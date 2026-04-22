@@ -1,0 +1,3 @@
+PySide6>=6.6
+litemapy>=0.10.0b0
+amulet-nbt>=2.1.3

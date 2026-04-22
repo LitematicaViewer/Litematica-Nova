@@ -1,0 +1,39 @@
+diff --git a/src/editor/Editor.ts b/src/editor/Editor.ts
+index 3218249..595fdab 100644
+--- a/src/editor/Editor.ts
++++ b/src/editor/Editor.ts
+@@ -502,4 +502,34 @@ class Editor {
+ 	}
+ }
+ 
++declare global {
++	interface Window {
++		/** LitematicaBA：将原始 .litematic / NBT 字节解析为 Deepslate ``NbtFile.toJson()`` 载荷。 */
++		lbaReadNbtFileToJson(bytes: Uint8Array): ReturnType<NbtFile['toJson']>
++		/** LitematicaBA：模拟 VSCode webview 的 ``postMessage`` init（``type: 'structure'`` 等）。 */
++		lbaDispatchNbtViewerInit(body: { type: string, readOnly: boolean, content: ReturnType<NbtFile['toJson']> }): void
++	}
++}
++
++window.lbaReadNbtFileToJson = (bytes: Uint8Array) => {
++	let littleEndian = false
++	try {
++		let file = NbtFile.read(bytes, { littleEndian, bedrockHeader: littleEndian })
++		if (!littleEndian && file.root.size === 0) {
++			const bedrockFile = NbtFile.read(bytes, { littleEndian: true, bedrockHeader: true })
++			if (bedrockFile.root.size > 0) {
++				file = bedrockFile
++			}
++		}
++		return file.toJson()
++	} catch {
++		littleEndian = !littleEndian
++		return NbtFile.read(bytes, { littleEndian, bedrockHeader: littleEndian }).toJson()
++	}
++}
++
++window.lbaDispatchNbtViewerInit = (body) => {
++	window.dispatchEvent(new MessageEvent('message', { data: { type: 'init', body } }))
++}
++
+ new Editor()

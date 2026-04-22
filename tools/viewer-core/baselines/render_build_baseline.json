@@ -1,0 +1,50 @@
+{
+  "formal_default_mode": "normal",
+  "formal_default_pipeline": "headless_pipeline",
+  "cases": {
+    "danjing": {
+      "expected_counts": {
+        "renderable_chunks": 3295,
+        "empty_mesh_chunks": 26,
+        "total_chunks": 3321
+      },
+      "max_wall_ms": {
+        "end_to_end_ms": 7200,
+        "prebuild_wall_ms": 7200,
+        "input_read_ms": 900,
+        "finalize_ms": 1000
+      }
+    },
+    "all_items_a": {
+      "expected_counts": {
+        "renderable_chunks": 214,
+        "empty_mesh_chunks": 1,
+        "total_chunks": 215
+      },
+      "max_wall_ms": {
+        "end_to_end_ms": 700,
+        "prebuild_wall_ms": 700,
+        "input_read_ms": 150,
+        "finalize_ms": 250
+      }
+    },
+    "all_items_b": {
+      "expected_counts": {
+        "renderable_chunks": 261,
+        "empty_mesh_chunks": 0,
+        "total_chunks": 261
+      },
+      "max_wall_ms": {
+        "end_to_end_ms": 750,
+        "prebuild_wall_ms": 750,
+        "input_read_ms": 150,
+        "finalize_ms": 300
+      }
+    }
+  },
+  "notes": [
+    "Only the normal formal line is gated by this baseline.",
+    "Fast experimental mode remains opt-in and is excluded from default-line regression checks.",
+    "Thresholds were fixed from tmp_headless_prebuild_ab_final/summary.tsv after headless prebuild and writer pipeline landed."
+  ]
+}

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NBT Viewer（vscode-nbt）</title>
+  <!-- 应用内默认不加载本页：mcmeta 在 data/minecraft-assets/nbt-viewer/<版本>/mcmeta/，由合并页加载。
+       本文件供「整包外置」时与 mcmeta 同目录使用。 -->
+  <link href="codicon.css" rel="stylesheet" />
+  <link href="editor.css" rel="stylesheet" />
+  <!-- Qt WebEngine 无 VSCode 主题变量：提供暗色回退 -->
+  <style>
+    :root {
+      --vscode-descriptionForeground: #9d9d9d;
+      --vscode-input-background: #3c3c3c;
+      --vscode-input-foreground: #cccccc;
+      --vscode-input-border: #3c3c3c;
+      --vscode-input-placeholderForeground: #767676;
+      --vscode-focusBorder: #007fd4;
+      --vscode-selection-background: #264f78;
+      --vscode-editor-selectionBackground: #264f78;
+      --vscode-editor-background: #1e1e1e;
+      --vscode-editor-foreground: #d4d4d4;
+      --vscode-sideBar-background: #252526;
+      --vscode-sideBar-foreground: #cccccc;
+      --vscode-button-background: #0e639c;
+      --vscode-button-foreground: #ffffff;
+      --vscode-button-hoverBackground: #1177bb;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: var(--vscode-editor-background);
+      color: var(--vscode-editor-foreground);
+    }
+    .panel-menu { flex-shrink: 0; }
+    .find-widget { display: none !important; }
+    .nbt-editor { flex: 1; min-height: 0; }
+    .file-info { display: none; }
+    .texture-atlas { display: none; }
+  </style>
+</head>
+<body>
+  <div class="panel-menu"></div>
+  <div class="find-widget"></div>
+  <div class="nbt-editor"></div>
+  <div class="file-info"></div>
+
+  <img class="texture-atlas" src="mcmeta/atlas.png" alt="" />
+  <script src="mcmeta/assets.js"></script>
+  <script src="mcmeta/uvmapping.js"></script>
+  <script src="mcmeta/blocks.js"></script>
+
+  <script>
+    function acquireVsCodeApi() {
+      return { postMessage: function () {} };
+    }
+  </script>
+  <script src="editor.js"></script>
+  <script src="lba_nbt_view_preset_bridge.js"></script>
+</body>
+</html>

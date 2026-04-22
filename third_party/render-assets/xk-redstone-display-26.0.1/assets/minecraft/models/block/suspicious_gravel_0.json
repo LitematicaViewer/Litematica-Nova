@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:block/high_light_cube_all",
+  "textures": {
+    "hl": "minecraft:block/high_light_g",
+    "all": "minecraft:block/suspicious_gravel_0"
+  }
+}

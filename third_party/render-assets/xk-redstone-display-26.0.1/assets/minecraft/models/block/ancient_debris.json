@@ -1,0 +1,8 @@
+{
+  "parent": "minecraft:block/high_light_cube_column",
+  "textures": {
+    "end": "minecraft:block/ancient_debris_top",
+    "side": "minecraft:block/ancient_debris_side",
+    "hl": "minecraft:block/high_light_r"
+  }
+}

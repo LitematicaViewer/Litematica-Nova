@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="8" height="24" viewBox="0 0 8 24">
+  <!-- middle block: width 8, height 16 -->
+  <rect x="0" y="4" width="8" height="16" fill="#0078d7" />
+  <!-- top semicircle (radius 4), cap points upward -->
+  <path d="M0 4 A4 4 0 0 1 8 4 L8 4 L0 4 Z" fill="#0078d7" />
+  <!-- bottom semicircle (radius 4), cap points downward -->
+  <path d="M0 20 A4 4 0 0 0 8 20 L8 20 L0 20 Z" fill="#0078d7" />
+</svg>

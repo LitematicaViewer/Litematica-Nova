@@ -1,0 +1,22 @@
+Piston family fixture layout
+
+Columns (x step=4):
+  x= 0: facing=north
+  x= 4: facing=east
+  x= 8: facing=south
+  x=12: facing=west
+  x=16: facing=up
+  x=20: facing=down
+
+Rows:
+  z= 0: kind=minecraft:piston extended=false
+  z= 4: kind=minecraft:piston extended=true
+  z=10: kind=minecraft:sticky_piston extended=false
+  z=14: kind=minecraft:sticky_piston extended=true
+  z=22: kind=minecraft:piston_head type=normal short=false
+  z=26: kind=minecraft:piston_head type=normal short=true
+  z=30: kind=minecraft:piston_head type=sticky short=false
+  z=34: kind=minecraft:piston_head type=sticky short=true
+
+Placed blocks: 48
+Bounding box: width=21, height=2, length=35

@@ -1,0 +1,43 @@
+.obsidian/
+.tmp/
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Build outputs
+build/
+dist/
+target/
+obj/
+out/
+
+# Windows / IDE
+.vs/
+.idea/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini
+
+# Local runtime data
+data/cache/
+data/projection-library/
+data/settings.json
+data/content_tile_layout.sqlite3
+
+# Local packaging state
+bin/pack_state.json
+bin/launcher/*.exe
+bin/launcher/*.pdb
+bin/viewer-backend/*.exe
+
+# Local preview / verify outputs
+_full_verify_v2_*.png
+_full_verify_v2_*.txt

@@ -1,0 +1,147 @@
+# Litematica Blueprint Assistant
+
+Litematica Blueprint Assistant 是一个面向 Minecraft `.litematic` 投影文件的本地查看、分析与渲染工具。项目包含 Python 桌面界面、Rust 原生 viewer backend，以及用于 Full Mode V2 渲染一致性验证的 fixture 工具。
+
+## 当前重点
+
+- 读取 `.litematic` 投影并解析 NBT / block state / region 数据。
+- 提供材料统计、投影查看和 Full Mode 渲染预览。
+- Full Mode V2 使用 Rust viewer-core 解析 blockstate / model / texture，并逐步按 block family 收口渲染 fidelity。
+- 当前保留 piston family 的专用调试 fixture 与可视化编号模式，用于继续定位 `piston` / `sticky_piston` / `piston_head` 的细节问题。
+
+## 目录结构
+
+```text
+bin/viewer-backend/        已构建的 viewer backend 可执行文件
+desktop-ui/                桌面 UI 相关资源
+scripts/                   fixture 与辅助脚本
+src/litematicaba/          Python 应用代码
+third_party/render-assets/ Full Mode V2 使用的渲染资源
+tools/viewer-core/         Rust viewer-core 源码
+_full_mode_piston*.litematic
+_full_mode_piston*_layout.txt
+                            piston 调试投影与说明文件
+```
+
+## 运行桌面应用
+
+首次准备开发环境：
+
+```powershell
+cd <repo>
+.\install.bat
+```
+
+默认会把开发环境建在工作区外：
+
+- `%LOCALAPPDATA%\Litematica-BA\dev-env\venv`
+- `%LOCALAPPDATA%\Litematica-BA\dev-env\pip-cache`
+
+如需覆盖路径，可在运行前设置：
+
+```powershell
+$env:LBA_DEV_HOME='D:\LBA\dev-env'
+```
+
+准备好后启动桌面应用：
+
+```powershell
+cd <repo>
+python -m litematicaba
+```
+
+也可以使用根目录的启动脚本：
+
+```powershell
+cd <repo>
+.\launch_ba_ui.bat
+```
+
+`bin\dev-win-qt.bat` 也会自动复用同一套工作区外开发环境。
+
+## 运行 Full Mode V2 Viewer
+
+打开任意 `.litematic`：
+
+```powershell
+cd <repo>
+.\bin\viewer-backend\litematica_native_viewer.exe '<path-to-file.litematic>' --chunk-size=32 --display-mode=full
+```
+
+导出预览图：
+
+```powershell
+cd <repo>
+.\bin\viewer-backend\litematica_native_viewer.exe '<path-to-file.litematic>' --chunk-size=32 --display-mode=full --preview-output='<output.png>' --auto-exit-seconds=4
+```
+
+## Piston Debug Fixture
+
+项目保留两套 piston fixture：
+
+- `_full_mode_piston_fixture.litematic`
+- `_full_mode_piston_complex_fixture.litematic`
+
+复杂 fixture 的说明文件：
+
+- `_full_mode_piston_complex_fixture_layout.txt`
+
+复杂 fixture 按区域组织：
+
+- `Bxx`: base 单独展示区
+- `Hxx`: head 单独展示区
+- `Cxx`: base + head 配对区
+- `Mxx`: mixed 组合区
+
+开启 piston debug 编号模式：
+
+```powershell
+cd <repo>
+$env:LBA_FULL_MODE_V2_PISTON_DEBUG='1'
+.\bin\viewer-backend\litematica_native_viewer.exe '.\_full_mode_piston_complex_fixture.litematic' --chunk-size=32 --display-mode=full
+```
+
+关闭 debug 编号模式：
+
+```powershell
+cd <repo>
+$env:LBA_FULL_MODE_V2_PISTON_DEBUG=$null
+.\bin\viewer-backend\litematica_native_viewer.exe '.\_full_mode_piston_complex_fixture.litematic' --chunk-size=32 --display-mode=full
+```
+
+重新生成 complex fixture：
+
+```powershell
+cd <repo>
+python .\scripts\generate_piston_complex_fixture.py
+```
+
+## Rust Backend 构建
+
+```powershell
+cd <repo>\tools\viewer-core
+cargo check
+cargo build --release
+```
+
+同步 release 构建到运行目录：
+
+```powershell
+cd <repo>
+Copy-Item .\tools\viewer-core\target\release\litematica_native_viewer.exe .\bin\viewer-backend\litematica_native_viewer.exe -Force
+Copy-Item .\tools\viewer-core\target\release\litematica_core.exe .\bin\viewer-backend\litematica_core.exe -Force
+```
+
+## 调试约定
+
+- 正常运行保持安静。
+- piston family 调试通过 `LBA_FULL_MODE_V2_PISTON_DEBUG=1` 开启。
+- 临时日志、预览图和本地大场景验证产物不作为项目固定资产提交。
+- fixture、layout 和生成脚本保留，用于复现和人工反馈。
+
+## 开发注意
+
+- Full Mode V2 的 block family 修复应尽量收在对应 family 的 typed 输出层。
+- 不要为了单个问题随意改 shared UV / shared rotation / shared transform / shared culling。
+- `moving_piston` 与 static piston family 分开处理。
+- 修改渲染行为后，优先用 fixture 验证，再看真实大场景。

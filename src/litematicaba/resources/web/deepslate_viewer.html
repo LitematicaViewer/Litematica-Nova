@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LitematicaBA Deepslate</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #2a2d34; overflow: hidden; }
+    #c { display: block; width: 100%; height: 100%; touch-action: none; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <!-- 设计 §2.6.3.8：脚本与库均为应用内本地文件；勿依赖远程脚本（避免 MIME / CSP 问题） -->
+  <script>
+(function () {
+  window.__lbaVoxelQueue = [];
+  window.__lbaViewPreset = 0;
+  window.lbaLoadVoxelsB64 = function (b64) {
+    window.__lbaVoxelQueue.push(b64);
+    if (typeof window.__lbaInternalApplyVoxels === "function") {
+      while (window.__lbaVoxelQueue.length) {
+        window.__lbaInternalApplyVoxels(window.__lbaVoxelQueue.shift());
+      }
+    }
+  };
+  window.lbaSetViewPreset = function (n) {
+    window.__lbaViewPreset = Math.max(0, Math.min(8, n | 0));
+    window.__lbaSyncViewFromPreset = true;
+  };
+  window.__lbaInvertY = false;
+  window.lbaSetInvertY = function (v) {
+    window.__lbaInvertY = !!v;
+  };
+  window.__lbaCameraFov = 70;
+  window.lbaSetCameraFov = function (deg) {
+    window.__lbaCameraFov = Math.max(0, Math.min(110, deg | 0));
+  };
+})();
+  </script>
+  <script src="vendor/gl-matrix-min.js"></script>
+  <script src="vendor/deepslate.umd.js"></script>
+  <script>
+(function () {
+  const canvas = document.getElementById("c");
+  const gl = canvas.getContext("webgl", {
+    alpha: true,
+    premultipliedAlpha: false,
+    antialias: true,
+    preserveDrawingBuffer: true,
+  });
+  if (!gl) {
+    document.body.textContent = "WebGL 不可用";
+    window.__lbaInternalApplyVoxels = function () {};
+    return;
+  }
+  const DS = window.deepslate;
+  if (!DS || !DS.VoxelRenderer) {
+    document.body.textContent = "Deepslate 未加载（请检查 vendor/deepslate.umd.js）";
+    window.__lbaInternalApplyVoxels = function () {};
+    return;
+  }
+  const { mat4, vec3 } = glMatrix;
+  const voxelRenderer = new DS.VoxelRenderer(gl);
+  voxelRenderer.getPerspective = function () {
+    const cv = this.gl.canvas;
+    const bw = Math.max(1, cv.width || cv.clientWidth || 1);
+    const bh = Math.max(1, cv.height || cv.clientHeight || 1);
+    const aspect = bw / bh;
+    const out = mat4.create();
+    const fov = window.__lbaCameraFov | 0;
+    if (fov <= 0) {
+      const halfH = Math.max(camDist * 0.38, 2.5);
+      const halfW = halfH * aspect;
+      mat4.ortho(out, -halfW, halfW, -halfH, halfH, 0.1, 500);
+    } else {
+      const rad = Math.max(1, Math.min(110, fov)) * Math.PI / 180;
+      mat4.perspective(out, rad, aspect, 0.1, 500);
+    }
+    return out;
+  };
+
+  let camDist = 64;
+  /** 体素包围盒各向尺寸（与 NBT getSize 语义一致），供四角对角预设用 */
+  window.__lbaVoxelBBoxSize = [1, 1, 1];
+  /** 观察目标（世界坐标），右键拖动平移 */
+  const pan = vec3.create();
+  /** 轨道角：绕 Y 为 yaw，仰角为 pitch（弧度） */
+  let yaw = 0;
+  let pitch = 0;
+  window.__lbaSyncViewFromPreset = true;
+
+  function normalize3(out, x, y, z) {
+    const len = Math.hypot(x, y, z);
+    if (len < 1e-8) {
+      out[0] = 0; out[1] = 1; out[2] = 0;
+      return out;
+    }
+    out[0] = x / len; out[1] = y / len; out[2] = z / len;
+    return out;
+  }
+
+  /** 与旧版九向预设一致的方向向量（单位化），用于同步 yaw/pitch */
+  function presetDirection(p) {
+    const d = 1;
+    const dh = 0.45;
+    const o = [0, 0, 0];
+    switch (p | 0) {
+      case 0:
+        return normalize3(o, 0, 1, 0);
+      case 1:
+        return normalize3(o, 0, dh, -d);
+      case 2:
+        return normalize3(o, 0, dh, d);
+      case 3:
+        return normalize3(o, d, dh, 0);
+      case 4:
+        return normalize3(o, -d, dh, 0);
+      case 5:
+        return normalize3(o, d * 0.82, d * 0.55, -d * 0.82);
+      case 6:
+        return normalize3(o, d * 0.82, d * 0.55, d * 0.82);
+      case 7:
+        return normalize3(o, -d * 0.82, d * 0.55, d * 0.82);
+      default:
+        return normalize3(o, -d * 0.82, d * 0.55, -d * 0.82);
+    }
+  }
+
+  function yawPitchDiagonalPreset(p, sx, sy, sz) {
+    const x = Math.max(sx, 1e-6);
+    const y = Math.max(sy, 1e-6);
+    const z = Math.max(sz, 1e-6);
+    const pitchDiag = Math.atan2(y, Math.hypot(x, z));
+    switch (p | 0) {
+      case 5:
+        return [Math.atan2(-x, -z), pitchDiag];
+      case 6:
+        return [Math.atan2(-x, z), pitchDiag];
+      case 7:
+        return [Math.atan2(x, z), pitchDiag];
+      case 8:
+        return [Math.atan2(x, -z), pitchDiag];
+      default:
+        return null;
+    }
+  }
+
+  function syncFromPreset() {
+    const p = window.__lbaViewPreset | 0;
+    if (p >= 5 && p <= 8) {
+      const b = window.__lbaVoxelBBoxSize || [1, 1, 1];
+      const yp = yawPitchDiagonalPreset(p, b[0], b[1], b[2]);
+      if (yp) {
+        yaw = yp[0];
+        pitch = yp[1];
+        pan[0] = 0;
+        pan[1] = 0;
+        pan[2] = 0;
+        window.__lbaSyncViewFromPreset = false;
+        return;
+      }
+    }
+    const dir = presetDirection(p);
+    pitch = Math.asin(Math.max(-1, Math.min(1, dir[1])));
+    yaw = Math.atan2(dir[0], dir[2]);
+    pan[0] = 0;
+    pan[1] = 0;
+    pan[2] = 0;
+    window.__lbaSyncViewFromPreset = false;
+  }
+
+  /** 由 yaw/pitch/camDist/pan 得到 view 矩阵（Y 轴向上） */
+  function buildViewMatrix(out) {
+    const cp = Math.cos(pitch);
+    const sp = Math.sin(pitch);
+    const sy = Math.sin(yaw);
+    const cy = Math.cos(yaw);
+    const dir = vec3.fromValues(cp * sy, sp, cp * cy);
+    const eye = vec3.create();
+    vec3.scaleAndAdd(eye, pan, dir, camDist);
+    let up = vec3.fromValues(0, 1, 0);
+    if (Math.abs(dir[1]) > 0.98) {
+      up[0] = 0; up[1] = 0; up[2] = dir[1] > 0 ? -1 : 1;
+    }
+    mat4.lookAt(out, eye, pan, up);
+    return out;
+  }
+
+  let dragMode = 0;
+  let lastPx = 0;
+  let lastPy = 0;
+  const ORBIT_SENS = 0.005;
+  const PITCH_MIN = -1.45;
+  const PITCH_MAX = 1.45;
+  const CAM_DIST_MIN = 2;
+  const CAM_DIST_MAX = 50000;
+  const WHEEL_ZOOM_SENS = 0.0012;
+
+  function panScale() {
+    const w = canvas.clientWidth || 1;
+    const h = canvas.clientHeight || 1;
+    return (camDist * 0.0022) / Math.min(w, h) * Math.max(w, h);
+  }
+
+  canvas.addEventListener("contextmenu", function (e) {
+    e.preventDefault();
+  });
+
+  canvas.addEventListener(
+    "wheel",
+    function (e) {
+      e.preventDefault();
+      let dy = e.deltaY;
+      if (e.deltaMode === 1) dy *= 16;
+      else if (e.deltaMode === 2) dy *= canvas.clientHeight || 1;
+      camDist *= Math.exp(-dy * WHEEL_ZOOM_SENS);
+      if (camDist < CAM_DIST_MIN) camDist = CAM_DIST_MIN;
+      if (camDist > CAM_DIST_MAX) camDist = CAM_DIST_MAX;
+    },
+    { passive: false }
+  );
+
+  canvas.addEventListener("pointerdown", function (e) {
+    if (e.button === 0) {
+      dragMode = 1;
+    } else if (e.button === 2) {
+      dragMode = 2;
+    } else {
+      return;
+    }
+    lastPx = e.clientX;
+    lastPy = e.clientY;
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch (_err) {}
+  });
+
+  canvas.addEventListener("pointermove", function (e) {
+    if (!dragMode) return;
+    const dx = e.clientX - lastPx;
+    const dy = e.clientY - lastPy;
+    lastPx = e.clientX;
+    lastPy = e.clientY;
+
+    const ySign = window.__lbaInvertY ? -1 : 1;
+    if (dragMode === 1) {
+      yaw -= dx * ORBIT_SENS;
+      // 未勾选「反转 Y」：鼠标向下拖 → 视角向下（常见 FPS/建模习惯）；勾选后与触摸屏「拖动内容」习惯一致
+      pitch += dy * ORBIT_SENS * ySign;
+      if (pitch < PITCH_MIN) pitch = PITCH_MIN;
+      if (pitch > PITCH_MAX) pitch = PITCH_MAX;
+    } else if (dragMode === 2) {
+      const view = mat4.create();
+      buildViewMatrix(view);
+      const inv = mat4.create();
+      mat4.invert(inv, view);
+      const right = vec3.fromValues(inv[0], inv[4], inv[8]);
+      const upv = vec3.fromValues(inv[1], inv[5], inv[9]);
+      vec3.normalize(right, right);
+      vec3.normalize(upv, upv);
+      const k = panScale();
+      vec3.scaleAndAdd(pan, pan, right, -dx * k);
+      vec3.scaleAndAdd(pan, pan, upv, dy * k * ySign);
+    }
+  });
+
+  function endDrag(e) {
+    if (e.button === 0 || e.button === 2) {
+      dragMode = 0;
+    }
+    try {
+      canvas.releasePointerCapture(e.pointerId);
+    } catch (_err) {}
+  }
+
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+  canvas.addEventListener("lostpointercapture", function () {
+    dragMode = 0;
+  });
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    const h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    voxelRenderer.setViewport(0, 0, canvas.width, canvas.height);
+  }
+
+  window.addEventListener("resize", resize);
+
+  const viewMat = mat4.create();
+
+  function tick() {
+    resize();
+    if (window.__lbaSyncViewFromPreset) {
+      syncFromPreset();
+    }
+    buildViewMatrix(viewMat);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.clearColor(42 / 255, 45 / 255, 52 / 255, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    voxelRenderer.draw(viewMat);
+    requestAnimationFrame(tick);
+  }
+
+  window.__lbaInternalApplyVoxels = function (b64) {
+    try {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const json = new TextDecoder().decode(bytes);
+      const data = JSON.parse(json);
+      if (typeof data.camDist === "number" && data.camDist > 1) {
+        camDist = data.camDist;
+      }
+      const list = Array.isArray(data.voxels) ? data.voxels : [];
+      const normalized = [];
+      for (let i = 0; i < list.length; i++) {
+        const v = list[i];
+        if (!v || typeof v.x !== "number" || typeof v.y !== "number" || typeof v.z !== "number") continue;
+        let c = v.color;
+        if (!c || c.length < 3) c = [128, 128, 128];
+        normalized.push({ x: v.x, y: v.y, z: v.z, color: [c[0], c[1], c[2]] });
+      }
+      let bx = 1;
+      let by = 1;
+      let bz = 1;
+      window.__lbaVoxelBounds = { has: false, minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+      if (normalized.length) {
+        let minX = normalized[0].x;
+        let maxX = normalized[0].x;
+        let minY = normalized[0].y;
+        let maxY = normalized[0].y;
+        let minZ = normalized[0].z;
+        let maxZ = normalized[0].z;
+        for (let j = 1; j < normalized.length; j++) {
+          const q = normalized[j];
+          if (q.x < minX) minX = q.x;
+          if (q.x > maxX) maxX = q.x;
+          if (q.y < minY) minY = q.y;
+          if (q.y > maxY) maxY = q.y;
+          if (q.z < minZ) minZ = q.z;
+          if (q.z > maxZ) maxZ = q.z;
+        }
+        bx = maxX - minX + 1;
+        by = maxY - minY + 1;
+        bz = maxZ - minZ + 1;
+        window.__lbaVoxelBounds = {
+          has: true,
+          minX,
+          minY,
+          minZ,
+          maxX,
+          maxY,
+          maxZ,
+        };
+      }
+      window.__lbaVoxelBBoxSize = [bx, by, bz];
+      voxelRenderer.setVoxels(normalized);
+    } catch (e) {
+      console.error(e);
+      voxelRenderer.setVoxels([]);
+    }
+  };
+
+  while (window.__lbaVoxelQueue.length) {
+    window.__lbaInternalApplyVoxels(window.__lbaVoxelQueue.shift());
+  }
+
+  function lbaDeepslateMaxNdcAtDist(dist) {
+    const W = canvas.width;
+    const H = canvas.height;
+    const saveD = camDist;
+    const savePan = vec3.fromValues(pan[0], pan[1], pan[2]);
+    camDist = dist;
+    voxelRenderer.setViewport(0, 0, W, H);
+    buildViewMatrix(viewMat);
+    const proj = voxelRenderer.getPerspective();
+    const mvp = mat4.create();
+    mat4.multiply(mvp, proj, viewMat);
+    const B = window.__lbaVoxelBounds;
+    let maxAbs = 0;
+    if (!B || !B.has) {
+      camDist = saveD;
+      vec3.copy(pan, savePan);
+      return 0;
+    }
+    const xs = [B.minX, B.maxX + 1];
+    const ys = [B.minY, B.maxY + 1];
+    const zs = [B.minZ, B.maxZ + 1];
+    for (let i = 0; i < 2; i++) {
+      for (let j = 0; j < 2; j++) {
+        for (let k = 0; k < 2; k++) {
+          const x = xs[i];
+          const y = ys[j];
+          const z = zs[k];
+          const cx = mvp[0] * x + mvp[4] * y + mvp[8] * z + mvp[12];
+          const cy = mvp[1] * x + mvp[5] * y + mvp[9] * z + mvp[13];
+          const cw = mvp[3] * x + mvp[7] * y + mvp[11] * z + mvp[15];
+          if (cw <= 1e-6) {
+            maxAbs = 10;
+            break;
+          }
+          const ax = Math.abs(cx / cw);
+          const ay = Math.abs(cy / cw);
+          if (ax > maxAbs) maxAbs = ax;
+          if (ay > maxAbs) maxAbs = ay;
+        }
+      }
+    }
+    camDist = saveD;
+    vec3.copy(pan, savePan);
+    return maxAbs;
+  }
+
+  /**
+   * @param {'screen'|'full'} mode
+   */
+  window.lbaDeepslateCaptureRenderPng = function (mode) {
+    return new Promise(function (resolve) {
+      const m = mode === "full" ? "full" : "screen";
+      if (m === "screen") {
+        requestAnimationFrame(function () {
+          try {
+            resolve(canvas.toDataURL("image/png"));
+          } catch (e) {
+            resolve("");
+          }
+        });
+        return;
+      }
+      const saveD = camDist;
+      const savePan = vec3.fromValues(pan[0], pan[1], pan[2]);
+      try {
+        resize();
+        const W = canvas.width;
+        const H = canvas.height;
+        const B = window.__lbaVoxelBounds;
+        if (!B || !B.has) {
+          buildViewMatrix(viewMat);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.clearColor(42 / 255, 45 / 255, 52 / 255, 1);
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+          voxelRenderer.draw(viewMat);
+          if (typeof gl.finish === "function") gl.finish();
+          resolve(canvas.toDataURL("image/png"));
+          return;
+        }
+        pan[0] = (B.minX + B.maxX + 1) / 2;
+        pan[1] = (B.minY + B.maxY + 1) / 2;
+        pan[2] = (B.minZ + B.maxZ + 1) / 2;
+        let hi = Math.max(CAM_DIST_MIN, saveD);
+        let guard = 0;
+        while (lbaDeepslateMaxNdcAtDist(hi) > 0.88 && hi < CAM_DIST_MAX && guard < 48) {
+          hi = Math.min(hi * 1.35, CAM_DIST_MAX);
+          guard++;
+        }
+        let lo = CAM_DIST_MIN;
+        let b = hi;
+        while (b - lo > 0.35) {
+          const mid = (lo + b) / 2;
+          if (lbaDeepslateMaxNdcAtDist(mid) <= 0.88) b = mid;
+          else lo = mid;
+        }
+        camDist = b;
+        voxelRenderer.setViewport(0, 0, W, H);
+        buildViewMatrix(viewMat);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, W, H);
+        gl.clearColor(42 / 255, 45 / 255, 52 / 255, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        voxelRenderer.draw(viewMat);
+        if (typeof gl.finish === "function") gl.finish();
+        const url = canvas.toDataURL("image/png");
+        camDist = saveD;
+        vec3.copy(pan, savePan);
+        voxelRenderer.setViewport(0, 0, canvas.width, canvas.height);
+        resolve(url);
+      } catch (e2) {
+        camDist = saveD;
+        vec3.copy(pan, savePan);
+        voxelRenderer.setViewport(0, 0, canvas.width, canvas.height);
+        resolve("");
+      }
+    });
+  };
+
+  resize();
+  requestAnimationFrame(tick);
+})();
+  </script>
+</body>
+</html>

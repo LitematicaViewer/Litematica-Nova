@@ -1,0 +1,20 @@
+{
+    "羊毛":["wool","carpet"],
+    "陶瓦":["terracotta"],
+    "混凝土":["concrete"],
+    "玻璃":["glass"],
+    "木制":["birch","oak","bamboo","cherry","crimson","acacia","jungle","mangrove","spruce","warped","azalea"],
+    "石英":["quartz"],
+    "矿类":["copper","ore","raw"],
+    "红石":["redstone","lever","observer","note","piston","dispenser","dropper","hopper","trapped","slime","honey","detector","sensor","target","tnt","repeater","comparator","crafter","hook"],
+    "容器": ["chest","box","barrel","composter","pot"],
+    "铁类":["iron","anvil","cauldron","heavy","rail"],
+    "末地类":["obsidian","end","purpur"],
+    "地狱类":["glowstone","nether","netherrack","magma","soul"],
+    "石质":["cobblestone","stone","blackstone","deepslate"],
+    "其他岩石":["calcite","granite","andesite","diorite","tuff"],
+    "自然类":["sand","sandstone","gravel","dirt","mud","podzol","mycelium","farmland","grass","ice","snow"],
+    "海晶类":["prismarine","sea","coral"],
+    "粘土类":["clay","brick"],
+    "液体": ["water","lava","bubble"]
+}

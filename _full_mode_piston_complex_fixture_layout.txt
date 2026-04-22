@@ -1,0 +1,139 @@
+Piston complex fixture layout
+
+Purpose:
+  Expose static piston family issues in matrix, pair, and mixed arrangements before changing render rules.
+
+Face/facing order used in matrix columns:
+  north, east, south, west, up, down
+
+Areas:
+  Bxx: Base standalone matrix at x=0, z=0
+  Hxx: Head standalone matrix at x=34, z=0
+  Cxx: Base+Head pair matrix at x=0, z=26
+  Mxx: Mixed composition zone at x=34, z=26
+
+Columns:
+group	role	block_id	facing	extended	short	type	paired	x	y	z	note
+B01	base_matrix	minecraft:piston	north	false	-	-	no	0	1	0	Base standalone matrix
+B02	base_matrix	minecraft:piston	east	false	-	-	no	4	1	0	Base standalone matrix
+B03	base_matrix	minecraft:piston	south	false	-	-	no	8	1	0	Base standalone matrix
+B04	base_matrix	minecraft:piston	west	false	-	-	no	12	1	0	Base standalone matrix
+B05	base_matrix	minecraft:piston	up	false	-	-	no	16	1	0	Base standalone matrix
+B06	base_matrix	minecraft:piston	down	false	-	-	no	20	1	0	Base standalone matrix
+B07	base_matrix	minecraft:piston	north	true	-	-	no	0	1	4	Base standalone matrix
+B08	base_matrix	minecraft:piston	east	true	-	-	no	4	1	4	Base standalone matrix
+B09	base_matrix	minecraft:piston	south	true	-	-	no	8	1	4	Base standalone matrix
+B10	base_matrix	minecraft:piston	west	true	-	-	no	12	1	4	Base standalone matrix
+B11	base_matrix	minecraft:piston	up	true	-	-	no	16	1	4	Base standalone matrix
+B12	base_matrix	minecraft:piston	down	true	-	-	no	20	1	4	Base standalone matrix
+B13	base_matrix	minecraft:sticky_piston	north	false	-	-	no	0	1	8	Base standalone matrix
+B14	base_matrix	minecraft:sticky_piston	east	false	-	-	no	4	1	8	Base standalone matrix
+B15	base_matrix	minecraft:sticky_piston	south	false	-	-	no	8	1	8	Base standalone matrix
+B16	base_matrix	minecraft:sticky_piston	west	false	-	-	no	12	1	8	Base standalone matrix
+B17	base_matrix	minecraft:sticky_piston	up	false	-	-	no	16	1	8	Base standalone matrix
+B18	base_matrix	minecraft:sticky_piston	down	false	-	-	no	20	1	8	Base standalone matrix
+B19	base_matrix	minecraft:sticky_piston	north	true	-	-	no	0	1	12	Base standalone matrix
+B20	base_matrix	minecraft:sticky_piston	east	true	-	-	no	4	1	12	Base standalone matrix
+B21	base_matrix	minecraft:sticky_piston	south	true	-	-	no	8	1	12	Base standalone matrix
+B22	base_matrix	minecraft:sticky_piston	west	true	-	-	no	12	1	12	Base standalone matrix
+B23	base_matrix	minecraft:sticky_piston	up	true	-	-	no	16	1	12	Base standalone matrix
+B24	base_matrix	minecraft:sticky_piston	down	true	-	-	no	20	1	12	Base standalone matrix
+H01	head_matrix	minecraft:piston_head	north	-	false	normal	no	34	1	0	Head standalone matrix
+H02	head_matrix	minecraft:piston_head	east	-	false	normal	no	38	1	0	Head standalone matrix
+H03	head_matrix	minecraft:piston_head	south	-	false	normal	no	42	1	0	Head standalone matrix
+H04	head_matrix	minecraft:piston_head	west	-	false	normal	no	46	1	0	Head standalone matrix
+H05	head_matrix	minecraft:piston_head	up	-	false	normal	no	50	1	0	Head standalone matrix
+H06	head_matrix	minecraft:piston_head	down	-	false	normal	no	54	1	0	Head standalone matrix
+H07	head_matrix	minecraft:piston_head	north	-	true	normal	no	34	1	4	Head standalone matrix
+H08	head_matrix	minecraft:piston_head	east	-	true	normal	no	38	1	4	Head standalone matrix
+H09	head_matrix	minecraft:piston_head	south	-	true	normal	no	42	1	4	Head standalone matrix
+H10	head_matrix	minecraft:piston_head	west	-	true	normal	no	46	1	4	Head standalone matrix
+H11	head_matrix	minecraft:piston_head	up	-	true	normal	no	50	1	4	Head standalone matrix
+H12	head_matrix	minecraft:piston_head	down	-	true	normal	no	54	1	4	Head standalone matrix
+H13	head_matrix	minecraft:piston_head	north	-	false	sticky	no	34	1	8	Head standalone matrix
+H14	head_matrix	minecraft:piston_head	east	-	false	sticky	no	38	1	8	Head standalone matrix
+H15	head_matrix	minecraft:piston_head	south	-	false	sticky	no	42	1	8	Head standalone matrix
+H16	head_matrix	minecraft:piston_head	west	-	false	sticky	no	46	1	8	Head standalone matrix
+H17	head_matrix	minecraft:piston_head	up	-	false	sticky	no	50	1	8	Head standalone matrix
+H18	head_matrix	minecraft:piston_head	down	-	false	sticky	no	54	1	8	Head standalone matrix
+H19	head_matrix	minecraft:piston_head	north	-	true	sticky	no	34	1	12	Head standalone matrix
+H20	head_matrix	minecraft:piston_head	east	-	true	sticky	no	38	1	12	Head standalone matrix
+H21	head_matrix	minecraft:piston_head	south	-	true	sticky	no	42	1	12	Head standalone matrix
+H22	head_matrix	minecraft:piston_head	west	-	true	sticky	no	46	1	12	Head standalone matrix
+H23	head_matrix	minecraft:piston_head	up	-	true	sticky	no	50	1	12	Head standalone matrix
+H24	head_matrix	minecraft:piston_head	down	-	true	sticky	no	54	1	12	Head standalone matrix
+C01	paired_base	minecraft:piston	north	true	-	-	yes	0	1	26	Base+head pair: base
+C01	paired_head	minecraft:piston_head	north	-	false	normal	yes	0	1	25	Base+head pair: head placed one block in facing direction
+C02	paired_base	minecraft:piston	east	true	-	-	yes	4	1	26	Base+head pair: base
+C02	paired_head	minecraft:piston_head	east	-	false	normal	yes	5	1	26	Base+head pair: head placed one block in facing direction
+C03	paired_base	minecraft:piston	south	true	-	-	yes	8	1	26	Base+head pair: base
+C03	paired_head	minecraft:piston_head	south	-	false	normal	yes	8	1	27	Base+head pair: head placed one block in facing direction
+C04	paired_base	minecraft:piston	west	true	-	-	yes	12	1	26	Base+head pair: base
+C04	paired_head	minecraft:piston_head	west	-	false	normal	yes	11	1	26	Base+head pair: head placed one block in facing direction
+C05	paired_base	minecraft:piston	up	true	-	-	yes	16	1	26	Base+head pair: base
+C05	paired_head	minecraft:piston_head	up	-	false	normal	yes	16	2	26	Base+head pair: head placed one block in facing direction
+C06	paired_base	minecraft:piston	down	true	-	-	yes	20	1	26	Base+head pair: base
+C06	paired_head	minecraft:piston_head	down	-	false	normal	yes	20	0	26	Base+head pair: head placed one block in facing direction
+C07	paired_base	minecraft:piston	north	true	-	-	yes	0	1	31	Base+head pair: base
+C07	paired_head	minecraft:piston_head	north	-	true	normal	yes	0	1	30	Base+head pair: head placed one block in facing direction
+C08	paired_base	minecraft:piston	east	true	-	-	yes	4	1	31	Base+head pair: base
+C08	paired_head	minecraft:piston_head	east	-	true	normal	yes	5	1	31	Base+head pair: head placed one block in facing direction
+C09	paired_base	minecraft:piston	south	true	-	-	yes	8	1	31	Base+head pair: base
+C09	paired_head	minecraft:piston_head	south	-	true	normal	yes	8	1	32	Base+head pair: head placed one block in facing direction
+C10	paired_base	minecraft:piston	west	true	-	-	yes	12	1	31	Base+head pair: base
+C10	paired_head	minecraft:piston_head	west	-	true	normal	yes	11	1	31	Base+head pair: head placed one block in facing direction
+C11	paired_base	minecraft:piston	up	true	-	-	yes	16	1	31	Base+head pair: base
+C11	paired_head	minecraft:piston_head	up	-	true	normal	yes	16	2	31	Base+head pair: head placed one block in facing direction
+C12	paired_base	minecraft:piston	down	true	-	-	yes	20	1	31	Base+head pair: base
+C12	paired_head	minecraft:piston_head	down	-	true	normal	yes	20	0	31	Base+head pair: head placed one block in facing direction
+C13	paired_base	minecraft:sticky_piston	north	true	-	-	yes	0	1	36	Base+head pair: base
+C13	paired_head	minecraft:piston_head	north	-	false	sticky	yes	0	1	35	Base+head pair: head placed one block in facing direction
+C14	paired_base	minecraft:sticky_piston	east	true	-	-	yes	4	1	36	Base+head pair: base
+C14	paired_head	minecraft:piston_head	east	-	false	sticky	yes	5	1	36	Base+head pair: head placed one block in facing direction
+C15	paired_base	minecraft:sticky_piston	south	true	-	-	yes	8	1	36	Base+head pair: base
+C15	paired_head	minecraft:piston_head	south	-	false	sticky	yes	8	1	37	Base+head pair: head placed one block in facing direction
+C16	paired_base	minecraft:sticky_piston	west	true	-	-	yes	12	1	36	Base+head pair: base
+C16	paired_head	minecraft:piston_head	west	-	false	sticky	yes	11	1	36	Base+head pair: head placed one block in facing direction
+C17	paired_base	minecraft:sticky_piston	up	true	-	-	yes	16	1	36	Base+head pair: base
+C17	paired_head	minecraft:piston_head	up	-	false	sticky	yes	16	2	36	Base+head pair: head placed one block in facing direction
+C18	paired_base	minecraft:sticky_piston	down	true	-	-	yes	20	1	36	Base+head pair: base
+C18	paired_head	minecraft:piston_head	down	-	false	sticky	yes	20	0	36	Base+head pair: head placed one block in facing direction
+C19	paired_base	minecraft:sticky_piston	north	true	-	-	yes	0	1	41	Base+head pair: base
+C19	paired_head	minecraft:piston_head	north	-	true	sticky	yes	0	1	40	Base+head pair: head placed one block in facing direction
+C20	paired_base	minecraft:sticky_piston	east	true	-	-	yes	4	1	41	Base+head pair: base
+C20	paired_head	minecraft:piston_head	east	-	true	sticky	yes	5	1	41	Base+head pair: head placed one block in facing direction
+C21	paired_base	minecraft:sticky_piston	south	true	-	-	yes	8	1	41	Base+head pair: base
+C21	paired_head	minecraft:piston_head	south	-	true	sticky	yes	8	1	42	Base+head pair: head placed one block in facing direction
+C22	paired_base	minecraft:sticky_piston	west	true	-	-	yes	12	1	41	Base+head pair: base
+C22	paired_head	minecraft:piston_head	west	-	true	sticky	yes	11	1	41	Base+head pair: head placed one block in facing direction
+C23	paired_base	minecraft:sticky_piston	up	true	-	-	yes	16	1	41	Base+head pair: base
+C23	paired_head	minecraft:piston_head	up	-	true	sticky	yes	16	2	41	Base+head pair: head placed one block in facing direction
+C24	paired_base	minecraft:sticky_piston	down	true	-	-	yes	20	1	41	Base+head pair: base
+C24	paired_head	minecraft:piston_head	down	-	true	sticky	yes	20	0	41	Base+head pair: head placed one block in facing direction
+M01	mixed_base	minecraft:piston	north	true	-	-	yes	34	1	26	Mixed composition zone: base
+M01	mixed_head	minecraft:piston_head	north	-	false	normal	yes	34	1	25	Mixed composition zone: paired head
+M02	mixed_base	minecraft:sticky_piston	east	true	-	-	yes	40	1	27	Mixed composition zone: base
+M02	mixed_head	minecraft:piston_head	east	-	true	sticky	yes	41	1	27	Mixed composition zone: paired head
+M03	mixed_base	minecraft:piston	south	true	-	-	yes	46	1	26	Mixed composition zone: base
+M03	mixed_head	minecraft:piston_head	south	-	true	normal	yes	46	1	27	Mixed composition zone: paired head
+M04	mixed_base	minecraft:sticky_piston	west	true	-	-	yes	52	1	27	Mixed composition zone: base
+M04	mixed_head	minecraft:piston_head	west	-	false	sticky	yes	51	1	27	Mixed composition zone: paired head
+M05	mixed_base	minecraft:piston	up	true	-	-	yes	35	4	33	Mixed composition zone: base
+M05	mixed_head	minecraft:piston_head	up	-	false	normal	yes	35	5	33	Mixed composition zone: paired head
+M06	mixed_base	minecraft:sticky_piston	down	true	-	-	yes	41	4	34	Mixed composition zone: base
+M06	mixed_head	minecraft:piston_head	down	-	true	sticky	yes	41	3	34	Mixed composition zone: paired head
+M07	mixed_base	minecraft:sticky_piston	north	true	-	-	yes	47	4	33	Mixed composition zone: base
+M07	mixed_head	minecraft:piston_head	north	-	false	sticky	yes	47	4	32	Mixed composition zone: paired head
+M08	mixed_base	minecraft:piston	east	true	-	-	yes	53	4	34	Mixed composition zone: base
+M08	mixed_head	minecraft:piston_head	east	-	true	normal	yes	54	4	34	Mixed composition zone: paired head
+M09	mixed_base	minecraft:piston	west	true	-	-	yes	34	1	40	Mixed composition zone: base
+M09	mixed_head	minecraft:piston_head	west	-	false	normal	yes	33	1	40	Mixed composition zone: paired head
+M10	mixed_base	minecraft:sticky_piston	south	true	-	-	yes	40	1	41	Mixed composition zone: base
+M10	mixed_head	minecraft:piston_head	south	-	true	sticky	yes	40	1	42	Mixed composition zone: paired head
+M11	mixed_base	minecraft:piston	down	true	-	-	yes	46	1	40	Mixed composition zone: base
+M11	mixed_head	minecraft:piston_head	down	-	true	normal	yes	46	0	40	Mixed composition zone: paired head
+M12	mixed_base	minecraft:sticky_piston	up	true	-	-	yes	52	1	41	Mixed composition zone: base
+M12	mixed_head	minecraft:piston_head	up	-	false	sticky	yes	52	2	41	Mixed composition zone: paired head
+
+Placed blocks: 120
+Bounding box: width=55, height=6, length=43

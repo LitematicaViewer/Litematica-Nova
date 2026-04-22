@@ -1,0 +1,42 @@
+NBT Viewer 资源分层与更新（规划说明）
+====================================
+
+一、设计目标
+-----------
+1. 「随 NBT-Viewer / MC 数据版本变化」的内容：只放在用户数据目录，不进 git。
+2. 你在本项目中改的「编辑器 UI」：与上游 vscode-nbt 的 rollup 产物解耦，避免每次更新 editor.js 被覆盖。
+
+二、目录约定
+-----------
+【包内】src/litematicaba/resources/web/nbt-viewer/
+  - editor.js      … 上游 vscode-nbt（rollup）+ 本项目对 Editor.ts 等补丁；随「NBT Viewer 版本」更新（tools/build_nbt_viewer.ps1）。
+  - index.html     … 壳页模板（整包外置时用）；平时合并模式用 .cache 里生成的合并页。
+  - editor.css     … 来自 vscode-nbt res（一般随上游）。
+  - codicon.css / codicon.ttf … 图标字体。
+  - （不再包含 mcmeta/）
+
+【用户数据】<user_data_dir>/minecraft-assets/nbt-viewer/
+  - mcmeta/        … 游戏资源（blocks.js, assets.js, uvmapping.js, atlas.png, version.txt）
+                     随 MC 数据版本更新：选项页「更新游戏资源」或 scripts/fetch_nbt_mcmeta_assets.py
+  - （可选）整包外置时还可放 editor.js / index.html 等，见 fetch 脚本参数。
+
+【生成】<user_data_dir>/.cache/nbt_viewer_merged.html
+  - 合并页：包内 UI + 上述 mcmeta/ 的绝对 file URI；mcmeta 或包内 editor.js 变更后点「重新加载 3D」会重写/重载。
+
+【你以后加的「自定义 UI」建议】
+  - Qt 侧：继续只在 RenderPage / 主窗布局改，与 editor.js 无关。
+  - Web 侧若要坚持改 HTML/CSS/小脚本：建议放在单独目录（例如将来可扩展
+    minecraft-assets/nbt-viewer/overlays/），由合并页在 editor.js 之后注入；
+    当前版本未自动注入 overlays，需再开发时接上 nbt_viewer_bundle.write_merged_nbt_launcher。
+
+三、更新操作对应关系
+-------------------
+| 更新什么              | 操作                                      | 主要变动文件                          |
+|-----------------------|-------------------------------------------|----------------------------------------|
+| MC 方块/模型/图集     | 选项 → 更新游戏资源；或 fetch 脚本        | data/.../minecraft-assets/.../mcmeta/* |
+| vscode-nbt 前端逻辑   | third_party 拉代码/打补丁 → build 脚本    | 包内 nbt-viewer/editor.js（及可选 data 副本）|
+
+四、设置项
+---------
+- nbt_mcmeta_target_version：上次在选项页通过「选择版本并下载」选定的 MC 版本 id；留空表示「最新稳定正式版」（无单独输入框，仅对话框选择）。
+- 选项页「选择版本并下载游戏资源」会弹出对话框，从 misode/mcmeta 拉取完整版本列表（含新命名如 26.x、快照），无需手填 id。

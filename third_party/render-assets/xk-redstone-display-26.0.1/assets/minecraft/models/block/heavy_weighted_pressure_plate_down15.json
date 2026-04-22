@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:block/pressure_plate_down_number",
+  "textures": {
+    "texture": "minecraft:block/iron_block",
+    "num": "minecraft:block/iron_15"
+  }
+}

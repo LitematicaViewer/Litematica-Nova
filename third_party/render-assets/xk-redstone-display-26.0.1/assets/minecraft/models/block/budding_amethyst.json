@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:block/high_light_cube_all",
+  "textures": {
+    "all": "minecraft:block/budding_amethyst",
+    "hl": "minecraft:block/high_light_b"
+  }
+}
