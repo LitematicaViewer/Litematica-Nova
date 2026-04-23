@@ -1884,7 +1884,10 @@ fn build_textured_mesh_chunk_output(
                 &mut solid_indices,
                 &mut translucent_indices,
                 occupied,
+                render_info,
                 materials,
+                &block_palette_by_pos,
+                block.palette_id,
                 &palette_material,
                 block.gx,
                 block.gy,
@@ -1898,7 +1901,10 @@ fn build_textured_mesh_chunk_output(
                 &mut solid_indices,
                 &mut translucent_indices,
                 occupied,
+                render_info,
                 materials,
+                &block_palette_by_pos,
+                block.palette_id,
                 &palette_material,
                 block.gx,
                 block.gy,
@@ -1935,7 +1941,10 @@ fn build_textured_mesh_chunk_output(
                     &mut solid_indices,
                     &mut translucent_indices,
                     occupied,
+                    render_info,
                     materials,
+                    &block_palette_by_pos,
+                    block.palette_id,
                     &palette_material,
                     block.gx,
                     block.gy,
@@ -1949,7 +1958,10 @@ fn build_textured_mesh_chunk_output(
                     &mut solid_indices,
                     &mut translucent_indices,
                     occupied,
+                    render_info,
                     materials,
+                    &block_palette_by_pos,
+                    block.palette_id,
                     &palette_material,
                     block.gx,
                     block.gy,
@@ -1980,7 +1992,10 @@ fn emit_textured_cuboid(
     solid_indices: &mut Vec<u32>,
     translucent_indices: &mut Vec<u32>,
     occupied: &OccupancyGrid,
+    render_info: &[BlockRenderInfo],
     materials: &FullModeMaterialCache,
+    block_palette_by_pos: &HashMap<(i32, i32, i32), usize>,
+    palette_id: usize,
     palette_material: &FullModePaletteMaterial,
     gx: i32,
     gy: i32,
@@ -1989,12 +2004,21 @@ fn emit_textured_cuboid(
     max: [f32; 3],
     neighbor_culling: bool,
 ) {
-    for (face_index, offset_vec) in FACE_NEIGHBORS.iter().enumerate() {
-        if neighbor_culling {
-            let neighbor = (gx + offset_vec[0], gy + offset_vec[1], gz + offset_vec[2]);
-            if occupied.contains_world(neighbor.0, neighbor.1, neighbor.2) {
-                continue;
-            }
+    for (face_index, _) in FACE_NEIGHBORS.iter().enumerate() {
+        if neighbor_culling
+            && textured_face_culled_by_neighbor(
+                occupied,
+                render_info,
+                materials,
+                block_palette_by_pos,
+                palette_id,
+                face_index,
+                gx,
+                gy,
+                gz,
+            )
+        {
+            continue;
         }
         emit_textured_axis_aligned_face(
             vertices,
@@ -2010,6 +2034,51 @@ fn emit_textured_cuboid(
             max,
         );
     }
+}
+
+fn textured_face_culled_by_neighbor(
+    occupied: &OccupancyGrid,
+    render_info: &[BlockRenderInfo],
+    materials: &FullModeMaterialCache,
+    block_palette_by_pos: &HashMap<(i32, i32, i32), usize>,
+    palette_id: usize,
+    face_index: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+) -> bool {
+    let offset = FACE_NEIGHBORS[face_index];
+    let neighbor = (gx + offset[0], gy + offset[1], gz + offset[2]);
+    let current_non_occluding = full_mode_non_occluding_palette(materials, palette_id);
+    if let Some(neighbor_palette_id) = block_palette_by_pos.get(&neighbor).copied() {
+        let current_policy =
+            block_properties_for_key(materials.palette_keys.get(palette_id)).culling_policy;
+        if block_culling_registry_should_cull(materials, palette_id, neighbor_palette_id) {
+            return true;
+        }
+        if block_culling_registry_preserves_neighbor_face(
+            materials,
+            palette_id,
+            neighbor_palette_id,
+        ) {
+            return false;
+        }
+        if matches!(current_policy, CullingPolicy::SameBlockOnly) {
+            return false;
+        }
+        if current_non_occluding || full_mode_non_occluding_palette(materials, neighbor_palette_id)
+        {
+            return false;
+        }
+        return render_info
+            .get(neighbor_palette_id)
+            .map(|info| info.occludes_neighbors)
+            .unwrap_or(false);
+    }
+    if current_non_occluding {
+        return false;
+    }
+    occupied.contains_world(neighbor.0, neighbor.1, neighbor.2)
 }
 
 fn emit_textured_axis_aligned_face(
@@ -2138,6 +2207,13 @@ fn model_quad_culled(
         if block_culling_registry_should_cull(materials, palette_id, neighbor_palette_id) {
             return true;
         }
+        if block_culling_registry_preserves_neighbor_face(
+            materials,
+            palette_id,
+            neighbor_palette_id,
+        ) {
+            return false;
+        }
         if matches!(current_policy, CullingPolicy::SameBlockOnly) {
             return false;
         }
@@ -2193,9 +2269,8 @@ fn block_culling_registry_should_cull(
     let neighbor_key = materials.palette_keys.get(neighbor_palette_id);
     let current = block_properties_for_key(current_key);
     let neighbor = block_properties_for_key(neighbor_key);
-    let identical_glass_pair = current.is_glass
-        && neighbor.is_glass
-        && block_id_from_palette_key(current_key) == block_id_from_palette_key(neighbor_key);
+    let identical_glass_pair =
+        block_culling_registry_identical_glass_pair(current_key, neighbor_key, current, neighbor);
     if current.is_glass && !neighbor.is_glass && neighbor.is_opaque && neighbor.is_full_cube {
         return true;
     }
@@ -2213,6 +2288,34 @@ fn block_culling_registry_should_cull(
         CullingPolicy::OpaqueFullCube => neighbor.is_opaque && neighbor.is_full_cube,
         CullingPolicy::NonOccluding => false,
     }
+}
+
+fn block_culling_registry_preserves_neighbor_face(
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    neighbor_palette_id: usize,
+) -> bool {
+    let current_key = materials.palette_keys.get(palette_id);
+    let neighbor_key = materials.palette_keys.get(neighbor_palette_id);
+    let current = block_properties_for_key(current_key);
+    let neighbor = block_properties_for_key(neighbor_key);
+    let identical_glass_pair =
+        block_culling_registry_identical_glass_pair(current_key, neighbor_key, current, neighbor);
+    if current.is_glass && !neighbor.is_glass && neighbor.is_opaque && neighbor.is_full_cube {
+        return false;
+    }
+    neighbor.preserve_neighbor_faces && !identical_glass_pair
+}
+
+fn block_culling_registry_identical_glass_pair(
+    current_key: Option<&String>,
+    neighbor_key: Option<&String>,
+    current: BlockProperties,
+    neighbor: BlockProperties,
+) -> bool {
+    current.is_glass
+        && neighbor.is_glass
+        && block_id_from_palette_key(current_key) == block_id_from_palette_key(neighbor_key)
 }
 
 fn block_properties_for_key(key: Option<&String>) -> BlockProperties {
@@ -2273,18 +2376,23 @@ fn full_mode_non_occluding_local(local: &str) -> bool {
                 | "sticky_piston"
                 | "piston_head"
                 | "moving_piston"
+                | "water"
+                | "rail"
                 | "cauldron"
                 | "water_cauldron"
                 | "lava_cauldron"
                 | "powder_snow_cauldron"
                 | "composter"
                 | "hopper"
+                | "chest"
+                | "trapped_chest"
+                | "ender_chest"
                 | "brewing_stand"
         )
         || local.ends_with("_rail")
 }
 
-fn full_mode_preserve_neighbor_faces_local(local: &str) -> bool {
+pub(crate) fn full_mode_preserve_neighbor_faces_local(local: &str) -> bool {
     matches!(
         local,
         "redstone_wire"
@@ -2293,11 +2401,14 @@ fn full_mode_preserve_neighbor_faces_local(local: &str) -> bool {
             | "redstone_torch"
             | "redstone_wall_torch"
             | "hopper"
+            | "water"
+            | "rail"
             | "chest"
             | "trapped_chest"
             | "ender_chest"
             | "barrel"
-    ) || full_mode_is_coral_family_local(local)
+    ) || local.ends_with("_rail")
+        || full_mode_is_coral_family_local(local)
 }
 
 fn full_mode_glass_family_local(local: &str) -> bool {

@@ -180,7 +180,7 @@ struct TemplateQuad {
     cullface: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResourceFlavor {
     Vanilla,
     Faithful,
@@ -203,6 +203,7 @@ struct FullModeV2Builder {
     xk_root: PathBuf,
     model_cache: HashMap<String, Option<ResolvedModel>>,
     typed_model_cache: HashMap<String, Option<TypedResolvedModel>>,
+    xk_typed_model_cache: HashMap<String, Option<TypedResolvedModel>>,
     json_cache: HashMap<String, Option<Value>>,
     texture_cache: HashMap<String, Option<(RgbaImage, ResourceFlavor)>>,
     font_ascii: Option<RgbaImage>,
@@ -225,6 +226,7 @@ impl FullModeV2Builder {
             xk_root,
             model_cache: HashMap::new(),
             typed_model_cache: HashMap::new(),
+            xk_typed_model_cache: HashMap::new(),
             json_cache: HashMap::new(),
             texture_cache: HashMap::new(),
             font_ascii: None,
@@ -257,31 +259,14 @@ impl FullModeV2Builder {
             };
             palette_keys.push(key);
             vanilla_quads += template.len();
-            let mut baked_quads = Vec::with_capacity(template.len());
-            for quad in template {
-                let slot =
-                    self.material_slot(&mut material_order, &mut material_index, quad.material);
-                match quad.cullface.as_deref() {
-                    Some("down") => palette_material.down = Some(slot),
-                    Some("up") => palette_material.up = Some(slot),
-                    Some("north") => palette_material.north = Some(slot),
-                    Some("south") => palette_material.south = Some(slot),
-                    Some("west") => palette_material.west = Some(slot),
-                    Some("east") => palette_material.east = Some(slot),
-                    _ => {
-                        if palette_material.cross.is_none() {
-                            palette_material.cross = Some(slot);
-                        }
-                    }
-                }
-                baked_quads.push(FullModeModelQuad {
-                    vertices: quad.vertices,
-                    material: slot,
-                    uv: quad.uv,
-                    double_sided: quad.double_sided,
-                    cullface: quad.cullface,
-                });
-            }
+            let baked_quads = self.template_to_model_quads_with_context(
+                &entry.block_id,
+                &properties,
+                template,
+                &mut material_order,
+                &mut material_index,
+                Some(&mut palette_material),
+            );
             if palette_material.cross.is_none() {
                 palette_material.cross = palette_material
                     .down
@@ -423,6 +408,7 @@ impl FullModeV2Builder {
                 rotation: 0,
             },
             "sign",
+            true,
         )?;
         let mut quads = cuboid_template(
             material.clone(),
@@ -565,6 +551,7 @@ impl FullModeV2Builder {
                         rotation,
                     },
                     face_name,
+                    true,
                 )?;
                 let Some(vertices) = element_face_quad(element, face_name, model_ref) else {
                     continue;
@@ -621,7 +608,12 @@ impl FullModeV2Builder {
         }
         let mut quads = Vec::new();
         for model_ref in refs {
-            if let Some(model) = self.resolve_typed_model(&model_ref.model)? {
+            let model = if hopper_uses_xk_typed_model_base(local_id(block_id), &model_ref.model) {
+                self.resolve_xk_typed_model(&model_ref.model)?
+            } else {
+                self.resolve_typed_model(&model_ref.model)?
+            };
+            if let Some(model) = model {
                 let model_quads =
                     self.collect_typed_model_quads(block_id, properties, &model, &model_ref)?;
                 if is_basic_rail_family(local_id(block_id))
@@ -715,6 +707,9 @@ impl FullModeV2Builder {
         block_id: &str,
         properties: &BTreeMap<String, String>,
     ) -> Result<Vec<OwnedModelRef>> {
+        if local_id(block_id) == "hopper" {
+            return Ok(hopper_typed_model_refs(properties));
+        }
         let Some(payload) = self.read_typed_json::<TypedBlockState>(&blockstate_path(block_id))?
         else {
             return Ok(Vec::new());
@@ -778,6 +773,48 @@ impl FullModeV2Builder {
         Ok(Some(resolved))
     }
 
+    fn resolve_xk_typed_model(&mut self, model_ref: &str) -> Result<Option<TypedResolvedModel>> {
+        let path = model_path(model_ref);
+        if let Some(cached) = self.xk_typed_model_cache.get(&path) {
+            return Ok(cached.clone());
+        }
+        let full_path = self.xk_root.join(&path);
+        let text = match std::fs::read_to_string(&full_path) {
+            Ok(text) => text,
+            Err(_) => {
+                self.xk_typed_model_cache.insert(path, None);
+                return Ok(None);
+            }
+        };
+        let payload: TypedBlockModel = serde_json::from_str(&text)
+            .with_context(|| format!("parse xk typed json failed: {}", full_path.display()))?;
+        let mut textures = HashMap::<String, String>::new();
+        let mut elements = Vec::<ResolvedElement>::new();
+        if let Some(parent_ref) = payload.parent.as_deref()
+            && let Some(parent) = self.resolve_xk_typed_model(parent_ref)?
+        {
+            textures.extend(parent.textures);
+            elements.extend(parent.elements);
+        }
+        textures.extend(
+            payload
+                .textures
+                .into_iter()
+                .map(|(key, value)| (key, value.texture_id())),
+        );
+        if !payload.elements.is_empty() {
+            elements = payload
+                .elements
+                .into_iter()
+                .map(ResolvedElement::from)
+                .collect();
+        }
+        let resolved = TypedResolvedModel { textures, elements };
+        self.xk_typed_model_cache
+            .insert(path, Some(resolved.clone()));
+        Ok(Some(resolved))
+    }
+
     fn collect_typed_model_quads(
         &mut self,
         block_id: &str,
@@ -786,25 +823,66 @@ impl FullModeV2Builder {
         model_ref: &OwnedModelRef,
     ) -> Result<Vec<TemplateQuad>> {
         let mut quads = Vec::new();
-        for element in &model.elements {
+        let local = local_id(block_id);
+        let xk_model = if local == "hopper" {
+            self.resolve_xk_typed_model(&model_ref.model)?
+        } else {
+            None
+        };
+        for (element_index, element) in model.elements.iter().enumerate() {
             for (face_name, face) in &element.faces {
                 if is_basic_rail_family(local_id(block_id)) && face_name == "down" {
                     continue;
                 }
-                let Some(texture_id) = resolve_texture_id(&face.texture, &model.textures) else {
+                let xk_face = xk_model
+                    .as_ref()
+                    .and_then(|override_model| override_model.elements.get(element_index))
+                    .and_then(|override_element| override_element.faces.get(face_name));
+                let use_real_material =
+                    hopper_big_bottom_face(local, &model_ref.model, element_index, face_name);
+                let texture_ref = hopper_texture_ref_override(
+                    local,
+                    &model_ref.model,
+                    element_index,
+                    face_name,
+                    xk_face,
+                    face,
+                );
+                let texture_textures = if use_real_material {
+                    &model.textures
+                } else {
+                    xk_face
+                        .map(|_| xk_model.as_ref().map(|model| &model.textures).unwrap())
+                        .unwrap_or(&model.textures)
+                };
+                let Some(raw_texture_id) = resolve_texture_id(texture_ref, texture_textures) else {
                     continue;
+                };
+                let texture_id = if use_real_material {
+                    hopper_real_material_texture_id(&raw_texture_id).to_string()
+                } else {
+                    raw_texture_id
+                };
+                let material_face = xk_face.unwrap_or(face);
+                let face_uv = if local == "hopper" {
+                    material_face
+                        .uv
+                        .or_else(|| hopper_default_face_uv(element, face_name))
+                } else {
+                    material_face.uv
                 };
                 let material = self.material_for_texture(
                     block_id,
                     properties,
                     &FaceSpec {
                         texture_id: &texture_id,
-                        uv: face.uv,
-                        rotation: face.rotation,
+                        uv: face_uv,
+                        rotation: material_face.rotation,
                     },
                     face_name,
+                    !use_real_material,
                 )?;
-                let geometry_face_name = if local_id(block_id) == "barrel" && model_ref.x == 90 {
+                let geometry_face_name = if local == "barrel" && model_ref.x == 90 {
                     match face_name.as_str() {
                         "north" => "south",
                         "south" => "north",
@@ -825,7 +903,6 @@ impl FullModeV2Builder {
                 };
                 let alpha = material.alpha_mode;
                 let final_world_face = dominant_face_from_vertices(&vertices);
-                let local = local_id(block_id);
                 let rotated_cullface = face
                     .cullface
                     .as_deref()
@@ -892,7 +969,34 @@ impl FullModeV2Builder {
                 let uv = auto_piston_body_uv
                     .as_ref()
                     .map(|(uv, _)| *uv)
-                    .unwrap_or_else(|| typed_face_quad_uv(face_name));
+                    .unwrap_or_else(|| {
+                        hopper_quad_uv_override(
+                            local,
+                            properties,
+                            &model_ref.model,
+                            element_index,
+                            face_name,
+                            typed_face_quad_uv(face_name),
+                        )
+                    });
+                if local == "hopper"
+                    && std::env::var_os("LBA_FULL_MODE_V2_HOPPER_DEBUG").is_some()
+                    && hopper_debug_case_selected(properties)
+                {
+                    println!(
+                        "[LBA_FULL_MODE_V2_HOPPER_FACE] state={} model={} element={} src_face={} world_face={} texture_slot={} source={} material_id={} uv_spec={:?} quad_uv={}",
+                        state_key(block_id, properties),
+                        model_ref.model,
+                        element_index,
+                        face_name,
+                        final_world_face,
+                        texture_id,
+                        self.texture_source_trace(&texture_id, !use_real_material)?,
+                        material.key,
+                        face_uv,
+                        format_uv2(&uv),
+                    );
+                }
                 if let Some((_, debug)) = auto_piston_body_uv.as_ref() {
                     if std::env::var_os("LBA_FULL_MODE_V2_PISTON_DEBUG").is_some() {
                         println!(
@@ -968,17 +1072,21 @@ impl FullModeV2Builder {
         properties: &BTreeMap<String, String>,
         spec: &FaceSpec<'_>,
         face_name: &str,
+        allow_xk: bool,
     ) -> Result<MaterialImage> {
-        let (image, key_prefix) =
+        let (image, key_prefix) = if allow_xk {
             if let Some(xk_id) = xk_texture_id_for_state(block_id, properties, spec.texture_id) {
                 if let Some((image, _)) = self.load_texture(&xk_id)? {
                     (image, format!("xk:{xk_id}"))
                 } else {
-                    self.load_texture_with_alias(spec.texture_id)?
+                    self.load_texture_with_alias(spec.texture_id, allow_xk)?
                 }
             } else {
-                self.load_texture_with_alias(spec.texture_id)?
-            };
+                self.load_texture_with_alias(spec.texture_id, allow_xk)?
+            }
+        } else {
+            self.load_texture_with_alias(spec.texture_id, allow_xk)?
+        };
         let mut image = bake_face_image(image, spec.uv, spec.rotation);
         let key_prefix = if let Some(tinted) =
             redstone_wire_tinted_image(block_id, properties, spec.texture_id, &image)
@@ -1015,6 +1123,7 @@ impl FullModeV2Builder {
                 rotation: 0,
             },
             "wire_power_overlay",
+            true,
         )?;
         Ok(vec![TemplateQuad {
             vertices: face_vertices(
@@ -1035,34 +1144,7 @@ impl FullModeV2Builder {
         block_id: &str,
         properties: &BTreeMap<String, String>,
     ) -> Result<Vec<TemplateQuad>> {
-        let mut top_image = self
-            .load_texture("minecraft:block/water_still")?
-            .map(|(image, _)| image)
-            .unwrap_or_else(|| RgbaImage::from_pixel(16, 16, Rgba([52, 118, 255, 150])));
-        if matches!(detect_alpha_mode(&top_image), FullModeAlphaMode::Opaque) {
-            for pixel in top_image.pixels_mut() {
-                pixel.0[3] = 150;
-            }
-        }
-        let top_material = MaterialImage {
-            key: format!("water_top:{}", state_key(block_id, properties)),
-            image: crop_first_animation_frame(top_image),
-            alpha_mode: FullModeAlphaMode::Translucent,
-        };
-        let mut side_image = self
-            .load_texture("minecraft:block/water_flow")?
-            .map(|(image, _)| image)
-            .unwrap_or_else(|| RgbaImage::from_pixel(16, 16, Rgba([52, 118, 255, 150])));
-        if matches!(detect_alpha_mode(&side_image), FullModeAlphaMode::Opaque) {
-            for pixel in side_image.pixels_mut() {
-                pixel.0[3] = 150;
-            }
-        }
-        let side_material = MaterialImage {
-            key: format!("water_side:{}", state_key(block_id, properties)),
-            image: crop_first_animation_frame(side_image),
-            alpha_mode: FullModeAlphaMode::Translucent,
-        };
+        let (top_material, side_material) = self.water_materials(block_id, properties)?;
         let height = water_height(properties);
         let mut quads = Vec::new();
         quads.push(TemplateQuad {
@@ -1091,6 +1173,42 @@ impl FullModeV2Builder {
         Ok(quads)
     }
 
+    fn water_materials(
+        &mut self,
+        block_id: &str,
+        properties: &BTreeMap<String, String>,
+    ) -> Result<(MaterialImage, MaterialImage)> {
+        let mut top_image = self
+            .load_texture("minecraft:block/water_still")?
+            .map(|(image, _)| image)
+            .unwrap_or_else(|| RgbaImage::from_pixel(16, 16, Rgba([52, 118, 255, 150])));
+        if matches!(detect_alpha_mode(&top_image), FullModeAlphaMode::Opaque) {
+            for pixel in top_image.pixels_mut() {
+                pixel.0[3] = 150;
+            }
+        }
+        let top_material = MaterialImage {
+            key: format!("water_top:{}", state_key(block_id, properties)),
+            image: crop_first_animation_frame(top_image),
+            alpha_mode: FullModeAlphaMode::Translucent,
+        };
+        let mut side_image = self
+            .load_texture("minecraft:block/water_flow")?
+            .map(|(image, _)| image)
+            .unwrap_or_else(|| RgbaImage::from_pixel(16, 16, Rgba([52, 118, 255, 150])));
+        if matches!(detect_alpha_mode(&side_image), FullModeAlphaMode::Opaque) {
+            for pixel in side_image.pixels_mut() {
+                pixel.0[3] = 150;
+            }
+        }
+        let side_material = MaterialImage {
+            key: format!("water_side:{}", state_key(block_id, properties)),
+            image: crop_first_animation_frame(side_image),
+            alpha_mode: FullModeAlphaMode::Translucent,
+        };
+        Ok((top_material, side_material))
+    }
+
     fn cauldron_template(
         &mut self,
         block_id: &str,
@@ -1105,6 +1223,7 @@ impl FullModeV2Builder {
                 rotation: 0,
             },
             "cauldron_side",
+            true,
         )?;
         let top = self.material_for_texture(
             block_id,
@@ -1115,6 +1234,7 @@ impl FullModeV2Builder {
                 rotation: 0,
             },
             "cauldron_top",
+            true,
         )?;
         let bottom = self.material_for_texture(
             block_id,
@@ -1125,6 +1245,7 @@ impl FullModeV2Builder {
                 rotation: 0,
             },
             "cauldron_bottom",
+            true,
         )?;
         let inner = self.material_for_texture(
             block_id,
@@ -1135,6 +1256,7 @@ impl FullModeV2Builder {
                 rotation: 0,
             },
             "cauldron_inner",
+            true,
         )?;
         let wall = 0.125;
         let floor_y = 0.25;
@@ -1234,6 +1356,7 @@ impl FullModeV2Builder {
                         rotation: 0,
                     },
                     "cauldron_water",
+                    true,
                 )?;
                 quads.push(TemplateQuad {
                     vertices: face_vertices(
@@ -1258,6 +1381,7 @@ impl FullModeV2Builder {
                         rotation: 0,
                     },
                     "cauldron_lava",
+                    true,
                 )?;
                 quads.push(TemplateQuad {
                     vertices: face_vertices(
@@ -1288,6 +1412,7 @@ impl FullModeV2Builder {
                         rotation: 0,
                     },
                     "cauldron_powder_snow",
+                    true,
                 )?;
                 quads.push(TemplateQuad {
                     vertices: face_vertices(
@@ -1321,6 +1446,7 @@ impl FullModeV2Builder {
                 rotation: 0,
             },
             "composter_side",
+            true,
         )?;
         let top = self.material_for_texture(
             block_id,
@@ -1331,6 +1457,7 @@ impl FullModeV2Builder {
                 rotation: 0,
             },
             "composter_top",
+            true,
         )?;
         let bottom = self.material_for_texture(
             block_id,
@@ -1341,6 +1468,7 @@ impl FullModeV2Builder {
                 rotation: 0,
             },
             "composter_bottom",
+            true,
         )?;
         let fill_texture = if properties
             .get("level")
@@ -1361,6 +1489,7 @@ impl FullModeV2Builder {
                 rotation: 0,
             },
             "composter_fill",
+            true,
         )?;
         let wall = 0.125;
         let floor_y = 0.125;
@@ -1441,61 +1570,67 @@ impl FullModeV2Builder {
             .get("type")
             .map(String::as_str)
             .unwrap_or("single");
-        let template_identity = chest_template_identity(chest_type);
-        let texture_id = chest_texture_id_for_template(block_id, template_identity);
-        let template = chest_template_spec(template_identity);
-        let mut quads = self.chest_textured_cuboid(
+        let canonical_identity = chest_canonical_identity(chest_type);
+        let facing = properties
+            .get("facing")
+            .map(String::as_str)
+            .unwrap_or("north");
+        let template = chest_template_spec(canonical_identity);
+        let mut base_quads = self.chest_textured_cuboid(
             block_id,
             properties,
-            &texture_id,
             "base",
             template.base_min,
             template.base_max,
             template.base_size,
             [0.0, 19.0],
         )?;
-        quads.extend(self.chest_textured_cuboid(
+        let mut lid_quads = self.chest_textured_cuboid(
             block_id,
             properties,
-            &texture_id,
             "lid",
             template.lid_min,
             template.lid_max,
             template.lid_size,
             [0.0, 0.0],
-        )?);
+        )?;
         let mut lock_quads = self.chest_textured_cuboid(
             block_id,
             properties,
-            &texture_id,
             "lock",
             template.lock_min,
             template.lock_max,
             template.lock_size,
             [0.0, 0.0],
         )?;
-        apply_chest_local_half_shift(&mut quads, chest_type);
-        apply_chest_local_lock_shift(&mut lock_quads, chest_type);
-        quads.extend(lock_quads);
-        let facing = properties
-            .get("facing")
-            .map(String::as_str)
-            .unwrap_or("north");
         let rotation = chest_rotation_degrees(facing);
         log_chest_transform_debug(
             block_id,
             chest_type,
-            template_identity.label(),
+            canonical_identity.label(),
             facing,
             rotation,
         );
         if rotation != 0.0 {
-            for quad in &mut quads {
+            for quad in &mut base_quads {
+                for vertex in &mut quad.vertices {
+                    *vertex = rotate_point(*vertex, [0.5, 0.5, 0.5], "y", rotation, false);
+                }
+            }
+            for quad in &mut lid_quads {
+                for vertex in &mut quad.vertices {
+                    *vertex = rotate_point(*vertex, [0.5, 0.5, 0.5], "y", rotation, false);
+                }
+            }
+            for quad in &mut lock_quads {
                 for vertex in &mut quad.vertices {
                     *vertex = rotate_point(*vertex, [0.5, 0.5, 0.5], "y", rotation, false);
                 }
             }
         }
+        let mut quads = base_quads;
+        quads.extend(lid_quads);
+        quads.extend(lock_quads);
         Ok(quads)
     }
 
@@ -1503,7 +1638,6 @@ impl FullModeV2Builder {
         &mut self,
         block_id: &str,
         properties: &BTreeMap<String, String>,
-        texture_id: &str,
         part: &str,
         min: [f32; 3],
         max: [f32; 3],
@@ -1512,30 +1646,25 @@ impl FullModeV2Builder {
     ) -> Result<Vec<TemplateQuad>> {
         let [dx, dy, dz] = size;
         let [u, v] = uv_origin;
-        let specs = [
-            ("west", [u, v + dz, u + dz, v + dz + dy]),
-            ("north", [u + dz, v + dz, u + dz + dx, v + dz + dy]),
-            ("east", [u + dz + dx, v + dz, u + dz + dx + dz, v + dz + dy]),
-            (
-                "south",
-                [u + dz + dx + dz, v + dz, u + dz + dx + dz + dx, v + dz + dy],
-            ),
-            ("up", [u + dz, v, u + dz + dx, v + dz]),
-            ("down", [u + dz + dx, v, u + dz + dx + dx, v + dz]),
-        ];
+        let specs = ["west", "north", "east", "south", "up", "down"];
         let mut quads = Vec::new();
-        for (face, uv) in specs {
+        for face in specs {
+            let semantic_face = chest_open_semantic_face(part, face);
+            let uv = chest_cuboid_face_uv(u, v, dx, dy, dz, semantic_face);
+            let texture_id = chest_texture_id_for_face(block_id, properties, face, semantic_face);
             let material = self.chest_face_material(
                 block_id,
                 properties,
-                texture_id,
+                &texture_id,
                 uv,
-                &format!("{part}_{face}"),
+                &format!("{part}_{face}@semantic={semantic_face}"),
             )?;
+            let vertices = face_vertices(face, min, max).unwrap();
+            let quad_uv = typed_face_quad_uv(face);
             quads.push(TemplateQuad {
-                vertices: face_vertices(face, min, max).unwrap(),
+                vertices,
                 material,
-                uv: Some(typed_face_quad_uv(face)),
+                uv: Some(quad_uv),
                 double_sided: false,
                 cullface: None,
             });
@@ -1545,15 +1674,37 @@ impl FullModeV2Builder {
 
     fn chest_face_material(
         &mut self,
-        _block_id: &str,
-        _properties: &BTreeMap<String, String>,
+        block_id: &str,
+        properties: &BTreeMap<String, String>,
         texture_id: &str,
         uv: [f32; 4],
         face_name: &str,
     ) -> Result<MaterialImage> {
-        let (image, key_prefix) = self.load_texture_with_alias(texture_id)?;
+        let debug_trace = chest_debug_trace_target(block_id, properties, face_name);
+        let texture_source = if debug_trace {
+            Some(self.texture_source_trace(texture_id, true)?)
+        } else {
+            None
+        };
+        let (image, key_prefix) = self.load_texture_with_alias(texture_id, true)?;
         let image = crop_texture_pixel_region(image, uv, [64.0, 64.0]);
         let alpha_mode = detect_alpha_mode(&image);
+        if debug_trace {
+            println!(
+                "[LBA_FULL_MODE_V2_CHEST_MATERIAL] state={} face_name={} local_face={} world_face={} semantic_face={} texture_id={} texture_source={} uv={:?} crop={}x{} fingerprint={}",
+                state_key(block_id, properties),
+                face_name,
+                chest_debug_local_face(face_name),
+                chest_debug_world_face(properties, face_name),
+                chest_debug_semantic_face(face_name),
+                texture_id,
+                texture_source.unwrap_or_else(|| "missing".to_string()),
+                uv,
+                image.width(),
+                image.height(),
+                image_fingerprint(&image),
+            );
+        }
         Ok(MaterialImage {
             key: format!("{key_prefix}@chest_uv={uv:?}#{face_name}"),
             image,
@@ -1625,6 +1776,7 @@ impl FullModeV2Builder {
                     rotation: 0,
                 },
                 "north",
+                true,
             )?;
             quads = cuboid_template(material, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0], false);
             translate_template_quads(&mut quads, offset);
@@ -1648,6 +1800,18 @@ impl FullModeV2Builder {
             HashMap::<(i32, i32, i32), (String, BTreeMap<String, String>)>::new();
         for region in root.regions.values() {
             fill_region_palette_lookup(region, bounds, &mut palette_by_pos)?;
+        }
+        overrides.extend(self.water_block_overrides(
+            &palette_by_pos,
+            material_order,
+            material_index,
+        )?);
+        if std::env::var_os("LBA_FULL_MODE_V2_HOPPER_DEBUG").is_some() {
+            overrides.extend(self.hopper_debug_overlays(
+                &palette_by_pos,
+                material_order,
+                material_index,
+            )?);
         }
         if std::env::var_os("LBA_FULL_MODE_V2_PISTON_DEBUG").is_some() {
             overrides.extend(self.piston_debug_overlays(
@@ -1724,6 +1888,34 @@ impl FullModeV2Builder {
         Ok(overrides)
     }
 
+    fn water_block_overrides(
+        &mut self,
+        palette_by_pos: &HashMap<(i32, i32, i32), (String, BTreeMap<String, String>)>,
+        material_order: &mut Vec<MaterialImage>,
+        material_index: &mut HashMap<String, u32>,
+    ) -> Result<Vec<FullModeBlockModelQuads>> {
+        let mut waters = palette_by_pos
+            .iter()
+            .filter(|(_, (block_id, _))| local_id(block_id) == "water")
+            .map(|(pos, state)| (*pos, state.clone()))
+            .collect::<Vec<_>>();
+        waters.sort_by_key(|((x, y, z), _)| (*z, *y, *x));
+
+        let mut overrides = Vec::with_capacity(waters.len());
+        for ((x, y, z), (block_id, properties)) in waters {
+            let template =
+                self.water_template_at((x, y, z), &block_id, &properties, palette_by_pos)?;
+            overrides.push(FullModeBlockModelQuads {
+                x,
+                y,
+                z,
+                replace: true,
+                quads: self.template_to_model_quads(template, material_order, material_index),
+            });
+        }
+        Ok(overrides)
+    }
+
     fn piston_debug_overlays(
         &mut self,
         palette_by_pos: &HashMap<(i32, i32, i32), (String, BTreeMap<String, String>)>,
@@ -1778,6 +1970,142 @@ impl FullModeV2Builder {
         Ok(overlays)
     }
 
+    fn hopper_debug_overlays(
+        &mut self,
+        palette_by_pos: &HashMap<(i32, i32, i32), (String, BTreeMap<String, String>)>,
+        material_order: &mut Vec<MaterialImage>,
+        material_index: &mut HashMap<String, u32>,
+    ) -> Result<Vec<FullModeBlockModelQuads>> {
+        let mut hoppers = palette_by_pos
+            .iter()
+            .filter(|(_, (block_id, _))| local_id(block_id) == "hopper")
+            .map(|(pos, state)| (*pos, state.clone()))
+            .collect::<Vec<_>>();
+        hoppers.sort_by_key(|((x, y, z), _)| (*z, *y, *x));
+
+        let mut overlays = Vec::with_capacity(hoppers.len());
+        for (index, ((x, y, z), (block_id, properties))) in hoppers.into_iter().enumerate() {
+            let block_label = format!("H{:02}", index + 1);
+            let template = self.build_state_template(&block_id, &properties)?;
+            let mut face_overlays = Vec::with_capacity(template.len());
+            println!(
+                "[LBA_FULL_MODE_V2_HOPPER_VIS] id={} pos=({}, {}, {}) block_id={} state={} facing={} enabled={} face_count={}",
+                block_label,
+                x,
+                y,
+                z,
+                block_id,
+                state_key(&block_id, &properties),
+                properties.get("facing").map(String::as_str).unwrap_or("-"),
+                properties.get("enabled").map(String::as_str).unwrap_or("-"),
+                template.len(),
+            );
+            for (face_index, quad) in template.iter().enumerate() {
+                let face_label = format!("{block_label}-{:02}", face_index + 1);
+                let Some(vertices) = inset_debug_quad_vertices(&quad.vertices) else {
+                    continue;
+                };
+                let world_face = dominant_face_from_vertices(&quad.vertices);
+                let center = scale3(
+                    quad.vertices
+                        .iter()
+                        .copied()
+                        .reduce(add3)
+                        .unwrap_or([0.0, 0.0, 0.0]),
+                    0.25,
+                );
+                let normal = quad_normal(&quad.vertices).unwrap_or([0.0, 0.0, 0.0]);
+                println!(
+                    "[LBA_FULL_MODE_V2_HOPPER_VIS_FACE] id={} block_id={} state={} world_face={} cullface={:?} center={} normal={}",
+                    face_label,
+                    block_id,
+                    state_key(&block_id, &properties),
+                    world_face,
+                    quad.cullface,
+                    format_vec3(center),
+                    format_vec3(normal),
+                );
+                face_overlays.push(TemplateQuad {
+                    vertices,
+                    material: self.hopper_debug_label_material(
+                        &block_id,
+                        &properties,
+                        &face_label,
+                        world_face,
+                    )?,
+                    uv: Some(debug_label_quad_uv()),
+                    double_sided: false,
+                    cullface: None,
+                });
+            }
+            overlays.push(FullModeBlockModelQuads {
+                x,
+                y,
+                z,
+                replace: false,
+                quads: self.template_to_model_quads(face_overlays, material_order, material_index),
+            });
+        }
+        Ok(overlays)
+    }
+
+    fn water_template_at(
+        &mut self,
+        pos: (i32, i32, i32),
+        block_id: &str,
+        properties: &BTreeMap<String, String>,
+        palette_by_pos: &HashMap<(i32, i32, i32), (String, BTreeMap<String, String>)>,
+    ) -> Result<Vec<TemplateQuad>> {
+        let (top_material, side_material) = self.water_materials(block_id, properties)?;
+        let mut quads = Vec::new();
+        let corner_heights = water_corner_heights(pos, properties, palette_by_pos);
+
+        let up_neighbor = palette_by_pos.get(&(pos.0, pos.1 + 1, pos.2));
+        if water_face_should_render(up_neighbor) {
+            quads.push(TemplateQuad {
+                vertices: [
+                    [0.0, corner_heights[0], 0.0],
+                    [0.0, corner_heights[1], 1.0],
+                    [1.0, corner_heights[2], 1.0],
+                    [1.0, corner_heights[3], 0.0],
+                ],
+                material: top_material.clone(),
+                uv: Some(typed_face_quad_uv("up")),
+                double_sided: false,
+                cullface: None,
+            });
+        }
+
+        let down_neighbor = palette_by_pos.get(&(pos.0, pos.1 - 1, pos.2));
+        if water_face_should_render(down_neighbor) {
+            quads.push(TemplateQuad {
+                vertices: face_vertices("down", [0.0, 0.0, 0.0], [1.0, 0.0, 1.0]).unwrap(),
+                material: top_material.clone(),
+                uv: Some(typed_face_quad_uv("down")),
+                double_sided: false,
+                cullface: None,
+            });
+        }
+
+        for face in ["north", "south", "west", "east"] {
+            let neighbor_pos = adjacent_pos(pos, face);
+            let neighbor = palette_by_pos.get(&neighbor_pos);
+            if !water_face_should_render(neighbor) {
+                continue;
+            }
+            let (vertices, uv) = water_side_geometry(face, corner_heights);
+            quads.push(TemplateQuad {
+                vertices,
+                material: side_material.clone(),
+                uv: Some(uv),
+                double_sided: false,
+                cullface: None,
+            });
+        }
+
+        Ok(quads)
+    }
+
     fn piston_short_head_pair_overrides(
         &mut self,
         palette_by_pos: &HashMap<(i32, i32, i32), (String, BTreeMap<String, String>)>,
@@ -1817,7 +2145,12 @@ impl FullModeV2Builder {
             } else {
                 "normal"
             };
-            if properties.get("type").map(String::as_str).unwrap_or("normal") != expected_type {
+            if properties
+                .get("type")
+                .map(String::as_str)
+                .unwrap_or("normal")
+                != expected_type
+            {
                 continue;
             }
 
@@ -1896,7 +2229,10 @@ impl FullModeV2Builder {
                     };
                     let matching_head = local_id(head_block_id) == "piston_head"
                         && head_properties.get("facing").map(String::as_str) == Some(facing)
-                        && head_properties.get("type").map(String::as_str).unwrap_or("normal")
+                        && head_properties
+                            .get("type")
+                            .map(String::as_str)
+                            .unwrap_or("normal")
                             == expected_type;
                     if matching_head {
                         continue;
@@ -1922,7 +2258,10 @@ impl FullModeV2Builder {
                     block_id,
                     state_key(block_id, properties),
                     facing,
-                    properties.get("extended").map(String::as_str).unwrap_or("-"),
+                    properties
+                        .get("extended")
+                        .map(String::as_str)
+                        .unwrap_or("-"),
                     x,
                     y,
                     z,
@@ -1984,20 +2323,82 @@ impl FullModeV2Builder {
         })
     }
 
+    fn hopper_debug_label_material(
+        &mut self,
+        block_id: &str,
+        properties: &BTreeMap<String, String>,
+        text: &str,
+        face: &str,
+    ) -> Result<MaterialImage> {
+        let font = self.load_ascii_font()?;
+        let mut image = RgbaImage::from_pixel(192, 48, Rgba([0, 0, 0, 0]));
+        fill_debug_label_background(&mut image);
+        draw_debug_text(&mut image, &font, text, 7, Rgba([0, 0, 0, 255]), 4);
+        Ok(MaterialImage {
+            key: format!(
+                "generated:hopper_debug_label:{}:{}:{}:{}",
+                state_key(block_id, properties),
+                text,
+                face,
+                properties.get("facing").map(String::as_str).unwrap_or("-")
+            ),
+            image,
+            alpha_mode: FullModeAlphaMode::Translucent,
+        })
+    }
+
     fn template_to_model_quads(
         &self,
         template: Vec<TemplateQuad>,
         material_order: &mut Vec<MaterialImage>,
         material_index: &mut HashMap<String, u32>,
     ) -> Vec<FullModeModelQuad> {
+        self.template_to_model_quads_with_context(
+            "",
+            &BTreeMap::new(),
+            template,
+            material_order,
+            material_index,
+            None,
+        )
+    }
+
+    fn template_to_model_quads_with_context(
+        &self,
+        _block_id: &str,
+        _properties: &BTreeMap<String, String>,
+        template: Vec<TemplateQuad>,
+        material_order: &mut Vec<MaterialImage>,
+        material_index: &mut HashMap<String, u32>,
+        mut palette_material: Option<&mut FullModePaletteMaterial>,
+    ) -> Vec<FullModeModelQuad> {
         template
             .into_iter()
-            .map(|quad| FullModeModelQuad {
-                vertices: quad.vertices,
-                material: self.material_slot(material_order, material_index, quad.material),
-                uv: quad.uv,
-                double_sided: quad.double_sided,
-                cullface: quad.cullface,
+            .map(|quad| {
+                let slot =
+                    self.material_slot(material_order, material_index, quad.material.clone());
+                if let Some(palette_material) = palette_material.as_deref_mut() {
+                    match quad.cullface.as_deref() {
+                        Some("down") => palette_material.down = Some(slot),
+                        Some("up") => palette_material.up = Some(slot),
+                        Some("north") => palette_material.north = Some(slot),
+                        Some("south") => palette_material.south = Some(slot),
+                        Some("west") => palette_material.west = Some(slot),
+                        Some("east") => palette_material.east = Some(slot),
+                        _ => {
+                            if palette_material.cross.is_none() {
+                                palette_material.cross = Some(slot);
+                            }
+                        }
+                    }
+                }
+                FullModeModelQuad {
+                    vertices: quad.vertices,
+                    material: slot,
+                    uv: quad.uv,
+                    double_sided: quad.double_sided,
+                    cullface: quad.cullface,
+                }
             })
             .collect()
     }
@@ -2066,12 +2467,16 @@ impl FullModeV2Builder {
         Ok(out)
     }
 
-    fn load_texture_with_alias(&mut self, texture_id: &str) -> Result<(RgbaImage, String)> {
-        if let Some((image, flavor)) = self.load_texture(texture_id)? {
+    fn load_texture_with_alias(
+        &mut self,
+        texture_id: &str,
+        allow_xk: bool,
+    ) -> Result<(RgbaImage, String)> {
+        if let Some((image, flavor)) = self.load_texture_from_candidates(texture_id, allow_xk)? {
             return Ok((image, format!("{}:{}", flavor_label(flavor), texture_id)));
         }
         if let Some(alias) = texture_alias(texture_id)
-            && let Some((image, flavor)) = self.load_texture(&alias)?
+            && let Some((image, flavor)) = self.load_texture_from_candidates(&alias, allow_xk)?
         {
             println!(
                 "[LBA_FULL_MODE_V2] texture_alias original={} alias={} flavor={}",
@@ -2089,6 +2494,51 @@ impl FullModeV2Builder {
             transparent_missing_texture(),
             format!("transparent_missing:{texture_id}"),
         ))
+    }
+
+    fn load_texture_from_candidates(
+        &mut self,
+        texture_id: &str,
+        allow_xk: bool,
+    ) -> Result<Option<(RgbaImage, ResourceFlavor)>> {
+        if allow_xk {
+            return self.load_texture(texture_id);
+        }
+        for (path, flavor) in self.texture_candidates(texture_id) {
+            if flavor == ResourceFlavor::Xk {
+                continue;
+            }
+            if let Some(image) = load_png_path(&path)? {
+                return Ok(Some((crop_first_animation_frame(image), flavor)));
+            }
+        }
+        let asset_path = texture_asset_path(texture_id);
+        if let Ok(mut file) = self.vanilla.by_name(&asset_path) {
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            let image = image::load_from_memory(&bytes)?.to_rgba8();
+            return Ok(Some((
+                crop_first_animation_frame(image),
+                ResourceFlavor::Vanilla,
+            )));
+        }
+        Ok(None)
+    }
+
+    fn texture_source_trace(&self, texture_id: &str, allow_xk: bool) -> Result<String> {
+        for (path, flavor) in self.texture_candidates(texture_id) {
+            if !allow_xk && flavor == ResourceFlavor::Xk {
+                continue;
+            }
+            if path.is_file() {
+                return Ok(format!("{}:{}", flavor_label(flavor), path.display()));
+            }
+        }
+        let asset_path = texture_asset_path(texture_id);
+        if self.vanilla.file_names().any(|name| name == asset_path) {
+            return Ok(format!("vanilla-jar:{asset_path}"));
+        }
+        Ok(format!("missing:{texture_id}"))
     }
 
     fn load_ascii_font(&mut self) -> Result<RgbaImage> {
@@ -2145,6 +2595,65 @@ fn typed_model_refs_from_apply(value: &TypedModelApply) -> Vec<OwnedModelRef> {
         model: item.model.clone(),
         x: item.x % 360,
         y: item.y % 360,
+    }]
+}
+
+fn hopper_typed_model_refs(properties: &BTreeMap<String, String>) -> Vec<OwnedModelRef> {
+    let facing = properties
+        .get("facing")
+        .map(String::as_str)
+        .unwrap_or("down");
+    let enabled = properties
+        .get("enabled")
+        .map(String::as_str)
+        .unwrap_or("true");
+    let powered_model = enabled == "false";
+    let (model, y) = match facing {
+        "down" => (
+            if powered_model {
+                "minecraft:block/hopper_on"
+            } else {
+                "minecraft:block/hopper"
+            },
+            0,
+        ),
+        "south" => (
+            if powered_model {
+                "minecraft:block/hopper_side_on"
+            } else {
+                "minecraft:block/hopper_side"
+            },
+            180,
+        ),
+        "west" => (
+            if powered_model {
+                "minecraft:block/hopper_side_on"
+            } else {
+                "minecraft:block/hopper_side"
+            },
+            270,
+        ),
+        "east" => (
+            if powered_model {
+                "minecraft:block/hopper_side_on"
+            } else {
+                "minecraft:block/hopper_side"
+            },
+            90,
+        ),
+        _ => (
+            if powered_model {
+                "minecraft:block/hopper_side_on"
+            } else {
+                "minecraft:block/hopper_side"
+            },
+            0,
+        ),
+    };
+    vec![OwnedModelRef {
+        model: model.to_string(),
+        x: 0,
+        y,
     }]
 }
 
@@ -2262,10 +2771,10 @@ struct ChestTemplateSpec {
     lock_size: [f32; 3],
 }
 
-fn chest_template_identity(chest_type: &str) -> ChestTemplateIdentity {
+fn chest_canonical_identity(chest_type: &str) -> ChestTemplateIdentity {
     match chest_type {
-        "left" => ChestTemplateIdentity::Left,
-        "right" => ChestTemplateIdentity::Right,
+        "left" => ChestTemplateIdentity::Right,
+        "right" => ChestTemplateIdentity::Left,
         _ => ChestTemplateIdentity::Single,
     }
 }
@@ -2330,43 +2839,6 @@ fn chest_rotation_degrees(facing: &str) -> f32 {
         "west" => 90.0,
         "east" => 270.0,
         _ => 0.0,
-    }
-}
-
-fn apply_chest_local_half_shift(quads: &mut [TemplateQuad], chest_type: &str) {
-    let shift_x = match chest_type {
-        "left" => 1.0 / 16.0,
-        "right" => -1.0 / 16.0,
-        _ => 0.0,
-    };
-    if shift_x == 0.0 {
-        return;
-    }
-    for quad in quads {
-        for vertex in &mut quad.vertices {
-            vertex[0] += shift_x;
-        }
-    }
-}
-
-fn apply_chest_local_lock_shift(quads: &mut [TemplateQuad], chest_type: &str) {
-    let target_min_x = match chest_type {
-        "left" => 15.0 / 16.0,
-        "right" => 0.0,
-        _ => return,
-    };
-    let Some(current_min_x) = quads
-        .iter()
-        .flat_map(|quad| quad.vertices.iter().map(|vertex| vertex[0]))
-        .reduce(f32::min)
-    else {
-        return;
-    };
-    let offset = target_min_x - current_min_x;
-    for quad in quads {
-        for vertex in &mut quad.vertices {
-            vertex[0] += offset;
-        }
     }
 }
 
@@ -2838,7 +3310,10 @@ fn piston_pair_relation_debug(local: &str, properties: &BTreeMap<String, String>
     }
     match (
         local,
-        properties.get("facing").map(String::as_str).unwrap_or("north"),
+        properties
+            .get("facing")
+            .map(String::as_str)
+            .unwrap_or("north"),
     ) {
         ("piston_head", "up") => "head_front=up,base_expected=down",
         ("piston_head", "down") => "head_front=down,base_expected=up",
@@ -2882,6 +3357,159 @@ fn typed_face_quad_uv(face: &str) -> [[f32; 2]; 4] {
         "east" => [[1.0, 1.0], [0.0, 1.0], [0.0, 0.0], [1.0, 0.0]],
         _ => [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
     }
+}
+
+fn hopper_texture_ref_override<'a>(
+    local: &str,
+    model_name: &str,
+    element_index: usize,
+    face_name: &str,
+    xk_face: Option<&'a ResolvedFace>,
+    face: &'a ResolvedFace,
+) -> &'a str {
+    if hopper_big_bottom_face(local, model_name, element_index, face_name) {
+        &face.texture
+    } else {
+        xk_face
+            .map(|candidate| candidate.texture.as_str())
+            .unwrap_or(&face.texture)
+    }
+}
+
+fn hopper_big_bottom_face(
+    local: &str,
+    model_name: &str,
+    element_index: usize,
+    face_name: &str,
+) -> bool {
+    local == "hopper"
+        && matches!(
+            model_name,
+            "minecraft:block/hopper"
+                | "minecraft:block/hopper_side"
+                | "minecraft:block/hopper_on"
+                | "minecraft:block/hopper_side_on"
+        )
+        && element_index == 0
+        && face_name == "down"
+}
+
+fn hopper_uses_xk_typed_model_base(local: &str, model_name: &str) -> bool {
+    local == "hopper"
+        && matches!(
+            model_name,
+            "minecraft:block/hopper_on" | "minecraft:block/hopper_side_on"
+        )
+}
+
+fn hopper_real_material_texture_id(texture_id: &str) -> &str {
+    match texture_id {
+        "block/hopper_inside_on"
+        | "block/hopper_inside2"
+        | "block/hopper_inside2_on"
+        | "minecraft:block/hopper_inside_on"
+        | "minecraft:block/hopper_inside2"
+        | "minecraft:block/hopper_inside2_on" => "minecraft:block/hopper_inside",
+        _ => texture_id,
+    }
+}
+
+fn hopper_quad_uv_override(
+    local: &str,
+    properties: &BTreeMap<String, String>,
+    model_name: &str,
+    element_index: usize,
+    face_name: &str,
+    uv: [[f32; 2]; 4],
+) -> [[f32; 2]; 4] {
+    let facing = properties.get("facing").map(String::as_str);
+    let enabled = properties
+        .get("enabled")
+        .map(String::as_str)
+        .unwrap_or("true");
+    if local == "hopper"
+        && ((enabled == "true"
+            && (model_name == "minecraft:block/hopper"
+                && matches!(
+                    (element_index, face_name, facing),
+                    (2, "east", Some("down"))
+                )))
+            || (enabled == "true"
+                && (model_name == "minecraft:block/hopper_side"
+                    && matches!(
+                        (element_index, face_name, facing),
+                        (
+                            2,
+                            "east" | "south" | "north",
+                            Some("north" | "south" | "east" | "west")
+                        )
+                    )))
+            || (enabled == "false"
+                && ((model_name == "minecraft:block/hopper_on"
+                    && matches!(
+                        (element_index, face_name, facing),
+                        (2, "east", Some("down"))
+                    ))
+                    || (model_name == "minecraft:block/hopper_side_on"
+                        && matches!(
+                            (element_index, face_name, facing),
+                            (2, "east", Some("north" | "south" | "east" | "west"))
+                        )))))
+    {
+        return apply_quad_uv_transform(uv, 0, true, false);
+    }
+    if local == "hopper"
+        && model_name == "minecraft:block/hopper_side"
+        && matches!(facing, Some("north" | "south"))
+        && matches!((element_index, face_name), (1, "south"))
+    {
+        return apply_quad_uv_transform(uv, 180, false, false);
+    }
+    if local == "hopper"
+        && enabled == "true"
+        && ((model_name == "minecraft:block/hopper"
+            && matches!(
+                (element_index, face_name, facing),
+                (2, "south", Some("down"))
+            ))
+            || (model_name == "minecraft:block/hopper_side"
+                && matches!(
+                    (element_index, face_name, facing),
+                    (2, "up", Some("north" | "south" | "east" | "west"))
+                )))
+    {
+        return apply_quad_uv_transform(uv, 180, false, false);
+    }
+    if local == "hopper"
+        && enabled == "false"
+        && ((model_name == "minecraft:block/hopper_on"
+            && matches!(
+                (element_index, face_name, facing),
+                (2, "east", Some("down"))
+            ))
+            || (model_name == "minecraft:block/hopper_side_on"
+                && matches!(
+                    (element_index, face_name, facing),
+                    (2, "north", Some("north" | "south" | "east" | "west"))
+                )))
+    {
+        return apply_quad_uv_transform(uv, 180, false, false);
+    }
+    uv
+}
+
+fn hopper_default_face_uv(element: &ResolvedElement, face_name: &str) -> Option<[f32; 4]> {
+    let [x0, y0, z0] = element.from;
+    let [x1, y1, z1] = element.to;
+    Some(match face_name {
+        "down" => [x0, 16.0 - z1, x1, 16.0 - z0],
+        "up" => [x0, z0, x1, z1],
+        "north" => [16.0 - x1, 16.0 - y1, 16.0 - x0, 16.0 - y0],
+        "south" => [x0, 16.0 - y1, x1, 16.0 - y0],
+        "west" => [z0, 16.0 - y1, z1, 16.0 - y0],
+        "east" => [16.0 - z1, 16.0 - y1, 16.0 - z0, 16.0 - y0],
+        _ => return None,
+    })
 }
 
 fn quad_uv_axis_direction(
@@ -3041,6 +3669,67 @@ fn quad_normal(vertices: &[[f32; 3]; 4]) -> Option<[f32; 3]> {
     normalize3(cross3(ab, bc))
 }
 
+fn inset_debug_quad_vertices(vertices: &[[f32; 3]; 4]) -> Option<[[f32; 3]; 4]> {
+    let center = scale3(
+        vertices
+            .iter()
+            .copied()
+            .reduce(add3)
+            .unwrap_or([0.0, 0.0, 0.0]),
+        0.25,
+    );
+    let u_dir = normalize3(sub3(vertices[1], vertices[0]))?;
+    let v_dir = normalize3(sub3(vertices[3], vertices[0]))?;
+    let normal = quad_normal(vertices)?;
+    let width = ((sub3(vertices[1], vertices[0])
+        .iter()
+        .map(|v| v * v)
+        .sum::<f32>())
+    .sqrt()
+        + (sub3(vertices[2], vertices[3])
+            .iter()
+            .map(|v| v * v)
+            .sum::<f32>())
+        .sqrt())
+        * 0.5;
+    let height = ((sub3(vertices[3], vertices[0])
+        .iter()
+        .map(|v| v * v)
+        .sum::<f32>())
+    .sqrt()
+        + (sub3(vertices[2], vertices[1])
+            .iter()
+            .map(|v| v * v)
+            .sum::<f32>())
+        .sqrt())
+        * 0.5;
+    let half_w = (width * 0.72).clamp(0.16, 0.58) * 0.5;
+    let half_h = (height * 0.72).clamp(0.12, 0.28) * 0.5;
+    let lift = scale3(normal, -0.3);
+    Some([
+        add3(
+            add3(center, scale3(u_dir, -half_w)),
+            add3(scale3(v_dir, half_h), lift),
+        ),
+        add3(
+            add3(center, scale3(u_dir, half_w)),
+            add3(scale3(v_dir, half_h), lift),
+        ),
+        add3(
+            add3(center, scale3(u_dir, half_w)),
+            add3(scale3(v_dir, -half_h), lift),
+        ),
+        add3(
+            add3(center, scale3(u_dir, -half_w)),
+            add3(scale3(v_dir, -half_h), lift),
+        ),
+    ])
+}
+
+fn debug_label_quad_uv() -> [[f32; 2]; 4] {
+    [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]
+}
+
 fn format_vec3(v: [f32; 3]) -> String {
     format!("[{:.3},{:.3},{:.3}]", v[0], v[1], v[2])
 }
@@ -3099,6 +3788,17 @@ fn crop_texture_pixel_region(
     } else {
         transparent_missing_texture()
     }
+}
+
+fn image_fingerprint(image: &RgbaImage) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    image.width().hash(&mut hasher);
+    image.height().hash(&mut hasher);
+    image.as_raw().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn pack_materials(materials: &[MaterialImage]) -> (RgbaImage, Vec<FullModeMaterialSlot>) {
@@ -3546,14 +4246,34 @@ fn typed_block_truth(block_id: &str, properties: &BTreeMap<String, String>) -> S
                 .unwrap_or("false"),
         ),
         "hopper" => format!(
-            "facing={}",
+            "facing={},enabled={}",
             properties
                 .get("facing")
                 .map(String::as_str)
-                .unwrap_or("down")
+                .unwrap_or("down"),
+            properties
+                .get("enabled")
+                .map(String::as_str)
+                .unwrap_or("true")
         ),
         _ => "n/a".to_string(),
     }
+}
+
+fn hopper_debug_case_selected(properties: &BTreeMap<String, String>) -> bool {
+    matches!(
+        properties
+            .get("facing")
+            .map(String::as_str)
+            .unwrap_or("down"),
+        "down" | "north" | "south" | "east" | "west"
+    ) && matches!(
+        properties
+            .get("enabled")
+            .map(String::as_str)
+            .unwrap_or("true"),
+        "true" | "false"
+    )
 }
 
 fn redstone_wire_truth(properties: &BTreeMap<String, String>) -> String {
@@ -4156,20 +4876,337 @@ fn water_height(properties: &BTreeMap<String, String>) -> f32 {
     }
 }
 
-fn chest_texture_id(block_id: &str, properties: &BTreeMap<String, String>) -> String {
-    let local = local_id(block_id);
-    if local == "ender_chest" {
-        return "minecraft:entity/chest/ender".to_string();
+fn water_corner_heights(
+    pos: (i32, i32, i32),
+    properties: &BTreeMap<String, String>,
+    palette_by_pos: &HashMap<(i32, i32, i32), (String, BTreeMap<String, String>)>,
+) -> [f32; 4] {
+    let current = water_height(properties);
+    [
+        water_corner_height(
+            pos,
+            current,
+            palette_by_pos,
+            &[(0, 0), (-1, 0), (0, -1), (-1, -1)],
+        ),
+        water_corner_height(
+            pos,
+            current,
+            palette_by_pos,
+            &[(0, 0), (-1, 0), (0, 1), (-1, 1)],
+        ),
+        water_corner_height(
+            pos,
+            current,
+            palette_by_pos,
+            &[(0, 0), (1, 0), (0, 1), (1, 1)],
+        ),
+        water_corner_height(
+            pos,
+            current,
+            palette_by_pos,
+            &[(0, 0), (1, 0), (0, -1), (1, -1)],
+        ),
+    ]
+}
+
+fn water_corner_height(
+    pos: (i32, i32, i32),
+    current_height: f32,
+    palette_by_pos: &HashMap<(i32, i32, i32), (String, BTreeMap<String, String>)>,
+    offsets: &[(i32, i32)],
+) -> f32 {
+    let mut heights = Vec::new();
+    for (dx, dz) in offsets {
+        let sample_pos = (pos.0 + dx, pos.1, pos.2 + dz);
+        if water_has_column_above(sample_pos, palette_by_pos) {
+            return 1.0;
+        }
+        if let Some(height) = water_state_height_at(sample_pos, palette_by_pos) {
+            heights.push(height);
+        }
     }
-    let base = if local == "trapped_chest" {
-        "trapped"
+    if heights.is_empty() {
+        current_height
     } else {
-        "normal"
+        heights.iter().copied().sum::<f32>() / heights.len() as f32
+    }
+}
+
+fn water_state_height_at(
+    pos: (i32, i32, i32),
+    palette_by_pos: &HashMap<(i32, i32, i32), (String, BTreeMap<String, String>)>,
+) -> Option<f32> {
+    let (block_id, properties) = palette_by_pos.get(&pos)?;
+    (local_id(block_id) == "water").then(|| water_height(properties))
+}
+
+fn water_has_column_above(
+    pos: (i32, i32, i32),
+    palette_by_pos: &HashMap<(i32, i32, i32), (String, BTreeMap<String, String>)>,
+) -> bool {
+    palette_by_pos
+        .get(&(pos.0, pos.1 + 1, pos.2))
+        .map(|(block_id, _)| local_id(block_id) == "water")
+        .unwrap_or(false)
+}
+
+fn water_face_should_render(neighbor: Option<&(String, BTreeMap<String, String>)>) -> bool {
+    let Some((block_id, _)) = neighbor else {
+        return true;
     };
-    match properties.get("type").map(String::as_str) {
-        Some("left") => format!("minecraft:entity/chest/{base}_left"),
-        Some("right") => format!("minecraft:entity/chest/{base}_right"),
-        _ => format!("minecraft:entity/chest/{base}"),
+    let local = local_id(block_id);
+    if local == "water" {
+        return false;
+    }
+    if is_full_glass_block(local) {
+        return true;
+    }
+    if crate::mesh::full_mode_preserve_neighbor_faces_local(local) {
+        return true;
+    }
+    !water_face_occluding_local(local)
+}
+
+fn water_face_occluding_local(local: &str) -> bool {
+    !(water_non_occluding_local(local)
+        || is_full_glass_block(local)
+        || local.ends_with("_pane")
+        || local.ends_with("_slab")
+        || local.ends_with("_stairs")
+        || local.ends_with("_wall")
+        || local.ends_with("_fence")
+        || local.ends_with("_gate")
+        || local.ends_with("_door")
+        || local.ends_with("_trapdoor")
+        || local.ends_with("_button")
+        || local.ends_with("_pressure_plate")
+        || local.ends_with("_sign")
+        || local.ends_with("_torch")
+        || local.ends_with("_candle")
+        || local.ends_with("_skull")
+        || local == "ladder"
+        || local == "vine"
+        || local == "scaffolding")
+}
+
+fn water_non_occluding_local(local: &str) -> bool {
+    local == "redstone_wire"
+        || matches!(
+            local,
+            "redstone_torch"
+                | "redstone_wall_torch"
+                | "repeater"
+                | "comparator"
+                | "lever"
+                | "piston"
+                | "sticky_piston"
+                | "piston_head"
+                | "moving_piston"
+                | "cauldron"
+                | "water_cauldron"
+                | "lava_cauldron"
+                | "powder_snow_cauldron"
+                | "composter"
+                | "hopper"
+                | "brewing_stand"
+                | "chain"
+                | "tripwire"
+                | "air"
+                | "cave_air"
+                | "void_air"
+        )
+}
+
+fn adjacent_pos(pos: (i32, i32, i32), face: &str) -> (i32, i32, i32) {
+    match face {
+        "north" => (pos.0, pos.1, pos.2 - 1),
+        "south" => (pos.0, pos.1, pos.2 + 1),
+        "west" => (pos.0 - 1, pos.1, pos.2),
+        "east" => (pos.0 + 1, pos.1, pos.2),
+        "up" => (pos.0, pos.1 + 1, pos.2),
+        "down" => (pos.0, pos.1 - 1, pos.2),
+        _ => pos,
+    }
+}
+
+fn water_side_geometry(face: &str, heights: [f32; 4]) -> ([[f32; 3]; 4], [[f32; 2]; 4]) {
+    match face {
+        "north" => (
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+                [0.0, heights[0], 0.0],
+                [1.0, heights[3], 0.0],
+            ],
+            [
+                [1.0, 1.0],
+                [0.0, 1.0],
+                [0.0, 1.0 - heights[0]],
+                [1.0, 1.0 - heights[3]],
+            ],
+        ),
+        "south" => (
+            [
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [1.0, heights[2], 1.0],
+                [0.0, heights[1], 1.0],
+            ],
+            [
+                [0.0, 1.0],
+                [1.0, 1.0],
+                [1.0, 1.0 - heights[2]],
+                [0.0, 1.0 - heights[1]],
+            ],
+        ),
+        "west" => (
+            [
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, heights[1], 1.0],
+                [0.0, heights[0], 0.0],
+            ],
+            [
+                [0.0, 1.0],
+                [1.0, 1.0],
+                [1.0, 1.0 - heights[1]],
+                [0.0, 1.0 - heights[0]],
+            ],
+        ),
+        "east" => (
+            [
+                [1.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0],
+                [1.0, heights[3], 0.0],
+                [1.0, heights[2], 1.0],
+            ],
+            [
+                [1.0, 1.0],
+                [0.0, 1.0],
+                [0.0, 1.0 - heights[3]],
+                [1.0, 1.0 - heights[2]],
+            ],
+        ),
+        _ => (
+            face_vertices(face, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]).unwrap(),
+            typed_face_quad_uv(face),
+        ),
+    }
+}
+
+fn chest_open_semantic_face<'a>(part: &str, face: &'a str) -> &'a str {
+    match (part, face) {
+        ("lid", "down") => "up",
+        ("base", "up") => "down",
+        _ => face,
+    }
+}
+
+fn chest_cuboid_face_uv(u: f32, v: f32, dx: f32, dy: f32, dz: f32, face: &str) -> [f32; 4] {
+    match face {
+        "west" => [u, v + dz, u + dz, v + dz + dy],
+        "north" => [u + dz, v + dz, u + dz + dx, v + dz + dy],
+        "east" => [u + dz + dx, v + dz, u + dz + dx + dz, v + dz + dy],
+        "south" => [u + dz + dx + dz, v + dz, u + dz + dx + dz + dx, v + dz + dy],
+        "up" => [u + dz, v, u + dz + dx, v + dz],
+        "down" => [u + dz + dx, v, u + dz + dx + dx, v + dz],
+        _ => [u + dz, v, u + dz + dx, v + dz],
+    }
+}
+
+fn chest_texture_id_for_face(
+    block_id: &str,
+    properties: &BTreeMap<String, String>,
+    local_face: &str,
+    semantic_face: &str,
+) -> String {
+    let chest_type = properties
+        .get("type")
+        .map(String::as_str)
+        .unwrap_or("single");
+    let facing = properties
+        .get("facing")
+        .map(String::as_str)
+        .unwrap_or("north");
+    let world_face = rotate_direction(local_face, 0, chest_rotation_degrees(facing) as i32);
+    let face_class = chest_world_face_class(facing, &world_face);
+    let identity = chest_texture_identity_for_world_face(chest_type, facing, &world_face);
+    let _ = semantic_face;
+    let _ = face_class;
+    chest_texture_id_for_template(block_id, identity)
+}
+
+fn chest_texture_identity_for_world_face(
+    chest_type: &str,
+    facing: &str,
+    world_face: &str,
+) -> ChestTemplateIdentity {
+    let identity = chest_canonical_identity(chest_type);
+    if chest_texture_identity_should_swap(chest_type, facing, world_face) {
+        swap_chest_texture_identity(identity)
+    } else {
+        identity
+    }
+}
+
+fn chest_texture_identity_should_swap(chest_type: &str, facing: &str, world_face: &str) -> bool {
+    if chest_type == "single" {
+        return false;
+    }
+    match (
+        facing,
+        chest_type,
+        chest_world_face_class(facing, world_face),
+    ) {
+        ("north", "left" | "right", ChestWorldFaceClass::Back) => true,
+        ("south", "left" | "right", ChestWorldFaceClass::Back) => true,
+        ("east", "left", ChestWorldFaceClass::Front) => false,
+        ("east", "right", ChestWorldFaceClass::Front) => false,
+        ("west", "left", ChestWorldFaceClass::Front) => false,
+        ("west", "right", ChestWorldFaceClass::Front) => false,
+        ("east", "left", ChestWorldFaceClass::Back) => true,
+        ("east", "right", ChestWorldFaceClass::Back) => true,
+        ("west", "left", ChestWorldFaceClass::Back) => true,
+        ("west", "right", ChestWorldFaceClass::Back) => true,
+        _ => false,
+    }
+}
+
+fn swap_chest_texture_identity(identity: ChestTemplateIdentity) -> ChestTemplateIdentity {
+    match identity {
+        ChestTemplateIdentity::Left => ChestTemplateIdentity::Right,
+        ChestTemplateIdentity::Right => ChestTemplateIdentity::Left,
+        ChestTemplateIdentity::Single => ChestTemplateIdentity::Single,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChestWorldFaceClass {
+    Front,
+    Back,
+    Other,
+}
+
+fn chest_world_face_class(facing: &str, world_face: &str) -> ChestWorldFaceClass {
+    if world_face == facing {
+        ChestWorldFaceClass::Front
+    } else if world_face == opposite_direction(facing) {
+        ChestWorldFaceClass::Back
+    } else {
+        ChestWorldFaceClass::Other
+    }
+}
+
+fn opposite_direction(direction: &str) -> &str {
+    match direction {
+        "north" => "south",
+        "south" => "north",
+        "west" => "east",
+        "east" => "west",
+        "up" => "down",
+        "down" => "up",
+        _ => direction,
     }
 }
 
@@ -4184,10 +5221,52 @@ fn chest_texture_id_for_template(block_id: &str, identity: ChestTemplateIdentity
         "normal"
     };
     match identity {
-        ChestTemplateIdentity::Left => format!("minecraft:entity/chest/{base}_right"),
-        ChestTemplateIdentity::Right => format!("minecraft:entity/chest/{base}_left"),
+        ChestTemplateIdentity::Left => format!("minecraft:entity/chest/{base}_left"),
+        ChestTemplateIdentity::Right => format!("minecraft:entity/chest/{base}_right"),
         ChestTemplateIdentity::Single => format!("minecraft:entity/chest/{base}"),
     }
+}
+
+fn chest_debug_trace_target(
+    block_id: &str,
+    properties: &BTreeMap<String, String>,
+    face_name: &str,
+) -> bool {
+    if std::env::var_os("LBA_FULL_MODE_V2_CHEST_DEBUG").is_none() || local_id(block_id) != "chest" {
+        return false;
+    }
+    let facing = properties
+        .get("facing")
+        .map(String::as_str)
+        .unwrap_or("north");
+    if !matches!(facing, "east" | "west") {
+        return false;
+    }
+    matches!(chest_debug_local_face(face_name), "north" | "south")
+}
+
+fn chest_debug_local_face(face_name: &str) -> &str {
+    face_name
+        .split('_')
+        .nth(1)
+        .and_then(|segment| segment.split('@').next())
+        .unwrap_or("?")
+}
+
+fn chest_debug_semantic_face(face_name: &str) -> &str {
+    face_name.split("@semantic=").nth(1).unwrap_or("?")
+}
+
+fn chest_debug_world_face(properties: &BTreeMap<String, String>, face_name: &str) -> String {
+    let facing = properties
+        .get("facing")
+        .map(String::as_str)
+        .unwrap_or("north");
+    rotate_direction(
+        chest_debug_local_face(face_name),
+        0,
+        chest_rotation_degrees(facing) as i32,
+    )
 }
 
 fn facing_offset(facing: &str, distance: f32) -> [f32; 3] {
