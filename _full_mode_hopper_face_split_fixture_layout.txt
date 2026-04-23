@@ -1,0 +1,25 @@
+Hopper face-split fixture layout
+
+Purpose:
+  Hopper-only face-split paired fixture for per-face numbering and enabled=true/false comparison.
+  Columns keep the same five core facings; rows separate unlocked and locked hopper states.
+
+Rows:
+  z=0 -> enabled=true
+  z=7 -> enabled=false
+
+Columns:
+  x=0 down, x=7 north, x=14 south, x=21 east, x=28 west
+
+Samples:
+sample_id	section	title	anchor	block_id	properties	note
+HF01	face_split_core	Hopper face-split facing=down enabled=true	(0,0,0)	minecraft:hopper	enabled=true,facing=down	Face-split paired sample for direct locked/unlocked comparison. Top row keeps enabled=true, bottom row keeps enabled=false.
+HF02	face_split_core	Hopper face-split facing=north enabled=true	(7,0,0)	minecraft:hopper	enabled=true,facing=north	Face-split paired sample for direct locked/unlocked comparison. Top row keeps enabled=true, bottom row keeps enabled=false.
+HF03	face_split_core	Hopper face-split facing=south enabled=true	(14,0,0)	minecraft:hopper	enabled=true,facing=south	Face-split paired sample for direct locked/unlocked comparison. Top row keeps enabled=true, bottom row keeps enabled=false.
+HF04	face_split_core	Hopper face-split facing=east enabled=true	(21,0,0)	minecraft:hopper	enabled=true,facing=east	Face-split paired sample for direct locked/unlocked comparison. Top row keeps enabled=true, bottom row keeps enabled=false.
+HF05	face_split_core	Hopper face-split facing=west enabled=true	(28,0,0)	minecraft:hopper	enabled=true,facing=west	Face-split paired sample for direct locked/unlocked comparison. Top row keeps enabled=true, bottom row keeps enabled=false.
+HF06	face_split_core	Hopper face-split facing=down enabled=false	(0,0,7)	minecraft:hopper	enabled=false,facing=down	Face-split paired sample for direct locked/unlocked comparison. Top row keeps enabled=true, bottom row keeps enabled=false.
+HF07	face_split_core	Hopper face-split facing=north enabled=false	(7,0,7)	minecraft:hopper	enabled=false,facing=north	Face-split paired sample for direct locked/unlocked comparison. Top row keeps enabled=true, bottom row keeps enabled=false.
+HF08	face_split_core	Hopper face-split facing=south enabled=false	(14,0,7)	minecraft:hopper	enabled=false,facing=south	Face-split paired sample for direct locked/unlocked comparison. Top row keeps enabled=true, bottom row keeps enabled=false.
+HF09	face_split_core	Hopper face-split facing=east enabled=false	(21,0,7)	minecraft:hopper	enabled=false,facing=east	Face-split paired sample for direct locked/unlocked comparison. Top row keeps enabled=true, bottom row keeps enabled=false.
+HF10	face_split_core	Hopper face-split facing=west enabled=false	(28,0,7)	minecraft:hopper	enabled=false,facing=west	Face-split paired sample for direct locked/unlocked comparison. Top row keeps enabled=true, bottom row keeps enabled=false.
