@@ -41,3 +41,4 @@ bin/viewer-backend/*.exe
 # Local preview / verify outputs
 _full_verify_v2_*.png
 _full_verify_v2_*.txt
+/data
