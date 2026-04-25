@@ -7,8 +7,8 @@ from litematicaba.ui.pages.flake_page import FlakePage
 from litematicaba.ui.pages.placeholders import (
     ReplacePage,
 )
-from litematicaba.ui.pages.render_bridge_page import RenderPage
-from litematicaba.ui.pages.statistics_bridge_page import StatisticsPage
+from litematicaba.ui.pages.render_page import RenderPage
+from litematicaba.ui.pages.statistics_page import StatisticsPage
 from litematicaba.ui.pages.ui_test_page import UiTestPage
 
 __all__ = [

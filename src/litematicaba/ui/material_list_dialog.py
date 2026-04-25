@@ -1,4 +1,4 @@
-﻿"""材料列表独立窗口（design §2.8）：磁盘缓存优先；未过期时不重复扫描。
+"""材料列表独立窗口（design §2.8）：磁盘缓存优先；未过期时不重复扫描。
 
 子区域列表优先复用属性页已解析的 ``Regions``，避免对大文件再次 ``Schematic.load`` 阻塞 UI；
 仅在无法与属性页对齐时于后台线程读取键名。「重新加载」或缓存过期时后台重扫；有缓存时先以中灰色显示缓存行再刷新。
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QHeaderView,
     QSizePolicy,
     QSpinBox,
     QTableWidget,
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from litematicaba.core.game_resource_language import load_runtime_language_map
-from litematicaba.core.native_backend_bridge import material_counts_from_analysis
+from litematicaba.core.litematic_block_scan import scan_litematic_block_counts, sorted_block_counts
 from litematicaba.core.snbt_properties import load_snbt_properties
 from litematicaba.core.material_list_cache import (
     cache_is_stale,
@@ -106,7 +107,13 @@ def _load_block_cn_map() -> dict[str, str]:
 
 def _display_name(block_id: str, cn: dict[str, str]) -> str:
     if block_id.startswith("E/"):
-        return block_id
+        # 实体翻译：E/minecraft:pig -> entity.minecraft.pig
+        raw_entity = block_id[2:]
+        return (
+            cn.get(f"entity.{raw_entity.replace(':', '.')}")
+            or cn.get(f"entity.{raw_entity}")
+            or block_id
+        )
     raw = block_id.split("[")[0].strip()
     if ":" in raw:
         local = raw.split(":", 1)[1]
@@ -247,9 +254,15 @@ class _MaterialScanThread(QThread):
 
     def run(self) -> None:  # type: ignore[override]
         try:
-            if self._region is not None:
-                raise RuntimeError("当前材料列表已切到 Litematica-viewer 后端；该后端当前只输出整投影材料统计。")
-            d = material_counts_from_analysis(self._path, include_entities=self._inc)
+            settings = load_settings()
+            if settings.material_list_scan_backend == MATERIAL_LIST_SCAN_BACKEND_NATIVE and self._region is None:
+                d = material_counts_from_analysis(self._path, include_entities=self._inc)
+            else:
+                d = scan_litematic_block_counts(
+                    self._path,
+                    include_entities=self._inc,
+                    region_name=self._region,
+                )
             self.finished_ok.emit(d)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -325,6 +338,9 @@ class MaterialListDialog(QDialog):
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setColumnWidth(0, 40)
         self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.setColumnWidth(2, 100)
+        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         configure_material_list_table(self._table, self._theme_id)
 
         root = QVBoxLayout(self)
@@ -513,7 +529,7 @@ class MaterialListDialog(QDialog):
         self._csv_mode = True
         self._csv_source = csv_path
         self._litematic_path = None
-        self._base_rows = _sorted_material_counts(counts)
+        self._base_rows = sorted_block_counts(counts)
         self._status.setText(f"自定义文件：{csv_path.name}")
         self._fill_table(self._base_rows, gray=False)
 
@@ -564,7 +580,7 @@ class MaterialListDialog(QDialog):
         if cached is not None:
             counts, mns = cached
             stale = cache_is_stale(resolved, mns)
-            self._base_rows = _sorted_material_counts(counts)
+            self._base_rows = sorted_block_counts(counts)
             if force_refresh:
                 self._fill_table(self._base_rows, gray=True)
                 self._status.setText("已从缓存显示（中灰色）；正在重新扫描…")
@@ -620,7 +636,7 @@ class MaterialListDialog(QDialog):
             )
         except OSError:
             pass
-        self._base_rows = _sorted_material_counts(dict(counts))
+        self._base_rows = sorted_block_counts(dict(counts))
         self._fill_table(self._base_rows, gray=False)
         self._status.setText("已更新为最新扫描结果。")
 

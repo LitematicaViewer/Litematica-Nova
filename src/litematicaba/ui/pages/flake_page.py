@@ -1,4 +1,4 @@
-"""分层页：Y 轴俯视切片的最小真实闭环。"""
+"""分层页：Y 轴俯视切片功能（design §2.5）。"""
 
 from __future__ import annotations
 
@@ -84,6 +84,11 @@ _STATE_KEY_LABELS = {
     "distance": "距离",
     "level": "等级",
     "age": "生长阶段",
+    "power": "强度",
+    "east": "东",
+    "west": "西",
+    "north": "北",
+    "south": "南",
 }
 
 
@@ -112,6 +117,10 @@ _STATE_VALUE_LABELS = {
     "straight": "直线",
     "true": "是",
     "false": "否",
+    "none": "无",
+    "side": "侧连",
+    "low": "矮",
+    "tall": "高",
 }
 
 
@@ -150,140 +159,23 @@ def _friendly_state_short_value(value: str) -> str:
     return _friendly_state_value(value)[:2]
 
 
-def _friendly_state_text(block_id: str, properties: dict[str, str]) -> str:
-    if not properties:
-        return f"方块 ID：{block_id}"
-    parts = []
-    for key, value in sorted(properties.items()):
-        label = _STATE_KEY_LABELS.get(key, key.replace("_", " "))
-        parts.append(f"{label}：{_friendly_state_value(value)}")
-    return f"方块 ID：{block_id}\n状态：" + "，".join(parts)
-
-
-_STATE_KEY_LABELS = {
-    "axis": "\u8f74\u5411",
-    "facing": "\u671d\u5411",
-    "half": "\u534a\u90e8",
-    "shape": "\u5f62\u72b6",
-    "type": "\u7c7b\u578b",
-    "waterlogged": "\u542b\u6c34",
-    "open": "\u6253\u5f00",
-    "powered": "\u5145\u80fd",
-    "lit": "\u70b9\u4eae",
-    "snowy": "\u8986\u96ea",
-    "attached": "\u5df2\u8fde\u63a5",
-    "distance": "\u8ddd\u79bb",
-    "level": "\u7b49\u7ea7",
-    "age": "\u751f\u957f\u9636\u6bb5",
-}
-
-_STATE_VALUE_LABELS = {
-    "north": "\u671d\u5317",
-    "south": "\u671d\u5357",
-    "east": "\u671d\u4e1c",
-    "west": "\u671d\u897f",
-    "up": "\u671d\u4e0a",
-    "down": "\u671d\u4e0b",
-    "x": "X \u8f74",
-    "y": "Y \u8f74",
-    "z": "Z \u8f74",
-    "top": "\u4e0a\u534a",
-    "bottom": "\u4e0b\u534a",
-    "upper": "\u4e0a\u534a",
-    "lower": "\u4e0b\u534a",
-    "left": "\u5de6",
-    "right": "\u53f3",
-    "single": "\u5355\u5757",
-    "double": "\u53cc\u5c42",
-    "inner_left": "\u5185\u89d2\u5de6",
-    "inner_right": "\u5185\u89d2\u53f3",
-    "outer_left": "\u5916\u89d2\u5de6",
-    "outer_right": "\u5916\u89d2\u53f3",
-    "straight": "\u76f4\u7ebf",
-    "true": "\u662f",
-    "false": "\u5426",
-}
-
-_STATE_SHORT_VALUE_LABELS = {
-    "north": "\u5317",
-    "south": "\u5357",
-    "east": "\u4e1c",
-    "west": "\u897f",
-    "up": "\u4e0a",
-    "down": "\u4e0b",
-    "x": "X",
-    "y": "Y",
-    "z": "Z",
-    "top": "\u4e0a",
-    "bottom": "\u4e0b",
-    "upper": "\u4e0a",
-    "lower": "\u4e0b",
-    "left": "\u5de6",
-    "right": "\u53f3",
-    "true": "\u662f",
-    "false": "\u5426",
-}
-
-
-def _friendly_state_value(value: str) -> str:
-    key = value.strip().lower()
-    if key in _STATE_VALUE_LABELS:
-        return _STATE_VALUE_LABELS[key]
-    return value.replace("_", " ")
-
-
-def _friendly_state_short_value(value: str) -> str:
-    key = value.strip().lower()
-    if key in _STATE_SHORT_VALUE_LABELS:
-        return _STATE_SHORT_VALUE_LABELS[key]
-    return _friendly_state_value(value)[:2]
-
-
-def _friendly_state_text(block_id: str, properties: dict[str, str]) -> str:
-    if not properties:
-        return f"\u65b9\u5757 ID\uff1a{block_id}"
-    parts = []
-    for key, value in sorted(properties.items()):
-        label = _STATE_KEY_LABELS.get(key, key.replace("_", " "))
-        parts.append(f"{label}\uff1a{_friendly_state_value(value)}")
-    return f"\u65b9\u5757 ID\uff1a{block_id}\n\u72b6\u6001\uff1a" + "\uff0c".join(parts)
-
-
 _DIRECTION_LABELS = {
-    "north": "\u5317",
-    "south": "\u5357",
-    "east": "\u4e1c",
-    "west": "\u897f",
-    "up": "\u4e0a",
-    "down": "\u4e0b",
+    "north": "北",
+    "south": "南",
+    "east": "东",
+    "west": "西",
+    "up": "上",
+    "down": "下",
 }
 
 _BOOLEAN_STATE_LABELS = {
-    "open": ("\u5f00\u542f", "\u5173\u95ed"),
-    "waterlogged": ("\u542b\u6c34", "\u4e0d\u542b\u6c34"),
-    "powered": ("\u901a\u7535", "\u672a\u901a\u7535"),
-    "lit": ("\u70b9\u4eae", "\u672a\u70b9\u4eae"),
-    "attached": ("\u5df2\u8fde\u63a5", "\u672a\u8fde\u63a5"),
-    "snowy": ("\u8986\u96ea", "\u65e0\u8986\u96ea"),
+    "open": ("开启", "关闭"),
+    "waterlogged": ("含水", "不含水"),
+    "powered": ("通电", "未通电"),
+    "lit": ("点亮", "未点亮"),
+    "attached": ("已连接", "未连接"),
+    "snowy": ("覆雪", "无覆雪"),
 }
-
-_STATE_KEY_LABELS.update(
-    {
-        "power": "\u5f3a\u5ea6",
-        "east": "\u4e1c",
-        "west": "\u897f",
-        "north": "\u5317",
-        "south": "\u5357",
-    }
-)
-_STATE_VALUE_LABELS.update(
-    {
-        "none": "\u65e0",
-        "side": "\u4fa7\u8fde",
-        "low": "\u77ee",
-        "tall": "\u9ad8",
-    }
-)
 
 
 def _friendly_state_lines(properties: dict[str, str]) -> list[str]:
@@ -300,24 +192,24 @@ def _friendly_state_lines(properties: dict[str, str]) -> list[str]:
         elif value == "side":
             connection_dirs.append(label)
         elif value == "up":
-            connection_dirs.append(f"{label}\u4e0a")
+            connection_dirs.append(f"{label}上")
         elif value in ("low", "tall"):
-            height_label = "\u9ad8" if value == "tall" else "\u77ee"
+            height_label = "高" if value == "tall" else "矮"
             wall_connections.append(f"{label}{height_label}")
     if connection_dirs:
-        lines.append("\u8fde\u63a5\uff1a" + "\u3001".join(connection_dirs))
+        lines.append("连接：" + "、".join(connection_dirs))
     if wall_connections:
-        lines.append("\u8fde\u63a5\uff1a" + "\u3001".join(wall_connections))
+        lines.append("连接：" + "、".join(wall_connections))
 
     for key in ("facing", "rotation"):
         value = properties.get(key)
         if value:
-            lines.append(f"\u671d\u5411\uff1a{_friendly_state_short_value(value)}")
+            lines.append(f"朝向：{_friendly_state_short_value(value)}")
     for key in ("half", "axis", "type", "shape"):
         value = properties.get(key)
         if value:
             label = _STATE_KEY_LABELS.get(key, key)
-            lines.append(f"{label}\uff1a{_friendly_state_value(value)}")
+            lines.append(f"{label}：{_friendly_state_value(value)}")
     for key, (true_label, false_label) in _BOOLEAN_STATE_LABELS.items():
         value = properties.get(key)
         if value == "true":
@@ -330,17 +222,17 @@ def _friendly_state_lines(properties: dict[str, str]) -> list[str]:
         if key in _BOOLEAN_STATE_LABELS:
             continue
         label = _STATE_KEY_LABELS.get(key, key.replace("_", " "))
-        lines.append(f"{label}\uff1a{_friendly_state_value(value)}")
+        lines.append(f"{label}：{_friendly_state_value(value)}")
     return lines
 
 
 def _friendly_state_text(block_id: str, properties: dict[str, str]) -> str:
     if not properties:
-        return f"\u65b9\u5757 ID\uff1a{block_id}"
+        return f"方块 ID：{block_id}"
     lines = _friendly_state_lines(properties)
     if not lines:
-        return f"\u65b9\u5757 ID\uff1a{block_id}"
-    return f"\u65b9\u5757 ID\uff1a{block_id}\n\u72b6\u6001\uff1a" + "\uff1b".join(lines)
+        return f"方块 ID：{block_id}"
+    return f"方块 ID：{block_id}\n状态：" + "；".join(lines)
 
 
 class _VisualMetaWorker(QThread):
@@ -352,7 +244,7 @@ class _VisualMetaWorker(QThread):
         self._seq = seq
         self._cache_file = cache_file
 
-    def run(self) -> None:  # type: ignore[override]
+    def run(self) -> None:
         try:
             payload = get_cache_layer_meta(self._cache_file)
         except Exception as exc:
@@ -372,7 +264,7 @@ class _VisualLayerWorker(QThread):
         self._cache_file = cache_file
         self._y = int(y)
 
-    def run(self) -> None:  # type: ignore[override]
+    def run(self) -> None:
         try:
             payload = get_cache_layer(self._cache_file, self._y)
         except Exception as exc:
@@ -527,7 +419,7 @@ class LayerSliceCanvas(QWidget):
             self._clamp_axis(self._pan.y(), content_h, float(self.height())),
         )
 
-    def resizeEvent(self, event) -> None:  # type: ignore[override]
+    def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if not self._blocks and self._size_x > 0:
             self.fit_to_view()
@@ -536,7 +428,7 @@ class LayerSliceCanvas(QWidget):
             self._clamp_pan()
             self.update()
 
-    def wheelEvent(self, event: QWheelEvent) -> None:  # type: ignore[override]
+    def wheelEvent(self, event: QWheelEvent) -> None:
         if self._size_x <= 0 or self._size_z <= 0:
             return
         angle = event.angleDelta().y()
@@ -553,14 +445,14 @@ class LayerSliceCanvas(QWidget):
         self.update()
         event.accept()
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = event.position().toPoint()
             self._drag_pan = QPointF(self._pan)
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         pos = event.position().toPoint()
         if self._drag_start is not None:
             delta = pos - self._drag_start
@@ -571,13 +463,13 @@ class LayerSliceCanvas(QWidget):
             return
         self._sync_hover(pos, event.globalPosition().toPoint())
 
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
         super().mouseReleaseEvent(event)
 
-    def leaveEvent(self, event) -> None:  # type: ignore[override]
+    def leaveEvent(self, event) -> None:
         self._hover = None
         self._popup.hide()
         self.update()
@@ -631,7 +523,7 @@ class LayerSliceCanvas(QWidget):
         self._layer_pixmap_tile_px = tile_px
         return pixmap
 
-    def paintEvent(self, event) -> None:  # type: ignore[override]
+    def paintEvent(self, event) -> None:
         super().paintEvent(event)
         painter = QPainter(self)
         painter.fillRect(self.rect(), self.palette().base())
@@ -727,7 +619,7 @@ class LayerSliceCanvas(QWidget):
 
 
 class FlakePage(QWidget):
-    """现有分层页上的 Y 轴俯视切片。"""
+    """分层页：Y 轴俯视切片（design §2.5）。"""
 
     def __init__(
         self,
@@ -813,6 +705,7 @@ class FlakePage(QWidget):
 
         self._canvas = LayerSliceCanvas(self)
         self._canvas.set_state_badges_enabled(self._render_mode != RENDER_BUILD_MODE_FULL)
+
         self._btn_material = QPushButton("材料列表（当前区域）")
         self._btn_material.clicked.connect(self._on_material_list)
 
@@ -851,7 +744,10 @@ class FlakePage(QWidget):
                 for display_name, source_key in ents:
                     self._region_combo.addItem(display_name, source_key)
             else:
-                self._region_combo.addItem("整个投影", "")
+                from litemapy import Schematic
+                sch = Schematic.load(str(path))
+                for k in sch.regions.keys():
+                    self._region_combo.addItem(k, k)
         except Exception:
             self._region_combo.addItem("整个投影", "")
         self._region_combo.blockSignals(False)
@@ -870,7 +766,6 @@ class FlakePage(QWidget):
         self._reset_visual_state()
 
     def _on_region_changed(self, _index: int) -> None:
-        # 本轮只做整投影 Y 轴分层；区域下拉保留给材料列表和后续区域裁剪。
         return
 
     def showEvent(self, event: QShowEvent) -> None:
@@ -912,7 +807,7 @@ class FlakePage(QWidget):
         self._canvas.update()
 
     def _sync_path_label(self) -> None:
-        path = self._props.display_file_path()
+        path = self._props.active_file_path()
         self._lbl_path.setText(str(path) if path is not None else "请在“属性”页加载 .litematic。")
 
     def _reset_visual_state(self) -> None:

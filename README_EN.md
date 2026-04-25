@@ -76,15 +76,15 @@ Quickly replace/restrict different blocks in the schematic
 
 ### Material List
 List block counts included in selected regions or layers
-- [ ] Unit statistics (shulker boxes/stacks/remainders)
-- [ ] Table item hover panel
+- [x] Unit statistics (shulker boxes/stacks/remainders)
+- [x] Table item hover panel
 - [x] Multi-workbook coexistence
 - [x] Export list data
 	- [x] `.csv` comma-separated value file
 	- [x] `.txt` ASCII art table
 - [x] Import and parse list data
 	- [x] Read `.csv` comma-separated value files exported by the Litematica mod
-- [ ] Minecraft block item icons
+- [x] Minecraft block item icons
 
 ### User Interface
 - [ ] Themes

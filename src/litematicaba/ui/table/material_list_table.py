@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from PySide6.QtCore import QEvent, QModelIndex, QObject, QPoint, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
@@ -64,10 +65,17 @@ def material_list_block_icon_pixmap_32() -> QPixmap:
 
 
 def material_list_block_icon_pixmap_32_for_block(block_id: str) -> QPixmap:
-    """按「应用到材料列表」资源解析方块 PNG；图标列**固定 32×32**，不采用列表型 ``table_list_thumb_px`` 约定。"""
+    """按优先级解析图标：激活方块库 → 激活物品库 → 内建方块 → 内建物品 → 占位符。"""
     from litematicaba.core.game_resource_block_icon import (
+        block_2d_initial_dir,
         normalize_material_list_block_local_id,
         resolve_material_list_icon_path,
+        resolve_material_list_icon_path_in_root,
+    )
+    from litematicaba.core.game_resource_item_icon import (
+        item_initial_dir,
+        layering_item_icon_search_root,
+        resolve_layering_item_icon_path_in_root,
     )
     from litematicaba.core.material_list_icon_pixmap_cache import prewarmed_scaled_pixmap_for_local_id
 
@@ -76,9 +84,30 @@ def material_list_block_icon_pixmap_32_for_block(block_id: str) -> QPixmap:
     if hit is not None:
         return hit
 
+    candidates: list[Path] = []
+
+    # 1) 激活的方块图标库
     p = resolve_material_list_icon_path(block_id)
     if p is not None:
-        pm = QPixmap(str(p))
+        candidates.append(p)
+
+    # 2) 激活的物品图标库
+    p = resolve_layering_item_icon_path_in_root(block_id, layering_item_icon_search_root())
+    if p is not None:
+        candidates.append(p)
+
+    # 3) 内建方块图标库（单个加载）
+    p = resolve_material_list_icon_path_in_root(block_id, block_2d_initial_dir())
+    if p is not None:
+        candidates.append(p)
+
+    # 4) 内建物品图标库（单个加载）
+    p = resolve_layering_item_icon_path_in_root(block_id, item_initial_dir())
+    if p is not None:
+        candidates.append(p)
+
+    for one in candidates:
+        pm = QPixmap(str(one))
         if not pm.isNull():
             return pm.scaled(
                 32,
@@ -86,6 +115,7 @@ def material_list_block_icon_pixmap_32_for_block(block_id: str) -> QPixmap:
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.FastTransformation,
             )
+
     return material_list_block_icon_pixmap_32()
 
 
@@ -140,7 +170,7 @@ def refresh_material_list_row_visuals(table: QTableWidget) -> None:
 
 
 def _material_list_row_payload(table: QTableWidget, row: int) -> tuple[str, str, int] | None:
-    """返回 (方块 ID, 名称列展示文, 总计数量)；无效行返回 None。"""
+    """返回 (方块 ID, 名称列展示文，总计数量)；无效行返回 None。"""
     name_it = table.item(row, 1)
     total_it = table.item(row, 2)
     if name_it is None:

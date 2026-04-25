@@ -31,6 +31,10 @@ from litematicaba.core.settings import (
     AppSettings,
     load_settings,
 )
+from litematicaba.ui.layering_item_icon_prewarmer import (
+    LayeringItemIconPrewarmer,
+    attach_layering_item_icon_prewarmer,
+)
 from litematicaba.ui.material_list_icon_prewarmer import (
     MaterialListIconPrewarmer,
     attach_material_list_icon_prewarmer,
@@ -82,6 +86,8 @@ class AutoProjectionPreviewWorker(QThread):
             return
         self.finished_ok.emit(str(path))
 
+
+# 页面排序
 PAGE_HOME = 0
 PAGE_LIBRARY = 1
 PAGE_PROPERTIES = 2
@@ -214,17 +220,7 @@ class MainWindow(QWidget):
             "ui_test": self._btn_ui_test,
             "options": self._btn_options,
         }
-        for b in (
-            self._btn_home,
-            self._btn_library,
-            self._btn_properties,
-            self._btn_statistics,
-            self._btn_flake,
-            self._btn_render,
-            self._btn_replace,
-            self._btn_ui_test,
-            self._btn_options,
-        ):
+        for b in self._nav_buttons.values():
             self._btn_group.addButton(b)
 
         self._btn_home.clicked.connect(lambda: self._navigate("home"))
@@ -285,6 +281,10 @@ class MainWindow(QWidget):
             self, config_provider=self._block_icon_prewarm_config
         )
         attach_material_list_icon_prewarmer(self._material_list_icon_prewarmer)
+        self._layering_item_icon_prewarmer = LayeringItemIconPrewarmer(
+            self, config_provider=self._block_icon_prewarm_config
+        )
+        attach_layering_item_icon_prewarmer(self._layering_item_icon_prewarmer)
         register_material_ui_icon_prewarm_hook(self._maybe_start_icon_prewarm_from_material_ui)
         self._btn_home.setChecked(True)
         self._stack.setCurrentIndex(PAGE_HOME)
@@ -300,9 +300,14 @@ class MainWindow(QWidget):
             s.block_icon_prewarm_decode_thread,
         )
 
+    def _start_material_then_layering_item_icon_prewarm(self) -> None:
+        self._material_list_icon_prewarmer.start()
+        # 需求：物品图标加载任务顺序在方块图标之后。
+        QTimer.singleShot(0, self._layering_item_icon_prewarmer.start)
+
     def schedule_material_list_icon_prewarm(self) -> None:
         """窗口先完成首帧绘制后再预载图标，减轻与冷启动争用。"""
-        QTimer.singleShot(1200, self._material_list_icon_prewarmer.start)
+        QTimer.singleShot(1200, self._start_material_then_layering_item_icon_prewarm)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -540,7 +545,7 @@ class MainWindow(QWidget):
         if self._icon_prewarm_session_litematic:
             return
         self._icon_prewarm_session_litematic = True
-        self._material_list_icon_prewarmer.start()
+        self._start_material_then_layering_item_icon_prewarm()
 
     def _maybe_start_icon_prewarm_from_material_ui(self) -> None:
         if self._settings.block_icon_preload_mode != BLOCK_ICON_PRELOAD_ON_MATERIAL_OR_FLAKE:
@@ -548,7 +553,7 @@ class MainWindow(QWidget):
         if self._icon_prewarm_session_material_ui:
             return
         self._icon_prewarm_session_material_ui = True
-        self._material_list_icon_prewarmer.start()
+        self._start_material_then_layering_item_icon_prewarm()
 
     def _on_settings_changed(self, s: AppSettings) -> None:
         old_icon = self._settings.block_icon_preload_mode

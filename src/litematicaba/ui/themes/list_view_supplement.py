@@ -20,10 +20,11 @@ _SEL_SECTION = "QWidget#McmetaStandardTableSection QTableWidget#UITestActionTabl
 _SEL_UI_TEST_CONTENT_LIST = "QWidget#UiTestContentListSection QTableWidget#UITestContentListTable"
 _SEL_LANG = "QDialog#GameResourceLanguageDialog QTableWidget#OptionsLanguageFileTable"
 _SEL_BLOCK_ICON = "QDialog#GameResourceBlockIconDialog QTableWidget#OptionsBlockIconResourceTable"
+_SEL_ITEM_ICON = "QDialog#GameResourceItemIconDialog QTableWidget#OptionsItemIconResourceTable"
 _SEL_MATERIAL = "QDialog#MaterialListDialog QTableWidget#MaterialListTable"
 _SEL_PROPERTIES_REGION = "QTableWidget#PropertiesRegionTable"
 # mcmeta 操作表语义（选中 #000000）；不含材料表（材料表走列表型 delegate / Metro 覆写）
-_SEL_OP_DIALOGS = f"{_SEL_DIALOG}, {_SEL_SECTION}, {_SEL_LANG}, {_SEL_BLOCK_ICON}"
+_SEL_OP_DIALOGS = f"{_SEL_DIALOG}, {_SEL_SECTION}, {_SEL_LANG}, {_SEL_BLOCK_ICON}, {_SEL_ITEM_ICON}"
 _SEL = f"{_SEL_OP_DIALOGS}, {_SEL_MATERIAL}, {_SEL_PROPERTIES_REGION}"
 # Minecraft：操作表 + UI 测试「内容物」表共用底纹；内容列表选中色与 delegate 一致（#3c3c3c）
 _SEL_MC_ALL_TABLES = f"{_SEL}, {_SEL_UI_TEST_CONTENT_LIST}"

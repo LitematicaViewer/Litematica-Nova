@@ -51,8 +51,11 @@ from litematicaba.core.settings import (
     VALID_THEMES,
     AppSettings,
     save_settings,
+    MATERIAL_LIST_SCAN_BACKEND_NATIVE,
+    MATERIAL_LIST_SCAN_BACKEND_PYTHON,
 )
 from litematicaba.ui.game_resource_block_icon_dialog import GameResourceBlockIconDialog
+from litematicaba.ui.game_resource_item_icon_dialog import GameResourceItemIconDialog
 from litematicaba.ui.game_resource_language_dialog import GameResourceLanguageDialog
 from litematicaba.ui.mcmeta_version_picker_dialog import McmetaVersionPickerDialog
 
@@ -80,35 +83,45 @@ class OptionsPage(QWidget):
         body_lay = QVBoxLayout(body)
         body_lay.setContentsMargins(16, 16, 16, 16)
 
+        # 界面
         g_theme = QGroupBox("界面")
         form_theme = QFormLayout(g_theme)
+        ## 主题
         self._theme = QComboBox()
-        for t in VALID_THEMES:
+        for t in VALID_THEMES: # （Ctrl跳转）主题列表
             self._theme.addItem(t, t)
         form_theme.addRow("主题：", self._theme)
-
-        g_dev = QGroupBox("侧栏与调试")
-        form_dev = QFormLayout(g_dev)
-        self._show_ui_test = QCheckBox("在侧栏显示「UI 测试」入口")
-        form_dev.addRow(self._show_ui_test)
-        hint = QLabel("关闭后若当前在 UI 测试页，将自动返回主页。")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: palette(mid);")
-        form_dev.addRow(hint)
-        self._show_widget_inspector = QCheckBox("显示控件信息（悬停高亮，不拦截点击）")
-        form_dev.addRow(self._show_widget_inspector)
-        self._perf_test_overlay = QCheckBox("性能测试（洋红圆动画 + 左下角 FPS 浮层，均不拦截鼠标）")
-        form_dev.addRow(self._perf_test_overlay)
+        ## 显示磁贴网格（仅影响可拖拽磁贴区域）
         self._show_tile_grid = QCheckBox("显示磁贴网格（仅影响可拖拽磁贴区域）")
-        form_dev.addRow(self._show_tile_grid)
+        form_theme.addRow(self._show_tile_grid)
+        ## 自动放置磁贴优先列数
         self._tile_auto_place_preferred_cols = QSpinBox()
         self._tile_auto_place_preferred_cols.setRange(1, 64)
-        form_dev.addRow("自动放置磁贴优先列数：", self._tile_auto_place_preferred_cols)
+        form_theme.addRow("自动放置磁贴优先列数：", self._tile_auto_place_preferred_cols)
+        ## 磁贴视图右侧留白
         self._tile_view_right_padding_px = QSpinBox()
         self._tile_view_right_padding_px.setRange(0, 300)
         self._tile_view_right_padding_px.setSuffix(" px")
-        form_dev.addRow("磁贴视图右侧留白：", self._tile_view_right_padding_px)
+        form_theme.addRow("磁贴视图右侧留白：", self._tile_view_right_padding_px)
 
+        # 调试
+        g_dev = QGroupBox("调试")
+        form_dev = QFormLayout(g_dev)
+        ## 显示UI测试入口
+        self._show_ui_test = QCheckBox("在侧栏显示「UI 测试」入口")
+        form_dev.addRow(self._show_ui_test)
+        hint = QLabel("关闭后若当前在 UI 测试页，将自动返回主页。即将弃用；未来移动至新配置项“侧栏功能编辑”。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: palette(mid);")
+        form_dev.addRow(hint)
+        ## 显示控件信息（悬停高亮，不拦截点击）
+        self._show_widget_inspector = QCheckBox("显示控件信息（悬停高亮，不拦截点击）")
+        form_dev.addRow(self._show_widget_inspector)
+        ## 性能测试（洋红圆动画 + 左下角 FPS 浮层，均不拦截鼠标）
+        self._perf_test_overlay = QCheckBox("性能测试（洋红圆动画 + 左下角 FPS 浮层，均不拦截鼠标）")
+        form_dev.addRow(self._perf_test_overlay)
+        
+        # 性能与预加载
         g_perf = QGroupBox("性能与预加载")
         form_perf = QFormLayout(g_perf)
         perf_hint = QLabel(
@@ -118,12 +131,14 @@ class OptionsPage(QWidget):
         perf_hint.setWordWrap(True)
         perf_hint.setStyleSheet("color: palette(mid);")
         form_perf.addRow(perf_hint)
+        ## 方块图标预加载时机
         self._block_icon_preload = QComboBox()
         self._block_icon_preload.addItem("软件启动时（默认）", BLOCK_ICON_PRELOAD_STARTUP)
         self._block_icon_preload.addItem("首次加载投影文件时", BLOCK_ICON_PRELOAD_ON_LITEMATIC)
         self._block_icon_preload.addItem("首次点击材料列表或分层时", BLOCK_ICON_PRELOAD_ON_MATERIAL_OR_FLAKE)
         self._block_icon_preload.addItem("不加载方块图标（回退手段）", BLOCK_ICON_PRELOAD_NEVER)
         form_perf.addRow("方块图标预加载时机：", self._block_icon_preload)
+        ## 材料列表计算时机
         self._material_list_prewarm = QComboBox()
         self._material_list_prewarm.addItem(
             "首次加载投影文件时（默认）", MATERIAL_LIST_PREWARM_ON_LITEMATIC
@@ -132,6 +147,13 @@ class OptionsPage(QWidget):
             "首次点击材料列表时", MATERIAL_LIST_PREWARM_ON_MATERIAL_LIST
         )
         form_perf.addRow("材料列表计算时机：", self._material_list_prewarm)
+
+        ## 材料列表扫描方案
+        self._material_list_scan_backend = QComboBox()
+        self._material_list_scan_backend.addItem("Native Bridge 扫描（高性能，仅整投影）", MATERIAL_LIST_SCAN_BACKEND_NATIVE)
+        self._material_list_scan_backend.addItem("Python 扫描（支持子区域）", MATERIAL_LIST_SCAN_BACKEND_PYTHON)
+        form_perf.addRow("材料列表扫描方案：", self._material_list_scan_backend)
+        ## 投影后台加载阈值
         self._litematic_async_load_min_kb = QSpinBox()
         self._litematic_async_load_min_kb.setRange(0, 512 * 1024)
         self._litematic_async_load_min_kb.setSuffix(" KB")
@@ -141,6 +163,7 @@ class OptionsPage(QWidget):
             f" 默认 {DEFAULT_LITEMATIC_ASYNC_LOAD_MIN_BYTES // 1024} KB。"
         )
         form_perf.addRow("投影后台加载阈值：", self._litematic_async_load_min_kb)
+        ## 图标预载批次间隔
         self._block_icon_prewarm_interval_ms = QSpinBox()
         self._block_icon_prewarm_interval_ms.setRange(0, 2000)
         self._block_icon_prewarm_interval_ms.setSingleStep(1)
@@ -150,6 +173,7 @@ class OptionsPage(QWidget):
             f"默认 {DEFAULT_BLOCK_ICON_PREWARM_BATCH_INTERVAL_MS} ms。"
         )
         form_perf.addRow("图标预载批次间隔：", self._block_icon_prewarm_interval_ms)
+        ## 图标预载批次数量
         self._block_icon_prewarm_batch_count = QSpinBox()
         self._block_icon_prewarm_batch_count.setRange(1, 500)
         self._block_icon_prewarm_batch_count.setToolTip(
@@ -157,6 +181,7 @@ class OptionsPage(QWidget):
             f"默认 {DEFAULT_BLOCK_ICON_PREWARM_BATCH_COUNT}。"
         )
         form_perf.addRow("图标预载批次数量：", self._block_icon_prewarm_batch_count)
+        ## 图标预载解码线程
         self._block_icon_prewarm_decode_thread = QComboBox()
         self._block_icon_prewarm_decode_thread.addItem("主线程", BLOCK_ICON_PREWARM_DECODE_MAIN)
         self._block_icon_prewarm_decode_thread.addItem(
@@ -168,52 +193,86 @@ class OptionsPage(QWidget):
         )
         form_perf.addRow("图标预载解码线程：", self._block_icon_prewarm_decode_thread)
 
-        g_render = QGroupBox("Deepslate 渲染")
-        form_render = QFormLayout(g_render)
-        hint_render = QLabel(
+        # 游戏资源
+        g_game_resource = QGroupBox("游戏资源")
+        form_game_resource = QFormLayout(g_game_resource)
+        ## 管理游戏语言
+        self._btn_lang_manage = QPushButton("管理游戏语言...")
+        self._btn_lang_manage.clicked.connect(self._on_lang_manage_clicked)
+        form_game_resource.addRow(self._btn_lang_manage)
+        ## hint：管理游戏语言
+        hint_lang = QLabel("语言将被用于：“材料列表”")
+        hint_lang.setWordWrap(True)
+        hint_lang.setStyleSheet("color: palette(mid);")
+        form_game_resource.addRow(hint_lang)
+        ## 管理方块图标
+        self._btn_block_icon_manage = QPushButton("管理方块图标...")
+        self._btn_block_icon_manage.clicked.connect(self._on_block_icon_manage_clicked)
+        form_game_resource.addRow(self._btn_block_icon_manage)
+        ## hint：管理方块图标
+        hint_block_icon = QLabel("方块图标将被用于：“材料列表”、“分层”")
+        hint_block_icon.setWordWrap(True)
+        hint_block_icon.setStyleSheet("color: palette(mid);")
+        form_game_resource.addRow(hint_block_icon)
+        ## 管理物品图标
+        self._btn_item_icon_manage = QPushButton("管理物品图标...")
+        self._btn_item_icon_manage.clicked.connect(self._on_item_icon_manage_clicked)
+        form_game_resource.addRow(self._btn_item_icon_manage)
+        ## hint：管理物品图标
+        hint_item_icon = QLabel("物品图标将被用于：“材料列表”、“分层”")
+        hint_item_icon.setWordWrap(True)
+        hint_item_icon.setStyleSheet("color: palette(mid);")
+        form_game_resource.addRow(hint_item_icon)
+
+        # 自建 Deepslate 渲染
+        g_render_deepslate = QGroupBox("自建 Deepslate 渲染")
+        form_render_deepslate = QFormLayout(g_render_deepslate)
+        hint_render_deepslate = QLabel(
             "Deepslate 在构建时打入安装包，启动时不会从 GitHub 下载源码。"
             " Minecraft 方块资源缓存（若启用）与渲染包更新策略见需求文档。"
         )
-        hint_render.setWordWrap(True)
-        hint_render.setStyleSheet("color: palette(mid);")
-        form_render.addRow(hint_render)
+        hint_render_deepslate.setWordWrap(True)
+        hint_render_deepslate.setStyleSheet("color: palette(mid);")
+        form_render_deepslate.addRow(hint_render_deepslate)
         self._deepslate_invert_y = QCheckBox(
             "3D 视图反转纵向拖拽（触摸屏与鼠标纵向习惯相反时勾选；未勾选为常见鼠标习惯）"
         )
-        form_render.addRow(self._deepslate_invert_y)
+        form_render_deepslate.addRow(self._deepslate_invert_y)
         self._deepslate_check_startup = QCheckBox("启动时检查渲染组件更新（需更新源可用后生效，默认关闭）")
-        form_render.addRow(self._deepslate_check_startup)
+        form_render_deepslate.addRow(self._deepslate_check_startup)
         self._auto_generate_projection_preview = QCheckBox("自动获取投影库预览图（3D cache 完成后后台生成，默认启用）")
-        form_render.addRow(self._auto_generate_projection_preview)
+        form_render_deepslate.addRow(self._auto_generate_projection_preview)
         self._btn_deepslate_update = QPushButton("立即检查渲染组件更新...")
         self._btn_deepslate_update.clicked.connect(self._on_deepslate_update_clicked)
-        form_render.addRow(self._btn_deepslate_update)
+        form_render_deepslate.addRow(self._btn_deepslate_update)
 
-        g_nbt = QGroupBox("NBT 3D 预览 — 游戏资源（mcmeta）")
-        form_nbt = QFormLayout(g_nbt)
+        # NBT 3D 预览 — 游戏资源（mcmeta）
+        g_nbt3d = QGroupBox("NBT 3D 预览 — 游戏资源（mcmeta）")
+        form_nbt3d = QFormLayout(g_nbt3d)
         hint_nbt = QLabel(
             "与 Minecraft 数据版本相关的方块定义、模型与图集按版本分目录保存在用户数据下，不随应用安装包更新。"
             " 在管理窗口中下载后需点击「应用」才会用于 3D 预览；更新 NBT Viewer 前端（editor.js）仍请使用仓库内 tools/build_nbt_viewer.ps1。"
         )
         hint_nbt.setWordWrap(True)
         hint_nbt.setStyleSheet("color: palette(mid);")
-        form_nbt.addRow(hint_nbt)
+        form_nbt3d.addRow(hint_nbt)
+        ## hint：当前 mcmeta
         self._lbl_nbt_mcmeta_status = QLabel("—")
         self._lbl_nbt_mcmeta_status.setWordWrap(True)
-        form_nbt.addRow("当前 mcmeta：", self._lbl_nbt_mcmeta_status)
+        form_nbt3d.addRow("当前 mcmeta：", self._lbl_nbt_mcmeta_status)
+        ## 管理游戏资源
         self._btn_nbt_fetch = QPushButton("管理游戏资源...")
         self._btn_nbt_fetch.clicked.connect(self._on_nbt_manage_clicked)
-        form_nbt.addRow(self._btn_nbt_fetch)
-        self._btn_lang_manage = QPushButton("管理游戏语言...")
-        self._btn_lang_manage.clicked.connect(self._on_lang_manage_clicked)
-        form_nbt.addRow(self._btn_lang_manage)
-        self._btn_block_icon_manage = QPushButton("管理方块图标...")
-        self._btn_block_icon_manage.clicked.connect(self._on_block_icon_manage_clicked)
-        form_nbt.addRow(self._btn_block_icon_manage)
+        form_nbt3d.addRow(self._btn_nbt_fetch)
+        
+        ## 上次选择的 mcmeta
+        self._nbt_mcmeta_last_choice = ""
+        ## 在 NBT 3D 预览中显示相机调试信息
         self._nbt_viewer_camera_debug = QCheckBox(
             "在 NBT 3D 预览中显示相机调试信息（cPos、cRot、与目标距离 cDist、结构尺寸等）"
         )
-        form_nbt.addRow(self._nbt_viewer_camera_debug)
+        form_nbt3d.addRow(self._nbt_viewer_camera_debug)
+        ## 大结构提示阈值（体素）
         self._nbt_large_structure_threshold = QSpinBox()
         self._nbt_large_structure_threshold.setRange(1_000, 1_000_000_000)
         self._nbt_large_structure_threshold.setSingleStep(1_000)
@@ -221,9 +280,8 @@ class OptionsPage(QWidget):
             "当结构体积（x*y*z）超过此值时，显示“Trying to render a very large structure”确认提示。"
             f"默认值：{NBT_VIEWER_LARGE_STRUCTURE_THRESHOLD_DEFAULT}（48×48×48）。"
         )
-        form_nbt.addRow("大结构提示阈值（体素）：", self._nbt_large_structure_threshold)
-        self._nbt_mcmeta_last_choice = ""
-
+        form_nbt3d.addRow("大结构提示阈值（体素）：", self._nbt_large_structure_threshold)
+        
         g_nbt_export = QGroupBox("NBT 3D — 完整入镜导出（「导出…」）")
         form_exp = QFormLayout(g_nbt_export)
         hint_exp = QLabel(
@@ -309,8 +367,9 @@ class OptionsPage(QWidget):
         body_lay.addWidget(g_theme)
         body_lay.addWidget(g_dev)
         body_lay.addWidget(g_perf)
-        body_lay.addWidget(g_render)
-        body_lay.addWidget(g_nbt)
+        body_lay.addWidget(g_game_resource)
+        body_lay.addWidget(g_render_deepslate)
+        body_lay.addWidget(g_nbt3d)
         body_lay.addWidget(g_nbt_export)
         body_lay.addStretch()
 
@@ -340,6 +399,7 @@ class OptionsPage(QWidget):
         self._block_icon_prewarm_interval_ms.valueChanged.connect(self._persist)
         self._block_icon_prewarm_batch_count.valueChanged.connect(self._persist)
         self._block_icon_prewarm_decode_thread.currentIndexChanged.connect(self._persist)
+        self._material_list_scan_backend.currentIndexChanged.connect(self._persist)
 
         self._loading = False
 
@@ -377,6 +437,8 @@ class OptionsPage(QWidget):
         self._litematic_async_load_min_kb.setValue(max(0, s.litematic_async_load_min_bytes // 1024))
         tidx = self._block_icon_prewarm_decode_thread.findData(s.block_icon_prewarm_decode_thread)
         self._block_icon_prewarm_decode_thread.setCurrentIndex(tidx if tidx >= 0 else 0)
+        sidx = self._material_list_scan_backend.findData(s.material_list_scan_backend)
+        self._material_list_scan_backend.setCurrentIndex(sidx if sidx >= 0 else 0)
         self._committed_block_icon_mode = self._block_icon_preload.currentData()
         self._refresh_nbt_mcmeta_status_label()
         self._loading = False
@@ -409,6 +471,7 @@ class OptionsPage(QWidget):
             block_icon_prewarm_batch_interval_ms=self._block_icon_prewarm_interval_ms.value(),
             block_icon_prewarm_batch_count=self._block_icon_prewarm_batch_count.value(),
             block_icon_prewarm_decode_thread=self._block_icon_prewarm_decode_thread.currentData(),
+            material_list_scan_backend=self._material_list_scan_backend.currentData(),
             litematic_async_load_min_bytes=self._litematic_async_load_min_kb.value() * 1024,
             projection_library_limit=getattr(
                 self._settings_snapshot,
@@ -483,6 +546,10 @@ class OptionsPage(QWidget):
 
     def _on_block_icon_manage_clicked(self) -> None:
         dlg = GameResourceBlockIconDialog(self)
+        dlg.exec()
+
+    def _on_item_icon_manage_clicked(self) -> None:
+        dlg = GameResourceItemIconDialog(self)
         dlg.exec()
 
     def _on_block_icon_preload_changed(self, index: int) -> None:

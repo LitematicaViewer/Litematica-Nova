@@ -139,60 +139,6 @@ class _LitematicLoadWaitDialog(QDialog):
         btn.clicked.connect(self.reject)
 
 
-class _ProjectLoadWorker(QThread):
-    """在 **子进程** 中执行 ``load_snbt_properties``，避免与 Qt 主进程争夺 CPython GIL 导致整窗未响应。
-
-    ``QThread`` 仅负责 ``join`` 子进程与反序列化；主线程事件循环可继续处理重绘与加载对话框。
-    """
-
-    finished_ok = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, file_path: str | Path) -> None:
-        super().__init__()
-        self._file_path = Path(file_path)
-        self._include_entities = True
-
-    def abort_child_process(self) -> None:
-        """从 UI 线程调用：终止仍在运行的子进程（例如用户点击「中断」）。"""
-        self.requestInterruption()
-
-    def run(self) -> None:  # type: ignore[override]
-        ctx = multiprocessing.get_context("spawn")
-        rq = ctx.Queue(maxsize=1)
-        proc = ctx.Process(
-            target=mp_load_snbt_properties_for_ui,
-            args=(str(self._file_path.resolve()), rq),
-        )
-        with self._proc_lock:
-            self._child_proc = proc
-        proc.start()
-        proc.join()
-        exit_code = proc.exitcode
-        with self._proc_lock:
-            self._child_proc = None
-
-        try:
-            kind, payload = rq.get_nowait()
-        except Empty:
-            if exit_code == 0:
-                self.failed.emit("加载失败（进程已结束但未返回数据）")
-            else:
-                self.failed.emit("加载已中断")
-            return
-
-        if kind == "err":
-            self.failed.emit(str(payload))
-            return
-
-        try:
-            data = pickle.loads(payload)
-        except Exception as exc:
-            self.failed.emit(f"反序列化失败：{exc}")
-            return
-        self.finished_ok.emit(data)
-
-
 class _ProjectLoadAnalyzeWorker(QThread):
     finished_ok = Signal(object)
     failed = Signal(str)
@@ -419,7 +365,7 @@ class PropertiesPage(QWidget):
             self._properties_render_container.hide()
         if hasattr(self, "_properties_render_placeholder"):
             self._properties_render_placeholder.setText(
-                "渲染页还没有构建过 3D cache。构建完成后这里会显示固定摄像机的嵌入式 3D 预览。"
+                "渲染页还没有构建过 3D cache。构建完成后这里会显示固定摄像机的嵌入式 3D 渲染图。"
             )
             self._properties_render_placeholder.show()
 
@@ -503,7 +449,7 @@ class PropertiesPage(QWidget):
         if not self.isVisible():
             self._stop_properties_embedded_viewer()
             self._properties_render_container.hide()
-            self._properties_render_placeholder.setText("3D cache 已完成。打开属性页后会显示嵌入式 3D 预览。")
+            self._properties_render_placeholder.setText("3D cache 已完成。打开属性页后会显示嵌入式 3D 渲染图。")
             self._properties_render_placeholder.show()
             return
         if (
@@ -528,7 +474,7 @@ class PropertiesPage(QWidget):
             self._properties_embedded_cache_file = cache.resolve()
         except Exception as exc:
             self._properties_render_container.hide()
-            self._properties_render_placeholder.setText(f"嵌入式 3D 预览启动失败：{exc}")
+            self._properties_render_placeholder.setText(f"嵌入式 3D 渲染图启动失败：{exc}")
             self._properties_render_placeholder.show()
             return
         self._properties_render_placeholder.hide()
@@ -597,17 +543,25 @@ class PropertiesPage(QWidget):
         snbt_outer = QVBoxLayout(self._snbt_column)
         snbt_outer.setContentsMargins(0, 0, 0, 0)
         snbt_outer.addWidget(self._build_snbt_box())
-        preview_box = self._build_embedded_render_box()
-        preview_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        right_col = QWidget()
+        right_lay = QVBoxLayout(right_col)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(12)
+        preview_box = self._build_preview_box()
+        right_lay.addWidget(preview_box, 0)
+        right_lay.addWidget(self._build_embedded_render_box(), 0)
+        right_col.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         row.addWidget(self._snbt_column, 2)
-        row.addWidget(preview_box, 1)
+        row.addWidget(right_col, 1)
         return row
 
     def _build_embedded_render_box(self) -> QGroupBox:
-        box = QGroupBox("3D 渲染预览")
+        box = QGroupBox("3D 渲染图")
         lay = QVBoxLayout(box)
         lay.setSpacing(8)
-        self._properties_render_placeholder = QLabel("渲染页还没有构建过 3D cache。构建完成后这里会显示固定摄像机的嵌入式 3D 预览。")
+        self._properties_render_placeholder = QLabel(
+            "渲染页还没有构建过 3D cache。构建完成后这里会显示固定摄像机的嵌入式 3D 渲染图。"
+        )
         self._properties_render_placeholder.setWordWrap(True)
         self._properties_render_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._properties_render_placeholder.setStyleSheet("color: palette(mid);")
@@ -905,7 +859,7 @@ class PropertiesPage(QWidget):
         self._load_from_file(entry.backup_file_path)
 
     def _on_choose_from_library(self) -> None:
-        """项目内「库」选择器尚未接入。"""
+        """从投影库选择备份路径并加载。"""
         if not self._confirm_discard_if_dirty():
             return
         try:
@@ -944,10 +898,8 @@ class PropertiesPage(QWidget):
         """清空内存预览与画布，并标记脏（将写入空的 PreviewImageData）。"""
         self._save_preview_from_model_list = False
         self._preview_image = QImage()
-        if hasattr(self, "_preview_canvas"):
-            self._preview_canvas.set_preview(None)
-        if hasattr(self, "_preview_count_hint"):
-            self._preview_count_hint.setText("PreviewImageData: 0 项")
+        self._preview_canvas.set_preview(None)
+        self._preview_count_hint.setText("PreviewImageData: 0 项")
         self._mark_dirty()
 
     def _on_import_preview(self) -> None:
@@ -1032,6 +984,22 @@ class PropertiesPage(QWidget):
         if self._current_data.file_path is None:
             QMessageBox.information(self, "保存", "请先选择一个 .litematic 文件。")
             return
+
+        # 检查文件名是否被更改
+        original_file_name = self._current_data.file_name
+        current_ui_file_name = self._file_name_edit.text().strip()
+
+        if current_ui_file_name != original_file_name:
+            QMessageBox.information(
+                self,
+                "保存",
+                f"此改动将依旧保存到\"{original_file_name}\"，文件名更改将不会生效。",
+            )
+            # 将 UI 上的文件名恢复为原始文件名，确保后续 _collect_ui_to_model 拿到的是旧名
+            self._loading = True
+            self._file_name_edit.setText(original_file_name)
+            self._loading = False
+
         try:
             model = self._collect_ui_to_model()
             save_snbt_properties(model)
@@ -1126,9 +1094,9 @@ class PropertiesPage(QWidget):
         _p = str(active_path)
 
         def _emit_active() -> None:
+            # 下一事件循环再通知各页，避免与预览解码、重绘挤在同一主线程切片里
             self.active_file_changed.emit(_p)
 
-            # 下一事件循环再通知各页，避免与预览解码、重绘挤在同一主线程切片里
         QTimer.singleShot(0, _emit_active)
 
     def _commit_loaded_project(self, result: LoadAnalyzeResult) -> None:
@@ -1176,7 +1144,7 @@ class PropertiesPage(QWidget):
         QMessageBox.critical(self, "打开失败", f"读取 SNBT 失败：\n{message}")
 
     def _on_async_snbt_load_canceled(self) -> None:
-        """用户点击「中断」：作废当前序号并终止子进程（勿 ``QThread.terminate``）。"""
+        """用户点击「中断」：作废当前序号并请求后台加载线程停止（勿 ``QThread.terminate``）。"""
         self._snbt_load_seq += 1
         w = self._load_thread
         if w is not None:
@@ -1188,20 +1156,8 @@ class PropertiesPage(QWidget):
         self._set_snbt_load_busy(False)
         self._close_snbt_progress_dialog()
 
-    def _load_snbt_sync(self, path: Path, seq: int) -> None:
-        """主线程直接 ``load_snbt_properties``（小文件或阈值较高时）。"""
-        try:
-            data = load_snbt_properties(path)
-        except Exception as exc:
-            if seq == self._snbt_load_seq:
-                QMessageBox.critical(self, "打开失败", f"读取 SNBT 失败：\n{exc}")
-            return
-        if seq != self._snbt_load_seq:
-            return
-        self._commit_loaded_snbt_model(data)
-
     def _load_from_file(self, file_path: str | Path) -> None:
-        """按设置决定同步或后台加载；大于阈值时在后台 ``amulet_nbt.load`` 并显示可中断进度。
+        """在后台线程执行 ``load_and_analyze_litematic``；超过字节阈值时显示可中断的加载对话框。
 
         成功后同步更新 ``_baseline_snapshot``，供「恢复默认值」使用。
         """
@@ -1334,10 +1290,6 @@ class PropertiesPage(QWidget):
         return model
 
     def _set_preview_from_argb_list(self, data: list[int]) -> None:
-        if not hasattr(self, "_preview_canvas"):
-            self._save_preview_from_model_list = True
-            self._preview_image = QImage()
-            return
         """将文件中的 PreviewImageData（每元素 32 位 ARGB）还原为 ``QImage`` 并显示。
 
         仅当列表长度为完全平方数时才认为合法；否则清空预览且不标脏（加载阶段）。
@@ -1395,10 +1347,8 @@ class PropertiesPage(QWidget):
     def _on_clear_preview_no_dirty(self) -> None:
         """与 ``_on_clear_preview`` 相同视觉效果，但不调用 ``_mark_dirty``（用于加载失败或非法数据）。"""
         self._preview_image = QImage()
-        if hasattr(self, "_preview_canvas"):
-            self._preview_canvas.set_preview(None)
-        if hasattr(self, "_preview_count_hint"):
-            self._preview_count_hint.setText("PreviewImageData: 0 项")
+        self._preview_canvas.set_preview(None)
+        self._preview_count_hint.setText("PreviewImageData: 0 项")
 
     def _confirm_discard_if_dirty(self) -> bool:
         """返回 True 表示可继续（无脏数据或用户确认丢弃）。"""
@@ -1425,7 +1375,8 @@ class PropertiesPage(QWidget):
         if self._snbt_load_busy and self._async_load_target_path is not None:
             base = f"加载中… {self._async_load_target_path}"
         else:
-            base = str(self._current_data.file_path) if self._current_data.file_path else "当前未激活文件"
+            display_path = self.display_file_path()
+            base = str(display_path) if display_path else "当前未激活文件"
         self._full_file_hint_text = f"{base}{' *' if self._dirty else ''}"
         self._active_file_hint.setToolTip(self._full_file_hint_text)
         self._update_file_hint_elide()
@@ -1456,16 +1407,6 @@ class PropertiesPage(QWidget):
             return "-"
         pct = 100.0 * float(blocks) / float(volume)
         return f"{pct:.1f}%"
-
-    def _sync_title_hint(self) -> None:
-        if self._snbt_load_busy and self._async_load_target_path is not None:
-            base = f"加载中... {self._async_load_target_path}"
-        else:
-            display_path = self.display_file_path()
-            base = str(display_path) if display_path else "当前未激活文件"
-        self._full_file_hint_text = f"{base}{' *' if self._dirty else ''}"
-        self._active_file_hint.setToolTip(self._full_file_hint_text)
-        self._update_file_hint_elide()
 
     def _show_not_implemented(self, action: str) -> None:
         """占位功能的统一提示，避免静默无响应。"""

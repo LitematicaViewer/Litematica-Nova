@@ -13,14 +13,15 @@ from typing import Any
 
 from litematicaba.core.config import user_data_dir
 
+# 有效主题列表（被注释掉的主题还尚未开发完成）
 VALID_THEMES = (
     "QTDefault",
-    "Glass7",
-    "Metro8",
+    # "Glass7",
+    # "Metro8",
     "Metro10",
-    "Fluent11",
-    "LightMac",
-    "Bootstrap5",
+    # "Fluent11",
+    # "LightMac",
+    # "Bootstrap5",
     "Minecraft",
 )
 DEFAULT_THEME = "QTDefault"
@@ -57,6 +58,15 @@ VALID_MATERIAL_LIST_PREWARM_MODES = (
 )
 DEFAULT_MATERIAL_LIST_PREWARM_MODE = MATERIAL_LIST_PREWARM_ON_LITEMATIC
 
+# 材料列表扫描后端：native（Rust，高性能）/ python（litemapy，完整功能）
+MATERIAL_LIST_SCAN_BACKEND_NATIVE = "native"
+MATERIAL_LIST_SCAN_BACKEND_PYTHON = "python"
+VALID_MATERIAL_LIST_SCAN_BACKENDS = (
+    MATERIAL_LIST_SCAN_BACKEND_NATIVE,
+    MATERIAL_LIST_SCAN_BACKEND_PYTHON,
+)
+DEFAULT_MATERIAL_LIST_SCAN_BACKEND = MATERIAL_LIST_SCAN_BACKEND_NATIVE
+
 # 材料列表方块图标预载：主线程泵送节奏与解码位置（design / 性能选项）
 BLOCK_ICON_PREWARM_DECODE_MAIN = "main"
 BLOCK_ICON_PREWARM_DECODE_WORKER = "worker_experimental"
@@ -85,11 +95,20 @@ DEFAULT_RENDER_BUILD_MODE = RENDER_BUILD_MODE_NORMAL
 
 @dataclass
 class AppSettings:
+    # 界面：
+    ## 主题名称
     theme_id: str = DEFAULT_THEME
-    show_ui_test_nav: bool = True
+    ## 显示磁贴网格
     show_tile_grid: bool = False
+    ## 自动放置磁贴优先列数
     tile_auto_place_preferred_cols: int = 12
+    ## 磁贴视图右侧留白
     tile_view_right_padding_px: int = 64
+
+    # 调试：
+    ## 显示UI测试入口（即将弃用；未来移动至“侧栏功能编辑”）
+    show_ui_test_nav: bool = True
+    ## 显示控件信息
     show_widget_inspector: bool = False
     perf_test_overlay: bool = False
     # Deepslate / WebView 渲染包：默认不在启动时联网检查；见 design §2.0.4、§2.6.3.9
@@ -115,6 +134,8 @@ class AppSettings:
     block_icon_preload_mode: str = DEFAULT_BLOCK_ICON_PRELOAD_MODE
     # 材料列表「整个投影」扫描时机；不改为清除磁盘材料缓存。
     material_list_prewarm_mode: str = DEFAULT_MATERIAL_LIST_PREWARM_MODE
+    # 材料列表扫描后端：python (完整功能) / native_experimental (高性能，暂不支持子区域)
+    material_list_scan_backend: str = DEFAULT_MATERIAL_LIST_SCAN_BACKEND
     # 方块图标预载：定时器间隔（毫秒）、每 tick 处理数量；解码在主线程或工作线程（实验性）。
     block_icon_prewarm_batch_interval_ms: int = DEFAULT_BLOCK_ICON_PREWARM_BATCH_INTERVAL_MS
     block_icon_prewarm_batch_count: int = DEFAULT_BLOCK_ICON_PREWARM_BATCH_COUNT
@@ -211,7 +232,7 @@ class AppSettings:
 def _settings_path() -> Path:
     return user_data_dir() / "settings.json"
 
-
+# 加载设置
 def load_settings() -> AppSettings:
     path = _settings_path()
     if not path.is_file():
@@ -288,6 +309,9 @@ def load_settings() -> AppSettings:
         ),
         material_list_prewarm_mode=str(
             raw.get("material_list_prewarm_mode", DEFAULT_MATERIAL_LIST_PREWARM_MODE)
+        ),
+        material_list_scan_backend=str(
+            raw.get("material_list_scan_backend", DEFAULT_MATERIAL_LIST_SCAN_BACKEND)
         ),
         block_icon_prewarm_batch_interval_ms=int(
             raw.get(

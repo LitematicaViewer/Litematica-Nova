@@ -122,11 +122,13 @@ class RenderCapturePreviewDialog(QDialog):
         image: QImage,
         *,
         apply_preview: Callable[[QImage], None],
+        goto_properties: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self._full_image = image
         self._apply_preview = apply_preview
+        self._goto_properties = goto_properties
         self._label = QLabel()
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         scroll = QScrollArea()
@@ -198,11 +200,19 @@ class RenderCapturePreviewDialog(QDialog):
             QMessageBox.warning(self, "预览图", "没有可写入的图像。")
             return
         self._apply_preview(self._full_image)
-        QMessageBox.information(
-            self,
-            "预览图",
-            "已写入属性页预览（内存）。请到「属性」页确认并保存文件以写入 PreviewImageData。",
-        )
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("预览图")
+        msg.setText("已写入属性页预览（内存）。请到「属性」页确认并保存文件以写入 PreviewImageData。")
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.addButton("确定", QMessageBox.ButtonRole.AcceptRole)
+        btn_goto = msg.addButton("跳转到“属性”", QMessageBox.ButtonRole.ActionRole)
+        msg.exec()
+
+        if msg.clickedButton() == btn_goto and self._goto_properties is not None:
+            self._goto_properties()
+            self.accept()
+
 
 
 def _effective_camera_fov_for_slider(raw: int) -> int:
@@ -255,6 +265,8 @@ class _NbtRawFileThread(QThread):
 
 class RenderPage(QWidget):
     """3D 预览：vscode-nbt 同源（若资源齐全）或 Deepslate 体素回退。"""
+
+    request_navigate_properties = Signal()
 
     def __init__(
         self,
@@ -743,6 +755,12 @@ class RenderPage(QWidget):
     def _on_active_file_changed(self, _path: str) -> None:
         self._sync_path_label()
         self._sync_region_combo()
+        if self._use_nbt_viewer and self._view is not None:
+            # 切换文件时强制重新加载 HTML 以清空上一个文件的 JS 状态
+            self._viewer_ready = False
+            p, _ = resolve_nbt_viewer_html_path(self._nbt_applied_mcmeta_version)
+            if p and p.is_file():
+                self._view.load(QUrl.fromLocalFile(str(p.resolve())))
         self._schedule_load()
 
     def _on_region_changed(self, _index: int) -> None:
@@ -949,6 +967,7 @@ class RenderPage(QWidget):
                 dialog_title,
                 img,
                 apply_preview=self._props.apply_render_as_preview,
+                goto_properties=self._emit_navigate_properties,
             )
             dlg.exec()
 
@@ -959,6 +978,9 @@ class RenderPage(QWidget):
 
     def _on_full_export_capture(self) -> None:
         self._run_js_capture("full", "导出预览")
+
+    def _emit_navigate_properties(self) -> None:
+        self.request_navigate_properties.emit()
 
     def _on_material_list(self) -> None:
         if self._props.active_file_path() is None:

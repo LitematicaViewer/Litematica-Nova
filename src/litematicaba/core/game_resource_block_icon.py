@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import shutil
+import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from litematicaba.core.config import project_root, user_data_dir
 
@@ -19,6 +21,10 @@ BLOCK_TYPE_ICON = "Icon"
 
 VAULT_ENTRY_ID = f"{BLOCK_SOURCE_VAULT}:ccvaults"
 VAULT_SITE_LABEL = "https://ccvaults.com/"
+VAULT_API_TOKEN_PATH = "/api/token"
+VAULT_API_BLOCKS_PATH = "/api/assets/20.%20Blocks"
+VAULT_API_ALL_ASSETS_PATH = "/api/assets/all"
+VAULT_API_KEY = "mcicons-apikey-0201osaiudx-24493534"
 
 INSTALLED_FILENAME = "installed.json"
 _LEGACY_SUBDIR_REGISTRY = "block_visuals_installed.json"
@@ -363,6 +369,261 @@ def register_vault_block_icon_slot() -> InstalledBlockVisual:
     return entry
 
 
+def download_and_process_vault_icons(
+    progress_callback: Callable[[int, int, str], bool] | None = None
+) -> None:
+    """通过 Vault API 索引下载方块图标并处理为 32x32 PNG。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QImage
+    import concurrent.futures
+    import http.cookiejar
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    def _emit_progress(current: int, total: int, status: str) -> bool:
+        if progress_callback is None:
+            return True
+        return bool(progress_callback(current, total, status))
+
+    def _fetch_json_with_auth(
+        opener: urllib.request.OpenerDirector, url: str, headers: dict[str, str]
+    ) -> object:
+        req = urllib.request.Request(url, headers=headers)
+        with opener.open(req, timeout=30) as resp:
+            payload = resp.read().decode("utf-8", "ignore")
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Vault 返回非 JSON 数据：{url}") from exc
+
+    if not _emit_progress(0, 1, "正在连接到 ccvaults.com..."):
+        return
+
+    vault_dir = block_icon_vault_dir()
+    vault_dir.mkdir(parents=True, exist_ok=True)
+
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    opener.addheaders = [
+        (
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        )
+    ]
+
+    try:
+        opener.open(VAULT_SITE_LABEL, timeout=20).read()
+    except OSError as exc:
+        raise RuntimeError("无法连接 Vault 首页") from exc
+
+    if not _emit_progress(0, 1, "正在获取访问令牌..."):
+        return
+
+    token_url = urllib.parse.urljoin(VAULT_SITE_LABEL, VAULT_API_TOKEN_PATH)
+    token_req = urllib.request.Request(
+        token_url,
+        data=b"{}",
+        method="POST",
+        headers={
+            "x-api-key": VAULT_API_KEY,
+            "Content-Type": "application/json;charset=UTF-8",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": VAULT_SITE_LABEL.rstrip("/"),
+            "Referer": VAULT_SITE_LABEL,
+            "X-Requested-With": "XMLHttpRequest",
+        },
+    )
+
+    try:
+        with opener.open(token_req, timeout=20) as token_resp:
+            token_payload = token_resp.read().decode("utf-8", "ignore")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"获取 Vault 令牌失败：HTTP {exc.code}") from exc
+    except OSError as exc:
+        raise RuntimeError("获取 Vault 令牌失败") from exc
+
+    try:
+        token = str(json.loads(token_payload).get("token", "")).strip()
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Vault 令牌响应解析失败") from exc
+    if not token:
+        raise RuntimeError("Vault 未返回可用访问令牌")
+
+    auth_headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": VAULT_SITE_LABEL.rstrip("/"),
+        "Referer": VAULT_SITE_LABEL,
+    }
+
+    if not _emit_progress(0, 1, "正在获取方块图标索引..."):
+        return
+
+    block_assets_url = urllib.parse.urljoin(VAULT_SITE_LABEL, VAULT_API_BLOCKS_PATH)
+    try:
+        blocks_payload = _fetch_json_with_auth(opener, block_assets_url, auth_headers)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"获取 Vault 方块索引失败：HTTP {exc.code}") from exc
+
+    entries: list[tuple[str, str]] = []
+    seen_block_ids: set[str] = set()
+    category_name = "20. Blocks"
+
+    if isinstance(blocks_payload, list):
+        for row in blocks_payload:
+            if not isinstance(row, dict):
+                continue
+            subcategories = row.get("subcategories")
+            if not isinstance(subcategories, list):
+                continue
+            for sub in subcategories:
+                if not isinstance(sub, dict):
+                    continue
+                sub_name = str(sub.get("name", "")).strip()
+                files = sub.get("files")
+                if not sub_name or not isinstance(files, list):
+                    continue
+                for file_name in files:
+                    if not isinstance(file_name, str) or not file_name.lower().endswith(".png"):
+                        continue
+                    block_id = Path(file_name).stem.lower()
+                    if not block_id or block_id in seen_block_ids:
+                        continue
+                    rel_path = "/".join(
+                        urllib.parse.quote(seg, safe="")
+                        for seg in ("assets", category_name, sub_name, file_name)
+                    )
+                    file_url = urllib.parse.urljoin(VAULT_SITE_LABEL, rel_path)
+                    entries.append((block_id, file_url))
+                    seen_block_ids.add(block_id)
+
+    # blocks 专用索引失败时，回退全量索引。
+    if not entries:
+        all_assets_url = urllib.parse.urljoin(VAULT_SITE_LABEL, VAULT_API_ALL_ASSETS_PATH)
+        try:
+            all_payload = _fetch_json_with_auth(opener, all_assets_url, auth_headers)
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"获取 Vault 全量索引失败：HTTP {exc.code}") from exc
+
+        if isinstance(all_payload, list):
+            for row in all_payload:
+                if not isinstance(row, dict):
+                    continue
+                files = row.get("files")
+                if not isinstance(files, list):
+                    continue
+                for file_row in files:
+                    if not isinstance(file_row, dict):
+                        continue
+                    file_name = str(file_row.get("file", "")).strip()
+                    if not file_name.lower().endswith(".png"):
+                        continue
+                    category = str(file_row.get("category", "")).strip()
+                    if category != category_name:
+                        continue
+                    subcategory = str(file_row.get("subcategory", "")).strip()
+                    block_id = Path(file_name).stem.lower()
+                    if not block_id or block_id in seen_block_ids:
+                        continue
+                    rel_parts = ["assets", category]
+                    if subcategory:
+                        rel_parts.append(subcategory)
+                    rel_parts.append(file_name)
+                    rel_path = "/".join(urllib.parse.quote(seg, safe="") for seg in rel_parts)
+                    file_url = urllib.parse.urljoin(VAULT_SITE_LABEL, rel_path)
+                    entries.append((block_id, file_url))
+                    seen_block_ids.add(block_id)
+
+    if not entries:
+        raise RuntimeError("未解析到任何方块图标索引")
+
+    total_count = len(entries)
+    if not _emit_progress(0, total_count, f"准备并行下载 {total_count} 个图标..."):
+        return
+
+    downloaded_count = 0
+    completed_count = 0
+
+    import threading
+
+    cancel_event = threading.Event()
+    max_workers = min(12, max(4, total_count))
+
+    def _download_one(entry: tuple[str, str]) -> bool:
+        if cancel_event.is_set():
+            return False
+        block_id, file_url = entry
+        try:
+            req = urllib.request.Request(
+                file_url,
+                headers={
+                    "User-Agent": "LitematicaBA-icon-manager/1.0",
+                    "Referer": VAULT_SITE_LABEL,
+                },
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                img_data = resp.read()
+        except (urllib.error.HTTPError, OSError):
+            return False
+
+        if cancel_event.is_set():
+            return False
+
+        img = QImage.fromData(img_data)
+        if img.isNull():
+            return False
+
+        if img.width() != 32 or img.height() != 32:
+            img = img.scaled(
+                32,
+                32,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+
+        return bool(img.save(str(vault_dir / f"{block_id}.png"), "PNG"))
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    future_to_block: dict[concurrent.futures.Future[bool], str] = {}
+    try:
+        for entry in entries:
+            fut = executor.submit(_download_one, entry)
+            future_to_block[fut] = entry[0]
+
+        for fut in concurrent.futures.as_completed(future_to_block):
+            block_id = future_to_block[fut]
+            completed_count += 1
+            ok = False
+            try:
+                ok = bool(fut.result())
+            except Exception:
+                ok = False
+            if ok:
+                downloaded_count += 1
+
+            if not _emit_progress(
+                completed_count,
+                total_count,
+                f"正在下载图标: {block_id} ({completed_count}/{total_count})，成功 {downloaded_count}",
+            ):
+                cancel_event.set()
+                for pending in future_to_block:
+                    pending.cancel()
+                break
+    finally:
+        executor.shutdown(wait=not cancel_event.is_set(), cancel_futures=cancel_event.is_set())
+
+    if cancel_event.is_set():
+        return
+
+    if downloaded_count <= 0:
+        raise RuntimeError("未成功下载任何方块图标")
+
+    _emit_progress(total_count, total_count, f"下载完成：{downloaded_count}/{total_count}")
+
+
 def normalize_material_list_block_local_id(block_id: str) -> str | None:
     """自材料列表方块键提取用于匹配贴图文件的本地 id（不含命名空间与方块状态）。"""
     raw = (block_id or "").strip()
@@ -439,6 +700,14 @@ def _find_block_png_under(root: Path, local_id: str) -> Path | None:
     except OSError:
         pass
     return None
+
+
+def resolve_material_list_icon_path_in_root(block_id: str, root: Path) -> Path | None:
+    """在指定根目录下解析材料列表方块 PNG 路径（不带全局缓存）。"""
+    lid = normalize_material_list_block_local_id(block_id)
+    if not lid:
+        return None
+    return _find_block_png_under(root, lid)
 
 
 _ml_icon_cache: dict[tuple[str, str], Path | None] = {}

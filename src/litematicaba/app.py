@@ -11,20 +11,27 @@ from litematicaba.core.config import (
 )
 from litematicaba.core.native_backend_bridge import cleanup_backend_processes
 from litematicaba.core.settings import load_settings
+from litematicaba.ui.main_window import MainWindow
 from litematicaba.ui.theme import apply_theme
 
 
+# 处理 PyInstaller 启动画面
 _pyi_splash = None
 try:
     import pyi_splash as _pyi_splash
 except ImportError:
-    _pyi_splash = None
+    pass
 
 def main() -> int:
+    # 创建应用实例
     app = QApplication(sys.argv)
     app.setApplicationName("Litematica-BA")
+    
+    # 注册清理回调
     atexit.register(cleanup_backend_processes)
     app.aboutToQuit.connect(cleanup_backend_processes)
+
+    # 检查目录可写性
     if getattr(sys, "frozen", False) and not user_data_dir_is_writable():
         r = QMessageBox.question(
             None,
@@ -36,17 +43,22 @@ def main() -> int:
         if r != QMessageBox.StandardButton.Yes:
             return 0
         set_user_accepted_unwritable_data_dir()
+
+    # 加载设置
     settings = load_settings()
     apply_theme(app, settings.theme_id)
 
-    from litematicaba.ui.main_window import MainWindow
-
-    window = MainWindow()
+    # 创建窗口
+    window = MainWindow() # 主窗口
     window.show()
+
+    # 确保窗口显示后关闭启动画面
     app.processEvents()
     if _pyi_splash is not None:
         try:
             _pyi_splash.close()
         except Exception:
             pass
+
+    # 事件循环
     return app.exec()

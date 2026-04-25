@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
+from litematicaba.core.litematic_block_scan import scan_litematic_block_counts
 from litematicaba.core.material_list_cache import (
     cache_is_stale,
     file_mtime_ns,
@@ -19,14 +20,28 @@ class _WholeProjectScanThread(QThread):
     ok = Signal(int, object, object)  # token, Path, dict[str, int]
     failed = Signal(int, object, str)  # token, Path, err
 
-    def __init__(self, path: Path, token: int, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        token: int,
+        backend: str,
+        parent: QObject | None = None,
+    ) -> None:
         super().__init__(parent)
         self._path = path.resolve()
         self._token = token
+        self._backend = backend
 
     def run(self) -> None:  # type: ignore[override]
         try:
-            d = material_counts_from_analysis(self._path, include_entities=False)
+            if self._backend == "python":
+                d = scan_litematic_block_counts(
+                    self._path,
+                    include_entities=False,
+                    region_name=None,
+                )
+            else:
+                d = material_counts_from_analysis(self._path, include_entities=False)
             self.ok.emit(self._token, self._path, d)
         except Exception as exc:
             self.failed.emit(self._token, self._path, str(exc))
@@ -50,11 +65,29 @@ class MaterialListScanPrewarmer(QObject):
             return False
         return self._focus_path.resolve() == path.resolve()
 
-    def schedule(self, path: Path) -> None:
+    def schedule(
+        self,
+        path: Path,
+        *,
+        backend: str | None = None,
+    ) -> None:
+        from litematicaba.core.settings import (
+            MATERIAL_LIST_SCAN_BACKEND_NATIVE,
+            load_settings,
+        )
+
         resolved = path.resolve()
         self._gen += 1
         token = self._gen
         self._focus_path = resolved
+
+        # 使用传入的 backend，否则从设置中读取（默认 Rust）
+        if backend is None:
+            try:
+                settings = load_settings()
+                backend = settings.material_list_scan_backend
+            except Exception:
+                backend = MATERIAL_LIST_SCAN_BACKEND_NATIVE
 
         cached = load_material_cache(resolved, region_name=None, include_entities=False)
         if cached is not None:
@@ -63,7 +96,7 @@ class MaterialListScanPrewarmer(QObject):
                 QTimer.singleShot(0, lambda: self._emit_done_if_current(token, resolved))
                 return
 
-        th = _WholeProjectScanThread(resolved, token, self)
+        th = _WholeProjectScanThread(resolved, token, backend, self)
         self._thread = th
         th.ok.connect(self._on_thread_ok)
         th.failed.connect(self._on_thread_failed)

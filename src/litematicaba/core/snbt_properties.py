@@ -155,8 +155,6 @@ def snbt_properties_from_dict(raw: dict[str, Any]) -> SnbtProperties:
         _regions_geo_loaded=True,
         _root_tag=None,
     )
-
-
 def _import_amulet_nbt():
     try:
         from amulet_nbt import (

@@ -1,7 +1,13 @@
+# 基础 IDE 与系统
 .obsidian/
-.tmp/
+.idea/
+.vs/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini
 
-# Python environments and caches
+# Python 环境与缓存
 .venv/
 venv/
 __pycache__/
@@ -11,34 +17,33 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# Build outputs
+# 构建输出
 build/
 dist/
+sdist/
 target/
 obj/
 out/
-
-# Windows / IDE
-.vs/
-.idea/
-*.user
-*.suo
-Thumbs.db
-Desktop.ini
-
-# Local runtime data
-data/cache/
-data/projection-library/
-data/settings.json
-data/content_tile_layout.sqlite3
-
-# Local packaging state
+*.spec
 bin/pack_state.json
 bin/launcher/*.exe
 bin/launcher/*.pdb
 bin/viewer-backend/*.exe
 
-# Local preview / verify outputs
+# 日志与临时文件
+.tmp/
+/tmp
+log.txt
+error.log
 _full_verify_v2_*.png
 _full_verify_v2_*.txt
+
+# 数据与第三方库
 /data
+data/cache/
+data/projection-library/
+data/settings.json
+data/content_tile_layout.sqlite3
+/third_party/vscode-nbt/node_modules/
+/third_party/vscode-nbt/out/
+/ref

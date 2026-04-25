@@ -1,4 +1,4 @@
-"""方块图标资源管理弹窗（结构对齐游戏资源语言管理）。"""
+"""物品图标资源管理弹窗（结构对齐方块图标管理）。"""
 
 from __future__ import annotations
 
@@ -19,28 +19,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from litematicaba.core.game_resource_block_icon import (
-    BLOCK_SOURCE_BUILTIN,
-    BLOCK_SOURCE_VAULT,
-    BLOCK_TYPE_2D,
-    BLOCK_TYPE_ICON,
-    InstalledBlockVisual,
-    clear_active_layering,
-    clear_active_material_list,
-    delete_installed_block_visual,
-    download_and_process_vault_icons,
-    ensure_initial_block_2d_seeded,
-    load_installed_block_visuals,
-    register_vault_block_icon_slot,
-    set_active_layering,
-    set_active_material_list,
+from litematicaba.core.game_resource_item_icon import (
+    ITEM_SOURCE_BUILTIN,
+    ITEM_SOURCE_VAULT,
+    InstalledItemIcon,
+    clear_active_layering_item_icon,
+    delete_installed_item_icon,
+    download_and_process_vault_item_icons,
+    ensure_initial_item_seeded,
+    load_installed_item_icons,
+    register_vault_item_icon_slot,
+    set_active_layering_item_icon,
 )
-from litematicaba.ui.material_list_icon_prewarmer import restart_material_list_icon_prewarm
+from litematicaba.ui.layering_item_icon_prewarmer import restart_layering_item_icon_prewarm
 from litematicaba.ui.theme import current_theme_id
 from litematicaba.ui.widgets.mcmeta_standard_table import (
     McmetaStandardTableCellHost,
     McmetaStandardTableRowHoverController,
-    apply_block_icon_resource_table_chrome,
+    apply_item_icon_resource_table_chrome,
     apply_mcmeta_standard_table_row_heights,
     attach_mcmeta_row_hover_to_button,
     clear_mcmeta_table_current_cell,
@@ -48,9 +44,8 @@ from litematicaba.ui.widgets.mcmeta_standard_table import (
 from litematicaba.ui.widgets.progress_dialog import GenericProgressDialog
 
 _COL_VER = 0
-_COL_KIND = 1
-_COL_SRC = 2
-_COL_OP = 3
+_COL_SRC = 1
+_COL_OP = 2
 
 
 class _VaultDownloadWorker(QThread):
@@ -71,34 +66,34 @@ class _VaultDownloadWorker(QThread):
 
     def run(self) -> None:  # type: ignore[override]
         try:
-            download_and_process_vault_icons(self._progress_callback)
+            download_and_process_vault_item_icons(self._progress_callback)
             if self._is_canceled:
                 return
-            self.finished_ok.emit(register_vault_block_icon_slot())
+            self.finished_ok.emit(register_vault_item_icon_slot())
         except Exception as exc:
             self.finished_err.emit(str(exc))
 
 
-class GameResourceBlockIconDialog(QDialog):
-    """来源、子选项占位、Vault 登记与已装载列表。"""
+class GameResourceItemIconDialog(QDialog):
+    """来源、Vault 下载与已装载列表（物品仅 2D）。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("GameResourceBlockIconDialog")
-        self.setWindowTitle("方块图标资源管理")
-        self.resize(960, 560)
-        ensure_initial_block_2d_seeded()
+        self.setObjectName("GameResourceItemIconDialog")
+        self.setWindowTitle("物品图标资源管理")
+        self.resize(900, 560)
+        ensure_initial_item_seeded()
 
         self._download_worker: _VaultDownloadWorker | None = None
-        self._installed: list[InstalledBlockVisual] = load_installed_block_visuals()
+        self._installed: list[InstalledItemIcon] = load_installed_item_icons()
         self._hover_ctrl: McmetaStandardTableRowHoverController | None = None
 
         root = QVBoxLayout(self)
 
         form = QFormLayout()
         self._source = QComboBox()
-        self._source.addItem("内建", BLOCK_SOURCE_BUILTIN)
-        self._source.addItem("vault", BLOCK_SOURCE_VAULT)
+        self._source.addItem("内建", ITEM_SOURCE_BUILTIN)
+        self._source.addItem("vault", ITEM_SOURCE_VAULT)
         form.addRow("来源", self._source)
         root.addLayout(form)
 
@@ -115,22 +110,20 @@ class GameResourceBlockIconDialog(QDialog):
         row2.addWidget(self._btn_download)
         root.addLayout(row2)
 
-        self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["版本（目前均为未知）", "类型", "来源", ""])
+        self._table = QTableWidget(0, 3)
+        self._table.setHorizontalHeaderLabels(["版本（目前均为未知）", "来源", ""])
         hh = self._table.horizontalHeader()
         hh.setSectionsMovable(False)
         hh.setSectionResizeMode(_COL_VER, QHeaderView.ResizeMode.Fixed)
-        hh.setSectionResizeMode(_COL_KIND, QHeaderView.ResizeMode.Fixed)
         hh.setSectionResizeMode(_COL_SRC, QHeaderView.ResizeMode.Fixed)
         hh.setSectionResizeMode(_COL_OP, QHeaderView.ResizeMode.Stretch)
         self._table.setColumnWidth(_COL_VER, 180)
-        self._table.setColumnWidth(_COL_KIND, 72)
         self._table.setColumnWidth(_COL_SRC, 220)
 
         app = QApplication.instance()
         tid = current_theme_id(app if isinstance(app, QApplication) else None)
-        self._hover_ctrl = apply_block_icon_resource_table_chrome(self._table, tid)
-        self._table.setObjectName("OptionsBlockIconResourceTable")
+        self._hover_ctrl = apply_item_icon_resource_table_chrome(self._table, tid)
+        self._table.setObjectName("OptionsItemIconResourceTable")
 
         root.addWidget(QLabel("已装载的资源"))
         root.addWidget(self._table, 1)
@@ -157,24 +150,21 @@ class GameResourceBlockIconDialog(QDialog):
 
     def _set_busy(self, busy: bool, text: str = "") -> None:
         self._source.setEnabled(not busy)
-        vault = self._source.currentData() == BLOCK_SOURCE_VAULT
+        vault = self._source.currentData() == ITEM_SOURCE_VAULT
         self._btn_download.setEnabled((not busy) and vault)
         self._status.setText(text)
 
     def _refresh_table(self) -> None:
         assert self._hover_ctrl is not None
         self._table._mcmeta_hover_row = None  # type: ignore[attr-defined]
-        has_ml = any(i.active_material_list for i in self._installed)
         has_layer = any(i.active_layering for i in self._installed)
         rows = [
-            InstalledBlockVisual(
-                id=BLOCK_SOURCE_BUILTIN,
+            InstalledItemIcon(
+                id=ITEM_SOURCE_BUILTIN,
                 version_label="未知",
-                kind=BLOCK_TYPE_2D,
                 source_label="内建",
-                source_key=BLOCK_SOURCE_BUILTIN,
+                source_key=ITEM_SOURCE_BUILTIN,
                 file_relpath="",
-                active_material_list=not has_ml,
                 active_layering=not has_layer,
                 installed_at="",
             )
@@ -188,9 +178,6 @@ class GameResourceBlockIconDialog(QDialog):
             v_it = QTableWidgetItem(item.version_label)
             v_it.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
             self._table.setItem(r, _COL_VER, v_it)
-            k_it = QTableWidgetItem(item.kind)
-            k_it.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
-            self._table.setItem(r, _COL_KIND, k_it)
             s_it = QTableWidgetItem(item.source_label)
             s_it.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
             self._table.setItem(r, _COL_SRC, s_it)
@@ -200,37 +187,15 @@ class GameResourceBlockIconDialog(QDialog):
             op_row.setContentsMargins(0, 0, 0, 0)
             op_row.setSpacing(4)
 
-            btn_ml = QPushButton("应用到材料列表")
-            btn_ml.setCheckable(True)
-            if item.id == BLOCK_SOURCE_BUILTIN:
-                btn_ml.setChecked(not has_ml)
-            else:
-                btn_ml.setChecked(bool(item.active_material_list))
-            btn_ml.clicked.connect(
-                lambda _c=False, item_id=item.id: self._on_apply_material_list(item_id)
-            )
-            attach_mcmeta_row_hover_to_button(btn_ml, self._hover_ctrl, r)
-            op_row.addWidget(btn_ml)
-
-            btn_layer = QPushButton("应用到分层")
-            btn_layer.setCheckable(True)
-            can_layer = item.kind == BLOCK_TYPE_2D
-            btn_layer.setEnabled(can_layer)
-            if not can_layer:
-                btn_layer.setChecked(False)
-                btn_layer.setToolTip("Icon 类型不能应用到分层")
-            elif item.id == BLOCK_SOURCE_BUILTIN:
-                btn_layer.setChecked(not has_layer)
-            else:
-                btn_layer.setChecked(bool(item.active_layering))
-            btn_layer.clicked.connect(
-                lambda _c=False, item_id=item.id: self._on_apply_layering(item_id)
-            )
-            attach_mcmeta_row_hover_to_button(btn_layer, self._hover_ctrl, r)
-            op_row.addWidget(btn_layer)
+            btn_apply = QPushButton("应用")
+            btn_apply.setCheckable(True)
+            btn_apply.setChecked(bool(item.active_layering))
+            btn_apply.clicked.connect(lambda _c=False, item_id=item.id: self._on_apply(item_id))
+            attach_mcmeta_row_hover_to_button(btn_apply, self._hover_ctrl, r)
+            op_row.addWidget(btn_apply)
 
             btn_del = QPushButton("删除")
-            if item.id == BLOCK_SOURCE_BUILTIN:
+            if item.id == ITEM_SOURCE_BUILTIN:
                 btn_del.setEnabled(False)
             btn_del.clicked.connect(lambda _c=False, item_id=item.id: self._on_delete(item_id))
             attach_mcmeta_row_hover_to_button(btn_del, self._hover_ctrl, r)
@@ -246,19 +211,16 @@ class GameResourceBlockIconDialog(QDialog):
 
     def _on_source_changed(self) -> None:
         src = self._source.currentData()
-        if src == BLOCK_SOURCE_BUILTIN:
-            self._set_busy(False, "当前来源：内建（2D，block_2d/initial）")
+        if src == ITEM_SOURCE_BUILTIN:
+            self._set_busy(False, "当前来源：内建（2D，item/initial）")
         else:
-            self._set_busy(
-                False,
-                "当前来源：vault（Icon，block_icon/vault；下载将登记至 block_icon/installed.json）",
-            )
+            self._set_busy(False, "当前来源：vault（2D，item/vault；下载将登记至 item/installed.json）")
 
     def _on_download_clicked(self) -> None:
-        if self._source.currentData() != BLOCK_SOURCE_VAULT:
+        if self._source.currentData() != ITEM_SOURCE_VAULT:
             return
 
-        self._progress_dlg = GenericProgressDialog("下载方块图标", self)
+        self._progress_dlg = GenericProgressDialog("下载物品图标", self)
         self._download_worker = _VaultDownloadWorker()
 
         self._download_worker.progress.connect(self._progress_dlg.set_progress)
@@ -276,45 +238,32 @@ class GameResourceBlockIconDialog(QDialog):
         if hasattr(self, "_progress_dlg"):
             self._progress_dlg.accept()
         self._download_worker = None
-        if not isinstance(item, InstalledBlockVisual):
+        if not isinstance(item, InstalledItemIcon):
             self._set_busy(False, "登记失败")
             return
-        self._installed = load_installed_block_visuals()
+        self._installed = load_installed_item_icons()
         self._refresh_table()
-        self._set_busy(
-            False,
-            "已写入 block_icon/installed.json，Vault 图标索引下载完成。",
-        )
-        restart_material_list_icon_prewarm()
+        self._set_busy(False, "已写入 item/installed.json，Vault 图标索引下载完成。")
+        restart_layering_item_icon_prewarm()
 
     def _on_vault_err(self, err: str) -> None:
         if hasattr(self, "_progress_dlg"):
             self._progress_dlg.reject()
         self._download_worker = None
         self._set_busy(False, "登记失败")
-        QMessageBox.warning(self, "方块图标", f"Vault 下载或登记失败：\n{err}")
+        QMessageBox.warning(self, "物品图标", f"Vault 下载或登记失败：\n{err}")
 
-    def _on_apply_material_list(self, item_id: str) -> None:
-        if item_id == BLOCK_SOURCE_BUILTIN:
-            self._installed = clear_active_material_list()
+    def _on_apply(self, item_id: str) -> None:
+        if item_id == ITEM_SOURCE_BUILTIN:
+            self._installed = clear_active_layering_item_icon()
             self._refresh_table()
-            self._set_busy(False, "已应用到材料列表：内建 2D")
-            restart_material_list_icon_prewarm()
+            self._set_busy(False, "已应用：内建 2D")
+            restart_layering_item_icon_prewarm()
             return
-        self._installed = set_active_material_list(item_id)
+        self._installed = set_active_layering_item_icon(item_id)
         self._refresh_table()
-        self._set_busy(False, "已应用到材料列表")
-        restart_material_list_icon_prewarm()
-
-    def _on_apply_layering(self, item_id: str) -> None:
-        if item_id == BLOCK_SOURCE_BUILTIN:
-            self._installed = clear_active_layering()
-            self._refresh_table()
-            self._set_busy(False, "已应用到分层：内建 2D")
-            return
-        self._installed = set_active_layering(item_id)
-        self._refresh_table()
-        self._set_busy(False, "已应用到分层")
+        self._set_busy(False, "已应用")
+        restart_layering_item_icon_prewarm()
 
     def _on_delete(self, item_id: str) -> None:
         target = None
@@ -327,15 +276,16 @@ class GameResourceBlockIconDialog(QDialog):
         r = QMessageBox.question(
             self,
             "删除资源",
-            f"确定删除该资源？\n\n类型：{target.kind}\n来源：{target.source_label}",
+            f"确定删除该资源？\n\n来源：{target.source_label}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if r != QMessageBox.StandardButton.Yes:
             return
-        self._installed = delete_installed_block_visual(item_id)
+        self._installed = delete_installed_item_icon(item_id)
         self._refresh_table()
         self._set_busy(False, "已删除资源")
+        restart_layering_item_icon_prewarm()
 
     def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if self._hover_ctrl is not None:
