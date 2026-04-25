@@ -39,7 +39,7 @@ _full_verify_v2_*.png
 _full_verify_v2_*.txt
 
 # 数据与第三方库
-/data
+data/minecraft-assets/
 data/cache/
 data/projection-library/
 data/settings.json
@@ -47,3 +47,27 @@ data/content_tile_layout.sqlite3
 /third_party/vscode-nbt/node_modules/
 /third_party/vscode-nbt/out/
 /ref
+
+# 打包元数据（一次性生成）
+*.egg-info/
+
+# 前端 / Rust / .NET 构建产物
+node_modules/
+**/target/
+tools/launcher/bin/
+tools/launcher/obj/
+
+# 根目录调试与验证残留
+/_verify_*
+/_observer_*
+/_chest_*
+/*_trace.log
+/*_stdout.log
+/*_stderr.log
+/*_probe*.png
+/_tmp_*.png
+/_next_chat_prompt_*.md
+/001_probe.png
+/003_probe_zoom.png
+/新建 文本文档.txt
+/GEMINI.md
