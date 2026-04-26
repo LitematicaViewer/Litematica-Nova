@@ -182,6 +182,8 @@ pub struct CompactSurfaceOutput {
 pub struct TexturedVertexOutput {
     pub position: [f32; 3],
     pub uv: [f32; 2],
+    #[serde(default)]
+    pub emissive_tag: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,15 +216,15 @@ pub struct MeshBatchOutput {
     pub chunks: Vec<MeshChunkOutput>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct BlockStateNbt {
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub properties: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EntityNbt {
     #[serde(rename = "id")]
     pub id_lower: Option<String>,

@@ -105,3 +105,36 @@ Quickly generate specified schematic structures
 - [ ] Sphere
 - [ ] Custom curve/surface equations
 
+## 2026-04-25 Rendering Handoff
+
+The active rendering thread is the stable viewer-side lighting baseline, not MC Light, wall-sign, or chest geometry.
+
+Read these first in the next conversation:
+
+1. `C:\Users\27232\Documents\Litematica-BA\README.md`
+2. `C:\Users\27232\Documents\Litematica-BA\开发文档.md`
+3. `C:\Users\27232\Documents\Litematica-BA\投影格式文档.md`
+
+Current fixed executable:
+
+```powershell
+& "C:\Users\27232\Documents\Litematica-BA\bin\viewer-backend\litematica_native_viewer.exe" `
+  "D:\.minecraft\versions\1.21-SurvivalRedstonePower\schematics\建筑\海景豪宅.litematic" `
+  --display-mode=full `
+  --basic-lighting `
+  --basic-shadows
+```
+
+Current frozen defaults:
+
+- shadow preset: `soft`
+- `final_max=0.77`
+- `final_min=0.36`
+- `shadow_strength=0.72`
+- PCF: 8-sample Poisson-like filtering
+- PCF radius: `1.25`
+- shadow bias: `0.00035`
+- frustum mode: `balanced`
+- point shadows: paused / default off
+
+MC Light / block light voxel propagation has been removed. Legacy `LBA_MC_LIGHT*` environment variables are ignored; emissive/bloom rendering still uses `emissive_tag`.

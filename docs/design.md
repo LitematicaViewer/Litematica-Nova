@@ -318,6 +318,9 @@ $$
 ##### 2.6.3.3 Minecraft 资源与数据版本
 - Deepslate 绘制依赖 **方块状态（blockstates）**、**模型（models）**、**纹理图集**及 **UV 映射**，须与投影文件的 **Minecraft 数据版本**（属性页只读字段）一致或兼容。
 - 建议缓存目录：`data/render_assets/<数据版本>/`（或等价结构），可借鉴 vscode-nbt 的下载/缓存思路；**缺失资源时**应提示用户并允许回退 `legacy`，而非静默错模。
+- `data/minecraft_blockstates/<version>.json` 由 `scripts/generate_minecraft_blockstate_db.py` 从 Minecraft `assets/minecraft/blockstates/*.json` 反推生成；该来源不覆盖全部运行时/特殊状态。
+- 合法但无法从 blockstates JSON 完整反推的状态通过 `data/minecraft_blockstates/overrides/<version>.json` 补充，例如 `minecraft:water[level=0..15]`、`minecraft:lava[level=0..15]`、`light[level=0..15]` 等。
+- 生成命令仍使用 `scripts/generate_minecraft_blockstate_db.py --version-dir <version-dir>`；脚本会自动合并同版本 override。合并规则是新增缺失 block/property、合并 property values、默认不覆盖已有 `default_properties`。
 
 ##### 2.6.3.4 宿主 ↔ WebView 数据通道
 | 方式 | 适用 | 说明 |

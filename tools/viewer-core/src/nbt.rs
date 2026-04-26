@@ -3,13 +3,15 @@ use std::fs::File;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use fastnbt::{LongArray, Value, from_reader};
+use fastnbt::{LongArray, Value, from_reader, to_writer};
+use flate2::Compression;
 use flate2::read::GzDecoder;
-use serde::Deserialize;
+use flate2::write::GzEncoder;
+use serde::{Deserialize, Serialize};
 
 use crate::model::{BlockStateNbt, EnclosingSize, EntityNbt};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct LitematicRoot {
     pub metadata: MetadataNbt,
@@ -20,7 +22,7 @@ pub struct LitematicRoot {
     pub minecraft_data_version: Option<i32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct MetadataNbt {
     pub author: Option<String>,
@@ -32,7 +34,7 @@ pub struct MetadataNbt {
     pub enclosing_size: Option<EnclosingSize>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct RegionNbt {
     pub position: Vec3i,
@@ -45,7 +47,7 @@ pub struct RegionNbt {
     pub tile_entities: Vec<Value>,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct Vec3i {
     pub x: i32,
     pub y: i32,
@@ -66,6 +68,13 @@ pub fn load_litematic_root(path: &Path) -> Result<LitematicRoot> {
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let decoder = GzDecoder::new(file);
     from_reader(decoder).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+pub fn save_litematic_root(path: &Path, root: &LitematicRoot) -> Result<()> {
+    let file =
+        File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
+    let encoder = GzEncoder::new(file, Compression::default());
+    to_writer(encoder, root).with_context(|| format!("failed to write {}", path.display()))
 }
 
 pub fn region_volume(size: &Vec3i) -> Result<usize> {
@@ -147,6 +156,32 @@ pub fn decode_palette_frequencies(
     }
 
     Ok(counts)
+}
+
+pub fn pack_palette_indices(indices: &[usize], nbits: usize) -> LongArray {
+    let expected_len = (indices.len() * nbits).div_ceil(64);
+    let mask = if nbits >= 64 {
+        u64::MAX
+    } else {
+        (1_u64 << nbits) - 1
+    };
+    let mut packed = vec![0_u64; expected_len];
+
+    for (index, palette_index) in indices.iter().copied().enumerate() {
+        let value = (palette_index as u64) & mask;
+        let start_offset = index * nbits;
+        let start_arr_index = start_offset >> 6;
+        let end_arr_index = (((index + 1) * nbits) - 1) >> 6;
+        let start_bit_offset = start_offset & 0x3f;
+
+        packed[start_arr_index] |= value << start_bit_offset;
+        if start_arr_index != end_arr_index {
+            let end_offset = 64 - start_bit_offset;
+            packed[end_arr_index] |= value >> end_offset;
+        }
+    }
+
+    LongArray::new(packed.into_iter().map(|value| value as i64).collect())
 }
 
 pub fn for_each_palette_index<F>(

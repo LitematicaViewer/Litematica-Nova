@@ -1,0 +1,36 @@
+{
+  "coverage": {
+    "total_key_values": 358,
+    "total_keys": 78,
+    "translated_key_values": 335,
+    "translated_keys": 78
+  },
+  "missing_property_keys": [],
+  "missing_property_values": {
+    "instrument": [
+      "banjo",
+      "basedrum",
+      "bass",
+      "bell",
+      "bit",
+      "chime",
+      "cow_bell",
+      "creeper",
+      "custom_head",
+      "didgeridoo",
+      "dragon",
+      "flute",
+      "guitar",
+      "harp",
+      "hat",
+      "iron_xylophone",
+      "piglin",
+      "pling",
+      "skeleton",
+      "snare",
+      "wither_skeleton",
+      "xylophone",
+      "zombie"
+    ]
+  }
+}

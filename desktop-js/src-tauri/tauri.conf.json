@@ -1,0 +1,20 @@
+{
+  "productName": "Litematica BA",
+  "version": "0.1.0",
+  "identifier": "com.litematicaba.dev",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "title": "Litematica BA", "width": 1024, "height": 768 }],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.ico"]
+  }
+}
