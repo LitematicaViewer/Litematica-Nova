@@ -2580,6 +2580,7 @@ fn emit_textured_quad(
         vertices.push(TexturedVertexOutput {
             position: *position,
             uv: *uv,
+            emissive_tag: 0.0,
         });
     }
     let target = if alpha_mode == FullModeAlphaMode::Translucent {

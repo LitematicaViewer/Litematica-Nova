@@ -1,0 +1,581 @@
+{
+  "fallback": {
+    "unknown_key_policy": "show_raw_key",
+    "unknown_value_policy": "show_raw_value"
+  },
+  "locale": "zh_cn",
+  "property_keys": {
+    "age": "生长阶段",
+    "attached": "附着",
+    "attachment": "附着方式",
+    "axis": "轴向",
+    "berries": "浆果",
+    "bites": "咬食次数",
+    "bloom": "盛开",
+    "bottom": "下方连接",
+    "can_summon": "可召唤",
+    "candles": "蜡烛数量",
+    "charges": "充能数",
+    "conditional": "条件型",
+    "crafting": "合成中",
+    "creaking_heart_state": "嘎吱心状态",
+    "delay": "延迟",
+    "distance": "距离",
+    "down": "下侧",
+    "dusted": "掸扫程度",
+    "east": "东侧",
+    "eggs": "蛋数量",
+    "extended": "伸出",
+    "eye": "有末影眼",
+    "face": "附着面",
+    "facing": "朝向",
+    "flower_amount": "花数量",
+    "half": "半部",
+    "hanging": "悬挂",
+    "has_bottle_0": "有药水瓶_0",
+    "has_bottle_1": "有药水瓶_1",
+    "has_bottle_2": "有药水瓶_2",
+    "hatch": "孵化阶段",
+    "hinge": "合页位置",
+    "honey_level": "蜂蜜等级",
+    "hydration": "湿润度",
+    "in_wall": "位于墙中",
+    "instrument": "乐器",
+    "inverted": "反转",
+    "layers": "层数",
+    "leaves": "树叶",
+    "level": "等级",
+    "lit": "点亮",
+    "locked": "锁定",
+    "map": "有地图",
+    "mode": "模式",
+    "moisture": "湿度",
+    "north": "北侧",
+    "note": "音符",
+    "ominous": "不祥",
+    "open": "打开",
+    "orientation": "朝向",
+    "persistent": "持久",
+    "pickles": "海泡菜数量",
+    "power": "红石强度",
+    "powered": "充能",
+    "sculk_sensor_phase": "幽匿感测阶段",
+    "segment_amount": "节数量",
+    "shape": "形状",
+    "short": "短型",
+    "side_chain": "侧边链",
+    "slot_0_occupied": "槽位_0_占用",
+    "slot_1_occupied": "槽位_1_占用",
+    "slot_2_occupied": "槽位_2_占用",
+    "slot_3_occupied": "槽位_3_占用",
+    "slot_4_occupied": "槽位_4_占用",
+    "slot_5_occupied": "槽位_5_占用",
+    "snowy": "覆雪",
+    "south": "南侧",
+    "thickness": "厚度",
+    "tilt": "倾斜",
+    "tip": "顶端",
+    "trial_spawner_state": "试炼刷怪笼状态",
+    "triggered": "已触发",
+    "type": "类型",
+    "up": "上侧",
+    "vault_state": "宝库状态",
+    "vertical_direction": "垂直方向",
+    "waterlogged": "含水",
+    "west": "西侧"
+  },
+  "property_values": {
+    "age": {
+      "0": "0",
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4",
+      "5": "5",
+      "6": "6",
+      "7": "7"
+    },
+    "attached": {
+      "false": "否",
+      "true": "是"
+    },
+    "attachment": {
+      "ceiling": "天花板",
+      "double_wall": "双面墙",
+      "floor": "地面",
+      "single_wall": "单面墙"
+    },
+    "axis": {
+      "x": "X轴",
+      "y": "Y轴",
+      "z": "Z轴"
+    },
+    "berries": {
+      "false": "否",
+      "true": "是"
+    },
+    "bites": {
+      "0": "0",
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4",
+      "5": "5",
+      "6": "6"
+    },
+    "bloom": {
+      "false": "否",
+      "true": "是"
+    },
+    "bottom": {
+      "false": "否",
+      "true": "是"
+    },
+    "can_summon": {
+      "false": "否",
+      "true": "是"
+    },
+    "candles": {
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4"
+    },
+    "charges": {
+      "0": "0",
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4"
+    },
+    "conditional": {
+      "false": "否",
+      "true": "是"
+    },
+    "crafting": {
+      "false": "否",
+      "true": "是"
+    },
+    "creaking_heart_state": {
+      "awake": "唤醒",
+      "dormant": "休眠",
+      "uprooted": "拔起"
+    },
+    "delay": {
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4"
+    },
+    "distance": {
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4",
+      "5": "5",
+      "6": "6",
+      "7": "7"
+    },
+    "down": {
+      "false": "否",
+      "true": "是"
+    },
+    "dusted": {
+      "0": "0",
+      "1": "1",
+      "2": "2",
+      "3": "3"
+    },
+    "east": {
+      "false": "否",
+      "low": "低",
+      "none": "无",
+      "side": "侧面",
+      "tall": "高",
+      "true": "是",
+      "up": "上"
+    },
+    "eggs": {
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4"
+    },
+    "extended": {
+      "false": "否",
+      "true": "是"
+    },
+    "eye": {
+      "false": "否",
+      "true": "是"
+    },
+    "face": {
+      "ceiling": "天花板",
+      "floor": "地面",
+      "wall": "墙面"
+    },
+    "facing": {
+      "down": "下",
+      "east": "东",
+      "north": "北",
+      "south": "南",
+      "up": "上",
+      "west": "西"
+    },
+    "flower_amount": {
+      "2": "2",
+      "3": "3",
+      "4": "4"
+    },
+    "half": {
+      "bottom": "下半",
+      "lower": "下半",
+      "top": "上半",
+      "upper": "上半"
+    },
+    "hanging": {
+      "false": "否",
+      "true": "是"
+    },
+    "has_bottle_0": {
+      "false": "否",
+      "true": "是"
+    },
+    "has_bottle_1": {
+      "false": "否",
+      "true": "是"
+    },
+    "has_bottle_2": {
+      "false": "否",
+      "true": "是"
+    },
+    "hatch": {
+      "0": "0",
+      "1": "1",
+      "2": "2"
+    },
+    "hinge": {
+      "left": "左",
+      "right": "右"
+    },
+    "honey_level": {
+      "0": "0",
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4",
+      "5": "5"
+    },
+    "hydration": {
+      "0": "0",
+      "1": "1",
+      "2": "2",
+      "3": "3"
+    },
+    "in_wall": {
+      "false": "否",
+      "true": "是"
+    },
+    "instrument": {},
+    "inverted": {
+      "false": "否",
+      "true": "是"
+    },
+    "layers": {
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4",
+      "5": "5",
+      "6": "6",
+      "7": "7",
+      "8": "8"
+    },
+    "leaves": {
+      "large": "大",
+      "small": "小"
+    },
+    "level": {
+      "0": "0",
+      "1": "1",
+      "10": "10",
+      "11": "11",
+      "12": "12",
+      "13": "13",
+      "14": "14",
+      "15": "15",
+      "2": "2",
+      "3": "3",
+      "4": "4",
+      "5": "5",
+      "6": "6",
+      "7": "7",
+      "8": "8",
+      "9": "9"
+    },
+    "lit": {
+      "false": "否",
+      "true": "是"
+    },
+    "locked": {
+      "false": "否",
+      "true": "是"
+    },
+    "map": {
+      "false": "否",
+      "true": "是"
+    },
+    "mode": {
+      "accept": "接受",
+      "compare": "比较",
+      "corner": "角落",
+      "data": "数据",
+      "fail": "失败",
+      "load": "加载",
+      "log": "记录",
+      "save": "保存",
+      "start": "开始",
+      "subtract": "减法"
+    },
+    "moisture": {
+      "0": "0",
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4",
+      "5": "5",
+      "6": "6",
+      "7": "7"
+    },
+    "north": {
+      "false": "否",
+      "low": "低",
+      "none": "无",
+      "side": "侧面",
+      "tall": "高",
+      "true": "是",
+      "up": "上"
+    },
+    "note": {
+      "0": "0",
+      "1": "1",
+      "10": "10",
+      "11": "11",
+      "12": "12",
+      "13": "13",
+      "14": "14",
+      "15": "15",
+      "16": "16",
+      "17": "17",
+      "18": "18",
+      "19": "19",
+      "2": "2",
+      "20": "20",
+      "21": "21",
+      "22": "22",
+      "23": "23",
+      "24": "24",
+      "3": "3",
+      "4": "4",
+      "5": "5",
+      "6": "6",
+      "7": "7",
+      "8": "8",
+      "9": "9"
+    },
+    "ominous": {
+      "false": "否",
+      "true": "是"
+    },
+    "open": {
+      "false": "否",
+      "true": "是"
+    },
+    "orientation": {
+      "down_east": "下东",
+      "down_north": "下北",
+      "down_south": "下南",
+      "down_west": "下西",
+      "east_up": "东上",
+      "north_up": "北上",
+      "south_up": "南上",
+      "up_east": "上东",
+      "up_north": "上北",
+      "up_south": "上南",
+      "up_west": "上西",
+      "west_up": "西上"
+    },
+    "persistent": {
+      "false": "否",
+      "true": "是"
+    },
+    "pickles": {
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4"
+    },
+    "power": {
+      "0": "0",
+      "1": "1",
+      "10": "10",
+      "11": "11",
+      "12": "12",
+      "13": "13",
+      "14": "14",
+      "15": "15",
+      "2": "2",
+      "3": "3",
+      "4": "4",
+      "5": "5",
+      "6": "6",
+      "7": "7",
+      "8": "8",
+      "9": "9"
+    },
+    "powered": {
+      "false": "否",
+      "true": "是"
+    },
+    "sculk_sensor_phase": {
+      "active": "激活",
+      "cooldown": "冷却",
+      "inactive": "未激活"
+    },
+    "segment_amount": {
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4"
+    },
+    "shape": {
+      "ascending_east": "向东上升",
+      "ascending_north": "向北上升",
+      "ascending_south": "向南上升",
+      "ascending_west": "向西上升",
+      "east_west": "东西",
+      "inner_left": "内左",
+      "inner_right": "内右",
+      "north_east": "东北",
+      "north_south": "南北",
+      "north_west": "西北",
+      "outer_left": "外左",
+      "outer_right": "外右",
+      "south_east": "东南",
+      "south_west": "西南",
+      "straight": "直线"
+    },
+    "short": {
+      "false": "否",
+      "true": "是"
+    },
+    "side_chain": {
+      "center": "中心",
+      "left": "左",
+      "right": "右",
+      "unconnected": "未连接"
+    },
+    "slot_0_occupied": {
+      "false": "否",
+      "true": "是"
+    },
+    "slot_1_occupied": {
+      "false": "否",
+      "true": "是"
+    },
+    "slot_2_occupied": {
+      "false": "否",
+      "true": "是"
+    },
+    "slot_3_occupied": {
+      "false": "否",
+      "true": "是"
+    },
+    "slot_4_occupied": {
+      "false": "否",
+      "true": "是"
+    },
+    "slot_5_occupied": {
+      "false": "否",
+      "true": "是"
+    },
+    "snowy": {
+      "false": "否",
+      "true": "是"
+    },
+    "south": {
+      "false": "否",
+      "low": "低",
+      "none": "无",
+      "side": "侧面",
+      "tall": "高",
+      "true": "是",
+      "up": "上"
+    },
+    "thickness": {
+      "base": "底座",
+      "frustum": "锥台",
+      "middle": "中段",
+      "tip": "尖端",
+      "tip_merge": "尖端合并"
+    },
+    "tilt": {
+      "full": "完全",
+      "none": "无",
+      "partial": "部分",
+      "unstable": "不稳定"
+    },
+    "tip": {
+      "false": "否",
+      "true": "是"
+    },
+    "trial_spawner_state": {
+      "active": "激活",
+      "cooldown": "冷却",
+      "ejecting_reward": "弹出奖励",
+      "inactive": "未激活",
+      "waiting_for_players": "等待玩家",
+      "waiting_for_reward_ejection": "等待奖励弹出"
+    },
+    "triggered": {
+      "false": "否",
+      "true": "是"
+    },
+    "type": {
+      "bottom": "下半",
+      "double": "双层",
+      "normal": "普通",
+      "sticky": "粘性",
+      "top": "上半"
+    },
+    "up": {
+      "false": "否",
+      "true": "是"
+    },
+    "vault_state": {
+      "active": "激活",
+      "ejecting": "弹出中",
+      "inactive": "未激活",
+      "unlocking": "解锁中"
+    },
+    "vertical_direction": {
+      "down": "下",
+      "up": "上"
+    },
+    "waterlogged": {
+      "false": "否",
+      "true": "是"
+    },
+    "west": {
+      "false": "否",
+      "low": "低",
+      "none": "无",
+      "side": "侧面",
+      "tall": "高",
+      "true": "是",
+      "up": "上"
+    }
+  },
+  "source_db": "data/minecraft_blockstates/26.1.json",
+  "version_id": "26.1"
+}

@@ -1,6 +1,13 @@
 .obsidian/
 .tmp/
 
+# Node / frontend
+node_modules/
+desktop-js/node_modules/
+desktop-js/dist/
+desktop-js/.vite/
+*.tsbuildinfo
+
 # Python environments and caches
 .venv/
 venv/
@@ -10,13 +17,16 @@ __pycache__/
 *.pyd
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 
 # Build outputs
 build/
 dist/
 target/
+**/target/
 obj/
 out/
+coverage/
 
 # Windows / IDE
 .vs/
@@ -31,13 +41,31 @@ data/cache/
 data/projection-library/
 data/settings.json
 data/content_tile_layout.sqlite3
+diagnostics/bundle_*/
+cleanup_manifest.json
+cleanup_report.md
 
 # Local packaging state
 bin/pack_state.json
 bin/launcher/*.exe
 bin/launcher/*.pdb
+bin/launcher/
 bin/viewer-backend/*.exe
+bin/viewer-backend/*.pdb
 
 # Local preview / verify outputs
+*.tmp
+*.temp
 _full_verify_v2_*.png
 _full_verify_v2_*.txt
+_full_mode_*
+_verify_*
+_observer_*
+_chest_*
+_hopper_*
+_water*
+_lava*
+*_trace.log
+*_debug.log
+*_probe.png
+*_preview.png

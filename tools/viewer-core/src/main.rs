@@ -2,7 +2,9 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
 use anyhow::Result;
-use litematica_core::{analyze, cache_layer, cli, mesh, visual};
+use litematica_core::{
+    analyze, cache_layer, cli, generate_projection, mesh, replace_blocks, stats_api, visual,
+};
 use serde::Serialize;
 
 fn emit_output<T: Serialize>(value: &T, output: Option<&std::path::Path>) -> Result<()> {
@@ -27,6 +29,23 @@ fn emit_output<T: Serialize>(value: &T, output: Option<&std::path::Path>) -> Res
 fn main() -> Result<()> {
     let args = cli::parse_args()?;
     match args.command.as_str() {
+        "stats" => {
+            let output = stats_api::build_stats_output(&args.input)?;
+            emit_output(&output, args.output.as_deref())?;
+        }
+        "materials" => {
+            let scope = match (args.scope.as_deref(), args.region.as_ref(), args.layer) {
+                (_, Some(region), None) => stats_api::MaterialScope::Region(region.clone()),
+                (_, None, Some(layer)) => stats_api::MaterialScope::Layer(layer),
+                (Some("all"), None, None) | (None, None, None) => stats_api::MaterialScope::All,
+                (Some(other), None, None) => {
+                    anyhow::bail!("unsupported --scope value for materials: {other}")
+                }
+                _ => anyhow::bail!("use exactly one of --scope all, --region <name>, --layer <y>"),
+            };
+            let output = stats_api::build_materials_output(&args.input, scope)?;
+            emit_output(&output, args.output.as_deref())?;
+        }
         "analyze" => {
             let output = analyze::analyze_litematic(&args.input, args.include_entities)?;
             emit_output(&output, args.output.as_deref())?;
@@ -73,6 +92,32 @@ fn main() -> Result<()> {
         "mesh" => {
             let output = mesh::build_mesh_output(&args.input, args.chunk_size)?;
             emit_output(&output, args.output.as_deref())?;
+        }
+        "replace-blocks" => {
+            let rules = args
+                .rules
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --rules for replace-blocks"))?;
+            let summary = replace_blocks::replace_blocks(
+                &args.input,
+                args.output.as_deref(),
+                rules,
+                args.dry_run,
+            )?;
+            emit_output(&summary, None)?;
+        }
+        "generate" => {
+            let plan = args
+                .plan
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --plan for generate"))?;
+            let summary = generate_projection::generate_projection(
+                plan,
+                args.output.as_deref(),
+                args.dry_run,
+                args.force,
+            )?;
+            emit_output(&summary, None)?;
         }
         other => anyhow::bail!("unknown command: {other}"),
     }

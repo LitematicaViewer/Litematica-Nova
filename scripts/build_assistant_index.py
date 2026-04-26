@@ -23,9 +23,9 @@ DOC_FILES = [
 
 CODE_ROOTS = [
     REPO_ROOT / "tools" / "viewer-core" / "src",
-    REPO_ROOT / "src" / "litematicaba",
-    REPO_ROOT / "script",
     REPO_ROOT / "scripts",
+    REPO_ROOT / "desktop-js" / "src",
+    REPO_ROOT / "desktop-js" / "src-tauri" / "src",
     REPO_ROOT / "docs",
 ]
 
@@ -71,14 +71,14 @@ MODULE_ROLE_HINTS = {
     "tools/viewer-core/src/full_mode_v2.rs": ["full_mode_v2", "typed_model_chain", "block_family"],
     "tools/viewer-core/src/native_viewer.rs": ["native_window", "wgpu", "preview_output"],
     "tools/viewer-core/src/analyze.rs": ["analysis", "palette_frequency"],
-    "src/litematicaba/core/native_backend_bridge.py": ["python_bridge", "desktop_backend"],
-    "src/litematicaba/ui/main_window.py": ["desktop_ui", "main_window"],
+    "desktop-js/src/services/backend.ts": ["tauri_bridge", "desktop_backend"],
+    "desktop-js/src/routes/GeneratePage.tsx": ["ai_projection", "plan_generation"],
 }
 
 
 PROJECT_STATE = {
     "snapshot_date": "2026-04-23",
-    "primary_focus": "Rust viewer-core side is the active development center; Python/UI side remains as shell and legacy utilities.",
+    "primary_focus": "desktop-js is the active UI; Rust viewer-core is the active backend/viewer. Legacy PySide6 UI has been removed.",
     "stable_chain": [
         ".litematic -> gzip -> NBT parsing",
         "scene/catalog generation",
@@ -169,10 +169,10 @@ def detect_lang(path: Path) -> str:
 def detect_domain(path_str: str) -> str:
     if path_str.startswith("tools/viewer-core/src/"):
         return "rust_core"
-    if path_str.startswith("src/litematicaba/"):
-        return "python_app"
-    if path_str.startswith("script/"):
-        return "legacy_python"
+    if path_str.startswith("desktop-js/src-tauri/"):
+        return "tauri_backend"
+    if path_str.startswith("desktop-js/src/"):
+        return "desktop_js"
     if path_str.startswith("scripts/"):
         return "tooling"
     if path_str.startswith("docs/") or path_str.endswith(".md"):

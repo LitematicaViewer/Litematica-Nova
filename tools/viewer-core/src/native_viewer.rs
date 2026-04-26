@@ -1,3 +1,12 @@
+#![allow(
+    clippy::too_many_arguments,
+    clippy::result_large_err,
+    clippy::while_let_loop,
+    clippy::question_mark,
+    clippy::format_in_format_args,
+    clippy::explicit_counter_loop
+)]
+
 use std::collections::HashMap;
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::f32::consts::FRAC_PI_4;
@@ -36,6 +45,52 @@ use crate::model::{CompactSurfaceOutput, MeshChunkOutput, MetadataOutput, Textur
 const VIEWER_SHADER: &str = r#"
 struct CameraUniform {
     view_proj: mat4x4<f32>,
+    camera_position: vec4<f32>,
+};
+
+struct LightingUniform {
+    enabled: f32,
+    ambient_strength: f32,
+    directional_strength: f32,
+    min_brightness_floor: f32,
+    light_direction: vec4<f32>,
+    light_view_proj: mat4x4<f32>,
+    shadow_enabled: f32,
+    shadow_strength: f32,
+    shadow_bias: f32,
+    shadow_debug_view_mode: f32,
+    shadow_force_test: f32,
+    shadow_lighting_preset: f32,
+    shadow_pcf_samples: f32,
+    shadow_pcf_radius: f32,
+    contact_shadow_enabled: f32,
+    contact_shadow_strength: f32,
+    ssao_enabled: f32,
+    ssao_radius: f32,
+    ssao_strength: f32,
+    ao_debug_view_mode: f32,
+    ao_sample_count: f32,
+    ao_distance_fade_start: f32,
+    ao_distance_fade_end: f32,
+    ao_edge_guard: f32,
+    ao_max_occlusion: f32,
+    ao_padding: f32,
+    tone_preset: f32,
+    tone_exposure: f32,
+    tone_gamma: f32,
+    tone_saturation: f32,
+    tone_contrast: f32,
+    tone_highlight_rolloff: f32,
+    tone_debug_view_mode: f32,
+    tone_padding: f32,
+    emissive_enabled: f32,
+    emissive_strength: f32,
+    bloom_enabled: f32,
+    bloom_threshold: f32,
+    bloom_intensity: f32,
+    bloom_radius: f32,
+    bloom_debug_view_mode: f32,
+    emissive_debug_view_mode: f32,
 };
 
 @group(0) @binding(0)
@@ -47,11 +102,22 @@ var atlas_texture: texture_2d<f32>;
 @group(1) @binding(1)
 var atlas_sampler: sampler;
 
+@group(2) @binding(0)
+var<uniform> lighting: LightingUniform;
+
+@group(3) @binding(0)
+var shadow_texture: texture_depth_2d;
+
+@group(3) @binding(1)
+var shadow_sampler: sampler_comparison;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) color: vec4<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) use_texture: f32,
+    @location(4) normal: vec3<f32>,
+    @location(5) emissive_tag: f32,
 };
 
 struct VertexOutput {
@@ -59,6 +125,10 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) use_texture: f32,
+    @location(3) normal: vec3<f32>,
+    @location(4) shadow_position: vec4<f32>,
+    @location(5) world_position: vec3<f32>,
+    @location(6) emissive_tag: f32,
 };
 
 @vertex
@@ -68,20 +138,346 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.color = input.color;
     output.uv = input.uv;
     output.use_texture = input.use_texture;
+    output.normal = input.normal;
+    output.shadow_position = lighting.light_view_proj * vec4<f32>(input.position, 1.0);
+    output.world_position = input.position;
+    output.emissive_tag = input.emissive_tag;
     return output;
+}
+
+fn apply_lba_tone_pipeline(color: vec3<f32>) -> vec3<f32> {
+    if (lighting.tone_preset < 0.5) {
+        return clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    let exposure_color = max(color * lighting.tone_exposure, vec3<f32>(0.0));
+    let rolloff = clamp(lighting.tone_highlight_rolloff, 0.0, 1.0);
+    var toned = exposure_color / (vec3<f32>(1.0) + exposure_color * rolloff);
+    let luminance = dot(toned, vec3<f32>(0.2126, 0.7152, 0.0722));
+    toned = mix(vec3<f32>(luminance), toned, lighting.tone_saturation);
+    toned = (toned - vec3<f32>(0.5)) * lighting.tone_contrast + vec3<f32>(0.5);
+    let gamma = max(lighting.tone_gamma, 0.01);
+    toned = pow(max(toned, vec3<f32>(0.0)), vec3<f32>(1.0 / gamma));
+    return clamp(toned, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn lba_luminance(color: vec3<f32>) -> f32 {
+    return dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var color = input.color;
-    if (input.use_texture > 0.5) {
+    var sampled_base_rgb = color.rgb;
+    if (input.emissive_tag < -0.5) {
+        let debug_id = max(-input.emissive_tag - 1.0, 0.0);
+        let stripe = fract(debug_id * 0.173);
+        sampled_base_rgb = vec3<f32>(
+            0.18 + 0.72 * stripe,
+            0.95,
+            0.18 + 0.45 * (1.0 - stripe),
+        );
+        color = vec4<f32>(sampled_base_rgb, 1.0);
+    } else if (input.use_texture > 0.5) {
         let sampled = textureSample(atlas_texture, atlas_sampler, input.uv);
         if (sampled.a <= 0.01) {
             discard;
         }
         color = vec4<f32>(sampled.rgb, sampled.a * input.color.a);
+        sampled_base_rgb = sampled.rgb;
+    }
+    if (lighting.enabled > 0.5) {
+        let normal = normalize(input.normal);
+        let light_direction = normalize(lighting.light_direction.xyz);
+        let diffuse = max(dot(normal, light_direction), 0.0);
+        let shadow_ndc = input.shadow_position.xyz / input.shadow_position.w;
+        let shadow_uv = vec2<f32>(
+            shadow_ndc.x * 0.5 + 0.5,
+            0.5 - shadow_ndc.y * 0.5,
+        );
+        let shadow_valid =
+            input.shadow_position.w > 0.000001 &&
+            shadow_ndc.x == shadow_ndc.x &&
+            shadow_ndc.y == shadow_ndc.y &&
+            shadow_ndc.z == shadow_ndc.z;
+        let behind_or_depth_out = shadow_valid && (shadow_ndc.z < 0.0 || shadow_ndc.z > 1.0);
+        let inside_light =
+            shadow_valid &&
+            all(shadow_uv >= vec2<f32>(0.0, 0.0)) &&
+            all(shadow_uv <= vec2<f32>(1.0, 1.0)) &&
+            shadow_ndc.z >= 0.0 &&
+            shadow_ndc.z <= 1.0;
+        let shadow_size_i = textureDimensions(shadow_texture);
+        let shadow_size = vec2<f32>(shadow_size_i);
+        var sampled_shadow_depth = 1.0;
+        if (inside_light) {
+            let shadow_texel = vec2<i32>(clamp(
+                shadow_uv * shadow_size,
+                vec2<f32>(0.0, 0.0),
+                shadow_size - vec2<f32>(1.0, 1.0),
+            ));
+            sampled_shadow_depth = textureLoad(shadow_texture, shadow_texel, 0);
+        }
+        var shadow_visibility = 1.0;
+        var raw_shadow_visibility = 1.0;
+        if (lighting.shadow_enabled > 0.5) {
+            if (lighting.shadow_force_test > 0.5) {
+                let checker = floor(shadow_uv.x * 18.0) + floor(shadow_uv.y * 18.0);
+                let lit = fract(checker * 0.5) * 2.0;
+                shadow_visibility = mix(1.0 - lighting.shadow_strength, 1.0, lit);
+                raw_shadow_visibility = shadow_visibility;
+            } else if (diffuse > 0.001 && inside_light) {
+                let compare_depth = shadow_ndc.z - lighting.shadow_bias;
+                let raw_lit = select(0.0, 1.0, compare_depth <= sampled_shadow_depth);
+                raw_shadow_visibility = mix(1.0 - lighting.shadow_strength, 1.0, raw_lit);
+                var lit = raw_lit;
+                if (lighting.shadow_pcf_samples > 0.5) {
+                    var lit_sum = 0.0;
+                    var sample_count = 0.0;
+                    for (var i: i32 = 0; i < 12; i = i + 1) {
+                        if (f32(i) < lighting.shadow_pcf_samples) {
+                            var offset = vec2<f32>(-0.326, -0.406);
+                            switch i {
+                                case 1: { offset = vec2<f32>(-0.840, -0.074); }
+                                case 2: { offset = vec2<f32>(-0.696, 0.457); }
+                                case 3: { offset = vec2<f32>(-0.203, 0.621); }
+                                case 4: { offset = vec2<f32>(0.962, -0.195); }
+                                case 5: { offset = vec2<f32>(0.473, -0.480); }
+                                case 6: { offset = vec2<f32>(0.519, 0.767); }
+                                case 7: { offset = vec2<f32>(0.185, -0.893); }
+                                case 8: { offset = vec2<f32>(0.507, 0.064); }
+                                case 9: { offset = vec2<f32>(0.896, 0.412); }
+                                case 10: { offset = vec2<f32>(-0.322, -0.933); }
+                                case 11: { offset = vec2<f32>(-0.792, -0.598); }
+                                default: {}
+                            }
+                            let sample_coord = shadow_uv * shadow_size + offset * lighting.shadow_pcf_radius;
+                            let sample_texel = vec2<i32>(clamp(
+                                sample_coord,
+                                vec2<f32>(0.0, 0.0),
+                                shadow_size - vec2<f32>(1.0, 1.0),
+                            ));
+                            let depth = textureLoad(shadow_texture, sample_texel, 0);
+                            lit_sum = lit_sum + select(0.0, 1.0, compare_depth <= depth);
+                            sample_count = sample_count + 1.0;
+                        }
+                    }
+                    lit = lit_sum / max(sample_count, 1.0);
+                }
+                shadow_visibility = mix(1.0 - lighting.shadow_strength, 1.0, lit);
+            }
+        }
+        var light_factor = clamp(
+            max(
+                lighting.min_brightness_floor,
+                lighting.ambient_strength + diffuse * lighting.directional_strength
+            ),
+            0.0,
+            1.0,
+        );
+        if (lighting.shadow_enabled > 0.5) {
+            let preset = lighting.shadow_lighting_preset;
+            var hemisphere_ground = 0.54;
+            var hemisphere_sky = 0.72;
+            var top_lift_strength = 0.055;
+            var bottom_shade_strength = 0.070;
+            var side_layer_x = 0.025;
+            var side_layer_z = -0.018;
+            var direct_strength = 0.18;
+            var unshadowed_min = 0.44;
+            var unshadowed_max = 0.96;
+            var shadow_floor = 0.58;
+            var final_min = 0.38;
+            var final_max = 0.90;
+            if (preset > 1.5) {
+                hemisphere_ground = 0.50;
+                hemisphere_sky = 0.72;
+                top_lift_strength = 0.060;
+                bottom_shade_strength = 0.090;
+                side_layer_x = 0.032;
+                side_layer_z = -0.024;
+                direct_strength = 0.22;
+                unshadowed_min = 0.40;
+                unshadowed_max = 0.98;
+                shadow_floor = 0.48;
+                final_min = 0.34;
+                final_max = 0.90;
+            } else if (preset > 0.5) {
+                hemisphere_ground = 0.54;
+                hemisphere_sky = 0.75;
+                top_lift_strength = 0.052;
+                bottom_shade_strength = 0.062;
+                side_layer_x = 0.020;
+                side_layer_z = -0.014;
+                direct_strength = 0.14;
+                unshadowed_min = 0.46;
+                unshadowed_max = 0.94;
+                shadow_floor = 0.62;
+                final_min = 0.36;
+                final_max = 0.77;
+            }
+            let sky_hemisphere = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
+            let side_amount = 1.0 - abs(normal.y);
+            let hemisphere_fill = mix(hemisphere_ground, hemisphere_sky, sky_hemisphere);
+            let minecraft_top_lift = top_lift_strength * max(normal.y, 0.0);
+            let minecraft_bottom_shade = bottom_shade_strength * max(-normal.y, 0.0);
+            let minecraft_side_layer = side_amount * (side_layer_x * normal.x + side_layer_z * normal.z);
+            let softened_direct = diffuse * direct_strength;
+            let unshadowed_viewer_light = clamp(
+                hemisphere_fill + softened_direct + minecraft_top_lift - minecraft_bottom_shade + minecraft_side_layer,
+                unshadowed_min,
+                unshadowed_max,
+            );
+            let softened_shadow = mix(shadow_floor, 1.0, shadow_visibility);
+            light_factor = clamp(unshadowed_viewer_light * softened_shadow, final_min, final_max);
+        }
+        if (lighting.shadow_debug_view_mode > 0.5 && lighting.shadow_debug_view_mode < 1.5) {
+            return vec4<f32>(vec3<f32>(shadow_visibility), color.a);
+        }
+        if (lighting.shadow_debug_view_mode > 1.5 && lighting.shadow_debug_view_mode < 2.5) {
+            if (!shadow_valid) {
+                return vec4<f32>(1.0, 0.0, 1.0, color.a);
+            }
+            if (behind_or_depth_out) {
+                return vec4<f32>(0.0, 0.25, 1.0, color.a);
+            }
+            if (inside_light) {
+                return vec4<f32>(0.0, 1.0, 0.0, color.a);
+            }
+            return vec4<f32>(1.0, 0.0, 0.0, color.a);
+        }
+        if (lighting.shadow_debug_view_mode > 2.5 && lighting.shadow_debug_view_mode < 3.5) {
+            return vec4<f32>(vec3<f32>(select(0.0, clamp(shadow_ndc.z, 0.0, 1.0), inside_light)), color.a);
+        }
+        if (lighting.shadow_debug_view_mode > 3.5 && lighting.shadow_debug_view_mode < 4.5) {
+            return vec4<f32>(vec3<f32>(select(0.0, sampled_shadow_depth, inside_light)), color.a);
+        }
+        if (lighting.shadow_debug_view_mode > 4.5 && lighting.shadow_debug_view_mode < 5.5) {
+            return vec4<f32>(vec3<f32>(raw_shadow_visibility), color.a);
+        }
+        if (lighting.shadow_debug_view_mode > 5.5 && lighting.shadow_debug_view_mode < 6.5) {
+            return vec4<f32>(vec3<f32>(shadow_visibility), color.a);
+        }
+        var contact_ao = 1.0;
+        var ssao_ao = 1.0;
+        var combined_ao = 1.0;
+        let ao_requested =
+            lighting.contact_shadow_enabled > 0.5 ||
+            lighting.ssao_enabled > 0.5 ||
+            lighting.ao_debug_view_mode > 0.5;
+        if (ao_requested) {
+            let radius = clamp(lighting.ssao_radius, 0.1, 3.0);
+            let view_distance = length(input.world_position - camera.camera_position.xyz);
+            let fade_start = min(lighting.ao_distance_fade_start, lighting.ao_distance_fade_end - 0.001);
+            let fade_end = max(lighting.ao_distance_fade_end, fade_start + 0.001);
+            let distance_fade = 1.0 - smoothstep(fade_start, fade_end, view_distance);
+            let radius_scale = clamp(fade_start / max(view_distance, 0.001), 0.22, 1.0);
+            let depth_edge = clamp(fwidth(input.position.z) * 420.0 * radius * radius_scale, 0.0, 1.0);
+            let normal_edge = clamp((length(dpdx(normal)) + length(dpdy(normal))) * 0.85, 0.0, 1.0);
+            let edge_guard = clamp(lighting.ao_edge_guard, 0.0, 1.0);
+            let edge_protection = 1.0 - smoothstep(edge_guard, min(edge_guard + 0.28, 1.0), depth_edge);
+            let top_protection = 1.0 - clamp(max(normal.y, 0.0) * 0.22, 0.0, 0.22);
+            let ao_gate = distance_fade * edge_protection;
+            let contact_seed = clamp(depth_edge * (0.52 + normal_edge * 0.18) * top_protection * ao_gate, 0.0, 0.70);
+            let ssao_seed = clamp((depth_edge * 0.24 + normal_edge * 0.24 + (1.0 - shadow_visibility) * 0.08) * ao_gate, 0.0, 0.50);
+            let max_occlusion = clamp(lighting.ao_max_occlusion, 0.0, 0.8);
+            contact_ao = select(
+                1.0,
+                clamp(1.0 - min(contact_seed * lighting.contact_shadow_strength, max_occlusion), 0.0, 1.0),
+                lighting.contact_shadow_enabled > 0.5,
+            );
+            ssao_ao = select(
+                1.0,
+                clamp(1.0 - min(ssao_seed * lighting.ssao_strength, max_occlusion), 0.0, 1.0),
+                lighting.ssao_enabled > 0.5,
+            );
+            combined_ao = max(clamp(contact_ao * ssao_ao, 0.0, 1.0), 1.0 - max_occlusion);
+        }
+        if (lighting.ao_debug_view_mode > 0.5 && lighting.ao_debug_view_mode < 1.5) {
+            return vec4<f32>(vec3<f32>(contact_ao), color.a);
+        }
+        if (lighting.ao_debug_view_mode > 1.5 && lighting.ao_debug_view_mode < 2.5) {
+            return vec4<f32>(vec3<f32>(ssao_ao), color.a);
+        }
+        if (lighting.ao_debug_view_mode > 2.5 && lighting.ao_debug_view_mode < 3.5) {
+            return vec4<f32>(vec3<f32>(combined_ao), color.a);
+        }
+        let final_effects_enabled = lighting.shadow_enabled > 0.5;
+        let lit_color = color.rgb * light_factor * combined_ao;
+        let emissive_tag_mask = clamp(input.emissive_tag, 0.0, 1.0);
+        let emissive_mask = select(
+            0.0,
+            emissive_tag_mask,
+            final_effects_enabled && lighting.emissive_enabled > 0.5 && input.use_texture > 0.5,
+        );
+        let emissive_color = sampled_base_rgb * emissive_mask * max(lighting.emissive_strength - 1.0, 0.0);
+        var pre_tone_color = lit_color + emissive_color;
+        let bloom_radius = clamp(lighting.bloom_radius, 0.25, 4.0);
+        let bloom_mask = select(
+            0.0,
+            emissive_mask,
+            final_effects_enabled && lighting.bloom_enabled > 0.5,
+        );
+        let bloom_color = pre_tone_color * bloom_mask * lighting.bloom_intensity * (0.65 + bloom_radius * 0.12);
+        pre_tone_color = pre_tone_color + bloom_color;
+        var post_tone_color = select(
+            clamp(pre_tone_color, vec3<f32>(0.0), vec3<f32>(1.0)),
+            apply_lba_tone_pipeline(pre_tone_color),
+            lighting.shadow_enabled > 0.5,
+        );
+        if (lighting.emissive_debug_view_mode > 0.5 && lighting.emissive_debug_view_mode < 1.5) {
+            return vec4<f32>(vec3<f32>(emissive_mask), color.a);
+        }
+        if (lighting.emissive_debug_view_mode > 1.5 && lighting.emissive_debug_view_mode < 2.5) {
+            return vec4<f32>(vec3<f32>(0.0, emissive_tag_mask, 0.0), color.a);
+        }
+        if (lighting.emissive_debug_view_mode > 2.5 && lighting.emissive_debug_view_mode < 3.5) {
+            return vec4<f32>(post_tone_color, color.a);
+        }
+        if (lighting.bloom_debug_view_mode > 0.5 && lighting.bloom_debug_view_mode < 1.5) {
+            return vec4<f32>(vec3<f32>(max(emissive_mask, bloom_mask)), color.a);
+        }
+        if (lighting.bloom_debug_view_mode > 1.5 && lighting.bloom_debug_view_mode < 2.5) {
+            return vec4<f32>(clamp(bloom_color, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
+        }
+        if (lighting.bloom_debug_view_mode > 2.5 && lighting.bloom_debug_view_mode < 3.5) {
+            return vec4<f32>(post_tone_color, color.a);
+        }
+        if (lighting.tone_debug_view_mode > 0.5 && lighting.tone_debug_view_mode < 1.5) {
+            return vec4<f32>(clamp(pre_tone_color, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
+        }
+        if (lighting.tone_debug_view_mode > 1.5 && lighting.tone_debug_view_mode < 2.5) {
+            return vec4<f32>(post_tone_color, color.a);
+        }
+        if (lighting.tone_debug_view_mode > 2.5 && lighting.tone_debug_view_mode < 3.5) {
+            let tone_luma = dot(post_tone_color, vec3<f32>(0.2126, 0.7152, 0.0722));
+            return vec4<f32>(vec3<f32>(tone_luma), color.a);
+        }
+        color = vec4<f32>(post_tone_color, color.a);
     }
     return color;
+}
+"#;
+
+const SHADOW_DEPTH_SHADER: &str = r#"
+struct CameraUniform {
+    view_proj: mat4x4<f32>,
+};
+
+@group(0) @binding(0)
+var<uniform> camera: CameraUniform;
+
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) use_texture: f32,
+    @location(4) normal: vec3<f32>,
+    @location(5) emissive_tag: f32,
+};
+
+@vertex
+fn vs_main(input: VertexInput) -> @builtin(position) vec4<f32> {
+    return camera.view_proj * vec4<f32>(input.position, 1.0);
 }
 "#;
 
@@ -92,6 +488,8 @@ struct GpuVertex {
     color: [f32; 4],
     uv: [f32; 2],
     use_texture: f32,
+    normal: [f32; 3],
+    emissive_tag: f32,
 }
 
 impl GpuVertex {
@@ -124,26 +522,161 @@ impl GpuVertex {
                     shader_location: 3,
                     format: wgpu::VertexFormat::Float32,
                 },
+                wgpu::VertexAttribute {
+                    offset: (std::mem::size_of::<[f32; 3]>()
+                        + std::mem::size_of::<[f32; 4]>()
+                        + std::mem::size_of::<[f32; 2]>()
+                        + std::mem::size_of::<f32>())
+                        as wgpu::BufferAddress,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: (std::mem::size_of::<[f32; 3]>()
+                        + std::mem::size_of::<[f32; 4]>()
+                        + std::mem::size_of::<[f32; 2]>()
+                        + std::mem::size_of::<f32>()
+                        + std::mem::size_of::<[f32; 3]>())
+                        as wgpu::BufferAddress,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32,
+                },
             ],
         }
     }
+}
+
+fn default_vertex_normal() -> [f32; 3] {
+    [0.0, 1.0, 0.0]
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
+    camera_position: [f32; 4],
 }
 
 impl CameraUniform {
-    fn from_matrix(matrix: Mat4) -> Self {
+    fn from_matrix_and_eye(matrix: Mat4, eye: Vec3) -> Self {
         Self {
             view_proj: matrix.to_cols_array_2d(),
+            camera_position: [eye.x, eye.y, eye.z, 0.0],
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct LightingUniform {
+    enabled: f32,
+    ambient_strength: f32,
+    directional_strength: f32,
+    min_brightness_floor: f32,
+    light_direction: [f32; 4],
+    light_view_proj: [[f32; 4]; 4],
+    shadow_enabled: f32,
+    shadow_strength: f32,
+    shadow_bias: f32,
+    shadow_debug_view_mode: f32,
+    shadow_force_test: f32,
+    shadow_lighting_preset: f32,
+    shadow_pcf_samples: f32,
+    shadow_pcf_radius: f32,
+    contact_shadow_enabled: f32,
+    contact_shadow_strength: f32,
+    ssao_enabled: f32,
+    ssao_radius: f32,
+    ssao_strength: f32,
+    ao_debug_view_mode: f32,
+    ao_sample_count: f32,
+    ao_distance_fade_start: f32,
+    ao_distance_fade_end: f32,
+    ao_edge_guard: f32,
+    ao_max_occlusion: f32,
+    ao_padding: f32,
+    tone_preset: f32,
+    tone_exposure: f32,
+    tone_gamma: f32,
+    tone_saturation: f32,
+    tone_contrast: f32,
+    tone_highlight_rolloff: f32,
+    tone_debug_view_mode: f32,
+    tone_padding: f32,
+    emissive_enabled: f32,
+    emissive_strength: f32,
+    bloom_enabled: f32,
+    bloom_threshold: f32,
+    bloom_intensity: f32,
+    bloom_radius: f32,
+    bloom_debug_view_mode: f32,
+    emissive_debug_view_mode: f32,
+}
+
+impl LightingUniform {
+    fn from_config(config: LightingConfig) -> Self {
+        let basic = config.basic();
+        let shadow = config.shadow();
+        let ao = config.ao();
+        let tone = config.tone();
+        let emissive = config.emissive_bloom();
+        let light_view_proj = shadow
+            .light_camera
+            .map(|camera| camera.view_proj)
+            .unwrap_or(Mat4::IDENTITY)
+            .to_cols_array_2d();
+        Self {
+            enabled: if basic.enabled { 1.0 } else { 0.0 },
+            ambient_strength: basic.tuning.ambient_strength,
+            directional_strength: basic.tuning.directional_strength,
+            min_brightness_floor: basic.tuning.min_brightness_floor,
+            light_direction: [
+                basic.tuning.light_direction[0],
+                basic.tuning.light_direction[1],
+                basic.tuning.light_direction[2],
+                0.0,
+            ],
+            light_view_proj,
+            shadow_enabled: if shadow.enabled { 1.0 } else { 0.0 },
+            shadow_strength: shadow.strength,
+            shadow_bias: shadow.bias,
+            shadow_debug_view_mode: shadow.debug_view.shader_code(),
+            shadow_force_test: if shadow.force_test { 1.0 } else { 0.0 },
+            shadow_lighting_preset: shadow.lighting_preset.shader_code(),
+            shadow_pcf_samples: shadow.pcf.samples as f32,
+            shadow_pcf_radius: shadow.pcf.radius,
+            contact_shadow_enabled: if ao.contact_enabled { 1.0 } else { 0.0 },
+            contact_shadow_strength: ao.contact_strength,
+            ssao_enabled: if ao.ssao_enabled { 1.0 } else { 0.0 },
+            ssao_radius: ao.ssao_radius,
+            ssao_strength: ao.ssao_strength,
+            ao_debug_view_mode: ao.debug_view.shader_code(),
+            ao_sample_count: AoConfig::SAMPLE_COUNT as f32,
+            ao_distance_fade_start: ao.distance_fade_start,
+            ao_distance_fade_end: ao.distance_fade_end,
+            ao_edge_guard: ao.edge_guard,
+            ao_max_occlusion: ao.max_occlusion,
+            ao_padding: 0.0,
+            tone_preset: tone.preset.shader_code(),
+            tone_exposure: tone.exposure,
+            tone_gamma: tone.gamma,
+            tone_saturation: tone.saturation,
+            tone_contrast: tone.contrast,
+            tone_highlight_rolloff: tone.highlight_rolloff,
+            tone_debug_view_mode: tone.debug_view.shader_code(),
+            tone_padding: 0.0,
+            emissive_enabled: if emissive.emissive_enabled { 1.0 } else { 0.0 },
+            emissive_strength: emissive.emissive_strength,
+            bloom_enabled: if emissive.bloom_enabled { 1.0 } else { 0.0 },
+            bloom_threshold: emissive.bloom_threshold,
+            bloom_intensity: emissive.bloom_intensity,
+            bloom_radius: emissive.bloom_radius,
+            bloom_debug_view_mode: emissive.bloom_debug_view.shader_code(),
+            emissive_debug_view_mode: emissive.emissive_debug_view.shader_code(),
+        }
+    }
+}
+
 struct ViewerArgs {
     input: Option<PathBuf>,
     chunk_size: u32,
@@ -165,6 +698,11 @@ struct ViewerArgs {
     preview_mode: bool,
     preview_spin: bool,
     display_mode: ViewerDisplayMode,
+    basic_lighting: bool,
+    basic_shadows: bool,
+    shadow_debug: bool,
+    shadow_debug_view: ShadowDebugViewMode,
+    shadow_force_test: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -683,6 +1221,8 @@ impl ViewerScene {
                         ),
                         uv: [0.0, 0.0],
                         use_texture: 0.0,
+                        normal: default_vertex_normal(),
+                        emissive_tag: 0.0,
                     })
                     .collect::<Vec<_>>();
                 if vertices.is_empty() || payload.indices.is_empty() {
@@ -767,7 +1307,7 @@ fn resolve_scene_palette_colors(
     let color_source = if display_mode == ViewerDisplayMode::Full {
         "runtime_v2_texture_atlas"
     } else {
-        "desktop-ui/src/data/blockColorCache.json"
+        "data/blockColorCache.json"
     };
     println!(
         "[VIEWER_COLOR] display_mode={} color_source={} preview_chain={} native_chain={} palette_entries={} cache_entries={} palette_hits={} palette_misses={}",
@@ -1005,48 +1545,64 @@ impl PreparedChunkMesh {
                 color: [0.91, 0.31, 0.24, 1.0],
                 uv: [0.0, 0.0],
                 use_texture: 0.0,
+                normal: default_vertex_normal(),
+                emissive_tag: 0.0,
             },
             GpuVertex {
                 position: [1.0, -1.0, 1.0],
                 color: [0.91, 0.31, 0.24, 1.0],
                 uv: [0.0, 0.0],
                 use_texture: 0.0,
+                normal: default_vertex_normal(),
+                emissive_tag: 0.0,
             },
             GpuVertex {
                 position: [1.0, 1.0, 1.0],
                 color: [0.91, 0.31, 0.24, 1.0],
                 uv: [0.0, 0.0],
                 use_texture: 0.0,
+                normal: default_vertex_normal(),
+                emissive_tag: 0.0,
             },
             GpuVertex {
                 position: [-1.0, 1.0, 1.0],
                 color: [0.91, 0.31, 0.24, 1.0],
                 uv: [0.0, 0.0],
                 use_texture: 0.0,
+                normal: default_vertex_normal(),
+                emissive_tag: 0.0,
             },
             GpuVertex {
                 position: [-1.0, -1.0, -1.0],
                 color: [0.13, 0.60, 0.95, 1.0],
                 uv: [0.0, 0.0],
                 use_texture: 0.0,
+                normal: default_vertex_normal(),
+                emissive_tag: 0.0,
             },
             GpuVertex {
                 position: [1.0, -1.0, -1.0],
                 color: [0.13, 0.60, 0.95, 1.0],
                 uv: [0.0, 0.0],
                 use_texture: 0.0,
+                normal: default_vertex_normal(),
+                emissive_tag: 0.0,
             },
             GpuVertex {
                 position: [1.0, 1.0, -1.0],
                 color: [0.13, 0.60, 0.95, 1.0],
                 uv: [0.0, 0.0],
                 use_texture: 0.0,
+                normal: default_vertex_normal(),
+                emissive_tag: 0.0,
             },
             GpuVertex {
                 position: [-1.0, 1.0, -1.0],
                 color: [0.13, 0.60, 0.95, 1.0],
                 uv: [0.0, 0.0],
                 use_texture: 0.0,
+                normal: default_vertex_normal(),
+                emissive_tag: 0.0,
             },
         ];
         let indices = vec![
@@ -1086,7 +1642,7 @@ impl PreparedChunkMesh {
             mesh_chunk
                 .textured_vertices
                 .into_iter()
-                .map(|vertex| textured_vertex_from_output(vertex))
+                .map(textured_vertex_from_output)
                 .collect::<Vec<_>>()
         } else {
             let mut vertices = Vec::<GpuVertex>::with_capacity(mesh_chunk.vertices.len());
@@ -1106,6 +1662,8 @@ impl PreparedChunkMesh {
                     color: rgb_to_rgba(color),
                     uv: [0.0, 0.0],
                     use_texture: 0.0,
+                    normal: default_vertex_normal(),
+                    emissive_tag: 0.0,
                 });
             }
             vertices
@@ -1166,6 +1724,8 @@ fn textured_vertex_from_output(vertex: TexturedVertexOutput) -> GpuVertex {
         color: [1.0, 1.0, 1.0, 1.0],
         uv: vertex.uv,
         use_texture: 1.0,
+        normal: default_vertex_normal(),
+        emissive_tag: 0.0,
     }
 }
 
@@ -1366,7 +1926,7 @@ fn compact_face_index(vertices: &[GpuVertex]) -> Option<u8> {
             .all(|vertex| same(vertex.position[axis], first))
             .then_some(first)
     };
-    let a = Vec3::from(vertices.get(0)?.position);
+    let a = Vec3::from(vertices.first()?.position);
     let b = Vec3::from(vertices.get(1)?.position);
     let c = Vec3::from(vertices.get(2)?.position);
     let normal = (b - a).cross(c - a);
@@ -1395,7 +1955,7 @@ fn append_compact_quad(
     color: [f32; 3],
 ) -> Result<()> {
     let templates = match face_index {
-        0 | 1 | 2 | 3 | 4 | 5 => FACE_VERTICES_RUNTIME[face_index],
+        0..=5 => FACE_VERTICES_RUNTIME[face_index],
         _ => bail!("invalid compact cache face index: {face_index}"),
     };
     let base = vertices.len() as u32;
@@ -1409,6 +1969,8 @@ fn append_compact_quad(
             color: [color[0], color[1], color[2], 1.0],
             uv: [0.0, 0.0],
             use_texture: 0.0,
+            normal: default_vertex_normal(),
+            emissive_tag: 0.0,
         });
     }
     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -1513,6 +2075,8 @@ fn read_prepared_cache_chunk_binary(path: &Path, chunk_size: u32) -> Result<Prep
                 color: rgb_to_rgba(DEFAULT_BLOCK_COLOR),
                 uv: [0.0, 0.0],
                 use_texture: 0.0,
+                normal: default_vertex_normal(),
+                emissive_tag: 0.0,
             });
         }
         let mut raw_face_colors = Vec::with_capacity(raw_face_color_count);
@@ -1580,6 +2144,8 @@ fn read_prepared_cache_chunk_binary(path: &Path, chunk_size: u32) -> Result<Prep
             color: rgb_to_rgba(color),
             uv: [0.0, 0.0],
             use_texture: 0.0,
+            normal: default_vertex_normal(),
+            emissive_tag: 0.0,
         });
     }
     if is_v3 {
@@ -2662,13 +3228,6 @@ impl OrbitCamera {
         self.pitch = (self.pitch + delta.y * 0.01).clamp(-1.54, 1.54);
     }
 
-    fn orbit_around_eye(&mut self, delta: Vec2) {
-        let pivot_eye = self.eye();
-        self.yaw -= delta.x * 0.01;
-        self.pitch = (self.pitch + delta.y * 0.01).clamp(-1.54, 1.54);
-        self.target = pivot_eye - Self::offset_from_angles(self.yaw, self.pitch, self.distance);
-    }
-
     fn pan(&mut self, delta: Vec2) {
         let eye = self.eye();
         let forward = (self.target - eye).normalize_or_zero();
@@ -2731,6 +3290,122 @@ impl DepthTexture {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Self { view }
+    }
+}
+
+struct ShadowMapResources {
+    config: ShadowMapConfig,
+    depth_texture: wgpu::Texture,
+    depth_view: wgpu::TextureView,
+    depth_pipeline: wgpu::RenderPipeline,
+    camera_bind_group: wgpu::BindGroup,
+    bind_group: wgpu::BindGroup,
+}
+
+fn create_shadow_map_resources(
+    device: &wgpu::Device,
+    config: ShadowMapConfig,
+    shadow_bind_group_layout: &wgpu::BindGroupLayout,
+    camera_bind_group_layout: &wgpu::BindGroupLayout,
+    depth_shader: &wgpu::ShaderModule,
+) -> ShadowMapResources {
+    let resolution = config.resolution.max(1);
+    let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("native_viewer_shadow_depth"),
+        size: wgpu::Extent3d {
+            width: resolution,
+            height: resolution,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("native_viewer_shadow_sampler"),
+        compare: Some(wgpu::CompareFunction::LessEqual),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        ..Default::default()
+    });
+    let camera_uniform = CameraUniform {
+        view_proj: config
+            .light_camera
+            .map(|camera| camera.view_proj)
+            .unwrap_or(Mat4::IDENTITY)
+            .to_cols_array_2d(),
+        camera_position: [0.0, 0.0, 0.0, 0.0],
+    };
+    let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("native_viewer_shadow_camera"),
+        contents: bytemuck::bytes_of(&camera_uniform),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("native_viewer_shadow_camera_bind_group"),
+        layout: camera_bind_group_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: camera_buffer.as_entire_binding(),
+        }],
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("native_viewer_shadow_bind_group"),
+        layout: shadow_bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&depth_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("native_viewer_shadow_depth_pipeline_layout"),
+        bind_group_layouts: &[camera_bind_group_layout],
+        push_constant_ranges: &[],
+    });
+    let depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("native_viewer_shadow_depth_pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: depth_shader,
+            entry_point: "vs_main",
+            buffers: &[GpuVertex::desc()],
+        },
+        fragment: None,
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+    });
+    ShadowMapResources {
+        config,
+        depth_texture,
+        depth_view,
+        depth_pipeline,
+        camera_bind_group,
+        bind_group,
     }
 }
 
@@ -2817,6 +3492,1281 @@ fn create_atlas_bind_group(
     })
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BasicLightingTuning {
+    ambient_strength: f32,
+    directional_strength: f32,
+    min_brightness_floor: f32,
+    light_direction: [f32; 3],
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BasicLightingConfig {
+    enabled: bool,
+    tuning: BasicLightingTuning,
+}
+
+impl BasicLightingConfig {
+    const FROZEN_BASELINE_TUNING: BasicLightingTuning = BasicLightingTuning {
+        ambient_strength: 0.76,
+        directional_strength: 0.24,
+        min_brightness_floor: 0.80,
+        light_direction: [0.55, 1.0, 0.35],
+    };
+
+    fn from_enabled(enabled: bool) -> Self {
+        Self {
+            enabled,
+            tuning: BasicLightingTuning {
+                light_direction: normalize_lighting_direction(
+                    Self::FROZEN_BASELINE_TUNING.light_direction,
+                ),
+                ..Self::FROZEN_BASELINE_TUNING
+            },
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct LightingConfig {
+    basic: BasicLightingConfig,
+    shadow: ShadowMapConfig,
+    ao: AoConfig,
+    tone: ToneConfig,
+    emissive_bloom: EmissiveBloomConfig,
+}
+
+impl LightingConfig {
+    fn from_args(
+        basic_enabled: bool,
+        shadow_requested: bool,
+        shadow_debug_view: ShadowDebugViewMode,
+        shadow_force_test: bool,
+        scene_bounds: SceneBounds,
+    ) -> Self {
+        let basic = BasicLightingConfig::from_enabled(basic_enabled);
+        let shadow = ShadowMapConfig::from_flags(
+            basic_enabled && shadow_requested,
+            basic.tuning.light_direction,
+            shadow_debug_view,
+            shadow_force_test,
+            scene_bounds,
+        );
+        Self {
+            basic,
+            shadow,
+            ao: AoConfig::from_env(),
+            tone: ToneConfig::from_env(),
+            emissive_bloom: EmissiveBloomConfig::from_env(),
+        }
+    }
+
+    fn basic(self) -> BasicLightingConfig {
+        self.basic
+    }
+
+    fn shadow(self) -> ShadowMapConfig {
+        self.shadow
+    }
+
+    fn ao(self) -> AoConfig {
+        self.ao
+    }
+
+    fn tone(self) -> ToneConfig {
+        self.tone
+    }
+
+    fn emissive_bloom(self) -> EmissiveBloomConfig {
+        self.emissive_bloom
+    }
+}
+
+fn env_on_off(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on" | "yes"
+            )
+        })
+        .unwrap_or(default)
+}
+
+fn env_f32(name: &str, default: f32, min: f32, max: f32) -> f32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .filter(|value| value.is_finite())
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
+fn env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
+fn normalize_lighting_direction(direction: [f32; 3]) -> [f32; 3] {
+    let vector = Vec3::new(direction[0], direction[1], direction[2]).normalize_or_zero();
+    if vector.length_squared() <= f32::EPSILON {
+        [0.55, 1.0, 0.35]
+    } else {
+        [vector.x, vector.y, vector.z]
+    }
+}
+
+fn apply_basic_lighting(
+    rgb: [f32; 3],
+    normal: [f32; 3],
+    lighting: BasicLightingConfig,
+) -> [f32; 3] {
+    if !lighting.enabled {
+        return rgb;
+    }
+    let n = Vec3::new(normal[0], normal[1], normal[2]).normalize_or_zero();
+    let l = Vec3::from_array(lighting.tuning.light_direction).normalize_or_zero();
+    let diffuse = n.dot(l).max(0.0);
+    let factor = (lighting.tuning.ambient_strength
+        + diffuse * lighting.tuning.directional_strength)
+        .max(lighting.tuning.min_brightness_floor)
+        .clamp(0.0, 1.0);
+    [rgb[0] * factor, rgb[1] * factor, rgb[2] * factor]
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ShadowLightCamera {
+    view_proj: Mat4,
+    light_bounds_min: Vec3,
+    light_bounds_max: Vec3,
+    near: f32,
+    far: f32,
+    width: f32,
+    height: f32,
+    depth: f32,
+    world_units_per_texel: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShadowDebugViewMode {
+    Off,
+    Factor,
+    Frustum,
+    ReceiverDepth,
+    ShadowMapDepth,
+    Raw,
+    Final,
+}
+
+impl ShadowDebugViewMode {
+    fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "factor" | "shadow" => Self::Factor,
+            "frustum" => Self::Frustum,
+            "receiver-depth" | "receiver_depth" => Self::ReceiverDepth,
+            "shadow-map-depth" | "shadow_map_depth" => Self::ShadowMapDepth,
+            "raw" => Self::Raw,
+            "final" => Self::Final,
+            _ => Self::Off,
+        }
+    }
+
+    fn shader_code(self) -> f32 {
+        match self {
+            Self::Off => 0.0,
+            Self::Factor => 1.0,
+            Self::Frustum => 2.0,
+            Self::ReceiverDepth => 3.0,
+            Self::ShadowMapDepth => 4.0,
+            Self::Raw => 5.0,
+            Self::Final => 6.0,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Factor => "factor",
+            Self::Frustum => "frustum",
+            Self::ReceiverDepth => "receiver-depth",
+            Self::ShadowMapDepth => "shadow-map-depth",
+            Self::Raw => "raw",
+            Self::Final => "final",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShadowLightingPreset {
+    Soft,
+}
+
+impl ShadowLightingPreset {
+    fn from_env() -> Self {
+        Self::Soft
+    }
+    fn shader_code(self) -> f32 {
+        1.0
+    }
+    fn label(self) -> &'static str {
+        "soft"
+    }
+    fn tuning(self) -> ShadowLightingTuning {
+        ShadowLightingTuning {
+            final_min: 0.36,
+            final_max: 0.77,
+            hemisphere_ground: 0.54,
+            hemisphere_sky: 0.75,
+            top_lift_strength: 0.052,
+            bottom_shade_strength: 0.062,
+            side_layer_x: 0.020,
+            side_layer_z: -0.014,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ShadowLightingTuning {
+    final_min: f32,
+    final_max: f32,
+    hemisphere_ground: f32,
+    hemisphere_sky: f32,
+    top_lift_strength: f32,
+    bottom_shade_strength: f32,
+    side_layer_x: f32,
+    side_layer_z: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ShadowPcfConfig {
+    samples: u32,
+    radius: f32,
+}
+
+impl ShadowPcfConfig {
+    fn from_env() -> Self {
+        Self {
+            samples: env_usize("LBA_SHADOW_PCF", 8, 0, 12) as u32,
+            radius: env_f32("LBA_SHADOW_PCF_RADIUS", 1.25, 0.0, 8.0),
+        }
+    }
+    fn label(self) -> &'static str {
+        match self.samples {
+            0 => "off",
+            8 => "pcf8",
+            _ => "custom",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ShadowFrustumConfig {
+    padding: f32,
+    mode: ShadowFrustumMode,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ShadowFrustumMode;
+
+impl ShadowFrustumMode {
+    fn label(self) -> &'static str {
+        "scene_bounds"
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ShadowMapConfig {
+    enabled: bool,
+    strength: f32,
+    bias: f32,
+    resolution: u32,
+    pcf: ShadowPcfConfig,
+    debug_view: ShadowDebugViewMode,
+    force_test: bool,
+    lighting_preset: ShadowLightingPreset,
+    frustum: ShadowFrustumConfig,
+    scene_bounds: SceneBounds,
+    light_direction: [f32; 3],
+    light_camera: Option<ShadowLightCamera>,
+}
+
+impl ShadowMapConfig {
+    fn from_flags(
+        enabled: bool,
+        light_direction: [f32; 3],
+        debug_view: ShadowDebugViewMode,
+        force_test: bool,
+        scene_bounds: SceneBounds,
+    ) -> Self {
+        let resolution = env_usize("LBA_SHADOW_MAP_SIZE", 2048, 256, 8192) as u32;
+        let direction = normalize_lighting_direction(light_direction);
+        let light_camera =
+            enabled.then(|| build_shadow_light_camera(scene_bounds, direction, resolution));
+        Self {
+            enabled,
+            strength: env_f32("LBA_SHADOW_STRENGTH", 0.72, 0.0, 1.0),
+            bias: env_f32("LBA_SHADOW_BIAS", 0.00035, 0.0, 0.05),
+            resolution,
+            pcf: ShadowPcfConfig::from_env(),
+            debug_view,
+            force_test,
+            lighting_preset: ShadowLightingPreset::from_env(),
+            frustum: ShadowFrustumConfig {
+                padding: 4.0,
+                mode: ShadowFrustumMode,
+            },
+            scene_bounds,
+            light_direction: direction,
+            light_camera,
+        }
+    }
+}
+
+fn build_shadow_light_camera(
+    bounds: SceneBounds,
+    direction: [f32; 3],
+    resolution: u32,
+) -> ShadowLightCamera {
+    let dir = Vec3::from_array(direction).normalize_or_zero();
+    let eye = bounds.center - dir * bounds.radius.max(8.0) * 2.0;
+    let view = Mat4::look_at_rh(eye, bounds.center, Vec3::Y);
+    let extent = bounds.radius.max(4.0) + 4.0;
+    let near = 0.1;
+    let far = extent * 4.0;
+    let proj = Mat4::orthographic_rh(-extent, extent, -extent, extent, near, far);
+    ShadowLightCamera {
+        view_proj: proj * view,
+        light_bounds_min: bounds.center - Vec3::splat(extent),
+        light_bounds_max: bounds.center + Vec3::splat(extent),
+        near,
+        far,
+        width: extent * 2.0,
+        height: extent * 2.0,
+        depth: far - near,
+        world_units_per_texel: (extent * 2.0) / resolution.max(1) as f32,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ShadowDepthPassPlan {
+    enabled: bool,
+}
+
+impl ShadowDepthPassPlan {
+    fn from_config(config: ShadowMapConfig) -> Self {
+        Self {
+            enabled: config.enabled && config.light_camera.is_some(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EmissiveBloomConfig {
+    emissive_enabled: bool,
+    emissive_strength: f32,
+    bloom_enabled: bool,
+    bloom_threshold: f32,
+    bloom_intensity: f32,
+    bloom_radius: f32,
+    emissive_debug_view: EmissiveDebugViewMode,
+    bloom_debug_view: BloomDebugViewMode,
+}
+
+impl EmissiveBloomConfig {
+    fn from_env() -> Self {
+        Self {
+            emissive_enabled: env_on_off("LBA_EMISSIVE", true),
+            emissive_strength: env_f32("LBA_EMISSIVE_STRENGTH", 1.45, 1.0, 4.0),
+            bloom_enabled: env_on_off("LBA_BLOOM", true),
+            bloom_threshold: env_f32("LBA_BLOOM_THRESHOLD", 0.78, 0.0, 2.0),
+            bloom_intensity: env_f32("LBA_BLOOM_INTENSITY", 0.30, 0.0, 2.0),
+            bloom_radius: env_f32("LBA_BLOOM_RADIUS", 1.20, 0.25, 4.0),
+            emissive_debug_view: EmissiveDebugViewMode::from_env(),
+            bloom_debug_view: BloomDebugViewMode::from_env(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmissiveDebugViewMode {
+    Off,
+    Mask,
+    Material,
+    Final,
+}
+
+impl EmissiveDebugViewMode {
+    fn from_env() -> Self {
+        match std::env::var("LBA_EMISSIVE_DEBUG_VIEW")
+            .ok()
+            .map(|v| v.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("mask") => Self::Mask,
+            Some("material") => Self::Material,
+            Some("final") => Self::Final,
+            _ => Self::Off,
+        }
+    }
+    fn shader_code(self) -> f32 {
+        match self {
+            Self::Off => 0.0,
+            Self::Mask => 1.0,
+            Self::Material => 2.0,
+            Self::Final => 3.0,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Mask => "mask",
+            Self::Material => "material",
+            Self::Final => "final",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BloomDebugViewMode {
+    Off,
+    Mask,
+    Bloom,
+    Final,
+}
+
+impl BloomDebugViewMode {
+    fn from_env() -> Self {
+        match std::env::var("LBA_BLOOM_DEBUG_VIEW")
+            .ok()
+            .map(|v| v.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("mask") => Self::Mask,
+            Some("bloom") => Self::Bloom,
+            Some("final") => Self::Final,
+            _ => Self::Off,
+        }
+    }
+    fn shader_code(self) -> f32 {
+        match self {
+            Self::Off => 0.0,
+            Self::Mask => 1.0,
+            Self::Bloom => 2.0,
+            Self::Final => 3.0,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Mask => "mask",
+            Self::Bloom => "bloom",
+            Self::Final => "final",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AoConfig {
+    contact_enabled: bool,
+    contact_strength: f32,
+    ssao_enabled: bool,
+    ssao_radius: f32,
+    ssao_strength: f32,
+    debug_view: AoDebugViewMode,
+    distance_fade_start: f32,
+    distance_fade_end: f32,
+    edge_guard: f32,
+    max_occlusion: f32,
+}
+
+impl AoConfig {
+    const DEFAULT_CONTACT_STRENGTH: f32 = 0.20;
+    const DEFAULT_SSAO_RADIUS: f32 = 0.75;
+    const DEFAULT_SSAO_STRENGTH: f32 = 0.20;
+    const DEFAULT_DISTANCE_FADE_START: f32 = 24.0;
+    const DEFAULT_DISTANCE_FADE_END: f32 = 96.0;
+    const DEFAULT_EDGE_GUARD: f32 = 0.45;
+    const DEFAULT_MAX_OCCLUSION: f32 = 0.42;
+    const SAMPLE_COUNT: u32 = 6;
+
+    fn from_env() -> Self {
+        Self {
+            contact_enabled: env_on_off("LBA_CONTACT_SHADOWS", false),
+            contact_strength: env_f32(
+                "LBA_CONTACT_SHADOW_STRENGTH",
+                Self::DEFAULT_CONTACT_STRENGTH,
+                0.0,
+                0.8,
+            ),
+            ssao_enabled: env_on_off("LBA_SSAO", false),
+            ssao_radius: env_f32("LBA_SSAO_RADIUS", Self::DEFAULT_SSAO_RADIUS, 0.1, 3.0),
+            ssao_strength: env_f32("LBA_SSAO_STRENGTH", Self::DEFAULT_SSAO_STRENGTH, 0.0, 0.8),
+            debug_view: AoDebugViewMode::from_env(),
+            distance_fade_start: env_f32(
+                "LBA_AO_DISTANCE_FADE_START",
+                Self::DEFAULT_DISTANCE_FADE_START,
+                0.0,
+                2048.0,
+            ),
+            distance_fade_end: env_f32(
+                "LBA_AO_DISTANCE_FADE_END",
+                Self::DEFAULT_DISTANCE_FADE_END,
+                1.0,
+                4096.0,
+            ),
+            edge_guard: env_f32("LBA_AO_EDGE_GUARD", Self::DEFAULT_EDGE_GUARD, 0.0, 1.0),
+            max_occlusion: env_f32(
+                "LBA_AO_MAX_OCCLUSION",
+                Self::DEFAULT_MAX_OCCLUSION,
+                0.0,
+                0.8,
+            ),
+        }
+    }
+
+    fn combined_min_estimate(self) -> f32 {
+        let contact_min = if self.contact_enabled {
+            1.0 - 0.70 * self.contact_strength
+        } else {
+            1.0
+        };
+        let ssao_min = if self.ssao_enabled {
+            1.0 - 0.50 * self.ssao_strength
+        } else {
+            1.0
+        };
+        (contact_min * ssao_min)
+            .max(1.0 - self.max_occlusion)
+            .clamp(0.0, 1.0)
+    }
+
+    fn combined_avg_estimate(self) -> f32 {
+        ((self.combined_min_estimate() + 1.0) * 0.5).clamp(0.0, 1.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AoDebugViewMode {
+    Off,
+    Contact,
+    Ssao,
+    Combined,
+}
+
+impl AoDebugViewMode {
+    fn from_env() -> Self {
+        match std::env::var("LBA_AO_DEBUG_VIEW")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("contact") | Some("contact-shadow") | Some("contact_shadows") => Self::Contact,
+            Some("ssao") => Self::Ssao,
+            Some("combined") | Some("ao") => Self::Combined,
+            Some("") | None => Self::Off,
+            Some(_) => Self::Off,
+        }
+    }
+
+    fn shader_code(self) -> f32 {
+        match self {
+            Self::Off => 0.0,
+            Self::Contact => 1.0,
+            Self::Ssao => 2.0,
+            Self::Combined => 3.0,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Contact => "contact",
+            Self::Ssao => "ssao",
+            Self::Combined => "combined",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ToneConfig {
+    preset: TonePreset,
+    exposure: f32,
+    gamma: f32,
+    saturation: f32,
+    contrast: f32,
+    highlight_rolloff: f32,
+    debug_view: ToneDebugViewMode,
+}
+
+impl ToneConfig {
+    fn from_env() -> Self {
+        let preset = TonePreset::from_env();
+        let defaults = preset.defaults();
+        Self {
+            preset,
+            exposure: env_f32("LBA_TONE_EXPOSURE", defaults.exposure, 0.25, 2.0),
+            gamma: env_f32("LBA_TONE_GAMMA", defaults.gamma, 0.5, 3.0),
+            saturation: env_f32("LBA_TONE_SATURATION", defaults.saturation, 0.0, 2.0),
+            contrast: env_f32("LBA_TONE_CONTRAST", defaults.contrast, 0.5, 2.0),
+            highlight_rolloff: env_f32(
+                "LBA_TONE_HIGHLIGHT_ROLLOFF",
+                defaults.highlight_rolloff,
+                0.0,
+                1.0,
+            ),
+            debug_view: ToneDebugViewMode::from_env(),
+        }
+    }
+
+    fn estimated_range(self) -> (f32, f32) {
+        if self.preset == TonePreset::Off {
+            return (0.0, 1.0);
+        }
+        let low = tone_map_scalar(0.0, self);
+        let high = tone_map_scalar(1.0, self);
+        (low.min(high), low.max(high))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TonePreset {
+    Off,
+    Soft,
+    Filmic,
+    Contrast,
+}
+
+impl TonePreset {
+    fn from_env() -> Self {
+        match std::env::var("LBA_TONE_PRESET")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("off") | Some("none") | Some("0") | Some("false") => Self::Off,
+            Some("filmic") => Self::Filmic,
+            Some("contrast") => Self::Contrast,
+            Some("soft") | Some("") | None => Self::Soft,
+            Some(_) => Self::Soft,
+        }
+    }
+
+    fn defaults(self) -> ToneDefaults {
+        match self {
+            Self::Off => ToneDefaults {
+                exposure: 1.0,
+                gamma: 1.0,
+                saturation: 1.0,
+                contrast: 1.0,
+                highlight_rolloff: 0.0,
+            },
+            Self::Soft => ToneDefaults {
+                exposure: 0.98,
+                gamma: 1.0,
+                saturation: 1.03,
+                contrast: 1.04,
+                highlight_rolloff: 0.25,
+            },
+            Self::Filmic => ToneDefaults {
+                exposure: 0.96,
+                gamma: 1.0,
+                saturation: 1.04,
+                contrast: 1.06,
+                highlight_rolloff: 0.40,
+            },
+            Self::Contrast => ToneDefaults {
+                exposure: 1.0,
+                gamma: 1.0,
+                saturation: 1.08,
+                contrast: 1.10,
+                highlight_rolloff: 0.28,
+            },
+        }
+    }
+
+    fn shader_code(self) -> f32 {
+        match self {
+            Self::Off => 0.0,
+            Self::Soft => 1.0,
+            Self::Filmic => 2.0,
+            Self::Contrast => 3.0,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Soft => "soft",
+            Self::Filmic => "filmic",
+            Self::Contrast => "contrast",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ToneDefaults {
+    exposure: f32,
+    gamma: f32,
+    saturation: f32,
+    contrast: f32,
+    highlight_rolloff: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToneDebugViewMode {
+    Off,
+    PreTone,
+    PostTone,
+    Luminance,
+}
+
+impl ToneDebugViewMode {
+    fn from_env() -> Self {
+        match std::env::var("LBA_TONE_DEBUG_VIEW")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("pre-tone") | Some("pretone") | Some("pre_tone") => Self::PreTone,
+            Some("post-tone") | Some("posttone") | Some("post_tone") => Self::PostTone,
+            Some("luminance") | Some("luma") => Self::Luminance,
+            Some("") | None => Self::Off,
+            Some(_) => Self::Off,
+        }
+    }
+
+    fn shader_code(self) -> f32 {
+        match self {
+            Self::Off => 0.0,
+            Self::PreTone => 1.0,
+            Self::PostTone => 2.0,
+            Self::Luminance => 3.0,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::PreTone => "pre-tone",
+            Self::PostTone => "post-tone",
+            Self::Luminance => "luminance",
+        }
+    }
+}
+
+fn tone_map_scalar(value: f32, config: ToneConfig) -> f32 {
+    let exposed = (value * config.exposure).max(0.0);
+    let rolled = exposed / (1.0 + exposed * config.highlight_rolloff.clamp(0.0, 1.0));
+    let contrasted = (rolled - 0.5) * config.contrast + 0.5;
+    let gamma = config.gamma.max(0.01);
+    contrasted.max(0.0).powf(1.0 / gamma).clamp(0.0, 1.0)
+}
+
+fn log_shadow_startup_debug(
+    basic_lighting: bool,
+    basic_shadows: bool,
+    config: ShadowMapConfig,
+    uniform: &LightingUniform,
+) {
+    let camera_valid = config.light_camera.is_some_and(|camera| {
+        camera
+            .view_proj
+            .to_cols_array()
+            .iter()
+            .all(|value| value.is_finite())
+    });
+    let light_bounds = config
+        .light_camera
+        .map(|camera| {
+            format!(
+                "min=({:.2},{:.2},{:.2}) max=({:.2},{:.2},{:.2})",
+                camera.light_bounds_min.x,
+                camera.light_bounds_min.y,
+                camera.light_bounds_min.z,
+                camera.light_bounds_max.x,
+                camera.light_bounds_max.y,
+                camera.light_bounds_max.z,
+            )
+        })
+        .unwrap_or_else(|| "none".to_string());
+    let light_near = config.light_camera.map(|camera| camera.near).unwrap_or(0.0);
+    let light_far = config.light_camera.map(|camera| camera.far).unwrap_or(0.0);
+    let frustum_width = config
+        .light_camera
+        .map(|camera| camera.width)
+        .unwrap_or(0.0);
+    let frustum_height = config
+        .light_camera
+        .map(|camera| camera.height)
+        .unwrap_or(0.0);
+    let frustum_depth = config
+        .light_camera
+        .map(|camera| camera.depth)
+        .unwrap_or(0.0);
+    let world_units_per_shadow_texel = config
+        .light_camera
+        .map(|camera| camera.world_units_per_texel)
+        .unwrap_or(0.0);
+    let tuning = config.lighting_preset.tuning();
+    let shadow_texel_size = if config.resolution == 0 {
+        0.0
+    } else {
+        1.0 / config.resolution as f32
+    };
+    println!(
+        "[LBA_SHADOW_DEBUG] stage=baseline basic_lighting={} basic_shadows_requested={} basic_shadows_effective={} preset={} final_min={:.3} final_max={:.3} map_size={} pcf_samples={} pcf_radius={:.3} bias={:.6} frustum_mode={} frustum_padding={:.3} world_units_per_shadow_texel={:.6} shadow_texel_uv={:.8}",
+        basic_lighting,
+        basic_shadows,
+        config.enabled,
+        config.lighting_preset.label(),
+        tuning.final_min,
+        tuning.final_max,
+        config.resolution,
+        config.pcf.label(),
+        config.pcf.radius,
+        config.bias,
+        config.frustum.mode.label(),
+        config.frustum.padding,
+        world_units_per_shadow_texel,
+        shadow_texel_size,
+    );
+    println!(
+        "[LBA_SHADOW_DEBUG] stage=frustum scene_center=({:.2},{:.2},{:.2}) scene_radius={:.2} light_dir=({:.4},{:.4},{:.4}) light_bounds={} near={:.3} far={:.3} width={:.3} height={:.3} depth={:.3} light_vp_valid={} shader_shadow_enabled={:.1} shader_pcf_samples={:.1} shader_pcf_radius={:.3} debug_view={} debug_view_code={:.1} force_test={}",
+        config.scene_bounds.center.x,
+        config.scene_bounds.center.y,
+        config.scene_bounds.center.z,
+        config.scene_bounds.radius,
+        config.light_direction[0],
+        config.light_direction[1],
+        config.light_direction[2],
+        light_bounds,
+        light_near,
+        light_far,
+        frustum_width,
+        frustum_height,
+        frustum_depth,
+        camera_valid,
+        uniform.shadow_enabled,
+        uniform.shadow_pcf_samples,
+        uniform.shadow_pcf_radius,
+        config.debug_view.label(),
+        uniform.shadow_debug_view_mode,
+        config.force_test,
+    );
+}
+
+fn log_ao_startup_debug(config: AoConfig, shadow: ShadowMapConfig) {
+    let tuning = shadow.lighting_preset.tuning();
+    println!(
+        "[LBA_AO_DEBUG] contact_effective={} contact_strength={:.3} ssao_effective={} ssao_radius={:.3} ssao_strength={:.3} distance_fade_start={:.3} distance_fade_end={:.3} edge_guard={:.3} max_occlusion={:.3} sample_count={} debug_view={} combined_ao_min={:.3} combined_ao_max=1.000 combined_ao_avg_est={:.3} hemisphere_ground={:.3} hemisphere_sky={:.3} top_lift={:.3} bottom_shade={:.3} side_bias_x={:.3} side_bias_z={:.3}",
+        config.contact_enabled,
+        config.contact_strength,
+        config.ssao_enabled,
+        config.ssao_radius,
+        config.ssao_strength,
+        config.distance_fade_start,
+        config
+            .distance_fade_end
+            .max(config.distance_fade_start + 1.0),
+        config.edge_guard,
+        config.max_occlusion,
+        AoConfig::SAMPLE_COUNT,
+        config.debug_view.label(),
+        config.combined_min_estimate(),
+        config.combined_avg_estimate(),
+        tuning.hemisphere_ground,
+        tuning.hemisphere_sky,
+        tuning.top_lift_strength,
+        tuning.bottom_shade_strength,
+        tuning.side_layer_x,
+        tuning.side_layer_z,
+    );
+}
+
+fn log_ao_smoke_check(config: AoConfig) {
+    let fade_end = config
+        .distance_fade_end
+        .max(config.distance_fade_start + 1.0);
+    let pass = config.contact_strength.is_finite()
+        && config.ssao_radius.is_finite()
+        && config.ssao_strength.is_finite()
+        && config.distance_fade_start.is_finite()
+        && fade_end.is_finite()
+        && config.edge_guard.is_finite()
+        && config.max_occlusion.is_finite()
+        && fade_end > config.distance_fade_start
+        && config.combined_min_estimate().is_finite();
+    println!(
+        "[LBA_AO_SMOKE] pass={} contact_effective={} ssao_effective={} contact_strength={:.3} ssao_radius={:.3} ssao_strength={:.3} fade=({:.3},{:.3}) edge_guard={:.3} max_occlusion={:.3} combined_ao_min={:.3}",
+        pass,
+        config.contact_enabled,
+        config.ssao_enabled,
+        config.contact_strength,
+        config.ssao_radius,
+        config.ssao_strength,
+        config.distance_fade_start,
+        fade_end,
+        config.edge_guard,
+        config.max_occlusion,
+        config.combined_min_estimate(),
+    );
+}
+
+fn log_tone_startup_debug(config: ToneConfig) {
+    let (range_min, range_max) = config.estimated_range();
+    println!(
+        "[LBA_TONE_DEBUG] preset={} exposure={:.3} gamma={:.3} saturation={:.3} contrast={:.3} highlight_rolloff={:.3} debug_view={} final_color_range_est=({:.3},{:.3}) clamp=(0.000,1.000)",
+        config.preset.label(),
+        config.exposure,
+        config.gamma,
+        config.saturation,
+        config.contrast,
+        config.highlight_rolloff,
+        config.debug_view.label(),
+        range_min,
+        range_max,
+    );
+}
+
+fn log_emissive_bloom_debug(
+    config: EmissiveBloomConfig,
+    materials: Option<&FullModeMaterialCache>,
+) {
+    let matched_material_count = materials
+        .map(count_emissive_material_candidates)
+        .unwrap_or(0);
+    let unmatched_emissive_looking_count = materials
+        .map(count_unmatched_emissive_looking_material_candidates)
+        .unwrap_or(0);
+    let material_slots = materials
+        .map(|materials| materials.materials.len())
+        .unwrap_or(0);
+    println!(
+        "[LBA_EMISSIVE_BLOOM_DEBUG] emissive_effective={} emissive_strength={:.3} emissive_debug_view={} bloom_effective={} threshold={:.3} intensity={:.3} radius={:.3} bloom_debug_view={} material_id_available=false emissive_tag_available=true matched_emissive_count={} unmatched_emissive_looking_candidates={} material_slots={} emissive_mask_mode=emissive_tag fallback_reason=none",
+        config.emissive_enabled,
+        config.emissive_strength,
+        config.emissive_debug_view.label(),
+        config.bloom_enabled,
+        config.bloom_threshold,
+        config.bloom_intensity,
+        config.bloom_radius,
+        config.bloom_debug_view.label(),
+        matched_material_count,
+        unmatched_emissive_looking_count,
+        material_slots,
+    );
+    if let Some(materials) = materials {
+        for (index, key) in unmatched_emissive_looking_material_candidates(materials)
+            .into_iter()
+            .take(32)
+        {
+            println!(
+                "[LBA_EMISSIVE_UNMATCHED_CANDIDATE] material_index={} key={}",
+                index, key
+            );
+        }
+    }
+}
+
+fn count_emissive_material_candidates(materials: &FullModeMaterialCache) -> usize {
+    materials
+        .materials
+        .iter()
+        .filter(|slot| emissive_material_key_candidate(&slot.key))
+        .count()
+}
+
+fn emissive_material_key_candidate(key: &str) -> bool {
+    emissive_material_key_match(key).is_some()
+}
+
+fn emissive_material_key_match(key: &str) -> Option<(&'static str, f32)> {
+    let key = key.to_ascii_lowercase();
+    let local = key.rsplit([':', '/', '\\']).next().unwrap_or(key.as_str());
+    const EMISSIVE_NAMES: [(&str, f32); 23] = [
+        ("glowstone", 1.0),
+        ("sea_lantern", 2.0),
+        ("shroomlight", 3.0),
+        ("ochre_froglight", 4.0),
+        ("verdant_froglight", 4.0),
+        ("pearlescent_froglight", 4.0),
+        ("froglight", 4.0),
+        ("redstone_lamp", 5.0),
+        ("soul_lantern", 6.0),
+        ("lantern", 6.0),
+        ("soul_wall_torch", 8.0),
+        ("soul_torch", 8.0),
+        ("redstone_wall_torch", 7.0),
+        ("redstone_torch", 7.0),
+        ("wall_torch", 7.0),
+        ("torch", 7.0),
+        ("end_rod", 9.0),
+        ("soul_campfire", 10.0),
+        ("campfire", 10.0),
+        ("jack_o_lantern", 11.0),
+        ("beacon", 12.0),
+        ("cave_vines_lit", 13.0),
+        ("cave_vines_plant_lit", 13.0),
+    ];
+    EMISSIVE_NAMES
+        .iter()
+        .find_map(|(name, tag)| key.contains(name).then_some((*name, *tag)))
+        .or_else(|| {
+            matches!(local, "glow_berries" | "glow_berry_vines").then_some(("glow_berries", 13.0))
+        })
+}
+
+fn count_unmatched_emissive_looking_material_candidates(
+    materials: &FullModeMaterialCache,
+) -> usize {
+    unmatched_emissive_looking_material_candidates(materials).len()
+}
+
+fn unmatched_emissive_looking_material_candidates(
+    materials: &FullModeMaterialCache,
+) -> Vec<(usize, String)> {
+    materials
+        .materials
+        .iter()
+        .enumerate()
+        .filter(|(_, slot)| {
+            !emissive_material_key_candidate(&slot.key)
+                && emissive_looking_material_key_candidate(&slot.key)
+        })
+        .map(|(index, slot)| (index, slot.key.clone()))
+        .collect()
+}
+
+fn emissive_looking_material_key_candidate(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    [
+        "glow", "lit", "light", "lamp", "torch", "lantern", "beacon", "berry", "rod",
+    ]
+    .iter()
+    .any(|needle| key.contains(needle))
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct ShadowScalarStats {
+    count: u64,
+    min: f32,
+    max: f32,
+    sum: f64,
+}
+
+impl ShadowScalarStats {
+    fn record(&mut self, value: f32) {
+        if !value.is_finite() {
+            return;
+        }
+        if self.count == 0 {
+            self.min = value;
+            self.max = value;
+        } else {
+            self.min = self.min.min(value);
+            self.max = self.max.max(value);
+        }
+        self.count += 1;
+        self.sum += f64::from(value);
+    }
+
+    fn avg(self) -> f32 {
+        if self.count == 0 {
+            0.0
+        } else {
+            (self.sum / self.count as f64) as f32
+        }
+    }
+
+    fn format(self) -> String {
+        if self.count == 0 {
+            "count=0 min=n/a max=n/a avg=n/a".to_string()
+        } else {
+            format!(
+                "count={} min={:.6} max={:.6} avg={:.6}",
+                self.count,
+                self.min,
+                self.max,
+                self.avg()
+            )
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ShadowCompareStats {
+    total: u64,
+    inside: u64,
+    outside: u64,
+    invalid: u64,
+    depth_out: u64,
+    lit: u64,
+    shadowed: u64,
+    receiver_depth: ShadowScalarStats,
+    sampled_shadow_depth: ShadowScalarStats,
+}
+
+impl ShadowCompareStats {
+    fn log(&self, config: ShadowMapConfig) {
+        let inside_ratio = ratio(self.inside, self.total);
+        let outside_ratio = ratio(self.outside, self.total);
+        let invalid_ratio = ratio(self.invalid, self.total);
+        let depth_out_ratio = ratio(self.depth_out, self.total);
+        let shadowed_ratio = ratio(self.shadowed, self.inside);
+        println!(
+            "[LBA_SHADOW_DEBUG] stage=coverage samples={} inside={}({:.3}) outside={}({:.3}) invalid={}({:.3}) depth_out={}({:.3}) lit={} shadowed={} shadowed_inside_ratio={:.3} receiver_depth=[{}] sampled_shadow_depth=[{}]",
+            self.total,
+            self.inside,
+            inside_ratio,
+            self.outside,
+            outside_ratio,
+            self.invalid,
+            invalid_ratio,
+            self.depth_out,
+            depth_out_ratio,
+            self.lit,
+            self.shadowed,
+            shadowed_ratio,
+            self.receiver_depth.format(),
+            self.sampled_shadow_depth.format(),
+        );
+        if shadow_smoke_check_enabled() {
+            log_shadow_smoke_check(self, config);
+        }
+    }
+}
+
+fn ratio(value: u64, total: u64) -> f32 {
+    if total == 0 {
+        0.0
+    } else {
+        value as f32 / total as f32
+    }
+}
+
+fn shadow_smoke_check_enabled() -> bool {
+    env_bool("LBA_SHADOW_SMOKE_CHECK")
+}
+
+fn log_shadow_smoke_check(stats: &ShadowCompareStats, config: ShadowMapConfig) {
+    let texel_density_ok = config
+        .light_camera
+        .map(|camera| {
+            camera.world_units_per_texel.is_finite() && camera.world_units_per_texel > 0.0
+        })
+        .unwrap_or(false);
+    let inside_ratio = ratio(stats.inside, stats.total);
+    let abnormal_ratio = ratio(stats.outside + stats.invalid + stats.depth_out, stats.total);
+    let pass = config.enabled
+        && config.pcf.samples > 0
+        && texel_density_ok
+        && stats.total > 0
+        && inside_ratio >= 0.01
+        && abnormal_ratio < 0.75;
+    println!(
+        "[LBA_SHADOW_SMOKE] pass={} shadows_enabled={} pcf_effective={} texel_density_ok={} samples={} inside_ratio={:.3} abnormal_ratio={:.3}",
+        pass,
+        config.enabled,
+        config.pcf.samples > 0,
+        texel_density_ok,
+        stats.total,
+        inside_ratio,
+        abnormal_ratio,
+    );
+}
+
+fn collect_shadow_compare_stats(
+    resident_chunks: &BTreeMap<ChunkKey, ResidentChunkMesh>,
+    cpu_mesh_cache: &ChunkMeshCpuCache,
+    depth_values: &[f32],
+    config: ShadowMapConfig,
+) -> ShadowCompareStats {
+    let mut stats = ShadowCompareStats::default();
+    let Some(light_camera) = config.light_camera else {
+        return stats;
+    };
+    let resolution = config.resolution as usize;
+    if resolution == 0 || depth_values.len() < resolution.saturating_mul(resolution) {
+        return stats;
+    }
+    for resident in resident_chunks.values() {
+        let Some(entry) = cpu_mesh_cache.entries.get(&resident.key) else {
+            continue;
+        };
+        let vertex_stride = (entry.mesh.vertices.len() / 120_000).max(1);
+        for vertex in entry.mesh.vertices.iter().step_by(vertex_stride) {
+            stats.total += 1;
+            let clip = light_camera.view_proj * Vec3::from_array(vertex.position).extend(1.0);
+            if clip.w <= 0.000001
+                || !clip.x.is_finite()
+                || !clip.y.is_finite()
+                || !clip.z.is_finite()
+            {
+                stats.invalid += 1;
+                continue;
+            }
+            let ndc = clip.truncate() / clip.w;
+            let uv = Vec2::new(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+            if ndc.z < 0.0 || ndc.z > 1.0 {
+                stats.depth_out += 1;
+                continue;
+            }
+            if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
+                stats.outside += 1;
+                continue;
+            }
+            stats.inside += 1;
+            stats.receiver_depth.record(ndc.z);
+            let x = ((uv.x * resolution as f32).floor() as usize).min(resolution - 1);
+            let y = ((uv.y * resolution as f32).floor() as usize).min(resolution - 1);
+            let sampled = depth_values[y * resolution + x];
+            stats.sampled_shadow_depth.record(sampled);
+            if ndc.z - config.bias <= sampled {
+                stats.lit += 1;
+            } else {
+                stats.shadowed += 1;
+            }
+        }
+    }
+    stats
+}
+
+fn collect_shadow_depth_stats(depth_values: &[f32]) -> ShadowScalarStats {
+    let mut stats = ShadowScalarStats::default();
+    for value in depth_values.iter().copied() {
+        if value < 0.999_999 {
+            stats.record(value);
+        }
+    }
+    stats
+}
+
+fn read_shadow_depth_values(
+    device: &wgpu::Device,
+    buffer: &wgpu::Buffer,
+    byte_len: usize,
+) -> Option<Vec<f32>> {
+    let slice = buffer.slice(..);
+    let (tx, rx) = mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = tx.send(result);
+    });
+    device.poll(wgpu::Maintain::Wait);
+    if rx.recv().ok()?.is_err() {
+        return None;
+    }
+    let view = slice.get_mapped_range();
+    let values = bytemuck::cast_slice::<u8, f32>(&view[..byte_len]).to_vec();
+    drop(view);
+    buffer.unmap();
+    Some(values)
+}
+
 struct ViewerState {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -2828,13 +4778,14 @@ struct ViewerState {
     camera: OrbitCamera,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    lighting_bind_group: wgpu::BindGroup,
+    shadow_resources: ShadowMapResources,
     atlas_bind_group: wgpu::BindGroup,
     depth_texture: DepthTexture,
     drag_mode: Option<DragMode>,
     last_cursor_position: Option<Vec2>,
     scene_bounds: SceneBounds,
     chunk_scene_index: Option<Arc<ChunkSceneIndex>>,
-    full_mode_materials: Option<Arc<FullModeMaterialCache>>,
     cpu_mesh_cache: ChunkMeshCpuCache,
     pending_build_queue: VecDeque<PendingChunkBuild>,
     pending_build_keys: HashSet<ChunkKey>,
@@ -2895,6 +4846,8 @@ struct ViewerState {
     last_runtime_diag_frame: u64,
     last_pressure_skip_log_frame: u64,
     last_camera_diag_frame: u64,
+    shadow_debug: bool,
+    shadow_debug_logged: bool,
 }
 
 impl ViewerState {
@@ -3009,7 +4962,16 @@ impl ViewerState {
 
         let pipeline_started_at = Instant::now();
         let camera = OrbitCamera::from_bounds(scene_bounds, config.width, config.height);
-        let camera_uniform = CameraUniform::from_matrix(camera.view_proj_matrix());
+        let camera_uniform =
+            CameraUniform::from_matrix_and_eye(camera.view_proj_matrix(), camera.eye());
+        let lighting_config = LightingConfig::from_args(
+            args.basic_lighting,
+            args.basic_shadows,
+            args.shadow_debug_view,
+            args.shadow_force_test,
+            scene_bounds,
+        );
+        let lighting_uniform = LightingUniform::from_config(lighting_config);
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native_viewer_camera"),
             contents: bytemuck::bytes_of(&camera_uniform),
@@ -3020,7 +4982,7 @@ impl ViewerState {
                 label: Some("native_viewer_camera_layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -3037,6 +4999,55 @@ impl ViewerState {
                 resource: camera_buffer.as_entire_binding(),
             }],
         });
+        let lighting_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("native_viewer_basic_lighting"),
+            contents: bytemuck::bytes_of(&lighting_uniform),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let lighting_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("native_viewer_basic_lighting_layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("native_viewer_basic_lighting_bind_group"),
+            layout: &lighting_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: lighting_buffer.as_entire_binding(),
+            }],
+        });
+        let shadow_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("native_viewer_basic_shadow_layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                        count: None,
+                    },
+                ],
+            });
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("native_viewer_texture_layout"),
@@ -3070,10 +5081,54 @@ impl ViewerState {
             label: Some("native_viewer_shader"),
             source: wgpu::ShaderSource::Wgsl(VIEWER_SHADER.into()),
         });
+        let shadow_depth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("native_viewer_basic_shadow_depth_shader"),
+            source: wgpu::ShaderSource::Wgsl(SHADOW_DEPTH_SHADER.into()),
+        });
+        let shadow_resources = create_shadow_map_resources(
+            &device,
+            lighting_config.shadow(),
+            &shadow_bind_group_layout,
+            &camera_bind_group_layout,
+            &shadow_depth_shader,
+        );
+        if args.shadow_debug {
+            log_shadow_startup_debug(
+                args.basic_lighting,
+                args.basic_shadows,
+                lighting_config.shadow(),
+                &lighting_uniform,
+            );
+        }
+        if env_bool("LBA_AO_DEBUG") || lighting_config.ao().debug_view != AoDebugViewMode::Off {
+            log_ao_startup_debug(lighting_config.ao(), lighting_config.shadow());
+        }
+        if env_bool("LBA_AO_SMOKE_CHECK") {
+            log_ao_smoke_check(lighting_config.ao());
+        }
+        if env_bool("LBA_TONE_DEBUG") || lighting_config.tone().debug_view != ToneDebugViewMode::Off
+        {
+            log_tone_startup_debug(lighting_config.tone());
+        }
+        if env_bool("LBA_EMISSIVE_DEBUG")
+            || env_bool("LBA_BLOOM_DEBUG")
+            || lighting_config.emissive_bloom().emissive_debug_view != EmissiveDebugViewMode::Off
+            || lighting_config.emissive_bloom().bloom_debug_view != BloomDebugViewMode::Off
+        {
+            log_emissive_bloom_debug(
+                lighting_config.emissive_bloom(),
+                full_mode_materials.as_deref(),
+            );
+        }
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("native_viewer_pipeline_layout"),
-                bind_group_layouts: &[&camera_bind_group_layout, &texture_bind_group_layout],
+                bind_group_layouts: &[
+                    &camera_bind_group_layout,
+                    &texture_bind_group_layout,
+                    &lighting_bind_group_layout,
+                    &shadow_bind_group_layout,
+                ],
                 push_constant_ranges: &[],
             });
         let render_pipeline_solid =
@@ -3212,13 +5267,14 @@ impl ViewerState {
             camera,
             camera_buffer,
             camera_bind_group,
+            lighting_bind_group,
+            shadow_resources,
             atlas_bind_group,
             depth_texture,
             drag_mode: None,
             last_cursor_position: None,
             scene_bounds,
             chunk_scene_index,
-            full_mode_materials,
             cpu_mesh_cache: ChunkMeshCpuCache::new(
                 args.cpu_cache_max_chunks,
                 args.cpu_cache_max_bytes,
@@ -3287,6 +5343,8 @@ impl ViewerState {
             last_runtime_diag_frame: 0,
             last_pressure_skip_log_frame: 0,
             last_camera_diag_frame: 0,
+            shadow_debug: args.shadow_debug,
+            shadow_debug_logged: false,
         };
         state.install_bootstrap_meshes(bootstrap_meshes);
         println!(
@@ -3464,11 +5522,7 @@ impl ViewerState {
         let renderable_chunks = self.cpu_mesh_cache.len().min(total_chunks);
         let empty_mesh_chunks = self.prebuild_empty_mesh_keys.len().min(total_chunks);
         let resident_chunks = self.resident_chunks.len().min(total_chunks);
-        let uploaded_chunks = if self.prebuild_cache_only {
-            completed_chunks
-        } else {
-            completed_chunks
-        };
+        let uploaded_chunks = completed_chunks;
         let cache_file_bytes = self
             .cache_file
             .as_deref()
@@ -3978,6 +6032,7 @@ impl ViewerState {
     }
 
     fn upload_chunk_mesh(&self, prepared: &PreparedChunkMesh) -> ResidentChunkMesh {
+        log_chest_front_gpu_vertices("upload", &prepared.vertices, &prepared.indices);
         let vertex_count = prepared.vertices.len() as u32;
         let solid_index_count = prepared.indices.len() as u32;
         let translucent_index_count = prepared.translucent_indices.len() as u32;
@@ -4343,21 +6398,18 @@ impl ViewerState {
         let mut preload_queue = VecDeque::<PendingChunkBuild>::new();
         while let Some(mut pending) = self.pending_build_queue.pop_front() {
             self.pending_build_keys.remove(&pending.key);
-            match self.current_queue_priority(pending.key) {
-                Some(priority) => {
-                    pending.priority = priority;
-                    match priority {
-                        QueuePriority::Target => target_queue.push_back(pending),
-                        QueuePriority::Preload => preload_queue.push_back(pending),
-                    }
+            if let Some(priority) = self.current_queue_priority(pending.key) {
+                pending.priority = priority;
+                match priority {
+                    QueuePriority::Target => target_queue.push_back(pending),
+                    QueuePriority::Preload => preload_queue.push_back(pending),
                 }
-                None => {}
             }
         }
 
         let mut next_queue = VecDeque::<PendingChunkBuild>::new();
         let mut prebuild_batch = Vec::<PendingChunkBuild>::new();
-        for mut pending in target_queue.into_iter().chain(preload_queue.into_iter()) {
+        for mut pending in target_queue.into_iter().chain(preload_queue) {
             let Some(priority) = self.current_queue_priority(pending.key) else {
                 continue;
             };
@@ -4444,30 +6496,33 @@ impl ViewerState {
                 }
             }
         }
-        if !prebuild_batch.is_empty() {
-            if let Some(request_tx) = self.build_request_tx.clone() {
-                let priority = prebuild_batch
-                    .iter()
-                    .any(|pending| pending.priority == QueuePriority::Target)
-                    .then_some(QueuePriority::Target)
-                    .unwrap_or(QueuePriority::Preload);
-                let submitted = self.submit_build_batch(&request_tx, &prebuild_batch, priority)?;
-                for pending in &prebuild_batch {
-                    match priority {
-                        QueuePriority::Target => stats.target_usage.consume(
-                            pending.estimated_vertex_count,
-                            pending.estimated_index_count,
-                        ),
-                        QueuePriority::Preload => stats.preload_usage.consume(
-                            pending.estimated_vertex_count,
-                            pending.estimated_index_count,
-                        ),
-                    }
-                }
+        if !prebuild_batch.is_empty()
+            && let Some(request_tx) = self.build_request_tx.clone()
+        {
+            let priority = if prebuild_batch
+                .iter()
+                .any(|pending| pending.priority == QueuePriority::Target)
+            {
+                QueuePriority::Target
+            } else {
+                QueuePriority::Preload
+            };
+            let submitted = self.submit_build_batch(&request_tx, &prebuild_batch, priority)?;
+            for pending in &prebuild_batch {
                 match priority {
-                    QueuePriority::Target => stats.target_submitted_builds += submitted,
-                    QueuePriority::Preload => stats.preload_submitted_builds += submitted,
+                    QueuePriority::Target => stats.target_usage.consume(
+                        pending.estimated_vertex_count,
+                        pending.estimated_index_count,
+                    ),
+                    QueuePriority::Preload => stats.preload_usage.consume(
+                        pending.estimated_vertex_count,
+                        pending.estimated_index_count,
+                    ),
                 }
+            }
+            match priority {
+                QueuePriority::Target => stats.target_submitted_builds += submitted,
+                QueuePriority::Preload => stats.preload_submitted_builds += submitted,
             }
         }
 
@@ -4574,8 +6629,8 @@ impl ViewerState {
             Err(error) => {
                 let failed_request = error.0;
                 println!(
-                    "[PREVIEW_CACHE] cache_write_failed key=({}, {}, {}) error=writer_send:{}",
-                    key.cx, key.cy, key.cz, "result_channel_closed"
+                    "[PREVIEW_CACHE] cache_write_failed key=({}, {}, {}) error=writer_send:result_channel_closed",
+                    key.cx, key.cy, key.cz
                 );
                 Err(failed_request.mesh)
             }
@@ -4597,11 +6652,11 @@ impl ViewerState {
                 key.cx, key.cy, key.cz, error
             );
         }
-        if let Some(manifest_chunk) = result.manifest_chunk {
-            if self.prebuild_cache_written_keys.insert(key) {
-                self.prebuild_chunk_bytes = self.prebuild_chunk_bytes.saturating_add(result.bytes);
-                self.prebuild_manifest_chunks.push(manifest_chunk);
-            }
+        if let Some(manifest_chunk) = result.manifest_chunk
+            && self.prebuild_cache_written_keys.insert(key)
+        {
+            self.prebuild_chunk_bytes = self.prebuild_chunk_bytes.saturating_add(result.bytes);
+            self.prebuild_manifest_chunks.push(manifest_chunk);
         }
         let vertex_count = result.mesh.vertex_count();
         let index_count = result.mesh.index_count();
@@ -4801,20 +6856,17 @@ impl ViewerState {
         let mut preload_queue = VecDeque::<PendingChunkUpload>::new();
         while let Some(mut pending) = self.pending_upload_queue.pop_front() {
             self.pending_upload_keys.remove(&pending.key);
-            match self.current_queue_priority(pending.key) {
-                Some(priority) => {
-                    pending.priority = priority;
-                    match priority {
-                        QueuePriority::Target => target_queue.push_back(pending),
-                        QueuePriority::Preload => preload_queue.push_back(pending),
-                    }
+            if let Some(priority) = self.current_queue_priority(pending.key) {
+                pending.priority = priority;
+                match priority {
+                    QueuePriority::Target => target_queue.push_back(pending),
+                    QueuePriority::Preload => preload_queue.push_back(pending),
                 }
-                None => {}
             }
         }
 
         let mut next_queue = VecDeque::<PendingChunkUpload>::new();
-        for mut pending in target_queue.into_iter().chain(preload_queue.into_iter()) {
+        for mut pending in target_queue.into_iter().chain(preload_queue) {
             let Some(priority) = self.current_queue_priority(pending.key) else {
                 continue;
             };
@@ -5518,7 +7570,8 @@ impl ViewerState {
     }
 
     fn write_camera(&mut self) {
-        let camera_uniform = CameraUniform::from_matrix(self.camera.view_proj_matrix());
+        let camera_uniform =
+            CameraUniform::from_matrix_and_eye(self.camera.view_proj_matrix(), self.camera.eye());
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
     }
@@ -5599,7 +7652,7 @@ impl ViewerState {
         let next_yaw = if self.preview_spin {
             self.camera.yaw + 0.0015
         } else {
-            0.7853982
+            FRAC_PI_4
         };
         let next_target = self.scene_bounds.center;
         let next_pitch = 0.45;
@@ -5690,10 +7743,10 @@ impl ViewerState {
         } else {
             self.apply_stress_camera_sweep();
         }
-        if self.residency_dirty {
-            if let Err(error) = self.sync_chunk_residency() {
-                println!("[VIEWER_STREAM] sync_failed error={error}");
-            }
+        if self.residency_dirty
+            && let Err(error) = self.sync_chunk_residency()
+        {
+            println!("[VIEWER_STREAM] sync_failed error={error}");
         }
         let async_stats = self.consume_completed_build_results();
         let writer_completed = self.drain_prebuild_cache_writer_results();
@@ -5894,6 +7947,100 @@ impl ViewerState {
                 label: Some("native_viewer_encoder"),
             });
 
+        let shadow_plan = ShadowDepthPassPlan::from_config(self.shadow_resources.config);
+        let mut shadow_draw_calls = 0_u64;
+        let mut shadow_index_count = 0_u64;
+        if shadow_plan.enabled {
+            let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("native_viewer_basic_shadow_depth_pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_resources.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+            shadow_pass.set_pipeline(&self.shadow_resources.depth_pipeline);
+            shadow_pass.set_bind_group(0, &self.shadow_resources.camera_bind_group, &[]);
+            for resident in self.resident_chunks.values() {
+                shadow_pass.set_vertex_buffer(0, resident.gpu.vertex_buffer.slice(..));
+                shadow_pass.set_index_buffer(
+                    resident.gpu.solid_index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
+                shadow_pass.draw_indexed(0..resident.gpu.solid_index_count, 0, 0..1);
+                shadow_draw_calls += 1;
+                shadow_index_count += u64::from(resident.gpu.solid_index_count);
+            }
+        }
+        let should_log_shadow_debug = self.shadow_debug
+            && (!self.shadow_debug_logged || self.frame_index.is_multiple_of(120));
+        let shadow_debug_readback = if should_log_shadow_debug && shadow_plan.enabled {
+            let resolution = self.shadow_resources.config.resolution.max(1);
+            let bytes_per_row = resolution * std::mem::size_of::<f32>() as u32;
+            let byte_len = bytes_per_row as u64 * u64::from(resolution);
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("native_viewer_basic_shadow_debug_readback"),
+                size: byte_len,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                wgpu::ImageCopyTexture {
+                    texture: &self.shadow_resources.depth_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::DepthOnly,
+                },
+                wgpu::ImageCopyBuffer {
+                    buffer: &buffer,
+                    layout: wgpu::ImageDataLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: Some(resolution),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: resolution,
+                    height: resolution,
+                    depth_or_array_layers: 1,
+                },
+            );
+            Some((buffer, byte_len as usize))
+        } else {
+            None
+        };
+        if should_log_shadow_debug {
+            self.shadow_debug_logged = true;
+            println!(
+                "[LBA_SHADOW_DEBUG] stage=depth_pass frame={} enabled={} executed={} draw_calls={} index_count={} instance_count={} resident_chunks={} shadow_map_resolution={} effective_pcf_samples={} pcf_radius={:.3} bias={:.5} strength={:.3} shader_shadow_enabled={} shadow_debug_view={} shadow_force_test={}",
+                self.frame_index,
+                self.shadow_resources.config.enabled,
+                shadow_plan.enabled,
+                shadow_draw_calls,
+                shadow_index_count,
+                shadow_draw_calls,
+                self.resident_chunks.len(),
+                self.shadow_resources.config.resolution,
+                self.shadow_resources.config.pcf.label(),
+                self.shadow_resources.config.pcf.radius,
+                self.shadow_resources.config.bias,
+                self.shadow_resources.config.strength,
+                if self.shadow_resources.config.enabled {
+                    1.0
+                } else {
+                    0.0
+                },
+                self.shadow_resources.config.debug_view.label(),
+                self.shadow_resources.config.force_test,
+            );
+        }
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("native_viewer_render_pass"),
@@ -5923,6 +8070,8 @@ impl ViewerState {
             });
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+            render_pass.set_bind_group(2, &self.lighting_bind_group, &[]);
+            render_pass.set_bind_group(3, &self.shadow_resources.bind_group, &[]);
             render_pass.set_pipeline(&self.render_pipeline_solid);
             for resident in self.resident_chunks.values() {
                 render_pass.set_vertex_buffer(0, resident.gpu.vertex_buffer.slice(..));
@@ -5934,6 +8083,8 @@ impl ViewerState {
             }
             render_pass.set_pipeline(&self.render_pipeline_translucent);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(2, &self.lighting_bind_group, &[]);
+            render_pass.set_bind_group(3, &self.shadow_resources.bind_group, &[]);
             for resident in self.resident_chunks.values() {
                 let Some(translucent_index_buffer) = resident.gpu.translucent_index_buffer.as_ref()
                 else {
@@ -5950,6 +8101,29 @@ impl ViewerState {
 
         self.queue.submit(Some(encoder.finish()));
         output.present();
+        if let Some((buffer, byte_len)) = shadow_debug_readback {
+            if let Some(depth_values) = read_shadow_depth_values(&self.device, &buffer, byte_len) {
+                let shadow_depth_stats = collect_shadow_depth_stats(&depth_values);
+                println!(
+                    "[LBA_SHADOW_DEBUG] stage=shadow_depth_stats written_depth=[{}] clear_depth_pixels={} total_pixels={}",
+                    shadow_depth_stats.format(),
+                    depth_values
+                        .iter()
+                        .filter(|value| **value >= 0.999_999)
+                        .count(),
+                    depth_values.len(),
+                );
+                collect_shadow_compare_stats(
+                    &self.resident_chunks,
+                    &self.cpu_mesh_cache,
+                    &depth_values,
+                    self.shadow_resources.config,
+                )
+                .log(self.shadow_resources.config);
+            } else {
+                println!("[LBA_SHADOW_DEBUG] stage=shadow_depth_stats readback_failed=true");
+            }
+        }
         Ok(())
     }
 }
@@ -5986,6 +8160,38 @@ fn parse_args() -> Result<Option<ViewerArgs>> {
     let mut embed_parent_hwnd = None;
     let mut preview_mode = false;
     let mut preview_spin = false;
+    let mut basic_lighting = std::env::var("LBA_VIEWER_BASIC_LIGHTING")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on"
+            )
+        })
+        .unwrap_or(false);
+    let mut shadow_debug = env_bool("LBA_SHADOW_DEBUG") || shadow_smoke_check_enabled();
+    let shadow_debug_view_env = std::env::var("LBA_SHADOW_DEBUG_VIEW")
+        .ok()
+        .map(|value| ShadowDebugViewMode::parse(&value));
+    let mut shadow_debug_view = ShadowDebugViewMode::Off;
+    let shadow_force_test = std::env::var("LBA_SHADOW_FORCE_TEST")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on"
+            )
+        })
+        .unwrap_or(false);
+    let mut basic_shadows = std::env::var("LBA_VIEWER_BASIC_SHADOWS")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on"
+            )
+        })
+        .unwrap_or(false);
     let mut display_mode = std::env::var("LBA_VIEWER_DISPLAY_MODE")
         .ok()
         .map(|value| ViewerDisplayMode::parse(&value))
@@ -5994,7 +8200,7 @@ fn parse_args() -> Result<Option<ViewerArgs>> {
         match arg.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "usage: litematica_native_viewer [file] [--chunk-size=N] [--probe-scene] [--prebuild-only] [--auto-exit-seconds=N] [--prebuild-before-show] [--ready-file=PATH] [--cache-file=PATH] [--preview-output=PATH] [--build-workers=N] [--stress-limits] [--preview-mode] [--preview-spin] [--display-mode=normal|fast_experimental|full] [--cpu-cache-max-chunks=N] [--cpu-cache-max-bytes=SIZE] [--resident-max-chunks=N] [--resident-max-bytes=SIZE] [--embed-parent-hwnd=HWND]"
+                    "usage: litematica_native_viewer [file] [--chunk-size=N] [--probe-scene] [--prebuild-only] [--auto-exit-seconds=N] [--prebuild-before-show] [--ready-file=PATH] [--cache-file=PATH] [--preview-output=PATH] [--build-workers=N] [--stress-limits] [--preview-mode] [--preview-spin] [--display-mode=normal|fast_experimental|full] [--basic-lighting] [--basic-shadows] [--shadow-debug] [--shadow-debug-view] [--cpu-cache-max-chunks=N] [--cpu-cache-max-bytes=SIZE] [--resident-max-chunks=N] [--resident-max-bytes=SIZE] [--embed-parent-hwnd=HWND]"
                 );
                 println!(
                     "controls: left-drag rotate, right-drag pan, mouse-wheel zoom, R reset, Esc exit"
@@ -6008,6 +8214,13 @@ fn parse_args() -> Result<Option<ViewerArgs>> {
             "--preview-spin" => {
                 preview_mode = true;
                 preview_spin = true;
+            }
+            "--basic-lighting" => basic_lighting = true,
+            "--basic-shadows" => basic_shadows = true,
+            "--shadow-debug" => shadow_debug = true,
+            "--shadow-debug-view" => {
+                shadow_debug = true;
+                shadow_debug_view = shadow_debug_view_env.unwrap_or(ShadowDebugViewMode::Factor);
             }
             "--stress-limits" => {
                 stress_limits = true;
@@ -6076,6 +8289,12 @@ fn parse_args() -> Result<Option<ViewerArgs>> {
             }
         }
     }
+    if basic_shadows && !basic_lighting {
+        println!(
+            "[NATIVE_VIEWER] basic_shadows_requested=true basic_lighting=false shadow_effect=disabled"
+        );
+        basic_shadows = false;
+    }
     Ok(Some(ViewerArgs {
         input,
         chunk_size,
@@ -6097,7 +8316,24 @@ fn parse_args() -> Result<Option<ViewerArgs>> {
         preview_mode,
         preview_spin,
         display_mode,
+        basic_lighting,
+        basic_shadows,
+        shadow_debug,
+        shadow_debug_view,
+        shadow_force_test,
     }))
+}
+
+fn env_bool(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn resolve_palette_color(
@@ -6171,8 +8407,6 @@ fn block_color_cache() -> &'static HashMap<String, [f32; 3]> {
             return HashMap::new();
         };
         let cache_path = root
-            .join("desktop-ui")
-            .join("src")
             .join("data")
             .join("blockColorCache.json");
         let payload = match std::fs::read_to_string(&cache_path) {
@@ -6195,7 +8429,7 @@ fn block_color_cache() -> &'static HashMap<String, [f32; 3]> {
             HashMap::new()
         });
         println!(
-            "[VIEWER_COLOR] color_source=desktop-ui/src/data/blockColorCache.json cache_entries={} path={}",
+            "[VIEWER_COLOR] color_source=data/blockColorCache.json cache_entries={} path={}",
             cache.len(),
             cache_path.display()
         );
@@ -6205,12 +8439,7 @@ fn block_color_cache() -> &'static HashMap<String, [f32; 3]> {
 
 fn locate_workspace_root() -> Option<PathBuf> {
     fn is_workspace_root(path: &Path) -> bool {
-        path.join("desktop-ui")
-            .join("src")
-            .join("data")
-            .join("blockColorCache.json")
-            .exists()
-            && path.join("block").exists()
+        path.join("block").exists()
             && path.join("item").exists()
     }
 
@@ -6280,20 +8509,32 @@ fn load_scene(args: &ViewerArgs) -> Result<ViewerScene> {
     }
 }
 
-fn render_offscreen_preview(scene: &ViewerScene, output: &Path) -> Result<()> {
-    let (width, height) = if std::env::var_os("LBA_FULL_MODE_V2_PISTON_DEBUG").is_some() {
+fn render_offscreen_preview(
+    scene: &ViewerScene,
+    output: &Path,
+    lighting: LightingConfig,
+) -> Result<()> {
+    let basic_lighting = lighting.basic();
+    let debug_labels = std::env::var_os("LBA_FULL_MODE_V2_PISTON_DEBUG").is_some()
+        || std::env::var_os("LBA_FULL_MODE_V2_CHEST_DEBUG").is_some()
+        || std::env::var_os("LBA_FULL_MODE_V2_OBSERVER_DEBUG").is_some();
+    let (width, height) = if debug_labels {
         (1600_u32, 1000_u32)
     } else {
         (320_u32, 200_u32)
     };
     let mut camera = OrbitCamera::from_bounds(scene.bounds, width, height);
-    camera.yaw = 0.7853982;
+    camera.yaw = FRAC_PI_4;
     camera.pitch = 0.45;
     camera.distance = (OrbitCamera::fit_distance(scene.bounds) * 1.08).min(camera.max_distance);
     let view_proj = camera.view_proj_matrix();
     let mut image = RgbImage::from_pixel(width, height, Rgb([22, 24, 29]));
     let mut opaque_depth = vec![f32::INFINITY; (width * height) as usize];
     let mut translucent_triangles = Vec::<PreviewTriangle>::new();
+    let mut chest_debug_stats = (std::env::var_os("LBA_FULL_MODE_V2_CHEST_DEBUG").is_some())
+        .then(ChestDebugPreviewStats::default);
+    let mut observer_debug_stats = (std::env::var_os("LBA_FULL_MODE_V2_OBSERVER_DEBUG").is_some())
+        .then(ObserverDebugPreviewStats::default);
     for mesh in &scene.bootstrap_meshes {
         for tri in mesh.indices.chunks_exact(3) {
             if let Some(triangle) =
@@ -6306,7 +8547,10 @@ fn render_offscreen_preview(scene: &ViewerScene, output: &Path) -> Result<()> {
                     height,
                     &triangle,
                     scene.texture_atlas.as_ref(),
+                    basic_lighting,
                     PreviewRasterMode::Opaque,
+                    chest_debug_stats.as_mut(),
+                    observer_debug_stats.as_mut(),
                 );
             }
         }
@@ -6332,8 +8576,17 @@ fn render_offscreen_preview(scene: &ViewerScene, output: &Path) -> Result<()> {
             height,
             triangle,
             scene.texture_atlas.as_ref(),
+            basic_lighting,
             PreviewRasterMode::Translucent,
+            chest_debug_stats.as_mut(),
+            observer_debug_stats.as_mut(),
         );
+    }
+    if let Some(stats) = chest_debug_stats.as_ref() {
+        stats.log_summary();
+    }
+    if let Some(stats) = observer_debug_stats.as_ref() {
+        stats.log_summary();
     }
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent)
@@ -6383,11 +8636,14 @@ struct PreviewProjectedVertex {
     color: [f32; 4],
     uv: [f32; 2],
     use_texture: f32,
+    normal: [f32; 3],
 }
 
 #[derive(Clone)]
 struct PreviewTriangle {
     vertices: [PreviewProjectedVertex; 3],
+    chest_debug: Option<ChestDebugTriangleInfo>,
+    observer_debug: Option<ObserverDebugTriangleInfo>,
 }
 
 impl PreviewTriangle {
@@ -6419,6 +8675,9 @@ fn project_preview_triangle(
     let Some(v2) = vertices.get(*tri.get(2)? as usize) else {
         return None;
     };
+    let chest_debug = classify_chest_debug_triangle([v0, v1, v2]);
+    let observer_debug = classify_observer_debug_triangle([v0, v1, v2]);
+    log_chest_front_triangle("preview_input", [v0, v1, v2], chest_debug.as_ref());
     let p0 = project_preview_vertex(view_proj, v0.position, width, height)?;
     let p1 = project_preview_vertex(view_proj, v1.position, width, height)?;
     let p2 = project_preview_vertex(view_proj, v2.position, width, height)?;
@@ -6429,20 +8688,25 @@ fn project_preview_triangle(
                 color: v0.color,
                 uv: v0.uv,
                 use_texture: v0.use_texture,
+                normal: v0.normal,
             },
             PreviewProjectedVertex {
                 position: p1,
                 color: v1.color,
                 uv: v1.uv,
                 use_texture: v1.use_texture,
+                normal: v1.normal,
             },
             PreviewProjectedVertex {
                 position: p2,
                 color: v2.color,
                 uv: v2.uv,
                 use_texture: v2.use_texture,
+                normal: v2.normal,
             },
         ],
+        chest_debug,
+        observer_debug,
     })
 }
 
@@ -6453,7 +8717,10 @@ fn raster_preview_triangle(
     height: u32,
     triangle: &PreviewTriangle,
     atlas: Option<&RgbaImage>,
+    lighting: BasicLightingConfig,
     mode: PreviewRasterMode,
+    chest_debug_stats: Option<&mut ChestDebugPreviewStats>,
+    observer_debug_stats: Option<&mut ObserverDebugPreviewStats>,
 ) {
     let p0 = triangle.vertices[0].position;
     let p1 = triangle.vertices[1].position;
@@ -6461,6 +8728,20 @@ fn raster_preview_triangle(
     let area = edge_preview(p0, p1, p2[0], p2[1]);
     if area.abs() <= f32::EPSILON {
         return;
+    }
+    let mut chest_debug_stats = chest_debug_stats;
+    let mut observer_debug_stats = observer_debug_stats;
+    if let (Some(stats), Some(debug)) = (
+        chest_debug_stats.as_deref_mut(),
+        triangle.chest_debug.as_ref(),
+    ) {
+        stats.note_triangle(debug, mode);
+    }
+    if let (Some(stats), Some(debug)) = (
+        observer_debug_stats.as_deref_mut(),
+        triangle.observer_debug.as_ref(),
+    ) {
+        stats.note_triangle(debug, mode);
     }
     let min_x = p0[0].min(p1[0]).min(p2[0]).floor().max(0.0) as u32;
     let max_x = p0[0].max(p1[0]).max(p2[0]).ceil().min(width as f32 - 1.0) as u32;
@@ -6476,6 +8757,18 @@ fn raster_preview_triangle(
             let w2 = edge_preview(p0, p1, px, py) * sign;
             if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                 continue;
+            }
+            if let (Some(stats), Some(debug)) = (
+                chest_debug_stats.as_deref_mut(),
+                triangle.chest_debug.as_ref(),
+            ) {
+                stats.note_candidate(debug);
+            }
+            if let (Some(stats), Some(debug)) = (
+                observer_debug_stats.as_deref_mut(),
+                triangle.observer_debug.as_ref(),
+            ) {
+                stats.note_candidate(debug);
             }
             let inv_area = 1.0 / area.abs();
             let b0 = w0 * inv_area;
@@ -6503,6 +8796,17 @@ fn raster_preview_triangle(
             let use_texture = triangle.vertices[0].use_texture * b0
                 + triangle.vertices[1].use_texture * b1
                 + triangle.vertices[2].use_texture * b2;
+            let normal = normalize_lighting_direction([
+                triangle.vertices[0].normal[0] * b0
+                    + triangle.vertices[1].normal[0] * b1
+                    + triangle.vertices[2].normal[0] * b2,
+                triangle.vertices[0].normal[1] * b0
+                    + triangle.vertices[1].normal[1] * b1
+                    + triangle.vertices[2].normal[1] * b2,
+                triangle.vertices[0].normal[2] * b0
+                    + triangle.vertices[1].normal[2] * b1
+                    + triangle.vertices[2].normal[2] * b2,
+            ]);
             if use_texture > 0.5 {
                 let uv = [
                     triangle.vertices[0].uv[0] * b0
@@ -6518,10 +8822,38 @@ fn raster_preview_triangle(
                 }
                 color = [sampled[0], sampled[1], sampled[2], color[3] * sampled[3]];
             }
+            let lit_rgb = apply_basic_lighting([color[0], color[1], color[2]], normal, lighting);
+            color[0] = lit_rgb[0];
+            color[1] = lit_rgb[1];
+            color[2] = lit_rgb[2];
             if color[3] <= 0.01 {
                 continue;
             }
+            if let (Some(stats), Some(debug)) = (
+                chest_debug_stats.as_deref_mut(),
+                triangle.chest_debug.as_ref(),
+            ) {
+                stats.note_drawn(debug);
+            }
+            if let (Some(stats), Some(debug)) = (
+                observer_debug_stats.as_deref_mut(),
+                triangle.observer_debug.as_ref(),
+            ) {
+                stats.note_drawn(debug);
+            }
             if mode == PreviewRasterMode::Opaque {
+                if let (Some(stats), Some(debug)) = (
+                    chest_debug_stats.as_deref_mut(),
+                    triangle.chest_debug.as_ref(),
+                ) {
+                    stats.note_depth_result(debug, z < depth[index]);
+                }
+                if let (Some(stats), Some(debug)) = (
+                    observer_debug_stats.as_deref_mut(),
+                    triangle.observer_debug.as_ref(),
+                ) {
+                    stats.note_depth_result(debug, z < depth[index]);
+                }
                 depth[index] = z;
                 image.put_pixel(
                     x,
@@ -6533,6 +8865,18 @@ fn raster_preview_triangle(
                     ]),
                 );
                 continue;
+            }
+            if let (Some(stats), Some(debug)) = (
+                chest_debug_stats.as_deref_mut(),
+                triangle.chest_debug.as_ref(),
+            ) {
+                stats.note_depth_result(debug, true);
+            }
+            if let (Some(stats), Some(debug)) = (
+                observer_debug_stats.as_deref_mut(),
+                triangle.observer_debug.as_ref(),
+            ) {
+                stats.note_depth_result(debug, true);
             }
             let dst = image.get_pixel(x, y).0;
             let alpha = color[3].clamp(0.0, 1.0);
@@ -6569,6 +8913,493 @@ fn sample_preview_atlas(atlas: Option<&RgbaImage>, uv: [f32; 2]) -> [f32; 4] {
         pixel[2] as f32 / 255.0,
         pixel[3] as f32 / 255.0,
     ]
+}
+
+#[derive(Clone)]
+struct ChestDebugTriangleInfo {
+    block_label: &'static str,
+    face_role: &'static str,
+    pair_half: &'static str,
+    world_face: &'static str,
+    candidate_label: &'static str,
+    group_key: String,
+    world_bounds: String,
+    uv_bounds: String,
+}
+
+impl ChestDebugTriangleInfo {
+    fn target_label(&self) -> String {
+        format!("{}-{}", self.face_role, self.pair_half)
+    }
+}
+
+#[derive(Default)]
+struct ChestDebugPreviewStats {
+    groups: HashMap<String, ChestDebugPreviewGroupStats>,
+}
+
+#[derive(Clone)]
+struct ChestDebugPreviewGroupStats {
+    block_label: &'static str,
+    face_role: &'static str,
+    pair_half: &'static str,
+    world_face: &'static str,
+    candidate_label: &'static str,
+    world_bounds: String,
+    uv_bounds: String,
+    opaque_triangles: usize,
+    translucent_triangles: usize,
+    candidate_pixels: usize,
+    drawn_pixels: usize,
+    visible_pixels: usize,
+}
+
+impl ChestDebugPreviewStats {
+    fn note_triangle(&mut self, info: &ChestDebugTriangleInfo, mode: PreviewRasterMode) {
+        let entry = self
+            .groups
+            .entry(info.group_key.clone())
+            .or_insert_with(|| ChestDebugPreviewGroupStats {
+                block_label: info.block_label,
+                face_role: info.face_role,
+                pair_half: info.pair_half,
+                world_face: info.world_face,
+                candidate_label: info.candidate_label,
+                world_bounds: info.world_bounds.clone(),
+                uv_bounds: info.uv_bounds.clone(),
+                opaque_triangles: 0,
+                translucent_triangles: 0,
+                candidate_pixels: 0,
+                drawn_pixels: 0,
+                visible_pixels: 0,
+            });
+        match mode {
+            PreviewRasterMode::Opaque => entry.opaque_triangles += 1,
+            PreviewRasterMode::Translucent => entry.translucent_triangles += 1,
+        }
+    }
+
+    fn note_candidate(&mut self, info: &ChestDebugTriangleInfo) {
+        if let Some(entry) = self.groups.get_mut(&info.group_key) {
+            entry.candidate_pixels += 1;
+        }
+    }
+
+    fn note_drawn(&mut self, info: &ChestDebugTriangleInfo) {
+        if let Some(entry) = self.groups.get_mut(&info.group_key) {
+            entry.drawn_pixels += 1;
+        }
+    }
+
+    fn note_depth_result(&mut self, info: &ChestDebugTriangleInfo, visible: bool) {
+        if visible && let Some(entry) = self.groups.get_mut(&info.group_key) {
+            entry.visible_pixels += 1;
+        }
+    }
+
+    fn log_summary(&self) {
+        let mut groups = self.groups.values().cloned().collect::<Vec<_>>();
+        groups.sort_by(|left, right| {
+            right
+                .visible_pixels
+                .cmp(&left.visible_pixels)
+                .then(right.drawn_pixels.cmp(&left.drawn_pixels))
+                .then(left.block_label.cmp(right.block_label))
+        });
+        for group in groups {
+            println!(
+                "[LBA_FULL_MODE_V2_CHEST_PREVIEW] block={} target={} candidate={} world_face={} opaque_triangles={} translucent_triangles={} candidate_pixels={} drawn_pixels={} visible_pixels={} world_bounds={} uv_bounds={}",
+                group.block_label,
+                format!("{}-{}", group.face_role, group.pair_half),
+                group.candidate_label,
+                group.world_face,
+                group.opaque_triangles,
+                group.translucent_triangles,
+                group.candidate_pixels,
+                group.drawn_pixels,
+                group.visible_pixels,
+                group.world_bounds,
+                group.uv_bounds,
+            );
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ObserverDebugTriangleInfo {
+    block_label: &'static str,
+    face_number: &'static str,
+    world_face: &'static str,
+    group_key: String,
+    world_bounds: String,
+    uv_bounds: String,
+}
+
+#[derive(Default)]
+struct ObserverDebugPreviewStats {
+    groups: HashMap<String, ObserverDebugPreviewGroupStats>,
+}
+
+#[derive(Clone)]
+struct ObserverDebugPreviewGroupStats {
+    block_label: &'static str,
+    face_number: &'static str,
+    world_face: &'static str,
+    world_bounds: String,
+    uv_bounds: String,
+    opaque_triangles: usize,
+    translucent_triangles: usize,
+    candidate_pixels: usize,
+    drawn_pixels: usize,
+    visible_pixels: usize,
+}
+
+impl ObserverDebugPreviewStats {
+    fn note_triangle(&mut self, info: &ObserverDebugTriangleInfo, mode: PreviewRasterMode) {
+        let entry = self
+            .groups
+            .entry(info.group_key.clone())
+            .or_insert_with(|| ObserverDebugPreviewGroupStats {
+                block_label: info.block_label,
+                face_number: info.face_number,
+                world_face: info.world_face,
+                world_bounds: info.world_bounds.clone(),
+                uv_bounds: info.uv_bounds.clone(),
+                opaque_triangles: 0,
+                translucent_triangles: 0,
+                candidate_pixels: 0,
+                drawn_pixels: 0,
+                visible_pixels: 0,
+            });
+        match mode {
+            PreviewRasterMode::Opaque => entry.opaque_triangles += 1,
+            PreviewRasterMode::Translucent => entry.translucent_triangles += 1,
+        }
+    }
+
+    fn note_candidate(&mut self, info: &ObserverDebugTriangleInfo) {
+        if let Some(entry) = self.groups.get_mut(&info.group_key) {
+            entry.candidate_pixels += 1;
+        }
+    }
+
+    fn note_drawn(&mut self, info: &ObserverDebugTriangleInfo) {
+        if let Some(entry) = self.groups.get_mut(&info.group_key) {
+            entry.drawn_pixels += 1;
+        }
+    }
+
+    fn note_depth_result(&mut self, info: &ObserverDebugTriangleInfo, visible: bool) {
+        if visible && let Some(entry) = self.groups.get_mut(&info.group_key) {
+            entry.visible_pixels += 1;
+        }
+    }
+
+    fn log_summary(&self) {
+        let mut groups = self.groups.values().cloned().collect::<Vec<_>>();
+        groups.sort_by(|left, right| {
+            left.block_label
+                .cmp(right.block_label)
+                .then(left.face_number.cmp(right.face_number))
+        });
+        for group in groups {
+            println!(
+                "[LBA_FULL_MODE_V2_OBSERVER_PREVIEW] block={} face={} world_face={} opaque_triangles={} translucent_triangles={} candidate_pixels={} drawn_pixels={} visible_pixels={} world_bounds={} uv_bounds={}",
+                group.block_label,
+                group.face_number,
+                group.world_face,
+                group.opaque_triangles,
+                group.translucent_triangles,
+                group.candidate_pixels,
+                group.drawn_pixels,
+                group.visible_pixels,
+                group.world_bounds,
+                group.uv_bounds,
+            );
+        }
+    }
+}
+
+fn classify_chest_debug_triangle(vertices: [&GpuVertex; 3]) -> Option<ChestDebugTriangleInfo> {
+    std::env::var_os("LBA_FULL_MODE_V2_CHEST_DEBUG")?;
+    let positions = vertices.map(|vertex| vertex.position);
+    let centroid = [
+        (positions[0][0] + positions[1][0] + positions[2][0]) / 3.0,
+        (positions[0][1] + positions[1][1] + positions[2][1]) / 3.0,
+        (positions[0][2] + positions[1][2] + positions[2][2]) / 3.0,
+    ];
+    let ab = [
+        positions[1][0] - positions[0][0],
+        positions[1][1] - positions[0][1],
+        positions[1][2] - positions[0][2],
+    ];
+    let ac = [
+        positions[2][0] - positions[0][0],
+        positions[2][1] - positions[0][1],
+        positions[2][2] - positions[0][2],
+    ];
+    let normal = [
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    ];
+    let within_block = |origin: [f32; 3]| {
+        centroid[0] >= origin[0] - 0.01
+            && centroid[0] <= origin[0] + 1.01
+            && centroid[1] >= origin[1] - 0.01
+            && centroid[1] <= origin[1] + 1.01
+            && centroid[2] >= origin[2] - 0.01
+            && centroid[2] <= origin[2] + 1.01
+    };
+    let world_face = if normal[0] > 0.0001 && normal[0].abs() >= normal[2].abs() {
+        Some("east")
+    } else if normal[0] < -0.0001 && normal[0].abs() >= normal[2].abs() {
+        Some("west")
+    } else {
+        None
+    }?;
+    let (block_label, face_role, pair_half) = match world_face {
+        "east" if within_block([47.0, 1.0, 114.0]) => ("C49-6", "F", "R"),
+        "west" if within_block([47.0, 1.0, 114.0]) => ("C49-6", "B", "L"),
+        "east" if within_block([47.0, 1.0, 115.0]) => ("C55-6", "F", "L"),
+        "west" if within_block([47.0, 1.0, 115.0]) => ("C55-6", "B", "R"),
+        "west" if within_block([33.0, 1.0, 115.0]) => ("C54-5", "F", "L"),
+        "east" if within_block([33.0, 1.0, 115.0]) => ("C54-5", "B", "R"),
+        "west" if within_block([33.0, 1.0, 116.0]) => ("C56-5", "F", "R"),
+        "east" if within_block([33.0, 1.0, 116.0]) => ("C56-5", "B", "L"),
+        _ => return None,
+    };
+    let candidate_label = classify_chest_debug_candidate(face_role, positions);
+    Some(ChestDebugTriangleInfo {
+        block_label,
+        face_role,
+        pair_half,
+        world_face,
+        candidate_label,
+        group_key: format!(
+            "{}|{}-{}|{}|{}|{}|{}",
+            block_label,
+            face_role,
+            pair_half,
+            candidate_label,
+            world_face,
+            quantized_world_bounds(positions),
+            quantized_uv_bounds(vertices),
+        ),
+        world_bounds: quantized_world_bounds(positions),
+        uv_bounds: quantized_uv_bounds(vertices),
+    })
+}
+
+fn classify_observer_debug_triangle(
+    vertices: [&GpuVertex; 3],
+) -> Option<ObserverDebugTriangleInfo> {
+    std::env::var_os("LBA_FULL_MODE_V2_OBSERVER_DEBUG")?;
+    let positions = vertices.map(|vertex| vertex.position);
+    let centroid = [
+        (positions[0][0] + positions[1][0] + positions[2][0]) / 3.0,
+        (positions[0][1] + positions[1][1] + positions[2][1]) / 3.0,
+        (positions[0][2] + positions[1][2] + positions[2][2]) / 3.0,
+    ];
+    let Some(block_label) = observer_debug_block_label(centroid) else {
+        return None;
+    };
+    let world_face = dominant_world_face_from_positions(positions)?;
+    let face_number = match world_face {
+        "up" => "1",
+        "down" => "2",
+        "north" => "3",
+        "south" => "4",
+        "west" => "5",
+        "east" => "6",
+        _ => return None,
+    };
+    if !matches!(
+        (block_label, face_number),
+        ("O05", "1") | ("O06", "1") | ("O11", "1") | ("O12", "1")
+    ) {
+        return None;
+    }
+    Some(ObserverDebugTriangleInfo {
+        block_label,
+        face_number,
+        world_face,
+        group_key: format!("{block_label}-{face_number}"),
+        world_bounds: quantized_world_bounds(positions),
+        uv_bounds: quantized_uv_bounds(vertices),
+    })
+}
+
+fn observer_debug_block_label(centroid: [f32; 3]) -> Option<&'static str> {
+    if (centroid[1] - 2.025).abs() > 0.15 {
+        return None;
+    }
+    const TARGETS: [(&str, f32, f32); 4] = [
+        ("O05", 54.0, 5.0),
+        ("O06", 66.0, 5.0),
+        ("O11", 54.0, 15.0),
+        ("O12", 66.0, 15.0),
+    ];
+    TARGETS
+        .into_iter()
+        .find(|(_, x, z)| (centroid[0] - *x).abs() <= 1.2 && (centroid[2] - *z).abs() <= 1.2)
+        .map(|(label, _, _)| label)
+}
+
+fn dominant_world_face_from_positions(positions: [[f32; 3]; 3]) -> Option<&'static str> {
+    let ab = [
+        positions[1][0] - positions[0][0],
+        positions[1][1] - positions[0][1],
+        positions[1][2] - positions[0][2],
+    ];
+    let ac = [
+        positions[2][0] - positions[0][0],
+        positions[2][1] - positions[0][1],
+        positions[2][2] - positions[0][2],
+    ];
+    let normal = [
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    ];
+    let abs = [normal[0].abs(), normal[1].abs(), normal[2].abs()];
+    if abs[0] <= f32::EPSILON && abs[1] <= f32::EPSILON && abs[2] <= f32::EPSILON {
+        return None;
+    }
+    Some(if abs[1] >= abs[0] && abs[1] >= abs[2] {
+        if normal[1] >= 0.0 { "up" } else { "down" }
+    } else if abs[0] >= abs[2] {
+        if normal[0] >= 0.0 { "east" } else { "west" }
+    } else if normal[2] >= 0.0 {
+        "south"
+    } else {
+        "north"
+    })
+}
+
+fn log_chest_front_triangle(
+    stage: &str,
+    vertices: [&GpuVertex; 3],
+    debug: Option<&ChestDebugTriangleInfo>,
+) {
+    let Some(debug) = debug else {
+        return;
+    };
+    println!(
+        "[LBA_FULL_MODE_V2_CHEST_NATIVE] stage={} block={} target={} candidate={} world_face={} positions={} uvs={} world_bounds={} uv_bounds={} use_texture={:.1}/{:.1}/{:.1}",
+        stage,
+        debug.block_label,
+        debug.target_label(),
+        debug.candidate_label,
+        debug.world_face,
+        format_gpu_positions(vertices),
+        format_gpu_uvs(vertices),
+        debug.world_bounds,
+        debug.uv_bounds,
+        vertices[0].use_texture,
+        vertices[1].use_texture,
+        vertices[2].use_texture,
+    );
+}
+
+fn log_chest_front_gpu_vertices(stage: &str, vertices: &[GpuVertex], indices: &[u32]) {
+    if std::env::var_os("LBA_FULL_MODE_V2_CHEST_DEBUG").is_none() {
+        return;
+    }
+    for tri in indices.chunks_exact(3) {
+        let Some(v0) = vertices.get(tri[0] as usize) else {
+            continue;
+        };
+        let Some(v1) = vertices.get(tri[1] as usize) else {
+            continue;
+        };
+        let Some(v2) = vertices.get(tri[2] as usize) else {
+            continue;
+        };
+        let debug = classify_chest_debug_triangle([v0, v1, v2]);
+        log_chest_front_triangle(stage, [v0, v1, v2], debug.as_ref());
+    }
+}
+
+fn classify_chest_debug_candidate(face_role: &str, positions: [[f32; 3]; 3]) -> &'static str {
+    let min_y = positions.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+    let max_y = positions
+        .iter()
+        .map(|p| p[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_z = positions.iter().map(|p| p[2]).fold(f32::INFINITY, f32::min);
+    let max_z = positions
+        .iter()
+        .map(|p| p[2])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let y_span = max_y - min_y;
+    let z_span = max_z - min_z;
+    match (face_role, y_span, z_span, min_y) {
+        ("F", y, z, min) if y >= 0.5 && z >= 0.8 && min < 1.1 => "base_front_candidate_A",
+        ("B", y, z, min) if y >= 0.5 && z >= 0.8 && min < 1.1 => "base_back_candidate_A",
+        ("F", y, z, min) if y >= 0.2 && z >= 0.8 && min >= 1.5 => "lid_front_candidate_B",
+        ("B", y, z, min) if y >= 0.2 && z >= 0.8 && min >= 1.5 => "lid_back_candidate_B",
+        ("F", y, z, _) if y <= 0.3 && z <= 0.1 => "lock_front_candidate_C",
+        ("B", y, z, _) if y <= 0.3 && z <= 0.1 => "lock_back_candidate_C",
+        ("F", ..) => "other_front_candidate_Z",
+        _ => "other_back_candidate_Z",
+    }
+}
+
+fn format_gpu_positions(vertices: [&GpuVertex; 3]) -> String {
+    format!(
+        "[{:?},{:?},{:?}]",
+        vertices[0].position, vertices[1].position, vertices[2].position
+    )
+}
+
+fn format_gpu_uvs(vertices: [&GpuVertex; 3]) -> String {
+    format!(
+        "[{:?},{:?},{:?}]",
+        vertices[0].uv, vertices[1].uv, vertices[2].uv
+    )
+}
+
+fn quantized_world_bounds(positions: [[f32; 3]; 3]) -> String {
+    let min_x = positions.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+    let max_x = positions
+        .iter()
+        .map(|p| p[0])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = positions.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+    let max_y = positions
+        .iter()
+        .map(|p| p[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_z = positions.iter().map(|p| p[2]).fold(f32::INFINITY, f32::min);
+    let max_z = positions
+        .iter()
+        .map(|p| p[2])
+        .fold(f32::NEG_INFINITY, f32::max);
+    format!(
+        "[{:.4}..{:.4},{:.4}..{:.4},{:.4}..{:.4}]",
+        min_x, max_x, min_y, max_y, min_z, max_z
+    )
+}
+
+fn quantized_uv_bounds(vertices: [&GpuVertex; 3]) -> String {
+    let min_u = vertices
+        .iter()
+        .map(|vertex| vertex.uv[0])
+        .fold(f32::INFINITY, f32::min);
+    let max_u = vertices
+        .iter()
+        .map(|vertex| vertex.uv[0])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_v = vertices
+        .iter()
+        .map(|vertex| vertex.uv[1])
+        .fold(f32::INFINITY, f32::min);
+    let max_v = vertices
+        .iter()
+        .map(|vertex| vertex.uv[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    format!("[{:.6}..{:.6},{:.6}..{:.6}]", min_u, max_u, min_v, max_v)
 }
 
 fn edge_preview(a: [f32; 3], b: [f32; 3], x: f32, y: f32) -> f32 {
@@ -6902,12 +9733,12 @@ fn run_headless_prebuild(args: &ViewerArgs, total_trace_started_at: Instant) -> 
             if let Some(error) = result.error {
                 bail!("headless cache write failed: {error}");
             }
-            if let Some(chunk) = result.manifest_chunk {
-                if cache_written_keys.insert(result.mesh.key) {
-                    total_chunk_bytes = total_chunk_bytes.saturating_add(result.bytes);
-                    manifest_chunks.push(chunk);
-                    writer_completed_chunks += 1;
-                }
+            if let Some(chunk) = result.manifest_chunk
+                && cache_written_keys.insert(result.mesh.key)
+            {
+                total_chunk_bytes = total_chunk_bytes.saturating_add(result.bytes);
+                manifest_chunks.push(chunk);
+                writer_completed_chunks += 1;
             }
         }
         (pipeline.chunk_dir_name, pipeline.chunk_dir)
@@ -7178,7 +10009,7 @@ pub fn run() -> Result<()> {
         return Ok(());
     };
     println!(
-        "[NATIVE_VIEWER] startup file={} chunk_size={} probe_scene={} prebuild_only={} auto_exit_seconds={} prebuild_before_show={} cache_input={} ready_file={} cache_file={} preview_output={} build_workers={} cpu_cache_max_chunks={} cpu_cache_max_bytes={} resident_max_chunks={} resident_max_bytes={} stress_limits={} preview_mode={} preview_spin={} display_mode={} launch_mode={} embed_parent_hwnd={}",
+        "[NATIVE_VIEWER] startup file={} chunk_size={} probe_scene={} prebuild_only={} auto_exit_seconds={} prebuild_before_show={} cache_input={} ready_file={} cache_file={} preview_output={} build_workers={} cpu_cache_max_chunks={} cpu_cache_max_bytes={} resident_max_chunks={} resident_max_bytes={} stress_limits={} preview_mode={} preview_spin={} display_mode={} basic_lighting={} basic_shadows={} shadow_debug={} shadow_debug_view={} shadow_force_test={} launch_mode={} embed_parent_hwnd={}",
         args.input
             .as_deref()
             .map(|path| path.display().to_string())
@@ -7215,6 +10046,11 @@ pub fn run() -> Result<()> {
         args.preview_mode,
         args.preview_spin,
         args.display_mode.label(),
+        args.basic_lighting,
+        args.basic_shadows,
+        args.shadow_debug,
+        args.shadow_debug_view.label(),
+        args.shadow_force_test,
         if args.embed_parent_hwnd.is_some() {
             "embedded"
         } else {
@@ -7237,7 +10073,17 @@ pub fn run() -> Result<()> {
     }
     let scene = load_scene(&args)?;
     if let Some(output) = args.preview_output.as_deref() {
-        return render_offscreen_preview(&scene, output);
+        return render_offscreen_preview(
+            &scene,
+            output,
+            LightingConfig::from_args(
+                args.basic_lighting,
+                args.basic_shadows,
+                args.shadow_debug_view,
+                args.shadow_force_test,
+                scene.bounds,
+            ),
+        );
     }
     if args.probe_scene {
         probe_scene(&scene)?;
@@ -7315,13 +10161,13 @@ pub fn run() -> Result<()> {
                 WindowEvent::MouseWheel { delta, .. } => {
                     state.process_scroll(delta);
                 }
-                WindowEvent::KeyboardInput { event, .. } => {
-                    if event.state == ElementState::Pressed {
-                        match event.physical_key {
-                            PhysicalKey::Code(KeyCode::Escape) => event_loop_window_target.exit(),
-                            PhysicalKey::Code(KeyCode::KeyR) => state.reset_camera(),
-                            _ => {}
-                        }
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.state == ElementState::Pressed =>
+                {
+                    match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Escape) => event_loop_window_target.exit(),
+                        PhysicalKey::Code(KeyCode::KeyR) => state.reset_camera(),
+                        _ => {}
                     }
                 }
                 WindowEvent::RedrawRequested => {
@@ -7342,15 +10188,15 @@ pub fn run() -> Result<()> {
                 _ => {}
             },
             Event::AboutToWait => {
-                if let Some(auto_exit_after) = auto_exit_after {
-                    if viewer_started_at.elapsed() >= auto_exit_after {
-                        println!(
-                            "[NATIVE_VIEWER] auto_exit elapsed_seconds={} reason=auto_exit_seconds",
-                            auto_exit_after.as_secs()
-                        );
-                        event_loop_window_target.exit();
-                        return;
-                    }
+                if let Some(auto_exit_after) = auto_exit_after
+                    && viewer_started_at.elapsed() >= auto_exit_after
+                {
+                    println!(
+                        "[NATIVE_VIEWER] auto_exit elapsed_seconds={} reason=auto_exit_seconds",
+                        auto_exit_after.as_secs()
+                    );
+                    event_loop_window_target.exit();
+                    return;
                 }
                 window.request_redraw();
             }

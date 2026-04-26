@@ -174,6 +174,69 @@ def placements() -> list[BlockPlacement]:
             ),
         ]
     )
+
+    # W07: water against a waterlogged special plant block
+    out.extend(
+        [
+            BlockPlacement(
+                group="W07",
+                block_id="minecraft:water",
+                x=21,
+                y=1,
+                z=6,
+                properties={"level": "0"},
+                note="Water adjacent to waterlogged big dripleaf stem on the east face.",
+            ),
+            BlockPlacement(
+                group="W07",
+                block_id="minecraft:big_dripleaf_stem",
+                x=22,
+                y=1,
+                z=6,
+                properties={"facing": "north", "waterlogged": "true"},
+                note="Waterlogged special plant neighbor for W07.",
+            ),
+        ]
+    )
+
+    # W08: source water pair for same-fluid internal face culling
+    out.extend(
+        [
+            BlockPlacement(
+                group="W08",
+                block_id="minecraft:water",
+                x=26,
+                y=1,
+                z=6,
+                properties={"level": "0"},
+                note="First source water in same-fluid pair.",
+            ),
+            BlockPlacement(
+                group="W08",
+                block_id="minecraft:water",
+                x=27,
+                y=1,
+                z=6,
+                properties={"level": "0"},
+                note="Second source water in same-fluid pair.",
+            ),
+        ]
+    )
+
+    # W09: compact source pool for visual block-boundary checks
+    for dx in range(3):
+        for dz in range(3):
+            out.append(
+                BlockPlacement(
+                    group="W09",
+                    block_id="minecraft:water",
+                    x=32 + dx,
+                    y=1,
+                    z=5 + dz,
+                    properties={"level": "0"},
+                    note="3x3 source-water pool; same-fluid internal sides should not create visible grid seams.",
+                )
+            )
     return out
 
 
@@ -227,6 +290,8 @@ def build_fixture() -> tuple[litemapy.Schematic, str]:
             "  W04: water next to glass",
             "  W05: water next to rail",
             "  W06: water next to redstone wire",
+            "  W07: water next to waterlogged big dripleaf stem",
+            "  W08: adjacent source water pair",
             "",
             f"Placed blocks: {len(items)}",
             f"Bounding box: width={width}, height={height}, length={length}",

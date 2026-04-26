@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "prompt_markdown": "data/ai-projection/prompt_config.md",
+  "max_region_axis": 128,
+  "max_operations": 128,
+  "max_estimated_non_air_blocks": 1000000,
+  "operations": [
+    "fill_box",
+    "hollow_box",
+    "floor",
+    "wall",
+    "pillar",
+    "cylinder",
+    "sphere",
+    "outline_box",
+    "checkerboard_floor",
+    "roof_gable",
+    "ring"
+  ],
+  "materials": ["single", "weighted_random"]
+}
