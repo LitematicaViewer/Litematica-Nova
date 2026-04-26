@@ -1,0 +1,23 @@
+Rail neighbor fixture layout
+
+Purpose:
+  Validate rail preserve-neighbor-faces semantics and smoke-check nearby special families.
+
+Columns:
+group	block_id	x	y	z	properties	note
+R01	minecraft:rail	1	1	1	shape=north_south,waterlogged=false	Central rail.
+R01	minecraft:stone	1	0	1	-	Down neighbor / support under rail.
+R01	minecraft:stone	1	2	1	-	Up neighbor above rail.
+R01	minecraft:stone	0	1	1	-	West neighbor facing rail.
+R01	minecraft:stone	2	1	1	-	East neighbor facing rail.
+R01	minecraft:stone	1	1	0	-	North neighbor facing rail.
+R01	minecraft:stone	1	1	2	-	South neighbor facing rail.
+S01	minecraft:glass	7	1	0	-	Glass smoke sample.
+S02	minecraft:stone	10	0	0	-	Support for repeater.
+S02	minecraft:repeater	10	1	0	delay=1,facing=east,locked=false,powered=false	Repeater smoke sample.
+S03	minecraft:stone	13	0	0	-	Support for redstone wire.
+S03	minecraft:redstone_wire	13	1	0	east=none,north=none,power=5,south=none,west=none	Redstone wire smoke sample.
+S04	minecraft:hopper	16	1	0	enabled=true,facing=down	Hopper smoke sample.
+S05	minecraft:chest	19	1	0	facing=south,type=single,waterlogged=false	Chest smoke sample.
+S06	minecraft:barrel	22	1	0	facing=up,open=false	Barrel smoke sample.
+S07	minecraft:piston	25	1	0	extended=false,facing=east	Static piston smoke sample.
