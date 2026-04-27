@@ -213,7 +213,7 @@ export default function App() {
                     onClick={() => setSidebarExpanded((value) => !value)}
                 >
                     <span className="hamburger" aria-hidden="true" />
-                    {sidebarExpanded ? <strong>Litematica BA</strong> : null}
+                    {sidebarExpanded ? <strong>Litematica Nova</strong> : null}
                 </button>
                 <nav className="nav-list" aria-label="主导航">
                     {topNavKeys.map((key) => (

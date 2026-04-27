@@ -10,7 +10,7 @@ struct AppSnapshot {
 #[tauri::command]
 fn get_app_snapshot() -> AppSnapshot {
     AppSnapshot {
-        name: "LitematicaBA".to_string(),
+        name: "LitematicaNova".to_string(),
         active_file: None,
         theme: "QTDefault".to_string(),
     }

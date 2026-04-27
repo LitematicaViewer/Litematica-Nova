@@ -25,6 +25,7 @@
     border-width: 0 0 1px;
     border-color: ThreeDShadow;
     text-align: left;
+    color: #ffffff;
     background: var(--ln-navigation-background-color, #ffffff);/* 将弃用于：按钮样式开发后 */
 }
 
