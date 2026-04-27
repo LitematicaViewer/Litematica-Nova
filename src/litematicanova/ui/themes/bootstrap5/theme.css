@@ -1,4 +1,5 @@
 @import "./nav-icons.css";
+@import "./widget/button.css";
 @import "./widget/nav.css";
 @import "./widget/form.css";
 @import "./widget/table.css";
@@ -6,5 +7,5 @@
 
 :root {
     --ln-ui-background-color: #ffffff;
-    --ln-navigation-background-color: #0d6efd;
+    --ln-navigation-background-color: #722ef9;
 }

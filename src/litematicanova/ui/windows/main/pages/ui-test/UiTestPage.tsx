@@ -26,6 +26,79 @@ export function UiTestPage() {
                     </div>
                 </FormRow>
             </fieldset>
+            <fieldset>
+                <legend>表格</legend>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>缩略图</th>
+                            <th>文字</th>
+                            <th>数据</th>
+                            <th>空列</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>（目前为空）</td>
+                            <td>常规数字</td>
+                            <td>999</td>
+                            <td></td>
+                            <td>
+                                <div className="button-row">
+                                    <button type="button">测试按钮1</button>
+                                    <button type="button">测试按钮2</button>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>（目前为空）</td>
+                            <td>大数字</td>
+                            <td>99,999</td>
+                            <td></td>
+                            <td>
+                                <div className="button-row">
+                                    <button type="button" disabled>不可用按钮按钮1</button>
+                                    <button type="button">测试按钮2</button>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>（目前为空）</td>
+                            <td>小数点</td>
+                            <td>9.99</td>
+                            <td></td>
+                            <td>
+                                <div className="button-row">
+                                    <button type="button" aria-pressed="true">可选中按钮1</button>
+                                    <button type="button">测试按钮2</button>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>（目前为空）</td>
+                            <td>百分比</td>
+                            <td>99%</td>
+                            <td></td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>（目前为空）</td>
+                            <td>带小数点的百分比</td>
+                            <td>99.99%</td>
+                            <td></td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td>（目前为空）</td>
+                            <td>货币</td>
+                            <td>$99.00</td>
+                            <td></td>
+                            <td></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </fieldset>
         </section>
     );
 }

@@ -5,7 +5,6 @@
     width: 220px;
     min-width: 220px;
     flex-direction: column;
-    border-right: 1px solid ThreeDShadow;
     background: var(--ln-navigation-background-color, #f7f7f7);
 }
 
@@ -27,6 +26,7 @@
     min-height: 48px;
     max-height: 48px;
     align-items: center;
+    justify-content: flex-start;
     gap: 12px;
     padding: 0 16px;
     border: none;
@@ -50,7 +50,9 @@
 }
 
 /* 普通导航项 */
-.nav-item {
+.nav-item,
+.nav-item[aria-pressed="true"],
+.nav-item-active {
     background: transparent;
 }
 
@@ -102,28 +104,7 @@
 
 /* 折叠侧边栏中的激活导航项 */
 .sidebar-collapsed .nav-item-active {
-    border-right: none;
     padding-left: 0;
-}
-
-/* 汉堡菜单图标 */
-.hamburger {
-    position: relative;
-    width: 16px;
-    height: 12px;
-    border-top: 2px solid currentColor;
-    border-bottom: 2px solid currentColor;
-}
-
-/* 汉堡菜单图标的中间横线 */
-.hamburger::after {
-    position: absolute;
-    top: 3px;
-    left: 0;
-    width: 16px;
-    height: 2px;
-    background: currentColor;
-    content: "";
 }
 
 @media (max-width: 760px) {

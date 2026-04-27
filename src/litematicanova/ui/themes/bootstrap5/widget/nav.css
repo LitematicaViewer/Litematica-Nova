@@ -4,7 +4,6 @@
     width: 220px;
     min-width: 220px;
     flex-direction: column;
-    border-right: 1px solid ThreeDShadow;
     background: var(--ln-navigation-background-color, #ffffff);
 }
 
@@ -22,9 +21,21 @@
     align-items: center;
     gap: 12px;
     padding: 0 16px;
-    border-width: 0 0 1px;
-    border-color: ThreeDShadow;
+    border: none;
+    background: transparent;
+    color: #ffffff;
     text-align: left;
+}
+
+.nav-expand:hover,
+.nav-item:hover {
+    background: rgb(255 255 255 / 50%);
+    color: var(--ln-navigation-background-color);
+}
+
+.nav-item-active {
+    background: #ffffff;
+    color: var(--ln-navigation-background-color);
 }
 
 .sidebar-collapsed .nav-expand,
@@ -43,40 +54,19 @@
     margin-top: auto;
 }
 
-.nav-icon {
+.theme-bootstrap5 .nav-icon {
     display: block;
     flex: 0 0 auto;
     width: 16px;
     height: 16px;
+    filter: brightness(0) invert(1);
     object-fit: contain;
 }
 
-.nav-item-active {
-    border-left: 4px solid Highlight;
-    padding-left: 12px;
-}
-
-.sidebar-collapsed .nav-item-active {
-    border-right: 4px solid transparent;
-    padding-left: 0;
-}
-
-.hamburger {
-    position: relative;
-    width: 16px;
-    height: 12px;
-    border-top: 2px solid currentColor;
-    border-bottom: 2px solid currentColor;
-}
-
-.hamburger::after {
-    position: absolute;
-    top: 3px;
-    left: 0;
-    width: 16px;
-    height: 2px;
-    background: currentColor;
-    content: "";
+.theme-bootstrap5 .nav-expand:hover .nav-icon,
+.theme-bootstrap5 .nav-item:hover .nav-icon,
+.theme-bootstrap5 .nav-item-active .nav-icon {
+    filter: brightness(0) saturate(100%) invert(20%) sepia(96%) saturate(4329%) hue-rotate(255deg) brightness(100%) contrast(96%);
 }
 
 @media (max-width: 760px) {

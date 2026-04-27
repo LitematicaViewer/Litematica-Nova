@@ -212,7 +212,13 @@ export default function App() {
                     title={sidebarExpanded ? "收起侧栏" : "展开侧栏"}
                     onClick={() => setSidebarExpanded((value) => !value)}
                 >
-                    <span className="hamburger" aria-hidden="true" />
+                    <img
+                        className="nav-icon nav-icon-hamburger"
+                        src={navIconUrl(snapshotTheme, "hamburger")}
+                        alt=""
+                        aria-hidden="true"
+                        onError={(event) => handleNavIconError(event, "hamburger")}
+                    />
                     {sidebarExpanded ? <strong>Litematica Nova</strong> : null}
                 </button>
                 <nav className="nav-list" aria-label="主导航">
