@@ -1,0 +1,101 @@
+.sidebar {
+    display: flex;
+    flex: 0 0 220px;
+    width: 220px;
+    min-width: 220px;
+    flex-direction: column;
+    border-right: 1px solid ThreeDShadow;
+    background: var(--ln-navigation-background-color, #ffffff);
+}
+
+.sidebar-collapsed {
+    flex-basis: 48px;
+    width: 48px;
+    min-width: 48px;
+}
+
+.nav-expand,
+.nav-item {
+    display: flex;
+    width: 100%;
+    min-height: 48px;
+    align-items: center;
+    gap: 12px;
+    padding: 0 16px;
+    border-width: 0 0 1px;
+    border-color: ThreeDShadow;
+    text-align: left;
+    background: var(--ln-navigation-background-color, #ffffff);/* 将弃用于：按钮样式开发后 */
+}
+
+.sidebar-collapsed .nav-expand,
+.sidebar-collapsed .nav-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+}
+
+.nav-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.nav-list-bottom {
+    margin-top: auto;
+}
+
+.nav-icon {
+    display: block;
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+}
+
+.nav-item-active {
+    border-left: 4px solid Highlight;
+    padding-left: 12px;
+}
+
+.sidebar-collapsed .nav-item-active {
+    border-right: 4px solid transparent;
+    padding-left: 0;
+}
+
+.hamburger {
+    position: relative;
+    width: 16px;
+    height: 12px;
+    border-top: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+}
+
+.hamburger::after {
+    position: absolute;
+    top: 3px;
+    left: 0;
+    width: 16px;
+    height: 2px;
+    background: currentColor;
+    content: "";
+}
+
+@media (max-width: 760px) {
+    .sidebar {
+        flex-basis: 48px;
+        width: 48px;
+        min-width: 48px;
+    }
+
+    .sidebar .nav-expand,
+    .sidebar .nav-item {
+        justify-content: center;
+        gap: 0;
+        padding: 0;
+    }
+
+    .sidebar .nav-expand strong,
+    .sidebar .nav-item .nav-label {
+        display: none;
+    }
+}

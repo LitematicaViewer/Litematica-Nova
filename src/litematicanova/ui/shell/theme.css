@@ -1,0 +1,10 @@
+@import "./nav-icons.css";
+@import "./widget/nav.css";
+@import "./widget/form.css";
+@import "./widget/table.css";
+@import "./widget/text.css";
+
+:root {
+    --ln-ui-background-color: #ffffff;
+    --ln-navigation-background-color: #ffffff;
+}

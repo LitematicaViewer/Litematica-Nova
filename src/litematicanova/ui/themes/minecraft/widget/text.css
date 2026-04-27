@@ -1,0 +1,12 @@
+@font-face {
+    font-family: "Unifont";
+    src: url("../resource/font/unifont-15.0.01.ttf") format("truetype");
+    font-style: normal;
+    font-weight: normal;
+}
+
+:root {
+    --ln-body-font-family: "Unifont", monospace;
+    --ln-body-font-size: 16px;
+    --ln-body-text-color: #ffffff;
+}

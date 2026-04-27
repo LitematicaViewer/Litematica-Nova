@@ -284,6 +284,9 @@ def _resolve_binary(name: str) -> Path:
             [
                 repo / "core" / "target" / "debug" / filename,
                 repo / "core" / "target" / "release" / filename,
+                repo / "desktop-ui" / "tauri" / "target" / "debug" / filename,
+                repo / "desktop-ui" / "tauri" / "target" / "release" / filename,
+                repo / "desktop-ui" / "tauri" / "binaries" / filename,
                 repo / "desktop-ui" / "src-tauri" / "target" / "debug" / filename,
                 repo / "desktop-ui" / "src-tauri" / "target" / "release" / filename,
                 repo / "desktop-ui" / "src-tauri" / "binaries" / filename,

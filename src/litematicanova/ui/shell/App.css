@@ -1,0 +1,317 @@
+:root {
+    color: var(--ln-body-text-color, #000000);
+    background: var(--ln-ui-background-color, #ffffff);
+    font-family: var(--ln-body-font-family, system-ui, "Segoe UI", sans-serif);
+    font-size: var(--ln-body-font-size, 14px);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+}
+
+button {
+    min-height: 28px;
+}
+
+input,
+select {
+    min-width: 0;
+}
+
+h1,
+h2,
+p {
+    margin-top: 0;
+}
+
+fieldset {
+    min-width: 0;
+    margin: 0 0 12px;
+    padding: 12px;
+    border: 1px solid ThreeDShadow;
+}
+
+legend {
+    padding: 0 4px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th,
+td {
+    padding: 6px 8px;
+    border: 1px solid ThreeDShadow;
+    text-align: left;
+}
+
+.app-shell {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+
+.content {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+.page-pad {
+    height: 100%;
+    padding: 12px;
+    overflow: auto;
+}
+
+.home-page {
+    display: grid;
+    height: 100%;
+    padding: 32px;
+    place-items: center;
+}
+
+.home-center {
+    display: grid;
+    width: min(620px, 100%);
+    justify-items: center;
+    gap: 12px;
+    text-align: center;
+}
+
+.home-center h1 {
+    font-size: 22px;
+}
+
+.home-center button {
+    width: 220px;
+    min-height: 40px;
+}
+
+.toolbar,
+.filter-row,
+.button-row,
+.file-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.toolbar h2 {
+    margin: 0;
+}
+
+.toolbar-spacer {
+    flex: 1;
+}
+
+.filter-row input,
+.filter-row select,
+.file-row .path-label {
+    flex: 1;
+}
+
+.muted {
+    color: GrayText;
+}
+
+.empty-state {
+    display: grid;
+    min-height: 260px;
+    place-items: center;
+    color: GrayText;
+    text-align: center;
+}
+
+.properties-page {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+}
+
+.scroll-body {
+    flex: 1;
+    min-height: 0;
+    padding: 16px;
+    overflow: auto;
+}
+
+.footer-actions {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 8px;
+    padding: 8px 16px 16px;
+    border-top: 1px solid ThreeDShadow;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.form-row > label {
+    text-align: right;
+}
+
+.form-row input,
+.form-row select {
+    width: 100%;
+}
+
+.two-column {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+    gap: 12px;
+}
+
+.side-stack {
+    min-width: 0;
+}
+
+.inline-fields {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.inline-fields label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.preview-box {
+    display: grid;
+    width: 140px;
+    height: 140px;
+    place-items: center;
+    border: 1px solid ThreeDShadow;
+    background: var(--ln-ui-background-color, #ffffff);
+    color: GrayText;
+}
+
+.render-placeholder,
+.render-viewport,
+.slice-canvas {
+    display: grid;
+    min-height: 180px;
+    place-items: center;
+    border: 1px solid ThreeDShadow;
+    background: var(--ln-ui-background-color, #ffffff);
+    color: GrayText;
+    text-align: center;
+}
+
+.slice-canvas {
+    min-height: 320px;
+    background-image:
+        linear-gradient(to right, ThreeDShadow 1px, transparent 1px),
+        linear-gradient(to bottom, ThreeDShadow 1px, transparent 1px);
+    background-size: 32px 32px;
+}
+
+.wide-button {
+    width: 100%;
+}
+
+.layer-control {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    gap: 8px;
+    align-items: center;
+}
+
+.render-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(220px, 2fr);
+    gap: 12px;
+    min-height: 0;
+}
+
+.render-main {
+    min-width: 0;
+}
+
+.render-viewport {
+    min-height: 330px;
+}
+
+.render-settings {
+    align-self: start;
+}
+
+.direction-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    width: fit-content;
+    margin: 8px auto 12px;
+}
+
+.direction-grid button {
+    width: 52px;
+    height: 52px;
+}
+
+.options-page {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+}
+
+.options-page fieldset {
+    margin-bottom: 0;
+}
+
+.options-page label {
+    display: block;
+    margin-bottom: 8px;
+}
+
+.visually-hidden {
+    position: fixed;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+@media (max-width: 760px) {
+    .two-column,
+    .render-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+
+    .form-row > label {
+        text-align: left;
+    }
+}
