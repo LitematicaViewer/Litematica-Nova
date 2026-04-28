@@ -1,0 +1,29 @@
+:root {
+    --ln-check-size: 16px;
+    --ln-check-label-gap: 6px;
+    --ln-check-label-min-height: 20px;
+}
+
+label:has(> input[type="checkbox"]),
+label:has(> input[type="radio"]) {
+    display: inline-flex;
+    min-height: var(--ln-check-label-min-height);
+    align-items: center;
+    gap: var(--ln-check-label-gap);
+    vertical-align: middle;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+    flex: 0 0 auto;
+    width: var(--ln-check-size);
+    height: var(--ln-check-size);
+    min-width: var(--ln-check-size);
+    margin: 0;
+    vertical-align: middle;
+}
+
+.form-row input[type="checkbox"],
+.form-row input[type="radio"] {
+    width: var(--ln-check-size);
+}

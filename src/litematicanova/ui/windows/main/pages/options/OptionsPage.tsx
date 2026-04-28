@@ -23,15 +23,15 @@ export function OptionsPage({ theme, onThemeChange }: OptionsPageProps) {
                         <option>Minecraft</option>
                     </select>
                 </FormRow>
-                <label><input type="checkbox" /> 显示磁贴网格（仅影响可拖拽磁贴区域）</label>
+                <label className="setting-row"><input type="checkbox" /> 显示磁贴网格（仅影响可拖拽磁贴区域）</label>
                 <FormRow label="自动放置磁贴优先列数："><input type="number" min="1" max="64" defaultValue="12" /></FormRow>
                 <FormRow label="磁贴视图右侧留白："><input type="number" min="0" max="300" defaultValue="64" /></FormRow>
             </fieldset>
             <fieldset>
                 <legend>调试</legend>
-                <label><input type="checkbox" defaultChecked /> 在侧栏显示「UI 测试」入口</label>
-                <label><input type="checkbox" /> 显示控件信息（已弃用，现在按下F12即可查看控件信息）</label>
-                <label><input type="checkbox" /> 性能测试（洋红圆动画 + 左下角 FPS 浮层，均不拦截鼠标）</label>
+                <label className="setting-row"><input type="checkbox" defaultChecked /> 在侧栏显示「UI 测试」入口</label>
+                <label className="setting-row"><input type="checkbox" /> 显示控件信息（已弃用，现在按下F12即可查看控件信息）</label>
+                <label className="setting-row"><input type="checkbox" /> 性能测试（洋红圆动画 + 左下角 FPS 浮层，均不拦截鼠标）</label>
             </fieldset>
             <fieldset>
                 <legend>性能与预加载</legend>
@@ -47,11 +47,11 @@ export function OptionsPage({ theme, onThemeChange }: OptionsPageProps) {
             </fieldset>
             <fieldset>
                 <legend>游戏资源</legend>
-                <button type="button">管理游戏语言...</button>
+                <button className="wide-button" type="button">管理游戏语言...</button>
                 <p className="muted">语言将被用于：“材料列表”</p>
-                <button type="button">管理方块图标...</button>
+                <button className="wide-button" type="button">管理方块图标...</button>
                 <p className="muted">方块图标将被用于：“材料列表”、“分层”</p>
-                <button type="button">管理物品图标...</button>
+                <button className="wide-button" type="button">管理物品图标...</button>
                 <p className="muted">物品图标将被用于：“材料列表”、“分层”</p>
             </fieldset>
         </section>

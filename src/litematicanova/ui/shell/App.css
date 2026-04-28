@@ -293,6 +293,11 @@ td {
     margin-bottom: 8px;
 }
 
+label.setting-row:has(> input[type="checkbox"]),
+label.setting-row:has(> input[type="radio"]) {
+    display: flex;
+}
+
 .visually-hidden {
     position: fixed;
     width: 1px;
