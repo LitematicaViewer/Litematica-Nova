@@ -1,6 +1,12 @@
 import type { ActiveFile } from "../../../../shell/types";
 
-export function FlakePage({ activeFile }: { activeFile: ActiveFile | null }) {
+export function FlakePage({
+    activeFile,
+    onOpenMaterialList
+}: {
+    activeFile: ActiveFile | null;
+    onOpenMaterialList: () => void;
+}) {
     return (
         <section className="page-pad flake-page">
             <p>{activeFile ? activeFile.path : "请在“属性”页加载 .litematic。"}</p>
@@ -28,7 +34,7 @@ export function FlakePage({ activeFile }: { activeFile: ActiveFile | null }) {
             </fieldset>
             <div className="slice-canvas">请先在“渲染”页构建 3D cache。</div>
             <p className="muted">分层数据尚未加载。</p>
-            <button type="button">材料列表（当前区域）</button>
+            <button type="button" onClick={onOpenMaterialList}>材料列表（当前区域）</button>
         </section>
     );
 }

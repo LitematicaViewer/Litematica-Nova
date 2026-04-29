@@ -10,7 +10,7 @@ export function HomePage({
     return (
         <section className="home-page">
             <div className="home-center">
-                <h1>Litematica Blueprint Assistant</h1>
+                <h1>Litematica Nova</h1>
                 <p>
                     第一阶段主链：打开 .litematic、做结构分析、构建单一 3D cache，
                     再用同一份 cache 驱动嵌入式预览和弹窗 viewer。

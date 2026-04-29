@@ -8,7 +8,8 @@ export function UiTestPage() {
             <fieldset>
                 <legend>表单</legend>
                 <FormRow label="单选：">
-                    <label><input type="radio" name="sample" defaultChecked /> 选项 A</label>
+                    <label className="setting-row"><input type="radio" name="sample" defaultChecked /> 选项 A</label>
+                    <label className="setting-row"><input type="radio" name="sample" /> 选项 B</label>
                 </FormRow>
                 <FormRow label="复选：">
                     <label><input type="checkbox" /> 示例复选框</label>

@@ -298,6 +298,108 @@ label.setting-row:has(> input[type="radio"]) {
     display: flex;
 }
 
+.material-list-window {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    background: var(--ln-ui-background-color, #ffffff);
+}
+
+.material-list-panel {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    padding: 12px;
+    flex-direction: column;
+}
+
+.material-list-source-row select {
+    flex: 1;
+}
+
+.material-list-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.material-list-multiplier {
+    width: 88px;
+    flex: 0 0 auto !important;
+}
+
+.material-list-source-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.material-list-table-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    border: 1px solid ThreeDShadow;
+}
+
+.material-list-table {
+    border: 0;
+}
+
+.material-list-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--ln-ui-background-color, #ffffff);
+}
+
+.material-list-table th,
+.material-list-table td {
+    height: 40px;
+    vertical-align: middle;
+}
+
+.material-list-icon-col {
+    width: 48px;
+    text-align: center;
+}
+
+.material-list-total-col {
+    width: 120px;
+    text-align: right;
+}
+
+.material-list-icon-cell {
+    text-align: center;
+}
+
+.material-list-number {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.material-icon-placeholder {
+    display: inline-block;
+    width: 32px;
+    height: 32px;
+    border: 1px solid ThreeDShadow;
+    background:
+        linear-gradient(135deg, transparent 0 42%, ThreeDShadow 42% 58%, transparent 58% 100%),
+        linear-gradient(45deg, transparent 0 42%, ThreeDShadow 42% 58%, transparent 58% 100%);
+    opacity: 0.5;
+}
+
+.material-list-empty {
+    height: 180px;
+    color: GrayText;
+    text-align: center;
+}
+
+.material-list-status {
+    margin: 8px 0 0;
+}
+
 .visually-hidden {
     position: fixed;
     width: 1px;

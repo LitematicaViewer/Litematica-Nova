@@ -2,7 +2,13 @@ import type { ActiveFile } from "../../../../shell/types";
 
 const directions = ["西北", "北", "东北", "西", "顶视", "东", "西南", "南", "东南"];
 
-export function RenderPage({ activeFile }: { activeFile: ActiveFile | null }) {
+export function RenderPage({
+    activeFile,
+    onOpenMaterialList
+}: {
+    activeFile: ActiveFile | null;
+    onOpenMaterialList: () => void;
+}) {
     return (
         <section className="page-pad render-page">
             <p>{activeFile ? activeFile.path : "请在「属性」页加载 .litematic。"}</p>
@@ -20,7 +26,7 @@ export function RenderPage({ activeFile }: { activeFile: ActiveFile | null }) {
                         <select><option>全部区域</option></select>
                     </div>
                     <div className="button-row">
-                        <button type="button">材料列表（当前区域）</button>
+                        <button type="button" onClick={onOpenMaterialList}>材料列表（当前区域）</button>
                         <button type="button">截屏...</button>
                         <button type="button">导出...</button>
                     </div>

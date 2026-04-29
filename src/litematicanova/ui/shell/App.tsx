@@ -14,12 +14,16 @@ import {
     UiTestPage
 } from "../windows/main";
 import { emptyMetrics, loadedMetrics, navItems } from "./mockData";
+import {
+    announceThemeChange,
+    applyThemeStylesheet,
+    currentThemeId,
+    normalizeThemeId,
+    themeClassName,
+    themeResourceKey,
+    webDefaultThemeId
+} from "./themeRuntime";
 import type { ActiveFile, MetricRow, PageKey, Snapshot } from "./types";
-
-const webDefaultThemeId = "WebDefault";
-const legacyDefaultThemeId = "QTDefault";
-
-const themeResourceKey = (themeId: string) => themeId.trim().toLowerCase();
 
 type NavIconUrls = Record<string, string>;
 
@@ -58,64 +62,10 @@ const themedNavIconUrls = Object.entries(
     return themes;
 }, {});
 
-const themeStylesheetLinkId = "litematicanova-theme-css";
-
-const themeStylesheetUrls = Object.entries(
-    import.meta.glob<string>("../themes/*/theme.css", {
-        eager: true,
-        import: "default",
-        query: "?url"
-    })
-).reduce<Record<string, string>>((themes, [path, url]) => {
-    const themeKey = path.match(/\.\.\/themes\/([^/]+)\//)?.[1];
-    if (themeKey) {
-        themes[themeKey] = url;
-    }
-    return themes;
-}, {});
-
 const fallbackNavIconUrl = (iconName: string) => shellNavIconUrls[iconName] || shellNavIconUrls.undefined;
 
 const navIconUrl = (themeId: string, iconName: string) =>
     themedNavIconUrls[themeResourceKey(normalizeThemeId(themeId))]?.[iconName] || fallbackNavIconUrl(iconName);
-
-const normalizeThemeId = (themeId: string) => {
-    const trimmedThemeId = themeId.trim();
-    const themeKey = themeResourceKey(trimmedThemeId);
-    if (!trimmedThemeId || trimmedThemeId === legacyDefaultThemeId || themeKey === themeResourceKey(webDefaultThemeId)) {
-        return webDefaultThemeId;
-    }
-    return themeStylesheetUrls[themeKey] ? trimmedThemeId : webDefaultThemeId;
-};
-
-const themeClassName = (themeId: string) => {
-    const themeKey = themeResourceKey(normalizeThemeId(themeId));
-    return themeStylesheetUrls[themeKey] ? `theme-${themeKey}` : "";
-};
-
-const themeStylesheetUrl = (themeId: string) =>
-    themeStylesheetUrls[themeResourceKey(normalizeThemeId(themeId))];
-
-const applyThemeStylesheet = (themeId: string) => {
-    const href = themeStylesheetUrl(themeId);
-    const existingLink = document.getElementById(themeStylesheetLinkId) as HTMLLinkElement | null;
-
-    if (!href) {
-        existingLink?.remove();
-        return;
-    }
-
-    if (existingLink) {
-        existingLink.href = href;
-        return;
-    }
-
-    const link = document.createElement("link");
-    link.id = themeStylesheetLinkId;
-    link.rel = "stylesheet";
-    link.href = href;
-    document.head.appendChild(link);
-};
 
 const handleNavIconError = (event: SyntheticEvent<HTMLImageElement>, iconName: string) => {
     const fallbackUrl = fallbackNavIconUrl(iconName);
@@ -143,7 +93,7 @@ export default function App() {
     const [activePage, setActivePage] = useState<PageKey>("home");
     const [sidebarExpanded, setSidebarExpanded] = useState(true);
     const [activeFile, setActiveFile] = useState<ActiveFile | null>(null);
-    const [snapshotTheme, setSnapshotTheme] = useState(webDefaultThemeId);
+    const [snapshotTheme, setSnapshotTheme] = useState(currentThemeId());
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
     useEffect(() => {
@@ -167,6 +117,7 @@ export default function App() {
 
     useEffect(() => {
         applyThemeStylesheet(snapshotTheme);
+        announceThemeChange(snapshotTheme);
     }, [snapshotTheme]);
 
     const metrics = useMemo<MetricRow[]>(
@@ -194,6 +145,12 @@ export default function App() {
 
     const handleThemeChange = (themeId: string) => {
         setSnapshotTheme(normalizeThemeId(themeId));
+    };
+
+    const openMaterialListWindow = (filePath?: string | null) => {
+        invoke("open_material_list_window", { activeFile: filePath || null }).catch((error) => {
+            console.error("Failed to open material list window", error);
+        });
     };
 
     return (
@@ -259,10 +216,24 @@ export default function App() {
                     <PropertiesPage activeFile={activeFile} onOpenFile={triggerFileSelect} />
                 ) : null}
                 {activePage === "statistics" ? (
-                    <StatisticsPage activeFile={activeFile} metrics={metrics} />
+                    <StatisticsPage
+                        activeFile={activeFile}
+                        metrics={metrics}
+                        onOpenMaterialList={() => openMaterialListWindow(activeFile?.path)}
+                    />
                 ) : null}
-                {activePage === "flake" ? <FlakePage activeFile={activeFile} /> : null}
-                {activePage === "render" ? <RenderPage activeFile={activeFile} /> : null}
+                {activePage === "flake" ? (
+                    <FlakePage
+                        activeFile={activeFile}
+                        onOpenMaterialList={() => openMaterialListWindow(activeFile?.path)}
+                    />
+                ) : null}
+                {activePage === "render" ? (
+                    <RenderPage
+                        activeFile={activeFile}
+                        onOpenMaterialList={() => openMaterialListWindow(activeFile?.path)}
+                    />
+                ) : null}
                 {activePage === "replace" ? <PlaceholderPage title="替换" /> : null}
                 {activePage === "ui_test" ? <UiTestPage /> : null}
                 {activePage === "options" ? <OptionsPage theme={snapshotTheme} onThemeChange={handleThemeChange} /> : null}
