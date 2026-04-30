@@ -62,6 +62,12 @@ td {
     text-align: left;
 }
 
+.ui-test-thumb {
+    display: block;
+    width: auto;
+    height: auto;
+}
+
 .app-shell {
     display: flex;
     width: 100%;
@@ -115,7 +121,7 @@ td {
     min-width: 0;
     align-items: center;
     gap: 8px;
-    margin-bottom: 10px;
+    /* margin-bottom: 10px; */
 }
 
 .toolbar h2 {

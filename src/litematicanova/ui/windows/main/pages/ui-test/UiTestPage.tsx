@@ -1,6 +1,32 @@
+import { useEffect, useState } from "react";
+import { currentThemeId, subscribeToThemeChanges, themeResourceKey } from "../../../../shell/themeRuntime";
 import { FormRow } from "../common/FormRow";
 
+const fallbackThumbExampleUrl = new URL("../../../../shell/resource/thumb_example.png", import.meta.url).href;
+
+const themeThumbExampleUrls = Object.entries(
+    import.meta.glob<string>("../../../../themes/*/resource/thumb_example.png", {
+        eager: true,
+        import: "default",
+        query: "?url"
+    })
+).reduce<Record<string, string>>((thumbUrls, [path, url]) => {
+    const themeKey = path.match(/themes\/([^/]+)\//)?.[1];
+    if (themeKey) {
+        thumbUrls[themeKey] = url;
+    }
+    return thumbUrls;
+}, {});
+
+const thumbExampleUrlForTheme = (themeId: string) =>
+    themeThumbExampleUrls[themeResourceKey(themeId)] || fallbackThumbExampleUrl;
+
 export function UiTestPage() {
+    const [themeId, setThemeId] = useState(() => currentThemeId());
+    useEffect(() => subscribeToThemeChanges(setThemeId), []);
+
+    const thumbExampleUrl = thumbExampleUrlForTheme(themeId);
+    const renderThumbExample = () => <img className="ui-test-thumb" src={thumbExampleUrl} alt="示例缩略图" />;
     return (
         <section className="page-pad">
             <h2>UI 测试页（title）</h2>
@@ -41,7 +67,7 @@ export function UiTestPage() {
                     </thead>
                     <tbody>
                         <tr>
-                            <td>（目前为空）</td>
+                            <td>{renderThumbExample()}</td>
                             <td>常规数字</td>
                             <td>999</td>
                             <td></td>
@@ -53,19 +79,19 @@ export function UiTestPage() {
                             </td>
                         </tr>
                         <tr>
-                            <td>（目前为空）</td>
+                            <td>{renderThumbExample()}</td>
                             <td>大数字</td>
                             <td>99,999</td>
                             <td></td>
                             <td>
                                 <div className="button-row">
-                                    <button type="button" disabled>不可用按钮按钮1</button>
+                                    <button type="button" disabled>不可用按钮1</button>
                                     <button type="button">测试按钮2</button>
                                 </div>
                             </td>
                         </tr>
                         <tr>
-                            <td>（目前为空）</td>
+                            <td>{renderThumbExample()}</td>
                             <td>小数点</td>
                             <td>9.99</td>
                             <td></td>
@@ -77,21 +103,21 @@ export function UiTestPage() {
                             </td>
                         </tr>
                         <tr>
-                            <td>（目前为空）</td>
+                            <td>{renderThumbExample()}</td>
                             <td>百分比</td>
                             <td>99%</td>
                             <td></td>
                             <td></td>
                         </tr>
                         <tr>
-                            <td>（目前为空）</td>
+                            <td>{renderThumbExample()}</td>
                             <td>带小数点的百分比</td>
                             <td>99.99%</td>
                             <td></td>
                             <td></td>
                         </tr>
                         <tr>
-                            <td>（目前为空）</td>
+                            <td>{renderThumbExample()}</td>
                             <td>货币</td>
                             <td>$99.00</td>
                             <td></td>

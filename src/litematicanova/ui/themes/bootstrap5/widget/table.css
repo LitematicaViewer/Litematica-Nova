@@ -1,0 +1,129 @@
+:root {
+    --ln-bootstrap5-table-color: #212529;
+    --ln-bootstrap5-table-background: transparent;
+    --ln-bootstrap5-table-border-color: #dee2e6;
+    --ln-bootstrap5-table-caption-color: #6c757d;
+    --ln-bootstrap5-table-cell-padding-y: 0.5rem;
+    --ln-bootstrap5-table-cell-padding-x: 0.5rem;
+    --ln-bootstrap5-table-cell-padding-y-sm: 0.25rem;
+    --ln-bootstrap5-table-cell-padding-x-sm: 0.25rem;
+    --ln-bootstrap5-table-row-min-height: 2.25rem;
+    --ln-bootstrap5-table-striped-background: rgb(0 0 0 / 5%);
+    --ln-bootstrap5-table-hover-background: rgb(0 0 0 / 7.5%);
+    --ln-bootstrap5-table-active-background: rgb(0 0 0 / 10%);
+    --ln-bootstrap5-table-group-divider-color: currentcolor;
+}
+
+table,
+.table {
+    width: 100%;
+    margin-bottom: 0;
+    border-collapse: collapse;
+    caption-side: bottom;
+    color: var(--ln-bootstrap5-table-color);
+    vertical-align: top;
+}
+
+table > :not(caption) > * > *,
+.table > :not(caption) > * > * {
+    padding: var(--ln-bootstrap5-table-cell-padding-y) var(--ln-bootstrap5-table-cell-padding-x);
+    border-style: solid;
+    border-color: var(--ln-bootstrap5-table-border-color);
+    border-width: 0 0 1px;
+    background-color: var(--ln-bootstrap5-table-background);
+    box-shadow: inset 0 0 0 9999px var(--ln-bootstrap5-table-accent-background, transparent);
+    color: inherit;
+}
+
+table > thead,
+.table > thead {
+    vertical-align: bottom;
+}
+
+table > tbody,
+table > tfoot,
+.table > tbody,
+.table > tfoot {
+    vertical-align: inherit;
+}
+
+table > caption,
+.table > caption {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+    color: var(--ln-bootstrap5-table-caption-color);
+    text-align: left;
+}
+
+table.caption-top > caption,
+.table.caption-top > caption {
+    caption-side: top;
+}
+
+table.table-sm > :not(caption) > * > *,
+.table.table-sm > :not(caption) > * > * {
+    padding: var(--ln-bootstrap5-table-cell-padding-y-sm) var(--ln-bootstrap5-table-cell-padding-x-sm);
+}
+
+table.table-striped > tbody > tr:nth-of-type(odd) > *,
+.table.table-striped > tbody > tr:nth-of-type(odd) > * {
+    --ln-bootstrap5-table-accent-background: var(--ln-bootstrap5-table-striped-background);
+}
+
+table.table-hover > tbody > tr:hover > *,
+.table.table-hover > tbody > tr:hover > * {
+    --ln-bootstrap5-table-accent-background: var(--ln-bootstrap5-table-hover-background);
+}
+
+table > tbody > tr.table-active > *,
+table > tbody > tr > .table-active,
+.table > tbody > tr.table-active > *,
+.table > tbody > tr > .table-active {
+    --ln-bootstrap5-table-accent-background: var(--ln-bootstrap5-table-active-background);
+}
+
+table.table-bordered,
+.table.table-bordered {
+    border: 1px solid var(--ln-bootstrap5-table-border-color);
+}
+
+table.table-bordered > :not(caption) > * > *,
+.table.table-bordered > :not(caption) > * > * {
+    border: 1px solid var(--ln-bootstrap5-table-border-color);
+}
+
+table.table-borderless > :not(caption) > * > *,
+.table.table-borderless > :not(caption) > * > * {
+    border-bottom-width: 0;
+}
+
+tbody.table-group-divider {
+    border-top: 2px solid var(--ln-bootstrap5-table-group-divider-color);
+}
+
+table > tbody > tr,
+.table > tbody > tr {
+    height: var(--ln-bootstrap5-table-row-min-height);
+}
+
+table > tbody > tr > * > .button-row,
+.table > tbody > tr > * > .button-row {
+    margin-bottom: 0;
+}
+
+table > tbody > tr > * > .button-row > button,
+table > tbody > tr > * > .button-row > input[type="button"],
+table > tbody > tr > * > .button-row > input[type="submit"],
+table > tbody > tr > * > .button-row > input[type="reset"],
+.table > tbody > tr > * > .button-row > button,
+.table > tbody > tr > * > .button-row > input[type="button"],
+.table > tbody > tr > * > .button-row > input[type="submit"],
+.table > tbody > tr > * > .button-row > input[type="reset"] {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
