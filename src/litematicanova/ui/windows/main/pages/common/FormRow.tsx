@@ -1,9 +1,17 @@
 import type { ReactNode } from "react";
 
-export function FormRow({ label, children }: { label: string; children: ReactNode }) {
+export function FormRow({
+    label,
+    children,
+    htmlFor
+}: {
+    label: string;
+    children: ReactNode;
+    htmlFor?: string;
+}) {
     return (
         <div className="form-row">
-            <label>{label}</label>
+            <label htmlFor={htmlFor}>{label}</label>
             <div>{children}</div>
         </div>
     );

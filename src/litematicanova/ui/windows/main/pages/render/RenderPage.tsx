@@ -1,4 +1,5 @@
 import type { ActiveFile } from "../../../../shell/types";
+import { FormRow } from "../common/FormRow";
 
 const directions = ["西北", "北", "东北", "西", "顶视", "东", "西南", "南", "东南"];
 
@@ -12,19 +13,17 @@ export function RenderPage({
     return (
         <section className="page-pad render-page">
             <p>{activeFile ? activeFile.path : "请在「属性」页加载 .litematic。"}</p>
-            <div className="filter-row">
-                <label>渲染方案：</label>
-                <select defaultValue="nbt-viewer">
+            <FormRow label="渲染方案：" htmlFor="render-engine">
+                <select id="render-engine" defaultValue="nbt-viewer">
                     <option value="deepslate">deepslate</option>
                     <option value="nbt-viewer">nbt-viewer</option>
                 </select>
-            </div>
+            </FormRow>
             <div className="render-layout">
                 <div className="render-main">
-                    <div className="filter-row">
-                        <label>选择区域：</label>
-                        <select><option>全部区域</option></select>
-                    </div>
+                    <FormRow label="选择区域：" htmlFor="render-region">
+                        <select id="render-region"><option>全部区域</option></select>
+                    </FormRow>
                     <div className="button-row">
                         <button type="button" onClick={onOpenMaterialList}>材料列表（当前区域）</button>
                         <button type="button">截屏...</button>

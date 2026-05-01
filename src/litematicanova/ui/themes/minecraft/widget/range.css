@@ -1,0 +1,129 @@
+:root {
+    --ln-minecraft-range-border: 4px;
+    --ln-minecraft-range-height: 44px;
+    --ln-minecraft-range-thumb-width: 8px;
+    --ln-minecraft-range-track-image: url("../resource/button/button_disabled_min.png");
+    --ln-minecraft-range-thumb-image: url("../resource/button/button_normal_min.png");
+    --ln-minecraft-range-thumb-hover-image: url("../resource/button/button_hover_min.png");
+    --ln-minecraft-range-thumb-disabled-image: url("../resource/button/button_disabled_min.png");
+}
+
+input[type="range"] {
+    box-sizing: border-box;
+    display: block;
+    width: 100%;
+    height: var(--ln-minecraft-range-height);
+    padding: 0;
+    border: 0;
+    appearance: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+
+input[type="range"]:focus {
+    outline: 0;
+}
+
+input[type="range"]:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+    box-sizing: border-box;
+    width: 100%;
+    height: var(--ln-minecraft-range-height);
+    border: var(--ln-minecraft-range-border) solid transparent;
+    border-radius: 0;
+    border-image-source: var(--ln-minecraft-range-track-image);
+    border-image-slice: 4 fill;
+    border-image-width: var(--ln-minecraft-range-border);
+    border-image-repeat: stretch;
+    background: transparent;
+    image-rendering: pixelated;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    box-sizing: border-box;
+    width: var(--ln-minecraft-range-thumb-width);
+    height: var(--ln-minecraft-range-height);
+    margin-top: calc(var(--ln-minecraft-range-border) * -1);
+    border: var(--ln-minecraft-range-border) solid transparent;
+    border-radius: 0;
+    border-image-source: var(--ln-minecraft-range-thumb-image);
+    border-image-slice: 4 fill;
+    border-image-width: var(--ln-minecraft-range-border);
+    border-image-outset: 0 var(--ln-minecraft-range-border);
+    border-image-repeat: stretch;
+    appearance: none;
+    background: transparent;
+    image-rendering: pixelated;
+}
+
+input[type="range"]:hover:not(:disabled)::-webkit-slider-thumb {
+    border-image-source: var(--ln-minecraft-range-thumb-hover-image);
+}
+
+input[type="range"]::-moz-range-track {
+    box-sizing: border-box;
+    width: 100%;
+    height: var(--ln-minecraft-range-height);
+    border: var(--ln-minecraft-range-border) solid transparent;
+    border-radius: 0;
+    border-image-source: var(--ln-minecraft-range-track-image);
+    border-image-slice: 4 fill;
+    border-image-width: var(--ln-minecraft-range-border);
+    border-image-repeat: stretch;
+    background: transparent;
+    image-rendering: pixelated;
+}
+
+input[type="range"]::-moz-range-progress {
+    box-sizing: border-box;
+    height: var(--ln-minecraft-range-height);
+    border: var(--ln-minecraft-range-border) solid transparent;
+    border-radius: 0;
+    border-image-source: var(--ln-minecraft-range-track-image);
+    border-image-slice: 4 fill;
+    border-image-width: var(--ln-minecraft-range-border);
+    border-image-repeat: stretch;
+    background: transparent;
+    image-rendering: pixelated;
+}
+
+input[type="range"]::-moz-range-thumb {
+    box-sizing: border-box;
+    width: var(--ln-minecraft-range-thumb-width);
+    height: var(--ln-minecraft-range-height);
+    margin-top: calc(var(--ln-minecraft-range-border) * -1);
+    border: var(--ln-minecraft-range-border) solid transparent;
+    border-radius: 0;
+    border-image-source: var(--ln-minecraft-range-thumb-image);
+    border-image-slice: 4 fill;
+    border-image-width: var(--ln-minecraft-range-border);
+    border-image-outset: 0 var(--ln-minecraft-range-border);
+    border-image-repeat: stretch;
+    background: transparent;
+    image-rendering: pixelated;
+}
+
+input[type="range"]:hover:not(:disabled)::-moz-range-thumb {
+    border-image-source: var(--ln-minecraft-range-thumb-hover-image);
+}
+
+input[type="range"]::-moz-focus-outer {
+    border: 0;
+}
+
+input[type="range"]:disabled {
+    cursor: default;
+}
+
+input[type="range"]:disabled::-webkit-slider-thumb {
+    border-image-source: var(--ln-minecraft-range-thumb-disabled-image);
+}
+
+input[type="range"]:disabled::-moz-range-thumb {
+    border-image-source: var(--ln-minecraft-range-thumb-disabled-image);
+}

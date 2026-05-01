@@ -184,6 +184,10 @@ td {
     text-align: right;
 }
 
+.form-row > div {
+    min-width: 0;
+}
+
 .form-row input,
 .form-row select {
     width: 100%;
@@ -318,6 +322,21 @@ label.setting-row:has(> input[type="radio"]) {
     min-width: 0;
     padding: 12px;
     flex-direction: column;
+}
+
+.material-list-panel .form-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.material-list-panel .form-row > label {
+    flex: 0 0 auto;
+    text-align: left;
+}
+
+.material-list-panel .form-row > div {
+    flex: 1;
 }
 
 .material-list-source-row select {

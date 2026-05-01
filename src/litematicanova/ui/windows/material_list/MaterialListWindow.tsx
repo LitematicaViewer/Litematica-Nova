@@ -7,6 +7,7 @@ import {
     subscribeToThemeChanges,
     themeClassName
 } from "../../shell/themeRuntime";
+import { FormRow } from "../main/pages/common/FormRow";
 
 interface MaterialListWindowProps {
     initialFilePath?: string | null;
@@ -217,53 +218,56 @@ export function MaterialListWindow({ initialFilePath = null }: MaterialListWindo
                 onChange={handleFileSelected}
             />
             <section className="material-list-panel">
-                <div className="filter-row material-list-source-row">
-                    <label htmlFor="material-list-workbook">工作簿：</label>
-                    <select id="material-list-workbook" value={workbookLabel} onChange={() => undefined}>
-                        <option value={workbookLabel}>{workbookLabel}</option>
-                    </select>
-                    <button type="button" onClick={() => fileInputRef.current?.click()}>选择文件...</button>
-                </div>
-                <div className="filter-row">
-                    <label htmlFor="material-list-region">区域：</label>
-                    <select id="material-list-region" value={regionName} onChange={(event) => setRegionName(event.target.value)}>
-                        <option>全部区域</option>
-                    </select>
-                    <label className="material-list-check">
+                <FormRow label="工作簿：" htmlFor="material-list-workbook">
+                    <div className="filter-row material-list-source-row">
+                        <select id="material-list-workbook" value={workbookLabel} onChange={() => undefined}>
+                            <option value={workbookLabel}>{workbookLabel}</option>
+                        </select>
+                        <button type="button" onClick={() => fileInputRef.current?.click()}>选择文件...</button>
+                    </div>
+                </FormRow>
+                <FormRow label="区域：" htmlFor="material-list-region">
+                    <div className="filter-row">
+                        <select id="material-list-region" value={regionName} onChange={(event) => setRegionName(event.target.value)}>
+                            <option>全部区域</option>
+                        </select>
+                        <label className="material-list-check">
+                            <input
+                                type="checkbox"
+                                checked={includeEntities}
+                                onChange={(event) => setIncludeEntities(event.target.checked)}
+                            />
+                            统计实体
+                        </label>
+                        <span className="toolbar-spacer" />
+                        <button type="button" onClick={handleReload}>重新加载</button>
+                    </div>
+                </FormRow>
+                <FormRow label="倍率：" htmlFor="material-list-multiplier">
+                    <div className="filter-row">
                         <input
-                            type="checkbox"
-                            checked={includeEntities}
-                            onChange={(event) => setIncludeEntities(event.target.checked)}
+                            id="material-list-multiplier"
+                            className="material-list-multiplier"
+                            type="number"
+                            min="1"
+                            max="9999"
+                            value={multiplier}
+                            onChange={(event) => setMultiplier(Math.max(1, Number.parseInt(event.target.value || "1", 10)))}
                         />
-                        统计实体
-                    </label>
-                    <span className="toolbar-spacer" />
-                    <button type="button" onClick={handleReload}>重新加载</button>
-                </div>
-                <div className="filter-row">
-                    <label htmlFor="material-list-multiplier">倍率：</label>
-                    <input
-                        id="material-list-multiplier"
-                        className="material-list-multiplier"
-                        type="number"
-                        min="1"
-                        max="9999"
-                        value={multiplier}
-                        onChange={(event) => setMultiplier(Math.max(1, Number.parseInt(event.target.value || "1", 10)))}
-                    />
-                    <span className="muted">行数：{displayRows.length}，总数：{totalMaterials}</span>
-                    <span className="toolbar-spacer" />
-                    <label htmlFor="material-list-export-format">格式：</label>
-                    <select
-                        id="material-list-export-format"
-                        value={exportFormat}
-                        onChange={(event) => setExportFormat(event.target.value as "csv" | "txt")}
-                    >
-                        <option value="csv">CSV</option>
-                        <option value="txt">文本</option>
-                    </select>
-                    <button type="button" onClick={handleExport}>写入文件...</button>
-                </div>
+                        <span className="muted">行数：{displayRows.length}，总数：{totalMaterials}</span>
+                        <span className="toolbar-spacer" />
+                        <label htmlFor="material-list-export-format">格式：</label>
+                        <select
+                            id="material-list-export-format"
+                            value={exportFormat}
+                            onChange={(event) => setExportFormat(event.target.value as "csv" | "txt")}
+                        >
+                            <option value="csv">CSV</option>
+                            <option value="txt">文本</option>
+                        </select>
+                        <button type="button" onClick={handleExport}>写入文件...</button>
+                    </div>
+                </FormRow>
                 <p className="muted material-list-source-path">{sourcePath || "未选择文件"}</p>
                 <div className="material-list-table-wrap">
                     <table className="material-list-table">
