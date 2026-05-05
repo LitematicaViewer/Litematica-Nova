@@ -86,7 +86,8 @@ if defined NEED_SYNC (
 
 set "PATH=%UI_ROOT%\node_modules\.bin;%PATH%"
 set "TAURI_DEV_HOST=127.0.0.1"
-set "CARGO_TARGET_DIR=%UI_ROOT%\tauri\target"
+set "TAURI_ROOT=%ROOT%\src\litematicanova\platform\tauri"
+set "CARGO_TARGET_DIR=%TAURI_ROOT%\target"
 set "TAURI_TARGET_MIGRATION_STAMP=%UI_DEV_HOME%\tauri-target-migrated-v1.stamp"
 if not exist "%TAURI_TARGET_MIGRATION_STAMP%" (
   if exist "%CARGO_TARGET_DIR%" (

@@ -19,6 +19,7 @@ interface MaterialRow {
     total: number;
 }
 
+// 即将迁移：文件名与路径辅助函数将迁移到 core/validation 或 core/types。
 const invalidFilenameChars = /[<>:"/\\|?*\n\r\t]/g;
 
 const filenameSafeSegment = (value: string) => {
@@ -30,6 +31,7 @@ const basename = (path: string) => path.split(/[\\/]/).pop() || path;
 
 const stripExtension = (name: string) => name.replace(/\.[^.]+$/, "");
 
+// 即将迁移：导出文本组装逻辑将迁移到 core/export。
 const csvEscape = (value: string) => `"${value.replace(/"/g, "\"\"")}"`;
 
 const exportTitle = (sourceName: string | null, regionName: string) => {
@@ -65,6 +67,7 @@ const textTable = (title: string, rows: MaterialRow[]) => {
     ].join("\n") + "\n";
 };
 
+// 即将迁移：CSV 解析逻辑将迁移到 core/material。
 const parseCsvLine = (line: string) => {
     const cells: string[] = [];
     let cell = "";
@@ -104,6 +107,7 @@ const parseCsvRows = (text: string): MaterialRow[] => {
     return rows.sort((left, right) => right.total - left.total || left.name.localeCompare(right.name));
 };
 
+// 即将迁移：下载适配逻辑将迁移到 bridge 层。
 const downloadText = (filename: string, content: string, type: string) => {
     const url = URL.createObjectURL(new Blob([content], { type }));
     const anchor = document.createElement("a");
@@ -153,6 +157,7 @@ export function MaterialListWindow({ initialFilePath = null }: MaterialListWindo
 
     const workbookLabel = sourceName || "未选择文件";
 
+    // 即将迁移：文件解析与装载流程将下沉到 bridge/core，当前保留 UI 事件外壳。
     const handleFileSelected = async (event: ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) {
@@ -185,6 +190,7 @@ export function MaterialListWindow({ initialFilePath = null }: MaterialListWindo
         setStatus("材料扫描后端尚未接入新 UI；窗口打开与文件选择流程已可独立使用。 ");
     };
 
+    // 即将迁移：导出内容生成将下沉到 core/export，当前保留 UI 事件外壳。
     const handleExport = () => {
         if (!displayRows.length) {
             setStatus("没有可导出的材料数据。 ");

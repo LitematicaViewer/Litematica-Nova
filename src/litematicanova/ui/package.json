@@ -7,8 +7,10 @@
         "dev": "vite --host 127.0.0.1 --port 1420",
         "build": "tsc && vite build",
         "preview": "vite preview --host 127.0.0.1 --port 1421",
-        "tauri": "tauri",
-        "tauri:dev": "tauri dev -c tauri/tauri.conf.json"
+        "tauri": "node ./run-tauri-with-rust-path.mjs",
+        "tauri:dev": "node ./run-tauri-with-rust-path.mjs dev -c platform/tauri/tauri.conf.json",
+        "tauri:build": "node ./run-tauri-with-rust-path.mjs build -c platform/tauri/tauri.conf.json",
+        "tauri:info": "node ./run-tauri-with-rust-path.mjs info"
     },
     "dependencies": {
         "@tauri-apps/api": "^2.0.0",
