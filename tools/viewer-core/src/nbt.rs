@@ -28,6 +28,8 @@ pub struct MetadataNbt {
     pub author: Option<String>,
     pub description: Option<String>,
     pub name: Option<String>,
+    pub time_created: Option<i64>,
+    pub time_modified: Option<i64>,
     pub total_blocks: Option<i32>,
     pub total_volume: Option<i32>,
     pub region_count: Option<i32>,
@@ -95,6 +97,179 @@ pub fn bits_for_palette(palette_len: usize) -> usize {
     bits.max(2)
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PalettePacking {
+    CompactBitstream,
+    PaddedLongs,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PaletteLayout {
+    packing: PalettePacking,
+    nbits: usize,
+}
+
+fn compact_block_states_len(size: usize, nbits: usize) -> usize {
+    (size * nbits).div_ceil(64)
+}
+
+fn padded_block_states_len(size: usize, nbits: usize) -> usize {
+    let values_per_long = (64 / nbits).max(1);
+    size.div_ceil(values_per_long)
+}
+
+fn palette_mask(nbits: usize) -> u64 {
+    if nbits >= 64 {
+        u64::MAX
+    } else {
+        (1_u64 << nbits) - 1
+    }
+}
+
+fn palette_index_at_with_packing(
+    block_states: &LongArray,
+    nbits: usize,
+    index: usize,
+    packing: PalettePacking,
+) -> usize {
+    let mask = palette_mask(nbits);
+    match packing {
+        PalettePacking::CompactBitstream => {
+            let start_offset = index * nbits;
+            let start_arr_index = start_offset >> 6;
+            let end_arr_index = (((index + 1) * nbits) - 1) >> 6;
+            let start_bit_offset = start_offset & 0x3f;
+
+            if start_arr_index == end_arr_index {
+                (((block_states[start_arr_index] as u64) >> start_bit_offset) & mask) as usize
+            } else {
+                let end_offset = 64 - start_bit_offset;
+                ((((block_states[start_arr_index] as u64) >> start_bit_offset)
+                    | ((block_states[end_arr_index] as u64) << end_offset))
+                    & mask) as usize
+            }
+        }
+        PalettePacking::PaddedLongs => {
+            let values_per_long = (64 / nbits).max(1);
+            let arr_index = index / values_per_long;
+            let bit_offset = (index % values_per_long) * nbits;
+            (((block_states[arr_index] as u64) >> bit_offset) & mask) as usize
+        }
+    }
+}
+
+fn choose_palette_packing(
+    block_states: &LongArray,
+    size: usize,
+    nbits: usize,
+    palette_len: usize,
+) -> Result<PaletteLayout> {
+    let compact_len = compact_block_states_len(size, nbits);
+    let padded_len = padded_block_states_len(size, nbits);
+    let actual_len = block_states.len();
+
+    let compact_possible = actual_len >= compact_len;
+    let padded_possible = actual_len >= padded_len;
+    if !compact_possible && !padded_possible {
+        if let Some(layout) = choose_legacy_underpacked_palette_layout(
+            block_states,
+            size,
+            nbits,
+            palette_len,
+            actual_len,
+        ) {
+            return Ok(layout);
+        }
+
+        bail!(
+            "block state long array length mismatch, expected at least compact {} or padded {}, got {}",
+            compact_len,
+            padded_len,
+            actual_len
+        );
+    }
+
+    let layout_is_valid = |packing: PalettePacking, layout_bits: usize| {
+        (0..size).all(|index| {
+            palette_index_at_with_packing(block_states, layout_bits, index, packing)
+                < palette_len.max(1)
+        })
+    };
+
+    match (compact_possible, padded_possible) {
+        (true, false) => Ok(PaletteLayout {
+            packing: PalettePacking::CompactBitstream,
+            nbits,
+        }),
+        (false, true) => Ok(PaletteLayout {
+            packing: PalettePacking::PaddedLongs,
+            nbits,
+        }),
+        (true, true) => {
+            let compact_valid = layout_is_valid(PalettePacking::CompactBitstream, nbits);
+            let padded_valid = layout_is_valid(PalettePacking::PaddedLongs, nbits);
+            match (compact_valid, padded_valid) {
+                (true, _) => Ok(PaletteLayout {
+                    packing: PalettePacking::CompactBitstream,
+                    nbits,
+                }),
+                (false, true) => Ok(PaletteLayout {
+                    packing: PalettePacking::PaddedLongs,
+                    nbits,
+                }),
+                (false, false) => Ok(PaletteLayout {
+                    packing: PalettePacking::CompactBitstream,
+                    nbits,
+                }),
+            }
+        }
+        (false, false) => unreachable!("invalid palette packing length was rejected above"),
+    }
+}
+
+fn choose_legacy_underpacked_palette_layout(
+    block_states: &LongArray,
+    size: usize,
+    expected_nbits: usize,
+    palette_len: usize,
+    actual_len: usize,
+) -> Option<PaletteLayout> {
+    if expected_nbits <= 2 {
+        return None;
+    }
+
+    for candidate_bits in (2..expected_nbits).rev() {
+        let compact_exact = actual_len == compact_block_states_len(size, candidate_bits);
+        let padded_exact = actual_len == padded_block_states_len(size, candidate_bits);
+
+        for packing in [
+            PalettePacking::CompactBitstream,
+            PalettePacking::PaddedLongs,
+        ] {
+            let matches_len = match packing {
+                PalettePacking::CompactBitstream => compact_exact,
+                PalettePacking::PaddedLongs => padded_exact,
+            };
+            if !matches_len {
+                continue;
+            }
+
+            let layout_is_valid = (0..size).all(|index| {
+                palette_index_at_with_packing(block_states, candidate_bits, index, packing)
+                    < palette_len.max(1)
+            });
+            if layout_is_valid {
+                return Some(PaletteLayout {
+                    packing,
+                    nbits: candidate_bits,
+                });
+            }
+        }
+    }
+
+    None
+}
+
 pub fn region_bounds(region: &RegionNbt) -> RegionBounds {
     let min_x = std::cmp::min(region.position.x, region.position.x + region.size.x + 1);
     let max_x = std::cmp::max(region.position.x, region.position.x + region.size.x - 1);
@@ -118,41 +293,15 @@ pub fn decode_palette_frequencies(
     nbits: usize,
     palette_len: usize,
 ) -> Result<Vec<u64>> {
-    let expected_len = (size * nbits).div_ceil(64);
-    if block_states.len() != expected_len {
-        bail!(
-            "block state long array length mismatch, expected {}, got {}",
-            expected_len,
-            block_states.len()
-        );
-    }
-
-    let mask = if nbits >= 64 {
-        u64::MAX
-    } else {
-        (1_u64 << nbits) - 1
-    };
+    let layout = choose_palette_packing(block_states, size, nbits, palette_len)?;
     let mut counts = vec![0_u64; palette_len.max(1)];
 
     for index in 0..size {
-        let start_offset = index * nbits;
-        let start_arr_index = start_offset >> 6;
-        let end_arr_index = (((index + 1) * nbits) - 1) >> 6;
-        let start_bit_offset = start_offset & 0x3f;
-
-        let value = if start_arr_index == end_arr_index {
-            ((block_states[start_arr_index] as u64) >> start_bit_offset) & mask
-        } else {
-            let end_offset = 64 - start_bit_offset;
-            (((block_states[start_arr_index] as u64) >> start_bit_offset)
-                | ((block_states[end_arr_index] as u64) << end_offset))
-                & mask
-        } as usize;
-
-        let slot = counts
-            .get_mut(value)
-            .ok_or_else(|| anyhow!("palette index {} out of range {}", value, palette_len))?;
-        *slot += 1;
+        let value =
+            palette_index_at_with_packing(block_states, layout.nbits, index, layout.packing);
+        if let Some(slot) = counts.get_mut(value) {
+            *slot += 1;
+        }
     }
 
     Ok(counts)
@@ -188,41 +337,17 @@ pub fn for_each_palette_index<F>(
     block_states: &LongArray,
     size: usize,
     nbits: usize,
+    palette_len: usize,
     mut callback: F,
 ) -> Result<()>
 where
     F: FnMut(usize, usize) -> Result<()>,
 {
-    let expected_len = (size * nbits).div_ceil(64);
-    if block_states.len() != expected_len {
-        bail!(
-            "block state long array length mismatch, expected {}, got {}",
-            expected_len,
-            block_states.len()
-        );
-    }
-
-    let mask = if nbits >= 64 {
-        u64::MAX
-    } else {
-        (1_u64 << nbits) - 1
-    };
+    let layout = choose_palette_packing(block_states, size, nbits, palette_len)?;
 
     for index in 0..size {
-        let start_offset = index * nbits;
-        let start_arr_index = start_offset >> 6;
-        let end_arr_index = (((index + 1) * nbits) - 1) >> 6;
-        let start_bit_offset = start_offset & 0x3f;
-
-        let value = if start_arr_index == end_arr_index {
-            ((block_states[start_arr_index] as u64) >> start_bit_offset) & mask
-        } else {
-            let end_offset = 64 - start_bit_offset;
-            (((block_states[start_arr_index] as u64) >> start_bit_offset)
-                | ((block_states[end_arr_index] as u64) << end_offset))
-                & mask
-        } as usize;
-
+        let value =
+            palette_index_at_with_packing(block_states, layout.nbits, index, layout.packing);
         callback(index, value)?;
     }
 
@@ -233,6 +358,7 @@ pub fn palette_index_at(
     block_states: &LongArray,
     size: usize,
     nbits: usize,
+    palette_len: usize,
     index: usize,
 ) -> Result<usize> {
     if index >= size {
@@ -243,35 +369,13 @@ pub fn palette_index_at(
         );
     }
 
-    let expected_len = (size * nbits).div_ceil(64);
-    if block_states.len() != expected_len {
-        bail!(
-            "block state long array length mismatch, expected {}, got {}",
-            expected_len,
-            block_states.len()
-        );
-    }
-
-    let mask = if nbits >= 64 {
-        u64::MAX
-    } else {
-        (1_u64 << nbits) - 1
-    };
-    let start_offset = index * nbits;
-    let start_arr_index = start_offset >> 6;
-    let end_arr_index = (((index + 1) * nbits) - 1) >> 6;
-    let start_bit_offset = start_offset & 0x3f;
-
-    let value = if start_arr_index == end_arr_index {
-        ((block_states[start_arr_index] as u64) >> start_bit_offset) & mask
-    } else {
-        let end_offset = 64 - start_bit_offset;
-        (((block_states[start_arr_index] as u64) >> start_bit_offset)
-            | ((block_states[end_arr_index] as u64) << end_offset))
-            & mask
-    } as usize;
-
-    Ok(value)
+    let layout = choose_palette_packing(block_states, size, nbits, palette_len)?;
+    Ok(palette_index_at_with_packing(
+        block_states,
+        layout.nbits,
+        index,
+        layout.packing,
+    ))
 }
 
 pub fn storage_to_region_coords(
@@ -309,5 +413,42 @@ pub fn region_coord_to_storage_coord(region_coord: i32, axis_size: i32) -> Optio
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_legacy_underpacked_palette_when_extra_palette_entry_is_unused() {
+        let indices: Vec<usize> = (0..1000).map(|index| index % 32).collect();
+        let block_states = pack_palette_indices(&indices, 5);
+
+        let mut decoded = Vec::new();
+        for_each_palette_index(
+            &block_states,
+            indices.len(),
+            bits_for_palette(33),
+            33,
+            |_, value| {
+                decoded.push(value);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(decoded, indices);
+    }
+
+    #[test]
+    fn rejects_underpacked_palette_when_actual_length_does_not_match_known_layout() {
+        let block_states = LongArray::new(vec![0]);
+        let error =
+            for_each_palette_index(&block_states, 1000, bits_for_palette(33), 33, |_, _| Ok(()))
+                .unwrap_err()
+                .to_string();
+
+        assert!(error.contains("block state long array length mismatch"));
     }
 }

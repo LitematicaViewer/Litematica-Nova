@@ -1,0 +1,41 @@
+:root {
+    --ln-metro10-table-row-min-height: 60px;
+    --ln-metro10-table-hover-background: #e6e6e6;
+}
+
+table,
+.table {
+    border-collapse: collapse;
+}
+
+table > tbody > tr,
+.table > tbody > tr {
+    height: var(--ln-metro10-table-row-min-height);
+}
+
+table > :not(caption) > * > *,
+.table > :not(caption) > * > * {
+    border: 0;
+}
+
+table > tbody > tr:hover > *,
+.table > tbody > tr:hover > * {
+    background-color: var(--ln-metro10-table-hover-background);
+}
+
+table > tbody > tr > * > .button-row,
+.table > tbody > tr > * > .button-row {
+    margin-bottom: 0;
+}
+
+table > tbody > tr > * > .button-row > button,
+table > tbody > tr > * > .button-row > input[type="button"],
+table > tbody > tr > * > .button-row > input[type="submit"],
+table > tbody > tr > * > .button-row > input[type="reset"],
+.table > tbody > tr > * > .button-row > button,
+.table > tbody > tr > * > .button-row > input[type="button"],
+.table > tbody > tr > * > .button-row > input[type="submit"],
+.table > tbody > tr > * > .button-row > input[type="reset"] {
+    margin-top: 0;
+    margin-bottom: 0;
+}

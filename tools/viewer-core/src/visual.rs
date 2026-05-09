@@ -36,6 +36,8 @@ pub fn build_metadata_output(root: &LitematicRoot, bounds: Option<RegionBounds>)
         name: root.metadata.name.clone().unwrap_or_default(),
         author: root.metadata.author.clone().unwrap_or_default(),
         description: root.metadata.description.clone().unwrap_or_default(),
+        time_created: root.metadata.time_created.unwrap_or_default(),
+        time_modified: root.metadata.time_modified.unwrap_or_default(),
         total_blocks: root.metadata.total_blocks.unwrap_or_default(),
         total_volume: root.metadata.total_volume.unwrap_or(
             enclosing
@@ -162,11 +164,11 @@ pub fn build_visual_layer_output(
             &region.block_states,
             volume,
             nbits,
+            region.block_state_palette.len(),
             |index, palette_index| {
-                let block = region
-                    .block_state_palette
-                    .get(palette_index)
-                    .ok_or_else(|| anyhow!("palette index {} out of range", palette_index))?;
+                let Some(block) = region.block_state_palette.get(palette_index) else {
+                    return Ok(());
+                };
                 let state = format_block_state(block);
                 if is_air_state(&state) {
                     return Ok(());

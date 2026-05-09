@@ -1,4 +1,4 @@
-const fs = require('fs');
+﻿const fs = require('fs');
 const path = require('path');
 
 function mkdir(dir) {
@@ -10,12 +10,12 @@ function write(file, content) {
   fs.writeFileSync(file, content.trim() + '\n', 'utf8');
 }
 
-const root = 'desktop-js';
+const root = 'desktop-nova';
 mkdir(root);
 
 write(`${root}/package.json`, `
 {
-  "name": "desktop-js",
+  "name": "desktop-nova",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -94,7 +94,7 @@ write(`${root}/index.html`, `
 
 write(`${root}/src-tauri/Cargo.toml`, `
 [package]
-name = "desktop-js"
+name = "desktop-nova"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
@@ -159,7 +159,7 @@ use base64::Engine;
 fn get_root() -> PathBuf {
     let mut current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if current_dir.ends_with("src-tauri") { current_dir.pop(); current_dir.pop(); }
-    else if current_dir.ends_with("desktop-js") { current_dir.pop(); }
+    else if current_dir.ends_with("desktop-nova") { current_dir.pop(); }
     current_dir
 }
 
@@ -322,7 +322,7 @@ export function translateKey(key: string): string {
   return i18nCache?.property_keys?.[key] || key;
 }
 export function translateValue(key: string, value: string): string {
-  if (value === "$keep") return "保持原状态";
+  if (value === "$keep") return "淇濇寔鍘熺姸鎬?;
   return i18nCache?.property_values?.[key]?.[value] || value;
 }
 export function getAllBlocks() {
@@ -385,7 +385,7 @@ export function Dropdown({ value, options, onChange, renderValue }: { value: str
   const display = renderValue ? renderValue(value) : (options.find(o => o.value === value)?.label || value);
   return (
     <div className="dropdown-container" ref={ref}>
-      <button type="button" className="btn" onClick={() => setOpen(!open)}>{display} ▾</button>
+      <button type="button" className="btn" onClick={() => setOpen(!open)}>{display} 鈻?/button>
       {open && (
         <div className="dropdown-menu">
           {options.map(o => (
@@ -422,11 +422,11 @@ export function App() {
   useEffect(() => { loadDatabases(); }, []);
 
   const pages: Record<string, { name: string, comp: React.FC<any> }> = {
-    library: { name: "投影库", comp: LibraryPage },
-    properties: { name: "属性", comp: PropertiesPage },
-    materials: { name: "材料", comp: () => <div>材料页 (Placeholder)</div> },
-    replace: { name: "方块替换", comp: ReplacePage },
-    settings: { name: "设置", comp: SettingsPage },
+    library: { name: "鎶曞奖搴?, comp: LibraryPage },
+    properties: { name: "灞炴€?, comp: PropertiesPage },
+    materials: { name: "鏉愭枡", comp: () => <div>鏉愭枡椤?(Placeholder)</div> },
+    replace: { name: "鏂瑰潡鏇挎崲", comp: ReplacePage },
+    settings: { name: "璁剧疆", comp: SettingsPage },
   };
 
   const Page = pages[route].comp;
@@ -447,7 +447,7 @@ export function App() {
           <div style={{ padding: 16, borderTop: '1px solid var(--border)' }}>
             <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8, wordBreak: 'break-all' }}>{currentFile}</div>
             <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => startNativeViewer(currentFile)}>
-              打开 3D 预览
+              鎵撳紑 3D 棰勮
             </button>
           </div>
         )}
@@ -476,9 +476,9 @@ export function LibraryPage({ currentFile, setCurrentFile }: any) {
   };
   return (
     <div className="card">
-      <h2>投影库</h2>
-      <p>当前选择: {currentFile || "未选择"}</p>
-      <button className="btn btn-primary" onClick={handleSelect}>选择 .litematic 文件</button>
+      <h2>鎶曞奖搴?/h2>
+      <p>褰撳墠閫夋嫨: {currentFile || "鏈€夋嫨"}</p>
+      <button className="btn btn-primary" onClick={handleSelect}>閫夋嫨 .litematic 鏂囦欢</button>
     </div>
   );
 }
@@ -502,20 +502,20 @@ export function PropertiesPage({ currentFile }: any) {
       .catch(e => setError(e));
   }, [currentFile]);
 
-  if (!currentFile) return <div>请先在投影库选择文件。</div>;
+  if (!currentFile) return <div>璇峰厛鍦ㄦ姇褰卞簱閫夋嫨鏂囦欢銆?/div>;
   
   return (
     <div className="card">
-      <h2>属性与统计</h2>
+      <h2>灞炴€т笌缁熻</h2>
       {error && <pre style={{ color: 'red' }}>{error}</pre>}
       {data && data.metadata && (
         <div>
-          <p>名称: {data.metadata.name}</p>
-          <p>作者: {data.metadata.author}</p>
-          <p>描述: {data.metadata.description}</p>
-          <p>总方块: {data.metadata.total_blocks}</p>
-          <p>体积: {data.metadata.total_volume}</p>
-          <p>区域数: {data.metadata.region_count}</p>
+          <p>鍚嶇О: {data.metadata.name}</p>
+          <p>浣滆€? {data.metadata.author}</p>
+          <p>鎻忚堪: {data.metadata.description}</p>
+          <p>鎬绘柟鍧? {data.metadata.total_blocks}</p>
+          <p>浣撶Н: {data.metadata.total_volume}</p>
+          <p>鍖哄煙鏁? {data.metadata.region_count}</p>
         </div>
       )}
     </div>
@@ -529,18 +529,18 @@ import React from 'react';
 export function SettingsPage({ theme, setTheme }: any) {
   return (
     <div className="card">
-      <h2>设置</h2>
+      <h2>璁剧疆</h2>
       <div>
-        <label>主题: </label>
+        <label>涓婚: </label>
         <select className="input" value={theme} onChange={e => setTheme(e.target.value)}>
           <option value="metro10">Metro10</option>
           <option value="minecraft">Minecraft</option>
         </select>
       </div>
       <div style={{ marginTop: 20 }}>
-        <h3>后端状态</h3>
-        <p>调用路径: bin/viewer-backend/litematica_core.exe</p>
-        <p>数据库版本: data/minecraft_blockstates/26.1.json</p>
+        <h3>鍚庣鐘舵€?/h3>
+        <p>璋冪敤璺緞: bin/viewer-backend/litematica_core.exe</p>
+        <p>鏁版嵁搴撶増鏈? data/minecraft_blockstates/26.1.json</p>
       </div>
     </div>
   );
@@ -558,7 +558,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 function PropertySelector({ blockId, value, onChange, isTo }: any) {
   const props = getBlockProperties(blockId);
   const keys = Object.keys(props).sort();
-  if (keys.length === 0) return <span style={{fontSize: 12, opacity: 0.5}}>无属性</span>;
+  if (keys.length === 0) return <span style={{fontSize: 12, opacity: 0.5}}>鏃犲睘鎬?/span>;
   
   return (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -568,7 +568,7 @@ function PropertySelector({ blockId, value, onChange, isTo }: any) {
           <Dropdown
             value={value[k] || (isTo ? "$keep" : "")}
             options={[
-              ...(isTo ? [{label: "默认 (保持)", value: "$keep"}] : [{label: "所有", value: ""}]),
+              ...(isTo ? [{label: "榛樿 (淇濇寔)", value: "$keep"}] : [{label: "鎵€鏈?, value: ""}]),
               ...props[k].map(v => ({ label: \`\${translateValue(k, v)} (\${v})\`, value: v }))
             ]}
             onChange={v => {
@@ -587,7 +587,7 @@ function RuleRow({ rule, onChange, onRemove, onDuplicate }: any) {
   return (
     <div className="rule-row">
       <div className="rule-block">
-        <h4>替换前 (From)</h4>
+        <h4>鏇挎崲鍓?(From)</h4>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <BlockIcon blockId={rule.match.name} />
           <input className="input" value={rule.match.name} onChange={e => onChange({...rule, match: {...rule.match, name: e.target.value}})} placeholder="minecraft:stone" />
@@ -595,24 +595,24 @@ function RuleRow({ rule, onChange, onRemove, onDuplicate }: any) {
         <PropertySelector blockId={rule.match.name} value={rule.match.properties || {}} onChange={(p: any) => onChange({...rule, match: {...rule.match, properties: p}})} isTo={false} />
       </div>
       
-      <div style={{ fontSize: 24, fontWeight: 'bold' }}>→</div>
+      <div style={{ fontSize: 24, fontWeight: 'bold' }}>鈫?/div>
       
       <div className="rule-block">
-        <h4>替换后 (To)</h4>
+        <h4>鏇挎崲鍚?(To)</h4>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <BlockIcon blockId={rule.replace.name} />
           <input className="input" value={rule.replace.name} onChange={e => onChange({...rule, replace: {...rule.replace, name: e.target.value}})} placeholder="minecraft:stone" />
         </div>
         <PropertySelector blockId={rule.replace.name} value={rule.replace.properties || {}} onChange={(p: any) => onChange({...rule, replace: {...rule.replace, properties: p}})} isTo={true} />
         <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 12 }}>模式:</span>
-          <Dropdown value={rule.property_mode} options={[{label: "保持同名状态 (merge)", value: "merge"}, {label: "使用目标默认 (drop)", value: "drop"}, {label: "仅使用手动指定 (replace)", value: "replace"}]} onChange={v => onChange({...rule, property_mode: v})} />
+          <span style={{ fontSize: 12 }}>妯″紡:</span>
+          <Dropdown value={rule.property_mode} options={[{label: "淇濇寔鍚屽悕鐘舵€?(merge)", value: "merge"}, {label: "浣跨敤鐩爣榛樿 (drop)", value: "drop"}, {label: "浠呬娇鐢ㄦ墜鍔ㄦ寚瀹?(replace)", value: "replace"}]} onChange={v => onChange({...rule, property_mode: v})} />
         </div>
       </div>
       
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <button className="btn" onClick={onDuplicate}>复制</button>
-        <button className="btn" onClick={onRemove}>删除</button>
+        <button className="btn" onClick={onDuplicate}>澶嶅埗</button>
+        <button className="btn" onClick={onRemove}>鍒犻櫎</button>
       </div>
     </div>
   );
@@ -625,12 +625,12 @@ export function ReplacePage({ currentFile }: any) {
   const [showDialog, setShowDialog] = useState(false);
   const [outPath, setOutPath] = useState("");
 
-  if (!currentFile) return <div className="card">请先在投影库选择文件。</div>;
+  if (!currentFile) return <div className="card">璇峰厛鍦ㄦ姇褰卞簱閫夋嫨鏂囦欢銆?/div>;
 
   const handleAdd = () => setRules([...rules, { match: { name: "minecraft:stone", properties: {} }, replace: { name: "minecraft:air", properties: {} }, property_mode: "merge" }]);
 
   const handleDryRun = async () => {
-    if (rules.length === 0) return alert("请添加规则");
+    if (rules.length === 0) return alert("璇锋坊鍔犺鍒?);
     const cleanRules = rules.map(r => {
       const matchProps = { ...r.match.properties };
       if (Object.keys(matchProps).length === 0) delete r.match.properties;
@@ -638,30 +638,30 @@ export function ReplacePage({ currentFile }: any) {
     });
     
     await writeWorkspaceFile(".tmp/replace_rules_js.json", JSON.stringify({ rules: cleanRules }));
-    setLog("分析中...");
+    setLog("鍒嗘瀽涓?..");
     try {
       const res = await executeBackend("litematica_core.exe", ["replace-blocks", "--input", currentFile, "--rules", ".tmp/replace_rules_js.json", "--dry-run"]);
       setDryRunRes(res);
       setOutPath(currentFile.replace(".litematic", ".replaced.litematic"));
       setShowDialog(true);
-      setLog("Dry-run 完成");
+      setLog("Dry-run 瀹屾垚");
     } catch(e: any) {
-      alert("执行失败: " + e);
+      alert("鎵ц澶辫触: " + e);
       setLog(e);
     }
   };
 
   const handleApply = async () => {
-    if (!outPath || outPath === currentFile) return alert("输出路径不合法");
-    if (await checkFileExists(outPath)) return alert("输出文件已存在，为防覆盖请选择其他路径！");
+    if (!outPath || outPath === currentFile) return alert("杈撳嚭璺緞涓嶅悎娉?);
+    if (await checkFileExists(outPath)) return alert("杈撳嚭鏂囦欢宸插瓨鍦紝涓洪槻瑕嗙洊璇烽€夋嫨鍏朵粬璺緞锛?);
     setShowDialog(false);
-    setLog("替换中...");
+    setLog("鏇挎崲涓?..");
     try {
       const res = await executeBackend("litematica_core.exe", ["replace-blocks", "--input", currentFile, "--output", outPath, "--rules", ".tmp/replace_rules_js.json"]);
-      alert("替换成功！\\n" + outPath);
+      alert("鏇挎崲鎴愬姛锛乗\n" + outPath);
       setLog(res);
     } catch(e: any) {
-      alert("替换失败: " + e);
+      alert("鏇挎崲澶辫触: " + e);
       setLog(e);
     }
   };
@@ -669,10 +669,10 @@ export function ReplacePage({ currentFile }: any) {
   return (
     <div>
       <div className="card" style={{ display: 'flex', gap: 8 }}>
-        <button className="btn" onClick={handleAdd}>添加规则</button>
-        <button className="btn" onClick={() => setRules([])}>清空</button>
+        <button className="btn" onClick={handleAdd}>娣诲姞瑙勫垯</button>
+        <button className="btn" onClick={() => setRules([])}>娓呯┖</button>
         <div style={{ flex: 1 }} />
-        <button className="btn btn-primary" onClick={handleDryRun}>替换方块 (Dry-run)</button>
+        <button className="btn btn-primary" onClick={handleDryRun}>鏇挎崲鏂瑰潡 (Dry-run)</button>
       </div>
       
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -686,21 +686,21 @@ export function ReplacePage({ currentFile }: any) {
       {showDialog && (
         <div className="dialog-overlay">
           <div className="dialog-content">
-            <h3>确认替换</h3>
+            <h3>纭鏇挎崲</h3>
             <pre style={{ maxHeight: 200, overflow: 'auto', background: 'var(--bg)', padding: 8 }}>{dryRunRes}</pre>
             <div style={{ marginTop: 16 }}>
-              <label>输出路径: </label>
+              <label>杈撳嚭璺緞: </label>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input className="input" style={{ flex: 1 }} value={outPath} readOnly />
                 <button className="btn" onClick={async () => {
                   const res = await save({ defaultPath: outPath, filters: [{ name: "Litematic", extensions: ["litematic"] }] });
                   if (res) setOutPath(res);
-                }}>浏览...</button>
+                }}>娴忚...</button>
               </div>
             </div>
             <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button className="btn" onClick={() => setShowDialog(false)}>取消</button>
-              <button className="btn btn-primary" onClick={handleApply}>确认替换</button>
+              <button className="btn" onClick={() => setShowDialog(false)}>鍙栨秷</button>
+              <button className="btn btn-primary" onClick={handleApply}>纭鏇挎崲</button>
             </div>
           </div>
         </div>

@@ -1,0 +1,20 @@
+{
+  "productName": "Litematica Nova BA",
+  "version": "0.1.0",
+  "identifier": "com.litematicaba.nova",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://127.0.0.1:1430",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "title": "Litematica Nova BA", "width": 1024, "height": 768 }],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.ico"]
+  }
+}

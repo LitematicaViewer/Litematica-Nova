@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
+use fastnbt::Value as NbtValue;
 use serde::Serialize;
 
 use crate::model::MetadataOutput;
@@ -19,6 +20,7 @@ pub struct StableStructureOutput {
     pub regions: Vec<RegionSummaryOutput>,
     pub layers_summary: Vec<LayerSummaryOutput>,
     pub entity_summary: EntitySummaryOutput,
+    pub container_scan: ContainerScanOutput,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +50,9 @@ pub struct MaterialItemOutput {
     pub block_id: String,
     pub display_name: String,
     pub count: u64,
+    pub block_count: u64,
+    pub container_item_count: u64,
+    pub total_count: u64,
     pub icon_hint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region_counts: Option<Vec<RegionCountOutput>>,
@@ -124,6 +129,14 @@ pub struct EntityCountOutput {
     pub count: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ContainerScanOutput {
+    pub enabled: bool,
+    pub containers_scanned: usize,
+    pub item_stacks_scanned: usize,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub enum MaterialScope {
     All,
@@ -133,7 +146,8 @@ pub enum MaterialScope {
 
 #[derive(Default)]
 struct MaterialAccumulator {
-    count: u64,
+    block_count: u64,
+    container_item_count: u64,
     region_counts: BTreeMap<String, u64>,
     layer_counts: BTreeMap<i32, u64>,
 }
@@ -150,15 +164,26 @@ struct LayerAccumulator {
     block_types: BTreeSet<String>,
 }
 
-pub fn build_stats_output(path: &Path) -> Result<StableStructureOutput> {
-    build_structure_output(path, MaterialScope::All)
+pub fn build_stats_output(
+    path: &Path,
+    include_container_items: bool,
+) -> Result<StableStructureOutput> {
+    build_structure_output(path, MaterialScope::All, include_container_items)
 }
 
-pub fn build_materials_output(path: &Path, scope: MaterialScope) -> Result<StableStructureOutput> {
-    build_structure_output(path, scope)
+pub fn build_materials_output(
+    path: &Path,
+    scope: MaterialScope,
+    include_container_items: bool,
+) -> Result<StableStructureOutput> {
+    build_structure_output(path, scope, include_container_items)
 }
 
-fn build_structure_output(path: &Path, scope: MaterialScope) -> Result<StableStructureOutput> {
+fn build_structure_output(
+    path: &Path,
+    scope: MaterialScope,
+    include_container_items: bool,
+) -> Result<StableStructureOutput> {
     let root = load_litematic_root(path)?;
     let bounds = compute_bounds(&root);
     let metadata = build_metadata_output(&root, bounds);
@@ -172,6 +197,10 @@ fn build_structure_output(path: &Path, scope: MaterialScope) -> Result<StableStr
         .map(|_| LayerAccumulator::default())
         .collect::<Vec<_>>();
     let mut entity_counts = BTreeMap::<String, u64>::new();
+    let mut container_scan = ContainerScanOutput {
+        enabled: include_container_items,
+        ..ContainerScanOutput::default()
+    };
     let mut total_entities = 0_usize;
     let mut total_tile_entities = 0_usize;
 
@@ -194,11 +223,11 @@ fn build_structure_output(path: &Path, scope: MaterialScope) -> Result<StableStr
             &region.block_states,
             volume,
             nbits,
+            region.block_state_palette.len(),
             |index, palette_index| {
-                let block = region
-                    .block_state_palette
-                    .get(palette_index)
-                    .ok_or_else(|| anyhow!("palette index {} out of range", palette_index))?;
+                let Some(block) = region.block_state_palette.get(palette_index) else {
+                    return Ok(());
+                };
                 if is_air_block(&block.name) {
                     return Ok(());
                 }
@@ -221,7 +250,7 @@ fn build_structure_output(path: &Path, scope: MaterialScope) -> Result<StableStr
 
                 if resolved_scope.matches(region_name, layer_index) {
                     let material = material_counts.entry(block_id).or_default();
-                    material.count += 1;
+                    material.block_count += 1;
                     *material
                         .region_counts
                         .entry(region_name.clone())
@@ -232,6 +261,17 @@ fn build_structure_output(path: &Path, scope: MaterialScope) -> Result<StableStr
                 Ok(())
             },
         )?;
+
+        if include_container_items {
+            scan_region_container_items(
+                region_name,
+                region,
+                &resolved_scope,
+                resolved_bounds.min_y,
+                &mut material_counts,
+                &mut container_scan,
+            );
+        }
 
         let region_bounds = region_bounds(region);
         regions.push(RegionSummaryOutput {
@@ -266,7 +306,7 @@ fn build_structure_output(path: &Path, scope: MaterialScope) -> Result<StableStr
         })
         .collect::<Vec<_>>();
 
-    let total_selected_blocks = material_items.iter().map(|item| item.count).sum();
+    let total_selected_blocks = material_items.iter().map(|item| item.block_count).sum();
     let entity_summary = EntitySummaryOutput {
         total_entities,
         items: entity_counts
@@ -290,6 +330,7 @@ fn build_structure_output(path: &Path, scope: MaterialScope) -> Result<StableStr
         regions,
         layers_summary,
         entity_summary,
+        container_scan,
     })
 }
 
@@ -303,7 +344,10 @@ fn build_material_items(
             display_name: display_name_for_block(&block_id),
             icon_hint: block_id.clone(),
             block_id,
-            count: acc.count,
+            count: acc.block_count + acc.container_item_count,
+            block_count: acc.block_count,
+            container_item_count: acc.container_item_count,
+            total_count: acc.block_count + acc.container_item_count,
             region_counts: Some(
                 acc.region_counts
                     .into_iter()
@@ -325,11 +369,216 @@ fn build_material_items(
 
     items.sort_by(|left, right| {
         right
-            .count
-            .cmp(&left.count)
+            .total_count
+            .cmp(&left.total_count)
             .then_with(|| left.block_id.cmp(&right.block_id))
     });
     items
+}
+
+fn scan_region_container_items(
+    region_name: &str,
+    region: &crate::nbt::RegionNbt,
+    scope: &ResolvedScope,
+    min_world_y: i32,
+    material_counts: &mut BTreeMap<String, MaterialAccumulator>,
+    scan: &mut ContainerScanOutput,
+) {
+    for (index, tile_entity) in region.tile_entities.iter().enumerate() {
+        let layer_index = tile_entity_layer_index(tile_entity, region.position.y, min_world_y);
+        let in_scope = match scope {
+            ResolvedScope::All => true,
+            ResolvedScope::Region(expected) => expected == region_name,
+            ResolvedScope::Layer(expected) => match layer_index {
+                Some(layer) => layer == *expected,
+                None => {
+                    scan.warnings.push(format!(
+                        "tile entity {region_name}#{index} has no numeric y field; skipped for layer scope"
+                    ));
+                    false
+                }
+            },
+        };
+        if !in_scope {
+            continue;
+        }
+
+        let mut stacks = Vec::<ContainerStack>::new();
+        collect_container_stacks(
+            tile_entity,
+            &mut stacks,
+            scan,
+            &format!("{region_name}#{index}"),
+        );
+        if !stacks.is_empty() {
+            scan.containers_scanned += 1;
+        }
+        for stack in stacks {
+            scan.item_stacks_scanned += 1;
+            let material = material_counts.entry(stack.id.clone()).or_default();
+            material.container_item_count =
+                material.container_item_count.saturating_add(stack.count);
+            *material
+                .region_counts
+                .entry(region_name.to_string())
+                .or_insert(0) += stack.count;
+            if let Some(layer) = layer_index {
+                *material.layer_counts.entry(layer).or_insert(0) += stack.count;
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ContainerStack {
+    id: String,
+    count: u64,
+}
+
+fn collect_container_stacks(
+    value: &NbtValue,
+    out: &mut Vec<ContainerStack>,
+    scan: &mut ContainerScanOutput,
+    path: &str,
+) {
+    let NbtValue::Compound(map) = value else {
+        return;
+    };
+
+    if let Some(items) = get_case_insensitive(map, "Items") {
+        match items {
+            NbtValue::List(list) => {
+                for (index, item) in list.iter().enumerate() {
+                    match parse_item_stack(item) {
+                        Some(stack) => out.push(stack),
+                        None => scan
+                            .warnings
+                            .push(format!("{path}.Items[{index}] is missing id or Count")),
+                    }
+                }
+            }
+            _ => scan
+                .warnings
+                .push(format!("{path}.Items is not a list; skipped")),
+        }
+    }
+
+    if let Some(item) = get_case_insensitive(map, "Item") {
+        if let Some(stack) = parse_pot_item(item) {
+            out.push(stack);
+        }
+    }
+
+    if let Some(sherds) = get_case_insensitive(map, "Sherds") {
+        if let NbtValue::List(list) = sherds {
+            for sherd in list {
+                if let Some(id) = nbt_string(sherd).filter(|id| !id.is_empty()) {
+                    out.push(ContainerStack {
+                        id: id.to_string(),
+                        count: 1,
+                    });
+                }
+            }
+        }
+    }
+
+    for (key, child) in map {
+        if key.eq_ignore_ascii_case("Items")
+            || key.eq_ignore_ascii_case("Item")
+            || key.eq_ignore_ascii_case("Sherds")
+        {
+            continue;
+        }
+        match child {
+            NbtValue::Compound(_) => {
+                collect_container_stacks(child, out, scan, &format!("{path}.{key}"))
+            }
+            NbtValue::List(list) => {
+                for (index, item) in list.iter().enumerate() {
+                    if matches!(item, NbtValue::Compound(_)) {
+                        collect_container_stacks(
+                            item,
+                            out,
+                            scan,
+                            &format!("{path}.{key}[{index}]"),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn parse_item_stack(value: &NbtValue) -> Option<ContainerStack> {
+    let NbtValue::Compound(map) = value else {
+        return None;
+    };
+    let id = get_case_insensitive(map, "id").and_then(nbt_string)?;
+    if id.is_empty() || id == "minecraft:air" {
+        return None;
+    }
+    let count = get_case_insensitive(map, "Count")
+        .and_then(nbt_u64)
+        .unwrap_or(1);
+    if count == 0 {
+        return None;
+    }
+    Some(ContainerStack {
+        id: id.to_string(),
+        count,
+    })
+}
+
+fn parse_pot_item(value: &NbtValue) -> Option<ContainerStack> {
+    match value {
+        NbtValue::String(id) if !id.is_empty() => Some(ContainerStack {
+            id: id.clone(),
+            count: 1,
+        }),
+        NbtValue::Compound(_) => parse_item_stack(value),
+        _ => None,
+    }
+}
+
+fn tile_entity_layer_index(value: &NbtValue, region_y: i32, min_world_y: i32) -> Option<i32> {
+    let NbtValue::Compound(map) = value else {
+        return None;
+    };
+    let y = get_case_insensitive(map, "y").and_then(nbt_i64)? as i32;
+    Some(region_y + y - min_world_y)
+}
+
+fn get_case_insensitive<'a>(
+    map: &'a std::collections::HashMap<String, NbtValue>,
+    key: &str,
+) -> Option<&'a NbtValue> {
+    map.get(key).or_else(|| {
+        map.iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value)
+    })
+}
+
+fn nbt_string(value: &NbtValue) -> Option<&str> {
+    match value {
+        NbtValue::String(value) => Some(value.as_str()),
+        _ => None,
+    }
+}
+
+fn nbt_u64(value: &NbtValue) -> Option<u64> {
+    nbt_i64(value).and_then(|value| u64::try_from(value).ok())
+}
+
+fn nbt_i64(value: &NbtValue) -> Option<i64> {
+    match value {
+        NbtValue::Byte(value) => Some(i64::from(*value)),
+        NbtValue::Short(value) => Some(i64::from(*value)),
+        NbtValue::Int(value) => Some(i64::from(*value)),
+        NbtValue::Long(value) => Some(*value),
+        _ => None,
+    }
 }
 
 fn display_name_for_block(block_id: &str) -> String {
@@ -463,7 +712,7 @@ mod tests {
 
     #[test]
     fn stats_output_contains_required_sections() {
-        let output = build_stats_output(std::path::Path::new(water_fixture_path())).unwrap();
+        let output = build_stats_output(std::path::Path::new(water_fixture_path()), false).unwrap();
 
         assert_eq!(output.metadata.name, "Water Fixture");
         assert_eq!(output.structure_stats.scope.kind, "all");
@@ -478,6 +727,7 @@ mod tests {
         let output = build_materials_output(
             std::path::Path::new(water_fixture_path()),
             MaterialScope::Layer(0),
+            false,
         )
         .unwrap();
 
@@ -485,6 +735,8 @@ mod tests {
         assert_eq!(output.structure_stats.total_non_air_blocks, 2);
         assert_eq!(output.material_items.len(), 1);
         assert_eq!(output.material_items[0].block_id, "minecraft:stone");
-        assert_eq!(output.material_items[0].count, 2);
+        assert_eq!(output.material_items[0].block_count, 2);
+        assert_eq!(output.material_items[0].container_item_count, 0);
+        assert_eq!(output.material_items[0].total_count, 2);
     }
 }

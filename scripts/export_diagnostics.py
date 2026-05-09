@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Export a minimal Litematica-BA diagnostics bundle.
 
 This script is intentionally low-intrusion:
@@ -39,7 +39,7 @@ MAX_JSON_FILE_BYTES = 2_000_000
 def find_repo_root(start: Path) -> Path:
     current = start.resolve()
     for candidate in [current, *current.parents]:
-        if (candidate / "desktop-js").is_dir() and (candidate / "tools" / "viewer-core").is_dir():
+        if (candidate / "desktop-nova").is_dir() and (candidate / "tools" / "viewer-core").is_dir():
             return candidate
     return current
 
@@ -151,12 +151,12 @@ def collect_environment(repo: Path) -> str:
 def collect_project_paths(repo: Path) -> dict[str, Any]:
     paths = {
         "project_root": repo,
-        "desktop_js": repo / "desktop-js",
+        "desktop_nova": repo / "desktop-nova",
         "viewer_core": repo / "tools" / "viewer-core",
         "data": repo / "data",
         "viewer_backend_bin": repo / "bin" / "viewer-backend",
         "projection_library": repo / "data" / "projection-library",
-        "cache": repo / ".tmp" / "desktop-js" / "render",
+        "cache": repo / ".tmp" / "desktop-nova" / "render",
         "docs": repo / "docs",
         "diagnostics": repo / "diagnostics",
         "assistant_index": repo / ".tmp" / "assistant" / "lba_assistant_index.sqlite",
@@ -252,11 +252,11 @@ def latest_file(paths: list[Path]) -> Path | None:
 
 
 def collect_recent_cache_manifest(repo: Path) -> dict[str, Any]:
-    cache_dir = repo / ".tmp" / "desktop-js" / "render"
+    cache_dir = repo / ".tmp" / "desktop-nova" / "render"
     candidates = sorted(cache_dir.glob("lba_native_cache*.json")) if cache_dir.is_dir() else []
     latest = latest_file(candidates)
     if not latest:
-        return unavailable("no lba_native_cache*.json manifest found under .tmp/desktop-js/render")
+        return unavailable("no lba_native_cache*.json manifest found under .tmp/desktop-nova/render")
     try:
         stat = latest.stat()
         if stat.st_size > MAX_JSON_FILE_BYTES:
@@ -304,12 +304,12 @@ def read_tail(path: Path, max_chars: int = MAX_TEXT_CHARS) -> str:
 
 def collect_recent_logs(repo: Path) -> str:
     candidates: list[Path] = []
-    for folder in [repo / ".tmp" / "desktop-js" / "render", repo]:
+    for folder in [repo / ".tmp" / "desktop-nova" / "render", repo]:
         if folder.is_dir():
             candidates.extend(folder.glob("*.log"))
     candidates = [p for p in candidates if p.is_file()]
     if not candidates:
-        return "not available yet: no .log files found under .tmp/desktop-js/render or repo root\n"
+        return "not available yet: no .log files found under .tmp/desktop-nova/render or repo root\n"
     candidates = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[:8]
     parts = [
         "Recent log excerpts",
