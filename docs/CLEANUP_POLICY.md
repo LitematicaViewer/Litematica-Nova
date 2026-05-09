@@ -1,124 +1,95 @@
 # 清理策略
 
-本文定义低风险磁盘清理规则。它只处理生成物、缓存和可恢复隔离，不是重构计划。
+本文定义仓库清理规则，目标是避免把本地构建产物、调试输出、下载缓存和临时样例提交到 GitHub。
 
-## 当前 UI 状态
+## 当前主线
 
-- `desktop-nova/` 是当前桌面 UI 主线和功能基准，清理时不得删除。
-- 旧 JS 桌面 UI 已从 Git 跟踪中排除，只保留本地参考，不作为维护入口。
-- `src/litematicaba/`、`desktop-ui/`、`script/` 已删除。
-- `scripts/` 是当前维护脚本目录。
+- `desktop-nova/` 是当前桌面端主线。
+- `tools/viewer-core/` 是 `.litematic` 解析、统计、cache 和原生 viewer 后端。
+- `bin/viewer-backend/` 是应用运行时读取的后端目录，里面的 exe 应来自 release build。
+- `data/` 保存内置模板、AI prompt、BlockState DB 和资源数据。
+- `scripts/` 保存维护脚本和可重复生成数据的脚本。
 
-## 可以删除的内容
+## 不提交的内容
 
-这些内容是缓存或构建产物，可在需要释放空间时删除：
+这些内容属于本地状态或可重新生成内容，不应提交：
 
 - `desktop-nova/node_modules/`
 - `desktop-nova/dist/`
 - `desktop-nova/src-tauri/target/`
 - `tools/viewer-core/target/`
 - `.tmp/`
-- `.external/`，前提是当前任务不需要 Nova 参考仓库。
+- `.external/`
 - `diagnostics/bundle_*`
-- `__pycache__/`、`.pytest_cache/`、`.mypy_cache/`、`.ruff_cache/`、`.cache/`
-- `.vite/`、`.turbo/`、`.next/`、`coverage/`、`build/`
+- `__pycache__/`、`.pytest_cache/`、`.mypy_cache/`、`.ruff_cache/`
 - `*.tmp`、`*.temp`
-- 本地验证图，例如 `_full_verify_*.png`
-- `docs/` 下本地打包出的 exe
+- `_full_verify_*.png`
+- `_full_mode_*`
+- `*_trace.log`
+- `*_debug.log`
+- `*_probe.png`
+- `*_preview.png`
+- AppData 下载物和 RedenMC 下载出来的 `.litematic`
+- 本地打包出的 exe，例如 `docs/*.exe`
 
-保留 `diagnostics/README.md`；只删除生成出的 `bundle_*` 目录。
+## 可以删除的本地内容
+
+需要释放磁盘空间时，可以删除：
+
+- Node 依赖目录和前端构建目录。
+- Rust `target/`。
+- 诊断包目录 `diagnostics/bundle_*`。
+- 根目录临时验证图、临时 fixture、probe 输出和 debug log。
+- `.external/`，前提是当前任务不需要对照 Nova 原仓库。
 
 ## 不要删除或移动
 
-清理时不要删除或移动：
+除非任务明确要求，不要删除或移动：
 
 - `desktop-nova/`
 - `tools/viewer-core/`
-- `data/projection-library/`
-- `data/ai-projection/`
-- `data/minecraft_blockstates/overrides/`
-- 当前 BlockState DB 文件，除非任务明确要求重新生成 DB。
-- `bin/viewer-backend/`
+- `data/`
 - `docs/`
 - `scripts/`
-- `MAINTAINERS.md`
-- `README.md`
+- `bin/viewer-backend/`
 - package manifest、Cargo manifest、Tauri 配置。
-- AI prompt、config、validator、normalizer、apply bridge 源码。
+- AI prompt、配置模板、validator、normalizer 和 apply bridge 源码。
 - viewer-core mesh、Full Mode、native viewer、cache 协议源码。
 
-## 只隔离，不直接删
+## 测试 fixture
 
-如果某个文件像调试产物或 fixture，但可能仍有回归价值，先移动到仓库外隔离区，不要直接删除。
+测试需要的 fixture 应放在对应模块的 `tests/fixtures/` 下，不再放在仓库根目录。
 
-隔离目录：
+当前保留：
 
-```text
-C:\Users\27232\CodexBackups\<cleanup_backup>\quarantine\
-```
+- `tools/viewer-core/tests/fixtures/stats_water_fixture.litematic`
 
-建议隔离对象：
+## 重新构建
 
-- 根目录 `_full_mode_*`
-- 根目录 `_verify_*`
-- 根目录包含 `debug`、`trace`、`probe`、`fixture`、`baseline`、`repro`、`test` 的零散产物。
-- 根目录 `.png`、`.log`、零散 `.litematic` 样例。
-- 无法确认用途的截图、JSON、layout 文件。
-
-隔离前应记录原始路径和判断依据到 `cleanup_manifest.json`。
-
-## 从隔离区恢复
-
-恢复单个文件：
+安装前端依赖：
 
 ```powershell
-Copy-Item "C:\Users\27232\CodexBackups\<cleanup_backup>\quarantine\_verify_example.png" "C:\Users\27232\Documents\Litematica-BA\_verify_example.png"
-```
-
-恢复全部文件时，把隔离目录内容按原相对路径复制回仓库根目录。
-
-## 重新安装和构建
-
-删除 `node_modules` 后：
-
-```powershell
-cd C:\Users\27232\Documents\Litematica-BA\desktop-nova
+cd desktop-nova
 npm install
 ```
 
-重新构建前端：
+构建前端：
 
 ```powershell
-cd C:\Users\27232\Documents\Litematica-BA\desktop-nova
+cd desktop-nova
 npm run build
 ```
 
-重新检查 Tauri 和 Rust：
+检查 Tauri 后端：
 
 ```powershell
-cd C:\Users\27232\Documents\Litematica-BA\desktop-nova\src-tauri
+cd desktop-nova\src-tauri
 cargo check
-
-cd C:\Users\27232\Documents\Litematica-BA\tools\viewer-core
-cargo build --release --bin litematica_core
-cargo build --release --bin litematica_native_viewer
 ```
 
-## 重新导出诊断
+检查 viewer-core：
 
 ```powershell
-cd C:\Users\27232\Documents\Litematica-BA
-python scripts\export_diagnostics.py
+cd tools\viewer-core
+cargo check
 ```
-
-## 必需清理记录
-
-任何破坏性清理都应创建：
-
-- `cleanup_manifest.json`
-- `cleanup_report.md`
-- 仓库外备份目录：`C:\Users\27232\CodexBackups\`
-- 备份内的 `BACKUP_MANIFEST.json`、备份日志、`cleanup_plan_before.json`
-
-不要把备份或隔离目录放进仓库。
-

@@ -1896,7 +1896,7 @@ fn open_workspace_path(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn cleanup_js_temp_files() -> Result<String, String> {
+fn cleanup_local_temp_files() -> Result<String, String> {
     let dir = current_user_config_dir()?.join("render");
     if !dir.exists() {
         return Ok("No desktop-nova render temp directory exists.".to_string());
@@ -2495,7 +2495,7 @@ fn main() {
             read_image_base64,
             open_file_parent_dir,
             open_workspace_path,
-            cleanup_js_temp_files,
+            cleanup_local_temp_files,
             reden_search_litematica,
             reden_machine_detail,
             reden_download_attachment,

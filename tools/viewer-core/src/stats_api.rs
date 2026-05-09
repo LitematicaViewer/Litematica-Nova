@@ -706,7 +706,7 @@ mod tests {
     fn water_fixture_path() -> &'static str {
         concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../_full_mode_water_fixture.litematic"
+            "/tests/fixtures/stats_water_fixture.litematic"
         )
     }
 

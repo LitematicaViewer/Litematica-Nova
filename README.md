@@ -8,8 +8,6 @@
 - `data/`：内置模板、AI prompt、BlockState DB、资源数据。
 - `scripts/`：维护脚本、诊断导出、索引生成、数据生成。
 
-旧 JS 桌面 UI 只保留在本地，已经从 Git 跟踪中排除，不再作为维护入口，也不上传。
-
 ## 已移除的旧入口
 
 - `desktop-ui/` 已删除。
@@ -27,7 +25,7 @@
 - 不修改 viewer-core 渲染语义来解决 UI 问题。
 - 普通用户态数据默认写入 `%AppData%\Litematica-BA\desktop-nova`。
 - API Key 不写入 localStorage、普通配置、日志或 prompt。
-- 旧 JS 桌面 UI 不再上传，也不在文档中作为功能规格引用。
+- 历史桌面入口不再上传，也不再作为功能规格引用。
 
 当前已接入的主要能力：
 
