@@ -1,12 +1,12 @@
 # desktop-nova 状态
 
-本文记录 `desktop-nova` 当前状态，避免后续维护时把旧 UI、本地参考仓库和新主线混在一起。
+本文记录 `desktop-nova` 当前状态，避免后续维护时把历史入口、本地参考仓库和新主线混在一起。
 
 ## 当前方向
 
 - `desktop-nova/` 是新的桌面端主线和功能基准。
 - `.external/Litematica-Nova-rpr-ba` 只作为 Nova 视觉和主题参考，不上传。
-- 旧 JS 桌面 UI 只保留在本地，已从 Git 跟踪中排除，不再作为维护入口。
+- 历史桌面入口已从 Git 跟踪中排除，不再作为维护入口。
 - 后端能力通过 `desktop-nova` 的 service/adapter 调用 `bin/viewer-backend/` 里的可执行文件。
 - 用户态数据默认写入 `%AppData%\Litematica-BA\desktop-nova`。
 
