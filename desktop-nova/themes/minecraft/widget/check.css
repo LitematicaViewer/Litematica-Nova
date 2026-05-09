@@ -1,0 +1,79 @@
+:root {
+    --ln-check-size: 20px;
+    --ln-check-label-gap: 8px;
+    --ln-check-label-min-height: 24px;
+}
+
+label:has(> input[type="checkbox"]),
+label:has(> input[type="radio"]) {
+    display: inline-flex;
+    min-height: var(--ln-check-label-min-height);
+    align-items: center;
+    gap: var(--ln-check-label-gap);
+    vertical-align: middle;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+    flex: 0 0 auto;
+    width: var(--ln-check-size);
+    height: var(--ln-check-size);
+    min-width: var(--ln-check-size);
+    margin: 0;
+    appearance: none;
+    background-color: transparent;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: var(--ln-check-size) var(--ln-check-size);
+    cursor: default;
+    image-rendering: pixelated;
+    vertical-align: middle;
+}
+
+.form-row input[type="checkbox"],
+.form-row input[type="radio"] {
+    width: var(--ln-check-size);
+}
+
+input[type="radio"] {
+    background-image: url("../resource/form/radio_default.png");
+}
+
+input[type="radio"]:hover:not(:disabled) {
+    background-image: url("../resource/form/radio_hover.png");
+}
+
+input[type="radio"]:checked {
+    background-image: url("../resource/form/radio_checked.png");
+}
+
+input[type="radio"]:checked:hover:not(:disabled) {
+    background-image: url("../resource/form/radio_checked_hover.png");
+}
+
+input[type="checkbox"] {
+    background-image: url("../resource/form/checkbox_default.png");
+}
+
+input[type="checkbox"]:hover:not(:disabled) {
+    background-image: url("../resource/form/checkbox_hover.png");
+}
+
+input[type="checkbox"]:checked {
+    background-image: url("../resource/form/checkbox_checked.png");
+}
+
+input[type="checkbox"]:checked:hover:not(:disabled) {
+    background-image: url("../resource/form/checkbox_checked_hover.png");
+}
+
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+}
+
+label:has(> input[type="checkbox"]:disabled),
+label:has(> input[type="radio"]:disabled) {
+    color: #808080;
+}

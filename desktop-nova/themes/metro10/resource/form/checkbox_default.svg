@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
+  <defs>
+    <mask id="ringMask">
+      <rect width="20" height="20" fill="black" />
+      <rect x="0" y="0" width="20" height="20" fill="white" />
+      <rect x="2" y="2" width="16" height="16" fill="black" />
+    </mask>
+  </defs>
+  <rect x="0" y="0" width="20" height="20" fill="#333333" mask="url(#ringMask)" />
+</svg>

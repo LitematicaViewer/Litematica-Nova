@@ -7,6 +7,7 @@ pub mod full_mode;
 pub mod full_mode_v2;
 pub mod generate_projection;
 pub mod mesh;
+pub mod metadata_edit;
 pub mod model;
 pub mod native_viewer;
 pub mod nbt;

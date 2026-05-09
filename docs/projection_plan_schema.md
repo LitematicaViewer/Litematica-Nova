@@ -1,8 +1,8 @@
-# Projection Plan Schema v1
+# 投影生成计划格式
 
-`projection_plan.json` is the stable local contract for generated projections. Future AI/API layers should produce only this JSON plan; the local `litematica_core generate` command validates it and writes the `.litematic` NBT file.
+`projection_plan.json` 是本地生成投影的稳定契约。AI/API 层只能生成这个 JSON；真正写 `.litematic` 由本地 `litematica_core generate` 完成。
 
-## Commands
+## 命令
 
 ```powershell
 litematica_core.exe generate --plan <plan.json> --dry-run
@@ -11,9 +11,9 @@ litematica_core.exe generate --plan <plan.json> --output <out.litematic>
 litematica_core.exe generate --plan <plan.json> --output <out.litematic> --force=false
 ```
 
-Output files are not overwritten by default. `--dry-run` validates and summarizes the plan without writing a file. The command currently writes a stable JSON summary to stdout; `--json` is accepted for dry-run callers that want to be explicit.
+默认不覆盖输出文件。`--dry-run` 只校验和汇总，不写文件。
 
-## Top Level
+## 顶层结构
 
 ```json
 {
@@ -28,253 +28,46 @@ Output files are not overwritten by default. `--dry-run` validates and summarize
 }
 ```
 
-- `version`: required, currently `1`.
-- `metadata`: optional display metadata.
-- `minecraft_data_version`: optional integer written to `MinecraftDataVersion`.
-- `regions`: required non-empty array.
+字段：
 
-## Region
+- `version`：必填，目前为 `1`。
+- `metadata`：可选，用于展示。
+- `minecraft_data_version`：可选整数，写入 `MinecraftDataVersion`。
+- `regions`：必填，非空数组。
+
+## 区域
 
 ```json
 {
   "name": "main",
   "origin": [0, 0, 0],
-  "size": [32, 16, 32],
   "operations": []
 }
 ```
 
-`size` values must be positive. Operation coordinates are local to the region and must stay within `0..size-1`.
+字段：
 
-## Block
+- `name`：区域名。
+- `origin`：区域原点 `[x, y, z]`。
+- `operations`：生成操作数组。
 
-```json
-{
-  "name": "minecraft:stone_bricks",
-  "properties": {}
-}
-```
+## 操作
 
-Unqualified vanilla names such as `stone` are normalized to `minecraft:stone`. Properties are preserved as string key/value pairs. The generator rejects empty names and empty property keys/values, but does not perform full Minecraft state legality validation.
+常见操作包括：
 
-## Material
+- `fill_box`
+- `hollow_box`
+- `sphere`
+- `cylinder`
+- `line`
+- `weighted_random`
 
-Older plans may continue to put `block` directly on operations:
+每个操作必须提供合法的 Minecraft block id 和属性。
 
-```json
-{
-  "type": "fill_box",
-  "from": [0, 0, 0],
-  "to": [3, 3, 3],
-  "block": { "name": "minecraft:stone" }
-}
-```
+## 规则
 
-New plans may use `material`.
+- plan、block id、property key/value 必须使用英文和 Minecraft 原始标识。
+- 中文只能出现在 metadata 文本里。
+- AI 返回 plan 后只允许填入表单，不允许自动 dry-run/apply。
+- 前端校验只做第一层防护，后端 dry-run 是最终校验。
 
-### single
-
-```json
-{
-  "material": {
-    "type": "single",
-    "block": { "name": "minecraft:stone_bricks", "properties": {} }
-  }
-}
-```
-
-### weighted_random
-
-```json
-{
-  "material": {
-    "type": "weighted_random",
-    "seed": 12345,
-    "entries": [
-      { "weight": 70, "block": { "name": "minecraft:stone_bricks" } },
-      { "weight": 20, "block": { "name": "minecraft:cracked_stone_bricks" } },
-      { "weight": 10, "block": { "name": "minecraft:mossy_stone_bricks" } }
-    ]
-  }
-}
-```
-
-Weighted random is deterministic. The same plan and seed produce the same output. If `seed` is omitted, the generator uses a stable built-in seed, never the current time.
-
-`checkerboard_floor.material_a` and `checkerboard_floor.material_b` accept either a full material object or a direct block object.
-
-## Operations
-
-Operations run in order; later operations overwrite earlier blocks. Regions start filled with `minecraft:air`. Every operation supports optional `name`, used only in summary and diagnostics.
-
-### fill_box
-
-```json
-{
-  "type": "fill_box",
-  "name": "solid core",
-  "from": [0, 0, 0],
-  "to": [3, 3, 3],
-  "block": { "name": "minecraft:stone" }
-}
-```
-
-### hollow_box
-
-```json
-{
-  "type": "hollow_box",
-  "from": [0, 0, 0],
-  "to": [31, 15, 31],
-  "material": { "type": "single", "block": { "name": "minecraft:stone_bricks" } },
-  "thickness": 1
-}
-```
-
-### outline_box
-
-Writes only the 12 edges of a box.
-
-```json
-{
-  "type": "outline_box",
-  "from": [0, 0, 0],
-  "to": [15, 7, 15],
-  "block": { "name": "minecraft:oak_log", "properties": { "axis": "y" } }
-}
-```
-
-### floor
-
-```json
-{
-  "type": "floor",
-  "from": [0, 0, 0],
-  "to": [31, 0, 31],
-  "y": 0,
-  "block": { "name": "minecraft:oak_planks" }
-}
-```
-
-### checkerboard_floor
-
-```json
-{
-  "type": "checkerboard_floor",
-  "from": [0, 0, 0],
-  "to": [15, 0, 15],
-  "material_a": { "name": "minecraft:white_concrete" },
-  "material_b": { "name": "minecraft:black_concrete" }
-}
-```
-
-### wall
-
-```json
-{
-  "type": "wall",
-  "from": [0, 0, 0],
-  "to": [0, 7, 15],
-  "block": { "name": "minecraft:stone_bricks" },
-  "thickness": 1
-}
-```
-
-### pillar
-
-```json
-{
-  "type": "pillar",
-  "base": [0, 0, 0],
-  "height": 8,
-  "block": { "name": "minecraft:oak_log", "properties": { "axis": "y" } }
-}
-```
-
-### cylinder
-
-```json
-{
-  "type": "cylinder",
-  "center": [8, 0, 8],
-  "radius": 4,
-  "height": 8,
-  "filled": true,
-  "block": { "name": "minecraft:stone" }
-}
-```
-
-### ring
-
-Creates a hollow circular ring or vertical ring stack.
-
-```json
-{
-  "type": "ring",
-  "center": [8, 0, 8],
-  "radius": 5,
-  "height": 2,
-  "thickness": 1,
-  "block": { "name": "minecraft:stone_bricks" }
-}
-```
-
-### sphere
-
-```json
-{
-  "type": "sphere",
-  "center": [8, 8, 8],
-  "radius": 4,
-  "filled": false,
-  "block": { "name": "minecraft:glass" }
-}
-```
-
-### roof_gable
-
-Creates a simple two-slope gable roof. `axis` is the ridge direction axis, either `x` or `z`.
-
-```json
-{
-  "type": "roof_gable",
-  "from": [0, 5, 0],
-  "to": [15, 9, 9],
-  "axis": "x",
-  "overhang": 1,
-  "block": { "name": "minecraft:brick_stairs", "properties": { "facing": "north" } }
-}
-```
-
-## Summary
-
-Dry-run and apply return JSON summary on stdout:
-
-- `plan_path`
-- `output_path`
-- `dry_run`
-- `regions_count`
-- `operation_count`
-- `total_volume`
-- `estimated_non_air_blocks`
-- `estimated_palette_count`
-- `palette_entries_per_region`
-- `operations`
-- `material_summary`
-- `warnings`
-- `errors`
-
-Each operation summary includes:
-
-- `region`
-- `index`
-- `name`
-- `operation_type`
-- `affected_block_count`
-- `material_summary`
-
-Apply additionally reports:
-
-- `wrote_file`
-- `output_size`
-- `verify_load_result`

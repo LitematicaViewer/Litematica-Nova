@@ -3,6 +3,7 @@
 
 # Node / frontend
 node_modules/
+desktop-js/
 desktop-js/node_modules/
 desktop-js/dist/
 desktop-js/.vite/
@@ -37,6 +38,7 @@ Thumbs.db
 Desktop.ini
 
 # Local runtime data
+.external/
 data/cache/
 data/projection-library/
 data/settings.json
@@ -56,6 +58,8 @@ bin/viewer-backend/*.pdb
 # Local preview / verify outputs
 *.tmp
 *.temp
+docs/*.exe
+_full_verify_*.png
 _full_verify_v2_*.png
 _full_verify_v2_*.txt
 _full_mode_*

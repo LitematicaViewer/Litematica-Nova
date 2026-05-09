@@ -1,0 +1,133 @@
+/* 导航侧边栏容器 */
+.sidebar {
+    display: flex;
+    flex: 0 0 220px;
+    width: 220px;
+    min-width: 220px;
+    flex-direction: column;
+    background: var(--ln-navigation-background-color, #f7f7f7);
+}
+
+/* 折叠状态的侧边栏容器 */
+.sidebar-collapsed {
+    flex-basis: 48px;
+    width: 48px;
+    min-width: 48px;
+}
+
+/* 导航展开按钮的基础布局 */
+.nav-expand,
+/* 普通导航项的基础布局 */
+.nav-item {
+    display: flex;
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 48px;
+    max-height: 48px;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 0 16px;
+    border: none;
+    outline: 1px solid transparent;
+    outline-offset: -1px;
+    color: #1a1a1a;
+    text-align: left;
+}
+
+/* 导航展开按钮 */
+.nav-expand {
+    background-color: #f7f7f7;
+}
+
+/* 可用状态下悬停的导航展开按钮 */
+.nav-expand:hover:not(:disabled),
+/* 可用状态下悬停的普通导航项 */
+.nav-item:hover:not(:disabled) {
+    outline-color: #999999;
+    background-color: #e2e2e2;
+}
+
+/* 普通导航项 */
+.nav-item,
+.nav-item[aria-pressed="true"],
+.nav-item-active {
+    background: transparent;
+}
+
+/* 折叠侧边栏中的导航展开按钮 */
+.sidebar-collapsed .nav-expand,
+/* 折叠侧边栏中的普通导航项 */
+.sidebar-collapsed .nav-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+}
+
+/* 导航列表 */
+.nav-list {
+    display: flex;
+    flex-direction: column;
+}
+
+/* 底部导航列表 */
+.nav-list-bottom {
+    margin-top: auto;
+}
+
+/* 导航图标 */
+.nav-icon {
+    display: block;
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+}
+
+/* 当前激活的导航项 */
+.nav-item-active {
+    border-left: none;
+    padding-left: 16px;
+}
+
+.nav-item-active::before {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 4px;
+    height: 24px;
+    background: Highlight;
+    transform: translateY(-50%);
+    content: "";
+}
+
+/* 折叠侧边栏中的激活导航项 */
+.sidebar-collapsed .nav-item-active {
+    padding-left: 0;
+}
+
+@media (max-width: 760px) {
+    /* 小屏幕下的导航侧边栏容器 */
+    .sidebar {
+        flex-basis: 48px;
+        width: 48px;
+        min-width: 48px;
+    }
+
+    /* 小屏幕下侧边栏中的导航展开按钮 */
+    .sidebar .nav-expand,
+    /* 小屏幕下侧边栏中的普通导航项 */
+    .sidebar .nav-item {
+        justify-content: center;
+        gap: 0;
+        padding: 0;
+    }
+
+    /* 小屏幕下导航展开按钮中的文字 */
+    .sidebar .nav-expand strong,
+    /* 小屏幕下普通导航项中的标签文字 */
+    .sidebar .nav-item .nav-label {
+        display: none;
+    }
+}

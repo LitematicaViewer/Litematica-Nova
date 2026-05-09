@@ -1,61 +1,66 @@
-# Litematica-BA Maintainer Entry
+# Litematica-BA 维护入口
 
-This file is a maintenance entry point. It is not product documentation.
+本文是维护入口，不是产品介绍。
 
-## Current mainline
+## 当前主线
 
-- Active desktop UI: `desktop-js/`.
-- Active Rust core and native viewer: `tools/viewer-core/`.
-- Runtime viewer binaries used by the app: `bin/viewer-backend/`.
-- Main data/config area: `data/`.
-- Removed legacy paths: `src/litematicaba/`, `desktop-ui/`, and `script/`.
-- `scripts/` remains the active maintenance tooling directory.
+- 活跃桌面 UI：`desktop-nova/`。
+- Rust 后端和原生 viewer：`tools/viewer-core/`。
+- 应用运行时二进制：`bin/viewer-backend/`。
+- 主数据和配置区：`data/`。
+- 维护脚本：`scripts/`。
+- 旧 JS 桌面 UI 已从 Git 跟踪中排除，只保留为本地历史参考，不上传，不作为维护入口。
+- 已删除旧路径：`src/litematicaba/`、`desktop-ui/`、`script/`。
 
-## Read first
+## 先读这些
 
-1. `docs/PROJECT_MAP.md` - project map and current mainline.
-2. `docs/FEATURE_ENTRYPOINTS.md` - feature entry points and call chains.
-3. `docs/DATA_FLOW.md` - data lifecycle and generated/cache areas.
-4. `docs/MODULE_BOUNDARIES.md` - safe edit zones and regression requirements.
-5. `docs/DIAGNOSTICS.md` - diagnostic bundle export and reading guide.
+1. `docs/DESKTOP_NOVA_STATUS.md`：desktop-nova 当前状态和缺口。
+2. `docs/PROJECT_MAP.md`：项目目录和主线说明。
+3. `docs/FEATURE_ENTRYPOINTS.md`：功能入口和调用链。
+4. `docs/DATA_FLOW.md`：数据流、缓存、生成物。
+5. `docs/MODULE_BOUNDARIES.md`：模块边界和回归要求。
+6. `docs/DIAGNOSTICS.md`：诊断包导出和阅读方法。
 
-## Common commands
+## 常用命令
 
 ```powershell
 python scripts\build_assistant_index.py
-python scripts\query_assistant_index.py "desktop-js"
+python scripts\query_assistant_index.py "desktop-nova"
 python scripts\export_diagnostics.py
 
-cd desktop-js
+cd desktop-nova
 npm run build
 
 cd src-tauri
 cargo check
 ```
 
-## Do not hand-edit
+## 不要手改
 
-- Generated BlockState DB outputs under `data/minecraft_blockstates/*.json`; update overrides/scripts and regenerate instead.
-- Diagnostic bundles under `diagnostics/bundle_*`; regenerate with `python scripts\export_diagnostics.py`.
-- Build output such as `desktop-js/dist/`, `desktop-js/node_modules/`, and Rust `target/` directories.
-- Runtime binaries in `bin/viewer-backend/` unless they are copied from a verified `tools/viewer-core` release build.
-- Cache files and manifests unless the task is explicitly cache maintenance.
+- `data/minecraft_blockstates/*.json` 这类生成出的 BlockState DB；应修改 override 或生成脚本后重新生成。
+- `diagnostics/bundle_*` 诊断包；需要时重新导出。
+- `desktop-nova/dist/`、`desktop-nova/node_modules/`、Rust `target/` 等构建产物。
+- `bin/viewer-backend/` 里的运行时 exe；必须来自 `tools/viewer-core` 的 release build。
+- cache 文件和 manifest，除非任务明确要求维护 cache。
 
-## Cleanup / Disk Space
+## 清理规则
 
-For disk cleanup, follow `docs/CLEANUP_POLICY.md`. Build/cache outputs may be deleted, but uncertain debug fixtures and loose root-level regression artifacts should be moved to a workspace-external quarantine instead of being permanently deleted. The old PySide6 UI, `desktop-ui/`, and old `script/` tree have already been removed.
+清理磁盘空间时遵循 `docs/CLEANUP_POLICY.md`。
 
-## AI/Codex maintenance workflow
+可再生成的构建产物可以删除；不确定用途的 fixture、截图、根目录零散调试文件应先移动到仓库外隔离区，不要直接永久删除。
 
-1. Read this file and the docs listed above.
-2. Rebuild/query the assistant index before broad code search.
-3. Locate the feature entry point before editing.
-4. Keep UI/service/core boundaries intact.
-5. Do not change viewer-core mesh, full mode, cache protocol, AI plan semantics, or blockstate generation while fixing unrelated issues.
-6. Run the smallest relevant regression checks, plus build/check commands when paths or shared contracts change.
+## AI/Codex 维护流程
 
-## Top-level cleanup notes
+1. 先读本文和上面列出的文档。
+2. 大范围搜索前先重建或查询维护索引。
+3. 编辑前先定位功能入口和调用链。
+4. 保持 UI、service、Tauri、viewer-core 的边界清晰。
+5. 修 UI 问题时不要顺手改 viewer-core mesh、Full Mode、cache 协议、AI plan 语义或 BlockState 生成逻辑。
+6. 修改共享契约后运行对应 build/check/test。
 
-- The repository currently contains many root-level debug fixtures, screenshots, and logs from renderer investigations. Treat them as generated/debug artifacts unless a doc or test references them.
-- No core directory should be moved during low-risk structure cleanup: keep `desktop-js/`, `tools/viewer-core/`, `data/`, and `bin/viewer-backend/` stable.
-- For uncertain areas, add local README notes first; do not perform large moves or deletes.
+## 顶层清理说明
+
+- 仓库根目录仍可能有 renderer 调查遗留的 fixture、截图、日志。默认按生成物或调试产物处理，除非文档或测试明确引用。
+- 低风险整理时不要移动核心目录：`desktop-nova/`、`tools/viewer-core/`、`data/`、`bin/viewer-backend/`。
+- 不确定归属时，先补说明文档，不要大规模移动或删除。
+

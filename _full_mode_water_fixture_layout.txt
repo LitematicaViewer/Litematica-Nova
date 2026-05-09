@@ -19,6 +19,19 @@ W05	minecraft:rail	11	1	5	shape=north_south,waterlogged=false	Rail neighbor for 
 W06	minecraft:water	15	1	5	level=0	Water adjacent to redstone wire on the east face.
 W06	minecraft:stone	16	0	5	-	Support block for redstone wire.
 W06	minecraft:redstone_wire	16	1	5	east=none,north=none,power=7,south=none,west=none	Redstone wire neighbor for W06.
+W07	minecraft:water	20	1	5	level=0	Water adjacent to waterlogged big dripleaf stem on the east face.
+W07	minecraft:big_dripleaf_stem	21	1	5	facing=north,waterlogged=true	Waterlogged special plant neighbor for W07.
+W08	minecraft:water	25	1	5	level=0	First source water in same-fluid pair.
+W08	minecraft:water	26	1	5	level=0	Second source water in same-fluid pair.
+W09	minecraft:water	31	1	4	level=0	3x3 source-water pool; same-fluid internal sides should not create visible grid seams.
+W09	minecraft:water	31	1	5	level=0	3x3 source-water pool; same-fluid internal sides should not create visible grid seams.
+W09	minecraft:water	31	1	6	level=0	3x3 source-water pool; same-fluid internal sides should not create visible grid seams.
+W09	minecraft:water	32	1	4	level=0	3x3 source-water pool; same-fluid internal sides should not create visible grid seams.
+W09	minecraft:water	32	1	5	level=0	3x3 source-water pool; same-fluid internal sides should not create visible grid seams.
+W09	minecraft:water	32	1	6	level=0	3x3 source-water pool; same-fluid internal sides should not create visible grid seams.
+W09	minecraft:water	33	1	4	level=0	3x3 source-water pool; same-fluid internal sides should not create visible grid seams.
+W09	minecraft:water	33	1	5	level=0	3x3 source-water pool; same-fluid internal sides should not create visible grid seams.
+W09	minecraft:water	33	1	6	level=0	3x3 source-water pool; same-fluid internal sides should not create visible grid seams.
 
 Groups:
   W01: single water
@@ -27,6 +40,8 @@ Groups:
   W04: water next to glass
   W05: water next to rail
   W06: water next to redstone wire
+  W07: water next to waterlogged big dripleaf stem
+  W08: adjacent source water pair
 
-Placed blocks: 14
-Bounding box: width=17, height=2, length=6
+Placed blocks: 27
+Bounding box: width=34, height=2, length=7

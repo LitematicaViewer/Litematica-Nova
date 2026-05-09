@@ -3,7 +3,8 @@ use std::io::{self, BufWriter, Write};
 
 use anyhow::Result;
 use litematica_core::{
-    analyze, cache_layer, cli, generate_projection, mesh, replace_blocks, stats_api, visual,
+    analyze, cache_layer, cli, generate_projection, mesh, metadata_edit, replace_blocks, stats_api,
+    visual,
 };
 use serde::Serialize;
 
@@ -30,7 +31,7 @@ fn main() -> Result<()> {
     let args = cli::parse_args()?;
     match args.command.as_str() {
         "stats" => {
-            let output = stats_api::build_stats_output(&args.input)?;
+            let output = stats_api::build_stats_output(&args.input, args.include_container_items)?;
             emit_output(&output, args.output.as_deref())?;
         }
         "materials" => {
@@ -43,7 +44,11 @@ fn main() -> Result<()> {
                 }
                 _ => anyhow::bail!("use exactly one of --scope all, --region <name>, --layer <y>"),
             };
-            let output = stats_api::build_materials_output(&args.input, scope)?;
+            let output = stats_api::build_materials_output(
+                &args.input,
+                scope,
+                args.include_container_items,
+            )?;
             emit_output(&output, args.output.as_deref())?;
         }
         "analyze" => {
@@ -117,6 +122,14 @@ fn main() -> Result<()> {
                 args.dry_run,
                 args.force,
             )?;
+            emit_output(&summary, None)?;
+        }
+        "edit-metadata" => {
+            let patch = args
+                .patch
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --patch for edit-metadata"))?;
+            let summary = metadata_edit::edit_metadata(&args.input, args.output.as_deref(), patch)?;
             emit_output(&summary, None)?;
         }
         other => anyhow::bail!("unknown command: {other}"),

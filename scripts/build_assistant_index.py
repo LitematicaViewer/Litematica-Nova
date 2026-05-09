@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -16,16 +16,16 @@ DB_PATH = DB_DIR / "lba_assistant_index.sqlite"
 
 DOC_FILES = [
     REPO_ROOT / "README.md",
-    REPO_ROOT / "开发文档.md",
-    REPO_ROOT / "投影格式文档.md",
+    REPO_ROOT / "寮€鍙戞枃妗?md",
+    REPO_ROOT / "鎶曞奖鏍煎紡鏂囨。.md",
     REPO_ROOT / "_next_chat_prompt_chest_front.md",
 ]
 
 CODE_ROOTS = [
     REPO_ROOT / "tools" / "viewer-core" / "src",
     REPO_ROOT / "scripts",
-    REPO_ROOT / "desktop-js" / "src",
-    REPO_ROOT / "desktop-js" / "src-tauri" / "src",
+    REPO_ROOT / "desktop-nova" / "src",
+    REPO_ROOT / "desktop-nova" / "src-tauri" / "src",
     REPO_ROOT / "docs",
 ]
 
@@ -56,10 +56,10 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 
 DOC_ABSTRACTS = {
-    "README.md": "仓库总览，说明 Python 桌面 UI 与 Rust viewer backend 并存，强调 Full Mode V2 与固定 fixture 调试流程。",
-    "开发文档.md": "当前仓库开发边界说明，明确核心开发目录、三种显示模式、Full Mode V2 主链、调试开关与块族修复原则。",
-    "投影格式文档.md": "`.litematic` 文件结构说明，覆盖 Metadata、Regions、BlockStatePalette、BlockStates、TileEntities 与解析还原流程。",
-    "_next_chat_prompt_chest_front.md": "当前 chest family 接力约束，只允许继续排查 east/west double chest 的 front texture identity 后续采样链。",
+    "README.md": "浠撳簱鎬昏锛岃鏄?Python 妗岄潰 UI 涓?Rust viewer backend 骞跺瓨锛屽己璋?Full Mode V2 涓庡浐瀹?fixture 璋冭瘯娴佺▼銆?,
+    "寮€鍙戞枃妗?md": "褰撳墠浠撳簱寮€鍙戣竟鐣岃鏄庯紝鏄庣‘鏍稿績寮€鍙戠洰褰曘€佷笁绉嶆樉绀烘ā寮忋€丗ull Mode V2 涓婚摼銆佽皟璇曞紑鍏充笌鍧楁棌淇鍘熷垯銆?,
+    "鎶曞奖鏍煎紡鏂囨。.md": "`.litematic` 鏂囦欢缁撴瀯璇存槑锛岃鐩?Metadata銆丷egions銆丅lockStatePalette銆丅lockStates銆乀ileEntities 涓庤В鏋愯繕鍘熸祦绋嬨€?,
+    "_next_chat_prompt_chest_front.md": "褰撳墠 chest family 鎺ュ姏绾︽潫锛屽彧鍏佽缁х画鎺掓煡 east/west double chest 鐨?front texture identity 鍚庣画閲囨牱閾俱€?,
 }
 
 
@@ -71,14 +71,14 @@ MODULE_ROLE_HINTS = {
     "tools/viewer-core/src/full_mode_v2.rs": ["full_mode_v2", "typed_model_chain", "block_family"],
     "tools/viewer-core/src/native_viewer.rs": ["native_window", "wgpu", "preview_output"],
     "tools/viewer-core/src/analyze.rs": ["analysis", "palette_frequency"],
-    "desktop-js/src/services/backend.ts": ["tauri_bridge", "desktop_backend"],
-    "desktop-js/src/routes/GeneratePage.tsx": ["ai_projection", "plan_generation"],
+    "desktop-nova/src/services/backend.ts": ["tauri_bridge", "desktop_backend"],
+    "desktop-nova/src/routes/GeneratePage.tsx": ["ai_projection", "plan_generation"],
 }
 
 
 PROJECT_STATE = {
     "snapshot_date": "2026-04-23",
-    "primary_focus": "desktop-js is the active UI; Rust viewer-core is the active backend/viewer. Legacy PySide6 UI has been removed.",
+    "primary_focus": "desktop-nova is the active UI; Rust viewer-core is the active backend/viewer. Legacy PySide6 UI has been removed.",
     "stable_chain": [
         ".litematic -> gzip -> NBT parsing",
         "scene/catalog generation",
@@ -169,10 +169,10 @@ def detect_lang(path: Path) -> str:
 def detect_domain(path_str: str) -> str:
     if path_str.startswith("tools/viewer-core/src/"):
         return "rust_core"
-    if path_str.startswith("desktop-js/src-tauri/"):
+    if path_str.startswith("desktop-nova/src-tauri/"):
         return "tauri_backend"
-    if path_str.startswith("desktop-js/src/"):
-        return "desktop_js"
+    if path_str.startswith("desktop-nova/src/"):
+        return "desktop_nova"
     if path_str.startswith("scripts/"):
         return "tooling"
     if path_str.startswith("docs/") or path_str.endswith(".md"):

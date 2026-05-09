@@ -1,0 +1,50 @@
+HTTP/1.1 302 Found
+Date: Tue, 05 May 2026 15:15:22 GMT
+X-Request-ID: b7f0214c633db98bcc3d9befd8a99a0f
+Vary: Origin
+X-RateLimit-Limit: 50
+X-RateLimit-Remaining: 26
+X-RateLimit-Reset: 1777994124
+Location: https://pan.quark.cn/s/53bb12f5116a
+Server: RedenMC-API/1.0 Starlight
+X-Cache-Lookup: Cache Miss
+Age: 0
+Content-Length: 0
+X-NWS-LOG-UUID: 9595025963485939471
+Connection: keep-alive
+X-Cache-Lookup: Cache Miss
+Cache-Control: max-age=0
+
+HTTP/1.1 200 OK
+Date: Tue, 05 May 2026 15:15:22 GMT
+Content-Type: text/html; charset=utf-8
+Content-Length: 2732
+Connection: keep-alive
+Vary: Accept-Encoding
+Server: Tengine
+Vary: Accept-Encoding
+Vary: Origin
+x-server-id: a132805fe77874e4b29c9334f3d6bf617efccfb643b4fef0f62a1d1c5235b4da4c427b5349595857ccf64da7ecaa541f
+set-cookie: ctoken=itmjIVKxakPnag-HacM_Y6ka; path=/
+set-cookie: grey-id=8710706f-c6ce-26f4-adfc-7fda435f0c74; path=/; httponly
+set-cookie: grey-id.sig=HZqpJ9lBHh8MRNc5BAJ1HPwMesTP7AaIZUXT302rSXA; path=/; httponly
+Cache-Control: no-cache
+Accept-Ch: Sec-CH-UA-Platform
+Accept-Ch: Sec-CH-UA-Platform-Version
+Accept-Ch: Sec-CH-UA-Full-Version
+Accept-Ch: Sec-CH-UA-Arch
+Accept-Ch: Sec-CH-UA-Model
+Accept-Ch: Sec-CH-UA-Bitness
+Accept-Ch: Sec-CH-UA-Full-Version-List
+Accept-Ch: Sec-CH-UA-WoW64
+Accept-Ch: Sec-CH-UA-Mobile
+x-frame-options: SAMEORIGIN
+x-xss-protection: 1; mode=block
+x-content-type-options: nosniff
+x-download-options: noopen
+strict-transport-security: max-age=31536000
+x-readtime: 8
+EagleEye-TraceId: 212bfc3b17779941228953651e63d0
+Strict-Transport-Security: max-age=31536000
+Timing-Allow-Origin: *
+

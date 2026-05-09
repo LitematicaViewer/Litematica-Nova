@@ -384,6 +384,8 @@ fn build_root(plan: &ProjectionPlan) -> Result<BuiltRoot> {
         author: Some(plan.metadata.author.clone()),
         description: Some(plan.metadata.description.clone()),
         name: Some(plan.metadata.name.clone()),
+        time_created: None,
+        time_modified: None,
         total_blocks: Some(clamp_i32(total_blocks)),
         total_volume: Some(clamp_i32(total_volume)),
         region_count: Some(clamp_i32(plan.regions.len() as u64)),
@@ -1898,6 +1900,7 @@ mod tests {
             &region.block_states,
             region_volume(&region.size)?,
             bits_for_palette(region.block_state_palette.len()),
+            region.block_state_palette.len(),
             index,
         )?;
         region

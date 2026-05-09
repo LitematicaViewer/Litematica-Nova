@@ -25,6 +25,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec2, Vec3};
 use image::{Rgb, RgbImage, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use wgpu::util::DeviceExt;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent};
@@ -802,6 +803,7 @@ const FACE_VERTICES_RUNTIME: [[[f32; 3]; 4]; 6] = [
 const NATIVE_CACHE_CHUNK_BINARY_MAGIC_V2: &[u8; 8] = b"LPNC2\0\0\0";
 const NATIVE_CACHE_CHUNK_BINARY_MAGIC_V3: &[u8; 8] = b"LPNC3\0\0\0";
 const NATIVE_CACHE_CHUNK_BINARY_MAGIC_V4: &[u8; 8] = b"LPNC4\0\0\0";
+const NATIVE_CACHE_CHUNK_BINARY_MAGIC_V5: &[u8; 8] = b"LPNC5\0\0\0";
 static BLOCK_COLOR_CACHE: OnceLock<HashMap<String, [f32; 3]>> = OnceLock::new();
 
 #[derive(Debug, Default)]
@@ -1174,7 +1176,12 @@ impl ViewerScene {
         })
     }
 
-    fn from_prebuild_cache(path: &Path, chunk_size: u32) -> Result<Self> {
+    fn from_prebuild_cache(
+        path: &Path,
+        chunk_size: u32,
+        display_mode: ViewerDisplayMode,
+        litematic_path: Option<&Path>,
+    ) -> Result<Self> {
         println!(
             "[VIEWER_CACHE] loading_prebuild_cache path={}",
             path.display()
@@ -1241,10 +1248,50 @@ impl ViewerScene {
         }
 
         let bounds = SceneBounds::from_meshes(&meshes);
+        let uses_textures = meshes
+            .iter()
+            .any(|mesh| mesh.vertices.iter().any(|vertex| vertex.use_texture > 0.5));
+        let (full_mode_materials, texture_atlas) = if display_mode == ViewerDisplayMode::Full {
+            let litematic_path = litematic_path.ok_or_else(|| {
+                anyhow!(
+                    "[VIEWER_CACHE] full mode cache-input requires original litematic path to rebuild runtime_v2_texture_atlas"
+                )
+            })?;
+            if !uses_textures {
+                bail!(
+                    "[VIEWER_CACHE] incompatible full mode cache: cache_input={} format={} has no textured vertices; rebuild 3D cache with current native viewer",
+                    path.display(),
+                    manifest.format
+                );
+            }
+            let chunk_scene_index = ChunkSceneIndex::load(litematic_path, chunk_size)?;
+            let assets = load_full_mode_scene_assets(&chunk_scene_index, litematic_path)?;
+            println!(
+                "[VIEWER_CACHE] full_mode_cache_input_assets restored=true runtime_v2_texture_atlas={} material_slots={} fallback_palette_entries={}",
+                assets.1.is_some(),
+                assets
+                    .0
+                    .as_ref()
+                    .map(|materials| materials.materials.len())
+                    .unwrap_or(0),
+                assets
+                    .0
+                    .as_ref()
+                    .and_then(|materials| materials.stats.as_ref())
+                    .map(|stats| stats.fallback_palette_entries)
+                    .unwrap_or(0)
+            );
+            assets
+        } else {
+            (None, None)
+        };
         println!(
-            "[VIEWER_CACHE] prebuild_cache_ready chunks={} color_chain={} scene_radius={:.2} scene_center=({:.2},{:.2},{:.2}) bounds_source=full_mesh_bounds metadata_size_center=({:.2},{:.2},{:.2})",
+            "[VIEWER_CACHE] prebuild_cache_ready chunks={} format={} color_chain={} loaded_from_cache=true runtime_v2_texture_atlas={} textured_vertices={} scene_radius={:.2} scene_center=({:.2},{:.2},{:.2}) bounds_source=full_mesh_bounds metadata_size_center=({:.2},{:.2},{:.2})",
             meshes.len(),
+            manifest.format,
             manifest.color_chain,
+            texture_atlas.is_some(),
+            uses_textures,
             bounds.radius,
             bounds.center.x,
             bounds.center.y,
@@ -1256,8 +1303,20 @@ impl ViewerScene {
         println!("[VIEWER_COLOR] vertex_color_enabled=true");
         println!("[VIEWER_COLOR] shading_mode=vertex_color_flat");
         println!(
-            "[VIEWER_COLOR] color_source=prebuild_cache native_chain=cache_vertex_color cache_path={}",
-            path.display()
+            "[VIEWER_COLOR] display_mode={} color_source={} native_chain={} cache_path={} loaded_from_cache=true runtime_v2_texture_atlas={}",
+            display_mode.label(),
+            if texture_atlas.is_some() {
+                "runtime_v2_texture_atlas"
+            } else {
+                "prebuild_cache"
+            },
+            if texture_atlas.is_some() {
+                "cache_textured_vertices+runtime_atlas_sample"
+            } else {
+                "cache_vertex_color"
+            },
+            path.display(),
+            texture_atlas.is_some()
         );
         Ok(Self {
             label: path
@@ -1270,8 +1329,8 @@ impl ViewerScene {
             chunk_scene_index: None,
             bootstrap_visible_first: meshes.len(),
             bootstrap_meshes: meshes,
-            full_mode_materials: None,
-            texture_atlas: None,
+            full_mode_materials,
+            texture_atlas,
         })
     }
 }
@@ -1292,11 +1351,25 @@ fn resolve_scene_palette_colors(
         .iter()
         .map(|entry| entry.rgb)
         .collect::<Vec<_>>();
-    let palette_misses = resolved_palette_colors
+    let default_hits = resolved_palette_colors
         .iter()
         .filter(|entry| entry.used_default)
         .count();
-    let palette_hits = resolved_palette_colors.len().saturating_sub(palette_misses);
+    let fallback_hits = resolved_palette_colors
+        .iter()
+        .filter(|entry| {
+            entry
+                .matched_key
+                .as_deref()
+                .is_some_and(|key| key.starts_with("fallback_material:"))
+                && !entry.used_default
+        })
+        .count();
+    let cache_hits = resolved_palette_colors
+        .len()
+        .saturating_sub(fallback_hits)
+        .saturating_sub(default_hits);
+    let palette_hits = resolved_palette_colors.len().saturating_sub(default_hits);
     let cached_entries = if display_mode == ViewerDisplayMode::Full {
         0
     } else {
@@ -1307,16 +1380,16 @@ fn resolve_scene_palette_colors(
     let color_source = if display_mode == ViewerDisplayMode::Full {
         "runtime_v2_texture_atlas"
     } else {
-        "data/blockColorCache.json"
+        "data/blockColorCache.json+material_fallback"
     };
     println!(
-        "[VIEWER_COLOR] display_mode={} color_source={} preview_chain={} native_chain={} palette_entries={} cache_entries={} palette_hits={} palette_misses={}",
+        "[VIEWER_COLOR] display_mode={} color_source={} preview_chain={} native_chain={} palette_entries={} cache_entries={} cache_hits={} fallback_material_hits={} default_gray_hits={} palette_hits={} palette_misses={}",
         display_mode.label(),
         color_source,
         if display_mode == ViewerDisplayMode::Full {
             "runtime_v2_texture_atlas"
         } else {
-            "desktop_ui_cache"
+            "block_color_cache_or_material_fallback"
         },
         if display_mode == ViewerDisplayMode::Full {
             "runtime_atlas_sample"
@@ -1325,8 +1398,11 @@ fn resolve_scene_palette_colors(
         },
         palette_colors.len(),
         cached_entries,
+        cache_hits,
+        fallback_hits,
+        default_hits,
         palette_hits,
-        palette_misses
+        default_hits
     );
     for (entry, color) in chunk_scene_index
         .palette()
@@ -1748,10 +1824,22 @@ fn vertex_rgb(vertex: &GpuVertex) -> [f32; 3] {
     [vertex.color[0], vertex.color[1], vertex.color[2]]
 }
 
+fn prepared_mesh_uses_full_texture_data(mesh: &PreparedChunkMesh) -> bool {
+    mesh.vertices.iter().any(|vertex| {
+        vertex.use_texture > 0.5
+            || vertex.uv != [0.0, 0.0]
+            || vertex.emissive_tag != 0.0
+            || vertex.color != rgb_to_rgba(vertex_rgb(vertex))
+    })
+}
+
 fn write_prepared_cache_chunk_binary(
     path: &Path,
     mesh: &PreparedChunkMesh,
 ) -> std::io::Result<usize> {
+    if prepared_mesh_uses_full_texture_data(mesh) {
+        return write_prepared_cache_chunk_binary_v5(path, mesh);
+    }
     if compact_cache_v2_enabled() {
         return write_prepared_cache_chunk_compact_v2(path, mesh);
     }
@@ -1781,6 +1869,44 @@ fn write_prepared_cache_chunk_binary(
         }
     }
     for index in &mesh.indices {
+        writer.write_all(&index.to_le_bytes())?;
+    }
+    writer.flush()?;
+    Ok(std::fs::metadata(path)?.len() as usize)
+}
+
+fn write_prepared_cache_chunk_binary_v5(
+    path: &Path,
+    mesh: &PreparedChunkMesh,
+) -> std::io::Result<usize> {
+    let mut writer = BufWriter::new(File::create(path)?);
+    writer.write_all(NATIVE_CACHE_CHUNK_BINARY_MAGIC_V5)?;
+    writer.write_all(&mesh.key.cx.to_le_bytes())?;
+    writer.write_all(&mesh.key.cy.to_le_bytes())?;
+    writer.write_all(&mesh.key.cz.to_le_bytes())?;
+    writer.write_all(&(mesh.vertices.len() as u32).to_le_bytes())?;
+    writer.write_all(&(mesh.indices.len() as u32).to_le_bytes())?;
+    writer.write_all(&(mesh.translucent_indices.len() as u32).to_le_bytes())?;
+    for vertex in &mesh.vertices {
+        for value in vertex.position {
+            writer.write_all(&value.to_le_bytes())?;
+        }
+        for value in vertex.color {
+            writer.write_all(&value.to_le_bytes())?;
+        }
+        for value in vertex.uv {
+            writer.write_all(&value.to_le_bytes())?;
+        }
+        writer.write_all(&vertex.use_texture.to_le_bytes())?;
+        for value in vertex.normal {
+            writer.write_all(&value.to_le_bytes())?;
+        }
+        writer.write_all(&vertex.emissive_tag.to_le_bytes())?;
+    }
+    for index in &mesh.indices {
+        writer.write_all(&index.to_le_bytes())?;
+    }
+    for index in &mesh.translucent_indices {
         writer.write_all(&index.to_le_bytes())?;
     }
     writer.flush()?;
@@ -2017,13 +2143,69 @@ fn read_prepared_cache_chunk_binary(path: &Path, chunk_size: u32) -> Result<Prep
     let is_v2 = magic == NATIVE_CACHE_CHUNK_BINARY_MAGIC_V2;
     let is_v3 = magic == NATIVE_CACHE_CHUNK_BINARY_MAGIC_V3;
     let is_v4 = magic == NATIVE_CACHE_CHUNK_BINARY_MAGIC_V4;
-    if !is_v2 && !is_v3 && !is_v4 {
+    let is_v5 = magic == NATIVE_CACHE_CHUNK_BINARY_MAGIC_V5;
+    if !is_v2 && !is_v3 && !is_v4 && !is_v5 {
         bail!("invalid binary cache chunk magic: {}", path.display());
     }
     let mut offset = NATIVE_CACHE_CHUNK_BINARY_MAGIC_V2.len();
     let cx = read_i32_le(&bytes, &mut offset)?;
     let cy = read_i32_le(&bytes, &mut offset)?;
     let cz = read_i32_le(&bytes, &mut offset)?;
+    if is_v5 {
+        let vertex_count = read_u32_le(&bytes, &mut offset)? as usize;
+        let index_count = read_u32_le(&bytes, &mut offset)? as usize;
+        let translucent_index_count = read_u32_le(&bytes, &mut offset)? as usize;
+        let mut vertices = Vec::with_capacity(vertex_count);
+        for _ in 0..vertex_count {
+            let position = [
+                read_f32_le(&bytes, &mut offset)?,
+                read_f32_le(&bytes, &mut offset)?,
+                read_f32_le(&bytes, &mut offset)?,
+            ];
+            let color = [
+                read_f32_le(&bytes, &mut offset)?,
+                read_f32_le(&bytes, &mut offset)?,
+                read_f32_le(&bytes, &mut offset)?,
+                read_f32_le(&bytes, &mut offset)?,
+            ];
+            let uv = [
+                read_f32_le(&bytes, &mut offset)?,
+                read_f32_le(&bytes, &mut offset)?,
+            ];
+            let use_texture = read_f32_le(&bytes, &mut offset)?;
+            let normal = [
+                read_f32_le(&bytes, &mut offset)?,
+                read_f32_le(&bytes, &mut offset)?,
+                read_f32_le(&bytes, &mut offset)?,
+            ];
+            let emissive_tag = read_f32_le(&bytes, &mut offset)?;
+            vertices.push(GpuVertex {
+                position,
+                color,
+                uv,
+                use_texture,
+                normal,
+                emissive_tag,
+            });
+        }
+        let mut indices = Vec::with_capacity(index_count);
+        for _ in 0..index_count {
+            indices.push(read_u32_le(&bytes, &mut offset)?);
+        }
+        let mut translucent_indices = Vec::with_capacity(translucent_index_count);
+        for _ in 0..translucent_index_count {
+            translucent_indices.push(read_u32_le(&bytes, &mut offset)?);
+        }
+        let key = ChunkKey::new(cx, cy, cz);
+        return Ok(PreparedChunkMesh {
+            key,
+            bounds: ChunkBounds::from_key(key, chunk_size),
+            vertices,
+            indices,
+            translucent_indices,
+            compact_surfaces: Vec::new(),
+        });
+    }
     if is_v4 {
         let quad_count = read_u32_le(&bytes, &mut offset)? as usize;
         let raw_vertex_count = read_u32_le(&bytes, &mut offset)? as usize;
@@ -8372,12 +8554,25 @@ fn resolve_palette_color(
         .into_iter()
         .find(|candidate| cache.contains_key(*candidate))
         .map(str::to_string);
-    let used_default = matched_key.is_none();
-    let rgb = matched_key
-        .as_deref()
-        .and_then(|candidate| cache.get(candidate))
-        .copied()
-        .unwrap_or(DEFAULT_BLOCK_COLOR);
+    let (rgb, matched_key, used_default) = if let Some(matched_key) = matched_key {
+        (
+            cache
+                .get(matched_key.as_str())
+                .copied()
+                .unwrap_or(DEFAULT_BLOCK_COLOR),
+            Some(matched_key),
+            false,
+        )
+    } else {
+        {
+            let family = fallback_material_family(&normalized_key);
+            (
+                fallback_material_color(&normalized_key),
+                Some(format!("fallback_material:{family}")),
+                family == DEFAULT_BLOCK_COLOR_FAMILY,
+            )
+        }
+    };
     ResolvedBlockColor {
         rgb,
         normalized_key,
@@ -8402,7 +8597,7 @@ fn block_color_cache() -> &'static HashMap<String, [f32; 3]> {
     BLOCK_COLOR_CACHE.get_or_init(|| {
         let Some(root) = locate_workspace_root() else {
             println!(
-                "[VIEWER_COLOR] color_source=missing_workspace_root preview_chain=desktop_ui_cache native_chain=default_gray"
+                "[VIEWER_COLOR] color_source=missing_workspace_root preview_chain=material_fallback native_chain=palette_vertex_color"
             );
             return HashMap::new();
         };
@@ -8413,23 +8608,23 @@ fn block_color_cache() -> &'static HashMap<String, [f32; 3]> {
             Ok(payload) => payload,
             Err(error) => {
                 println!(
-                    "[VIEWER_COLOR] color_source=missing_cache path={} error={} native_chain=default_gray",
+                    "[VIEWER_COLOR] color_source=missing_cache path={} error={} native_chain=material_fallback",
                     cache_path.display(),
                     error
                 );
                 return HashMap::new();
             }
         };
-        let cache = serde_json::from_str::<HashMap<String, [f32; 3]>>(&payload).unwrap_or_else(|error| {
+        let cache = parse_block_color_cache(&payload).unwrap_or_else(|error| {
             println!(
-                "[VIEWER_COLOR] color_source=invalid_cache path={} error={} native_chain=default_gray",
+                "[VIEWER_COLOR] color_source=invalid_cache path={} error={} native_chain=material_fallback",
                 cache_path.display(),
                 error
             );
             HashMap::new()
         });
         println!(
-            "[VIEWER_COLOR] color_source=data/blockColorCache.json cache_entries={} path={}",
+            "[VIEWER_COLOR] color_source=data/blockColorCache.json+material_fallback cache_entries={} path={}",
             cache.len(),
             cache_path.display()
         );
@@ -8437,10 +8632,40 @@ fn block_color_cache() -> &'static HashMap<String, [f32; 3]> {
     })
 }
 
+fn parse_block_color_cache(payload: &str) -> Result<HashMap<String, [f32; 3]>, serde_json::Error> {
+    if let Ok(cache) = serde_json::from_str::<HashMap<String, [f32; 3]>>(payload) {
+        return Ok(cache);
+    }
+    let value = serde_json::from_str::<JsonValue>(payload)?;
+    let colors = value
+        .get("colors")
+        .and_then(JsonValue::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut cache = HashMap::new();
+    for (key, value) in colors {
+        if let Some(rgb) = json_rgb(&value) {
+            cache.insert(key, rgb);
+        }
+    }
+    Ok(cache)
+}
+
+fn json_rgb(value: &JsonValue) -> Option<[f32; 3]> {
+    let array = value.as_array()?;
+    if array.len() != 3 {
+        return None;
+    }
+    Some([
+        array[0].as_f64()? as f32,
+        array[1].as_f64()? as f32,
+        array[2].as_f64()? as f32,
+    ])
+}
+
 fn locate_workspace_root() -> Option<PathBuf> {
     fn is_workspace_root(path: &Path) -> bool {
-        path.join("block").exists()
-            && path.join("item").exists()
+        path.join("block").exists() && path.join("item").exists()
     }
 
     if let Ok(current_dir) = std::env::current_dir() {
@@ -8462,9 +8687,209 @@ fn locate_workspace_root() -> Option<PathBuf> {
     None
 }
 
+fn fallback_material_color(local: &str) -> [f32; 3] {
+    match fallback_material_family(local) {
+        "grass" => [0.34, 0.56, 0.22],
+        "leaves" => [0.25, 0.49, 0.18],
+        "dirt" => [0.45, 0.32, 0.20],
+        "stone" => [0.50, 0.50, 0.48],
+        "deepslate" => [0.25, 0.26, 0.28],
+        "wood" => [0.55, 0.36, 0.18],
+        "sand" => [0.82, 0.75, 0.50],
+        "snow" => [0.88, 0.92, 0.94],
+        "clay" => [0.49, 0.58, 0.62],
+        "water" => [0.18, 0.36, 0.82],
+        "lava" => [0.95, 0.36, 0.08],
+        "glass" => [0.62, 0.82, 0.90],
+        "redstone" => [0.72, 0.05, 0.04],
+        "rail" => [0.55, 0.45, 0.28],
+        "metal" => [0.68, 0.66, 0.60],
+        "wool_white" => [0.86, 0.86, 0.82],
+        "wool_orange" => [0.88, 0.42, 0.12],
+        "wool_magenta" => [0.72, 0.28, 0.74],
+        "wool_light_blue" => [0.38, 0.56, 0.86],
+        "wool_yellow" => [0.92, 0.78, 0.20],
+        "wool_lime" => [0.48, 0.72, 0.18],
+        "wool_pink" => [0.90, 0.50, 0.62],
+        "wool_gray" => [0.30, 0.32, 0.32],
+        "wool_light_gray" => [0.62, 0.64, 0.62],
+        "wool_cyan" => [0.22, 0.55, 0.62],
+        "wool_purple" => [0.45, 0.25, 0.62],
+        "wool_blue" => [0.20, 0.28, 0.68],
+        "wool_brown" => [0.40, 0.25, 0.14],
+        "wool_green" => [0.28, 0.42, 0.14],
+        "wool_red" => [0.62, 0.16, 0.14],
+        "wool_black" => [0.08, 0.08, 0.09],
+        "terracotta" => [0.60, 0.36, 0.26],
+        "concrete_white" => [0.82, 0.84, 0.80],
+        "concrete_orange" => [0.88, 0.38, 0.08],
+        "concrete_magenta" => [0.66, 0.20, 0.68],
+        "concrete_light_blue" => [0.28, 0.50, 0.78],
+        "concrete_yellow" => [0.86, 0.70, 0.08],
+        "concrete_lime" => [0.44, 0.66, 0.10],
+        "concrete_pink" => [0.84, 0.36, 0.50],
+        "concrete_gray" => [0.26, 0.28, 0.28],
+        "concrete_light_gray" => [0.55, 0.56, 0.54],
+        "concrete_cyan" => [0.12, 0.46, 0.54],
+        "concrete_purple" => [0.36, 0.18, 0.56],
+        "concrete_blue" => [0.16, 0.22, 0.62],
+        "concrete_brown" => [0.34, 0.20, 0.10],
+        "concrete_green" => [0.22, 0.34, 0.08],
+        "concrete_red" => [0.55, 0.10, 0.08],
+        "concrete_black" => [0.05, 0.06, 0.07],
+        _ => DEFAULT_BLOCK_COLOR,
+    }
+}
+
+fn fallback_material_family(local: &str) -> &'static str {
+    if local == "grass_block" || local == "short_grass" || local == "tall_grass" || local == "fern"
+    {
+        return "grass";
+    }
+    if local.ends_with("_leaves") || local == "vine" || local == "moss_block" {
+        return "leaves";
+    }
+    if local.contains("dirt") || local == "mud" || local == "podzol" || local == "farmland" {
+        return "dirt";
+    }
+    if local.contains("deepslate") || local.contains("blackstone") || local.contains("basalt") {
+        return "deepslate";
+    }
+    if local.contains("stone")
+        || local.contains("andesite")
+        || local.contains("granite")
+        || local.contains("diorite")
+        || local.contains("tuff")
+    {
+        return "stone";
+    }
+    if local.contains("planks")
+        || local.contains("_log")
+        || local.contains("_wood")
+        || local.contains("_stem")
+        || local.contains("_hyphae")
+        || local.contains("bamboo")
+        || local.contains("chest")
+        || local.contains("barrel")
+    {
+        return "wood";
+    }
+    if local.contains("sand") || local.contains("sandstone") {
+        return "sand";
+    }
+    if local.contains("snow") || local == "ice" || local == "packed_ice" || local == "blue_ice" {
+        return "snow";
+    }
+    if local.contains("clay") || local == "gravel" {
+        return "clay";
+    }
+    if local == "water" || local == "kelp" || local == "seagrass" {
+        return "water";
+    }
+    if local == "lava" || local.contains("magma") {
+        return "lava";
+    }
+    if local.contains("glass") || local.ends_with("_pane") || local == "iron_bars" {
+        return "glass";
+    }
+    if local.contains("redstone") || local == "repeater" || local == "comparator" {
+        return "redstone";
+    }
+    if local.contains("rail") {
+        return "rail";
+    }
+    if local.contains("iron")
+        || local.contains("gold")
+        || local.contains("copper")
+        || local.contains("chain")
+        || local.contains("anvil")
+        || local.contains("hopper")
+    {
+        return "metal";
+    }
+    if local.ends_with("_wool") || local.ends_with("_carpet") {
+        return dye_family(local, "wool");
+    }
+    if local.ends_with("_concrete") || local.ends_with("_concrete_powder") {
+        return dye_family(local, "concrete");
+    }
+    if local.ends_with("_terracotta") || local == "terracotta" {
+        return "terracotta";
+    }
+    DEFAULT_BLOCK_COLOR_FAMILY
+}
+
+const DEFAULT_BLOCK_COLOR_FAMILY: &str = "default_gray";
+
+fn dye_family(local: &str, material: &str) -> &'static str {
+    let colors = [
+        "light_blue",
+        "light_gray",
+        "white",
+        "orange",
+        "magenta",
+        "yellow",
+        "lime",
+        "pink",
+        "gray",
+        "cyan",
+        "purple",
+        "blue",
+        "brown",
+        "green",
+        "red",
+        "black",
+    ];
+    for color in colors {
+        if local.starts_with(color) {
+            return match (material, color) {
+                ("wool", "white") => "wool_white",
+                ("wool", "orange") => "wool_orange",
+                ("wool", "magenta") => "wool_magenta",
+                ("wool", "light_blue") => "wool_light_blue",
+                ("wool", "yellow") => "wool_yellow",
+                ("wool", "lime") => "wool_lime",
+                ("wool", "pink") => "wool_pink",
+                ("wool", "gray") => "wool_gray",
+                ("wool", "light_gray") => "wool_light_gray",
+                ("wool", "cyan") => "wool_cyan",
+                ("wool", "purple") => "wool_purple",
+                ("wool", "blue") => "wool_blue",
+                ("wool", "brown") => "wool_brown",
+                ("wool", "green") => "wool_green",
+                ("wool", "red") => "wool_red",
+                ("wool", "black") => "wool_black",
+                ("concrete", "white") => "concrete_white",
+                ("concrete", "orange") => "concrete_orange",
+                ("concrete", "magenta") => "concrete_magenta",
+                ("concrete", "light_blue") => "concrete_light_blue",
+                ("concrete", "yellow") => "concrete_yellow",
+                ("concrete", "lime") => "concrete_lime",
+                ("concrete", "pink") => "concrete_pink",
+                ("concrete", "gray") => "concrete_gray",
+                ("concrete", "light_gray") => "concrete_light_gray",
+                ("concrete", "cyan") => "concrete_cyan",
+                ("concrete", "purple") => "concrete_purple",
+                ("concrete", "blue") => "concrete_blue",
+                ("concrete", "brown") => "concrete_brown",
+                ("concrete", "green") => "concrete_green",
+                ("concrete", "red") => "concrete_red",
+                ("concrete", "black") => "concrete_black",
+                _ => DEFAULT_BLOCK_COLOR_FAMILY,
+            };
+        }
+    }
+    DEFAULT_BLOCK_COLOR_FAMILY
+}
+
 fn load_scene(args: &ViewerArgs) -> Result<ViewerScene> {
     if let Some(path) = args.cache_input.as_deref() {
-        match ViewerScene::from_prebuild_cache(path, args.chunk_size) {
+        match ViewerScene::from_prebuild_cache(
+            path,
+            args.chunk_size,
+            args.display_mode,
+            args.input.as_deref(),
+        ) {
             Ok(scene) => return Ok(scene),
             Err(error) => {
                 if args.display_mode == ViewerDisplayMode::Full {
@@ -9517,6 +9942,8 @@ fn write_native_cache_manifest(
     path: &Path,
     chunk_dir: &Path,
     chunk_dir_name: String,
+    format: &str,
+    color_chain: &str,
     metadata: MetadataOutput,
     total_chunks: usize,
     empty_mesh_chunks: usize,
@@ -9527,8 +9954,8 @@ fn write_native_cache_manifest(
 ) -> Result<usize> {
     manifest_chunks.sort_by_key(|chunk| (chunk.cy, chunk.cx, chunk.cz));
     let payload = NativePreviewCacheManifest {
-        format: "native_preview_cache_manifest_v3".to_string(),
-        color_chain: "shared_native_cache".to_string(),
+        format: format.to_string(),
+        color_chain: color_chain.to_string(),
         metadata,
         total_chunks,
         renderable_chunks: manifest_chunks.len(),
@@ -9547,12 +9974,14 @@ fn write_native_cache_manifest(
         .and_then(|_| std::fs::metadata(path).map(|metadata| metadata.len() as usize))
         .with_context(|| format!("write cache manifest failed: {}", path.display()))?;
     println!(
-        "[PREVIEW_CACHE] chunked_cache_manifest path={} chunk_dir={} renderable_chunks={} empty_mesh_chunks={} total_chunks={} color_chain=shared_native_cache",
+        "[PREVIEW_CACHE] chunked_cache_manifest path={} chunk_dir={} renderable_chunks={} empty_mesh_chunks={} total_chunks={} format={} color_chain={}",
         path.display(),
         chunk_dir.display(),
         payload.renderable_chunks,
         payload.empty_mesh_chunks,
-        payload.total_chunks
+        payload.total_chunks,
+        payload.format,
+        payload.color_chain
     );
     println!(
         "[PREVIEW_CACHE] chunked_cache_written manifest_path={} chunk_dir={} chunk_files={} manifest_bytes={} chunk_bytes={} total_bytes={} cache_write_ms={}",
@@ -9586,6 +10015,25 @@ fn run_headless_prebuild(args: &ViewerArgs, total_trace_started_at: Instant) -> 
         &scene_index,
         args.display_mode,
     ));
+    let (full_mode_materials, texture_atlas) = if args.display_mode == ViewerDisplayMode::Full {
+        load_full_mode_scene_assets(&scene_index, input)?
+    } else {
+        (None, None)
+    };
+    println!(
+        "[VIEWER_CACHE] headless_prebuild_assets display_mode={} runtime_v2_texture_atlas={} material_slots={} fallback_palette_entries={}",
+        args.display_mode.label(),
+        texture_atlas.is_some(),
+        full_mode_materials
+            .as_ref()
+            .map(|materials| materials.materials.len())
+            .unwrap_or(0),
+        full_mode_materials
+            .as_ref()
+            .and_then(|materials| materials.stats.as_ref())
+            .map(|stats| stats.fallback_palette_entries)
+            .unwrap_or(0)
+    );
     let bounds = SceneBounds::from_metadata(scene_index.metadata());
     println!(
         "[VIEWER_CHUNK] index_ready total_chunks={} chunk_size={} scene_radius={:.2}",
@@ -9605,7 +10053,7 @@ fn run_headless_prebuild(args: &ViewerArgs, total_trace_started_at: Instant) -> 
     let (request_tx, result_rx, workers) = spawn_build_worker_pool(
         scene_index.clone(),
         palette_colors,
-        None,
+        full_mode_materials.clone(),
         args.build_workers,
         trace.clone(),
     );
@@ -9652,6 +10100,8 @@ fn run_headless_prebuild(args: &ViewerArgs, total_trace_started_at: Instant) -> 
     let mut writer_completed_chunks = 0_usize;
     let mut cache_written_keys = HashSet::<ChunkKey>::new();
     let mut cpu_meshes = Vec::<PreparedChunkMesh>::new();
+    let mut textured_mesh_chunks = 0_usize;
+    let mut textured_vertices = 0_usize;
     let mut last_progress = Instant::now();
 
     while completed_chunks < total_chunks {
@@ -9669,6 +10119,14 @@ fn run_headless_prebuild(args: &ViewerArgs, total_trace_started_at: Instant) -> 
                 completed_chunks += 1;
                 if let Some(mesh) = result.mesh {
                     renderable_chunks += 1;
+                    if prepared_mesh_uses_full_texture_data(&mesh) {
+                        textured_mesh_chunks += 1;
+                        textured_vertices += mesh
+                            .vertices
+                            .iter()
+                            .filter(|vertex| vertex.use_texture > 0.5)
+                            .count();
+                    }
                     if let Some(pipeline) = pipeline.as_ref() {
                         if let Some(request_tx) = pipeline.request_tx.as_ref() {
                             request_tx.send(CacheWriterRequest {
@@ -9778,10 +10236,24 @@ fn run_headless_prebuild(args: &ViewerArgs, total_trace_started_at: Instant) -> 
         (chunk_dir_name, chunk_dir)
     };
     let layer_index_file = Some(write_native_cache_layer_index(cache_file, &scene_index)?);
+    let cache_manifest_format =
+        if args.display_mode == ViewerDisplayMode::Full && textured_mesh_chunks > 0 {
+            "native_preview_cache_manifest_v5"
+        } else {
+            "native_preview_cache_manifest_v3"
+        };
+    let cache_color_chain =
+        if args.display_mode == ViewerDisplayMode::Full && textured_mesh_chunks > 0 {
+            "runtime_v2_texture_atlas_cache"
+        } else {
+            "shared_native_cache"
+        };
     let total_bytes = write_native_cache_manifest(
         cache_file,
         &chunk_dir,
         chunk_dir_name,
+        cache_manifest_format,
+        cache_color_chain,
         scene_index.metadata().clone(),
         total_chunks,
         empty_mesh_chunks,
@@ -9804,6 +10276,18 @@ fn run_headless_prebuild(args: &ViewerArgs, total_trace_started_at: Instant) -> 
     );
     let finalize_ms = finalize_started_at.elapsed().as_millis();
     let total_wall_ms = prebuild_started_at.elapsed().as_millis();
+    println!(
+        "[VIEWER_CACHE] headless_prebuild_mesh_summary display_mode={} renderable_chunks={} textured_mesh_chunks={} textured_vertices={} cache_chunk_format={}",
+        args.display_mode.label(),
+        renderable_chunks,
+        textured_mesh_chunks,
+        textured_vertices,
+        if textured_mesh_chunks > 0 {
+            "LPNC5"
+        } else {
+            "LPNC3_or_LPNC4"
+        }
+    );
     println!(
         "[PREBUILD_TIMING] finalize_ms={} cache_write_ms={} total_elapsed_ms={}",
         finalize_ms, cache_write_ms, total_wall_ms
