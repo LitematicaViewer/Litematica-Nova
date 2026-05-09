@@ -130,5 +130,5 @@ GET https://redenmc.com/api/mc-services/yisibite/<machineId>?xSize=<x>&ySize=<y>
 - 下载完成后 analyze。
 - analyze 成功后加入 AppData 投影库。
 - 设置 currentFile。
-- RedenMC API 样例保存在 `docs/reden-api-samples/`，只保存小 JSON 或响应头，不提交大型 `.litematic`。
+- RedenMC API 样例保存在 `docs/reden-api-samples/`，只保留小 JSON，不提交下载文件或大段响应头。
 
