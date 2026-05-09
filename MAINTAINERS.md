@@ -9,7 +9,7 @@
 - 应用运行时二进制：`bin/viewer-backend/`。
 - 主数据和配置区：`data/`。
 - 维护脚本：`scripts/`。
-- 旧 JS 桌面 UI 已从 Git 跟踪中排除，只保留为本地历史参考，不上传，不作为维护入口。
+- 历史桌面入口已从 Git 跟踪中排除，不上传，不作为维护入口。
 - 已删除旧路径：`src/litematicaba/`、`desktop-ui/`、`script/`。
 
 ## 先读这些

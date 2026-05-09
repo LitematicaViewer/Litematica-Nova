@@ -6,7 +6,7 @@
 
 - 表格视觉应遵循 Nova 主题 token。
 - 不再沿用旧 PySide6/QTableWidget 主题体系。
-- 不再使用旧 JS UI 作为表格样式来源。
+- 不再使用历史桌面入口作为表格样式来源。
 - 表头、行高、边框、hover、选中态应在 Nova 样式系统中统一处理。
 
 ## desktop-nova 表格要求

@@ -6,7 +6,7 @@ import {
   aiSaveConfig,
   aiTestConnection,
   chooseUserConfigDir,
-  cleanupJsTempFiles,
+  cleanupLocalTempFiles,
   executeBackend,
   getPathInfo,
   getUserConfig,
@@ -402,7 +402,7 @@ export function SettingsPage({ theme, setTheme }: any) {
 
       <div className="group-box">
         <div className="group-box-title">维护</div>
-        <button className="btn" onClick={async () => setLog(await cleanupJsTempFiles())}>清理 JS UI 临时文件</button>
+        <button className="btn" onClick={async () => setLog(await cleanupLocalTempFiles())}>清理本地临时文件</button>
       </div>
 
       {log && (

@@ -44,8 +44,8 @@ export async function openFileParentDir(filePath: string): Promise<void> {
 export async function readImageBase64(path: string): Promise<string> {
   return await invoke("read_image_base64", { path });
 }
-export async function cleanupJsTempFiles(): Promise<string> {
-  return await invoke("cleanup_js_temp_files");
+export async function cleanupLocalTempFiles(): Promise<string> {
+  return await invoke("cleanup_local_temp_files");
 }
 export async function executeBackend(binaryName: string, args: string[]): Promise<string> {
   return await invoke("execute_backend", { binaryName, args });
