@@ -14,6 +14,8 @@ pub struct MetadataOutput {
     pub name: String,
     pub author: String,
     pub description: String,
+    pub time_created: i64,
+    pub time_modified: i64,
     pub total_blocks: i32,
     pub total_volume: i32,
     pub region_count: i32,
@@ -65,8 +67,16 @@ pub struct AnalysisDerivedOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisOutput {
     pub metadata: MetadataOutput,
+    pub regions: Vec<AnalysisRegionOutput>,
     pub analysis: AnalysisSummary,
     pub derived: AnalysisDerivedOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisRegionOutput {
+    pub name: String,
+    pub position: EnclosingSize,
+    pub size: EnclosingSize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

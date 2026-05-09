@@ -1,0 +1,103 @@
+:root {
+    --ln-minecraft-input-height: 44px;
+    --ln-minecraft-input-padding-y: 4px;
+    --ln-minecraft-input-padding-x: 8px;
+    --ln-minecraft-input-background: #000000;
+    --ln-minecraft-input-color: #ffffff;
+    --ln-minecraft-input-border: #a0a0a0;
+    --ln-minecraft-input-border-focus: #ffffff;
+    --ln-minecraft-input-disabled-color: #808080;
+}
+
+input:not([type]),
+input[type="text"],
+input[type="search"],
+input[type="password"],
+input[type="email"],
+input[type="url"],
+input[type="tel"],
+input[type="number"],
+textarea,
+select {
+    display: inline-block;
+    width: auto;
+    max-width: 100%;
+    min-height: var(--ln-minecraft-input-height);
+    padding: var(--ln-minecraft-input-padding-y) var(--ln-minecraft-input-padding-x);
+    border: 2px solid var(--ln-minecraft-input-border);
+    border-radius: 0;
+    appearance: none;
+    background-color: var(--ln-minecraft-input-background);
+    color: var(--ln-minecraft-input-color);
+    font: inherit;
+    line-height: 1.4;
+}
+
+input:not([type]),
+input[type="text"],
+input[type="search"],
+input[type="password"],
+input[type="email"],
+input[type="url"],
+input[type="tel"],
+input[type="number"],
+select:not([multiple]):not([size]) {
+    height: var(--ln-minecraft-input-height);
+}
+
+textarea {
+    min-height: calc(var(--ln-minecraft-input-height) * 2);
+    resize: vertical;
+}
+
+select:not([multiple]):not([size]) {
+    padding-right: 32px;
+    background-image: url("../resource/form/spin_down.png");
+    background-position: right 0px center;
+    background-repeat: no-repeat;
+    background-size: 40px 40px;
+    image-rendering: pixelated;
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: #808080;
+    opacity: 1;
+}
+
+input:not([type]):focus,
+input[type="text"]:focus,
+input[type="search"]:focus,
+input[type="password"]:focus,
+input[type="email"]:focus,
+input[type="url"]:focus,
+input[type="tel"]:focus,
+input[type="number"]:focus,
+textarea:focus,
+select:focus,
+input:not([type]):focus:hover,
+input[type="text"]:focus:hover,
+input[type="search"]:focus:hover,
+input[type="password"]:focus:hover,
+input[type="email"]:focus:hover,
+input[type="url"]:focus:hover,
+input[type="tel"]:focus:hover,
+input[type="number"]:focus:hover,
+textarea:focus:hover,
+select:focus:hover {
+    border-color: var(--ln-minecraft-input-border-focus);
+    outline: 0;
+}
+
+input:not([type]):disabled,
+input[type="text"]:disabled,
+input[type="search"]:disabled,
+input[type="password"]:disabled,
+input[type="email"]:disabled,
+input[type="url"]:disabled,
+input[type="tel"]:disabled,
+input[type="number"]:disabled,
+textarea:disabled,
+select:disabled {
+    color: var(--ln-minecraft-input-disabled-color);
+}

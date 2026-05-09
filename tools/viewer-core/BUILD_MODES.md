@@ -1,48 +1,55 @@
-# viewer-core build modes
+# viewer-core 构建模式
 
-## Formal default line
+## 正式默认线
 
-- Default mode: `normal`
-- Stable defaults kept on:
-  - `opaque_full_cube` fast path
-  - writer pipeline
-  - headless prebuild
-- Default mode keeps these experimental paths off unless explicitly selected:
-  - compact cache v2
-  - `non_occluding_full_cube`
-  - `half_slab`
-  - `stair_half`
-  - `carpet`
+- 默认模式：`normal`
+- 默认启用：
+  - `opaque_full_cube` 快速路径；
+  - writer pipeline；
+  - headless prebuild。
+- 默认不启用实验路径，除非用户明确选择：
+  - compact cache v2；
+  - `non_occluding_full_cube`；
+  - `half_slab`；
+  - `stair_half`；
+  - `carpet`。
 
-## Experimental line
+## 实验线
 
-- Opt-in mode: `fast_experimental`
-- Entry:
-  - UI render page mode selector
-  - env `LBA_VIEWER_BUILD_MODE=fast_experimental`
-- This mode enables the current experimental cache/build switches together and stays outside the formal baseline gate.
+- 可选模式：`fast_experimental`
+- 入口：
+  - desktop-nova 渲染页模式选择；
+  - 环境变量 `LBA_VIEWER_BUILD_MODE=fast_experimental`。
+- 该模式会组合启用当前实验 cache/build 开关，不属于正式默认基线。
 
-## Layer boundaries
+## 层级边界
 
-- Input / parse:
+- 输入和解析：
   - `src/nbt.rs`
   - `src/visual.rs`
   - `src/analyze.rs`
-- Build:
+- 构建：
   - `src/mesh.rs`
   - `src/build_mode.rs`
-- Cache / runtime:
+- cache 和运行时：
   - `src/storage.rs`
   - `src/native_viewer.rs`
   - `src/cli.rs`
 
-## Performance gate
+## 性能门槛
 
-- Formal baseline cases:
-  - `danjing`
-  - `all_items_a`
-  - `all_items_b`
-- Baseline file:
-  - `baselines/render_build_baseline.json`
-- Check command:
-  - `python tools/viewer-core/scripts/check_render_build_baseline.py <summary.tsv>`
+修改构建模式或 cache 路径后至少运行：
+
+```powershell
+cd tools\viewer-core
+cargo fmt
+cargo check
+cargo test
+```
+
+如果修改影响运行时 exe，需要重新构建并复制到：
+
+```text
+bin/viewer-backend/
+```
+

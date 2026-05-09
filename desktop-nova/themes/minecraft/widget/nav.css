@@ -1,0 +1,111 @@
+:root {
+    --ln-minecraft-nav-button-height: 48px;
+    --ln-minecraft-sidebar-collapsed-width: 49px;
+}
+
+.sidebar {
+    display: flex;
+    flex: 0 0 220px;
+    width: 220px;
+    min-width: 220px;
+    flex-direction: column;
+    border-right: 1px solid ThreeDShadow;
+    background: var(--ln-navigation-background-color, #ffffff);
+}
+
+.sidebar-collapsed {
+    flex-basis: var(--ln-minecraft-sidebar-collapsed-width);
+    width: var(--ln-minecraft-sidebar-collapsed-width);
+    min-width: var(--ln-minecraft-sidebar-collapsed-width);
+}
+
+.nav-expand,
+.nav-item {
+    display: flex;
+    position: relative;
+    width: 100%;
+    height: var(--ln-minecraft-nav-button-height);
+    min-height: var(--ln-minecraft-nav-button-height);
+    max-height: var(--ln-minecraft-nav-button-height);
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 0 16px;
+    border: var(--ln-minecraft-button-border, 4px) solid transparent;
+    border-image-source: var(--ln-minecraft-button-image);
+    border-image-slice: 4 fill;
+    border-image-width: var(--ln-minecraft-button-border, 4px);
+    border-image-repeat: stretch;
+    text-align: center;
+    color: #ffffff;
+    background: transparent;
+}
+
+.sidebar-collapsed .nav-expand,
+.sidebar-collapsed .nav-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+}
+
+.sidebar-collapsed .nav-icon {
+    position: static;
+    transform: none;
+}
+
+.nav-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.nav-list-bottom {
+    margin-top: auto;
+}
+
+.nav-icon {
+    display: block;
+    position: absolute;
+    top: 50%;
+    left: calc(16px - var(--ln-minecraft-button-border, 4px));
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+    transform: translateY(-50%);
+}
+
+.nav-item.nav-item-active {
+    --ln-minecraft-button-image: url("../resource/button/button_check_min.png");
+
+    color: #ffff00;
+}
+
+.nav-item.nav-item-active:hover:not(:disabled) {
+    --ln-minecraft-button-image: url("../resource/button/button_check_hover_min.png");
+    color: #ffff00;
+}
+
+@media (max-width: 760px) {
+    .sidebar {
+        flex-basis: var(--ln-minecraft-sidebar-collapsed-width);
+        width: var(--ln-minecraft-sidebar-collapsed-width);
+        min-width: var(--ln-minecraft-sidebar-collapsed-width);
+    }
+
+    .sidebar .nav-expand,
+    .sidebar .nav-item {
+        justify-content: center;
+        gap: 0;
+        padding: 0;
+    }
+
+    .sidebar .nav-icon {
+        position: static;
+        transform: none;
+    }
+
+    .sidebar .nav-expand strong,
+    .sidebar .nav-item .nav-label {
+        display: none;
+    }
+}

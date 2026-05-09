@@ -1,3 +1,9 @@
+#![allow(
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::type_complexity
+)]
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
@@ -15,7 +21,7 @@ use crate::model::{
     TexturedVertexOutput, VisualOutput, VisualSummaryOutput,
 };
 use crate::nbt::{
-    RegionBounds, bits_for_palette, for_each_palette_index, palette_index_at, region_bounds,
+    RegionBounds, bits_for_palette, for_each_palette_index, region_bounds,
     region_coord_to_storage_coord, region_volume, storage_to_region_coords,
 };
 use crate::visual::{VisualCatalog, format_block_state, is_air_state, load_visual_catalog};
@@ -316,9 +322,15 @@ impl ChunkSceneIndex {
         let mut total_fast_path_used_chunks = 0_usize;
         let mut total_fast_path_eligible_chunks = 0_usize;
         let mut total_fast_path_low_benefit_chunks = 0_usize;
-        for (key, blocks) in selected_keys.into_iter().zip(chunk_blocks.into_iter()) {
-            let (chunk, face_stats) =
-                build_mesh_chunk_output(key, self.chunk_size, blocks, &occupied, &self.render_info);
+        for (key, blocks) in selected_keys.into_iter().zip(chunk_blocks) {
+            let (chunk, face_stats) = build_mesh_chunk_output(
+                key,
+                self.chunk_size,
+                blocks,
+                &occupied,
+                &self.render_info,
+                &self.catalog,
+            );
             total_generated_faces += face_stats.generated_faces;
             total_culled_faces += face_stats.culled_faces;
             total_face_counts[0] += face_stats.generated_neg_x;
@@ -551,17 +563,26 @@ impl ChunkSceneIndex {
             &self.chunk_counts,
             Some(&non_occluding_palette),
         )?;
+        let block_palette_by_pos = chunk_blocks
+            .iter()
+            .flat_map(|blocks| {
+                blocks
+                    .iter()
+                    .map(|block| ((block.gx, block.gy, block.gz), block.palette_id))
+            })
+            .collect::<HashMap<_, _>>();
         let mut chunks = Vec::with_capacity(selected_keys.len());
         let mut textured_vertices = 0_usize;
         let mut solid_indices = 0_usize;
         let mut translucent_indices = 0_usize;
-        for (key, blocks) in selected_keys.into_iter().zip(chunk_blocks.into_iter()) {
+        for (key, blocks) in selected_keys.into_iter().zip(chunk_blocks) {
             let chunk = build_textured_mesh_chunk_output(
                 key,
                 blocks,
                 &occupied,
                 &self.render_info,
                 materials,
+                &block_palette_by_pos,
             );
             textured_vertices += chunk.textured_vertices.len();
             solid_indices += chunk.indices.len();
@@ -631,6 +652,7 @@ impl ChunkSceneIndex {
                 &region.block_states,
                 volume,
                 nbits,
+                region.block_state_palette.len(),
                 |index, palette_index| {
                     let Some(Some(palette_id)) = region_palette_ids.get(palette_index) else {
                         return Ok(());
@@ -1108,6 +1130,13 @@ fn classify_block_render_info(
     if matches!(
         suffix,
         "grass"
+            | "azalea"
+            | "flowering_azalea"
+            | "cave_vines"
+            | "cave_vines_plant"
+            | "big_dripleaf"
+            | "big_dripleaf_stem"
+            | "small_dripleaf"
             | "fern"
             | "dead_bush"
             | "short_grass"
@@ -1265,6 +1294,7 @@ fn scan_chunk_counts(
             &region.block_states,
             volume,
             nbits,
+            region.block_state_palette.len(),
             |index, palette_index| {
                 if palette_ids.get(palette_index).copied().flatten().is_none() {
                     return Ok(());
@@ -1410,6 +1440,17 @@ fn collect_target_chunk_blocks(
         let palette_semantics = region_palette_semantics
             .get(region_name)
             .ok_or_else(|| anyhow!("missing palette semantics for region {}", region_name))?;
+        let mut decoded_palette_indices = Vec::<usize>::with_capacity(volume);
+        for_each_palette_index(
+            &region.block_states,
+            volume,
+            nbits,
+            region.block_state_palette.len(),
+            |_, palette_index| {
+                decoded_palette_indices.push(palette_index);
+                Ok(())
+            },
+        )?;
 
         let palette_lookup_started_at = Instant::now();
         for (expanded_index, &chunk_key) in expanded_chunks.iter().enumerate() {
@@ -1445,8 +1486,9 @@ fn collect_target_chunk_blocks(
                         };
 
                         let index = store_y * layer_stride + store_z * width + store_x;
-                        let palette_index =
-                            palette_index_at(&region.block_states, volume, nbits, index)?;
+                        let Some(&palette_index) = decoded_palette_indices.get(index) else {
+                            continue;
+                        };
                         access_stats.palette_reads += 1;
                         let Some(semantic) = palette_semantics.get(palette_index).copied() else {
                             continue;
@@ -1497,6 +1539,7 @@ fn build_mesh_chunk_output(
     blocks: Vec<TargetBlock>,
     occupied: &OccupancyGrid,
     render_info: &[BlockRenderInfo],
+    catalog: &VisualCatalog,
 ) -> (MeshChunkOutput, MeshFaceStats) {
     let mut vertices = Vec::<[f32; 3]>::new();
     let mut indices = Vec::<u32>::new();
@@ -1631,6 +1674,7 @@ fn build_mesh_chunk_output(
             &mut color_indices,
             &mut compact_surfaces,
             &mut face_stats,
+            catalog,
             key,
             chunk_size,
             &fast_path_grid,
@@ -1773,14 +1817,11 @@ fn build_textured_mesh_chunk_output(
     occupied: &OccupancyGrid,
     render_info: &[BlockRenderInfo],
     materials: &FullModeMaterialCache,
+    block_palette_by_pos: &HashMap<(i32, i32, i32), usize>,
 ) -> MeshChunkOutput {
     let mut textured_vertices = Vec::<TexturedVertexOutput>::new();
     let mut solid_indices = Vec::<u32>::new();
     let mut translucent_indices = Vec::<u32>::new();
-    let block_palette_by_pos = blocks
-        .iter()
-        .map(|block| ((block.gx, block.gy, block.gz), block.palette_id))
-        .collect::<HashMap<_, _>>();
     let block_overrides = materials
         .block_model_quads
         .iter()
@@ -1791,9 +1832,52 @@ fn build_textured_mesh_chunk_output(
             )
         })
         .collect::<HashMap<_, _>>();
+    let mut stripped_birch_logical_count = 0usize;
+    let mut stripped_birch_skipped_count = 0usize;
 
     for block in blocks {
+        let is_stripped_birch = stripped_birch_palette(materials, block.palette_id);
+        if is_stripped_birch {
+            stripped_birch_logical_count += 1;
+            trace_stripped_birch_logical_instance(
+                materials,
+                block.palette_id,
+                block.gx,
+                block.gy,
+                block.gz,
+            );
+            if stripped_birch_logical_overlay_enabled()
+                && let Some(tag) = stripped_birch_debug_tag(
+                    materials,
+                    block.palette_id,
+                    block.gx,
+                    block.gy,
+                    block.gz,
+                )
+            {
+                emit_stripped_birch_logical_marker(
+                    &mut textured_vertices,
+                    &mut solid_indices,
+                    &mut translucent_indices,
+                    block.gx,
+                    block.gy,
+                    block.gz,
+                    tag,
+                );
+            }
+        }
         let Some(info) = render_info.get(block.palette_id) else {
+            if is_stripped_birch {
+                stripped_birch_skipped_count += 1;
+                trace_stripped_birch_skip(
+                    materials,
+                    block.palette_id,
+                    block.gx,
+                    block.gy,
+                    block.gz,
+                    "missing_render_info",
+                );
+            }
             continue;
         };
         let palette_material = materials
@@ -1804,6 +1888,25 @@ fn build_textured_mesh_chunk_output(
         let override_quads = block_overrides
             .get(&(block.gx, block.gy, block.gz))
             .copied();
+        froglight_trace_log_full_block(
+            "full_mode_block_route",
+            materials,
+            block.palette_id,
+            block.gx,
+            block.gy,
+            block.gz,
+            &format!(
+                "geometry={} override_replace={} palette_model_quads={} flat_top_hint={}",
+                block_geometry_label(&info.geometry),
+                override_quads.is_some_and(|value| value.replace),
+                materials
+                    .palette_model_quads
+                    .get(block.palette_id)
+                    .map(|quads| quads.len())
+                    .unwrap_or(0),
+                palette_material.is_flat_top_hint(),
+            ),
+        );
         if let Some(override_quads) = override_quads
             && override_quads.replace
         {
@@ -1814,7 +1917,7 @@ fn build_textured_mesh_chunk_output(
                 occupied,
                 render_info,
                 materials,
-                &block_palette_by_pos,
+                block_palette_by_pos,
                 block.palette_id,
                 &override_quads.quads,
                 block.gx,
@@ -1834,7 +1937,7 @@ fn build_textured_mesh_chunk_output(
                 occupied,
                 render_info,
                 materials,
-                &block_palette_by_pos,
+                block_palette_by_pos,
                 block.palette_id,
                 model_quads,
                 block.gx,
@@ -1853,7 +1956,7 @@ fn build_textured_mesh_chunk_output(
                 occupied,
                 render_info,
                 materials,
-                &block_palette_by_pos,
+                block_palette_by_pos,
                 block.palette_id,
                 &override_quads.quads,
                 block.gx,
@@ -1886,7 +1989,7 @@ fn build_textured_mesh_chunk_output(
                 occupied,
                 render_info,
                 materials,
-                &block_palette_by_pos,
+                block_palette_by_pos,
                 block.palette_id,
                 &palette_material,
                 block.gx,
@@ -1903,7 +2006,7 @@ fn build_textured_mesh_chunk_output(
                 occupied,
                 render_info,
                 materials,
-                &block_palette_by_pos,
+                block_palette_by_pos,
                 block.palette_id,
                 &palette_material,
                 block.gx,
@@ -1943,7 +2046,7 @@ fn build_textured_mesh_chunk_output(
                     occupied,
                     render_info,
                     materials,
-                    &block_palette_by_pos,
+                    block_palette_by_pos,
                     block.palette_id,
                     &palette_material,
                     block.gx,
@@ -1960,7 +2063,7 @@ fn build_textured_mesh_chunk_output(
                     occupied,
                     render_info,
                     materials,
-                    &block_palette_by_pos,
+                    block_palette_by_pos,
                     block.palette_id,
                     &palette_material,
                     block.gx,
@@ -1973,6 +2076,12 @@ fn build_textured_mesh_chunk_output(
             }
         }
     }
+
+    trace_stripped_birch_chunk_summary(
+        key,
+        stripped_birch_logical_count,
+        stripped_birch_skipped_count,
+    );
 
     MeshChunkOutput {
         cx: key.cx,
@@ -2004,8 +2113,10 @@ fn emit_textured_cuboid(
     max: [f32; 3],
     neighbor_culling: bool,
 ) {
+    let mut emitted_faces = 0usize;
+    let mut culled_faces = 0usize;
     for (face_index, _) in FACE_NEIGHBORS.iter().enumerate() {
-        if neighbor_culling
+        let culled = neighbor_culling
             && textured_face_culled_by_neighbor(
                 occupied,
                 render_info,
@@ -2016,16 +2127,51 @@ fn emit_textured_cuboid(
                 gx,
                 gy,
                 gz,
-            )
-        {
+            );
+        froglight_trace_log_full_block(
+            "full_mode_face_route",
+            materials,
+            palette_id,
+            gx,
+            gy,
+            gz,
+            &format!(
+                "face={} culled={} bounds=({:.2},{:.2},{:.2})..({:.2},{:.2},{:.2}) neighbor_culling={}",
+                face_index_label(face_index),
+                culled,
+                min[0],
+                min[1],
+                min[2],
+                max[0],
+                max[1],
+                max[2],
+                neighbor_culling,
+            ),
+        );
+        trace_stripped_birch_cuboid_face(
+            materials,
+            block_palette_by_pos,
+            palette_id,
+            face_index,
+            gx,
+            gy,
+            gz,
+            min,
+            max,
+            culled,
+        );
+        if culled {
+            culled_faces += 1;
             continue;
         }
+        emitted_faces += 1;
         emit_textured_axis_aligned_face(
             vertices,
             solid_indices,
             translucent_indices,
             materials,
             palette_material,
+            palette_id,
             face_index,
             gx,
             gy,
@@ -2034,6 +2180,16 @@ fn emit_textured_cuboid(
             max,
         );
     }
+    trace_stripped_birch_summary(
+        materials,
+        palette_id,
+        gx,
+        gy,
+        gz,
+        emitted_faces,
+        culled_faces,
+        "cuboid",
+    );
 }
 
 fn textured_face_culled_by_neighbor(
@@ -2052,33 +2208,447 @@ fn textured_face_culled_by_neighbor(
     let current_non_occluding = full_mode_non_occluding_palette(materials, palette_id);
     if let Some(neighbor_palette_id) = block_palette_by_pos.get(&neighbor).copied() {
         let current_policy =
-            block_properties_for_key(materials.palette_keys.get(palette_id)).culling_policy;
-        if block_culling_registry_should_cull(materials, palette_id, neighbor_palette_id) {
-            return true;
-        }
-        if block_culling_registry_preserves_neighbor_face(
+            block_properties_for_palette(render_info, materials, palette_id).culling_policy;
+        let should_cull = block_culling_registry_should_cull(
+            render_info,
             materials,
             palette_id,
             neighbor_palette_id,
-        ) {
+        );
+        let preserve_neighbor_face = block_culling_registry_preserves_neighbor_face(
+            render_info,
+            materials,
+            palette_id,
+            neighbor_palette_id,
+        );
+        let fallback_neighbor_occludes = render_info
+            .get(neighbor_palette_id)
+            .map(|info| info.occludes_neighbors)
+            .unwrap_or(false);
+        glass_sandwich_trace_pair(
+            "textured_face_culled_by_neighbor",
+            render_info,
+            materials,
+            palette_id,
+            neighbor_palette_id,
+            face_index,
+            gx,
+            gy,
+            gz,
+            should_cull,
+            preserve_neighbor_face,
+            fallback_neighbor_occludes,
+        );
+        if preserve_neighbor_face {
+            trace_slab_culling_final(
+                "textured_face_culled_by_neighbor",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                false,
+                "preserve_neighbor_face",
+            );
             return false;
         }
+        if should_cull {
+            trace_slab_culling_final(
+                "textured_face_culled_by_neighbor",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                true,
+                "registry_should_cull",
+            );
+            return true;
+        }
         if matches!(current_policy, CullingPolicy::SameBlockOnly) {
+            trace_slab_culling_final(
+                "textured_face_culled_by_neighbor",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                false,
+                "current_same_block_only_policy",
+            );
             return false;
         }
         if current_non_occluding || full_mode_non_occluding_palette(materials, neighbor_palette_id)
         {
+            trace_slab_culling_final(
+                "textured_face_culled_by_neighbor",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                false,
+                "non_occluding_pair",
+            );
             return false;
         }
-        return render_info
-            .get(neighbor_palette_id)
-            .map(|info| info.occludes_neighbors)
-            .unwrap_or(false);
+        trace_slab_culling_final(
+            "textured_face_culled_by_neighbor",
+            render_info,
+            materials,
+            palette_id,
+            neighbor_palette_id,
+            face_index,
+            gx,
+            gy,
+            gz,
+            should_cull,
+            preserve_neighbor_face,
+            fallback_neighbor_occludes,
+            "fallback_neighbor_occludes",
+        );
+        return fallback_neighbor_occludes;
     }
     if current_non_occluding {
         return false;
     }
     occupied.contains_world(neighbor.0, neighbor.1, neighbor.2)
+}
+
+fn stripped_birch_trace_enabled() -> bool {
+    env_flag_enabled("LBA_STRIPPED_BIRCH_TRACE")
+        || env_flag_enabled("LBA_STRIPPED_BIRCH_ZERO_FACE_TRACE")
+        || env_flag_enabled("LBA_LOG_FACE_TRACE")
+        || env_flag_enabled("LBA_CULL_TRACE")
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on" | "yes"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn stripped_birch_overlay_enabled() -> bool {
+    env_flag_enabled("LBA_STRIPPED_BIRCH_OVERLAY")
+        || env_flag_enabled("LBA_STRIPPED_BIRCH_NUMBERED")
+}
+
+fn stripped_birch_logical_overlay_enabled() -> bool {
+    env_flag_enabled("LBA_STRIPPED_BIRCH_LOGICAL_OVERLAY")
+}
+
+fn stripped_birch_palette(materials: &FullModeMaterialCache, palette_id: usize) -> bool {
+    materials
+        .palette_keys
+        .get(palette_id)
+        .and_then(|key| local_id_from_palette_key(Some(key)))
+        == Some("stripped_birch_log")
+}
+
+fn stripped_birch_state(materials: &FullModeMaterialCache, palette_id: usize) -> &str {
+    materials
+        .palette_keys
+        .get(palette_id)
+        .map(String::as_str)
+        .unwrap_or("<missing-state-key>")
+}
+
+fn stripped_birch_axis(materials: &FullModeMaterialCache, palette_id: usize) -> &'static str {
+    let state = stripped_birch_state(materials, palette_id);
+    if state.contains("axis=x") {
+        "x"
+    } else if state.contains("axis=z") {
+        "z"
+    } else {
+        "y"
+    }
+}
+
+fn stripped_birch_overlay_tag(
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+) -> Option<f32> {
+    if !stripped_birch_overlay_enabled() || !stripped_birch_palette(materials, palette_id) {
+        return None;
+    }
+    stripped_birch_debug_tag(materials, palette_id, gx, gy, gz)
+}
+
+fn stripped_birch_debug_tag(
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+) -> Option<f32> {
+    if !stripped_birch_palette(materials, palette_id) {
+        return None;
+    }
+    let hash = ((gx.wrapping_mul(73_856_093))
+        ^ (gy.wrapping_mul(19_349_663))
+        ^ (gz.wrapping_mul(83_492_791)))
+    .unsigned_abs()
+        % 997;
+    Some(-1.0 - hash as f32)
+}
+
+fn trace_stripped_birch_chunk_summary(key: ChunkKey, logical_count: usize, skipped_count: usize) {
+    if !stripped_birch_trace_enabled() && logical_count == 0 {
+        return;
+    }
+    if !stripped_birch_trace_enabled() {
+        return;
+    }
+    println!(
+        "[LBA_STRIPPED_BIRCH_TRACE] stage=chunk_summary chunk=({}, {}, {}) stripped_birch_state_count={} skipped_instance_count={} logical_overlay={} zero_face_trace={}",
+        key.cx,
+        key.cy,
+        key.cz,
+        logical_count,
+        skipped_count,
+        stripped_birch_logical_overlay_enabled(),
+        env_flag_enabled("LBA_STRIPPED_BIRCH_ZERO_FACE_TRACE"),
+    );
+}
+
+fn trace_stripped_birch_logical_instance(
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+) {
+    if !stripped_birch_trace_enabled() || !stripped_birch_palette(materials, palette_id) {
+        return;
+    }
+    println!(
+        "[LBA_STRIPPED_BIRCH_TRACE] stage=logical_instance state={} axis={} pos=({}, {}, {})",
+        stripped_birch_state(materials, palette_id),
+        stripped_birch_axis(materials, palette_id),
+        gx,
+        gy,
+        gz,
+    );
+}
+
+fn trace_stripped_birch_skip(
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    reason: &str,
+) {
+    if !stripped_birch_trace_enabled() || !stripped_birch_palette(materials, palette_id) {
+        return;
+    }
+    println!(
+        "[LBA_STRIPPED_BIRCH_TRACE] stage=skipped_instance state={} axis={} pos=({}, {}, {}) skip_reason={}",
+        stripped_birch_state(materials, palette_id),
+        stripped_birch_axis(materials, palette_id),
+        gx,
+        gy,
+        gz,
+        reason,
+    );
+}
+
+fn trace_stripped_birch_summary(
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    emitted_faces: usize,
+    culled_faces: usize,
+    route: &str,
+) {
+    if !stripped_birch_trace_enabled() || !stripped_birch_palette(materials, palette_id) {
+        return;
+    }
+    println!(
+        "[LBA_STRIPPED_BIRCH_TRACE] stage=block_summary route={} state={} axis={} pos=({}, {}, {}) emitted_face_count={} culled_face_count={} overlay={} numbered={}",
+        route,
+        stripped_birch_state(materials, palette_id),
+        stripped_birch_axis(materials, palette_id),
+        gx,
+        gy,
+        gz,
+        emitted_faces,
+        culled_faces,
+        env_flag_enabled("LBA_STRIPPED_BIRCH_OVERLAY"),
+        env_flag_enabled("LBA_STRIPPED_BIRCH_NUMBERED"),
+    );
+    if emitted_faces == 0 {
+        println!(
+            "[LBA_STRIPPED_BIRCH_TRACE] stage=zero_face_instance route={} state={} axis={} pos=({}, {}, {}) culled_face_count={} zero_face_trace={}",
+            route,
+            stripped_birch_state(materials, palette_id),
+            stripped_birch_axis(materials, palette_id),
+            gx,
+            gy,
+            gz,
+            culled_faces,
+            env_flag_enabled("LBA_STRIPPED_BIRCH_ZERO_FACE_TRACE"),
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn trace_stripped_birch_cuboid_face(
+    materials: &FullModeMaterialCache,
+    block_palette_by_pos: &HashMap<(i32, i32, i32), usize>,
+    palette_id: usize,
+    face_index: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    min: [f32; 3],
+    max: [f32; 3],
+    culled: bool,
+) {
+    if !stripped_birch_trace_enabled() || !stripped_birch_palette(materials, palette_id) {
+        return;
+    }
+    let offset = FACE_NEIGHBORS[face_index];
+    let neighbor = (gx + offset[0], gy + offset[1], gz + offset[2]);
+    let neighbor_state = block_palette_by_pos
+        .get(&neighbor)
+        .and_then(|neighbor_palette| materials.palette_keys.get(*neighbor_palette))
+        .map(String::as_str)
+        .unwrap_or("<none>");
+    let material = materials
+        .palette_materials
+        .get(palette_id)
+        .and_then(|palette| palette.slot_for_face_index(face_index))
+        .and_then(|slot| materials.materials.get(slot as usize));
+    println!(
+        "[LBA_STRIPPED_BIRCH_TRACE] stage=face route=cuboid state={} axis={} pos=({}, {}, {}) face={} culled={} culling_reason={} neighbor_pos=({}, {}, {}) neighbor_state={} material_key={} atlas_uv={:?} bounds=({:.2},{:.2},{:.2})..({:.2},{:.2},{:.2})",
+        stripped_birch_state(materials, palette_id),
+        stripped_birch_axis(materials, palette_id),
+        gx,
+        gy,
+        gz,
+        face_index_label(face_index),
+        culled,
+        if culled {
+            "neighbor_culling"
+        } else {
+            "emitted"
+        },
+        neighbor.0,
+        neighbor.1,
+        neighbor.2,
+        neighbor_state,
+        material
+            .map(|slot| slot.key.as_str())
+            .unwrap_or("<missing-material>"),
+        material.map(|slot| slot.uv_rect).unwrap_or([0.0; 4]),
+        min[0],
+        min[1],
+        min[2],
+        max[0],
+        max[1],
+        max[2],
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn trace_stripped_birch_model_face(
+    materials: &FullModeMaterialCache,
+    block_palette_by_pos: &HashMap<(i32, i32, i32), usize>,
+    palette_id: usize,
+    model_quad: &crate::full_mode::FullModeModelQuad,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    culled: bool,
+) {
+    if !stripped_birch_trace_enabled() || !stripped_birch_palette(materials, palette_id) {
+        return;
+    }
+    let (face_label, neighbor, neighbor_state, reason) =
+        stripped_birch_model_culling_face_index(materials, palette_id, model_quad)
+            .map(|face_index| {
+                let offset = FACE_NEIGHBORS[face_index];
+                let neighbor = (gx + offset[0], gy + offset[1], gz + offset[2]);
+                let neighbor_state = block_palette_by_pos
+                    .get(&neighbor)
+                    .and_then(|neighbor_palette| materials.palette_keys.get(*neighbor_palette))
+                    .map(String::as_str)
+                    .unwrap_or("<none>");
+                (
+                    face_index_label(face_index),
+                    neighbor,
+                    neighbor_state,
+                    if culled {
+                        "model_quad_culled_by_neighbor"
+                    } else {
+                        "emitted"
+                    },
+                )
+            })
+            .unwrap_or((
+                model_quad.cullface.as_deref().unwrap_or("<none>"),
+                (gx, gy, gz),
+                "<none>",
+                if culled {
+                    "culled_without_known_face"
+                } else {
+                    "emitted_no_cullface"
+                },
+            ));
+    let material = materials.materials.get(model_quad.material as usize);
+    println!(
+        "[LBA_STRIPPED_BIRCH_TRACE] stage=face route=model state={} axis={} pos=({}, {}, {}) face={} culled={} culling_reason={} neighbor_pos=({}, {}, {}) neighbor_state={} material_key={} atlas_uv={:?} double_sided={} vertices={:?}",
+        stripped_birch_state(materials, palette_id),
+        stripped_birch_axis(materials, palette_id),
+        gx,
+        gy,
+        gz,
+        face_label,
+        culled,
+        reason,
+        neighbor.0,
+        neighbor.1,
+        neighbor.2,
+        neighbor_state,
+        material
+            .map(|slot| slot.key.as_str())
+            .unwrap_or("<missing-material>"),
+        material.map(|slot| slot.uv_rect).unwrap_or([0.0; 4]),
+        model_quad.double_sided,
+        model_quad.vertices,
+    );
 }
 
 fn emit_textured_axis_aligned_face(
@@ -2087,6 +2657,7 @@ fn emit_textured_axis_aligned_face(
     translucent_indices: &mut Vec<u32>,
     materials: &FullModeMaterialCache,
     palette_material: &FullModePaletteMaterial,
+    _palette_id: usize,
     face_index: usize,
     gx: i32,
     gy: i32,
@@ -2116,16 +2687,19 @@ fn emit_textured_axis_aligned_face(
         ];
         uv[vertex_slot] = atlas_uv(material.uv_rect, axis_face_local_uv(face_index, local));
     }
+    let emissive_tag = emissive_tag_for_material_key(&material.key);
+    let effective_alpha = alpha_mode
+        .or(Some(material.alpha_mode))
+        .unwrap_or(FullModeAlphaMode::Opaque);
     emit_textured_quad(
         vertices,
         solid_indices,
         translucent_indices,
         &quad,
         &uv,
-        alpha_mode
-            .or(Some(material.alpha_mode))
-            .unwrap_or(FullModeAlphaMode::Opaque),
+        effective_alpha,
         false,
+        emissive_tag,
     );
 }
 
@@ -2143,8 +2717,10 @@ fn emit_textured_model_quads(
     gy: i32,
     gz: i32,
 ) {
+    let mut emitted_faces = 0usize;
+    let mut culled_faces = 0usize;
     for model_quad in model_quads {
-        if model_quad_culled(
+        let culled = model_quad_culled(
             model_quad,
             occupied,
             render_info,
@@ -2154,10 +2730,40 @@ fn emit_textured_model_quads(
             gx,
             gy,
             gz,
-        ) {
+        );
+        froglight_trace_log_model_quad(
+            "model_quad_route",
+            materials,
+            palette_id,
+            gx,
+            gy,
+            gz,
+            model_quad,
+            Some(culled),
+        );
+        trace_stripped_birch_model_face(
+            materials,
+            block_palette_by_pos,
+            palette_id,
+            model_quad,
+            gx,
+            gy,
+            gz,
+            culled,
+        );
+        if culled {
+            culled_faces += 1;
             continue;
         }
         let Some(material) = materials.materials.get(model_quad.material as usize) else {
+            trace_stripped_birch_skip(
+                materials,
+                palette_id,
+                gx,
+                gy,
+                gz,
+                "missing_model_quad_material",
+            );
             continue;
         };
         let mut quad = [[0.0_f32; 3]; 4];
@@ -2180,8 +2786,21 @@ fn emit_textured_model_quads(
             &uv,
             material.alpha_mode,
             model_quad.double_sided,
+            stripped_birch_overlay_tag(materials, palette_id, gx, gy, gz)
+                .unwrap_or_else(|| emissive_tag_for_material_key(&material.key)),
         );
+        emitted_faces += 1;
     }
+    trace_stripped_birch_summary(
+        materials,
+        palette_id,
+        gx,
+        gy,
+        gz,
+        emitted_faces,
+        culled_faces,
+        "model_quads",
+    );
 }
 
 fn model_quad_culled(
@@ -2195,7 +2814,27 @@ fn model_quad_culled(
     gy: i32,
     gz: i32,
 ) -> bool {
-    let Some(face_index) = model_quad.cullface.as_deref().and_then(face_name_to_index) else {
+    let Some(face_index) =
+        stripped_birch_model_culling_face_index(materials, palette_id, model_quad)
+    else {
+        trace_terrain_stack_model_cull(
+            "model_quad_culled",
+            model_quad,
+            render_info,
+            materials,
+            block_palette_by_pos,
+            palette_id,
+            None,
+            None,
+            gx,
+            gy,
+            gz,
+            false,
+            false,
+            false,
+            false,
+            "no_cullface",
+        );
         return false;
     };
     let offset = FACE_NEIGHBORS[face_index];
@@ -2203,33 +2842,1144 @@ fn model_quad_culled(
     let current_non_occluding = full_mode_non_occluding_palette(materials, palette_id);
     if let Some(neighbor_palette_id) = block_palette_by_pos.get(&neighbor).copied() {
         let current_policy =
-            block_properties_for_key(materials.palette_keys.get(palette_id)).culling_policy;
-        if block_culling_registry_should_cull(materials, palette_id, neighbor_palette_id) {
-            return true;
-        }
-        if block_culling_registry_preserves_neighbor_face(
+            block_properties_for_palette(render_info, materials, palette_id).culling_policy;
+        let should_cull = block_culling_registry_should_cull(
+            render_info,
             materials,
             palette_id,
             neighbor_palette_id,
-        ) {
+        );
+        let preserve_neighbor_face = block_culling_registry_preserves_neighbor_face(
+            render_info,
+            materials,
+            palette_id,
+            neighbor_palette_id,
+        );
+        let fallback_neighbor_occludes = render_info
+            .get(neighbor_palette_id)
+            .map(|info| info.occludes_neighbors)
+            .unwrap_or(false);
+        glass_sandwich_trace_pair(
+            "model_quad_culled",
+            render_info,
+            materials,
+            palette_id,
+            neighbor_palette_id,
+            face_index,
+            gx,
+            gy,
+            gz,
+            should_cull,
+            preserve_neighbor_face,
+            fallback_neighbor_occludes,
+        );
+        if current_stairs_model_quad_culling_is_conservative(render_info, materials, palette_id) {
+            trace_stairs_model_culling_final(
+                "model_quad_culled",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                model_quad.cullface.as_deref().unwrap_or("<none>"),
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                fallback_neighbor_occludes,
+                false,
+                "current_stairs_model_conservative",
+            );
+            trace_terrain_stack_model_cull(
+                "model_quad_culled",
+                model_quad,
+                render_info,
+                materials,
+                block_palette_by_pos,
+                palette_id,
+                Some(neighbor_palette_id),
+                Some(face_index),
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                fallback_neighbor_occludes,
+                false,
+                "current_stairs_model_conservative",
+            );
             return false;
         }
+        if preserve_neighbor_face {
+            trace_stairs_model_culling_final(
+                "model_quad_culled",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                model_quad.cullface.as_deref().unwrap_or("<none>"),
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                fallback_neighbor_occludes,
+                false,
+                "preserve_neighbor_face",
+            );
+            trace_slab_culling_final(
+                "model_quad_culled",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                false,
+                "preserve_neighbor_face",
+            );
+            trace_terrain_stack_model_cull(
+                "model_quad_culled",
+                model_quad,
+                render_info,
+                materials,
+                block_palette_by_pos,
+                palette_id,
+                Some(neighbor_palette_id),
+                Some(face_index),
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                fallback_neighbor_occludes,
+                false,
+                "preserve_neighbor_face",
+            );
+            return false;
+        }
+        if should_cull {
+            trace_stairs_model_culling_final(
+                "model_quad_culled",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                model_quad.cullface.as_deref().unwrap_or("<none>"),
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                fallback_neighbor_occludes,
+                true,
+                "registry_should_cull",
+            );
+            trace_slab_culling_final(
+                "model_quad_culled",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                true,
+                "registry_should_cull",
+            );
+            trace_terrain_stack_model_cull(
+                "model_quad_culled",
+                model_quad,
+                render_info,
+                materials,
+                block_palette_by_pos,
+                palette_id,
+                Some(neighbor_palette_id),
+                Some(face_index),
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                fallback_neighbor_occludes,
+                true,
+                "registry_should_cull",
+            );
+            return true;
+        }
         if matches!(current_policy, CullingPolicy::SameBlockOnly) {
+            trace_stairs_model_culling_final(
+                "model_quad_culled",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                model_quad.cullface.as_deref().unwrap_or("<none>"),
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                fallback_neighbor_occludes,
+                false,
+                "current_same_block_only_policy",
+            );
+            trace_slab_culling_final(
+                "model_quad_culled",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                false,
+                "current_same_block_only_policy",
+            );
+            trace_terrain_stack_model_cull(
+                "model_quad_culled",
+                model_quad,
+                render_info,
+                materials,
+                block_palette_by_pos,
+                palette_id,
+                Some(neighbor_palette_id),
+                Some(face_index),
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                fallback_neighbor_occludes,
+                false,
+                "current_same_block_only_policy",
+            );
             return false;
         }
         if current_non_occluding || full_mode_non_occluding_palette(materials, neighbor_palette_id)
         {
+            trace_stairs_model_culling_final(
+                "model_quad_culled",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                model_quad.cullface.as_deref().unwrap_or("<none>"),
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                fallback_neighbor_occludes,
+                false,
+                "non_occluding_pair",
+            );
+            trace_slab_culling_final(
+                "model_quad_culled",
+                render_info,
+                materials,
+                palette_id,
+                neighbor_palette_id,
+                face_index,
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                false,
+                "non_occluding_pair",
+            );
+            trace_terrain_stack_model_cull(
+                "model_quad_culled",
+                model_quad,
+                render_info,
+                materials,
+                block_palette_by_pos,
+                palette_id,
+                Some(neighbor_palette_id),
+                Some(face_index),
+                gx,
+                gy,
+                gz,
+                should_cull,
+                preserve_neighbor_face,
+                fallback_neighbor_occludes,
+                false,
+                "non_occluding_pair",
+            );
             return false;
         }
-        return render_info
-            .get(neighbor_palette_id)
-            .map(|info| info.occludes_neighbors)
-            .unwrap_or(false);
+        trace_stairs_model_culling_final(
+            "model_quad_culled",
+            render_info,
+            materials,
+            palette_id,
+            neighbor_palette_id,
+            model_quad.cullface.as_deref().unwrap_or("<none>"),
+            face_index,
+            gx,
+            gy,
+            gz,
+            should_cull,
+            preserve_neighbor_face,
+            fallback_neighbor_occludes,
+            fallback_neighbor_occludes,
+            "fallback_neighbor_occludes",
+        );
+        trace_slab_culling_final(
+            "model_quad_culled",
+            render_info,
+            materials,
+            palette_id,
+            neighbor_palette_id,
+            face_index,
+            gx,
+            gy,
+            gz,
+            should_cull,
+            preserve_neighbor_face,
+            fallback_neighbor_occludes,
+            "fallback_neighbor_occludes",
+        );
+        trace_terrain_stack_model_cull(
+            "model_quad_culled",
+            model_quad,
+            render_info,
+            materials,
+            block_palette_by_pos,
+            palette_id,
+            Some(neighbor_palette_id),
+            Some(face_index),
+            gx,
+            gy,
+            gz,
+            should_cull,
+            preserve_neighbor_face,
+            fallback_neighbor_occludes,
+            fallback_neighbor_occludes,
+            "fallback_neighbor_occludes",
+        );
+        return fallback_neighbor_occludes;
     }
     if current_non_occluding {
+        trace_terrain_stack_model_cull(
+            "model_quad_culled",
+            model_quad,
+            render_info,
+            materials,
+            block_palette_by_pos,
+            palette_id,
+            None,
+            Some(face_index),
+            gx,
+            gy,
+            gz,
+            false,
+            false,
+            false,
+            false,
+            "current_non_occluding_no_neighbor",
+        );
         return false;
     }
-    occupied.contains_world(neighbor.0, neighbor.1, neighbor.2)
+    let final_culled = occupied.contains_world(neighbor.0, neighbor.1, neighbor.2);
+    trace_terrain_stack_model_cull(
+        "model_quad_culled",
+        model_quad,
+        render_info,
+        materials,
+        block_palette_by_pos,
+        palette_id,
+        None,
+        Some(face_index),
+        gx,
+        gy,
+        gz,
+        false,
+        false,
+        final_culled,
+        final_culled,
+        "occupied_fallback_no_palette_neighbor",
+    );
+    final_culled
+}
+
+fn stripped_birch_model_culling_face_index(
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    model_quad: &crate::full_mode::FullModeModelQuad,
+) -> Option<usize> {
+    if stripped_birch_palette(materials, palette_id)
+        && let Some(face_index) = axis_aligned_model_quad_face_index(model_quad)
+    {
+        return Some(face_index);
+    }
+    model_quad.cullface.as_deref().and_then(face_name_to_index)
+}
+
+fn axis_aligned_model_quad_face_index(
+    model_quad: &crate::full_mode::FullModeModelQuad,
+) -> Option<usize> {
+    const EPSILON: f32 = 0.0005;
+    let all_close = |axis: usize, value: f32| {
+        model_quad
+            .vertices
+            .iter()
+            .all(|vertex| (vertex[axis] - value).abs() <= EPSILON)
+    };
+    if all_close(0, 0.0) {
+        Some(0)
+    } else if all_close(0, 1.0) {
+        Some(1)
+    } else if all_close(1, 0.0) {
+        Some(2)
+    } else if all_close(1, 1.0) {
+        Some(3)
+    } else if all_close(2, 0.0) {
+        Some(4)
+    } else if all_close(2, 1.0) {
+        Some(5)
+    } else {
+        None
+    }
+}
+
+fn glass_sandwich_trace_enabled() -> bool {
+    std::env::var("LBA_GLASS_SANDWICH_TRACE")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn froglight_sandwich_trace_enabled() -> bool {
+    std::env::var("LBA_FROGLIGHT_SANDWICH_TRACE")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn face_index_label(face_index: usize) -> &'static str {
+    match face_index {
+        0 => "west",
+        1 => "east",
+        2 => "down",
+        3 => "up",
+        4 => "north",
+        5 => "south",
+        _ => "?",
+    }
+}
+
+fn opposite_face_index(face_index: usize) -> usize {
+    match face_index {
+        0 => 1,
+        1 => 0,
+        2 => 3,
+        3 => 2,
+        4 => 5,
+        5 => 4,
+        _ => face_index,
+    }
+}
+
+fn slab_preserve_trace_enabled() -> bool {
+    std::env::var("LBA_SLAB_PRESERVE_TRACE")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn is_slab_palette_key(key: Option<&String>) -> bool {
+    local_id_from_palette_key(key).is_some_and(|local| local.ends_with("_slab"))
+}
+
+fn stairs_model_culling_trace_enabled() -> bool {
+    std::env::var("LBA_STAIRS_CULL_TRACE")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn terrain_stack_trace_enabled() -> bool {
+    std::env::var("LBA_TERRAIN_STACK_TRACE")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn is_terrain_stack_palette_key(key: Option<&String>) -> bool {
+    local_id_from_palette_key(key).is_some_and(|local| {
+        matches!(
+            local,
+            "dirt" | "coarse_dirt" | "rooted_dirt" | "grass_block" | "podzol" | "mycelium"
+        )
+    })
+}
+
+fn is_stairs_palette_key(key: Option<&String>) -> bool {
+    local_id_from_palette_key(key).is_some_and(|local| local.ends_with("_stairs"))
+}
+
+fn current_stairs_model_quad_culling_is_conservative(
+    render_info: &[BlockRenderInfo],
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+) -> bool {
+    if !is_stairs_palette_key(materials.palette_keys.get(palette_id)) {
+        return false;
+    }
+    matches!(
+        render_info.get(palette_id).map(|info| &info.geometry),
+        Some(BlockGeometry::Cuboid { non_full: true, .. })
+    )
+}
+
+fn trace_stairs_model_culling_final(
+    stage: &str,
+    render_info: &[BlockRenderInfo],
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    neighbor_palette_id: usize,
+    cullface: &str,
+    face_index: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    registry_should_cull: bool,
+    preserve_neighbor_face: bool,
+    fallback_neighbor_occludes: bool,
+    final_culled: bool,
+    return_reason: &str,
+) {
+    if !stairs_model_culling_trace_enabled() {
+        return;
+    }
+    let current_key = materials.palette_keys.get(palette_id);
+    let neighbor_key = materials.palette_keys.get(neighbor_palette_id);
+    if !(is_stairs_palette_key(current_key) || is_stairs_palette_key(neighbor_key)) {
+        return;
+    }
+    let same_exact_state = block_culling_registry_identical_state(current_key, neighbor_key);
+    let current_geometry = render_info
+        .get(palette_id)
+        .map(|info| block_geometry_label(&info.geometry))
+        .unwrap_or("<missing>");
+    let neighbor_geometry = render_info
+        .get(neighbor_palette_id)
+        .map(|info| block_geometry_label(&info.geometry))
+        .unwrap_or("<missing>");
+    println!(
+        "[LBA_STAIRS_CULL_TRACE_20260424A] stage={} pos=({}, {}, {}) face={} cullface={} current_state={} neighbor_state={} current_palette_key={} neighbor_palette_key={} current_geometry={} neighbor_geometry={} same_exact_state={} registry_should_cull={} preserve_neighbor_face={} fallback_neighbor_occludes={} final_culled={} return_reason={}",
+        stage,
+        gx,
+        gy,
+        gz,
+        face_index_label(face_index),
+        cullface,
+        current_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        neighbor_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        current_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        neighbor_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        current_geometry,
+        neighbor_geometry,
+        same_exact_state,
+        registry_should_cull,
+        preserve_neighbor_face,
+        fallback_neighbor_occludes,
+        final_culled,
+        return_reason,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn trace_terrain_stack_model_cull(
+    stage: &str,
+    model_quad: &crate::full_mode::FullModeModelQuad,
+    render_info: &[BlockRenderInfo],
+    materials: &FullModeMaterialCache,
+    block_palette_by_pos: &HashMap<(i32, i32, i32), usize>,
+    palette_id: usize,
+    neighbor_palette_id: Option<usize>,
+    face_index: Option<usize>,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    registry_should_cull: bool,
+    preserve_neighbor_face: bool,
+    fallback_neighbor_occludes: bool,
+    final_culled: bool,
+    return_reason: &str,
+) {
+    trace_shared_culling_model_cull(
+        stage,
+        model_quad,
+        render_info,
+        materials,
+        block_palette_by_pos,
+        palette_id,
+        neighbor_palette_id,
+        face_index,
+        gx,
+        gy,
+        gz,
+        registry_should_cull,
+        preserve_neighbor_face,
+        fallback_neighbor_occludes,
+        final_culled,
+        return_reason,
+    );
+    if !terrain_stack_trace_enabled() {
+        return;
+    }
+    let current_key = materials.palette_keys.get(palette_id);
+    let neighbor_key = neighbor_palette_id.and_then(|id| materials.palette_keys.get(id));
+    if !(is_terrain_stack_palette_key(current_key) || is_terrain_stack_palette_key(neighbor_key)) {
+        return;
+    }
+    let face = face_index.map(face_index_label).unwrap_or("<none>");
+    let neighbor_pos = face_index
+        .map(|index| {
+            let offset = FACE_NEIGHBORS[index];
+            (gx + offset[0], gy + offset[1], gz + offset[2])
+        })
+        .unwrap_or((gx, gy, gz));
+    let neighbor_from_pos = block_palette_by_pos
+        .get(&neighbor_pos)
+        .and_then(|id| materials.palette_keys.get(*id))
+        .map(String::as_str)
+        .unwrap_or("<none>");
+    let current_geometry = render_info
+        .get(palette_id)
+        .map(|info| block_geometry_label(&info.geometry))
+        .unwrap_or("<missing>");
+    let neighbor_geometry = neighbor_palette_id
+        .and_then(|id| render_info.get(id))
+        .map(|info| block_geometry_label(&info.geometry))
+        .unwrap_or("<missing>");
+    let material_key = materials
+        .materials
+        .get(model_quad.material as usize)
+        .map(|material| material.key.as_str())
+        .unwrap_or("<missing>");
+    let sample_id = terrain_stack_sample_id(gx, gy, gz).unwrap_or("<unknown>");
+    let expected_face = terrain_stack_expected_face(sample_id).unwrap_or("<unspecified>");
+    println!(
+        "[LBA_TERRAIN_STACK_TRACE_20260424A] stage={} sample_id={} expected_visible_faces={} block_pos=({}, {}, {}) neighbor_pos=({}, {}, {}) state={} current_state={} neighbor_state={} neighbor_state_from_pos={} face={} local_face=<model_quad> world_face={} cullface={} material_key={} quad_vertices={:?} generated_top_quad={} generated=true final_culled={} return_reason={} current_geometry={} neighbor_geometry={} registry_should_cull={} preserve_neighbor_face={} fallback_neighbor_occludes={}",
+        stage,
+        sample_id,
+        expected_face,
+        gx,
+        gy,
+        gz,
+        neighbor_pos.0,
+        neighbor_pos.1,
+        neighbor_pos.2,
+        current_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        current_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        neighbor_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        neighbor_from_pos,
+        face,
+        face,
+        model_quad.cullface.as_deref().unwrap_or("<none>"),
+        material_key,
+        model_quad.vertices,
+        face == "up",
+        final_culled,
+        return_reason,
+        current_geometry,
+        neighbor_geometry,
+        registry_should_cull,
+        preserve_neighbor_face,
+        fallback_neighbor_occludes,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn trace_shared_culling_model_cull(
+    stage: &str,
+    model_quad: &crate::full_mode::FullModeModelQuad,
+    render_info: &[BlockRenderInfo],
+    materials: &FullModeMaterialCache,
+    block_palette_by_pos: &HashMap<(i32, i32, i32), usize>,
+    palette_id: usize,
+    neighbor_palette_id: Option<usize>,
+    face_index: Option<usize>,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    registry_should_cull: bool,
+    preserve_neighbor_face: bool,
+    fallback_neighbor_occludes: bool,
+    final_culled: bool,
+    return_reason: &str,
+) {
+    if !shared_cull_trace_enabled() {
+        return;
+    }
+    let current_key = materials.palette_keys.get(palette_id);
+    let neighbor_key = neighbor_palette_id.and_then(|id| materials.palette_keys.get(id));
+    if !(shared_cull_trace_target_key(current_key) || shared_cull_trace_target_key(neighbor_key)) {
+        return;
+    }
+    let face = face_index.map(face_index_label).unwrap_or("<none>");
+    let neighbor_pos = face_index
+        .map(|index| {
+            let offset = FACE_NEIGHBORS[index];
+            (gx + offset[0], gy + offset[1], gz + offset[2])
+        })
+        .unwrap_or((gx, gy, gz));
+    let neighbor_from_pos = block_palette_by_pos
+        .get(&neighbor_pos)
+        .and_then(|id| materials.palette_keys.get(*id))
+        .map(String::as_str)
+        .unwrap_or("<none>");
+    let current_geometry = render_info
+        .get(palette_id)
+        .map(|info| block_geometry_label(&info.geometry))
+        .unwrap_or("<missing>");
+    let neighbor_geometry = neighbor_palette_id
+        .and_then(|id| render_info.get(id))
+        .map(|info| block_geometry_label(&info.geometry))
+        .unwrap_or("<missing>");
+    let same_exact_state = neighbor_palette_id
+        .map(|id| {
+            block_culling_registry_identical_state(current_key, materials.palette_keys.get(id))
+        })
+        .unwrap_or(false);
+    let material_key = materials
+        .materials
+        .get(model_quad.material as usize)
+        .map(|material| material.key.as_str())
+        .unwrap_or("<missing>");
+    let sample_id = chain_banner_trace_sample_id((gx, gy, gz), current_key)
+        .or_else(|| chain_banner_trace_sample_id(neighbor_pos, neighbor_key))
+        .unwrap_or("-");
+    println!(
+        "[LBA_SHARED_CULL_TRACE_20260424A] stage={} sample_id={} block_pos=({}, {}, {}) neighbor_pos=({}, {}, {}) current_state={} neighbor_state={} neighbor_state_from_pos={} face={} cullface={} material_key={} quad_vertices={:?} current_geometry={} neighbor_geometry={} same_exact_state={} registry_should_cull={} preserve_neighbor_face={} fallback_neighbor_occludes={} final_culled={} return_reason={}",
+        stage,
+        sample_id,
+        gx,
+        gy,
+        gz,
+        neighbor_pos.0,
+        neighbor_pos.1,
+        neighbor_pos.2,
+        current_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        neighbor_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        neighbor_from_pos,
+        face,
+        model_quad.cullface.as_deref().unwrap_or("<none>"),
+        material_key,
+        model_quad.vertices,
+        current_geometry,
+        neighbor_geometry,
+        same_exact_state,
+        registry_should_cull,
+        preserve_neighbor_face,
+        fallback_neighbor_occludes,
+        final_culled,
+        return_reason,
+    );
+}
+
+fn shared_cull_trace_enabled() -> bool {
+    std::env::var("LBA_SHARED_CULL_TRACE")
+        .ok()
+        .map(|value| {
+            let value = value.trim();
+            !(value.is_empty() || value == "0" || value.eq_ignore_ascii_case("false"))
+        })
+        .unwrap_or(false)
+}
+
+fn shared_cull_trace_target_key(key: Option<&String>) -> bool {
+    local_id_from_palette_key(key)
+        .map(|local| {
+            full_mode_preserve_neighbor_faces_local(local)
+                || local.ends_with("_pane")
+                || local == "chain"
+                || local.ends_with("_banner")
+                || local == "water"
+        })
+        .unwrap_or(false)
+}
+
+fn chain_banner_trace_sample_id(
+    pos: (i32, i32, i32),
+    key: Option<&String>,
+) -> Option<&'static str> {
+    let local = local_id_from_palette_key(key)?;
+    if !(local == "chain" || local.ends_with("_banner")) {
+        return None;
+    }
+    match (pos.0, pos.2, local) {
+        (0, 1, "chain") => Some("CB01"),
+        (4, 1, "chain") => Some("CB02"),
+        (8, 1, "chain") => Some("CB03"),
+        (12, 1, "white_banner") => Some("CB04"),
+        (16, 1, "red_banner") => Some("CB05"),
+        (20, 1, "blue_wall_banner") => Some("CB06"),
+        (24, 1, "blue_wall_banner") => Some("CB07"),
+        (28, 1, "blue_wall_banner") => Some("CB08"),
+        (32, 1, "blue_wall_banner") => Some("CB09"),
+        _ => None,
+    }
+}
+
+fn terrain_stack_sample_id(gx: i32, gy: i32, gz: i32) -> Option<&'static str> {
+    match (gx, gy, gz) {
+        (0, 0, 0) => Some("T01"),
+        (3, 0, 0) => Some("T02"),
+        (6, 0 | 1, 0) => Some("T03"),
+        (9, 0 | 1, 0) => Some("T04"),
+        (12, 0..=2, 0) => Some("T05"),
+        (0..=1, 0..=1, 5) => Some("T06"),
+        (4..=6, 0..=1, 5) => Some("T07"),
+        (9, 0 | 1, 5) => Some("T08"),
+        (12, 0 | 1, 5) => Some("T09"),
+        _ => None,
+    }
+}
+
+fn terrain_stack_expected_face(sample_id: &str) -> Option<&'static str> {
+    match sample_id {
+        "T01" | "T02" => Some("all exterior faces"),
+        "T03" | "T04" | "T05" | "T08" | "T09" => Some("top block up face plus exterior sides"),
+        "T06" | "T07" => Some("outer cliff sides and top faces; interior x-neighbor faces culled"),
+        _ => None,
+    }
+}
+
+fn trace_slab_culling_final(
+    stage: &str,
+    render_info: &[BlockRenderInfo],
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    neighbor_palette_id: usize,
+    face_index: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    should_cull: bool,
+    preserve_neighbor_face: bool,
+    final_culled: bool,
+    return_reason: &str,
+) {
+    if !slab_preserve_trace_enabled() {
+        return;
+    }
+    let current_key = materials.palette_keys.get(palette_id);
+    let neighbor_key = materials.palette_keys.get(neighbor_palette_id);
+    if !(is_slab_palette_key(current_key) || is_slab_palette_key(neighbor_key)) {
+        return;
+    }
+    let current = block_properties_for_palette(render_info, materials, palette_id);
+    let neighbor = block_properties_for_palette(render_info, materials, neighbor_palette_id);
+    let same_exact_state = block_culling_registry_identical_state(current_key, neighbor_key);
+    let current_geometry = render_info
+        .get(palette_id)
+        .map(|info| block_geometry_label(&info.geometry))
+        .unwrap_or("<missing>");
+    let neighbor_geometry = render_info
+        .get(neighbor_palette_id)
+        .map(|info| block_geometry_label(&info.geometry))
+        .unwrap_or("<missing>");
+    println!(
+        "[LBA_SLAB_PRESERVE_TRACE_20260424A] stage={} pos=({}, {}, {}) face={} opposite_face={} current_state={} neighbor_state={} current_palette_key={} neighbor_palette_key={} current_geometry={} neighbor_geometry={} current_generic_preserve={} neighbor_generic_preserve={} same_exact_state={} should_cull={} preserve_neighbor_face={} final_culled={} return_reason={}",
+        stage,
+        gx,
+        gy,
+        gz,
+        face_index_label(face_index),
+        face_index_label(opposite_face_index(face_index)),
+        current_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        neighbor_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        current_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        neighbor_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        current_geometry,
+        neighbor_geometry,
+        current.generic_preserve_neighbor_faces,
+        neighbor.generic_preserve_neighbor_faces,
+        same_exact_state,
+        should_cull,
+        preserve_neighbor_face,
+        final_culled,
+        return_reason,
+    );
+}
+
+fn glass_sandwich_trace_pair(
+    stage: &str,
+    render_info: &[BlockRenderInfo],
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    neighbor_palette_id: usize,
+    face_index: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    should_cull: bool,
+    preserve_neighbor_face: bool,
+    fallback_neighbor_occludes: bool,
+) {
+    if !glass_sandwich_trace_enabled() {
+        return;
+    }
+    let current_key = materials.palette_keys.get(palette_id);
+    let neighbor_key = materials.palette_keys.get(neighbor_palette_id);
+    let current = block_properties_for_palette(render_info, materials, palette_id);
+    let neighbor = block_properties_for_palette(render_info, materials, neighbor_palette_id);
+    if !(current.is_glass
+        || neighbor.is_glass
+        || current.preserve_neighbor_faces
+        || neighbor.preserve_neighbor_faces
+        || current.generic_preserve_neighbor_faces
+        || neighbor.generic_preserve_neighbor_faces)
+    {
+        return;
+    }
+    println!(
+        "[LBA_GLASS_SANDWICH_TRACE_20260424A] stage={} pos=({}, {}, {}) face={} current_key={} neighbor_key={} current_glass={} neighbor_glass={} current_preserve={} neighbor_preserve={} current_generic_preserve={} neighbor_generic_preserve={} current_policy={:?} neighbor_policy={:?} should_cull={} preserve_neighbor_face={} fallback_neighbor_occludes={}",
+        stage,
+        gx,
+        gy,
+        gz,
+        face_index_label(face_index),
+        current_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        neighbor_key.map(|value| value.as_str()).unwrap_or("<none>"),
+        current.is_glass,
+        neighbor.is_glass,
+        current.preserve_neighbor_faces,
+        neighbor.preserve_neighbor_faces,
+        current.generic_preserve_neighbor_faces,
+        neighbor.generic_preserve_neighbor_faces,
+        current.culling_policy,
+        neighbor.culling_policy,
+        should_cull,
+        preserve_neighbor_face,
+        fallback_neighbor_occludes,
+    );
+}
+
+fn is_froglight_local(local: &str) -> bool {
+    local.ends_with("_froglight")
+}
+
+fn froglight_trace_palette_local(catalog: &VisualCatalog, palette_id: usize) -> Option<&str> {
+    catalog.palette.get(palette_id).map(|entry| {
+        entry
+            .block_id
+            .strip_prefix("minecraft:")
+            .unwrap_or(entry.block_id.as_str())
+    })
+}
+
+fn froglight_trace_should_log_palette(catalog: &VisualCatalog, palette_id: usize) -> bool {
+    froglight_trace_palette_local(catalog, palette_id).is_some_and(is_froglight_local)
+}
+
+fn froglight_trace_log_visible_face(
+    catalog: &VisualCatalog,
+    palette_id: usize,
+    face_index: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    width: i32,
+    height: i32,
+    class_id: u8,
+    route: &str,
+) {
+    if !froglight_sandwich_trace_enabled()
+        || !froglight_trace_should_log_palette(catalog, palette_id)
+    {
+        return;
+    }
+    println!(
+        "[LBA_FROGLIGHT_SANDWICH_TRACE_20260424A] stage=visible_face route={} pos=({}, {}, {}) local={} face={} class_id={} span={}x{}",
+        route,
+        gx,
+        gy,
+        gz,
+        froglight_trace_palette_local(catalog, palette_id).unwrap_or("<none>"),
+        face_index_label(face_index),
+        class_id,
+        width,
+        height,
+    );
+}
+
+fn froglight_trace_log_output_quad(
+    stage: &str,
+    catalog: &VisualCatalog,
+    palette_id: usize,
+    face_index: usize,
+    min: [i32; 3],
+    max: [i32; 3],
+    width: i32,
+    height: i32,
+    route: &str,
+) {
+    if !froglight_sandwich_trace_enabled()
+        || !froglight_trace_should_log_palette(catalog, palette_id)
+    {
+        return;
+    }
+    println!(
+        "[LBA_FROGLIGHT_SANDWICH_TRACE_20260424A] stage={} route={} local={} face={} bounds=({}, {}, {})..({}, {}, {}) span={}x{}",
+        stage,
+        route,
+        froglight_trace_palette_local(catalog, palette_id).unwrap_or("<none>"),
+        face_index_label(face_index),
+        min[0],
+        min[1],
+        min[2],
+        max[0],
+        max[1],
+        max[2],
+        width,
+        height,
+    );
+}
+
+fn froglight_trace_log_full_block(
+    stage: &str,
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    detail: &str,
+) {
+    if !froglight_sandwich_trace_enabled() {
+        return;
+    }
+    let Some(local) = local_id_from_palette_key(materials.palette_keys.get(palette_id)) else {
+        return;
+    };
+    if !is_froglight_local(local) {
+        return;
+    }
+    println!(
+        "[LBA_FROGLIGHT_SANDWICH_TRACE_20260424A] stage={} pos=({}, {}, {}) local={} {}",
+        stage, gx, gy, gz, local, detail
+    );
+}
+
+fn block_geometry_label(geometry: &BlockGeometry) -> &'static str {
+    match geometry {
+        BlockGeometry::FullCube => "full_cube",
+        BlockGeometry::Cuboid { .. } => "cuboid",
+        BlockGeometry::CrossedPlanes { .. } => "crossed_planes",
+        BlockGeometry::CrossColumn { .. } => "cross_column",
+    }
+}
+
+fn froglight_trace_log_model_quad(
+    stage: &str,
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    model_quad: &crate::full_mode::FullModeModelQuad,
+    culled: Option<bool>,
+) {
+    if !froglight_sandwich_trace_enabled() {
+        return;
+    }
+    let Some(local) = local_id_from_palette_key(materials.palette_keys.get(palette_id)) else {
+        return;
+    };
+    if !is_froglight_local(local) {
+        return;
+    }
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for vertex in model_quad.vertices {
+        min[0] = min[0].min(vertex[0]);
+        min[1] = min[1].min(vertex[1]);
+        min[2] = min[2].min(vertex[2]);
+        max[0] = max[0].max(vertex[0]);
+        max[1] = max[1].max(vertex[1]);
+        max[2] = max[2].max(vertex[2]);
+    }
+    let uv_bounds = model_quad.uv.map(|uvs| {
+        let mut uv_min = [f32::INFINITY; 2];
+        let mut uv_max = [f32::NEG_INFINITY; 2];
+        for uv in uvs {
+            uv_min[0] = uv_min[0].min(uv[0]);
+            uv_min[1] = uv_min[1].min(uv[1]);
+            uv_max[0] = uv_max[0].max(uv[0]);
+            uv_max[1] = uv_max[1].max(uv[1]);
+        }
+        (uv_min, uv_max)
+    });
+    println!(
+        "[LBA_FROGLIGHT_SANDWICH_TRACE_20260424A] stage={} pos=({}, {}, {}) local={} cullface={} material={} culled={} bounds=({:.2},{:.2},{:.2})..({:.2},{:.2},{:.2}) uv_bounds={}",
+        stage,
+        gx,
+        gy,
+        gz,
+        local,
+        model_quad.cullface.as_deref().unwrap_or("<none>"),
+        model_quad.material,
+        culled
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "n/a".to_string()),
+        min[0],
+        min[1],
+        min[2],
+        max[0],
+        max[1],
+        max[2],
+        uv_bounds
+            .map(|(uv_min, uv_max)| format!(
+                "({:.2},{:.2})..({:.2},{:.2})",
+                uv_min[0], uv_min[1], uv_max[0], uv_max[1]
+            ))
+            .unwrap_or_else(|| "<none>".to_string()),
+    );
 }
 
 fn face_name_to_index(face_name: &str) -> Option<usize> {
@@ -2257,27 +4007,27 @@ struct BlockProperties {
     is_full_cube: bool,
     is_glass: bool,
     preserve_neighbor_faces: bool,
+    generic_preserve_neighbor_faces: bool,
     culling_policy: CullingPolicy,
 }
 
 fn block_culling_registry_should_cull(
+    render_info: &[BlockRenderInfo],
     materials: &FullModeMaterialCache,
     palette_id: usize,
     neighbor_palette_id: usize,
 ) -> bool {
     let current_key = materials.palette_keys.get(palette_id);
     let neighbor_key = materials.palette_keys.get(neighbor_palette_id);
-    let current = block_properties_for_key(current_key);
-    let neighbor = block_properties_for_key(neighbor_key);
+    let current = block_properties_for_palette(render_info, materials, palette_id);
+    let neighbor = block_properties_for_palette(render_info, materials, neighbor_palette_id);
     let identical_glass_pair =
         block_culling_registry_identical_glass_pair(current_key, neighbor_key, current, neighbor);
     if current.is_glass && !neighbor.is_glass && neighbor.is_opaque && neighbor.is_full_cube {
         return true;
     }
-    if neighbor.preserve_neighbor_faces {
-        if !identical_glass_pair {
-            return false;
-        }
+    if neighbor.preserve_neighbor_faces && !identical_glass_pair {
+        return false;
     }
     match current.culling_policy {
         CullingPolicy::SameBlockOnly => {
@@ -2291,20 +4041,40 @@ fn block_culling_registry_should_cull(
 }
 
 fn block_culling_registry_preserves_neighbor_face(
+    render_info: &[BlockRenderInfo],
     materials: &FullModeMaterialCache,
     palette_id: usize,
     neighbor_palette_id: usize,
 ) -> bool {
     let current_key = materials.palette_keys.get(palette_id);
     let neighbor_key = materials.palette_keys.get(neighbor_palette_id);
-    let current = block_properties_for_key(current_key);
-    let neighbor = block_properties_for_key(neighbor_key);
+    let current = block_properties_for_palette(render_info, materials, palette_id);
+    let neighbor = block_properties_for_palette(render_info, materials, neighbor_palette_id);
     let identical_glass_pair =
         block_culling_registry_identical_glass_pair(current_key, neighbor_key, current, neighbor);
     if current.is_glass && !neighbor.is_glass && neighbor.is_opaque && neighbor.is_full_cube {
         return false;
     }
-    neighbor.preserve_neighbor_faces && !identical_glass_pair
+    if identical_glass_pair {
+        return false;
+    }
+    if block_culling_registry_is_campfire_neighbor(neighbor_key) {
+        return true;
+    }
+    if neighbor.preserve_neighbor_faces {
+        trace_preserve_neighbor_face(neighbor_key, true, "explicit_preserve_neighbor_faces");
+        return true;
+    }
+    let generic_preserved = neighbor.generic_preserve_neighbor_faces
+        && !block_culling_registry_identical_state(current_key, neighbor_key);
+    if generic_preserved {
+        trace_preserve_neighbor_face(
+            neighbor_key,
+            true,
+            "generic_non_full_geometry_preserve_neighbor_faces",
+        );
+    }
+    generic_preserved
 }
 
 fn block_culling_registry_identical_glass_pair(
@@ -2318,13 +4088,58 @@ fn block_culling_registry_identical_glass_pair(
         && block_id_from_palette_key(current_key) == block_id_from_palette_key(neighbor_key)
 }
 
-fn block_properties_for_key(key: Option<&String>) -> BlockProperties {
+fn block_culling_registry_identical_state(
+    current_key: Option<&String>,
+    neighbor_key: Option<&String>,
+) -> bool {
+    matches!((current_key, neighbor_key), (Some(current), Some(neighbor)) if current == neighbor)
+}
+
+fn trace_preserve_neighbor_face(
+    neighbor_key: Option<&String>,
+    neighbor_face_preserved: bool,
+    culling_reason: &str,
+) {
+    if std::env::var_os("LBA_PRESERVE_NEIGHBOR_TRACE").is_none() {
+        return;
+    }
+    let block_id = block_id_from_palette_key(neighbor_key).unwrap_or("<missing>");
+    let local = local_id_from_palette_key(neighbor_key).unwrap_or("<missing>");
+    let family = full_mode_preserve_neighbor_family_name(local);
+    println!(
+        "[LBA_PRESERVE_NEIGHBOR_TRACE] block_id={} family={} preserve_neighbor_faces=true neighbor_face_preserved={} culling_reason={}",
+        block_id, family, neighbor_face_preserved, culling_reason
+    );
+}
+
+fn block_culling_registry_is_campfire_neighbor(key: Option<&String>) -> bool {
+    local_id_from_palette_key(key)
+        .map(|local| matches!(local, "campfire" | "soul_campfire"))
+        .unwrap_or(false)
+}
+
+fn block_properties_for_palette(
+    render_info: &[BlockRenderInfo],
+    materials: &FullModeMaterialCache,
+    palette_id: usize,
+) -> BlockProperties {
+    block_properties_for_key(
+        render_info.get(palette_id),
+        materials.palette_keys.get(palette_id),
+    )
+}
+
+fn block_properties_for_key(
+    info: Option<&BlockRenderInfo>,
+    key: Option<&String>,
+) -> BlockProperties {
     let Some(local) = local_id_from_palette_key(key) else {
         return BlockProperties {
             is_opaque: false,
             is_full_cube: false,
             is_glass: false,
             preserve_neighbor_faces: false,
+            generic_preserve_neighbor_faces: false,
             culling_policy: CullingPolicy::NonOccluding,
         };
     };
@@ -2335,16 +4150,20 @@ fn block_properties_for_key(key: Option<&String>) -> BlockProperties {
             is_full_cube: true,
             is_glass: true,
             preserve_neighbor_faces: true,
+            generic_preserve_neighbor_faces: false,
             culling_policy: CullingPolicy::SameBlockOnly,
         };
     }
     let non_occluding = full_mode_non_occluding_local(local);
     let preserve_neighbor_faces = full_mode_preserve_neighbor_faces_local(local);
+    let generic_preserve_neighbor_faces =
+        !preserve_neighbor_faces && full_mode_generic_preserve_neighbor_faces(info);
     BlockProperties {
         is_opaque: !non_occluding,
         is_full_cube: !non_occluding,
         is_glass: false,
         preserve_neighbor_faces,
+        generic_preserve_neighbor_faces,
         culling_policy: if non_occluding {
             CullingPolicy::NonOccluding
         } else {
@@ -2389,7 +4208,9 @@ fn full_mode_non_occluding_local(local: &str) -> bool {
                 | "ender_chest"
                 | "brewing_stand"
         )
+        || full_mode_explicit_preserve_neighbor_family_local(local)
         || local.ends_with("_rail")
+        || local.ends_with("_pane")
 }
 
 pub(crate) fn full_mode_preserve_neighbor_faces_local(local: &str) -> bool {
@@ -2407,14 +4228,134 @@ pub(crate) fn full_mode_preserve_neighbor_faces_local(local: &str) -> bool {
             | "trapped_chest"
             | "ender_chest"
             | "barrel"
-    ) || local.ends_with("_rail")
+    ) || full_mode_explicit_preserve_neighbor_family_local(local)
+        || local.ends_with("_rail")
+        || local.ends_with("_door")
+        || local.ends_with("_banner")
+        || local.ends_with("_button")
+        || local.ends_with("_leaves")
+        || local == "flower_pot"
+        || local.starts_with("potted_")
+        || local == "end_rod"
+        || full_mode_is_plant_family_local(local)
+        || full_mode_is_flower_cluster_family_local(local)
+        || full_mode_is_torch_family_local(local)
+        || full_mode_is_lantern_family_local(local)
+        || full_mode_is_amethyst_cluster_family_local(local)
         || full_mode_is_coral_family_local(local)
+}
+
+fn full_mode_explicit_preserve_neighbor_family_local(local: &str) -> bool {
+    matches!(local, "lightning_rod" | "lantern" | "soul_lantern")
+        || local.ends_with("_pressure_plate")
+        || local.ends_with("_trapdoor")
+        || local.ends_with("_sign")
+}
+
+fn full_mode_preserve_neighbor_family_name(local: &str) -> &'static str {
+    if local == "lightning_rod" {
+        "lightning_rod"
+    } else if matches!(local, "lantern" | "soul_lantern") {
+        "lantern"
+    } else if local.ends_with("_pressure_plate") {
+        "pressure_plate"
+    } else if local.ends_with("_trapdoor") {
+        "trapdoor"
+    } else if local.ends_with("_wall_hanging_sign") {
+        "wall_hanging_sign"
+    } else if local.ends_with("_hanging_sign") {
+        "hanging_sign"
+    } else if local.ends_with("_wall_sign") {
+        "wall_sign"
+    } else if local.ends_with("_sign") {
+        "sign"
+    } else {
+        "generic"
+    }
+}
+
+fn full_mode_generic_preserve_neighbor_faces(info: Option<&BlockRenderInfo>) -> bool {
+    matches!(
+        info.map(|info| &info.geometry),
+        Some(
+            BlockGeometry::CrossedPlanes { .. }
+                | BlockGeometry::CrossColumn { .. }
+                | BlockGeometry::Cuboid { non_full: true, .. }
+        )
+    )
 }
 
 fn full_mode_glass_family_local(local: &str) -> bool {
     local == "glass"
         || local == "tinted_glass"
         || (local.ends_with("_stained_glass") && !local.ends_with("_pane"))
+}
+
+fn full_mode_is_plant_family_local(local: &str) -> bool {
+    matches!(
+        local,
+        "grass"
+            | "fern"
+            | "dead_bush"
+            | "short_grass"
+            | "tall_grass"
+            | "sunflower"
+            | "lilac"
+            | "rose_bush"
+            | "peony"
+            | "large_fern"
+            | "dandelion"
+            | "poppy"
+            | "blue_orchid"
+            | "allium"
+            | "azure_bluet"
+            | "red_tulip"
+            | "orange_tulip"
+            | "white_tulip"
+            | "pink_tulip"
+            | "oxeye_daisy"
+            | "cornflower"
+            | "lily_of_the_valley"
+            | "wither_rose"
+            | "torchflower"
+            | "pitcher_plant"
+            | "seagrass"
+            | "tall_seagrass"
+            | "kelp"
+            | "bamboo_sapling"
+            | "cactus_flower"
+    ) || local.ends_with("_sapling")
+        || local.ends_with("_crop")
+        || local.ends_with("_flower")
+        || local.ends_with("_bush")
+        || local.ends_with("_mushroom")
+}
+
+fn full_mode_is_flower_cluster_family_local(local: &str) -> bool {
+    matches!(local, "pink_petals" | "wildflowers" | "leaf_litter")
+}
+
+fn full_mode_is_torch_family_local(local: &str) -> bool {
+    matches!(
+        local,
+        "torch"
+            | "wall_torch"
+            | "redstone_torch"
+            | "redstone_wall_torch"
+            | "soul_torch"
+            | "soul_wall_torch"
+    )
+}
+
+fn full_mode_is_lantern_family_local(local: &str) -> bool {
+    matches!(local, "lantern" | "soul_lantern")
+}
+
+fn full_mode_is_amethyst_cluster_family_local(local: &str) -> bool {
+    matches!(
+        local,
+        "amethyst_cluster" | "small_amethyst_bud" | "medium_amethyst_bud" | "large_amethyst_bud"
+    )
 }
 
 fn full_mode_is_coral_family_local(local: &str) -> bool {
@@ -2455,6 +4396,7 @@ fn emit_textured_crossed_planes(
     let y0 = gy as f32 + min_y;
     let y1 = gy as f32 + max_y;
     let uv = map_unit_quad_uv(material.uv_rect);
+    let emissive_tag = emissive_tag_for_material_key(&material.key);
     let quads = [
         [
             [cx - half_width, y0, cz - half_width],
@@ -2470,16 +4412,18 @@ fn emit_textured_crossed_planes(
         ],
     ];
     for quad in quads {
+        let effective_alpha = alpha_mode
+            .or(Some(material.alpha_mode))
+            .unwrap_or(FullModeAlphaMode::Opaque);
         emit_textured_quad(
             vertices,
             solid_indices,
             translucent_indices,
             &quad,
             &uv,
-            alpha_mode
-                .or(Some(material.alpha_mode))
-                .unwrap_or(FullModeAlphaMode::Opaque),
+            effective_alpha,
             true,
+            emissive_tag,
         );
     }
 }
@@ -2516,6 +4460,7 @@ fn emit_textured_flat_top(
         &uv,
         material.alpha_mode,
         true,
+        emissive_tag_for_material_key(&material.key),
     );
 }
 
@@ -2527,7 +4472,7 @@ fn resolved_material_slot(
     let slot = face_index
         .and_then(|face_index| palette_material.slot_for_face_index(face_index))
         .or_else(|| palette_material.cross_slot())
-        .or_else(|| None);
+        .or(None);
     let alpha_mode = slot
         .and_then(|slot| materials.materials.get(slot as usize))
         .map(|material| material.alpha_mode);
@@ -2566,6 +4511,45 @@ fn axis_face_local_uv(face_index: usize, local: [f32; 3]) -> [f32; 2] {
     }
 }
 
+fn emit_stripped_birch_logical_marker(
+    vertices: &mut Vec<TexturedVertexOutput>,
+    solid_indices: &mut Vec<u32>,
+    translucent_indices: &mut Vec<u32>,
+    gx: i32,
+    gy: i32,
+    gz: i32,
+    emissive_tag: f32,
+) {
+    let min = [-0.035_f32, -0.035_f32, -0.035_f32];
+    let max = [1.035_f32, 1.035_f32, 1.035_f32];
+    let uv = [[0.0_f32, 0.0_f32]; 4];
+    for face_index in 0..FACE_VERTICES.len() {
+        let mut quad = [[0.0_f32; 3]; 4];
+        for (vertex_slot, template) in FACE_VERTICES[face_index].iter().enumerate() {
+            let local = [
+                if template[0] == 0.0 { min[0] } else { max[0] },
+                if template[1] == 0.0 { min[1] } else { max[1] },
+                if template[2] == 0.0 { min[2] } else { max[2] },
+            ];
+            quad[vertex_slot] = [
+                gx as f32 + local[0],
+                gy as f32 + local[1],
+                gz as f32 + local[2],
+            ];
+        }
+        emit_textured_quad(
+            vertices,
+            solid_indices,
+            translucent_indices,
+            &quad,
+            &uv,
+            FullModeAlphaMode::Opaque,
+            true,
+            emissive_tag,
+        );
+    }
+}
+
 fn emit_textured_quad(
     vertices: &mut Vec<TexturedVertexOutput>,
     solid_indices: &mut Vec<u32>,
@@ -2574,13 +4558,14 @@ fn emit_textured_quad(
     uv: &[[f32; 2]; 4],
     alpha_mode: FullModeAlphaMode,
     double_sided: bool,
+    emissive_tag: f32,
 ) {
     let base = vertices.len() as u32;
     for (position, uv) in quad.iter().zip(uv.iter()) {
         vertices.push(TexturedVertexOutput {
             position: *position,
             uv: *uv,
-            emissive_tag: 0.0,
+            emissive_tag,
         });
     }
     let target = if alpha_mode == FullModeAlphaMode::Translucent {
@@ -2592,6 +4577,48 @@ fn emit_textured_quad(
     if double_sided {
         target.extend_from_slice(&[base, base + 3, base + 2, base, base + 2, base + 1]);
     }
+}
+
+fn emissive_tag_for_material_key(key: &str) -> f32 {
+    emissive_material_key_match(key)
+        .map(|(_, tag)| tag)
+        .unwrap_or(0.0)
+}
+
+fn emissive_material_key_match(key: &str) -> Option<(&'static str, f32)> {
+    let key = key.to_ascii_lowercase();
+    let local = key.rsplit([':', '/', '\\']).next().unwrap_or(key.as_str());
+    const EMISSIVE_NAMES: [(&str, f32); 23] = [
+        ("glowstone", 1.0),
+        ("sea_lantern", 2.0),
+        ("shroomlight", 3.0),
+        ("ochre_froglight", 4.0),
+        ("verdant_froglight", 4.0),
+        ("pearlescent_froglight", 4.0),
+        ("froglight", 4.0),
+        ("redstone_lamp", 5.0),
+        ("soul_lantern", 6.0),
+        ("lantern", 6.0),
+        ("soul_wall_torch", 8.0),
+        ("soul_torch", 8.0),
+        ("redstone_wall_torch", 7.0),
+        ("redstone_torch", 7.0),
+        ("wall_torch", 7.0),
+        ("torch", 7.0),
+        ("end_rod", 9.0),
+        ("soul_campfire", 10.0),
+        ("campfire", 10.0),
+        ("jack_o_lantern", 11.0),
+        ("beacon", 12.0),
+        ("cave_vines_lit", 13.0),
+        ("cave_vines_plant_lit", 13.0),
+    ];
+    EMISSIVE_NAMES
+        .iter()
+        .find_map(|(name, tag)| key.contains(name).then_some((*name, *tag)))
+        .or_else(|| {
+            matches!(local, "glow_berries" | "glow_berry_vines").then_some(("glow_berries", 13.0))
+        })
 }
 
 struct CuboidSpec {
@@ -2610,6 +4637,7 @@ fn emit_greedy_full_cube_faces(
     color_indices: &mut Vec<u32>,
     compact_surfaces: &mut Vec<CompactSurfaceOutput>,
     face_stats: &mut MeshFaceStats,
+    catalog: &VisualCatalog,
     chunk_key: ChunkKey,
     chunk_size: u32,
     fast_path_grid: &[u32],
@@ -2669,13 +4697,29 @@ fn emit_greedy_full_cube_faces(
                             fast_path_occludes_grid,
                             occupied,
                         ),
-                        3 | 4 | 5 | 6 | 7 => matches!(face_index, 2 | 3),
+                        3..=7 => matches!(face_index, 2 | 3),
                         _ => false,
                     };
                     if face_visible {
                         let index = (v * chunk_size_i32 + u) as usize;
                         mask[index] = palette_id;
                         mask_class[index] = class_id;
+                        froglight_trace_log_visible_face(
+                            catalog,
+                            palette_id as usize,
+                            face_index,
+                            gx,
+                            gy,
+                            gz,
+                            1,
+                            1,
+                            class_id,
+                            if compact_cache_v2_enabled() && class_id == 1 {
+                                "compact_candidate"
+                            } else {
+                                "greedy_candidate"
+                            },
+                        );
                         face_stats.fast_path_visible_faces += 1;
                         match class_id {
                             1 => face_stats.fast_path_opaque_visible_faces += 1,
@@ -2727,7 +4771,7 @@ fn emit_greedy_full_cube_faces(
                         quad_height += 1;
                     }
 
-                    if matches!(class_id, 3 | 4 | 5 | 6 | 7) {
+                    if matches!(class_id, 3..=7) {
                         emit_greedy_non_full_horizontal_quad(
                             vertices,
                             indices,
@@ -2750,6 +4794,7 @@ fn emit_greedy_full_cube_faces(
                     } else if compact_cache_v2_enabled() && class_id == 1 {
                         emit_compact_surface_quad(
                             compact_surfaces,
+                            catalog,
                             face_index,
                             palette_id as usize,
                             base_x,
@@ -2768,6 +4813,7 @@ fn emit_greedy_full_cube_faces(
                             indices,
                             color_indices,
                             face_stats,
+                            catalog,
                             face_index,
                             chunk_key,
                             chunk_size,
@@ -2824,7 +4870,7 @@ fn emit_half_slab_side_faces(
             continue;
         }
         let class_id = fast_path_class_grid[index];
-        if !matches!(class_id, 3 | 4 | 5 | 6 | 7) {
+        if !matches!(class_id, 3..=7) {
             continue;
         }
         let (local_x, local_y, local_z) = fast_path_grid_coords(chunk_size_usize, index);
@@ -2946,6 +4992,7 @@ fn emit_greedy_face_quad(
     indices: &mut Vec<u32>,
     color_indices: &mut Vec<u32>,
     face_stats: &mut MeshFaceStats,
+    catalog: &VisualCatalog,
     face_index: usize,
     chunk_key: ChunkKey,
     chunk_size: u32,
@@ -3011,6 +5058,18 @@ fn emit_greedy_face_quad(
         _ => unreachable!("invalid face index"),
     };
 
+    froglight_trace_log_output_quad(
+        "output_quad",
+        catalog,
+        palette_id,
+        face_index,
+        min,
+        max,
+        width,
+        height,
+        "greedy_face_quad",
+    );
+
     emit_axis_aligned_face_bounds(
         vertices,
         indices,
@@ -3029,6 +5088,7 @@ fn emit_greedy_face_quad(
 
 fn emit_compact_surface_quad(
     compact_surfaces: &mut Vec<CompactSurfaceOutput>,
+    catalog: &VisualCatalog,
     face_index: usize,
     palette_id: usize,
     base_x: i32,
@@ -3091,6 +5151,17 @@ fn emit_compact_surface_quad(
         ),
         _ => unreachable!("invalid face index"),
     };
+    froglight_trace_log_output_quad(
+        "output_quad",
+        catalog,
+        palette_id,
+        face_index,
+        min,
+        max,
+        width,
+        height,
+        "compact_surface",
+    );
     compact_surfaces.push(CompactSurfaceOutput {
         face_index: face_index as u8,
         min: [min[0] as f32, min[1] as f32, min[2] as f32],
@@ -3397,4 +5468,76 @@ pub fn build_mesh_output(path: &Path, chunk_size: u32) -> Result<MeshOutput> {
         property_pool: scene_index.property_pool().to_vec(),
         chunks,
     })
+}
+
+#[cfg(test)]
+mod preserve_neighbor_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_preserve_neighbor_family_patterns_cover_new_materials() {
+        let samples = [
+            ("lightning_rod", "lightning_rod"),
+            ("lantern", "lantern"),
+            ("soul_lantern", "lantern"),
+            ("cherry_trapdoor", "trapdoor"),
+            ("bamboo_trapdoor", "trapdoor"),
+            ("mangrove_trapdoor", "trapdoor"),
+            ("crimson_trapdoor", "trapdoor"),
+            ("warped_trapdoor", "trapdoor"),
+            ("pale_oak_trapdoor", "trapdoor"),
+            ("copper_trapdoor", "trapdoor"),
+            ("exposed_copper_trapdoor", "trapdoor"),
+            ("weathered_copper_trapdoor", "trapdoor"),
+            ("oxidized_copper_trapdoor", "trapdoor"),
+            ("waxed_copper_trapdoor", "trapdoor"),
+            ("waxed_exposed_copper_trapdoor", "trapdoor"),
+            ("waxed_weathered_copper_trapdoor", "trapdoor"),
+            ("waxed_oxidized_copper_trapdoor", "trapdoor"),
+            ("cherry_pressure_plate", "pressure_plate"),
+            ("polished_blackstone_pressure_plate", "pressure_plate"),
+            ("light_weighted_pressure_plate", "pressure_plate"),
+            ("heavy_weighted_pressure_plate", "pressure_plate"),
+            ("cherry_sign", "sign"),
+            ("cherry_wall_sign", "wall_sign"),
+            ("cherry_hanging_sign", "hanging_sign"),
+            ("cherry_wall_hanging_sign", "wall_hanging_sign"),
+        ];
+        for (local, family) in samples {
+            assert!(
+                full_mode_preserve_neighbor_faces_local(local),
+                "{local} should preserve neighbor faces"
+            );
+            assert!(
+                full_mode_non_occluding_local(local),
+                "{local} should not be treated as full solid"
+            );
+            assert_eq!(full_mode_preserve_neighbor_family_name(local), family);
+        }
+    }
+
+    #[test]
+    fn existing_preserve_neighbor_families_still_match() {
+        for local in [
+            "flower_pot",
+            "potted_oak_sapling",
+            "oak_slab",
+            "oak_stairs",
+            "glass_pane",
+            "chain",
+            "white_banner",
+            "torch",
+        ] {
+            assert!(
+                full_mode_preserve_neighbor_faces_local(local)
+                    || full_mode_generic_preserve_neighbor_faces(Some(
+                        &classify_block_render_info(
+                            &format!("minecraft:{local}"),
+                            &BTreeMap::new()
+                        )
+                    )),
+                "{local} should still preserve neighbor faces"
+            );
+        }
+    }
 }

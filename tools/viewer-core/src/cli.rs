@@ -7,10 +7,12 @@ pub struct CliArgs {
     pub command: String,
     pub input: PathBuf,
     pub include_entities: bool,
+    pub include_container_items: bool,
     pub json: bool,
     pub chunk_size: u32,
     pub output: Option<PathBuf>,
     pub plan: Option<PathBuf>,
+    pub patch: Option<PathBuf>,
     pub rules: Option<PathBuf>,
     pub dry_run: bool,
     pub force: bool,
@@ -38,9 +40,13 @@ pub fn parse_args() -> Result<CliArgs> {
     if command == "generate" {
         return parse_generate_args(command, args.collect());
     }
+    if command == "edit-metadata" {
+        return parse_edit_metadata_args(command, args.collect());
+    }
 
     let mut input = None;
     let mut include_entities = false;
+    let mut include_container_items = false;
     let mut json = false;
     let mut chunk_size = 32_u32;
     let mut output = None;
@@ -64,6 +70,7 @@ pub fn parse_args() -> Result<CliArgs> {
                 input = Some(PathBuf::from(path));
             }
             "--include-entities" => include_entities = true,
+            "--include-container-items" => include_container_items = true,
             "--json" => json = true,
             "--scope" => {
                 let Some(value) = args.next() else {
@@ -164,10 +171,12 @@ pub fn parse_args() -> Result<CliArgs> {
         command,
         input,
         include_entities,
+        include_container_items,
         json,
         chunk_size,
         output,
         plan: None,
+        patch: None,
         rules: None,
         dry_run: false,
         force: false,
@@ -257,10 +266,12 @@ fn parse_replace_blocks_args(command: String, raw_args: Vec<String>) -> Result<C
         command,
         input,
         include_entities: false,
+        include_container_items: false,
         json: false,
         chunk_size: 32,
         output,
         plan: None,
+        patch: None,
         rules,
         dry_run,
         force: false,
@@ -338,13 +349,99 @@ fn parse_generate_args(command: String, raw_args: Vec<String>) -> Result<CliArgs
         command,
         input: PathBuf::new(),
         include_entities: false,
+        include_container_items: false,
         json,
         chunk_size: 32,
         output,
         plan,
+        patch: None,
         rules: None,
         dry_run,
         force,
+        scope: None,
+        region: None,
+        layer: None,
+        y: None,
+        y_start: None,
+        y_end: None,
+        cx: None,
+        cy: None,
+        cz: None,
+        offset: 0,
+        limit: 64,
+    })
+}
+
+fn parse_edit_metadata_args(command: String, raw_args: Vec<String>) -> Result<CliArgs> {
+    let mut input = None;
+    let mut output = None;
+    let mut patch = None;
+    let mut args = raw_args.into_iter();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--input" => {
+                let Some(path) = args.next() else {
+                    bail!("missing path after --input");
+                };
+                input = Some(PathBuf::from(path));
+            }
+            "--output" => {
+                let Some(path) = args.next() else {
+                    bail!("missing path after --output");
+                };
+                output = Some(PathBuf::from(path));
+            }
+            "--patch" => {
+                let Some(path) = args.next() else {
+                    bail!("missing path after --patch");
+                };
+                patch = Some(PathBuf::from(path));
+            }
+            _ if arg.starts_with("--input=") => {
+                let value = arg.trim_start_matches("--input=");
+                if value.is_empty() {
+                    bail!("missing path after --input=");
+                }
+                input = Some(PathBuf::from(value));
+            }
+            _ if arg.starts_with("--output=") => {
+                let value = arg.trim_start_matches("--output=");
+                if value.is_empty() {
+                    bail!("missing path after --output=");
+                }
+                output = Some(PathBuf::from(value));
+            }
+            _ if arg.starts_with("--patch=") => {
+                let value = arg.trim_start_matches("--patch=");
+                if value.is_empty() {
+                    bail!("missing path after --patch=");
+                }
+                patch = Some(PathBuf::from(value));
+            }
+            _ if arg.starts_with('-') => bail!("unknown argument: {arg}"),
+            _ => {
+                if input.is_some() {
+                    bail!("unexpected positional argument: {arg}");
+                }
+                input = Some(PathBuf::from(arg));
+            }
+        }
+    }
+
+    Ok(CliArgs {
+        command,
+        input: input.ok_or_else(|| anyhow::anyhow!("edit-metadata requires --input <path>"))?,
+        include_entities: false,
+        include_container_items: false,
+        json: true,
+        chunk_size: 32,
+        output,
+        plan: None,
+        patch: Some(patch.ok_or_else(|| anyhow::anyhow!("edit-metadata requires --patch <path>"))?),
+        rules: None,
+        dry_run: false,
+        force: false,
         scope: None,
         region: None,
         layer: None,
