@@ -1,0 +1,33 @@
+{
+    "name": "desktop-nova",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite --host 127.0.0.1 --port 1430",
+        "build": "tsc && vite build",
+        "preview": "vite preview --host 127.0.0.1 --port 1431",
+        "tauri": "tauri",
+        "tauri:dev": "tauri dev",
+        "tauri:build": "tauri build",
+        "tauri:info": "tauri info"
+    },
+    "dependencies": {
+        "@tauri-apps/api": "2.10.1",
+        "@tauri-apps/plugin-dialog": "2.7.0",
+        "@tauri-apps/plugin-shell": "2.3.5",
+        "clsx": "^2.1.0",
+        "lucide-react": "^0.300.0",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "react-router-dom": "^6.20.0"
+    },
+    "devDependencies": {
+        "@tauri-apps/cli": "2.10.1",
+        "@types/react": "^18.3.3",
+        "@types/react-dom": "^18.3.0",
+        "@vitejs/plugin-react": "^4.3.1",
+        "typescript": "^5.5.4",
+        "vite": "^5.4.0"
+    }
+}

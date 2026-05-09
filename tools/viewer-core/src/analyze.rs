@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 
 use crate::business::build_analysis_derived;
-use crate::model::{AnalysisOutput, AnalysisSummary};
+use crate::model::{AnalysisOutput, AnalysisRegionOutput, AnalysisSummary, EnclosingSize};
 use crate::nbt::{
     bits_for_palette, decode_palette_frequencies, load_litematic_root, region_bounds, region_volume,
 };
@@ -79,8 +79,26 @@ pub fn analyze_litematic(path: &Path, include_entities: bool) -> Result<Analysis
         ),
         total_non_air_blocks,
     );
+    let regions = root
+        .regions
+        .iter()
+        .map(|(name, region)| AnalysisRegionOutput {
+            name: name.clone(),
+            position: EnclosingSize {
+                x: region.position.x,
+                y: region.position.y,
+                z: region.position.z,
+            },
+            size: EnclosingSize {
+                x: region.size.x,
+                y: region.size.y,
+                z: region.size.z,
+            },
+        })
+        .collect();
     Ok(AnalysisOutput {
         metadata,
+        regions,
         analysis: AnalysisSummary {
             total_non_air_blocks,
             block_counts,

@@ -1,0 +1,86 @@
+:root {
+    --ln-metro10-range-height: 24px;
+    --ln-metro10-range-track-height: 2px;
+    --ln-metro10-range-track-background: #999999;
+    --ln-metro10-range-progress-background: #0078d7;
+    --ln-metro10-range-thumb-width: 8px;
+    --ln-metro10-range-thumb-height: 24px;
+    --ln-metro10-range-focus: #0078d7;
+    --ln-metro10-range-disabled-opacity: 0.55;
+    --ln-metro10-range-progress: 0%;
+}
+
+input[type="range"] {
+    display: block;
+    width: 100%;
+    height: var(--ln-metro10-range-height);
+    padding: 0;
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+
+input[type="range"]:focus {
+    outline: 0;
+}
+
+input[type="range"]:focus-visible {
+    outline: 2px solid var(--ln-metro10-range-focus);
+    outline-offset: 4px;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+    width: 100%;
+    height: var(--ln-metro10-range-track-height);
+    border-radius: 1px;
+    background: linear-gradient(
+        to right,
+        var(--ln-metro10-range-progress-background) 0,
+        var(--ln-metro10-range-progress-background) var(--ln-metro10-range-progress),
+        var(--ln-metro10-range-track-background) var(--ln-metro10-range-progress),
+        var(--ln-metro10-range-track-background) 100%
+    );
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    width: var(--ln-metro10-range-thumb-width);
+    height: var(--ln-metro10-range-thumb-height);
+    margin-top: calc((var(--ln-metro10-range-track-height) - var(--ln-metro10-range-thumb-height)) / 2);
+    appearance: none;
+    border: 0;
+    border-radius: 0;
+    background: transparent url("../resource/form/slider_handle.svg") center / contain no-repeat;
+}
+
+input[type="range"]::-moz-range-track {
+    width: 100%;
+    height: var(--ln-metro10-range-track-height);
+    border: 0;
+    border-radius: 1px;
+    background: var(--ln-metro10-range-track-background);
+}
+
+input[type="range"]::-moz-range-progress {
+    height: var(--ln-metro10-range-track-height);
+    border-radius: 1px;
+    background: var(--ln-metro10-range-progress-background);
+}
+
+input[type="range"]::-moz-range-thumb {
+    width: var(--ln-metro10-range-thumb-width);
+    height: var(--ln-metro10-range-thumb-height);
+    border: 0;
+    border-radius: 0;
+    background: transparent url("../resource/form/slider_handle.svg") center / contain no-repeat;
+}
+
+input[type="range"]::-moz-focus-outer {
+    border: 0;
+}
+
+input[type="range"]:disabled {
+    opacity: var(--ln-metro10-range-disabled-opacity);
+    cursor: default;
+}

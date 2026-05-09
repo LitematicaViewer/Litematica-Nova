@@ -1,108 +1,102 @@
-# Cleanup Policy
+# 清理策略
 
-This document defines low-risk disk cleanup rules for maintainers. It is about generated files, caches, and reversible quarantine only. It is not a refactor plan.
+本文定义低风险磁盘清理规则。它只处理生成物、缓存和可恢复隔离，不是重构计划。
 
-## Current UI status
+## 当前 UI 状态
 
-- The only active desktop UI is `desktop-js/`.
-- The old PySide6 package `src/litematicaba/` has been deleted.
-- The old alternate UI directory `desktop-ui/` has been deleted.
-- The old script directory `script/` has been deleted.
-- The active tooling directory is `scripts/`; do not confuse it with the deleted `script/` directory.
+- `desktop-nova/` 是当前桌面 UI 主线和功能基准，清理时不得删除。
+- 旧 JS 桌面 UI 已从 Git 跟踪中排除，只保留本地参考，不作为维护入口。
+- `src/litematicaba/`、`desktop-ui/`、`script/` 已删除。
+- `scripts/` 是当前维护脚本目录。
 
-## Safe to delete
+## 可以删除的内容
 
-These are generated or cache outputs and can be removed when reclaiming disk space:
+这些内容是缓存或构建产物，可在需要释放空间时删除：
 
-- `desktop-js/node_modules/`
-- `desktop-js/dist/`
-- `desktop-js/src-tauri/target/`
+- `desktop-nova/node_modules/`
+- `desktop-nova/dist/`
+- `desktop-nova/src-tauri/target/`
 - `tools/viewer-core/target/`
 - `.tmp/`
+- `.external/`，前提是当前任务不需要 Nova 参考仓库。
 - `diagnostics/bundle_*`
-- `__pycache__/`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `.cache/`
-- `.vite/`, `.turbo/`, `.next/`, `coverage/`, `build/`
-- `*.tmp`, `*.temp`
+- `__pycache__/`、`.pytest_cache/`、`.mypy_cache/`、`.ruff_cache/`、`.cache/`
+- `.vite/`、`.turbo/`、`.next/`、`coverage/`、`build/`
+- `*.tmp`、`*.temp`
+- 本地验证图，例如 `_full_verify_*.png`
+- `docs/` 下本地打包出的 exe
 
-Keep `diagnostics/README.md`; only remove generated `bundle_*` directories.
+保留 `diagnostics/README.md`；只删除生成出的 `bundle_*` 目录。
 
-## Do not delete or move
+## 不要删除或移动
 
-Do not delete or move these during disk cleanup:
+清理时不要删除或移动：
 
-- `desktop-js/`
+- `desktop-nova/`
 - `tools/viewer-core/`
 - `data/projection-library/`
 - `data/ai-projection/`
 - `data/minecraft_blockstates/overrides/`
-- current BlockState DB files unless the task is explicitly DB regeneration
+- 当前 BlockState DB 文件，除非任务明确要求重新生成 DB。
 - `bin/viewer-backend/`
 - `docs/`
 - `scripts/`
 - `MAINTAINERS.md`
-- `README.md`, package manifests, Cargo manifests, Tauri config
-- projection library index/schema files
-- AI prompt/config, validator, normalizer, or apply bridge source
-- viewer-core mesh, full mode, native viewer, and cache protocol source
+- `README.md`
+- package manifest、Cargo manifest、Tauri 配置。
+- AI prompt、config、validator、normalizer、apply bridge 源码。
+- viewer-core mesh、Full Mode、native viewer、cache 协议源码。
 
-The deleted legacy paths above should be restored only from the cleanup backup if a maintainer explicitly needs historical comparison.
+## 只隔离，不直接删
 
-## Quarantine only
+如果某个文件像调试产物或 fixture，但可能仍有回归价值，先移动到仓库外隔离区，不要直接删除。
 
-If a file looks like a debug artifact or fixture but might still be useful for regression work, move it outside the repository instead of deleting it.
-
-Use:
+隔离目录：
 
 ```text
 C:\Users\27232\CodexBackups\<cleanup_backup>\quarantine\
 ```
 
-Quarantine candidates:
+建议隔离对象：
 
-- top-level `_full_mode_*`
-- top-level `_verify_*`
-- top-level `debug`, `trace`, `probe`, `fixture`, `baseline`, `repro`, or `test` artifacts
-- top-level `.png`, `.log`, and loose `.litematic` samples not in `data/projection-library/`
-- uncertain screenshots, JSON files, or generated layouts
+- 根目录 `_full_mode_*`
+- 根目录 `_verify_*`
+- 根目录包含 `debug`、`trace`、`probe`、`fixture`、`baseline`、`repro`、`test` 的零散产物。
+- 根目录 `.png`、`.log`、零散 `.litematic` 样例。
+- 无法确认用途的截图、JSON、layout 文件。
 
-Before quarantine, record the original path and reference scan result in `cleanup_manifest.json`.
+隔离前应记录原始路径和判断依据到 `cleanup_manifest.json`。
 
-## Restore from quarantine
+## 从隔离区恢复
 
-To restore one file, copy it back to the same relative path from:
-
-```text
-C:\Users\27232\CodexBackups\<cleanup_backup>\quarantine\<relative-path>
-```
-
-Example:
+恢复单个文件：
 
 ```powershell
 Copy-Item "C:\Users\27232\CodexBackups\<cleanup_backup>\quarantine\_verify_example.png" "C:\Users\27232\Documents\Litematica-BA\_verify_example.png"
 ```
 
-To restore everything, copy the quarantine directory contents back into the repository root, preserving relative paths.
+恢复全部文件时，把隔离目录内容按原相对路径复制回仓库根目录。
 
-## Reinstall and rebuild
+## 重新安装和构建
 
-After deleting `node_modules`:
+删除 `node_modules` 后：
 
 ```powershell
-cd C:\Users\27232\Documents\Litematica-BA\desktop-js
+cd C:\Users\27232\Documents\Litematica-BA\desktop-nova
 npm install
 ```
 
-Rebuild the desktop frontend:
+重新构建前端：
 
 ```powershell
-cd C:\Users\27232\Documents\Litematica-BA\desktop-js
+cd C:\Users\27232\Documents\Litematica-BA\desktop-nova
 npm run build
 ```
 
-Recreate Rust build outputs:
+重新检查 Tauri 和 Rust：
 
 ```powershell
-cd C:\Users\27232\Documents\Litematica-BA\desktop-js\src-tauri
+cd C:\Users\27232\Documents\Litematica-BA\desktop-nova\src-tauri
 cargo check
 
 cd C:\Users\27232\Documents\Litematica-BA\tools\viewer-core
@@ -110,20 +104,21 @@ cargo build --release --bin litematica_core
 cargo build --release --bin litematica_native_viewer
 ```
 
-## Regenerate diagnostics
+## 重新导出诊断
 
 ```powershell
 cd C:\Users\27232\Documents\Litematica-BA
 python scripts\export_diagnostics.py
 ```
 
-## Required cleanup records
+## 必需清理记录
 
-Every destructive cleanup should create:
+任何破坏性清理都应创建：
 
 - `cleanup_manifest.json`
 - `cleanup_report.md`
-- a workspace-external backup under `C:\Users\27232\CodexBackups\`
-- `BACKUP_MANIFEST.json`, backup log, and `cleanup_plan_before.json` inside the backup
+- 仓库外备份目录：`C:\Users\27232\CodexBackups\`
+- 备份内的 `BACKUP_MANIFEST.json`、备份日志、`cleanup_plan_before.json`
 
-Do not put backups or quarantine directories inside the repository.
+不要把备份或隔离目录放进仓库。
+

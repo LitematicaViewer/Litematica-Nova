@@ -212,13 +212,19 @@ pub fn replace_blocks(
 
         if !dry_run && region_changed {
             let mut remapped = Vec::with_capacity(volume);
-            for_each_palette_index(&region.block_states, volume, old_bits, |_, old_index| {
-                let new_index = *old_to_new
-                    .get(old_index)
-                    .ok_or_else(|| anyhow!("palette index {old_index} out of range"))?;
-                remapped.push(new_index);
-                Ok(())
-            })
+            for_each_palette_index(
+                &region.block_states,
+                volume,
+                old_bits,
+                region.block_state_palette.len(),
+                |_, old_index| {
+                    let new_index = *old_to_new
+                        .get(old_index)
+                        .ok_or_else(|| anyhow!("palette index {old_index} out of range"))?;
+                    remapped.push(new_index);
+                    Ok(())
+                },
+            )
             .with_context(|| format!("failed to remap block states for region {region_name}"))?;
 
             let new_bits = bits_for_palette(new_palette.len());
@@ -577,6 +583,7 @@ mod tests {
             &region.block_states,
             region_volume(&region.size)?,
             bits_for_palette(region.block_state_palette.len()),
+            region.block_state_palette.len(),
             |_, palette_index| {
                 decoded.push(region.block_state_palette[palette_index].name.clone());
                 Ok(())
@@ -626,6 +633,8 @@ mod tests {
                 author: Some("test".to_string()),
                 description: Some("replace block fixture".to_string()),
                 name: Some("ReplaceFixture".to_string()),
+                time_created: None,
+                time_modified: None,
                 total_blocks: Some(7),
                 total_volume: Some(8),
                 region_count: Some(1),
