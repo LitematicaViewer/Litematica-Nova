@@ -1,4 +1,4 @@
-import { emit, listen } from "@tauri-apps/api/event";
+import { emitEvent, listenEvent } from "../src/platform/events";
 
 export const webDefaultThemeId = "WebDefault";
 
@@ -8,7 +8,7 @@ const themeStorageKey = "litematicanova-theme-id";
 const themeChangedEvent = "litematicanova-theme-changed";
 
 const themeStylesheetUrls = Object.entries(
-    import.meta.glob<string>("../themes/*/theme.css", {
+    (import.meta as ImportMeta & { glob: <T>(pattern: string, options: Record<string, unknown>) => Record<string, T> }).glob<string>("../themes/*/theme.css", {
         eager: true,
         import: "default",
         query: "?url"
@@ -100,7 +100,7 @@ const persistThemeId = (themeId: string) => {
 export const announceThemeChange = (themeId: string) => {
     const normalizedThemeId = persistThemeId(themeId);
     window.dispatchEvent(new CustomEvent(themeChangedEvent, { detail: normalizedThemeId }));
-    emit(themeChangedEvent, normalizedThemeId).catch(() => undefined);
+    emitEvent(themeChangedEvent, normalizedThemeId).catch(() => undefined);
     return normalizedThemeId;
 };
 
@@ -123,7 +123,7 @@ export const subscribeToThemeChanges = (callback: (themeId: string) => void) => 
 
     window.addEventListener("storage", onStorage);
     window.addEventListener(themeChangedEvent, onCustom);
-    const unlistenPromise = listen<string>(themeChangedEvent, (event) => apply(event.payload)).catch(() => undefined);
+    const unlistenPromise = listenEvent<string>(themeChangedEvent, (event) => apply(event.payload)).catch(() => undefined);
 
     return () => {
         window.removeEventListener("storage", onStorage);

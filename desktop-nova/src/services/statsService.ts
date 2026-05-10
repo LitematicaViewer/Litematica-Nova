@@ -1,4 +1,4 @@
-import { save } from "@tauri-apps/plugin-dialog";
+import { saveDialog } from "../platform/dialogs";
 import { executeBackend, writeTextFileAbsolute } from "./backend";
 import { translateBlockId, translateBuildingType } from "./i18n";
 
@@ -158,7 +158,7 @@ export async function exportMaterials(
   materials: MaterialItem[],
   multiplier: number,
 ): Promise<boolean> {
-  const savePath = await save({
+  const savePath = await saveDialog({
     defaultPath: defaultExportName(filePath),
     filters: [{ name: "CSV", extensions: ["csv"] }],
   });

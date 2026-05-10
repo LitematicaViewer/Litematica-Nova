@@ -7,10 +7,18 @@ import {
     subscribeToThemeChanges,
     themeClassName
 } from "../../shell/themeRuntime";
-import { FormRow } from "../main/pages/common/FormRow";
 
 interface MaterialListWindowProps {
     initialFilePath?: string | null;
+}
+
+function FormRow({ label, htmlFor, children }: { label: string; htmlFor?: string; children: React.ReactNode }) {
+    return (
+        <label className="form-row" htmlFor={htmlFor}>
+            <span className="form-label">{label}</span>
+            <span className="form-control">{children}</span>
+        </label>
+    );
 }
 
 interface MaterialRow {
