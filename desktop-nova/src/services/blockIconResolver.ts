@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { readImageBase64 } from "../platform/files";
 
 const iconCache = new Map<string, Promise<string | null>>();
 
@@ -23,7 +23,7 @@ async function loadIcon(blockId: string): Promise<string | null> {
   for (const folder of paths) {
     for (const candidate of iconCandidates(blockId)) {
       try {
-        const dataUrl = await invoke<string>("read_image_base64", { path: `${folder}/${candidate}.png` });
+        const dataUrl = await readImageBase64(`${folder}/${candidate}.png`);
         if (dataUrl) return dataUrl;
       } catch {
         // Try the next candidate.
