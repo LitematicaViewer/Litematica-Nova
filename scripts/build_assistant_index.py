@@ -16,9 +16,8 @@ DB_PATH = DB_DIR / "lba_assistant_index.sqlite"
 
 DOC_FILES = [
     REPO_ROOT / "README.md",
-    REPO_ROOT / "寮€鍙戞枃妗?md",
-    REPO_ROOT / "鎶曞奖鏍煎紡鏂囨。.md",
-    REPO_ROOT / "_next_chat_prompt_chest_front.md",
+    REPO_ROOT / "docs" / "ARCHITECTURE.md",
+    REPO_ROOT / "docs" / "DEVELOPMENT.md",
 ]
 
 CODE_ROOTS = [
@@ -56,10 +55,9 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 
 DOC_ABSTRACTS = {
-    "README.md": "浠撳簱鎬昏锛岃鏄?Python 妗岄潰 UI 涓?Rust viewer backend 骞跺瓨锛屽己璋?Full Mode V2 涓庡浐瀹?fixture 璋冭瘯娴佺▼銆?,
-    "寮€鍙戞枃妗?md": "褰撳墠浠撳簱寮€鍙戣竟鐣岃鏄庯紝鏄庣‘鏍稿績寮€鍙戠洰褰曘€佷笁绉嶆樉绀烘ā寮忋€丗ull Mode V2 涓婚摼銆佽皟璇曞紑鍏充笌鍧楁棌淇鍘熷垯銆?,
-    "鎶曞奖鏍煎紡鏂囨。.md": "`.litematic` 鏂囦欢缁撴瀯璇存槑锛岃鐩?Metadata銆丷egions銆丅lockStatePalette銆丅lockStates銆乀ileEntities 涓庤В鏋愯繕鍘熸祦绋嬨€?,
-    "_next_chat_prompt_chest_front.md": "褰撳墠 chest family 鎺ュ姏绾︽潫锛屽彧鍏佽缁х画鎺掓煡 east/west double chest 鐨?front texture identity 鍚庣画閲囨牱閾俱€?,
+    "README.md": "项目入口，说明 desktop-nova 主线、运行方式、关键目录和常用命令。",
+    "ARCHITECTURE.md": "desktop-nova 分层架构、Tauri/Rust 后端桥接、AppData、viewer 关系和禁区。",
+    "DEVELOPMENT.md": "开发验证命令、projection plan、AI、RedenMC、BlockState、清理政策和故障排查。",
 }
 
 
