@@ -1,4 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
+import {
+  redenDownloadAttachment,
+  redenDownloadParametric,
+  redenMachineDetail,
+  redenSearchLitematica,
+} from "../platform/http";
 import { addOrUpdateRecord, LibraryState } from "./libraryStore";
 
 export interface RedenTag {
@@ -73,22 +78,22 @@ export interface RedenSizeRule {
 }
 
 export async function searchRedenLitematica(query: string): Promise<RedenSearchResponse> {
-  return await invoke("reden_search_litematica", { query });
+  return await redenSearchLitematica(query);
 }
 
 export async function fetchRedenMachineDetail(machineId: string): Promise<RedenMachine> {
-  const response = await invoke<RedenDetailResponse>("reden_machine_detail", { machineId });
+  const response = await redenMachineDetail<RedenDetailResponse>(machineId);
   const item = response.d?.[0];
   if (!item) throw new Error("RedenMC detail returned no machine data.");
   return item;
 }
 
 export async function downloadRedenAttachment(machineId: string, attachmentIndex: number): Promise<RedenDownloadOutput> {
-  return await invoke("reden_download_attachment", { machineId, attachmentIndex });
+  return await redenDownloadAttachment(machineId, attachmentIndex);
 }
 
 export async function downloadRedenParametric(machineId: string, sizes: RedenSizes): Promise<RedenDownloadOutput> {
-  return await invoke("reden_download_parametric", { machineId, sizes });
+  return await redenDownloadParametric(machineId, sizes);
 }
 
 function parseRule(rule: string): Partial<RedenSizeRule> {
