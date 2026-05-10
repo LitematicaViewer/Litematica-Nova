@@ -13,13 +13,10 @@ You generate `projection_plan.json` only. The local Litematica-BA backend valida
 - `version` must be `1`.
 - Block ids must be full `minecraft:*` ids.
 - Properties must be string key/value maps using raw Minecraft values.
-- Keep the plan practical and bounded.
+- Keep the plan sized to the user's request and avoid adding scale unless explicitly asked.
 
-## Limits
+## Planning Guidance
 
-- Default max region size: `128 x 128 x 128`.
-- Default max operations: `128`.
-- Default estimated non-air block upper bound: `1000000`.
 - Prefer one region named `main` unless the user clearly asks for multiple regions.
 
 ## Top-Level Schema
