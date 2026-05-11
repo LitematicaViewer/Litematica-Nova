@@ -11,6 +11,7 @@ const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const TEXT_EXTENSIONS = new Set([...SOURCE_EXTENSIONS, ".css", ".scss", ".json"]);
 const PAGE_FILE_RE = /(^|[/\\])pages[/\\].+\.[tj]sx?$|(^|[/\\])routes[/\\].*Page\.[tj]sx?$|Page\.[tj]sx?$/;
 const API_KEY_RE = /\b(api[-_\s]*key|apikey|secret|token|ai[_-]?(save|clear|get|test|chat)|openai|gemini|provider)\b/i;
+const ALLOWED_INLINE_STYLE_RE = /style=\{\{[^}]*\b(cursor|left|top|width)\s*:/;
 
 const violations = [];
 
@@ -153,6 +154,14 @@ function checkTextRules(filePath, text) {
 
     if (isPage && /\binvoke\s*\(/.test(line)) {
       addViolation(filePath, lineNumber, "pages-no-direct-invoke", "Page files must not invoke Tauri commands directly.");
+    }
+
+    if (inUi && line.includes("style={{") && !ALLOWED_INLINE_STYLE_RE.test(line)) {
+      addViolation(filePath, lineNumber, "ui-no-fixed-inline-style", "Fixed UI styles must live in CSS classes; only cursor, tooltip position, and progress width inline styles are allowed.");
+    }
+
+    if (inUi && line.includes("dangerouslySetInnerHTML")) {
+      addViolation(filePath, lineNumber, "ui-no-dangerous-html", "UI icons/content should be rendered as components instead of dangerouslySetInnerHTML.");
     }
   });
 }
