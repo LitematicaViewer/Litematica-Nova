@@ -1,1 +1,1 @@
-export { FlakePage } from "../ui/pages/FlakePage";
+export { FlakePage } from "../../ui/windows/main/pages/flake/FlakePage";

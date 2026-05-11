@@ -1,1 +1,2 @@
-export { RenderPage } from "../ui/pages/RenderPage";
+export { RenderPage } from "../../ui/windows/main/pages/render/RenderPage";
+

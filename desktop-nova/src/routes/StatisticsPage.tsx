@@ -1,1 +1,1 @@
-export { MaterialsDialog, StatisticsPage } from "../ui/pages/StatisticsPage";
+export { MaterialsDialog, StatisticsPage } from "../../ui/windows/main/pages/statistics/StatisticsPage";

@@ -1,1 +1,1 @@
-export { LibraryPage } from "../ui/pages/LibraryPage";
+export { LibraryPage } from "../../ui/windows/main/pages/library/LibraryPage";

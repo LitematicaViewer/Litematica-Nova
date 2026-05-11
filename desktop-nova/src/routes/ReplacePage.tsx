@@ -1,1 +1,2 @@
-export { ReplacePage } from "../ui/pages/ReplacePage";
+export { ReplacePage } from "../../ui/windows/main/pages/replace/ReplacePage";
+
