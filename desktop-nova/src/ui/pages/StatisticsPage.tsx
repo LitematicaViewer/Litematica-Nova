@@ -16,32 +16,17 @@ function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; ite
 
   return (
     <div
-      style={{
-        position: "fixed",
-        left: x + 15,
-        top: y + 15,
-        backgroundColor: "var(--surface-elevated, #1a1a1a)",
-        border: "1px solid var(--border, #555)",
-        color: "var(--text, #fff)",
-        padding: "8px 12px",
-        zIndex: 9999,
-        pointerEvents: "none",
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        minWidth: 220,
-        boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
-        fontSize: "12px",
-      }}
+      className="materials-tooltip"
+      style={{ left: x + 15, top: y + 15 }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
+      <div className="nova-row-tight nova-strong">
         <BlockIcon blockId={item.iconHint} />
         <span>{item.name}</span>
       </div>
-      <div style={{ color: "var(--text-muted, #aaa)", fontSize: "0.9em" }}>{item.id}</div>
+      <div className="nova-muted nova-small">{item.id}</div>
       <div>合计：{total} = {formatMaterialUnits(total)}</div>
       {item.containerItemCount > 0 && (
-        <div style={{ color: "var(--text-muted, #aaa)" }}>
+        <div className="nova-muted">
           方块 {item.blockCount * multiplier} / 容器物品 {item.containerItemCount * multiplier}
         </div>
       )}
@@ -113,30 +98,29 @@ export function MaterialsDialog({
 
   return (
     <div className="dialog-overlay" onMouseMove={(event) => setMousePos({ x: event.clientX, y: event.clientY })}>
-      <div className="dialog-content" style={{ width: 720, display: "flex", flexDirection: "column", gap: 12, height: "80vh", padding: 0 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "var(--surface-elevated)", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
-          <h3 style={{ margin: 0 }}>材料列表</h3>
-          <button className="btn" onClick={onClose} style={{ minWidth: 32, padding: "4px 8px" }}>×</button>
+      <div className="dialog-content materials-dialog">
+        <div className="materials-dialog-header">
+          <h3>材料列表</h3>
+          <button className="btn materials-dialog-close" onClick={onClose}>×</button>
         </div>
 
-        <div style={{ padding: "0 12px", display: "flex", flexDirection: "column", gap: 12, flex: 1, overflow: "hidden" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="materials-dialog-body">
+          <div className="nova-row-tight">
             <span>范围</span>
             <Dropdown value={workbook} options={options} onChange={setWorkbook} />
             <button className="btn" onClick={() => loadMats(workbook)} disabled={isLoading}>重新加载</button>
             <button className="btn" onClick={handleExport} disabled={isLoading || materials.length === 0}>导出材料列表</button>
-            <div style={{ flex: 1 }} />
+            <div className="nova-input-flex" />
             <span>倍数</span>
             <input
               type="number"
-              className="input"
-              style={{ width: 70 }}
+              className="input properties-number-xs"
               value={multiplier}
               onChange={(event) => setMultiplier(Math.max(1, parseInt(event.target.value, 10) || 1))}
             />
           </div>
 
-          <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text)" }}>
+          <label className="nova-inline-label">
             <input
               type="checkbox"
               checked={includeContainerItems}
@@ -145,47 +129,47 @@ export function MaterialsDialog({
             统计容器内物品
           </label>
 
-          <div style={{ fontSize: "0.9em", color: "var(--text-muted)" }}>
+          <div className="nova-muted nova-small">
             {isLoading ? "正在分析..." : includeContainerItems ? "已包含容器 BlockEntity/TileEntity 内物品。" : "当前仅统计投影方块。"}
           </div>
-          {error && <pre style={{ color: "#ffb3b3", background: "rgba(255,0,0,0.1)", padding: 8, margin: 0, whiteSpace: "pre-wrap" }}>{error}</pre>}
+          {error && <pre className="nova-error">{error}</pre>}
 
-          <div style={{ flex: 1, backgroundColor: "var(--surface)", border: "1px solid var(--border)", overflowY: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", color: "var(--text)" }}>
-              <thead style={{ position: "sticky", top: 0, backgroundColor: "var(--surface-elevated)", zIndex: 1 }}>
+          <div className="materials-table-wrap">
+            <table className="nova-table materials-table">
+              <thead>
                 <tr>
-                  <th style={thCenter}>图标</th>
-                  <th style={thLeft}>名称</th>
-                  <th style={thRight}>方块</th>
-                  <th style={thRight}>容器物品</th>
-                  <th style={thRight}>合计</th>
+                  <th className="materials-icon-col">图标</th>
+                  <th>名称</th>
+                  <th className="nova-table-number">方块</th>
+                  <th className="nova-table-number">容器物品</th>
+                  <th className="nova-table-number">合计</th>
                 </tr>
               </thead>
               <tbody>
                 {materials.map((material, index) => (
                   <tr
                     key={material.id}
-                    style={{ backgroundColor: index % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent", borderBottom: "1px solid var(--border)" }}
+                    className={index % 2 === 0 ? "materials-row-even" : ""}
                     onMouseEnter={() => setHoverItem(material)}
                     onMouseLeave={() => setHoverItem(null)}
                   >
-                    <td style={tdCenter}><BlockIcon blockId={material.iconHint} /></td>
-                    <td style={tdLeft}>{material.name}</td>
-                    <td style={tdRight}>{material.blockCount * multiplier}</td>
-                    <td style={tdRight}>{material.containerItemCount * multiplier}</td>
-                    <td style={tdRight}>{material.totalCount * multiplier}</td>
+                    <td className="materials-icon-cell"><BlockIcon blockId={material.iconHint} /></td>
+                    <td>{material.name}</td>
+                    <td className="nova-table-number">{material.blockCount * multiplier}</td>
+                    <td className="nova-table-number">{material.containerItemCount * multiplier}</td>
+                    <td className="nova-table-number">{material.totalCount * multiplier}</td>
                   </tr>
                 ))}
                 {materials.length === 0 && !isLoading && (
                   <tr>
-                    <td colSpan={5} style={{ padding: 16, textAlign: "center", color: "var(--text-muted)" }}>暂无材料数据</td>
+                    <td colSpan={5} className="materials-empty">暂无材料数据</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
         </div>
-        <div style={{ height: 12 }} />
+        <div className="materials-dialog-footer" />
       </div>
       <MaterialTooltip x={mousePos.x} y={mousePos.y} item={hoverItem} multiplier={multiplier} />
     </div>
@@ -215,7 +199,7 @@ export function StatisticsPage({ currentFile }: any) {
 
   if (!currentFile) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", opacity: 0.7 }}>
+      <div className="nova-empty-state">
         <h2>统计</h2>
         <p>请先在投影库中选择一个 .litematic 文件。</p>
       </div>
@@ -226,10 +210,10 @@ export function StatisticsPage({ currentFile }: any) {
   const scan = data?.containerScan;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+    <div className="nova-page">
+      <div className="nova-toolbar">
         <button className="btn" onClick={() => setShowMaterials(true)} disabled={!data}>材料列表</button>
-        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <label className="nova-inline-label">
           <input
             type="checkbox"
             checked={includeContainerItems}
@@ -237,33 +221,33 @@ export function StatisticsPage({ currentFile }: any) {
           />
           统计容器内物品
         </label>
-        <div style={{ flex: 1, color: "var(--text-muted)", fontSize: "0.9em" }}>
+        <div className="nova-muted nova-small nova-flex-1">
           {includeContainerItems && scan
             ? `容器扫描：${scan.containers_scanned} 个容器，${scan.item_stacks_scanned} 个物品堆。`
             : "当前仅统计投影方块。"}
         </div>
-        <div style={{ color: "var(--text-muted)", fontSize: "0.85em", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={currentFile}>
+        <div className="nova-file-chip-wide nova-tiny" title={currentFile}>
           {currentFile}
         </div>
         <button className="btn" onClick={loadStats}>重新分析</button>
       </div>
 
-      {error && <pre style={{ color: "#ff6666", background: "rgba(255,0,0,0.1)", padding: 8, border: "1px solid #ff6666" }}>{error}</pre>}
+      {error && <pre className="nova-error">{error}</pre>}
 
       {scan?.warnings?.length ? (
         <details>
-          <summary style={{ color: "var(--text-muted)", cursor: "pointer" }}>容器扫描 warning（{scan.warnings.length}）</summary>
-          <pre style={{ whiteSpace: "pre-wrap", maxHeight: 120, overflow: "auto", background: "var(--surface)", border: "1px solid var(--border)", padding: 8 }}>
+          <summary className="nova-summary">容器扫描 warning（{scan.warnings.length}）</summary>
+          <pre className="nova-pre nova-pre-short">
             {scan.warnings.slice(0, 40).join("\n")}
           </pre>
         </details>
       ) : null}
 
-      <div style={{ display: "flex", gap: 12, flex: 1, overflow: "hidden" }}>
-        <div className="group-box" style={{ flex: 1, overflowY: "auto" }}>
+      <div className="statistics-grid">
+        <div className="group-box statistics-panel-scroll">
           <div className="group-box-title">结构分析</div>
           {data ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div className="nova-stack-compact">
               <ReadOnlyRow label="非空气方块" value={data.totalNonAirBlocks} />
               <ReadOnlyRow label="区域数量" value={data.regionCount} />
               <ReadOnlyRow label="包围尺寸" value={`${data.enclosingSize.x}x${data.enclosingSize.y}x${data.enclosingSize.z}`} />
@@ -274,26 +258,26 @@ export function StatisticsPage({ currentFile }: any) {
               <ReadOnlyRow label="实体种类" value={data.entityCount} />
             </div>
           ) : (
-            <div style={{ color: "var(--text-muted)", padding: 16 }}>加载中...</div>
+            <div className="nova-empty-compact">加载中...</div>
           )}
         </div>
 
-        <div className="group-box" style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        <div className="group-box nova-flex-column-fill">
           <div className="group-box-title">主要材料</div>
-          <div style={{ flex: 1, backgroundColor: "var(--surface)", border: "1px solid var(--border)", padding: 12, overflowY: "auto", color: "var(--text)" }}>
+          <div className="statistics-material-list">
             {data ? (
               topMaterials.map((material) => (
-                <div key={material.id} style={{ marginBottom: 6, fontSize: "1.05em" }}>
-                  {material.name} <span style={{ color: "var(--text-muted)" }}>x</span> {material.totalCount}
+                <div key={material.id} className="statistics-material-row">
+                  {material.name} <span className="nova-muted">x</span> {material.totalCount}
                   {includeContainerItems && material.containerItemCount > 0 && (
-                    <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>
+                    <span className="statistics-container-count">
                       方块 {material.blockCount} / 容器 {material.containerItemCount}
                     </span>
                   )}
                 </div>
               ))
             ) : (
-              <div style={{ color: "var(--text-muted)" }}>加载中...</div>
+              <div className="nova-muted">加载中...</div>
             )}
           </div>
         </div>
@@ -308,20 +292,13 @@ export function StatisticsPage({ currentFile }: any) {
 
 function ReadOnlyRow({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="form-row" style={{ marginBottom: 0 }}>
-      <div className="form-label" style={{ width: 140, padding: "6px 8px", textAlign: "right" }}>{label}</div>
-      <div className="form-field" style={{ margin: 0, padding: 0 }}>
-        <input className="input" style={{ width: "100%" }} value={value} readOnly />
+    <div className="form-row statistics-readonly-row">
+      <div className="form-label statistics-readonly-label">{label}</div>
+      <div className="form-field statistics-readonly-field">
+        <input className="input nova-input-full" value={value} readOnly />
       </div>
     </div>
   );
 }
-
-const thCenter: React.CSSProperties = { padding: 8, textAlign: "center", borderBottom: "1px solid var(--border)", width: 54 };
-const thLeft: React.CSSProperties = { padding: 8, textAlign: "left", borderBottom: "1px solid var(--border)" };
-const thRight: React.CSSProperties = { padding: 8, textAlign: "right", borderBottom: "1px solid var(--border)" };
-const tdCenter: React.CSSProperties = { padding: 6, textAlign: "center", borderBottom: "1px solid var(--border)" };
-const tdLeft: React.CSSProperties = { padding: 8, borderBottom: "1px solid var(--border)" };
-const tdRight: React.CSSProperties = { padding: 8, textAlign: "right", borderBottom: "1px solid var(--border)" };
 
 

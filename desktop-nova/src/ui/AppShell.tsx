@@ -21,21 +21,20 @@ import {
   webDefaultThemeId,
 } from "../../shell/themeRuntime";
 
-const NAV_ICON_SVGS: Record<string, string> = {
-  home: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M2.5 8.2 9 2.4l6.5 5.8v7.3h-4.2v-4.6H6.7v4.6H2.5z" fill="currentColor"/></svg>',
-  gallery: '<svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="3.5" width="13" height="11" rx="2" fill="none" stroke="currentColor"/><path d="M4.5 12.5 7.2 9.7l2.1 2 1.8-1.9 2.4 2.7" fill="none" stroke="currentColor"/></svg>',
-  properties: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M5 2.5h5.5L14 6v9.5H5z" fill="none" stroke="currentColor"/><path d="M7 8h4M7 11h4" stroke="currentColor"/></svg>',
-  statistics: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M4 14V9m5 5V4m5 10V7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
-  flake: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M9 2.5v13M3.5 6l11 6M14.5 6l-11 6" stroke="currentColor" stroke-linecap="round"/></svg>',
-  render: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M9 2.5 3 5.8v6.4l6 3.3 6-3.3V5.8z" fill="none" stroke="currentColor"/><path d="M3 5.8 9 9l6-3.2M9 9v6.5" stroke="currentColor"/></svg>',
-  replace: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M5 6h8l-2-2M13 12H5l2 2" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-  ui_debug: '<svg width="18" height="18" viewBox="0 0 18 18"><rect x="3.5" y="3.5" width="11" height="11" rx="1.5" fill="none" stroke="currentColor"/><path d="M6 7h6M6 10h4" stroke="currentColor"/></svg>',
-  options: '<svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="2.2" fill="none" stroke="currentColor"/><path d="M9 2.5v2m0 9v2M2.5 9h2m9 0h2M5 5l1.4 1.4m5.2 5.2L13 13m0-8-1.4 1.4m-5.2 5.2L5 13" stroke="currentColor" stroke-linecap="round"/></svg>',
-};
-
 function NavIcon({ name }: { name: string }) {
-  const svg = NAV_ICON_SVGS[name] || '<svg width="18" height="18" viewBox="0 0 18 18"><rect width="18" height="18" fill="none" stroke="currentColor" /></svg>';
-  return <div className="nova-nav-icon" dangerouslySetInnerHTML={{ __html: svg }} />;
+  return (
+    <div className="nova-nav-icon">
+      {name === "home" && <svg width="18" height="18" viewBox="0 0 18 18"><path d="M2.5 8.2 9 2.4l6.5 5.8v7.3h-4.2v-4.6H6.7v4.6H2.5z" fill="currentColor" /></svg>}
+      {name === "gallery" && <svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="3.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" /><path d="M4.5 12.5 7.2 9.7l2.1 2 1.8-1.9 2.4 2.7" fill="none" stroke="currentColor" /></svg>}
+      {name === "properties" && <svg width="18" height="18" viewBox="0 0 18 18"><path d="M5 2.5h5.5L14 6v9.5H5z" fill="none" stroke="currentColor" /><path d="M7 8h4M7 11h4" stroke="currentColor" /></svg>}
+      {name === "statistics" && <svg width="18" height="18" viewBox="0 0 18 18"><path d="M4 14V9m5 5V4m5 10V7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>}
+      {name === "flake" && <svg width="18" height="18" viewBox="0 0 18 18"><path d="M9 2.5v13M3.5 6l11 6M14.5 6l-11 6" stroke="currentColor" strokeLinecap="round" /></svg>}
+      {name === "render" && <svg width="18" height="18" viewBox="0 0 18 18"><path d="M9 2.5 3 5.8v6.4l6 3.3 6-3.3V5.8z" fill="none" stroke="currentColor" /><path d="M3 5.8 9 9l6-3.2M9 9v6.5" stroke="currentColor" /></svg>}
+      {name === "replace" && <svg width="18" height="18" viewBox="0 0 18 18"><path d="M5 6h8l-2-2M13 12H5l2 2" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+      {name === "ui_debug" && <svg width="18" height="18" viewBox="0 0 18 18"><rect x="3.5" y="3.5" width="11" height="11" rx="1.5" fill="none" stroke="currentColor" /><path d="M6 7h6M6 10h4" stroke="currentColor" /></svg>}
+      {name === "options" && <svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="2.2" fill="none" stroke="currentColor" /><path d="M9 2.5v2m0 9v2M2.5 9h2m9 0h2M5 5l1.4 1.4m5.2 5.2L13 13m0-8-1.4 1.4m-5.2 5.2L5 13" stroke="currentColor" strokeLinecap="round" /></svg>}
+    </div>
+  );
 }
 
 export function App() {
@@ -109,7 +108,7 @@ export function App() {
           </button>
         </div>
 
-        <div className="sidebar-item-container" style={{ flex: 1 }}>
+        <div className="sidebar-item-container sidebar-main">
           {Object.entries(topPages).map(([key, value]) => {
             const active = route === key;
             return (

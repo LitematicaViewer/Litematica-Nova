@@ -19,11 +19,11 @@ export function BlockIcon({ blockId }: { blockId: string }) {
   }, [blockId]);
   
   if (src) {
-    return <img src={src} style={{ width: 32, height: 32, objectFit: 'contain', imageRendering: "pixelated" }} />;
+    return <img className="block-icon-image" src={src} alt="" />;
   }
   
   return (
-    <div style={{ width: 32, height: 32, border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, backgroundColor: 'rgba(0,0,0,0.5)', color: '#fff' }}>
+    <div className="block-icon-fallback">
       {blockId.replace("minecraft:", "").slice(0, 2).toUpperCase()}
     </div>
   );
