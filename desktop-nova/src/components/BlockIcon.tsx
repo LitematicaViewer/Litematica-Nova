@@ -1,1 +1,1 @@
-export { BlockIcon } from "../ui/components/BlockIcon";
+export { BlockIcon } from "../../ui/components/BlockIcon";

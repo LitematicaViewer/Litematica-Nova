@@ -1,1 +1,1 @@
-export { PropertiesPage } from "../ui/pages/PropertiesPage";
+export { PropertiesPage } from "../../ui/windows/main/pages/properties/PropertiesPage";

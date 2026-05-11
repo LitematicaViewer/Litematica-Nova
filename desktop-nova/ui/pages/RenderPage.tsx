@@ -1,0 +1,1 @@
+﻿export * from "../windows/main/pages/render/RenderPage";

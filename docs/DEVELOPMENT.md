@@ -283,7 +283,7 @@ diagnostics/bundle_YYYYMMDD_HHMMSS
 - `desktop-nova/src/main.tsx`
 - `desktop-nova/src/styles/base.css`
 - `desktop-nova/src/ui/styles/base.css`
-- `desktop-nova/windows/material_list/main.tsx`
+- `desktop-nova/ui/windows/material_list/main.tsx`
 
 `src/styles/base.css` 是兼容入口；`src/ui/styles/base.css` 是 UI 层样式入口。不要把 import 写到仓库外路径。
 

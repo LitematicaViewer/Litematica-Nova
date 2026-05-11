@@ -56,7 +56,9 @@ src/litematicanova/
     app/                     应用装配、路由、窗口入口
     shell/                   AppShell、导航、主题运行时
     windows/                 多窗口入口与窗口级页面
-    pages/                   页面组件
+      main/                  主窗口相关内容
+        pages/               各个页面组件
+      material-list/         材料列表相关内容
     components/              可复用 UI 组件
     themes/                  主题包、主题资源、控件样式
     styles/                  全局样式入口
@@ -77,8 +79,8 @@ desktop-nova/src-tauri/              -> src/litematicanova/platform/tauri/
 desktop-nova/src/routes/             -> 迁移期兼容入口，最终并入 ui/pages 或 ui/app/routes
 desktop-nova/src/components/         -> 迁移期兼容入口，最终并入 ui/components
 desktop-nova/src/services/           -> 迁移期旧服务入口，后续按职责拆入 business/platform/core
-desktop-nova/shell/                  -> 旧 shell/theme 资源入口，最终并入 ui/shell
-desktop-nova/themes/                 -> 主题资源入口，最终并入 ui/themes
+desktop-nova/ui/shell/               -> 旧 shell/theme 资源入口，最终并入 ui/shell
+desktop-nova/ui/themes/              -> 主题资源入口，最终并入 ui/themes
 ```
 
 当前 `desktop-nova/src/business` 已覆盖大部分核心业务域：
@@ -114,7 +116,11 @@ desktop-nova/themes/                 -> 主题资源入口，最终并入 ui/the
 
 当前迁移期的实际职责：
 
-- `desktop-nova/src/ui/`：页面、组件、AppShell、样式。
+- `desktop-nova/ui/windows/main/pages/`：主窗口页面级组件。页面可以编排业务动作，但不放可复用控件实现。
+- `desktop-nova/ui/windows/`：多窗口入口，例如主窗口和材料列表窗口。
+- `desktop-nova/ui/components/`：跨页面、跨窗口复用组件。
+- `desktop-nova/ui/shell/`：AppShell、导航、主题切换和窗口框架。
+- `desktop-nova/ui/styles/`：全局样式入口。
 - `desktop-nova/src/business/`：投影库、统计、生成、替换、AI、Reden、render cache、settings 等业务编排。
 - `desktop-nova/src/platform/`：Tauri invoke、文件、AppData、后端进程、viewer、HTTP、key storage。
 
@@ -161,8 +167,10 @@ UI 采用“应用装配、窗口、页面、组件、主题”分层。
 
 - `ui/app/` 放路由、全局 provider、应用启动和窗口注册。
 - `ui/windows/` 放多窗口入口，例如主窗口和材料列表窗口。
-- `ui/pages/` 放页面级组件。页面可以编排业务动作，但不放可复用控件实现。
-- `ui/components/` 放跨页面复用组件。
+- `ui/windows/main/pages/` 放主窗口页面级组件。页面可以编排业务动作，但不放可复用控件实现。
+- `ui/windows/<window-name>/` 放特定窗口的入口、窗口组件和窗口私有页面。
+- `ui/pages/` 是迁移期兼容入口，不再新增实际页面实现。
+- `ui/components/` 放跨页面、跨窗口复用组件。
 - `ui/shell/` 放 AppShell、导航、主题切换和窗口框架。
 - `ui/themes/<theme-name>/` 放主题 CSS、主题资源和控件样式。
 - `ui/assets/` 放 UI 私有静态资源。可被多个运行时使用的大型资源应放 `data/` 或 `pack-in/`。
@@ -170,8 +178,9 @@ UI 采用“应用装配、窗口、页面、组件、主题”分层。
 当前兼容入口：
 
 - `desktop-nova/src/App.tsx` re-export `ui/AppShell`。
-- `desktop-nova/src/routes/*` re-export `ui/pages/*`。
+- `desktop-nova/src/routes/*` re-export `ui/windows/main/pages/*`。
 - `desktop-nova/src/components/*` re-export `ui/components/*`。
+- `desktop-nova/ui/pages/*` re-export `ui/windows/main/pages/*`，仅保留给迁移期旧 import 使用。
 
 这些薄入口用于降低迁移风险，后续继续收窄。导出的 TypeScript 函数、组件工具函数和公共 API 必须写 JSDoc。
 

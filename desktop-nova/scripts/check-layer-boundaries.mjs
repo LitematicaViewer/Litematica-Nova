@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, "..");
 const srcDir = path.join(rootDir, "src");
+const uiDir = path.join(rootDir, "ui");
+const legacyUiDir = path.join(srcDir, "ui");
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const TEXT_EXTENSIONS = new Set([...SOURCE_EXTENSIONS, ".css", ".scss", ".json"]);
@@ -85,13 +87,19 @@ function resolveImport(fromFile, specifier) {
   return null;
 }
 
+function layerDirs(layerName) {
+  if (layerName === "ui") {
+    return [uiDir, legacyUiDir];
+  }
+  return [path.join(srcDir, layerName)];
+}
+
 function importTargetsLayer(fromFile, specifier, layerName) {
   const target = resolveImport(fromFile, specifier);
   if (!target) {
     return false;
   }
-  const layerDir = path.join(srcDir, layerName);
-  return target === layerDir || isUnder(target, layerDir);
+  return layerDirs(layerName).some((layerDir) => target === layerDir || isUnder(target, layerDir));
 }
 
 function collectImportSpecifiers(sourceFile) {
@@ -135,22 +143,22 @@ function collectLocalStorageUses(sourceFile) {
 function checkTextRules(filePath, text) {
   const rel = relativePath(filePath);
   const lines = text.split(/\r?\n/);
-  const inUi = isUnder(filePath, path.join(srcDir, "ui"));
+  const inUi = isUnder(filePath, uiDir) || isUnder(filePath, legacyUiDir);
   const isPage = PAGE_FILE_RE.test(rel);
 
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
 
     if (inUi && line.includes("@tauri-apps/api")) {
-      addViolation(filePath, lineNumber, "ui-no-tauri-api", "src/ui must not import @tauri-apps/api.");
+      addViolation(filePath, lineNumber, "ui-no-tauri-api", "ui must not import @tauri-apps/api.");
     }
 
     if (inUi && /\binvoke\s*\(/.test(line)) {
-      addViolation(filePath, lineNumber, "ui-no-direct-invoke", "src/ui must call platform services instead of invoke directly.");
+      addViolation(filePath, lineNumber, "ui-no-direct-invoke", "ui must call platform services instead of invoke directly.");
     }
 
     if (inUi && /litematica_(core|native_viewer)\.exe/.test(line)) {
-      addViolation(filePath, lineNumber, "ui-no-backend-binary", "src/ui must not reference backend executable names directly.");
+      addViolation(filePath, lineNumber, "ui-no-backend-binary", "ui must not reference backend executable names directly.");
     }
 
     if (isPage && /\binvoke\s*\(/.test(line)) {
@@ -168,11 +176,11 @@ function checkSourceRules(filePath, text) {
     const line = lineNumberAt(text, item.pos);
 
     if (inBusiness && importTargetsLayer(filePath, item.specifier, "ui")) {
-      addViolation(filePath, line, "business-no-ui-import", "src/business must not import src/ui.");
+      addViolation(filePath, line, "business-no-ui-import", "src/business must not import ui.");
     }
 
     if (inPlatform && importTargetsLayer(filePath, item.specifier, "ui")) {
-      addViolation(filePath, line, "platform-no-ui-import", "src/platform must not import src/ui.");
+      addViolation(filePath, line, "platform-no-ui-import", "src/platform must not import ui.");
     }
 
     if (inPlatform && importTargetsLayer(filePath, item.specifier, "business")) {
@@ -187,7 +195,7 @@ function checkSourceRules(filePath, text) {
   }
 }
 
-for (const filePath of walk(srcDir)) {
+for (const filePath of [...walk(srcDir), ...walk(uiDir)]) {
   const text = fs.readFileSync(filePath, "utf8");
   checkTextRules(filePath, text);
 
