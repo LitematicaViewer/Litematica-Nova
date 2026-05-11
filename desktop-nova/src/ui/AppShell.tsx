@@ -1,4 +1,5 @@
 ﻿import React, { useEffect, useState } from "react";
+import type { SyntheticEvent } from "react";
 import { loadDatabases } from "../business/facade";
 import { initI18n } from "../business/facade";
 import { HomePage } from "./pages/HomePage";
@@ -10,6 +11,7 @@ import { ReplacePage } from "./pages/ReplacePage";
 import { GeneratePage } from "./pages/GeneratePage";
 import { RenderPage } from "./pages/RenderPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { UiTestPage } from "./pages/UiTestPage";
 import { hideEmbeddedViewer, showEmbeddedViewer } from "../business/facade";
 import { loadUserConfigMigratingLocalStorage, normalizeTheme, saveThemeConfig } from "../business/facade";
 import {
@@ -21,23 +23,78 @@ import {
   webDefaultThemeId,
 } from "../../shell/themeRuntime";
 
-const NAV_ICON_SVGS: Record<string, string> = {
-  home: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M2.5 8.2 9 2.4l6.5 5.8v7.3h-4.2v-4.6H6.7v4.6H2.5z" fill="currentColor"/></svg>',
-  gallery: '<svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="3.5" width="13" height="11" rx="2" fill="none" stroke="currentColor"/><path d="M4.5 12.5 7.2 9.7l2.1 2 1.8-1.9 2.4 2.7" fill="none" stroke="currentColor"/></svg>',
-  properties: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M5 2.5h5.5L14 6v9.5H5z" fill="none" stroke="currentColor"/><path d="M7 8h4M7 11h4" stroke="currentColor"/></svg>',
-  statistics: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M4 14V9m5 5V4m5 10V7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
-  flake: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M9 2.5v13M3.5 6l11 6M14.5 6l-11 6" stroke="currentColor" stroke-linecap="round"/></svg>',
-  render: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M9 2.5 3 5.8v6.4l6 3.3 6-3.3V5.8z" fill="none" stroke="currentColor"/><path d="M3 5.8 9 9l6-3.2M9 9v6.5" stroke="currentColor"/></svg>',
-  replace: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M5 6h8l-2-2M13 12H5l2 2" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-  ui_debug: '<svg width="18" height="18" viewBox="0 0 18 18"><rect x="3.5" y="3.5" width="11" height="11" rx="1.5" fill="none" stroke="currentColor"/><path d="M6 7h6M6 10h4" stroke="currentColor"/></svg>',
-  options: '<svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="2.2" fill="none" stroke="currentColor"/><path d="M9 2.5v2m0 9v2M2.5 9h2m9 0h2M5 5l1.4 1.4m5.2 5.2L13 13m0-8-1.4 1.4m-5.2 5.2L5 13" stroke="currentColor" stroke-linecap="round"/></svg>',
+type NavIconUrls = Record<string, string>;
+
+const iconNameFromPath = (path: string) => path.split("/").pop()?.replace(/\.[^.]+$/, "") || "";
+
+const shellNavIconUrls = Object.entries(
+  import.meta.glob<string>("../../shell/resource/icon/nav/*.{svg,png}", {
+    eager: true,
+    import: "default",
+    query: "?url",
+  }),
+).reduce<NavIconUrls>((icons, [path, url]) => {
+  const iconName = iconNameFromPath(path);
+  if (iconName) {
+    icons[iconName] = url;
+  }
+  return icons;
+}, {});
+
+const themedNavIconUrls = Object.entries(
+  import.meta.glob<string>("../../themes/*/resource/icon/nav/*.{svg,png}", {
+    eager: true,
+    import: "default",
+    query: "?url",
+  }),
+).reduce<Record<string, NavIconUrls>>((themes, [path, url]) => {
+  const themeKey = path.match(/\.\.\/\.\.\/themes\/([^/]+)\//)?.[1];
+  const iconName = iconNameFromPath(path);
+  if (themeKey && iconName) {
+    themes[themeKey] = themes[themeKey] || {};
+    themes[themeKey][iconName] = url;
+  }
+  return themes;
+}, {});
+
+const fallbackNavIconUrl = (iconName: string) =>
+  shellNavIconUrls[iconName] ||
+  shellNavIconUrls.undefined ||
+  themedNavIconUrls.metro10?.[iconName] ||
+  themedNavIconUrls.metro10?.undefined ||
+  "";
+
+const navIconUrl = (themeId: string, iconName: string) => {
+  const normalizedThemeId = normalizeThemeId(themeId);
+  const themeKey = themeResourceKey(normalizedThemeId);
+  if (themeKey === themeResourceKey(webDefaultThemeId)) {
+    return fallbackNavIconUrl(iconName);
+  }
+  return themedNavIconUrls[themeKey]?.[iconName] || fallbackNavIconUrl(iconName);
 };
 
-function NavIcon({ name }: { name: string }) {
-  const svg = NAV_ICON_SVGS[name] || '<svg width="18" height="18" viewBox="0 0 18 18"><rect width="18" height="18" fill="none" stroke="currentColor" /></svg>';
-  return <div className="nova-nav-icon" dangerouslySetInnerHTML={{ __html: svg }} />;
+function handleNavIconError(event: SyntheticEvent<HTMLImageElement>, iconName: string) {
+  const fallbackUrl = fallbackNavIconUrl(iconName);
+  if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
+    event.currentTarget.src = fallbackUrl;
+  }
 }
 
+function NavIcon({ name, theme }: { name: string; theme: string }) {
+  return (
+    <img
+      className={`nav-icon nav-icon-${name}`}
+      src={navIconUrl(theme, name)}
+      alt=""
+      aria-hidden="true"
+      onError={(event) => handleNavIconError(event, name)}
+    />
+  );
+}
+
+/**
+ * Renders the Nova desktop shell and keeps page logic behind the UI boundary.
+ */
 export function App() {
   const [currentFile, setCurrentFile] = useState<string>("");
   const [theme, setThemeState] = useState(webDefaultThemeId);
@@ -85,10 +142,11 @@ export function App() {
     flake: { name: "分层", icon: "flake", comp: FlakePage },
     render: { name: "渲染", icon: "render", comp: RenderPage },
     replace: { name: "替换", icon: "replace", comp: ReplacePage },
-    generate: { name: "生成", icon: "ui_debug", comp: GeneratePage },
+    generate: { name: "生成", icon: "generate", comp: GeneratePage },
   };
 
   const bottomPages: Record<string, { name: string; icon: string; comp: React.FC<any> }> = {
+    ui_test: { name: "UI 测试", icon: "ui_debug", comp: UiTestPage },
     settings: { name: "选项", icon: "options", comp: SettingsPage },
   };
 
@@ -96,20 +154,19 @@ export function App() {
   const Page = allPages[route]?.comp || HomePage;
 
   return (
-    <div className={`app-container nova-desktop-spec ${themeClassName(theme)}`}>
-      <div className={`sidebar ${expanded ? "expanded" : "collapsed"} ${expanded ? "" : "sidebar-collapsed"}`}>
-        <div className="hamburger-area">
-          <button
-            className="nav-expand"
-            type="button"
-            onClick={() => setExpanded(!expanded)}
-            title={expanded ? "收起侧栏" : "展开侧栏"}
-          >
-            {expanded ? "‹" : "›"}
-          </button>
-        </div>
+    <div className={["app-shell", themeClassName(theme)].filter(Boolean).join(" ")}>
+      <aside className={expanded ? "sidebar" : "sidebar sidebar-collapsed"}>
+        <button
+          className="nav-expand"
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          title={expanded ? "收起侧栏" : "展开侧栏"}
+        >
+          <NavIcon name="hamburger" theme={theme} />
+          {expanded ? <strong>Litematica Nova</strong> : null}
+        </button>
 
-        <div className="sidebar-item-container" style={{ flex: 1 }}>
+        <nav className="nav-list" aria-label="主导航">
           {Object.entries(topPages).map(([key, value]) => {
             const active = route === key;
             return (
@@ -119,17 +176,16 @@ export function App() {
                 onClick={() => setRoute(key)}
                 title={!expanded ? value.name : ""}
                 type="button"
+                aria-pressed={active}
               >
-                <div className="sidebar-icon">
-                  <NavIcon name={value.icon} />
-                </div>
-                {expanded && <div className="sidebar-text nav-label">{value.name}</div>}
+                <NavIcon name={value.icon} theme={theme} />
+                {expanded && <span className="nav-label">{value.name}</span>}
               </button>
             );
           })}
-        </div>
+        </nav>
 
-        <div className="sidebar-item-container sidebar-bottom">
+        <nav className="nav-list nav-list-bottom" aria-label="选项">
           {Object.entries(bottomPages).map(([key, value]) => {
             const active = route === key;
             return (
@@ -139,21 +195,18 @@ export function App() {
                 onClick={() => setRoute(key)}
                 title={!expanded ? value.name : ""}
                 type="button"
+                aria-pressed={active}
               >
-                <div className="sidebar-icon">
-                  <NavIcon name={value.icon} />
-                </div>
-                {expanded && <div className="sidebar-text nav-label">{value.name}</div>}
+                <NavIcon name={value.icon} theme={theme} />
+                {expanded && <span className="nav-label">{value.name}</span>}
               </button>
             );
           })}
-        </div>
-      </div>
-      <div className="main-content">
-        <div className="page-content">
-          <Page currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} />
-        </div>
-      </div>
+        </nav>
+      </aside>
+      <main className="content">
+        <Page currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} />
+      </main>
     </div>
   );
 }
