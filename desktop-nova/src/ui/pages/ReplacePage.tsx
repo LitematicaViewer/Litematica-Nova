@@ -7,13 +7,13 @@ import { applyReplaceBlocks, checkFileExists, dryRunReplaceBlocks, selectLitemat
 function PropertySelector({ blockId, value, onChange, isTo }: any) {
   const props = getBlockProperties(blockId);
   const keys = Object.keys(props).sort();
-  if (keys.length === 0) return <span style={{fontSize: 12, opacity: 0.5}}>无属性</span>;
+  if (keys.length === 0) return <span className="replace-property-empty">无属性</span>;
   
   return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+    <div className="replace-property-list">
       {keys.map(k => (
-        <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ fontSize: 12 }}>{translateKey(k)}:</span>
+        <div key={k} className="replace-property-item">
+          <span className="replace-property-label">{translateKey(k)}:</span>
           <Dropdown
             value={value[k] || (isTo ? "$keep" : "")}
             options={[
@@ -36,30 +36,30 @@ function RuleRow({ rule, onChange, onRemove, onDuplicate }: any) {
   return (
     <div className="rule-row">
       <div className="rule-block">
-        <div style={{fontWeight: 'bold', marginBottom: 4}}>替换前 (From)</div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+        <div className="nova-section-title">替换前 (From)</div>
+        <div className="nova-row-tight replace-block-row">
           <BlockIcon blockId={rule.match.name} />
-          <input className="input" style={{flex: 1}} value={rule.match.name} onChange={e => onChange({...rule, match: {...rule.match, name: e.target.value}})} placeholder="minecraft:stone" />
+          <input className="input nova-input-flex" value={rule.match.name} onChange={e => onChange({...rule, match: {...rule.match, name: e.target.value}})} placeholder="minecraft:stone" />
         </div>
         <PropertySelector blockId={rule.match.name} value={rule.match.properties || {}} onChange={(p: any) => onChange({...rule, match: {...rule.match, properties: p}})} isTo={false} />
       </div>
       
-      <div style={{ fontSize: 24, fontWeight: 'bold', margin: '0 8px' }}>→</div>
+      <div className="replace-arrow">→</div>
       
       <div className="rule-block">
-        <div style={{fontWeight: 'bold', marginBottom: 4}}>替换后 (To)</div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+        <div className="nova-section-title">替换后 (To)</div>
+        <div className="nova-row-tight replace-block-row">
           <BlockIcon blockId={rule.replace.name} />
-          <input className="input" style={{flex: 1}} value={rule.replace.name} onChange={e => onChange({...rule, replace: {...rule.replace, name: e.target.value}})} placeholder="minecraft:stone" />
+          <input className="input nova-input-flex" value={rule.replace.name} onChange={e => onChange({...rule, replace: {...rule.replace, name: e.target.value}})} placeholder="minecraft:stone" />
         </div>
         <PropertySelector blockId={rule.replace.name} value={rule.replace.properties || {}} onChange={(p: any) => onChange({...rule, replace: {...rule.replace, properties: p}})} isTo={true} />
-        <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 12 }}>状态模式:</span>
+        <div className="nova-row-tight replace-mode-row">
+          <span className="replace-mode-label">状态模式:</span>
           <Dropdown value={rule.property_mode} options={[{label: "保持同名状态 (merge)", value: "merge"}, {label: "使用目标默认状态 (drop)", value: "drop"}, {label: "仅使用手动指定 (replace)", value: "replace"}]} onChange={v => onChange({...rule, property_mode: v})} />
         </div>
       </div>
       
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="replace-actions">
         <button className="btn" onClick={onDuplicate}>复制</button>
         <button className="btn" onClick={onRemove}>删除</button>
       </div>
@@ -76,7 +76,7 @@ export function ReplacePage({ currentFile }: any) {
 
   if (!currentFile) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', opacity: 0.7 }}>
+      <div className="nova-empty-state">
         <h2>方块替换</h2>
         <p>请先在投影库中选择并打开一个 .litematic 文件</p>
       </div>
@@ -116,40 +116,40 @@ export function ReplacePage({ currentFile }: any) {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 12 }}>
-      <div style={{ flex: 1, overflowY: 'auto', border: '1px solid var(--border)', background: 'var(--bg)', padding: 12 }}>
-        {rules.length === 0 && <div style={{ opacity: 0.5, fontStyle: 'italic' }}>无规则</div>}
+    <div className="nova-page">
+      <div className="nova-scroll-panel">
+        {rules.length === 0 && <div className="nova-empty-inline">无规则</div>}
         {rules.map((r, i) => (
           <RuleRow key={i} rule={r} onChange={(nr: any) => { const n = [...rules]; n[i] = nr; setRules(n); }} onRemove={() => setRules(rules.filter((_, idx) => idx !== i))} onDuplicate={() => setRules([...rules, JSON.parse(JSON.stringify(r))])} />
         ))}
       </div>
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div className="nova-toolbar">
         <button className="btn" onClick={handleAdd}>添加规则</button>
         <button className="btn" onClick={() => setRules([])}>清空规则</button>
-        <div style={{ flex: 1 }} />
-        <button className="btn" style={{ backgroundColor: '#0078d4', color: 'white', fontWeight: 'bold', minWidth: 150 }} onClick={handleDryRun}>替换方块 (Dry-run)</button>
+        <div className="nova-spacer" />
+        <button className="btn nova-button-primary" onClick={handleDryRun}>替换方块 (Dry-run)</button>
       </div>
 
-      <textarea readOnly value={log} placeholder="执行日志..." style={{ height: 80, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--fg)', padding: 8, fontFamily: 'inherit', resize: 'none' }} />
+      <textarea readOnly value={log} placeholder="执行日志..." className="input replace-log" />
       
       {showDialog && (
         <div className="dialog-overlay">
           <div className="dialog-content">
-            <h3 style={{marginTop: 0}}>确认替换 - 预览</h3>
+            <h3>确认替换 - 预览</h3>
             <div>Dry-run 结果摘要:</div>
-            <textarea readOnly value={dryRunRes} style={{ width: '100%', height: 200, marginTop: 8, marginBottom: 16, background: 'var(--bg)', color: 'var(--fg)', border: '1px solid var(--border)', padding: 8, fontFamily: 'inherit', resize: 'none' }} />
-            <div style={{ marginBottom: 8 }}>选择输出路径:</div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-              <input className="input" style={{ flex: 1 }} value={outPath} readOnly />
+            <textarea readOnly value={dryRunRes} className="input nova-textarea-lg replace-dialog-preview" />
+            <div className="replace-dialog-output-label">选择输出路径:</div>
+            <div className="replace-dialog-path-row">
+              <input className="input nova-input-flex" value={outPath} readOnly />
               <button className="btn" onClick={async () => {
                 const res = await selectLitematicSavePath(outPath);
                 if (res) setOutPath(res);
               }}>浏览...</button>
             </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div className="replace-dialog-actions">
               <button className="btn" onClick={() => setShowDialog(false)}>取消</button>
-              <button className="btn" style={{ backgroundColor: '#0078d4', color: 'white', fontWeight: 'bold' }} onClick={handleApply}>开始替换</button>
+              <button className="btn nova-button-primary" onClick={handleApply}>开始替换</button>
             </div>
           </div>
         </div>

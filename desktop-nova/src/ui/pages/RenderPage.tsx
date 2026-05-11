@@ -366,19 +366,19 @@ export function RenderPage({ currentFile, activeRoute }: any) {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-        <div style={{ color: "#aaa", fontSize: "0.9em", maxWidth: "30%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={currentFile}>
+    <div className="nova-page">
+      <div className="render-header">
+        <div className="nova-file-chip nova-small" title={currentFile}>
           {currentFile || "请先在属性页打开 .litematic。"}
         </div>
-        <div style={{ fontSize: "1.3em", fontWeight: "bold", textAlign: "center", flex: 1 }}>Render Bridge Page / 渲染页</div>
+        <div className="render-title">Render Bridge Page / 渲染页</div>
         <button className="btn" onClick={() => setShowMaterials(true)} disabled={!currentFile || !statsData}>材料列表</button>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ color: "#ccc" }}>模式</span>
+      <div className="nova-toolbar">
+        <span className="nova-muted">模式</span>
         <Dropdown value={buildMode} options={DISPLAY_MODE_OPTIONS} onChange={setBuildMode} />
-        <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#ccc", marginLeft: 8 }}>
+        <label className="nova-inline-label render-option">
           <input type="checkbox" checked={precacheLayers} onChange={(event) => setPrecacheLayers(event.target.checked)} />
           同时预生成分层
         </label>
@@ -387,53 +387,53 @@ export function RenderPage({ currentFile, activeRoute }: any) {
         <button className="btn" onClick={() => setStageText("弹窗 Viewer 负责视角控制，打开后可在 Viewer 窗口内按 R 重置视角。")} disabled={!currentFile}>重置视角</button>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
-        <div style={{ flex: 1, height: 16, backgroundColor: "#111", border: "2px solid #555", position: "relative" }}>
-          <div style={{ height: "100%", width: `${progressWidth}%`, backgroundColor: "#0078d4", transition: "width 0.2s" }} />
+      <div className="nova-toolbar render-progress-row">
+        <div className="nova-progress-track">
+          <div className="nova-progress-fill" style={{ width: `${progressWidth}%` }} />
         </div>
-        <div style={{ color: "#ccc", width: 360, fontSize: "0.9em" }}>
+        <div className="nova-muted nova-small nova-status-width">
           {isBuilding ? (progress ? `${progress.phase} ${progress.percent.toFixed(1)}% (${progress.built_chunks}/${progress.total_chunks})` : "等待真实进度...") : cacheReady ? "cache 已完成：下方是静态预览，交互请打开弹窗 Viewer。" : stageText}
         </div>
       </div>
 
-      <div style={{ color: "#888", fontSize: "0.85em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      <div className="nova-muted nova-tiny render-cache-path">
         {cacheFile ? `cache=${cacheFile}` : ""}
       </div>
 
-      {error && <pre style={{ color: "#ff6666", background: "rgba(255,0,0,0.1)", padding: 8, border: "1px solid #ff6666", margin: 0, whiteSpace: "pre-wrap" }}>{error}</pre>}
-      {embeddedError && <pre style={{ color: "#ffcc66", background: "rgba(255,180,0,0.1)", padding: 8, border: "1px solid #8a6a22", margin: 0, whiteSpace: "pre-wrap" }}>嵌入式 viewer 启动失败，已回退静态预览 / 弹窗 Viewer：{embeddedError}</pre>}
+      {error && <pre className="nova-error">{error}</pre>}
+      {embeddedError && <pre className="nova-warning">嵌入式 viewer 启动失败，已回退静态预览 / 弹窗 Viewer：{embeddedError}</pre>}
       {(stdoutTail || stderrTail) && (
         <details>
-          <summary style={{ color: "#aaa", cursor: "pointer" }}>native viewer stdout/stderr</summary>
-          <pre style={{ whiteSpace: "pre-wrap", maxHeight: 180, overflow: "auto", background: "#111", border: "1px solid #444", padding: 8, marginTop: 6 }}>{stderrTail || stdoutTail}</pre>
+          <summary className="nova-summary">native viewer stdout/stderr</summary>
+          <pre className="nova-pre nova-pre-medium nova-mt-xs">{stderrTail || stdoutTail}</pre>
         </details>
       )}
 
-      <div className="group-box" style={{ flex: 1, display: "flex", flexDirection: "column", marginTop: 4 }}>
+      <div className="group-box nova-flex-column-fill render-panel">
         <div className="group-box-title">渲染页</div>
-        <div ref={previewHostRef} style={{ flex: 1, backgroundColor: "#222", border: "2px solid #111", display: "flex", alignItems: "center", justifyContent: "center", margin: "16px 8px 8px 8px", overflow: "hidden", position: "relative" }}>
+        <div ref={previewHostRef} className="render-viewport-host">
           {embeddedRunning ? (
-            <div style={{ position: "absolute", left: 8, bottom: 8, background: "rgba(0,0,0,0.65)", color: "#ccc", border: "1px solid #444", padding: "4px 8px", fontSize: "0.85em", zIndex: 1 }}>
+            <div className="render-overlay-label">
               嵌入式 Viewer 运行中
             </div>
           ) : previewDataUrl ? (
-            <div style={{ width: "100%", height: "100%", position: "relative" }}>
-              <img src={previewDataUrl} alt="static 3D preview" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", imageRendering: "auto" }} />
-              <div style={{ position: "absolute", left: 8, bottom: 8, background: "rgba(0,0,0,0.65)", color: "#ccc", border: "1px solid #444", padding: "4px 8px", fontSize: "0.85em" }}>
+            <div className="render-preview-wrap">
+              <img src={previewDataUrl} alt="static 3D preview" className="render-preview-image" />
+              <div className="render-overlay-label">
                 静态预览；交互请打开弹窗 Viewer
               </div>
             </div>
           ) : !cacheReady && !isBuilding ? (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, backgroundColor: "#333", padding: 32, border: "2px solid #555" }}>
-              <div style={{ fontSize: "0.9em", color: "#888" }}>RENDER MODE ACTIVE</div>
-              <div style={{ fontSize: "1.4em", fontWeight: "bold", textAlign: "center", lineHeight: 1.4 }}>RENDER BRIDGE PAGE<br />渲染页</div>
-              <div style={{ fontSize: "1.1em" }}>当前文件：{fileName}</div>
-              <div style={{ fontSize: "1.1em", fontWeight: "bold" }}>cache 状态：{error ? "失败" : "未开始"}</div>
-              <div style={{ color: "#aaa", fontSize: "0.95em", textAlign: "center" }}>{currentFile ? stageText : "请先在属性页打开 .litematic 文件。"}</div>
-              <button className="btn" style={{ padding: "8px 24px", fontSize: "1.1em" }} onClick={handleBuild} disabled={!currentFile}>构建 3D cache</button>
+            <div className="render-placeholder-card">
+              <div className="render-placeholder-kicker">RENDER MODE ACTIVE</div>
+              <div className="render-placeholder-title">RENDER BRIDGE PAGE<br />渲染页</div>
+              <div className="render-placeholder-meta">当前文件：{fileName}</div>
+              <div className="render-placeholder-meta nova-strong">cache 状态：{error ? "失败" : "未开始"}</div>
+              <div className="nova-muted render-placeholder-note">{currentFile ? stageText : "请先在属性页打开 .litematic 文件。"}</div>
+              <button className="btn nova-button-wide" onClick={handleBuild} disabled={!currentFile}>构建 3D cache</button>
             </div>
           ) : (
-            <div style={{ fontSize: "1.2em", color: "#ccc" }}>{stageText}</div>
+            <div className="nova-muted render-stage-text">{stageText}</div>
           )}
         </div>
       </div>

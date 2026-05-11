@@ -41,10 +41,10 @@ function statusText(ok: boolean | null) {
 function PathRow({ label, path, info }: { label: string; path: string; info?: PathInfo | null }) {
   return (
     <div className="form-row">
-      <div className="form-label" style={{ width: 150 }}>{label}</div>
-      <div className="form-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <input className="input" style={{ flex: 1 }} value={info?.normalized || path} readOnly />
-        <span style={{ minWidth: 70, color: info ? (info.exists ? "#8fd18f" : "#ff8888") : "#aaa" }}>
+      <div className="form-label nova-form-label-wide">{label}</div>
+      <div className="form-field nova-row-tight">
+        <input className="input nova-input-flex" value={info?.normalized || path} readOnly />
+        <span className={`settings-status ${info ? (info.exists ? "is-ok" : "is-error") : ""}`}>
           {info ? (info.exists ? "存在" : "缺失") : "未检查"}
         </span>
       </div>
@@ -242,13 +242,13 @@ export function SettingsPage({ theme, setTheme }: any) {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%", overflow: "auto" }}>
-      <div style={{ fontSize: "1.3em", fontWeight: "bold" }}>选项</div>
+    <div className="nova-page nova-page-scroll">
+      <div className="nova-page-title">选项</div>
 
       <div className="group-box">
         <div className="group-box-title">外观</div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>主题</div>
+          <div className="form-label nova-form-label-wide">主题</div>
           <div className="form-field">
             <select className="input" value={normalizeTheme(theme)} onChange={(event) => handleTheme(event.target.value)}>
               {NOVA_THEME_OPTIONS.map((option) => (
@@ -262,20 +262,20 @@ export function SettingsPage({ theme, setTheme }: any) {
       <div className="group-box">
         <div className="group-box-title">用户配置目录</div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>当前目录</div>
-          <input className="input" style={{ flex: 1 }} value={userConfig?.config_dir || ""} readOnly />
+          <div className="form-label nova-form-label-wide">当前目录</div>
+          <input className="input nova-input-flex" value={userConfig?.config_dir || ""} readOnly />
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>默认目录</div>
-          <input className="input" style={{ flex: 1 }} value={userConfig?.default_config_dir || ""} readOnly />
+          <div className="form-label nova-form-label-wide">默认目录</div>
+          <input className="input nova-input-flex" value={userConfig?.default_config_dir || ""} readOnly />
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="nova-row-wrap">
           <button className="btn" onClick={chooseConfigDir}>选择目录</button>
           <button className="btn" onClick={() => openUserConfigDir()}>打开目录</button>
           <button className="btn" onClick={resetConfigDir}>恢复默认目录</button>
           <button className="btn" onClick={migrateConfigDir}>迁移当前配置到新目录</button>
         </div>
-        <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
+        <div className="nova-muted-copy nova-mt-sm">
           用户态文件会写入 projection-library/js_library.json、previews/、render/、generation-templates/custom/ 和普通 config。API Key 不写入普通 config。
         </div>
       </div>
@@ -283,31 +283,30 @@ export function SettingsPage({ theme, setTheme }: any) {
       <div className="group-box">
         <div className="group-box-title">AI 设置</div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>Provider</div>
+          <div className="form-label nova-form-label-wide">Provider</div>
           <select className="input" value={aiProvider} onChange={(event) => setAiProvider(event.target.value)}>
             <option value="mock">Mock</option>
             <option value="openai_compatible">OpenAI Compatible</option>
             <option value="gemini_compatible">Gemini Compatible（占位）</option>
           </select>
-          <span style={{ opacity: 0.72 }} title={aiConfig ? `provider=${aiConfig.provider}` : undefined}>
+          <span className="nova-muted-copy" title={aiConfig ? `provider=${aiConfig.provider}` : undefined}>
             Key 状态：{apiKeyDirty ? "本次输入未保存" : aiStatus}
           </span>
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>Base URL</div>
-          <input className="input" style={{ flex: 1 }} value={aiBaseUrl} onChange={(event) => setAiBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" />
+          <div className="form-label nova-form-label-wide">Base URL</div>
+          <input className="input nova-input-flex" value={aiBaseUrl} onChange={(event) => setAiBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" />
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>Model</div>
-          <input className="input" style={{ width: 260 }} value={aiModel} onChange={(event) => setAiModel(event.target.value)} placeholder="gpt-4.1-mini" />
+          <div className="form-label nova-form-label-wide">Model</div>
+          <input className="input nova-input-md" value={aiModel} onChange={(event) => setAiModel(event.target.value)} placeholder="gpt-4.1-mini" />
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>API Key</div>
-          <div className="form-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="form-label nova-form-label-wide">API Key</div>
+          <div className="form-field nova-row-tight">
             <input
-              className="input"
+              className="input nova-input-flex"
               type={showApiKey ? "text" : "password"}
-              style={{ flex: 1 }}
               value={apiKeyInput}
               onChange={(event) => {
                 setApiKeyInput(event.target.value);
@@ -322,17 +321,17 @@ export function SettingsPage({ theme, setTheme }: any) {
             </button>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="nova-row-wrap">
           <button className="btn" onClick={saveAi}>保存 Key</button>
           <button className="btn" onClick={clearAiKey}>清除 Key</button>
           <button className="btn" onClick={testAi}>测试连接</button>
         </div>
         {(aiSaveMessage || aiTestStatus) && (
-          <pre style={{ whiteSpace: "pre-wrap", background: "#111", border: "1px solid #444", padding: 8, color: aiTestStatus.startsWith("测试失败") ? "#ffb3b3" : "#cfcfcf", marginTop: 8 }}>
+          <pre className={aiTestStatus.startsWith("测试失败") ? "nova-error nova-mt-sm" : "nova-pre nova-mt-sm"}>
             {[aiSaveMessage, aiTestStatus].filter(Boolean).join("\n")}
           </pre>
         )}
-        <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
+        <div className="nova-muted-copy nova-mt-sm">
           API Key 不写入 localStorage、普通 config、prompt、plan 或日志；页面不会回显已保存的真实 Key。
         </div>
       </div>
@@ -342,9 +341,9 @@ export function SettingsPage({ theme, setTheme }: any) {
         <PathRow label="工作目录" path={workspaceRoot || "..."} info={workspaceRoot ? ({ normalized: workspaceRoot, exists: true } as PathInfo) : null} />
         <PathRow label="litematica_core" path={coreInfo?.normalized || ""} info={coreInfo} />
         <PathRow label="native_viewer" path={viewerInfo?.normalized || ""} info={viewerInfo} />
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <div className="nova-row-tight nova-mt-sm">
           <button className="btn" onClick={checkBackend}>检查后端</button>
-          <span style={{ color: backendOk === false ? "#ff8888" : "#aaa" }}>{statusText(backendOk)}</span>
+          <span className={`settings-status ${backendOk === false ? "is-error" : ""}`}>{statusText(backendOk)}</span>
         </div>
       </div>
 
@@ -353,11 +352,11 @@ export function SettingsPage({ theme, setTheme }: any) {
         <PathRow label="BlockState DB" path={BLOCKSTATE_DB} info={dbInfo} />
         <PathRow label="中文翻译 DB" path={BLOCKSTATE_ZH} info={zhInfo} />
         <PathRow label="block 图标库" path={BLOCK_ICON_DIR} info={iconDirInfo} />
-        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+        <div className="nova-row-wrap nova-mt-sm">
           <button className="btn" onClick={checkDatabase}>检查 BlockState 数据库</button>
           <button className="btn" onClick={checkIcons}>检查图标库</button>
           <button className="btn" onClick={() => openWorkspacePath("data/minecraft_blockstates")}>打开数据目录</button>
-          <span style={{ color: dbOk === false || iconOk === false ? "#ff8888" : "#aaa" }}>
+          <span className={`settings-status ${dbOk === false || iconOk === false ? "is-error" : ""}`}>
             DB: {statusText(dbOk)} / 图标: {statusText(iconOk)}
           </span>
         </div>
@@ -366,8 +365,8 @@ export function SettingsPage({ theme, setTheme }: any) {
       <div className="group-box">
         <div className="group-box-title">渲染</div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>渲染页 displayMode</div>
-          <div className="form-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="form-label nova-form-label-wide">渲染页 displayMode</div>
+          <div className="form-field nova-row-tight">
             <select className="input" value={displayMode} onChange={(event) => handleDisplayMode(event.target.value)}>
               {DISPLAY_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
@@ -375,15 +374,15 @@ export function SettingsPage({ theme, setTheme }: any) {
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>预览图生成</div>
-          <div className="form-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="form-label nova-form-label-wide">预览图生成</div>
+          <div className="form-field nova-row-tight">
             <select className="input" value={previewMode} onChange={(event) => handlePreviewMode(event.target.value)}>
               {DISPLAY_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
             <button className="btn" onClick={() => handlePreviewMode("normal")}>重置为 normal</button>
           </div>
         </div>
-        <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
+        <div className="nova-muted-copy nova-mt-sm">
           投影库“生成预览”使用“预览图生成”模式；它独立于渲染页 displayMode。
         </div>
       </div>
@@ -394,7 +393,7 @@ export function SettingsPage({ theme, setTheme }: any) {
       </div>
 
       {log && (
-        <pre style={{ whiteSpace: "pre-wrap", background: "#111", border: "1px solid #444", padding: 8, color: "#ccc", maxHeight: 220, overflow: "auto" }}>{log}</pre>
+        <pre className="nova-pre">{log}</pre>
       )}
     </div>
   );

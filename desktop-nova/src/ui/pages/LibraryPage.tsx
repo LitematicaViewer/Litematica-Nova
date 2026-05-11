@@ -94,15 +94,11 @@ function ProjectionCard({
   const author = record.author || "Unknown";
   return (
     <div
-      className="library-card"
+      className={`library-card ${isCurrent ? "library-card-current" : ""}`}
       draggable
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDrop={onDrop}
-      style={{
-        border: isCurrent ? "1px solid color-mix(in srgb, var(--primary) 70%, #333)" : "",
-        background: isCurrent ? "rgba(92, 132, 92, 0.22)" : "var(--surface)",
-      }}
       onClick={(event) => {
         event.stopPropagation();
         onSetCurrent();
@@ -117,12 +113,12 @@ function ProjectionCard({
         <div className="lib-card-text">导入：{formatDate(record.lastAnalyzedAt)} &nbsp;&nbsp;&nbsp;&nbsp; 最近使用：{formatDate(record.lastAnalyzedAt)}</div>
 
         {record.status !== "ok" && (
-          <div style={{ color: record.status === "missing" ? "#ff6666" : "orange", marginTop: 8, fontSize: "0.9em" }}>
+          <div className={`library-card-status ${record.status === "missing" ? "is-missing" : "is-warning"}`}>
             {record.status === "missing" ? "文件已丢失" : `解析失败: ${record.lastError}`}
           </div>
         )}
 
-        <div style={{ flex: 1 }} />
+        <div className="nova-input-flex" />
         <div className="lib-card-actions">
           <button className="btn" onClick={(event) => { event.stopPropagation(); onSetCurrent(); }}>打开</button>
           <button className="btn" onClick={(event) => { event.stopPropagation(); onEditProperties(); }}>更改属性</button>
@@ -135,11 +131,10 @@ function ProjectionCard({
       <div className="lib-card-right">
         <div className="lib-card-size">{formatSize(record.fileSize)}</div>
         <div className="lib-card-preview-box">
-          {previewDataUrl ? <img src={previewDataUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : "暂无预览图"}
+          {previewDataUrl ? <img src={previewDataUrl} alt="" className="library-preview-image" /> : "暂无预览图"}
         </div>
         <button
-          className="btn"
-          style={{ width: "100%" }}
+          className="btn nova-input-full"
           disabled={isGenerating || record.status !== "ok"}
           onClick={(event) => { event.stopPropagation(); onGeneratePreview(); }}
         >
@@ -365,12 +360,12 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const issueCount = state.records.filter((r) => r.status === "missing" || r.status === "parse_error").length;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }} onClick={() => setCurrentFile("")}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ fontSize: "1.2em", fontWeight: "bold" }}>投影库</div>
-        <div style={{ color: "var(--fg)", opacity: 0.5, flex: 1, fontSize: "0.9em" }}>{state.records.length} 条记录，{issueCount} 条需关注</div>
-        <div style={{ fontSize: "0.9em" }}>最近保留</div>
-        <select className="input" style={{ width: 80 }} value={limit} onChange={(event) => setLimit(Number(event.target.value))}>
+    <div className="nova-page" onClick={() => setCurrentFile("")}>
+      <div className="nova-toolbar">
+        <div className="nova-page-title-sm">投影库</div>
+        <div className="nova-muted nova-small nova-flex-1">{state.records.length} 条记录，{issueCount} 条需关注</div>
+        <div className="nova-small">最近保留</div>
+        <select className="input nova-select-xs" value={limit} onChange={(event) => setLimit(Number(event.target.value))}>
           <option value="20">20</option>
           <option value="50">50</option>
           <option value="100">100</option>
@@ -380,15 +375,15 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         <button className="btn" onClick={(event) => { event.stopPropagation(); handleRefresh(); }} disabled={isRefreshing}>{isRefreshing ? "刷新中..." : "刷新校验"}</button>
       </div>
 
-      <div style={{ display: "flex", gap: 12 }} onClick={(event) => event.stopPropagation()}>
-        <input className="input" style={{ flex: 1 }} placeholder="搜索投影名、原文件名或原地址" value={search} onChange={(event) => setSearch(event.target.value)} />
-        <select className="input" style={{ width: 140 }} value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
+      <div className="library-filter-row" onClick={(event) => event.stopPropagation()}>
+        <input className="input nova-input-flex" placeholder="搜索投影名、原文件名或原地址" value={search} onChange={(event) => setSearch(event.target.value)} />
+        <select className="input nova-select-sm" value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
           <option value="">全部标签</option>
           <option value="untagged">无标签</option>
           <option value="missing">已丢失</option>
           <option value="parse_error">解析失败</option>
         </select>
-        <select className="input" style={{ width: 140 }} value={sortMode} onChange={(event) => setSortMode(event.target.value)}>
+        <select className="input nova-select-sm" value={sortMode} onChange={(event) => setSortMode(event.target.value)}>
           <option value="manual">手动排序</option>
           <option value="recent_import">最近导入</option>
           <option value="recent_mod">最近修改</option>
@@ -397,23 +392,11 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         </select>
       </div>
 
-      <section
-        style={{
-          border: "1px solid rgba(255,255,255,0.12)",
-          background: "rgba(255,255,255,0.035)",
-          padding: 12,
-          borderRadius: 8,
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-        }}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ fontWeight: 700 }}>在线投影库 / RedenMC</div>
+      <section className="reden-library-section" onClick={(event) => event.stopPropagation()}>
+        <div className="nova-row-tight">
+          <div className="nova-strong">在线投影库 / RedenMC</div>
           <input
-            className="input"
-            style={{ flex: 1 }}
+            className="input nova-input-flex"
             value={redenQuery}
             placeholder="搜索机器，例如：刷石机、世界吞噬者"
             onChange={(event) => setRedenQuery(event.target.value)}
@@ -425,52 +408,46 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         </div>
 
         {redenStatus && (
-          <div style={{ fontSize: "0.9em", color: redenStatus.includes("失败") || redenStatus.includes("不合法") ? "#ffb3b3" : "var(--fg)" }}>
+          <div className={`nova-small ${redenStatus.includes("失败") || redenStatus.includes("不合法") ? "nova-error-text" : ""}`}>
             {redenStatus}
           </div>
         )}
 
         {redenResults.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 8, maxHeight: 260, overflowY: "auto" }}>
+          <div className="nova-grid-results">
             {redenResults.map((item) => (
               <button
                 key={item.key}
-                className="btn"
-                style={{
-                  textAlign: "left",
-                  whiteSpace: "normal",
-                  padding: 10,
-                  borderColor: redenDetail?.key === item.key ? "var(--primary)" : undefined,
-                }}
+                className={`btn reden-result-card ${redenDetail?.key === item.key ? "is-active" : ""}`}
                 disabled={redenBusy === `detail:${item.key}`}
                 onClick={() => handleRedenDetail(item.key)}
               >
-                <div style={{ fontWeight: 700 }}>{item.name || item.key}</div>
-                <div style={{ opacity: 0.75, fontSize: "0.85em" }}>作者：{item.author?.username || "-"} · 下载：{item.downloads ?? 0} · 收藏/赞：{item.upVotes ?? 0}</div>
-                <div style={{ opacity: 0.75, fontSize: "0.85em" }}>标签：{redenTags(item)}</div>
-                <div style={{ opacity: 0.65, fontSize: "0.85em" }}>更新：{formatRedenDate(item.updatedAt)}</div>
-                {redenSummary(item) && <div style={{ marginTop: 6, fontSize: "0.85em" }}>{redenSummary(item).slice(0, 120)}</div>}
+                <div className="nova-strong">{item.name || item.key}</div>
+                <div className="nova-muted-copy nova-tiny">作者：{item.author?.username || "-"} · 下载：{item.downloads ?? 0} · 收藏/赞：{item.upVotes ?? 0}</div>
+                <div className="nova-muted-copy nova-tiny">标签：{redenTags(item)}</div>
+                <div className="nova-subtle nova-tiny">更新：{formatRedenDate(item.updatedAt)}</div>
+                {redenSummary(item) && <div className="nova-tiny nova-mt-xs">{redenSummary(item).slice(0, 120)}</div>}
               </button>
             ))}
           </div>
         )}
 
         {redenDetail && (
-          <div style={{ borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="reden-detail">
             <div>
-              <div style={{ fontWeight: 700 }}>{redenDetail.name || redenDetail.key}</div>
-              <div style={{ fontSize: "0.9em", opacity: 0.75 }}>ID：{redenDetail.key} · 类型：{redenDetail.type || "-"} · 作者：{redenDetail.author?.username || "-"}</div>
-              {redenSummary(redenDetail) && <div style={{ marginTop: 4, fontSize: "0.9em", whiteSpace: "pre-wrap" }}>{redenSummary(redenDetail)}</div>}
+              <div className="nova-strong">{redenDetail.name || redenDetail.key}</div>
+              <div className="nova-muted-copy nova-small">ID：{redenDetail.key} · 类型：{redenDetail.type || "-"} · 作者：{redenDetail.author?.username || "-"}</div>
+              {redenSummary(redenDetail) && <div className="nova-small reden-summary">{redenSummary(redenDetail)}</div>}
             </div>
 
             {(redenDetail.attachments || []).length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ fontWeight: 600 }}>普通附件</div>
+              <div className="nova-stack-compact">
+                <div className="nova-section-title">普通附件</div>
                 {(redenDetail.attachments || []).map((attachment, index) => (
-                  <div key={`${attachment.name}-${index}`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{ flex: 1 }}>
+                  <div key={`${attachment.name}-${index}`} className="nova-row-tight">
+                    <div className="nova-input-flex">
                       <div>{index + 1}. {attachment.name || `attachment-${index + 1}.litematic`}</div>
-                      <div style={{ fontSize: "0.85em", opacity: 0.7 }}>{attachment.size ? formatSize(attachment.size) : "-"} {attachment.description || ""}</div>
+                      <div className="nova-muted-copy nova-tiny">{attachment.size ? formatSize(attachment.size) : "-"} {attachment.description || ""}</div>
                     </div>
                     <button className="btn" disabled={redenBusy === `download:${index}`} onClick={() => handleRedenDownloadAttachment(redenDetail, index)}>
                       {redenBusy === `download:${index}` ? "下载中..." : "下载并入库"}
@@ -481,9 +458,9 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
             )}
 
             {(redenDetail.hasX || redenDetail.hasY || redenDetail.hasZ) && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <div style={{ fontWeight: 600 }}>重复结构尺寸</div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <div className="nova-stack-tight">
+                <div className="nova-section-title">重复结构尺寸</div>
+                <div className="nova-row-wrap">
                   {(["x", "y", "z"] as const).map((axis) => {
                     const enabled = axis === "x" ? redenDetail.hasX : axis === "y" ? redenDetail.hasY : redenDetail.hasZ;
                     if (!enabled) return null;
@@ -495,7 +472,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
                       rules.mod ? `mod ${rules.mod.step},${rules.mod.offset}` : "",
                     ].filter(Boolean).join(" / ");
                     return (
-                      <label key={axis} style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 130 }}>
+                      <label key={axis} className="reden-size-field">
                         <span>{axis.toUpperCase()} ({hint || "no rule"})</span>
                         <input
                           className="input"
@@ -507,7 +484,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
                     );
                   })}
                 </div>
-                <button className="btn" style={{ alignSelf: "flex-start" }} disabled={redenBusy === "download:parametric"} onClick={() => handleRedenDownloadParametric(redenDetail)}>
+                <button className="btn nova-self-start" disabled={redenBusy === "download:parametric"} onClick={() => handleRedenDownloadParametric(redenDetail)}>
                   {redenBusy === "download:parametric" ? "生成下载中..." : "生成下载并入库"}
                 </button>
               </div>
@@ -516,15 +493,15 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         )}
       </section>
 
-      {previewError && <pre style={{ whiteSpace: "pre-wrap", background: "#111", border: "1px solid #884444", color: "#ffb3b3", padding: 8, maxHeight: 180, overflow: "auto" }}>{previewError}</pre>}
+      {previewError && <pre className="nova-error nova-pre-medium">{previewError}</pre>}
 
       {state.records.length === 0 ? (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", paddingTop: 20, opacity: 0.55 }}>
-          <p style={{ margin: 0, fontSize: "0.95em" }}>投影库还没有内容。请先导入一个 .litematic 文件。</p>
-          <button className="btn" onClick={(event) => { event.stopPropagation(); handleSelect(); }} style={{ marginTop: 12 }}>选择 .litematic...</button>
+        <div className="library-empty">
+          <p className="library-empty-text">投影库还没有内容。请先导入一个 .litematic 文件。</p>
+          <button className="btn nova-mt-md" onClick={(event) => { event.stopPropagation(); handleSelect(); }}>选择 .litematic...</button>
         </div>
       ) : (
-        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingRight: 4 }}>
+        <div className="nova-list-panel">
           {visibleRecords.map((r) => (
             <ProjectionCard
               key={r.path}
