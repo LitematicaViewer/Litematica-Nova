@@ -416,21 +416,21 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+    <div className="nova-page">
+      <div className="nova-toolbar">
         <div>
-          <div style={{ fontSize: "1.3em", fontWeight: "bold" }}>投影生成</div>
-          <div style={{ opacity: 0.7, fontSize: "0.9em" }}>通过本地参数化 plan 生成 .litematic，后续可接入智能生成。</div>
+          <div className="nova-page-title">投影生成</div>
+          <div className="nova-muted-copy">通过本地参数化 plan 生成 .litematic，后续可接入智能生成。</div>
         </div>
-        <div style={{ flex: 1 }} />
-        <div className="form-field" style={{ flex: "0 0 auto" }}>
+        <div className="nova-input-flex" />
+        <div className="form-field generate-field-static">
           <span>当前状态：</span>
           <strong>{status}</strong>
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(620px, 1.15fr) minmax(420px, 0.85fr)", gap: 12, minHeight: 0, flex: 1 }}>
-        <div style={{ overflowY: "auto", paddingRight: 4 }}>
+      <div className="nova-grid-two">
+        <div className="generate-scroll">
           <MetadataGroup form={form} updateMetadata={updateMetadata} />
           <RegionGroup form={form} updateRegion={updateRegion} />
           <TemplateLibrary
@@ -446,11 +446,11 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
 
           <div className="group-box">
             <div className="group-box-title">操作列表</div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <div className="nova-row-tight generate-row-gap-lg">
               <button className="btn" onClick={() => { setForm((prev) => ({ ...prev, operations: [...prev.operations, createDefaultOperation("fill_box")] })); setFormDirty(true); clearDryRun(); }}>添加操作</button>
               <button className="btn" onClick={() => { setForm((prev) => ({ ...prev, operations: [] })); setFormDirty(true); clearDryRun(); }}>清空</button>
-              <div style={{ flex: 1 }} />
-              <span style={{ opacity: 0.65 }}>后面的 operation 会覆盖前面的方块。</span>
+              <div className="nova-input-flex" />
+              <span className="nova-subtle">后面的 operation 会覆盖前面的方块。</span>
             </div>
             {form.operations.map((operation, index) => (
               <OperationEditor
@@ -485,18 +485,18 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
             <div className="group-box-title">智能生成（网页端）</div>
             <div className="form-row">
               <div className="form-label">自然语言需求</div>
-              <textarea className="input" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} placeholder="描述要生成或修改的投影；本区域不会自动调用真实 API。" style={{ flex: 1, minHeight: 60, resize: "vertical" }} />
+              <textarea className="input nova-textarea-prompt" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} placeholder="描述要生成或修改的投影；本区域不会自动调用真实 API。" />
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <div className="nova-row-wrap generate-row-gap">
               <button className="btn" onClick={copyWebPrompt}>复制给网页端 AI 的完整提示词</button>
               <button className="btn" onClick={applyMockPlan}>Mock 生成示例方案</button>
               <button className="btn" onClick={() => setAiChatOpen((open) => !open)}>使用 API 对话</button>
-              {aiWebPromptCopied && <span style={{ opacity: 0.75 }}>已复制</span>}
+              {aiWebPromptCopied && <span className="nova-muted-copy">已复制</span>}
             </div>
             <div className="form-row">
               <div className="form-label">导入 AI 输出</div>
               <textarea
-                className="input"
+                className="input nova-textarea-ai-plan nova-code"
                 value={aiPlanText}
                 onChange={(e) => {
                   setAiPlanText(e.target.value);
@@ -505,35 +505,34 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
                   setAiPlanWarnings([]);
                 }}
                 placeholder="粘贴 AI 返回的 projection_plan.json。不会自动生成 .litematic。"
-                style={{ flex: 1, minHeight: 90, resize: "vertical", fontFamily: "Consolas, monospace" }}
               />
             </div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <div className="nova-row-wrap generate-row-gap">
               <button className="btn" onClick={importAiPlan}>解析并预览</button>
               <button className="btn" onClick={() => aiImportedPlan && applyImportedPlan(aiImportedPlan)} disabled={!aiImportedPlan}>应用到当前方案</button>
             </div>
             {aiPlanErrors.length > 0 && <ErrorList errors={aiPlanErrors} />}
             {aiPlanWarnings.length > 0 && (
-              <div style={{ color: "#ffd580", marginBottom: 8 }}>
+              <div className="nova-warning-inline">
                 {aiPlanWarnings.map((warning) => <div key={warning}>warning: {warning}</div>)}
               </div>
             )}
             {aiImportedPlan && (
-              <details open style={{ marginBottom: 8 }}>
-                <summary style={{ cursor: "pointer" }}>AI plan 预览</summary>
-                <pre className="generate-json-preview" style={{ maxHeight: 220 }}>{JSON.stringify(aiImportedPlan, null, 2)}</pre>
+              <details open className="nova-mb-sm">
+                <summary className="nova-summary">AI plan 预览</summary>
+                <pre className="generate-json-preview generate-json-preview-limited">{JSON.stringify(aiImportedPlan, null, 2)}</pre>
               </details>
             )}
-            <div style={{ opacity: 0.7, fontSize: "0.9em" }}>
+            <div className="nova-muted-copy">
               AI 只生成 projection_plan.json；导入后仍需用户确认应用，并手动 Dry-run / Apply。复制内容包含 prompt_config、当前 region/plan 和用户需求，不包含 API Key 或本地文件路径。
             </div>
           </div>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", minHeight: 0, gap: 12 }}>
-          <div className="group-box" style={{ flex: "1 1 45%", minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <div className="nova-stack">
+          <div className="group-box nova-flex-column-fill">
             <div className="group-box-title">projection_plan.json 预览</div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <div className="nova-row-tight generate-row-gap">
               <button className="btn" onClick={() => setDetailsOpen(!detailsOpen)}>{detailsOpen ? "折叠" : "展开"}</button>
               <button className="btn" onClick={() => navigator.clipboard.writeText(planJson)}>复制 plan JSON</button>
               <button className="btn" onClick={savePlan}>保存 plan...</button>
@@ -545,25 +544,25 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
             <div className="group-box-title">生成</div>
             {currentValidation.length > 0 && <ErrorList errors={currentValidation} />}
             {clientErrors.length > 0 && <ErrorList errors={clientErrors} />}
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <div className="nova-row-tight generate-row-gap">
               <button className="btn" onClick={handleDryRun}>Dry-run 预览</button>
               <button className="btn" onClick={chooseOutput}>选择输出路径...</button>
               <button className="btn" onClick={handleApply} disabled={!dryRunSummary || status === "正在生成"}>生成 .litematic</button>
             </div>
             <div className="form-row">
               <div className="form-label">输出路径</div>
-              <input className="input" style={{ flex: 1 }} value={outputPath} onChange={(e) => setOutputPath(e.target.value)} placeholder="完整绝对路径，例如 C:\path\name.litematic" />
+              <input className="input nova-input-flex" value={outputPath} onChange={(e) => setOutputPath(e.target.value)} placeholder="完整绝对路径，例如 C:\path\name.litematic" />
             </div>
-            {lastError && <textarea readOnly className="input" value={lastError} style={{ width: "100%", height: 84, color: "#ffb0b0", resize: "vertical" }} />}
+            {lastError && <textarea readOnly className="input nova-textarea-sm nova-error-textarea" value={lastError} />}
             {dryRunSummary && <SummaryView summary={dryRunSummary} />}
             {rawOutput && (
-              <div style={{ marginTop: 8 }}>
+              <div className="nova-mt-sm">
                 <button className="btn" onClick={() => setRawOpen(!rawOpen)}>{rawOpen ? "隐藏 raw output" : "显示 raw output"}</button>
-                {rawOpen && <textarea readOnly className="input" value={rawOutput} style={{ width: "100%", height: 160, marginTop: 8, resize: "vertical", fontFamily: "monospace" }} />}
+                {rawOpen && <textarea readOnly className="input nova-textarea-md nova-code nova-mt-sm" value={rawOutput} />}
               </div>
             )}
             {generatedPath && (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+              <div className="nova-row-wrap nova-mt-md">
                 <button className="btn" onClick={() => setRoute("properties")}>打开属性页</button>
                 <button className="btn" onClick={() => setRoute("library")}>打开投影库</button>
                 <button className="btn" onClick={() => setRoute("render")}>打开 3D 预览页</button>
@@ -575,25 +574,25 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
         </div>
       </div>
       {aiChatOpen && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.58)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <div className="group-box" style={{ width: "min(920px, 96vw)", height: "min(760px, 92vh)", display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <div className="group-box-title" style={{ margin: 0 }}>API 智能生成</div>
-              <div style={{ flex: 1 }} />
+        <div className="nova-dialog-backdrop">
+          <div className="group-box nova-dialog-large">
+            <div className="nova-row-tight">
+              <div className="group-box-title nova-dialog-title">API 智能生成</div>
+              <div className="nova-input-flex" />
               <button className="btn" onClick={() => setAiDirectMode((value) => !value)}>
                 更改：{aiDirectMode ? "开启 = 直接发送原文" : "关闭 = 使用生成配置包装"}
               </button>
               <button className="btn" onClick={clearAiChat}>清空对话</button>
               <button className="btn" onClick={() => setAiChatOpen(false)}>关闭</button>
             </div>
-            <div style={{ flex: 1, overflowY: "auto", background: "#111", border: "1px solid #333", padding: 8 }}>
+            <div className="nova-chat-log">
               {aiChatMessages.length === 0 ? (
-                <div style={{ opacity: 0.65 }}>暂无消息。默认发送 prompt_config + 当前上下文 + 用户输入；开启“更改”后只发送原文。</div>
+                <div className="nova-subtle">暂无消息。默认发送 prompt_config + 当前上下文 + 用户输入；开启“更改”后只发送原文。</div>
               ) : (
                 aiChatMessages.map((message, index) => (
-                  <div key={`${message.role}-${message.timestamp || index}`} style={{ marginBottom: 10 }}>
-                    <div style={{ opacity: 0.75, fontWeight: "bold" }}>{message.role === "assistant" ? "AI" : message.role === "system" ? "System" : "User"}</div>
-                    <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "Consolas, monospace" }}>
+                  <div key={`${message.role}-${message.timestamp || index}`} className="nova-chat-message">
+                    <div className="nova-chat-role">{message.role === "assistant" ? "AI" : message.role === "system" ? "System" : "User"}</div>
+                    <pre className="nova-chat-text">
                       {message.content.length > 5000 ? `${message.content.slice(0, 5000)}\n...` : message.content}
                     </pre>
                   </div>
@@ -601,20 +600,19 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
               )}
             </div>
             <textarea
-              className="input"
+              className="input nova-textarea-chat"
               value={aiChatInput}
               onChange={(event) => setAiChatInput(event.target.value)}
               placeholder={aiDirectMode ? "直接发送给 API 的原文" : "输入自然语言需求；发送时会包装生成配置和当前 plan"}
-              style={{ minHeight: 86, resize: "vertical" }}
             />
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <div className="nova-row-wrap">
               <button className="btn" onClick={handleAiChatSend} disabled={aiChatSending || !aiChatInput.trim()}>
                 {aiChatSending ? "发送中..." : "发送"}
               </button>
               <button className="btn" onClick={() => aiChatPlan && applyImportedPlan(aiChatPlan)} disabled={!aiChatPlan}>应用 AI 返回的 plan</button>
-              <span style={{ opacity: 0.7 }}>{aiDirectMode ? "当前：直接发送原文" : "当前：使用生成配置包装"}</span>
+              <span className="nova-muted-copy">{aiDirectMode ? "当前：直接发送原文" : "当前：使用生成配置包装"}</span>
             </div>
-            {aiChatError && <div style={{ color: "#ff8888", whiteSpace: "pre-wrap" }}>{aiChatError}</div>}
+            {aiChatError && <div className="nova-error-inline">{aiChatError}</div>}
           </div>
         </div>
       )}
@@ -644,8 +642,8 @@ function TemplateLibrary({
   return (
     <div className="group-box">
       <div className="group-box-title">模板库</div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
-        <input className="input" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="搜索模板名称 / 标签 / id" style={{ flex: 1 }} />
+      <div className="nova-row-tight generate-row-gap">
+        <input className="input nova-input-flex" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="搜索模板名称 / 标签 / id" />
         <select className="input" value={selectedTag} onChange={(event) => onTagChange(event.target.value)}>
           <option value="">全部标签</option>
           {allTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}
@@ -655,15 +653,15 @@ function TemplateLibrary({
       <div className="template-library-list">
         {templates.map((template) => (
           <div key={template.id} className="template-library-row">
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontWeight: "bold" }}>{template.name_zh}</div>
-              <div style={{ opacity: 0.72, fontSize: "0.9em" }}>{template.description_zh}</div>
-              <div style={{ opacity: 0.62, fontSize: "0.85em" }}>{template.tags.join(" / ")}</div>
+            <div className="nova-flex-1">
+              <div className="nova-strong">{template.name_zh}</div>
+              <div className="nova-muted-copy">{template.description_zh}</div>
+              <div className="nova-subtle nova-tiny">{template.tags.join(" / ")}</div>
             </div>
             <button className="btn" onClick={() => onLoad(template)}>复制为当前方案</button>
           </div>
         ))}
-        {templates.length === 0 && <div style={{ opacity: 0.65, padding: 8 }}>没有匹配模板</div>}
+        {templates.length === 0 && <div className="nova-empty-compact">没有匹配模板</div>}
       </div>
     </div>
   );
@@ -680,10 +678,10 @@ function OperationEditor({ operation, index, allBlocks, onChange, onRemove, onDu
   const update = (patch: Partial<OperationFormState>) => onChange({ ...operation, ...patch });
   return (
     <div className="generate-operation">
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+      <div className="nova-row-tight generate-row-gap">
         <strong>#{index + 1}</strong>
         <Dropdown value={operation.type} options={operationLabels} onChange={(value) => update({ type: value as OperationType })} />
-        <div style={{ flex: 1 }} />
+        <div className="nova-input-flex" />
         <button className="btn" onClick={onDuplicate}>复制</button>
         <button className="btn" onClick={onRemove}>删除</button>
       </div>
@@ -821,7 +819,7 @@ function MaterialEditor({
           ]}
           onChange={setMode}
         />
-        {allBlocks.length === 0 && <span style={{ opacity: 0.65 }}>BlockState 数据库缺失，保留手动 ID 兜底。</span>}
+        {allBlocks.length === 0 && <span className="nova-subtle">BlockState 数据库缺失，保留手动 ID 兜底。</span>}
       </div>
       {mode === "weighted_random" && material?.type === "weighted_random" ? (
         <WeightedRandomEditor material={material} onChange={onMaterialChange} />
@@ -854,11 +852,11 @@ function CheckerboardMaterialEditor({
   return (
     <div className="generate-block-selector">
       <div className="generate-material-entry">
-        <div style={{ fontWeight: "bold", marginBottom: 6 }}>棋盘材料 A</div>
+        <div className="nova-section-title">棋盘材料 A</div>
         <BlockSelector block={blockA} onChange={(block) => onChangeA({ type: "single", block })} />
       </div>
       <div className="generate-material-entry">
-        <div style={{ fontWeight: "bold", marginBottom: 6 }}>棋盘材料 B</div>
+        <div className="nova-section-title">棋盘材料 B</div>
         <BlockSelector block={blockB} onChange={(block) => onChangeB({ type: "single", block })} />
       </div>
     </div>
@@ -876,14 +874,14 @@ function WeightedRandomEditor({ material, onChange }: { material: Extract<Materi
     <div>
       <div className="form-row">
         <div className="form-label">seed</div>
-        <input className="input" type="number" value={material.seed} onChange={(e) => onChange({ ...material, seed: Number(e.target.value) })} style={{ width: 160 }} />
+        <input className="input nova-number-lg" type="number" value={material.seed} onChange={(e) => onChange({ ...material, seed: Number(e.target.value) })} />
         <button className="btn" onClick={() => onChange({ ...material, entries: [...material.entries, { id: makeId(), weight: 10, block: { name: "minecraft:stone_bricks", properties: {} } }] })}>添加 entry</button>
       </div>
       {material.entries.map((entry, index) => (
         <div key={entry.id} className="generate-material-entry">
           <div className="form-row">
             <div className="form-label">weight</div>
-            <input className="input" type="number" min={1} value={entry.weight} onChange={(e) => updateEntry(index, { weight: Number(e.target.value) })} style={{ width: 120 }} />
+            <input className="input nova-number-md" type="number" min={1} value={entry.weight} onChange={(e) => updateEntry(index, { weight: Number(e.target.value) })} />
             <button className="btn" onClick={() => removeEntry(index)} disabled={material.entries.length <= 1}>删除</button>
           </div>
           <BlockSelector block={entry.block} onChange={(nextBlock) => updateEntry(index, { block: nextBlock })} />
@@ -906,21 +904,21 @@ function BlockSelector({ block, onChange }: { block: { name: string; properties?
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+      <div className="nova-row-tight generate-row-gap">
         <BlockSearchSelect value={block.name} onChange={(blockId) => onChange({ name: blockId, properties: {} })} />
         <button className="btn" onClick={() => onChange({ name: block.name, properties: { ...defaultProperties } })}>默认状态</button>
         <button className="btn" onClick={() => onChange({ name: block.name, properties: {} })}>清空状态</button>
       </div>
-      <details style={{ marginBottom: 8 }}>
-        <summary style={{ cursor: "pointer", opacity: 0.75 }}>高级手动 ID</summary>
-        <input className="input" value={block.name} onChange={(e) => onChange({ name: e.target.value, properties: {} })} placeholder="minecraft:stone_bricks" style={{ width: "100%", marginTop: 6 }} />
+      <details className="nova-mb-sm">
+        <summary className="nova-summary">高级手动 ID</summary>
+        <input className="input nova-input-full nova-mt-xs" value={block.name} onChange={(e) => onChange({ name: e.target.value, properties: {} })} placeholder="minecraft:stone_bricks" />
       </details>
       {propertyKeys.length === 0 ? (
-        <div style={{ opacity: 0.55, fontSize: "0.9em" }}>无 properties</div>
+        <div className="nova-muted-copy">无 properties</div>
       ) : (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="nova-row-wrap">
           {propertyKeys.map((key) => (
-            <label key={key} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <label key={key} className="nova-inline-label">
               <span>{translateKey(key)}</span>
               <select className="input" value={(block.properties || {})[key] || ""} onChange={(e) => setProperty(key, e.target.value)}>
                 <option value="">未指定</option>
@@ -943,19 +941,19 @@ function SummaryView({ summary }: { summary: GenerateSummary }) {
       <div>estimated non-air blocks: {summary.estimated_non_air_blocks}</div>
       <div>estimated palette count: {summary.estimated_palette_count ?? "-"}</div>
       <div>palette entries: {summary.palette_entries_per_region.map((entry) => `${entry.region}=${entry.palette_entries}`).join(", ")}</div>
-      <div style={{ marginTop: 6, fontWeight: "bold" }}>material summary</div>
+      <div className="nova-section-title nova-mt-xs">material summary</div>
       {summary.material_summary.map((entry) => (
         <div key={`${entry.block_id}-${JSON.stringify(entry.properties)}`}>{entry.block_id} {Object.keys(entry.properties).length ? JSON.stringify(entry.properties) : "{}"} : {entry.count}</div>
       ))}
       {summary.operations && summary.operations.length > 0 && (
         <>
-          <div style={{ marginTop: 6, fontWeight: "bold" }}>operations</div>
+          <div className="nova-section-title nova-mt-xs">operations</div>
           {summary.operations.map((operation) => (
             <div key={`${operation.region}-${operation.index}`}>#{operation.index + 1} {operation.name || operation.operation_type}: {operation.affected_block_count}</div>
           ))}
         </>
       )}
-      {summary.warnings.length > 0 && <div style={{ color: "#ffd580" }}>warnings: {summary.warnings.join("; ")}</div>}
+      {summary.warnings.length > 0 && <div className="nova-warning-inline">warnings: {summary.warnings.join("; ")}</div>}
     </div>
   );
 }
@@ -968,7 +966,7 @@ function TextRow({ label, value, onChange }: { label: string; value: string; onC
   return (
     <div className="form-row">
       <div className="form-label">{label}</div>
-      <input className="input" style={{ flex: 1 }} value={value} onChange={(e) => onChange(e.target.value)} />
+      <input className="input nova-input-flex" value={value} onChange={(e) => onChange(e.target.value)} />
     </div>
   );
 }
@@ -977,7 +975,7 @@ function NumberRow({ label, value, onChange, min }: { label: string; value: numb
   return (
     <div className="form-row">
       <div className="form-label">{label}</div>
-      <input className="input" type="number" min={min} value={value} onChange={(e) => onChange(Number(e.target.value))} style={{ width: 120 }} />
+      <input className="input nova-number-md" type="number" min={min} value={value} onChange={(e) => onChange(Number(e.target.value))} />
     </div>
   );
 }
@@ -986,7 +984,7 @@ function CheckRow({ label, value, onChange }: { label: string; value: boolean; o
   return (
     <div className="form-row">
       <div className="form-label">{label}</div>
-      <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <label className="nova-inline-label">
         <input type="checkbox" checked={value} onChange={(e) => onChange(e.target.checked)} />
         true
       </label>
@@ -1004,7 +1002,7 @@ function Vec3Row({ label, value, onChange, min }: { label: string; value: [numbe
     <div className="form-row">
       <div className="form-label">{label}</div>
       {[0, 1, 2].map((axis) => (
-        <input key={axis} className="input" type="number" min={min} value={value[axis]} onChange={(e) => setAxis(axis as 0 | 1 | 2, Number(e.target.value))} style={{ width: 82, marginRight: 6 }} />
+        <input key={axis} className="input nova-number-sm nova-mr-sm" type="number" min={min} value={value[axis]} onChange={(e) => setAxis(axis as 0 | 1 | 2, Number(e.target.value))} />
       ))}
     </div>
   );

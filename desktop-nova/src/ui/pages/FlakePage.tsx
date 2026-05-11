@@ -204,7 +204,8 @@ const LayerCanvas = forwardRef<
   return (
     <canvas
       ref={canvasRef}
-      style={{ width: "100%", height: "100%", display: "block", cursor: isDragging ? "grabbing" : "grab" }}
+      className="slice-canvas"
+      style={{ cursor: isDragging ? "grabbing" : "grab" }}
       onWheel={handleWheel}
       onMouseDown={(event) => {
         setIsDragging(true);
@@ -278,7 +279,7 @@ export function FlakePage({ currentFile }: any) {
 
   if (!currentFile) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", opacity: 0.7 }}>
+      <div className="nova-empty-state">
         <h2>Layers</h2>
         <p>Select a .litematic file first.</p>
       </div>
@@ -286,39 +287,39 @@ export function FlakePage({ currentFile }: any) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
-      <div style={{ padding: "6px 12px", backgroundColor: "#222", border: "1px solid #444", color: "#ccc", fontSize: "0.9em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+    <div className="nova-page">
+      <div className="flake-file-path">
         {currentFile}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ color: "#aaa" }}>Region</span>
-        <input className="input" style={{ width: 250 }} value={regionName} readOnly />
+      <div className="nova-row-tight">
+        <span className="nova-muted">Region</span>
+        <input className="input flake-region-input" value={regionName} readOnly />
       </div>
 
-      <div className="group-box" style={{ padding: "16px 12px", marginTop: 16 }}>
+      <div className="group-box flake-layer-control">
         <div className="group-box-title">Layer control</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <span style={{ color: "#aaa", minWidth: 60 }}>Layer</span>
-          <input type="range" min={0} max={maxY} value={layerY} onChange={(event) => setLayerY(parseInt(event.target.value, 10))} style={{ flex: 1 }} disabled={!ready} />
+        <div className="flake-layer-row">
+          <span className="flake-layer-label">Layer</span>
+          <input type="range" min={0} max={maxY} value={layerY} onChange={(event) => setLayerY(parseInt(event.target.value, 10))} className="nova-input-flex" disabled={!ready} />
           <button className="btn" disabled={!ready} onClick={() => canvasRef.current?.resetView()}>Reset view</button>
         </div>
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 8 }}>
-          <div style={{ color: "#e0e0e0", fontSize: "1.1em", fontWeight: "bold" }}>Y = {layerY}</div>
-          <div style={{ display: "flex", gap: 4 }}>
-            <button className="btn" style={{ minWidth: 32 }} disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 5))}>--</button>
-            <button className="btn" style={{ minWidth: 32 }} disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 1))}>-</button>
-            <button className="btn" style={{ minWidth: 32 }} disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 1))}>+</button>
-            <button className="btn" style={{ minWidth: 32 }} disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 5))}>++</button>
+        <div className="flake-layer-actions">
+          <div className="flake-layer-y">Y = {layerY}</div>
+          <div className="flake-step-buttons">
+            <button className="btn flake-step-button" disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 5))}>--</button>
+            <button className="btn flake-step-button" disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 1))}>-</button>
+            <button className="btn flake-step-button" disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 1))}>+</button>
+            <button className="btn flake-step-button" disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 5))}>++</button>
           </div>
         </div>
       </div>
 
-      <div style={{ flex: 1, backgroundColor: "#222", border: "1px solid #444", position: "relative", overflow: "hidden" }}>
+      <div className="flake-canvas-host">
         {!ready ? (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#888" }}>
-            <div style={{ fontSize: "1.2em", marginBottom: 8 }}>{building ? "3D cache is building." : "Layer view needs a finished 3D cache."}</div>
+          <div className="nova-empty-state">
+            <div className="flake-empty-title">{building ? "3D cache is building." : "Layer view needs a finished 3D cache."}</div>
             <div>{building ? "Open the Render page to watch the live build progress." : "Build 3D cache on the Render page first."}</div>
           </div>
         ) : (
@@ -326,20 +327,20 @@ export function FlakePage({ currentFile }: any) {
         )}
 
         {hoverBlock && (
-          <div style={{ position: "absolute", left: hoverPos.x + 15, top: hoverPos.y + 15, backgroundColor: "#1a1a1a", border: "1px solid #555", color: "#fff", padding: "8px 12px", zIndex: 10, pointerEvents: "none", boxShadow: "2px 2px 5px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", gap: 4 }}>
-            <div style={{ fontWeight: "bold", fontSize: "1.1em" }}>{hoverBlock.name}</div>
-            <div style={{ color: "#aaa" }}>x={hoverBlock.x} y={hoverBlock.y} z={hoverBlock.z}</div>
-            <div style={{ color: "#888", fontSize: "0.9em", marginTop: 4 }}>Block ID:</div>
-            <div style={{ color: "#ccc", fontSize: "0.95em" }}>{hoverBlock.id}</div>
+          <div className="flake-hover-card" style={{ left: hoverPos.x + 15, top: hoverPos.y + 15 }}>
+            <div className="flake-hover-title">{hoverBlock.name}</div>
+            <div className="nova-muted">x={hoverBlock.x} y={hoverBlock.y} z={hoverBlock.z}</div>
+            <div className="nova-muted nova-small nova-mt-xs">Block ID:</div>
+            <div className="nova-small">{hoverBlock.id}</div>
           </div>
         )}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ flex: 1, color: "#aaa", fontSize: "0.9em" }}>
+      <div className="nova-toolbar">
+        <div className="nova-muted nova-small nova-flex-1">
           {!ready ? (building ? "Cache is building; layer data will become available when the ready file is written." : "Layers unavailable: build 3D cache on the Render page first.") : `Y=${layerY}; ${sliceData?.blocks?.length || 0} non-air blocks. Wheel zooms, drag pans.`}
         </div>
-        <button className="btn" style={{ minWidth: 150, padding: "8px 16px" }} onClick={() => setShowMaterials(true)} disabled={!statsData}>
+        <button className="btn flake-materials-button" onClick={() => setShowMaterials(true)} disabled={!statsData}>
           Materials
         </button>
       </div>
