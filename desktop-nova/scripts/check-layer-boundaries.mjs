@@ -3,8 +3,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { fileURLToPath } from "node:url";
 
-const rootDir = path.resolve(import.meta.dirname, "..");
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(scriptDir, "..");
 const srcDir = path.join(rootDir, "src");
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
