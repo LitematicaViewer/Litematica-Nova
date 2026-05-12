@@ -1,6 +1,7 @@
 @import "../shell/theme.css";
 
 :root {
+    --ln-window-content-padding: 12px;
     color: var(--ln-body-text-color, #000000);
     background: var(--ln-ui-background-color, #ffffff);
     font-family: var(--ln-body-font-family, system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif);
@@ -94,6 +95,7 @@ td {
     flex: 1;
     min-width: 0;
     height: 100%;
+    padding: var(--ln-window-content-padding);
     overflow: hidden;
 }
 
