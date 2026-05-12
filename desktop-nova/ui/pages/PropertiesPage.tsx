@@ -1,1 +1,0 @@
-﻿export * from "../windows/main/pages/properties/PropertiesPage";
