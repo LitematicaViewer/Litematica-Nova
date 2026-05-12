@@ -2484,6 +2484,30 @@ async fn open_material_list_window(
 }
 
 #[tauri::command]
+async fn open_reden_library_window(app: AppHandle) -> Result<(), String> {
+    const LABEL: &str = "reden-library";
+
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        LABEL,
+        tauri::WebviewUrl::App("reden_library.html".into()),
+    )
+    .title("Online Projection Library")
+    .inner_size(1080.0, 760.0)
+    .min_inner_size(760.0, 560.0)
+    .build()
+    .map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn open_ui_demo_window(app: AppHandle) -> Result<(), String> {
     const LABEL: &str = "ui-demo-window";
 
@@ -2581,6 +2605,7 @@ fn main() {
             ai_test_connection,
             ai_chat_completion,
             open_material_list_window,
+            open_reden_library_window,
             open_ui_demo_window
         ])
         .run(tauri::generate_context!())

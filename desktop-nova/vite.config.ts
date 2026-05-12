@@ -17,6 +17,7 @@ export default defineConfig({
             input: {
                 main: resolve(__dirname, "index.html"),
                 materialList: resolve(__dirname, "material_list.html"),
+                redenLibrary: resolve(__dirname, "reden_library.html"),
                 demoWindow: resolve(__dirname, "demo_window.html")
             }
         }

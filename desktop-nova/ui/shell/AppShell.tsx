@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useState } from "react";
 import type { SyntheticEvent } from "react";
+import { listenEvent } from "../../src/platform/events";
 import { loadDatabases } from "../../src/business/facade";
 import { initI18n } from "../../src/business/facade";
 import { HomePage } from "../windows/main/pages/home/HomePage";
@@ -22,6 +23,7 @@ import {
   themeResourceKey,
   webDefaultThemeId,
 } from "./themeRuntime";
+import { projectionLibraryImportedEvent } from "../windows/libraryEvents";
 
 type NavIconUrls = Record<string, string>;
 
@@ -125,6 +127,17 @@ export function App() {
         setShowUiTestPage(normalizeShowUiTestPage(info.config.show_ui_test_page));
       })
       .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const unlistenPromise = listenEvent<{ path?: string }>(projectionLibraryImportedEvent, (event) => {
+      if (event.payload?.path) {
+        setCurrentFile(event.payload.path);
+      }
+    }).catch(() => undefined);
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten?.());
+    };
   }, []);
 
   useEffect(() => {
