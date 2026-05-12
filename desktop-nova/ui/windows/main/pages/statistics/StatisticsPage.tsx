@@ -64,7 +64,7 @@ function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; ite
       </div>
       <div className="material-list-hover-popup-row">ID：{item.id}</div>
       <div className="material-list-hover-popup-row">
-        总计：<strong>{total}</strong> = <strong>{stacks}</strong> × 64 + <strong>{remainder}</strong> = <strong>{shulkerBoxes}</strong> 潜影盒
+        总计： <strong>&nbsp;{total}&nbsp;</strong> = <strong>&nbsp;{stacks}&nbsp;</strong> × 64 + <strong>&nbsp;{remainder}&nbsp;</strong> = <strong>&nbsp;{shulkerBoxes}&nbsp;</strong> 潜影盒
       </div>
     </div>
   );

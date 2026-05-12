@@ -1,0 +1,1 @@
+export const projectionLibraryImportedEvent = "projection-library-record-imported";
