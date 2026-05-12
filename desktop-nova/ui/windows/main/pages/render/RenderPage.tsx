@@ -20,15 +20,13 @@ import { loadStructureStats, StatsData } from "../../../../../src/business/facad
 import { Dropdown } from "../../../../components/Dropdown";
 import { MaterialsDialog } from "../statistics/StatisticsPage";
 import {
-  elementToPhysicalRect,
-  elementToCssRect,
   getEmbeddedViewerStatus,
   hideEmbeddedViewer,
-  isUsableEmbeddedRect,
   showEmbeddedViewer,
   startEmbeddedViewer,
   updateEmbeddedViewerBounds,
 } from "../../../../../src/business/facade";
+import { elementToCssRect, elementToPhysicalRect, isUsableEmbeddedRect } from "../../embeddedViewerGeometry";
 
 function parseProgress(raw: string | null): RenderProgress | null {
   if (!raw) return null;

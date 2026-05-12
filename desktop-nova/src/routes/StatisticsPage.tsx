@@ -1,1 +1,0 @@
-export { MaterialsDialog, StatisticsPage } from "../../ui/windows/main/pages/statistics/StatisticsPage";

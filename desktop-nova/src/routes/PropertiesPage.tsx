@@ -1,1 +1,0 @@
-export { PropertiesPage } from "../../ui/windows/main/pages/properties/PropertiesPage";

@@ -72,12 +72,10 @@ src/litematicanova/
 当前 `desktop-nova` 与长期结构的对应关系：
 
 ```text
-desktop-nova/src/ui/                 -> src/litematicanova/ui/
+desktop-nova/ui/                     -> src/litematicanova/ui/
 desktop-nova/src/business/           -> src/litematicanova/core/services/ + core/<domain>/ + bridge/
 desktop-nova/src/platform/           -> src/litematicanova/platform/
 desktop-nova/src-tauri/              -> src/litematicanova/platform/tauri/
-desktop-nova/src/routes/             -> 迁移期兼容入口，最终并入 ui/pages 或 ui/app/routes
-desktop-nova/src/components/         -> 迁移期兼容入口，最终并入 ui/components
 desktop-nova/src/services/           -> 迁移期旧服务入口，后续按职责拆入 business/platform/core
 desktop-nova/ui/shell/               -> 旧 shell/theme 资源入口，最终并入 ui/shell
 desktop-nova/ui/themes/              -> 主题资源入口，最终并入 ui/themes
@@ -101,7 +99,7 @@ desktop-nova/ui/themes/              -> 主题资源入口，最终并入 ui/the
 
 - `business` 里既有纯领域逻辑，也有前端业务编排；迁移时拆成 `core/<domain>` 和 `core/services`。
 - 跨 Tauri/Rust/前端的数据结构目前散在 `business`、`platform`、`services` 中；迁移时集中到 `bridge/dto`、`bridge/events`、`bridge/mappers`。
-- `routes`、`components`、`services` 是兼容目录；新代码优先写入 `ui`、`business`、`platform`，只在需要保持旧 import 稳定时使用兼容入口。
+- `services` 是迁移期旧服务入口；新代码优先写入 `ui`、`business`、`platform`，只在需要保持旧 import 稳定时使用兼容入口。
 - `desktop-nova/src-tauri` 暂时保持不动；等前端目录迁移稳定后，再整体迁入 `platform/tauri` 并调整配置路径。
 
 ## 分层职责
@@ -177,9 +175,6 @@ UI 采用“应用装配、窗口、页面、组件、主题”分层。
 
 当前兼容入口：
 
-- `desktop-nova/src/App.tsx` re-export `ui/AppShell`。
-- `desktop-nova/src/routes/*` re-export `ui/windows/main/pages/*`。
-- `desktop-nova/src/components/*` re-export `ui/components/*`。
 - `desktop-nova/ui/pages/*` re-export `ui/windows/main/pages/*`，仅保留给迁移期旧 import 使用。
 
 这些薄入口用于降低迁移风险，后续继续收窄。导出的 TypeScript 函数、组件工具函数和公共 API 必须写 JSDoc。
@@ -267,7 +262,7 @@ API Key 不写入 localStorage、普通 config、日志、prompt 或 plan。用�
 ## 迁移建议
 
 1. 继续在 `desktop-nova/` 内收敛边界，保持 `npm run check:layers` 通过。
-2. 把当前 `desktop-nova/src/ui` 迁入 `src/litematicanova/ui`，保留短期 re-export 入口。
+2. 把当前 `desktop-nova/ui` 迁入 `src/litematicanova/ui`，保留短期 re-export 入口。
 3. 把当前 `desktop-nova/src/business` 拆入 `core/services`、`core/<domain>` 和 `bridge`。
 4. 把当前 `desktop-nova/src/platform` 迁入 `src/litematicanova/platform`。
 5. 把 `desktop-nova/src-tauri` 迁入 `src/litematicanova/platform/tauri`，同步调整 Vite/Tauri 配置路径。
