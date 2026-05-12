@@ -24,10 +24,12 @@ import { DISPLAY_MODE_OPTIONS, DisplayMode, loadDisplayMode, normalizeDisplayMod
 import {
   loadUserConfigMigratingLocalStorage,
   normalizeMaterialListWindowBehavior,
+  normalizeShowUiTestPage,
   normalizeTheme,
   saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
   saveRenderDisplayModeConfig,
+  saveShowUiTestPageConfig,
   saveThemeConfig,
 } from "../../../../../src/business/facade";
 
@@ -64,11 +66,12 @@ function PathRow({ label, path, info }: { label: string; path: string; info?: Pa
   );
 }
 
-export function SettingsPage({ theme, setTheme }: any) {
+export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [displayMode, setDisplayMode] = useState<DisplayMode>(loadDisplayMode());
   const [previewMode, setPreviewMode] = useState<DisplayMode>("normal");
   const [materialListWindowBehavior, setMaterialListWindowBehavior] = useState("independent_window");
+  const [showUiTestPage, setShowUiTestPageState] = useState(true);
   const [userConfig, setUserConfig] = useState<UserConfigInfo | null>(null);
   const [coreInfo, setCoreInfo] = useState<PathInfo | null>(null);
   const [viewerInfo, setViewerInfo] = useState<PathInfo | null>(null);
@@ -91,10 +94,13 @@ export function SettingsPage({ theme, setTheme }: any) {
   const [aiTestStatus, setAiTestStatus] = useState("");
 
   const applyUserConfig = (info: UserConfigInfo) => {
+    const showUiTest = normalizeShowUiTestPage(info.config.show_ui_test_page);
     setUserConfig(info);
     setDisplayMode(normalizeDisplayMode(info.config.render_display_mode));
     setPreviewMode(normalizeDisplayMode(info.config.preview_mode));
     setMaterialListWindowBehavior(normalizeMaterialListWindowBehavior(info.config.material_list_window_behavior));
+    setShowUiTestPageState(showUiTest);
+    setShowUiTestPage?.(showUiTest);
     setTheme(normalizeTheme(info.config.theme));
   };
 
@@ -147,6 +153,12 @@ export function SettingsPage({ theme, setTheme }: any) {
     const behavior = normalizeMaterialListWindowBehavior(value);
     setMaterialListWindowBehavior(behavior);
     applyUserConfig(await saveMaterialListWindowBehaviorConfig(behavior));
+  };
+
+  const handleShowUiTestPage = async (checked: boolean) => {
+    setShowUiTestPageState(checked);
+    setShowUiTestPage?.(checked);
+    applyUserConfig(await saveShowUiTestPageConfig(checked));
   };
 
   const checkBackend = async () => {
@@ -360,7 +372,7 @@ export function SettingsPage({ theme, setTheme }: any) {
       <div className="group-box">
         <div className="group-box-title">测试功能</div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>材料列表窗口行为</div>
+          <div className="form-label" style={{ width: 150 }}>子窗口行为</div>
           <div className="form-field">
             <select className="input" value={materialListWindowBehavior} onChange={(event) => handleMaterialListWindowBehavior(event.target.value)}>
               {MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS.map((option) => (
@@ -368,6 +380,16 @@ export function SettingsPage({ theme, setTheme }: any) {
               ))}
             </select>
           </div>
+        </div>
+        <div className="form-row">
+          <div className="form-label" style={{ width: 150 }}>显示 UI调试页</div>
+          <label className="form-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" checked={showUiTestPage} onChange={(event) => handleShowUiTestPage(event.target.checked)} />
+            <span>在左侧导航栏显示 UI 测试入口</span>
+          </label>
+        </div>
+        <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
+          材料列表和 UI 测试页中的演示窗口都会按照这里的子窗口行为决定使用独立窗口还是主窗口遮罩。
         </div>
       </div>
 

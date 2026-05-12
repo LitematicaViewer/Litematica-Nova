@@ -16,7 +16,8 @@ export default defineConfig({
         rollupOptions: {
             input: {
                 main: resolve(__dirname, "index.html"),
-                materialList: resolve(__dirname, "material_list.html")
+                materialList: resolve(__dirname, "material_list.html"),
+                demoWindow: resolve(__dirname, "demo_window.html")
             }
         }
     }

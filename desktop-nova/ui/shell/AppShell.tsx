@@ -13,7 +13,7 @@ import { RenderPage } from "../windows/main/pages/render/RenderPage";
 import { SettingsPage } from "../windows/main/pages/settings/SettingsPage";
 import { UiTestPage } from "../windows/main/pages/ui-test/UiTestPage";
 import { hideEmbeddedViewer, showEmbeddedViewer } from "../../src/business/facade";
-import { loadUserConfigMigratingLocalStorage, normalizeTheme, saveThemeConfig } from "../../src/business/facade";
+import { loadUserConfigMigratingLocalStorage, normalizeShowUiTestPage, normalizeTheme, saveThemeConfig } from "../../src/business/facade";
 import {
   announceThemeChange,
   applyThemeStylesheet,
@@ -100,6 +100,7 @@ export function App() {
   const [theme, setThemeState] = useState(webDefaultThemeId);
   const [route, setRoute] = useState("home");
   const [expanded, setExpanded] = useState(true);
+  const [showUiTestPage, setShowUiTestPage] = useState(true);
 
   useEffect(() => {
     const normalized = normalizeThemeId(theme);
@@ -119,7 +120,10 @@ export function App() {
     loadDatabases();
     initI18n();
     loadUserConfigMigratingLocalStorage()
-      .then((info) => setThemeState(normalizeThemeId(normalizeTheme(info.config.theme))))
+      .then((info) => {
+        setThemeState(normalizeThemeId(normalizeTheme(info.config.theme)));
+        setShowUiTestPage(normalizeShowUiTestPage(info.config.show_ui_test_page));
+      })
       .catch(() => undefined);
   }, []);
 
@@ -134,6 +138,12 @@ export function App() {
     showEmbeddedViewer().catch(() => undefined);
   }, [route]);
 
+  useEffect(() => {
+    if (!showUiTestPage && route === "ui_test") {
+      setRoute("settings");
+    }
+  }, [showUiTestPage, route]);
+
   const topPages: Record<string, { name: string; icon: string; comp: React.FC<any> }> = {
     home: { name: "主页", icon: "home", comp: HomePage },
     library: { name: "投影库", icon: "gallery", comp: LibraryPage },
@@ -146,7 +156,7 @@ export function App() {
   };
 
   const bottomPages: Record<string, { name: string; icon: string; comp: React.FC<any> }> = {
-    ui_test: { name: "UI 测试", icon: "ui_debug", comp: UiTestPage },
+    ...(showUiTestPage ? { ui_test: { name: "UI 测试", icon: "ui_debug", comp: UiTestPage } } : {}),
     settings: { name: "选项", icon: "options", comp: SettingsPage },
   };
 
@@ -205,7 +215,7 @@ export function App() {
         </nav>
       </aside>
       <main className="content">
-        <Page currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} />
+        <Page currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} setShowUiTestPage={setShowUiTestPage} />
       </main>
     </div>
   );

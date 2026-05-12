@@ -22,10 +22,12 @@ export type { MaterialListWindowBehavior, ThemeName } from "../../services/userC
 export {
   loadUserConfigMigratingLocalStorage,
   normalizeMaterialListWindowBehavior,
+  normalizeShowUiTestPage,
   normalizeTheme,
   saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
   saveRenderDisplayModeConfig,
+  saveShowUiTestPageConfig,
   saveThemeConfig,
 } from "../../services/userConfig";
 export type { DisplayMode } from "../../services/renderMode";
