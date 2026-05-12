@@ -1,7 +1,6 @@
 @import "../shell/theme.css";
 
 :root {
-    --ln-window-content-padding: 12px;
     color: var(--ln-body-text-color, #000000);
     background: var(--ln-ui-background-color, #ffffff);
     font-family: var(--ln-body-font-family, system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif);
@@ -80,23 +79,6 @@ td {
     display: block;
     width: auto;
     height: auto;
-}
-
-.app-shell {
-    display: flex;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    background: var(--ln-ui-background-color, Canvas);
-    color: var(--ln-body-text-color, CanvasText);
-}
-
-.content {
-    flex: 1;
-    min-width: 0;
-    height: 100%;
-    padding: var(--ln-window-content-padding);
-    overflow: hidden;
 }
 
 .page-pad,
@@ -345,33 +327,6 @@ label.setting-row:has(> input[type="radio"]) {
     display: flex;
 }
 
-.nav-list {
-    display: flex;
-    flex-direction: column;
-}
-
-.nav-list-bottom {
-    margin-top: auto;
-}
-
-.nav-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.nav-icon {
-    display: block;
-    flex: 0 0 auto;
-    width: 16px;
-    height: 16px;
-    object-fit: contain;
-}
-
-.theme-minecraft .nav-icon {
-    image-rendering: pixelated;
-}
-
 .btn {
     font: inherit;
 }
@@ -386,61 +341,6 @@ label.setting-row:has(> input[type="radio"]) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-}
-
-.material-list-hover-popup {
-    position: fixed;
-    z-index: 9999;
-    min-width: 310px;
-    max-width: calc(100vw - 8px);
-    padding: 8px;
-    border: 1px solid var(--border, ThreeDShadow);
-    background: var(--surface-elevated, var(--ln-ui-background-color, Canvas));
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    color: var(--text, var(--ln-body-text-color, CanvasText));
-    font-size: 12px;
-    pointer-events: none;
-}
-
-.material-list-hover-popup-row {
-    display: flex;
-    min-height: 32px;
-    align-items: center;
-    white-space: nowrap;
-}
-
-.material-list-hover-popup-item-row {
-    gap: 6px;
-}
-
-.material-list-hover-popup-label {
-    flex: 0 0 auto;
-}
-
-.material-list-hover-popup-name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.material-list-hover-popup strong {
-    font-weight: 700;
-}
-
-.theme-metro10 .material-list-hover-popup {
-    border: 2px solid #0078d7;
-    background-color: #f0f0f0;
-    box-shadow: none;
-    color: #000000;
-}
-
-.theme-minecraft .material-list-hover-popup {
-    border: 2px solid #999999;
-    background-color: #000000;
-    box-shadow: none;
-    color: #ffffff;
-    font-size: 16px;
-    image-rendering: pixelated;
 }
 
 .card,
