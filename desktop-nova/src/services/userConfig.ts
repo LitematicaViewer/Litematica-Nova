@@ -13,6 +13,10 @@ const MIGRATION_KEY = "lba.appdataConfigMigrated.v1";
 export type ThemeName = "WebDefault" | "Bootstrap5" | "Metro10" | "Minecraft";
 export type MaterialListWindowBehavior = "independent_window" | "main_window_overlay";
 
+export function normalizeShowUiTestPage(value: unknown): boolean {
+  return value !== false;
+}
+
 export function normalizeTheme(value: unknown): ThemeName {
   const key = String(value || "").trim().toLowerCase();
   if (key === "bootstrap5") return "Bootstrap5";
@@ -63,4 +67,8 @@ export async function savePreviewModeConfig(mode: string): Promise<UserConfigInf
  */
 export async function saveMaterialListWindowBehaviorConfig(behavior: string): Promise<UserConfigInfo> {
   return await saveUserConfig({ material_list_window_behavior: normalizeMaterialListWindowBehavior(behavior) });
+}
+
+export async function saveShowUiTestPageConfig(show: boolean): Promise<UserConfigInfo> {
+  return await saveUserConfig({ show_ui_test_page: normalizeShowUiTestPage(show) });
 }

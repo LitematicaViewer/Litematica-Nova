@@ -1,5 +1,10 @@
 import React, { useEffect, useState } from "react";
 
+import {
+  loadUserConfigMigratingLocalStorage,
+  normalizeMaterialListWindowBehavior,
+  openUiDemoWindow,
+} from "../../../../../src/business/facade";
 import { currentThemeId, subscribeToThemeChanges, themeResourceKey } from "../../../../shell/themeRuntime";
 
 const fallbackThumbExampleUrl = new URL("../../../../shell/resource/thumb_example.png", import.meta.url).href;
@@ -35,11 +40,27 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
  */
 export function UiTestPage() {
   const [themeId, setThemeId] = useState(() => currentThemeId());
+  const [showDemoOverlay, setShowDemoOverlay] = useState(false);
   useEffect(() => subscribeToThemeChanges(setThemeId), []);
 
   const thumbExampleUrl = thumbExampleUrlForTheme(themeId);
   const renderThumbExample = () =>
     thumbExampleUrl ? <img className="ui-test-thumb" src={thumbExampleUrl} alt="示例缩略图" /> : <span />;
+
+  const handleOpenDemoWindow = async () => {
+    const info = await loadUserConfigMigratingLocalStorage().catch(() => null);
+    const behavior = normalizeMaterialListWindowBehavior(info?.config.material_list_window_behavior);
+    if (behavior === "independent_window") {
+      try {
+        await openUiDemoWindow();
+        return;
+      } catch {
+        window.open("demo_window.html", "_blank", "popup=yes,width=720,height=520");
+        return;
+      }
+    }
+    setShowDemoOverlay(true);
+  };
 
   return (
     <section className="page-pad">
@@ -68,6 +89,11 @@ export function UiTestPage() {
             <button type="button">普通按钮</button>
             <button type="button" aria-pressed="true">可勾选</button>
             <button type="button" disabled>禁用</button>
+          </div>
+        </FormRow>
+        <FormRow label="子窗口：">
+          <div className="button-row">
+            <button type="button" onClick={handleOpenDemoWindow}>打开空的演示窗口</button>
           </div>
         </FormRow>
       </fieldset>
@@ -112,6 +138,32 @@ export function UiTestPage() {
           </tbody>
         </table>
       </fieldset>
+      {showDemoOverlay && (
+        <div className="dialog-overlay" onClick={() => setShowDemoOverlay(false)}>
+          <div
+            className="dialog-content"
+            style={{ width: 720, maxWidth: "90%", height: "80vh", display: "flex", flexDirection: "column", gap: 12, padding: 0, overflow: "hidden" }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "var(--surface-elevated)", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
+              <h3 style={{ margin: 0 }}>子窗口样式演示</h3>
+              <button className="btn material-list-close-button" type="button" aria-label="关闭演示窗口" onClick={() => setShowDemoOverlay(false)}>×</button>
+            </div>
+            <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12, flex: 1, overflow: "hidden" }}>
+              <div className="muted">当前按“子窗口行为”设置，以主窗口遮罩方式打开这个演示窗口。</div>
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 320,
+                  border: "1px dashed var(--border)",
+                  background: "var(--surface-elevated)",
+                  borderRadius: 8,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

@@ -147,6 +147,8 @@ struct UserConfig {
     preview_mode: String,
     #[serde(default = "default_material_list_window_behavior")]
     material_list_window_behavior: String,
+    #[serde(default = "default_show_ui_test_page")]
+    show_ui_test_page: bool,
 }
 
 #[derive(Deserialize)]
@@ -155,6 +157,7 @@ struct UserConfigInput {
     render_display_mode: Option<String>,
     preview_mode: Option<String>,
     material_list_window_behavior: Option<String>,
+    show_ui_test_page: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -352,11 +355,16 @@ fn default_user_config() -> UserConfig {
         render_display_mode: "normal".to_string(),
         preview_mode: "normal".to_string(),
         material_list_window_behavior: default_material_list_window_behavior(),
+        show_ui_test_page: default_show_ui_test_page(),
     }
 }
 
 fn default_material_list_window_behavior() -> String {
     "independent_window".to_string()
+}
+
+fn default_show_ui_test_page() -> bool {
+    true
 }
 
 fn normalize_material_list_window_behavior(value: &str) -> String {
@@ -1441,6 +1449,9 @@ fn save_user_config(input: UserConfigInput) -> Result<UserConfigInfo, String> {
         config.material_list_window_behavior =
             normalize_material_list_window_behavior(&behavior);
     }
+    if let Some(show) = input.show_ui_test_page {
+        config.show_ui_test_page = show;
+    }
     write_user_config_data(&dir, &config)?;
     Ok(UserConfigInfo {
         config_dir: dir.display().to_string(),
@@ -2472,6 +2483,30 @@ async fn open_material_list_window(
     Ok(())
 }
 
+#[tauri::command]
+async fn open_ui_demo_window(app: AppHandle) -> Result<(), String> {
+    const LABEL: &str = "ui-demo-window";
+
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        LABEL,
+        tauri::WebviewUrl::App("demo_window.html".into()),
+    )
+    .title("UI Demo Window")
+    .inner_size(720.0, 520.0)
+    .min_inner_size(560.0, 420.0)
+    .build()
+    .map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(BuildState {
@@ -2545,7 +2580,8 @@ fn main() {
             ai_clear_key,
             ai_test_connection,
             ai_chat_completion,
-            open_material_list_window
+            open_material_list_window,
+            open_ui_demo_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
