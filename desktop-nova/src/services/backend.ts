@@ -40,7 +40,7 @@ export {
 } from "../platform/backendProcess";
 export type { BackendTrace, CacheBuildLaunch, CacheBuildSnapshot } from "../platform/backendProcess";
 
-export { startNativeViewer } from "../platform/nativeViewer";
+export { openMaterialListWindow, startNativeViewer } from "../platform/nativeViewer";
 export { generatePreviewImage, renderPreviewImage } from "../platform/previewImage";
 export type { RenderPreviewOutput } from "../platform/previewImage";
 

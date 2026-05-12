@@ -11,6 +11,7 @@ const PREVIEW_MODE_KEY = "lba.preview.displayMode";
 const MIGRATION_KEY = "lba.appdataConfigMigrated.v1";
 
 export type ThemeName = "WebDefault" | "Bootstrap5" | "Metro10" | "Minecraft";
+export type MaterialListWindowBehavior = "independent_window" | "main_window_overlay";
 
 export function normalizeTheme(value: unknown): ThemeName {
   const key = String(value || "").trim().toLowerCase();
@@ -18,6 +19,13 @@ export function normalizeTheme(value: unknown): ThemeName {
   if (key === "metro10") return "Metro10";
   if (key === "minecraft") return "Minecraft";
   return "WebDefault";
+}
+
+/**
+ * Normalizes the material list window behavior stored in user config.
+ */
+export function normalizeMaterialListWindowBehavior(value: unknown): MaterialListWindowBehavior {
+  return String(value || "").trim() === "main_window_overlay" ? "main_window_overlay" : "independent_window";
 }
 
 export async function loadUserConfigMigratingLocalStorage(): Promise<UserConfigInfo> {
@@ -48,4 +56,11 @@ export async function saveRenderDisplayModeConfig(mode: string): Promise<UserCon
 
 export async function savePreviewModeConfig(mode: string): Promise<UserConfigInfo> {
   return await saveUserConfig({ preview_mode: normalizeDisplayMode(mode) as DisplayMode });
+}
+
+/**
+ * Persists how the material list should open from main-window pages.
+ */
+export async function saveMaterialListWindowBehaviorConfig(behavior: string): Promise<UserConfigInfo> {
+  return await saveUserConfig({ material_list_window_behavior: normalizeMaterialListWindowBehavior(behavior) });
 }

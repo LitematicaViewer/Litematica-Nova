@@ -9,7 +9,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "Litematica Nova BA", "width": 1024, "height": 768 }],
+    "windows": [{ "title": "Litematica Nova BA", "width": 854, "height": 480 }],
     "security": { "csp": null }
   },
   "bundle": {
