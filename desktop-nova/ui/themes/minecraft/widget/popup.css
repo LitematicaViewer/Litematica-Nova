@@ -1,0 +1,8 @@
+.theme-minecraft .material-list-hover-popup {
+    border: 2px solid #999999;
+    background-color: #000000;
+    box-shadow: none;
+    color: #ffffff;
+    font-size: 16px;
+    image-rendering: pixelated;
+}
