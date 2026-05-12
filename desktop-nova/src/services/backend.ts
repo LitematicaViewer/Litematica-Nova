@@ -11,13 +11,14 @@ export {
   saveUserConfig,
   setUserConfigDir,
 } from "../platform";
-export type { PathInfo, UserConfig, UserConfigInfo } from "../platform";
+export type { PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo } from "../platform";
 
 export {
   checkFileExists,
   getAppDataFilePath as getUserConfigFilePath,
   readAppDataFile as readUserConfigFile,
   readImageBase64,
+  readProjectionPreviewImage,
   readWorkspaceFile,
   writeAppDataFile as writeUserConfigFile,
   writeTextFileAbsolute,

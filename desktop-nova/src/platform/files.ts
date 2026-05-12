@@ -12,6 +12,12 @@ export interface PathInfo {
   has_litematic_ext: boolean;
 }
 
+export interface ProjectionPreviewImageOutput {
+  width: number;
+  height: number;
+  data_url: string;
+}
+
 export function readWorkspaceFile(path: string): Promise<string> {
   return invoke("read_file_string", { path });
 }
@@ -58,6 +64,10 @@ export function openFileParentDir(filePath: string): Promise<void> {
 
 export function readImageBase64(path: string): Promise<string> {
   return invoke("read_image_base64", { path });
+}
+
+export function readProjectionPreviewImage(path: string): Promise<ProjectionPreviewImageOutput | null> {
+  return invoke("read_projection_preview_image", { filePath: path });
 }
 
 export function cleanupLocalTempFiles(): Promise<string> {

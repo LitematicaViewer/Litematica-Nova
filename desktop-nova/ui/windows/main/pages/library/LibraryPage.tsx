@@ -9,7 +9,7 @@ import {
   saveLibrary,
   setRecordPreview,
 } from "../../../../../src/business/facade";
-import { checkFileExists, generatePreviewImage, openFileParentDir, openRedenLibraryWindow, readImageBase64, selectLitematicFile } from "../../../../../src/business/facade";
+import { checkFileExists, generatePreviewImage, openFileParentDir, openRedenLibraryWindow, readImageBase64, readProjectionPreviewImage, selectLitematicFile } from "../../../../../src/business/facade";
 import { loadUserConfigMigratingLocalStorage } from "../../../../../src/business/facade";
 import { DisplayMode, normalizeDisplayMode } from "../../../../../src/business/facade";
 import { listenEvent } from "../../../../../src/platform/events";
@@ -43,6 +43,8 @@ function ProjectionCard({
   record,
   isCurrent,
   previewDataUrl,
+  projectionPreviewDataUrl,
+  isLoadingProjectionPreview,
   previewMode,
   isGenerating,
   onSetCurrent,
@@ -51,6 +53,7 @@ function ProjectionCard({
   onReanalyze,
   onRemove,
   onGeneratePreview,
+  onEnsureProjectionPreview,
   onDragStart,
   onDragOver,
   onDrop,
@@ -58,6 +61,8 @@ function ProjectionCard({
   record: ProjectionRecord;
   isCurrent: boolean;
   previewDataUrl: string;
+  projectionPreviewDataUrl: string;
+  isLoadingProjectionPreview: boolean;
   previewMode: DisplayMode;
   isGenerating: boolean;
   onSetCurrent: () => void;
@@ -66,11 +71,12 @@ function ProjectionCard({
   onReanalyze: () => void;
   onRemove: () => void;
   onGeneratePreview: () => void;
+  onEnsureProjectionPreview: () => void;
   onDragStart: () => void;
   onDragOver: (event: React.DragEvent) => void;
   onDrop: () => void;
 }) {
-  const [imageKind, setImageKind] = useState<"render" | "preview">("render");
+  const [imageKind, setImageKind] = useState<"render" | "preview">("preview");
   const tags = record.tags?.length ? record.tags.join(" / ") : "无标签";
   const author = record.author || "Unknown";
   const statusLabel = recordStatusLabel(record);
@@ -79,6 +85,10 @@ function ProjectionCard({
     "lib-card-status",
     record.status === "missing" ? "lib-card-status-missing" : "lib-card-status-error",
   ].join(" ");
+
+  useEffect(() => {
+    if (imageKind === "preview") onEnsureProjectionPreview();
+  }, [imageKind, onEnsureProjectionPreview]);
 
   return (
     <div
@@ -124,9 +134,20 @@ function ProjectionCard({
       <div className="lib-card-right">
         <div className="lib-card-image-label">{imageKind === "render" ? "渲染图" : "预览图"}</div>
         <div className="lib-card-preview-box">
-          {imageKind === "render" && previewDataUrl ? <img className="lib-card-preview-image" src={previewDataUrl} alt="" /> : imageKind === "render" ? "暂无渲染图" : "预览图尚未接入"}
+          {imageKind === "render"
+            ? (previewDataUrl ? <img className="lib-card-preview-image" src={previewDataUrl} alt="" /> : "暂无渲染图")
+            : (isLoadingProjectionPreview
+              ? "加载中..."
+              : projectionPreviewDataUrl
+                ? <img className="lib-card-preview-image" src={projectionPreviewDataUrl} alt="" />
+                : "无内嵌预览图")}
         </div>
-        <button className="btn wide-button" onClick={(event) => { event.stopPropagation(); setImageKind(imageKind === "render" ? "preview" : "render"); }}>
+        <button className="btn wide-button" onClick={(event) => {
+          event.stopPropagation();
+          const nextKind = imageKind === "render" ? "preview" : "render";
+          setImageKind(nextKind);
+          if (nextKind === "preview") onEnsureProjectionPreview();
+        }}>
           {imageKind === "render" ? "切换到预览图" : "切换到渲染图"}
         </button>
         <button
@@ -157,6 +178,9 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [generatingPreviewPath, setGeneratingPreviewPath] = useState("");
   const [previewError, setPreviewError] = useState("");
   const [previewDataUrls, setPreviewDataUrls] = useState<Record<string, string>>({});
+  const [projectionPreviewDataUrls, setProjectionPreviewDataUrls] = useState<Record<string, string>>({});
+  const [projectionPreviewLoadingPaths, setProjectionPreviewLoadingPaths] = useState<Record<string, boolean>>({});
+  const [projectionPreviewLoadedPaths, setProjectionPreviewLoadedPaths] = useState<Record<string, boolean>>({});
   const [dragPath, setDragPath] = useState("");
 
   useEffect(() => {
@@ -243,6 +267,27 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       setPreviewError(String(err));
     } finally {
       setGeneratingPreviewPath("");
+    }
+  };
+
+  const ensureProjectionPreview = async (record: ProjectionRecord) => {
+    if (projectionPreviewLoadedPaths[record.path] || projectionPreviewLoadingPaths[record.path]) return;
+    setPreviewError("");
+    setProjectionPreviewLoadingPaths((current) => ({ ...current, [record.path]: true }));
+    try {
+      const output = await readProjectionPreviewImage(record.path);
+      if (output?.data_url) {
+        setProjectionPreviewDataUrls((current) => ({ ...current, [record.path]: output.data_url }));
+      }
+      setProjectionPreviewLoadedPaths((current) => ({ ...current, [record.path]: true }));
+    } catch (err: any) {
+      setPreviewError(`读取内嵌预览图失败\n${record.path}\n${String(err)}`);
+    } finally {
+      setProjectionPreviewLoadingPaths((current) => {
+        const next = { ...current };
+        delete next[record.path];
+        return next;
+      });
     }
   };
 
@@ -359,9 +404,12 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
                 onReanalyze={async () => setState(await addOrUpdateRecord(state, r.path))}
                 onRemove={() => handleRemove(r.path)}
                 onGeneratePreview={() => handleGeneratePreview(r)}
+                onEnsureProjectionPreview={() => ensureProjectionPreview(r)}
                 previewMode={previewMode}
                 isGenerating={generatingPreviewPath === r.path}
+                isLoadingProjectionPreview={!!projectionPreviewLoadingPaths[r.path]}
                 previewDataUrl={previewDataUrls[r.path] || ""}
+                projectionPreviewDataUrl={projectionPreviewDataUrls[r.path] || ""}
                 onDragStart={() => setDragPath(r.path)}
                 onDragOver={(event) => { if (sortMode === "manual") event.preventDefault(); }}
                 onDrop={() => handleDrop(r.path)}

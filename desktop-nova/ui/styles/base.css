@@ -691,7 +691,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .lib-card-right {
     width: 180px;
-    align-items: flex-end;
+    align-items: center;
 }
 
 .lib-card-line-main {
@@ -752,15 +752,16 @@ label.setting-row:has(> input[type="radio"]) {
 }
 
 .lib-card-preview-box {
-    width: 180px;
-    height: 110px;
+    width: 140px;
+    height: 140px;
+    margin: 0 auto;
 }
 
 .lib-card-image-label {
     width: 100%;
     color: var(--ln-body-text-color, CanvasText);
     font-weight: 700;
-    text-align: left;
+    text-align: center;
 }
 
 .lib-card-preview-image {
