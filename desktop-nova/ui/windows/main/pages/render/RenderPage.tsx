@@ -18,7 +18,7 @@ import { DISPLAY_MODE_OPTIONS, loadDisplayMode, saveDisplayMode } from "../../..
 import { loadUserConfigMigratingLocalStorage, saveRenderDisplayModeConfig } from "../../../../../src/business/facade";
 import { loadStructureStats, StatsData } from "../../../../../src/business/facade";
 import { Dropdown } from "../../../../components/Dropdown";
-import { MaterialsDialog } from "../statistics/StatisticsPage";
+import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
 import {
   getEmbeddedViewerStatus,
   hideEmbeddedViewer,
@@ -370,7 +370,7 @@ export function RenderPage({ currentFile, activeRoute }: any) {
           {currentFile || "请先在属性页打开 .litematic。"}
         </div>
         <div style={{ fontSize: "1.3em", fontWeight: "bold", textAlign: "center", flex: 1 }}>Render Bridge Page / 渲染页</div>
-        <button className="btn" onClick={() => setShowMaterials(true)} disabled={!currentFile || !statsData}>材料列表</button>
+        <button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!currentFile || !statsData}>材料列表</button>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

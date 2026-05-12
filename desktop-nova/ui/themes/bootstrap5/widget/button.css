@@ -57,3 +57,12 @@ input[type="reset"]:focus-visible {
     outline: 2px solid var(--ln-bootstrap5-button-color);
     outline-offset: 2px;
 }
+
+button.material-list-close-button {
+    width: var(--ln-bootstrap5-button-height);
+    min-width: var(--ln-bootstrap5-button-height);
+    height: var(--ln-bootstrap5-button-height);
+    min-height: var(--ln-bootstrap5-button-height);
+    padding: 0;
+    line-height: 1;
+}

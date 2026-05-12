@@ -70,3 +70,35 @@ input[type="reset"]:focus-visible {
     outline: 2px solid #ffffff;
     outline-offset: 2px;
 }
+
+button.material-list-close-button {
+    width: var(--ln-minecraft-button-height);
+    min-width: var(--ln-minecraft-button-height);
+    max-width: var(--ln-minecraft-button-height);
+    height: var(--ln-minecraft-button-height);
+    min-height: var(--ln-minecraft-button-height);
+    max-height: var(--ln-minecraft-button-height);
+    flex: 0 0 auto;
+    margin: -8px -12px 0 0;
+    padding: 0;
+    border: 0;
+    border-image-source: none;
+    overflow: hidden;
+    image-rendering: pixelated;
+    background: transparent url("../resource/button/windowClose_normal.png") center / contain no-repeat;
+    color: transparent;
+}
+
+button.material-list-close-button:hover:not(:disabled) {
+    --ln-minecraft-button-image: none;
+    border-image-source: none;
+    background-image: url("../resource/button/windowClose_hover.png");
+    color: transparent;
+}
+
+button.material-list-close-button:active:not(:disabled) {
+    --ln-minecraft-button-image: none;
+    border-image-source: none;
+    background-image: url("../resource/button/windowClose_hover.png");
+    color: transparent;
+}

@@ -4,6 +4,8 @@
     --ln-metro10-button-border-hover: #7a7a7a;
     --ln-metro10-button-text-disabled: #7a7a7a;
     --ln-metro10-button-height: 31px;
+    --ln-metro10-window-close-width: 47px;
+    --ln-metro10-window-close-height: 31px;
 }
 
 button,
@@ -56,4 +58,30 @@ input[type="submit"]:focus-visible,
 input[type="reset"]:focus-visible {
     outline: 2px solid Highlight;
     outline-offset: 2px;
+}
+
+button.material-list-close-button {
+    width: var(--ln-metro10-window-close-width);
+    min-width: var(--ln-metro10-window-close-width);
+    max-width: var(--ln-metro10-window-close-width);
+    height: var(--ln-metro10-window-close-height);
+    min-height: var(--ln-metro10-window-close-height);
+    max-height: var(--ln-metro10-window-close-height);
+    flex: 0 0 auto;
+    margin: -8px -12px 0 0;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    background: transparent url("../resource/button/windowClose_normal.png") center / auto no-repeat;
+    color: transparent;
+}
+
+button.material-list-close-button:hover:not(:disabled) {
+    border: 0;
+    background-image: url("../resource/button/windowClose_hover.png");
+}
+
+button.material-list-close-button:active:not(:disabled) {
+    background-color: transparent;
+    background-image: url("../resource/button/windowClose_hover.png");
 }

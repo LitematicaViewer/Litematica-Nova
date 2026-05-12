@@ -16,7 +16,7 @@ import {
 import { getLatestRenderCacheState, subscribeRenderCacheStore } from "../../../../../src/business/facade";
 import { loadStructureStats, StatsData } from "../../../../../src/business/facade";
 import { translateBlockId } from "../../../../../src/business/facade";
-import { MaterialsDialog } from "../statistics/StatisticsPage";
+import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
 import { getBlockIconDataUrl } from "../../../../../src/business/facade";
 
 interface LayerCanvasHandle {
@@ -339,7 +339,7 @@ export function FlakePage({ currentFile }: any) {
         <div style={{ flex: 1, color: "#aaa", fontSize: "0.9em" }}>
           {!ready ? (building ? "Cache is building; layer data will become available when the ready file is written." : "Layers unavailable: build 3D cache on the Render page first.") : `Y=${layerY}; ${sliceData?.blocks?.length || 0} non-air blocks. Wheel zooms, drag pans.`}
         </div>
-        <button className="btn" style={{ minWidth: 150, padding: "8px 16px" }} onClick={() => setShowMaterials(true)} disabled={!statsData}>
+        <button className="btn" style={{ minWidth: 150, padding: "8px 16px" }} onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!statsData}>
           Materials
         </button>
       </div>

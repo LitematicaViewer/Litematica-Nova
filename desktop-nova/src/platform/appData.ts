@@ -4,6 +4,7 @@ export interface UserConfig {
   theme: string;
   render_display_mode: string;
   preview_mode: string;
+  material_list_window_behavior: string;
 }
 
 export interface UserConfigInfo {

@@ -1,62 +1,105 @@
-﻿import React, { useEffect, useMemo, useState } from "react";
+﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   exportMaterials,
-  formatMaterialUnits,
   loadMaterialsScope,
   loadStructureStats,
   MaterialItem,
   StatsData,
 } from "../../../../../src/business/facade";
+import {
+  loadUserConfigMigratingLocalStorage,
+  normalizeMaterialListWindowBehavior,
+  openMaterialListWindow,
+} from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { Dropdown } from "../../../../components/Dropdown";
 
 function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; item: MaterialItem | null; multiplier: number }) {
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  const total = item ? Math.max(0, Math.floor(item.totalCount * multiplier)) : 0;
+  const stacks = Math.floor(total / 64);
+  const remainder = total % 64;
+  const shulkerBoxes = (total / 1728).toFixed(2);
+  const [position, setPosition] = useState(() => ({ left: x + 14, top: y + 14 }));
+
+  useLayoutEffect(() => {
+    if (!item) return;
+    const popup = popupRef.current;
+    const offset = 14;
+    const margin = 4;
+    if (!popup) {
+      setPosition({ left: x + offset, top: y + offset });
+      return;
+    }
+
+    const rect = popup.getBoundingClientRect();
+    let left = x + offset;
+    let top = y + offset;
+
+    if (left + rect.width > window.innerWidth - margin) {
+      left = x - rect.width - offset;
+    }
+    if (top + rect.height > window.innerHeight - margin) {
+      top = y - rect.height - offset;
+    }
+
+    left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
+    top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
+    setPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
+  }, [x, y, item, total]);
+
   if (!item) return null;
-  const total = Math.max(0, Math.floor(item.totalCount * multiplier));
 
   return (
     <div
-      style={{
-        position: "fixed",
-        left: x + 15,
-        top: y + 15,
-        backgroundColor: "var(--surface-elevated, #1a1a1a)",
-        border: "1px solid var(--border, #555)",
-        color: "var(--text, #fff)",
-        padding: "8px 12px",
-        zIndex: 9999,
-        pointerEvents: "none",
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        minWidth: 220,
-        boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
-        fontSize: "12px",
-      }}
+      ref={popupRef}
+      className="material-list-hover-popup"
+      role="tooltip"
+      style={{ left: position.left, top: position.top }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
+      <div className="material-list-hover-popup-row material-list-hover-popup-item-row">
+        <span className="material-list-hover-popup-label">项目：</span>
         <BlockIcon blockId={item.iconHint} />
-        <span>{item.name}</span>
+        <span className="material-list-hover-popup-name">{item.name}</span>
       </div>
-      <div style={{ color: "var(--text-muted, #aaa)", fontSize: "0.9em" }}>{item.id}</div>
-      <div>合计：{total} = {formatMaterialUnits(total)}</div>
-      {item.containerItemCount > 0 && (
-        <div style={{ color: "var(--text-muted, #aaa)" }}>
-          方块 {item.blockCount * multiplier} / 容器物品 {item.containerItemCount * multiplier}
-        </div>
-      )}
+      <div className="material-list-hover-popup-row">ID：{item.id}</div>
+      <div className="material-list-hover-popup-row">
+        总计：<strong>{total}</strong> = <strong>{stacks}</strong> × 64 + <strong>{remainder}</strong> = <strong>{shulkerBoxes}</strong> 潜影盒
+      </div>
     </div>
   );
 }
 
-export function MaterialsDialog({
+/**
+ * Opens the material list according to the user's configured window behavior.
+ */
+export async function openMaterialsWithWindowBehavior(currentFile: string, showOverlay: () => void): Promise<void> {
+  const info = await loadUserConfigMigratingLocalStorage().catch(() => null);
+  const behavior = normalizeMaterialListWindowBehavior(info?.config.material_list_window_behavior);
+  if (behavior === "independent_window") {
+    try {
+      await openMaterialListWindow(currentFile);
+      return;
+    } catch {
+      // Browser preview cannot create a desktop window, so keep the in-window dialog as fallback.
+    }
+  }
+  showOverlay();
+}
+
+/**
+ * Shared material-list body used by both the modal dialog and the desktop child window.
+ */
+export function MaterialListContent({
   data,
   onClose,
   currentFile,
+  standalone = false,
 }: {
   data: StatsData;
-  onClose: () => void;
+  onClose?: () => void;
   currentFile: string;
+  standalone?: boolean;
 }) {
   const [multiplier, setMultiplier] = useState(1);
   const [includeContainerItems, setIncludeContainerItems] = useState(false);
@@ -66,6 +109,16 @@ export function MaterialsDialog({
   const [error, setError] = useState("");
   const [hoverItem, setHoverItem] = useState<MaterialItem | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const contentStyle: React.CSSProperties = {
+    width: standalone ? "100%" : 720,
+    maxWidth: standalone ? "none" : "90%",
+    height: standalone ? "100%" : "80vh",
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+    padding: 0,
+    overflow: "hidden",
+  };
 
   const options = useMemo(() => {
     const next = [{ label: "整个投影", value: "scope:all" }];
@@ -112,11 +165,14 @@ export function MaterialsDialog({
   };
 
   return (
-    <div className="dialog-overlay" onMouseMove={(event) => setMousePos({ x: event.clientX, y: event.clientY })}>
-      <div className="dialog-content" style={{ width: 720, display: "flex", flexDirection: "column", gap: 12, height: "80vh", padding: 0 }}>
+      <div
+        className={standalone ? "material-list-window" : "dialog-content"}
+        style={contentStyle}
+        onMouseMove={(event) => setMousePos({ x: event.clientX, y: event.clientY })}
+      >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "var(--surface-elevated)", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
           <h3 style={{ margin: 0 }}>材料列表</h3>
-          <button className="btn" onClick={onClose} style={{ minWidth: 32, padding: "4px 8px" }}>×</button>
+          {onClose && <button className="btn material-list-close-button" type="button" aria-label="关闭材料列表" onClick={onClose}>×</button>}
         </div>
 
         <div style={{ padding: "0 12px", display: "flex", flexDirection: "column", gap: 12, flex: 1, overflow: "hidden" }}>
@@ -186,8 +242,15 @@ export function MaterialsDialog({
           </div>
         </div>
         <div style={{ height: 12 }} />
+        <MaterialTooltip x={mousePos.x} y={mousePos.y} item={hoverItem} multiplier={multiplier} />
       </div>
-      <MaterialTooltip x={mousePos.x} y={mousePos.y} item={hoverItem} multiplier={multiplier} />
+  );
+}
+
+export function MaterialsDialog({ data, onClose, currentFile }: { data: StatsData; onClose: () => void; currentFile: string }) {
+  return (
+    <div className="dialog-overlay">
+      <MaterialListContent data={data} onClose={onClose} currentFile={currentFile} />
     </div>
   );
 }
@@ -228,7 +291,7 @@ export function StatisticsPage({ currentFile }: any) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button className="btn" onClick={() => setShowMaterials(true)} disabled={!data}>材料列表</button>
+        <button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!data}>材料列表</button>
         <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input
             type="checkbox"
