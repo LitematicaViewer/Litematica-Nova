@@ -1,10 +1,12 @@
 ﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use base64::Engine;
+use flate2::read::GzDecoder;
+use image::{DynamicImage, RgbaImage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::env;
-use std::io::Write;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::Mutex;
@@ -138,6 +140,13 @@ struct RenderPreviewOutput {
     stdout: String,
     stderr: String,
     exit_code: Option<i32>,
+}
+
+#[derive(Serialize)]
+struct ProjectionPreviewOutput {
+    width: u32,
+    height: u32,
+    data_url: String,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -1868,6 +1877,125 @@ fn read_image_base64(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn read_projection_preview_image(
+    file_path: String,
+) -> Result<Option<ProjectionPreviewOutput>, String> {
+    let input = PathBuf::from(file_path);
+    let full_path = if input.is_absolute() {
+        input
+    } else {
+        get_root().join(input)
+    };
+
+    let file = std::fs::File::open(&full_path)
+        .map_err(|e| format!("open {} failed: {}", full_path.display(), e))?;
+    let mut decoder = GzDecoder::new(file);
+    let mut nbt_bytes = Vec::new();
+    decoder
+        .read_to_end(&mut nbt_bytes)
+        .map_err(|e| format!("decompress {} failed: {}", full_path.display(), e))?;
+
+    let Some(pixels) = extract_preview_image_data_from_nbt_bytes(&nbt_bytes)? else {
+        return Ok(None);
+    };
+    if pixels.is_empty() {
+        return Ok(None);
+    }
+
+    let size = (pixels.len() as f64).sqrt() as usize;
+    if size == 0 || size * size != pixels.len() {
+        return Err(format!(
+            "invalid PreviewImageData length {}, expected square pixel array",
+            pixels.len()
+        ));
+    }
+
+    let mut rgba = Vec::with_capacity(pixels.len() * 4);
+    for pixel in pixels {
+        let argb = pixel as u32;
+        rgba.push(((argb >> 16) & 0xff) as u8);
+        rgba.push(((argb >> 8) & 0xff) as u8);
+        rgba.push((argb & 0xff) as u8);
+        rgba.push(((argb >> 24) & 0xff) as u8);
+    }
+
+    let image = RgbaImage::from_raw(size as u32, size as u32, rgba)
+        .ok_or_else(|| "failed to build preview image buffer".to_string())?;
+    let mut png_bytes = Vec::new();
+    DynamicImage::ImageRgba8(image)
+        .write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+        .map_err(|e| format!("encode preview png failed: {}", e))?;
+
+    Ok(Some(ProjectionPreviewOutput {
+        width: size as u32,
+        height: size as u32,
+        data_url: format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png_bytes)
+        ),
+    }))
+}
+
+fn extract_preview_image_data_from_nbt_bytes(bytes: &[u8]) -> Result<Option<Vec<i32>>, String> {
+    const FIELD_NAME: &[u8] = b"PreviewImageData";
+    let Some(name_offset) = bytes
+        .windows(FIELD_NAME.len())
+        .position(|window| window == FIELD_NAME)
+    else {
+        return Ok(None);
+    };
+    if name_offset < 3 {
+        return Err("PreviewImageData field is truncated".to_string());
+    }
+
+    let tag_type = bytes[name_offset - 3];
+    let name_len = u16::from_be_bytes([bytes[name_offset - 2], bytes[name_offset - 1]]) as usize;
+    if tag_type != 11 {
+        return Err(format!(
+            "PreviewImageData tag type mismatch: expected 11 (IntArray), got {}",
+            tag_type
+        ));
+    }
+    if name_len != FIELD_NAME.len() {
+        return Err(format!(
+            "PreviewImageData name length mismatch: expected {}, got {}",
+            FIELD_NAME.len(),
+            name_len
+        ));
+    }
+
+    let data_start = name_offset + FIELD_NAME.len();
+    if data_start + 4 > bytes.len() {
+        return Err("PreviewImageData array length is truncated".to_string());
+    }
+    let array_len = i32::from_be_bytes([
+        bytes[data_start],
+        bytes[data_start + 1],
+        bytes[data_start + 2],
+        bytes[data_start + 3],
+    ]);
+    if array_len < 0 {
+        return Err(format!("PreviewImageData length is negative: {}", array_len));
+    }
+    let array_len = array_len as usize;
+    let payload_start = data_start + 4;
+    let payload_end = payload_start + array_len * 4;
+    if payload_end > bytes.len() {
+        return Err(format!(
+            "PreviewImageData payload truncated: expected {} bytes, got {}",
+            array_len * 4,
+            bytes.len().saturating_sub(payload_start)
+        ));
+    }
+
+    let mut pixels = Vec::with_capacity(array_len);
+    for chunk in bytes[payload_start..payload_end].chunks_exact(4) {
+        pixels.push(i32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+    Ok(Some(pixels))
+}
+
+#[tauri::command]
 fn open_file_parent_dir(file_path: String) -> Result<(), String> {
     let input = PathBuf::from(&file_path);
     let full_path = if input.is_absolute() {
@@ -2592,6 +2720,7 @@ fn main() {
             get_workspace_root,
             get_path_info,
             read_image_base64,
+            read_projection_preview_image,
             open_file_parent_dir,
             open_workspace_path,
             cleanup_local_temp_files,
