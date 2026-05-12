@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, State, Window};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tauri_plugin_dialog::DialogExt;
 
 #[cfg(windows)]
@@ -145,6 +145,8 @@ struct UserConfig {
     theme: String,
     render_display_mode: String,
     preview_mode: String,
+    #[serde(default = "default_material_list_window_behavior")]
+    material_list_window_behavior: String,
 }
 
 #[derive(Deserialize)]
@@ -152,6 +154,7 @@ struct UserConfigInput {
     theme: Option<String>,
     render_display_mode: Option<String>,
     preview_mode: Option<String>,
+    material_list_window_behavior: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -348,6 +351,18 @@ fn default_user_config() -> UserConfig {
         theme: "WebDefault".to_string(),
         render_display_mode: "normal".to_string(),
         preview_mode: "normal".to_string(),
+        material_list_window_behavior: default_material_list_window_behavior(),
+    }
+}
+
+fn default_material_list_window_behavior() -> String {
+    "independent_window".to_string()
+}
+
+fn normalize_material_list_window_behavior(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "main_window_overlay" => "main_window_overlay".to_string(),
+        _ => "independent_window".to_string(),
     }
 }
 
@@ -377,6 +392,8 @@ fn read_user_config_data(dir: &Path) -> UserConfig {
     config.theme = normalize_theme(&config.theme);
     config.render_display_mode = normalize_mode_string(&config.render_display_mode);
     config.preview_mode = normalize_mode_string(&config.preview_mode);
+    config.material_list_window_behavior =
+        normalize_material_list_window_behavior(&config.material_list_window_behavior);
     config
 }
 
@@ -1420,6 +1437,10 @@ fn save_user_config(input: UserConfigInput) -> Result<UserConfigInfo, String> {
     if let Some(mode) = input.preview_mode {
         config.preview_mode = normalize_mode_string(&mode);
     }
+    if let Some(behavior) = input.material_list_window_behavior {
+        config.material_list_window_behavior =
+            normalize_material_list_window_behavior(&behavior);
+    }
     write_user_config_data(&dir, &config)?;
     Ok(UserConfigInfo {
         config_dir: dir.display().to_string(),
@@ -2405,23 +2426,42 @@ fn mock_ai_plan_response() -> String {
     .to_string()
 }
 
+fn query_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
 #[tauri::command]
 async fn open_material_list_window(
     app: AppHandle,
-    _active_file: Option<String>,
+    active_file: Option<String>,
 ) -> Result<(), String> {
     const LABEL: &str = "material-list";
 
     if let Some(window) = app.get_webview_window(LABEL) {
         window.show().map_err(|err| err.to_string())?;
         window.set_focus().map_err(|err| err.to_string())?;
+        app.emit_to(LABEL, "material-list-open-file", active_file)
+            .map_err(|err| err.to_string())?;
         return Ok(());
     }
+
+    let url = match active_file.as_deref().filter(|file| !file.trim().is_empty()) {
+        Some(file) => format!("material_list.html?file={}", query_encode(file)),
+        None => "material_list.html".to_string(),
+    };
 
     tauri::WebviewWindowBuilder::new(
         &app,
         LABEL,
-        tauri::WebviewUrl::App("material_list.html".into()),
+        tauri::WebviewUrl::App(url.into()),
     )
     .title("Material List")
     .inner_size(720.0, 520.0)

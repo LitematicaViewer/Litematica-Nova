@@ -376,6 +376,73 @@ label.setting-row:has(> input[type="radio"]) {
     font: inherit;
 }
 
+.material-list-close-button {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    padding: 0;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.material-list-hover-popup {
+    position: fixed;
+    z-index: 9999;
+    min-width: 310px;
+    max-width: calc(100vw - 8px);
+    padding: 8px;
+    border: 1px solid var(--border, ThreeDShadow);
+    background: var(--surface-elevated, var(--ln-ui-background-color, Canvas));
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    color: var(--text, var(--ln-body-text-color, CanvasText));
+    font-size: 12px;
+    pointer-events: none;
+}
+
+.material-list-hover-popup-row {
+    display: flex;
+    min-height: 32px;
+    align-items: center;
+    white-space: nowrap;
+}
+
+.material-list-hover-popup-item-row {
+    gap: 6px;
+}
+
+.material-list-hover-popup-label {
+    flex: 0 0 auto;
+}
+
+.material-list-hover-popup-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.material-list-hover-popup strong {
+    font-weight: 700;
+}
+
+.theme-metro10 .material-list-hover-popup {
+    border: 2px solid #0078d7;
+    background-color: #f0f0f0;
+    box-shadow: none;
+    color: #000000;
+}
+
+.theme-minecraft .material-list-hover-popup {
+    border: 2px solid #999999;
+    background-color: #000000;
+    box-shadow: none;
+    color: #ffffff;
+    font-size: 16px;
+    image-rendering: pixelated;
+}
+
 .card,
 .group-box,
 .generate-operation,
@@ -559,6 +626,22 @@ pre {
     min-width: 0;
     color: var(--ln-body-text-color, CanvasText);
     background: var(--ln-ui-background-color, Canvas);
+}
+
+.material-list-window-state {
+    display: grid;
+    width: 100%;
+    height: 100%;
+    place-items: center;
+    padding: 24px;
+    color: GrayText;
+    text-align: center;
+}
+
+.material-list-window-error {
+    margin: 0;
+    color: #ffb3b3;
+    white-space: pre-wrap;
 }
 
 .material-list-panel {

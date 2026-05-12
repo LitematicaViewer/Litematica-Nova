@@ -21,7 +21,15 @@ import {
   UserConfigInfo,
 } from "../../../../../src/business/facade";
 import { DISPLAY_MODE_OPTIONS, DisplayMode, loadDisplayMode, normalizeDisplayMode, saveDisplayMode } from "../../../../../src/business/facade";
-import { loadUserConfigMigratingLocalStorage, normalizeTheme, savePreviewModeConfig, saveRenderDisplayModeConfig, saveThemeConfig } from "../../../../../src/business/facade";
+import {
+  loadUserConfigMigratingLocalStorage,
+  normalizeMaterialListWindowBehavior,
+  normalizeTheme,
+  saveMaterialListWindowBehaviorConfig,
+  savePreviewModeConfig,
+  saveRenderDisplayModeConfig,
+  saveThemeConfig,
+} from "../../../../../src/business/facade";
 
 const BLOCKSTATE_DB = "data/minecraft_blockstates/26.1.json";
 const BLOCKSTATE_ZH = "data/minecraft_blockstates/26.1.zh_cn.json";
@@ -31,6 +39,10 @@ const NOVA_THEME_OPTIONS = [
   { value: "Bootstrap5", label: "Bootstrap5" },
   { value: "Metro10", label: "Metro10" },
   { value: "Minecraft", label: "Minecraft" },
+];
+const MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS = [
+  { value: "independent_window", label: "独立窗口" },
+  { value: "main_window_overlay", label: "主窗口遮罩" },
 ];
 
 function statusText(ok: boolean | null) {
@@ -56,6 +68,7 @@ export function SettingsPage({ theme, setTheme }: any) {
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [displayMode, setDisplayMode] = useState<DisplayMode>(loadDisplayMode());
   const [previewMode, setPreviewMode] = useState<DisplayMode>("normal");
+  const [materialListWindowBehavior, setMaterialListWindowBehavior] = useState("independent_window");
   const [userConfig, setUserConfig] = useState<UserConfigInfo | null>(null);
   const [coreInfo, setCoreInfo] = useState<PathInfo | null>(null);
   const [viewerInfo, setViewerInfo] = useState<PathInfo | null>(null);
@@ -81,6 +94,7 @@ export function SettingsPage({ theme, setTheme }: any) {
     setUserConfig(info);
     setDisplayMode(normalizeDisplayMode(info.config.render_display_mode));
     setPreviewMode(normalizeDisplayMode(info.config.preview_mode));
+    setMaterialListWindowBehavior(normalizeMaterialListWindowBehavior(info.config.material_list_window_behavior));
     setTheme(normalizeTheme(info.config.theme));
   };
 
@@ -127,6 +141,12 @@ export function SettingsPage({ theme, setTheme }: any) {
     const mode = normalizeDisplayMode(value);
     setPreviewMode(mode);
     applyUserConfig(await savePreviewModeConfig(mode));
+  };
+
+  const handleMaterialListWindowBehavior = async (value: string) => {
+    const behavior = normalizeMaterialListWindowBehavior(value);
+    setMaterialListWindowBehavior(behavior);
+    applyUserConfig(await saveMaterialListWindowBehaviorConfig(behavior));
   };
 
   const checkBackend = async () => {
@@ -334,6 +354,20 @@ export function SettingsPage({ theme, setTheme }: any) {
         )}
         <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
           API Key 不写入 localStorage、普通 config、prompt、plan 或日志；页面不会回显已保存的真实 Key。
+        </div>
+      </div>
+
+      <div className="group-box">
+        <div className="group-box-title">测试功能</div>
+        <div className="form-row">
+          <div className="form-label" style={{ width: 150 }}>材料列表窗口行为</div>
+          <div className="form-field">
+            <select className="input" value={materialListWindowBehavior} onChange={(event) => handleMaterialListWindowBehavior(event.target.value)}>
+              {MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 

@@ -18,10 +18,12 @@ export {
   saveUserConfig,
   setUserConfigDir,
 } from "../../services/backend";
-export type { ThemeName } from "../../services/userConfig";
+export type { MaterialListWindowBehavior, ThemeName } from "../../services/userConfig";
 export {
   loadUserConfigMigratingLocalStorage,
+  normalizeMaterialListWindowBehavior,
   normalizeTheme,
+  saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
   saveRenderDisplayModeConfig,
   saveThemeConfig,
