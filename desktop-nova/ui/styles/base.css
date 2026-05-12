@@ -816,6 +816,11 @@ label.setting-row:has(> input[type="radio"]) {
     font-size: .9em;
 }
 
+.reden-footer {
+    padding-top: 8px;
+    border-top: 1px solid ThreeDShadow;
+}
+
 .reden-status-error {
     color: #ff6666;
 }

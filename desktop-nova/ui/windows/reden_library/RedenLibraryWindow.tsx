@@ -185,12 +185,6 @@ export function RedenLibraryWindow() {
           </button>
         </div>
 
-        {redenStatus && (
-          <div className={statusClassName}>
-            {redenStatus}
-          </div>
-        )}
-
         <div className="reden-content-grid">
           <div className="reden-results-pane">
             <div className="reden-pane-title">搜索结果</div>
@@ -309,6 +303,14 @@ export function RedenLibraryWindow() {
             )}
           </div>
         </div>
+
+        {redenStatus && (
+          <footer className="reden-footer">
+            <div className={statusClassName}>
+              {redenStatus}
+            </div>
+          </footer>
+        )}
       </section>
     </main>
   );
