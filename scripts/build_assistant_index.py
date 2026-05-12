@@ -70,7 +70,7 @@ MODULE_ROLE_HINTS = {
     "tools/viewer-core/src/native_viewer.rs": ["native_window", "wgpu", "preview_output"],
     "tools/viewer-core/src/analyze.rs": ["analysis", "palette_frequency"],
     "desktop-nova/src/services/backend.ts": ["tauri_bridge", "desktop_backend"],
-    "desktop-nova/src/routes/GeneratePage.tsx": ["ai_projection", "plan_generation"],
+    "desktop-nova/ui/windows/main/pages/generate/GeneratePage.tsx": ["ai_projection", "plan_generation"],
 }
 
 
