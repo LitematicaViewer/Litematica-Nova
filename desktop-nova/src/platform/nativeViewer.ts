@@ -6,6 +6,9 @@ export function startNativeViewer(filePath: string, displayMode = "full", cacheI
   return invoke("start_native_viewer", { filePath, displayMode, cacheInput: cacheInput || null });
 }
 
+/**
+ * Opens or focuses the desktop material-list window for the active projection.
+ */
 export function openMaterialListWindow(activeFile?: string | null): Promise<void> {
   return invoke("open_material_list_window", { activeFile: activeFile || null });
 }

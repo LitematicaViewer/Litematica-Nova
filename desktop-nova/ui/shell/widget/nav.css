@@ -1,0 +1,105 @@
+.app-shell {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--ln-ui-background-color, Canvas);
+    color: var(--ln-body-text-color, CanvasText);
+}
+
+.content {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: var(--ln-window-content-padding);
+    overflow: hidden;
+}
+
+.sidebar {
+    display: flex;
+    flex: 0 0 220px;
+    width: 220px;
+    min-width: 220px;
+    flex-direction: column;
+    /* border-right: 1px solid ThreeDShadow; */
+    background: var(--ln-navigation-background-color, #ffffff);
+}
+
+.sidebar-collapsed {
+    flex-basis: 48px;
+    width: 48px;
+    min-width: 48px;
+}
+
+.nav-expand,
+.nav-item {
+    display: flex;
+    width: 100%;
+    min-height: 48px;
+    align-items: center;
+    gap: 12px;
+    padding: 0 12px;
+    border-width: 0 0 1px;
+    border-color: ThreeDShadow;
+    text-align: left;
+}
+
+.sidebar-collapsed .nav-expand,
+.sidebar-collapsed .nav-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+}
+
+.nav-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.nav-list-bottom {
+    margin-top: auto;
+}
+
+.nav-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nav-icon {
+    display: block;
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+}
+
+.nav-item-active {
+    border-left: 4px solid Highlight;
+    padding-left: 12px;
+}
+
+.sidebar-collapsed .nav-item-active {
+    /* border-right: 4px solid transparent; */
+    padding-left: 0;
+}
+
+@media (max-width: 760px) {
+    .sidebar {
+        flex-basis: 48px;
+        width: 48px;
+        min-width: 48px;
+    }
+
+    .sidebar .nav-expand,
+    .sidebar .nav-item {
+        justify-content: center;
+        gap: 0;
+        padding: 0;
+    }
+
+    .sidebar .nav-expand strong,
+    .sidebar .nav-item .nav-label {
+        display: none;
+    }
+}
