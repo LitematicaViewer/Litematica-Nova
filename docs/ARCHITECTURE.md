@@ -77,7 +77,7 @@ desktop-nova/src/business/           -> src/litematicanova/core/services/ + core
 desktop-nova/src/platform/           -> src/litematicanova/platform/
 desktop-nova/src-tauri/              -> src/litematicanova/platform/tauri/
 desktop-nova/src/services/           -> 迁移期旧服务入口，后续按职责拆入 business/platform/core
-desktop-nova/ui/shell/               -> 旧 shell/theme 资源入口，最终并入 ui/shell
+desktop-nova/ui/shell/               -> 当前 AppShell、导航、主题运行时、默认主题和回退样式入口，最终并入 ui/shell
 desktop-nova/ui/themes/              -> 主题资源入口，最终并入 ui/themes
 ```
 
@@ -117,8 +117,9 @@ desktop-nova/ui/themes/              -> 主题资源入口，最终并入 ui/the
 - `desktop-nova/ui/windows/main/pages/`：主窗口页面级组件。页面可以编排业务动作，但不放可复用控件实现。
 - `desktop-nova/ui/windows/`：多窗口入口，例如主窗口和材料列表窗口。
 - `desktop-nova/ui/components/`：跨页面、跨窗口复用组件。
-- `desktop-nova/ui/shell/`：AppShell、导航、主题切换和窗口框架。
-- `desktop-nova/ui/styles/`：全局样式入口。
+- `desktop-nova/ui/shell/`：AppShell、导航、主题运行时、默认主题和回退样式入口。
+- `desktop-nova/ui/themes/`：主题包、主题资源和控件差异样式。
+- `desktop-nova/ui/styles/`：全局基础样式和页面通用结构，不承载默认主题语义。
 - `desktop-nova/src/business/`：投影库、统计、生成、替换、AI、Reden、render cache、settings 等业务编排。
 - `desktop-nova/src/platform/`：Tauri invoke、文件、AppData、后端进程、viewer、HTTP、key storage。
 
@@ -167,17 +168,23 @@ UI 采用“应用装配、窗口、页面、组件、主题”分层。
 - `ui/windows/` 放多窗口入口，例如主窗口和材料列表窗口。
 - `ui/windows/main/pages/` 放主窗口页面级组件。页面可以编排业务动作，但不放可复用控件实现。
 - `ui/windows/<window-name>/` 放特定窗口的入口、窗口组件和窗口私有页面。
-- `ui/pages/` 是迁移期兼容入口，不再新增实际页面实现。
 - `ui/components/` 放跨页面、跨窗口复用组件。
-- `ui/shell/` 放 AppShell、导航、主题切换和窗口框架。
-- `ui/themes/<theme-name>/` 放主题 CSS、主题资源和控件样式。
+- `ui/shell/` 放 AppShell、导航、主题运行时、默认主题、默认控件样式和回退资源。
+- `ui/themes/<theme-name>/` 放主题 CSS、主题资源和控件差异样式。
+- `ui/styles/` 放全局基础样式入口、reset、基础元素样式和页面通用结构，不放默认主题 token、shell 导航结构或主题变体规则。
 - `ui/assets/` 放 UI 私有静态资源。可被多个运行时使用的大型资源应放 `data/` 或 `pack-in/`。
 
-当前兼容入口：
+当前已清理 `desktop-nova/ui/pages/` 兼容入口。新代码直接使用 `ui/windows/main/pages/` 中的真实页面组件，不再新增页面 re-export 层。
 
-- `desktop-nova/ui/pages/*` re-export `ui/windows/main/pages/*`，仅保留给迁移期旧 import 使用。
+样式归属约定：
 
-这些薄入口用于降低迁移风险，后续继续收窄。导出的 TypeScript 函数、组件工具函数和公共 API 必须写 JSDoc。
+- `ui/shell/theme.css` 是默认主题入口，负责导入默认 `widget/*.css` 并提供 WebDefault 回退 token。
+- `ui/shell/widget/*.css` 放默认控件样式、shell 样式和没有外部主题时的最小可用回退样式。
+- `ui/themes/<theme-name>/theme.css` 是具体主题入口，负责导入该主题的 `widget/*.css` 和主题 token。
+- `ui/themes/<theme-name>/widget/*.css` 只放该主题相对默认样式的差异，例如按钮、导航、输入框、悬浮窗等主题化外观。
+- `ui/styles/base.css` 可以导入默认主题入口，但自身只维护全局基础和页面通用布局。
+
+导出的 TypeScript 函数、组件工具函数和公共 API 必须写 JSDoc。
 
 ## Tauri 与 Rust 后端桥接
 
