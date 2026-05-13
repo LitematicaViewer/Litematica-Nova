@@ -7,6 +7,9 @@ import {
   getRedenSizeRules,
   importDownloadedLitematic,
   loadLibrary,
+  loadUserConfigMigratingLocalStorage,
+  normalizeMaterialListWindowBehavior,
+  openRedenLibraryWindow as openRedenLibraryDesktopWindow,
   RedenMachine,
   RedenSizes,
   searchRedenLitematica,
@@ -57,25 +60,29 @@ function redenSummary(item: RedenMachine): string {
 }
 
 /**
- * Renders the RedenMC online projection library window.
+ * Opens the online projection library according to the user's configured child-window behavior.
  */
-export function RedenLibraryWindow() {
-  const [themeId, setThemeId] = useState(currentThemeId());
+export async function openRedenLibraryWithWindowBehavior(showOverlay: () => void): Promise<void> {
+  const info = await loadUserConfigMigratingLocalStorage().catch(() => null);
+  const behavior = normalizeMaterialListWindowBehavior(info?.config.material_list_window_behavior);
+  if (behavior === "independent_window") {
+    try {
+      await openRedenLibraryDesktopWindow();
+      return;
+    } catch {
+      // Browser preview cannot create a desktop window, so fall back to the in-window dialog.
+    }
+  }
+  showOverlay();
+}
+
+function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
   const [redenQuery, setRedenQuery] = useState("刷石机");
   const [redenResults, setRedenResults] = useState<RedenMachine[]>([]);
   const [redenDetail, setRedenDetail] = useState<RedenMachine | null>(null);
   const [redenStatus, setRedenStatus] = useState("");
   const [redenBusy, setRedenBusy] = useState("");
   const [redenSizes, setRedenSizes] = useState<RedenSizes>({});
-
-  useEffect(() => {
-    applyThemeStylesheet(themeId);
-  }, [themeId]);
-
-  useEffect(() => {
-    setThemeId(currentThemeId());
-    return subscribeToThemeChanges(setThemeId);
-  }, []);
 
   const handleRedenSearch = async () => {
     const query = redenQuery.trim();
@@ -158,21 +165,22 @@ export function RedenLibraryWindow() {
   };
 
   const statusClassName = [
-    "reden-status",
-    redenStatus.includes("失败") || redenStatus.includes("不合法") ? "reden-status-error" : "",
+    "subwindow-status-text",
+    redenStatus.includes("失败") || redenStatus.includes("不合法") ? "subwindow-status-text-error" : "",
   ].filter(Boolean).join(" ");
 
   return (
-    <main
-      className={["reden-library-window", themeClassName(themeId)].filter(Boolean).join(" ")}
-    >
-      <div className="reden-library-header">
-        <div className="reden-library-title">在线投影库 / RedenMC</div>
-        <div className="reden-library-subtitle">搜索、查看详情并直接导入投影库</div>
+    <section className="subwindow-panel-shell">
+      <div className="subwindow-title-bar">
+        <div className="subwindow-title-stack">
+          <h3 className="subwindow-title">在线投影库 / RedenMC</h3>
+        </div>
+        {onClose ? <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</button> : null}
       </div>
+      <p className="muted subwindow-subtitle">搜索、查看详情并直接导入投影库</p>
 
-      <section className="reden-library-panel">
-        <div className="reden-search-row">
+      <div className="subwindow-body">
+        <div className="subwindow-toolbar subwindow-wrap-row">
           <input
             className="input nova-input-flex"
             value={redenQuery}
@@ -232,7 +240,7 @@ export function RedenLibraryWindow() {
                   </div>
                 );
               }) : (
-                <div className="reden-empty-results">
+                <div className="subwindow-empty-state">
                   暂无结果。请输入关键词后开始搜索。
                 </div>
               )}
@@ -299,7 +307,7 @@ export function RedenLibraryWindow() {
                 )}
               </div>
             ) : (
-              <div className="reden-empty-detail">请选择左侧搜索结果查看详情。</div>
+              <div className="subwindow-status-text reden-empty-detail">请选择左侧搜索结果查看详情。</div>
             )}
           </div>
         </div>
@@ -311,7 +319,42 @@ export function RedenLibraryWindow() {
             </div>
           </footer>
         )}
-      </section>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Overlay dialog form of the online projection library.
+ */
+export function RedenLibraryDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <div className="dialog-content subwindow-frame subwindow-frame-wide" onClick={(event) => event.stopPropagation()}>
+        <RedenLibraryPanel onClose={onClose} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Renders the standalone desktop window used for the online projection library.
+ */
+export function RedenLibraryWindow() {
+  const [themeId, setThemeId] = useState(currentThemeId());
+
+  useEffect(() => {
+    applyThemeStylesheet(themeId);
+  }, [themeId]);
+
+  useEffect(() => {
+    setThemeId(currentThemeId());
+    return subscribeToThemeChanges(setThemeId);
+  }, []);
+
+  return (
+    <main className={["subwindow-standalone-page", themeClassName(themeId)].filter(Boolean).join(" ")}>
+      <RedenLibraryPanel />
     </main>
   );
 }
