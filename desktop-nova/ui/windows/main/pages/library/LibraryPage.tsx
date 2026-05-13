@@ -9,8 +9,9 @@ import {
   saveLibrary,
   setRecordPreview,
 } from "../../../../../src/business/facade";
-import { checkFileExists, generatePreviewImage, openFileParentDir, openRedenLibraryWindow, readImageBase64, readProjectionPreviewImage, selectLitematicFile } from "../../../../../src/business/facade";
+import { checkFileExists, generatePreviewImage, openFileParentDir, readImageBase64, readProjectionPreviewImage, selectLitematicFile } from "../../../../../src/business/facade";
 import { LocalLibraryFoldersDialog, openLocalLibraryFoldersWithWindowBehavior } from "../../../local_library_folders";
+import { RedenLibraryDialog, openRedenLibraryWithWindowBehavior } from "../../../reden_library";
 import { loadUserConfigMigratingLocalStorage } from "../../../../../src/business/facade";
 import { DisplayMode, normalizeDisplayMode } from "../../../../../src/business/facade";
 import { listenEvent } from "../../../../../src/platform/events";
@@ -183,6 +184,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [projectionPreviewLoadingPaths, setProjectionPreviewLoadingPaths] = useState<Record<string, boolean>>({});
   const [projectionPreviewLoadedPaths, setProjectionPreviewLoadedPaths] = useState<Record<string, boolean>>({});
   const [showLocalLibraryFoldersOverlay, setShowLocalLibraryFoldersOverlay] = useState(false);
+  const [showRedenLibraryOverlay, setShowRedenLibraryOverlay] = useState(false);
   const [dragPath, setDragPath] = useState("");
 
   useEffect(() => {
@@ -243,6 +245,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
 
   const handleOpenLocalLibraryFolders = async () => {
     await openLocalLibraryFoldersWithWindowBehavior(() => setShowLocalLibraryFoldersOverlay(true));
+  };
+
+  const handleOpenRedenLibrary = async () => {
+    await openRedenLibraryWithWindowBehavior(() => setShowRedenLibraryOverlay(true));
   };
 
   const handleRefresh = async () => {
@@ -374,7 +380,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
 
       <div className="library-action-row" onClick={(event) => event.stopPropagation()}>
         <button className="btn" onClick={handleSelect}>添加本地记录...</button>
-        <button className="btn" onClick={() => openRedenLibraryWindow().catch((err) => alert(`打开在线投影库失败\n${String(err)}`))}>从在线投影库获取...</button>
+        <button className="btn" onClick={() => handleOpenRedenLibrary().catch((err) => alert(`打开在线投影库失败\n${String(err)}`))}>从在线投影库获取...</button>
         <button className="btn" onClick={() => handleOpenLocalLibraryFolders().catch((err) => alert(`打开本地库文件夹失败\n${String(err)}`))}>管理本地库文件夹...</button>
         <button className="btn" onClick={handleRefresh} disabled={isRefreshing}>{isRefreshing ? "刷新中" : "刷新"}</button>
       </div>
@@ -460,6 +466,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         </>
       )}
       {showLocalLibraryFoldersOverlay ? <LocalLibraryFoldersDialog onClose={() => setShowLocalLibraryFoldersOverlay(false)} /> : null}
+      {showRedenLibraryOverlay ? <RedenLibraryDialog onClose={() => setShowRedenLibraryOverlay(false)} /> : null}
     </div>
   );
 }

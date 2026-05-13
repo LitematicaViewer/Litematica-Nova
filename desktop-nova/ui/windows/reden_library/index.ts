@@ -1,1 +1,5 @@
-export { RedenLibraryWindow } from "./RedenLibraryWindow";
+export {
+  RedenLibraryDialog,
+  RedenLibraryWindow,
+  openRedenLibraryWithWindowBehavior,
+} from "./RedenLibraryWindow";

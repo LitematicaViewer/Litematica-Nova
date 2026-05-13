@@ -11,7 +11,7 @@ button.subwindow-close-button {
     min-height: var(--ln-metro10-window-close-height);
     max-height: var(--ln-metro10-window-close-height);
     flex: 0 0 auto;
-    margin: -19px -13px 0 0;
+    margin: -9px -13px 0 0;
     padding: 0;
     border: 0;
     overflow: hidden;

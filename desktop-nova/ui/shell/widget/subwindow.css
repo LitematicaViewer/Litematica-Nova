@@ -69,7 +69,6 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    min-height: 49px;
     padding: 8px 12px;
     border-bottom: 1px solid ThreeDShadow;
     background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
@@ -271,7 +270,6 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
-    border: 1px solid ThreeDShadow;
 }
 
 .material-list-table {
@@ -290,7 +288,6 @@
 .material-list-table td {
     height: 40px;
     padding: 6px 8px;
-    border-bottom: 1px solid ThreeDShadow;
     vertical-align: middle;
 }
 
@@ -340,51 +337,10 @@
     margin: 8px 0 0;
 }
 
-.reden-library-window {
-    display: flex;
-    height: 100vh;
-    min-height: 0;
-    box-sizing: border-box;
-    overflow: hidden;
-    padding: 16px;
-    flex-direction: column;
-    gap: 12px;
-    color: var(--ln-body-text-color, CanvasText);
-    background: var(--ln-ui-background-color, Canvas);
-}
-
-.reden-library-header,
-.reden-search-row,
 .reden-attachment-row {
     display: flex;
     align-items: center;
     gap: 12px;
-}
-
-.reden-search-row {
-    gap: 10px;
-}
-
-.reden-library-title {
-    font-size: 1.15em;
-    font-weight: 700;
-}
-
-.reden-library-subtitle {
-    color: var(--ln-muted-text-color, GrayText);
-    font-size: .9em;
-}
-
-.reden-library-panel {
-    display: flex;
-    flex: 1;
-    min-height: 0;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.reden-status {
-    font-size: .9em;
 }
 
 .reden-footer {
@@ -392,7 +348,6 @@
     border-top: 1px solid ThreeDShadow;
 }
 
-.reden-status-error,
 .subwindow-status-text-error {
     color: #ff6666;
 }
@@ -453,7 +408,6 @@
     gap: 12px;
 }
 
-.reden-result-title,
 .reden-detail-title {
     font-weight: 700;
 }
@@ -481,12 +435,6 @@
 .reden-result-summary {
     color: var(--ln-muted-text-color, GrayText);
     font-size: .85em;
-}
-
-.reden-empty-results {
-    padding: 12px;
-    border: 1px dashed ThreeDShadow;
-    color: var(--ln-muted-text-color, GrayText);
 }
 
 .reden-detail-pane {
@@ -526,7 +474,6 @@
 
 .reden-empty-detail {
     padding-top: 8px;
-    color: var(--ln-muted-text-color, GrayText);
 }
 
 .subwindow-panel-shell {
@@ -577,9 +524,8 @@
 }
 
 @media (max-width: 760px) {
-    .reden-library-header,
-    .reden-search-row {
-        flex-wrap: wrap;
+    .reden-content-grid {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .reden-detail-pane {
