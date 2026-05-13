@@ -141,25 +141,16 @@ export function UiTestPage() {
       {showDemoOverlay && (
         <div className="dialog-overlay" onClick={() => setShowDemoOverlay(false)}>
           <div
-            className="dialog-content"
-            style={{ width: 720, maxWidth: "90%", height: "80vh", display: "flex", flexDirection: "column", gap: 12, padding: 0, overflow: "hidden" }}
+            className="dialog-content subwindow-frame"
             onClick={(event) => event.stopPropagation()}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "var(--surface-elevated)", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
-              <h3 style={{ margin: 0 }}>子窗口样式演示</h3>
-              <button className="btn material-list-close-button" type="button" aria-label="关闭演示窗口" onClick={() => setShowDemoOverlay(false)}>×</button>
+            <div className="subwindow-title-bar">
+              <h3 className="subwindow-title">子窗口样式演示</h3>
+              <button className="btn subwindow-close-button" type="button" aria-label="关闭演示窗口" onClick={() => setShowDemoOverlay(false)}>×</button>
             </div>
-            <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12, flex: 1, overflow: "hidden" }}>
+            <div className="subwindow-body">
               <div className="muted">当前按“子窗口行为”设置，以主窗口遮罩方式打开这个演示窗口。</div>
-              <div
-                style={{
-                  flex: 1,
-                  minHeight: 320,
-                  border: "1px dashed var(--border)",
-                  background: "var(--surface-elevated)",
-                  borderRadius: 8,
-                }}
-              />
+              <div className="subwindow-demo-fill" />
             </div>
           </div>
         </div>

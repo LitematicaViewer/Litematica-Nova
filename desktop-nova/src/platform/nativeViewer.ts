@@ -21,6 +21,13 @@ export function openRedenLibraryWindow(): Promise<void> {
 }
 
 /**
+ * Opens or focuses the desktop local-library-folder manager window.
+ */
+export function openLocalLibraryFoldersWindow(): Promise<void> {
+  return invoke("open_local_library_folders_window");
+}
+
+/**
  * Opens or focuses an empty desktop demo window for child-window style checks.
  */
 export function openUiDemoWindow(): Promise<void> {

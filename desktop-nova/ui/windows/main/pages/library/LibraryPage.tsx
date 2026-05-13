@@ -10,10 +10,11 @@ import {
   setRecordPreview,
 } from "../../../../../src/business/facade";
 import { checkFileExists, generatePreviewImage, openFileParentDir, openRedenLibraryWindow, readImageBase64, readProjectionPreviewImage, selectLitematicFile } from "../../../../../src/business/facade";
+import { LocalLibraryFoldersDialog, openLocalLibraryFoldersWithWindowBehavior } from "../../../local_library_folders";
 import { loadUserConfigMigratingLocalStorage } from "../../../../../src/business/facade";
 import { DisplayMode, normalizeDisplayMode } from "../../../../../src/business/facade";
 import { listenEvent } from "../../../../../src/platform/events";
-import { projectionLibraryImportedEvent } from "../../../libraryEvents";
+import { projectionLibraryImportedEvent, projectionLibraryStateChangedEvent } from "../../../libraryEvents";
 
 function formatSize(numBytes: number): string {
   let value = Math.max(0, numBytes);
@@ -166,7 +167,7 @@ function ProjectionCard({
  * Renders the local projection library page.
  */
 export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
-  const [state, setState] = useState<LibraryState>({ records: [] });
+  const [state, setState] = useState<LibraryState>({ records: [], folders: [] });
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -181,6 +182,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [projectionPreviewDataUrls, setProjectionPreviewDataUrls] = useState<Record<string, string>>({});
   const [projectionPreviewLoadingPaths, setProjectionPreviewLoadingPaths] = useState<Record<string, boolean>>({});
   const [projectionPreviewLoadedPaths, setProjectionPreviewLoadedPaths] = useState<Record<string, boolean>>({});
+  const [showLocalLibraryFoldersOverlay, setShowLocalLibraryFoldersOverlay] = useState(false);
   const [dragPath, setDragPath] = useState("");
 
   useEffect(() => {
@@ -201,6 +203,15 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       unlistenPromise.then((unlisten) => unlisten?.());
     };
   }, [setCurrentFile]);
+
+  useEffect(() => {
+    const unlistenPromise = listenEvent(projectionLibraryStateChangedEvent, async () => {
+      setState(await loadLibrary());
+    }).catch(() => undefined);
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten?.());
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -228,6 +239,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       setCurrentFile(res);
       setState(await addOrUpdateRecord(state, res));
     }
+  };
+
+  const handleOpenLocalLibraryFolders = async () => {
+    await openLocalLibraryFoldersWithWindowBehavior(() => setShowLocalLibraryFoldersOverlay(true));
   };
 
   const handleRefresh = async () => {
@@ -272,17 +287,20 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
 
   const ensureProjectionPreview = async (record: ProjectionRecord) => {
     if (projectionPreviewLoadedPaths[record.path] || projectionPreviewLoadingPaths[record.path]) return;
-    setPreviewError("");
     setProjectionPreviewLoadingPaths((current) => ({ ...current, [record.path]: true }));
     try {
       const output = await readProjectionPreviewImage(record.path);
       if (output?.data_url) {
         setProjectionPreviewDataUrls((current) => ({ ...current, [record.path]: output.data_url }));
       }
-      setProjectionPreviewLoadedPaths((current) => ({ ...current, [record.path]: true }));
-    } catch (err: any) {
-      setPreviewError(`读取内嵌预览图失败\n${record.path}\n${String(err)}`);
+    } catch {
+      setProjectionPreviewDataUrls((current) => {
+        const next = { ...current };
+        delete next[record.path];
+        return next;
+      });
     } finally {
+      setProjectionPreviewLoadedPaths((current) => ({ ...current, [record.path]: true }));
       setProjectionPreviewLoadingPaths((current) => {
         const next = { ...current };
         delete next[record.path];
@@ -357,8 +375,8 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       <div className="library-action-row" onClick={(event) => event.stopPropagation()}>
         <button className="btn" onClick={handleSelect}>添加本地记录...</button>
         <button className="btn" onClick={() => openRedenLibraryWindow().catch((err) => alert(`打开在线投影库失败\n${String(err)}`))}>从在线投影库获取...</button>
-        <button className="btn" disabled title="本地库文件夹管理需要业务逻辑接入">管理本地库文件夹...</button>
-        <button className="btn" onClick={handleRefresh} disabled={isRefreshing}>{isRefreshing ? "刷新中..." : "刷新..."}</button>
+        <button className="btn" onClick={() => handleOpenLocalLibraryFolders().catch((err) => alert(`打开本地库文件夹失败\n${String(err)}`))}>管理本地库文件夹...</button>
+        <button className="btn" onClick={handleRefresh} disabled={isRefreshing}>{isRefreshing ? "刷新中" : "刷新"}</button>
       </div>
 
       <div className="library-filter-row" onClick={(event) => event.stopPropagation()}>
@@ -420,7 +438,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
           </div>
 
           <div className="library-footer" onClick={(event) => event.stopPropagation()}>
-            <div className="nova-muted nova-small">当前内容 {filteredRecords.length} 条，{issueCount} 条需关注</div>
+            <div className="nova-muted nova-small"> {filteredRecords.length} 个项目，{issueCount} 条需关注</div>
             <label className="library-page-size-control">
               <span>每页条目</span>
               <select className="input library-limit-select" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
@@ -441,6 +459,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
           </div>
         </>
       )}
+      {showLocalLibraryFoldersOverlay ? <LocalLibraryFoldersDialog onClose={() => setShowLocalLibraryFoldersOverlay(false)} /> : null}
     </div>
   );
 }

@@ -1823,6 +1823,52 @@ fn check_file_exists(path: String) -> bool {
     get_root().join(path).is_file()
 }
 
+fn collect_litematic_files_in_directory(
+    current_dir: &Path,
+    recursive: bool,
+    files: &mut Vec<String>,
+) -> Result<(), String> {
+    for entry in std::fs::read_dir(current_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            if recursive {
+                collect_litematic_files_in_directory(&path, true, files)?;
+            }
+            continue;
+        }
+        let has_litematic_ext = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("litematic"))
+            .unwrap_or(false);
+        if has_litematic_ext {
+            files.push(path.display().to_string());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn list_litematic_files_in_directory(path: String, recursive: bool) -> Result<Vec<String>, String> {
+    let input = PathBuf::from(&path);
+    let full_path = if input.is_absolute() {
+        input
+    } else {
+        get_root().join(input)
+    };
+    if !full_path.exists() {
+        return Err(format!("directory not found: {}", full_path.display()));
+    }
+    if !full_path.is_dir() {
+        return Err(format!("path is not a directory: {}", full_path.display()));
+    }
+    let mut files = Vec::new();
+    collect_litematic_files_in_directory(&full_path, recursive, &mut files)?;
+    files.sort_unstable();
+    Ok(files)
+}
+
 #[tauri::command]
 fn get_workspace_root() -> String {
     get_root().display().to_string()
@@ -2636,6 +2682,30 @@ async fn open_reden_library_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn open_local_library_folders_window(app: AppHandle) -> Result<(), String> {
+    const LABEL: &str = "local-library-folders";
+
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        LABEL,
+        tauri::WebviewUrl::App("local_library_folders.html".into()),
+    )
+    .title("Local Library Folders")
+    .inner_size(920.0, 680.0)
+    .min_inner_size(700.0, 520.0)
+    .build()
+    .map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn open_ui_demo_window(app: AppHandle) -> Result<(), String> {
     const LABEL: &str = "ui-demo-window";
 
@@ -2717,6 +2787,7 @@ fn main() {
             write_file_string,
             write_text_file_absolute,
             check_file_exists,
+            list_litematic_files_in_directory,
             get_workspace_root,
             get_path_info,
             read_image_base64,
@@ -2735,6 +2806,7 @@ fn main() {
             ai_chat_completion,
             open_material_list_window,
             open_reden_library_window,
+            open_local_library_folders_window,
             open_ui_demo_window
         ])
         .run(tauri::generate_context!())
