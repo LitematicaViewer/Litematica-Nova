@@ -48,6 +48,13 @@ function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; ite
     setPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
   }, [x, y, item, total]);
 
+  useLayoutEffect(() => {
+    const popup = popupRef.current;
+    if (!popup) return;
+    popup.style.left = `${position.left}px`;
+    popup.style.top = `${position.top}px`;
+  }, [position.left, position.top]);
+
   if (!item) return null;
 
   return (
@@ -55,7 +62,6 @@ function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; ite
       ref={popupRef}
       className="material-list-hover-popup"
       role="tooltip"
-      style={{ left: position.left, top: position.top }}
     >
       <div className="material-list-hover-popup-row material-list-hover-popup-item-row">
         <span className="material-list-hover-popup-label">项目：</span>
@@ -109,16 +115,12 @@ export function MaterialListContent({
   const [error, setError] = useState("");
   const [hoverItem, setHoverItem] = useState<MaterialItem | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-  const contentStyle: React.CSSProperties = {
-    width: standalone ? "100%" : 720,
-    maxWidth: standalone ? "none" : "90%",
-    height: standalone ? "100%" : "80vh",
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-    padding: 0,
-    overflow: "hidden",
-  };
+  const contentClassName = [
+    standalone ? "material-list-window" : "dialog-content",
+    "subwindow-frame",
+    "material-list-content",
+    standalone ? "subwindow-frame-full material-list-content-standalone" : "",
+  ].filter(Boolean).join(" ");
 
   const options = useMemo(() => {
     const next = [{ label: "整个投影", value: "scope:all" }];
@@ -166,33 +168,31 @@ export function MaterialListContent({
 
   return (
       <div
-        className={standalone ? "material-list-window" : "dialog-content"}
-        style={contentStyle}
+        className={contentClassName}
         onMouseMove={(event) => setMousePos({ x: event.clientX, y: event.clientY })}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "var(--surface-elevated)", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
-          <h3 style={{ margin: 0 }}>材料列表</h3>
-          {onClose && <button className="btn material-list-close-button" type="button" aria-label="关闭材料列表" onClick={onClose}>×</button>}
+        <div className="subwindow-title-bar">
+          <h3 className="subwindow-title">材料列表</h3>
+          {onClose && <button className="btn subwindow-close-button" type="button" aria-label="关闭材料列表" onClick={onClose}>×</button>}
         </div>
 
-        <div style={{ padding: "0 12px", display: "flex", flexDirection: "column", gap: 12, flex: 1, overflow: "hidden" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="subwindow-body">
+          <div className="subwindow-toolbar">
             <span>范围</span>
             <Dropdown value={workbook} options={options} onChange={setWorkbook} />
             <button className="btn" onClick={() => loadMats(workbook)} disabled={isLoading}>重新加载</button>
             <button className="btn" onClick={handleExport} disabled={isLoading || materials.length === 0}>导出材料列表</button>
-            <div style={{ flex: 1 }} />
+            <div className="subwindow-toolbar-spacer" />
             <span>倍数</span>
             <input
               type="number"
-              className="input"
-              style={{ width: 70 }}
+              className="input material-list-count-input"
               value={multiplier}
               onChange={(event) => setMultiplier(Math.max(1, parseInt(event.target.value, 10) || 1))}
             />
           </div>
 
-          <label style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--text)" }}>
+          <label className="subwindow-check-row">
             <input
               type="checkbox"
               checked={includeContainerItems}
@@ -201,47 +201,45 @@ export function MaterialListContent({
             统计容器内物品
           </label>
 
-          <div style={{ fontSize: "0.9em", color: "var(--text-muted)" }}>
+          <div className="subwindow-status-text">
             {isLoading ? "正在分析..." : includeContainerItems ? "已包含容器 BlockEntity/TileEntity 内物品。" : "当前仅统计投影方块。"}
           </div>
-          {error && <pre style={{ color: "#ffb3b3", background: "rgba(255,0,0,0.1)", padding: 8, margin: 0, whiteSpace: "pre-wrap" }}>{error}</pre>}
+          {error && <pre className="subwindow-error">{error}</pre>}
 
-          <div style={{ flex: 1, backgroundColor: "var(--surface)", border: "1px solid var(--border)", overflowY: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", color: "var(--text)" }}>
-              <thead style={{ position: "sticky", top: 0, backgroundColor: "var(--surface-elevated)", zIndex: 1 }}>
+          <div className="material-list-table-wrap">
+            <table className="material-list-table">
+              <thead>
                 <tr>
-                  <th style={thCenter}>图标</th>
-                  <th style={thLeft}>名称</th>
-                  <th style={thRight}>方块</th>
-                  <th style={thRight}>容器物品</th>
-                  <th style={thRight}>合计</th>
+                  <th className="material-list-icon-col">图标</th>
+                  <th>名称</th>
+                  <th className="material-list-number">方块</th>
+                  <th className="material-list-number">容器物品</th>
+                  <th className="material-list-total-col">合计</th>
                 </tr>
               </thead>
               <tbody>
-                {materials.map((material, index) => (
+                {materials.map((material) => (
                   <tr
                     key={material.id}
-                    style={{ backgroundColor: index % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent", borderBottom: "1px solid var(--border)" }}
                     onMouseEnter={() => setHoverItem(material)}
                     onMouseLeave={() => setHoverItem(null)}
                   >
-                    <td style={tdCenter}><BlockIcon blockId={material.iconHint} /></td>
-                    <td style={tdLeft}>{material.name}</td>
-                    <td style={tdRight}>{material.blockCount * multiplier}</td>
-                    <td style={tdRight}>{material.containerItemCount * multiplier}</td>
-                    <td style={tdRight}>{material.totalCount * multiplier}</td>
+                    <td className="material-list-icon-cell"><BlockIcon blockId={material.iconHint} /></td>
+                    <td>{material.name}</td>
+                    <td className="material-list-number">{material.blockCount * multiplier}</td>
+                    <td className="material-list-number">{material.containerItemCount * multiplier}</td>
+                    <td className="material-list-number">{material.totalCount * multiplier}</td>
                   </tr>
                 ))}
                 {materials.length === 0 && !isLoading && (
                   <tr>
-                    <td colSpan={5} style={{ padding: 16, textAlign: "center", color: "var(--text-muted)" }}>暂无材料数据</td>
+                    <td colSpan={5} className="material-list-empty-cell">暂无材料数据</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
         </div>
-        <div style={{ height: 12 }} />
         <MaterialTooltip x={mousePos.x} y={mousePos.y} item={hoverItem} multiplier={multiplier} />
       </div>
   );
@@ -379,12 +377,4 @@ function ReadOnlyRow({ label, value }: { label: string; value: string | number }
     </div>
   );
 }
-
-const thCenter: React.CSSProperties = { padding: 8, textAlign: "center", borderBottom: "1px solid var(--border)", width: 54 };
-const thLeft: React.CSSProperties = { padding: 8, textAlign: "left", borderBottom: "1px solid var(--border)" };
-const thRight: React.CSSProperties = { padding: 8, textAlign: "right", borderBottom: "1px solid var(--border)" };
-const tdCenter: React.CSSProperties = { padding: 6, textAlign: "center", borderBottom: "1px solid var(--border)" };
-const tdLeft: React.CSSProperties = { padding: 8, borderBottom: "1px solid var(--border)" };
-const tdRight: React.CSSProperties = { padding: 8, textAlign: "right", borderBottom: "1px solid var(--border)" };
-
 

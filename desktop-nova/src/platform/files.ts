@@ -46,6 +46,10 @@ export function checkFileExists(path: string): Promise<boolean> {
   return invoke("check_file_exists", { path });
 }
 
+export function listLitematicFilesInDirectory(path: string, recursive = true): Promise<string[]> {
+  return invoke("list_litematic_files_in_directory", { path, recursive });
+}
+
 export function getWorkspaceRoot(): Promise<string> {
   return invoke("get_workspace_root");
 }
