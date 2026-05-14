@@ -18,6 +18,12 @@ export interface ProjectionPreviewImageOutput {
   data_url: string;
 }
 
+export interface CopyFileToDirectoryOutput {
+  target_path: string;
+  overwritten: boolean;
+  bytes_copied: number;
+}
+
 export function readWorkspaceFile(path: string): Promise<string> {
   return invoke("read_file_string", { path });
 }
@@ -64,6 +70,10 @@ export function openWorkspacePath(path: string): Promise<void> {
 
 export function openFileParentDir(filePath: string): Promise<void> {
   return invoke("open_file_parent_dir", { filePath });
+}
+
+export function copyFileToDirectory(sourcePath: string, targetDirectory: string, targetFileName: string, overwrite = false): Promise<CopyFileToDirectoryOutput> {
+  return invoke("copy_file_to_directory", { sourcePath, targetDirectory, targetFileName, overwrite });
 }
 
 export function readImageBase64(path: string): Promise<string> {
