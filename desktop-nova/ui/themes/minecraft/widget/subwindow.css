@@ -4,7 +4,8 @@
     border-radius: 0;
 }
 
-button.subwindow-close-button {
+button.subwindow-close-button,
+button.dialog-close-button {
     width: var(--ln-minecraft-button-height);
     min-width: var(--ln-minecraft-button-height);
     max-width: var(--ln-minecraft-button-height);
@@ -26,14 +27,16 @@ button.subwindow-overlay-close-button {
     margin: 0;
 }
 
-button.subwindow-close-button:hover:not(:disabled) {
+button.subwindow-close-button:hover:not(:disabled),
+button.dialog-close-button:hover:not(:disabled) {
     --ln-minecraft-button-image: none;
     border-image-source: none;
     background-image: url("../resource/button/windowClose_hover.png");
     color: transparent;
 }
 
-button.subwindow-close-button:active:not(:disabled) {
+button.subwindow-close-button:active:not(:disabled),
+button.dialog-close-button:active:not(:disabled) {
     --ln-minecraft-button-image: none;
     border-image-source: none;
     background-image: url("../resource/button/windowClose_hover.png");

@@ -4,6 +4,7 @@
 @import "./widget/popup.css";
 @import "./widget/table.css";
 @import "./widget/text.css";
+@import "./widget/dialog.css";
 @import "./widget/subwindow.css";
 
 :root {

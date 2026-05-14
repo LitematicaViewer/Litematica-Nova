@@ -149,6 +149,13 @@ struct ProjectionPreviewOutput {
     data_url: String,
 }
 
+#[derive(Serialize)]
+struct CopyFileToDirectoryOutput {
+    target_path: String,
+    overwritten: bool,
+    bytes_copied: u64,
+}
+
 #[derive(Deserialize, Serialize, Clone)]
 struct UserConfig {
     theme: String,
@@ -2087,6 +2094,63 @@ fn open_file_parent_dir(file_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn copy_file_to_directory(
+    source_path: String,
+    target_directory: String,
+    target_file_name: String,
+    overwrite: bool,
+) -> Result<CopyFileToDirectoryOutput, String> {
+    let source_input = PathBuf::from(&source_path);
+    let source_full_path = if source_input.is_absolute() {
+        source_input
+    } else {
+        get_root().join(source_input)
+    };
+    if !source_full_path.is_file() {
+        return Err(format!("source file not found: {}", source_full_path.display()));
+    }
+
+    let trimmed_file_name = target_file_name.trim();
+    if trimmed_file_name.is_empty() {
+        return Err("target file name must not be empty".to_string());
+    }
+    if trimmed_file_name.contains('/') || trimmed_file_name.contains('\\') {
+        return Err("target file name must not contain path separators".to_string());
+    }
+
+    let target_input = PathBuf::from(&target_directory);
+    let target_dir_path = if target_input.is_absolute() {
+        target_input
+    } else {
+        get_root().join(target_input)
+    };
+    if target_dir_path.exists() && !target_dir_path.is_dir() {
+        return Err(format!("target path is not a directory: {}", target_dir_path.display()));
+    }
+    std::fs::create_dir_all(&target_dir_path).map_err(|e| e.to_string())?;
+
+    let target_full_path = target_dir_path.join(trimmed_file_name);
+    if target_full_path == source_full_path {
+        return Err("source and target path are identical".to_string());
+    }
+
+    let overwritten = target_full_path.exists();
+    if overwritten && !overwrite {
+        return Err(format!("target file already exists: {}", target_full_path.display()));
+    }
+    if overwritten && !target_full_path.is_file() {
+        return Err(format!("target path is not a file: {}", target_full_path.display()));
+    }
+
+    let bytes_copied = std::fs::copy(&source_full_path, &target_full_path).map_err(|e| e.to_string())?;
+    Ok(CopyFileToDirectoryOutput {
+        target_path: target_full_path.display().to_string(),
+        overwritten,
+        bytes_copied,
+    })
+}
+
+#[tauri::command]
 fn open_workspace_path(path: String) -> Result<(), String> {
     let input = PathBuf::from(&path);
     let full_path = if input.is_absolute() {
@@ -2793,6 +2857,7 @@ fn main() {
             read_image_base64,
             read_projection_preview_image,
             open_file_parent_dir,
+            copy_file_to_directory,
             open_workspace_path,
             cleanup_local_temp_files,
             reden_search_litematica,

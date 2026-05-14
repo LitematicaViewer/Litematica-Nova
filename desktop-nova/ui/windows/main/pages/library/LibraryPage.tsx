@@ -2,13 +2,16 @@
 import {
   addOrUpdateRecord,
   analyzeFile,
+  copyFileToDirectory,
   LibraryState,
   loadLibrary,
+  LocalLibraryFolder,
   ProjectionRecord,
   reorderLibraryRecords,
   saveLibrary,
   setRecordPreview,
 } from "../../../../../src/business/facade";
+import { SendProjectionDialog, ensureLitematicFileName } from "./sendDialog";
 import { checkFileExists, generatePreviewImage, openFileParentDir, readImageBase64, readProjectionPreviewImage, selectLitematicFile } from "../../../../../src/business/facade";
 import { LocalLibraryFoldersDialog, openLocalLibraryFoldersWithWindowBehavior } from "../../../local_library_folders";
 import { RedenLibraryDialog, openRedenLibraryWithWindowBehavior } from "../../../reden_library";
@@ -41,6 +44,17 @@ function recordStatusLabel(record: ProjectionRecord): string {
   return "";
 }
 
+function parentDirectory(path: string): string {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  const lastSeparatorIndex = Math.max(normalized.lastIndexOf("\\"), normalized.lastIndexOf("/"));
+  return lastSeparatorIndex >= 0 ? normalized.slice(0, lastSeparatorIndex) : "";
+}
+
+function pickDefaultSendFolder(record: ProjectionRecord, folders: LocalLibraryFolder[]): string {
+  const sourceParent = parentDirectory(record.path).toLowerCase();
+  return folders.find((folder) => folder.path.toLowerCase() !== sourceParent)?.path || folders[0]?.path || "";
+}
+
 function ProjectionCard({
   record,
   isCurrent,
@@ -52,7 +66,7 @@ function ProjectionCard({
   onSetCurrent,
   onEditProperties,
   onOpenFolder,
-  onReanalyze,
+  onSend,
   onRemove,
   onGeneratePreview,
   onEnsureProjectionPreview,
@@ -70,7 +84,7 @@ function ProjectionCard({
   onSetCurrent: () => void;
   onEditProperties: () => void;
   onOpenFolder: () => void;
-  onReanalyze: () => void;
+  onSend: () => void;
   onRemove: () => void;
   onGeneratePreview: () => void;
   onEnsureProjectionPreview: () => void;
@@ -127,8 +141,8 @@ function ProjectionCard({
         <div className="lib-card-actions">
           <button className="btn" onClick={(event) => { event.stopPropagation(); onSetCurrent(); }}>激活</button>
           <button className="btn" onClick={(event) => { event.stopPropagation(); onEditProperties(); }}>属性</button>
-          <button className="btn" onClick={(event) => { event.stopPropagation(); onReanalyze(); }}>重新分析</button>
           <button className="btn" onClick={(event) => { event.stopPropagation(); onOpenFolder(); }}>打开目录</button>
+          <button className="btn" onClick={(event) => { event.stopPropagation(); onSend(); }}>发送...</button>
           <button className="btn" onClick={(event) => { event.stopPropagation(); onRemove(); }}>删除记录</button>
         </div>
       </div>
@@ -186,6 +200,12 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [showLocalLibraryFoldersOverlay, setShowLocalLibraryFoldersOverlay] = useState(false);
   const [showRedenLibraryOverlay, setShowRedenLibraryOverlay] = useState(false);
   const [dragPath, setDragPath] = useState("");
+  const [sendDialogRecord, setSendDialogRecord] = useState<ProjectionRecord | null>(null);
+  const [sendTargetDirectory, setSendTargetDirectory] = useState("");
+  const [sendTargetFileName, setSendTargetFileName] = useState("");
+  const [sendOverwrite, setSendOverwrite] = useState(false);
+  const [sendError, setSendError] = useState("");
+  const [isSending, setIsSending] = useState(false);
 
   useEffect(() => {
     loadLibrary().then(setState);
@@ -249,6 +269,48 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
 
   const handleOpenRedenLibrary = async () => {
     await openRedenLibraryWithWindowBehavior(() => setShowRedenLibraryOverlay(true));
+  };
+
+  const handleOpenSendDialog = (record: ProjectionRecord) => {
+    setSendDialogRecord(record);
+    setSendTargetDirectory(pickDefaultSendFolder(record, state.folders));
+    setSendTargetFileName(record.fileName);
+    setSendOverwrite(false);
+    setSendError("");
+  };
+
+  const handleCloseSendDialog = () => {
+    setSendDialogRecord(null);
+    setSendTargetDirectory("");
+    setSendTargetFileName("");
+    setSendOverwrite(false);
+    setSendError("");
+  };
+
+  const handleConfirmSend = async () => {
+    if (!sendDialogRecord) return;
+    const normalizedFileName = ensureLitematicFileName(sendTargetFileName);
+    if (!sendTargetDirectory) {
+      setSendError("请选择目标本地库文件夹。");
+      return;
+    }
+    if (!normalizedFileName) {
+      setSendError("请输入目标文件名。");
+      return;
+    }
+    setIsSending(true);
+    setSendError("");
+    try {
+      const output = await copyFileToDirectory(sendDialogRecord.path, sendTargetDirectory, normalizedFileName, sendOverwrite);
+      const nextState = await addOrUpdateRecord(await loadLibrary(), output.target_path);
+      setState(nextState);
+      setCurrentFile(output.target_path);
+      handleCloseSendDialog();
+    } catch (error: any) {
+      setSendError(String(error));
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleRefresh = async () => {
@@ -425,7 +487,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
                 onSetCurrent={() => setCurrentFile(r.path)}
                 onEditProperties={() => { setCurrentFile(r.path); setRoute("properties"); }}
                 onOpenFolder={() => openFileParentDir(r.path).catch((err) => alert(`打开失败\n${String(err)}`))}
-                onReanalyze={async () => setState(await addOrUpdateRecord(state, r.path))}
+                onSend={() => handleOpenSendDialog(r)}
                 onRemove={() => handleRemove(r.path)}
                 onGeneratePreview={() => handleGeneratePreview(r)}
                 onEnsureProjectionPreview={() => ensureProjectionPreview(r)}
@@ -465,6 +527,22 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
           </div>
         </>
       )}
+      {sendDialogRecord ? (
+        <SendProjectionDialog
+          record={sendDialogRecord}
+          folders={state.folders}
+          targetDirectory={sendTargetDirectory}
+          targetFileName={sendTargetFileName}
+          overwrite={sendOverwrite}
+          isSending={isSending}
+          error={sendError}
+          onTargetDirectoryChange={setSendTargetDirectory}
+          onTargetFileNameChange={setSendTargetFileName}
+          onOverwriteChange={setSendOverwrite}
+          onClose={isSending ? () => undefined : handleCloseSendDialog}
+          onSubmit={handleConfirmSend}
+        />
+      ) : null}
       {showLocalLibraryFoldersOverlay ? <LocalLibraryFoldersDialog onClose={() => setShowLocalLibraryFoldersOverlay(false)} /> : null}
       {showRedenLibraryOverlay ? <RedenLibraryDialog onClose={() => setShowRedenLibraryOverlay(false)} /> : null}
     </div>

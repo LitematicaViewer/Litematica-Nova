@@ -173,7 +173,7 @@ export function MaterialListContent({
       >
         <div className="subwindow-title-bar">
           <h3 className="subwindow-title">材料列表</h3>
-          {onClose && <button className="btn subwindow-close-button" type="button" aria-label="关闭材料列表" onClick={onClose}>×</button>}
+          {onClose && <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</button>}
         </div>
 
         <div className="subwindow-body">

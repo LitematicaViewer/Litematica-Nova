@@ -3,7 +3,8 @@
     border-radius: 0;
 }
 
-button.subwindow-close-button {
+button.subwindow-close-button,
+button.dialog-close-button {
     width: var(--ln-metro10-window-close-width);
     min-width: var(--ln-metro10-window-close-width);
     max-width: var(--ln-metro10-window-close-width);
@@ -23,12 +24,14 @@ button.subwindow-overlay-close-button {
     margin: 0;
 }
 
-button.subwindow-close-button:hover:not(:disabled) {
+button.subwindow-close-button:hover:not(:disabled),
+button.dialog-close-button:hover:not(:disabled) {
     border: 0;
     background-image: url("../resource/button/windowClose_hover.png");
 }
 
-button.subwindow-close-button:active:not(:disabled) {
+button.subwindow-close-button:active:not(:disabled),
+button.dialog-close-button:active:not(:disabled) {
     background-color: transparent;
     background-image: url("../resource/button/windowClose_hover.png");
 }

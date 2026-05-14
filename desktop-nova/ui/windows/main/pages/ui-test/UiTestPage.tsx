@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 
+import { Dialog } from "../../../../components/Dialog";
 import {
   loadUserConfigMigratingLocalStorage,
   normalizeMaterialListWindowBehavior,
@@ -41,6 +42,7 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
 export function UiTestPage() {
   const [themeId, setThemeId] = useState(() => currentThemeId());
   const [showDemoOverlay, setShowDemoOverlay] = useState(false);
+  const [showTemplateDialog, setShowTemplateDialog] = useState(false);
   useEffect(() => subscribeToThemeChanges(setThemeId), []);
 
   const thumbExampleUrl = thumbExampleUrlForTheme(themeId);
@@ -91,6 +93,11 @@ export function UiTestPage() {
             <button type="button" disabled>禁用</button>
           </div>
         </FormRow>
+        <FormRow label="对话框：">
+          <div className="button-row">
+            <button type="button" onClick={() => setShowTemplateDialog(true)}>打开标准对话框模板</button>
+          </div>
+        </FormRow>
         <FormRow label="子窗口：">
           <div className="button-row">
             <button type="button" onClick={handleOpenDemoWindow}>打开空的演示窗口</button>
@@ -138,6 +145,36 @@ export function UiTestPage() {
           </tbody>
         </table>
       </fieldset>
+      {showTemplateDialog ? (
+        <Dialog
+          title="标准对话框模板"
+          subtitle="用于普通确认、表单和轻量交互；它始终是主窗口内遮罩，不提供独立窗口模式。"
+          width="md"
+          onClose={() => setShowTemplateDialog(false)}
+          footer={(
+            <>
+              <button type="button" onClick={() => setShowTemplateDialog(false)}>取消</button>
+              <button type="button">主要操作</button>
+            </>
+          )}
+        >
+          <div className="dialog-form-grid">
+            <span className="dialog-label">标题区</span>
+            <span className="muted">上方包含标题、副标题和关闭按钮。</span>
+            <span className="dialog-label">正文区</span>
+            <div className="dialog-field-stack">
+              <input defaultValue="可直接放输入框、选择框和说明文案" />
+              <select defaultValue="template-a">
+                <option value="template-a">模板选项 A</option>
+                <option value="template-b">模板选项 B</option>
+              </select>
+              <label className="setting-row"><input type="checkbox" defaultChecked /> 支持内联布尔选项</label>
+            </div>
+            <span className="dialog-label">说明区</span>
+            <div className="dialog-message">这里适合放路径预览、确认文案、结果提示或错误信息。</div>
+          </div>
+        </Dialog>
+      ) : null}
       {showDemoOverlay && (
         <div className="dialog-overlay" onClick={() => setShowDemoOverlay(false)}>
           <div
@@ -146,7 +183,7 @@ export function UiTestPage() {
           >
             <div className="subwindow-title-bar">
               <h3 className="subwindow-title">子窗口样式演示</h3>
-              <button className="btn subwindow-close-button" type="button" aria-label="关闭演示窗口" onClick={() => setShowDemoOverlay(false)}>×</button>
+              <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={() => setShowDemoOverlay(false)}>×</button>
             </div>
             <div className="subwindow-body">
               <div className="muted">当前按“子窗口行为”设置，以主窗口遮罩方式打开这个演示窗口。</div>
