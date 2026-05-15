@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 
 import {
@@ -17,6 +17,7 @@ import {
   openLocalLibraryFoldersWindow,
   openWorkspacePath,
   ProjectionRecord,
+  readProjectionPreviewImage,
   removeLocalLibraryFolder,
   syncAllLocalLibraryFolders,
   syncLocalLibraryFolder,
@@ -29,6 +30,7 @@ import { projectionLibraryImportedEvent, projectionLibraryStateChangedEvent } fr
 import { SendProjectionDialog, ensureLitematicFileName } from "../main/pages/library/sendDialog";
 
 type FileIconUrls = Record<string, string>;
+type HoverPreviewEntry = { entry: DirectoryEntryInfo; x: number; y: number };
 
 const iconNameFromPath = (path: string) => path.split("/").pop()?.replace(/\.[^.]+$/, "") || "";
 
@@ -136,6 +138,66 @@ function pickDefaultSendFolder(record: ProjectionRecord, folders: LocalLibraryFo
   return folders.find((folder) => folder.path.toLowerCase() !== sourceParent)?.path || folders[0]?.path || "";
 }
 
+function LocalBrowserPreviewPopup({
+  hover,
+  previewDataUrl,
+  isLoading,
+}: {
+  hover: HoverPreviewEntry | null;
+  previewDataUrl: string | null | undefined;
+  isLoading: boolean;
+}) {
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState(() => ({ left: (hover?.x || 0) + 14, top: (hover?.y || 0) + 14 }));
+
+  useLayoutEffect(() => {
+    if (!hover) return;
+    const popup = popupRef.current;
+    const offset = 14;
+    const margin = 4;
+    if (!popup) {
+      setPosition({ left: hover.x + offset, top: hover.y + offset });
+      return;
+    }
+
+    const rect = popup.getBoundingClientRect();
+    let left = hover.x + offset;
+    let top = hover.y + offset;
+
+    if (left + rect.width > window.innerWidth - margin) {
+      left = hover.x - rect.width - offset;
+    }
+    if (top + rect.height > window.innerHeight - margin) {
+      top = hover.y - rect.height - offset;
+    }
+
+    left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
+    top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
+    setPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
+  }, [hover, previewDataUrl, isLoading]);
+
+  useLayoutEffect(() => {
+    const popup = popupRef.current;
+    if (!popup) return;
+    popup.style.left = `${position.left}px`;
+    popup.style.top = `${position.top}px`;
+  }, [position.left, position.top]);
+
+  if (!hover) return null;
+
+  return (
+    <div ref={popupRef} className="material-list-hover-popup local-browser-preview-popup" role="tooltip">
+      <div className="local-browser-preview-box">
+        {previewDataUrl ? (
+          <img className="local-browser-preview-image" src={previewDataUrl} alt="" />
+        ) : (
+          <span>{isLoading ? "加载中..." : "无内嵌预览图"}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 async function emitLibraryStateChanged(): Promise<void> {
   await emitEvent(projectionLibraryStateChangedEvent);
 }
@@ -175,6 +237,9 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
   const [sendOverwrite, setSendOverwrite] = useState(false);
   const [sendError, setSendError] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [hoverPreview, setHoverPreview] = useState<HoverPreviewEntry | null>(null);
+  const [previewDataUrls, setPreviewDataUrls] = useState<Record<string, string | null>>({});
+  const [previewLoadingPaths, setPreviewLoadingPaths] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     loadLibrary().then(setState).catch((error) => setStatus(`读取本地库配置失败：${String(error)}`));
@@ -375,6 +440,23 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
     }
   };
 
+  const ensureHoverPreview = async (entry: DirectoryEntryInfo) => {
+    if (!isLitematicEntry(entry) || previewDataUrls[entry.path] !== undefined || previewLoadingPaths[entry.path]) return;
+    setPreviewLoadingPaths((current) => ({ ...current, [entry.path]: true }));
+    try {
+      const output = await readProjectionPreviewImage(entry.path);
+      setPreviewDataUrls((current) => ({ ...current, [entry.path]: output?.data_url || null }));
+    } catch {
+      setPreviewDataUrls((current) => ({ ...current, [entry.path]: null }));
+    } finally {
+      setPreviewLoadingPaths((current) => {
+        const next = { ...current };
+        delete next[entry.path];
+        return next;
+      });
+    }
+  };
+
   const enabledCount = state.folders.filter((folder) => folder.enabled).length;
   const statusClassName = [
     "subwindow-status-text",
@@ -436,6 +518,20 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                     return (
                       <tr
                         key={entry.path}
+                        onMouseEnter={(event) => {
+                          if (!isLitematicEntry(entry)) return;
+                          setHoverPreview({ entry, x: event.clientX, y: event.clientY });
+                          ensureHoverPreview(entry).catch(() => undefined);
+                        }}
+                        onMouseMove={(event) => {
+                          if (!isLitematicEntry(entry)) return;
+                          setHoverPreview((current) => current?.entry.path === entry.path
+                            ? { entry, x: event.clientX, y: event.clientY }
+                            : current);
+                        }}
+                        onMouseLeave={() => {
+                          if (isLitematicEntry(entry)) setHoverPreview(null);
+                        }}
                         onDoubleClick={() => {
                           if (entry.is_dir) {
                             setBrowserPath(entry.path);
@@ -564,6 +660,11 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
           onSubmit={handleConfirmSend}
         />
       ) : null}
+      <LocalBrowserPreviewPopup
+        hover={hoverPreview}
+        previewDataUrl={hoverPreview ? previewDataUrls[hoverPreview.entry.path] : undefined}
+        isLoading={hoverPreview ? !!previewLoadingPaths[hoverPreview.entry.path] : false}
+      />
     </section>
   );
 }
