@@ -110,6 +110,20 @@ function parentDirectory(path: string): string {
   return lastSeparatorIndex >= 0 ? normalized.slice(0, lastSeparatorIndex) : "";
 }
 
+function compactFolderPath(path: string): string {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  const separator = normalized.includes("\\") ? "\\" : "/";
+  const parts = normalized.split(/[\\/]+/).filter(Boolean);
+  if (parts.length <= 3) return normalized;
+  const driveOrRoot = normalized.match(/^[A-Za-z]:/)?.[0] || (normalized.startsWith("/") ? "" : parts[0]);
+  const tail = parts.slice(-2).join(separator);
+  return driveOrRoot ? `${driveOrRoot}${separator}...${separator}${tail}` : `${separator}...${separator}${tail}`;
+}
+
+function systemFileManagerLabel(): string {
+  return navigator.platform.toLowerCase().includes("mac") ? "在访达打开" : "在文件资源管理器打开";
+}
+
 function recordFromEntry(entry: DirectoryEntryInfo): ProjectionRecord {
   return {
     id: entry.path,
@@ -462,6 +476,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
   };
 
   const enabledCount = state.folders.filter((folder) => folder.enabled).length;
+  const fileManagerLabel = systemFileManagerLabel();
   const statusClassName = [
     "subwindow-status-text",
     status.includes("失败") || status.includes("错误") ? "subwindow-status-text-error" : "",
@@ -609,7 +624,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
               <div className="lib-card-left subwindow-card-stack">
                 <div className="lib-card-line-main">
                   <div className="lib-card-heading">
-                    <span className="lib-card-title">{folder.path}</span>
+                    <span className="lib-card-title" title={folder.path}>{compactFolderPath(folder.path)}</span>
                   </div>
                 </div>
                 <div className="subwindow-status-text">最近同步：{formatDate(folder.lastSyncedAt)}</div>
@@ -636,14 +651,15 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                   </label>
                 </div>
                 <div className="button-row subwindow-wrap-row">
-                  <button className="btn" type="button" disabled={!!busyKey} onClick={() => openWorkspacePath(folder.path)}>打开文件夹</button>
+                  <button className="btn" type="button" disabled={!!busyKey} onClick={() => handleOpenBrowser(folder)}>浏览目录</button>
+                  <button className="btn" type="button" disabled={!!busyKey} onClick={() => openWorkspacePath(folder.path)}>{fileManagerLabel}</button>
                   <button
                     className="btn"
                     type="button"
                     disabled={!!busyKey}
                     onClick={() => handleSyncFolder(folder)}
                   >
-                    {busyKey === `sync:${folder.path}` ? "同步中..." : "仅同步此文件夹"}
+                    {busyKey === `sync:${folder.path}` ? "同步中..." : "立即同步"}
                   </button>
                   <button className="btn" type="button" disabled={!!busyKey} onClick={() => handleRemoveFolder(folder)}>移除</button>
                 </div>
