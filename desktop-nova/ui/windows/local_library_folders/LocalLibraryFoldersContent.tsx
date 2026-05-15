@@ -240,6 +240,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
   const [hoverPreview, setHoverPreview] = useState<HoverPreviewEntry | null>(null);
   const [previewDataUrls, setPreviewDataUrls] = useState<Record<string, string | null>>({});
   const [previewLoadingPaths, setPreviewLoadingPaths] = useState<Record<string, boolean>>({});
+  const [selectedBrowserEntryPath, setSelectedBrowserEntryPath] = useState("");
 
   useEffect(() => {
     loadLibrary().then(setState).catch((error) => setStatus(`读取本地库配置失败：${String(error)}`));
@@ -250,9 +251,11 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
   useEffect(() => {
     if (!browserPath) {
       setBrowserEntries([]);
+      setSelectedBrowserEntryPath("");
       return;
     }
     let cancelled = false;
+    setSelectedBrowserEntryPath("");
     setIsBrowserLoading(true);
     listDirectoryEntries(browserPath)
       .then((entries) => {
@@ -373,6 +376,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
     setBrowserRootFolder(null);
     setBrowserPath("");
     setBrowserEntries([]);
+    setSelectedBrowserEntryPath("");
   };
 
   const handleGoBrowserUp = () => {
@@ -515,9 +519,13 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                   ) : browserEntries.map((entry) => {
                     const iconName = entry.is_dir ? "folder" : isLitematicEntry(entry) ? "litematic" : "unknown";
                     const canActivate = isLitematicEntry(entry) && !busyKey;
+                    const isSelected = selectedBrowserEntryPath === entry.path;
                     return (
                       <tr
                         key={entry.path}
+                        className={isSelected ? "table-row-selected" : ""}
+                        aria-selected={isSelected}
+                        onClick={() => setSelectedBrowserEntryPath(entry.path)}
                         onMouseEnter={(event) => {
                           if (!isLitematicEntry(entry)) return;
                           setHoverPreview({ entry, x: event.clientX, y: event.clientY });
