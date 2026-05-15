@@ -36,3 +36,24 @@
 .material-list-hover-popup strong {
     font-weight: 700;
 }
+
+.local-browser-preview-popup {
+    min-width: 0;
+}
+
+.local-browser-preview-box {
+    display: grid;
+    width: 140px;
+    height: 140px;
+    place-items: center;
+    overflow: hidden;
+    color: var(--ln-muted-text-color, GrayText);
+    text-align: center;
+}
+
+.local-browser-preview-image {
+    display: block;
+    width: 140px;
+    height: 140px;
+    object-fit: contain;
+}
