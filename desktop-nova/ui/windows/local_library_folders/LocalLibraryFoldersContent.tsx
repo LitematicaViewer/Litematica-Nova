@@ -1,15 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { SyntheticEvent } from "react";
 
 import {
+  activateProjectionRecord,
   addLocalLibraryFolder,
   chooseUserConfigDir,
+  copyFileToDirectory,
+  DirectoryEntryInfo,
+  listDirectoryEntries,
   loadLibrary,
   loadUserConfigMigratingLocalStorage,
   LocalLibraryFolder,
   LibraryState,
   normalizeMaterialListWindowBehavior,
+  openFileParentDir,
   openLocalLibraryFoldersWindow,
   openWorkspacePath,
+  ProjectionRecord,
   removeLocalLibraryFolder,
   syncAllLocalLibraryFolders,
   syncLocalLibraryFolder,
@@ -17,13 +24,116 @@ import {
 } from "../../../src/business/facade";
 import { confirmDialog } from "../../../src/platform/dialogs";
 import { emitEvent } from "../../../src/platform/events";
-import { projectionLibraryStateChangedEvent } from "../libraryEvents";
+import { currentThemeId, subscribeToThemeChanges, themeResourceKey } from "../../shell/themeRuntime";
+import { projectionLibraryImportedEvent, projectionLibraryStateChangedEvent } from "../libraryEvents";
+import { SendProjectionDialog, ensureLitematicFileName } from "../main/pages/library/sendDialog";
+
+type FileIconUrls = Record<string, string>;
+
+const iconNameFromPath = (path: string) => path.split("/").pop()?.replace(/\.[^.]+$/, "") || "";
+
+const shellFileIconUrls = Object.entries(
+  import.meta.glob<string>("../../shell/resource/icon/file/*.{svg,png}", {
+    eager: true,
+    import: "default",
+    query: "?url",
+  }),
+).reduce<FileIconUrls>((icons, [path, url]) => {
+  const iconName = iconNameFromPath(path);
+  if (iconName) icons[iconName] = url;
+  return icons;
+}, {});
+
+const themedFileIconUrls = Object.entries(
+  import.meta.glob<string>("../../themes/*/resource/icon/file/*.{svg,png}", {
+    eager: true,
+    import: "default",
+    query: "?url",
+  }),
+).reduce<Record<string, FileIconUrls>>((themes, [path, url]) => {
+  const themeKey = path.match(/\.\.\/\.\.\/themes\/([^/]+)\//)?.[1];
+  const iconName = iconNameFromPath(path);
+  if (themeKey && iconName) {
+    themes[themeKey] = themes[themeKey] || {};
+    themes[themeKey][iconName] = url;
+  }
+  return themes;
+}, {});
+
+function fallbackFileIconUrl(iconName: string): string {
+  return shellFileIconUrls[iconName] || shellFileIconUrls.unknown || shellFileIconUrls.undefined || "";
+}
+
+function fileIconUrl(themeId: string, iconName: string): string {
+  const themeKey = themeResourceKey(themeId);
+  return themedFileIconUrls[themeKey]?.[iconName]
+    || themedFileIconUrls[themeKey]?.unknown
+    || themedFileIconUrls[themeKey]?.undefined
+    || fallbackFileIconUrl(iconName);
+}
+
+function handleFileIconError(event: SyntheticEvent<HTMLImageElement>, iconName: string) {
+  const fallbackUrl = fallbackFileIconUrl(iconName);
+  if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
+    event.currentTarget.src = fallbackUrl;
+  }
+}
 
 function formatDate(timestamp: number): string {
   if (!timestamp) return "-";
   const date = new Date(timestamp);
   const pad = (value: number) => value.toString().padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function formatSize(numBytes: number): string {
+  if (!numBytes) return "-";
+  let value = Math.max(0, numBytes);
+  const units = ["B", "KB", "MB", "GB"];
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index++;
+  }
+  return index === 0 ? `${Math.floor(value)} ${units[index]}` : `${value.toFixed(1)} ${units[index]}`;
+}
+
+function isLitematicEntry(entry: DirectoryEntryInfo): boolean {
+  return entry.is_file && /\.litematic$/i.test(entry.name || entry.path);
+}
+
+function parentDirectory(path: string): string {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  const lastSeparatorIndex = Math.max(normalized.lastIndexOf("\\"), normalized.lastIndexOf("/"));
+  return lastSeparatorIndex >= 0 ? normalized.slice(0, lastSeparatorIndex) : "";
+}
+
+function recordFromEntry(entry: DirectoryEntryInfo): ProjectionRecord {
+  return {
+    id: entry.path,
+    path: entry.path,
+    fileName: entry.name,
+    displayName: entry.name,
+    author: "",
+    description: "",
+    totalBlocks: 0,
+    totalVolume: 0,
+    regionCount: 0,
+    enclosingSize: { x: 0, y: 0, z: 0 },
+    minecraftDataVersion: 0,
+    fileSize: entry.file_size,
+    mtime: entry.mtime_ms,
+    tags: [],
+    status: "ok",
+    lastAnalyzedAt: entry.mtime_ms,
+    lastError: "",
+    sort_index: 0,
+  };
+}
+
+function pickDefaultSendFolder(record: ProjectionRecord, folders: LocalLibraryFolder[]): string {
+  const sourceParent = parentDirectory(record.path).toLowerCase();
+  return folders.find((folder) => folder.path.toLowerCase() !== sourceParent)?.path || folders[0]?.path || "";
 }
 
 async function emitLibraryStateChanged(): Promise<void> {
@@ -54,10 +164,51 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
   const [state, setState] = useState<LibraryState>({ records: [], folders: [] });
   const [busyKey, setBusyKey] = useState("");
   const [status, setStatus] = useState("");
+  const [themeId, setThemeId] = useState(() => currentThemeId());
+  const [browserRootFolder, setBrowserRootFolder] = useState<LocalLibraryFolder | null>(null);
+  const [browserPath, setBrowserPath] = useState("");
+  const [browserEntries, setBrowserEntries] = useState<DirectoryEntryInfo[]>([]);
+  const [isBrowserLoading, setIsBrowserLoading] = useState(false);
+  const [sendDialogRecord, setSendDialogRecord] = useState<ProjectionRecord | null>(null);
+  const [sendTargetDirectory, setSendTargetDirectory] = useState("");
+  const [sendTargetFileName, setSendTargetFileName] = useState("");
+  const [sendOverwrite, setSendOverwrite] = useState(false);
+  const [sendError, setSendError] = useState("");
+  const [isSending, setIsSending] = useState(false);
 
   useEffect(() => {
     loadLibrary().then(setState).catch((error) => setStatus(`读取本地库配置失败：${String(error)}`));
   }, []);
+
+  useEffect(() => subscribeToThemeChanges(setThemeId), []);
+
+  useEffect(() => {
+    if (!browserPath) {
+      setBrowserEntries([]);
+      return;
+    }
+    let cancelled = false;
+    setIsBrowserLoading(true);
+    listDirectoryEntries(browserPath)
+      .then((entries) => {
+        if (!cancelled) setBrowserEntries(entries);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setBrowserEntries([]);
+          setStatus(`读取文件夹失败：${String(error)}`);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsBrowserLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [browserPath]);
+
+  const browserRootKey = useMemo(() => browserRootFolder ? browserRootFolder.path.toLowerCase() : "", [browserRootFolder]);
+  const canGoBrowserUp = !!browserRootFolder && browserPath.toLowerCase() !== browserRootKey;
 
   const handleAddFolder = async () => {
     const folderPath = await chooseUserConfigDir().catch((error) => {
@@ -119,7 +270,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
       setStatus(
         result.errors.length
           ? `同步完成，但存在 ${result.errors.length} 个错误。`
-          : `已同步 ${result.scannedFolderCount} 个文件夹，共处理 ${result.importedCount} 个 .litematic 文件。`,
+          : `已扫描 ${result.scannedFolderCount} 个文件夹，共发现 ${result.importedCount} 个 .litematic 文件。`,
       );
       await emitLibraryStateChanged();
     } catch (error: any) {
@@ -137,13 +288,90 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
       setStatus(
         result.errors.length
           ? `批量同步完成，但存在 ${result.errors.length} 个错误。`
-          : `已同步 ${result.scannedFolderCount} 个文件夹，共处理 ${result.importedCount} 个 .litematic 文件。`,
+          : `已扫描 ${result.scannedFolderCount} 个文件夹，共发现 ${result.importedCount} 个 .litematic 文件。`,
       );
       await emitLibraryStateChanged();
     } catch (error: any) {
       setStatus(`批量同步失败：${String(error)}`);
     } finally {
       setBusyKey("");
+    }
+  };
+
+  const handleOpenBrowser = (folder: LocalLibraryFolder) => {
+    setBrowserRootFolder(folder);
+    setBrowserPath(folder.path);
+    setStatus("");
+  };
+
+  const handleCloseBrowser = () => {
+    setBrowserRootFolder(null);
+    setBrowserPath("");
+    setBrowserEntries([]);
+  };
+
+  const handleGoBrowserUp = () => {
+    if (!canGoBrowserUp) return;
+    const parent = parentDirectory(browserPath);
+    if (!parent || parent.toLowerCase().length < browserRootKey.length) return;
+    setBrowserPath(parent);
+  };
+
+  const handleActivateEntry = async (entry: DirectoryEntryInfo) => {
+    if (!isLitematicEntry(entry)) return;
+    setBusyKey(`activate:${entry.path}`);
+    try {
+      const nextState = await activateProjectionRecord(await loadLibrary(), entry.path);
+      setState(nextState);
+      setStatus(`已激活：${entry.path}`);
+      await emitEvent(projectionLibraryImportedEvent, { path: entry.path });
+      await emitLibraryStateChanged();
+    } catch (error: any) {
+      setStatus(`激活失败：${String(error)}`);
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  const handleOpenSendDialog = (entry: DirectoryEntryInfo) => {
+    if (!isLitematicEntry(entry)) return;
+    const record = recordFromEntry(entry);
+    setSendDialogRecord(record);
+    setSendTargetDirectory(pickDefaultSendFolder(record, state.folders));
+    setSendTargetFileName(record.fileName);
+    setSendOverwrite(false);
+    setSendError("");
+  };
+
+  const handleCloseSendDialog = () => {
+    setSendDialogRecord(null);
+    setSendTargetDirectory("");
+    setSendTargetFileName("");
+    setSendOverwrite(false);
+    setSendError("");
+  };
+
+  const handleConfirmSend = async () => {
+    if (!sendDialogRecord) return;
+    const normalizedFileName = ensureLitematicFileName(sendTargetFileName);
+    if (!sendTargetDirectory) {
+      setSendError("请选择目标本地库文件夹。");
+      return;
+    }
+    if (!normalizedFileName) {
+      setSendError("请输入目标文件名。");
+      return;
+    }
+    setIsSending(true);
+    setSendError("");
+    try {
+      const output = await copyFileToDirectory(sendDialogRecord.path, sendTargetDirectory, normalizedFileName, sendOverwrite);
+      setStatus(`已发送到：${output.target_path}`);
+      handleCloseSendDialog();
+    } catch (error: any) {
+      setSendError(String(error));
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -179,12 +407,101 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
       </fieldset>
 
       <fieldset className="subwindow-list-fieldset">
-        <legend>文件夹列表</legend>
+        <legend>{browserRootFolder ? "文件浏览器" : "文件夹列表"}</legend>
         <div className="subwindow-list">
-          {state.folders.length === 0 ? (
+          {browserRootFolder ? (
+            <>
+              <div className="local-browser-toolbar">
+                <button className="btn" type="button" onClick={handleCloseBrowser}>返回文件夹列表</button>
+                <button className="btn" type="button" disabled={!canGoBrowserUp} onClick={handleGoBrowserUp}>上一级</button>
+                <div className="local-browser-path" title={browserPath}>{browserPath}</div>
+              </div>
+              <table className="local-browser-table">
+                <thead>
+                  <tr>
+                    <th className="local-browser-icon-col">图标</th>
+                    <th>文件名</th>
+                    <th className="local-browser-size-col">大小</th>
+                    <th className="local-browser-actions-col">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {isBrowserLoading ? (
+                    <tr><td colSpan={4}>加载中...</td></tr>
+                  ) : browserEntries.length === 0 ? (
+                    <tr><td colSpan={4}>这个文件夹里没有内容。</td></tr>
+                  ) : browserEntries.map((entry) => {
+                    const iconName = entry.is_dir ? "folder" : isLitematicEntry(entry) ? "litematic" : "unknown";
+                    const canActivate = isLitematicEntry(entry) && !busyKey;
+                    return (
+                      <tr
+                        key={entry.path}
+                        onDoubleClick={() => {
+                          if (entry.is_dir) {
+                            setBrowserPath(entry.path);
+                          } else {
+                            handleActivateEntry(entry).catch((error) => setStatus(`激活失败：${String(error)}`));
+                          }
+                        }}
+                      >
+                        <td className="local-browser-icon-cell">
+                          <img
+                            className="local-browser-file-icon"
+                            src={fileIconUrl(themeId, iconName)}
+                            alt=""
+                            aria-hidden="true"
+                            onError={(event) => handleFileIconError(event, iconName)}
+                          />
+                        </td>
+                        <td className="local-browser-name-cell" title={entry.path}>{entry.name}</td>
+                        <td className="local-browser-size-cell">{entry.is_dir ? "-" : formatSize(entry.file_size)}</td>
+                        <td>
+                          <div className="button-row subwindow-wrap-row">
+                            <button
+                              className="btn"
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                (entry.is_dir ? openWorkspacePath(entry.path) : openFileParentDir(entry.path))
+                                  .catch((error) => setStatus(`打开目录失败：${String(error)}`));
+                              }}
+                            >
+                              打开目录
+                            </button>
+                            <button
+                              className="btn"
+                              type="button"
+                              disabled={!canActivate}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleActivateEntry(entry).catch((error) => setStatus(`激活失败：${String(error)}`));
+                              }}
+                            >
+                              {busyKey === `activate:${entry.path}` ? "激活中..." : "激活"}
+                            </button>
+                            <button
+                              className="btn"
+                              type="button"
+                              disabled={!canActivate}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleOpenSendDialog(entry);
+                              }}
+                            >
+                              发送...
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </>
+          ) : state.folders.length === 0 ? (
             <div className="subwindow-empty-state">还没有挂载任何本地库文件夹。</div>
           ) : state.folders.map((folder) => (
-            <div key={folder.path} className="library-card subwindow-card-stretch">
+            <div key={folder.path} className="library-card subwindow-card-stretch" onDoubleClick={() => handleOpenBrowser(folder)}>
               <div className="lib-card-left subwindow-card-stack">
                 <div className="lib-card-line-main">
                   <div className="lib-card-heading">
@@ -231,6 +548,22 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
           ))}
         </div>
       </fieldset>
+      {sendDialogRecord ? (
+        <SendProjectionDialog
+          record={sendDialogRecord}
+          folders={state.folders}
+          targetDirectory={sendTargetDirectory}
+          targetFileName={sendTargetFileName}
+          overwrite={sendOverwrite}
+          isSending={isSending}
+          error={sendError}
+          onTargetDirectoryChange={setSendTargetDirectory}
+          onTargetFileNameChange={setSendTargetFileName}
+          onOverwriteChange={setSendOverwrite}
+          onClose={isSending ? () => undefined : handleCloseSendDialog}
+          onSubmit={handleConfirmSend}
+        />
+      ) : null}
     </section>
   );
 }

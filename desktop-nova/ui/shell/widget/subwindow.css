@@ -523,6 +523,59 @@
     flex-wrap: wrap;
 }
 
+.local-browser-toolbar {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.local-browser-path,
+.local-browser-name-cell {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.local-browser-path {
+    flex: 1;
+    color: var(--ln-muted-text-color, GrayText);
+}
+
+.local-browser-table {
+    table-layout: fixed;
+}
+
+.local-browser-icon-col {
+    width: calc(var(--ln-file-icon-size, 16px) + 32px);
+}
+
+.local-browser-size-col {
+    width: 112px;
+}
+
+.local-browser-actions-col {
+    width: 300px;
+}
+
+.local-browser-icon-cell,
+.local-browser-size-cell {
+    text-align: center;
+}
+
+.local-browser-icon-cell > img,
+.local-browser-file-icon {
+    display: block;
+    width: var(--ln-file-icon-size, 16px);
+    max-width: var(--ln-file-icon-size, 16px);
+    height: var(--ln-file-icon-size, 16px);
+    max-height: var(--ln-file-icon-size, 16px);
+    margin: 0 auto;
+    object-fit: contain;
+}
+
 @media (max-width: 760px) {
     .reden-content-grid {
         grid-template-columns: minmax(0, 1fr);
@@ -533,6 +586,10 @@
         padding-left: 0;
         border-top: 1px solid ThreeDShadow;
         border-left: 0;
+    }
+
+    .local-browser-actions-col {
+        width: 220px;
     }
 
 }

@@ -11,11 +11,13 @@ export {
   saveUserConfig,
   setUserConfigDir,
 } from "../platform";
-export type { CopyFileToDirectoryOutput, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo } from "../platform";
+export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo } from "../platform";
 
 export {
   checkFileExists,
   copyFileToDirectory,
+  listDirectoryEntries,
+  listLitematicFileEntriesInDirectory,
   getAppDataFilePath as getUserConfigFilePath,
   listLitematicFilesInDirectory,
   readAppDataFile as readUserConfigFile,
