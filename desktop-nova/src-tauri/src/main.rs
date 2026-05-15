@@ -98,6 +98,17 @@ struct PathInfo {
 }
 
 #[derive(Serialize)]
+struct DirectoryEntryInfo {
+    path: String,
+    name: String,
+    is_dir: bool,
+    is_file: bool,
+    file_size: u64,
+    mtime_ms: u128,
+    extension: String,
+}
+
+#[derive(Serialize)]
 struct BackendTrace {
     actual_core_exe_path: String,
     actual_core_exe_exists: bool,
@@ -1856,14 +1867,76 @@ fn collect_litematic_files_in_directory(
     Ok(())
 }
 
-#[tauri::command]
-fn list_litematic_files_in_directory(path: String, recursive: bool) -> Result<Vec<String>, String> {
-    let input = PathBuf::from(&path);
-    let full_path = if input.is_absolute() {
+fn metadata_modified_ms(metadata: &std::fs::Metadata) -> u128 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn directory_entry_info(path: PathBuf) -> Result<DirectoryEntryInfo, String> {
+    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_string();
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_string();
+    Ok(DirectoryEntryInfo {
+        path: path.display().to_string(),
+        name,
+        is_dir: metadata.is_dir(),
+        is_file: metadata.is_file(),
+        file_size: if metadata.is_file() { metadata.len() } else { 0 },
+        mtime_ms: metadata_modified_ms(&metadata),
+        extension,
+    })
+}
+
+fn collect_litematic_file_entries_in_directory(
+    current_dir: &Path,
+    recursive: bool,
+    files: &mut Vec<DirectoryEntryInfo>,
+) -> Result<(), String> {
+    for entry in std::fs::read_dir(current_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            if recursive {
+                collect_litematic_file_entries_in_directory(&path, true, files)?;
+            }
+            continue;
+        }
+        let has_litematic_ext = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("litematic"))
+            .unwrap_or(false);
+        if has_litematic_ext {
+            files.push(directory_entry_info(path)?);
+        }
+    }
+    Ok(())
+}
+
+fn resolve_input_path(path: &str) -> PathBuf {
+    let input = PathBuf::from(path);
+    if input.is_absolute() {
         input
     } else {
         get_root().join(input)
-    };
+    }
+}
+
+#[tauri::command]
+fn list_litematic_files_in_directory(path: String, recursive: bool) -> Result<Vec<String>, String> {
+    let full_path = resolve_input_path(&path);
     if !full_path.exists() {
         return Err(format!("directory not found: {}", full_path.display()));
     }
@@ -1873,6 +1946,47 @@ fn list_litematic_files_in_directory(path: String, recursive: bool) -> Result<Ve
     let mut files = Vec::new();
     collect_litematic_files_in_directory(&full_path, recursive, &mut files)?;
     files.sort_unstable();
+    Ok(files)
+}
+
+#[tauri::command]
+fn list_directory_entries(path: String) -> Result<Vec<DirectoryEntryInfo>, String> {
+    let full_path = resolve_input_path(&path);
+    if !full_path.exists() {
+        return Err(format!("directory not found: {}", full_path.display()));
+    }
+    if !full_path.is_dir() {
+        return Err(format!("path is not a directory: {}", full_path.display()));
+    }
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&full_path).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        entries.push(directory_entry_info(entry.path())?);
+    }
+    entries.sort_by(|left, right| {
+        right
+            .is_dir
+            .cmp(&left.is_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    Ok(entries)
+}
+
+#[tauri::command]
+fn list_litematic_file_entries_in_directory(
+    path: String,
+    recursive: bool,
+) -> Result<Vec<DirectoryEntryInfo>, String> {
+    let full_path = resolve_input_path(&path);
+    if !full_path.exists() {
+        return Err(format!("directory not found: {}", full_path.display()));
+    }
+    if !full_path.is_dir() {
+        return Err(format!("path is not a directory: {}", full_path.display()));
+    }
+    let mut files = Vec::new();
+    collect_litematic_file_entries_in_directory(&full_path, recursive, &mut files)?;
+    files.sort_by(|left, right| left.path.to_lowercase().cmp(&right.path.to_lowercase()));
     Ok(files)
 }
 
@@ -2852,6 +2966,8 @@ fn main() {
             write_text_file_absolute,
             check_file_exists,
             list_litematic_files_in_directory,
+            list_directory_entries,
+            list_litematic_file_entries_in_directory,
             get_workspace_root,
             get_path_info,
             read_image_base64,

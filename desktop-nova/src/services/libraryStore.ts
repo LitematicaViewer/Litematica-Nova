@@ -3,7 +3,8 @@ import {
   writeUserConfigFile,
   executeBackend,
   checkFileExists,
-  listLitematicFilesInDirectory,
+  DirectoryEntryInfo,
+  listLitematicFileEntriesInDirectory,
 } from "./backend";
 
 export interface ProjectionRecord {
@@ -95,6 +96,34 @@ function normalizeLibraryState(raw?: Partial<LibraryState> | null): LibraryState
   return { records, folders };
 }
 
+function fileNameFromPath(filePath: string): string {
+  return filePath.split(/[\\/]/).pop() || "";
+}
+
+function projectionRecordFromDirectoryEntry(entry: DirectoryEntryInfo): ProjectionRecord {
+  const fileName = entry.name || fileNameFromPath(entry.path);
+  return {
+    id: entry.path,
+    path: entry.path,
+    fileName,
+    displayName: fileName,
+    author: "",
+    description: "",
+    totalBlocks: 0,
+    totalVolume: 0,
+    regionCount: 0,
+    enclosingSize: { x: 0, y: 0, z: 0 },
+    minecraftDataVersion: 0,
+    fileSize: entry.file_size || 0,
+    mtime: entry.mtime_ms || 0,
+    tags: [],
+    status: "ok",
+    lastAnalyzedAt: entry.mtime_ms || 0,
+    lastError: "",
+    sort_index: 0,
+  };
+}
+
 async function persistLibraryState(state: LibraryState): Promise<LibraryState> {
   const normalized = normalizeLibraryState(state);
   await writeUserConfigFile(LIB_PATH, JSON.stringify(normalized, null, 2));
@@ -122,7 +151,7 @@ async function addOrUpdateRecordInternal(
   }
 
   const analysis = await analyzeFile(filePath);
-  const fileName = filePath.split(/[\\/]/).pop() || "";
+  const fileName = fileNameFromPath(filePath);
   const existingIdx = nextState.records.findIndex((record) => record.path === filePath);
   const existing = existingIdx >= 0 ? nextState.records[existingIdx] : null;
 
@@ -200,6 +229,44 @@ export async function analyzeFile(filePath: string): Promise<Partial<ProjectionR
 
 export async function addOrUpdateRecord(state: LibraryState, filePath: string): Promise<LibraryState> {
   return await addOrUpdateRecordInternal(state, filePath, true);
+}
+
+/**
+ * Adds or refreshes a projection record, moves it to the top of recent content, and persists the library.
+ */
+export async function activateProjectionRecord(state: LibraryState, filePath: string): Promise<LibraryState> {
+  const updatedState = await addOrUpdateRecordInternal(state, filePath, false);
+  const orderedRecords = [
+    ...updatedState.records.filter((record) => record.path === filePath),
+    ...updatedState.records
+      .filter((record) => record.path !== filePath)
+      .sort((left, right) => (left.sort_index ?? 0) - (right.sort_index ?? 0)),
+  ].map((record, index) => ({ ...record, sort_index: index }));
+  return await persistLibraryState({ ...updatedState, records: orderedRecords });
+}
+
+/**
+ * Searches enabled local-library folders without adding matches to recent content.
+ */
+export async function searchLocalLibraryFolderRecords(
+  state: LibraryState,
+  query: string,
+): Promise<ProjectionRecord[]> {
+  const normalizedState = normalizeLibraryState(state);
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  const existingByPath = new Map(normalizedState.records.map((record) => [record.path, record]));
+  const foundByPath = new Map<string, ProjectionRecord>();
+  for (const folder of normalizedState.folders.filter((item) => item.enabled)) {
+    const entries = await listLitematicFileEntriesInDirectory(folder.path, folder.recursive);
+    for (const entry of entries) {
+      const fileName = entry.name || fileNameFromPath(entry.path);
+      const searchable = `${fileName} ${entry.path}`.toLowerCase();
+      if (!searchable.includes(needle)) continue;
+      foundByPath.set(entry.path, existingByPath.get(entry.path) || projectionRecordFromDirectoryEntry(entry));
+    }
+  }
+  return [...foundByPath.values()].sort((left, right) => left.fileName.localeCompare(right.fileName));
 }
 
 export async function addLocalLibraryFolder(state: LibraryState, folderPath: string): Promise<LibraryState> {
@@ -280,10 +347,7 @@ async function syncFoldersInternal(
   const errors: string[] = [];
   for (const folder of targets) {
     try {
-      const files = await listLitematicFilesInDirectory(folder.path, folder.recursive);
-      for (const filePath of files) {
-        nextState = await addOrUpdateRecordInternal(nextState, filePath, false);
-      }
+      const files = await listLitematicFileEntriesInDirectory(folder.path, folder.recursive);
       nextState = normalizeLibraryState({
         ...nextState,
         folders: nextState.folders.map((item) =>

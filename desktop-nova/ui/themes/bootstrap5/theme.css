@@ -13,4 +13,5 @@
 :root {
     --ln-ui-background-color: #ffffff;
     --ln-navigation-background-color: #722ef9;
+    --ln-file-icon-size: 24px;
 }

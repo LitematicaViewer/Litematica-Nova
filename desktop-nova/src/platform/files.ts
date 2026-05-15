@@ -24,6 +24,16 @@ export interface CopyFileToDirectoryOutput {
   bytes_copied: number;
 }
 
+export interface DirectoryEntryInfo {
+  path: string;
+  name: string;
+  is_dir: boolean;
+  is_file: boolean;
+  file_size: number;
+  mtime_ms: number;
+  extension: string;
+}
+
 export function readWorkspaceFile(path: string): Promise<string> {
   return invoke("read_file_string", { path });
 }
@@ -54,6 +64,20 @@ export function checkFileExists(path: string): Promise<boolean> {
 
 export function listLitematicFilesInDirectory(path: string, recursive = true): Promise<string[]> {
   return invoke("list_litematic_files_in_directory", { path, recursive });
+}
+
+/**
+ * Lists the immediate children of a directory with lightweight file metadata.
+ */
+export function listDirectoryEntries(path: string): Promise<DirectoryEntryInfo[]> {
+  return invoke("list_directory_entries", { path });
+}
+
+/**
+ * Lists .litematic files under a directory with lightweight file metadata.
+ */
+export function listLitematicFileEntriesInDirectory(path: string, recursive = true): Promise<DirectoryEntryInfo[]> {
+  return invoke("list_litematic_file_entries_in_directory", { path, recursive });
 }
 
 export function getWorkspaceRoot(): Promise<string> {

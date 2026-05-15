@@ -2,6 +2,7 @@
 import {
   addOrUpdateRecord,
   analyzeFile,
+  activateProjectionRecord,
   copyFileToDirectory,
   LibraryState,
   loadLibrary,
@@ -9,6 +10,7 @@ import {
   ProjectionRecord,
   reorderLibraryRecords,
   saveLibrary,
+  searchLocalLibraryFolderRecords,
   setRecordPreview,
 } from "../../../../../src/business/facade";
 import { SendProjectionDialog, ensureLitematicFileName } from "./sendDialog";
@@ -206,6 +208,9 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [sendOverwrite, setSendOverwrite] = useState(false);
   const [sendError, setSendError] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [folderSearchRecords, setFolderSearchRecords] = useState<ProjectionRecord[]>([]);
+  const [isFolderSearchLoading, setIsFolderSearchLoading] = useState(false);
+  const [folderSearchError, setFolderSearchError] = useState("");
 
   useEffect(() => {
     loadLibrary().then(setState);
@@ -313,6 +318,12 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     }
   };
 
+  const handleActivateRecord = async (path: string) => {
+    const nextState = await activateProjectionRecord(await loadLibrary(), path);
+    setState(nextState);
+    setCurrentFile(path);
+  };
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
     const newState = { ...state, records: [...state.records] };
@@ -396,7 +407,14 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   }, [state.records]);
 
   const filteredRecords = useMemo(() => {
-    let records = state.records.filter((r) => {
+    const recordsByPath = new Map<string, ProjectionRecord>();
+    for (const record of state.records) recordsByPath.set(record.path, record);
+    if (search) {
+      for (const record of folderSearchRecords) {
+        recordsByPath.set(record.path, recordsByPath.get(record.path) || record);
+      }
+    }
+    let records = [...recordsByPath.values()].filter((r) => {
       if (search) {
         const q = search.toLowerCase();
         if (!`${r.displayName} ${r.fileName} ${r.path} ${r.author} ${r.description}`.toLowerCase().includes(q)) return false;
@@ -415,7 +433,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       records = [...records].sort((a, b) => a.displayName.localeCompare(b.displayName));
     }
     return records;
-  }, [state.records, search, tagFilter, statusFilter, sortMode]);
+  }, [state.records, folderSearchRecords, search, tagFilter, statusFilter, sortMode]);
 
   const pageCount = pageSize === 0 ? 1 : Math.max(1, Math.ceil(filteredRecords.length / pageSize));
   const currentPage = Math.min(page, pageCount);
@@ -429,6 +447,35 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   useEffect(() => {
     setPage(1);
   }, [search, tagFilter, statusFilter, sortMode, pageSize]);
+
+  useEffect(() => {
+    const trimmedSearch = search.trim();
+    if (!trimmedSearch) {
+      setFolderSearchRecords([]);
+      setFolderSearchError("");
+      setIsFolderSearchLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setIsFolderSearchLoading(true);
+    setFolderSearchError("");
+    searchLocalLibraryFolderRecords(state, trimmedSearch)
+      .then((records) => {
+        if (!cancelled) setFolderSearchRecords(records);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setFolderSearchRecords([]);
+          setFolderSearchError(String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsFolderSearchLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.folders, search]);
 
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
@@ -469,22 +516,23 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       </div>
 
       {previewError && <pre className="nova-error nova-pre-medium library-preview-error">{previewError}</pre>}
+      {folderSearchError && <pre className="nova-error nova-pre-medium library-preview-error">{folderSearchError}</pre>}
 
-      {state.records.length === 0 ? (
+      {state.records.length === 0 && !search ? (
         <div className="library-empty-state">
           <p className="library-empty-text">投影库还没有内容。请先导入一个 .litematic 文件。</p>
           <button className="btn library-empty-action" onClick={(event) => { event.stopPropagation(); handleSelect(); }}>选择 .litematic...</button>
         </div>
       ) : (
         <>
-          <div className="library-content-title">{search ? "搜索结果" : "最近内容"}</div>
+          <div className="library-content-title">{search ? `搜索结果${isFolderSearchLoading ? "（正在扫描本地库文件夹...）" : ""}` : "最近内容"}</div>
           <div className="library-record-list">
             {visibleRecords.length > 0 ? visibleRecords.map((r) => (
               <ProjectionCard
                 key={r.path}
                 record={r}
                 isCurrent={currentFile === r.path}
-                onSetCurrent={() => setCurrentFile(r.path)}
+                onSetCurrent={() => handleActivateRecord(r.path)}
                 onEditProperties={() => { setCurrentFile(r.path); setRoute("properties"); }}
                 onOpenFolder={() => openFileParentDir(r.path).catch((err) => alert(`打开失败\n${String(err)}`))}
                 onSend={() => handleOpenSendDialog(r)}
@@ -548,5 +596,4 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     </div>
   );
 }
-
 
