@@ -1,7 +1,28 @@
-import React from "react";
+import { useEffect, useState } from "react";
 
 import { Dialog } from "../../../../components/Dialog";
-import { LocalLibraryFolder, ProjectionRecord } from "../../../../../src/business/facade";
+import {
+  loadUserConfigMigratingLocalStorage,
+  LocalLibraryFolder,
+  normalizeLocalLibraryTailPathCount,
+  ProjectionRecord,
+} from "../../../../../src/business/facade";
+
+const DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT = 3;
+
+function compactFolderPath(path: string, tailCount: number): string {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  const separator = normalized.includes("\\") ? "\\" : "/";
+  const parts = normalized.split(/[\\/]+/).filter(Boolean);
+  const safeTailCount = Number.isFinite(tailCount) && tailCount >= 1 ? Math.floor(tailCount) : DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT;
+  const hasWindowsDrive = /^[A-Za-z]:/.test(normalized);
+  const hasUnixRoot = normalized.startsWith("/");
+  const visiblePrefixSegments = hasWindowsDrive || !hasUnixRoot ? 1 : 0;
+  if (parts.length <= safeTailCount + visiblePrefixSegments) return normalized;
+  const driveOrRoot = hasWindowsDrive ? normalized.match(/^[A-Za-z]:/)?.[0] || "" : hasUnixRoot ? "" : parts[0];
+  const tail = parts.slice(-safeTailCount).join(separator);
+  return driveOrRoot ? `${driveOrRoot}${separator}...${separator}${tail}` : `${separator}...${separator}${tail}`;
+}
 
 export function ensureLitematicFileName(fileName: string): string {
   const trimmed = fileName.trim();
@@ -36,6 +57,14 @@ export function SendProjectionDialog({
   onClose: () => void;
   onSubmit: () => void;
 }) {
+  const [localLibraryTailPathCount, setLocalLibraryTailPathCount] = useState(DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT);
+
+  useEffect(() => {
+    loadUserConfigMigratingLocalStorage()
+      .then((info) => setLocalLibraryTailPathCount(normalizeLocalLibraryTailPathCount(info.config.local_library_tail_path_count)))
+      .catch(() => undefined);
+  }, []);
+
   const normalizedFileName = ensureLitematicFileName(targetFileName);
   const targetPathPreview = targetDirectory && normalizedFileName
     ? `${targetDirectory.replace(/[\\/]+$/, "")}/${normalizedFileName}`
@@ -65,7 +94,7 @@ export function SendProjectionDialog({
             {folders.length === 0 ? (
               <option value="">请先配置本地库文件夹</option>
             ) : folders.map((folder) => (
-              <option key={folder.path} value={folder.path}>{folder.path}{folder.enabled ? "" : "（未启用）"}</option>
+              <option key={folder.path} value={folder.path}>{compactFolderPath(folder.path, localLibraryTailPathCount)}{folder.enabled ? "" : "（未启用）"}</option>
             ))}
           </select>
           <span className="muted">目标是已配置的本地库文件夹根目录；发送会复制当前 `.litematic` 文件。</span>

@@ -1,6 +1,7 @@
 @font-face {
     font-family: "Unifont";
-    src: url("../resource/font/unifont-15.0.01.ttf") format("truetype");
+    /* src: url("../resource/font/UnifontExMono.woff2") format("woff2"); */
+    src: url("../resource/font/unifont-16.0.04.ttf") format("truetype");
     font-style: normal;
     font-weight: normal;
 }

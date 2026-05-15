@@ -12,6 +12,7 @@ import {
   loadUserConfigMigratingLocalStorage,
   LocalLibraryFolder,
   LibraryState,
+  normalizeLocalLibraryTailPathCount,
   normalizeMaterialListWindowBehavior,
   openFileParentDir,
   openLocalLibraryFoldersWindow,
@@ -110,13 +111,23 @@ function parentDirectory(path: string): string {
   return lastSeparatorIndex >= 0 ? normalized.slice(0, lastSeparatorIndex) : "";
 }
 
-function compactFolderPath(path: string): string {
+/**
+ * 压缩文件夹路径，保留最后 N 级目录。
+ * @param path 文件夹路径
+ * @param tailCount 保留的目录级数
+ * @returns 压缩后的文件夹路径
+ */
+function compactFolderPath(path: string, tailCount: number): string {
   const normalized = path.trim().replace(/[\\/]+$/, "");
   const separator = normalized.includes("\\") ? "\\" : "/";
   const parts = normalized.split(/[\\/]+/).filter(Boolean);
-  if (parts.length <= 3) return normalized;
-  const driveOrRoot = normalized.match(/^[A-Za-z]:/)?.[0] || (normalized.startsWith("/") ? "" : parts[0]);
-  const tail = parts.slice(-2).join(separator);
+  const safeTailCount = normalizeLocalLibraryTailPathCount(tailCount);
+  const hasWindowsDrive = /^[A-Za-z]:/.test(normalized);
+  const hasUnixRoot = normalized.startsWith("/");
+  const visiblePrefixSegments = hasWindowsDrive || !hasUnixRoot ? 1 : 0;
+  if (parts.length <= safeTailCount + visiblePrefixSegments) return normalized;
+  const driveOrRoot = hasWindowsDrive ? normalized.match(/^[A-Za-z]:/)?.[0] || "" : hasUnixRoot ? "" : parts[0];
+  const tail = parts.slice(-safeTailCount).join(separator);
   return driveOrRoot ? `${driveOrRoot}${separator}...${separator}${tail}` : `${separator}...${separator}${tail}`;
 }
 
@@ -241,6 +252,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
   const [busyKey, setBusyKey] = useState("");
   const [status, setStatus] = useState("");
   const [themeId, setThemeId] = useState(() => currentThemeId());
+  const [localLibraryTailPathCount, setLocalLibraryTailPathCount] = useState(3);
   const [browserRootFolder, setBrowserRootFolder] = useState<LocalLibraryFolder | null>(null);
   const [browserPath, setBrowserPath] = useState("");
   const [browserEntries, setBrowserEntries] = useState<DirectoryEntryInfo[]>([]);
@@ -258,6 +270,12 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
 
   useEffect(() => {
     loadLibrary().then(setState).catch((error) => setStatus(`读取本地库配置失败：${String(error)}`));
+  }, []);
+
+  useEffect(() => {
+    loadUserConfigMigratingLocalStorage()
+      .then((info) => setLocalLibraryTailPathCount(normalizeLocalLibraryTailPathCount(info.config.local_library_tail_path_count)))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => subscribeToThemeChanges(setThemeId), []);
@@ -624,7 +642,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
               <div className="lib-card-left subwindow-card-stack">
                 <div className="lib-card-line-main">
                   <div className="lib-card-heading">
-                    <span className="lib-card-title" title={folder.path}>{compactFolderPath(folder.path)}</span>
+                    <span className="lib-card-title" title={folder.path}>{compactFolderPath(folder.path, localLibraryTailPathCount)}</span>
                   </div>
                 </div>
                 <div className="subwindow-status-text">最近同步：{formatDate(folder.lastSyncedAt)}</div>

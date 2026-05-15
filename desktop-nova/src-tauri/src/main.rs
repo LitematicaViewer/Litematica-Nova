@@ -176,6 +176,8 @@ struct UserConfig {
     material_list_window_behavior: String,
     #[serde(default = "default_show_ui_test_page")]
     show_ui_test_page: bool,
+    #[serde(default = "default_local_library_tail_path_count")]
+    local_library_tail_path_count: u32,
 }
 
 #[derive(Deserialize)]
@@ -185,6 +187,7 @@ struct UserConfigInput {
     preview_mode: Option<String>,
     material_list_window_behavior: Option<String>,
     show_ui_test_page: Option<bool>,
+    local_library_tail_path_count: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -383,6 +386,7 @@ fn default_user_config() -> UserConfig {
         preview_mode: "normal".to_string(),
         material_list_window_behavior: default_material_list_window_behavior(),
         show_ui_test_page: default_show_ui_test_page(),
+        local_library_tail_path_count: default_local_library_tail_path_count(),
     }
 }
 
@@ -394,10 +398,22 @@ fn default_show_ui_test_page() -> bool {
     true
 }
 
+fn default_local_library_tail_path_count() -> u32 {
+    3
+}
+
 fn normalize_material_list_window_behavior(value: &str) -> String {
     match value.trim().to_ascii_lowercase().as_str() {
         "main_window_overlay" => "main_window_overlay".to_string(),
         _ => "independent_window".to_string(),
+    }
+}
+
+fn normalize_local_library_tail_path_count(value: u32) -> u32 {
+    if value >= 1 {
+        value
+    } else {
+        default_local_library_tail_path_count()
     }
 }
 
@@ -429,6 +445,8 @@ fn read_user_config_data(dir: &Path) -> UserConfig {
     config.preview_mode = normalize_mode_string(&config.preview_mode);
     config.material_list_window_behavior =
         normalize_material_list_window_behavior(&config.material_list_window_behavior);
+    config.local_library_tail_path_count =
+        normalize_local_library_tail_path_count(config.local_library_tail_path_count);
     config
 }
 
@@ -1478,6 +1496,9 @@ fn save_user_config(input: UserConfigInput) -> Result<UserConfigInfo, String> {
     }
     if let Some(show) = input.show_ui_test_page {
         config.show_ui_test_page = show;
+    }
+    if let Some(count) = input.local_library_tail_path_count {
+        config.local_library_tail_path_count = normalize_local_library_tail_path_count(count);
     }
     write_user_config_data(&dir, &config)?;
     Ok(UserConfigInfo {
