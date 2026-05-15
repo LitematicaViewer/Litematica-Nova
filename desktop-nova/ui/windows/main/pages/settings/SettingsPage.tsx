@@ -23,9 +23,11 @@ import {
 import { DISPLAY_MODE_OPTIONS, DisplayMode, loadDisplayMode, normalizeDisplayMode, saveDisplayMode } from "../../../../../src/business/facade";
 import {
   loadUserConfigMigratingLocalStorage,
+  normalizeLocalLibraryTailPathCount,
   normalizeMaterialListWindowBehavior,
   normalizeShowUiTestPage,
   normalizeTheme,
+  saveLocalLibraryTailPathCountConfig,
   saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
   saveRenderDisplayModeConfig,
@@ -66,11 +68,26 @@ function PathRow({ label, path, info }: { label: string; path: string; info?: Pa
   );
 }
 
+function compactFolderPathDemo(path: string, tailCount: number): string {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  const separator = normalized.includes("\\") ? "\\" : "/";
+  const parts = normalized.split(/[\\/]+/).filter(Boolean);
+  const safeTailCount = normalizeLocalLibraryTailPathCount(tailCount);
+  const hasWindowsDrive = /^[A-Za-z]:/.test(normalized);
+  const hasUnixRoot = normalized.startsWith("/");
+  const visiblePrefixSegments = hasWindowsDrive || !hasUnixRoot ? 1 : 0;
+  if (parts.length <= safeTailCount + visiblePrefixSegments) return normalized;
+  const driveOrRoot = hasWindowsDrive ? normalized.match(/^[A-Za-z]:/)?.[0] || "" : hasUnixRoot ? "" : parts[0];
+  const tail = parts.slice(-safeTailCount).join(separator);
+  return driveOrRoot ? `${driveOrRoot}${separator}...${separator}${tail}` : `${separator}...${separator}${tail}`;
+}
+
 export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [displayMode, setDisplayMode] = useState<DisplayMode>(loadDisplayMode());
   const [previewMode, setPreviewMode] = useState<DisplayMode>("normal");
   const [materialListWindowBehavior, setMaterialListWindowBehavior] = useState("independent_window");
+  const [localLibraryTailPathCount, setLocalLibraryTailPathCount] = useState(3);
   const [showUiTestPage, setShowUiTestPageState] = useState(true);
   const [userConfig, setUserConfig] = useState<UserConfigInfo | null>(null);
   const [coreInfo, setCoreInfo] = useState<PathInfo | null>(null);
@@ -99,6 +116,7 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
     setDisplayMode(normalizeDisplayMode(info.config.render_display_mode));
     setPreviewMode(normalizeDisplayMode(info.config.preview_mode));
     setMaterialListWindowBehavior(normalizeMaterialListWindowBehavior(info.config.material_list_window_behavior));
+    setLocalLibraryTailPathCount(normalizeLocalLibraryTailPathCount(info.config.local_library_tail_path_count));
     setShowUiTestPageState(showUiTest);
     setShowUiTestPage?.(showUiTest);
     setTheme(normalizeTheme(info.config.theme));
@@ -159,6 +177,12 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
     setShowUiTestPageState(checked);
     setShowUiTestPage?.(checked);
     applyUserConfig(await saveShowUiTestPageConfig(checked));
+  };
+
+  const handleLocalLibraryTailPathCount = async (value: string) => {
+    const count = normalizeLocalLibraryTailPathCount(value);
+    setLocalLibraryTailPathCount(count);
+    applyUserConfig(await saveLocalLibraryTailPathCountConfig(count));
   };
 
   const checkBackend = async () => {
@@ -387,6 +411,35 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
             <input type="checkbox" checked={showUiTestPage} onChange={(event) => handleShowUiTestPage(event.target.checked)} />
             <span>在左侧导航栏显示 UI 测试入口</span>
           </label>
+        </div>
+        <div className="form-row">
+          <div className="form-label" style={{ width: 150 }}>保留尾部路径数</div>
+          <div className="form-field" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              className="input"
+              type="number"
+              min={1}
+              step={1}
+              style={{ width: 120 }}
+              value={localLibraryTailPathCount}
+              onChange={(event) => handleLocalLibraryTailPathCount(event.target.value)}
+            />
+            <span style={{ opacity: 0.72 }}>本地库文件夹标题压缩时，保留最后 N 级目录</span>
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-label" style={{ width: 150 }}>演示</div>
+          <div className="form-field" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <code style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", opacity: 0.72 }}>
+              {"C:\\Users\\LOLcat\\Documents\\Minecraft\\Schematics\\Castle\\Overworld\\North Gate"}
+            </code>
+            <div>
+              {compactFolderPathDemo(
+                "C:\\Users\\LOLcat\\Documents\\Minecraft\\Schematics\\Castle\\Overworld\\North Gate",
+                localLibraryTailPathCount,
+              )}
+            </div>
+          </div>
         </div>
         <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
           材料列表和 UI 测试页中的演示窗口都会按照这里的子窗口行为决定使用独立窗口还是主窗口遮罩。

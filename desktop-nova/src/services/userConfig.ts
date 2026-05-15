@@ -12,6 +12,7 @@ const MIGRATION_KEY = "lba.appdataConfigMigrated.v1";
 
 export type ThemeName = "WebDefault" | "Bootstrap5" | "Metro10" | "Minecraft";
 export type MaterialListWindowBehavior = "independent_window" | "main_window_overlay";
+const DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT = 3;
 
 export function normalizeShowUiTestPage(value: unknown): boolean {
   return value !== false;
@@ -30,6 +31,11 @@ export function normalizeTheme(value: unknown): ThemeName {
  */
 export function normalizeMaterialListWindowBehavior(value: unknown): MaterialListWindowBehavior {
   return String(value || "").trim() === "main_window_overlay" ? "main_window_overlay" : "independent_window";
+}
+
+export function normalizeLocalLibraryTailPathCount(value: unknown): number {
+  const numeric = Math.floor(Number(value));
+  return Number.isFinite(numeric) && numeric >= 1 ? numeric : DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT;
 }
 
 export async function loadUserConfigMigratingLocalStorage(): Promise<UserConfigInfo> {
@@ -67,6 +73,13 @@ export async function savePreviewModeConfig(mode: string): Promise<UserConfigInf
  */
 export async function saveMaterialListWindowBehaviorConfig(behavior: string): Promise<UserConfigInfo> {
   return await saveUserConfig({ material_list_window_behavior: normalizeMaterialListWindowBehavior(behavior) });
+}
+
+/**
+ * Persists how many trailing path segments should remain visible in local-library folder labels.
+ */
+export async function saveLocalLibraryTailPathCountConfig(count: number): Promise<UserConfigInfo> {
+  return await saveUserConfig({ local_library_tail_path_count: normalizeLocalLibraryTailPathCount(count) });
 }
 
 export async function saveShowUiTestPageConfig(show: boolean): Promise<UserConfigInfo> {
