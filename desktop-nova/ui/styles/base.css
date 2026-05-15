@@ -519,7 +519,7 @@ label.setting-row:has(> input[type="radio"]) {
 .library-card,
 .rule-row {
     background: var(--ln-ui-background-color, Canvas);
-    border: 1px solid ThreeDShadow;
+    border: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color, ThreeDShadow);
 }
 
 .card,
@@ -639,8 +639,9 @@ label.setting-row:has(> input[type="radio"]) {
 }
 
 .library-card-current {
-    border-color: var(--ln-accent-color, Highlight);
-    background: color-mix(in srgb, var(--ln-accent-color, Highlight) 12%, var(--ln-ui-background-color, Canvas));
+    border-width: var(--ln-card-border-width-active, var(--ln-card-border-width, 1px));
+    border-color: var(--ln-card-border-color-active, var(--ln-accent-color, Highlight));
+    background: var(--ln-card-background-color-active, color-mix(in srgb, var(--ln-accent-color, Highlight) 12%, var(--ln-ui-background-color, Canvas)));
 }
 
 .library-footer {
