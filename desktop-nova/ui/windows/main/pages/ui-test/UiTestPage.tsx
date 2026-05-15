@@ -43,6 +43,7 @@ export function UiTestPage() {
   const [themeId, setThemeId] = useState(() => currentThemeId());
   const [showDemoOverlay, setShowDemoOverlay] = useState(false);
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
+  const [selectedTableRow, setSelectedTableRow] = useState("");
   useEffect(() => subscribeToThemeChanges(setThemeId), []);
 
   const thumbExampleUrl = thumbExampleUrlForTheme(themeId);
@@ -124,24 +125,32 @@ export function UiTestPage() {
               ["百分比", "99%"],
               ["带小数点的百分比", "99.99%"],
               ["货币", "$99.00"],
-            ].map(([label, value], index) => (
-              <tr key={label}>
-                <td>{renderThumbExample()}</td>
-                <td>{label}</td>
-                <td>{value}</td>
-                <td />
-                <td>
-                  {index < 3 ? (
-                    <div className="button-row">
-                      <button type="button" disabled={index === 1} aria-pressed={index === 2}>
-                        {index === 1 ? "不可用按钮1" : index === 2 ? "可选中按钮1" : "测试按钮1"}
-                      </button>
-                      <button type="button">测试按钮2</button>
-                    </div>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
+            ].map(([label, value], index) => {
+              const isSelected = selectedTableRow === label;
+              return (
+                <tr
+                  key={label}
+                  className={isSelected ? "table-row-selected" : ""}
+                  aria-selected={isSelected}
+                  onClick={() => setSelectedTableRow(label)}
+                >
+                  <td>{renderThumbExample()}</td>
+                  <td>{label}</td>
+                  <td>{value}</td>
+                  <td />
+                  <td>
+                    {index < 3 ? (
+                      <div className="button-row">
+                        <button type="button" disabled={index === 1} aria-pressed={index === 2}>
+                          {index === 1 ? "不可用按钮1" : index === 2 ? "可选中按钮1" : "测试按钮1"}
+                        </button>
+                        <button type="button">测试按钮2</button>
+                      </div>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </fieldset>
