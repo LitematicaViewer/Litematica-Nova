@@ -400,6 +400,7 @@ fn build_root(plan: &ProjectionPlan) -> Result<BuiltRoot> {
                 .saturating_sub(bounds_min[2])
                 .saturating_add(1),
         }),
+        preview_image_data: None,
     };
     let root = LitematicRoot {
         metadata,

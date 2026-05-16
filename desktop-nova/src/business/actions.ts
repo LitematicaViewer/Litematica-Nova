@@ -64,6 +64,21 @@ export async function selectJsonSavePath(defaultPath: string): Promise<string | 
   return typeof selected === "string" ? selected : null;
 }
 
+export async function selectPreviewImageFile(): Promise<string | null> {
+  const selected = await openDialog({
+    filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function clearProjectionPreviewImage(currentFile: string): Promise<string> {
+  return saveProjectionMetadataPatch({ currentFile, patch: { preview_image_data: [] } });
+}
+
+export async function importProjectionPreviewImage(currentFile: string, imagePath: string): Promise<string> {
+  return saveProjectionMetadataPatch({ currentFile, patch: { preview_image_path: imagePath } });
+}
+
 export async function openExternalPath(path: string): Promise<void> {
   await openPath(path);
 }
