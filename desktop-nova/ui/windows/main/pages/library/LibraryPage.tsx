@@ -13,7 +13,8 @@ import {
   searchLocalLibraryFolderRecords,
   setRecordPreview,
 } from "../../../../../src/business/facade";
-import { SendProjectionDialog, ensureLitematicFileName } from "./sendDialog";
+import { SendProjectionDialog } from "./sendDialog";
+import { ensureLitematicFileName } from "./function";
 import { checkFileExists, generatePreviewImage, openFileParentDir, readImageBase64, readProjectionPreviewImage, selectLitematicFile } from "../../../../../src/business/facade";
 import { LocalLibraryFoldersDialog, openLocalLibraryFoldersWithWindowBehavior } from "../../../local_library_folders";
 import { RedenLibraryDialog, openRedenLibraryWithWindowBehavior } from "../../../reden_library";
