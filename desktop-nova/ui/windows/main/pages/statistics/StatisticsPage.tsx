@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  exportMaterials,
+  exportMaterialsArtTable,
+  exportMaterialsCsv,
   loadMaterialsScope,
   loadStructureStats,
   MaterialItem,
@@ -12,7 +13,6 @@ import {
   openMaterialListWindow,
 } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
-import { Dropdown } from "../../../../components/Dropdown";
 
 function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; item: MaterialItem | null; multiplier: number }) {
   const popupRef = useRef<HTMLDivElement | null>(null);
@@ -51,8 +51,8 @@ function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; ite
   useLayoutEffect(() => {
     const popup = popupRef.current;
     if (!popup) return;
-    popup.style.left = `${position.left}px`;
-    popup.style.top = `${position.top}px`;
+    popup.style.setProperty("--material-list-popup-left", `${position.left}px`);
+    popup.style.setProperty("--material-list-popup-top", `${position.top}px`);
   }, [position.left, position.top]);
 
   if (!item) return null;
@@ -157,12 +157,21 @@ export function MaterialListContent({
     loadMats(workbook);
   }, [workbook, includeContainerItems]);
 
-  const handleExport = async () => {
+  const handleExportArtTable = async () => {
     try {
-      const ok = await exportMaterials(currentFile, materials, multiplier);
-      if (ok) alert("导出成功");
+      const ok = await exportMaterialsArtTable(currentFile, materials, multiplier);
+      if (ok) alert("写入艺术表成功");
     } catch (err: any) {
-      setError(`导出失败：${err}`);
+      setError(`写入艺术表失败：${err}`);
+    }
+  };
+
+  const handleExportCsv = async () => {
+    try {
+      const ok = await exportMaterialsCsv(currentFile, materials, multiplier);
+      if (ok) alert("写入 CSV 成功");
+    } catch (err: any) {
+      setError(`写入 CSV 失败：${err}`);
     }
   };
 
@@ -177,29 +186,50 @@ export function MaterialListContent({
         </div>
 
         <div className="subwindow-body">
-          <div className="subwindow-toolbar">
-            <span>范围</span>
-            <Dropdown value={workbook} options={options} onChange={setWorkbook} />
-            <button className="btn" onClick={() => loadMats(workbook)} disabled={isLoading}>重新加载</button>
-            <button className="btn" onClick={handleExport} disabled={isLoading || materials.length === 0}>导出材料列表</button>
-            <div className="subwindow-toolbar-spacer" />
-            <span>倍数</span>
-            <input
-              type="number"
-              className="input material-list-count-input"
-              value={multiplier}
-              onChange={(event) => setMultiplier(Math.max(1, parseInt(event.target.value, 10) || 1))}
-            />
-          </div>
+          <div className="material-list-control-stack">
+            <div className="material-list-control-row material-list-control-row-workbook">
+              <span className="material-list-control-label">工作簿</span>
+              <select
+                className="input material-list-workbook-select"
+                value={workbook}
+                onChange={(event) => setWorkbook(event.target.value)}
+              >
+                {options.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
 
-          <label className="subwindow-check-row">
-            <input
-              type="checkbox"
-              checked={includeContainerItems}
-              onChange={(event) => setIncludeContainerItems(event.target.checked)}
-            />
-            统计容器内物品
-          </label>
+            <div className="material-list-control-row material-list-control-row-actions">
+              <button className="btn" onClick={() => loadMats(workbook)} disabled={isLoading}>重新加载</button>
+              <button className="btn" onClick={handleExportArtTable} disabled={isLoading || materials.length === 0}>写入艺术表</button>
+              <button className="btn" onClick={handleExportCsv} disabled={isLoading || materials.length === 0}>写入CSV</button>
+              <label className="material-list-multiplier-control">
+                <span>倍数</span>
+                <input
+                  type="number"
+                  className="input material-list-count-input"
+                  value={multiplier}
+                  onChange={(event) => setMultiplier(Math.max(1, parseInt(event.target.value, 10) || 1))}
+                />
+              </label>
+            </div>
+
+            <div className="material-list-control-row material-list-control-row-toggles">
+              <label className="subwindow-check-row">
+                <input
+                  type="checkbox"
+                  checked={includeContainerItems}
+                  onChange={(event) => setIncludeContainerItems(event.target.checked)}
+                />
+                统计容器
+              </label>
+              <label className="subwindow-check-row material-list-disabled-toggle" title="统计实体尚未实现">
+                <input type="checkbox" disabled />
+                统计实体
+              </label>
+            </div>
+          </div>
 
           <div className="subwindow-status-text">
             {isLoading ? "正在分析..." : includeContainerItems ? "已包含容器 BlockEntity/TileEntity 内物品。" : "当前仅统计投影方块。"}
