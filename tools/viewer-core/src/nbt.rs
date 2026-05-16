@@ -3,7 +3,7 @@ use std::fs::File;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use fastnbt::{LongArray, Value, from_reader, to_writer};
+use fastnbt::{IntArray, LongArray, Value, from_reader, to_writer};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -34,6 +34,7 @@ pub struct MetadataNbt {
     pub total_volume: Option<i32>,
     pub region_count: Option<i32>,
     pub enclosing_size: Option<EnclosingSize>,
+    pub preview_image_data: Option<IntArray>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

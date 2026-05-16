@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use fastnbt::IntArray;
+use image::{GenericImageView, imageops::FilterType};
 use serde::{Deserialize, Serialize};
 
 use crate::nbt::{load_litematic_root, save_litematic_root};
@@ -17,6 +19,8 @@ pub struct MetadataEditPatch {
     pub litematic_version: Option<i32>,
     pub litematic_subversion: Option<i32>,
     pub minecraft_data_version: Option<i32>,
+    pub preview_image_data: Option<Vec<i32>>,
+    pub preview_image_path: Option<String>,
     #[serde(default)]
     pub regions: Vec<RegionRenamePatch>,
 }
@@ -75,6 +79,11 @@ pub fn edit_metadata(
     }
     if let Some(value) = patch.minecraft_data_version {
         root.minecraft_data_version = Some(value);
+    }
+    if let Some(image_path) = patch.preview_image_path.as_deref() {
+        root.metadata.preview_image_data = Some(load_preview_image_data(Path::new(image_path))?);
+    } else if let Some(value) = patch.preview_image_data {
+        root.metadata.preview_image_data = Some(IntArray::new(value));
     }
 
     let mut changed_regions = Vec::new();
@@ -144,6 +153,29 @@ pub fn edit_metadata(
         backup_path,
         changed_regions,
     })
+}
+
+fn load_preview_image_data(path: &Path) -> Result<IntArray> {
+    let image = image::open(path).with_context(|| format!("failed to open preview image {}", path.display()))?;
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        bail!("preview image must not be empty");
+    }
+
+    let size = width.min(height);
+    let x = (width - size) / 2;
+    let y = (height - size) / 2;
+    let cropped = image.crop_imm(x, y, size, size);
+    let resized = cropped.resize_exact(140, 140, FilterType::Lanczos3).to_rgba8();
+
+    let pixels = resized
+        .pixels()
+        .map(|pixel| {
+            let [r, g, b, a] = pixel.0;
+            (((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32) as i32
+        })
+        .collect();
+    Ok(IntArray::new(pixels))
 }
 
 fn backup_path_for(input: &Path) -> PathBuf {
