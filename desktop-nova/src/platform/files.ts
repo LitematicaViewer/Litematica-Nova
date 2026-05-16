@@ -12,6 +12,28 @@ export interface PathInfo {
   has_litematic_ext: boolean;
 }
 
+export interface ProjectionPreviewImageOutput {
+  width: number;
+  height: number;
+  data_url: string;
+}
+
+export interface CopyFileToDirectoryOutput {
+  target_path: string;
+  overwritten: boolean;
+  bytes_copied: number;
+}
+
+export interface DirectoryEntryInfo {
+  path: string;
+  name: string;
+  is_dir: boolean;
+  is_file: boolean;
+  file_size: number;
+  mtime_ms: number;
+  extension: string;
+}
+
 export function readWorkspaceFile(path: string): Promise<string> {
   return invoke("read_file_string", { path });
 }
@@ -40,6 +62,24 @@ export function checkFileExists(path: string): Promise<boolean> {
   return invoke("check_file_exists", { path });
 }
 
+export function listLitematicFilesInDirectory(path: string, recursive = true): Promise<string[]> {
+  return invoke("list_litematic_files_in_directory", { path, recursive });
+}
+
+/**
+ * Lists the immediate children of a directory with lightweight file metadata.
+ */
+export function listDirectoryEntries(path: string): Promise<DirectoryEntryInfo[]> {
+  return invoke("list_directory_entries", { path });
+}
+
+/**
+ * Lists .litematic files under a directory with lightweight file metadata.
+ */
+export function listLitematicFileEntriesInDirectory(path: string, recursive = true): Promise<DirectoryEntryInfo[]> {
+  return invoke("list_litematic_file_entries_in_directory", { path, recursive });
+}
+
 export function getWorkspaceRoot(): Promise<string> {
   return invoke("get_workspace_root");
 }
@@ -56,8 +96,16 @@ export function openFileParentDir(filePath: string): Promise<void> {
   return invoke("open_file_parent_dir", { filePath });
 }
 
+export function copyFileToDirectory(sourcePath: string, targetDirectory: string, targetFileName: string, overwrite = false): Promise<CopyFileToDirectoryOutput> {
+  return invoke("copy_file_to_directory", { sourcePath, targetDirectory, targetFileName, overwrite });
+}
+
 export function readImageBase64(path: string): Promise<string> {
   return invoke("read_image_base64", { path });
+}
+
+export function readProjectionPreviewImage(path: string): Promise<ProjectionPreviewImageOutput | null> {
+  return invoke("read_projection_preview_image", { filePath: path });
 }
 
 export function cleanupLocalTempFiles(): Promise<string> {

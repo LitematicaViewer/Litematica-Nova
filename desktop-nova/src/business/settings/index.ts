@@ -21,9 +21,11 @@ export {
 export type { MaterialListWindowBehavior, ThemeName } from "../../services/userConfig";
 export {
   loadUserConfigMigratingLocalStorage,
+  normalizeLocalLibraryTailPathCount,
   normalizeMaterialListWindowBehavior,
   normalizeShowUiTestPage,
   normalizeTheme,
+  saveLocalLibraryTailPathCountConfig,
   saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
   saveRenderDisplayModeConfig,

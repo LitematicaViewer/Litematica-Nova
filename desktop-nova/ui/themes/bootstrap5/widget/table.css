@@ -10,7 +10,8 @@
     --ln-bootstrap5-table-row-min-height: 2.25rem;
     --ln-bootstrap5-table-striped-background: rgb(0 0 0 / 5%);
     --ln-bootstrap5-table-hover-background: rgb(0 0 0 / 7.5%);
-    --ln-bootstrap5-table-active-background: rgb(0 0 0 / 10%);
+    --ln-bootstrap5-table-active-background: #f2f2f2;
+    --ln-table-row-selected-background: #f2f2f2;
     --ln-bootstrap5-table-group-divider-color: currentcolor;
 }
 
@@ -80,6 +81,13 @@ table > tbody > tr > .table-active,
 .table > tbody > tr.table-active > *,
 .table > tbody > tr > .table-active {
     --ln-bootstrap5-table-accent-background: var(--ln-bootstrap5-table-active-background);
+}
+
+table > tbody > tr.table-row-selected > *,
+table > tbody > tr[aria-selected="true"] > *,
+.table > tbody > tr.table-row-selected > *,
+.table > tbody > tr[aria-selected="true"] > * {
+    --ln-bootstrap5-table-accent-background: var(--ln-table-row-selected-background);
 }
 
 table.table-bordered,

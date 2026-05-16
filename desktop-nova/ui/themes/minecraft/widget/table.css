@@ -3,6 +3,7 @@
     --ln-minecraft-table-row-background-odd: #000000;
     --ln-minecraft-table-row-background-even: #1a1a1a;
     --ln-minecraft-table-row-background-hover: #2b2b2b;
+    --ln-table-row-selected-background: #4d4d4d;
 }
 
 table,
@@ -33,6 +34,13 @@ table > tbody > tr:nth-of-type(even) > *,
 table > tbody > tr:hover > *,
 .table > tbody > tr:hover > * {
     background-color: var(--ln-minecraft-table-row-background-hover);
+}
+
+table > tbody > tr.table-row-selected > *,
+table > tbody > tr[aria-selected="true"] > *,
+.table > tbody > tr.table-row-selected > *,
+.table > tbody > tr[aria-selected="true"] > * {
+    background-color: var(--ln-table-row-selected-background);
 }
 
 table > tbody > tr > * > .button-row,
