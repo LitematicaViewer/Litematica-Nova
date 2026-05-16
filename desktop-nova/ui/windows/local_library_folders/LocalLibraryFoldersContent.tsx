@@ -28,7 +28,9 @@ import { confirmDialog } from "../../../src/platform/dialogs";
 import { emitEvent } from "../../../src/platform/events";
 import { currentThemeId, subscribeToThemeChanges, themeResourceKey } from "../../shell/themeRuntime";
 import { projectionLibraryImportedEvent, projectionLibraryStateChangedEvent } from "../libraryEvents";
-import { SendProjectionDialog, ensureLitematicFileName } from "../main/pages/library/sendDialog";
+import { SendProjectionDialog } from "../main/pages/library/sendDialog";
+import { ensureLitematicFileName } from "../main/pages/library/function";
+import { compactFolderPath } from "../main/pages/library/function";
 
 type FileIconUrls = Record<string, string>;
 type HoverPreviewEntry = { entry: DirectoryEntryInfo; x: number; y: number };
@@ -109,26 +111,6 @@ function parentDirectory(path: string): string {
   const normalized = path.trim().replace(/[\\/]+$/, "");
   const lastSeparatorIndex = Math.max(normalized.lastIndexOf("\\"), normalized.lastIndexOf("/"));
   return lastSeparatorIndex >= 0 ? normalized.slice(0, lastSeparatorIndex) : "";
-}
-
-/**
- * 压缩文件夹路径，保留最后 N 级目录。
- * @param path 文件夹路径
- * @param tailCount 保留的目录级数
- * @returns 压缩后的文件夹路径
- */
-function compactFolderPath(path: string, tailCount: number): string {
-  const normalized = path.trim().replace(/[\\/]+$/, "");
-  const separator = normalized.includes("\\") ? "\\" : "/";
-  const parts = normalized.split(/[\\/]+/).filter(Boolean);
-  const safeTailCount = normalizeLocalLibraryTailPathCount(tailCount);
-  const hasWindowsDrive = /^[A-Za-z]:/.test(normalized);
-  const hasUnixRoot = normalized.startsWith("/");
-  const visiblePrefixSegments = hasWindowsDrive || !hasUnixRoot ? 1 : 0;
-  if (parts.length <= safeTailCount + visiblePrefixSegments) return normalized;
-  const driveOrRoot = hasWindowsDrive ? normalized.match(/^[A-Za-z]:/)?.[0] || "" : hasUnixRoot ? "" : parts[0];
-  const tail = parts.slice(-safeTailCount).join(separator);
-  return driveOrRoot ? `${driveOrRoot}${separator}...${separator}${tail}` : `${separator}...${separator}${tail}`;
 }
 
 function systemFileManagerLabel(): string {
