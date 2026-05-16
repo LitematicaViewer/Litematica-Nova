@@ -314,29 +314,33 @@ export function StatisticsPage({ currentFile }: any) {
   }
 
   const topMaterials = data ? [...data.materials].sort((a, b) => b.totalCount - a.totalCount) : [];
+  const featuredMaterials = topMaterials.slice(0, 5);
+  const totalMaterialCount = topMaterials.reduce((sum, material) => sum + material.totalCount, 0);
   const scan = data?.containerScan;
 
   return (
     <div className="statistics-page">
       <div className="statistics-toolbar">
-        <button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!data}>材料列表</button>
-        <label className="statistics-container-toggle">
-          <input
-            type="checkbox"
-            checked={includeContainerItems}
-            onChange={(event) => setIncludeContainerItems(event.target.checked)}
-          />
-          统计容器内物品
-        </label>
-        <div className="statistics-summary">
-          {includeContainerItems && scan
-            ? `容器扫描：${scan.containers_scanned} 个容器，${scan.item_stacks_scanned} 个物品堆。`
-            : "当前仅统计投影方块。"}
+        <div className="statistics-action-row">
+          <button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!data}>材料列表</button>
+          <button className="btn" onClick={loadStats}>重新统计</button>
+          <button className="btn" type="button" disabled>打开枚举器...</button>
         </div>
-        <div className="statistics-file-path" title={currentFile}>
-          {currentFile}
+
+        <div className="statistics-toggle-row">
+          <label className="statistics-container-toggle">
+            <input
+              type="checkbox"
+              checked={includeContainerItems}
+              onChange={(event) => setIncludeContainerItems(event.target.checked)}
+            />
+            统计容器
+          </label>
+          <label className="statistics-container-toggle statistics-toggle-disabled">
+            <input type="checkbox" disabled />
+            统计实体
+          </label>
         </div>
-        <button className="btn" onClick={loadStats}>重新分析</button>
       </div>
 
       {error && <pre className="statistics-error">{error}</pre>}
@@ -352,16 +356,17 @@ export function StatisticsPage({ currentFile }: any) {
 
       <div className="statistics-layout">
         <div className="group-box statistics-panel-scroll">
-          <div className="group-box-title">结构分析</div>
+          <div className="group-box-title">统计学信息</div>
           {data ? (
             <div className="statistics-metrics">
-              <ReadOnlyRow label="非空气方块" value={data.totalNonAirBlocks} />
+              <ReadOnlyRow label="网格数" value={data.enclosingSize.x * data.enclosingSize.y * data.enclosingSize.z} />
+              <ReadOnlyRow label="方块数" value={data.totalNonAirBlocks} />
+              <ReadOnlyRow label="密度" value={`${(data.density * 100).toFixed(2)}%`} />
               <ReadOnlyRow label="区域数量" value={data.regionCount} />
               <ReadOnlyRow label="包围尺寸" value={`${data.enclosingSize.x}x${data.enclosingSize.y}x${data.enclosingSize.z}`} />
-              <ReadOnlyRow label="密度" value={`${(data.density * 100).toFixed(2)}%`} />
               <ReadOnlyRow label="结构类型" value={data.buildingType} />
               <ReadOnlyRow label="红石偏度" value={`${(data.redstoneRatio * 100).toFixed(2)}%`} />
-              <ReadOnlyRow label="流体偏度" value={`${(data.fluidRatio * 100).toFixed(2)}%`} />
+              <ReadOnlyRow label="液体偏度" value={`${(data.fluidRatio * 100).toFixed(2)}%`} />
               <ReadOnlyRow label="实体种类" value={data.entityCount} />
             </div>
           ) : (
@@ -369,24 +374,57 @@ export function StatisticsPage({ currentFile }: any) {
           )}
         </div>
 
-        <div className="group-box statistics-materials-panel">
-          <div className="group-box-title">主要材料</div>
-          <div className="statistics-materials-body">
-            {data ? (
-              topMaterials.map((material) => (
-                <div key={material.id} className="statistics-material-row">
-                  {material.name} <span className="statistics-material-separator">x</span> {material.totalCount}
-                  {includeContainerItems && material.containerItemCount > 0 && (
-                    <span className="statistics-material-detail">
-                      方块 {material.blockCount} / 容器 {material.containerItemCount}
-                    </span>
-                  )}
-                </div>
-              ))
-            ) : (
-              <div className="statistics-loading">加载中...</div>
-            )}
+        <div className="statistics-side-stack">
+          <div className="group-box statistics-materials-panel">
+            <div className="group-box-title">主要材料</div>
+            <div className="statistics-materials-body">
+              {data ? (
+                featuredMaterials.map((material) => {
+                  const ratio = totalMaterialCount > 0 ? (material.totalCount / totalMaterialCount) * 100 : 0;
+                  return (
+                    <div key={material.id} className="statistics-material-row">
+                      <div className="statistics-material-main">
+                        <span className="statistics-material-name">{material.name}</span>
+                        <span className="statistics-material-count">{material.totalCount}</span>
+                      </div>
+                      <div className="statistics-material-meta">
+                        <span className="statistics-material-ratio">占比 {ratio.toFixed(2)}%</span>
+                        {includeContainerItems && material.containerItemCount > 0 && (
+                          <span className="statistics-material-detail">
+                            方块 {material.blockCount} / 容器 {material.containerItemCount}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="statistics-loading">加载中...</div>
+              )}
+            </div>
           </div>
+
+          <div className="group-box statistics-enumerator-panel">
+            <div className="group-box-title">枚举器信息</div>
+            <div className="statistics-enumerator-body">
+              <div className="statistics-panel-note">枚举器尚未接入，当前先保留占位控件。</div>
+              <div className="statistics-enumerator-actions">
+                <button className="btn" type="button" disabled>打开枚举器...</button>
+                <button className="btn" type="button" disabled>编辑信息框</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="statistics-footer">
+        <div className="statistics-summary">
+          {includeContainerItems && scan
+            ? `容器扫描：${scan.containers_scanned} 个容器，${scan.item_stacks_scanned} 个物品堆。`
+            : "当前仅统计投影方块。"}
+        </div>
+        <div className="statistics-file-path" title={currentFile}>
+          {currentFile}
         </div>
       </div>
 

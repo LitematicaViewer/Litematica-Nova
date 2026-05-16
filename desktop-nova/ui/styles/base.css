@@ -1076,14 +1076,29 @@ label.setting-row:has(> input[type="radio"]) {
     min-height: 0;
     flex-direction: column;
     gap: 12px;
+    overflow-y: auto;
+    padding-right: 4px;
 }
 
 .statistics-toolbar {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+}
+
+.statistics-action-row,
+.statistics-toggle-row,
+.statistics-footer {
     display: flex;
     min-width: 0;
     flex-wrap: wrap;
     align-items: center;
     gap: 12px;
+}
+
+.statistics-toggle-row {
+    padding-left: 2px;
 }
 
 .statistics-container-toggle {
@@ -1092,11 +1107,18 @@ label.setting-row:has(> input[type="radio"]) {
     gap: 6px;
 }
 
+.statistics-toggle-disabled {
+    color: var(--ln-muted-text-color, GrayText);
+}
+
 .statistics-summary {
-    flex: 1;
-    min-width: 220px;
     color: var(--ln-muted-text-color, GrayText);
     font-size: .9em;
+}
+
+.statistics-footer .statistics-summary {
+    flex: 1;
+    min-width: 220px;
 }
 
 .statistics-file-path {
@@ -1136,21 +1158,30 @@ label.setting-row:has(> input[type="radio"]) {
 }
 
 .statistics-layout {
-    display: flex;
-    flex: 1;
-    min-height: 0;
+    display: grid;
+    min-height: fit-content;
+    align-items: start;
+    grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr);
     gap: 12px;
-    overflow: hidden;
 }
 
 .statistics-panel-scroll,
-.statistics-materials-panel {
-    flex: 1;
+.statistics-materials-panel,
+.statistics-enumerator-panel {
     min-width: 0;
+    padding-top: 20px;
 }
 
-.statistics-panel-scroll {
-    overflow-y: auto;
+.statistics-side-stack {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.statistics-materials-panel,
+.statistics-enumerator-panel {
+    min-width: 0;
 }
 
 .statistics-metrics {
@@ -1164,36 +1195,91 @@ label.setting-row:has(> input[type="radio"]) {
     color: var(--ln-muted-text-color, GrayText);
 }
 
-.statistics-materials-panel {
+.statistics-materials-panel,
+.statistics-enumerator-panel {
     display: flex;
     flex-direction: column;
 }
 
-.statistics-materials-body {
+.statistics-materials-body,
+.statistics-enumerator-body {
     flex: 1;
-    overflow-y: auto;
     padding: 12px;
     border: 1px solid ThreeDShadow;
     background: var(--ln-ui-background-color, Canvas);
     color: var(--ln-body-text-color, CanvasText);
 }
 
+.statistics-materials-body {
+    overflow-y: auto;
+}
+
+.statistics-enumerator-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.statistics-panel-note {
+    color: var(--ln-muted-text-color, GrayText);
+    line-height: 1.5;
+}
+
+.statistics-enumerator-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.statistics-enumerator-actions > .btn {
+    flex: 1 1 140px;
+}
+
 .statistics-material-row {
-    margin-bottom: 6px;
-    font-size: 1.05em;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 10px;
 }
 
 .statistics-material-row:last-child {
     margin-bottom: 0;
 }
 
-.statistics-material-separator,
-.statistics-material-detail {
+.statistics-material-main,
+.statistics-material-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.statistics-material-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.statistics-material-count {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+}
+
+.statistics-material-meta {
     color: var(--ln-muted-text-color, GrayText);
+    font-size: .9em;
+}
+
+.statistics-material-ratio {
+    flex: 0 0 auto;
 }
 
 .statistics-material-detail {
-    margin-left: 8px;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .statistics-readonly-row {
@@ -1231,12 +1317,9 @@ pre {
 @media (max-width: 760px) {
     .two-column,
     .render-layout,
-    .form-row {
-        grid-template-columns: 1fr;
-    }
-
+    .form-row,
     .statistics-layout {
-        flex-direction: column;
+        grid-template-columns: 1fr;
     }
 
     .statistics-file-path {
