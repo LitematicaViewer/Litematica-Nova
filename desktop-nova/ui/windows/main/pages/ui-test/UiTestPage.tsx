@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 
+import { Dialog } from "../../../../components/Dialog";
 import {
   loadUserConfigMigratingLocalStorage,
   normalizeMaterialListWindowBehavior,
@@ -41,6 +42,8 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
 export function UiTestPage() {
   const [themeId, setThemeId] = useState(() => currentThemeId());
   const [showDemoOverlay, setShowDemoOverlay] = useState(false);
+  const [showTemplateDialog, setShowTemplateDialog] = useState(false);
+  const [selectedTableRow, setSelectedTableRow] = useState("");
   useEffect(() => subscribeToThemeChanges(setThemeId), []);
 
   const thumbExampleUrl = thumbExampleUrlForTheme(themeId);
@@ -91,6 +94,11 @@ export function UiTestPage() {
             <button type="button" disabled>禁用</button>
           </div>
         </FormRow>
+        <FormRow label="对话框：">
+          <div className="button-row">
+            <button type="button" onClick={() => setShowTemplateDialog(true)}>打开标准对话框模板</button>
+          </div>
+        </FormRow>
         <FormRow label="子窗口：">
           <div className="button-row">
             <button type="button" onClick={handleOpenDemoWindow}>打开空的演示窗口</button>
@@ -117,49 +125,78 @@ export function UiTestPage() {
               ["百分比", "99%"],
               ["带小数点的百分比", "99.99%"],
               ["货币", "$99.00"],
-            ].map(([label, value], index) => (
-              <tr key={label}>
-                <td>{renderThumbExample()}</td>
-                <td>{label}</td>
-                <td>{value}</td>
-                <td />
-                <td>
-                  {index < 3 ? (
-                    <div className="button-row">
-                      <button type="button" disabled={index === 1} aria-pressed={index === 2}>
-                        {index === 1 ? "不可用按钮1" : index === 2 ? "可选中按钮1" : "测试按钮1"}
-                      </button>
-                      <button type="button">测试按钮2</button>
-                    </div>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
+            ].map(([label, value], index) => {
+              const isSelected = selectedTableRow === label;
+              return (
+                <tr
+                  key={label}
+                  className={isSelected ? "table-row-selected" : ""}
+                  aria-selected={isSelected}
+                  onClick={() => setSelectedTableRow(label)}
+                >
+                  <td>{renderThumbExample()}</td>
+                  <td>{label}</td>
+                  <td>{value}</td>
+                  <td />
+                  <td>
+                    {index < 3 ? (
+                      <div className="button-row">
+                        <button type="button" disabled={index === 1} aria-pressed={index === 2}>
+                          {index === 1 ? "不可用按钮1" : index === 2 ? "可选中按钮1" : "测试按钮1"}
+                        </button>
+                        <button type="button">测试按钮2</button>
+                      </div>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </fieldset>
+      {showTemplateDialog ? (
+        <Dialog
+          title="标准对话框模板"
+          subtitle="用于普通确认、表单和轻量交互；它始终是主窗口内遮罩，不提供独立窗口模式。"
+          width="md"
+          onClose={() => setShowTemplateDialog(false)}
+          footer={(
+            <>
+              <button type="button" onClick={() => setShowTemplateDialog(false)}>取消</button>
+              <button type="button">主要操作</button>
+            </>
+          )}
+        >
+          <div className="dialog-form-grid">
+            <span className="dialog-label">标题区</span>
+            <span className="muted">上方包含标题、副标题和关闭按钮。</span>
+            <span className="dialog-label">正文区</span>
+            <div className="dialog-field-stack">
+              <input defaultValue="可直接放输入框、选择框和说明文案" />
+              <select defaultValue="template-a">
+                <option value="template-a">模板选项 A</option>
+                <option value="template-b">模板选项 B</option>
+              </select>
+              <label className="setting-row"><input type="checkbox" defaultChecked /> 支持内联布尔选项</label>
+            </div>
+            <span className="dialog-label">说明区</span>
+            <div className="dialog-message">这里适合放路径预览、确认文案、结果提示或错误信息。</div>
+          </div>
+        </Dialog>
+      ) : null}
       {showDemoOverlay && (
         <div className="dialog-overlay" onClick={() => setShowDemoOverlay(false)}>
           <div
-            className="dialog-content"
-            style={{ width: 720, maxWidth: "90%", height: "80vh", display: "flex", flexDirection: "column", gap: 12, padding: 0, overflow: "hidden" }}
+            className="dialog-content subwindow-frame"
             onClick={(event) => event.stopPropagation()}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: "var(--surface-elevated)", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
-              <h3 style={{ margin: 0 }}>子窗口样式演示</h3>
-              <button className="btn material-list-close-button" type="button" aria-label="关闭演示窗口" onClick={() => setShowDemoOverlay(false)}>×</button>
+            <div className="subwindow-title-bar">
+              <h3 className="subwindow-title">子窗口样式演示</h3>
+              <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={() => setShowDemoOverlay(false)}>×</button>
             </div>
-            <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12, flex: 1, overflow: "hidden" }}>
+            <div className="subwindow-body">
               <div className="muted">当前按“子窗口行为”设置，以主窗口遮罩方式打开这个演示窗口。</div>
-              <div
-                style={{
-                  flex: 1,
-                  minHeight: 320,
-                  border: "1px dashed var(--border)",
-                  background: "var(--surface-elevated)",
-                  borderRadius: 8,
-                }}
-              />
+              <div className="subwindow-demo-fill" />
             </div>
           </div>
         </div>

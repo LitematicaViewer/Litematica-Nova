@@ -7,8 +7,12 @@
 @import "./widget/range.css";
 @import "./widget/table.css";
 @import "./widget/text.css";
+@import "./widget/dialog.css";
+@import "./widget/subwindow.css";
+@import "./widget/content.css";
 
 :root {
     --ln-ui-background-color: #3c3c3c;
     --ln-navigation-background-color: #3c3c3c;
+    --ln-file-icon-size: 32px;
 }

@@ -1,10 +1,12 @@
 ﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use base64::Engine;
+use flate2::read::GzDecoder;
+use image::{DynamicImage, RgbaImage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::env;
-use std::io::Write;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::Mutex;
@@ -96,6 +98,17 @@ struct PathInfo {
 }
 
 #[derive(Serialize)]
+struct DirectoryEntryInfo {
+    path: String,
+    name: String,
+    is_dir: bool,
+    is_file: bool,
+    file_size: u64,
+    mtime_ms: u128,
+    extension: String,
+}
+
+#[derive(Serialize)]
 struct BackendTrace {
     actual_core_exe_path: String,
     actual_core_exe_exists: bool,
@@ -140,6 +153,20 @@ struct RenderPreviewOutput {
     exit_code: Option<i32>,
 }
 
+#[derive(Serialize)]
+struct ProjectionPreviewOutput {
+    width: u32,
+    height: u32,
+    data_url: String,
+}
+
+#[derive(Serialize)]
+struct CopyFileToDirectoryOutput {
+    target_path: String,
+    overwritten: bool,
+    bytes_copied: u64,
+}
+
 #[derive(Deserialize, Serialize, Clone)]
 struct UserConfig {
     theme: String,
@@ -149,6 +176,8 @@ struct UserConfig {
     material_list_window_behavior: String,
     #[serde(default = "default_show_ui_test_page")]
     show_ui_test_page: bool,
+    #[serde(default = "default_local_library_tail_path_count")]
+    local_library_tail_path_count: u32,
 }
 
 #[derive(Deserialize)]
@@ -158,6 +187,7 @@ struct UserConfigInput {
     preview_mode: Option<String>,
     material_list_window_behavior: Option<String>,
     show_ui_test_page: Option<bool>,
+    local_library_tail_path_count: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -356,6 +386,7 @@ fn default_user_config() -> UserConfig {
         preview_mode: "normal".to_string(),
         material_list_window_behavior: default_material_list_window_behavior(),
         show_ui_test_page: default_show_ui_test_page(),
+        local_library_tail_path_count: default_local_library_tail_path_count(),
     }
 }
 
@@ -367,10 +398,22 @@ fn default_show_ui_test_page() -> bool {
     true
 }
 
+fn default_local_library_tail_path_count() -> u32 {
+    3
+}
+
 fn normalize_material_list_window_behavior(value: &str) -> String {
     match value.trim().to_ascii_lowercase().as_str() {
         "main_window_overlay" => "main_window_overlay".to_string(),
         _ => "independent_window".to_string(),
+    }
+}
+
+fn normalize_local_library_tail_path_count(value: u32) -> u32 {
+    if value >= 1 {
+        value
+    } else {
+        default_local_library_tail_path_count()
     }
 }
 
@@ -402,6 +445,8 @@ fn read_user_config_data(dir: &Path) -> UserConfig {
     config.preview_mode = normalize_mode_string(&config.preview_mode);
     config.material_list_window_behavior =
         normalize_material_list_window_behavior(&config.material_list_window_behavior);
+    config.local_library_tail_path_count =
+        normalize_local_library_tail_path_count(config.local_library_tail_path_count);
     config
 }
 
@@ -1452,6 +1497,9 @@ fn save_user_config(input: UserConfigInput) -> Result<UserConfigInfo, String> {
     if let Some(show) = input.show_ui_test_page {
         config.show_ui_test_page = show;
     }
+    if let Some(count) = input.local_library_tail_path_count {
+        config.local_library_tail_path_count = normalize_local_library_tail_path_count(count);
+    }
     write_user_config_data(&dir, &config)?;
     Ok(UserConfigInfo {
         config_dir: dir.display().to_string(),
@@ -1814,6 +1862,155 @@ fn check_file_exists(path: String) -> bool {
     get_root().join(path).is_file()
 }
 
+fn collect_litematic_files_in_directory(
+    current_dir: &Path,
+    recursive: bool,
+    files: &mut Vec<String>,
+) -> Result<(), String> {
+    for entry in std::fs::read_dir(current_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            if recursive {
+                collect_litematic_files_in_directory(&path, true, files)?;
+            }
+            continue;
+        }
+        let has_litematic_ext = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("litematic"))
+            .unwrap_or(false);
+        if has_litematic_ext {
+            files.push(path.display().to_string());
+        }
+    }
+    Ok(())
+}
+
+fn metadata_modified_ms(metadata: &std::fs::Metadata) -> u128 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn directory_entry_info(path: PathBuf) -> Result<DirectoryEntryInfo, String> {
+    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_string();
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_string();
+    Ok(DirectoryEntryInfo {
+        path: path.display().to_string(),
+        name,
+        is_dir: metadata.is_dir(),
+        is_file: metadata.is_file(),
+        file_size: if metadata.is_file() { metadata.len() } else { 0 },
+        mtime_ms: metadata_modified_ms(&metadata),
+        extension,
+    })
+}
+
+fn collect_litematic_file_entries_in_directory(
+    current_dir: &Path,
+    recursive: bool,
+    files: &mut Vec<DirectoryEntryInfo>,
+) -> Result<(), String> {
+    for entry in std::fs::read_dir(current_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            if recursive {
+                collect_litematic_file_entries_in_directory(&path, true, files)?;
+            }
+            continue;
+        }
+        let has_litematic_ext = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("litematic"))
+            .unwrap_or(false);
+        if has_litematic_ext {
+            files.push(directory_entry_info(path)?);
+        }
+    }
+    Ok(())
+}
+
+fn resolve_input_path(path: &str) -> PathBuf {
+    let input = PathBuf::from(path);
+    if input.is_absolute() {
+        input
+    } else {
+        get_root().join(input)
+    }
+}
+
+#[tauri::command]
+fn list_litematic_files_in_directory(path: String, recursive: bool) -> Result<Vec<String>, String> {
+    let full_path = resolve_input_path(&path);
+    if !full_path.exists() {
+        return Err(format!("directory not found: {}", full_path.display()));
+    }
+    if !full_path.is_dir() {
+        return Err(format!("path is not a directory: {}", full_path.display()));
+    }
+    let mut files = Vec::new();
+    collect_litematic_files_in_directory(&full_path, recursive, &mut files)?;
+    files.sort_unstable();
+    Ok(files)
+}
+
+#[tauri::command]
+fn list_directory_entries(path: String) -> Result<Vec<DirectoryEntryInfo>, String> {
+    let full_path = resolve_input_path(&path);
+    if !full_path.exists() {
+        return Err(format!("directory not found: {}", full_path.display()));
+    }
+    if !full_path.is_dir() {
+        return Err(format!("path is not a directory: {}", full_path.display()));
+    }
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&full_path).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        entries.push(directory_entry_info(entry.path())?);
+    }
+    entries.sort_by(|left, right| {
+        right
+            .is_dir
+            .cmp(&left.is_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    Ok(entries)
+}
+
+#[tauri::command]
+fn list_litematic_file_entries_in_directory(
+    path: String,
+    recursive: bool,
+) -> Result<Vec<DirectoryEntryInfo>, String> {
+    let full_path = resolve_input_path(&path);
+    if !full_path.exists() {
+        return Err(format!("directory not found: {}", full_path.display()));
+    }
+    if !full_path.is_dir() {
+        return Err(format!("path is not a directory: {}", full_path.display()));
+    }
+    let mut files = Vec::new();
+    collect_litematic_file_entries_in_directory(&full_path, recursive, &mut files)?;
+    files.sort_by(|left, right| left.path.to_lowercase().cmp(&right.path.to_lowercase()));
+    Ok(files)
+}
+
 #[tauri::command]
 fn get_workspace_root() -> String {
     get_root().display().to_string()
@@ -1868,6 +2065,125 @@ fn read_image_base64(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn read_projection_preview_image(
+    file_path: String,
+) -> Result<Option<ProjectionPreviewOutput>, String> {
+    let input = PathBuf::from(file_path);
+    let full_path = if input.is_absolute() {
+        input
+    } else {
+        get_root().join(input)
+    };
+
+    let file = std::fs::File::open(&full_path)
+        .map_err(|e| format!("open {} failed: {}", full_path.display(), e))?;
+    let mut decoder = GzDecoder::new(file);
+    let mut nbt_bytes = Vec::new();
+    decoder
+        .read_to_end(&mut nbt_bytes)
+        .map_err(|e| format!("decompress {} failed: {}", full_path.display(), e))?;
+
+    let Some(pixels) = extract_preview_image_data_from_nbt_bytes(&nbt_bytes)? else {
+        return Ok(None);
+    };
+    if pixels.is_empty() {
+        return Ok(None);
+    }
+
+    let size = (pixels.len() as f64).sqrt() as usize;
+    if size == 0 || size * size != pixels.len() {
+        return Err(format!(
+            "invalid PreviewImageData length {}, expected square pixel array",
+            pixels.len()
+        ));
+    }
+
+    let mut rgba = Vec::with_capacity(pixels.len() * 4);
+    for pixel in pixels {
+        let argb = pixel as u32;
+        rgba.push(((argb >> 16) & 0xff) as u8);
+        rgba.push(((argb >> 8) & 0xff) as u8);
+        rgba.push((argb & 0xff) as u8);
+        rgba.push(((argb >> 24) & 0xff) as u8);
+    }
+
+    let image = RgbaImage::from_raw(size as u32, size as u32, rgba)
+        .ok_or_else(|| "failed to build preview image buffer".to_string())?;
+    let mut png_bytes = Vec::new();
+    DynamicImage::ImageRgba8(image)
+        .write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+        .map_err(|e| format!("encode preview png failed: {}", e))?;
+
+    Ok(Some(ProjectionPreviewOutput {
+        width: size as u32,
+        height: size as u32,
+        data_url: format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png_bytes)
+        ),
+    }))
+}
+
+fn extract_preview_image_data_from_nbt_bytes(bytes: &[u8]) -> Result<Option<Vec<i32>>, String> {
+    const FIELD_NAME: &[u8] = b"PreviewImageData";
+    let Some(name_offset) = bytes
+        .windows(FIELD_NAME.len())
+        .position(|window| window == FIELD_NAME)
+    else {
+        return Ok(None);
+    };
+    if name_offset < 3 {
+        return Err("PreviewImageData field is truncated".to_string());
+    }
+
+    let tag_type = bytes[name_offset - 3];
+    let name_len = u16::from_be_bytes([bytes[name_offset - 2], bytes[name_offset - 1]]) as usize;
+    if tag_type != 11 {
+        return Err(format!(
+            "PreviewImageData tag type mismatch: expected 11 (IntArray), got {}",
+            tag_type
+        ));
+    }
+    if name_len != FIELD_NAME.len() {
+        return Err(format!(
+            "PreviewImageData name length mismatch: expected {}, got {}",
+            FIELD_NAME.len(),
+            name_len
+        ));
+    }
+
+    let data_start = name_offset + FIELD_NAME.len();
+    if data_start + 4 > bytes.len() {
+        return Err("PreviewImageData array length is truncated".to_string());
+    }
+    let array_len = i32::from_be_bytes([
+        bytes[data_start],
+        bytes[data_start + 1],
+        bytes[data_start + 2],
+        bytes[data_start + 3],
+    ]);
+    if array_len < 0 {
+        return Err(format!("PreviewImageData length is negative: {}", array_len));
+    }
+    let array_len = array_len as usize;
+    let payload_start = data_start + 4;
+    let payload_end = payload_start + array_len * 4;
+    if payload_end > bytes.len() {
+        return Err(format!(
+            "PreviewImageData payload truncated: expected {} bytes, got {}",
+            array_len * 4,
+            bytes.len().saturating_sub(payload_start)
+        ));
+    }
+
+    let mut pixels = Vec::with_capacity(array_len);
+    for chunk in bytes[payload_start..payload_end].chunks_exact(4) {
+        pixels.push(i32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+    Ok(Some(pixels))
+}
+
+#[tauri::command]
 fn open_file_parent_dir(file_path: String) -> Result<(), String> {
     let input = PathBuf::from(&file_path);
     let full_path = if input.is_absolute() {
@@ -1910,6 +2226,63 @@ fn open_file_parent_dir(file_path: String) -> Result<(), String> {
             Err(message)
         }
     }
+}
+
+#[tauri::command]
+fn copy_file_to_directory(
+    source_path: String,
+    target_directory: String,
+    target_file_name: String,
+    overwrite: bool,
+) -> Result<CopyFileToDirectoryOutput, String> {
+    let source_input = PathBuf::from(&source_path);
+    let source_full_path = if source_input.is_absolute() {
+        source_input
+    } else {
+        get_root().join(source_input)
+    };
+    if !source_full_path.is_file() {
+        return Err(format!("source file not found: {}", source_full_path.display()));
+    }
+
+    let trimmed_file_name = target_file_name.trim();
+    if trimmed_file_name.is_empty() {
+        return Err("target file name must not be empty".to_string());
+    }
+    if trimmed_file_name.contains('/') || trimmed_file_name.contains('\\') {
+        return Err("target file name must not contain path separators".to_string());
+    }
+
+    let target_input = PathBuf::from(&target_directory);
+    let target_dir_path = if target_input.is_absolute() {
+        target_input
+    } else {
+        get_root().join(target_input)
+    };
+    if target_dir_path.exists() && !target_dir_path.is_dir() {
+        return Err(format!("target path is not a directory: {}", target_dir_path.display()));
+    }
+    std::fs::create_dir_all(&target_dir_path).map_err(|e| e.to_string())?;
+
+    let target_full_path = target_dir_path.join(trimmed_file_name);
+    if target_full_path == source_full_path {
+        return Err("source and target path are identical".to_string());
+    }
+
+    let overwritten = target_full_path.exists();
+    if overwritten && !overwrite {
+        return Err(format!("target file already exists: {}", target_full_path.display()));
+    }
+    if overwritten && !target_full_path.is_file() {
+        return Err(format!("target path is not a file: {}", target_full_path.display()));
+    }
+
+    let bytes_copied = std::fs::copy(&source_full_path, &target_full_path).map_err(|e| e.to_string())?;
+    Ok(CopyFileToDirectoryOutput {
+        target_path: target_full_path.display().to_string(),
+        overwritten,
+        bytes_copied,
+    })
 }
 
 #[tauri::command]
@@ -2484,6 +2857,54 @@ async fn open_material_list_window(
 }
 
 #[tauri::command]
+async fn open_reden_library_window(app: AppHandle) -> Result<(), String> {
+    const LABEL: &str = "reden-library";
+
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        LABEL,
+        tauri::WebviewUrl::App("reden_library.html".into()),
+    )
+    .title("Online Projection Library")
+    .inner_size(1080.0, 760.0)
+    .min_inner_size(760.0, 560.0)
+    .build()
+    .map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_local_library_folders_window(app: AppHandle) -> Result<(), String> {
+    const LABEL: &str = "local-library-folders";
+
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        LABEL,
+        tauri::WebviewUrl::App("local_library_folders.html".into()),
+    )
+    .title("Local Library Folders")
+    .inner_size(920.0, 680.0)
+    .min_inner_size(700.0, 520.0)
+    .build()
+    .map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn open_ui_demo_window(app: AppHandle) -> Result<(), String> {
     const LABEL: &str = "ui-demo-window";
 
@@ -2565,10 +2986,15 @@ fn main() {
             write_file_string,
             write_text_file_absolute,
             check_file_exists,
+            list_litematic_files_in_directory,
+            list_directory_entries,
+            list_litematic_file_entries_in_directory,
             get_workspace_root,
             get_path_info,
             read_image_base64,
+            read_projection_preview_image,
             open_file_parent_dir,
+            copy_file_to_directory,
             open_workspace_path,
             cleanup_local_temp_files,
             reden_search_litematica,
@@ -2581,6 +3007,8 @@ fn main() {
             ai_test_connection,
             ai_chat_completion,
             open_material_list_window,
+            open_reden_library_window,
+            open_local_library_folders_window,
             open_ui_demo_window
         ])
         .run(tauri::generate_context!())

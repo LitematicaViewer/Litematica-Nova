@@ -1,6 +1,7 @@
 :root {
     --ln-metro10-table-row-min-height: 60px;
     --ln-metro10-table-hover-background: #e6e6e6;
+    --ln-table-row-selected-background: #f2f2f2;
 }
 
 table,
@@ -21,6 +22,13 @@ table > :not(caption) > * > *,
 table > tbody > tr:hover > *,
 .table > tbody > tr:hover > * {
     background-color: var(--ln-metro10-table-hover-background);
+}
+
+table > tbody > tr.table-row-selected > *,
+table > tbody > tr[aria-selected="true"] > *,
+.table > tbody > tr.table-row-selected > *,
+.table > tbody > tr[aria-selected="true"] > * {
+    background-color: var(--ln-table-row-selected-background);
 }
 
 table > tbody > tr > * > .button-row,
