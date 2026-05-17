@@ -16,6 +16,8 @@ export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, Projectio
 export {
   checkFileExists,
   copyFileToDirectory,
+  downloadVaultBlockIconsFromVault,
+  downloadVaultItemIconsFromVault,
   listDirectoryEntries,
   listLitematicFileEntriesInDirectory,
   getAppDataFilePath as getUserConfigFilePath,

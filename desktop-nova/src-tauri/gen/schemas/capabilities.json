@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"","local":true,"windows":["main","material-list","local-library-folders"],"permissions":["core:default","dialog:default","shell:default"]}}
+{"default":{"identifier":"default","description":"","local":true,"windows":["main","material-list","local-library-folders","asset-manager"],"permissions":["core:default","dialog:default","shell:default"]}}
