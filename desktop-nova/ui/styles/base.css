@@ -274,10 +274,15 @@ td {
     display: flex;
     min-width: 0;
     flex: 1;
+    min-height: 0;
     flex-direction: column;
     gap: 10px;
     padding: 12px;
-    overflow: auto;
+    overflow: hidden;
+}
+
+.asset-manager-heading {
+    flex: 0 0 auto;
 }
 
 .asset-manager-heading h3 {
@@ -288,21 +293,76 @@ td {
     margin: 0;
 }
 
-.asset-manager-actions {
+.asset-manager-panel {
     display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+}
+
+.asset-manager-config {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.asset-manager-form-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 12px;
+}
+
+.asset-manager-form-row-top {
+    align-items: flex-start;
+}
+
+.asset-manager-form-label {
+    flex: 0 0 72px;
+    color: var(--ln-muted-text-color, GrayText);
+}
+
+.asset-manager-inline-controls {
+    display: flex;
+    min-width: 0;
+    flex: 1;
     flex-wrap: wrap;
     gap: 8px;
 }
 
+.asset-manager-select {
+    min-width: 0;
+    flex: 1;
+}
+
+.asset-manager-fetch-row {
+    align-items: center;
+}
+
 .asset-manager-health {
     display: flex;
+    flex: 0 0 auto;
     flex-direction: column;
     gap: 4px;
+    padding: 8px 10px;
+    border: 1px solid ThreeDShadow;
+    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
 }
 
 .asset-manager-table-wrap {
     min-height: 0;
+    flex: 1;
     overflow: auto;
+}
+
+.asset-manager-empty-row {
+    padding: 18px 12px;
+    color: var(--ln-muted-text-color, GrayText);
+    text-align: center;
 }
 
 .asset-manager-log {
@@ -310,11 +370,49 @@ td {
     overflow: auto;
 }
 
+.asset-manager-footer {
+    display: flex;
+    flex: 0 0 auto;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 12px;
+    border-top: 1px solid ThreeDShadow;
+}
+
+.asset-manager-footer-status {
+    min-width: 0;
+    flex: 1;
+}
+
+.asset-manager-footer-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 @media (max-width: 760px) {
     .asset-manager-sidebar {
         flex-basis: 48px;
         width: 48px;
         min-width: 48px;
+    }
+
+    .asset-manager-form-row,
+    .asset-manager-footer {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .asset-manager-form-label {
+        flex-basis: auto;
+    }
+
+    .asset-manager-footer-actions {
+        justify-content: flex-start;
     }
 }
 

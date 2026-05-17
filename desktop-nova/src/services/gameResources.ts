@@ -1,6 +1,8 @@
 import { emitEvent } from "../platform/events";
 import {
   copyFileToDirectory,
+  downloadVaultBlockIconsFromVault,
+  downloadVaultItemIconsFromVault,
   getPathInfo,
   readImageBase64,
   readWorkspaceFile,
@@ -12,8 +14,17 @@ import {
 
 export type GameResourceKind = "language" | "block_icon" | "item_icon" | "game_data";
 export type BlockIconSlot = "material_list" | "layering";
-export type GameResourceSource = "builtin" | "imported" | "external" | "github";
+export type GameResourceSource = "builtin" | "imported" | "external" | "github" | "vault";
 export type RemoteLanguageSource = "github/InventivetalentDev";
+
+export interface VaultBlockIconInstallResult {
+  snapshot: GameResourceSnapshot;
+  total: number;
+  downloaded: number;
+  target_dir: string;
+}
+
+export type VaultItemIconInstallResult = VaultBlockIconInstallResult;
 
 export interface GameResourceEntry {
   id: string;
@@ -618,6 +629,55 @@ export async function registerExternalIconDirectory(kind: "block_icon" | "item_i
   await registerGameResource(entry);
   if (kind === "block_icon") return activateGameResource(kind, entry.id, slot);
   return activateGameResource(kind, entry.id, "layering");
+}
+
+/**
+ * Downloads CCVaults block icons, registers the local vault directory, and activates it for the material list slot.
+ */
+export async function downloadVaultBlockIcons(): Promise<VaultBlockIconInstallResult> {
+  const result = await downloadVaultBlockIconsFromVault();
+  const entry: GameResourceEntry = {
+    id: "vault:block_icon:ccvaults",
+    kind: "block_icon",
+    label: "CCVaults 方块图标",
+    source: "vault",
+    root_relpath: result.root_relpath || "minecraft-assets/block_icon/vault",
+    active_material_list: true,
+    active_layering: false,
+    installed_at: new Date().toISOString(),
+  };
+  await registerGameResource(entry);
+  const snapshot = await activateGameResource("block_icon", entry.id, "material_list");
+  return {
+    snapshot,
+    total: result.total,
+    downloaded: result.downloaded,
+    target_dir: result.target_dir,
+  };
+}
+
+/**
+ * Downloads CCVaults item icons, registers the local vault directory, and activates it for the layering item slot.
+ */
+export async function downloadVaultItemIcons(): Promise<VaultItemIconInstallResult> {
+  const result = await downloadVaultItemIconsFromVault();
+  const entry: GameResourceEntry = {
+    id: "vault:item_icon:ccvaults",
+    kind: "item_icon",
+    label: "CCVaults 物品图标",
+    source: "vault",
+    root_relpath: result.root_relpath || "minecraft-assets/item/vault",
+    active_layering: true,
+    installed_at: new Date().toISOString(),
+  };
+  await registerGameResource(entry);
+  const snapshot = await activateGameResource("item_icon", entry.id, "layering");
+  return {
+    snapshot,
+    total: result.total,
+    downloaded: result.downloaded,
+    target_dir: result.target_dir,
+  };
 }
 
 /**
