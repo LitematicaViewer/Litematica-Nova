@@ -81,7 +81,7 @@ const LayerCanvas = forwardRef<
       await Promise.all(
         meta.palette.map(async (entry, index) => {
           if (!entry?.block_id || entry.block_id.includes("air")) return;
-          const dataUrl = await getBlockIconDataUrl(entry.block_id);
+          const dataUrl = await getBlockIconDataUrl(entry.block_id, "layering");
           if (!dataUrl) return;
           await new Promise<void>((resolve) => {
             const img = new Image();

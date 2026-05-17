@@ -192,6 +192,132 @@ td {
     font-size: .9em;
 }
 
+.form-label-wide {
+    width: 150px;
+}
+
+.game-resource-active {
+    line-height: 1.5;
+    opacity: .82;
+}
+
+.game-resource-actions,
+.game-resource-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.game-resource-actions {
+    margin-bottom: 8px;
+}
+
+.game-resource-health {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.game-resource-health-ok {
+    color: #8fd18f;
+}
+
+.game-resource-health-failed {
+    color: #ff8888;
+}
+
+.game-resource-kind {
+    margin-top: 10px;
+}
+
+.game-resource-kind-title {
+    margin-bottom: 6px;
+    font-weight: 700;
+}
+
+.game-resource-path {
+    word-break: break-all;
+}
+
+.game-resource-note {
+    margin-top: 8px;
+    font-size: .9em;
+    opacity: .72;
+}
+
+.game-resource-row-actions {
+    gap: 6px;
+}
+
+.asset-manager-window {
+    min-width: 0;
+}
+
+.asset-manager-window > .subwindow-body.asset-manager-body {
+    display: flex;
+    min-height: 0;
+    flex-direction: row;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.asset-manager-sidebar {
+    flex-basis: 188px;
+    width: 188px;
+    min-width: 188px;
+    border-right: 1px solid ThreeDShadow;
+}
+
+.asset-manager-content {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    overflow: auto;
+}
+
+.asset-manager-heading h3 {
+    margin: 0 0 4px;
+}
+
+.asset-manager-heading p {
+    margin: 0;
+}
+
+.asset-manager-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.asset-manager-health {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.asset-manager-table-wrap {
+    min-height: 0;
+    overflow: auto;
+}
+
+.asset-manager-log {
+    max-height: 180px;
+    overflow: auto;
+}
+
+@media (max-width: 760px) {
+    .asset-manager-sidebar {
+        flex-basis: 48px;
+        width: 48px;
+        min-width: 48px;
+    }
+}
+
 .nova-tiny {
     font-size: .85em;
 }

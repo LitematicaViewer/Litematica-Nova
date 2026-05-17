@@ -47,6 +47,7 @@ export type { BackendTrace, CacheBuildLaunch, CacheBuildSnapshot } from "../plat
 
 export {
   openLocalLibraryFoldersWindow,
+  openAssetManagerWindow,
   openMaterialListWindow,
   openRedenLibraryWindow,
   openUiDemoWindow,
