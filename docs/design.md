@@ -752,7 +752,7 @@ L ∩ (N ∪ Q) = ∅
 | 资源类型 | 安装位置 | 索引/状态 | 消费槽位 |
 |------|------|------|------|
 | 游戏语言 | `minecraft-assets/language/...` | `language/installed.json` + `active` | 全局单活跃语言 |
-| 方块图标 | `minecraft-assets/block_2d/...`、`minecraft-assets/block_icon/...` | `block_2d/installed.json`、`block_icon/installed.json` | `active_material_list`、`active_layering` |
+| 方块图标 | 2D图标`minecraft-assets/block_2d/...`、3D图标`minecraft-assets/block_icon/...` | `block_2d/installed.json`、`block_icon/installed.json` | `active_material_list`、`active_layering` |
 | 物品图标 | `minecraft-assets/item/...` | `item/installed.json` | `active_layering` |
 
 旧项目消费特征：

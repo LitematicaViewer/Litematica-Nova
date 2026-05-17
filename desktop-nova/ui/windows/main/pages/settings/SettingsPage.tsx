@@ -11,6 +11,7 @@ import {
   getNovaRuntimePathInfo,
   getPathInfo,
   getUserConfig,
+  openAssetManagerWindow,
   openUserConfigDir,
   openWorkspacePath,
   PathInfo,
@@ -254,6 +255,14 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
     setLog("用户配置目录已恢复默认位置，并迁移当前配置。");
   };
 
+  const openAssetManager = async () => {
+    try {
+      await openAssetManagerWindow();
+    } catch {
+      window.open("asset_manager.html", "_blank", "popup=yes,width=1040,height=700");
+    }
+  };
+
   const saveAiConfigOnly = async () => {
     const typedKey = apiKeyInput.trim();
     const saved = await aiSaveConfig({
@@ -333,6 +342,16 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
         </div>
         <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
           用户态文件会写入 projection-library/js_library.json、previews/、render/、generation-templates/custom/ 和普通 config。API Key 不写入普通 config。
+        </div>
+      </div>
+
+      <div className="group-box">
+        <div className="group-box-title">游戏资源管理</div>
+        <div className="button-row">
+          <button className="btn" type="button" onClick={openAssetManager}>打开游戏资源管理器</button>
+        </div>
+        <div className="game-resource-note">
+          语言、方块图标、物品图标和游戏数据现在在独立子窗口中管理。
         </div>
       </div>
 
