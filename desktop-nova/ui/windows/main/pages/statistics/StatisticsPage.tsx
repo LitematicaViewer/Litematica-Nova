@@ -1,7 +1,8 @@
-﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   exportMaterialsArtTable,
   exportMaterialsCsv,
+  initI18n,
   loadMaterialsScope,
   loadStructureStats,
   MaterialItem,
@@ -90,6 +91,7 @@ export async function openMaterialsWithWindowBehavior(currentFile: string, showO
       // Browser preview cannot create a desktop window, so keep the in-window dialog as fallback.
     }
   }
+  await initI18n(true);
   showOverlay();
 }
 
@@ -144,6 +146,7 @@ export function MaterialListContent({
     setIsLoading(true);
     setError("");
     try {
+      await initI18n();
       const next = await loadMaterialsScope(currentFile, scopeArgs(value), includeContainers);
       setMaterials(next.sort((a, b) => b.totalCount - a.totalCount));
     } catch (err: any) {

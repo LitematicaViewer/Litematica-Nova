@@ -12,14 +12,17 @@ import {
 
 export type GameResourceKind = "language" | "block_icon" | "item_icon" | "game_data";
 export type BlockIconSlot = "material_list" | "layering";
+export type GameResourceSource = "builtin" | "imported" | "external" | "github";
+export type RemoteLanguageSource = "github/InventivetalentDev";
 
 export interface GameResourceEntry {
   id: string;
   kind: GameResourceKind;
   label: string;
-  source: "builtin" | "imported" | "external";
+  source: GameResourceSource;
   installed_at?: string;
   language?: string;
+  branch?: string;
   version?: string;
   file_relpath?: string;
   root_relpath?: string;
@@ -60,6 +63,15 @@ export interface GameResourceHealthRow {
   detail: string;
 }
 
+interface GithubBranchRow {
+  name?: string;
+}
+
+interface GithubContentRow {
+  type?: string;
+  name?: string;
+}
+
 const INDEX_PATHS: Record<GameResourceKind, string> = {
   language: "minecraft-assets/language/installed.json",
   block_icon: "minecraft-assets/block_icon/installed.json",
@@ -67,13 +79,26 @@ const INDEX_PATHS: Record<GameResourceKind, string> = {
   game_data: "minecraft-assets/game-data/installed.json",
 };
 
+const INITIAL_LANGUAGE_RELPATH = "minecraft-assets/language/initial/zh_cn.json";
+const BUNDLED_LANGUAGE_RELPATH = "pack-in/lang/zh_cn.json";
+const GITHUB_LANGUAGE_SOURCE: RemoteLanguageSource = "github/InventivetalentDev";
+const GITHUB_API_BASE = "https://api.github.com/repos/InventivetalentDev/minecraft-assets";
+const GITHUB_RAW_BASE = "https://raw.githubusercontent.com/InventivetalentDev/minecraft-assets";
+const LANGUAGE_ALLOWED_PREFIXES = [
+  "block.",
+  "effect.",
+  "enchantment.",
+  "entity.",
+  "item.",
+] as const;
+
 const BUILTIN_LANGUAGE: GameResourceEntry = {
   id: "builtin:language:zh_cn",
   kind: "language",
   label: "内建 zh_cn",
   source: "builtin",
   language: "zh_cn",
-  file_relpath: "pack-in/lang/zh_cn.json",
+  file_relpath: INITIAL_LANGUAGE_RELPATH,
   active: true,
   builtin: true,
 };
@@ -138,9 +163,149 @@ function joinPath(root: string, relative: string): string {
   return `${root.replace(/[\\/]+$/, "")}${separator}${relative.replace(/^[\\/]+/, "").replace(/\//g, separator)}`;
 }
 
+function isUserConfigRelativePath(path: string): boolean {
+  return /^(minecraft-assets|legacy)\//.test(path);
+}
+
+function isAllowedLanguageBranch(value: string): boolean {
+  const branch = value.trim();
+  if (!branch) return false;
+  return /^1\.\d+(?:\.\d+)?$/.test(branch) || /^\d{2}\.\d+(?:\.\d+)?$/.test(branch);
+}
+
+function languageBranchSortKey(value: string): number[] {
+  return value
+    .split(".")
+    .map((part) => Number.parseInt(part, 10))
+    .map((part) => (Number.isFinite(part) ? part : -1));
+}
+
+function compareBranchesDesc(left: string, right: string): number {
+  const leftKey = languageBranchSortKey(left);
+  const rightKey = languageBranchSortKey(right);
+  const size = Math.max(leftKey.length, rightKey.length, 3);
+  for (let index = 0; index < size; index += 1) {
+    const diff = (rightKey[index] ?? -1) - (leftKey[index] ?? -1);
+    if (diff !== 0) return diff;
+  }
+  return right.localeCompare(left);
+}
+
+function isAllowedLanguageCode(value: string): boolean {
+  return /^[a-z]{2,3}(?:_[a-z0-9]{2,8}){0,2}$/.test(value.trim().toLowerCase());
+}
+
+function filterLanguageMapObject(payload: Record<string, unknown>): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (typeof value !== "string") continue;
+    if (!LANGUAGE_ALLOWED_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
+    next[key] = value;
+  }
+  return next;
+}
+
+function normalizeLanguageJsonText(rawText: string): string {
+  const parsed = JSON.parse(rawText) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("language payload must be a JSON object");
+  }
+  const filtered = filterLanguageMapObject(parsed as Record<string, unknown>);
+  if (Object.keys(filtered).length === 0) {
+    throw new Error("language payload does not contain supported Minecraft translation keys");
+  }
+  return JSON.stringify(filtered, null, 2);
+}
+
+function parseLanguageListPayload(payload: unknown): string[] {
+  const languages = new Set<string>();
+  const push = (candidate: unknown) => {
+    if (typeof candidate !== "string") return;
+    const normalized = candidate.trim().toLowerCase();
+    if (isAllowedLanguageCode(normalized)) languages.add(normalized);
+  };
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      if (typeof item === "string") {
+        push(item);
+        continue;
+      }
+      if (!item || typeof item !== "object") continue;
+      const row = item as Record<string, unknown>;
+      push(row.code);
+      push(row.lang);
+      push(row.id);
+      push(row.name);
+    }
+  } else if (payload && typeof payload === "object") {
+    for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+      push(key);
+      push(value);
+      if (!value || typeof value !== "object") continue;
+      const row = value as Record<string, unknown>;
+      push(row.code);
+      push(row.lang);
+      push(row.id);
+      push(row.name);
+    }
+  }
+  return Array.from(languages).sort((left, right) => left.localeCompare(right));
+}
+
+function parseBranchNamesFromHtml(html: string): string[] {
+  const matches = html.matchAll(/\/tree\/([^"/?#]+)"/g);
+  const branches = new Set<string>();
+  for (const match of matches) {
+    const branch = decodeURIComponent(match[1] || "").trim();
+    if (isAllowedLanguageBranch(branch)) branches.add(branch);
+  }
+  return Array.from(branches).sort(compareBranchesDesc);
+}
+
+function parseLanguageCodesFromHtml(html: string): string[] {
+  const matches = html.matchAll(/([a-z0-9_]+)\.json/gi);
+  const languages = new Set<string>();
+  for (const match of matches) {
+    const language = (match[1] || "").trim().toLowerCase();
+    if (isAllowedLanguageCode(language)) languages.add(language);
+  }
+  return Array.from(languages).sort((left, right) => left.localeCompare(right));
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`request failed (${response.status}) ${url}`);
+  }
+  return await response.json() as T;
+}
+
+async function fetchText(url: string): Promise<string> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`request failed (${response.status}) ${url}`);
+  }
+  return await response.text();
+}
+
 async function appDataDirFor(relativeDir: string): Promise<string> {
   const marker = await getUserConfigFilePath(`${relativeDir}/.resource-dir`);
   return folderFromFilePath(marker);
+}
+
+async function ensureInitialLanguageSeeded(): Promise<void> {
+  try {
+    await readUserConfigFile(INITIAL_LANGUAGE_RELPATH);
+    return;
+  } catch {
+    // fall through and seed from bundled resource
+  }
+  const bundled = await readWorkspaceFile(BUNDLED_LANGUAGE_RELPATH);
+  await writeUserConfigFile(INITIAL_LANGUAGE_RELPATH, normalizeLanguageJsonText(bundled));
 }
 
 async function readIndex(kind: GameResourceKind): Promise<GameResourceIndex> {
@@ -219,14 +384,119 @@ async function pathInfoForRoot(root: IconSearchRoot): Promise<PathInfo> {
 
 async function readEntryFile(entry: GameResourceEntry, relpath: string | undefined): Promise<string> {
   if (!relpath) throw new Error(`resource ${entry.id} does not define a file path`);
-  if (entry.source === "builtin") return readWorkspaceFile(relpath);
+  if (entry.source === "builtin") {
+    return isUserConfigRelativePath(relpath) ? readUserConfigFile(relpath) : readWorkspaceFile(relpath);
+  }
   return readUserConfigFile(relpath);
+}
+
+export async function readFallbackLanguageResource(): Promise<string> {
+  await ensureInitialLanguageSeeded();
+  return readUserConfigFile(INITIAL_LANGUAGE_RELPATH);
+}
+
+export async function listRemoteMinecraftLanguageBranches(source: RemoteLanguageSource = GITHUB_LANGUAGE_SOURCE): Promise<string[]> {
+  if (source !== GITHUB_LANGUAGE_SOURCE) throw new Error(`unsupported language source: ${source}`);
+  const branches = new Set<string>();
+  try {
+    let page = 1;
+    while (true) {
+      const rows = await fetchJson<GithubBranchRow[]>(`${GITHUB_API_BASE}/branches?per_page=100&page=${page}`);
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      for (const row of rows) {
+        const branch = typeof row?.name === "string" ? row.name.trim() : "";
+        if (isAllowedLanguageBranch(branch)) branches.add(branch);
+      }
+      if (rows.length < 100) break;
+      page += 1;
+    }
+  } catch {
+    // fall through to HTML fallback
+  }
+  if (branches.size === 0) {
+    try {
+      const html = await fetchText("https://github.com/InventivetalentDev/minecraft-assets/branches");
+      for (const branch of parseBranchNamesFromHtml(html)) branches.add(branch);
+    } catch {
+      // handled below
+    }
+  }
+  const output = Array.from(branches).sort(compareBranchesDesc);
+  if (output.length === 0) {
+    throw new Error("无法获取 GitHub 语言版本分支列表。");
+  }
+  return output;
+}
+
+export async function listRemoteMinecraftLanguages(branch: string, source: RemoteLanguageSource = GITHUB_LANGUAGE_SOURCE): Promise<string[]> {
+  if (source !== GITHUB_LANGUAGE_SOURCE) throw new Error(`unsupported language source: ${source}`);
+  const cleanBranch = branch.trim();
+  if (!isAllowedLanguageBranch(cleanBranch)) {
+    throw new Error(`invalid language branch: ${branch}`);
+  }
+  try {
+    const listPayload = await fetchJson<unknown>(`${GITHUB_RAW_BASE}/${cleanBranch}/assets/minecraft/lang/_list.json`);
+    const parsed = parseLanguageListPayload(listPayload);
+    if (parsed.length > 0) return parsed;
+  } catch {
+    // fall through
+  }
+  try {
+    const rows = await fetchJson<GithubContentRow[]>(`${GITHUB_API_BASE}/contents/assets/minecraft/lang?ref=${encodeURIComponent(cleanBranch)}`);
+    const languages = rows
+      .map((row) => (row.type === "file" && typeof row.name === "string" ? row.name : ""))
+      .filter((name) => name.toLowerCase().endsWith(".json"))
+      .map((name) => name.slice(0, -5).toLowerCase())
+      .filter((name, index, array) => isAllowedLanguageCode(name) && array.indexOf(name) === index)
+      .sort((left, right) => left.localeCompare(right));
+    if (languages.length > 0) return languages;
+  } catch {
+    // fall through
+  }
+  try {
+    const html = await fetchText(`https://github.com/InventivetalentDev/minecraft-assets/tree/${encodeURIComponent(cleanBranch)}/assets/minecraft/lang`);
+    const languages = parseLanguageCodesFromHtml(html);
+    if (languages.length > 0) return languages;
+  } catch {
+    // handled below
+  }
+  throw new Error(`无法获取 ${cleanBranch} 的语言列表。`);
+}
+
+export async function downloadRemoteMinecraftLanguage(branch: string, language: string, source: RemoteLanguageSource = GITHUB_LANGUAGE_SOURCE): Promise<GameResourceSnapshot> {
+  if (source !== GITHUB_LANGUAGE_SOURCE) throw new Error(`unsupported language source: ${source}`);
+  const cleanBranch = branch.trim();
+  const cleanLanguage = language.trim().toLowerCase();
+  if (!isAllowedLanguageBranch(cleanBranch)) {
+    throw new Error(`invalid language branch: ${branch}`);
+  }
+  if (!isAllowedLanguageCode(cleanLanguage)) {
+    throw new Error(`invalid language code: ${language}`);
+  }
+  const rawText = await fetchText(`${GITHUB_RAW_BASE}/${cleanBranch}/assets/minecraft/lang/${cleanLanguage}.json`);
+  const normalized = normalizeLanguageJsonText(rawText);
+  const fileRelpath = `minecraft-assets/language/github/InventivetalentDev/${cleanBranch}/${cleanLanguage}.json`;
+  await writeUserConfigFile(fileRelpath, normalized);
+  const entry: GameResourceEntry = {
+    id: `github:language:${normalizeResourceIdPart(cleanBranch)}:${cleanLanguage}`,
+    kind: "language",
+    label: `GitHub ${cleanBranch} / ${cleanLanguage}`,
+    source: "github",
+    branch: cleanBranch,
+    language: cleanLanguage,
+    file_relpath: fileRelpath,
+    active: true,
+    installed_at: new Date().toISOString(),
+  };
+  await registerGameResource(entry);
+  return activateGameResource("language", entry.id);
 }
 
 /**
  * Lists installed game resources and appends the immutable built-in fallback entry for every kind.
  */
 export async function listGameResourceRegistry(): Promise<GameResourceSnapshot> {
+  await ensureInitialLanguageSeeded();
   const [configPath, language, blockIcon, itemIcon, gameData] = await Promise.all([
     getUserConfigFilePath(".resource-root"),
     readIndex("language"),
@@ -382,6 +652,7 @@ export async function importGameDataResource(dataPath: string, i18nPath?: string
  * Reads the currently active language JSON text, falling back to the bundled zh_cn map.
  */
 export async function readActiveLanguageResource(): Promise<string> {
+  await ensureInitialLanguageSeeded();
   const snapshot = await listGameResourceRegistry();
   return readEntryFile(snapshot.active_language, snapshot.active_language.file_relpath);
 }
@@ -462,7 +733,11 @@ export async function checkGameResourceHealth(): Promise<GameResourceHealthRow[]
   const rows: GameResourceHealthRow[] = [];
   try {
     JSON.parse(await readActiveLanguageResource());
-    rows.push({ label: `语言：${snapshot.active_language.label}`, ok: true, detail: snapshot.active_language.file_relpath || snapshot.active_language.root_path || "" });
+    rows.push({
+      label: `语言：${snapshot.active_language.label}`,
+      ok: true,
+      detail: snapshot.active_language.file_relpath || snapshot.active_language.root_path || "",
+    });
   } catch (error) {
     rows.push({ label: `语言：${snapshot.active_language.label}`, ok: false, detail: String(error) });
   }

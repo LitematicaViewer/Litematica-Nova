@@ -1,2 +1,6 @@
+export {
+  AssetManagerDialog,
+  AssetManagerWindow,
+  openAssetManagerWithWindowBehavior,
+} from "./AssetManagerWindow";
 export { AssetManagerContent } from "./AssetManagerContent";
-export { AssetManagerWindow } from "./AssetManagerWindow";
