@@ -8,6 +8,7 @@
 | V1.4 | 2026-04-12 | CharaDust | 明确 Deepslate 非每次启动从 GitHub 拉代码；选项页增加渲染组件更新相关项（**2.0.4**、**2.6.3.9**） |
 | V1.5 | 2026-04-13 | CharaDust | Render「完整入镜导出」参数配置化：新增选项项与默认值提示，区分透视/正交公式并写入设置（**2.0.4**、**2.6.3.6**、**2.6.3.10**） |
 | V1.6 | 2026-05-06 | Codex | 新增“枚举器”需求：Minecraft 数据值全集、命名集合、复制、集合计算与跨模块复用（**2.0.2**、**2.10**、**4.3**、**8.1**） |
+| V1.7 | 2026-05-17 | Codex | 补充旧项目资源管理/消费模型、Nova 当前资源消费模式与迁移层映射（**2.0.4**、**4.4**、**5.3**） |
 
 ---
 ## 1. 项目概述
@@ -59,6 +60,7 @@
 | FR-O.4 | 启动时检查渲染组件 | 开关项 `deepslate_check_updates_on_startup`（默认关）；在**独立渲染资源包更新源**就绪后，可在启动时联网检查（与 npm/GitHub 源码拉取无关） | P2 |
 | FR-O.5 | 手动检查渲染组件 | 按钮「立即检查渲染组件更新」：当前版本提示策略与完整应用升级路径；将来可改为拉取清单并下载差分包 | P2 |
 | FR-O.6 | NBT 完整入镜导出参数 | 提供「NBT 3D — 完整入镜导出（导出…）」参数组；参数持久化到 `settings.json`，控件提示需注明内置默认值；参数调整后对后续导出立即生效 | P1 |
+| FR-O.7 | 游戏资源管理 | 提供游戏语言、方块图标、物品图标与版本化游戏数据的管理入口；支持查看当前生效资源、下载/导入/删除资源、切换激活状态、执行资源健康检查与触发前端缓存失效/重载 | P1 |
 
 ---
 ### 2.1 模块一：主页（Home）
@@ -363,14 +365,20 @@ $$
 #### 2.5.1 功能描述
 沿用旧项目逻辑，实现分层平面渲染。
 #### 2.5.2 功能点
-| 编号 | 功能点 | 描述 | 优先级 |
-|------|--------|------|--------|
-| FR-F.1 | 视图区域 | 左侧显示渲染视图 | P1 |
-| FR-F.2 | 子区域下拉 | 多子区域时可选择显示子区域 | P1 |
-| FR-F.3 | 默认区域策略 | 默认显示第一个区域；可配置默认显示全部区域 | P1 |
-| FR-F.4 | 材料列表 | 右侧按钮打开当前层级约束下材料列表 | P1 |
-| FR-F.5 | 渲染方案 | **主路径：`Deepslate`（内嵌 WebView）**；`legacy` 为 **二维图像 / 平面切片** 渲染（非体素 3D），持续改进性能与画质 | P1 |
-| FR-F.6 | 层级控制 | 横向单手柄滑条控制显示层级 | P1 |
+| 编号      | 功能点    | 描述                                   | 优先级   |
+| ------- | ------ | ------------------------------------ | ----- |
+| FR-F.1  | 视图区域   | 左侧显示渲染视图                             | P1    |
+| FR-F.2  | 子区域下拉  | 多子区域时可选择显示子区域                        | P1    |
+| FR-F.3  | 默认区域策略 | 默认显示第一个区域；可配置默认显示全部区域                | P1    |
+| FR-F.4  | 材料列表   | 右侧按钮打开当前层级约束下材料列表                    | P1    |
+| FR-F.5  | 渲染方案   | **二维图像 / 平面切片** 渲染（非体素 3D），持续改进性能与画质 | P1    |
+| FR-F.6  | 层级控制   | 横向单手柄滑条控制显示层级                        | P1    |
+| FR-F.7  | 悬浮信息显示 | 当鼠标悬浮于方块上时，显示方块信息与状态                 | P1    |
+| FR-F.9  | 选取区域   | 用于圈定矩形区域，或自由区域                       | P2/P3 |
+| FR-F.8  | 矩形测量   | 给出圈定区域测量其长宽                          | P2    |
+| FR-F.10 | 方块填充   | 用于填充圈定区域为方块                          | P2    |
+| FR-F.11 | 方块画笔   | 用于绘制方块或清除方块                          | P2    |
+| FR-F.12 | 原点放置   | 用于放置原点                               | P2    |
 
 ---
 ### 2.6 模块六：区域渲染（Render）
@@ -577,29 +585,29 @@ $$
 本模块以某一 Minecraft 版本的数据值总表作为 **全集 `U`**。用户可从 `U` 中选择任意数量的数据值，生成命名集合（如 `A`、`N`、`Q`），并通过并集、交集、差集、补集、映射等操作得到新的集合或映射关系。集合结果可复制到剪贴板，也可在替换、搜索、筛选等页面粘贴或引用。
 
 #### 2.10.2 数据值范围
-| 类型 | 示例 | 用途 | 优先级 |
-|------|------|------|--------|
-| 方块 ID | `minecraft:stone`、`minecraft:netherrack` | 方块替换、材料筛选、投影判定 | P0 |
-| 方块状态值 | `minecraft:oak_stairs[facing=north,half=bottom]` | 精确替换、精确筛选 | P1 |
-| 物品 ID | `minecraft:quartz`、`minecraft:redstone` | 材料列表、物品筛选 | P1 |
-| 标签 / 分类 | `minecraft:logs`、`minecraft:mineable/pickaxe` | 批量选择、集合构造 | P1 |
-| 自定义分类 | `下界岩制品|N`、`石英制品|Q` | 用户知识库、投影材料判定 | P0 |
+| 类型      | 示例                                               | 用途             | 优先级 |
+| ------- | ------------------------------------------------ | -------------- | --- |
+| 方块 ID   | `minecraft:stone`、`minecraft:netherrack`         | 方块替换、材料筛选、投影判定 | P0  |
+| 方块状态值   | `minecraft:oak_stairs[facing=north,half=bottom]` | 精确替换、精确筛选      | P1  |
+| 物品 ID   | `minecraft:quartz`、`minecraft:redstone`          | 材料列表、物品筛选      | P1  |
+| 标签 / 分类 | `minecraft:logs`、`minecraft:mineable/pickaxe`    | 批量选择、集合构造      | P1  |
+| 自定义分类   | `<br>`下界岩制品N`、`石英制品Q                             | 用户知识库、投影材料判定   | P0  |
 
 数据源可来自 `misode/mcmeta`、本地 `client.jar` 提取结果、项目内置资源或用户自定义导入；进入枚举器前应统一整理为版本化缓存，例如 `data/minecraft-assets/game-data/<version>/values.json`。
 
 #### 2.10.3 功能点
-| 编号 | 功能点 | 描述 | 优先级 |
-|------|--------|------|--------|
-| FR-E.1 | 数据值全集 | 按 Minecraft 版本加载数据值总表，形成全集 `U` | P0 |
-| FR-E.2 | 浏览与搜索 | 支持按 ID、译名、类型、标签、来源分类筛选数据值 | P0 |
-| FR-E.3 | 多选与复制 | 用户可选择一个或多个数据值，复制为纯 ID 列表、换行列表、JSON 数组或集合表达式 | P0 |
-| FR-E.4 | 命名集合 | 将当前选择保存为命名集合，支持显示名与短符号，如 `下界岩制品|N` | P0 |
-| FR-E.5 | 手动分类 | 支持将数据值拖动或批量加入自定义集合，形成用户维护的分类库 | P1 |
-| FR-E.6 | 集合计算 | 支持 `∪` 并集、`∩` 交集、`-` 差集、补集、去重、包含关系与空集判断 | P0 |
-| FR-E.7 | 集合映射 | 支持将集合中的多个源数据值映射到一个或多个目标数据值，用于替换等模块 | P1 |
-| FR-E.8 | 跨模块引用 | 替换、搜索、筛选、材料列表等模块可粘贴集合内容或引用已保存集合 | P0 |
-| FR-E.9 | 版本标识 | 集合需记录来源 Minecraft 版本；跨版本使用时提示缺失、改名或不兼容项 | P1 |
-| FR-E.10 | 持久化 | 命名集合与自定义分类保存到 `data/` 下，避免随安装包更新丢失 | P0 |
+| 编号      | 功能点   | 描述                                                        | 优先级 |
+| ------- | ----- | --------------------------------------------------------- | --- |
+| FR-E.1  | 数据值全集 | 按 Minecraft 版本加载数据值总表，形成全集 `U`                            | P0  |
+| FR-E.2  | 浏览与搜索 | 支持按 ID、译名、类型、标签、来源分类筛选数据值                                 | P0  |
+| FR-E.3  | 多选与复制 | 用户可选择一个或多个数据值，复制为纯 ID 列表、换行列表、JSON 数组或集合表达式               | P0  |
+| FR-E.4  | 命名集合  | 将当前选择保存为命名集合，支持显示名与短符号，如 `下界岩制品N`                         | P0  |
+| FR-E.5  | 手动分类  | 支持将数据值拖动或批量加入自定义集合，形成用户维护的分类库                             | P1  |
+| FR-E.6  | 集合计算  | 支持用四则运算符表示 `∪/+` 并集、`∩/*` 交集、`-` 差集、补集、去重（对称差集）、包含关系与空集判断 | P0  |
+| FR-E.7  | 集合映射  | 支持将集合中的多个源数据值映射到一个或多个目标数据值，用于替换等模块                        | P1  |
+| FR-E.8  | 跨模块引用 | 替换、搜索、筛选、材料列表等模块可粘贴集合内容或引用已保存集合                           | P0  |
+| FR-E.9  | 版本标识  | 集合需记录来源 Minecraft 版本；跨版本使用时提示缺失、改名或不兼容项                   | P1  |
+| FR-E.10 | 持久化   | 命名集合与自定义分类保存到 `data/` 下，避免随安装包更新丢失                        | P0  |
 
 #### 2.10.4 典型用例：批量替换集合
 1. 枚举器加载某版本数据值全集 `U`。
@@ -670,6 +678,7 @@ L ∩ (N ∪ Q) = ∅
 | NFR-4.1 | 术语一致 | 明确区分“预览图”与“缩略图” |
 | NFR-4.2 | 操作一致 | 全模块共享“活动文件”语义 |
 | NFR-4.3 | 多语言 | UI 支持基于 JSON 的语言切换 |
+
 ---
 ## 4. 数据模型（草案）
 ### 4.1 核心实体关系
@@ -730,11 +739,73 @@ L ∩ (N ∪ Q) = ∅
 建议路径：`data/enumerator/sets.json`；导入导出可使用同结构 JSON。
 
 #### 4.3.3 表达式与映射
-| 字段 | 含义 |
+| 字段              | 含义                                                         |
+| --------------- | ---------------------------------------------------------- |
+| `expression`    | 集合表达式，如 `L ∩ (N ∪ Q)`                                      |
+| `result_values` | 表达式计算后的数据值列表，可缓存也可即时计算                                     |
+| `mapping`       | 替换映射，如 `{ "sources": ["A"], "target": "minecraft:stone" }` |
+
+### 4.4 游戏资源管理与消费模型
+#### 4.4.1 旧项目资源管理模型（已验证）
+旧项目采用“**安装索引 + 激活槽位 + 运行时解析**”模式：资源先被下载/导入到用户数据目录，再写入 `installed.json`，业务模块不直接约定固定文件，而是先解析“当前生效资源”。
+
+| 资源类型 | 安装位置 | 索引/状态 | 消费槽位 |
+|------|------|------|------|
+| 游戏语言 | `minecraft-assets/language/...` | `language/installed.json` + `active` | 全局单活跃语言 |
+| 方块图标 | `minecraft-assets/block_2d/...`、`minecraft-assets/block_icon/...` | `block_2d/installed.json`、`block_icon/installed.json` | `active_material_list`、`active_layering` |
+| 物品图标 | `minecraft-assets/item/...` | `item/installed.json` | `active_layering` |
+
+旧项目消费特征：
+- 页面消费前先经资源解析层决定当前根目录或当前语言映射，而不是直接拼固定路径。
+- 图标缓存与预热缓存绑定当前资源环境标签；当 `installed.json` 或激活项变化时自动失效。
+- 同一种资源允许按业务场景拆分槽位，例如材料列表与分层可使用不同方块图标来源。
+
+##### 4.4.1.1 旧项目语言资源的具体实现
+| 项 | 旧项目实现 |
 |------|------|
-| `expression` | 集合表达式，如 `L ∩ (N ∪ Q)` |
-| `result_values` | 表达式计算后的数据值列表，可缓存也可即时计算 |
-| `mapping` | 替换映射，如 `{ "sources": ["A"], "target": "minecraft:stone" }` |
+| 内建回退源 | 首次运行时将 `pack-in/lang/zh_cn.json` 解包到 `minecraft-assets/language/initial/zh_cn.json`；同时将 `pack-in/legacy/category.json` 解包到 `legacy/category.json` 供旧统计分类使用。 |
+| 在线来源 | `https://github.com/InventivetalentDev/minecraft-assets` |
+| 分支索引获取 | 先调用 GitHub API `repos/.../branches?per_page=100&page=N`；若匿名额度受限或失败，则回退 `git ls-remote --heads`；再失败则抓取 GitHub branches HTML 页面。 |
+| 分支过滤 | 仅接受类似 `1.20`、`1.20.1`、`26.1` 这类版本分支名，并按数值版本倒序排序。 |
+| 语言索引获取 | 先尝试读取 `raw.githubusercontent.com/.../assets/minecraft/lang/_list.json`；若无则退回 GitHub Contents API `contents/assets/minecraft/lang?ref=<branch>`；再失败则抓取该目录 HTML 页面并提取 `*.json`。 |
+| 语言过滤 | 仅保留合法语言码，如 `zh_cn`、`en_us`、`zh_hans_cn`；下载后只保留 `block.`、`item.`、`entity.`、`effect.`、`enchantment.` 前缀键。 |
+| 本地落盘 | 下载结果写入 `minecraft-assets/language/github/InventivetalentDev/<branch>/<lang>.json`。 |
+| 索引写入 | 写入 `language/installed.json`，字段至少包含 `id`、`language`、`branch`、`source`、`file_relpath`、`active`、`installed_at`。 |
+| 运行时读取 | `load_runtime_language_map()` 先读取 `installed.json` 中 `active=true` 的条目；若无可用项则回退 `initial/zh_cn.json`。 |
+
+##### 4.4.1.2 旧项目方块图标资源的具体实现
+| 项 | 旧项目实现 |
+|------|------|
+| 内建回退源 | 首次运行时将 `pack-in/arr-private/block.zip` 解压到 `minecraft-assets/block_2d/initial`；通过哨兵文件 `.lba_block_2d_seed` 与版本号避免重复解压。 |
+| 在线来源 | `https://ccvaults.com/` |
+| 访问令牌获取 | 先访问站点首页建立 Cookie，再向 `/api/token` 发送 `POST`，携带 `x-api-key`、`Origin`、`Referer`、`X-Requested-With` 等头，取得 Bearer token。 |
+| 方块索引获取 | 优先调用 `/api/assets/20.%20Blocks`，遍历 `subcategories[].files[]` 生成 `(block_id, file_url)`；若为空，则回退 `/api/assets/all`，过滤 `category == "20. Blocks"` 的文件。 |
+| 索引去重 | 以 `block_id = Path(file_name).stem.lower()` 去重，避免同名方块重复登记。 |
+| 下载与处理 | 并行下载 PNG，若尺寸不是 `32x32` 则统一缩放到 `32x32`，最终保存到 `minecraft-assets/block_icon/vault/<block_id>.png`。 |
+| 槽位登记 | 下载后调用 `register_vault_block_icon_slot()`，在 `block_icon/installed.json` 中登记一个 `vault:ccvaults` 条目，并默认将其设为 `active_material_list=true`、`active_layering=false`。 |
+| 索引迁移 | 兼容旧版根目录 `block_visuals_installed.json`，启动时会拆分迁移到 `block_2d/installed.json` 与 `block_icon/installed.json`。 |
+| 运行时解析 | 材料列表先根据 `active_material_list` 解析当前图标根目录；若无激活项则回退 `block_2d/initial`。路径解析优先尝试直连目录，再尝试 `assets/minecraft/textures/block/`、`textures/block/`、`block/`，最后 `rglob` 搜索。 |
+| 缓存失效 | 图标解析缓存和预热缓存绑定当前图标根目录、目录时间戳及 `installed.json` 指纹；切换资源后自动失效。 |
+
+#### 4.4.2 Nova 当前资源消费模型（现状）
+Nova 当前采用“**工作区固定资源 + 启动后前端缓存**”模式：页面直接通过 service 层读取工作区内随应用分发的资源文件，运行时默认不存在“切换当前资源包”的状态层。
+
+| 资源类型 | 当前来源 | 当前消费方式 | 当前限制 |
+|------|------|------|------|
+| 基础中文翻译 | `pack-in/lang/zh_cn.json` | 启动时加载到前端 `langMap` | 无激活语言概念 |
+| BlockState 数据库 | `data/minecraft_blockstates/<version>.json` 与 `.zh_cn.json` | 启动时加载到前端 cache | 版本基本写死在代码常量 |
+| 方块图标 | `block/*.png`、`item/*.png`、`pack-in/*.png` | 运行时按 block id 直接解析为 data URL | 无资源索引、无槽位切换 |
+
+Nova 当前消费特征：
+- 页面消费的是固定路径约定，不依赖用户态安装索引。
+- 设置页当前更偏“路径存在性与健康检查”，而不是资源安装/切换管理器。
+- 图标与语言缓存目前只按会话初始化，不按“资源版本/激活状态”自动失效。
+
+#### 4.4.3 目标原则
+若要把旧项目的资源管理能力迁入 Nova，应采用“**资源管理状态可切换，业务消费入口保持稳定**”原则：
+- 页面仍只调用统一 service，如 `translateBlockId()`、`getBlockIconDataUrl()`。
+- 是否使用内建资源、用户导入资源、在线下载资源，均由资源解析层和激活状态层决定。
+- 允许保留 Nova 当前固定资源作为默认回退，以便离线冷启动始终可用。
 
 ---
 ## 5. 系统架构（草案）
@@ -749,6 +820,34 @@ L ∩ (N ∪ Q) = ∅
 1. 文件解析、统计与渲染必须异步化，避免阻塞 UI。  
 2. “属性（Properties）”是活动文件管理主入口。  
 3. 缓存采用“先展示后刷新”策略，保证反馈速度。
+
+### 5.3 旧项目资源模型迁入 Nova 的分层映射
+| 目标层 | Nova 需要补的层/能力 | 说明 |
+|------|------|------|
+| UI 层 | 资源管理入口与管理对话框/页面 | 在设置页新增“游戏资源管理”入口，至少覆盖语言、方块图标、物品图标、版本化游戏数据四类资源；支持下载/导入/删除/应用/回退内建。 |
+| UI 层 | 当前生效资源可视化 | 在设置页明确显示“当前语言”“材料列表图标来源”“分层图标来源”“当前数据版本”，避免用户只看到文件存在性而看不到实际消费状态。 |
+| 业务层 | Resource Registry Service | 抽象出统一资源注册表读写服务，负责读取/写入 `installed.json`、维护资源元数据、暴露当前 active 状态。 |
+| 业务层 | Resource Resolver | 将当前固定的 `i18n.ts`、`blockIconResolver.ts`、`blockstateDb.ts` 提升为“先解析激活资源、再返回消费结果”的入口，页面 API 尽量保持不变。 |
+| 业务层 | 多槽位激活策略 | 至少支持：全局语言单活跃、方块图标按 `material_list` / `flake` 双槽位、物品图标按 `flake` 槽位；后续如 Render/Enumerator 有独立需求可继续扩展。 |
+| 业务层 | 资源切换后的缓存失效 | 资源切换后需主动清空前端内存缓存、图标 Promise cache、预览缓存，并通知已打开页面重读；不能依赖用户重启应用。 |
+| 数据层 | 用户态资源目录 | 在用户配置目录下建立稳定目录，例如 `minecraft-assets/language/`、`block_2d/`、`block_icon/`、`item/`、`game-data/`，与工作区只读资源解耦。 |
+| 数据层 | 安装索引与迁移 | 定义 `installed.json` 结构、版本号、迁移规则与内建回退策略；旧索引字段变更时要可升级。 |
+| 数据层 | 下载/导入/删除管线 | 提供下载、文件导入、去重、覆盖确认、删除、回滚与健康检查；避免 UI 直接操作路径。 |
+| 适配层 | Tauri 文件/网络命令 | 当前前端主要读取工作区文件；迁移后需要补用户配置目录读写、下载、目录枚举、图片读取与路径健康检查命令。 |
+| 适配层 | 前端事件广播 | 需要新增诸如 `resource-language-changed`、`resource-block-icons-changed`、`resource-game-data-changed` 事件，驱动页面热更新。 |
+
+#### 5.3.1 对现有 Nova service 的直接映射
+| 现有入口 | 当前模式 | 迁移后目标 |
+|------|------|------|
+| `initI18n()` / `translateBlockId()` | 固定读取 `pack-in/lang/zh_cn.json` | 改为读取“当前激活语言包”，无激活时回退内建。 |
+| `loadDatabases()` / `translateKey()` / `translateValue()` | 固定读取 `data/minecraft_blockstates/26.1*.json` | 改为按当前游戏数据版本解析用户态或内建数据源；设置页可切换或下载版本。 |
+| `getBlockIconDataUrl()` | 固定按 `block/`、`item/`、`pack-in/` 查找 PNG | 改为先解析当前槽位对应的图标根目录，再按统一候选策略查找；切换后缓存失效。 |
+| `SettingsPage` 检查资源文件存在性 | 被动检查 | 升级为可操作的资源管理页，同时保留健康检查。 |
+
+#### 5.3.2 实施顺序建议
+1. 先补**数据层索引 + 适配层命令**，让 Nova 具备“安装资源、读取 active 状态”的基础能力。  
+2. 再改**业务层 resolver**，保持页面调用接口尽量不变。  
+3. 最后补**设置页资源管理 UI 与事件广播**，接通热切换与缓存失效。
 ---
 ## 6. 项目里程碑（建议）
 | 阶段 | 目标 | 交付内容 |
