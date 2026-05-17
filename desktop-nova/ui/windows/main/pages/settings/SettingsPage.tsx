@@ -11,7 +11,6 @@ import {
   getNovaRuntimePathInfo,
   getPathInfo,
   getUserConfig,
-  openAssetManagerWindow,
   openUserConfigDir,
   openWorkspacePath,
   PathInfo,
@@ -35,6 +34,7 @@ import {
   saveShowUiTestPageConfig,
   saveThemeConfig,
 } from "../../../../../src/business/facade";
+import { AssetManagerDialog, openAssetManagerWithWindowBehavior } from "../../../asset_manager";
 
 const BLOCKSTATE_DB = "data/minecraft_blockstates/26.1.json";
 const BLOCKSTATE_ZH = "data/minecraft_blockstates/26.1.zh_cn.json";
@@ -107,6 +107,7 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showAssetManagerOverlay, setShowAssetManagerOverlay] = useState(false);
   const [aiStatus, setAiStatus] = useState("未保存");
   const [aiSaveMessage, setAiSaveMessage] = useState("");
   const [aiTestStatus, setAiTestStatus] = useState("");
@@ -256,11 +257,7 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
   };
 
   const openAssetManager = async () => {
-    try {
-      await openAssetManagerWindow();
-    } catch {
-      window.open("asset_manager.html", "_blank", "popup=yes,width=1040,height=700");
-    }
+    await openAssetManagerWithWindowBehavior(() => setShowAssetManagerOverlay(true));
   };
 
   const saveAiConfigOnly = async () => {
@@ -351,7 +348,7 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
           <button className="btn" type="button" onClick={openAssetManager}>打开游戏资源管理器</button>
         </div>
         <div className="game-resource-note">
-          语言、方块图标、物品图标和游戏数据现在在独立子窗口中管理。
+          语言、方块图标、物品图标和游戏数据会按照“子窗口行为”设置决定使用独立窗口还是主窗口遮罩。
         </div>
       </div>
 
@@ -461,7 +458,7 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
           </div>
         </div>
         <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
-          材料列表和 UI 测试页中的演示窗口都会按照这里的子窗口行为决定使用独立窗口还是主窗口遮罩。
+          材料列表、游戏资源管理器和 UI 测试页中的演示窗口都会按照这里的子窗口行为决定使用独立窗口还是主窗口遮罩。
         </div>
       </div>
 
@@ -524,6 +521,9 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
       {log && (
         <pre style={{ whiteSpace: "pre-wrap", background: "#111", border: "1px solid #444", padding: 8, color: "#ccc", maxHeight: 220, overflow: "auto" }}>{log}</pre>
       )}
+      {showAssetManagerOverlay ? (
+        <AssetManagerDialog theme={normalizeTheme(theme)} onClose={() => setShowAssetManagerOverlay(false)} />
+      ) : null}
     </div>
   );
 }

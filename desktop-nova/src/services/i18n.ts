@@ -1,18 +1,35 @@
-import { readActiveLanguageResource } from "./gameResources";
+import { readActiveLanguageResource, readFallbackLanguageResource } from "./gameResources";
 
 let langMap: Record<string, string> = {};
+
+function parseLanguageMap(raw: string): Record<string, string> {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof value === "string") next[key] = value;
+  }
+  return next;
+}
 
 /**
  * Loads the active Minecraft language map into the in-memory translation cache.
  */
 export async function initI18n(force = false): Promise<void> {
   if (!force && Object.keys(langMap).length > 0) return;
+  let fallbackMap: Record<string, string> = {};
   try {
-    const raw = await readActiveLanguageResource();
-    langMap = JSON.parse(raw);
-  } catch (e) {
-    console.warn("Failed to load active language resource", e);
+    fallbackMap = parseLanguageMap(await readFallbackLanguageResource());
+  } catch (error) {
+    console.warn("Failed to load fallback language resource", error);
   }
+  let activeMap: Record<string, string> = {};
+  try {
+    activeMap = parseLanguageMap(await readActiveLanguageResource());
+  } catch (error) {
+    console.warn("Failed to load active language resource", error);
+  }
+  langMap = { ...fallbackMap, ...activeMap };
 }
 
 /**
