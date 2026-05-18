@@ -1,5 +1,6 @@
 param(
     [string]$Root = "bin/stockpile-server",
+    [string[]]$Target = @("all"),
     [switch]$Json
 )
 
@@ -12,12 +13,33 @@ $rootPath = if ([System.IO.Path]::IsPathRooted($Root)) {
     Join-Path $repoRoot $Root
 }
 
-$required = @(
+$allTargets = @(
     @{ Platform = "windows-x64"; File = "stockpile_server.exe" },
     @{ Platform = "linux-x64"; File = "stockpile_server" },
     @{ Platform = "macos-x64"; File = "stockpile_server" },
     @{ Platform = "macos-arm64"; File = "stockpile_server" }
 )
+
+$targetNames = @()
+foreach ($entry in $Target) {
+    foreach ($name in ($entry -split ",")) {
+        $trimmed = $name.Trim()
+        if ($trimmed.Length -gt 0) {
+            $targetNames += $trimmed
+        }
+    }
+}
+if ($targetNames.Count -eq 0 -or $targetNames -contains "all") {
+    $targetNames = @("windows-x64", "linux-x64", "macos-x64", "macos-arm64")
+}
+$validNames = @("windows-x64", "linux-x64", "macos-x64", "macos-arm64")
+foreach ($name in $targetNames) {
+    if ($validNames -notcontains $name) {
+        throw "Invalid target '$name'. Use windows-x64, linux-x64, macos-x64, macos-arm64, or all."
+    }
+}
+
+$required = @($allTargets | Where-Object { $targetNames -contains $_.Platform })
 
 $results = foreach ($item in $required) {
     $path = Join-Path (Join-Path $rootPath $item.Platform) $item.File

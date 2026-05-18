@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -81,6 +81,96 @@ pub struct StockpileDeployOptions {
     pub whitelist: Vec<String>,
     pub allow_guest_readonly: Option<bool>,
     pub admin_page_enabled: Option<bool>,
+    pub targets: Vec<StockpileDeployTarget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum StockpileDeployTarget {
+    WindowsX64,
+    LinuxX64,
+    MacosX64,
+    MacosArm64,
+}
+
+impl StockpileDeployTarget {
+    fn platform(self) -> &'static str {
+        match self {
+            StockpileDeployTarget::WindowsX64 => "windows-x64",
+            StockpileDeployTarget::LinuxX64 => "linux-x64",
+            StockpileDeployTarget::MacosX64 => "macos-x64",
+            StockpileDeployTarget::MacosArm64 => "macos-arm64",
+        }
+    }
+
+    fn file_name(self) -> &'static str {
+        match self {
+            StockpileDeployTarget::WindowsX64 => "stockpile_server.exe",
+            _ => "stockpile_server",
+        }
+    }
+
+    fn zip_binary_path(self) -> String {
+        format!("server/{}/{}", self.platform(), self.file_name())
+    }
+
+    fn zip_start_path(self) -> String {
+        match self {
+            StockpileDeployTarget::WindowsX64 => "server/windows-x64/start.cmd".to_string(),
+            _ => format!("server/{}/start.sh", self.platform()),
+        }
+    }
+}
+
+impl FromStr for StockpileDeployTarget {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "windows-x64" => Ok(StockpileDeployTarget::WindowsX64),
+            "linux-x64" => Ok(StockpileDeployTarget::LinuxX64),
+            "macos-x64" => Ok(StockpileDeployTarget::MacosX64),
+            "macos-arm64" => Ok(StockpileDeployTarget::MacosArm64),
+            _ => bail!(
+                "stockpile deploy target must be windows-x64, linux-x64, macos-x64, macos-arm64, or all"
+            ),
+        }
+    }
+}
+
+pub fn parse_deploy_targets(values: &[String]) -> Result<Vec<StockpileDeployTarget>> {
+    if values.is_empty() {
+        return Ok(vec![default_deploy_target()]);
+    }
+    let mut targets = BTreeSet::new();
+    for value in values {
+        if value == "all" {
+            targets.extend(all_deploy_targets());
+        } else {
+            targets.insert(value.parse()?);
+        }
+    }
+    Ok(targets.into_iter().collect())
+}
+
+fn default_deploy_target() -> StockpileDeployTarget {
+    if cfg!(target_os = "windows") {
+        StockpileDeployTarget::WindowsX64
+    } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        StockpileDeployTarget::MacosArm64
+    } else if cfg!(target_os = "macos") {
+        StockpileDeployTarget::MacosX64
+    } else {
+        StockpileDeployTarget::LinuxX64
+    }
+}
+
+fn all_deploy_targets() -> [StockpileDeployTarget; 4] {
+    [
+        StockpileDeployTarget::WindowsX64,
+        StockpileDeployTarget::LinuxX64,
+        StockpileDeployTarget::MacosX64,
+        StockpileDeployTarget::MacosArm64,
+    ]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,7 +218,7 @@ pub fn export_stockpile_zip(
     let output_path = resolve_output_path(input, output)?;
     let payload = build_payload(input, minecraft_version, materials, recipe_status, mode)?;
     write_zip(&output_path, &payload, mode, &deploy_options)?;
-    Ok(summary(&output_path, &payload, mode))
+    Ok(summary(&output_path, &payload, mode, &deploy_options))
 }
 
 fn validate_multi_deploy_options(options: &StockpileDeployOptions) -> Result<()> {
@@ -274,27 +364,31 @@ fn add_multi_deploy_files(
     deploy_options: &StockpileDeployOptions,
     options: SimpleFileOptions,
 ) -> Result<()> {
+    let targets = if deploy_options.targets.is_empty() {
+        vec![default_deploy_target()]
+    } else {
+        deploy_options.targets.clone()
+    };
     add_bytes_file(
         zip,
         "db/stockpile.sqlite",
         &initial_stockpile_db(payload, deploy_options)?,
         options,
     )?;
-    add_text_file(
-        zip,
-        "server/windows-x64/start.cmd",
-        WINDOWS_START_CMD,
-        options,
-    )?;
-    add_text_file(zip, "server/linux-x64/start.sh", UNIX_START_SH, options)?;
-    add_text_file(zip, "server/macos-x64/start.sh", UNIX_START_SH, options)?;
-    add_text_file(zip, "server/macos-arm64/start.sh", UNIX_START_SH, options)?;
-    add_text_file(zip, "README.txt", MULTI_README, options)?;
+    for target in &targets {
+        let start_path = target.zip_start_path();
+        let start_content = match target {
+            StockpileDeployTarget::WindowsX64 => WINDOWS_START_CMD,
+            _ => UNIX_START_SH,
+        };
+        add_text_file(zip, &start_path, start_content, options)?;
+    }
+    add_text_file(zip, "README.txt", &multi_readme(&targets), options)?;
 
-    for binary in stockpile_server_binaries()? {
+    for binary in stockpile_server_binaries(&targets)? {
         add_bytes_file(
             zip,
-            binary.zip_path,
+            &binary.zip_path,
             &fs::read(&binary.source)
                 .with_context(|| format!("read {}", binary.source.display()))?,
             options,
@@ -333,41 +427,21 @@ fn initial_stockpile_db(
 #[derive(Debug)]
 struct DeployBinary {
     source: PathBuf,
-    zip_path: &'static str,
+    zip_path: String,
 }
 
-fn stockpile_server_binaries() -> Result<Vec<DeployBinary>> {
+fn stockpile_server_binaries(targets: &[StockpileDeployTarget]) -> Result<Vec<DeployBinary>> {
     let root = stockpile_server_bin_root()?;
-    let required = [
-        (
-            "windows-x64",
-            "stockpile_server.exe",
-            "server/windows-x64/stockpile_server.exe",
-        ),
-        (
-            "linux-x64",
-            "stockpile_server",
-            "server/linux-x64/stockpile_server",
-        ),
-        (
-            "macos-x64",
-            "stockpile_server",
-            "server/macos-x64/stockpile_server",
-        ),
-        (
-            "macos-arm64",
-            "stockpile_server",
-            "server/macos-arm64/stockpile_server",
-        ),
-    ];
     let mut missing = Vec::new();
     let mut binaries = Vec::new();
-    for (platform, file_name, zip_path) in required {
+    for target in targets {
+        let platform = target.platform();
+        let file_name = target.file_name();
         let path = root.join(platform).join(file_name);
         if path.is_file() {
             binaries.push(DeployBinary {
                 source: path,
-                zip_path,
+                zip_path: target.zip_binary_path(),
             });
         } else {
             missing.push(format!("{platform}/{file_name}"));
@@ -375,9 +449,19 @@ fn stockpile_server_binaries() -> Result<Vec<DeployBinary>> {
     }
     if !missing.is_empty() {
         bail!(
-            "stockpile multi export requires real server binaries under {}; missing: {}. Run scripts/stockpile/verify_stockpile_server_bins.ps1 to inspect local binaries, then scripts/stockpile/fetch_stockpile_server_artifacts.ps1 after the GitHub Actions artifacts are available.",
+            "stockpile multi export requires real server binaries under {}; missing: {}. Run scripts/stockpile/verify_stockpile_server_bins.ps1 -Target {} to inspect local binaries, then scripts/stockpile/fetch_stockpile_server_artifacts.ps1 -Target {} after the GitHub Actions artifacts are available.",
             root.display(),
-            missing.join(", ")
+            missing.join(", "),
+            targets
+                .iter()
+                .map(|target| target.platform())
+                .collect::<Vec<_>>()
+                .join(","),
+            targets
+                .iter()
+                .map(|target| target.platform())
+                .collect::<Vec<_>>()
+                .join(",")
         );
     }
     Ok(binaries)
@@ -706,6 +790,7 @@ fn summary(
     output_path: &Path,
     payload: &StockpileZipPayload,
     mode: StockpileExportMode,
+    deploy_options: &StockpileDeployOptions,
 ) -> StockpileZipSummary {
     let mut files = vec![
         "index.html".to_string(),
@@ -721,18 +806,17 @@ fn summary(
         format!("assets/icons/*.png ({})", payload.icon_files.len()),
     ];
     if mode == StockpileExportMode::Multi {
-        files.extend([
-            "db/stockpile.sqlite".to_string(),
-            "server/windows-x64/start.cmd".to_string(),
-            "server/windows-x64/stockpile_server.exe".to_string(),
-            "server/linux-x64/start.sh".to_string(),
-            "server/linux-x64/stockpile_server".to_string(),
-            "server/macos-x64/start.sh".to_string(),
-            "server/macos-x64/stockpile_server".to_string(),
-            "server/macos-arm64/start.sh".to_string(),
-            "server/macos-arm64/stockpile_server".to_string(),
-            "README.txt".to_string(),
-        ]);
+        files.push("db/stockpile.sqlite".to_string());
+        let targets = if deploy_options.targets.is_empty() {
+            vec![default_deploy_target()]
+        } else {
+            deploy_options.targets.clone()
+        };
+        for target in targets {
+            files.push(target.zip_start_path());
+            files.push(target.zip_binary_path());
+        }
+        files.push("README.txt".to_string());
     }
     StockpileZipSummary {
         output: output_path.to_path_buf(),
@@ -762,7 +846,63 @@ echo "Starting stockpile server at http://127.0.0.1:${BIND##*:}/"
 exec "$(dirname "$0")/stockpile_server" serve --root . --bind "$BIND"
 "#;
 
-const MULTI_README: &str = r#"Litematica-BA Stockpile Multiplayer Package
+fn multi_readme(targets: &[StockpileDeployTarget]) -> String {
+    let mut lines = vec![
+        "Litematica-BA Stockpile Multiplayer Package".to_string(),
+        "".to_string(),
+        "This package contains precomputed stockpile materials, recipe trees, icons, i18n data, selected platform stockpile_server binaries, and an initialized SQLite database.".to_string(),
+        "".to_string(),
+        "Do not upload .litematic files to the server. The deployment server only hosts this package and writes db/stockpile.sqlite.".to_string(),
+        "".to_string(),
+        "Passwords, whitelist users, and default configuration were written at export time. To change them, use the admin page or rebuild the package.".to_string(),
+        "".to_string(),
+        "Available targets:".to_string(),
+    ];
+    for target in targets {
+        lines.push(format!("  - {}", target.platform()));
+    }
+    lines.push("".to_string());
+    for target in targets {
+        match target {
+            StockpileDeployTarget::WindowsX64 => {
+                lines.push("Windows x64:".to_string());
+                lines.push("  Double-click server/windows-x64/start.cmd".to_string());
+            }
+            StockpileDeployTarget::LinuxX64 => {
+                lines.push("Linux x64:".to_string());
+                lines.push(
+                    "  chmod +x server/linux-x64/start.sh server/linux-x64/stockpile_server"
+                        .to_string(),
+                );
+                lines.push("  ./server/linux-x64/start.sh".to_string());
+            }
+            StockpileDeployTarget::MacosX64 => {
+                lines.push("macOS x64:".to_string());
+                lines.push(
+                    "  chmod +x server/macos-x64/start.sh server/macos-x64/stockpile_server"
+                        .to_string(),
+                );
+                lines.push("  ./server/macos-x64/start.sh".to_string());
+            }
+            StockpileDeployTarget::MacosArm64 => {
+                lines.push("macOS arm64:".to_string());
+                lines.push(
+                    "  chmod +x server/macos-arm64/start.sh server/macos-arm64/stockpile_server"
+                        .to_string(),
+                );
+                lines.push("  ./server/macos-arm64/start.sh".to_string());
+            }
+        }
+        lines.push("".to_string());
+    }
+    lines.push("Default URL:".to_string());
+    lines.push("  http://127.0.0.1:8787/".to_string());
+    lines.push("".to_string());
+    lines.join("\n")
+}
+
+#[allow(dead_code)]
+const LEGACY_MULTI_README_REFERENCE: &str = r#"Litematica-BA Stockpile Multiplayer Package
 
 This package contains precomputed stockpile materials, recipe trees, icons, i18n data, platform stockpile_server binaries, and an initialized SQLite database.
 
@@ -1398,6 +1538,7 @@ mod tests {
                 whitelist: vec!["Eldon".to_string()],
                 allow_guest_readonly: Some(true),
                 admin_page_enabled: Some(true),
+                targets: all_deploy_targets().to_vec(),
             },
         )
         .expect("write multi zip");
@@ -1497,10 +1638,17 @@ mod tests {
                 whitelist: vec!["Eldon".to_string()],
                 allow_guest_readonly: None,
                 admin_page_enabled: None,
+                targets: vec![StockpileDeployTarget::LinuxX64],
             },
         )
         .expect_err("missing binaries fail");
         assert!(error.to_string().contains("missing:"));
+        assert!(error.to_string().contains("linux-x64/stockpile_server"));
+        assert!(
+            !error
+                .to_string()
+                .contains("windows-x64/stockpile_server.exe")
+        );
         let _ = fs::remove_file(output);
         let _ = fs::remove_dir_all(bin_root);
         unsafe {
