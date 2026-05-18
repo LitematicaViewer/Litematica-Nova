@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
@@ -95,6 +95,39 @@ pub struct SessionImportOutput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StockpileConfig {
+    pub mode: String,
+    pub admin_page_enabled: bool,
+    pub access_password_enabled: bool,
+    pub admin_password_enabled: bool,
+    pub whitelist_enabled: bool,
+    pub allow_guest_readonly: bool,
+    pub default_language: String,
+    pub poll_interval_ms: u32,
+    pub show_advanced_recipe_tree: bool,
+    pub show_unresolved_recipes: bool,
+    pub show_icon_fallback_badge: bool,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigShowOutput {
+    pub zip_path: PathBuf,
+    pub session_db: PathBuf,
+    pub schema_version: u32,
+    pub config: StockpileConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigResetOutput {
+    pub zip_path: PathBuf,
+    pub session_db: PathBuf,
+    pub reset: bool,
+    pub config: StockpileConfig,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ParticipantState {
     pub user_id: String,
     pub first_seen_at: u64,
@@ -139,6 +172,23 @@ struct ParticipantRequest {
 struct ClaimRequest {
     status: String,
     quantity: u64,
+}
+
+fn default_config(now: u64) -> StockpileConfig {
+    StockpileConfig {
+        mode: "multi".to_string(),
+        admin_page_enabled: false,
+        access_password_enabled: false,
+        admin_password_enabled: false,
+        whitelist_enabled: false,
+        allow_guest_readonly: false,
+        default_language: "auto".to_string(),
+        poll_interval_ms: 3000,
+        show_advanced_recipe_tree: true,
+        show_unresolved_recipes: true,
+        show_icon_fallback_badge: false,
+        updated_at: now,
+    }
 }
 
 pub fn serve_stockpile_zip(zip_path: &Path, bind: &str) -> Result<StockpileServeSummary> {
@@ -211,6 +261,16 @@ fn route_request_inner(
         ("GET", "/api/state") => {
             let state = build_state(db_path, &project.materials)?;
             return Ok(json_response(200, state, "OK"));
+        }
+        ("GET", "/api/config") => {
+            let config = load_config(db_path)?;
+            return Ok(json_response(200, config, "OK"));
+        }
+        ("PUT", "/api/config") => {
+            let body: Value =
+                serde_json::from_slice(&request.body).context("parse config request failed")?;
+            let config = update_config_from_value(db_path, &body)?;
+            return Ok(json_response(200, config, "OK"));
         }
         ("POST", "/api/participants") => {
             let body: ParticipantRequest = serde_json::from_slice(&request.body)
@@ -293,6 +353,21 @@ fn init_db_conn(conn: &Connection) -> Result<()> {
             key TEXT PRIMARY KEY NOT NULL,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS stockpile_config (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            mode TEXT NOT NULL CHECK(mode IN ('single', 'multi')),
+            admin_page_enabled INTEGER NOT NULL CHECK(admin_page_enabled IN (0, 1)),
+            access_password_enabled INTEGER NOT NULL CHECK(access_password_enabled IN (0, 1)),
+            admin_password_enabled INTEGER NOT NULL CHECK(admin_password_enabled IN (0, 1)),
+            whitelist_enabled INTEGER NOT NULL CHECK(whitelist_enabled IN (0, 1)),
+            allow_guest_readonly INTEGER NOT NULL CHECK(allow_guest_readonly IN (0, 1)),
+            default_language TEXT NOT NULL CHECK(default_language IN ('auto', 'zh-CN', 'en-US')),
+            poll_interval_ms INTEGER NOT NULL CHECK(poll_interval_ms >= 2000 AND poll_interval_ms <= 10000),
+            show_advanced_recipe_tree INTEGER NOT NULL CHECK(show_advanced_recipe_tree IN (0, 1)),
+            show_unresolved_recipes INTEGER NOT NULL CHECK(show_unresolved_recipes IN (0, 1)),
+            show_icon_fallback_badge INTEGER NOT NULL CHECK(show_icon_fallback_badge IN (0, 1)),
+            updated_at INTEGER NOT NULL
+        );
         "#,
     )
     .context("initialize stockpile session db failed")?;
@@ -307,6 +382,7 @@ fn init_db_conn(conn: &Connection) -> Result<()> {
         set_meta(conn, "created_at", &now.to_string())?;
         set_meta(conn, "updated_at", &now.to_string())?;
     }
+    insert_default_config_if_missing(conn, now)?;
     Ok(())
 }
 
@@ -317,7 +393,9 @@ fn ensure_session_db(path: &Path, expected_zip_hash: &str) -> Result<()> {
         .unwrap_or_default()
         .parse::<u32>()
         .unwrap_or(0);
-    if schema_version != STOCKPILE_SQLITE_SCHEMA_VERSION {
+    if schema_version < STOCKPILE_SQLITE_SCHEMA_VERSION {
+        migrate_sqlite_schema(&conn, schema_version)?;
+    } else if schema_version != STOCKPILE_SQLITE_SCHEMA_VERSION {
         bail!(
             "unsupported stockpile sqlite schema_version {}; supported {}; export/reset/import session state",
             schema_version,
@@ -333,6 +411,66 @@ fn ensure_session_db(path: &Path, expected_zip_hash: &str) -> Result<()> {
         );
     }
     touch_meta(&conn)?;
+    Ok(())
+}
+
+fn migrate_sqlite_schema(conn: &Connection, schema_version: u32) -> Result<()> {
+    match schema_version {
+        2 => {
+            insert_default_config_if_missing(conn, current_unix_timestamp()?)?;
+            set_meta(
+                conn,
+                "schema_version",
+                &STOCKPILE_SQLITE_SCHEMA_VERSION.to_string(),
+            )?;
+            touch_meta(conn)?;
+            Ok(())
+        }
+        _ => bail!(
+            "unsupported stockpile sqlite schema_version {}; supported {}; export/reset/import session state",
+            schema_version,
+            STOCKPILE_SQLITE_SCHEMA_VERSION
+        ),
+    }
+}
+
+fn insert_default_config_if_missing(conn: &Connection, now: u64) -> Result<()> {
+    let config = default_config(now);
+    conn.execute(
+        r#"
+        INSERT OR IGNORE INTO stockpile_config(
+            id,
+            mode,
+            admin_page_enabled,
+            access_password_enabled,
+            admin_password_enabled,
+            whitelist_enabled,
+            allow_guest_readonly,
+            default_language,
+            poll_interval_ms,
+            show_advanced_recipe_tree,
+            show_unresolved_recipes,
+            show_icon_fallback_badge,
+            updated_at
+        )
+        VALUES(1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        "#,
+        params![
+            config.mode,
+            bool_to_i64(config.admin_page_enabled),
+            bool_to_i64(config.access_password_enabled),
+            bool_to_i64(config.admin_password_enabled),
+            bool_to_i64(config.whitelist_enabled),
+            bool_to_i64(config.allow_guest_readonly),
+            config.default_language,
+            config.poll_interval_ms as i64,
+            bool_to_i64(config.show_advanced_recipe_tree),
+            bool_to_i64(config.show_unresolved_recipes),
+            bool_to_i64(config.show_icon_fallback_badge),
+            config.updated_at as i64,
+        ],
+    )
+    .context("initialize stockpile config failed")?;
     Ok(())
 }
 
@@ -480,7 +618,9 @@ pub fn session_reset(zip_path: &Path, yes: bool) -> Result<SessionResetOutput> {
         .unwrap_or_default()
         .parse::<u32>()
         .unwrap_or(0);
-    if schema_version != STOCKPILE_SQLITE_SCHEMA_VERSION {
+    if schema_version < STOCKPILE_SQLITE_SCHEMA_VERSION {
+        migrate_sqlite_schema(&conn, schema_version)?;
+    } else if schema_version != STOCKPILE_SQLITE_SCHEMA_VERSION {
         bail!(
             "unsupported stockpile sqlite schema_version {}; supported {}; export/reset/import session state",
             schema_version,
@@ -496,6 +636,246 @@ pub fn session_reset(zip_path: &Path, yes: bool) -> Result<SessionResetOutput> {
         reset: true,
         warning: None,
     })
+}
+
+pub fn config_show(zip_path: &Path) -> Result<ConfigShowOutput> {
+    let (zip_path, db_path) = ensure_zip_session(zip_path)?;
+    let config = load_config(&db_path)?;
+    Ok(ConfigShowOutput {
+        zip_path,
+        session_db: db_path,
+        schema_version: STOCKPILE_SQLITE_SCHEMA_VERSION,
+        config,
+    })
+}
+
+pub fn config_set(zip_path: &Path, key: &str, value: &str) -> Result<ConfigShowOutput> {
+    let (zip_path, db_path) = ensure_zip_session(zip_path)?;
+    let mut changes = BTreeMap::new();
+    changes.insert(key.to_string(), Value::String(value.to_string()));
+    let config = update_config_map(&db_path, &changes)?;
+    Ok(ConfigShowOutput {
+        zip_path,
+        session_db: db_path,
+        schema_version: STOCKPILE_SQLITE_SCHEMA_VERSION,
+        config,
+    })
+}
+
+pub fn config_reset(zip_path: &Path, yes: bool) -> Result<ConfigResetOutput> {
+    let (zip_path, db_path) = ensure_zip_session(zip_path)?;
+    if !yes {
+        return Ok(ConfigResetOutput {
+            zip_path,
+            session_db: db_path.clone(),
+            reset: false,
+            config: load_config(&db_path)?,
+            warning: Some("config-reset requires --yes to restore default config".to_string()),
+        });
+    }
+    let conn = Connection::open(&db_path)?;
+    let config = default_config(current_unix_timestamp()?);
+    save_config_conn(&conn, &config)?;
+    touch_meta(&conn)?;
+    Ok(ConfigResetOutput {
+        zip_path,
+        session_db: db_path,
+        reset: true,
+        config,
+        warning: None,
+    })
+}
+
+fn ensure_zip_session(zip_path: &Path) -> Result<(PathBuf, PathBuf)> {
+    let zip_path = absolutize(zip_path)?;
+    load_project_from_zip(&zip_path)?;
+    let db_path = session_db_path(&zip_path)?;
+    ensure_session_db(&db_path, &zip_hash(&zip_path)?)?;
+    Ok((zip_path, db_path))
+}
+
+fn load_config(path: &Path) -> Result<StockpileConfig> {
+    init_db(path)?;
+    let conn = Connection::open(path)?;
+    load_config_conn(&conn)
+}
+
+fn load_config_conn(conn: &Connection) -> Result<StockpileConfig> {
+    conn.query_row(
+        r#"
+        SELECT mode,
+               admin_page_enabled,
+               access_password_enabled,
+               admin_password_enabled,
+               whitelist_enabled,
+               allow_guest_readonly,
+               default_language,
+               poll_interval_ms,
+               show_advanced_recipe_tree,
+               show_unresolved_recipes,
+               show_icon_fallback_badge,
+               updated_at
+        FROM stockpile_config
+        WHERE id = 1
+        "#,
+        [],
+        |row| {
+            Ok(StockpileConfig {
+                mode: row.get(0)?,
+                admin_page_enabled: i64_to_bool(row.get(1)?),
+                access_password_enabled: i64_to_bool(row.get(2)?),
+                admin_password_enabled: i64_to_bool(row.get(3)?),
+                whitelist_enabled: i64_to_bool(row.get(4)?),
+                allow_guest_readonly: i64_to_bool(row.get(5)?),
+                default_language: row.get(6)?,
+                poll_interval_ms: i64_to_u64(row.get(7)?) as u32,
+                show_advanced_recipe_tree: i64_to_bool(row.get(8)?),
+                show_unresolved_recipes: i64_to_bool(row.get(9)?),
+                show_icon_fallback_badge: i64_to_bool(row.get(10)?),
+                updated_at: i64_to_u64(row.get(11)?),
+            })
+        },
+    )
+    .context("load stockpile config failed")
+}
+
+fn update_config_from_value(path: &Path, value: &Value) -> Result<StockpileConfig> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("config update body must be a JSON object"))?;
+    let changes = object
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    update_config_map(path, &changes)
+}
+
+fn update_config_map(path: &Path, changes: &BTreeMap<String, Value>) -> Result<StockpileConfig> {
+    init_db(path)?;
+    let conn = Connection::open(path)?;
+    let mut config = load_config_conn(&conn)?;
+    for (key, value) in changes {
+        apply_config_value(&mut config, key, value)?;
+    }
+    config.updated_at = current_unix_timestamp()?;
+    save_config_conn(&conn, &config)?;
+    touch_meta(&conn)?;
+    Ok(config)
+}
+
+fn apply_config_value(config: &mut StockpileConfig, key: &str, value: &Value) -> Result<()> {
+    match key {
+        "mode" => {
+            let value = string_value(key, value)?;
+            if !matches!(value, "single" | "multi") {
+                bail!("mode must be single or multi");
+            }
+            config.mode = value.to_string();
+        }
+        "admin_page_enabled" => config.admin_page_enabled = bool_value(key, value)?,
+        "access_password_enabled" => config.access_password_enabled = bool_value(key, value)?,
+        "admin_password_enabled" => config.admin_password_enabled = bool_value(key, value)?,
+        "whitelist_enabled" => config.whitelist_enabled = bool_value(key, value)?,
+        "allow_guest_readonly" => config.allow_guest_readonly = bool_value(key, value)?,
+        "default_language" => {
+            let value = string_value(key, value)?;
+            if !matches!(value, "auto" | "zh-CN" | "en-US") {
+                bail!("default_language must be auto, zh-CN, or en-US");
+            }
+            config.default_language = value.to_string();
+        }
+        "poll_interval_ms" => {
+            let value = u32_value(key, value)?;
+            if !(2000..=10000).contains(&value) {
+                bail!("poll_interval_ms must be between 2000 and 10000");
+            }
+            config.poll_interval_ms = value;
+        }
+        "show_advanced_recipe_tree" => config.show_advanced_recipe_tree = bool_value(key, value)?,
+        "show_unresolved_recipes" => config.show_unresolved_recipes = bool_value(key, value)?,
+        "show_icon_fallback_badge" => config.show_icon_fallback_badge = bool_value(key, value)?,
+        other => bail!("unsupported stockpile config key: {other}"),
+    }
+    Ok(())
+}
+
+fn save_config_conn(conn: &Connection, config: &StockpileConfig) -> Result<()> {
+    conn.execute(
+        r#"
+        INSERT INTO stockpile_config(
+            id,
+            mode,
+            admin_page_enabled,
+            access_password_enabled,
+            admin_password_enabled,
+            whitelist_enabled,
+            allow_guest_readonly,
+            default_language,
+            poll_interval_ms,
+            show_advanced_recipe_tree,
+            show_unresolved_recipes,
+            show_icon_fallback_badge,
+            updated_at
+        )
+        VALUES(1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        ON CONFLICT(id) DO UPDATE SET
+            mode = excluded.mode,
+            admin_page_enabled = excluded.admin_page_enabled,
+            access_password_enabled = excluded.access_password_enabled,
+            admin_password_enabled = excluded.admin_password_enabled,
+            whitelist_enabled = excluded.whitelist_enabled,
+            allow_guest_readonly = excluded.allow_guest_readonly,
+            default_language = excluded.default_language,
+            poll_interval_ms = excluded.poll_interval_ms,
+            show_advanced_recipe_tree = excluded.show_advanced_recipe_tree,
+            show_unresolved_recipes = excluded.show_unresolved_recipes,
+            show_icon_fallback_badge = excluded.show_icon_fallback_badge,
+            updated_at = excluded.updated_at
+        "#,
+        params![
+            config.mode,
+            bool_to_i64(config.admin_page_enabled),
+            bool_to_i64(config.access_password_enabled),
+            bool_to_i64(config.admin_password_enabled),
+            bool_to_i64(config.whitelist_enabled),
+            bool_to_i64(config.allow_guest_readonly),
+            config.default_language,
+            config.poll_interval_ms as i64,
+            bool_to_i64(config.show_advanced_recipe_tree),
+            bool_to_i64(config.show_unresolved_recipes),
+            bool_to_i64(config.show_icon_fallback_badge),
+            config.updated_at as i64,
+        ],
+    )
+    .context("save stockpile config failed")?;
+    Ok(())
+}
+
+fn string_value<'a>(key: &str, value: &'a Value) -> Result<&'a str> {
+    value
+        .as_str()
+        .ok_or_else(|| anyhow!("{key} must be a string"))
+}
+
+fn bool_value(key: &str, value: &Value) -> Result<bool> {
+    if let Some(value) = value.as_bool() {
+        return Ok(value);
+    }
+    match value.as_str() {
+        Some("true") => Ok(true),
+        Some("false") => Ok(false),
+        _ => bail!("{key} must be true or false"),
+    }
+}
+
+fn u32_value(key: &str, value: &Value) -> Result<u32> {
+    if let Some(value) = value.as_u64() {
+        return u32::try_from(value).with_context(|| format!("{key} is too large"));
+    }
+    let value = string_value(key, value)?;
+    value
+        .parse::<u32>()
+        .with_context(|| format!("{key} must be an integer"))
 }
 
 pub fn session_export(zip_path: &Path, output: &Path) -> Result<SessionExportData> {
@@ -897,6 +1277,14 @@ fn i64_to_u64(value: i64) -> u64 {
     value.max(0) as u64
 }
 
+fn i64_to_bool(value: i64) -> bool {
+    value != 0
+}
+
+fn bool_to_i64(value: bool) -> i64 {
+    i64::from(value)
+}
+
 fn current_unix_timestamp() -> Result<u64> {
     Ok(SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1039,6 +1427,11 @@ mod tests {
             .optional()
             .expect("participants table");
         assert_eq!(participants.as_deref(), Some("participants"));
+        let config = load_config(&db).expect("default config");
+        assert_eq!(config.mode, "multi");
+        assert_eq!(config.default_language, "auto");
+        assert_eq!(config.poll_interval_ms, 3000);
+        assert!(config.show_advanced_recipe_tree);
         let _ = std::fs::remove_file(db);
     }
 
@@ -1170,6 +1563,202 @@ mod tests {
         let _ = std::fs::remove_file(output);
         let _ = std::fs::remove_file(db);
         let _ = std::fs::remove_file(state_path);
+    }
+
+    #[test]
+    fn config_show_returns_default_config() {
+        let fixture = exported_fixture("config_show");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+
+        let output = config_show(&fixture).expect("config show");
+        assert_eq!(output.config.mode, "multi");
+        assert_eq!(output.config.default_language, "auto");
+        assert_eq!(output.config.poll_interval_ms, 3000);
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn config_set_accepts_bool_and_enum_values() {
+        let fixture = exported_fixture("config_set");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+
+        let output = config_set(&fixture, "admin_page_enabled", "true").expect("set bool");
+        assert!(output.config.admin_page_enabled);
+        let output = config_set(&fixture, "mode", "single").expect("set mode");
+        assert_eq!(output.config.mode, "single");
+        let output = config_set(&fixture, "default_language", "zh-CN").expect("set language");
+        assert_eq!(output.config.default_language, "zh-CN");
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn config_set_validates_poll_interval_range() {
+        let fixture = exported_fixture("config_poll");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+
+        let output = config_set(&fixture, "poll_interval_ms", "5000").expect("set interval");
+        assert_eq!(output.config.poll_interval_ms, 5000);
+        assert!(config_set(&fixture, "poll_interval_ms", "1000").is_err());
+        assert!(config_set(&fixture, "poll_interval_ms", "12000").is_err());
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn config_set_rejects_illegal_key_and_values() {
+        let fixture = exported_fixture("config_illegal");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+
+        assert!(config_set(&fixture, "unknown", "true").is_err());
+        assert!(config_set(&fixture, "mode", "coop").is_err());
+        assert!(config_set(&fixture, "default_language", "fr-FR").is_err());
+        assert!(config_set(&fixture, "whitelist_enabled", "yes").is_err());
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn config_reset_requires_confirmation_and_restores_defaults() {
+        let fixture = exported_fixture("config_reset");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+
+        config_set(&fixture, "mode", "single").expect("set mode");
+        let dry = config_reset(&fixture, false).expect("dry reset");
+        assert!(!dry.reset);
+        assert_eq!(dry.config.mode, "single");
+        let reset = config_reset(&fixture, true).expect("reset");
+        assert!(reset.reset);
+        assert_eq!(reset.config.mode, "multi");
+        assert_eq!(reset.config.poll_interval_ms, 3000);
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn old_sqlite_schema_auto_adds_config_table() {
+        let fixture = exported_fixture("config_migrate");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        let conn = Connection::open(&db).expect("open db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE participants (
+                user_id TEXT PRIMARY KEY NOT NULL,
+                first_seen_at INTEGER NOT NULL,
+                last_seen_at INTEGER NOT NULL
+            );
+            CREATE TABLE material_claims (
+                material_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('preparing', 'done')),
+                quantity INTEGER NOT NULL CHECK(quantity >= 0),
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY(material_id, user_id)
+            );
+            CREATE TABLE meta (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL
+            );
+            INSERT INTO meta(key, value) VALUES('schema_version', '2');
+            INSERT INTO meta(key, value) VALUES('zip_hash', '');
+            INSERT INTO meta(key, value) VALUES('created_at', '1');
+            INSERT INTO meta(key, value) VALUES('updated_at', '1');
+            "#,
+        )
+        .expect("seed v2 db");
+
+        ensure_session_db(&db, &zip_hash(&fixture).expect("zip hash")).expect("migrate db");
+        let migrated = load_config(&db).expect("load migrated config");
+        assert_eq!(migrated.mode, "multi");
+        assert_eq!(
+            meta_value(
+                &Connection::open(&db).expect("open migrated"),
+                "schema_version"
+            )
+            .expect("schema"),
+            Some(STOCKPILE_SQLITE_SCHEMA_VERSION.to_string())
+        );
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn session_export_import_does_not_overwrite_config() {
+        let fixture = exported_fixture("config_export_import");
+        let db = session_db_path(&fixture).expect("session db");
+        let state_path = temp_session_export("config_export_import");
+        let _ = std::fs::remove_file(&db);
+
+        config_set(&fixture, "mode", "single").expect("set mode");
+        put_claim(&db, "minecraft:stone", "alex", "preparing", 2).expect("claim");
+        session_export(&fixture, &state_path).expect("export");
+        config_set(&fixture, "poll_interval_ms", "5000").expect("set interval");
+        session_import(&fixture, &state_path, true).expect("import");
+        let config = config_show(&fixture).expect("config").config;
+        assert_eq!(config.mode, "single");
+        assert_eq!(config.poll_interval_ms, 5000);
+
+        cleanup_fixture(&fixture, &db, &state_path);
+    }
+
+    #[test]
+    fn config_api_get_and_put_update_config() {
+        let fixture = exported_fixture("config_api");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        ensure_session_db(&db, &zip_hash(&fixture).expect("zip hash")).expect("session");
+        let project = load_project_from_zip(&fixture).expect("project");
+
+        let get = route_request_inner(&request("GET", "/api/config", b""), &fixture, &db, &project)
+            .expect("get config");
+        assert_eq!(get.status, 200);
+        let config: StockpileConfig = serde_json::from_slice(&get.body).expect("config json");
+        assert_eq!(config.mode, "multi");
+
+        let put = route_request_inner(
+            &request(
+                "PUT",
+                "/api/config",
+                br#"{"mode":"single","poll_interval_ms":5000,"show_icon_fallback_badge":true}"#,
+            ),
+            &fixture,
+            &db,
+            &project,
+        )
+        .expect("put config");
+        assert_eq!(put.status, 200);
+        let config: StockpileConfig = serde_json::from_slice(&put.body).expect("updated config");
+        assert_eq!(config.mode, "single");
+        assert_eq!(config.poll_interval_ms, 5000);
+        assert!(config.show_icon_fallback_badge);
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn config_api_invalid_put_returns_error() {
+        let fixture = exported_fixture("config_api_bad");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        ensure_session_db(&db, &zip_hash(&fixture).expect("zip hash")).expect("session");
+        let project = load_project_from_zip(&fixture).expect("project");
+
+        let response = route_request(
+            &request("PUT", "/api/config", br#"{"poll_interval_ms":1000}"#),
+            &fixture,
+            &db,
+            &project,
+        );
+        assert_ne!(response.status, 200);
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
     }
 
     #[test]
@@ -1386,6 +1975,14 @@ mod tests {
         let _ = std::fs::remove_file(db);
         if !extra.as_os_str().is_empty() {
             let _ = std::fs::remove_file(extra);
+        }
+    }
+
+    fn request(method: &str, path: &str, body: &[u8]) -> HttpRequest {
+        HttpRequest {
+            method: method.to_string(),
+            path: path.to_string(),
+            body: body.to_vec(),
         }
     }
 }

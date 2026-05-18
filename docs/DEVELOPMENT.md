@@ -210,6 +210,9 @@ bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpi
 bin\viewer-backend\litematica_core.exe stockpile session-export --zip data\stockpile\exports\<name>.stockpile.zip --output data\stockpile\sessions\<name>.state.json
 bin\viewer-backend\litematica_core.exe stockpile session-reset --zip data\stockpile\exports\<name>.stockpile.zip --yes
 bin\viewer-backend\litematica_core.exe stockpile session-import --zip data\stockpile\exports\<name>.stockpile.zip --input data\stockpile\sessions\<name>.state.json --replace
+bin\viewer-backend\litematica_core.exe stockpile config-show --zip data\stockpile\exports\<name>.stockpile.zip
+bin\viewer-backend\litematica_core.exe stockpile config-set --zip data\stockpile\exports\<name>.stockpile.zip --key poll_interval_ms --value 5000
+bin\viewer-backend\litematica_core.exe stockpile config-reset --zip data\stockpile\exports\<name>.stockpile.zip --yes
 ```
 
 `recipe-fetch` 通过 provider 从 Mojang 官方 version manifest 定位对应 client jar，提取 `data/minecraft/recipe/*.json` 后生成本地缓存。无缓存时 `export-data` 不失败，材料项标记为 `missing`；缓存损坏或版本不匹配时标记为 `unresolved`。
@@ -222,7 +225,9 @@ bin\viewer-backend\litematica_core.exe stockpile session-import --zip data\stock
 
 `session-info`、`session-reset`、`session-export` 和 `session-import` 只操作 `data/stockpile/sessions/<zip-stem>.sqlite` 或 JSON 状态文件，不修改 ZIP。`session-reset` 没有 `--yes` 时只返回确认提示；显式 `--yes` 会清空 claims、保留 participants，并把 session 重新绑定到当前 ZIP hash，便于同名 ZIP 重导出后的恢复。`session-import` 会校验 session export schema 和 ZIP hash，默认 merge/upsert，`--replace` 时先清空 claims。
 
-Stockpile schema 版本集中在后端 `stockpile_schema` 模块：ZIP manifest 会写入 ZIP、materials、recipe_trees、i18n、icons、item_names 的 schema version；SQLite `meta` 会写入 schema version 和 zip hash。serve 读取不支持或不匹配的 ZIP/SQLite 时必须显式报错，不静默错读。
+`config-show`、`config-set` 和 `config-reset` 只读写 session SQLite 内的 `stockpile_config` 表，不修改 ZIP，不写密码明文。配置支持 `mode`、访问/管理员/白名单开关、默认语言、轮询间隔和若干展示项；`config-set` 严格校验 enum、bool 和 `poll_interval_ms=2000..10000`。serve 暴露 `GET /api/config` 和 `PUT /api/config`，本阶段只提供配置读写，不做访问控制拦截。
+
+Stockpile schema 版本集中在后端 `stockpile_schema` 模块：ZIP manifest 会写入 ZIP、materials、recipe_trees、i18n、icons、item_names 的 schema version；SQLite `meta` 会写入 schema version 和 zip hash，并通过 `stockpile_config` 保存项目会话配置。serve 读取不支持或不匹配的 ZIP/SQLite 时必须显式报错，不静默错读。
 
 材料和合成链图标来自 `data/cache/item-icons/minecraft_<version>/icons/`。导出时会优先从 Mojang client jar 的 `assets/minecraft/textures/item`、`textures/block` 和常见 model 指向解析 PNG；无法解析时写入简洁 fallback PNG，并在 `materials.json` 中标记 `icon_available=false`。材料名本地化来自 `data/cache/item-names/minecraft_<version>/en_us.json` 和 `zh_cn.json`，ZIP 只写入当前材料和合成链需要的 `data/item_names.json`，其中 `status` 会标识 `available` / `partial` / `missing`。不要提交 `data/cache/item-icons/` 或 `data/cache/item-names/` 生成物。
 

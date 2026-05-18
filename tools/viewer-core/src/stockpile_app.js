@@ -15,11 +15,29 @@
   let syncError = '';
   let pollHandle = null;
   let participantRegistered = false;
+  let config = defaultConfig();
 
   function pickInitialLang() {
     const stored = localStorage.getItem(langKey);
     if (stored === 'zh-CN' || stored === 'en-US') return stored;
     return (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US';
+  }
+  function defaultConfig() {
+    return {
+      mode: 'multi',
+      default_language: 'auto',
+      poll_interval_ms: 3000,
+      show_advanced_recipe_tree: true,
+      show_unresolved_recipes: true,
+      show_icon_fallback_badge: false
+    };
+  }
+  function applyConfig(nextConfig) {
+    config = { ...defaultConfig(), ...(nextConfig || {}) };
+    const stored = localStorage.getItem(langKey);
+    if (!stored && (config.default_language === 'zh-CN' || config.default_language === 'en-US')) {
+      lang = config.default_language;
+    }
   }
   function dict() { return (data.i18n && data.i18n[lang]) || (data.i18n && data.i18n['en-US']) || {}; }
   function t(key) { return dict()[key] || key; }
@@ -35,6 +53,7 @@
       try {
         const project = await apiGet('/api/project');
         if (project && project.manifest) data = project;
+        applyConfig(await apiGet('/api/config'));
       } catch (error) {
         syncError = `${t('syncError')}: ${error.message}`;
       }
@@ -50,7 +69,7 @@
         if (userId && !participantRegistered) await registerParticipant();
         await refreshState();
         render();
-      }, 3000);
+      }, Math.min(10000, Math.max(2000, Number(config.poll_interval_ms || 3000))));
     }
   }
 
@@ -236,7 +255,7 @@
       <div class="identity">
         <span class="note">${escapeHtml(isServeMode ? t('syncMode') : t('offlineMode'))}</span>
         <span class="badge">${escapeHtml(t('currentId'))}: ${escapeHtml(userId || '-')}</span>
-        ${isServeMode ? `<span class="badge">${escapeHtml(t('lastSync'))}: ${escapeHtml(lastSyncText)}</span><span class="badge">${escapeHtml(t('participants'))}: ${(syncState.participants || []).length}</span>` : ''}
+        ${isServeMode ? `<span class="badge">${escapeHtml(t('lastSync'))}: ${escapeHtml(lastSyncText)}</span>${config.mode === 'multi' ? `<span class="badge">${escapeHtml(t('participants'))}: ${(syncState.participants || []).length}</span>` : ''}` : ''}
         <select class="field" id="lang" aria-label="${escapeAttr(t('language'))}"><option value="zh-CN" ${lang === 'zh-CN' ? 'selected' : ''}>中文</option><option value="en-US" ${lang === 'en-US' ? 'selected' : ''}>English</option></select>
         <button class="button" id="switchUser">${escapeHtml(t('switchId'))}</button>
       </div>
@@ -295,7 +314,7 @@
         <div>
           <div class="material-title">${iconImg(item.item_icon_key, true, item)}<span class="name">${escapeHtml(displayName(item))}</span></div>
           <div class="sub">${escapeHtml(item.namespace_id)} · ${escapeHtml(item.category)} · ${escapeHtml(t('remaining'))} ${sync.remaining_count}</div>
-          <div class="badges"><span class="badge ${item.recipe_status}">${recipeLabel(item.recipe_status)}</span><span class="badge ${sync.overall_status}">${overallLabel(sync.overall_status)}</span><span class="badge">${sync.participants.length ? `${escapeHtml(t('claimedBy'))}: ${escapeHtml(sync.participants.join(', '))}` : escapeHtml(t('unclaimed'))}</span></div>
+          <div class="badges"><span class="badge ${item.recipe_status}">${recipeLabel(item.recipe_status)}</span><span class="badge ${sync.overall_status}">${overallLabel(sync.overall_status)}</span><span class="badge">${sync.participants.length ? `${escapeHtml(t('claimedBy'))}: ${escapeHtml(sync.participants.join(', '))}` : escapeHtml(t('unclaimed'))}</span>${config.show_icon_fallback_badge && item.icon_available === false ? `<span class="badge missing">${escapeHtml(t('iconFallback'))}</span>` : ''}</div>
         </div>
         <div><div class="count">${item.required_count}</div><div class="actions">
           <input class="field qty" type="number" min="0" value="${Number(claim.quantity || 0)}" data-action="qty" />
@@ -324,7 +343,7 @@
       ${detail(t('recipeStatus'), item.recipe_status)}
     </div>
     <div class="claim-list">${(sync.claims || []).map((claim) => `<span class="claim-chip">${escapeHtml(claim.user_id)} · ${escapeHtml(overallLabel(claim.status))} · ${claim.quantity}</span>`).join('')}</div>
-    ${tree ? `<div class="craft-chain">${renderRecipeTree(tree, true)}</div>` : ''}<p class="sub">${escapeHtml(recipeNote)}</p>`;
+    ${tree && config.show_advanced_recipe_tree ? `<div class="craft-chain">${renderRecipeTree(tree, true)}</div>` : ''}${recipeNote && config.show_unresolved_recipes ? `<p class="sub">${escapeHtml(recipeNote)}</p>` : ''}`;
   }
   function renderRecipeTree(node, isRoot = true) {
     const nodeId = node.node_id || `${node.item_id}-${node.depth || 0}`;
