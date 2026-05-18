@@ -12,8 +12,10 @@ import {
   loadUserConfigMigratingLocalStorage,
   normalizeMaterialListWindowBehavior,
   openMaterialListWindow,
+  createRuntimeProjectionCollection,
 } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
+import { EnumeratorDialog, openEnumeratorWithWindowBehavior } from "../../../enumerator";
 
 function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; item: MaterialItem | null; multiplier: number }) {
   const popupRef = useRef<HTMLDivElement | null>(null);
@@ -286,10 +288,11 @@ export function MaterialsDialog({ data, onClose, currentFile }: { data: StatsDat
   );
 }
 
-export function StatisticsPage({ currentFile }: any) {
+export function StatisticsPage({ currentFile, theme }: any) {
   const [data, setData] = useState<StatsData | null>(null);
   const [error, setError] = useState("");
   const [showMaterials, setShowMaterials] = useState(false);
+  const [showEnumerator, setShowEnumerator] = useState(false);
   const [includeContainerItems, setIncludeContainerItems] = useState(false);
 
   const loadStats = async () => {
@@ -320,6 +323,7 @@ export function StatisticsPage({ currentFile }: any) {
   const featuredMaterials = topMaterials.slice(0, 5);
   const totalMaterialCount = topMaterials.reduce((sum, material) => sum + material.totalCount, 0);
   const scan = data?.containerScan;
+  const runtimeCollection = data ? createRuntimeProjectionCollection(currentFile, data.materials) : null;
 
   return (
     <div className="statistics-page">
@@ -327,7 +331,7 @@ export function StatisticsPage({ currentFile }: any) {
         <div className="statistics-action-row">
           <button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!data}>材料列表</button>
           <button className="btn" onClick={loadStats}>重新统计</button>
-          <button className="btn" type="button" disabled>打开枚举器...</button>
+          <button className="btn" type="button" onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true))} disabled={!data}>打开枚举器...</button>
         </div>
 
         <div className="statistics-toggle-row">
@@ -410,10 +414,13 @@ export function StatisticsPage({ currentFile }: any) {
           <div className="group-box statistics-enumerator-panel">
             <div className="group-box-title">枚举器信息</div>
             <div className="statistics-enumerator-body">
-              <div className="statistics-panel-note">枚举器尚未接入，当前先保留占位控件。</div>
+              <div className="statistics-panel-note">
+                {runtimeCollection
+                  ? `当前统计结果可作为枚举器运行时集合使用，共 ${runtimeCollection.values.length} 项。`
+                  : "枚举器会基于当前统计结果生成运行时集合。"}
+              </div>
               <div className="statistics-enumerator-actions">
-                <button className="btn" type="button" disabled>打开枚举器...</button>
-                <button className="btn" type="button" disabled>编辑信息框</button>
+                <button className="btn" type="button" onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true))} disabled={!data}>打开枚举器...</button>
               </div>
             </div>
           </div>
@@ -433,6 +440,14 @@ export function StatisticsPage({ currentFile }: any) {
 
       {showMaterials && data && (
         <MaterialsDialog data={data} onClose={() => setShowMaterials(false)} currentFile={currentFile} />
+      )}
+      {showEnumerator && runtimeCollection && (
+        <EnumeratorDialog
+          currentFile={currentFile}
+          runtimeCollection={runtimeCollection}
+          theme={theme || "WebDefault"}
+          onClose={() => setShowEnumerator(false)}
+        />
       )}
     </div>
   );

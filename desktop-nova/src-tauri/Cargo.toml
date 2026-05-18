@@ -20,6 +20,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 fastnbt = "2.6"
 flate2 = "1.1"
 image = "0.25"
+scraper = "0.27.0"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader"] }

@@ -5,6 +5,7 @@ export * from "../services/backend";
 export * from "../services/blockIconResolver";
 export * from "../services/blockstateDb";
 export * from "../services/embeddedViewer";
+export * from "../services/enumeratorService";
 export * from "../services/generateService";
 export * from "../services/generationTemplates";
 export * from "../services/gameResources";

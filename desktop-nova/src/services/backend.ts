@@ -11,13 +11,14 @@ export {
   saveUserConfig,
   setUserConfigDir,
 } from "../platform";
-export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo } from "../platform";
+export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo, WikiEnumCatalogDownloadOutput } from "../platform";
 
 export {
   checkFileExists,
   copyFileToDirectory,
   downloadVaultBlockIconsFromVault,
   downloadVaultItemIconsFromVault,
+  downloadWikiEnumCatalogsFromMinecraftWiki,
   listDirectoryEntries,
   listLitematicFileEntriesInDirectory,
   getAppDataFilePath as getUserConfigFilePath,
@@ -50,6 +51,7 @@ export type { BackendTrace, CacheBuildLaunch, CacheBuildSnapshot } from "../plat
 export {
   openLocalLibraryFoldersWindow,
   openAssetManagerWindow,
+  openEnumeratorWindow,
   openMaterialListWindow,
   openRedenLibraryWindow,
   openUiDemoWindow,

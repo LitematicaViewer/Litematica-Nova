@@ -14,6 +14,13 @@ export function openMaterialListWindow(activeFile?: string | null): Promise<void
 }
 
 /**
+ * Opens or focuses the desktop enumerator window for the active projection.
+ */
+export function openEnumeratorWindow(activeFile?: string | null): Promise<void> {
+  return invoke("open_enumerator_window", { activeFile: activeFile || null });
+}
+
+/**
  * Opens or focuses the desktop RedenMC online-library window.
  */
 export function openRedenLibraryWindow(): Promise<void> {

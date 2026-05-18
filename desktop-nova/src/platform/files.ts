@@ -41,6 +41,15 @@ export interface VaultBlockIconDownloadOutput {
   root_relpath: string;
 }
 
+export interface WikiEnumCatalogDownloadOutput {
+  target_dir: string;
+  root_relpath: string;
+  blocks: number;
+  items: number;
+  enchantments: number;
+  entities: number;
+}
+
 export function readWorkspaceFile(path: string): Promise<string> {
   return invoke("read_file_string", { path });
 }
@@ -119,6 +128,13 @@ export function downloadVaultBlockIconsFromVault(): Promise<VaultBlockIconDownlo
  */
 export function downloadVaultItemIconsFromVault(): Promise<VaultBlockIconDownloadOutput> {
   return invoke("download_vault_item_icons");
+}
+
+/**
+ * Downloads the Minecraft Wiki enum catalog bundle into the configured user resource directory.
+ */
+export function downloadWikiEnumCatalogsFromMinecraftWiki(): Promise<WikiEnumCatalogDownloadOutput> {
+  return invoke("download_minecraft_wiki_enum_catalogs");
 }
 
 export function readImageBase64(path: string): Promise<string> {
