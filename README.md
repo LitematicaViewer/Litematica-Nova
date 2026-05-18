@@ -119,6 +119,11 @@ cargo build --release --bin stockpile_server
 Copy-Item target\release\stockpile_server.exe ..\..\bin\viewer-backend\stockpile_server.exe -Force
 Copy-Item target\release\stockpile_server.exe ..\..\bin\stockpile-server\windows-x64\stockpile_server.exe -Force
 
+# 检查/下载跨平台 stockpile_server artifacts
+cd ..\..
+scripts\stockpile\verify_stockpile_server_bins.ps1
+scripts\stockpile\fetch_stockpile_server_artifacts.ps1
+
 # 构建并同步 native viewer
 cd tools\viewer-core
 cargo build --release --bin litematica_native_viewer

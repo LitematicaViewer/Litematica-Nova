@@ -43,6 +43,16 @@ bin/stockpile-server/macos-x64/stockpile_server
 bin/stockpile-server/macos-arm64/stockpile_server
 ```
 
+The real binaries are ignored by Git and must not be committed. On Windows, local builds only produce `windows-x64`; Linux and macOS binaries come from GitHub Actions artifacts or from builds on those platforms. Before exporting a cross-platform multi package:
+
+```powershell
+scripts\stockpile\verify_stockpile_server_bins.ps1
+scripts\stockpile\fetch_stockpile_server_artifacts.ps1
+scripts\stockpile\verify_stockpile_server_bins.ps1
+```
+
+`fetch_stockpile_server_artifacts.ps1` requires the GitHub CLI (`gh`) and an authenticated account that can read workflow artifacts. If `gh` or permissions are unavailable, download the four artifacts manually from the `stockpile-server` workflow run and place them in the paths above. Single packages do not need server binaries. If you only deploy to one platform manually, you can run that platform's server binary directly, but `export-zip --mode multi` intentionally requires all four platforms so the package is complete.
+
 For Linux only, build from the repository root:
 
 ```bash

@@ -375,7 +375,7 @@ fn stockpile_server_binaries() -> Result<Vec<DeployBinary>> {
     }
     if !missing.is_empty() {
         bail!(
-            "stockpile multi export requires real server binaries under {}; missing: {}",
+            "stockpile multi export requires real server binaries under {}; missing: {}. Run scripts/stockpile/verify_stockpile_server_bins.ps1 to inspect local binaries, then scripts/stockpile/fetch_stockpile_server_artifacts.ps1 after the GitHub Actions artifacts are available.",
             root.display(),
             missing.join(", ")
         );
