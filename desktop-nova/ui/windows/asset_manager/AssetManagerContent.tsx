@@ -7,6 +7,7 @@ import {
   downloadRemoteMinecraftLanguage,
   downloadVaultBlockIcons,
   downloadVaultItemIcons,
+  downloadWikiEnumCatalog,
   GameResourceEntry,
   GameResourceHealthRow,
   GameResourceKind,
@@ -29,8 +30,8 @@ import {
 import { listenEvent } from "../../../src/platform/events";
 import { NavIcon } from "../../shell/NavIcon";
 
-type ManagedAssetRoute = "block_icon" | "item_icon" | "language" | "game_data";
-type AssetRoute = ManagedAssetRoute | "enum_catalog";
+type ManagedAssetRoute = "block_icon" | "item_icon" | "language" | "game_data" | "enum_catalog";
+type AssetRoute = ManagedAssetRoute;
 type AssetSource = "builtin" | "local_directory" | "vault" | "wiki" | "local_json" | "github";
 type AssetSourceState = Record<AssetRoute, AssetSource>;
 type AssetTableColumnKey = "name" | "source" | "version" | "language" | "usage" | "status" | "date" | "actions";
@@ -146,13 +147,14 @@ const ROUTE_ROOT_RELPATH: Record<AssetRoute, string> = {
   item_icon: "minecraft-assets/item",
   language: "minecraft-assets/language",
   game_data: "minecraft-assets/game-data",
-  enum_catalog: "minecraft-assets",
+  enum_catalog: "enumerator/base",
 };
 
 const BUILTIN_BLOCK_ICON_ID = "builtin:block_icon:nova";
 const BUILTIN_ITEM_ICON_ID = "builtin:item_icon:nova";
 const BUILTIN_LANGUAGE_ID = "builtin:language:zh_cn";
 const BUILTIN_GAME_DATA_ID = "builtin:game_data:26.1";
+const BUILTIN_ENUM_CATALOG_ID = "builtin:enum_catalog:base";
 
 function baseName(path: string): string {
   return path.split(/[\\/]+/).filter(Boolean).pop() || path;
@@ -172,6 +174,7 @@ function resourceActiveText(snapshot: GameResourceSnapshot | null): string {
     `分层方块=${snapshot.active_layering_block_icons.label}`,
     `分层物品=${snapshot.active_layering_item_icons.label}`,
     `数据=${snapshot.active_game_data.label}`,
+    `枚举=${snapshot.active_enum_catalog.label}`,
   ].join(" / ");
 }
 
@@ -181,12 +184,12 @@ function routeIntro(route: AssetRoute): string {
     case "item_icon": return "管理分层视图中可用的物品图标来源。";
     case "language": return "导入、下载并切换 Minecraft 语言 JSON。";
     case "game_data": return "导入并切换 BlockState 数据库与属性翻译。";
-    case "enum_catalog": return "用于管理枚举器的全集数据值，当前阶段先保留布局与操作入口。";
+    case "enum_catalog": return "下载并切换枚举器使用的基础全集文件。";
   }
 }
 
 function isManagedAssetRoute(route: AssetRoute): route is ManagedAssetRoute {
-  return route !== "enum_catalog";
+  return true;
 }
 
 function sourceTag(entry: GameResourceEntry): string {
@@ -196,6 +199,7 @@ function sourceTag(entry: GameResourceEntry): string {
     case "external": return "local";
     case "vault": return "vault";
     case "github": return "github";
+    case "wiki": return "wiki";
   }
 }
 
@@ -218,8 +222,7 @@ function blockUsageLabel(entry: GameResourceEntry): string {
 
 function activationLabel(route: AssetRoute, entry: GameResourceEntry): string {
   if (route === "item_icon") return entry.active_layering ? "已激活" : "";
-  if (route === "language" || route === "game_data") return entry.active ? "已激活" : "";
-  if (route === "enum_catalog") return "";
+  if (route === "language" || route === "game_data" || route === "enum_catalog") return entry.active ? "已激活" : "";
   return blockUsageLabel(entry);
 }
 
@@ -239,6 +242,11 @@ function displayEntryName(route: AssetRoute, entry: GameResourceEntry): string {
   if (route === "game_data") {
     if (entry.source === "builtin") return "（内建）";
     if (entry.source === "imported") return baseName(entry.data_relpath || entry.label);
+    return entry.label;
+  }
+  if (route === "enum_catalog") {
+    if (entry.source === "builtin") return "（内建）";
+    if (entry.source === "wiki") return "Minecraft Wiki";
     return entry.label;
   }
   return entry.label;
@@ -289,6 +297,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   const [languageDownloadBusy, setLanguageDownloadBusy] = useState(false);
   const [blockIconDownloadBusy, setBlockIconDownloadBusy] = useState(false);
   const [itemIconDownloadBusy, setItemIconDownloadBusy] = useState(false);
+  const [enumCatalogDownloadBusy, setEnumCatalogDownloadBusy] = useState(false);
 
   const selectedNavItem = useMemo(() => ASSET_NAV_ITEMS.find((item) => item.key === route) || ASSET_NAV_ITEMS[0], [route]);
   const selectedSource = selectedSourceByRoute[route];
@@ -359,7 +368,11 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       await applyResourceSnapshot(activateGameResource("game_data", BUILTIN_GAME_DATA_ID), "已切换到内建游戏数据。");
       return;
     }
-    reportStatus("枚举全集重新解包暂未实现。", "当前仅保留布局与入口。");
+    if (route === "enum_catalog") {
+      await applyResourceSnapshot(activateGameResource("enum_catalog", BUILTIN_ENUM_CATALOG_ID), "已切换到内建枚举全集。");
+      return;
+    }
+    reportStatus("无法识别当前资源类型。", route);
   };
 
   const deleteResource = async (kind: GameResourceKind, id: string) => {
@@ -418,6 +431,23 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       reportStatus("下载 CCVault 物品图标失败。", String(error));
     } finally {
       setItemIconDownloadBusy(false);
+    }
+  };
+
+  const downloadEnumCatalogs = async () => {
+    setEnumCatalogDownloadBusy(true);
+    reportStatus("正在下载 Minecraft Wiki 枚举全集...", "正在抓取方块、物品、魔咒和实体基础集合...");
+    try {
+      const result = await downloadWikiEnumCatalog();
+      setResourceSnapshot(result.snapshot);
+      reportStatus(
+        `枚举全集已下载：B=${result.blocks} / I=${result.items} / E=${result.enchantments} / N=${result.entities}`,
+        `${result.target_dir}\n${resourceActiveText(result.snapshot)}`,
+      );
+    } catch (error) {
+      reportStatus("下载 Minecraft Wiki 枚举全集失败。", String(error));
+    } finally {
+      setEnumCatalogDownloadBusy(false);
     }
   };
 
@@ -529,7 +559,15 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
         await importGameData();
         return;
       }
-      reportStatus("枚举全集获取暂未实现。", "当前仅保留布局与入口。");
+      if (route === "enum_catalog") {
+        if (selectedSource === "builtin") {
+          await activateBuiltinForCurrentRoute();
+          return;
+        }
+        await downloadEnumCatalogs();
+        return;
+      }
+      reportStatus("无法识别当前资源类型。", route);
     } catch (error) {
       reportStatus("资源操作失败。", String(error));
     }
@@ -610,7 +648,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
             {route === "item_icon" ? (
               <button className="btn" type="button" onClick={() => activateResource("item_icon", entry.id, "layering")}>应用</button>
             ) : null}
-            {(route === "language" || route === "game_data") ? (
+            {(route === "language" || route === "game_data" || route === "enum_catalog") ? (
               <button className="btn" type="button" onClick={() => activateResource(route, entry.id)}>应用</button>
             ) : null}
             {!entry.builtin ? <button className="btn" type="button" onClick={() => deleteResource(entry.kind, entry.id)}>删除登记</button> : null}
@@ -764,6 +802,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                     disabled={
                       blockIconDownloadBusy ||
                       itemIconDownloadBusy ||
+                      enumCatalogDownloadBusy ||
                       (route === "language" && selectedSource === "github" && (!selectedLanguageBranch || !selectedRemoteLanguage || remoteLanguageBusy))
                     }
                     onClick={runFetchAction}
@@ -771,10 +810,12 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                     {route === "block_icon" && blockIconDownloadBusy ? "下载中..." : null}
                     {route === "item_icon" && itemIconDownloadBusy ? "下载中..." : null}
                     {route === "language" && languageDownloadBusy ? "下载中..." : null}
+                    {route === "enum_catalog" && enumCatalogDownloadBusy ? "下载中..." : null}
                     {!(
                       (route === "block_icon" && blockIconDownloadBusy) ||
                       (route === "item_icon" && itemIconDownloadBusy) ||
-                      (route === "language" && languageDownloadBusy)
+                      (route === "language" && languageDownloadBusy) ||
+                      (route === "enum_catalog" && enumCatalogDownloadBusy)
                     ) ? fetchButtonLabel(route, selectedSource) : null}
                   </button>
                   {route === "language" && selectedSource === "github" ? (
@@ -815,7 +856,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                   )) : (
                     <tr>
                       <td colSpan={tableColumns.length} className="asset-manager-empty-row">
-                        {route === "enum_catalog" ? "枚举全集功能暂未实现。" : "暂无已登记资源。"}
+                        暂无已登记资源。
                       </td>
                     </tr>
                   )}
@@ -824,7 +865,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
             </div>
 
             <div className="game-resource-note">
-              内建资源始终作为离线回退；导入目录目前登记外部路径，导入 JSON 与远端下载会复制到用户配置目录下的 minecraft-assets。
+              内建资源始终作为离线回退；导入目录目前登记外部路径，导入 JSON 与远端下载会复制到用户配置目录下的 `minecraft-assets` 或 `enumerator/base`。
             </div>
             {log ? <pre className="subwindow-error asset-manager-log">{log}</pre> : null}
           </div>

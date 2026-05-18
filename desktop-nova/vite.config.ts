@@ -17,6 +17,7 @@ export default defineConfig({
             input: {
                 main: resolve(__dirname, "index.html"),
                 materialList: resolve(__dirname, "material_list.html"),
+                enumerator: resolve(__dirname, "enumerator.html"),
                 redenLibrary: resolve(__dirname, "reden_library.html"),
                 localLibraryFolders: resolve(__dirname, "local_library_folders.html"),
                 assetManager: resolve(__dirname, "asset_manager.html"),

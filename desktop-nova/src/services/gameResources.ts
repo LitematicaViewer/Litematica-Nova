@@ -3,6 +3,7 @@ import {
   copyFileToDirectory,
   downloadVaultBlockIconsFromVault,
   downloadVaultItemIconsFromVault,
+  downloadWikiEnumCatalogsFromMinecraftWiki,
   getPathInfo,
   readImageBase64,
   readWorkspaceFile,
@@ -12,9 +13,9 @@ import {
   type PathInfo,
 } from "./backend";
 
-export type GameResourceKind = "language" | "block_icon" | "item_icon" | "game_data";
+export type GameResourceKind = "language" | "block_icon" | "item_icon" | "game_data" | "enum_catalog";
 export type BlockIconSlot = "material_list" | "layering";
-export type GameResourceSource = "builtin" | "imported" | "external" | "github" | "vault";
+export type GameResourceSource = "builtin" | "imported" | "external" | "github" | "vault" | "wiki";
 export type RemoteLanguageSource = "github/InventivetalentDev";
 
 export interface VaultBlockIconInstallResult {
@@ -25,6 +26,15 @@ export interface VaultBlockIconInstallResult {
 }
 
 export type VaultItemIconInstallResult = VaultBlockIconInstallResult;
+
+export interface WikiEnumCatalogInstallResult {
+  snapshot: GameResourceSnapshot;
+  target_dir: string;
+  blocks: number;
+  items: number;
+  enchantments: number;
+  entities: number;
+}
 
 export interface GameResourceEntry {
   id: string;
@@ -37,6 +47,7 @@ export interface GameResourceEntry {
   version?: string;
   file_relpath?: string;
   root_relpath?: string;
+  manifest_relpath?: string;
   root_path?: string;
   data_relpath?: string;
   i18n_relpath?: string;
@@ -66,6 +77,7 @@ export interface GameResourceSnapshot {
   active_layering_block_icons: GameResourceEntry;
   active_layering_item_icons: GameResourceEntry;
   active_game_data: GameResourceEntry;
+  active_enum_catalog: GameResourceEntry;
 }
 
 export interface GameResourceHealthRow {
@@ -88,6 +100,7 @@ const INDEX_PATHS: Record<GameResourceKind, string> = {
   block_icon: "minecraft-assets/block_icon/installed.json",
   item_icon: "minecraft-assets/item/installed.json",
   game_data: "minecraft-assets/game-data/installed.json",
+  enum_catalog: "enumerator/base/installed.json",
 };
 
 const INITIAL_LANGUAGE_RELPATH = "minecraft-assets/language/initial/zh_cn.json";
@@ -143,6 +156,16 @@ const BUILTIN_GAME_DATA: GameResourceEntry = {
   version: "26.1",
   data_relpath: "data/minecraft_blockstates/26.1.json",
   i18n_relpath: "data/minecraft_blockstates/26.1.zh_cn.json",
+  active: true,
+  builtin: true,
+};
+
+const BUILTIN_ENUM_CATALOG: GameResourceEntry = {
+  id: "builtin:enum_catalog:base",
+  kind: "enum_catalog",
+  label: "内建枚举全集",
+  source: "builtin",
+  root_relpath: "enumerator/base/builtin",
   active: true,
   builtin: true,
 };
@@ -351,12 +374,13 @@ function builtinEntry(kind: GameResourceKind): GameResourceEntry {
     case "block_icon": return { ...BUILTIN_BLOCK_ICON };
     case "item_icon": return { ...BUILTIN_ITEM_ICON };
     case "game_data": return { ...BUILTIN_GAME_DATA };
+    case "enum_catalog": return { ...BUILTIN_ENUM_CATALOG };
   }
 }
 
 function withBuiltinActivation(kind: GameResourceKind, entries: GameResourceEntry[]): GameResourceEntry[] {
   const builtin = builtinEntry(kind);
-  if (kind === "language" || kind === "game_data") {
+  if (kind === "language" || kind === "game_data" || kind === "enum_catalog") {
     builtin.active = !entries.some((entry) => entry.active);
   } else if (kind === "block_icon") {
     builtin.active_material_list = !entries.some((entry) => entry.active_material_list);
@@ -383,6 +407,7 @@ async function emitResourceChange(kind: GameResourceKind): Promise<void> {
   if (kind === "language") await emitEvent("resource-language-changed", {}).catch(() => undefined);
   if (kind === "block_icon" || kind === "item_icon") await emitEvent("resource-block-icons-changed", {}).catch(() => undefined);
   if (kind === "game_data") await emitEvent("resource-game-data-changed", {}).catch(() => undefined);
+  if (kind === "enum_catalog") await emitEvent("resource-enum-catalog-changed", {}).catch(() => undefined);
 }
 
 async function pathInfoForRoot(root: IconSearchRoot): Promise<PathInfo> {
@@ -508,12 +533,13 @@ export async function downloadRemoteMinecraftLanguage(branch: string, language: 
  */
 export async function listGameResourceRegistry(): Promise<GameResourceSnapshot> {
   await ensureInitialLanguageSeeded();
-  const [configPath, language, blockIcon, itemIcon, gameData] = await Promise.all([
+  const [configPath, language, blockIcon, itemIcon, gameData, enumCatalog] = await Promise.all([
     getUserConfigFilePath(".resource-root"),
     readIndex("language"),
     readIndex("block_icon"),
     readIndex("item_icon"),
     readIndex("game_data"),
+    readIndex("enum_catalog"),
   ]);
   const config_dir = folderFromFilePath(configPath);
   const entries = {
@@ -521,6 +547,7 @@ export async function listGameResourceRegistry(): Promise<GameResourceSnapshot> 
     block_icon: withBuiltinActivation("block_icon", blockIcon.entries),
     item_icon: withBuiltinActivation("item_icon", itemIcon.entries),
     game_data: withBuiltinActivation("game_data", gameData.entries),
+    enum_catalog: withBuiltinActivation("enum_catalog", enumCatalog.entries),
   };
   return {
     config_dir,
@@ -530,6 +557,7 @@ export async function listGameResourceRegistry(): Promise<GameResourceSnapshot> 
     active_layering_block_icons: activeEntry("block_icon", entries.block_icon, "layering"),
     active_layering_item_icons: activeEntry("item_icon", entries.item_icon),
     active_game_data: activeEntry("game_data", entries.game_data),
+    active_enum_catalog: activeEntry("enum_catalog", entries.enum_catalog),
   };
 }
 
@@ -558,7 +586,7 @@ export async function registerGameResource(entry: GameResourceEntry): Promise<Ga
 export async function activateGameResource(kind: GameResourceKind, id: string, slot?: BlockIconSlot): Promise<GameResourceSnapshot> {
   const index = await readIndex(kind);
   const next = index.entries.map((entry) => {
-    if (kind === "language" || kind === "game_data") {
+    if (kind === "language" || kind === "game_data" || kind === "enum_catalog") {
       return { ...entry, active: entry.id === id };
     }
     if (kind === "block_icon") {
@@ -569,7 +597,7 @@ export async function activateGameResource(kind: GameResourceKind, id: string, s
   });
   const selectingBuiltin = id.startsWith("builtin:");
   await writeIndex(kind, selectingBuiltin ? next.map((entry) => {
-    if (kind === "language" || kind === "game_data") return { ...entry, active: false };
+    if (kind === "language" || kind === "game_data" || kind === "enum_catalog") return { ...entry, active: false };
     if (kind === "block_icon") {
       return slot === "layering" ? { ...entry, active_layering: false } : { ...entry, active_material_list: false };
     }
@@ -681,6 +709,33 @@ export async function downloadVaultItemIcons(): Promise<VaultItemIconInstallResu
 }
 
 /**
+ * Downloads the Minecraft Wiki enum catalog bundle, registers the local base directory, and activates it.
+ */
+export async function downloadWikiEnumCatalog(): Promise<WikiEnumCatalogInstallResult> {
+  const result = await downloadWikiEnumCatalogsFromMinecraftWiki();
+  const entry: GameResourceEntry = {
+    id: "wiki:enum_catalog:minecraft_wiki",
+    kind: "enum_catalog",
+    label: "Minecraft Wiki",
+    source: "wiki",
+    root_relpath: result.root_relpath || "enumerator/base/wiki",
+    manifest_relpath: `${result.root_relpath || "enumerator/base/wiki"}/manifest.json`,
+    active: true,
+    installed_at: new Date().toISOString(),
+  };
+  await registerGameResource(entry);
+  const snapshot = await activateGameResource("enum_catalog", entry.id);
+  return {
+    snapshot,
+    target_dir: result.target_dir,
+    blocks: result.blocks,
+    items: result.items,
+    enchantments: result.enchantments,
+    entities: result.entities,
+  };
+}
+
+/**
  * Imports BlockState database JSON files into the user resource directory and activates them.
  */
 export async function importGameDataResource(dataPath: string, i18nPath?: string, version?: string): Promise<GameResourceSnapshot> {
@@ -782,6 +837,7 @@ export async function getActiveResourceFingerprint(): Promise<string> {
     snapshot.active_layering_block_icons.id,
     snapshot.active_layering_item_icons.id,
     snapshot.active_game_data.id,
+    snapshot.active_enum_catalog.id,
   ].join("|");
 }
 
@@ -817,6 +873,17 @@ export async function checkGameResourceHealth(): Promise<GameResourceHealthRow[]
     } catch (error) {
       rows.push({ label: `材料列表图标：${root.label}`, ok: false, detail: String(error) });
     }
+  }
+  try {
+    const enumRoot = snapshot.active_enum_catalog.root_relpath ? await appDataDirFor(snapshot.active_enum_catalog.root_relpath) : "";
+    const info = enumRoot ? await getPathInfo(enumRoot) : { exists: false, is_dir: false, normalized: "" } as PathInfo;
+    rows.push({
+      label: `枚举全集：${snapshot.active_enum_catalog.label}`,
+      ok: snapshot.active_enum_catalog.builtin ? true : (info.exists && info.is_dir),
+      detail: snapshot.active_enum_catalog.builtin ? "内建回退入口" : info.normalized,
+    });
+  } catch (error) {
+    rows.push({ label: `枚举全集：${snapshot.active_enum_catalog.label}`, ok: false, detail: String(error) });
   }
   return rows;
 }

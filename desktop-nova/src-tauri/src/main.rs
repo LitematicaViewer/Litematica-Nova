@@ -3,6 +3,7 @@
 use base64::Engine;
 use flate2::read::GzDecoder;
 use image::{DynamicImage, GenericImageView, RgbaImage};
+use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -2354,6 +2355,16 @@ struct VaultBlockIconDownloadOutput {
     root_relpath: String,
 }
 
+#[derive(Serialize)]
+struct WikiEnumCatalogDownloadOutput {
+    target_dir: String,
+    root_relpath: String,
+    blocks: usize,
+    items: usize,
+    enchantments: usize,
+    entities: usize,
+}
+
 const VAULT_SITE_LABEL: &str = "https://ccvaults.com/";
 const VAULT_API_TOKEN_PATH: &str = "/api/token";
 const VAULT_API_BLOCKS_PATH: &str = "/api/assets/20.%20Blocks";
@@ -2365,6 +2376,11 @@ const VAULT_BLOCK_ICON_ROOT_RELPATH: &str = "minecraft-assets/block_icon/vault";
 const VAULT_ITEM_ICON_ROOT_RELPATH: &str = "minecraft-assets/item/vault";
 const VAULT_BLOCK_CATEGORY_NAME: &str = "20. Blocks";
 const VAULT_ITEM_CATEGORY_NAME: &str = "10. Items";
+const WIKI_ENUM_BLOCKS_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values/Blocks";
+const WIKI_ENUM_ITEMS_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values/Items";
+const WIKI_ENUM_MAIN_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values";
+const WIKI_ENUM_ENTITIES_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values/Entities";
+const WIKI_ENUM_ROOT_RELPATH: &str = "enumerator/base/wiki";
 
 fn emit_vault_block_icon_progress(
     app: &AppHandle,
@@ -3458,6 +3474,173 @@ fn query_encode(value: &str) -> String {
         .collect()
 }
 
+fn wiki_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("Litematica-Nova-enum-catalog/1.0")
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn fetch_wiki_html(client: &reqwest::blocking::Client, url: &str) -> Result<String, String> {
+    let response = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml")
+        .send()
+        .map_err(|e| format!("请求 {url} 失败: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("请求 {url} 失败: HTTP {status}"));
+    }
+    response.text().map_err(|e| e.to_string())
+}
+
+fn normalize_html_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn element_text(element: &ElementRef<'_>) -> String {
+    normalize_html_text(&element.text().collect::<Vec<_>>().join(" "))
+}
+
+fn extract_code_values_from_cell(cell: &ElementRef<'_>, code_selector: &Selector) -> Vec<String> {
+    cell.select(code_selector)
+        .map(|code| normalize_html_text(&code.text().collect::<Vec<_>>().join(" ")))
+        .map(|value| value.trim_matches('`').trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn extract_resource_locations_from_html(html: &str) -> Result<Vec<String>, String> {
+    let table_selector = Selector::parse("table").map_err(|e| e.to_string())?;
+    let row_selector = Selector::parse("tr").map_err(|e| e.to_string())?;
+    let cell_selector = Selector::parse("th, td").map_err(|e| e.to_string())?;
+    let code_selector = Selector::parse("code").map_err(|e| e.to_string())?;
+    let document = Html::parse_document(html);
+    let mut seen = HashSet::new();
+    let mut output = Vec::new();
+
+    for table in document.select(&table_selector) {
+        let rows: Vec<_> = table.select(&row_selector).collect();
+        let mut resource_column = None;
+        let mut data_start = 0usize;
+        for (row_index, row) in rows.iter().enumerate() {
+            let cells: Vec<_> = row.select(&cell_selector).collect();
+            let labels: Vec<_> = cells
+                .iter()
+                .map(|cell| element_text(cell).to_ascii_lowercase())
+                .collect();
+            if let Some(column_index) = labels.iter().position(|label| label.contains("resource location")) {
+                resource_column = Some(column_index);
+                data_start = row_index + 1;
+                break;
+            }
+        }
+        let Some(resource_column) = resource_column else {
+            continue;
+        };
+        for row in rows.iter().skip(data_start) {
+            let cells: Vec<_> = row.select(&cell_selector).collect();
+            let Some(cell) = cells.get(resource_column) else {
+                continue;
+            };
+            for value in extract_code_values_from_cell(cell, &code_selector) {
+                if seen.insert(value.clone()) {
+                    output.push(value);
+                }
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+fn extract_enchantment_section_html<'a>(html: &'a str) -> Option<&'a str> {
+    let lower = html.to_ascii_lowercase();
+    let markers = [
+        "id=\"enchantments\"",
+        "id='enchantments'",
+        "id=\"enchantment\"",
+        "id='enchantment'",
+    ];
+    let start_hint = markers.iter().filter_map(|marker| lower.find(marker)).max()?;
+    let start = lower[..start_hint]
+        .rfind("<div class=\"mw-heading")
+        .or_else(|| lower[..start_hint].rfind("<h"))
+        .unwrap_or(start_hint);
+    let search_start = (start_hint + 1).min(html.len());
+    let end = lower[search_start..]
+        .find("<div class=\"mw-heading")
+        .map(|offset| search_start + offset)
+        .unwrap_or(html.len());
+    Some(&html[start..end])
+}
+
+fn write_json_catalog(path: &Path, values: &[String]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(values).map_err(|e| e.to_string())?;
+    std::fs::write(path, content).map_err(|e| e.to_string())
+}
+
+fn download_minecraft_wiki_enum_catalogs_sync() -> Result<WikiEnumCatalogDownloadOutput, String> {
+    let client = wiki_client()?;
+    let blocks_html = fetch_wiki_html(&client, WIKI_ENUM_BLOCKS_URL)?;
+    let items_html = fetch_wiki_html(&client, WIKI_ENUM_ITEMS_URL)?;
+    let main_html = fetch_wiki_html(&client, WIKI_ENUM_MAIN_URL)?;
+    let entities_html = fetch_wiki_html(&client, WIKI_ENUM_ENTITIES_URL)?;
+
+    let blocks = extract_resource_locations_from_html(&blocks_html)?;
+    let items = extract_resource_locations_from_html(&items_html)?;
+    let enchantment_section = extract_enchantment_section_html(&main_html)
+        .ok_or_else(|| "无法定位 Minecraft Wiki 魔咒数据值分节".to_string())?;
+    let enchantments = extract_resource_locations_from_html(enchantment_section)?;
+    let entities = extract_resource_locations_from_html(&entities_html)?;
+
+    if blocks.is_empty() || items.is_empty() || enchantments.is_empty() || entities.is_empty() {
+        return Err("Minecraft Wiki 枚举全集解析结果为空。".to_string());
+    }
+
+    let target_dir = current_user_config_dir()?.join(WIKI_ENUM_ROOT_RELPATH);
+    std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    write_json_catalog(&target_dir.join("DV_Blocks.json"), &blocks)?;
+    write_json_catalog(&target_dir.join("DV_Items.json"), &items)?;
+    write_json_catalog(&target_dir.join("DV_Enchantments.json"), &enchantments)?;
+    write_json_catalog(&target_dir.join("DV_Entities.json"), &entities)?;
+    let manifest = serde_json::json!({
+        "source": "minecraft_wiki",
+        "root_relpath": WIKI_ENUM_ROOT_RELPATH,
+        "catalogs": {
+            "blocks": { "file": "DV_Blocks.json", "url": WIKI_ENUM_BLOCKS_URL, "count": blocks.len() },
+            "items": { "file": "DV_Items.json", "url": WIKI_ENUM_ITEMS_URL, "count": items.len() },
+            "enchantments": { "file": "DV_Enchantments.json", "url": WIKI_ENUM_MAIN_URL, "count": enchantments.len() },
+            "entities": { "file": "DV_Entities.json", "url": WIKI_ENUM_ENTITIES_URL, "count": entities.len() }
+        }
+    });
+    std::fs::write(
+        target_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(WikiEnumCatalogDownloadOutput {
+        target_dir: target_dir.display().to_string(),
+        root_relpath: WIKI_ENUM_ROOT_RELPATH.to_string(),
+        blocks: blocks.len(),
+        items: items.len(),
+        enchantments: enchantments.len(),
+        entities: entities.len(),
+    })
+}
+
+#[tauri::command]
+async fn download_minecraft_wiki_enum_catalogs() -> Result<WikiEnumCatalogDownloadOutput, String> {
+    tauri::async_runtime::spawn_blocking(download_minecraft_wiki_enum_catalogs_sync)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn open_material_list_window(
     app: AppHandle,
@@ -3486,6 +3669,40 @@ async fn open_material_list_window(
     .title("Material List")
     .inner_size(720.0, 520.0)
     .min_inner_size(560.0, 420.0)
+    .build()
+    .map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_enumerator_window(
+    app: AppHandle,
+    active_file: Option<String>,
+) -> Result<(), String> {
+    const LABEL: &str = "enumerator";
+
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        app.emit_to(LABEL, "enumerator-open-file", active_file)
+            .map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    let url = match active_file.as_deref().filter(|file| !file.trim().is_empty()) {
+        Some(file) => format!("enumerator.html?file={}", query_encode(file)),
+        None => "enumerator.html".to_string(),
+    };
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        LABEL,
+        tauri::WebviewUrl::App(url.into()),
+    )
+    .title("Enumerator")
+    .inner_size(1180.0, 760.0)
+    .min_inner_size(900.0, 560.0)
     .build()
     .map_err(|err| err.to_string())?;
 
@@ -3657,6 +3874,7 @@ fn main() {
             copy_file_to_directory,
             download_vault_block_icons,
             download_vault_item_icons,
+            download_minecraft_wiki_enum_catalogs,
             open_workspace_path,
             cleanup_local_temp_files,
             reden_search_litematica,
@@ -3669,6 +3887,7 @@ fn main() {
             ai_test_connection,
             ai_chat_completion,
             open_material_list_window,
+            open_enumerator_window,
             open_reden_library_window,
             open_local_library_folders_window,
             open_asset_manager_window,
