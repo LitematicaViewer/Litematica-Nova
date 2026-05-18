@@ -40,6 +40,10 @@ Desktop.ini
 # Local runtime data
 .external/
 data/cache/
+data/stockpile/
+data/reden/
+data/exports/
+data/tmp/
 data/projection-library/
 data/settings.json
 data/content_tile_layout.sqlite3

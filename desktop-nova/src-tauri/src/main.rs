@@ -1,4 +1,4 @@
-﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use base64::Engine;
 use flate2::read::GzDecoder;
@@ -282,8 +282,30 @@ fn backend_exe_path(binary_name: &str) -> PathBuf {
         .join(binary_name)
 }
 
+fn data_root() -> Result<PathBuf, String> {
+    let dir = env::var_os("LBA_DATA_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                get_root().join(path)
+            }
+        })
+        .unwrap_or_else(|| get_root().join("data"));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn legacy_appdata_config_dir() -> Option<PathBuf> {
+    env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .map(|base| base.join("Litematica-BA").join("desktop-nova"))
+}
+
 fn render_tmp_path(prefix: &str, ext: &str) -> Result<PathBuf, String> {
-    let dir = current_user_config_dir()?.join("render");
+    let dir = data_root()?.join("cache").join("render");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -320,19 +342,65 @@ fn run_command_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Outpu
 }
 
 fn app_config_dir() -> Result<PathBuf, String> {
-    let base = env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| get_root().join(".tmp").join("app-config"));
-    let dir = base.join("Litematica-BA").join("desktop-nova");
+    let dir = data_root()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    migrate_legacy_appdata_if_needed(&dir)?;
     Ok(dir)
+}
+
+fn copy_file_if_missing(source: &Path, target: &Path) -> Result<(), String> {
+    if !source.is_file() || target.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::copy(source, target)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn copy_dir_files_if_missing(source: &Path, target: &Path) -> Result<(), String> {
+    if !source.is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+        if metadata.is_dir() {
+            copy_dir_files_if_missing(&source_path, &target_path)?;
+        } else if metadata.is_file() {
+            copy_file_if_missing(&source_path, &target_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_legacy_appdata_if_needed(target_root: &Path) -> Result<(), String> {
+    let Some(legacy_root) = legacy_appdata_config_dir() else {
+        return Ok(());
+    };
+    if legacy_root == target_root || !legacy_root.is_dir() {
+        return Ok(());
+    }
+    for file in ["config.json", "config_dir.json", "ai_config.json"] {
+        copy_file_if_missing(&legacy_root.join(file), &target_root.join(file))?;
+    }
+    for dir in ["projection-library", "generation-templates/custom"] {
+        copy_dir_files_if_missing(&legacy_root.join(dir), &target_root.join(dir))?;
+    }
+    Ok(())
 }
 
 fn ai_config_path() -> Result<PathBuf, String> {
     let path = app_config_dir()?.join("ai_config.json");
     if !path.exists() {
         if let Some(base) = env::var_os("APPDATA") {
-            let old_path = PathBuf::from(base).join("Litematica-BA").join("ai_config.json");
+            let old_path = PathBuf::from(base)
+                .join("Litematica-BA")
+                .join("ai_config.json");
             if old_path.is_file() {
                 let _ = std::fs::copy(old_path, &path);
             }
@@ -369,8 +437,11 @@ fn ensure_user_config_layout(dir: &Path) -> Result<(), String> {
     for relative in [
         "",
         "projection-library",
-        "previews",
-        "render",
+        "projection-library/previews",
+        "cache/render",
+        "tmp/render",
+        "reden/downloads",
+        "exports",
         "generation-templates",
         "generation-templates/custom",
     ] {
@@ -485,6 +556,22 @@ fn safe_user_relative_path(relative_path: &str) -> Result<PathBuf, String> {
             .any(|c| matches!(c, std::path::Component::ParentDir))
     {
         return Err("Invalid user config relative path.".to_string());
+    }
+    Ok(path)
+}
+
+fn user_runtime_relative_path(relative_path: &str) -> Result<PathBuf, String> {
+    let path = safe_user_relative_path(relative_path)?;
+    let mut components = path.components();
+    let Some(first) = components.next() else {
+        return Ok(path);
+    };
+    let first = first.as_os_str().to_string_lossy();
+    if first == "render" {
+        return Ok(PathBuf::from("tmp").join(path));
+    }
+    if first == "previews" {
+        return Ok(PathBuf::from("projection-library").join(path));
     }
     Ok(path)
 }
@@ -1086,7 +1173,9 @@ fn start_embedded_viewer(
         stderr_file,
     };
     if let Err(error) = wait_for_embedded_viewer_start(&mut record) {
-        log_embed(&format!("status=start_failed reason=native_start_error error={error}"));
+        log_embed(&format!(
+            "status=start_failed reason=native_start_error error={error}"
+        ));
         stop_embedded_record(&mut record);
         return Err(error);
     }
@@ -1404,9 +1493,11 @@ async fn generate_preview_image(
     file_path: String,
     display_mode: String,
 ) -> Result<RenderPreviewOutput, String> {
-    tauri::async_runtime::spawn_blocking(move || generate_preview_image_sync(file_path, display_mode))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        generate_preview_image_sync(file_path, display_mode)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn generate_preview_image_sync(
@@ -1417,7 +1508,7 @@ fn generate_preview_image_sync(
     let exe_path = backend_exe_path("litematica_native_viewer.exe");
     let mode = normalized_display_mode(&display_mode);
     let resolved_input = normalized_input_path(&file_path);
-    let preview_dir = current_user_config_dir()?.join("previews");
+    let preview_dir = data_root()?.join("projection-library").join("previews");
     std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
     hasher.update(resolved_input.to_string_lossy().as_bytes());
@@ -1491,8 +1582,7 @@ fn save_user_config(input: UserConfigInput) -> Result<UserConfigInfo, String> {
         config.preview_mode = normalize_mode_string(&mode);
     }
     if let Some(behavior) = input.material_list_window_behavior {
-        config.material_list_window_behavior =
-            normalize_material_list_window_behavior(&behavior);
+        config.material_list_window_behavior = normalize_material_list_window_behavior(&behavior);
     }
     if let Some(show) = input.show_ui_test_page {
         config.show_ui_test_page = show;
@@ -1601,14 +1691,14 @@ fn reset_user_config_dir(migrate: bool) -> Result<UserConfigInfo, String> {
 fn read_user_config_file(relative_path: String) -> Result<String, String> {
     let dir = current_user_config_dir()?;
     migrate_legacy_library_if_needed(&dir)?;
-    let path = dir.join(safe_user_relative_path(&relative_path)?);
+    let path = dir.join(user_runtime_relative_path(&relative_path)?);
     std::fs::read_to_string(path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn write_user_config_file(relative_path: String, content: String) -> Result<(), String> {
     let dir = current_user_config_dir()?;
-    let path = dir.join(safe_user_relative_path(&relative_path)?);
+    let path = dir.join(user_runtime_relative_path(&relative_path)?);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -1618,7 +1708,7 @@ fn write_user_config_file(relative_path: String, content: String) -> Result<(), 
 #[tauri::command]
 fn get_user_config_file_path(relative_path: String) -> Result<String, String> {
     let dir = current_user_config_dir()?;
-    let path = dir.join(safe_user_relative_path(&relative_path)?);
+    let path = dir.join(user_runtime_relative_path(&relative_path)?);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -1710,7 +1800,10 @@ fn kill_cache_build_task(state: State<'_, Mutex<BuildState>>) -> Result<(), Stri
 
 fn cache_progress_signature(raw: &str) -> Option<(String, bool)> {
     let value: serde_json::Value = serde_json::from_str(raw).ok()?;
-    let ready = value.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ready = value
+        .get("ready")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let signature = serde_json::json!({
         "ready": ready,
         "phase": value.get("phase").and_then(|v| v.as_str()).unwrap_or(""),
@@ -1778,7 +1871,8 @@ fn poll_cache_build_task(state: State<'_, Mutex<BuildState>>) -> CacheBuildSnaps
                     .map(|instant| instant.elapsed() >= Duration::from_secs(90))
                     .unwrap_or(false)
                 {
-                    forced_error = Some("3D cache 构建 90 秒仍未写出 progress JSON，已自动停止。".to_string());
+                    forced_error =
+                        Some("3D cache 构建 90 秒仍未写出 progress JSON，已自动停止。".to_string());
                 }
                 if forced_error.is_some() {
                     if let Some(mut child) = st.child.take() {
@@ -1914,7 +2008,11 @@ fn directory_entry_info(path: PathBuf) -> Result<DirectoryEntryInfo, String> {
         name,
         is_dir: metadata.is_dir(),
         is_file: metadata.is_file(),
-        file_size: if metadata.is_file() { metadata.len() } else { 0 },
+        file_size: if metadata.is_file() {
+            metadata.len()
+        } else {
+            0
+        },
         mtime_ms: metadata_modified_ms(&metadata),
         extension,
     })
@@ -2163,7 +2261,10 @@ fn extract_preview_image_data_from_nbt_bytes(bytes: &[u8]) -> Result<Option<Vec<
         bytes[data_start + 3],
     ]);
     if array_len < 0 {
-        return Err(format!("PreviewImageData length is negative: {}", array_len));
+        return Err(format!(
+            "PreviewImageData length is negative: {}",
+            array_len
+        ));
     }
     let array_len = array_len as usize;
     let payload_start = data_start + 4;
@@ -2242,7 +2343,10 @@ fn copy_file_to_directory(
         get_root().join(source_input)
     };
     if !source_full_path.is_file() {
-        return Err(format!("source file not found: {}", source_full_path.display()));
+        return Err(format!(
+            "source file not found: {}",
+            source_full_path.display()
+        ));
     }
 
     let trimmed_file_name = target_file_name.trim();
@@ -2260,7 +2364,10 @@ fn copy_file_to_directory(
         get_root().join(target_input)
     };
     if target_dir_path.exists() && !target_dir_path.is_dir() {
-        return Err(format!("target path is not a directory: {}", target_dir_path.display()));
+        return Err(format!(
+            "target path is not a directory: {}",
+            target_dir_path.display()
+        ));
     }
     std::fs::create_dir_all(&target_dir_path).map_err(|e| e.to_string())?;
 
@@ -2271,13 +2378,20 @@ fn copy_file_to_directory(
 
     let overwritten = target_full_path.exists();
     if overwritten && !overwrite {
-        return Err(format!("target file already exists: {}", target_full_path.display()));
+        return Err(format!(
+            "target file already exists: {}",
+            target_full_path.display()
+        ));
     }
     if overwritten && !target_full_path.is_file() {
-        return Err(format!("target path is not a file: {}", target_full_path.display()));
+        return Err(format!(
+            "target path is not a file: {}",
+            target_full_path.display()
+        ));
     }
 
-    let bytes_copied = std::fs::copy(&source_full_path, &target_full_path).map_err(|e| e.to_string())?;
+    let bytes_copied =
+        std::fs::copy(&source_full_path, &target_full_path).map_err(|e| e.to_string())?;
     Ok(CopyFileToDirectoryOutput {
         target_path: target_full_path.display().to_string(),
         overwritten,
@@ -2302,22 +2416,28 @@ fn open_workspace_path(path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn cleanup_local_temp_files() -> Result<String, String> {
-    let dir = current_user_config_dir()?.join("render");
-    if !dir.exists() {
-        return Ok("No desktop-nova render temp directory exists.".to_string());
-    }
     let mut removed = 0usize;
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if path.is_dir() {
-            std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
-        } else {
-            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    for dir in [
+        data_root()?.join("cache").join("render"),
+        data_root()?.join("tmp").join("render"),
+    ] {
+        if !dir.exists() {
+            continue;
         }
-        removed += 1;
+        for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+            } else {
+                std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+            }
+            removed += 1;
+        }
     }
-    Ok(format!("Removed {removed} desktop-nova render temp entries."))
+    Ok(format!(
+        "Removed {removed} desktop-nova render temp entries."
+    ))
 }
 
 #[derive(Deserialize)]
@@ -2348,20 +2468,26 @@ fn reden_client() -> Result<reqwest::blocking::Client, String> {
 fn reden_get_json(url: reqwest::Url) -> Result<serde_json::Value, String> {
     let response = reden_client()?
         .get(url)
-        .header(reqwest::header::USER_AGENT, "Litematica-BA desktop-nova/0.1")
+        .header(
+            reqwest::header::USER_AGENT,
+            "Litematica-BA desktop-nova/0.1",
+        )
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .map_err(|e| e.to_string())?;
     let status = response.status();
     let text = response.text().map_err(|e| e.to_string())?;
     if !status.is_success() {
-        return Err(format!("RedenMC API failed: status={} body={}", status, text));
+        return Err(format!(
+            "RedenMC API failed: status={} body={}",
+            status, text
+        ));
     }
     serde_json::from_str(&text).map_err(|e| format!("RedenMC JSON parse failed: {e}; body={text}"))
 }
 
 fn reden_download_dir() -> Result<PathBuf, String> {
-    let dir = app_config_dir()?.join("reden").join("downloads");
+    let dir = data_root()?.join("reden").join("downloads");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -2408,13 +2534,19 @@ fn file_name_from_headers_or_url(
     sanitize_reden_file_name(from_url)
 }
 
-fn reden_fetch_download(start_url: reqwest::Url, fallback_name: &str) -> Result<RedenDownloadOutput, String> {
+fn reden_fetch_download(
+    start_url: reqwest::Url,
+    fallback_name: &str,
+) -> Result<RedenDownloadOutput, String> {
     let client = reden_client()?;
     let mut url = start_url;
     for _ in 0..6 {
         let response = client
             .get(url.clone())
-            .header(reqwest::header::USER_AGENT, "Litematica-BA desktop-nova/0.1")
+            .header(
+                reqwest::header::USER_AGENT,
+                "Litematica-BA desktop-nova/0.1",
+            )
             .header(reqwest::header::REFERER, "https://redenmc.com/")
             .header(reqwest::header::ORIGIN, "https://redenmc.com")
             .send()
@@ -2422,7 +2554,9 @@ fn reden_fetch_download(start_url: reqwest::Url, fallback_name: &str) -> Result<
         let status = response.status();
         if status.is_redirection() {
             let Some(location) = response.headers().get(reqwest::header::LOCATION) else {
-                return Err(format!("RedenMC download redirected without Location: status={status}"));
+                return Err(format!(
+                    "RedenMC download redirected without Location: status={status}"
+                ));
             };
             let location = location.to_str().map_err(|e| e.to_string())?;
             url = url.join(location).map_err(|e| e.to_string())?;
@@ -2837,21 +2971,20 @@ async fn open_material_list_window(
         return Ok(());
     }
 
-    let url = match active_file.as_deref().filter(|file| !file.trim().is_empty()) {
+    let url = match active_file
+        .as_deref()
+        .filter(|file| !file.trim().is_empty())
+    {
         Some(file) => format!("material_list.html?file={}", query_encode(file)),
         None => "material_list.html".to_string(),
     };
 
-    tauri::WebviewWindowBuilder::new(
-        &app,
-        LABEL,
-        tauri::WebviewUrl::App(url.into()),
-    )
-    .title("Material List")
-    .inner_size(720.0, 520.0)
-    .min_inner_size(560.0, 420.0)
-    .build()
-    .map_err(|err| err.to_string())?;
+    tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App(url.into()))
+        .title("Material List")
+        .inner_size(720.0, 520.0)
+        .min_inner_size(560.0, 420.0)
+        .build()
+        .map_err(|err| err.to_string())?;
 
     Ok(())
 }

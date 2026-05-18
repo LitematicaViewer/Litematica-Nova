@@ -42,6 +42,7 @@ use crate::full_mode::FullModeMaterialCache;
 use crate::full_mode_v2::build_full_mode_v2_scene_assets;
 use crate::mesh::{ChunkKey, ChunkSceneIndex};
 use crate::model::{CompactSurfaceOutput, MeshChunkOutput, MetadataOutput, TexturedVertexOutput};
+use crate::runtime_paths;
 
 const VIEWER_SHADER: &str = r#"
 struct CameraUniform {
@@ -8595,15 +8596,13 @@ fn block_state_color_key(block_id: &str, properties: &BTreeMap<String, String>) 
 
 fn block_color_cache() -> &'static HashMap<String, [f32; 3]> {
     BLOCK_COLOR_CACHE.get_or_init(|| {
-        let Some(root) = locate_workspace_root() else {
+        let Ok(root) = runtime_paths::data_root() else {
             println!(
-                "[VIEWER_COLOR] color_source=missing_workspace_root preview_chain=material_fallback native_chain=palette_vertex_color"
+                "[VIEWER_COLOR] color_source=missing_data_root preview_chain=material_fallback native_chain=palette_vertex_color"
             );
             return HashMap::new();
         };
-        let cache_path = root
-            .join("data")
-            .join("blockColorCache.json");
+        let cache_path = root.join("blockColorCache.json");
         let payload = match std::fs::read_to_string(&cache_path) {
             Ok(payload) => payload,
             Err(error) => {
@@ -8661,30 +8660,6 @@ fn json_rgb(value: &JsonValue) -> Option<[f32; 3]> {
         array[1].as_f64()? as f32,
         array[2].as_f64()? as f32,
     ])
-}
-
-fn locate_workspace_root() -> Option<PathBuf> {
-    fn is_workspace_root(path: &Path) -> bool {
-        path.join("block").exists() && path.join("item").exists()
-    }
-
-    if let Ok(current_dir) = std::env::current_dir() {
-        for ancestor in current_dir.ancestors() {
-            if is_workspace_root(ancestor) {
-                return Some(ancestor.to_path_buf());
-            }
-        }
-    }
-
-    if let Ok(current_exe) = std::env::current_exe() {
-        for ancestor in current_exe.ancestors() {
-            if is_workspace_root(ancestor) {
-                return Some(ancestor.to_path_buf());
-            }
-        }
-    }
-
-    None
 }
 
 fn fallback_material_color(local: &str) -> [f32; 3] {
@@ -10489,6 +10464,7 @@ fn attach_window_to_parent(window: &winit::window::Window, parent_hwnd: isize) -
 }
 
 pub fn run() -> Result<()> {
+    runtime_paths::ensure_runtime_layout()?;
     let Some(args) = parse_args()? else {
         return Ok(());
     };

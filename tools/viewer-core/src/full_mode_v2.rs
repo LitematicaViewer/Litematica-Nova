@@ -25,6 +25,7 @@ use crate::nbt::{
     RegionBounds, bits_for_palette, for_each_palette_index, region_bounds, region_volume,
     storage_to_region_coords,
 };
+use crate::runtime_paths;
 
 const RENDER_ASSET_ROOT: &str = "third_party/render-assets";
 const VANILLA_JAR_REL: &str = "vanilla/26.1.jar";
@@ -262,7 +263,7 @@ struct FullModeV2Builder {
 
 impl FullModeV2Builder {
     fn new() -> Result<Self> {
-        let workspace_root = locate_workspace_root()?;
+        let workspace_root = runtime_paths::app_root()?;
         let render_asset_root = workspace_root.join(RENDER_ASSET_ROOT);
         let vanilla_jar = render_asset_root.join(VANILLA_JAR_REL);
         let faithful_root = render_asset_root.join(FAITHFUL_ROOT_REL);
@@ -7169,31 +7170,6 @@ fn xk_texture_id_for_state(
     None
 }
 
-fn locate_workspace_root() -> Result<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Ok(current_exe) = env::current_exe() {
-        candidates.push(current_exe);
-    }
-    if let Ok(current_dir) = env::current_dir() {
-        candidates.push(current_dir);
-    }
-    for candidate in candidates {
-        for dir in candidate.ancestors() {
-            if dir
-                .join("tools")
-                .join("viewer-core")
-                .join("Cargo.toml")
-                .is_file()
-            {
-                return Ok(dir.to_path_buf());
-            }
-        }
-    }
-    Err(anyhow::anyhow!(
-        "failed to locate workspace root from current executable or current directory"
-    ))
-}
-
 fn load_png_path(path: &Path) -> Result<Option<RgbaImage>> {
     if !path.is_file() {
         return Ok(None);
@@ -7206,7 +7182,7 @@ fn load_png_path(path: &Path) -> Result<Option<RgbaImage>> {
 }
 
 fn load_observer_debug_semantic_image(name: &str) -> Result<RgbaImage> {
-    let path = locate_workspace_root()?
+    let path = runtime_paths::app_root()?
         .join("tools")
         .join("viewer-core")
         .join("assets")

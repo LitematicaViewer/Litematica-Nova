@@ -173,13 +173,40 @@ GET https://redenmc.com/api/mc-services/yisibite/<machineId>?xSize=<x>&ySize=<y>
 
 下载集成规则：
 
-- 下载缓存写入 `%AppData%\Litematica-BA\desktop-nova\reden\downloads\`。
+- 下载缓存写入 `data/reden/downloads/`。
 - 不把下载文件写入项目目录。
 - 下载完成后确认是 `.litematic`，再 analyze、入库、设置 currentFile。
 - 如果返回 HTML、外部网盘页面、错误 JSON，必须报真实错误，不得伪装成投影文件。
 - 实测搜索、详情、普通下载和参数化下载不需要登录；上游静态资源或外部跳转失败时显示真实 status/message。
 
 ## BlockState DB 与 overrides
+
+## Stockpile recipe cache
+
+合成表缓存统一写入：
+
+```text
+data/cache/recipes/minecraft_<version>/
+```
+
+结构：
+
+```text
+manifest.json
+recipes.json
+items.json
+blocks.json
+```
+
+CLI：
+
+```powershell
+bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile export-data --input <file.litematic> --output data\stockpile\projects\<name>\materials.json
+```
+
+`recipe-fetch` 通过 provider 从 Mojang 官方 version manifest 定位对应 client jar，提取 `data/minecraft/recipe/*.json` 后生成本地缓存。无缓存时 `export-data` 不失败，材料项标记为 `missing`；缓存损坏或版本不匹配时标记为 `unresolved`。
 
 运行资源：
 
@@ -236,7 +263,7 @@ python scripts\generate_block_color_cache.py
 - `*_debug.log`
 - `*_probe.png`
 - `*_preview.png`
-- AppData 下载物和 RedenMC 下载出来的 `.litematic`
+- `data/reden/` 下载物和 RedenMC 下载出来的 `.litematic`
 - 本地打包出的 exe，例如 `docs/*.exe`
 
 不要删除或移动：
