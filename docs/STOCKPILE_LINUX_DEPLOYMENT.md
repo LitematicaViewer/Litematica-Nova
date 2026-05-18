@@ -11,7 +11,7 @@
 For full multiplayer collaboration export a multi package locally:
 
 ```powershell
-"access-pass`nadmin-pass" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project.stockpile.zip --minecraft-version 1.21.10 --mode multi --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly true --admin-page-enabled true
+"access-pass`nadmin-pass" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly true --admin-page-enabled true
 ```
 
 Then upload and unzip `project.stockpile.zip`. The deployment side does not need `.litematic`, recipe cache, Minecraft client jars, Rust source, or `litematica_core`.
@@ -34,7 +34,7 @@ curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
 
 ## Build Linux Server Binary
 
-Multi export requires real server binaries for all platforms under `bin/stockpile-server/<platform>/`. Use the `stockpile-server` GitHub Actions workflow or build on each platform and place artifacts at:
+Multi export requires real server binaries for the selected target under `bin/stockpile-server/<platform>/`. Use the `stockpile-server` GitHub Actions workflow or build on each platform and place artifacts at:
 
 ```text
 bin/stockpile-server/windows-x64/stockpile_server.exe
@@ -43,15 +43,15 @@ bin/stockpile-server/macos-x64/stockpile_server
 bin/stockpile-server/macos-arm64/stockpile_server
 ```
 
-The real binaries are ignored by Git and must not be committed. On Windows, local builds only produce `windows-x64`; Linux and macOS binaries come from GitHub Actions artifacts or from builds on those platforms. Before exporting a cross-platform multi package:
+The real binaries are ignored by Git and must not be committed. On Windows, local builds only produce `windows-x64`; Linux and macOS binaries come from GitHub Actions artifacts or from builds on those platforms. Before exporting a Linux VPS package:
 
 ```powershell
-scripts\stockpile\verify_stockpile_server_bins.ps1
-scripts\stockpile\fetch_stockpile_server_artifacts.ps1
-scripts\stockpile\verify_stockpile_server_bins.ps1
+scripts\stockpile\verify_stockpile_server_bins.ps1 -Target linux-x64
+scripts\stockpile\fetch_stockpile_server_artifacts.ps1 -Target linux-x64
+scripts\stockpile\verify_stockpile_server_bins.ps1 -Target linux-x64
 ```
 
-`fetch_stockpile_server_artifacts.ps1` requires the GitHub CLI (`gh`) and an authenticated account that can read workflow artifacts. If `gh` or permissions are unavailable, download the four artifacts manually from the `stockpile-server` workflow run and place them in the paths above. Single packages do not need server binaries. If you only deploy to one platform manually, you can run that platform's server binary directly, but `export-zip --mode multi` intentionally requires all four platforms so the package is complete.
+`fetch_stockpile_server_artifacts.ps1` requires the GitHub CLI (`gh`) and an authenticated account that can read workflow artifacts. If `gh` or permissions are unavailable, download the required target artifact manually from the `stockpile-server` workflow run and place it in the path above. Single packages do not need server binaries. Use multiple `--target` flags or `--target all` only when you want a multi-platform package.
 
 For Linux only, build from the repository root:
 
