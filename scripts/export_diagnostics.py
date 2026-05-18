@@ -156,10 +156,10 @@ def collect_project_paths(repo: Path) -> dict[str, Any]:
         "data": repo / "data",
         "viewer_backend_bin": repo / "bin" / "viewer-backend",
         "projection_library": repo / "data" / "projection-library",
-        "cache": repo / ".tmp" / "desktop-nova" / "render",
+        "cache": repo / "data" / "cache" / "render",
         "docs": repo / "docs",
-        "diagnostics": repo / "diagnostics",
-        "assistant_index": repo / ".tmp" / "assistant" / "lba_assistant_index.sqlite",
+        "diagnostics": repo / "data" / "exports" / "diagnostics",
+        "assistant_index": repo / "data" / "cache" / "assistant" / "lba_assistant_index.sqlite",
     }
     return {key: path_info(path) for key, path in paths.items()}
 
@@ -252,11 +252,11 @@ def latest_file(paths: list[Path]) -> Path | None:
 
 
 def collect_recent_cache_manifest(repo: Path) -> dict[str, Any]:
-    cache_dir = repo / ".tmp" / "desktop-nova" / "render"
+    cache_dir = repo / "data" / "cache" / "render"
     candidates = sorted(cache_dir.glob("lba_native_cache*.json")) if cache_dir.is_dir() else []
     latest = latest_file(candidates)
     if not latest:
-        return unavailable("no lba_native_cache*.json manifest found under .tmp/desktop-nova/render")
+        return unavailable("no lba_native_cache*.json manifest found under data/cache/render")
     try:
         stat = latest.stat()
         if stat.st_size > MAX_JSON_FILE_BYTES:
@@ -304,12 +304,12 @@ def read_tail(path: Path, max_chars: int = MAX_TEXT_CHARS) -> str:
 
 def collect_recent_logs(repo: Path) -> str:
     candidates: list[Path] = []
-    for folder in [repo / ".tmp" / "desktop-nova" / "render", repo]:
+    for folder in [repo / "data" / "cache" / "render", repo]:
         if folder.is_dir():
             candidates.extend(folder.glob("*.log"))
     candidates = [p for p in candidates if p.is_file()]
     if not candidates:
-        return "not available yet: no .log files found under .tmp/desktop-nova/render or repo root\n"
+        return "not available yet: no .log files found under data/cache/render or repo root\n"
     candidates = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[:8]
     parts = [
         "Recent log excerpts",
@@ -396,8 +396,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Export a minimal Litematica-BA diagnostics bundle.")
     parser.add_argument(
         "--output-dir",
-        default="diagnostics",
-        help="Directory where bundle_YYYYMMDD_HHMMSS will be created (default: diagnostics)",
+        default=str(Path("data") / "exports" / "diagnostics"),
+        help="Directory where bundle_YYYYMMDD_HHMMSS will be created (default: data/exports/diagnostics)",
     )
     args = parser.parse_args()
 
