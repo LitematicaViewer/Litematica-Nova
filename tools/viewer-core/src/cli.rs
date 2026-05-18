@@ -37,6 +37,11 @@ pub struct CliArgs {
     pub user: Option<String>,
     pub password_stdin: bool,
     pub stockpile_mode: Option<String>,
+    pub access_password_stdin: bool,
+    pub admin_password_stdin: bool,
+    pub whitelist_file: Option<PathBuf>,
+    pub allow_guest_readonly: Option<bool>,
+    pub admin_page_enabled: Option<bool>,
 }
 
 pub fn parse_args() -> Result<CliArgs> {
@@ -217,6 +222,11 @@ pub fn parse_args() -> Result<CliArgs> {
         user: None,
         password_stdin: false,
         stockpile_mode: None,
+        access_password_stdin: false,
+        admin_password_stdin: false,
+        whitelist_file: None,
+        allow_guest_readonly: None,
+        admin_page_enabled: None,
     })
 }
 
@@ -278,6 +288,11 @@ fn parse_runtime_paths_args(command: String, raw_args: Vec<String>) -> Result<Cl
         user: None,
         password_stdin: false,
         stockpile_mode: None,
+        access_password_stdin: false,
+        admin_password_stdin: false,
+        whitelist_file: None,
+        allow_guest_readonly: None,
+        admin_page_enabled: None,
     })
 }
 
@@ -301,6 +316,11 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     let mut user = None;
     let mut password_stdin = false;
     let mut stockpile_mode = None;
+    let mut access_password_stdin = false;
+    let mut admin_password_stdin = false;
+    let mut whitelist_file = None;
+    let mut allow_guest_readonly = None;
+    let mut admin_page_enabled = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -325,6 +345,26 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
             "--replace" => replace = true,
             "--password-stdin" => password_stdin = true,
             "--password" => bail!("stockpile password options must use --password-stdin"),
+            "--access-password-stdin" => access_password_stdin = true,
+            "--admin-password-stdin" => admin_password_stdin = true,
+            "--whitelist-file" => {
+                let Some(path) = args.next() else {
+                    bail!("missing path after --whitelist-file");
+                };
+                whitelist_file = Some(PathBuf::from(path));
+            }
+            "--allow-guest-readonly" => {
+                let Some(value) = args.next() else {
+                    bail!("missing value after --allow-guest-readonly");
+                };
+                allow_guest_readonly = Some(parse_bool_arg("--allow-guest-readonly", &value)?);
+            }
+            "--admin-page-enabled" => {
+                let Some(value) = args.next() else {
+                    bail!("missing value after --admin-page-enabled");
+                };
+                admin_page_enabled = Some(parse_bool_arg("--admin-page-enabled", &value)?);
+            }
             "--mode" => {
                 let Some(value) = args.next() else {
                     bail!("missing value after --mode");
@@ -444,6 +484,21 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
             }
             _ if arg.starts_with("--password=") => {
                 bail!("stockpile password options must use --password-stdin");
+            }
+            _ if arg.starts_with("--whitelist-file=") => {
+                let value = arg.trim_start_matches("--whitelist-file=");
+                if value.is_empty() {
+                    bail!("missing path after --whitelist-file=");
+                }
+                whitelist_file = Some(PathBuf::from(value));
+            }
+            _ if arg.starts_with("--allow-guest-readonly=") => {
+                let value = arg.trim_start_matches("--allow-guest-readonly=");
+                allow_guest_readonly = Some(parse_bool_arg("--allow-guest-readonly", value)?);
+            }
+            _ if arg.starts_with("--admin-page-enabled=") => {
+                let value = arg.trim_start_matches("--admin-page-enabled=");
+                admin_page_enabled = Some(parse_bool_arg("--admin-page-enabled", value)?);
             }
             _ if arg.starts_with("--mode=") => {
                 let value = arg.trim_start_matches("--mode=");
@@ -603,7 +658,20 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
         user,
         password_stdin,
         stockpile_mode,
+        access_password_stdin,
+        admin_password_stdin,
+        whitelist_file,
+        allow_guest_readonly,
+        admin_page_enabled,
     })
+}
+
+fn parse_bool_arg(name: &str, value: &str) -> Result<bool> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => bail!("{name} must be true or false"),
+    }
 }
 
 fn parse_replace_blocks_args(command: String, raw_args: Vec<String>) -> Result<CliArgs> {
@@ -708,6 +776,11 @@ fn parse_replace_blocks_args(command: String, raw_args: Vec<String>) -> Result<C
         user: None,
         password_stdin: false,
         stockpile_mode: None,
+        access_password_stdin: false,
+        admin_password_stdin: false,
+        whitelist_file: None,
+        allow_guest_readonly: None,
+        admin_page_enabled: None,
     })
 }
 
@@ -801,6 +874,11 @@ fn parse_generate_args(command: String, raw_args: Vec<String>) -> Result<CliArgs
         user: None,
         password_stdin: false,
         stockpile_mode: None,
+        access_password_stdin: false,
+        admin_password_stdin: false,
+        whitelist_file: None,
+        allow_guest_readonly: None,
+        admin_page_enabled: None,
     })
 }
 
@@ -895,5 +973,10 @@ fn parse_edit_metadata_args(command: String, raw_args: Vec<String>) -> Result<Cl
         user: None,
         password_stdin: false,
         stockpile_mode: None,
+        access_password_stdin: false,
+        admin_password_stdin: false,
+        whitelist_file: None,
+        allow_guest_readonly: None,
+        admin_page_enabled: None,
     })
 }

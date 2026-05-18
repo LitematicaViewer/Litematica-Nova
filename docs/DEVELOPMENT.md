@@ -43,6 +43,7 @@ cargo build --release --bin stockpile_server
 Copy-Item target\release\litematica_core.exe ..\..\bin\viewer-backend\litematica_core.exe -Force
 Copy-Item target\release\litematica_native_viewer.exe ..\..\bin\viewer-backend\litematica_native_viewer.exe -Force
 Copy-Item target\release\stockpile_server.exe ..\..\bin\viewer-backend\stockpile_server.exe -Force
+Copy-Item target\release\stockpile_server.exe ..\..\bin\stockpile-server\windows-x64\stockpile_server.exe -Force
 ```
 
 不要为了验证反复启动 Tauri UI。需要人工验收时再启动：
@@ -207,7 +208,7 @@ bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-versi
 bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile export-data --input <file.litematic> --output data\stockpile\projects\<name>\materials.json
 bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>.stockpile.zip --minecraft-version 1.21.10 --mode single
-bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>-multi.stockpile.zip --minecraft-version 1.21.10 --mode multi
+("access-pass`nadmin-pass" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>-multi.stockpile.zip --minecraft-version 1.21.10 --mode multi --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly true --admin-page-enabled true)
 bin\viewer-backend\litematica_core.exe stockpile serve --zip data\stockpile\exports\<name>.stockpile.zip --bind 127.0.0.1:8787
 bin\viewer-backend\stockpile_server.exe --root <unzipped-stockpile-dir> --bind 127.0.0.1:8787
 bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpile\exports\<name>.stockpile.zip
@@ -223,7 +224,9 @@ bin\viewer-backend\litematica_core.exe stockpile config-reset --zip data\stockpi
 
 `export-zip --mode single` 复用 stockpile materials 数据模型，输出可解压后直接打开的单页网页。ZIP 内包含 `index.html`、`assets/app.css`、`assets/app.js`、`assets/icons/*.png`、`data/manifest.json`、`data/materials.json`、`data/recipe_status.json`、`data/recipe_trees.json`、`data/icons.json`、`data/item_names.json` 和 `data/i18n.json`；`index.html` 内嵌 `window.__STOCKPILE_DATA__`，避免 `file://` 下 fetch 本地 JSON 被拦截。离线打开时状态只写入浏览器 localStorage。
 
-`export-zip --mode multi` 在 single 内容基础上额外写入 `db/stockpile.sqlite`、`server/<platform>/start.*`、可用平台的 `stockpile_server` 二进制和 `README.txt`。部署端只需要解压 ZIP 并运行对应启动脚本；`stockpile_server` 只托管静态文件、读取 `data/*.json`、读写 `db/stockpile.sqlite` 并提供 claim/note/auth/admin/whitelist/audit API，不读取 `.litematic`、不做材料统计、不拉 recipe、不触碰 viewer/native/Full Mode V2/MC Light。当前平台无法构建的 Linux/macOS server 会写入 README 占位说明，后续由 CI 或对应平台构建补齐。
+`export-zip --mode multi` 在 single 内容基础上额外写入 `db/stockpile.sqlite`、四个平台的 `server/<platform>/stockpile_server`、启动脚本和 `README.txt`。导出时必须能在 `bin/stockpile-server/windows-x64/`、`linux-x64/`、`macos-x64/`、`macos-arm64/` 找到真实 server 二进制；缺任一平台会失败，不写占位文件。部署端只需要解压 ZIP 并运行对应启动脚本；`stockpile_server` 只托管静态文件、读取 `data/*.json`、读写 `db/stockpile.sqlite` 并提供 claim/note/auth/admin/whitelist/audit API，不读取 `.litematic`、不做材料统计、不拉 recipe、不触碰 viewer/native/Full Mode V2/MC Light。
+
+multi 包的访问密码、管理员密码、白名单和默认配置在 `litematica_core export-zip` 阶段通过 `--access-password-stdin`、`--admin-password-stdin`、`--whitelist-file`、`--allow-guest-readonly`、`--admin-page-enabled` 写入 `db/stockpile.sqlite`。部署端 `stockpile_server` 不提供初始化 CLI；要改密码或白名单，使用 admin 页面或重新导出包。
 
 `recipe_trees.json` 由本地 recipe cache 解析生成，不联网。解析器会递归生成可视化合成链节点，支持 `minecraft:crafting_shaped`、`minecraft:crafting_shapeless`、`minecraft:stonecutting`、cooking 类配方、smithing transform/trim 和 `minecraft:crafting_special_*`。tag 输入只显示 tag 节点并标记 unresolved，不猜具体材料；special recipe 标记为 `special_recipe`；找不到支持配方时标记 `no_recipe`。ZIP 网页展开材料时使用节点卡片、工艺 badge、批次数、余量和父子连线展示完整合成链。
 

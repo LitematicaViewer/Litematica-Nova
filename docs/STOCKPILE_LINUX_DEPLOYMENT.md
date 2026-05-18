@@ -11,7 +11,7 @@
 For full multiplayer collaboration export a multi package locally:
 
 ```powershell
-bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project.stockpile.zip --minecraft-version 1.21.10 --mode multi
+"access-pass`nadmin-pass" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project.stockpile.zip --minecraft-version 1.21.10 --mode multi --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly true --admin-page-enabled true
 ```
 
 Then upload and unzip `project.stockpile.zip`. The deployment side does not need `.litematic`, recipe cache, Minecraft client jars, Rust source, or `litematica_core`.
@@ -34,17 +34,26 @@ curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
 
 ## Build Linux Server Binary
 
-If the package does not already contain `server/linux-x64/stockpile_server`, build it on Linux from the repository root:
+Multi export requires real server binaries for all platforms under `bin/stockpile-server/<platform>/`. Use the `stockpile-server` GitHub Actions workflow or build on each platform and place artifacts at:
+
+```text
+bin/stockpile-server/windows-x64/stockpile_server.exe
+bin/stockpile-server/linux-x64/stockpile_server
+bin/stockpile-server/macos-x64/stockpile_server
+bin/stockpile-server/macos-arm64/stockpile_server
+```
+
+For Linux only, build from the repository root:
 
 ```bash
 cargo build --release --bin stockpile_server
 ```
 
-Copy the binary into the unzipped package:
+Copy the binary into the fixed export input directory:
 
 ```bash
-cp tools/viewer-core/target/release/stockpile_server /path/to/unzipped-stockpile/server/linux-x64/stockpile_server
-chmod +x /path/to/unzipped-stockpile/server/linux-x64/stockpile_server
+cp tools/viewer-core/target/release/stockpile_server bin/stockpile-server/linux-x64/stockpile_server
+chmod +x bin/stockpile-server/linux-x64/stockpile_server
 ```
 
 ## Start For Testing
@@ -66,11 +75,7 @@ db/stockpile.sqlite
 
 ## Passwords Before Public Exposure
 
-If you bind to `0.0.0.0:8787`, set at least an access password:
-
-```bash
-TODO: password bootstrap for unpacked stockpile_server packages is planned.
-```
+Passwords, whitelist users, and default config are initialized during `export-zip --mode multi` and stored as hashes/config rows in `db/stockpile.sqlite`. The deployment server does not provide a password bootstrap CLI. To change access rules, use `/admin` or rebuild the package.
 
 ## Firewall
 

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+﻿use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -152,6 +152,15 @@ pub struct WhitelistOutput {
     pub zip_path: PathBuf,
     pub session_db: PathBuf,
     pub users: Vec<WhitelistEntry>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DeployDbOptions {
+    pub access_password: Option<String>,
+    pub admin_password: Option<String>,
+    pub whitelist: Vec<String>,
+    pub allow_guest_readonly: Option<bool>,
+    pub admin_page_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -879,11 +888,46 @@ pub(crate) fn init_db(path: &Path) -> Result<()> {
 }
 
 pub fn create_initial_session_db(path: &Path) -> Result<()> {
+    create_initialized_deploy_db(path, "", &DeployDbOptions::default())
+}
+
+pub fn create_initialized_deploy_db(
+    path: &Path,
+    project_hash: &str,
+    options: &DeployDbOptions,
+) -> Result<()> {
     let _ = fs::remove_file(path);
     init_db(path)?;
     let conn = Connection::open(path)
         .with_context(|| format!("open stockpile session db failed: {}", path.display()))?;
-    set_meta(&conn, "zip_hash", "")?;
+    set_meta(&conn, "zip_hash", project_hash)?;
+    let now = current_unix_timestamp()?;
+    let mut config = default_config(now);
+    config.mode = "multi".to_string();
+    config.access_password_enabled = options.access_password.is_some();
+    config.admin_password_enabled = options.admin_password.is_some();
+    config.whitelist_enabled = !options.whitelist.is_empty();
+    if let Some(value) = options.allow_guest_readonly {
+        config.allow_guest_readonly = value;
+    }
+    if let Some(value) = options.admin_page_enabled {
+        config.admin_page_enabled = value;
+    }
+    save_config_conn(&conn, &config)?;
+    if let Some(password) = &options.access_password {
+        store_password_hash_conn(&conn, "access", password)?;
+    }
+    if let Some(password) = &options.admin_password {
+        store_password_hash_conn(&conn, "admin", password)?;
+    }
+    for user_id in &options.whitelist {
+        validate_user_id(user_id)?;
+        conn.execute(
+            "INSERT INTO stockpile_whitelist(user_id, created_at) VALUES(?1, ?2) ON CONFLICT(user_id) DO NOTHING",
+            params![user_id, now],
+        )?;
+    }
+    touch_meta(&conn)?;
     conn.execute_batch(
         r#"
         PRAGMA wal_checkpoint(TRUNCATE);
@@ -1390,12 +1434,7 @@ fn set_password(
     }
     let (zip_path, db_path) = ensure_zip_session(zip_path)?;
     let conn = Connection::open(&db_path)?;
-    let hash = hash_password(password)?;
-    let now = current_unix_timestamp()?;
-    conn.execute(
-        "INSERT INTO password_hashes(kind, password_hash, updated_at) VALUES(?1, ?2, ?3) ON CONFLICT(kind) DO UPDATE SET password_hash = excluded.password_hash, updated_at = excluded.updated_at",
-        params![kind, hash, now],
-    )?;
+    store_password_hash_conn(&conn, kind, password)?;
     let mut changes = BTreeMap::new();
     changes.insert(config_key.to_string(), Value::Bool(enabled));
     let config = update_config_map(&db_path, &changes)?;
@@ -1415,6 +1454,19 @@ fn set_password(
         enabled,
         config,
     })
+}
+
+fn store_password_hash_conn(conn: &Connection, kind: &str, password: &str) -> Result<()> {
+    if password.trim().is_empty() {
+        bail!("password cannot be empty");
+    }
+    let hash = hash_password(password)?;
+    let now = current_unix_timestamp()?;
+    conn.execute(
+        "INSERT INTO password_hashes(kind, password_hash, updated_at) VALUES(?1, ?2, ?3) ON CONFLICT(kind) DO UPDATE SET password_hash = excluded.password_hash, updated_at = excluded.updated_at",
+        params![kind, hash, now],
+    )?;
+    Ok(())
 }
 
 fn clear_password(zip_path: &Path, kind: &str, config_key: &str) -> Result<PasswordOutput> {
@@ -2211,7 +2263,7 @@ fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
         .with_context(|| format!("parse JSON file failed: {}", path.display()))
 }
 
-fn project_hash(project: &StockpileZipPayload) -> Result<String> {
+pub fn project_hash(project: &StockpileZipPayload) -> Result<String> {
     let mut hasher = Sha256::new();
     hasher.update(serde_json::to_vec(&project.manifest)?);
     hasher.update(serde_json::to_vec(&project.materials)?);
@@ -2362,7 +2414,7 @@ fn admin_page_html() -> &'static str {
 <body><div id="admin" class="shell"></div><script>
 (function(){
 const i18n={
-zh:{title:'绠＄悊鍛?,login:'绠＄悊鍛樼櫥褰?,password:'绠＄悊鍛樺瘑鐮?,enter:'鐧诲綍',project:'澶囪揣鍗?,summary:'椤圭洰鎬昏',users:'鐢ㄦ埛',whitelist:'鐧藉悕鍗?,materials:'鏉愭枡绠＄悊',audit:'瀹¤鏃ュ織',add:'娣诲姞',remove:'绉婚櫎',lock:'閿佸畾',unlock:'瑙ｉ攣',save:'淇濆瓨',clearMaterial:'娓呯┖鏉愭枡澶囪揣',clearUser:'娓呯┖鐢ㄦ埛澶囪揣',note:'澶囨敞',location:'瀛樻斁浣嶇疆',language:'璇█',back:'杩斿洖澶囪揣鍗?,filter:'绛涢€?,all:'鍏ㄩ儴',unclaimed:'鏃犱汉璁ら',overfilled:'瓒呴',stalled:'宸插璐ф湭瀹屾垚',notStarted:'鏈紑濮?,locked:'閿佸畾',noted:'鏈夊娉?,userSummary:'鐢ㄦ埛姹囨€?,materialCount:'鏉愭枡鏁?,preparing:'澶囪揣涓?,done:'宸插畬鎴?,preparingQty:'澶囪揣涓暟閲?,doneQty:'瀹屾垚鏁伴噺',actor:'鎿嶄綔鑰?,action:'鍔ㄤ綔',target:'鐩爣',time:'鏃堕棿',success:'鎿嶄綔鎴愬姛',error:'閿欒',showPassword:'鏄剧ず瀵嗙爜',claim_put:'鏇存柊澶囪揣',claim_delete:'鍙栨秷澶囪揣',material_note_update:'鏇存柊鏉愭枡澶囨敞',claims_clear_material:'娓呯┖鏉愭枡澶囪揣',claims_clear_user:'娓呯┖鐢ㄦ埛澶囪揣',whitelist_add:'娣诲姞鐧藉悕鍗?,whitelist_remove:'绉婚櫎鐧藉悕鍗?,session_reset:'閲嶇疆浼氳瘽',session_import:'瀵煎叆浼氳瘽',session_import_replace:'鏇挎崲浼氳瘽',access_password_set:'璁剧疆璁块棶瀵嗙爜',admin_password_set:'璁剧疆绠＄悊鍛樺瘑鐮?,access_password_clear:'娓呴櫎璁块棶瀵嗙爜',admin_password_clear:'娓呴櫎绠＄悊鍛樺瘑鐮?},
+zh:{title:'缁狅紕鎮婇崨?,login:'缁狅紕鎮婇崨妯兼瑜?,password:'缁狅紕鎮婇崨妯虹槕閻?,enter:'閻ц缍?,project:'婢跺洩鎻ｉ崡?,summary:'妞ゅ湱娲伴幀鏄忣潔',users:'閻劍鍩?,whitelist:'閻ц棄鎮曢崡?,materials:'閺夋劖鏋＄粻锛勬倞',audit:'鐎孤ゎ吀閺冦儱绻?,add:'濞ｈ濮?,remove:'缁夊娅?,lock:'闁夸礁鐣?,unlock:'鐟欙綁鏀?,save:'娣囨繂鐡?,clearMaterial:'濞撳懐鈹栭弶鎰灐婢跺洩鎻?,clearUser:'濞撳懐鈹栭悽銊﹀煕婢跺洩鎻?,note:'婢跺洦鏁?,location:'鐎涙ɑ鏂佹担宥囩枂',language:'鐠囶叀鈻?,back:'鏉╂柨娲栨径鍥彛閸?,filter:'缁涙盯鈧?,all:'閸忋劑鍎?,unclaimed:'閺冪姳姹夌拋銈夘暙',overfilled:'鐡掑懘顤?,stalled:'瀹告彃顦拹褎婀€瑰本鍨?,notStarted:'閺堫亜绱戞慨?,locked:'闁夸礁鐣?,noted:'閺堝顦▔?,userSummary:'閻劍鍩涘Ч鍥ㄢ偓?,materialCount:'閺夋劖鏋￠弫?,preparing:'婢跺洩鎻ｆ稉?,done:'瀹告彃鐣幋?,preparingQty:'婢跺洩鎻ｆ稉顓熸殶闁?,doneQty:'鐎瑰本鍨氶弫浼村櫤',actor:'閹垮秳缍旈懓?,action:'閸斻劋缍?,target:'閻╊喗鐖?,time:'閺冨爼妫?,success:'閹垮秳缍旈幋鎰',error:'闁挎瑨顕?,showPassword:'閺勫墽銇氱€靛棛鐖?,claim_put:'閺囧瓨鏌婃径鍥彛',claim_delete:'閸欐牗绉锋径鍥彛',material_note_update:'閺囧瓨鏌婇弶鎰灐婢跺洦鏁?,claims_clear_material:'濞撳懐鈹栭弶鎰灐婢跺洩鎻?,claims_clear_user:'濞撳懐鈹栭悽銊﹀煕婢跺洩鎻?,whitelist_add:'濞ｈ濮為惂钘夋倳閸?,whitelist_remove:'缁夊娅庨惂钘夋倳閸?,session_reset:'闁插秶鐤嗘导姘崇樈',session_import:'鐎电厧鍙嗘导姘崇樈',session_import_replace:'閺囨寧宕叉导姘崇樈',access_password_set:'鐠佸墽鐤嗙拋鍧楁６鐎靛棛鐖?,admin_password_set:'鐠佸墽鐤嗙粻锛勬倞閸涙ê鐦戦惍?,access_password_clear:'濞撳懘娅庣拋鍧楁６鐎靛棛鐖?,admin_password_clear:'濞撳懘娅庣粻锛勬倞閸涙ê鐦戦惍?},
 en:{title:'Admin',login:'Admin login',password:'Admin password',enter:'Login',project:'Stockpile',summary:'Summary',users:'Users',whitelist:'Whitelist',materials:'Materials',audit:'Audit log',add:'Add',remove:'Remove',lock:'Lock',unlock:'Unlock',save:'Save',clearMaterial:'Clear material claims',clearUser:'Clear user claims',note:'Note',location:'Storage',language:'Language',back:'Back to stockpile',filter:'Filter',all:'All',unclaimed:'Unclaimed',overfilled:'Overfilled',stalled:'Prepared not done',notStarted:'Not started',locked:'Locked',noted:'With notes',userSummary:'User summary',materialCount:'Materials',preparing:'Preparing',done:'Done',preparingQty:'Preparing qty',doneQty:'Done qty',actor:'Actor',action:'Action',target:'Target',time:'Time',success:'Saved',error:'Error',showPassword:'Show password',claim_put:'Updated claim',claim_delete:'Removed claim',material_note_update:'Updated material note',claims_clear_material:'Cleared material claims',claims_clear_user:'Cleared user claims',whitelist_add:'Added whitelist user',whitelist_remove:'Removed whitelist user',session_reset:'Reset session',session_import:'Imported session',session_import_replace:'Replaced session',access_password_set:'Set access password',admin_password_set:'Set admin password',access_password_clear:'Cleared access password',admin_password_clear:'Cleared admin password'}};
 let lang=(localStorage.getItem('lba-stockpile-lang')||navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en';
 let filter='all'; let flash=''; const root=document.getElementById('admin'); const t=k=>i18n[lang][k]||i18n.en[k]||k;
@@ -2372,10 +2424,10 @@ function actionLabel(action){return t(action);}
 function matchesFilter(m){if(filter==='unclaimed')return !(m.participants||[]).length;if(filter==='overfilled')return m.overfilled_count>0;if(filter==='stalled')return m.preparing_count>0&&m.done_count<m.required_count;if(filter==='not_started')return m.overall_status==='not_started';if(filter==='locked')return !!m.locked;if(filter==='noted')return !!(m.public_note||m.storage_location);return true;}
 async function render(){
 let auth=await send('/api/auth/status');
-if(!auth.admin){root.innerHTML=`<section class="modal-card"><h1>${t('login')}</h1><div class="password-row"><input class="field" id="pw" type="password" placeholder="${t('password')}"/><button class="button icon-button" id="togglePw" type="button" title="${t('showPassword')}">馃憗</button></div><div class="actions"><button class="button primary" id="login">${t('enter')}</button></div><p class="sub" id="err"></p></section>`;document.getElementById('togglePw').onclick=()=>{const pw=document.getElementById('pw');pw.type=pw.type==='password'?'text':'password';};document.getElementById('login').onclick=async()=>{try{await send('/api/auth/admin','POST',{password:document.getElementById('pw').value});flash=t('success');render();}catch(e){document.getElementById('err').textContent=`${t('error')}: ${e.message}`;}};return;}
+if(!auth.admin){root.innerHTML=`<section class="modal-card"><h1>${t('login')}</h1><div class="password-row"><input class="field" id="pw" type="password" placeholder="${t('password')}"/><button class="button icon-button" id="togglePw" type="button" title="${t('showPassword')}">棣冩啑</button></div><div class="actions"><button class="button primary" id="login">${t('enter')}</button></div><p class="sub" id="err"></p></section>`;document.getElementById('togglePw').onclick=()=>{const pw=document.getElementById('pw');pw.type=pw.type==='password'?'text':'password';};document.getElementById('login').onclick=async()=>{try{await send('/api/auth/admin','POST',{password:document.getElementById('pw').value});flash=t('success');render();}catch(e){document.getElementById('err').textContent=`${t('error')}: ${e.message}`;}};return;}
 const [summary,users,white,materials,audit,state]=await Promise.all([send('/api/admin/summary'),send('/api/users'),send('/api/whitelist'),send('/api/admin/materials'),send('/api/admin/audit-log'),send('/api/state')]);
 const visibleMaterials=Object.values(materials).filter(matchesFilter); const userSummaries=state.summaries?.user_summaries||[];
-root.innerHTML=`<header class="topbar"><div class="brand"><strong>${t('title')}</strong><span>${t('project')}</span></div><div class="identity"><select class="field" id="lang"><option value="zh" ${lang==='zh'?'selected':''}>涓枃</option><option value="en" ${lang==='en'?'selected':''}>English</option></select><a class="button" href="/">${t('back')}</a></div></header>
+root.innerHTML=`<header class="topbar"><div class="brand"><strong>${t('title')}</strong><span>${t('project')}</span></div><div class="identity"><select class="field" id="lang"><option value="zh" ${lang==='zh'?'selected':''}>娑擃厽鏋?/option><option value="en" ${lang==='en'?'selected':''}>English</option></select><a class="button" href="/">${t('back')}</a></div></header>
 ${flash?`<div class="empty">${esc(flash)}</div>`:''}
 <section class="summary">${Object.entries(summary).map(([k,v])=>`<div class="metric"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('')}</section>
 <section class="section"><h2>${t('userSummary')}</h2><div class="list">${userSummaries.map(u=>`<div class="card"><div class="card-main"><div><b>${esc(u.user_id)}</b><div class="sub">${t('materialCount')}: ${u.material_count} / ${t('preparingQty')}: ${u.preparing_quantity} / ${t('doneQty')}: ${u.done_quantity}</div></div><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button></div></div>`).join('')}</div></section>
@@ -2801,6 +2853,7 @@ mod tests {
             false,
             Some("1.21.10"),
             crate::stockpile_zip::StockpileExportMode::Single,
+            crate::stockpile_zip::StockpileDeployOptions::default(),
         )
         .expect("export zip");
         let project = load_project_from_zip(&output).expect("load project");
@@ -2828,6 +2881,7 @@ mod tests {
             false,
             Some("1.21.10"),
             crate::stockpile_zip::StockpileExportMode::Single,
+            crate::stockpile_zip::StockpileDeployOptions::default(),
         )
         .expect("export zip");
         let db = session_db_path(&output).expect("session db");
@@ -3525,6 +3579,7 @@ mod tests {
             false,
             Some("1.21.10"),
             crate::stockpile_zip::StockpileExportMode::Single,
+            crate::stockpile_zip::StockpileDeployOptions::default(),
         )
         .expect("export zip");
         output

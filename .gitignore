@@ -58,6 +58,9 @@ bin/launcher/*.pdb
 bin/launcher/
 bin/viewer-backend/*.exe
 bin/viewer-backend/*.pdb
+bin/stockpile-server/**/stockpile_server
+bin/stockpile-server/**/stockpile_server.exe
+!bin/stockpile-server/**/.gitkeep
 
 # Local preview / verify outputs
 *.tmp
