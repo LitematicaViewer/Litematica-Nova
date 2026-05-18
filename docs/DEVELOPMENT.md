@@ -220,11 +220,11 @@ bin\viewer-backend\litematica_core.exe stockpile session-import --zip data\stock
 
 `serve` 只读取 stockpile ZIP，不回写 ZIP。会话状态写入 `data/stockpile/sessions/<zip-stem>.sqlite`，表为 `meta`、`participants` 和 `material_claims`。HTTP API 包括 `GET /api/project`、`GET /api/state`、`POST /api/participants`、`PUT /api/materials/:material_id/claims/:user_id` 和 `DELETE /api/materials/:material_id/claims/:user_id`。serve 模式页面每数秒轮询状态；同一材料允许多个用户同时 claim，取消参与会删除对应 claim。
 
-`session-info`、`session-reset`、`session-export` 和 `session-import` 只操作 `data/stockpile/sessions/<zip-stem>.sqlite` 或 JSON 状态文件，不修改 ZIP。`session-reset` 没有 `--yes` 时只返回确认提示；`session-import` 会校验 session export schema 和 ZIP hash，默认 merge/upsert，`--replace` 时先清空 claims。
+`session-info`、`session-reset`、`session-export` 和 `session-import` 只操作 `data/stockpile/sessions/<zip-stem>.sqlite` 或 JSON 状态文件，不修改 ZIP。`session-reset` 没有 `--yes` 时只返回确认提示；显式 `--yes` 会清空 claims、保留 participants，并把 session 重新绑定到当前 ZIP hash，便于同名 ZIP 重导出后的恢复。`session-import` 会校验 session export schema 和 ZIP hash，默认 merge/upsert，`--replace` 时先清空 claims。
 
 Stockpile schema 版本集中在后端 `stockpile_schema` 模块：ZIP manifest 会写入 ZIP、materials、recipe_trees、i18n、icons、item_names 的 schema version；SQLite `meta` 会写入 schema version 和 zip hash。serve 读取不支持或不匹配的 ZIP/SQLite 时必须显式报错，不静默错读。
 
-材料和合成链图标来自 `data/cache/item-icons/minecraft_<version>/icons/`。导出时会优先从 Mojang client jar 的 `assets/minecraft/textures/item`、`textures/block` 和常见 model 指向解析 PNG；无法解析时写入简洁 fallback PNG，并在 `materials.json` 中标记 `icon_available=false`。材料名本地化来自 `data/cache/item-names/minecraft_<version>/en_us.json` 和 `zh_cn.json`，ZIP 只写入当前材料和合成链需要的 `data/item_names.json`。不要提交 `data/cache/item-icons/` 或 `data/cache/item-names/` 生成物。
+材料和合成链图标来自 `data/cache/item-icons/minecraft_<version>/icons/`。导出时会优先从 Mojang client jar 的 `assets/minecraft/textures/item`、`textures/block` 和常见 model 指向解析 PNG；无法解析时写入简洁 fallback PNG，并在 `materials.json` 中标记 `icon_available=false`。材料名本地化来自 `data/cache/item-names/minecraft_<version>/en_us.json` 和 `zh_cn.json`，ZIP 只写入当前材料和合成链需要的 `data/item_names.json`，其中 `status` 会标识 `available` / `partial` / `missing`。不要提交 `data/cache/item-icons/` 或 `data/cache/item-names/` 生成物。
 
 运行资源：
 
