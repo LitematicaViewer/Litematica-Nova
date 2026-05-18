@@ -1,0 +1,15 @@
+@import "./nav-icons.css";
+@import "./widget/nav.css";
+@import "./widget/check.css";
+@import "./widget/popup.css";
+@import "./widget/table.css";
+@import "./widget/text.css";
+@import "./widget/dialog.css";
+@import "./widget/subwindow.css";
+
+:root {
+    --ln-window-content-padding: 12px;
+    --ln-ui-background-color: #ffffff;
+    --ln-navigation-background-color: #ffffff;
+    --ln-file-icon-size: 16px;
+}

@@ -1,0 +1,61 @@
+:root {
+    --ln-minecraft-table-row-min-height: 44px;
+    --ln-minecraft-table-row-background-odd: #000000;
+    --ln-minecraft-table-row-background-even: #1a1a1a;
+    --ln-minecraft-table-row-background-hover: #2b2b2b;
+    --ln-table-row-selected-background: #4d4d4d;
+}
+
+table,
+.table {
+    border-collapse: collapse;
+}
+
+table > tbody > tr,
+.table > tbody > tr {
+    height: var(--ln-minecraft-table-row-min-height);
+}
+
+table > :not(caption) > * > *,
+.table > :not(caption) > * > * {
+    border: 0;
+}
+
+table > tbody > tr:nth-of-type(odd) > *,
+.table > tbody > tr:nth-of-type(odd) > * {
+    background-color: var(--ln-minecraft-table-row-background-odd);
+}
+
+table > tbody > tr:nth-of-type(even) > *,
+.table > tbody > tr:nth-of-type(even) > * {
+    background-color: var(--ln-minecraft-table-row-background-even);
+}
+
+table > tbody > tr:hover > *,
+.table > tbody > tr:hover > * {
+    background-color: var(--ln-minecraft-table-row-background-hover);
+}
+
+table > tbody > tr.table-row-selected > *,
+table > tbody > tr[aria-selected="true"] > *,
+.table > tbody > tr.table-row-selected > *,
+.table > tbody > tr[aria-selected="true"] > * {
+    background-color: var(--ln-table-row-selected-background);
+}
+
+table > tbody > tr > * > .button-row,
+.table > tbody > tr > * > .button-row {
+    margin-bottom: 0;
+}
+
+table > tbody > tr > * > .button-row > button,
+table > tbody > tr > * > .button-row > input[type="button"],
+table > tbody > tr > * > .button-row > input[type="submit"],
+table > tbody > tr > * > .button-row > input[type="reset"],
+.table > tbody > tr > * > .button-row > button,
+.table > tbody > tr > * > .button-row > input[type="button"],
+.table > tbody > tr > * > .button-row > input[type="submit"],
+.table > tbody > tr > * > .button-row > input[type="reset"] {
+    margin-top: 0;
+    margin-bottom: 0;
+}

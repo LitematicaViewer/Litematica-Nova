@@ -33,6 +33,9 @@ async function loadIcon(blockId: string): Promise<string | null> {
   return null;
 }
 
+/**
+ * Loads and caches the data URL for a Minecraft block or item icon.
+ */
 export function getBlockIconDataUrl(blockId: string): Promise<string | null> {
   if (!iconCache.has(blockId)) {
     iconCache.set(blockId, loadIcon(blockId));

@@ -280,12 +280,11 @@ diagnostics/bundle_YYYYMMDD_HHMMSS
 
 检查入口：
 
-- `desktop-nova/src/main.tsx`
-- `desktop-nova/src/styles/base.css`
-- `desktop-nova/src/ui/styles/base.css`
-- `desktop-nova/windows/material_list/main.tsx`
+- `desktop-nova/ui/app/main.tsx`
+- `desktop-nova/ui/styles/base.css`
+- `desktop-nova/ui/windows/material_list/main.tsx`
 
-`src/styles/base.css` 是兼容入口；`src/ui/styles/base.css` 是 UI 层样式入口。不要把 import 写到仓库外路径。
+`ui/styles/base.css` 是 UI 层样式入口。不要把 import 写到仓库外路径。
 
 ### check:layers 失败
 

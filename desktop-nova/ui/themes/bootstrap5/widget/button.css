@@ -1,0 +1,68 @@
+:root {
+    --ln-bootstrap5-button-color: #0d6efd;
+    --ln-bootstrap5-button-hover-background: #0d6efd80;
+    --ln-bootstrap5-button-active-color: #ffffff;
+    --ln-bootstrap5-button-height: 38px;
+}
+
+button:not(.nav-expand):not(.nav-item),
+input[type="button"],
+input[type="submit"],
+input[type="reset"] {
+    box-sizing: border-box;
+    display: inline-block;
+    height: var(--ln-bootstrap5-button-height);
+    margin: 4px 2px;
+    padding: 6px 12px;
+    border: 1px solid var(--ln-bootstrap5-button-color);
+    border-radius: 6px;
+    appearance: none;
+    background-color: transparent;
+    color: var(--ln-bootstrap5-button-color);
+    font: inherit;
+    letter-spacing: normal;
+    line-height: 24px;
+    text-align: center;
+    cursor: default;
+}
+
+button:not(.nav-expand):not(.nav-item):hover:not(:disabled),
+input[type="button"]:hover:not(:disabled),
+input[type="submit"]:hover:not(:disabled),
+input[type="reset"]:hover:not(:disabled) {
+    background-color: var(--ln-bootstrap5-button-hover-background);
+    color: var(--ln-bootstrap5-button-color);
+}
+
+button:not(.nav-expand):not(.nav-item):active:not(:disabled),
+button:not(.nav-expand):not(.nav-item)[aria-pressed="true"],
+input[type="button"]:active:not(:disabled),
+input[type="submit"]:active:not(:disabled),
+input[type="reset"]:active:not(:disabled) {
+    background-color: var(--ln-bootstrap5-button-color);
+    color: var(--ln-bootstrap5-button-active-color);
+}
+
+button:not(.nav-expand):not(.nav-item):disabled,
+input[type="button"]:disabled,
+input[type="submit"]:disabled,
+input[type="reset"]:disabled {
+    opacity: 0.65;
+}
+
+button:not(.nav-expand):not(.nav-item):focus-visible,
+input[type="button"]:focus-visible,
+input[type="submit"]:focus-visible,
+input[type="reset"]:focus-visible {
+    outline: 2px solid var(--ln-bootstrap5-button-color);
+    outline-offset: 2px;
+}
+
+button.material-list-close-button {
+    width: var(--ln-bootstrap5-button-height);
+    min-width: var(--ln-bootstrap5-button-height);
+    height: var(--ln-bootstrap5-button-height);
+    min-height: var(--ln-bootstrap5-button-height);
+    padding: 0;
+    line-height: 1;
+}

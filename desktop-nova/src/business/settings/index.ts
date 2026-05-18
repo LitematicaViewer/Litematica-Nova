@@ -18,12 +18,18 @@ export {
   saveUserConfig,
   setUserConfigDir,
 } from "../../services/backend";
-export type { ThemeName } from "../../services/userConfig";
+export type { MaterialListWindowBehavior, ThemeName } from "../../services/userConfig";
 export {
   loadUserConfigMigratingLocalStorage,
+  normalizeLocalLibraryTailPathCount,
+  normalizeMaterialListWindowBehavior,
+  normalizeShowUiTestPage,
   normalizeTheme,
+  saveLocalLibraryTailPathCountConfig,
+  saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
   saveRenderDisplayModeConfig,
+  saveShowUiTestPageConfig,
   saveThemeConfig,
 } from "../../services/userConfig";
 export type { DisplayMode } from "../../services/renderMode";
