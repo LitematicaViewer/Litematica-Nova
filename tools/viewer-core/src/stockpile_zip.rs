@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -20,6 +21,7 @@ use crate::stockpile_schema::{
     STOCKPILE_ITEM_NAMES_SCHEMA_VERSION, STOCKPILE_MATERIALS_SCHEMA_VERSION,
     STOCKPILE_RECIPE_TREES_SCHEMA_VERSION, STOCKPILE_ZIP_SCHEMA_VERSION,
 };
+use crate::stockpile_serve;
 use crate::{
     item_icons,
     item_icons::{IconZipAsset, StockpileIconPayload},
@@ -39,6 +41,7 @@ pub struct StockpileZipSummary {
     pub material_count: usize,
     pub recipe_status: String,
     pub files: Vec<String>,
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +71,34 @@ pub struct StockpileZipManifest {
     pub recipe_status: String,
     pub generator: String,
     pub material_count: usize,
+    pub export_mode: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StockpileExportMode {
+    Single,
+    Multi,
+}
+
+impl StockpileExportMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            StockpileExportMode::Single => "single",
+            StockpileExportMode::Multi => "multi",
+        }
+    }
+}
+
+impl FromStr for StockpileExportMode {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "single" => Ok(StockpileExportMode::Single),
+            "multi" => Ok(StockpileExportMode::Multi),
+            _ => bail!("stockpile export mode must be single or multi"),
+        }
+    }
 }
 
 pub fn export_stockpile_zip(
@@ -75,15 +106,16 @@ pub fn export_stockpile_zip(
     output: Option<&Path>,
     include_container_items: bool,
     minecraft_version: Option<&str>,
+    mode: StockpileExportMode,
 ) -> Result<StockpileZipSummary> {
     let minecraft_version = minecraft_version.unwrap_or(DEFAULT_MINECRAFT_VERSION);
     let materials =
         stockpile::build_materials_data(input, include_container_items, Some(minecraft_version))?;
     let recipe_status = recipe_cache::recipe_status(minecraft_version)?;
     let output_path = resolve_output_path(input, output)?;
-    let payload = build_payload(input, minecraft_version, materials, recipe_status)?;
-    write_zip(&output_path, &payload)?;
-    Ok(summary(&output_path, &payload))
+    let payload = build_payload(input, minecraft_version, materials, recipe_status, mode)?;
+    write_zip(&output_path, &payload, mode)?;
+    Ok(summary(&output_path, &payload, mode))
 }
 
 fn build_payload(
@@ -91,6 +123,7 @@ fn build_payload(
     minecraft_version: &str,
     mut materials: StockpileMaterialsData,
     recipe_status: RecipeCacheStatusOutput,
+    mode: StockpileExportMode,
 ) -> Result<StockpileZipPayload> {
     let recipe_trees = if recipe_status.status == RecipeCacheStatus::Available {
         recipe_tree::resolve_recipe_trees_for_materials(minecraft_version, &materials)
@@ -104,6 +137,7 @@ fn build_payload(
         &mut materials,
         recipe_status,
         recipe_trees,
+        mode,
     )
 }
 
@@ -113,6 +147,7 @@ fn build_payload_with_trees(
     materials: &mut StockpileMaterialsData,
     recipe_status: RecipeCacheStatusOutput,
     recipe_trees: BTreeMap<String, RecipeTreeNode>,
+    mode: StockpileExportMode,
 ) -> Result<StockpileZipPayload> {
     let icon_assets =
         item_icons::resolve_stockpile_icons(minecraft_version, materials, &recipe_trees)?;
@@ -131,6 +166,7 @@ fn build_payload_with_trees(
         recipe_status: recipe_status_string(&recipe_status),
         generator: GENERATOR.to_string(),
         material_count: materials.materials.len(),
+        export_mode: mode.as_str().to_string(),
     };
     Ok(StockpileZipPayload {
         manifest,
@@ -144,7 +180,11 @@ fn build_payload_with_trees(
     })
 }
 
-fn write_zip(output_path: &Path, payload: &StockpileZipPayload) -> Result<()> {
+fn write_zip(
+    output_path: &Path,
+    payload: &StockpileZipPayload,
+    mode: StockpileExportMode,
+) -> Result<()> {
     ensure_stockpile_export_output(output_path)?;
     let file = File::create(output_path)
         .with_context(|| format!("create stockpile zip failed: {}", output_path.display()))?;
@@ -184,8 +224,104 @@ fn write_zip(output_path: &Path, payload: &StockpileZipPayload) -> Result<()> {
     for icon in &payload.icon_files {
         add_bytes_file(&mut zip, &icon.path, &icon.bytes, options)?;
     }
+    if mode == StockpileExportMode::Multi {
+        add_multi_deploy_files(&mut zip, options)?;
+    }
     zip.finish().context("finish stockpile zip failed")?;
     Ok(())
+}
+
+fn add_multi_deploy_files(zip: &mut ZipWriter<File>, options: SimpleFileOptions) -> Result<()> {
+    add_bytes_file(
+        zip,
+        "db/stockpile.sqlite",
+        &initial_stockpile_db()?,
+        options,
+    )?;
+    add_text_file(zip, "server/windows/start.cmd", WINDOWS_START_CMD, options)?;
+    add_text_file(zip, "server/linux-x64/start.sh", UNIX_START_SH, options)?;
+    add_text_file(zip, "server/macos-x64/start.sh", UNIX_START_SH, options)?;
+    add_text_file(zip, "server/macos-arm64/start.sh", UNIX_START_SH, options)?;
+    add_text_file(zip, "README.txt", MULTI_README, options)?;
+
+    if let Some(binary) = find_stockpile_server_binary("stockpile_server.exe") {
+        add_bytes_file(
+            zip,
+            "server/windows/stockpile_server.exe",
+            &fs::read(&binary).with_context(|| format!("read {}", binary.display()))?,
+            options,
+        )?;
+    } else {
+        add_text_file(
+            zip,
+            "server/windows/README.txt",
+            "stockpile_server.exe was not available when this package was exported. Build it on Windows with: cargo build --release --bin stockpile_server\n",
+            options,
+        )?;
+    }
+
+    add_text_file(
+        zip,
+        "server/linux-x64/README.txt",
+        "Linux x64 stockpile_server binary is not bundled by this Windows build. Build on Linux or CI with: cargo build --release --bin stockpile_server\n",
+        options,
+    )?;
+    add_text_file(
+        zip,
+        "server/macos-x64/README.txt",
+        "macOS x64 stockpile_server binary is not bundled by this Windows build. Build on macOS or CI with: cargo build --release --bin stockpile_server\n",
+        options,
+    )?;
+    add_text_file(
+        zip,
+        "server/macos-arm64/README.txt",
+        "macOS arm64 stockpile_server binary is not bundled by this Windows build. Build on macOS arm64 or CI with: cargo build --release --bin stockpile_server\n",
+        options,
+    )?;
+    Ok(())
+}
+
+fn initial_stockpile_db() -> Result<Vec<u8>> {
+    let path = std::env::temp_dir().join(format!(
+        "lba_stockpile_initial_{}.sqlite",
+        std::process::id()
+    ));
+    let _ = fs::remove_file(&path);
+    stockpile_serve::create_initial_session_db(&path)?;
+    let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(path.with_extension("sqlite-wal"));
+    let _ = fs::remove_file(path.with_extension("sqlite-shm"));
+    Ok(bytes)
+}
+
+fn find_stockpile_server_binary(file_name: &str) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(parent) = current_exe.parent()
+    {
+        candidates.push(parent.join(file_name));
+    }
+    if let Ok(app_root) = runtime_paths::app_root() {
+        candidates.push(app_root.join("bin").join("viewer-backend").join(file_name));
+        candidates.push(
+            app_root
+                .join("tools")
+                .join("viewer-core")
+                .join("target")
+                .join("release")
+                .join(file_name),
+        );
+        candidates.push(
+            app_root
+                .join("tools")
+                .join("viewer-core")
+                .join("target")
+                .join("debug")
+                .join(file_name),
+        );
+    }
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 fn add_text_file(
@@ -318,6 +454,7 @@ fn i18n_payload() -> Value {
             "appTitle": "Litematica 备货单",
             "offlineMode": "本机预览状态，非多人同步",
             "syncMode": "多人同步模式",
+            "multiPreviewWarning": "这是多人协作包，请运行启动脚本；直接打开只能预览，不能同步。",
             "lastSync": "最近同步",
             "participants": "参与人数",
             "currentId": "当前 ID",
@@ -408,6 +545,7 @@ fn i18n_payload() -> Value {
             "appTitle": "Litematica Stockpile",
             "offlineMode": "Local preview state, not multiplayer sync",
             "syncMode": "Multiplayer sync mode",
+            "multiPreviewWarning": "This is a multiplayer package. Run the start script; opening index.html directly is preview-only and cannot sync.",
             "lastSync": "Last sync",
             "participants": "Participants",
             "currentId": "Current ID",
@@ -496,28 +634,82 @@ fn i18n_payload() -> Value {
     })
 }
 
-fn summary(output_path: &Path, payload: &StockpileZipPayload) -> StockpileZipSummary {
+fn summary(
+    output_path: &Path,
+    payload: &StockpileZipPayload,
+    mode: StockpileExportMode,
+) -> StockpileZipSummary {
+    let mut files = vec![
+        "index.html".to_string(),
+        "assets/app.css".to_string(),
+        "assets/app.js".to_string(),
+        "data/manifest.json".to_string(),
+        "data/materials.json".to_string(),
+        "data/recipe_status.json".to_string(),
+        "data/recipe_trees.json".to_string(),
+        "data/icons.json".to_string(),
+        "data/item_names.json".to_string(),
+        "data/i18n.json".to_string(),
+        format!("assets/icons/*.png ({})", payload.icon_files.len()),
+    ];
+    if mode == StockpileExportMode::Multi {
+        files.extend([
+            "db/stockpile.sqlite".to_string(),
+            "server/windows/start.cmd".to_string(),
+            "server/linux-x64/start.sh".to_string(),
+            "server/macos-x64/start.sh".to_string(),
+            "server/macos-arm64/start.sh".to_string(),
+            "README.txt".to_string(),
+        ]);
+    }
     StockpileZipSummary {
         output: output_path.to_path_buf(),
         source_file: payload.manifest.source_file.clone(),
         minecraft_version: payload.manifest.minecraft_version.clone(),
         material_count: payload.manifest.material_count,
         recipe_status: payload.manifest.recipe_status.clone(),
-        files: vec![
-            "index.html".to_string(),
-            "assets/app.css".to_string(),
-            "assets/app.js".to_string(),
-            "data/manifest.json".to_string(),
-            "data/materials.json".to_string(),
-            "data/recipe_status.json".to_string(),
-            "data/recipe_trees.json".to_string(),
-            "data/icons.json".to_string(),
-            "data/item_names.json".to_string(),
-            "data/i18n.json".to_string(),
-            format!("assets/icons/*.png ({})", payload.icon_files.len()),
-        ],
+        files,
+        mode: mode.as_str().to_string(),
     }
 }
+
+const WINDOWS_START_CMD: &str = r#"@echo off
+setlocal
+cd /d "%~dp0\..\.."
+set BIND=0.0.0.0:8787
+echo Starting stockpile server at http://127.0.0.1:8787/
+server\windows\stockpile_server.exe --root . --bind %BIND%
+pause
+"#;
+
+const UNIX_START_SH: &str = r#"#!/usr/bin/env sh
+set -eu
+cd "$(dirname "$0")/../.."
+BIND="${BIND:-0.0.0.0:8787}"
+echo "Starting stockpile server at http://127.0.0.1:${BIND##*:}/"
+exec "$(dirname "$0")/stockpile_server" --root . --bind "$BIND"
+"#;
+
+const MULTI_README: &str = r#"Litematica-BA Stockpile Multiplayer Package
+
+This package contains precomputed stockpile materials, recipe trees, icons, i18n data, and an initial SQLite database.
+
+Do not upload .litematic files to the server. The deployment server only hosts this package and writes db/stockpile.sqlite.
+
+Windows:
+  Double-click server/windows/start.cmd
+
+Linux x64:
+  chmod +x server/linux-x64/start.sh server/linux-x64/stockpile_server
+  ./server/linux-x64/start.sh
+
+macOS:
+  chmod +x server/macos-*/start.sh server/macos-*/stockpile_server
+  ./server/macos-arm64/start.sh
+
+Default URL:
+  http://127.0.0.1:8787/
+"#;
 
 const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="zh-CN">
@@ -988,9 +1180,16 @@ mod tests {
         let materials = stockpile::build_materials_data(&input, false, Some("1.21.10"))
             .expect("materials data");
         let recipe_status = missing_recipe_status("1.21.10");
-        let payload = build_payload(&input, "1.21.10", materials, recipe_status).expect("payload");
+        let payload = build_payload(
+            &input,
+            "1.21.10",
+            materials,
+            recipe_status,
+            StockpileExportMode::Single,
+        )
+        .expect("payload");
         let output = temp_zip_path("contains");
-        write_zip(&output, &payload).expect("write zip");
+        write_zip(&output, &payload, StockpileExportMode::Single).expect("write zip");
 
         let file = File::open(&output).expect("open zip");
         let mut zip = ZipArchive::new(file).expect("zip archive");
@@ -1067,16 +1266,56 @@ mod tests {
             "1.21.10",
             materials,
             missing_recipe_status("1.21.10"),
+            StockpileExportMode::Single,
         )
         .expect("payload");
         let output = temp_zip_path("missing_recipe");
-        write_zip(&output, &payload).expect("write zip without recipe cache");
+        write_zip(&output, &payload, StockpileExportMode::Single)
+            .expect("write zip without recipe cache");
         let file = File::open(&output).expect("open zip");
         let mut zip = ZipArchive::new(file).expect("zip archive");
         let status: Value =
             serde_json::from_str(&read_zip_entry(&mut zip, "data/recipe_status.json"))
                 .expect("status json");
         assert_eq!(status["status"], json!("missing"));
+        let _ = fs::remove_file(output);
+    }
+
+    #[test]
+    fn stockpile_multi_zip_contains_db_and_start_scripts() {
+        let input = fixture_path();
+        let materials = stockpile::build_materials_data(&input, false, Some("1.21.10"))
+            .expect("materials data");
+        let payload = build_payload(
+            &input,
+            "1.21.10",
+            materials,
+            missing_recipe_status("1.21.10"),
+            StockpileExportMode::Multi,
+        )
+        .expect("payload");
+        let output = temp_zip_path("multi_package");
+        write_zip(&output, &payload, StockpileExportMode::Multi).expect("write multi zip");
+        let file = File::open(&output).expect("open zip");
+        let mut zip = ZipArchive::new(file).expect("zip archive");
+        for name in [
+            "db/stockpile.sqlite",
+            "server/windows/start.cmd",
+            "server/linux-x64/start.sh",
+            "server/macos-x64/start.sh",
+            "server/macos-arm64/start.sh",
+            "README.txt",
+        ] {
+            zip.by_name(name)
+                .unwrap_or_else(|_| panic!("missing {name}"));
+        }
+        let manifest: Value = serde_json::from_str(&read_zip_entry(&mut zip, "data/manifest.json"))
+            .expect("manifest json");
+        assert_eq!(manifest["export_mode"], json!("multi"));
+        let index = read_zip_entry(&mut zip, "index.html");
+        assert!(index.contains("window.__STOCKPILE_DATA__"));
+        let app_js = read_zip_entry(&mut zip, "assets/app.js");
+        assert!(app_js.contains("multiPreviewWarning"));
         let _ = fs::remove_file(output);
     }
 
@@ -1137,10 +1376,11 @@ mod tests {
             &mut materials,
             available_recipe_status("1.21.10"),
             trees,
+            StockpileExportMode::Single,
         )
         .expect("payload");
         let output = temp_zip_path("recipe_tree");
-        write_zip(&output, &payload).expect("write zip");
+        write_zip(&output, &payload, StockpileExportMode::Single).expect("write zip");
         let file = File::open(&output).expect("open zip");
         let mut zip = ZipArchive::new(file).expect("zip archive");
         let trees_json: Value =

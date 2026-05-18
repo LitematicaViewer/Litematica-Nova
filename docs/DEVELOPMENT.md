@@ -39,8 +39,10 @@ cargo fmt
 cargo test
 cargo build --release --bin litematica_core
 cargo build --release --bin litematica_native_viewer
+cargo build --release --bin stockpile_server
 Copy-Item target\release\litematica_core.exe ..\..\bin\viewer-backend\litematica_core.exe -Force
 Copy-Item target\release\litematica_native_viewer.exe ..\..\bin\viewer-backend\litematica_native_viewer.exe -Force
+Copy-Item target\release\stockpile_server.exe ..\..\bin\viewer-backend\stockpile_server.exe -Force
 ```
 
 不要为了验证反复启动 Tauri UI。需要人工验收时再启动：
@@ -204,8 +206,10 @@ CLI：
 bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile export-data --input <file.litematic> --output data\stockpile\projects\<name>\materials.json
-bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>.stockpile.zip --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>.stockpile.zip --minecraft-version 1.21.10 --mode single
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>-multi.stockpile.zip --minecraft-version 1.21.10 --mode multi
 bin\viewer-backend\litematica_core.exe stockpile serve --zip data\stockpile\exports\<name>.stockpile.zip --bind 127.0.0.1:8787
+bin\viewer-backend\stockpile_server.exe --root <unzipped-stockpile-dir> --bind 127.0.0.1:8787
 bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpile\exports\<name>.stockpile.zip
 bin\viewer-backend\litematica_core.exe stockpile session-export --zip data\stockpile\exports\<name>.stockpile.zip --output data\stockpile\sessions\<name>.state.json
 bin\viewer-backend\litematica_core.exe stockpile session-reset --zip data\stockpile\exports\<name>.stockpile.zip --yes
@@ -217,11 +221,13 @@ bin\viewer-backend\litematica_core.exe stockpile config-reset --zip data\stockpi
 
 `recipe-fetch` 通过 provider 从 Mojang 官方 version manifest 定位对应 client jar，提取 `data/minecraft/recipe/*.json` 后生成本地缓存。无缓存时 `export-data` 不失败，材料项标记为 `missing`；缓存损坏或版本不匹配时标记为 `unresolved`。
 
-`export-zip` 复用 stockpile materials 数据模型，输出可解压后直接打开的单页网页。ZIP 内包含 `index.html`、`assets/app.css`、`assets/app.js`、`assets/icons/*.png`、`data/manifest.json`、`data/materials.json`、`data/recipe_status.json`、`data/recipe_trees.json`、`data/icons.json`、`data/item_names.json` 和 `data/i18n.json`；`index.html` 内嵌 `window.__STOCKPILE_DATA__`，避免 `file://` 下 fetch 本地 JSON 被拦截。离线打开时状态只写入浏览器 localStorage。
+`export-zip --mode single` 复用 stockpile materials 数据模型，输出可解压后直接打开的单页网页。ZIP 内包含 `index.html`、`assets/app.css`、`assets/app.js`、`assets/icons/*.png`、`data/manifest.json`、`data/materials.json`、`data/recipe_status.json`、`data/recipe_trees.json`、`data/icons.json`、`data/item_names.json` 和 `data/i18n.json`；`index.html` 内嵌 `window.__STOCKPILE_DATA__`，避免 `file://` 下 fetch 本地 JSON 被拦截。离线打开时状态只写入浏览器 localStorage。
+
+`export-zip --mode multi` 在 single 内容基础上额外写入 `db/stockpile.sqlite`、`server/<platform>/start.*`、可用平台的 `stockpile_server` 二进制和 `README.txt`。部署端只需要解压 ZIP 并运行对应启动脚本；`stockpile_server` 只托管静态文件、读取 `data/*.json`、读写 `db/stockpile.sqlite` 并提供 claim/note/auth/admin/whitelist/audit API，不读取 `.litematic`、不做材料统计、不拉 recipe、不触碰 viewer/native/Full Mode V2/MC Light。当前平台无法构建的 Linux/macOS server 会写入 README 占位说明，后续由 CI 或对应平台构建补齐。
 
 `recipe_trees.json` 由本地 recipe cache 解析生成，不联网。解析器会递归生成可视化合成链节点，支持 `minecraft:crafting_shaped`、`minecraft:crafting_shapeless`、`minecraft:stonecutting`、cooking 类配方、smithing transform/trim 和 `minecraft:crafting_special_*`。tag 输入只显示 tag 节点并标记 unresolved，不猜具体材料；special recipe 标记为 `special_recipe`；找不到支持配方时标记 `no_recipe`。ZIP 网页展开材料时使用节点卡片、工艺 badge、批次数、余量和父子连线展示完整合成链。
 
-`serve` 只读取 stockpile ZIP，不回写 ZIP。会话状态写入 `data/stockpile/sessions/<zip-stem>.sqlite`，表为 `meta`、`participants` 和 `material_claims`。HTTP API 包括 `GET /api/project`、`GET /api/state`、`POST /api/participants`、`PUT /api/materials/:material_id/claims/:user_id` 和 `DELETE /api/materials/:material_id/claims/:user_id`。serve 模式页面每数秒轮询状态；同一材料允许多个用户同时 claim，取消参与会删除对应 claim。
+`litematica_core stockpile serve --zip` 保留为 legacy/internal 兼容入口，只读取 stockpile ZIP，不回写 ZIP。新部署优先使用 `stockpile_server --root <解压目录>`，会话状态写入解压目录下的 `db/stockpile.sqlite`。HTTP API 包括 `GET /api/project`、`GET /api/state`、`POST /api/participants`、`PUT /api/materials/:material_id/claims/:user_id` 和 `DELETE /api/materials/:material_id/claims/:user_id`。serve 模式页面每数秒轮询状态；同一材料允许多个用户同时 claim，取消参与会删除对应 claim。
 
 `session-info`、`session-reset`、`session-export` 和 `session-import` 只操作 `data/stockpile/sessions/<zip-stem>.sqlite` 或 JSON 状态文件，不修改 ZIP。`session-reset` 没有 `--yes` 时只返回确认提示；显式 `--yes` 会清空 claims、保留 participants，并把 session 重新绑定到当前 ZIP hash，便于同名 ZIP 重导出后的恢复。`session-import` 会校验 session export schema 和 ZIP hash，默认 merge/upsert，`--replace` 时先清空 claims。
 

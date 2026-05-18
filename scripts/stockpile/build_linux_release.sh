@@ -28,13 +28,13 @@ if [[ ! -f "${VIEWER_CORE_DIR}/Cargo.toml" ]]; then
 fi
 
 cd "${VIEWER_CORE_DIR}"
-cargo build --release --bin litematica_core
+cargo build --release --bin stockpile_server
 
-BINARY="${VIEWER_CORE_DIR}/target/release/litematica_core"
+BINARY="${VIEWER_CORE_DIR}/target/release/stockpile_server"
 if [[ ! -x "${BINARY}" ]]; then
-  echo "Linux litematica_core was not produced at: ${BINARY}" >&2
+  echo "Linux stockpile_server was not produced at: ${BINARY}" >&2
   exit 1
 fi
 
-echo "Linux litematica_core:"
+echo "Linux stockpile_server:"
 echo "${BINARY}"
