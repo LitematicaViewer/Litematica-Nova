@@ -44,6 +44,7 @@ pub struct SessionInfoOutput {
     pub zip_path: PathBuf,
     pub session_db: PathBuf,
     pub schema_version: u32,
+    pub zip_hash: String,
     pub participants_count: u64,
     pub claims_count: u64,
     pub materials_count: u64,
@@ -442,13 +443,15 @@ pub fn session_info(zip_path: &Path) -> Result<SessionInfoOutput> {
     let zip_path = absolutize(zip_path)?;
     let project = load_project_from_zip(&zip_path)?;
     let db_path = session_db_path(&zip_path)?;
-    ensure_session_db(&db_path, &zip_hash(&zip_path)?)?;
+    let zip_hash = zip_hash(&zip_path)?;
+    ensure_session_db(&db_path, &zip_hash)?;
     let state = build_state(&db_path, &project.materials)?;
     let summary = summarize_state(&state);
     Ok(SessionInfoOutput {
         zip_path,
         session_db: db_path,
         schema_version: STOCKPILE_SQLITE_SCHEMA_VERSION,
+        zip_hash,
         participants_count: summary.participants_count,
         claims_count: summary.claims_count,
         materials_count: summary.materials_count,
@@ -463,7 +466,7 @@ pub fn session_info(zip_path: &Path) -> Result<SessionInfoOutput> {
 pub fn session_reset(zip_path: &Path, yes: bool) -> Result<SessionResetOutput> {
     let zip_path = absolutize(zip_path)?;
     let db_path = session_db_path(&zip_path)?;
-    ensure_session_db(&db_path, &zip_hash(&zip_path)?)?;
+    init_db(&db_path)?;
     if !yes {
         return Ok(SessionResetOutput {
             zip_path,
@@ -473,7 +476,19 @@ pub fn session_reset(zip_path: &Path, yes: bool) -> Result<SessionResetOutput> {
         });
     }
     let conn = Connection::open(&db_path)?;
+    let schema_version = meta_value(&conn, "schema_version")?
+        .unwrap_or_default()
+        .parse::<u32>()
+        .unwrap_or(0);
+    if schema_version != STOCKPILE_SQLITE_SCHEMA_VERSION {
+        bail!(
+            "unsupported stockpile sqlite schema_version {}; supported {}; export/reset/import session state",
+            schema_version,
+            STOCKPILE_SQLITE_SCHEMA_VERSION
+        );
+    }
     conn.execute("DELETE FROM material_claims", [])?;
+    set_meta(&conn, "zip_hash", &zip_hash(&zip_path)?)?;
     touch_meta(&conn)?;
     Ok(SessionResetOutput {
         zip_path,
@@ -730,8 +745,10 @@ pub(crate) fn load_project_from_zip(zip_path: &Path) -> Result<StockpileZipPaylo
         item_names: read_json_entry(&mut zip, "data/item_names.json").unwrap_or_else(|_| {
             StockpileItemNamesPayload {
                 schema_version: STOCKPILE_ITEM_NAMES_SCHEMA_VERSION,
+                status: "missing".to_string(),
                 manifest: None,
                 names: BTreeMap::new(),
+                warning: Some("stockpile zip has no item_names payload".to_string()),
             }
         }),
         i18n: read_json_entry(&mut zip, "data/i18n.json").unwrap_or_else(|_| json!({})),
@@ -1133,6 +1150,7 @@ mod tests {
         put_claim(&db, "minecraft:stone", "alex", "preparing", 2).expect("claim");
         let info = session_info(&output).expect("info");
         assert_eq!(info.claims_count, 1);
+        assert_eq!(info.zip_hash, zip_hash(&output).expect("zip hash"));
         let state_path = crate::runtime_paths::stockpile_sessions_root()
             .expect("sessions")
             .join(format!(
@@ -1162,6 +1180,113 @@ mod tests {
         std::fs::write(&path, b"not a zip").expect("bad zip");
         assert!(load_project_from_zip(&path).is_err());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn session_import_merges_by_default() {
+        let fixture = exported_fixture("merge");
+        let db = session_db_path(&fixture).expect("session db");
+        let state_path = temp_session_export("merge");
+        let _ = std::fs::remove_file(&db);
+        put_claim(&db, "minecraft:stone", "alex", "preparing", 2).expect("seed claim");
+        session_export(&fixture, &state_path).expect("export session");
+        put_claim(&db, "minecraft:glass", "sam", "done", 5).expect("extra claim");
+
+        let imported = session_import(&fixture, &state_path, false).expect("merge import");
+        assert_eq!(imported.imported_claims, 1);
+        let info = session_info(&fixture).expect("info");
+        assert_eq!(info.claims_count, 2);
+
+        cleanup_fixture(&fixture, &db, &state_path);
+    }
+
+    #[test]
+    fn session_import_replace_clears_existing_claims() {
+        let fixture = exported_fixture("replace");
+        let db = session_db_path(&fixture).expect("session db");
+        let state_path = temp_session_export("replace");
+        let _ = std::fs::remove_file(&db);
+        put_claim(&db, "minecraft:stone", "alex", "preparing", 2).expect("seed claim");
+        session_export(&fixture, &state_path).expect("export session");
+        put_claim(&db, "minecraft:glass", "sam", "done", 5).expect("extra claim");
+
+        let imported = session_import(&fixture, &state_path, true).expect("replace import");
+        assert_eq!(imported.imported_claims, 1);
+        let state = build_state(
+            &db,
+            &load_project_from_zip(&fixture).expect("project").materials,
+        )
+        .expect("state");
+        assert!(state.materials["minecraft:glass"].claims.is_empty());
+        assert_eq!(session_info(&fixture).expect("info").claims_count, 1);
+
+        cleanup_fixture(&fixture, &db, &state_path);
+    }
+
+    #[test]
+    fn session_import_rejects_zip_hash_mismatch() {
+        let fixture = exported_fixture("hash_mismatch");
+        let db = session_db_path(&fixture).expect("session db");
+        let state_path = temp_session_export("hash_mismatch");
+        let _ = std::fs::remove_file(&db);
+        put_claim(&db, "minecraft:stone", "alex", "preparing", 2).expect("seed claim");
+        let mut exported = session_export(&fixture, &state_path).expect("export session");
+        exported.zip_hash = "not-the-right-zip".to_string();
+        fs::write(
+            &state_path,
+            serde_json::to_vec_pretty(&exported).expect("serialize export"),
+        )
+        .expect("rewrite export");
+
+        assert!(session_import(&fixture, &state_path, false).is_err());
+
+        cleanup_fixture(&fixture, &db, &state_path);
+    }
+
+    #[test]
+    fn session_reset_yes_rebinds_changed_zip_hash() {
+        let fixture = exported_fixture("reset_rebind");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        ensure_session_db(&db, "old-hash").expect("seed old hash");
+        put_claim(&db, "minecraft:stone", "alex", "preparing", 2).expect("claim");
+
+        let reset = session_reset(&fixture, true).expect("reset changed zip");
+        assert!(reset.reset);
+        let conn = Connection::open(&db).expect("open db");
+        assert_eq!(
+            meta_value(&conn, "zip_hash").expect("zip hash"),
+            Some(zip_hash(&fixture).expect("fixture hash"))
+        );
+        assert_eq!(session_info(&fixture).expect("info").claims_count, 0);
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn load_project_rejects_unsupported_zip_schema() {
+        let fixture = exported_fixture("unsupported_schema");
+        let mut project = load_project_from_zip(&fixture).expect("load project");
+        project.manifest.schema_version = 999;
+
+        assert!(validate_project_schema(&project).is_err());
+
+        let db = session_db_path(&fixture).expect("session db");
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn ensure_session_db_rejects_schema_mismatch() {
+        let fixture = exported_fixture("sqlite_schema");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        init_db(&db).expect("init db");
+        let conn = Connection::open(&db).expect("open db");
+        set_meta(&conn, "schema_version", "999").expect("set schema");
+
+        assert!(ensure_session_db(&db, &zip_hash(&fixture).expect("zip hash")).is_err());
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
     }
 
     fn fixture_materials() -> StockpileMaterialsData {
@@ -1228,5 +1353,39 @@ mod tests {
             std::process::id(),
             id
         ))
+    }
+
+    fn exported_fixture(name: &str) -> PathBuf {
+        let input = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("stats_water_fixture.litematic");
+        let output = temp_zip_path(name);
+        crate::stockpile_zip::export_stockpile_zip(&input, Some(&output), false, Some("1.21.10"))
+            .expect("export zip");
+        output
+    }
+
+    fn temp_zip_path(name: &str) -> PathBuf {
+        crate::runtime_paths::stockpile_exports_root()
+            .expect("exports root")
+            .join(format!("stockpile_serve_{name}_{}.zip", std::process::id()))
+    }
+
+    fn temp_session_export(name: &str) -> PathBuf {
+        crate::runtime_paths::stockpile_sessions_root()
+            .expect("sessions root")
+            .join(format!(
+                "stockpile_serve_{name}_{}.json",
+                std::process::id()
+            ))
+    }
+
+    fn cleanup_fixture(zip: &Path, db: &Path, extra: &Path) {
+        let _ = std::fs::remove_file(zip);
+        let _ = std::fs::remove_file(db);
+        if !extra.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(extra);
+        }
     }
 }

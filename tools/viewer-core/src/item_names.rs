@@ -35,8 +35,10 @@ pub struct ItemNamesManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockpileItemNamesPayload {
     pub schema_version: u32,
+    pub status: String,
     pub manifest: Option<ItemNamesManifest>,
     pub names: BTreeMap<String, BTreeMap<String, String>>,
+    pub warning: Option<String>,
 }
 
 pub fn resolve_stockpile_item_names(
@@ -44,22 +46,31 @@ pub fn resolve_stockpile_item_names(
     materials: &mut StockpileMaterialsData,
     recipe_trees: &BTreeMap<String, RecipeTreeNode>,
 ) -> Result<StockpileItemNamesPayload> {
-    let keys = collect_name_keys(materials, recipe_trees);
     let cache = LangCache::load_or_fetch(minecraft_version).unwrap_or_else(|_| LangCache::empty());
+    Ok(build_payload_from_cache(materials, recipe_trees, cache))
+}
+
+fn build_payload_from_cache(
+    materials: &mut StockpileMaterialsData,
+    recipe_trees: &BTreeMap<String, RecipeTreeNode>,
+    cache: LangCache,
+) -> StockpileItemNamesPayload {
+    let keys = collect_name_keys(materials, recipe_trees);
+    let minecraft_keys = keys
+        .into_iter()
+        .filter(|key| key.starts_with("minecraft:"))
+        .collect::<BTreeSet<_>>();
     let mut names = BTreeMap::<String, BTreeMap<String, String>>::new();
-    for key in keys {
-        if !key.starts_with("minecraft:") {
-            continue;
-        }
+    for key in &minecraft_keys {
         let mut localized = BTreeMap::<String, String>::new();
-        if let Some(value) = cache.lookup("en-US", &key) {
+        if let Some(value) = cache.lookup("en-US", key) {
             localized.insert("en-US".to_string(), value);
         }
-        if let Some(value) = cache.lookup("zh-CN", &key) {
+        if let Some(value) = cache.lookup("zh-CN", key) {
             localized.insert("zh-CN".to_string(), value);
         }
         if !localized.is_empty() {
-            names.insert(key, localized);
+            names.insert(key.clone(), localized);
         }
     }
     for material in &mut materials.materials {
@@ -67,11 +78,29 @@ pub fn resolve_stockpile_item_names(
             material.display_names = localized.clone();
         }
     }
-    Ok(StockpileItemNamesPayload {
+    let has_missing_locale = names
+        .values()
+        .any(|localized| !localized.contains_key("en-US") || !localized.contains_key("zh-CN"));
+    let (status, warning) = if cache.manifest.is_none() {
+        (
+            "missing".to_string(),
+            Some("item name cache is unavailable".to_string()),
+        )
+    } else if names.len() < minecraft_keys.len() || has_missing_locale {
+        (
+            "partial".to_string(),
+            Some("item name cache is missing some project translations".to_string()),
+        )
+    } else {
+        ("available".to_string(), None)
+    };
+    StockpileItemNamesPayload {
         schema_version: STOCKPILE_ITEM_NAMES_SCHEMA_VERSION,
+        status,
         manifest: cache.manifest,
         names,
-    })
+        warning,
+    }
 }
 
 fn collect_name_keys(
@@ -444,6 +473,9 @@ fn to_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stockpile::{
+        StockpileMaterialItem, StockpileMaterialsData, StockpileProjectInfo, StockpileSummary,
+    };
 
     #[test]
     fn lookup_falls_back_when_cache_missing() {
@@ -472,5 +504,130 @@ mod tests {
             cache.lookup("en-US", "minecraft:iron_ingot").as_deref(),
             Some("Iron Ingot")
         );
+    }
+
+    #[test]
+    fn payload_marks_missing_cache_and_exports_no_names() {
+        let mut materials = fixture_materials();
+        let payload =
+            build_payload_from_cache(&mut materials, &BTreeMap::new(), LangCache::empty());
+        assert_eq!(payload.status, "missing");
+        assert!(payload.warning.is_some());
+        assert!(payload.names.is_empty());
+        assert!(materials.materials[0].display_names.is_empty());
+    }
+
+    #[test]
+    fn payload_only_exports_project_keys_and_localizes_materials() {
+        let mut cache = LangCache::empty();
+        cache.manifest = Some(ItemNamesManifest {
+            schema_version: STOCKPILE_ITEM_NAMES_SCHEMA_VERSION,
+            minecraft_version: "1.21.10".to_string(),
+            source: "test".to_string(),
+            fetched_at: 1,
+            hash: "hash".to_string(),
+            en_us_count: 3,
+            zh_cn_count: 3,
+        });
+        cache
+            .en_us
+            .insert("block.minecraft.stone".to_string(), "Stone".to_string());
+        cache
+            .zh_cn
+            .insert("block.minecraft.stone".to_string(), "石头".to_string());
+        cache
+            .en_us
+            .insert("item.minecraft.barrier".to_string(), "Barrier".to_string());
+        cache
+            .zh_cn
+            .insert("item.minecraft.barrier".to_string(), "屏障".to_string());
+        cache
+            .en_us
+            .insert("item.minecraft.unused".to_string(), "Unused".to_string());
+        cache
+            .zh_cn
+            .insert("item.minecraft.unused".to_string(), "未使用".to_string());
+
+        let mut materials = fixture_materials();
+        let payload = build_payload_from_cache(&mut materials, &BTreeMap::new(), cache);
+
+        assert_eq!(payload.status, "available");
+        assert_eq!(payload.names.len(), 2);
+        assert!(payload.names.contains_key("minecraft:stone"));
+        assert!(payload.names.contains_key("minecraft:barrier"));
+        assert!(!payload.names.contains_key("minecraft:unused"));
+        assert_eq!(
+            materials.materials[0]
+                .display_names
+                .get("zh-CN")
+                .map(String::as_str),
+            Some("石头")
+        );
+    }
+
+    #[test]
+    fn payload_marks_partial_when_project_translation_is_incomplete() {
+        let mut cache = LangCache::empty();
+        cache.manifest = Some(ItemNamesManifest {
+            schema_version: STOCKPILE_ITEM_NAMES_SCHEMA_VERSION,
+            minecraft_version: "1.21.10".to_string(),
+            source: "test".to_string(),
+            fetched_at: 1,
+            hash: "hash".to_string(),
+            en_us_count: 1,
+            zh_cn_count: 0,
+        });
+        cache
+            .en_us
+            .insert("block.minecraft.stone".to_string(), "Stone".to_string());
+
+        let mut materials = fixture_materials();
+        let payload = build_payload_from_cache(&mut materials, &BTreeMap::new(), cache);
+
+        assert_eq!(payload.status, "partial");
+        assert!(payload.warning.is_some());
+        assert_eq!(
+            payload.names["minecraft:stone"]
+                .get("en-US")
+                .map(String::as_str),
+            Some("Stone")
+        );
+    }
+
+    fn fixture_materials() -> StockpileMaterialsData {
+        StockpileMaterialsData {
+            schema_version: crate::stockpile_schema::STOCKPILE_MATERIALS_SCHEMA_VERSION,
+            project: StockpileProjectInfo {
+                source_file: "fixture.litematic".to_string(),
+                created_at: 1,
+                data_version: 3953,
+                regions: vec!["main".to_string()],
+            },
+            summary: StockpileSummary {
+                total_blocks: 1,
+                unique_materials: 1,
+                total_stacks: 1,
+                estimated_shulker_boxes: 1,
+            },
+            materials: vec![StockpileMaterialItem {
+                id: "stone".to_string(),
+                namespace_id: "minecraft:stone".to_string(),
+                display_name: "Stone".to_string(),
+                required_count: 1,
+                stack_size: 64,
+                stacks: 0,
+                remainder: 1,
+                shulker_boxes: 1,
+                category: "Other".to_string(),
+                category_icon: "minecraft:barrier".to_string(),
+                item_icon_key: "minecraft:stone".to_string(),
+                icon_path: String::new(),
+                icon_available: false,
+                display_names: BTreeMap::new(),
+                source_regions: vec!["main".to_string()],
+                recipe_status: "missing".to_string(),
+                craft_complexity: 0,
+            }],
+        }
     }
 }

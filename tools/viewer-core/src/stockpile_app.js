@@ -353,8 +353,8 @@
           ${hasChildren ? `<button class="button tree-toggle" data-action="tree-toggle" data-tree-id="${escapeAttr(nodeId)}">${collapsed ? '+' : '-'}</button>` : ''}
         </div>
         <div class="recipe-grid">
-          ${recipeStat(t('recipe'), node.recipe_type || 'n/a')}
-          ${recipeStat(t('process'), node.process_type || 'n/a')}
+          ${recipeStat(t('recipe'), recipeTypeLabel(node.recipe_type))}
+          ${recipeStat(t('process'), processLabel(node))}
           ${recipeStat(t('outputEach'), node.output_count)}
           ${recipeStat(t('batches'), node.batch_count)}
           ${recipeStat(t('extra'), node.extra_output)}
@@ -371,8 +371,35 @@
     return `<div class="recipe-stat"><span>${escapeHtml(label)}</span>${escapeHtml(String(value ?? 0))}</div>`;
   }
   function processLabel(node) {
-    const map = { craft: 'Craft', stonecut: 'Stonecut', smelt: 'Smelt', blast: 'Blast', smoke: 'Smoke', campfire: 'Campfire', smith: 'Smith', smith_trim: 'Smith', special: 'Special', tag: 'Tag', unresolved: 'Unresolved' };
-    return escapeHtml(map[node.process_type] || node.process_type || node.recipe_type || 'Recipe');
+    const map = {
+      craft: 'processCraft',
+      stonecut: 'processStonecut',
+      smelt: 'processSmelt',
+      blast: 'processBlast',
+      smoke: 'processSmoke',
+      campfire: 'processCampfire',
+      smith: 'processSmith',
+      smith_trim: 'processSmith',
+      special: 'processSpecial',
+      tag: 'processTag',
+      unresolved: 'processUnresolved'
+    };
+    return escapeHtml(t(map[node.process_type] || 'processUnresolved'));
+  }
+  function recipeTypeLabel(recipeType) {
+    const map = {
+      'minecraft:crafting_shaped': 'recipeCraftingShaped',
+      'minecraft:crafting_shapeless': 'recipeCraftingShapeless',
+      'minecraft:stonecutting': 'recipeStonecutting',
+      'minecraft:smelting': 'recipeSmelting',
+      'minecraft:blasting': 'recipeBlasting',
+      'minecraft:smoking': 'recipeSmoking',
+      'minecraft:campfire_cooking': 'recipeCampfireCooking',
+      'minecraft:smithing_transform': 'recipeSmithingTransform',
+      'minecraft:smithing_trim': 'recipeSmithingTrim'
+    };
+    if ((recipeType || '').startsWith('minecraft:crafting_special_')) return t('recipeSpecial');
+    return t(map[recipeType] || 'processUnresolved');
   }
   function renderPossibleItems(node) {
     const values = (node.possible_items || []).slice(0, 12);
