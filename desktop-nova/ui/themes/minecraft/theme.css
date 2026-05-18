@@ -1,0 +1,18 @@
+@import "./nav-icons.css";
+@import "./widget/button.css";
+@import "./widget/nav.css";
+@import "./widget/check.css";
+@import "./widget/input.css";
+@import "./widget/popup.css";
+@import "./widget/range.css";
+@import "./widget/table.css";
+@import "./widget/text.css";
+@import "./widget/dialog.css";
+@import "./widget/subwindow.css";
+@import "./widget/content.css";
+
+:root {
+    --ln-ui-background-color: #3c3c3c;
+    --ln-navigation-background-color: #3c3c3c;
+    --ln-file-icon-size: 32px;
+}

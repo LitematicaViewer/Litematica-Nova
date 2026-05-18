@@ -1,0 +1,128 @@
+.dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgb(0 0 0 / 42%);
+}
+
+.dialog-surface {
+    display: flex;
+    width: min(100%, 640px);
+    max-height: min(90vh, 820px);
+    flex-direction: column;
+    overflow: hidden;
+    color: var(--ln-body-text-color, CanvasText);
+    background: var(--ln-ui-background-color, Canvas);
+    border: 1px solid ThreeDShadow;
+}
+
+.dialog-surface-sm {
+    width: min(100%, 440px);
+}
+
+.dialog-surface-md {
+    width: min(100%, 640px);
+}
+
+.dialog-surface-lg {
+    width: min(100%, 840px);
+}
+
+.dialog-header {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px 0;
+}
+
+.dialog-title-stack {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.dialog-title {
+    margin: 0;
+    font-size: 1.1em;
+    font-weight: 700;
+}
+
+.dialog-subtitle {
+    margin: 0;
+}
+
+.dialog-close-button {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    padding: 0;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dialog-body {
+    display: flex;
+    min-height: 0;
+    padding: 16px;
+    flex-direction: column;
+    gap: 12px;
+    overflow: auto;
+}
+
+.dialog-footer {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 0 16px 16px;
+}
+
+.dialog-form-grid {
+    display: grid;
+    grid-template-columns: minmax(96px, 140px) minmax(0, 1fr);
+    gap: 10px 12px;
+    align-items: center;
+}
+
+.dialog-label {
+    color: var(--ln-muted-text-color, GrayText);
+}
+
+.dialog-field-stack {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.dialog-path-preview {
+    padding: 8px 10px;
+    overflow-wrap: anywhere;
+    background: rgb(127 127 127 / 10%);
+    border: 1px solid rgb(127 127 127 / 18%);
+}
+
+.dialog-message {
+    margin: 0;
+    padding: 8px 10px;
+    white-space: pre-wrap;
+    border: 1px solid rgb(127 127 127 / 18%);
+    background: rgb(127 127 127 / 10%);
+}
+
+.dialog-message-error {
+    color: #ffb3b3;
+    background: rgb(255 0 0 / 10%);
+    border-color: rgb(255 0 0 / 18%);
+}

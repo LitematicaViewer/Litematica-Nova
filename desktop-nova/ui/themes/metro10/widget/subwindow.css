@@ -1,0 +1,37 @@
+/* Metro10 child-window styling */
+.dialog-content {
+    border-radius: 0;
+}
+
+button.subwindow-close-button,
+button.dialog-close-button {
+    width: var(--ln-metro10-window-close-width);
+    min-width: var(--ln-metro10-window-close-width);
+    max-width: var(--ln-metro10-window-close-width);
+    height: var(--ln-metro10-window-close-height);
+    min-height: var(--ln-metro10-window-close-height);
+    max-height: var(--ln-metro10-window-close-height);
+    flex: 0 0 auto;
+    margin: -9px -13px 0 0;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    background: transparent url("../resource/button/windowClose_normal.png") center / auto no-repeat;
+    color: transparent;
+}
+
+button.subwindow-overlay-close-button {
+    margin: 0;
+}
+
+button.subwindow-close-button:hover:not(:disabled),
+button.dialog-close-button:hover:not(:disabled) {
+    border: 0;
+    background-image: url("../resource/button/windowClose_hover.png");
+}
+
+button.subwindow-close-button:active:not(:disabled),
+button.dialog-close-button:active:not(:disabled) {
+    background-color: transparent;
+    background-image: url("../resource/button/windowClose_hover.png");
+}

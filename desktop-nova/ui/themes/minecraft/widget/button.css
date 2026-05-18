@@ -1,0 +1,104 @@
+:root {
+    --ln-minecraft-button-border: 4px;
+    --ln-minecraft-button-height: 44px;
+}
+
+button,
+input[type="button"],
+input[type="submit"],
+input[type="reset"] {
+    --ln-minecraft-button-image: url("../resource/button/button_normal_min.png");
+
+    box-sizing: border-box;
+    display: inline-flex;
+    height: var(--ln-minecraft-button-height);
+    min-height: var(--ln-minecraft-button-height);
+    align-items: center;
+    justify-content: center;
+    padding: 4px 12px;
+    border: var(--ln-minecraft-button-border) solid transparent;
+    border-radius: 0;
+    border-image-source: var(--ln-minecraft-button-image);
+    border-image-slice: 4 fill;
+    border-image-width: var(--ln-minecraft-button-border);
+    border-image-repeat: stretch;
+    appearance: none;
+    background: transparent;
+    color: #ffffff;
+    text-align: center;
+    cursor: default;
+}
+
+button:hover:not(:disabled),
+input[type="button"]:hover:not(:disabled),
+input[type="submit"]:hover:not(:disabled),
+input[type="reset"]:hover:not(:disabled) {
+    --ln-minecraft-button-image: url("../resource/button/button_hover_min.png");
+    color: #ffff00;
+}
+
+button:active:not(:disabled),
+input[type="button"]:active:not(:disabled),
+input[type="submit"]:active:not(:disabled),
+input[type="reset"]:active:not(:disabled) {
+    --ln-minecraft-button-image: url("../resource/button/button_normal_min.png");
+    color: #ffff00;
+}
+
+button[aria-pressed="true"] {
+    --ln-minecraft-button-image: url("../resource/button/button_check_min.png");
+    color: #ffff00;
+}
+
+button[aria-pressed="true"]:hover:not(:disabled) {
+    --ln-minecraft-button-image: url("../resource/button/button_check_hover_min.png");
+    color: #ffff00;
+}
+
+button:disabled,
+input[type="button"]:disabled,
+input[type="submit"]:disabled,
+input[type="reset"]:disabled {
+    --ln-minecraft-button-image: url("../resource/button/button_disabled_min.png");
+    color: #808080;
+}
+
+button:focus-visible,
+input[type="button"]:focus-visible,
+input[type="submit"]:focus-visible,
+input[type="reset"]:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+}
+
+button.material-list-close-button {
+    width: var(--ln-minecraft-button-height);
+    min-width: var(--ln-minecraft-button-height);
+    max-width: var(--ln-minecraft-button-height);
+    height: var(--ln-minecraft-button-height);
+    min-height: var(--ln-minecraft-button-height);
+    max-height: var(--ln-minecraft-button-height);
+    flex: 0 0 auto;
+    margin: -8px -12px 0 0;
+    padding: 0;
+    border: 0;
+    border-image-source: none;
+    overflow: hidden;
+    image-rendering: pixelated;
+    background: transparent url("../resource/button/windowClose_normal.png") center / contain no-repeat;
+    color: transparent;
+}
+
+button.material-list-close-button:hover:not(:disabled) {
+    --ln-minecraft-button-image: none;
+    border-image-source: none;
+    background-image: url("../resource/button/windowClose_hover.png");
+    color: transparent;
+}
+
+button.material-list-close-button:active:not(:disabled) {
+    --ln-minecraft-button-image: none;
+    border-image-source: none;
+    background-image: url("../resource/button/windowClose_hover.png");
+    color: transparent;
+}

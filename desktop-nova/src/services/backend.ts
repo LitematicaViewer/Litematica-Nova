@@ -11,13 +11,18 @@ export {
   saveUserConfig,
   setUserConfigDir,
 } from "../platform";
-export type { PathInfo, UserConfig, UserConfigInfo } from "../platform";
+export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo } from "../platform";
 
 export {
   checkFileExists,
+  copyFileToDirectory,
+  listDirectoryEntries,
+  listLitematicFileEntriesInDirectory,
   getAppDataFilePath as getUserConfigFilePath,
+  listLitematicFilesInDirectory,
   readAppDataFile as readUserConfigFile,
   readImageBase64,
+  readProjectionPreviewImage,
   readWorkspaceFile,
   writeAppDataFile as writeUserConfigFile,
   writeTextFileAbsolute,
@@ -40,7 +45,13 @@ export {
 } from "../platform/backendProcess";
 export type { BackendTrace, CacheBuildLaunch, CacheBuildSnapshot } from "../platform/backendProcess";
 
-export { startNativeViewer } from "../platform/nativeViewer";
+export {
+  openLocalLibraryFoldersWindow,
+  openMaterialListWindow,
+  openRedenLibraryWindow,
+  openUiDemoWindow,
+  startNativeViewer,
+} from "../platform/nativeViewer";
 export { generatePreviewImage, renderPreviewImage } from "../platform/previewImage";
 export type { RenderPreviewOutput } from "../platform/previewImage";
 

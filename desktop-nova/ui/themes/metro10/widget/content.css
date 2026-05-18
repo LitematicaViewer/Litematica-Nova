@@ -1,0 +1,6 @@
+:root {
+    --ln-card-border-width: 2px;
+    --ln-card-border-color: #999999;
+    --ln-card-border-color-active: #0078d7;
+    --ln-card-background-color-active: #cce8ff;
+}

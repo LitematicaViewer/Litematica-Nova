@@ -1,0 +1,17 @@
+@font-face {
+    font-family: "Unifont";
+    /* src: url("../resource/font/UnifontExMono.woff2") format("woff2"); */
+    src: url("../resource/font/unifont-16.0.04.ttf") format("truetype");
+    font-style: normal;
+    font-weight: normal;
+}
+
+:root {
+    --ln-body-font-family: "Unifont", monospace;
+    --ln-body-font-size: 16px;
+    --ln-body-text-color: #ffffff;
+    font-smooth: never;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeSpeed;
+}

@@ -1,0 +1,5 @@
+/* Bootstrap5 dialog styling */
+.dialog-surface {
+    border-radius: .375rem;
+    box-shadow: 0 .5rem 1rem rgb(0 0 0 / 15%);
+}

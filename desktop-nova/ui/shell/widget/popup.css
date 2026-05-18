@@ -1,0 +1,59 @@
+.material-list-hover-popup {
+    position: fixed;
+    z-index: 9999;
+    min-width: 310px;
+    max-width: calc(100vw - 8px);
+    padding: 8px;
+    border: 1px solid var(--border, ThreeDShadow);
+    background: var(--surface-elevated, var(--ln-ui-background-color, Canvas));
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    color: var(--text, var(--ln-body-text-color, CanvasText));
+    font-size: 12px;
+    pointer-events: none;
+}
+
+.material-list-hover-popup-row {
+    display: flex;
+    min-height: 32px;
+    align-items: center;
+    white-space: nowrap;
+}
+
+.material-list-hover-popup-item-row {
+    gap: 6px;
+}
+
+.material-list-hover-popup-label {
+    flex: 0 0 auto;
+}
+
+.material-list-hover-popup-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.material-list-hover-popup strong {
+    font-weight: 700;
+}
+
+.local-browser-preview-popup {
+    min-width: 0;
+}
+
+.local-browser-preview-box {
+    display: grid;
+    width: 140px;
+    height: 140px;
+    place-items: center;
+    overflow: hidden;
+    color: var(--ln-muted-text-color, GrayText);
+    text-align: center;
+}
+
+.local-browser-preview-image {
+    display: block;
+    width: 140px;
+    height: 140px;
+    object-fit: contain;
+}

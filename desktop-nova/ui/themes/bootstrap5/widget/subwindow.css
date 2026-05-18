@@ -1,0 +1,13 @@
+/* Bootstrap5 child-window styling */
+.dialog-content {
+    border-radius: .375rem;
+}
+
+.subwindow-close-button {
+    width: var(--ln-bootstrap5-button-height);
+    min-width: var(--ln-bootstrap5-button-height);
+    height: var(--ln-bootstrap5-button-height);
+    min-height: var(--ln-bootstrap5-button-height);
+    padding: 0;
+    line-height: 1;
+}

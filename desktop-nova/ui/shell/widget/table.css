@@ -1,0 +1,10 @@
+:root {
+    --ln-table-row-selected-background: #ffffff;
+}
+
+table > tbody > tr.table-row-selected > *,
+table > tbody > tr[aria-selected="true"] > *,
+.table > tbody > tr.table-row-selected > *,
+.table > tbody > tr[aria-selected="true"] > * {
+    background-color: var(--ln-table-row-selected-background, #ffffff);
+}
