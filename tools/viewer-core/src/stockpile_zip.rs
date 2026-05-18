@@ -6,12 +6,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use serde_json::Value;
 use zip::CompressionMethod;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
-use crate::recipe_cache::{self, RecipeCacheStatusOutput};
+use crate::recipe_cache::{self, RecipeCacheStatus, RecipeCacheStatusOutput};
+use crate::recipe_tree::{self, RecipeTreeNode};
 use crate::runtime_paths;
 use crate::stockpile::{self, StockpileMaterialsData};
 
@@ -34,7 +34,7 @@ struct StockpileZipPayload {
     manifest: StockpileZipManifest,
     materials: StockpileMaterialsData,
     recipe_status: RecipeCacheStatusOutput,
-    recipe_trees: BTreeMap<String, Value>,
+    recipe_trees: BTreeMap<String, RecipeTreeNode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,6 +70,28 @@ fn build_payload(
     materials: StockpileMaterialsData,
     recipe_status: RecipeCacheStatusOutput,
 ) -> Result<StockpileZipPayload> {
+    let recipe_trees = if recipe_status.status == RecipeCacheStatus::Available {
+        recipe_tree::resolve_recipe_trees_for_materials(minecraft_version, &materials)
+            .unwrap_or_default()
+    } else {
+        BTreeMap::new()
+    };
+    build_payload_with_trees(
+        input,
+        minecraft_version,
+        materials,
+        recipe_status,
+        recipe_trees,
+    )
+}
+
+fn build_payload_with_trees(
+    input: &Path,
+    minecraft_version: &str,
+    materials: StockpileMaterialsData,
+    recipe_status: RecipeCacheStatusOutput,
+    recipe_trees: BTreeMap<String, RecipeTreeNode>,
+) -> Result<StockpileZipPayload> {
     let manifest = StockpileZipManifest {
         schema_version: SCHEMA_VERSION,
         created_at: current_unix_timestamp()?,
@@ -83,7 +105,7 @@ fn build_payload(
         manifest,
         materials,
         recipe_status,
-        recipe_trees: BTreeMap::new(),
+        recipe_trees,
     })
 }
 
@@ -352,6 +374,15 @@ button { cursor: pointer; }
 .detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
 .detail { background: #0c100e; border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
 .detail span { display: block; color: var(--muted); font-size: 12px; }
+.recipe-tree { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; background: #0b100d; padding: 12px; }
+.tree-node { margin: 8px 0 8px 18px; padding-left: 12px; border-left: 1px solid #3e5543; }
+.tree-node.root { margin-left: 0; }
+.tree-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tree-item { font-weight: 800; color: var(--text); }
+.tree-meta { color: var(--muted); font-size: 12px; }
+.tree-recipe { color: var(--accent); font-size: 12px; }
+.tree-unresolved { color: var(--warn); font-size: 12px; }
+.tree-ingredients { color: var(--muted); font-size: 12px; margin: 6px 0; }
 .empty { color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; padding: 20px; text-align: center; }
 
 .modal { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(0,0,0,.76); padding: 20px; }
@@ -558,7 +589,7 @@ const APP_JS: &str = r#"(function () {
     const tree = recipeTrees[item.namespace_id];
     let recipeNote = '';
     if (data.recipe_status.status === 'missing') recipeNote = '当前备货单未包含合成表';
-    else if (item.recipe_status === 'available' && !tree) recipeNote = '合成表已缓存，合成树解析器尚未启用';
+    else if (item.recipe_status === 'available' && !tree) recipeNote = '合成表已缓存，但当前材料未生成合成树';
     else if (item.recipe_status === 'unresolved') recipeNote = '当前材料未解析到合成树';
     return `<div class="detail-grid">
       ${detail('namespace_id', item.namespace_id)}
@@ -567,7 +598,18 @@ const APP_JS: &str = r#"(function () {
       ${detail('shulker_boxes', item.shulker_boxes)}
       ${detail('source_regions', (item.source_regions || []).join(', ') || '-')}
       ${detail('recipe_status', item.recipe_status)}
-    </div><p class="sub">${escapeHtml(recipeNote)}</p>`;
+    </div>${tree ? renderRecipeTree(tree) : ''}<p class="sub">${escapeHtml(recipeNote)}</p>`;
+  }
+  function renderRecipeTree(node, isRoot = true) {
+    const ingredients = (node.ingredients || []).map((ingredient) => `${ingredient.item_id} x${ingredient.needed_count}${ingredient.unresolved ? ` (${ingredient.unresolved_reason})` : ''}`).join(' · ');
+    const children = (node.children || []).map((child) => renderRecipeTree(child, false)).join('');
+    const unresolved = node.unresolved ? `<span class="tree-unresolved">${escapeHtml(node.unresolved_reason || 'unresolved')}</span>` : '';
+    return `<div class="recipe-tree ${isRoot ? '' : 'tree-node'}">
+      <div class="tree-head"><span class="tree-item">${escapeHtml(node.display_name || node.item_id)}</span><span class="tree-meta">${escapeHtml(node.item_id)} · need ${node.needed_count}</span>${unresolved}</div>
+      <div class="tree-recipe">${escapeHtml(node.recipe_type)} · output ${node.output_count} · batches ${node.batch_count} · extra ${node.extra_output}</div>
+      ${ingredients ? `<div class="tree-ingredients">inputs: ${escapeHtml(ingredients)}</div>` : ''}
+      ${children ? `<div>${children}</div>` : ''}
+    </div>`;
   }
   function detail(label, value) { return `<div class="detail"><span>${escapeHtml(label)}</span>${escapeHtml(String(value))}</div>`; }
   function bindControls() {
@@ -602,6 +644,7 @@ const APP_JS: &str = r#"(function () {
 mod tests {
     use super::*;
     use crate::recipe_cache::RecipeCacheStatus;
+    use serde_json::Value;
     use serde_json::json;
     use zip::ZipArchive;
 
@@ -670,6 +713,54 @@ mod tests {
         let _ = fs::remove_file(output);
     }
 
+    #[test]
+    fn stockpile_zip_serializes_nonempty_recipe_trees() {
+        let input = fixture_path();
+        let materials = stockpile::build_materials_data(&input, false, Some("1.21.10"))
+            .expect("materials data");
+        let mut trees = BTreeMap::new();
+        trees.insert(
+            "minecraft:stone".to_string(),
+            RecipeTreeNode {
+                item_id: "minecraft:stone".to_string(),
+                display_name: "Stone".to_string(),
+                needed_count: 3,
+                output_count: 1,
+                batch_count: 3,
+                extra_output: 0,
+                recipe_type: "minecraft:stonecutting".to_string(),
+                ingredients: Vec::new(),
+                children: Vec::new(),
+                unresolved: false,
+                unresolved_reason: None,
+            },
+        );
+        let payload = build_payload_with_trees(
+            &input,
+            "1.21.10",
+            materials,
+            available_recipe_status("1.21.10"),
+            trees,
+        )
+        .expect("payload");
+        let output = temp_zip_path("recipe_tree");
+        write_zip(&output, &payload).expect("write zip");
+        let file = File::open(&output).expect("open zip");
+        let mut zip = ZipArchive::new(file).expect("zip archive");
+        let trees_json: Value =
+            serde_json::from_str(&read_zip_entry(&mut zip, "data/recipe_trees.json"))
+                .expect("recipe trees json");
+        assert!(
+            trees_json
+                .as_object()
+                .is_some_and(|value| !value.is_empty())
+        );
+        let index = read_zip_entry(&mut zip, "index.html");
+        assert!(index.contains("\"recipe_trees\""));
+        assert!(index.contains("minecraft:stone"));
+        let _ = fs::remove_file(output);
+    }
+
     fn fixture_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
@@ -703,6 +794,26 @@ mod tests {
             schema_version: None,
             hash: None,
             warning: Some("recipe cache manifest is missing".to_string()),
+        }
+    }
+
+    fn available_recipe_status(version: &str) -> RecipeCacheStatusOutput {
+        let cache_dir = runtime_paths::recipe_cache_root()
+            .expect("recipe root")
+            .join(format!("minecraft_{version}"));
+        RecipeCacheStatusOutput {
+            status: RecipeCacheStatus::Available,
+            minecraft_version: version.to_string(),
+            cache_dir: cache_dir.clone(),
+            manifest_path: cache_dir.join("manifest.json"),
+            has_recipes: true,
+            has_items: true,
+            has_blocks: true,
+            source: Some("test".to_string()),
+            fetched_at: Some(0),
+            schema_version: Some(1),
+            hash: Some("test".to_string()),
+            warning: None,
         }
     }
 

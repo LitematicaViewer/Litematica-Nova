@@ -12,6 +12,7 @@ pub mod model;
 pub mod native_viewer;
 pub mod nbt;
 pub mod recipe_cache;
+pub mod recipe_tree;
 pub mod replace_blocks;
 pub mod runtime_paths;
 pub mod stats_api;

@@ -218,6 +218,15 @@ pub fn load_available_recipe_items(minecraft_version: &str) -> Result<Option<BTr
     Ok(Some(items.into_iter().collect()))
 }
 
+pub fn load_available_recipes(minecraft_version: &str) -> Result<Option<BTreeMap<String, Value>>> {
+    let cache_root = runtime_paths::recipe_cache_root()?;
+    if recipe_status_in(&cache_root, minecraft_version)?.status != RecipeCacheStatus::Available {
+        return Ok(None);
+    }
+    let recipes_path = version_cache_dir(&cache_root, minecraft_version).join(RECIPES_FILE);
+    read_json(&recipes_path).map(Some)
+}
+
 pub fn recipe_status_in(
     recipe_cache_root: &Path,
     minecraft_version: &str,
