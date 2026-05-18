@@ -9,6 +9,7 @@
 | V1.5 | 2026-04-13 | CharaDust | Render「完整入镜导出」参数配置化：新增选项项与默认值提示，区分透视/正交公式并写入设置（**2.0.4**、**2.6.3.6**、**2.6.3.10**） |
 | V1.6 | 2026-05-06 | Codex | 新增“枚举器”需求：Minecraft 数据值全集、命名集合、复制、集合计算与跨模块复用（**2.0.2**、**2.10**、**4.3**、**8.1**） |
 | V1.7 | 2026-05-17 | Codex | 补充旧项目资源管理/消费模型、Nova 当前资源消费模式与迁移层映射（**2.0.4**、**4.4**、**5.3**） |
+| V1.8 | 2026-05-18 | Codex | 明确枚举器首批基础全集的数据来源、提取规则、落盘目录与删除约束（**2.10**、**4.3**） |
 
 ---
 ## 1. 项目概述
@@ -595,6 +596,28 @@ $$
 
 数据源可来自 `misode/mcmeta`、本地 `client.jar` 提取结果、项目内置资源或用户自定义导入；进入枚举器前应统一整理为版本化缓存，例如 `data/minecraft-assets/game-data/<version>/values.json`。
 
+#### 2.10.2.1 基础全集来源（首批实现）
+首批实现不直接从 `mcmeta` 或 `client.jar` 生成全集，而是先以 **Minecraft Wiki** 作为基础全集来源。目标是先拿到可稳定落盘、可直接做集合运算的 4 个基础集合文件。
+
+统一规则：
+- 以页面表格中表头为 **`Resource location`** 的列作为提取源。
+- 提取结果为**字符串数组**，供并集、交集、差集、去重等集合运算直接使用。
+- 同一来源页面若存在多个目标表，则按出现顺序提取后合并，再做去重。
+- 这 4 个集合均视为**基础集合**，为枚举器提供最小可用全集能力。
+
+| 集合名 | 来源页面 | 提取规则 | 本地文件 |
+|------|------|------|------|
+| 方块 | `https://minecraft.wiki/w/Java_Edition_data_values/Blocks` | 提取主表 `Resource location` 列 | `DV_Blocks.json` |
+| 物品 | `https://minecraft.wiki/w/Java_Edition_data_values/Items` | 提取主表 `Resource location` 列 | `DV_Items.json` |
+| 魔咒 | `https://minecraft.wiki/w/Java_Edition_data_values` | 提取主数据值页中魔咒相关表的 `Resource location` 列 | `DV_Enchantments.json` |
+| 实体 | `https://minecraft.wiki/w/Java_Edition_data_values/Entities` | 提取页面内多个实体表的 `Resource location` 列，合并后去重 | `DV_Entities.json` |
+
+#### 2.10.2.2 基础全集文件的生命周期约束
+- 4 个基础集合文件保存在**同一个目录**下，作为枚举器运行时的基础数据输入。
+- 这些文件在枚举器界面中**不可轻易删除**；枚举器内优先提供“刷新/重新抓取/重新应用”，不提供常规删除主路径。
+- 若用户确实需要移除基础集合文件，可在“游戏资源管理”模块中执行整体删除。
+- 当任一基础集合文件缺失时，枚举器应提示用户重新获取，而不是静默降级为一个空集合。
+
 #### 2.10.3 功能点
 | 编号      | 功能点   | 描述                                                        | 优先级 |
 | ------- | ----- | --------------------------------------------------------- | --- |
@@ -779,11 +802,26 @@ L ∩ (N ∪ Q) = ∅
 | 字段 | 含义 |
 |------|------|
 | `version` | Minecraft 版本号或数据版本标识 |
-| `source` | 数据来源，如 `mcmeta`、`client_jar`、`builtin`、`custom` |
-| `values` | 数据值列表，包含 ID、类型、译名、标签、状态属性等 |
+| `source` | 数据来源，如 `minecraft_wiki`、`mcmeta`、`client_jar`、`builtin`、`custom` |
+| `values` | 数据值列表，通常为可直接参与集合运算的字符串数组；扩展结构可追加 ID、类型、译名、标签、状态属性等 |
 | `generated_at` | 缓存生成时间 |
 
 建议路径：`data/minecraft-assets/game-data/<version>/values.json`。
+
+#### 4.3.1.1 基础全集文件（首批实现）
+首批实现先落盘 4 个由 Minecraft Wiki 抽取得到的基础集合文件，统一放在同一目录下：`data/enumerator/base/`。
+
+| 文件名 | 集合含义 | 来源 | 结构 |
+|------|------|------|------|
+| `DV_Blocks.json` | 方块基础集合 | `Java_Edition_data_values/Blocks` | JSON 字符串数组 |
+| `DV_Items.json` | 物品基础集合 | `Java_Edition_data_values/Items` | JSON 字符串数组 |
+| `DV_Enchantments.json` | 魔咒基础集合 | `Java_Edition_data_values` 主页中的魔咒表 | JSON 字符串数组 |
+| `DV_Entities.json` | 实体基础集合 | `Java_Edition_data_values/Entities` 多表合并 | JSON 字符串数组 |
+
+约束：
+- 4 个文件属于枚举器基础输入，不作为普通用户集合写入 `sets.json`。
+- 枚举器默认只消费这些基础文件与用户命名集合，不在界面中提供基础文件的常规删除入口。
+- “游戏资源管理”模块会将抓取好的全集写入一行项目，可以对这些基础文件执行打包删除、重抓取或重建。
 
 #### 4.3.2 命名集合
 | 字段 | 含义 |
