@@ -7,6 +7,7 @@ export * from "../services/blockstateDb";
 export * from "../services/embeddedViewer";
 export * from "../services/generateService";
 export * from "../services/generationTemplates";
+export * from "../services/gameResources";
 export * from "../services/i18n";
 export * from "../services/layerService";
 export * from "../services/libraryStore";

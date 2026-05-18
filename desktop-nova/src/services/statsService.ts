@@ -147,10 +147,107 @@ function csvEscape(value: string | number): string {
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-function defaultExportName(filePath: string): string {
+function formatExportTimestamp(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + "_" + [pad(date.getHours()), pad(date.getMinutes()), pad(date.getSeconds())].join(".");
+}
+
+function defaultExportBaseName(filePath: string): string {
   const rawName = (filePath.split(/[\\/]/).pop() || "projection").replace(/\.litematic$/i, "");
   const safeName = rawName.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_");
-  return `materials_${safeName}.csv`;
+  return `material_list_${safeName}_${formatExportTimestamp()}`;
+}
+
+function toExportRows(materials: MaterialItem[], multiplier: number): Array<{ item: string; total: number }> {
+  return materials.map((material) => ({
+    item: material.name || material.id,
+    total: Math.max(0, Math.floor(material.totalCount * multiplier)),
+  }));
+}
+
+function getDisplayWidth(value: string): number {
+  let width = 0;
+  for (const char of value) {
+    const codePoint = char.codePointAt(0) || 0;
+    width += isFullWidthCodePoint(codePoint) ? 2 : 1;
+  }
+  return width;
+}
+
+function isFullWidthCodePoint(codePoint: number): boolean {
+  return (
+    codePoint >= 0x1100 && (
+      codePoint <= 0x115f ||
+      codePoint === 0x2329 ||
+      codePoint === 0x232a ||
+      (codePoint >= 0x2e80 && codePoint <= 0xa4cf && codePoint !== 0x303f) ||
+      (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+      (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+      (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
+      (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
+      (codePoint >= 0xff00 && codePoint <= 0xff60) ||
+      (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
+      (codePoint >= 0x1f300 && codePoint <= 0x1f64f) ||
+      (codePoint >= 0x1f900 && codePoint <= 0x1f9ff) ||
+      (codePoint >= 0x20000 && codePoint <= 0x3fffd)
+    )
+  );
+}
+
+function padDisplay(value: string, width: number, align: "left" | "right" = "left"): string {
+  const padding = Math.max(0, width - getDisplayWidth(value));
+  const spaces = " ".repeat(padding);
+  return align === "right" ? `${spaces}${value}` : `${value}${spaces}`;
+}
+
+function buildArtTable(filePath: string, rows: Array<{ item: string; total: number }>): string {
+  const title = `原理图的材料清单 '${(filePath.split(/[\\/]/).pop() || "projection").replace(/\.litematic$/i, "")}'`;
+  const totalColumnWidth = Math.max(getDisplayWidth("Total"), ...rows.map((row) => getDisplayWidth(String(row.total))));
+  const minItemWidth = Math.max(getDisplayWidth("Item"), ...rows.map((row) => getDisplayWidth(row.item)));
+  const titleDrivenItemWidth = Math.max(minItemWidth, getDisplayWidth(title) - totalColumnWidth - 3);
+  const itemColumnWidth = Math.max(minItemWidth, titleDrivenItemWidth);
+  const titleContentWidth = itemColumnWidth + totalColumnWidth + 3;
+  const border = `+${"-".repeat(itemColumnWidth + 2)}+${"-".repeat(totalColumnWidth + 2)}+`;
+  const titleRow = `| ${padDisplay(title, titleContentWidth)} |`;
+  const headerRow = `| ${padDisplay("Item", itemColumnWidth)} | ${padDisplay("Total", totalColumnWidth, "right")} |`;
+  const bodyRows = rows.map((row) => `| ${padDisplay(row.item, itemColumnWidth)} | ${padDisplay(String(row.total), totalColumnWidth, "right")} |`);
+  return [titleRow, border, headerRow, border, ...bodyRows, border].join("\r\n");
+}
+
+async function saveMaterialsFile(filePath: string, extension: "csv" | "txt", content: string, filterName: string): Promise<boolean> {
+  const savePath = await saveDialog({
+    defaultPath: `${defaultExportBaseName(filePath)}.${extension}`,
+    filters: [{ name: filterName, extensions: [extension] }],
+  });
+  if (!savePath) return false;
+  await writeTextFileAbsolute(savePath, content);
+  return true;
+}
+
+export async function exportMaterialsCsv(
+  filePath: string,
+  materials: MaterialItem[],
+  multiplier: number,
+): Promise<boolean> {
+  const rows = toExportRows(materials, multiplier);
+  const csv = [
+    "\uFEFF\"Item\",\"Total\"",
+    ...rows.map((row) => `${csvEscape(row.item)},${row.total}`),
+  ].join("\r\n");
+  return saveMaterialsFile(filePath, "csv", csv, "CSV");
+}
+
+export async function exportMaterialsArtTable(
+  filePath: string,
+  materials: MaterialItem[],
+  multiplier: number,
+): Promise<boolean> {
+  const rows = toExportRows(materials, multiplier);
+  return saveMaterialsFile(filePath, "txt", buildArtTable(filePath, rows), "Text");
 }
 
 export async function exportMaterials(
@@ -158,22 +255,5 @@ export async function exportMaterials(
   materials: MaterialItem[],
   multiplier: number,
 ): Promise<boolean> {
-  const savePath = await saveDialog({
-    defaultPath: defaultExportName(filePath),
-    filters: [{ name: "CSV", extensions: ["csv"] }],
-  });
-  if (!savePath) return false;
-
-  let csv = "\uFEFF名称,数字,统计数据\r\n";
-  for (const material of materials) {
-    const total = Math.max(0, Math.floor(material.totalCount * multiplier));
-    csv += [
-      csvEscape(material.name || material.id),
-      csvEscape(total),
-      csvEscape(formatMaterialUnits(total)),
-    ].join(",") + "\r\n";
-  }
-
-  await writeTextFileAbsolute(savePath, csv);
-  return true;
+  return exportMaterialsCsv(filePath, materials, multiplier);
 }

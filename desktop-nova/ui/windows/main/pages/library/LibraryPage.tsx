@@ -6,7 +6,6 @@ import {
   copyFileToDirectory,
   LibraryState,
   loadLibrary,
-  LocalLibraryFolder,
   ProjectionRecord,
   reorderLibraryRecords,
   saveLibrary,
@@ -14,7 +13,6 @@ import {
   setRecordPreview,
 } from "../../../../../src/business/facade";
 import { SendProjectionDialog } from "./sendDialog";
-import { ensureLitematicFileName } from "./function";
 import { checkFileExists, generatePreviewImage, openFileParentDir, readImageBase64, readProjectionPreviewImage, selectLitematicFile } from "../../../../../src/business/facade";
 import { LocalLibraryFoldersDialog, openLocalLibraryFoldersWithWindowBehavior } from "../../../local_library_folders";
 import { RedenLibraryDialog, openRedenLibraryWithWindowBehavior } from "../../../reden_library";
@@ -22,42 +20,35 @@ import { loadUserConfigMigratingLocalStorage } from "../../../../../src/business
 import { DisplayMode, normalizeDisplayMode } from "../../../../../src/business/facade";
 import { listenEvent } from "../../../../../src/platform/events";
 import { projectionLibraryImportedEvent, projectionLibraryStateChangedEvent } from "../../../libraryEvents";
+// 同级函数
+import { 
+  ensureLitematicFileName, 
+  formatDate, 
+  formatSize, 
+  pickDefaultSendFolder, 
+  recordStatusLabel 
+} from "./function";
 
-function formatSize(numBytes: number): string {
-  let value = Math.max(0, numBytes);
-  const units = ["B", "KB", "MB", "GB"];
-  let index = 0;
-  while (value >= 1024.0 && index < units.length - 1) {
-    value /= 1024.0;
-    index++;
-  }
-  return index === 0 ? `${Math.floor(value)} ${units[index]}` : `${value.toFixed(1)} ${units[index]}`;
-}
-
-function formatDate(timestamp: number): string {
-  if (!timestamp) return "-";
-  const d = new Date(timestamp);
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function recordStatusLabel(record: ProjectionRecord): string {
-  if (record.status === "missing") return "文件丢失";
-  if (record.status === "parse_error") return "解析失败";
-  return "";
-}
-
-function parentDirectory(path: string): string {
-  const normalized = path.trim().replace(/[\\/]+$/, "");
-  const lastSeparatorIndex = Math.max(normalized.lastIndexOf("\\"), normalized.lastIndexOf("/"));
-  return lastSeparatorIndex >= 0 ? normalized.slice(0, lastSeparatorIndex) : "";
-}
-
-function pickDefaultSendFolder(record: ProjectionRecord, folders: LocalLibraryFolder[]): string {
-  const sourceParent = parentDirectory(record.path).toLowerCase();
-  return folders.find((folder) => folder.path.toLowerCase() !== sourceParent)?.path || folders[0]?.path || "";
-}
-
+/**
+ * Widget:投影卡片。
+ * @param record 记录
+ * @param isCurrent 是否当前
+ * @param previewDataUrl 预览数据 URL
+ * @param projectionPreviewDataUrl 投影预览数据 URL
+ * @param isLoadingProjectionPreview 是否加载投影预览
+ * @param previewMode 预览模式
+ * @param isGenerating 是否生成中
+ * @param onSetCurrent 设置当前
+ * @param onEditProperties 编辑属性
+ * @param onOpenFolder 打开文件夹
+ * @param onSend 发送
+ * @param onRemove 删除
+ * @param onGeneratePreview 生成预览
+ * @param onEnsureProjectionPreview 确保投影预览
+ * @param onDragStart 拖动开始
+ * @param onDragOver 拖动覆盖
+ * @param onDrop 拖动放下
+ */
 function ProjectionCard({
   record,
   isCurrent,
@@ -182,7 +173,7 @@ function ProjectionCard({
 }
 
 /**
- * Renders the local projection library page.
+ * Main Layout
  */
 export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [state, setState] = useState<LibraryState>({ records: [], folders: [] });
@@ -261,6 +252,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     };
   }, [state.records]);
 
+  /**
+   * 处理选择文件。
+   * @returns 选择文件结果
+   */
   const handleSelect = async () => {
     const res = await selectLitematicFile();
     if (res) {
@@ -269,14 +264,27 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     }
   };
 
+  /**
+   * 处理打开本地库文件夹。
+   * @returns 打开本地库文件夹结果
+   */
   const handleOpenLocalLibraryFolders = async () => {
     await openLocalLibraryFoldersWithWindowBehavior(() => setShowLocalLibraryFoldersOverlay(true));
   };
 
+  /**
+   * 处理打开在线投影库。
+   * @returns 打开在线投影库结果
+   */
   const handleOpenRedenLibrary = async () => {
     await openRedenLibraryWithWindowBehavior(() => setShowRedenLibraryOverlay(true));
   };
 
+  /**
+   * 处理打开发送对话框。
+   * @param record 记录
+   * @returns 打开发送对话框结果
+   */
   const handleOpenSendDialog = (record: ProjectionRecord) => {
     setSendDialogRecord(record);
     setSendTargetDirectory(pickDefaultSendFolder(record, state.folders));
@@ -285,6 +293,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     setSendError("");
   };
 
+  /**
+   * 处理关闭发送对话框。
+   * @returns 关闭发送对话框结果
+   */
   const handleCloseSendDialog = () => {
     setSendDialogRecord(null);
     setSendTargetDirectory("");
@@ -293,6 +305,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     setSendError("");
   };
 
+  /**
+   * 处理确认发送。
+   * @returns 确认发送结果
+   */
   const handleConfirmSend = async () => {
     if (!sendDialogRecord) return;
     const normalizedFileName = ensureLitematicFileName(sendTargetFileName);
@@ -319,12 +335,21 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     }
   };
 
+  /**
+   * 处理激活记录。
+   * @param path 路径
+   * @returns 激活记录结果
+   */
   const handleActivateRecord = async (path: string) => {
     const nextState = await activateProjectionRecord(await loadLibrary(), path);
     setState(nextState);
     setCurrentFile(path);
   };
 
+  /**
+   * 处理刷新。
+   * @returns 刷新结果
+   */
   const handleRefresh = async () => {
     setIsRefreshing(true);
     const newState = { ...state, records: [...state.records] };
@@ -343,6 +368,11 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     setIsRefreshing(false);
   };
 
+  /**
+   * 处理删除记录。
+   * @param path 路径
+   * @returns 删除记录结果
+   */
   const handleRemove = async (path: string) => {
     const newState = { ...state, records: state.records.filter((r) => r.path !== path) };
     await saveLibrary(newState);
@@ -350,6 +380,11 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     if (currentFile === path) setCurrentFile("");
   };
 
+  /**
+   * 处理生成预览。
+   * @param record 记录
+   * @returns 生成预览结果
+   */
   const handleGeneratePreview = async (record: ProjectionRecord) => {
     setPreviewError("");
     setGeneratingPreviewPath(record.path);
@@ -365,6 +400,11 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     }
   };
 
+  /**
+   * 处理确保投影预览。
+   * @param record 记录
+   * @returns 确保投影预览结果
+   */
   const ensureProjectionPreview = async (record: ProjectionRecord) => {
     if (projectionPreviewLoadedPaths[record.path] || projectionPreviewLoadingPaths[record.path]) return;
     setProjectionPreviewLoadingPaths((current) => ({ ...current, [record.path]: true }));
@@ -389,6 +429,11 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     }
   };
 
+  /**
+   * 处理拖动放下。
+   * @param targetPath 目标路径
+   * @returns 拖动放下结果
+   */
   const handleDrop = async (targetPath: string) => {
     if (!dragPath || dragPath === targetPath || sortMode !== "manual") return;
     const ordered = [...visibleRecords];

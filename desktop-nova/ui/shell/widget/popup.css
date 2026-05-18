@@ -1,5 +1,7 @@
 .material-list-hover-popup {
     position: fixed;
+    top: var(--material-list-popup-top, 0);
+    left: var(--material-list-popup-left, 0);
     z-index: 9999;
     min-width: 310px;
     max-width: calc(100vw - 8px);

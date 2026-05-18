@@ -1,23 +1,29 @@
-﻿import React, { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   analyzeProjectionFile,
+  clearProjectionPreviewImage,
+  importProjectionPreviewImage,
   openProjectionViewer,
   saveProjectionMetadataPatch,
   selectLitematicFile,
   selectLitematicSavePath,
+  selectPreviewImageFile,
 } from "../../../../../src/business/facade";
-import { addOrUpdateRecord, loadLibrary } from "../../../../../src/business/facade";
+import { addOrUpdateRecord, loadLibrary, setRecordPreview } from "../../../../../src/business/facade";
+import { generatePreviewImage, readImageBase64, readProjectionPreviewImage } from "../../../../../src/business/facade";
 import { getLatestRenderCacheState, subscribeRenderCacheStore } from "../../../../../src/business/facade";
 import { hideEmbeddedViewer } from "../../../../../src/business/facade";
+// 同级函数
+import { buildPatch, metadataToForm, validateRegions } from "./function";
 
-type RegionEdit = {
+export type RegionEdit = {
   originalName: string;
   name: string;
   position: { x: number; y: number; z: number };
   size: { x: number; y: number; z: number };
 };
 
-type MetadataForm = {
+export type MetadataForm = {
   name: string;
   author: string;
   description: string;
@@ -29,76 +35,20 @@ type MetadataForm = {
   regions: RegionEdit[];
 };
 
-function toLocalDateTime(value: unknown): string {
-  const n = Number(value || 0);
-  if (!Number.isFinite(n) || n <= 0) return "";
-  const d = new Date(n);
-  const pad = (x: number) => String(x).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function fromLocalDateTime(value: string): number | undefined {
-  if (!value) return undefined;
-  const ms = new Date(value).getTime();
-  return Number.isFinite(ms) ? ms : undefined;
-}
-
-function metadataToForm(data: any): MetadataForm {
-  const meta = data?.metadata || {};
-  const regions = (data?.regions || []).map((region: any): RegionEdit => ({
-    originalName: region.name || "Unnamed",
-    name: region.name || "Unnamed",
-    position: region.position || { x: 0, y: 0, z: 0 },
-    size: region.size || { x: 0, y: 0, z: 0 },
-  }));
-  return {
-    name: meta.name || "",
-    author: meta.author || "",
-    description: meta.description || "",
-    time_created: toLocalDateTime(meta.time_created),
-    time_modified: toLocalDateTime(meta.time_modified),
-    litematic_version: Number(meta.litematic_version || 6),
-    litematic_subversion: Number(meta.litematic_subversion || 1),
-    minecraft_data_version: Number(meta.minecraft_data_version || 0),
-    regions,
-  };
-}
-
-function buildPatch(form: MetadataForm) {
-  return {
-    name: form.name,
-    author: form.author,
-    description: form.description,
-    time_created: fromLocalDateTime(form.time_created),
-    time_modified: fromLocalDateTime(form.time_modified),
-    litematic_version: Number(form.litematic_version) || 6,
-    litematic_subversion: Number(form.litematic_subversion) || 1,
-    minecraft_data_version: Number(form.minecraft_data_version) || 0,
-    regions: form.regions
-      .filter((region) => region.name !== region.originalName)
-      .map((region) => ({ old_name: region.originalName, new_name: region.name })),
-  };
-}
-
-function validateRegions(regions: RegionEdit[]): string {
-  const names = new Set<string>();
-  for (const region of regions) {
-    const name = region.name.trim();
-    if (!name) return "区域名不能为空。";
-    if (names.has(name)) return `区域名重复：${name}`;
-    names.add(name);
-  }
-  return "";
-}
-
+/**
+ * Main Layout
+ */
 export function PropertiesPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [data, setData] = useState<any>(null);
   const [initialForm, setInitialForm] = useState<MetadataForm | null>(null);
   const [form, setForm] = useState<MetadataForm | null>(null);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [projectionPreviewDataUrl, setProjectionPreviewDataUrl] = useState("");
   const [previewDataUrl, setPreviewDataUrl] = useState("");
   const [previewMode, setPreviewMode] = useState("normal");
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  const [isUpdatingProjectionPreview, setIsUpdatingProjectionPreview] = useState(false);
   const [convertOpen, setConvertOpen] = useState(false);
 
   useEffect(() => {
@@ -118,20 +68,129 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute }: any) {
     await addOrUpdateRecord(state, filePath);
   };
 
+  const refreshLibraryRenderPreview = async (filePath = currentFile) => {
+    if (!filePath) return;
+    const cacheState = getLatestRenderCacheState(filePath);
+    if (cacheState?.previewPath) {
+      setPreviewDataUrl(cacheState.previewPath);
+      setPreviewMode(cacheState.displayMode || "normal");
+      return;
+    }
+
+    const state = await loadLibrary();
+    const record = state.records.find((item) => item.path === filePath);
+    const imagePath = record?.preview_image_path || record?.previewPath;
+    if (!imagePath) {
+      setPreviewDataUrl("");
+      return;
+    }
+
+    try {
+      setPreviewDataUrl(await readImageBase64(imagePath));
+    } catch {
+      setPreviewDataUrl("");
+    }
+  };
+
+  const refreshProjectionPreview = async (filePath = currentFile) => {
+    if (!filePath) {
+      setProjectionPreviewDataUrl("");
+      return;
+    }
+    const output = await readProjectionPreviewImage(filePath);
+    setProjectionPreviewDataUrl(output?.data_url || "");
+  };
+
   useEffect(() => {
     if (!currentFile) return;
     refreshAnalysis().catch((err) => setError(String(err)));
-    const cacheState = getLatestRenderCacheState(currentFile);
-    setPreviewDataUrl(cacheState?.previewPath || "");
-    setPreviewMode(cacheState?.displayMode || "normal");
+    refreshLibraryRenderPreview().catch(() => setPreviewDataUrl(""));
   }, [currentFile]);
 
   useEffect(() => subscribeRenderCacheStore(() => {
     if (!currentFile) return;
     const cacheState = getLatestRenderCacheState(currentFile);
-    setPreviewDataUrl(cacheState?.previewPath || "");
-    setPreviewMode(cacheState?.displayMode || "normal");
+    if (cacheState?.previewPath) {
+      setPreviewDataUrl(cacheState.previewPath);
+      setPreviewMode(cacheState.displayMode || "normal");
+      return;
+    }
+    refreshLibraryRenderPreview(currentFile).catch(() => setPreviewDataUrl(""));
   }), [currentFile]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!currentFile) {
+      setProjectionPreviewDataUrl("");
+      return;
+    }
+    setProjectionPreviewDataUrl("");
+    readProjectionPreviewImage(currentFile)
+      .then((output) => {
+        if (!cancelled) setProjectionPreviewDataUrl(output?.data_url || "");
+      })
+      .catch(() => {
+        if (!cancelled) setProjectionPreviewDataUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentFile]);
+
+  const handleClearProjectionPreview = async () => {
+    if (!currentFile || isUpdatingProjectionPreview) return;
+    setIsUpdatingProjectionPreview(true);
+    setError("");
+    setStatus("正在清空预览图...");
+    try {
+      await clearProjectionPreviewImage(currentFile);
+      await refreshProjectionPreview(currentFile);
+      setStatus("预览图已清空。");
+    } catch (err: any) {
+      setError(String(err));
+      setStatus("");
+    } finally {
+      setIsUpdatingProjectionPreview(false);
+    }
+  };
+
+  const handleImportProjectionPreview = async () => {
+    if (!currentFile || isUpdatingProjectionPreview) return;
+    const imagePath = await selectPreviewImageFile();
+    if (!imagePath) return;
+    setIsUpdatingProjectionPreview(true);
+    setError("");
+    setStatus("正在导入预览图...");
+    try {
+      await importProjectionPreviewImage(currentFile, imagePath);
+      await refreshProjectionPreview(currentFile);
+      setStatus("预览图已导入。");
+    } catch (err: any) {
+      setError(String(err));
+      setStatus("");
+    } finally {
+      setIsUpdatingProjectionPreview(false);
+    }
+  };
+
+  const handleGenerateRenderPreview = async () => {
+    if (!currentFile || isGeneratingPreview) return;
+    setIsGeneratingPreview(true);
+    setError("");
+    setStatus("正在生成渲染图...");
+    try {
+      const output = await generatePreviewImage(currentFile, previewMode);
+      setPreviewDataUrl(output.data_url);
+      const state = await loadLibrary();
+      await setRecordPreview(state, currentFile, output.preview_path);
+      setStatus("渲染图已生成，并已同步到投影库 preview cache。");
+    } catch (err: any) {
+      setError(String(err));
+      setStatus("");
+    } finally {
+      setIsGeneratingPreview(false);
+    }
+  };
 
   const fileName = currentFile ? currentFile.split(/[\\/]/).pop() : "";
   const metadata = data?.metadata || {};
@@ -193,12 +252,12 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute }: any) {
 
   if (!currentFile) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div className="properties-page">
+        <div className="properties-toolbar">
           <button className="btn" onClick={handleSelectFile}>选择文件...</button>
           <button className="btn" onClick={() => setRoute("library")}>在库中选择...</button>
         </div>
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", opacity: 0.55 }}>
+        <div className="properties-empty-state">
           请先选择一个 .litematic 文件。
         </div>
       </div>
@@ -206,29 +265,28 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute }: any) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+    <div className="properties-page">
+      <div className="properties-toolbar">
         <button className="btn" onClick={handleSelectFile}>选择文件...</button>
         <button className="btn" onClick={() => setRoute("library")}>在库中选择...</button>
-        <div style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.8 }} title={currentFile}>
+        <div className="properties-file-path" title={currentFile}>
           {currentFile}
         </div>
       </div>
 
-      {error && <pre style={{ whiteSpace: "pre-wrap", color: "#ffb3b3", background: "#1a0808", border: "1px solid #884444", padding: 8 }}>{error}</pre>}
-      {status && <pre style={{ whiteSpace: "pre-wrap", color: "#cfcfcf", background: "#111", border: "1px solid #444", padding: 8, maxHeight: 140, overflow: "auto" }}>{status}</pre>}
+      {error && <pre className="properties-message properties-message-error">{error}</pre>}
 
       {form && (
-        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12, paddingRight: 4 }}>
+        <div className="properties-scroll">
           <div className="group-box">
             <div className="group-box-title">文件</div>
             <div className="form-row">
-              <div className="form-label" style={{ width: 130 }}>文件名</div>
-              <input className="input" style={{ flex: 1 }} value={fileName} readOnly />
+              <div className="form-label properties-label">文件名</div>
+              <input className="input properties-input-flex" value={fileName} readOnly />
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(520px, 1fr) 340px", gap: 12 }}>
+          <div className="properties-main-grid">
             <div className="group-box">
               <div className="group-box-title">元数据</div>
               <TextRow label="内部名称" value={form.name} onChange={(value) => updateForm({ name: value })} />
@@ -240,51 +298,69 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute }: any) {
               <NumberRow label="SubVersion" value={form.litematic_subversion} onChange={(value) => updateForm({ litematic_subversion: value })} />
               <NumberRow label="Minecraft 数据版本" value={form.minecraft_data_version} onChange={(value) => updateForm({ minecraft_data_version: value })} />
               <div className="form-row">
-                <div className="form-label" style={{ width: 130 }}>尺寸</div>
-                <div className="form-field" style={{ gap: 8 }}>
-                  <input className="input" style={{ width: 70 }} value={metadata.enclosing_size?.x || 0} readOnly />
-                  <input className="input" style={{ width: 70 }} value={metadata.enclosing_size?.y || 0} readOnly />
-                  <input className="input" style={{ width: 70 }} value={metadata.enclosing_size?.z || 0} readOnly />
+                <div className="form-label properties-label">尺寸</div>
+                <div className="form-field properties-axis-field">
+                  <input className="input properties-size-input" value={metadata.enclosing_size?.x || 0} readOnly />
+                  <input className="input properties-size-input" value={metadata.enclosing_size?.y || 0} readOnly />
+                  <input className="input properties-size-input" value={metadata.enclosing_size?.z || 0} readOnly />
                 </div>
               </div>
               <div className="form-row">
-                <div className="form-label" style={{ width: 130 }}>统计</div>
-                <div className="form-field" style={{ gap: 8 }}>
-                  <input className="input" style={{ width: 100 }} value={metadata.total_blocks || 0} readOnly />
-                  <input className="input" style={{ width: 100 }} value={metadata.total_volume || 0} readOnly />
-                  <input className="input" style={{ width: 100 }} value={`${(((derived.building?.density || 0) * 100)).toFixed(2)}%`} readOnly />
+                <div className="form-label properties-label">统计</div>
+                <div className="form-field properties-axis-field">
+                  <input className="input properties-stat-input" value={metadata.total_blocks || 0} readOnly />
+                  <input className="input properties-stat-input" value={metadata.total_volume || 0} readOnly />
+                  <input className="input properties-stat-input" value={`${(((derived.building?.density || 0) * 100)).toFixed(2)}%`} readOnly />
                 </div>
               </div>
             </div>
 
-            <div className="group-box" style={{ display: "flex", flexDirection: "column" }}>
-              <div className="group-box-title">3D 静态预览</div>
-              <div style={{ minHeight: 220, background: "#10151a", border: "1px solid #000", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {previewDataUrl ? <img src={previewDataUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ opacity: 0.6 }}>请先在渲染页构建 3D cache</span>}
+            <div className="group-box properties-preview-card">
+              <div className="group-box-title">预览/渲染</div>
+
+              <div className="properties-preview-section">
+                <div className="properties-preview-section-title">预览图画布</div>
+                <div className="properties-preview-canvas properties-projection-preview-canvas">
+                  {projectionPreviewDataUrl ? <img className="properties-preview-img properties-projection-preview-img" src={projectionPreviewDataUrl} alt="" /> : <span className="properties-preview-placeholder">文件内暂无预览图</span>}
+                </div>
+                <div className="properties-preview-actions-row">
+                  <button className="btn" onClick={handleClearProjectionPreview} disabled={!currentFile || isUpdatingProjectionPreview}>清空预览图</button>
+                  <button className="btn" onClick={handleImportProjectionPreview} disabled={!currentFile || isUpdatingProjectionPreview}>导入预览图</button>
+                </div>
               </div>
-              <button className="btn" style={{ marginTop: 8 }} onClick={() => openProjectionViewer(currentFile, previewMode)}>打开弹窗 Viewer</button>
+
+              <div className="properties-preview-section">
+                <div className="properties-preview-section-title">渲染图画布</div>
+                <div className="properties-preview-canvas properties-render-preview-canvas">
+                  {previewDataUrl ? <img className="properties-preview-img" src={previewDataUrl} alt="" /> : <span className="properties-preview-placeholder">暂无渲染图 cache</span>}
+                </div>
+                <div className="properties-preview-actions-row">
+                  <button className="btn" onClick={handleGenerateRenderPreview} disabled={!currentFile || isGeneratingPreview}>{isGeneratingPreview ? "生成中..." : "生成渲染"}</button>
+                  <button className="btn" onClick={() => openProjectionViewer(currentFile, previewMode)} disabled={!currentFile}>打开弹窗 Viewer</button>
+                </div>
+              </div>
             </div>
           </div>
 
           <div className="group-box">
             <div className="group-box-title">区域列表</div>
-            {regionError && <div style={{ color: "#ffb3b3", marginBottom: 8 }}>{regionError}</div>}
-            <table style={{ width: "100%", borderCollapse: "collapse", color: "#ccc", fontSize: "0.95em" }}>
+            {regionError && <div className="properties-region-error">{regionError}</div>}
+            <table>
               <thead>
-                <tr style={{ background: "#222" }}>
-                  <th style={th}>区域名称（双击/直接编辑）</th>
-                  <th style={th}>尺寸 x</th>
-                  <th style={th}>尺寸 y</th>
-                  <th style={th}>尺寸 z</th>
-                  <th style={th}>位置 x</th>
-                  <th style={th}>位置 y</th>
-                  <th style={th}>位置 z</th>
+                <tr>
+                  <th>区域名称</th>
+                  <th>尺寸 x</th>
+                  <th>尺寸 y</th>
+                  <th>尺寸 z</th>
+                  <th>位置 x</th>
+                  <th>位置 y</th>
+                  <th>位置 z</th>
                 </tr>
               </thead>
               <tbody>
                 {form.regions.map((region, index) => (
-                  <tr key={region.originalName} style={{ borderBottom: "1px solid #333" }}>
-                    <td style={td}>
+                  <tr key={region.originalName}>
+                    <td>
                       <input
                         className="input"
                         value={region.name}
@@ -295,12 +371,12 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute }: any) {
                         }}
                       />
                     </td>
-                    <td style={tdRight}>{region.size.x}</td>
-                    <td style={tdRight}>{region.size.y}</td>
-                    <td style={tdRight}>{region.size.z}</td>
-                    <td style={tdRight}>{region.position.x}</td>
-                    <td style={tdRight}>{region.position.y}</td>
-                    <td style={tdRight}>{region.position.z}</td>
+                    <td className="properties-table-number">{region.size.x}</td>
+                    <td className="properties-table-number">{region.size.y}</td>
+                    <td className="properties-table-number">{region.size.z}</td>
+                    <td className="properties-table-number">{region.position.x}</td>
+                    <td className="properties-table-number">{region.position.y}</td>
+                    <td className="properties-table-number">{region.position.z}</td>
                   </tr>
                 ))}
               </tbody>
@@ -309,23 +385,26 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute }: any) {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
-        <button className="btn" onClick={handleSave} disabled={!form || !!regionError}>保存</button>
-        <button className="btn" onClick={handleSaveAs} disabled={!form || !!regionError}>另存为</button>
-        <button className="btn" onClick={handleRestore} disabled={!form}>恢复默认值</button>
-        <button className="btn" onClick={() => setConvertOpen(true)}>转换格式</button>
+      <div className="properties-footer">
+        <div className="properties-footer-status" title={status}>{status}</div>
+        <div className="properties-actions">
+          <button className="btn" onClick={handleSave} disabled={!form || !!regionError}>保存</button>
+          <button className="btn" onClick={handleSaveAs} disabled={!form || !!regionError}>另存为</button>
+          <button className="btn" onClick={handleRestore} disabled={!form}>恢复默认值</button>
+          <button className="btn" onClick={() => setConvertOpen(true)}>转换格式</button>
+        </div>
       </div>
 
       {convertOpen && (
-        <div style={modalBackdrop} onClick={() => setConvertOpen(false)}>
-          <div style={modalPanel} onClick={(event) => event.stopPropagation()}>
-            <h3 style={{ marginTop: 0 }}>转换格式</h3>
+        <div className="properties-modal-backdrop" onClick={() => setConvertOpen(false)}>
+          <div className="properties-modal-panel" onClick={(event) => event.stopPropagation()}>
+            <h3 className="properties-modal-title">转换格式</h3>
             <div>当前格式：litematic</div>
-            <div style={{ marginTop: 12 }}>
+            <div className="properties-modal-section">
               <button className="btn" onClick={handleSaveAs}>.litematic 另存/重写 metadata</button>
             </div>
-            <div style={{ opacity: 0.72, marginTop: 12 }}>.schem / .nbt / .schematic：后端暂未实现稳定 exporter，已禁用。</div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+            <div className="properties-modal-note">.schem / .nbt / .schematic：后端暂未实现稳定 exporter，已禁用。</div>
+            <div className="properties-modal-footer">
               <button className="btn" onClick={() => setConvertOpen(false)}>关闭</button>
             </div>
           </div>
@@ -335,37 +414,47 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute }: any) {
   );
 }
 
-const th: React.CSSProperties = { padding: "6px 8px", textAlign: "left", border: "1px solid #444" };
-const td: React.CSSProperties = { padding: "6px 8px", border: "1px solid #333" };
-const tdRight: React.CSSProperties = { ...td, textAlign: "right" };
-const modalBackdrop: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 };
-const modalPanel: React.CSSProperties = { width: 460, background: "var(--surface)", border: "1px solid var(--border)", padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,0.45)" };
-
+/**
+ * 文本输入行控件行为
+ * @param label 标签
+ * @param value 值
+ * @param onChange 值变化回调
+ */
 function TextRow({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <div className="form-row">
-      <div className="form-label" style={{ width: 130 }}>{label}</div>
-      <input className="input" style={{ flex: 1 }} value={value} onChange={(event) => onChange(event.target.value)} />
+      <div className="form-label properties-label">{label}</div>
+      <input className="input properties-input-flex" value={value} onChange={(event) => onChange(event.target.value)} />
     </div>
   );
 }
 
+/**
+ * 日期输入行控件行为
+ * @param label 标签
+ * @param value 值
+ * @param onChange 值变化回调
+ */
 function DateRow({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <div className="form-row">
-      <div className="form-label" style={{ width: 130 }}>{label}</div>
-      <input className="input" style={{ width: 220 }} type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} />
+      <div className="form-label properties-label">{label}</div>
+      <input className="input properties-date-input" type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} />
     </div>
   );
 }
 
+/**
+ * 数字输入行控件行为
+ * @param label 标签
+ * @param value 值
+ * @param onChange 值变化回调
+ */
 function NumberRow({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
   return (
     <div className="form-row">
-      <div className="form-label" style={{ width: 130 }}>{label}</div>
-      <input className="input" style={{ width: 140 }} type="number" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <div className="form-label properties-label">{label}</div>
+      <input className="input properties-number-input" type="number" value={value} onChange={(event) => onChange(Number(event.target.value))} />
     </div>
   );
 }
-
-

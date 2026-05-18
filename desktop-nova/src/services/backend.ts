@@ -16,6 +16,8 @@ export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, Projectio
 export {
   checkFileExists,
   copyFileToDirectory,
+  downloadVaultBlockIconsFromVault,
+  downloadVaultItemIconsFromVault,
   listDirectoryEntries,
   listLitematicFileEntriesInDirectory,
   getAppDataFilePath as getUserConfigFilePath,
@@ -47,6 +49,7 @@ export type { BackendTrace, CacheBuildLaunch, CacheBuildSnapshot } from "../plat
 
 export {
   openLocalLibraryFoldersWindow,
+  openAssetManagerWindow,
   openMaterialListWindow,
   openRedenLibraryWindow,
   openUiDemoWindow,

@@ -1,6 +1,8 @@
-﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  exportMaterials,
+  exportMaterialsArtTable,
+  exportMaterialsCsv,
+  initI18n,
   loadMaterialsScope,
   loadStructureStats,
   MaterialItem,
@@ -12,7 +14,6 @@ import {
   openMaterialListWindow,
 } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
-import { Dropdown } from "../../../../components/Dropdown";
 
 function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; item: MaterialItem | null; multiplier: number }) {
   const popupRef = useRef<HTMLDivElement | null>(null);
@@ -51,8 +52,8 @@ function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; ite
   useLayoutEffect(() => {
     const popup = popupRef.current;
     if (!popup) return;
-    popup.style.left = `${position.left}px`;
-    popup.style.top = `${position.top}px`;
+    popup.style.setProperty("--material-list-popup-left", `${position.left}px`);
+    popup.style.setProperty("--material-list-popup-top", `${position.top}px`);
   }, [position.left, position.top]);
 
   if (!item) return null;
@@ -90,6 +91,7 @@ export async function openMaterialsWithWindowBehavior(currentFile: string, showO
       // Browser preview cannot create a desktop window, so keep the in-window dialog as fallback.
     }
   }
+  await initI18n(true);
   showOverlay();
 }
 
@@ -144,6 +146,7 @@ export function MaterialListContent({
     setIsLoading(true);
     setError("");
     try {
+      await initI18n();
       const next = await loadMaterialsScope(currentFile, scopeArgs(value), includeContainers);
       setMaterials(next.sort((a, b) => b.totalCount - a.totalCount));
     } catch (err: any) {
@@ -157,12 +160,21 @@ export function MaterialListContent({
     loadMats(workbook);
   }, [workbook, includeContainerItems]);
 
-  const handleExport = async () => {
+  const handleExportArtTable = async () => {
     try {
-      const ok = await exportMaterials(currentFile, materials, multiplier);
-      if (ok) alert("导出成功");
+      const ok = await exportMaterialsArtTable(currentFile, materials, multiplier);
+      if (ok) alert("写入艺术表成功");
     } catch (err: any) {
-      setError(`导出失败：${err}`);
+      setError(`写入艺术表失败：${err}`);
+    }
+  };
+
+  const handleExportCsv = async () => {
+    try {
+      const ok = await exportMaterialsCsv(currentFile, materials, multiplier);
+      if (ok) alert("写入 CSV 成功");
+    } catch (err: any) {
+      setError(`写入 CSV 失败：${err}`);
     }
   };
 
@@ -177,29 +189,50 @@ export function MaterialListContent({
         </div>
 
         <div className="subwindow-body">
-          <div className="subwindow-toolbar">
-            <span>范围</span>
-            <Dropdown value={workbook} options={options} onChange={setWorkbook} />
-            <button className="btn" onClick={() => loadMats(workbook)} disabled={isLoading}>重新加载</button>
-            <button className="btn" onClick={handleExport} disabled={isLoading || materials.length === 0}>导出材料列表</button>
-            <div className="subwindow-toolbar-spacer" />
-            <span>倍数</span>
-            <input
-              type="number"
-              className="input material-list-count-input"
-              value={multiplier}
-              onChange={(event) => setMultiplier(Math.max(1, parseInt(event.target.value, 10) || 1))}
-            />
-          </div>
+          <div className="material-list-control-stack">
+            <div className="material-list-control-row material-list-control-row-workbook">
+              <span className="material-list-control-label">工作簿</span>
+              <select
+                className="input material-list-workbook-select"
+                value={workbook}
+                onChange={(event) => setWorkbook(event.target.value)}
+              >
+                {options.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
 
-          <label className="subwindow-check-row">
-            <input
-              type="checkbox"
-              checked={includeContainerItems}
-              onChange={(event) => setIncludeContainerItems(event.target.checked)}
-            />
-            统计容器内物品
-          </label>
+            <div className="material-list-control-row material-list-control-row-actions">
+              <button className="btn" onClick={() => loadMats(workbook)} disabled={isLoading}>重新加载</button>
+              <button className="btn" onClick={handleExportArtTable} disabled={isLoading || materials.length === 0}>写入艺术表</button>
+              <button className="btn" onClick={handleExportCsv} disabled={isLoading || materials.length === 0}>写入CSV</button>
+              <label className="material-list-multiplier-control">
+                <span>倍数</span>
+                <input
+                  type="number"
+                  className="input material-list-count-input"
+                  value={multiplier}
+                  onChange={(event) => setMultiplier(Math.max(1, parseInt(event.target.value, 10) || 1))}
+                />
+              </label>
+            </div>
+
+            <div className="material-list-control-row material-list-control-row-toggles">
+              <label className="subwindow-check-row">
+                <input
+                  type="checkbox"
+                  checked={includeContainerItems}
+                  onChange={(event) => setIncludeContainerItems(event.target.checked)}
+                />
+                统计容器
+              </label>
+              <label className="subwindow-check-row material-list-disabled-toggle" title="统计实体尚未实现">
+                <input type="checkbox" disabled />
+                统计实体
+              </label>
+            </div>
+          </div>
 
           <div className="subwindow-status-text">
             {isLoading ? "正在分析..." : includeContainerItems ? "已包含容器 BlockEntity/TileEntity 内物品。" : "当前仅统计投影方块。"}
@@ -276,7 +309,7 @@ export function StatisticsPage({ currentFile }: any) {
 
   if (!currentFile) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", opacity: 0.7 }}>
+      <div className="statistics-empty-state">
         <h2>统计</h2>
         <p>请先在投影库中选择一个 .litematic 文件。</p>
       </div>
@@ -284,79 +317,117 @@ export function StatisticsPage({ currentFile }: any) {
   }
 
   const topMaterials = data ? [...data.materials].sort((a, b) => b.totalCount - a.totalCount) : [];
+  const featuredMaterials = topMaterials.slice(0, 5);
+  const totalMaterialCount = topMaterials.reduce((sum, material) => sum + material.totalCount, 0);
   const scan = data?.containerScan;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!data}>材料列表</button>
-        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={includeContainerItems}
-            onChange={(event) => setIncludeContainerItems(event.target.checked)}
-          />
-          统计容器内物品
-        </label>
-        <div style={{ flex: 1, color: "var(--text-muted)", fontSize: "0.9em" }}>
-          {includeContainerItems && scan
-            ? `容器扫描：${scan.containers_scanned} 个容器，${scan.item_stacks_scanned} 个物品堆。`
-            : "当前仅统计投影方块。"}
+    <div className="statistics-page">
+      <div className="statistics-toolbar">
+        <div className="statistics-action-row">
+          <button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!data}>材料列表</button>
+          <button className="btn" onClick={loadStats}>重新统计</button>
+          <button className="btn" type="button" disabled>打开枚举器...</button>
         </div>
-        <div style={{ color: "var(--text-muted)", fontSize: "0.85em", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={currentFile}>
-          {currentFile}
+
+        <div className="statistics-toggle-row">
+          <label className="statistics-container-toggle">
+            <input
+              type="checkbox"
+              checked={includeContainerItems}
+              onChange={(event) => setIncludeContainerItems(event.target.checked)}
+            />
+            统计容器
+          </label>
+          <label className="statistics-container-toggle statistics-toggle-disabled">
+            <input type="checkbox" disabled />
+            统计实体
+          </label>
         </div>
-        <button className="btn" onClick={loadStats}>重新分析</button>
       </div>
 
-      {error && <pre style={{ color: "#ff6666", background: "rgba(255,0,0,0.1)", padding: 8, border: "1px solid #ff6666" }}>{error}</pre>}
+      {error && <pre className="statistics-error">{error}</pre>}
 
       {scan?.warnings?.length ? (
-        <details>
-          <summary style={{ color: "var(--text-muted)", cursor: "pointer" }}>容器扫描 warning（{scan.warnings.length}）</summary>
-          <pre style={{ whiteSpace: "pre-wrap", maxHeight: 120, overflow: "auto", background: "var(--surface)", border: "1px solid var(--border)", padding: 8 }}>
+        <details className="statistics-warnings">
+          <summary className="statistics-warnings-summary">容器扫描 warning（{scan.warnings.length}）</summary>
+          <pre className="statistics-warnings-body">
             {scan.warnings.slice(0, 40).join("\n")}
           </pre>
         </details>
       ) : null}
 
-      <div style={{ display: "flex", gap: 12, flex: 1, overflow: "hidden" }}>
-        <div className="group-box" style={{ flex: 1, overflowY: "auto" }}>
-          <div className="group-box-title">结构分析</div>
+      <div className="statistics-layout">
+        <div className="group-box statistics-panel-scroll">
+          <div className="group-box-title">统计学信息</div>
           {data ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <ReadOnlyRow label="非空气方块" value={data.totalNonAirBlocks} />
+            <div className="statistics-metrics">
+              <ReadOnlyRow label="网格数" value={data.enclosingSize.x * data.enclosingSize.y * data.enclosingSize.z} />
+              <ReadOnlyRow label="方块数" value={data.totalNonAirBlocks} />
+              <ReadOnlyRow label="密度" value={`${(data.density * 100).toFixed(2)}%`} />
               <ReadOnlyRow label="区域数量" value={data.regionCount} />
               <ReadOnlyRow label="包围尺寸" value={`${data.enclosingSize.x}x${data.enclosingSize.y}x${data.enclosingSize.z}`} />
-              <ReadOnlyRow label="密度" value={`${(data.density * 100).toFixed(2)}%`} />
               <ReadOnlyRow label="结构类型" value={data.buildingType} />
               <ReadOnlyRow label="红石偏度" value={`${(data.redstoneRatio * 100).toFixed(2)}%`} />
-              <ReadOnlyRow label="流体偏度" value={`${(data.fluidRatio * 100).toFixed(2)}%`} />
+              <ReadOnlyRow label="液体偏度" value={`${(data.fluidRatio * 100).toFixed(2)}%`} />
               <ReadOnlyRow label="实体种类" value={data.entityCount} />
             </div>
           ) : (
-            <div style={{ color: "var(--text-muted)", padding: 16 }}>加载中...</div>
+            <div className="statistics-loading">加载中...</div>
           )}
         </div>
 
-        <div className="group-box" style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-          <div className="group-box-title">主要材料</div>
-          <div style={{ flex: 1, backgroundColor: "var(--surface)", border: "1px solid var(--border)", padding: 12, overflowY: "auto", color: "var(--text)" }}>
-            {data ? (
-              topMaterials.map((material) => (
-                <div key={material.id} style={{ marginBottom: 6, fontSize: "1.05em" }}>
-                  {material.name} <span style={{ color: "var(--text-muted)" }}>x</span> {material.totalCount}
-                  {includeContainerItems && material.containerItemCount > 0 && (
-                    <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>
-                      方块 {material.blockCount} / 容器 {material.containerItemCount}
-                    </span>
-                  )}
-                </div>
-              ))
-            ) : (
-              <div style={{ color: "var(--text-muted)" }}>加载中...</div>
-            )}
+        <div className="statistics-side-stack">
+          <div className="group-box statistics-materials-panel">
+            <div className="group-box-title">主要材料</div>
+            <div className="statistics-materials-body">
+              {data ? (
+                featuredMaterials.map((material) => {
+                  const ratio = totalMaterialCount > 0 ? (material.totalCount / totalMaterialCount) * 100 : 0;
+                  return (
+                    <div key={material.id} className="statistics-material-row">
+                      <div className="statistics-material-main">
+                        <span className="statistics-material-name">{material.name}</span>
+                        <span className="statistics-material-count">{material.totalCount}</span>
+                      </div>
+                      <div className="statistics-material-meta">
+                        <span className="statistics-material-ratio">占比 {ratio.toFixed(2)}%</span>
+                        {includeContainerItems && material.containerItemCount > 0 && (
+                          <span className="statistics-material-detail">
+                            方块 {material.blockCount} / 容器 {material.containerItemCount}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="statistics-loading">加载中...</div>
+              )}
+            </div>
           </div>
+
+          <div className="group-box statistics-enumerator-panel">
+            <div className="group-box-title">枚举器信息</div>
+            <div className="statistics-enumerator-body">
+              <div className="statistics-panel-note">枚举器尚未接入，当前先保留占位控件。</div>
+              <div className="statistics-enumerator-actions">
+                <button className="btn" type="button" disabled>打开枚举器...</button>
+                <button className="btn" type="button" disabled>编辑信息框</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="statistics-footer">
+        <div className="statistics-summary">
+          {includeContainerItems && scan
+            ? `容器扫描：${scan.containers_scanned} 个容器，${scan.item_stacks_scanned} 个物品堆。`
+            : "当前仅统计投影方块。"}
+        </div>
+        <div className="statistics-file-path" title={currentFile}>
+          {currentFile}
         </div>
       </div>
 
@@ -369,10 +440,10 @@ export function StatisticsPage({ currentFile }: any) {
 
 function ReadOnlyRow({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="form-row" style={{ marginBottom: 0 }}>
-      <div className="form-label" style={{ width: 140, padding: "6px 8px", textAlign: "right" }}>{label}</div>
-      <div className="form-field" style={{ margin: 0, padding: 0 }}>
-        <input className="input" style={{ width: "100%" }} value={value} readOnly />
+    <div className="form-row statistics-readonly-row">
+      <div className="form-label statistics-readonly-label">{label}</div>
+      <div className="form-field statistics-readonly-field">
+        <input className="input statistics-readonly-input" value={value} readOnly />
       </div>
     </div>
   );
