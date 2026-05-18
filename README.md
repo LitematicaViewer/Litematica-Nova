@@ -97,7 +97,7 @@ cd ..\..
 bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test.stockpile.zip --minecraft-version 1.21.10 --mode single
-bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test-multi.stockpile.zip --minecraft-version 1.21.10 --mode multi
+("access-pass`nadmin-pass" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test-multi.stockpile.zip --minecraft-version 1.21.10 --mode multi --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly true --admin-page-enabled true)
 bin\viewer-backend\litematica_core.exe stockpile serve --zip data\stockpile\exports\test.stockpile.zip --bind 127.0.0.1:8787
 bin\viewer-backend\stockpile_server.exe --root <unzipped-stockpile-dir> --bind 127.0.0.1:8787
 bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpile\exports\test.stockpile.zip
@@ -117,6 +117,7 @@ Copy-Item target\release\litematica_core.exe ..\..\bin\viewer-backend\litematica
 cd tools\viewer-core
 cargo build --release --bin stockpile_server
 Copy-Item target\release\stockpile_server.exe ..\..\bin\viewer-backend\stockpile_server.exe -Force
+Copy-Item target\release\stockpile_server.exe ..\..\bin\stockpile-server\windows-x64\stockpile_server.exe -Force
 
 # 构建并同步 native viewer
 cd tools\viewer-core

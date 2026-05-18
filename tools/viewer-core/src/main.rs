@@ -61,12 +61,28 @@ fn main() -> Result<()> {
         }
         "stockpile export-zip" => {
             let mode = args.stockpile_mode.as_deref().unwrap_or("single").parse()?;
+            let deploy_options = stockpile_zip::StockpileDeployOptions {
+                access_password: read_optional_export_password(
+                    args.access_password_stdin,
+                    args.admin_password_stdin,
+                    true,
+                )?,
+                admin_password: read_optional_export_password(
+                    args.access_password_stdin,
+                    args.admin_password_stdin,
+                    false,
+                )?,
+                whitelist: read_whitelist_file(args.whitelist_file.as_deref())?,
+                allow_guest_readonly: args.allow_guest_readonly,
+                admin_page_enabled: args.admin_page_enabled,
+            };
             let output = stockpile_zip::export_stockpile_zip(
                 &args.input,
                 args.output.as_deref(),
                 args.include_container_items,
                 args.minecraft_version.as_deref(),
                 mode,
+                deploy_options,
             )?;
             emit_output(&output, None)?;
         }
@@ -277,4 +293,64 @@ fn read_stdin_password(enabled: bool) -> Result<String> {
         anyhow::bail!("password cannot be empty");
     }
     Ok(value)
+}
+
+fn read_optional_export_password(
+    access_enabled: bool,
+    admin_enabled: bool,
+    access: bool,
+) -> Result<Option<String>> {
+    if !access_enabled && !admin_enabled {
+        return Ok(None);
+    }
+    let value = read_all_stdin_once()?;
+    if access_enabled && admin_enabled {
+        let mut lines = value.lines().filter(|line| !line.trim().is_empty());
+        let access_password = lines
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing access password on stdin line 1"))?
+            .to_string();
+        let admin_password = lines
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing admin password on stdin line 2"))?
+            .to_string();
+        return Ok(Some(if access {
+            access_password
+        } else {
+            admin_password
+        }));
+    }
+    if access == access_enabled {
+        let password = value.trim_end_matches(['\r', '\n']).to_string();
+        if password.is_empty() {
+            anyhow::bail!("password cannot be empty");
+        }
+        Ok(Some(password))
+    } else {
+        Ok(None)
+    }
+}
+
+fn read_all_stdin_once() -> Result<String> {
+    static STDIN_VALUE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(value) = STDIN_VALUE.get() {
+        return Ok(value.clone());
+    }
+    let mut value = String::new();
+    io::stdin().read_to_string(&mut value)?;
+    let _ = STDIN_VALUE.set(value);
+    Ok(STDIN_VALUE.get().cloned().unwrap_or_default())
+}
+
+fn read_whitelist_file(path: Option<&std::path::Path>) -> Result<Vec<String>> {
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    let text = std::fs::read_to_string(path)?;
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(ToOwned::to_owned)
+        .collect())
 }

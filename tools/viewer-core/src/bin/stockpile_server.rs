@@ -16,7 +16,11 @@ struct ServerArgs {
 
 impl ServerArgs {
     fn parse() -> Result<Self> {
-        let mut args = std::env::args().skip(1);
+        let mut raw_args = std::env::args().skip(1).collect::<Vec<_>>();
+        if raw_args.first().is_some_and(|arg| arg == "serve") {
+            raw_args.remove(0);
+        }
+        let mut args = raw_args.into_iter();
         let mut root = None;
         let mut bind = None;
         while let Some(arg) = args.next() {

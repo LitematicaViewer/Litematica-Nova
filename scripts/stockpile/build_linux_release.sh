@@ -38,3 +38,10 @@ fi
 
 echo "Linux stockpile_server:"
 echo "${BINARY}"
+
+OUT="${REPO_ROOT}/bin/stockpile-server/linux-x64/stockpile_server"
+mkdir -p "$(dirname -- "${OUT}")"
+cp "${BINARY}" "${OUT}"
+chmod +x "${OUT}"
+echo "Copied to:"
+echo "${OUT}"
