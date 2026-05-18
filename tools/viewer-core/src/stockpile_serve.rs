@@ -297,6 +297,12 @@ fn default_config(now: u64) -> StockpileConfig {
 
 pub fn serve_stockpile_zip(zip_path: &Path, bind: &str) -> Result<StockpileServeSummary> {
     let zip_path = absolutize(zip_path)?;
+    if !zip_path.is_file() {
+        bail!(
+            "stockpile zip does not exist or is not a file: {}",
+            zip_path.display()
+        );
+    }
     let project = load_project_from_zip(&zip_path)?;
     let db_path = session_db_path(&zip_path)?;
     ensure_session_db(&db_path, &zip_hash(&zip_path)?)?;
@@ -308,8 +314,13 @@ pub fn serve_stockpile_zip(zip_path: &Path, bind: &str) -> Result<StockpileServe
             "WARNING: stockpile serve is bound to {bind} without access_password_enabled; public writes may be exposed"
         );
     }
-    let listener =
-        TcpListener::bind(bind).with_context(|| format!("bind stockpile server failed: {bind}"))?;
+    let listener = TcpListener::bind(bind).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AddrInUse {
+            anyhow!("bind stockpile server failed: {bind}; address is already in use")
+        } else {
+            anyhow!("bind stockpile server failed: {bind}: {error}")
+        }
+    })?;
     let summary = StockpileServeSummary {
         bind: bind.to_string(),
         zip: zip_path.clone(),
