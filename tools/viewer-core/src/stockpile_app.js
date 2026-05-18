@@ -14,6 +14,7 @@
   let lastSyncText = '-';
   let syncError = '';
   let pollHandle = null;
+  let participantRegistered = false;
 
   function pickInitialLang() {
     const stored = localStorage.getItem(langKey);
@@ -46,6 +47,7 @@
     ensureUser();
     if (isServeMode) {
       pollHandle = setInterval(async () => {
+        if (userId && !participantRegistered) await registerParticipant();
         await refreshState();
         render();
       }, 3000);
@@ -70,8 +72,10 @@
     if (!userId || !isServeMode) return;
     try {
       await apiSend('/api/participants', 'POST', { user_id: userId });
+      participantRegistered = true;
       syncError = '';
     } catch (error) {
+      participantRegistered = false;
       syncError = `${t('syncError')}: ${error.message}`;
     }
   }
@@ -82,6 +86,7 @@
     }
     try {
       syncState = await apiGet('/api/state');
+      participantRegistered = !!userId && (syncState.participants || []).some((participant) => participant.user_id === userId);
       lastSyncText = new Date().toLocaleTimeString();
       syncError = '';
     } catch (error) {
@@ -153,6 +158,7 @@
       const value = input.value.trim();
       if (!value) { input.focus(); return; }
       userId = value;
+      participantRegistered = false;
       localStorage.setItem(userKey, userId);
       modal.remove();
       if (isServeMode) await registerParticipant();
@@ -407,6 +413,7 @@
     document.getElementById('switchUser').addEventListener('click', () => {
       localStorage.removeItem(userKey);
       userId = '';
+      participantRegistered = false;
       ensureUser();
       render();
     });

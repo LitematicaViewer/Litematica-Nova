@@ -215,6 +215,7 @@ fn route_request_inner(
             let body: ParticipantRequest = serde_json::from_slice(&request.body)
                 .context("parse participant request failed")?;
             upsert_participant(db_path, &body.user_id)?;
+            eprintln!("stockpile participant upserted: {}", body.user_id);
             let state = build_state(db_path, &project.materials)?;
             return Ok(json_response(200, state, "OK"));
         }
