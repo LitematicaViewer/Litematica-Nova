@@ -211,7 +211,7 @@ bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litema
 
 `export-zip` 复用 stockpile materials 数据模型，输出可解压后直接打开的单页网页。ZIP 内包含 `index.html`、`assets/app.css`、`assets/app.js`、`data/manifest.json`、`data/materials.json`、`data/recipe_status.json` 和 `data/recipe_trees.json`；`index.html` 内嵌 `window.__STOCKPILE_DATA__`，避免 `file://` 下 fetch 本地 JSON 被拦截。当前状态只写入浏览器 localStorage，不提供多人同步。
 
-`recipe_trees.json` 由本地 recipe cache 解析生成，不联网。第一版支持 `minecraft:crafting_shaped`、`minecraft:crafting_shapeless` 和 `minecraft:stonecutting`。tag 输入只显示 tag 节点并标记 unresolved，不猜具体材料；找不到支持配方时标记 `no_recipe`。
+`recipe_trees.json` 由本地 recipe cache 解析生成，不联网。解析器会递归生成可视化合成链节点，支持 `minecraft:crafting_shaped`、`minecraft:crafting_shapeless`、`minecraft:stonecutting`、cooking 类配方、smithing transform/trim 和 `minecraft:crafting_special_*`。tag 输入只显示 tag 节点并标记 unresolved，不猜具体材料；special recipe 标记为 `special_recipe`；找不到支持配方时标记 `no_recipe`。ZIP 网页展开材料时使用节点卡片、工艺 badge、批次数、余量和父子连线展示完整合成链。
 
 运行资源：
 

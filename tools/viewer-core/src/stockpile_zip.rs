@@ -374,15 +374,33 @@ button { cursor: pointer; }
 .detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
 .detail { background: #0c100e; border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
 .detail span { display: block; color: var(--muted); font-size: 12px; }
-.recipe-tree { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; background: #0b100d; padding: 12px; }
-.tree-node { margin: 8px 0 8px 18px; padding-left: 12px; border-left: 1px solid #3e5543; }
+.craft-chain { margin-top: 14px; display: grid; gap: 10px; }
+.tree-node { position: relative; margin: 10px 0 10px 22px; }
+.tree-node::before { content: ""; position: absolute; left: -13px; top: -10px; bottom: 20px; width: 1px; background: #3f5b46; }
+.tree-node::after { content: ""; position: absolute; left: -13px; top: 24px; width: 13px; height: 1px; background: #3f5b46; }
 .tree-node.root { margin-left: 0; }
-.tree-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.tree-item { font-weight: 800; color: var(--text); }
-.tree-meta { color: var(--muted); font-size: 12px; }
-.tree-recipe { color: var(--accent); font-size: 12px; }
-.tree-unresolved { color: var(--warn); font-size: 12px; }
-.tree-ingredients { color: var(--muted); font-size: 12px; margin: 6px 0; }
+.tree-node.root::before, .tree-node.root::after { display: none; }
+.recipe-card { border: 1px solid var(--line); border-radius: 8px; background: #0b100d; padding: 12px; box-shadow: inset 0 1px 0 rgba(255,255,255,.03); }
+.recipe-card.tag { border-color: #7b6332; background: #151309; }
+.recipe-card.special { border-color: #805a43; background: #17100d; }
+.recipe-card.unresolved { border-color: #804949; background: #180f0f; }
+.recipe-card-head { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 10px; align-items: start; }
+.recipe-icon { width: 46px; height: 46px; border-radius: 8px; display: grid; place-items: center; background: #0d1520; border: 1px solid #244260; color: var(--accent-2); font-size: 10px; text-align: center; overflow-wrap: anywhere; padding: 4px; }
+.recipe-name { font-weight: 800; font-size: 15px; }
+.recipe-id { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.recipe-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+.recipe-badge { border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; font-size: 11px; color: var(--muted); }
+.recipe-badge.process { color: var(--accent); border-color: #3a8b5a; }
+.recipe-badge.warn { color: var(--warn); border-color: #7b6332; }
+.recipe-badge.bad { color: var(--bad); border-color: #804949; }
+.recipe-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.recipe-stat { background: #08100b; border: 1px solid #26372b; border-radius: 8px; padding: 8px; }
+.recipe-stat span { display: block; color: var(--muted); font-size: 11px; }
+.recipe-ingredients { color: var(--muted); font-size: 12px; margin-top: 9px; }
+.recipe-children { margin-top: 8px; }
+.tree-toggle { min-width: 34px; height: 30px; padding: 0 8px; }
+.possible-items { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.possible-items span { border: 1px solid #5f6234; border-radius: 999px; padding: 2px 7px; font-size: 11px; color: var(--warn); }
 .empty { color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; padding: 20px; text-align: center; }
 
 .modal { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(0,0,0,.76); padding: 20px; }
@@ -413,6 +431,7 @@ const APP_JS: &str = r#"(function () {
   let state = loadState();
   let controls = { search: '', sort: 'grouped', filter: 'all' };
   let open = new Set();
+  let collapsedTree = new Set();
 
   function loadState() {
     try { return JSON.parse(localStorage.getItem(storageKey) || '{}'); }
@@ -598,19 +617,78 @@ const APP_JS: &str = r#"(function () {
       ${detail('shulker_boxes', item.shulker_boxes)}
       ${detail('source_regions', (item.source_regions || []).join(', ') || '-')}
       ${detail('recipe_status', item.recipe_status)}
-    </div>${tree ? renderRecipeTree(tree) : ''}<p class="sub">${escapeHtml(recipeNote)}</p>`;
+    </div>${tree ? `<div class="craft-chain">${renderRecipeTree(tree, true)}</div>` : ''}<p class="sub">${escapeHtml(recipeNote)}</p>`;
   }
   function renderRecipeTree(node, isRoot = true) {
-    const ingredients = (node.ingredients || []).map((ingredient) => `${ingredient.item_id} x${ingredient.needed_count}${ingredient.unresolved ? ` (${ingredient.unresolved_reason})` : ''}`).join(' · ');
-    const children = (node.children || []).map((child) => renderRecipeTree(child, false)).join('');
-    const unresolved = node.unresolved ? `<span class="tree-unresolved">${escapeHtml(node.unresolved_reason || 'unresolved')}</span>` : '';
-    return `<div class="recipe-tree ${isRoot ? '' : 'tree-node'}">
-      <div class="tree-head"><span class="tree-item">${escapeHtml(node.display_name || node.item_id)}</span><span class="tree-meta">${escapeHtml(node.item_id)} · need ${node.needed_count}</span>${unresolved}</div>
-      <div class="tree-recipe">${escapeHtml(node.recipe_type)} · output ${node.output_count} · batches ${node.batch_count} · extra ${node.extra_output}</div>
-      ${ingredients ? `<div class="tree-ingredients">inputs: ${escapeHtml(ingredients)}</div>` : ''}
-      ${children ? `<div>${children}</div>` : ''}
+    const nodeId = node.node_id || `${node.item_id}-${node.depth || 0}`;
+    const collapsed = collapsedTree.has(nodeId);
+    const hasChildren = (node.children || []).length > 0;
+    const children = hasChildren && !collapsed ? (node.children || []).map((child) => renderRecipeTree(child, false)).join('') : '';
+    const ingredients = (node.ingredients || []).map((ingredient) => `${ingredient.display_name || ingredient.item_id} x${ingredient.needed_count}${ingredient.unresolved ? ` (${ingredient.unresolved_reason})` : ''}`).join(' · ');
+    const possible = renderPossibleItems(node);
+    const message = nodeMessageSafe(node);
+    return `<div class="tree-node ${isRoot ? 'root' : ''}" data-tree-id="${escapeAttr(nodeId)}">
+      <div class="recipe-card ${escapeAttr(node.visual_kind || '')}">
+        <div class="recipe-card-head">
+          <div class="recipe-icon">${escapeHtml(node.icon_key || node.item_id)}</div>
+          <div>
+            <div class="recipe-name">${escapeHtml(node.display_name || node.item_id)}</div>
+            <div class="recipe-id">${escapeHtml(node.tag || node.item_id)}</div>
+            <div class="recipe-badges">
+              <span class="recipe-badge process">${processLabel(node)}</span>
+              <span class="recipe-badge">Need ${node.needed_count}</span>
+              ${node.unresolved ? `<span class="recipe-badge bad">${escapeHtml(node.unresolved_reason || 'unresolved')}</span>` : ''}
+              ${node.requires_fuel ? '<span class="recipe-badge warn">Fuel required</span>' : ''}
+              ${node.decorative_smithing ? '<span class="recipe-badge warn">Decorative smithing</span>' : ''}
+            </div>
+          </div>
+          ${hasChildren ? `<button class="button tree-toggle" data-action="tree-toggle" data-tree-id="${escapeAttr(nodeId)}">${collapsed ? '+' : '-'}</button>` : ''}
+        </div>
+        <div class="recipe-grid">
+          ${recipeStat('Recipe', node.recipe_type || 'n/a')}
+          ${recipeStat('Process', node.process_type || 'n/a')}
+          ${recipeStat('Output each', node.output_count)}
+          ${recipeStat('Batches', node.batch_count)}
+          ${recipeStat('Extra', node.extra_output)}
+          ${recipeStat('Depth', node.depth || 0)}
+        </div>
+        ${ingredients ? `<div class="recipe-ingredients">Inputs: ${escapeHtml(ingredients)}</div>` : ''}
+        ${message ? `<div class="recipe-ingredients">${escapeHtml(message)}</div>` : ''}
+        ${possible}
+      </div>
+      ${children ? `<div class="recipe-children">${children}</div>` : ''}
     </div>`;
   }
+  function recipeStat(label, value) {
+    return `<div class="recipe-stat"><span>${escapeHtml(label)}</span>${escapeHtml(String(value ?? 0))}</div>`;
+  }
+  function processLabel(node) {
+    const map = { craft: 'Craft', stonecut: 'Stonecut', smelt: 'Smelt', blast: 'Blast', smoke: 'Smoke', campfire: 'Campfire', smith: 'Smith', smith_trim: 'Smith', special: 'Special', tag: 'Tag', unresolved: 'Unresolved' };
+    return escapeHtml(map[node.process_type] || node.process_type || node.recipe_type || 'Recipe');
+  }
+  function renderPossibleItems(node) {
+    const values = (node.possible_items || []).slice(0, 12);
+    if (!values.length) return '';
+    const more = (node.possible_items || []).length - values.length;
+    return `<div class="possible-items">${values.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}${more > 0 ? `<span>+${more}</span>` : ''}</div>`;
+  }
+  function nodeMessageSafe(node) {
+    if (node.visual_kind === 'tag') return `可替代材料组 ${node.tag || node.item_id}`;
+    if (node.visual_kind === 'special') return `特殊配方，无法静态展开：${node.recipe_type}`;
+    if (node.unresolved_reason === 'no_recipe') return '无固定配方，需要手动准备';
+    if (node.unresolved_reason === 'tag_input') return 'tag 输入不会自动猜具体材料';
+    if (node.unresolved) return `未解析：${node.unresolved_reason || 'unresolved'}`;
+    return '';
+  }
+  /* function nodeMessage(node) {
+    if (node.visual_kind === 'tag') return `可替代材料组 ${node.tag || node.item_id}`;
+    if (node.visual_kind === 'special') return `特殊配方，无法静态展开：${node.recipe_type}`;
+    if (node.unresolved_reason === 'no_recipe') return '无固定配方，需要手动准备';
+    if (node.unresolved_reason === 'tag_input') return 'tag 输入不会自动猜具体材料';
+    if (node.unresolved) return `未解析：${node.unresolved_reason || 'unresolved'}`;
+    return '';
+  }
+  */
   function detail(label, value) { return `<div class="detail"><span>${escapeHtml(label)}</span>${escapeHtml(String(value))}</div>`; }
   function bindControls() {
     document.getElementById('switchUser').addEventListener('click', () => {
@@ -629,6 +707,14 @@ const APP_JS: &str = r#"(function () {
       card.querySelector('[data-action="done"]').addEventListener('click', () => setMaterialState(item, { status: 'done', quantity: item.required_count, assignee: userId }));
       card.querySelector('[data-action="cancel"]').addEventListener('click', () => setMaterialState(item, { status: 'not_started', quantity: 0, assignee: '' }));
       card.querySelector('[data-action="toggle"]').addEventListener('click', () => { open.has(item.namespace_id) ? open.delete(item.namespace_id) : open.add(item.namespace_id); render(); });
+    });
+    document.querySelectorAll('[data-action="tree-toggle"]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const id = button.dataset.treeId;
+        collapsedTree.has(id) ? collapsedTree.delete(id) : collapsedTree.add(id);
+        render();
+      });
     });
   }
   function escapeHtml(value) {
@@ -719,22 +805,51 @@ mod tests {
         let materials = stockpile::build_materials_data(&input, false, Some("1.21.10"))
             .expect("materials data");
         let mut trees = BTreeMap::new();
-        trees.insert(
-            "minecraft:stone".to_string(),
-            RecipeTreeNode {
-                item_id: "minecraft:stone".to_string(),
-                display_name: "Stone".to_string(),
-                needed_count: 3,
-                output_count: 1,
-                batch_count: 3,
-                extra_output: 0,
-                recipe_type: "minecraft:stonecutting".to_string(),
-                ingredients: Vec::new(),
-                children: Vec::new(),
-                unresolved: false,
-                unresolved_reason: None,
-            },
+        let mut root = test_recipe_node(
+            "minecraft:stone",
+            "Stone",
+            "minecraft:smelting",
+            "smelt",
+            "process",
+            0,
         );
+        root.requires_fuel = true;
+        root.children.push(test_recipe_node(
+            "#minecraft:logs",
+            "#minecraft:logs",
+            "",
+            "tag",
+            "tag",
+            1,
+        ));
+        root.children.last_mut().expect("tag node").unresolved = true;
+        root.children
+            .last_mut()
+            .expect("tag node")
+            .unresolved_reason = Some("tag_input".to_string());
+        root.children.last_mut().expect("tag node").tag = Some("#minecraft:logs".to_string());
+        root.children.push(test_recipe_node(
+            "minecraft:netherite_pickaxe",
+            "Netherite Pickaxe",
+            "minecraft:smithing_transform",
+            "smith",
+            "process",
+            1,
+        ));
+        root.children.push(test_recipe_node(
+            "minecraft:firework_rocket",
+            "Firework Rocket",
+            "minecraft:crafting_special_firework_rocket",
+            "special",
+            "special",
+            1,
+        ));
+        root.children.last_mut().expect("special node").unresolved = true;
+        root.children
+            .last_mut()
+            .expect("special node")
+            .unresolved_reason = Some("special_recipe".to_string());
+        trees.insert("minecraft:stone".to_string(), root);
         let payload = build_payload_with_trees(
             &input,
             "1.21.10",
@@ -758,6 +873,10 @@ mod tests {
         let index = read_zip_entry(&mut zip, "index.html");
         assert!(index.contains("\"recipe_trees\""));
         assert!(index.contains("minecraft:stone"));
+        assert!(index.contains("\"process_type\":\"smelt\""));
+        assert!(index.contains("\"process_type\":\"smith\""));
+        assert!(index.contains("\"visual_kind\":\"tag\""));
+        assert!(index.contains("\"visual_kind\":\"special\""));
         let _ = fs::remove_file(output);
     }
 
@@ -814,6 +933,39 @@ mod tests {
             schema_version: Some(1),
             hash: Some("test".to_string()),
             warning: None,
+        }
+    }
+
+    fn test_recipe_node(
+        item_id: &str,
+        display_name: &str,
+        recipe_type: &str,
+        process_type: &str,
+        visual_kind: &str,
+        depth: u32,
+    ) -> RecipeTreeNode {
+        RecipeTreeNode {
+            node_id: format!("{}_{}", item_id.replace([':', '#'], "_"), depth),
+            item_id: item_id.to_string(),
+            display_name: display_name.to_string(),
+            icon_key: item_id.to_string(),
+            needed_count: 3,
+            output_count: 1,
+            batch_count: 3,
+            extra_output: 0,
+            recipe_type: recipe_type.to_string(),
+            process_type: process_type.to_string(),
+            ingredients: Vec::new(),
+            children: Vec::new(),
+            unresolved: false,
+            unresolved_reason: None,
+            visual_kind: visual_kind.to_string(),
+            depth,
+            tag: None,
+            possible_items: Vec::new(),
+            requires_fuel: false,
+            fuel_estimate: None,
+            decorative_smithing: false,
         }
     }
 
