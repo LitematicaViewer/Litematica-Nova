@@ -102,6 +102,9 @@ bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpi
 bin\viewer-backend\litematica_core.exe stockpile session-export --zip data\stockpile\exports\test.stockpile.zip --output data\stockpile\sessions\test.state.json
 bin\viewer-backend\litematica_core.exe stockpile session-reset --zip data\stockpile\exports\test.stockpile.zip --yes
 bin\viewer-backend\litematica_core.exe stockpile session-import --zip data\stockpile\exports\test.stockpile.zip --input data\stockpile\sessions\test.state.json --replace
+bin\viewer-backend\litematica_core.exe stockpile config-show --zip data\stockpile\exports\test.stockpile.zip
+bin\viewer-backend\litematica_core.exe stockpile config-set --zip data\stockpile\exports\test.stockpile.zip --key mode --value single
+bin\viewer-backend\litematica_core.exe stockpile config-reset --zip data\stockpile\exports\test.stockpile.zip --yes
 
 # 构建并同步 litematica_core
 cd tools\viewer-core

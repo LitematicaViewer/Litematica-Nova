@@ -32,6 +32,8 @@ pub struct CliArgs {
     pub yes: bool,
     pub replace: bool,
     pub session_input: Option<PathBuf>,
+    pub config_key: Option<String>,
+    pub config_value: Option<String>,
 }
 
 pub fn parse_args() -> Result<CliArgs> {
@@ -207,6 +209,8 @@ pub fn parse_args() -> Result<CliArgs> {
         yes: false,
         replace: false,
         session_input: None,
+        config_key: None,
+        config_value: None,
     })
 }
 
@@ -263,6 +267,8 @@ fn parse_runtime_paths_args(command: String, raw_args: Vec<String>) -> Result<Cl
         yes: false,
         replace: false,
         session_input: None,
+        config_key: None,
+        config_value: None,
     })
 }
 
@@ -281,6 +287,8 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     let mut yes = false;
     let mut replace = false;
     let mut session_input = None;
+    let mut config_key = None;
+    let mut config_value = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -303,6 +311,24 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
             "--include-container-items" => include_container_items = true,
             "--yes" => yes = true,
             "--replace" => replace = true,
+            "--key" => {
+                let Some(value) = args.next() else {
+                    bail!("missing value after --key");
+                };
+                if value.is_empty() {
+                    bail!("missing value after --key");
+                }
+                config_key = Some(value);
+            }
+            "--value" => {
+                let Some(value) = args.next() else {
+                    bail!("missing value after --value");
+                };
+                if value.is_empty() {
+                    bail!("missing value after --value");
+                }
+                config_value = Some(value);
+            }
             "--minecraft-version" => {
                 let Some(value) = args.next() else {
                     bail!("missing value after --minecraft-version");
@@ -363,6 +389,20 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
                 }
                 bind = Some(value.to_string());
             }
+            _ if arg.starts_with("--key=") => {
+                let value = arg.trim_start_matches("--key=");
+                if value.is_empty() {
+                    bail!("missing value after --key=");
+                }
+                config_key = Some(value.to_string());
+            }
+            _ if arg.starts_with("--value=") => {
+                let value = arg.trim_start_matches("--value=");
+                if value.is_empty() {
+                    bail!("missing value after --value=");
+                }
+                config_value = Some(value.to_string());
+            }
             _ if arg.starts_with('-') => bail!("unknown argument: {arg}"),
             _ => {
                 if input.is_some() {
@@ -395,6 +435,9 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
             | "session-reset"
             | "session-export"
             | "session-import"
+            | "config-show"
+            | "config-set"
+            | "config-reset"
     ) {
         bail!("unsupported stockpile subcommand: {subcommand}");
     }
@@ -403,7 +446,13 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     }
     if matches!(
         subcommand.as_str(),
-        "session-info" | "session-reset" | "session-export" | "session-import"
+        "session-info"
+            | "session-reset"
+            | "session-export"
+            | "session-import"
+            | "config-show"
+            | "config-set"
+            | "config-reset"
     ) && input.is_none()
     {
         bail!("stockpile {subcommand} requires --zip <path>");
@@ -413,6 +462,9 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     }
     if subcommand == "session-import" && session_input.is_none() {
         bail!("stockpile session-import requires --input <state.json>");
+    }
+    if subcommand == "config-set" && (config_key.is_none() || config_value.is_none()) {
+        bail!("stockpile config-set requires --key <key> --value <value>");
     }
 
     Ok(CliArgs {
@@ -426,6 +478,9 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
                 | "session-reset"
                 | "session-export"
                 | "session-import"
+                | "config-show"
+                | "config-set"
+                | "config-reset"
         ) {
             input.ok_or_else(|| {
                 if subcommand == "serve" {
@@ -463,6 +518,8 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
         yes,
         replace,
         session_input,
+        config_key,
+        config_value,
     })
 }
 
@@ -563,6 +620,8 @@ fn parse_replace_blocks_args(command: String, raw_args: Vec<String>) -> Result<C
         yes: false,
         replace: false,
         session_input: None,
+        config_key: None,
+        config_value: None,
     })
 }
 
@@ -651,6 +710,8 @@ fn parse_generate_args(command: String, raw_args: Vec<String>) -> Result<CliArgs
         yes: false,
         replace: false,
         session_input: None,
+        config_key: None,
+        config_value: None,
     })
 }
 
@@ -740,5 +801,7 @@ fn parse_edit_metadata_args(command: String, raw_args: Vec<String>) -> Result<Cl
         yes: false,
         replace: false,
         session_input: None,
+        config_key: None,
+        config_value: None,
     })
 }

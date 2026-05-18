@@ -99,6 +99,26 @@ fn main() -> Result<()> {
             let output = stockpile_serve::session_import(&args.input, input_path, args.replace)?;
             emit_output(&output, None)?;
         }
+        "stockpile config-show" => {
+            let output = stockpile_serve::config_show(&args.input)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile config-set" => {
+            let key = args
+                .config_key
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --key"))?;
+            let value = args
+                .config_value
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --value"))?;
+            let output = stockpile_serve::config_set(&args.input, key, value)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile config-reset" => {
+            let output = stockpile_serve::config_reset(&args.input, args.yes)?;
+            emit_output(&output, None)?;
+        }
         "stats" => {
             let output = stats_api::build_stats_output(&args.input, args.include_container_items)?;
             emit_output(&output, args.output.as_deref())?;

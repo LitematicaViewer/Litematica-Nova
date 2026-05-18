@@ -399,6 +399,7 @@ fn i18n_payload() -> Value {
             "specialRecipe": "特殊配方，无法静态展开",
             "noRecipe": "无固定配方，需要手动准备",
             "tagInput": "tag 输入不会自动猜具体材料",
+            "iconFallback": "备用图标",
             "syncError": "同步失败",
             "empty": "没有匹配的材料"
         },
@@ -488,6 +489,7 @@ fn i18n_payload() -> Value {
             "specialRecipe": "Special recipe, cannot be expanded statically",
             "noRecipe": "No fixed recipe; prepare manually",
             "tagInput": "Tag input is not guessed as a concrete item",
+            "iconFallback": "Fallback icon",
             "syncError": "Sync failed",
             "empty": "No matching materials"
         }
