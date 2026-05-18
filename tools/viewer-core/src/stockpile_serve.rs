@@ -1,4 +1,4 @@
-﻿use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -476,8 +476,12 @@ fn route_request_inner(
         return Ok(response);
     }
     match (request.method.as_str(), path) {
-        ("GET", "/api/project") => return Ok(json_response(200, project, "OK")),
+        ("GET", "/api/project") => {
+            ensure_can_read(&config, &auth)?;
+            return Ok(json_response(200, project, "OK"));
+        }
         ("GET", "/api/state") => {
+            ensure_can_read(&config, &auth)?;
             let state = build_state(db_path, &project.materials)?;
             return Ok(json_response(200, state, "OK"));
         }
@@ -806,6 +810,13 @@ fn login_response(conn: &Connection, kind: &str, body: AuthRequest) -> Result<Ht
 fn require_admin(auth: &AuthContext) -> Result<()> {
     if !auth.admin {
         bail!("admin_required");
+    }
+    Ok(())
+}
+
+fn ensure_can_read(config: &StockpileConfig, auth: &AuthContext) -> Result<()> {
+    if config.access_password_enabled && !auth.access && !config.allow_guest_readonly {
+        bail!("unauthorized");
     }
     Ok(())
 }
@@ -2645,7 +2656,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
 fn write_response(stream: &mut TcpStream, response: HttpResponse) -> Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Credentials: true\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nContent-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'\r\n",
         response.status,
         response.reason,
         response.content_type,
@@ -3377,6 +3388,57 @@ mod tests {
             &project,
         );
         assert_eq!(ok.status, 200);
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn access_password_blocks_project_and_state_reads_until_authenticated() {
+        let fixture = exported_fixture("access_blocks_reads");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        set_access_password(&fixture, "secret").expect("set password");
+        config_set(&fixture, "allow_guest_readonly", "false").expect("disable readonly guests");
+        let project = load_project_from_zip(&fixture).expect("project");
+        let source = AssetSource::Zip(fixture.clone());
+
+        let blocked_project =
+            route_request(&request("GET", "/api/project", b""), &source, &db, &project);
+        let blocked_state =
+            route_request(&request("GET", "/api/state", b""), &source, &db, &project);
+        assert_eq!(blocked_project.status, 401);
+        assert_eq!(blocked_state.status, 401);
+
+        config_set(&fixture, "allow_guest_readonly", "true").expect("enable readonly guests");
+        let readonly_state =
+            route_request(&request("GET", "/api/state", b""), &source, &db, &project);
+        assert_eq!(readonly_state.status, 200);
+
+        config_set(&fixture, "allow_guest_readonly", "false").expect("disable readonly guests");
+        let login = route_request_inner(
+            &request(
+                "POST",
+                "/api/auth/access",
+                br#"{"password":"secret","user_id":"alex"}"#,
+            ),
+            &source,
+            &db,
+            &project,
+        )
+        .expect("login");
+        let cookie = login
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Set-Cookie")
+            .map(|(_, value)| value.clone())
+            .expect("cookie");
+        let ok_state = route_request(
+            &request_with_cookie("GET", "/api/state", b"", &cookie),
+            &source,
+            &db,
+            &project,
+        );
+        assert_eq!(ok_state.status, 200);
 
         cleanup_fixture(&fixture, &db, Path::new(""));
     }
