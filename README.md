@@ -27,6 +27,22 @@ Litematica-BA 是面向 Minecraft `.litematic` 投影文件的桌面工具。当
 - 生成页模板、AI plan、API 对话、dry-run/apply。
 - 选项页主题、用户数据配置、后端检查、AI 设置。
 
+## Stockpile 网页导出速览
+
+Stockpile 网页导出分为两个角色：`litematica_core` 在本地/CI 负责解析 `.litematic` 并构建 `single` 或 `multi` `.stockpile.zip`；部署端只运行轻量 `stockpile_server`，读取包内 JSON 并把多人状态写入 `db/stockpile.sqlite`。完整交接见 `docs/STOCKPILE_HANDOFF.md`，Linux/VPS 部署见 `docs/STOCKPILE_LINUX_DEPLOYMENT.md`。
+
+常用导出形态：
+
+```powershell
+# 单人/离线：解压后直接打开 index.html，状态存在浏览器 localStorage
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project-single.stockpile.zip --minecraft-version 1.21.10 --mode single
+
+# 多人/可运行：构建期写入 access/admin 密码、白名单、默认访问策略和 admin 页面开关
+"access-pass`nadmin-pass`n" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly false --admin-page-enabled true
+```
+
+`multi --target` 支持 `windows-x64`、`linux-x64`、`macos-x64`、`macos-arm64` 和 `all`。部署 VPS 时上传目标平台 `.stockpile.zip`，不要上传源码、`.litematic`、`data/cache/`、本地 `data/stockpile/` 工作区或未打包的真实二进制。
+
 ## 怎么运行 desktop-nova
 
 安装依赖：
@@ -97,7 +113,7 @@ cd ..\..
 bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test.stockpile.zip --minecraft-version 1.21.10 --mode single
-("access-pass`nadmin-pass" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test-multi.stockpile.zip --minecraft-version 1.21.10 --mode multi --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly true --admin-page-enabled true)
+"access-pass`nadmin-pass`n" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly false --admin-page-enabled true
 bin\viewer-backend\litematica_core.exe stockpile serve --zip data\stockpile\exports\test.stockpile.zip --bind 127.0.0.1:8787
 bin\viewer-backend\stockpile_server.exe --root <unzipped-stockpile-dir> --bind 127.0.0.1:8787
 bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpile\exports\test.stockpile.zip
@@ -122,7 +138,7 @@ Copy-Item target\release\stockpile_server.exe ..\..\bin\stockpile-server\windows
 # 检查/下载跨平台 stockpile_server artifacts
 cd ..\..
 scripts\stockpile\verify_stockpile_server_bins.ps1
-scripts\stockpile\fetch_stockpile_server_artifacts.ps1
+scripts\stockpile\fetch_stockpile_server_artifacts.ps1 -Target linux-x64
 
 # 构建并同步 native viewer
 cd tools\viewer-core
@@ -137,3 +153,5 @@ Copy-Item target\release\litematica_native_viewer.exe ..\..\bin\viewer-backend\l
 - `README.md`：项目入口和运行方式。
 - `docs/ARCHITECTURE.md`：架构、分层、后端桥接和禁区。
 - `docs/DEVELOPMENT.md`：开发、验证、schema、Reden、BlockState、清理和排障。
+- `docs/STOCKPILE_HANDOFF.md`：Stockpile 网页导出、CLI、session、权限和跨平台部署交接。
+- `docs/STOCKPILE_LINUX_DEPLOYMENT.md`：Stockpile Linux/VPS 运行包部署说明。

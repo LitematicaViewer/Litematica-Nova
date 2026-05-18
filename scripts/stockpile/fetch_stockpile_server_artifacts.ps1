@@ -3,7 +3,8 @@ param(
     [string]$Workflow = "stockpile-server.yml",
     [string]$RunId,
     [string]$ReleaseTag,
-    [string]$Out = "bin/stockpile-server"
+    [string]$Out = "bin/stockpile-server",
+    [string[]]$Target = @("all")
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,6 +44,9 @@ function Copy-ArtifactFile {
         $matches = @(Get-ChildItem -LiteralPath $TempRoot -Recurse -File -Filter $FileName | Where-Object {
             $_.FullName -match [regex]::Escape($Platform)
         })
+        if ($matches.Count -eq 0) {
+            $matches = @(Get-ChildItem -LiteralPath $TempRoot -Recurse -File -Filter $FileName)
+        }
         if ($matches.Count -eq 1) {
             $expected = $matches[0].FullName
         } else {
@@ -79,6 +83,25 @@ try {
         @{ Name = "stockpile-server-macos-x64"; Platform = "macos-x64"; File = "stockpile_server" },
         @{ Name = "stockpile-server-macos-arm64"; Platform = "macos-arm64"; File = "stockpile_server" }
     )
+    $targetNames = @()
+    foreach ($entry in $Target) {
+        foreach ($name in ($entry -split ",")) {
+            $trimmed = $name.Trim()
+            if ($trimmed.Length -gt 0) {
+                $targetNames += $trimmed
+            }
+        }
+    }
+    if ($targetNames.Count -eq 0 -or $targetNames -contains "all") {
+        $targetNames = @("windows-x64", "linux-x64", "macos-x64", "macos-arm64")
+    }
+    $validNames = @("windows-x64", "linux-x64", "macos-x64", "macos-arm64")
+    foreach ($name in $targetNames) {
+        if ($validNames -notcontains $name) {
+            throw "Invalid target '$name'. Use windows-x64, linux-x64, macos-x64, macos-arm64, or all."
+        }
+    }
+    $artifacts = @($artifacts | Where-Object { $targetNames -contains $_.Platform })
 
     if ($ReleaseTag) {
         foreach ($artifact in $artifacts) {
@@ -105,7 +128,7 @@ try {
         Copy-ArtifactFile -TempRoot $tempRoot -Platform $artifact.Platform -FileName $artifact.File -OutRoot $outRoot
     }
 
-    & (Join-Path $PSScriptRoot "verify_stockpile_server_bins.ps1") -Root $outRoot
+    & (Join-Path $PSScriptRoot "verify_stockpile_server_bins.ps1") -Root $outRoot -Target $targetNames
 } finally {
     Pop-Location
 }

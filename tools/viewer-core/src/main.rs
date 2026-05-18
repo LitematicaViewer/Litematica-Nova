@@ -75,6 +75,7 @@ fn main() -> Result<()> {
                 whitelist: read_whitelist_file(args.whitelist_file.as_deref())?,
                 allow_guest_readonly: args.allow_guest_readonly,
                 admin_page_enabled: args.admin_page_enabled,
+                targets: stockpile_zip::parse_deploy_targets(&args.stockpile_targets)?,
             };
             let output = stockpile_zip::export_stockpile_zip(
                 &args.input,

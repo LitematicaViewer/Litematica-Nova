@@ -1,40 +1,48 @@
 # Stockpile Linux Deployment
 
-`stockpile.zip` can be opened directly for static preview, but static preview only stores state in the browser. Multiplayer sync, SQLite sessions, passwords, whitelist, admin APIs, and `/admin` require the lightweight `stockpile_server` backend:
+Use this guide for Linux/VPS deployment of an already exported stockpile `multi` package. The deployment side runs only the lightweight `stockpile_server`; it does not need `litematica_core`, Rust, repository source, recipe cache, Minecraft client jars, or the original `.litematic`.
 
-```bash
-./stockpile_server --root /path/to/unzipped-stockpile --bind 0.0.0.0:8787
-```
+For the full CLI handoff, see `docs/STOCKPILE_HANDOFF.md`.
 
 ## What To Upload
 
-For full multiplayer collaboration export a multi package locally:
+Export a Linux-targeted `multi` package locally or in CI:
 
 ```powershell
-"access-pass`nadmin-pass" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project.stockpile.zip --minecraft-version 1.21.10 --mode multi --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly true --admin-page-enabled true
+"access-pass`nadmin-pass`n" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly false --admin-page-enabled true
 ```
 
-Then upload and unzip `project.stockpile.zip`. The deployment side does not need `.litematic`, recipe cache, Minecraft client jars, Rust source, or `litematica_core`.
+Upload only `project-linux.stockpile.zip` to the VPS and unzip it. Do not upload:
 
-## Debian 12 Dependencies
+- `.litematic` source files
+- repository source code
+- `litematica_core`
+- Rust toolchains or build directories
+- `data/cache/`
+- local `data/stockpile/` workspaces
+- untracked real binaries outside the generated package
 
-```bash
-apt update
-apt install -y curl ca-certificates build-essential pkg-config libssl-dev unzip \
-  libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev \
-  libwayland-dev libxkbcommon-dev libasound2-dev libudev-dev
+The ZIP already contains precomputed materials, recipe trees, item names, icons, i18n payloads, an initialized `db/stockpile.sqlite`, and the selected `server/linux-x64/stockpile_server` binary.
+
+## Prepare Linux Server Binary Before Export
+
+`export-zip --mode multi --target linux-x64` requires a real Linux server binary at:
+
+```text
+bin/stockpile-server/linux-x64/stockpile_server
 ```
 
-Install Rust if the VPS does not already have `cargo`:
+Prefer GitHub Actions artifacts from `.github/workflows/stockpile-server.yml`:
 
-```bash
-curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
-. "$HOME/.cargo/env"
+```powershell
+scripts\stockpile\verify_stockpile_server_bins.ps1 -Target linux-x64
+scripts\stockpile\fetch_stockpile_server_artifacts.ps1 -RunId <workflow-run-id> -Target linux-x64
+scripts\stockpile\verify_stockpile_server_bins.ps1 -Target linux-x64
 ```
 
-## Build Linux Server Binary
+`fetch_stockpile_server_artifacts.ps1` requires GitHub CLI (`gh`) and artifact read permission. If that is unavailable, manually download the `stockpile-server-linux-x64` artifact and place `stockpile_server` in the path above.
 
-Multi export requires real server binaries for all platforms under `bin/stockpile-server/<platform>/`. Use the `stockpile-server` GitHub Actions workflow or build on each platform and place artifacts at:
+Expected binary input paths for all targets are:
 
 ```text
 bin/stockpile-server/windows-x64/stockpile_server.exe
@@ -43,51 +51,59 @@ bin/stockpile-server/macos-x64/stockpile_server
 bin/stockpile-server/macos-arm64/stockpile_server
 ```
 
-The real binaries are ignored by Git and must not be committed. On Windows, local builds only produce `windows-x64`; Linux and macOS binaries come from GitHub Actions artifacts or from builds on those platforms. Before exporting a cross-platform multi package:
+Use `--target all` only when all four are present. For a VPS, `--target linux-x64` is usually enough.
 
-```powershell
-scripts\stockpile\verify_stockpile_server_bins.ps1
-scripts\stockpile\fetch_stockpile_server_artifacts.ps1
-scripts\stockpile\verify_stockpile_server_bins.ps1
-```
+## Start On The VPS
 
-`fetch_stockpile_server_artifacts.ps1` requires the GitHub CLI (`gh`) and an authenticated account that can read workflow artifacts. If `gh` or permissions are unavailable, download the four artifacts manually from the `stockpile-server` workflow run and place them in the paths above. Single packages do not need server binaries. If you only deploy to one platform manually, you can run that platform's server binary directly, but `export-zip --mode multi` intentionally requires all four platforms so the package is complete.
-
-For Linux only, build from the repository root:
+After upload and unzip:
 
 ```bash
-cargo build --release --bin stockpile_server
-```
-
-Copy the binary into the fixed export input directory:
-
-```bash
-cp tools/viewer-core/target/release/stockpile_server bin/stockpile-server/linux-x64/stockpile_server
-chmod +x bin/stockpile-server/linux-x64/stockpile_server
-```
-
-## Start For Testing
-
-From the unzipped package:
-
-```bash
+cd /opt/litematica-stockpile
 chmod +x server/linux-x64/start.sh server/linux-x64/stockpile_server
-./server/linux-x64/start.sh
+BIND=0.0.0.0:8787 ./server/linux-x64/start.sh
 ```
 
-The server writes state to:
+Or run the binary directly:
+
+```bash
+./server/linux-x64/stockpile_server serve --root . --bind 0.0.0.0:8787
+```
+
+The standalone server also accepts:
+
+```bash
+./server/linux-x64/stockpile_server --root . --bind 0.0.0.0:8787
+```
+
+Open the site at the host/port mapped to `8787`.
+
+## SQLite State
+
+Live multiplayer state is stored in:
 
 ```text
 db/stockpile.sqlite
 ```
 
-`litematica_core stockpile serve --zip` remains available as a legacy/internal compatibility command, but new deployments should use `stockpile_server`.
+This database stores claims, participants, config, password hashes, whitelist rows, admin notes/locks, audit log, schema version, and project hash metadata. Back up this file if you need to preserve live collaboration state across deployments.
 
-## Passwords Before Public Exposure
+The deployment server does not parse `.litematic`; all project data is served from exported JSON files under `data/`.
 
-Passwords, whitelist users, and default config are initialized during `export-zip --mode multi` and stored as hashes/config rows in `db/stockpile.sqlite`. The deployment server does not provide a password bootstrap CLI. To change access rules, use `/admin` or rebuild the package.
+## Passwords, Whitelist, Admin, And Rate Limit
 
-## Firewall
+Passwords, whitelist users, and default config are initialized during `export-zip --mode multi`:
+
+- `--access-password-stdin` writes the access password hash.
+- `--admin-password-stdin` writes the admin password hash.
+- `--whitelist-file <users.txt>` imports allowed users.
+- `--allow-guest-readonly true|false` controls guest read access.
+- `--admin-page-enabled true|false` controls `/admin`.
+
+Failed `/api/auth/access` and `/api/auth/admin` attempts are rate limited. After repeated failures, the server returns `429 Too Many Requests` with `Retry-After`.
+
+To change access rules after deployment, use `/admin` or rebuild/redeploy the package. The deployment server intentionally has no bootstrap CLI for plaintext passwords.
+
+## Firewall And Port Mapping
 
 For direct public access:
 
@@ -96,27 +112,33 @@ ufw allow 8787/tcp
 ufw status
 ```
 
-If a panel or tunnel maps public port `30017` to internal port `8787`, expose TCP, not UDP.
+If a panel, tunnel, or NAT maps public port `30017` to internal `8787`, expose TCP. UDP is not used.
 
-## systemd
+HTTPS is optional for basic operation. If you place Caddy/Nginx/Cloudflare Tunnel in front, terminate HTTPS at the reverse proxy and forward to the local `stockpile_server`; the server will add `Secure` to session cookies only when the HTTPS forwarding signal comes from a trusted local proxy.
 
-The multi package is designed to run directly from its platform start script. For a long-running VPS service, create a small systemd unit that runs the same command:
+## systemd Example
 
 ```ini
+[Unit]
+Description=Litematica Stockpile
+After=network.target
+
 [Service]
 WorkingDirectory=/opt/litematica-stockpile
-ExecStart=/opt/litematica-stockpile/server/linux-x64/stockpile_server --root /opt/litematica-stockpile --bind 0.0.0.0:8787
+ExecStart=/opt/litematica-stockpile/server/linux-x64/stockpile_server serve --root /opt/litematica-stockpile --bind 0.0.0.0:8787
 Restart=on-failure
+User=stockpile
+Group=stockpile
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-## Example VPS SSH
+Use a dedicated low-privilege user and keep the package directory writable only where `db/stockpile.sqlite` must be updated.
 
-```powershell
-ssh -i "C:\Users\27232\Documents\btp-vps-id_rsa\id_rsa.pem" root@154.17.6.144
-```
+## Troubleshooting
 
-Upload package from Windows:
-
-```powershell
-scp -r .\dist\stockpile-deploy root@154.17.6.144:/root/
-```
+- Double-clicked HTML is single-user only: use `multi` plus `stockpile_server` for shared state.
+- Missing Linux binary: run `verify_stockpile_server_bins.ps1`, then fetch or manually place the artifact.
+- Login works locally but not through a proxy: verify the proxy forwards HTTP to the correct bind address/port and preserves cookies.
+- Need to move a live session: back up and restore `db/stockpile.sqlite`, or use local `session-export`/`session-import` workflows before packaging.
