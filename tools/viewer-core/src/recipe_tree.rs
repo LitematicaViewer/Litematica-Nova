@@ -8,43 +8,74 @@ use serde_json::Value;
 use crate::recipe_cache;
 use crate::stockpile::StockpileMaterialsData;
 
-const MAX_RECIPE_DEPTH: u32 = 8;
+pub const MAX_RECIPE_DEPTH: u32 = 12;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RecipeTreeNode {
+    pub node_id: String,
     pub item_id: String,
     pub display_name: String,
+    pub icon_key: String,
     pub needed_count: u64,
     pub output_count: u64,
     pub batch_count: u64,
     pub extra_output: u64,
     pub recipe_type: String,
+    pub process_type: String,
     pub ingredients: Vec<RecipeTreeIngredient>,
     pub children: Vec<RecipeTreeNode>,
     pub unresolved: bool,
     pub unresolved_reason: Option<String>,
+    pub visual_kind: String,
+    pub depth: u32,
+    pub tag: Option<String>,
+    pub possible_items: Vec<String>,
+    pub requires_fuel: bool,
+    pub fuel_estimate: Option<u64>,
+    pub decorative_smithing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RecipeTreeIngredient {
     pub item_id: String,
     pub display_name: String,
+    pub icon_key: String,
     pub needed_count: u64,
+    pub visual_kind: String,
     pub unresolved: bool,
     pub unresolved_reason: Option<String>,
+    pub tag: Option<String>,
+    pub possible_items: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 struct RecipeCandidate {
     recipe_id: String,
     recipe_type: String,
+    process_type: ProcessType,
     output_item: String,
     output_count: u64,
     ingredients: Vec<RecipeInput>,
+    requires_fuel: bool,
+    decorative_smithing: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessType {
+    Craft,
+    Stonecut,
+    Smelt,
+    Blast,
+    Smoke,
+    Campfire,
+    Smith,
+    SmithTrim,
+    Special,
 }
 
 #[derive(Debug, Clone)]
 struct RecipeInput {
+    role: String,
     spec: InputSpec,
     count: u64,
 }
@@ -54,6 +85,15 @@ enum InputSpec {
     Item(String),
     Tag(String),
     Alternatives(Vec<String>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct TreeScore {
+    unresolved_count: u32,
+    special_count: u32,
+    input_total: u64,
+    extra_output: u64,
+    type_rank: u8,
 }
 
 pub fn resolve_recipe_trees_for_materials(
@@ -100,7 +140,7 @@ impl RecipeTreeResolver {
             }
         }
         for values in candidates.values_mut() {
-            values.sort_by(compare_candidates);
+            values.sort_by(compare_static_candidates);
         }
         Self { candidates }
     }
@@ -117,30 +157,58 @@ impl RecipeTreeResolver {
         stack: &mut BTreeSet<String>,
     ) -> RecipeTreeNode {
         if item_id.starts_with('#') {
-            return unresolved_node(item_id, needed_count, "tag_input");
+            return tag_node(item_id, needed_count, depth, Vec::new());
         }
         if stack.contains(item_id) {
-            return unresolved_node(item_id, needed_count, "cycle");
+            return unresolved_node(item_id, needed_count, depth, "cycle");
         }
         if depth >= MAX_RECIPE_DEPTH {
-            return unresolved_node(item_id, needed_count, "max_depth");
+            return unresolved_node(item_id, needed_count, depth, "max_depth");
         }
-        let Some(candidate) = self
-            .candidates
-            .get(item_id)
-            .and_then(|values| values.first())
-        else {
-            return unresolved_node(item_id, needed_count, "no_recipe");
+        let Some(candidates) = self.candidates.get(item_id) else {
+            return unresolved_node(item_id, needed_count, depth, "no_recipe");
         };
 
+        let mut best: Option<(TreeScore, RecipeTreeNode)> = None;
+        for candidate in candidates {
+            let node = self.resolve_candidate(candidate, needed_count, depth, stack);
+            let score = score_tree(&node, candidate, is_stone_family(item_id));
+            if best
+                .as_ref()
+                .is_none_or(|(best_score, _)| score < *best_score)
+            {
+                best = Some((score, node));
+            }
+        }
+        best.map(|(_, node)| node)
+            .unwrap_or_else(|| unresolved_node(item_id, needed_count, depth, "no_recipe"))
+    }
+
+    fn resolve_candidate(
+        &self,
+        candidate: &RecipeCandidate,
+        needed_count: u64,
+        depth: u32,
+        stack: &mut BTreeSet<String>,
+    ) -> RecipeTreeNode {
         let output_count = candidate.output_count.max(1);
         let batch_count = ceil_div(needed_count, output_count);
         let extra_output = batch_count
             .saturating_mul(output_count)
             .saturating_sub(needed_count);
-        stack.insert(item_id.to_string());
+
         let mut ingredients = Vec::new();
         let mut children = Vec::new();
+        if candidate.process_type == ProcessType::Special {
+            return special_node(
+                &candidate.output_item,
+                needed_count,
+                depth,
+                &candidate.recipe_type,
+            );
+        }
+
+        stack.insert(candidate.output_item.clone());
         for input in &candidate.ingredients {
             let ingredient_needed = input.count.saturating_mul(batch_count);
             ingredients.push(ingredient_summary(input, ingredient_needed));
@@ -148,50 +216,127 @@ impl RecipeTreeResolver {
                 InputSpec::Item(child_item) => {
                     self.resolve_inner(child_item, ingredient_needed, depth + 1, stack)
                 }
-                InputSpec::Tag(tag) => unresolved_node(tag, ingredient_needed, "tag_input"),
+                InputSpec::Tag(tag) => {
+                    tag_node(tag, ingredient_needed, depth + 1, possible_items(input))
+                }
                 InputSpec::Alternatives(values) => {
-                    unresolved_node(&values.join("|"), ingredient_needed, "alternative_input")
+                    alternative_node(values, ingredient_needed, depth + 1)
                 }
             });
         }
-        stack.remove(item_id);
+        stack.remove(&candidate.output_item);
 
         RecipeTreeNode {
-            item_id: item_id.to_string(),
-            display_name: display_name(item_id),
+            node_id: node_id(&candidate.output_item, depth),
+            item_id: candidate.output_item.clone(),
+            display_name: display_name(&candidate.output_item),
+            icon_key: candidate.output_item.clone(),
             needed_count,
             output_count,
             batch_count,
             extra_output,
             recipe_type: candidate.recipe_type.clone(),
+            process_type: process_type_name(candidate.process_type).to_string(),
             ingredients,
             children,
             unresolved: false,
             unresolved_reason: None,
+            visual_kind: "process".to_string(),
+            depth,
+            tag: None,
+            possible_items: Vec::new(),
+            requires_fuel: candidate.requires_fuel,
+            fuel_estimate: None,
+            decorative_smithing: candidate.decorative_smithing,
         }
     }
 }
 
 fn parse_supported_recipe(recipe_id: &str, recipe: &Value) -> Option<RecipeCandidate> {
     let recipe_type = recipe.get("type")?.as_str()?.to_string();
-    let (output_item, output_count) = parse_result(recipe)?;
-    let ingredients = match recipe_type.as_str() {
-        "minecraft:crafting_shaped" => parse_shaped_ingredients(recipe)?,
-        "minecraft:crafting_shapeless" => parse_shapeless_ingredients(recipe)?,
-        "minecraft:stonecutting" => vec![parse_input(recipe.get("ingredient")?)?],
-        _ => return None,
+    let process_type = process_type_from_recipe_type(&recipe_type)?;
+    if process_type == ProcessType::Special {
+        return Some(RecipeCandidate {
+            recipe_id: recipe_id.to_string(),
+            recipe_type,
+            process_type,
+            output_item: recipe
+                .get("result")
+                .and_then(parse_result)
+                .map(|(item, _)| item)
+                .unwrap_or_else(|| recipe_id.to_string()),
+            output_count: 1,
+            ingredients: Vec::new(),
+            requires_fuel: false,
+            decorative_smithing: false,
+        });
+    }
+
+    let (output_item, output_count) = parse_result(recipe.get("result")?)?;
+    let ingredients = match process_type {
+        ProcessType::Craft => {
+            if recipe_type == "minecraft:crafting_shaped" {
+                parse_shaped_ingredients(recipe)?
+            } else {
+                parse_shapeless_ingredients(recipe)?
+            }
+        }
+        ProcessType::Stonecut => vec![RecipeInput {
+            role: "ingredient".to_string(),
+            spec: parse_input(recipe.get("ingredient")?)?,
+            count: 1,
+        }],
+        ProcessType::Smelt | ProcessType::Blast | ProcessType::Smoke | ProcessType::Campfire => {
+            vec![RecipeInput {
+                role: "ingredient".to_string(),
+                spec: parse_input(recipe.get("ingredient")?)?,
+                count: 1,
+            }]
+        }
+        ProcessType::Smith => vec![
+            role_input("template", recipe.get("template")?)?,
+            role_input("base", recipe.get("base")?)?,
+            role_input("addition", recipe.get("addition")?)?,
+        ],
+        ProcessType::SmithTrim => vec![
+            role_input("template", recipe.get("template")?)?,
+            role_input("base", recipe.get("base")?)?,
+            role_input("addition", recipe.get("addition")?)?,
+        ],
+        ProcessType::Special => Vec::new(),
     };
+
     Some(RecipeCandidate {
         recipe_id: recipe_id.to_string(),
         recipe_type,
+        process_type,
         output_item,
         output_count,
         ingredients: aggregate_inputs(ingredients),
+        requires_fuel: matches!(
+            process_type,
+            ProcessType::Smelt | ProcessType::Blast | ProcessType::Smoke | ProcessType::Campfire
+        ),
+        decorative_smithing: process_type == ProcessType::SmithTrim,
     })
 }
 
-fn parse_result(recipe: &Value) -> Option<(String, u64)> {
-    let result = recipe.get("result")?;
+fn process_type_from_recipe_type(recipe_type: &str) -> Option<ProcessType> {
+    match recipe_type {
+        "minecraft:crafting_shaped" | "minecraft:crafting_shapeless" => Some(ProcessType::Craft),
+        "minecraft:stonecutting" => Some(ProcessType::Stonecut),
+        "minecraft:smelting" => Some(ProcessType::Smelt),
+        "minecraft:blasting" => Some(ProcessType::Blast),
+        "minecraft:smoking" => Some(ProcessType::Smoke),
+        "minecraft:campfire_cooking" => Some(ProcessType::Campfire),
+        "minecraft:smithing_transform" => Some(ProcessType::Smith),
+        "minecraft:smithing_trim" => Some(ProcessType::SmithTrim),
+        value if value.starts_with("minecraft:crafting_special_") => Some(ProcessType::Special),
+        _ => None,
+    }
+}
+
+fn parse_result(result: &Value) -> Option<(String, u64)> {
     match result {
         Value::String(item) => Some((item.clone(), 1)),
         Value::Object(object) => {
@@ -207,25 +352,43 @@ fn parse_result(recipe: &Value) -> Option<(String, u64)> {
     }
 }
 
-fn parse_shaped_ingredients(recipe: &Value) -> Option<Vec<InputSpec>> {
+fn parse_shaped_ingredients(recipe: &Value) -> Option<Vec<RecipeInput>> {
     let pattern = recipe.get("pattern")?.as_array()?;
     let key = recipe.get("key")?.as_object()?;
     let mut inputs = Vec::new();
     for row in pattern {
         for ch in row.as_str()?.chars().filter(|ch| *ch != ' ') {
-            inputs.push(parse_input(key.get(&ch.to_string())?)?);
+            inputs.push(RecipeInput {
+                role: "ingredient".to_string(),
+                spec: parse_input(key.get(&ch.to_string())?)?,
+                count: 1,
+            });
         }
     }
     Some(inputs)
 }
 
-fn parse_shapeless_ingredients(recipe: &Value) -> Option<Vec<InputSpec>> {
+fn parse_shapeless_ingredients(recipe: &Value) -> Option<Vec<RecipeInput>> {
     recipe
         .get("ingredients")?
         .as_array()?
         .iter()
-        .map(parse_input)
+        .map(|value| {
+            Some(RecipeInput {
+                role: "ingredient".to_string(),
+                spec: parse_input(value)?,
+                count: 1,
+            })
+        })
         .collect()
+}
+
+fn role_input(role: &str, value: &Value) -> Option<RecipeInput> {
+    Some(RecipeInput {
+        role: role.to_string(),
+        spec: parse_input(value)?,
+        count: 1,
+    })
 }
 
 fn parse_input(value: &Value) -> Option<InputSpec> {
@@ -268,79 +431,241 @@ fn input_spec_from_string(input: &str) -> InputSpec {
     }
 }
 
-fn aggregate_inputs(inputs: Vec<InputSpec>) -> Vec<RecipeInput> {
-    let mut counts = BTreeMap::<InputSpec, u64>::new();
+fn aggregate_inputs(inputs: Vec<RecipeInput>) -> Vec<RecipeInput> {
+    let mut counts = BTreeMap::<(String, InputSpec), u64>::new();
     for input in inputs {
-        *counts.entry(input).or_default() += 1;
+        *counts.entry((input.role, input.spec)).or_default() += input.count;
     }
     counts
         .into_iter()
-        .map(|(spec, count)| RecipeInput { spec, count })
+        .map(|((role, spec), count)| RecipeInput { role, spec, count })
         .collect()
 }
 
-fn compare_candidates(left: &RecipeCandidate, right: &RecipeCandidate) -> Ordering {
-    candidate_priority(left)
-        .cmp(&candidate_priority(right))
+fn compare_static_candidates(left: &RecipeCandidate, right: &RecipeCandidate) -> Ordering {
+    static_candidate_priority(left)
+        .cmp(&static_candidate_priority(right))
         .then_with(|| left.recipe_id.cmp(&right.recipe_id))
 }
 
-fn candidate_priority(candidate: &RecipeCandidate) -> (u8, usize, std::cmp::Reverse<u64>) {
-    let type_rank = match candidate.recipe_type.as_str() {
-        "minecraft:crafting_shaped" | "minecraft:crafting_shapeless" => 0,
-        "minecraft:stonecutting" => 1,
-        _ => 2,
-    };
+fn static_candidate_priority(candidate: &RecipeCandidate) -> (u8, u64, std::cmp::Reverse<u64>) {
     (
-        type_rank,
-        candidate
-            .ingredients
-            .iter()
-            .map(|input| input.count as usize)
-            .sum(),
+        static_type_rank(candidate.process_type, false),
+        candidate.ingredients.iter().map(|input| input.count).sum(),
         std::cmp::Reverse(candidate.output_count),
     )
 }
 
+fn score_tree(
+    node: &RecipeTreeNode,
+    candidate: &RecipeCandidate,
+    stone_family_target: bool,
+) -> TreeScore {
+    TreeScore {
+        unresolved_count: unresolved_count(node),
+        special_count: special_count(node),
+        input_total: candidate.ingredients.iter().map(|input| input.count).sum(),
+        extra_output: node.extra_output,
+        type_rank: static_type_rank(candidate.process_type, stone_family_target),
+    }
+}
+
+fn unresolved_count(node: &RecipeTreeNode) -> u32 {
+    u32::from(node.unresolved)
+        + node.children.iter().map(unresolved_count).sum::<u32>()
+        + node
+            .ingredients
+            .iter()
+            .filter(|ingredient| ingredient.unresolved)
+            .count() as u32
+}
+
+fn special_count(node: &RecipeTreeNode) -> u32 {
+    u32::from(node.visual_kind == "special") + node.children.iter().map(special_count).sum::<u32>()
+}
+
+fn static_type_rank(process_type: ProcessType, stone_family_target: bool) -> u8 {
+    match process_type {
+        ProcessType::Stonecut if stone_family_target => 0,
+        ProcessType::Craft => 1,
+        ProcessType::Stonecut => 2,
+        ProcessType::Smelt | ProcessType::Blast | ProcessType::Smoke | ProcessType::Campfire => 3,
+        ProcessType::Smith => 4,
+        ProcessType::SmithTrim => 5,
+        ProcessType::Special => 9,
+    }
+}
+
 fn ingredient_summary(input: &RecipeInput, needed_count: u64) -> RecipeTreeIngredient {
+    let role_prefix = if input.role == "ingredient" {
+        String::new()
+    } else {
+        format!("{}: ", input.role)
+    };
     match &input.spec {
         InputSpec::Item(item) => RecipeTreeIngredient {
             item_id: item.clone(),
-            display_name: display_name(item),
+            display_name: format!("{role_prefix}{}", display_name(item)),
+            icon_key: item.clone(),
             needed_count,
+            visual_kind: "item".to_string(),
             unresolved: false,
             unresolved_reason: None,
+            tag: None,
+            possible_items: Vec::new(),
         },
         InputSpec::Tag(tag) => RecipeTreeIngredient {
             item_id: tag.clone(),
-            display_name: tag.clone(),
+            display_name: format!("{role_prefix}{tag}"),
+            icon_key: tag.clone(),
             needed_count,
+            visual_kind: "tag".to_string(),
             unresolved: true,
             unresolved_reason: Some("tag_input".to_string()),
+            tag: Some(tag.clone()),
+            possible_items: possible_items(input),
         },
         InputSpec::Alternatives(items) => RecipeTreeIngredient {
             item_id: items.join("|"),
-            display_name: items.join(" 或 "),
+            display_name: format!("{role_prefix}{}", items.join(" or ")),
+            icon_key: items.first().cloned().unwrap_or_default(),
             needed_count,
+            visual_kind: "tag".to_string(),
             unresolved: true,
-            unresolved_reason: Some("alternative_input".to_string()),
+            unresolved_reason: Some("tag_input".to_string()),
+            tag: None,
+            possible_items: items.clone(),
         },
     }
 }
 
-fn unresolved_node(item_id: &str, needed_count: u64, reason: &str) -> RecipeTreeNode {
+fn tag_node(
+    tag: &str,
+    needed_count: u64,
+    depth: u32,
+    possible_items: Vec<String>,
+) -> RecipeTreeNode {
     RecipeTreeNode {
+        node_id: node_id(tag, depth),
+        item_id: tag.to_string(),
+        display_name: "Alternative material group".to_string(),
+        icon_key: tag.to_string(),
+        needed_count,
+        output_count: 0,
+        batch_count: 0,
+        extra_output: 0,
+        recipe_type: "tag_input".to_string(),
+        process_type: "tag".to_string(),
+        ingredients: Vec::new(),
+        children: Vec::new(),
+        unresolved: true,
+        unresolved_reason: Some("tag_input".to_string()),
+        visual_kind: "tag".to_string(),
+        depth,
+        tag: Some(tag.to_string()),
+        possible_items,
+        requires_fuel: false,
+        fuel_estimate: None,
+        decorative_smithing: false,
+    }
+}
+
+fn alternative_node(values: &[String], needed_count: u64, depth: u32) -> RecipeTreeNode {
+    RecipeTreeNode {
+        node_id: node_id(&values.join("|"), depth),
+        item_id: values.join("|"),
+        display_name: "Alternative material group".to_string(),
+        icon_key: values.first().cloned().unwrap_or_default(),
+        needed_count,
+        output_count: 0,
+        batch_count: 0,
+        extra_output: 0,
+        recipe_type: "tag_input".to_string(),
+        process_type: "tag".to_string(),
+        ingredients: Vec::new(),
+        children: Vec::new(),
+        unresolved: true,
+        unresolved_reason: Some("tag_input".to_string()),
+        visual_kind: "tag".to_string(),
+        depth,
+        tag: None,
+        possible_items: values.to_vec(),
+        requires_fuel: false,
+        fuel_estimate: None,
+        decorative_smithing: false,
+    }
+}
+
+fn special_node(item_id: &str, needed_count: u64, depth: u32, recipe_type: &str) -> RecipeTreeNode {
+    RecipeTreeNode {
+        node_id: node_id(item_id, depth),
         item_id: item_id.to_string(),
         display_name: display_name(item_id),
+        icon_key: item_id.to_string(),
+        needed_count,
+        output_count: 0,
+        batch_count: 0,
+        extra_output: 0,
+        recipe_type: recipe_type.to_string(),
+        process_type: "special".to_string(),
+        ingredients: Vec::new(),
+        children: Vec::new(),
+        unresolved: true,
+        unresolved_reason: Some("special_recipe".to_string()),
+        visual_kind: "special".to_string(),
+        depth,
+        tag: None,
+        possible_items: Vec::new(),
+        requires_fuel: false,
+        fuel_estimate: None,
+        decorative_smithing: false,
+    }
+}
+
+fn unresolved_node(item_id: &str, needed_count: u64, depth: u32, reason: &str) -> RecipeTreeNode {
+    RecipeTreeNode {
+        node_id: node_id(item_id, depth),
+        item_id: item_id.to_string(),
+        display_name: display_name(item_id),
+        icon_key: item_id.to_string(),
         needed_count,
         output_count: 0,
         batch_count: 0,
         extra_output: 0,
         recipe_type: "unresolved".to_string(),
+        process_type: "unresolved".to_string(),
         ingredients: Vec::new(),
         children: Vec::new(),
         unresolved: true,
         unresolved_reason: Some(reason.to_string()),
+        visual_kind: "unresolved".to_string(),
+        depth,
+        tag: None,
+        possible_items: Vec::new(),
+        requires_fuel: false,
+        fuel_estimate: None,
+        decorative_smithing: false,
+    }
+}
+
+fn possible_items(input: &RecipeInput) -> Vec<String> {
+    match &input.spec {
+        InputSpec::Alternatives(items) => items.clone(),
+        _ => Vec::new(),
+    }
+}
+
+fn process_type_name(process_type: ProcessType) -> &'static str {
+    match process_type {
+        ProcessType::Craft => "craft",
+        ProcessType::Stonecut => "stonecut",
+        ProcessType::Smelt => "smelt",
+        ProcessType::Blast => "blast",
+        ProcessType::Smoke => "smoke",
+        ProcessType::Campfire => "campfire",
+        ProcessType::Smith => "smith",
+        ProcessType::SmithTrim => "smith_trim",
+        ProcessType::Special => "special",
     }
 }
 
@@ -373,6 +698,36 @@ fn display_name(item_id: &str) -> String {
         .join(" ")
 }
 
+fn node_id(item_id: &str, depth: u32) -> String {
+    format!(
+        "{}_{}",
+        item_id
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .collect::<String>(),
+        depth
+    )
+}
+
+fn is_stone_family(item_id: &str) -> bool {
+    let local = item_id.split(':').next_back().unwrap_or(item_id);
+    [
+        "stone",
+        "deepslate",
+        "andesite",
+        "diorite",
+        "granite",
+        "tuff",
+        "basalt",
+        "blackstone",
+        "brick",
+        "quartz",
+        "copper",
+    ]
+    .iter()
+    .any(|needle| local.contains(needle))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,10 +748,13 @@ mod tests {
             }),
         )]));
         let tree = resolver.resolve("minecraft:rail", 17);
-        assert_eq!(tree.recipe_type, "minecraft:crafting_shaped");
+        assert_eq!(tree.process_type, "craft");
+        assert_eq!(tree.visual_kind, "process");
         assert_eq!(tree.output_count, 16);
         assert_eq!(tree.batch_count, 2);
         assert_eq!(tree.extra_output, 15);
+        assert_eq!(tree.depth, 0);
+        assert_eq!(tree.icon_key, "minecraft:rail");
         assert_eq!(tree.ingredients.len(), 2);
         assert_eq!(
             tree.ingredients
@@ -409,18 +767,29 @@ mod tests {
     }
 
     #[test]
-    fn resolves_shapeless_recipe() {
-        let resolver = RecipeTreeResolver::new(&recipe_map([(
-            "minecraft:acacia_button",
-            json!({
-                "type": "minecraft:crafting_shapeless",
-                "ingredients": ["minecraft:acacia_planks"],
-                "result": { "id": "minecraft:acacia_button", "count": 1 }
-            }),
-        )]));
+    fn resolves_shapeless_recipe_recursively() {
+        let resolver = RecipeTreeResolver::new(&recipe_map([
+            (
+                "minecraft:acacia_button",
+                json!({
+                    "type": "minecraft:crafting_shapeless",
+                    "ingredients": ["minecraft:acacia_planks"],
+                    "result": { "id": "minecraft:acacia_button", "count": 1 }
+                }),
+            ),
+            (
+                "minecraft:acacia_planks",
+                json!({
+                    "type": "minecraft:crafting_shapeless",
+                    "ingredients": ["minecraft:acacia_log"],
+                    "result": { "id": "minecraft:acacia_planks", "count": 4 }
+                }),
+            ),
+        ]));
         let tree = resolver.resolve("minecraft:acacia_button", 3);
-        assert_eq!(tree.recipe_type, "minecraft:crafting_shapeless");
+        assert_eq!(tree.process_type, "craft");
         assert_eq!(tree.children[0].item_id, "minecraft:acacia_planks");
+        assert_eq!(tree.children[0].children[0].item_id, "minecraft:acacia_log");
     }
 
     #[test]
@@ -434,42 +803,105 @@ mod tests {
             }),
         )]));
         let tree = resolver.resolve("minecraft:stone_bricks", 2);
-        assert_eq!(tree.recipe_type, "minecraft:stonecutting");
+        assert_eq!(tree.process_type, "stonecut");
         assert_eq!(tree.children[0].item_id, "minecraft:stone");
     }
 
     #[test]
-    fn prefers_crafting_over_stonecutting() {
-        let resolver = RecipeTreeResolver::new(&recipe_map([
-            (
-                "minecraft:stone_bricks_from_stone_stonecutting",
-                json!({
-                    "type": "minecraft:stonecutting",
-                    "ingredient": "minecraft:stone",
-                    "result": { "id": "minecraft:stone_bricks", "count": 1 }
-                }),
-            ),
-            (
-                "minecraft:stone_bricks",
-                json!({
-                    "type": "minecraft:crafting_shaped",
-                    "pattern": ["##", "##"],
-                    "key": { "#": "minecraft:stone" },
-                    "result": { "id": "minecraft:stone_bricks", "count": 4 }
-                }),
-            ),
-        ]));
-        let tree = resolver.resolve("minecraft:stone_bricks", 4);
-        assert_eq!(tree.recipe_type, "minecraft:crafting_shaped");
-        assert_eq!(tree.output_count, 4);
+    fn resolves_smelting_as_fuel_requiring_process() {
+        let resolver = RecipeTreeResolver::new(&recipe_map([(
+            "minecraft:glass",
+            json!({
+                "type": "minecraft:smelting",
+                "ingredient": "minecraft:sand",
+                "result": { "id": "minecraft:glass" }
+            }),
+        )]));
+        let tree = resolver.resolve("minecraft:glass", 64);
+        assert_eq!(tree.process_type, "smelt");
+        assert!(tree.requires_fuel);
+        assert_eq!(tree.fuel_estimate, None);
+        assert_eq!(tree.batch_count, 64);
+        assert_eq!(tree.children[0].item_id, "minecraft:sand");
+        assert_eq!(tree.children[0].needed_count, 64);
     }
 
     #[test]
-    fn unresolved_when_no_recipe() {
-        let resolver = RecipeTreeResolver::new(&BTreeMap::new());
-        let tree = resolver.resolve("minecraft:diamond", 1);
+    fn resolves_blasting_smoking_and_campfire() {
+        for (recipe_type, process) in [
+            ("minecraft:blasting", "blast"),
+            ("minecraft:smoking", "smoke"),
+            ("minecraft:campfire_cooking", "campfire"),
+        ] {
+            let resolver = RecipeTreeResolver::new(&recipe_map([(
+                "minecraft:processed",
+                json!({
+                    "type": recipe_type,
+                    "ingredient": "minecraft:raw",
+                    "result": { "id": "minecraft:processed" }
+                }),
+            )]));
+            let tree = resolver.resolve("minecraft:processed", 2);
+            assert_eq!(tree.process_type, process);
+            assert!(tree.requires_fuel);
+            assert_eq!(tree.children[0].item_id, "minecraft:raw");
+        }
+    }
+
+    #[test]
+    fn resolves_smithing_transform() {
+        let resolver = RecipeTreeResolver::new(&recipe_map([(
+            "minecraft:netherite_axe_smithing",
+            json!({
+                "type": "minecraft:smithing_transform",
+                "template": "minecraft:netherite_upgrade_smithing_template",
+                "base": "minecraft:diamond_axe",
+                "addition": "#minecraft:netherite_tool_materials",
+                "result": { "id": "minecraft:netherite_axe" }
+            }),
+        )]));
+        let tree = resolver.resolve("minecraft:netherite_axe", 1);
+        assert_eq!(tree.process_type, "smith");
+        assert_eq!(tree.ingredients.len(), 3);
+        assert!(
+            tree.children
+                .iter()
+                .any(|child| child.item_id == "minecraft:diamond_axe")
+        );
+        assert!(tree.children.iter().any(|child| child.visual_kind == "tag"));
+    }
+
+    #[test]
+    fn parses_smithing_trim_as_decorative_when_result_is_present() {
+        let resolver = RecipeTreeResolver::new(&recipe_map([(
+            "minecraft:test_trim",
+            json!({
+                "type": "minecraft:smithing_trim",
+                "template": "minecraft:bolt_armor_trim_smithing_template",
+                "base": "#minecraft:trimmable_armor",
+                "addition": "#minecraft:trim_materials",
+                "result": { "id": "minecraft:trimmed_armor" }
+            }),
+        )]));
+        let tree = resolver.resolve("minecraft:trimmed_armor", 1);
+        assert_eq!(tree.process_type, "smith_trim");
+        assert!(tree.decorative_smithing);
+    }
+
+    #[test]
+    fn special_recipe_is_unresolved_and_not_static_expanded() {
+        let resolver = RecipeTreeResolver::new(&recipe_map([(
+            "minecraft:armor_dye",
+            json!({
+                "type": "minecraft:crafting_special_armordye",
+                "result": { "id": "minecraft:dyed_armor" }
+            }),
+        )]));
+        let tree = resolver.resolve("minecraft:dyed_armor", 1);
         assert!(tree.unresolved);
-        assert_eq!(tree.unresolved_reason.as_deref(), Some("no_recipe"));
+        assert_eq!(tree.visual_kind, "special");
+        assert_eq!(tree.unresolved_reason.as_deref(), Some("special_recipe"));
+        assert_eq!(tree.recipe_type, "minecraft:crafting_special_armordye");
     }
 
     #[test]
@@ -484,12 +916,21 @@ mod tests {
             }),
         )]));
         let tree = resolver.resolve("minecraft:chest", 1);
-        assert_eq!(tree.children[0].item_id, "#minecraft:planks");
-        assert!(tree.children[0].unresolved);
+        assert_eq!(tree.children[0].visual_kind, "tag");
+        assert_eq!(tree.children[0].tag.as_deref(), Some("#minecraft:planks"));
         assert_eq!(
             tree.children[0].unresolved_reason.as_deref(),
             Some("tag_input")
         );
+    }
+
+    #[test]
+    fn no_recipe_node_is_explicit() {
+        let resolver = RecipeTreeResolver::new(&BTreeMap::new());
+        let tree = resolver.resolve("minecraft:diamond", 1);
+        assert!(tree.unresolved);
+        assert_eq!(tree.visual_kind, "unresolved");
+        assert_eq!(tree.unresolved_reason.as_deref(), Some("no_recipe"));
     }
 
     #[test]
@@ -521,7 +962,7 @@ mod tests {
 
     #[test]
     fn max_depth_guard_stops_long_chain() {
-        let recipes = (0..12)
+        let recipes = (0..16)
             .map(|index| {
                 (
                     format!("minecraft:item_{index}"),
@@ -536,6 +977,61 @@ mod tests {
         let resolver = RecipeTreeResolver::new(&recipes);
         let tree = resolver.resolve("minecraft:item_0", 1);
         assert!(contains_unresolved_reason(&tree, "max_depth"));
+    }
+
+    #[test]
+    fn candidate_selection_prefers_expandable_recipe_before_low_input_recipe() {
+        let resolver = RecipeTreeResolver::new(&recipe_map([
+            (
+                "minecraft:target_bad",
+                json!({
+                    "type": "minecraft:crafting_shapeless",
+                    "ingredients": ["minecraft:missing"],
+                    "result": { "id": "minecraft:target", "count": 1 }
+                }),
+            ),
+            (
+                "minecraft:target_good",
+                json!({
+                    "type": "minecraft:crafting_shapeless",
+                    "ingredients": ["minecraft:known_a", "minecraft:known_b"],
+                    "result": { "id": "minecraft:target", "count": 1 }
+                }),
+            ),
+            leaf_recipe("minecraft:known_a"),
+            leaf_recipe("minecraft:known_b"),
+        ]));
+        let tree = resolver.resolve("minecraft:target", 1);
+        assert!(
+            tree.children
+                .iter()
+                .any(|child| child.item_id == "minecraft:known_a")
+        );
+    }
+
+    #[test]
+    fn stone_family_prefers_stonecutting() {
+        let resolver = RecipeTreeResolver::new(&recipe_map([
+            (
+                "minecraft:stone_bricks",
+                json!({
+                    "type": "minecraft:crafting_shaped",
+                    "pattern": ["##", "##"],
+                    "key": { "#": "minecraft:stone" },
+                    "result": { "id": "minecraft:stone_bricks", "count": 4 }
+                }),
+            ),
+            (
+                "minecraft:stone_bricks_from_stone_stonecutting",
+                json!({
+                    "type": "minecraft:stonecutting",
+                    "ingredient": "minecraft:stone",
+                    "result": { "id": "minecraft:stone_bricks", "count": 1 }
+                }),
+            ),
+        ]));
+        let tree = resolver.resolve("minecraft:stone_bricks", 1);
+        assert_eq!(tree.process_type, "stonecut");
     }
 
     #[test]
@@ -561,6 +1057,18 @@ mod tests {
             .into_iter()
             .map(|(key, value)| (key.to_string(), value))
             .collect()
+    }
+
+    fn leaf_recipe(item: &str) -> (&str, Value) {
+        let leaked: &'static str = Box::leak(format!("{item}_leaf").into_boxed_str());
+        (
+            leaked,
+            json!({
+                "type": "minecraft:crafting_shapeless",
+                "ingredients": [],
+                "result": { "id": item, "count": 1 }
+            }),
+        )
     }
 
     fn materials_data<const N: usize>(values: [(&str, u64, &str); N]) -> StockpileMaterialsData {
