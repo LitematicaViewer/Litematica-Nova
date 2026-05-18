@@ -15,13 +15,18 @@ use crate::recipe_cache::{self, RecipeCacheStatus, RecipeCacheStatusOutput};
 use crate::recipe_tree::{self, RecipeTreeNode};
 use crate::runtime_paths;
 use crate::stockpile::{self, StockpileMaterialsData};
+use crate::stockpile_schema::{
+    STOCKPILE_I18N_SCHEMA_VERSION, STOCKPILE_ICONS_SCHEMA_VERSION,
+    STOCKPILE_ITEM_NAMES_SCHEMA_VERSION, STOCKPILE_MATERIALS_SCHEMA_VERSION,
+    STOCKPILE_RECIPE_TREES_SCHEMA_VERSION, STOCKPILE_ZIP_SCHEMA_VERSION,
+};
 use crate::{
     item_icons,
     item_icons::{IconZipAsset, StockpileIconPayload},
+    item_names::{self, StockpileItemNamesPayload},
 };
 
 const DEFAULT_MINECRAFT_VERSION: &str = "1.21.10";
-const SCHEMA_VERSION: u32 = 1;
 const GENERATOR: &str = "litematica_core stockpile export-zip";
 const STOCKPILE_APP_CSS: &str = include_str!("stockpile_app.css");
 const STOCKPILE_APP_JS: &str = include_str!("stockpile_app.js");
@@ -43,6 +48,7 @@ pub struct StockpileZipPayload {
     pub recipe_status: RecipeCacheStatusOutput,
     pub recipe_trees: BTreeMap<String, RecipeTreeNode>,
     pub icons: StockpileIconPayload,
+    pub item_names: StockpileItemNamesPayload,
     pub i18n: Value,
     #[serde(skip)]
     pub(crate) icon_files: Vec<IconZipAsset>,
@@ -51,6 +57,11 @@ pub struct StockpileZipPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockpileZipManifest {
     pub schema_version: u32,
+    pub materials_schema_version: u32,
+    pub recipe_trees_schema_version: u32,
+    pub i18n_schema_version: u32,
+    pub icons_schema_version: u32,
+    pub item_names_schema_version: u32,
     pub created_at: u64,
     pub source_file: String,
     pub minecraft_version: String,
@@ -105,8 +116,15 @@ fn build_payload_with_trees(
 ) -> Result<StockpileZipPayload> {
     let icon_assets =
         item_icons::resolve_stockpile_icons(minecraft_version, materials, &recipe_trees)?;
+    let item_names =
+        item_names::resolve_stockpile_item_names(minecraft_version, materials, &recipe_trees)?;
     let manifest = StockpileZipManifest {
-        schema_version: SCHEMA_VERSION,
+        schema_version: STOCKPILE_ZIP_SCHEMA_VERSION,
+        materials_schema_version: STOCKPILE_MATERIALS_SCHEMA_VERSION,
+        recipe_trees_schema_version: STOCKPILE_RECIPE_TREES_SCHEMA_VERSION,
+        i18n_schema_version: STOCKPILE_I18N_SCHEMA_VERSION,
+        icons_schema_version: STOCKPILE_ICONS_SCHEMA_VERSION,
+        item_names_schema_version: STOCKPILE_ITEM_NAMES_SCHEMA_VERSION,
         created_at: current_unix_timestamp()?,
         source_file: input.display().to_string(),
         minecraft_version: minecraft_version.to_string(),
@@ -120,6 +138,7 @@ fn build_payload_with_trees(
         recipe_status,
         recipe_trees,
         icons: icon_assets.payload,
+        item_names,
         i18n: i18n_payload(),
         icon_files: icon_assets.files,
     })
@@ -155,6 +174,12 @@ fn write_zip(output_path: &Path, payload: &StockpileZipPayload) -> Result<()> {
         options,
     )?;
     add_json_file(&mut zip, "data/icons.json", &payload.icons, options)?;
+    add_json_file(
+        &mut zip,
+        "data/item_names.json",
+        &payload.item_names,
+        options,
+    )?;
     add_json_file(&mut zip, "data/i18n.json", &payload.i18n, options)?;
     for icon in &payload.icon_files {
         add_bytes_file(&mut zip, &icon.path, &icon.bytes, options)?;
@@ -289,6 +314,7 @@ fn recipe_status_string(status: &RecipeCacheStatusOutput) -> String {
 fn i18n_payload() -> Value {
     json!({
         "zh-CN": {
+            "schema_version": STOCKPILE_I18N_SCHEMA_VERSION,
             "appTitle": "Litematica 备货单",
             "offlineMode": "本机预览状态，非多人同步",
             "syncMode": "多人同步模式",
@@ -357,6 +383,7 @@ fn i18n_payload() -> Value {
             "empty": "没有匹配的材料"
         },
         "en-US": {
+            "schema_version": STOCKPILE_I18N_SCHEMA_VERSION,
             "appTitle": "Litematica Stockpile",
             "offlineMode": "Local preview state, not multiplayer sync",
             "syncMode": "Multiplayer sync mode",
@@ -443,6 +470,7 @@ fn summary(output_path: &Path, payload: &StockpileZipPayload) -> StockpileZipSum
             "data/recipe_status.json".to_string(),
             "data/recipe_trees.json".to_string(),
             "data/icons.json".to_string(),
+            "data/item_names.json".to_string(),
             "data/i18n.json".to_string(),
             format!("assets/icons/*.png ({})", payload.icon_files.len()),
         ],
@@ -933,6 +961,7 @@ mod tests {
             "data/recipe_status.json",
             "data/recipe_trees.json",
             "data/icons.json",
+            "data/item_names.json",
             "data/i18n.json",
         ] {
             zip.by_name(name)
@@ -969,10 +998,16 @@ mod tests {
             serde_json::from_str(&read_zip_entry(&mut zip, "data/i18n.json")).expect("i18n json");
         assert!(i18n_json.get("zh-CN").is_some());
         assert!(i18n_json.get("en-US").is_some());
+        let item_names_json: Value =
+            serde_json::from_str(&read_zip_entry(&mut zip, "data/item_names.json"))
+                .expect("item names json");
+        assert_eq!(item_names_json["schema_version"], json!(1));
         let manifest_json: Value =
             serde_json::from_str(&read_zip_entry(&mut zip, "data/manifest.json"))
                 .expect("manifest json");
-        assert_eq!(manifest_json["schema_version"], json!(1));
+        assert_eq!(manifest_json["schema_version"], json!(2));
+        assert_eq!(manifest_json["materials_schema_version"], json!(2));
+        assert_eq!(manifest_json["item_names_schema_version"], json!(1));
         let _ = fs::remove_file(output);
     }
 

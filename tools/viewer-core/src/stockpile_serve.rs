@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -9,11 +9,19 @@ use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
 use crate::item_icons::StockpileIconPayload;
+use crate::item_names::StockpileItemNamesPayload;
 use crate::runtime_paths;
 use crate::stockpile::StockpileMaterialsData;
+use crate::stockpile_schema::{
+    STOCKPILE_I18N_SCHEMA_VERSION, STOCKPILE_ICONS_SCHEMA_VERSION,
+    STOCKPILE_ITEM_NAMES_SCHEMA_VERSION, STOCKPILE_MATERIALS_SCHEMA_VERSION,
+    STOCKPILE_RECIPE_TREES_SCHEMA_VERSION, STOCKPILE_SQLITE_SCHEMA_VERSION,
+    STOCKPILE_ZIP_SCHEMA_VERSION,
+};
 use crate::stockpile_zip::StockpileZipPayload;
 
 #[derive(Debug, Clone, Serialize)]
@@ -21,6 +29,68 @@ pub struct StockpileServeSummary {
     pub bind: String,
     pub zip: PathBuf,
     pub database: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionMeta {
+    pub schema_version: u32,
+    pub zip_hash: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionInfoOutput {
+    pub zip_path: PathBuf,
+    pub session_db: PathBuf,
+    pub schema_version: u32,
+    pub participants_count: u64,
+    pub claims_count: u64,
+    pub materials_count: u64,
+    pub done_count: u64,
+    pub preparing_count: u64,
+    pub remaining_count: u64,
+    pub overfilled_count: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionExportData {
+    pub schema_version: u32,
+    pub zip_path: String,
+    pub zip_hash: String,
+    pub participants: Vec<ParticipantState>,
+    pub material_claims: Vec<ClaimState>,
+    pub summary: SessionInfoSummary,
+    pub exported_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInfoSummary {
+    pub participants_count: u64,
+    pub claims_count: u64,
+    pub materials_count: u64,
+    pub done_count: u64,
+    pub preparing_count: u64,
+    pub remaining_count: u64,
+    pub overfilled_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionResetOutput {
+    pub zip_path: PathBuf,
+    pub session_db: PathBuf,
+    pub reset: bool,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionImportOutput {
+    pub zip_path: PathBuf,
+    pub session_db: PathBuf,
+    pub imported_participants: usize,
+    pub imported_claims: usize,
+    pub replace: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -74,7 +144,7 @@ pub fn serve_stockpile_zip(zip_path: &Path, bind: &str) -> Result<StockpileServe
     let zip_path = absolutize(zip_path)?;
     let project = load_project_from_zip(&zip_path)?;
     let db_path = session_db_path(&zip_path)?;
-    init_db(&db_path)?;
+    ensure_session_db(&db_path, &zip_hash(&zip_path)?)?;
     let listener =
         TcpListener::bind(bind).with_context(|| format!("bind stockpile server failed: {bind}"))?;
     let summary = StockpileServeSummary {
@@ -217,10 +287,73 @@ fn init_db_conn(conn: &Connection) -> Result<()> {
             updated_at INTEGER NOT NULL,
             PRIMARY KEY(material_id, user_id)
         );
+        CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY NOT NULL,
+            value TEXT NOT NULL
+        );
         "#,
     )
     .context("initialize stockpile session db failed")?;
+    let now = current_unix_timestamp()?;
+    if meta_value(conn, "schema_version")?.is_none() {
+        set_meta(
+            conn,
+            "schema_version",
+            &STOCKPILE_SQLITE_SCHEMA_VERSION.to_string(),
+        )?;
+        set_meta(conn, "zip_hash", "")?;
+        set_meta(conn, "created_at", &now.to_string())?;
+        set_meta(conn, "updated_at", &now.to_string())?;
+    }
     Ok(())
+}
+
+fn ensure_session_db(path: &Path, expected_zip_hash: &str) -> Result<()> {
+    init_db(path)?;
+    let conn = Connection::open(path)?;
+    let schema_version = meta_value(&conn, "schema_version")?
+        .unwrap_or_default()
+        .parse::<u32>()
+        .unwrap_or(0);
+    if schema_version != STOCKPILE_SQLITE_SCHEMA_VERSION {
+        bail!(
+            "unsupported stockpile sqlite schema_version {}; supported {}; export/reset/import session state",
+            schema_version,
+            STOCKPILE_SQLITE_SCHEMA_VERSION
+        );
+    }
+    let existing_hash = meta_value(&conn, "zip_hash")?.unwrap_or_default();
+    if existing_hash.is_empty() {
+        set_meta(&conn, "zip_hash", expected_zip_hash)?;
+    } else if existing_hash != expected_zip_hash {
+        bail!(
+            "session database zip_hash does not match stockpile zip; use session-export/reset/import"
+        );
+    }
+    touch_meta(&conn)?;
+    Ok(())
+}
+
+fn meta_value(conn: &Connection, key: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT value FROM meta WHERE key = ?1")?;
+    let mut rows = stmt.query(params![key])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(row.get(0)?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+fn touch_meta(conn: &Connection) -> Result<()> {
+    set_meta(conn, "updated_at", &current_unix_timestamp()?.to_string())
 }
 
 pub(crate) fn upsert_participant(path: &Path, user_id: &str) -> Result<()> {
@@ -271,6 +404,7 @@ pub(crate) fn put_claim(
         "#,
         params![material_id, user_id, status, quantity as i64, now],
     )?;
+    touch_meta(&conn)?;
     Ok(())
 }
 
@@ -283,6 +417,7 @@ pub(crate) fn delete_claim(path: &Path, material_id: &str, user_id: &str) -> Res
         "DELETE FROM material_claims WHERE material_id = ?1 AND user_id = ?2",
         params![material_id, user_id],
     )?;
+    touch_meta(&conn)?;
     Ok(())
 }
 
@@ -300,6 +435,175 @@ pub(crate) fn build_state(
         claims,
         current_unix_timestamp()?,
     ))
+}
+
+pub fn session_info(zip_path: &Path) -> Result<SessionInfoOutput> {
+    let zip_path = absolutize(zip_path)?;
+    let project = load_project_from_zip(&zip_path)?;
+    let db_path = session_db_path(&zip_path)?;
+    ensure_session_db(&db_path, &zip_hash(&zip_path)?)?;
+    let state = build_state(&db_path, &project.materials)?;
+    let summary = summarize_state(&state);
+    Ok(SessionInfoOutput {
+        zip_path,
+        session_db: db_path,
+        schema_version: STOCKPILE_SQLITE_SCHEMA_VERSION,
+        participants_count: summary.participants_count,
+        claims_count: summary.claims_count,
+        materials_count: summary.materials_count,
+        done_count: summary.done_count,
+        preparing_count: summary.preparing_count,
+        remaining_count: summary.remaining_count,
+        overfilled_count: summary.overfilled_count,
+        updated_at: state.updated_at,
+    })
+}
+
+pub fn session_reset(zip_path: &Path, yes: bool) -> Result<SessionResetOutput> {
+    let zip_path = absolutize(zip_path)?;
+    let db_path = session_db_path(&zip_path)?;
+    ensure_session_db(&db_path, &zip_hash(&zip_path)?)?;
+    if !yes {
+        return Ok(SessionResetOutput {
+            zip_path,
+            session_db: db_path,
+            reset: false,
+            warning: Some("session-reset requires --yes to clear material_claims".to_string()),
+        });
+    }
+    let conn = Connection::open(&db_path)?;
+    conn.execute("DELETE FROM material_claims", [])?;
+    touch_meta(&conn)?;
+    Ok(SessionResetOutput {
+        zip_path,
+        session_db: db_path,
+        reset: true,
+        warning: None,
+    })
+}
+
+pub fn session_export(zip_path: &Path, output: &Path) -> Result<SessionExportData> {
+    let zip_path = absolutize(zip_path)?;
+    let project = load_project_from_zip(&zip_path)?;
+    let db_path = session_db_path(&zip_path)?;
+    let zip_hash = zip_hash(&zip_path)?;
+    ensure_session_db(&db_path, &zip_hash)?;
+    let conn = Connection::open(&db_path)?;
+    let participants = load_participants(&conn)?;
+    let claims = load_claims(&conn)?;
+    let state = aggregate_state(
+        &project.materials,
+        participants.clone(),
+        claims.clone(),
+        current_unix_timestamp()?,
+    );
+    let data = SessionExportData {
+        schema_version: crate::stockpile_schema::STOCKPILE_SESSION_EXPORT_SCHEMA_VERSION,
+        zip_path: zip_path.display().to_string(),
+        zip_hash,
+        participants,
+        material_claims: claims,
+        summary: summarize_state(&state),
+        exported_at: current_unix_timestamp()?,
+    };
+    let output = absolutize(output)?;
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create session export dir failed: {}", parent.display()))?;
+    }
+    fs::write(&output, serde_json::to_vec_pretty(&data)?)
+        .with_context(|| format!("write session export failed: {}", output.display()))?;
+    Ok(data)
+}
+
+pub fn session_import(zip_path: &Path, input: &Path, replace: bool) -> Result<SessionImportOutput> {
+    let zip_path = absolutize(zip_path)?;
+    let input = absolutize(input)?;
+    let project = load_project_from_zip(&zip_path)?;
+    let db_path = session_db_path(&zip_path)?;
+    let expected_hash = zip_hash(&zip_path)?;
+    ensure_session_db(&db_path, &expected_hash)?;
+    let data: SessionExportData = serde_json::from_slice(
+        &fs::read(&input)
+            .with_context(|| format!("read session import failed: {}", input.display()))?,
+    )
+    .with_context(|| format!("parse session import failed: {}", input.display()))?;
+    if data.schema_version != crate::stockpile_schema::STOCKPILE_SESSION_EXPORT_SCHEMA_VERSION {
+        bail!(
+            "unsupported session export schema_version {}",
+            data.schema_version
+        );
+    }
+    if data.zip_hash != expected_hash {
+        bail!("session export zip_hash does not match target stockpile zip");
+    }
+    let valid_materials = project
+        .materials
+        .materials
+        .iter()
+        .map(|material| material.namespace_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let conn = Connection::open(&db_path)?;
+    if replace {
+        conn.execute("DELETE FROM material_claims", [])?;
+    }
+    for participant in &data.participants {
+        upsert_participant(&db_path, &participant.user_id)?;
+    }
+    let mut imported_claims = 0_usize;
+    for claim in &data.material_claims {
+        if valid_materials.contains(claim.material_id.as_str()) {
+            put_claim(
+                &db_path,
+                &claim.material_id,
+                &claim.user_id,
+                &claim.status,
+                claim.quantity,
+            )?;
+            imported_claims += 1;
+        }
+    }
+    touch_meta(&conn)?;
+    Ok(SessionImportOutput {
+        zip_path,
+        session_db: db_path,
+        imported_participants: data.participants.len(),
+        imported_claims,
+        replace,
+    })
+}
+
+fn summarize_state(state: &StockpileSyncState) -> SessionInfoSummary {
+    let claims_count = state
+        .materials
+        .values()
+        .map(|material| material.claims.len() as u64)
+        .sum();
+    SessionInfoSummary {
+        participants_count: state.participants.len() as u64,
+        claims_count,
+        materials_count: state.materials.len() as u64,
+        done_count: state
+            .materials
+            .values()
+            .map(|material| material.done_count)
+            .sum(),
+        preparing_count: state
+            .materials
+            .values()
+            .map(|material| material.preparing_count)
+            .sum(),
+        remaining_count: state
+            .materials
+            .values()
+            .map(|material| material.remaining_count)
+            .sum(),
+        overfilled_count: state
+            .materials
+            .values()
+            .map(|material| material.overfilled_count)
+            .sum(),
+    }
 }
 
 fn aggregate_state(
@@ -411,7 +715,7 @@ pub(crate) fn load_project_from_zip(zip_path: &Path) -> Result<StockpileZipPaylo
             .with_context(|| format!("open stockpile zip failed: {}", zip_path.display()))?,
     )
     .context("open stockpile zip archive failed")?;
-    Ok(StockpileZipPayload {
+    let payload = StockpileZipPayload {
         manifest: read_json_entry(&mut zip, "data/manifest.json")?,
         materials: read_json_entry(&mut zip, "data/materials.json")?,
         recipe_status: read_json_entry(&mut zip, "data/recipe_status.json")?,
@@ -422,9 +726,49 @@ pub(crate) fn load_project_from_zip(zip_path: &Path) -> Result<StockpileZipPaylo
                 by_key: BTreeMap::new(),
             }
         }),
+        item_names: read_json_entry(&mut zip, "data/item_names.json").unwrap_or_else(|_| {
+            StockpileItemNamesPayload {
+                schema_version: STOCKPILE_ITEM_NAMES_SCHEMA_VERSION,
+                manifest: None,
+                names: BTreeMap::new(),
+            }
+        }),
         i18n: read_json_entry(&mut zip, "data/i18n.json").unwrap_or_else(|_| json!({})),
         icon_files: Vec::new(),
-    })
+    };
+    validate_project_schema(&payload)?;
+    Ok(payload)
+}
+
+fn validate_project_schema(project: &StockpileZipPayload) -> Result<()> {
+    let manifest = &project.manifest;
+    if manifest.schema_version != STOCKPILE_ZIP_SCHEMA_VERSION {
+        bail!(
+            "unsupported stockpile zip schema_version {}; supported {}",
+            manifest.schema_version,
+            STOCKPILE_ZIP_SCHEMA_VERSION
+        );
+    }
+    if manifest.materials_schema_version != STOCKPILE_MATERIALS_SCHEMA_VERSION
+        || project.materials.schema_version != STOCKPILE_MATERIALS_SCHEMA_VERSION
+    {
+        bail!("unsupported stockpile materials schema version");
+    }
+    if manifest.recipe_trees_schema_version != STOCKPILE_RECIPE_TREES_SCHEMA_VERSION {
+        bail!("unsupported stockpile recipe_trees schema version");
+    }
+    if manifest.icons_schema_version != STOCKPILE_ICONS_SCHEMA_VERSION {
+        bail!("unsupported stockpile icons schema version");
+    }
+    if manifest.i18n_schema_version != STOCKPILE_I18N_SCHEMA_VERSION {
+        bail!("unsupported stockpile i18n schema version");
+    }
+    if manifest.item_names_schema_version != STOCKPILE_ITEM_NAMES_SCHEMA_VERSION
+        || project.item_names.schema_version != STOCKPILE_ITEM_NAMES_SCHEMA_VERSION
+    {
+        bail!("unsupported stockpile item_names schema version");
+    }
+    Ok(())
 }
 
 fn read_json_entry<T: for<'de> Deserialize<'de>>(
@@ -472,13 +816,21 @@ fn serve_zip_asset(zip_path: &Path, path: &str) -> Result<HttpResponse> {
     })
 }
 
-fn session_db_path(zip_path: &Path) -> Result<PathBuf> {
+pub(crate) fn session_db_path(zip_path: &Path) -> Result<PathBuf> {
     let stem = zip_path
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("stockpile");
     Ok(runtime_paths::stockpile_sessions_root()?
         .join(format!("{}.sqlite", safe_session_name(stem))))
+}
+
+pub(crate) fn zip_hash(zip_path: &Path) -> Result<String> {
+    let bytes =
+        fs::read(zip_path).with_context(|| format!("read zip failed: {}", zip_path.display()))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(to_hex(&hasher.finalize()))
 }
 
 fn safe_session_name(value: &str) -> String {
@@ -532,6 +884,10 @@ fn current_unix_timestamp() -> Result<u64> {
         .duration_since(UNIX_EPOCH)
         .context("system time is before unix epoch")?
         .as_secs())
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 struct HttpRequest {
@@ -757,8 +1113,59 @@ mod tests {
         let _ = std::fs::remove_file(output);
     }
 
+    #[test]
+    fn session_info_reset_export_import_roundtrip() {
+        let input = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("stats_water_fixture.litematic");
+        let output = crate::runtime_paths::stockpile_exports_root()
+            .expect("exports root")
+            .join(format!(
+                "stockpile_session_roundtrip_{}.zip",
+                std::process::id()
+            ));
+        crate::stockpile_zip::export_stockpile_zip(&input, Some(&output), false, Some("1.21.10"))
+            .expect("export zip");
+        let db = session_db_path(&output).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        put_claim(&db, "minecraft:stone", "alex", "preparing", 2).expect("claim");
+        let info = session_info(&output).expect("info");
+        assert_eq!(info.claims_count, 1);
+        let state_path = crate::runtime_paths::stockpile_sessions_root()
+            .expect("sessions")
+            .join(format!(
+                "stockpile_session_roundtrip_{}.json",
+                std::process::id()
+            ));
+        let exported = session_export(&output, &state_path).expect("export session");
+        assert_eq!(exported.material_claims.len(), 1);
+        let dry = session_reset(&output, false).expect("dry reset");
+        assert!(!dry.reset);
+        let reset = session_reset(&output, true).expect("reset");
+        assert!(reset.reset);
+        assert_eq!(session_info(&output).expect("post reset").claims_count, 0);
+        let imported = session_import(&output, &state_path, true).expect("import");
+        assert_eq!(imported.imported_claims, 1);
+        assert_eq!(session_info(&output).expect("post import").claims_count, 1);
+        let _ = std::fs::remove_file(output);
+        let _ = std::fs::remove_file(db);
+        let _ = std::fs::remove_file(state_path);
+    }
+
+    #[test]
+    fn load_project_rejects_bad_zip() {
+        let path = crate::runtime_paths::stockpile_exports_root()
+            .expect("exports root")
+            .join(format!("stockpile_bad_zip_{}.zip", std::process::id()));
+        std::fs::write(&path, b"not a zip").expect("bad zip");
+        assert!(load_project_from_zip(&path).is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
     fn fixture_materials() -> StockpileMaterialsData {
         StockpileMaterialsData {
+            schema_version: crate::stockpile_schema::STOCKPILE_MATERIALS_SCHEMA_VERSION,
             project: StockpileProjectInfo {
                 source_file: "fixture.litematic".to_string(),
                 created_at: 1,
@@ -796,6 +1203,7 @@ mod tests {
             item_icon_key: id.to_string(),
             icon_path: String::new(),
             icon_available: false,
+            display_names: BTreeMap::new(),
             source_regions: vec!["main".to_string()],
             recipe_status: "missing".to_string(),
             craft_complexity: 0,

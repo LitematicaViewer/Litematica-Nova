@@ -75,6 +75,30 @@ fn main() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("missing --bind"))?;
             stockpile_serve::serve_stockpile_zip(&args.input, bind)?;
         }
+        "stockpile session-info" => {
+            let output = stockpile_serve::session_info(&args.input)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile session-reset" => {
+            let output = stockpile_serve::session_reset(&args.input, args.yes)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile session-export" => {
+            let output_path = args
+                .output
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --output"))?;
+            let output = stockpile_serve::session_export(&args.input, output_path)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile session-import" => {
+            let input_path = args
+                .session_input
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --input"))?;
+            let output = stockpile_serve::session_import(&args.input, input_path, args.replace)?;
+            emit_output(&output, None)?;
+        }
         "stats" => {
             let output = stats_api::build_stats_output(&args.input, args.include_container_items)?;
             emit_output(&output, args.output.as_deref())?;

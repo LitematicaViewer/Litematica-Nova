@@ -169,7 +169,7 @@
     return data.materials.materials.filter((item) => {
       const sync = materialSync(item);
       const mine = (sync.claims || []).some((claim) => claim.user_id === userId);
-      if (query && !`${item.display_name} ${item.namespace_id} ${item.category} ${item.item_icon_key}`.toLowerCase().includes(query)) return false;
+      if (query && !`${displayName(item)} ${item.display_name} ${item.namespace_id} ${item.category} ${item.item_icon_key}`.toLowerCase().includes(query)) return false;
       switch (controls.filter) {
         case 'not_started': return sync.overall_status === 'not_started';
         case 'preparing': return sync.overall_status === 'preparing' || sync.overall_status === 'partial_done';
@@ -189,14 +189,14 @@
     const mineA = (sa.claims || []).some((claim) => claim.user_id === userId) ? 0 : 1;
     const mineB = (sb.claims || []).some((claim) => claim.user_id === userId) ? 0 : 1;
     switch (controls.sort) {
-      case 'count_asc': return a.required_count - b.required_count || a.display_name.localeCompare(b.display_name);
-      case 'name': return a.display_name.localeCompare(b.display_name);
+      case 'count_asc': return a.required_count - b.required_count || displayName(a).localeCompare(displayName(b));
+      case 'name': return displayName(a).localeCompare(displayName(b));
       case 'remaining_desc': return sb.remaining_count - sa.remaining_count || b.required_count - a.required_count;
       case 'status': return statusRank(sa.overall_status) - statusRank(sb.overall_status) || b.required_count - a.required_count;
       case 'mine': return mineA - mineB || b.required_count - a.required_count;
       case 'grouped': return a.category.localeCompare(b.category) || statusRank(sa.overall_status) - statusRank(sb.overall_status) || b.required_count - a.required_count;
       case 'count_desc':
-      default: return b.required_count - a.required_count || a.display_name.localeCompare(b.display_name);
+      default: return b.required_count - a.required_count || displayName(a).localeCompare(displayName(b));
     }
   }
   function statusRank(status) {
@@ -287,7 +287,7 @@
     return `<article class="card ${isOpen ? 'open' : ''}" data-id="${escapeAttr(item.namespace_id)}">
       <div class="card-main">
         <div>
-          <div class="material-title">${iconImg(item.item_icon_key, true, item)}<span class="name">${escapeHtml(item.display_name)}</span></div>
+          <div class="material-title">${iconImg(item.item_icon_key, true, item)}<span class="name">${escapeHtml(displayName(item))}</span></div>
           <div class="sub">${escapeHtml(item.namespace_id)} · ${escapeHtml(item.category)} · ${escapeHtml(t('remaining'))} ${sync.remaining_count}</div>
           <div class="badges"><span class="badge ${item.recipe_status}">${recipeLabel(item.recipe_status)}</span><span class="badge ${sync.overall_status}">${overallLabel(sync.overall_status)}</span><span class="badge">${sync.participants.length ? `${escapeHtml(t('claimedBy'))}: ${escapeHtml(sync.participants.join(', '))}` : escapeHtml(t('unclaimed'))}</span></div>
         </div>
@@ -325,7 +325,7 @@
     const collapsed = collapsedTree.has(nodeId);
     const hasChildren = (node.children || []).length > 0;
     const children = hasChildren && !collapsed ? (node.children || []).map((child) => renderRecipeTree(child, false)).join('') : '';
-    const ingredients = (node.ingredients || []).map((ingredient) => `${ingredient.display_name || ingredient.item_id} x${ingredient.needed_count}${ingredient.unresolved ? ` (${reasonLabel(ingredient.unresolved_reason)})` : ''}`).join(' · ');
+    const ingredients = (node.ingredients || []).map((ingredient) => `${itemName(ingredient.item_id, ingredient.display_name || ingredient.item_id)} x${ingredient.needed_count}${ingredient.unresolved ? ` (${reasonLabel(ingredient.unresolved_reason)})` : ''}`).join(' · ');
     const possible = renderPossibleItems(node);
     const message = nodeMessage(node);
     const iconKey = node.visual_kind === 'tag' ? '__tag' : node.visual_kind === 'special' ? '__special' : node.unresolved ? '__unresolved' : node.icon_key;
@@ -334,7 +334,7 @@
         <div class="recipe-card-head">
           ${iconImg(iconKey, true)}
           <div>
-            <div class="recipe-name">${escapeHtml(node.display_name || node.item_id)}</div>
+            <div class="recipe-name">${escapeHtml(itemName(node.item_id, node.display_name || node.item_id))}</div>
             <div class="recipe-id">${escapeHtml(node.tag || node.item_id)}</div>
             <div class="recipe-badges">
               <span class="recipe-badge process">${processLabel(node)}</span>
@@ -372,7 +372,7 @@
     const values = (node.possible_items || []).slice(0, 12);
     if (!values.length) return '';
     const more = (node.possible_items || []).length - values.length;
-    return `<div class="possible-items">${values.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}${more > 0 ? `<span>+${more}</span>` : ''}</div>`;
+    return `<div class="possible-items">${values.map((item) => `<span>${escapeHtml(itemName(item, item))}</span>`).join('')}${more > 0 ? `<span>+${more}</span>` : ''}</div>`;
   }
   function nodeMessage(node) {
     if (node.visual_kind === 'tag') return `${t('tagGroup')} ${node.tag || node.item_id}`;
@@ -395,6 +395,12 @@
   function iconImg(key, large, material) {
     const src = material?.icon_path || (data.icons?.by_key?.[key]?.path) || data.icons?.by_key?.__fallback?.path || '';
     return `<span class="icon-frame ${large ? 'large' : ''}"><img class="icon-img" src="${escapeAttr(src)}" alt="" loading="lazy" /></span>`;
+  }
+  function displayName(item) {
+    return item.display_names?.[lang] || item.display_names?.['en-US'] || item.display_name || item.namespace_id;
+  }
+  function itemName(itemId, fallback) {
+    return data.item_names?.names?.[itemId]?.[lang] || data.item_names?.names?.[itemId]?.['en-US'] || fallback || itemId;
   }
 
   function bindControls() {
