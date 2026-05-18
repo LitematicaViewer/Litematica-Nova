@@ -28,6 +28,7 @@ pub struct CliArgs {
     pub offset: usize,
     pub limit: usize,
     pub minecraft_version: Option<String>,
+    pub bind: Option<String>,
 }
 
 pub fn parse_args() -> Result<CliArgs> {
@@ -199,6 +200,7 @@ pub fn parse_args() -> Result<CliArgs> {
         offset,
         limit,
         minecraft_version: None,
+        bind: None,
     })
 }
 
@@ -251,6 +253,7 @@ fn parse_runtime_paths_args(command: String, raw_args: Vec<String>) -> Result<Cl
         offset: 0,
         limit: 64,
         minecraft_version: None,
+        bind: None,
     })
 }
 
@@ -258,13 +261,14 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     let mut args = raw_args.into_iter();
     let Some(subcommand) = args.next() else {
         bail!(
-            "stockpile requires a subcommand: export-data | export-zip | recipe-status | recipe-fetch"
+            "stockpile requires a subcommand: export-data | export-zip | recipe-status | recipe-fetch | serve"
         );
     };
     let mut input = None;
     let mut output = None;
     let mut include_container_items = false;
     let mut minecraft_version = None;
+    let mut bind = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -290,6 +294,18 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
                 }
                 minecraft_version = Some(value);
             }
+            "--zip" => {
+                let Some(path) = args.next() else {
+                    bail!("missing path after --zip");
+                };
+                input = Some(PathBuf::from(path));
+            }
+            "--bind" => {
+                let Some(value) = args.next() else {
+                    bail!("missing value after --bind");
+                };
+                bind = Some(value);
+            }
             _ if arg.starts_with("--input=") => {
                 let value = arg.trim_start_matches("--input=");
                 if value.is_empty() {
@@ -310,6 +326,20 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
                     bail!("missing value after --minecraft-version=");
                 }
                 minecraft_version = Some(value.to_string());
+            }
+            _ if arg.starts_with("--zip=") => {
+                let value = arg.trim_start_matches("--zip=");
+                if value.is_empty() {
+                    bail!("missing path after --zip=");
+                }
+                input = Some(PathBuf::from(value));
+            }
+            _ if arg.starts_with("--bind=") => {
+                let value = arg.trim_start_matches("--bind=");
+                if value.is_empty() {
+                    bail!("missing value after --bind=");
+                }
+                bind = Some(value.to_string());
             }
             _ if arg.starts_with('-') => bail!("unknown argument: {arg}"),
             _ => {
@@ -334,16 +364,24 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     }
     if !matches!(
         subcommand.as_str(),
-        "export-data" | "export-zip" | "recipe-status" | "recipe-fetch"
+        "export-data" | "export-zip" | "recipe-status" | "recipe-fetch" | "serve"
     ) {
         bail!("unsupported stockpile subcommand: {subcommand}");
+    }
+    if subcommand == "serve" && bind.is_none() {
+        bail!("stockpile serve requires --bind <addr:port>");
     }
 
     Ok(CliArgs {
         command: format!("stockpile {subcommand}"),
-        input: if matches!(subcommand.as_str(), "export-data" | "export-zip") {
-            input
-                .ok_or_else(|| anyhow::anyhow!("stockpile {subcommand} requires --input <path>"))?
+        input: if matches!(subcommand.as_str(), "export-data" | "export-zip" | "serve") {
+            input.ok_or_else(|| {
+                if subcommand == "serve" {
+                    anyhow::anyhow!("stockpile serve requires --zip <path>")
+                } else {
+                    anyhow::anyhow!("stockpile {subcommand} requires --input <path>")
+                }
+            })?
         } else {
             PathBuf::new()
         },
@@ -369,6 +407,7 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
         offset: 0,
         limit: 64,
         minecraft_version,
+        bind,
     })
 }
 
@@ -465,6 +504,7 @@ fn parse_replace_blocks_args(command: String, raw_args: Vec<String>) -> Result<C
         offset: 0,
         limit: 64,
         minecraft_version: None,
+        bind: None,
     })
 }
 
@@ -549,6 +589,7 @@ fn parse_generate_args(command: String, raw_args: Vec<String>) -> Result<CliArgs
         offset: 0,
         limit: 64,
         minecraft_version: None,
+        bind: None,
     })
 }
 
@@ -634,5 +675,6 @@ fn parse_edit_metadata_args(command: String, raw_args: Vec<String>) -> Result<Cl
         offset: 0,
         limit: 64,
         minecraft_version: None,
+        bind: None,
     })
 }

@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use zip::CompressionMethod;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
@@ -14,12 +15,18 @@ use crate::recipe_cache::{self, RecipeCacheStatus, RecipeCacheStatusOutput};
 use crate::recipe_tree::{self, RecipeTreeNode};
 use crate::runtime_paths;
 use crate::stockpile::{self, StockpileMaterialsData};
+use crate::{
+    item_icons,
+    item_icons::{IconZipAsset, StockpileIconPayload},
+};
 
 const DEFAULT_MINECRAFT_VERSION: &str = "1.21.10";
 const SCHEMA_VERSION: u32 = 1;
 const GENERATOR: &str = "litematica_core stockpile export-zip";
+const STOCKPILE_APP_CSS: &str = include_str!("stockpile_app.css");
+const STOCKPILE_APP_JS: &str = include_str!("stockpile_app.js");
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockpileZipSummary {
     pub output: PathBuf,
     pub source_file: String,
@@ -29,23 +36,27 @@ pub struct StockpileZipSummary {
     pub files: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct StockpileZipPayload {
-    manifest: StockpileZipManifest,
-    materials: StockpileMaterialsData,
-    recipe_status: RecipeCacheStatusOutput,
-    recipe_trees: BTreeMap<String, RecipeTreeNode>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockpileZipPayload {
+    pub manifest: StockpileZipManifest,
+    pub materials: StockpileMaterialsData,
+    pub recipe_status: RecipeCacheStatusOutput,
+    pub recipe_trees: BTreeMap<String, RecipeTreeNode>,
+    pub icons: StockpileIconPayload,
+    pub i18n: Value,
+    #[serde(skip)]
+    pub(crate) icon_files: Vec<IconZipAsset>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct StockpileZipManifest {
-    schema_version: u32,
-    created_at: u64,
-    source_file: String,
-    minecraft_version: String,
-    recipe_status: String,
-    generator: String,
-    material_count: usize,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockpileZipManifest {
+    pub schema_version: u32,
+    pub created_at: u64,
+    pub source_file: String,
+    pub minecraft_version: String,
+    pub recipe_status: String,
+    pub generator: String,
+    pub material_count: usize,
 }
 
 pub fn export_stockpile_zip(
@@ -67,7 +78,7 @@ pub fn export_stockpile_zip(
 fn build_payload(
     input: &Path,
     minecraft_version: &str,
-    materials: StockpileMaterialsData,
+    mut materials: StockpileMaterialsData,
     recipe_status: RecipeCacheStatusOutput,
 ) -> Result<StockpileZipPayload> {
     let recipe_trees = if recipe_status.status == RecipeCacheStatus::Available {
@@ -79,7 +90,7 @@ fn build_payload(
     build_payload_with_trees(
         input,
         minecraft_version,
-        materials,
+        &mut materials,
         recipe_status,
         recipe_trees,
     )
@@ -88,10 +99,12 @@ fn build_payload(
 fn build_payload_with_trees(
     input: &Path,
     minecraft_version: &str,
-    materials: StockpileMaterialsData,
+    materials: &mut StockpileMaterialsData,
     recipe_status: RecipeCacheStatusOutput,
     recipe_trees: BTreeMap<String, RecipeTreeNode>,
 ) -> Result<StockpileZipPayload> {
+    let icon_assets =
+        item_icons::resolve_stockpile_icons(minecraft_version, materials, &recipe_trees)?;
     let manifest = StockpileZipManifest {
         schema_version: SCHEMA_VERSION,
         created_at: current_unix_timestamp()?,
@@ -103,9 +116,12 @@ fn build_payload_with_trees(
     };
     Ok(StockpileZipPayload {
         manifest,
-        materials,
+        materials: materials.clone(),
         recipe_status,
         recipe_trees,
+        icons: icon_assets.payload,
+        i18n: i18n_payload(),
+        icon_files: icon_assets.files,
     })
 }
 
@@ -122,8 +138,8 @@ fn write_zip(output_path: &Path, payload: &StockpileZipPayload) -> Result<()> {
         &render_index_html(payload)?,
         options,
     )?;
-    add_text_file(&mut zip, "assets/app.css", APP_CSS, options)?;
-    add_text_file(&mut zip, "assets/app.js", APP_JS, options)?;
+    add_text_file(&mut zip, "assets/app.css", STOCKPILE_APP_CSS, options)?;
+    add_text_file(&mut zip, "assets/app.js", STOCKPILE_APP_JS, options)?;
     add_json_file(&mut zip, "data/manifest.json", &payload.manifest, options)?;
     add_json_file(&mut zip, "data/materials.json", &payload.materials, options)?;
     add_json_file(
@@ -138,6 +154,11 @@ fn write_zip(output_path: &Path, payload: &StockpileZipPayload) -> Result<()> {
         &payload.recipe_trees,
         options,
     )?;
+    add_json_file(&mut zip, "data/icons.json", &payload.icons, options)?;
+    add_json_file(&mut zip, "data/i18n.json", &payload.i18n, options)?;
+    for icon in &payload.icon_files {
+        add_bytes_file(&mut zip, &icon.path, &icon.bytes, options)?;
+    }
     zip.finish().context("finish stockpile zip failed")?;
     Ok(())
 }
@@ -150,6 +171,17 @@ fn add_text_file(
 ) -> Result<()> {
     zip.start_file(name, options)?;
     zip.write_all(content.as_bytes())?;
+    Ok(())
+}
+
+fn add_bytes_file(
+    zip: &mut ZipWriter<File>,
+    name: &str,
+    content: &[u8],
+    options: SimpleFileOptions,
+) -> Result<()> {
+    zip.start_file(name, options)?;
+    zip.write_all(content)?;
     Ok(())
 }
 
@@ -254,6 +286,147 @@ fn recipe_status_string(status: &RecipeCacheStatusOutput) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+fn i18n_payload() -> Value {
+    json!({
+        "zh-CN": {
+            "appTitle": "Litematica 备货单",
+            "offlineMode": "本机预览状态，非多人同步",
+            "syncMode": "多人同步模式",
+            "lastSync": "最近同步",
+            "participants": "参与人数",
+            "currentId": "当前 ID",
+            "switchId": "切换 ID",
+            "language": "语言",
+            "enterIdTitle": "输入你的备货 ID",
+            "enterIdBody": "ID 必填。离线打开时状态只保存到本机；serve 模式会同步到本项目会话数据库。",
+            "enterIdPlaceholder": "例如 Steve / Builder01",
+            "enter": "进入备货单",
+            "search": "搜索材料、ID、分类",
+            "all": "全部",
+            "notStarted": "未开始",
+            "preparing": "备货中",
+            "done": "已完成",
+            "partialDone": "部分完成",
+            "overfilled": "超量",
+            "mine": "我参与的",
+            "unclaimed": "无人认领",
+            "craftable": "可合成",
+            "unresolved": "未解析",
+            "recipeMissing": "合成表缺失",
+            "countDesc": "数量大到小",
+            "countAsc": "数量小到大",
+            "grouped": "按类型分组",
+            "remainingDesc": "剩余缺口大到小",
+            "status": "完成状态",
+            "mineFirst": "我参与的优先",
+            "name": "名称",
+            "totalMaterials": "材料种类",
+            "totalBlocks": "总方块数",
+            "totalStacks": "总组数",
+            "shulkerEstimate": "潜影盒估算",
+            "required": "需求",
+            "remaining": "剩余缺口",
+            "claimed": "已认领",
+            "claimedBy": "参与者",
+            "available": "可合成",
+            "missing": "缺失",
+            "quantity": "数量",
+            "cancel": "取消",
+            "details": "详情",
+            "collapse": "收起",
+            "sourceRegions": "来源区域",
+            "recipeStatus": "合成状态",
+            "recipeUnavailable": "当前备货单未包含合成表",
+            "recipeCachedNoTree": "合成表已缓存，合成树解析器未生成该材料路径",
+            "recipeUnresolved": "当前材料未解析到固定合成路径",
+            "inputs": "输入",
+            "need": "需求",
+            "recipe": "配方",
+            "process": "工艺",
+            "outputEach": "每次产出",
+            "batches": "需要批次",
+            "extra": "多余数量",
+            "depth": "深度",
+            "fuelRequired": "需要燃料",
+            "decorativeSmithing": "装饰锻造",
+            "tagGroup": "可替代材料组",
+            "specialRecipe": "特殊配方，无法静态展开",
+            "noRecipe": "无固定配方，需要手动准备",
+            "tagInput": "tag 输入不会自动猜具体材料",
+            "syncError": "同步失败",
+            "empty": "没有匹配的材料"
+        },
+        "en-US": {
+            "appTitle": "Litematica Stockpile",
+            "offlineMode": "Local preview state, not multiplayer sync",
+            "syncMode": "Multiplayer sync mode",
+            "lastSync": "Last sync",
+            "participants": "Participants",
+            "currentId": "Current ID",
+            "switchId": "Switch ID",
+            "language": "Language",
+            "enterIdTitle": "Enter your stockpile ID",
+            "enterIdBody": "ID is required. Offline state stays in this browser; serve mode syncs to this project session database.",
+            "enterIdPlaceholder": "e.g. Steve / Builder01",
+            "enter": "Open stockpile",
+            "search": "Search material, ID, category",
+            "all": "All",
+            "notStarted": "Not started",
+            "preparing": "Preparing",
+            "done": "Done",
+            "partialDone": "Part done",
+            "overfilled": "Overfilled",
+            "mine": "Mine",
+            "unclaimed": "Unclaimed",
+            "craftable": "Craftable",
+            "unresolved": "Unresolved",
+            "recipeMissing": "Recipe missing",
+            "countDesc": "Count high to low",
+            "countAsc": "Count low to high",
+            "grouped": "Grouped by type",
+            "remainingDesc": "Remaining high to low",
+            "status": "Status",
+            "mineFirst": "Mine first",
+            "name": "Name",
+            "totalMaterials": "Unique materials",
+            "totalBlocks": "Total blocks",
+            "totalStacks": "Total stacks",
+            "shulkerEstimate": "Shulker estimate",
+            "required": "Required",
+            "remaining": "Remaining",
+            "claimed": "Claimed",
+            "claimedBy": "Participants",
+            "available": "Craftable",
+            "missing": "Missing",
+            "quantity": "Qty",
+            "cancel": "Cancel",
+            "details": "Details",
+            "collapse": "Collapse",
+            "sourceRegions": "Source regions",
+            "recipeStatus": "Recipe status",
+            "recipeUnavailable": "This stockpile does not include recipes",
+            "recipeCachedNoTree": "Recipe cache is available, but no tree was generated for this material",
+            "recipeUnresolved": "This material did not resolve to a fixed recipe path",
+            "inputs": "Inputs",
+            "need": "Need",
+            "recipe": "Recipe",
+            "process": "Process",
+            "outputEach": "Output each",
+            "batches": "Batches",
+            "extra": "Extra",
+            "depth": "Depth",
+            "fuelRequired": "Fuel required",
+            "decorativeSmithing": "Decorative smithing",
+            "tagGroup": "Alternative material group",
+            "specialRecipe": "Special recipe, cannot be expanded statically",
+            "noRecipe": "No fixed recipe; prepare manually",
+            "tagInput": "Tag input is not guessed as a concrete item",
+            "syncError": "Sync failed",
+            "empty": "No matching materials"
+        }
+    })
+}
+
 fn summary(output_path: &Path, payload: &StockpileZipPayload) -> StockpileZipSummary {
     StockpileZipSummary {
         output: output_path.to_path_buf(),
@@ -269,6 +442,9 @@ fn summary(output_path: &Path, payload: &StockpileZipPayload) -> StockpileZipSum
             "data/materials.json".to_string(),
             "data/recipe_status.json".to_string(),
             "data/recipe_trees.json".to_string(),
+            "data/icons.json".to_string(),
+            "data/i18n.json".to_string(),
+            format!("assets/icons/*.png ({})", payload.icon_files.len()),
         ],
     }
 }
@@ -289,6 +465,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 </html>
 "#;
 
+#[allow(dead_code)]
 const APP_CSS: &str = r#":root {
   color-scheme: dark;
   --bg: #101311;
@@ -421,6 +598,7 @@ button { cursor: pointer; }
 }
 "#;
 
+#[allow(dead_code)]
 const APP_JS: &str = r#"(function () {
   const data = window.__STOCKPILE_DATA__;
   const app = document.getElementById('app');
@@ -754,10 +932,16 @@ mod tests {
             "data/materials.json",
             "data/recipe_status.json",
             "data/recipe_trees.json",
+            "data/icons.json",
+            "data/i18n.json",
         ] {
             zip.by_name(name)
                 .unwrap_or_else(|_| panic!("missing {name}"));
         }
+        assert!(
+            zip.file_names()
+                .any(|name| name.starts_with("assets/icons/") && name.ends_with(".png"))
+        );
 
         let index = read_zip_entry(&mut zip, "index.html");
         assert!(index.contains("window.__STOCKPILE_DATA__"));
@@ -769,6 +953,22 @@ mod tests {
                 .as_array()
                 .is_some_and(|items| !items.is_empty())
         );
+        let first_material = &materials_json["materials"][0];
+        assert!(first_material["icon_path"].as_str().is_some_and(|value| {
+            value.starts_with("assets/icons/") && value.ends_with(".png")
+        }));
+        assert!(first_material["icon_available"].as_bool().is_some());
+        let icons_json: Value =
+            serde_json::from_str(&read_zip_entry(&mut zip, "data/icons.json")).expect("icons json");
+        assert!(
+            icons_json["by_key"]
+                .as_object()
+                .is_some_and(|value| !value.is_empty())
+        );
+        let i18n_json: Value =
+            serde_json::from_str(&read_zip_entry(&mut zip, "data/i18n.json")).expect("i18n json");
+        assert!(i18n_json.get("zh-CN").is_some());
+        assert!(i18n_json.get("en-US").is_some());
         let manifest_json: Value =
             serde_json::from_str(&read_zip_entry(&mut zip, "data/manifest.json"))
                 .expect("manifest json");
@@ -802,7 +1002,7 @@ mod tests {
     #[test]
     fn stockpile_zip_serializes_nonempty_recipe_trees() {
         let input = fixture_path();
-        let materials = stockpile::build_materials_data(&input, false, Some("1.21.10"))
+        let mut materials = stockpile::build_materials_data(&input, false, Some("1.21.10"))
             .expect("materials data");
         let mut trees = BTreeMap::new();
         let mut root = test_recipe_node(
@@ -853,7 +1053,7 @@ mod tests {
         let payload = build_payload_with_trees(
             &input,
             "1.21.10",
-            materials,
+            &mut materials,
             available_recipe_status("1.21.10"),
             trees,
         )

@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::recipe_cache;
@@ -10,7 +10,7 @@ use crate::stockpile::StockpileMaterialsData;
 
 pub const MAX_RECIPE_DEPTH: u32 = 12;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecipeTreeNode {
     pub node_id: String,
     pub item_id: String,
@@ -35,7 +35,7 @@ pub struct RecipeTreeNode {
     pub decorative_smithing: bool,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecipeTreeIngredient {
     pub item_id: String,
     pub display_name: String,
@@ -1099,6 +1099,8 @@ mod tests {
                     category: "test".to_string(),
                     category_icon: "minecraft:stone".to_string(),
                     item_icon_key: id.to_string(),
+                    icon_path: String::new(),
+                    icon_available: false,
                     source_regions: Vec::new(),
                     recipe_status: status.to_string(),
                     craft_complexity: 0,
