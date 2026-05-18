@@ -16,6 +16,7 @@
   let pollHandle = null;
   let participantRegistered = false;
   let config = defaultConfig();
+  let authStatus = { authenticated: false, admin: false, access_password_enabled: false, whitelist_enabled: false, allow_guest_readonly: false };
 
   function pickInitialLang() {
     const stored = localStorage.getItem(langKey);
@@ -54,6 +55,7 @@
         const project = await apiGet('/api/project');
         if (project && project.manifest) data = project;
         applyConfig(await apiGet('/api/config'));
+        authStatus = await apiGet('/api/auth/status');
       } catch (error) {
         syncError = `${t('syncError')}: ${error.message}`;
       }
@@ -105,6 +107,7 @@
     }
     try {
       syncState = await apiGet('/api/state');
+      try { authStatus = await apiGet('/api/auth/status'); } catch (_) {}
       participantRegistered = !!userId && (syncState.participants || []).some((participant) => participant.user_id === userId);
       lastSyncText = new Date().toLocaleTimeString();
       syncError = '';
@@ -159,6 +162,25 @@
     if (userId.trim()) return true;
     renderModal();
     return false;
+  }
+  function canWrite(item) {
+    const sync = item ? materialSync(item) : {};
+    if (!isServeMode) return true;
+    if (sync.locked && !authStatus.admin) return false;
+    if (authStatus.access_password_enabled && !authStatus.authenticated) return false;
+    if (authStatus.whitelist_enabled && authStatus.allow_guest_readonly && !authStatus.admin) return false;
+    return true;
+  }
+  function writeHint(item) {
+    const sync = item ? materialSync(item) : {};
+    if (sync.locked && !authStatus.admin) return t('materialLocked') || 'Locked';
+    if (authStatus.access_password_enabled && !authStatus.authenticated) return t('loginRequired') || 'Login required';
+    if (authStatus.whitelist_enabled && authStatus.allow_guest_readonly && !authStatus.admin) return t('readonlyGuest') || 'Read-only guest';
+    return '';
+  }
+  function renderAccessLogin() {
+    if (!isServeMode || !authStatus.access_password_enabled || authStatus.authenticated) return '';
+    return `<section class="toolbar"><div class="password-row"><input class="field" id="accessPassword" type="password" placeholder="${escapeAttr(t('accessPassword') || 'Access password')}" /><button class="button icon-button" id="toggleAccessPassword" type="button" title="${escapeAttr(t('accessPassword') || 'Access password')}">👁</button></div><button class="button primary" id="accessLogin">${escapeHtml(t('enter') || 'Enter')}</button></section>`;
   }
   function renderModal() {
     if (document.querySelector('.modal')) return;
@@ -273,6 +295,7 @@
         <select class="field" id="sort">${sortOptions()}</select>
         <select class="field" id="filter">${filterOptions()}</select>
       </section>
+      ${renderAccessLogin()}
       ${renderList(items)}
     </main>`;
     bindControls();
@@ -309,18 +332,21 @@
     const sync = materialSync(item);
     const claim = myClaim(item);
     const isOpen = open.has(item.namespace_id);
+    const disabled = !canWrite(item);
+    const hint = writeHint(item);
     return `<article class="card ${isOpen ? 'open' : ''}" data-id="${escapeAttr(item.namespace_id)}">
       <div class="card-main">
         <div>
           <div class="material-title">${iconImg(item.item_icon_key, true, item)}<span class="name">${escapeHtml(displayName(item))}</span></div>
           <div class="sub">${escapeHtml(item.namespace_id)} · ${escapeHtml(item.category)} · ${escapeHtml(t('remaining'))} ${sync.remaining_count}</div>
-          <div class="badges"><span class="badge ${item.recipe_status}">${recipeLabel(item.recipe_status)}</span><span class="badge ${sync.overall_status}">${overallLabel(sync.overall_status)}</span><span class="badge">${sync.participants.length ? `${escapeHtml(t('claimedBy'))}: ${escapeHtml(sync.participants.join(', '))}` : escapeHtml(t('unclaimed'))}</span>${config.show_icon_fallback_badge && item.icon_available === false ? `<span class="badge missing">${escapeHtml(t('iconFallback'))}</span>` : ''}</div>
+          <div class="badges"><span class="badge ${item.recipe_status}">${recipeLabel(item.recipe_status)}</span><span class="badge ${sync.overall_status}">${overallLabel(sync.overall_status)}</span><span class="badge">${sync.participants.length ? `${escapeHtml(t('claimedBy'))}: ${escapeHtml(sync.participants.join(', '))}` : escapeHtml(t('unclaimed'))}</span>${sync.locked ? `<span class="badge missing">${escapeHtml(t('locked') || 'Locked')}</span>` : ''}${config.show_icon_fallback_badge && item.icon_available === false ? `<span class="badge missing">${escapeHtml(t('iconFallback'))}</span>` : ''}</div>
+          ${(sync.public_note || sync.storage_location || hint) ? `<div class="sub">${sync.public_note ? `${escapeHtml(t('publicNote') || 'Note')}: ${escapeHtml(sync.public_note)} ` : ''}${sync.storage_location ? `${escapeHtml(t('storageLocation') || 'Storage')}: ${escapeHtml(sync.storage_location)} ` : ''}${hint ? `${escapeHtml(hint)}` : ''}</div>` : ''}
         </div>
         <div><div class="count">${item.required_count}</div><div class="actions">
-          <input class="field qty" type="number" min="0" value="${Number(claim.quantity || 0)}" data-action="qty" />
-          <button class="button" data-action="progress">${escapeHtml(t('preparing'))}</button>
-          <button class="button primary" data-action="done">${escapeHtml(t('done'))}</button>
-          <button class="button danger" data-action="cancel">${escapeHtml(t('cancel'))}</button>
+          <input class="field qty" type="number" min="0" value="${Number(claim.quantity || 0)}" data-action="qty" ${disabled ? 'disabled' : ''} />
+          <button class="button" data-action="progress" ${disabled ? 'disabled' : ''}>${escapeHtml(t('preparing'))}</button>
+          <button class="button primary" data-action="done" ${disabled ? 'disabled' : ''}>${escapeHtml(t('done'))}</button>
+          <button class="button danger" data-action="cancel" ${disabled ? 'disabled' : ''}>${escapeHtml(t('cancel'))}</button>
           <button class="button" data-action="toggle">${escapeHtml(isOpen ? t('collapse') : t('details'))}</button>
         </div></div>
       </div>
@@ -472,6 +498,20 @@
     document.getElementById('search').addEventListener('input', (event) => { controls.search = event.target.value; render(); });
     document.getElementById('sort').addEventListener('change', (event) => { controls.sort = event.target.value; render(); });
     document.getElementById('filter').addEventListener('change', (event) => { controls.filter = event.target.value; render(); });
+    const accessLogin = document.getElementById('accessLogin');
+    if (accessLogin) accessLogin.addEventListener('click', async () => {
+      try {
+        await apiSend('/api/auth/access', 'POST', { password: document.getElementById('accessPassword').value, user_id: userId || null });
+        authStatus = await apiGet('/api/auth/status');
+        await refreshState();
+        render();
+      } catch (error) { syncError = `${t('syncError')}: ${error.message}`; render(); }
+    });
+    const toggleAccessPassword = document.getElementById('toggleAccessPassword');
+    if (toggleAccessPassword) toggleAccessPassword.addEventListener('click', () => {
+      const input = document.getElementById('accessPassword');
+      input.type = input.type === 'password' ? 'text' : 'password';
+    });
     document.querySelectorAll('.card').forEach((card) => {
       const item = data.materials.materials.find((material) => material.namespace_id === card.dataset.id);
       card.querySelector('[data-action="progress"]').addEventListener('click', () => updateClaim(item, 'preparing'));

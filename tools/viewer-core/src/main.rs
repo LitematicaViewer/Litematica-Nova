@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Write};
 
 use anyhow::Result;
 use litematica_core::{
@@ -119,6 +119,44 @@ fn main() -> Result<()> {
             let output = stockpile_serve::config_reset(&args.input, args.yes)?;
             emit_output(&output, None)?;
         }
+        "stockpile set-access-password" => {
+            let password = read_stdin_password(args.password_stdin)?;
+            let output = stockpile_serve::set_access_password(&args.input, &password)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile clear-access-password" => {
+            let output = stockpile_serve::clear_access_password(&args.input)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile set-admin-password" => {
+            let password = read_stdin_password(args.password_stdin)?;
+            let output = stockpile_serve::set_admin_password(&args.input, &password)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile clear-admin-password" => {
+            let output = stockpile_serve::clear_admin_password(&args.input)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile whitelist-add" => {
+            let user = args
+                .user
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --user"))?;
+            let output = stockpile_serve::whitelist_add(&args.input, user)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile whitelist-remove" => {
+            let user = args
+                .user
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --user"))?;
+            let output = stockpile_serve::whitelist_remove(&args.input, user)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile whitelist-list" => {
+            let output = stockpile_serve::whitelist_list(&args.input)?;
+            emit_output(&output, None)?;
+        }
         "stats" => {
             let output = stats_api::build_stats_output(&args.input, args.include_container_items)?;
             emit_output(&output, args.output.as_deref())?;
@@ -224,4 +262,17 @@ fn main() -> Result<()> {
         other => anyhow::bail!("unknown command: {other}"),
     }
     Ok(())
+}
+
+fn read_stdin_password(enabled: bool) -> Result<String> {
+    if !enabled {
+        anyhow::bail!("password input requires --password-stdin");
+    }
+    let mut value = String::new();
+    io::stdin().read_to_string(&mut value)?;
+    let value = value.trim_end_matches(['\r', '\n']).to_string();
+    if value.is_empty() {
+        anyhow::bail!("password cannot be empty");
+    }
+    Ok(value)
 }

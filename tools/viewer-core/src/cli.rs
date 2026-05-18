@@ -34,6 +34,8 @@ pub struct CliArgs {
     pub session_input: Option<PathBuf>,
     pub config_key: Option<String>,
     pub config_value: Option<String>,
+    pub user: Option<String>,
+    pub password_stdin: bool,
 }
 
 pub fn parse_args() -> Result<CliArgs> {
@@ -211,6 +213,8 @@ pub fn parse_args() -> Result<CliArgs> {
         session_input: None,
         config_key: None,
         config_value: None,
+        user: None,
+        password_stdin: false,
     })
 }
 
@@ -269,6 +273,8 @@ fn parse_runtime_paths_args(command: String, raw_args: Vec<String>) -> Result<Cl
         session_input: None,
         config_key: None,
         config_value: None,
+        user: None,
+        password_stdin: false,
     })
 }
 
@@ -289,6 +295,8 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     let mut session_input = None;
     let mut config_key = None;
     let mut config_value = None;
+    let mut user = None;
+    let mut password_stdin = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -311,6 +319,17 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
             "--include-container-items" => include_container_items = true,
             "--yes" => yes = true,
             "--replace" => replace = true,
+            "--password-stdin" => password_stdin = true,
+            "--password" => bail!("stockpile password options must use --password-stdin"),
+            "--user" => {
+                let Some(value) = args.next() else {
+                    bail!("missing value after --user");
+                };
+                if value.is_empty() {
+                    bail!("missing value after --user");
+                }
+                user = Some(value);
+            }
             "--key" => {
                 let Some(value) = args.next() else {
                     bail!("missing value after --key");
@@ -403,6 +422,16 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
                 }
                 config_value = Some(value.to_string());
             }
+            _ if arg.starts_with("--user=") => {
+                let value = arg.trim_start_matches("--user=");
+                if value.is_empty() {
+                    bail!("missing value after --user=");
+                }
+                user = Some(value.to_string());
+            }
+            _ if arg.starts_with("--password=") => {
+                bail!("stockpile password options must use --password-stdin");
+            }
             _ if arg.starts_with('-') => bail!("unknown argument: {arg}"),
             _ => {
                 if input.is_some() {
@@ -438,6 +467,13 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
             | "config-show"
             | "config-set"
             | "config-reset"
+            | "set-access-password"
+            | "clear-access-password"
+            | "set-admin-password"
+            | "clear-admin-password"
+            | "whitelist-add"
+            | "whitelist-remove"
+            | "whitelist-list"
     ) {
         bail!("unsupported stockpile subcommand: {subcommand}");
     }
@@ -453,6 +489,13 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
             | "config-show"
             | "config-set"
             | "config-reset"
+            | "set-access-password"
+            | "clear-access-password"
+            | "set-admin-password"
+            | "clear-admin-password"
+            | "whitelist-add"
+            | "whitelist-remove"
+            | "whitelist-list"
     ) && input.is_none()
     {
         bail!("stockpile {subcommand} requires --zip <path>");
@@ -465,6 +508,16 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     }
     if subcommand == "config-set" && (config_key.is_none() || config_value.is_none()) {
         bail!("stockpile config-set requires --key <key> --value <value>");
+    }
+    if matches!(
+        subcommand.as_str(),
+        "set-access-password" | "set-admin-password"
+    ) && !password_stdin
+    {
+        bail!("stockpile {subcommand} requires --password-stdin");
+    }
+    if matches!(subcommand.as_str(), "whitelist-add" | "whitelist-remove") && user.is_none() {
+        bail!("stockpile {subcommand} requires --user <id>");
     }
 
     Ok(CliArgs {
@@ -481,6 +534,13 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
                 | "config-show"
                 | "config-set"
                 | "config-reset"
+                | "set-access-password"
+                | "clear-access-password"
+                | "set-admin-password"
+                | "clear-admin-password"
+                | "whitelist-add"
+                | "whitelist-remove"
+                | "whitelist-list"
         ) {
             input.ok_or_else(|| {
                 if subcommand == "serve" {
@@ -520,6 +580,8 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
         session_input,
         config_key,
         config_value,
+        user,
+        password_stdin,
     })
 }
 
@@ -622,6 +684,8 @@ fn parse_replace_blocks_args(command: String, raw_args: Vec<String>) -> Result<C
         session_input: None,
         config_key: None,
         config_value: None,
+        user: None,
+        password_stdin: false,
     })
 }
 
@@ -712,6 +776,8 @@ fn parse_generate_args(command: String, raw_args: Vec<String>) -> Result<CliArgs
         session_input: None,
         config_key: None,
         config_value: None,
+        user: None,
+        password_stdin: false,
     })
 }
 
@@ -803,5 +869,7 @@ fn parse_edit_metadata_args(command: String, raw_args: Vec<String>) -> Result<Cl
         session_input: None,
         config_key: None,
         config_value: None,
+        user: None,
+        password_stdin: false,
     })
 }

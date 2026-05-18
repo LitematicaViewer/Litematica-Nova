@@ -6,7 +6,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
-use rusqlite::{Connection, params};
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
+use rand::RngCore;
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -127,6 +132,28 @@ pub struct ConfigResetOutput {
     pub warning: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PasswordOutput {
+    pub zip_path: PathBuf,
+    pub session_db: PathBuf,
+    pub kind: String,
+    pub enabled: bool,
+    pub config: StockpileConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WhitelistEntry {
+    pub user_id: String,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WhitelistOutput {
+    pub zip_path: PathBuf,
+    pub session_db: PathBuf,
+    pub users: Vec<WhitelistEntry>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ParticipantState {
     pub user_id: String,
@@ -154,6 +181,10 @@ pub struct MaterialSyncState {
     pub participants: Vec<String>,
     pub overall_status: String,
     pub claims: Vec<ClaimState>,
+    pub public_note: Option<String>,
+    pub storage_location: Option<String>,
+    pub locked: bool,
+    pub updated_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -172,6 +203,47 @@ struct ParticipantRequest {
 struct ClaimRequest {
     status: String,
     quantity: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthRequest {
+    password: String,
+    user_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WhitelistRequest {
+    user_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MaterialNoteRequest {
+    public_note: Option<String>,
+    storage_location: Option<String>,
+    locked: Option<bool>,
+    user_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MaterialNoteState {
+    pub material_id: String,
+    pub public_note: Option<String>,
+    pub storage_location: Option<String>,
+    pub locked: bool,
+    pub updated_by: Option<String>,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditLogEntry {
+    pub id: u64,
+    pub actor: String,
+    pub action: String,
+    pub target: String,
+    pub before_json: Option<String>,
+    pub after_json: Option<String>,
+    pub ip: Option<String>,
+    pub created_at: u64,
 }
 
 fn default_config(now: u64) -> StockpileConfig {
@@ -196,6 +268,14 @@ pub fn serve_stockpile_zip(zip_path: &Path, bind: &str) -> Result<StockpileServe
     let project = load_project_from_zip(&zip_path)?;
     let db_path = session_db_path(&zip_path)?;
     ensure_session_db(&db_path, &zip_hash(&zip_path)?)?;
+    let config = load_config(&db_path)?;
+    if (bind.starts_with("0.0.0.0:") || bind.starts_with("[::]:"))
+        && !config.access_password_enabled
+    {
+        eprintln!(
+            "WARNING: stockpile serve is bound to {bind} without access_password_enabled; public writes may be exposed"
+        );
+    }
     let listener =
         TcpListener::bind(bind).with_context(|| format!("bind stockpile server failed: {bind}"))?;
     let summary = StockpileServeSummary {
@@ -241,11 +321,24 @@ fn route_request(
 ) -> HttpResponse {
     match route_request_inner(request, zip_path, db_path, project) {
         Ok(response) => response,
-        Err(error) => json_response(
-            500,
-            json!({ "error": error.to_string() }),
-            "Internal Server Error",
-        ),
+        Err(error) => {
+            let message = error.to_string();
+            match message.as_str() {
+                "unauthorized" => error_response(401, "unauthorized", "authentication required"),
+                "whitelist_required" => {
+                    error_response(403, "whitelist_required", "user is not whitelisted")
+                }
+                "readonly_guest" => {
+                    error_response(403, "readonly_guest", "guest users are read-only")
+                }
+                "material_locked" => error_response(403, "material_locked", "material is locked"),
+                "admin_required" => error_response(403, "admin_required", "admin session required"),
+                "invalid_config" => {
+                    error_response(400, "invalid_config", "invalid stockpile configuration")
+                }
+                _ => json_response(500, json!({ "error": message }), "Internal Server Error"),
+            }
+        }
     }
 }
 
@@ -256,14 +349,53 @@ fn route_request_inner(
     project: &StockpileZipPayload,
 ) -> Result<HttpResponse> {
     let path = request.path.split('?').next().unwrap_or("/");
+    let conn = Connection::open(db_path)?;
+    init_db_conn(&conn)?;
+    let config = load_config_conn(&conn)?;
+    let auth = auth_context(&conn, request)?;
+    if request.method == "OPTIONS" {
+        let mut response = json_response(204, json!({}), "No Content");
+        response.headers.push((
+            "Access-Control-Allow-Methods".to_string(),
+            "GET,POST,PUT,DELETE,OPTIONS".to_string(),
+        ));
+        response.headers.push((
+            "Access-Control-Allow-Headers".to_string(),
+            "Content-Type,Accept".to_string(),
+        ));
+        return Ok(response);
+    }
     match (request.method.as_str(), path) {
         ("GET", "/api/project") => return Ok(json_response(200, project, "OK")),
         ("GET", "/api/state") => {
             let state = build_state(db_path, &project.materials)?;
             return Ok(json_response(200, state, "OK"));
         }
+        ("GET", "/api/auth/status") => {
+            return Ok(json_response(200, auth_status_json(&config, &auth), "OK"));
+        }
+        ("POST", "/api/auth/access") => {
+            let body: AuthRequest = serde_json::from_slice(&request.body)
+                .context("parse access auth request failed")?;
+            return login_response(&conn, "access", body);
+        }
+        ("POST", "/api/auth/admin") => {
+            let body: AuthRequest =
+                serde_json::from_slice(&request.body).context("parse admin auth request failed")?;
+            return login_response(&conn, "admin", body);
+        }
+        ("POST", "/api/auth/logout") => {
+            if let Some(token) = cookie_value(request, "lba_stockpile_session") {
+                conn.execute("DELETE FROM auth_sessions WHERE token = ?1", params![token])?;
+            }
+            let mut response = json_response(200, json!({"ok": true}), "OK");
+            response.headers.push((
+                "Set-Cookie".to_string(),
+                "lba_stockpile_session=; Path=/; Max-Age=0; SameSite=Lax".to_string(),
+            ));
+            return Ok(response);
+        }
         ("GET", "/api/config") => {
-            let config = load_config(db_path)?;
             return Ok(json_response(200, config, "OK"));
         }
         ("PUT", "/api/config") => {
@@ -280,17 +412,170 @@ fn route_request_inner(
             let state = build_state(db_path, &project.materials)?;
             return Ok(json_response(200, state, "OK"));
         }
+        ("GET", "/api/users") => {
+            return Ok(json_response(200, load_participants(&conn)?, "OK"));
+        }
+        ("GET", "/api/whitelist") => {
+            require_admin(&auth)?;
+            return Ok(json_response(200, load_whitelist(&conn)?, "OK"));
+        }
+        ("POST", "/api/whitelist") => {
+            require_admin(&auth)?;
+            let body: WhitelistRequest =
+                serde_json::from_slice(&request.body).context("parse whitelist request failed")?;
+            validate_user_id(&body.user_id)?;
+            conn.execute(
+                "INSERT INTO stockpile_whitelist(user_id, created_at) VALUES(?1, ?2) ON CONFLICT(user_id) DO NOTHING",
+                params![body.user_id, current_unix_timestamp()?],
+            )?;
+            write_audit_conn(
+                &conn,
+                auth.actor(),
+                "whitelist_add",
+                &body.user_id,
+                None,
+                Some(json!({"user_id": body.user_id})),
+                client_ip(request).as_deref(),
+            )?;
+            return Ok(json_response(200, load_whitelist(&conn)?, "OK"));
+        }
+        ("GET", "/api/admin/summary") => {
+            require_admin(&auth)?;
+            let state = build_state(db_path, &project.materials)?;
+            return Ok(json_response(200, summarize_state(&state), "OK"));
+        }
+        ("GET", "/api/admin/materials") => {
+            require_admin(&auth)?;
+            let state = build_state(db_path, &project.materials)?;
+            return Ok(json_response(200, state.materials, "OK"));
+        }
+        ("GET", "/api/admin/audit-log") => {
+            require_admin(&auth)?;
+            return Ok(json_response(200, load_audit_log(&conn, 200)?, "OK"));
+        }
         _ => {}
+    }
+
+    if request.method == "DELETE" {
+        if let Some(user_id) = path.strip_prefix("/api/whitelist/") {
+            require_admin(&auth)?;
+            let user_id = percent_decode(user_id)?;
+            let before = load_whitelist_entry(&conn, &user_id)?.map(|value| json!(value));
+            conn.execute(
+                "DELETE FROM stockpile_whitelist WHERE user_id = ?1",
+                params![user_id],
+            )?;
+            write_audit_conn(
+                &conn,
+                auth.actor(),
+                "whitelist_remove",
+                &user_id,
+                before,
+                None,
+                client_ip(request).as_deref(),
+            )?;
+            return Ok(json_response(200, load_whitelist(&conn)?, "OK"));
+        }
+        if let Some(material_id) = path
+            .strip_prefix("/api/admin/materials/")
+            .and_then(|rest| rest.strip_suffix("/claims"))
+        {
+            require_admin(&auth)?;
+            let material_id = percent_decode(material_id)?;
+            conn.execute(
+                "DELETE FROM material_claims WHERE material_id = ?1",
+                params![material_id],
+            )?;
+            write_audit_conn(
+                &conn,
+                auth.actor(),
+                "claims_clear_material",
+                &material_id,
+                None,
+                None,
+                client_ip(request).as_deref(),
+            )?;
+            let state = build_state(db_path, &project.materials)?;
+            return Ok(json_response(200, state, "OK"));
+        }
+        if let Some(user_id) = path
+            .strip_prefix("/api/admin/users/")
+            .and_then(|rest| rest.strip_suffix("/claims"))
+        {
+            require_admin(&auth)?;
+            let user_id = percent_decode(user_id)?;
+            conn.execute(
+                "DELETE FROM material_claims WHERE user_id = ?1",
+                params![user_id],
+            )?;
+            write_audit_conn(
+                &conn,
+                auth.actor(),
+                "claims_clear_user",
+                &user_id,
+                None,
+                None,
+                client_ip(request).as_deref(),
+            )?;
+            let state = build_state(db_path, &project.materials)?;
+            return Ok(json_response(200, state, "OK"));
+        }
+    }
+
+    if request.method == "PUT" {
+        if let Some(material_id) = path.strip_prefix("/api/admin/materials/") {
+            require_admin(&auth)?;
+            let material_id = percent_decode(material_id)?;
+            let body: MaterialNoteRequest = serde_json::from_slice(&request.body)
+                .context("parse admin material request failed")?;
+            let note = save_material_note_conn(&conn, &material_id, &body, auth.actor())?;
+            return Ok(json_response(200, note, "OK"));
+        }
+        if let Some(material_id) = path
+            .strip_prefix("/api/materials/")
+            .and_then(|rest| rest.strip_suffix("/note"))
+        {
+            let material_id = percent_decode(material_id)?;
+            let body: MaterialNoteRequest = serde_json::from_slice(&request.body)
+                .context("parse material note request failed")?;
+            let actor = body.user_id.as_deref().unwrap_or_else(|| auth.actor());
+            ensure_can_write(&conn, &config, &auth, actor, &material_id)?;
+            let note = save_material_note_conn(&conn, &material_id, &body, actor)?;
+            return Ok(json_response(200, note, "OK"));
+        }
     }
 
     if request.method == "PUT" || request.method == "DELETE" {
         if let Some((material_id, user_id)) = parse_claim_path(path)? {
+            ensure_can_write(&conn, &config, &auth, &user_id, &material_id)?;
             if request.method == "PUT" {
                 let body: ClaimRequest =
                     serde_json::from_slice(&request.body).context("parse claim request failed")?;
+                let before = load_claim_for_audit(&conn, &material_id, &user_id)?;
                 put_claim(db_path, &material_id, &user_id, &body.status, body.quantity)?;
+                write_audit_conn(
+                    &conn,
+                    &user_id,
+                    "claim_put",
+                    &material_id,
+                    before,
+                    Some(
+                        json!({"material_id": material_id, "user_id": user_id, "status": body.status, "quantity": body.quantity}),
+                    ),
+                    client_ip(request).as_deref(),
+                )?;
             } else {
+                let before = load_claim_for_audit(&conn, &material_id, &user_id)?;
                 delete_claim(db_path, &material_id, &user_id)?;
+                write_audit_conn(
+                    &conn,
+                    &user_id,
+                    "claim_delete",
+                    &material_id,
+                    before,
+                    None,
+                    client_ip(request).as_deref(),
+                )?;
             }
             let state = build_state(db_path, &project.materials)?;
             return Ok(json_response(200, state, "OK"));
@@ -298,6 +583,9 @@ fn route_request_inner(
     }
 
     if request.method == "GET" {
+        if path == "/admin" || path == "/admin/" {
+            return Ok(admin_page_response());
+        }
         return serve_zip_asset(zip_path, path);
     }
 
@@ -319,6 +607,163 @@ fn parse_claim_path(path: &str) -> Result<Option<(String, String)>> {
         percent_decode(material_id)?,
         percent_decode(user_id)?,
     )))
+}
+
+#[derive(Debug, Clone, Default)]
+struct AuthContext {
+    access: bool,
+    admin: bool,
+    user_id: Option<String>,
+}
+
+impl AuthContext {
+    fn actor(&self) -> &str {
+        self.user_id
+            .as_deref()
+            .unwrap_or(if self.admin { "admin" } else { "guest" })
+    }
+}
+
+fn auth_context(conn: &Connection, request: &HttpRequest) -> Result<AuthContext> {
+    let Some(token) = cookie_value(request, "lba_stockpile_session") else {
+        return Ok(AuthContext::default());
+    };
+    let now = current_unix_timestamp()?;
+    conn.execute(
+        "DELETE FROM auth_sessions WHERE expires_at < ?1",
+        params![now as i64],
+    )?;
+    conn.query_row(
+        "SELECT role, user_id FROM auth_sessions WHERE token = ?1 AND expires_at >= ?2",
+        params![token, now as i64],
+        |row| {
+            let role: String = row.get(0)?;
+            Ok(AuthContext {
+                access: role == "access" || role == "admin",
+                admin: role == "admin",
+                user_id: row.get(1)?,
+            })
+        },
+    )
+    .optional()
+    .map(|value| value.unwrap_or_default())
+    .context("load auth session failed")
+}
+
+fn auth_status_json(config: &StockpileConfig, auth: &AuthContext) -> Value {
+    json!({
+        "access_password_enabled": config.access_password_enabled,
+        "admin_password_enabled": config.admin_password_enabled,
+        "whitelist_enabled": config.whitelist_enabled,
+        "allow_guest_readonly": config.allow_guest_readonly,
+        "admin_page_enabled": config.admin_page_enabled,
+        "authenticated": auth.access,
+        "admin": auth.admin,
+        "user_id": auth.user_id,
+    })
+}
+
+fn login_response(conn: &Connection, kind: &str, body: AuthRequest) -> Result<HttpResponse> {
+    let Some(hash) = load_password_hash(conn, kind)? else {
+        return Ok(error_response(
+            403,
+            "invalid_config",
+            "password is not configured",
+        ));
+    };
+    if !verify_password(&body.password, &hash)? {
+        return Ok(error_response(401, "unauthorized", "invalid password"));
+    }
+    let token = new_session_token();
+    let now = current_unix_timestamp()?;
+    let ttl = if kind == "admin" {
+        12 * 60 * 60
+    } else {
+        30 * 24 * 60 * 60
+    };
+    conn.execute(
+        "INSERT INTO auth_sessions(token, role, user_id, created_at, expires_at) VALUES(?1, ?2, ?3, ?4, ?5)",
+        params![token, kind, body.user_id, now as i64, (now + ttl) as i64],
+    )?;
+    let mut response = json_response(200, json!({"ok": true, "role": kind}), "OK");
+    response.headers.push((
+        "Set-Cookie".to_string(),
+        format!("lba_stockpile_session={token}; Path=/; Max-Age={ttl}; SameSite=Lax"),
+    ));
+    Ok(response)
+}
+
+fn require_admin(auth: &AuthContext) -> Result<()> {
+    if !auth.admin {
+        bail!("admin_required");
+    }
+    Ok(())
+}
+
+fn ensure_can_write(
+    conn: &Connection,
+    config: &StockpileConfig,
+    auth: &AuthContext,
+    user_id: &str,
+    material_id: &str,
+) -> Result<()> {
+    validate_user_id(user_id)?;
+    if config.access_password_enabled && !auth.access {
+        bail!("unauthorized");
+    }
+    if config.whitelist_enabled && !auth.admin && load_whitelist_entry(conn, user_id)?.is_none() {
+        if config.allow_guest_readonly {
+            bail!("readonly_guest");
+        }
+        bail!("whitelist_required");
+    }
+    if !auth.admin
+        && load_material_note(conn, material_id)?
+            .map(|note| note.locked)
+            .unwrap_or(false)
+    {
+        bail!("material_locked");
+    }
+    Ok(())
+}
+
+fn cookie_value(request: &HttpRequest, name: &str) -> Option<String> {
+    request.headers.get("cookie").and_then(|cookie| {
+        cookie.split(';').find_map(|part| {
+            let (key, value) = part.trim().split_once('=')?;
+            (key == name).then(|| value.to_string())
+        })
+    })
+}
+
+fn client_ip(request: &HttpRequest) -> Option<String> {
+    request
+        .headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.split(',').next())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn error_response(status: u16, code: &str, message: &str) -> HttpResponse {
+    json_response(
+        status,
+        json!({ "error": code, "message": message }),
+        status_reason(status),
+    )
+}
+
+fn status_reason(status: u16) -> &'static str {
+    match status {
+        200 => "OK",
+        204 => "No Content",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "Error",
+    }
 }
 
 pub(crate) fn init_db(path: &Path) -> Result<()> {
@@ -368,6 +813,40 @@ fn init_db_conn(conn: &Connection) -> Result<()> {
             show_icon_fallback_badge INTEGER NOT NULL CHECK(show_icon_fallback_badge IN (0, 1)),
             updated_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS password_hashes (
+            kind TEXT PRIMARY KEY NOT NULL CHECK(kind IN ('access', 'admin')),
+            password_hash TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS stockpile_whitelist (
+            user_id TEXT PRIMARY KEY NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS material_notes (
+            material_id TEXT PRIMARY KEY NOT NULL,
+            public_note TEXT,
+            storage_location TEXT,
+            locked INTEGER NOT NULL CHECK(locked IN (0, 1)) DEFAULT 0,
+            updated_by TEXT,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target TEXT NOT NULL,
+            before_json TEXT,
+            after_json TEXT,
+            ip TEXT,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            token TEXT PRIMARY KEY NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('access', 'admin')),
+            user_id TEXT,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL
+        );
         "#,
     )
     .context("initialize stockpile session db failed")?;
@@ -416,16 +895,16 @@ fn ensure_session_db(path: &Path, expected_zip_hash: &str) -> Result<()> {
 
 fn migrate_sqlite_schema(conn: &Connection, schema_version: u32) -> Result<()> {
     match schema_version {
-        2 => {
-            insert_default_config_if_missing(conn, current_unix_timestamp()?)?;
+        2 | 3 => {
+            init_db_conn(conn)?;
             set_meta(
                 conn,
                 "schema_version",
                 &STOCKPILE_SQLITE_SCHEMA_VERSION.to_string(),
             )?;
-            touch_meta(conn)?;
-            Ok(())
+            touch_meta(conn)
         }
+        _ if schema_version == STOCKPILE_SQLITE_SCHEMA_VERSION => Ok(()),
         _ => bail!(
             "unsupported stockpile sqlite schema_version {}; supported {}; export/reset/import session state",
             schema_version,
@@ -569,10 +1048,12 @@ pub(crate) fn build_state(
     init_db_conn(&conn)?;
     let participants = load_participants(&conn)?;
     let claims = load_claims(&conn)?;
+    let notes = load_material_notes(&conn)?;
     Ok(aggregate_state(
         materials,
         participants,
         claims,
+        notes,
         current_unix_timestamp()?,
     ))
 }
@@ -628,6 +1109,15 @@ pub fn session_reset(zip_path: &Path, yes: bool) -> Result<SessionResetOutput> {
         );
     }
     conn.execute("DELETE FROM material_claims", [])?;
+    write_audit_conn(
+        &conn,
+        "cli",
+        "session_reset",
+        "material_claims",
+        None,
+        None,
+        None,
+    )?;
     set_meta(&conn, "zip_hash", &zip_hash(&zip_path)?)?;
     touch_meta(&conn)?;
     Ok(SessionResetOutput {
@@ -683,6 +1173,154 @@ pub fn config_reset(zip_path: &Path, yes: bool) -> Result<ConfigResetOutput> {
         reset: true,
         config,
         warning: None,
+    })
+}
+
+pub fn set_access_password(zip_path: &Path, password: &str) -> Result<PasswordOutput> {
+    set_password(
+        zip_path,
+        "access",
+        password,
+        "access_password_enabled",
+        true,
+    )
+}
+
+pub fn clear_access_password(zip_path: &Path) -> Result<PasswordOutput> {
+    clear_password(zip_path, "access", "access_password_enabled")
+}
+
+pub fn set_admin_password(zip_path: &Path, password: &str) -> Result<PasswordOutput> {
+    set_password(zip_path, "admin", password, "admin_password_enabled", true)
+}
+
+pub fn clear_admin_password(zip_path: &Path) -> Result<PasswordOutput> {
+    clear_password(zip_path, "admin", "admin_password_enabled")
+}
+
+pub fn whitelist_add(zip_path: &Path, user_id: &str) -> Result<WhitelistOutput> {
+    validate_user_id(user_id)?;
+    let (zip_path, db_path) = ensure_zip_session(zip_path)?;
+    let conn = Connection::open(&db_path)?;
+    let now = current_unix_timestamp()?;
+    conn.execute(
+        "INSERT INTO stockpile_whitelist(user_id, created_at) VALUES(?1, ?2) ON CONFLICT(user_id) DO NOTHING",
+        params![user_id, now],
+    )?;
+    write_audit_conn(
+        &conn,
+        "cli",
+        "whitelist_add",
+        user_id,
+        None,
+        Some(json!({"user_id": user_id})),
+        None,
+    )?;
+    touch_meta(&conn)?;
+    Ok(WhitelistOutput {
+        zip_path,
+        session_db: db_path,
+        users: load_whitelist(&conn)?,
+    })
+}
+
+pub fn whitelist_remove(zip_path: &Path, user_id: &str) -> Result<WhitelistOutput> {
+    validate_user_id(user_id)?;
+    let (zip_path, db_path) = ensure_zip_session(zip_path)?;
+    let conn = Connection::open(&db_path)?;
+    let before = load_whitelist_entry(&conn, user_id)?.map(|entry| json!(entry));
+    conn.execute(
+        "DELETE FROM stockpile_whitelist WHERE user_id = ?1",
+        params![user_id],
+    )?;
+    write_audit_conn(
+        &conn,
+        "cli",
+        "whitelist_remove",
+        user_id,
+        before,
+        None,
+        None,
+    )?;
+    touch_meta(&conn)?;
+    Ok(WhitelistOutput {
+        zip_path,
+        session_db: db_path,
+        users: load_whitelist(&conn)?,
+    })
+}
+
+pub fn whitelist_list(zip_path: &Path) -> Result<WhitelistOutput> {
+    let (zip_path, db_path) = ensure_zip_session(zip_path)?;
+    let conn = Connection::open(&db_path)?;
+    Ok(WhitelistOutput {
+        zip_path,
+        session_db: db_path,
+        users: load_whitelist(&conn)?,
+    })
+}
+
+fn set_password(
+    zip_path: &Path,
+    kind: &str,
+    password: &str,
+    config_key: &str,
+    enabled: bool,
+) -> Result<PasswordOutput> {
+    if password.trim().is_empty() {
+        bail!("password cannot be empty");
+    }
+    let (zip_path, db_path) = ensure_zip_session(zip_path)?;
+    let conn = Connection::open(&db_path)?;
+    let hash = hash_password(password)?;
+    let now = current_unix_timestamp()?;
+    conn.execute(
+        "INSERT INTO password_hashes(kind, password_hash, updated_at) VALUES(?1, ?2, ?3) ON CONFLICT(kind) DO UPDATE SET password_hash = excluded.password_hash, updated_at = excluded.updated_at",
+        params![kind, hash, now],
+    )?;
+    let mut changes = BTreeMap::new();
+    changes.insert(config_key.to_string(), Value::Bool(enabled));
+    let config = update_config_map(&db_path, &changes)?;
+    write_audit_conn(
+        &conn,
+        "cli",
+        &format!("{kind}_password_set"),
+        kind,
+        None,
+        None,
+        None,
+    )?;
+    Ok(PasswordOutput {
+        zip_path,
+        session_db: db_path,
+        kind: kind.to_string(),
+        enabled,
+        config,
+    })
+}
+
+fn clear_password(zip_path: &Path, kind: &str, config_key: &str) -> Result<PasswordOutput> {
+    let (zip_path, db_path) = ensure_zip_session(zip_path)?;
+    let conn = Connection::open(&db_path)?;
+    conn.execute("DELETE FROM password_hashes WHERE kind = ?1", params![kind])?;
+    let mut changes = BTreeMap::new();
+    changes.insert(config_key.to_string(), Value::Bool(false));
+    let config = update_config_map(&db_path, &changes)?;
+    write_audit_conn(
+        &conn,
+        "cli",
+        &format!("{kind}_password_clear"),
+        kind,
+        None,
+        None,
+        None,
+    )?;
+    Ok(PasswordOutput {
+        zip_path,
+        session_db: db_path,
+        kind: kind.to_string(),
+        enabled: false,
+        config,
     })
 }
 
@@ -891,6 +1529,7 @@ pub fn session_export(zip_path: &Path, output: &Path) -> Result<SessionExportDat
         &project.materials,
         participants.clone(),
         claims.clone(),
+        load_material_notes(&conn)?,
         current_unix_timestamp()?,
     );
     let data = SessionExportData {
@@ -942,6 +1581,15 @@ pub fn session_import(zip_path: &Path, input: &Path, replace: bool) -> Result<Se
     let conn = Connection::open(&db_path)?;
     if replace {
         conn.execute("DELETE FROM material_claims", [])?;
+        write_audit_conn(
+            &conn,
+            "cli",
+            "session_import_replace",
+            "material_claims",
+            None,
+            None,
+            None,
+        )?;
     }
     for participant in &data.participants {
         upsert_participant(&db_path, &participant.user_id)?;
@@ -960,6 +1608,15 @@ pub fn session_import(zip_path: &Path, input: &Path, replace: bool) -> Result<Se
         }
     }
     touch_meta(&conn)?;
+    write_audit_conn(
+        &conn,
+        "cli",
+        "session_import",
+        input.to_string_lossy().as_ref(),
+        None,
+        Some(json!({"imported_claims": imported_claims, "replace": replace})),
+        None,
+    )?;
     Ok(SessionImportOutput {
         zip_path,
         session_db: db_path,
@@ -1006,6 +1663,7 @@ fn aggregate_state(
     materials: &StockpileMaterialsData,
     participants: Vec<ParticipantState>,
     claims: Vec<ClaimState>,
+    notes: BTreeMap<String, MaterialNoteState>,
     updated_at: u64,
 ) -> StockpileSyncState {
     let mut claims_by_material = BTreeMap::<String, Vec<ClaimState>>::new();
@@ -1051,6 +1709,13 @@ fn aggregate_state(
             "preparing"
         }
         .to_string();
+        let note = notes
+            .get(&material.namespace_id)
+            .cloned()
+            .unwrap_or_else(|| MaterialNoteState {
+                material_id: material.namespace_id.clone(),
+                ..Default::default()
+            });
         material_states.insert(
             material.namespace_id.clone(),
             MaterialSyncState {
@@ -1063,6 +1728,10 @@ fn aggregate_state(
                 participants: participants_for_material,
                 overall_status,
                 claims: material_claims,
+                public_note: note.public_note,
+                storage_location: note.storage_location,
+                locked: note.locked,
+                updated_by: note.updated_by,
             },
         );
     }
@@ -1103,6 +1772,165 @@ fn load_claims(conn: &Connection) -> Result<Vec<ClaimState>> {
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .context("load claims failed")
+}
+
+fn load_claim_for_audit(
+    conn: &Connection,
+    material_id: &str,
+    user_id: &str,
+) -> Result<Option<Value>> {
+    conn.query_row(
+        "SELECT material_id, user_id, status, quantity, updated_at FROM material_claims WHERE material_id = ?1 AND user_id = ?2",
+        params![material_id, user_id],
+        |row| {
+            Ok(json!(ClaimState {
+                material_id: row.get(0)?,
+                user_id: row.get(1)?,
+                status: row.get(2)?,
+                quantity: i64_to_u64(row.get(3)?),
+                updated_at: i64_to_u64(row.get(4)?),
+            }))
+        },
+    )
+    .optional()
+    .context("load claim for audit failed")
+}
+
+fn load_material_notes(conn: &Connection) -> Result<BTreeMap<String, MaterialNoteState>> {
+    let mut stmt = conn.prepare(
+        "SELECT material_id, public_note, storage_location, locked, updated_by, updated_at FROM material_notes ORDER BY material_id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let material_id: String = row.get(0)?;
+        Ok((
+            material_id.clone(),
+            MaterialNoteState {
+                material_id,
+                public_note: row.get(1)?,
+                storage_location: row.get(2)?,
+                locked: i64_to_bool(row.get(3)?),
+                updated_by: row.get(4)?,
+                updated_at: i64_to_u64(row.get(5)?),
+            },
+        ))
+    })?;
+    rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()
+        .context("load material notes failed")
+}
+
+fn load_material_note(conn: &Connection, material_id: &str) -> Result<Option<MaterialNoteState>> {
+    conn.query_row(
+        "SELECT material_id, public_note, storage_location, locked, updated_by, updated_at FROM material_notes WHERE material_id = ?1",
+        params![material_id],
+        |row| {
+            Ok(MaterialNoteState {
+                material_id: row.get(0)?,
+                public_note: row.get(1)?,
+                storage_location: row.get(2)?,
+                locked: i64_to_bool(row.get(3)?),
+                updated_by: row.get(4)?,
+                updated_at: i64_to_u64(row.get(5)?),
+            })
+        },
+    )
+    .optional()
+    .context("load material note failed")
+}
+
+fn save_material_note_conn(
+    conn: &Connection,
+    material_id: &str,
+    request: &MaterialNoteRequest,
+    actor: &str,
+) -> Result<MaterialNoteState> {
+    validate_material_id(material_id)?;
+    let before = load_material_note(conn, material_id)?;
+    let now = current_unix_timestamp()?;
+    let public_note = request
+        .public_note
+        .clone()
+        .or_else(|| before.as_ref().and_then(|value| value.public_note.clone()));
+    let storage_location = request.storage_location.clone().or_else(|| {
+        before
+            .as_ref()
+            .and_then(|value| value.storage_location.clone())
+    });
+    let locked = request
+        .locked
+        .unwrap_or_else(|| before.as_ref().map(|value| value.locked).unwrap_or(false));
+    conn.execute(
+        r#"
+        INSERT INTO material_notes(material_id, public_note, storage_location, locked, updated_by, updated_at)
+        VALUES(?1, ?2, ?3, ?4, ?5, ?6)
+        ON CONFLICT(material_id) DO UPDATE SET
+            public_note = excluded.public_note,
+            storage_location = excluded.storage_location,
+            locked = excluded.locked,
+            updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at
+        "#,
+        params![material_id, public_note, storage_location, bool_to_i64(locked), actor, now],
+    )?;
+    let after = load_material_note(conn, material_id)?.expect("saved note");
+    write_audit_conn(
+        conn,
+        actor,
+        "material_note_update",
+        material_id,
+        before.map(|value| json!(value)),
+        Some(json!(after)),
+        None,
+    )?;
+    touch_meta(conn)?;
+    Ok(after)
+}
+
+fn load_whitelist(conn: &Connection) -> Result<Vec<WhitelistEntry>> {
+    let mut stmt =
+        conn.prepare("SELECT user_id, created_at FROM stockpile_whitelist ORDER BY user_id")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(WhitelistEntry {
+            user_id: row.get(0)?,
+            created_at: i64_to_u64(row.get(1)?),
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("load whitelist failed")
+}
+
+fn load_whitelist_entry(conn: &Connection, user_id: &str) -> Result<Option<WhitelistEntry>> {
+    conn.query_row(
+        "SELECT user_id, created_at FROM stockpile_whitelist WHERE user_id = ?1",
+        params![user_id],
+        |row| {
+            Ok(WhitelistEntry {
+                user_id: row.get(0)?,
+                created_at: i64_to_u64(row.get(1)?),
+            })
+        },
+    )
+    .optional()
+    .context("load whitelist entry failed")
+}
+
+fn load_audit_log(conn: &Connection, limit: u64) -> Result<Vec<AuditLogEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, actor, action, target, before_json, after_json, ip, created_at FROM audit_log ORDER BY id DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], |row| {
+        Ok(AuditLogEntry {
+            id: i64_to_u64(row.get(0)?),
+            actor: row.get(1)?,
+            action: row.get(2)?,
+            target: row.get(3)?,
+            before_json: row.get(4)?,
+            after_json: row.get(5)?,
+            ip: row.get(6)?,
+            created_at: i64_to_u64(row.get(7)?),
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("load audit log failed")
 }
 
 pub(crate) fn load_project_from_zip(zip_path: &Path) -> Result<StockpileZipPayload> {
@@ -1210,8 +2038,47 @@ fn serve_zip_asset(zip_path: &Path, path: &str) -> Result<HttpResponse> {
         status: 200,
         reason: "OK".to_string(),
         content_type: content_type(&name).to_string(),
+        headers: Vec::new(),
         body: bytes,
     })
+}
+
+fn admin_page_response() -> HttpResponse {
+    let html = r#"<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Stockpile Admin</title><link rel="stylesheet" href="/assets/app.css"/></head>
+<body><div id="admin" class="shell"></div><script>
+(function(){
+const zh={title:'管理员',login:'管理员登录',password:'管理员密码',enter:'登录',summary:'项目总览',users:'用户',whitelist:'白名单',materials:'材料管理',audit:'审计日志',add:'添加',remove:'移除',lock:'锁定',unlock:'解锁',save:'保存',clearMaterial:'清空材料备货',clearUser:'清空用户备货',note:'备注',location:'存放位置'};
+const en={title:'Admin',login:'Admin login',password:'Admin password',enter:'Login',summary:'Summary',users:'Users',whitelist:'Whitelist',materials:'Materials',audit:'Audit log',add:'Add',remove:'Remove',lock:'Lock',unlock:'Unlock',save:'Save',clearMaterial:'Clear material claims',clearUser:'Clear user claims',note:'Note',location:'Storage'};
+let lang=(localStorage.getItem('lba-stockpile-lang')||navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en'; const t=k=>(lang==='zh'?zh:en)[k]||k; const root=document.getElementById('admin');
+async function send(path,method='GET',body){const r=await fetch(path,{method,headers:{'Content-Type':'application/json',Accept:'application/json'},body:body?JSON.stringify(body):undefined}); if(!r.ok) throw new Error(await r.text()); return r.json();}
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function render(){let auth=await send('/api/auth/status'); if(!auth.admin){root.innerHTML=`<section class="modal-card"><h1>${t('login')}</h1><div class="password-row"><input class="field" id="pw" type="password" placeholder="${t('password')}"/><button class="button icon-button" id="togglePw" type="button" title="${t('password')}">👁</button></div><div class="actions"><button class="button primary" id="login">${t('enter')}</button></div><p class="sub" id="err"></p></section>`; document.getElementById('togglePw').onclick=()=>{const pw=document.getElementById('pw'); pw.type=pw.type==='password'?'text':'password';}; document.getElementById('login').onclick=async()=>{try{await send('/api/auth/admin','POST',{password:document.getElementById('pw').value}); render();}catch(e){document.getElementById('err').textContent=e.message;}}; return;}
+const [summary,users,white,materials,audit]=await Promise.all([send('/api/admin/summary'),send('/api/users'),send('/api/whitelist'),send('/api/admin/materials'),send('/api/admin/audit-log')]);
+root.innerHTML=`<header class="topbar"><div class="brand"><strong>${t('title')}</strong><span>Stockpile</span></div><div class="identity"><a class="button" href="/">Stockpile</a></div></header>
+<section class="summary">${Object.entries(summary).map(([k,v])=>`<div class="metric"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('')}</section>
+<section class="section"><h2>${t('whitelist')}</h2><div class="toolbar"><input class="field" id="newUser"/><button class="button primary" id="addUser">${t('add')}</button></div><div class="list">${white.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-rm="${esc(u.user_id)}">${t('remove')}</button></div></div>`).join('')}</div></section>
+<section class="section"><h2>${t('users')}</h2><div class="list">${users.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button></div></div>`).join('')}</div></section>
+<section class="section"><h2>${t('materials')}</h2><div class="list">${Object.values(materials).map(m=>`<div class="card"><div class="card-main"><div><b>${esc(m.material_id)}</b><div class="sub">${t('note')}: ${esc(m.public_note||'')} / ${t('location')}: ${esc(m.storage_location||'')}</div><div class="badges"><span class="badge">${esc(m.overall_status)}</span>${m.locked?'<span class="badge missing">locked</span>':''}</div></div><div class="actions"><button class="button" data-note="${esc(m.material_id)}" data-note-value="${esc(m.public_note||'')}" data-location-value="${esc(m.storage_location||'')}">${t('save')}</button><button class="button" data-lock="${esc(m.material_id)}" data-locked="${m.locked?'1':'0'}">${m.locked?t('unlock'):t('lock')}</button><button class="button danger" data-clear-mat="${esc(m.material_id)}">${t('clearMaterial')}</button></div></div></div>`).join('')}</div></section>
+<section class="section"><h2>${t('audit')}</h2><div class="list">${audit.map(a=>`<div class="card"><div class="card-main"><div><b>${esc(a.action)}</b><div class="sub">${esc(a.actor)} -> ${esc(a.target)} @ ${esc(a.created_at)}</div></div></div></div>`).join('')}</div></section>`;
+document.getElementById('addUser').onclick=async()=>{await send('/api/whitelist','POST',{user_id:document.getElementById('newUser').value}); render();};
+document.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{await send('/api/whitelist/'+encodeURIComponent(b.dataset.rm),'DELETE'); render();});
+document.querySelectorAll('[data-clear-user]').forEach(b=>b.onclick=async()=>{await send('/api/admin/users/'+encodeURIComponent(b.dataset.clearUser)+'/claims','DELETE'); render();});
+document.querySelectorAll('[data-clear-mat]').forEach(b=>b.onclick=async()=>{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.clearMat)+'/claims','DELETE'); render();});
+document.querySelectorAll('[data-lock]').forEach(b=>b.onclick=async()=>{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.lock),'PUT',{locked:b.dataset.locked!=='1'}); render();});
+document.querySelectorAll('[data-note]').forEach(b=>b.onclick=async()=>{const public_note=prompt(t('note'),b.dataset.noteValue||''); if(public_note===null)return; const storage_location=prompt(t('location'),b.dataset.locationValue||''); if(storage_location===null)return; await send('/api/admin/materials/'+encodeURIComponent(b.dataset.note),'PUT',{public_note,storage_location}); render();});
+}
+render().catch(e=>{root.innerHTML='<pre class="empty">'+esc(e.message)+'</pre>';});
+}());
+</script></body></html>"#;
+    HttpResponse {
+        status: 200,
+        reason: "OK".to_string(),
+        content_type: "text/html; charset=utf-8".to_string(),
+        headers: Vec::new(),
+        body: html.as_bytes().to_vec(),
+    }
 }
 
 pub(crate) fn session_db_path(zip_path: &Path) -> Result<PathBuf> {
@@ -1273,6 +2140,62 @@ fn validate_material_id(value: &str) -> Result<()> {
     Ok(())
 }
 
+fn hash_password(password: &str) -> Result<String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|error| anyhow!("hash password failed: {error}"))
+}
+
+fn verify_password(password: &str, hash: &str) -> Result<bool> {
+    let parsed =
+        PasswordHash::new(hash).map_err(|error| anyhow!("parse password hash failed: {error}"))?;
+    Ok(Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok())
+}
+
+fn load_password_hash(conn: &Connection, kind: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT password_hash FROM password_hashes WHERE kind = ?1",
+        params![kind],
+        |row| row.get(0),
+    )
+    .optional()
+    .context("load password hash failed")
+}
+
+fn new_session_token() -> String {
+    let mut bytes = [0_u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    to_hex(&bytes)
+}
+
+fn write_audit_conn(
+    conn: &Connection,
+    actor: &str,
+    action: &str,
+    target: &str,
+    before_json: Option<Value>,
+    after_json: Option<Value>,
+    ip: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO audit_log(actor, action, target, before_json, after_json, ip, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            actor,
+            action,
+            target,
+            before_json.map(|value| value.to_string()),
+            after_json.map(|value| value.to_string()),
+            ip,
+            current_unix_timestamp()? as i64,
+        ],
+    )?;
+    Ok(())
+}
+
 fn i64_to_u64(value: i64) -> u64 {
     value.max(0) as u64
 }
@@ -1299,6 +2222,7 @@ fn to_hex(bytes: &[u8]) -> String {
 struct HttpRequest {
     method: String,
     path: String,
+    headers: BTreeMap<String, String>,
     body: Vec<u8>,
 }
 
@@ -1306,6 +2230,7 @@ struct HttpResponse {
     status: u16,
     reason: String,
     content_type: String,
+    headers: Vec<(String, String)>,
     body: Vec<u8>,
 }
 
@@ -1320,12 +2245,16 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
     let method = parts.next().unwrap_or_default().to_string();
     let path = parts.next().unwrap_or("/").to_string();
     let mut content_length = 0_usize;
+    let mut headers = BTreeMap::new();
     loop {
         let mut line = String::new();
         reader.read_line(&mut line)?;
         let trimmed = line.trim_end();
         if trimmed.is_empty() {
             break;
+        }
+        if let Some((name, value)) = trimmed.split_once(':') {
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
         }
         if let Some(value) = trimmed
             .strip_prefix("Content-Length:")
@@ -1338,18 +2267,27 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
     if content_length > 0 {
         reader.read_exact(&mut body)?;
     }
-    Ok(HttpRequest { method, path, body })
+    Ok(HttpRequest {
+        method,
+        path,
+        headers,
+        body,
+    })
 }
 
 fn write_response(stream: &mut TcpStream, response: HttpResponse) -> Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Credentials: true\r\n",
         response.status,
         response.reason,
         response.content_type,
         response.body.len()
     )?;
+    for (name, value) in &response.headers {
+        write!(stream, "{name}: {value}\r\n")?;
+    }
+    write!(stream, "\r\n")?;
     stream.write_all(&response.body)?;
     stream.flush()?;
     Ok(())
@@ -1360,6 +2298,7 @@ fn json_response<T: Serialize>(status: u16, value: T, reason: &str) -> HttpRespo
         status,
         reason: reason.to_string(),
         content_type: "application/json; charset=utf-8".to_string(),
+        headers: Vec::new(),
         body: serde_json::to_vec(&value).unwrap_or_else(|_| b"{\"error\":\"serialize\"}".to_vec()),
     }
 }
@@ -1475,7 +2414,7 @@ mod tests {
             claim("minecraft:rail", "c", "done", 10),
             claim("minecraft:chest", "d", "done", 8),
         ];
-        let state = aggregate_state(&materials, Vec::new(), claims, 1);
+        let state = aggregate_state(&materials, Vec::new(), claims, BTreeMap::new(), 1);
         assert_eq!(
             state.materials["minecraft:stone"].overall_status,
             "preparing"
@@ -1878,6 +2817,193 @@ mod tests {
         cleanup_fixture(&fixture, &db, Path::new(""));
     }
 
+    #[test]
+    fn password_cli_hashes_and_whitelist_crud_works() {
+        let fixture = exported_fixture("access_password");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+
+        let access = set_access_password(&fixture, "secret").expect("set access password");
+        assert!(access.config.access_password_enabled);
+        let admin = set_admin_password(&fixture, "admin-secret").expect("set admin password");
+        assert!(admin.config.admin_password_enabled);
+        let conn = Connection::open(&db).expect("open db");
+        let stored = load_password_hash(&conn, "access")
+            .expect("hash")
+            .expect("stored hash");
+        assert_ne!(stored, "secret");
+        assert!(verify_password("secret", &stored).expect("verify"));
+
+        let listed = whitelist_add(&fixture, "Eldon").expect("add whitelist");
+        assert_eq!(listed.users.len(), 1);
+        let listed = whitelist_remove(&fixture, "Eldon").expect("remove whitelist");
+        assert!(listed.users.is_empty());
+        let cleared = clear_access_password(&fixture).expect("clear access");
+        assert!(!cleared.config.access_password_enabled);
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn access_password_blocks_claim_until_authenticated() {
+        let fixture = exported_fixture("access_blocks_claim");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        set_access_password(&fixture, "secret").expect("set password");
+        let project = load_project_from_zip(&fixture).expect("project");
+
+        let blocked = route_request(
+            &request(
+                "PUT",
+                "/api/materials/minecraft%3Astone/claims/alex",
+                br#"{"status":"preparing","quantity":1}"#,
+            ),
+            &fixture,
+            &db,
+            &project,
+        );
+        assert_eq!(blocked.status, 401);
+
+        let login = route_request_inner(
+            &request(
+                "POST",
+                "/api/auth/access",
+                br#"{"password":"secret","user_id":"alex"}"#,
+            ),
+            &fixture,
+            &db,
+            &project,
+        )
+        .expect("login");
+        assert_eq!(login.status, 200);
+        let cookie = login
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Set-Cookie")
+            .map(|(_, value)| value.clone())
+            .expect("cookie");
+        let ok = route_request(
+            &request_with_cookie(
+                "PUT",
+                "/api/materials/minecraft%3Astone/claims/alex",
+                br#"{"status":"preparing","quantity":1}"#,
+                &cookie,
+            ),
+            &fixture,
+            &db,
+            &project,
+        );
+        assert_eq!(ok.status, 200);
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn whitelist_and_locked_materials_block_non_admin_writes() {
+        let fixture = exported_fixture("whitelist_locked");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        config_set(&fixture, "whitelist_enabled", "true").expect("enable whitelist");
+        config_set(&fixture, "allow_guest_readonly", "true").expect("readonly guests");
+        let project = load_project_from_zip(&fixture).expect("project");
+
+        let blocked = route_request(
+            &request(
+                "PUT",
+                "/api/materials/minecraft%3Astone/claims/alex",
+                br#"{"status":"preparing","quantity":1}"#,
+            ),
+            &fixture,
+            &db,
+            &project,
+        );
+        assert_eq!(blocked.status, 403);
+
+        whitelist_add(&fixture, "alex").expect("whitelist alex");
+        let conn = Connection::open(&db).expect("open db");
+        save_material_note_conn(
+            &conn,
+            "minecraft:stone",
+            &MaterialNoteRequest {
+                public_note: None,
+                storage_location: None,
+                locked: Some(true),
+                user_id: None,
+            },
+            "admin",
+        )
+        .expect("lock material");
+        let locked = route_request(
+            &request(
+                "PUT",
+                "/api/materials/minecraft%3Astone/claims/alex",
+                br#"{"status":"preparing","quantity":1}"#,
+            ),
+            &fixture,
+            &db,
+            &project,
+        );
+        assert_eq!(locked.status, 403);
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn admin_api_requires_admin_and_updates_material_notes() {
+        let fixture = exported_fixture("admin_api");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        set_admin_password(&fixture, "admin-secret").expect("set admin password");
+        let project = load_project_from_zip(&fixture).expect("project");
+
+        let blocked = route_request(
+            &request("GET", "/api/admin/summary", b""),
+            &fixture,
+            &db,
+            &project,
+        );
+        assert_eq!(blocked.status, 403);
+        let login = route_request_inner(
+            &request(
+                "POST",
+                "/api/auth/admin",
+                br#"{"password":"admin-secret","user_id":"root"}"#,
+            ),
+            &fixture,
+            &db,
+            &project,
+        )
+        .expect("admin login");
+        let cookie = login
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Set-Cookie")
+            .map(|(_, value)| value.clone())
+            .expect("cookie");
+        let updated = route_request(
+            &request_with_cookie(
+                "PUT",
+                "/api/admin/materials/minecraft%3Astone",
+                br#"{"public_note":"bring stone","storage_location":"chest A","locked":true}"#,
+                &cookie,
+            ),
+            &fixture,
+            &db,
+            &project,
+        );
+        assert_eq!(updated.status, 200);
+        let note: MaterialNoteState = serde_json::from_slice(&updated.body).expect("note");
+        assert_eq!(note.public_note.as_deref(), Some("bring stone"));
+        assert!(note.locked);
+        assert!(
+            !load_audit_log(&Connection::open(&db).expect("open"), 10)
+                .expect("audit")
+                .is_empty()
+        );
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
     fn fixture_materials() -> StockpileMaterialsData {
         StockpileMaterialsData {
             schema_version: crate::stockpile_schema::STOCKPILE_MATERIALS_SCHEMA_VERSION,
@@ -1982,7 +3108,16 @@ mod tests {
         HttpRequest {
             method: method.to_string(),
             path: path.to_string(),
+            headers: BTreeMap::new(),
             body: body.to_vec(),
         }
+    }
+
+    fn request_with_cookie(method: &str, path: &str, body: &[u8], cookie: &str) -> HttpRequest {
+        let mut request = request(method, path, body);
+        request
+            .headers
+            .insert("cookie".to_string(), cookie.to_string());
+        request
     }
 }
