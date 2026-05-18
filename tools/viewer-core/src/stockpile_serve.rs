@@ -192,6 +192,38 @@ pub struct StockpileSyncState {
     pub updated_at: u64,
     pub participants: Vec<ParticipantState>,
     pub materials: BTreeMap<String, MaterialSyncState>,
+    pub summaries: StockpileStateSummaries,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct StockpileStateSummaries {
+    pub user_summaries: Vec<UserSummaryState>,
+    pub unclaimed_materials: Vec<String>,
+    pub overfilled_materials: Vec<String>,
+    pub stalled_materials: Vec<String>,
+    pub not_started_materials: Vec<String>,
+    pub locked_materials: Vec<String>,
+    pub noted_materials: Vec<String>,
+    pub recent_activity: Vec<ActivitySummaryState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct UserSummaryState {
+    pub user_id: String,
+    pub material_count: u64,
+    pub preparing_count: u64,
+    pub done_count: u64,
+    pub preparing_quantity: u64,
+    pub done_quantity: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ActivitySummaryState {
+    pub actor: String,
+    pub action: String,
+    pub target: String,
+    pub summary: String,
+    pub created_at: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1049,11 +1081,13 @@ pub(crate) fn build_state(
     let participants = load_participants(&conn)?;
     let claims = load_claims(&conn)?;
     let notes = load_material_notes(&conn)?;
+    let audit = load_audit_log(&conn, 20).unwrap_or_default();
     Ok(aggregate_state(
         materials,
         participants,
         claims,
         notes,
+        audit,
         current_unix_timestamp()?,
     ))
 }
@@ -1530,6 +1564,7 @@ pub fn session_export(zip_path: &Path, output: &Path) -> Result<SessionExportDat
         participants.clone(),
         claims.clone(),
         load_material_notes(&conn)?,
+        load_audit_log(&conn, 20).unwrap_or_default(),
         current_unix_timestamp()?,
     );
     let data = SessionExportData {
@@ -1664,16 +1699,38 @@ fn aggregate_state(
     participants: Vec<ParticipantState>,
     claims: Vec<ClaimState>,
     notes: BTreeMap<String, MaterialNoteState>,
+    audit: Vec<AuditLogEntry>,
     updated_at: u64,
 ) -> StockpileSyncState {
     let mut claims_by_material = BTreeMap::<String, Vec<ClaimState>>::new();
+    let mut user_acc = BTreeMap::<String, UserSummaryState>::new();
     for claim in claims {
+        let entry = user_acc
+            .entry(claim.user_id.clone())
+            .or_insert_with(|| UserSummaryState {
+                user_id: claim.user_id.clone(),
+                ..Default::default()
+            });
+        entry.material_count += 1;
+        if claim.status == "done" {
+            entry.done_count += 1;
+            entry.done_quantity = entry.done_quantity.saturating_add(claim.quantity);
+        } else {
+            entry.preparing_count += 1;
+            entry.preparing_quantity = entry.preparing_quantity.saturating_add(claim.quantity);
+        }
         claims_by_material
             .entry(claim.material_id.clone())
             .or_default()
             .push(claim);
     }
     let mut material_states = BTreeMap::<String, MaterialSyncState>::new();
+    let mut unclaimed_materials = Vec::new();
+    let mut overfilled_materials = Vec::new();
+    let mut stalled_materials = Vec::new();
+    let mut not_started_materials = Vec::new();
+    let mut locked_materials = Vec::new();
+    let mut noted_materials = Vec::new();
     for material in &materials.materials {
         let material_claims = claims_by_material
             .remove(&material.namespace_id)
@@ -1716,6 +1773,34 @@ fn aggregate_state(
                 material_id: material.namespace_id.clone(),
                 ..Default::default()
             });
+        if participants_for_material.is_empty() {
+            unclaimed_materials.push(material.namespace_id.clone());
+        }
+        if overfilled_count > 0 {
+            overfilled_materials.push(material.namespace_id.clone());
+        }
+        if preparing_count > 0 && done_count < material.required_count {
+            stalled_materials.push(material.namespace_id.clone());
+        }
+        if total_claimed == 0 {
+            not_started_materials.push(material.namespace_id.clone());
+        }
+        if note.locked {
+            locked_materials.push(material.namespace_id.clone());
+        }
+        if note
+            .public_note
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+            || note
+                .storage_location
+                .as_deref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+        {
+            noted_materials.push(material.namespace_id.clone());
+        }
         material_states.insert(
             material.namespace_id.clone(),
             MaterialSyncState {
@@ -1739,6 +1824,25 @@ fn aggregate_state(
         updated_at,
         participants,
         materials: material_states,
+        summaries: StockpileStateSummaries {
+            user_summaries: user_acc.into_values().collect(),
+            unclaimed_materials,
+            overfilled_materials,
+            stalled_materials,
+            not_started_materials,
+            locked_materials,
+            noted_materials,
+            recent_activity: audit
+                .into_iter()
+                .map(|entry| ActivitySummaryState {
+                    summary: audit_summary(&entry),
+                    actor: entry.actor,
+                    action: entry.action,
+                    target: entry.target,
+                    created_at: entry.created_at,
+                })
+                .collect(),
+        },
     }
 }
 
@@ -1933,6 +2037,27 @@ fn load_audit_log(conn: &Connection, limit: u64) -> Result<Vec<AuditLogEntry>> {
         .context("load audit log failed")
 }
 
+fn audit_summary(entry: &AuditLogEntry) -> String {
+    match entry.action.as_str() {
+        "claim_put" => "updated claim",
+        "claim_delete" => "removed claim",
+        "material_note_update" => "updated material note",
+        "claims_clear_material" => "cleared material claims",
+        "claims_clear_user" => "cleared user claims",
+        "whitelist_add" => "added whitelist user",
+        "whitelist_remove" => "removed whitelist user",
+        "session_reset" => "reset session claims",
+        "session_import" => "imported session state",
+        "session_import_replace" => "replaced session claims",
+        "access_password_set" => "updated access password",
+        "admin_password_set" => "updated admin password",
+        "access_password_clear" => "cleared access password",
+        "admin_password_clear" => "cleared admin password",
+        other => other,
+    }
+    .to_string()
+}
+
 pub(crate) fn load_project_from_zip(zip_path: &Path) -> Result<StockpileZipPayload> {
     let mut zip = ZipArchive::new(
         File::open(zip_path)
@@ -2044,34 +2169,7 @@ fn serve_zip_asset(zip_path: &Path, path: &str) -> Result<HttpResponse> {
 }
 
 fn admin_page_response() -> HttpResponse {
-    let html = r#"<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Stockpile Admin</title><link rel="stylesheet" href="/assets/app.css"/></head>
-<body><div id="admin" class="shell"></div><script>
-(function(){
-const zh={title:'管理员',login:'管理员登录',password:'管理员密码',enter:'登录',summary:'项目总览',users:'用户',whitelist:'白名单',materials:'材料管理',audit:'审计日志',add:'添加',remove:'移除',lock:'锁定',unlock:'解锁',save:'保存',clearMaterial:'清空材料备货',clearUser:'清空用户备货',note:'备注',location:'存放位置'};
-const en={title:'Admin',login:'Admin login',password:'Admin password',enter:'Login',summary:'Summary',users:'Users',whitelist:'Whitelist',materials:'Materials',audit:'Audit log',add:'Add',remove:'Remove',lock:'Lock',unlock:'Unlock',save:'Save',clearMaterial:'Clear material claims',clearUser:'Clear user claims',note:'Note',location:'Storage'};
-let lang=(localStorage.getItem('lba-stockpile-lang')||navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en'; const t=k=>(lang==='zh'?zh:en)[k]||k; const root=document.getElementById('admin');
-async function send(path,method='GET',body){const r=await fetch(path,{method,headers:{'Content-Type':'application/json',Accept:'application/json'},body:body?JSON.stringify(body):undefined}); if(!r.ok) throw new Error(await r.text()); return r.json();}
-function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-async function render(){let auth=await send('/api/auth/status'); if(!auth.admin){root.innerHTML=`<section class="modal-card"><h1>${t('login')}</h1><div class="password-row"><input class="field" id="pw" type="password" placeholder="${t('password')}"/><button class="button icon-button" id="togglePw" type="button" title="${t('password')}">👁</button></div><div class="actions"><button class="button primary" id="login">${t('enter')}</button></div><p class="sub" id="err"></p></section>`; document.getElementById('togglePw').onclick=()=>{const pw=document.getElementById('pw'); pw.type=pw.type==='password'?'text':'password';}; document.getElementById('login').onclick=async()=>{try{await send('/api/auth/admin','POST',{password:document.getElementById('pw').value}); render();}catch(e){document.getElementById('err').textContent=e.message;}}; return;}
-const [summary,users,white,materials,audit]=await Promise.all([send('/api/admin/summary'),send('/api/users'),send('/api/whitelist'),send('/api/admin/materials'),send('/api/admin/audit-log')]);
-root.innerHTML=`<header class="topbar"><div class="brand"><strong>${t('title')}</strong><span>Stockpile</span></div><div class="identity"><a class="button" href="/">Stockpile</a></div></header>
-<section class="summary">${Object.entries(summary).map(([k,v])=>`<div class="metric"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('')}</section>
-<section class="section"><h2>${t('whitelist')}</h2><div class="toolbar"><input class="field" id="newUser"/><button class="button primary" id="addUser">${t('add')}</button></div><div class="list">${white.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-rm="${esc(u.user_id)}">${t('remove')}</button></div></div>`).join('')}</div></section>
-<section class="section"><h2>${t('users')}</h2><div class="list">${users.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button></div></div>`).join('')}</div></section>
-<section class="section"><h2>${t('materials')}</h2><div class="list">${Object.values(materials).map(m=>`<div class="card"><div class="card-main"><div><b>${esc(m.material_id)}</b><div class="sub">${t('note')}: ${esc(m.public_note||'')} / ${t('location')}: ${esc(m.storage_location||'')}</div><div class="badges"><span class="badge">${esc(m.overall_status)}</span>${m.locked?'<span class="badge missing">locked</span>':''}</div></div><div class="actions"><button class="button" data-note="${esc(m.material_id)}" data-note-value="${esc(m.public_note||'')}" data-location-value="${esc(m.storage_location||'')}">${t('save')}</button><button class="button" data-lock="${esc(m.material_id)}" data-locked="${m.locked?'1':'0'}">${m.locked?t('unlock'):t('lock')}</button><button class="button danger" data-clear-mat="${esc(m.material_id)}">${t('clearMaterial')}</button></div></div></div>`).join('')}</div></section>
-<section class="section"><h2>${t('audit')}</h2><div class="list">${audit.map(a=>`<div class="card"><div class="card-main"><div><b>${esc(a.action)}</b><div class="sub">${esc(a.actor)} -> ${esc(a.target)} @ ${esc(a.created_at)}</div></div></div></div>`).join('')}</div></section>`;
-document.getElementById('addUser').onclick=async()=>{await send('/api/whitelist','POST',{user_id:document.getElementById('newUser').value}); render();};
-document.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{await send('/api/whitelist/'+encodeURIComponent(b.dataset.rm),'DELETE'); render();});
-document.querySelectorAll('[data-clear-user]').forEach(b=>b.onclick=async()=>{await send('/api/admin/users/'+encodeURIComponent(b.dataset.clearUser)+'/claims','DELETE'); render();});
-document.querySelectorAll('[data-clear-mat]').forEach(b=>b.onclick=async()=>{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.clearMat)+'/claims','DELETE'); render();});
-document.querySelectorAll('[data-lock]').forEach(b=>b.onclick=async()=>{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.lock),'PUT',{locked:b.dataset.locked!=='1'}); render();});
-document.querySelectorAll('[data-note]').forEach(b=>b.onclick=async()=>{const public_note=prompt(t('note'),b.dataset.noteValue||''); if(public_note===null)return; const storage_location=prompt(t('location'),b.dataset.locationValue||''); if(storage_location===null)return; await send('/api/admin/materials/'+encodeURIComponent(b.dataset.note),'PUT',{public_note,storage_location}); render();});
-}
-render().catch(e=>{root.innerHTML='<pre class="empty">'+esc(e.message)+'</pre>';});
-}());
-</script></body></html>"#;
+    let html = admin_page_html();
     HttpResponse {
         status: 200,
         reason: "OK".to_string(),
@@ -2081,6 +2179,47 @@ render().catch(e=>{root.innerHTML='<pre class="empty">'+esc(e.message)+'</pre>';
     }
 }
 
+fn admin_page_html() -> &'static str {
+    r#"<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Stockpile Admin</title><link rel="stylesheet" href="/assets/app.css"/></head>
+<body><div id="admin" class="shell"></div><script>
+(function(){
+const i18n={
+zh:{title:'管理员',login:'管理员登录',password:'管理员密码',enter:'登录',project:'备货单',summary:'项目总览',users:'用户',whitelist:'白名单',materials:'材料管理',audit:'审计日志',add:'添加',remove:'移除',lock:'锁定',unlock:'解锁',save:'保存',clearMaterial:'清空材料备货',clearUser:'清空用户备货',note:'备注',location:'存放位置',language:'语言',back:'返回备货单',filter:'筛选',all:'全部',unclaimed:'无人认领',overfilled:'超额',stalled:'已备货未完成',notStarted:'未开始',locked:'锁定',noted:'有备注',userSummary:'用户汇总',materialCount:'材料数',preparing:'备货中',done:'已完成',preparingQty:'备货中数量',doneQty:'完成数量',actor:'操作者',action:'动作',target:'目标',time:'时间',success:'操作成功',error:'错误',showPassword:'显示密码',claim_put:'更新备货',claim_delete:'取消备货',material_note_update:'更新材料备注',claims_clear_material:'清空材料备货',claims_clear_user:'清空用户备货',whitelist_add:'添加白名单',whitelist_remove:'移除白名单',session_reset:'重置会话',session_import:'导入会话',session_import_replace:'替换会话',access_password_set:'设置访问密码',admin_password_set:'设置管理员密码',access_password_clear:'清除访问密码',admin_password_clear:'清除管理员密码'},
+en:{title:'Admin',login:'Admin login',password:'Admin password',enter:'Login',project:'Stockpile',summary:'Summary',users:'Users',whitelist:'Whitelist',materials:'Materials',audit:'Audit log',add:'Add',remove:'Remove',lock:'Lock',unlock:'Unlock',save:'Save',clearMaterial:'Clear material claims',clearUser:'Clear user claims',note:'Note',location:'Storage',language:'Language',back:'Back to stockpile',filter:'Filter',all:'All',unclaimed:'Unclaimed',overfilled:'Overfilled',stalled:'Prepared not done',notStarted:'Not started',locked:'Locked',noted:'With notes',userSummary:'User summary',materialCount:'Materials',preparing:'Preparing',done:'Done',preparingQty:'Preparing qty',doneQty:'Done qty',actor:'Actor',action:'Action',target:'Target',time:'Time',success:'Saved',error:'Error',showPassword:'Show password',claim_put:'Updated claim',claim_delete:'Removed claim',material_note_update:'Updated material note',claims_clear_material:'Cleared material claims',claims_clear_user:'Cleared user claims',whitelist_add:'Added whitelist user',whitelist_remove:'Removed whitelist user',session_reset:'Reset session',session_import:'Imported session',session_import_replace:'Replaced session',access_password_set:'Set access password',admin_password_set:'Set admin password',access_password_clear:'Cleared access password',admin_password_clear:'Cleared admin password'}};
+let lang=(localStorage.getItem('lba-stockpile-lang')||navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en';
+let filter='all'; let flash=''; const root=document.getElementById('admin'); const t=k=>i18n[lang][k]||i18n.en[k]||k;
+async function send(path,method='GET',body){const r=await fetch(path,{method,headers:{'Content-Type':'application/json',Accept:'application/json'},body:body?JSON.stringify(body):undefined}); if(!r.ok) throw new Error(await r.text()); return r.json();}
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function actionLabel(action){return t(action);}
+function matchesFilter(m){if(filter==='unclaimed')return !(m.participants||[]).length;if(filter==='overfilled')return m.overfilled_count>0;if(filter==='stalled')return m.preparing_count>0&&m.done_count<m.required_count;if(filter==='not_started')return m.overall_status==='not_started';if(filter==='locked')return !!m.locked;if(filter==='noted')return !!(m.public_note||m.storage_location);return true;}
+async function render(){
+let auth=await send('/api/auth/status');
+if(!auth.admin){root.innerHTML=`<section class="modal-card"><h1>${t('login')}</h1><div class="password-row"><input class="field" id="pw" type="password" placeholder="${t('password')}"/><button class="button icon-button" id="togglePw" type="button" title="${t('showPassword')}">👁</button></div><div class="actions"><button class="button primary" id="login">${t('enter')}</button></div><p class="sub" id="err"></p></section>`;document.getElementById('togglePw').onclick=()=>{const pw=document.getElementById('pw');pw.type=pw.type==='password'?'text':'password';};document.getElementById('login').onclick=async()=>{try{await send('/api/auth/admin','POST',{password:document.getElementById('pw').value});flash=t('success');render();}catch(e){document.getElementById('err').textContent=`${t('error')}: ${e.message}`;}};return;}
+const [summary,users,white,materials,audit,state]=await Promise.all([send('/api/admin/summary'),send('/api/users'),send('/api/whitelist'),send('/api/admin/materials'),send('/api/admin/audit-log'),send('/api/state')]);
+const visibleMaterials=Object.values(materials).filter(matchesFilter); const userSummaries=state.summaries?.user_summaries||[];
+root.innerHTML=`<header class="topbar"><div class="brand"><strong>${t('title')}</strong><span>${t('project')}</span></div><div class="identity"><select class="field" id="lang"><option value="zh" ${lang==='zh'?'selected':''}>中文</option><option value="en" ${lang==='en'?'selected':''}>English</option></select><a class="button" href="/">${t('back')}</a></div></header>
+${flash?`<div class="empty">${esc(flash)}</div>`:''}
+<section class="summary">${Object.entries(summary).map(([k,v])=>`<div class="metric"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('')}</section>
+<section class="section"><h2>${t('userSummary')}</h2><div class="list">${userSummaries.map(u=>`<div class="card"><div class="card-main"><div><b>${esc(u.user_id)}</b><div class="sub">${t('materialCount')}: ${u.material_count} / ${t('preparingQty')}: ${u.preparing_quantity} / ${t('doneQty')}: ${u.done_quantity}</div></div><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button></div></div>`).join('')}</div></section>
+<section class="section"><h2>${t('whitelist')}</h2><div class="toolbar"><input class="field" id="newUser"/><button class="button primary" id="addUser">${t('add')}</button></div><div class="list">${white.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-rm="${esc(u.user_id)}">${t('remove')}</button></div></div>`).join('')}</div></section>
+<section class="section"><h2>${t('users')}</h2><div class="list">${users.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button></div></div>`).join('')}</div></section>
+<section class="section"><h2>${t('materials')}</h2><div class="toolbar"><select class="field" id="filter"><option value="all">${t('all')}</option><option value="unclaimed">${t('unclaimed')}</option><option value="overfilled">${t('overfilled')}</option><option value="stalled">${t('stalled')}</option><option value="not_started">${t('notStarted')}</option><option value="locked">${t('locked')}</option><option value="noted">${t('noted')}</option></select></div><div class="list">${visibleMaterials.map(m=>`<div class="card"><div class="card-main"><div><b>${esc(m.material_id)}</b><div class="sub">${t('note')}: ${esc(m.public_note||'')} / ${t('location')}: ${esc(m.storage_location||'')}</div><div class="badges"><span class="badge">${esc(m.overall_status)}</span>${m.locked?`<span class="badge missing">${t('locked')}</span>`:''}</div></div><div class="actions"><button class="button" data-note="${esc(m.material_id)}" data-note-value="${esc(m.public_note||'')}" data-location-value="${esc(m.storage_location||'')}">${t('save')}</button><button class="button" data-lock="${esc(m.material_id)}" data-locked="${m.locked?'1':'0'}">${m.locked?t('unlock'):t('lock')}</button><button class="button danger" data-clear-mat="${esc(m.material_id)}">${t('clearMaterial')}</button></div></div></div>`).join('')}</div></section>
+<section class="section"><h2>${t('audit')}</h2><div class="list">${audit.map(a=>`<div class="card"><div class="card-main"><div><b>${esc(actionLabel(a.action))}</b><div class="sub">${t('actor')}: ${esc(a.actor)} / ${t('target')}: ${esc(a.target)} / ${t('time')}: ${esc(new Date(a.created_at*1000).toLocaleString())}</div></div></div></div>`).join('')}</div></section>`;
+document.getElementById('lang').onchange=e=>{lang=e.target.value;localStorage.setItem('lba-stockpile-lang',lang==='zh'?'zh-CN':'en-US');render();};
+document.getElementById('filter').value=filter;document.getElementById('filter').onchange=e=>{filter=e.target.value;render();};
+document.getElementById('addUser').onclick=async()=>{try{await send('/api/whitelist','POST',{user_id:document.getElementById('newUser').value});flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}};
+document.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{try{await send('/api/whitelist/'+encodeURIComponent(b.dataset.rm),'DELETE');flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
+document.querySelectorAll('[data-clear-user]').forEach(b=>b.onclick=async()=>{try{await send('/api/admin/users/'+encodeURIComponent(b.dataset.clearUser)+'/claims','DELETE');flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
+document.querySelectorAll('[data-clear-mat]').forEach(b=>b.onclick=async()=>{try{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.clearMat)+'/claims','DELETE');flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
+document.querySelectorAll('[data-lock]').forEach(b=>b.onclick=async()=>{try{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.lock),'PUT',{locked:b.dataset.locked!=='1'});flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
+document.querySelectorAll('[data-note]').forEach(b=>b.onclick=async()=>{const public_note=prompt(t('note'),b.dataset.noteValue||'');if(public_note===null)return;const storage_location=prompt(t('location'),b.dataset.locationValue||'');if(storage_location===null)return;try{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.note),'PUT',{public_note,storage_location});flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
+}
+render().catch(e=>{root.innerHTML='<pre class="empty">'+esc(e.message)+'</pre>';});
+}());
+</script></body></html>"#
+}
 pub(crate) fn session_db_path(zip_path: &Path) -> Result<PathBuf> {
     let stem = zip_path
         .file_stem()
@@ -2414,7 +2553,14 @@ mod tests {
             claim("minecraft:rail", "c", "done", 10),
             claim("minecraft:chest", "d", "done", 8),
         ];
-        let state = aggregate_state(&materials, Vec::new(), claims, BTreeMap::new(), 1);
+        let state = aggregate_state(
+            &materials,
+            Vec::new(),
+            claims,
+            BTreeMap::new(),
+            Vec::new(),
+            1,
+        );
         assert_eq!(
             state.materials["minecraft:stone"].overall_status,
             "preparing"
@@ -2431,6 +2577,25 @@ mod tests {
         assert_eq!(
             state.materials["minecraft:empty"].overall_status,
             "not_started"
+        );
+        assert_eq!(state.summaries.user_summaries.len(), 4);
+        assert!(
+            state
+                .summaries
+                .overfilled_materials
+                .contains(&"minecraft:chest".to_string())
+        );
+        assert!(
+            state
+                .summaries
+                .unclaimed_materials
+                .contains(&"minecraft:empty".to_string())
+        );
+        assert!(
+            state
+                .summaries
+                .stalled_materials
+                .contains(&"minecraft:stone".to_string())
         );
     }
 
@@ -3002,6 +3167,18 @@ mod tests {
         );
 
         cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn admin_page_i18n_and_collaboration_controls_are_present() {
+        let html = admin_page_html();
+        assert!(html.contains("const i18n="));
+        assert!(html.contains("userSummary"));
+        assert!(html.contains("actionLabel"));
+        assert!(html.contains("overfilled"));
+        assert!(html.contains("stalled"));
+        assert!(html.contains("noted"));
+        assert!(html.contains("togglePw"));
     }
 
     fn fixture_materials() -> StockpileMaterialsData {

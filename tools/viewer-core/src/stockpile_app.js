@@ -40,8 +40,26 @@
       lang = config.default_language;
     }
   }
+  const extraI18n = {
+    'zh-CN': {
+      myTasks: '我的任务', myPreparing: '我备货中', myDone: '我已完成', myTotal: '我参与总数',
+      overfilledOnly: '超额材料', stalledOnly: '已备货未完成', lockedOnly: '只看锁定', notedOnly: '只看有备注',
+      copyAllGaps: '复制全部缺口', copyMine: '复制我的任务', copyUnclaimed: '复制无人认领', copyOverfilled: '复制超额材料',
+      copied: '已复制', readonlyMode: '只读模式', recentBy: '最近修改', publicNote: '备注', storageLocation: '存放位置',
+      locked: '锁定', materialLocked: '材料已锁定', loginRequired: '需要先输入访问密码', readonlyGuest: '只读访客，不能修改',
+      accessPassword: '访问密码'
+    },
+    'en-US': {
+      myTasks: 'My tasks', myPreparing: 'My preparing', myDone: 'My done', myTotal: 'My total',
+      overfilledOnly: 'Overfilled', stalledOnly: 'Prepared not done', lockedOnly: 'Locked only', notedOnly: 'With notes',
+      copyAllGaps: 'Copy all gaps', copyMine: 'Copy my tasks', copyUnclaimed: 'Copy unclaimed', copyOverfilled: 'Copy overfilled',
+      copied: 'Copied', readonlyMode: 'Read-only mode', recentBy: 'Last changed by', publicNote: 'Note', storageLocation: 'Storage',
+      locked: 'Locked', materialLocked: 'Material is locked', loginRequired: 'Access password required', readonlyGuest: 'Read-only guest',
+      accessPassword: 'Access password'
+    }
+  };
   function dict() { return (data.i18n && data.i18n[lang]) || (data.i18n && data.i18n['en-US']) || {}; }
-  function t(key) { return dict()[key] || key; }
+  function t(key) { return dict()[key] || extraI18n[lang]?.[key] || extraI18n['en-US'][key] || key; }
   function storageKey() { return `lba-stockpile:${data.manifest.source_file}:${data.manifest.created_at}`; }
   function loadOfflineState() {
     try { state = JSON.parse(localStorage.getItem(storageKey()) || '{}'); }
@@ -137,7 +155,7 @@
         claims: local.assignee ? [{ user_id: local.assignee, status: status === 'done' ? 'done' : 'preparing', quantity }] : []
       };
     }
-    return { participants: userId ? [{ user_id: userId }] : [], materials, updated_at: Date.now() };
+    return withClientSummaries({ participants: userId ? [{ user_id: userId }] : [], materials, updated_at: Date.now() });
   }
 
   function materialSync(item) {
@@ -223,6 +241,10 @@
         case 'done': return sync.overall_status === 'done';
         case 'mine': return mine;
         case 'unclaimed': return !sync.participants.length;
+        case 'overfilled': return sync.overfilled_count > 0;
+        case 'stalled': return sync.preparing_count > 0 && sync.done_count < sync.required_count;
+        case 'locked': return !!sync.locked;
+        case 'noted': return !!(sync.public_note || sync.storage_location);
         case 'available': return item.recipe_status === 'available';
         case 'unresolved': return item.recipe_status === 'unresolved';
         case 'missing': return item.recipe_status === 'missing';
@@ -267,15 +289,55 @@
     const assigned = items.reduce((sum, item) => sum + materialSync(item).preparing_count + materialSync(item).done_count, 0);
     return { required, done, assigned, progress: required ? Math.min(100, Math.round(done / required * 100)) : 0 };
   }
+  function stateSummaries() {
+    return syncState.summaries || withClientSummaries(syncState).summaries || {};
+  }
+  function myTaskStats() {
+    const my = (stateSummaries().user_summaries || []).find((item) => item.user_id === userId);
+    return my || { material_count: 0, preparing_count: 0, done_count: 0, preparing_quantity: 0, done_quantity: 0 };
+  }
+  function withClientSummaries(source) {
+    const materials = source.materials || {};
+    const users = new Map();
+    const summaries = {
+      user_summaries: [],
+      unclaimed_materials: [],
+      overfilled_materials: [],
+      stalled_materials: [],
+      not_started_materials: [],
+      locked_materials: [],
+      noted_materials: [],
+      recent_activity: source.summaries?.recent_activity || []
+    };
+    for (const [id, sync] of Object.entries(materials)) {
+      if (!(sync.participants || []).length) summaries.unclaimed_materials.push(id);
+      if (sync.overfilled_count > 0) summaries.overfilled_materials.push(id);
+      if (sync.preparing_count > 0 && sync.done_count < sync.required_count) summaries.stalled_materials.push(id);
+      if (sync.overall_status === 'not_started') summaries.not_started_materials.push(id);
+      if (sync.locked) summaries.locked_materials.push(id);
+      if (sync.public_note || sync.storage_location) summaries.noted_materials.push(id);
+      for (const claim of sync.claims || []) {
+        const user = users.get(claim.user_id) || { user_id: claim.user_id, material_count: 0, preparing_count: 0, done_count: 0, preparing_quantity: 0, done_quantity: 0 };
+        user.material_count += 1;
+        if (claim.status === 'done') { user.done_count += 1; user.done_quantity += Number(claim.quantity || 0); }
+        else { user.preparing_count += 1; user.preparing_quantity += Number(claim.quantity || 0); }
+        users.set(claim.user_id, user);
+      }
+    }
+    summaries.user_summaries = [...users.values()];
+    return { ...source, summaries };
+  }
 
   function render() {
     document.title = t('appTitle');
     const items = filteredMaterials();
     const allTotals = totals(data.materials.materials);
+    const mine = myTaskStats();
     app.innerHTML = `<header class="topbar">
       <div class="brand"><strong>${escapeHtml(t('appTitle'))}</strong><span>${escapeHtml(data.manifest.source_file)}</span></div>
       <div class="identity">
         <span class="note">${escapeHtml(isServeMode ? t('syncMode') : t('offlineMode'))}</span>
+        ${writeHint() ? `<span class="note">${escapeHtml(t('readonlyMode'))}: ${escapeHtml(writeHint())}</span>` : ''}
         <span class="badge">${escapeHtml(t('currentId'))}: ${escapeHtml(userId || '-')}</span>
         ${isServeMode ? `<span class="badge">${escapeHtml(t('lastSync'))}: ${escapeHtml(lastSyncText)}</span>${config.mode === 'multi' ? `<span class="badge">${escapeHtml(t('participants'))}: ${(syncState.participants || []).length}</span>` : ''}` : ''}
         <select class="field" id="lang" aria-label="${escapeAttr(t('language'))}"><option value="zh-CN" ${lang === 'zh-CN' ? 'selected' : ''}>中文</option><option value="en-US" ${lang === 'en-US' ? 'selected' : ''}>English</option></select>
@@ -290,10 +352,22 @@
         ${metric(t('totalStacks'), data.materials.summary.total_stacks)}
         <div class="metric"><b>${allTotals.progress}%</b><span>${escapeHtml(t('done'))}</span><div class="progress-track"><div class="progress-bar" style="width:${allTotals.progress}%"></div></div></div>
       </section>
+      <section class="summary">
+        ${metric(t('myPreparing'), `${mine.preparing_count} / ${mine.preparing_quantity}`)}
+        ${metric(t('myDone'), `${mine.done_count} / ${mine.done_quantity}`)}
+        ${metric(t('myTotal'), mine.material_count)}
+        ${metric(t('unclaimed'), stateSummaries().unclaimed_materials?.length || 0)}
+      </section>
       <section class="toolbar">
         <input class="field" id="search" value="${escapeAttr(controls.search)}" placeholder="${escapeAttr(t('search'))}" />
         <select class="field" id="sort">${sortOptions()}</select>
         <select class="field" id="filter">${filterOptions()}</select>
+      </section>
+      <section class="toolbar copy-toolbar">
+        <button class="button" data-copy="all">${escapeHtml(t('copyAllGaps'))}</button>
+        <button class="button" data-copy="mine">${escapeHtml(t('copyMine'))}</button>
+        <button class="button" data-copy="unclaimed">${escapeHtml(t('copyUnclaimed'))}</button>
+        <button class="button" data-copy="overfilled">${escapeHtml(t('copyOverfilled'))}</button>
       </section>
       ${renderAccessLogin()}
       ${renderList(items)}
@@ -312,7 +386,8 @@
   function filterOptions() {
     return [
       ['all', t('all')], ['not_started', t('notStarted')], ['preparing', t('preparing')], ['done', t('done')],
-      ['mine', t('mine')], ['unclaimed', t('unclaimed')], ['available', t('craftable')], ['unresolved', t('unresolved')], ['missing', t('recipeMissing')]
+      ['mine', t('mine')], ['unclaimed', t('unclaimed')], ['overfilled', t('overfilledOnly')], ['stalled', t('stalledOnly')],
+      ['locked', t('lockedOnly')], ['noted', t('notedOnly')], ['available', t('craftable')], ['unresolved', t('unresolved')], ['missing', t('recipeMissing')]
     ].map(([value, label]) => `<option value="${value}" ${controls.filter === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
   }
   function renderList(items) {
@@ -340,7 +415,7 @@
           <div class="material-title">${iconImg(item.item_icon_key, true, item)}<span class="name">${escapeHtml(displayName(item))}</span></div>
           <div class="sub">${escapeHtml(item.namespace_id)} · ${escapeHtml(item.category)} · ${escapeHtml(t('remaining'))} ${sync.remaining_count}</div>
           <div class="badges"><span class="badge ${item.recipe_status}">${recipeLabel(item.recipe_status)}</span><span class="badge ${sync.overall_status}">${overallLabel(sync.overall_status)}</span><span class="badge">${sync.participants.length ? `${escapeHtml(t('claimedBy'))}: ${escapeHtml(sync.participants.join(', '))}` : escapeHtml(t('unclaimed'))}</span>${sync.locked ? `<span class="badge missing">${escapeHtml(t('locked') || 'Locked')}</span>` : ''}${config.show_icon_fallback_badge && item.icon_available === false ? `<span class="badge missing">${escapeHtml(t('iconFallback'))}</span>` : ''}</div>
-          ${(sync.public_note || sync.storage_location || hint) ? `<div class="sub">${sync.public_note ? `${escapeHtml(t('publicNote') || 'Note')}: ${escapeHtml(sync.public_note)} ` : ''}${sync.storage_location ? `${escapeHtml(t('storageLocation') || 'Storage')}: ${escapeHtml(sync.storage_location)} ` : ''}${hint ? `${escapeHtml(hint)}` : ''}</div>` : ''}
+          ${(sync.public_note || sync.storage_location || sync.updated_by || hint) ? `<div class="sub">${sync.public_note ? `${escapeHtml(t('publicNote'))}: ${escapeHtml(sync.public_note)} ` : ''}${sync.storage_location ? `${escapeHtml(t('storageLocation'))}: ${escapeHtml(sync.storage_location)} ` : ''}${sync.updated_by ? `${escapeHtml(t('recentBy'))}: ${escapeHtml(sync.updated_by)} ` : ''}${hint ? `${escapeHtml(hint)}` : ''}</div>` : ''}
         </div>
         <div><div class="count">${item.required_count}</div><div class="actions">
           <input class="field qty" type="number" min="0" value="${Number(claim.quantity || 0)}" data-action="qty" ${disabled ? 'disabled' : ''} />
@@ -512,6 +587,11 @@
       const input = document.getElementById('accessPassword');
       input.type = input.type === 'password' ? 'text' : 'password';
     });
+    document.querySelectorAll('[data-copy]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        await copyText(buildCopyText(button.dataset.copy));
+      });
+    });
     document.querySelectorAll('.card').forEach((card) => {
       const item = data.materials.materials.find((material) => material.namespace_id === card.dataset.id);
       card.querySelector('[data-action="progress"]').addEventListener('click', () => updateClaim(item, 'preparing'));
@@ -552,6 +632,43 @@
       delete state[item.namespace_id];
       saveOfflineState();
       syncState = offlineSyncState();
+    }
+    render();
+  }
+  function buildCopyText(kind) {
+    let items = data.materials.materials;
+    if (kind === 'mine') items = items.filter((item) => (materialSync(item).claims || []).some((claim) => claim.user_id === userId));
+    if (kind === 'unclaimed') items = items.filter((item) => !(materialSync(item).participants || []).length);
+    if (kind === 'overfilled') items = items.filter((item) => materialSync(item).overfilled_count > 0);
+    if (kind === 'all') items = items.filter((item) => materialSync(item).remaining_count > 0);
+    const title = {
+      all: t('copyAllGaps'),
+      mine: t('copyMine'),
+      unclaimed: t('copyUnclaimed'),
+      overfilled: t('copyOverfilled')
+    }[kind] || t('appTitle');
+    const lines = [`# ${title}`, `${t('currentId')}: ${userId || '-'}`, ''];
+    for (const item of items) {
+      const sync = materialSync(item);
+      const count = kind === 'overfilled' ? sync.overfilled_count : kind === 'mine' ? (sync.claims || []).filter((claim) => claim.user_id === userId).reduce((sum, claim) => sum + Number(claim.quantity || 0), 0) : sync.remaining_count;
+      lines.push(`- ${displayName(item)} (${item.namespace_id}) x${count} [${overallLabel(sync.overall_status)}]`);
+    }
+    return lines.join('\n');
+  }
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else {
+        const area = document.createElement('textarea');
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        area.remove();
+      }
+      syncError = t('copied');
+    } catch (error) {
+      syncError = `${t('syncError')}: ${error.message}`;
     }
     render();
   }
