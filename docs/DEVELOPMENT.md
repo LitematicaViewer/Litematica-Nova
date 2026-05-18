@@ -184,6 +184,28 @@ GET https://redenmc.com/api/mc-services/yisibite/<machineId>?xSize=<x>&ySize=<y>
 
 ## BlockState DB 与 overrides
 
+## Stockpile web export handoff
+
+Stockpile 的网页导出链路以 `docs/STOCKPILE_HANDOFF.md` 为交接入口。维护时保持这条边界：
+
+- `litematica_core stockpile export-zip` 负责构建 `single` 离线包和 `multi` 可运行包。
+- `single` 包只需要静态文件，双击 `index.html` 后状态保存在浏览器 localStorage。
+- `multi` 包额外包含 `db/stockpile.sqlite`、选中 target 的 `stockpile_server`、启动脚本和 `README.txt`。
+- `--target` 只允许 `windows-x64`、`linux-x64`、`macos-x64`、`macos-arm64`、`all`，可重复传入；缺少目标平台真实二进制时导出必须失败。
+- 部署端只运行 `stockpile_server --root <unzipped-stockpile-dir> --bind <addr:port>` 或生成脚本里的 `stockpile_server serve --root . --bind <addr:port>`；不要要求 VPS 编译、安装 Rust、上传源码或上传 `.litematic`。
+- access/admin 密码、白名单、`allow_guest_readonly`、`admin_page_enabled` 都在构建期写入 SQLite；部署端通过 `/admin` 或重新导出包调整。
+- recipe trees、item names、icons、i18n 都在导出期进入 ZIP；部署端不读取 `data/cache/`。
+
+更新 stockpile CLI 或 ZIP 内容时，同步检查：
+
+```powershell
+bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project.stockpile.zip --minecraft-version 1.21.10 --mode single
+"access-pass`nadmin-pass`n" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly false --admin-page-enabled true
+scripts\stockpile\verify_stockpile_server_bins.ps1 -Target linux-x64
+```
+
 ## Stockpile recipe cache
 
 合成表缓存统一写入：
@@ -208,7 +230,7 @@ bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-versi
 bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile export-data --input <file.litematic> --output data\stockpile\projects\<name>\materials.json
 bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>.stockpile.zip --minecraft-version 1.21.10 --mode single
-("access-pass`nadmin-pass" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly true --admin-page-enabled true)
+"access-pass`nadmin-pass`n" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly false --admin-page-enabled true
 bin\viewer-backend\litematica_core.exe stockpile serve --zip data\stockpile\exports\<name>.stockpile.zip --bind 127.0.0.1:8787
 bin\viewer-backend\stockpile_server.exe --root <unzipped-stockpile-dir> --bind 127.0.0.1:8787
 bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpile\exports\<name>.stockpile.zip
