@@ -79,10 +79,7 @@ pub fn export_materials_data(
     include_container_items: bool,
     minecraft_version: Option<&str>,
 ) -> Result<StockpileMaterialsData> {
-    let stats = build_materials_output(input, MaterialScope::All, include_container_items)?;
-    let recipe_availability =
-        resolve_recipe_availability(minecraft_version.unwrap_or(DEFAULT_MINECRAFT_VERSION))?;
-    let data = build_stockpile_materials_data(input, stats, &recipe_availability)?;
+    let data = build_materials_data(input, include_container_items, minecraft_version)?;
     let output_path = resolve_output_path(input, output)?;
     ensure_stockpile_project_output(&output_path)?;
     let file = File::create(&output_path).with_context(|| {
@@ -96,6 +93,17 @@ pub fn export_materials_data(
     writer.write_all(b"\n")?;
     writer.flush()?;
     Ok(data)
+}
+
+pub fn build_materials_data(
+    input: &Path,
+    include_container_items: bool,
+    minecraft_version: Option<&str>,
+) -> Result<StockpileMaterialsData> {
+    let stats = build_materials_output(input, MaterialScope::All, include_container_items)?;
+    let recipe_availability =
+        resolve_recipe_availability(minecraft_version.unwrap_or(DEFAULT_MINECRAFT_VERSION))?;
+    build_stockpile_materials_data(input, stats, &recipe_availability)
 }
 
 fn build_stockpile_materials_data(
@@ -168,7 +176,7 @@ fn stockpile_material_item(
 }
 
 #[derive(Debug, Clone)]
-enum RecipeAvailability {
+pub(crate) enum RecipeAvailability {
     Missing,
     Unresolved,
     Available(BTreeSet<String>),

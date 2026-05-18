@@ -204,9 +204,12 @@ CLI：
 bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile export-data --input <file.litematic> --output data\stockpile\projects\<name>\materials.json
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>.stockpile.zip --minecraft-version 1.21.10
 ```
 
 `recipe-fetch` 通过 provider 从 Mojang 官方 version manifest 定位对应 client jar，提取 `data/minecraft/recipe/*.json` 后生成本地缓存。无缓存时 `export-data` 不失败，材料项标记为 `missing`；缓存损坏或版本不匹配时标记为 `unresolved`。
+
+`export-zip` 复用 stockpile materials 数据模型，输出可解压后直接打开的单页网页。ZIP 内包含 `index.html`、`assets/app.css`、`assets/app.js`、`data/manifest.json`、`data/materials.json`、`data/recipe_status.json` 和 `data/recipe_trees.json`；`index.html` 内嵌 `window.__STOCKPILE_DATA__`，避免 `file://` 下 fetch 本地 JSON 被拦截。当前状态只写入浏览器 localStorage，不提供多人同步。
 
 运行资源：
 

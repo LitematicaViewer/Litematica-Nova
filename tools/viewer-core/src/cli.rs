@@ -257,7 +257,9 @@ fn parse_runtime_paths_args(command: String, raw_args: Vec<String>) -> Result<Cl
 fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     let mut args = raw_args.into_iter();
     let Some(subcommand) = args.next() else {
-        bail!("stockpile requires a subcommand: export-data | recipe-status | recipe-fetch");
+        bail!(
+            "stockpile requires a subcommand: export-data | export-zip | recipe-status | recipe-fetch"
+        );
     };
     let mut input = None;
     let mut output = None;
@@ -332,15 +334,16 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     }
     if !matches!(
         subcommand.as_str(),
-        "export-data" | "recipe-status" | "recipe-fetch"
+        "export-data" | "export-zip" | "recipe-status" | "recipe-fetch"
     ) {
         bail!("unsupported stockpile subcommand: {subcommand}");
     }
 
     Ok(CliArgs {
         command: format!("stockpile {subcommand}"),
-        input: if subcommand == "export-data" {
-            input.ok_or_else(|| anyhow::anyhow!("stockpile export-data requires --input <path>"))?
+        input: if matches!(subcommand.as_str(), "export-data" | "export-zip") {
+            input
+                .ok_or_else(|| anyhow::anyhow!("stockpile {subcommand} requires --input <path>"))?
         } else {
             PathBuf::new()
         },
