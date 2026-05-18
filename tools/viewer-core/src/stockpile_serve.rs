@@ -1,4 +1,4 @@
-﻿use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -28,6 +28,10 @@ use crate::stockpile_schema::{
     STOCKPILE_ZIP_SCHEMA_VERSION,
 };
 use crate::stockpile_zip::StockpileZipPayload;
+
+const AUTH_RATE_LIMIT_WINDOW_SECONDS: u64 = 5 * 60;
+const AUTH_RATE_LIMIT_LOCK_SECONDS: u64 = 10 * 60;
+const AUTH_RATE_LIMIT_MAX_FAILURES: u32 = 5;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StockpileServeSummary {
@@ -476,8 +480,12 @@ fn route_request_inner(
         return Ok(response);
     }
     match (request.method.as_str(), path) {
-        ("GET", "/api/project") => return Ok(json_response(200, project, "OK")),
+        ("GET", "/api/project") => {
+            ensure_can_read(&config, &auth)?;
+            return Ok(json_response(200, project, "OK"));
+        }
         ("GET", "/api/state") => {
+            ensure_can_read(&config, &auth)?;
             let state = build_state(db_path, &project.materials)?;
             return Ok(json_response(200, state, "OK"));
         }
@@ -487,12 +495,12 @@ fn route_request_inner(
         ("POST", "/api/auth/access") => {
             let body: AuthRequest = serde_json::from_slice(&request.body)
                 .context("parse access auth request failed")?;
-            return login_response(&conn, "access", body);
+            return login_response(&conn, "access", body, client_rate_limit_key(request));
         }
         ("POST", "/api/auth/admin") => {
             let body: AuthRequest =
                 serde_json::from_slice(&request.body).context("parse admin auth request failed")?;
-            return login_response(&conn, "admin", body);
+            return login_response(&conn, "admin", body, client_rate_limit_key(request));
         }
         ("POST", "/api/auth/logout") => {
             if let Some(token) = cookie_value(request, "lba_stockpile_session") {
@@ -773,7 +781,23 @@ fn auth_status_json(config: &StockpileConfig, auth: &AuthContext) -> Value {
     })
 }
 
-fn login_response(conn: &Connection, kind: &str, body: AuthRequest) -> Result<HttpResponse> {
+fn login_response(
+    conn: &Connection,
+    kind: &str,
+    body: AuthRequest,
+    client_key: String,
+) -> Result<HttpResponse> {
+    if let Some(retry_after) = auth_rate_limit_retry_after(conn, kind, &client_key)? {
+        let mut response = error_response(
+            429,
+            "rate_limited",
+            "too many failed login attempts; retry later",
+        );
+        response
+            .headers
+            .push(("Retry-After".to_string(), retry_after.to_string()));
+        return Ok(response);
+    }
     let Some(hash) = load_password_hash(conn, kind)? else {
         return Ok(error_response(
             403,
@@ -782,8 +806,20 @@ fn login_response(conn: &Connection, kind: &str, body: AuthRequest) -> Result<Ht
         ));
     };
     if !verify_password(&body.password, &hash)? {
+        if let Some(retry_after) = record_auth_failure(conn, kind, &client_key)? {
+            let mut response = error_response(
+                429,
+                "rate_limited",
+                "too many failed login attempts; retry later",
+            );
+            response
+                .headers
+                .push(("Retry-After".to_string(), retry_after.to_string()));
+            return Ok(response);
+        }
         return Ok(error_response(401, "unauthorized", "invalid password"));
     }
+    clear_auth_failures(conn, kind, &client_key)?;
     let token = new_session_token();
     let now = current_unix_timestamp()?;
     let ttl = if kind == "admin" {
@@ -806,6 +842,13 @@ fn login_response(conn: &Connection, kind: &str, body: AuthRequest) -> Result<Ht
 fn require_admin(auth: &AuthContext) -> Result<()> {
     if !auth.admin {
         bail!("admin_required");
+    }
+    Ok(())
+}
+
+fn ensure_can_read(config: &StockpileConfig, auth: &AuthContext) -> Result<()> {
+    if config.access_password_enabled && !auth.access && !config.allow_guest_readonly {
+        bail!("unauthorized");
     }
     Ok(())
 }
@@ -855,6 +898,98 @@ fn client_ip(request: &HttpRequest) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn client_rate_limit_key(request: &HttpRequest) -> String {
+    client_ip(request).unwrap_or_else(|| "local".to_string())
+}
+
+fn auth_rate_limit_key(kind: &str, client_key: &str) -> String {
+    format!("{kind}:{client_key}")
+}
+
+fn auth_rate_limit_retry_after(
+    conn: &Connection,
+    kind: &str,
+    client_key: &str,
+) -> Result<Option<u64>> {
+    let now = current_unix_timestamp()?;
+    clear_expired_auth_rate_limits(conn, now)?;
+    let key = auth_rate_limit_key(kind, client_key);
+    let locked_until = conn
+        .query_row(
+            "SELECT locked_until FROM auth_rate_limits WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .context("load auth rate limit failed")?;
+    Ok(locked_until
+        .and_then(|locked_until| u64::try_from(locked_until).ok())
+        .and_then(|locked_until| {
+            if locked_until > now {
+                Some(locked_until - now)
+            } else {
+                None
+            }
+        }))
+}
+
+fn record_auth_failure(conn: &Connection, kind: &str, client_key: &str) -> Result<Option<u64>> {
+    let now = current_unix_timestamp()?;
+    clear_expired_auth_rate_limits(conn, now)?;
+    let key = auth_rate_limit_key(kind, client_key);
+    let existing = conn
+        .query_row(
+            "SELECT failures, first_failed_at FROM auth_rate_limits WHERE key = ?1",
+            params![key],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .context("load auth failure count failed")?;
+    let (failures, first_failed_at) = match existing {
+        Some((failures, first_failed_at))
+            if u64::try_from(first_failed_at).ok().is_some_and(|first| {
+                now.saturating_sub(first) <= AUTH_RATE_LIMIT_WINDOW_SECONDS
+            }) =>
+        {
+            (
+                u32::try_from(failures).unwrap_or(0).saturating_add(1),
+                first_failed_at,
+            )
+        }
+        _ => (1, now as i64),
+    };
+    let locked_until = if failures >= AUTH_RATE_LIMIT_MAX_FAILURES {
+        (now + AUTH_RATE_LIMIT_LOCK_SECONDS) as i64
+    } else {
+        0
+    };
+    conn.execute(
+        "INSERT INTO auth_rate_limits(key, failures, first_failed_at, locked_until, updated_at)
+         VALUES(?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(key) DO UPDATE SET failures = excluded.failures, first_failed_at = excluded.first_failed_at, locked_until = excluded.locked_until, updated_at = excluded.updated_at",
+        params![key, failures as i64, first_failed_at, locked_until, now as i64],
+    )
+    .context("record auth failure failed")?;
+    Ok((locked_until > 0).then_some(AUTH_RATE_LIMIT_LOCK_SECONDS))
+}
+
+fn clear_auth_failures(conn: &Connection, kind: &str, client_key: &str) -> Result<()> {
+    let key = auth_rate_limit_key(kind, client_key);
+    conn.execute("DELETE FROM auth_rate_limits WHERE key = ?1", params![key])
+        .context("clear auth failures failed")?;
+    Ok(())
+}
+
+fn clear_expired_auth_rate_limits(conn: &Connection, now: u64) -> Result<()> {
+    let stale_before = now.saturating_sub(AUTH_RATE_LIMIT_WINDOW_SECONDS) as i64;
+    conn.execute(
+        "DELETE FROM auth_rate_limits WHERE (locked_until = 0 AND updated_at < ?1) OR (locked_until > 0 AND locked_until < ?2)",
+        params![stale_before, now as i64],
+    )
+    .context("clear expired auth rate limits failed")?;
+    Ok(())
+}
+
 fn error_response(status: u16, code: &str, message: &str) -> HttpResponse {
     json_response(
         status,
@@ -871,6 +1006,7 @@ fn status_reason(status: u16) -> &'static str {
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
+        429 => "Too Many Requests",
         500 => "Internal Server Error",
         _ => "Error",
     }
@@ -1006,6 +1142,13 @@ fn init_db_conn(conn: &Connection) -> Result<()> {
             user_id TEXT,
             created_at INTEGER NOT NULL,
             expires_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS auth_rate_limits (
+            key TEXT PRIMARY KEY NOT NULL,
+            failures INTEGER NOT NULL CHECK(failures >= 0),
+            first_failed_at INTEGER NOT NULL,
+            locked_until INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
         );
         "#,
     )
@@ -2645,7 +2788,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
 fn write_response(stream: &mut TcpStream, response: HttpResponse) -> Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Credentials: true\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nContent-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'\r\n",
         response.status,
         response.reason,
         response.content_type,
@@ -3377,6 +3520,116 @@ mod tests {
             &project,
         );
         assert_eq!(ok.status, 200);
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn access_password_blocks_project_and_state_reads_until_authenticated() {
+        let fixture = exported_fixture("access_blocks_reads");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        set_access_password(&fixture, "secret").expect("set password");
+        config_set(&fixture, "allow_guest_readonly", "false").expect("disable readonly guests");
+        let project = load_project_from_zip(&fixture).expect("project");
+        let source = AssetSource::Zip(fixture.clone());
+
+        let blocked_project =
+            route_request(&request("GET", "/api/project", b""), &source, &db, &project);
+        let blocked_state =
+            route_request(&request("GET", "/api/state", b""), &source, &db, &project);
+        assert_eq!(blocked_project.status, 401);
+        assert_eq!(blocked_state.status, 401);
+
+        config_set(&fixture, "allow_guest_readonly", "true").expect("enable readonly guests");
+        let readonly_state =
+            route_request(&request("GET", "/api/state", b""), &source, &db, &project);
+        assert_eq!(readonly_state.status, 200);
+
+        config_set(&fixture, "allow_guest_readonly", "false").expect("disable readonly guests");
+        let login = route_request_inner(
+            &request(
+                "POST",
+                "/api/auth/access",
+                br#"{"password":"secret","user_id":"alex"}"#,
+            ),
+            &source,
+            &db,
+            &project,
+        )
+        .expect("login");
+        let cookie = login
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Set-Cookie")
+            .map(|(_, value)| value.clone())
+            .expect("cookie");
+        let ok_state = route_request(
+            &request_with_cookie("GET", "/api/state", b"", &cookie),
+            &source,
+            &db,
+            &project,
+        );
+        assert_eq!(ok_state.status, 200);
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn auth_login_rate_limits_repeated_failures() {
+        let fixture = exported_fixture("auth_rate_limit");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        set_access_password(&fixture, "secret").expect("set password");
+        let project = load_project_from_zip(&fixture).expect("project");
+        let source = AssetSource::Zip(fixture.clone());
+
+        for _ in 0..(AUTH_RATE_LIMIT_MAX_FAILURES - 1) {
+            let response = route_request_inner(
+                &request(
+                    "POST",
+                    "/api/auth/access",
+                    br#"{"password":"wrong","user_id":"alex"}"#,
+                ),
+                &source,
+                &db,
+                &project,
+            )
+            .expect("bad login response");
+            assert_eq!(response.status, 401);
+        }
+
+        let limited = route_request_inner(
+            &request(
+                "POST",
+                "/api/auth/access",
+                br#"{"password":"wrong","user_id":"alex"}"#,
+            ),
+            &source,
+            &db,
+            &project,
+        )
+        .expect("limited login response");
+        assert_eq!(limited.status, 429);
+        assert!(
+            limited
+                .headers
+                .iter()
+                .any(|(name, _)| name == "Retry-After")
+        );
+
+        let still_limited = route_request_inner(
+            &request(
+                "POST",
+                "/api/auth/access",
+                br#"{"password":"secret","user_id":"alex"}"#,
+            ),
+            &source,
+            &db,
+            &project,
+        )
+        .expect("still limited login response");
+        assert_eq!(still_limited.status, 429);
 
         cleanup_fixture(&fixture, &db, Path::new(""));
     }

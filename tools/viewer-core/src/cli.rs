@@ -42,6 +42,7 @@ pub struct CliArgs {
     pub whitelist_file: Option<PathBuf>,
     pub allow_guest_readonly: Option<bool>,
     pub admin_page_enabled: Option<bool>,
+    pub stockpile_targets: Vec<String>,
 }
 
 pub fn parse_args() -> Result<CliArgs> {
@@ -227,6 +228,7 @@ pub fn parse_args() -> Result<CliArgs> {
         whitelist_file: None,
         allow_guest_readonly: None,
         admin_page_enabled: None,
+        stockpile_targets: Vec::new(),
     })
 }
 
@@ -293,6 +295,7 @@ fn parse_runtime_paths_args(command: String, raw_args: Vec<String>) -> Result<Cl
         whitelist_file: None,
         allow_guest_readonly: None,
         admin_page_enabled: None,
+        stockpile_targets: Vec::new(),
     })
 }
 
@@ -321,6 +324,7 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     let mut whitelist_file = None;
     let mut allow_guest_readonly = None;
     let mut admin_page_enabled = None;
+    let mut stockpile_targets = Vec::new();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -364,6 +368,13 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
                     bail!("missing value after --admin-page-enabled");
                 };
                 admin_page_enabled = Some(parse_bool_arg("--admin-page-enabled", &value)?);
+            }
+            "--target" => {
+                let Some(value) = args.next() else {
+                    bail!("missing value after --target");
+                };
+                validate_stockpile_target(&value)?;
+                stockpile_targets.push(value);
             }
             "--mode" => {
                 let Some(value) = args.next() else {
@@ -499,6 +510,11 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
             _ if arg.starts_with("--admin-page-enabled=") => {
                 let value = arg.trim_start_matches("--admin-page-enabled=");
                 admin_page_enabled = Some(parse_bool_arg("--admin-page-enabled", value)?);
+            }
+            _ if arg.starts_with("--target=") => {
+                let value = arg.trim_start_matches("--target=");
+                validate_stockpile_target(value)?;
+                stockpile_targets.push(value.to_string());
             }
             _ if arg.starts_with("--mode=") => {
                 let value = arg.trim_start_matches("--mode=");
@@ -663,7 +679,17 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
         whitelist_file,
         allow_guest_readonly,
         admin_page_enabled,
+        stockpile_targets,
     })
+}
+
+fn validate_stockpile_target(value: &str) -> Result<()> {
+    match value {
+        "windows-x64" | "linux-x64" | "macos-x64" | "macos-arm64" | "all" => Ok(()),
+        _ => bail!(
+            "stockpile --target must be windows-x64, linux-x64, macos-x64, macos-arm64, or all"
+        ),
+    }
 }
 
 fn parse_bool_arg(name: &str, value: &str) -> Result<bool> {
@@ -781,6 +807,7 @@ fn parse_replace_blocks_args(command: String, raw_args: Vec<String>) -> Result<C
         whitelist_file: None,
         allow_guest_readonly: None,
         admin_page_enabled: None,
+        stockpile_targets: Vec::new(),
     })
 }
 
@@ -879,6 +906,7 @@ fn parse_generate_args(command: String, raw_args: Vec<String>) -> Result<CliArgs
         whitelist_file: None,
         allow_guest_readonly: None,
         admin_page_enabled: None,
+        stockpile_targets: Vec::new(),
     })
 }
 
@@ -978,5 +1006,6 @@ fn parse_edit_metadata_args(command: String, raw_args: Vec<String>) -> Result<Cl
         whitelist_file: None,
         allow_guest_readonly: None,
         admin_page_enabled: None,
+        stockpile_targets: Vec::new(),
     })
 }
