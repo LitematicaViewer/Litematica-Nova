@@ -453,7 +453,7 @@ function tokenizeExpression(expression: string): string[] {
   };
 
   for (const char of expression) {
-    if (char === "(" || char === ")" || char === "∪" || char === "∩" || char === "-") {
+    if (char === "(" || char === ")" || char === "∪" || char === "|" || char === "∩" || char === "&" || char === "-") {
       flush();
       tokens.push(char);
       continue;
@@ -465,8 +465,8 @@ function tokenizeExpression(expression: string): string[] {
 }
 
 function precedence(operator: string): number {
-  if (operator === "∩") return 2;
-  if (operator === "∪" || operator === "-") return 1;
+  if (operator === "∩" || operator === "&") return 2;
+  if (operator === "∪" || operator === "|" || operator === "-") return 1;
   return 0;
 }
 
@@ -486,7 +486,7 @@ function toRpn(tokens: string[]): string[] {
       operators.pop();
       continue;
     }
-    if (token === "∪" || token === "∩" || token === "-") {
+    if (token === "∪" || token === "|" || token === "∩" || token === "&" || token === "-") {
       while (operators.length && precedence(operators[operators.length - 1]) >= precedence(token)) {
         output.push(operators.pop()!);
       }
@@ -504,8 +504,8 @@ function toRpn(tokens: string[]): string[] {
 }
 
 function applyOperator(left: Set<string>, right: Set<string>, operator: string): Set<string> {
-  if (operator === "∪") return new Set([...left, ...right]);
-  if (operator === "∩") return new Set([...left].filter((value) => right.has(value)));
+  if (operator === "∪" || operator === "|") return new Set([...left, ...right]);
+  if (operator === "∩" || operator === "&") return new Set([...left].filter((value) => right.has(value)));
   if (operator === "-") return new Set([...left].filter((value) => !right.has(value)));
   return new Set(left);
 }
@@ -520,7 +520,7 @@ export function evaluateEnumeratorExpression(expression: string, collections: En
     const dependencies: string[] = [];
 
     for (const token of rpn) {
-      if (token === "∪" || token === "∩" || token === "-") {
+      if (token === "∪" || token === "|" || token === "∩" || token === "&" || token === "-") {
         const right = stack.pop();
         const left = stack.pop();
         if (!left || !right) throw new Error("表达式不完整。");
