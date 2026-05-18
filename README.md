@@ -20,7 +20,7 @@ Litematica-BA 是面向 Minecraft `.litematic` 投影文件的桌面工具。当
 - 属性页 metadata 编辑、保存、另存、恢复。
 - 统计页和材料列表，支持可选统计容器内物品。
 - 材料 CSV 导出，UTF-8 BOM，列为 `名称,数字,统计数据`。
-- Stockpile 材料数据导出与合成表缓存 preflight。
+- Stockpile 材料数据导出、合成表缓存 preflight 和离线网页 ZIP 导出。
 - 渲染页 3D cache 构建、进度轮询、静态预览、嵌入 viewer、弹窗 viewer。
 - 分层页读取真实 cache。
 - 替换页 dry-run/apply。
@@ -96,6 +96,7 @@ cargo check
 cd ..\..
 bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test.stockpile.zip --minecraft-version 1.21.10
 
 # 构建并同步 litematica_core
 cd tools\viewer-core

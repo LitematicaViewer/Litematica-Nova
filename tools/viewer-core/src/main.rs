@@ -4,7 +4,7 @@ use std::io::{self, BufWriter, Write};
 use anyhow::Result;
 use litematica_core::{
     analyze, cache_layer, cli, generate_projection, mesh, metadata_edit, recipe_cache,
-    replace_blocks, runtime_paths, stats_api, stockpile, visual,
+    replace_blocks, runtime_paths, stats_api, stockpile, stockpile_zip, visual,
 };
 use serde::Serialize;
 
@@ -57,6 +57,15 @@ fn main() -> Result<()> {
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("missing --minecraft-version"))?;
             let output = recipe_cache::fetch_recipe_cache(minecraft_version)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile export-zip" => {
+            let output = stockpile_zip::export_stockpile_zip(
+                &args.input,
+                args.output.as_deref(),
+                args.include_container_items,
+                args.minecraft_version.as_deref(),
+            )?;
             emit_output(&output, None)?;
         }
         "stats" => {

@@ -16,5 +16,6 @@ pub mod replace_blocks;
 pub mod runtime_paths;
 pub mod stats_api;
 pub mod stockpile;
+pub mod stockpile_zip;
 pub mod storage;
 pub mod visual;
