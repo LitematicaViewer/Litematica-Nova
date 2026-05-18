@@ -11,7 +11,7 @@ from typing import Iterable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DB_DIR = REPO_ROOT / ".tmp" / "assistant"
+DB_DIR = REPO_ROOT / "data" / "cache" / "assistant"
 DB_PATH = DB_DIR / "lba_assistant_index.sqlite"
 
 DOC_FILES = [
@@ -56,7 +56,7 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 DOC_ABSTRACTS = {
     "README.md": "项目入口，说明 desktop-nova 主线、运行方式、关键目录和常用命令。",
-    "ARCHITECTURE.md": "desktop-nova 分层架构、Tauri/Rust 后端桥接、AppData、viewer 关系和禁区。",
+    "ARCHITECTURE.md": "desktop-nova 分层架构、Tauri/Rust 后端桥接、data 用户目录、viewer 关系和禁区。",
     "DEVELOPMENT.md": "开发验证命令、projection plan、AI、RedenMC、BlockState、清理政策和故障排查。",
 }
 

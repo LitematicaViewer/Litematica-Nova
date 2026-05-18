@@ -3,8 +3,8 @@ use std::io::{self, BufWriter, Write};
 
 use anyhow::Result;
 use litematica_core::{
-    analyze, cache_layer, cli, generate_projection, mesh, metadata_edit, replace_blocks, stats_api,
-    visual,
+    analyze, cache_layer, cli, generate_projection, mesh, metadata_edit, recipe_cache,
+    replace_blocks, runtime_paths, stats_api, stockpile, visual,
 };
 use serde::Serialize;
 
@@ -29,7 +29,36 @@ fn emit_output<T: Serialize>(value: &T, output: Option<&std::path::Path>) -> Res
 
 fn main() -> Result<()> {
     let args = cli::parse_args()?;
+    let runtime_paths = runtime_paths::ensure_runtime_layout()?;
     match args.command.as_str() {
+        "runtime-paths" => {
+            emit_output(&runtime_paths, args.output.as_deref())?;
+        }
+        "stockpile export-data" => {
+            let output = stockpile::export_materials_data(
+                &args.input,
+                args.output.as_deref(),
+                args.include_container_items,
+                args.minecraft_version.as_deref(),
+            )?;
+            emit_output(&output, None)?;
+        }
+        "stockpile recipe-status" => {
+            let minecraft_version = args
+                .minecraft_version
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --minecraft-version"))?;
+            let output = recipe_cache::recipe_status(minecraft_version)?;
+            emit_output(&output, None)?;
+        }
+        "stockpile recipe-fetch" => {
+            let minecraft_version = args
+                .minecraft_version
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --minecraft-version"))?;
+            let output = recipe_cache::fetch_recipe_cache(minecraft_version)?;
+            emit_output(&output, None)?;
+        }
         "stats" => {
             let output = stats_api::build_stats_output(&args.input, args.include_container_items)?;
             emit_output(&output, args.output.as_deref())?;
