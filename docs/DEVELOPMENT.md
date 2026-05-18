@@ -1,4 +1,4 @@
-﻿# 开发说明
+# 开发说明
 
 本文合并开发、构建、验证、projection plan、AI、RedenMC、BlockState、清理和故障排查规则。
 

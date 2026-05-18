@@ -1,4 +1,4 @@
-import { readImageBase64 } from "../platform/files";
+import { getActiveIconSearchRoots, readIconFromRoot, type BlockIconSlot } from "./gameResources";
 
 const iconCache = new Map<string, Promise<string | null>>();
 
@@ -17,16 +17,30 @@ function iconCandidates(blockId: string): string[] {
   return Array.from(new Set(candidates));
 }
 
-async function loadIcon(blockId: string): Promise<string | null> {
+function iconRelativePaths(candidate: string): string[] {
+  return [
+    `${candidate}.png`,
+    `assets/minecraft/textures/block/${candidate}.png`,
+    `assets/minecraft/textures/item/${candidate}.png`,
+    `textures/block/${candidate}.png`,
+    `textures/item/${candidate}.png`,
+    `block/${candidate}.png`,
+    `item/${candidate}.png`,
+  ];
+}
+
+async function loadIcon(blockId: string, slot: BlockIconSlot): Promise<string | null> {
   if (!blockId) return null;
-  const paths = ["block", "item", "pack-in"];
-  for (const folder of paths) {
+  const roots = await getActiveIconSearchRoots(slot);
+  for (const root of roots) {
     for (const candidate of iconCandidates(blockId)) {
-      try {
-        const dataUrl = await readImageBase64(`${folder}/${candidate}.png`);
-        if (dataUrl) return dataUrl;
-      } catch {
-        // Try the next candidate.
+      for (const relativePath of iconRelativePaths(candidate)) {
+        try {
+          const dataUrl = await readIconFromRoot(root, relativePath);
+          if (dataUrl) return dataUrl;
+        } catch {
+          // Try the next candidate.
+        }
       }
     }
   }
@@ -34,11 +48,19 @@ async function loadIcon(blockId: string): Promise<string | null> {
 }
 
 /**
+ * Clears the icon promise cache after active icon resources change.
+ */
+export function invalidateBlockIconCache(): void {
+  iconCache.clear();
+}
+
+/**
  * Loads and caches the data URL for a Minecraft block or item icon.
  */
-export function getBlockIconDataUrl(blockId: string): Promise<string | null> {
-  if (!iconCache.has(blockId)) {
-    iconCache.set(blockId, loadIcon(blockId));
+export function getBlockIconDataUrl(blockId: string, slot: BlockIconSlot = "material_list"): Promise<string | null> {
+  const cacheKey = `${slot}:${blockId}`;
+  if (!iconCache.has(cacheKey)) {
+    iconCache.set(cacheKey, loadIcon(blockId, slot));
   }
-  return iconCache.get(blockId)!;
+  return iconCache.get(cacheKey)!;
 }

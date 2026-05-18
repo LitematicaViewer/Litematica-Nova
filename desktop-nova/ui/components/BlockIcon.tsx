@@ -1,35 +1,45 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { getBlockIconDataUrl } from "../../src/business/facade";
+import { listenEvent } from "../../src/platform/events";
 
 /**
  * Renders a Minecraft block or item icon at the shared UI icon size.
  */
 export function BlockIcon({ blockId }: { blockId: string }) {
   const [src, setSrc] = useState<string | null>(null);
+  const [resourceRevision, setResourceRevision] = useState(0);
+
+  useEffect(() => {
+    const unlistenPromise = listenEvent("resource-block-icons-changed", () => {
+      setResourceRevision((value) => value + 1);
+    }).catch(() => undefined);
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten?.());
+    };
+  }, []);
 
   useEffect(() => {
     if (!blockId) return;
+    setSrc(null);
 
     let active = true;
     const fetchIcon = async () => {
       const dataUrl = await getBlockIconDataUrl(blockId);
       if (active) setSrc(dataUrl);
     };
-    
+
     fetchIcon();
-    
+
     return () => { active = false; };
-  }, [blockId]);
-  
+  }, [blockId, resourceRevision]);
+
   if (src) {
     return <img className="block-icon-image" src={src} alt="" />;
   }
-  
+
   return (
     <div className="block-icon-fallback">
       {blockId.replace("minecraft:", "").slice(0, 2).toUpperCase()}
     </div>
   );
 }
-
-

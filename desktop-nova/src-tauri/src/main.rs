@@ -2,14 +2,15 @@
 
 use base64::Engine;
 use flate2::read::GzDecoder;
-use image::{DynamicImage, RgbaImage};
+use image::{DynamicImage, GenericImageView, RgbaImage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::env;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::Mutex;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tauri_plugin_dialog::DialogExt;
@@ -2337,6 +2338,641 @@ struct RedenDownloadOutput {
     bytes: usize,
 }
 
+#[derive(Clone, Serialize)]
+struct VaultBlockIconProgress {
+    current: usize,
+    total: usize,
+    downloaded: usize,
+    status: String,
+}
+
+#[derive(Serialize)]
+struct VaultBlockIconDownloadOutput {
+    total: usize,
+    downloaded: usize,
+    target_dir: String,
+    root_relpath: String,
+}
+
+const VAULT_SITE_LABEL: &str = "https://ccvaults.com/";
+const VAULT_API_TOKEN_PATH: &str = "/api/token";
+const VAULT_API_BLOCKS_PATH: &str = "/api/assets/20.%20Blocks";
+const VAULT_API_ITEMS_PATH: &str = "/api/assets/10.%20Items";
+const VAULT_API_ALL_ASSETS_PATH: &str = "/api/assets/all";
+const VAULT_API_KEY: &str = "242gag58XGJjOfPPl9nFE8xz92YjMHysKyvVaJ";
+const VAULT_LEGACY_API_KEY: &str = "mcicons-apikey-0201osaiudx-24493534";
+const VAULT_BLOCK_ICON_ROOT_RELPATH: &str = "minecraft-assets/block_icon/vault";
+const VAULT_ITEM_ICON_ROOT_RELPATH: &str = "minecraft-assets/item/vault";
+const VAULT_BLOCK_CATEGORY_NAME: &str = "20. Blocks";
+const VAULT_ITEM_CATEGORY_NAME: &str = "10. Items";
+
+fn emit_vault_block_icon_progress(
+    app: &AppHandle,
+    current: usize,
+    total: usize,
+    downloaded: usize,
+    status: impl Into<String>,
+) {
+    let _ = app.emit(
+        "vault-block-icons-download-progress",
+        VaultBlockIconProgress {
+            current,
+            total,
+            downloaded,
+            status: status.into(),
+        },
+    );
+}
+
+fn emit_vault_item_icon_progress(
+    app: &AppHandle,
+    current: usize,
+    total: usize,
+    downloaded: usize,
+    status: impl Into<String>,
+) {
+    let _ = app.emit(
+        "vault-item-icons-download-progress",
+        VaultBlockIconProgress {
+            current,
+            total,
+            downloaded,
+            status: status.into(),
+        },
+    );
+}
+
+fn vault_api_url(path: &str) -> Result<reqwest::Url, String> {
+    reqwest::Url::parse(VAULT_SITE_LABEL)
+        .and_then(|base| base.join(path))
+        .map_err(|e| e.to_string())
+}
+
+fn vault_asset_url(parts: &[&str]) -> Result<String, String> {
+    let mut url = reqwest::Url::parse(VAULT_SITE_LABEL).map_err(|e| e.to_string())?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| "failed to build Vault asset URL".to_string())?;
+        segments.clear();
+        for part in parts {
+            segments.push(part);
+        }
+    }
+    Ok(url.to_string())
+}
+
+fn find_between<'a>(text: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let start_index = text.find(start)? + start.len();
+    let end_index = text[start_index..].find(end)? + start_index;
+    Some(&text[start_index..end_index])
+}
+
+fn find_vault_index_script_path(html: &str) -> Option<String> {
+    let marker = "src=\"";
+    let mut offset = 0;
+    while let Some(index) = html[offset..].find(marker) {
+        let start = offset + index + marker.len();
+        let Some(end) = html[start..].find('"').map(|value| start + value) else {
+            break;
+        };
+        let src = &html[start..end];
+        if src.contains("static/js/index.") && src.ends_with(".js") {
+            return Some(src.to_string());
+        }
+        offset = end + 1;
+    }
+    None
+}
+
+fn extract_vault_api_key_from_script(script: &str) -> Option<String> {
+    if let Some(prefix_index) = script.find("post(\"/api/token\"") {
+        let prefix = &script[..prefix_index];
+        if let Some(key_index) = prefix.rfind("const e=\"") {
+            if let Some(candidate) = prefix[key_index + "const e=\"".len()..]
+                .split('"')
+                .next()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    find_between(script, "x-api-key\":\"", "\"")
+        .or_else(|| find_between(script, "x-api-key\":", "}"))
+        .map(str::trim)
+        .map(|value| value.trim_matches('"'))
+        .filter(|value| !value.is_empty() && !value.contains(':') && !value.contains('{'))
+        .map(ToString::to_string)
+}
+
+fn discover_vault_api_key(client: &reqwest::blocking::Client, home_html: &str) -> Option<String> {
+    let script_path = find_vault_index_script_path(home_html)?;
+    let script_url = reqwest::Url::parse(VAULT_SITE_LABEL)
+        .ok()?
+        .join(&script_path)
+        .ok()?;
+    let script = client.get(script_url).send().ok()?.text().ok()?;
+    extract_vault_api_key_from_script(&script)
+}
+
+fn request_vault_token(
+    client: &reqwest::blocking::Client,
+    api_key: &str,
+) -> Result<String, String> {
+    let token_response = client
+        .post(vault_api_url(VAULT_API_TOKEN_PATH)?)
+        .header("x-api-key", api_key)
+        .header(reqwest::header::CONTENT_TYPE, "application/json;charset=UTF-8")
+        .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
+        .header(reqwest::header::ORIGIN, VAULT_SITE_LABEL.trim_end_matches('/'))
+        .header(reqwest::header::REFERER, VAULT_SITE_LABEL)
+        .header("X-Requested-With", "XMLHttpRequest")
+        .body("{}")
+        .send()
+        .map_err(|e| format!("获取 Vault 令牌失败: {e}"))?;
+    let status = token_response.status();
+    let token_text = token_response.text().map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("获取 Vault 令牌失败: HTTP {status}"));
+    }
+    let token_payload: serde_json::Value = serde_json::from_str(&token_text)
+        .map_err(|e| format!("Vault 令牌响应解析失败: {e}"))?;
+    token_payload
+        .get("token")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| "Vault 未返回可用访问令牌".to_string())
+}
+
+fn acquire_vault_token(
+    client: &reqwest::blocking::Client,
+    home_html: &str,
+) -> Result<String, String> {
+    let mut token_error = String::new();
+    for api_key in [VAULT_API_KEY, VAULT_LEGACY_API_KEY] {
+        match request_vault_token(client, api_key) {
+            Ok(value) => return Ok(value),
+            Err(error) => token_error = error,
+        }
+    }
+    if let Some(discovered_key) = discover_vault_api_key(client, home_html) {
+        match request_vault_token(client, &discovered_key) {
+            Ok(value) => return Ok(value),
+            Err(error) => token_error = error,
+        }
+    }
+    Err(token_error)
+}
+
+fn normalize_vault_block_id(file_name: &str) -> Option<String> {
+    let stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(file_name)
+        .trim()
+        .to_lowercase();
+    if stem.is_empty() {
+        return None;
+    }
+    let sanitized: String = stem
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
+}
+
+fn vault_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .cookie_store(true)
+        .user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        )
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn vault_fetch_json_with_auth(
+    client: &reqwest::blocking::Client,
+    path: &str,
+    token: &str,
+) -> Result<serde_json::Value, String> {
+    let response = client
+        .get(vault_api_url(path)?)
+        .bearer_auth(token)
+        .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
+        .header(reqwest::header::ORIGIN, VAULT_SITE_LABEL.trim_end_matches('/'))
+        .header(reqwest::header::REFERER, VAULT_SITE_LABEL)
+        .send()
+        .map_err(|e| e.to_string())?;
+    let status = response.status();
+    let text = response.text().map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("Vault API failed: status={} body={}", status, text));
+    }
+    serde_json::from_str(&text).map_err(|e| format!("Vault JSON parse failed: {e}; body={text}"))
+}
+
+fn collect_vault_block_entries(payload: &serde_json::Value) -> Vec<(String, String)> {
+    collect_vault_category_entries(payload, VAULT_BLOCK_CATEGORY_NAME)
+}
+
+fn collect_vault_item_entries(payload: &serde_json::Value) -> Vec<(String, String)> {
+    collect_vault_category_entries(payload, VAULT_ITEM_CATEGORY_NAME)
+}
+
+fn collect_vault_category_entries(
+    payload: &serde_json::Value,
+    category_name: &str,
+) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+    let mut seen = HashSet::new();
+    let Some(rows) = payload.as_array() else {
+        return entries;
+    };
+    for row in rows {
+        let Some(subcategories) = row.get("subcategories").and_then(|value| value.as_array()) else {
+            continue;
+        };
+        for subcategory in subcategories {
+            let Some(sub_name) = subcategory.get("name").and_then(|value| value.as_str()).map(str::trim) else {
+                continue;
+            };
+            if sub_name.is_empty() {
+                continue;
+            }
+            let Some(files) = subcategory.get("files").and_then(|value| value.as_array()) else {
+                continue;
+            };
+            for file in files {
+                let Some(file_name) = file.as_str().map(str::trim) else {
+                    continue;
+                };
+                if !file_name.to_lowercase().ends_with(".png") {
+                    continue;
+                }
+                let Some(block_id) = normalize_vault_block_id(file_name) else {
+                    continue;
+                };
+                if !seen.insert(block_id.clone()) {
+                    continue;
+                }
+                if let Ok(url) = vault_asset_url(&["assets", category_name, sub_name, file_name]) {
+                    entries.push((block_id, url));
+                }
+            }
+        }
+    }
+    entries
+}
+
+fn collect_vault_block_entries_from_all(payload: &serde_json::Value) -> Vec<(String, String)> {
+    collect_vault_category_entries_from_all(payload, VAULT_BLOCK_CATEGORY_NAME)
+}
+
+fn collect_vault_item_entries_from_all(payload: &serde_json::Value) -> Vec<(String, String)> {
+    collect_vault_category_entries_from_all(payload, VAULT_ITEM_CATEGORY_NAME)
+}
+
+fn collect_vault_category_entries_from_all(
+    payload: &serde_json::Value,
+    category_name: &str,
+) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+    let mut seen = HashSet::new();
+    let Some(rows) = payload.as_array() else {
+        return entries;
+    };
+    for row in rows {
+        let Some(files) = row.get("files").and_then(|value| value.as_array()) else {
+            continue;
+        };
+        for file in files {
+            let Some(file_row) = file.as_object() else {
+                continue;
+            };
+            let file_name = file_row
+                .get("file")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .unwrap_or("");
+            if !file_name.to_lowercase().ends_with(".png") {
+                continue;
+            }
+            let category = file_row
+                .get("category")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .unwrap_or("");
+            if category != category_name {
+                continue;
+            }
+            let Some(block_id) = normalize_vault_block_id(file_name) else {
+                continue;
+            };
+            if !seen.insert(block_id.clone()) {
+                continue;
+            }
+            let subcategory = file_row
+                .get("subcategory")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .unwrap_or("");
+            let url = if subcategory.is_empty() {
+                vault_asset_url(&["assets", category, file_name])
+            } else {
+                vault_asset_url(&["assets", category, subcategory, file_name])
+            };
+            if let Ok(url) = url {
+                entries.push((block_id, url));
+            }
+        }
+    }
+    entries
+}
+
+fn download_one_vault_block_icon(
+    client: &reqwest::blocking::Client,
+    target_dir: &Path,
+    block_id: &str,
+    file_url: &str,
+) -> bool {
+    download_one_vault_icon(
+        client,
+        target_dir,
+        block_id,
+        file_url,
+        "Litematica-Nova-icon-manager/1.0",
+        image::imageops::FilterType::Lanczos3,
+    )
+}
+
+fn download_one_vault_item_icon(
+    client: &reqwest::blocking::Client,
+    target_dir: &Path,
+    item_id: &str,
+    file_url: &str,
+) -> bool {
+    download_one_vault_icon(
+        client,
+        target_dir,
+        item_id,
+        file_url,
+        "Litematica-Nova-item-icon-manager/1.0",
+        image::imageops::FilterType::Nearest,
+    )
+}
+
+fn download_one_vault_icon(
+    client: &reqwest::blocking::Client,
+    target_dir: &Path,
+    icon_id: &str,
+    file_url: &str,
+    user_agent: &str,
+    resize_filter: image::imageops::FilterType,
+) -> bool {
+    let response = match client
+        .get(file_url)
+        .header(reqwest::header::USER_AGENT, user_agent)
+        .header(reqwest::header::REFERER, VAULT_SITE_LABEL)
+        .send()
+    {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+    let bytes = match response.bytes() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let mut image = match image::load_from_memory(&bytes) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    if image.dimensions() != (32, 32) {
+        image = image.resize_exact(32, 32, resize_filter);
+    }
+    let mut out = Vec::new();
+    if image
+        .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+        .is_err()
+    {
+        return false;
+    }
+    std::fs::write(target_dir.join(format!("{icon_id}.png")), out).is_ok()
+}
+
+fn download_vault_block_icons_sync(app: AppHandle) -> Result<VaultBlockIconDownloadOutput, String> {
+    emit_vault_block_icon_progress(&app, 0, 1, 0, "正在连接到 ccvaults.com...");
+    let client = vault_client()?;
+    let home = client
+        .get(VAULT_SITE_LABEL)
+        .send()
+        .map_err(|e| format!("无法连接 Vault 首页: {e}"))?;
+    if !home.status().is_success() {
+        return Err(format!("无法连接 Vault 首页: HTTP {}", home.status()));
+    }
+    let home_html = home.text().unwrap_or_default();
+
+    emit_vault_block_icon_progress(&app, 0, 1, 0, "正在获取访问令牌...");
+    let token = acquire_vault_token(&client, &home_html)?;
+
+    emit_vault_block_icon_progress(&app, 0, 1, 0, "正在获取方块图标索引...");
+    let blocks_payload = vault_fetch_json_with_auth(&client, VAULT_API_BLOCKS_PATH, &token)?;
+    let mut entries = collect_vault_block_entries(&blocks_payload);
+    if entries.is_empty() {
+        let all_payload = vault_fetch_json_with_auth(&client, VAULT_API_ALL_ASSETS_PATH, &token)?;
+        entries = collect_vault_block_entries_from_all(&all_payload);
+    }
+    if entries.is_empty() {
+        return Err("未解析到任何方块图标索引".to_string());
+    }
+
+    let target_dir = current_user_config_dir()?.join(VAULT_BLOCK_ICON_ROOT_RELPATH);
+    std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    let total = entries.len();
+    emit_vault_block_icon_progress(&app, 0, total, 0, format!("准备并行下载 {total} 个图标..."));
+
+    let worker_count = total.min(12).max(1);
+    let mut buckets: Vec<Vec<(String, String)>> = (0..worker_count).map(|_| Vec::new()).collect();
+    for (index, entry) in entries.into_iter().enumerate() {
+        buckets[index % worker_count].push(entry);
+    }
+
+    let target_dir = Arc::new(target_dir);
+    let (sender, receiver) = mpsc::channel::<(String, bool)>();
+    let mut handles = Vec::new();
+    for bucket in buckets {
+        let sender = sender.clone();
+        let client = client.clone();
+        let target_dir = target_dir.clone();
+        handles.push(std::thread::spawn(move || {
+            for (block_id, file_url) in bucket {
+                let ok = download_one_vault_block_icon(&client, &target_dir, &block_id, &file_url);
+                let _ = sender.send((block_id, ok));
+            }
+        }));
+    }
+    drop(sender);
+
+    let mut completed = 0;
+    let mut downloaded = 0;
+    for (block_id, ok) in receiver {
+        completed += 1;
+        if ok {
+            downloaded += 1;
+        }
+        emit_vault_block_icon_progress(
+            &app,
+            completed,
+            total,
+            downloaded,
+            format!("正在下载图标: {block_id} ({completed}/{total})，成功 {downloaded}"),
+        );
+    }
+    for handle in handles {
+        let _ = handle.join();
+    }
+    if downloaded == 0 {
+        return Err("未成功下载任何方块图标".to_string());
+    }
+    emit_vault_block_icon_progress(
+        &app,
+        total,
+        total,
+        downloaded,
+        format!("下载完成：{downloaded}/{total}"),
+    );
+
+    Ok(VaultBlockIconDownloadOutput {
+        total,
+        downloaded,
+        target_dir: target_dir.display().to_string(),
+        root_relpath: VAULT_BLOCK_ICON_ROOT_RELPATH.to_string(),
+    })
+}
+
+#[tauri::command]
+async fn download_vault_block_icons(app: AppHandle) -> Result<VaultBlockIconDownloadOutput, String> {
+    tauri::async_runtime::spawn_blocking(move || download_vault_block_icons_sync(app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn download_vault_item_icons_sync(app: AppHandle) -> Result<VaultBlockIconDownloadOutput, String> {
+    emit_vault_item_icon_progress(&app, 0, 1, 0, "正在连接到 ccvaults.com...");
+    let client = vault_client()?;
+    let home = client
+        .get(VAULT_SITE_LABEL)
+        .send()
+        .map_err(|e| format!("无法连接 Vault 首页: {e}"))?;
+    if !home.status().is_success() {
+        return Err(format!("无法连接 Vault 首页: HTTP {}", home.status()));
+    }
+    let home_html = home.text().unwrap_or_default();
+
+    emit_vault_item_icon_progress(&app, 0, 1, 0, "正在获取访问令牌...");
+    let token = acquire_vault_token(&client, &home_html)?;
+
+    emit_vault_item_icon_progress(&app, 0, 1, 0, "正在获取物品图标索引...");
+    let items_payload = vault_fetch_json_with_auth(&client, VAULT_API_ITEMS_PATH, &token)?;
+    let mut entries = collect_vault_item_entries(&items_payload);
+    if entries.is_empty() {
+        let all_payload = vault_fetch_json_with_auth(&client, VAULT_API_ALL_ASSETS_PATH, &token)?;
+        entries = collect_vault_item_entries_from_all(&all_payload);
+    }
+    if entries.is_empty() {
+        return Err("未解析到任何物品图标索引".to_string());
+    }
+
+    let target_dir = current_user_config_dir()?.join(VAULT_ITEM_ICON_ROOT_RELPATH);
+    std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    let total = entries.len();
+    emit_vault_item_icon_progress(&app, 0, total, 0, format!("准备并行下载 {total} 个图标..."));
+
+    let worker_count = total.min(12).max(1);
+    let mut buckets: Vec<Vec<(String, String)>> = (0..worker_count).map(|_| Vec::new()).collect();
+    for (index, entry) in entries.into_iter().enumerate() {
+        buckets[index % worker_count].push(entry);
+    }
+
+    let target_dir = Arc::new(target_dir);
+    let (sender, receiver) = mpsc::channel::<(String, bool)>();
+    let mut handles = Vec::new();
+    for bucket in buckets {
+        let sender = sender.clone();
+        let client = client.clone();
+        let target_dir = target_dir.clone();
+        handles.push(std::thread::spawn(move || {
+            for (item_id, file_url) in bucket {
+                let ok = download_one_vault_item_icon(&client, &target_dir, &item_id, &file_url);
+                let _ = sender.send((item_id, ok));
+            }
+        }));
+    }
+    drop(sender);
+
+    let mut completed = 0;
+    let mut downloaded = 0;
+    for (item_id, ok) in receiver {
+        completed += 1;
+        if ok {
+            downloaded += 1;
+        }
+        emit_vault_item_icon_progress(
+            &app,
+            completed,
+            total,
+            downloaded,
+            format!("正在下载图标: {item_id} ({completed}/{total})，成功 {downloaded}"),
+        );
+    }
+    for handle in handles {
+        let _ = handle.join();
+    }
+    if downloaded == 0 {
+        return Err("未成功下载任何物品图标".to_string());
+    }
+    emit_vault_item_icon_progress(
+        &app,
+        total,
+        total,
+        downloaded,
+        format!("下载完成：{downloaded}/{total}"),
+    );
+
+    Ok(VaultBlockIconDownloadOutput {
+        total,
+        downloaded,
+        target_dir: target_dir.display().to_string(),
+        root_relpath: VAULT_ITEM_ICON_ROOT_RELPATH.to_string(),
+    })
+}
+
+#[tauri::command]
+async fn download_vault_item_icons(app: AppHandle) -> Result<VaultBlockIconDownloadOutput, String> {
+    tauri::async_runtime::spawn_blocking(move || download_vault_item_icons_sync(app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 fn reden_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(120))
@@ -2928,6 +3564,30 @@ async fn open_ui_demo_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn open_asset_manager_window(app: AppHandle) -> Result<(), String> {
+    const LABEL: &str = "asset-manager";
+
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        LABEL,
+        tauri::WebviewUrl::App("asset_manager.html".into()),
+    )
+    .title("Game Asset Manager")
+    .inner_size(1040.0, 700.0)
+    .min_inner_size(760.0, 520.0)
+    .build()
+    .map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(BuildState {
@@ -2995,6 +3655,8 @@ fn main() {
             read_projection_preview_image,
             open_file_parent_dir,
             copy_file_to_directory,
+            download_vault_block_icons,
+            download_vault_item_icons,
             open_workspace_path,
             cleanup_local_temp_files,
             reden_search_litematica,
@@ -3009,6 +3671,7 @@ fn main() {
             open_material_list_window,
             open_reden_library_window,
             open_local_library_folders_window,
+            open_asset_manager_window,
             open_ui_demo_window
         ])
         .run(tauri::generate_context!())

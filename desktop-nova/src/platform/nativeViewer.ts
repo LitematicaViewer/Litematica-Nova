@@ -34,6 +34,13 @@ export function openUiDemoWindow(): Promise<void> {
   return invoke("open_ui_demo_window");
 }
 
+/**
+ * Opens or focuses the desktop game asset manager window.
+ */
+export function openAssetManagerWindow(): Promise<void> {
+  return invoke("open_asset_manager_window");
+}
+
 export function openPath(path: string): Promise<void> {
   return openShell(path);
 }

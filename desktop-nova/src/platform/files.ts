@@ -34,6 +34,13 @@ export interface DirectoryEntryInfo {
   extension: string;
 }
 
+export interface VaultBlockIconDownloadOutput {
+  total: number;
+  downloaded: number;
+  target_dir: string;
+  root_relpath: string;
+}
+
 export function readWorkspaceFile(path: string): Promise<string> {
   return invoke("read_file_string", { path });
 }
@@ -98,6 +105,20 @@ export function openFileParentDir(filePath: string): Promise<void> {
 
 export function copyFileToDirectory(sourcePath: string, targetDirectory: string, targetFileName: string, overwrite = false): Promise<CopyFileToDirectoryOutput> {
   return invoke("copy_file_to_directory", { sourcePath, targetDirectory, targetFileName, overwrite });
+}
+
+/**
+ * Downloads the CCVaults block icon set into the configured user resource directory.
+ */
+export function downloadVaultBlockIconsFromVault(): Promise<VaultBlockIconDownloadOutput> {
+  return invoke("download_vault_block_icons");
+}
+
+/**
+ * Downloads the CCVaults item icon set into the configured user resource directory.
+ */
+export function downloadVaultItemIconsFromVault(): Promise<VaultBlockIconDownloadOutput> {
+  return invoke("download_vault_item_icons");
 }
 
 export function readImageBase64(path: string): Promise<string> {
