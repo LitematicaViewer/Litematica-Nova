@@ -60,11 +60,13 @@ fn main() -> Result<()> {
             emit_output(&output, None)?;
         }
         "stockpile export-zip" => {
+            let mode = args.stockpile_mode.as_deref().unwrap_or("single").parse()?;
             let output = stockpile_zip::export_stockpile_zip(
                 &args.input,
                 args.output.as_deref(),
                 args.include_container_items,
                 args.minecraft_version.as_deref(),
+                mode,
             )?;
             emit_output(&output, None)?;
         }

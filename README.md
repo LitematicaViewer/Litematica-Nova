@@ -5,7 +5,7 @@ Litematica-BA 是面向 Minecraft `.litematic` 投影文件的桌面工具。当
 ## 当前主线
 
 - `desktop-nova/`：当前桌面端主线，包含 UI、Tauri 后端桥接、Nova 主题和页面入口。
-- `tools/viewer-core/`：Rust 后端源码，提供 `litematica_core` 和 `litematica_native_viewer`。
+- `tools/viewer-core/`：Rust 后端源码，提供 `litematica_core`、`litematica_native_viewer` 和轻量 `stockpile_server`。
 - `bin/viewer-backend/`：桌面应用运行时读取的后端 exe 目录，文件应由 `tools/viewer-core` release build 同步而来。
 - `data/`：运行资源和用户态数据，包括生成模板、AI prompt、BlockState DB、中文翻译、投影库、cache、stockpile、Reden 下载和导出物。
 - `scripts/`：维护脚本、诊断导出、索引生成和数据生成脚本。
@@ -20,7 +20,7 @@ Litematica-BA 是面向 Minecraft `.litematic` 投影文件的桌面工具。当
 - 属性页 metadata 编辑、保存、另存、恢复。
 - 统计页和材料列表，支持可选统计容器内物品。
 - 材料 CSV 导出，UTF-8 BOM，列为 `名称,数字,统计数据`。
-- Stockpile 材料数据导出、合成表缓存 preflight、离线网页 ZIP 导出和本地 serve/SQLite 协作。
+- Stockpile 材料数据导出、合成表缓存 preflight、离线/多人网页 ZIP 导出和轻量 `stockpile_server`/SQLite 协作。
 - 渲染页 3D cache 构建、进度轮询、静态预览、嵌入 viewer、弹窗 viewer。
 - 分层页读取真实 cache。
 - 替换页 dry-run/apply。
@@ -96,8 +96,10 @@ cargo check
 cd ..\..
 bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
-bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test.stockpile.zip --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test.stockpile.zip --minecraft-version 1.21.10 --mode single
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test-multi.stockpile.zip --minecraft-version 1.21.10 --mode multi
 bin\viewer-backend\litematica_core.exe stockpile serve --zip data\stockpile\exports\test.stockpile.zip --bind 127.0.0.1:8787
+bin\viewer-backend\stockpile_server.exe --root <unzipped-stockpile-dir> --bind 127.0.0.1:8787
 bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpile\exports\test.stockpile.zip
 bin\viewer-backend\litematica_core.exe stockpile session-export --zip data\stockpile\exports\test.stockpile.zip --output data\stockpile\sessions\test.state.json
 bin\viewer-backend\litematica_core.exe stockpile session-reset --zip data\stockpile\exports\test.stockpile.zip --yes
@@ -110,6 +112,11 @@ bin\viewer-backend\litematica_core.exe stockpile config-reset --zip data\stockpi
 cd tools\viewer-core
 cargo build --release --bin litematica_core
 Copy-Item target\release\litematica_core.exe ..\..\bin\viewer-backend\litematica_core.exe -Force
+
+# 构建并同步 stockpile_server
+cd tools\viewer-core
+cargo build --release --bin stockpile_server
+Copy-Item target\release\stockpile_server.exe ..\..\bin\viewer-backend\stockpile_server.exe -Force
 
 # 构建并同步 native viewer
 cd tools\viewer-core

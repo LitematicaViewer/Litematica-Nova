@@ -2,6 +2,7 @@
   let data = window.__STOCKPILE_DATA__;
   const app = document.getElementById('app');
   const isServeMode = location.protocol === 'http:' || location.protocol === 'https:';
+  const isMultiPackage = data && data.manifest && data.manifest.export_mode === 'multi';
   const userKey = 'lba-stockpile-user-id';
   const langKey = 'lba-stockpile-lang';
   let lang = pickInitialLang();
@@ -77,6 +78,9 @@
       } catch (error) {
         syncError = `${t('syncError')}: ${error.message}`;
       }
+    }
+    if (!isServeMode && isMultiPackage) {
+      syncError = t('multiPreviewWarning') || 'This is a multiplayer package. Run the start script to sync; direct file preview cannot sync.';
     }
     loadOfflineState();
     document.title = t('appTitle');

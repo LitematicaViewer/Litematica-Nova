@@ -36,6 +36,7 @@ pub struct CliArgs {
     pub config_value: Option<String>,
     pub user: Option<String>,
     pub password_stdin: bool,
+    pub stockpile_mode: Option<String>,
 }
 
 pub fn parse_args() -> Result<CliArgs> {
@@ -215,6 +216,7 @@ pub fn parse_args() -> Result<CliArgs> {
         config_value: None,
         user: None,
         password_stdin: false,
+        stockpile_mode: None,
     })
 }
 
@@ -275,6 +277,7 @@ fn parse_runtime_paths_args(command: String, raw_args: Vec<String>) -> Result<Cl
         config_value: None,
         user: None,
         password_stdin: false,
+        stockpile_mode: None,
     })
 }
 
@@ -297,6 +300,7 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     let mut config_value = None;
     let mut user = None;
     let mut password_stdin = false;
+    let mut stockpile_mode = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -321,6 +325,15 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
             "--replace" => replace = true,
             "--password-stdin" => password_stdin = true,
             "--password" => bail!("stockpile password options must use --password-stdin"),
+            "--mode" => {
+                let Some(value) = args.next() else {
+                    bail!("missing value after --mode");
+                };
+                if value != "single" && value != "multi" {
+                    bail!("stockpile --mode must be single or multi");
+                }
+                stockpile_mode = Some(value);
+            }
             "--user" => {
                 let Some(value) = args.next() else {
                     bail!("missing value after --user");
@@ -431,6 +444,13 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
             }
             _ if arg.starts_with("--password=") => {
                 bail!("stockpile password options must use --password-stdin");
+            }
+            _ if arg.starts_with("--mode=") => {
+                let value = arg.trim_start_matches("--mode=");
+                if value != "single" && value != "multi" {
+                    bail!("stockpile --mode must be single or multi");
+                }
+                stockpile_mode = Some(value.to_string());
             }
             _ if arg.starts_with('-') => bail!("unknown argument: {arg}"),
             _ => {
@@ -582,6 +602,7 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
         config_value,
         user,
         password_stdin,
+        stockpile_mode,
     })
 }
 
@@ -686,6 +707,7 @@ fn parse_replace_blocks_args(command: String, raw_args: Vec<String>) -> Result<C
         config_value: None,
         user: None,
         password_stdin: false,
+        stockpile_mode: None,
     })
 }
 
@@ -778,6 +800,7 @@ fn parse_generate_args(command: String, raw_args: Vec<String>) -> Result<CliArgs
         config_value: None,
         user: None,
         password_stdin: false,
+        stockpile_mode: None,
     })
 }
 
@@ -871,5 +894,6 @@ fn parse_edit_metadata_args(command: String, raw_args: Vec<String>) -> Result<Cl
         config_value: None,
         user: None,
         password_stdin: false,
+        stockpile_mode: None,
     })
 }

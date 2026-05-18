@@ -32,7 +32,7 @@ use crate::stockpile_zip::StockpileZipPayload;
 #[derive(Debug, Clone, Serialize)]
 pub struct StockpileServeSummary {
     pub bind: String,
-    pub zip: PathBuf,
+    pub root: PathBuf,
     pub database: PathBuf,
 }
 
@@ -321,9 +321,10 @@ pub fn serve_stockpile_zip(zip_path: &Path, bind: &str) -> Result<StockpileServe
             anyhow!("bind stockpile server failed: {bind}: {error}")
         }
     })?;
+    let source = AssetSource::Zip(zip_path.clone());
     let summary = StockpileServeSummary {
         bind: bind.to_string(),
-        zip: zip_path.clone(),
+        root: zip_path.clone(),
         database: db_path.clone(),
     };
     eprintln!(
@@ -334,7 +335,58 @@ pub fn serve_stockpile_zip(zip_path: &Path, bind: &str) -> Result<StockpileServe
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(error) = handle_connection(stream, &zip_path, &db_path, &project) {
+                if let Err(error) = handle_connection(stream, &source, &db_path, &project) {
+                    eprintln!("stockpile serve request failed: {error:#}");
+                }
+            }
+            Err(error) => eprintln!("stockpile serve accept failed: {error}"),
+        }
+    }
+    Ok(summary)
+}
+
+pub fn serve_stockpile_root(root: &Path, bind: &str) -> Result<StockpileServeSummary> {
+    let root = absolutize(root)?;
+    if !root.is_dir() {
+        bail!(
+            "stockpile server root does not exist or is not a directory: {}",
+            root.display()
+        );
+    }
+    let project = load_project_from_root(&root)?;
+    let db_path = root.join("db").join("stockpile.sqlite");
+    let expected_hash = project_hash(&project)?;
+    ensure_session_db(&db_path, &expected_hash)?;
+    let config = load_config(&db_path)?;
+    if (bind.starts_with("0.0.0.0:") || bind.starts_with("[::]:"))
+        && !config.access_password_enabled
+    {
+        eprintln!(
+            "WARNING: stockpile_server is bound to {bind} without access_password_enabled; public writes may be exposed"
+        );
+    }
+    let listener = TcpListener::bind(bind).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AddrInUse {
+            anyhow!("bind stockpile server failed: {bind}; address is already in use")
+        } else {
+            anyhow!("bind stockpile server failed: {bind}: {error}")
+        }
+    })?;
+    let source = AssetSource::Root(root.clone());
+    let summary = StockpileServeSummary {
+        bind: bind.to_string(),
+        root: root.clone(),
+        database: db_path.clone(),
+    };
+    eprintln!(
+        "stockpile server listening on http://{} using {}",
+        bind,
+        db_path.display()
+    );
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                if let Err(error) = handle_connection(stream, &source, &db_path, &project) {
                     eprintln!("stockpile serve request failed: {error:#}");
                 }
             }
@@ -346,23 +398,29 @@ pub fn serve_stockpile_zip(zip_path: &Path, bind: &str) -> Result<StockpileServe
 
 fn handle_connection(
     mut stream: TcpStream,
-    zip_path: &Path,
+    source: &AssetSource,
     db_path: &Path,
     project: &StockpileZipPayload,
 ) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     let request = read_request(&mut stream)?;
-    let response = route_request(&request, zip_path, db_path, project);
+    let response = route_request(&request, source, db_path, project);
     write_response(&mut stream, response)
+}
+
+#[derive(Debug, Clone)]
+enum AssetSource {
+    Zip(PathBuf),
+    Root(PathBuf),
 }
 
 fn route_request(
     request: &HttpRequest,
-    zip_path: &Path,
+    source: &AssetSource,
     db_path: &Path,
     project: &StockpileZipPayload,
 ) -> HttpResponse {
-    match route_request_inner(request, zip_path, db_path, project) {
+    match route_request_inner(request, source, db_path, project) {
         Ok(response) => response,
         Err(error) => {
             let message = error.to_string();
@@ -387,7 +445,7 @@ fn route_request(
 
 fn route_request_inner(
     request: &HttpRequest,
-    zip_path: &Path,
+    source: &AssetSource,
     db_path: &Path,
     project: &StockpileZipPayload,
 ) -> Result<HttpResponse> {
@@ -629,7 +687,7 @@ fn route_request_inner(
         if path == "/admin" || path == "/admin/" {
             return Ok(admin_page_response());
         }
-        return serve_zip_asset(zip_path, path);
+        return serve_asset(source, path);
     }
 
     Ok(json_response(
@@ -818,6 +876,21 @@ pub(crate) fn init_db(path: &Path) -> Result<()> {
     let conn = Connection::open(path)
         .with_context(|| format!("open stockpile session db failed: {}", path.display()))?;
     init_db_conn(&conn)
+}
+
+pub fn create_initial_session_db(path: &Path) -> Result<()> {
+    let _ = fs::remove_file(path);
+    init_db(path)?;
+    let conn = Connection::open(path)
+        .with_context(|| format!("open stockpile session db failed: {}", path.display()))?;
+    set_meta(&conn, "zip_hash", "")?;
+    conn.execute_batch(
+        r#"
+        PRAGMA wal_checkpoint(TRUNCATE);
+        PRAGMA journal_mode = DELETE;
+        "#,
+    )?;
+    Ok(())
 }
 
 fn init_db_conn(conn: &Connection) -> Result<()> {
@@ -2102,6 +2175,51 @@ pub(crate) fn load_project_from_zip(zip_path: &Path) -> Result<StockpileZipPaylo
     Ok(payload)
 }
 
+pub fn load_project_from_root(root: &Path) -> Result<StockpileZipPayload> {
+    let data_root = root.join("data");
+    let payload = StockpileZipPayload {
+        manifest: read_json_file(&data_root.join("manifest.json"))?,
+        materials: read_json_file(&data_root.join("materials.json"))?,
+        recipe_status: read_json_file(&data_root.join("recipe_status.json"))?,
+        recipe_trees: read_json_file(&data_root.join("recipe_trees.json"))?,
+        icons: read_json_file(&data_root.join("icons.json")).unwrap_or_else(|_| {
+            StockpileIconPayload {
+                manifest: None,
+                by_key: BTreeMap::new(),
+            }
+        }),
+        item_names: read_json_file(&data_root.join("item_names.json")).unwrap_or_else(|_| {
+            StockpileItemNamesPayload {
+                schema_version: STOCKPILE_ITEM_NAMES_SCHEMA_VERSION,
+                status: "missing".to_string(),
+                manifest: None,
+                names: BTreeMap::new(),
+                warning: Some("stockpile root has no item_names payload".to_string()),
+            }
+        }),
+        i18n: read_json_file(&data_root.join("i18n.json")).unwrap_or_else(|_| json!({})),
+        icon_files: Vec::new(),
+    };
+    validate_project_schema(&payload)?;
+    Ok(payload)
+}
+
+fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("read JSON file failed: {}", path.display()))?;
+    serde_json::from_str(&text)
+        .with_context(|| format!("parse JSON file failed: {}", path.display()))
+}
+
+fn project_hash(project: &StockpileZipPayload) -> Result<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(serde_json::to_vec(&project.manifest)?);
+    hasher.update(serde_json::to_vec(&project.materials)?);
+    hasher.update(serde_json::to_vec(&project.recipe_status)?);
+    hasher.update(serde_json::to_vec(&project.recipe_trees)?);
+    Ok(to_hex(&hasher.finalize()))
+}
+
 fn validate_project_schema(project: &StockpileZipPayload) -> Result<()> {
     let manifest = &project.manifest;
     if manifest.schema_version != STOCKPILE_ZIP_SCHEMA_VERSION {
@@ -2147,19 +2265,36 @@ fn read_json_entry<T: for<'de> Deserialize<'de>>(
     serde_json::from_str(&text).with_context(|| format!("parse zip JSON failed: {name}"))
 }
 
-fn serve_zip_asset(zip_path: &Path, path: &str) -> Result<HttpResponse> {
+fn serve_asset(source: &AssetSource, path: &str) -> Result<HttpResponse> {
+    match source {
+        AssetSource::Zip(zip_path) => serve_zip_asset(zip_path, path),
+        AssetSource::Root(root) => serve_root_asset(root, path),
+    }
+}
+
+fn asset_name(path: &str) -> Result<String> {
     let name = if path == "/" || path == "/index.html" {
         "index.html".to_string()
     } else {
         path.trim_start_matches('/').replace('\\', "/")
     };
     if name.contains("..") || name.starts_with('/') {
-        return Ok(json_response(
-            400,
-            json!({ "error": "invalid path" }),
-            "Bad Request",
-        ));
+        bail!("invalid asset path");
     }
+    Ok(name)
+}
+
+fn serve_zip_asset(zip_path: &Path, path: &str) -> Result<HttpResponse> {
+    let name = match asset_name(path) {
+        Ok(name) => name,
+        Err(_) => {
+            return Ok(json_response(
+                400,
+                json!({ "error": "invalid path" }),
+                "Bad Request",
+            ));
+        }
+    };
     let mut zip = ZipArchive::new(File::open(zip_path)?)?;
     let Ok(mut entry) = zip.by_name(&name) else {
         return Ok(json_response(
@@ -2170,6 +2305,36 @@ fn serve_zip_asset(zip_path: &Path, path: &str) -> Result<HttpResponse> {
     };
     let mut bytes = Vec::new();
     entry.read_to_end(&mut bytes)?;
+    Ok(HttpResponse {
+        status: 200,
+        reason: "OK".to_string(),
+        content_type: content_type(&name).to_string(),
+        headers: Vec::new(),
+        body: bytes,
+    })
+}
+
+fn serve_root_asset(root: &Path, path: &str) -> Result<HttpResponse> {
+    let name = match asset_name(path) {
+        Ok(name) => name,
+        Err(_) => {
+            return Ok(json_response(
+                400,
+                json!({ "error": "invalid path" }),
+                "Bad Request",
+            ));
+        }
+    };
+    let path = root.join(&name);
+    if !path.is_file() {
+        return Ok(json_response(
+            404,
+            json!({ "error": "not found" }),
+            "Not Found",
+        ));
+    }
+    let bytes =
+        fs::read(&path).with_context(|| format!("read asset failed: {}", path.display()))?;
     Ok(HttpResponse {
         status: 200,
         reason: "OK".to_string(),
@@ -2197,7 +2362,7 @@ fn admin_page_html() -> &'static str {
 <body><div id="admin" class="shell"></div><script>
 (function(){
 const i18n={
-zh:{title:'管理员',login:'管理员登录',password:'管理员密码',enter:'登录',project:'备货单',summary:'项目总览',users:'用户',whitelist:'白名单',materials:'材料管理',audit:'审计日志',add:'添加',remove:'移除',lock:'锁定',unlock:'解锁',save:'保存',clearMaterial:'清空材料备货',clearUser:'清空用户备货',note:'备注',location:'存放位置',language:'语言',back:'返回备货单',filter:'筛选',all:'全部',unclaimed:'无人认领',overfilled:'超额',stalled:'已备货未完成',notStarted:'未开始',locked:'锁定',noted:'有备注',userSummary:'用户汇总',materialCount:'材料数',preparing:'备货中',done:'已完成',preparingQty:'备货中数量',doneQty:'完成数量',actor:'操作者',action:'动作',target:'目标',time:'时间',success:'操作成功',error:'错误',showPassword:'显示密码',claim_put:'更新备货',claim_delete:'取消备货',material_note_update:'更新材料备注',claims_clear_material:'清空材料备货',claims_clear_user:'清空用户备货',whitelist_add:'添加白名单',whitelist_remove:'移除白名单',session_reset:'重置会话',session_import:'导入会话',session_import_replace:'替换会话',access_password_set:'设置访问密码',admin_password_set:'设置管理员密码',access_password_clear:'清除访问密码',admin_password_clear:'清除管理员密码'},
+zh:{title:'绠＄悊鍛?,login:'绠＄悊鍛樼櫥褰?,password:'绠＄悊鍛樺瘑鐮?,enter:'鐧诲綍',project:'澶囪揣鍗?,summary:'椤圭洰鎬昏',users:'鐢ㄦ埛',whitelist:'鐧藉悕鍗?,materials:'鏉愭枡绠＄悊',audit:'瀹¤鏃ュ織',add:'娣诲姞',remove:'绉婚櫎',lock:'閿佸畾',unlock:'瑙ｉ攣',save:'淇濆瓨',clearMaterial:'娓呯┖鏉愭枡澶囪揣',clearUser:'娓呯┖鐢ㄦ埛澶囪揣',note:'澶囨敞',location:'瀛樻斁浣嶇疆',language:'璇█',back:'杩斿洖澶囪揣鍗?,filter:'绛涢€?,all:'鍏ㄩ儴',unclaimed:'鏃犱汉璁ら',overfilled:'瓒呴',stalled:'宸插璐ф湭瀹屾垚',notStarted:'鏈紑濮?,locked:'閿佸畾',noted:'鏈夊娉?,userSummary:'鐢ㄦ埛姹囨€?,materialCount:'鏉愭枡鏁?,preparing:'澶囪揣涓?,done:'宸插畬鎴?,preparingQty:'澶囪揣涓暟閲?,doneQty:'瀹屾垚鏁伴噺',actor:'鎿嶄綔鑰?,action:'鍔ㄤ綔',target:'鐩爣',time:'鏃堕棿',success:'鎿嶄綔鎴愬姛',error:'閿欒',showPassword:'鏄剧ず瀵嗙爜',claim_put:'鏇存柊澶囪揣',claim_delete:'鍙栨秷澶囪揣',material_note_update:'鏇存柊鏉愭枡澶囨敞',claims_clear_material:'娓呯┖鏉愭枡澶囪揣',claims_clear_user:'娓呯┖鐢ㄦ埛澶囪揣',whitelist_add:'娣诲姞鐧藉悕鍗?,whitelist_remove:'绉婚櫎鐧藉悕鍗?,session_reset:'閲嶇疆浼氳瘽',session_import:'瀵煎叆浼氳瘽',session_import_replace:'鏇挎崲浼氳瘽',access_password_set:'璁剧疆璁块棶瀵嗙爜',admin_password_set:'璁剧疆绠＄悊鍛樺瘑鐮?,access_password_clear:'娓呴櫎璁块棶瀵嗙爜',admin_password_clear:'娓呴櫎绠＄悊鍛樺瘑鐮?},
 en:{title:'Admin',login:'Admin login',password:'Admin password',enter:'Login',project:'Stockpile',summary:'Summary',users:'Users',whitelist:'Whitelist',materials:'Materials',audit:'Audit log',add:'Add',remove:'Remove',lock:'Lock',unlock:'Unlock',save:'Save',clearMaterial:'Clear material claims',clearUser:'Clear user claims',note:'Note',location:'Storage',language:'Language',back:'Back to stockpile',filter:'Filter',all:'All',unclaimed:'Unclaimed',overfilled:'Overfilled',stalled:'Prepared not done',notStarted:'Not started',locked:'Locked',noted:'With notes',userSummary:'User summary',materialCount:'Materials',preparing:'Preparing',done:'Done',preparingQty:'Preparing qty',doneQty:'Done qty',actor:'Actor',action:'Action',target:'Target',time:'Time',success:'Saved',error:'Error',showPassword:'Show password',claim_put:'Updated claim',claim_delete:'Removed claim',material_note_update:'Updated material note',claims_clear_material:'Cleared material claims',claims_clear_user:'Cleared user claims',whitelist_add:'Added whitelist user',whitelist_remove:'Removed whitelist user',session_reset:'Reset session',session_import:'Imported session',session_import_replace:'Replaced session',access_password_set:'Set access password',admin_password_set:'Set admin password',access_password_clear:'Cleared access password',admin_password_clear:'Cleared admin password'}};
 let lang=(localStorage.getItem('lba-stockpile-lang')||navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en';
 let filter='all'; let flash=''; const root=document.getElementById('admin'); const t=k=>i18n[lang][k]||i18n.en[k]||k;
@@ -2207,10 +2372,10 @@ function actionLabel(action){return t(action);}
 function matchesFilter(m){if(filter==='unclaimed')return !(m.participants||[]).length;if(filter==='overfilled')return m.overfilled_count>0;if(filter==='stalled')return m.preparing_count>0&&m.done_count<m.required_count;if(filter==='not_started')return m.overall_status==='not_started';if(filter==='locked')return !!m.locked;if(filter==='noted')return !!(m.public_note||m.storage_location);return true;}
 async function render(){
 let auth=await send('/api/auth/status');
-if(!auth.admin){root.innerHTML=`<section class="modal-card"><h1>${t('login')}</h1><div class="password-row"><input class="field" id="pw" type="password" placeholder="${t('password')}"/><button class="button icon-button" id="togglePw" type="button" title="${t('showPassword')}">👁</button></div><div class="actions"><button class="button primary" id="login">${t('enter')}</button></div><p class="sub" id="err"></p></section>`;document.getElementById('togglePw').onclick=()=>{const pw=document.getElementById('pw');pw.type=pw.type==='password'?'text':'password';};document.getElementById('login').onclick=async()=>{try{await send('/api/auth/admin','POST',{password:document.getElementById('pw').value});flash=t('success');render();}catch(e){document.getElementById('err').textContent=`${t('error')}: ${e.message}`;}};return;}
+if(!auth.admin){root.innerHTML=`<section class="modal-card"><h1>${t('login')}</h1><div class="password-row"><input class="field" id="pw" type="password" placeholder="${t('password')}"/><button class="button icon-button" id="togglePw" type="button" title="${t('showPassword')}">馃憗</button></div><div class="actions"><button class="button primary" id="login">${t('enter')}</button></div><p class="sub" id="err"></p></section>`;document.getElementById('togglePw').onclick=()=>{const pw=document.getElementById('pw');pw.type=pw.type==='password'?'text':'password';};document.getElementById('login').onclick=async()=>{try{await send('/api/auth/admin','POST',{password:document.getElementById('pw').value});flash=t('success');render();}catch(e){document.getElementById('err').textContent=`${t('error')}: ${e.message}`;}};return;}
 const [summary,users,white,materials,audit,state]=await Promise.all([send('/api/admin/summary'),send('/api/users'),send('/api/whitelist'),send('/api/admin/materials'),send('/api/admin/audit-log'),send('/api/state')]);
 const visibleMaterials=Object.values(materials).filter(matchesFilter); const userSummaries=state.summaries?.user_summaries||[];
-root.innerHTML=`<header class="topbar"><div class="brand"><strong>${t('title')}</strong><span>${t('project')}</span></div><div class="identity"><select class="field" id="lang"><option value="zh" ${lang==='zh'?'selected':''}>中文</option><option value="en" ${lang==='en'?'selected':''}>English</option></select><a class="button" href="/">${t('back')}</a></div></header>
+root.innerHTML=`<header class="topbar"><div class="brand"><strong>${t('title')}</strong><span>${t('project')}</span></div><div class="identity"><select class="field" id="lang"><option value="zh" ${lang==='zh'?'selected':''}>涓枃</option><option value="en" ${lang==='en'?'selected':''}>English</option></select><a class="button" href="/">${t('back')}</a></div></header>
 ${flash?`<div class="empty">${esc(flash)}</div>`:''}
 <section class="summary">${Object.entries(summary).map(([k,v])=>`<div class="metric"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('')}</section>
 <section class="section"><h2>${t('userSummary')}</h2><div class="list">${userSummaries.map(u=>`<div class="card"><div class="card-main"><div><b>${esc(u.user_id)}</b><div class="sub">${t('materialCount')}: ${u.material_count} / ${t('preparingQty')}: ${u.preparing_quantity} / ${t('doneQty')}: ${u.done_quantity}</div></div><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button></div></div>`).join('')}</div></section>
@@ -2630,8 +2795,14 @@ mod tests {
                 "stockpile_serve_project_{}.zip",
                 std::process::id()
             ));
-        crate::stockpile_zip::export_stockpile_zip(&input, Some(&output), false, Some("1.21.10"))
-            .expect("export zip");
+        crate::stockpile_zip::export_stockpile_zip(
+            &input,
+            Some(&output),
+            false,
+            Some("1.21.10"),
+            crate::stockpile_zip::StockpileExportMode::Single,
+        )
+        .expect("export zip");
         let project = load_project_from_zip(&output).expect("load project");
         assert!(!project.materials.materials.is_empty());
         assert!(project.i18n.get("zh-CN").is_some());
@@ -2651,8 +2822,14 @@ mod tests {
                 "stockpile_session_roundtrip_{}.zip",
                 std::process::id()
             ));
-        crate::stockpile_zip::export_stockpile_zip(&input, Some(&output), false, Some("1.21.10"))
-            .expect("export zip");
+        crate::stockpile_zip::export_stockpile_zip(
+            &input,
+            Some(&output),
+            false,
+            Some("1.21.10"),
+            crate::stockpile_zip::StockpileExportMode::Single,
+        )
+        .expect("export zip");
         let db = session_db_path(&output).expect("session db");
         let _ = std::fs::remove_file(&db);
         put_claim(&db, "minecraft:stone", "alex", "preparing", 2).expect("claim");
@@ -2831,7 +3008,8 @@ mod tests {
         ensure_session_db(&db, &zip_hash(&fixture).expect("zip hash")).expect("session");
         let project = load_project_from_zip(&fixture).expect("project");
 
-        let get = route_request_inner(&request("GET", "/api/config", b""), &fixture, &db, &project)
+        let source = AssetSource::Zip(fixture.clone());
+        let get = route_request_inner(&request("GET", "/api/config", b""), &source, &db, &project)
             .expect("get config");
         assert_eq!(get.status, 200);
         let config: StockpileConfig = serde_json::from_slice(&get.body).expect("config json");
@@ -2843,7 +3021,7 @@ mod tests {
                 "/api/config",
                 br#"{"mode":"single","poll_interval_ms":5000,"show_icon_fallback_badge":true}"#,
             ),
-            &fixture,
+            &source,
             &db,
             &project,
         )
@@ -2865,9 +3043,10 @@ mod tests {
         ensure_session_db(&db, &zip_hash(&fixture).expect("zip hash")).expect("session");
         let project = load_project_from_zip(&fixture).expect("project");
 
+        let source = AssetSource::Zip(fixture.clone());
         let response = route_request(
             &request("PUT", "/api/config", br#"{"poll_interval_ms":1000}"#),
-            &fixture,
+            &source,
             &db,
             &project,
         );
@@ -2884,6 +3063,79 @@ mod tests {
         std::fs::write(&path, b"not a zip").expect("bad zip");
         assert!(load_project_from_zip(&path).is_err());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn stockpile_root_loads_project_and_uses_embedded_sqlite() {
+        let fixture = exported_fixture("root_server");
+        let root = crate::runtime_paths::stockpile_tmp_root()
+            .expect("tmp root")
+            .join(format!("stockpile_root_server_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).expect("root data");
+        let project = load_project_from_zip(&fixture).expect("project");
+        std::fs::write(
+            root.join("index.html"),
+            "<!doctype html><div id=\"app\"></div>",
+        )
+        .expect("index");
+        std::fs::write(
+            root.join("data/manifest.json"),
+            serde_json::to_vec_pretty(&project.manifest).expect("manifest"),
+        )
+        .expect("manifest");
+        std::fs::write(
+            root.join("data/materials.json"),
+            serde_json::to_vec_pretty(&project.materials).expect("materials"),
+        )
+        .expect("materials");
+        std::fs::write(
+            root.join("data/recipe_status.json"),
+            serde_json::to_vec_pretty(&project.recipe_status).expect("status"),
+        )
+        .expect("status");
+        std::fs::write(
+            root.join("data/recipe_trees.json"),
+            serde_json::to_vec_pretty(&project.recipe_trees).expect("trees"),
+        )
+        .expect("trees");
+        std::fs::write(
+            root.join("data/icons.json"),
+            serde_json::to_vec_pretty(&project.icons).expect("icons"),
+        )
+        .expect("icons");
+        std::fs::write(
+            root.join("data/item_names.json"),
+            serde_json::to_vec_pretty(&project.item_names).expect("names"),
+        )
+        .expect("names");
+        std::fs::write(
+            root.join("data/i18n.json"),
+            serde_json::to_vec_pretty(&project.i18n).expect("i18n"),
+        )
+        .expect("i18n");
+        let db = root.join("db/stockpile.sqlite");
+        create_initial_session_db(&db).expect("initial db");
+        let loaded = load_project_from_root(&root).expect("load root project");
+        ensure_session_db(&db, &project_hash(&loaded).expect("project hash")).expect("session");
+        let source = AssetSource::Root(root.clone());
+        let response = route_request(&request("GET", "/api/project", b""), &source, &db, &loaded);
+        assert_eq!(response.status, 200);
+        let response = route_request(
+            &request(
+                "PUT",
+                "/api/materials/minecraft%3Astone/claims/alex",
+                br#"{"status":"preparing","quantity":1}"#,
+            ),
+            &source,
+            &db,
+            &loaded,
+        );
+        assert_eq!(response.status, 200);
+        assert!(db.is_file());
+        let _ = std::fs::remove_dir_all(&root);
+        let db = session_db_path(&fixture).expect("session db");
+        cleanup_fixture(&fixture, &db, Path::new(""));
     }
 
     #[test]
@@ -3027,6 +3279,7 @@ mod tests {
         let _ = std::fs::remove_file(&db);
         set_access_password(&fixture, "secret").expect("set password");
         let project = load_project_from_zip(&fixture).expect("project");
+        let source = AssetSource::Zip(fixture.clone());
 
         let blocked = route_request(
             &request(
@@ -3034,7 +3287,7 @@ mod tests {
                 "/api/materials/minecraft%3Astone/claims/alex",
                 br#"{"status":"preparing","quantity":1}"#,
             ),
-            &fixture,
+            &source,
             &db,
             &project,
         );
@@ -3046,7 +3299,7 @@ mod tests {
                 "/api/auth/access",
                 br#"{"password":"secret","user_id":"alex"}"#,
             ),
-            &fixture,
+            &source,
             &db,
             &project,
         )
@@ -3065,7 +3318,7 @@ mod tests {
                 br#"{"status":"preparing","quantity":1}"#,
                 &cookie,
             ),
-            &fixture,
+            &source,
             &db,
             &project,
         );
@@ -3082,6 +3335,7 @@ mod tests {
         config_set(&fixture, "whitelist_enabled", "true").expect("enable whitelist");
         config_set(&fixture, "allow_guest_readonly", "true").expect("readonly guests");
         let project = load_project_from_zip(&fixture).expect("project");
+        let source = AssetSource::Zip(fixture.clone());
 
         let blocked = route_request(
             &request(
@@ -3089,7 +3343,7 @@ mod tests {
                 "/api/materials/minecraft%3Astone/claims/alex",
                 br#"{"status":"preparing","quantity":1}"#,
             ),
-            &fixture,
+            &source,
             &db,
             &project,
         );
@@ -3115,7 +3369,7 @@ mod tests {
                 "/api/materials/minecraft%3Astone/claims/alex",
                 br#"{"status":"preparing","quantity":1}"#,
             ),
-            &fixture,
+            &source,
             &db,
             &project,
         );
@@ -3131,10 +3385,11 @@ mod tests {
         let _ = std::fs::remove_file(&db);
         set_admin_password(&fixture, "admin-secret").expect("set admin password");
         let project = load_project_from_zip(&fixture).expect("project");
+        let source = AssetSource::Zip(fixture.clone());
 
         let blocked = route_request(
             &request("GET", "/api/admin/summary", b""),
-            &fixture,
+            &source,
             &db,
             &project,
         );
@@ -3145,7 +3400,7 @@ mod tests {
                 "/api/auth/admin",
                 br#"{"password":"admin-secret","user_id":"root"}"#,
             ),
-            &fixture,
+            &source,
             &db,
             &project,
         )
@@ -3163,7 +3418,7 @@ mod tests {
                 br#"{"public_note":"bring stone","storage_location":"chest A","locked":true}"#,
                 &cookie,
             ),
-            &fixture,
+            &source,
             &db,
             &project,
         );
@@ -3264,8 +3519,14 @@ mod tests {
             .join("fixtures")
             .join("stats_water_fixture.litematic");
         let output = temp_zip_path(name);
-        crate::stockpile_zip::export_stockpile_zip(&input, Some(&output), false, Some("1.21.10"))
-            .expect("export zip");
+        crate::stockpile_zip::export_stockpile_zip(
+            &input,
+            Some(&output),
+            false,
+            Some("1.21.10"),
+            crate::stockpile_zip::StockpileExportMode::Single,
+        )
+        .expect("export zip");
         output
     }
 

@@ -1,19 +1,20 @@
 # Stockpile Linux Deployment
 
-`stockpile.zip` can be opened directly for static preview, but static preview only stores state in the browser. Multiplayer sync, SQLite sessions, passwords, whitelist, admin APIs, and `/admin` require the Linux backend:
+`stockpile.zip` can be opened directly for static preview, but static preview only stores state in the browser. Multiplayer sync, SQLite sessions, passwords, whitelist, admin APIs, and `/admin` require the lightweight `stockpile_server` backend:
 
 ```bash
-./litematica_core stockpile serve --zip project.stockpile.zip --bind 0.0.0.0:8787
+./stockpile_server --root /path/to/unzipped-stockpile --bind 0.0.0.0:8787
 ```
 
 ## What To Upload
 
-For full multiplayer collaboration upload both:
+For full multiplayer collaboration export a multi package locally:
 
-- `project.stockpile.zip`
-- Linux `litematica_core`
+```powershell
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project.stockpile.zip --minecraft-version 1.21.10 --mode multi
+```
 
-Do not upload the Windows `litematica_core.exe` to a Debian VPS. Build or copy the Linux binary.
+Then upload and unzip `project.stockpile.zip`. The deployment side does not need `.litematic`, recipe cache, Minecraft client jars, Rust source, or `litematica_core`.
 
 ## Debian 12 Dependencies
 
@@ -31,85 +32,44 @@ curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
 . "$HOME/.cargo/env"
 ```
 
-## Build Linux Backend
+## Build Linux Server Binary
 
-Run on Linux from the repository root:
-
-```bash
-scripts/stockpile/build_linux_release.sh
-```
-
-The script builds:
-
-```text
-tools/viewer-core/target/release/litematica_core
-```
-
-## Create Deploy Package
-
-After exporting a stockpile ZIP:
+If the package does not already contain `server/linux-x64/stockpile_server`, build it on Linux from the repository root:
 
 ```bash
-scripts/stockpile/make_linux_deploy.sh \
-  --zip data/stockpile/exports/project.stockpile.zip \
-  --out dist/stockpile-deploy
+cargo build --release --bin stockpile_server
 ```
 
-Package layout:
+Copy the binary into the unzipped package:
 
-```text
-stockpile-deploy/
-  litematica_core
-  project.stockpile.zip
-  data/
-  run-stockpile.sh
-  install-systemd.sh
-  litematica-stockpile.service.example
-  README.md
+```bash
+cp tools/viewer-core/target/release/stockpile_server /path/to/unzipped-stockpile/server/linux-x64/stockpile_server
+chmod +x /path/to/unzipped-stockpile/server/linux-x64/stockpile_server
 ```
 
 ## Start For Testing
 
-```bash
-cd stockpile-deploy
-./run-stockpile.sh
-```
-
-`run-stockpile.sh` sets:
+From the unzipped package:
 
 ```bash
-LBA_DATA_ROOT=./data
+chmod +x server/linux-x64/start.sh server/linux-x64/stockpile_server
+./server/linux-x64/start.sh
 ```
 
-SQLite sessions are written to:
+The server writes state to:
 
 ```text
-data/stockpile/sessions/<zip-stem>.sqlite
+db/stockpile.sqlite
 ```
+
+`litematica_core stockpile serve --zip` remains available as a legacy/internal compatibility command, but new deployments should use `stockpile_server`.
 
 ## Passwords Before Public Exposure
 
 If you bind to `0.0.0.0:8787`, set at least an access password:
 
 ```bash
-printf '%s' 'change-me' | ./litematica_core stockpile set-access-password \
-  --zip project.stockpile.zip \
-  --password-stdin
-```
-
-Admin password:
-
-```bash
-printf '%s' 'change-admin' | ./litematica_core stockpile set-admin-password \
-  --zip project.stockpile.zip \
-  --password-stdin
-```
-
-Optional whitelist:
-
-```bash
-./litematica_core stockpile whitelist-add --zip project.stockpile.zip --user Eldon
-./litematica_core stockpile config-set --zip project.stockpile.zip --key whitelist_enabled --value true
+TODO: password bootstrap for unpacked stockpile_server packages is planned.
 ```
 
 ## Firewall
@@ -125,18 +85,13 @@ If a panel or tunnel maps public port `30017` to internal port `8787`, expose TC
 
 ## systemd
 
-The generated package includes `install-systemd.sh`, but it does not start or enable the service automatically.
+The multi package is designed to run directly from its platform start script. For a long-running VPS service, create a small systemd unit that runs the same command:
 
-```bash
-cd stockpile-deploy
-sudo ./install-systemd.sh
-sudo systemctl start litematica-stockpile
-```
-
-Enable boot autostart only when wanted:
-
-```bash
-sudo systemctl enable litematica-stockpile
+```ini
+[Service]
+WorkingDirectory=/opt/litematica-stockpile
+ExecStart=/opt/litematica-stockpile/server/linux-x64/stockpile_server --root /opt/litematica-stockpile --bind 0.0.0.0:8787
+Restart=on-failure
 ```
 
 ## Example VPS SSH
