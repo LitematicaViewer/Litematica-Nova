@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 pub mod analyze;
 pub mod build_mode;
 pub mod business;
@@ -6,6 +8,7 @@ pub mod cli;
 pub mod full_mode;
 pub mod full_mode_v2;
 pub mod generate_projection;
+pub mod item_icons;
 pub mod mesh;
 pub mod metadata_edit;
 pub mod model;
@@ -17,6 +20,7 @@ pub mod replace_blocks;
 pub mod runtime_paths;
 pub mod stats_api;
 pub mod stockpile;
+pub mod stockpile_serve;
 pub mod stockpile_zip;
 pub mod storage;
 pub mod visual;

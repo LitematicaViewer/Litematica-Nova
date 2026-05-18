@@ -4,7 +4,7 @@ use std::io::{self, BufWriter, Write};
 use anyhow::Result;
 use litematica_core::{
     analyze, cache_layer, cli, generate_projection, mesh, metadata_edit, recipe_cache,
-    replace_blocks, runtime_paths, stats_api, stockpile, stockpile_zip, visual,
+    replace_blocks, runtime_paths, stats_api, stockpile, stockpile_serve, stockpile_zip, visual,
 };
 use serde::Serialize;
 
@@ -67,6 +67,13 @@ fn main() -> Result<()> {
                 args.minecraft_version.as_deref(),
             )?;
             emit_output(&output, None)?;
+        }
+        "stockpile serve" => {
+            let bind = args
+                .bind
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --bind"))?;
+            stockpile_serve::serve_stockpile_zip(&args.input, bind)?;
         }
         "stats" => {
             let output = stats_api::build_stats_output(&args.input, args.include_container_items)?;

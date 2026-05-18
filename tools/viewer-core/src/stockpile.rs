@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::recipe_cache::{self, RecipeCacheStatus};
 use crate::runtime_paths;
@@ -18,14 +18,14 @@ const DEFAULT_MINECRAFT_VERSION: &str = "1.21.10";
 const DEFAULT_STACK_SIZE: u64 = 64;
 const SHULKER_STACKS: u64 = 27;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockpileMaterialsData {
     pub project: StockpileProjectInfo,
     pub summary: StockpileSummary,
     pub materials: Vec<StockpileMaterialItem>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockpileProjectInfo {
     pub source_file: String,
     pub created_at: u64,
@@ -33,7 +33,7 @@ pub struct StockpileProjectInfo {
     pub regions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockpileSummary {
     pub total_blocks: u64,
     pub unique_materials: usize,
@@ -41,7 +41,7 @@ pub struct StockpileSummary {
     pub estimated_shulker_boxes: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockpileMaterialItem {
     pub id: String,
     pub namespace_id: String,
@@ -54,6 +54,8 @@ pub struct StockpileMaterialItem {
     pub category: String,
     pub category_icon: String,
     pub item_icon_key: String,
+    pub icon_path: String,
+    pub icon_available: bool,
     pub source_regions: Vec<String>,
     pub recipe_status: String,
     pub craft_complexity: u32,
@@ -168,7 +170,9 @@ fn stockpile_material_item(
         shulker_boxes: breakdown.shulker_boxes,
         category: category.name.to_string(),
         category_icon: category.icon.to_string(),
-        item_icon_key: namespace_id,
+        item_icon_key: namespace_id.clone(),
+        icon_path: String::new(),
+        icon_available: false,
         source_regions: source_regions(item),
         recipe_status,
         craft_complexity: 0,
@@ -403,7 +407,7 @@ fn categorize_material(namespace_id: &str) -> MaterialCategory {
             "end_rod",
         ],
     ) {
-        return category("照明", "minecraft:lantern");
+        return category("照明", "minecraft:torch");
     }
     if contains_any(
         local,
@@ -462,7 +466,7 @@ fn categorize_material(namespace_id: &str) -> MaterialCategory {
             "coal_block",
         ],
     ) {
-        return category("金属制品", "minecraft:iron_block");
+        return category("金属制品", "minecraft:iron_ingot");
     }
     if contains_any(
         local,
@@ -485,7 +489,7 @@ fn categorize_material(namespace_id: &str) -> MaterialCategory {
     ) {
         return category("功能方块", "minecraft:crafting_table");
     }
-    category("其他", "minecraft:grass_block")
+    category("其他", "minecraft:barrier")
 }
 
 fn contains_any(value: &str, needles: &[&str]) -> bool {
