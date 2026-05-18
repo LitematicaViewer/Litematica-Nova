@@ -1073,6 +1073,7 @@ mod tests {
 
     fn materials_data<const N: usize>(values: [(&str, u64, &str); N]) -> StockpileMaterialsData {
         StockpileMaterialsData {
+            schema_version: crate::stockpile_schema::STOCKPILE_MATERIALS_SCHEMA_VERSION,
             project: StockpileProjectInfo {
                 source_file: "fixture.litematic".to_string(),
                 created_at: 0,
@@ -1101,6 +1102,7 @@ mod tests {
                     item_icon_key: id.to_string(),
                     icon_path: String::new(),
                     icon_available: false,
+                    display_names: std::collections::BTreeMap::new(),
                     source_regions: Vec::new(),
                     recipe_status: status.to_string(),
                     craft_complexity: 0,

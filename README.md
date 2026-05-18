@@ -98,6 +98,10 @@ bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-versi
 bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test.stockpile.zip --minecraft-version 1.21.10
 bin\viewer-backend\litematica_core.exe stockpile serve --zip data\stockpile\exports\test.stockpile.zip --bind 127.0.0.1:8787
+bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpile\exports\test.stockpile.zip
+bin\viewer-backend\litematica_core.exe stockpile session-export --zip data\stockpile\exports\test.stockpile.zip --output data\stockpile\sessions\test.state.json
+bin\viewer-backend\litematica_core.exe stockpile session-reset --zip data\stockpile\exports\test.stockpile.zip --yes
+bin\viewer-backend\litematica_core.exe stockpile session-import --zip data\stockpile\exports\test.stockpile.zip --input data\stockpile\sessions\test.state.json --replace
 
 # 构建并同步 litematica_core
 cd tools\viewer-core

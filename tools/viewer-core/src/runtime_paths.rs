@@ -21,6 +21,7 @@ pub struct RuntimePaths {
     pub cache_root: RuntimePathEntry,
     pub recipe_cache_root: RuntimePathEntry,
     pub item_icons_cache_root: RuntimePathEntry,
+    pub item_names_cache_root: RuntimePathEntry,
     pub manifests_cache_root: RuntimePathEntry,
     pub stockpile_root: RuntimePathEntry,
     pub stockpile_exports_root: RuntimePathEntry,
@@ -48,6 +49,10 @@ pub fn recipe_cache_root() -> Result<PathBuf> {
 
 pub fn item_icons_cache_root() -> Result<PathBuf> {
     Ok(cache_root()?.join("item-icons"))
+}
+
+pub fn item_names_cache_root() -> Result<PathBuf> {
+    Ok(cache_root()?.join("item-names"))
 }
 
 pub fn manifests_cache_root() -> Result<PathBuf> {
@@ -80,6 +85,7 @@ pub fn ensure_runtime_layout() -> Result<RuntimePaths> {
     let cache_root = data_root.join("cache");
     let recipe_cache_root = cache_root.join("recipes");
     let item_icons_cache_root = cache_root.join("item-icons");
+    let item_names_cache_root = cache_root.join("item-names");
     let manifests_cache_root = cache_root.join("manifests");
     let stockpile_root = data_root.join("stockpile");
     let stockpile_exports_root = stockpile_root.join("exports");
@@ -92,6 +98,7 @@ pub fn ensure_runtime_layout() -> Result<RuntimePaths> {
         &cache_root,
         &recipe_cache_root,
         &item_icons_cache_root,
+        &item_names_cache_root,
         &manifests_cache_root,
         &stockpile_root,
         &stockpile_exports_root,
@@ -109,6 +116,7 @@ pub fn ensure_runtime_layout() -> Result<RuntimePaths> {
         cache_root: path_entry(cache_root),
         recipe_cache_root: path_entry(recipe_cache_root),
         item_icons_cache_root: path_entry(item_icons_cache_root),
+        item_names_cache_root: path_entry(item_names_cache_root),
         manifests_cache_root: path_entry(manifests_cache_root),
         stockpile_root: path_entry(stockpile_root),
         stockpile_exports_root: path_entry(stockpile_exports_root),
@@ -194,6 +202,10 @@ mod tests {
             data.join("cache").join("recipes")
         );
         assert_eq!(
+            item_names_cache_root().expect("item names cache root"),
+            data.join("cache").join("item-names")
+        );
+        assert_eq!(
             stockpile_root().expect("stockpile root"),
             data.join("stockpile")
         );
@@ -206,6 +218,7 @@ mod tests {
         assert!(paths.cache_root.is_dir);
         assert!(paths.recipe_cache_root.is_dir);
         assert!(paths.item_icons_cache_root.is_dir);
+        assert!(paths.item_names_cache_root.is_dir);
         assert!(paths.manifests_cache_root.is_dir);
         assert!(paths.stockpile_root.is_dir);
         assert!(paths.stockpile_exports_root.is_dir);

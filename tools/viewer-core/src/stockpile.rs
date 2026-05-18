@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -13,6 +13,7 @@ use crate::stats_api::{
     MaterialItemOutput, MaterialScope, RegionSummaryOutput, StableStructureOutput,
     build_materials_output,
 };
+use crate::stockpile_schema::STOCKPILE_MATERIALS_SCHEMA_VERSION;
 
 const DEFAULT_MINECRAFT_VERSION: &str = "1.21.10";
 const DEFAULT_STACK_SIZE: u64 = 64;
@@ -20,6 +21,7 @@ const SHULKER_STACKS: u64 = 27;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockpileMaterialsData {
+    pub schema_version: u32,
     pub project: StockpileProjectInfo,
     pub summary: StockpileSummary,
     pub materials: Vec<StockpileMaterialItem>,
@@ -56,6 +58,7 @@ pub struct StockpileMaterialItem {
     pub item_icon_key: String,
     pub icon_path: String,
     pub icon_available: bool,
+    pub display_names: BTreeMap<String, String>,
     pub source_regions: Vec<String>,
     pub recipe_status: String,
     pub craft_complexity: u32,
@@ -81,7 +84,13 @@ pub fn export_materials_data(
     include_container_items: bool,
     minecraft_version: Option<&str>,
 ) -> Result<StockpileMaterialsData> {
-    let data = build_materials_data(input, include_container_items, minecraft_version)?;
+    let mut data = build_materials_data(input, include_container_items, minecraft_version)?;
+    let empty_trees = BTreeMap::new();
+    let _ = crate::item_names::resolve_stockpile_item_names(
+        minecraft_version.unwrap_or(DEFAULT_MINECRAFT_VERSION),
+        &mut data,
+        &empty_trees,
+    );
     let output_path = resolve_output_path(input, output)?;
     ensure_stockpile_project_output(&output_path)?;
     let file = File::create(&output_path).with_context(|| {
@@ -130,6 +139,7 @@ fn build_stockpile_materials_data(
     let unique_materials = materials.len();
 
     Ok(StockpileMaterialsData {
+        schema_version: STOCKPILE_MATERIALS_SCHEMA_VERSION,
         project: StockpileProjectInfo {
             source_file: input.display().to_string(),
             created_at: current_unix_timestamp()?,
@@ -173,6 +183,7 @@ fn stockpile_material_item(
         item_icon_key: namespace_id.clone(),
         icon_path: String::new(),
         icon_available: false,
+        display_names: BTreeMap::new(),
         source_regions: source_regions(item),
         recipe_status,
         craft_complexity: 0,

@@ -29,6 +29,9 @@ pub struct CliArgs {
     pub limit: usize,
     pub minecraft_version: Option<String>,
     pub bind: Option<String>,
+    pub yes: bool,
+    pub replace: bool,
+    pub session_input: Option<PathBuf>,
 }
 
 pub fn parse_args() -> Result<CliArgs> {
@@ -201,6 +204,9 @@ pub fn parse_args() -> Result<CliArgs> {
         limit,
         minecraft_version: None,
         bind: None,
+        yes: false,
+        replace: false,
+        session_input: None,
     })
 }
 
@@ -254,6 +260,9 @@ fn parse_runtime_paths_args(command: String, raw_args: Vec<String>) -> Result<Cl
         limit: 64,
         minecraft_version: None,
         bind: None,
+        yes: false,
+        replace: false,
+        session_input: None,
     })
 }
 
@@ -269,6 +278,9 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     let mut include_container_items = false;
     let mut minecraft_version = None;
     let mut bind = None;
+    let mut yes = false;
+    let mut replace = false;
+    let mut session_input = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -276,7 +288,11 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
                 let Some(path) = args.next() else {
                     bail!("missing path after --input");
                 };
-                input = Some(PathBuf::from(path));
+                if subcommand == "session-import" {
+                    session_input = Some(PathBuf::from(path));
+                } else {
+                    input = Some(PathBuf::from(path));
+                }
             }
             "--output" => {
                 let Some(path) = args.next() else {
@@ -285,6 +301,8 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
                 output = Some(PathBuf::from(path));
             }
             "--include-container-items" => include_container_items = true,
+            "--yes" => yes = true,
+            "--replace" => replace = true,
             "--minecraft-version" => {
                 let Some(value) = args.next() else {
                     bail!("missing value after --minecraft-version");
@@ -311,7 +329,11 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
                 if value.is_empty() {
                     bail!("missing path after --input=");
                 }
-                input = Some(PathBuf::from(value));
+                if subcommand == "session-import" {
+                    session_input = Some(PathBuf::from(value));
+                } else {
+                    input = Some(PathBuf::from(value));
+                }
             }
             _ if arg.starts_with("--output=") => {
                 let value = arg.trim_start_matches("--output=");
@@ -364,17 +386,47 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
     }
     if !matches!(
         subcommand.as_str(),
-        "export-data" | "export-zip" | "recipe-status" | "recipe-fetch" | "serve"
+        "export-data"
+            | "export-zip"
+            | "recipe-status"
+            | "recipe-fetch"
+            | "serve"
+            | "session-info"
+            | "session-reset"
+            | "session-export"
+            | "session-import"
     ) {
         bail!("unsupported stockpile subcommand: {subcommand}");
     }
     if subcommand == "serve" && bind.is_none() {
         bail!("stockpile serve requires --bind <addr:port>");
     }
+    if matches!(
+        subcommand.as_str(),
+        "session-info" | "session-reset" | "session-export" | "session-import"
+    ) && input.is_none()
+    {
+        bail!("stockpile {subcommand} requires --zip <path>");
+    }
+    if subcommand == "session-export" && output.is_none() {
+        bail!("stockpile session-export requires --output <path>");
+    }
+    if subcommand == "session-import" && session_input.is_none() {
+        bail!("stockpile session-import requires --input <state.json>");
+    }
 
     Ok(CliArgs {
         command: format!("stockpile {subcommand}"),
-        input: if matches!(subcommand.as_str(), "export-data" | "export-zip" | "serve") {
+        input: if matches!(
+            subcommand.as_str(),
+            "export-data"
+                | "export-zip"
+                | "serve"
+                | "session-info"
+                | "session-reset"
+                | "session-export"
+                | "session-import"
+        ) {
             input.ok_or_else(|| {
                 if subcommand == "serve" {
                     anyhow::anyhow!("stockpile serve requires --zip <path>")
@@ -408,6 +460,9 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
         limit: 64,
         minecraft_version,
         bind,
+        yes,
+        replace,
+        session_input,
     })
 }
 
@@ -505,6 +560,9 @@ fn parse_replace_blocks_args(command: String, raw_args: Vec<String>) -> Result<C
         limit: 64,
         minecraft_version: None,
         bind: None,
+        yes: false,
+        replace: false,
+        session_input: None,
     })
 }
 
@@ -590,6 +648,9 @@ fn parse_generate_args(command: String, raw_args: Vec<String>) -> Result<CliArgs
         limit: 64,
         minecraft_version: None,
         bind: None,
+        yes: false,
+        replace: false,
+        session_input: None,
     })
 }
 
@@ -676,5 +737,8 @@ fn parse_edit_metadata_args(command: String, raw_args: Vec<String>) -> Result<Cl
         limit: 64,
         minecraft_version: None,
         bind: None,
+        yes: false,
+        replace: false,
+        session_input: None,
     })
 }
