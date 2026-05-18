@@ -228,6 +228,16 @@ bin\viewer-backend\litematica_core.exe stockpile config-reset --zip data\stockpi
 
 multi 包的访问密码、管理员密码、白名单和默认配置在 `litematica_core export-zip` 阶段通过 `--access-password-stdin`、`--admin-password-stdin`、`--whitelist-file`、`--allow-guest-readonly`、`--admin-page-enabled` 写入 `db/stockpile.sqlite`。部署端 `stockpile_server` 不提供初始化 CLI；要改密码或白名单，使用 admin 页面或重新导出包。
 
+真实 `stockpile_server` 二进制不提交到 Git。Windows 本地只能构建 Windows 版；Linux/macOS 版由 `.github/workflows/stockpile-server.yml` 的 GitHub Actions 矩阵构建并作为 artifacts 上传。导出跨平台 multi 包前运行：
+
+```powershell
+scripts\stockpile\verify_stockpile_server_bins.ps1
+scripts\stockpile\fetch_stockpile_server_artifacts.ps1
+scripts\stockpile\verify_stockpile_server_bins.ps1
+```
+
+如果没有 `gh` CLI 或 GitHub 权限，手动下载 workflow artifacts，并把文件放到 `bin/stockpile-server/<platform>/`。只导出 `--mode single` 不需要这些二进制；只部署某一个平台时可以只使用对应平台的 `stockpile_server`，但跨平台 multi ZIP 必须四个平台齐全。
+
 `recipe_trees.json` 由本地 recipe cache 解析生成，不联网。解析器会递归生成可视化合成链节点，支持 `minecraft:crafting_shaped`、`minecraft:crafting_shapeless`、`minecraft:stonecutting`、cooking 类配方、smithing transform/trim 和 `minecraft:crafting_special_*`。tag 输入只显示 tag 节点并标记 unresolved，不猜具体材料；special recipe 标记为 `special_recipe`；找不到支持配方时标记 `no_recipe`。ZIP 网页展开材料时使用节点卡片、工艺 badge、批次数、余量和父子连线展示完整合成链。
 
 `litematica_core stockpile serve --zip` 保留为 legacy/internal 兼容入口，只读取 stockpile ZIP，不回写 ZIP。新部署优先使用 `stockpile_server --root <解压目录>`，会话状态写入解压目录下的 `db/stockpile.sqlite`。HTTP API 包括 `GET /api/project`、`GET /api/state`、`POST /api/participants`、`PUT /api/materials/:material_id/claims/:user_id` 和 `DELETE /api/materials/:material_id/claims/:user_id`。serve 模式页面每数秒轮询状态；同一材料允许多个用户同时 claim，取消参与会删除对应 claim。
