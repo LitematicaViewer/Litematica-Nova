@@ -3,7 +3,7 @@ import { listGameResourceRegistry, readActiveGameDataResource, readActiveLanguag
 import { translateBlockId } from "./i18n";
 import type { MaterialItem } from "./statsService";
 
-export type EnumeratorCollectionCategory = "base" | "version" | "creative" | "custom" | "runtime";
+export type EnumeratorCollectionCategory = "base" | "version" | "system_enum" | "creative" | "custom" | "runtime";
 export type EnumeratorValueType = "block" | "item" | "entity" | "enchantment" | "mixed" | "unknown";
 
 export interface EnumeratorCollection {
@@ -26,6 +26,7 @@ export interface EnumeratorValueRow {
   id: string;
   name: string;
   iconHint: string;
+  iconLookupMode: "default" | "item_first";
   type: EnumeratorValueType;
   customCollections: string[];
 }
@@ -51,6 +52,7 @@ interface ActiveLanguageMap {
 const DEFAULT_ENUM_ROOTS = ["enumerator/base", "enumerator/base/wiki", "enumerator/base/builtin"];
 const COLLECTION_DIRS: Record<Exclude<EnumeratorCollectionCategory, "base" | "runtime">, string> = {
   version: "enumerator/version",
+  system_enum: "enumerator/system_enum",
   creative: "enumerator/creative",
   custom: "enumerator/custom",
 };
@@ -365,15 +367,17 @@ async function loadFolderCollections(category: Exclude<EnumeratorCollectionCateg
 }
 
 export async function loadEnumeratorCollections(runtimeCollections: EnumeratorCollection[] = []): Promise<EnumeratorCollection[]> {
-  const [baseCollections, versionCollections, creativeCollections, customCollections] = await Promise.all([
+  const [baseCollections, versionCollections, systemCollections, creativeCollections, customCollections] = await Promise.all([
     loadBaseCollections(),
     loadFolderCollections("version"),
+    loadFolderCollections("system_enum"),
     loadFolderCollections("creative"),
     loadFolderCollections("custom"),
   ]);
   return [
     ...baseCollections,
     ...versionCollections,
+    ...systemCollections,
     ...creativeCollections,
     ...runtimeCollections,
     ...customCollections,
@@ -556,6 +560,12 @@ function detectValueType(value: string, membership: Record<string, Set<string>>)
   return "unknown";
 }
 
+function isItemLikeBlockCollection(collection: EnumeratorCollection): boolean {
+  const normalizedId = normalizeLookupKey(collection.id);
+  const normalizedName = normalizeLookupKey(collection.name);
+  return normalizedId === "custom:itemlike_block" || normalizedName === "itemlike_block";
+}
+
 export function buildEnumeratorValueRows(values: string[], collections: EnumeratorCollection[]): EnumeratorValueRow[] {
   const membership = {
     blocks: new Set(collections.find((collection) => collection.id === "base:dv-blocks")?.values || []),
@@ -564,10 +574,16 @@ export function buildEnumeratorValueRows(values: string[], collections: Enumerat
     enchantments: new Set(collections.find((collection) => collection.id === "base:dv-enchantments")?.values || []),
   };
   const customCollections = collections.filter((collection) => collection.category === "custom" || collection.category === "runtime");
+  const itemLikeBlocks = new Set(
+    collections
+      .filter((collection) => isItemLikeBlockCollection(collection))
+      .flatMap((collection) => collection.values),
+  );
   return uniq(values).map((value) => ({
     id: value,
     name: translateBlockId(value) || value,
     iconHint: value,
+    iconLookupMode: membership.items.has(value) || itemLikeBlocks.has(value) ? "item_first" : "default",
     type: detectValueType(value, membership),
     customCollections: customCollections
       .filter((collection) => collection.values.includes(value))

@@ -15,6 +15,7 @@ import {
   createRuntimeProjectionCollection,
 } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
+import { useVirtualWindow } from "../../../../components/useVirtualWindow";
 import { EnumeratorDialog, openEnumeratorWithWindowBehavior } from "../../../enumerator";
 
 function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; item: MaterialItem | null; multiplier: number }) {
@@ -119,6 +120,7 @@ export function MaterialListContent({
   const [error, setError] = useState("");
   const [hoverItem, setHoverItem] = useState<MaterialItem | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const tableWrapRef = useRef<HTMLDivElement | null>(null);
   const contentClassName = [
     standalone ? "material-list-window" : "dialog-content",
     "subwindow-frame",
@@ -161,6 +163,12 @@ export function MaterialListContent({
   useEffect(() => {
     loadMats(workbook);
   }, [workbook, includeContainerItems]);
+
+  const {
+    visibleItems: visibleMaterials,
+    topSpacerHeight,
+    bottomSpacerHeight,
+  } = useVirtualWindow(materials, tableWrapRef, 40, 10);
 
   const handleExportArtTable = async () => {
     try {
@@ -241,7 +249,7 @@ export function MaterialListContent({
           </div>
           {error && <pre className="subwindow-error">{error}</pre>}
 
-          <div className="material-list-table-wrap">
+          <div className="material-list-table-wrap" ref={tableWrapRef} onScroll={() => setHoverItem(null)}>
             <table className="material-list-table">
               <thead>
                 <tr>
@@ -253,23 +261,36 @@ export function MaterialListContent({
                 </tr>
               </thead>
               <tbody>
-                {materials.map((material) => (
-                  <tr
-                    key={material.id}
-                    onMouseEnter={() => setHoverItem(material)}
-                    onMouseLeave={() => setHoverItem(null)}
-                  >
-                    <td className="material-list-icon-cell"><BlockIcon blockId={material.iconHint} /></td>
-                    <td>{material.name}</td>
-                    <td className="material-list-number">{material.blockCount * multiplier}</td>
-                    <td className="material-list-number">{material.containerItemCount * multiplier}</td>
-                    <td className="material-list-number">{material.totalCount * multiplier}</td>
-                  </tr>
-                ))}
-                {materials.length === 0 && !isLoading && (
+                {materials.length === 0 && !isLoading ? (
                   <tr>
                     <td colSpan={5} className="material-list-empty-cell">暂无材料数据</td>
                   </tr>
+                ) : (
+                  <>
+                    {topSpacerHeight > 0 ? (
+                      <tr aria-hidden>
+                        <td colSpan={5} style={{ height: topSpacerHeight, padding: 0, border: 0 }} />
+                      </tr>
+                    ) : null}
+                    {visibleMaterials.map((material) => (
+                      <tr
+                        key={material.id}
+                        onMouseEnter={() => setHoverItem(material)}
+                        onMouseLeave={() => setHoverItem(null)}
+                      >
+                        <td className="material-list-icon-cell"><BlockIcon blockId={material.iconHint} /></td>
+                        <td>{material.name}</td>
+                        <td className="material-list-number">{material.blockCount * multiplier}</td>
+                        <td className="material-list-number">{material.containerItemCount * multiplier}</td>
+                        <td className="material-list-number">{material.totalCount * multiplier}</td>
+                      </tr>
+                    ))}
+                    {bottomSpacerHeight > 0 ? (
+                      <tr aria-hidden>
+                        <td colSpan={5} style={{ height: bottomSpacerHeight, padding: 0, border: 0 }} />
+                      </tr>
+                    ) : null}
+                  </>
                 )}
               </tbody>
             </table>
