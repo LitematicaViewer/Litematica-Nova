@@ -15,6 +15,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tauri_plugin_dialog::DialogExt;
+use zip::ZipArchive;
 
 #[cfg(windows)]
 use std::ptr::null_mut;
@@ -2476,6 +2477,13 @@ struct VaultBlockIconDownloadOutput {
 }
 
 #[derive(Serialize)]
+struct BuiltinIconExtractOutput {
+    target_dir: String,
+    root_relpath: String,
+    extracted: usize,
+}
+
+#[derive(Serialize)]
 struct WikiEnumCatalogDownloadOutput {
     target_dir: String,
     root_relpath: String,
@@ -2501,6 +2509,97 @@ const WIKI_ENUM_ITEMS_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_va
 const WIKI_ENUM_MAIN_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values";
 const WIKI_ENUM_ENTITIES_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values/Entities";
 const WIKI_ENUM_ROOT_RELPATH: &str = "enumerator/base/wiki";
+const BUILTIN_BLOCK_ARCHIVE_RELPATH: &str = "pack-in/arr-private/block.zip";
+const BUILTIN_BLOCK_ICON_ROOT_RELPATH: &str = "minecraft-assets/block_2d/initial";
+const BUILTIN_ITEM_ARCHIVE_RELPATH: &str = "pack-in/arr-private/item.zip";
+const BUILTIN_ITEM_ICON_ROOT_RELPATH: &str = "minecraft-assets/item/initial";
+
+fn directory_contains_files(dir: &Path) -> Result<bool, String> {
+    if !dir.is_dir() {
+        return Ok(false);
+    }
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+        if metadata.is_file() {
+            return Ok(true);
+        }
+        if metadata.is_dir() && directory_contains_files(&path)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn clear_directory_contents(dir: &Path) -> Result<(), String> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+        if metadata.is_dir() {
+            std::fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+        } else {
+            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn extract_builtin_icon_archive(
+    archive_relpath: &str,
+    target_relpath: &str,
+    force: bool,
+) -> Result<BuiltinIconExtractOutput, String> {
+    let target_dir = current_user_config_dir()?.join(target_relpath);
+    if !force && directory_contains_files(&target_dir)? {
+        return Ok(BuiltinIconExtractOutput {
+            target_dir: target_dir.display().to_string(),
+            root_relpath: target_relpath.to_string(),
+            extracted: 0,
+        });
+    }
+
+    let archive_path = get_root().join(archive_relpath);
+    let archive_file = std::fs::File::open(&archive_path)
+        .map_err(|e| format!("open {} failed: {}", archive_path.display(), e))?;
+    let mut archive = ZipArchive::new(archive_file)
+        .map_err(|e| format!("open zip {} failed: {}", archive_path.display(), e))?;
+
+    std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    clear_directory_contents(&target_dir)?;
+
+    let mut extracted = 0usize;
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).map_err(|e| e.to_string())?;
+        let Some(enclosed_name) = file.enclosed_name().map(|path| path.to_path_buf()) else {
+            continue;
+        };
+        if enclosed_name.as_os_str().is_empty() {
+            continue;
+        }
+        let output_path = target_dir.join(&enclosed_name);
+        if file.is_dir() {
+            std::fs::create_dir_all(&output_path).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut output_file = std::fs::File::create(&output_path).map_err(|e| e.to_string())?;
+        std::io::copy(&mut file, &mut output_file).map_err(|e| e.to_string())?;
+        extracted += 1;
+    }
+
+    Ok(BuiltinIconExtractOutput {
+        target_dir: target_dir.display().to_string(),
+        root_relpath: target_relpath.to_string(),
+        extracted,
+    })
+}
 
 fn emit_vault_block_icon_progress(
     app: &AppHandle,
@@ -3107,6 +3206,36 @@ async fn download_vault_item_icons(app: AppHandle) -> Result<VaultBlockIconDownl
     tauri::async_runtime::spawn_blocking(move || download_vault_item_icons_sync(app))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn ensure_builtin_block_icons_extracted(
+    force: bool,
+) -> Result<BuiltinIconExtractOutput, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_builtin_icon_archive(
+            BUILTIN_BLOCK_ARCHIVE_RELPATH,
+            BUILTIN_BLOCK_ICON_ROOT_RELPATH,
+            force,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn ensure_builtin_item_icons_extracted(
+    force: bool,
+) -> Result<BuiltinIconExtractOutput, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_builtin_icon_archive(
+            BUILTIN_ITEM_ARCHIVE_RELPATH,
+            BUILTIN_ITEM_ICON_ROOT_RELPATH,
+            force,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn reden_client() -> Result<reqwest::blocking::Client, String> {
@@ -4007,6 +4136,8 @@ fn main() {
             copy_file_to_directory,
             download_vault_block_icons,
             download_vault_item_icons,
+            ensure_builtin_block_icons_extracted,
+            ensure_builtin_item_icons_extracted,
             download_minecraft_wiki_enum_catalogs,
             open_workspace_path,
             cleanup_local_temp_files,

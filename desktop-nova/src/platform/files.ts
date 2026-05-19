@@ -41,6 +41,12 @@ export interface VaultBlockIconDownloadOutput {
   root_relpath: string;
 }
 
+export interface BuiltinIconExtractOutput {
+  target_dir: string;
+  root_relpath: string;
+  extracted: number;
+}
+
 export interface WikiEnumCatalogDownloadOutput {
   target_dir: string;
   root_relpath: string;
@@ -128,6 +134,14 @@ export function downloadVaultBlockIconsFromVault(): Promise<VaultBlockIconDownlo
  */
 export function downloadVaultItemIconsFromVault(): Promise<VaultBlockIconDownloadOutput> {
   return invoke("download_vault_item_icons");
+}
+
+export function ensureBuiltinBlockIconsExtracted(force = false): Promise<BuiltinIconExtractOutput> {
+  return invoke("ensure_builtin_block_icons_extracted", { force });
+}
+
+export function ensureBuiltinItemIconsExtracted(force = false): Promise<BuiltinIconExtractOutput> {
+  return invoke("ensure_builtin_item_icons_extracted", { force });
 }
 
 /**

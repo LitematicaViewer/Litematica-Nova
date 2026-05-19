@@ -3,6 +3,8 @@ import {
   copyFileToDirectory,
   downloadVaultBlockIconsFromVault,
   downloadVaultItemIconsFromVault,
+  ensureBuiltinBlockIconsExtractedNative,
+  ensureBuiltinItemIconsExtractedNative,
   downloadWikiEnumCatalogsFromMinecraftWiki,
   getPathInfo,
   readImageBase64,
@@ -17,6 +19,7 @@ export type GameResourceKind = "language" | "block_icon" | "item_icon" | "game_d
 export type BlockIconSlot = "material_list" | "layering";
 export type GameResourceSource = "builtin" | "imported" | "external" | "github" | "vault" | "wiki";
 export type RemoteLanguageSource = "github/InventivetalentDev";
+export type BlockIconVariant = "2d" | "3d";
 
 export interface VaultBlockIconInstallResult {
   snapshot: GameResourceSnapshot;
@@ -51,6 +54,7 @@ export interface GameResourceEntry {
   root_path?: string;
   data_relpath?: string;
   i18n_relpath?: string;
+  block_icon_variant?: BlockIconVariant;
   active?: boolean;
   active_material_list?: boolean;
   active_layering?: boolean;
@@ -132,7 +136,8 @@ const BUILTIN_BLOCK_ICON: GameResourceEntry = {
   kind: "block_icon",
   label: "内建 Nova 方块图标",
   source: "builtin",
-  root_relpath: "block",
+  root_relpath: "minecraft-assets/block_2d/initial",
+  block_icon_variant: "2d",
   active_material_list: true,
   active_layering: true,
   builtin: true,
@@ -143,7 +148,7 @@ const BUILTIN_ITEM_ICON: GameResourceEntry = {
   kind: "item_icon",
   label: "内建 Nova 物品图标",
   source: "builtin",
-  root_relpath: "item",
+  root_relpath: "minecraft-assets/item/initial",
   active_layering: true,
   builtin: true,
 };
@@ -195,6 +200,26 @@ function folderFromFilePath(path: string): string {
 function joinPath(root: string, relative: string): string {
   const separator = root.includes("\\") ? "\\" : "/";
   return `${root.replace(/[\\/]+$/, "")}${separator}${relative.replace(/^[\\/]+/, "").replace(/\//g, separator)}`;
+}
+
+export function resolveBlockIconVariant(entry: Pick<GameResourceEntry, "block_icon_variant" | "source" | "root_relpath" | "active_layering">): BlockIconVariant {
+  if (entry.block_icon_variant === "2d" || entry.block_icon_variant === "3d") {
+    return entry.block_icon_variant;
+  }
+  if ((entry.root_relpath || "").includes("block_2d")) {
+    return "2d";
+  }
+  if (entry.source === "vault" || (entry.root_relpath || "").includes("block_icon")) {
+    return "3d";
+  }
+  if (entry.active_layering) {
+    return "2d";
+  }
+  return "3d";
+}
+
+export function supportsBlockIconLayering(entry: Pick<GameResourceEntry, "block_icon_variant" | "source" | "root_relpath" | "active_layering">): boolean {
+  return resolveBlockIconVariant(entry) === "2d";
 }
 
 function isUserConfigRelativePath(path: string): boolean {
@@ -431,6 +456,14 @@ export async function readFallbackLanguageResource(): Promise<string> {
   return readUserConfigFile(INITIAL_LANGUAGE_RELPATH);
 }
 
+export async function ensureBuiltinBlockIconsExtracted(force = false): Promise<{ target_dir: string; root_relpath: string; extracted: number }> {
+  return ensureBuiltinBlockIconsExtractedNative(force);
+}
+
+export async function ensureBuiltinItemIconsExtracted(force = false): Promise<{ target_dir: string; root_relpath: string; extracted: number }> {
+  return ensureBuiltinItemIconsExtractedNative(force);
+}
+
 export async function listRemoteMinecraftLanguageBranches(source: RemoteLanguageSource = GITHUB_LANGUAGE_SOURCE): Promise<string[]> {
   if (source !== GITHUB_LANGUAGE_SOURCE) throw new Error(`unsupported language source: ${source}`);
   const branches = new Set<string>();
@@ -585,6 +618,10 @@ export async function registerGameResource(entry: GameResourceEntry): Promise<Ga
  */
 export async function activateGameResource(kind: GameResourceKind, id: string, slot?: BlockIconSlot): Promise<GameResourceSnapshot> {
   const index = await readIndex(kind);
+  const targetEntry = index.entries.find((entry) => entry.id === id);
+  if (kind === "block_icon" && slot === "layering" && targetEntry && !supportsBlockIconLayering(targetEntry)) {
+    throw new Error("3D 方块图标不能用于分层槽。请改用 2D 方块图标资源。");
+  }
   const next = index.entries.map((entry) => {
     if (kind === "language" || kind === "game_data" || kind === "enum_catalog") {
       return { ...entry, active: entry.id === id };
@@ -643,7 +680,12 @@ export async function importLanguageResource(sourcePath: string, language?: stri
 /**
  * Registers an external block or item icon directory for the requested slot.
  */
-export async function registerExternalIconDirectory(kind: "block_icon" | "item_icon", rootPath: string, slot: BlockIconSlot): Promise<GameResourceSnapshot> {
+export async function registerExternalIconDirectory(
+  kind: "block_icon" | "item_icon",
+  rootPath: string,
+  slot: BlockIconSlot,
+  blockIconVariant?: BlockIconVariant,
+): Promise<GameResourceSnapshot> {
   const label = `${kind === "block_icon" ? "外部方块图标" : "外部物品图标"} ${baseName(rootPath)}`;
   const entry: GameResourceEntry = {
     id: `external:${kind}:${normalizeResourceIdPart(baseName(rootPath))}:${nowId()}`,
@@ -651,6 +693,7 @@ export async function registerExternalIconDirectory(kind: "block_icon" | "item_i
     label,
     source: "external",
     root_path: rootPath,
+    block_icon_variant: kind === "block_icon" ? (blockIconVariant || (slot === "layering" ? "2d" : "3d")) : undefined,
     active_material_list: kind === "block_icon" && slot === "material_list",
     active_layering: slot === "layering",
   };
@@ -670,6 +713,7 @@ export async function downloadVaultBlockIcons(): Promise<VaultBlockIconInstallRe
     label: "CCVaults 方块图标",
     source: "vault",
     root_relpath: result.root_relpath || "minecraft-assets/block_icon/vault",
+    block_icon_variant: "3d",
     active_material_list: true,
     active_layering: false,
     installed_at: new Date().toISOString(),
@@ -794,25 +838,44 @@ export async function readActiveGameDataResource(): Promise<{ dbText: string; i1
 export async function getActiveIconSearchRoots(slot: BlockIconSlot = "material_list"): Promise<IconSearchRoot[]> {
   const snapshot = await listGameResourceRegistry();
   const roots: IconSearchRoot[] = [];
-  const blockEntry = slot === "layering" ? snapshot.active_layering_block_icons : snapshot.active_material_list_icons;
-  if (blockEntry.source === "external" && blockEntry.root_path) {
-    roots.push({ source: "absolute", root: blockEntry.root_path, label: blockEntry.label });
-  } else if (!blockEntry.builtin && blockEntry.root_relpath) {
-    roots.push({ source: "app_data", root: blockEntry.root_relpath, label: blockEntry.label });
-  }
+  const seen = new Set<string>();
+
+  const pushRoot = async (entry: GameResourceEntry | null | undefined) => {
+    if (!entry) return;
+    let root: IconSearchRoot | null = null;
+    if (entry.source === "external" && entry.root_path) {
+      root = { source: "absolute", root: entry.root_path, label: entry.label };
+    } else if (entry.root_relpath) {
+      if (entry.builtin && supportsBlockIconLayering(entry)) {
+        await ensureBuiltinBlockIconsExtracted(false);
+      }
+      root = { source: "app_data", root: entry.root_relpath, label: entry.label };
+    }
+    if (!root) return;
+    const key = `${root.source}:${root.root}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    roots.push(root);
+  };
+
   if (slot === "layering") {
+    await pushRoot(snapshot.active_layering_block_icons);
     const itemEntry = snapshot.active_layering_item_icons;
     if (itemEntry.source === "external" && itemEntry.root_path) {
-      roots.push({ source: "absolute", root: itemEntry.root_path, label: itemEntry.label });
-    } else if (!itemEntry.builtin && itemEntry.root_relpath) {
-      roots.push({ source: "app_data", root: itemEntry.root_relpath, label: itemEntry.label });
+      await pushRoot({ source: itemEntry.source, root_path: itemEntry.root_path, label: itemEntry.label } as GameResourceEntry);
+    } else if (itemEntry.root_relpath) {
+      if (itemEntry.builtin) {
+        await ensureBuiltinItemIconsExtracted(false);
+      }
+      await pushRoot({ source: itemEntry.source, root_relpath: itemEntry.root_relpath, label: itemEntry.label } as GameResourceEntry);
     }
+    return roots;
   }
-  roots.push(
-    { source: "workspace", root: "block", label: "内建 block/" },
-    { source: "workspace", root: "item", label: "内建 item/" },
-    { source: "workspace", root: "pack-in", label: "内建 pack-in/" },
-  );
+
+  await pushRoot(snapshot.active_material_list_icons);
+  if (supportsBlockIconLayering(snapshot.active_layering_block_icons)) {
+    await pushRoot(snapshot.active_layering_block_icons);
+  }
   return roots;
 }
 
@@ -865,13 +928,22 @@ export async function checkGameResourceHealth(): Promise<GameResourceHealthRow[]
   } catch (error) {
     rows.push({ label: `BlockState：${snapshot.active_game_data.label}`, ok: false, detail: String(error) });
   }
-  const roots = await getActiveIconSearchRoots("material_list");
-  for (const root of roots.slice(0, 1)) {
+  const materialRoots = await getActiveIconSearchRoots("material_list");
+  for (const root of materialRoots.slice(0, 2)) {
     try {
       const info = await pathInfoForRoot(root);
-      rows.push({ label: `材料列表图标：${root.label}`, ok: info.exists && info.is_dir, detail: info.normalized });
+      rows.push({ label: `材料列表方块图标：${root.label}`, ok: info.exists && info.is_dir, detail: info.normalized });
     } catch (error) {
-      rows.push({ label: `材料列表图标：${root.label}`, ok: false, detail: String(error) });
+      rows.push({ label: `材料列表方块图标：${root.label}`, ok: false, detail: String(error) });
+    }
+  }
+  const layeringRoots = await getActiveIconSearchRoots("layering");
+  for (const root of layeringRoots.slice(0, 2)) {
+    try {
+      const info = await pathInfoForRoot(root);
+      rows.push({ label: `分层图标：${root.label}`, ok: info.exists && info.is_dir, detail: info.normalized });
+    } catch (error) {
+      rows.push({ label: `分层图标：${root.label}`, ok: false, detail: String(error) });
     }
   }
   try {

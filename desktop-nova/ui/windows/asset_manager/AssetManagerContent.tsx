@@ -8,6 +8,8 @@ import {
   downloadVaultBlockIcons,
   downloadVaultItemIcons,
   downloadWikiEnumCatalog,
+  ensureBuiltinBlockIconsExtracted,
+  ensureBuiltinItemIconsExtracted,
   GameResourceEntry,
   GameResourceHealthRow,
   GameResourceKind,
@@ -26,6 +28,8 @@ import {
   openDialog,
   openWorkspacePath,
   registerExternalIconDirectory,
+  resolveBlockIconVariant,
+  supportsBlockIconLayering,
 } from "../../../src/business/facade";
 import { listenEvent } from "../../../src/platform/events";
 import { NavIcon } from "../../shell/NavIcon";
@@ -33,6 +37,7 @@ import { NavIcon } from "../../shell/NavIcon";
 type ManagedAssetRoute = "block_icon" | "item_icon" | "language" | "game_data" | "enum_catalog";
 type AssetRoute = ManagedAssetRoute;
 type AssetSource = "builtin" | "local_directory" | "vault" | "wiki" | "local_json" | "github";
+type BlockIconResourceSlot = "material_list" | "layering";
 type AssetSourceState = Record<AssetRoute, AssetSource>;
 type AssetTableColumnKey = "name" | "source" | "version" | "language" | "usage" | "status" | "date" | "actions";
 
@@ -143,7 +148,7 @@ const TABLE_COLUMNS_BY_ROUTE: Record<AssetRoute, AssetTableColumn[]> = {
 };
 
 const ROUTE_ROOT_RELPATH: Record<AssetRoute, string> = {
-  block_icon: "minecraft-assets/block_icon",
+  block_icon: "minecraft-assets/block_2d",
   item_icon: "minecraft-assets/item",
   language: "minecraft-assets/language",
   game_data: "minecraft-assets/game-data",
@@ -180,7 +185,7 @@ function resourceActiveText(snapshot: GameResourceSnapshot | null): string {
 
 function routeIntro(route: AssetRoute): string {
   switch (route) {
-    case "block_icon": return "管理材料列表与分层视图使用的方块图标来源。";
+    case "block_icon": return "管理两个方块图标槽位：2D 槽可用于分层并可回退给材料列表，3D 槽仅用于材料列表。";
     case "item_icon": return "管理分层视图中可用的物品图标来源。";
     case "language": return "导入、下载并切换 Minecraft 语言 JSON。";
     case "game_data": return "导入并切换 BlockState 数据库与属性翻译。";
@@ -188,7 +193,7 @@ function routeIntro(route: AssetRoute): string {
   }
 }
 
-function isManagedAssetRoute(route: AssetRoute): route is ManagedAssetRoute {
+function isManagedAssetRoute(_route: AssetRoute): _route is ManagedAssetRoute {
   return true;
 }
 
@@ -215,8 +220,8 @@ function formatDate(value?: string): string {
 
 function blockUsageLabel(entry: GameResourceEntry): string {
   return [
-    entry.active_material_list ? "材料" : "",
-    entry.active_layering ? "分层" : "",
+    entry.active_material_list ? "材料槽" : "",
+    entry.active_layering ? "2D 槽" : "",
   ].filter(Boolean).join("/");
 }
 
@@ -228,6 +233,13 @@ function activationLabel(route: AssetRoute, entry: GameResourceEntry): string {
 
 function displayEntryName(route: AssetRoute, entry: GameResourceEntry): string {
   if (route === "block_icon" || route === "item_icon") {
+    if (route === "block_icon") {
+      const prefix = resolveBlockIconVariant(entry) === "2d" ? "[2D] " : "[3D] ";
+      if (entry.source === "builtin") return `${prefix}（内建）`;
+      if (entry.source === "external") return `${prefix}${baseName(entry.root_path || entry.label)}/`;
+      if (entry.source === "vault") return `${prefix}CCVault`;
+      return `${prefix}${entry.label}`;
+    }
     if (entry.source === "builtin") return "（内建）";
     if (entry.source === "external") return `${baseName(entry.root_path || entry.label)}/`;
     if (entry.source === "vault") return "CCVault";
@@ -253,6 +265,9 @@ function displayEntryName(route: AssetRoute, entry: GameResourceEntry): string {
 }
 
 function displayVersion(route: AssetRoute, entry: GameResourceEntry): string {
+  if (route === "block_icon") {
+    return resolveBlockIconVariant(entry) === "2d" ? "2D" : "3D";
+  }
   if (route === "language") {
     return entry.source === "github" ? (entry.branch || entry.version || "未知") : "未知";
   }
@@ -262,9 +277,13 @@ function displayVersion(route: AssetRoute, entry: GameResourceEntry): string {
   return "未知";
 }
 
+function blockIconSlotLabel(slot: BlockIconResourceSlot): string {
+  return slot === "layering" ? "2D 槽（分层）" : "3D 槽（材料列表）";
+}
+
 function fetchButtonLabel(route: AssetRoute, source: AssetSource): string {
   if (route === "block_icon" || route === "item_icon") {
-    if (source === "builtin") return "重新解包";
+    if (source === "builtin") return "重新提取";
     if (source === "local_directory") return "导入...";
     return "下载";
   }
@@ -289,6 +308,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   const [statusText, setStatusText] = useState("正在加载资源...");
   const [log, setLog] = useState("");
   const [selectedSourceByRoute, setSelectedSourceByRoute] = useState<AssetSourceState>(DEFAULT_SOURCE_BY_ROUTE);
+  const [selectedBlockIconSlot, setSelectedBlockIconSlot] = useState<BlockIconResourceSlot>("layering");
   const [languageBranches, setLanguageBranches] = useState<string[]>([]);
   const [selectedLanguageBranch, setSelectedLanguageBranch] = useState("");
   const [remoteLanguages, setRemoteLanguages] = useState<string[]>([]);
@@ -416,6 +436,25 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     }
   };
 
+  const reextractBuiltinBlockIcons = async (slot: BlockIconResourceSlot) => {
+    setBlockIconDownloadBusy(true);
+    reportStatus("正在重新提取内建方块图标...", "正在从 block.zip 提取到 data/minecraft-assets/block_2d/initial ...");
+    try {
+      const result = await ensureBuiltinBlockIconsExtracted(true);
+      const snapshot = await activateGameResource("block_icon", BUILTIN_BLOCK_ICON_ID, slot);
+      setResourceSnapshot(snapshot);
+      await reloadRuntimeResources();
+      reportStatus(
+        `内建方块图标已提取并应用到${blockIconSlotLabel(slot)}：${result.extracted}`,
+        `${result.target_dir}\n${resourceActiveText(snapshot)}`,
+      );
+    } catch (error) {
+      reportStatus("重新提取内建方块图标失败。", String(error));
+    } finally {
+      setBlockIconDownloadBusy(false);
+    }
+  };
+
   const downloadItemIcons = async () => {
     setItemIconDownloadBusy(true);
     reportStatus("正在下载 CCVault 物品图标...", "正在下载 CCVault 物品图标...");
@@ -429,6 +468,24 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       );
     } catch (error) {
       reportStatus("下载 CCVault 物品图标失败。", String(error));
+    } finally {
+      setItemIconDownloadBusy(false);
+    }
+  };
+
+  const reextractBuiltinItemIcons = async () => {
+    setItemIconDownloadBusy(true);
+    reportStatus("正在重新提取内建物品图标...", "正在从 item.zip 提取到 data/minecraft-assets/item/initial ...");
+    try {
+      const result = await ensureBuiltinItemIconsExtracted(true);
+      const snapshot = await refreshGameResources(true);
+      await reloadRuntimeResources();
+      reportStatus(
+        `内建物品图标已提取：${result.extracted}`,
+        `${result.target_dir}\n${resourceActiveText(snapshot)}`,
+      );
+    } catch (error) {
+      reportStatus("重新提取内建物品图标失败。", String(error));
     } finally {
       setItemIconDownloadBusy(false);
     }
@@ -451,12 +508,13 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     }
   };
 
-  const importBlockIconDir = async () => {
+  const importBlockIconDir = async (slot: BlockIconResourceSlot) => {
     const selected = await openDialog({ directory: true });
     if (typeof selected !== "string") return;
+    const variant = slot === "layering" ? "2d" : "3d";
     await applyResourceSnapshot(
-      registerExternalIconDirectory("block_icon", selected, "material_list"),
-      `方块图标目录已导入：${selected}`,
+      registerExternalIconDirectory("block_icon", selected, slot, variant),
+      `方块图标目录已导入到${blockIconSlotLabel(slot)}：${selected}`,
     );
   };
 
@@ -489,7 +547,10 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
 
   const openCurrentRootDirectory = async () => {
     try {
-      const marker = await getUserConfigFilePath(`${ROUTE_ROOT_RELPATH[route]}/.resource-root`);
+      const relativeRoot = route === "block_icon"
+        ? (selectedBlockIconSlot === "layering" ? "minecraft-assets/block_2d" : "minecraft-assets/block_icon")
+        : ROUTE_ROOT_RELPATH[route];
+      const marker = await getUserConfigFilePath(`${relativeRoot}/.resource-root`);
       await openWorkspacePath(parentDir(marker));
       setStatusText(`已打开 ${selectedNavItem.label} 根目录。`);
     } catch (error) {
@@ -509,14 +570,18 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     try {
       if (route === "block_icon") {
         if (selectedSource === "builtin") {
-          await activateBuiltinForCurrentRoute();
+          await reextractBuiltinBlockIcons(selectedBlockIconSlot);
           return;
         }
         if (selectedSource === "local_directory") {
-          await importBlockIconDir();
+          await importBlockIconDir(selectedBlockIconSlot);
           return;
         }
         if (selectedSource === "vault") {
+          if (selectedBlockIconSlot === "layering") {
+            reportStatus("CCVault 方块图标仅支持材料列表 3D 槽。", "请选择“3D 槽（材料列表）”后再下载。");
+            return;
+          }
           await downloadBlockIcons();
           return;
         }
@@ -525,7 +590,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       }
       if (route === "item_icon") {
         if (selectedSource === "builtin") {
-          await activateBuiltinForCurrentRoute();
+          await reextractBuiltinItemIcons();
           return;
         }
         if (selectedSource === "local_directory") {
@@ -574,6 +639,23 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   };
 
   const renderSubOptionControls = () => {
+    if (route === "block_icon") {
+      return (
+        <>
+          <select
+            className="input asset-manager-select"
+            value={selectedBlockIconSlot}
+            onChange={(event) => setSelectedBlockIconSlot(event.target.value as BlockIconResourceSlot)}
+          >
+            <option value="layering">2D 槽（分层）</option>
+            <option value="material_list">3D 槽（材料列表）</option>
+          </select>
+          <select className="input asset-manager-select" disabled value="">
+            <option value="">{selectedBlockIconSlot === "layering" ? "该槽仅接受 2D 方块图标" : "该槽可用 3D，必要时回退 2D"}</option>
+          </select>
+        </>
+      );
+    }
     if (route === "language" && selectedSource === "github") {
       return (
         <>
@@ -641,8 +723,10 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
           <div className="game-resource-row-actions">
             {route === "block_icon" ? (
               <>
-                <button className="btn" type="button" onClick={() => activateResource("block_icon", entry.id, "material_list")}>用于材料</button>
-                <button className="btn" type="button" onClick={() => activateResource("block_icon", entry.id, "layering")}>用于分层</button>
+                <button className="btn" type="button" onClick={() => activateResource("block_icon", entry.id, "material_list")}>用于材料槽</button>
+                {supportsBlockIconLayering(entry) ? (
+                  <button className="btn" type="button" onClick={() => activateResource("block_icon", entry.id, "layering")}>用于 2D 槽</button>
+                ) : null}
               </>
             ) : null}
             {route === "item_icon" ? (
@@ -807,8 +891,8 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                     }
                     onClick={runFetchAction}
                   >
-                    {route === "block_icon" && blockIconDownloadBusy ? "下载中..." : null}
-                    {route === "item_icon" && itemIconDownloadBusy ? "下载中..." : null}
+                    {route === "block_icon" && blockIconDownloadBusy ? (selectedSource === "builtin" ? "提取中..." : "下载中...") : null}
+                    {route === "item_icon" && itemIconDownloadBusy ? (selectedSource === "builtin" ? "提取中..." : "下载中...") : null}
                     {route === "language" && languageDownloadBusy ? "下载中..." : null}
                     {route === "enum_catalog" && enumCatalogDownloadBusy ? "下载中..." : null}
                     {!(

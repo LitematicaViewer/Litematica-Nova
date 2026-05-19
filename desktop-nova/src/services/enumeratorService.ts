@@ -128,10 +128,10 @@ function slugify(value: string): string {
   const compact = String(value || "")
     .trim()
     .toLowerCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/[^a-z0-9\-\u4e00-\u9fff]/g, "")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
+    .replace(/[\s\p{P}\p{S}]+/gu, "_")
+    .replace(/[^a-z0-9_\u4e00-\u9fff]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
   return compact || "collection";
 }
 

@@ -11,13 +11,24 @@ export {
   saveUserConfig,
   setUserConfigDir,
 } from "../platform";
-export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo, WikiEnumCatalogDownloadOutput } from "../platform";
+export type {
+  BuiltinIconExtractOutput,
+  CopyFileToDirectoryOutput,
+  DirectoryEntryInfo,
+  PathInfo,
+  ProjectionPreviewImageOutput,
+  UserConfig,
+  UserConfigInfo,
+  WikiEnumCatalogDownloadOutput,
+} from "../platform";
 
 export {
   checkFileExists,
   copyFileToDirectory,
   downloadVaultBlockIconsFromVault,
   downloadVaultItemIconsFromVault,
+  ensureBuiltinBlockIconsExtracted as ensureBuiltinBlockIconsExtractedNative,
+  ensureBuiltinItemIconsExtracted as ensureBuiltinItemIconsExtractedNative,
   downloadWikiEnumCatalogsFromMinecraftWiki,
   listDirectoryEntries,
   listLitematicFileEntriesInDirectory,
