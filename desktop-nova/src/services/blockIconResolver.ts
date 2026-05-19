@@ -1,6 +1,7 @@
 import { getActiveIconSearchRoots, readIconFromRoot, type BlockIconSlot } from "./gameResources";
 
 const iconCache = new Map<string, Promise<string | null>>();
+type IconLookupMode = "default" | "item_first";
 
 function iconCandidates(blockId: string): string[] {
   const displayId = blockId.replace("minecraft:", "");
@@ -29,9 +30,15 @@ function iconRelativePaths(candidate: string): string[] {
   ];
 }
 
-async function loadIcon(blockId: string, slot: BlockIconSlot): Promise<string | null> {
+async function loadIcon(blockId: string, slot: BlockIconSlot, lookupMode: IconLookupMode): Promise<string | null> {
   if (!blockId) return null;
-  const roots = await getActiveIconSearchRoots(slot);
+  let roots = await getActiveIconSearchRoots(slot);
+  if (lookupMode === "item_first") {
+    const layeringRoots = await getActiveIconSearchRoots("layering");
+    roots = layeringRoots.length > 1
+      ? [layeringRoots[layeringRoots.length - 1], ...layeringRoots.slice(0, layeringRoots.length - 1)]
+      : layeringRoots;
+  }
   for (const root of roots) {
     for (const candidate of iconCandidates(blockId)) {
       for (const relativePath of iconRelativePaths(candidate)) {
@@ -57,10 +64,10 @@ export function invalidateBlockIconCache(): void {
 /**
  * Loads and caches the data URL for a Minecraft block or item icon.
  */
-export function getBlockIconDataUrl(blockId: string, slot: BlockIconSlot = "material_list"): Promise<string | null> {
-  const cacheKey = `${slot}:${blockId}`;
+export function getBlockIconDataUrl(blockId: string, slot: BlockIconSlot = "material_list", lookupMode: IconLookupMode = "default"): Promise<string | null> {
+  const cacheKey = `${slot}:${lookupMode}:${blockId}`;
   if (!iconCache.has(cacheKey)) {
-    iconCache.set(cacheKey, loadIcon(blockId, slot));
+    iconCache.set(cacheKey, loadIcon(blockId, slot, lookupMode));
   }
   return iconCache.get(cacheKey)!;
 }

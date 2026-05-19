@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   loadStructureStats,
@@ -18,6 +18,7 @@ import {
   type EnumeratorValueType,
 } from "../../../src/services/enumeratorService";
 import { BlockIcon } from "../../components/BlockIcon";
+import { useVirtualWindow } from "../../components/useVirtualWindow";
 import {
   applyThemeStylesheet,
   currentThemeId,
@@ -27,7 +28,7 @@ import {
 
 const enumeratorOpenFileEvent = "enumerator-open-file";
 
-type CategoryFilter = "all" | "base" | "version" | "creative" | "custom";
+type CategoryFilter = "all" | "base" | "version" | "system_enum" | "creative" | "custom";
 
 const initialFileFromUrl = () => {
   try {
@@ -45,6 +46,8 @@ function categoryLabel(category: EnumeratorCollectionCategory): string {
       return "版本";
     case "creative":
       return "创造模式";
+    case "system_enum":
+      return "系统枚举";
     case "custom":
       return "自定义";
     case "runtime":
@@ -297,6 +300,19 @@ function EnumeratorContent({
     return rightRows.filter((row) => [row.name, row.id].some((value) => value.toLowerCase().includes(keyword)));
   }, [rightRows, rightSearchKeyword]);
 
+  const leftValueTableRef = useRef<HTMLDivElement | null>(null);
+  const rightValueTableRef = useRef<HTMLDivElement | null>(null);
+  const {
+    visibleItems: visibleLeftRows,
+    topSpacerHeight: leftTopSpacerHeight,
+    bottomSpacerHeight: leftBottomSpacerHeight,
+  } = useVirtualWindow(filteredLeftRows, leftValueTableRef, 40, 10);
+  const {
+    visibleItems: visibleRightRows,
+    topSpacerHeight: rightTopSpacerHeight,
+    bottomSpacerHeight: rightBottomSpacerHeight,
+  } = useVirtualWindow(filteredRightRows, rightValueTableRef, 40, 10);
+
   const handleCreateCollection = () => {
     hydrateRightEditor(null);
     setStatus("已创建一个未保存的右侧集合草稿。");
@@ -383,12 +399,13 @@ function EnumeratorContent({
               <option value="base">全集</option>
               <option value="version">版本</option>
               <option value="creative">创造模式</option>
+              <option value="system_enum">系统枚举</option>
               <option value="custom">自定义</option>
             </select>
           </div>
 
           <div className="enumerator-panel-note">
-            {isLoadingCollections ? "正在加载集合..." : "左键放入左侧来源，右键放入右侧编辑。版本/创造模式/自定义集合均从用户配置目录 enumerator/ 对应子目录读取。"}
+            {isLoadingCollections ? "正在加载集合..." : "左键放入左侧来源，右键放入右侧编辑。版本/创造模式/系统/自定义集合均从用户配置目录 enumerator/ 对应子目录读取。"}
           </div>
 
           <div className="enumerator-collection-table-wrap">
@@ -465,7 +482,7 @@ function EnumeratorContent({
                 />
               </div>
 
-              <div className="enumerator-value-table-wrap">
+              <div className="enumerator-value-table-wrap" ref={leftValueTableRef}>
                 <table className="material-list-table enumerator-table">
                   <thead>
                     <tr>
@@ -474,23 +491,36 @@ function EnumeratorContent({
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredLeftRows.map((row) => (
-                      <tr
-                        key={row.id}
-                        onContextMenu={(event) => {
-                          event.preventDefault();
-                          handleAddValueToRight(row.id);
-                        }}
-                      >
-                        <td className="material-list-icon-cell"><BlockIcon blockId={row.iconHint} /></td>
-                        <td>{row.name}</td>
-                      </tr>
-                    ))}
                     {!filteredLeftRows.length ? (
                       <tr>
                         <td colSpan={2} className="enumerator-empty-cell">无来源数据</td>
                       </tr>
-                    ) : null}
+                    ) : (
+                      <>
+                        {leftTopSpacerHeight > 0 ? (
+                          <tr aria-hidden>
+                            <td colSpan={2} style={{ height: leftTopSpacerHeight, padding: 0, border: 0 }} />
+                          </tr>
+                        ) : null}
+                        {visibleLeftRows.map((row) => (
+                          <tr
+                            key={row.id}
+                            onContextMenu={(event) => {
+                              event.preventDefault();
+                              handleAddValueToRight(row.id);
+                            }}
+                          >
+                            <td className="material-list-icon-cell"><BlockIcon blockId={row.iconHint} lookupMode={row.iconLookupMode} /></td>
+                            <td>{row.name}</td>
+                          </tr>
+                        ))}
+                        {leftBottomSpacerHeight > 0 ? (
+                          <tr aria-hidden>
+                            <td colSpan={2} style={{ height: leftBottomSpacerHeight, padding: 0, border: 0 }} />
+                          </tr>
+                        ) : null}
+                      </>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -522,7 +552,7 @@ function EnumeratorContent({
                 />
               </div>
 
-              <div className="enumerator-value-table-wrap">
+              <div className="enumerator-value-table-wrap" ref={rightValueTableRef}>
                 <table className="material-list-table enumerator-table">
                   <thead>
                     <tr>
@@ -531,28 +561,41 @@ function EnumeratorContent({
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredRightRows.map((row) => {
-                      const active = rightSelected.includes(row.id);
-                      return (
-                        <tr
-                          key={row.id}
-                          className={active ? "enumerator-row-selected" : ""}
-                          onClick={() => handleToggleRightSelection(row.id)}
-                          onContextMenu={(event) => {
-                            event.preventDefault();
-                            handleRemoveValueFromRight(row.id);
-                          }}
-                        >
-                          <td className="material-list-icon-cell"><BlockIcon blockId={row.iconHint} /></td>
-                          <td>{row.name}</td>
-                        </tr>
-                      );
-                    })}
                     {!filteredRightRows.length ? (
                       <tr>
                         <td colSpan={2} className="enumerator-empty-cell">当前右侧集合为空</td>
                       </tr>
-                    ) : null}
+                    ) : (
+                      <>
+                        {rightTopSpacerHeight > 0 ? (
+                          <tr aria-hidden>
+                            <td colSpan={2} style={{ height: rightTopSpacerHeight, padding: 0, border: 0 }} />
+                          </tr>
+                        ) : null}
+                        {visibleRightRows.map((row) => {
+                          const active = rightSelected.includes(row.id);
+                          return (
+                            <tr
+                              key={row.id}
+                              className={active ? "enumerator-row-selected" : ""}
+                              onClick={() => handleToggleRightSelection(row.id)}
+                              onContextMenu={(event) => {
+                                event.preventDefault();
+                                handleRemoveValueFromRight(row.id);
+                              }}
+                            >
+                              <td className="material-list-icon-cell"><BlockIcon blockId={row.iconHint} lookupMode={row.iconLookupMode} /></td>
+                              <td>{row.name}</td>
+                            </tr>
+                          );
+                        })}
+                        {rightBottomSpacerHeight > 0 ? (
+                          <tr aria-hidden>
+                            <td colSpan={2} style={{ height: rightBottomSpacerHeight, padding: 0, border: 0 }} />
+                          </tr>
+                        ) : null}
+                      </>
+                    )}
                   </tbody>
                 </table>
               </div>
