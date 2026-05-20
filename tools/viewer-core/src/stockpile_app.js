@@ -20,6 +20,8 @@
   let authStatus = { authenticated: false, admin: false, access_password_enabled: false, whitelist_enabled: false, allow_guest_readonly: false };
   let searchRenderTimer = null;
   let searchComposing = false;
+  const activePollMs = 15000;
+  const hiddenPollMs = 60000;
 
   function pickInitialLang() {
     const stored = localStorage.getItem(langKey);
@@ -52,6 +54,7 @@
       copied: '\u5df2\u590d\u5236', readonlyMode: '\u53ea\u8bfb\u6a21\u5f0f', recentBy: '\u6700\u8fd1\u4fee\u6539\u4eba', recentAt: '\u6700\u8fd1\u4fee\u6539\u65f6\u95f4', publicNote: '\u5907\u6ce8', storageLocation: '\u5b58\u653e\u4f4d\u7f6e',
       locked: '\u9501\u5b9a', materialLocked: '\u6750\u6599\u5df2\u9501\u5b9a', loginRequired: '\u8bf7\u5148\u8f93\u5165\u8bbf\u95ee\u5bc6\u7801', readonlyGuest: '\u53ea\u8bfb\u8bbf\u5ba2\u4e0d\u80fd\u4fee\u6539',
       accessPassword: '\u8bbf\u95ee\u5bc6\u7801', noMyTasks: '\u6682\u65e0\u6211\u7684\u4efb\u52a1', rawCountSuffix: '\u539f\u59cb\u4e2a\u6570', operationUnavailable: '\u5f53\u524d\u4e0d\u53ef\u64cd\u4f5c'
+      , refresh: '\u5237\u65b0'
     },
     'en-US': {
       myTasks: 'My tasks', myPreparing: 'Preparing', myDone: 'Done', myParticipated: 'Participated', myTotal: 'My task stats',
@@ -61,6 +64,7 @@
       copied: 'Copied', readonlyMode: 'Read-only mode', recentBy: 'Last changed by', recentAt: 'Last changed at', publicNote: 'Note', storageLocation: 'Storage',
       locked: 'Locked', materialLocked: 'Material is locked', loginRequired: 'Access password required', readonlyGuest: 'Read-only guest',
       accessPassword: 'Access password', noMyTasks: 'No tasks yet', rawCountSuffix: 'raw', operationUnavailable: 'Unavailable'
+      , refresh: 'Refresh'
     }
   };
   function dict() { return (data.i18n && data.i18n[lang]) || (data.i18n && data.i18n['en-US']) || {}; }
@@ -106,12 +110,13 @@
     render();
     ensureUser();
     if (isServeMode) {
-      pollHandle = setInterval(async () => {
+      const poll = async () => {
         if (userId && !participantRegistered) await registerParticipant();
         await refreshState();
-        if (document.activeElement?.id === 'search' || searchComposing) return;
-        render();
-      }, Math.min(10000, Math.max(2000, Number(config.poll_interval_ms || 3000))));
+        if (!isEditing() && !searchComposing) render();
+        pollHandle = setTimeout(poll, document.hidden ? hiddenPollMs : activePollMs);
+      };
+      pollHandle = setTimeout(poll, activePollMs);
     }
   }
 
@@ -377,6 +382,7 @@
         <span class="badge">${escapeHtml(t('currentId'))}: ${escapeHtml(userId || '-')}</span>
         ${isServeMode ? `<span class="badge">${escapeHtml(t('lastSync'))}: ${escapeHtml(lastSyncText)}</span>${config.mode === 'multi' ? `<span class="badge">${escapeHtml(t('participants'))}: ${(syncState.participants || []).length}</span>` : ''}` : ''}
         <select class="field" id="lang" aria-label="${escapeAttr(t('language'))}"><option value="zh-CN" ${lang === 'zh-CN' ? 'selected' : ''}>\u4e2d\u6587</option><option value="en-US" ${lang === 'en-US' ? 'selected' : ''}>English</option></select>
+        <button class="button" id="refreshNow">${escapeHtml(t('refresh') || 'Refresh')}</button>
         <button class="button" id="switchUser">${escapeHtml(t('switchId'))}</button>
       </div>
     </header>
@@ -690,6 +696,10 @@
   }
 
   function bindControls() {
+    document.getElementById('refreshNow')?.addEventListener('click', async () => {
+      await refreshState();
+      render();
+    });
     document.getElementById('switchUser').addEventListener('click', () => {
       localStorage.removeItem(userKey);
       userId = '';
@@ -831,9 +841,17 @@
     return String(value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
   function escapeAttr(value) { return escapeHtml(value); }
+  function isEditing() {
+    const active = document.activeElement;
+    return !!active && (
+      active.matches?.('input, textarea, select') ||
+      active.isContentEditable ||
+      ['search', 'accessPassword', 'userInput'].includes(active.id)
+    );
+  }
 
   window.addEventListener('beforeunload', () => {
-    if (pollHandle) clearInterval(pollHandle);
+    if (pollHandle) clearTimeout(pollHandle);
   });
   init();
 }());
