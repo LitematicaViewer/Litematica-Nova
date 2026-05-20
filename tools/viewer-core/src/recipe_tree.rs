@@ -508,6 +508,9 @@ fn material_priority(item_id: &str) -> u32 {
         "raw_iron" => 10,
         "deepslate_iron_ore" => 20,
         "iron_nugget" => 500,
+        "bone" => 0,
+        "bone_meal" => 20,
+        "bone_block" => 800,
         "oak_log" | "oak_planks" => 0,
         "oak_wood" => 1,
         "spruce_log" | "spruce_planks" => 10,
@@ -529,6 +532,15 @@ fn candidate_type_rank(candidate: &RecipeCandidate, stone_family_target: bool) -
         .split(':')
         .next_back()
         .unwrap_or(candidate.output_item.as_str());
+    if output_local == "bone_meal"
+        && candidate.process_type == ProcessType::Craft
+        && candidate
+            .ingredients
+            .iter()
+            .any(|input| input_contains_local(input, "bone_block"))
+    {
+        return 8;
+    }
     if output_local.ends_with("_ingot")
         && candidate.process_type == ProcessType::Craft
         && candidate.ingredients.iter().any(|input| match &input.spec {
@@ -540,6 +552,16 @@ fn candidate_type_rank(candidate: &RecipeCandidate, stone_family_target: bool) -
         return 8;
     }
     static_type_rank(candidate.process_type, stone_family_target)
+}
+
+fn input_contains_local(input: &RecipeInput, local_name: &str) -> bool {
+    match &input.spec {
+        InputSpec::Item(item) => item.split(':').next_back().unwrap_or(item) == local_name,
+        InputSpec::Alternatives(items) => items
+            .iter()
+            .any(|item| item.split(':').next_back().unwrap_or(item) == local_name),
+        InputSpec::Tag(_) => false,
+    }
 }
 
 fn unresolved_count(node: &RecipeTreeNode) -> u32 {
@@ -1263,6 +1285,44 @@ mod tests {
                 .iter()
                 .any(|child| child.item_id == "minecraft:known_a")
         );
+    }
+
+    #[test]
+    fn bone_meal_prefers_bone_over_bone_block_cycle() {
+        let resolver = RecipeTreeResolver::new(&recipe_map([
+            (
+                "minecraft:bone_meal_from_bone",
+                json!({
+                    "type": "minecraft:crafting_shapeless",
+                    "ingredients": ["minecraft:bone"],
+                    "result": { "id": "minecraft:bone_meal", "count": 3 }
+                }),
+            ),
+            (
+                "minecraft:bone_meal_from_bone_block",
+                json!({
+                    "type": "minecraft:crafting_shapeless",
+                    "ingredients": ["minecraft:bone_block"],
+                    "result": { "id": "minecraft:bone_meal", "count": 9 }
+                }),
+            ),
+            (
+                "minecraft:bone_block",
+                json!({
+                    "type": "minecraft:crafting_shaped",
+                    "pattern": ["###", "###", "###"],
+                    "key": { "#": "minecraft:bone_meal" },
+                    "result": { "id": "minecraft:bone_block", "count": 1 }
+                }),
+            ),
+        ]));
+        let meal = resolver.resolve("minecraft:bone_meal", 9);
+        assert_eq!(meal.children[0].item_id, "minecraft:bone");
+        assert!(!contains_unresolved_reason(&meal, "cycle"));
+
+        let block = resolver.resolve("minecraft:bone_block", 1);
+        assert_eq!(block.children[0].item_id, "minecraft:bone_meal");
+        assert!(!contains_unresolved_reason(&block, "cycle"));
     }
 
     #[test]

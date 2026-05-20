@@ -45,32 +45,34 @@
   }
   const extraI18n = {
     'zh-CN': {
-      myTasks: '我的任务', myPreparing: '我备货中', myDone: '我已完成', myTotal: '我参与总数',
-      overfilledOnly: '超额材料', stalledOnly: '已备货未完成', lockedOnly: '只看锁定', notedOnly: '只看有备注',
-      copyAllGaps: '复制全部缺口', copyMine: '复制我的任务', copyUnclaimed: '复制无人认领', copyOverfilled: '复制超额材料',
-      copied: '已复制', readonlyMode: '只读模式', recentBy: '最近修改', publicNote: '备注', storageLocation: '存放位置',
-      locked: '锁定', materialLocked: '材料已锁定', loginRequired: '需要先输入访问密码', readonlyGuest: '只读访客，不能修改',
-      accessPassword: '访问密码'
+      myTasks: '\u6211\u7684\u4efb\u52a1', myPreparing: '\u6211\u5907\u8d27\u4e2d', myDone: '\u6211\u5df2\u5b8c\u6210', myParticipated: '\u6211\u53c2\u4e0e\u8fc7', myTotal: '\u6211\u7684\u4efb\u52a1\u7edf\u8ba1',
+      taskItems: '\u9879\u6570', taskQuantity: '\u6570\u91cf', taskRate: '\u5b8c\u6210\u7387', containerEstimate: '\u5bb9\u5668\u6298\u7b97', rawTotal: '\u603b\u6570\u91cf',
+      overfilledOnly: '\u8d85\u989d', stalledOnly: '\u5df2\u5907\u8d27\u4f46\u672a\u5b8c\u6210', lockedOnly: '\u5df2\u9501\u5b9a', notedOnly: '\u6709\u5907\u6ce8', storedOnly: '\u6709\u5b58\u653e\u4f4d\u7f6e',
+      copyAllGaps: '\u590d\u5236\u5269\u4f59\u7f3a\u53e3', copyMine: '\u590d\u5236\u6211\u7684\u4efb\u52a1', copyUnclaimed: '\u590d\u5236\u65e0\u4eba\u8ba4\u9886', copyOverfilled: '\u590d\u5236\u8d85\u989d\u6750\u6599',
+      copied: '\u5df2\u590d\u5236', readonlyMode: '\u53ea\u8bfb\u6a21\u5f0f', recentBy: '\u6700\u8fd1\u4fee\u6539\u4eba', recentAt: '\u6700\u8fd1\u4fee\u6539\u65f6\u95f4', publicNote: '\u5907\u6ce8', storageLocation: '\u5b58\u653e\u4f4d\u7f6e',
+      locked: '\u9501\u5b9a', materialLocked: '\u6750\u6599\u5df2\u9501\u5b9a', loginRequired: '\u8bf7\u5148\u8f93\u5165\u8bbf\u95ee\u5bc6\u7801', readonlyGuest: '\u53ea\u8bfb\u8bbf\u5ba2\u4e0d\u80fd\u4fee\u6539',
+      accessPassword: '\u8bbf\u95ee\u5bc6\u7801', noMyTasks: '\u6682\u65e0\u6211\u7684\u4efb\u52a1', rawCountSuffix: '\u539f\u59cb\u4e2a\u6570', operationUnavailable: '\u5f53\u524d\u4e0d\u53ef\u64cd\u4f5c'
     },
     'en-US': {
-      myTasks: 'My tasks', myPreparing: 'My preparing', myDone: 'My done', myTotal: 'My total',
-      overfilledOnly: 'Overfilled', stalledOnly: 'Prepared not done', lockedOnly: 'Locked only', notedOnly: 'With notes',
-      copyAllGaps: 'Copy all gaps', copyMine: 'Copy my tasks', copyUnclaimed: 'Copy unclaimed', copyOverfilled: 'Copy overfilled',
-      copied: 'Copied', readonlyMode: 'Read-only mode', recentBy: 'Last changed by', publicNote: 'Note', storageLocation: 'Storage',
+      myTasks: 'My tasks', myPreparing: 'Preparing', myDone: 'Done', myParticipated: 'Participated', myTotal: 'My task stats',
+      taskItems: 'Items', taskQuantity: 'Quantity', taskRate: 'Done rate', containerEstimate: 'Container estimate', rawTotal: 'Total quantity',
+      overfilledOnly: 'Overfilled', stalledOnly: 'Prepared not done', lockedOnly: 'Locked', notedOnly: 'With notes', storedOnly: 'With storage',
+      copyAllGaps: 'Copy remaining gaps', copyMine: 'Copy my tasks', copyUnclaimed: 'Copy unclaimed', copyOverfilled: 'Copy overfilled',
+      copied: 'Copied', readonlyMode: 'Read-only mode', recentBy: 'Last changed by', recentAt: 'Last changed at', publicNote: 'Note', storageLocation: 'Storage',
       locked: 'Locked', materialLocked: 'Material is locked', loginRequired: 'Access password required', readonlyGuest: 'Read-only guest',
-      accessPassword: 'Access password'
+      accessPassword: 'Access password', noMyTasks: 'No tasks yet', rawCountSuffix: 'raw', operationUnavailable: 'Unavailable'
     }
   };
   function dict() { return (data.i18n && data.i18n[lang]) || (data.i18n && data.i18n['en-US']) || {}; }
-  function t(key) { return dict()[key] || extraI18n[lang]?.[key] || extraI18n['en-US'][key] || defaultLabel(key) || key; }
+  function t(key) { return extraI18n[lang]?.[key] || dict()[key] || extraI18n['en-US'][key] || defaultLabel(key) || key; }
   function defaultLabel(key) {
     const zh = {
-      totalQuantity: '总数量', rawCount: '原始个数', stackSize: '每组数量', unitChest: '箱', unitBox: '盒', unitStack: '组', unitEach: '个',
-      direct: '可采集', recipeDirect: '可直接采集/挖掘获得', namespaceId: '命名空间 ID', stacksRemainder: '组 / 余数', shulkerBoxes: '盒数',
-      tagPlanks: '任意木板', tagLogs: '任意原木', tagStone: '任意石材', tagCoals: '任意煤炭', tagIronOres: '任意铁矿石'
+      totalQuantity: '\u603b\u6570\u91cf', rawCount: '\u539f\u59cb\u4e2a\u6570', stackSize: '\u6bcf\u7ec4\u6570\u91cf', unitChest: '\u7bb1\u76d2', unitBox: '\u76d2', unitStack: '\u7ec4', unitEach: '\u4e2a',
+      direct: '\u53ef\u91c7\u96c6', recipeDirect: '\u53ef\u76f4\u63a5\u91c7\u96c6\u6216\u6316\u6398\u83b7\u5f97', namespaceId: '\u547d\u540d\u7a7a\u95f4 ID', stacksRemainder: '\u7ec4 / \u4f59\u6570', shulkerBoxes: '\u76d2\u6570',
+      tagPlanks: '\u4efb\u610f\u6728\u677f', tagLogs: '\u4efb\u610f\u539f\u6728', tagStone: '\u4efb\u610f\u77f3\u6750', tagCoals: '\u4efb\u610f\u7164\u70ad', tagIronOres: '\u4efb\u610f\u94c1\u77ff\u77f3'
     };
     const en = {
-      totalQuantity: 'Total quantity', rawCount: 'Raw count', stackSize: 'Stack size', unitChest: 'chest', unitBox: 'box', unitStack: 'stack', unitEach: 'item',
+      totalQuantity: 'Total quantity', rawCount: 'Raw count', stackSize: 'Stack size', unitChest: 'chest-box', unitBox: 'box', unitStack: 'stack', unitEach: 'item',
       direct: 'Gatherable', recipeDirect: 'Directly gather or mine this material', namespaceId: 'Namespace ID', stacksRemainder: 'stacks / remainder', shulkerBoxes: 'boxes',
       tagPlanks: 'Any planks', tagLogs: 'Any logs', tagStone: 'Any stone material', tagCoals: 'Any coal', tagIronOres: 'Any iron ore'
     };
@@ -166,13 +168,16 @@
       materials[item.namespace_id] = {
         material_id: item.namespace_id,
         required_count: item.required_count,
+        stack_size: item.stack_size || 64,
         preparing_count: preparing,
         done_count: done,
         remaining_count: Math.max(0, item.required_count - total),
         overfilled_count: Math.max(0, total - item.required_count),
         participants: local.assignee ? [local.assignee] : [],
         overall_status: total === 0 ? 'not_started' : total > item.required_count ? 'overfilled' : done >= item.required_count ? 'done' : done > 0 ? 'partial_done' : 'preparing',
-        claims: local.assignee ? [{ user_id: local.assignee, status: status === 'done' ? 'done' : 'preparing', quantity }] : []
+        claims: local.assignee ? [{ user_id: local.assignee, status: status === 'done' ? 'done' : 'preparing', quantity, updated_at: Math.floor(Date.now() / 1000) }] : [],
+        updated_by: local.assignee || undefined,
+        updated_at: local.assignee ? Math.floor(Date.now() / 1000) : undefined
       };
     }
     return withClientSummaries({ participants: userId ? [{ user_id: userId }] : [], materials, updated_at: Date.now() });
@@ -182,13 +187,19 @@
     return syncState.materials[item.namespace_id] || {
       material_id: item.namespace_id,
       required_count: item.required_count,
+      stack_size: item.stack_size || 64,
       preparing_count: 0,
       done_count: 0,
       remaining_count: item.required_count,
       overfilled_count: 0,
       participants: [],
       overall_status: 'not_started',
-      claims: []
+      claims: [],
+      public_note: undefined,
+      storage_location: undefined,
+      locked: false,
+      updated_by: undefined,
+      updated_at: undefined
     };
   }
   function myClaim(item) {
@@ -218,7 +229,7 @@
   }
   function renderAccessLogin() {
     if (!isServeMode || !authStatus.access_password_enabled || authStatus.authenticated) return '';
-    return `<section class="toolbar"><div class="password-row"><input class="field" id="accessPassword" type="password" placeholder="${escapeAttr(t('accessPassword') || 'Access password')}" /><button class="button icon-button" id="toggleAccessPassword" type="button" title="${escapeAttr(t('accessPassword') || 'Access password')}">👁</button></div><button class="button primary" id="accessLogin">${escapeHtml(t('enter') || 'Enter')}</button></section>`;
+    return `<section class="toolbar"><div class="password-row"><input class="field" id="accessPassword" type="password" placeholder="${escapeAttr(t('accessPassword') || 'Access password')}" /><button class="button icon-button" id="toggleAccessPassword" type="button" title="${escapeAttr(t('accessPassword') || 'Access password')}">\u663e\u793a</button></div><button class="button primary" id="accessLogin">${escapeHtml(t('enter') || 'Enter')}</button></section>`;
   }
   function renderModal() {
     if (document.querySelector('.modal')) return;
@@ -264,7 +275,8 @@
         case 'overfilled': return sync.overfilled_count > 0;
         case 'stalled': return sync.preparing_count > 0 && sync.done_count < sync.required_count;
         case 'locked': return !!sync.locked;
-        case 'noted': return !!(sync.public_note || sync.storage_location);
+        case 'noted': return !!sync.public_note;
+        case 'stored': return !!sync.storage_location;
         case 'available': return item.recipe_status === 'available';
         case 'unresolved': return item.recipe_status === 'unresolved';
         case 'missing': return item.recipe_status === 'missing';
@@ -335,7 +347,7 @@
       if (sync.preparing_count > 0 && sync.done_count < sync.required_count) summaries.stalled_materials.push(id);
       if (sync.overall_status === 'not_started') summaries.not_started_materials.push(id);
       if (sync.locked) summaries.locked_materials.push(id);
-      if (sync.public_note || sync.storage_location) summaries.noted_materials.push(id);
+      if (sync.public_note) summaries.noted_materials.push(id);
       for (const claim of sync.claims || []) {
         const user = users.get(claim.user_id) || { user_id: claim.user_id, material_count: 0, preparing_count: 0, done_count: 0, preparing_quantity: 0, done_quantity: 0 };
         user.material_count += 1;
@@ -364,7 +376,7 @@
         ${writeHint() ? `<span class="note">${escapeHtml(t('readonlyMode'))}: ${escapeHtml(writeHint())}</span>` : ''}
         <span class="badge">${escapeHtml(t('currentId'))}: ${escapeHtml(userId || '-')}</span>
         ${isServeMode ? `<span class="badge">${escapeHtml(t('lastSync'))}: ${escapeHtml(lastSyncText)}</span>${config.mode === 'multi' ? `<span class="badge">${escapeHtml(t('participants'))}: ${(syncState.participants || []).length}</span>` : ''}` : ''}
-        <select class="field" id="lang" aria-label="${escapeAttr(t('language'))}"><option value="zh-CN" ${lang === 'zh-CN' ? 'selected' : ''}>中文</option><option value="en-US" ${lang === 'en-US' ? 'selected' : ''}>English</option></select>
+        <select class="field" id="lang" aria-label="${escapeAttr(t('language'))}"><option value="zh-CN" ${lang === 'zh-CN' ? 'selected' : ''}>\u4e2d\u6587</option><option value="en-US" ${lang === 'en-US' ? 'selected' : ''}>English</option></select>
         <button class="button" id="switchUser">${escapeHtml(t('switchId'))}</button>
       </div>
     </header>
@@ -372,16 +384,11 @@
       ${syncError ? `<div class="empty">${escapeHtml(syncError)}</div>` : ''}
       <section class="summary">
         ${metric(t('totalMaterials'), data.materials.summary.unique_materials)}
-        ${metric(t('totalQuantity'), formatQuantity(data.materials.summary.total_blocks))}
-        ${metric(t('shulkerEstimate'), `${data.materials.summary.estimated_shulker_boxes}${t('unitBox')}`)}
+        ${metric(t('rawTotal'), rawQuantity(data.materials.summary.total_blocks))}
+        ${metric(t('containerEstimate'), formatQuantity(data.materials.summary.total_blocks))}
         <div class="metric"><b>${allTotals.progress}%</b><span>${escapeHtml(t('done'))}</span><div class="progress-track"><div class="progress-bar" style="width:${allTotals.progress}%"></div></div></div>
       </section>
-      <section class="summary">
-        ${metric(t('myPreparing'), `${mine.preparing_count} / ${formatQuantity(mine.preparing_quantity)}`)}
-        ${metric(t('myDone'), `${mine.done_count} / ${formatQuantity(mine.done_quantity)}`)}
-        ${metric(t('myTotal'), mine.material_count)}
-        ${metric(t('unclaimed'), stateSummaries().unclaimed_materials?.length || 0)}
-      </section>
+      ${renderMyTasks(mine)}
       <section class="toolbar">
         <input class="field" id="search" value="${escapeAttr(controls.search)}" placeholder="${escapeAttr(t('search'))}" />
         <select class="field" id="sort">${sortOptions()}</select>
@@ -408,6 +415,29 @@
   function metric(label, value) {
     return `<div class="metric"><b>${escapeHtml(String(value))}</b><span>${escapeHtml(label)}</span></div>`;
   }
+  function renderMyTasks(mine) {
+    const tasks = myTaskItems();
+    const doneRate = mine.material_count ? Math.round(mine.done_count / mine.material_count * 100) : 0;
+    const preparing = tasks.filter((task) => task.claim.status !== 'done');
+    const done = tasks.filter((task) => task.claim.status === 'done');
+    return `<section class="section my-tasks">
+      <div class="section-head"><div><h2>${escapeHtml(t('myTasks'))}</h2><div class="section-meta">${escapeHtml(t('taskItems'))}: ${mine.material_count} / ${escapeHtml(t('taskQuantity'))}: ${escapeHtml(formatQuantity(mine.preparing_quantity + mine.done_quantity))} / ${escapeHtml(t('taskRate'))}: ${doneRate}%</div></div><div class="section-rate">${doneRate}%</div></div>
+      <div class="task-columns">
+        ${taskColumn(t('myPreparing'), preparing)}
+        ${taskColumn(t('myDone'), done)}
+        ${taskColumn(t('myParticipated'), tasks)}
+      </div>
+    </section>`;
+  }
+  function taskColumn(title, tasks) {
+    const body = tasks.slice(0, 8).map(({ item, claim }) => `<li>${escapeHtml(displayName(item))}<span>${escapeHtml(formatQuantity(claim.quantity, item))}</span></li>`).join('');
+    return `<div class="task-panel"><h3>${escapeHtml(title)}</h3><ul>${body || `<li>${escapeHtml(t('noMyTasks'))}</li>`}</ul></div>`;
+  }
+  function myTaskItems() {
+    return data.materials.materials.flatMap((item) => (materialSync(item).claims || [])
+      .filter((claim) => claim.user_id === userId)
+      .map((claim) => ({ item, claim })));
+  }
   function sortOptions() {
     return [
       ['count_desc', t('countDesc')], ['count_asc', t('countAsc')], ['grouped', t('grouped')],
@@ -418,7 +448,7 @@
     return [
       ['all', t('all')], ['not_started', t('notStarted')], ['preparing', t('preparing')], ['done', t('done')],
       ['mine', t('mine')], ['unclaimed', t('unclaimed')], ['overfilled', t('overfilledOnly')], ['stalled', t('stalledOnly')],
-      ['locked', t('lockedOnly')], ['noted', t('notedOnly')], ['available', t('craftable')], ['unresolved', t('unresolved')], ['missing', t('recipeMissing')]
+      ['locked', t('lockedOnly')], ['noted', t('notedOnly')], ['stored', t('storedOnly')], ['available', t('craftable')], ['unresolved', t('unresolved')], ['missing', t('recipeMissing')]
     ].map(([value, label]) => `<option value="${value}" ${controls.filter === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
   }
   function renderList(items) {
@@ -430,7 +460,7 @@
     const info = totals(group.items);
     const icon = group.items[0]?.category_icon || 'minecraft:barrier';
     return `<section class="section">
-      <div class="section-head"><div class="section-icon">${iconImg(icon, true)}</div><div><h2>${escapeHtml(group.category)}</h2><div class="section-meta">${group.items.length} · ${escapeHtml(t('required'))} ${info.required} · ${escapeHtml(t('claimed'))} ${info.assigned}</div></div><div class="section-rate">${info.progress}%</div></div>
+      <div class="section-head"><div class="section-icon">${iconImg(icon, true)}</div><div><h2>${escapeHtml(group.category)}</h2><div class="section-meta">${group.items.length} / ${escapeHtml(t('required'))} ${escapeHtml(formatQuantity(info.required))} / ${escapeHtml(t('claimed'))} ${escapeHtml(formatQuantity(info.assigned))}</div></div><div class="section-rate">${info.progress}%</div></div>
       <div class="list">${group.items.map(renderCard).join('')}</div>
     </section>`;
   }
@@ -440,19 +470,29 @@
     const isOpen = open.has(item.namespace_id);
     const disabled = !canWrite(item);
     const hint = writeHint(item);
+    const actionControls = disabled
+      ? `<span class="sub">${escapeHtml(hint || t('operationUnavailable'))}</span>`
+      : `<input class="field qty" type="number" min="0" value="${Number(claim.quantity || 0)}" data-action="qty" />
+          <button class="button" data-action="progress">${escapeHtml(t('preparing'))}</button>
+          <button class="button primary" data-action="done">${escapeHtml(t('done'))}</button>
+          <button class="button danger" data-action="cancel">${escapeHtml(t('cancel'))}</button>`;
+    const updatedText = [
+      sync.public_note ? `${t('publicNote')}: ${sync.public_note}` : '',
+      sync.storage_location ? `${t('storageLocation')}: ${sync.storage_location}` : '',
+      sync.updated_by ? `${t('recentBy')}: ${sync.updated_by}` : '',
+      sync.updated_at ? `${t('recentAt')}: ${formatTime(sync.updated_at)}` : '',
+      hint
+    ].filter(Boolean).join(' / ');
     return `<article class="card ${isOpen ? 'open' : ''}" data-id="${escapeAttr(item.namespace_id)}">
       <div class="card-main">
         <div>
           <div class="material-title">${iconImg(item.item_icon_key, true, item)}<span class="name">${escapeHtml(displayName(item))}</span></div>
-          <div class="sub">${escapeHtml(item.namespace_id)} · ${escapeHtml(item.category)} · ${escapeHtml(t('remaining'))} ${sync.remaining_count}</div>
+          <div class="sub">${escapeHtml(item.namespace_id)} / ${escapeHtml(item.category)} / ${escapeHtml(t('remaining'))} ${escapeHtml(formatQuantity(sync.remaining_count, item))}</div>
           <div class="badges"><span class="badge ${item.recipe_status}">${recipeLabel(item.recipe_status)}</span><span class="badge ${sync.overall_status}">${overallLabel(sync.overall_status)}</span><span class="badge">${sync.participants.length ? `${escapeHtml(t('claimedBy'))}: ${escapeHtml(sync.participants.join(', '))}` : escapeHtml(t('unclaimed'))}</span>${sync.locked ? `<span class="badge missing">${escapeHtml(t('locked') || 'Locked')}</span>` : ''}${config.show_icon_fallback_badge && item.icon_available === false ? `<span class="badge missing">${escapeHtml(t('iconFallback'))}</span>` : ''}</div>
-          ${(sync.public_note || sync.storage_location || sync.updated_by || hint) ? `<div class="sub">${sync.public_note ? `${escapeHtml(t('publicNote'))}: ${escapeHtml(sync.public_note)} ` : ''}${sync.storage_location ? `${escapeHtml(t('storageLocation'))}: ${escapeHtml(sync.storage_location)} ` : ''}${sync.updated_by ? `${escapeHtml(t('recentBy'))}: ${escapeHtml(sync.updated_by)} ` : ''}${hint ? `${escapeHtml(hint)}` : ''}</div>` : ''}
+          ${updatedText ? `<div class="sub">${escapeHtml(updatedText)}</div>` : ''}
         </div>
         <div><div class="count">${formatQuantity(item.required_count, item)}</div><div class="actions">
-          <input class="field qty" type="number" min="0" value="${Number(claim.quantity || 0)}" data-action="qty" ${disabled ? 'disabled' : ''} />
-          <button class="button" data-action="progress" ${disabled ? 'disabled' : ''}>${escapeHtml(t('preparing'))}</button>
-          <button class="button primary" data-action="done" ${disabled ? 'disabled' : ''}>${escapeHtml(t('done'))}</button>
-          <button class="button danger" data-action="cancel" ${disabled ? 'disabled' : ''}>${escapeHtml(t('cancel'))}</button>
+          ${actionControls}
           <button class="button" data-action="toggle">${escapeHtml(isOpen ? t('collapse') : t('details'))}</button>
         </div></div>
       </div>
@@ -476,7 +516,7 @@
       ${detail(t('sourceRegions'), (item.source_regions || []).join(', ') || '-')}
       ${detail(t('recipeStatus'), recipeLabel(item.recipe_status))}
     </div>
-    <div class="claim-list">${(sync.claims || []).map((claim) => `<span class="claim-chip">${escapeHtml(claim.user_id)} · ${escapeHtml(overallLabel(claim.status))} · ${claim.quantity}</span>`).join('')}</div>
+    <div class="claim-list">${(sync.claims || []).map((claim) => `<span class="claim-chip">${escapeHtml(claim.user_id)} / ${escapeHtml(overallLabel(claim.status))} / ${escapeHtml(formatQuantity(claim.quantity, item))} (${escapeHtml(rawQuantity(claim.quantity))})</span>`).join('')}</div>
     ${tree && config.show_advanced_recipe_tree ? `<div class="craft-chain">${renderRecipeTree(tree, true)}</div>` : ''}${recipeNote && config.show_unresolved_recipes ? `<p class="sub">${escapeHtml(recipeNote)}</p>` : ''}`;
   }
   function renderRecipeTree(node, isRoot = true) {
@@ -484,7 +524,7 @@
     const collapsed = collapsedTree.has(nodeId);
     const hasChildren = (node.children || []).length > 0;
     const children = hasChildren && !collapsed ? (node.children || []).map((child) => renderRecipeTree(child, false)).join('') : '';
-    const ingredients = (node.ingredients || []).map((ingredient) => `${itemName(ingredient.item_id, ingredient.display_name || ingredient.item_id)} x${ingredient.needed_count}${ingredient.unresolved ? ` (${reasonLabel(ingredient.unresolved_reason)})` : ''}`).join(' · ');
+    const ingredients = (node.ingredients || []).map((ingredient) => `${itemName(ingredient.item_id, ingredient.display_name || ingredient.item_id)} ${formatQuantity(ingredient.needed_count, materialById(ingredient.item_id))}${ingredient.unresolved ? ` (${reasonLabel(ingredient.unresolved_reason)})` : ''}`).join(' / ');
     const possible = renderPossibleItems(node);
     const message = nodeMessage(node);
     const iconKey = node.visual_kind === 'tag' ? (node.icon_key || '__tag') : node.visual_kind === 'special' ? '__special' : node.unresolved ? '__unresolved' : node.icon_key;
@@ -497,7 +537,7 @@
             <div class="recipe-id">${escapeHtml(node.visual_kind === 'tag' ? itemName(node.item_id, node.display_name || node.item_id) : node.item_id)}</div>
             <div class="recipe-badges">
               <span class="recipe-badge process">${processLabel(node)}</span>
-              <span class="recipe-badge">${escapeHtml(t('need'))} ${node.needed_count}</span>
+              <span class="recipe-badge">${escapeHtml(t('need'))} ${escapeHtml(formatQuantity(node.needed_count, materialById(node.item_id)))}</span>
               ${node.unresolved ? `<span class="recipe-badge bad">${escapeHtml(reasonLabel(node.unresolved_reason))}</span>` : ''}
               ${node.requires_fuel ? `<span class="recipe-badge warn">${escapeHtml(t('fuelRequired'))}</span>` : ''}
               ${node.decorative_smithing ? `<span class="recipe-badge warn">${escapeHtml(t('decorativeSmithing'))}</span>` : ''}
@@ -606,11 +646,17 @@
   function effectiveStackSize(item) {
     return Number(materialSync(item).stack_size || item.stack_size || 64);
   }
+  function materialById(itemId) {
+    return data.materials.materials.find((item) => item.namespace_id === itemId);
+  }
+  function rawQuantity(count) {
+    return `${Math.max(0, Number(count || 0))}${t('unitEach')}`;
+  }
   function formatQuantity(count, item) {
     let remaining = Math.max(0, Number(count || 0));
     const stackSize = item ? effectiveStackSize(item) : 64;
-    const chestSize = stackSize * 54;
     const boxSize = stackSize * 27;
+    const chestSize = boxSize * 27;
     const parts = [];
     if (remaining >= chestSize) {
       const chests = Math.floor(remaining / chestSize);
@@ -636,6 +682,11 @@
     const stacks = Math.floor(total / stackSize);
     const remainder = total % stackSize;
     return { stacks, remainder, boxes: Math.ceil((stacks + (remainder > 0 ? 1 : 0)) / 27) };
+  }
+  function formatTime(seconds) {
+    const value = Number(seconds || 0);
+    if (!value) return '-';
+    return new Date(value * 1000).toLocaleString();
   }
 
   function bindControls() {
@@ -688,10 +739,10 @@
     });
     document.querySelectorAll('.card').forEach((card) => {
       const item = data.materials.materials.find((material) => material.namespace_id === card.dataset.id);
-      card.querySelector('[data-action="progress"]').addEventListener('click', () => updateClaim(item, 'preparing'));
-      card.querySelector('[data-action="done"]').addEventListener('click', () => updateClaim(item, 'done'));
-      card.querySelector('[data-action="cancel"]').addEventListener('click', () => deleteClaim(item));
-      card.querySelector('[data-action="toggle"]').addEventListener('click', () => { open.has(item.namespace_id) ? open.delete(item.namespace_id) : open.add(item.namespace_id); render(); });
+      card.querySelector('[data-action="progress"]')?.addEventListener('click', () => updateClaim(item, 'preparing'));
+      card.querySelector('[data-action="done"]')?.addEventListener('click', () => updateClaim(item, 'done'));
+      card.querySelector('[data-action="cancel"]')?.addEventListener('click', () => deleteClaim(item));
+      card.querySelector('[data-action="toggle"]')?.addEventListener('click', () => { open.has(item.namespace_id) ? open.delete(item.namespace_id) : open.add(item.namespace_id); render(); });
     });
     document.querySelectorAll('[data-action="tree-toggle"]').forEach((button) => {
       button.addEventListener('click', (event) => {
@@ -745,26 +796,33 @@
     for (const item of items) {
       const sync = materialSync(item);
       const count = kind === 'overfilled' ? sync.overfilled_count : kind === 'mine' ? (sync.claims || []).filter((claim) => claim.user_id === userId).reduce((sum, claim) => sum + Number(claim.quantity || 0), 0) : sync.remaining_count;
-      lines.push(`- ${displayName(item)} (${item.namespace_id}) x${count} [${overallLabel(sync.overall_status)}]`);
+      if (count <= 0) continue;
+      lines.push(`- ${displayName(item)} (${item.namespace_id}) ${formatQuantity(count, item)} (${rawQuantity(count)}) [${overallLabel(sync.overall_status)}]`);
     }
     return lines.join('\n');
   }
   async function copyText(text) {
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-      else {
-        const area = document.createElement('textarea');
-        area.value = text;
-        document.body.appendChild(area);
-        area.select();
-        document.execCommand('copy');
-        area.remove();
-      }
+      if (navigator.clipboard?.writeText) {
+        try { await navigator.clipboard.writeText(text); }
+        catch (_) { fallbackCopyText(text); }
+      } else fallbackCopyText(text);
       syncError = t('copied');
     } catch (error) {
       syncError = `${t('syncError')}: ${error.message}`;
     }
     render();
+  }
+  function fallbackCopyText(text) {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.left = '-9999px';
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
   }
   function cssEscape(value) {
     return String(value).replace(/["\\]/g, '\\$&');
