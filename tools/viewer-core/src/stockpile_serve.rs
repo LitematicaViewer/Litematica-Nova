@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -495,22 +495,21 @@ fn route_request_inner(
         ("POST", "/api/auth/access") => {
             let body: AuthRequest = serde_json::from_slice(&request.body)
                 .context("parse access auth request failed")?;
-            return login_response(&conn, "access", body, client_rate_limit_key(request));
+            return login_response(&conn, "access", body, request);
         }
         ("POST", "/api/auth/admin") => {
             let body: AuthRequest =
                 serde_json::from_slice(&request.body).context("parse admin auth request failed")?;
-            return login_response(&conn, "admin", body, client_rate_limit_key(request));
+            return login_response(&conn, "admin", body, request);
         }
         ("POST", "/api/auth/logout") => {
             if let Some(token) = cookie_value(request, "lba_stockpile_session") {
                 conn.execute("DELETE FROM auth_sessions WHERE token = ?1", params![token])?;
             }
             let mut response = json_response(200, json!({"ok": true}), "OK");
-            response.headers.push((
-                "Set-Cookie".to_string(),
-                "lba_stockpile_session=; Path=/; Max-Age=0; SameSite=Lax".to_string(),
-            ));
+            response
+                .headers
+                .push(("Set-Cookie".to_string(), expired_session_cookie(request)));
             return Ok(response);
         }
         ("GET", "/api/config") => {
@@ -785,8 +784,9 @@ fn login_response(
     conn: &Connection,
     kind: &str,
     body: AuthRequest,
-    client_key: String,
+    request: &HttpRequest,
 ) -> Result<HttpResponse> {
+    let client_key = client_rate_limit_key(request);
     if let Some(retry_after) = auth_rate_limit_retry_after(conn, kind, &client_key)? {
         let mut response = error_response(
             429,
@@ -834,7 +834,7 @@ fn login_response(
     let mut response = json_response(200, json!({"ok": true, "role": kind}), "OK");
     response.headers.push((
         "Set-Cookie".to_string(),
-        format!("lba_stockpile_session={token}; Path=/; Max-Age={ttl}; SameSite=Lax"),
+        session_cookie(&token, ttl, request),
     ));
     Ok(response)
 }
@@ -889,13 +889,118 @@ fn cookie_value(request: &HttpRequest, name: &str) -> Option<String> {
     })
 }
 
-fn client_ip(request: &HttpRequest) -> Option<String> {
+fn session_cookie(token: &str, ttl: u64, request: &HttpRequest) -> String {
+    let mut cookie =
+        format!("lba_stockpile_session={token}; Path=/; Max-Age={ttl}; HttpOnly; SameSite=Lax");
+    if is_secure_request(request) {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+fn expired_session_cookie(request: &HttpRequest) -> String {
+    let mut cookie =
+        "lba_stockpile_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax".to_string();
+    if is_secure_request(request) {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+fn is_secure_request(request: &HttpRequest) -> bool {
+    if !can_trust_forwarded_headers(request) {
+        return false;
+    }
+    header_first_value(request, "x-forwarded-proto")
+        .map(|value| value.eq_ignore_ascii_case("https"))
+        .unwrap_or(false)
+        || request
+            .headers
+            .get("x-forwarded-ssl")
+            .map(|value| value.eq_ignore_ascii_case("on"))
+            .unwrap_or(false)
+        || forwarded_proto(request)
+            .map(|value| value.eq_ignore_ascii_case("https"))
+            .unwrap_or(false)
+}
+
+fn can_trust_forwarded_headers(request: &HttpRequest) -> bool {
+    request
+        .remote_addr
+        .map(|remote_addr| remote_addr.is_loopback())
+        .unwrap_or(true)
+}
+
+fn header_first_value<'a>(request: &'a HttpRequest, name: &str) -> Option<&'a str> {
     request
         .headers
-        .get("x-forwarded-for")
+        .get(name)
         .and_then(|value| value.split(',').next())
-        .map(|value| value.trim().to_string())
+        .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn forwarded_proto(request: &HttpRequest) -> Option<String> {
+    let forwarded = header_first_value(request, "forwarded")?;
+    forwarded.split(';').find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        if key.trim().eq_ignore_ascii_case("proto") {
+            let value = value.trim().trim_matches('"');
+            (!value.is_empty()).then(|| value.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn forwarded_client_ip(request: &HttpRequest) -> Option<String> {
+    header_first_value(request, "x-forwarded-for")
+        .and_then(normalize_client_ip)
+        .or_else(|| {
+            let forwarded = header_first_value(request, "forwarded")?;
+            forwarded.split(';').find_map(|part| {
+                let (key, value) = part.trim().split_once('=')?;
+                key.trim()
+                    .eq_ignore_ascii_case("for")
+                    .then_some(value)
+                    .and_then(normalize_client_ip)
+            })
+        })
+}
+
+fn normalize_client_ip(value: &str) -> Option<String> {
+    let value = value.trim().trim_matches('"');
+    if value.is_empty() || value.eq_ignore_ascii_case("unknown") {
+        return None;
+    }
+    if let Ok(ip) = value.parse::<IpAddr>() {
+        return Some(ip.to_string());
+    }
+    if let Ok(addr) = value.parse::<std::net::SocketAddr>() {
+        return Some(addr.ip().to_string());
+    }
+    let unbracketed = value.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = unbracketed.parse::<IpAddr>() {
+        return Some(ip.to_string());
+    }
+    if value.matches(':').count() == 1 {
+        if let Some((host, _port)) = value.rsplit_once(':') {
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn client_ip(request: &HttpRequest) -> Option<String> {
+    if let Some(remote_addr) = request.remote_addr {
+        if can_trust_forwarded_headers(request) {
+            return Some(forwarded_client_ip(request).unwrap_or_else(|| remote_addr.to_string()));
+        }
+        return Some(remote_addr.to_string());
+    }
+    forwarded_client_ip(request)
 }
 
 fn client_rate_limit_key(request: &HttpRequest) -> String {
@@ -2733,6 +2838,7 @@ struct HttpRequest {
     method: String,
     path: String,
     headers: BTreeMap<String, String>,
+    remote_addr: Option<IpAddr>,
     body: Vec<u8>,
 }
 
@@ -2745,6 +2851,7 @@ struct HttpResponse {
 }
 
 fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
+    let remote_addr = stream.peer_addr().ok().map(|addr| addr.ip());
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
@@ -2781,6 +2888,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         method,
         path,
         headers,
+        remote_addr,
         body,
     })
 }
@@ -3635,6 +3743,83 @@ mod tests {
     }
 
     #[test]
+    fn auth_cookie_uses_httponly_and_secure_only_for_https_requests() {
+        let fixture = exported_fixture("auth_cookie_flags");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        set_access_password(&fixture, "secret").expect("set password");
+        let project = load_project_from_zip(&fixture).expect("project");
+        let source = AssetSource::Zip(fixture.clone());
+
+        let plain_login = route_request_inner(
+            &request(
+                "POST",
+                "/api/auth/access",
+                br#"{"password":"secret","user_id":"alex"}"#,
+            ),
+            &source,
+            &db,
+            &project,
+        )
+        .expect("plain login");
+        let plain_cookie = plain_login
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Set-Cookie")
+            .map(|(_, value)| value.clone())
+            .expect("plain cookie");
+        assert!(plain_cookie.contains("HttpOnly"));
+        assert!(plain_cookie.contains("SameSite=Lax"));
+        assert!(!plain_cookie.contains("Secure"));
+
+        let mut https_request = request(
+            "POST",
+            "/api/auth/access",
+            br#"{"password":"secret","user_id":"alex"}"#,
+        );
+        https_request
+            .headers
+            .insert("x-forwarded-proto".to_string(), "https".to_string());
+        let https_login =
+            route_request_inner(&https_request, &source, &db, &project).expect("https login");
+        let https_cookie = https_login
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Set-Cookie")
+            .map(|(_, value)| value.clone())
+            .expect("https cookie");
+        assert!(https_cookie.contains("HttpOnly"));
+        assert!(https_cookie.contains("Secure"));
+
+        let mut spoofed = request("POST", "/api/auth/access", b"");
+        spoofed.remote_addr = Some("203.0.113.7".parse().expect("remote ip"));
+        spoofed
+            .headers
+            .insert("x-forwarded-proto".to_string(), "https".to_string());
+        assert!(!session_cookie("token", 60, &spoofed).contains("Secure"));
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn rate_limit_key_trusts_forwarded_for_only_from_loopback_peer() {
+        let mut direct = request("POST", "/api/auth/access", b"");
+        direct.remote_addr = Some("203.0.113.7".parse().expect("remote ip"));
+        direct
+            .headers
+            .insert("x-forwarded-for".to_string(), "198.51.100.9".to_string());
+        assert_eq!(client_rate_limit_key(&direct), "203.0.113.7");
+
+        let mut proxied = request("POST", "/api/auth/access", b"");
+        proxied.remote_addr = Some("127.0.0.1".parse().expect("loopback ip"));
+        proxied.headers.insert(
+            "x-forwarded-for".to_string(),
+            "198.51.100.9, 127.0.0.1".to_string(),
+        );
+        assert_eq!(client_rate_limit_key(&proxied), "198.51.100.9");
+    }
+
+    #[test]
     fn whitelist_and_locked_materials_block_non_admin_writes() {
         let fixture = exported_fixture("whitelist_locked");
         let db = session_db_path(&fixture).expect("session db");
@@ -3866,6 +4051,7 @@ mod tests {
             method: method.to_string(),
             path: path.to_string(),
             headers: BTreeMap::new(),
+            remote_addr: None,
             body: body.to_vec(),
         }
     }
