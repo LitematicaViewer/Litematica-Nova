@@ -407,6 +407,9 @@ fn ceil_div(value: u64, divisor: u64) -> u64 {
 
 fn categorize_material(namespace_id: &str) -> MaterialCategory {
     let local = namespace_id.split(':').next_back().unwrap_or(namespace_id);
+    if let Some(category) = spreadsheet_category(local) {
+        return category;
+    }
     if contains_any(
         local,
         &[
@@ -571,6 +574,28 @@ fn categorize_material(namespace_id: &str) -> MaterialCategory {
     category("其他", "minecraft:barrier")
 }
 
+fn spreadsheet_category(local: &str) -> Option<MaterialCategory> {
+    for line in include_str!("stockpile_categories.tsv").lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut columns = line.split('\t');
+        let Some(name) = columns.next() else {
+            continue;
+        };
+        let Some(icon) = columns.next() else {
+            continue;
+        };
+        let Some(ids) = columns.next() else {
+            continue;
+        };
+        if ids.split(',').any(|item| item == local) {
+            return Some(category(name, icon));
+        }
+    }
+    None
+}
+
 fn contains_any(value: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| value.contains(needle))
 }
@@ -610,33 +635,27 @@ mod tests {
 
     #[test]
     fn material_categories_cover_core_stockpile_groups() {
-        assert_eq!(categorize_material("minecraft:stone_bricks").name, "石制品");
-        assert_eq!(categorize_material("minecraft:oak_planks").name, "木制品");
-        assert_eq!(categorize_material("minecraft:glass_pane").name, "玻璃制品");
         assert_eq!(
-            categorize_material("minecraft:redstone_torch").name,
-            "红石制品"
+            categorize_material("minecraft:stone_bricks").name,
+            "石质方块"
         );
+        assert_eq!(categorize_material("minecraft:oak_planks").name, "木质方块");
+        assert_eq!(categorize_material("minecraft:glass_pane").name, "颜色方块");
+        assert_eq!(categorize_material("minecraft:redstone_torch").name, "红石");
         assert_eq!(
             categorize_material("minecraft:redstone_wire").name,
             "红石制品"
         );
-        assert_eq!(
-            categorize_material("minecraft:powered_rail").name,
-            "铁轨/交通"
-        );
-        assert_eq!(categorize_material("minecraft:barrel").name, "容器/存储");
-        assert_eq!(categorize_material("minecraft:lantern").name, "照明");
-        assert_eq!(
-            categorize_material("minecraft:white_wool").name,
-            "染色/装饰"
-        );
+        assert_eq!(categorize_material("minecraft:powered_rail").name, "红石");
+        assert_eq!(categorize_material("minecraft:barrel").name, "功能方块");
+        assert_eq!(categorize_material("minecraft:lantern").name, "功能方块");
+        assert_eq!(categorize_material("minecraft:white_wool").name, "颜色方块");
         assert_eq!(
             categorize_material("minecraft:grass_block").name,
             "自然方块"
         );
         assert_eq!(categorize_material("minecraft:water").name, "自然方块");
-        assert_eq!(categorize_material("minecraft:iron_block").name, "金属制品");
+        assert_eq!(categorize_material("minecraft:iron_block").name, "石质方块");
         assert_eq!(
             categorize_material("minecraft:crafting_table").name,
             "功能方块"
