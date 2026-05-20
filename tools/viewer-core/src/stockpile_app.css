@@ -62,6 +62,12 @@ button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
 .section-head h2 { margin: 0; font-size: 22px; }
 .section-meta { color: var(--muted); font-size: 13px; }
 .section-rate { color: var(--accent); font-weight: 700; }
+.task-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.task-panel { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 12px; min-width: 0; }
+.task-panel h3 { margin: 0 0 8px; font-size: 15px; }
+.task-panel ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.task-panel li { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 12px; }
+.task-panel li span { color: var(--text); text-align: right; }
 
 .list { display: grid; gap: 10px; margin-top: 12px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
@@ -130,6 +136,7 @@ button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
   .topbar { grid-template-columns: 1fr; }
   .identity { justify-content: flex-start; }
   .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .task-columns { grid-template-columns: 1fr; }
   .toolbar { grid-template-columns: 1fr; }
   .card-main { grid-template-columns: 1fr; }
   .count { text-align: left; }
