@@ -79,6 +79,7 @@ pub struct StockpileDeployOptions {
     pub access_password: Option<String>,
     pub admin_password: Option<String>,
     pub whitelist: Vec<String>,
+    pub whitelist_enabled: Option<bool>,
     pub allow_guest_readonly: Option<bool>,
     pub admin_page_enabled: Option<bool>,
     pub targets: Vec<StockpileDeployTarget>,
@@ -237,9 +238,6 @@ fn validate_multi_deploy_options(options: &StockpileDeployOptions) -> Result<()>
         .is_empty()
     {
         bail!("stockpile export-zip --mode multi requires --admin-password-stdin");
-    }
-    if options.whitelist.is_empty() {
-        bail!("stockpile export-zip --mode multi requires --whitelist-file with at least one user");
     }
     Ok(())
 }
@@ -413,6 +411,7 @@ fn initial_stockpile_db(
             access_password: deploy_options.access_password.clone(),
             admin_password: deploy_options.admin_password.clone(),
             whitelist: deploy_options.whitelist.clone(),
+            whitelist_enabled: deploy_options.whitelist_enabled,
             allow_guest_readonly: deploy_options.allow_guest_readonly,
             admin_page_enabled: deploy_options.admin_page_enabled,
         },
@@ -1536,6 +1535,7 @@ mod tests {
                 access_password: Some("access".to_string()),
                 admin_password: Some("admin".to_string()),
                 whitelist: vec!["Eldon".to_string()],
+                whitelist_enabled: None,
                 allow_guest_readonly: Some(true),
                 admin_page_enabled: Some(true),
                 targets: all_deploy_targets().to_vec(),
@@ -1636,6 +1636,7 @@ mod tests {
                 access_password: Some("access".to_string()),
                 admin_password: Some("admin".to_string()),
                 whitelist: vec!["Eldon".to_string()],
+                whitelist_enabled: None,
                 allow_guest_readonly: None,
                 admin_page_enabled: None,
                 targets: vec![StockpileDeployTarget::LinuxX64],

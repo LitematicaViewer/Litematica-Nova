@@ -66,6 +66,7 @@ pub struct StockpileMaterialItem {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StackBreakdown {
+    stack_size: u64,
     full_stacks: u64,
     remainder: u64,
     stack_units: u64,
@@ -127,7 +128,8 @@ fn build_stockpile_materials_data(
         .material_items
         .iter()
         .map(|item| {
-            let breakdown = stack_breakdown(item.total_count, DEFAULT_STACK_SIZE);
+            let stack_size = max_stack_size(&item.block_id);
+            let breakdown = stack_breakdown(item.total_count, stack_size);
             total_stack_units = total_stack_units.saturating_add(breakdown.stack_units);
             stockpile_material_item(item, breakdown, recipe_availability)
         })
@@ -174,7 +176,7 @@ fn stockpile_material_item(
         namespace_id: namespace_id.clone(),
         display_name: item.display_name.clone(),
         required_count: item.total_count,
-        stack_size: DEFAULT_STACK_SIZE,
+        stack_size: breakdown.stack_size,
         stacks: breakdown.full_stacks,
         remainder: breakdown.remainder,
         shulker_boxes: breakdown.shulker_boxes,
@@ -222,6 +224,8 @@ fn recipe_status_for_material(
         RecipeAvailability::Available(items) => {
             if items.contains(namespace_id) {
                 "available"
+            } else if is_directly_obtainable_material(namespace_id) {
+                "direct"
             } else {
                 "unresolved"
             }
@@ -322,11 +326,75 @@ fn stack_breakdown(count: u64, stack_size: u64) -> StackBreakdown {
     let remainder = count % stack_size;
     let stack_units = full_stacks + u64::from(remainder > 0);
     StackBreakdown {
+        stack_size,
         full_stacks,
         remainder,
         stack_units,
         shulker_boxes: ceil_div(stack_units, SHULKER_STACKS),
     }
+}
+
+fn max_stack_size(namespace_id: &str) -> u64 {
+    let local = namespace_id.split(':').next_back().unwrap_or(namespace_id);
+    if contains_any(
+        local,
+        &[
+            "shulker_box",
+            "_bed",
+            "cake",
+            "dragon_egg",
+            "conduit",
+            "decorated_pot",
+        ],
+    ) {
+        return 1;
+    }
+    if contains_any(local, &["_sign", "_banner"]) {
+        return 16;
+    }
+    DEFAULT_STACK_SIZE
+}
+
+fn is_directly_obtainable_material(namespace_id: &str) -> bool {
+    let local = namespace_id.split(':').next_back().unwrap_or(namespace_id);
+    contains_any(
+        local,
+        &[
+            "stone",
+            "cobble",
+            "ore",
+            "dirt",
+            "grass_block",
+            "sand",
+            "gravel",
+            "clay",
+            "snow",
+            "ice",
+            "netherrack",
+            "basalt",
+            "tuff",
+            "deepslate",
+            "granite",
+            "diorite",
+            "andesite",
+            "calcite",
+            "dripstone",
+            "obsidian",
+            "leaves",
+            "log",
+            "wood",
+            "stem",
+            "hyphae",
+            "water",
+            "lava",
+            "short_grass",
+            "tall_grass",
+            "flower",
+            "coral",
+            "kelp",
+            "vine",
+        ],
+    )
 }
 
 fn ceil_div(value: u64, divisor: u64) -> u64 {
