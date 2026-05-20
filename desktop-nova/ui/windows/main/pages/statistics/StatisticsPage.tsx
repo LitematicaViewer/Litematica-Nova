@@ -19,6 +19,7 @@ import {
   StatsData,
 } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
+import { VirtualSpacerCell } from "../../../../components/VirtualSpacerCell";
 import { useVirtualWindow } from "../../../../components/useVirtualWindow";
 import { EnumeratorDialog, openEnumeratorWithWindowBehavior } from "../../../enumerator";
 
@@ -443,7 +444,7 @@ export function MaterialListContent({
                   <>
                     {topSpacerHeight > 0 ? (
                       <tr className="material-list-virtual-spacer" aria-hidden>
-                        <td colSpan={5} style={{ height: topSpacerHeight, padding: 0, border: 0 }} />
+                        <VirtualSpacerCell colSpan={5} height={topSpacerHeight} />
                       </tr>
                     ) : null}
                     {visibleMaterials.map((material, index) => (
@@ -462,7 +463,7 @@ export function MaterialListContent({
                     ))}
                     {bottomSpacerHeight > 0 ? (
                       <tr className="material-list-virtual-spacer" aria-hidden>
-                        <td colSpan={5} style={{ height: bottomSpacerHeight, padding: 0, border: 0 }} />
+                        <VirtualSpacerCell colSpan={5} height={bottomSpacerHeight} />
                       </tr>
                     ) : null}
                   </>

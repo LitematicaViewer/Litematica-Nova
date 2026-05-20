@@ -349,6 +349,13 @@
     background: transparent !important;
 }
 
+.material-list-virtual-spacer-cell {
+    height: var(--material-list-virtual-spacer-height, 0px) !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+}
+
 .material-list-icon-col {
     width: 54px;
     text-align: center;
