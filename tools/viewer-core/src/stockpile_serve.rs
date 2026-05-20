@@ -163,6 +163,7 @@ pub struct DeployDbOptions {
     pub access_password: Option<String>,
     pub admin_password: Option<String>,
     pub whitelist: Vec<String>,
+    pub whitelist_enabled: Option<bool>,
     pub allow_guest_readonly: Option<bool>,
     pub admin_page_enabled: Option<bool>,
 }
@@ -187,6 +188,7 @@ pub struct ClaimState {
 pub struct MaterialSyncState {
     pub material_id: String,
     pub required_count: u64,
+    pub stack_size: u64,
     pub preparing_count: u64,
     pub done_count: u64,
     pub remaining_count: u64,
@@ -266,6 +268,7 @@ struct MaterialNoteRequest {
     public_note: Option<String>,
     storage_location: Option<String>,
     locked: Option<bool>,
+    stack_size: Option<u64>,
     user_id: Option<String>,
 }
 
@@ -1147,7 +1150,9 @@ pub fn create_initialized_deploy_db(
     config.mode = "multi".to_string();
     config.access_password_enabled = options.access_password.is_some();
     config.admin_password_enabled = options.admin_password.is_some();
-    config.whitelist_enabled = !options.whitelist.is_empty();
+    config.whitelist_enabled = options
+        .whitelist_enabled
+        .unwrap_or_else(|| !options.whitelist.is_empty());
     if let Some(value) = options.allow_guest_readonly {
         config.allow_guest_readonly = value;
     }
@@ -1228,6 +1233,12 @@ fn init_db_conn(conn: &Connection) -> Result<()> {
             public_note TEXT,
             storage_location TEXT,
             locked INTEGER NOT NULL CHECK(locked IN (0, 1)) DEFAULT 0,
+            updated_by TEXT,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS material_stack_overrides (
+            material_id TEXT PRIMARY KEY NOT NULL,
+            stack_size INTEGER NOT NULL CHECK(stack_size >= 1 AND stack_size <= 99),
             updated_by TEXT,
             updated_at INTEGER NOT NULL
         );
@@ -1457,12 +1468,14 @@ pub(crate) fn build_state(
     let participants = load_participants(&conn)?;
     let claims = load_claims(&conn)?;
     let notes = load_material_notes(&conn)?;
+    let stack_overrides = load_stack_overrides(&conn)?;
     let audit = load_audit_log(&conn, 20).unwrap_or_default();
     Ok(aggregate_state(
         materials,
         participants,
         claims,
         notes,
+        stack_overrides,
         audit,
         current_unix_timestamp()?,
     ))
@@ -1948,6 +1961,7 @@ pub fn session_export(zip_path: &Path, output: &Path) -> Result<SessionExportDat
         participants.clone(),
         claims.clone(),
         load_material_notes(&conn)?,
+        load_stack_overrides(&conn)?,
         load_audit_log(&conn, 20).unwrap_or_default(),
         current_unix_timestamp()?,
     );
@@ -2083,6 +2097,7 @@ fn aggregate_state(
     participants: Vec<ParticipantState>,
     claims: Vec<ClaimState>,
     notes: BTreeMap<String, MaterialNoteState>,
+    stack_overrides: BTreeMap<String, u64>,
     audit: Vec<AuditLogEntry>,
     updated_at: u64,
 ) -> StockpileSyncState {
@@ -2190,6 +2205,10 @@ fn aggregate_state(
             MaterialSyncState {
                 material_id: material.namespace_id.clone(),
                 required_count: material.required_count,
+                stack_size: stack_overrides
+                    .get(&material.namespace_id)
+                    .copied()
+                    .unwrap_or(material.stack_size),
                 preparing_count,
                 done_count,
                 remaining_count,
@@ -2346,6 +2365,22 @@ fn save_material_note_conn(
     let locked = request
         .locked
         .unwrap_or_else(|| before.as_ref().map(|value| value.locked).unwrap_or(false));
+    if let Some(stack_size) = request.stack_size {
+        if !(1..=99).contains(&stack_size) {
+            bail!("stack_size must be between 1 and 99");
+        }
+        conn.execute(
+            r#"
+            INSERT INTO material_stack_overrides(material_id, stack_size, updated_by, updated_at)
+            VALUES(?1, ?2, ?3, ?4)
+            ON CONFLICT(material_id) DO UPDATE SET
+                stack_size = excluded.stack_size,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            "#,
+            params![material_id, stack_size as i64, actor, now],
+        )?;
+    }
     conn.execute(
         r#"
         INSERT INTO material_notes(material_id, public_note, storage_location, locked, updated_by, updated_at)
@@ -2371,6 +2406,17 @@ fn save_material_note_conn(
     )?;
     touch_meta(conn)?;
     Ok(after)
+}
+
+fn load_stack_overrides(conn: &Connection) -> Result<BTreeMap<String, u64>> {
+    let mut stmt = conn.prepare(
+        "SELECT material_id, stack_size FROM material_stack_overrides ORDER BY material_id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, i64_to_u64(row.get(1)?)))
+    })?;
+    rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()
+        .context("load material stack overrides failed")
 }
 
 fn load_whitelist(conn: &Connection) -> Result<Vec<WhitelistEntry>> {
@@ -2662,7 +2708,7 @@ fn admin_page_html() -> &'static str {
 <body><div id="admin" class="shell"></div><script>
 (function(){
 const i18n={
-zh:{title:'缁狅紕鎮婇崨?,login:'缁狅紕鎮婇崨妯兼瑜?,password:'缁狅紕鎮婇崨妯虹槕閻?,enter:'閻ц缍?,project:'婢跺洩鎻ｉ崡?,summary:'妞ゅ湱娲伴幀鏄忣潔',users:'閻劍鍩?,whitelist:'閻ц棄鎮曢崡?,materials:'閺夋劖鏋＄粻锛勬倞',audit:'鐎孤ゎ吀閺冦儱绻?,add:'濞ｈ濮?,remove:'缁夊娅?,lock:'闁夸礁鐣?,unlock:'鐟欙綁鏀?,save:'娣囨繂鐡?,clearMaterial:'濞撳懐鈹栭弶鎰灐婢跺洩鎻?,clearUser:'濞撳懐鈹栭悽銊﹀煕婢跺洩鎻?,note:'婢跺洦鏁?,location:'鐎涙ɑ鏂佹担宥囩枂',language:'鐠囶叀鈻?,back:'鏉╂柨娲栨径鍥彛閸?,filter:'缁涙盯鈧?,all:'閸忋劑鍎?,unclaimed:'閺冪姳姹夌拋銈夘暙',overfilled:'鐡掑懘顤?,stalled:'瀹告彃顦拹褎婀€瑰本鍨?,notStarted:'閺堫亜绱戞慨?,locked:'闁夸礁鐣?,noted:'閺堝顦▔?,userSummary:'閻劍鍩涘Ч鍥ㄢ偓?,materialCount:'閺夋劖鏋￠弫?,preparing:'婢跺洩鎻ｆ稉?,done:'瀹告彃鐣幋?,preparingQty:'婢跺洩鎻ｆ稉顓熸殶闁?,doneQty:'鐎瑰本鍨氶弫浼村櫤',actor:'閹垮秳缍旈懓?,action:'閸斻劋缍?,target:'閻╊喗鐖?,time:'閺冨爼妫?,success:'閹垮秳缍旈幋鎰',error:'闁挎瑨顕?,showPassword:'閺勫墽銇氱€靛棛鐖?,claim_put:'閺囧瓨鏌婃径鍥彛',claim_delete:'閸欐牗绉锋径鍥彛',material_note_update:'閺囧瓨鏌婇弶鎰灐婢跺洦鏁?,claims_clear_material:'濞撳懐鈹栭弶鎰灐婢跺洩鎻?,claims_clear_user:'濞撳懐鈹栭悽銊﹀煕婢跺洩鎻?,whitelist_add:'濞ｈ濮為惂钘夋倳閸?,whitelist_remove:'缁夊娅庨惂钘夋倳閸?,session_reset:'闁插秶鐤嗘导姘崇樈',session_import:'鐎电厧鍙嗘导姘崇樈',session_import_replace:'閺囨寧宕叉导姘崇樈',access_password_set:'鐠佸墽鐤嗙拋鍧楁６鐎靛棛鐖?,admin_password_set:'鐠佸墽鐤嗙粻锛勬倞閸涙ê鐦戦惍?,access_password_clear:'濞撳懘娅庣拋鍧楁６鐎靛棛鐖?,admin_password_clear:'濞撳懘娅庣粻锛勬倞閸涙ê鐦戦惍?},
+zh:{},
 en:{title:'Admin',login:'Admin login',password:'Admin password',enter:'Login',project:'Stockpile',summary:'Summary',users:'Users',whitelist:'Whitelist',materials:'Materials',audit:'Audit log',add:'Add',remove:'Remove',lock:'Lock',unlock:'Unlock',save:'Save',clearMaterial:'Clear material claims',clearUser:'Clear user claims',note:'Note',location:'Storage',language:'Language',back:'Back to stockpile',filter:'Filter',all:'All',unclaimed:'Unclaimed',overfilled:'Overfilled',stalled:'Prepared not done',notStarted:'Not started',locked:'Locked',noted:'With notes',userSummary:'User summary',materialCount:'Materials',preparing:'Preparing',done:'Done',preparingQty:'Preparing qty',doneQty:'Done qty',actor:'Actor',action:'Action',target:'Target',time:'Time',success:'Saved',error:'Error',showPassword:'Show password',claim_put:'Updated claim',claim_delete:'Removed claim',material_note_update:'Updated material note',claims_clear_material:'Cleared material claims',claims_clear_user:'Cleared user claims',whitelist_add:'Added whitelist user',whitelist_remove:'Removed whitelist user',session_reset:'Reset session',session_import:'Imported session',session_import_replace:'Replaced session',access_password_set:'Set access password',admin_password_set:'Set admin password',access_password_clear:'Cleared access password',admin_password_clear:'Cleared admin password'}};
 let lang=(localStorage.getItem('lba-stockpile-lang')||navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en';
 let filter='all'; let flash=''; const root=document.getElementById('admin'); const t=k=>i18n[lang][k]||i18n.en[k]||k;
@@ -2672,25 +2718,26 @@ function actionLabel(action){return t(action);}
 function matchesFilter(m){if(filter==='unclaimed')return !(m.participants||[]).length;if(filter==='overfilled')return m.overfilled_count>0;if(filter==='stalled')return m.preparing_count>0&&m.done_count<m.required_count;if(filter==='not_started')return m.overall_status==='not_started';if(filter==='locked')return !!m.locked;if(filter==='noted')return !!(m.public_note||m.storage_location);return true;}
 async function render(){
 let auth=await send('/api/auth/status');
-if(!auth.admin){root.innerHTML=`<section class="modal-card"><h1>${t('login')}</h1><div class="password-row"><input class="field" id="pw" type="password" placeholder="${t('password')}"/><button class="button icon-button" id="togglePw" type="button" title="${t('showPassword')}">棣冩啑</button></div><div class="actions"><button class="button primary" id="login">${t('enter')}</button></div><p class="sub" id="err"></p></section>`;document.getElementById('togglePw').onclick=()=>{const pw=document.getElementById('pw');pw.type=pw.type==='password'?'text':'password';};document.getElementById('login').onclick=async()=>{try{await send('/api/auth/admin','POST',{password:document.getElementById('pw').value});flash=t('success');render();}catch(e){document.getElementById('err').textContent=`${t('error')}: ${e.message}`;}};return;}
-const [summary,users,white,materials,audit,state]=await Promise.all([send('/api/admin/summary'),send('/api/users'),send('/api/whitelist'),send('/api/admin/materials'),send('/api/admin/audit-log'),send('/api/state')]);
+if(!auth.admin){root.innerHTML=`<section class="modal-card"><h1>${t('login')}</h1><div class="password-row"><input class="field" id="pw" type="password" placeholder="${t('password')}"/><button class="button icon-button" id="togglePw" type="button" title="${t('showPassword')}">Show</button></div><div class="actions"><button class="button primary" id="login">${t('enter')}</button></div><p class="sub" id="err"></p></section>`;document.getElementById('togglePw').onclick=()=>{const pw=document.getElementById('pw');pw.type=pw.type==='password'?'text':'password';};document.getElementById('login').onclick=async()=>{try{await send('/api/auth/admin','POST',{password:document.getElementById('pw').value});flash=t('success');render();}catch(e){document.getElementById('err').textContent=`${t('error')}: ${e.message}`;}};return;}
+const [summary,users,white,materials,audit,state,config]=await Promise.all([send('/api/admin/summary'),send('/api/users'),send('/api/whitelist'),send('/api/admin/materials'),send('/api/admin/audit-log'),send('/api/state'),send('/api/config')]);
 const visibleMaterials=Object.values(materials).filter(matchesFilter); const userSummaries=state.summaries?.user_summaries||[];
-root.innerHTML=`<header class="topbar"><div class="brand"><strong>${t('title')}</strong><span>${t('project')}</span></div><div class="identity"><select class="field" id="lang"><option value="zh" ${lang==='zh'?'selected':''}>娑擃厽鏋?/option><option value="en" ${lang==='en'?'selected':''}>English</option></select><a class="button" href="/">${t('back')}</a></div></header>
+root.innerHTML=`<header class="topbar"><div class="brand"><strong>${t('title')}</strong><span>${t('project')}</span></div><div class="identity"><select class="field" id="lang"><option value="zh" ${lang==='zh'?'selected':''}>中文</option><option value="en" ${lang==='en'?'selected':''}>English</option></select><a class="button" href="/">${t('back')}</a></div></header>
 ${flash?`<div class="empty">${esc(flash)}</div>`:''}
 <section class="summary">${Object.entries(summary).map(([k,v])=>`<div class="metric"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('')}</section>
 <section class="section"><h2>${t('userSummary')}</h2><div class="list">${userSummaries.map(u=>`<div class="card"><div class="card-main"><div><b>${esc(u.user_id)}</b><div class="sub">${t('materialCount')}: ${u.material_count} / ${t('preparingQty')}: ${u.preparing_quantity} / ${t('doneQty')}: ${u.done_quantity}</div></div><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button></div></div>`).join('')}</div></section>
-<section class="section"><h2>${t('whitelist')}</h2><div class="toolbar"><input class="field" id="newUser"/><button class="button primary" id="addUser">${t('add')}</button></div><div class="list">${white.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-rm="${esc(u.user_id)}">${t('remove')}</button></div></div>`).join('')}</div></section>
+<section class="section"><h2>${t('whitelist')}</h2><div class="toolbar"><label class="badge"><input type="checkbox" id="whitelistEnabled" ${config.whitelist_enabled?'checked':''}/> whitelist_enabled</label><input class="field" id="newUser"/><button class="button primary" id="addUser">${t('add')}</button></div><div class="list">${white.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-rm="${esc(u.user_id)}">${t('remove')}</button></div></div>`).join('')}</div></section>
 <section class="section"><h2>${t('users')}</h2><div class="list">${users.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button></div></div>`).join('')}</div></section>
-<section class="section"><h2>${t('materials')}</h2><div class="toolbar"><select class="field" id="filter"><option value="all">${t('all')}</option><option value="unclaimed">${t('unclaimed')}</option><option value="overfilled">${t('overfilled')}</option><option value="stalled">${t('stalled')}</option><option value="not_started">${t('notStarted')}</option><option value="locked">${t('locked')}</option><option value="noted">${t('noted')}</option></select></div><div class="list">${visibleMaterials.map(m=>`<div class="card"><div class="card-main"><div><b>${esc(m.material_id)}</b><div class="sub">${t('note')}: ${esc(m.public_note||'')} / ${t('location')}: ${esc(m.storage_location||'')}</div><div class="badges"><span class="badge">${esc(m.overall_status)}</span>${m.locked?`<span class="badge missing">${t('locked')}</span>`:''}</div></div><div class="actions"><button class="button" data-note="${esc(m.material_id)}" data-note-value="${esc(m.public_note||'')}" data-location-value="${esc(m.storage_location||'')}">${t('save')}</button><button class="button" data-lock="${esc(m.material_id)}" data-locked="${m.locked?'1':'0'}">${m.locked?t('unlock'):t('lock')}</button><button class="button danger" data-clear-mat="${esc(m.material_id)}">${t('clearMaterial')}</button></div></div></div>`).join('')}</div></section>
+<section class="section"><h2>${t('materials')}</h2><div class="toolbar"><select class="field" id="filter"><option value="all">${t('all')}</option><option value="unclaimed">${t('unclaimed')}</option><option value="overfilled">${t('overfilled')}</option><option value="stalled">${t('stalled')}</option><option value="not_started">${t('notStarted')}</option><option value="locked">${t('locked')}</option><option value="noted">${t('noted')}</option></select></div><div class="list">${visibleMaterials.map(m=>`<div class="card"><div class="card-main"><div><b>${esc(m.material_id)}</b><div class="sub">${t('note')}: ${esc(m.public_note||'')} / ${t('location')}: ${esc(m.storage_location||'')} / stack_size: ${esc(m.stack_size||64)}</div><div class="badges"><span class="badge">${esc(m.overall_status)}</span>${m.locked?`<span class="badge missing">${t('locked')}</span>`:''}</div></div><div class="actions"><button class="button" data-note="${esc(m.material_id)}" data-note-value="${esc(m.public_note||'')}" data-location-value="${esc(m.storage_location||'')}" data-stack-size="${esc(m.stack_size||64)}">${t('save')}</button><button class="button" data-lock="${esc(m.material_id)}" data-locked="${m.locked?'1':'0'}">${m.locked?t('unlock'):t('lock')}</button><button class="button danger" data-clear-mat="${esc(m.material_id)}">${t('clearMaterial')}</button></div></div></div>`).join('')}</div></section>
 <section class="section"><h2>${t('audit')}</h2><div class="list">${audit.map(a=>`<div class="card"><div class="card-main"><div><b>${esc(actionLabel(a.action))}</b><div class="sub">${t('actor')}: ${esc(a.actor)} / ${t('target')}: ${esc(a.target)} / ${t('time')}: ${esc(new Date(a.created_at*1000).toLocaleString())}</div></div></div></div>`).join('')}</div></section>`;
 document.getElementById('lang').onchange=e=>{lang=e.target.value;localStorage.setItem('lba-stockpile-lang',lang==='zh'?'zh-CN':'en-US');render();};
 document.getElementById('filter').value=filter;document.getElementById('filter').onchange=e=>{filter=e.target.value;render();};
+document.getElementById('whitelistEnabled').onchange=async e=>{try{await send('/api/config','PUT',{whitelist_enabled:e.target.checked});flash=t('success');render();}catch(err){flash=`${t('error')}: ${err.message}`;render();}};
 document.getElementById('addUser').onclick=async()=>{try{await send('/api/whitelist','POST',{user_id:document.getElementById('newUser').value});flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}};
 document.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{try{await send('/api/whitelist/'+encodeURIComponent(b.dataset.rm),'DELETE');flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
 document.querySelectorAll('[data-clear-user]').forEach(b=>b.onclick=async()=>{try{await send('/api/admin/users/'+encodeURIComponent(b.dataset.clearUser)+'/claims','DELETE');flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
 document.querySelectorAll('[data-clear-mat]').forEach(b=>b.onclick=async()=>{try{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.clearMat)+'/claims','DELETE');flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
 document.querySelectorAll('[data-lock]').forEach(b=>b.onclick=async()=>{try{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.lock),'PUT',{locked:b.dataset.locked!=='1'});flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
-document.querySelectorAll('[data-note]').forEach(b=>b.onclick=async()=>{const public_note=prompt(t('note'),b.dataset.noteValue||'');if(public_note===null)return;const storage_location=prompt(t('location'),b.dataset.locationValue||'');if(storage_location===null)return;try{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.note),'PUT',{public_note,storage_location});flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
+document.querySelectorAll('[data-note]').forEach(b=>b.onclick=async()=>{const public_note=prompt(t('note'),b.dataset.noteValue||'');if(public_note===null)return;const storage_location=prompt(t('location'),b.dataset.locationValue||'');if(storage_location===null)return;const stack=prompt('stack_size',b.dataset.stackSize||'64');if(stack===null)return;try{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.note),'PUT',{public_note,storage_location,stack_size:Number(stack)});flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
 }
 render().catch(e=>{root.innerHTML='<pre class="empty">'+esc(e.message)+'</pre>';});
 }());
@@ -3036,6 +3083,7 @@ mod tests {
             &materials,
             Vec::new(),
             claims,
+            BTreeMap::new(),
             BTreeMap::new(),
             Vec::new(),
             1,
@@ -3850,6 +3898,7 @@ mod tests {
                 public_note: None,
                 storage_location: None,
                 locked: Some(true),
+                stack_size: None,
                 user_id: None,
             },
             "admin",

@@ -18,6 +18,8 @@
   let participantRegistered = false;
   let config = defaultConfig();
   let authStatus = { authenticated: false, admin: false, access_password_enabled: false, whitelist_enabled: false, allow_guest_readonly: false };
+  let searchRenderTimer = null;
+  let searchComposing = false;
 
   function pickInitialLang() {
     const stored = localStorage.getItem(langKey);
@@ -60,7 +62,20 @@
     }
   };
   function dict() { return (data.i18n && data.i18n[lang]) || (data.i18n && data.i18n['en-US']) || {}; }
-  function t(key) { return dict()[key] || extraI18n[lang]?.[key] || extraI18n['en-US'][key] || key; }
+  function t(key) { return dict()[key] || extraI18n[lang]?.[key] || extraI18n['en-US'][key] || defaultLabel(key) || key; }
+  function defaultLabel(key) {
+    const zh = {
+      totalQuantity: '总数量', rawCount: '原始个数', stackSize: '每组数量', unitChest: '箱', unitBox: '盒', unitStack: '组', unitEach: '个',
+      direct: '可采集', recipeDirect: '可直接采集/挖掘获得', namespaceId: '命名空间 ID', stacksRemainder: '组 / 余数', shulkerBoxes: '盒数',
+      tagPlanks: '任意木板', tagLogs: '任意原木', tagStone: '任意石材', tagCoals: '任意煤炭', tagIronOres: '任意铁矿石'
+    };
+    const en = {
+      totalQuantity: 'Total quantity', rawCount: 'Raw count', stackSize: 'Stack size', unitChest: 'chest', unitBox: 'box', unitStack: 'stack', unitEach: 'item',
+      direct: 'Gatherable', recipeDirect: 'Directly gather or mine this material', namespaceId: 'Namespace ID', stacksRemainder: 'stacks / remainder', shulkerBoxes: 'boxes',
+      tagPlanks: 'Any planks', tagLogs: 'Any logs', tagStone: 'Any stone material', tagCoals: 'Any coal', tagIronOres: 'Any iron ore'
+    };
+    return (lang === 'zh-CN' ? zh : en)[key] || en[key];
+  }
   function storageKey() { return `lba-stockpile:${data.manifest.source_file}:${data.manifest.created_at}`; }
   function loadOfflineState() {
     try { state = JSON.parse(localStorage.getItem(storageKey()) || '{}'); }
@@ -92,6 +107,7 @@
       pollHandle = setInterval(async () => {
         if (userId && !participantRegistered) await registerParticipant();
         await refreshState();
+        if (document.activeElement?.id === 'search' || searchComposing) return;
         render();
       }, Math.min(10000, Math.max(2000, Number(config.poll_interval_ms || 3000))));
     }
@@ -334,6 +350,10 @@
 
   function render() {
     document.title = t('appTitle');
+    const active = document.activeElement;
+    const restoreSearch = active?.id === 'search';
+    const searchStart = restoreSearch ? active.selectionStart : null;
+    const searchEnd = restoreSearch ? active.selectionEnd : null;
     const items = filteredMaterials();
     const allTotals = totals(data.materials.materials);
     const mine = myTaskStats();
@@ -352,13 +372,13 @@
       ${syncError ? `<div class="empty">${escapeHtml(syncError)}</div>` : ''}
       <section class="summary">
         ${metric(t('totalMaterials'), data.materials.summary.unique_materials)}
-        ${metric(t('totalBlocks'), data.materials.summary.total_blocks)}
-        ${metric(t('totalStacks'), data.materials.summary.total_stacks)}
+        ${metric(t('totalQuantity'), formatQuantity(data.materials.summary.total_blocks))}
+        ${metric(t('shulkerEstimate'), `${data.materials.summary.estimated_shulker_boxes}${t('unitBox')}`)}
         <div class="metric"><b>${allTotals.progress}%</b><span>${escapeHtml(t('done'))}</span><div class="progress-track"><div class="progress-bar" style="width:${allTotals.progress}%"></div></div></div>
       </section>
       <section class="summary">
-        ${metric(t('myPreparing'), `${mine.preparing_count} / ${mine.preparing_quantity}`)}
-        ${metric(t('myDone'), `${mine.done_count} / ${mine.done_quantity}`)}
+        ${metric(t('myPreparing'), `${mine.preparing_count} / ${formatQuantity(mine.preparing_quantity)}`)}
+        ${metric(t('myDone'), `${mine.done_count} / ${formatQuantity(mine.done_quantity)}`)}
         ${metric(t('myTotal'), mine.material_count)}
         ${metric(t('unclaimed'), stateSummaries().unclaimed_materials?.length || 0)}
       </section>
@@ -377,6 +397,13 @@
       ${renderList(items)}
     </main>`;
     bindControls();
+    if (restoreSearch) {
+      const nextSearch = document.getElementById('search');
+      if (nextSearch) {
+        nextSearch.focus();
+        try { nextSearch.setSelectionRange(searchStart, searchEnd); } catch (_) {}
+      }
+    }
   }
   function metric(label, value) {
     return `<div class="metric"><b>${escapeHtml(String(value))}</b><span>${escapeHtml(label)}</span></div>`;
@@ -421,7 +448,7 @@
           <div class="badges"><span class="badge ${item.recipe_status}">${recipeLabel(item.recipe_status)}</span><span class="badge ${sync.overall_status}">${overallLabel(sync.overall_status)}</span><span class="badge">${sync.participants.length ? `${escapeHtml(t('claimedBy'))}: ${escapeHtml(sync.participants.join(', '))}` : escapeHtml(t('unclaimed'))}</span>${sync.locked ? `<span class="badge missing">${escapeHtml(t('locked') || 'Locked')}</span>` : ''}${config.show_icon_fallback_badge && item.icon_available === false ? `<span class="badge missing">${escapeHtml(t('iconFallback'))}</span>` : ''}</div>
           ${(sync.public_note || sync.storage_location || sync.updated_by || hint) ? `<div class="sub">${sync.public_note ? `${escapeHtml(t('publicNote'))}: ${escapeHtml(sync.public_note)} ` : ''}${sync.storage_location ? `${escapeHtml(t('storageLocation'))}: ${escapeHtml(sync.storage_location)} ` : ''}${sync.updated_by ? `${escapeHtml(t('recentBy'))}: ${escapeHtml(sync.updated_by)} ` : ''}${hint ? `${escapeHtml(hint)}` : ''}</div>` : ''}
         </div>
-        <div><div class="count">${item.required_count}</div><div class="actions">
+        <div><div class="count">${formatQuantity(item.required_count, item)}</div><div class="actions">
           <input class="field qty" type="number" min="0" value="${Number(claim.quantity || 0)}" data-action="qty" ${disabled ? 'disabled' : ''} />
           <button class="button" data-action="progress" ${disabled ? 'disabled' : ''}>${escapeHtml(t('preparing'))}</button>
           <button class="button primary" data-action="done" ${disabled ? 'disabled' : ''}>${escapeHtml(t('done'))}</button>
@@ -440,12 +467,14 @@
     else if (item.recipe_status === 'available' && !tree) recipeNote = t('recipeCachedNoTree');
     else if (item.recipe_status === 'unresolved') recipeNote = t('recipeUnresolved');
     return `<div class="detail-grid">
-      ${detail('namespace_id', item.namespace_id)}
-      ${detail(t('quantity'), item.required_count)}
-      ${detail('stacks / remainder', `${item.stacks} / ${item.remainder}`)}
-      ${detail('shulker_boxes', item.shulker_boxes)}
+      ${detail(t('namespaceId'), item.namespace_id)}
+      ${detail(t('quantity'), formatQuantity(item.required_count, item))}
+      ${detail(t('rawCount'), item.required_count)}
+      ${detail(t('stackSize'), effectiveStackSize(item))}
+      ${detail(t('stacksRemainder'), `${quantityBreakdown(item.required_count, item).stacks} / ${quantityBreakdown(item.required_count, item).remainder}`)}
+      ${detail(t('shulkerBoxes'), quantityBreakdown(item.required_count, item).boxes)}
       ${detail(t('sourceRegions'), (item.source_regions || []).join(', ') || '-')}
-      ${detail(t('recipeStatus'), item.recipe_status)}
+      ${detail(t('recipeStatus'), recipeLabel(item.recipe_status))}
     </div>
     <div class="claim-list">${(sync.claims || []).map((claim) => `<span class="claim-chip">${escapeHtml(claim.user_id)} · ${escapeHtml(overallLabel(claim.status))} · ${claim.quantity}</span>`).join('')}</div>
     ${tree && config.show_advanced_recipe_tree ? `<div class="craft-chain">${renderRecipeTree(tree, true)}</div>` : ''}${recipeNote && config.show_unresolved_recipes ? `<p class="sub">${escapeHtml(recipeNote)}</p>` : ''}`;
@@ -458,14 +487,14 @@
     const ingredients = (node.ingredients || []).map((ingredient) => `${itemName(ingredient.item_id, ingredient.display_name || ingredient.item_id)} x${ingredient.needed_count}${ingredient.unresolved ? ` (${reasonLabel(ingredient.unresolved_reason)})` : ''}`).join(' · ');
     const possible = renderPossibleItems(node);
     const message = nodeMessage(node);
-    const iconKey = node.visual_kind === 'tag' ? '__tag' : node.visual_kind === 'special' ? '__special' : node.unresolved ? '__unresolved' : node.icon_key;
+    const iconKey = node.visual_kind === 'tag' ? (node.icon_key || '__tag') : node.visual_kind === 'special' ? '__special' : node.unresolved ? '__unresolved' : node.icon_key;
     return `<div class="tree-node ${isRoot ? 'root' : ''}" data-tree-id="${escapeAttr(nodeId)}">
       <div class="recipe-card ${escapeAttr(node.visual_kind || '')}">
         <div class="recipe-card-head">
           ${iconImg(iconKey, true)}
           <div>
             <div class="recipe-name">${escapeHtml(itemName(node.item_id, node.display_name || node.item_id))}</div>
-            <div class="recipe-id">${escapeHtml(node.tag || node.item_id)}</div>
+            <div class="recipe-id">${escapeHtml(node.visual_kind === 'tag' ? itemName(node.item_id, node.display_name || node.item_id) : node.item_id)}</div>
             <div class="recipe-badges">
               <span class="recipe-badge process">${processLabel(node)}</span>
               <span class="recipe-badge">${escapeHtml(t('need'))} ${node.needed_count}</span>
@@ -506,6 +535,7 @@
       smith_trim: 'processSmith',
       special: 'processSpecial',
       tag: 'processTag',
+      direct: 'direct',
       unresolved: 'processUnresolved'
     };
     return escapeHtml(t(map[node.process_type] || 'processUnresolved'));
@@ -520,7 +550,8 @@
       'minecraft:smoking': 'recipeSmoking',
       'minecraft:campfire_cooking': 'recipeCampfireCooking',
       'minecraft:smithing_transform': 'recipeSmithingTransform',
-      'minecraft:smithing_trim': 'recipeSmithingTrim'
+      'minecraft:smithing_trim': 'recipeSmithingTrim',
+      direct: 'direct'
     };
     if ((recipeType || '').startsWith('minecraft:crafting_special_')) return t('recipeSpecial');
     return t(map[recipeType] || 'processUnresolved');
@@ -532,7 +563,8 @@
     return `<div class="possible-items">${values.map((item) => `<span>${escapeHtml(itemName(item, item))}</span>`).join('')}${more > 0 ? `<span>+${more}</span>` : ''}</div>`;
   }
   function nodeMessage(node) {
-    if (node.visual_kind === 'tag') return `${t('tagGroup')} ${node.tag || node.item_id}`;
+    if (node.visual_kind === 'tag') return `${t('tagGroup')} ${itemName(node.item_id, node.display_name || node.item_id)}`;
+    if (node.visual_kind === 'direct') return t('recipeDirect');
     if (node.visual_kind === 'special') return `${t('specialRecipe')}: ${node.recipe_type}`;
     if (node.unresolved_reason === 'no_recipe') return t('noRecipe');
     if (node.unresolved_reason === 'tag_input') return t('tagInput');
@@ -541,7 +573,7 @@
   }
   function detail(label, value) { return `<div class="detail"><span>${escapeHtml(label)}</span>${escapeHtml(String(value))}</div>`; }
   function recipeLabel(status) {
-    return { available: t('available'), unresolved: t('unresolved'), missing: t('missing') }[status] || status;
+    return { available: t('available'), direct: t('direct'), unresolved: t('unresolved'), missing: t('missing') }[status] || status;
   }
   function overallLabel(status) {
     return { not_started: t('notStarted'), preparing: t('preparing'), partial_done: t('partialDone'), done: t('done'), overfilled: t('overfilled') }[status] || status;
@@ -557,7 +589,53 @@
     return item.display_names?.[lang] || item.display_names?.['en-US'] || item.display_name || item.namespace_id;
   }
   function itemName(itemId, fallback) {
+    if ((itemId || '').startsWith('#')) return tagName(itemId);
     return data.item_names?.names?.[itemId]?.[lang] || data.item_names?.names?.[itemId]?.['en-US'] || fallback || itemId;
+  }
+  function tagName(tag) {
+    return {
+      '#minecraft:planks': t('tagPlanks'),
+      '#minecraft:logs': t('tagLogs'),
+      '#minecraft:logs_that_burn': t('tagLogs'),
+      '#minecraft:stone_crafting_materials': t('tagStone'),
+      '#minecraft:stone_tool_materials': t('tagStone'),
+      '#minecraft:coals': t('tagCoals'),
+      '#minecraft:iron_ores': t('tagIronOres')
+    }[tag] || t('tagGroup');
+  }
+  function effectiveStackSize(item) {
+    return Number(materialSync(item).stack_size || item.stack_size || 64);
+  }
+  function formatQuantity(count, item) {
+    let remaining = Math.max(0, Number(count || 0));
+    const stackSize = item ? effectiveStackSize(item) : 64;
+    const chestSize = stackSize * 54;
+    const boxSize = stackSize * 27;
+    const parts = [];
+    if (remaining >= chestSize) {
+      const chests = Math.floor(remaining / chestSize);
+      parts.push(`${chests}${t('unitChest')}`);
+      remaining %= chestSize;
+    }
+    if (remaining >= boxSize) {
+      const boxes = Math.floor(remaining / boxSize);
+      parts.push(`${boxes}${t('unitBox')}`);
+      remaining %= boxSize;
+    }
+    if (remaining >= stackSize) {
+      const stacks = Math.floor(remaining / stackSize);
+      parts.push(`${stacks}${t('unitStack')}`);
+      remaining %= stackSize;
+    }
+    if (remaining > 0 || !parts.length) parts.push(`${remaining}${t('unitEach')}`);
+    return parts.join(' ');
+  }
+  function quantityBreakdown(count, item) {
+    const stackSize = item ? effectiveStackSize(item) : 64;
+    const total = Math.max(0, Number(count || 0));
+    const stacks = Math.floor(total / stackSize);
+    const remainder = total % stackSize;
+    return { stacks, remainder, boxes: Math.ceil((stacks + (remainder > 0 ? 1 : 0)) / 27) };
   }
 
   function bindControls() {
@@ -574,7 +652,19 @@
       document.title = t('appTitle');
       render();
     });
-    document.getElementById('search').addEventListener('input', (event) => { controls.search = event.target.value; render(); });
+    const search = document.getElementById('search');
+    search.addEventListener('compositionstart', () => { searchComposing = true; });
+    search.addEventListener('compositionend', (event) => {
+      searchComposing = false;
+      controls.search = event.target.value;
+      render();
+    });
+    search.addEventListener('input', (event) => {
+      controls.search = event.target.value;
+      if (searchComposing) return;
+      clearTimeout(searchRenderTimer);
+      searchRenderTimer = setTimeout(render, 180);
+    });
     document.getElementById('sort').addEventListener('change', (event) => { controls.sort = event.target.value; render(); });
     document.getElementById('filter').addEventListener('change', (event) => { controls.filter = event.target.value; render(); });
     const accessLogin = document.getElementById('accessLogin');
