@@ -18,6 +18,7 @@ import {
   type EnumeratorValueType,
 } from "../../../src/services/enumeratorService";
 import { BlockIcon } from "../../components/BlockIcon";
+import { VirtualSpacerCell } from "../../components/VirtualSpacerCell";
 import { useVirtualWindow } from "../../components/useVirtualWindow";
 import {
   applyThemeStylesheet,
@@ -501,7 +502,7 @@ function EnumeratorContent({
                       <>
                         {leftTopSpacerHeight > 0 ? (
                           <tr className="material-list-virtual-spacer" aria-hidden>
-                            <td colSpan={2} style={{ height: leftTopSpacerHeight, padding: 0, border: 0 }} />
+                            <VirtualSpacerCell colSpan={2} height={leftTopSpacerHeight} />
                           </tr>
                         ) : null}
                         {visibleLeftRows.map((row, index) => (
@@ -519,7 +520,7 @@ function EnumeratorContent({
                         ))}
                         {leftBottomSpacerHeight > 0 ? (
                           <tr className="material-list-virtual-spacer" aria-hidden>
-                            <td colSpan={2} style={{ height: leftBottomSpacerHeight, padding: 0, border: 0 }} />
+                            <VirtualSpacerCell colSpan={2} height={leftBottomSpacerHeight} />
                           </tr>
                         ) : null}
                       </>
@@ -572,7 +573,7 @@ function EnumeratorContent({
                       <>
                         {rightTopSpacerHeight > 0 ? (
                           <tr className="material-list-virtual-spacer" aria-hidden>
-                            <td colSpan={2} style={{ height: rightTopSpacerHeight, padding: 0, border: 0 }} />
+                            <VirtualSpacerCell colSpan={2} height={rightTopSpacerHeight} />
                           </tr>
                         ) : null}
                         {visibleRightRows.map((row, index) => {
@@ -598,7 +599,7 @@ function EnumeratorContent({
                         })}
                         {rightBottomSpacerHeight > 0 ? (
                           <tr className="material-list-virtual-spacer" aria-hidden>
-                            <td colSpan={2} style={{ height: rightBottomSpacerHeight, padding: 0, border: 0 }} />
+                            <VirtualSpacerCell colSpan={2} height={rightBottomSpacerHeight} />
                           </tr>
                         ) : null}
                       </>
