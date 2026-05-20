@@ -7,6 +7,7 @@ export interface UserConfig {
   material_list_window_behavior: string;
   show_ui_test_page: boolean;
   local_library_tail_path_count: number;
+  statistics_enumerator_info_rules: string[];
 }
 
 export interface UserConfigInfo {
