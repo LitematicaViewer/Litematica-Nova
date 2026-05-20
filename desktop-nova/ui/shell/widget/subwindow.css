@@ -337,8 +337,16 @@
     vertical-align: middle;
 }
 
-.material-list-table tbody tr:nth-child(odd) {
+.material-list-row-odd {
     background: rgb(255 255 255 / 2%);
+}
+
+.material-list-virtual-spacer {
+    background: transparent !important;
+}
+
+.material-list-virtual-spacer td {
+    background: transparent !important;
 }
 
 .material-list-icon-col {

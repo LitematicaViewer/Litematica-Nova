@@ -123,7 +123,7 @@ function normalizeValueType(value: unknown): EnumeratorValueType {
 
 function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return uniq(value.map((item) => String(item || "").trim()));
+  return uniq(value.map((item) => normalizeCollectionValue(item)).filter(Boolean));
 }
 
 function slugify(value: string): string {
@@ -144,6 +144,20 @@ function safeSymbol(value: string, fallback: string): string {
 
 function normalizeLookupKey(value: string): string {
   return String(value || "").trim().toLowerCase();
+}
+
+function normalizeCollectionValue(value: unknown): string {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  if (normalized.startsWith("E/")) {
+    const entityId = normalized.slice(2).trim();
+    if (!entityId) return "";
+    return entityId.includes(":") ? `E/${entityId.toLowerCase()}` : `E/minecraft:${entityId.toLowerCase()}`;
+  }
+  if (normalized.includes(":")) {
+    return normalized.toLowerCase();
+  }
+  return `minecraft:${normalized.toLowerCase()}`;
 }
 
 function itemKeyToId(prefix: string, key: string): string {

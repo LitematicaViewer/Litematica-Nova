@@ -304,11 +304,13 @@ function EnumeratorContent({
   const rightValueTableRef = useRef<HTMLDivElement | null>(null);
   const {
     visibleItems: visibleLeftRows,
+    startIndex: leftStartIndex,
     topSpacerHeight: leftTopSpacerHeight,
     bottomSpacerHeight: leftBottomSpacerHeight,
   } = useVirtualWindow(filteredLeftRows, leftValueTableRef, 40, 10);
   const {
     visibleItems: visibleRightRows,
+    startIndex: rightStartIndex,
     topSpacerHeight: rightTopSpacerHeight,
     bottomSpacerHeight: rightBottomSpacerHeight,
   } = useVirtualWindow(filteredRightRows, rightValueTableRef, 40, 10);
@@ -498,13 +500,14 @@ function EnumeratorContent({
                     ) : (
                       <>
                         {leftTopSpacerHeight > 0 ? (
-                          <tr aria-hidden>
+                          <tr className="material-list-virtual-spacer" aria-hidden>
                             <td colSpan={2} style={{ height: leftTopSpacerHeight, padding: 0, border: 0 }} />
                           </tr>
                         ) : null}
-                        {visibleLeftRows.map((row) => (
+                        {visibleLeftRows.map((row, index) => (
                           <tr
                             key={row.id}
+                            className={(leftStartIndex + index) % 2 === 0 ? "material-list-row-even" : "material-list-row-odd"}
                             onContextMenu={(event) => {
                               event.preventDefault();
                               handleAddValueToRight(row.id);
@@ -515,7 +518,7 @@ function EnumeratorContent({
                           </tr>
                         ))}
                         {leftBottomSpacerHeight > 0 ? (
-                          <tr aria-hidden>
+                          <tr className="material-list-virtual-spacer" aria-hidden>
                             <td colSpan={2} style={{ height: leftBottomSpacerHeight, padding: 0, border: 0 }} />
                           </tr>
                         ) : null}
@@ -568,16 +571,20 @@ function EnumeratorContent({
                     ) : (
                       <>
                         {rightTopSpacerHeight > 0 ? (
-                          <tr aria-hidden>
+                          <tr className="material-list-virtual-spacer" aria-hidden>
                             <td colSpan={2} style={{ height: rightTopSpacerHeight, padding: 0, border: 0 }} />
                           </tr>
                         ) : null}
-                        {visibleRightRows.map((row) => {
+                        {visibleRightRows.map((row, index) => {
                           const active = rightSelected.includes(row.id);
+                          const rowClassName = [
+                            (rightStartIndex + index) % 2 === 0 ? "material-list-row-even" : "material-list-row-odd",
+                            active ? "enumerator-row-selected" : "",
+                          ].filter(Boolean).join(" ");
                           return (
                             <tr
                               key={row.id}
-                              className={active ? "enumerator-row-selected" : ""}
+                              className={rowClassName}
                               onClick={() => handleToggleRightSelection(row.id)}
                               onContextMenu={(event) => {
                                 event.preventDefault();
@@ -590,7 +597,7 @@ function EnumeratorContent({
                           );
                         })}
                         {rightBottomSpacerHeight > 0 ? (
-                          <tr aria-hidden>
+                          <tr className="material-list-virtual-spacer" aria-hidden>
                             <td colSpan={2} style={{ height: rightBottomSpacerHeight, padding: 0, border: 0 }} />
                           </tr>
                         ) : null}

@@ -1460,6 +1460,101 @@ label.setting-row:has(> input[type="radio"]) {
     flex: 1 1 140px;
 }
 
+.statistics-enumerator-list,
+.statistics-enumerator-preview-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.statistics-enumerator-row,
+.statistics-enumerator-preview-item {
+    padding: 8px 10px;
+    border: 1px solid ThreeDShadow;
+    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
+}
+
+.statistics-enumerator-row-main,
+.statistics-enumerator-preview-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.statistics-enumerator-row-title,
+.statistics-enumerator-preview-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.statistics-enumerator-row-value,
+.statistics-enumerator-preview-value {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+}
+
+.statistics-enumerator-row-error,
+.statistics-enumerator-preview-error,
+.statistics-enumerator-editor-error {
+    margin-top: 6px;
+    color: #ff8888;
+    white-space: pre-wrap;
+}
+
+.statistics-enumerator-editor {
+    max-width: 980px;
+}
+
+.statistics-enumerator-editor-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.statistics-enumerator-editor-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+}
+
+.statistics-enumerator-editor-column {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.statistics-enumerator-editor-heading {
+    font-weight: 700;
+}
+
+.statistics-enumerator-editor-textarea {
+    min-height: 220px;
+    resize: vertical;
+    font-family: Consolas, "Courier New", monospace;
+}
+
+.statistics-enumerator-editor-hint {
+    color: var(--ln-muted-text-color, GrayText);
+    line-height: 1.6;
+}
+
+.statistics-enumerator-editor-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.statistics-enumerator-editor-footer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 .statistics-material-row {
     display: flex;
     flex-direction: column;
