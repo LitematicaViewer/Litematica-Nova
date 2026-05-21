@@ -39,6 +39,9 @@ Desktop.ini
 
 # Local runtime data
 .external/
+block/
+item/
+lang/
 data/cache/
 data/stockpile/
 data/reden/

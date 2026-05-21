@@ -38,7 +38,6 @@ import { AssetManagerDialog, openAssetManagerWithWindowBehavior } from "../../..
 
 const BLOCKSTATE_DB = "data/minecraft_blockstates/26.1.json";
 const BLOCKSTATE_ZH = "data/minecraft_blockstates/26.1.zh_cn.json";
-const BLOCK_ICON_DIR = "block";
 const NOVA_THEME_OPTIONS = [
   { value: "WebDefault", label: "WebDefault" },
   { value: "Bootstrap5", label: "Bootstrap5" },
@@ -95,10 +94,8 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
   const [viewerInfo, setViewerInfo] = useState<PathInfo | null>(null);
   const [dbInfo, setDbInfo] = useState<PathInfo | null>(null);
   const [zhInfo, setZhInfo] = useState<PathInfo | null>(null);
-  const [iconDirInfo, setIconDirInfo] = useState<PathInfo | null>(null);
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
   const [dbOk, setDbOk] = useState<boolean | null>(null);
-  const [iconOk, setIconOk] = useState<boolean | null>(null);
   const [log, setLog] = useState("");
   const [aiConfig, setAiConfig] = useState<AiPublicConfig | null>(null);
   const [aiProvider, setAiProvider] = useState("mock");
@@ -131,7 +128,6 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
     setViewerInfo(info.viewerInfo);
     setDbInfo(info.dbInfo);
     setZhInfo(info.zhInfo);
-    setIconDirInfo(info.iconDirInfo);
   };
 
   const refreshAiConfig = async () => {
@@ -217,23 +213,6 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
     } catch (err: any) {
       setDbOk(false);
       setLog(`检查 BlockState 数据库失败：${err}`);
-    }
-  };
-
-  const checkIcons = async () => {
-    try {
-      const [iconDir, dirt, grass] = await Promise.all([
-        getPathInfo(BLOCK_ICON_DIR),
-        getPathInfo("block/dirt.png"),
-        getPathInfo("block/grass_block.png"),
-      ]);
-      setIconDirInfo(iconDir);
-      const ok = iconDir.exists && iconDir.is_dir && dirt.exists && grass.exists;
-      setIconOk(ok);
-      setLog(`检查图标库：${ok ? "OK" : "失败"}\n目录：${iconDir.normalized}\ndirt.png=${dirt.exists}\ngrass_block.png=${grass.exists}`);
-    } catch (err: any) {
-      setIconOk(false);
-      setLog(String(err));
     }
   };
 
@@ -477,13 +456,11 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
         <div className="group-box-title">数据文件</div>
         <PathRow label="BlockState DB" path={BLOCKSTATE_DB} info={dbInfo} />
         <PathRow label="中文翻译 DB" path={BLOCKSTATE_ZH} info={zhInfo} />
-        <PathRow label="block 图标库" path={BLOCK_ICON_DIR} info={iconDirInfo} />
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
           <button className="btn" onClick={checkDatabase}>检查 BlockState 数据库</button>
-          <button className="btn" onClick={checkIcons}>检查图标库</button>
           <button className="btn" onClick={() => openWorkspacePath("data/minecraft_blockstates")}>打开数据目录</button>
-          <span style={{ color: dbOk === false || iconOk === false ? "#ff8888" : "#aaa" }}>
-            DB: {statusText(dbOk)} / 图标: {statusText(iconOk)}
+          <span style={{ color: dbOk === false ? "#ff8888" : "#aaa" }}>
+            DB: {statusText(dbOk)}
           </span>
         </div>
       </div>
