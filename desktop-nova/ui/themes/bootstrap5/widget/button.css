@@ -5,7 +5,7 @@
     --ln-bootstrap5-button-height: 38px;
 }
 
-button:not(.nav-expand):not(.nav-item),
+button:not(.nav-expand):not(.nav-item):not(.flake-page__quickbar-slot):not(.flake-page__quickbar-open-inventory),
 input[type="button"],
 input[type="submit"],
 input[type="reset"] {
@@ -26,7 +26,7 @@ input[type="reset"] {
     cursor: default;
 }
 
-button:not(.nav-expand):not(.nav-item):hover:not(:disabled),
+button:not(.nav-expand):not(.nav-item):not(.flake-page__quickbar-slot):not(.flake-page__quickbar-open-inventory):hover:not(:disabled),
 input[type="button"]:hover:not(:disabled),
 input[type="submit"]:hover:not(:disabled),
 input[type="reset"]:hover:not(:disabled) {
@@ -34,8 +34,8 @@ input[type="reset"]:hover:not(:disabled) {
     color: var(--ln-bootstrap5-button-color);
 }
 
-button:not(.nav-expand):not(.nav-item):active:not(:disabled),
-button:not(.nav-expand):not(.nav-item)[aria-pressed="true"],
+button:not(.nav-expand):not(.nav-item):not(.flake-page__quickbar-slot):not(.flake-page__quickbar-open-inventory):active:not(:disabled),
+button:not(.nav-expand):not(.nav-item):not(.flake-page__quickbar-slot):not(.flake-page__quickbar-open-inventory)[aria-pressed="true"],
 input[type="button"]:active:not(:disabled),
 input[type="submit"]:active:not(:disabled),
 input[type="reset"]:active:not(:disabled) {
@@ -43,14 +43,14 @@ input[type="reset"]:active:not(:disabled) {
     color: var(--ln-bootstrap5-button-active-color);
 }
 
-button:not(.nav-expand):not(.nav-item):disabled,
+button:not(.nav-expand):not(.nav-item):not(.flake-page__quickbar-slot):not(.flake-page__quickbar-open-inventory):disabled,
 input[type="button"]:disabled,
 input[type="submit"]:disabled,
 input[type="reset"]:disabled {
     opacity: 0.65;
 }
 
-button:not(.nav-expand):not(.nav-item):focus-visible,
+button:not(.nav-expand):not(.nav-item):not(.flake-page__quickbar-slot):not(.flake-page__quickbar-open-inventory):focus-visible,
 input[type="button"]:focus-visible,
 input[type="submit"]:focus-visible,
 input[type="reset"]:focus-visible {
@@ -67,7 +67,25 @@ button.material-list-close-button {
     line-height: 1;
 }
 
-button.flake-page__quickbar-slot,
+button.flake-page__quickbar-slot {
+    box-sizing: border-box;
+    display: grid;
+    width: 32px;
+    min-width: 32px;
+    max-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    max-height: 32px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    place-items: center;
+    background: transparent;
+    color: transparent;
+    line-height: 1;
+    overflow: visible;
+}
+
 button.flake-page__quickbar-slot:hover:not(:disabled),
 button.flake-page__quickbar-slot:active:not(:disabled),
 button.flake-page__quickbar-slot[aria-pressed="true"] {
@@ -77,4 +95,39 @@ button.flake-page__quickbar-slot[aria-pressed="true"] {
     background: transparent;
     color: transparent;
     line-height: 1;
+}
+
+button.flake-page__quickbar-open-inventory {
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    background: transparent var(--flake-open-inventory-normal-image) center / contain no-repeat;
+    color: transparent;
+}
+
+button.flake-page__quickbar-open-inventory:hover:not(:disabled),
+button.flake-page__quickbar-open-inventory:active:not(:disabled) {
+    border: 0;
+    background-color: transparent;
+    background-image: var(--flake-open-inventory-hover-image);
+    color: transparent;
+}
+
+button.flake-page__quickbar-open-inventory .flake-page__quickbar-open-inventory-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
