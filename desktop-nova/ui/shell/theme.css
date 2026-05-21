@@ -12,4 +12,6 @@
     --ln-ui-background-color: #ffffff;
     --ln-navigation-background-color: #ffffff;
     --ln-file-icon-size: 16px;
+    --flake-hotbar-image: url("./resource/content/hotbar.png");
+    --flake-hotbar-selection-image: url("./resource/content/hotbar_selection.png");
 }

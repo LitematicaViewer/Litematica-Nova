@@ -102,3 +102,52 @@ button.material-list-close-button:active:not(:disabled) {
     background-image: url("../resource/button/windowClose_hover.png");
     color: transparent;
 }
+
+button.flake-page__quickbar-slot,
+button.flake-page__quickbar-slot:hover:not(:disabled),
+button.flake-page__quickbar-slot:active:not(:disabled),
+button.flake-page__quickbar-slot[aria-pressed="true"] {
+    --ln-minecraft-button-image: none;
+    border: 0;
+    border-image-source: none;
+    background: transparent;
+    color: transparent;
+}
+
+button.flake-page__quickbar-open-inventory {
+    --ln-minecraft-button-image: none;
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    padding: 0;
+    border: 0;
+    border-image-source: none;
+    overflow: hidden;
+    image-rendering: pixelated;
+    background: transparent var(--flake-open-inventory-normal-image) center / contain no-repeat;
+    color: transparent;
+}
+
+button.flake-page__quickbar-open-inventory:hover:not(:disabled),
+button.flake-page__quickbar-open-inventory:active:not(:disabled) {
+    --ln-minecraft-button-image: none;
+    border: 0;
+    border-image-source: none;
+    background-image: var(--flake-open-inventory-hover-image);
+    color: transparent;
+}
+
+button.flake-page__quickbar-open-inventory .flake-page__quickbar-open-inventory-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}

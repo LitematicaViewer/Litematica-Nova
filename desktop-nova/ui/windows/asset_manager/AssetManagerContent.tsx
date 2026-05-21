@@ -185,8 +185,8 @@ function resourceActiveText(snapshot: GameResourceSnapshot | null): string {
 
 function routeIntro(route: AssetRoute): string {
   switch (route) {
-    case "block_icon": return "管理两个方块图标槽位：2D 槽可用于分层并可回退给材料列表，3D 槽仅用于材料列表。";
-    case "item_icon": return "管理分层视图中可用的物品图标来源。";
+    case "block_icon": return "管理材料槽与 2D 槽使用的图标包；材料相关界面会按 block_icon/block_2d 与激活包名解析，分层画布只走 2D 槽。";
+    case "item_icon": return "管理 item/激活包；材料相关界面中的物品分支会把它作为 block_itemLike 之后的第二优先级。";
     case "language": return "导入、下载并切换 Minecraft 语言 JSON。";
     case "game_data": return "导入并切换 BlockState 数据库与属性翻译。";
     case "enum_catalog": return "下载并切换枚举器使用的基础全集文件。";
