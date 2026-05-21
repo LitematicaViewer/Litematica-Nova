@@ -55,6 +55,7 @@ button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
 .icon-button { width: 44px; min-width: 44px; padding: 9px 0; }
 .button.primary { background: #1f5f3b; border-color: #3a8b5a; }
 .button.danger { background: #3b1d1d; border-color: #714040; }
+.link-button { border: 0; background: transparent; color: var(--accent); padding: 0 2px; font-size: 11px; }
 
 .section { margin: 22px 0; }
 .section-head { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 14px 2px; border-bottom: 1px solid var(--line); }
@@ -75,6 +76,7 @@ button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
 .material-title { display: flex; gap: 10px; align-items: center; min-width: 0; flex-wrap: wrap; }
 .icon-frame { width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid #244260; border-radius: 7px; background: #0d1520; overflow: hidden; }
 .icon-frame.large { width: 46px; height: 46px; }
+.icon-frame.fallback { outline: 1px dashed var(--danger); outline-offset: 2px; }
 .icon-img { width: 32px; height: 32px; image-rendering: pixelated; object-fit: contain; }
 .icon-frame.large .icon-img { width: 40px; height: 40px; }
 .name { font-weight: 800; font-size: 17px; }
@@ -98,6 +100,11 @@ button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
 .detail span { display: block; color: var(--muted); font-size: 12px; }
 .claim-list { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
 .claim-chip { border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; color: var(--muted); font-size: 11px; }
+.presence { position: relative; display: inline-block; }
+.presence summary { cursor: pointer; list-style: none; }
+.presence summary::-webkit-details-marker { display: none; }
+.presence-menu { position: absolute; right: 0; top: 28px; z-index: 20; min-width: 160px; max-width: 280px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); display: grid; gap: 4px; }
+.presence-menu span { color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
 
 .craft-chain { margin-top: 14px; display: grid; gap: 10px; }
 .tree-node { position: relative; margin: 10px 0 10px 22px; }

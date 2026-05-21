@@ -623,11 +623,14 @@ mod tests {
                 item_icon_key: "minecraft:stone".to_string(),
                 icon_path: String::new(),
                 icon_available: false,
+                icon_diagnostic: None,
+                normalized_from: Vec::new(),
                 display_names: BTreeMap::new(),
                 source_regions: vec!["main".to_string()],
                 recipe_status: "missing".to_string(),
                 craft_complexity: 0,
             }],
+            diagnostics: Vec::new(),
         }
     }
 }

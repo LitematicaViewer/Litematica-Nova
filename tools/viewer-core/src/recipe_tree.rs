@@ -1418,12 +1418,15 @@ mod tests {
                     item_icon_key: id.to_string(),
                     icon_path: String::new(),
                     icon_available: false,
+                    icon_diagnostic: None,
+                    normalized_from: Vec::new(),
                     display_names: std::collections::BTreeMap::new(),
                     source_regions: Vec::new(),
                     recipe_status: status.to_string(),
                     craft_complexity: 0,
                 })
                 .collect(),
+            diagnostics: Vec::new(),
         }
     }
 

@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::recipe_cache::{self, RecipeCacheStatus};
 use crate::runtime_paths;
 use crate::stats_api::{
-    MaterialItemOutput, MaterialScope, RegionSummaryOutput, StableStructureOutput,
-    build_materials_output,
+    MaterialItemOutput, MaterialScope, RegionCountOutput, RegionSummaryOutput,
+    StableStructureOutput, build_materials_output,
 };
 use crate::stockpile_schema::STOCKPILE_MATERIALS_SCHEMA_VERSION;
 
@@ -25,6 +25,16 @@ pub struct StockpileMaterialsData {
     pub project: StockpileProjectInfo,
     pub summary: StockpileSummary,
     pub materials: Vec<StockpileMaterialItem>,
+    #[serde(default)]
+    pub diagnostics: Vec<StockpileDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StockpileDiagnostic {
+    pub kind: String,
+    pub source: String,
+    pub target: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +68,10 @@ pub struct StockpileMaterialItem {
     pub item_icon_key: String,
     pub icon_path: String,
     pub icon_available: bool,
+    #[serde(default)]
+    pub icon_diagnostic: Option<String>,
+    #[serde(default)]
+    pub normalized_from: Vec<String>,
     pub display_names: BTreeMap<String, String>,
     pub source_regions: Vec<String>,
     pub recipe_status: String,
@@ -123,9 +137,9 @@ fn build_stockpile_materials_data(
     stats: StableStructureOutput,
     recipe_availability: &RecipeAvailability,
 ) -> Result<StockpileMaterialsData> {
+    let (aggregated_items, diagnostics) = normalize_material_items(&stats.material_items);
     let mut total_stack_units = 0_u64;
-    let materials = stats
-        .material_items
+    let materials = aggregated_items
         .iter()
         .map(|item| {
             let stack_size = max_stack_size(&item.block_id);
@@ -155,11 +169,12 @@ fn build_stockpile_materials_data(
             estimated_shulker_boxes: ceil_div(total_stack_units, SHULKER_STACKS),
         },
         materials,
+        diagnostics,
     })
 }
 
 fn stockpile_material_item(
-    item: &MaterialItemOutput,
+    item: &NormalizedMaterialItem,
     breakdown: StackBreakdown,
     recipe_availability: &RecipeAvailability,
 ) -> StockpileMaterialItem {
@@ -185,11 +200,139 @@ fn stockpile_material_item(
         item_icon_key: namespace_id.clone(),
         icon_path: String::new(),
         icon_available: false,
+        icon_diagnostic: None,
+        normalized_from: item.normalized_from.clone(),
         display_names: BTreeMap::new(),
         source_regions: source_regions(item),
         recipe_status,
         craft_complexity: 0,
     }
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedMaterialItem {
+    block_id: String,
+    display_name: String,
+    total_count: u64,
+    region_counts: Option<Vec<RegionCountOutput>>,
+    normalized_from: Vec<String>,
+}
+
+fn normalize_material_items(
+    items: &[MaterialItemOutput],
+) -> (Vec<NormalizedMaterialItem>, Vec<StockpileDiagnostic>) {
+    let mut diagnostics = Vec::new();
+    let mut by_id = BTreeMap::<String, NormalizedMaterialItem>::new();
+    for item in items {
+        let normalized = normalize_unobtainable_material(&item.block_id)
+            .unwrap_or_else(|| item.block_id.as_str());
+        if normalized != item.block_id {
+            diagnostics.push(StockpileDiagnostic {
+                kind: "material_normalized".to_string(),
+                source: item.block_id.clone(),
+                target: normalized.to_string(),
+                message: format!(
+                    "normalized {} to obtainable item {}",
+                    item.block_id, normalized
+                ),
+            });
+        }
+        let entry = by_id
+            .entry(normalized.to_string())
+            .or_insert_with(|| NormalizedMaterialItem {
+                block_id: normalized.to_string(),
+                display_name: if normalized == item.block_id {
+                    item.display_name.clone()
+                } else {
+                    normalized
+                        .split(':')
+                        .next_back()
+                        .unwrap_or(normalized)
+                        .replace('_', " ")
+                },
+                total_count: 0,
+                region_counts: None,
+                normalized_from: Vec::new(),
+            });
+        entry.total_count = entry.total_count.saturating_add(item.total_count);
+        merge_region_counts(&mut entry.region_counts, item.region_counts.as_deref());
+        if normalized != item.block_id && !entry.normalized_from.contains(&item.block_id) {
+            entry.normalized_from.push(item.block_id.clone());
+        }
+    }
+    (by_id.into_values().collect(), diagnostics)
+}
+
+fn normalize_unobtainable_material(id: &str) -> Option<&'static str> {
+    match id {
+        "minecraft:lava_cauldron"
+        | "minecraft:water_cauldron"
+        | "minecraft:powder_snow_cauldron" => Some("minecraft:cauldron"),
+        "minecraft:potted_azalea_bush"
+        | "minecraft:potted_flowering_azalea_bush"
+        | "minecraft:potted_acacia_sapling"
+        | "minecraft:potted_bamboo"
+        | "minecraft:potted_birch_sapling"
+        | "minecraft:potted_cherry_sapling"
+        | "minecraft:potted_dark_oak_sapling"
+        | "minecraft:potted_jungle_sapling"
+        | "minecraft:potted_mangrove_propagule"
+        | "minecraft:potted_oak_sapling"
+        | "minecraft:potted_pale_oak_sapling"
+        | "minecraft:potted_spruce_sapling"
+        | "minecraft:potted_cactus"
+        | "minecraft:potted_dead_bush"
+        | "minecraft:potted_fern"
+        | "minecraft:potted_dandelion"
+        | "minecraft:potted_poppy"
+        | "minecraft:potted_blue_orchid"
+        | "minecraft:potted_allium"
+        | "minecraft:potted_azure_bluet"
+        | "minecraft:potted_red_tulip"
+        | "minecraft:potted_orange_tulip"
+        | "minecraft:potted_white_tulip"
+        | "minecraft:potted_pink_tulip"
+        | "minecraft:potted_oxeye_daisy"
+        | "minecraft:potted_cornflower"
+        | "minecraft:potted_lily_of_the_valley"
+        | "minecraft:potted_wither_rose"
+        | "minecraft:potted_crimson_fungus"
+        | "minecraft:potted_warped_fungus"
+        | "minecraft:potted_crimson_roots"
+        | "minecraft:potted_warped_roots" => Some("minecraft:flower_pot"),
+        "minecraft:redstone_wall_torch" => Some("minecraft:redstone_torch"),
+        "minecraft:soul_wall_torch" => Some("minecraft:soul_torch"),
+        "minecraft:wall_torch" => Some("minecraft:torch"),
+        _ => None,
+    }
+}
+
+fn merge_region_counts(
+    target: &mut Option<Vec<RegionCountOutput>>,
+    source: Option<&[RegionCountOutput]>,
+) {
+    let Some(source) = source else {
+        return;
+    };
+    let mut counts = target
+        .take()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|region| (region.region, region.count))
+        .collect::<BTreeMap<_, _>>();
+    for region in source {
+        *counts.entry(region.region.clone()).or_default() = counts
+            .get(&region.region)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(region.count);
+    }
+    *target = Some(
+        counts
+            .into_iter()
+            .map(|(region, count)| RegionCountOutput { region, count })
+            .collect(),
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -234,7 +377,7 @@ fn recipe_status_for_material(
     .to_string()
 }
 
-fn source_regions(item: &MaterialItemOutput) -> Vec<String> {
+fn source_regions(item: &NormalizedMaterialItem) -> Vec<String> {
     let mut regions = BTreeSet::<String>::new();
     if let Some(region_counts) = item.region_counts.as_ref() {
         for region in region_counts {
@@ -608,7 +751,7 @@ fn category(name: &'static str, icon: &'static str) -> MaterialCategory {
 mod tests {
     use super::{
         RecipeAvailability, build_stockpile_materials_data, categorize_material,
-        recipe_status_for_material, stack_breakdown,
+        normalize_unobtainable_material, recipe_status_for_material, stack_breakdown,
     };
     use crate::stats_api::{MaterialScope, build_materials_output};
 
@@ -661,6 +804,27 @@ mod tests {
             "功能方块"
         );
         assert_eq!(categorize_material("minecraft:unknown_custom").name, "其他");
+    }
+
+    #[test]
+    fn unobtainable_state_blocks_normalize_to_obtainable_materials() {
+        assert_eq!(
+            normalize_unobtainable_material("minecraft:lava_cauldron"),
+            Some("minecraft:cauldron")
+        );
+        assert_eq!(
+            normalize_unobtainable_material("minecraft:water_cauldron"),
+            Some("minecraft:cauldron")
+        );
+        assert_eq!(
+            normalize_unobtainable_material("minecraft:powder_snow_cauldron"),
+            Some("minecraft:cauldron")
+        );
+        assert_eq!(normalize_unobtainable_material("minecraft:cauldron"), None);
+        assert_eq!(
+            normalize_unobtainable_material("minecraft:sea_lantern"),
+            None
+        );
     }
 
     #[test]

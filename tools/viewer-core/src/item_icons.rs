@@ -87,6 +87,27 @@ pub fn resolve_stockpile_icons(
         if let Some(icon) = by_key.get(&material.item_icon_key) {
             material.icon_path = icon.path.clone();
             material.icon_available = icon.available;
+            material.icon_diagnostic = (!icon.available).then(|| {
+                format!(
+                    "missing icon for {}; using generated fallback, not category fallback",
+                    material.item_icon_key
+                )
+            });
+        }
+    }
+    for material in &materials.materials {
+        if !material.icon_available {
+            materials
+                .diagnostics
+                .push(crate::stockpile::StockpileDiagnostic {
+                    kind: "icon_missing".to_string(),
+                    source: material.namespace_id.clone(),
+                    target: material.item_icon_key.clone(),
+                    message: format!(
+                        "no real item/block icon found for {}; generated fallback used",
+                        material.item_icon_key
+                    ),
+                });
         }
     }
 
@@ -135,6 +156,35 @@ fn collect_tree_keys(node: &RecipeTreeNode, keys: &mut BTreeSet<String>) {
     }
     for child in &node.children {
         collect_tree_keys(child, keys);
+    }
+}
+
+fn collect_blockstate_models(value: &Value) -> Vec<String> {
+    let mut models = BTreeSet::<String>::new();
+    collect_blockstate_models_inner(value, &mut models);
+    models.into_iter().collect()
+}
+
+fn collect_blockstate_models_inner(value: &Value, models: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(model) = map.get("model").and_then(Value::as_str) {
+                models.insert(if model.contains(':') {
+                    model.to_string()
+                } else {
+                    format!("minecraft:{model}")
+                });
+            }
+            for child in map.values() {
+                collect_blockstate_models_inner(child, models);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_blockstate_models_inner(child, models);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -235,11 +285,22 @@ impl IconResolver {
             }
 
             let mut visited = BTreeSet::<String>::new();
-            self.resolve_model_texture(
+            if let Some(bytes) = self.resolve_model_texture(
                 &mut archive,
                 &format!("minecraft:item/{local}"),
                 &mut visited,
-            )
+            )? {
+                return Ok(Some(bytes));
+            }
+            let mut visited = BTreeSet::<String>::new();
+            if let Some(bytes) = self.resolve_model_texture(
+                &mut archive,
+                &format!("minecraft:block/{local}"),
+                &mut visited,
+            )? {
+                return Ok(Some(bytes));
+            }
+            self.resolve_blockstate_texture(&mut archive, local)
         }
     }
 
@@ -289,6 +350,26 @@ impl IconResolver {
             return Ok(None);
         }
         read_zip_bytes(archive, &format!("assets/minecraft/textures/{local}.png"))
+    }
+
+    fn resolve_blockstate_texture(
+        &self,
+        archive: &mut ZipArchive<Cursor<&[u8]>>,
+        local: &str,
+    ) -> Result<Option<Vec<u8>>> {
+        let path = format!("assets/minecraft/blockstates/{local}.json");
+        let Some(text) = read_zip_string(archive, &path)? else {
+            return Ok(None);
+        };
+        let value: Value = serde_json::from_str(&text)
+            .with_context(|| format!("parse blockstate failed: {path}"))?;
+        for model_ref in collect_blockstate_models(&value) {
+            let mut visited = BTreeSet::<String>::new();
+            if let Some(bytes) = self.resolve_model_texture(archive, &model_ref, &mut visited)? {
+                return Ok(Some(bytes));
+            }
+        }
+        Ok(None)
     }
 
     fn ensure_client_jar(&mut self) -> Result<()> {
