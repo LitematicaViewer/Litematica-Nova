@@ -12,6 +12,8 @@
   let open = new Set();
   let collapsedTree = new Set();
   let syncState = { participants: [], materials: {}, updated_at: null };
+  let presence = [];
+  let lastRevision = null;
   let lastSyncText = '-';
   let syncError = '';
   let pollHandle = null;
@@ -54,7 +56,7 @@
       copied: '\u5df2\u590d\u5236', readonlyMode: '\u53ea\u8bfb\u6a21\u5f0f', recentBy: '\u6700\u8fd1\u4fee\u6539\u4eba', recentAt: '\u6700\u8fd1\u4fee\u6539\u65f6\u95f4', publicNote: '\u5907\u6ce8', storageLocation: '\u5b58\u653e\u4f4d\u7f6e',
       locked: '\u9501\u5b9a', materialLocked: '\u6750\u6599\u5df2\u9501\u5b9a', loginRequired: '\u8bf7\u5148\u8f93\u5165\u8bbf\u95ee\u5bc6\u7801', readonlyGuest: '\u53ea\u8bfb\u8bbf\u5ba2\u4e0d\u80fd\u4fee\u6539',
       accessPassword: '\u8bbf\u95ee\u5bc6\u7801', noMyTasks: '\u6682\u65e0\u6211\u7684\u4efb\u52a1', rawCountSuffix: '\u539f\u59cb\u4e2a\u6570', operationUnavailable: '\u5f53\u524d\u4e0d\u53ef\u64cd\u4f5c'
-      , refresh: '\u5237\u65b0'
+      , refresh: '\u5237\u65b0', onlineUsers: '\u5728\u7ebf', onlineCount: '\u5728\u7ebf {n} \u4eba', switchOnly: '\u4ec5\u5207\u6362\u8eab\u4efd', migrateClaims: '\u8fc1\u79fb\u65e7 ID \u4efb\u52a1', mergeIdPrompt: '\u8f93\u5165\u65b0 ID'
     },
     'en-US': {
       myTasks: 'My tasks', myPreparing: 'Preparing', myDone: 'Done', myParticipated: 'Participated', myTotal: 'My task stats',
@@ -64,7 +66,7 @@
       copied: 'Copied', readonlyMode: 'Read-only mode', recentBy: 'Last changed by', recentAt: 'Last changed at', publicNote: 'Note', storageLocation: 'Storage',
       locked: 'Locked', materialLocked: 'Material is locked', loginRequired: 'Access password required', readonlyGuest: 'Read-only guest',
       accessPassword: 'Access password', noMyTasks: 'No tasks yet', rawCountSuffix: 'raw', operationUnavailable: 'Unavailable'
-      , refresh: 'Refresh'
+      , refresh: 'Refresh', onlineUsers: 'Online', onlineCount: '{n} online', switchOnly: 'Switch only', migrateClaims: 'Migrate old ID tasks', mergeIdPrompt: 'New ID'
     }
   };
   function dict() { return (data.i18n && data.i18n[lang]) || (data.i18n && data.i18n['en-US']) || {}; }
@@ -73,12 +75,14 @@
     const zh = {
       totalQuantity: '\u603b\u6570\u91cf', rawCount: '\u539f\u59cb\u4e2a\u6570', stackSize: '\u6bcf\u7ec4\u6570\u91cf', unitChest: '\u7bb1\u76d2', unitBox: '\u76d2', unitStack: '\u7ec4', unitEach: '\u4e2a',
       direct: '\u53ef\u91c7\u96c6', recipeDirect: '\u53ef\u76f4\u63a5\u91c7\u96c6\u6216\u6316\u6398\u83b7\u5f97', namespaceId: '\u547d\u540d\u7a7a\u95f4 ID', stacksRemainder: '\u7ec4 / \u4f59\u6570', shulkerBoxes: '\u76d2\u6570',
-      tagPlanks: '\u4efb\u610f\u6728\u677f', tagLogs: '\u4efb\u610f\u539f\u6728', tagStone: '\u4efb\u610f\u77f3\u6750', tagCoals: '\u4efb\u610f\u7164\u70ad', tagIronOres: '\u4efb\u610f\u94c1\u77ff\u77f3'
+      tagPlanks: '\u4efb\u610f\u6728\u677f', tagLogs: '\u4efb\u610f\u539f\u6728', tagStone: '\u4efb\u610f\u77f3\u6750', tagCoals: '\u4efb\u610f\u7164\u70ad', tagIronOres: '\u4efb\u610f\u94c1\u77ff\u77f3',
+      normalizedFrom: '\u5df2\u5f52\u4e00\u5316\u6765\u6e90', iconDiagnostic: '\u56fe\u6807\u8bca\u65ad'
     };
     const en = {
       totalQuantity: 'Total quantity', rawCount: 'Raw count', stackSize: 'Stack size', unitChest: 'chest-box', unitBox: 'box', unitStack: 'stack', unitEach: 'item',
       direct: 'Gatherable', recipeDirect: 'Directly gather or mine this material', namespaceId: 'Namespace ID', stacksRemainder: 'stacks / remainder', shulkerBoxes: 'boxes',
-      tagPlanks: 'Any planks', tagLogs: 'Any logs', tagStone: 'Any stone material', tagCoals: 'Any coal', tagIronOres: 'Any iron ore'
+      tagPlanks: 'Any planks', tagLogs: 'Any logs', tagStone: 'Any stone material', tagCoals: 'Any coal', tagIronOres: 'Any iron ore',
+      normalizedFrom: 'Normalized from', iconDiagnostic: 'Icon diagnostic'
     };
     return (lang === 'zh-CN' ? zh : en)[key] || en[key];
   }
@@ -106,13 +110,14 @@
     loadOfflineState();
     document.title = t('appTitle');
     if (userId && isServeMode) await registerParticipant();
-    await refreshState();
+    await refreshState(true);
     render();
     ensureUser();
     if (isServeMode) {
       const poll = async () => {
         if (userId && !participantRegistered) await registerParticipant();
-        await refreshState();
+        await heartbeatPresence();
+        await refreshState(false);
         if (!isEditing() && !searchComposing) render();
         pollHandle = setTimeout(poll, document.hidden ? hiddenPollMs : activePollMs);
       };
@@ -145,13 +150,18 @@
       syncError = `${t('syncError')}: ${error.message}`;
     }
   }
-  async function refreshState() {
+  async function refreshState(force) {
     if (!isServeMode) {
       syncState = offlineSyncState();
       return;
     }
     try {
-      syncState = await apiGet('/api/state');
+      const revision = await apiGet('/api/revision');
+      if (force || revision.revision !== lastRevision) {
+        syncState = await apiGet('/api/state');
+        lastRevision = revision.revision;
+      }
+      presence = syncState.presence || presence;
       try { authStatus = await apiGet('/api/auth/status'); } catch (_) {}
       participantRegistered = !!userId && (syncState.participants || []).some((participant) => participant.user_id === userId);
       lastSyncText = new Date().toLocaleTimeString();
@@ -159,6 +169,13 @@
     } catch (error) {
       syncError = `${t('syncError')}: ${error.message}`;
     }
+  }
+
+  async function heartbeatPresence() {
+    if (!isServeMode) return;
+    try {
+      presence = await apiSend('/api/presence', 'POST', { user_id: userId || 'guest' });
+    } catch (_) {}
   }
 
   function offlineSyncState() {
@@ -257,7 +274,7 @@
       localStorage.setItem(userKey, userId);
       modal.remove();
       if (isServeMode) await registerParticipant();
-      await refreshState();
+      await refreshState(true);
       render();
     });
     input.addEventListener('keydown', (event) => {
@@ -380,7 +397,7 @@
         <span class="note">${escapeHtml(isServeMode ? t('syncMode') : t('offlineMode'))}</span>
         ${writeHint() ? `<span class="note">${escapeHtml(t('readonlyMode'))}: ${escapeHtml(writeHint())}</span>` : ''}
         <span class="badge">${escapeHtml(t('currentId'))}: ${escapeHtml(userId || '-')}</span>
-        ${isServeMode ? `<span class="badge">${escapeHtml(t('lastSync'))}: ${escapeHtml(lastSyncText)}</span>${config.mode === 'multi' ? `<span class="badge">${escapeHtml(t('participants'))}: ${(syncState.participants || []).length}</span>` : ''}` : ''}
+        ${isServeMode ? `<span class="badge">${escapeHtml(t('lastSync'))}: ${escapeHtml(lastSyncText)}</span>${config.mode === 'multi' ? `<span class="badge">${escapeHtml(t('participants'))}: ${(syncState.participants || []).length}</span>${renderPresenceBadge()}` : ''}` : ''}
         <select class="field" id="lang" aria-label="${escapeAttr(t('language'))}"><option value="zh-CN" ${lang === 'zh-CN' ? 'selected' : ''}>\u4e2d\u6587</option><option value="en-US" ${lang === 'en-US' ? 'selected' : ''}>English</option></select>
         <button class="button" id="refreshNow">${escapeHtml(t('refresh') || 'Refresh')}</button>
         <button class="button" id="switchUser">${escapeHtml(t('switchId'))}</button>
@@ -420,6 +437,12 @@
   }
   function metric(label, value) {
     return `<div class="metric"><b>${escapeHtml(String(value))}</b><span>${escapeHtml(label)}</span></div>`;
+  }
+  function renderPresenceBadge() {
+    const users = (presence || syncState.presence || []).map((entry) => entry.user_id).filter(Boolean);
+    if (!users.length) return '';
+    const label = users.length <= 4 ? `${t('onlineUsers')}: ${users.join(', ')}` : (t('onlineCount') || '{n} online').replace('{n}', users.length);
+    return `<details class="presence"><summary class="badge">${escapeHtml(label)}</summary><div class="presence-menu">${users.map((id) => `<span>${escapeHtml(id)}</span>`).join('')}</div></details>`;
   }
   function renderMyTasks(mine) {
     const tasks = myTaskItems();
@@ -521,6 +544,8 @@
       ${detail(t('shulkerBoxes'), quantityBreakdown(item.required_count, item).boxes)}
       ${detail(t('sourceRegions'), (item.source_regions || []).join(', ') || '-')}
       ${detail(t('recipeStatus'), recipeLabel(item.recipe_status))}
+      ${(item.normalized_from || []).length ? detail(t('normalizedFrom') || 'Normalized from', item.normalized_from.join(', ')) : ''}
+      ${item.icon_diagnostic ? detail(t('iconDiagnostic') || 'Icon diagnostic', item.icon_diagnostic) : ''}
     </div>
     <div class="claim-list">${(sync.claims || []).map((claim) => `<span class="claim-chip">${escapeHtml(claim.user_id)} / ${escapeHtml(overallLabel(claim.status))} / ${escapeHtml(formatQuantity(claim.quantity, item))} (${escapeHtml(rawQuantity(claim.quantity))})</span>`).join('')}</div>
     ${tree && config.show_advanced_recipe_tree ? `<div class="craft-chain">${renderRecipeTree(tree, true)}</div>` : ''}${recipeNote && config.show_unresolved_recipes ? `<p class="sub">${escapeHtml(recipeNote)}</p>` : ''}`;
@@ -629,7 +654,8 @@
   }
   function iconImg(key, large, material) {
     const src = material?.icon_path || (data.icons?.by_key?.[key]?.path) || data.icons?.by_key?.__fallback?.path || '';
-    return `<span class="icon-frame ${large ? 'large' : ''}"><img class="icon-img" src="${escapeAttr(src)}" alt="" loading="lazy" /></span>`;
+    const fallback = material && material.icon_available === false ? ' fallback' : '';
+    return `<span class="icon-frame ${large ? 'large' : ''}${fallback}"><img class="icon-img" src="${escapeAttr(src)}" alt="" loading="lazy" /></span>`;
   }
   function displayName(item) {
     return item.display_names?.[lang] || item.display_names?.['en-US'] || item.display_name || item.namespace_id;
@@ -697,14 +723,31 @@
 
   function bindControls() {
     document.getElementById('refreshNow')?.addEventListener('click', async () => {
-      await refreshState();
+      await refreshState(true);
       render();
     });
-    document.getElementById('switchUser').addEventListener('click', () => {
-      localStorage.removeItem(userKey);
-      userId = '';
+    document.getElementById('switchUser').addEventListener('click', async () => {
+      const oldId = userId;
+      const nextId = prompt(t('mergeIdPrompt'), oldId || '');
+      if (nextId === null) return;
+      const trimmed = nextId.trim();
+      if (!trimmed) {
+        localStorage.removeItem(userKey);
+        userId = '';
+        participantRegistered = false;
+        ensureUser();
+        render();
+        return;
+      }
+      const migrate = oldId && oldId !== trimmed && confirm(`${t('migrateClaims')}?`);
+      userId = trimmed;
+      localStorage.setItem(userKey, userId);
       participantRegistered = false;
-      ensureUser();
+      if (isServeMode && oldId && oldId !== userId) {
+        await apiSend('/api/users/merge', 'POST', { from_user_id: oldId, to_user_id: userId, mode: migrate ? 'migrate' : 'switch' });
+      }
+      if (isServeMode) await registerParticipant();
+      await refreshState(true);
       render();
     });
     document.getElementById('lang').addEventListener('change', (event) => {
@@ -733,7 +776,7 @@
       try {
         await apiSend('/api/auth/access', 'POST', { password: document.getElementById('accessPassword').value, user_id: userId || null });
         authStatus = await apiGet('/api/auth/status');
-        await refreshState();
+        await refreshState(true);
         render();
       } catch (error) { syncError = `${t('syncError')}: ${error.message}`; render(); }
     });
@@ -770,7 +813,7 @@
     const quantity = entered > 0 ? entered : item.required_count;
     if (isServeMode) {
       await apiSend(`/api/materials/${encodeURIComponent(item.namespace_id)}/claims/${encodeURIComponent(userId)}`, 'PUT', { status, quantity });
-      await refreshState();
+      await refreshState(true);
     } else {
       state[item.namespace_id] = { status: status === 'done' ? 'done' : 'in_progress', quantity, assignee: userId };
       saveOfflineState();
@@ -782,7 +825,7 @@
     if (!ensureUser()) return;
     if (isServeMode) {
       await apiSend(`/api/materials/${encodeURIComponent(item.namespace_id)}/claims/${encodeURIComponent(userId)}`, 'DELETE');
-      await refreshState();
+      await refreshState(true);
     } else {
       delete state[item.namespace_id];
       saveOfflineState();

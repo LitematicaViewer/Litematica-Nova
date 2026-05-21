@@ -448,14 +448,9 @@ fn stockpile_server_binaries(targets: &[StockpileDeployTarget]) -> Result<Vec<De
     }
     if !missing.is_empty() {
         bail!(
-            "stockpile multi export requires real server binaries under {}; missing: {}. Run scripts/stockpile/verify_stockpile_server_bins.ps1 -Target {} to inspect local binaries, then scripts/stockpile/fetch_stockpile_server_artifacts.ps1 -Target {} after the GitHub Actions artifacts are available.",
+            "stockpile multi export requires real server binaries under {}; missing: {}. Offline packaging never downloads, compiles, or creates placeholder binaries. Place artifacts at bin/stockpile-server/<target>/, run scripts/stockpile/verify_stockpile_server_bins.ps1 -Target {} to inspect them, then export again.",
             root.display(),
             missing.join(", "),
-            targets
-                .iter()
-                .map(|target| target.platform())
-                .collect::<Vec<_>>()
-                .join(","),
             targets
                 .iter()
                 .map(|target| target.platform())
