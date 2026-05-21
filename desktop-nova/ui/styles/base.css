@@ -1031,17 +1031,128 @@ textarea.input,
 }
 
 .flake-page__inventory-dialog-body {
+    display: flex;
     margin-top: 12px;
+    flex-direction: column;
+    gap: 12px;
 }
 
-.flake-page__inventory-grid {
+.flake-page__creative-inventory-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px;
+}
+
+.flake-page__creative-inventory-control {
+    display: flex;
+    min-width: 180px;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.flake-page__creative-inventory-search {
+    flex: 1;
+    min-width: 240px;
+}
+
+.flake-page__creative-inventory-range {
+    margin-left: auto;
+}
+
+.flake-page__creative-inventory-stage {
+    max-width: 100%;
+    overflow: auto;
+}
+
+.flake-page__creative-inventory-surface {
+    --flake-creative-inventory-width: 424px;
+    --flake-creative-inventory-height: 272px;
+    --flake-creative-slot-size: 32px;
+    --flake-creative-slot-gap: 4px;
+    --flake-creative-grid-left: 16px;
+    --flake-creative-grid-top: 36px;
+    position: relative;
+    width: var(--flake-creative-inventory-width);
+    min-width: var(--flake-creative-inventory-width);
+    height: var(--flake-creative-inventory-height);
+    min-height: var(--flake-creative-inventory-height);
+    image-rendering: pixelated;
+    background: var(--flake-creative-inventory-image, url("../shell/resource/content/creativeInventory.png")) center no-repeat;
+}
+
+.flake-page__creative-inventory-grid {
+    position: absolute;
+    top: var(--flake-creative-grid-top);
+    left: var(--flake-creative-grid-left);
     display: grid;
-    grid-template-columns: repeat(9, minmax(0, 1fr));
-    gap: 8px;
+    grid-template-columns: repeat(9, var(--flake-creative-slot-size));
+    grid-template-rows: repeat(5, var(--flake-creative-slot-size));
+    gap: var(--flake-creative-slot-gap);
 }
 
-.flake-page__inventory-slot {
-    min-height: 56px;
+.flake-page__creative-hotbar-grid {
+    position: absolute;
+    top: 224px;
+    left: 16px;
+    display: grid;
+    grid-template-columns: repeat(9, 32px);
+    gap: 4px;
+}
+
+.flake-page__creative-slot,
+.flake-page__creative-hotbar-slot {
+    position: relative;
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    cursor: pointer;
+}
+
+.flake-page__creative-slot.is-empty {
+    opacity: 0;
+}
+
+.flake-page__creative-slot.is-carried-source,
+.flake-page__creative-hotbar-slot.has-item.is-carried-source {
+    opacity: .45;
+}
+
+.flake-page__creative-slot .block-icon-image,
+.flake-page__creative-slot .block-icon-fallback,
+.flake-page__creative-hotbar-slot .block-icon-image,
+.flake-page__creative-hotbar-slot .block-icon-fallback,
+.flake-page__quickbar-slot .block-icon-image,
+.flake-page__quickbar-slot .block-icon-fallback,
+.flake-page__creative-carry-preview .block-icon-image,
+.flake-page__creative-carry-preview .block-icon-fallback {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+}
+
+.flake-page__creative-inventory-overlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px 32px;
+    background: rgb(0 0 0 / 24%);
+    text-align: center;
+    pointer-events: none;
+}
+
+.flake-page__creative-carry-preview {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 2600;
+    width: 32px;
+    height: 32px;
+    pointer-events: none;
+    transform: translate(calc(var(--flake-carry-x, 0px) - 16px), calc(var(--flake-carry-y, 0px) - 16px));
 }
 
 @media (max-width: 960px) {
@@ -1073,10 +1184,6 @@ textarea.input,
         align-self: stretch;
         overflow: visible;
     }
-
-    .flake-page__inventory-grid {
-        grid-template-columns: repeat(6, minmax(0, 1fr));
-    }
 }
 
 @media (max-width: 760px) {
@@ -1103,8 +1210,12 @@ textarea.input,
         max-width: calc(100% - 12px);
     }
 
-    .flake-page__inventory-grid {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+    .flake-page__creative-inventory-control,
+    .flake-page__creative-inventory-search,
+    .flake-page__creative-inventory-range {
+        min-width: 0;
+        width: 100%;
+        margin-left: 0;
     }
 }
 
