@@ -66,3 +66,15 @@ button.material-list-close-button {
     padding: 0;
     line-height: 1;
 }
+
+button.flake-page__quickbar-slot,
+button.flake-page__quickbar-slot:hover:not(:disabled),
+button.flake-page__quickbar-slot:active:not(:disabled),
+button.flake-page__quickbar-slot[aria-pressed="true"] {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: transparent;
+    line-height: 1;
+}

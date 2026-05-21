@@ -678,6 +678,436 @@ textarea.input,
     align-items: center;
 }
 
+.flake-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+}
+
+.flake-canvas.is-dragging {
+    cursor: grabbing;
+}
+
+.flake-page {
+    position: relative;
+    --flake-tool-panel-width: 320px;
+}
+
+.flake-page--edit-mode {
+    padding-bottom: 0;
+}
+
+.flake-page__empty-state {
+    opacity: .78;
+}
+
+.flake-page__empty-title {
+    margin-bottom: 8px;
+}
+
+.flake-page__topbar {
+    flex-wrap: wrap;
+}
+
+.flake-page__file-path {
+    overflow: hidden;
+    min-width: min(360px, 100%);
+    max-width: min(480px, 100%);
+    padding: 6px 12px;
+    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
+    color: var(--ln-muted-text-color, GrayText);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.flake-page__materials-button,
+.flake-page__build-button {
+    min-width: 132px;
+}
+
+.flake-page__edit-toggle {
+    flex: 0 0 auto;
+}
+
+.flake-page__control-box {
+    margin-top: 0;
+    padding: 16px 12px;
+}
+
+.flake-page__layer-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 16px;
+}
+
+.flake-page__layer-label {
+    min-width: 60px;
+}
+
+.flake-page__layer-range {
+    flex: 1;
+    min-width: 0;
+}
+
+.flake-page__layer-footer {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.flake-page__layer-value {
+    color: var(--ln-body-text-color, CanvasText);
+    font-size: 1.1em;
+    font-weight: 700;
+}
+
+.flake-page__layer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+}
+
+.flake-page__step-button {
+    min-width: 40px;
+}
+
+.flake-page__workspace {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    align-items: stretch;
+    overflow: hidden;
+}
+
+.flake-page__main-panel {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 240px;
+    overflow: hidden;
+    flex-direction: column;
+}
+
+.flake-page__viewport {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-height: 240px;
+    overflow: hidden;
+    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
+}
+
+.flake-page__viewport-empty {
+    padding: 24px;
+}
+
+.flake-page__viewport-title {
+    margin-bottom: 8px;
+    color: var(--ln-body-text-color, CanvasText);
+    font-size: 1.2em;
+}
+
+.flake-page__splitter {
+    width: 8px;
+    flex: 0 0 8px;
+    cursor: col-resize;
+    background:
+        linear-gradient(to right,
+            transparent 0,
+            transparent 2px,
+            var(--ln-ui-edge-color, ThreeDShadow) 2px,
+            var(--ln-ui-edge-color, ThreeDShadow) 6px,
+            transparent 6px,
+            transparent 100%);
+}
+
+.flake-page__tool-panel {
+    display: flex;
+    width: var(--flake-tool-panel-width);
+    min-width: 240px;
+    min-height: 0;
+    max-width: 460px;
+    margin-top: 0;
+    padding: 16px 12px 12px;
+    flex: 0 0 var(--flake-tool-panel-width);
+    flex-direction: column;
+    overflow: auto;
+}
+
+.flake-page__tool-panel-body {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.flake-page__tool-panel-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.flake-page__tool-panel-heading {
+    font-weight: 700;
+}
+
+.flake-page__tool-panel-kv {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.flake-page__status-text,
+.flake-page__tool-panel-placeholder {
+    white-space: pre-wrap;
+}
+
+.flake-page__tool-panel-error {
+    margin-top: 0;
+}
+
+.flake-page__tool-panel-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: auto;
+}
+
+.flake-page__tooltip {
+    position: absolute;
+    top: var(--flake-tooltip-top, 0px);
+    left: var(--flake-tooltip-left, 0px);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: min(420px, calc(100% - 16px));
+    padding: 8px 12px;
+    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+    background: var(--surface-elevated, var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas)));
+    box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+    color: var(--ln-body-text-color, CanvasText);
+    pointer-events: none;
+}
+
+.flake-page__tooltip-title {
+    font-size: 1.1em;
+    font-weight: 700;
+}
+
+.flake-page__tooltip-label {
+    margin-top: 4px;
+    color: var(--ln-muted-text-color, GrayText);
+    font-size: .9em;
+}
+
+.flake-page__tooltip-id {
+    font-size: .95em;
+    word-break: break-word;
+}
+
+.flake-page__quickbar {
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    transform: translateX(-50%);
+    z-index: 20;
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    max-width: calc(100% - 24px);
+    margin: 0;
+    pointer-events: none;
+}
+
+.flake-page__quickbar-body,
+.flake-page__quickbar-open-inventory {
+    pointer-events: auto;
+}
+
+.flake-page__quickbar-body {
+    --flake-hotbar-slot-size: 32px;
+    --flake-hotbar-gap: 8px;
+    --flake-hotbar-inset: 6px;
+    display: grid;
+    grid-template-columns: repeat(9, var(--flake-hotbar-slot-size));
+    gap: var(--flake-hotbar-gap);
+    width: fit-content;
+    height: calc(var(--flake-hotbar-slot-size) + (var(--flake-hotbar-inset) * 2));
+    padding: var(--flake-hotbar-inset);
+    image-rendering: pixelated;
+    background:
+        var(--flake-hotbar-image, url("../shell/resource/content/hotbar.png"))
+        center / 100% 100% no-repeat;
+}
+
+.flake-page__quickbar-slot {
+    position: relative;
+    display: grid;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    padding: 0;
+    border: 0;
+    margin: 0;
+    place-items: center;
+    background: transparent;
+    color: transparent;
+    overflow: visible;
+}
+
+.flake-page__quickbar-slot:hover:not(:disabled),
+.flake-page__quickbar-slot:active:not(:disabled),
+.flake-page__quickbar-slot[aria-pressed="true"] {
+    border: 0;
+    margin: 0;
+    background: transparent;
+    color: transparent;
+}
+
+.flake-page__quickbar-slot::after {
+    content: "";
+    position: absolute;
+    inset: 50% auto auto 50%;
+    width: 48px;
+    height: 48px;
+    transform: translate(-50%, -50%);
+    background:
+        var(--flake-hotbar-selection-image, url("../shell/resource/content/hotbar_selection.png"))
+        center no-repeat;
+    image-rendering: pixelated;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.flake-page__quickbar-slot.is-selected::after {
+    opacity: 1;
+}
+
+.flake-page__quickbar-slot-icon {
+    display: block;
+    width: 32px;
+    height: 32px;
+}
+
+.flake-page__quickbar-slot-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.flake-page__quickbar-open-inventory {
+    min-width: 132px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0 12px;
+}
+
+.flake-page__quickbar-open-inventory-text {
+    display: inline-block;
+}
+
+.flake-page__inventory-dialog {
+    width: 720px;
+    max-width: 92vw;
+}
+
+.flake-page__inventory-dialog-body {
+    margin-top: 12px;
+}
+
+.flake-page__inventory-grid {
+    display: grid;
+    grid-template-columns: repeat(9, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.flake-page__inventory-slot {
+    min-height: 56px;
+}
+
+@media (max-width: 960px) {
+    .flake-page {
+        overflow: hidden;
+    }
+
+    .flake-page__workspace {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        flex-direction: column;
+    }
+
+    .flake-page__main-panel {
+        flex: 0 0 auto;
+    }
+
+    .flake-page__splitter {
+        display: none;
+    }
+
+    .flake-page__tool-panel {
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        max-height: none;
+        flex: 0 0 auto;
+        align-self: stretch;
+        overflow: visible;
+    }
+
+    .flake-page__inventory-grid {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 760px) {
+    .flake-page__layer-row,
+    .flake-page__layer-footer {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .flake-page__layer-label {
+        min-width: 0;
+    }
+
+    .flake-page__materials-button,
+    .flake-page__build-button,
+    .flake-page__file-path,
+    .flake-page__tool-panel-actions > .btn {
+        width: 100%;
+        max-width: 100%;
+    }
+
+    .flake-page__quickbar {
+        gap: 8px;
+        max-width: calc(100% - 12px);
+    }
+
+    .flake-page__inventory-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
 .render-layout {
     display: grid;
     grid-template-columns: minmax(0, 3fr) minmax(220px, 2fr);
