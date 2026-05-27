@@ -47,7 +47,7 @@ interface FlakeHoverBlock {
 
 function formatStateRecord(record: Record<string, unknown>): string {
   return Object.entries(record)
-    .filter(([key, value]) => key)
+    .filter(([key]) => key)
     .map(([key, value]) => `${key}=${String(value)}`)
     .join(", ");
 }
@@ -237,8 +237,14 @@ function CreativeInventoryDialog({
       .then((allCollections) => {
         if (!active) return;
         const creativeCollections = allCollections
-          .filter((collection) => collection.category === "creative" && collection.values.length > 0)
-          .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+          .filter((collection) =>
+            (collection.category === "creative" || collection.id === "base:dv-blocks") && collection.values.length > 0,
+          )
+          .sort((left, right) => {
+            if (left.id === "base:dv-blocks") return -1;
+            if (right.id === "base:dv-blocks") return 1;
+            return left.name.localeCompare(right.name, "zh-CN");
+          });
         setCollections(creativeCollections);
         setSelectedCollectionId((previous) => previous && creativeCollections.some((collection) => collection.id === previous)
           ? previous
