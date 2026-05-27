@@ -6,8 +6,8 @@ export interface LayerSliceMeta {
   size_x: number;
   size_y: number;
   size_z: number;
-  palette: any[];
-  property_pool: any[];
+  palette: Array<{ block_id: string; property_id: number }>;
+  property_pool: Array<Record<string, string>>;
 }
 
 export interface LayerSliceBlock {

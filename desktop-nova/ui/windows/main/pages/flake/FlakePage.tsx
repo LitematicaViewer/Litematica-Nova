@@ -42,6 +42,69 @@ interface FlakeHoverBlock {
   z: number;
   id: string;
   name: string;
+  states: string;
+}
+
+function formatStateRecord(record: Record<string, unknown>): string {
+  return Object.entries(record)
+    .filter(([key, value]) => key)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(", ");
+}
+
+function formatStateValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => formatStateValue(entry)).filter(Boolean).join(", ");
+  }
+  if (typeof value === "object") {
+    const row = value as Record<string, unknown>;
+    const namedKey = ["name", "key", "property", "prop"].find((key) => typeof row[key] === "string");
+    const valueKey = ["value", "val"].find((key) => row[key] !== undefined);
+    if (namedKey && valueKey) {
+      return `${String(row[namedKey])}=${String(row[valueKey])}`;
+    }
+    return formatStateRecord(row);
+  }
+  return "";
+}
+
+function resolveLayerBlockStates(entry: any, propertyPool: any[]): string {
+  if (!entry) return "无";
+
+  const parts: string[] = [];
+  const push = (value: unknown) => {
+    const text = formatStateValue(value);
+    if (text) parts.push(text);
+  };
+
+  if (typeof entry.property_id === "number" && entry.property_id >= 0 && entry.property_id < propertyPool.length) {
+    push(propertyPool[entry.property_id]);
+  }
+
+  if (entry.block_state) push(entry.block_state);
+  if (entry.state) push(entry.state);
+  if (entry.states) push(entry.states);
+  if (entry.properties) push(entry.properties);
+
+  const propertyRefKeys = ["property_ids", "property_indices", "property_refs", "state_ids", "state_indices"];
+  for (const key of propertyRefKeys) {
+    const refs = entry[key];
+    if (!Array.isArray(refs)) continue;
+    for (const ref of refs) {
+      if (typeof ref === "number" && ref >= 0 && ref < propertyPool.length) {
+        push(propertyPool[ref]);
+      } else {
+        push(ref);
+      }
+    }
+  }
+
+  const normalized = Array.from(new Set(parts.flatMap((part) => part.split(",").map((item) => item.trim()).filter(Boolean))));
+  return normalized.length ? normalized.join(", ") : "无";
 }
 
 function FlakeBlockTooltip({ x, y, item }: { x: number; y: number; item: FlakeHoverBlock | null }) {
@@ -90,6 +153,7 @@ function FlakeBlockTooltip({ x, y, item }: { x: number; y: number; item: FlakeHo
         <span className="material-list-hover-popup-name">{item.name}</span>
       </div>
       <div className="material-list-hover-popup-row">方块ID：{item.id}</div>
+      <div className="material-list-hover-popup-row">方块状态：{item.states}</div>
       <div className="material-list-hover-popup-row">x={item.x} y={item.y} z={item.z}</div>
     </div>
   );
@@ -313,7 +377,7 @@ function CreativeInventoryDialog({
         <div className="subwindow-title-row">
           <div>
             <h3 className="subwindow-title">创造模式物品栏</h3>
-            <p className="subwindow-subtitle nova-muted">使用创造模式分类枚举作为数据源，滚轮按整行切换当前显示区间；点选方块会复制到鼠标上，再点快捷栏槽位即可放置。</p>
+            {/* <p className="subwindow-subtitle nova-muted">使用创造模式分类枚举作为数据源，滚轮按整行切换当前显示区间；点选方块会复制到鼠标上，再点快捷栏槽位即可放置。</p> */}
           </div>
           <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</button>
         </div>
@@ -566,7 +630,14 @@ const LayerCanvas = forwardRef<
       if (block) {
         const paletteEntry = meta.palette[block.palette_id];
         onHoverBlock(
-          { x: bx, y: sliceData.y, z: bz, id: paletteEntry.block_id, name: translateBlockId(paletteEntry.block_id) },
+          {
+            x: bx,
+            y: sliceData.y,
+            z: bz,
+            id: paletteEntry.block_id,
+            name: translateBlockId(paletteEntry.block_id),
+            states: resolveLayerBlockStates(paletteEntry, meta.property_pool || []),
+          },
           event,
         );
         return;
