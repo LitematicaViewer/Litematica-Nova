@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   buildLayerMetaCache,
   openProjectionViewer,
@@ -17,7 +17,6 @@ import {
 import { DISPLAY_MODE_OPTIONS, loadDisplayMode, saveDisplayMode } from "../../../../../src/business/facade";
 import { loadUserConfigMigratingLocalStorage, saveRenderDisplayModeConfig } from "../../../../../src/business/facade";
 import { loadStructureStats, StatsData } from "../../../../../src/business/facade";
-import { Dropdown } from "../../../../components/Dropdown";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
 import {
   getEmbeddedViewerStatus,
@@ -27,6 +26,10 @@ import {
   updateEmbeddedViewerBounds,
 } from "../../../../../src/business/facade";
 import { elementToCssRect, elementToPhysicalRect, isUsableEmbeddedRect } from "../../embeddedViewerGeometry";
+
+const RENDERER_OPTIONS = [
+  { value: "rsbin", label: "RSBIN" },
+] as const;
 
 function parseProgress(raw: string | null): RenderProgress | null {
   if (!raw) return null;
@@ -46,6 +49,7 @@ function parseProgress(raw: string | null): RenderProgress | null {
 }
 
 export function RenderPage({ currentFile, activeRoute }: any) {
+  const [renderer, setRenderer] = useState<string>(RENDERER_OPTIONS[0].value);
   const [buildMode, setBuildModeState] = useState(() => loadDisplayMode());
   const [precacheLayers, setPrecacheLayers] = useState(false);
   const [isBuilding, setIsBuilding] = useState(false);
@@ -145,7 +149,7 @@ export function RenderPage({ currentFile, activeRoute }: any) {
           status: "frontend_bounds_skip",
           reason: "invalid_or_hidden_rect",
           rect_css: rectCss,
-            rect_physical: rectPhysical,
+          rect_physical: rectPhysical,
         });
         await hideEmbeddedViewer().catch(() => undefined);
         return;
@@ -354,92 +358,143 @@ export function RenderPage({ currentFile, activeRoute }: any) {
     }
   };
 
-  const progressWidth = progress ? Math.max(0, Math.min(100, progress.percent)) : 0;
-  const fileName = currentFile ? currentFile.split(/[\\/]/).pop() : "未选择文件";
-
   const setBuildMode = (value: string) => {
     const mode = saveDisplayMode(value);
     setBuildModeState(mode);
     saveRenderDisplayModeConfig(mode).catch(() => undefined);
   };
 
+  const progressValue = progress ? Math.max(0, Math.min(100, progress.percent)) : 0;
+  const fileName = currentFile ? currentFile.split(/[\\/]/).pop() : "未选择文件";
+  const renderStatusText = isBuilding
+    ? (progress ? `${progress.phase} ${progress.percent.toFixed(1)}% (${progress.built_chunks}/${progress.total_chunks})` : "等待真实进度...")
+    : cacheReady
+      ? "cache 已完成：左侧为嵌入式查看器或静态预览。"
+      : stageText;
+  const cacheStatusLabel = error ? "失败" : cacheReady ? "已完成" : isBuilding ? "构建中" : "未开始";
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-        <div style={{ color: "#aaa", fontSize: "0.9em", maxWidth: "30%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={currentFile}>
-          {currentFile || "请先在属性页打开 .litematic。"}
-        </div>
-        <div style={{ fontSize: "1.3em", fontWeight: "bold", textAlign: "center", flex: 1 }}>Render Bridge Page / 渲染页</div>
-        <button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!currentFile || !statsData}>材料列表</button>
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ color: "#ccc" }}>模式</span>
-        <Dropdown value={buildMode} options={DISPLAY_MODE_OPTIONS} onChange={setBuildMode} />
-        <label style={{ display: "flex", alignItems: "center", gap: 4, color: "#ccc", marginLeft: 8 }}>
-          <input type="checkbox" checked={precacheLayers} onChange={(event) => setPrecacheLayers(event.target.checked)} />
-          同时预生成分层
+    <div className="nova-page render-page">
+      <div className="render-page__toolbar">
+        <button className="btn render-page__toolbar-button" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!currentFile || !statsData}>
+          材料列表
+        </button>
+        <label className="render-page__toolbar-field">
+          {/* <span className="nova-muted">渲染器</span> */}
+          <select className="input render-page__select" value={renderer} onChange={(event) => setRenderer(event.target.value)}>
+            {RENDERER_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
         </label>
-        <button className="btn" onClick={handleBuild} disabled={!currentFile || isBuilding}>构建 3D cache</button>
-        <button className="btn" onClick={handleOpenPopup} disabled={!currentFile}>打开弹窗 Viewer</button>
-        <button className="btn" onClick={() => setStageText("弹窗 Viewer 负责视角控制，打开后可在 Viewer 窗口内按 R 重置视角。")} disabled={!currentFile}>重置视角</button>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
-        <div style={{ flex: 1, height: 16, backgroundColor: "#111", border: "2px solid #555", position: "relative" }}>
-          <div style={{ height: "100%", width: `${progressWidth}%`, backgroundColor: "#0078d4", transition: "width 0.2s" }} />
-        </div>
-        <div style={{ color: "#ccc", width: 360, fontSize: "0.9em" }}>
-          {isBuilding ? (progress ? `${progress.phase} ${progress.percent.toFixed(1)}% (${progress.built_chunks}/${progress.total_chunks})` : "等待真实进度...") : cacheReady ? "cache 已完成：下方是静态预览，交互请打开弹窗 Viewer。" : stageText}
-        </div>
-      </div>
-
-      <div style={{ color: "#888", fontSize: "0.85em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {cacheFile ? `cache=${cacheFile}` : ""}
-      </div>
-
-      {error && <pre style={{ color: "#ff6666", background: "rgba(255,0,0,0.1)", padding: 8, border: "1px solid #ff6666", margin: 0, whiteSpace: "pre-wrap" }}>{error}</pre>}
-      {embeddedError && <pre style={{ color: "#ffcc66", background: "rgba(255,180,0,0.1)", padding: 8, border: "1px solid #8a6a22", margin: 0, whiteSpace: "pre-wrap" }}>嵌入式 viewer 启动失败，已回退静态预览 / 弹窗 Viewer：{embeddedError}</pre>}
-      {(stdoutTail || stderrTail) && (
-        <details>
-          <summary style={{ color: "#aaa", cursor: "pointer" }}>native viewer stdout/stderr</summary>
-          <pre style={{ whiteSpace: "pre-wrap", maxHeight: 180, overflow: "auto", background: "#111", border: "1px solid #444", padding: 8, marginTop: 6 }}>{stderrTail || stdoutTail}</pre>
+      {error ? <pre className="nova-error render-page__message">{error}</pre> : null}
+      {embeddedError ? <pre className="nova-warning render-page__message">嵌入式 viewer 启动失败，已回退静态预览 / 弹窗 Viewer：{embeddedError}</pre> : null}
+      {(stdoutTail || stderrTail) ? (
+        <details className="render-page__logs">
+          <summary className="nova-summary">native viewer stdout/stderr</summary>
+          <pre className="nova-pre nova-pre-medium render-page__log-output">{stderrTail || stdoutTail}</pre>
         </details>
-      )}
+      ) : null}
 
-      <div className="group-box" style={{ flex: 1, display: "flex", flexDirection: "column", marginTop: 4 }}>
-        <div className="group-box-title">渲染页</div>
-        <div ref={previewHostRef} style={{ flex: 1, backgroundColor: "#222", border: "2px solid #111", display: "flex", alignItems: "center", justifyContent: "center", margin: "16px 8px 8px 8px", overflow: "hidden", position: "relative" }}>
-          {embeddedRunning ? (
-            <div style={{ position: "absolute", left: 8, bottom: 8, background: "rgba(0,0,0,0.65)", color: "#ccc", border: "1px solid #444", padding: "4px 8px", fontSize: "0.85em", zIndex: 1 }}>
-              嵌入式 Viewer 运行中
-            </div>
-          ) : previewDataUrl ? (
-            <div style={{ width: "100%", height: "100%", position: "relative" }}>
-              <img src={previewDataUrl} alt="static 3D preview" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", imageRendering: "auto" }} />
-              <div style={{ position: "absolute", left: 8, bottom: 8, background: "rgba(0,0,0,0.65)", color: "#ccc", border: "1px solid #444", padding: "4px 8px", fontSize: "0.85em" }}>
-                静态预览；交互请打开弹窗 Viewer
+      <div className="group-box render-page__shell">
+        <div className="group-box-title">渲染器主界面</div>
+        <div className="render-page__shell-body">
+          <section className="group-box render-page__build-panel">
+            <div className="group-box-title">构建</div>
+            <div className="render-page__build-body">
+              <div className="render-page__build-grid">
+                <label className="render-page__field">
+                  <span className="nova-muted">构建模式</span>
+                  <select className="input render-page__select" value={buildMode} onChange={(event) => setBuildMode(event.target.value)}>
+                    {DISPLAY_MODE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="render-page__check-row render-page__build-check">
+                  <input type="checkbox" checked={precacheLayers} onChange={(event) => setPrecacheLayers(event.target.checked)} />
+                  <span>预生成分层</span>
+                </label>
+              </div>
+
+              <div className="render-page__action-row">
+                <button className="btn" onClick={handleBuild} disabled={!currentFile || isBuilding}>
+                  {isBuilding ? "构建中..." : "开始构建"}
+                </button>
+                <button className="btn" onClick={handleOpenPopup} disabled={!currentFile}>
+                  打开浏览弹窗
+                </button>
+              </div>
+
+              <div className="render-page__status-card">
+                <div className="render-page__status-heading">构建进度</div>
+                <progress className="render-page__progress-bar" max={100} value={progressValue} />
+                <div className="render-page__status-text">{renderStatusText}</div>
               </div>
             </div>
-          ) : !cacheReady && !isBuilding ? (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, backgroundColor: "#333", padding: 32, border: "2px solid #555" }}>
-              <div style={{ fontSize: "0.9em", color: "#888" }}>RENDER MODE ACTIVE</div>
-              <div style={{ fontSize: "1.4em", fontWeight: "bold", textAlign: "center", lineHeight: 1.4 }}>RENDER BRIDGE PAGE<br />渲染页</div>
-              <div style={{ fontSize: "1.1em" }}>当前文件：{fileName}</div>
-              <div style={{ fontSize: "1.1em", fontWeight: "bold" }}>cache 状态：{error ? "失败" : "未开始"}</div>
-              <div style={{ color: "#aaa", fontSize: "0.95em", textAlign: "center" }}>{currentFile ? stageText : "请先在属性页打开 .litematic 文件。"}</div>
-              <button className="btn" style={{ padding: "8px 24px", fontSize: "1.1em" }} onClick={handleBuild} disabled={!currentFile}>构建 3D cache</button>
-            </div>
-          ) : (
-            <div style={{ fontSize: "1.2em", color: "#ccc" }}>{stageText}</div>
-          )}
+          </section>
+
+          <div className="render-page__workspace">
+            <section className="group-box render-page__viewer-panel">
+              <div className="group-box-title">嵌入式查看器</div>
+              <div ref={previewHostRef} className="render-page__viewer-host">
+                {embeddedRunning ? (
+                  <div className="render-page__viewer-badge">嵌入式 Viewer 运行中</div>
+                ) : previewDataUrl ? (
+                  <div className="render-page__preview-shell">
+                    <img src={previewDataUrl} alt="static 3D preview" className="render-page__preview-image" />
+                    <div className="render-page__viewer-badge">静态预览；交互请打开弹窗 Viewer</div>
+                  </div>
+                ) : !cacheReady && !isBuilding ? (
+                  <div className="render-page__empty-state">
+                    <div className="render-page__empty-kicker">RENDER MODE ACTIVE</div>
+                    <div className="render-page__empty-title">RENDER BRIDGE PAGE / 渲染页</div>
+                    <div className="render-page__empty-meta">当前文件：{fileName}</div>
+                    <div className="render-page__empty-meta">cache 状态：{cacheStatusLabel}</div>
+                    <div className="render-page__empty-text">{currentFile ? stageText : "请先在属性页打开 .litematic 文件。"}</div>
+                    <button className="btn nova-button-wide render-page__empty-action" onClick={handleBuild} disabled={!currentFile}>
+                      开始构建
+                    </button>
+                  </div>
+                ) : (
+                  <div className="render-page__viewer-text">{stageText}</div>
+                )}
+              </div>
+            </section>
+
+            <aside className="group-box render-page__control-panel">
+              <div className="group-box-title">控制面板</div>
+              <div className="render-page__control-body">
+                <div className="render-page__action-row">
+                  <button className="btn" onClick={() => setStageText("弹窗 Viewer 负责视角控制，打开后可在 Viewer 窗口内按 R 重置视角。")} disabled={!currentFile}>
+                    重置视角
+                  </button>
+                </div>
+
+                <div className="render-page__info-list">
+                  <div className="render-page__info-row">
+                    <span className="nova-muted">当前文件</span>
+                    <span className="render-page__info-value" title={currentFile || ""}>{currentFile || "请先在属性页打开 .litematic。"}</span>
+                  </div>
+                  <div className="render-page__info-row">
+                    <span className="nova-muted">cache 状态</span>
+                    <span className="render-page__info-value">{cacheStatusLabel}</span>
+                  </div>
+                  <div className="render-page__info-row">
+                    <span className="nova-muted">cache 文件</span>
+                    <span className="render-page__info-value" title={cacheFile || ""}>{cacheFile || "尚未生成"}</span>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
         </div>
       </div>
 
-      {showMaterials && statsData && <MaterialsDialog data={statsData} onClose={() => setShowMaterials(false)} currentFile={currentFile} />}
+      {showMaterials && statsData ? <MaterialsDialog data={statsData} onClose={() => setShowMaterials(false)} currentFile={currentFile} /> : null}
     </div>
   );
 }
-
-
-
