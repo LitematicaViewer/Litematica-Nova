@@ -129,6 +129,10 @@ export function downloadVaultBlockIconsFromVault(): Promise<VaultBlockIconDownlo
   return invoke("download_vault_block_icons");
 }
 
+export function downloadWikiBlockIconsFromMinecraftWiki(slot: "material_list" | "layering"): Promise<VaultBlockIconDownloadOutput> {
+  return invoke("download_minecraft_wiki_block_icons", { slot });
+}
+
 /**
  * Downloads the CCVaults item icon set into the configured user resource directory.
  */

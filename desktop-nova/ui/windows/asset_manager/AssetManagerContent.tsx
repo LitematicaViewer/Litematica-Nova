@@ -6,6 +6,7 @@ import {
   deleteGameResource,
   downloadRemoteMinecraftLanguage,
   downloadVaultBlockIcons,
+  downloadWikiBlockIcons,
   downloadVaultItemIcons,
   downloadWikiEnumCatalog,
   ensureBuiltinBlockIconsExtracted,
@@ -281,6 +282,23 @@ function blockIconSlotLabel(slot: BlockIconResourceSlot): string {
   return slot === "layering" ? "2D 槽（分层）" : "3D 槽（材料列表）";
 }
 
+function lockedBlockIconSlotForSource(source: AssetSource): BlockIconResourceSlot | null {
+  if (source === "builtin") return "layering";
+  if (source === "vault") return "material_list";
+  return null;
+}
+
+function blockIconSourceHint(source: AssetSource, slot: BlockIconResourceSlot): string {
+  if (source === "builtin") return "内建来源固定写入 2D 槽";
+  if (source === "vault") return "CCVault 来源固定写入 3D 槽";
+  if (source === "wiki") {
+    return slot === "layering"
+      ? "2D 槽走 Template:BlockLink，保持 16x16"
+      : "3D 槽走 Java Edition data values/Blocks，转为 32x32";
+  }
+  return slot === "layering" ? "该槽仅接受 2D 方块图标" : "该槽可用 3D，必要时回退 2D";
+}
+
 function fetchButtonLabel(route: AssetRoute, source: AssetSource): string {
   if (route === "block_icon" || route === "item_icon") {
     if (source === "builtin") return "重新提取";
@@ -326,6 +344,10 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   const entries = isManagedRoute ? resourceSnapshot?.entries[route] || [] : [];
   const remoteLanguageEnabled = route === "language" && selectedSourceByRoute.language === "github";
   const remoteLanguageBusy = remoteLanguageEnabled && (languageCatalogBusy || languageDownloadBusy);
+  const lockedBlockIconSlot = route === "block_icon" ? lockedBlockIconSlotForSource(selectedSourceByRoute.block_icon) : null;
+  const effectiveBlockIconSlot = route === "block_icon"
+    ? (lockedBlockIconSlot || selectedBlockIconSlot)
+    : selectedBlockIconSlot;
 
   const reportStatus = (status: string, detail?: string) => {
     setStatusText(status);
@@ -431,6 +453,29 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       );
     } catch (error) {
       reportStatus("下载 CCVault 方块图标失败。", String(error));
+    } finally {
+      setBlockIconDownloadBusy(false);
+    }
+  };
+
+  const downloadWikiBlockIconsForSlot = async (slot: BlockIconResourceSlot) => {
+    setBlockIconDownloadBusy(true);
+    reportStatus(
+      `正在下载 Minecraft Wiki ${blockIconSlotLabel(slot)}方块图标...`,
+      slot === "layering"
+        ? "正在按 Template:BlockLink 抓取 16x16 2D 图标..."
+        : "正在按 Java Edition data values/Blocks 抓取并转换 32x32 图标...",
+    );
+    try {
+      const result = await downloadWikiBlockIcons(slot);
+      setResourceSnapshot(result.snapshot);
+      await reloadRuntimeResources();
+      reportStatus(
+        `Minecraft Wiki 方块图标已下载到${blockIconSlotLabel(slot)}：${result.downloaded}/${result.total}`,
+        `${result.target_dir}\n${resourceActiveText(result.snapshot)}`,
+      );
+    } catch (error) {
+      reportStatus("下载 Minecraft Wiki 方块图标失败。", String(error));
     } finally {
       setBlockIconDownloadBusy(false);
     }
@@ -548,7 +593,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   const openCurrentRootDirectory = async () => {
     try {
       const relativeRoot = route === "block_icon"
-        ? (selectedBlockIconSlot === "layering" ? "minecraft-assets/block_2d" : "minecraft-assets/block_icon")
+        ? (effectiveBlockIconSlot === "layering" ? "minecraft-assets/block_2d" : "minecraft-assets/block_icon")
         : ROUTE_ROOT_RELPATH[route];
       const marker = await getUserConfigFilePath(`${relativeRoot}/.resource-root`);
       await openWorkspacePath(parentDir(marker));
@@ -569,23 +614,20 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   const runFetchAction = async () => {
     try {
       if (route === "block_icon") {
+        const slot = effectiveBlockIconSlot;
         if (selectedSource === "builtin") {
-          await reextractBuiltinBlockIcons(selectedBlockIconSlot);
+          await reextractBuiltinBlockIcons(slot);
           return;
         }
         if (selectedSource === "local_directory") {
-          await importBlockIconDir(selectedBlockIconSlot);
+          await importBlockIconDir(slot);
           return;
         }
         if (selectedSource === "vault") {
-          if (selectedBlockIconSlot === "layering") {
-            reportStatus("CCVault 方块图标仅支持材料列表 3D 槽。", "请选择“3D 槽（材料列表）”后再下载。");
-            return;
-          }
           await downloadBlockIcons();
           return;
         }
-        reportStatus("Minecraft Wiki 方块图标下载暂未实现。", "当前仅支持内建、本地目录和 CCVault。");
+        await downloadWikiBlockIconsForSlot(slot);
         return;
       }
       if (route === "item_icon") {
@@ -644,14 +686,15 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
         <>
           <select
             className="input asset-manager-select"
-            value={selectedBlockIconSlot}
+            value={effectiveBlockIconSlot}
+            disabled={!!lockedBlockIconSlot}
             onChange={(event) => setSelectedBlockIconSlot(event.target.value as BlockIconResourceSlot)}
           >
             <option value="layering">2D 槽（分层）</option>
             <option value="material_list">3D 槽（材料列表）</option>
           </select>
           <select className="input asset-manager-select" disabled value="">
-            <option value="">{selectedBlockIconSlot === "layering" ? "该槽仅接受 2D 方块图标" : "该槽可用 3D，必要时回退 2D"}</option>
+            <option value="">{blockIconSourceHint(selectedSourceByRoute.block_icon, effectiveBlockIconSlot)}</option>
           </select>
         </>
       );
@@ -772,6 +815,11 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       unlistenPromise.then((unlisten) => unlisten?.());
     };
   }, []);
+
+  useEffect(() => {
+    if (!lockedBlockIconSlot) return;
+    setSelectedBlockIconSlot((current) => current === lockedBlockIconSlot ? current : lockedBlockIconSlot);
+  }, [lockedBlockIconSlot]);
 
   useEffect(() => {
     if (!remoteLanguageEnabled || languageBranches.length > 0) return;

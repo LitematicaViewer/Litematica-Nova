@@ -27,6 +27,7 @@ export {
   copyFileToDirectory,
   downloadVaultBlockIconsFromVault,
   downloadVaultItemIconsFromVault,
+  downloadWikiBlockIconsFromMinecraftWiki,
   ensureBuiltinBlockIconsExtracted as ensureBuiltinBlockIconsExtractedNative,
   ensureBuiltinItemIconsExtracted as ensureBuiltinItemIconsExtractedNative,
   downloadWikiEnumCatalogsFromMinecraftWiki,
