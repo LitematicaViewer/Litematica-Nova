@@ -2,6 +2,7 @@ import { emitEvent } from "../platform/events";
 import {
   copyFileToDirectory,
   downloadVaultBlockIconsFromVault,
+  downloadWikiBlockIconsFromMinecraftWiki,
   downloadVaultItemIconsFromVault,
   ensureBuiltinBlockIconsExtractedNative,
   ensureBuiltinItemIconsExtractedNative,
@@ -29,6 +30,7 @@ export interface VaultBlockIconInstallResult {
 }
 
 export type VaultItemIconInstallResult = VaultBlockIconInstallResult;
+export type WikiBlockIconInstallResult = VaultBlockIconInstallResult;
 
 export interface WikiEnumCatalogInstallResult {
   snapshot: GameResourceSnapshot;
@@ -720,6 +722,34 @@ export async function downloadVaultBlockIcons(): Promise<VaultBlockIconInstallRe
   };
   await registerGameResource(entry);
   const snapshot = await activateGameResource("block_icon", entry.id, "material_list");
+  return {
+    snapshot,
+    total: result.total,
+    downloaded: result.downloaded,
+    target_dir: result.target_dir,
+  };
+}
+
+/**
+ * Downloads Minecraft Wiki block icons, registers the local wiki directory, and activates it for the requested slot.
+ */
+export async function downloadWikiBlockIcons(slot: BlockIconSlot): Promise<WikiBlockIconInstallResult> {
+  const result = await downloadWikiBlockIconsFromMinecraftWiki(slot);
+  const variant = slot === "layering" ? "2d" : "3d";
+  const fallbackRoot = slot === "layering" ? "minecraft-assets/block_2d/wiki" : "minecraft-assets/block_icon/wiki";
+  const entry: GameResourceEntry = {
+    id: `wiki:block_icon:minecraft_wiki:${variant}`,
+    kind: "block_icon",
+    label: "Minecraft Wiki",
+    source: "wiki",
+    root_relpath: result.root_relpath || fallbackRoot,
+    block_icon_variant: variant,
+    active_material_list: slot === "material_list",
+    active_layering: slot === "layering",
+    installed_at: new Date().toISOString(),
+  };
+  await registerGameResource(entry);
+  const snapshot = await activateGameResource("block_icon", entry.id, slot);
   return {
     snapshot,
     total: result.total,

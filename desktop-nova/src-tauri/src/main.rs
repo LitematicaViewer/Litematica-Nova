@@ -17,6 +17,9 @@ use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tauri_plugin_dialog::DialogExt;
 use zip::ZipArchive;
 
+mod wiki_block_icons;
+use wiki_block_icons::download_minecraft_wiki_block_icons;
+
 #[cfg(windows)]
 use std::ptr::null_mut;
 #[cfg(windows)]
@@ -4168,6 +4171,7 @@ fn main() {
             ensure_builtin_block_icons_extracted,
             ensure_builtin_item_icons_extracted,
             download_minecraft_wiki_enum_catalogs,
+            download_minecraft_wiki_block_icons,
             open_workspace_path,
             cleanup_local_temp_files,
             reden_search_litematica,
