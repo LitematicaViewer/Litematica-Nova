@@ -1634,16 +1634,34 @@ fn save_user_config(input: UserConfigInput) -> Result<UserConfigInfo, String> {
 }
 
 #[tauri::command]
-fn choose_user_config_dir(app: AppHandle) -> Result<Option<String>, String> {
-    let Some(path) = app
-        .dialog()
+async fn pick_litematic_file(app: AppHandle) -> Result<Option<String>, String> {
+    let (tx, rx) = mpsc::channel();
+    app.dialog()
         .file()
-        .blocking_pick_folder()
-        .and_then(|p| p.into_path().ok())
-    else {
-        return Ok(None);
-    };
-    Ok(Some(path.display().to_string()))
+        .add_filter("Litematic", &["litematic"])
+        .pick_file(move |path| {
+            let selection = path
+                .and_then(|value| value.into_path().ok())
+                .map(|value| value.display().to_string());
+            let _ = tx.send(selection);
+        });
+    tauri::async_runtime::spawn_blocking(move || rx.recv().map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn choose_user_config_dir(app: AppHandle) -> Result<Option<String>, String> {
+    let (tx, rx) = mpsc::channel();
+    app.dialog().file().pick_folder(move |path| {
+        let selection = path
+            .and_then(|value| value.into_path().ok())
+            .map(|value| value.display().to_string());
+        let _ = tx.send(selection);
+    });
+    tauri::async_runtime::spawn_blocking(move || rx.recv().map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -4146,6 +4164,7 @@ fn main() {
             poll_cache_build_task,
             get_user_config,
             save_user_config,
+            pick_litematic_file,
             choose_user_config_dir,
             open_user_config_dir,
             set_user_config_dir,
