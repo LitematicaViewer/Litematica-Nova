@@ -68,6 +68,10 @@ export function writeTextFileAbsolute(path: string, content: string): Promise<vo
   return invoke("write_text_file_absolute", { path, content });
 }
 
+export function pickLitematicFile(): Promise<string | null> {
+  return invoke("pick_litematic_file");
+}
+
 export function readAppDataFile(relativePath: string): Promise<string> {
   return invoke("read_user_config_file", { relativePath });
 }
