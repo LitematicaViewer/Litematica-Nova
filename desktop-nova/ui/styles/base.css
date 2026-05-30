@@ -1221,6 +1221,8 @@ textarea.input,
 
 .render-page {
     min-width: 0;
+    overflow: auto;
+    padding-right: 4px;
 }
 
 .render-page__toolbar {
@@ -1265,12 +1267,11 @@ textarea.input,
 
 .render-page__shell {
     display: flex;
-    flex: 1;
     min-width: 0;
-    min-height: 0;
+    flex-direction: column;
+    align-self: stretch;
     margin-top: 0;
     padding: 16px 12px 12px;
-    overflow: hidden;
 }
 
 .render-page__shell-body {
@@ -1316,18 +1317,17 @@ textarea.input,
 
 .render-page__workspace {
     display: grid;
-    flex: 1;
     min-width: 0;
-    min-height: 0;
     grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+    align-items: stretch;
     gap: 12px;
 }
 
 .render-page__viewer-panel {
     display: flex;
     min-width: 0;
-    min-height: 0;
-    overflow: hidden;
+    flex-direction: column;
+    align-self: stretch;
 }
 
 .render-page__viewer-host {
@@ -1416,9 +1416,8 @@ textarea.input,
 .render-page__control-panel {
     display: flex;
     min-width: 0;
-    min-height: 0;
     flex-direction: column;
-    overflow: auto;
+    align-self: stretch;
 }
 
 .render-page__control-body {

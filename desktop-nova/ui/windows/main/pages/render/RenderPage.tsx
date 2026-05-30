@@ -48,6 +48,11 @@ function parseProgress(raw: string | null): RenderProgress | null {
   }
 }
 
+function platformSupportsEmbeddedViewer(): boolean {
+  if (typeof navigator === "undefined") return true;
+  return navigator.userAgent.toLowerCase().includes("win");
+}
+
 export function RenderPage({ currentFile, activeRoute }: any) {
   const [renderer, setRenderer] = useState<string>(RENDERER_OPTIONS[0].value);
   const [buildMode, setBuildModeState] = useState(() => loadDisplayMode());
@@ -175,6 +180,12 @@ export function RenderPage({ currentFile, activeRoute }: any) {
       await new Promise((resolve) => requestAnimationFrame(() => window.setTimeout(resolve, 120)));
       if (cancelled) return;
       const element = previewHostRef.current;
+      if (!platformSupportsEmbeddedViewer()) {
+        await hideEmbeddedViewer().catch(() => undefined);
+        setEmbeddedRunning(false);
+        setEmbeddedError("");
+        return;
+      }
       if (activeRoute !== "render" || !currentFile || !cacheReady || !element) {
         console.log("[LBA_EMBED_VIEWER] route_active=render action=hide reason=inactive_or_not_ready");
         await hideEmbeddedViewer().catch(() => undefined);
