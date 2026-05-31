@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   AiPublicConfig,
   aiClearKey,
@@ -54,15 +54,26 @@ function statusText(ok: boolean | null) {
   return ok ? "OK" : "失败";
 }
 
+function pathStatusClass(info?: PathInfo | null) {
+  if (!info) return "settings-page__path-status settings-page__status settings-page__status--idle";
+  return `settings-page__path-status settings-page__status ${info.exists ? "settings-page__status--ok" : "settings-page__status--error"}`;
+}
+
+function checkStatusClass(ok: boolean | null) {
+  return `settings-page__status ${ok === false ? "settings-page__status--error" : "settings-page__status--idle"}`;
+}
+
+function aiLogClass(aiTestStatus: string) {
+  return `nova-pre settings-page__panel-log${aiTestStatus.startsWith("测试失败") ? " settings-page__panel-log--error" : ""}`;
+}
+
 function PathRow({ label, path, info }: { label: string; path: string; info?: PathInfo | null }) {
   return (
     <div className="form-row">
-      <div className="form-label" style={{ width: 150 }}>{label}</div>
-      <div className="form-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <input className="input" style={{ flex: 1 }} value={info?.normalized || path} readOnly />
-        <span style={{ minWidth: 70, color: info ? (info.exists ? "#8fd18f" : "#ff8888") : "#aaa" }}>
-          {info ? (info.exists ? "存在" : "缺失") : "未检查"}
-        </span>
+      <div className="form-label form-label-wide">{label}</div>
+      <div className="form-field">
+        <input className="input nova-input-flex" value={info?.normalized || path} readOnly />
+        <span className={pathStatusClass(info)}>{info ? (info.exists ? "存在" : "缺失") : "未检查"}</span>
       </div>
     </div>
   );
@@ -283,13 +294,13 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%", overflow: "auto" }}>
-      <div style={{ fontSize: "1.3em", fontWeight: "bold" }}>选项</div>
+    <div className="settings-page">
+      <div className="settings-page__title">选项</div>
 
       <div className="group-box">
         <div className="group-box-title">外观</div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>主题</div>
+          <div className="form-label form-label-wide">主题</div>
           <div className="form-field">
             <select className="input" value={normalizeTheme(theme)} onChange={(event) => handleTheme(event.target.value)}>
               {NOVA_THEME_OPTIONS.map((option) => (
@@ -303,20 +314,20 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
       <div className="group-box">
         <div className="group-box-title">用户配置目录</div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>当前目录</div>
-          <input className="input" style={{ flex: 1 }} value={userConfig?.config_dir || ""} readOnly />
+          <div className="form-label form-label-wide">当前目录</div>
+          <input className="input" value={userConfig?.config_dir || ""} readOnly />
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>默认目录</div>
-          <input className="input" style={{ flex: 1 }} value={userConfig?.default_config_dir || ""} readOnly />
+          <div className="form-label form-label-wide">默认目录</div>
+          <input className="input" value={userConfig?.default_config_dir || ""} readOnly />
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="button-row settings-page__actions-wrap">
           <button className="btn" onClick={chooseConfigDir}>选择目录</button>
           <button className="btn" onClick={() => openUserConfigDir()}>打开目录</button>
           <button className="btn" onClick={resetConfigDir}>恢复默认目录</button>
           <button className="btn" onClick={migrateConfigDir}>迁移当前配置到新目录</button>
         </div>
-        <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
+        <div className="settings-page__note">
           用户态文件会写入 projection-library/js_library.json、previews/、render/、generation-templates/custom/ 和普通 config。API Key 不写入普通 config。
         </div>
       </div>
@@ -334,31 +345,32 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
       <div className="group-box">
         <div className="group-box-title">AI 设置</div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>Provider</div>
-          <select className="input" value={aiProvider} onChange={(event) => setAiProvider(event.target.value)}>
-            <option value="mock">Mock</option>
-            <option value="openai_compatible">OpenAI Compatible</option>
-            <option value="gemini_compatible">Gemini Compatible（占位）</option>
-          </select>
-          <span style={{ opacity: 0.72 }} title={aiConfig ? `provider=${aiConfig.provider}` : undefined}>
-            Key 状态：{apiKeyDirty ? "本次输入未保存" : aiStatus}
-          </span>
+          <div className="form-label form-label-wide">Provider</div>
+          <div className="form-field">
+            <select className="input" value={aiProvider} onChange={(event) => setAiProvider(event.target.value)}>
+              <option value="mock">Mock</option>
+              <option value="openai_compatible">OpenAI Compatible</option>
+              <option value="gemini_compatible">Gemini Compatible（占位）</option>
+            </select>
+            <span className="settings-page__inline-note" title={aiConfig ? `provider=${aiConfig.provider}` : undefined}>
+              Key 状态：{apiKeyDirty ? "本次输入未保存" : aiStatus}
+            </span>
+          </div>
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>Base URL</div>
-          <input className="input" style={{ flex: 1 }} value={aiBaseUrl} onChange={(event) => setAiBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" />
+          <div className="form-label form-label-wide">Base URL</div>
+          <input className="input nova-input-flex" value={aiBaseUrl} onChange={(event) => setAiBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" />
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>Model</div>
-          <input className="input" style={{ width: 260 }} value={aiModel} onChange={(event) => setAiModel(event.target.value)} placeholder="gpt-4.1-mini" />
+          <div className="form-label form-label-wide">Model</div>
+          <input className="input settings-page__model-input" value={aiModel} onChange={(event) => setAiModel(event.target.value)} placeholder="gpt-4.1-mini" />
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>API Key</div>
-          <div className="form-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="form-label form-label-wide">API Key</div>
+          <div className="form-field">
             <input
-              className="input"
+              className="input nova-input-flex"
               type={showApiKey ? "text" : "password"}
-              style={{ flex: 1 }}
               value={apiKeyInput}
               onChange={(event) => {
                 setApiKeyInput(event.target.value);
@@ -373,17 +385,15 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
             </button>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div className="button-row settings-page__actions-wrap">
           <button className="btn" onClick={saveAi}>保存 Key</button>
           <button className="btn" onClick={clearAiKey}>清除 Key</button>
           <button className="btn" onClick={testAi}>测试连接</button>
         </div>
         {(aiSaveMessage || aiTestStatus) && (
-          <pre style={{ whiteSpace: "pre-wrap", background: "#111", border: "1px solid #444", padding: 8, color: aiTestStatus.startsWith("测试失败") ? "#ffb3b3" : "#cfcfcf", marginTop: 8 }}>
-            {[aiSaveMessage, aiTestStatus].filter(Boolean).join("\n")}
-          </pre>
+          <pre className={aiLogClass(aiTestStatus)}>{[aiSaveMessage, aiTestStatus].filter(Boolean).join("\n")}</pre>
         )}
-        <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
+        <div className="settings-page__note">
           API Key 不写入 localStorage、普通 config、prompt、plan 或日志；页面不会回显已保存的真实 Key。
         </div>
       </div>
@@ -391,7 +401,7 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
       <div className="group-box">
         <div className="group-box-title">测试功能</div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>子窗口行为</div>
+          <div className="form-label form-label-wide">子窗口行为</div>
           <div className="form-field">
             <select className="input" value={materialListWindowBehavior} onChange={(event) => handleMaterialListWindowBehavior(event.target.value)}>
               {MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS.map((option) => (
@@ -401,31 +411,30 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>显示 UI调试页</div>
-          <label className="form-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="form-label form-label-wide">显示 UI调试页</div>
+          <label className="form-field settings-page__check-label">
             <input type="checkbox" checked={showUiTestPage} onChange={(event) => handleShowUiTestPage(event.target.checked)} />
             <span>在左侧导航栏显示 UI 测试入口</span>
           </label>
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>保留尾部路径数</div>
-          <div className="form-field" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="form-label form-label-wide">保留尾部路径数</div>
+          <div className="form-field settings-page__field-wrap">
             <input
-              className="input"
+              className="input settings-page__number-input"
               type="number"
               min={1}
               step={1}
-              style={{ width: 120 }}
               value={localLibraryTailPathCount}
               onChange={(event) => handleLocalLibraryTailPathCount(event.target.value)}
             />
-            <span style={{ opacity: 0.72 }}>本地库文件夹标题压缩时，保留最后 N 级目录</span>
+            <span className="settings-page__inline-note">本地库文件夹标题压缩时，保留最后 N 级目录</span>
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>演示</div>
-          <div className="form-field" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <code style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", opacity: 0.72 }}>
+          <div className="form-label form-label-wide">演示</div>
+          <div className="form-field settings-page__demo-field">
+            <code className="settings-page__demo-path">
               {"C:\\Users\\LOLcat\\Documents\\Minecraft\\Schematics\\Castle\\Overworld\\North Gate"}
             </code>
             <div>
@@ -436,7 +445,7 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
             </div>
           </div>
         </div>
-        <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
+        <div className="settings-page__note">
           材料列表、游戏资源管理器和 UI 测试页中的演示窗口都会按照这里的子窗口行为决定使用独立窗口还是主窗口遮罩。
         </div>
       </div>
@@ -446,9 +455,9 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
         <PathRow label="工作目录" path={workspaceRoot || "..."} info={workspaceRoot ? ({ normalized: workspaceRoot, exists: true } as PathInfo) : null} />
         <PathRow label="litematica_core" path={coreInfo?.normalized || ""} info={coreInfo} />
         <PathRow label="native_viewer" path={viewerInfo?.normalized || ""} info={viewerInfo} />
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <div className="button-row settings-page__status-row">
           <button className="btn" onClick={checkBackend}>检查后端</button>
-          <span style={{ color: backendOk === false ? "#ff8888" : "#aaa" }}>{statusText(backendOk)}</span>
+          <span className={checkStatusClass(backendOk)}>{statusText(backendOk)}</span>
         </div>
       </div>
 
@@ -456,20 +465,18 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
         <div className="group-box-title">数据文件</div>
         <PathRow label="BlockState DB" path={BLOCKSTATE_DB} info={dbInfo} />
         <PathRow label="中文翻译 DB" path={BLOCKSTATE_ZH} info={zhInfo} />
-        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+        <div className="button-row settings-page__status-row settings-page__actions-wrap">
           <button className="btn" onClick={checkDatabase}>检查 BlockState 数据库</button>
           <button className="btn" onClick={() => openWorkspacePath("data/minecraft_blockstates")}>打开数据目录</button>
-          <span style={{ color: dbOk === false ? "#ff8888" : "#aaa" }}>
-            DB: {statusText(dbOk)}
-          </span>
+          <span className={checkStatusClass(dbOk)}>DB: {statusText(dbOk)}</span>
         </div>
       </div>
 
       <div className="group-box">
         <div className="group-box-title">渲染</div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>渲染页 displayMode</div>
-          <div className="form-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="form-label form-label-wide">渲染页 displayMode</div>
+          <div className="form-field">
             <select className="input" value={displayMode} onChange={(event) => handleDisplayMode(event.target.value)}>
               {DISPLAY_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
@@ -477,32 +484,30 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label" style={{ width: 150 }}>预览图生成</div>
-          <div className="form-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="form-label form-label-wide">预览图生成</div>
+          <div className="form-field">
             <select className="input" value={previewMode} onChange={(event) => handlePreviewMode(event.target.value)}>
               {DISPLAY_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
             <button className="btn" onClick={() => handlePreviewMode("normal")}>重置为 normal</button>
           </div>
         </div>
-        <div style={{ opacity: 0.72, fontSize: "0.9em", marginTop: 8 }}>
+        <div className="settings-page__note">
           投影库“生成预览”使用“预览图生成”模式；它独立于渲染页 displayMode。
         </div>
       </div>
 
       <div className="group-box">
         <div className="group-box-title">维护</div>
-        <button className="btn" onClick={async () => setLog(await cleanupLocalTempFiles())}>清理本地临时文件</button>
+        <div className="button-row">
+          <button className="btn" onClick={async () => setLog(await cleanupLocalTempFiles())}>清理本地临时文件</button>
+        </div>
       </div>
 
-      {log && (
-        <pre style={{ whiteSpace: "pre-wrap", background: "#111", border: "1px solid #444", padding: 8, color: "#ccc", maxHeight: 220, overflow: "auto" }}>{log}</pre>
-      )}
+      {log && <pre className="nova-pre settings-page__main-log">{log}</pre>}
       {showAssetManagerOverlay ? (
         <AssetManagerDialog theme={normalizeTheme(theme)} onClose={() => setShowAssetManagerOverlay(false)} />
       ) : null}
     </div>
   );
 }
-
-
