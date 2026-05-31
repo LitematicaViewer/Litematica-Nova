@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { listenEvent } from "../../src/platform/events";
 import { invalidateBlockIconCache, invalidateBlockstateDbCache, invalidateI18nCache, loadDatabases } from "../../src/business/facade";
 import { initI18n } from "../../src/business/facade";
@@ -139,43 +139,45 @@ export function App() {
           {expanded ? <strong>Litematica Nova</strong> : null}
         </button>
 
-        <nav className="nav-list" aria-label="主导航">
-          {Object.entries(topPages).map(([key, value]) => {
-            const active = route === key;
-            return (
-              <button
-                key={key}
-                className={`sidebar-item nav-item ${active ? "active nav-item-active" : ""}`}
-                onClick={() => setRoute(key)}
-                title={!expanded ? value.name : ""}
-                type="button"
-                aria-pressed={active}
-              >
-                <NavIcon name={value.icon} theme={theme} />
-                {expanded && <span className="nav-label">{value.name}</span>}
-              </button>
-            );
-          })}
-        </nav>
+        <div className="nav-scroll-area">
+          <nav className="nav-list" aria-label="主导航">
+            {Object.entries(topPages).map(([key, value]) => {
+              const active = route === key;
+              return (
+                <button
+                  key={key}
+                  className={`sidebar-item nav-item ${active ? "active nav-item-active" : ""}`}
+                  onClick={() => setRoute(key)}
+                  title={!expanded ? value.name : ""}
+                  type="button"
+                  aria-pressed={active}
+                >
+                  <NavIcon name={value.icon} theme={theme} />
+                  {expanded && <span className="nav-label">{value.name}</span>}
+                </button>
+              );
+            })}
+          </nav>
 
-        <nav className="nav-list nav-list-bottom" aria-label="选项">
-          {Object.entries(bottomPages).map(([key, value]) => {
-            const active = route === key;
-            return (
-              <button
-                key={key}
-                className={`sidebar-item nav-item ${active ? "active nav-item-active" : ""}`}
-                onClick={() => setRoute(key)}
-                title={!expanded ? value.name : ""}
-                type="button"
-                aria-pressed={active}
-              >
-                <NavIcon name={value.icon} theme={theme} />
-                {expanded && <span className="nav-label">{value.name}</span>}
-              </button>
-            );
-          })}
-        </nav>
+          <nav className="nav-list nav-list-bottom" aria-label="选项">
+            {Object.entries(bottomPages).map(([key, value]) => {
+              const active = route === key;
+              return (
+                <button
+                  key={key}
+                  className={`sidebar-item nav-item ${active ? "active nav-item-active" : ""}`}
+                  onClick={() => setRoute(key)}
+                  title={!expanded ? value.name : ""}
+                  type="button"
+                  aria-pressed={active}
+                >
+                  <NavIcon name={value.icon} theme={theme} />
+                  {expanded && <span className="nav-label">{value.name}</span>}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
       </aside>
       <main className="content">
         <Page currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} setShowUiTestPage={setShowUiTestPage} />

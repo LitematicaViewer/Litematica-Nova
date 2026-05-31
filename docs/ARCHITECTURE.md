@@ -48,7 +48,7 @@ src/litematicanova/
     tauri/                   Tauri command 的前端侧适配
   platform/                  平台相关实现
     tauri/                   Tauri/Rust 项目与 command 实现
-    fs/                      文件系统、AppData、路径安全
+    fs/                      文件系统、data 用户目录、路径安全
     process/                 后端进程调用
     network/                 HTTP、下载代理、外部服务访问
     secure-storage/          API Key 等敏感信息存取
@@ -108,9 +108,9 @@ desktop-nova/ui/themes/              -> 主题资源入口，最终并入 ui/the
 
 `bridge` 负责稳定协议。所有跨进程、跨语言、跨窗口的数据结构都先落在这里，避免页面直接理解 Rust command 返回值，也避免后端协议散落在 UI 组件中。
 
-`platform` 负责环境能力，例如 Tauri invoke、文件、AppData、进程、HTTP、系统对话框和安全存储。它暴露能力，不写页面交互逻辑。
+`platform` 负责环境能力，例如 Tauri invoke、文件、data 用户目录、进程、HTTP、系统对话框和安全存储。它暴露能力，不写页面交互逻辑。
 
-`ui` 负责界面、交互状态和视图组合。页面可以调用 business facade 或 bridge API，但不直接拼后端命令参数，不直接读写 AppData，不直接调用底层 Tauri invoke。
+`ui` 负责界面、交互状态和视图组合。页面可以调用 business facade 或 bridge API，但不直接拼后端命令参数，不直接读写 data 用户目录，不直接调用底层 Tauri invoke。
 
 当前迁移期的实际职责：
 
@@ -121,7 +121,7 @@ desktop-nova/ui/themes/              -> 主题资源入口，最终并入 ui/the
 - `desktop-nova/ui/themes/`：主题包、主题资源和控件差异样式。
 - `desktop-nova/ui/styles/`：全局基础样式和页面通用结构，不承载默认主题语义。
 - `desktop-nova/src/business/`：投影库、统计、生成、替换、AI、Reden、render cache、settings 等业务编排。
-- `desktop-nova/src/platform/`：Tauri invoke、文件、AppData、后端进程、viewer、HTTP、key storage。
+- `desktop-nova/src/platform/`：Tauri invoke、文件、data 用户目录、后端进程、viewer、HTTP、key storage。
 
 ## 依赖方向
 
@@ -151,7 +151,7 @@ ui -> business -> platform
 - `ui` 不直接 import `@tauri-apps/api`。
 - `ui` 不直接 `invoke(...)`。
 - `ui` 不直接写 `litematica_core.exe` 或 `litematica_native_viewer.exe`。
-- 页面文件不直接读写 AppData，不直接拼后端命令参数。
+- 页面文件不直接读写 data 用户目录，不直接拼后端命令参数。
 
 边界检查：
 
@@ -195,7 +195,7 @@ UI 采用“应用装配、窗口、页面、组件、主题”分层。
 `desktop-nova/src-tauri/src/main.rs` 暴露 Tauri command，负责：
 
 - 文件读写、路径检查、打开目录。
-- AppData 用户配置目录选择、迁移、恢复默认。
+- `data/` 用户配置目录选择、迁移、恢复默认。
 - 后端 exe 调用。
 - RedenMC 下载代理，避免前端直接处理跨域和下载文件。
 - render cache 构建任务、progress 轮询和 watchdog。
@@ -215,25 +215,31 @@ UI 采用“应用装配、窗口、页面、组件、主题”分层。
 
 `tools/viewer-core/` 保持为独立 Rust 后端源码目录，除非后续决定把它正式纳入 `src/litematicanova/platform/native/`。修改后端源码后必须重新构建 release，并同步 exe 到 `bin/viewer-backend/`。
 
-## AppData 用户数据
+## data 用户数据
 
 默认用户态目录：
 
 ```text
-%AppData%\Litematica-BA\desktop-nova
+data/
 ```
 
 用户态数据包括：
 
 - `projection-library/js_library.json`
-- `previews/`
-- `render/`
+- `projection-library/previews/`
+- `cache/render/`
+- `cache/recipes/`
+- `tmp/render/`
 - `reden/downloads/`
+- `exports/`
+- `stockpile/`
 - `generation-templates/custom/`
 - 普通 config
 - AI 普通配置
 
-不搬到 AppData 的运行资源：
+旧版 `%AppData%\Litematica-BA\desktop-nova` 只作为兼容读取/迁移来源，不作为新运行时产物的默认写入位置。
+
+不作为用户态覆盖目标的内置资源：
 
 - `data/minecraft_blockstates/`
 - `data/generation-templates/` 内置模板
@@ -241,7 +247,7 @@ UI 采用“应用装配、窗口、页面、组件、主题”分层。
 - block 图标库
 - render assets
 
-API Key 不写入 localStorage、普通 config、日志、prompt 或 plan。用户下载、RedenMC 缓存、预览缓存等写入 AppData，不写入项目源码目录。
+API Key 不写入 localStorage、普通 config、日志、prompt 或 plan。用户下载、RedenMC 缓存、预览缓存等写入 `data/` 下的运行时目录，不写入源码资源目录。
 
 ## 数据与资源
 

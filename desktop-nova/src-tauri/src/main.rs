@@ -1,8 +1,9 @@
-﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use base64::Engine;
 use flate2::read::GzDecoder;
 use image::{DynamicImage, GenericImageView, RgbaImage};
+use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -14,6 +15,10 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tauri_plugin_dialog::DialogExt;
+use zip::ZipArchive;
+
+mod wiki_block_icons;
+use wiki_block_icons::download_minecraft_wiki_block_icons;
 
 #[cfg(windows)]
 use std::ptr::null_mut;
@@ -179,6 +184,8 @@ struct UserConfig {
     show_ui_test_page: bool,
     #[serde(default = "default_local_library_tail_path_count")]
     local_library_tail_path_count: u32,
+    #[serde(default = "default_statistics_enumerator_info_rules")]
+    statistics_enumerator_info_rules: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -189,6 +196,7 @@ struct UserConfigInput {
     material_list_window_behavior: Option<String>,
     show_ui_test_page: Option<bool>,
     local_library_tail_path_count: Option<u32>,
+    statistics_enumerator_info_rules: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -283,8 +291,30 @@ fn backend_exe_path(binary_name: &str) -> PathBuf {
         .join(binary_name)
 }
 
+fn data_root() -> Result<PathBuf, String> {
+    let dir = env::var_os("LBA_DATA_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                get_root().join(path)
+            }
+        })
+        .unwrap_or_else(|| get_root().join("data"));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn legacy_appdata_config_dir() -> Option<PathBuf> {
+    env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .map(|base| base.join("Litematica-BA").join("desktop-nova"))
+}
+
 fn render_tmp_path(prefix: &str, ext: &str) -> Result<PathBuf, String> {
-    let dir = current_user_config_dir()?.join("render");
+    let dir = data_root()?.join("cache").join("render");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -321,19 +351,65 @@ fn run_command_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Outpu
 }
 
 fn app_config_dir() -> Result<PathBuf, String> {
-    let base = env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| get_root().join(".tmp").join("app-config"));
-    let dir = base.join("Litematica-BA").join("desktop-nova");
+    let dir = data_root()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    migrate_legacy_appdata_if_needed(&dir)?;
     Ok(dir)
+}
+
+fn copy_file_if_missing(source: &Path, target: &Path) -> Result<(), String> {
+    if !source.is_file() || target.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::copy(source, target)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn copy_dir_files_if_missing(source: &Path, target: &Path) -> Result<(), String> {
+    if !source.is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+        if metadata.is_dir() {
+            copy_dir_files_if_missing(&source_path, &target_path)?;
+        } else if metadata.is_file() {
+            copy_file_if_missing(&source_path, &target_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_legacy_appdata_if_needed(target_root: &Path) -> Result<(), String> {
+    let Some(legacy_root) = legacy_appdata_config_dir() else {
+        return Ok(());
+    };
+    if legacy_root == target_root || !legacy_root.is_dir() {
+        return Ok(());
+    }
+    for file in ["config.json", "config_dir.json", "ai_config.json"] {
+        copy_file_if_missing(&legacy_root.join(file), &target_root.join(file))?;
+    }
+    for dir in ["projection-library", "generation-templates/custom"] {
+        copy_dir_files_if_missing(&legacy_root.join(dir), &target_root.join(dir))?;
+    }
+    Ok(())
 }
 
 fn ai_config_path() -> Result<PathBuf, String> {
     let path = app_config_dir()?.join("ai_config.json");
     if !path.exists() {
         if let Some(base) = env::var_os("APPDATA") {
-            let old_path = PathBuf::from(base).join("Litematica-BA").join("ai_config.json");
+            let old_path = PathBuf::from(base)
+                .join("Litematica-BA")
+                .join("ai_config.json");
             if old_path.is_file() {
                 let _ = std::fs::copy(old_path, &path);
             }
@@ -370,8 +446,11 @@ fn ensure_user_config_layout(dir: &Path) -> Result<(), String> {
     for relative in [
         "",
         "projection-library",
-        "previews",
-        "render",
+        "projection-library/previews",
+        "cache/render",
+        "tmp/render",
+        "reden/downloads",
+        "exports",
         "generation-templates",
         "generation-templates/custom",
     ] {
@@ -388,6 +467,7 @@ fn default_user_config() -> UserConfig {
         material_list_window_behavior: default_material_list_window_behavior(),
         show_ui_test_page: default_show_ui_test_page(),
         local_library_tail_path_count: default_local_library_tail_path_count(),
+        statistics_enumerator_info_rules: default_statistics_enumerator_info_rules(),
     }
 }
 
@@ -401,6 +481,26 @@ fn default_show_ui_test_page() -> bool {
 
 fn default_local_library_tail_path_count() -> u32 {
     3
+}
+
+fn default_statistics_enumerator_info_rules() -> Vec<String> {
+    vec![
+        "理论版本 = version(L)".to_string(),
+        "生存不可达 = any(L & survival_impossible)".to_string(),
+    ]
+}
+
+fn normalize_statistics_enumerator_info_rules(values: Vec<String>) -> Vec<String> {
+    let normalized: Vec<String> = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    if normalized.is_empty() {
+        default_statistics_enumerator_info_rules()
+    } else {
+        normalized
+    }
 }
 
 fn normalize_material_list_window_behavior(value: &str) -> String {
@@ -448,6 +548,8 @@ fn read_user_config_data(dir: &Path) -> UserConfig {
         normalize_material_list_window_behavior(&config.material_list_window_behavior);
     config.local_library_tail_path_count =
         normalize_local_library_tail_path_count(config.local_library_tail_path_count);
+    config.statistics_enumerator_info_rules =
+        normalize_statistics_enumerator_info_rules(config.statistics_enumerator_info_rules);
     config
 }
 
@@ -486,6 +588,22 @@ fn safe_user_relative_path(relative_path: &str) -> Result<PathBuf, String> {
             .any(|c| matches!(c, std::path::Component::ParentDir))
     {
         return Err("Invalid user config relative path.".to_string());
+    }
+    Ok(path)
+}
+
+fn user_runtime_relative_path(relative_path: &str) -> Result<PathBuf, String> {
+    let path = safe_user_relative_path(relative_path)?;
+    let mut components = path.components();
+    let Some(first) = components.next() else {
+        return Ok(path);
+    };
+    let first = first.as_os_str().to_string_lossy();
+    if first == "render" {
+        return Ok(PathBuf::from("tmp").join(path));
+    }
+    if first == "previews" {
+        return Ok(PathBuf::from("projection-library").join(path));
     }
     Ok(path)
 }
@@ -1087,7 +1205,9 @@ fn start_embedded_viewer(
         stderr_file,
     };
     if let Err(error) = wait_for_embedded_viewer_start(&mut record) {
-        log_embed(&format!("status=start_failed reason=native_start_error error={error}"));
+        log_embed(&format!(
+            "status=start_failed reason=native_start_error error={error}"
+        ));
         stop_embedded_record(&mut record);
         return Err(error);
     }
@@ -1405,9 +1525,11 @@ async fn generate_preview_image(
     file_path: String,
     display_mode: String,
 ) -> Result<RenderPreviewOutput, String> {
-    tauri::async_runtime::spawn_blocking(move || generate_preview_image_sync(file_path, display_mode))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        generate_preview_image_sync(file_path, display_mode)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn generate_preview_image_sync(
@@ -1418,7 +1540,7 @@ fn generate_preview_image_sync(
     let exe_path = backend_exe_path("litematica_native_viewer.exe");
     let mode = normalized_display_mode(&display_mode);
     let resolved_input = normalized_input_path(&file_path);
-    let preview_dir = current_user_config_dir()?.join("previews");
+    let preview_dir = data_root()?.join("projection-library").join("previews");
     std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
     hasher.update(resolved_input.to_string_lossy().as_bytes());
@@ -1492,14 +1614,16 @@ fn save_user_config(input: UserConfigInput) -> Result<UserConfigInfo, String> {
         config.preview_mode = normalize_mode_string(&mode);
     }
     if let Some(behavior) = input.material_list_window_behavior {
-        config.material_list_window_behavior =
-            normalize_material_list_window_behavior(&behavior);
+        config.material_list_window_behavior = normalize_material_list_window_behavior(&behavior);
     }
     if let Some(show) = input.show_ui_test_page {
         config.show_ui_test_page = show;
     }
     if let Some(count) = input.local_library_tail_path_count {
         config.local_library_tail_path_count = normalize_local_library_tail_path_count(count);
+    }
+    if let Some(rules) = input.statistics_enumerator_info_rules {
+        config.statistics_enumerator_info_rules = normalize_statistics_enumerator_info_rules(rules);
     }
     write_user_config_data(&dir, &config)?;
     Ok(UserConfigInfo {
@@ -1510,16 +1634,34 @@ fn save_user_config(input: UserConfigInput) -> Result<UserConfigInfo, String> {
 }
 
 #[tauri::command]
-fn choose_user_config_dir(app: AppHandle) -> Result<Option<String>, String> {
-    let Some(path) = app
-        .dialog()
+async fn pick_litematic_file(app: AppHandle) -> Result<Option<String>, String> {
+    let (tx, rx) = mpsc::channel();
+    app.dialog()
         .file()
-        .blocking_pick_folder()
-        .and_then(|p| p.into_path().ok())
-    else {
-        return Ok(None);
-    };
-    Ok(Some(path.display().to_string()))
+        .add_filter("Litematic", &["litematic"])
+        .pick_file(move |path| {
+            let selection = path
+                .and_then(|value| value.into_path().ok())
+                .map(|value| value.display().to_string());
+            let _ = tx.send(selection);
+        });
+    tauri::async_runtime::spawn_blocking(move || rx.recv().map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn choose_user_config_dir(app: AppHandle) -> Result<Option<String>, String> {
+    let (tx, rx) = mpsc::channel();
+    app.dialog().file().pick_folder(move |path| {
+        let selection = path
+            .and_then(|value| value.into_path().ok())
+            .map(|value| value.display().to_string());
+        let _ = tx.send(selection);
+    });
+    tauri::async_runtime::spawn_blocking(move || rx.recv().map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1602,14 +1744,14 @@ fn reset_user_config_dir(migrate: bool) -> Result<UserConfigInfo, String> {
 fn read_user_config_file(relative_path: String) -> Result<String, String> {
     let dir = current_user_config_dir()?;
     migrate_legacy_library_if_needed(&dir)?;
-    let path = dir.join(safe_user_relative_path(&relative_path)?);
+    let path = dir.join(user_runtime_relative_path(&relative_path)?);
     std::fs::read_to_string(path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn write_user_config_file(relative_path: String, content: String) -> Result<(), String> {
     let dir = current_user_config_dir()?;
-    let path = dir.join(safe_user_relative_path(&relative_path)?);
+    let path = dir.join(user_runtime_relative_path(&relative_path)?);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -1619,7 +1761,7 @@ fn write_user_config_file(relative_path: String, content: String) -> Result<(), 
 #[tauri::command]
 fn get_user_config_file_path(relative_path: String) -> Result<String, String> {
     let dir = current_user_config_dir()?;
-    let path = dir.join(safe_user_relative_path(&relative_path)?);
+    let path = dir.join(user_runtime_relative_path(&relative_path)?);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -1711,7 +1853,10 @@ fn kill_cache_build_task(state: State<'_, Mutex<BuildState>>) -> Result<(), Stri
 
 fn cache_progress_signature(raw: &str) -> Option<(String, bool)> {
     let value: serde_json::Value = serde_json::from_str(raw).ok()?;
-    let ready = value.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ready = value
+        .get("ready")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let signature = serde_json::json!({
         "ready": ready,
         "phase": value.get("phase").and_then(|v| v.as_str()).unwrap_or(""),
@@ -1779,7 +1924,8 @@ fn poll_cache_build_task(state: State<'_, Mutex<BuildState>>) -> CacheBuildSnaps
                     .map(|instant| instant.elapsed() >= Duration::from_secs(90))
                     .unwrap_or(false)
                 {
-                    forced_error = Some("3D cache 构建 90 秒仍未写出 progress JSON，已自动停止。".to_string());
+                    forced_error =
+                        Some("3D cache 构建 90 秒仍未写出 progress JSON，已自动停止。".to_string());
                 }
                 if forced_error.is_some() {
                     if let Some(mut child) = st.child.take() {
@@ -1915,7 +2061,11 @@ fn directory_entry_info(path: PathBuf) -> Result<DirectoryEntryInfo, String> {
         name,
         is_dir: metadata.is_dir(),
         is_file: metadata.is_file(),
-        file_size: if metadata.is_file() { metadata.len() } else { 0 },
+        file_size: if metadata.is_file() {
+            metadata.len()
+        } else {
+            0
+        },
         mtime_ms: metadata_modified_ms(&metadata),
         extension,
     })
@@ -2164,7 +2314,10 @@ fn extract_preview_image_data_from_nbt_bytes(bytes: &[u8]) -> Result<Option<Vec<
         bytes[data_start + 3],
     ]);
     if array_len < 0 {
-        return Err(format!("PreviewImageData length is negative: {}", array_len));
+        return Err(format!(
+            "PreviewImageData length is negative: {}",
+            array_len
+        ));
     }
     let array_len = array_len as usize;
     let payload_start = data_start + 4;
@@ -2243,7 +2396,10 @@ fn copy_file_to_directory(
         get_root().join(source_input)
     };
     if !source_full_path.is_file() {
-        return Err(format!("source file not found: {}", source_full_path.display()));
+        return Err(format!(
+            "source file not found: {}",
+            source_full_path.display()
+        ));
     }
 
     let trimmed_file_name = target_file_name.trim();
@@ -2261,7 +2417,10 @@ fn copy_file_to_directory(
         get_root().join(target_input)
     };
     if target_dir_path.exists() && !target_dir_path.is_dir() {
-        return Err(format!("target path is not a directory: {}", target_dir_path.display()));
+        return Err(format!(
+            "target path is not a directory: {}",
+            target_dir_path.display()
+        ));
     }
     std::fs::create_dir_all(&target_dir_path).map_err(|e| e.to_string())?;
 
@@ -2272,13 +2431,20 @@ fn copy_file_to_directory(
 
     let overwritten = target_full_path.exists();
     if overwritten && !overwrite {
-        return Err(format!("target file already exists: {}", target_full_path.display()));
+        return Err(format!(
+            "target file already exists: {}",
+            target_full_path.display()
+        ));
     }
     if overwritten && !target_full_path.is_file() {
-        return Err(format!("target path is not a file: {}", target_full_path.display()));
+        return Err(format!(
+            "target path is not a file: {}",
+            target_full_path.display()
+        ));
     }
 
-    let bytes_copied = std::fs::copy(&source_full_path, &target_full_path).map_err(|e| e.to_string())?;
+    let bytes_copied =
+        std::fs::copy(&source_full_path, &target_full_path).map_err(|e| e.to_string())?;
     Ok(CopyFileToDirectoryOutput {
         target_path: target_full_path.display().to_string(),
         overwritten,
@@ -2303,22 +2469,28 @@ fn open_workspace_path(path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn cleanup_local_temp_files() -> Result<String, String> {
-    let dir = current_user_config_dir()?.join("render");
-    if !dir.exists() {
-        return Ok("No desktop-nova render temp directory exists.".to_string());
-    }
     let mut removed = 0usize;
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if path.is_dir() {
-            std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
-        } else {
-            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    for dir in [
+        data_root()?.join("cache").join("render"),
+        data_root()?.join("tmp").join("render"),
+    ] {
+        if !dir.exists() {
+            continue;
         }
-        removed += 1;
+        for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+            } else {
+                std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+            }
+            removed += 1;
+        }
     }
-    Ok(format!("Removed {removed} desktop-nova render temp entries."))
+    Ok(format!(
+        "Removed {removed} desktop-nova render temp entries."
+    ))
 }
 
 #[derive(Deserialize)]
@@ -2354,6 +2526,23 @@ struct VaultBlockIconDownloadOutput {
     root_relpath: String,
 }
 
+#[derive(Serialize)]
+struct BuiltinIconExtractOutput {
+    target_dir: String,
+    root_relpath: String,
+    extracted: usize,
+}
+
+#[derive(Serialize)]
+struct WikiEnumCatalogDownloadOutput {
+    target_dir: String,
+    root_relpath: String,
+    blocks: usize,
+    items: usize,
+    enchantments: usize,
+    entities: usize,
+}
+
 const VAULT_SITE_LABEL: &str = "https://ccvaults.com/";
 const VAULT_API_TOKEN_PATH: &str = "/api/token";
 const VAULT_API_BLOCKS_PATH: &str = "/api/assets/20.%20Blocks";
@@ -2365,6 +2554,102 @@ const VAULT_BLOCK_ICON_ROOT_RELPATH: &str = "minecraft-assets/block_icon/vault";
 const VAULT_ITEM_ICON_ROOT_RELPATH: &str = "minecraft-assets/item/vault";
 const VAULT_BLOCK_CATEGORY_NAME: &str = "20. Blocks";
 const VAULT_ITEM_CATEGORY_NAME: &str = "10. Items";
+const WIKI_ENUM_BLOCKS_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values/Blocks";
+const WIKI_ENUM_ITEMS_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values/Items";
+const WIKI_ENUM_MAIN_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values";
+const WIKI_ENUM_ENTITIES_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values/Entities";
+const WIKI_ENUM_ROOT_RELPATH: &str = "enumerator/base/wiki";
+const BUILTIN_BLOCK_ARCHIVE_RELPATH: &str = "pack-in/arr-private/block.zip";
+const BUILTIN_BLOCK_ICON_ROOT_RELPATH: &str = "minecraft-assets/block_2d/initial";
+const BUILTIN_ITEM_ARCHIVE_RELPATH: &str = "pack-in/arr-private/item.zip";
+const BUILTIN_ITEM_ICON_ROOT_RELPATH: &str = "minecraft-assets/item/initial";
+
+fn directory_contains_files(dir: &Path) -> Result<bool, String> {
+    if !dir.is_dir() {
+        return Ok(false);
+    }
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+        if metadata.is_file() {
+            return Ok(true);
+        }
+        if metadata.is_dir() && directory_contains_files(&path)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn clear_directory_contents(dir: &Path) -> Result<(), String> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+        if metadata.is_dir() {
+            std::fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+        } else {
+            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn extract_builtin_icon_archive(
+    archive_relpath: &str,
+    target_relpath: &str,
+    force: bool,
+) -> Result<BuiltinIconExtractOutput, String> {
+    let target_dir = current_user_config_dir()?.join(target_relpath);
+    if !force && directory_contains_files(&target_dir)? {
+        return Ok(BuiltinIconExtractOutput {
+            target_dir: target_dir.display().to_string(),
+            root_relpath: target_relpath.to_string(),
+            extracted: 0,
+        });
+    }
+
+    let archive_path = get_root().join(archive_relpath);
+    let archive_file = std::fs::File::open(&archive_path)
+        .map_err(|e| format!("open {} failed: {}", archive_path.display(), e))?;
+    let mut archive = ZipArchive::new(archive_file)
+        .map_err(|e| format!("open zip {} failed: {}", archive_path.display(), e))?;
+
+    std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    clear_directory_contents(&target_dir)?;
+
+    let mut extracted = 0usize;
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).map_err(|e| e.to_string())?;
+        let Some(enclosed_name) = file.enclosed_name().map(|path| path.to_path_buf()) else {
+            continue;
+        };
+        if enclosed_name.as_os_str().is_empty() {
+            continue;
+        }
+        let output_path = target_dir.join(&enclosed_name);
+        if file.is_dir() {
+            std::fs::create_dir_all(&output_path).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut output_file = std::fs::File::create(&output_path).map_err(|e| e.to_string())?;
+        std::io::copy(&mut file, &mut output_file).map_err(|e| e.to_string())?;
+        extracted += 1;
+    }
+
+    Ok(BuiltinIconExtractOutput {
+        target_dir: target_dir.display().to_string(),
+        root_relpath: target_relpath.to_string(),
+        extracted,
+    })
+}
 
 fn emit_vault_block_icon_progress(
     app: &AppHandle,
@@ -2973,6 +3258,36 @@ async fn download_vault_item_icons(app: AppHandle) -> Result<VaultBlockIconDownl
         .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+async fn ensure_builtin_block_icons_extracted(
+    force: bool,
+) -> Result<BuiltinIconExtractOutput, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_builtin_icon_archive(
+            BUILTIN_BLOCK_ARCHIVE_RELPATH,
+            BUILTIN_BLOCK_ICON_ROOT_RELPATH,
+            force,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn ensure_builtin_item_icons_extracted(
+    force: bool,
+) -> Result<BuiltinIconExtractOutput, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_builtin_icon_archive(
+            BUILTIN_ITEM_ARCHIVE_RELPATH,
+            BUILTIN_ITEM_ICON_ROOT_RELPATH,
+            force,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn reden_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(120))
@@ -2984,20 +3299,26 @@ fn reden_client() -> Result<reqwest::blocking::Client, String> {
 fn reden_get_json(url: reqwest::Url) -> Result<serde_json::Value, String> {
     let response = reden_client()?
         .get(url)
-        .header(reqwest::header::USER_AGENT, "Litematica-BA desktop-nova/0.1")
+        .header(
+            reqwest::header::USER_AGENT,
+            "Litematica-BA desktop-nova/0.1",
+        )
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .map_err(|e| e.to_string())?;
     let status = response.status();
     let text = response.text().map_err(|e| e.to_string())?;
     if !status.is_success() {
-        return Err(format!("RedenMC API failed: status={} body={}", status, text));
+        return Err(format!(
+            "RedenMC API failed: status={} body={}",
+            status, text
+        ));
     }
     serde_json::from_str(&text).map_err(|e| format!("RedenMC JSON parse failed: {e}; body={text}"))
 }
 
 fn reden_download_dir() -> Result<PathBuf, String> {
-    let dir = app_config_dir()?.join("reden").join("downloads");
+    let dir = data_root()?.join("reden").join("downloads");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -3044,13 +3365,19 @@ fn file_name_from_headers_or_url(
     sanitize_reden_file_name(from_url)
 }
 
-fn reden_fetch_download(start_url: reqwest::Url, fallback_name: &str) -> Result<RedenDownloadOutput, String> {
+fn reden_fetch_download(
+    start_url: reqwest::Url,
+    fallback_name: &str,
+) -> Result<RedenDownloadOutput, String> {
     let client = reden_client()?;
     let mut url = start_url;
     for _ in 0..6 {
         let response = client
             .get(url.clone())
-            .header(reqwest::header::USER_AGENT, "Litematica-BA desktop-nova/0.1")
+            .header(
+                reqwest::header::USER_AGENT,
+                "Litematica-BA desktop-nova/0.1",
+            )
             .header(reqwest::header::REFERER, "https://redenmc.com/")
             .header(reqwest::header::ORIGIN, "https://redenmc.com")
             .send()
@@ -3058,7 +3385,9 @@ fn reden_fetch_download(start_url: reqwest::Url, fallback_name: &str) -> Result<
         let status = response.status();
         if status.is_redirection() {
             let Some(location) = response.headers().get(reqwest::header::LOCATION) else {
-                return Err(format!("RedenMC download redirected without Location: status={status}"));
+                return Err(format!(
+                    "RedenMC download redirected without Location: status={status}"
+                ));
             };
             let location = location.to_str().map_err(|e| e.to_string())?;
             url = url.join(location).map_err(|e| e.to_string())?;
@@ -3458,6 +3787,173 @@ fn query_encode(value: &str) -> String {
         .collect()
 }
 
+fn wiki_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("Litematica-Nova-enum-catalog/1.0")
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn fetch_wiki_html(client: &reqwest::blocking::Client, url: &str) -> Result<String, String> {
+    let response = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml")
+        .send()
+        .map_err(|e| format!("请求 {url} 失败: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("请求 {url} 失败: HTTP {status}"));
+    }
+    response.text().map_err(|e| e.to_string())
+}
+
+fn normalize_html_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn element_text(element: &ElementRef<'_>) -> String {
+    normalize_html_text(&element.text().collect::<Vec<_>>().join(" "))
+}
+
+fn extract_code_values_from_cell(cell: &ElementRef<'_>, code_selector: &Selector) -> Vec<String> {
+    cell.select(code_selector)
+        .map(|code| normalize_html_text(&code.text().collect::<Vec<_>>().join(" ")))
+        .map(|value| value.trim_matches('`').trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn extract_resource_locations_from_html(html: &str) -> Result<Vec<String>, String> {
+    let table_selector = Selector::parse("table").map_err(|e| e.to_string())?;
+    let row_selector = Selector::parse("tr").map_err(|e| e.to_string())?;
+    let cell_selector = Selector::parse("th, td").map_err(|e| e.to_string())?;
+    let code_selector = Selector::parse("code").map_err(|e| e.to_string())?;
+    let document = Html::parse_document(html);
+    let mut seen = HashSet::new();
+    let mut output = Vec::new();
+
+    for table in document.select(&table_selector) {
+        let rows: Vec<_> = table.select(&row_selector).collect();
+        let mut resource_column = None;
+        let mut data_start = 0usize;
+        for (row_index, row) in rows.iter().enumerate() {
+            let cells: Vec<_> = row.select(&cell_selector).collect();
+            let labels: Vec<_> = cells
+                .iter()
+                .map(|cell| element_text(cell).to_ascii_lowercase())
+                .collect();
+            if let Some(column_index) = labels.iter().position(|label| label.contains("resource location")) {
+                resource_column = Some(column_index);
+                data_start = row_index + 1;
+                break;
+            }
+        }
+        let Some(resource_column) = resource_column else {
+            continue;
+        };
+        for row in rows.iter().skip(data_start) {
+            let cells: Vec<_> = row.select(&cell_selector).collect();
+            let Some(cell) = cells.get(resource_column) else {
+                continue;
+            };
+            for value in extract_code_values_from_cell(cell, &code_selector) {
+                if seen.insert(value.clone()) {
+                    output.push(value);
+                }
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+fn extract_enchantment_section_html<'a>(html: &'a str) -> Option<&'a str> {
+    let lower = html.to_ascii_lowercase();
+    let markers = [
+        "id=\"enchantments\"",
+        "id='enchantments'",
+        "id=\"enchantment\"",
+        "id='enchantment'",
+    ];
+    let start_hint = markers.iter().filter_map(|marker| lower.find(marker)).max()?;
+    let start = lower[..start_hint]
+        .rfind("<div class=\"mw-heading")
+        .or_else(|| lower[..start_hint].rfind("<h"))
+        .unwrap_or(start_hint);
+    let search_start = (start_hint + 1).min(html.len());
+    let end = lower[search_start..]
+        .find("<div class=\"mw-heading")
+        .map(|offset| search_start + offset)
+        .unwrap_or(html.len());
+    Some(&html[start..end])
+}
+
+fn write_json_catalog(path: &Path, values: &[String]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(values).map_err(|e| e.to_string())?;
+    std::fs::write(path, content).map_err(|e| e.to_string())
+}
+
+fn download_minecraft_wiki_enum_catalogs_sync() -> Result<WikiEnumCatalogDownloadOutput, String> {
+    let client = wiki_client()?;
+    let blocks_html = fetch_wiki_html(&client, WIKI_ENUM_BLOCKS_URL)?;
+    let items_html = fetch_wiki_html(&client, WIKI_ENUM_ITEMS_URL)?;
+    let main_html = fetch_wiki_html(&client, WIKI_ENUM_MAIN_URL)?;
+    let entities_html = fetch_wiki_html(&client, WIKI_ENUM_ENTITIES_URL)?;
+
+    let blocks = extract_resource_locations_from_html(&blocks_html)?;
+    let items = extract_resource_locations_from_html(&items_html)?;
+    let enchantment_section = extract_enchantment_section_html(&main_html)
+        .ok_or_else(|| "无法定位 Minecraft Wiki 魔咒数据值分节".to_string())?;
+    let enchantments = extract_resource_locations_from_html(enchantment_section)?;
+    let entities = extract_resource_locations_from_html(&entities_html)?;
+
+    if blocks.is_empty() || items.is_empty() || enchantments.is_empty() || entities.is_empty() {
+        return Err("Minecraft Wiki 枚举全集解析结果为空。".to_string());
+    }
+
+    let target_dir = current_user_config_dir()?.join(WIKI_ENUM_ROOT_RELPATH);
+    std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    write_json_catalog(&target_dir.join("DV_Blocks.json"), &blocks)?;
+    write_json_catalog(&target_dir.join("DV_Items.json"), &items)?;
+    write_json_catalog(&target_dir.join("DV_Enchantments.json"), &enchantments)?;
+    write_json_catalog(&target_dir.join("DV_Entities.json"), &entities)?;
+    let manifest = serde_json::json!({
+        "source": "minecraft_wiki",
+        "root_relpath": WIKI_ENUM_ROOT_RELPATH,
+        "catalogs": {
+            "blocks": { "file": "DV_Blocks.json", "url": WIKI_ENUM_BLOCKS_URL, "count": blocks.len() },
+            "items": { "file": "DV_Items.json", "url": WIKI_ENUM_ITEMS_URL, "count": items.len() },
+            "enchantments": { "file": "DV_Enchantments.json", "url": WIKI_ENUM_MAIN_URL, "count": enchantments.len() },
+            "entities": { "file": "DV_Entities.json", "url": WIKI_ENUM_ENTITIES_URL, "count": entities.len() }
+        }
+    });
+    std::fs::write(
+        target_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(WikiEnumCatalogDownloadOutput {
+        target_dir: target_dir.display().to_string(),
+        root_relpath: WIKI_ENUM_ROOT_RELPATH.to_string(),
+        blocks: blocks.len(),
+        items: items.len(),
+        enchantments: enchantments.len(),
+        entities: entities.len(),
+    })
+}
+
+#[tauri::command]
+async fn download_minecraft_wiki_enum_catalogs() -> Result<WikiEnumCatalogDownloadOutput, String> {
+    tauri::async_runtime::spawn_blocking(download_minecraft_wiki_enum_catalogs_sync)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn open_material_list_window(
     app: AppHandle,
@@ -3473,9 +3969,42 @@ async fn open_material_list_window(
         return Ok(());
     }
 
-    let url = match active_file.as_deref().filter(|file| !file.trim().is_empty()) {
+    let url = match active_file
+        .as_deref()
+        .filter(|file| !file.trim().is_empty())
+    {
         Some(file) => format!("material_list.html?file={}", query_encode(file)),
         None => "material_list.html".to_string(),
+    };
+
+    tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App(url.into()))
+        .title("Material List")
+        .inner_size(720.0, 520.0)
+        .min_inner_size(560.0, 420.0)
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_enumerator_window(
+    app: AppHandle,
+    active_file: Option<String>,
+) -> Result<(), String> {
+    const LABEL: &str = "enumerator";
+
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        app.emit_to(LABEL, "enumerator-open-file", active_file)
+            .map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    let url = match active_file.as_deref().filter(|file| !file.trim().is_empty()) {
+        Some(file) => format!("enumerator.html?file={}", query_encode(file)),
+        None => "enumerator.html".to_string(),
     };
 
     tauri::WebviewWindowBuilder::new(
@@ -3483,9 +4012,9 @@ async fn open_material_list_window(
         LABEL,
         tauri::WebviewUrl::App(url.into()),
     )
-    .title("Material List")
-    .inner_size(720.0, 520.0)
-    .min_inner_size(560.0, 420.0)
+    .title("Enumerator")
+    .inner_size(1180.0, 760.0)
+    .min_inner_size(900.0, 560.0)
     .build()
     .map_err(|err| err.to_string())?;
 
@@ -3635,6 +4164,7 @@ fn main() {
             poll_cache_build_task,
             get_user_config,
             save_user_config,
+            pick_litematic_file,
             choose_user_config_dir,
             open_user_config_dir,
             set_user_config_dir,
@@ -3657,6 +4187,10 @@ fn main() {
             copy_file_to_directory,
             download_vault_block_icons,
             download_vault_item_icons,
+            ensure_builtin_block_icons_extracted,
+            ensure_builtin_item_icons_extracted,
+            download_minecraft_wiki_enum_catalogs,
+            download_minecraft_wiki_block_icons,
             open_workspace_path,
             cleanup_local_temp_files,
             reden_search_litematica,
@@ -3669,6 +4203,7 @@ fn main() {
             ai_test_connection,
             ai_chat_completion,
             open_material_list_window,
+            open_enumerator_window,
             open_reden_library_window,
             open_local_library_folders_window,
             open_asset_manager_window,

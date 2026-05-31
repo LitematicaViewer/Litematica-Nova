@@ -39,8 +39,11 @@ cargo fmt
 cargo test
 cargo build --release --bin litematica_core
 cargo build --release --bin litematica_native_viewer
+cargo build --release --bin stockpile_server
 Copy-Item target\release\litematica_core.exe ..\..\bin\viewer-backend\litematica_core.exe -Force
 Copy-Item target\release\litematica_native_viewer.exe ..\..\bin\viewer-backend\litematica_native_viewer.exe -Force
+Copy-Item target\release\stockpile_server.exe ..\..\bin\viewer-backend\stockpile_server.exe -Force
+Copy-Item target\release\stockpile_server.exe ..\..\bin\stockpile-server\windows-x64\stockpile_server.exe -Force
 ```
 
 不要为了验证反复启动 Tauri UI。需要人工验收时再启动：
@@ -173,13 +176,101 @@ GET https://redenmc.com/api/mc-services/yisibite/<machineId>?xSize=<x>&ySize=<y>
 
 下载集成规则：
 
-- 下载缓存写入 `%AppData%\Litematica-BA\desktop-nova\reden\downloads\`。
+- 下载缓存写入 `data/reden/downloads/`。
 - 不把下载文件写入项目目录。
 - 下载完成后确认是 `.litematic`，再 analyze、入库、设置 currentFile。
 - 如果返回 HTML、外部网盘页面、错误 JSON，必须报真实错误，不得伪装成投影文件。
 - 实测搜索、详情、普通下载和参数化下载不需要登录；上游静态资源或外部跳转失败时显示真实 status/message。
 
 ## BlockState DB 与 overrides
+
+## Stockpile web export handoff
+
+Stockpile 的网页导出链路以 `docs/STOCKPILE_HANDOFF.md` 为交接入口。维护时保持这条边界：
+
+- `litematica_core stockpile export-zip` 负责构建 `single` 离线包和 `multi` 可运行包。
+- `single` 包只需要静态文件，双击 `index.html` 后状态保存在浏览器 localStorage。
+- `multi` 包额外包含 `db/stockpile.sqlite`、选中 target 的 `stockpile_server`、启动脚本和 `README.txt`。
+- `--target` 只允许 `windows-x64`、`linux-x64`、`macos-x64`、`macos-arm64`、`all`，可重复传入；缺少目标平台真实二进制时导出必须失败。
+- 部署端只运行 `stockpile_server --root <unzipped-stockpile-dir> --bind <addr:port>` 或生成脚本里的 `stockpile_server serve --root . --bind <addr:port>`；不要要求 VPS 编译、安装 Rust、上传源码或上传 `.litematic`。
+- access/admin 密码、白名单、`allow_guest_readonly`、`admin_page_enabled` 都在构建期写入 SQLite；部署端通过 `/admin` 或重新导出包调整。
+- recipe trees、item names、icons、i18n 都在导出期进入 ZIP；部署端不读取 `data/cache/`。
+
+更新 stockpile CLI 或 ZIP 内容时，同步检查：
+
+```powershell
+bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project.stockpile.zip --minecraft-version 1.21.10 --mode single
+"access-pass`nadmin-pass`n" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly false --admin-page-enabled true
+scripts\stockpile\verify_stockpile_server_bins.ps1 -Target linux-x64
+```
+
+## Stockpile recipe cache
+
+合成表缓存统一写入：
+
+```text
+data/cache/recipes/minecraft_<version>/
+```
+
+结构：
+
+```text
+manifest.json
+recipes.json
+items.json
+blocks.json
+```
+
+CLI：
+
+```powershell
+bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile export-data --input <file.litematic> --output data\stockpile\projects\<name>\materials.json
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>.stockpile.zip --minecraft-version 1.21.10 --mode single
+"access-pass`nadmin-pass`n" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\<name>-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly false --admin-page-enabled true
+bin\viewer-backend\litematica_core.exe stockpile serve --zip data\stockpile\exports\<name>.stockpile.zip --bind 127.0.0.1:8787
+bin\viewer-backend\stockpile_server.exe --root <unzipped-stockpile-dir> --bind 127.0.0.1:8787
+bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpile\exports\<name>.stockpile.zip
+bin\viewer-backend\litematica_core.exe stockpile session-export --zip data\stockpile\exports\<name>.stockpile.zip --output data\stockpile\sessions\<name>.state.json
+bin\viewer-backend\litematica_core.exe stockpile session-reset --zip data\stockpile\exports\<name>.stockpile.zip --yes
+bin\viewer-backend\litematica_core.exe stockpile session-import --zip data\stockpile\exports\<name>.stockpile.zip --input data\stockpile\sessions\<name>.state.json --replace
+bin\viewer-backend\litematica_core.exe stockpile config-show --zip data\stockpile\exports\<name>.stockpile.zip
+bin\viewer-backend\litematica_core.exe stockpile config-set --zip data\stockpile\exports\<name>.stockpile.zip --key poll_interval_ms --value 5000
+bin\viewer-backend\litematica_core.exe stockpile config-reset --zip data\stockpile\exports\<name>.stockpile.zip --yes
+```
+
+`recipe-fetch` 通过 provider 从 Mojang 官方 version manifest 定位对应 client jar，提取 `data/minecraft/recipe/*.json` 后生成本地缓存。无缓存时 `export-data` 不失败，材料项标记为 `missing`；缓存损坏或版本不匹配时标记为 `unresolved`。
+
+`export-zip --mode single` 复用 stockpile materials 数据模型，输出可解压后直接打开的单页网页。ZIP 内包含 `index.html`、`assets/app.css`、`assets/app.js`、`assets/icons/*.png`、`data/manifest.json`、`data/materials.json`、`data/recipe_status.json`、`data/recipe_trees.json`、`data/icons.json`、`data/item_names.json` 和 `data/i18n.json`；`index.html` 内嵌 `window.__STOCKPILE_DATA__`，避免 `file://` 下 fetch 本地 JSON 被拦截。离线打开时状态只写入浏览器 localStorage。
+
+`export-zip --mode multi` 在 single 内容基础上额外写入 `db/stockpile.sqlite`、选中 target 的 `server/<platform>/stockpile_server`、启动脚本和 `README.txt`。`--target` 支持 `windows-x64`、`linux-x64`、`macos-x64`、`macos-arm64` 和 `all`，也可重复传入；Windows 本地默认只打 `windows-x64`，只有 `--target all` 才要求四个平台全部齐全。导出时只检查选中 target 的真实 server 二进制，缺哪个 target 就报哪个，不写占位文件。部署端只需要解压 ZIP 并运行对应启动脚本；`stockpile_server` 只托管静态文件、读取 `data/*.json`、读写 `db/stockpile.sqlite` 并提供 claim/note/auth/admin/whitelist/audit API，不读取 `.litematic`、不做材料统计、不拉 recipe、不触碰 viewer/native/Full Mode V2/MC Light。
+
+multi 包的访问密码、管理员密码、白名单和默认配置在 `litematica_core export-zip` 阶段通过 `--access-password-stdin`、`--admin-password-stdin`、`--whitelist-file`、`--allow-guest-readonly`、`--admin-page-enabled` 写入 `db/stockpile.sqlite`。部署端 `stockpile_server` 不提供初始化 CLI；要改密码或白名单，使用 admin 页面或重新导出包。
+
+真实 `stockpile_server` 二进制不提交到 Git。Windows 本地只能构建 Windows 版；Linux/macOS 版由 `.github/workflows/stockpile-server.yml` 的 GitHub Actions 矩阵构建并作为 artifacts 上传。导出跨平台 multi 包前运行：
+
+```powershell
+scripts\stockpile\verify_stockpile_server_bins.ps1 -Target linux-x64
+scripts\stockpile\fetch_stockpile_server_artifacts.ps1 -Target linux-x64
+scripts\stockpile\verify_stockpile_server_bins.ps1 -Target linux-x64
+```
+
+如果没有 `gh` CLI 或 GitHub 权限，手动下载 workflow artifacts，并把文件放到 `bin/stockpile-server/<platform>/`。只导出 `--mode single` 不需要这些二进制；只部署某一个平台时只需下载对应 target，跨平台包使用多个 `--target` 或 `--target all`。
+
+`recipe_trees.json` 由本地 recipe cache 解析生成，不联网。解析器会递归生成可视化合成链节点，支持 `minecraft:crafting_shaped`、`minecraft:crafting_shapeless`、`minecraft:stonecutting`、cooking 类配方、smithing transform/trim 和 `minecraft:crafting_special_*`。tag 输入只显示 tag 节点并标记 unresolved，不猜具体材料；special recipe 标记为 `special_recipe`；找不到支持配方时标记 `no_recipe`。ZIP 网页展开材料时使用节点卡片、工艺 badge、批次数、余量和父子连线展示完整合成链。
+
+`litematica_core stockpile serve --zip` 保留为 legacy/internal 兼容入口，只读取 stockpile ZIP，不回写 ZIP。新部署优先使用 `stockpile_server --root <解压目录>`，会话状态写入解压目录下的 `db/stockpile.sqlite`。HTTP API 包括 `GET /api/project`、`GET /api/state`、`POST /api/participants`、`PUT /api/materials/:material_id/claims/:user_id` 和 `DELETE /api/materials/:material_id/claims/:user_id`。serve 模式页面每数秒轮询状态；同一材料允许多个用户同时 claim，取消参与会删除对应 claim。
+
+`session-info`、`session-reset`、`session-export` 和 `session-import` 只操作 `data/stockpile/sessions/<zip-stem>.sqlite` 或 JSON 状态文件，不修改 ZIP。`session-reset` 没有 `--yes` 时只返回确认提示；显式 `--yes` 会清空 claims、保留 participants，并把 session 重新绑定到当前 ZIP hash，便于同名 ZIP 重导出后的恢复。`session-import` 会校验 session export schema 和 ZIP hash，默认 merge/upsert，`--replace` 时先清空 claims。
+
+`config-show`、`config-set` 和 `config-reset` 只读写 session SQLite 内的 `stockpile_config` 表，不修改 ZIP，不写密码明文。配置支持 `mode`、访问/管理员/白名单开关、默认语言、轮询间隔和若干展示项；`config-set` 严格校验 enum、bool 和 `poll_interval_ms=2000..10000`。serve 暴露 `GET /api/config` 和 `PUT /api/config`，本阶段只提供配置读写，不做访问控制拦截。
+
+Stockpile schema 版本集中在后端 `stockpile_schema` 模块：ZIP manifest 会写入 ZIP、materials、recipe_trees、i18n、icons、item_names 的 schema version；SQLite `meta` 会写入 schema version 和 zip hash，并通过 `stockpile_config` 保存项目会话配置。serve 读取不支持或不匹配的 ZIP/SQLite 时必须显式报错，不静默错读。
+
+材料和合成链图标来自 `data/cache/item-icons/minecraft_<version>/icons/`。导出时会优先从 Mojang client jar 的 `assets/minecraft/textures/item`、`textures/block` 和常见 model 指向解析 PNG；无法解析时写入简洁 fallback PNG，并在 `materials.json` 中标记 `icon_available=false`。材料名本地化来自 `data/cache/item-names/minecraft_<version>/en_us.json` 和 `zh_cn.json`，ZIP 只写入当前材料和合成链需要的 `data/item_names.json`，其中 `status` 会标识 `available` / `partial` / `missing`。不要提交 `data/cache/item-icons/` 或 `data/cache/item-names/` 生成物。
 
 运行资源：
 
@@ -236,7 +327,7 @@ python scripts\generate_block_color_cache.py
 - `*_debug.log`
 - `*_probe.png`
 - `*_preview.png`
-- AppData 下载物和 RedenMC 下载出来的 `.litematic`
+- `data/reden/` 下载物和 RedenMC 下载出来的 `.litematic`
 - 本地打包出的 exe，例如 `docs/*.exe`
 
 不要删除或移动：

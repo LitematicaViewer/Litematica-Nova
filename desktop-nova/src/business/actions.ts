@@ -1,4 +1,5 @@
 import { openDialog, saveDialog } from "../platform/dialogs";
+import { pickLitematicFile } from "../platform/files";
 import { openPath } from "../platform/nativeViewer";
 import {
   CORE_BACKEND_EXE,
@@ -44,8 +45,7 @@ export interface MetadataPatchInput {
 }
 
 export async function selectLitematicFile(): Promise<string | null> {
-  const selected = await openDialog({ filters: [{ name: "Litematic", extensions: ["litematic"] }] });
-  return typeof selected === "string" ? selected : null;
+  return pickLitematicFile();
 }
 
 export async function selectLitematicSavePath(defaultPath: string): Promise<string | null> {

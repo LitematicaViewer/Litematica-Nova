@@ -10,6 +10,7 @@
     --ln-body-font-family: "Unifont", monospace;
     --ln-body-font-size: 16px;
     --ln-body-text-color: #ffffff;
+    --ln-muted-text-color: #666666;
     font-smooth: never;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
