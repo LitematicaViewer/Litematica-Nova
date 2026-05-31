@@ -1,4 +1,4 @@
-﻿import React, {
+import React, {
   forwardRef,
   useEffect,
   useImperativeHandle,
@@ -11,6 +11,7 @@ import {
   buildLayerMetaCache,
   checkCacheExists,
   getBlockColor,
+  getBlockIconDataUrl,
   getLatestRenderCacheState,
   LayerSliceData,
   LayerSliceMeta,
@@ -30,7 +31,6 @@ import {
 } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
-import { getBlockIconDataUrl } from "../../../../../src/business/facade";
 
 interface LayerCanvasHandle {
   resetView: () => void;
@@ -466,12 +466,12 @@ function CreativeInventoryDialog({
 
 function fitView(
   meta: LayerSliceMeta,
-  canvas: HTMLCanvasElement | null,
+  viewport: HTMLElement | null,
   setScale: (scale: number) => void,
   setOffset: (offset: { x: number; y: number }) => void,
 ) {
-  const width = canvas?.parentElement?.clientWidth || 600;
-  const height = canvas?.parentElement?.clientHeight || 600;
+  const width = viewport?.parentElement?.clientWidth || viewport?.clientWidth || 600;
+  const height = viewport?.parentElement?.clientHeight || viewport?.clientHeight || 600;
   const maxDim = Math.max(meta.size_x, meta.size_z);
   if (maxDim <= 0) return;
   const initialScale = Math.min(10, Math.max(0.5, (Math.min(width, height) * 0.8) / maxDim));
@@ -490,15 +490,97 @@ const LayerCanvas = forwardRef<
     onHoverBlock: (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => void;
   }
 >(({ meta, sliceData, onHoverBlock }, ref) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [iconImages, setIconImages] = useState<Map<number, HTMLImageElement>>(new Map());
+  const [iconImages, setIconImages] = useState<Map<number, string>>(new Map());
+
+  const colorMap = useMemo(() => {
+    const next = new Map<number, string>();
+    if (!meta) return next;
+    meta.palette.forEach((entry, index) => {
+      let color = getBlockColor(entry.block_id);
+      if (entry.block_id.includes("stone")) color = "#888";
+      else if (entry.block_id.includes("dirt")) color = "#754";
+      else if (entry.block_id.includes("grass")) color = "#583";
+      else if (entry.block_id.includes("quartz")) color = "#eee";
+      else if (entry.block_id.includes("glass")) color = "rgba(200,200,255,0.5)";
+      else if (entry.block_id.includes("air")) color = "transparent";
+      next.set(index, color);
+    });
+    return next;
+  }, [meta]);
+
+  const slicePaletteIds = useMemo(() => {
+    if (!meta || !sliceData) return [] as number[];
+    const seen = new Set<number>();
+    const paletteIds: number[] = [];
+    for (const block of sliceData.blocks) {
+      const paletteId = block.palette_id;
+      if (seen.has(paletteId)) continue;
+      seen.add(paletteId);
+      const entry = meta.palette[paletteId];
+      if (!entry?.block_id || entry.block_id.includes("air")) continue;
+      paletteIds.push(paletteId);
+    }
+    return paletteIds;
+  }, [meta, sliceData]);
+
+  const sliceBlockIndex = useMemo(() => {
+    const index = new Map<number, LayerSliceData["blocks"][number]>();
+    if (!meta || !sliceData) return index;
+    for (const block of sliceData.blocks) {
+      index.set(block.z * meta.size_x + block.x, block);
+    }
+    return index;
+  }, [meta, sliceData]);
+
+  const visibleBlocks = useMemo(() => {
+    if (!meta || !sliceData) return [] as Array<{
+      key: string;
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+      color: string;
+      iconUrl: string;
+    }>;
+
+    const blocks: Array<{
+      key: string;
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+      color: string;
+      iconUrl: string;
+    }> = [];
+
+    for (const block of sliceData.blocks) {
+      const color = colorMap.get(block.palette_id) || "#f0f";
+      if (color === "transparent") continue;
+      const left = Math.round(offset.x + block.x * scale);
+      const top = Math.round(offset.y + block.z * scale);
+      const width = Math.max(1, Math.ceil(scale));
+      const height = Math.max(1, Math.ceil(scale));
+      blocks.push({
+        key: `${block.x}:${block.z}:${block.palette_id}`,
+        left,
+        top,
+        width,
+        height,
+        color,
+        iconUrl: iconImages.get(block.palette_id) || "",
+      });
+    }
+
+    return blocks;
+  }, [colorMap, iconImages, meta, offset.x, offset.y, scale, sliceData]);
 
   const resetView = () => {
-    if (meta) fitView(meta, canvasRef.current, setScale, setOffset);
+    if (meta) fitView(meta, viewportRef.current, setScale, setOffset);
   };
 
   useImperativeHandle(ref, () => ({ resetView }), [meta]);
@@ -508,107 +590,41 @@ const LayerCanvas = forwardRef<
   }, [meta]);
 
   useEffect(() => {
-    drawCanvas();
-  }, [meta, sliceData, scale, offset, iconImages]);
+    let cancelled = false;
+    setIconImages(new Map());
 
-  useEffect(() => {
-    let active = true;
-    const loadPaletteIcons = async () => {
-      const next = new Map<number, HTMLImageElement>();
-      if (!meta) {
+    if (!meta || slicePaletteIds.length === 0) {
+      // console.log("[LBA_FLAKE] icon_batch:disabled", { has_meta: !!meta, slice_palette_ids: slicePaletteIds.length });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void (async () => {
+      const next = new Map<number, string>();
+      for (const paletteId of slicePaletteIds) {
+        const entry = meta.palette[paletteId];
+        if (!entry?.block_id) continue;
+        const dataUrl = await getBlockIconDataUrl(entry.block_id, "layering");
+        if (cancelled || !dataUrl) continue;
+        next.set(paletteId, dataUrl);
+      }
+      if (!cancelled) {
         setIconImages(next);
-        return;
       }
-      await Promise.all(
-        meta.palette.map(async (entry, index) => {
-          if (!entry?.block_id || entry.block_id.includes("air")) return;
-          const dataUrl = await getBlockIconDataUrl(entry.block_id, "layering");
-          if (!dataUrl) return;
-          await new Promise<void>((resolve) => {
-            const img = new Image();
-            img.onload = () => {
-              next.set(index, img);
-              resolve();
-            };
-            img.onerror = () => resolve();
-            img.src = dataUrl;
-          });
-        }),
-      );
-      if (active) setIconImages(next);
-    };
-    loadPaletteIcons();
+    })();
+
     return () => {
-      active = false;
+      cancelled = true;
     };
-  }, [meta]);
-
-  const drawCanvas = () => {
-    const canvas = canvasRef.current;
-    if (!canvas || !meta || !sliceData) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const parent = canvas.parentElement;
-    const viewportWidth = parent?.clientWidth || canvas.clientWidth || 0;
-    const viewportHeight = parent?.clientHeight || canvas.clientHeight || 0;
-    const dpr = window.devicePixelRatio || 1;
-    const physicalWidth = Math.max(1, Math.round(viewportWidth * dpr));
-    const physicalHeight = Math.max(1, Math.round(viewportHeight * dpr));
-
-    if (canvas.width !== physicalWidth || canvas.height !== physicalHeight) {
-      canvas.width = physicalWidth;
-      canvas.height = physicalHeight;
-      canvas.style.width = `${viewportWidth}px`;
-      canvas.style.height = `${viewportHeight}px`;
-    }
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, viewportWidth, viewportHeight);
-    ctx.strokeStyle = "#555";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(offset.x, offset.y, meta.size_x * scale, meta.size_z * scale);
-
-    const colorMap = new Map<number, string>();
-    meta.palette.forEach((p, i) => {
-      let color = getBlockColor(p.block_id);
-      if (p.block_id.includes("stone")) color = "#888";
-      else if (p.block_id.includes("dirt")) color = "#754";
-      else if (p.block_id.includes("grass")) color = "#583";
-      else if (p.block_id.includes("quartz")) color = "#eee";
-      else if (p.block_id.includes("glass")) color = "rgba(200,200,255,0.5)";
-      else if (p.block_id.includes("air")) color = "transparent";
-      colorMap.set(i, color);
-    });
-
-    for (const block of sliceData.blocks) {
-      const px = offset.x + block.x * scale;
-      const pz = offset.y + block.z * scale;
-      if (px + scale < 0 || pz + scale < 0 || px > viewportWidth || pz > viewportHeight) continue;
-
-      const color = colorMap.get(block.palette_id) || "#f0f";
-      if (color === "transparent") continue;
-      const icon = iconImages.get(block.palette_id);
-      if (icon) {
-        ctx.drawImage(icon, px, pz, Math.ceil(scale), Math.ceil(scale));
-      } else {
-        ctx.fillStyle = color;
-        ctx.fillRect(px, pz, Math.ceil(scale), Math.ceil(scale));
-      }
-      if (scale > 8) {
-        ctx.strokeStyle = "rgba(0,0,0,0.3)";
-        ctx.strokeRect(px, pz, Math.ceil(scale), Math.ceil(scale));
-      }
-    }
-  };
+  }, [meta, slicePaletteIds]);
 
   const handleWheel = (event: React.WheelEvent) => {
     event.preventDefault();
-    if (!canvasRef.current) return;
+    if (!viewportRef.current) return;
     const direction = event.deltaY < 0 ? 1 : -1;
     const nextScale = Math.max(0.1, Math.min(50, scale * Math.pow(1.1, direction)));
-    const rect = canvasRef.current.getBoundingClientRect();
+    const rect = viewportRef.current.getBoundingClientRect();
     const mouseX = event.clientX - rect.left;
     const mouseY = event.clientY - rect.top;
     setOffset({
@@ -624,15 +640,16 @@ const LayerCanvas = forwardRef<
       return;
     }
 
-    if (!meta || !sliceData || !canvasRef.current) {
+    if (!meta || !sliceData || !viewportRef.current) {
       onHoverBlock(null, event);
       return;
     }
-    const rect = canvasRef.current.getBoundingClientRect();
+
+    const rect = viewportRef.current.getBoundingClientRect();
     const bx = Math.floor((event.clientX - rect.left - offset.x) / scale);
     const bz = Math.floor((event.clientY - rect.top - offset.y) / scale);
     if (bx >= 0 && bx < meta.size_x && bz >= 0 && bz < meta.size_z) {
-      const block = sliceData.blocks.find((candidate) => candidate.x === bx && candidate.z === bz);
+      const block = sliceBlockIndex.get(bz * meta.size_x + bx);
       if (block) {
         const paletteEntry = meta.palette[block.palette_id];
         onHoverBlock(
@@ -649,20 +666,14 @@ const LayerCanvas = forwardRef<
         return;
       }
     }
+
     onHoverBlock(null, event);
   };
 
-  useEffect(() => {
-    const handleResize = () => drawCanvas();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [meta, sliceData, scale, offset]);
-
   return (
-    <canvas
-      ref={canvasRef}
+    <div
+      ref={viewportRef}
       className={isDragging ? "flake-canvas is-dragging" : "flake-canvas"}
-      style={{ imageRendering: "pixelated" }}
       onWheel={handleWheel}
       onMouseDown={(event) => {
         setIsDragging(true);
@@ -674,7 +685,32 @@ const LayerCanvas = forwardRef<
         setIsDragging(false);
         onHoverBlock(null, null);
       }}
-    />
+    >
+      <div
+        className="flake-layer-border"
+        style={{
+          left: `${Math.round(offset.x)}px`,
+          top: `${Math.round(offset.y)}px`,
+          width: `${Math.max(1, Math.round(meta ? meta.size_x * scale : 0))}px`,
+          height: `${Math.max(1, Math.round(meta ? meta.size_z * scale : 0))}px`,
+        }}
+      />
+      {visibleBlocks.map((block) => (
+        <div
+          key={block.key}
+          className="flake-layer-block"
+          style={{
+            left: `${block.left}px`,
+            top: `${block.top}px`,
+            width: `${block.width}px`,
+            height: `${block.height}px`,
+            background: block.iconUrl ? "transparent" : block.color,
+          }}
+        >
+          {block.iconUrl ? <img className="flake-layer-block-icon" src={block.iconUrl} alt="" draggable={false} /> : null}
+        </div>
+      ))}
+    </div>
   );
 });
 
@@ -702,6 +738,11 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const pollIntervalRef = useRef<number | null>(null);
+  const syncRequestIdRef = useRef(0);
+  const inFlightMetaKeyRef = useRef("");
+  const loadedMetaKeyRef = useRef("");
+  const inFlightSliceKeyRef = useRef("");
+  const loadedSliceKeyRef = useRef("");
 
   const stopQuickBuildPolling = () => {
     if (pollIntervalRef.current !== null) {
@@ -712,7 +753,17 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
   const syncCacheState = async () => {
     if (!currentFile) return;
+    const requestId = ++syncRequestIdRef.current;
+    // console.log("[LBA_FLAKE] syncCacheState:start", { currentFile });
     const stored = getLatestRenderCacheState(currentFile);
+    /*
+    console.log("[LBA_FLAKE] syncCacheState:stored", {
+      currentFile,
+      status: stored?.status || "idle",
+      cacheFile: stored?.cacheFile || "",
+      stage: stored?.stage || "",
+    });
+    */
     setCacheStatus(stored?.status || "idle");
     setCacheFile(stored?.cacheFile || "");
     setQuickBuildStatus(stored?.stage || "");
@@ -721,14 +772,61 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setMeta(null);
     setSliceData(null);
     setCacheExists(false);
+    loadedMetaKeyRef.current = "";
+    loadedSliceKeyRef.current = "";
 
-    if (!stored?.cacheFile) return;
+    if (!stored?.cacheFile) {
+      inFlightMetaKeyRef.current = "";
+      inFlightSliceKeyRef.current = "";
+      // console.log("[LBA_FLAKE] syncCacheState:no_cache", { currentFile });
+      return;
+    }
     const exists = await checkCacheExists(stored.cacheFile);
+    if (requestId !== syncRequestIdRef.current) return;
+    /*
+    console.log("[LBA_FLAKE] syncCacheState:cache_exists", {
+      currentFile,
+      cacheFile: stored.cacheFile,
+      exists,
+      status: stored.status,
+    });
+    */
     setCacheExists(exists);
     if (exists && stored.status === "ready") {
-      const loadedMeta = await loadLayerMeta(stored.cacheFile);
-      setMeta(loadedMeta);
-      setLayerY(0);
+      const metaKey = stored.cacheFile;
+      if (inFlightMetaKeyRef.current === metaKey || loadedMetaKeyRef.current === metaKey) {
+        return;
+      }
+      inFlightMetaKeyRef.current = metaKey;
+      /*
+      console.log("[LBA_FLAKE] syncCacheState:load_meta:start", {
+        currentFile,
+        cacheFile: stored.cacheFile,
+      });
+      */
+      try {
+        const loadedMeta = await loadLayerMeta(stored.cacheFile);
+        if (requestId !== syncRequestIdRef.current) return;
+        /*
+        console.log("[LBA_FLAKE] syncCacheState:load_meta:end", {
+          currentFile,
+          cacheFile: stored.cacheFile,
+          size_x: loadedMeta?.size_x || 0,
+          size_y: loadedMeta?.size_y || 0,
+          size_z: loadedMeta?.size_z || 0,
+          palette_len: loadedMeta?.palette?.length || 0,
+          property_pool_len: loadedMeta?.property_pool?.length || 0,
+        });
+        */
+        loadedMetaKeyRef.current = metaKey;
+        loadedSliceKeyRef.current = "";
+        setMeta(loadedMeta);
+        setLayerY(0);
+      } finally {
+        if (inFlightMetaKeyRef.current === metaKey) {
+          inFlightMetaKeyRef.current = "";
+        }
+      }
     }
   };
 
@@ -818,9 +916,18 @@ export function FlakePage({ currentFile, setRoute }: any) {
     window.removeEventListener("pointerup", handleToolSplitterPointerUp);
   };
 
+  const ensureStatsData = async () => {
+    if (!currentFile) return null;
+    if (statsData) return statsData;
+    const loaded = await loadStructureStats(currentFile);
+    setStatsData(loaded);
+    return loaded;
+  };
+
   useEffect(() => {
     if (!currentFile) return;
-    loadStructureStats(currentFile).then(setStatsData).catch(() => setStatsData(null));
+    // console.log("[LBA_FLAKE] effect:currentFile", { currentFile });
+    setStatsData(null);
     syncCacheState();
   }, [currentFile]);
 
@@ -838,9 +945,51 @@ export function FlakePage({ currentFile, setRoute }: any) {
   }, [editMode]);
 
   useEffect(() => {
-    if (cacheExists && meta && cacheFile) {
-      loadLayerSlice(cacheFile, layerY).then(setSliceData);
+    if (!cacheExists || !meta || !cacheFile) return;
+    const sliceKey = `${cacheFile}::${layerY}`;
+    if (inFlightSliceKeyRef.current === sliceKey || loadedSliceKeyRef.current === sliceKey) {
+      return;
     }
+    inFlightSliceKeyRef.current = sliceKey;
+    /*
+    console.log("[LBA_FLAKE] effect:loadLayerSlice:start", {
+      cacheFile,
+      layerY,
+      size_x: meta.size_x,
+      size_y: meta.size_y,
+      size_z: meta.size_z,
+    });
+    */
+    loadLayerSlice(cacheFile, layerY)
+      .then((nextSlice) => {
+        /*
+        console.log("[LBA_FLAKE] effect:loadLayerSlice:end", {
+          cacheFile,
+          layerY,
+          block_count: nextSlice?.blocks?.length || 0,
+        });
+        */
+        loadedSliceKeyRef.current = sliceKey;
+        setSliceData(nextSlice);
+      })
+      .catch((error) => {
+        /*
+        console.log("[LBA_FLAKE] effect:loadLayerSlice:error", {
+          cacheFile,
+          layerY,
+          error: String(error),
+        });
+        */
+        if (loadedSliceKeyRef.current === sliceKey) {
+          loadedSliceKeyRef.current = "";
+        }
+        setSliceData(null);
+      })
+      .finally(() => {
+        if (inFlightSliceKeyRef.current === sliceKey) {
+          inFlightSliceKeyRef.current = "";
+        }
+      });
   }, [layerY, cacheExists, meta, cacheFile]);
 
   const handleHoverBlock = (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => {
@@ -854,7 +1003,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
     page.style.setProperty("--flake-tool-panel-width", `${toolPanelWidth}px`);
   }, [toolPanelWidth]);
 
-  const regionName = statsData?.regions?.[0]?.name || "Unnamed";
+  const regionName = statsData?.regions?.[0]?.name || currentFile.split(/[\\/]/).pop() || "Unnamed";
   const maxY = meta ? Math.max(0, meta.size_y - 1) : 0;
   const ready = cacheExists && cacheStatus === "ready" && !!meta;
   const building = cacheStatus === "building" || isQuickBuilding;
@@ -874,7 +1023,15 @@ export function FlakePage({ currentFile, setRoute }: any) {
   return (
     <div ref={pageRef} className={editMode ? "nova-page flake-page flake-page--edit-mode" : "nova-page flake-page"}>
       <div className="subwindow-toolbar flake-page__topbar">
-        <button className="btn flake-page__materials-button" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!statsData}>
+        <button className="btn flake-page__materials-button" onClick={async () => {
+          try {
+            const loaded = await ensureStatsData();
+            if (!loaded) return;
+            openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true));
+          } catch {
+            setStatsData(null);
+          }
+        }}>
           材料列表
         </button>
         <button className="btn flake-page__build-button" onClick={handleQuickBuild} disabled={!currentFile || isQuickBuilding}>

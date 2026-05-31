@@ -18,9 +18,10 @@ import {
 
 export type GameResourceKind = "language" | "block_icon" | "item_icon" | "game_data" | "enum_catalog";
 export type BlockIconSlot = "material_list" | "layering";
-export type GameResourceSource = "builtin" | "imported" | "external" | "github" | "vault" | "wiki";
+export type GameResourceSource = "builtin" | "imported" | "external" | "github" | "vault" | "wiki" | "wiki_zh";
 export type RemoteLanguageSource = "github/InventivetalentDev";
 export type BlockIconVariant = "2d" | "3d";
+export type WikiBlockIconSource = "wiki" | "wiki_zh";
 
 export interface VaultBlockIconInstallResult {
   snapshot: GameResourceSnapshot;
@@ -733,15 +734,18 @@ export async function downloadVaultBlockIcons(): Promise<VaultBlockIconInstallRe
 /**
  * Downloads Minecraft Wiki block icons, registers the local wiki directory, and activates it for the requested slot.
  */
-export async function downloadWikiBlockIcons(slot: BlockIconSlot): Promise<WikiBlockIconInstallResult> {
-  const result = await downloadWikiBlockIconsFromMinecraftWiki(slot);
+export async function downloadWikiBlockIcons(slot: BlockIconSlot, source: WikiBlockIconSource = "wiki"): Promise<WikiBlockIconInstallResult> {
+  const result = await downloadWikiBlockIconsFromMinecraftWiki(slot, source);
   const variant = slot === "layering" ? "2d" : "3d";
-  const fallbackRoot = slot === "layering" ? "minecraft-assets/block_2d/wiki" : "minecraft-assets/block_icon/wiki";
+  const fallbackRoot = slot === "layering"
+    ? (source === "wiki_zh" ? "minecraft-assets/block_2d/wiki_zh" : "minecraft-assets/block_2d/wiki")
+    : (source === "wiki_zh" ? "minecraft-assets/block_icon/wiki_zh" : "minecraft-assets/block_icon/wiki");
+  const label = source === "wiki_zh" ? "中文 Minecraft 维基百科" : "Minecraft Wiki";
   const entry: GameResourceEntry = {
-    id: `wiki:block_icon:minecraft_wiki:${variant}`,
+    id: `${source}:block_icon:minecraft_wiki:${variant}`,
     kind: "block_icon",
-    label: "Minecraft Wiki",
-    source: "wiki",
+    label,
+    source,
     root_relpath: result.root_relpath || fallbackRoot,
     block_icon_variant: variant,
     active_material_list: slot === "material_list",
