@@ -1,19 +1,196 @@
 ﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  createRuntimeProjectionCollection,
+  DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES,
+  EnumeratorCollection,
+  evaluateEnumeratorExpression,
   exportMaterialsArtTable,
   exportMaterialsCsv,
   initI18n,
+  loadEnumeratorCollections,
   loadMaterialsScope,
   loadStructureStats,
+  loadUserConfigMigratingLocalStorage,
   MaterialItem,
+  normalizeMaterialListWindowBehavior,
+  normalizeStatisticsEnumeratorInfoRules,
+  openMaterialListWindow,
+  saveStatisticsEnumeratorInfoRulesConfig,
   StatsData,
 } from "../../../../../src/business/facade";
-import {
-  loadUserConfigMigratingLocalStorage,
-  normalizeMaterialListWindowBehavior,
-  openMaterialListWindow,
-} from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
+import { VirtualSpacerCell } from "../../../../components/VirtualSpacerCell";
+import { useVirtualWindow } from "../../../../components/useVirtualWindow";
+import { EnumeratorDialog, openEnumeratorWithWindowBehavior } from "../../../enumerator";
+
+interface EnumeratorInfoRule {
+  title: string;
+  expression: string;
+  raw: string;
+}
+
+interface EnumeratorInfoResult {
+  title: string;
+  value: string;
+  error: string;
+  raw: string;
+}
+
+function parseEnumeratorInfoRules(rules: string[]): EnumeratorInfoRule[] {
+  return normalizeStatisticsEnumeratorInfoRules(rules)
+    .map((raw) => {
+      const separatorIndex = raw.indexOf("=");
+      if (separatorIndex <= 0 || separatorIndex === raw.length - 1) {
+        return {
+          title: raw.trim() || "未命名项",
+          expression: "",
+          raw,
+        };
+      }
+      return {
+        title: raw.slice(0, separatorIndex).trim() || "未命名项",
+        expression: raw.slice(separatorIndex + 1).trim(),
+        raw,
+      };
+    })
+    .filter((rule) => rule.title || rule.expression);
+}
+
+function parseFunctionCall(expression: string): { name: string; argument: string } | null {
+  const trimmed = String(expression || "").trim();
+  const openIndex = trimmed.indexOf("(");
+  if (openIndex <= 0 || !trimmed.endsWith(")")) return null;
+  return {
+    name: trimmed.slice(0, openIndex).trim().toLowerCase(),
+    argument: trimmed.slice(openIndex + 1, -1).trim(),
+  };
+}
+
+function uniqValues(values: string[]): string[] {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function buildBaseUniverse(collections: EnumeratorCollection[]): Set<string> {
+  return new Set(
+    collections
+      .filter((collection) => collection.category === "base")
+      .flatMap((collection) => collection.values),
+  );
+}
+
+function buildVersionUniverse(collections: EnumeratorCollection[]): Set<string> {
+  return new Set(
+    collections
+      .filter((collection) => collection.category === "version")
+      .flatMap((collection) => collection.values),
+  );
+}
+
+function parseVersionToken(collection: EnumeratorCollection): { kind: "older" | "normal"; numbers: number[]; label: string } | null {
+  const candidates = [collection.version, collection.name, collection.id];
+  for (const candidate of candidates) {
+    const normalized = String(candidate || "").trim();
+    if (!normalized) continue;
+    if (normalized === "v_older") {
+      return { kind: "older", numbers: [1, 12, 2], label: "1.12.2之前" };
+    }
+    if (!normalized.startsWith("v_")) continue;
+    const parts = normalized
+      .slice(2)
+      .split("_")
+      .map((part) => Number.parseInt(part, 10));
+    if (!parts.length || parts.some((part) => !Number.isFinite(part))) continue;
+    return {
+      kind: "normal",
+      numbers: parts,
+      label: parts.join("."),
+    };
+  }
+  return null;
+}
+
+function compareVersionCollections(left: EnumeratorCollection, right: EnumeratorCollection): number {
+  const leftToken = parseVersionToken(left);
+  const rightToken = parseVersionToken(right);
+  if (!leftToken && !rightToken) return left.name.localeCompare(right.name, "zh-CN");
+  if (!leftToken) return -1;
+  if (!rightToken) return 1;
+  if (leftToken.kind !== rightToken.kind) {
+    return leftToken.kind === "older" ? -1 : 1;
+  }
+  const size = Math.max(leftToken.numbers.length, rightToken.numbers.length, 3);
+  for (let index = 0; index < size; index += 1) {
+    const diff = (leftToken.numbers[index] ?? 0) - (rightToken.numbers[index] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function formatVersionResult(values: string[], collections: EnumeratorCollection[]): string {
+  if (values.length === 0) return "--";
+  const targetSet = new Set(values);
+  const baseUniverse = buildBaseUniverse(collections);
+  const versionCollections = collections.filter((collection) => collection.category === "version");
+  const validVersionCollections = versionCollections.filter((collection) => Boolean(parseVersionToken(collection)));
+  const versionUniverse = buildVersionUniverse(collections);
+  const matchedVersions = versionCollections.filter((collection) => collection.values.some((value) => targetSet.has(value)));
+  const hasHigherVersion = [...targetSet].some((value) => baseUniverse.has(value) && !versionUniverse.has(value));
+  const sortedMatchedVersions = matchedVersions.sort(compareVersionCollections);
+  const latestVersion = sortedMatchedVersions.length > 0 ? sortedMatchedVersions[sortedMatchedVersions.length - 1] : null;
+  if (!latestVersion) {
+    if (validVersionCollections.length === 0) {
+      return "未配置版本集合";
+    }
+    return hasHigherVersion ? "更高版本" : "--";
+  }
+  const versionToken = parseVersionToken(latestVersion);
+  const label = versionToken?.label || latestVersion.name;
+  return hasHigherVersion ? `${label} / 更高版本` : label;
+}
+
+function evaluateEnumeratorInfoRule(rule: EnumeratorInfoRule, data: StatsData, collections: EnumeratorCollection[]): EnumeratorInfoResult {
+  if (!rule.expression) {
+    return { title: rule.title, value: "", error: "缺少表达式。", raw: rule.raw };
+  }
+  const call = parseFunctionCall(rule.expression);
+  if (!call) {
+    return { title: rule.title, value: "", error: "表达式必须为 函数(集合表达式) 形式。", raw: rule.raw };
+  }
+  const evaluated = evaluateEnumeratorExpression(call.argument, collections);
+  if (evaluated.error) {
+    return { title: rule.title, value: "", error: evaluated.error, raw: rule.raw };
+  }
+  const values = uniqValues(evaluated.values);
+  switch (call.name) {
+    case "version":
+      return { title: rule.title, value: formatVersionResult(values, collections), error: "", raw: rule.raw };
+    case "any":
+      return { title: rule.title, value: values.length > 0 ? "True" : "False", error: "", raw: rule.raw };
+    case "ratio": {
+      if (data.totalNonAirBlocks <= 0) {
+        return { title: rule.title, value: "--", error: "", raw: rule.raw };
+      }
+      const countById = new Map(data.materials.map((material) => [material.id, material.totalCount]));
+      const numerator = values.reduce((sum, value) => sum + (countById.get(value) || 0), 0);
+      return {
+        title: rule.title,
+        value: `${((numerator / data.totalNonAirBlocks) * 100).toFixed(1)}%`,
+        error: "",
+        raw: rule.raw,
+      };
+    }
+    default:
+      return { title: rule.title, value: "", error: `不支持的函数：${call.name}`, raw: rule.raw };
+  }
+}
+
+function buildEnumeratorInfoResults(rules: string[], data: StatsData | null, collections: EnumeratorCollection[]): EnumeratorInfoResult[] {
+  const parsedRules = parseEnumeratorInfoRules(rules);
+  if (!data) {
+    return parsedRules.map((rule) => ({ title: rule.title, value: "等待统计结果", error: "", raw: rule.raw }));
+  }
+  return parsedRules.map((rule) => evaluateEnumeratorInfoRule(rule, data, collections));
+}
 
 function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; item: MaterialItem | null; multiplier: number }) {
   const popupRef = useRef<HTMLDivElement | null>(null);
@@ -117,6 +294,7 @@ export function MaterialListContent({
   const [error, setError] = useState("");
   const [hoverItem, setHoverItem] = useState<MaterialItem | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const tableWrapRef = useRef<HTMLDivElement | null>(null);
   const contentClassName = [
     standalone ? "material-list-window" : "dialog-content",
     "subwindow-frame",
@@ -159,6 +337,13 @@ export function MaterialListContent({
   useEffect(() => {
     loadMats(workbook);
   }, [workbook, includeContainerItems]);
+
+  const {
+    visibleItems: visibleMaterials,
+    startIndex,
+    topSpacerHeight,
+    bottomSpacerHeight,
+  } = useVirtualWindow(materials, tableWrapRef, 40, 10);
 
   const handleExportArtTable = async () => {
     try {
@@ -239,7 +424,7 @@ export function MaterialListContent({
           </div>
           {error && <pre className="subwindow-error">{error}</pre>}
 
-          <div className="material-list-table-wrap">
+          <div className="material-list-table-wrap" ref={tableWrapRef}>
             <table className="material-list-table">
               <thead>
                 <tr>
@@ -251,23 +436,37 @@ export function MaterialListContent({
                 </tr>
               </thead>
               <tbody>
-                {materials.map((material) => (
-                  <tr
-                    key={material.id}
-                    onMouseEnter={() => setHoverItem(material)}
-                    onMouseLeave={() => setHoverItem(null)}
-                  >
-                    <td className="material-list-icon-cell"><BlockIcon blockId={material.iconHint} /></td>
-                    <td>{material.name}</td>
-                    <td className="material-list-number">{material.blockCount * multiplier}</td>
-                    <td className="material-list-number">{material.containerItemCount * multiplier}</td>
-                    <td className="material-list-number">{material.totalCount * multiplier}</td>
-                  </tr>
-                ))}
-                {materials.length === 0 && !isLoading && (
+                {materials.length === 0 && !isLoading ? (
                   <tr>
                     <td colSpan={5} className="material-list-empty-cell">暂无材料数据</td>
                   </tr>
+                ) : (
+                  <>
+                    {topSpacerHeight > 0 ? (
+                      <tr className="material-list-virtual-spacer" aria-hidden>
+                        <VirtualSpacerCell colSpan={5} height={topSpacerHeight} />
+                      </tr>
+                    ) : null}
+                    {visibleMaterials.map((material, index) => (
+                      <tr
+                        key={material.id}
+                        className={(startIndex + index) % 2 === 0 ? "material-list-row-even" : "material-list-row-odd"}
+                        onMouseEnter={() => setHoverItem(material)}
+                        onMouseLeave={() => setHoverItem(null)}
+                      >
+                        <td className="material-list-icon-cell"><BlockIcon blockId={material.iconHint} /></td>
+                        <td>{material.name}</td>
+                        <td className="material-list-number">{material.blockCount * multiplier}</td>
+                        <td className="material-list-number">{material.containerItemCount * multiplier}</td>
+                        <td className="material-list-number">{material.totalCount * multiplier}</td>
+                      </tr>
+                    ))}
+                    {bottomSpacerHeight > 0 ? (
+                      <tr className="material-list-virtual-spacer" aria-hidden>
+                        <VirtualSpacerCell colSpan={5} height={bottomSpacerHeight} />
+                      </tr>
+                    ) : null}
+                  </>
                 )}
               </tbody>
             </table>
@@ -286,11 +485,117 @@ export function MaterialsDialog({ data, onClose, currentFile }: { data: StatsDat
   );
 }
 
-export function StatisticsPage({ currentFile }: any) {
+function EnumeratorInfoEditorDialog({
+  rules,
+  data,
+  collections,
+  onClose,
+  onSave,
+}: {
+  rules: string[];
+  data: StatsData | null;
+  collections: EnumeratorCollection[];
+  onClose: () => void;
+  onSave: (rules: string[]) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(rules.join("\n"));
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+
+  useEffect(() => {
+    setDraft(rules.join("\n"));
+  }, [rules]);
+
+  const parsedDraftRules = useMemo(
+    () => normalizeStatisticsEnumeratorInfoRules(draft.split(/\r?\n/)),
+    [draft],
+  );
+
+  const previewResults = useMemo(
+    () => buildEnumeratorInfoResults(parsedDraftRules, data, collections),
+    [collections, data, parsedDraftRules],
+  );
+
+  const hasErrors = previewResults.some((item) => Boolean(item.error));
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    setSaveError("");
+    try {
+      await onSave(parsedDraftRules);
+      onClose();
+    } catch (error: any) {
+      setSaveError(String(error?.message || error || "保存失败"));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <section className="dialog-content subwindow-frame subwindow-frame-wide statistics-enumerator-editor" onClick={(event) => event.stopPropagation()}>
+        <div className="subwindow-title-bar">
+          <h3 className="subwindow-title">枚举统计编辑器</h3>
+          <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</button>
+        </div>
+        <div className="subwindow-body statistics-enumerator-editor-body">
+          <div className="statistics-enumerator-editor-columns">
+            <div className="statistics-enumerator-editor-column">
+              <div className="statistics-enumerator-editor-heading">多行编辑框</div>
+              <textarea
+                className="input statistics-enumerator-editor-textarea"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                spellCheck={false}
+              />
+              <div className="statistics-enumerator-editor-hint">
+                <div>一行一个显示项，格式：标题 = 函数(集合表达式)</div>
+                <div>推荐运算符：<code>|</code>、<code>&</code>、<code>-</code></div>
+                <div>可用函数：<code>version(expr)</code>、<code>any(expr)</code>、<code>ratio(expr)</code></div>
+              </div>
+            </div>
+            <div className="statistics-enumerator-editor-column">
+              <div className="statistics-enumerator-editor-heading">实时预览</div>
+              <div className="statistics-enumerator-preview-list">
+                {previewResults.map((item) => (
+                  <div key={item.raw} className="statistics-enumerator-preview-item">
+                    <div className="statistics-enumerator-preview-main">
+                      <span className="statistics-enumerator-preview-title">{item.title}</span>
+                      <span className="statistics-enumerator-preview-value">{item.error ? "错误" : item.value}</span>
+                    </div>
+                    {item.error ? <div className="statistics-enumerator-preview-error">{item.error}</div> : null}
+                  </div>
+                ))}
+              </div>
+              {saveError ? <pre className="statistics-error">{saveError}</pre> : null}
+              {hasErrors ? <div className="statistics-enumerator-editor-error">存在语法或集合错误，修复后才能保存。</div> : null}
+            </div>
+          </div>
+          <div className="statistics-enumerator-editor-footer">
+            <button className="btn" type="button" onClick={() => setDraft(DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES.join("\n"))} disabled={isSaving}>恢复默认</button>
+            <div className="statistics-enumerator-editor-footer-actions">
+              <button className="btn" type="button" onClick={onClose} disabled={isSaving}>取消</button>
+              <button className="btn" type="button" onClick={handleSave} disabled={isSaving || hasErrors}>保存</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export function StatisticsPage({ currentFile, theme }: any) {
   const [data, setData] = useState<StatsData | null>(null);
   const [error, setError] = useState("");
   const [showMaterials, setShowMaterials] = useState(false);
+  const [showEnumerator, setShowEnumerator] = useState(false);
+  const [showEnumeratorInfoEditor, setShowEnumeratorInfoEditor] = useState(false);
   const [includeContainerItems, setIncludeContainerItems] = useState(false);
+  const [enumeratorCollections, setEnumeratorCollections] = useState<EnumeratorCollection[]>([]);
+  const [enumeratorCollectionsError, setEnumeratorCollectionsError] = useState("");
+  const [isLoadingEnumeratorCollections, setIsLoadingEnumeratorCollections] = useState(false);
+  const [enumeratorInfoRules, setEnumeratorInfoRules] = useState<string[]>([...DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES]);
+  const [isLoadingEnumeratorInfoConfig, setIsLoadingEnumeratorInfoConfig] = useState(true);
 
   const loadStats = async () => {
     if (!currentFile) return;
@@ -307,6 +612,63 @@ export function StatisticsPage({ currentFile }: any) {
     loadStats();
   }, [currentFile, includeContainerItems]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingEnumeratorInfoConfig(true);
+    loadUserConfigMigratingLocalStorage()
+      .then((info) => {
+        if (cancelled) return;
+        setEnumeratorInfoRules(normalizeStatisticsEnumeratorInfoRules(info.config.statistics_enumerator_info_rules));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setEnumeratorInfoRules([...DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES]);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingEnumeratorInfoConfig(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const runtimeCollection = useMemo(
+    () => (data ? createRuntimeProjectionCollection(currentFile, data.materials) : null),
+    [currentFile, data],
+  );
+
+  useEffect(() => {
+    if (!runtimeCollection) {
+      setEnumeratorCollections([]);
+      setEnumeratorCollectionsError("");
+      setIsLoadingEnumeratorCollections(false);
+      return;
+    }
+    let cancelled = false;
+    setIsLoadingEnumeratorCollections(true);
+    setEnumeratorCollectionsError("");
+    loadEnumeratorCollections([runtimeCollection])
+      .then((collections) => {
+        if (cancelled) return;
+        setEnumeratorCollections(collections);
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setEnumeratorCollections([]);
+        setEnumeratorCollectionsError(String(err?.message || err || "加载枚举集合失败"));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingEnumeratorCollections(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runtimeCollection]);
+
   if (!currentFile) {
     return (
       <div className="statistics-empty-state">
@@ -320,6 +682,14 @@ export function StatisticsPage({ currentFile }: any) {
   const featuredMaterials = topMaterials.slice(0, 5);
   const totalMaterialCount = topMaterials.reduce((sum, material) => sum + material.totalCount, 0);
   const scan = data?.containerScan;
+  const enumeratorInfoResults = data && enumeratorCollections.length > 0
+    ? buildEnumeratorInfoResults(enumeratorInfoRules, data, enumeratorCollections)
+    : [];
+
+  const handleSaveEnumeratorInfoRules = async (rules: string[]) => {
+    const info = await saveStatisticsEnumeratorInfoRulesConfig(rules);
+    setEnumeratorInfoRules(normalizeStatisticsEnumeratorInfoRules(info.config.statistics_enumerator_info_rules));
+  };
 
   return (
     <div className="statistics-page">
@@ -327,7 +697,7 @@ export function StatisticsPage({ currentFile }: any) {
         <div className="statistics-action-row">
           <button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!data}>材料列表</button>
           <button className="btn" onClick={loadStats}>重新统计</button>
-          <button className="btn" type="button" disabled>打开枚举器...</button>
+          <button className="btn" type="button" onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true))} disabled={!data}>打开枚举器...</button>
         </div>
 
         <div className="statistics-toggle-row">
@@ -410,10 +780,40 @@ export function StatisticsPage({ currentFile }: any) {
           <div className="group-box statistics-enumerator-panel">
             <div className="group-box-title">枚举器信息</div>
             <div className="statistics-enumerator-body">
-              <div className="statistics-panel-note">枚举器尚未接入，当前先保留占位控件。</div>
+              <div className="statistics-enumerator-list">
+                {isLoadingEnumeratorInfoConfig || isLoadingEnumeratorCollections ? (
+                  <div className="statistics-loading">加载中...</div>
+                ) : enumeratorCollectionsError ? (
+                  <pre className="statistics-error">{enumeratorCollectionsError}</pre>
+                ) : enumeratorInfoResults.length > 0 ? (
+                  enumeratorInfoResults.map((item) => (
+                    <div key={item.raw} className="statistics-enumerator-row">
+                      <div className="statistics-enumerator-row-main">
+                        <span className="statistics-enumerator-row-title">{item.title}</span>
+                        <span className="statistics-enumerator-row-value">{item.error ? "错误" : item.value}</span>
+                      </div>
+                      {item.error ? <div className="statistics-enumerator-row-error">{item.error}</div> : null}
+                    </div>
+                  ))
+                ) : (
+                  <div className="statistics-panel-note">暂无可显示的枚举器信息。</div>
+                )}
+              </div>
+              <div className="statistics-panel-note">
+                {runtimeCollection
+                  ? `当前统计结果可作为枚举器运行时集合使用，共 ${runtimeCollection.values.length} 项。`
+                  : "枚举器会基于当前统计结果生成运行时集合。"}
+              </div>
               <div className="statistics-enumerator-actions">
-                <button className="btn" type="button" disabled>打开枚举器...</button>
-                <button className="btn" type="button" disabled>编辑信息框</button>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => setShowEnumeratorInfoEditor(true)}
+                  disabled={!data || isLoadingEnumeratorInfoConfig || isLoadingEnumeratorCollections || !!enumeratorCollectionsError || enumeratorCollections.length === 0}
+                >
+                  编辑信息框
+                </button>
+                <button className="btn" type="button" onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true))} disabled={!data}>打开枚举器...</button>
               </div>
             </div>
           </div>
@@ -434,6 +834,23 @@ export function StatisticsPage({ currentFile }: any) {
       {showMaterials && data && (
         <MaterialsDialog data={data} onClose={() => setShowMaterials(false)} currentFile={currentFile} />
       )}
+      {showEnumerator && runtimeCollection && (
+        <EnumeratorDialog
+          currentFile={currentFile}
+          runtimeCollection={runtimeCollection}
+          theme={theme || "WebDefault"}
+          onClose={() => setShowEnumerator(false)}
+        />
+      )}
+      {showEnumeratorInfoEditor ? (
+        <EnumeratorInfoEditorDialog
+          rules={enumeratorInfoRules}
+          data={data}
+          collections={enumeratorCollections}
+          onClose={() => setShowEnumeratorInfoEditor(false)}
+          onSave={handleSaveEnumeratorInfoRules}
+        />
+      ) : null}
     </div>
   );
 }

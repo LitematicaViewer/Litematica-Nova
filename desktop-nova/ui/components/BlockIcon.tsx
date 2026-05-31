@@ -5,7 +5,7 @@ import { listenEvent } from "../../src/platform/events";
 /**
  * Renders a Minecraft block or item icon at the shared UI icon size.
  */
-export function BlockIcon({ blockId }: { blockId: string }) {
+export function BlockIcon({ blockId, lookupMode = "default" }: { blockId: string; lookupMode?: "default" | "item_first" }) {
   const [src, setSrc] = useState<string | null>(null);
   const [resourceRevision, setResourceRevision] = useState(0);
 
@@ -24,14 +24,14 @@ export function BlockIcon({ blockId }: { blockId: string }) {
 
     let active = true;
     const fetchIcon = async () => {
-      const dataUrl = await getBlockIconDataUrl(blockId);
+      const dataUrl = await getBlockIconDataUrl(blockId, "material_list", lookupMode);
       if (active) setSrc(dataUrl);
     };
 
     fetchIcon();
 
     return () => { active = false; };
-  }, [blockId, resourceRevision]);
+  }, [blockId, lookupMode, resourceRevision]);
 
   if (src) {
     return <img className="block-icon-image" src={src} alt="" />;

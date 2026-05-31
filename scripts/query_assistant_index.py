@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = REPO_ROOT / ".tmp" / "assistant" / "lba_assistant_index.sqlite"
+DB_PATH = REPO_ROOT / "data" / "cache" / "assistant" / "lba_assistant_index.sqlite"
 
 
 def main() -> int:

@@ -1,0 +1,62 @@
+{
+    // VS Code 调试配置
+    // 1. 前端联调：直接启动 Vite，并自动用 Edge 打开指定页面
+    // 2. 桌面联调：启动 Tauri dev，适合需要完整桌面壳时使用
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Vite: 首页",
+            "type": "pwa-node",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/desktop-nova",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "dev"],
+            "console": "integratedTerminal",
+            "skipFiles": ["<node_internals>/**"],
+            "serverReadyAction": {
+                "pattern": "Local:\\s+(https?://\\S+)",
+                "uriFormat": "%sindex.html",
+                "action": "debugWithEdge"
+            }
+        },
+        {
+            "name": "Vite: Asset Manager",
+            "type": "pwa-node",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/desktop-nova",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "dev"],
+            "console": "integratedTerminal",
+            "skipFiles": ["<node_internals>/**"],
+            "serverReadyAction": {
+                "pattern": "Local:\\s+(https?://\\S+)",
+                "uriFormat": "%sasset_manager.html",
+                "action": "debugWithEdge"
+            }
+        },
+        {
+            "name": "Edge: 首页（附加）",
+            "type": "pwa-msedge",
+            "request": "launch",
+            "url": "http://127.0.0.1:1430/index.html",
+            "webRoot": "${workspaceFolder}/desktop-nova"
+        },
+        {
+            "name": "Edge: Asset Manager（附加）",
+            "type": "pwa-msedge",
+            "request": "launch",
+            "url": "http://127.0.0.1:1430/asset_manager.html",
+            "webRoot": "${workspaceFolder}/desktop-nova"
+        },
+        {
+            "name": "Tauri: 桌面应用",
+            "type": "pwa-node",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/desktop-nova",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "tauri:dev"],
+            "console": "integratedTerminal",
+            "skipFiles": ["<node_internals>/**"]
+        }
+    ]
+}

@@ -15,4 +15,9 @@
     --ln-ui-background-color: #3c3c3c;
     --ln-navigation-background-color: #3c3c3c;
     --ln-file-icon-size: 32px;
+    --flake-hotbar-image: url("./resource/content/hotbar.png");
+    --flake-hotbar-selection-image: url("./resource/content/hotbar_selection.png");
+    --flake-creative-inventory-image: url("./resource/content/creativeInventory.png");
+    --flake-open-inventory-normal-image: url("./resource/button/openInventory_normal.png");
+    --flake-open-inventory-hover-image: url("./resource/button/openInventory_hover.png");
 }

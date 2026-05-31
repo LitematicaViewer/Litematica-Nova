@@ -5,9 +5,9 @@ Litematica-BA 是面向 Minecraft `.litematic` 投影文件的桌面工具。当
 ## 当前主线
 
 - `desktop-nova/`：当前桌面端主线，包含 UI、Tauri 后端桥接、Nova 主题和页面入口。
-- `tools/viewer-core/`：Rust 后端源码，提供 `litematica_core` 和 `litematica_native_viewer`。
+- `tools/viewer-core/`：Rust 后端源码，提供 `litematica_core`、`litematica_native_viewer` 和轻量 `stockpile_server`。
 - `bin/viewer-backend/`：桌面应用运行时读取的后端 exe 目录，文件应由 `tools/viewer-core` release build 同步而来。
-- `data/`：运行资源，包括生成模板、AI prompt、BlockState DB、中文翻译和资源数据。
+- `data/`：运行资源和用户态数据，包括生成模板、AI prompt、BlockState DB、中文翻译、投影库、cache、stockpile、Reden 下载和导出物。
 - `scripts/`：维护脚本、诊断导出、索引生成和数据生成脚本。
 
 `desktop-js` 已从 Git 主线排除。若本地工作区仍存在 `desktop-js/`，它只作为历史参考，不上传、不作为功能规格、不参与当前验证。
@@ -15,16 +15,33 @@ Litematica-BA 是面向 Minecraft `.litematic` 投影文件的桌面工具。当
 ## 已接入能力
 
 - 选择本地 `.litematic` 并 analyze。
-- AppData 投影库。
+- `data/` 投影库。
 - RedenMC 在线投影库搜索、详情、普通下载、参数化下载、入库。
 - 属性页 metadata 编辑、保存、另存、恢复。
 - 统计页和材料列表，支持可选统计容器内物品。
 - 材料 CSV 导出，UTF-8 BOM，列为 `名称,数字,统计数据`。
+- Stockpile 材料数据导出、合成表缓存 preflight、离线/多人网页 ZIP 导出和轻量 `stockpile_server`/SQLite 协作。
 - 渲染页 3D cache 构建、进度轮询、静态预览、嵌入 viewer、弹窗 viewer。
 - 分层页读取真实 cache。
 - 替换页 dry-run/apply。
 - 生成页模板、AI plan、API 对话、dry-run/apply。
-- 选项页主题、AppData 配置、后端检查、AI 设置。
+- 选项页主题、用户数据配置、后端检查、AI 设置。
+
+## Stockpile 网页导出速览
+
+Stockpile 网页导出分为两个角色：`litematica_core` 在本地/CI 负责解析 `.litematic` 并构建 `single` 或 `multi` `.stockpile.zip`；部署端只运行轻量 `stockpile_server`，读取包内 JSON 并把多人状态写入 `db/stockpile.sqlite`。完整交接见 `docs/STOCKPILE_HANDOFF.md`，Linux/VPS 部署见 `docs/STOCKPILE_LINUX_DEPLOYMENT.md`。
+
+常用导出形态：
+
+```powershell
+# 单人/离线：解压后直接打开 index.html，状态存在浏览器 localStorage
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project-single.stockpile.zip --minecraft-version 1.21.10 --mode single
+
+# 多人/可运行：构建期写入 access/admin 密码、白名单、默认访问策略和 admin 页面开关
+"access-pass`nadmin-pass`n" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly false --admin-page-enabled true
+```
+
+`multi --target` 支持 `windows-x64`、`linux-x64`、`macos-x64`、`macos-arm64` 和 `all`。部署 VPS 时上传目标平台 `.stockpile.zip`，不要上传源码、`.litematic`、`data/cache/`、本地 `data/stockpile/` 工作区或未打包的真实二进制。
 
 ## 怎么运行 desktop-nova
 
@@ -69,7 +86,7 @@ cargo check
 | --- | --- |
 | `desktop-nova/src/ui/` | UI 层：AppShell、页面、组件、样式。 |
 | `desktop-nova/src/business/` | 业务层：投影库、属性、统计、替换、生成、AI、Reden、渲染 cache 等 facade/actions。 |
-| `desktop-nova/src/platform/` | 平台层：Tauri、文件、AppData、后端进程、viewer、HTTP、key storage。 |
+| `desktop-nova/src/platform/` | 平台层：Tauri、文件、data 用户目录、后端进程、viewer、HTTP、key storage。 |
 | `desktop-nova/src/services/` | 兼容旧 import 的薄服务入口，逐步收敛到 business/platform。 |
 | `desktop-nova/src-tauri/` | Tauri Rust 端命令和窗口桥接。 |
 | `tools/viewer-core/` | Rust 核心库和两个运行时二进制源码。 |
@@ -91,10 +108,37 @@ python scripts\export_diagnostics.py
 cd tools\viewer-core
 cargo check
 
+# stockpile 合成表缓存状态/抓取
+cd ..\..
+bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
+bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test.stockpile.zip --minecraft-version 1.21.10 --mode single
+"access-pass`nadmin-pass`n" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly false --admin-page-enabled true
+bin\viewer-backend\litematica_core.exe stockpile serve --zip data\stockpile\exports\test.stockpile.zip --bind 127.0.0.1:8787
+bin\viewer-backend\stockpile_server.exe --root <unzipped-stockpile-dir> --bind 127.0.0.1:8787
+bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpile\exports\test.stockpile.zip
+bin\viewer-backend\litematica_core.exe stockpile session-export --zip data\stockpile\exports\test.stockpile.zip --output data\stockpile\sessions\test.state.json
+bin\viewer-backend\litematica_core.exe stockpile session-reset --zip data\stockpile\exports\test.stockpile.zip --yes
+bin\viewer-backend\litematica_core.exe stockpile session-import --zip data\stockpile\exports\test.stockpile.zip --input data\stockpile\sessions\test.state.json --replace
+bin\viewer-backend\litematica_core.exe stockpile config-show --zip data\stockpile\exports\test.stockpile.zip
+bin\viewer-backend\litematica_core.exe stockpile config-set --zip data\stockpile\exports\test.stockpile.zip --key mode --value single
+bin\viewer-backend\litematica_core.exe stockpile config-reset --zip data\stockpile\exports\test.stockpile.zip --yes
+
 # 构建并同步 litematica_core
 cd tools\viewer-core
 cargo build --release --bin litematica_core
 Copy-Item target\release\litematica_core.exe ..\..\bin\viewer-backend\litematica_core.exe -Force
+
+# 构建并同步 stockpile_server
+cd tools\viewer-core
+cargo build --release --bin stockpile_server
+Copy-Item target\release\stockpile_server.exe ..\..\bin\viewer-backend\stockpile_server.exe -Force
+Copy-Item target\release\stockpile_server.exe ..\..\bin\stockpile-server\windows-x64\stockpile_server.exe -Force
+
+# 检查/下载跨平台 stockpile_server artifacts
+cd ..\..
+scripts\stockpile\verify_stockpile_server_bins.ps1
+scripts\stockpile\fetch_stockpile_server_artifacts.ps1 -Target linux-x64
 
 # 构建并同步 native viewer
 cd tools\viewer-core
@@ -109,3 +153,5 @@ Copy-Item target\release\litematica_native_viewer.exe ..\..\bin\viewer-backend\l
 - `README.md`：项目入口和运行方式。
 - `docs/ARCHITECTURE.md`：架构、分层、后端桥接和禁区。
 - `docs/DEVELOPMENT.md`：开发、验证、schema、Reden、BlockState、清理和排障。
+- `docs/STOCKPILE_HANDOFF.md`：Stockpile 网页导出、CLI、session、权限和跨平台部署交接。
+- `docs/STOCKPILE_LINUX_DEPLOYMENT.md`：Stockpile Linux/VPS 运行包部署说明。
