@@ -133,8 +133,11 @@ export function downloadVaultBlockIconsFromVault(): Promise<VaultBlockIconDownlo
   return invoke("download_vault_block_icons");
 }
 
-export function downloadWikiBlockIconsFromMinecraftWiki(slot: "material_list" | "layering"): Promise<VaultBlockIconDownloadOutput> {
-  return invoke("download_minecraft_wiki_block_icons", { slot });
+export function downloadWikiBlockIconsFromMinecraftWiki(
+  slot: "material_list" | "layering",
+  source: "wiki" | "wiki_zh" = "wiki",
+): Promise<VaultBlockIconDownloadOutput> {
+  return invoke("download_minecraft_wiki_block_icons", { slot, source });
 }
 
 /**

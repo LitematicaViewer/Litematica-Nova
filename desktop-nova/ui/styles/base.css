@@ -679,14 +679,43 @@ textarea.input,
 }
 
 .flake-canvas {
+    position: relative;
     display: block;
     width: 100%;
     height: 100%;
+    overflow: hidden;
     cursor: grab;
+    image-rendering: pixelated;
+    background: #1b1b1b;
 }
 
 .flake-canvas.is-dragging {
     cursor: grabbing;
+}
+
+.flake-layer-border,
+.flake-layer-block {
+    position: absolute;
+    pointer-events: none;
+}
+
+.flake-layer-block {
+    display: flex;
+    align-items: stretch;
+    justify-content: stretch;
+    overflow: hidden;
+}
+
+.flake-layer-block-icon {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: pixelated;
+    pointer-events: none;
+}
+
+.flake-layer-border {
+    border: 1px solid #555;
 }
 
 .flake-page {

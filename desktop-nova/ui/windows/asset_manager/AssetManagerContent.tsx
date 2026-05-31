@@ -37,7 +37,7 @@ import { NavIcon } from "../../shell/NavIcon";
 
 type ManagedAssetRoute = "block_icon" | "item_icon" | "language" | "game_data" | "enum_catalog";
 type AssetRoute = ManagedAssetRoute;
-type AssetSource = "builtin" | "local_directory" | "vault" | "wiki" | "local_json" | "github";
+type AssetSource = "builtin" | "local_directory" | "vault" | "wiki" | "wiki_zh" | "local_json" | "github";
 type BlockIconResourceSlot = "material_list" | "layering";
 type AssetSourceState = Record<AssetRoute, AssetSource>;
 type AssetTableColumnKey = "name" | "source" | "version" | "language" | "usage" | "status" | "date" | "actions";
@@ -87,6 +87,7 @@ const SOURCE_OPTIONS_BY_ROUTE: Record<AssetRoute, AssetSourceOption[]> = {
     { value: "local_directory", label: "本地目录" },
     { value: "vault", label: "CCVault" },
     { value: "wiki", label: "Minecraft Wiki" },
+    { value: "wiki_zh", label: "中文 Minecraft 维基百科" },
   ],
   item_icon: [
     { value: "builtin", label: "内建" },
@@ -206,6 +207,7 @@ function sourceTag(entry: GameResourceEntry): string {
     case "vault": return "vault";
     case "github": return "github";
     case "wiki": return "wiki";
+    case "wiki_zh": return "wiki_zh";
   }
 }
 
@@ -291,10 +293,11 @@ function lockedBlockIconSlotForSource(source: AssetSource): BlockIconResourceSlo
 function blockIconSourceHint(source: AssetSource, slot: BlockIconResourceSlot): string {
   if (source === "builtin") return "内建来源固定写入 2D 槽";
   if (source === "vault") return "CCVault 来源固定写入 3D 槽";
-  if (source === "wiki") {
+  if (source === "wiki" || source === "wiki_zh") {
+    const label = source === "wiki_zh" ? "中文 Wiki" : "英文 Wiki";
     return slot === "layering"
-      ? "2D 槽走 Template:BlockLink，保持 16x16"
-      : "3D 槽走 Java Edition data values/Blocks，转为 32x32";
+      ? `2D 槽走 ${label} BlockSprite 列表，保持 16x16`
+      : `3D 槽走 ${label} 数据值页面，转为 32x32`;
   }
   return slot === "layering" ? "该槽仅接受 2D 方块图标" : "该槽可用 3D，必要时回退 2D";
 }
@@ -458,24 +461,25 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     }
   };
 
-  const downloadWikiBlockIconsForSlot = async (slot: BlockIconResourceSlot) => {
+  const downloadWikiBlockIconsForSlot = async (slot: BlockIconResourceSlot, source: "wiki" | "wiki_zh") => {
     setBlockIconDownloadBusy(true);
+    const sourceLabel = source === "wiki_zh" ? "中文 Minecraft 维基百科" : "Minecraft Wiki";
     reportStatus(
-      `正在下载 Minecraft Wiki ${blockIconSlotLabel(slot)}方块图标...`,
+      `正在下载${sourceLabel} ${blockIconSlotLabel(slot)}方块图标...`,
       slot === "layering"
-        ? "正在按 Template:BlockLink 抓取 16x16 2D 图标..."
-        : "正在按 Java Edition data values/Blocks 抓取并转换 32x32 图标...",
+        ? "正在按 BlockSprite 列表抓取 16x16 2D 图标..."
+        : "正在按数据值页面抓取并转换 32x32 图标...",
     );
     try {
-      const result = await downloadWikiBlockIcons(slot);
+      const result = await downloadWikiBlockIcons(slot, source);
       setResourceSnapshot(result.snapshot);
       await reloadRuntimeResources();
       reportStatus(
-        `Minecraft Wiki 方块图标已下载到${blockIconSlotLabel(slot)}：${result.downloaded}/${result.total}`,
+        `${sourceLabel} 方块图标已下载到${blockIconSlotLabel(slot)}：${result.downloaded}/${result.total}`,
         `${result.target_dir}\n${resourceActiveText(result.snapshot)}`,
       );
     } catch (error) {
-      reportStatus("下载 Minecraft Wiki 方块图标失败。", String(error));
+      reportStatus(`下载${sourceLabel} 方块图标失败。`, String(error));
     } finally {
       setBlockIconDownloadBusy(false);
     }
@@ -627,7 +631,11 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
           await downloadBlockIcons();
           return;
         }
-        await downloadWikiBlockIconsForSlot(slot);
+        if (selectedSource === "wiki" || selectedSource === "wiki_zh") {
+          await downloadWikiBlockIconsForSlot(slot, selectedSource);
+          return;
+        }
+        reportStatus("无法识别当前方块图标来源。", selectedSource);
         return;
       }
       if (route === "item_icon") {
