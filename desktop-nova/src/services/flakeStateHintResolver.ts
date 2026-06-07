@@ -6,7 +6,8 @@ type FlakeStateHintMode = "mask" | "replace";
 
 interface FlakeStateHintRule {
   mode: FlakeStateHintMode;
-  imageRelPaths: string[];
+  imageRelPaths?: string[];
+  iconBlockIds?: string[];
 }
 
 interface ResolveFlakeLayerBlockImageInput {
@@ -16,8 +17,17 @@ interface ResolveFlakeLayerBlockImageInput {
   enabled: boolean;
 }
 
+// 遮罩
 const STAGE_1_HINT_RELPATH = "data/flake/state_hint/stage_1.png";
 const HANGING_TRUE_HINT_RELPATH = "data/flake/state_hint/hanging_true.png";
+const SNOWY_TRUE_HINT_RELPATH = "data/flake/state_hint/snowy_true.png";
+// 替换
+const GRASS_BLOCK_TOP_BLOCK_ID = "minecraft:grass_block_top";
+// const GRASS_PATH_TOP_BLOCK_ID = "minecraft:grass_path_top";
+const DIRT_PATH_TOP_BLOCK_ID = "minecraft:dirt_path_top";
+const PODZOL_TOP_BLOCK_ID = "minecraft:podzol_top";
+const MYCELIUM_TOP_BLOCK_ID = "minecraft:mycelium_top";
+
 const hintImageCache = new Map<string, Promise<string | null>>();
 
 function joinPath(root: string, relativePath: string): string {
@@ -91,6 +101,39 @@ export function extractLayerPaletteStates(
 /** 图标解析规则 */
 function resolveManualStateHintRule(blockId: string, states: Record<string, string>): FlakeStateHintRule | null {
   switch (normalizeBlockId(blockId)) {
+    // 草方块
+    case "minecraft:grass_block": {
+      const imageRelPaths: string[] = [];
+      if (states.snowy === "true") {
+        imageRelPaths.push(SNOWY_TRUE_HINT_RELPATH);
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [GRASS_BLOCK_TOP_BLOCK_ID],
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+      };
+    }
+    // 草径
+    // case "minecraft:grass_path":
+    //   return { mode: "replace", iconBlockIds: [GRASS_PATH_TOP_BLOCK_ID] };
+    // 土径
+    case "minecraft:dirt_path":
+      return { mode: "replace", iconBlockIds: [DIRT_PATH_TOP_BLOCK_ID] };
+    // 灰化土
+    case "minecraft:podzol": {
+      const imageRelPaths: string[] = [];
+      if (states.snowy === "true") {
+        imageRelPaths.push(SNOWY_TRUE_HINT_RELPATH);
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [PODZOL_TOP_BLOCK_ID],
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+      };
+    }
+    // 菌丝体
+    case "minecraft:mycelium":
+      return { mode: "replace", iconBlockIds: [MYCELIUM_TOP_BLOCK_ID] };
     // 树苗
     case "minecraft:oak_sapling":
     case "minecraft:spruce_sapling":
@@ -158,6 +201,40 @@ async function readHintImageDataUrls(relativePaths: string[]): Promise<string[] 
   }
 }
 
+/** 读取图标数据URL 
+ * @param blockIds - 图标ID列表
+ * @returns 图标数据URL列表
+*/
+async function readLayeringIconDataUrls(blockIds: string[]): Promise<string[] | null> {
+  try {
+    const urls = await Promise.all(blockIds.map((blockId) => getBlockIconDataUrl(blockId, "layering")));
+    if (urls.some((url) => !url)) return null;
+    return urls.filter((url): url is string => !!url);
+  } catch {
+    return null;
+  }
+}
+
+/** 解析图标数据URL
+ * @param rule - 图标解析规则
+ * @returns 图标数据URL列表
+ */
+async function resolveRuleImageUrls(rule: FlakeStateHintRule): Promise<string[] | null> {
+  const imageRelPaths = rule.imageRelPaths;
+  if (imageRelPaths && imageRelPaths.length > 0) {
+    return await readHintImageDataUrls(imageRelPaths);
+  }
+  return null;
+}
+
+async function resolveRuleBaseImageUrls(rule: FlakeStateHintRule): Promise<string[] | null> {
+  const iconBlockIds = rule.iconBlockIds;
+  if (iconBlockIds && iconBlockIds.length > 0) {
+    return await readLayeringIconDataUrls(iconBlockIds);
+  }
+  return null;
+}
+
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -202,14 +279,19 @@ export async function resolveFlakeLayerBlockImage({
   const rule = resolveManualStateHintRule(blockId, states);
   if (!rule) return baseIconUrl;
 
-  const hintImageUrls = await readHintImageDataUrls(rule.imageRelPaths);
-  if (!hintImageUrls || hintImageUrls.length === 0) return baseIconUrl;
+  const baseImageUrls = await resolveRuleBaseImageUrls(rule);
+  const resolvedBaseIconUrl = baseImageUrls && baseImageUrls.length > 0
+    ? (baseImageUrls[baseImageUrls.length - 1] || baseIconUrl)
+    : baseIconUrl;
 
-  if (rule.mode === "replace") {
-    return hintImageUrls[hintImageUrls.length - 1] || baseIconUrl;
+  const hintImageUrls = await resolveRuleImageUrls(rule);
+  if (rule.mode === "replace" && (!hintImageUrls || hintImageUrls.length === 0)) {
+    return resolvedBaseIconUrl;
   }
 
-  if (!baseIconUrl) return baseIconUrl;
-  const masked = await applyMaskOverlays(baseIconUrl, hintImageUrls);
+  if (!hintImageUrls || hintImageUrls.length === 0) return baseIconUrl;
+  if (!resolvedBaseIconUrl) return baseIconUrl;
+
+  const masked = await applyMaskOverlays(resolvedBaseIconUrl, hintImageUrls);
   return masked || baseIconUrl;
 }
