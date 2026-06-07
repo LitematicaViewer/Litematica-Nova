@@ -1,4 +1,4 @@
-import React, {
+﻿import React, {
   forwardRef,
   useEffect,
   useImperativeHandle,
@@ -47,14 +47,26 @@ export interface FlakeHoverBlock {
   states: string;
 }
 
+interface FlakeRenderSlice {
+  depth: number;
+  opacity: number;
+  sliceData: LayerSliceData;
+}
+
+interface VisibleLayerBlock {
+  block: LayerSliceData["blocks"][number];
+  y: number;
+  opacity: number;
+}
+
 const LayerCanvas = forwardRef<
   LayerCanvasHandle,
   {
     meta: LayerSliceMeta | null;
-    sliceData: LayerSliceData | null;
+    renderSlices: FlakeRenderSlice[];
     onHoverBlock: (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => void;
   }
->(({ meta, sliceData, onHoverBlock }, ref) => {
+>(({ meta, renderSlices, onHoverBlock }, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -79,31 +91,41 @@ const LayerCanvas = forwardRef<
   }, [meta]);
 
   const slicePaletteIds = useMemo(() => {
-    if (!meta || !sliceData) return [] as number[];
+    if (!meta || renderSlices.length === 0) return [] as number[];
     const seen = new Set<number>();
     const paletteIds: number[] = [];
-    for (const block of sliceData.blocks) {
-      const paletteId = block.palette_id;
-      if (seen.has(paletteId)) continue;
-      seen.add(paletteId);
-      const entry = meta.palette[paletteId];
-      if (!entry?.block_id || entry.block_id.includes("air")) continue;
-      paletteIds.push(paletteId);
+    for (const renderSlice of renderSlices) {
+      for (const block of renderSlice.sliceData.blocks) {
+        const paletteId = block.palette_id;
+        if (seen.has(paletteId)) continue;
+        seen.add(paletteId);
+        const entry = meta.palette[paletteId];
+        if (!entry?.block_id || entry.block_id.includes("air")) continue;
+        paletteIds.push(paletteId);
+      }
     }
     return paletteIds;
-  }, [meta, sliceData]);
+  }, [meta, renderSlices]);
 
-  const sliceBlockIndex = useMemo(() => {
-    const index = new Map<number, LayerSliceData["blocks"][number]>();
-    if (!meta || !sliceData) return index;
-    for (const block of sliceData.blocks) {
-      index.set(block.z * meta.size_x + block.x, block);
+  const visibleBlockIndex = useMemo(() => {
+    const index = new Map<number, VisibleLayerBlock>();
+    if (!meta || renderSlices.length === 0) return index;
+    for (const renderSlice of renderSlices) {
+      for (const block of renderSlice.sliceData.blocks) {
+        const positionKey = block.z * meta.size_x + block.x;
+        if (index.has(positionKey)) continue;
+        index.set(positionKey, {
+          block,
+          y: renderSlice.sliceData.y,
+          opacity: renderSlice.opacity,
+        });
+      }
     }
     return index;
-  }, [meta, sliceData]);
+  }, [meta, renderSlices]);
 
   const visibleBlocks = useMemo(() => {
-    if (!meta || !sliceData) return [] as Array<{
+    if (!meta || visibleBlockIndex.size === 0) return [] as Array<{
       key: string;
       left: number;
       top: number;
@@ -111,6 +133,7 @@ const LayerCanvas = forwardRef<
       height: number;
       color: string;
       iconUrl: string;
+      opacity: number;
     }>;
 
     const blocks: Array<{
@@ -121,28 +144,30 @@ const LayerCanvas = forwardRef<
       height: number;
       color: string;
       iconUrl: string;
+      opacity: number;
     }> = [];
 
-    for (const block of sliceData.blocks) {
-      const color = colorMap.get(block.palette_id) || "#f0f";
+    for (const visibleBlock of visibleBlockIndex.values()) {
+      const color = colorMap.get(visibleBlock.block.palette_id) || "#f0f";
       if (color === "transparent") continue;
-      const left = Math.round(offset.x + block.x * scale);
-      const top = Math.round(offset.y + block.z * scale);
+      const left = Math.round(offset.x + visibleBlock.block.x * scale);
+      const top = Math.round(offset.y + visibleBlock.block.z * scale);
       const width = Math.max(1, Math.ceil(scale));
       const height = Math.max(1, Math.ceil(scale));
       blocks.push({
-        key: `${block.x}:${block.z}:${block.palette_id}`,
+        key: `${visibleBlock.block.x}:${visibleBlock.block.z}:${visibleBlock.y}:${visibleBlock.block.palette_id}`,
         left,
         top,
         width,
         height,
         color,
-        iconUrl: iconImages.get(block.palette_id) || "",
+        iconUrl: iconImages.get(visibleBlock.block.palette_id) || "",
+        opacity: visibleBlock.opacity,
       });
     }
 
     return blocks;
-  }, [colorMap, iconImages, meta, offset.x, offset.y, scale, sliceData]);
+  }, [colorMap, iconImages, meta, offset.x, offset.y, scale, visibleBlockIndex]);
 
   const resetView = () => {
     if (meta) fitView(meta, viewportRef.current, setScale, setOffset);
@@ -205,7 +230,7 @@ const LayerCanvas = forwardRef<
       return;
     }
 
-    if (!meta || !sliceData || !viewportRef.current) {
+    if (!meta || visibleBlockIndex.size === 0 || !viewportRef.current) {
       onHoverBlock(null, event);
       return;
     }
@@ -214,13 +239,13 @@ const LayerCanvas = forwardRef<
     const bx = Math.floor((event.clientX - rect.left - offset.x) / scale);
     const bz = Math.floor((event.clientY - rect.top - offset.y) / scale);
     if (bx >= 0 && bx < meta.size_x && bz >= 0 && bz < meta.size_z) {
-      const block = sliceBlockIndex.get(bz * meta.size_x + bx);
-      if (block) {
-        const paletteEntry = meta.palette[block.palette_id];
+      const visibleBlock = visibleBlockIndex.get(bz * meta.size_x + bx);
+      if (visibleBlock) {
+        const paletteEntry = meta.palette[visibleBlock.block.palette_id];
         onHoverBlock(
           {
             x: bx,
-            y: sliceData.y,
+            y: visibleBlock.y,
             z: bz,
             id: paletteEntry.block_id,
             name: translateBlockId(paletteEntry.block_id),
@@ -269,6 +294,7 @@ const LayerCanvas = forwardRef<
             top: `${block.top}px`,
             width: `${block.width}px`,
             height: `${block.height}px`,
+            opacity: block.opacity,
             background: block.iconUrl ? "transparent" : block.color,
           }}
         >
@@ -284,9 +310,10 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [cacheStatus, setCacheStatus] = useState("idle");
   const [cacheExists, setCacheExists] = useState(false);
   const [meta, setMeta] = useState<LayerSliceMeta | null>(null);
-  const [sliceData, setSliceData] = useState<LayerSliceData | null>(null);
+  const [sliceDataByY, setSliceDataByY] = useState<Record<number, LayerSliceData | null>>({});
   const [statsData, setStatsData] = useState<StatsData | null>(null);
   const [layerY, setLayerY] = useState(0);
+  const [onionSkinDepth, setOnionSkinDepth] = useState(0);
   const [hoverBlock, setHoverBlock] = useState<FlakeHoverBlock | null>(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
   const [showMaterials, setShowMaterials] = useState(false);
@@ -306,8 +333,8 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const syncRequestIdRef = useRef(0);
   const inFlightMetaKeyRef = useRef("");
   const loadedMetaKeyRef = useRef("");
-  const inFlightSliceKeyRef = useRef("");
-  const loadedSliceKeyRef = useRef("");
+  const inFlightSliceKeysRef = useRef(new Set<string>());
+  const loadedSliceKeysRef = useRef(new Set<string>());
 
   const stopQuickBuildPolling = () => {
     if (pollIntervalRef.current !== null) {
@@ -335,14 +362,14 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setQuickBuildError(stored?.status === "error" ? stored.stage || "" : "");
     setIsQuickBuilding(stored?.status === "building");
     setMeta(null);
-    setSliceData(null);
+    setSliceDataByY({});
     setCacheExists(false);
     loadedMetaKeyRef.current = "";
-    loadedSliceKeyRef.current = "";
+    loadedSliceKeysRef.current.clear();
 
     if (!stored?.cacheFile) {
       inFlightMetaKeyRef.current = "";
-      inFlightSliceKeyRef.current = "";
+      inFlightSliceKeysRef.current.clear();
       // console.log("[LBA_FLAKE] syncCacheState:no_cache", { currentFile });
       return;
     }
@@ -384,7 +411,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
         });
         */
         loadedMetaKeyRef.current = metaKey;
-        loadedSliceKeyRef.current = "";
+        loadedSliceKeysRef.current.clear();
+        inFlightSliceKeysRef.current.clear();
+        setSliceDataByY({});
         setMeta(loadedMeta);
         setLayerY(0);
       } finally {
@@ -403,7 +432,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setIsQuickBuilding(true);
     setCacheExists(false);
     setMeta(null);
-    setSliceData(null);
+    setSliceDataByY({});
+    loadedSliceKeysRef.current.clear();
+    inFlightSliceKeysRef.current.clear();
 
     try {
       const launch = await startCacheBuildTask(currentFile, "normal");
@@ -511,51 +542,79 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
   useEffect(() => {
     if (!cacheExists || !meta || !cacheFile) return;
-    const sliceKey = `${cacheFile}::${layerY}`;
-    if (inFlightSliceKeyRef.current === sliceKey || loadedSliceKeyRef.current === sliceKey) {
-      return;
+    const requiredYs: number[] = [];
+    const maxDepth = Math.min(5, onionSkinDepth, layerY);
+    for (let depth = 0; depth <= maxDepth; depth += 1) {
+      requiredYs.push(layerY - depth);
     }
-    inFlightSliceKeyRef.current = sliceKey;
-    /*
-    console.log("[LBA_FLAKE] effect:loadLayerSlice:start", {
-      cacheFile,
-      layerY,
-      size_x: meta.size_x,
-      size_y: meta.size_y,
-      size_z: meta.size_z,
-    });
-    */
-    loadLayerSlice(cacheFile, layerY)
-      .then((nextSlice) => {
-        /*
-        console.log("[LBA_FLAKE] effect:loadLayerSlice:end", {
-          cacheFile,
-          layerY,
-          block_count: nextSlice?.blocks?.length || 0,
-        });
-        */
-        loadedSliceKeyRef.current = sliceKey;
-        setSliceData(nextSlice);
-      })
-      .catch((error) => {
-        /*
-        console.log("[LBA_FLAKE] effect:loadLayerSlice:error", {
-          cacheFile,
-          layerY,
-          error: String(error),
-        });
-        */
-        if (loadedSliceKeyRef.current === sliceKey) {
-          loadedSliceKeyRef.current = "";
-        }
-        setSliceData(null);
-      })
-      .finally(() => {
-        if (inFlightSliceKeyRef.current === sliceKey) {
-          inFlightSliceKeyRef.current = "";
-        }
+
+    requiredYs.forEach((targetY) => {
+      const sliceKey = `${cacheFile}::${targetY}`;
+      if (inFlightSliceKeysRef.current.has(sliceKey) || loadedSliceKeysRef.current.has(sliceKey)) {
+        return;
+      }
+      inFlightSliceKeysRef.current.add(sliceKey);
+      /*
+      console.log("[LBA_FLAKE] effect:loadLayerSlice:start", {
+        cacheFile,
+        layerY: targetY,
+        size_x: meta.size_x,
+        size_y: meta.size_y,
+        size_z: meta.size_z,
       });
-  }, [layerY, cacheExists, meta, cacheFile]);
+      */
+      loadLayerSlice(cacheFile, targetY)
+        .then((nextSlice) => {
+          /*
+          console.log("[LBA_FLAKE] effect:loadLayerSlice:end", {
+            cacheFile,
+            layerY: targetY,
+            block_count: nextSlice?.blocks?.length || 0,
+          });
+          */
+          loadedSliceKeysRef.current.add(sliceKey);
+          setSliceDataByY((current) => ({
+            ...current,
+            [targetY]: nextSlice,
+          }));
+        })
+        .catch(() => {
+          /*
+          console.log("[LBA_FLAKE] effect:loadLayerSlice:error", {
+            cacheFile,
+            layerY: targetY,
+            error: String(error),
+          });
+          */
+          loadedSliceKeysRef.current.delete(sliceKey);
+          setSliceDataByY((current) => ({
+            ...current,
+            [targetY]: null,
+          }));
+        })
+        .finally(() => {
+          inFlightSliceKeysRef.current.delete(sliceKey);
+        });
+    });
+  }, [layerY, onionSkinDepth, cacheExists, meta, cacheFile]);
+
+  const sliceData = sliceDataByY[layerY] ?? null;
+  const renderSlices = useMemo(() => {
+    if (!Object.prototype.hasOwnProperty.call(sliceDataByY, layerY) || sliceDataByY[layerY] === null) return [] as FlakeRenderSlice[];
+    const effectiveDepth = Math.min(5, onionSkinDepth, layerY);
+    const next: FlakeRenderSlice[] = [];
+    for (let depth = 0; depth <= effectiveDepth; depth += 1) {
+      const targetY = layerY - depth;
+      const slice = sliceDataByY[targetY];
+      if (!slice) continue;
+      next.push({
+        depth,
+        opacity: depth === 0 ? 1 : (onionSkinDepth + 1 - depth) / (onionSkinDepth + 1),
+        sliceData: slice,
+      });
+    }
+    return next;
+  }, [layerY, onionSkinDepth, sliceDataByY]);
 
   const handleHoverBlock = (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => {
     setHoverBlock(block);
@@ -574,7 +633,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const building = cacheStatus === "building" || isQuickBuilding;
   const statusText = quickBuildError || quickBuildStatus || (!ready
     ? (building ? "Cache is building; layer data will become available when the ready file is written." : "Layers unavailable: build 3D cache first.")
-    : `Y=${layerY}; ${sliceData?.blocks?.length || 0} non-air blocks. Wheel zooms, drag pans.`);
+    : `Y=${layerY}; 当前层 ${sliceData?.blocks?.length || 0} 个非空气方块；洋葱皮 ${onionSkinDepth} 层。滚轮缩放，拖拽平移。`);
 
   if (!currentFile) {
     return (
@@ -617,6 +676,33 @@ export function FlakePage({ currentFile, setRoute }: any) {
           <input className="flake-page__layer-range" type="range" min={0} max={maxY} value={layerY} onChange={(event) => setLayerY(parseInt(event.target.value, 10))} disabled={!ready} />
         </div>
 
+        <div className="flake-page__layer-row flake-page__onion-row">
+          <span className="nova-muted flake-page__layer-label">洋葱皮</span>
+          <input
+            className="flake-page__layer-range"
+            type="range"
+            min={0}
+            max={5}
+            step={1}
+            value={onionSkinDepth}
+            onChange={(event) => setOnionSkinDepth(Math.min(5, Math.max(0, Number(event.target.value) || 0)))}
+            disabled={!ready}
+          />
+          <input
+            className="input flake-page__onion-input"
+            type="number"
+            min={0}
+            max={5}
+            step={1}
+            value={onionSkinDepth}
+            onChange={(event) => setOnionSkinDepth(Math.min(5, Math.max(0, Number(event.target.value) || 0)))}
+            disabled={!ready}
+          />
+        </div>
+        <div className="nova-muted nova-small flake-page__onion-hint">
+          0 表示关闭；只显示当前位置最上面那一层可见方块，下方层按厚度比例半透明补显。
+        </div>
+
         <div className="flake-page__layer-footer">
           <div className="flake-page__layer-value">Y = {layerY}</div>
           <div className="flake-page__layer-actions">
@@ -638,7 +724,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 <div>{building ? "标准模式 3D cache 正在构建。" : "请先生成标准模式 3D cache。"}</div>
               </div>
             ) : (
-              <LayerCanvas ref={canvasRef} meta={meta} sliceData={sliceData} onHoverBlock={handleHoverBlock} />
+              <LayerCanvas ref={canvasRef} meta={meta} renderSlices={renderSlices} onHoverBlock={handleHoverBlock} />
             )}
 
             <FlakeBlockTooltip x={hoverPos.x} y={hoverPos.y} item={hoverBlock} />
