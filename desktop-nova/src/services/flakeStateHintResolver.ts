@@ -24,6 +24,8 @@ interface ResolveFlakeLayerBlockImageInput {
 const STAGE_1_HINT_RELPATH = "data/flake/state_hint/stage_1.png";
 const HANGING_TRUE_HINT_RELPATH = "data/flake/state_hint/hanging_true.png";
 const SNOWY_TRUE_HINT_RELPATH = "data/flake/state_hint/snowy_true.png";
+const PERSISTENT_FALSE_BLOCK_ID = "data/flake/state_hint/persistent_false.png";
+
 const WATERLOGGED_TRUE_BLOCK_ID = "minecraft:water";
 // 反色遮罩
 const LEVEL_0_OVERLAY_REPATH = "data/flake/state_overlay/level_0.png";
@@ -260,14 +262,147 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
         overlayBlendMode: "subtract",
       };
     }
-    case "minecraft:spruce_log":
-    case "minecraft:birch_log":
-    case "minecraft:jungle_log":
-    case "minecraft:acacia_log":
-    case "minecraft:dark_oak_log":
-    case "minecraft:cherry_log":
-    case "minecraft:mangrove_log":
-    
+    // 云杉原木
+    case "minecraft:spruce_log": {
+      const imageRelPaths: string[] = [];
+      if (states.axis === "x") {
+        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+      }
+      if (states.axis === "z") {
+        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [SPRUCE_LOG_TOP_BLOCK_ID],
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+        overlayBlendMode: "subtract",
+      };
+    }
+    // 白桦原木
+    case "minecraft:birch_log": {
+      const imageRelPaths: string[] = [];
+      if (states.axis === "x") {
+        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+      }
+      if (states.axis === "z") {
+        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [BIRCH_LOG_TOP_BLOCK_ID],
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+        overlayBlendMode: "subtract",
+      };
+    }
+    // 丛林原木
+    case "minecraft:jungle_log": {
+      const imageRelPaths: string[] = [];
+      if (states.axis === "x") {
+        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+      }
+      if (states.axis === "z") {
+        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [JUNGLE_LOG_TOP_BLOCK_ID],
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+        overlayBlendMode: "subtract",
+      };
+    }
+    // 金合欢原木
+    case "minecraft:acacia_log": {
+      const imageRelPaths: string[] = [];
+      if (states.axis === "x") {
+        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+      }
+      if (states.axis === "z") {
+        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [ACACIA_LOG_TOP_BLOCK_ID],
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+        overlayBlendMode: "subtract",
+      };
+    }
+    // 深色橡木原木
+    case "minecraft:dark_oak_log": {
+      const imageRelPaths: string[] = [];
+        if (states.axis === "x") {
+          imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+        }
+        if (states.axis === "z") {
+          imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+        }
+      return {
+        mode: "replace",
+        iconBlockIds: [DARK_OAK_LOG_TOP_BLOCK_ID],
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+        overlayBlendMode: "subtract",
+      };
+    }
+    // 樱花原木
+    case "minecraft:cherry_log": {
+      const imageRelPaths: string[] = [];
+      if (states.axis === "x") {
+        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+      }
+      if (states.axis === "z") {
+        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [CHERRY_LOG_TOP_BLOCK_ID],
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+        overlayBlendMode: "subtract",
+      };
+    }
+    // 红树原木
+    case "minecraft:mangrove_log": {
+      const imageRelPaths: string[] = [];
+      if (states.axis === "x") {
+        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+      }
+      if (states.axis === "z") {
+        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [MANGROVE_LOG_TOP_BLOCK_ID],
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+        overlayBlendMode: "subtract",
+      };
+    }
+    // 树叶
+    case "minecraft:oak_leaves":
+    case "minecraft:spruce_leaves":
+    case "minecraft:birch_leaves":
+    case "minecraft:jungle_leaves":
+    case "minecraft:acacia_leaves":
+    case "minecraft:dark_oak_leaves":
+    case "minecraft:cherry_leaves":
+    case "minecraft:mangrove_leaves": 
+    case "minecraft:azalea_leaves":
+    case "minecraft:flowering_azalea_leaves":
+    {
+      const imageRelPaths: string[] = [];
+      const overlayIconBlockIds: string[] = [];
+      if (states.persistent === "false") {
+        imageRelPaths.push(PERSISTENT_FALSE_BLOCK_ID);
+      }
+      if (states.waterlogged === "true") {
+        overlayIconBlockIds.push(WATERLOGGED_TRUE_BLOCK_ID);
+      }
+      return imageRelPaths.length || overlayIconBlockIds.length
+        ? {
+            mode: "mask",
+            imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+            overlayIconBlockIds: overlayIconBlockIds.length ? overlayIconBlockIds : undefined,
+          }
+        : null;
+    }
+    // 默认
     default:
       return null;
   }
