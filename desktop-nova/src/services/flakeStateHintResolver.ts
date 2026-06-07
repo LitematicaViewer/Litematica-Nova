@@ -73,7 +73,10 @@ const HOPPER_INSIDE_VERT_RELPATH = "data/flake/redstone_display/hopper_inside2.p
 const HOPPER_INSIDE_VERT_ON_RELPATH = "data/flake/redstone_display/hopper_inside2_on.png";
 const HOPPER_TOP_RELPATH = "data/flake/redstone_display/hopper_top.png";
 const HOPPER_TOP_ON_RELPATH = "data/flake/redstone_display/hopper_top_on.png";
-
+  // 侦测器
+const OBSERVER_BLOCK_ID = "minecraft:observer";
+const OBSERVER_BACK_BLOCK_ID = "minecraft:observer_back";
+const OBSERVER_TOP_RELPATH = "data/flake/redstone_display/observer_top.png";
 
 const hintImageCache = new Map<string, Promise<string | null>>();
 
@@ -621,7 +624,44 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
         }
       }
     }
-
+    case "minecraft:observer": {
+      const facing = states.facing;
+      if (facing === "north") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [OBSERVER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 2,
+        };
+      }
+      if (facing === "east") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [OBSERVER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 3,
+        };
+      }
+      if (facing === "south") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [OBSERVER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 4,
+        };
+      }
+      if (facing === "west") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [OBSERVER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 1,
+        };
+      }
+      if (facing === "down") {
+        return {
+          mode: "replace",
+          iconBlockIds: [OBSERVER_BACK_BLOCK_ID],
+        };
+      }
+      return null;
+    }
 
     // 默认
     default:
