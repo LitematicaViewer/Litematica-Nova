@@ -1,12 +1,26 @@
 import { executeBackend, checkFileExists } from "./backend";
 import { translateBlockId } from "./i18n";
 
+export interface LayerPaletteEntry {
+  block_id: string;
+  property_id: number;
+  block_state?: unknown;
+  state?: unknown;
+  states?: unknown;
+  properties?: unknown;
+  property_ids?: unknown;
+  property_indices?: unknown;
+  property_refs?: unknown;
+  state_ids?: unknown;
+  state_indices?: unknown;
+}
+
 export interface LayerSliceMeta {
   chunk_size: number;
   size_x: number;
   size_y: number;
   size_z: number;
-  palette: Array<{ block_id: string; property_id: number }>;
+  palette: LayerPaletteEntry[];
   property_pool: Array<Record<string, string>>;
 }
 
