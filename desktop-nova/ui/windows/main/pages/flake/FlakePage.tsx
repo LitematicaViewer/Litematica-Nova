@@ -11,7 +11,6 @@ import {
   buildLayerMetaCache,
   checkCacheExists,
   getBlockColor,
-  getBlockIconDataUrl,
   getLatestRenderCacheState,
   LayerSliceData,
   LayerSliceMeta,
@@ -27,6 +26,7 @@ import {
   updateRenderCacheState,
   upsertRenderCacheState,
 } from "../../../../../src/business/facade";
+import { resolveFlakeLayerBlockImage } from "../../../../../src/services/flakeStateHintResolver";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
 
@@ -64,9 +64,10 @@ const LayerCanvas = forwardRef<
   {
     meta: LayerSliceMeta | null;
     renderSlices: FlakeRenderSlice[];
+    showStateHints: boolean;
     onHoverBlock: (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => void;
   }
->(({ meta, renderSlices, onHoverBlock }, ref) => {
+>(({ meta, renderSlices, showStateHints, onHoverBlock }, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -195,7 +196,12 @@ const LayerCanvas = forwardRef<
       for (const paletteId of slicePaletteIds) {
         const entry = meta.palette[paletteId];
         if (!entry?.block_id) continue;
-        const dataUrl = await getBlockIconDataUrl(entry.block_id, "layering");
+        const dataUrl = await resolveFlakeLayerBlockImage({
+          blockId: entry.block_id,
+          paletteEntry: entry,
+          propertyPool: meta.property_pool || [],
+          enabled: showStateHints,
+        });
         if (cancelled || !dataUrl) continue;
         next.set(paletteId, dataUrl);
       }
@@ -207,7 +213,7 @@ const LayerCanvas = forwardRef<
     return () => {
       cancelled = true;
     };
-  }, [meta, slicePaletteIds]);
+  }, [meta, slicePaletteIds, showStateHints]);
 
   const handleWheel = (event: React.WheelEvent) => {
     event.preventDefault();
@@ -314,6 +320,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [statsData, setStatsData] = useState<StatsData | null>(null);
   const [layerY, setLayerY] = useState(0);
   const [onionSkinDepth, setOnionSkinDepth] = useState(0);
+  const [showStateHints, setShowStateHints] = useState(true);
   const [hoverBlock, setHoverBlock] = useState<FlakeHoverBlock | null>(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
   const [showMaterials, setShowMaterials] = useState(false);
@@ -702,6 +709,10 @@ export function FlakePage({ currentFile, setRoute }: any) {
         <div className="nova-muted nova-small flake-page__onion-hint">
           0 表示关闭；只显示当前位置最上面那一层可见方块，下方层按厚度比例半透明补显。
         </div>
+        <label className="subwindow-check-row flake-page__edit-toggle">
+          <input type="checkbox" checked={showStateHints} onChange={(event) => setShowStateHints(event.target.checked)} disabled={!ready} />
+          状态提示图片
+        </label>
 
         <div className="flake-page__layer-footer">
           <div className="flake-page__layer-value">Y = {layerY}</div>
@@ -724,7 +735,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 <div>{building ? "标准模式 3D cache 正在构建。" : "请先生成标准模式 3D cache。"}</div>
               </div>
             ) : (
-              <LayerCanvas ref={canvasRef} meta={meta} renderSlices={renderSlices} onHoverBlock={handleHoverBlock} />
+              <LayerCanvas ref={canvasRef} meta={meta} renderSlices={renderSlices} showStateHints={showStateHints} onHoverBlock={handleHoverBlock} />
             )}
 
             <FlakeBlockTooltip x={hoverPos.x} y={hoverPos.y} item={hoverBlock} />
