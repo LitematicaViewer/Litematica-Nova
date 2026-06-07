@@ -9,6 +9,8 @@ interface FlakeStateHintRule {
   mode: FlakeStateHintMode;
   imageRelPaths?: string[];
   iconBlockIds?: string[];
+  baseImageRelPaths?: string[];
+  baseImageRotateQuarterTurns?: number;
   overlayIconBlockIds?: string[];
   overlayBlendMode?: FlakeOverlayBlendMode;
 }
@@ -32,13 +34,16 @@ const LEVEL_0_OVERLAY_REPATH = "data/flake/state_overlay/level_0.png";
 const AXIS_X_OVERLAY_REPATH = "data/flake/state_overlay/axis_x.png";
 const AXIS_Z_OVERLAY_REPATH = "data/flake/state_overlay/axis_z.png";
 // 替换
+  // 草皮
 const GRASS_BLOCK_TOP_BLOCK_ID = "minecraft:grass_block_top";
 // const GRASS_PATH_TOP_BLOCK_ID = "minecraft:grass_path_top";
 const DIRT_PATH_TOP_BLOCK_ID = "minecraft:dirt_path_top";
 const PODZOL_TOP_BLOCK_ID = "minecraft:podzol_top";
 const MYCELIUM_TOP_BLOCK_ID = "minecraft:mycelium_top";
+  //液体
 const WATER_TOP_BLOCK_ID = "minecraft:water_top";
 const LAVA_TOP_BLOCK_ID = "minecraft:lava_top";
+  // 原木
 const OAK_LOG_TOP_BLOCK_ID = "minecraft:oak_log_top";
 const SPRUCE_LOG_TOP_BLOCK_ID = "minecraft:spruce_log_top";
 const BIRCH_LOG_TOP_BLOCK_ID = "minecraft:birch_log_top";
@@ -47,6 +52,28 @@ const ACACIA_LOG_TOP_BLOCK_ID = "minecraft:acacia_log_top";
 const DARK_OAK_LOG_TOP_BLOCK_ID = "minecraft:dark_oak_log_top";
 const CHERRY_LOG_TOP_BLOCK_ID = "minecraft:cherry_log_top";
 const MANGROVE_LOG_TOP_BLOCK_ID = "minecraft:mangrove_log_top";
+  // 发射器
+const DISPENSER_TOP_RELPATH = "data/flake/redstone_display/dispenser_top.png";
+const DISPENSER_TOP_ON_RELPATH = "data/flake/redstone_display/dispenser_top_on.png";
+const DISPENSER_FRONT_VERTICAL_RELPATH = "data/flake/redstone_display/dispenser_front_vertical.png";
+const DISPENSER_FRONT_VERTICAL_ON_RELPATH = "data/flake/redstone_display/dispenser_front_vertical_on.png";
+const DISPENSER_BOTTOM_RELPATH = "data/flake/redstone_display/dispenser_bottom.png";
+const DISPENSER_BOTTOM_ON_RELPATH = "data/flake/redstone_display/dispenser_bottom_on.png";
+  // 投掷器
+const DROPPER_TOP_RELPATH = "data/flake/redstone_display/dropper_top.png";
+const DROPPER_TOP_ON_RELPATH = "data/flake/redstone_display/dropper_top_on.png";
+const DROPPER_FRONT_VERTICAL_RELPATH = "data/flake/redstone_display/dropper_front_vertical.png";
+const DROPPER_FRONT_VERTICAL_ON_RELPATH = "data/flake/redstone_display/dropper_front_vertical_on.png";
+const DROPPER_BOTTOM_RELPATH = "data/flake/redstone_display/dropper_bottom.png";
+const DROPPER_BOTTOM_ON_RELPATH = "data/flake/redstone_display/dropper_bottom_on.png";
+  // 漏斗
+const HOPPER_INSIDE_DOWN_RELPATH = "data/flake/redstone_display/hopper_inside.png";
+const HOPPER_INSIDE_DOWN_ON_RELPATH = "data/flake/redstone_display/hopper_inside_on.png";
+const HOPPER_INSIDE_VERT_RELPATH = "data/flake/redstone_display/hopper_inside2.png";
+const HOPPER_INSIDE_VERT_ON_RELPATH = "data/flake/redstone_display/hopper_inside2_on.png";
+const HOPPER_TOP_RELPATH = "data/flake/redstone_display/hopper_top.png";
+const HOPPER_TOP_ON_RELPATH = "data/flake/redstone_display/hopper_top_on.png";
+
 
 const hintImageCache = new Map<string, Promise<string | null>>();
 
@@ -402,6 +429,200 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
           }
         : null;
     }
+    // 发射器
+    case "minecraft:dispenser": {
+      const facing = states.facing;
+      const triggered = states.triggered === "true";
+      if (facing === "west") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DISPENSER_TOP_ON_RELPATH : DISPENSER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 1,
+        };
+      }
+      if (facing === "south") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DISPENSER_TOP_ON_RELPATH : DISPENSER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 0,
+        };
+      }
+      if (facing === "east") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DISPENSER_TOP_ON_RELPATH : DISPENSER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 3,
+        };
+      }
+      if (facing === "north") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DISPENSER_TOP_ON_RELPATH : DISPENSER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 2,
+        };
+      }
+      if (facing === "up") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DISPENSER_FRONT_VERTICAL_ON_RELPATH : DISPENSER_FRONT_VERTICAL_RELPATH],
+        };
+      }
+      if (facing === "down") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DISPENSER_BOTTOM_ON_RELPATH : DISPENSER_BOTTOM_RELPATH],
+        };
+      }
+      return null;
+    }
+    // 投掷器
+    case "minecraft:dropper": {
+      const facing = states.facing;
+      const triggered = states.triggered === "true";
+      if (facing === "west") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DROPPER_TOP_ON_RELPATH : DROPPER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 1,
+        };
+      }
+      if (facing === "south") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DROPPER_TOP_ON_RELPATH : DROPPER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 0,
+        };
+      }
+      if (facing === "east") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DROPPER_TOP_ON_RELPATH : DROPPER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 3,
+        };
+      }
+      if (facing === "north") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DROPPER_TOP_ON_RELPATH : DROPPER_TOP_RELPATH],
+          baseImageRotateQuarterTurns: 2,
+        };
+      }
+      if (facing === "up") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DROPPER_FRONT_VERTICAL_ON_RELPATH : DROPPER_FRONT_VERTICAL_RELPATH],
+        };
+      }
+      if (facing === "down") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [triggered ? DROPPER_BOTTOM_ON_RELPATH : DROPPER_BOTTOM_RELPATH],
+        };
+      }
+      return null;
+    }
+
+    // 漏斗
+    case "minecraft:hopper": {
+      const imageRelPaths: string[] = [];
+      if (states.facing === "north") {
+        if (states.enabled === "true") {
+          imageRelPaths.push(HOPPER_TOP_RELPATH);
+          return {
+          mode: "replace",
+          baseImageRelPaths: [HOPPER_INSIDE_VERT_RELPATH],
+          imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+          baseImageRotateQuarterTurns: 0,
+        };
+        } else {
+          imageRelPaths.push(HOPPER_TOP_ON_RELPATH);
+          return {
+            mode: "replace",
+            baseImageRelPaths: [HOPPER_INSIDE_VERT_ON_RELPATH],
+            imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+            baseImageRotateQuarterTurns: 0,
+          };
+        }
+      }
+      if (states.facing === "east") {
+        if (states.enabled === "true") {
+          imageRelPaths.push(HOPPER_TOP_RELPATH);
+          return {
+          mode: "replace",
+          baseImageRelPaths: [HOPPER_INSIDE_VERT_RELPATH],
+          imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+          baseImageRotateQuarterTurns: 1,
+        };
+        } else {
+          imageRelPaths.push(HOPPER_TOP_ON_RELPATH);
+          return {
+            mode: "replace",
+            baseImageRelPaths: [HOPPER_INSIDE_VERT_ON_RELPATH],
+            imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+            baseImageRotateQuarterTurns: 1,
+          };
+        }
+      }
+      if (states.facing === "south") {
+        if (states.enabled === "true") {
+          imageRelPaths.push(HOPPER_TOP_RELPATH);
+          return {
+          mode: "replace",
+          baseImageRelPaths: [HOPPER_INSIDE_VERT_RELPATH],
+          imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+          baseImageRotateQuarterTurns: 2,
+        };
+        } else {
+          imageRelPaths.push(HOPPER_TOP_ON_RELPATH);
+          return {
+            mode: "replace",
+            baseImageRelPaths: [HOPPER_INSIDE_VERT_ON_RELPATH],
+            imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+            baseImageRotateQuarterTurns: 2,
+          };
+        }
+      }
+      if (states.facing === "west") {
+        if (states.enabled === "true") {
+          imageRelPaths.push(HOPPER_TOP_RELPATH);
+          return {
+          mode: "replace",
+          baseImageRelPaths: [HOPPER_INSIDE_VERT_RELPATH],
+          imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+          baseImageRotateQuarterTurns: 3,
+        };
+        } else {
+          imageRelPaths.push(HOPPER_TOP_ON_RELPATH);
+          return {
+            mode: "replace",
+            baseImageRelPaths: [HOPPER_INSIDE_VERT_ON_RELPATH],
+            imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+            baseImageRotateQuarterTurns: 3,
+          };
+        }
+      }
+      if (states.facing === "down") {
+        if (states.enabled === "true") {
+          imageRelPaths.push(HOPPER_TOP_RELPATH);
+          return {
+          mode: "replace",
+          baseImageRelPaths: [HOPPER_INSIDE_DOWN_RELPATH],
+          imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+          baseImageRotateQuarterTurns: 3,
+        };
+        } else {
+          imageRelPaths.push(HOPPER_TOP_ON_RELPATH);
+          return {
+            mode: "replace",
+            baseImageRelPaths: [HOPPER_INSIDE_DOWN_ON_RELPATH],
+            imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+            baseImageRotateQuarterTurns: 3,
+          };
+        }
+      }
+    }
+
+
     // 默认
     default:
       return null;
@@ -484,6 +705,17 @@ async function resolveRuleImageUrls(rule: FlakeStateHintRule): Promise<string[] 
 }
 
 async function resolveRuleBaseImageUrls(rule: FlakeStateHintRule): Promise<string[] | null> {
+  const baseImageRelPaths = rule.baseImageRelPaths;
+  if (baseImageRelPaths && baseImageRelPaths.length > 0) {
+    const baseImageUrls = await readHintImageDataUrls(baseImageRelPaths);
+    if (!baseImageUrls) return null;
+    const rotateQuarterTurns = rule.baseImageRotateQuarterTurns || 0;
+    if (rotateQuarterTurns === 0) return baseImageUrls;
+    const rotatedUrls = await Promise.all(baseImageUrls.map((url) => rotateImageDataUrl(url, rotateQuarterTurns)));
+    if (rotatedUrls.some((url) => !url)) return null;
+    return rotatedUrls.filter((url): url is string => !!url);
+  }
+
   const iconBlockIds = rule.iconBlockIds;
   if (iconBlockIds && iconBlockIds.length > 0) {
     return await readLayeringIconDataUrls(iconBlockIds);
@@ -498,6 +730,28 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error("image load failed"));
     image.src = url;
   });
+}
+
+async function rotateImageDataUrl(url: string, quarterTurns: number): Promise<string | null> {
+  try {
+    const normalizedTurns = ((quarterTurns % 4) + 4) % 4;
+    if (normalizedTurns === 0) return url;
+    const image = await loadImage(url);
+    const sourceWidth = Math.max(1, image.naturalWidth || image.width || 16);
+    const sourceHeight = Math.max(1, image.naturalHeight || image.height || 16);
+    const swapAxis = normalizedTurns % 2 === 1;
+    const canvas = document.createElement("canvas");
+    canvas.width = swapAxis ? sourceHeight : sourceWidth;
+    canvas.height = swapAxis ? sourceWidth : sourceHeight;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.translate(canvas.width / 2, canvas.height / 2);
+    context.rotate(normalizedTurns * Math.PI / 2);
+    context.drawImage(image, -sourceWidth / 2, -sourceHeight / 2, sourceWidth, sourceHeight);
+    return canvas.toDataURL("image/png");
+  } catch {
+    return null;
+  }
 }
 
 async function applyMaskOverlays(baseIconUrl: string, overlayUrls: string[]): Promise<string | null> {
