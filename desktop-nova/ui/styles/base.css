@@ -781,6 +781,20 @@ textarea.input,
     min-width: 0;
 }
 
+.flake-page__onion-row {
+    margin-top: 10px;
+}
+
+.flake-page__onion-input {
+    width: 64px;
+    flex: 0 0 64px;
+}
+
+.flake-page__onion-hint {
+    margin-top: 6px;
+    padding-left: 76px;
+}
+
 .flake-page__layer-footer {
     display: flex;
     min-width: 0;
