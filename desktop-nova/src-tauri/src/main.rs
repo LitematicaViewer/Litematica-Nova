@@ -403,6 +403,28 @@ fn migrate_legacy_appdata_if_needed(target_root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+// 初始化种子数据目录
+fn seed_pack_in_directory_if_missing(source_relpath: &str, target_relpath: &str) -> Result<(), String> {
+    let source_dir = get_root().join(source_relpath);
+    if !source_dir.is_dir() {
+        return Ok(());
+    }
+
+    let target_dir = data_root()?.join(target_relpath);
+    if directory_contains_files(&target_dir)? {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    copy_dir_files_if_missing(&source_dir, &target_dir)
+}
+
+fn ensure_seed_data_directories() -> Result<(), String> {
+    seed_pack_in_directory_if_missing(PACK_IN_FLAKE_DIR_RELPATH, "flake")?;
+    seed_pack_in_directory_if_missing(PACK_IN_ENUMERATOR_DIR_RELPATH, "enumerator")?;
+    Ok(())
+}
+
 fn ai_config_path() -> Result<PathBuf, String> {
     let path = app_config_dir()?.join("ai_config.json");
     if !path.exists() {
@@ -2563,6 +2585,9 @@ const BUILTIN_BLOCK_ARCHIVE_RELPATH: &str = "pack-in/arr-private/block.zip";
 const BUILTIN_BLOCK_ICON_ROOT_RELPATH: &str = "minecraft-assets/block_2d/initial";
 const BUILTIN_ITEM_ARCHIVE_RELPATH: &str = "pack-in/arr-private/item.zip";
 const BUILTIN_ITEM_ICON_ROOT_RELPATH: &str = "minecraft-assets/item/initial";
+// 打包文件目录
+const PACK_IN_FLAKE_DIR_RELPATH: &str = "pack-in/flake";
+const PACK_IN_ENUMERATOR_DIR_RELPATH: &str = "pack-in/enumerator";
 
 fn directory_contains_files(dir: &Path) -> Result<bool, String> {
     if !dir.is_dir() {
@@ -4119,6 +4144,12 @@ async fn open_asset_manager_window(app: AppHandle) -> Result<(), String> {
 
 fn main() {
     tauri::Builder::default()
+        // 初始化种子数据目录
+        .setup(|_app| {
+            ensure_seed_data_directories()
+                .map_err(|err| std::io::Error::other(err))?;
+            Ok(())
+        })
         .manage(Mutex::new(BuildState {
             child: None,
             progress_file: None,

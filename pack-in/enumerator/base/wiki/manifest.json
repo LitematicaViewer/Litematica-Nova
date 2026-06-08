@@ -1,0 +1,26 @@
+{
+  "catalogs": {
+    "blocks": {
+      "count": 1195,
+      "file": "DV_Blocks.json",
+      "url": "https://minecraft.wiki/w/Java_Edition_data_values/Blocks"
+    },
+    "enchantments": {
+      "count": 43,
+      "file": "DV_Enchantments.json",
+      "url": "https://minecraft.wiki/w/Java_Edition_data_values"
+    },
+    "entities": {
+      "count": 158,
+      "file": "DV_Entities.json",
+      "url": "https://minecraft.wiki/w/Java_Edition_data_values/Entities"
+    },
+    "items": {
+      "count": 497,
+      "file": "DV_Items.json",
+      "url": "https://minecraft.wiki/w/Java_Edition_data_values/Items"
+    }
+  },
+  "root_relpath": "enumerator/base/wiki",
+  "source": "minecraft_wiki"
+}
