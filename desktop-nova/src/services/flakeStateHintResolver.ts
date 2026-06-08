@@ -1,3 +1,4 @@
+import { image } from "@tauri-apps/api";
 import { getUserConfigFilePath, getWorkspaceRoot, readImageBase64 } from "./backend";
 import { getBlockIconDataUrl } from "./blockIconResolver";
 import type { LayerPaletteEntry } from "./layerService";
@@ -77,6 +78,27 @@ const HOPPER_TOP_ON_RELPATH = "data/flake/redstone_display/hopper_top_on.png";
 const OBSERVER_BLOCK_ID = "minecraft:observer";
 const OBSERVER_BACK_BLOCK_ID = "minecraft:observer_back";
 const OBSERVER_TOP_RELPATH = "data/flake/redstone_display/observer_top.png";
+  // 活塞
+const PISTON_TOP_RELPATH = "data/flake/redstone_display/piston_top.png";
+const PISTON_TOP_ON_RELPATH = "data/flake/redstone_display/piston_top_on.png";
+const PISTON_BOTTOM_RELPATH = "data/flake/redstone_display/piston_bottom.png";
+const PISTON_BOTTOM_ON_RELPATH = "data/flake/redstone_display/piston_bottom_on.png";
+const PISTON_SIDE_RELPATH = "data/flake/redstone_display/piston_side.png";
+const PISTON_SIDE_ON_RELPATH = "data/flake/redstone_display/piston_side_on.png";
+const PISTON_INNER_RELPATH = "data/flake/redstone_display/piston_inner.png";
+const PISTON_INNER2_RELPATH = "data/flake/redstone_display/piston_inner2.png";
+const PISTON_HEAD_BLOCK_ID = "minecraft:piston_head";
+  // 黏性活塞
+const PISTON_TOP_STICKY_RELPATH = "data/flake/redstone_display/piston_top_sticky.png";
+const PISTON_TOP_STICKY_ON_RELPATH = "data/flake/redstone_display/piston_top_sticky_on.png";
+const PISTON_BOTTOM_STICKY_RELPATH = "data/flake/redstone_display/piston_bottom_sticky.png";
+const PISTON_BOTTOM_STICKY_ON_RELPATH = "data/flake/redstone_display/piston_bottom_sticky_on.png";
+const PISTON_SIDE_STICKY_RELPATH = "data/flake/redstone_display/piston_side_sticky.png";
+const PISTON_SIDE_STICKY_ON_RELPATH = "data/flake/redstone_display/piston_side_sticky_on.png";
+const PISTON_INNER_STICKY_RELPATH = "data/flake/redstone_display/piston_inner_sticky.png";
+const PISTON_HEAD_STICKY_RELPATH = "data/flake/redstone_display/piston_head_sticky.png";
+const PISTON_INNER2_STICKY_RELPATH = "data/flake/redstone_display/piston_inner2_sticky.png";
+
 
 const hintImageCache = new Map<string, Promise<string | null>>();
 
@@ -663,6 +685,189 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
       return null;
     }
 
+    // 活塞
+    case "minecraft:piston": {
+      const extended = states.extended === "true";
+      const facing = states.facing;
+      if (facing === "north") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_SIDE_ON_RELPATH : PISTON_SIDE_RELPATH],
+          baseImageRotateQuarterTurns: 0,
+        };
+      }
+      if (facing === "east") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_SIDE_ON_RELPATH : PISTON_SIDE_RELPATH],
+          baseImageRotateQuarterTurns: 1,
+        };
+      }
+      if (facing === "south") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_SIDE_ON_RELPATH : PISTON_SIDE_RELPATH],
+          baseImageRotateQuarterTurns: 2,
+        };
+      }
+      if (facing === "west") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_SIDE_ON_RELPATH : PISTON_SIDE_RELPATH],
+          baseImageRotateQuarterTurns: 3,
+        };
+      }
+      if (facing === "up") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_INNER_RELPATH : PISTON_TOP_RELPATH],
+        };
+      }
+      if (facing === "down") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_BOTTOM_ON_RELPATH : PISTON_BOTTOM_RELPATH],
+        };
+      }
+      return null;
+    }
+    // 活塞头
+    case "minecraft:piston_head": {
+      const facing = states.facing;
+      const type = states.type;
+      if (type === "normal") {
+        if (facing === "north") {
+          return {
+            mode: "replace",
+            iconBlockIds: [PISTON_HEAD_BLOCK_ID],
+            baseImageRotateQuarterTurns: 0,
+          };
+        }
+        if (facing === "east") {
+          return {
+            mode: "replace",
+            iconBlockIds: [PISTON_HEAD_BLOCK_ID],
+            baseImageRotateQuarterTurns: 1,
+          };
+        }
+        if (facing === "south") {
+          return {
+            mode: "replace",
+            iconBlockIds: [PISTON_HEAD_BLOCK_ID],
+            baseImageRotateQuarterTurns: 2,
+          };
+        }
+        if (facing === "west") {
+          return {
+            mode: "replace",
+            iconBlockIds: [PISTON_HEAD_BLOCK_ID],
+            baseImageRotateQuarterTurns: 3,
+          };
+        }
+        if (facing === "up"){
+          return {
+            mode: "replace",
+            baseImageRelPaths: [PISTON_TOP_ON_RELPATH],
+          };
+        }
+        if (facing === "down"){
+          return {
+            mode: "replace",
+            baseImageRelPaths: [PISTON_INNER2_RELPATH],
+          };
+        }
+      }
+      if (type === "sticky") {
+        if (facing === "north") {
+          return {
+            mode: "replace",
+            baseImageRelPaths: [PISTON_HEAD_STICKY_RELPATH],
+            baseImageRotateQuarterTurns: 0,
+          };
+        }
+        if (facing === "east") {
+          return {
+            mode: "replace",
+            baseImageRelPaths: [PISTON_HEAD_STICKY_RELPATH],
+            baseImageRotateQuarterTurns: 1,
+          };
+        }
+        if (facing === "south") {
+          return {
+            mode: "replace",
+            baseImageRelPaths: [PISTON_HEAD_STICKY_RELPATH],
+            baseImageRotateQuarterTurns: 2,
+          };
+        }
+        if (facing === "west") {
+          return {
+            mode: "replace",
+            baseImageRelPaths: [PISTON_HEAD_STICKY_RELPATH],
+            baseImageRotateQuarterTurns: 3,
+          };
+        }
+        if (facing === "up"){
+          return {
+            mode: "replace",
+            baseImageRelPaths: [PISTON_TOP_STICKY_ON_RELPATH],
+          };
+        }
+        if (facing === "down"){
+          return {
+            mode: "replace",
+            baseImageRelPaths: [PISTON_INNER2_STICKY_RELPATH],
+          };
+        }
+      }
+      return null;
+    }
+    // 黏性活塞
+    case "minecraft:sticky_piston": {
+      const extended = states.extended === "true";
+      const facing = states.facing;
+      if (facing === "north") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_SIDE_STICKY_ON_RELPATH : PISTON_SIDE_STICKY_RELPATH],
+          baseImageRotateQuarterTurns: 0,
+        };
+      }
+      if (facing === "east") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_SIDE_STICKY_ON_RELPATH : PISTON_SIDE_STICKY_RELPATH],
+          baseImageRotateQuarterTurns: 1,
+        };
+        }
+      if (facing === "south") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_SIDE_STICKY_ON_RELPATH : PISTON_SIDE_STICKY_RELPATH],
+          baseImageRotateQuarterTurns: 2,
+        };
+      }
+      if (facing === "west") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_SIDE_STICKY_ON_RELPATH : PISTON_SIDE_STICKY_RELPATH],
+          baseImageRotateQuarterTurns: 3,
+        };
+      }
+      if (facing === "up") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_INNER_STICKY_RELPATH : PISTON_TOP_STICKY_RELPATH],
+        };
+      }
+      if (facing === "down") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [extended ? PISTON_BOTTOM_STICKY_ON_RELPATH : PISTON_BOTTOM_STICKY_RELPATH],
+        };
+      }
+      return null;
+    }
+    
     // 默认
     default:
       return null;
@@ -745,22 +950,26 @@ async function resolveRuleImageUrls(rule: FlakeStateHintRule): Promise<string[] 
 }
 
 async function resolveRuleBaseImageUrls(rule: FlakeStateHintRule): Promise<string[] | null> {
+  let baseImageUrls: string[] | null = null;
+
   const baseImageRelPaths = rule.baseImageRelPaths;
   if (baseImageRelPaths && baseImageRelPaths.length > 0) {
-    const baseImageUrls = await readHintImageDataUrls(baseImageRelPaths);
-    if (!baseImageUrls) return null;
-    const rotateQuarterTurns = rule.baseImageRotateQuarterTurns || 0;
-    if (rotateQuarterTurns === 0) return baseImageUrls;
-    const rotatedUrls = await Promise.all(baseImageUrls.map((url) => rotateImageDataUrl(url, rotateQuarterTurns)));
-    if (rotatedUrls.some((url) => !url)) return null;
-    return rotatedUrls.filter((url): url is string => !!url);
+    baseImageUrls = await readHintImageDataUrls(baseImageRelPaths);
+  } else {
+    const iconBlockIds = rule.iconBlockIds;
+    if (iconBlockIds && iconBlockIds.length > 0) {
+      baseImageUrls = await readLayeringIconDataUrls(iconBlockIds);
+    }
   }
 
-  const iconBlockIds = rule.iconBlockIds;
-  if (iconBlockIds && iconBlockIds.length > 0) {
-    return await readLayeringIconDataUrls(iconBlockIds);
-  }
-  return null;
+  if (!baseImageUrls) return null;
+
+  const rotateQuarterTurns = rule.baseImageRotateQuarterTurns || 0;
+  if (rotateQuarterTurns === 0) return baseImageUrls;
+
+  const rotatedUrls = await Promise.all(baseImageUrls.map((url) => rotateImageDataUrl(url, rotateQuarterTurns)));
+  if (rotatedUrls.some((url) => !url)) return null;
+  return rotatedUrls.filter((url): url is string => !!url);
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {
