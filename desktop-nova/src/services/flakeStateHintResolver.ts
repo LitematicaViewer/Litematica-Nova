@@ -98,7 +98,16 @@ const PISTON_SIDE_STICKY_ON_RELPATH = "data/flake/redstone_display/piston_side_s
 const PISTON_INNER_STICKY_RELPATH = "data/flake/redstone_display/piston_inner_sticky.png";
 const PISTON_HEAD_STICKY_RELPATH = "data/flake/redstone_display/piston_head_sticky.png";
 const PISTON_INNER2_STICKY_RELPATH = "data/flake/redstone_display/piston_inner2_sticky.png";
-
+  // 红石中继器
+const REPEATOR1_RELPATH = "data/flake/redstone_display/repeater1.png";
+const REPEATOR_ON1_RELPATH = "data/flake/redstone_display/repeater_on1.png";
+const REPEATOR2_RELPATH = "data/flake/redstone_display/repeater2.png";
+const REPEATOR_ON2_RELPATH = "data/flake/redstone_display/repeater_on2.png";
+const REPEATOR3_RELPATH = "data/flake/redstone_display/repeater3.png";
+const REPEATOR_ON3_RELPATH = "data/flake/redstone_display/repeater_on3.png";
+const REPEATOR4_RELPATH = "data/flake/redstone_display/repeater4.png";
+const REPEATOR_ON4_RELPATH = "data/flake/redstone_display/repeater_on4.png";
+const REPEATOR_LOCK_RELPATH = "data/flake/redstone_display/repeater_lock.png";
 
 const hintImageCache = new Map<string, Promise<string | null>>();
 
@@ -863,6 +872,63 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
         return {
           mode: "replace",
           baseImageRelPaths: [extended ? PISTON_BOTTOM_STICKY_ON_RELPATH : PISTON_BOTTOM_STICKY_RELPATH],
+        };
+      }
+      return null;
+    }
+    // 红石中继器
+    case "minecraft:repeater": {
+      const imageRelPaths: string[] = [];
+      const delay = states.delay;
+      const facing = states.facing;
+      const powered = states.powered;
+      const locked = states.locked;
+      let rotateQuarterTurns = 0;
+      if (locked === "true") {
+        imageRelPaths.push(REPEATOR_LOCK_RELPATH);
+      }
+      if (facing === "north") {
+        rotateQuarterTurns = 2;
+      }
+      if (facing === "east") {
+        rotateQuarterTurns = 3;
+      }
+      if (facing === "south") {
+        rotateQuarterTurns = 0;
+      }
+      if (facing === "west") {
+        rotateQuarterTurns = 3;
+      }
+      if (delay === "1") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [powered === "true" ? REPEATOR_ON1_RELPATH : REPEATOR1_RELPATH],
+          imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+          baseImageRotateQuarterTurns: rotateQuarterTurns,
+        };
+      }
+      if (delay === "2") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [powered === "true" ? REPEATOR_ON2_RELPATH : REPEATOR2_RELPATH],
+          imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+          baseImageRotateQuarterTurns: rotateQuarterTurns,
+        };
+      }
+      if (delay === "3") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [powered === "true" ? REPEATOR_ON3_RELPATH : REPEATOR3_RELPATH],
+          imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+          baseImageRotateQuarterTurns: rotateQuarterTurns,
+        };
+      }
+      if (delay === "4") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [powered === "true" ? REPEATOR_ON4_RELPATH : REPEATOR4_RELPATH],
+          imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+          baseImageRotateQuarterTurns: rotateQuarterTurns,
         };
       }
       return null;
