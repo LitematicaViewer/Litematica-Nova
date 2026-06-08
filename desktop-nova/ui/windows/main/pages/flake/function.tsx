@@ -195,6 +195,14 @@ export function CreativeInventoryTooltip({ x, y, item }: { x: number; y: number;
     </div>
   );
 }
+
+/**
+ * 适应视图。
+ * @param meta 层切片元数据
+ * @param viewport 视图元素
+ * @param setScale 设置缩放比例
+ * @param setOffset 设置偏移量
+ */
 export function fitView(
   meta: LayerSliceMeta,
   viewport: HTMLElement | null,
