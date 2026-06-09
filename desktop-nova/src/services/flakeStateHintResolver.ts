@@ -2,6 +2,7 @@ import { image } from "@tauri-apps/api";
 import { getUserConfigFilePath, getWorkspaceRoot, readImageBase64 } from "./backend";
 import { getBlockIconDataUrl } from "./blockIconResolver";
 import type { LayerPaletteEntry } from "./layerService";
+import { applyWaterloggedOverlay } from "./flake/stateHintRules/stateWaterlogged";
 
 type FlakeStateHintMode = "mask" | "replace";
 type FlakeOverlayBlendMode = "normal" | "subtract";
@@ -29,7 +30,6 @@ const HANGING_TRUE_HINT_RELPATH = "data/flake/state_hint/hanging_true.png";
 const SNOWY_TRUE_HINT_RELPATH = "data/flake/state_hint/snowy_true.png";
 const PERSISTENT_FALSE_BLOCK_ID = "data/flake/state_hint/persistent_false.png";
 
-const WATERLOGGED_TRUE_BLOCK_ID = "minecraft:water";
 // 反色遮罩
 const LEVEL_0_OVERLAY_REPATH = "data/flake/state_overlay/level_0.png";
 const AXIS_X_OVERLAY_REPATH = "data/flake/state_overlay/axis_x.png";
@@ -123,6 +123,20 @@ const REDSTONE_WIRE_NORTH_UP_RELPATH = "data/flake/redstone_display/redstone_wir
 const REDSTONE_WIRE_EAST_UP_RELPATH = "data/flake/redstone_display/redstone_wire_east_up.png";
 const REDSTONE_WIRE_SOUTH_UP_RELPATH = "data/flake/redstone_display/redstone_wire_south_up.png";
 const REDSTONE_WIRE_WEST_UP_RELPATH = "data/flake/redstone_display/redstone_wire_west_up.png";
+const REDSTONE_WIRE_SIDE_RELPATHS: Record<string, string> = {
+  north: REDSTONE_WIRE_NORTH_RELPATH,
+  east: REDSTONE_WIRE_EAST_RELPATH,
+  south: REDSTONE_WIRE_SOUTH_RELPATH,
+  west: REDSTONE_WIRE_WEST_RELPATH,
+};
+
+const REDSTONE_WIRE_UP_RELPATHS: Record<string, string> = {
+  north: REDSTONE_WIRE_NORTH_UP_RELPATH,
+  east: REDSTONE_WIRE_EAST_UP_RELPATH,
+  south: REDSTONE_WIRE_SOUTH_UP_RELPATH,
+  west: REDSTONE_WIRE_WEST_UP_RELPATH,
+};
+const REDSTONE_WIRE_DIRECTIONS = ["north", "east", "south", "west"] as const;
   // 数字
 const NUM_0_RELPATH = "data/flake/redstone_display/num_0.png";
 const NUM_1_RELPATH = "data/flake/redstone_display/num_1.png";
@@ -140,26 +154,6 @@ const NUM_12_RELPATH = "data/flake/redstone_display/num_12.png";
 const NUM_13_RELPATH = "data/flake/redstone_display/num_13.png";
 const NUM_14_RELPATH = "data/flake/redstone_display/num_14.png";
 const NUM_15_RELPATH = "data/flake/redstone_display/num_15.png";
-
-const REDSTONE_WIRE_POWER_COLORS: Record<string, string> = {
-  "0": "#4C0000",
-  "1": "#700000",
-  "2": "#7A0000",
-  "3": "#840000",
-  "4": "#8E0000",
-  "5": "#990000",
-  "6": "#A30000",
-  "7": "#AD0000",
-  "8": "#B70000",
-  "9": "#C10000",
-  "10": "#CC0000",
-  "11": "#D60000",
-  "12": "#E00000",
-  "13": "#EA0000",
-  "14": "#F41B00",
-  "15": "#FF3200",
-};
-
 const REDSTONE_WIRE_NUMBER_RELPATHS: Record<string, string> = {
   "0": NUM_0_RELPATH,
   "1": NUM_1_RELPATH,
@@ -178,22 +172,37 @@ const REDSTONE_WIRE_NUMBER_RELPATHS: Record<string, string> = {
   "14": NUM_14_RELPATH,
   "15": NUM_15_RELPATH,
 };
-
-const REDSTONE_WIRE_SIDE_RELPATHS: Record<string, string> = {
-  north: REDSTONE_WIRE_NORTH_RELPATH,
-  east: REDSTONE_WIRE_EAST_RELPATH,
-  south: REDSTONE_WIRE_SOUTH_RELPATH,
-  west: REDSTONE_WIRE_WEST_RELPATH,
+// 红石颜色
+const REDSTONE_WIRE_POWER_COLORS: Record<string, string> = {
+  "0": "#4C0000",
+  "1": "#700000",
+  "2": "#7A0000",
+  "3": "#840000",
+  "4": "#8E0000",
+  "5": "#990000",
+  "6": "#A30000",
+  "7": "#AD0000",
+  "8": "#B70000",
+  "9": "#C10000",
+  "10": "#CC0000",
+  "11": "#D60000",
+  "12": "#E00000",
+  "13": "#EA0000",
+  "14": "#F41B00",
+  "15": "#FF3200",
 };
-
-const REDSTONE_WIRE_UP_RELPATHS: Record<string, string> = {
-  north: REDSTONE_WIRE_NORTH_UP_RELPATH,
-  east: REDSTONE_WIRE_EAST_UP_RELPATH,
-  south: REDSTONE_WIRE_SOUTH_UP_RELPATH,
-  west: REDSTONE_WIRE_WEST_UP_RELPATH,
-};
-
-const REDSTONE_WIRE_DIRECTIONS = ["north", "east", "south", "west"] as const;
+  // 地上的火把
+const TORCH_HEAD_RELPATH = "data/flake/state_replace/torch_head.png";
+const SOUL_TORCH_HEAD_RELPATH = "data/flake/state_replace/soul_torch_head.png";
+const COPPER_TORCH_HEAD_RELPATH = "data/flake/state_replace/copper_torch_head.png";
+const REDSTONE_TORCH_HEAD_RELPATH = "data/flake/redstone_display/redstone_torch_head.png";
+const REDSTONE_TORCH_HEAD_OFF_RELPATH = "data/flake/redstone_display/redstone_torch_head_off.png";
+  // 墙上的火把
+const WALL_TORCH_BLOCK_ID = "minecraft:wall_torch";
+const SOUL_WALL_TORCH_BLOCK_ID = "minecraft:soul_wall_torch";
+const COPPER_WALL_TORCH_BLOCK_ID = "minecraft:copper_wall_torch";
+const REDSTONE_WALL_TORCH_BLOCK_ID = "minecraft:redstone_wall_torch";
+const REDSTONE_WALL_TORCH_OFF_BLOCK_ID = "minecraft:redstone_wall_torch_off";
 
 const hintImageCache = new Map<string, Promise<string | null>>();
 
@@ -361,9 +370,7 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
       if (states.stage === "1") {
         imageRelPaths.push(STAGE_1_HINT_RELPATH);
       }
-      if (states.waterlogged === "true") {
-        overlayIconBlockIds.push(WATERLOGGED_TRUE_BLOCK_ID);
-      }
+      applyWaterloggedOverlay(states, overlayIconBlockIds);
       return imageRelPaths.length || overlayIconBlockIds.length
         ? {
             mode: "mask",
@@ -538,9 +545,7 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
       if (states.persistent === "false") {
         imageRelPaths.push(PERSISTENT_FALSE_BLOCK_ID);
       }
-      if (states.waterlogged === "true") {
-        overlayIconBlockIds.push(WATERLOGGED_TRUE_BLOCK_ID);
-      }
+      applyWaterloggedOverlay(states, overlayIconBlockIds);
       return imageRelPaths.length || overlayIconBlockIds.length
         ? {
             mode: "mask",
@@ -1056,8 +1061,100 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
     // 红石线由专用合成流程处理
     case "minecraft:redstone_wire":
       return null;
-
-
+    // 墙上的火把
+    case "minecraft:wall_torch": {
+      const imageRelPaths: string[] = [];
+      const facing = states.facing;
+      let rotateQuarterTurns = 0;
+      if (facing === "north") {
+        rotateQuarterTurns = 0;
+      }
+      if (facing === "east") {
+        rotateQuarterTurns = 1;
+      }
+      if (facing === "south") {
+        rotateQuarterTurns = 2;
+      }
+      if (facing === "west") {
+        rotateQuarterTurns = 3;
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [WALL_TORCH_BLOCK_ID],
+        baseImageRotateQuarterTurns: rotateQuarterTurns,
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+      }
+    }
+    case "minecraft:soul_wall_torch": {
+      const imageRelPaths: string[] = [];
+      const facing = states.facing;
+      let rotateQuarterTurns = 0;
+      if (facing === "north") {
+        rotateQuarterTurns = 0;
+      }
+      if (facing === "east") {
+        rotateQuarterTurns = 1;
+      }
+      if (facing === "south") {
+        rotateQuarterTurns = 2;
+      }
+      if (facing === "west") {
+        rotateQuarterTurns = 3;
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [SOUL_WALL_TORCH_BLOCK_ID],
+        baseImageRotateQuarterTurns: rotateQuarterTurns,
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+      }
+    }
+    case "minecraft:copper_wall_torch": {
+      const imageRelPaths: string[] = [];
+      const facing = states.facing;
+      let rotateQuarterTurns = 0;
+      if (facing === "north") {
+        rotateQuarterTurns = 0;
+      }
+      if (facing === "east") {
+        rotateQuarterTurns = 1;
+      }
+      if (facing === "south") {
+        rotateQuarterTurns = 2;
+      }
+      if (facing === "west") {
+        rotateQuarterTurns = 3;
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [COPPER_WALL_TORCH_BLOCK_ID],
+        baseImageRotateQuarterTurns: rotateQuarterTurns,
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+      }
+    }
+    case "minecraft:redstone_wall_torch": {
+      const imageRelPaths: string[] = [];
+      const facing = states.facing;
+      const lit = states.lit;
+      let rotateQuarterTurns = 0;
+      if (facing === "north") {
+        rotateQuarterTurns = 0;
+      }
+      if (facing === "east") {
+        rotateQuarterTurns = 1;
+      }
+      if (facing === "south") {
+        rotateQuarterTurns = 2;
+      }
+      if (facing === "west") {
+        rotateQuarterTurns = 3;
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: lit === "true" ? [REDSTONE_WALL_TORCH_BLOCK_ID] : [REDSTONE_WALL_TORCH_OFF_BLOCK_ID],
+        baseImageRotateQuarterTurns: rotateQuarterTurns,
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+      }
+    }
     // 默认
     default:
       return null;
