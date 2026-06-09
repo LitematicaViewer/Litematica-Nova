@@ -3,6 +3,7 @@ import { getUserConfigFilePath, getWorkspaceRoot, readImageBase64 } from "./back
 import { getBlockIconDataUrl } from "./blockIconResolver";
 import type { LayerPaletteEntry } from "./layerService";
 import { applyWaterloggedOverlay } from "./flake/stateHintRules/stateWaterlogged";
+import { isBlockInEnumerator } from "./flake/enumeratorLoader";
 
 type FlakeStateHintMode = "mask" | "replace";
 type FlakeOverlayBlendMode = "normal" | "subtract";
@@ -275,7 +276,7 @@ export function extractLayerPaletteStates(
 }
 
 /** 图标解析规则 */
-function resolveManualStateHintRule(blockId: string, states: Record<string, string>): FlakeStateHintRule | null {
+async function resolveManualStateHintRule(blockId: string, states: Record<string, string>): Promise<FlakeStateHintRule | null> {
   switch (normalizeBlockId(blockId)) {
     // 草方块
     case "minecraft:grass_block": {
@@ -1155,9 +1156,23 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       }
     }
+
     // 默认
-    default:
+    default: {
+      // 枚举器匹配：含水方块
+      const normalizedId = normalizeBlockId(blockId);
+      if (await isBlockInEnumerator(normalizedId, "enumerator/system_enum/state_waterlogged.json")) {
+        const overlayIconBlockIds: string[] = [];
+        applyWaterloggedOverlay(states, overlayIconBlockIds);
+        if (overlayIconBlockIds.length > 0) {
+          return {
+            mode: "mask",
+            overlayIconBlockIds,
+          };
+        }
+      }
       return null;
+    }
   }
 }
 
@@ -1472,7 +1487,7 @@ export async function resolveFlakeLayerBlockImage({
     return redstoneWireImage || baseIconUrl;
   }
 
-  const rule = resolveManualStateHintRule(blockId, states);
+  const rule = await resolveManualStateHintRule(blockId, states);
   if (!rule) return baseIconUrl;
 
   const baseImageUrls = await resolveRuleBaseImageUrls(rule);
