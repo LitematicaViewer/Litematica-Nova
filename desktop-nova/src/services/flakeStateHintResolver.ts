@@ -371,7 +371,7 @@ async function resolveManualStateHintRule(blockId: string, states: Record<string
       if (states.stage === "1") {
         imageRelPaths.push(STAGE_1_HINT_RELPATH);
       }
-      applyWaterloggedOverlay(states, overlayIconBlockIds);
+      applyWaterloggedOverlay(states, imageRelPaths, overlayIconBlockIds);
       return imageRelPaths.length || overlayIconBlockIds.length
         ? {
             mode: "mask",
@@ -546,7 +546,7 @@ async function resolveManualStateHintRule(blockId: string, states: Record<string
       if (states.persistent === "false") {
         imageRelPaths.push(PERSISTENT_FALSE_BLOCK_ID);
       }
-      applyWaterloggedOverlay(states, overlayIconBlockIds);
+      applyWaterloggedOverlay(states, imageRelPaths, overlayIconBlockIds);
       return imageRelPaths.length || overlayIconBlockIds.length
         ? {
             mode: "mask",
@@ -1162,12 +1162,14 @@ async function resolveManualStateHintRule(blockId: string, states: Record<string
       // 枚举器匹配：含水方块
       const normalizedId = normalizeBlockId(blockId);
       if (await isBlockInEnumerator(normalizedId, "enumerator/system_enum/state_waterlogged.json")) {
+        const imageRelPaths: string[] = [];
         const overlayIconBlockIds: string[] = [];
-        applyWaterloggedOverlay(states, overlayIconBlockIds);
-        if (overlayIconBlockIds.length > 0) {
+        applyWaterloggedOverlay(states, imageRelPaths, overlayIconBlockIds);
+        if (imageRelPaths.length > 0 || overlayIconBlockIds.length > 0) {
           return {
             mode: "mask",
-            overlayIconBlockIds,
+            imageRelPaths: imageRelPaths.length > 0 ? imageRelPaths : undefined,
+            overlayIconBlockIds: overlayIconBlockIds.length > 0 ? overlayIconBlockIds : undefined,
           };
         }
       }
