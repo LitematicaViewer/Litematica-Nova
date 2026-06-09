@@ -113,6 +113,87 @@ const COMPARATOR_RELPATH = "data/flake/redstone_display/comparator.png";
 const COMPARATOR_ON_RELPATH = "data/flake/redstone_display/comparator_on.png";
 const COMPARATOR2_RELPATH = "data/flake/redstone_display/comparator2.png";
 const COMPARATOR2_ON_RELPATH = "data/flake/redstone_display/comparator2_on.png";
+  // 红石线
+const REDSTONE_WIRE_BASE_RELPATH = "data/flake/redstone_display/redstone_wire_base.png";
+const REDSTONE_WIRE_NORTH_RELPATH = "data/flake/redstone_display/redstone_wire_north.png";
+const REDSTONE_WIRE_EAST_RELPATH = "data/flake/redstone_display/redstone_wire_east.png";
+const REDSTONE_WIRE_SOUTH_RELPATH = "data/flake/redstone_display/redstone_wire_south.png";
+const REDSTONE_WIRE_WEST_RELPATH = "data/flake/redstone_display/redstone_wire_west.png";
+const REDSTONE_WIRE_NORTH_UP_RELPATH = "data/flake/redstone_display/redstone_wire_north_up.png";
+const REDSTONE_WIRE_EAST_UP_RELPATH = "data/flake/redstone_display/redstone_wire_east_up.png";
+const REDSTONE_WIRE_SOUTH_UP_RELPATH = "data/flake/redstone_display/redstone_wire_south_up.png";
+const REDSTONE_WIRE_WEST_UP_RELPATH = "data/flake/redstone_display/redstone_wire_west_up.png";
+  // 数字
+const NUM_0_RELPATH = "data/flake/redstone_display/num_0.png";
+const NUM_1_RELPATH = "data/flake/redstone_display/num_1.png";
+const NUM_2_RELPATH = "data/flake/redstone_display/num_2.png";
+const NUM_3_RELPATH = "data/flake/redstone_display/num_3.png";
+const NUM_4_RELPATH = "data/flake/redstone_display/num_4.png";
+const NUM_5_RELPATH = "data/flake/redstone_display/num_5.png";
+const NUM_6_RELPATH = "data/flake/redstone_display/num_6.png";
+const NUM_7_RELPATH = "data/flake/redstone_display/num_7.png";
+const NUM_8_RELPATH = "data/flake/redstone_display/num_8.png";
+const NUM_9_RELPATH = "data/flake/redstone_display/num_9.png";
+const NUM_10_RELPATH = "data/flake/redstone_display/num_10.png";
+const NUM_11_RELPATH = "data/flake/redstone_display/num_11.png";
+const NUM_12_RELPATH = "data/flake/redstone_display/num_12.png";
+const NUM_13_RELPATH = "data/flake/redstone_display/num_13.png";
+const NUM_14_RELPATH = "data/flake/redstone_display/num_14.png";
+const NUM_15_RELPATH = "data/flake/redstone_display/num_15.png";
+
+const REDSTONE_WIRE_POWER_COLORS: Record<string, string> = {
+  "0": "#4C0000",
+  "1": "#700000",
+  "2": "#7A0000",
+  "3": "#840000",
+  "4": "#8E0000",
+  "5": "#990000",
+  "6": "#A30000",
+  "7": "#AD0000",
+  "8": "#B70000",
+  "9": "#C10000",
+  "10": "#CC0000",
+  "11": "#D60000",
+  "12": "#E00000",
+  "13": "#EA0000",
+  "14": "#F41B00",
+  "15": "#FF3200",
+};
+
+const REDSTONE_WIRE_NUMBER_RELPATHS: Record<string, string> = {
+  "0": NUM_0_RELPATH,
+  "1": NUM_1_RELPATH,
+  "2": NUM_2_RELPATH,
+  "3": NUM_3_RELPATH,
+  "4": NUM_4_RELPATH,
+  "5": NUM_5_RELPATH,
+  "6": NUM_6_RELPATH,
+  "7": NUM_7_RELPATH,
+  "8": NUM_8_RELPATH,
+  "9": NUM_9_RELPATH,
+  "10": NUM_10_RELPATH,
+  "11": NUM_11_RELPATH,
+  "12": NUM_12_RELPATH,
+  "13": NUM_13_RELPATH,
+  "14": NUM_14_RELPATH,
+  "15": NUM_15_RELPATH,
+};
+
+const REDSTONE_WIRE_SIDE_RELPATHS: Record<string, string> = {
+  north: REDSTONE_WIRE_NORTH_RELPATH,
+  east: REDSTONE_WIRE_EAST_RELPATH,
+  south: REDSTONE_WIRE_SOUTH_RELPATH,
+  west: REDSTONE_WIRE_WEST_RELPATH,
+};
+
+const REDSTONE_WIRE_UP_RELPATHS: Record<string, string> = {
+  north: REDSTONE_WIRE_NORTH_UP_RELPATH,
+  east: REDSTONE_WIRE_EAST_UP_RELPATH,
+  south: REDSTONE_WIRE_SOUTH_UP_RELPATH,
+  west: REDSTONE_WIRE_WEST_UP_RELPATH,
+};
+
+const REDSTONE_WIRE_DIRECTIONS = ["north", "east", "south", "west"] as const;
 
 const hintImageCache = new Map<string, Promise<string | null>>();
 
@@ -972,7 +1053,9 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
       }
       return null;
     }
-
+    // 红石线由专用合成流程处理
+    case "minecraft:redstone_wire":
+      return null;
 
 
     // 默认
@@ -1016,6 +1099,99 @@ async function readHintImageDataUrls(relativePaths: string[]): Promise<string[] 
   } catch {
     return null;
   }
+}
+
+function parseHexColor(hex: string): [number, number, number] | null {
+  const normalized = String(hex || "").trim();
+  const matched = normalized.match(/^#([0-9a-fA-F]{6})$/);
+  if (!matched) return null;
+  const value = matched[1];
+  return [
+    Number.parseInt(value.slice(0, 2), 16),
+    Number.parseInt(value.slice(2, 4), 16),
+    Number.parseInt(value.slice(4, 6), 16),
+  ];
+}
+
+async function tintImageDataUrl(url: string, colorHex: string): Promise<string | null> {
+  try {
+    const rgb = parseHexColor(colorHex);
+    if (!rgb) return null;
+    const [red, green, blue] = rgb;
+    const image = await loadImage(url);
+    const width = Math.max(1, image.naturalWidth || image.width || 16);
+    const height = Math.max(1, image.naturalHeight || image.height || 16);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.imageSmoothingEnabled = false;
+    context.clearRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+    context.globalCompositeOperation = "source-in";
+    context.fillStyle = `rgb(${red}, ${green}, ${blue})`;
+    context.fillRect(0, 0, width, height);
+    context.globalCompositeOperation = "source-over";
+    return canvas.toDataURL("image/png");
+  } catch {
+    return null;
+  }
+}
+
+async function composeImageDataUrls(layerUrls: string[]): Promise<string | null> {
+  try {
+    if (!layerUrls.length) return null;
+    const images = await Promise.all(layerUrls.map((url) => loadImage(url)));
+    const width = Math.max(1, ...images.map((image) => image.naturalWidth || image.width || 16));
+    const height = Math.max(1, ...images.map((image) => image.naturalHeight || image.height || 16));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.imageSmoothingEnabled = false;
+    context.clearRect(0, 0, width, height);
+    for (const image of images) {
+      context.drawImage(image, 0, 0, width, height);
+    }
+    return canvas.toDataURL("image/png");
+  } catch {
+    return null;
+  }
+}
+
+async function resolveRedstoneWireStateHintImage(states: Record<string, string>): Promise<string | null> {
+  const power = states.power && REDSTONE_WIRE_POWER_COLORS[states.power] ? states.power : "0";
+  const tintColor = REDSTONE_WIRE_POWER_COLORS[power] || REDSTONE_WIRE_POWER_COLORS["0"];
+  const tintRelPaths: string[] = [REDSTONE_WIRE_BASE_RELPATH];
+
+  for (const direction of REDSTONE_WIRE_DIRECTIONS) {
+    const state = states[direction];
+    if (state === "side") {
+      tintRelPaths.push(REDSTONE_WIRE_SIDE_RELPATHS[direction]);
+    }
+    if (state === "up") {
+      tintRelPaths.push(REDSTONE_WIRE_UP_RELPATHS[direction]);
+    }
+  }
+
+  const tintUrls = await readHintImageDataUrls(tintRelPaths);
+  if (!tintUrls) return null;
+
+  const tintedLayerUrls = await Promise.all(tintUrls.map((url) => tintImageDataUrl(url, tintColor)));
+  if (tintedLayerUrls.some((url) => !url)) return null;
+
+  const composedLayerUrls = tintedLayerUrls.filter((url): url is string => !!url);
+  const fixedRelPath = REDSTONE_WIRE_NUMBER_RELPATHS[power];
+  if (fixedRelPath) {
+    const fixedUrls = await readHintImageDataUrls([fixedRelPath]);
+    if (fixedUrls) {
+      composedLayerUrls.push(...fixedUrls);
+    }
+  }
+
+  return await composeImageDataUrls(composedLayerUrls);
 }
 
 /** 读取图标数据URL 
@@ -1101,6 +1277,7 @@ async function rotateImageDataUrl(url: string, quarterTurns: number): Promise<st
     canvas.height = swapAxis ? sourceWidth : sourceHeight;
     const context = canvas.getContext("2d");
     if (!context) return null;
+    context.imageSmoothingEnabled = false;
     context.translate(canvas.width / 2, canvas.height / 2);
     context.rotate(normalizedTurns * Math.PI / 2);
     context.drawImage(image, -sourceWidth / 2, -sourceHeight / 2, sourceWidth, sourceHeight);
@@ -1121,6 +1298,7 @@ async function applyMaskOverlays(baseIconUrl: string, overlayUrls: string[]): Pr
     canvas.height = height;
     const context = canvas.getContext("2d");
     if (!context) return null;
+    context.imageSmoothingEnabled = false;
     context.clearRect(0, 0, width, height);
     context.drawImage(baseImage, 0, 0, width, height);
     for (const overlayImage of overlayImages) {
@@ -1143,6 +1321,7 @@ async function applySubtractOverlays(baseIconUrl: string, overlayUrls: string[])
     canvas.height = height;
     const context = canvas.getContext("2d", { willReadFrequently: true });
     if (!context) return null;
+    context.imageSmoothingEnabled = false;
     context.clearRect(0, 0, width, height);
     context.drawImage(baseImage, 0, 0, width, height);
 
@@ -1152,6 +1331,7 @@ async function applySubtractOverlays(baseIconUrl: string, overlayUrls: string[])
       overlayCanvas.height = height;
       const overlayContext = overlayCanvas.getContext("2d", { willReadFrequently: true });
       if (!overlayContext) return null;
+      overlayContext.imageSmoothingEnabled = false;
       overlayContext.clearRect(0, 0, width, height);
       overlayContext.drawImage(overlayImage, 0, 0, width, height);
 
@@ -1190,6 +1370,11 @@ export async function resolveFlakeLayerBlockImage({
   if (!enabled) return baseIconUrl;
 
   const states = extractLayerPaletteStates(paletteEntry, propertyPool);
+  if (normalizeBlockId(blockId) === "minecraft:redstone_wire") {
+    const redstoneWireImage = await resolveRedstoneWireStateHintImage(states);
+    return redstoneWireImage || baseIconUrl;
+  }
+
   const rule = resolveManualStateHintRule(blockId, states);
   if (!rule) return baseIconUrl;
 
