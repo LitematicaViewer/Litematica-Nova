@@ -108,6 +108,11 @@ const REPEATOR_ON3_RELPATH = "data/flake/redstone_display/repeater_on3.png";
 const REPEATOR4_RELPATH = "data/flake/redstone_display/repeater4.png";
 const REPEATOR_ON4_RELPATH = "data/flake/redstone_display/repeater_on4.png";
 const REPEATOR_LOCK_RELPATH = "data/flake/redstone_display/repeater_lock.png";
+  // 红石比较器
+const COMPARATOR_RELPATH = "data/flake/redstone_display/comparator.png";
+const COMPARATOR_ON_RELPATH = "data/flake/redstone_display/comparator_on.png";
+const COMPARATOR2_RELPATH = "data/flake/redstone_display/comparator2.png";
+const COMPARATOR2_ON_RELPATH = "data/flake/redstone_display/comparator2_on.png";
 
 const hintImageCache = new Map<string, Promise<string | null>>();
 
@@ -897,7 +902,7 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
         rotateQuarterTurns = 0;
       }
       if (facing === "west") {
-        rotateQuarterTurns = 3;
+        rotateQuarterTurns = 1;
       }
       if (delay === "1") {
         return {
@@ -933,7 +938,43 @@ function resolveManualStateHintRule(blockId: string, states: Record<string, stri
       }
       return null;
     }
-    
+    // 红石比较器
+    case "minecraft:comparator": {
+      const mode = states.mode;
+      const facing = states.facing;
+      const powered = states.powered;
+      let rotateQuarterTurns = 0;
+      if (facing === "north") {
+        rotateQuarterTurns = 2;
+      }
+      if (facing === "east") {
+        rotateQuarterTurns = 3;
+      }
+      if (facing === "south") {
+        rotateQuarterTurns = 0;
+      }
+      if (facing === "west") {
+        rotateQuarterTurns = 1;
+      }
+      if (mode === "subtract") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [powered === "true" ? COMPARATOR2_ON_RELPATH : COMPARATOR2_RELPATH],
+          baseImageRotateQuarterTurns: rotateQuarterTurns,
+        };
+      }
+      if (mode === "compare") {
+        return {
+          mode: "replace",
+          baseImageRelPaths: [powered === "true" ? COMPARATOR_ON_RELPATH : COMPARATOR_RELPATH],
+          baseImageRotateQuarterTurns: rotateQuarterTurns,
+        };
+      }
+      return null;
+    }
+
+
+
     // 默认
     default:
       return null;
