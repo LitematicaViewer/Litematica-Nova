@@ -33,6 +33,8 @@ import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/
 // 同级函数
 import { fitView, FlakeBlockTooltip, resolveLayerBlockStates } from "./function";
 import { CreativeInventoryDialog } from "./creativeInventoryDialog";
+import { ContainerDialog } from "./containerDialog";
+import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem } from "../../../../../src/business/facade";
 
 interface LayerCanvasHandle {
   resetView: () => void;
@@ -66,8 +68,9 @@ const LayerCanvas = forwardRef<
     renderSlices: FlakeRenderSlice[];
     showStateHints: boolean;
     onHoverBlock: (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => void;
+    onBlockRightClick: (block: FlakeHoverBlock, event: React.MouseEvent) => void;
   }
->(({ meta, renderSlices, showStateHints, onHoverBlock }, ref) => {
+>(({ meta, renderSlices, showStateHints, onHoverBlock, onBlockRightClick }, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -266,14 +269,54 @@ const LayerCanvas = forwardRef<
     onHoverBlock(null, event);
   };
 
+  const handleContextMenu = (event: React.MouseEvent) => {
+    console.log("handleContextMenu 被调用");
+    event.preventDefault();
+    
+    if (!meta || visibleBlockIndex.size === 0 || !viewportRef.current) {
+      console.log("无法处理右键: meta=", !!meta, "visibleBlockIndex.size=", visibleBlockIndex.size, "viewportRef=", !!viewportRef.current);
+      return;
+    }
+
+    const rect = viewportRef.current.getBoundingClientRect();
+    const bx = Math.floor((event.clientX - rect.left - offset.x) / scale);
+    const bz = Math.floor((event.clientY - rect.top - offset.y) / scale);
+    console.log("计算的方块坐标:", bx, bz, "范围:", meta.size_x, meta.size_z);
+    
+    if (bx >= 0 && bx < meta.size_x && bz >= 0 && bz < meta.size_z) {
+      const visibleBlock = visibleBlockIndex.get(bz * meta.size_x + bx);
+      console.log("找到的 visibleBlock:", visibleBlock);
+      
+      if (visibleBlock) {
+        const paletteEntry = meta.palette[visibleBlock.block.palette_id];
+        const block: FlakeHoverBlock = {
+          x: bx,
+          y: visibleBlock.y,
+          z: bz,
+          id: paletteEntry.block_id,
+          name: translateBlockId(paletteEntry.block_id),
+          states: resolveLayerBlockStates(paletteEntry, meta.property_pool || []),
+        };
+        console.log("准备调用 onBlockRightClick, block=", block);
+        onBlockRightClick(block, event);
+      } else {
+        console.log("该位置没有方块");
+      }
+    } else {
+      console.log("坐标超出范围");
+    }
+  };
+
   return (
     <div
       ref={viewportRef}
       className={isDragging ? "flake-canvas is-dragging" : "flake-canvas"}
       onWheel={handleWheel}
       onMouseDown={(event) => {
-        setIsDragging(true);
-        setDragStart({ x: event.clientX - offset.x, y: event.clientY - offset.y });
+        if (event.button === 0) { // 只响应左键拖拽
+          setIsDragging(true);
+          setDragStart({ x: event.clientX - offset.x, y: event.clientY - offset.y });
+        }
       }}
       onMouseMove={handleMouseMove}
       onMouseUp={() => setIsDragging(false)}
@@ -281,6 +324,7 @@ const LayerCanvas = forwardRef<
         setIsDragging(false);
         onHoverBlock(null, null);
       }}
+      onContextMenu={handleContextMenu}
     >
       <div
         className="flake-layer-border"
@@ -324,6 +368,8 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [hoverBlock, setHoverBlock] = useState<FlakeHoverBlock | null>(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
   const [showMaterials, setShowMaterials] = useState(false);
+  const [showContainerDialog, setShowContainerDialog] = useState(false);
+  const [containerData, setContainerData] = useState<{ type: "chest" | "shulker_box" | "barrel"; items: ContainerItem[]; position: { x: number; y: number; z: number } } | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
   const [selectedQuickbarSlot, setSelectedQuickbarSlot] = useState(0);
@@ -628,6 +674,49 @@ export function FlakePage({ currentFile, setRoute }: any) {
     if (event) setHoverPos({ x: event.clientX, y: event.clientY });
   };
 
+  const handleBlockRightClick = async (block: FlakeHoverBlock, event: React.MouseEvent) => {
+    event.preventDefault();
+    
+    console.log("右键点击方块:", block.id, "坐标:", block.x, block.y, block.z);
+    
+    // 检查是否为容器方块
+    if (!isContainerBlock(block.id)) {
+      console.log("不是容器方块");
+      return;
+    }
+    
+    console.log("检测到容器方块，开始加载数据...");
+    
+    // 加载容器数据
+    const data = await loadContainerData(currentFile, regionName, block.x, block.y, block.z);
+    
+    console.log("加载到的容器数据:", data);
+    
+    if (!data) {
+      console.log("未找到容器数据或容器为空");
+      return;
+    }
+    
+    const containerType = getContainerType(data.block_id);
+    
+    console.log("容器类型:", containerType);
+    
+    // 只支持箱子、潜影盒和木桶
+    if (!containerType) {
+      console.log("不支持的容器类型，当前仅支持：箱子、潜影盒、木桶");
+      return;
+    }
+    
+    console.log("准备显示容器对话框");
+    
+    setContainerData({
+      type: containerType,
+      items: data.items,
+      position: data.position,
+    });
+    setShowContainerDialog(true);
+  };
+
   useLayoutEffect(() => {
     const page = pageRef.current;
     if (!page) return;
@@ -735,7 +824,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 <div>{building ? "标准模式 3D cache 正在构建。" : "请先生成标准模式 3D cache。"}</div>
               </div>
             ) : (
-              <LayerCanvas ref={canvasRef} meta={meta} renderSlices={renderSlices} showStateHints={showStateHints} onHoverBlock={handleHoverBlock} />
+              <LayerCanvas ref={canvasRef} meta={meta} renderSlices={renderSlices} showStateHints={showStateHints} onHoverBlock={handleHoverBlock} onBlockRightClick={handleBlockRightClick} />
             )}
 
             <FlakeBlockTooltip x={hoverPos.x} y={hoverPos.y} item={hoverBlock} />
@@ -833,6 +922,15 @@ export function FlakePage({ currentFile, setRoute }: any) {
       ) : null}
 
       {showMaterials && statsData && <MaterialsDialog data={statsData} onClose={() => setShowMaterials(false)} currentFile={currentFile} />}
+      
+      {showContainerDialog && containerData && (
+        <ContainerDialog
+          onClose={() => setShowContainerDialog(false)}
+          containerType={containerData.type}
+          items={containerData.items}
+          position={containerData.position}
+        />
+      )}
     </div>
   );
 }

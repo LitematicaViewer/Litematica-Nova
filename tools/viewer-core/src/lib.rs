@@ -1,6 +1,7 @@
 #![recursion_limit = "512"]
 
 pub mod analyze;
+pub mod block_entity;
 pub mod build_mode;
 pub mod business;
 pub mod cache_layer;
