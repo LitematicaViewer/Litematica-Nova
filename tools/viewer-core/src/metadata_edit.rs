@@ -54,7 +54,8 @@ pub fn edit_metadata(
         .with_context(|| format!("failed to read patch {}", patch_path.display()))?;
     let patch: MetadataEditPatch = serde_json::from_str(patch_text.trim_start_matches('\u{feff}'))
         .with_context(|| format!("failed to parse patch {}", patch_path.display()))?;
-    let mut root = load_litematic_root(input)?;
+    let arc_root = load_litematic_root(input)?;
+    let mut root = (*arc_root).clone();
 
     if let Some(value) = patch.name {
         root.metadata.name = Some(value);
