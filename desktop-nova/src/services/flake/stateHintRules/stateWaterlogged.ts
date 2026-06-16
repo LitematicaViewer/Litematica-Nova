@@ -7,6 +7,7 @@ const WATERLOGGED_TRUE_RELPATH = "data/flake/state_hint/waterlogged_true.png";
  * @param states - 方块状态对象
  * @param imageRelPaths - 遮罩图像路径数组
  * @param overlayIconBlockIds - 已有的覆盖图标数组
+ * @returns 是否需要添加水方块图标到覆盖层数组
  */
 export function applyWaterloggedOverlay(
   states: Record<string, string>,

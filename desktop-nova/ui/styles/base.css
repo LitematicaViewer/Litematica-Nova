@@ -2881,3 +2881,53 @@ pre {
         margin-left: 0;
     }
 }
+
+/* 容器对话框样式 */
+.flake-page__container-dialog {
+    width: 380px;
+    max-width: 90vw;
+}
+
+.flake-page__container-body {
+    position: relative;
+    width: 348px;
+    height: 180px;
+    background: url('../windows/main/pages/flake/../../themes/minecraft/resource/content/chest27.png') no-repeat center center;
+    background-size: contain;
+    margin: 16px auto;
+}
+
+.flake-page__container-grid {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+.flake-page__container-slot {
+    position: absolute;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+}
+
+.flake-page__container-slot img {
+    width: 32px;
+    height: 32px;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
+
+.flake-page__container-slot-count {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    font-size: 10px;
+    font-weight: bold;
+    color: white;
+    text-shadow: 1px 1px 0 #3f3f3f;
+    pointer-events: none;
+    font-family: 'MinecraftFive', monospace;
+}
