@@ -26,46 +26,53 @@ export async function loadContainerData(
   y: number,
   z: number
 ): Promise<ContainerData | null> {
-  try {
-    console.log("loadContainerData 调用参数:", { filePath, regionName, x, y, z });
-    
-    // 使用 read-block-entity 命令读取指定位置的 block entity
-    const out = await executeBackend("litematica_core.exe", [
-      "read-block-entity",
-      "--input",
-      filePath,
-      `--x=${x}`,
-      `--y=${y}`,
-      `--z=${z}`,
-      "--json",
-    ]);
-    
-    console.log("read-block-entity 原始输出:", out);
-    
-    if (!out || out.trim() === "null") {
-      console.log("未找到 block entity");
-      return null;
-    }
-    
-    const parsed = JSON.parse(out);
-    console.log("read-block-entity 返回:", parsed);
-    
-    if (!parsed) {
-      return null;
-    }
-    
-    // 解析物品
-    const items = parseContainerItems(parsed.nbt);
-    
-    return {
-      block_id: parsed.block_id,
-      position: { x: parsed.x, y: parsed.y, z: parsed.z },
-      items,
-    };
-  } catch (error) {
-    console.error("Failed to load container data:", error);
-    return null;
-  }
+  // 使用 queueMicrotask 延迟执行，避免阻塞主线程
+  return new Promise((resolve) => {
+    queueMicrotask(async () => {
+      try {
+        console.log("loadContainerData 调用参数:", { filePath, regionName, x, y, z });
+        
+        // 使用 read-block-entity 命令读取指定位置的 block entity
+        const out = await executeBackend("litematica_core.exe", [
+          "read-block-entity",
+          "--input",
+          filePath,
+          `--x=${x}`,
+          `--y=${y}`,
+          `--z=${z}`,
+          "--json",
+        ]);
+        
+        console.log("read-block-entity 原始输出:", out);
+        
+        if (!out || out.trim() === "null") {
+          console.log("未找到 block entity");
+          resolve(null);
+          return;
+        }
+        
+        const parsed = JSON.parse(out);
+        console.log("read-block-entity 返回:", parsed);
+        
+        if (!parsed) {
+          resolve(null);
+          return;
+        }
+        
+        // 解析物品
+        const items = parseContainerItems(parsed.nbt);
+        
+        resolve({
+          block_id: parsed.block_id,
+          position: { x: parsed.x, y: parsed.y, z: parsed.z },
+          items,
+        });
+      } catch (error) {
+        console.error("Failed to load container data:", error);
+        resolve(null);
+      }
+    });
+  });
 }
 
 /**
