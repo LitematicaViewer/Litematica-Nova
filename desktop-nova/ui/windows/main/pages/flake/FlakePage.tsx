@@ -1,5 +1,6 @@
 ﻿import React, {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -35,6 +36,32 @@ import { fitView, FlakeBlockTooltip, resolveLayerBlockStates } from "./function"
 import { CreativeInventoryDialog } from "./creativeInventoryDialog";
 import { ContainerDialog } from "./containerDialog";
 import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem } from "../../../../../src/business/facade";
+
+// 全局图标缓存，避免重复处理相同方块
+const globalIconCache = new Map<string, Promise<string | null>>();
+
+function getCachedIconImage(
+  blockId: string,
+  paletteEntry: any,
+  propertyPool: any[],
+  enabled: boolean
+): Promise<string | null> {
+  const cacheKey = `${blockId}::${JSON.stringify(paletteEntry)}::${enabled}`;
+  
+  if (!globalIconCache.has(cacheKey)) {
+    globalIconCache.set(
+      cacheKey,
+      resolveFlakeLayerBlockImage({
+        blockId,
+        paletteEntry,
+        propertyPool,
+        enabled,
+      })
+    );
+  }
+  
+  return globalIconCache.get(cacheKey)!;
+}
 
 interface LayerCanvasHandle {
   resetView: () => void;
@@ -185,32 +212,49 @@ const LayerCanvas = forwardRef<
 
   useEffect(() => {
     let cancelled = false;
-    setIconImages(new Map());
-
+    
     if (!meta || slicePaletteIds.length === 0) {
-      // console.log("[LBA_FLAKE] icon_batch:disabled", { has_meta: !!meta, slice_palette_ids: slicePaletteIds.length });
+      setIconImages(new Map());
       return () => {
         cancelled = true;
       };
     }
 
     void (async () => {
-      const next = new Map<number, string>();
-      for (const paletteId of slicePaletteIds) {
+      // 并行处理所有图标，避免串行阻塞
+      const tasks = slicePaletteIds.map(async (paletteId) => {
         const entry = meta.palette[paletteId];
-        if (!entry?.block_id) continue;
-        const dataUrl = await resolveFlakeLayerBlockImage({
-          blockId: entry.block_id,
-          paletteEntry: entry,
-          propertyPool: meta.property_pool || [],
-          enabled: showStateHints,
-        });
-        if (cancelled || !dataUrl) continue;
-        next.set(paletteId, dataUrl);
+        if (!entry?.block_id) return null;
+        
+        try {
+          // 使用缓存，避免重复处理
+          const dataUrl = await getCachedIconImage(
+            entry.block_id,
+            entry,
+            meta.property_pool || [],
+            showStateHints
+          );
+          return { paletteId, dataUrl };
+        } catch (error) {
+          console.error(`Failed to resolve icon for palette ${paletteId}:`, error);
+          return null;
+        }
+      });
+
+      // 等待所有任务完成（并行执行）
+      const results = await Promise.all(tasks);
+      
+      if (cancelled) return;
+
+      // 批量更新状态
+      const next = new Map<number, string>();
+      for (const result of results) {
+        if (result && result.dataUrl) {
+          next.set(result.paletteId, result.dataUrl);
+        }
       }
-      if (!cancelled) {
-        setIconImages(next);
-      }
+      
+      setIconImages(next);
     })();
 
     return () => {
@@ -370,6 +414,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [showMaterials, setShowMaterials] = useState(false);
   const [showContainerDialog, setShowContainerDialog] = useState(false);
   const [containerData, setContainerData] = useState<{ type: "chest" | "shulker_box" | "barrel"; items: ContainerItem[]; position: { x: number; y: number; z: number } } | null>(null);
+  const [isLoadingContainer, setIsLoadingContainer] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
   const [selectedQuickbarSlot, setSelectedQuickbarSlot] = useState(0);
@@ -607,6 +652,11 @@ export function FlakePage({ currentFile, setRoute }: any) {
         return;
       }
       inFlightSliceKeysRef.current.add(sliceKey);
+      // #region agent log
+      const layerLoadStart = Date.now();
+      fetch('http://127.0.0.1:7337/ingest/eabd7817-9767-4d77-8cb1-446d598a0056',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'eabd7817-9767-4d77-8cb1-446d598a0056'},body:JSON.stringify({sessionId:'eabd7817-9767-4d77-8cb1-446d598a0056',location:'FlakePage.tsx:656',message:'loadLayerSlice start',data:{cacheFile,targetY},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      
       /*
       console.log("[LBA_FLAKE] effect:loadLayerSlice:start", {
         cacheFile,
@@ -618,6 +668,10 @@ export function FlakePage({ currentFile, setRoute }: any) {
       */
       loadLayerSlice(cacheFile, targetY)
         .then((nextSlice) => {
+          // #region agent log
+          fetch('http://127.0.0.1:7337/ingest/eabd7817-9767-4d77-8cb1-446d598a0056',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'eabd7817-9767-4d77-8cb1-446d598a0056'},body:JSON.stringify({sessionId:'eabd7817-9767-4d77-8cb1-446d598a0056',location:'FlakePage.tsx:671',message:'loadLayerSlice success',data:{duration:Date.now()-layerLoadStart,blockCount:nextSlice?.blocks?.length||0},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
+          // #endregion
+          
           /*
           console.log("[LBA_FLAKE] effect:loadLayerSlice:end", {
             cacheFile,
@@ -669,13 +723,18 @@ export function FlakePage({ currentFile, setRoute }: any) {
     return next;
   }, [layerY, onionSkinDepth, sliceDataByY]);
 
-  const handleHoverBlock = (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => {
+  const handleHoverBlock = useCallback((block: FlakeHoverBlock | null, event: React.MouseEvent | null) => {
     setHoverBlock(block);
     if (event) setHoverPos({ x: event.clientX, y: event.clientY });
-  };
+  }, []);
 
-  const handleBlockRightClick = async (block: FlakeHoverBlock, event: React.MouseEvent) => {
+  const handleBlockRightClick = useCallback(async (block: FlakeHoverBlock, event: React.MouseEvent) => {
     event.preventDefault();
+    
+    // 防止重复加载
+    if (isLoadingContainer) {
+      return;
+    }
     
     console.log("右键点击方块:", block.id, "坐标:", block.x, block.y, block.z);
     
@@ -687,35 +746,50 @@ export function FlakePage({ currentFile, setRoute }: any) {
     
     console.log("检测到容器方块，开始加载数据...");
     
-    // 加载容器数据
-    const data = await loadContainerData(currentFile, regionName, block.x, block.y, block.z);
+    // 设置加载状态
+    setIsLoadingContainer(true);
     
-    console.log("加载到的容器数据:", data);
-    
-    if (!data) {
-      console.log("未找到容器数据或容器为空");
-      return;
+    try {
+      // 计算 regionName（避免闭包依赖问题）
+      const region = statsData?.regions?.[0]?.name || currentFile.split(/[\\/]/).pop() || "Unnamed";
+      
+      // 使用 Promise 包装，避免阻塞主线程
+      const data = await Promise.race([
+        loadContainerData(currentFile, region, block.x, block.y, block.z),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)) // 5秒超时
+      ]);
+      
+      console.log("加载到的容器数据:", data);
+      
+      if (!data) {
+        console.log("未找到容器数据或容器为空");
+        return;
+      }
+      
+      const containerType = getContainerType(data.block_id);
+      
+      console.log("容器类型:", containerType);
+      
+      // 只支持箱子、潜影盒和木桶
+      if (!containerType) {
+        console.log("不支持的容器类型，当前仅支持：箱子、潜影盒、木桶");
+        return;
+      }
+      
+      console.log("准备显示容器对话框");
+      
+      setContainerData({
+        type: containerType,
+        items: data.items,
+        position: data.position,
+      });
+      setShowContainerDialog(true);
+    } catch (error) {
+      console.error("加载容器数据失败:", error);
+    } finally {
+      setIsLoadingContainer(false);
     }
-    
-    const containerType = getContainerType(data.block_id);
-    
-    console.log("容器类型:", containerType);
-    
-    // 只支持箱子、潜影盒和木桶
-    if (!containerType) {
-      console.log("不支持的容器类型，当前仅支持：箱子、潜影盒、木桶");
-      return;
-    }
-    
-    console.log("准备显示容器对话框");
-    
-    setContainerData({
-      type: containerType,
-      items: data.items,
-      position: data.position,
-    });
-    setShowContainerDialog(true);
-  };
+  }, [currentFile, statsData, isLoadingContainer]);
 
   useLayoutEffect(() => {
     const page = pageRef.current;

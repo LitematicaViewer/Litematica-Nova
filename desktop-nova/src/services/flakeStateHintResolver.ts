@@ -5,6 +5,21 @@ import type { LayerPaletteEntry } from "./layerService";
 import { applyWaterloggedOverlay } from "./flake/stateHintRules/stateWaterlogged";
 import { isBlockInEnumerator } from "./flake/enumeratorLoader";
 
+// 含水方块枚举器的同步缓存
+let waterloggedBlocksSet: Set<string> | null = null;
+
+// 预加载含水方块枚举器（在模块初始化时异步加载）
+(async () => {
+  try {
+    // 触发加载，利用 enumeratorLoader 的内部缓存
+    const testBlock = "minecraft:chest";
+    await isBlockInEnumerator(testBlock, "enumerator/system_enum/state_waterlogged.json");
+    // 注意：这里只是预热缓存，实际检查仍然需要调用 isBlockInEnumerator
+  } catch (error) {
+    console.warn("Failed to preload waterlogged enumerator:", error);
+  }
+})();
+
 type FlakeStateHintMode = "mask" | "replace";
 type FlakeOverlayBlendMode = "normal" | "subtract";
 
