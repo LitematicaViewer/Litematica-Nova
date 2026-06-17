@@ -42,6 +42,19 @@ export function executeBackend(binaryName: string, args: string[]): Promise<stri
   return invoke("execute_backend", { binaryName, args });
 }
 
+/**
+ * Runs a read-only backend command through the Rust-side cache shared by all
+ * windows. `cacheKeyPath` is the source file whose mtime validates the entry.
+ */
+export function executeBackendCached(binaryName: string, args: string[], cacheKeyPath: string): Promise<string> {
+  return invoke("execute_backend_cached", { binaryName, args, cacheKeyPath });
+}
+
+/** Drops Rust-side cached results for a file path (empty string clears all). */
+export function invalidateBackendCache(path: string): Promise<void> {
+  return invoke("invalidate_backend_cache", { path });
+}
+
 export function executeBackendTrace(binaryName: string, args: string[]): Promise<BackendTrace> {
   return invoke("execute_backend_trace", { binaryName, args });
 }

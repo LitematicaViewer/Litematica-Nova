@@ -652,11 +652,6 @@ export function FlakePage({ currentFile, setRoute }: any) {
         return;
       }
       inFlightSliceKeysRef.current.add(sliceKey);
-      // #region agent log
-      const layerLoadStart = Date.now();
-      fetch('http://127.0.0.1:7337/ingest/eabd7817-9767-4d77-8cb1-446d598a0056',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'eabd7817-9767-4d77-8cb1-446d598a0056'},body:JSON.stringify({sessionId:'eabd7817-9767-4d77-8cb1-446d598a0056',location:'FlakePage.tsx:656',message:'loadLayerSlice start',data:{cacheFile,targetY},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
-      
       /*
       console.log("[LBA_FLAKE] effect:loadLayerSlice:start", {
         cacheFile,
@@ -668,10 +663,6 @@ export function FlakePage({ currentFile, setRoute }: any) {
       */
       loadLayerSlice(cacheFile, targetY)
         .then((nextSlice) => {
-          // #region agent log
-          fetch('http://127.0.0.1:7337/ingest/eabd7817-9767-4d77-8cb1-446d598a0056',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'eabd7817-9767-4d77-8cb1-446d598a0056'},body:JSON.stringify({sessionId:'eabd7817-9767-4d77-8cb1-446d598a0056',location:'FlakePage.tsx:671',message:'loadLayerSlice success',data:{duration:Date.now()-layerLoadStart,blockCount:nextSlice?.blocks?.length||0},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-          // #endregion
-          
           /*
           console.log("[LBA_FLAKE] effect:loadLayerSlice:end", {
             cacheFile,

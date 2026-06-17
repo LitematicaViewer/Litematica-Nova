@@ -10,6 +10,7 @@ export interface PathInfo {
   is_file: boolean;
   is_absolute: boolean;
   has_litematic_ext: boolean;
+  mtime_ms: number;
 }
 
 export interface ProjectionPreviewImageOutput {
