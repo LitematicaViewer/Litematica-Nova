@@ -16,6 +16,7 @@ import {
   type PathInfo,
 } from "../services/backend";
 import { sanitizeFileName } from "../services/generateService";
+import { getAnalyzeOutput, invalidateCoreReadCache } from "../services/coreReadCache";
 
 const BLOCKSTATE_DB_PATH = "data/minecraft_blockstates/26.1.json";
 const BLOCKSTATE_ZH_PATH = "data/minecraft_blockstates/26.1.zh_cn.json";
@@ -98,7 +99,7 @@ export async function getDefaultProjectionOutputPath(currentFile: string | undef
 }
 
 export async function analyzeProjectionFile(filePath: string): Promise<any> {
-  return JSON.parse(await executeCoreBackend(["analyze", filePath]));
+  return JSON.parse(await getAnalyzeOutput(filePath));
 }
 
 export async function saveProjectionMetadataPatch({ currentFile, patch, outputPath }: MetadataPatchInput): Promise<string> {
@@ -107,7 +108,10 @@ export async function saveProjectionMetadataPatch({ currentFile, patch, outputPa
   await writeUserConfigFile(relative, JSON.stringify(patch, null, 2));
   const args = ["edit-metadata", "--input", currentFile, "--patch", patchPath];
   if (outputPath) args.push("--output", outputPath);
-  return executeCoreBackend(args);
+  const result = await executeCoreBackend(args);
+  // edit-metadata rewrites currentFile in place when no separate output is given.
+  invalidateCoreReadCache(outputPath ? undefined : currentFile);
+  return result;
 }
 
 export async function dryRunReplaceBlocks(currentFile: string, rules: any[]): Promise<string> {

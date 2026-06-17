@@ -1,11 +1,11 @@
 import {
   readUserConfigFile,
   writeUserConfigFile,
-  executeBackend,
   checkFileExists,
   DirectoryEntryInfo,
   listLitematicFileEntriesInDirectory,
 } from "./backend";
+import { getAnalyzeOutput } from "./coreReadCache";
 
 export interface ProjectionRecord {
   id: string;
@@ -202,18 +202,8 @@ export async function saveLibrary(state: LibraryState): Promise<void> {
 }
 
 export async function analyzeFile(filePath: string): Promise<Partial<ProjectionRecord>> {
-  // #region agent log
-  const analyzeStart = Date.now();
-  fetch('http://127.0.0.1:7337/ingest/eabd7817-9767-4d77-8cb1-446d598a0056',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'eabd7817-9767-4d77-8cb1-446d598a0056'},body:JSON.stringify({sessionId:'eabd7817-9767-4d77-8cb1-446d598a0056',location:'libraryStore.ts:205',message:'analyzeFile start',data:{filePath},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-  // #endregion
-  
   try {
-    const out = await executeBackend("litematica_core.exe", ["analyze", filePath]);
-    
-    // #region agent log
-    fetch('http://127.0.0.1:7337/ingest/eabd7817-9767-4d77-8cb1-446d598a0056',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'eabd7817-9767-4d77-8cb1-446d598a0056'},body:JSON.stringify({sessionId:'eabd7817-9767-4d77-8cb1-446d598a0056',location:'libraryStore.ts:213',message:'analyzeFile backend complete',data:{duration:Date.now()-analyzeStart,outputLength:out?.length||0},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
-    
+    const out = await getAnalyzeOutput(filePath);
     try {
       const parsed = JSON.parse(out);
       const meta = parsed.metadata || {};

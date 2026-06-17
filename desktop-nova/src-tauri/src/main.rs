@@ -7,11 +7,12 @@ use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::collections::HashMap;
 use std::env;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tauri_plugin_dialog::DialogExt;
@@ -101,6 +102,7 @@ struct PathInfo {
     is_file: bool,
     is_absolute: bool,
     has_litematic_ext: bool,
+    mtime_ms: u128,
 }
 
 #[derive(Serialize)]
@@ -966,6 +968,92 @@ async fn execute_backend(binary_name: String, args: Vec<String>) -> Result<Strin
             "Exit code: {:?}\nStdout: {}\nStderr: {}",
             trace.backend_exit_code, trace.backend_stdout, trace.backend_stderr
         ))
+    }
+}
+
+/// Process-wide cache for read-only backend command output, shared across all
+/// windows (main + material-list etc. are WebViews of this single Tauri process).
+/// Keyed by (binary_name, args); validated against the source file's mtime so an
+/// edited or replaced file re-runs automatically.
+struct CoreReadCacheEntry {
+    mtime_ms: u128,
+    output: String,
+}
+
+fn core_read_cache() -> &'static Mutex<HashMap<String, CoreReadCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, CoreReadCacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn file_mtime_ms(path: &Path) -> u128 {
+    std::fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata_modified_ms(&metadata))
+        .unwrap_or(0)
+}
+
+/// Runs a read-only core command, reusing cached stdout when `cache_key_path`'s
+/// mtime is unchanged. Only call for commands whose output is a pure function of
+/// (file contents, args) — never for mutating commands.
+#[tauri::command]
+async fn execute_backend_cached(
+    binary_name: String,
+    args: Vec<String>,
+    cache_key_path: String,
+) -> Result<String, String> {
+    let input = PathBuf::from(&cache_key_path);
+    let full_path = if input.is_absolute() {
+        input
+    } else {
+        get_root().join(input)
+    };
+    let mtime_ms = file_mtime_ms(&full_path);
+    let cache_key = format!("{binary_name}\u{0}{}", args.join("\u{0}"));
+
+    if mtime_ms != 0 {
+        if let Ok(cache) = core_read_cache().lock() {
+            if let Some(entry) = cache.get(&cache_key) {
+                if entry.mtime_ms == mtime_ms {
+                    return Ok(entry.output.clone());
+                }
+            }
+        }
+    }
+
+    let trace = run_backend(&binary_name, &args)?;
+    if trace.backend_exit_code != Some(0) {
+        return Err(format!(
+            "Exit code: {:?}\nStdout: {}\nStderr: {}",
+            trace.backend_exit_code, trace.backend_stdout, trace.backend_stderr
+        ));
+    }
+
+    if mtime_ms != 0 {
+        if let Ok(mut cache) = core_read_cache().lock() {
+            cache.insert(
+                cache_key,
+                CoreReadCacheEntry {
+                    mtime_ms,
+                    output: trace.backend_stdout.clone(),
+                },
+            );
+        }
+    }
+
+    Ok(trace.backend_stdout)
+}
+
+/// Drops cached read results whose source file path matches `path` (or clears the
+/// whole cache when `path` is empty). Best-effort: mtime validation already keeps
+/// stale entries out, this just frees memory after an in-place edit.
+#[tauri::command]
+fn invalidate_backend_cache(path: String) {
+    if let Ok(mut cache) = core_read_cache().lock() {
+        if path.is_empty() {
+            cache.clear();
+        } else {
+            cache.retain(|key, _| !key.contains(&path));
+        }
     }
 }
 
@@ -2216,6 +2304,7 @@ fn get_path_info(path: String) -> PathInfo {
         is_file: metadata.as_ref().map(|m| m.is_file()).unwrap_or(false),
         is_absolute: full_path.is_absolute(),
         has_litematic_ext,
+        mtime_ms: metadata.as_ref().map(metadata_modified_ms).unwrap_or(0),
     }
 }
 
@@ -4181,6 +4270,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             execute_backend,
             execute_backend_trace,
+            execute_backend_cached,
+            invalidate_backend_cache,
             start_native_viewer,
             start_embedded_viewer,
             update_embedded_viewer_bounds,
