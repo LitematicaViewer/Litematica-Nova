@@ -2884,16 +2884,16 @@ pre {
 
 /* 容器对话框样式 */
 .flake-page__container-dialog {
-    width: 380px;
+    width: 400px;
     max-width: 90vw;
 }
 
 .flake-page__container-body {
     position: relative;
-    width: 348px;
-    height: 180px;
-    background: url('../windows/main/pages/flake/../../themes/minecraft/resource/content/chest27.png') no-repeat center center;
-    background-size: contain;
+    width: 352px;
+    height: 332px;
+    background: var(--flake-chest-image, url("../shell/resource/content/chest27.png")) no-repeat center center;
+    image-rendering: pixelated;
     margin: 16px auto;
 }
 
