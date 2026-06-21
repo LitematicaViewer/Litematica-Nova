@@ -6,7 +6,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 
 use crate::model::{
-    LayerSliceOutput, VisualLayerOutput, VisualMetaOutput, VisualMetaSummaryOutput, VisualOutput,
+    LayerSliceOutput, VisualAllLayersOutput, VisualLayerOutput, VisualMetaOutput,
+    VisualMetaSummaryOutput, VisualOutput,
 };
 
 #[derive(Debug, Deserialize)]
@@ -81,6 +82,19 @@ pub fn build_cache_layer_output(
         chunk_size: sidecar.visual.chunk_size,
         y: target_y,
         blocks,
+    })
+}
+
+/// Returns every layer in one shot, so the renderer can prefetch all slices with
+/// a single subprocess call instead of re-parsing the whole layer index per `--y`.
+pub fn build_cache_all_layers_output(
+    cache_manifest_path: &Path,
+) -> Result<VisualAllLayersOutput> {
+    let sidecar = read_layer_index(cache_manifest_path)?;
+    Ok(VisualAllLayersOutput {
+        metadata: sidecar.metadata,
+        chunk_size: sidecar.visual.chunk_size,
+        layers: sidecar.visual.layers,
     })
 }
 
