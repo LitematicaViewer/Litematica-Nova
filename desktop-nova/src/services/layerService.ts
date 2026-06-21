@@ -65,6 +65,26 @@ export async function loadLayerSlice(cacheFile: string, y: number): Promise<Laye
   }
 }
 
+/**
+ * Loads every layer slice in one backend call. Lets the renderer prefetch the
+ * whole projection so switching layers is a pure in-memory lookup with no
+ * per-layer subprocess round-trip.
+ */
+export async function loadAllLayerSlices(cacheFile: string): Promise<LayerSliceData[] | null> {
+  try {
+    const out = await executeBackend("litematica_core.exe", ["cache-layers-all", cacheFile]);
+    const parsed = JSON.parse(out);
+    const layers = Array.isArray(parsed.layers) ? parsed.layers : [];
+    return layers.map((layer: any) => ({
+      y: layer.y,
+      blocks: layer.blocks || [],
+    }));
+  } catch (e) {
+    console.error("Failed to load all layer slices", e);
+    return null;
+  }
+}
+
 // Convert palette block id to hex color string for canvas drawing
 export function getBlockColor(blockId: string): string {
   // Simple heuristic color generation based on block id string hash to keep it stable

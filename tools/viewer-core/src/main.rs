@@ -223,6 +223,10 @@ fn main() -> Result<()> {
             let output = cache_layer::build_cache_layer_output(&args.input, y)?;
             emit_output(&output, args.output.as_deref())?;
         }
+        "cache-layers-all" => {
+            let output = cache_layer::build_cache_all_layers_output(&args.input)?;
+            emit_output(&output, args.output.as_deref())?;
+        }
         "visualize" => {
             let output = visual::build_visual_output(&args.input, args.chunk_size)?;
             emit_output(&output, args.output.as_deref())?;

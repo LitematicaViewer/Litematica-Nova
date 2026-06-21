@@ -17,6 +17,7 @@ import {
   LayerSliceMeta,
   loadLayerMeta,
   loadLayerSlice,
+  loadAllLayerSlices,
   loadStructureStats,
   pollCacheBuildTask,
   startCacheBuildTask,
@@ -433,6 +434,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const loadedMetaKeyRef = useRef("");
   const inFlightSliceKeysRef = useRef(new Set<string>());
   const loadedSliceKeysRef = useRef(new Set<string>());
+  const prefetchedAllKeyRef = useRef("");
 
   const stopQuickBuildPolling = () => {
     if (pollIntervalRef.current !== null) {
@@ -464,6 +466,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setCacheExists(false);
     loadedMetaKeyRef.current = "";
     loadedSliceKeysRef.current.clear();
+    prefetchedAllKeyRef.current = "";
 
     if (!stored?.cacheFile) {
       inFlightMetaKeyRef.current = "";
@@ -511,6 +514,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
         loadedMetaKeyRef.current = metaKey;
         loadedSliceKeysRef.current.clear();
         inFlightSliceKeysRef.current.clear();
+        prefetchedAllKeyRef.current = "";
         setSliceDataByY({});
         setMeta(loadedMeta);
         setLayerY(0);
@@ -533,6 +537,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setSliceDataByY({});
     loadedSliceKeysRef.current.clear();
     inFlightSliceKeysRef.current.clear();
+    prefetchedAllKeyRef.current = "";
 
     try {
       const launch = await startCacheBuildTask(currentFile, "normal");
@@ -637,6 +642,34 @@ export function FlakePage({ currentFile, setRoute }: any) {
       setShowInventoryDialog(false);
     }
   }, [editMode]);
+
+  // Prefetch every layer in one backend call as soon as the cache is ready, so
+  // switching layers becomes a pure in-memory lookup with no per-layer wait.
+  useEffect(() => {
+    if (!cacheExists || !meta || !cacheFile) return;
+    if (prefetchedAllKeyRef.current === cacheFile) return;
+    prefetchedAllKeyRef.current = cacheFile;
+
+    let cancelled = false;
+    loadAllLayerSlices(cacheFile)
+      .then((slices) => {
+        if (cancelled || !slices) return;
+        const byY: Record<number, LayerSliceData> = {};
+        for (const slice of slices) {
+          byY[slice.y] = slice;
+          loadedSliceKeysRef.current.add(`${cacheFile}::${slice.y}`);
+        }
+        setSliceDataByY((current) => ({ ...byY, ...current }));
+      })
+      .catch(() => {
+        // Fall back to per-layer on-demand loading below.
+        prefetchedAllKeyRef.current = "";
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cacheExists, meta, cacheFile]);
 
   useEffect(() => {
     if (!cacheExists || !meta || !cacheFile) return;
