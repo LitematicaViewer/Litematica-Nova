@@ -3,6 +3,14 @@ import { BlockIcon } from "../../../../components/BlockIcon";
 import { FlakeHoverBlock } from "./FlakePage";
 import { LayerSliceMeta } from "../../../../../src/services/layerService";
 
+function resolveDefaultFlakeScale(sizeZ: number): number {
+  if (sizeZ <= 20) return 32;
+  if (sizeZ <= 40) return 16;
+  if (sizeZ <= 80) return 8;
+  if (sizeZ <= 160) return 4;
+  return 1;
+}
+
 /**
  * 格式化状态记录。
  * @param record 状态记录
@@ -210,9 +218,7 @@ export function fitView(
   setOffset: (offset: { x: number; y: number; }) => void) {
   const width = viewport?.parentElement?.clientWidth || viewport?.clientWidth || 600;
   const height = viewport?.parentElement?.clientHeight || viewport?.clientHeight || 600;
-  const maxDim = Math.max(meta.size_x, meta.size_z);
-  if (maxDim <= 0) return;
-  const initialScale = Math.min(10, Math.max(0.5, (Math.min(width, height) * 0.8) / maxDim));
+  const initialScale = resolveDefaultFlakeScale(meta.size_z);
   setScale(initialScale);
   setOffset({
     x: width / 2 - (meta.size_x * initialScale) / 2,

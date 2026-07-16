@@ -17,7 +17,6 @@ import {
   LayerSliceMeta,
   loadLayerMeta,
   loadLayerSlice,
-  loadAllLayerSlices,
   loadStructureStats,
   pollCacheBuildTask,
   startCacheBuildTask,
@@ -41,9 +40,48 @@ import { loadContainerData, isContainerBlock, getContainerType, type ContainerIt
 // 缩放范围：scale 表示每个方块占用的像素数（像素/格）。
 const MIN_SCALE = 1;
 const MAX_SCALE = 64;
+const ICON_NATIVE_SIZE = 16;
+const HOVER_TOOLTIP_MIN_SCALE = 8;
+const RENDER_OVERSCAN_PIXELS = 256;
 
 // 全局图标缓存，避免重复处理相同方块
 const globalIconCache = new Map<string, Promise<string | null>>();
+const globalIconUnitColorCache = new Map<string, Promise<string | null>>();
+
+function resolveIconUnitColor(iconUrl: string): Promise<string | null> {
+  if (!globalIconUnitColorCache.has(iconUrl)) {
+    globalIconUnitColorCache.set(iconUrl, new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 1;
+        canvas.height = 1;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (!context) {
+          resolve(null);
+          return;
+        }
+
+        context.clearRect(0, 0, 1, 1);
+        context.drawImage(image, 0, 0, 1, 1);
+        const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+        if (alpha <= 0) {
+          resolve(null);
+          return;
+        }
+        if (alpha >= 255) {
+          resolve(`rgb(${red}, ${green}, ${blue})`);
+          return;
+        }
+        resolve(`rgba(${red}, ${green}, ${blue}, ${Math.round((alpha / 255) * 1000) / 1000})`);
+      };
+      image.onerror = () => resolve(null);
+      image.src = iconUrl;
+    }));
+  }
+
+  return globalIconUnitColorCache.get(iconUrl)!;
+}
 
 function getCachedIconImage(
   blockId: string,
@@ -100,6 +138,29 @@ interface VisibleLayerBlock {
   opacity: number;
 }
 
+interface VisibleLayerIndex {
+  byPosition: Map<number, VisibleLayerBlock>;
+  rows: Map<number, VisibleLayerBlock[]>;
+}
+
+interface VisibleBlockWindow {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+function findFirstBlockAtOrAfterX(blocks: VisibleLayerBlock[], minX: number): number {
+  let low = 0;
+  let high = blocks.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (blocks[mid].block.x < minX) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
 const LayerCanvas = forwardRef<
   LayerCanvasHandle,
   {
@@ -112,11 +173,16 @@ const LayerCanvas = forwardRef<
   }
 >(({ meta, renderSlices, showStateHints, onHoverBlock, onBlockRightClick, onScaleChange }, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const worldRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [iconImages, setIconImages] = useState<Map<number, string>>(new Map());
+  const [iconUnitColors, setIconUnitColors] = useState<Map<number, string>>(new Map());
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const dragFrameRef = useRef<number | null>(null);
+  const pendingOffsetRef = useRef(offset);
 
   // 用 ref 镜像最新的 scale / offset，供事件处理和命令式缩放共用，避免闭包读到旧值。
   const scaleRef = useRef(scale);
@@ -124,12 +190,58 @@ const LayerCanvas = forwardRef<
   scaleRef.current = scale;
   offsetRef.current = offset;
 
+  const scheduleOffset = useCallback((nextOffset: { x: number; y: number }) => {
+    pendingOffsetRef.current = nextOffset;
+    if (dragFrameRef.current !== null) return;
+    dragFrameRef.current = window.requestAnimationFrame(() => {
+      dragFrameRef.current = null;
+      setOffset(pendingOffsetRef.current);
+    });
+  }, []);
+
   // 通知父组件当前缩放，用于同步滑块和输入框。用 ref 保存回调避免因引用变化触发多余 effect。
   const onScaleChangeRef = useRef(onScaleChange);
   onScaleChangeRef.current = onScaleChange;
   useEffect(() => {
     onScaleChangeRef.current?.(scale);
   }, [scale]);
+
+  useEffect(() => {
+    if (scale < HOVER_TOOLTIP_MIN_SCALE) {
+      onHoverBlock(null, null);
+    }
+  }, [onHoverBlock, scale]);
+
+  useLayoutEffect(() => {
+    const world = worldRef.current;
+    if (!world) return;
+    world.style.transform = `translate(${Math.round(offset.x)}px, ${Math.round(offset.y)}px)`;
+  }, [offset.x, offset.y]);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    const updateViewportSize = () => {
+      const rect = viewport.getBoundingClientRect();
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      setViewportSize((current) => (
+        current.width === width && current.height === height ? current : { width, height }
+      ));
+    };
+
+    updateViewportSize();
+    const observer = new ResizeObserver(updateViewportSize);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => () => {
+    if (dragFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragFrameRef.current);
+    }
+  }, []);
 
   // 围绕锚点 (anchorX, anchorY，均相对视口左上角) 将缩放设置为 nextScale。
   const applyZoom = (rawScale: number, anchorX: number, anchorY: number) => {
@@ -178,25 +290,54 @@ const LayerCanvas = forwardRef<
     return paletteIds;
   }, [meta, renderSlices]);
 
-  const visibleBlockIndex = useMemo(() => {
-    const index = new Map<number, VisibleLayerBlock>();
-    if (!meta || renderSlices.length === 0) return index;
+  const visibleLayerIndex = useMemo<VisibleLayerIndex>(() => {
+    const byPosition = new Map<number, VisibleLayerBlock>();
+    const rowMaps = new Map<number, Map<number, VisibleLayerBlock>>();
+    if (!meta || renderSlices.length === 0) return { byPosition, rows: new Map() };
+
     for (const renderSlice of renderSlices) {
       for (const block of renderSlice.sliceData.blocks) {
         const positionKey = block.z * meta.size_x + block.x;
-        if (index.has(positionKey)) continue;
-        index.set(positionKey, {
+        if (byPosition.has(positionKey)) continue;
+        const visibleBlock = {
           block,
           y: renderSlice.sliceData.y,
           opacity: renderSlice.opacity,
-        });
+        };
+        byPosition.set(positionKey, visibleBlock);
+
+        let row = rowMaps.get(block.z);
+        if (!row) {
+          row = new Map<number, VisibleLayerBlock>();
+          rowMaps.set(block.z, row);
+        }
+        row.set(block.x, visibleBlock);
       }
     }
-    return index;
+
+    const rows = new Map<number, VisibleLayerBlock[]>();
+    for (const [z, row] of rowMaps.entries()) {
+      rows.set(z, Array.from(row.values()).sort((a, b) => a.block.x - b.block.x));
+    }
+    return { byPosition, rows };
   }, [meta, renderSlices]);
 
+  const visibleBlockWindow = useMemo<VisibleBlockWindow | null>(() => {
+    if (!meta) return null;
+    const width = viewportSize.width || 600;
+    const height = viewportSize.height || 600;
+    const safeScale = Math.max(MIN_SCALE, scale);
+    const overscanBlocks = Math.max(2, Math.ceil(RENDER_OVERSCAN_PIXELS / safeScale));
+    const minX = Math.max(0, Math.floor((-offset.x) / safeScale) - overscanBlocks);
+    const maxX = Math.min(meta.size_x - 1, Math.ceil((width - offset.x) / safeScale) + overscanBlocks);
+    const minZ = Math.max(0, Math.floor((-offset.y) / safeScale) - overscanBlocks);
+    const maxZ = Math.min(meta.size_z - 1, Math.ceil((height - offset.y) / safeScale) + overscanBlocks);
+    if (maxX < minX || maxZ < minZ) return null;
+    return { minX, maxX, minZ, maxZ };
+  }, [meta, offset.x, offset.y, scale, viewportSize.height, viewportSize.width]);
+
   const visibleBlocks = useMemo(() => {
-    if (!meta || visibleBlockIndex.size === 0) return [] as Array<{
+    if (!meta || visibleLayerIndex.byPosition.size === 0 || !visibleBlockWindow) return [] as Array<{
       key: string;
       left: number;
       top: number;
@@ -204,9 +345,11 @@ const LayerCanvas = forwardRef<
       height: number;
       color: string;
       iconUrl: string;
+      shouldRenderIcon: boolean;
       opacity: number;
     }>;
 
+    const shouldRenderIcons = scale >= ICON_NATIVE_SIZE;
     const blocks: Array<{
       key: string;
       left: number;
@@ -215,30 +358,44 @@ const LayerCanvas = forwardRef<
       height: number;
       color: string;
       iconUrl: string;
+      shouldRenderIcon: boolean;
       opacity: number;
     }> = [];
 
-    for (const visibleBlock of visibleBlockIndex.values()) {
-      const color = colorMap.get(visibleBlock.block.palette_id) || "#f0f";
-      if (color === "transparent") continue;
-      const left = Math.round(offset.x + visibleBlock.block.x * scale);
-      const top = Math.round(offset.y + visibleBlock.block.z * scale);
-      const width = Math.max(1, Math.ceil(scale));
-      const height = Math.max(1, Math.ceil(scale));
-      blocks.push({
-        key: `${visibleBlock.block.x}:${visibleBlock.block.z}:${visibleBlock.y}:${visibleBlock.block.palette_id}`,
-        left,
-        top,
-        width,
-        height,
-        color,
-        iconUrl: iconImages.get(visibleBlock.block.palette_id) || "",
-        opacity: visibleBlock.opacity,
-      });
+    for (let z = visibleBlockWindow.minZ; z <= visibleBlockWindow.maxZ; z += 1) {
+      const row = visibleLayerIndex.rows.get(z);
+      if (!row) continue;
+
+      for (let index = findFirstBlockAtOrAfterX(row, visibleBlockWindow.minX); index < row.length; index += 1) {
+        const visibleBlock = row[index];
+        if (visibleBlock.block.x > visibleBlockWindow.maxX) break;
+
+        const fallbackColor = colorMap.get(visibleBlock.block.palette_id) || "#f0f";
+        const color = shouldRenderIcons
+          ? fallbackColor
+          : (iconUnitColors.get(visibleBlock.block.palette_id) || fallbackColor);
+        if (color === "transparent") continue;
+        const left = Math.round(visibleBlock.block.x * scale);
+        const top = Math.round(visibleBlock.block.z * scale);
+        const width = Math.max(1, Math.ceil(scale));
+        const height = Math.max(1, Math.ceil(scale));
+        const iconUrl = iconImages.get(visibleBlock.block.palette_id) || "";
+        blocks.push({
+          key: `${visibleBlock.block.x}:${visibleBlock.block.z}:${visibleBlock.y}:${visibleBlock.block.palette_id}`,
+          left,
+          top,
+          width,
+          height,
+          color,
+          iconUrl,
+          shouldRenderIcon: shouldRenderIcons && !!iconUrl,
+          opacity: visibleBlock.opacity,
+        });
+      }
     }
 
     return blocks;
-  }, [colorMap, iconImages, meta, offset.x, offset.y, scale, visibleBlockIndex]);
+  }, [colorMap, iconImages, iconUnitColors, meta, scale, visibleBlockWindow, visibleLayerIndex]);
 
   const resetView = () => {
     if (meta) fitView(meta, viewportRef.current, setScale, setOffset);
@@ -264,6 +421,7 @@ const LayerCanvas = forwardRef<
     
     if (!meta || slicePaletteIds.length === 0) {
       setIconImages(new Map());
+      setIconUnitColors(new Map());
       return () => {
         cancelled = true;
       };
@@ -283,7 +441,8 @@ const LayerCanvas = forwardRef<
             meta.property_pool || [],
             showStateHints
           );
-          return { paletteId, dataUrl };
+          const unitColor = dataUrl ? await resolveIconUnitColor(dataUrl) : null;
+          return { paletteId, dataUrl, unitColor };
         } catch (error) {
           console.error(`Failed to resolve icon for palette ${paletteId}:`, error);
           return null;
@@ -296,14 +455,19 @@ const LayerCanvas = forwardRef<
       if (cancelled) return;
 
       // 批量更新状态
-      const next = new Map<number, string>();
+      const nextImages = new Map<number, string>();
+      const nextUnitColors = new Map<number, string>();
       for (const result of results) {
         if (result && result.dataUrl) {
-          next.set(result.paletteId, result.dataUrl);
+          nextImages.set(result.paletteId, result.dataUrl);
+        }
+        if (result && result.unitColor) {
+          nextUnitColors.set(result.paletteId, result.unitColor);
         }
       }
       
-      setIconImages(next);
+      setIconImages(nextImages);
+      setIconUnitColors(nextUnitColors);
     })();
 
     return () => {
@@ -323,11 +487,16 @@ const LayerCanvas = forwardRef<
 
   const handleMouseMove = (event: React.MouseEvent) => {
     if (isDragging) {
-      setOffset({ x: event.clientX - dragStart.x, y: event.clientY - dragStart.y });
+      scheduleOffset({ x: event.clientX - dragStart.x, y: event.clientY - dragStart.y });
       return;
     }
 
-    if (!meta || visibleBlockIndex.size === 0 || !viewportRef.current) {
+    if (scale < HOVER_TOOLTIP_MIN_SCALE) {
+      onHoverBlock(null, null);
+      return;
+    }
+
+    if (!meta || visibleLayerIndex.byPosition.size === 0 || !viewportRef.current) {
       onHoverBlock(null, event);
       return;
     }
@@ -336,7 +505,7 @@ const LayerCanvas = forwardRef<
     const bx = Math.floor((event.clientX - rect.left - offset.x) / scale);
     const bz = Math.floor((event.clientY - rect.top - offset.y) / scale);
     if (bx >= 0 && bx < meta.size_x && bz >= 0 && bz < meta.size_z) {
-      const visibleBlock = visibleBlockIndex.get(bz * meta.size_x + bx);
+      const visibleBlock = visibleLayerIndex.byPosition.get(bz * meta.size_x + bx);
       if (visibleBlock) {
         const paletteEntry = meta.palette[visibleBlock.block.palette_id];
         onHoverBlock(
@@ -361,8 +530,8 @@ const LayerCanvas = forwardRef<
     console.log("handleContextMenu 被调用");
     event.preventDefault();
     
-    if (!meta || visibleBlockIndex.size === 0 || !viewportRef.current) {
-      console.log("无法处理右键: meta=", !!meta, "visibleBlockIndex.size=", visibleBlockIndex.size, "viewportRef=", !!viewportRef.current);
+    if (!meta || visibleLayerIndex.byPosition.size === 0 || !viewportRef.current) {
+      console.log("无法处理右键: meta=", !!meta, "visibleBlockIndex.size=", visibleLayerIndex.byPosition.size, "viewportRef=", !!viewportRef.current);
       return;
     }
 
@@ -372,7 +541,7 @@ const LayerCanvas = forwardRef<
     console.log("计算的方块坐标:", bx, bz, "范围:", meta.size_x, meta.size_z);
     
     if (bx >= 0 && bx < meta.size_x && bz >= 0 && bz < meta.size_z) {
-      const visibleBlock = visibleBlockIndex.get(bz * meta.size_x + bx);
+      const visibleBlock = visibleLayerIndex.byPosition.get(bz * meta.size_x + bx);
       console.log("找到的 visibleBlock:", visibleBlock);
       
       if (visibleBlock) {
@@ -403,7 +572,7 @@ const LayerCanvas = forwardRef<
       onMouseDown={(event) => {
         if (event.button === 0) { // 只响应左键拖拽
           setIsDragging(true);
-          setDragStart({ x: event.clientX - offset.x, y: event.clientY - offset.y });
+          setDragStart({ x: event.clientX - offsetRef.current.x, y: event.clientY - offsetRef.current.y });
         }
       }}
       onMouseMove={handleMouseMove}
@@ -415,30 +584,33 @@ const LayerCanvas = forwardRef<
       onContextMenu={handleContextMenu}
     >
       <div
-        className="flake-layer-border"
-        style={{
-          left: `${Math.round(offset.x)}px`,
-          top: `${Math.round(offset.y)}px`,
-          width: `${Math.max(1, Math.round(meta ? meta.size_x * scale : 0))}px`,
-          height: `${Math.max(1, Math.round(meta ? meta.size_z * scale : 0))}px`,
-        }}
-      />
-      {visibleBlocks.map((block) => (
+        ref={worldRef}
+        className="flake-layer-world"
+      >
         <div
-          key={block.key}
-          className="flake-layer-block"
+          className="flake-layer-border"
           style={{
-            left: `${block.left}px`,
-            top: `${block.top}px`,
-            width: `${block.width}px`,
-            height: `${block.height}px`,
-            opacity: block.opacity,
-            background: block.iconUrl ? "transparent" : block.color,
+            width: `${Math.max(1, Math.round(meta ? meta.size_x * scale : 0))}px`,
+            height: `${Math.max(1, Math.round(meta ? meta.size_z * scale : 0))}px`,
           }}
-        >
-          {block.iconUrl ? <img className="flake-layer-block-icon" src={block.iconUrl} alt="" draggable={false} /> : null}
-        </div>
-      ))}
+        />
+        {visibleBlocks.map((block) => (
+          <div
+            key={block.key}
+            className="flake-layer-block"
+            style={{
+              left: `${block.left}px`,
+              top: `${block.top}px`,
+              width: `${block.width}px`,
+              height: `${block.height}px`,
+              opacity: block.opacity,
+              background: block.shouldRenderIcon ? "transparent" : block.color,
+            }}
+          >
+            {block.shouldRenderIcon ? <img className="flake-layer-block-icon" src={block.iconUrl} alt="" draggable={false} /> : null}
+          </div>
+        ))}
+      </div>
     </div>
   );
 });
@@ -478,7 +650,6 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const loadedMetaKeyRef = useRef("");
   const inFlightSliceKeysRef = useRef(new Set<string>());
   const loadedSliceKeysRef = useRef(new Set<string>());
-  const prefetchedAllKeyRef = useRef("");
 
   const stopQuickBuildPolling = () => {
     if (pollIntervalRef.current !== null) {
@@ -510,7 +681,6 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setCacheExists(false);
     loadedMetaKeyRef.current = "";
     loadedSliceKeysRef.current.clear();
-    prefetchedAllKeyRef.current = "";
 
     if (!stored?.cacheFile) {
       inFlightMetaKeyRef.current = "";
@@ -558,7 +728,6 @@ export function FlakePage({ currentFile, setRoute }: any) {
         loadedMetaKeyRef.current = metaKey;
         loadedSliceKeysRef.current.clear();
         inFlightSliceKeysRef.current.clear();
-        prefetchedAllKeyRef.current = "";
         setSliceDataByY({});
         setMeta(loadedMeta);
         setLayerY(0);
@@ -581,7 +750,6 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setSliceDataByY({});
     loadedSliceKeysRef.current.clear();
     inFlightSliceKeysRef.current.clear();
-    prefetchedAllKeyRef.current = "";
 
     try {
       const launch = await startCacheBuildTask(currentFile, "normal");
@@ -686,34 +854,6 @@ export function FlakePage({ currentFile, setRoute }: any) {
       setShowInventoryDialog(false);
     }
   }, [editMode]);
-
-  // Prefetch every layer in one backend call as soon as the cache is ready, so
-  // switching layers becomes a pure in-memory lookup with no per-layer wait.
-  useEffect(() => {
-    if (!cacheExists || !meta || !cacheFile) return;
-    if (prefetchedAllKeyRef.current === cacheFile) return;
-    prefetchedAllKeyRef.current = cacheFile;
-
-    let cancelled = false;
-    loadAllLayerSlices(cacheFile)
-      .then((slices) => {
-        if (cancelled || !slices) return;
-        const byY: Record<number, LayerSliceData> = {};
-        for (const slice of slices) {
-          byY[slice.y] = slice;
-          loadedSliceKeysRef.current.add(`${cacheFile}::${slice.y}`);
-        }
-        setSliceDataByY((current) => ({ ...byY, ...current }));
-      })
-      .catch(() => {
-        // Fall back to per-layer on-demand loading below.
-        prefetchedAllKeyRef.current = "";
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [cacheExists, meta, cacheFile]);
 
   useEffect(() => {
     if (!cacheExists || !meta || !cacheFile) return;
