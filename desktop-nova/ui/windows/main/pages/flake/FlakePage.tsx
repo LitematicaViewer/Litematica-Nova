@@ -38,6 +38,10 @@ import { CreativeInventoryDialog } from "./creativeInventoryDialog";
 import { ContainerDialog } from "./containerDialog";
 import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem } from "../../../../../src/business/facade";
 
+// 缩放范围：scale 表示每个方块占用的像素数（像素/格）。
+const MIN_SCALE = 1;
+const MAX_SCALE = 64;
+
 // 全局图标缓存，避免重复处理相同方块
 const globalIconCache = new Map<string, Promise<string | null>>();
 
@@ -71,6 +75,8 @@ function getCachedIconImage(
 
 interface LayerCanvasHandle {
   resetView: () => void;
+  // 将缩放设置到指定的像素/格值，围绕视口中心缩放。
+  zoomTo: (nextScale: number) => void;
 }
 
 export interface FlakeHoverBlock {
@@ -102,14 +108,42 @@ const LayerCanvas = forwardRef<
     showStateHints: boolean;
     onHoverBlock: (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => void;
     onBlockRightClick: (block: FlakeHoverBlock, event: React.MouseEvent) => void;
+    onScaleChange?: (scale: number) => void;
   }
->(({ meta, renderSlices, showStateHints, onHoverBlock, onBlockRightClick }, ref) => {
+>(({ meta, renderSlices, showStateHints, onHoverBlock, onBlockRightClick, onScaleChange }, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [iconImages, setIconImages] = useState<Map<number, string>>(new Map());
+
+  // 用 ref 镜像最新的 scale / offset，供事件处理和命令式缩放共用，避免闭包读到旧值。
+  const scaleRef = useRef(scale);
+  const offsetRef = useRef(offset);
+  scaleRef.current = scale;
+  offsetRef.current = offset;
+
+  // 通知父组件当前缩放，用于同步滑块和输入框。用 ref 保存回调避免因引用变化触发多余 effect。
+  const onScaleChangeRef = useRef(onScaleChange);
+  onScaleChangeRef.current = onScaleChange;
+  useEffect(() => {
+    onScaleChangeRef.current?.(scale);
+  }, [scale]);
+
+  // 围绕锚点 (anchorX, anchorY，均相对视口左上角) 将缩放设置为 nextScale。
+  const applyZoom = (rawScale: number, anchorX: number, anchorY: number) => {
+    const nextScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, rawScale));
+    const currentScale = scaleRef.current;
+    if (nextScale === currentScale) return;
+    const currentOffset = offsetRef.current;
+    const ratio = nextScale / currentScale;
+    setOffset({
+      x: anchorX - (anchorX - currentOffset.x) * ratio,
+      y: anchorY - (anchorY - currentOffset.y) * ratio,
+    });
+    setScale(nextScale);
+  };
 
   const colorMap = useMemo(() => {
     const next = new Map<number, string>();
@@ -210,7 +244,16 @@ const LayerCanvas = forwardRef<
     if (meta) fitView(meta, viewportRef.current, setScale, setOffset);
   };
 
-  useImperativeHandle(ref, () => ({ resetView }), [meta]);
+  // 命令式缩放：围绕视口中心缩放，供层级控制区的滑块 / 输入框调用。
+  const zoomTo = (nextScale: number) => {
+    const viewport = viewportRef.current;
+    const rect = viewport?.getBoundingClientRect();
+    const anchorX = rect ? rect.width / 2 : 0;
+    const anchorY = rect ? rect.height / 2 : 0;
+    applyZoom(nextScale, anchorX, anchorY);
+  };
+
+  useImperativeHandle(ref, () => ({ resetView, zoomTo }), [meta]);
 
   useEffect(() => {
     if (meta) resetView();
@@ -268,19 +311,14 @@ const LayerCanvas = forwardRef<
     };
   }, [meta, slicePaletteIds, showStateHints]);
 
+  // 滚轮事件
   const handleWheel = (event: React.WheelEvent) => {
     event.preventDefault();
     if (!viewportRef.current) return;
     const direction = event.deltaY < 0 ? 1 : -1;
-    const nextScale = Math.max(0.1, Math.min(50, scale * Math.pow(1.1, direction)));
     const rect = viewportRef.current.getBoundingClientRect();
-    const mouseX = event.clientX - rect.left;
-    const mouseY = event.clientY - rect.top;
-    setOffset({
-      x: mouseX - (mouseX - offset.x) * (nextScale / scale),
-      y: mouseY - (mouseY - offset.y) * (nextScale / scale),
-    });
-    setScale(nextScale);
+    // 缩放乘数
+    applyZoom(scaleRef.current * Math.pow(2, direction), event.clientX - rect.left, event.clientY - rect.top);
   };
 
   const handleMouseMove = (event: React.MouseEvent) => {
@@ -414,6 +452,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [statsData, setStatsData] = useState<StatsData | null>(null);
   const [layerY, setLayerY] = useState(0);
   const [onionSkinDepth, setOnionSkinDepth] = useState(0);
+  const [viewScale, setViewScale] = useState(1);
   const [showStateHints, setShowStateHints] = useState(true);
   const [hoverBlock, setHoverBlock] = useState<FlakeHoverBlock | null>(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
@@ -901,6 +940,35 @@ export function FlakePage({ currentFile, setRoute }: any) {
         <div className="nova-muted nova-small flake-page__onion-hint">
           0 表示关闭；只显示当前位置最上面那一层可见方块，下方层按厚度比例半透明补显。
         </div>
+
+        <div className="flake-page__layer-row flake-page__zoom-row">
+          <span className="nova-muted flake-page__layer-label">缩放</span>
+          <input
+            className="flake-page__layer-range"
+            type="range"
+            min={MIN_SCALE}
+            max={MAX_SCALE}
+            step={0.1}
+            value={viewScale}
+            onChange={(event) => canvasRef.current?.zoomTo(Number(event.target.value))}
+            disabled={!ready}
+          />
+          <input
+            className="input flake-page__zoom-input"
+            type="number"
+            min={MIN_SCALE}
+            max={MAX_SCALE}
+            step={0.1}
+            value={Math.round(viewScale * 10) / 10}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              if (Number.isFinite(next)) canvasRef.current?.zoomTo(next);
+            }}
+            disabled={!ready}
+          />
+          <span className="nova-muted nova-small flake-page__zoom-unit">像素/格</span>
+        </div>
+
         <label className="subwindow-check-row flake-page__edit-toggle">
           <input type="checkbox" checked={showStateHints} onChange={(event) => setShowStateHints(event.target.checked)} disabled={!ready} />
           状态提示图片
@@ -927,7 +995,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 <div>{building ? "标准模式 3D cache 正在构建。" : "请先生成标准模式 3D cache。"}</div>
               </div>
             ) : (
-              <LayerCanvas ref={canvasRef} meta={meta} renderSlices={renderSlices} showStateHints={showStateHints} onHoverBlock={handleHoverBlock} onBlockRightClick={handleBlockRightClick} />
+              <LayerCanvas ref={canvasRef} meta={meta} renderSlices={renderSlices} showStateHints={showStateHints} onHoverBlock={handleHoverBlock} onBlockRightClick={handleBlockRightClick} onScaleChange={setViewScale} />
             )}
 
             <FlakeBlockTooltip x={hoverPos.x} y={hoverPos.y} item={hoverBlock} />

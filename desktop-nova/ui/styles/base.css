@@ -790,6 +790,20 @@ textarea.input,
     flex: 0 0 64px;
 }
 
+.flake-page__zoom-row {
+    margin-top: 10px;
+}
+
+.flake-page__zoom-input {
+    width: 72px;
+    flex: 0 0 72px;
+}
+
+.flake-page__zoom-unit {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
 .flake-page__onion-hint {
     margin-top: 6px;
     padding-left: 76px;
