@@ -28,7 +28,7 @@ import {
   updateRenderCacheState,
   upsertRenderCacheState,
 } from "../../../../../src/business/facade";
-import { resolveFlakeLayerBlockImage } from "../../../../../src/services/flakeStateHintResolver";
+import { resolveFlakeLayerBlockImage, extractLayerPaletteStates } from "../../../../../src/services/flakeStateHintResolver";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
 
@@ -47,8 +47,13 @@ function getCachedIconImage(
   propertyPool: any[],
   enabled: boolean
 ): Promise<string | null> {
-  const cacheKey = `${blockId}::${JSON.stringify(paletteEntry)}::${enabled}`;
-  
+  // 缓存键必须基于解析后的真实状态，而非 paletteEntry.property_id 下标。
+  // property_id 只是指向当前投影 propertyPool 的索引，不同投影的 propertyPool
+  // 各自独立——同一个 property_id 在投影 A 可能是 level=0，在投影 B 却是 level=3。
+  // 若只用 property_id 作键，跨投影会命中错误的旧图标（如水的 level 遮罩错乱）。
+  const resolvedStates = extractLayerPaletteStates(paletteEntry, propertyPool);
+  const cacheKey = `${blockId}::${JSON.stringify(resolvedStates)}::${enabled}`;
+
   if (!globalIconCache.has(cacheKey)) {
     globalIconCache.set(
       cacheKey,
@@ -60,7 +65,7 @@ function getCachedIconImage(
       })
     );
   }
-  
+
   return globalIconCache.get(cacheKey)!;
 }
 
