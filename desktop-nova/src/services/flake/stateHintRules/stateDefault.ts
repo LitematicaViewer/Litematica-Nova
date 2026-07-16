@@ -31,6 +31,8 @@ export const ACACIA_LOG_TOP_BLOCK_ID = "minecraft:acacia_log_top";
 export const DARK_OAK_LOG_TOP_BLOCK_ID = "minecraft:dark_oak_log_top";
 export const CHERRY_LOG_TOP_BLOCK_ID = "minecraft:cherry_log_top";
 export const MANGROVE_LOG_TOP_BLOCK_ID = "minecraft:mangrove_log_top";
+// 去皮标记
+export const STRIPPED_X_RELPATH = "data/flake/state_hint/stripped_x.png";
 // 发射器
 export const DISPENSER_TOP_RELPATH = "data/flake/redstone_display/dispenser_top.png";
 export const DISPENSER_TOP_ON_RELPATH = "data/flake/redstone_display/dispenser_top_on.png";
@@ -296,6 +298,17 @@ export async function resolveManualStateHintRule(blockId: string, states: Record
     case "minecraft:dark_oak_wood":
     case "minecraft:cherry_wood":
     case "minecraft:mangrove_wood":
+    // 去皮木头
+    case "minecraft:stripped_oak_wood":
+    case "minecraft:stripped_spruce_wood":
+    case "minecraft:stripped_birch_wood":
+    case "minecraft:stripped_jungle_wood":
+    case "minecraft:stripped_acacia_wood":
+    case "minecraft:stripped_dark_oak_wood":
+    case "minecraft:stripped_cherry_wood":
+    case "minecraft:stripped_mangrove_wood":
+    // 红树根
+    case "minecraft:muddy_mangrove_roots":
       {
         const imageRelPaths: string[] = [];
         if (states.axis === "x") {

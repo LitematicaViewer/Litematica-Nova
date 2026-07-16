@@ -693,6 +693,15 @@ textarea.input,
     cursor: grabbing;
 }
 
+.flake-layer-world {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+    transform-origin: 0 0;
+    will-change: transform;
+}
+
 .flake-layer-border,
 .flake-layer-block {
     position: absolute;
@@ -715,6 +724,8 @@ textarea.input,
 }
 
 .flake-layer-border {
+    left: 0;
+    top: 0;
     border: 1px solid #555;
 }
 
