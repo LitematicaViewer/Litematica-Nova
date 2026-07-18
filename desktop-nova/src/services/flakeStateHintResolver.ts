@@ -3,7 +3,8 @@ import { getUserConfigFilePath, getWorkspaceRoot, readImageBase64 } from "./back
 import { getBlockIconDataUrl } from "./blockIconResolver";
 import type { LayerPaletteEntry } from "./layerService";
 import { isBlockInEnumerator } from "./flake/enumeratorLoader";
-import { REDSTONE_WIRE_BASE_RELPATH, REDSTONE_WIRE_DIRECTIONS, REDSTONE_WIRE_NUMBER_RELPATHS, REDSTONE_WIRE_POWER_COLORS, REDSTONE_WIRE_SIDE_RELPATHS, REDSTONE_WIRE_UP_RELPATHS, resolveManualStateHintRule } from "./flake/stateHintRules/stateDefault";
+import { resolveManualStateHintRule } from "./flake/stateHintRules/stateDefault";
+import { resolveRedstoneWireStateHintImage } from "./flake/stateHintRules/blockRedstone";
 
 // 含水方块枚举器的同步缓存
 let waterloggedBlocksSet: Set<string> | null = null;
@@ -21,16 +22,16 @@ let waterloggedBlocksSet: Set<string> | null = null;
 })();
 
 type FlakeStateHintMode = "mask" | "replace";
-type FlakeOverlayBlendMode = "normal" | "subtract";
 
 export interface FlakeStateHintRule {
   mode: FlakeStateHintMode;
   imageRelPaths?: string[];
+  subtractImageRelPaths?: string[];
   iconBlockIds?: string[];
   baseImageRelPaths?: string[];
   baseImageRotateQuarterTurns?: number;
   overlayIconBlockIds?: string[];
-  overlayBlendMode?: FlakeOverlayBlendMode;
+  subtractOverlayIconBlockIds?: string[];
 }
 
 interface ResolveFlakeLayerBlockImageInput {
@@ -157,7 +158,7 @@ async function readHintImageDataUrl(relativePath: string): Promise<string | null
   return null;
 }
 
-async function readHintImageDataUrls(relativePaths: string[]): Promise<string[] | null> {
+export async function readHintImageDataUrls(relativePaths: string[]): Promise<string[] | null> {
   try {
     const urls = await Promise.all(relativePaths.map((relativePath) => readHintImageDataUrl(relativePath)));
     if (urls.some((url) => !url)) return null;
@@ -179,7 +180,7 @@ function parseHexColor(hex: string): [number, number, number] | null {
   ];
 }
 
-async function tintImageDataUrl(url: string, colorHex: string): Promise<string | null> {
+export async function tintImageDataUrl(url: string, colorHex: string): Promise<string | null> {
   try {
     const rgb = parseHexColor(colorHex);
     if (!rgb) return null;
@@ -205,7 +206,7 @@ async function tintImageDataUrl(url: string, colorHex: string): Promise<string |
   }
 }
 
-async function composeImageDataUrls(layerUrls: string[]): Promise<string | null> {
+export async function composeImageDataUrls(layerUrls: string[]): Promise<string | null> {
   try {
     if (!layerUrls.length) return null;
     const images = await Promise.all(layerUrls.map((url) => loadImage(url)));
@@ -225,39 +226,6 @@ async function composeImageDataUrls(layerUrls: string[]): Promise<string | null>
   } catch {
     return null;
   }
-}
-
-async function resolveRedstoneWireStateHintImage(states: Record<string, string>): Promise<string | null> {
-  const power = states.power && REDSTONE_WIRE_POWER_COLORS[states.power] ? states.power : "0";
-  const tintColor = REDSTONE_WIRE_POWER_COLORS[power] || REDSTONE_WIRE_POWER_COLORS["0"];
-  const tintRelPaths: string[] = [REDSTONE_WIRE_BASE_RELPATH];
-
-  for (const direction of REDSTONE_WIRE_DIRECTIONS) {
-    const state = states[direction];
-    if (state === "side") {
-      tintRelPaths.push(REDSTONE_WIRE_SIDE_RELPATHS[direction]);
-    }
-    if (state === "up") {
-      tintRelPaths.push(REDSTONE_WIRE_UP_RELPATHS[direction]);
-    }
-  }
-
-  const tintUrls = await readHintImageDataUrls(tintRelPaths);
-  if (!tintUrls) return null;
-
-  const tintedLayerUrls = await Promise.all(tintUrls.map((url) => tintImageDataUrl(url, tintColor)));
-  if (tintedLayerUrls.some((url) => !url)) return null;
-
-  const composedLayerUrls = tintedLayerUrls.filter((url): url is string => !!url);
-  const fixedRelPath = REDSTONE_WIRE_NUMBER_RELPATHS[power];
-  if (fixedRelPath) {
-    const fixedUrls = await readHintImageDataUrls([fixedRelPath]);
-    if (fixedUrls) {
-      composedLayerUrls.push(...fixedUrls);
-    }
-  }
-
-  return await composeImageDataUrls(composedLayerUrls);
 }
 
 /** 读取图标数据URL 
@@ -291,6 +259,26 @@ async function resolveRuleImageUrls(rule: FlakeStateHintRule): Promise<string[] 
   const imageRelPaths = rule.imageRelPaths;
   if (imageRelPaths && imageRelPaths.length > 0) {
     const hintUrls = await readHintImageDataUrls(imageRelPaths);
+    if (!hintUrls) return null;
+    urls.push(...hintUrls);
+  }
+
+  return urls.length ? urls : null;
+}
+
+async function resolveRuleSubtractImageUrls(rule: FlakeStateHintRule): Promise<string[] | null> {
+  const urls: string[] = [];
+
+  const subtractOverlayIconBlockIds = rule.subtractOverlayIconBlockIds;
+  if (subtractOverlayIconBlockIds && subtractOverlayIconBlockIds.length > 0) {
+    const overlayIconUrls = await readLayeringIconDataUrls(subtractOverlayIconBlockIds);
+    if (!overlayIconUrls) return null;
+    urls.push(...overlayIconUrls);
+  }
+
+  const subtractImageRelPaths = rule.subtractImageRelPaths;
+  if (subtractImageRelPaths && subtractImageRelPaths.length > 0) {
+    const hintUrls = await readHintImageDataUrls(subtractImageRelPaths);
     if (!hintUrls) return null;
     urls.push(...hintUrls);
   }
@@ -449,16 +437,29 @@ export async function resolveFlakeLayerBlockImage({
     ? (baseImageUrls[baseImageUrls.length - 1] || baseIconUrl)
     : baseIconUrl;
 
-  const hintImageUrls = await resolveRuleImageUrls(rule);
-  if (rule.mode === "replace" && (!hintImageUrls || hintImageUrls.length === 0)) {
+  const normalHintImageUrls = await resolveRuleImageUrls(rule);
+  const subtractHintImageUrls = await resolveRuleSubtractImageUrls(rule);
+  const hasNormalOverlays = !!normalHintImageUrls && normalHintImageUrls.length > 0;
+  const hasSubtractOverlays = !!subtractHintImageUrls && subtractHintImageUrls.length > 0;
+  if (rule.mode === "replace" && !hasNormalOverlays && !hasSubtractOverlays) {
     return resolvedBaseIconUrl;
   }
 
-  if (!hintImageUrls || hintImageUrls.length === 0) return baseIconUrl;
+  if (!hasNormalOverlays && !hasSubtractOverlays) return baseIconUrl;
   if (!resolvedBaseIconUrl) return baseIconUrl;
 
-  const masked = rule.overlayBlendMode === "subtract"
-    ? await applySubtractOverlays(resolvedBaseIconUrl, hintImageUrls)
-    : await applyMaskOverlays(resolvedBaseIconUrl, hintImageUrls);
-  return masked || baseIconUrl;
+  let composedIconUrl = resolvedBaseIconUrl;
+  if (hasSubtractOverlays) {
+    const masked = await applySubtractOverlays(composedIconUrl, subtractHintImageUrls);
+    if (!masked) return baseIconUrl;
+    composedIconUrl = masked;
+  }
+
+  if (hasNormalOverlays) {
+    const masked = await applyMaskOverlays(composedIconUrl, normalHintImageUrls);
+    if (!masked) return baseIconUrl;
+    composedIconUrl = masked;
+  }
+
+  return composedIconUrl || baseIconUrl;
 }

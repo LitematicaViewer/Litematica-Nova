@@ -2811,6 +2811,37 @@ label.setting-row:has(> input[type="radio"]) {
     background: rgba(0, 120, 215, 0.16);
 }
 
+.enumerator-copy-toast {
+    transform: translate(10px, 10px);
+    animation: enumerator-copy-toast-fade 1s ease-out forwards;
+}
+
+.enumerator-copy-toast .material-list-hover-popup-name {
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
+@keyframes enumerator-copy-toast-fade {
+    0% {
+        opacity: 0;
+        transform: translate(10px, 14px);
+    }
+
+    16% {
+        opacity: 1;
+        transform: translate(10px, 10px);
+    }
+
+    70% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0;
+        transform: translate(10px, 4px);
+    }
+}
+
 .enumerator-empty-cell {
     text-align: center;
     color: var(--ln-muted-text-color, GrayText);
