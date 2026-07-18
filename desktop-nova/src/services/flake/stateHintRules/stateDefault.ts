@@ -31,6 +31,7 @@ export const ACACIA_LOG_TOP_BLOCK_ID = "minecraft:acacia_log_top";
 export const DARK_OAK_LOG_TOP_BLOCK_ID = "minecraft:dark_oak_log_top";
 export const CHERRY_LOG_TOP_BLOCK_ID = "minecraft:cherry_log_top";
 export const MANGROVE_LOG_TOP_BLOCK_ID = "minecraft:mangrove_log_top";
+export const BAMBOO_BLOCK_TOP_BLOCK_ID = "minecraft:bamboo_block_top"
 // 去皮标记
 export const STRIPPED_X_RELPATH = "data/flake/state_hint/stripped_x.png";
 // 发射器
@@ -238,8 +239,7 @@ export async function resolveManualStateHintRule(blockId: string, states: Record
       return {
         mode: "replace",
         iconBlockIds: [WATER_TOP_BLOCK_ID],
-        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
-        overlayBlendMode: "subtract",
+        subtractImageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
     // 熔岩
@@ -251,8 +251,7 @@ export async function resolveManualStateHintRule(blockId: string, states: Record
       return {
         mode: "replace",
         iconBlockIds: [LAVA_TOP_BLOCK_ID],
-        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
-        overlayBlendMode: "subtract",
+        subtractImageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
     // 树苗
@@ -318,135 +317,187 @@ export async function resolveManualStateHintRule(blockId: string, states: Record
           imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
         }
         return imageRelPaths.length
-          ? { mode: "mask", imageRelPaths, overlayBlendMode: "subtract" }
+          ? { mode: "mask", subtractImageRelPaths: imageRelPaths }
           : null;
       }
     // 橡木原木
-    case "minecraft:oak_log": {
+    case "minecraft:oak_log":
+    case "minecraft:stripped_oak_log": {
       const imageRelPaths: string[] = [];
+      const subtractImageRelPaths: string[] = [];
       if (states.axis === "x") {
-        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_X_OVERLAY_REPATH); // 朝向标记
       }
       if (states.axis === "z") {
-        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_Z_OVERLAY_REPATH); // 朝向标记
+      }
+      if (normalizeBlockId(blockId) === "minecraft:stripped_oak_log") {
+        imageRelPaths.push(STRIPPED_X_RELPATH); // 去皮标记
       }
       return {
         mode: "replace",
         iconBlockIds: [OAK_LOG_TOP_BLOCK_ID],
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
-        overlayBlendMode: "subtract",
+        subtractImageRelPaths: subtractImageRelPaths.length ? subtractImageRelPaths : undefined,
       };
     }
     // 云杉原木
     case "minecraft:spruce_log": {
       const imageRelPaths: string[] = [];
+      const subtractImageRelPaths: string[] = [];
       if (states.axis === "x") {
-        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_X_OVERLAY_REPATH); // 朝向标记
       }
       if (states.axis === "z") {
-        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_Z_OVERLAY_REPATH); // 朝向标记
+      }
+      if (normalizeBlockId(blockId) === "minecraft:stripped_spruce_log") {
+        imageRelPaths.push(STRIPPED_X_RELPATH); // 去皮标记
       }
       return {
         mode: "replace",
         iconBlockIds: [SPRUCE_LOG_TOP_BLOCK_ID],
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
-        overlayBlendMode: "subtract",
+        subtractImageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
     // 白桦原木
     case "minecraft:birch_log": {
       const imageRelPaths: string[] = [];
+      const subtractImageRelPaths: string[] = [];
       if (states.axis === "x") {
-        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_X_OVERLAY_REPATH); // 朝向标记
       }
       if (states.axis === "z") {
-        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_Z_OVERLAY_REPATH); // 朝向标记
+      }
+      if (normalizeBlockId(blockId) === "minecraft:stripped_birch_log") {
+        imageRelPaths.push(STRIPPED_X_RELPATH); // 去皮标记
       }
       return {
         mode: "replace",
         iconBlockIds: [BIRCH_LOG_TOP_BLOCK_ID],
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
-        overlayBlendMode: "subtract",
+        subtractImageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
     // 丛林原木
     case "minecraft:jungle_log": {
       const imageRelPaths: string[] = [];
+      const subtractImageRelPaths: string[] = [];
       if (states.axis === "x") {
-        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_X_OVERLAY_REPATH); // 朝向标记
       }
       if (states.axis === "z") {
-        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_Z_OVERLAY_REPATH); // 朝向标记
+      }
+      if (normalizeBlockId(blockId) === "minecraft:stripped_jungle_log") {
+        imageRelPaths.push(STRIPPED_X_RELPATH); // 去皮标记
       }
       return {
         mode: "replace",
         iconBlockIds: [JUNGLE_LOG_TOP_BLOCK_ID],
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
-        overlayBlendMode: "subtract",
+        subtractImageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
     // 金合欢原木
     case "minecraft:acacia_log": {
       const imageRelPaths: string[] = [];
+      const subtractImageRelPaths: string[] = [];
       if (states.axis === "x") {
-        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_X_OVERLAY_REPATH); // 朝向标记
       }
       if (states.axis === "z") {
-        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_Z_OVERLAY_REPATH); // 朝向标记
+      }
+      if (normalizeBlockId(blockId) === "minecraft:stripped_acacia_log") {
+        imageRelPaths.push(STRIPPED_X_RELPATH); // 去皮标记
       }
       return {
         mode: "replace",
         iconBlockIds: [ACACIA_LOG_TOP_BLOCK_ID],
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
-        overlayBlendMode: "subtract",
+        subtractImageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
     // 深色橡木原木
     case "minecraft:dark_oak_log": {
       const imageRelPaths: string[] = [];
+      const subtractImageRelPaths: string[] = [];
       if (states.axis === "x") {
-        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_X_OVERLAY_REPATH); // 朝向标记
       }
       if (states.axis === "z") {
-        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_Z_OVERLAY_REPATH); // 朝向标记
+      }
+      if (normalizeBlockId(blockId) === "minecraft:stripped_dark_oak_log") {
+        imageRelPaths.push(STRIPPED_X_RELPATH); // 去皮标记
       }
       return {
         mode: "replace",
         iconBlockIds: [DARK_OAK_LOG_TOP_BLOCK_ID],
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
-        overlayBlendMode: "subtract",
+        subtractImageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
     // 樱花原木
     case "minecraft:cherry_log": {
       const imageRelPaths: string[] = [];
+      const subtractImageRelPaths: string[] = [];
       if (states.axis === "x") {
-        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_X_OVERLAY_REPATH); // 朝向标记
       }
       if (states.axis === "z") {
-        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_Z_OVERLAY_REPATH); // 朝向标记
+      }
+      if (normalizeBlockId(blockId) === "minecraft:stripped_cherry_log") {
+        imageRelPaths.push(STRIPPED_X_RELPATH); // 去皮标记
       }
       return {
         mode: "replace",
         iconBlockIds: [CHERRY_LOG_TOP_BLOCK_ID],
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
-        overlayBlendMode: "subtract",
+        subtractImageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
     // 红树原木
     case "minecraft:mangrove_log": {
       const imageRelPaths: string[] = [];
+      const subtractImageRelPaths: string[] = [];
       if (states.axis === "x") {
-        imageRelPaths.push(AXIS_X_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_X_OVERLAY_REPATH); // 朝向标记
       }
       if (states.axis === "z") {
-        imageRelPaths.push(AXIS_Z_OVERLAY_REPATH);
+        subtractImageRelPaths.push(AXIS_Z_OVERLAY_REPATH); // 朝向标记
+      }
+      if (normalizeBlockId(blockId) === "minecraft:stripped_mangrove_log") {
+        imageRelPaths.push(STRIPPED_X_RELPATH); // 去皮标记
       }
       return {
         mode: "replace",
         iconBlockIds: [MANGROVE_LOG_TOP_BLOCK_ID],
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
-        overlayBlendMode: "subtract",
+        subtractImageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+      };
+    }
+    // 竹块
+    case "minecraft:bamboo_block":{
+      const imageRelPaths: string[] = [];
+      const subtractImageRelPaths: string[] = [];
+      if (states.axis === "x") {
+        subtractImageRelPaths.push(AXIS_X_OVERLAY_REPATH); // 朝向标记
+      }
+      if (states.axis === "z") {
+        subtractImageRelPaths.push(AXIS_Z_OVERLAY_REPATH); // 朝向标记
+      }
+      if (normalizeBlockId(blockId) === "minecraft:stripped_bamboo_block") {
+        imageRelPaths.push(STRIPPED_X_RELPATH); // 去皮标记
+      }
+      return {
+        mode: "replace",
+        iconBlockIds: [BAMBOO_BLOCK_TOP_BLOCK_ID],
+        subtractImageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
     // 树叶
@@ -982,7 +1033,7 @@ export async function resolveManualStateHintRule(blockId: string, states: Record
     // 红石线由专用合成流程处理
     case "minecraft:redstone_wire":
       return null;
-    // 墙上的火把
+    // 火把
     case "minecraft:wall_torch": {
       const imageRelPaths: string[] = [];
       const facing = states.facing;
@@ -1006,6 +1057,13 @@ export async function resolveManualStateHintRule(blockId: string, states: Record
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
+    case "minecraft:torch": {
+      return {
+        mode: "replace",
+        baseImageRelPaths: [TORCH_HEAD_RELPATH]
+      }
+    }
+    // 灵魂火把
     case "minecraft:soul_wall_torch": {
       const imageRelPaths: string[] = [];
       const facing = states.facing;
@@ -1029,6 +1087,13 @@ export async function resolveManualStateHintRule(blockId: string, states: Record
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
+    case "minecraft:soul_torch": {
+      return {
+        mode: "replace",
+        baseImageRelPaths: [SOUL_TORCH_HEAD_RELPATH]
+      }
+    }
+    // 铜火把
     case "minecraft:copper_wall_torch": {
       const imageRelPaths: string[] = [];
       const facing = states.facing;
@@ -1052,6 +1117,13 @@ export async function resolveManualStateHintRule(blockId: string, states: Record
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
+    case "minecraft:copper_torch": {
+      return {
+        mode: "replace",
+        baseImageRelPaths: [COPPER_TORCH_HEAD_RELPATH]
+      }
+    }
+    // 红石火把
     case "minecraft:redstone_wall_torch": {
       const imageRelPaths: string[] = [];
       const facing = states.facing;
@@ -1076,7 +1148,15 @@ export async function resolveManualStateHintRule(blockId: string, states: Record
         imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
       };
     }
-
+    case "minecraft:redstone_torch": {
+      const imageRelPaths: string[] = [];
+      const lit = states.lit;
+      return {
+        mode: "replace",
+        baseImageRelPaths: lit === "true" ? [REDSTONE_TORCH_HEAD_RELPATH] : [REDSTONE_TORCH_HEAD_OFF_RELPATH],
+        imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+      }
+    }
     // 默认
     default: {
       // 枚举器匹配：含水方块
