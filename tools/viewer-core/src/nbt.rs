@@ -1,17 +1,28 @@
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::num::NonZeroUsize;
 
 use anyhow::{Context, Result, anyhow, bail};
 use fastnbt::{IntArray, LongArray, Value, from_reader, to_writer};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
+use lru::LruCache;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{BlockStateNbt, EnclosingSize, EntityNbt};
 
-#[derive(Debug, Serialize, Deserialize)]
+// 全局 LRU 缓存,存储最近访问的 litematic 文件
+// 默认缓存 10 个文件
+lazy_static::lazy_static! {
+    static ref LITEMATIC_CACHE: Mutex<LruCache<PathBuf, Arc<LitematicRoot>>> = {
+        Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap()))
+    };
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct LitematicRoot {
     pub metadata: MetadataNbt,
@@ -22,7 +33,7 @@ pub struct LitematicRoot {
     pub minecraft_data_version: Option<i32>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct MetadataNbt {
     pub author: Option<String>,
@@ -37,7 +48,7 @@ pub struct MetadataNbt {
     pub preview_image_data: Option<IntArray>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct RegionNbt {
     pub position: Vec3i,
@@ -67,10 +78,29 @@ pub struct RegionBounds {
     pub max_z: i32,
 }
 
-pub fn load_litematic_root(path: &Path) -> Result<LitematicRoot> {
+pub fn load_litematic_root(path: &Path) -> Result<Arc<LitematicRoot>> {
+    // 规范化路径用于缓存键
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    
+    // 检查缓存
+    if let Ok(mut cache) = LITEMATIC_CACHE.lock() {
+        if let Some(cached) = cache.get(&canonical_path) {
+            return Ok(Arc::clone(cached));
+        }
+    }
+    
+    // 缓存未命中,从磁盘加载
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let decoder = GzDecoder::new(file);
-    from_reader(decoder).with_context(|| format!("failed to parse {}", path.display()))
+    let root: LitematicRoot = from_reader(decoder).with_context(|| format!("failed to parse {}", path.display()))?;
+    let arc_root = Arc::new(root);
+    
+    // 存入缓存
+    if let Ok(mut cache) = LITEMATIC_CACHE.lock() {
+        cache.put(canonical_path, Arc::clone(&arc_root));
+    }
+    
+    Ok(arc_root)
 }
 
 pub fn save_litematic_root(path: &Path, root: &LitematicRoot) -> Result<()> {

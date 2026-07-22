@@ -693,6 +693,15 @@ textarea.input,
     cursor: grabbing;
 }
 
+.flake-layer-world {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+    transform-origin: 0 0;
+    will-change: transform;
+}
+
 .flake-layer-border,
 .flake-layer-block {
     position: absolute;
@@ -704,6 +713,12 @@ textarea.input,
     align-items: stretch;
     justify-content: stretch;
     overflow: hidden;
+    left: var(--flake-layer-block-left, 0);
+    top: var(--flake-layer-block-top, 0);
+    width: var(--flake-layer-block-width, 1px);
+    height: var(--flake-layer-block-height, 1px);
+    opacity: var(--flake-layer-block-opacity, 1);
+    background: var(--flake-layer-block-background, transparent);
 }
 
 .flake-layer-block-icon {
@@ -715,6 +730,10 @@ textarea.input,
 }
 
 .flake-layer-border {
+    left: 0;
+    top: 0;
+    width: var(--flake-layer-border-width, 1px);
+    height: var(--flake-layer-border-height, 1px);
     border: 1px solid #555;
 }
 
@@ -779,6 +798,34 @@ textarea.input,
 .flake-page__layer-range {
     flex: 1;
     min-width: 0;
+}
+
+.flake-page__onion-row {
+    margin-top: 10px;
+}
+
+.flake-page__onion-input {
+    width: 64px;
+    flex: 0 0 64px;
+}
+
+.flake-page__zoom-row {
+    margin-top: 10px;
+}
+
+.flake-page__zoom-input {
+    width: 72px;
+    flex: 0 0 72px;
+}
+
+.flake-page__zoom-unit {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.flake-page__onion-hint {
+    margin-top: 6px;
+    padding-left: 76px;
 }
 
 .flake-page__layer-footer {
@@ -2772,6 +2819,37 @@ label.setting-row:has(> input[type="radio"]) {
     background: rgba(0, 120, 215, 0.16);
 }
 
+.enumerator-copy-toast {
+    transform: translate(10px, 10px);
+    animation: enumerator-copy-toast-fade 1s ease-out forwards;
+}
+
+.enumerator-copy-toast .material-list-hover-popup-name {
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
+@keyframes enumerator-copy-toast-fade {
+    0% {
+        opacity: 0;
+        transform: translate(10px, 14px);
+    }
+
+    16% {
+        opacity: 1;
+        transform: translate(10px, 10px);
+    }
+
+    70% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0;
+        transform: translate(10px, 4px);
+    }
+}
+
 .enumerator-empty-cell {
     text-align: center;
     color: var(--ln-muted-text-color, GrayText);
@@ -2866,4 +2944,57 @@ pre {
     .enumerator-symbol-label {
         margin-left: 0;
     }
+}
+
+/* 容器对话框样式 */
+.flake-page__container-dialog {
+    width: 400px;
+    max-width: 90vw;
+}
+
+.flake-page__container-body {
+    position: relative;
+    width: 352px;
+    height: 332px;
+    background: var(--flake-chest-image, url("../shell/resource/content/chest27.png")) no-repeat center center;
+    image-rendering: pixelated;
+    margin: 16px auto;
+}
+
+.flake-page__container-grid {
+    position: absolute;
+    left: 16px;
+    top: 36px;
+    display: grid;
+    grid-template-columns: repeat(9, 32px);
+    grid-template-rows: repeat(3, 32px);
+    gap: 4px;
+}
+
+.flake-page__container-slot {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+}
+
+.flake-page__container-slot img {
+    width: 32px;
+    height: 32px;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
+
+.flake-page__container-slot-count {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    font-size: 10px;
+    font-weight: bold;
+    color: white;
+    text-shadow: 1px 1px 0 #3f3f3f;
+    pointer-events: none;
+    font-family: 'MinecraftFive', monospace;
 }

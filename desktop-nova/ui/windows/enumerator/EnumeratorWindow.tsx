@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import {
   loadStructureStats,
@@ -30,6 +30,12 @@ import {
 const enumeratorOpenFileEvent = "enumerator-open-file";
 
 type CategoryFilter = "all" | "base" | "version" | "system_enum" | "creative" | "custom";
+type CopyToast = {
+  id: number;
+  value: string;
+  x: number;
+  y: number;
+};
 
 const initialFileFromUrl = () => {
   try {
@@ -82,6 +88,35 @@ function reorderValues(values: string[], selected: string[], direction: -1 | 1):
 
 function collectionSummary(collection: EnumeratorCollection): string {
   return `${categoryLabel(collection.category)} · ${collection.values.length} 项`;
+}
+
+async function writeClipboardText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Some WebView/browser contexts expose clipboard but reject it; try the
+      // legacy selection path before surfacing a failure to the user.
+    }
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = value;
+  textArea.setAttribute("readonly", "true");
+  textArea.style.position = "fixed";
+  textArea.style.left = "-9999px";
+  textArea.style.top = "0";
+  document.body.appendChild(textArea);
+  textArea.select();
+  try {
+    const copied = document.execCommand("copy");
+    if (!copied) {
+      throw new Error("copy command rejected");
+    }
+  } finally {
+    document.body.removeChild(textArea);
+  }
 }
 
 /**
@@ -206,6 +241,8 @@ function EnumeratorContent({
   const [rightValues, setRightValues] = useState<string[]>([]);
   const [rightSelected, setRightSelected] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [copyToast, setCopyToast] = useState<CopyToast | null>(null);
+  const copyToastTimerRef = useRef<number | null>(null);
 
   const hydrateRightEditor = useCallback((collection: EnumeratorCollection | null) => {
     if (!collection) {
@@ -347,6 +384,27 @@ function EnumeratorContent({
       : [...current, value]);
   };
 
+  const showCopyToast = (value: string, x: number, y: number) => {
+    if (copyToastTimerRef.current !== null) {
+      window.clearTimeout(copyToastTimerRef.current);
+    }
+    setCopyToast({ id: Date.now(), value, x, y });
+    copyToastTimerRef.current = window.setTimeout(() => {
+      setCopyToast(null);
+      copyToastTimerRef.current = null;
+    }, 1000);
+  };
+
+  const handleCopyValue = async (value: string, event: MouseEvent) => {
+    const { clientX, clientY } = event;
+    try {
+      await writeClipboardText(value);
+      showCopyToast(value, clientX, clientY);
+    } catch (err: any) {
+      setError(`复制失败：${String(err?.message || err)}`);
+    }
+  };
+
   const handleMoveSelected = (direction: -1 | 1) => {
     setRightValues((current) => reorderValues(current, rightSelected, direction));
   };
@@ -375,6 +433,14 @@ function EnumeratorContent({
       setIsSaving(false);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (copyToastTimerRef.current !== null) {
+        window.clearTimeout(copyToastTimerRef.current);
+      }
+    };
+  }, []);
 
   const contentClassName = [
     "enumerator-content",
@@ -509,6 +575,7 @@ function EnumeratorContent({
                           <tr
                             key={row.id}
                             className={(leftStartIndex + index) % 2 === 0 ? "material-list-row-even" : "material-list-row-odd"}
+                            onClick={(event) => handleCopyValue(row.id, event)}
                             onContextMenu={(event) => {
                               event.preventDefault();
                               handleAddValueToRight(row.id);
@@ -586,7 +653,10 @@ function EnumeratorContent({
                             <tr
                               key={row.id}
                               className={rowClassName}
-                              onClick={() => handleToggleRightSelection(row.id)}
+                              onClick={(event) => {
+                                handleToggleRightSelection(row.id);
+                                handleCopyValue(row.id, event);
+                              }}
                               onContextMenu={(event) => {
                                 event.preventDefault();
                                 handleRemoveValueFromRight(row.id);
@@ -630,6 +700,19 @@ function EnumeratorContent({
           <button className="btn" type="button" onClick={() => persistCollection(false)} disabled={isSaving || !rightValues.length}>保存集合</button>
         </div>
       </div>
+      {copyToast ? (
+        <div
+          key={copyToast.id}
+          className="material-list-hover-popup enumerator-copy-toast"
+          role="status"
+          style={{ left: copyToast.x, top: copyToast.y }}
+        >
+          <div className="material-list-hover-popup-row material-list-hover-popup-item-row">
+            <span className="material-list-hover-popup-label">已复制：</span>
+            <span className="material-list-hover-popup-name">{copyToast.value}</span>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

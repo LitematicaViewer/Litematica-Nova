@@ -116,7 +116,8 @@ pub fn replace_blocks(
         }
     }
 
-    let mut root = load_litematic_root(input)?;
+    let arc_root = load_litematic_root(input)?;
+    let mut root = (*arc_root).clone();
     let mut summary = ReplaceBlocksSummary {
         input_file: input.display().to_string(),
         output_file: output.map(|path| path.display().to_string()),

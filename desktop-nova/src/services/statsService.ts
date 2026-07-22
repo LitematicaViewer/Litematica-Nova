@@ -1,5 +1,6 @@
 import { saveDialog } from "../platform/dialogs";
-import { executeBackend, writeTextFileAbsolute } from "./backend";
+import { writeTextFileAbsolute } from "./backend";
+import { getCachedCoreOutput } from "./coreReadCache";
 import { translateBlockId, translateBuildingType } from "./i18n";
 
 export interface MaterialItem {
@@ -70,8 +71,8 @@ function mapMaterial(raw: any): MaterialItem {
 }
 
 export async function loadStructureStats(filePath: string, includeContainerItems = false): Promise<StatsData> {
-  const out = await executeBackend(
-    "litematica_core.exe",
+  const out = await getCachedCoreOutput(
+    filePath,
     withContainerFlag(["stats", "--input", filePath, "--json"], includeContainerItems),
   );
   const parsed = JSON.parse(out);
@@ -114,8 +115,8 @@ export async function loadMaterialsScope(
   scopeArgs: string[],
   includeContainerItems = false,
 ): Promise<MaterialItem[]> {
-  const out = await executeBackend(
-    "litematica_core.exe",
+  const out = await getCachedCoreOutput(
+    filePath,
     withContainerFlag(["materials", "--input", filePath, ...scopeArgs, "--json"], includeContainerItems),
   );
   const parsed = JSON.parse(out);

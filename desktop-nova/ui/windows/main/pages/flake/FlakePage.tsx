@@ -1,5 +1,6 @@
-import React, {
+﻿import React, {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -11,11 +12,9 @@ import {
   buildLayerMetaCache,
   checkCacheExists,
   getBlockColor,
-  getBlockIconDataUrl,
   getLatestRenderCacheState,
   LayerSliceData,
   LayerSliceMeta,
-  loadEnumeratorCollections,
   loadLayerMeta,
   loadLayerSlice,
   loadStructureStats,
@@ -25,18 +24,102 @@ import {
   StatsData,
   subscribeRenderCacheStore,
   translateBlockId,
-  type EnumeratorCollection,
   updateRenderCacheState,
   upsertRenderCacheState,
 } from "../../../../../src/business/facade";
+import { resolveFlakeLayerBlockImage, extractLayerPaletteStates } from "../../../../../src/services/flakeStateHintResolver";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
 
-interface LayerCanvasHandle {
-  resetView: () => void;
+// 同级函数
+import { fitView, FlakeBlockTooltip, resolveLayerBlockStates } from "./function";
+import { CreativeInventoryDialog } from "./creativeInventoryDialog";
+import { ContainerDialog } from "./containerDialog";
+import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem } from "../../../../../src/business/facade";
+
+// 缩放范围：scale 表示每个方块占用的像素数（像素/格）。
+const MIN_SCALE = 1;
+const MAX_SCALE = 64;
+const ICON_NATIVE_SIZE = 16;
+const HOVER_TOOLTIP_MIN_SCALE = 8;
+const RENDER_OVERSCAN_PIXELS = 256;
+
+type CssVariableStyle<T extends string> = React.CSSProperties & Record<T, string | number>;
+
+// 全局图标缓存，避免重复处理相同方块
+const globalIconCache = new Map<string, Promise<string | null>>();
+const globalIconUnitColorCache = new Map<string, Promise<string | null>>();
+
+function resolveIconUnitColor(iconUrl: string): Promise<string | null> {
+  if (!globalIconUnitColorCache.has(iconUrl)) {
+    globalIconUnitColorCache.set(iconUrl, new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 1;
+        canvas.height = 1;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (!context) {
+          resolve(null);
+          return;
+        }
+
+        context.clearRect(0, 0, 1, 1);
+        context.drawImage(image, 0, 0, 1, 1);
+        const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+        if (alpha <= 0) {
+          resolve(null);
+          return;
+        }
+        if (alpha >= 255) {
+          resolve(`rgb(${red}, ${green}, ${blue})`);
+          return;
+        }
+        resolve(`rgba(${red}, ${green}, ${blue}, ${Math.round((alpha / 255) * 1000) / 1000})`);
+      };
+      image.onerror = () => resolve(null);
+      image.src = iconUrl;
+    }));
+  }
+
+  return globalIconUnitColorCache.get(iconUrl)!;
 }
 
-interface FlakeHoverBlock {
+function getCachedIconImage(
+  blockId: string,
+  paletteEntry: any,
+  propertyPool: any[],
+  enabled: boolean
+): Promise<string | null> {
+  // 缓存键必须基于解析后的真实状态，而非 paletteEntry.property_id 下标。
+  // property_id 只是指向当前投影 propertyPool 的索引，不同投影的 propertyPool
+  // 各自独立——同一个 property_id 在投影 A 可能是 level=0，在投影 B 却是 level=3。
+  // 若只用 property_id 作键，跨投影会命中错误的旧图标（如水的 level 遮罩错乱）。
+  const resolvedStates = extractLayerPaletteStates(paletteEntry, propertyPool);
+  const cacheKey = `${blockId}::${JSON.stringify(resolvedStates)}::${enabled}`;
+
+  if (!globalIconCache.has(cacheKey)) {
+    globalIconCache.set(
+      cacheKey,
+      resolveFlakeLayerBlockImage({
+        blockId,
+        paletteEntry,
+        propertyPool,
+        enabled,
+      })
+    );
+  }
+
+  return globalIconCache.get(cacheKey)!;
+}
+
+interface LayerCanvasHandle {
+  resetView: () => void;
+  // 将缩放设置到指定的像素/格值，围绕视口中心缩放。
+  zoomTo: (nextScale: number) => void;
+}
+
+export interface FlakeHoverBlock {
   x: number;
   y: number;
   z: number;
@@ -45,457 +128,136 @@ interface FlakeHoverBlock {
   states: string;
 }
 
-function formatStateRecord(record: Record<string, unknown>): string {
-  return Object.entries(record)
-    .filter(([key]) => key)
-    .map(([key, value]) => `${key}=${String(value)}`)
-    .join(", ");
+interface FlakeRenderSlice {
+  depth: number;
+  opacity: number;
+  sliceData: LayerSliceData;
 }
 
-function formatStateValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
+interface VisibleLayerBlock {
+  block: LayerSliceData["blocks"][number];
+  y: number;
+  opacity: number;
+}
+
+interface VisibleLayerIndex {
+  byPosition: Map<number, VisibleLayerBlock>;
+  rows: Map<number, VisibleLayerBlock[]>;
+}
+
+interface VisibleBlockWindow {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+function findFirstBlockAtOrAfterX(blocks: VisibleLayerBlock[], minX: number): number {
+  let low = 0;
+  let high = blocks.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (blocks[mid].block.x < minX) low = mid + 1;
+    else high = mid;
   }
-  if (Array.isArray(value)) {
-    return value.map((entry) => formatStateValue(entry)).filter(Boolean).join(", ");
-  }
-  if (typeof value === "object") {
-    const row = value as Record<string, unknown>;
-    const namedKey = ["name", "key", "property", "prop"].find((key) => typeof row[key] === "string");
-    const valueKey = ["value", "val"].find((key) => row[key] !== undefined);
-    if (namedKey && valueKey) {
-      return `${String(row[namedKey])}=${String(row[valueKey])}`;
-    }
-    return formatStateRecord(row);
-  }
-  return "";
-}
-
-function resolveLayerBlockStates(entry: any, propertyPool: any[]): string {
-  if (!entry) return "无";
-
-  const parts: string[] = [];
-  const push = (value: unknown) => {
-    const text = formatStateValue(value);
-    if (text) parts.push(text);
-  };
-
-  if (typeof entry.property_id === "number" && entry.property_id >= 0 && entry.property_id < propertyPool.length) {
-    push(propertyPool[entry.property_id]);
-  }
-
-  if (entry.block_state) push(entry.block_state);
-  if (entry.state) push(entry.state);
-  if (entry.states) push(entry.states);
-  if (entry.properties) push(entry.properties);
-
-  const propertyRefKeys = ["property_ids", "property_indices", "property_refs", "state_ids", "state_indices"];
-  for (const key of propertyRefKeys) {
-    const refs = entry[key];
-    if (!Array.isArray(refs)) continue;
-    for (const ref of refs) {
-      if (typeof ref === "number" && ref >= 0 && ref < propertyPool.length) {
-        push(propertyPool[ref]);
-      } else {
-        push(ref);
-      }
-    }
-  }
-
-  const normalized = Array.from(new Set(parts.flatMap((part) => part.split(",").map((item) => item.trim()).filter(Boolean))));
-  return normalized.length ? normalized.join(", ") : "无";
-}
-
-function FlakeBlockTooltip({ x, y, item }: { x: number; y: number; item: FlakeHoverBlock | null }) {
-  const popupRef = useRef<HTMLDivElement | null>(null);
-  const [position, setPosition] = useState(() => ({ left: x + 14, top: y + 14 }));
-
-  useLayoutEffect(() => {
-    if (!item) return;
-    const popup = popupRef.current;
-    const offset = 14;
-    const margin = 4;
-    if (!popup) {
-      setPosition({ left: x + offset, top: y + offset });
-      return;
-    }
-
-    const rect = popup.getBoundingClientRect();
-    let left = x + offset;
-    let top = y + offset;
-
-    if (left + rect.width > window.innerWidth - margin) {
-      left = x - rect.width - offset;
-    }
-    if (top + rect.height > window.innerHeight - margin) {
-      top = y - rect.height - offset;
-    }
-
-    left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
-    top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
-    setPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
-  }, [x, y, item]);
-
-  useLayoutEffect(() => {
-    const popup = popupRef.current;
-    if (!popup) return;
-    popup.style.setProperty("--material-list-popup-left", `${position.left}px`);
-    popup.style.setProperty("--material-list-popup-top", `${position.top}px`);
-  }, [position.left, position.top]);
-
-  if (!item) return null;
-
-  return (
-    <div ref={popupRef} className="material-list-hover-popup" role="tooltip">
-      <div className="material-list-hover-popup-row material-list-hover-popup-item-row">
-        <BlockIcon blockId={item.id} />
-        <span className="material-list-hover-popup-name">{item.name}</span>
-      </div>
-      <div className="material-list-hover-popup-row">方块ID：{item.id}</div>
-      <div className="material-list-hover-popup-row">方块状态：{item.states}</div>
-      <div className="material-list-hover-popup-row">x={item.x} y={item.y} z={item.z}</div>
-    </div>
-  );
-}
-
-function CreativeInventoryTooltip({ x, y, item }: { x: number; y: number; item: { id: string; name: string } | null }) {
-  const popupRef = useRef<HTMLDivElement | null>(null);
-  const [position, setPosition] = useState(() => ({ left: x + 14, top: y + 14 }));
-
-  useLayoutEffect(() => {
-    if (!item) return;
-    const popup = popupRef.current;
-    const offset = 14;
-    const margin = 4;
-    if (!popup) {
-      setPosition({ left: x + offset, top: y + offset });
-      return;
-    }
-
-    const rect = popup.getBoundingClientRect();
-    let left = x + offset;
-    let top = y + offset;
-
-    if (left + rect.width > window.innerWidth - margin) {
-      left = x - rect.width - offset;
-    }
-    if (top + rect.height > window.innerHeight - margin) {
-      top = y - rect.height - offset;
-    }
-
-    left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
-    top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
-    setPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
-  }, [x, y, item]);
-
-  useLayoutEffect(() => {
-    const popup = popupRef.current;
-    if (!popup) return;
-    popup.style.setProperty("--material-list-popup-left", `${position.left}px`);
-    popup.style.setProperty("--material-list-popup-top", `${position.top}px`);
-  }, [position.left, position.top]);
-
-  if (!item) return null;
-
-  return (
-    <div ref={popupRef} className="material-list-hover-popup" role="tooltip">
-      <div className="material-list-hover-popup-row">
-        <strong className="material-list-hover-popup-name">{item.name}</strong>
-      </div>
-      <div className="material-list-hover-popup-row">方块ID：{item.id}</div>
-    </div>
-  );
-}
-
-function CreativeInventoryDialog({
-  onClose,
-  quickbarSlots,
-  onChangeQuickbarSlots,
-}: {
-  onClose: () => void;
-  quickbarSlots: string[];
-  onChangeQuickbarSlots: (updater: (current: string[]) => string[]) => void;
-}) {
-  const [collections, setCollections] = useState<EnumeratorCollection[]>([]);
-  const [selectedCollectionId, setSelectedCollectionId] = useState("");
-  const [search, setSearch] = useState("");
-  const [pageStart, setPageStart] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [carryBlockId, setCarryBlockId] = useState("");
-  const [carryPosition, setCarryPosition] = useState({ x: 0, y: 0 });
-  const [hoverItem, setHoverItem] = useState<{ id: string; name: string } | null>(null);
-  const [hoverPosition, setHoverPosition] = useState({ x: 0, y: 0 });
-  const carryPreviewRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    setError("");
-    loadEnumeratorCollections()
-      .then((allCollections) => {
-        if (!active) return;
-        const creativeCollections = allCollections
-          .filter((collection) =>
-            (collection.category === "creative" || collection.id === "base:dv-blocks") && collection.values.length > 0,
-          )
-          .sort((left, right) => {
-            if (left.id === "base:dv-blocks") return -1;
-            if (right.id === "base:dv-blocks") return 1;
-            return left.name.localeCompare(right.name, "zh-CN");
-          });
-        setCollections(creativeCollections);
-        setSelectedCollectionId((previous) => previous && creativeCollections.some((collection) => collection.id === previous)
-          ? previous
-          : (creativeCollections[0]?.id || ""));
-      })
-      .catch((nextError: any) => {
-        if (!active) return;
-        setCollections([]);
-        setSelectedCollectionId("");
-        setError(String(nextError || "创造模式枚举加载失败。"));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const selectedCollection = useMemo(
-    () => collections.find((collection) => collection.id === selectedCollectionId) || null,
-    [collections, selectedCollectionId],
-  );
-
-  const filteredValues = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-    const source = selectedCollection?.values || [];
-    if (!keyword) return source;
-    return source.filter((blockId) => {
-      const translated = translateBlockId(blockId).toLowerCase();
-      return blockId.toLowerCase().includes(keyword) || translated.includes(keyword);
-    });
-  }, [search, selectedCollection]);
-
-  const maxPageStart = useMemo(() => {
-    if (filteredValues.length <= 45) return 0;
-    return Math.floor((filteredValues.length - 1) / 9) * 9;
-  }, [filteredValues.length]);
-
-  const visibleValues = useMemo(() => {
-    const page = filteredValues.slice(pageStart, pageStart + 45);
-    const placeholders = Array.from({ length: Math.max(0, 45 - page.length) }, () => "");
-    return [...page, ...placeholders];
-  }, [filteredValues, pageStart]);
-
-  const collectionOptions = useMemo(
-    () => collections.map((collection) => ({ label: collection.name, value: collection.id })),
-    [collections],
-  );
-
-  useEffect(() => {
-    setPageStart(0);
-  }, [selectedCollectionId, search]);
-
-  useEffect(() => {
-    setPageStart((current) => Math.min(current, maxPageStart));
-  }, [maxPageStart]);
-
-  useEffect(() => {
-    if (!carryBlockId) return undefined;
-    setHoverItem(null);
-    const handlePointerMove = (event: MouseEvent) => {
-      setCarryPosition({ x: event.clientX, y: event.clientY });
-    };
-    window.addEventListener("mousemove", handlePointerMove);
-    return () => {
-      window.removeEventListener("mousemove", handlePointerMove);
-    };
-  }, [carryBlockId]);
-
-  useLayoutEffect(() => {
-    const preview = carryPreviewRef.current;
-    if (!preview || !carryBlockId) return;
-    preview.style.setProperty("--flake-carry-x", `${carryPosition.x}px`);
-    preview.style.setProperty("--flake-carry-y", `${carryPosition.y}px`);
-  }, [carryBlockId, carryPosition.x, carryPosition.y]);
-
-  const handleHoverItem = (blockId: string, event: React.MouseEvent<HTMLDivElement>) => {
-    if (carryBlockId || !blockId) return;
-    setHoverItem({ id: blockId, name: translateBlockId(blockId) });
-    setHoverPosition({ x: event.clientX, y: event.clientY });
-  };
-
-  const handleHoverLeave = () => {
-    setHoverItem(null);
-  };
-
-  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    if (!filteredValues.length) return;
-    event.preventDefault();
-    setPageStart((current) => {
-      if (event.deltaY > 0) return Math.min(maxPageStart, current + 9);
-      if (event.deltaY < 0) return Math.max(0, current - 9);
-      return current;
-    });
-  };
-
-  const handleInventorySlotClick = (blockId: string, event: React.MouseEvent<HTMLDivElement>) => {
-    event.stopPropagation();
-    setHoverItem(null);
-    if (!blockId) return;
-    if (carryBlockId) {
-      setCarryBlockId("");
-      return;
-    }
-    setCarryBlockId(blockId);
-    setCarryPosition({ x: event.clientX, y: event.clientY });
-  };
-
-  const handleCreativeHotbarSlotClick = (index: number, event: React.MouseEvent<HTMLDivElement>) => {
-    event.stopPropagation();
-    setHoverItem(null);
-    const slotBlockId = quickbarSlots[index] || "";
-    if (carryBlockId) {
-      onChangeQuickbarSlots((current) => current.map((value, slotIndex) => slotIndex === index ? carryBlockId : value));
-      setCarryBlockId("");
-      return;
-    }
-    if (!slotBlockId) return;
-    setCarryBlockId(slotBlockId);
-    setCarryPosition({ x: event.clientX, y: event.clientY });
-    onChangeQuickbarSlots((current) => current.map((value, slotIndex) => slotIndex === index ? "" : value));
-  };
-
-  const handleDropOutside = () => {
-    setHoverItem(null);
-    if (carryBlockId) setCarryBlockId("");
-  };
-
-  const rangeStart = filteredValues.length ? pageStart + 1 : 0;
-  const rangeEnd = filteredValues.length ? Math.min(filteredValues.length, pageStart + 45) : 0;
-
-  return (
-    <div className="dialog-overlay" onClick={onClose}>
-      <section className="dialog-content flake-page__inventory-dialog" onClick={(event) => { event.stopPropagation(); handleDropOutside(); }}>
-        <div className="subwindow-title-row">
-          <div>
-            <h3 className="subwindow-title">创造模式物品栏</h3>
-            {/* <p className="subwindow-subtitle nova-muted">使用创造模式分类枚举作为数据源，滚轮按整行切换当前显示区间；点选方块会复制到鼠标上，再点快捷栏槽位即可放置。</p> */}
-          </div>
-          <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</button>
-        </div>
-        <div className="flake-page__inventory-dialog-body">
-          <div className="flake-page__creative-inventory-controls">
-            <label className="flake-page__creative-inventory-control">
-              <span className="nova-muted">分类</span>
-              <select className="input" value={selectedCollectionId} onChange={(event) => setSelectedCollectionId(event.target.value)}>
-                {collectionOptions.length === 0 ? <option value="">选择创造模式分类</option> : null}
-                {collectionOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
-            <label className="flake-page__creative-inventory-control flake-page__creative-inventory-search">
-              <span className="nova-muted">搜索</span>
-              <input className="input" value={search} placeholder="按方块名或 ID 过滤" onChange={(event) => setSearch(event.target.value)} />
-            </label>
-            <div className="flake-page__creative-inventory-range nova-muted nova-small">
-              {loading ? "加载中..." : `${rangeStart}-${rangeEnd} / ${filteredValues.length}`}
-            </div>
-          </div>
-
-          <div className="flake-page__creative-inventory-stage">
-            <div className="flake-page__creative-inventory-surface" onWheel={handleWheel}>
-              <div className="flake-page__creative-inventory-grid">
-                {visibleValues.map((blockId, index) => blockId ? (
-                  <div
-                    key={`${blockId}-${index}`}
-                    className={carryBlockId === blockId ? "flake-page__creative-slot is-carried-source" : "flake-page__creative-slot"}
-                    role="button"
-                    tabIndex={0}
-                    onClick={(event) => handleInventorySlotClick(blockId, event)}
-                    onMouseEnter={(event) => handleHoverItem(blockId, event)}
-                    onMouseMove={(event) => handleHoverItem(blockId, event)}
-                    onMouseLeave={handleHoverLeave}
-                  >
-                    <BlockIcon blockId={blockId} />
-                  </div>
-                ) : (
-                  <div key={`empty-${index}`} className="flake-page__creative-slot is-empty" aria-hidden />
-                ))}
-              </div>
-
-              <div className="flake-page__creative-hotbar-grid">
-                {quickbarSlots.map((blockId, index) => {
-                  return (
-                    <div
-                      key={`creative-hotbar-${index + 1}`}
-                      className={blockId ? "flake-page__creative-hotbar-slot has-item" : "flake-page__creative-hotbar-slot"}
-                      role="button"
-                      tabIndex={0}
-                      onClick={(event) => handleCreativeHotbarSlotClick(index, event)}
-                      onMouseEnter={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
-                      onMouseMove={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
-                      onMouseLeave={blockId ? handleHoverLeave : undefined}
-                    >
-                      {blockId ? <BlockIcon blockId={blockId} /> : null}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {!loading && !error && !filteredValues.length ? (
-                <div className="flake-page__creative-inventory-overlay nova-muted">没有可显示的方块。</div>
-              ) : null}
-              {loading ? <div className="flake-page__creative-inventory-overlay nova-muted">正在加载创造模式分类...</div> : null}
-              {!loading && error ? <div className="flake-page__creative-inventory-overlay nova-error">{error}</div> : null}
-            </div>
-          </div>
-        </div>
-      </section>
-      {carryBlockId ? (
-        <div ref={carryPreviewRef} className="flake-page__creative-carry-preview">
-          <BlockIcon blockId={carryBlockId} />
-        </div>
-      ) : null}
-      {!carryBlockId ? <CreativeInventoryTooltip x={hoverPosition.x} y={hoverPosition.y} item={hoverItem} /> : null}
-    </div>
-  );
-}
-
-function fitView(
-  meta: LayerSliceMeta,
-  viewport: HTMLElement | null,
-  setScale: (scale: number) => void,
-  setOffset: (offset: { x: number; y: number }) => void,
-) {
-  const width = viewport?.parentElement?.clientWidth || viewport?.clientWidth || 600;
-  const height = viewport?.parentElement?.clientHeight || viewport?.clientHeight || 600;
-  const maxDim = Math.max(meta.size_x, meta.size_z);
-  if (maxDim <= 0) return;
-  const initialScale = Math.min(10, Math.max(0.5, (Math.min(width, height) * 0.8) / maxDim));
-  setScale(initialScale);
-  setOffset({
-    x: width / 2 - (meta.size_x * initialScale) / 2,
-    y: height / 2 - (meta.size_z * initialScale) / 2,
-  });
+  return low;
 }
 
 const LayerCanvas = forwardRef<
   LayerCanvasHandle,
   {
     meta: LayerSliceMeta | null;
-    sliceData: LayerSliceData | null;
+    renderSlices: FlakeRenderSlice[];
+    showStateHints: boolean;
     onHoverBlock: (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => void;
+    onBlockRightClick: (block: FlakeHoverBlock, event: React.MouseEvent) => void;
+    onScaleChange?: (scale: number) => void;
   }
->(({ meta, sliceData, onHoverBlock }, ref) => {
+>(({ meta, renderSlices, showStateHints, onHoverBlock, onBlockRightClick, onScaleChange }, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const worldRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [iconImages, setIconImages] = useState<Map<number, string>>(new Map());
+  const [iconUnitColors, setIconUnitColors] = useState<Map<number, string>>(new Map());
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const dragFrameRef = useRef<number | null>(null);
+  const pendingOffsetRef = useRef(offset);
+
+  // 用 ref 镜像最新的 scale / offset，供事件处理和命令式缩放共用，避免闭包读到旧值。
+  const scaleRef = useRef(scale);
+  const offsetRef = useRef(offset);
+  scaleRef.current = scale;
+  offsetRef.current = offset;
+
+  const scheduleOffset = useCallback((nextOffset: { x: number; y: number }) => {
+    pendingOffsetRef.current = nextOffset;
+    if (dragFrameRef.current !== null) return;
+    dragFrameRef.current = window.requestAnimationFrame(() => {
+      dragFrameRef.current = null;
+      setOffset(pendingOffsetRef.current);
+    });
+  }, []);
+
+  // 通知父组件当前缩放，用于同步滑块和输入框。用 ref 保存回调避免因引用变化触发多余 effect。
+  const onScaleChangeRef = useRef(onScaleChange);
+  onScaleChangeRef.current = onScaleChange;
+  useEffect(() => {
+    onScaleChangeRef.current?.(scale);
+  }, [scale]);
+
+  useEffect(() => {
+    if (scale < HOVER_TOOLTIP_MIN_SCALE) {
+      onHoverBlock(null, null);
+    }
+  }, [onHoverBlock, scale]);
+
+  useLayoutEffect(() => {
+    const world = worldRef.current;
+    if (!world) return;
+    world.style.transform = `translate(${Math.round(offset.x)}px, ${Math.round(offset.y)}px)`;
+  }, [offset.x, offset.y]);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    const updateViewportSize = () => {
+      const rect = viewport.getBoundingClientRect();
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      setViewportSize((current) => (
+        current.width === width && current.height === height ? current : { width, height }
+      ));
+    };
+
+    updateViewportSize();
+    const observer = new ResizeObserver(updateViewportSize);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => () => {
+    if (dragFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragFrameRef.current);
+    }
+  }, []);
+
+  // 围绕锚点 (anchorX, anchorY，均相对视口左上角) 将缩放设置为 nextScale。
+  const applyZoom = (rawScale: number, anchorX: number, anchorY: number) => {
+    const nextScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, rawScale));
+    const currentScale = scaleRef.current;
+    if (nextScale === currentScale) return;
+    const currentOffset = offsetRef.current;
+    const ratio = nextScale / currentScale;
+    setOffset({
+      x: anchorX - (anchorX - currentOffset.x) * ratio,
+      y: anchorY - (anchorY - currentOffset.y) * ratio,
+    });
+    setScale(nextScale);
+  };
 
   const colorMap = useMemo(() => {
     const next = new Map<number, string>();
@@ -514,76 +276,151 @@ const LayerCanvas = forwardRef<
   }, [meta]);
 
   const slicePaletteIds = useMemo(() => {
-    if (!meta || !sliceData) return [] as number[];
+    if (!meta || renderSlices.length === 0) return [] as number[];
     const seen = new Set<number>();
     const paletteIds: number[] = [];
-    for (const block of sliceData.blocks) {
-      const paletteId = block.palette_id;
-      if (seen.has(paletteId)) continue;
-      seen.add(paletteId);
-      const entry = meta.palette[paletteId];
-      if (!entry?.block_id || entry.block_id.includes("air")) continue;
-      paletteIds.push(paletteId);
+    for (const renderSlice of renderSlices) {
+      for (const block of renderSlice.sliceData.blocks) {
+        const paletteId = block.palette_id;
+        if (seen.has(paletteId)) continue;
+        seen.add(paletteId);
+        const entry = meta.palette[paletteId];
+        if (!entry?.block_id || entry.block_id.includes("air")) continue;
+        paletteIds.push(paletteId);
+      }
     }
     return paletteIds;
-  }, [meta, sliceData]);
+  }, [meta, renderSlices]);
 
-  const sliceBlockIndex = useMemo(() => {
-    const index = new Map<number, LayerSliceData["blocks"][number]>();
-    if (!meta || !sliceData) return index;
-    for (const block of sliceData.blocks) {
-      index.set(block.z * meta.size_x + block.x, block);
+  const visibleLayerIndex = useMemo<VisibleLayerIndex>(() => {
+    const byPosition = new Map<number, VisibleLayerBlock>();
+    const rowMaps = new Map<number, Map<number, VisibleLayerBlock>>();
+    if (!meta || renderSlices.length === 0) return { byPosition, rows: new Map() };
+
+    for (const renderSlice of renderSlices) {
+      for (const block of renderSlice.sliceData.blocks) {
+        const positionKey = block.z * meta.size_x + block.x;
+        if (byPosition.has(positionKey)) continue;
+        const visibleBlock = {
+          block,
+          y: renderSlice.sliceData.y,
+          opacity: renderSlice.opacity,
+        };
+        byPosition.set(positionKey, visibleBlock);
+
+        let row = rowMaps.get(block.z);
+        if (!row) {
+          row = new Map<number, VisibleLayerBlock>();
+          rowMaps.set(block.z, row);
+        }
+        row.set(block.x, visibleBlock);
+      }
     }
-    return index;
-  }, [meta, sliceData]);
+
+    const rows = new Map<number, VisibleLayerBlock[]>();
+    for (const [z, row] of rowMaps.entries()) {
+      rows.set(z, Array.from(row.values()).sort((a, b) => a.block.x - b.block.x));
+    }
+    return { byPosition, rows };
+  }, [meta, renderSlices]);
+
+  const visibleBlockWindow = useMemo<VisibleBlockWindow | null>(() => {
+    if (!meta) return null;
+    const width = viewportSize.width || 600;
+    const height = viewportSize.height || 600;
+    const safeScale = Math.max(MIN_SCALE, scale);
+    const overscanBlocks = Math.max(2, Math.ceil(RENDER_OVERSCAN_PIXELS / safeScale));
+    const minX = Math.max(0, Math.floor((-offset.x) / safeScale) - overscanBlocks);
+    const maxX = Math.min(meta.size_x - 1, Math.ceil((width - offset.x) / safeScale) + overscanBlocks);
+    const minZ = Math.max(0, Math.floor((-offset.y) / safeScale) - overscanBlocks);
+    const maxZ = Math.min(meta.size_z - 1, Math.ceil((height - offset.y) / safeScale) + overscanBlocks);
+    if (maxX < minX || maxZ < minZ) return null;
+    return { minX, maxX, minZ, maxZ };
+  }, [meta, offset.x, offset.y, scale, viewportSize.height, viewportSize.width]);
 
   const visibleBlocks = useMemo(() => {
-    if (!meta || !sliceData) return [] as Array<{
+    if (!meta || visibleLayerIndex.byPosition.size === 0 || !visibleBlockWindow) return [] as Array<{
       key: string;
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-      color: string;
       iconUrl: string;
+      shouldRenderIcon: boolean;
+      style: CssVariableStyle<
+        | "--flake-layer-block-left"
+        | "--flake-layer-block-top"
+        | "--flake-layer-block-width"
+        | "--flake-layer-block-height"
+        | "--flake-layer-block-opacity"
+        | "--flake-layer-block-background"
+      >;
     }>;
 
+    const shouldRenderIcons = scale >= ICON_NATIVE_SIZE;
     const blocks: Array<{
       key: string;
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-      color: string;
       iconUrl: string;
+      shouldRenderIcon: boolean;
+      style: CssVariableStyle<
+        | "--flake-layer-block-left"
+        | "--flake-layer-block-top"
+        | "--flake-layer-block-width"
+        | "--flake-layer-block-height"
+        | "--flake-layer-block-opacity"
+        | "--flake-layer-block-background"
+      >;
     }> = [];
 
-    for (const block of sliceData.blocks) {
-      const color = colorMap.get(block.palette_id) || "#f0f";
-      if (color === "transparent") continue;
-      const left = Math.round(offset.x + block.x * scale);
-      const top = Math.round(offset.y + block.z * scale);
-      const width = Math.max(1, Math.ceil(scale));
-      const height = Math.max(1, Math.ceil(scale));
-      blocks.push({
-        key: `${block.x}:${block.z}:${block.palette_id}`,
-        left,
-        top,
-        width,
-        height,
-        color,
-        iconUrl: iconImages.get(block.palette_id) || "",
-      });
+    for (let z = visibleBlockWindow.minZ; z <= visibleBlockWindow.maxZ; z += 1) {
+      const row = visibleLayerIndex.rows.get(z);
+      if (!row) continue;
+
+      for (let index = findFirstBlockAtOrAfterX(row, visibleBlockWindow.minX); index < row.length; index += 1) {
+        const visibleBlock = row[index];
+        if (visibleBlock.block.x > visibleBlockWindow.maxX) break;
+
+        const fallbackColor = colorMap.get(visibleBlock.block.palette_id) || "#f0f";
+        const color = shouldRenderIcons
+          ? fallbackColor
+          : (iconUnitColors.get(visibleBlock.block.palette_id) || fallbackColor);
+        if (color === "transparent") continue;
+        const iconUrl = iconImages.get(visibleBlock.block.palette_id) || "";
+        const shouldRenderIcon = shouldRenderIcons && !!iconUrl;
+        blocks.push({
+          key: `${visibleBlock.block.x}:${visibleBlock.block.z}:${visibleBlock.y}:${visibleBlock.block.palette_id}`,
+          iconUrl,
+          shouldRenderIcon,
+          style: {
+            "--flake-layer-block-left": `${Math.round(visibleBlock.block.x * scale)}px`,
+            "--flake-layer-block-top": `${Math.round(visibleBlock.block.z * scale)}px`,
+            "--flake-layer-block-width": `${Math.max(1, Math.ceil(scale))}px`,
+            "--flake-layer-block-height": `${Math.max(1, Math.ceil(scale))}px`,
+            "--flake-layer-block-opacity": visibleBlock.opacity,
+            "--flake-layer-block-background": shouldRenderIcon ? "transparent" : color,
+          },
+        });
+      }
     }
 
     return blocks;
-  }, [colorMap, iconImages, meta, offset.x, offset.y, scale, sliceData]);
+  }, [colorMap, iconImages, iconUnitColors, meta, scale, visibleBlockWindow, visibleLayerIndex]);
+
+  const borderStyle: CssVariableStyle<"--flake-layer-border-width" | "--flake-layer-border-height"> = useMemo(() => ({
+    "--flake-layer-border-width": `${Math.max(1, Math.round(meta ? meta.size_x * scale : 0))}px`,
+    "--flake-layer-border-height": `${Math.max(1, Math.round(meta ? meta.size_z * scale : 0))}px`,
+  }), [meta, scale]);
 
   const resetView = () => {
     if (meta) fitView(meta, viewportRef.current, setScale, setOffset);
   };
 
-  useImperativeHandle(ref, () => ({ resetView }), [meta]);
+  // 命令式缩放：围绕视口中心缩放，供层级控制区的滑块 / 输入框调用。
+  const zoomTo = (nextScale: number) => {
+    const viewport = viewportRef.current;
+    const rect = viewport?.getBoundingClientRect();
+    const anchorX = rect ? rect.width / 2 : 0;
+    const anchorY = rect ? rect.height / 2 : 0;
+    applyZoom(nextScale, anchorX, anchorY);
+  };
+
+  useImperativeHandle(ref, () => ({ resetView, zoomTo }), [meta]);
 
   useEffect(() => {
     if (meta) resetView();
@@ -591,56 +428,85 @@ const LayerCanvas = forwardRef<
 
   useEffect(() => {
     let cancelled = false;
-    setIconImages(new Map());
-
+    
     if (!meta || slicePaletteIds.length === 0) {
-      // console.log("[LBA_FLAKE] icon_batch:disabled", { has_meta: !!meta, slice_palette_ids: slicePaletteIds.length });
+      setIconImages(new Map());
+      setIconUnitColors(new Map());
       return () => {
         cancelled = true;
       };
     }
 
     void (async () => {
-      const next = new Map<number, string>();
-      for (const paletteId of slicePaletteIds) {
+      // 并行处理所有图标，避免串行阻塞
+      const tasks = slicePaletteIds.map(async (paletteId) => {
         const entry = meta.palette[paletteId];
-        if (!entry?.block_id) continue;
-        const dataUrl = await getBlockIconDataUrl(entry.block_id, "layering");
-        if (cancelled || !dataUrl) continue;
-        next.set(paletteId, dataUrl);
+        if (!entry?.block_id) return null;
+        
+        try {
+          // 使用缓存，避免重复处理
+          const dataUrl = await getCachedIconImage(
+            entry.block_id,
+            entry,
+            meta.property_pool || [],
+            showStateHints
+          );
+          const unitColor = dataUrl ? await resolveIconUnitColor(dataUrl) : null;
+          return { paletteId, dataUrl, unitColor };
+        } catch (error) {
+          console.error(`Failed to resolve icon for palette ${paletteId}:`, error);
+          return null;
+        }
+      });
+
+      // 等待所有任务完成（并行执行）
+      const results = await Promise.all(tasks);
+      
+      if (cancelled) return;
+
+      // 批量更新状态
+      const nextImages = new Map<number, string>();
+      const nextUnitColors = new Map<number, string>();
+      for (const result of results) {
+        if (result && result.dataUrl) {
+          nextImages.set(result.paletteId, result.dataUrl);
+        }
+        if (result && result.unitColor) {
+          nextUnitColors.set(result.paletteId, result.unitColor);
+        }
       }
-      if (!cancelled) {
-        setIconImages(next);
-      }
+      
+      setIconImages(nextImages);
+      setIconUnitColors(nextUnitColors);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [meta, slicePaletteIds]);
+  }, [meta, slicePaletteIds, showStateHints]);
 
+  // 滚轮事件
   const handleWheel = (event: React.WheelEvent) => {
     event.preventDefault();
     if (!viewportRef.current) return;
     const direction = event.deltaY < 0 ? 1 : -1;
-    const nextScale = Math.max(0.1, Math.min(50, scale * Math.pow(1.1, direction)));
     const rect = viewportRef.current.getBoundingClientRect();
-    const mouseX = event.clientX - rect.left;
-    const mouseY = event.clientY - rect.top;
-    setOffset({
-      x: mouseX - (mouseX - offset.x) * (nextScale / scale),
-      y: mouseY - (mouseY - offset.y) * (nextScale / scale),
-    });
-    setScale(nextScale);
+    // 缩放乘数
+    applyZoom(scaleRef.current * Math.pow(2, direction), event.clientX - rect.left, event.clientY - rect.top);
   };
 
   const handleMouseMove = (event: React.MouseEvent) => {
     if (isDragging) {
-      setOffset({ x: event.clientX - dragStart.x, y: event.clientY - dragStart.y });
+      scheduleOffset({ x: event.clientX - dragStart.x, y: event.clientY - dragStart.y });
       return;
     }
 
-    if (!meta || !sliceData || !viewportRef.current) {
+    if (scale < HOVER_TOOLTIP_MIN_SCALE) {
+      onHoverBlock(null, null);
+      return;
+    }
+
+    if (!meta || visibleLayerIndex.byPosition.size === 0 || !viewportRef.current) {
       onHoverBlock(null, event);
       return;
     }
@@ -649,13 +515,13 @@ const LayerCanvas = forwardRef<
     const bx = Math.floor((event.clientX - rect.left - offset.x) / scale);
     const bz = Math.floor((event.clientY - rect.top - offset.y) / scale);
     if (bx >= 0 && bx < meta.size_x && bz >= 0 && bz < meta.size_z) {
-      const block = sliceBlockIndex.get(bz * meta.size_x + bx);
-      if (block) {
-        const paletteEntry = meta.palette[block.palette_id];
+      const visibleBlock = visibleLayerIndex.byPosition.get(bz * meta.size_x + bx);
+      if (visibleBlock) {
+        const paletteEntry = meta.palette[visibleBlock.block.palette_id];
         onHoverBlock(
           {
             x: bx,
-            y: sliceData.y,
+            y: visibleBlock.y,
             z: bz,
             id: paletteEntry.block_id,
             name: translateBlockId(paletteEntry.block_id),
@@ -670,14 +536,54 @@ const LayerCanvas = forwardRef<
     onHoverBlock(null, event);
   };
 
+  const handleContextMenu = (event: React.MouseEvent) => {
+    console.log("handleContextMenu 被调用");
+    event.preventDefault();
+    
+    if (!meta || visibleLayerIndex.byPosition.size === 0 || !viewportRef.current) {
+      console.log("无法处理右键: meta=", !!meta, "visibleBlockIndex.size=", visibleLayerIndex.byPosition.size, "viewportRef=", !!viewportRef.current);
+      return;
+    }
+
+    const rect = viewportRef.current.getBoundingClientRect();
+    const bx = Math.floor((event.clientX - rect.left - offset.x) / scale);
+    const bz = Math.floor((event.clientY - rect.top - offset.y) / scale);
+    console.log("计算的方块坐标:", bx, bz, "范围:", meta.size_x, meta.size_z);
+    
+    if (bx >= 0 && bx < meta.size_x && bz >= 0 && bz < meta.size_z) {
+      const visibleBlock = visibleLayerIndex.byPosition.get(bz * meta.size_x + bx);
+      console.log("找到的 visibleBlock:", visibleBlock);
+      
+      if (visibleBlock) {
+        const paletteEntry = meta.palette[visibleBlock.block.palette_id];
+        const block: FlakeHoverBlock = {
+          x: bx,
+          y: visibleBlock.y,
+          z: bz,
+          id: paletteEntry.block_id,
+          name: translateBlockId(paletteEntry.block_id),
+          states: resolveLayerBlockStates(paletteEntry, meta.property_pool || []),
+        };
+        console.log("准备调用 onBlockRightClick, block=", block);
+        onBlockRightClick(block, event);
+      } else {
+        console.log("该位置没有方块");
+      }
+    } else {
+      console.log("坐标超出范围");
+    }
+  };
+
   return (
     <div
       ref={viewportRef}
       className={isDragging ? "flake-canvas is-dragging" : "flake-canvas"}
       onWheel={handleWheel}
       onMouseDown={(event) => {
-        setIsDragging(true);
-        setDragStart({ x: event.clientX - offset.x, y: event.clientY - offset.y });
+        if (event.button === 0) { // 只响应左键拖拽
+          setIsDragging(true);
+          setDragStart({ x: event.clientX - offsetRef.current.x, y: event.clientY - offsetRef.current.y });
+        }
       }}
       onMouseMove={handleMouseMove}
       onMouseUp={() => setIsDragging(false)}
@@ -685,46 +591,50 @@ const LayerCanvas = forwardRef<
         setIsDragging(false);
         onHoverBlock(null, null);
       }}
+      onContextMenu={handleContextMenu}
     >
       <div
-        className="flake-layer-border"
-        style={{
-          left: `${Math.round(offset.x)}px`,
-          top: `${Math.round(offset.y)}px`,
-          width: `${Math.max(1, Math.round(meta ? meta.size_x * scale : 0))}px`,
-          height: `${Math.max(1, Math.round(meta ? meta.size_z * scale : 0))}px`,
-        }}
-      />
-      {visibleBlocks.map((block) => (
+        ref={worldRef}
+        className="flake-layer-world"
+      >
         <div
-          key={block.key}
-          className="flake-layer-block"
-          style={{
-            left: `${block.left}px`,
-            top: `${block.top}px`,
-            width: `${block.width}px`,
-            height: `${block.height}px`,
-            background: block.iconUrl ? "transparent" : block.color,
-          }}
-        >
-          {block.iconUrl ? <img className="flake-layer-block-icon" src={block.iconUrl} alt="" draggable={false} /> : null}
-        </div>
-      ))}
+          className="flake-layer-border"
+          style={borderStyle}
+        />
+        {visibleBlocks.map((block) => (
+          <div
+            key={block.key}
+            className="flake-layer-block"
+            style={block.style}
+          >
+            {block.shouldRenderIcon ? <img className="flake-layer-block-icon" src={block.iconUrl} alt="" draggable={false} /> : null}
+          </div>
+        ))}
+      </div>
     </div>
   );
 });
 
+/**
+ * Renders the flake layer viewer and editing controls.
+ */
 export function FlakePage({ currentFile, setRoute }: any) {
   const [cacheFile, setCacheFile] = useState("");
   const [cacheStatus, setCacheStatus] = useState("idle");
   const [cacheExists, setCacheExists] = useState(false);
   const [meta, setMeta] = useState<LayerSliceMeta | null>(null);
-  const [sliceData, setSliceData] = useState<LayerSliceData | null>(null);
+  const [sliceDataByY, setSliceDataByY] = useState<Record<number, LayerSliceData | null>>({});
   const [statsData, setStatsData] = useState<StatsData | null>(null);
   const [layerY, setLayerY] = useState(0);
+  const [onionSkinDepth, setOnionSkinDepth] = useState(0);
+  const [viewScale, setViewScale] = useState(1);
+  const [showStateHints, setShowStateHints] = useState(true);
   const [hoverBlock, setHoverBlock] = useState<FlakeHoverBlock | null>(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
   const [showMaterials, setShowMaterials] = useState(false);
+  const [showContainerDialog, setShowContainerDialog] = useState(false);
+  const [containerData, setContainerData] = useState<{ type: "chest" | "shulker_box" | "barrel"; items: ContainerItem[]; position: { x: number; y: number; z: number } } | null>(null);
+  const [isLoadingContainer, setIsLoadingContainer] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
   const [selectedQuickbarSlot, setSelectedQuickbarSlot] = useState(0);
@@ -741,8 +651,8 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const syncRequestIdRef = useRef(0);
   const inFlightMetaKeyRef = useRef("");
   const loadedMetaKeyRef = useRef("");
-  const inFlightSliceKeyRef = useRef("");
-  const loadedSliceKeyRef = useRef("");
+  const inFlightSliceKeysRef = useRef(new Set<string>());
+  const loadedSliceKeysRef = useRef(new Set<string>());
 
   const stopQuickBuildPolling = () => {
     if (pollIntervalRef.current !== null) {
@@ -770,14 +680,14 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setQuickBuildError(stored?.status === "error" ? stored.stage || "" : "");
     setIsQuickBuilding(stored?.status === "building");
     setMeta(null);
-    setSliceData(null);
+    setSliceDataByY({});
     setCacheExists(false);
     loadedMetaKeyRef.current = "";
-    loadedSliceKeyRef.current = "";
+    loadedSliceKeysRef.current.clear();
 
     if (!stored?.cacheFile) {
       inFlightMetaKeyRef.current = "";
-      inFlightSliceKeyRef.current = "";
+      inFlightSliceKeysRef.current.clear();
       // console.log("[LBA_FLAKE] syncCacheState:no_cache", { currentFile });
       return;
     }
@@ -819,7 +729,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
         });
         */
         loadedMetaKeyRef.current = metaKey;
-        loadedSliceKeyRef.current = "";
+        loadedSliceKeysRef.current.clear();
+        inFlightSliceKeysRef.current.clear();
+        setSliceDataByY({});
         setMeta(loadedMeta);
         setLayerY(0);
       } finally {
@@ -838,7 +750,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setIsQuickBuilding(true);
     setCacheExists(false);
     setMeta(null);
-    setSliceData(null);
+    setSliceDataByY({});
+    loadedSliceKeysRef.current.clear();
+    inFlightSliceKeysRef.current.clear();
 
     try {
       const launch = await startCacheBuildTask(currentFile, "normal");
@@ -946,56 +860,147 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
   useEffect(() => {
     if (!cacheExists || !meta || !cacheFile) return;
-    const sliceKey = `${cacheFile}::${layerY}`;
-    if (inFlightSliceKeyRef.current === sliceKey || loadedSliceKeyRef.current === sliceKey) {
-      return;
+    const requiredYs: number[] = [];
+    const maxDepth = Math.min(5, onionSkinDepth, layerY);
+    for (let depth = 0; depth <= maxDepth; depth += 1) {
+      requiredYs.push(layerY - depth);
     }
-    inFlightSliceKeyRef.current = sliceKey;
-    /*
-    console.log("[LBA_FLAKE] effect:loadLayerSlice:start", {
-      cacheFile,
-      layerY,
-      size_x: meta.size_x,
-      size_y: meta.size_y,
-      size_z: meta.size_z,
-    });
-    */
-    loadLayerSlice(cacheFile, layerY)
-      .then((nextSlice) => {
-        /*
-        console.log("[LBA_FLAKE] effect:loadLayerSlice:end", {
-          cacheFile,
-          layerY,
-          block_count: nextSlice?.blocks?.length || 0,
-        });
-        */
-        loadedSliceKeyRef.current = sliceKey;
-        setSliceData(nextSlice);
-      })
-      .catch((error) => {
-        /*
-        console.log("[LBA_FLAKE] effect:loadLayerSlice:error", {
-          cacheFile,
-          layerY,
-          error: String(error),
-        });
-        */
-        if (loadedSliceKeyRef.current === sliceKey) {
-          loadedSliceKeyRef.current = "";
-        }
-        setSliceData(null);
-      })
-      .finally(() => {
-        if (inFlightSliceKeyRef.current === sliceKey) {
-          inFlightSliceKeyRef.current = "";
-        }
-      });
-  }, [layerY, cacheExists, meta, cacheFile]);
 
-  const handleHoverBlock = (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => {
+    requiredYs.forEach((targetY) => {
+      const sliceKey = `${cacheFile}::${targetY}`;
+      if (inFlightSliceKeysRef.current.has(sliceKey) || loadedSliceKeysRef.current.has(sliceKey)) {
+        return;
+      }
+      inFlightSliceKeysRef.current.add(sliceKey);
+      /*
+      console.log("[LBA_FLAKE] effect:loadLayerSlice:start", {
+        cacheFile,
+        layerY: targetY,
+        size_x: meta.size_x,
+        size_y: meta.size_y,
+        size_z: meta.size_z,
+      });
+      */
+      loadLayerSlice(cacheFile, targetY)
+        .then((nextSlice) => {
+          /*
+          console.log("[LBA_FLAKE] effect:loadLayerSlice:end", {
+            cacheFile,
+            layerY: targetY,
+            block_count: nextSlice?.blocks?.length || 0,
+          });
+          */
+          loadedSliceKeysRef.current.add(sliceKey);
+          setSliceDataByY((current) => ({
+            ...current,
+            [targetY]: nextSlice,
+          }));
+        })
+        .catch(() => {
+          /*
+          console.log("[LBA_FLAKE] effect:loadLayerSlice:error", {
+            cacheFile,
+            layerY: targetY,
+            error: String(error),
+          });
+          */
+          loadedSliceKeysRef.current.delete(sliceKey);
+          setSliceDataByY((current) => ({
+            ...current,
+            [targetY]: null,
+          }));
+        })
+        .finally(() => {
+          inFlightSliceKeysRef.current.delete(sliceKey);
+        });
+    });
+  }, [layerY, onionSkinDepth, cacheExists, meta, cacheFile]);
+
+  const sliceData = sliceDataByY[layerY] ?? null;
+  const renderSlices = useMemo(() => {
+    if (!Object.prototype.hasOwnProperty.call(sliceDataByY, layerY) || sliceDataByY[layerY] === null) return [] as FlakeRenderSlice[];
+    const effectiveDepth = Math.min(5, onionSkinDepth, layerY);
+    const next: FlakeRenderSlice[] = [];
+    for (let depth = 0; depth <= effectiveDepth; depth += 1) {
+      const targetY = layerY - depth;
+      const slice = sliceDataByY[targetY];
+      if (!slice) continue;
+      next.push({
+        depth,
+        opacity: depth === 0 ? 1 : (onionSkinDepth + 1 - depth) / (onionSkinDepth + 1),
+        sliceData: slice,
+      });
+    }
+    return next;
+  }, [layerY, onionSkinDepth, sliceDataByY]);
+
+  const handleHoverBlock = useCallback((block: FlakeHoverBlock | null, event: React.MouseEvent | null) => {
     setHoverBlock(block);
     if (event) setHoverPos({ x: event.clientX, y: event.clientY });
-  };
+  }, []);
+
+  const handleBlockRightClick = useCallback(async (block: FlakeHoverBlock, event: React.MouseEvent) => {
+    event.preventDefault();
+    
+    // 防止重复加载
+    if (isLoadingContainer) {
+      return;
+    }
+    
+    console.log("右键点击方块:", block.id, "坐标:", block.x, block.y, block.z);
+    
+    // 检查是否为容器方块
+    if (!isContainerBlock(block.id)) {
+      console.log("不是容器方块");
+      return;
+    }
+    
+    console.log("检测到容器方块，开始加载数据...");
+    
+    // 设置加载状态
+    setIsLoadingContainer(true);
+    
+    try {
+      // 计算 regionName（避免闭包依赖问题）
+      const region = statsData?.regions?.[0]?.name || currentFile.split(/[\\/]/).pop() || "Unnamed";
+      
+      // 使用 Promise 包装，避免阻塞主线程
+      const data = await Promise.race([
+        loadContainerData(currentFile, region, block.x, block.y, block.z),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)) // 5秒超时
+      ]);
+      
+      console.log("加载到的容器数据:", data);
+      
+      if (!data) {
+        console.log("未找到容器数据或容器为空");
+        return;
+      }
+      
+      const containerType = getContainerType(data.block_id);
+      
+      console.log("容器类型:", containerType);
+      
+      // 只支持箱子、潜影盒和木桶
+      if (!containerType) {
+        console.log("不支持的容器类型，当前仅支持：箱子、潜影盒、木桶");
+        return;
+      }
+      
+      console.log("准备显示容器对话框");
+      
+      setContainerData({
+        type: containerType,
+        items: data.items,
+        position: data.position,
+      });
+      setShowContainerDialog(true);
+    } catch (error) {
+      console.error("加载容器数据失败:", error);
+    } finally {
+      setIsLoadingContainer(false);
+    }
+  }, [currentFile, statsData, isLoadingContainer]);
 
   useLayoutEffect(() => {
     const page = pageRef.current;
@@ -1009,7 +1014,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const building = cacheStatus === "building" || isQuickBuilding;
   const statusText = quickBuildError || quickBuildStatus || (!ready
     ? (building ? "Cache is building; layer data will become available when the ready file is written." : "Layers unavailable: build 3D cache first.")
-    : `Y=${layerY}; ${sliceData?.blocks?.length || 0} non-air blocks. Wheel zooms, drag pans.`);
+    : `Y=${layerY}; 当前层 ${sliceData?.blocks?.length || 0} 个非空气方块；洋葱皮 ${onionSkinDepth} 层。滚轮缩放，拖拽平移。`);
 
   if (!currentFile) {
     return (
@@ -1052,6 +1057,66 @@ export function FlakePage({ currentFile, setRoute }: any) {
           <input className="flake-page__layer-range" type="range" min={0} max={maxY} value={layerY} onChange={(event) => setLayerY(parseInt(event.target.value, 10))} disabled={!ready} />
         </div>
 
+        <div className="flake-page__layer-row flake-page__onion-row">
+          <span className="nova-muted flake-page__layer-label">洋葱皮</span>
+          <input
+            className="flake-page__layer-range"
+            type="range"
+            min={0}
+            max={5}
+            step={1}
+            value={onionSkinDepth}
+            onChange={(event) => setOnionSkinDepth(Math.min(5, Math.max(0, Number(event.target.value) || 0)))}
+            disabled={!ready}
+          />
+          <input
+            className="input flake-page__onion-input"
+            type="number"
+            min={0}
+            max={5}
+            step={1}
+            value={onionSkinDepth}
+            onChange={(event) => setOnionSkinDepth(Math.min(5, Math.max(0, Number(event.target.value) || 0)))}
+            disabled={!ready}
+          />
+        </div>
+        <div className="nova-muted nova-small flake-page__onion-hint">
+          0 表示关闭；只显示当前位置最上面那一层可见方块，下方层按厚度比例半透明补显。
+        </div>
+
+        <div className="flake-page__layer-row flake-page__zoom-row">
+          <span className="nova-muted flake-page__layer-label">缩放</span>
+          <input
+            className="flake-page__layer-range"
+            type="range"
+            min={MIN_SCALE}
+            max={MAX_SCALE}
+            step={0.1}
+            value={viewScale}
+            onChange={(event) => canvasRef.current?.zoomTo(Number(event.target.value))}
+            disabled={!ready}
+          />
+          <input
+            className="input flake-page__zoom-input"
+            type="number"
+            min={MIN_SCALE}
+            max={MAX_SCALE}
+            step={0.1}
+            value={Math.round(viewScale * 10) / 10}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              if (Number.isFinite(next)) canvasRef.current?.zoomTo(next);
+            }}
+            disabled={!ready}
+          />
+          <span className="nova-muted nova-small flake-page__zoom-unit">像素/格</span>
+        </div>
+
+        <label className="subwindow-check-row flake-page__edit-toggle">
+          <input type="checkbox" checked={showStateHints} onChange={(event) => setShowStateHints(event.target.checked)} disabled={!ready} />
+          状态提示图片
+        </label>
+
         <div className="flake-page__layer-footer">
           <div className="flake-page__layer-value">Y = {layerY}</div>
           <div className="flake-page__layer-actions">
@@ -1073,7 +1138,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 <div>{building ? "标准模式 3D cache 正在构建。" : "请先生成标准模式 3D cache。"}</div>
               </div>
             ) : (
-              <LayerCanvas ref={canvasRef} meta={meta} sliceData={sliceData} onHoverBlock={handleHoverBlock} />
+              <LayerCanvas ref={canvasRef} meta={meta} renderSlices={renderSlices} showStateHints={showStateHints} onHoverBlock={handleHoverBlock} onBlockRightClick={handleBlockRightClick} onScaleChange={setViewScale} />
             )}
 
             <FlakeBlockTooltip x={hoverPos.x} y={hoverPos.y} item={hoverBlock} />
@@ -1171,6 +1236,15 @@ export function FlakePage({ currentFile, setRoute }: any) {
       ) : null}
 
       {showMaterials && statsData && <MaterialsDialog data={statsData} onClose={() => setShowMaterials(false)} currentFile={currentFile} />}
+      
+      {showContainerDialog && containerData && (
+        <ContainerDialog
+          onClose={() => setShowContainerDialog(false)}
+          containerType={containerData.type}
+          items={containerData.items}
+          position={containerData.position}
+        />
+      )}
     </div>
   );
 }

@@ -1,12 +1,26 @@
 import { executeBackend, checkFileExists } from "./backend";
 import { translateBlockId } from "./i18n";
 
+export interface LayerPaletteEntry {
+  block_id: string;
+  property_id: number;
+  block_state?: unknown;
+  state?: unknown;
+  states?: unknown;
+  properties?: unknown;
+  property_ids?: unknown;
+  property_indices?: unknown;
+  property_refs?: unknown;
+  state_ids?: unknown;
+  state_indices?: unknown;
+}
+
 export interface LayerSliceMeta {
   chunk_size: number;
   size_x: number;
   size_y: number;
   size_z: number;
-  palette: Array<{ block_id: string; property_id: number }>;
+  palette: LayerPaletteEntry[];
   property_pool: Array<Record<string, string>>;
 }
 
@@ -47,6 +61,26 @@ export async function loadLayerSlice(cacheFile: string, y: number): Promise<Laye
     };
   } catch (e) {
     console.error("Failed to load layer slice", e);
+    return null;
+  }
+}
+
+/**
+ * Loads every layer slice in one backend call. Lets the renderer prefetch the
+ * whole projection so switching layers is a pure in-memory lookup with no
+ * per-layer subprocess round-trip.
+ */
+export async function loadAllLayerSlices(cacheFile: string): Promise<LayerSliceData[] | null> {
+  try {
+    const out = await executeBackend("litematica_core.exe", ["cache-layers-all", cacheFile]);
+    const parsed = JSON.parse(out);
+    const layers = Array.isArray(parsed.layers) ? parsed.layers : [];
+    return layers.map((layer: any) => ({
+      y: layer.y,
+      blocks: layer.blocks || [],
+    }));
+  } catch (e) {
+    console.error("Failed to load all layer slices", e);
     return null;
   }
 }

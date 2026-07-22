@@ -19,7 +19,9 @@ pub struct CliArgs {
     pub scope: Option<String>,
     pub region: Option<String>,
     pub layer: Option<i32>,
+    pub x: Option<i32>,
     pub y: Option<i32>,
+    pub z: Option<i32>,
     pub y_start: Option<i32>,
     pub y_end: Option<i32>,
     pub cx: Option<i32>,
@@ -75,7 +77,9 @@ pub fn parse_args() -> Result<CliArgs> {
     let mut scope = None;
     let mut region = None;
     let mut layer = None;
+    let mut x = None;
     let mut y = None;
+    let mut z = None;
     let mut y_start = None;
     let mut y_end = None;
     let mut cx = None;
@@ -140,8 +144,14 @@ pub fn parse_args() -> Result<CliArgs> {
             _ if arg.starts_with("--layer=") => {
                 layer = Some(arg.trim_start_matches("--layer=").parse()?);
             }
+            _ if arg.starts_with("--x=") => {
+                x = Some(arg.trim_start_matches("--x=").parse()?);
+            }
             _ if arg.starts_with("--y=") => {
                 y = Some(arg.trim_start_matches("--y=").parse()?);
+            }
+            _ if arg.starts_with("--z=") => {
+                z = Some(arg.trim_start_matches("--z=").parse()?);
             }
             _ if arg.starts_with("--y-start=") => {
                 y_start = Some(arg.trim_start_matches("--y-start=").parse()?);
@@ -205,7 +215,9 @@ pub fn parse_args() -> Result<CliArgs> {
         scope,
         region,
         layer,
+        x,
         y,
+        z,
         y_start,
         y_end,
         cx,
@@ -272,7 +284,9 @@ fn parse_runtime_paths_args(command: String, raw_args: Vec<String>) -> Result<Cl
         scope: None,
         region: None,
         layer: None,
+        x: None,
         y: None,
+        z: None,
         y_start: None,
         y_end: None,
         cx: None,
@@ -656,7 +670,9 @@ fn parse_stockpile_args(raw_args: Vec<String>) -> Result<CliArgs> {
         scope: None,
         region: None,
         layer: None,
+        x: None,
         y: None,
+        z: None,
         y_start: None,
         y_end: None,
         cx: None,
@@ -784,7 +800,9 @@ fn parse_replace_blocks_args(command: String, raw_args: Vec<String>) -> Result<C
         scope: None,
         region: None,
         layer: None,
+        x: None,
         y: None,
+        z: None,
         y_start: None,
         y_end: None,
         cx: None,
@@ -883,7 +901,9 @@ fn parse_generate_args(command: String, raw_args: Vec<String>) -> Result<CliArgs
         scope: None,
         region: None,
         layer: None,
+        x: None,
         y: None,
+        z: None,
         y_start: None,
         y_end: None,
         cx: None,
@@ -983,7 +1003,9 @@ fn parse_edit_metadata_args(command: String, raw_args: Vec<String>) -> Result<Cl
         scope: None,
         region: None,
         layer: None,
+        x: None,
         y: None,
+        z: None,
         y_start: None,
         y_end: None,
         cx: None,

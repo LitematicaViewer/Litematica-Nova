@@ -1,11 +1,11 @@
 import {
   readUserConfigFile,
   writeUserConfigFile,
-  executeBackend,
   checkFileExists,
   DirectoryEntryInfo,
   listLitematicFileEntriesInDirectory,
 } from "./backend";
+import { getAnalyzeOutput } from "./coreReadCache";
 
 export interface ProjectionRecord {
   id: string;
@@ -203,7 +203,7 @@ export async function saveLibrary(state: LibraryState): Promise<void> {
 
 export async function analyzeFile(filePath: string): Promise<Partial<ProjectionRecord>> {
   try {
-    const out = await executeBackend("litematica_core.exe", ["analyze", filePath]);
+    const out = await getAnalyzeOutput(filePath);
     try {
       const parsed = JSON.parse(out);
       const meta = parsed.metadata || {};
