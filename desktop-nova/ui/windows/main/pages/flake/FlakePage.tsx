@@ -44,6 +44,8 @@ const ICON_NATIVE_SIZE = 16;
 const HOVER_TOOLTIP_MIN_SCALE = 8;
 const RENDER_OVERSCAN_PIXELS = 256;
 
+type CssVariableStyle<T extends string> = React.CSSProperties & Record<T, string | number>;
+
 // 全局图标缓存，避免重复处理相同方块
 const globalIconCache = new Map<string, Promise<string | null>>();
 const globalIconUnitColorCache = new Map<string, Promise<string | null>>();
@@ -339,27 +341,31 @@ const LayerCanvas = forwardRef<
   const visibleBlocks = useMemo(() => {
     if (!meta || visibleLayerIndex.byPosition.size === 0 || !visibleBlockWindow) return [] as Array<{
       key: string;
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-      color: string;
       iconUrl: string;
       shouldRenderIcon: boolean;
-      opacity: number;
+      style: CssVariableStyle<
+        | "--flake-layer-block-left"
+        | "--flake-layer-block-top"
+        | "--flake-layer-block-width"
+        | "--flake-layer-block-height"
+        | "--flake-layer-block-opacity"
+        | "--flake-layer-block-background"
+      >;
     }>;
 
     const shouldRenderIcons = scale >= ICON_NATIVE_SIZE;
     const blocks: Array<{
       key: string;
-      left: number;
-      top: number;
-      width: number;
-      height: number;
-      color: string;
       iconUrl: string;
       shouldRenderIcon: boolean;
-      opacity: number;
+      style: CssVariableStyle<
+        | "--flake-layer-block-left"
+        | "--flake-layer-block-top"
+        | "--flake-layer-block-width"
+        | "--flake-layer-block-height"
+        | "--flake-layer-block-opacity"
+        | "--flake-layer-block-background"
+      >;
     }> = [];
 
     for (let z = visibleBlockWindow.minZ; z <= visibleBlockWindow.maxZ; z += 1) {
@@ -375,27 +381,31 @@ const LayerCanvas = forwardRef<
           ? fallbackColor
           : (iconUnitColors.get(visibleBlock.block.palette_id) || fallbackColor);
         if (color === "transparent") continue;
-        const left = Math.round(visibleBlock.block.x * scale);
-        const top = Math.round(visibleBlock.block.z * scale);
-        const width = Math.max(1, Math.ceil(scale));
-        const height = Math.max(1, Math.ceil(scale));
         const iconUrl = iconImages.get(visibleBlock.block.palette_id) || "";
+        const shouldRenderIcon = shouldRenderIcons && !!iconUrl;
         blocks.push({
           key: `${visibleBlock.block.x}:${visibleBlock.block.z}:${visibleBlock.y}:${visibleBlock.block.palette_id}`,
-          left,
-          top,
-          width,
-          height,
-          color,
           iconUrl,
-          shouldRenderIcon: shouldRenderIcons && !!iconUrl,
-          opacity: visibleBlock.opacity,
+          shouldRenderIcon,
+          style: {
+            "--flake-layer-block-left": `${Math.round(visibleBlock.block.x * scale)}px`,
+            "--flake-layer-block-top": `${Math.round(visibleBlock.block.z * scale)}px`,
+            "--flake-layer-block-width": `${Math.max(1, Math.ceil(scale))}px`,
+            "--flake-layer-block-height": `${Math.max(1, Math.ceil(scale))}px`,
+            "--flake-layer-block-opacity": visibleBlock.opacity,
+            "--flake-layer-block-background": shouldRenderIcon ? "transparent" : color,
+          },
         });
       }
     }
 
     return blocks;
   }, [colorMap, iconImages, iconUnitColors, meta, scale, visibleBlockWindow, visibleLayerIndex]);
+
+  const borderStyle: CssVariableStyle<"--flake-layer-border-width" | "--flake-layer-border-height"> = useMemo(() => ({
+    "--flake-layer-border-width": `${Math.max(1, Math.round(meta ? meta.size_x * scale : 0))}px`,
+    "--flake-layer-border-height": `${Math.max(1, Math.round(meta ? meta.size_z * scale : 0))}px`,
+  }), [meta, scale]);
 
   const resetView = () => {
     if (meta) fitView(meta, viewportRef.current, setScale, setOffset);
@@ -589,23 +599,13 @@ const LayerCanvas = forwardRef<
       >
         <div
           className="flake-layer-border"
-          style={{
-            width: `${Math.max(1, Math.round(meta ? meta.size_x * scale : 0))}px`,
-            height: `${Math.max(1, Math.round(meta ? meta.size_z * scale : 0))}px`,
-          }}
+          style={borderStyle}
         />
         {visibleBlocks.map((block) => (
           <div
             key={block.key}
             className="flake-layer-block"
-            style={{
-              left: `${block.left}px`,
-              top: `${block.top}px`,
-              width: `${block.width}px`,
-              height: `${block.height}px`,
-              opacity: block.opacity,
-              background: block.shouldRenderIcon ? "transparent" : block.color,
-            }}
+            style={block.style}
           >
             {block.shouldRenderIcon ? <img className="flake-layer-block-icon" src={block.iconUrl} alt="" draggable={false} /> : null}
           </div>
@@ -615,6 +615,9 @@ const LayerCanvas = forwardRef<
   );
 });
 
+/**
+ * Renders the flake layer viewer and editing controls.
+ */
 export function FlakePage({ currentFile, setRoute }: any) {
   const [cacheFile, setCacheFile] = useState("");
   const [cacheStatus, setCacheStatus] = useState("idle");

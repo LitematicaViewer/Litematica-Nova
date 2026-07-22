@@ -713,6 +713,12 @@ textarea.input,
     align-items: stretch;
     justify-content: stretch;
     overflow: hidden;
+    left: var(--flake-layer-block-left, 0);
+    top: var(--flake-layer-block-top, 0);
+    width: var(--flake-layer-block-width, 1px);
+    height: var(--flake-layer-block-height, 1px);
+    opacity: var(--flake-layer-block-opacity, 1);
+    background: var(--flake-layer-block-background, transparent);
 }
 
 .flake-layer-block-icon {
@@ -726,6 +732,8 @@ textarea.input,
 .flake-layer-border {
     left: 0;
     top: 0;
+    width: var(--flake-layer-border-width, 1px);
+    height: var(--flake-layer-border-height, 1px);
     border: 1px solid #555;
 }
 
@@ -2954,13 +2962,16 @@ pre {
 }
 
 .flake-page__container-grid {
-    position: relative;
-    width: 100%;
-    height: 100%;
+    position: absolute;
+    left: 16px;
+    top: 36px;
+    display: grid;
+    grid-template-columns: repeat(9, 32px);
+    grid-template-rows: repeat(3, 32px);
+    gap: 4px;
 }
 
 .flake-page__container-slot {
-    position: absolute;
     width: 32px;
     height: 32px;
     display: flex;
