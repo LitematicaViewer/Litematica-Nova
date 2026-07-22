@@ -3,7 +3,7 @@ use std::io::{self, BufWriter, Read, Write};
 
 use anyhow::Result;
 use litematica_core::{
-    analyze, cache_layer, cli, generate_projection, mesh, metadata_edit, recipe_cache,
+    analyze, block_entity, cache_layer, cli, generate_projection, mesh, metadata_edit, recipe_cache,
     replace_blocks, runtime_paths, stats_api, stockpile, stockpile_serve, stockpile_zip, visual,
 };
 use serde::Serialize;
@@ -223,6 +223,10 @@ fn main() -> Result<()> {
             let output = cache_layer::build_cache_layer_output(&args.input, y)?;
             emit_output(&output, args.output.as_deref())?;
         }
+        "cache-layers-all" => {
+            let output = cache_layer::build_cache_all_layers_output(&args.input)?;
+            emit_output(&output, args.output.as_deref())?;
+        }
         "visualize" => {
             let output = visual::build_visual_output(&args.input, args.chunk_size)?;
             emit_output(&output, args.output.as_deref())?;
@@ -277,6 +281,13 @@ fn main() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("missing --patch for edit-metadata"))?;
             let summary = metadata_edit::edit_metadata(&args.input, args.output.as_deref(), patch)?;
             emit_output(&summary, None)?;
+        }
+        "read-block-entity" => {
+            let x = args.x.ok_or_else(|| anyhow::anyhow!("missing --x"))?;
+            let y = args.y.ok_or_else(|| anyhow::anyhow!("missing --y"))?;
+            let z = args.z.ok_or_else(|| anyhow::anyhow!("missing --z"))?;
+            let output = litematica_core::block_entity::read_block_entity_at(&args.input, x, y, z)?;
+            emit_output(&output, args.output.as_deref())?;
         }
         other => anyhow::bail!("unknown command: {other}"),
     }

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "kind": "enum_catalog",
+  "entries": [
+    {
+      "id": "wiki:enum_catalog:minecraft_wiki",
+      "kind": "enum_catalog",
+      "label": "Minecraft Wiki",
+      "source": "wiki",
+      "root_relpath": "enumerator/base/wiki",
+      "manifest_relpath": "enumerator/base/wiki/manifest.json",
+      "active": true,
+      "installed_at": "2026-05-18T11:56:26.451Z",
+      "builtin": false
+    }
+  ]
+}

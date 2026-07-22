@@ -18,6 +18,7 @@ export * from "../services/renderMode";
 export * from "../services/renderService";
 export * from "../services/statsService";
 export * from "../services/userConfig";
+export * from "../services/containerService";
 export {
   CORE_BACKEND_RELATIVE_PATH,
   NATIVE_VIEWER_RELATIVE_PATH,

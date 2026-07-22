@@ -46,6 +46,8 @@ export {
 
 export {
   executeBackend,
+  executeBackendCached,
+  invalidateBackendCache,
   executeBackendTrace,
   executeCoreBackend,
   executeCoreBackendTrace,

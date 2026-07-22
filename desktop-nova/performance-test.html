@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Performance Test</title>
+    <script type="module">
+        // 测试 Tauri invoke 性能
+        import { invoke } from '@tauri-apps/api/core';
+        
+        async function runTest() {
+            const results = document.getElementById('results');
+            results.innerHTML = 'Running tests...<br>';
+            
+            // 测试 1: 简单的后端调用
+            const test1Start = performance.now();
+            try {
+                await invoke('execute_backend', {
+                    binaryName: 'litematica_core.exe',
+                    args: ['--version']
+                });
+            } catch (e) {
+                // 即使失败也记录时间
+            }
+            const test1Time = performance.now() - test1Start;
+            results.innerHTML += `Test 1 (backend call): ${test1Time.toFixed(2)}ms<br>`;
+            
+            // 测试 2: 简单的 Promise
+            const test2Start = performance.now();
+            await new Promise(resolve => setTimeout(resolve, 0));
+            const test2Time = performance.now() - test2Start;
+            results.innerHTML += `Test 2 (Promise): ${test2Time.toFixed(2)}ms<br>`;
+            
+            // 测试 3: 多个连续后端调用
+            const test3Start = performance.now();
+            for (let i = 0; i < 3; i++) {
+                try {
+                    await invoke('execute_backend', {
+                        binaryName: 'litematica_core.exe',
+                        args: ['--version']
+                    });
+                } catch (e) {}
+            }
+            const test3Time = performance.now() - test3Start;
+            results.innerHTML += `Test 3 (3x backend calls): ${test3Time.toFixed(2)}ms<br>`;
+            results.innerHTML += `Average per call: ${(test3Time / 3).toFixed(2)}ms<br>`;
+            
+            // 判断
+            if (test1Time > 2000) {
+                results.innerHTML += '<br><strong style="color: red;">发现问题！单次后端调用超过 2 秒</strong><br>';
+                results.innerHTML += '可能原因：<br>';
+                results.innerHTML += '1. CPU 节流已启用（检查开发者工具）<br>';
+                results.innerHTML += '2. 后端进程阻塞<br>';
+                results.innerHTML += '3. Tauri IPC 层问题<br>';
+            } else {
+                results.innerHTML += '<br><strong style="color: green;">后端调用正常！</strong><br>';
+                results.innerHTML += '问题可能在前端逻辑或状态管理中。<br>';
+            }
+        }
+        
+        window.runTest = runTest;
+    </script>
+</head>
+<body>
+    <h1>Performance Diagnostic Tool</h1>
+    <button onclick="runTest()">Run Performance Test</button>
+    <div id="results" style="margin-top: 20px; font-family: monospace;"></div>
+</body>
+</html>
