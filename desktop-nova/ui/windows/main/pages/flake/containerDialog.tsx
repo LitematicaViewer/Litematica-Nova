@@ -15,6 +15,9 @@ interface ContainerDialogProps {
   position: { x: number; y: number; z: number };
 }
 
+/**
+ * Renders a container inventory dialog for flake block inspection.
+ */
 export function ContainerDialog({ onClose, containerType, items, position }: ContainerDialogProps) {
   // 27个物品槽，3行9列
   const slots = useMemo(() => {
@@ -55,20 +58,10 @@ export function ContainerDialog({ onClose, containerType, items, position }: Con
         <div className="flake-page__container-body">
           <div className="flake-page__container-grid">
             {slots.map((item, index) => {
-              const row = Math.floor(index / 9);
-              const col = index % 9;
-              // 第一个物品槽位于 (16, 36)，物品大小32x32，间隔4px
-              const left = 16 + col * (32 + 4);
-              const top = 36 + row * (32 + 4);
-
               return (
                 <div
                   key={index}
                   className="flake-page__container-slot"
-                  style={{
-                    left: `${left}px`,
-                    top: `${top}px`,
-                  }}
                   title={item ? `${translateBlockId(item.id)} x${item.count}` : undefined}
                 >
                   {item ? (
