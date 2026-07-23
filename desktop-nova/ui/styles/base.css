@@ -1,4 +1,5 @@
 @import "../shell/theme.css";
+@import "./replace.css";
 
 :root {
     color: var(--ln-body-text-color, #000000);
