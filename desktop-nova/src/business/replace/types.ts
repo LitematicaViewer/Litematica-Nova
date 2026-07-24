@@ -48,4 +48,6 @@ export interface ReplacePreviewSummary {
   block_positions_affected: number;
   per_unit: UnitPreviewSummary[];
   warnings: string[];
+  /** Diagnostic log lines populated by the backend for debugging. */
+  debug_log?: string[];
 }

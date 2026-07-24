@@ -403,6 +403,40 @@
     font-weight: 600;
 }
 
+/* ── Diagnostic debug log ───────────────────────────────────────────────── */
+.replace-debug-log {
+    margin-top: 8px;
+    border: 1px solid var(--ln-border-color, ThreeDShadow);
+    border-radius: 4px;
+    font-size: 11px;
+}
+
+.replace-debug-log-summary {
+    cursor: pointer;
+    padding: 4px 8px;
+    user-select: none;
+    opacity: 0.8;
+}
+
+.replace-debug-log-warn-badge {
+    color: var(--ln-warning-color, orange);
+    font-weight: 600;
+}
+
+.replace-debug-log-content {
+    margin: 0;
+    padding: 6px 10px;
+    font-family: monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 260px;
+    overflow-y: auto;
+    background: var(--ln-surface-background-color, color-mix(in srgb, CanvasText 4%, Canvas));
+    border-top: 1px solid var(--ln-border-color, ThreeDShadow);
+}
+
 .btn-primary {
     background-color: var(--ln-primary-button-background, #0078d4);
     color: var(--ln-primary-button-text, white);
