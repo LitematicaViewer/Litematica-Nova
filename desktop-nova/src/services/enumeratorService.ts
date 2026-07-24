@@ -461,6 +461,35 @@ function resolveCollectionToken(token: string, collections: EnumeratorCollection
   ) || null;
 }
 
+function validateWildcardToken(token: string): void {
+  const lookup = normalizeLookupKey(token);
+  const firstWildcardIndex = lookup.indexOf("*");
+  const lastWildcardIndex = lookup.lastIndexOf("*");
+  if (firstWildcardIndex < 0) return;
+  if (firstWildcardIndex !== 0 && firstWildcardIndex !== lookup.length - 1) {
+    throw new Error(`集合名通配符只能位于开头或末尾：${token}`);
+  }
+  if (lastWildcardIndex !== firstWildcardIndex && lastWildcardIndex !== lookup.length - 1) {
+    throw new Error(`集合名通配符只能位于开头或末尾：${token}`);
+  }
+}
+
+function isWildcardCollectionToken(token: string): boolean {
+  return normalizeLookupKey(token).includes("*");
+}
+
+function resolveWildcardCollections(token: string, collections: EnumeratorCollection[]): EnumeratorCollection[] {
+  const pattern = normalizeLookupKey(token);
+  validateWildcardToken(pattern);
+  const firstWildcardIndex = pattern.indexOf("*");
+  const prefix = pattern.startsWith("*") ? "" : pattern.slice(0, firstWildcardIndex);
+  const suffix = pattern.endsWith("*") ? "" : pattern.slice(pattern.lastIndexOf("*") + 1);
+  return collections.filter((collection) => {
+    const name = normalizeLookupKey(collection.name);
+    return name.startsWith(prefix) && name.endsWith(suffix) && name.length >= prefix.length + suffix.length;
+  });
+}
+
 function tokenizeExpression(expression: string): string[] {
   const tokens: string[] = [];
   let buffer = "";
@@ -480,6 +509,15 @@ function tokenizeExpression(expression: string): string[] {
   }
   flush();
   return tokens;
+}
+
+function validateWildcardParentheses(tokens: string[]): void {
+  tokens.forEach((token, index) => {
+    if (!isWildcardCollectionToken(token)) return;
+    if (tokens[index - 1] !== "(" || tokens[index + 1] !== ")") {
+      throw new Error(`通配符集合必须单独放在括号中，例如 A-(map_*)：${token}`);
+    }
+  });
 }
 
 function precedence(operator: string): number {
@@ -528,11 +566,19 @@ function applyOperator(left: Set<string>, right: Set<string>, operator: string):
   return new Set(left);
 }
 
+/**
+ * Evaluates an enumerator collection expression, including parenthesized name wildcards.
+ *
+ * @param expression Collection names, operators, and wildcard expressions to evaluate.
+ * @param collections Collections available to the expression.
+ * @returns The resolved values, referenced collection IDs, and any parse error.
+ */
 export function evaluateEnumeratorExpression(expression: string, collections: EnumeratorCollection[]): { values: string[]; dependencies: string[]; error: string } {
   const trimmed = String(expression || "").trim();
   if (!trimmed) return { values: [], dependencies: [], error: "" };
   try {
     const tokens = tokenizeExpression(trimmed);
+    validateWildcardParentheses(tokens);
     const rpn = toRpn(tokens);
     const stack: Set<string>[] = [];
     const dependencies: string[] = [];
@@ -543,6 +589,13 @@ export function evaluateEnumeratorExpression(expression: string, collections: En
         const left = stack.pop();
         if (!left || !right) throw new Error("表达式不完整。");
         stack.push(applyOperator(left, right, token));
+        continue;
+      }
+      if (isWildcardCollectionToken(token)) {
+        const matchedCollections = resolveWildcardCollections(token, collections);
+        if (!matchedCollections.length) throw new Error(`找不到匹配的集合：${token}`);
+        dependencies.push(...matchedCollections.map((collection) => collection.id));
+        stack.push(new Set(matchedCollections.flatMap((collection) => collection.values)));
         continue;
       }
       const collection = resolveCollectionToken(token, collections);
