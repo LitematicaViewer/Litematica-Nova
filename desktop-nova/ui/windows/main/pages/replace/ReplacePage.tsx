@@ -21,6 +21,10 @@ import {
 } from '../../../../../src/business/replace';
 import { selectLitematicSavePath } from '../../../../../src/business/facade';
 import { loadMaterialsScope } from '../../../../../src/services/statsService';
+import {
+  saveReplaceSession,
+  loadReplaceSession,
+} from '../../../../../src/services/replaceSessionStore';
 import type {
   ReplaceUnit,
   ReplaceItem,
@@ -305,12 +309,15 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
 // ── Main component ───────────────────────────────────────────────────────────
 
 export function ReplacePage({ currentFile }: { currentFile?: string }) {
-  const [items, setItems] = useState<ReplaceItem[]>([]);
+  // Load session data on mount
+  const sessionData = loadReplaceSession();
+
+  const [items, setItems] = useState<ReplaceItem[]>(sessionData?.items || []);
   const [presets, setPresets] = useState<string[]>([]);
-  const [selectedPreset, setSelectedPreset] = useState('');
+  const [selectedPreset, setSelectedPreset] = useState(sessionData?.selectedPreset || '');
   const [scanResult, setScanResult] = useState<ReplacePreviewSummary | null>(null);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [outputPath, setOutputPath] = useState('');
+  const [outputPath, setOutputPath] = useState(sessionData?.outputPath || '');
   const [materialBlocks, setMaterialBlocks] = useState<string[]>([]);
 
   /** 预计算 items 中每个元素对应的"单元序号"（仅对 ReplaceUnit 有意义）。 */
@@ -328,6 +335,26 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
     () => items.filter((item): item is ReplaceUnit => !isSeparatorItem(item)),
     [items]
   );
+
+  // Save session data whenever items, selectedPreset, or outputPath changes
+  useEffect(() => {
+    saveReplaceSession({
+      items,
+      selectedPreset,
+      outputPath,
+    });
+  }, [items, selectedPreset, outputPath]);
+
+  // Save session data on unmount
+  useEffect(() => {
+    return () => {
+      saveReplaceSession({
+        items,
+        selectedPreset,
+        outputPath,
+      });
+    };
+  }, [items, selectedPreset, outputPath]);
 
   useEffect(() => {
     listReplacePresets().then(setPresets).catch(() => setPresets([]));
@@ -454,7 +481,12 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
         <button className="btn btn-md" onClick={addSeparator} disabled={items.length === 0} title="在列表末尾插入串行分隔符">
           + 添加串行分隔符
         </button>
-        <button className="btn btn-md" onClick={() => { setItems([]); setScanResult(null); }}>清空所有</button>
+        <button className="btn btn-md" onClick={() => {
+          setItems([]);
+          setSelectedPreset('');
+          setOutputPath('');
+          setScanResult(null);
+        }}>清空所有</button>
       </div>
 
       {/* Replace items */}
