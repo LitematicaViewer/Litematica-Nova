@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { BlockIcon } from '../../../../components/BlockIcon';
 import { BlockPickerDialog } from '../../../../components/BlockPickerDialog';
 import {
@@ -17,11 +17,13 @@ import {
   loadReplacePreset,
   deleteReplacePreset,
   openReplacePresetFolder,
+  isSeparatorItem,
 } from '../../../../../src/business/replace';
 import { selectLitematicSavePath } from '../../../../../src/business/facade';
 import { loadMaterialsScope } from '../../../../../src/services/statsService';
 import type {
   ReplaceUnit,
+  ReplaceItem,
   ReplaceEntry,
   ReplaceOutputEntry,
   ReplacePreviewSummary,
@@ -63,6 +65,7 @@ function PropertySelector({ blockId, value, onChange, isOutput }: {
     </div>
   );
 }
+
 // ── Entry row components ─────────────────────────────────────────────────────
 
 function InputEntryRow({ entry, onChange, onRemove }: {
@@ -127,12 +130,37 @@ function OutputEntryRow({ entry, onChange, onRemove }: {
   );
 }
 
+// ── SerialSeparatorBar ────────────────────────────────────────────────────────
+
+function SerialSeparatorBar({ index, total, onRemove, onMoveUp, onMoveDown }: {
+  index: number;
+  total: number;
+  onRemove: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+}) {
+  return (
+    <div className="replace-separator">
+      <div className="replace-separator-line" />
+      <span className="replace-separator-label">串行分隔符</span>
+      <div className="replace-separator-actions">
+        <button className="btn btn-xs" disabled={index === 0} onClick={onMoveUp} title="上移">↑</button>
+        <button className="btn btn-xs" disabled={index === total - 1} onClick={onMoveDown} title="下移">↓</button>
+        <button className="btn btn-xs" onClick={onRemove} title="删除分隔符">删除</button>
+      </div>
+      <div className="replace-separator-line" />
+    </div>
+  );
+}
+
 // ── ReplaceUnitCard ──────────────────────────────────────────────────────────
 
 type PickerTarget = { side: 'input' | 'output'; type: 'inventory' | 'enumerator' } | null;
 
-function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onMoveDown, scanSummary, currentBlocks }: {
+function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, onMoveUp, onMoveDown, scanSummary, currentBlocks }: {
   unit: ReplaceUnit;
+  /** 当前单元在所有单元（不含分隔符）中的顺序，用于占位标签显示。 */
+  unitIndex: number;
   index: number;
   total: number;
   onChange: (u: ReplaceUnit) => void;
@@ -157,7 +185,6 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
   const removeOutput = (i: number) =>
     onChange({ ...unit, output: unit.output.filter((_, idx) => idx !== i) });
 
-  // Called from BlockPickerDialog — adds single entry
   const handlePickBlock = (blockId: string) => {
     if (!picker) return;
     if (picker.side === 'input') {
@@ -168,7 +195,6 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
     setPicker(null);
   };
 
-  // Called from EnumeratorBlockPickerDialog — adds multiple entries
   const handleAddBlocks = (blockIds: string[]) => {
     if (!picker) return;
     if (picker.side === 'input') {
@@ -181,7 +207,6 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
     setPicker(null);
   };
 
-  /** Two buttons for adding entries from different sources */
   const AddEntryButtons = ({ side }: { side: 'input' | 'output' }) => (
     <div className="replace-add-buttons">
       <button className="btn btn-sm" onClick={() => setPicker({ side, type: 'inventory' })}>
@@ -196,7 +221,6 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
   return (
     <>
       <div className="card replace-unit-card">
-        {/* Card header */}
         <div className={`replace-unit-header${collapsed ? ' collapsed' : ''}`}>
           <button className="btn btn-xs" onClick={() => setCollapsed(!collapsed)}>
             {collapsed ? '▶' : '▼'}
@@ -204,7 +228,7 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
           <input
             className="replace-unit-label-input"
             value={unit.label ?? ''}
-            placeholder={`替换单元 ${index + 1}`}
+            placeholder={`替换单元 ${unitIndex + 1}`}
             onChange={(e) => onChange({ ...unit, label: e.target.value || undefined })}
             onClick={(e) => e.stopPropagation()}
           />
@@ -217,10 +241,8 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
           <button className="btn btn-xs" onClick={onRemove}>删除单元</button>
         </div>
 
-        {/* Card body */}
         {!collapsed && (
           <div className="replace-unit-body">
-            {/* Input side */}
             <div className="replace-unit-side">
               <div className="replace-unit-side-title">输入端（Input）</div>
               {unit.input.map((e, i) => (
@@ -229,11 +251,7 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
               {unit.input.length === 0 && <div className="replace-entry-empty">无输入条目</div>}
               <AddEntryButtons side="input" />
             </div>
-
-            {/* Arrow */}
             <div className="replace-unit-arrow">→</div>
-
-            {/* Output side */}
             <div className="replace-unit-side">
               <div className="replace-unit-side-title">输出端（Output）</div>
               {unit.output.map((e, i) => (
@@ -245,7 +263,6 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
           </div>
         )}
 
-        {/* Scan result detail */}
         {!collapsed && scanSummary && scanSummary.output_distribution.length > 1 && (
           <div className="replace-unit-scan-dist">
             输出分布预估：
@@ -261,7 +278,6 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
         )}
       </div>
 
-      {/* Block picker dialog */}
       {picker?.type === 'inventory' && (
         <BlockPickerDialog
           title={picker.side === 'input' ? '选择输入方块' : '选择输出方块'}
@@ -275,7 +291,6 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
         />
       )}
 
-      {/* Enumerator picker dialog */}
       {picker?.type === 'enumerator' && (
         <EnumeratorBlockPickerDialog
           title={picker.side === 'input' ? '从枚举器批量添加输入方块' : '从枚举器批量添加输出方块'}
@@ -290,25 +305,38 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
 // ── Main component ───────────────────────────────────────────────────────────
 
 export function ReplacePage({ currentFile }: { currentFile?: string }) {
-  const [units, setUnits] = useState<ReplaceUnit[]>([]);
+  const [items, setItems] = useState<ReplaceItem[]>([]);
   const [presets, setPresets] = useState<string[]>([]);
   const [selectedPreset, setSelectedPreset] = useState('');
   const [scanResult, setScanResult] = useState<ReplacePreviewSummary | null>(null);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [outputPath, setOutputPath] = useState('');
-  const [log, setLog] = useState('');
   const [materialBlocks, setMaterialBlocks] = useState<string[]>([]);
 
-  // Load preset list on mount
+  /** 预计算 items 中每个元素对应的"单元序号"（仅对 ReplaceUnit 有意义）。 */
+  const unitIndexByItemIndex = useMemo(() => {
+    const map = new Map<number, number>();
+    let ui = 0;
+    items.forEach((item, i) => {
+      if (!isSeparatorItem(item)) map.set(i, ui++);
+    });
+    return map;
+  }, [items]);
+
+  /** items 中不含分隔符的单元列表，用于确认对话框展示。 */
+  const unitItems = useMemo(
+    () => items.filter((item): item is ReplaceUnit => !isSeparatorItem(item)),
+    [items]
+  );
+
   useEffect(() => {
     listReplacePresets().then(setPresets).catch(() => setPresets([]));
   }, []);
 
-  // Load material block list whenever the active file changes
   useEffect(() => {
     if (!currentFile) { setMaterialBlocks([]); return; }
     loadMaterialsScope(currentFile, [])
-      .then((items) => setMaterialBlocks(items.map((m) => m.id).filter(Boolean)))
+      .then((mats) => setMaterialBlocks(mats.map((m) => m.id).filter(Boolean)))
       .catch(() => setMaterialBlocks([]));
   }, [currentFile]);
 
@@ -317,9 +345,8 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
     if (!name) return;
     const loaded = await loadReplacePreset(name);
     if (loaded) {
-      setUnits(loaded);
+      setItems(loaded);
       setSelectedPreset(name);
-      setLog(`> 已加载预设：${name}`);
     } else {
       alert(`无法加载预设：${name}`);
     }
@@ -328,12 +355,11 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
   const handleSavePreset = useCallback(async () => {
     const name = prompt('预设名称：', selectedPreset || '新预设');
     if (!name) return;
-    await saveReplacePreset(name, units);
+    await saveReplacePreset(name, items);
     const updated = await listReplacePresets();
     setPresets(updated);
     setSelectedPreset(name);
-    setLog(`> 已保存预设：${name}`);
-  }, [units, selectedPreset]);
+  }, [items, selectedPreset]);
 
   const handleDeletePreset = useCallback(async () => {
     if (!selectedPreset) return alert('请先选择预设');
@@ -342,45 +368,43 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
     const updated = await listReplacePresets();
     setPresets(updated);
     setSelectedPreset('');
-    setLog(`> 已删除预设：${selectedPreset}`);
   }, [selectedPreset]);
 
   const handleOpenPresetFolder = () => openReplacePresetFolder();
 
-  // Unit CRUD helpers
+  // Items CRUD
   const addUnit = () =>
-    setUnits([...units, { input: [], output: [] }]);
+    setItems([...items, { input: [], output: [] }]);
 
-  const updateUnit = (i: number, u: ReplaceUnit) => {
-    const next = [...units]; next[i] = u; setUnits(next);
+  const addSeparator = () =>
+    setItems([...items, { _kind: 'separator' }]);
+
+  const updateItem = (i: number, u: ReplaceUnit) => {
+    const next = [...items]; next[i] = u; setItems(next);
   };
-  const removeUnit = (i: number) => setUnits(units.filter((_, idx) => idx !== i));
-  const moveUnit = (i: number, dir: -1 | 1) => {
+  const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
+  const moveItem = (i: number, dir: -1 | 1) => {
     const j = i + dir;
-    if (j < 0 || j >= units.length) return;
-    const next = [...units];
+    if (j < 0 || j >= items.length) return;
+    const next = [...items];
     [next[i], next[j]] = [next[j], next[i]];
-    setUnits(next);
+    setItems(next);
   };
 
   // Scan handler
   const handleScan = useCallback(async () => {
     if (!currentFile) return;
-    if (units.length === 0) return alert('请先添加至少一个替换单元。');
-    setLog('> 扫描中...');
+    if (unitItems.length === 0) return alert('请先添加至少一个替换单元。');
     try {
-      const summary = await dryRunReplaceUnits(currentFile, units);
+      const summary = await dryRunReplaceUnits(currentFile, items);
       setScanResult(summary);
       const defaultOut = currentFile.replace(/\.litematic$/i, '.replaced.litematic');
       setOutputPath(defaultOut);
       setShowConfirmDialog(true);
-      const total = summary.per_unit.reduce((acc, u) => acc + u.hit_count, 0);
-      setLog(`> 扫描完成，共命中 ${total} 个方块`);
     } catch (e: any) {
       alert('扫描失败: ' + e);
-      setLog('> 扫描失败: ' + e);
     }
-  }, [currentFile, units]);
+  }, [currentFile, items, unitItems.length]);
 
   // Apply handler
   const handleApply = useCallback(async () => {
@@ -388,18 +412,14 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
     if (outputPath === currentFile) return alert('输出路径不能与输入路径相同。');
     if (await checkFileExists(outputPath)) return alert('输出文件已存在，请重命名。');
     setShowConfirmDialog(false);
-    setLog('> 替换中...');
     try {
-      await applyReplaceUnits(currentFile, outputPath, units);
+      await applyReplaceUnits(currentFile, outputPath, items);
       alert(`替换完成！\n文件已保存至:\n${outputPath}`);
-      setLog(`> 替换完成，文件保存至 ${outputPath}`);
     } catch (e: any) {
       alert('替换失败: ' + e);
-      setLog('> 替换失败: ' + e);
     }
-  }, [currentFile, outputPath, units]);
+  }, [currentFile, outputPath, items]);
 
-  // Render
   if (!currentFile) {
     return (
       <div className="replace-no-file">
@@ -431,35 +451,54 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
       {/* Toolbar line 2: unit management */}
       <div className="replace-toolbar-2">
         <button className="btn btn-md" onClick={addUnit}>+ 添加替换单元</button>
-        <button className="btn btn-md" onClick={() => { setUnits([]); setScanResult(null); }}>清空所有</button>
+        <button className="btn btn-md" onClick={addSeparator} disabled={items.length === 0} title="在列表末尾插入串行分隔符">
+          + 添加串行分隔符
+        </button>
+        <button className="btn btn-md" onClick={() => { setItems([]); setScanResult(null); }}>清空所有</button>
       </div>
 
-      {/* Replace unit cards */}
+      {/* Replace items */}
       <div className="replace-content">
-        {units.length === 0 && (
+        {items.length === 0 && (
           <div className="replace-content-empty">暂无替换单元，点击"添加替换单元"开始</div>
         )}
-        {units.map((u, i) => (
-          <ReplaceUnitCard
-            key={i}
-            unit={u}
-            index={i}
-            total={units.length}
-            onChange={(nu) => updateUnit(i, nu)}
-            onRemove={() => removeUnit(i)}
-            onMoveUp={() => moveUnit(i, -1)}
-            onMoveDown={() => moveUnit(i, 1)}
-            scanSummary={scanResult?.per_unit?.[i]}
-            currentBlocks={materialBlocks}
-          />
-        ))}
+        {items.map((item, i) => {
+          if (isSeparatorItem(item)) {
+            return (
+              <SerialSeparatorBar
+                key={i}
+                index={i}
+                total={items.length}
+                onRemove={() => removeItem(i)}
+                onMoveUp={() => moveItem(i, -1)}
+                onMoveDown={() => moveItem(i, 1)}
+              />
+            );
+          }
+          const ui = unitIndexByItemIndex.get(i) ?? 0;
+          return (
+            <ReplaceUnitCard
+              key={i}
+              unit={item}
+              unitIndex={ui}
+              index={i}
+              total={items.length}
+              onChange={(nu) => updateItem(i, nu)}
+              onRemove={() => removeItem(i)}
+              onMoveUp={() => moveItem(i, -1)}
+              onMoveDown={() => moveItem(i, 1)}
+              scanSummary={scanResult?.per_unit?.[ui]}
+              currentBlocks={materialBlocks}
+            />
+          );
+        })}
       </div>
 
-      {/* Footer: action buttons + log */}
+      {/* Footer */}
       <div className="replace-footer">
         <div className="replace-footer-buttons">
           <div className="replace-unit-spacer" />
-          <button className="btn btn-action" onClick={handleScan} disabled={units.length === 0}>
+          <button className="btn btn-action" onClick={handleScan} disabled={unitItems.length === 0}>
             扫描并评估
           </button>
           <button
@@ -470,12 +509,6 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
             替换方块
           </button>
         </div>
-        <textarea
-          className="replace-log-area"
-          readOnly
-          value={log}
-          placeholder="执行日志..."
-        />
       </div>
 
       {/* Confirm dialog */}
@@ -490,7 +523,7 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
               <div className="replace-confirm-details">
                 {scanResult.per_unit.map((u, i) => (
                   <div key={i} className="replace-confirm-unit">
-                    <strong>{units[i]?.label || `替换单元 ${i + 1}`}:</strong> 命中 {u.hit_count} 个方块
+                    <strong>{unitItems[i]?.label || `替换单元 ${i + 1}`}:</strong> 命中 {u.hit_count} 个方块
                     {u.output_distribution.length > 1 && (
                       <div className="replace-confirm-dist">
                         输出分布预估：
@@ -508,7 +541,6 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
                 )}
               </div>
             </div>
-            {/* Diagnostic log */}
             {scanResult.debug_log && scanResult.debug_log.length > 0 && (
               <details className="replace-debug-log">
                 <summary className="replace-debug-log-summary">
@@ -540,4 +572,3 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
     </div>
   );
 }
-

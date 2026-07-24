@@ -1869,6 +1869,13 @@ fn write_user_config_file(relative_path: String, content: String) -> Result<(), 
 }
 
 #[tauri::command]
+fn delete_user_config_file(relative_path: String) -> Result<(), String> {
+    let dir = current_user_config_dir()?;
+    let path = dir.join(user_runtime_relative_path(&relative_path)?);
+    std::fs::remove_file(path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn get_user_config_file_path(relative_path: String) -> Result<String, String> {
     let dir = current_user_config_dir()?;
     let path = dir.join(user_runtime_relative_path(&relative_path)?);
@@ -4293,6 +4300,7 @@ fn main() {
             reset_user_config_dir,
             read_user_config_file,
             write_user_config_file,
+            delete_user_config_file,
             get_user_config_file_path,
             read_file_string,
             write_file_string,
