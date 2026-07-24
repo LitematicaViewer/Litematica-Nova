@@ -11,7 +11,7 @@ import type {
   ReplacePreviewSummary,
 } from "./types";
 
-const REPLACE_PRESETS_DIR = "data/replace/presets";
+const REPLACE_PRESETS_DIR = "replace/presets";
 const REPLACE_TEMP_RULES = "render/replace_units_js.json";
 
 /**

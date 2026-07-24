@@ -77,6 +77,29 @@
     font-size: 13px;
 }
 
+.replace-unit-label-input {
+    font-weight: 600;
+    font-size: 13px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 1px 4px;
+    min-width: 80px;
+    width: 160px;
+    color: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.replace-unit-label-input:hover {
+    border-color: var(--ln-card-border-color, ThreeDShadow);
+}
+
+.replace-unit-label-input:focus {
+    border-color: var(--ln-primary, #0078d4);
+    background: var(--ln-input-bg, Field);
+}
+
 .replace-unit-hit-count {
     font-size: 11px;
     opacity: 0.7;
