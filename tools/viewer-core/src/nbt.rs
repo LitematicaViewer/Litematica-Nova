@@ -237,6 +237,10 @@ fn choose_palette_packing(
             nbits,
         }),
         (true, true) => {
+            // Prefer compact bitstream: Litematica always writes compact format
+            // (LitematicaBitArray), so compact is the correct interpretation when
+            // both lengths fit.  Only fall back to padded when compact produces
+            // out-of-range indices.
             let compact_valid = layout_is_valid(PalettePacking::CompactBitstream, nbits);
             let padded_valid = layout_is_valid(PalettePacking::PaddedLongs, nbits);
             match (compact_valid, padded_valid) {
@@ -338,9 +342,15 @@ pub fn decode_palette_frequencies(
     Ok(counts)
 }
 
+/// Pack palette indices into a `LongArray` using the **compact bitstream** format
+/// that Litematica uses: entries are packed end-to-end across `i64` boundaries,
+/// exactly matching `LitematicaBitArray.setAt()` from the Litematica source.
+///
+/// Array size = ceil(count * nbits / 64).  Entries that cross a long boundary are
+/// split: the low bits go into the current long and the high bits go into the next.
 pub fn pack_palette_indices(indices: &[usize], nbits: usize) -> LongArray {
     let expected_len = (indices.len() * nbits).div_ceil(64);
-    let mask = if nbits >= 64 {
+    let mask: u64 = if nbits >= 64 {
         u64::MAX
     } else {
         (1_u64 << nbits) - 1
@@ -351,7 +361,7 @@ pub fn pack_palette_indices(indices: &[usize], nbits: usize) -> LongArray {
         let value = (palette_index as u64) & mask;
         let start_offset = index * nbits;
         let start_arr_index = start_offset >> 6;
-        let end_arr_index = (((index + 1) * nbits) - 1) >> 6;
+        let end_arr_index = ((index + 1) * nbits - 1) >> 6;
         let start_bit_offset = start_offset & 0x3f;
 
         packed[start_arr_index] |= value << start_bit_offset;
@@ -361,7 +371,7 @@ pub fn pack_palette_indices(indices: &[usize], nbits: usize) -> LongArray {
         }
     }
 
-    LongArray::new(packed.into_iter().map(|value| value as i64).collect())
+    LongArray::new(packed.into_iter().map(|v| v as i64).collect())
 }
 
 pub fn for_each_palette_index<F>(

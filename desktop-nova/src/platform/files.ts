@@ -81,6 +81,10 @@ export function writeAppDataFile(relativePath: string, content: string): Promise
   return invoke("write_user_config_file", { relativePath, content });
 }
 
+export function deleteAppDataFile(relativePath: string): Promise<void> {
+  return invoke("delete_user_config_file", { relativePath });
+}
+
 export function getAppDataFilePath(relativePath: string): Promise<string> {
   return invoke("get_user_config_file_path", { relativePath });
 }
