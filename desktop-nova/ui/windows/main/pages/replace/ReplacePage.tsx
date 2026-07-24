@@ -201,7 +201,13 @@ function ReplaceUnitCard({ unit, index, total, onChange, onRemove, onMoveUp, onM
           <button className="btn btn-xs" onClick={() => setCollapsed(!collapsed)}>
             {collapsed ? '▶' : '▼'}
           </button>
-          <span className="replace-unit-title">替换单元 {index + 1}</span>
+          <input
+            className="replace-unit-label-input"
+            value={unit.label ?? ''}
+            placeholder={`替换单元 ${index + 1}`}
+            onChange={(e) => onChange({ ...unit, label: e.target.value || undefined })}
+            onClick={(e) => e.stopPropagation()}
+          />
           {scanSummary && (
             <span className="replace-unit-hit-count">命中 {scanSummary.hit_count} 个方块</span>
           )}
@@ -484,7 +490,7 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
               <div className="replace-confirm-details">
                 {scanResult.per_unit.map((u, i) => (
                   <div key={i} className="replace-confirm-unit">
-                    <strong>替换单元 {i + 1}:</strong> 命中 {u.hit_count} 个方块
+                    <strong>{units[i]?.label || `替换单元 ${i + 1}`}:</strong> 命中 {u.hit_count} 个方块
                     {u.output_distribution.length > 1 && (
                       <div className="replace-confirm-dist">
                         输出分布预估：

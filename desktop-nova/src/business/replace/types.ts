@@ -12,6 +12,7 @@ export interface ReplaceOutputEntry extends ReplaceEntry {
 }
 
 export interface ReplaceUnit {
+  label?: string;
   input: ReplaceEntry[];
   output: ReplaceOutputEntry[];
 }
