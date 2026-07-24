@@ -99,7 +99,7 @@ export function EnumeratorBlockPickerDialog({
             <input
               className="input enum-picker-input"
               value={expression}
-              placeholder="例：base:dv-blocks  或  木头 ∪ 石头  或  A - B"
+              placeholder="例：base:dv-blocks  或  木头 ∪ 石头  或  A-(map_*)"
               onChange={(e) => setExpression(e.target.value)}
               autoFocus
             />
