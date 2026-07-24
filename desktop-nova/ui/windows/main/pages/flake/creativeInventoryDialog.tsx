@@ -6,11 +6,13 @@ import { CreativeInventoryTooltip } from "./function";
 
 
 export function CreativeInventoryDialog({
-  onClose, quickbarSlots, onChangeQuickbarSlots,
+  onClose, quickbarSlots, onChangeQuickbarSlots, extraCollections = [],
 }: {
   onClose: () => void;
   quickbarSlots: string[];
   onChangeQuickbarSlots: (updater: (current: string[]) => string[]) => void;
+  /** 额外注入的分类（如"当前统计结果"），显示在分类列表顶部。 */
+  extraCollections?: { id: string; name: string; values: string[] }[];
 }) {
   const [collections, setCollections] = useState<EnumeratorCollection[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState("");
@@ -32,22 +34,29 @@ export function CreativeInventoryDialog({
       .then((allCollections) => {
         if (!active) return;
         const creativeCollections = allCollections
-          .filter((collection) => (collection.category === "creative" || collection.id === "base:dv-blocks") && collection.values.length > 0
-          )
+          .filter((collection) => (collection.category === "creative" || collection.id === "base:dv-blocks") && collection.values.length > 0)
           .sort((left, right) => {
             if (left.id === "base:dv-blocks") return -1;
             if (right.id === "base:dv-blocks") return 1;
             return left.name.localeCompare(right.name, "zh-CN");
           });
         setCollections(creativeCollections);
-        setSelectedCollectionId((previous) => previous && creativeCollections.some((collection) => collection.id === previous)
-          ? previous
-          : (creativeCollections[0]?.id || ""));
+        setSelectedCollectionId((previous) => {
+          const allIds = new Set([
+            ...extraCollections.map((c) => c.id),
+            ...creativeCollections.map((c) => c.id),
+          ]);
+          if (previous && allIds.has(previous)) return previous;
+          // 优先选中第一个额外分类
+          return extraCollections.length > 0
+            ? extraCollections[0].id
+            : (creativeCollections[0]?.id || "");
+        });
       })
       .catch((nextError: any) => {
         if (!active) return;
         setCollections([]);
-        setSelectedCollectionId("");
+        setSelectedCollectionId(extraCollections.length > 0 ? extraCollections[0].id : "");
         setError(String(nextError || "创造模式枚举加载失败。"));
       })
       .finally(() => {
@@ -56,11 +65,22 @@ export function CreativeInventoryDialog({
     return () => {
       active = false;
     };
+  // extraCollections 在组件生命周期内不变，安全忽略
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** 合并后的全部分类：额外分类在前，枚举分类在后。 */
+  const allCollections = useMemo(
+    () => [
+      ...extraCollections.map((c) => ({ id: c.id, name: c.name, values: c.values })),
+      ...collections.map((c) => ({ id: c.id, name: c.name, values: c.values })),
+    ],
+    [collections, extraCollections]
+  );
+
   const selectedCollection = useMemo(
-    () => collections.find((collection) => collection.id === selectedCollectionId) || null,
-    [collections, selectedCollectionId]
+    () => allCollections.find((collection) => collection.id === selectedCollectionId) || null,
+    [allCollections, selectedCollectionId]
   );
 
   const filteredValues = useMemo(() => {
@@ -85,8 +105,8 @@ export function CreativeInventoryDialog({
   }, [filteredValues, pageStart]);
 
   const collectionOptions = useMemo(
-    () => collections.map((collection) => ({ label: collection.name, value: collection.id })),
-    [collections]
+    () => allCollections.map((collection) => ({ label: collection.name, value: collection.id })),
+    [allCollections]
   );
 
   useEffect(() => {
@@ -173,11 +193,10 @@ export function CreativeInventoryDialog({
 
   return (
     <div className="dialog-overlay" onClick={onClose}>
-      <section className="dialog-content flake-page__inventory-dialog" onClick={(event) => { event.stopPropagation(); handleDropOutside(); } }>
+      <section className="dialog-content flake-page__inventory-dialog" onClick={(event) => { event.stopPropagation(); handleDropOutside(); }}>
         <div className="subwindow-title-row">
           <div>
             <h3 className="subwindow-title">创造模式物品栏</h3>
-            {/* <p className="subwindow-subtitle nova-muted">使用创造模式分类枚举作为数据源，滚轮按整行切换当前显示区间；点选方块会复制到鼠标上，再点快捷栏槽位即可放置。</p> */}
           </div>
           <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</button>
         </div>
@@ -221,22 +240,20 @@ export function CreativeInventoryDialog({
               </div>
 
               <div className="flake-page__creative-hotbar-grid">
-                {quickbarSlots.map((blockId, index) => {
-                  return (
-                    <div
-                      key={`creative-hotbar-${index + 1}`}
-                      className={blockId ? "flake-page__creative-hotbar-slot has-item" : "flake-page__creative-hotbar-slot"}
-                      role="button"
-                      tabIndex={0}
-                      onClick={(event) => handleCreativeHotbarSlotClick(index, event)}
-                      onMouseEnter={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
-                      onMouseMove={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
-                      onMouseLeave={blockId ? handleHoverLeave : undefined}
-                    >
-                      {blockId ? <BlockIcon blockId={blockId} /> : null}
-                    </div>
-                  );
-                })}
+                {quickbarSlots.map((blockId, index) => (
+                  <div
+                    key={`creative-hotbar-${index + 1}`}
+                    className={blockId ? "flake-page__creative-hotbar-slot has-item" : "flake-page__creative-hotbar-slot"}
+                    role="button"
+                    tabIndex={0}
+                    onClick={(event) => handleCreativeHotbarSlotClick(index, event)}
+                    onMouseEnter={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
+                    onMouseMove={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
+                    onMouseLeave={blockId ? handleHoverLeave : undefined}
+                  >
+                    {blockId ? <BlockIcon blockId={blockId} /> : null}
+                  </div>
+                ))}
               </div>
 
               {!loading && !error && !filteredValues.length ? (

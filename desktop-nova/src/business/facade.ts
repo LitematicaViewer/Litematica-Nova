@@ -25,3 +25,24 @@ export {
   executeCoreBackend,
   executeNativeViewerBackend,
 } from "../platform/backendProcess";
+
+// Replace module v2 types and actions.
+export type {
+  ReplaceEntry,
+  ReplaceOutputEntry,
+  ReplaceUnit,
+  ReplacePreset,
+  OutputDistEntry,
+  UnitPreviewSummary,
+  ReplacePreviewSummary,
+} from "./replace/types";
+export {
+  dryRunReplaceUnits,
+  applyReplaceUnits,
+  listReplacePresets,
+  saveReplacePreset,
+  loadReplacePreset,
+  deleteReplacePreset,
+  openReplacePresetFolder,
+} from "./replace/actions";
+
