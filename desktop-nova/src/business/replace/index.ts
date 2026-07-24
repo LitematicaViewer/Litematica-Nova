@@ -19,11 +19,14 @@ export type {
   ReplaceEntry,
   ReplaceOutputEntry,
   ReplaceUnit,
+  SerialSeparator,
+  ReplaceItem,
   ReplacePreset,
   OutputDistEntry,
   UnitPreviewSummary,
   ReplacePreviewSummary,
 } from "./types";
+export { isSeparatorItem } from "./types";
 export {
   dryRunReplaceUnits,
   applyReplaceUnits,

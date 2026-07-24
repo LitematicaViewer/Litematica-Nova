@@ -1119,18 +1119,23 @@ textarea.input,
     flex-wrap: wrap;
     align-items: flex-end;
     gap: 12px;
+    /* 限制控制栏宽度不超过物品栏面板，并跟随面板居中 */
+    max-width: 424px;
+    align-self: center;
+    width: 100%;
 }
 
 .flake-page__creative-inventory-control {
     display: flex;
-    min-width: 180px;
+    min-width: 160px;
     flex-direction: column;
     gap: 4px;
 }
 
 .flake-page__creative-inventory-search {
     flex: 1;
-    min-width: 240px;
+    /* 移除固定 min-width，让搜索框随可用空间收缩 */
+    min-width: 0;
 }
 
 .flake-page__creative-inventory-range {
@@ -1140,6 +1145,9 @@ textarea.input,
 .flake-page__creative-inventory-stage {
     max-width: 100%;
     overflow: auto;
+    /* 将固定宽度的物品栏面板在对话框中居中 */
+    display: flex;
+    justify-content: center;
 }
 
 .flake-page__creative-inventory-surface {

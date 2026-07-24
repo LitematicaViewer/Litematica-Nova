@@ -97,7 +97,6 @@
 
 .replace-unit-label-input:focus {
     border-color: var(--ln-primary, #0078d4);
-    background: var(--ln-input-bg, Field);
 }
 
 .replace-unit-hit-count {
@@ -208,6 +207,36 @@
 .replace-property-no-props {
     font-size: 11px;
     opacity: 0.5;
+}
+
+/* Serial separator */
+.replace-separator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 2px;
+    padding: 2px 0;
+}
+
+.replace-separator-line {
+    flex: 1;
+    height: 2px;
+    background: var(--ln-primary, #0078d4);
+    opacity: 0.35;
+    border-radius: 1px;
+}
+
+.replace-separator-label {
+    font-size: 11px;
+    white-space: nowrap;
+    color: var(--ln-primary, #0078d4);
+    opacity: 0.85;
+    letter-spacing: 0.03em;
+}
+
+.replace-separator-actions {
+    display: flex;
+    gap: 3px;
 }
 
 /* Scan result details */
