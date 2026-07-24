@@ -137,6 +137,8 @@ pub struct ReplaceBlocksSummary {
     pub per_unit: Vec<UnitSummary>,
     pub warnings: Vec<String>,
     pub unchanged_reasons: UnchangedReasons,
+    /// Diagnostic log lines (always populated, useful for debugging).
+    pub debug_log: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -250,6 +252,7 @@ fn replace_blocks_v1(
         per_unit: Vec::new(),
         warnings: Vec::new(),
         unchanged_reasons: UnchangedReasons::default(),
+        debug_log: Vec::new(),
     };
 
     for (region_name, region) in root.regions.iter_mut() {
@@ -490,6 +493,7 @@ fn replace_blocks_v2(
         per_unit: unit_summaries,
         warnings: global_warnings,
         unchanged_reasons: UnchangedReasons::default(),
+        debug_log: Vec::new(),
     })
 }
 
@@ -512,8 +516,14 @@ fn process_region_palette_fast(
     let old_bits = bits_for_palette(region.block_state_palette.len());
     let volume = region.block_state_palette.len(); // reuse for capacity hint
     let mut old_to_new: Vec<usize> = Vec::with_capacity(volume);
-    let mut new_palette: Vec<BlockStateNbt> = Vec::new();
-    let mut new_index_by_key: BTreeMap<String, usize> = BTreeMap::new();
+    // Pre-seed palette with minecraft:air at index 0 (Litematica convention).
+    let air_state = BlockStateNbt {
+        name: "minecraft:air".to_string(),
+        properties: BTreeMap::new(),
+    };
+    let air_key = state_key(&air_state);
+    let mut new_palette: Vec<BlockStateNbt> = vec![air_state];
+    let mut new_index_by_key: BTreeMap<String, usize> = BTreeMap::from([(air_key, 0)]);
     let mut region_changed = false;
 
     for (old_idx, old_state) in region.block_state_palette.iter().enumerate() {
@@ -657,8 +667,16 @@ fn process_region_per_position(
     }
 
     // Actual run: iterate every position and randomly pick output.
-    let mut new_palette: Vec<BlockStateNbt> = Vec::new();
-    let mut new_index_by_key: BTreeMap<String, usize> = BTreeMap::new();
+    // Pre-seed palette with minecraft:air at index 0 — Litematica's convention
+    // requires air at palette[0] so that padding zeros in the packed long array
+    // are interpreted as air rather than as an arbitrary replacement block.
+    let air_state = BlockStateNbt {
+        name: "minecraft:air".to_string(),
+        properties: BTreeMap::new(),
+    };
+    let air_key = state_key(&air_state);
+    let mut new_palette: Vec<BlockStateNbt> = vec![air_state];
+    let mut new_index_by_key: BTreeMap<String, usize> = BTreeMap::from([(air_key, 0)]);
     let mut remapped: Vec<usize> = Vec::with_capacity(volume);
     let mut positions_changed = 0u64;
 

@@ -343,7 +343,7 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
 
   // Unit CRUD helpers
   const addUnit = () =>
-    setUnits([...units, { input: [{ name: 'minecraft:stone' }], output: [{ name: 'minecraft:air', weight: 1 }] }]);
+    setUnits([...units, { input: [], output: [] }]);
 
   const updateUnit = (i: number, u: ReplaceUnit) => {
     const next = [...units]; next[i] = u; setUnits(next);
@@ -502,6 +502,20 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
                 )}
               </div>
             </div>
+            {/* Diagnostic log */}
+            {scanResult.debug_log && scanResult.debug_log.length > 0 && (
+              <details className="replace-debug-log">
+                <summary className="replace-debug-log-summary">
+                  诊断日志（{scanResult.debug_log.length} 行）
+                  {scanResult.debug_log.some(l => l.includes('[警告]')) && (
+                    <span className="replace-debug-log-warn-badge"> ⚠ 含警告</span>
+                  )}
+                </summary>
+                <pre className="replace-debug-log-content">
+                  {scanResult.debug_log.join('\n')}
+                </pre>
+              </details>
+            )}
             <p className="replace-confirm-output-label">选择输出路径：</p>
             <div className="replace-confirm-output-row">
               <input className="input replace-confirm-output-input" value={outputPath} readOnly />
