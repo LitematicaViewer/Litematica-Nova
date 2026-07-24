@@ -1,4 +1,4 @@
-﻿# 架构说明
+# 架构说明
 
 本文说明 Litematica Nova 的代码结构、分层边界和迁移方向。当前可运行应用仍在 `desktop-nova/`，长期目标是把 Nova 主代码收束到 `src/litematicanova/`。如果本文与旧文档或旧目录习惯存在冲突，以本文约定为准。
 

@@ -27,6 +27,7 @@ import {
   updateRenderCacheState,
   upsertRenderCacheState,
 } from "../../../../../src/business/facade";
+import { loadMaterialsScope } from "../../../../../src/services/statsService";
 import { resolveFlakeLayerBlockImage, extractLayerPaletteStates } from "../../../../../src/services/flakeStateHintResolver";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
@@ -637,6 +638,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [isLoadingContainer, setIsLoadingContainer] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
+  const [materialBlocks, setMaterialBlocks] = useState<string[]>([]);
   const [selectedQuickbarSlot, setSelectedQuickbarSlot] = useState(0);
   const [quickbarSlots, setQuickbarSlots] = useState<string[]>(() => Array.from({ length: 9 }, () => ""));
   const [toolPanelWidth, setToolPanelWidth] = useState(320);
@@ -842,6 +844,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
     if (!currentFile) return;
     // console.log("[LBA_FLAKE] effect:currentFile", { currentFile });
     setStatsData(null);
+    setMaterialBlocks([]);
     syncCacheState();
   }, [currentFile]);
 
@@ -851,6 +854,14 @@ export function FlakePage({ currentFile, setRoute }: any) {
     stopQuickBuildPolling();
     handleToolSplitterPointerUp();
   }, []);
+
+  // 打开创造模式物品栏时懒加载当前投影的材料方块列表
+  useEffect(() => {
+    if (!showInventoryDialog || !currentFile || materialBlocks.length > 0) return;
+    loadMaterialsScope(currentFile, [])
+      .then((mats) => setMaterialBlocks(mats.map((m) => m.id).filter(Boolean)))
+      .catch(() => setMaterialBlocks([]));
+  }, [showInventoryDialog, currentFile]);
 
   useEffect(() => {
     if (!editMode) {
@@ -1232,6 +1243,11 @@ export function FlakePage({ currentFile, setRoute }: any) {
           onClose={() => setShowInventoryDialog(false)}
           quickbarSlots={quickbarSlots}
           onChangeQuickbarSlots={(updater) => setQuickbarSlots((current) => updater([...current]))}
+          extraCollections={
+            materialBlocks.length > 0
+              ? [{ id: '__current__', name: '当前统计结果', values: materialBlocks }]
+              : []
+          }
         />
       ) : null}
 

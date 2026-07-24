@@ -532,7 +532,7 @@ function EnumeratorContent({
                     setSourceCollectionId("");
                     setSourceExpression(event.target.value);
                   }}
-                  placeholder="左键点击集合填入，或手动输入表达式"
+                  placeholder="例：A-(map_*)；或左键点击集合填入"
                 />
               </div>
 

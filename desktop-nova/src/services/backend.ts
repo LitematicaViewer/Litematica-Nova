@@ -40,6 +40,7 @@ export {
   readProjectionPreviewImage,
   readWorkspaceFile,
   writeAppDataFile as writeUserConfigFile,
+  deleteAppDataFile as deleteUserConfigFile,
   writeTextFileAbsolute,
   writeWorkspaceFile,
 } from "../platform/files";
