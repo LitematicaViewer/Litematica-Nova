@@ -23,7 +23,10 @@ import {
   stateFromLaunch,
   StatsData,
   subscribeRenderCacheStore,
+  getBlockProperties,
   translateBlockId,
+  translateKey,
+  translateValue,
   updateRenderCacheState,
   upsertRenderCacheState,
 } from "../../../../../src/business/facade";
@@ -31,13 +34,15 @@ import { loadMaterialsScope } from "../../../../../src/services/statsService";
 import { buildMapColorLookup, loadEnumeratorCollections } from "../../../../../src/services/enumeratorService";
 import { resolveFlakeLayerBlockImage, extractLayerPaletteStates } from "../../../../../src/services/flakeStateHintResolver";
 import { BlockIcon } from "../../../../components/BlockIcon";
+import { Dialog } from "../../../../components/Dialog";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
 
 // 同级函数
-import { fitView, FlakeBlockTooltip, resolveLayerBlockStates } from "./function";
+import { fitView, FlakeBlockTooltip, formatStateRecord } from "./function";
 import { CreativeInventoryDialog } from "./creativeInventoryDialog";
 import { ContainerDialog } from "./containerDialog";
 import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem, type ContainerType } from "../../../../../src/business/facade";
+import noteCsvText from "../../../../../note.csv?raw";
 
 // 缩放范围：scale 表示每个方块占用的像素数（像素/格）。
 const MIN_SCALE = 1;
@@ -48,8 +53,126 @@ const HOVER_TOOLTIP_MIN_SCALE = 8;
 const RENDER_OVERSCAN_PIXELS = 256;
 const LOW_ZOOM_OVERSCAN_PIXELS = 64;
 const MAX_LOW_ZOOM_TILE_CACHE_SIZE = 2048;
+const NOTE_BLOCK_ID = "minecraft:note_block";
+const NOTE_BLOCK_NOTE_VALUES = Array.from({ length: 25 }, (_unused, index) => String(index));
+const NOTE_BLOCK_KEY_ROWS = [
+  { id: "high", label: "高位音高", values: Array.from({ length: 7 }, (_unused, index) => String(index + 18)) },
+  { id: "middle", label: "本位音高", values: Array.from({ length: 12 }, (_unused, index) => String(index + 6)) },
+  { id: "low", label: "低位音高", values: Array.from({ length: 6 }, (_unused, index) => String(index)) },
+] as const;
+const EDIT_TOOL_PLACEHOLDERS = [
+  { id: "hand", glyph: "手", name: "手型", description: "拖拽和查看" },
+  { id: "debug-stick", glyph: "调", name: "调试棒", description: "修改方块状态" },
+  { id: "measure", glyph: "量", name: "测量工具", description: "测量欧几里得距离与曼哈顿距离" },
+  { id: "select", glyph: "选", name: "框选工具", description: "框选区域" },
+  { id: "brush", glyph: "笔", name: "画笔", description: "绘制方块" },
+  { id: "eraser", glyph: "擦", name: "橡皮擦", description: "擦除方块" },
+  { id: "picker", glyph: "吸", name: "取色器", description: "拾取方块" },
+  { id: "rectangle", glyph: "矩", name: "矩形工具", description: "绘制矩形" },
+  { id: "circle", glyph: "圆", name: "圆形工具", description: "绘制圆形" },
+  { id: "bucket", glyph: "桶", name: "填色工具", description: "填充区域" },
+  { id: "text", glyph: "字", name: "文字工具", description: "仅支持 unifont 字体" },
+] as const;
 
+type EditToolId = typeof EDIT_TOOL_PLACEHOLDERS[number]["id"];
 type CssVariableStyle<T extends string> = React.CSSProperties & Record<T, string | number>;
+
+interface NoteToneLabel {
+  value: string;
+  raw: string;
+  base: string;
+  sharpMarks: string;
+}
+
+interface NoteScaleOption {
+  name: string;
+  labelsByValue: Record<string, NoteToneLabel>;
+}
+
+function parseCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === "\"") {
+      if (inQuotes && line[index + 1] === "\"") {
+        cell += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (char === "," && !inQuotes) {
+      cells.push(cell.trim());
+      cell = "";
+      continue;
+    }
+    cell += char;
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function parseNoteToneLabel(value: string, rawLabel: string | undefined): NoteToneLabel {
+  const raw = rawLabel?.trim() || value;
+  const sharpMatch = raw.match(/#+$/);
+  const sharpMarks = sharpMatch?.[0] || "";
+  const base = sharpMarks ? raw.slice(0, -sharpMarks.length) || raw : raw;
+  return { value, raw, base, sharpMarks };
+}
+
+function parseNoteScaleOptions(csvText: string): NoteScaleOption[] {
+  const rows = csvText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(parseCsvLine);
+  const header = rows[0] || [];
+  const noteValues = header.slice(1).filter((value) => NOTE_BLOCK_NOTE_VALUES.includes(value));
+
+  return rows.slice(1).map((row) => {
+    const labelsByValue: Record<string, NoteToneLabel> = {};
+    noteValues.forEach((value, index) => {
+      labelsByValue[value] = parseNoteToneLabel(value, row[index + 1]);
+    });
+    NOTE_BLOCK_NOTE_VALUES.forEach((value) => {
+      labelsByValue[value] = labelsByValue[value] || parseNoteToneLabel(value, value);
+    });
+    return {
+      name: row[0] || "默认调式",
+      labelsByValue,
+    };
+  });
+}
+
+const NOTE_SCALE_OPTIONS = parseNoteScaleOptions(noteCsvText);
+const DEFAULT_NOTE_SCALE_NAME = NOTE_SCALE_OPTIONS[0]?.name || "默认调式";
+
+function flakeBlockPositionKey(x: number, y: number, z: number): string {
+  return `${x}:${y}:${z}`;
+}
+
+function normalizeLayerStateRecord(value: Record<string, unknown> | null | undefined): Record<string, string> {
+  const next: Record<string, string> = {};
+  if (!value) return next;
+  Object.entries(value).forEach(([key, raw]) => {
+    if (!key || raw === null || raw === undefined) return;
+    next[key] = String(raw);
+  });
+  return next;
+}
+
+function layerStateRecordText(stateRecord: Record<string, string>): string {
+  return formatStateRecord(stateRecord) || "无";
+}
+
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return !!target.closest("input, textarea, select");
+}
 
 // 全局图标缓存，避免重复处理相同方块
 const globalIconCache = new Map<string, Promise<string | null>>();
@@ -92,9 +215,13 @@ export interface FlakeHoverBlock {
   x: number;
   y: number;
   z: number;
+  paletteId: number;
   id: string;
   name: string;
   states: string;
+  stateRecord: Record<string, string>;
+  originalStateRecord: Record<string, string>;
+  hasStates: boolean;
 }
 
 interface FlakeRenderSlice {
@@ -199,11 +326,14 @@ const LayerCanvas = forwardRef<
     meta: LayerSliceMeta | null;
     renderSlices: FlakeRenderSlice[];
     showStateHints: boolean;
+    interactionTool: EditToolId;
+    editedBlockStates: Record<string, Record<string, string>>;
     onHoverBlock: (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => void;
+    onBlockClick: (block: FlakeHoverBlock, event: React.MouseEvent) => void;
     onBlockRightClick: (block: FlakeHoverBlock, event: React.MouseEvent) => void;
     onScaleChange?: (scale: number) => void;
   }
->(({ meta, renderSlices, showStateHints, onHoverBlock, onBlockRightClick, onScaleChange }, ref) => {
+>(({ meta, renderSlices, showStateHints, interactionTool, editedBlockStates, onHoverBlock, onBlockClick, onBlockRightClick, onScaleChange }, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const lowZoomCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -679,6 +809,39 @@ const LayerCanvas = forwardRef<
     applyZoom(scaleRef.current * Math.pow(2, direction), event.clientX - rect.left, event.clientY - rect.top);
   };
 
+  const resolveBlockAtEvent = (event: React.MouseEvent): FlakeHoverBlock | null => {
+    if (!meta || visibleLayerIndex.byPosition.size === 0 || !viewportRef.current) return null;
+
+    const rect = viewportRef.current.getBoundingClientRect();
+    const bx = Math.floor((event.clientX - rect.left - offset.x) / scale);
+    const bz = Math.floor((event.clientY - rect.top - offset.y) / scale);
+    if (bx < 0 || bx >= meta.size_x || bz < 0 || bz >= meta.size_z) return null;
+
+    const visibleBlock = visibleLayerIndex.byPosition.get(bz * meta.size_x + bx);
+    if (!visibleBlock) return null;
+
+    const paletteId = visibleBlock.block.palette_id;
+    const paletteEntry = meta.palette[paletteId];
+    if (!paletteEntry) return null;
+
+    const originalStateRecord = normalizeLayerStateRecord(extractLayerPaletteStates(paletteEntry, meta.property_pool || []));
+    const positionKey = flakeBlockPositionKey(bx, visibleBlock.y, bz);
+    const stateRecord = editedBlockStates[positionKey] || originalStateRecord;
+
+    return {
+      x: bx,
+      y: visibleBlock.y,
+      z: bz,
+      paletteId,
+      id: paletteEntry.block_id,
+      name: translateBlockId(paletteEntry.block_id),
+      states: layerStateRecordText(stateRecord),
+      stateRecord,
+      originalStateRecord,
+      hasStates: Object.keys(originalStateRecord).length > 0,
+    };
+  };
+
   const handleMouseMove = (event: React.MouseEvent) => {
     if (isDragging) {
       scheduleOffset({ x: event.clientX - dragStart.x, y: event.clientY - dragStart.y });
@@ -690,72 +853,19 @@ const LayerCanvas = forwardRef<
       return;
     }
 
-    if (!meta || visibleLayerIndex.byPosition.size === 0 || !viewportRef.current) {
-      onHoverBlock(null, event);
-      return;
-    }
-
-    const rect = viewportRef.current.getBoundingClientRect();
-    const bx = Math.floor((event.clientX - rect.left - offset.x) / scale);
-    const bz = Math.floor((event.clientY - rect.top - offset.y) / scale);
-    if (bx >= 0 && bx < meta.size_x && bz >= 0 && bz < meta.size_z) {
-      const visibleBlock = visibleLayerIndex.byPosition.get(bz * meta.size_x + bx);
-      if (visibleBlock) {
-        const paletteEntry = meta.palette[visibleBlock.block.palette_id];
-        onHoverBlock(
-          {
-            x: bx,
-            y: visibleBlock.y,
-            z: bz,
-            id: paletteEntry.block_id,
-            name: translateBlockId(paletteEntry.block_id),
-            states: resolveLayerBlockStates(paletteEntry, meta.property_pool || []),
-          },
-          event,
-        );
-        return;
-      }
-    }
-
-    onHoverBlock(null, event);
+    onHoverBlock(resolveBlockAtEvent(event), event);
   };
 
   const handleContextMenu = (event: React.MouseEvent) => {
-    console.log("handleContextMenu 被调用");
     event.preventDefault();
-    
-    if (!meta || visibleLayerIndex.byPosition.size === 0 || !viewportRef.current) {
-      console.log("无法处理右键: meta=", !!meta, "visibleBlockIndex.size=", visibleLayerIndex.byPosition.size, "viewportRef=", !!viewportRef.current);
-      return;
-    }
+    const block = resolveBlockAtEvent(event);
+    if (block) onBlockRightClick(block, event);
+  };
 
-    const rect = viewportRef.current.getBoundingClientRect();
-    const bx = Math.floor((event.clientX - rect.left - offset.x) / scale);
-    const bz = Math.floor((event.clientY - rect.top - offset.y) / scale);
-    console.log("计算的方块坐标:", bx, bz, "范围:", meta.size_x, meta.size_z);
-    
-    if (bx >= 0 && bx < meta.size_x && bz >= 0 && bz < meta.size_z) {
-      const visibleBlock = visibleLayerIndex.byPosition.get(bz * meta.size_x + bx);
-      console.log("找到的 visibleBlock:", visibleBlock);
-      
-      if (visibleBlock) {
-        const paletteEntry = meta.palette[visibleBlock.block.palette_id];
-        const block: FlakeHoverBlock = {
-          x: bx,
-          y: visibleBlock.y,
-          z: bz,
-          id: paletteEntry.block_id,
-          name: translateBlockId(paletteEntry.block_id),
-          states: resolveLayerBlockStates(paletteEntry, meta.property_pool || []),
-        };
-        console.log("准备调用 onBlockRightClick, block=", block);
-        onBlockRightClick(block, event);
-      } else {
-        console.log("该位置没有方块");
-      }
-    } else {
-      console.log("坐标超出范围");
-    }
+  const handleClick = (event: React.MouseEvent) => {
+    if (event.button !== 0 || interactionTool === "hand") return;
+    const block = resolveBlockAtEvent(event);
+    if (block) onBlockClick(block, event);
   };
 
   return (
@@ -764,11 +874,12 @@ const LayerCanvas = forwardRef<
       className={isDragging ? "flake-canvas is-dragging" : "flake-canvas"}
       onWheel={handleWheel}
       onMouseDown={(event) => {
-        if (event.button === 0) { // 只响应左键拖拽
+        if (event.button === 0 && interactionTool === "hand") {
           setIsDragging(true);
           setDragStart({ x: event.clientX - offsetRef.current.x, y: event.clientY - offsetRef.current.y });
         }
       }}
+      onClick={handleClick}
       onMouseMove={handleMouseMove}
       onMouseUp={() => setIsDragging(false)}
       onMouseLeave={() => {
@@ -808,6 +919,127 @@ const LayerCanvas = forwardRef<
   );
 });
 
+function FlakeDebugStateDialog({
+  block,
+  onApply,
+  onClose,
+}: {
+  block: FlakeHoverBlock;
+  onApply: (stateRecord: Record<string, string>) => void;
+  onClose: () => void;
+}) {
+  const [draftState, setDraftState] = useState<Record<string, string>>(() => ({ ...block.stateRecord }));
+  const [selectedNoteScaleName, setSelectedNoteScaleName] = useState(DEFAULT_NOTE_SCALE_NAME);
+  const propertyKeys = useMemo(() => Object.keys(block.stateRecord).sort(), [block.stateRecord]);
+  const knownProperties = getBlockProperties(block.id);
+  const selectedNoteScale = NOTE_SCALE_OPTIONS.find((option) => option.name === selectedNoteScaleName) || NOTE_SCALE_OPTIONS[0];
+
+  useEffect(() => {
+    setDraftState({ ...block.stateRecord });
+  }, [block]);
+
+  const setProperty = (key: string, value: string) => {
+    setDraftState((current) => ({ ...current, [key]: value }));
+  };
+
+  return (
+    <Dialog
+      title="调试棒"
+      subtitle={`${block.name} (${block.id})`}
+      width="lg"
+      className="flake-page__state-dialog"
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" onClick={onClose}>取消</button>
+          <button type="button" onClick={() => onApply(normalizeLayerStateRecord(draftState))}>应用</button>
+        </>
+      )}
+    >
+      <div className="dialog-form-grid flake-page__state-dialog-grid">
+        <span className="dialog-label">位置</span>
+        <span>x={block.x} y={block.y} z={block.z}</span>
+        <span className="dialog-label">方块ID</span>
+        <div className="dialog-path-preview">{block.id}</div>
+        {propertyKeys.map((key) => {
+          const knownValues = knownProperties[key] || [];
+          const currentValue = draftState[key] ?? "";
+          const isNoteBlockNote = block.id === NOTE_BLOCK_ID && key === "note";
+          const optionValues = currentValue && !knownValues.includes(currentValue)
+            ? [currentValue, ...knownValues]
+            : knownValues;
+          return (
+            <React.Fragment key={key}>
+              <label className="dialog-label" htmlFor={`flake-state-${key}`}>{translateKey(key)}</label>
+              {isNoteBlockNote ? (
+                <div id={`flake-state-${key}`} className="flake-page__note-control">
+                  <select
+                    className="input flake-page__note-scale-select"
+                    value={selectedNoteScaleName}
+                    aria-label="音符盒调式"
+                    onChange={(event) => setSelectedNoteScaleName(event.target.value)}
+                  >
+                    {NOTE_SCALE_OPTIONS.map((option) => (
+                      <option key={option.name} value={option.name}>{option.name}</option>
+                    ))}
+                  </select>
+                  <div className="flake-page__note-keyboard" role="group" aria-label="音符盒音高">
+                    {NOTE_BLOCK_KEY_ROWS.map((row) => (
+                      <div
+                        key={row.id}
+                        className={`flake-page__note-key-row flake-page__note-key-row--${row.id}`}
+                        role="group"
+                        aria-label={row.label}
+                      >
+                        {row.values.map((value) => {
+                          const noteLabel = selectedNoteScale?.labelsByValue[value] || parseNoteToneLabel(value, value);
+                          return (
+                            <span key={value} className="flake-page__note-key-slot">
+                              <button
+                                className={noteLabel.sharpMarks ? "btn flake-page__note-key-button is-sharp" : "btn flake-page__note-key-button"}
+                                type="button"
+                                aria-label={`${noteLabel.raw}，音高 ${value}`}
+                                aria-pressed={currentValue === value}
+                                title={`${noteLabel.raw} (${value})`}
+                                onClick={() => setProperty(key, value)}
+                              >
+                                <span className="flake-page__note-key-label">{noteLabel.base}</span>
+                                {noteLabel.sharpMarks ? <span className="flake-page__note-key-sharp" aria-hidden="true">{noteLabel.sharpMarks}</span> : null}
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : optionValues.length > 0 ? (
+                <select
+                  id={`flake-state-${key}`}
+                  className="input"
+                  value={currentValue}
+                  onChange={(event) => setProperty(key, event.target.value)}
+                >
+                  {optionValues.map((value) => (
+                    <option key={value} value={value}>{translateValue(key, value)} ({value})</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  id={`flake-state-${key}`}
+                  className="input"
+                  value={currentValue}
+                  onChange={(event) => setProperty(key, event.target.value)}
+                />
+              )}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </Dialog>
+  );
+}
+
 /**
  * Renders the flake layer viewer and editing controls.
  */
@@ -829,6 +1061,10 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [containerData, setContainerData] = useState<{ type: ContainerType; items: ContainerItem[]; position: { x: number; y: number; z: number } } | null>(null);
   const [isLoadingContainer, setIsLoadingContainer] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  const [selectedEditTool, setSelectedEditTool] = useState<EditToolId>("hand");
+  const [isSpaceHandTool, setIsSpaceHandTool] = useState(false);
+  const [editedBlockStates, setEditedBlockStates] = useState<Record<string, Record<string, string>>>({});
+  const [debugStateBlock, setDebugStateBlock] = useState<FlakeHoverBlock | null>(null);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
   const [materialBlocks, setMaterialBlocks] = useState<string[]>([]);
   const [selectedQuickbarSlot, setSelectedQuickbarSlot] = useState(0);
@@ -1037,6 +1273,8 @@ export function FlakePage({ currentFile, setRoute }: any) {
     // console.log("[LBA_FLAKE] effect:currentFile", { currentFile });
     setStatsData(null);
     setMaterialBlocks([]);
+    setEditedBlockStates({});
+    setDebugStateBlock(null);
     syncCacheState();
   }, [currentFile]);
 
@@ -1058,8 +1296,37 @@ export function FlakePage({ currentFile, setRoute }: any) {
   useEffect(() => {
     if (!editMode) {
       setShowInventoryDialog(false);
+      setIsSpaceHandTool(false);
+      setDebugStateBlock(null);
+      return;
     }
+    setSelectedEditTool("hand");
   }, [editMode]);
+
+  useEffect(() => {
+    if (!editMode || debugStateBlock) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || isTextEntryTarget(event.target)) return;
+      event.preventDefault();
+      setIsSpaceHandTool(true);
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== "Space") return;
+      event.preventDefault();
+      setIsSpaceHandTool(false);
+    };
+    const handleBlur = () => setIsSpaceHandTool(false);
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleBlur);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [debugStateBlock, editMode]);
 
   useEffect(() => {
     if (!cacheExists || !meta || !cacheFile) return;
@@ -1137,10 +1404,37 @@ export function FlakePage({ currentFile, setRoute }: any) {
     return next;
   }, [layerY, onionSkinDepth, sliceDataByY]);
 
+  const effectiveEditTool: EditToolId = editMode && !isSpaceHandTool ? selectedEditTool : "hand";
+
   const handleHoverBlock = useCallback((block: FlakeHoverBlock | null, event: React.MouseEvent | null) => {
     setHoverBlock(block);
     if (event) setHoverPos({ x: event.clientX, y: event.clientY });
   }, []);
+
+  const handleBlockClick = useCallback((block: FlakeHoverBlock, event: React.MouseEvent) => {
+    event.preventDefault();
+    if (effectiveEditTool !== "debug-stick" || !block.hasStates) return;
+    setDebugStateBlock(block);
+  }, [effectiveEditTool]);
+
+  const handleApplyDebugState = useCallback((stateRecord: Record<string, string>) => {
+    if (!debugStateBlock) return;
+    const normalizedStateRecord = normalizeLayerStateRecord(stateRecord);
+    const positionKey = flakeBlockPositionKey(debugStateBlock.x, debugStateBlock.y, debugStateBlock.z);
+    setEditedBlockStates((current) => ({
+      ...current,
+      [positionKey]: normalizedStateRecord,
+    }));
+    setHoverBlock((current) => {
+      if (!current || flakeBlockPositionKey(current.x, current.y, current.z) !== positionKey) return current;
+      return {
+        ...current,
+        stateRecord: normalizedStateRecord,
+        states: layerStateRecordText(normalizedStateRecord),
+      };
+    });
+    setDebugStateBlock(null);
+  }, [debugStateBlock]);
 
   const handleBlockRightClick = useCallback(async (block: FlakeHoverBlock, event: React.MouseEvent) => {
     event.preventDefault();
@@ -1149,17 +1443,12 @@ export function FlakePage({ currentFile, setRoute }: any) {
     if (isLoadingContainer) {
       return;
     }
-    
-    console.log("右键点击方块:", block.id, "坐标:", block.x, block.y, block.z);
-    
+
     // 检查是否为容器方块
     if (!isContainerBlock(block.id)) {
-      console.log("不是容器方块");
       return;
     }
-    
-    console.log("检测到容器方块，开始加载数据...");
-    
+
     // 设置加载状态
     setIsLoadingContainer(true);
     
@@ -1172,26 +1461,18 @@ export function FlakePage({ currentFile, setRoute }: any) {
         loadContainerData(currentFile, region, block.x, block.y, block.z),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)) // 5秒超时
       ]);
-      
-      console.log("加载到的容器数据:", data);
-      
+
       if (!data) {
-        console.log("未找到容器数据或容器为空");
         return;
       }
       
       const containerType = getContainerType(data.block_id);
-      
-      console.log("容器类型:", containerType);
-      
+
       // 只支持已定义 UI 布局的容器类型
       if (!containerType) {
-        console.log("不支持的容器类型，当前仅支持：箱子、潜影盒、木桶、漏斗");
         return;
       }
-      
-      console.log("准备显示容器对话框");
-      
+
       setContainerData({
         type: containerType,
         items: data.items,
@@ -1258,7 +1539,15 @@ export function FlakePage({ currentFile, setRoute }: any) {
           {isQuickBuilding ? "生成中..." : "生成3DCache"}
         </button>
         <label className="subwindow-check-row flake-page__edit-toggle">
-          <input type="checkbox" checked={editMode} onChange={(event) => setEditMode(event.target.checked)} />
+          <input
+            type="checkbox"
+            checked={editMode}
+            onChange={(event) => {
+              const enabled = event.target.checked;
+              if (enabled) setSelectedEditTool("hand");
+              setEditMode(enabled);
+            }}
+          />
           编辑模式
         </label>
         <div className="subwindow-toolbar-spacer" />
@@ -1353,7 +1642,18 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 <div>{building ? "标准模式 3D cache 正在构建。" : "请先生成标准模式 3D cache。"}</div>
               </div>
             ) : (
-              <LayerCanvas ref={canvasRef} meta={meta} renderSlices={renderSlices} showStateHints={showStateHints} onHoverBlock={handleHoverBlock} onBlockRightClick={handleBlockRightClick} onScaleChange={setViewScale} />
+              <LayerCanvas
+                ref={canvasRef}
+                meta={meta}
+                renderSlices={renderSlices}
+                showStateHints={showStateHints}
+                interactionTool={effectiveEditTool}
+                editedBlockStates={editedBlockStates}
+                onHoverBlock={handleHoverBlock}
+                onBlockClick={handleBlockClick}
+                onBlockRightClick={handleBlockRightClick}
+                onScaleChange={setViewScale}
+              />
             )}
 
             <FlakeBlockTooltip x={hoverPos.x} y={hoverPos.y} item={hoverBlock} />
@@ -1397,8 +1697,20 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
                 <div className="flake-page__tool-panel-section">
                   <div className="flake-page__tool-panel-heading">编辑工具占位</div>
-                  <div className="nova-muted nova-small flake-page__tool-panel-placeholder">
-                    编辑逻辑尚未实现。当前先保留右侧工具区、可拖拽宽度、底部快捷栏与物品栏入口，用于验证整体交互布局。
+                  <div className="flake-page__tool-palette" role="toolbar" aria-label="编辑工具占位按钮">
+                    {EDIT_TOOL_PLACEHOLDERS.map((tool) => (
+                      <button
+                        key={tool.id}
+                        className="btn flake-page__edit-tool-button"
+                        type="button"
+                        onClick={() => setSelectedEditTool(tool.id)}
+                        title={`${tool.name}：${tool.description}`}
+                        aria-label={`${tool.name}，${tool.description}`}
+                        aria-pressed={effectiveEditTool === tool.id}
+                      >
+                        <span className="flake-page__edit-tool-glyph" aria-hidden="true">{tool.glyph}</span>
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -1456,6 +1768,14 @@ export function FlakePage({ currentFile, setRoute }: any) {
       ) : null}
 
       {showMaterials && statsData && <MaterialsDialog data={statsData} onClose={() => setShowMaterials(false)} currentFile={currentFile} />}
+      {debugStateBlock ? (
+        <FlakeDebugStateDialog
+          key={flakeBlockPositionKey(debugStateBlock.x, debugStateBlock.y, debugStateBlock.z)}
+          block={debugStateBlock}
+          onApply={handleApplyDebugState}
+          onClose={() => setDebugStateBlock(null)}
+        />
+      ) : null}
       
       {showContainerDialog && containerData && (
         <ContainerDialog

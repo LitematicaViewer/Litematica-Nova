@@ -955,13 +955,180 @@ textarea.input,
     gap: 12px;
 }
 
-.flake-page__status-text,
-.flake-page__tool-panel-placeholder {
+.flake-page__status-text {
     white-space: pre-wrap;
 }
 
 .flake-page__tool-panel-error {
     margin-top: 0;
+}
+
+.flake-page__tool-palette {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 44px);
+    align-items: center;
+    gap: 8px;
+}
+
+.flake-page.flake-page--edit-mode .flake-page__tool-panel .flake-page__tool-palette button.flake-page__edit-tool-button {
+    --ln-minecraft-button-image: none;
+
+    display: grid;
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    place-items: center;
+    margin: 0;
+    padding: 6px;
+    border: 0;
+    border-image-source: none;
+    overflow: hidden;
+    appearance: none;
+    background: transparent var(--flake-edit-tool-normal-image) center / 44px 44px no-repeat;
+    color: var(--ln-body-text-color, CanvasText);
+    font-size: 16px;
+    font-weight: 700;
+    image-rendering: pixelated;
+    letter-spacing: normal;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.flake-page.flake-page--edit-mode .flake-page__tool-panel .flake-page__tool-palette button.flake-page__edit-tool-button:hover,
+.flake-page.flake-page--edit-mode .flake-page__tool-panel .flake-page__tool-palette button.flake-page__edit-tool-button:focus-visible {
+    --ln-minecraft-button-image: none;
+
+    border: 0;
+    border-image-source: none;
+    background-color: transparent;
+    background-image: var(--flake-edit-tool-hover-image);
+}
+
+.flake-page.flake-page--edit-mode .flake-page__tool-panel .flake-page__tool-palette button.flake-page__edit-tool-button:active,
+.flake-page.flake-page--edit-mode .flake-page__tool-panel .flake-page__tool-palette button.flake-page__edit-tool-button[aria-pressed="true"] {
+    --ln-minecraft-button-image: none;
+
+    border: 0;
+    border-image-source: none;
+    background-color: transparent;
+    background-image: var(--flake-edit-tool-active-image);
+}
+
+.flake-page__edit-tool-glyph {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    pointer-events: none;
+}
+
+.flake-page__empty-state-row {
+    color: var(--ln-error-color, crimson);
+    font-weight: 700;
+}
+
+.flake-page__state-dialog-grid {
+    align-items: center;
+}
+
+.flake-page__state-dialog {
+    min-width: min(100%, 640px);
+}
+
+.flake-page__state-dialog-grid select,
+.flake-page__state-dialog-grid input {
+    width: 100%;
+}
+
+.flake-page__note-control,
+.flake-page__note-keyboard {
+    --flake-state-note-button-size: var(--ln-minecraft-button-height, var(--ln-bootstrap5-button-height, var(--ln-metro10-button-height, 28px)));
+
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.flake-page__note-control {
+    gap: 6px;
+}
+
+.flake-page__note-keyboard {
+    gap: 4px;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: visible;
+    padding-bottom: 2px;
+}
+
+.flake-page__note-key-row {
+    display: grid;
+    width: max-content;
+    gap: 4px;
+    min-width: max-content;
+}
+
+.flake-page__note-key-row--high {
+    grid-template-columns: repeat(7, var(--flake-state-note-button-size));
+    align-self: flex-start;
+}
+
+.flake-page__note-key-row--middle {
+    grid-template-columns: repeat(12, var(--flake-state-note-button-size));
+    align-self: center;
+}
+
+.flake-page__note-key-row--low {
+    grid-template-columns: repeat(6, var(--flake-state-note-button-size));
+    align-self: flex-end;
+}
+
+.flake-page__note-key-slot {
+    display: flex;
+    width: var(--flake-state-note-button-size);
+    height: calc(var(--flake-state-note-button-size) * 2);
+    align-items: center;
+    justify-content: center;
+}
+
+.flake-page.flake-page--edit-mode .flake-page__state-dialog-grid .flake-page__note-keyboard button.flake-page__note-key-button.btn {
+    position: relative;
+    width: var(--flake-state-note-button-size);
+    min-width: var(--flake-state-note-button-size);
+    max-width: var(--flake-state-note-button-size);
+    margin: 0;
+    padding-right: 0;
+    padding-left: 0;
+    overflow: hidden;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.flake-page.flake-page--edit-mode .flake-page__state-dialog-grid .flake-page__note-keyboard button.flake-page__note-key-button.is-sharp {
+    transform: translateY(calc(var(--flake-state-note-button-size) * -0.5));
+}
+
+.flake-page__note-key-label {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+}
+
+.flake-page__note-key-sharp {
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    max-width: calc(100% - 8px);
+    overflow: hidden;
+    font-size: 0.6em;
+    line-height: 1;
+    pointer-events: none;
+    text-align: right;
 }
 
 .flake-page__tool-panel-actions {

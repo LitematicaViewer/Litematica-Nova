@@ -1,6 +1,6 @@
 import React, { useRef, useState, useLayoutEffect } from "react";
 import { BlockIcon } from "../../../../components/BlockIcon";
-import { FlakeHoverBlock } from "./FlakePage";
+import type { FlakeHoverBlock } from "./FlakePage";
 import { LayerSliceMeta } from "../../../../../src/services/layerService";
 
 function resolveDefaultFlakeScale(sizeZ: number): number {
@@ -142,7 +142,7 @@ export function FlakeBlockTooltip({ x, y, item }: { x: number; y: number; item: 
         <span className="material-list-hover-popup-name">{item.name}</span>
       </div>
       <div className="material-list-hover-popup-row">方块ID：{item.id}</div>
-      <div className="material-list-hover-popup-row">方块状态：{item.states}</div>
+      <div className={item.hasStates ? "material-list-hover-popup-row" : "material-list-hover-popup-row flake-page__empty-state-row"}>方块状态：{item.states}</div>
       <div className="material-list-hover-popup-row">x={item.x} y={item.y} z={item.z}</div>
     </div>
   );

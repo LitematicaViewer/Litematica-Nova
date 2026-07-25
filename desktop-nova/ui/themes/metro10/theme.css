@@ -19,6 +19,9 @@
     --flake-hotbar-selection-image: url("./resource/content/hotbar_selection.png");
     --flake-open-inventory-normal-image: url("./resource/button/openInventory_normal.png");
     --flake-open-inventory-hover-image: url("./resource/button/openInventory_hover.png");
+    --flake-edit-tool-normal-image: url("./resource/button/editTool_normal.png");
+    --flake-edit-tool-hover-image: url("./resource/button/editTool_hover.png");
+    --flake-edit-tool-active-image: url("./resource/button/editTool_active.png");
     --flake-chest-image: url("./resource/content/chest27.png");
     --flake-hopper-image: url("./resource/content/hopper.png");
 }
