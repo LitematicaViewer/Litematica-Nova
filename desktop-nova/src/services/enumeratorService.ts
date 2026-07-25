@@ -3,7 +3,7 @@ import { listGameResourceRegistry, readActiveGameDataResource, readActiveLanguag
 import { translateBlockId } from "./i18n";
 import type { MaterialItem } from "./statsService";
 
-export type EnumeratorCollectionCategory = "base" | "version" | "system_enum" | "creative" | "custom" | "runtime";
+export type EnumeratorCollectionCategory = "base" | "version" | "system_enum" | "creative" | "map" | "custom" | "runtime";
 export type EnumeratorValueType = "block" | "item" | "entity" | "enchantment" | "mixed" | "unknown";
 
 export interface EnumeratorCollection {
@@ -54,6 +54,7 @@ const COLLECTION_DIRS: Record<Exclude<EnumeratorCollectionCategory, "base" | "ru
   version: "enumerator/version",
   system_enum: "enumerator/system_enum",
   creative: "enumerator/creative",
+  map: "enumerator/map",
   custom: "enumerator/custom",
 };
 
@@ -381,11 +382,12 @@ async function loadFolderCollections(category: Exclude<EnumeratorCollectionCateg
 }
 
 export async function loadEnumeratorCollections(runtimeCollections: EnumeratorCollection[] = []): Promise<EnumeratorCollection[]> {
-  const [baseCollections, versionCollections, systemCollections, creativeCollections, customCollections] = await Promise.all([
+  const [baseCollections, versionCollections, systemCollections, creativeCollections, mapCollections, customCollections] = await Promise.all([
     loadBaseCollections(),
     loadFolderCollections("version"),
     loadFolderCollections("system_enum"),
     loadFolderCollections("creative"),
+    loadFolderCollections("map"),
     loadFolderCollections("custom"),
   ]);
   return [
@@ -393,9 +395,32 @@ export async function loadEnumeratorCollections(runtimeCollections: EnumeratorCo
     ...versionCollections,
     ...systemCollections,
     ...creativeCollections,
+    ...mapCollections,
     ...runtimeCollections,
     ...customCollections,
   ];
+}
+
+/**
+ * Builds a block-to-color lookup from map collections named like `map_707070_stone`.
+ *
+ * @param collections Enumerator collections to inspect.
+ * @returns Normalized block IDs mapped to their six-digit map colors.
+ */
+export function buildMapColorLookup(collections: EnumeratorCollection[]): Map<string, string> {
+  const colors = new Map<string, string>();
+  for (const collection of collections) {
+    if (collection.category !== "map") continue;
+    const match = collection.name.trim().match(/^map_([0-9a-f]{6})(?:_|$)/i);
+    if (!match) continue;
+    const color = `#${match[1].toLowerCase()}`;
+    for (const value of collection.values) {
+      const normalizedValue = normalizeCollectionValue(value);
+      if (!normalizedValue || colors.has(normalizedValue)) continue;
+      colors.set(normalizedValue, color);
+    }
+  }
+  return colors;
 }
 
 export async function loadEnumeratorCustomCollections(): Promise<EnumeratorCollection[]> {

@@ -28,6 +28,7 @@ import {
   upsertRenderCacheState,
 } from "../../../../../src/business/facade";
 import { loadMaterialsScope } from "../../../../../src/services/statsService";
+import { buildMapColorLookup, loadEnumeratorCollections } from "../../../../../src/services/enumeratorService";
 import { resolveFlakeLayerBlockImage, extractLayerPaletteStates } from "../../../../../src/services/flakeStateHintResolver";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
@@ -42,49 +43,16 @@ import { loadContainerData, isContainerBlock, getContainerType, type ContainerIt
 const MIN_SCALE = 1;
 const MAX_SCALE = 64;
 const ICON_NATIVE_SIZE = 16;
+const LOW_ZOOM_TILE_SIZE = 16;
 const HOVER_TOOLTIP_MIN_SCALE = 8;
 const RENDER_OVERSCAN_PIXELS = 256;
+const LOW_ZOOM_OVERSCAN_PIXELS = 64;
+const MAX_LOW_ZOOM_TILE_CACHE_SIZE = 2048;
 
 type CssVariableStyle<T extends string> = React.CSSProperties & Record<T, string | number>;
 
 // 全局图标缓存，避免重复处理相同方块
 const globalIconCache = new Map<string, Promise<string | null>>();
-const globalIconUnitColorCache = new Map<string, Promise<string | null>>();
-
-function resolveIconUnitColor(iconUrl: string): Promise<string | null> {
-  if (!globalIconUnitColorCache.has(iconUrl)) {
-    globalIconUnitColorCache.set(iconUrl, new Promise((resolve) => {
-      const image = new Image();
-      image.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = 1;
-        canvas.height = 1;
-        const context = canvas.getContext("2d", { willReadFrequently: true });
-        if (!context) {
-          resolve(null);
-          return;
-        }
-
-        context.clearRect(0, 0, 1, 1);
-        context.drawImage(image, 0, 0, 1, 1);
-        const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
-        if (alpha <= 0) {
-          resolve(null);
-          return;
-        }
-        if (alpha >= 255) {
-          resolve(`rgb(${red}, ${green}, ${blue})`);
-          return;
-        }
-        resolve(`rgba(${red}, ${green}, ${blue}, ${Math.round((alpha / 255) * 1000) / 1000})`);
-      };
-      image.onerror = () => resolve(null);
-      image.src = iconUrl;
-    }));
-  }
-
-  return globalIconUnitColorCache.get(iconUrl)!;
-}
 
 function getCachedIconImage(
   blockId: string,
@@ -144,6 +112,7 @@ interface VisibleLayerBlock {
 interface VisibleLayerIndex {
   byPosition: Map<number, VisibleLayerBlock>;
   rows: Map<number, VisibleLayerBlock[]>;
+  tiles: Map<string, VisibleLayerBlock[]>;
 }
 
 interface VisibleBlockWindow {
@@ -151,6 +120,15 @@ interface VisibleBlockWindow {
   maxX: number;
   minZ: number;
   maxZ: number;
+}
+
+interface LowZoomTileCache {
+  meta: LayerSliceMeta | null;
+  scale: number;
+  devicePixelRatio: number;
+  colorMap: Map<number, string> | null;
+  tileSource: Map<string, VisibleLayerBlock[]> | null;
+  tiles: Map<string, HTMLCanvasElement>;
 }
 
 function findFirstBlockAtOrAfterX(blocks: VisibleLayerBlock[], minX: number): number {
@@ -162,6 +140,57 @@ function findFirstBlockAtOrAfterX(blocks: VisibleLayerBlock[], minX: number): nu
     else high = mid;
   }
   return low;
+}
+
+function normalizeFlakeBlockId(blockId: string): string {
+  const normalized = String(blockId || "").trim().toLowerCase();
+  if (!normalized) return "";
+  return normalized.includes(":") ? normalized : `minecraft:${normalized}`;
+}
+
+function lowZoomTileKey(tileX: number, tileZ: number): string {
+  return `${tileX}:${tileZ}`;
+}
+
+function buildLowZoomTile(
+  tileBlocks: VisibleLayerBlock[],
+  tileX: number,
+  tileZ: number,
+  meta: LayerSliceMeta,
+  scale: number,
+  devicePixelRatio: number,
+  colorMap: Map<number, string>,
+): { canvas: HTMLCanvasElement; width: number; height: number } {
+  const originX = tileX * LOW_ZOOM_TILE_SIZE;
+  const originZ = tileZ * LOW_ZOOM_TILE_SIZE;
+  const width = Math.max(1, Math.ceil(Math.min(LOW_ZOOM_TILE_SIZE, meta.size_x - originX) * scale));
+  const height = Math.max(1, Math.ceil(Math.min(LOW_ZOOM_TILE_SIZE, meta.size_z - originZ) * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(width * devicePixelRatio));
+  canvas.height = Math.max(1, Math.ceil(height * devicePixelRatio));
+
+  const context = canvas.getContext("2d");
+  if (!context) return { canvas, width, height };
+
+  context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  context.imageSmoothingEnabled = false;
+  for (const visibleBlock of tileBlocks) {
+    const color = colorMap.get(visibleBlock.block.palette_id) || "#f0f";
+    if (color === "transparent") continue;
+
+    const localX = visibleBlock.block.x - originX;
+    const localZ = visibleBlock.block.z - originZ;
+    const left = Math.floor(localX * scale);
+    const top = Math.floor(localZ * scale);
+    const right = Math.max(left + 1, Math.ceil((localX + 1) * scale));
+    const bottom = Math.max(top + 1, Math.ceil((localZ + 1) * scale));
+    context.globalAlpha = visibleBlock.opacity;
+    context.fillStyle = color;
+    context.fillRect(left, top, right - left, bottom - top);
+  }
+  context.globalAlpha = 1;
+
+  return { canvas, width, height };
 }
 
 const LayerCanvas = forwardRef<
@@ -177,15 +206,24 @@ const LayerCanvas = forwardRef<
 >(({ meta, renderSlices, showStateHints, onHoverBlock, onBlockRightClick, onScaleChange }, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
+  const lowZoomCanvasRef = useRef<HTMLCanvasElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [iconImages, setIconImages] = useState<Map<number, string>>(new Map());
-  const [iconUnitColors, setIconUnitColors] = useState<Map<number, string>>(new Map());
+  const [mapColorByBlockId, setMapColorByBlockId] = useState<Map<string, string>>(new Map());
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const dragFrameRef = useRef<number | null>(null);
   const pendingOffsetRef = useRef(offset);
+  const lowZoomTileCacheRef = useRef<LowZoomTileCache>({
+    meta: null,
+    scale: 0,
+    devicePixelRatio: 0,
+    colorMap: null,
+    tileSource: null,
+    tiles: new Map(),
+  });
 
   // 用 ref 镜像最新的 scale / offset，供事件处理和命令式缩放共用，避免闭包读到旧值。
   const scaleRef = useRef(scale);
@@ -260,43 +298,49 @@ const LayerCanvas = forwardRef<
     setScale(nextScale);
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    loadEnumeratorCollections()
+      .then((collections) => {
+        if (!cancelled) setMapColorByBlockId(buildMapColorLookup(collections));
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn("Failed to load map base colors:", error);
+        setMapColorByBlockId(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const colorMap = useMemo(() => {
     const next = new Map<number, string>();
     if (!meta) return next;
     meta.palette.forEach((entry, index) => {
-      let color = getBlockColor(entry.block_id);
-      if (entry.block_id.includes("stone")) color = "#888";
-      else if (entry.block_id.includes("dirt")) color = "#754";
-      else if (entry.block_id.includes("grass")) color = "#583";
-      else if (entry.block_id.includes("quartz")) color = "#eee";
-      else if (entry.block_id.includes("glass")) color = "rgba(200,200,255,0.5)";
-      else if (entry.block_id.includes("air")) color = "transparent";
+      const normalizedBlockId = normalizeFlakeBlockId(entry.block_id);
+      const mapColor = mapColorByBlockId.get(normalizedBlockId);
+      let color = mapColor || getBlockColor(entry.block_id);
+      if (!mapColor) {
+        if (normalizedBlockId.includes("stone")) color = "#888";
+        else if (normalizedBlockId.includes("dirt")) color = "#754";
+        else if (normalizedBlockId.includes("grass")) color = "#583";
+        else if (normalizedBlockId.includes("quartz")) color = "#eee";
+        else if (normalizedBlockId.includes("glass")) color = "rgba(200,200,255,0.5)";
+      }
+      if (normalizedBlockId.includes("air")) color = "transparent";
       next.set(index, color);
     });
     return next;
-  }, [meta]);
-
-  const slicePaletteIds = useMemo(() => {
-    if (!meta || renderSlices.length === 0) return [] as number[];
-    const seen = new Set<number>();
-    const paletteIds: number[] = [];
-    for (const renderSlice of renderSlices) {
-      for (const block of renderSlice.sliceData.blocks) {
-        const paletteId = block.palette_id;
-        if (seen.has(paletteId)) continue;
-        seen.add(paletteId);
-        const entry = meta.palette[paletteId];
-        if (!entry?.block_id || entry.block_id.includes("air")) continue;
-        paletteIds.push(paletteId);
-      }
-    }
-    return paletteIds;
-  }, [meta, renderSlices]);
+  }, [mapColorByBlockId, meta]);
 
   const visibleLayerIndex = useMemo<VisibleLayerIndex>(() => {
     const byPosition = new Map<number, VisibleLayerBlock>();
     const rowMaps = new Map<number, Map<number, VisibleLayerBlock>>();
-    if (!meta || renderSlices.length === 0) return { byPosition, rows: new Map() };
+    const tileMaps = new Map<string, VisibleLayerBlock[]>();
+    if (!meta || renderSlices.length === 0) {
+      return { byPosition, rows: new Map(), tiles: tileMaps };
+    }
 
     for (const renderSlice of renderSlices) {
       for (const block of renderSlice.sliceData.blocks) {
@@ -308,6 +352,17 @@ const LayerCanvas = forwardRef<
           opacity: renderSlice.opacity,
         };
         byPosition.set(positionKey, visibleBlock);
+
+        const tileKey = lowZoomTileKey(
+          Math.floor(block.x / LOW_ZOOM_TILE_SIZE),
+          Math.floor(block.z / LOW_ZOOM_TILE_SIZE),
+        );
+        const tile = tileMaps.get(tileKey);
+        if (tile) {
+          tile.push(visibleBlock);
+        } else {
+          tileMaps.set(tileKey, [visibleBlock]);
+        }
 
         let row = rowMaps.get(block.z);
         if (!row) {
@@ -322,7 +377,7 @@ const LayerCanvas = forwardRef<
     for (const [z, row] of rowMaps.entries()) {
       rows.set(z, Array.from(row.values()).sort((a, b) => a.block.x - b.block.x));
     }
-    return { byPosition, rows };
+    return { byPosition, rows, tiles: tileMaps };
   }, [meta, renderSlices]);
 
   const visibleBlockWindow = useMemo<VisibleBlockWindow | null>(() => {
@@ -330,7 +385,8 @@ const LayerCanvas = forwardRef<
     const width = viewportSize.width || 600;
     const height = viewportSize.height || 600;
     const safeScale = Math.max(MIN_SCALE, scale);
-    const overscanBlocks = Math.max(2, Math.ceil(RENDER_OVERSCAN_PIXELS / safeScale));
+    const overscanPixels = scale < ICON_NATIVE_SIZE ? LOW_ZOOM_OVERSCAN_PIXELS : RENDER_OVERSCAN_PIXELS;
+    const overscanBlocks = Math.max(2, Math.ceil(overscanPixels / safeScale));
     const minX = Math.max(0, Math.floor((-offset.x) / safeScale) - overscanBlocks);
     const maxX = Math.min(meta.size_x - 1, Math.ceil((width - offset.x) / safeScale) + overscanBlocks);
     const minZ = Math.max(0, Math.floor((-offset.y) / safeScale) - overscanBlocks);
@@ -339,8 +395,145 @@ const LayerCanvas = forwardRef<
     return { minX, maxX, minZ, maxZ };
   }, [meta, offset.x, offset.y, scale, viewportSize.height, viewportSize.width]);
 
+  const slicePaletteIds = useMemo(() => {
+    if (
+      !meta
+      || scale < ICON_NATIVE_SIZE
+      || visibleLayerIndex.rows.size === 0
+      || !visibleBlockWindow
+    ) {
+      return [] as number[];
+    }
+
+    const seen = new Set<number>();
+    const paletteIds: number[] = [];
+    for (let z = visibleBlockWindow.minZ; z <= visibleBlockWindow.maxZ; z += 1) {
+      const row = visibleLayerIndex.rows.get(z);
+      if (!row) continue;
+
+      for (let index = findFirstBlockAtOrAfterX(row, visibleBlockWindow.minX); index < row.length; index += 1) {
+        const visibleBlock = row[index];
+        if (visibleBlock.block.x > visibleBlockWindow.maxX) break;
+
+        const paletteId = visibleBlock.block.palette_id;
+        if (seen.has(paletteId)) continue;
+        seen.add(paletteId);
+        const entry = meta.palette[paletteId];
+        if (!entry?.block_id || normalizeFlakeBlockId(entry.block_id).includes("air")) continue;
+        paletteIds.push(paletteId);
+      }
+    }
+    return paletteIds;
+  }, [meta, scale, visibleBlockWindow, visibleLayerIndex]);
+
+  useLayoutEffect(() => {
+    const tileCache = lowZoomTileCacheRef.current;
+    if (scale >= ICON_NATIVE_SIZE || !meta || !visibleBlockWindow) {
+      tileCache.tiles.clear();
+      tileCache.meta = null;
+      tileCache.scale = 0;
+      tileCache.devicePixelRatio = 0;
+      tileCache.colorMap = null;
+      tileCache.tileSource = null;
+      return;
+    }
+
+    const canvas = lowZoomCanvasRef.current;
+    const viewport = viewportRef.current;
+    if (!canvas || !viewport) return;
+
+    const width = Math.max(1, viewportSize.width || viewport.clientWidth || 600);
+    const height = Math.max(1, viewportSize.height || viewport.clientHeight || 600);
+    const devicePixelRatio = Math.max(1, window.devicePixelRatio || 1);
+    if (
+      tileCache.meta !== meta
+      || tileCache.scale !== scale
+      || tileCache.devicePixelRatio !== devicePixelRatio
+      || tileCache.colorMap !== colorMap
+      || tileCache.tileSource !== visibleLayerIndex.tiles
+    ) {
+      tileCache.tiles.clear();
+      tileCache.meta = meta;
+      tileCache.scale = scale;
+      tileCache.devicePixelRatio = devicePixelRatio;
+      tileCache.colorMap = colorMap;
+      tileCache.tileSource = visibleLayerIndex.tiles;
+    }
+
+    const canvasWidth = Math.max(1, Math.round(width * devicePixelRatio));
+    const canvasHeight = Math.max(1, Math.round(height * devicePixelRatio));
+    if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
+    }
+
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    context.imageSmoothingEnabled = false;
+    context.clearRect(0, 0, width, height);
+
+    const minTileX = Math.floor(visibleBlockWindow.minX / LOW_ZOOM_TILE_SIZE);
+    const maxTileX = Math.floor(visibleBlockWindow.maxX / LOW_ZOOM_TILE_SIZE);
+    const minTileZ = Math.floor(visibleBlockWindow.minZ / LOW_ZOOM_TILE_SIZE);
+    const maxTileZ = Math.floor(visibleBlockWindow.maxZ / LOW_ZOOM_TILE_SIZE);
+    for (let tileZ = minTileZ; tileZ <= maxTileZ; tileZ += 1) {
+      for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
+        const tileKey = lowZoomTileKey(tileX, tileZ);
+        const tileBlocks = visibleLayerIndex.tiles.get(tileKey);
+        if (!tileBlocks) continue;
+
+        let tile = tileCache.tiles.get(tileKey);
+        if (!tile) {
+          const built = buildLowZoomTile(
+            tileBlocks,
+            tileX,
+            tileZ,
+            meta,
+            scale,
+            devicePixelRatio,
+            colorMap,
+          );
+          tile = built.canvas;
+          tileCache.tiles.set(tileKey, tile);
+          if (tileCache.tiles.size > MAX_LOW_ZOOM_TILE_CACHE_SIZE) {
+            const oldestKey = tileCache.tiles.keys().next().value;
+            if (oldestKey) tileCache.tiles.delete(oldestKey);
+          }
+        }
+
+        const originX = tileX * LOW_ZOOM_TILE_SIZE;
+        const originZ = tileZ * LOW_ZOOM_TILE_SIZE;
+        const tileWidth = Math.max(1, Math.ceil(Math.min(LOW_ZOOM_TILE_SIZE, meta.size_x - originX) * scale));
+        const tileHeight = Math.max(1, Math.ceil(Math.min(LOW_ZOOM_TILE_SIZE, meta.size_z - originZ) * scale));
+        context.drawImage(
+          tile,
+          Math.round(originX * scale + offset.x),
+          Math.round(originZ * scale + offset.y),
+          tileWidth,
+          tileHeight,
+        );
+      }
+    }
+  }, [
+    colorMap,
+    meta,
+    offset.x,
+    offset.y,
+    scale,
+    visibleBlockWindow,
+    visibleLayerIndex.tiles,
+    viewportSize.height,
+    viewportSize.width,
+  ]);
+
   const visibleBlocks = useMemo(() => {
-    if (!meta || visibleLayerIndex.byPosition.size === 0 || !visibleBlockWindow) return [] as Array<{
+    if (
+      !meta
+      || scale < ICON_NATIVE_SIZE
+      || visibleLayerIndex.byPosition.size === 0
+      || !visibleBlockWindow
+    ) return [] as Array<{
       key: string;
       iconUrl: string;
       shouldRenderIcon: boolean;
@@ -377,10 +570,7 @@ const LayerCanvas = forwardRef<
         const visibleBlock = row[index];
         if (visibleBlock.block.x > visibleBlockWindow.maxX) break;
 
-        const fallbackColor = colorMap.get(visibleBlock.block.palette_id) || "#f0f";
-        const color = shouldRenderIcons
-          ? fallbackColor
-          : (iconUnitColors.get(visibleBlock.block.palette_id) || fallbackColor);
+        const color = colorMap.get(visibleBlock.block.palette_id) || "#f0f";
         if (color === "transparent") continue;
         const iconUrl = iconImages.get(visibleBlock.block.palette_id) || "";
         const shouldRenderIcon = shouldRenderIcons && !!iconUrl;
@@ -401,7 +591,7 @@ const LayerCanvas = forwardRef<
     }
 
     return blocks;
-  }, [colorMap, iconImages, iconUnitColors, meta, scale, visibleBlockWindow, visibleLayerIndex]);
+  }, [colorMap, iconImages, meta, scale, visibleBlockWindow, visibleLayerIndex]);
 
   const borderStyle: CssVariableStyle<"--flake-layer-border-width" | "--flake-layer-border-height"> = useMemo(() => ({
     "--flake-layer-border-width": `${Math.max(1, Math.round(meta ? meta.size_x * scale : 0))}px`,
@@ -430,9 +620,8 @@ const LayerCanvas = forwardRef<
   useEffect(() => {
     let cancelled = false;
     
-    if (!meta || slicePaletteIds.length === 0) {
+    if (!meta || scale < ICON_NATIVE_SIZE || slicePaletteIds.length === 0) {
       setIconImages(new Map());
-      setIconUnitColors(new Map());
       return () => {
         cancelled = true;
       };
@@ -452,8 +641,7 @@ const LayerCanvas = forwardRef<
             meta.property_pool || [],
             showStateHints
           );
-          const unitColor = dataUrl ? await resolveIconUnitColor(dataUrl) : null;
-          return { paletteId, dataUrl, unitColor };
+          return { paletteId, dataUrl };
         } catch (error) {
           console.error(`Failed to resolve icon for palette ${paletteId}:`, error);
           return null;
@@ -467,24 +655,19 @@ const LayerCanvas = forwardRef<
 
       // 批量更新状态
       const nextImages = new Map<number, string>();
-      const nextUnitColors = new Map<number, string>();
       for (const result of results) {
         if (result && result.dataUrl) {
           nextImages.set(result.paletteId, result.dataUrl);
         }
-        if (result && result.unitColor) {
-          nextUnitColors.set(result.paletteId, result.unitColor);
-        }
       }
       
       setIconImages(nextImages);
-      setIconUnitColors(nextUnitColors);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [meta, slicePaletteIds, showStateHints]);
+  }, [meta, scale, slicePaletteIds, showStateHints]);
 
   // 滚轮事件
   const handleWheel = (event: React.WheelEvent) => {
@@ -594,6 +777,13 @@ const LayerCanvas = forwardRef<
       }}
       onContextMenu={handleContextMenu}
     >
+      {scale < ICON_NATIVE_SIZE ? (
+        <canvas
+          ref={lowZoomCanvasRef}
+          className="flake-layer-low-zoom-canvas"
+          aria-hidden="true"
+        />
+      ) : null}
       <div
         ref={worldRef}
         className="flake-layer-world"
@@ -602,15 +792,17 @@ const LayerCanvas = forwardRef<
           className="flake-layer-border"
           style={borderStyle}
         />
-        {visibleBlocks.map((block) => (
-          <div
-            key={block.key}
-            className="flake-layer-block"
-            style={block.style}
-          >
-            {block.shouldRenderIcon ? <img className="flake-layer-block-icon" src={block.iconUrl} alt="" draggable={false} /> : null}
-          </div>
-        ))}
+        {scale >= ICON_NATIVE_SIZE
+          ? visibleBlocks.map((block) => (
+            <div
+              key={block.key}
+              className="flake-layer-block"
+              style={block.style}
+            >
+              {block.shouldRenderIcon ? <img className="flake-layer-block-icon" src={block.iconUrl} alt="" draggable={false} /> : null}
+            </div>
+          ))
+          : null}
       </div>
     </div>
   );
