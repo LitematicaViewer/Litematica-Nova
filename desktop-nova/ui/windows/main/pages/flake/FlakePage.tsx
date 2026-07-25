@@ -37,7 +37,7 @@ import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/
 import { fitView, FlakeBlockTooltip, resolveLayerBlockStates } from "./function";
 import { CreativeInventoryDialog } from "./creativeInventoryDialog";
 import { ContainerDialog } from "./containerDialog";
-import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem } from "../../../../../src/business/facade";
+import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem, type ContainerType } from "../../../../../src/business/facade";
 
 // 缩放范围：scale 表示每个方块占用的像素数（像素/格）。
 const MIN_SCALE = 1;
@@ -826,7 +826,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
   const [showMaterials, setShowMaterials] = useState(false);
   const [showContainerDialog, setShowContainerDialog] = useState(false);
-  const [containerData, setContainerData] = useState<{ type: "chest" | "shulker_box" | "barrel"; items: ContainerItem[]; position: { x: number; y: number; z: number } } | null>(null);
+  const [containerData, setContainerData] = useState<{ type: ContainerType; items: ContainerItem[]; position: { x: number; y: number; z: number } } | null>(null);
   const [isLoadingContainer, setIsLoadingContainer] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
@@ -1184,9 +1184,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
       
       console.log("容器类型:", containerType);
       
-      // 只支持箱子、潜影盒和木桶
+      // 只支持已定义 UI 布局的容器类型
       if (!containerType) {
-        console.log("不支持的容器类型，当前仅支持：箱子、潜影盒、木桶");
+        console.log("不支持的容器类型，当前仅支持：箱子、潜影盒、木桶、漏斗");
         return;
       }
       

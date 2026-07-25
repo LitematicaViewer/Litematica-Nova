@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { translateBlockId } from "../../../../../src/services/i18n";
+import type { ContainerType } from "../../../../../src/services/containerService";
 
 interface ContainerItem {
   id: string;
@@ -10,27 +11,32 @@ interface ContainerItem {
 
 interface ContainerDialogProps {
   onClose: () => void;
-  containerType: "chest" | "shulker_box" | "barrel";
+  containerType: ContainerType;
   items: ContainerItem[];
   position: { x: number; y: number; z: number };
 }
+
+const CONTAINER_LAYOUTS: Record<ContainerType, { title: string; slotCount: number }> = {
+  chest: { title: "箱子", slotCount: 27 },
+  shulker_box: { title: "潜影盒", slotCount: 27 },
+  barrel: { title: "木桶", slotCount: 27 },
+  hopper: { title: "漏斗", slotCount: 5 },
+};
 
 /**
  * Renders a container inventory dialog for flake block inspection.
  */
 export function ContainerDialog({ onClose, containerType, items, position }: ContainerDialogProps) {
-  // 27个物品槽，3行9列
+  const layout = CONTAINER_LAYOUTS[containerType];
   const slots = useMemo(() => {
-    const result: Array<ContainerItem | null> = Array(27).fill(null);
+    const result: Array<ContainerItem | null> = Array(layout.slotCount).fill(null);
     items.forEach((item) => {
-      if (item.slot >= 0 && item.slot < 27) {
+      if (item.slot >= 0 && item.slot < layout.slotCount) {
         result[item.slot] = item;
       }
     });
     return result;
-  }, [items]);
-
-  const containerTitle = containerType === "chest" ? "箱子" : containerType === "barrel" ? "木桶" : "潜影盒";
+  }, [items, layout.slotCount]);
 
   return (
     <div className="dialog-overlay" onClick={onClose}>
@@ -40,7 +46,7 @@ export function ContainerDialog({ onClose, containerType, items, position }: Con
       >
         <div className="subwindow-title-row">
           <div>
-            <h3 className="subwindow-title">{containerTitle}</h3>
+            <h3 className="subwindow-title">{layout.title}</h3>
             <p className="subwindow-subtitle nova-muted">
               位置: ({position.x}, {position.y}, {position.z})
             </p>
@@ -55,8 +61,8 @@ export function ContainerDialog({ onClose, containerType, items, position }: Con
           </button>
         </div>
 
-        <div className="flake-page__container-body">
-          <div className="flake-page__container-grid">
+        <div className={`flake-page__container-body flake-page__container-body--${containerType}`}>
+          <div className={`flake-page__container-grid flake-page__container-grid--${containerType}`}>
             {slots.map((item, index) => {
               return (
                 <div

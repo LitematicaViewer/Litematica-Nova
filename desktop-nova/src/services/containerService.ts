@@ -12,6 +12,8 @@ export interface ContainerData {
   items: ContainerItem[];
 }
 
+export type ContainerType = "chest" | "shulker_box" | "barrel" | "hopper";
+
 /**
  * 从 litematic 文件中获取指定位置的容器内容
  * @param filePath litematic 文件路径
@@ -148,7 +150,7 @@ export function isContainerBlock(blockId: string): boolean {
  * 获取容器类型（用于UI显示）
  * 返回 null 表示不支持的容器类型
  */
-export function getContainerType(blockId: string): "chest" | "shulker_box" | "barrel" | null {
+export function getContainerType(blockId: string): ContainerType | null {
   const id = blockId.toLowerCase();
   
   if (id.includes("chest") && !id.includes("ender_chest")) {
@@ -161,6 +163,10 @@ export function getContainerType(blockId: string): "chest" | "shulker_box" | "ba
   
   if (id.includes("barrel")) {
     return "barrel";
+  }
+
+  if (id.includes("hopper")) {
+    return "hopper";
   }
   
   return null;
