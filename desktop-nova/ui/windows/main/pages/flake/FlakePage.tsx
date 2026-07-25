@@ -1221,9 +1221,21 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
   if (!currentFile) {
     return (
-      <div className="nova-empty-state flake-page__empty-state">
-        <h2 className="flake-page__empty-title">Layers</h2>
-        <p>Select a .litematic file first.</p>
+      <div className="nova-page flake-page">
+        <div className="subwindow-toolbar flake-page__topbar">
+          <button className="btn flake-page__materials-button" onClick={() => {}}>
+            材料列表
+          </button>
+          <button className="btn flake-page__build-button" disabled>
+            生成3DCache
+          </button>
+          <label className="subwindow-check-row flake-page__edit-toggle">
+            <input type="checkbox" disabled />
+            编辑模式
+          </label>
+          <div className="subwindow-toolbar-spacer" />
+        </div>
+        <div className="properties-empty-state">请先选择一个 .litematic 文件</div>
       </div>
     );
   }
