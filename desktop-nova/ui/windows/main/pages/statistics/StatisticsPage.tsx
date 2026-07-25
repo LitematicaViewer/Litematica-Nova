@@ -669,14 +669,6 @@ export function StatisticsPage({ currentFile, theme }: any) {
     };
   }, [runtimeCollection]);
 
-  if (!currentFile) {
-    return (
-      <div className="statistics-empty-state">
-        <h2>统计</h2>
-        <p>请先在投影库中选择一个 .litematic 文件。</p>
-      </div>
-    );
-  }
 
   const topMaterials = data ? [...data.materials].sort((a, b) => b.totalCount - a.totalCount) : [];
   const featuredMaterials = topMaterials.slice(0, 5);
@@ -695,9 +687,9 @@ export function StatisticsPage({ currentFile, theme }: any) {
     <div className="statistics-page">
       <div className="statistics-toolbar">
         <div className="statistics-action-row">
-          <button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!data}>材料列表</button>
-          <button className="btn" onClick={loadStats}>重新统计</button>
-          <button className="btn" type="button" onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true))} disabled={!data}>打开枚举器...</button>
+          <button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))}>材料列表</button>
+          <button className="btn" onClick={loadStats} disabled={!currentFile}>重新统计</button>
+          <button className="btn" type="button" onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true))}>打开枚举器...</button>
         </div>
 
         <div className="statistics-toggle-row">
@@ -730,7 +722,9 @@ export function StatisticsPage({ currentFile, theme }: any) {
       <div className="statistics-layout">
         <div className="group-box statistics-panel-scroll">
           <div className="group-box-title">统计学信息</div>
-          {data ? (
+          {!currentFile ? (
+            <div className="statistics-loading">请先选择一个 .litematic 文件</div>
+          ) : data ? (
             <div className="statistics-metrics">
               <ReadOnlyRow label="网格数" value={data.enclosingSize.x * data.enclosingSize.y * data.enclosingSize.z} />
               <ReadOnlyRow label="方块数" value={data.totalNonAirBlocks} />
@@ -751,7 +745,9 @@ export function StatisticsPage({ currentFile, theme }: any) {
           <div className="group-box statistics-materials-panel">
             <div className="group-box-title">主要材料</div>
             <div className="statistics-materials-body">
-              {data ? (
+              {!currentFile ? (
+                <div className="statistics-loading">请先选择一个 .litematic 文件</div>
+              ) : data ? (
                 featuredMaterials.map((material) => {
                   const ratio = totalMaterialCount > 0 ? (material.totalCount / totalMaterialCount) * 100 : 0;
                   return (
@@ -834,7 +830,7 @@ export function StatisticsPage({ currentFile, theme }: any) {
       {showMaterials && data && (
         <MaterialsDialog data={data} onClose={() => setShowMaterials(false)} currentFile={currentFile} />
       )}
-      {showEnumerator && runtimeCollection && (
+      {showEnumerator && (
         <EnumeratorDialog
           currentFile={currentFile}
           runtimeCollection={runtimeCollection}

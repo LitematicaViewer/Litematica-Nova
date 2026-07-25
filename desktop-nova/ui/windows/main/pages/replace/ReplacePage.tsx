@@ -447,15 +447,6 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
     }
   }, [currentFile, outputPath, items]);
 
-  if (!currentFile) {
-    return (
-      <div className="replace-no-file">
-        <h2>方块替换</h2>
-        <p>请先在投影库中选择并打开一个 .litematic 文件</p>
-      </div>
-    );
-  }
-
   return (
     <div className="replace-page">
       {/* Toolbar line 1: presets */}
@@ -530,13 +521,13 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
       <div className="replace-footer">
         <div className="replace-footer-buttons">
           <div className="replace-unit-spacer" />
-          <button className="btn btn-action" onClick={handleScan} disabled={unitItems.length === 0}>
+          <button className="btn btn-action" onClick={handleScan} disabled={!currentFile || unitItems.length === 0}>
             扫描并评估
           </button>
           <button
             className={`btn btn-action${scanResult ? ' btn-primary' : ''}`}
             onClick={handleApply}
-            disabled={!scanResult}
+            disabled={!currentFile || !scanResult}
           >
             替换方块
           </button>
