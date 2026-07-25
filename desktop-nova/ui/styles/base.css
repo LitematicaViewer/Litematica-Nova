@@ -922,11 +922,11 @@ textarea.input,
     min-width: 240px;
     min-height: 0;
     max-width: 460px;
-    margin-top: 0;
+    margin-top: 10px;
     padding: 16px 12px 12px;
     flex: 0 0 var(--flake-tool-panel-width);
     flex-direction: column;
-    overflow: auto;
+    overflow: visible;
 }
 
 .flake-page__tool-panel-body {
@@ -935,6 +935,7 @@ textarea.input,
     flex: 1;
     flex-direction: column;
     gap: 12px;
+    overflow: auto;
 }
 
 .flake-page__tool-panel-section {
@@ -2974,9 +2975,16 @@ pre {
     position: relative;
     width: 352px;
     height: 332px;
-    background: var(--flake-chest-image, url("../shell/resource/content/chest27.png")) no-repeat center center;
+    background-image: var(--flake-chest-image, url("../shell/resource/content/chest27.png"));
+    background-repeat: no-repeat;
+    background-position: center center;
     image-rendering: pixelated;
     margin: 16px auto;
+}
+
+.flake-page__container-body--hopper {
+    height: 266px;
+    background-image: var(--flake-hopper-image, url("../shell/resource/content/hopper.png"));
 }
 
 .flake-page__container-grid {
@@ -2989,9 +2997,17 @@ pre {
     gap: 4px;
 }
 
+.flake-page__container-grid--hopper {
+    left: 88px;
+    top: 40px;
+    grid-template-columns: repeat(5, 32px);
+    grid-template-rows: repeat(1, 32px);
+}
+
 .flake-page__container-slot {
     width: 32px;
     height: 32px;
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;

@@ -20,4 +20,5 @@
     --flake-open-inventory-normal-image: url("./resource/button/openInventory_normal.png");
     --flake-open-inventory-hover-image: url("./resource/button/openInventory_hover.png");
     --flake-chest-image: url("./resource/content/chest27.png");
+    --flake-hopper-image: url("./resource/content/hopper.png");
 }
