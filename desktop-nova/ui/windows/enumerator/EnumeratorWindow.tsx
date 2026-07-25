@@ -29,7 +29,7 @@ import {
 
 const enumeratorOpenFileEvent = "enumerator-open-file";
 
-type CategoryFilter = "all" | "base" | "version" | "system_enum" | "creative" | "custom";
+type CategoryFilter = "all" | "base" | "version" | "system_enum" | "creative" | "map" | "custom";
 type CopyToast = {
   id: number;
   value: string;
@@ -53,6 +53,8 @@ function categoryLabel(category: EnumeratorCollectionCategory): string {
       return "版本";
     case "creative":
       return "创造模式";
+    case "map":
+      return "地图基色";
     case "system_enum":
       return "系统枚举";
     case "custom":
@@ -468,6 +470,7 @@ function EnumeratorContent({
               <option value="base">全集</option>
               <option value="version">版本</option>
               <option value="creative">创造模式</option>
+              <option value="map">地图基色</option>
               <option value="system_enum">系统枚举</option>
               <option value="custom">自定义</option>
             </select>
