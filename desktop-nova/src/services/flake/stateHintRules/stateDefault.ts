@@ -52,6 +52,13 @@ export const SLOT_2_OCCUPIED_TRUE_RELPATH = "data/flake/state_hint/slot_2_occupi
 export const SLOT_3_OCCUPIED_TRUE_RELPATH = "data/flake/state_hint/slot_3_occupied_true.png";
 export const SLOT_4_OCCUPIED_TRUE_RELPATH = "data/flake/state_hint/slot_4_occupied_true.png";
 export const SLOT_5_OCCUPIED_TRUE_RELPATH = "data/flake/state_hint/slot_5_occupied_true.png";
+// 拉杆
+export const LEVER_GORUND_RELPATH = "data/flake/redstone_display/lever_ground.png"
+const LEVER_GORUND_ON_RELPATH = "data/flake/redstone_display/lever_ground_on.png"
+const LEVER_WALL_RELPATH = "data/flake/redstone_display/lever_wall.png"
+const LEVER_WALL_ON_RELPATH = "data/flake/redstone_display/lever_wall_on.png"
+const LEVER_CEILING_RELPATH = "data/flake/redstone_display/lever_ceiling.png"
+const LEVER_CEILING_ON_RELPATH = "data/flake/redstone_display/lever_ceiling_on.png"
 // 发射器
 export const DISPENSER_TOP_RELPATH = "data/flake/redstone_display/dispenser_top.png";
 export const DISPENSER_TOP_ON_RELPATH = "data/flake/redstone_display/dispenser_top_on.png";
@@ -564,6 +571,37 @@ export async function resolveManualStateHintRule(blockId: string, states: Record
           }
           : null;
       }
+    // 拉杆
+    case "minecraft:lever":{
+      const facing = states.facing;
+      const face = states.face;
+      const powered = states.powered;
+      let baseImageRelPath = "";
+      let rotateQuarterTurns = 0;
+      switch(face) {
+        case "floor":
+          { baseImageRelPath = powered === "true" ? LEVER_GORUND_ON_RELPATH : LEVER_GORUND_RELPATH; break; }
+        case "wall":
+          { baseImageRelPath = powered === "true" ? LEVER_WALL_ON_RELPATH : LEVER_WALL_RELPATH; break; }
+        case "ceiling":
+          { baseImageRelPath = powered === "true" ? LEVER_CEILING_ON_RELPATH : LEVER_CEILING_RELPATH; break; }
+      }
+      switch(facing) {
+        case "north":
+          { rotateQuarterTurns = 0; break; }
+        case "east":
+          { rotateQuarterTurns = 1; break; }
+        case "south":
+          { rotateQuarterTurns = 2; break; }
+        case "west":
+          { rotateQuarterTurns = 3; break; }
+      }
+      return {
+        mode: "replace",
+        baseImageRelPaths: [baseImageRelPath],
+        baseImageRotateQuarterTurns: rotateQuarterTurns,
+      };
+    }
     // 发射器
     case "minecraft:dispenser": {
       const facing = states.facing;
