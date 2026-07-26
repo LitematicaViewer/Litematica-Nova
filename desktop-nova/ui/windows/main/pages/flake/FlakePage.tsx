@@ -48,11 +48,14 @@ import noteCsvText from "../../../../../note.csv?raw";
 const MIN_SCALE = 1;
 const MAX_SCALE = 64;
 const ICON_NATIVE_SIZE = 16;
-const LOW_ZOOM_TILE_SIZE = 16;
+const LAYER_TILE_SIZE = 16;
 const HOVER_TOOLTIP_MIN_SCALE = 8;
 const RENDER_OVERSCAN_PIXELS = 256;
 const LOW_ZOOM_OVERSCAN_PIXELS = 64;
-const MAX_LOW_ZOOM_TILE_CACHE_SIZE = 2048;
+const MAX_MAP_COLOR_TILE_CACHE_SIZE = 2048;
+const MAX_TEXTURE_TILE_CACHE_SIZE = 192;
+const TEXTURE_LOAD_IDLE_DELAY_MS = 160;
+const TEXTURE_LOAD_CONCURRENCY = 3;
 const NOTE_BLOCK_ID = "minecraft:note_block";
 const NOTE_BLOCK_NOTE_VALUES = Array.from({ length: 25 }, (_unused, index) => String(index));
 const NOTE_BLOCK_KEY_ROWS = [
@@ -271,12 +274,23 @@ interface FlakeMeasurementPoint {
   z: number;
 }
 
-interface LowZoomTileCache {
+type LayerTileRenderMode = "map-color" | "texture";
+
+interface TileIconImageCacheEntry {
+  image: HTMLImageElement;
+  ready: boolean;
+  failed: boolean;
+}
+
+interface LayerTileCache {
+  mode: LayerTileRenderMode | null;
   meta: LayerSliceMeta | null;
   scale: number;
   devicePixelRatio: number;
   colorMap: Map<number, string> | null;
   tileSource: Map<string, VisibleLayerBlock[]> | null;
+  iconImages: Map<number, string> | null;
+  tileImageRevision: number;
   tiles: Map<string, HTMLCanvasElement>;
 }
 
@@ -297,8 +311,42 @@ function normalizeFlakeBlockId(blockId: string): string {
   return normalized.includes(":") ? normalized : `minecraft:${normalized}`;
 }
 
-function lowZoomTileKey(tileX: number, tileZ: number): string {
+function layerTileKey(tileX: number, tileZ: number): string {
   return `${tileX}:${tileZ}`;
+}
+
+function getMaxLayerTileCacheSize(mode: LayerTileRenderMode, scale: number): number {
+  if (mode === "map-color") return MAX_MAP_COLOR_TILE_CACHE_SIZE;
+  if (scale >= 48) return 48;
+  if (scale >= 32) return 96;
+  return MAX_TEXTURE_TILE_CACHE_SIZE;
+}
+
+function resolveReadyTileIconImage(
+  iconUrl: string,
+  imageCache: Map<string, TileIconImageCacheEntry>,
+  onReady: () => void,
+): HTMLImageElement | null {
+  let cacheEntry = imageCache.get(iconUrl);
+  if (!cacheEntry) {
+    const image = new Image();
+    cacheEntry = {
+      image,
+      ready: false,
+      failed: false,
+    };
+    image.onload = () => {
+      cacheEntry!.ready = true;
+      onReady();
+    };
+    image.onerror = () => {
+      cacheEntry!.failed = true;
+      onReady();
+    };
+    image.src = iconUrl;
+    imageCache.set(iconUrl, cacheEntry);
+  }
+  return cacheEntry.ready && !cacheEntry.failed ? cacheEntry.image : null;
 }
 
 function normalizeMeasurementRect(rect: FlakeMeasurementRect): NormalizedMeasurementRect {
@@ -329,7 +377,7 @@ function formatMeasurementDistance(value: number): string {
   return value < 10 ? value.toFixed(2) : value.toFixed(1);
 }
 
-function buildLowZoomTile(
+function buildLayerTile(
   tileBlocks: VisibleLayerBlock[],
   tileX: number,
   tileZ: number,
@@ -337,11 +385,14 @@ function buildLowZoomTile(
   scale: number,
   devicePixelRatio: number,
   colorMap: Map<number, string>,
+  iconImages: Map<number, string> | null,
+  imageCache: Map<string, TileIconImageCacheEntry>,
+  onIconReady: () => void,
 ): { canvas: HTMLCanvasElement; width: number; height: number } {
-  const originX = tileX * LOW_ZOOM_TILE_SIZE;
-  const originZ = tileZ * LOW_ZOOM_TILE_SIZE;
-  const width = Math.max(1, Math.ceil(Math.min(LOW_ZOOM_TILE_SIZE, meta.size_x - originX) * scale));
-  const height = Math.max(1, Math.ceil(Math.min(LOW_ZOOM_TILE_SIZE, meta.size_z - originZ) * scale));
+  const originX = tileX * LAYER_TILE_SIZE;
+  const originZ = tileZ * LAYER_TILE_SIZE;
+  const width = Math.max(1, Math.ceil(Math.min(LAYER_TILE_SIZE, meta.size_x - originX) * scale));
+  const height = Math.max(1, Math.ceil(Math.min(LAYER_TILE_SIZE, meta.size_z - originZ) * scale));
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.ceil(width * devicePixelRatio));
   canvas.height = Math.max(1, Math.ceil(height * devicePixelRatio));
@@ -361,9 +412,15 @@ function buildLowZoomTile(
     const top = Math.floor(localZ * scale);
     const right = Math.max(left + 1, Math.ceil((localX + 1) * scale));
     const bottom = Math.max(top + 1, Math.ceil((localZ + 1) * scale));
+    const iconUrl = iconImages?.get(visibleBlock.block.palette_id);
+    const iconImage = iconUrl ? resolveReadyTileIconImage(iconUrl, imageCache, onIconReady) : null;
     context.globalAlpha = visibleBlock.opacity;
-    context.fillStyle = color;
-    context.fillRect(left, top, right - left, bottom - top);
+    if (iconImage) {
+      context.drawImage(iconImage, left, top, right - left, bottom - top);
+    } else {
+      context.fillStyle = color;
+      context.fillRect(left, top, right - left, bottom - top);
+    }
   }
   context.globalAlpha = 1;
 
@@ -389,7 +446,7 @@ const LayerCanvas = forwardRef<
 >(({ meta, renderSlices, showStateHints, interactionTool, editedBlockStates, measurements, onHoverBlock, onBlockClick, onBlockRightClick, onAddMeasurement, onDeleteMeasurementAt, onScaleChange }, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
-  const lowZoomCanvasRef = useRef<HTMLCanvasElement>(null);
+  const layerTileCanvasRef = useRef<HTMLCanvasElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -397,17 +454,29 @@ const LayerCanvas = forwardRef<
   const [measurementDraft, setMeasurementDraft] = useState<FlakeMeasurementRect | null>(null);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [iconImages, setIconImages] = useState<Map<number, string>>(new Map());
+  const [tileImageRevision, setTileImageRevision] = useState(0);
+  const [isTextureInteractionActive, setIsTextureInteractionActive] = useState(false);
   const [mapColorByBlockId, setMapColorByBlockId] = useState<Map<string, string>>(new Map());
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const dragFrameRef = useRef<number | null>(null);
   const pendingOffsetRef = useRef(offset);
   const measurementDraftRef = useRef<FlakeMeasurementRect | null>(null);
-  const lowZoomTileCacheRef = useRef<LowZoomTileCache>({
+  const lastHoverBlockRef = useRef<FlakeHoverBlock | null>(null);
+  const iconImagesRef = useRef(iconImages);
+  const isTextureInteractionActiveRef = useRef(isTextureInteractionActive);
+  const textureInteractionTimerRef = useRef<number | null>(null);
+  const textureJobVersionRef = useRef(0);
+  const tileIconImageCacheRef = useRef(new Map<string, TileIconImageCacheEntry>());
+  const tileImageFrameRef = useRef<number | null>(null);
+  const layerTileCacheRef = useRef<LayerTileCache>({
+    mode: null,
     meta: null,
     scale: 0,
     devicePixelRatio: 0,
     colorMap: null,
     tileSource: null,
+    iconImages: null,
+    tileImageRevision: 0,
     tiles: new Map(),
   });
 
@@ -426,12 +495,24 @@ const LayerCanvas = forwardRef<
     });
   }, []);
 
+  const scheduleTileImageRevision = useCallback(() => {
+    if (tileImageFrameRef.current !== null) return;
+    tileImageFrameRef.current = window.requestAnimationFrame(() => {
+      tileImageFrameRef.current = null;
+      setTileImageRevision((current) => current + 1);
+    });
+  }, []);
+
   // 通知父组件当前缩放，用于同步滑块和输入框。用 ref 保存回调避免因引用变化触发多余 effect。
   const onScaleChangeRef = useRef(onScaleChange);
   onScaleChangeRef.current = onScaleChange;
   useEffect(() => {
     onScaleChangeRef.current?.(scale);
   }, [scale]);
+
+  useEffect(() => {
+    iconImagesRef.current = iconImages;
+  }, [iconImages]);
 
   const setMeasurementDraftValue = useCallback((nextDraft: FlakeMeasurementRect | null) => {
     measurementDraftRef.current = nextDraft;
@@ -441,6 +522,26 @@ const LayerCanvas = forwardRef<
   const updateMeasurementDraftValue = useCallback((updater: (current: FlakeMeasurementRect | null) => FlakeMeasurementRect | null) => {
     setMeasurementDraftValue(updater(measurementDraftRef.current));
   }, [setMeasurementDraftValue]);
+
+  const markTextureInteraction = useCallback(() => {
+    if (!isTextureInteractionActiveRef.current) {
+      isTextureInteractionActiveRef.current = true;
+      setIsTextureInteractionActive(true);
+    }
+    if (textureInteractionTimerRef.current !== null) {
+      window.clearTimeout(textureInteractionTimerRef.current);
+    }
+    textureInteractionTimerRef.current = window.setTimeout(() => {
+      textureInteractionTimerRef.current = null;
+      isTextureInteractionActiveRef.current = false;
+      setIsTextureInteractionActive(false);
+    }, TEXTURE_LOAD_IDLE_DELAY_MS);
+  }, []);
+
+  const emitHoverBlock = useCallback((block: FlakeHoverBlock | null, event: React.MouseEvent | null) => {
+    lastHoverBlockRef.current = block;
+    onHoverBlock(block, event);
+  }, [onHoverBlock]);
 
   const resolveMeasurementPointAtClient = useCallback((clientX: number, clientY: number, clampToBounds = false): FlakeMeasurementPoint | null => {
     if (!meta || !viewportRef.current) return null;
@@ -501,9 +602,9 @@ const LayerCanvas = forwardRef<
 
   useEffect(() => {
     if (scale < HOVER_TOOLTIP_MIN_SCALE) {
-      onHoverBlock(null, null);
+      emitHoverBlock(null, null);
     }
-  }, [onHoverBlock, scale]);
+  }, [emitHoverBlock, scale]);
 
   useLayoutEffect(() => {
     const world = worldRef.current;
@@ -534,6 +635,13 @@ const LayerCanvas = forwardRef<
     if (dragFrameRef.current !== null) {
       window.cancelAnimationFrame(dragFrameRef.current);
     }
+    if (tileImageFrameRef.current !== null) {
+      window.cancelAnimationFrame(tileImageFrameRef.current);
+    }
+    if (textureInteractionTimerRef.current !== null) {
+      window.clearTimeout(textureInteractionTimerRef.current);
+    }
+    textureJobVersionRef.current += 1;
   }, []);
 
   // 围绕锚点 (anchorX, anchorY，均相对视口左上角) 将缩放设置为 nextScale。
@@ -541,6 +649,7 @@ const LayerCanvas = forwardRef<
     const nextScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, rawScale));
     const currentScale = scaleRef.current;
     if (nextScale === currentScale) return;
+    markTextureInteraction();
     const currentOffset = offsetRef.current;
     const ratio = nextScale / currentScale;
     setOffset({
@@ -605,9 +714,9 @@ const LayerCanvas = forwardRef<
         };
         byPosition.set(positionKey, visibleBlock);
 
-        const tileKey = lowZoomTileKey(
-          Math.floor(block.x / LOW_ZOOM_TILE_SIZE),
-          Math.floor(block.z / LOW_ZOOM_TILE_SIZE),
+        const tileKey = layerTileKey(
+          Math.floor(block.x / LAYER_TILE_SIZE),
+          Math.floor(block.z / LAYER_TILE_SIZE),
         );
         const tile = tileMaps.get(tileKey);
         if (tile) {
@@ -657,8 +766,9 @@ const LayerCanvas = forwardRef<
       return [] as number[];
     }
 
-    const seen = new Set<number>();
-    const paletteIds: number[] = [];
+    const centerX = (visibleBlockWindow.minX + visibleBlockWindow.maxX) / 2;
+    const centerZ = (visibleBlockWindow.minZ + visibleBlockWindow.maxZ) / 2;
+    const palettePriority = new Map<number, number>();
     for (let z = visibleBlockWindow.minZ; z <= visibleBlockWindow.maxZ; z += 1) {
       const row = visibleLayerIndex.rows.get(z);
       if (!row) continue;
@@ -668,48 +778,72 @@ const LayerCanvas = forwardRef<
         if (visibleBlock.block.x > visibleBlockWindow.maxX) break;
 
         const paletteId = visibleBlock.block.palette_id;
-        if (seen.has(paletteId)) continue;
-        seen.add(paletteId);
         const entry = meta.palette[paletteId];
         if (!entry?.block_id || normalizeFlakeBlockId(entry.block_id).includes("air")) continue;
-        paletteIds.push(paletteId);
+        const dx = visibleBlock.block.x - centerX;
+        const dz = visibleBlock.block.z - centerZ;
+        const priority = dx * dx + dz * dz;
+        const currentPriority = palettePriority.get(paletteId);
+        if (currentPriority === undefined || priority < currentPriority) {
+          palettePriority.set(paletteId, priority);
+        }
       }
     }
-    return paletteIds;
+    return Array.from(palettePriority.entries())
+      .sort((left, right) => left[1] - right[1])
+      .map(([paletteId]) => paletteId);
   }, [meta, scale, visibleBlockWindow, visibleLayerIndex]);
 
   useLayoutEffect(() => {
-    const tileCache = lowZoomTileCacheRef.current;
-    if (scale >= ICON_NATIVE_SIZE || !meta || !visibleBlockWindow) {
+    const tileCache = layerTileCacheRef.current;
+    if (!meta || !visibleBlockWindow) {
       tileCache.tiles.clear();
+      tileCache.mode = null;
       tileCache.meta = null;
       tileCache.scale = 0;
       tileCache.devicePixelRatio = 0;
       tileCache.colorMap = null;
       tileCache.tileSource = null;
+      tileCache.iconImages = null;
+      tileCache.tileImageRevision = 0;
+      const canvas = layerTileCanvasRef.current;
+      const context = canvas?.getContext("2d");
+      if (canvas && context) {
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.clearRect(0, 0, canvas.width, canvas.height);
+      }
       return;
     }
 
-    const canvas = lowZoomCanvasRef.current;
+    const canvas = layerTileCanvasRef.current;
     const viewport = viewportRef.current;
     if (!canvas || !viewport) return;
 
     const width = Math.max(1, viewportSize.width || viewport.clientWidth || 600);
     const height = Math.max(1, viewportSize.height || viewport.clientHeight || 600);
     const devicePixelRatio = Math.max(1, window.devicePixelRatio || 1);
+    const renderMode: LayerTileRenderMode = scale < ICON_NATIVE_SIZE ? "map-color" : "texture";
+    const tileIconImages = renderMode === "texture" ? iconImages : null;
+    const activeTileImageRevision = renderMode === "texture" ? tileImageRevision : 0;
     if (
-      tileCache.meta !== meta
+      tileCache.mode !== renderMode
+      || tileCache.meta !== meta
       || tileCache.scale !== scale
       || tileCache.devicePixelRatio !== devicePixelRatio
       || tileCache.colorMap !== colorMap
       || tileCache.tileSource !== visibleLayerIndex.tiles
+      || tileCache.iconImages !== tileIconImages
+      || tileCache.tileImageRevision !== activeTileImageRevision
     ) {
       tileCache.tiles.clear();
+      tileCache.mode = renderMode;
       tileCache.meta = meta;
       tileCache.scale = scale;
       tileCache.devicePixelRatio = devicePixelRatio;
       tileCache.colorMap = colorMap;
       tileCache.tileSource = visibleLayerIndex.tiles;
+      tileCache.iconImages = tileIconImages;
+      tileCache.tileImageRevision = activeTileImageRevision;
     }
 
     const canvasWidth = Math.max(1, Math.round(width * devicePixelRatio));
@@ -725,19 +859,20 @@ const LayerCanvas = forwardRef<
     context.imageSmoothingEnabled = false;
     context.clearRect(0, 0, width, height);
 
-    const minTileX = Math.floor(visibleBlockWindow.minX / LOW_ZOOM_TILE_SIZE);
-    const maxTileX = Math.floor(visibleBlockWindow.maxX / LOW_ZOOM_TILE_SIZE);
-    const minTileZ = Math.floor(visibleBlockWindow.minZ / LOW_ZOOM_TILE_SIZE);
-    const maxTileZ = Math.floor(visibleBlockWindow.maxZ / LOW_ZOOM_TILE_SIZE);
+    const minTileX = Math.floor(visibleBlockWindow.minX / LAYER_TILE_SIZE);
+    const maxTileX = Math.floor(visibleBlockWindow.maxX / LAYER_TILE_SIZE);
+    const minTileZ = Math.floor(visibleBlockWindow.minZ / LAYER_TILE_SIZE);
+    const maxTileZ = Math.floor(visibleBlockWindow.maxZ / LAYER_TILE_SIZE);
+    const maxCacheSize = getMaxLayerTileCacheSize(renderMode, scale);
     for (let tileZ = minTileZ; tileZ <= maxTileZ; tileZ += 1) {
       for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
-        const tileKey = lowZoomTileKey(tileX, tileZ);
+        const tileKey = layerTileKey(tileX, tileZ);
         const tileBlocks = visibleLayerIndex.tiles.get(tileKey);
         if (!tileBlocks) continue;
 
         let tile = tileCache.tiles.get(tileKey);
         if (!tile) {
-          const built = buildLowZoomTile(
+          const built = buildLayerTile(
             tileBlocks,
             tileX,
             tileZ,
@@ -745,19 +880,22 @@ const LayerCanvas = forwardRef<
             scale,
             devicePixelRatio,
             colorMap,
+            tileIconImages,
+            tileIconImageCacheRef.current,
+            scheduleTileImageRevision,
           );
           tile = built.canvas;
           tileCache.tiles.set(tileKey, tile);
-          if (tileCache.tiles.size > MAX_LOW_ZOOM_TILE_CACHE_SIZE) {
+          if (tileCache.tiles.size > maxCacheSize) {
             const oldestKey = tileCache.tiles.keys().next().value;
             if (oldestKey) tileCache.tiles.delete(oldestKey);
           }
         }
 
-        const originX = tileX * LOW_ZOOM_TILE_SIZE;
-        const originZ = tileZ * LOW_ZOOM_TILE_SIZE;
-        const tileWidth = Math.max(1, Math.ceil(Math.min(LOW_ZOOM_TILE_SIZE, meta.size_x - originX) * scale));
-        const tileHeight = Math.max(1, Math.ceil(Math.min(LOW_ZOOM_TILE_SIZE, meta.size_z - originZ) * scale));
+        const originX = tileX * LAYER_TILE_SIZE;
+        const originZ = tileZ * LAYER_TILE_SIZE;
+        const tileWidth = Math.max(1, Math.ceil(Math.min(LAYER_TILE_SIZE, meta.size_x - originX) * scale));
+        const tileHeight = Math.max(1, Math.ceil(Math.min(LAYER_TILE_SIZE, meta.size_z - originZ) * scale));
         context.drawImage(
           tile,
           Math.round(originX * scale + offset.x),
@@ -769,81 +907,18 @@ const LayerCanvas = forwardRef<
     }
   }, [
     colorMap,
+    iconImages,
     meta,
     offset.x,
     offset.y,
     scale,
+    scheduleTileImageRevision,
+    tileImageRevision,
     visibleBlockWindow,
     visibleLayerIndex.tiles,
     viewportSize.height,
     viewportSize.width,
   ]);
-
-  const visibleBlocks = useMemo(() => {
-    if (
-      !meta
-      || scale < ICON_NATIVE_SIZE
-      || visibleLayerIndex.byPosition.size === 0
-      || !visibleBlockWindow
-    ) return [] as Array<{
-      key: string;
-      iconUrl: string;
-      shouldRenderIcon: boolean;
-      style: CssVariableStyle<
-        | "--flake-layer-block-left"
-        | "--flake-layer-block-top"
-        | "--flake-layer-block-width"
-        | "--flake-layer-block-height"
-        | "--flake-layer-block-opacity"
-        | "--flake-layer-block-background"
-      >;
-    }>;
-
-    const shouldRenderIcons = scale >= ICON_NATIVE_SIZE;
-    const blocks: Array<{
-      key: string;
-      iconUrl: string;
-      shouldRenderIcon: boolean;
-      style: CssVariableStyle<
-        | "--flake-layer-block-left"
-        | "--flake-layer-block-top"
-        | "--flake-layer-block-width"
-        | "--flake-layer-block-height"
-        | "--flake-layer-block-opacity"
-        | "--flake-layer-block-background"
-      >;
-    }> = [];
-
-    for (let z = visibleBlockWindow.minZ; z <= visibleBlockWindow.maxZ; z += 1) {
-      const row = visibleLayerIndex.rows.get(z);
-      if (!row) continue;
-
-      for (let index = findFirstBlockAtOrAfterX(row, visibleBlockWindow.minX); index < row.length; index += 1) {
-        const visibleBlock = row[index];
-        if (visibleBlock.block.x > visibleBlockWindow.maxX) break;
-
-        const color = colorMap.get(visibleBlock.block.palette_id) || "#f0f";
-        if (color === "transparent") continue;
-        const iconUrl = iconImages.get(visibleBlock.block.palette_id) || "";
-        const shouldRenderIcon = shouldRenderIcons && !!iconUrl;
-        blocks.push({
-          key: `${visibleBlock.block.x}:${visibleBlock.block.z}:${visibleBlock.y}:${visibleBlock.block.palette_id}`,
-          iconUrl,
-          shouldRenderIcon,
-          style: {
-            "--flake-layer-block-left": `${Math.round(visibleBlock.block.x * scale)}px`,
-            "--flake-layer-block-top": `${Math.round(visibleBlock.block.z * scale)}px`,
-            "--flake-layer-block-width": `${Math.max(1, Math.ceil(scale))}px`,
-            "--flake-layer-block-height": `${Math.max(1, Math.ceil(scale))}px`,
-            "--flake-layer-block-opacity": visibleBlock.opacity,
-            "--flake-layer-block-background": shouldRenderIcon ? "transparent" : color,
-          },
-        });
-      }
-    }
-
-    return blocks;
-  }, [colorMap, iconImages, meta, scale, visibleBlockWindow, visibleLayerIndex]);
 
   const borderStyle: CssVariableStyle<"--flake-layer-border-width" | "--flake-layer-border-height"> = useMemo(() => ({
     "--flake-layer-border-width": `${Math.max(1, Math.round(meta ? meta.size_x * scale : 0))}px`,
@@ -932,56 +1007,78 @@ const LayerCanvas = forwardRef<
   }, [meta]);
 
   useEffect(() => {
+    textureJobVersionRef.current += 1;
+    const emptyImages = new Map<number, string>();
+    iconImagesRef.current = emptyImages;
+    tileIconImageCacheRef.current.clear();
+    setTileImageRevision((current) => current + 1);
+    setIconImages(emptyImages);
+  }, [meta, showStateHints]);
+
+  useEffect(() => {
     let cancelled = false;
-    
-    if (!meta || scale < ICON_NATIVE_SIZE || slicePaletteIds.length === 0) {
-      setIconImages(new Map());
+
+    if (
+      !meta
+      || scale < ICON_NATIVE_SIZE
+      || isDragging
+      || isTextureInteractionActive
+      || slicePaletteIds.length === 0
+    ) {
       return () => {
         cancelled = true;
       };
     }
 
-    void (async () => {
-      // 并行处理所有图标，避免串行阻塞
-      const tasks = slicePaletteIds.map(async (paletteId) => {
+    const pendingPaletteIds = slicePaletteIds.filter((paletteId) => !iconImagesRef.current.has(paletteId));
+    if (!pendingPaletteIds.length) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const jobVersion = ++textureJobVersionRef.current;
+    let cursor = 0;
+    const workerCount = Math.min(TEXTURE_LOAD_CONCURRENCY, pendingPaletteIds.length);
+
+    const runWorker = async () => {
+      while (!cancelled && textureJobVersionRef.current === jobVersion) {
+        const paletteId = pendingPaletteIds[cursor];
+        cursor += 1;
+        if (paletteId === undefined) return;
+        if (iconImagesRef.current.has(paletteId)) continue;
+
         const entry = meta.palette[paletteId];
-        if (!entry?.block_id) return null;
+        if (!entry?.block_id) continue;
         
         try {
-          // 使用缓存，避免重复处理
           const dataUrl = await getCachedIconImage(
             entry.block_id,
             entry,
             meta.property_pool || [],
             showStateHints
           );
-          return { paletteId, dataUrl };
+          if (!dataUrl || cancelled || textureJobVersionRef.current !== jobVersion) continue;
+          setIconImages((current) => {
+            if (cancelled || textureJobVersionRef.current !== jobVersion || current.has(paletteId)) return current;
+            const next = new Map(current);
+            next.set(paletteId, dataUrl);
+            iconImagesRef.current = next;
+            return next;
+          });
+          await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
         } catch (error) {
           console.error(`Failed to resolve icon for palette ${paletteId}:`, error);
-          return null;
-        }
-      });
-
-      // 等待所有任务完成（并行执行）
-      const results = await Promise.all(tasks);
-      
-      if (cancelled) return;
-
-      // 批量更新状态
-      const nextImages = new Map<number, string>();
-      for (const result of results) {
-        if (result && result.dataUrl) {
-          nextImages.set(result.paletteId, result.dataUrl);
         }
       }
-      
-      setIconImages(nextImages);
-    })();
+    };
+
+    void Promise.all(Array.from({ length: workerCount }, () => runWorker()));
 
     return () => {
       cancelled = true;
     };
-  }, [meta, scale, slicePaletteIds, showStateHints]);
+  }, [isDragging, isTextureInteractionActive, meta, scale, slicePaletteIds, showStateHints]);
 
   // 滚轮事件
   const handleWheel = (event: React.WheelEvent) => {
@@ -1027,21 +1124,25 @@ const LayerCanvas = forwardRef<
 
   const handleMouseMove = (event: React.MouseEvent) => {
     if (isMeasuring) {
-      onHoverBlock(null, null);
+      emitHoverBlock(null, null);
       return;
     }
 
     if (isDragging) {
+      markTextureInteraction();
+      if (scale >= HOVER_TOOLTIP_MIN_SCALE && lastHoverBlockRef.current) {
+        emitHoverBlock(lastHoverBlockRef.current, event);
+      }
       scheduleOffset({ x: event.clientX - dragStart.x, y: event.clientY - dragStart.y });
       return;
     }
 
     if (scale < HOVER_TOOLTIP_MIN_SCALE) {
-      onHoverBlock(null, null);
+      emitHoverBlock(null, null);
       return;
     }
 
-    onHoverBlock(resolveBlockAtEvent(event), event);
+    emitHoverBlock(resolveBlockAtEvent(event), event);
   };
 
   const handleContextMenu = (event: React.MouseEvent) => {
@@ -1066,6 +1167,7 @@ const LayerCanvas = forwardRef<
 
   const handleMouseDown = (event: React.MouseEvent) => {
     if (event.button === 0 && interactionTool === "hand") {
+      markTextureInteraction();
       setIsDragging(true);
       setDragStart({ x: event.clientX - offsetRef.current.x, y: event.clientY - offsetRef.current.y });
       return;
@@ -1075,7 +1177,7 @@ const LayerCanvas = forwardRef<
     const point = resolveMeasurementPointAtClient(event.clientX, event.clientY);
     if (!point) return;
     event.preventDefault();
-    onHoverBlock(null, null);
+    emitHoverBlock(null, null);
     setMeasurementDraftValue({
       id: "__draft__",
       startX: point.x,
@@ -1107,17 +1209,15 @@ const LayerCanvas = forwardRef<
       onMouseUp={handleMouseUp}
       onMouseLeave={() => {
         setIsDragging(false);
-        onHoverBlock(null, null);
+        emitHoverBlock(null, null);
       }}
       onContextMenu={handleContextMenu}
     >
-      {scale < ICON_NATIVE_SIZE ? (
-        <canvas
-          ref={lowZoomCanvasRef}
-          className="flake-layer-low-zoom-canvas"
-          aria-hidden="true"
-        />
-      ) : null}
+      <canvas
+        ref={layerTileCanvasRef}
+        className="flake-layer-tile-canvas"
+        aria-hidden="true"
+      />
       <div
         ref={worldRef}
         className="flake-layer-world"
@@ -1126,17 +1226,6 @@ const LayerCanvas = forwardRef<
           className="flake-layer-border"
           style={borderStyle}
         />
-        {scale >= ICON_NATIVE_SIZE
-          ? visibleBlocks.map((block) => (
-            <div
-              key={block.key}
-              className="flake-layer-block"
-              style={block.style}
-            >
-              {block.shouldRenderIcon ? <img className="flake-layer-block-icon" src={block.iconUrl} alt="" draggable={false} /> : null}
-            </div>
-          ))
-          : null}
         {measurementOverlays.map((measurement) => (
           <div
             key={measurement.id}
