@@ -1,4 +1,4 @@
-﻿import React, {
+import React, {
   forwardRef,
   useCallback,
   useEffect,
@@ -63,7 +63,7 @@ const NOTE_BLOCK_KEY_ROWS = [
 const EDIT_TOOL_PLACEHOLDERS = [
   { id: "hand", glyph: "手", name: "手型", description: "拖拽和查看" },
   { id: "debug-stick", glyph: "调", name: "调试棒", description: "修改方块状态" },
-  { id: "measure", glyph: "量", name: "测量工具", description: "测量欧几里得距离与曼哈顿距离" },
+  { id: "measure", glyph: "量", name: "测量工具", description: "测量欧几里得距离与曼哈顿距离，右键删除矩形" },
   { id: "select", glyph: "选", name: "框选工具", description: "框选区域" },
   { id: "brush", glyph: "笔", name: "画笔", description: "绘制方块" },
   { id: "eraser", glyph: "擦", name: "橡皮擦", description: "擦除方块" },
@@ -249,6 +249,28 @@ interface VisibleBlockWindow {
   maxZ: number;
 }
 
+interface FlakeMeasurementRect {
+  id: string;
+  startX: number;
+  startZ: number;
+  endX: number;
+  endZ: number;
+}
+
+interface NormalizedMeasurementRect {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  widthBlocks: number;
+  heightBlocks: number;
+}
+
+interface FlakeMeasurementPoint {
+  x: number;
+  z: number;
+}
+
 interface LowZoomTileCache {
   meta: LayerSliceMeta | null;
   scale: number;
@@ -277,6 +299,34 @@ function normalizeFlakeBlockId(blockId: string): string {
 
 function lowZoomTileKey(tileX: number, tileZ: number): string {
   return `${tileX}:${tileZ}`;
+}
+
+function normalizeMeasurementRect(rect: FlakeMeasurementRect): NormalizedMeasurementRect {
+  const minX = Math.min(rect.startX, rect.endX);
+  const maxX = Math.max(rect.startX, rect.endX);
+  const minZ = Math.min(rect.startZ, rect.endZ);
+  const maxZ = Math.max(rect.startZ, rect.endZ);
+  return {
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    widthBlocks: maxX - minX + 1,
+    heightBlocks: maxZ - minZ + 1,
+  };
+}
+
+function measurementRectContainsPoint(rect: FlakeMeasurementRect, point: FlakeMeasurementPoint): boolean {
+  const normalized = normalizeMeasurementRect(rect);
+  return point.x >= normalized.minX
+    && point.x <= normalized.maxX
+    && point.z >= normalized.minZ
+    && point.z <= normalized.maxZ;
+}
+
+function formatMeasurementDistance(value: number): string {
+  if (Number.isInteger(value)) return String(value);
+  return value < 10 ? value.toFixed(2) : value.toFixed(1);
 }
 
 function buildLowZoomTile(
@@ -328,24 +378,30 @@ const LayerCanvas = forwardRef<
     showStateHints: boolean;
     interactionTool: EditToolId;
     editedBlockStates: Record<string, Record<string, string>>;
+    measurements: FlakeMeasurementRect[];
     onHoverBlock: (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => void;
     onBlockClick: (block: FlakeHoverBlock, event: React.MouseEvent) => void;
     onBlockRightClick: (block: FlakeHoverBlock, event: React.MouseEvent) => void;
+    onAddMeasurement: (rect: Omit<FlakeMeasurementRect, "id">) => void;
+    onDeleteMeasurementAt: (point: FlakeMeasurementPoint) => void;
     onScaleChange?: (scale: number) => void;
   }
->(({ meta, renderSlices, showStateHints, interactionTool, editedBlockStates, onHoverBlock, onBlockClick, onBlockRightClick, onScaleChange }, ref) => {
+>(({ meta, renderSlices, showStateHints, interactionTool, editedBlockStates, measurements, onHoverBlock, onBlockClick, onBlockRightClick, onAddMeasurement, onDeleteMeasurementAt, onScaleChange }, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const lowZoomCanvasRef = useRef<HTMLCanvasElement>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  const [isMeasuring, setIsMeasuring] = useState(false);
+  const [measurementDraft, setMeasurementDraft] = useState<FlakeMeasurementRect | null>(null);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [iconImages, setIconImages] = useState<Map<number, string>>(new Map());
   const [mapColorByBlockId, setMapColorByBlockId] = useState<Map<string, string>>(new Map());
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const dragFrameRef = useRef<number | null>(null);
   const pendingOffsetRef = useRef(offset);
+  const measurementDraftRef = useRef<FlakeMeasurementRect | null>(null);
   const lowZoomTileCacheRef = useRef<LowZoomTileCache>({
     meta: null,
     scale: 0,
@@ -376,6 +432,72 @@ const LayerCanvas = forwardRef<
   useEffect(() => {
     onScaleChangeRef.current?.(scale);
   }, [scale]);
+
+  const setMeasurementDraftValue = useCallback((nextDraft: FlakeMeasurementRect | null) => {
+    measurementDraftRef.current = nextDraft;
+    setMeasurementDraft(nextDraft);
+  }, []);
+
+  const updateMeasurementDraftValue = useCallback((updater: (current: FlakeMeasurementRect | null) => FlakeMeasurementRect | null) => {
+    setMeasurementDraftValue(updater(measurementDraftRef.current));
+  }, [setMeasurementDraftValue]);
+
+  const resolveMeasurementPointAtClient = useCallback((clientX: number, clientY: number, clampToBounds = false): FlakeMeasurementPoint | null => {
+    if (!meta || !viewportRef.current) return null;
+
+    const rect = viewportRef.current.getBoundingClientRect();
+    const rawX = Math.floor((clientX - rect.left - offsetRef.current.x) / scaleRef.current);
+    const rawZ = Math.floor((clientY - rect.top - offsetRef.current.y) / scaleRef.current);
+    if (clampToBounds) {
+      return {
+        x: Math.max(0, Math.min(meta.size_x - 1, rawX)),
+        z: Math.max(0, Math.min(meta.size_z - 1, rawZ)),
+      };
+    }
+    if (rawX < 0 || rawX >= meta.size_x || rawZ < 0 || rawZ >= meta.size_z) return null;
+    return { x: rawX, z: rawZ };
+  }, [meta]);
+
+  const finishMeasurementDraft = useCallback(() => {
+    const draft = measurementDraftRef.current;
+    setIsMeasuring(false);
+    setMeasurementDraftValue(null);
+    if (!draft) return;
+    onAddMeasurement({
+      startX: draft.startX,
+      startZ: draft.startZ,
+      endX: draft.endX,
+      endZ: draft.endZ,
+    });
+  }, [onAddMeasurement, setMeasurementDraftValue]);
+
+  useEffect(() => {
+    if (interactionTool === "measure" && meta) return;
+    setIsMeasuring(false);
+    setMeasurementDraftValue(null);
+  }, [interactionTool, meta, setMeasurementDraftValue]);
+
+  useEffect(() => {
+    if (!isMeasuring) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const point = resolveMeasurementPointAtClient(event.clientX, event.clientY, true);
+      if (!point) return;
+      updateMeasurementDraftValue((current) => current ? { ...current, endX: point.x, endZ: point.z } : current);
+    };
+    const handleMouseUp = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      finishMeasurementDraft();
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [finishMeasurementDraft, isMeasuring, resolveMeasurementPointAtClient, updateMeasurementDraftValue]);
 
   useEffect(() => {
     if (scale < HOVER_TOOLTIP_MIN_SCALE) {
@@ -728,6 +850,68 @@ const LayerCanvas = forwardRef<
     "--flake-layer-border-height": `${Math.max(1, Math.round(meta ? meta.size_z * scale : 0))}px`,
   }), [meta, scale]);
 
+  const measurementOverlays = useMemo(() => {
+    const allMeasurements = measurementDraft ? [...measurements, measurementDraft] : measurements;
+    return allMeasurements.map((rect) => {
+      const normalized = normalizeMeasurementRect(rect);
+      const leftPx = Math.round(normalized.minX * scale);
+      const topPx = Math.round(normalized.minZ * scale);
+      const widthPx = Math.max(1, Math.round((normalized.maxX + 1) * scale) - leftPx);
+      const heightPx = Math.max(1, Math.round((normalized.maxZ + 1) * scale) - topPx);
+      const diagonalStartX = rect.startX <= rect.endX ? 0 : widthPx;
+      const diagonalStartY = rect.startZ <= rect.endZ ? 0 : heightPx;
+      const diagonalEndX = rect.startX <= rect.endX ? widthPx : 0;
+      const diagonalEndY = rect.startZ <= rect.endZ ? heightPx : 0;
+      const euclidean = Math.sqrt(
+        normalized.widthBlocks * normalized.widthBlocks
+        + normalized.heightBlocks * normalized.heightBlocks
+      );
+      const manhattan = normalized.widthBlocks + normalized.heightBlocks;
+      const gridPathParts: string[] = [];
+      if (scale >= 8) {
+        for (let x = normalized.minX + 1; x <= normalized.maxX; x += 1) {
+          const lineX = Math.round(x * scale) - leftPx;
+          gridPathParts.push(`M ${lineX} 0 V ${heightPx}`);
+        }
+        for (let z = normalized.minZ + 1; z <= normalized.maxZ; z += 1) {
+          const lineZ = Math.round(z * scale) - topPx;
+          gridPathParts.push(`M 0 ${lineZ} H ${widthPx}`);
+        }
+      }
+      return {
+        id: rect.id,
+        isDraft: rect.id === "__draft__",
+        gridPath: gridPathParts.join(" "),
+        showGrid: gridPathParts.length > 0,
+        widthPx,
+        heightPx,
+        gridDash: scale >= 8 ? "4 4" : "2 2",
+        xLabel: `x ${normalized.widthBlocks}`,
+        zLabel: `z ${normalized.heightBlocks}`,
+        manhattanLabel: `曼哈顿 ${manhattan}`,
+        insideLabel: widthPx >= 64 && heightPx >= 28
+          ? `欧氏 ${formatMeasurementDistance(euclidean)}`
+          : `E ${formatMeasurementDistance(euclidean)}`,
+        showInsideLabel: widthPx >= 28 && heightPx >= 18,
+        diagonalStartX,
+        diagonalStartY,
+        diagonalEndX,
+        diagonalEndY,
+        style: {
+          "--flake-measurement-left": `${leftPx}px`,
+          "--flake-measurement-top": `${topPx}px`,
+          "--flake-measurement-width": `${widthPx}px`,
+          "--flake-measurement-height": `${heightPx}px`,
+        } as CssVariableStyle<
+          | "--flake-measurement-left"
+          | "--flake-measurement-top"
+          | "--flake-measurement-width"
+          | "--flake-measurement-height"
+        >,
+      };
+    });
+  }, [measurementDraft, measurements, scale]);
+
   const resetView = () => {
     if (meta) fitView(meta, viewportRef.current, setScale, setOffset);
   };
@@ -810,13 +994,12 @@ const LayerCanvas = forwardRef<
   };
 
   const resolveBlockAtEvent = (event: React.MouseEvent): FlakeHoverBlock | null => {
-    if (!meta || visibleLayerIndex.byPosition.size === 0 || !viewportRef.current) return null;
+    if (!meta || visibleLayerIndex.byPosition.size === 0) return null;
 
-    const rect = viewportRef.current.getBoundingClientRect();
-    const bx = Math.floor((event.clientX - rect.left - offset.x) / scale);
-    const bz = Math.floor((event.clientY - rect.top - offset.y) / scale);
-    if (bx < 0 || bx >= meta.size_x || bz < 0 || bz >= meta.size_z) return null;
-
+    const point = resolveMeasurementPointAtClient(event.clientX, event.clientY);
+    if (!point) return null;
+    const bx = point.x;
+    const bz = point.z;
     const visibleBlock = visibleLayerIndex.byPosition.get(bz * meta.size_x + bx);
     if (!visibleBlock) return null;
 
@@ -843,6 +1026,11 @@ const LayerCanvas = forwardRef<
   };
 
   const handleMouseMove = (event: React.MouseEvent) => {
+    if (isMeasuring) {
+      onHoverBlock(null, null);
+      return;
+    }
+
     if (isDragging) {
       scheduleOffset({ x: event.clientX - dragStart.x, y: event.clientY - dragStart.y });
       return;
@@ -858,30 +1046,65 @@ const LayerCanvas = forwardRef<
 
   const handleContextMenu = (event: React.MouseEvent) => {
     event.preventDefault();
+    if (interactionTool === "measure") {
+      setIsMeasuring(false);
+      setMeasurementDraftValue(null);
+      const point = resolveMeasurementPointAtClient(event.clientX, event.clientY);
+      if (point) onDeleteMeasurementAt(point);
+      return;
+    }
+
     const block = resolveBlockAtEvent(event);
     if (block) onBlockRightClick(block, event);
   };
 
   const handleClick = (event: React.MouseEvent) => {
-    if (event.button !== 0 || interactionTool === "hand") return;
+    if (event.button !== 0 || interactionTool === "hand" || interactionTool === "measure") return;
     const block = resolveBlockAtEvent(event);
     if (block) onBlockClick(block, event);
+  };
+
+  const handleMouseDown = (event: React.MouseEvent) => {
+    if (event.button === 0 && interactionTool === "hand") {
+      setIsDragging(true);
+      setDragStart({ x: event.clientX - offsetRef.current.x, y: event.clientY - offsetRef.current.y });
+      return;
+    }
+
+    if (event.button !== 0 || interactionTool !== "measure") return;
+    const point = resolveMeasurementPointAtClient(event.clientX, event.clientY);
+    if (!point) return;
+    event.preventDefault();
+    onHoverBlock(null, null);
+    setMeasurementDraftValue({
+      id: "__draft__",
+      startX: point.x,
+      startZ: point.z,
+      endX: point.x,
+      endZ: point.z,
+    });
+    setIsMeasuring(true);
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+    if (isMeasuring) finishMeasurementDraft();
   };
 
   return (
     <div
       ref={viewportRef}
-      className={isDragging ? "flake-canvas is-dragging" : "flake-canvas"}
+      className={[
+        "flake-canvas",
+        isDragging ? "is-dragging" : "",
+        interactionTool === "measure" ? "is-measure-tool" : "",
+        isMeasuring ? "is-measuring" : "",
+      ].filter(Boolean).join(" ")}
       onWheel={handleWheel}
-      onMouseDown={(event) => {
-        if (event.button === 0 && interactionTool === "hand") {
-          setIsDragging(true);
-          setDragStart({ x: event.clientX - offsetRef.current.x, y: event.clientY - offsetRef.current.y });
-        }
-      }}
+      onMouseDown={handleMouseDown}
       onClick={handleClick}
       onMouseMove={handleMouseMove}
-      onMouseUp={() => setIsDragging(false)}
+      onMouseUp={handleMouseUp}
       onMouseLeave={() => {
         setIsDragging(false);
         onHoverBlock(null, null);
@@ -914,6 +1137,49 @@ const LayerCanvas = forwardRef<
             </div>
           ))
           : null}
+        {measurementOverlays.map((measurement) => (
+          <div
+            key={measurement.id}
+            className={measurement.isDraft ? "flake-measurement-rect is-draft" : "flake-measurement-rect"}
+            style={measurement.style}
+          >
+            <svg
+              className="flake-measurement-svg"
+              viewBox={`0 0 ${measurement.widthPx} ${measurement.heightPx}`}
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              {measurement.showGrid ? (
+                <path
+                  className="flake-measurement-grid-line"
+                  d={measurement.gridPath}
+                  strokeDasharray={measurement.gridDash}
+                />
+              ) : null}
+              <line
+                className="flake-measurement-diagonal"
+                x1={measurement.diagonalStartX}
+                y1={measurement.diagonalStartY}
+                x2={measurement.diagonalEndX}
+                y2={measurement.diagonalEndY}
+              />
+            </svg>
+            <span className="flake-measurement-label flake-measurement-label--x">
+              {measurement.xLabel}
+            </span>
+            <span className="flake-measurement-label flake-measurement-label--z">
+              {measurement.zLabel}
+            </span>
+            <span className="flake-measurement-label flake-measurement-label--manhattan">
+              {measurement.manhattanLabel}
+            </span>
+            {measurement.showInsideLabel ? (
+              <span className="flake-measurement-label flake-measurement-label--inside">
+                {measurement.insideLabel}
+              </span>
+            ) : null}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1064,6 +1330,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [selectedEditTool, setSelectedEditTool] = useState<EditToolId>("hand");
   const [isSpaceHandTool, setIsSpaceHandTool] = useState(false);
   const [editedBlockStates, setEditedBlockStates] = useState<Record<string, Record<string, string>>>({});
+  const [measurementRects, setMeasurementRects] = useState<FlakeMeasurementRect[]>([]);
   const [debugStateBlock, setDebugStateBlock] = useState<FlakeHoverBlock | null>(null);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
   const [materialBlocks, setMaterialBlocks] = useState<string[]>([]);
@@ -1083,6 +1350,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const loadedMetaKeyRef = useRef("");
   const inFlightSliceKeysRef = useRef(new Set<string>());
   const loadedSliceKeysRef = useRef(new Set<string>());
+  const measurementIdRef = useRef(0);
 
   const stopQuickBuildPolling = () => {
     if (pollIntervalRef.current !== null) {
@@ -1274,6 +1542,8 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setStatsData(null);
     setMaterialBlocks([]);
     setEditedBlockStates({});
+    setMeasurementRects([]);
+    measurementIdRef.current = 0;
     setDebugStateBlock(null);
     syncCacheState();
   }, [currentFile]);
@@ -1435,6 +1705,30 @@ export function FlakePage({ currentFile, setRoute }: any) {
     });
     setDebugStateBlock(null);
   }, [debugStateBlock]);
+
+  const handleAddMeasurement = useCallback((rect: Omit<FlakeMeasurementRect, "id">) => {
+    measurementIdRef.current += 1;
+    setMeasurementRects((current) => [
+      ...current,
+      {
+        id: `measure-${measurementIdRef.current}`,
+        ...rect,
+      },
+    ]);
+  }, []);
+
+  const handleDeleteMeasurementAt = useCallback((point: FlakeMeasurementPoint) => {
+    setMeasurementRects((current) => {
+      let targetIndex = -1;
+      for (let index = current.length - 1; index >= 0; index -= 1) {
+        if (!measurementRectContainsPoint(current[index], point)) continue;
+        targetIndex = index;
+        break;
+      }
+      if (targetIndex < 0) return current;
+      return current.filter((_rect, index) => index !== targetIndex);
+    });
+  }, []);
 
   const handleBlockRightClick = useCallback(async (block: FlakeHoverBlock, event: React.MouseEvent) => {
     event.preventDefault();
@@ -1649,14 +1943,22 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 showStateHints={showStateHints}
                 interactionTool={effectiveEditTool}
                 editedBlockStates={editedBlockStates}
+                measurements={measurementRects}
                 onHoverBlock={handleHoverBlock}
                 onBlockClick={handleBlockClick}
                 onBlockRightClick={handleBlockRightClick}
+                onAddMeasurement={handleAddMeasurement}
+                onDeleteMeasurementAt={handleDeleteMeasurementAt}
                 onScaleChange={setViewScale}
               />
             )}
 
-            <FlakeBlockTooltip x={hoverPos.x} y={hoverPos.y} item={hoverBlock} />
+            <FlakeBlockTooltip
+              x={hoverPos.x}
+              y={hoverPos.y}
+              item={hoverBlock}
+              highlightEmptyState={effectiveEditTool === "debug-stick"}
+            />
           </div>
         </section>
 
@@ -1686,6 +1988,10 @@ export function FlakePage({ currentFile, setRoute }: any) {
                   <div className="flake-page__tool-panel-kv">
                     <span className="nova-muted">缓存</span>
                     <span>{ready ? "已就绪" : building ? "构建中" : "未就绪"}</span>
+                  </div>
+                  <div className="flake-page__tool-panel-kv">
+                    <span className="nova-muted">测量</span>
+                    <span>{measurementRects.length} 个矩形</span>
                   </div>
                 </div>
 

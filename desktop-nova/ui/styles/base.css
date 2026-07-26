@@ -747,6 +747,109 @@ textarea.input,
     border: 1px solid #555;
 }
 
+.flake-measurement-rect {
+    position: absolute;
+    left: var(--flake-measurement-left, 0);
+    top: var(--flake-measurement-top, 0);
+    z-index: 4;
+    width: var(--flake-measurement-width, 1px);
+    height: var(--flake-measurement-height, 1px);
+    background: rgb(93 183 255 / 22%);
+    box-sizing: border-box;
+    color: #e9f8ff;
+    pointer-events: none;
+}
+
+.flake-measurement-rect::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border: 2px solid rgb(87 190 255 / 88%);
+    box-shadow: 0 0 0 1px rgb(234 248 255 / 44%) inset;
+    box-sizing: border-box;
+    pointer-events: none;
+}
+
+.flake-measurement-rect.is-draft {
+    background: rgb(93 183 255 / 30%);
+}
+
+.flake-measurement-svg {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.flake-measurement-grid-line {
+    fill: none;
+    stroke: rgb(213 242 255 / 64%);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.flake-measurement-diagonal {
+    stroke: rgb(239 251 255 / 92%);
+    stroke-width: 2;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.flake-measurement-label {
+    position: absolute;
+    z-index: 2;
+    max-width: max-content;
+    padding: 2px 6px;
+    border: 1px solid rgb(139 211 255 / 70%);
+    background: rgb(7 25 39 / 86%);
+    box-shadow: 0 2px 8px rgb(0 0 0 / 28%);
+    color: #f0fbff;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.35;
+    pointer-events: none;
+    text-shadow: 0 1px 1px rgb(0 0 0 / 65%);
+    white-space: nowrap;
+}
+
+.flake-measurement-label--x {
+    left: 50%;
+    top: -6px;
+    transform: translate(-50%, -100%);
+}
+
+.flake-measurement-label--z {
+    top: 50%;
+    right: -6px;
+    transform: translate(100%, -50%);
+}
+
+.flake-measurement-label--manhattan {
+    top: -6px;
+    right: -6px;
+    transform: translate(100%, -100%);
+}
+
+.flake-measurement-label--inside {
+    left: 50%;
+    top: 50%;
+    max-width: calc(100% - 8px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transform: translate(-50%, -50%);
+}
+
+.flake-canvas.is-measure-tool {
+    cursor: crosshair;
+}
+
+.flake-canvas.is-measuring {
+    cursor: crosshair;
+}
+
 .flake-page {
     position: relative;
     --flake-tool-panel-width: 320px;
