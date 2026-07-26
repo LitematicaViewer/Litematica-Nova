@@ -3,8 +3,9 @@ use std::io::{self, BufWriter, Read, Write};
 
 use anyhow::Result;
 use litematica_core::{
-    analyze, block_entity, cache_layer, cli, generate_projection, mesh, metadata_edit, recipe_cache,
-    replace_blocks, runtime_paths, stats_api, stockpile, stockpile_serve, stockpile_zip, visual,
+    analyze, cache_layer, cli, generate_projection, mesh, metadata_edit, projection_marker,
+    recipe_cache, replace_blocks, runtime_paths, stats_api, stockpile, stockpile_serve,
+    stockpile_zip, visual,
 };
 use serde::Serialize;
 
@@ -280,6 +281,28 @@ fn main() -> Result<()> {
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("missing --patch for edit-metadata"))?;
             let summary = metadata_edit::edit_metadata(&args.input, args.output.as_deref(), patch)?;
+            emit_output(&summary, None)?;
+        }
+        "projection-markers" => {
+            let output = projection_marker::read_projection_markers(&args.input)?;
+            emit_output(&output, args.output.as_deref())?;
+        }
+        "set-origin" => {
+            let x = args.x.ok_or_else(|| anyhow::anyhow!("missing --x"))?;
+            let y = args.y.ok_or_else(|| anyhow::anyhow!("missing --y"))?;
+            let z = args.z.ok_or_else(|| anyhow::anyhow!("missing --z"))?;
+            let summary = projection_marker::set_projection_origin(
+                &args.input,
+                args.output.as_deref(),
+                x,
+                y,
+                z,
+            )?;
+            emit_output(&summary, None)?;
+        }
+        "remove-origin" => {
+            let summary =
+                projection_marker::remove_projection_origin(&args.input, args.output.as_deref())?;
             emit_output(&summary, None)?;
         }
         "read-block-entity" => {

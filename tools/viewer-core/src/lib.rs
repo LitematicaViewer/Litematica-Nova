@@ -16,6 +16,7 @@ pub mod metadata_edit;
 pub mod model;
 pub mod native_viewer;
 pub mod nbt;
+pub mod projection_marker;
 pub mod recipe_cache;
 pub mod recipe_tree;
 pub mod replace_blocks;

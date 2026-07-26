@@ -422,6 +422,8 @@ fn clone_region(region: &RegionNbt) -> RegionNbt {
         block_state_palette: region.block_state_palette.clone(),
         block_states: region.block_states.clone(),
         entities: region.entities.clone(),
+        pending_block_ticks: region.pending_block_ticks.clone(),
+        pending_fluid_ticks: region.pending_fluid_ticks.clone(),
         tile_entities: region.tile_entities.clone(),
     }
 }
@@ -501,6 +503,8 @@ fn build_region(region_plan: &PlanRegion, region_index: usize) -> Result<BuiltRe
         block_state_palette: palette,
         block_states: pack_palette_indices(&indices, nbits),
         entities: Vec::new(),
+        pending_block_ticks: Vec::new(),
+        pending_fluid_ticks: Vec::new(),
         tile_entities: Vec::<Value>::new(),
     };
 

@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::fs::File;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::num::NonZeroUsize;
 
 use anyhow::{Context, Result, anyhow, bail};
 use fastnbt::{IntArray, LongArray, Value, from_reader, to_writer};
@@ -57,6 +57,10 @@ pub struct RegionNbt {
     pub block_states: LongArray,
     #[serde(default)]
     pub entities: Vec<EntityNbt>,
+    #[serde(default)]
+    pub pending_block_ticks: Vec<Value>,
+    #[serde(default)]
+    pub pending_fluid_ticks: Vec<Value>,
     #[serde(default, rename = "TileEntities", alias = "BlockEntities")]
     pub tile_entities: Vec<Value>,
 }
@@ -81,25 +85,26 @@ pub struct RegionBounds {
 pub fn load_litematic_root(path: &Path) -> Result<Arc<LitematicRoot>> {
     // 规范化路径用于缓存键
     let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    
+
     // 检查缓存
     if let Ok(mut cache) = LITEMATIC_CACHE.lock() {
         if let Some(cached) = cache.get(&canonical_path) {
             return Ok(Arc::clone(cached));
         }
     }
-    
+
     // 缓存未命中,从磁盘加载
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let decoder = GzDecoder::new(file);
-    let root: LitematicRoot = from_reader(decoder).with_context(|| format!("failed to parse {}", path.display()))?;
+    let root: LitematicRoot =
+        from_reader(decoder).with_context(|| format!("failed to parse {}", path.display()))?;
     let arc_root = Arc::new(root);
-    
+
     // 存入缓存
     if let Ok(mut cache) = LITEMATIC_CACHE.lock() {
         cache.put(canonical_path, Arc::clone(&arc_root));
     }
-    
+
     Ok(arc_root)
 }
 
@@ -107,7 +112,14 @@ pub fn save_litematic_root(path: &Path, root: &LitematicRoot) -> Result<()> {
     let file =
         File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
     let encoder = GzEncoder::new(file, Compression::default());
-    to_writer(encoder, root).with_context(|| format!("failed to write {}", path.display()))
+    to_writer(encoder, root).with_context(|| format!("failed to write {}", path.display()))?;
+
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Ok(mut cache) = LITEMATIC_CACHE.lock() {
+        cache.put(canonical_path, Arc::new(root.clone()));
+    }
+
+    Ok(())
 }
 
 pub fn region_volume(size: &Vec3i) -> Result<usize> {

@@ -1072,6 +1072,8 @@ mod tests {
             block_state_palette: palette,
             block_states,
             entities: Vec::new(),
+            pending_block_ticks: Vec::new(),
+            pending_fluid_ticks: Vec::new(),
             tile_entities: Vec::new(),
         };
         LitematicRoot {

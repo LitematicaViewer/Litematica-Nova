@@ -820,12 +820,80 @@ textarea.input,
     transform: translate(-50%, -50%);
 }
 
+.flake-origin-marker {
+    position: absolute;
+    left: var(--flake-origin-marker-left, 0);
+    top: var(--flake-origin-marker-top, 0);
+    z-index: 5;
+    width: var(--flake-origin-marker-width, 1px);
+    height: var(--flake-origin-marker-height, 1px);
+    background: rgb(255 158 43 / 24%);
+    border: 2px solid rgb(255 146 28 / 90%);
+    box-shadow:
+        0 0 0 1px rgb(255 239 211 / 48%) inset,
+        0 0 10px rgb(255 146 28 / 36%);
+    box-sizing: border-box;
+    pointer-events: none;
+}
+
+.flake-origin-marker.is-dragging {
+    background: rgb(255 158 43 / 34%);
+    border-color: rgb(255 180 66 / 96%);
+}
+
 .flake-canvas.is-measure-tool {
     cursor: crosshair;
 }
 
 .flake-canvas.is-measuring {
     cursor: crosshair;
+}
+
+.flake-canvas.is-marker-tool {
+    cursor: cell;
+}
+
+.flake-canvas.is-dragging-marker {
+    cursor: grabbing;
+}
+
+.flake-marker-context-menu.dropdown-menu {
+    position: fixed;
+    left: var(--flake-marker-menu-left, 0);
+    top: var(--flake-marker-menu-top, 0);
+    z-index: 4200;
+    min-width: 176px;
+    max-height: none;
+    padding: 2px 0;
+}
+
+.flake-marker-menu-heading,
+.flake-marker-menu-empty {
+    color: GrayText;
+    font-size: 12px;
+}
+
+.flake-marker-menu-heading {
+    font-weight: 700;
+}
+
+.flake-marker-menu-item {
+    display: block;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+
+.flake-marker-menu-item:hover:not(:disabled) {
+    background: Highlight;
+    color: HighlightText;
+}
+
+.flake-marker-menu-item:disabled {
+    color: GrayText;
 }
 
 .flake-page {

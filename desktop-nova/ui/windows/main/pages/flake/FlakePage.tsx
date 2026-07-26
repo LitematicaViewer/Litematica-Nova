@@ -17,8 +17,13 @@ import {
   LayerSliceMeta,
   loadLayerMeta,
   loadLayerSlice,
+  loadProjectionMarkers,
   loadStructureStats,
   pollCacheBuildTask,
+  type ProjectionMarkerPoint,
+  removeProjectionOrigin,
+  selectLitematicSavePath,
+  setProjectionOrigin,
   startCacheBuildTask,
   stateFromLaunch,
   StatsData,
@@ -67,6 +72,7 @@ const EDIT_TOOL_PLACEHOLDERS = [
   { id: "hand", glyph: "手", name: "手型", description: "拖拽和查看" },
   { id: "debug-stick", glyph: "调", name: "调试棒", description: "修改方块状态" },
   { id: "measure", glyph: "量", name: "测量工具", description: "测量欧几里得距离与曼哈顿距离，右键删除矩形" },
+  { id: "marker", glyph: "标", name: "标记点工具", description: "设定投影标记点" },
   { id: "select", glyph: "选", name: "框选工具", description: "框选区域" },
   { id: "brush", glyph: "笔", name: "画笔", description: "绘制方块" },
   { id: "eraser", glyph: "擦", name: "橡皮擦", description: "擦除方块" },
@@ -274,6 +280,13 @@ interface FlakeMeasurementPoint {
   z: number;
 }
 
+interface FlakeMarkerMenuState {
+  clientX: number;
+  clientY: number;
+  point: ProjectionMarkerPoint;
+  isOrigin: boolean;
+}
+
 type LayerTileRenderMode = "map-color" | "texture";
 
 interface TileIconImageCacheEntry {
@@ -372,6 +385,36 @@ function measurementRectContainsPoint(rect: FlakeMeasurementRect, point: FlakeMe
     && point.z <= normalized.maxZ;
 }
 
+function markerPointsEqual(left: ProjectionMarkerPoint | null | undefined, right: ProjectionMarkerPoint | null | undefined): boolean {
+  return !!left
+    && !!right
+    && left.x === right.x
+    && left.y === right.y
+    && left.z === right.z;
+}
+
+function markerPointsChanged(left: ProjectionMarkerPoint | null | undefined, right: ProjectionMarkerPoint | null | undefined): boolean {
+  if (!left && !right) return false;
+  if (!left || !right) return true;
+  return !markerPointsEqual(left, right);
+}
+
+function ensureLitematicExtension(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) return trimmed;
+  return /\.litematic$/i.test(trimmed) ? trimmed : `${trimmed}.litematic`;
+}
+
+function markerSaveAsDefaultPath(currentFile: string): string {
+  if (!currentFile) return "edited.litematic";
+  const replaced = currentFile.replace(/\.litematic$/i, ".edited.litematic");
+  return replaced === currentFile ? `${currentFile}.edited.litematic` : replaced;
+}
+
+function pathsLookSame(left: string, right: string): boolean {
+  return left.replace(/\//g, "\\").toLocaleLowerCase() === right.replace(/\//g, "\\").toLocaleLowerCase();
+}
+
 function formatMeasurementDistance(value: number): string {
   if (Number.isInteger(value)) return String(value);
   return value < 10 ? value.toFixed(2) : value.toFixed(1);
@@ -431,19 +474,23 @@ const LayerCanvas = forwardRef<
   LayerCanvasHandle,
   {
     meta: LayerSliceMeta | null;
+    layerY: number;
     renderSlices: FlakeRenderSlice[];
     showStateHints: boolean;
     interactionTool: EditToolId;
     editedBlockStates: Record<string, Record<string, string>>;
+    originMarker: ProjectionMarkerPoint | null;
     measurements: FlakeMeasurementRect[];
     onHoverBlock: (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => void;
     onBlockClick: (block: FlakeHoverBlock, event: React.MouseEvent) => void;
     onBlockRightClick: (block: FlakeHoverBlock, event: React.MouseEvent) => void;
+    onMarkerContextMenu: (point: ProjectionMarkerPoint, isOrigin: boolean, event: React.MouseEvent) => void;
+    onOriginChange: (point: ProjectionMarkerPoint) => void;
     onAddMeasurement: (rect: Omit<FlakeMeasurementRect, "id">) => void;
     onDeleteMeasurementAt: (point: FlakeMeasurementPoint) => void;
     onScaleChange?: (scale: number) => void;
   }
->(({ meta, renderSlices, showStateHints, interactionTool, editedBlockStates, measurements, onHoverBlock, onBlockClick, onBlockRightClick, onAddMeasurement, onDeleteMeasurementAt, onScaleChange }, ref) => {
+>(({ meta, layerY, renderSlices, showStateHints, interactionTool, editedBlockStates, originMarker, measurements, onHoverBlock, onBlockClick, onBlockRightClick, onMarkerContextMenu, onOriginChange, onAddMeasurement, onDeleteMeasurementAt, onScaleChange }, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const layerTileCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -452,6 +499,8 @@ const LayerCanvas = forwardRef<
   const [isDragging, setIsDragging] = useState(false);
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [measurementDraft, setMeasurementDraft] = useState<FlakeMeasurementRect | null>(null);
+  const [originDragDraft, setOriginDragDraft] = useState<ProjectionMarkerPoint | null>(null);
+  const [isDraggingOrigin, setIsDraggingOrigin] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [iconImages, setIconImages] = useState<Map<number, string>>(new Map());
   const [tileImageRevision, setTileImageRevision] = useState(0);
@@ -461,6 +510,8 @@ const LayerCanvas = forwardRef<
   const dragFrameRef = useRef<number | null>(null);
   const pendingOffsetRef = useRef(offset);
   const measurementDraftRef = useRef<FlakeMeasurementRect | null>(null);
+  const originDragDraftRef = useRef<ProjectionMarkerPoint | null>(null);
+  const originMarkerRef = useRef<ProjectionMarkerPoint | null>(originMarker);
   const lastHoverBlockRef = useRef<FlakeHoverBlock | null>(null);
   const iconImagesRef = useRef(iconImages);
   const isTextureInteractionActiveRef = useRef(isTextureInteractionActive);
@@ -485,6 +536,7 @@ const LayerCanvas = forwardRef<
   const offsetRef = useRef(offset);
   scaleRef.current = scale;
   offsetRef.current = offset;
+  originMarkerRef.current = originMarker;
 
   const scheduleOffset = useCallback((nextOffset: { x: number; y: number }) => {
     pendingOffsetRef.current = nextOffset;
@@ -522,6 +574,11 @@ const LayerCanvas = forwardRef<
   const updateMeasurementDraftValue = useCallback((updater: (current: FlakeMeasurementRect | null) => FlakeMeasurementRect | null) => {
     setMeasurementDraftValue(updater(measurementDraftRef.current));
   }, [setMeasurementDraftValue]);
+
+  const setOriginDragDraftValue = useCallback((nextDraft: ProjectionMarkerPoint | null) => {
+    originDragDraftRef.current = nextDraft;
+    setOriginDragDraft(nextDraft);
+  }, []);
 
   const markTextureInteraction = useCallback(() => {
     if (!isTextureInteractionActiveRef.current) {
@@ -572,11 +629,26 @@ const LayerCanvas = forwardRef<
     });
   }, [onAddMeasurement, setMeasurementDraftValue]);
 
+  const finishOriginDrag = useCallback(() => {
+    const draft = originDragDraftRef.current;
+    const original = originMarkerRef.current;
+    setIsDraggingOrigin(false);
+    setOriginDragDraftValue(null);
+    if (!draft || !original || markerPointsEqual(draft, original)) return;
+    onOriginChange(draft);
+  }, [onOriginChange, setOriginDragDraftValue]);
+
   useEffect(() => {
     if (interactionTool === "measure" && meta) return;
     setIsMeasuring(false);
     setMeasurementDraftValue(null);
   }, [interactionTool, meta, setMeasurementDraftValue]);
+
+  useEffect(() => {
+    if (interactionTool === "marker" && meta) return;
+    setIsDraggingOrigin(false);
+    setOriginDragDraftValue(null);
+  }, [interactionTool, meta, setOriginDragDraftValue]);
 
   useEffect(() => {
     if (!isMeasuring) return;
@@ -599,6 +671,34 @@ const LayerCanvas = forwardRef<
       window.removeEventListener("mouseup", handleMouseUp);
     };
   }, [finishMeasurementDraft, isMeasuring, resolveMeasurementPointAtClient, updateMeasurementDraftValue]);
+
+  useEffect(() => {
+    if (!isDraggingOrigin) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const original = originMarkerRef.current;
+      if (!original) return;
+      const point = resolveMeasurementPointAtClient(event.clientX, event.clientY, true);
+      if (!point) return;
+      setOriginDragDraftValue({
+        x: point.x,
+        y: original.y,
+        z: point.z,
+      });
+    };
+    const handleMouseUp = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      finishOriginDrag();
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [finishOriginDrag, isDraggingOrigin, resolveMeasurementPointAtClient, setOriginDragDraftValue]);
 
   useEffect(() => {
     if (scale < HOVER_TOOLTIP_MIN_SCALE) {
@@ -987,6 +1087,29 @@ const LayerCanvas = forwardRef<
     });
   }, [measurementDraft, measurements, scale]);
 
+  const originMarkerOverlay = useMemo(() => {
+    const marker = originDragDraft || originMarker;
+    if (!meta || !marker || marker.y !== layerY) return null;
+    if (marker.x < 0 || marker.x >= meta.size_x || marker.z < 0 || marker.z >= meta.size_z) return null;
+    const leftPx = Math.round(marker.x * scale);
+    const topPx = Math.round(marker.z * scale);
+    const rightPx = Math.max(leftPx + 1, Math.round((marker.x + 1) * scale));
+    const bottomPx = Math.max(topPx + 1, Math.round((marker.z + 1) * scale));
+    return {
+      style: {
+        "--flake-origin-marker-left": `${leftPx}px`,
+        "--flake-origin-marker-top": `${topPx}px`,
+        "--flake-origin-marker-width": `${rightPx - leftPx}px`,
+        "--flake-origin-marker-height": `${bottomPx - topPx}px`,
+      } as CssVariableStyle<
+        | "--flake-origin-marker-left"
+        | "--flake-origin-marker-top"
+        | "--flake-origin-marker-width"
+        | "--flake-origin-marker-height"
+      >,
+    };
+  }, [layerY, meta, originDragDraft, originMarker, scale]);
+
   const resetView = () => {
     if (meta) fitView(meta, viewportRef.current, setScale, setOffset);
   };
@@ -1123,6 +1246,11 @@ const LayerCanvas = forwardRef<
   };
 
   const handleMouseMove = (event: React.MouseEvent) => {
+    if (isDraggingOrigin) {
+      emitHoverBlock(null, null);
+      return;
+    }
+
     if (isMeasuring) {
       emitHoverBlock(null, null);
       return;
@@ -1155,17 +1283,37 @@ const LayerCanvas = forwardRef<
       return;
     }
 
+    if (interactionTool === "marker") {
+      const block = resolveBlockAtEvent(event);
+      if (block) {
+        const point = { x: block.x, y: block.y, z: block.z };
+        onMarkerContextMenu(point, markerPointsEqual(originMarker, point), event);
+      }
+      return;
+    }
+
     const block = resolveBlockAtEvent(event);
     if (block) onBlockRightClick(block, event);
   };
 
   const handleClick = (event: React.MouseEvent) => {
-    if (event.button !== 0 || interactionTool === "hand" || interactionTool === "measure") return;
+    if (event.button !== 0 || interactionTool === "hand" || interactionTool === "measure" || interactionTool === "marker") return;
     const block = resolveBlockAtEvent(event);
     if (block) onBlockClick(block, event);
   };
 
   const handleMouseDown = (event: React.MouseEvent) => {
+    if (event.button === 0 && interactionTool === "marker" && originMarker?.y === layerY) {
+      const point = resolveMeasurementPointAtClient(event.clientX, event.clientY);
+      if (point && point.x === originMarker.x && point.z === originMarker.z) {
+        event.preventDefault();
+        emitHoverBlock(null, null);
+        setIsDraggingOrigin(true);
+        setOriginDragDraftValue({ ...originMarker });
+        return;
+      }
+    }
+
     if (event.button === 0 && interactionTool === "hand") {
       markTextureInteraction();
       setIsDragging(true);
@@ -1191,6 +1339,7 @@ const LayerCanvas = forwardRef<
   const handleMouseUp = () => {
     setIsDragging(false);
     if (isMeasuring) finishMeasurementDraft();
+    if (isDraggingOrigin) finishOriginDrag();
   };
 
   return (
@@ -1200,7 +1349,9 @@ const LayerCanvas = forwardRef<
         "flake-canvas",
         isDragging ? "is-dragging" : "",
         interactionTool === "measure" ? "is-measure-tool" : "",
+        interactionTool === "marker" ? "is-marker-tool" : "",
         isMeasuring ? "is-measuring" : "",
+        isDraggingOrigin ? "is-dragging-marker" : "",
       ].filter(Boolean).join(" ")}
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
@@ -1269,6 +1420,13 @@ const LayerCanvas = forwardRef<
             ) : null}
           </div>
         ))}
+        {originMarkerOverlay ? (
+          <div
+            className={isDraggingOrigin ? "flake-origin-marker is-dragging" : "flake-origin-marker"}
+            style={originMarkerOverlay.style}
+            aria-hidden="true"
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -1420,6 +1578,12 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [isSpaceHandTool, setIsSpaceHandTool] = useState(false);
   const [editedBlockStates, setEditedBlockStates] = useState<Record<string, Record<string, string>>>({});
   const [measurementRects, setMeasurementRects] = useState<FlakeMeasurementRect[]>([]);
+  const [originMarker, setOriginMarker] = useState<ProjectionMarkerPoint | null>(null);
+  const [draftOriginMarker, setDraftOriginMarker] = useState<ProjectionMarkerPoint | null>(null);
+  const [hasDraftOriginMarker, setHasDraftOriginMarker] = useState(false);
+  const [isSavingEdits, setIsSavingEdits] = useState(false);
+  const [markerMenu, setMarkerMenu] = useState<FlakeMarkerMenuState | null>(null);
+  const [markerStatus, setMarkerStatus] = useState("");
   const [debugStateBlock, setDebugStateBlock] = useState<FlakeHoverBlock | null>(null);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
   const [materialBlocks, setMaterialBlocks] = useState<string[]>([]);
@@ -1432,6 +1596,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const pageRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<LayerCanvasHandle>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const markerMenuRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const pollIntervalRef = useRef<number | null>(null);
   const syncRequestIdRef = useRef(0);
@@ -1440,6 +1605,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const inFlightSliceKeysRef = useRef(new Set<string>());
   const loadedSliceKeysRef = useRef(new Set<string>());
   const measurementIdRef = useRef(0);
+  const markerRequestIdRef = useRef(0);
 
   const stopQuickBuildPolling = () => {
     if (pollIntervalRef.current !== null) {
@@ -1447,6 +1613,21 @@ export function FlakePage({ currentFile, setRoute }: any) {
       pollIntervalRef.current = null;
     }
   };
+
+  const refreshProjectionMarkers = useCallback(async () => {
+    if (!currentFile) {
+      setOriginMarker(null);
+      setDraftOriginMarker(null);
+      setHasDraftOriginMarker(false);
+      return;
+    }
+    const requestId = ++markerRequestIdRef.current;
+    const markers = await loadProjectionMarkers(currentFile);
+    if (requestId !== markerRequestIdRef.current) return;
+    setOriginMarker(markers.origin);
+    setDraftOriginMarker(null);
+    setHasDraftOriginMarker(false);
+  }, [currentFile]);
 
   const syncCacheState = async () => {
     if (!currentFile) return;
@@ -1632,9 +1813,15 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setMaterialBlocks([]);
     setEditedBlockStates({});
     setMeasurementRects([]);
+    setOriginMarker(null);
+    setDraftOriginMarker(null);
+    setHasDraftOriginMarker(false);
+    setMarkerMenu(null);
+    setMarkerStatus("");
     measurementIdRef.current = 0;
     setDebugStateBlock(null);
     syncCacheState();
+    refreshProjectionMarkers();
   }, [currentFile]);
 
   useEffect(() => subscribeRenderCacheStore(syncCacheState), [currentFile]);
@@ -1657,6 +1844,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
       setShowInventoryDialog(false);
       setIsSpaceHandTool(false);
       setDebugStateBlock(null);
+      setMarkerMenu(null);
       return;
     }
     setSelectedEditTool("hand");
@@ -1764,6 +1952,29 @@ export function FlakePage({ currentFile, setRoute }: any) {
   }, [layerY, onionSkinDepth, sliceDataByY]);
 
   const effectiveEditTool: EditToolId = editMode && !isSpaceHandTool ? selectedEditTool : "hand";
+  const effectiveOriginMarker = hasDraftOriginMarker ? draftOriginMarker : originMarker;
+  const hasUnsavedMarkerEdits = hasDraftOriginMarker && markerPointsChanged(originMarker, draftOriginMarker);
+
+  useEffect(() => {
+    if (effectiveEditTool === "marker") return;
+    setMarkerMenu(null);
+  }, [effectiveEditTool]);
+
+  useEffect(() => {
+    if (!markerMenu) return;
+    const closeMenu = () => setMarkerMenu(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    window.addEventListener("mousedown", closeMenu);
+    window.addEventListener("wheel", closeMenu, { passive: true });
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", closeMenu);
+      window.removeEventListener("wheel", closeMenu);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [markerMenu]);
 
   const handleHoverBlock = useCallback((block: FlakeHoverBlock | null, event: React.MouseEvent | null) => {
     setHoverBlock(block);
@@ -1816,6 +2027,126 @@ export function FlakePage({ currentFile, setRoute }: any) {
       }
       if (targetIndex < 0) return current;
       return current.filter((_rect, index) => index !== targetIndex);
+    });
+  }, []);
+
+  const handleStageOriginMarker = useCallback((point: ProjectionMarkerPoint) => {
+    setMarkerMenu(null);
+    if (!currentFile) return;
+    if (!markerPointsChanged(originMarker, point)) {
+      setDraftOriginMarker(null);
+      setHasDraftOriginMarker(false);
+      setMarkerStatus("原点未改变。");
+      return;
+    }
+    setDraftOriginMarker(point);
+    setHasDraftOriginMarker(true);
+    setMarkerStatus(`原点变更已暂存：x=${point.x} y=${point.y} z=${point.z}。点击“保存”后写入文件。`);
+  }, [currentFile, originMarker]);
+
+  const handleRemoveOriginMarker = useCallback(() => {
+    setMarkerMenu(null);
+    if (!currentFile) return;
+    if (!markerPointsChanged(originMarker, null)) {
+      setDraftOriginMarker(null);
+      setHasDraftOriginMarker(false);
+      setMarkerStatus("当前文件没有原点标记。");
+      return;
+    }
+    setDraftOriginMarker(null);
+    setHasDraftOriginMarker(true);
+    setMarkerStatus("移除原点已暂存。点击“保存”后写入文件。");
+  }, [currentFile, originMarker]);
+
+  const handleShiftOriginMarker = useCallback((deltaY: number) => {
+    if (!effectiveOriginMarker || !meta) return;
+    const nextY = effectiveOriginMarker.y + deltaY;
+    if (nextY < 0 || nextY >= meta.size_y) {
+      setMarkerMenu(null);
+      setMarkerStatus("原点已在投影边界层");
+      return;
+    }
+    handleStageOriginMarker({ ...effectiveOriginMarker, y: nextY });
+  }, [effectiveOriginMarker, handleStageOriginMarker, meta]);
+
+  const handleSaveMarkerEdits = useCallback(async () => {
+    if (!currentFile || !hasUnsavedMarkerEdits || isSavingEdits) return;
+    setMarkerMenu(null);
+    setIsSavingEdits(true);
+    setMarkerStatus("正在保存标记...");
+    try {
+      const summary = draftOriginMarker
+        ? await setProjectionOrigin(currentFile, draftOriginMarker)
+        : await removeProjectionOrigin(currentFile);
+      setOriginMarker(summary.origin);
+      setDraftOriginMarker(null);
+      setHasDraftOriginMarker(false);
+      setStatsData(null);
+      setMarkerStatus(summary.origin
+        ? `原点已保存：x=${summary.origin.x} y=${summary.origin.y} z=${summary.origin.z}`
+        : "原点移除已保存。");
+    } catch (error) {
+      setMarkerStatus(`标记保存失败：${String(error)}`);
+      await refreshProjectionMarkers();
+    } finally {
+      setIsSavingEdits(false);
+    }
+  }, [currentFile, draftOriginMarker, hasUnsavedMarkerEdits, isSavingEdits, refreshProjectionMarkers]);
+
+  const handleSaveMarkerEditsAs = useCallback(async () => {
+    if (!currentFile || !hasUnsavedMarkerEdits || isSavingEdits) return;
+    const selected = await selectLitematicSavePath(markerSaveAsDefaultPath(currentFile));
+    if (!selected) return;
+    const outputPath = ensureLitematicExtension(selected);
+    if (!outputPath) return;
+
+    setMarkerMenu(null);
+    setIsSavingEdits(true);
+    setMarkerStatus("正在另存标记...");
+    try {
+      const summary = draftOriginMarker
+        ? await setProjectionOrigin(currentFile, draftOriginMarker, outputPath)
+        : await removeProjectionOrigin(currentFile, outputPath);
+      const savedPath = summary.output || outputPath;
+      if (pathsLookSame(savedPath, currentFile)) {
+        setOriginMarker(summary.origin);
+        setDraftOriginMarker(null);
+        setHasDraftOriginMarker(false);
+        setStatsData(null);
+        setMarkerStatus(summary.origin
+          ? `原点已保存：x=${summary.origin.x} y=${summary.origin.y} z=${summary.origin.z}`
+          : "原点移除已保存。");
+      } else {
+        setMarkerStatus(`已另存为：${savedPath}\n当前文件仍保留未保存标记。`);
+      }
+    } catch (error) {
+      setMarkerStatus(`标记另存失败：${String(error)}`);
+    } finally {
+      setIsSavingEdits(false);
+    }
+  }, [currentFile, draftOriginMarker, hasUnsavedMarkerEdits, isSavingEdits]);
+
+  const handleRestoreMarkerEdits = useCallback(async () => {
+    if (!currentFile || isSavingEdits) return;
+    setMarkerMenu(null);
+    setMarkerStatus("正在还原标记...");
+    try {
+      await refreshProjectionMarkers();
+      setMarkerStatus("标记已还原到当前文件状态。");
+    } catch (error) {
+      setMarkerStatus(`标记还原失败：${String(error)}`);
+    }
+  }, [currentFile, isSavingEdits, refreshProjectionMarkers]);
+
+  const handleMarkerContextMenu = useCallback((point: ProjectionMarkerPoint, isOrigin: boolean, event: React.MouseEvent) => {
+    event.preventDefault();
+    const menuWidth = 184;
+    const menuHeight = isOrigin ? 196 : 84;
+    setMarkerMenu({
+      clientX: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
+      clientY: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+      point,
+      isOrigin,
     });
   }, []);
 
@@ -1874,6 +2205,13 @@ export function FlakePage({ currentFile, setRoute }: any) {
     if (!page) return;
     page.style.setProperty("--flake-tool-panel-width", `${toolPanelWidth}px`);
   }, [toolPanelWidth]);
+
+  useLayoutEffect(() => {
+    const menu = markerMenuRef.current;
+    if (!menu || !markerMenu) return;
+    menu.style.setProperty("--flake-marker-menu-left", `${markerMenu.clientX}px`);
+    menu.style.setProperty("--flake-marker-menu-top", `${markerMenu.clientY}px`);
+  }, [markerMenu]);
 
   const regionName = statsData?.regions?.[0]?.name || currentFile.split(/[\\/]/).pop() || "Unnamed";
   const maxY = meta ? Math.max(0, meta.size_y - 1) : 0;
@@ -2028,14 +2366,18 @@ export function FlakePage({ currentFile, setRoute }: any) {
               <LayerCanvas
                 ref={canvasRef}
                 meta={meta}
+                layerY={layerY}
                 renderSlices={renderSlices}
                 showStateHints={showStateHints}
                 interactionTool={effectiveEditTool}
                 editedBlockStates={editedBlockStates}
+                originMarker={effectiveOriginMarker}
                 measurements={measurementRects}
                 onHoverBlock={handleHoverBlock}
                 onBlockClick={handleBlockClick}
                 onBlockRightClick={handleBlockRightClick}
+                onMarkerContextMenu={handleMarkerContextMenu}
+                onOriginChange={handleStageOriginMarker}
                 onAddMeasurement={handleAddMeasurement}
                 onDeleteMeasurementAt={handleDeleteMeasurementAt}
                 onScaleChange={setViewScale}
@@ -2082,11 +2424,20 @@ export function FlakePage({ currentFile, setRoute }: any) {
                     <span className="nova-muted">测量</span>
                     <span>{measurementRects.length} 个矩形</span>
                   </div>
+                  <div className="flake-page__tool-panel-kv">
+                    <span className="nova-muted">标记</span>
+                    <span>
+                      {effectiveOriginMarker
+                        ? `原点 x=${effectiveOriginMarker.x} y=${effectiveOriginMarker.y} z=${effectiveOriginMarker.z}${hasUnsavedMarkerEdits ? "（未保存）" : ""}`
+                        : hasUnsavedMarkerEdits ? "无（未保存）" : "无"}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="flake-page__tool-panel-section">
                   <div className="flake-page__tool-panel-heading">状态</div>
                   <div className="nova-muted nova-small flake-page__status-text">{statusText}</div>
+                  {markerStatus ? <div className="nova-muted nova-small flake-page__status-text">{markerStatus}</div> : null}
                   {quickBuildError ? <p className="nova-error flake-page__tool-panel-error">{quickBuildError}</p> : null}
                 </div>
 
@@ -2110,6 +2461,15 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 </div>
 
                 <div className="flake-page__tool-panel-actions">
+                  <button className="btn" type="button" onClick={handleSaveMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
+                    {isSavingEdits ? "保存中..." : "保存"}
+                  </button>
+                  <button className="btn" type="button" onClick={handleSaveMarkerEditsAs} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
+                    另存为
+                  </button>
+                  <button className="btn" type="button" onClick={handleRestoreMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
+                    还原
+                  </button>
                   <button className="btn" type="button" onClick={() => setShowInventoryDialog(true)} disabled={!editMode}>
                     打开创造模式物品栏
                   </button>
@@ -2146,6 +2506,49 @@ export function FlakePage({ currentFile, setRoute }: any) {
           <button className="btn flake-page__quickbar-open-inventory" type="button" onClick={() => setShowInventoryDialog(true)}>
             <span className="flake-page__quickbar-open-inventory-text">打开物品栏</span>
           </button>
+        </div>
+      ) : null}
+
+      {markerMenu ? (
+        <div
+          ref={markerMenuRef}
+          className="dropdown-menu flake-marker-context-menu"
+          onMouseDown={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          {markerMenu.isOrigin ? (
+            <>
+              <div className="dropdown-item flake-marker-menu-heading">编辑</div>
+              <button className="dropdown-item flake-marker-menu-item" type="button" onClick={handleRemoveOriginMarker}>
+                移除标记
+              </button>
+              <button
+                className="dropdown-item flake-marker-menu-item"
+                type="button"
+                disabled={!effectiveOriginMarker || !meta || effectiveOriginMarker.y >= meta.size_y - 1}
+                onClick={() => handleShiftOriginMarker(1)}
+              >
+                上移一层
+              </button>
+              <button
+                className="dropdown-item flake-marker-menu-item"
+                type="button"
+                disabled={!effectiveOriginMarker || effectiveOriginMarker.y <= 0}
+                onClick={() => handleShiftOriginMarker(-1)}
+              >
+                下移一层
+              </button>
+              <div className="dropdown-item flake-marker-menu-heading">创建/更改</div>
+              <div className="dropdown-item flake-marker-menu-empty">（无更多选项）</div>
+            </>
+          ) : (
+            <>
+              <div className="dropdown-item flake-marker-menu-heading">创建/更改（仅作提示）</div>
+              <button className="dropdown-item flake-marker-menu-item" type="button" onClick={() => handleStageOriginMarker(markerMenu.point)}>
+                原点
+              </button>
+            </>
+          )}
         </div>
       ) : null}
 
