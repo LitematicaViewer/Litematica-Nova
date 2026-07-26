@@ -96,7 +96,17 @@ export function resolveLayerBlockStates(entry: any, propertyPool: any[]): string
  * @param item 悬浮提示的方块
  * @returns 悬浮提示的组件
  */
-export function FlakeBlockTooltip({ x, y, item }: { x: number; y: number; item: FlakeHoverBlock | null; }) {
+export function FlakeBlockTooltip({
+  x,
+  y,
+  item,
+  highlightEmptyState = false,
+}: {
+  x: number;
+  y: number;
+  item: FlakeHoverBlock | null;
+  highlightEmptyState?: boolean;
+}) {
   const popupRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState(() => ({ left: x + 14, top: y + 14 }));
 
@@ -142,7 +152,7 @@ export function FlakeBlockTooltip({ x, y, item }: { x: number; y: number; item: 
         <span className="material-list-hover-popup-name">{item.name}</span>
       </div>
       <div className="material-list-hover-popup-row">方块ID：{item.id}</div>
-      <div className={item.hasStates ? "material-list-hover-popup-row" : "material-list-hover-popup-row flake-page__empty-state-row"}>方块状态：{item.states}</div>
+      <div className={highlightEmptyState && !item.hasStates ? "material-list-hover-popup-row flake-page__empty-state-row" : "material-list-hover-popup-row"}>方块状态：{item.states}</div>
       <div className="material-list-hover-popup-row">x={item.x} y={item.y} z={item.z}</div>
     </div>
   );
