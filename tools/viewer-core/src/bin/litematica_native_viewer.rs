@@ -2,7 +2,7 @@
 
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--public-build-info") {
-        println!("{}", serde_json::json!({"schema":"nova.public.beta.build.v1","flavor":"fast-only","fullMode":false,"publicBeta":true}));
+        println!("{}", serde_json::json!({"schema":"nova.public.beta.build.v1","flavor":"fast-only","fullMode":false,"publicBeta":true,"gitSha":env!("LBA_BACKEND_GIT_SHA")}));
         return ;
     }
 
