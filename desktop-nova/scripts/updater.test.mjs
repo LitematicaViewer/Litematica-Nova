@@ -45,12 +45,15 @@ test("取消更新后清理当次恢复快照，后续正常保存不会复活�
   assert.equal(f.api.takeUpdateDraft("properties:one"), undefined);
 });
 
-test("更新说明：始终统一新增、优化、修复、注意事项；旧文本进入注意事项", () => {
+test("更新说明：统一六段格式并兼容旧标题，实际Beta说明包含下版平台计划", () => {
   const f = fixture();
   const sections = f.api.releaseNoteSections("版本：0.2.0\n日期：2026-10-12\n## 新增\n- A\n## 修复\n- B");
-  assert.equal(sections.map((s) => s.label).join(","), "新增,优化,修复,注意事项");
-  assert.equal(sections[0].lines[0], "A"); assert.equal(sections[2].lines[0], "B");
-  assert.equal(f.api.releaseNoteSections("legacy text")[3].lines[0], "legacy text");
+  assert.equal(sections.map((s) => s.label).join(","), "版本与发布日期,新增功能,功能优化,问题修复,已知问题,后续计划");
+  assert.equal(sections[1].lines[0], "A"); assert.equal(sections[3].lines[0], "B");
+  assert.equal(f.api.releaseNoteSections("legacy text")[4].lines[0], "legacy text");
+  const release = f.api.releaseNoteSections(fs.readFileSync(new URL("../../docs/releases/BETA_0_1.md", import.meta.url), "utf8"));
+  assert.ok(release.every((s) => s.lines[0] !== "未提供"));
+  assert.ok(release[5].lines.includes("macOS 和 Linux 将在下个版本支持。"));
 });
 
 test("更新接口：前端仅走应用命令；官方验证与HTTPS不被旁路", () => {
@@ -65,7 +68,7 @@ test("更新接口：前端仅走应用命令；官方验证与HTTPS不被旁路
   assert.match(source, /same_release\(&original\.version, &original\.signature/);
   assert.match(source, /pause_admitting\(\)/);
   const quiesce = source.indexOf("supervisor.stop_admitting();");
-  const shutdown = source.indexOf("request_shutdown();");
+  const shutdown = source.indexOf(".close(&view.preview_id)");
   assert.ok(quiesce > 0 && shutdown > quiesce);
   assert.doesNotMatch(source.slice(shutdown, source.indexOf("pending.update.install")), /cancel.changed/);
   assert.doesNotMatch(source, /danger_accept_invalid|verify_signature\s*=\s*false/);

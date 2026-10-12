@@ -6,7 +6,7 @@
 
 Windows、Node.js 22、Rust stable/MSVC、WebView2，以及 Tauri 官方 Windows 构建依赖。公开快速模式不需要 Java、Iris 或完整模式适配产物。仓库包含获准再分发的游戏图标与统计资源。
 
-## Release EXE
+## Windows NSIS 安装包
 
 从仓库根目录执行 PowerShell：
 
@@ -20,11 +20,11 @@ $env:CARGO_TARGET_DIR = Join-Path $PWD.Path 'desktop-nova/src-tauri/target/publi
 Set-Location desktop-nova
 npm ci
 if ($LASTEXITCODE -ne 0) { throw "前端依赖安装失败" }
-npm run tauri -- build --no-bundle
+npm run tauri -- build --bundles nsis
 if ($LASTEXITCODE -ne 0) { throw "桌面构建失败" }
 ```
 
-输出目录为 `desktop-nova/src-tauri/target/public-beta/release`。程序不是单文件版：必须依照 `tauri.conf.json` 的资源映射保留整个运行目录。运行 `Litematica-Nova.exe --verify-public-resources` 核对后端身份、哈希及游戏资源；此 CLI 不启动界面。
+输出为 `desktop-nova/src-tauri/target/public-beta/release/bundle/nsis/*-setup.exe`。NSIS 使用 perMachine 安装，将显式映射的资源与快速后端包含在同一个 Setup.exe 内；不发布 ZIP/MSI。签名构建须从仓库外提供 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，或在 CI 构建后用官方 `tauri signer sign --app-version 0.1.1` 对原始安装包签名。运行 `Litematica-Nova.exe --verify-public-resources` 核对后端身份、哈希及游戏资源；此 CLI 不启动界面。
 
 ## 验证
 

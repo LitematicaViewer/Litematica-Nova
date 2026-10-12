@@ -45,14 +45,17 @@ export function clearCurrentUpdateDrafts() {
 }
 
 export function releaseNoteSections(notes: string | null) {
-  const labels = ["新增", "优化", "修复", "注意事项"];
+  const labels = ["版本与发布日期", "新增功能", "功能优化", "问题修复", "已知问题", "后续计划"];
+  const aliases: Record<string, string> = { 新增: "新增功能", 优化: "功能优化", 修复: "问题修复", 注意事项: "已知问题" };
   const sections = new Map(labels.map((label) => [label, [] as string[]]));
-  let active = "注意事项";
+  let active = "已知问题";
   for (const raw of (notes || "").split(/\r?\n/)) {
     const line = raw.trim();
-    if (!line || /^(?:#+\s*)?(?:版本|日期)\s*[：:]/.test(line)) continue;
+    if (!line || /^#\s/.test(line)) continue;
     const heading = line.replace(/^#+\s*/, "").replace(/[：:]$/, "").trim();
-    if (sections.has(heading)) { active = heading; continue; }
+    const label = aliases[heading] || heading;
+    if (sections.has(label)) { active = label; continue; }
+    if (/^(?:版本|日期)\s*[：:]/.test(line)) { sections.get("版本与发布日期")!.push(line); continue; }
     sections.get(active)!.push(line.replace(/^[-*]\s+/, ""));
   }
   return labels.map((label) => ({ label, lines: sections.get(label)!.length ? sections.get(label)! : ["未提供"] }));

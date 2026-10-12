@@ -1,7 +1,7 @@
 {
   "productName": "Litematica Nova",
   "mainBinaryName": "Litematica-Nova",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.litematica.nova",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -23,7 +23,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis"
+    ],
     "publisher": "Litematica-Nova",
     "shortDescription": "Litematica-Nova desktop viewer for Minecraft .litematic projections",
     "longDescription": "Litematica-Nova manages, analyzes, builds, and renders Minecraft .litematic projections.",
@@ -56,14 +58,16 @@
       "../../bin/public-beta": "bin/public-beta",
       "../../LICENSE": "licenses/LICENSE",
       "../../docs/THIRD_PARTY_UI.md": "licenses/THIRD_PARTY_UI.md",
-      "../../docs/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt"
-    }
+      "../../docs/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt",
+      "../../pack-in/materials/minecraft-26.3.json": "pack-in/materials/minecraft-26.3.json"
+    },
+    "createUpdaterArtifacts": true
   },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1NzZBN0MyNkE1Qjg5Q0QKUldUTmlWdHF3cWQydFVuaENKU3ZjQ1EvWEUyUmdvd3RlNlF0ZEdiWXdZNW1OSTlMVUdGK2ZNWHMK",
       "endpoints": [
-        "https://github.com/LitematicaViewer/Litematica-Nova/releases/latest/download/latest.json",
+        "https://raw.githubusercontent.com/LitematicaViewer/Litematica-Nova/main/updates/latest.json",
         "https://45-62-112-121.sslip.io:8448/nova-updates/latest.json"
       ],
       "windows": {

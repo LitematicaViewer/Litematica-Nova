@@ -324,4 +324,20 @@ mod tests {
         assert!(public.verify(&tampered, &signature, true).is_err());
         assert!(minisign_verify::Signature::decode("unsigned").is_err());
     }
+
+    #[test]
+    #[ignore = "requires NOVA_UPDATE_VERIFY_FILE and NOVA_UPDATE_VERIFY_SIGNATURE release paths"]
+    fn updater_release_signature_verifies_payload_and_rejects_tampering() {
+        use base64::Engine;
+        let config: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        let decode = |value: &str| String::from_utf8(base64::engine::general_purpose::STANDARD.decode(value.trim()).unwrap()).unwrap();
+        let public = minisign_verify::PublicKey::decode(&decode(config["plugins"]["updater"]["pubkey"].as_str().unwrap())).unwrap();
+        let signature_text = std::fs::read_to_string(std::env::var("NOVA_UPDATE_VERIFY_SIGNATURE").unwrap()).unwrap();
+        let signature = minisign_verify::Signature::decode(&decode(&signature_text)).unwrap();
+        let mut payload = std::fs::read(std::env::var("NOVA_UPDATE_VERIFY_FILE").unwrap()).unwrap();
+        assert!(public.verify(&payload, &signature, true).is_ok(), "release installer must match the embedded public key");
+        payload[0] ^= 1;
+        assert!(public.verify(&payload, &signature, true).is_err(), "tampered installer must be rejected");
+        println!("release_signature=verified; tampered_installer=rejected");
+    }
 }

@@ -4,7 +4,7 @@
 
 面向 Minecraft 玩家的 Windows 桌面工具。打开 `.litematic` 文件，就能查看投影信息和材料清单，也可以修改属性、批量替换方块，或从模板生成一份新投影。
 
-**Beta 0.1 公开测试准备 · Windows x64**
+**Beta 0.1 公开测试版 · Windows x64 · 版本 0.1.1**
 
 [反馈问题](https://github.com/LitematicaViewer/Litematica-Nova/issues) · **开发交流 QQ 群：1044260630**
 
@@ -34,11 +34,11 @@
 
 ## 开始使用
 
-1. 拿到完整测试包后，**先解压整个文件夹**，再双击 `Litematica-Nova.exe`。不要只拿走 EXE，也不要直接在压缩包中打开。
+1. 从 [Beta 0.1 发布页](https://github.com/LitematicaViewer/Litematica-Nova/releases/tag/beta-0.1.1) 下载 Windows x64 `Setup.exe`，运行安装；所需资源已包含在单个安装包内。安装到所有用户，需要确认 UAC。
 2. 点击「打开投影文件」，选择自己的 `.litematic`。它是独立软件，**不需要放进游戏的 mods 文件夹**。
 3. 在左侧切换统计、材料、分层等页面。首次尝试修改时，请保留原件，选择「另存为」。
 
-测试版本请通过开发群了解。当前版本仅支持 Windows x64；macOS/Linux 将会在下个版本支持。其他投影格式尚未作为正式发行功能提供。
+当前版本仅支持 Windows x64；**macOS 和 Linux 将在下个版本支持。** 其他投影格式尚未作为正式发行功能提供。详细变化见 [Beta 0.1 更新说明](docs/releases/BETA_0_1.md)。
 
 ## Beta 0.1 进度
 
@@ -66,7 +66,7 @@
 
 启动后会在后台检查更新。有新版本时显示版本、日期及新增/优化/修复/注意事项；可以更新、取消，或跳过当前版本。确认更新后显示下载进度，使用签名校验，保存当前草稿并等待后台写任务退出，再安装重启。GitHub 接口失败时切换专用 HTTPS 镜像。
 
-当前镜像服务已部署，尚未发布安装更新包；此状态表示“暂无更新”，不代表安装与重启已实机验收。具体配置见[更新维护说明](docs/UPDATER.md)。
+更新源使用 GitHub HTTPS 清单及专用 HTTPS 镜像，下载的是同一签名 NSIS 安装包，不使用便携 EXE 或 ZIP 更新。实际安装与重启仍需用户实机反馈；具体配置见[更新维护说明](docs/UPDATER.md)。
 
 ## 一起完善 Nova
 

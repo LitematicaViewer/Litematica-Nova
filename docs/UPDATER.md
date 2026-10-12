@@ -4,7 +4,7 @@ Nova 使用 **Tauri 官方 Updater 2.10.0**，与锁定的 Tauri 2.11.1 运行�
 
 ## 当前配置与行为
 
-1. 启动后异步检查 `https://github.com/LitematicaViewer/Litematica-Nova/releases/latest/download/latest.json`。
+1. 启动后异步检查 `https://raw.githubusercontent.com/LitematicaViewer/Litematica-Nova/main/updates/latest.json`。
 2. 网络、HTTP、解析失败自动检查 `https://45-62-112-121.sslip.io:8448/nova-updates/latest.json`。成功的 `204` 表示没有更新，不当作失败。
 3. 浮窗显示版本、日期、更新说明、来源及下载进度，提供更新、取消和跳过当前版本。手动「检查更新」可重新查看已跳过版本。
 4. 确认后先保存当前文件/页面，以及属性、替换、生成和分层草稿。签名校验完成后再保存最新草稿，暂停新任务，等待写入/构建任务自然结束，关闭预览并等待后台退出，随后官方插件安装并重启。
@@ -13,35 +13,39 @@ Nova 使用 **Tauri 官方 Updater 2.10.0**，与锁定的 Tauri 2.11.1 运行�
 
 更新前的 dry-run 授权不会跨重启恢复，恢复替换或生成草稿后须重新预览。分层方块状态与测量恢复为会话草稿，不伪称写入投影。
 
-**当前镜像只提供 204 空更新源，没有发布任何更新版本；GitHub 未发布。** 本轮 `--no-bundle` 仅构建可运行 Release 目录。Windows 官方 Updater 的实际更新载荷必须是签名 NSIS/MSI（包含匹配后端及资源），不能把便携主 EXE 当安装包。真实安装与重启、浮窗三主题显示仍待后续有签名安装包时人工验收；CLI 签名夹具不代表安装端到端通过。
+Beta 使用 Windows x64 单文件 NSIS Setup.exe，包含匹配快速后端及全部映射资源。CI 构建审计后由发布者在本机使用官方 Tauri signer 签名，安装包字节不变，签名放入更新清单。GitHub Pre-release 不会出现在 `/releases/latest`，因此主更新接口使用公开 `main/updates/latest.json`。真实安装、重启和主题显示未进行 GUI 验收；CLI 签名与安装包静态检查不等于安装端到端验收。
 
 ## 发布与密钥边界
 
 更新签名私钥与密码仅由发布者在仓库外管理，不进入源码、服务器、构建产物或 CI 日志。客户端只内置公钥。CI 当前只生成审计用构建产物，不自动创建正式 GitHub Release，不配置签名私钥。
 
-更新载荷必须使用通过审计、包含全部资源的签名 NSIS/MSI。便携 EXE 不写入 `latest.json` 的安装载荷。未完成签名安装与重启人工验收前，镜像继续返回 204。
+更新载荷只使用通过审计、包含全部资源的签名 NSIS Setup.exe。便携 EXE、ZIP、MSI 不作为本版发行载荷。签名、安装包 SHA256、版本一致性及双 HTTPS 源通过 CLI 检查后发布清单；无清单时镜像返回 204。VPS 每个版本只保存安装包、更新说明和更新所需最小元数据，不存源码、ZIP 或构建缓存。
 
-更新简介使用 [Beta 0.1 更新说明](releases/BETA_0_1.md)，本版明确注明：**macOS/Linux 将会在下个版本支持。**
+更新简介使用 [Beta 0.1 更新说明](releases/BETA_0_1.md)，本版明确注明：**macOS 和 Linux 将在下个版本支持。**
 
 ## 唯一更新说明格式
 
 `latest.json` 遵循官方静态清单：`version`、RFC3339 `pub_date`、`notes`、`platforms.windows-x86_64.url` 与 `.signature`。后者是 `.sig` 内容，不是路径。GitHub 与镜像使用完全相同的已签名包和版本，URL 可不同。以下仅为说明模板，不代表已发布版本：
 
 ```text
-版本：<SemVer>
-日期：<YYYY-MM-DD>
+## 版本与发布日期
+- 版本：<SemVer>
+- 日期：<YYYY-MM-DD>
 
-## 新增
+## 新增功能
 - <用户可见的新功能，无则写“无”>
 
-## 优化
-- <体验与性能变化，无则写“无”>
+## 功能优化
+- <体验变化，无则写“无”>
 
-## 修复
+## 问题修复
 - <已验证的问题修复，无则写“无”>
 
-## 注意事项
-- <兼容性、数据迁移及未完成验收，无则写“无”>
+## 已知问题
+- <兼容性、未完成验收，无则写“无”>
+
+## 后续计划
+- macOS 和 Linux 将在下个版本支持。
 ```
 
 ## CLI 验证
