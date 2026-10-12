@@ -34,7 +34,7 @@
 
 ## 开始使用
 
-1. 从 [Beta 0.1 发布页](https://github.com/LitematicaViewer/Litematica-Nova/releases/tag/beta-0.1.1) 下载 Windows x64 `Setup.exe`，运行安装；所需资源已包含在单个安装包内。安装到所有用户，需要确认 UAC。
+1. 从 [Beta 0.1 发布页](https://github.com/LitematicaViewer/Litematica-Nova/releases/tag/beta-0.1.1-r1) 下载 Windows x64 `Setup.exe`，运行安装；所需资源已包含在单个安装包内。安装到所有用户，需要确认 UAC。
 2. 点击「打开投影文件」，选择自己的 `.litematic`。它是独立软件，**不需要放进游戏的 mods 文件夹**。
 3. 在左侧切换统计、材料、分层等页面。首次尝试修改时，请保留原件，选择「另存为」。
 

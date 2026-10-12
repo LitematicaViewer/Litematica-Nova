@@ -49,6 +49,10 @@ function sourceGate(ref) {
   });
   const rejected = records.filter(item => item.type !== 'blob' || item.mode !== '100644' && item.mode !== '100755' || deniedSource(item.name));
   if (rejected.length) throw new Error(`Public source contains forbidden paths (${rejected.length}): ${rejected.slice(0, 12).map(item => item.name).join(', ')}`);
+  const sourcePaths = new Set(records.map(item => item.name));
+  for (const name of ['pack-in/materials/minecraft-26.3.json', 'pack-in/materials/item-icons-26.3.json', 'pack-in/lang/zh_cn.json', 'pack-in/game-icons/block.zip']) {
+    if (!sourcePaths.has(name)) throw new Error(`Required public compile input is missing: ${name}`);
+  }
   if (ref === 'HEAD') {
     const indexed = git(['ls-files', '-z']).split('\0').filter(Boolean);
     const tree = new Set(records.map(item => item.name));
