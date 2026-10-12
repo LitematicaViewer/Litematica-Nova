@@ -296,10 +296,10 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
   return (
     <div className="settings-page">
       <div className="settings-page__title">选项</div>
-
-      <div className="group-box">
+      
+      <div className="group-box"> {/* 外观 */}
         <div className="group-box-title">外观</div>
-        <div className="form-row">
+        <div className="form-row"> {/* 外观 - 主题 */}
           <div className="form-label form-label-wide">主题</div>
           <div className="form-field">
             <select className="input" value={normalizeTheme(theme)} onChange={(event) => handleTheme(event.target.value)}>
@@ -310,6 +310,11 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
           </div>
         </div>
       </div>
+      <div className="group-box"> {/* 用户文件 */}
+        <div className="group-box-title">用户文件</div>
+
+      </div>
+
 
       <div className="group-box">
         <div className="group-box-title">用户配置目录</div>
@@ -337,8 +342,8 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
         <div className="button-row">
           <button className="btn" type="button" onClick={openAssetManager}>打开游戏资源管理器</button>
         </div>
-        <div className="game-resource-note">
-          语言、方块图标、物品图标和游戏数据会按照“子窗口行为”设置决定使用独立窗口还是主窗口遮罩。
+        <div className="settings-page__note">
+          在子窗口中管理方块图标、物品图标、游戏数据和枚举器
         </div>
       </div>
 

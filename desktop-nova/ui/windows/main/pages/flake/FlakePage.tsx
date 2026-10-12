@@ -72,7 +72,7 @@ const EDIT_TOOL_PLACEHOLDERS = [
   { id: "hand", glyph: "手", name: "手型", description: "拖拽和查看" },
   { id: "debug-stick", glyph: "调", name: "调试棒", description: "修改方块状态" },
   { id: "measure", glyph: "量", name: "测量工具", description: "测量欧几里得距离与曼哈顿距离，右键删除矩形" },
-  { id: "marker", glyph: "标", name: "标记点工具", description: "设定投影标记点" },
+  { id: "marker", glyph: "标", name: "标记点工具", description: "在任意方格设定投影标记点" },
   { id: "select", glyph: "选", name: "框选工具", description: "框选区域" },
   { id: "brush", glyph: "笔", name: "画笔", description: "绘制方块" },
   { id: "eraser", glyph: "擦", name: "橡皮擦", description: "擦除方块" },
@@ -1284,9 +1284,9 @@ const LayerCanvas = forwardRef<
     }
 
     if (interactionTool === "marker") {
-      const block = resolveBlockAtEvent(event);
-      if (block) {
-        const point = { x: block.x, y: block.y, z: block.z };
+      const gridPoint = resolveMeasurementPointAtClient(event.clientX, event.clientY);
+      if (gridPoint) {
+        const point = { x: gridPoint.x, y: layerY, z: gridPoint.z };
         onMarkerContextMenu(point, markerPointsEqual(originMarker, point), event);
       }
       return;

@@ -242,6 +242,7 @@ td {
 }
 
 .game-resource-note {
+    color: var(--ln-muted-text-color, GrayText);
     margin-top: 8px;
     font-size: .9em;
     opacity: .72;
