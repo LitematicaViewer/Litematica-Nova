@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "litematica_native_viewer"
 path = "src/bin/litematica_native_viewer.rs"
 
+[[bin]]
+name = "stockpile_server"
+path = "src/bin/stockpile_server.rs"
+
 [features]
 default = ["public-beta"]
 public-beta = []
@@ -23,6 +27,7 @@ datafix-oracle = []
 resolver = "3"
 members = [
     "crates/viewer-launch-contract",
+    "crates/nova-render-protocol",
 ]
 default-members = [
     ".",
