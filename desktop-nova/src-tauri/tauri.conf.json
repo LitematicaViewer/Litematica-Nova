@@ -53,7 +53,10 @@
       "../../data/generation-templates": "data/generation-templates",
       "../../data/minecraft_blockstates": "data/minecraft_blockstates",
       "gen/block-icons": "block",
-      "../../bin/public-beta": "bin/public-beta"
+      "../../bin/public-beta": "bin/public-beta",
+      "../../LICENSE": "licenses/LICENSE",
+      "../../docs/THIRD_PARTY_UI.md": "licenses/THIRD_PARTY_UI.md",
+      "../../docs/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt"
     }
   },
   "plugins": {

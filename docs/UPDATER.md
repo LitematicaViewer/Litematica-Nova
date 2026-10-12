@@ -1,0 +1,51 @@
+# 自动更新与签名
+
+Nova 使用 **Tauri 官方 Updater 2.10.0**，与锁定的 Tauri 2.11.1 运行栈配合。更新编排在 `desktop-nova/src-tauri/src/application/updater.rs`，WebView 仅调用应用命令，不持有安装包字节、签名私钥或直接安装权限。
+
+## 当前配置与行为
+
+1. 启动后异步检查 `https://github.com/LitematicaViewer/Litematica-Nova/releases/latest/download/latest.json`。
+2. 网络、HTTP、解析失败自动检查 `https://45-62-112-121.sslip.io:8448/nova-updates/latest.json`。成功的 `204` 表示没有更新，不当作失败。
+3. 浮窗显示版本、日期、更新说明、来源及下载进度，提供更新、取消和跳过当前版本。手动「检查更新」可重新查看已跳过版本。
+4. 确认后先保存当前文件/页面，以及属性、替换、生成和分层草稿。签名校验完成后再保存最新草稿，暂停新任务，等待写入/构建任务自然结束，关闭预览并等待后台退出，随后官方插件安装并重启。
+5. 取消会取消检查/下载 future；等待任务阶段也可以取消，不强杀正在写文件的任务。开始最终停服阶段后禁用取消与新任务；若停服/安装失败，保留草稿并提供「重启恢复」，不会恢复已失效服务的业务入口。草稿存储失败则不开始安装。
+6. 下载失败仅对配置中的其他源各重试一次；镜像必须返回**同版本、同签名**，并重新由官方插件下载、强制校验。HTTPS 限制同时覆盖接口、安装包和重定向；不接受无效证书，不使用明文降级。
+
+更新前的 dry-run 授权不会跨重启恢复，恢复替换或生成草稿后须重新预览。分层方块状态与测量恢复为会话草稿，不伪称写入投影。
+
+**当前镜像只提供 204 空更新源，没有发布任何更新版本；GitHub 未发布。** 本轮 `--no-bundle` 仅构建可运行 Release 目录。Windows 官方 Updater 的实际更新载荷必须是签名 NSIS/MSI（包含匹配后端及资源），不能把便携主 EXE 当安装包。真实安装与重启、浮窗三主题显示仍待后续有签名安装包时人工验收；CLI 签名夹具不代表安装端到端通过。
+
+## 发布与密钥边界
+
+更新签名私钥与密码仅由发布者在仓库外管理，不进入源码、服务器、构建产物或 CI 日志。客户端只内置公钥。CI 当前只生成审计用构建产物，不自动创建正式 GitHub Release，不配置签名私钥。
+
+更新载荷必须使用通过审计、包含全部资源的签名 NSIS/MSI。便携 EXE 不写入 `latest.json` 的安装载荷。未完成签名安装与重启人工验收前，镜像继续返回 204。
+
+更新简介使用 [Beta 0.1 更新说明](releases/BETA_0_1.md)，本版明确注明：**macOS/Linux 将会在下个版本支持。**
+
+## 唯一更新说明格式
+
+`latest.json` 遵循官方静态清单：`version`、RFC3339 `pub_date`、`notes`、`platforms.windows-x86_64.url` 与 `.signature`。后者是 `.sig` 内容，不是路径。GitHub 与镜像使用完全相同的已签名包和版本，URL 可不同。以下仅为说明模板，不代表已发布版本：
+
+```text
+版本：<SemVer>
+日期：<YYYY-MM-DD>
+
+## 新增
+- <用户可见的新功能，无则写“无”>
+
+## 优化
+- <体验与性能变化，无则写“无”>
+
+## 修复
+- <已验证的问题修复，无则写“无”>
+
+## 注意事项
+- <兼容性、数据迁移及未完成验收，无则写“无”>
+```
+
+## CLI 验证
+
+从 `desktop-nova` 执行 `node --test scripts/updater.test.mjs`、`npx tsc --noEmit`；从仓库根执行 `cargo test --manifest-path desktop-nova/src-tauri/Cargo.toml --bin desktop-nova updater_`。公开测试夹具仅是无执行能力的文本和签名，覆盖签名正确、内容篡改与无效签名；不包含私钥。
+
+参考：[Tauri 官方 Updater](https://v2.tauri.app/plugin/updater/)、[锁定版本 Rust API](https://docs.rs/tauri-plugin-updater/2.10.0/tauri_plugin_updater/)。
