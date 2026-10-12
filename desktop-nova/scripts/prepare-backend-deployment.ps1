@@ -20,12 +20,28 @@ function Get-ArtifactRecord([string] $Path) {
     return [ordered]@{ bytes = [uint64](Get-Item -LiteralPath $Path).Length; sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 }
 function Assert-PublicBinary([string] $Path) {
-    $lines = @(& $Path --public-build-info)
-    if ($LASTEXITCODE -ne 0) { throw "Public build identity rejected: $Path" }
-    $info = ($lines -join "`n") | ConvertFrom-Json
+    # Windows-subsystem executables must be waited explicitly: PowerShell's
+    # native pipeline may otherwise close stdout before the CLI reply arrives.
+    $start = [Diagnostics.ProcessStartInfo]::new($Path)
+    $start.ArgumentList.Add('--public-build-info')
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $reply = $stdout.GetAwaiter().GetResult()
+        $errorReply = $stderr.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0 -or $errorReply) { throw "Public build identity rejected: $Path" }
+        $info = $reply | ConvertFrom-Json
+    } finally { $process.Dispose() }
     if ($info.schema -ne "nova.public.beta.build.v1" -or $info.flavor -ne "fast-only" -or $info.fullMode -ne $false -or $info.publicBeta -ne $true) {
         throw "Not an isolated public fast-only backend: $Path"
     }
+    if ($info.gitSha -ne $GitSha) { throw "Public backend source commit mismatch: $Path" }
 }
 
 $repo = (Resolve-Path -LiteralPath $RepoRoot).Path
