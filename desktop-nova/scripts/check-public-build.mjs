@@ -1,0 +1,177 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const privatePaths = /(?:^|\/)(?:render_v5|renderer-gl|renderer-vulkan|iris-compat|nova-render-protocol|nova-build-worker|nova-render-service|shaderpacks-private)(?:\/|$)|^desktop-nova\/src-tauri\/src\/(?:application\/render_facade|render_service_client|viewer_compatibility|headless_e2e|bin\/popup_smoke)\.rs$|^tools\/mc26-oracle\//i;
+const generatedOrSecretPaths = /(?:^|\/)(?:\.tmp|\.ssh|node_modules|target|arr-private|viewer-backend)(?:\/|$)|\.(?:exe|dll|pdb|jar|pem|key|pfx|p12|jks|sqlite|sqlite3)$/i;
+const privateMarkers = ['RenderV5Backend', 'RenderV5Request', 'PreparedV5Artifact', 'nova_render_protocol', 'nova-render-service', 'nova-build-worker', 'iris_runtime', 'renderer-gl', 'renderer-vulkan', 'iris-compat', 'src/render_v5/', 'src\\render_v5\\'];
+const privateModule = /\b(?:mod|use)\s+(?:crate::)?(?:render_v5|iris_runtime|iris_gl|render_service_client|render_facade|viewer_compatibility)\b|\bnova-render-protocol\s*=|\b(?:renderer-gl|renderer-vulkan|iris-compat)\s*=|\bfeature\s*=\s*"(?:full|full-mode|render-v5|iris|commercial)"/;
+const privateKey = /-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----[\r\n]+\s*[A-Za-z0-9+/=]{32,}/;
+const sensitiveCookie = /(?:set-cookie\s*:\s*[^\r\n]*?\bctoken\s*=|["']?ctoken["']?\s*[:=]\s*["']?)([A-Za-z0-9_+/.=-]{12,}|\[REDACTED\])/ig;
+const safeCookie = value => value === '[REDACTED]' || value === 'REDACTED';
+const textExtensions = /\.(?:rs|toml|lock|json|js|mjs|ts|tsx|yml|yaml|md|txt|ps1|sh|css|wgsl|glsl|vert|frag)$/i;
+
+function run(executable, args, options = {}) {
+  const result = spawnSync(executable, args, { cwd: repo, maxBuffer: 256 * 1024 * 1024, ...options });
+  if (result.error || result.status !== 0) throw new Error(`${path.basename(executable)} command failed (${result.status ?? 'spawn'}): ${result.error?.message ?? String(result.stderr).trim().slice(0, 800)}`);
+  return result.stdout;
+}
+function git(args, binary = false) { return run('git', args, { encoding: binary ? undefined : 'utf8' }); }
+function cookieLeak(text) {
+  sensitiveCookie.lastIndex = 0;
+  for (const match of text.matchAll(sensitiveCookie)) if (!safeCookie(match[1])) return true;
+  return false;
+}
+function deniedSource(name) {
+  if (privatePaths.test(name) || generatedOrSecretPaths.test(name)) return true;
+  if (name.startsWith('.github/workflows/') && name !== '.github/workflows/beta-public.yml') return true;
+  return false;
+}
+function binaryMarkerHits(bytes) {
+  return privateMarkers.filter(marker => bytes.includes(Buffer.from(marker)) || bytes.includes(Buffer.from(marker, 'utf16le')));
+}
+function isWindowsX64Exe(bytes) {
+  if (bytes.length < 64 || bytes.toString('ascii', 0, 2) !== 'MZ') return false;
+  const offset = bytes.readUInt32LE(0x3c);
+  return offset + 6 <= bytes.length && bytes.readUInt32LE(offset) === 0x00004550 && bytes.readUInt16LE(offset + 4) === 0x8664;
+}
+
+function sourceGate(ref) {
+  const commit = git(['rev-parse', '--verify', `${ref}^{commit}`]).trim();
+  const records = git(['ls-tree', '-rz', '--full-tree', commit]).split('\0').filter(Boolean).map(line => {
+    const [metadata, name] = line.split('\t');
+    const [mode, type, object] = metadata.split(' ');
+    return { mode, type, object, name };
+  });
+  const rejected = records.filter(item => item.type !== 'blob' || item.mode !== '100644' && item.mode !== '100755' || deniedSource(item.name));
+  if (rejected.length) throw new Error(`Public source contains forbidden paths (${rejected.length}): ${rejected.slice(0, 12).map(item => item.name).join(', ')}`);
+  if (ref === 'HEAD') {
+    const indexed = git(['ls-files', '-z']).split('\0').filter(Boolean);
+    const tree = new Set(records.map(item => item.name));
+    if (indexed.some(name => deniedSource(name) || !tree.has(name)) || tree.size !== indexed.length) throw new Error('Public source/index paths do not match the audited HEAD tree.');
+  }
+  for (const item of records.filter(item => textExtensions.test(item.name))) {
+    const text = git(['cat-file', 'blob', item.object], true).toString('utf8');
+    if (privateKey.test(text) || cookieLeak(text)) throw new Error(`Sensitive text found in ${item.name} (value redacted).`);
+    if (/^tools\/viewer-core\/.*\.(?:rs|toml)$|^desktop-nova\/src-tauri\/.*\.(?:rs|toml)$/.test(item.name) && privateModule.test(text)) throw new Error(`Private module or dependency reference in ${item.name}.`);
+  }
+  // Only real credential headers in history are rejected; identifiers and
+  // redacted header samples remain valid. Old Full history is not rejected.
+  const history = git(['rev-list', '--objects', commit]).split('\n').map(line => {
+    const at = line.indexOf(' '); return at < 0 ? null : { object: line.slice(0, at), name: line.slice(at + 1) };
+  }).filter(item => item && /(?:headers|reden-api-samples).*\.(?:txt|md|json)$/i.test(item.name));
+  let historicalHeaders = 0;
+  for (const item of history) {
+    if (git(['cat-file', '-t', item.object]).trim() !== 'blob') continue;
+    historicalHeaders += 1;
+    if (cookieLeak(git(['cat-file', 'blob', item.object], true).toString('utf8'))) throw new Error(`Historical credential header remains in ${item.name} (value redacted).`);
+  }
+  console.log(`public_source=verified; tracked_files=${records.length}; historical_headers=${historicalHeaders}; ref=${commit}`);
+}
+
+function filesUnder(directory) {
+  const files = [];
+  for (const entry of readdirSync(directory)) {
+    const filename = path.join(directory, entry);
+    const stat = lstatSync(filename);
+    if (stat.isSymbolicLink()) throw new Error(`Package symlink rejected: ${entry}`);
+    if (stat.isDirectory()) files.push(...filesUnder(filename));
+    else if (stat.isFile()) files.push(filename);
+    else throw new Error(`Package special file rejected: ${entry}`);
+  }
+  return files;
+}
+function buildIdentity(executable) {
+  const value = JSON.parse(run(executable, ['--public-build-info'], { encoding: 'utf8', timeout: 30_000 }));
+  if (value.schema !== 'nova.public.beta.build.v1' || value.flavor !== 'fast-only' || value.publicBeta !== true || value.fullMode !== false) throw new Error(`Public build identity rejected: ${path.basename(executable)}`);
+  return value;
+}
+function verifyMappedResources(directory, records) {
+  const manifestDir = path.join(repo, 'desktop-nova/src-tauri');
+  const resourceMap = JSON.parse(readFileSync(path.join(manifestDir, 'tauri.conf.json'), 'utf8')).bundle.resources;
+  if (!resourceMap || Array.isArray(resourceMap)) throw new Error('Public build requires the audited explicit resource map.');
+  const expected = new Set(['Litematica-Nova.exe']);
+  const actual = new Map(records.map(record => [record.path, record]));
+  let verified = 0;
+  for (const [sourceName, destinationName] of Object.entries(resourceMap)) {
+    const source = path.resolve(manifestDir, sourceName);
+    if (!source.startsWith(`${repo}${path.sep}`) || !existsSync(source) || lstatSync(source).isSymbolicLink()) throw new Error(`Public resource source missing or invalid: ${sourceName}`);
+    const destination = path.resolve(directory, destinationName);
+    if (!destination.startsWith(`${directory}${path.sep}`)) throw new Error(`Public resource destination escapes package: ${destinationName}`);
+    const directorySource = lstatSync(source).isDirectory();
+    for (const file of directorySource ? filesUnder(source) : [source]) {
+      const relative = directorySource ? path.join(destinationName, path.relative(source, file)) : destinationName;
+      const name = relative.split(path.sep).join('/');
+      if (expected.has(name)) throw new Error(`Duplicate mapped resource: ${name}`);
+      expected.add(name);
+      const bytes = readFileSync(file);
+      const deployed = actual.get(name);
+      if (!deployed || deployed.bytes !== bytes.length || deployed.sha256 !== createHash('sha256').update(bytes).digest('hex')) throw new Error(`Mapped resource missing or byte mismatch: ${name}`);
+      verified += 1;
+    }
+  }
+  assert.deepEqual([...actual.keys()].sort(), [...expected].sort(), 'Public package inventory must exactly match app and declared resources.');
+  return verified;
+}
+function artifactGate(input) {
+  if (process.platform !== 'win32') throw new Error('Beta 0.1 desktop runtime artifact verification supports Windows only; macOS/Linux are unsupported, not simulated.');
+  const directory = path.resolve(repo, input);
+  const expectedExe = new Set(['Litematica-Nova.exe', 'bin/public-beta/litematica_core.exe', 'bin/public-beta/litematica_native_viewer.exe']);
+  const permitted = /^(?:Litematica-Nova\.exe|public-build-audit\.json|bin\/public-beta\/(?:litematica_core\.exe|litematica_native_viewer\.exe|backend-deployment\.json)|block\/[^/]+\.png|pack-in\/(?:enumerator|flake|item-icons-26\.3|lang)\/.+|data\/(?:generation-templates|minecraft_blockstates)\/.+|licenses\/(?:THIRD_PARTY_NOTICES\.txt|LICENSE|THIRD_PARTY_UI\.md))$/;
+  const files = filesUnder(directory);
+  const records = [];
+  const exeNames = new Set();
+  for (const filename of files) {
+    const name = path.relative(directory, filename).split(path.sep).join('/');
+    if (!permitted.test(name) || /\.(?:dll|pdb|jar|pem|key|pfx|p12|jks)$/i.test(name) || privatePaths.test(name) || /\.exe$/i.test(name) && !expectedExe.has(name)) throw new Error(`Unexpected public package file: ${name}`);
+    if (name === 'public-build-audit.json') continue;
+    const bytes = readFileSync(filename);
+    const hits = binaryMarkerHits(bytes);
+    if (hits.length || privateKey.test(bytes.toString('utf8')) || cookieLeak(bytes.toString('utf8'))) throw new Error(`Sensitive package content in ${name} (markers: ${hits.join(', ') || 'credential'}; values redacted).`);
+    if (/\.exe$/i.test(name)) {
+      if (!isWindowsX64Exe(bytes)) throw new Error(`Package executable is not a real Windows x64 PE: ${name}`);
+      exeNames.add(name);
+    }
+    records.push({ path: name, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+  }
+  assert.deepEqual([...exeNames].sort(), [...expectedExe].sort(), 'Public package must contain exactly three real executables.');
+  for (const name of ['THIRD_PARTY_NOTICES.txt', 'LICENSE', 'THIRD_PARTY_UI.md']) {
+    if (!existsSync(path.join(directory, 'licenses', name))) throw new Error(`Public package license missing: ${name}`);
+  }
+  const mappedResources = verifyMappedResources(directory, records);
+  const identities = [...expectedExe].map(name => ({ path: name, ...buildIdentity(path.join(directory, name)) }));
+  const sourceCommit = process.env.LBA_BUILD_GIT_SHA ?? identities[0].gitSha;
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sourceCommit ?? '') || identities.some(identity => identity.gitSha !== sourceCommit)) throw new Error('Public executables do not match one audited source commit.');
+  const result = run(path.join(directory, 'Litematica-Nova.exe'), ['--verify-public-resources'], { encoding: 'utf8', timeout: 60_000 }).trim();
+  assert.equal(result, 'public_resources=verified; backends=fast-only; full_mode=absent');
+  const report = { schema: 'nova.public.beta.audit.v1', platform: 'windows-x64', sourceCommit, privateMarkerHits: 0, resourcesVerified: true, mappedResources, updaterPayload: false, supportedPlatforms: ['windows-x64'], unsupportedPlatforms: ['macos-x64', 'macos-arm64', 'linux-x64', 'linux-arm64'], identities, files: records };
+  const reportPath = path.join(directory, 'public-build-audit.json');
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  assert.deepEqual(JSON.parse(readFileSync(reportPath, 'utf8')), report);
+  console.log(`public_artifacts=verified; executables=3; files=${records.length}; mapped_resources=${mappedResources}; resources=verified; updater_payload=false`);
+}
+function selfTest() {
+  for (const name of ['tools/viewer-core/src/render_v5/backend.rs', 'tools/viewer-core/crates/iris-compat/src/lib.rs', 'desktop-nova/src-tauri/src/application/render_facade.rs', 'private.key', 'bin/viewer-backend/old.exe']) assert(deniedSource(name));
+  for (const name of ['tools/viewer-core/src/native_viewer.rs', 'desktop-nova/src-tauri/src/application/quick_preview.rs', 'pack-in/game-icons/block.zip']) assert(!deniedSource(name));
+  assert(cookieLeak(`set-cookie: ctoken=${'sample'.repeat(5)}; Path=/`));
+  assert(!cookieLeak('set-cookie: ctoken=[REDACTED]; Path=/'));
+  assert(!cookieLeak('ctoken identifier only'));
+  assert(privateKey.test(`-----BEGIN PRIVATE KEY-----\n${'A'.repeat(64)}`));
+  assert.deepEqual(binaryMarkerHits(Buffer.from('RenderV5Backend', 'utf16le')), ['RenderV5Backend']);
+  assert.deepEqual(binaryMarkerHits(Buffer.from('完整模式正在开发中 Full display DTO fast_experimental')), []);
+  console.log('public_gate_self_test=passed; checks=14');
+}
+
+try {
+  const args = process.argv.slice(2);
+  if (args.length === 1 && args[0] === '--self-test') selfTest();
+  else if (args[0] === '--source' && args[1] === '--ref' && args.length === 3) sourceGate(args[2]);
+  else if (args[0] === '--ref' && args.length === 2) sourceGate(args[1]);
+  else if (args[0] === '--source' && args.length <= 2) sourceGate(args[1] ?? 'HEAD');
+  else if (args[0] === '--artifacts' && args.length === 2 && existsSync(path.resolve(repo, args[1]))) artifactGate(args[1]);
+  else throw new Error('Usage: check-public-build.mjs --source [--ref <sha>] | --artifacts <runtime-package-dir> | --self-test');
+} catch (error) { console.error(`public_gate=blocked; ${error.message}`); process.exitCode = 1; }

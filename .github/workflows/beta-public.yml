@@ -1,0 +1,122 @@
+name: Beta public Windows build
+
+on:
+  push:
+    tags: ['beta-0.1.*']
+  workflow_dispatch:
+    inputs:
+      beta_tag:
+        description: 'Existing audited Beta tag reachable from public main (beta-0.1.*)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: beta-public-${{ github.event.inputs.beta_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  platform-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report actual platform support
+        run: |
+          echo 'Windows x64: build and CLI package verification follow in Windows job.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'macOS x64 / ARM64: unsupported; native Application Host and embedding are not implemented.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Linux x64 / ARM64: unsupported; native Application Host and embedding are not implemented.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No empty platform packages, formal GitHub Release, or updater payload will be published.' >> "$GITHUB_STEP_SUMMARY"
+
+  windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      LBA_BUILD_GIT_SHA: ${{ github.sha }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}\desktop-nova\src-tauri\target\public-beta
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.inputs.beta_tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require audited Beta tag on public main
+        shell: pwsh
+        env:
+          BETA_TAG: ${{ github.event.inputs.beta_tag || github.ref_name }}
+        run: |
+          $tag = $env:BETA_TAG
+          if ($tag -notmatch '^beta-0\.1\.[A-Za-z0-9._-]+$') { throw 'Only beta-0.1.* tags are allowed' }
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Beta tag must be reachable from public main' }
+          $sha = (git rev-parse HEAD).Trim()
+          "LBA_BUILD_GIT_SHA=$sha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          node desktop-nova/scripts/check-public-build.mjs --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node desktop-nova/scripts/check-public-build.mjs --source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install official Node.js toolchain
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Prepare official toolchains and frontend dependencies
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ([int]((node --version).TrimStart('v').Split('.')[0]) -lt 22) { throw 'Runner must provide Node.js 22 or newer' }
+          npm ci --prefix desktop-nova
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build only isolated public helpers
+        shell: pwsh
+        run: |
+          cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir tools/viewer-core/target/public-beta --no-default-features --features public-beta --bin litematica_core --bin litematica_native_viewer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./desktop-nova/scripts/prepare-backend-deployment.ps1 -RepoRoot $env:GITHUB_WORKSPACE -Profile release -GitSha $env:LBA_BUILD_GIT_SHA
+      - name: Build real Tauri application without publishing
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5
+        with:
+          projectPath: desktop-nova
+          args: --no-bundle
+          includeDebug: false
+          includeRelease: true
+          includeUpdaterJson: false
+          uploadPlainBinary: false
+          retryAttempts: 0
+          # No tagName/releaseId/releaseName and no GitHub write token.
+      - name: Assemble actual runnable portable directory
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:CARGO_TARGET_DIR 'release'
+          $package = Join-Path $env:GITHUB_WORKSPACE 'dist/public-beta/windows-x64'
+          New-Item -ItemType Directory -Path $package -Force | Out-Null
+          Copy-Item -LiteralPath (Join-Path $source 'Litematica-Nova.exe') -Destination $package
+          $manifestDir = Join-Path $env:GITHUB_WORKSPACE 'desktop-nova/src-tauri'
+          $resources = (Get-Content (Join-Path $manifestDir 'tauri.conf.json') -Raw | ConvertFrom-Json).bundle.resources
+          foreach ($mapping in $resources.PSObject.Properties) {
+            $input = [IO.Path]::GetFullPath((Join-Path $manifestDir $mapping.Name))
+            $destination = [IO.Path]::GetFullPath((Join-Path $package $mapping.Value))
+            if (-not $destination.StartsWith($package + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Resource destination escapes package' }
+            if ((Get-Item -LiteralPath $input).PSIsContainer) {
+              New-Item -ItemType Directory -Path $destination -Force | Out-Null
+              Get-ChildItem -LiteralPath $input -Force | Copy-Item -Destination $destination -Recurse
+            } else {
+              New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+              Copy-Item -LiteralPath $input -Destination $destination
+            }
+          }
+          node desktop-nova/scripts/check-public-build.mjs --artifacts $package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -LiteralPath $package -DestinationPath "dist/public-beta/Litematica-Nova-$env:LBA_BUILD_GIT_SHA-windows-x64.zip"
+          Get-FileHash "dist/public-beta/Litematica-Nova-$env:LBA_BUILD_GIT_SHA-windows-x64.zip" -Algorithm SHA256 | Format-List
+      - name: Upload audited build artifact only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Litematica-Nova-Beta-windows-x64-${{ github.run_id }}
+          path: |
+            dist/public-beta/*-windows-x64.zip
+            dist/public-beta/windows-x64/public-build-audit.json
+          if-no-files-found: error
+          retention-days: 14
