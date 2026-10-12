@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -121,7 +121,7 @@ function artifactGate(input) {
   if (process.platform !== 'win32') throw new Error('Beta 0.1 desktop runtime artifact verification supports Windows only; macOS/Linux are unsupported, not simulated.');
   const directory = path.resolve(repo, input);
   const expectedExe = new Set(['Litematica-Nova.exe', 'bin/public-beta/litematica_core.exe', 'bin/public-beta/litematica_native_viewer.exe']);
-  const permitted = /^(?:Litematica-Nova\.exe|public-build-audit\.json|bin\/public-beta\/(?:litematica_core\.exe|litematica_native_viewer\.exe|backend-deployment\.json)|block\/[^/]+\.png|pack-in\/(?:enumerator|flake|item-icons-26\.3|lang)\/.+|data\/(?:generation-templates|minecraft_blockstates)\/.+|licenses\/(?:THIRD_PARTY_NOTICES\.txt|LICENSE|THIRD_PARTY_UI\.md))$/;
+  const permitted = /^(?:Litematica-Nova\.exe|public-build-audit\.json|bin\/public-beta\/(?:litematica_core\.exe|litematica_native_viewer\.exe|backend-deployment\.json)|block\/[^/]+\.png|pack-in\/(?:enumerator|flake|item-icons-26\.3|lang|materials)\/.+|data\/(?:generation-templates|minecraft_blockstates)\/.+|licenses\/(?:THIRD_PARTY_NOTICES\.txt|LICENSE|THIRD_PARTY_UI\.md))$/;
   const files = filesUnder(directory);
   const records = [];
   const exeNames = new Set();
@@ -154,6 +154,66 @@ function artifactGate(input) {
   assert.deepEqual(JSON.parse(readFileSync(reportPath, 'utf8')), report);
   console.log(`public_artifacts=verified; executables=3; files=${records.length}; mapped_resources=${mappedResources}; resources=verified; updater_payload=false`);
 }
+function verifyPayloadCoverage(expected, extracted) {
+  const available = new Map();
+  for (const record of extracted) {
+    const key = `${record.bytes}:${record.sha256}`;
+    available.set(key, (available.get(key) ?? 0) + 1);
+  }
+  for (const record of expected) {
+    const key = `${record.bytes}:${record.sha256}`;
+    const count = available.get(key) ?? 0;
+    if (!count) throw new Error(`NSIS payload omits or changes audited runtime file: ${record.path}`);
+    available.set(key, count - 1);
+  }
+}
+function installerGate(input, runtimeInput) {
+  if (process.platform !== 'win32') throw new Error('NSIS payload verification requires Windows.');
+  const installer = path.resolve(repo, input);
+  const directory = path.resolve(repo, runtimeInput);
+  const audit = JSON.parse(readFileSync(path.join(directory, 'public-build-audit.json'), 'utf8'));
+  if (audit.schema !== 'nova.public.beta.audit.v1' || audit.platform !== 'windows-x64' || audit.privateMarkerHits !== 0 || audit.resourcesVerified !== true || !audit.files?.length || !/^[a-f0-9]{40}$/.test(audit.sourceCommit ?? '')) throw new Error('A successful fresh runtime audit is required before NSIS verification.');
+  if (process.env.LBA_BUILD_GIT_SHA && audit.sourceCommit !== process.env.LBA_BUILD_GIT_SHA) throw new Error('NSIS runtime audit source commit mismatch.');
+  const config = JSON.parse(readFileSync(path.join(repo, 'desktop-nova/src-tauri/tauri.conf.json'), 'utf8'));
+  assert.deepEqual(Array.isArray(config.bundle.targets) ? config.bundle.targets : [config.bundle.targets], ['nsis'], 'Public installers must use NSIS only.');
+  for (const record of audit.files) {
+    const filename = path.resolve(directory, record.path);
+    if (!filename.startsWith(`${directory}${path.sep}`) || lstatSync(filename).isSymbolicLink()) throw new Error('Runtime audit path rejected.');
+    const bytes = readFileSync(filename);
+    if (bytes.length !== record.bytes || createHash('sha256').update(bytes).digest('hex') !== record.sha256) throw new Error(`Runtime changed after audit: ${record.path}`);
+  }
+  if (!/\.exe$/i.test(installer) || lstatSync(installer).isSymbolicLink()) throw new Error('NSIS installer must be a regular Setup.exe.');
+  const bytes = readFileSync(installer);
+  // Official NSIS bootstrapper is x86 even when every installed application is x64.
+  if (bytes.length < 64 || bytes.toString('ascii', 0, 2) !== 'MZ') throw new Error('NSIS installer is not a Windows executable.');
+  const sevenZip = process.env.SEVENZIP_PATH ?? path.join(process.env.ProgramFiles ?? 'C:\\Program Files', '7-Zip/7z.exe');
+  const listing = run(sevenZip, ['l', '-slt', installer], { encoding: 'utf8', timeout: 60_000 });
+  if (!/^Type = Nsis\s*$/im.test(listing)) throw new Error('Installer is not an actual NSIS archive.');
+  const parent = path.dirname(installer);
+  if (!parent.startsWith(`${repo}${path.sep}`)) throw new Error('Installer audit staging must stay inside the repository build output.');
+  const extractedDir = mkdtempSync(path.join(parent, '.nsis-payload-audit-'));
+  const records = [];
+  try {
+    // Archive extraction only: neither the installer nor any plugin is executed.
+    run(sevenZip, ['x', installer, `-o${extractedDir}`, '-y'], { encoding: 'utf8', timeout: 120_000 });
+    for (const filename of filesUnder(extractedDir)) {
+      const name = path.relative(extractedDir, filename).split(path.sep).join('/');
+      const payload = readFileSync(filename);
+      if (privatePaths.test(name) || /\.(?:pdb|jar|pem|key|pfx|p12|jks)$/i.test(name) || binaryMarkerHits(payload).length || privateKey.test(payload.toString('utf8')) || cookieLeak(payload.toString('utf8'))) throw new Error(`Sensitive NSIS payload content: ${name} (values redacted).`);
+      records.push({ path: name, bytes: payload.length, sha256: createHash('sha256').update(payload).digest('hex') });
+    }
+    verifyPayloadCoverage(audit.files, records);
+  } finally {
+    const resolved = path.resolve(extractedDir);
+    if (!resolved.startsWith(`${parent}${path.sep}.nsis-payload-audit-`) || lstatSync(resolved).isSymbolicLink()) throw new Error('Installer audit cleanup path rejected.');
+    rmSync(resolved, { recursive: true });
+  }
+  const report = { schema: 'nova.public.beta.installer-audit.v1', platform: 'windows-x64', format: 'nsis', sourceCommit: audit.sourceCommit, installer: { path: path.basename(installer), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }, privateMarkerHits: 0, auditedRuntimeFiles: audit.files.length, extractedFiles: records.length, payloadContentVerified: true, updaterSignatureVerified: false, installerExecutionVerified: false, files: records };
+  const reportPath = path.join(parent, 'public-installer-audit.json');
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  assert.deepEqual(JSON.parse(readFileSync(reportPath, 'utf8')), report);
+  console.log(`public_installer=verified; format=nsis; runtime_files=${audit.files.length}; extracted_files=${records.length}; private_markers=0; updater_signature=false; installer_execution=false`);
+}
 function selfTest() {
   for (const name of ['tools/viewer-core/src/render_v5/backend.rs', 'tools/viewer-core/crates/iris-compat/src/lib.rs', 'desktop-nova/src-tauri/src/application/render_facade.rs', 'private.key', 'bin/viewer-backend/old.exe']) assert(deniedSource(name));
   for (const name of ['tools/viewer-core/src/native_viewer.rs', 'desktop-nova/src-tauri/src/application/quick_preview.rs', 'pack-in/game-icons/block.zip']) assert(!deniedSource(name));
@@ -163,7 +223,11 @@ function selfTest() {
   assert(privateKey.test(`-----BEGIN PRIVATE KEY-----\n${'A'.repeat(64)}`));
   assert.deepEqual(binaryMarkerHits(Buffer.from('RenderV5Backend', 'utf16le')), ['RenderV5Backend']);
   assert.deepEqual(binaryMarkerHits(Buffer.from('完整模式正在开发中 Full display DTO fast_experimental')), []);
-  console.log('public_gate_self_test=passed; checks=14');
+  const payload = { path: 'Litematica-Nova.exe', bytes: 123, sha256: 'sample-hash' };
+  verifyPayloadCoverage([payload, payload], [payload, payload]);
+  assert.throws(() => verifyPayloadCoverage([payload, payload], [payload]), /omits or changes/);
+  assert.throws(() => verifyPayloadCoverage([payload], [{ ...payload, sha256: 'different-hash' }]), /omits or changes/);
+  console.log('public_gate_self_test=passed; checks=17');
 }
 
 try {
@@ -173,5 +237,6 @@ try {
   else if (args[0] === '--ref' && args.length === 2) sourceGate(args[1]);
   else if (args[0] === '--source' && args.length <= 2) sourceGate(args[1] ?? 'HEAD');
   else if (args[0] === '--artifacts' && args.length === 2 && existsSync(path.resolve(repo, args[1]))) artifactGate(args[1]);
-  else throw new Error('Usage: check-public-build.mjs --source [--ref <sha>] | --artifacts <runtime-package-dir> | --self-test');
+  else if (args[0] === '--installer' && args[2] === '--runtime' && args.length === 4) installerGate(args[1], args[3]);
+  else throw new Error('Usage: check-public-build.mjs --source [--ref <sha>] | --artifacts <runtime-package-dir> | --installer <Setup.exe> --runtime <audited-runtime-dir> | --self-test');
 } catch (error) { console.error(`public_gate=blocked; ${error.message}`); process.exitCode = 1; }
