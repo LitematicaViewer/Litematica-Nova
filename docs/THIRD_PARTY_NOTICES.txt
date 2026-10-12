@@ -865,7 +865,7 @@ npm | @radix-ui/react-use-rect | 1.1.1 | MIT | L0353(@radix-ui/react-checkbox/LI
 npm | @radix-ui/react-use-size | 1.1.1 | MIT | L0353(@radix-ui/react-checkbox/LICENSE (same upstream WorkOS Radix project notice)) | ; https://www.npmjs.com/package/@radix-ui/react-use-size/v/1.1.1
 npm | @radix-ui/react-visually-hidden | 1.2.3 | MIT | L0353(LICENSE) | ; https://www.npmjs.com/package/@radix-ui/react-visually-hidden/v/1.2.3
 npm | @radix-ui/rect | 1.1.1 | MIT | L0353(@radix-ui/react-checkbox/LICENSE (same upstream WorkOS Radix project notice)) | ; https://www.npmjs.com/package/@radix-ui/rect/v/1.1.1
-npm | @tauri-apps/api | 2.10.1 | Apache-2.0 OR MIT | L0001(LICENSE_APACHE-2.0), L0285(LICENSE_MIT) | ; https://www.npmjs.com/package/@tauri-apps/api/v/2.10.1
+npm | @tauri-apps/api | 2.11.1 | Apache-2.0 OR MIT | L0001(LICENSE_APACHE-2.0), L0285(LICENSE_MIT) | ; https://www.npmjs.com/package/@tauri-apps/api/v/2.11.1
 npm | @tauri-apps/plugin-dialog | 2.7.0 | MIT OR Apache-2.0 | L0286(LICENSE.spdx) | ; https://www.npmjs.com/package/@tauri-apps/plugin-dialog/v/2.7.0
 npm | @tauri-apps/plugin-shell | 2.3.5 | MIT OR Apache-2.0 | L0286(LICENSE.spdx) | ; https://www.npmjs.com/package/@tauri-apps/plugin-shell/v/2.3.5
 npm | @types/prop-types | 15.7.15 | MIT | L0065(LICENSE) | ; https://www.npmjs.com/package/@types/prop-types/v/15.7.15
