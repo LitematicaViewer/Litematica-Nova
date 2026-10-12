@@ -5,7 +5,8 @@ param(
     [string] $GitSha,
     [string] $ViewerTargetDir,
     [string] $DesktopTargetDir,
-    [switch] $CleanOnly
+    [switch] $CleanOnly,
+    [switch] $StageOnly
 )
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -64,7 +65,7 @@ foreach ($name in @("litematica_core", "litematica_native_viewer")) {
     $binary = "$name$suffix"
     $source = Join-Path $viewerTarget $binary
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing isolated public backend: $source" }
-    Assert-PublicBinary $source
+    if (-not $StageOnly) { Assert-PublicBinary $source }
     $sources[$binary] = $source
 }
 # Only clear exact public build-owned directories after both source identities pass.
@@ -82,7 +83,7 @@ $manifest = [ordered]@{ schema = "nova.public.beta.backends.v1"; publicBeta = $t
 $manifestPath = Join-Path $backendDir "backend-deployment.json"
 [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
 foreach ($name in @($sources.Keys) + @("backend-deployment.json")) { Copy-Item -LiteralPath (Join-Path $backendDir $name) -Destination (Join-Path $stagingDir $name) }
-foreach ($name in $sources.Keys) {
+foreach ($name in $(if ($StageOnly) { @() } else { $sources.Keys })) {
     if ((Get-ArtifactRecord (Join-Path $stagingDir $name)).sha256 -ne $artifacts[$name].sha256) { throw "Staged public backend hash mismatch: $name" }
 }
 Write-Host "[public-backend] Ready flavor=fast-only gitSha=$GitSha profile=$Profile files=$($sources.Count + 1)"
