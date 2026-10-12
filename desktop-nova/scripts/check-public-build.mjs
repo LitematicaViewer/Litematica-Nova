@@ -6,10 +6,10 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const privatePaths = /(?:^|\/)(?:render_v5|renderer-gl|renderer-vulkan|iris-compat|nova-render-protocol|nova-build-worker|nova-render-service|shaderpacks-private)(?:\/|$)|^desktop-nova\/src-tauri\/src\/(?:application\/render_facade|render_service_client|viewer_compatibility|headless_e2e|bin\/popup_smoke)\.rs$|^tools\/mc26-oracle\//i;
+const privatePaths = /(?:^|\/)(?:render_v5|renderer-gl|renderer-vulkan|iris-compat|nova-build-worker|nova-render-service|shaderpacks-private)(?:\/|$)|^desktop-nova\/src-tauri\/src\/(?:application\/render_facade|render_service_client|viewer_compatibility|headless_e2e|bin\/popup_smoke)\.rs$|^tools\/mc26-oracle\//i;
 const generatedOrSecretPaths = /(?:^|\/)(?:\.tmp|\.ssh|node_modules|target|arr-private|viewer-backend)(?:\/|$)|\.(?:exe|dll|pdb|jar|pem|key|pfx|p12|jks|sqlite|sqlite3)$/i;
-const privateMarkers = ['RenderV5Backend', 'RenderV5Request', 'PreparedV5Artifact', 'nova_render_protocol', 'nova-render-service', 'nova-build-worker', 'iris_runtime', 'renderer-gl', 'renderer-vulkan', 'iris-compat', 'src/render_v5/', 'src\\render_v5\\'];
-const privateModule = /\b(?:mod|use)\s+(?:crate::)?(?:render_v5|iris_runtime|iris_gl|render_service_client|render_facade|viewer_compatibility)\b|\bnova-render-protocol\s*=|\b(?:renderer-gl|renderer-vulkan|iris-compat)\s*=|\bfeature\s*=\s*"(?:full|full-mode|render-v5|iris|commercial)"/;
+const privateMarkers = ['RenderV5Backend', 'RenderV5Request', 'PreparedV5Artifact', 'nova-render-service', 'nova-build-worker', 'iris_runtime', 'renderer-gl', 'renderer-vulkan', 'iris-compat', 'src/render_v5/', 'src\\render_v5\\'];
+const privateModule = /\b(?:mod|use)\s+(?:crate::)?(?:render_v5|iris_runtime|iris_gl|render_service_client|render_facade|viewer_compatibility)\b|\b(?:renderer-gl|renderer-vulkan|iris-compat)\s*=|\bfeature\s*=\s*"(?:full|full-mode|render-v5|iris|commercial)"/;
 const privateKey = /-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----[\r\n]+\s*[A-Za-z0-9+/=]{32,}/;
 const sensitiveCookie = /(?:set-cookie\s*:\s*[^\r\n]*?\bctoken\s*=|["']?ctoken["']?\s*[:=]\s*["']?)([A-Za-z0-9_+/.=-]{12,}|\[REDACTED\])/ig;
 const safeCookie = value => value === '[REDACTED]' || value === 'REDACTED';
@@ -171,6 +171,14 @@ function verifyPayloadCoverage(expected, extracted) {
     available.set(key, count - 1);
   }
 }
+function verifyOfficialNsisPatch(reference, installed) {
+  if (reference.equals(installed)) return null;
+  const marker = Buffer.from('__TAURI_BUNDLE_TYPE_VAR_UNK');
+  const markerOffset = reference.indexOf(marker);
+  const offset = markerOffset + marker.length - 3;
+  if (reference.length !== installed.length || markerOffset < 0 || reference.indexOf(marker, markerOffset + 1) !== -1 || installed.toString('ascii', offset, offset + 3) !== 'NSS' || !reference.subarray(0, offset).equals(installed.subarray(0, offset)) || !reference.subarray(offset + 3).equals(installed.subarray(offset + 3))) throw new Error('Installed main executable differs outside the official Tauri UNK-to-NSS bundle-type field.');
+  return { offset, bytes: 3, before: 'UNK', after: 'NSS' };
+}
 function installerGate(input, runtimeInput) {
   if (process.platform !== 'win32') throw new Error('NSIS payload verification requires Windows.');
   const installer = path.resolve(repo, input);
@@ -197,6 +205,9 @@ function installerGate(input, runtimeInput) {
   if (!parent.startsWith(`${repo}${path.sep}`)) throw new Error('Installer audit staging must stay inside the repository build output.');
   const extractedDir = mkdtempSync(path.join(parent, '.nsis-payload-audit-'));
   const records = [];
+  let bundleTypePatch;
+  let identities;
+  let resourceResult;
   try {
     // Archive extraction only: neither the installer nor any plugin is executed.
     run(sevenZip, ['x', installer, `-o${extractedDir}`, '-y'], { encoding: 'utf8', timeout: 120_000 });
@@ -206,17 +217,27 @@ function installerGate(input, runtimeInput) {
       if (privatePaths.test(name) || /\.(?:pdb|jar|pem|key|pfx|p12|jks)$/i.test(name) || binaryMarkerHits(payload).length || privateKey.test(payload.toString('utf8')) || cookieLeak(payload.toString('utf8'))) throw new Error(`Sensitive NSIS payload content: ${name} (values redacted).`);
       records.push({ path: name, bytes: payload.length, sha256: createHash('sha256').update(payload).digest('hex') });
     }
-    verifyPayloadCoverage(audit.files, records);
+    const installedMain = path.join(extractedDir, 'Litematica-Nova.exe');
+    bundleTypePatch = verifyOfficialNsisPatch(readFileSync(path.join(directory, 'Litematica-Nova.exe')), readFileSync(installedMain));
+    const installedMainRecord = records.find(record => record.path === 'Litematica-Nova.exe');
+    if (!installedMainRecord) throw new Error('NSIS main executable is missing from the installed layout.');
+    verifyPayloadCoverage(audit.files.map(record => record.path === 'Litematica-Nova.exe' ? installedMainRecord : record), records);
+    // Check the actual extracted payload, not the standalone build or the installer.
+    const expectedExe = ['Litematica-Nova.exe', 'bin/public-beta/litematica_core.exe', 'bin/public-beta/litematica_native_viewer.exe'];
+    identities = expectedExe.map(name => ({ path: name, ...buildIdentity(path.join(extractedDir, name)) }));
+    if (identities.some(identity => identity.gitSha !== audit.sourceCommit)) throw new Error('Installed executables do not match the audited source commit.');
+    resourceResult = run(installedMain, ['--verify-public-resources'], { encoding: 'utf8', timeout: 60_000 }).trim();
+    assert.equal(resourceResult, 'public_resources=verified; backends=fast-only; full_mode=absent');
   } finally {
     const resolved = path.resolve(extractedDir);
     if (!resolved.startsWith(`${parent}${path.sep}.nsis-payload-audit-`) || lstatSync(resolved).isSymbolicLink()) throw new Error('Installer audit cleanup path rejected.');
     rmSync(resolved, { recursive: true });
   }
-  const report = { schema: 'nova.public.beta.installer-audit.v1', platform: 'windows-x64', format: 'nsis', sourceCommit: audit.sourceCommit, installer: { path: path.basename(installer), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }, privateMarkerHits: 0, auditedRuntimeFiles: audit.files.length, extractedFiles: records.length, payloadContentVerified: true, updaterSignatureVerified: false, installerExecutionVerified: false, files: records };
+  const report = { schema: 'nova.public.beta.installer-audit.v1', platform: 'windows-x64', format: 'nsis', sourceCommit: audit.sourceCommit, installer: { path: path.basename(installer), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }, privateMarkerHits: 0, auditedRuntimeFiles: audit.files.length, extractedFiles: records.length, payloadContentVerified: true, bundleTypePatch, identities, resourceResult, updaterSignatureVerified: false, installerExecutionVerified: false, files: records };
   const reportPath = path.join(parent, 'public-installer-audit.json');
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   assert.deepEqual(JSON.parse(readFileSync(reportPath, 'utf8')), report);
-  console.log(`public_installer=verified; format=nsis; runtime_files=${audit.files.length}; extracted_files=${records.length}; private_markers=0; updater_signature=false; installer_execution=false`);
+  console.log(`public_installer=verified; format=nsis; runtime_files=${audit.files.length}; extracted_files=${records.length}; private_markers=0; bundle_type_patch=${bundleTypePatch ? 'UNK-to-NSS-only' : 'none'}; resources=verified; updater_signature=false; installer_execution=false`);
 }
 function selfTest() {
   for (const name of ['tools/viewer-core/src/render_v5/backend.rs', 'tools/viewer-core/crates/iris-compat/src/lib.rs', 'desktop-nova/src-tauri/src/application/render_facade.rs', 'private.key', 'bin/viewer-backend/old.exe']) assert(deniedSource(name));
@@ -231,7 +252,18 @@ function selfTest() {
   verifyPayloadCoverage([payload, payload], [payload, payload]);
   assert.throws(() => verifyPayloadCoverage([payload, payload], [payload]), /omits or changes/);
   assert.throws(() => verifyPayloadCoverage([payload], [{ ...payload, sha256: 'different-hash' }]), /omits or changes/);
-  console.log('public_gate_self_test=passed; checks=17');
+  assert(!deniedSource('tools/viewer-core/crates/nova-render-protocol/src/lib.rs'));
+  assert.deepEqual(binaryMarkerHits(Buffer.from('nova_render_protocol')), []);
+  assert(!privateModule.test('nova-render-protocol = { path = "crates/nova-render-protocol" }'));
+  const unknown = Buffer.from('prefix__TAURI_BUNDLE_TYPE_VAR_UNKsuffix');
+  const nsis = Buffer.from('prefix__TAURI_BUNDLE_TYPE_VAR_NSSsuffix');
+  assert.deepEqual(verifyOfficialNsisPatch(unknown, nsis), { offset: 30, bytes: 3, before: 'UNK', after: 'NSS' });
+  assert.equal(verifyOfficialNsisPatch(unknown, unknown), null);
+  assert.throws(() => verifyOfficialNsisPatch(unknown, Buffer.from('Prefix__TAURI_BUNDLE_TYPE_VAR_NSSsuffix')), /outside/);
+  assert.throws(() => verifyOfficialNsisPatch(unknown, Buffer.from('prefix__TAURI_BUNDLE_TYPE_VAR_MSIsuffix')), /outside/);
+  assert.throws(() => verifyOfficialNsisPatch(Buffer.concat([unknown, unknown]), Buffer.concat([nsis, unknown])), /outside/);
+  assert.throws(() => verifyOfficialNsisPatch(unknown, Buffer.concat([nsis, Buffer.from('extra')])), /outside/);
+  console.log('public_gate_self_test=passed; checks=26');
 }
 
 try {
