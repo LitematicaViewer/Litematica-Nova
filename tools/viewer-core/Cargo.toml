@@ -16,6 +16,10 @@ path = "src/bin/litematica_native_viewer.rs"
 name = "stockpile_server"
 path = "src/bin/stockpile_server.rs"
 
+[[bin]]
+name = "derive_resource_pack_32x"
+path = "src/bin/derive_resource_pack_32x.rs"
+
 [features]
 default = ["public-beta"]
 public-beta = []
@@ -28,6 +32,7 @@ resolver = "3"
 members = [
     "crates/viewer-launch-contract",
     "crates/nova-render-protocol",
+    "crates/render-ir",
 ]
 default-members = [
     ".",
