@@ -1,6 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 
-import { loadStructureStats, StatsData } from "../../../src/business/facade";
+import {
+    findRenderOperationForSource,
+    hasInventoryMaterialSemantics,
+    getApplicationRenderState,
+    loadStructureStats,
+    mapStructureStats,
+    subscribeApplicationRender,
+    StatsData,
+} from "../../../src/business/facade";
 import { listenEvent } from "../../../src/platform/events";
 import {
     applyThemeStylesheet,
@@ -24,13 +32,23 @@ const initialFileFromUrl = () => {
  * Standalone material-list window that follows the main shell theme.
  */
 export function MaterialListWindow() {
-    const [themeId, setThemeId] = useState(currentThemeId());
+    const applicationRender = useSyncExternalStore(
+        subscribeApplicationRender,
+        getApplicationRenderState,
+        getApplicationRenderState,
+    );
+    const [themeId, setThemeId] = useState(currentThemeId);
     const [currentFile, setCurrentFile] = useState(initialFileFromUrl());
     const [data, setData] = useState<StatsData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
-
-    useEffect(() => {
+    const renderOperation = useMemo(
+        () => findRenderOperationForSource(currentFile, applicationRender),
+        [applicationRender.operations, currentFile],
+    );
+    const applicationAnalysis = hasInventoryMaterialSemantics(renderOperation?.analysis) ? renderOperation!.analysis : null;
+    const applicationAnalysisKey = applicationAnalysis ? renderOperation?.operationId ?? "analysis" : "";
+    useLayoutEffect(() => {
         applyThemeStylesheet(themeId);
     }, [themeId]);
 
@@ -56,6 +74,12 @@ export function MaterialListWindow() {
             setIsLoading(false);
             return;
         }
+        if (applicationAnalysis) {
+            setData(mapStructureStats(applicationAnalysis));
+            setError("");
+            setIsLoading(false);
+            return;
+        }
         setIsLoading(true);
         setError("");
         loadStructureStats(currentFile)
@@ -74,7 +98,7 @@ export function MaterialListWindow() {
         return () => {
             cancelled = true;
         };
-    }, [currentFile]);
+    }, [currentFile, applicationAnalysisKey]);
 
     return (
         <main className={["material-list-window", themeClassName(themeId)].filter(Boolean).join(" ")}>

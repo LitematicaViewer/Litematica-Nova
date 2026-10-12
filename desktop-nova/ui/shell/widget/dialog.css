@@ -122,7 +122,7 @@
 }
 
 .dialog-message-error {
-    color: #ffb3b3;
+    color: var(--ln-error-color, #a61b1b);
     background: rgb(255 0 0 / 10%);
     border-color: rgb(255 0 0 / 18%);
 }

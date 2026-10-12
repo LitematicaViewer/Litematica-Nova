@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 
 import {
   applyThemeStylesheet,
@@ -12,9 +12,9 @@ import { LocalLibraryFoldersPanel } from "./LocalLibraryFoldersContent";
  * Renders the standalone desktop window used to manage mounted local-library folders.
  */
 export function LocalLibraryFoldersWindow() {
-  const [themeId, setThemeId] = useState(currentThemeId());
+  const [themeId, setThemeId] = useState(currentThemeId);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     applyThemeStylesheet(themeId);
   }, [themeId]);
 

@@ -1,0 +1,1 @@
+Nova updater signature verification fixture; not an installer.

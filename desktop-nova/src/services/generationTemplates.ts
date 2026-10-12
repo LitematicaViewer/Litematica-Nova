@@ -27,9 +27,9 @@ function makeId(): string {
 
 export async function loadGenerationTemplates(): Promise<GenerationTemplate[]> {
   const rawIndex = await readWorkspaceFile(TEMPLATE_INDEX_PATH);
-  const paths = JSON.parse(rawIndex) as string[];
+  const paths = JSON.parse(rawIndex.replace(/^\uFEFF/, "")) as string[];
   const templates = await Promise.all(
-    paths.map(async (path) => JSON.parse(await readWorkspaceFile(`data/generation-templates/${path}`)) as GenerationTemplate),
+    paths.map(async (path) => JSON.parse((await readWorkspaceFile(`data/generation-templates/${path}`)).replace(/^\uFEFF/, "")) as GenerationTemplate),
   );
   return templates.sort((a, b) => a.name_zh.localeCompare(b.name_zh, "zh-CN"));
 }
@@ -39,7 +39,7 @@ export function templateToForm(template: GenerationTemplate): GenerateFormState 
   return {
     metadata: {
       name: template.plan.metadata?.name || template.name_zh,
-      author: template.plan.metadata?.author || "Litematica-BA",
+      author: template.plan.metadata?.author || "Litematica-Nova",
       description: template.plan.metadata?.description || template.description_zh,
       minecraftDataVersion: template.plan.minecraft_data_version || 3953,
     },

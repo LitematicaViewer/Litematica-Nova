@@ -1,11 +1,19 @@
 import React, { useEffect, useState } from "react";
+import { Sun, Moon, Monitor, Check } from "lucide-react";
+import { Button } from "../../../../components/ui/button";
+import { Input } from "../../../../components/ui/input";
+import { Checkbox } from "../../../../components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "../../../../components/ui/radio-group";
+import { Textarea } from "../../../../components/ui/textarea";
+import { Dropdown } from "../../../../components/Dropdown";
+import { ScrollArea } from "../../../../components/ui/scroll-area";
 import {
   AiPublicConfig,
   aiClearKey,
   aiGetConfig,
   aiSaveConfig,
   aiTestConnection,
-  checkBackendHealth,
+  checkApplicationRuntimeHealth,
   chooseUserConfigDir,
   cleanupLocalTempFiles,
   getNovaRuntimePathInfo,
@@ -16,64 +24,51 @@ import {
   PathInfo,
   readWorkspaceFile,
   resetUserConfigDir,
-  saveUserConfig,
   setUserConfigDir,
   UserConfigInfo,
 } from "../../../../../src/business/facade";
-import { DISPLAY_MODE_OPTIONS, DisplayMode, loadDisplayMode, normalizeDisplayMode, saveDisplayMode } from "../../../../../src/business/facade";
+import { DISPLAY_MODE_OPTIONS, DisplayMode, normalizeDisplayMode } from "../../../../../src/business/facade";
 import {
   loadUserConfigMigratingLocalStorage,
   normalizeLocalLibraryTailPathCount,
   normalizeMaterialListWindowBehavior,
   normalizeShowUiTestPage,
   normalizeTheme,
+  normalizeColorMode,
   saveLocalLibraryTailPathCountConfig,
   saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
-  saveRenderDisplayModeConfig,
   saveShowUiTestPageConfig,
-  saveThemeConfig,
 } from "../../../../../src/business/facade";
-import { AssetManagerDialog, openAssetManagerWithWindowBehavior } from "../../../asset_manager";
+
+import "./settings.css";
 
 const BLOCKSTATE_DB = "data/minecraft_blockstates/26.1.json";
 const BLOCKSTATE_ZH = "data/minecraft_blockstates/26.1.zh_cn.json";
+const BLOCK_ICON_DIR = "block";
 const NOVA_THEME_OPTIONS = [
-  { value: "WebDefault", label: "WebDefault" },
-  { value: "Bootstrap5", label: "Bootstrap5" },
-  { value: "Metro10", label: "Metro10" },
+  { value: "shadcn", label: "shadcn/ui" },
+  { value: "8bitcn", label: "8bitcn/ui" },
   { value: "Minecraft", label: "Minecraft" },
 ];
 const MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS = [
   { value: "independent_window", label: "独立窗口" },
   { value: "main_window_overlay", label: "主窗口遮罩" },
 ];
-
 function statusText(ok: boolean | null) {
   if (ok === null) return "未检查";
   return ok ? "OK" : "失败";
 }
 
-function pathStatusClass(info?: PathInfo | null) {
-  if (!info) return "settings-page__path-status settings-page__status settings-page__status--idle";
-  return `settings-page__path-status settings-page__status ${info.exists ? "settings-page__status--ok" : "settings-page__status--error"}`;
-}
-
-function checkStatusClass(ok: boolean | null) {
-  return `settings-page__status ${ok === false ? "settings-page__status--error" : "settings-page__status--idle"}`;
-}
-
-function aiLogClass(aiTestStatus: string) {
-  return `nova-pre settings-page__panel-log${aiTestStatus.startsWith("测试失败") ? " settings-page__panel-log--error" : ""}`;
-}
-
 function PathRow({ label, path, info }: { label: string; path: string; info?: PathInfo | null }) {
   return (
     <div className="form-row">
-      <div className="form-label form-label-wide">{label}</div>
+      <div className="form-label">{label}</div>
       <div className="form-field">
-        <input className="input nova-input-flex" value={info?.normalized || path} readOnly />
-        <span className={pathStatusClass(info)}>{info ? (info.exists ? "存在" : "缺失") : "未检查"}</span>
+        <Input aria-label={label} className="input settings-grow" value={info?.normalized || path} readOnly />
+        <span className="settings-path-state" data-state={info ? (info.exists ? "ok" : "error") : "unchecked"}>
+          {info ? (info.exists ? "存在" : "缺失") : "未检查"}
+        </span>
       </div>
     </div>
   );
@@ -93,20 +88,19 @@ function compactFolderPathDemo(path: string, tailCount: number): string {
   return driveOrRoot ? `${driveOrRoot}${separator}...${separator}${tail}` : `${separator}...${separator}${tail}`;
 }
 
-export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
+export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShowUiTestPage }: any) {
   const [workspaceRoot, setWorkspaceRoot] = useState("");
-  const [displayMode, setDisplayMode] = useState<DisplayMode>(loadDisplayMode());
-  const [previewMode, setPreviewMode] = useState<DisplayMode>("normal");
+  const [previewMode, setPreviewMode] = useState<DisplayMode>("fast_experimental");
   const [materialListWindowBehavior, setMaterialListWindowBehavior] = useState("independent_window");
   const [localLibraryTailPathCount, setLocalLibraryTailPathCount] = useState(3);
   const [showUiTestPage, setShowUiTestPageState] = useState(true);
   const [userConfig, setUserConfig] = useState<UserConfigInfo | null>(null);
-  const [coreInfo, setCoreInfo] = useState<PathInfo | null>(null);
-  const [viewerInfo, setViewerInfo] = useState<PathInfo | null>(null);
   const [dbInfo, setDbInfo] = useState<PathInfo | null>(null);
   const [zhInfo, setZhInfo] = useState<PathInfo | null>(null);
-  const [backendOk, setBackendOk] = useState<boolean | null>(null);
+  const [iconDirInfo, setIconDirInfo] = useState<PathInfo | null>(null);
+  const [runtimeOk, setRuntimeOk] = useState<boolean | null>(null);
   const [dbOk, setDbOk] = useState<boolean | null>(null);
+  const [iconOk, setIconOk] = useState<boolean | null>(null);
   const [log, setLog] = useState("");
   const [aiConfig, setAiConfig] = useState<AiPublicConfig | null>(null);
   const [aiProvider, setAiProvider] = useState("mock");
@@ -115,30 +109,28 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
-  const [showAssetManagerOverlay, setShowAssetManagerOverlay] = useState(false);
   const [aiStatus, setAiStatus] = useState("未保存");
   const [aiSaveMessage, setAiSaveMessage] = useState("");
   const [aiTestStatus, setAiTestStatus] = useState("");
 
-  const applyUserConfig = (info: UserConfigInfo) => {
+  const applyUserConfig = (info: UserConfigInfo, changedConfigDirectory = false) => {
     const showUiTest = normalizeShowUiTestPage(info.config.show_ui_test_page);
     setUserConfig(info);
-    setDisplayMode(normalizeDisplayMode(info.config.render_display_mode));
     setPreviewMode(normalizeDisplayMode(info.config.preview_mode));
     setMaterialListWindowBehavior(normalizeMaterialListWindowBehavior(info.config.material_list_window_behavior));
     setLocalLibraryTailPathCount(normalizeLocalLibraryTailPathCount(info.config.local_library_tail_path_count));
     setShowUiTestPageState(showUiTest);
     setShowUiTestPage?.(showUiTest);
-    setTheme(normalizeTheme(info.config.theme));
+    if (changedConfigDirectory) setTheme(normalizeTheme(info.config.theme));
+    if (changedConfigDirectory) setColorMode(normalizeColorMode(info.config.color_mode));
   };
 
   const refreshPathInfo = async () => {
     const info = await getNovaRuntimePathInfo();
     setWorkspaceRoot(info.workspaceRoot);
-    setCoreInfo(info.coreInfo);
-    setViewerInfo(info.viewerInfo);
     setDbInfo(info.dbInfo);
     setZhInfo(info.zhInfo);
+    setIconDirInfo(info.iconDirInfo);
   };
 
   const refreshAiConfig = async () => {
@@ -155,20 +147,10 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
   useEffect(() => {
     refreshPathInfo().catch((err) => setLog(String(err)));
     refreshAiConfig().catch((err) => setLog(String(err)));
-    loadUserConfigMigratingLocalStorage().then(applyUserConfig).catch((err) => setLog(String(err)));
+    loadUserConfigMigratingLocalStorage().then((info) => applyUserConfig(info)).catch((err) => setLog(String(err)));
   }, []);
 
-  const handleTheme = async (value: string) => {
-    const next = normalizeTheme(value);
-    setTheme(next);
-    applyUserConfig(await saveThemeConfig(next));
-  };
-
-  const handleDisplayMode = async (value: string) => {
-    const mode = saveDisplayMode(value);
-    setDisplayMode(mode);
-    applyUserConfig(await saveRenderDisplayModeConfig(mode));
-  };
+  const handleTheme = (value: string) => setTheme(normalizeTheme(value));
 
   const handlePreviewMode = async (value: string) => {
     const mode = normalizeDisplayMode(value);
@@ -194,15 +176,17 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
     applyUserConfig(await saveLocalLibraryTailPathCountConfig(count));
   };
 
-  const checkBackend = async () => {
+  const checkApplicationRuntime = async () => {
     try {
-      const result = await checkBackendHealth();
-      setCoreInfo(result.coreInfo);
-      setViewerInfo(result.viewerInfo);
-      setBackendOk(result.ok);
-      setLog(`检查后端：${result.ok ? "OK" : "失败"}\n\nlitematica_core:\n${result.coreHelp.slice(0, 1200)}\n\nnative_viewer:\n${result.viewerHelp.slice(0, 1200)}`);
+      const result = await checkApplicationRuntimeHealth();
+      setRuntimeOk(result.ok);
+      setLog(
+        `检查应用运行能力：${result.ok ? "OK" : "失败"}`
+        + `\n\n核心操作：${result.core.available ? "可用" : "不可用"}\n${result.core.message.slice(0, 1200)}`
+        + `\n\n预览能力：${result.viewer.available ? "可用" : "不可用"}\n${result.viewer.message.slice(0, 1200)}`,
+      );
     } catch (err: any) {
-      setBackendOk(false);
+      setRuntimeOk(false);
       setLog(String(err));
     }
   };
@@ -227,27 +211,40 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
     }
   };
 
+  const checkIcons = async () => {
+    try {
+      const [iconDir, dirt, grass] = await Promise.all([
+        getPathInfo(BLOCK_ICON_DIR),
+        getPathInfo("block/dirt.png"),
+        getPathInfo("block/grass_block.png"),
+      ]);
+      setIconDirInfo(iconDir);
+      const ok = iconDir.exists && iconDir.is_dir && dirt.exists && grass.exists;
+      setIconOk(ok);
+      setLog(`检查图标库：${ok ? "OK" : "失败"}\n目录：${iconDir.normalized}\ndirt.png=${dirt.exists}\ngrass_block.png=${grass.exists}`);
+    } catch (err: any) {
+      setIconOk(false);
+      setLog(String(err));
+    }
+  };
+
   const chooseConfigDir = async () => {
     const selected = await chooseUserConfigDir();
     if (!selected) return;
-    applyUserConfig(await setUserConfigDir(selected, false));
+    applyUserConfig(await setUserConfigDir(selected, false), true);
     setLog(`用户配置目录已切换：${selected}`);
   };
 
   const migrateConfigDir = async () => {
     const selected = await chooseUserConfigDir();
     if (!selected) return;
-    applyUserConfig(await setUserConfigDir(selected, true));
+    applyUserConfig(await setUserConfigDir(selected, true), true);
     setLog(`用户配置已迁移到：${selected}`);
   };
 
   const resetConfigDir = async () => {
-    applyUserConfig(await resetUserConfigDir(true));
+    applyUserConfig(await resetUserConfigDir(true), true);
     setLog("用户配置目录已恢复默认位置，并迁移当前配置。");
-  };
-
-  const openAssetManager = async () => {
-    await openAssetManagerWithWindowBehavior(() => setShowAssetManagerOverlay(true));
   };
 
   const saveAiConfigOnly = async () => {
@@ -294,82 +291,83 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
   };
 
   return (
+    <ScrollArea className="settings-scroll-area" aria-label="设置">
     <div className="settings-page">
-      <div className="settings-page__title">选项</div>
+      <h2 className="settings-title">选项</h2>
 
       <div className="group-box">
         <div className="group-box-title">外观</div>
         <div className="form-row">
-          <div className="form-label form-label-wide">主题</div>
+          <div className="form-label">主题</div>
           <div className="form-field">
-            <select className="input" value={normalizeTheme(theme)} onChange={(event) => handleTheme(event.target.value)}>
+            <RadioGroup className="settings-theme-options" aria-label="主题"
+              value={normalizeTheme(theme)} onValueChange={handleTheme}>
               {NOVA_THEME_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
+                <RadioGroupItem key={option.value} value={option.value} className="settings-theme-option">
+                  <span className="settings-theme-swatch" data-theme-preview={option.value} aria-hidden="true"><span /><span /><span /></span>
+                  <span>{option.label}</span>
+                  <Check data-slot="radio-choice-mark" size={16} aria-hidden="true" />
+                </RadioGroupItem>
               ))}
-            </select>
+            </RadioGroup>
           </div>
+        </div>
+        <div className="form-row">
+          <div className="form-label">明暗模式</div>
+          <RadioGroup className="settings-color-options" aria-label="明暗模式" orientation="horizontal"
+            value={normalizeColorMode(colorMode)} onValueChange={setColorMode}>
+            {[{ value: "light", label: "浅色", Icon: Sun }, { value: "dark", label: "深色", Icon: Moon }, { value: "system", label: "跟随系统", Icon: Monitor }].map(({ value, label, Icon }) => (
+              <RadioGroupItem key={value} value={value}><Icon size={16} aria-hidden="true" />{label}</RadioGroupItem>
+            ))}
+          </RadioGroup>
         </div>
       </div>
 
       <div className="group-box">
         <div className="group-box-title">用户配置目录</div>
         <div className="form-row">
-          <div className="form-label form-label-wide">当前目录</div>
-          <input className="input" value={userConfig?.config_dir || ""} readOnly />
+          <div className="form-label">当前目录</div>
+          <Input className="input settings-grow" aria-label="当前配置目录" value={userConfig?.config_dir || ""} readOnly />
         </div>
         <div className="form-row">
-          <div className="form-label form-label-wide">默认目录</div>
-          <input className="input" value={userConfig?.default_config_dir || ""} readOnly />
+          <div className="form-label">默认目录</div>
+          <Input className="input settings-grow" aria-label="默认配置目录" value={userConfig?.default_config_dir || ""} readOnly />
         </div>
-        <div className="button-row settings-page__actions-wrap">
-          <button className="btn" onClick={chooseConfigDir}>选择目录</button>
-          <button className="btn" onClick={() => openUserConfigDir()}>打开目录</button>
-          <button className="btn" onClick={resetConfigDir}>恢复默认目录</button>
-          <button className="btn" onClick={migrateConfigDir}>迁移当前配置到新目录</button>
+        <div className="settings-actions">
+          <Button className="btn" onClick={chooseConfigDir}>选择目录</Button>
+          <Button className="btn" onClick={() => openUserConfigDir()}>打开目录</Button>
+          <Button className="btn" onClick={resetConfigDir}>恢复默认目录</Button>
+          <Button className="btn" onClick={migrateConfigDir}>迁移当前配置到新目录</Button>
         </div>
-        <div className="settings-page__note">
+        <div className="settings-help-text">
           用户态文件会写入 projection-library/js_library.json、previews/、render/、generation-templates/custom/ 和普通 config。API Key 不写入普通 config。
-        </div>
-      </div>
-
-      <div className="group-box">
-        <div className="group-box-title">游戏资源管理</div>
-        <div className="button-row">
-          <button className="btn" type="button" onClick={openAssetManager}>打开游戏资源管理器</button>
-        </div>
-        <div className="game-resource-note">
-          语言、方块图标、物品图标和游戏数据会按照“子窗口行为”设置决定使用独立窗口还是主窗口遮罩。
         </div>
       </div>
 
       <div className="group-box">
         <div className="group-box-title">AI 设置</div>
         <div className="form-row">
-          <div className="form-label form-label-wide">Provider</div>
+          <div className="form-label">Provider</div>
+          <Dropdown ariaLabel="AI Provider" value={aiProvider} onChange={setAiProvider}
+            options={[{ value: "mock", label: "Mock" }, { value: "openai_compatible", label: "OpenAI Compatible" }, { value: "gemini_compatible", label: "Gemini Compatible（占位）" }]} />
+          <span className="settings-muted" title={aiConfig ? `provider=${aiConfig.provider}` : undefined}>
+            Key 状态：{apiKeyDirty ? "本次输入未保存" : aiStatus}
+          </span>
+        </div>
+        <div className="form-row">
+          <div className="form-label">Base URL</div>
+          <Input className="input settings-grow" aria-label="Base URL" value={aiBaseUrl} onChange={(event) => setAiBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" />
+        </div>
+        <div className="form-row">
+          <div className="form-label">Model</div>
+          <Input className="input settings-model-input" aria-label="AI Model" value={aiModel} onChange={(event) => setAiModel(event.target.value)} placeholder="gpt-4.1-mini" />
+        </div>
+        <div className="form-row">
+          <div className="form-label">API Key</div>
           <div className="form-field">
-            <select className="input" value={aiProvider} onChange={(event) => setAiProvider(event.target.value)}>
-              <option value="mock">Mock</option>
-              <option value="openai_compatible">OpenAI Compatible</option>
-              <option value="gemini_compatible">Gemini Compatible（占位）</option>
-            </select>
-            <span className="settings-page__inline-note" title={aiConfig ? `provider=${aiConfig.provider}` : undefined}>
-              Key 状态：{apiKeyDirty ? "本次输入未保存" : aiStatus}
-            </span>
-          </div>
-        </div>
-        <div className="form-row">
-          <div className="form-label form-label-wide">Base URL</div>
-          <input className="input nova-input-flex" value={aiBaseUrl} onChange={(event) => setAiBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" />
-        </div>
-        <div className="form-row">
-          <div className="form-label form-label-wide">Model</div>
-          <input className="input settings-page__model-input" value={aiModel} onChange={(event) => setAiModel(event.target.value)} placeholder="gpt-4.1-mini" />
-        </div>
-        <div className="form-row">
-          <div className="form-label form-label-wide">API Key</div>
-          <div className="form-field">
-            <input
-              className="input nova-input-flex"
+            <Input
+              className="input settings-grow"
+              aria-label="API Key"
               type={showApiKey ? "text" : "password"}
               value={apiKeyInput}
               onChange={(event) => {
@@ -380,20 +378,22 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
               placeholder={aiConfig?.has_key ? "已保存；输入新 Key 可替换" : "未保存"}
               autoComplete="off"
             />
-            <button className="btn" type="button" onClick={() => setShowApiKey((value) => !value)}>
+            <Button className="btn" type="button" onClick={() => setShowApiKey((value) => !value)}>
               {showApiKey ? "隐藏" : "显示"}
-            </button>
+            </Button>
           </div>
         </div>
-        <div className="button-row settings-page__actions-wrap">
-          <button className="btn" onClick={saveAi}>保存 Key</button>
-          <button className="btn" onClick={clearAiKey}>清除 Key</button>
-          <button className="btn" onClick={testAi}>测试连接</button>
+        <div className="settings-actions">
+          <Button className="btn" onClick={saveAi}>保存 Key</Button>
+          <Button className="btn" onClick={clearAiKey}>清除 Key</Button>
+          <Button className="btn" onClick={testAi}>测试连接</Button>
         </div>
         {(aiSaveMessage || aiTestStatus) && (
-          <pre className={aiLogClass(aiTestStatus)}>{[aiSaveMessage, aiTestStatus].filter(Boolean).join("\n")}</pre>
+          <pre className="settings-feedback" data-state={aiTestStatus.startsWith("测试失败") ? "error" : "normal"}>
+            {[aiSaveMessage, aiTestStatus].filter(Boolean).join("\n")}
+          </pre>
         )}
-        <div className="settings-page__note">
+        <div className="settings-help-text">
           API Key 不写入 localStorage、普通 config、prompt、plan 或日志；页面不会回显已保存的真实 Key。
         </div>
       </div>
@@ -401,40 +401,38 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
       <div className="group-box">
         <div className="group-box-title">测试功能</div>
         <div className="form-row">
-          <div className="form-label form-label-wide">子窗口行为</div>
+          <div className="form-label">子窗口行为</div>
           <div className="form-field">
-            <select className="input" value={materialListWindowBehavior} onChange={(event) => handleMaterialListWindowBehavior(event.target.value)}>
-              {MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
+            <Dropdown ariaLabel="子窗口行为" value={materialListWindowBehavior}
+              options={MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS} onChange={handleMaterialListWindowBehavior} />
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label form-label-wide">显示 UI调试页</div>
-          <label className="form-field settings-page__check-label">
-            <input type="checkbox" checked={showUiTestPage} onChange={(event) => handleShowUiTestPage(event.target.checked)} />
+          <div className="form-label">显示 UI调试页</div>
+          <label className="form-field">
+            <Checkbox aria-label="显示 UI 调试页" checked={showUiTestPage} onCheckedChange={(checked) => handleShowUiTestPage(checked === true)} />
             <span>在左侧导航栏显示 UI 测试入口</span>
           </label>
         </div>
         <div className="form-row">
-          <div className="form-label form-label-wide">保留尾部路径数</div>
-          <div className="form-field settings-page__field-wrap">
-            <input
-              className="input settings-page__number-input"
+          <div className="form-label">保留尾部路径数</div>
+          <div className="form-field">
+            <Input
+              aria-label="保留尾部路径数"
+              className="input settings-count-input"
               type="number"
               min={1}
               step={1}
               value={localLibraryTailPathCount}
               onChange={(event) => handleLocalLibraryTailPathCount(event.target.value)}
             />
-            <span className="settings-page__inline-note">本地库文件夹标题压缩时，保留最后 N 级目录</span>
+            <span className="settings-muted">本地库文件夹标题压缩时，保留最后 N 级目录</span>
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label form-label-wide">演示</div>
-          <div className="form-field settings-page__demo-field">
-            <code className="settings-page__demo-path">
+          <div className="form-label">演示</div>
+          <div className="form-field settings-stack">
+            <code className="settings-path-example">
               {"C:\\Users\\LOLcat\\Documents\\Minecraft\\Schematics\\Castle\\Overworld\\North Gate"}
             </code>
             <div>
@@ -445,19 +443,17 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
             </div>
           </div>
         </div>
-        <div className="settings-page__note">
-          材料列表、游戏资源管理器和 UI 测试页中的演示窗口都会按照这里的子窗口行为决定使用独立窗口还是主窗口遮罩。
+        <div className="settings-help-text">
+          材料列表和 UI 测试页中的演示窗口都会按照这里的子窗口行为决定使用独立窗口还是主窗口遮罩。
         </div>
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">后端</div>
+        <div className="group-box-title">应用运行能力</div>
         <PathRow label="工作目录" path={workspaceRoot || "..."} info={workspaceRoot ? ({ normalized: workspaceRoot, exists: true } as PathInfo) : null} />
-        <PathRow label="litematica_core" path={coreInfo?.normalized || ""} info={coreInfo} />
-        <PathRow label="native_viewer" path={viewerInfo?.normalized || ""} info={viewerInfo} />
-        <div className="button-row settings-page__status-row">
-          <button className="btn" onClick={checkBackend}>检查后端</button>
-          <span className={checkStatusClass(backendOk)}>{statusText(backendOk)}</span>
+        <div className="settings-actions settings-actions-spaced">
+          <Button className="btn" onClick={checkApplicationRuntime}>检查运行能力</Button>
+          <span className="settings-status" data-state={runtimeOk === false ? "error" : "normal"}>{statusText(runtimeOk)}</span>
         </div>
       </div>
 
@@ -465,49 +461,36 @@ export function SettingsPage({ theme, setTheme, setShowUiTestPage }: any) {
         <div className="group-box-title">数据文件</div>
         <PathRow label="BlockState DB" path={BLOCKSTATE_DB} info={dbInfo} />
         <PathRow label="中文翻译 DB" path={BLOCKSTATE_ZH} info={zhInfo} />
-        <div className="button-row settings-page__status-row settings-page__actions-wrap">
-          <button className="btn" onClick={checkDatabase}>检查 BlockState 数据库</button>
-          <button className="btn" onClick={() => openWorkspacePath("data/minecraft_blockstates")}>打开数据目录</button>
-          <span className={checkStatusClass(dbOk)}>DB: {statusText(dbOk)}</span>
+        <PathRow label="block 图标库" path={BLOCK_ICON_DIR} info={iconDirInfo} />
+        <div className="settings-actions settings-actions-spaced">
+          <Button className="btn" onClick={checkDatabase}>检查 BlockState 数据库</Button>
+          <Button className="btn" onClick={checkIcons}>检查图标库</Button>
+          <Button className="btn" onClick={() => openWorkspacePath("data/minecraft_blockstates")}>打开数据目录</Button>
+          <span className="settings-status" data-state={dbOk === false || iconOk === false ? "error" : "normal"}>
+            DB: {statusText(dbOk)} / 图标: {statusText(iconOk)}
+          </span>
         </div>
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">渲染</div>
+        <div className="group-box-title">公开版快速渲染</div>
         <div className="form-row">
-          <div className="form-label form-label-wide">渲染页 displayMode</div>
-          <div className="form-field">
-            <select className="input" value={displayMode} onChange={(event) => handleDisplayMode(event.target.value)}>
-              {DISPLAY_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-            <button className="btn" onClick={() => handleDisplayMode("normal")}>重置为 normal</button>
-          </div>
+          <div className="form-label">预览图生成</div>
+          <Dropdown ariaLabel="预览图生成" value={previewMode} options={DISPLAY_MODE_OPTIONS} onChange={handlePreviewMode} />
         </div>
-        <div className="form-row">
-          <div className="form-label form-label-wide">预览图生成</div>
-          <div className="form-field">
-            <select className="input" value={previewMode} onChange={(event) => handlePreviewMode(event.target.value)}>
-              {DISPLAY_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-            <button className="btn" onClick={() => handlePreviewMode("normal")}>重置为 normal</button>
-          </div>
-        </div>
-        <div className="settings-page__note">
-          投影库“生成预览”使用“预览图生成”模式；它独立于渲染页 displayMode。
-        </div>
+        <div className="settings-help-text">公开 Beta 仅提供独立快速模式，不包含完整模式、光影包或完整模式配置。</div>
       </div>
 
       <div className="group-box">
         <div className="group-box-title">维护</div>
-        <div className="button-row">
-          <button className="btn" onClick={async () => setLog(await cleanupLocalTempFiles())}>清理本地临时文件</button>
-        </div>
+        <Button className="btn" onClick={async () => setLog(await cleanupLocalTempFiles())}>清理本地临时文件</Button>
       </div>
 
-      {log && <pre className="nova-pre settings-page__main-log">{log}</pre>}
-      {showAssetManagerOverlay ? (
-        <AssetManagerDialog theme={normalizeTheme(theme)} onClose={() => setShowAssetManagerOverlay(false)} />
-      ) : null}
+      {log && (
+        <pre className="settings-feedback">{log}</pre>
+      )}
     </div>
+    </ScrollArea>
   );
 }
+

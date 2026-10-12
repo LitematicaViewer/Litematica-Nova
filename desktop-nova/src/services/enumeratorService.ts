@@ -1,9 +1,9 @@
-import { getAppDataFilePath, listDirectoryEntries, readAppDataFile, writeAppDataFile } from "../platform/files";
-import { listGameResourceRegistry, readActiveGameDataResource, readActiveLanguageResource } from "./gameResources";
+import { getAppDataFilePath, listDirectoryEntries, readAppDataFile } from "../platform/files";
+import { readWorkspaceFile } from "../platform/files";
+import { getAllBlocks, loadDatabases } from "./blockstateDb";
 import { translateBlockId } from "./i18n";
-import type { MaterialItem } from "./statsService";
 
-export type EnumeratorCollectionCategory = "base" | "version" | "system_enum" | "creative" | "custom" | "runtime";
+export type EnumeratorCollectionCategory = "base" | "version" | "system_enum" | "creative" | "map" | "custom" | "runtime";
 export type EnumeratorValueType = "block" | "item" | "entity" | "enchantment" | "mixed" | "unknown";
 
 export interface EnumeratorCollection {
@@ -54,6 +54,7 @@ const COLLECTION_DIRS: Record<Exclude<EnumeratorCollectionCategory, "base" | "ru
   version: "enumerator/version",
   system_enum: "enumerator/system_enum",
   creative: "enumerator/creative",
+  map: "enumerator/map",
   custom: "enumerator/custom",
 };
 
@@ -208,7 +209,7 @@ async function resolveCollectionDir(relativeDir: string): Promise<{ absDir: stri
 }
 
 async function loadActiveLanguageMap(): Promise<ActiveLanguageMap> {
-  const raw = await readActiveLanguageResource().catch(() => "");
+  const raw = await readWorkspaceFile("pack-in/lang/zh_cn.json").catch(() => "");
   const parsed = readJson<Record<string, string>>(raw) || {};
   const blocks: string[] = [];
   const items: string[] = [];
@@ -242,19 +243,12 @@ async function loadActiveLanguageMap(): Promise<ActiveLanguageMap> {
 }
 
 async function loadActiveBlocks(): Promise<{ version: string; values: string[] }> {
-  const active = await readActiveGameDataResource().catch(() => null);
-  if (!active) return { version: "unknown", values: [] };
-  const parsed = readJson<{ version_id?: string; blocks?: Record<string, unknown> }>(active.dbText) || {};
-  return {
-    version: String(parsed.version_id || active.entry.version || "unknown").trim() || "unknown",
-    values: uniq(Object.keys(parsed.blocks || {})),
-  };
+  await loadDatabases();
+  return { version: "bundled", values: getAllBlocks() };
 }
 
 async function loadBaseCollections(): Promise<EnumeratorCollection[]> {
-  const snapshot = await listGameResourceRegistry().catch(() => null);
   const roots = uniq([
-    snapshot?.active_enum_catalog.root_relpath || "",
     ...DEFAULT_ENUM_ROOTS,
   ].filter(Boolean));
   const languageMap = await loadActiveLanguageMap();
@@ -293,10 +287,10 @@ async function loadBaseCollections(): Promise<EnumeratorCollection[]> {
       symbol: def.symbol,
       category: "base",
       valueType: def.valueType,
-      version: values.length ? (snapshot?.active_enum_catalog.label || "builtin") : "missing",
+      version: values.length ? "builtin" : "missing",
       values,
       description: values.length
-        ? (sourcePath ? "来自当前激活的枚举全集资源。" : "由当前激活的游戏数据/语言资源回填。")
+        ? (sourcePath ? "来自随程序提供的枚举资源。" : "由本地游戏数据/语言资源回填。")
         : "基础全集文件缺失，且无法从当前资源回填。",
       updatedAt: nowIso(),
       readOnly: true,
@@ -381,11 +375,12 @@ async function loadFolderCollections(category: Exclude<EnumeratorCollectionCateg
 }
 
 export async function loadEnumeratorCollections(runtimeCollections: EnumeratorCollection[] = []): Promise<EnumeratorCollection[]> {
-  const [baseCollections, versionCollections, systemCollections, creativeCollections, customCollections] = await Promise.all([
+  const [baseCollections, versionCollections, systemCollections, creativeCollections, mapCollections, customCollections] = await Promise.all([
     loadBaseCollections(),
     loadFolderCollections("version"),
     loadFolderCollections("system_enum"),
     loadFolderCollections("creative"),
+    loadFolderCollections("map"),
     loadFolderCollections("custom"),
   ]);
   return [
@@ -393,267 +388,30 @@ export async function loadEnumeratorCollections(runtimeCollections: EnumeratorCo
     ...versionCollections,
     ...systemCollections,
     ...creativeCollections,
+    ...mapCollections,
     ...runtimeCollections,
     ...customCollections,
   ];
 }
 
-export async function loadEnumeratorCustomCollections(): Promise<EnumeratorCollection[]> {
-  return loadFolderCollections("custom");
-}
-
-function targetCustomRelativePath(existing: EnumeratorCollection | null, name: string): string {
-  if (existing?.sourceRelativePath) return existing.sourceRelativePath;
-  return `${COLLECTION_DIRS.custom}/${slugify(name)}.json`;
-}
-
-export async function saveEnumeratorCollection(input: Partial<EnumeratorCollection> & Pick<EnumeratorCollection, "name" | "values">): Promise<EnumeratorCollection> {
-  const customCollections = await loadEnumeratorCustomCollections();
-  const baseId = String(input.id || "").trim();
-  const existing = customCollections.find((collection) => collection.id === baseId) || null;
-  const nextValues = uniq(input.values);
-  const name = String(input.name || "").trim() || "未命名集合";
-  const relativePath = targetCustomRelativePath(existing, name);
-  const next: EnumeratorCollection = {
-    id: existing?.id || `custom:${slugify(name)}:${Date.now()}`,
-    name,
-    symbol: safeSymbol(String(input.symbol || existing?.symbol || "").trim(), existing ? existing.symbol : `C${customCollections.length + 1}`),
-    category: "custom",
-    valueType: normalizeValueType(input.valueType || existing?.valueType || "mixed") === "unknown"
-      ? inferValueType(nextValues)
-      : normalizeValueType(input.valueType || existing?.valueType || "mixed"),
-    version: String(input.version || existing?.version || "custom").trim() || "custom",
-    values: nextValues,
-    description: String(input.description || existing?.description || "").trim(),
-    updatedAt: nowIso(),
-    readOnly: false,
-    sourceRelativePath: relativePath,
-    sourcePath: await resolveSourcePath(relativePath),
-  };
-
-  await writeAppDataFile(relativePath, JSON.stringify(next.values, null, 2));
-  return next;
-}
-
-export function createRuntimeProjectionCollection(filePath: string, materials: MaterialItem[]): EnumeratorCollection {
-  const fileName = filePath.split(/[\\/]/).pop() || "当前统计结果";
-  return {
-    id: `runtime:${filePath}`,
-    name: "当前统计结果",
-    symbol: "L",
-    category: "runtime",
-    valueType: "mixed",
-    version: "runtime",
-    values: uniq(materials.map((material) => material.id)),
-    description: `来自当前统计页：${fileName}`,
-    updatedAt: nowIso(),
-    readOnly: true,
-  };
-}
-
-function resolveCollectionToken(token: string, collections: EnumeratorCollection[]): EnumeratorCollection | null {
-  const lookup = normalizeLookupKey(token);
-  if (!lookup) return null;
-  return collections.find((collection) =>
-    normalizeLookupKey(collection.id) === lookup ||
-    normalizeLookupKey(collection.name) === lookup ||
-    normalizeLookupKey(collection.symbol) === lookup,
-  ) || null;
-}
-
-function validateWildcardToken(token: string): void {
-  const lookup = normalizeLookupKey(token);
-  const firstWildcardIndex = lookup.indexOf("*");
-  const lastWildcardIndex = lookup.lastIndexOf("*");
-  if (firstWildcardIndex < 0) return;
-  if (firstWildcardIndex !== 0 && firstWildcardIndex !== lookup.length - 1) {
-    throw new Error(`集合名通配符只能位于开头或末尾：${token}`);
-  }
-  if (lastWildcardIndex !== firstWildcardIndex && lastWildcardIndex !== lookup.length - 1) {
-    throw new Error(`集合名通配符只能位于开头或末尾：${token}`);
-  }
-}
-
-function isWildcardCollectionToken(token: string): boolean {
-  return normalizeLookupKey(token).includes("*");
-}
-
-function resolveWildcardCollections(token: string, collections: EnumeratorCollection[]): EnumeratorCollection[] {
-  const pattern = normalizeLookupKey(token);
-  validateWildcardToken(pattern);
-  const firstWildcardIndex = pattern.indexOf("*");
-  const prefix = pattern.startsWith("*") ? "" : pattern.slice(0, firstWildcardIndex);
-  const suffix = pattern.endsWith("*") ? "" : pattern.slice(pattern.lastIndexOf("*") + 1);
-  return collections.filter((collection) => {
-    const name = normalizeLookupKey(collection.name);
-    return name.startsWith(prefix) && name.endsWith(suffix) && name.length >= prefix.length + suffix.length;
-  });
-}
-
-function tokenizeExpression(expression: string): string[] {
-  const tokens: string[] = [];
-  let buffer = "";
-  const flush = () => {
-    const value = buffer.trim();
-    if (value) tokens.push(value);
-    buffer = "";
-  };
-
-  for (const char of expression) {
-    if (char === "(" || char === ")" || char === "∪" || char === "|" || char === "∩" || char === "&" || char === "-") {
-      flush();
-      tokens.push(char);
-      continue;
-    }
-    buffer += char;
-  }
-  flush();
-  return tokens;
-}
-
-function validateWildcardParentheses(tokens: string[]): void {
-  tokens.forEach((token, index) => {
-    if (!isWildcardCollectionToken(token)) return;
-    if (tokens[index - 1] !== "(" || tokens[index + 1] !== ")") {
-      throw new Error(`通配符集合必须单独放在括号中，例如 A-(map_*)：${token}`);
-    }
-  });
-}
-
-function precedence(operator: string): number {
-  if (operator === "∩" || operator === "&") return 2;
-  if (operator === "∪" || operator === "|" || operator === "-") return 1;
-  return 0;
-}
-
-function toRpn(tokens: string[]): string[] {
-  const output: string[] = [];
-  const operators: string[] = [];
-  for (const token of tokens) {
-    if (token === "(") {
-      operators.push(token);
-      continue;
-    }
-    if (token === ")") {
-      while (operators.length && operators[operators.length - 1] !== "(") {
-        output.push(operators.pop()!);
-      }
-      if (!operators.length) throw new Error("括号不匹配。");
-      operators.pop();
-      continue;
-    }
-    if (token === "∪" || token === "|" || token === "∩" || token === "&" || token === "-") {
-      while (operators.length && precedence(operators[operators.length - 1]) >= precedence(token)) {
-        output.push(operators.pop()!);
-      }
-      operators.push(token);
-      continue;
-    }
-    output.push(token);
-  }
-  while (operators.length) {
-    const operator = operators.pop()!;
-    if (operator === "(") throw new Error("括号不匹配。");
-    output.push(operator);
-  }
-  return output;
-}
-
-function applyOperator(left: Set<string>, right: Set<string>, operator: string): Set<string> {
-  if (operator === "∪" || operator === "|") return new Set([...left, ...right]);
-  if (operator === "∩" || operator === "&") return new Set([...left].filter((value) => right.has(value)));
-  if (operator === "-") return new Set([...left].filter((value) => !right.has(value)));
-  return new Set(left);
-}
-
 /**
- * Evaluates an enumerator collection expression, including parenthesized name wildcards.
+ * Builds a block-to-color lookup from map collections named like `map_707070_stone`.
  *
- * @param expression Collection names, operators, and wildcard expressions to evaluate.
- * @param collections Collections available to the expression.
- * @returns The resolved values, referenced collection IDs, and any parse error.
+ * @param collections Enumerator collections to inspect.
+ * @returns Normalized block IDs mapped to their six-digit map colors.
  */
-export function evaluateEnumeratorExpression(expression: string, collections: EnumeratorCollection[]): { values: string[]; dependencies: string[]; error: string } {
-  const trimmed = String(expression || "").trim();
-  if (!trimmed) return { values: [], dependencies: [], error: "" };
-  try {
-    const tokens = tokenizeExpression(trimmed);
-    validateWildcardParentheses(tokens);
-    const rpn = toRpn(tokens);
-    const stack: Set<string>[] = [];
-    const dependencies: string[] = [];
-
-    for (const token of rpn) {
-      if (token === "∪" || token === "|" || token === "∩" || token === "&" || token === "-") {
-        const right = stack.pop();
-        const left = stack.pop();
-        if (!left || !right) throw new Error("表达式不完整。");
-        stack.push(applyOperator(left, right, token));
-        continue;
-      }
-      if (isWildcardCollectionToken(token)) {
-        const matchedCollections = resolveWildcardCollections(token, collections);
-        if (!matchedCollections.length) throw new Error(`找不到匹配的集合：${token}`);
-        dependencies.push(...matchedCollections.map((collection) => collection.id));
-        stack.push(new Set(matchedCollections.flatMap((collection) => collection.values)));
-        continue;
-      }
-      const collection = resolveCollectionToken(token, collections);
-      if (!collection) throw new Error(`找不到集合：${token}`);
-      dependencies.push(collection.id);
-      stack.push(new Set(collection.values));
+export function buildMapColorLookup(collections: EnumeratorCollection[]): Map<string, string> {
+  const colors = new Map<string, string>();
+  for (const collection of collections) {
+    if (collection.category !== "map") continue;
+    const match = collection.name.trim().match(/^map_([0-9a-f]{6})(?:_|$)/i);
+    if (!match) continue;
+    const color = `#${match[1].toLowerCase()}`;
+    for (const value of collection.values) {
+      const normalizedValue = normalizeCollectionValue(value);
+      if (!normalizedValue || colors.has(normalizedValue)) continue;
+      colors.set(normalizedValue, color);
     }
-
-    if (stack.length !== 1) throw new Error("表达式不完整。");
-    return {
-      values: [...stack[0]],
-      dependencies: uniq(dependencies),
-      error: "",
-    };
-  } catch (error: any) {
-    return {
-      values: [],
-      dependencies: [],
-      error: String(error?.message || error || "表达式解析失败"),
-    };
   }
-}
-
-function detectValueType(value: string, membership: Record<string, Set<string>>): EnumeratorValueType {
-  if (membership.blocks.has(value)) return "block";
-  if (membership.items.has(value)) return "item";
-  if (membership.entities.has(value)) return "entity";
-  if (membership.enchantments.has(value)) return "enchantment";
-  return "unknown";
-}
-
-function isItemLikeBlockCollection(collection: EnumeratorCollection): boolean {
-  const normalizedId = normalizeLookupKey(collection.id);
-  const normalizedName = normalizeLookupKey(collection.name);
-  return normalizedId === "custom:itemlike_block" || normalizedName === "itemlike_block";
-}
-
-export function buildEnumeratorValueRows(values: string[], collections: EnumeratorCollection[]): EnumeratorValueRow[] {
-  const membership = {
-    blocks: new Set(collections.find((collection) => collection.id === "base:dv-blocks")?.values || []),
-    items: new Set(collections.find((collection) => collection.id === "base:dv-items")?.values || []),
-    entities: new Set(collections.find((collection) => collection.id === "base:dv-entities")?.values || []),
-    enchantments: new Set(collections.find((collection) => collection.id === "base:dv-enchantments")?.values || []),
-  };
-  const customCollections = collections.filter((collection) => collection.category === "custom" || collection.category === "runtime");
-  const itemLikeBlocks = new Set(
-    collections
-      .filter((collection) => isItemLikeBlockCollection(collection))
-      .flatMap((collection) => collection.values),
-  );
-  return uniq(values).map((value) => ({
-    id: value,
-    name: translateBlockId(value) || value,
-    iconHint: value,
-    iconLookupMode: membership.items.has(value) || itemLikeBlocks.has(value) ? "item_first" : "default",
-    type: detectValueType(value, membership),
-    customCollections: customCollections
-      .filter((collection) => collection.values.includes(value))
-      .map((collection) => collection.name),
-  }));
+  return colors;
 }

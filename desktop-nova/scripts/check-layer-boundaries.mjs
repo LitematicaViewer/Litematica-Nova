@@ -6,7 +6,39 @@ import ts from "typescript";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const rootDir = path.resolve(scriptDir, "..");
+const defaultRootDir = path.resolve(scriptDir, "..");
+const BASELINE_SCHEMA = "lba.layer-violations-baseline.v1";
+
+function parseArguments(argv) {
+  const options = {
+    mode: "strict",
+    rootDir: defaultRootDir,
+    baselinePath: path.join(scriptDir, "layer-violations-baseline.json"),
+    writeBaseline: false,
+  };
+
+  for (const argument of argv) {
+    if (argument === "--write-baseline") {
+      options.writeBaseline = true;
+    } else if (argument.startsWith("--mode=")) {
+      options.mode = argument.slice("--mode=".length);
+    } else if (argument.startsWith("--root-dir=")) {
+      options.rootDir = path.resolve(argument.slice("--root-dir=".length));
+    } else if (argument.startsWith("--baseline=")) {
+      options.baselinePath = path.resolve(argument.slice("--baseline=".length));
+    } else {
+      throw new Error(`Unknown layer check argument: ${argument}`);
+    }
+  }
+
+  if (options.mode !== "strict" && options.mode !== "baseline") {
+    throw new Error(`Invalid layer check mode ${JSON.stringify(options.mode)}; expected strict or baseline.`);
+  }
+  return options;
+}
+
+const options = parseArguments(process.argv.slice(2));
+const rootDir = options.rootDir;
 const srcDir = path.join(rootDir, "src");
 const uiDir = path.join(rootDir, "ui");
 const legacyUiDir = path.join(srcDir, "ui");
@@ -34,6 +66,85 @@ function addViolation(filePath, line, rule, message) {
     rule,
     message
   });
+}
+
+function compareViolations(left, right) {
+  return (
+    left.file.localeCompare(right.file) ||
+    left.line - right.line ||
+    left.rule.localeCompare(right.rule) ||
+    left.message.localeCompare(right.message)
+  );
+}
+
+function violationKey(violation) {
+  return JSON.stringify([violation.file, violation.line, violation.rule, violation.message]);
+}
+
+function validateBaselineViolation(value, index) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Layer baseline violation ${index} must be an object.`);
+  }
+  const exactKeys = ["file", "line", "rule", "message"];
+  const keys = Object.keys(value).sort();
+  if (JSON.stringify(keys) !== JSON.stringify([...exactKeys].sort())) {
+    throw new Error(`Layer baseline violation ${index} must contain exactly file, line, rule, and message.`);
+  }
+  if (
+    typeof value.file !== "string" ||
+    value.file.length === 0 ||
+    /[*?[\]{}!]/.test(value.file) ||
+    value.file.includes("\\") ||
+    path.isAbsolute(value.file) ||
+    value.file.split("/").includes("..")
+  ) {
+    throw new Error(`Layer baseline violation ${index} has a non-exact file path.`);
+  }
+  if (!Number.isSafeInteger(value.line) || value.line < 1) {
+    throw new Error(`Layer baseline violation ${index} has an invalid line.`);
+  }
+  if (typeof value.rule !== "string" || value.rule.length === 0 || /[*?[\]{}!]/.test(value.rule)) {
+    throw new Error(`Layer baseline violation ${index} has a non-exact rule.`);
+  }
+  if (typeof value.message !== "string" || value.message.length === 0) {
+    throw new Error(`Layer baseline violation ${index} has an invalid message.`);
+  }
+  return value;
+}
+
+function readBaseline(filePath) {
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    parsed.schema !== BASELINE_SCHEMA ||
+    !Array.isArray(parsed.violations)
+  ) {
+    throw new Error(`Layer baseline must use schema ${BASELINE_SCHEMA}.`);
+  }
+  const entries = parsed.violations.map(validateBaselineViolation).sort(compareViolations);
+  const keys = entries.map(violationKey);
+  if (new Set(keys).size !== keys.length) {
+    throw new Error("Layer baseline contains duplicate exact violations.");
+  }
+  return entries;
+}
+
+function writeBaseline(filePath, entries) {
+  const parent = path.dirname(filePath);
+  fs.mkdirSync(parent, { recursive: true });
+  fs.writeFileSync(
+    filePath,
+    `${JSON.stringify({ schema: BASELINE_SCHEMA, violations: entries }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+function printViolations(title, entries) {
+  console.error(title);
+  for (const violation of entries) {
+    console.error(`${violation.file}:${violation.line} [${violation.rule}] ${violation.message}`);
+  }
 }
 
 function walk(dir) {
@@ -213,12 +324,37 @@ for (const filePath of [...walk(srcDir), ...walk(uiDir)]) {
   }
 }
 
-if (violations.length > 0) {
-  console.error(`Layer boundary check failed with ${violations.length} violation(s):`);
-  for (const violation of violations) {
-    console.error(`${violation.file}:${violation.line} [${violation.rule}] ${violation.message}`);
+violations.sort(compareViolations);
+
+if (options.writeBaseline) {
+  writeBaseline(options.baselinePath, violations);
+  console.log(`Wrote ${violations.length} exact layer violation(s) to ${options.baselinePath}.`);
+  process.exit(0);
+}
+
+if (options.mode === "strict") {
+  if (violations.length === 0) {
+    console.log("Layer boundary strict check passed with zero violations.");
+    process.exit(0);
   }
+  printViolations(`Layer boundary strict check failed with ${violations.length} violation(s):`, violations);
   process.exit(1);
 }
 
-console.log("Layer boundary check passed.");
+const baseline = readBaseline(options.baselinePath);
+const baselineKeys = new Set(baseline.map(violationKey));
+const currentKeys = new Set(violations.map(violationKey));
+const newViolations = violations.filter((violation) => !baselineKeys.has(violationKey(violation)));
+const resolvedCount = baseline.filter((violation) => !currentKeys.has(violationKey(violation))).length;
+
+if (newViolations.length > 0) {
+  printViolations(
+    `Layer boundary baseline check failed with ${newViolations.length} new violation(s); ${violations.length - newViolations.length} exact baseline violation(s) remain:`,
+    newViolations,
+  );
+  process.exit(1);
+}
+
+console.log(
+  `Layer boundary baseline check passed: ${violations.length} known violation(s), 0 new, ${resolvedCount} resolved.`,
+);

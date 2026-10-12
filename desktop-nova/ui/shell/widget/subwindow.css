@@ -262,54 +262,8 @@
     white-space: nowrap;
 }
 
-.material-list-control-stack {
-    display: flex;
-    flex: 0 0 auto;
-    min-width: 0;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.material-list-control-row {
-    display: flex;
-    min-width: 0;
-    align-items: center;
-    gap: 8px;
-}
-
-.material-list-control-row-workbook {
-    width: 100%;
-}
-
-.material-list-control-label {
-    flex: 0 0 auto;
-    color: var(--ln-muted-text-color, GrayText);
-}
-
-.material-list-workbook-select {
-    flex: 1;
-    min-width: 0;
-    width: 100%;
-}
-
-.material-list-control-row-actions {
-    flex-wrap: wrap;
-    justify-content: flex-start;
-}
-
-.material-list-multiplier-control {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    margin-left: 4px;
-}
-
-.material-list-control-row-toggles {
-    flex-wrap: wrap;
-}
-
-.material-list-disabled-toggle {
-    opacity: 0.55;
+.material-list-count-input {
+    width: 70px;
 }
 
 .material-list-table-wrap {
@@ -337,23 +291,8 @@
     vertical-align: middle;
 }
 
-.material-list-row-odd {
+.material-list-table tbody tr:nth-child(odd) {
     background: rgb(255 255 255 / 2%);
-}
-
-.material-list-virtual-spacer {
-    background: transparent !important;
-}
-
-.material-list-virtual-spacer td {
-    background: transparent !important;
-}
-
-.material-list-virtual-spacer-cell {
-    height: var(--material-list-virtual-spacer-height, 0px) !important;
-    padding: 0 !important;
-    border: 0 !important;
-    background: transparent !important;
 }
 
 .material-list-icon-col {

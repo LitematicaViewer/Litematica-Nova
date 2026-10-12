@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!--
+    The previous MSI used these user-visible paths. Remove only installer-owned
+    shortcuts, then remove the directories only when they are empty. Unknown
+    files are deliberately preserved.
+  -->
+  <Fragment>
+    <DirectoryRef Id="ProgramFiles64Folder">
+      <Directory Id="LegacyNovaBaInstallDirectory" Name="Litematica Nova BA">
+        <Component Id="CleanupLegacyNovaBaInstallDirectory"
+                   Guid="e093e805-8f3b-4dd2-a164-49b7ddc52ca1"
+                   Win64="yes">
+          <RemoveFile Id="RemoveLegacyNovaBaUninstallShortcut"
+                      Name="Uninstall Litematica Nova BA.lnk"
+                      On="install" />
+          <RemoveFolder Id="RemoveLegacyNovaBaInstallDirectory"
+                        On="install" />
+          <RegistryValue Root="HKLM"
+                         Key="Software\Litematica-Nova\InstallerMigration"
+                         Name="LegacyInstallDirectoryCleanup"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
+      </Directory>
+    </DirectoryRef>
+  </Fragment>
+
+  <Fragment>
+    <DirectoryRef Id="ProgramMenuFolder">
+      <Directory Id="LegacyNovaBaProgramsDirectory" Name="Litematica Nova BA">
+        <Component Id="CleanupLegacyNovaBaProgramsDirectory"
+                   Guid="4c32740a-c693-4d5f-a16a-091af170618c"
+                   Win64="yes">
+          <RemoveFile Id="RemoveLegacyNovaBaStartMenuShortcut"
+                      Name="Litematica Nova BA.lnk"
+                      On="install" />
+          <RemoveFolder Id="RemoveLegacyNovaBaProgramsDirectory"
+                        On="install" />
+          <RegistryValue Root="HKCU"
+                         Key="Software\Litematica-Nova\InstallerMigration"
+                         Name="LegacyStartMenuCleanup"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
+      </Directory>
+    </DirectoryRef>
+  </Fragment>
+
+  <Fragment>
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="CleanupLegacyNovaBaDesktopShortcut"
+                 Guid="163697bb-8200-4f9a-b2f2-8dd39babcb12"
+                 Win64="yes">
+        <RemoveFile Id="RemoveLegacyNovaBaDesktopShortcut"
+                    Name="Litematica Nova BA.lnk"
+                    On="install" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\Litematica-Nova\InstallerMigration"
+                       Name="LegacyDesktopCleanup"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="LegacyNameCleanup">
+      <ComponentRef Id="CleanupLegacyNovaBaInstallDirectory" />
+      <ComponentRef Id="CleanupLegacyNovaBaProgramsDirectory" />
+      <ComponentRef Id="CleanupLegacyNovaBaDesktopShortcut" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>

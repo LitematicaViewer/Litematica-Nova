@@ -1,606 +1,207 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { BlockIcon } from '../../../../components/BlockIcon';
-import { BlockPickerDialog } from '../../../../components/BlockPickerDialog';
+import { ScrollArea } from "../../../../components/ui/scroll-area";
+import { Button } from "../../../../components/ui/button";
+import { Input } from "../../../../components/ui/input";
+import React, { useEffect, useRef, useState } from "react";
+import { takeUpdateDraft, useUpdateDraft } from "../../updateRecovery";
+import { BlockSearchSelect } from "../../../../components/BlockSearchSelect";
+import { Dialog } from "../../../../components/Dialog";
+import { Dropdown } from "../../../../components/Dropdown";
 import {
-  getAllBlocks,
-  getBlockProperties,
-  translateKey,
-  translateValue,
-  checkFileExists,
-} from '../../../../../src/business/replace';
-import { EnumeratorBlockPickerDialog } from './EnumeratorBlockPickerDialog';
-import {
-  dryRunReplaceUnits,
-  applyReplaceUnits,
-  listReplacePresets,
-  saveReplacePreset,
-  loadReplacePreset,
-  deleteReplacePreset,
-  openReplacePresetFolder,
-  isSeparatorItem,
-} from '../../../../../src/business/replace';
-import { selectLitematicSavePath } from '../../../../../src/business/facade';
-import { loadMaterialsScope } from '../../../../../src/services/statsService';
-import {
-  saveReplaceSession,
-  loadReplaceSession,
-} from '../../../../../src/services/replaceSessionStore';
-import type {
-  ReplaceUnit,
-  ReplaceItem,
-  ReplaceEntry,
-  ReplaceOutputEntry,
-  ReplacePreviewSummary,
-  UnitPreviewSummary,
-} from '../../../../../src/business/replace';
+  getBlockProperties, translateKey, translateValue, translateBlockId,
+  applyReplaceBlocks, checkFileExists, dryRunReplaceBlocks, selectLitematicSavePath,
+} from "../../../../../src/business/facade";
+import "./replace.css";
 
-// ── PropertySelector ─────────────────────────────────────────────────────────
+type Rule = {
+  match: { name: string; properties: Record<string, string> };
+  replace: { name: string; properties: Record<string, string> };
+  property_mode: string;
+};
+type ReplaceSummary = {
+  block_positions_affected: number;
+  regions_scanned: number;
+  warnings: string[];
+  per_rule: { rule_index: number; match_name: string; replace_name: string; affected_block_count: number }[];
+};
+type Preview = { source: string; rules: Rule[]; raw: string; summary: ReplaceSummary | null };
 
-function PropertySelector({ blockId, value, onChange, isOutput }: {
-  blockId: string;
-  value: Record<string, string>;
-  onChange: (props: Record<string, string>) => void;
-  isOutput: boolean;
+function parseSummary(raw: string): ReplaceSummary | null {
+  try {
+    const data = JSON.parse(raw);
+    return typeof data.block_positions_affected === "number" ? data : null;
+  } catch { return null; }
+}
+
+function PropertySelector({ blockId, value, onChange, isTo }: {
+  blockId: string; value: Record<string, string>; onChange: (value: Record<string, string>) => void; isTo: boolean;
 }) {
   const props = getBlockProperties(blockId);
   const keys = Object.keys(props).sort();
-  if (keys.length === 0) return <span className="replace-property-no-props">无属性</span>;
-  return (
-    <div className="replace-entry-properties">
-      {keys.map((k) => (
-        <div key={k} className="replace-property-item">
-          <span className="replace-property-label">{translateKey(k)}:</span>
-          <select
-            className="input"
-            value={value[k] || ''}
-            onChange={(e) => {
-              const nv = { ...value };
-              if (!e.target.value) delete nv[k]; else nv[k] = e.target.value;
-              onChange(nv);
-            }}
-          >
-            <option value="">{isOutput ? '默认' : '所有'}</option>
-            {props[k].map((v) => (
-              <option key={v} value={v}>{translateValue(k, v)} ({v})</option>
-            ))}
-          </select>
+  if (keys.length === 0) return <span className="muted">这个方块没有可选状态。</span>;
+  return <div className="replace-property-list">{keys.map((key) => (
+    <div className="replace-property" key={key}>
+      <span>{translateKey(key)}</span>
+      <Dropdown value={value[key] || (isTo ? "$keep" : "")} options={[
+        ...(isTo ? [{ label: "保持原状态", value: "$keep" }] : [{ label: "全部状态", value: "" }]),
+        ...props[key].map((item) => ({ label: `${translateValue(key, item)} (${item})`, value: item })),
+      ]} onChange={(item) => {
+        const next = { ...value };
+        if (!item) delete next[key]; else next[key] = item;
+        onChange(next);
+      }} />
+    </div>
+  ))}</div>;
+}
+
+function RuleRow({ rule, index, onChange, onRemove, onDuplicate }: {
+  rule: Rule; index: number; onChange: (rule: Rule) => void; onRemove: () => void; onDuplicate: () => void;
+}) {
+  return <div className="rule-row replace-rule">
+    <div className="replace-rule-main">
+      <div className="replace-block">
+        <strong>把这个方块</strong>
+        <BlockSearchSelect value={rule.match.name} onChange={(name) => onChange({ ...rule, match: { name, properties: {} } })} />
+      </div>
+      <div className="replace-block">
+        <strong>替换成</strong>
+        <BlockSearchSelect value={rule.replace.name} onChange={(name) => onChange({ ...rule, replace: { name, properties: {} } })} />
+      </div>
+      <div className="replace-rule-actions">
+        <Button variant="secondary" aria-label={`复制规则 ${index + 1}`} onClick={onDuplicate}>复制</Button>
+        <Button variant="ghost" aria-label={`删除规则 ${index + 1}`} onClick={onRemove}>删除</Button>
+      </div>
+    </div>
+    <details className="replace-advanced">
+      <summary>高级 · 方块状态与手动 ID</summary>
+      <div className="replace-rule-main">
+        <div className="replace-block">
+          <label>原方块 ID（可用通配符）<Input className="input" value={rule.match.name} onChange={(event) => onChange({ ...rule, match: { name: event.target.value, properties: {} } })} /></label>
+          <PropertySelector blockId={rule.match.name} value={rule.match.properties} onChange={(properties) => onChange({ ...rule, match: { ...rule.match, properties } })} isTo={false} />
         </div>
-      ))}
-    </div>
-  );
-}
-
-// ── Entry row components ─────────────────────────────────────────────────────
-
-function InputEntryRow({ entry, onChange, onRemove }: {
-  entry: ReplaceEntry;
-  onChange: (e: ReplaceEntry) => void;
-  onRemove: () => void;
-}) {
-  return (
-    <div className="replace-entry-row">
-      <div className="replace-entry-top">
-        <BlockIcon blockId={entry.name} />
-        <input
-          className="input replace-entry-name-input"
-          value={entry.name}
-          placeholder="minecraft:stone"
-          onChange={(e) => onChange({ ...entry, name: e.target.value })}
-        />
-        <button className="btn replace-entry-remove-btn" onClick={onRemove}>×</button>
-      </div>
-      <PropertySelector
-        blockId={entry.name}
-        value={entry.properties || {}}
-        onChange={(p) => onChange({ ...entry, properties: Object.keys(p).length ? p : undefined })}
-        isOutput={false}
-      />
-    </div>
-  );
-}
-
-function OutputEntryRow({ entry, onChange, onRemove }: {
-  entry: ReplaceOutputEntry;
-  onChange: (e: ReplaceOutputEntry) => void;
-  onRemove: () => void;
-}) {
-  return (
-    <div className="replace-entry-row">
-      <div className="replace-entry-top">
-        <BlockIcon blockId={entry.name} />
-        <input
-          className="input replace-entry-name-input"
-          value={entry.name}
-          placeholder="minecraft:stone"
-          onChange={(e) => onChange({ ...entry, name: e.target.value })}
-        />
-        <span className="replace-entry-weight-label">权重</span>
-        <input
-          className="input replace-entry-weight-input"
-          type="number"
-          min={0}
-          value={entry.weight}
-          onChange={(e) => onChange({ ...entry, weight: Math.max(0, parseInt(e.target.value) || 0) })}
-        />
-        <button className="btn replace-entry-remove-btn" onClick={onRemove}>×</button>
-      </div>
-      <PropertySelector
-        blockId={entry.name}
-        value={entry.properties || {}}
-        onChange={(p) => onChange({ ...entry, properties: Object.keys(p).length ? p : undefined })}
-        isOutput={true}
-      />
-    </div>
-  );
-}
-
-// ── SerialSeparatorBar ────────────────────────────────────────────────────────
-
-function SerialSeparatorBar({ index, total, onRemove, onMoveUp, onMoveDown }: {
-  index: number;
-  total: number;
-  onRemove: () => void;
-  onMoveUp: () => void;
-  onMoveDown: () => void;
-}) {
-  return (
-    <div className="replace-separator">
-      <div className="replace-separator-line" />
-      <span className="replace-separator-label">串行分隔符</span>
-      <div className="replace-separator-actions">
-        <button className="btn btn-xs" disabled={index === 0} onClick={onMoveUp} title="上移">↑</button>
-        <button className="btn btn-xs" disabled={index === total - 1} onClick={onMoveDown} title="下移">↓</button>
-        <button className="btn btn-xs" onClick={onRemove} title="删除分隔符">删除</button>
-      </div>
-      <div className="replace-separator-line" />
-    </div>
-  );
-}
-
-// ── ReplaceUnitCard ──────────────────────────────────────────────────────────
-
-type PickerTarget = { side: 'input' | 'output'; type: 'inventory' | 'enumerator' } | null;
-
-function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, onMoveUp, onMoveDown, scanSummary, currentBlocks }: {
-  unit: ReplaceUnit;
-  /** 当前单元在所有单元（不含分隔符）中的顺序，用于占位标签显示。 */
-  unitIndex: number;
-  index: number;
-  total: number;
-  onChange: (u: ReplaceUnit) => void;
-  onRemove: () => void;
-  onMoveUp: () => void;
-  onMoveDown: () => void;
-  scanSummary?: UnitPreviewSummary;
-  currentBlocks?: string[];
-}) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [picker, setPicker] = useState<PickerTarget>(null);
-
-  const updateInput = (i: number, e: ReplaceEntry) => {
-    const next = [...unit.input]; next[i] = e; onChange({ ...unit, input: next });
-  };
-  const removeInput = (i: number) =>
-    onChange({ ...unit, input: unit.input.filter((_, idx) => idx !== i) });
-
-  const updateOutput = (i: number, e: ReplaceOutputEntry) => {
-    const next = [...unit.output]; next[i] = e; onChange({ ...unit, output: next });
-  };
-  const removeOutput = (i: number) =>
-    onChange({ ...unit, output: unit.output.filter((_, idx) => idx !== i) });
-
-  const handlePickBlock = (blockId: string) => {
-    if (!picker) return;
-    if (picker.side === 'input') {
-      onChange({ ...unit, input: [...unit.input, { name: blockId }] });
-    } else {
-      onChange({ ...unit, output: [...unit.output, { name: blockId, weight: 1 }] });
-    }
-    setPicker(null);
-  };
-
-  const handleAddBlocks = (blockIds: string[]) => {
-    if (!picker) return;
-    if (picker.side === 'input') {
-      const added = blockIds.map((id) => ({ name: id } as ReplaceEntry));
-      onChange({ ...unit, input: [...unit.input, ...added] });
-    } else {
-      const added = blockIds.map((id) => ({ name: id, weight: 1 } as ReplaceOutputEntry));
-      onChange({ ...unit, output: [...unit.output, ...added] });
-    }
-    setPicker(null);
-  };
-
-  const AddEntryButtons = ({ side }: { side: 'input' | 'output' }) => (
-    <div className="replace-add-buttons">
-      <button className="btn btn-sm" onClick={() => setPicker({ side, type: 'inventory' })}>
-        + 创造模式物品栏
-      </button>
-      <button className="btn btn-sm" onClick={() => setPicker({ side, type: 'enumerator' })}>
-        + 枚举器
-      </button>
-    </div>
-  );
-
-  return (
-    <>
-      <div className="card replace-unit-card">
-        <div className={`replace-unit-header${collapsed ? ' collapsed' : ''}`}>
-          <button className="btn btn-xs" onClick={() => setCollapsed(!collapsed)}>
-            {collapsed ? '▶' : '▼'}
-          </button>
-          <input
-            className="replace-unit-label-input"
-            value={unit.label ?? ''}
-            placeholder={`替换单元 ${unitIndex + 1}`}
-            onChange={(e) => onChange({ ...unit, label: e.target.value || undefined })}
-            onClick={(e) => e.stopPropagation()}
-          />
-          {scanSummary && (
-            <span className="replace-unit-hit-count">命中 {scanSummary.hit_count} 个方块</span>
-          )}
-          <div className="replace-unit-spacer" />
-          <button className="btn btn-xs" disabled={index === 0} onClick={onMoveUp}>↑</button>
-          <button className="btn btn-xs" disabled={index === total - 1} onClick={onMoveDown}>↓</button>
-          <button className="btn btn-xs" onClick={onRemove}>删除单元</button>
+        <div className="replace-block">
+          <label>目标方块 ID<Input className="input" value={rule.replace.name} onChange={(event) => onChange({ ...rule, replace: { name: event.target.value, properties: {} } })} /></label>
+          <PropertySelector blockId={rule.replace.name} value={rule.replace.properties} onChange={(properties) => onChange({ ...rule, replace: { ...rule.replace, properties } })} isTo />
+          <Dropdown value={rule.property_mode} options={[
+            { label: "保持同名状态", value: "merge" },
+            { label: "使用目标默认状态", value: "drop" },
+            { label: "仅使用手动指定状态", value: "replace" },
+          ]} onChange={(property_mode) => onChange({ ...rule, property_mode })} />
         </div>
-
-        {!collapsed && (
-          <div className="replace-unit-body">
-            <div className="replace-unit-side">
-              <div className="replace-unit-side-title">输入端（Input）</div>
-              {unit.input.map((e, i) => (
-                <InputEntryRow key={i} entry={e} onChange={(ne) => updateInput(i, ne)} onRemove={() => removeInput(i)} />
-              ))}
-              {unit.input.length === 0 && <div className="replace-entry-empty">无输入条目</div>}
-              <AddEntryButtons side="input" />
-            </div>
-            <div className="replace-unit-arrow">→</div>
-            <div className="replace-unit-side">
-              <div className="replace-unit-side-title">输出端（Output）</div>
-              {unit.output.map((e, i) => (
-                <OutputEntryRow key={i} entry={e} onChange={(ne) => updateOutput(i, ne)} onRemove={() => removeOutput(i)} />
-              ))}
-              {unit.output.length === 0 && <div className="replace-entry-empty">无输出条目</div>}
-              <AddEntryButtons side="output" />
-            </div>
-          </div>
-        )}
-
-        {!collapsed && scanSummary && scanSummary.output_distribution.length > 1 && (
-          <div className="replace-unit-scan-dist">
-            输出分布预估：
-            {scanSummary.output_distribution.map((d, i) => (
-              <span key={i} className="replace-unit-scan-dist-item">{d.name}：{d.estimated_count}</span>
-            ))}
-          </div>
-        )}
-        {!collapsed && scanSummary && scanSummary.warnings.length > 0 && (
-          <div className="replace-unit-warnings">
-            ⚠ {scanSummary.warnings.join('; ')}
-          </div>
-        )}
       </div>
-
-      {picker?.type === 'inventory' && (
-        <BlockPickerDialog
-          title={picker.side === 'input' ? '选择输入方块' : '选择输出方块'}
-          onClose={() => setPicker(null)}
-          onPickBlock={handlePickBlock}
-          extraCollections={
-            currentBlocks && currentBlocks.length > 0
-              ? [{ id: '__current__', name: '当前统计结果', values: currentBlocks }]
-              : []
-          }
-        />
-      )}
-
-      {picker?.type === 'enumerator' && (
-        <EnumeratorBlockPickerDialog
-          title={picker.side === 'input' ? '从枚举器批量添加输入方块' : '从枚举器批量添加输出方块'}
-          onClose={() => setPicker(null)}
-          onAddBlocks={handleAddBlocks}
-        />
-      )}
-    </>
-  );
+    </details>
+  </div>;
 }
 
-// ── Main component ───────────────────────────────────────────────────────────
-
-export function ReplacePage({ currentFile }: { currentFile?: string }) {
-  // Load session data on mount
-  const sessionData = loadReplaceSession();
-
-  const [items, setItems] = useState<ReplaceItem[]>(sessionData?.items || []);
-  const [presets, setPresets] = useState<string[]>([]);
-  const [selectedPreset, setSelectedPreset] = useState(sessionData?.selectedPreset || '');
-  const [scanResult, setScanResult] = useState<ReplacePreviewSummary | null>(null);
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [outputPath, setOutputPath] = useState(sessionData?.outputPath || '');
-  const [materialBlocks, setMaterialBlocks] = useState<string[]>([]);
-
-  /** 预计算 items 中每个元素对应的"单元序号"（仅对 ReplaceUnit 有意义）。 */
-  const unitIndexByItemIndex = useMemo(() => {
-    const map = new Map<number, number>();
-    let ui = 0;
-    items.forEach((item, i) => {
-      if (!isSeparatorItem(item)) map.set(i, ui++);
-    });
-    return map;
-  }, [items]);
-
-  /** items 中不含分隔符的单元列表，用于确认对话框展示。 */
-  const unitItems = useMemo(
-    () => items.filter((item): item is ReplaceUnit => !isSeparatorItem(item)),
-    [items]
-  );
-
-  // Save session data whenever items, selectedPreset, or outputPath changes
-  useEffect(() => {
-    saveReplaceSession({
-      items,
-      selectedPreset,
-      outputPath,
-    });
-  }, [items, selectedPreset, outputPath]);
-
-  // Save session data on unmount
-  useEffect(() => {
-    return () => {
-      saveReplaceSession({
-        items,
-        selectedPreset,
-        outputPath,
-      });
-    };
-  }, [items, selectedPreset, outputPath]);
+export function ReplacePage({ currentFile }: any) {
+  const [rules, setRules] = useState<Rule[]>([]);
+  const [log, setLog] = useState("");
+  const [error, setError] = useState("");
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [outPath, setOutPath] = useState("");
+  useUpdateDraft(`replace:${currentFile}`, { rules, outPath });
+  const [busy, setBusy] = useState<"preview" | "apply" | "choose" | null>(null);
+  const busyRef = useRef(false);
+  const sourceRef = useRef(currentFile);
+  const recoverySource = useRef<string | null>(null);
+  sourceRef.current = currentFile;
 
   useEffect(() => {
-    listReplacePresets().then(setPresets).catch(() => setPresets([]));
-  }, []);
-
-  useEffect(() => {
-    if (!currentFile) { setMaterialBlocks([]); return; }
-    loadMaterialsScope(currentFile, [])
-      .then((mats) => setMaterialBlocks(mats.map((m) => m.id).filter(Boolean)))
-      .catch(() => setMaterialBlocks([]));
+    if (recoverySource.current === currentFile) return;
+    recoverySource.current = currentFile;
+    setPreview(null); setError(""); setLog("");
+    const recovered = takeUpdateDraft<{ rules: Rule[]; outPath: string }>(`replace:${currentFile}`);
+    setOutPath(recovered?.outPath || "");
+    if (recovered) setRules(recovered.rules);
   }, [currentFile]);
 
-  // Preset handlers
-  const handleLoadPreset = useCallback(async (name: string) => {
-    if (!name) return;
-    const loaded = await loadReplacePreset(name);
-    if (loaded) {
-      setItems(loaded);
-      setSelectedPreset(name);
-    } else {
-      alert(`无法加载预设：${name}`);
-    }
-  }, []);
-
-  const handleSavePreset = useCallback(async () => {
-    const name = prompt('预设名称：', selectedPreset || '新预设');
-    if (!name) return;
-    await saveReplacePreset(name, items);
-    const updated = await listReplacePresets();
-    setPresets(updated);
-    setSelectedPreset(name);
-  }, [items, selectedPreset]);
-
-  const handleDeletePreset = useCallback(async () => {
-    if (!selectedPreset) return alert('请先选择预设');
-    if (!confirm(`确定删除预设 "${selectedPreset}"？`)) return;
-    await deleteReplacePreset(selectedPreset);
-    const updated = await listReplacePresets();
-    setPresets(updated);
-    setSelectedPreset('');
-  }, [selectedPreset]);
-
-  const handleOpenPresetFolder = () => openReplacePresetFolder();
-
-  // Items CRUD
-  const addUnit = () =>
-    setItems([...items, { input: [], output: [] }]);
-
-  const addSeparator = () =>
-    setItems([...items, { _kind: 'separator' }]);
-
-  const updateItem = (i: number, u: ReplaceUnit) => {
-    const next = [...items]; next[i] = u; setItems(next);
+  const changeRules = (next: Rule[]) => {
+    if (busyRef.current) return;
+    setRules(next); setPreview(null); setError(""); setLog("");
   };
-  const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
-  const moveItem = (i: number, dir: -1 | 1) => {
-    const j = i + dir;
-    if (j < 0 || j >= items.length) return;
-    const next = [...items];
-    [next[i], next[j]] = [next[j], next[i]];
-    setItems(next);
+  const handleAdd = () => changeRules([...rules, {
+    match: { name: "minecraft:stone", properties: {} },
+    replace: { name: "minecraft:stone_bricks", properties: {} }, property_mode: "merge",
+  }]);
+
+  const handleDryRun = async () => {
+    if (busyRef.current || !rules.length || !currentFile) return;
+    const source = currentFile;
+    const snapshot: Rule[] = JSON.parse(JSON.stringify(rules));
+    busyRef.current = true; setBusy("preview"); setError(""); setLog(""); setPreview(null);
+    try {
+      const raw = await dryRunReplaceBlocks(source, snapshot);
+      if (sourceRef.current !== source) return;
+      setPreview({ source, rules: snapshot, raw, summary: parseSummary(raw) });
+      setOutPath(source.replace(/\.litematic$/i, ".replaced.litematic"));
+    } catch (err) {
+      if (sourceRef.current === source) setError(`预览未完成：${String(err)}`);
+    } finally { busyRef.current = false; setBusy(null); }
   };
 
-  // Scan handler
-  const handleScan = useCallback(async () => {
-    if (!currentFile) return;
-    if (unitItems.length === 0) return alert('请先添加至少一个替换单元。');
+  const handleChooseOutput = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy("choose");
+    const source = currentFile;
     try {
-      const summary = await dryRunReplaceUnits(currentFile, items);
-      setScanResult(summary);
-      const defaultOut = currentFile.replace(/\.litematic$/i, '.replaced.litematic');
-      setOutputPath(defaultOut);
-      setShowConfirmDialog(true);
-    } catch (e: any) {
-      alert('扫描失败: ' + e);
-    }
-  }, [currentFile, items, unitItems.length]);
+      const selected = await selectLitematicSavePath(outPath);
+      if (selected && sourceRef.current === source) { setOutPath(selected); setError(""); }
+    } catch (err) { setError(`选择保存位置失败：${String(err)}`); }
+    finally { busyRef.current = false; setBusy(null); }
+  };
 
-  // Apply handler
-  const handleApply = useCallback(async () => {
-    if (!currentFile || !outputPath) return;
-    if (outputPath === currentFile) return alert('输出路径不能与输入路径相同。');
-    if (await checkFileExists(outputPath)) return alert('输出文件已存在，请重命名。');
-    setShowConfirmDialog(false);
+  const handleApply = async () => {
+    if (busyRef.current || !preview || preview.source !== currentFile) return;
+    const samePath = (path: string) => path.replace(/\//g, "\\").toLowerCase();
+    if (!outPath || samePath(outPath) === samePath(currentFile)) { setError("请选择一个新的文件名，原投影将保持不变。"); return; }
+    const source = preview.source;
+    busyRef.current = true; setBusy("apply"); setError("");
     try {
-      await applyReplaceUnits(currentFile, outputPath, items);
-      alert(`替换完成！\n文件已保存至:\n${outputPath}`);
-    } catch (e: any) {
-      alert('替换失败: ' + e);
-    }
-  }, [currentFile, outputPath, items]);
+      if (await checkFileExists(outPath)) { setError("这个文件已存在，请选择另一个文件名。"); return; }
+      const result = await applyReplaceBlocks(source, outPath, preview.rules);
+      if (sourceRef.current !== source) return;
+      setPreview(null);
+      setLog(`替换完成，原投影未改动。\n新文件：${outPath}\n\n${result}`);
+    } catch (err) {
+      if (sourceRef.current === source) setError(`替换未完成：${String(err)}`);
+    } finally { busyRef.current = false; setBusy(null); }
+  };
 
-  if (!currentFile) {
-    return (
-      <div className="replace-no-file">
-        <h2>方块替换</h2>
-        <p>请先在投影库中选择并打开一个 .litematic 文件</p>
-      </div>
-    );
-  }
+  if (!currentFile) return <div className="replace-empty"><h2>替换方块</h2><p>先在投影库打开一个投影，再选择要替换的方块。</p></div>;
 
-  return (
-    <div className="replace-page">
-      {/* Toolbar line 1: presets */}
-      <div className="replace-toolbar">
-        <select
-          className="input"
-          value={selectedPreset}
-          onChange={(e) => handleLoadPreset(e.target.value)}
-        >
-          <option value="">(选择预设)</option>
-          {presets.map((p) => (
-            <option key={p} value={p}>{p}</option>
-          ))}
-        </select>
-        <button className="btn btn-md" onClick={handleSavePreset}>保存预设</button>
-        <button className="btn btn-md" onClick={handleDeletePreset} disabled={!selectedPreset}>删除该预设</button>
-        <button className="btn btn-md" onClick={handleOpenPresetFolder}>打开预设文件夹...</button>
-      </div>
-
-      {/* Toolbar line 2: unit management */}
-      <div className="replace-toolbar-2">
-        <button className="btn btn-md" onClick={addUnit}>+ 添加替换单元</button>
-        <button className="btn btn-md" onClick={addSeparator} disabled={items.length === 0} title="在列表末尾插入串行分隔符">
-          + 添加串行分隔符
-        </button>
-        <button className="btn btn-md" onClick={() => {
-          setItems([]);
-          setSelectedPreset('');
-          setOutputPath('');
-          setScanResult(null);
-        }}>清空所有</button>
-      </div>
-
-      {/* Replace items */}
-      <div className="replace-content">
-        {items.length === 0 && (
-          <div className="replace-content-empty">暂无替换单元，点击"添加替换单元"开始</div>
-        )}
-        {items.map((item, i) => {
-          if (isSeparatorItem(item)) {
-            return (
-              <SerialSeparatorBar
-                key={i}
-                index={i}
-                total={items.length}
-                onRemove={() => removeItem(i)}
-                onMoveUp={() => moveItem(i, -1)}
-                onMoveDown={() => moveItem(i, 1)}
-              />
-            );
-          }
-          const ui = unitIndexByItemIndex.get(i) ?? 0;
-          return (
-            <ReplaceUnitCard
-              key={i}
-              unit={item}
-              unitIndex={ui}
-              index={i}
-              total={items.length}
-              onChange={(nu) => updateItem(i, nu)}
-              onRemove={() => removeItem(i)}
-              onMoveUp={() => moveItem(i, -1)}
-              onMoveDown={() => moveItem(i, 1)}
-              scanSummary={scanResult?.per_unit?.[ui]}
-              currentBlocks={materialBlocks}
-            />
-          );
-        })}
-      </div>
-
-      {/* Footer */}
-      <div className="replace-footer">
-        <div className="replace-footer-buttons">
-          <div className="replace-unit-spacer" />
-          <button className="btn btn-action" onClick={handleScan} disabled={unitItems.length === 0}>
-            扫描并评估
-          </button>
-          <button
-            className={`btn btn-action${scanResult ? ' btn-primary' : ''}`}
-            onClick={handleApply}
-            disabled={!scanResult}
-          >
-            替换方块
-          </button>
-        </div>
-      </div>
-
-      {/* Confirm dialog */}
-      {showConfirmDialog && scanResult && (
-        <div className="dialog-overlay">
-          <div className="dialog-content dialog-content--wide">
-            <h3>扫描结果确认</h3>
-            <div className="replace-confirm-summary-block">
-              <p className="replace-confirm-summary">
-                <strong>共扫描 {scanResult.regions_scanned} 个区域</strong>，命中 <strong>{scanResult.block_positions_affected}</strong> 个方块位置
-              </p>
-              <div className="replace-confirm-details">
-                {scanResult.per_unit.map((u, i) => (
-                  <div key={i} className="replace-confirm-unit">
-                    <strong>{unitItems[i]?.label || `替换单元 ${i + 1}`}:</strong> 命中 {u.hit_count} 个方块
-                    {u.output_distribution.length > 1 && (
-                      <div className="replace-confirm-dist">
-                        输出分布预估：
-                        {u.output_distribution.map((d, j) => (
-                          <span key={j} className="replace-confirm-dist-item">
-                            {d.name.replace('minecraft:', '')}={d.estimated_count}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-                {scanResult.warnings.length > 0 && (
-                  <div className="replace-confirm-warning">⚠ 警告：{scanResult.warnings.join('; ')}</div>
-                )}
-              </div>
-            </div>
-            {scanResult.debug_log && scanResult.debug_log.length > 0 && (
-              <details className="replace-debug-log">
-                <summary className="replace-debug-log-summary">
-                  诊断日志（{scanResult.debug_log.length} 行）
-                  {scanResult.debug_log.some(l => l.includes('[警告]')) && (
-                    <span className="replace-debug-log-warn-badge"> ⚠ 含警告</span>
-                  )}
-                </summary>
-                <pre className="replace-debug-log-content">
-                  {scanResult.debug_log.join('\n')}
-                </pre>
-              </details>
-            )}
-            <p className="replace-confirm-output-label">选择输出路径：</p>
-            <div className="replace-confirm-output-row">
-              <input className="input replace-confirm-output-input" value={outputPath} readOnly />
-              <button className="btn btn-md" onClick={async () => {
-                const res = await selectLitematicSavePath(outputPath);
-                if (res) setOutputPath(res);
-              }}>浏览...</button>
-            </div>
-            <div className="replace-confirm-buttons">
-              <button className="btn btn-md" onClick={() => setShowConfirmDialog(false)}>取消</button>
-              <button className="btn btn-action btn-primary" onClick={handleApply}>确认并替换</button>
-            </div>
-          </div>
-        </div>
-      )}
+  return <section className="replace-page" aria-busy={!!busy}>
+    <h2 className="replace-title">替换方块</h2>
+    <p className="replace-intro">选择原方块和新方块，预览影响后保存为新文件。原投影保持不变。</p>
+    {error && !preview && <div className="replace-error" role="alert">{error}</div>}
+    <ScrollArea className="replace-scroll-area" aria-label="替换规则">
+    <fieldset className="replace-rules" disabled={!!busy}>
+      <legend className="replace-legend">替换规则</legend>
+      {!rules.length && <div className="replace-empty"><p>还没有替换规则</p><Button variant="secondary" onClick={handleAdd}>选择要替换的方块</Button></div>}
+      {rules.map((rule, index) => <RuleRow key={index} rule={rule} index={index}
+        onChange={(next) => changeRules(rules.map((item, i) => i === index ? next : item))}
+        onRemove={() => changeRules(rules.filter((_, i) => i !== index))}
+        onDuplicate={() => changeRules([...rules, JSON.parse(JSON.stringify(rule))])} />)}
+    </fieldset>
+    {log && <div className="replace-result" role="status"><strong>替换完成，原投影未改动。</strong><details><summary>查看保存位置与详细结果</summary><pre>{log}</pre></details></div>}
+    </ScrollArea>
+    <div className="replace-toolbar">
+      <Button variant="secondary" disabled={!!busy} onClick={handleAdd}>添加规则</Button>
+      <Button variant="ghost" disabled={!!busy || !rules.length} onClick={() => changeRules([])}>清空规则</Button>
+      <span className="muted">{rules.length} 条规则</span>
+      <Button variant="default" disabled={!!busy || !rules.length} onClick={handleDryRun}>{busy === "preview" ? "正在检查影响…" : "预览替换影响"}</Button>
     </div>
-  );
+    {preview && <Dialog title="确认替换" subtitle="确认影响范围，保存为新的投影文件。" busy={!!busy} onClose={() => setPreview(null)} width="lg" footer={<>
+      <Button variant="secondary" disabled={!!busy} onClick={() => setPreview(null)}>返回修改</Button>
+      <Button variant="default" disabled={!!busy || !outPath} onClick={handleApply}>{busy === "apply" ? "正在保存…" : "确认替换并另存"}</Button>
+    </>}>
+      {preview.summary ? <div className="replace-preview">
+        <p><strong>{preview.summary.block_positions_affected.toLocaleString()} 个方块</strong> 将发生变化，已检查 {preview.summary.regions_scanned} 个区域。</p>
+        {(preview.summary.per_rule || []).map((item) => <div key={item.rule_index}>{translateBlockId(item.match_name)} → {translateBlockId(item.replace_name)}：{item.affected_block_count.toLocaleString()} 个</div>)}
+        {(preview.summary.warnings || []).length > 0 && <div role="alert">{preview.summary.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</div>}
+        <details><summary>详细检查结果</summary><pre>{preview.raw}</pre></details>
+      </div> : <pre className="replace-preview-raw">{preview.raw}</pre>}
+      <label className="replace-output">新文件保存位置<Input className="input" value={outPath} readOnly /></label>
+      <Button variant="secondary" disabled={!!busy} onClick={handleChooseOutput}>更改保存位置…</Button>
+      {error && <p className="replace-error" role="alert">{error}</p>}
+    </Dialog>}
+  </section>;
 }

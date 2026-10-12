@@ -1,4 +1,5 @@
 import { invoke } from "./tauri";
+import { readEmbeddedPreview } from "./applicationOperations";
 
 export interface PathInfo {
   raw: string;
@@ -10,7 +11,6 @@ export interface PathInfo {
   is_file: boolean;
   is_absolute: boolean;
   has_litematic_ext: boolean;
-  mtime_ms: number;
 }
 
 export interface ProjectionPreviewImageOutput {
@@ -35,28 +35,6 @@ export interface DirectoryEntryInfo {
   extension: string;
 }
 
-export interface VaultBlockIconDownloadOutput {
-  total: number;
-  downloaded: number;
-  target_dir: string;
-  root_relpath: string;
-}
-
-export interface BuiltinIconExtractOutput {
-  target_dir: string;
-  root_relpath: string;
-  extracted: number;
-}
-
-export interface WikiEnumCatalogDownloadOutput {
-  target_dir: string;
-  root_relpath: string;
-  blocks: number;
-  items: number;
-  enchantments: number;
-  entities: number;
-}
-
 export function readWorkspaceFile(path: string): Promise<string> {
   return invoke("read_file_string", { path });
 }
@@ -69,20 +47,12 @@ export function writeTextFileAbsolute(path: string, content: string): Promise<vo
   return invoke("write_text_file_absolute", { path, content });
 }
 
-export function pickLitematicFile(): Promise<string | null> {
-  return invoke("pick_litematic_file");
-}
-
 export function readAppDataFile(relativePath: string): Promise<string> {
   return invoke("read_user_config_file", { relativePath });
 }
 
 export function writeAppDataFile(relativePath: string, content: string): Promise<void> {
   return invoke("write_user_config_file", { relativePath, content });
-}
-
-export function deleteAppDataFile(relativePath: string): Promise<void> {
-  return invoke("delete_user_config_file", { relativePath });
 }
 
 export function getAppDataFilePath(relativePath: string): Promise<string> {
@@ -131,48 +101,12 @@ export function copyFileToDirectory(sourcePath: string, targetDirectory: string,
   return invoke("copy_file_to_directory", { sourcePath, targetDirectory, targetFileName, overwrite });
 }
 
-/**
- * Downloads the CCVaults block icon set into the configured user resource directory.
- */
-export function downloadVaultBlockIconsFromVault(): Promise<VaultBlockIconDownloadOutput> {
-  return invoke("download_vault_block_icons");
-}
-
-export function downloadWikiBlockIconsFromMinecraftWiki(
-  slot: "material_list" | "layering",
-  source: "wiki" | "wiki_zh" = "wiki",
-): Promise<VaultBlockIconDownloadOutput> {
-  return invoke("download_minecraft_wiki_block_icons", { slot, source });
-}
-
-/**
- * Downloads the CCVaults item icon set into the configured user resource directory.
- */
-export function downloadVaultItemIconsFromVault(): Promise<VaultBlockIconDownloadOutput> {
-  return invoke("download_vault_item_icons");
-}
-
-export function ensureBuiltinBlockIconsExtracted(force = false): Promise<BuiltinIconExtractOutput> {
-  return invoke("ensure_builtin_block_icons_extracted", { force });
-}
-
-export function ensureBuiltinItemIconsExtracted(force = false): Promise<BuiltinIconExtractOutput> {
-  return invoke("ensure_builtin_item_icons_extracted", { force });
-}
-
-/**
- * Downloads the Minecraft Wiki enum catalog bundle into the configured user resource directory.
- */
-export function downloadWikiEnumCatalogsFromMinecraftWiki(): Promise<WikiEnumCatalogDownloadOutput> {
-  return invoke("download_minecraft_wiki_enum_catalogs");
-}
-
 export function readImageBase64(path: string): Promise<string> {
   return invoke("read_image_base64", { path });
 }
 
 export function readProjectionPreviewImage(path: string): Promise<ProjectionPreviewImageOutput | null> {
-  return invoke("read_projection_preview_image", { filePath: path });
+  return readEmbeddedPreview(path);
 }
 
 export function cleanupLocalTempFiles(): Promise<string> {

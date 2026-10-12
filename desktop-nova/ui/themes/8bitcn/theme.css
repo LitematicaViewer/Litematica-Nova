@@ -1,0 +1,62 @@
+@import "../modern.css";
+
+/* Local Chinese-capable pixel font. No Google Fonts network dependency. */
+@font-face {
+    font-family: "Nova Pixel";
+    src: url("../minecraft/resource/font/unifont-16.0.04.ttf") format("truetype");
+    font-weight: 400 700;
+    font-display: swap;
+}
+:root[data-color-scheme="dark"] {
+    --background: #181d19;
+    --foreground: #f0f0df;
+    --card: #232b24;
+    --popover: #2b342c;
+    --primary: #bad297;
+    --primary-foreground: #20291f;
+    --secondary: #394a36;
+    --muted: #2c352c;
+    --muted-foreground: #bbc4b0;
+    --accent: #3b4b39;
+    --destructive: #f18f88;
+    --border: #71806a;
+    --ring: #c8deaa;
+    --control-shadow: 2px 2px 0 #111810;
+    --panel-shadow: 5px 5px 0 #0d130d;
+}
+:root {
+    --background: #f2f0e7;
+    --foreground: #292e29;
+    --card: #fffdf4;
+    --popover: #fffdf4;
+    --primary: #315c43;
+    --primary-foreground: #fffdf4;
+    --secondary: #d0dec7;
+    --muted: #e7e6d9;
+    --muted-foreground: #595f50;
+    --accent: #e0e8cf;
+    --destructive: #a93438;
+    --border: #72775f;
+    --ring: #315c43;
+    --radius: 0px;
+    --edge-width: 2px;
+    --control-shadow: 2px 2px 0 #c3c5af;
+    --panel-shadow: 5px 5px 0 #72775f;
+    --ln-body-font-family: "Nova Pixel", "Microsoft YaHei UI", monospace;
+    --ln-body-font-size: 16px;
+}
+button:not(.nav-item):not(.nav-expand):not(.dialog-close-button):not(:where([role="checkbox"], [role="radio"])) { box-shadow: var(--control-shadow); }
+button:active:not(:disabled):not(:where([role="checkbox"], [role="radio"])) { box-shadow: none; transform: translateY(1px); }
+.sidebar { border-right-width: 2px; }
+.nav-item.active, .nav-item[aria-current="page"] { box-shadow: inset 4px 0 var(--primary); }
+.dialog-surface { border: 3px solid var(--foreground); border-radius: 0; }
+.input:focus-visible, select:focus-visible { outline-offset: 4px; }
+.nova-pixel-decoration { display: contents; }
+[data-slot="dialog-pixel-x"], [data-slot="dialog-pixel-y"] { display: block; }
+/* Official 8bitcn's stepped borders, scaled to dense desktop controls. */
+[data-slot="button-decorations"] { --color-foreground: var(--border); }
+[data-slot="button"] { margin: 4px; position: relative; }
+[data-slot="button"][data-variant="ghost"], [data-slot="button"][data-variant="link"] { margin: 0; }
+.dropdown-trigger { margin: 0; }
+th { border-bottom: 2px solid var(--border); }
+img { image-rendering: pixelated; }

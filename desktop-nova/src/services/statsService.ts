@@ -1,6 +1,10 @@
 import { saveDialog } from "../platform/dialogs";
+import {
+  getProjectMaterials,
+  getProjectStats,
+  type ApplicationMaterialScope,
+} from "../platform/applicationOperations";
 import { writeTextFileAbsolute } from "./backend";
-import { getCachedCoreOutput } from "./coreReadCache";
 import { translateBlockId, translateBuildingType } from "./i18n";
 
 export interface MaterialItem {
@@ -11,6 +15,19 @@ export interface MaterialItem {
   containerItemCount: number;
   totalCount: number;
   iconHint: string;
+  stackSize: number;
+  canFitContainer: boolean;
+  materialStatus: "item" | "no_item" | "unknown";
+  hasCustomStackSize: boolean;
+  regionCounts: Array<{ region: string; count: number }>;
+  layerCounts: Array<{ layer: number; worldY: number; count: number }>;
+}
+
+export interface NonItemBlock {
+  id: string;
+  name: string;
+  count: number;
+  reason: "no_item" | "unknown";
 }
 
 export interface ContainerScanSummary {
@@ -40,18 +57,15 @@ export interface StatsData {
   enclosingSize: { x: number; y: number; z: number };
   density: number;
   buildingType: string;
-  redstoneRatio: number;
-  fluidRatio: number;
+  redstoneRatio: number | null;
+  fluidRatio: number | null;
   entityCount: number;
   materials: MaterialItem[];
+  nonItemBlocks: NonItemBlock[];
   regions: RegionInfo[];
   layers: LayerInfo[];
   containerScan: ContainerScanSummary;
   raw: any;
-}
-
-function withContainerFlag(args: string[], includeContainerItems: boolean): string[] {
-  return includeContainerItems ? [...args, "--include-container-items"] : args;
 }
 
 function mapMaterial(raw: any): MaterialItem {
@@ -61,22 +75,29 @@ function mapMaterial(raw: any): MaterialItem {
   const totalCount = Number(raw.total_count ?? raw.count ?? blockCount + containerItemCount);
   return {
     id,
-    name: translateBlockId(id) || raw.display_name || id,
+    name: raw.display_name || translateBlockId(id) || id,
     count: totalCount,
     blockCount,
     containerItemCount,
     totalCount,
     iconHint: raw.icon_hint || id,
+    stackSize: Number(raw.stack_size || 1),
+    canFitContainer: raw.can_fit_container === true,
+    materialStatus: raw.material_status || "unknown",
+    hasCustomStackSize: raw.has_custom_stack_size === true,
+    regionCounts: (raw.region_counts || []).map((entry: any) => ({
+      region: String(entry.region || ""),
+      count: Number(entry.count || 0),
+    })),
+    layerCounts: (raw.layer_counts || []).map((entry: any) => ({
+      layer: Number(entry.layer || 0),
+      worldY: Number(entry.world_y || 0),
+      count: Number(entry.count || 0),
+    })),
   };
 }
 
-export async function loadStructureStats(filePath: string, includeContainerItems = false): Promise<StatsData> {
-  const out = await getCachedCoreOutput(
-    filePath,
-    withContainerFlag(["stats", "--input", filePath, "--json"], includeContainerItems),
-  );
-  const parsed = JSON.parse(out);
-
+export function mapStructureStats(parsed: any, includeContainerItems = false): StatsData {
   const meta = parsed.metadata || {};
   const stats = parsed.structure_stats || {};
   const matList = parsed.material_items || [];
@@ -86,18 +107,28 @@ export async function loadStructureStats(filePath: string, includeContainerItems
 
   const vol = meta.total_volume || 1;
   const density = vol > 0 ? (stats.total_non_air_blocks || 0) / vol : 0;
-  const materials = matList.map(mapMaterial);
+  // Old cached summaries mixed AIR-mapped blocks into the materials array.
+  // Never export or bill those rows while a fresh v2 analysis is loading.
+  const materials = matList.filter((entry: any) => entry.material_status === "item").map(mapMaterial);
+  const nonItemBlocks = (parsed.non_item_blocks || matList.filter((entry: any) => entry.material_status !== "item"))
+    .map((entry: any): NonItemBlock => ({
+      id: entry.block_id || entry.id || "",
+      name: entry.display_name || translateBlockId(entry.block_id || entry.id || ""),
+      count: Number(entry.block_count ?? entry.count ?? 0),
+      reason: entry.reason === "no_item" || entry.material_status === "no_item" ? "no_item" : "unknown",
+    }));
 
   return {
     totalNonAirBlocks: stats.total_non_air_blocks || 0,
     regionCount: stats.total_regions || meta.region_count || 0,
     enclosingSize: meta.enclosing_size || { x: 0, y: 0, z: 0 },
     density,
-    buildingType: translateBuildingType(parsed.derived?.building?.building_type || "building"),
-    redstoneRatio: parsed.derived?.building?.redstone_ratio || 0,
-    fluidRatio: parsed.derived?.building?.fluid_ratio || 0,
+    buildingType: parsed.derived?.building?.building_type ? translateBuildingType(parsed.derived.building.building_type) : "未提供",
+    redstoneRatio: Number.isFinite(parsed.derived?.building?.redstone_ratio) ? parsed.derived.building.redstone_ratio : null,
+    fluidRatio: Number.isFinite(parsed.derived?.building?.fluid_ratio) ? parsed.derived.building.fluid_ratio : null,
     entityCount: entitySum.total_entities || 0,
     materials,
+    nonItemBlocks,
     regions,
     layers,
     containerScan: parsed.container_scan || {
@@ -110,24 +141,32 @@ export async function loadStructureStats(filePath: string, includeContainerItems
   };
 }
 
-export async function loadMaterialsScope(
-  filePath: string,
-  scopeArgs: string[],
-  includeContainerItems = false,
-): Promise<MaterialItem[]> {
-  const out = await getCachedCoreOutput(
-    filePath,
-    withContainerFlag(["materials", "--input", filePath, ...scopeArgs, "--json"], includeContainerItems),
-  );
-  const parsed = JSON.parse(out);
-  return (parsed.material_items || []).map(mapMaterial);
+export async function loadStructureStats(filePath: string, includeContainerItems = false): Promise<StatsData> {
+  const analysis = await getProjectStats({
+    sourcePath: filePath,
+    includeContainerItems,
+  });
+  return mapStructureStats(analysis, includeContainerItems);
 }
 
-export function formatMaterialUnits(count: number): string {
-  const boxOfBoxesSize = 64 * 27 * 27;
-  const boxSize = 64 * 27;
-  const stackSize = 64;
-  let remaining = Math.max(0, Math.floor(count));
+export async function loadMaterialsScope(
+  filePath: string,
+  scope: ApplicationMaterialScope,
+  includeContainerItems = false,
+): Promise<MaterialItem[]> {
+  const result = await getProjectMaterials({
+    sourcePath: filePath,
+    scope,
+    includeContainerItems,
+  });
+  return (result.material_items || []).filter((entry: any) => entry.material_status === "item").map(mapMaterial);
+}
+
+export function formatMaterialUnits(count: number, stackSize = 64): string {
+  stackSize = Number.isFinite(stackSize) ? Math.max(1, Math.floor(stackSize)) : 1;
+  const boxOfBoxesSize = stackSize * 27 * 27;
+  const boxSize = stackSize * 27;
+  let remaining = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
   const boxOfBoxes = Math.floor(remaining / boxOfBoxesSize);
   remaining %= boxOfBoxesSize;
   const boxes = Math.floor(remaining / boxSize);
@@ -143,112 +182,26 @@ export function formatMaterialUnits(count: number): string {
   return parts.join(" ");
 }
 
+export function formatMaterialQuantity(material: MaterialItem, count: number, asItems = false): string {
+  const total = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+  if (material.materialStatus === "no_item") return `${total.toLocaleString("zh-CN")} 方块`;
+  if (asItems || material.materialStatus === "unknown" || !material.canFitContainer || material.hasCustomStackSize) return `${total.toLocaleString("zh-CN")} 个`;
+  return formatMaterialUnits(total, material.stackSize);
+}
+
+export function hasInventoryMaterialSemantics(analysis: any): boolean {
+  return analysis?.material_semantics === "minecraft-26.3-inventory-v2";
+}
+
 function csvEscape(value: string | number): string {
   const text = String(value);
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-function formatExportTimestamp(date = new Date()): string {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return [
-    date.getFullYear(),
-    pad(date.getMonth() + 1),
-    pad(date.getDate()),
-  ].join("-") + "_" + [pad(date.getHours()), pad(date.getMinutes()), pad(date.getSeconds())].join(".");
-}
-
-function defaultExportBaseName(filePath: string): string {
+function defaultExportName(filePath: string): string {
   const rawName = (filePath.split(/[\\/]/).pop() || "projection").replace(/\.litematic$/i, "");
   const safeName = rawName.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_");
-  return `material_list_${safeName}_${formatExportTimestamp()}`;
-}
-
-function toExportRows(materials: MaterialItem[], multiplier: number): Array<{ item: string; total: number }> {
-  return materials.map((material) => ({
-    item: material.name || material.id,
-    total: Math.max(0, Math.floor(material.totalCount * multiplier)),
-  }));
-}
-
-function getDisplayWidth(value: string): number {
-  let width = 0;
-  for (const char of value) {
-    const codePoint = char.codePointAt(0) || 0;
-    width += isFullWidthCodePoint(codePoint) ? 2 : 1;
-  }
-  return width;
-}
-
-function isFullWidthCodePoint(codePoint: number): boolean {
-  return (
-    codePoint >= 0x1100 && (
-      codePoint <= 0x115f ||
-      codePoint === 0x2329 ||
-      codePoint === 0x232a ||
-      (codePoint >= 0x2e80 && codePoint <= 0xa4cf && codePoint !== 0x303f) ||
-      (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
-      (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
-      (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
-      (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
-      (codePoint >= 0xff00 && codePoint <= 0xff60) ||
-      (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
-      (codePoint >= 0x1f300 && codePoint <= 0x1f64f) ||
-      (codePoint >= 0x1f900 && codePoint <= 0x1f9ff) ||
-      (codePoint >= 0x20000 && codePoint <= 0x3fffd)
-    )
-  );
-}
-
-function padDisplay(value: string, width: number, align: "left" | "right" = "left"): string {
-  const padding = Math.max(0, width - getDisplayWidth(value));
-  const spaces = " ".repeat(padding);
-  return align === "right" ? `${spaces}${value}` : `${value}${spaces}`;
-}
-
-function buildArtTable(filePath: string, rows: Array<{ item: string; total: number }>): string {
-  const title = `原理图的材料清单 '${(filePath.split(/[\\/]/).pop() || "projection").replace(/\.litematic$/i, "")}'`;
-  const totalColumnWidth = Math.max(getDisplayWidth("Total"), ...rows.map((row) => getDisplayWidth(String(row.total))));
-  const minItemWidth = Math.max(getDisplayWidth("Item"), ...rows.map((row) => getDisplayWidth(row.item)));
-  const titleDrivenItemWidth = Math.max(minItemWidth, getDisplayWidth(title) - totalColumnWidth - 3);
-  const itemColumnWidth = Math.max(minItemWidth, titleDrivenItemWidth);
-  const titleContentWidth = itemColumnWidth + totalColumnWidth + 3;
-  const border = `+${"-".repeat(itemColumnWidth + 2)}+${"-".repeat(totalColumnWidth + 2)}+`;
-  const titleRow = `| ${padDisplay(title, titleContentWidth)} |`;
-  const headerRow = `| ${padDisplay("Item", itemColumnWidth)} | ${padDisplay("Total", totalColumnWidth, "right")} |`;
-  const bodyRows = rows.map((row) => `| ${padDisplay(row.item, itemColumnWidth)} | ${padDisplay(String(row.total), totalColumnWidth, "right")} |`);
-  return [titleRow, border, headerRow, border, ...bodyRows, border].join("\r\n");
-}
-
-async function saveMaterialsFile(filePath: string, extension: "csv" | "txt", content: string, filterName: string): Promise<boolean> {
-  const savePath = await saveDialog({
-    defaultPath: `${defaultExportBaseName(filePath)}.${extension}`,
-    filters: [{ name: filterName, extensions: [extension] }],
-  });
-  if (!savePath) return false;
-  await writeTextFileAbsolute(savePath, content);
-  return true;
-}
-
-export async function exportMaterialsCsv(
-  filePath: string,
-  materials: MaterialItem[],
-  multiplier: number,
-): Promise<boolean> {
-  const rows = toExportRows(materials, multiplier);
-  const csv = [
-    "\uFEFF\"Item\",\"Total\"",
-    ...rows.map((row) => `${csvEscape(row.item)},${row.total}`),
-  ].join("\r\n");
-  return saveMaterialsFile(filePath, "csv", csv, "CSV");
-}
-
-export async function exportMaterialsArtTable(
-  filePath: string,
-  materials: MaterialItem[],
-  multiplier: number,
-): Promise<boolean> {
-  const rows = toExportRows(materials, multiplier);
-  return saveMaterialsFile(filePath, "txt", buildArtTable(filePath, rows), "Text");
+  return `materials_${safeName}.csv`;
 }
 
 export async function exportMaterials(
@@ -256,5 +209,23 @@ export async function exportMaterials(
   materials: MaterialItem[],
   multiplier: number,
 ): Promise<boolean> {
-  return exportMaterialsCsv(filePath, materials, multiplier);
+  const savePath = await saveDialog({
+    defaultPath: defaultExportName(filePath),
+    filters: [{ name: "CSV", extensions: ["csv"] }],
+  });
+  if (!savePath) return false;
+
+  let csv = "\uFEFF名称,数字,统计数据\r\n";
+  for (const material of materials) {
+    if (material.materialStatus !== "item") continue;
+    const total = Math.max(0, Math.floor(material.totalCount * multiplier));
+    csv += [
+      csvEscape(material.name || material.id),
+      csvEscape(total),
+      csvEscape(formatMaterialQuantity(material, total)),
+    ].join(",") + "\r\n";
+  }
+
+  await writeTextFileAbsolute(savePath, csv);
+  return true;
 }

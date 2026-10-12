@@ -1,0 +1,16 @@
+.render-page .render-preview-group { border: 0; padding: 0; margin: 0; gap: 8px; }
+.render-page .render-preview-host { border: 0; border-radius: 0; margin: 0; background: var(--ln-inset-background, var(--ln-ui-background-color)); }
+.render-page .render-preview-placeholder { color: var(--ln-muted-text-color, GrayText); }
+.render-page .render-preview-state { color: var(--ln-muted-text-color, GrayText); font-size: .9em; letter-spacing: 0; }
+.render-page .render-preview-help { color: var(--ln-muted-text-color, GrayText); font-size: .9em; }
+.render-page .render-progress-track { height: 6px; border: 0; border-radius: 3px; overflow: hidden; background: var(--ln-inset-background, var(--ln-ui-background-color)); }
+.render-progress-fill { height: 100%; background: var(--ln-accent-color, Highlight); transition: width .2s; }
+.render-page .render-page-actions { padding-bottom: 12px; border-bottom: 1px solid var(--ln-divider-color, var(--ln-card-border-color, ThreeDShadow)); }
+.render-page .render-error { max-height: 6rem; overflow: auto; overflow-wrap: anywhere; }
+.render-preflight-dialog .render-preflight-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+@media (prefers-reduced-motion: reduce) { .render-progress-fill { transition: none; } }
+.render-full-placeholder, .properties-full-placeholder { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--ln-muted-text-color, GrayText); font-size: .9em; }
+.render-full-placeholder { margin-left: auto; }
+.render-page .render-page-title { flex: 0 0 auto; margin: 0; text-align: left; }
+.render-page .render-page-source { flex: 1; max-width: none; }
+@media (max-width: 800px) { .render-full-placeholder { width: 100%; margin-left: 0; } }

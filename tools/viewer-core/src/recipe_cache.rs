@@ -84,7 +84,7 @@ pub struct MojangClientJarRecipeProvider {
 impl MojangClientJarRecipeProvider {
     pub fn new() -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
-            .user_agent("Litematica-BA recipe-cache/0.1")
+            .user_agent("Litematica-Nova recipe-cache/0.1")
             .build()
             .context("build recipe cache HTTP client failed")?;
         Ok(Self { client })

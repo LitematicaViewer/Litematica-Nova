@@ -1,0 +1,40 @@
+.home-scroll-area { height: 100%; min-height: 0; }
+.home-page {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(20rem, .9fr);
+    gap: clamp(32px, 5vw, 88px);
+    align-items: center;
+    justify-items: stretch;
+    text-align: left;
+    min-height: calc(100dvh - 72px);
+    padding: clamp(24px, 5vw, 72px);
+}
+.home-introduction, .home-current { min-width: 0; }
+.home-introduction h1 { margin: 0 0 20px; font-size: clamp(1.8rem, 3vw, 2.7rem); font-weight: 650; line-height: 1.15; letter-spacing: -.025em; overflow-wrap: anywhere; }
+.home-lead { max-width: 28em; margin: 0 0 32px; color: var(--muted-foreground); font-size: 1.15rem; line-height: 1.7; }
+.home-start-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.home-start-actions > button { gap: 8px; }
+.home-beta-note { margin: 24px 0 0; color: var(--muted-foreground); font-size: .9rem; }
+.home-current { padding: 28px; border-radius: var(--radius, 0); background: var(--card); }
+.home-current h2 { margin: 0 0 22px; font-size: 1.2rem; font-weight: 600; }
+.home-current-file { display: flex; gap: 14px; align-items: center; margin-bottom: 24px; }
+.home-current-file > svg { flex-shrink: 0; color: var(--primary); }
+.home-current-file > div { min-width: 0; }
+.home-current-file strong { display: block; font-weight: 600; overflow-wrap: anywhere; }
+.home-current-file span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; color: var(--muted-foreground); font-size: .85rem; }
+.home-empty { margin: 0 0 20px; color: var(--muted-foreground); line-height: 1.6; }
+.home-workflows { display: flex; flex-direction: column; gap: 6px; }
+html[data-theme] .home-workflows > button { display: flex; justify-content: flex-start; gap: 14px; height: auto; min-height: 72px; padding: 14px 12px; text-align: left; white-space: normal; }
+.home-workflows > button > span:not(.nova-pixel-decoration) { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
+.home-workflows strong { font-weight: 600; }
+.home-workflows small { font-size: .86rem; font-weight: 400; color: var(--muted-foreground); }
+html[data-theme="minecraft"] .home-workflows small { color: #e0e0e0; }
+@media (max-width: 1050px) {
+    .home-page { grid-template-columns: minmax(0, 1fr); gap: 32px; align-content: start; padding: 28px 24px; }
+    .home-current { padding: 22px; }
+}
+@media (max-width: 520px) {
+    .home-page { padding: 20px 12px; }
+    .home-current { padding: 18px 12px; }
+    .home-start-actions { align-items: stretch; flex-direction: column; }
+}

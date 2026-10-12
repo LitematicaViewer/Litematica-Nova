@@ -1,13 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 
-import { loadDatabases, initI18n } from "../../../src/business/facade";
+import { loadDatabases, initI18n, getUserConfig } from "../../../src/business/facade";
 import "../../styles/base.css";
+import { initializeWindowTheme } from "../../shell/themeRuntime";
 import { MaterialListWindow } from ".";
 
 async function bootstrap() {
     loadDatabases();
-    await initI18n();
+    await Promise.all([initI18n(), initializeWindowTheme(getUserConfig)]);
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
         <React.StrictMode>
             <MaterialListWindow />

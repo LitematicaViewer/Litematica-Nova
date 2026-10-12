@@ -19,7 +19,6 @@ export {
   dryRunGenerate,
   ensureLitematicExtension,
   formatGeneratePathLog,
-  formatJsGenerateTrace,
   normalizePlanBlockStates,
   sanitizeFileName,
   validateOutputPath,

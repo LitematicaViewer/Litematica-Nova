@@ -1,8 +1,0 @@
-{
-	"parent": "minecraft:item/template_waxed_block",
-	"textures": {
-		"top": "block/copper_grate",
-		"side": "block/copper_grate",
-		"bottom": "block/copper_grate"
-	}
-}

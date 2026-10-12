@@ -1,0 +1,1031 @@
+/* Flake canvas and dialogs, ported from origin/dev/flake without changing other pages. */
+
+
+.flake-canvas {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    cursor: grab;
+    image-rendering: pixelated;
+    background: #1b1b1b;
+}
+
+.flake-canvas.is-dragging {
+    cursor: grabbing;
+}
+
+.flake-layer-world {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+    transform-origin: 0 0;
+    will-change: transform;
+}
+
+.flake-layer-tile-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    image-rendering: pixelated;
+}
+
+.flake-layer-border {
+    position: absolute;
+    pointer-events: none;
+}
+
+.flake-layer-border {
+    left: 0;
+    top: 0;
+    width: var(--flake-layer-border-width, 1px);
+    height: var(--flake-layer-border-height, 1px);
+    border: 1px solid #555;
+}
+
+.flake-measurement-rect {
+    position: absolute;
+    left: var(--flake-measurement-left, 0);
+    top: var(--flake-measurement-top, 0);
+    z-index: 4;
+    width: var(--flake-measurement-width, 1px);
+    height: var(--flake-measurement-height, 1px);
+    background: rgb(93 183 255 / 22%);
+    box-sizing: border-box;
+    color: #e9f8ff;
+    pointer-events: none;
+}
+
+.flake-measurement-rect::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border: 2px solid rgb(87 190 255 / 88%);
+    box-shadow: 0 0 0 1px rgb(234 248 255 / 44%) inset;
+    box-sizing: border-box;
+    pointer-events: none;
+}
+
+.flake-measurement-rect.is-draft {
+    background: rgb(93 183 255 / 30%);
+}
+
+.flake-measurement-svg {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.flake-measurement-grid-line {
+    fill: none;
+    stroke: rgb(213 242 255 / 64%);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.flake-measurement-diagonal {
+    stroke: rgb(239 251 255 / 92%);
+    stroke-width: 2;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.flake-measurement-label {
+    position: absolute;
+    z-index: 2;
+    max-width: max-content;
+    padding: 2px 6px;
+    border: 1px solid rgb(139 211 255 / 70%);
+    background: rgb(7 25 39 / 86%);
+    box-shadow: 0 2px 8px rgb(0 0 0 / 28%);
+    color: #f0fbff;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.35;
+    pointer-events: none;
+    text-shadow: 0 1px 1px rgb(0 0 0 / 65%);
+    white-space: nowrap;
+}
+
+.flake-measurement-label--x {
+    left: 50%;
+    top: -6px;
+    transform: translate(-50%, -100%);
+}
+
+.flake-measurement-label--z {
+    top: 50%;
+    right: -6px;
+    transform: translate(100%, -50%);
+}
+
+.flake-measurement-label--manhattan {
+    top: -6px;
+    right: -6px;
+    transform: translate(100%, -100%);
+}
+
+.flake-measurement-label--inside {
+    left: 50%;
+    top: 50%;
+    max-width: calc(100% - 8px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transform: translate(-50%, -50%);
+}
+
+.flake-origin-marker {
+    position: absolute;
+    left: var(--flake-origin-marker-left, 0);
+    top: var(--flake-origin-marker-top, 0);
+    z-index: 5;
+    width: var(--flake-origin-marker-width, 1px);
+    height: var(--flake-origin-marker-height, 1px);
+    background: rgb(255 158 43 / 24%);
+    border: 2px solid rgb(255 146 28 / 90%);
+    box-shadow:
+        0 0 0 1px rgb(255 239 211 / 48%) inset,
+        0 0 10px rgb(255 146 28 / 36%);
+    box-sizing: border-box;
+    pointer-events: none;
+}
+
+.flake-origin-marker.is-dragging {
+    background: rgb(255 158 43 / 34%);
+    border-color: rgb(255 180 66 / 96%);
+}
+
+.flake-canvas.is-measure-tool {
+    cursor: crosshair;
+}
+
+.flake-canvas.is-measuring {
+    cursor: crosshair;
+}
+
+.flake-canvas.is-marker-tool {
+    cursor: cell;
+}
+
+.flake-canvas.is-dragging-marker {
+    cursor: grabbing;
+}
+
+.flake-marker-context-menu.dropdown-menu {
+    position: fixed;
+    left: var(--flake-marker-menu-left, 0);
+    top: var(--flake-marker-menu-top, 0);
+    z-index: 4200;
+    min-width: 176px;
+    max-height: none;
+    padding: 2px 0;
+}
+
+.flake-marker-menu-heading,
+.flake-marker-menu-empty {
+    color: GrayText;
+    font-size: 12px;
+}
+
+.flake-marker-menu-heading {
+    font-weight: 700;
+}
+
+.flake-marker-menu-item {
+    display: block;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+
+.flake-marker-menu-item:hover:not(:disabled) {
+    background: Highlight;
+    color: HighlightText;
+}
+
+.flake-marker-menu-item:disabled {
+    color: GrayText;
+}
+
+.flake-page {
+    position: relative;
+    --flake-tool-panel-width: 320px;
+}
+
+.flake-page--edit-mode {
+    padding-bottom: 0;
+}
+
+.flake-page__empty-state {
+    opacity: .78;
+}
+
+.flake-page__empty-title {
+    margin-bottom: 8px;
+}
+
+.flake-page__topbar {
+    flex-wrap: wrap;
+}
+
+.flake-page__file-path {
+    overflow: hidden;
+    min-width: min(360px, 100%);
+    max-width: min(480px, 100%);
+    padding: 6px 12px;
+    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
+    color: var(--ln-muted-text-color, GrayText);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.flake-page__materials-button,
+.flake-page__build-button {
+    min-width: 132px;
+}
+
+.flake-page__edit-toggle {
+    flex: 0 0 auto;
+}
+
+.flake-page__control-box {
+    margin-top: 0;
+    padding: 16px 12px;
+}
+
+.flake-page__layer-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 16px;
+}
+
+.flake-page__layer-label {
+    min-width: 60px;
+}
+
+.flake-page__layer-range {
+    flex: 1;
+    min-width: 0;
+}
+
+.flake-page__onion-row {
+    margin-top: 10px;
+}
+
+.flake-page__onion-input {
+    width: 64px;
+    flex: 0 0 64px;
+}
+
+.flake-page__zoom-row {
+    margin-top: 10px;
+}
+
+.flake-page__zoom-input {
+    width: 72px;
+    flex: 0 0 72px;
+}
+
+.flake-page__zoom-unit {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.flake-page__onion-hint {
+    margin-top: 6px;
+    padding-left: 76px;
+}
+
+.flake-page__layer-footer {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.flake-page__layer-value {
+    color: var(--ln-body-text-color, CanvasText);
+    font-size: 1.1em;
+    font-weight: 700;
+}
+
+.flake-page__layer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+}
+
+.flake-page__step-button {
+    min-width: 40px;
+}
+
+.flake-page__workspace {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    align-items: stretch;
+    overflow: hidden;
+}
+
+.flake-page__main-panel {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 240px;
+    overflow: hidden;
+    flex-direction: column;
+}
+
+.flake-page__viewport {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-height: 240px;
+    overflow: hidden;
+    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
+}
+
+.flake-page__viewport-empty {
+    padding: 24px;
+}
+
+.flake-page__viewport-title {
+    margin-bottom: 8px;
+    color: var(--ln-body-text-color, CanvasText);
+    font-size: 1.2em;
+}
+
+.flake-page__splitter {
+    width: 8px;
+    flex: 0 0 8px;
+    cursor: col-resize;
+    background:
+        linear-gradient(to right,
+            transparent 0,
+            transparent 2px,
+            var(--ln-ui-edge-color, ThreeDShadow) 2px,
+            var(--ln-ui-edge-color, ThreeDShadow) 6px,
+            transparent 6px,
+            transparent 100%);
+}
+
+.flake-page__tool-panel {
+    display: flex;
+    width: var(--flake-tool-panel-width);
+    min-width: 240px;
+    min-height: 0;
+    max-width: 460px;
+    margin-top: 10px;
+    padding: 16px 12px 12px;
+    flex: 0 0 var(--flake-tool-panel-width);
+    flex-direction: column;
+    overflow: visible;
+}
+
+.flake-page__tool-panel-body {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 12px;
+    overflow: auto;
+}
+
+.flake-page__tool-panel-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.flake-page__tool-panel-heading {
+    font-weight: 700;
+}
+
+.flake-page__tool-panel-kv {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.flake-page__status-text {
+    white-space: pre-wrap;
+}
+
+.flake-page__tool-panel-error {
+    margin-top: 0;
+}
+
+.flake-page__tool-palette {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 44px);
+    align-items: center;
+    gap: 8px;
+}
+
+.flake-page.flake-page--edit-mode .flake-page__tool-panel .flake-page__tool-palette button.flake-page__edit-tool-button {
+    --ln-minecraft-button-image: none;
+
+    display: grid;
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    place-items: center;
+    margin: 0;
+    padding: 6px;
+    border: 0;
+    border-image-source: none;
+    overflow: hidden;
+    appearance: none;
+    background: transparent var(--flake-edit-tool-normal-image) center / 44px 44px no-repeat;
+    color: var(--ln-body-text-color, CanvasText);
+    font-size: 16px;
+    font-weight: 700;
+    image-rendering: pixelated;
+    letter-spacing: normal;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.flake-page.flake-page--edit-mode .flake-page__tool-panel .flake-page__tool-palette button.flake-page__edit-tool-button:hover,
+.flake-page.flake-page--edit-mode .flake-page__tool-panel .flake-page__tool-palette button.flake-page__edit-tool-button:focus-visible {
+    --ln-minecraft-button-image: none;
+
+    border: 0;
+    border-image-source: none;
+    background-color: transparent;
+    background-image: var(--flake-edit-tool-hover-image);
+}
+
+.flake-page.flake-page--edit-mode .flake-page__tool-panel .flake-page__tool-palette button.flake-page__edit-tool-button:active,
+.flake-page.flake-page--edit-mode .flake-page__tool-panel .flake-page__tool-palette button.flake-page__edit-tool-button[aria-pressed="true"] {
+    --ln-minecraft-button-image: none;
+
+    border: 0;
+    border-image-source: none;
+    background-color: transparent;
+    background-image: var(--flake-edit-tool-active-image);
+}
+
+.flake-page__edit-tool-glyph {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    pointer-events: none;
+}
+
+.flake-page__empty-state-row {
+    color: var(--ln-error-color, crimson);
+    font-weight: 700;
+}
+
+.flake-page__state-dialog-grid {
+    align-items: center;
+}
+
+.flake-page__state-dialog {
+    min-width: min(100%, 640px);
+}
+
+.flake-page__state-dialog-grid select,
+.flake-page__state-dialog-grid input {
+    width: 100%;
+}
+
+.flake-page__note-control,
+.flake-page__note-keyboard {
+    --flake-state-note-button-size: var(--ln-minecraft-button-height, var(--ln-control-height, 28px));
+
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.flake-page__note-control {
+    gap: 6px;
+}
+
+.flake-page__note-keyboard {
+    gap: 4px;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: visible;
+    padding-bottom: 2px;
+}
+
+.flake-page__note-key-row {
+    display: grid;
+    width: max-content;
+    gap: 4px;
+    min-width: max-content;
+}
+
+.flake-page__note-key-row--high {
+    grid-template-columns: repeat(7, var(--flake-state-note-button-size));
+    align-self: flex-start;
+}
+
+.flake-page__note-key-row--middle {
+    grid-template-columns: repeat(12, var(--flake-state-note-button-size));
+    align-self: center;
+}
+
+.flake-page__note-key-row--low {
+    grid-template-columns: repeat(6, var(--flake-state-note-button-size));
+    align-self: flex-end;
+}
+
+.flake-page__note-key-slot {
+    display: flex;
+    width: var(--flake-state-note-button-size);
+    height: calc(var(--flake-state-note-button-size) * 2);
+    align-items: center;
+    justify-content: center;
+}
+
+.flake-page.flake-page--edit-mode .flake-page__state-dialog-grid .flake-page__note-keyboard button.flake-page__note-key-button.btn {
+    position: relative;
+    width: var(--flake-state-note-button-size);
+    min-width: var(--flake-state-note-button-size);
+    max-width: var(--flake-state-note-button-size);
+    margin: 0;
+    padding-right: 0;
+    padding-left: 0;
+    overflow: hidden;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.flake-page.flake-page--edit-mode .flake-page__state-dialog-grid .flake-page__note-keyboard button.flake-page__note-key-button.is-sharp {
+    transform: translateY(calc(var(--flake-state-note-button-size) * -0.5));
+}
+
+.flake-page__note-key-label {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+}
+
+.flake-page__note-key-sharp {
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    max-width: calc(100% - 8px);
+    overflow: hidden;
+    font-size: 0.6em;
+    line-height: 1;
+    pointer-events: none;
+    text-align: right;
+}
+
+.flake-page__tool-panel-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: auto;
+}
+
+.flake-page__tooltip {
+    position: absolute;
+    top: var(--flake-tooltip-top, 0px);
+    left: var(--flake-tooltip-left, 0px);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: min(420px, calc(100% - 16px));
+    padding: 8px 12px;
+    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+    background: var(--surface-elevated, var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas)));
+    box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+    color: var(--ln-body-text-color, CanvasText);
+    pointer-events: none;
+}
+
+.flake-page__tooltip-title {
+    font-size: 1.1em;
+    font-weight: 700;
+}
+
+.flake-page__tooltip-label {
+    margin-top: 4px;
+    color: var(--ln-muted-text-color, GrayText);
+    font-size: .9em;
+}
+
+.flake-page__tooltip-id {
+    font-size: .95em;
+    word-break: break-word;
+}
+
+.flake-page__quickbar {
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    transform: translateX(-50%);
+    z-index: 20;
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    max-width: calc(100% - 24px);
+    margin: 0;
+    pointer-events: none;
+}
+
+.flake-page__quickbar-body,
+.flake-page__quickbar-open-inventory {
+    pointer-events: auto;
+}
+
+.flake-page__quickbar-body {
+    --flake-hotbar-slot-size: 32px;
+    --flake-hotbar-gap: 8px;
+    --flake-hotbar-inset: 6px;
+    display: grid;
+    grid-template-columns: repeat(9, var(--flake-hotbar-slot-size));
+    gap: var(--flake-hotbar-gap);
+    width: fit-content;
+    height: calc(var(--flake-hotbar-slot-size) + (var(--flake-hotbar-inset) * 2));
+    padding: var(--flake-hotbar-inset);
+    image-rendering: pixelated;
+    background:
+        var(--flake-hotbar-image, url("../shell/resource/content/hotbar.png"))
+        center / 100% 100% no-repeat;
+}
+
+.flake-page__quickbar-slot {
+    position: relative;
+    display: grid;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    padding: 0;
+    border: 0;
+    margin: 0;
+    place-items: center;
+    background: transparent;
+    color: transparent;
+    overflow: visible;
+}
+
+.flake-page__quickbar-slot:hover:not(:disabled),
+.flake-page__quickbar-slot:active:not(:disabled),
+.flake-page__quickbar-slot[aria-pressed="true"] {
+    border: 0;
+    margin: 0;
+    background: transparent;
+    color: transparent;
+}
+
+.flake-page__quickbar-slot::after {
+    content: "";
+    position: absolute;
+    inset: 50% auto auto 50%;
+    width: 48px;
+    height: 48px;
+    transform: translate(-50%, -50%);
+    background:
+        var(--flake-hotbar-selection-image, url("../shell/resource/content/hotbar_selection.png"))
+        center no-repeat;
+    image-rendering: pixelated;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.flake-page__quickbar-slot.is-selected::after {
+    opacity: 1;
+}
+
+.flake-page__quickbar-slot-icon {
+    display: block;
+    width: 32px;
+    height: 32px;
+}
+
+.flake-page__quickbar-slot-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.flake-page__quickbar-open-inventory {
+    min-width: 132px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0 12px;
+}
+
+.flake-page__quickbar-open-inventory-text {
+    display: inline-block;
+}
+
+.flake-page__inventory-dialog {
+    width: 720px;
+    max-width: 92vw;
+}
+
+.flake-page__inventory-dialog-body {
+    display: flex;
+    margin-top: 12px;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.flake-page__creative-inventory-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px;
+    /* 限制控制栏宽度不超过物品栏面板，并跟随面板居中 */
+    max-width: 424px;
+    align-self: center;
+    width: 100%;
+}
+
+.flake-page__creative-inventory-control {
+    display: flex;
+    min-width: 160px;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.flake-page__creative-inventory-search {
+    flex: 1;
+    /* 移除固定 min-width，让搜索框随可用空间收缩 */
+    min-width: 0;
+}
+
+.flake-page__creative-inventory-range {
+    margin-left: auto;
+}
+
+.flake-page__creative-inventory-stage {
+    max-width: 100%;
+    overflow: auto;
+    /* 将固定宽度的物品栏面板在对话框中居中 */
+    display: flex;
+    justify-content: center;
+}
+
+.flake-page__creative-inventory-surface {
+    --flake-creative-inventory-width: 424px;
+    --flake-creative-inventory-height: 272px;
+    --flake-creative-slot-size: 32px;
+    --flake-creative-slot-gap: 4px;
+    --flake-creative-grid-left: 16px;
+    --flake-creative-grid-top: 36px;
+    position: relative;
+    width: var(--flake-creative-inventory-width);
+    min-width: var(--flake-creative-inventory-width);
+    height: var(--flake-creative-inventory-height);
+    min-height: var(--flake-creative-inventory-height);
+    image-rendering: pixelated;
+    background: var(--flake-creative-inventory-image, url("../shell/resource/content/creativeInventory.png")) center no-repeat;
+}
+
+.flake-page__creative-inventory-grid {
+    position: absolute;
+    top: var(--flake-creative-grid-top);
+    left: var(--flake-creative-grid-left);
+    display: grid;
+    grid-template-columns: repeat(9, var(--flake-creative-slot-size));
+    grid-template-rows: repeat(5, var(--flake-creative-slot-size));
+    gap: var(--flake-creative-slot-gap);
+}
+
+.flake-page__creative-hotbar-grid {
+    position: absolute;
+    top: 224px;
+    left: 16px;
+    display: grid;
+    grid-template-columns: repeat(9, 32px);
+    gap: 4px;
+}
+
+.flake-page__creative-slot,
+.flake-page__creative-hotbar-slot {
+    position: relative;
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    cursor: pointer;
+}
+
+.flake-page__creative-slot.is-empty {
+    opacity: 0;
+}
+
+.flake-page__creative-slot.is-carried-source,
+.flake-page__creative-hotbar-slot.has-item.is-carried-source {
+    opacity: .45;
+}
+
+.flake-page__creative-slot .block-icon-image,
+.flake-page__creative-slot .block-icon-fallback,
+.flake-page__creative-hotbar-slot .block-icon-image,
+.flake-page__creative-hotbar-slot .block-icon-fallback,
+.flake-page__quickbar-slot .block-icon-image,
+.flake-page__quickbar-slot .block-icon-fallback,
+.flake-page__creative-carry-preview .block-icon-image,
+.flake-page__creative-carry-preview .block-icon-fallback {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+}
+
+.flake-page__creative-inventory-overlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px 32px;
+    background: rgb(0 0 0 / 24%);
+    text-align: center;
+    pointer-events: none;
+}
+
+.flake-page__creative-carry-preview {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 2600;
+    width: 32px;
+    height: 32px;
+    pointer-events: none;
+    transform: translate(calc(var(--flake-carry-x, 0px) - 16px), calc(var(--flake-carry-y, 0px) - 16px));
+}
+
+@media (max-width: 960px) {
+    .flake-page {
+        overflow: hidden;
+    }
+
+    .flake-page__workspace {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        flex-direction: column;
+    }
+
+    .flake-page__main-panel {
+        flex: 0 0 auto;
+    }
+
+    .flake-page__splitter {
+        display: none;
+    }
+
+    .flake-page__tool-panel {
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        max-height: none;
+        flex: 0 0 auto;
+        align-self: stretch;
+        overflow: visible;
+    }
+}
+
+@media (max-width: 760px) {
+    .flake-page__layer-row,
+.flake-page__layer-footer {
+        align-items: center;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: var(--ln-space-2);
+    }
+
+    .flake-page__layer-label {
+        min-width: 0;
+    }
+
+    .flake-page__materials-button,
+.flake-page__build-button,
+.flake-page__file-path,
+.flake-page__tool-panel-actions > .btn {
+        width: 100%;
+        max-width: 100%;
+    }
+
+    .flake-page__quickbar {
+        gap: 8px;
+        max-width: calc(100% - 12px);
+    }
+
+    .flake-page__creative-inventory-control,
+.flake-page__creative-inventory-search,
+.flake-page__creative-inventory-range {
+        min-width: 0;
+        width: 100%;
+        margin-left: 0;
+    }
+}
+
+/* Short/high-DPI windows use one page scroll area instead of clipping the canvas. */
+@media (max-height: 700px) {
+    .flake-page { overflow-y: auto; padding-right: var(--ln-space-1); }
+    .flake-page__workspace { flex: 0 0 auto; min-height: 20rem; overflow: visible; }
+    .flake-page__main-panel, .flake-page__viewport { min-height: 20rem; }
+    .flake-page__tool-panel-body { overflow: visible; }
+    .flake-page__topbar, .flake-page__control-box { flex-shrink: 0; }
+}
+
+.flake-page__container-dialog {
+    width: 400px;
+    max-width: 90vw;
+}
+
+.flake-page__container-body {
+    position: relative;
+    width: 352px;
+    height: 332px;
+    background-image: var(--flake-chest-image, url("../shell/resource/content/chest27.png"));
+    background-repeat: no-repeat;
+    background-position: center center;
+    image-rendering: pixelated;
+    margin: 16px auto;
+}
+
+.flake-page__container-body--hopper {
+    height: 266px;
+    background-image: var(--flake-hopper-image, url("../shell/resource/content/hopper.png"));
+}
+
+.flake-page__container-grid {
+    position: absolute;
+    left: 16px;
+    top: 36px;
+    display: grid;
+    grid-template-columns: repeat(9, 32px);
+    grid-template-rows: repeat(3, 32px);
+    gap: 4px;
+}
+
+.flake-page__container-grid--hopper {
+    left: 88px;
+    top: 40px;
+    grid-template-columns: repeat(5, 32px);
+    grid-template-rows: repeat(1, 32px);
+}
+
+.flake-page__container-slot {
+    width: 32px;
+    height: 32px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+}
+
+.flake-page__container-slot img {
+    width: 32px;
+    height: 32px;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
+
+.flake-page__container-slot-count {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    font-size: 10px;
+    font-weight: bold;
+    color: white;
+    text-shadow: 1px 1px 0 #3f3f3f;
+    pointer-events: none;
+    font-family: 'MinecraftFive', monospace;
+}

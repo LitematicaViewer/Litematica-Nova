@@ -1,6 +1,9 @@
-import React, { useEffect, useState } from "react";
+import { Button } from "../components/ui/button";
+import { ScrollArea } from "../components/ui/scroll-area";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Menu, Home, Library, FileText, BarChart3, Layers, Box, Replace, Wand2, Settings, LayoutDashboard, type LucideIcon } from "lucide-react";
 import { listenEvent } from "../../src/platform/events";
-import { invalidateBlockIconCache, invalidateBlockstateDbCache, invalidateI18nCache, loadDatabases } from "../../src/business/facade";
+import { loadDatabases } from "../../src/business/facade";
 import { initI18n } from "../../src/business/facade";
 import { HomePage } from "../windows/main/pages/home/HomePage";
 import { LibraryPage } from "../windows/main/pages/library/LibraryPage";
@@ -12,41 +15,82 @@ import { GeneratePage } from "../windows/main/pages/generate/GeneratePage";
 import { RenderPage } from "../windows/main/pages/render/RenderPage";
 import { SettingsPage } from "../windows/main/pages/settings/SettingsPage";
 import { UiTestPage } from "../windows/main/pages/ui-test/UiTestPage";
-import { hideEmbeddedViewer, showEmbeddedViewer } from "../../src/business/facade";
-import { loadUserConfigMigratingLocalStorage, normalizeShowUiTestPage, normalizeTheme, saveThemeConfig } from "../../src/business/facade";
+import { loadUserConfigMigratingLocalStorage, normalizeShowUiTestPage, saveThemeConfig, saveColorModeConfig } from "../../src/business/facade";
 import {
   announceThemeChange,
+  announceColorModeChange,
   applyThemeStylesheet,
   normalizeThemeId,
   themeClassName,
-  themeResourceKey,
-  webDefaultThemeId,
+  currentThemeId,
+  currentColorMode,
+  subscribeToThemeChanges,
 } from "./themeRuntime";
 import { projectionLibraryImportedEvent } from "../windows/libraryEvents";
-import { NavIcon } from "./NavIcon";
+import { UpdateDialog } from "../windows/main/UpdateDialog";
+import { readUpdateDraft, takeUpdateDraft, useUpdateDraft } from "../windows/main/updateRecovery";
+
+const navigationIcons: Record<string, LucideIcon> = {
+  hamburger: Menu, home: Home, gallery: Library, properties: FileText,
+  statistics: BarChart3, flake: Layers, render: Box, replace: Replace,
+  generate: Wand2, options: Settings, ui_debug: LayoutDashboard,
+};
+
+function NavIcon({ name }: { name: string }) {
+  const Icon = navigationIcons[name] || Box;
+  return <Icon className="nav-icon" aria-hidden="true" focusable="false" />;
+}
 
 /**
  * Renders the Nova desktop shell and keeps page logic behind the UI boundary.
  */
 export function App() {
-  const [currentFile, setCurrentFile] = useState<string>("");
-  const [theme, setThemeState] = useState(webDefaultThemeId);
-  const [route, setRoute] = useState("home");
+  const [currentFile, setCurrentFile] = useState<string>(() => readUpdateDraft<{currentFile: string}>("shell")?.currentFile || "");
+  const [theme, setThemeState] = useState(currentThemeId);
+  const themeRef = useRef(theme);
+  const [colorMode, setColorModeState] = useState(currentColorMode);
+  const colorModeRef = useRef(colorMode);
+  const themeSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const [themeSaveError, setThemeSaveError] = useState("");
+  const [route, setRoute] = useState(() => readUpdateDraft<{route: string}>("shell")?.route || "home");
+  useUpdateDraft("shell", { currentFile, route });
+  useEffect(() => { takeUpdateDraft("shell"); }, []);
   const [expanded, setExpanded] = useState(true);
   const [showUiTestPage, setShowUiTestPage] = useState(true);
 
-  useEffect(() => {
-    const normalized = normalizeThemeId(theme);
-    document.body.className = themeClassName(normalized);
-    document.documentElement.dataset.theme = themeResourceKey(normalized);
-    applyThemeStylesheet(normalized);
-    announceThemeChange(normalized);
+  useLayoutEffect(() => {
+    applyThemeStylesheet(theme);
   }, [theme]);
 
+  useEffect(() => {
+    const acceptTheme = (next: ReturnType<typeof currentThemeId>) => {
+      if (themeRef.current === next) return;
+      themeRef.current = next;
+      setThemeState(next);
+      // Only the main shell writes native config. Serialize rapid switches so
+      // a slow earlier save cannot overwrite the final selection on disk.
+      themeSaveQueue.current = themeSaveQueue.current
+        .then(() => saveThemeConfig(next))
+        .then(() => setThemeSaveError(""))
+        .catch((error) => setThemeSaveError(`主题已切换，但保存失败：${String(error)}`));
+    };
+    const acceptColorMode = (next: ReturnType<typeof currentColorMode>) => {
+      if (colorModeRef.current === next) return;
+      colorModeRef.current = next;
+      setColorModeState(next);
+      themeSaveQueue.current = themeSaveQueue.current
+        .then(() => saveColorModeConfig(next))
+        .then(() => setThemeSaveError(""))
+        .catch((error) => setThemeSaveError(`外观已切换，但保存失败：${String(error)}`));
+    };
+    const unsubscribe = subscribeToThemeChanges(acceptTheme, acceptColorMode);
+    acceptTheme(currentThemeId());
+    acceptColorMode(currentColorMode());
+    return unsubscribe;
+  }, []);
+
   const setTheme = (value: string) => {
-    const next = normalizeThemeId(normalizeTheme(value));
-    setThemeState(next);
-    saveThemeConfig(next).catch(() => undefined);
+    announceThemeChange(value);
   };
 
   useEffect(() => {
@@ -54,29 +98,9 @@ export function App() {
     initI18n();
     loadUserConfigMigratingLocalStorage()
       .then((info) => {
-        setThemeState(normalizeThemeId(normalizeTheme(info.config.theme)));
         setShowUiTestPage(normalizeShowUiTestPage(info.config.show_ui_test_page));
       })
       .catch(() => undefined);
-  }, []);
-
-  useEffect(() => {
-    const unlistenLanguage = listenEvent("resource-language-changed", () => {
-      invalidateI18nCache();
-      initI18n(true).catch(() => undefined);
-    }).catch(() => undefined);
-    const unlistenGameData = listenEvent("resource-game-data-changed", () => {
-      invalidateBlockstateDbCache();
-      loadDatabases(true).catch(() => undefined);
-    }).catch(() => undefined);
-    const unlistenIcons = listenEvent("resource-block-icons-changed", () => {
-      invalidateBlockIconCache();
-    }).catch(() => undefined);
-    return () => {
-      unlistenLanguage.then((unlisten) => unlisten?.());
-      unlistenGameData.then((unlisten) => unlisten?.());
-      unlistenIcons.then((unlisten) => unlisten?.());
-    };
   }, []);
 
   useEffect(() => {
@@ -89,17 +113,6 @@ export function App() {
       unlistenPromise.then((unlisten) => unlisten?.());
     };
   }, []);
-
-  useEffect(() => {
-    const mayOwnEmbeddedViewer = route === "properties" || route === "render";
-    if (!mayOwnEmbeddedViewer) {
-      console.log(`[LBA_EMBED_VIEWER] route_active=${route} action=hide reason=route_change`);
-      hideEmbeddedViewer().catch(() => undefined);
-      return;
-    }
-    console.log(`[LBA_EMBED_VIEWER] route_active=${route} action=show reason=route_change`);
-    showEmbeddedViewer().catch(() => undefined);
-  }, [route]);
 
   useEffect(() => {
     if (!showUiTestPage && route === "ui_test") {
@@ -129,58 +142,60 @@ export function App() {
   return (
     <div className={["app-shell", themeClassName(theme)].filter(Boolean).join(" ")}>
       <aside className={expanded ? "sidebar" : "sidebar sidebar-collapsed"}>
-        <button
+        <Button variant="ghost"
           className="nav-expand"
           type="button"
           onClick={() => setExpanded(!expanded)}
           title={expanded ? "收起侧栏" : "展开侧栏"}
         >
-          <NavIcon name="hamburger" theme={theme} />
-          {expanded ? <strong>Litematica Nova</strong> : null}
-        </button>
+          <NavIcon name="hamburger" />
+          {expanded ? <strong>Litematica-Nova</strong> : null}
+        </Button>
 
-        <div className="nav-scroll-area">
-          <nav className="nav-list" aria-label="主导航">
-            {Object.entries(topPages).map(([key, value]) => {
-              const active = route === key;
-              return (
-                <button
-                  key={key}
-                  className={`sidebar-item nav-item ${active ? "active nav-item-active" : ""}`}
-                  onClick={() => setRoute(key)}
-                  title={!expanded ? value.name : ""}
-                  type="button"
-                  aria-pressed={active}
-                >
-                  <NavIcon name={value.icon} theme={theme} />
-                  {expanded && <span className="nav-label">{value.name}</span>}
-                </button>
-              );
-            })}
-          </nav>
+        <ScrollArea className="nav-scroll-area"><nav className="nav-list" aria-label="主导航">
+          {Object.entries(topPages).map(([key, value]) => {
+            const active = route === key;
+            return (
+              <Button variant="ghost"
+                key={key}
+                className={`sidebar-item nav-item ${active ? "active nav-item-active" : ""}`}
+                onClick={() => setRoute(key)}
+                title={!expanded ? value.name : ""}
+                type="button"
+                aria-pressed={active}
+                aria-label={value.name}
+              >
+                <NavIcon name={value.icon} />
+                {expanded && <span className="nav-label">{value.name}</span>}
+              </Button>
+            );
+          })}
+        </nav></ScrollArea>
 
-          <nav className="nav-list nav-list-bottom" aria-label="选项">
-            {Object.entries(bottomPages).map(([key, value]) => {
-              const active = route === key;
-              return (
-                <button
-                  key={key}
-                  className={`sidebar-item nav-item ${active ? "active nav-item-active" : ""}`}
-                  onClick={() => setRoute(key)}
-                  title={!expanded ? value.name : ""}
-                  type="button"
-                  aria-pressed={active}
-                >
-                  <NavIcon name={value.icon} theme={theme} />
-                  {expanded && <span className="nav-label">{value.name}</span>}
-                </button>
-              );
-            })}
-          </nav>
-        </div>
+        <nav className="nav-list nav-list-bottom" aria-label="选项">
+          <UpdateDialog />
+          {Object.entries(bottomPages).map(([key, value]) => {
+            const active = route === key;
+            return (
+              <Button variant="ghost"
+                key={key}
+                className={`sidebar-item nav-item ${active ? "active nav-item-active" : ""}`}
+                onClick={() => setRoute(key)}
+                title={!expanded ? value.name : ""}
+                type="button"
+                aria-pressed={active}
+                aria-label={value.name}
+              >
+                <NavIcon name={value.icon} />
+                {expanded && <span className="nav-label">{value.name}</span>}
+              </Button>
+            );
+          })}
+        </nav>
       </aside>
       <main className="content">
-        <Page currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} setShowUiTestPage={setShowUiTestPage} />
+        {themeSaveError && <p role="alert">{themeSaveError}</p>}
+        <Page currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} setShowUiTestPage={setShowUiTestPage} />
       </main>
     </div>
   );

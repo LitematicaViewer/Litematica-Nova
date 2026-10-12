@@ -1,6 +1,14 @@
+import { Checkbox } from "../../../../components/ui/checkbox";
+import { ScrollArea } from "../../../../components/ui/scroll-area";
+import { Slider } from "../../../../components/ui/slider";
+import { RadioGroup, RadioGroupItem } from "../../../../components/ui/radio-group";
+import { Input } from "../../../../components/ui/input";
+import { Button } from "../../../../components/ui/button";
+import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from "../../../../components/ui/table";
 import React, { useEffect, useState } from "react";
 
 import { Dialog } from "../../../../components/Dialog";
+import { Dropdown } from "../../../../components/Dropdown";
 import {
   loadUserConfigMigratingLocalStorage,
   normalizeMaterialListWindowBehavior,
@@ -44,6 +52,9 @@ export function UiTestPage() {
   const [showDemoOverlay, setShowDemoOverlay] = useState(false);
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
   const [selectedTableRow, setSelectedTableRow] = useState("");
+  const [selectedOption, setSelectedOption] = useState("first");
+  const [sampleTheme, setSampleTheme] = useState("shadcn");
+  const [sampleTemplate, setSampleTemplate] = useState("template-a");
   useEffect(() => subscribeToThemeChanges(setThemeId), []);
 
   const thumbExampleUrl = thumbExampleUrlForTheme(themeId);
@@ -66,58 +77,65 @@ export function UiTestPage() {
   };
 
   return (
-    <section className="page-pad">
+    <ScrollArea className="ui-control-gallery">
       <h2>UI 测试页（title）</h2>
       <p className="muted">主题与排版自检（subtitle）</p>
       <fieldset>
         <legend>表单</legend>
         <FormRow label="单选：">
-          <label className="setting-row"><input type="radio" name="sample" defaultChecked /> 选项 A</label>
-          <label className="setting-row"><input type="radio" name="sample" /> 选项 B</label>
+          <RadioGroup defaultValue="a" aria-label="单选示例">
+            <label className="setting-row"><RadioGroupItem value="a" /> 选项 A</label>
+            <label className="setting-row"><RadioGroupItem value="b" /> 选项 B</label>
+          </RadioGroup>
         </FormRow>
         <FormRow label="复选：">
-          <label><input type="checkbox" /> 示例复选框</label>
+          <label><Checkbox  /> 示例复选框</label>
         </FormRow>
-        <FormRow label="单行输入："><input defaultValue="默认系统输入框" /></FormRow>
+        <FormRow label="单行输入："><Input defaultValue="默认系统输入框" /></FormRow>
         <FormRow label="下拉框：">
-          <select defaultValue="QTDefault">
-            <option>QTDefault</option>
-            <option>Metro10</option>
-            <option>Minecraft</option>
-          </select>
+          <Dropdown value={sampleTheme} onChange={setSampleTheme} ariaLabel="主题名称下拉示例" options={[
+            {value: "shadcn", label: "shadcn/ui"}, {value: "8bitcn", label: "8bitcn/ui"}, {value: "Minecraft", label: "Minecraft"},
+          ]} />
         </FormRow>
-        <FormRow label="滑动条："><input type="range" defaultValue="40" /></FormRow>
+        <FormRow label="键盘下拉框：">
+          <Dropdown ariaLabel="键盘下拉框示例" value={selectedOption} onChange={setSelectedOption} options={[
+            { value: "first", label: "第一项" },
+            { value: "second", label: "第二项" },
+            { value: "third", label: "第三项" },
+          ]} />
+        </FormRow>
+        <FormRow label="滑动条："><Slider defaultValue={[40]} aria-label="滑动条示例" /></FormRow>
         <FormRow label="按钮：">
           <div className="button-row">
-            <button type="button">普通按钮</button>
-            <button type="button" aria-pressed="true">可勾选</button>
-            <button type="button" disabled>禁用</button>
+            <Button type="button">普通按钮</Button>
+            <Button type="button" aria-pressed="true">可勾选</Button>
+            <Button type="button" disabled>禁用</Button>
           </div>
         </FormRow>
         <FormRow label="对话框：">
           <div className="button-row">
-            <button type="button" onClick={() => setShowTemplateDialog(true)}>打开标准对话框模板</button>
+            <Button type="button" onClick={() => setShowTemplateDialog(true)}>打开标准对话框模板</Button>
           </div>
         </FormRow>
         <FormRow label="子窗口：">
           <div className="button-row">
-            <button type="button" onClick={handleOpenDemoWindow}>打开空的演示窗口</button>
+            <Button type="button" onClick={handleOpenDemoWindow}>打开空的演示窗口</Button>
           </div>
         </FormRow>
       </fieldset>
       <fieldset>
         <legend>表格</legend>
-        <table>
-          <thead>
-            <tr>
-              <th>缩略图</th>
-              <th>文字</th>
-              <th>数据</th>
-              <th>空列</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>缩略图</TableHead>
+              <TableHead>文字</TableHead>
+              <TableHead>数据</TableHead>
+              <TableHead>空列</TableHead>
+              <TableHead>操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {[
               ["常规数字", "999"],
               ["大数字", "99,999"],
@@ -128,31 +146,31 @@ export function UiTestPage() {
             ].map(([label, value], index) => {
               const isSelected = selectedTableRow === label;
               return (
-                <tr
+                <TableRow
                   key={label}
                   className={isSelected ? "table-row-selected" : ""}
                   aria-selected={isSelected}
                   onClick={() => setSelectedTableRow(label)}
                 >
-                  <td>{renderThumbExample()}</td>
-                  <td>{label}</td>
-                  <td>{value}</td>
-                  <td />
-                  <td>
+                  <TableCell>{renderThumbExample()}</TableCell>
+                  <TableCell>{label}</TableCell>
+                  <TableCell>{value}</TableCell>
+                  <TableCell />
+                  <TableCell>
                     {index < 3 ? (
                       <div className="button-row">
-                        <button type="button" disabled={index === 1} aria-pressed={index === 2}>
+                        <Button type="button" disabled={index === 1} aria-pressed={index === 2}>
                           {index === 1 ? "不可用按钮1" : index === 2 ? "可选中按钮1" : "测试按钮1"}
-                        </button>
-                        <button type="button">测试按钮2</button>
+                        </Button>
+                        <Button type="button">测试按钮2</Button>
                       </div>
                     ) : null}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </fieldset>
       {showTemplateDialog ? (
         <Dialog
@@ -162,8 +180,8 @@ export function UiTestPage() {
           onClose={() => setShowTemplateDialog(false)}
           footer={(
             <>
-              <button type="button" onClick={() => setShowTemplateDialog(false)}>取消</button>
-              <button type="button">主要操作</button>
+              <Button type="button" onClick={() => setShowTemplateDialog(false)}>取消</Button>
+              <Button type="button" onClick={() => setShowTemplateDialog(false)}>完成</Button>
             </>
           )}
         >
@@ -172,12 +190,11 @@ export function UiTestPage() {
             <span className="muted">上方包含标题、副标题和关闭按钮。</span>
             <span className="dialog-label">正文区</span>
             <div className="dialog-field-stack">
-              <input defaultValue="可直接放输入框、选择框和说明文案" />
-              <select defaultValue="template-a">
-                <option value="template-a">模板选项 A</option>
-                <option value="template-b">模板选项 B</option>
-              </select>
-              <label className="setting-row"><input type="checkbox" defaultChecked /> 支持内联布尔选项</label>
+              <Input defaultValue="可直接放输入框、选择框和说明文案" />
+              <Dropdown ariaLabel="模板选项示例" value={sampleTemplate} onChange={setSampleTemplate} options={[
+                {value: "template-a", label: "模板选项 A"}, {value: "template-b", label: "模板选项 B"},
+              ]} />
+              <label className="setting-row"><Checkbox  defaultChecked /> 支持内联布尔选项</label>
             </div>
             <span className="dialog-label">说明区</span>
             <div className="dialog-message">这里适合放路径预览、确认文案、结果提示或错误信息。</div>
@@ -185,22 +202,13 @@ export function UiTestPage() {
         </Dialog>
       ) : null}
       {showDemoOverlay && (
-        <div className="dialog-overlay" onClick={() => setShowDemoOverlay(false)}>
-          <div
-            className="dialog-content subwindow-frame"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="subwindow-title-bar">
-              <h3 className="subwindow-title">子窗口样式演示</h3>
-              <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={() => setShowDemoOverlay(false)}>×</button>
-            </div>
+        <Dialog title="子窗口样式演示" onClose={() => setShowDemoOverlay(false)}>
             <div className="subwindow-body">
               <div className="muted">当前按“子窗口行为”设置，以主窗口遮罩方式打开这个演示窗口。</div>
               <div className="subwindow-demo-fill" />
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
-    </section>
+    </ScrollArea>
   );
 }

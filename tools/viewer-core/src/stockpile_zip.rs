@@ -79,6 +79,7 @@ pub struct StockpileDeployOptions {
     pub access_password: Option<String>,
     pub admin_password: Option<String>,
     pub whitelist: Vec<String>,
+    pub whitelist_enabled: Option<bool>,
     pub allow_guest_readonly: Option<bool>,
     pub admin_page_enabled: Option<bool>,
     pub targets: Vec<StockpileDeployTarget>,
@@ -237,9 +238,6 @@ fn validate_multi_deploy_options(options: &StockpileDeployOptions) -> Result<()>
         .is_empty()
     {
         bail!("stockpile export-zip --mode multi requires --admin-password-stdin");
-    }
-    if options.whitelist.is_empty() {
-        bail!("stockpile export-zip --mode multi requires --whitelist-file with at least one user");
     }
     Ok(())
 }
@@ -401,10 +399,7 @@ fn initial_stockpile_db(
     payload: &StockpileZipPayload,
     deploy_options: &StockpileDeployOptions,
 ) -> Result<Vec<u8>> {
-    let path = std::env::temp_dir().join(format!(
-        "lba_stockpile_initial_{}.sqlite",
-        std::process::id()
-    ));
+    let path = initial_stockpile_db_path();
     let _ = fs::remove_file(&path);
     stockpile_serve::create_initialized_deploy_db(
         &path,
@@ -413,6 +408,7 @@ fn initial_stockpile_db(
             access_password: deploy_options.access_password.clone(),
             admin_password: deploy_options.admin_password.clone(),
             whitelist: deploy_options.whitelist.clone(),
+            whitelist_enabled: deploy_options.whitelist_enabled,
             allow_guest_readonly: deploy_options.allow_guest_readonly,
             admin_page_enabled: deploy_options.admin_page_enabled,
         },
@@ -422,6 +418,13 @@ fn initial_stockpile_db(
     let _ = fs::remove_file(path.with_extension("sqlite-wal"));
     let _ = fs::remove_file(path.with_extension("sqlite-shm"));
     Ok(bytes)
+}
+
+fn initial_stockpile_db_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "litematica_nova_stockpile_initial_{}.sqlite",
+        std::process::id()
+    ))
 }
 
 #[derive(Debug)]
@@ -449,14 +452,9 @@ fn stockpile_server_binaries(targets: &[StockpileDeployTarget]) -> Result<Vec<De
     }
     if !missing.is_empty() {
         bail!(
-            "stockpile multi export requires real server binaries under {}; missing: {}. Run scripts/stockpile/verify_stockpile_server_bins.ps1 -Target {} to inspect local binaries, then scripts/stockpile/fetch_stockpile_server_artifacts.ps1 -Target {} after the GitHub Actions artifacts are available.",
+            "stockpile multi export requires real server binaries under {}; missing: {}. Offline packaging never downloads, compiles, or creates placeholder binaries. Place artifacts at bin/stockpile-server/<target>/, run scripts/stockpile/verify_stockpile_server_bins.ps1 -Target {} to inspect them, then export again.",
             root.display(),
             missing.join(", "),
-            targets
-                .iter()
-                .map(|target| target.platform())
-                .collect::<Vec<_>>()
-                .join(","),
             targets
                 .iter()
                 .map(|target| target.platform())
@@ -848,7 +846,7 @@ exec "$(dirname "$0")/stockpile_server" serve --root . --bind "$BIND"
 
 fn multi_readme(targets: &[StockpileDeployTarget]) -> String {
     let mut lines = vec![
-        "Litematica-BA Stockpile Multiplayer Package".to_string(),
+        "Litematica-Nova Stockpile Multiplayer Package".to_string(),
         "".to_string(),
         "This package contains precomputed stockpile materials, recipe trees, icons, i18n data, selected platform stockpile_server binaries, and an initialized SQLite database.".to_string(),
         "".to_string(),
@@ -1392,6 +1390,17 @@ mod tests {
     static SERVER_BIN_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
+    fn initial_database_temp_file_uses_formal_product_prefix() {
+        let path = initial_stockpile_db_path();
+        assert!(
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("litematica_nova_")),
+            "initial stockpile database path: {}",
+            path.display()
+        );
+    }
+
+    #[test]
     fn stockpile_zip_contains_required_files_and_embedded_payload() {
         let input = fixture_path();
         let materials = stockpile::build_materials_data(&input, false, Some("1.21.10"))
@@ -1536,6 +1545,7 @@ mod tests {
                 access_password: Some("access".to_string()),
                 admin_password: Some("admin".to_string()),
                 whitelist: vec!["Eldon".to_string()],
+                whitelist_enabled: None,
                 allow_guest_readonly: Some(true),
                 admin_page_enabled: Some(true),
                 targets: all_deploy_targets().to_vec(),
@@ -1636,6 +1646,7 @@ mod tests {
                 access_password: Some("access".to_string()),
                 admin_password: Some("admin".to_string()),
                 whitelist: vec!["Eldon".to_string()],
+                whitelist_enabled: None,
                 allow_guest_readonly: None,
                 admin_page_enabled: None,
                 targets: vec![StockpileDeployTarget::LinuxX64],

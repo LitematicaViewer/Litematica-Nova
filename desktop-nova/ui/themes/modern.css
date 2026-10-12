@@ -1,0 +1,134 @@
+/* Utilities are loaded only for shadcn/ui and 8bitcn/ui. No preflight: Minecraft stays unchanged. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@source "../";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--foreground);
+    --color-destructive: var(--destructive);
+    --color-border: var(--border);
+    --color-input: var(--border);
+    --color-ring: var(--ring);
+    --radius-sm: calc(var(--radius) - 2px);
+    --radius-md: var(--radius);
+    --radius-lg: calc(var(--radius) + 2px);
+}
+
+:root {
+    color-scheme: light;
+    --ln-ui-background-color: var(--background);
+    --ln-navigation-background-color: var(--card);
+    --ln-body-text-color: var(--foreground);
+    --ln-muted-text-color: var(--muted-foreground);
+    --ln-control-height: 36px;
+    --ln-control-radius: var(--radius);
+    --ln-focus-color: var(--ring);
+    --ln-option-active-background: var(--accent);
+    --ln-option-active-color: var(--foreground);
+    --ln-popup-shadow: var(--panel-shadow);
+    --ln-error-color: var(--destructive);
+    --ln-warning-color: #8a4b00;
+    --ln-success-color: #306743;
+    --ln-card-border-color: var(--border);
+    --ln-card-background-color-active: var(--accent);
+    --ln-file-icon-size: 20px;
+}
+
+:root[data-color-scheme="dark"] {
+    color-scheme: dark;
+    --ln-warning-color: #ebba70;
+    --ln-success-color: #a3d7b2;
+}
+html[data-theme][data-color-scheme] {
+    --ln-scroll-track: var(--background);
+    --ln-scroll-track-hover: var(--muted);
+    --ln-scroll-thumb: color-mix(in srgb, var(--muted-foreground) 55%, var(--background));
+    --ln-scroll-hover: var(--muted-foreground);
+    --ln-scroll-active: var(--foreground);
+}
+
+body { line-height: 1.5; }
+:where(button, input, select, textarea) { font: inherit; }
+button, .btn, .dropdown-trigger {
+    min-height: var(--ln-control-height);
+    border: var(--edge-width) solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card);
+    color: var(--foreground);
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 120ms, border-color 120ms, box-shadow 120ms;
+}
+button:not(.nav-item):not(.nav-expand) { padding: 6px 12px; }
+button:hover:not(:disabled), .btn:hover:not(:disabled) { background: var(--accent); border-color: var(--ring); }
+button:active:not(:disabled) { background: var(--secondary); }
+button[aria-pressed="true"] { background: var(--accent); border-color: var(--primary); }
+button:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .5; cursor: not-allowed; }
+button.primary, button.btn-primary, button[data-variant="default"] { color: var(--primary-foreground); background: var(--primary); border-color: var(--primary); }
+button.primary:hover:not(:disabled), button.btn-primary:hover:not(:disabled), button[data-variant="default"]:hover:not(:disabled) { filter: brightness(.94); }
+button.danger, button[data-variant="destructive"] { color: var(--primary-foreground); background: var(--destructive); border-color: var(--destructive); }
+button[data-variant="ghost"], button[data-variant="link"] { background: transparent; border-color: transparent; box-shadow: none; }
+.input, input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), select, textarea {
+    min-height: var(--ln-control-height);
+    border: var(--edge-width) solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 10px;
+    background: var(--card);
+    color: var(--foreground);
+    box-shadow: var(--control-shadow);
+}
+input::placeholder, textarea::placeholder { color: var(--muted-foreground); opacity: 1; }
+input[readonly] { background: var(--muted); }
+input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color: var(--primary); }
+input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; flex-shrink: 0; }
+select { cursor: pointer; }
+:where(button, input, select, textarea, summary, a):focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+[aria-invalid="true"] { border-color: var(--destructive); }
+
+fieldset { border: 0; border-radius: calc(var(--radius) + 2px); background: var(--card); padding: 16px; }
+legend { padding: 0 6px; font-weight: 600; }
+.sidebar { border-right: var(--edge-width) solid var(--border); padding: 8px; gap: 4px; }
+.nav-expand, .nav-item { justify-content: flex-start; border: 0; border-radius: var(--radius); min-height: 44px; background: transparent; margin: 1px 0; }
+.nav-item:hover:not(:disabled), .nav-expand:hover:not(:disabled) { background: var(--muted); }
+.nav-item.active, .nav-item[aria-current="page"], .nav-item[aria-pressed="true"] { background: var(--accent); color: var(--foreground); box-shadow: inset 3px 0 var(--primary); font-weight: 650; }
+.sidebar-collapsed { padding: 4px; }
+.content { padding: 12px; }
+.dropdown-menu, .block-search-menu { padding: 4px; color: var(--foreground); background: var(--popover); border: var(--edge-width) solid var(--border); }
+.dropdown-item { border-radius: max(0px, calc(var(--radius) - 2px)); cursor: default; }
+.dropdown-item[data-highlighted], .dropdown-item:hover, .block-search-menu button:hover { background: var(--accent); outline: none; }
+.dropdown-item[data-state="checked"] { font-weight: 650; }
+.dialog-surface { position: relative; background: var(--popover); border: 0; border-radius: calc(var(--radius) + 4px); box-shadow: var(--panel-shadow); }
+.dialog-header { padding: 20px 20px 0; }
+.dialog-body { padding: 20px; }
+.dialog-footer { padding: 0 20px 20px; }
+.dialog-subtitle, .dialog-label { color: var(--muted-foreground); }
+button.dialog-close-button { padding: 0; min-width: 32px; width: 32px; height: 32px; min-height: 32px; }
+table { border-collapse: separate; border-spacing: 0; color: var(--foreground); font-size: inherit; }
+th, td { border: 0; padding: 9px 12px; }
+th { background: var(--muted); color: var(--muted-foreground); font-weight: 600; }
+tbody tr:hover { background: var(--accent); }
+tr[aria-selected="true"], tr[data-state="selected"] { background: var(--accent); }
+.material-list-table-wrap { border: 0; border-radius: var(--radius); background: var(--card); }
+.material-list-table { margin: 0; }
+.subwindow-toolbar .material-list-count-input { width: 104px; flex: 0 0 104px; }
+.subwindow-toolbar > span { white-space: nowrap; flex-shrink: 0; }
+.material-list-table .material-list-name { font-weight: 550; }
+.material-list-table .material-list-id { color: var(--muted-foreground); }
+.material-list-card, .lib-card, .library-card, .beta-workflow-card { border-color: var(--border); background: var(--card); border-radius: var(--radius); }
+.beta-statistics-fact, .beta-statistics-note { border-color: var(--border); }
+::selection { background: var(--primary); color: var(--primary-foreground); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }

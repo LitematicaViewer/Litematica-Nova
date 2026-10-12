@@ -6,6 +6,14 @@ pub enum ViewerBuildMode {
     FastExperimental,
 }
 
+pub fn install_viewer_build_mode(mode: ViewerBuildMode) -> Result<(), ViewerBuildMode> {
+    match BUILD_MODE.set(mode) {
+        Ok(()) => Ok(()),
+        Err(requested) if BUILD_MODE.get().copied() == Some(requested) => Ok(()),
+        Err(requested) => Err(requested),
+    }
+}
+
 static BUILD_MODE: OnceLock<ViewerBuildMode> = OnceLock::new();
 static WRITER_PIPELINE_DISABLED: OnceLock<bool> = OnceLock::new();
 static HEADLESS_PREBUILD_DISABLED: OnceLock<bool> = OnceLock::new();
@@ -21,18 +29,7 @@ fn env_flag_enabled(name: &str) -> bool {
 }
 
 pub fn viewer_build_mode() -> ViewerBuildMode {
-    *BUILD_MODE.get_or_init(|| {
-        match std::env::var("LBA_VIEWER_BUILD_MODE")
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("fast" | "fast_experimental" | "experimental") => {
-                ViewerBuildMode::FastExperimental
-            }
-            _ => ViewerBuildMode::Normal,
-        }
-    })
+    *BUILD_MODE.get_or_init(|| ViewerBuildMode::FastExperimental)
 }
 
 pub fn compact_cache_v2_enabled() -> bool {

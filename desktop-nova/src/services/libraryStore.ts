@@ -5,7 +5,7 @@ import {
   DirectoryEntryInfo,
   listLitematicFileEntriesInDirectory,
 } from "./backend";
-import { getAnalyzeOutput } from "./coreReadCache";
+import { inspectProject } from "../platform/applicationOperations";
 
 export interface ProjectionRecord {
   id: string;
@@ -151,6 +151,20 @@ async function addOrUpdateRecordInternal(
   }
 
   const analysis = await analyzeFile(filePath);
+  return await addOrUpdateRecordFromAnalysisInternal(nextState, filePath, analysis, persist);
+}
+
+async function addOrUpdateRecordFromAnalysisInternal(
+  state: LibraryState,
+  filePath: string,
+  analysis: Partial<ProjectionRecord>,
+  persist: boolean,
+): Promise<LibraryState> {
+  const nextState = normalizeLibraryState({
+    ...state,
+    records: [...state.records],
+    folders: [...state.folders],
+  });
   const fileName = fileNameFromPath(filePath);
   const existingIdx = nextState.records.findIndex((record) => record.path === filePath);
   const existing = existingIdx >= 0 ? nextState.records[existingIdx] : null;
@@ -201,27 +215,25 @@ export async function saveLibrary(state: LibraryState): Promise<void> {
   await persistLibraryState(state);
 }
 
+export function projectionRecordAnalysis(parsed: any): Partial<ProjectionRecord> {
+  const meta = parsed?.metadata || {};
+  return {
+    status: "ok",
+    lastError: "",
+    displayName: meta.name || "",
+    author: meta.author || "",
+    description: meta.description || "",
+    totalBlocks: meta.total_blocks || 0,
+    totalVolume: meta.total_volume || 0,
+    regionCount: meta.region_count || 0,
+    enclosingSize: meta.enclosing_size || { x: 0, y: 0, z: 0 },
+    minecraftDataVersion: meta.minecraft_data_version || 0,
+  };
+}
+
 export async function analyzeFile(filePath: string): Promise<Partial<ProjectionRecord>> {
   try {
-    const out = await getAnalyzeOutput(filePath);
-    try {
-      const parsed = JSON.parse(out);
-      const meta = parsed.metadata || {};
-      return {
-        status: "ok",
-        lastError: "",
-        displayName: meta.name || "",
-        author: meta.author || "",
-        description: meta.description || "",
-        totalBlocks: meta.total_blocks || 0,
-        totalVolume: meta.total_volume || 0,
-        regionCount: meta.region_count || 0,
-        enclosingSize: meta.enclosing_size || { x: 0, y: 0, z: 0 },
-        minecraftDataVersion: meta.minecraft_data_version || 0,
-      };
-    } catch {
-      return { status: "parse_error", lastError: out.substring(0, 1000) };
-    }
+    return projectionRecordAnalysis(await inspectProject({ sourcePath: filePath }));
   } catch (error: any) {
     return { status: "parse_error", lastError: String(error) };
   }
@@ -231,11 +243,17 @@ export async function addOrUpdateRecord(state: LibraryState, filePath: string): 
   return await addOrUpdateRecordInternal(state, filePath, true);
 }
 
-/**
- * Adds or refreshes a projection record, moves it to the top of recent content, and persists the library.
- */
+export async function addOrUpdateRecordFromAnalysis(
+  state: LibraryState,
+  filePath: string,
+  analysis: Partial<ProjectionRecord>,
+): Promise<LibraryState> {
+  return await addOrUpdateRecordFromAnalysisInternal(state, filePath, analysis, true);
+}
+
+/** Moves an existing record to recent content without coupling selection to file analysis. */
 export async function activateProjectionRecord(state: LibraryState, filePath: string): Promise<LibraryState> {
-  const updatedState = await addOrUpdateRecordInternal(state, filePath, false);
+  const updatedState = normalizeLibraryState(state);
   const orderedRecords = [
     ...updatedState.records.filter((record) => record.path === filePath),
     ...updatedState.records

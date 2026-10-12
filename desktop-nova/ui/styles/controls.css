@@ -1,0 +1,101 @@
+/* Shared official component structure. Theme files supply every surface/color. */
+/* Functional icons share one vector language; BlockIcon/item textures are not SVG. */
+html[data-theme] svg.lucide {
+  width: var(--nova-icon-size, 18px); height: var(--nova-icon-size, 18px);
+  flex-shrink: 0; stroke-width: 1.75; vertical-align: middle;
+}
+html[data-theme] :is(.library-preview-placeholder, .properties-preview-placeholder, .render-preview-placeholder, .properties-empty, .library-empty-state) > svg.lucide { --nova-icon-size: 32px; }
+html[data-theme] [data-slot="checkbox-indicator"] > svg.lucide { --nova-icon-size: 14px; stroke-width: 2; }
+html[data-theme] [data-slot="radio-group-indicator"] > svg.lucide { --nova-icon-size: 10px; }
+html[data-theme] .nova-control { font: inherit; }
+html[data-theme] [data-slot="button"] { line-height: 1.35; min-width: 0; }
+html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"] { border-color: transparent; background: var(--secondary); color: var(--foreground); box-shadow: none; }
+html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"]:hover:not(:disabled) { background: var(--accent); }
+html[data-theme] [data-slot="button"][data-size^="icon"] { padding: 7px; width: var(--ln-control-height); flex: 0 0 var(--ln-control-height); }
+html[data-theme] [data-slot="button"][data-size="sm"] { min-height: 30px; padding: 5px 10px; }
+html[data-theme] [data-slot="button"]:focus-visible,
+html[data-theme] [data-slot="input"]:focus-visible,
+html[data-theme] [data-slot="textarea"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; box-shadow: none; }
+html[data-theme] .nova-textarea { min-height: 6rem; height: auto; resize: vertical; line-height: 1.6; }
+/* Choice controls are not action buttons: reset inherited texture, movement and sizing. */
+html[data-theme] button:is([data-slot="checkbox"], [data-slot="radio-group-item"]) {
+  box-sizing: border-box; border-image: none; box-shadow: none; transform: none;
+  flex-shrink: 0; margin: 0; cursor: pointer; text-shadow: none;
+}
+html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group-item"])) {
+  display: inline-flex; align-items: center; gap: var(--ln-check-label-gap, 8px);
+  min-height: var(--ln-check-label-min-height, 24px); cursor: pointer;
+}
+html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group-item"]):disabled) { cursor: not-allowed; }
+html[data-theme] button[data-slot="checkbox"] {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; min-width: 20px; max-width: 20px; min-height: 20px; flex: 0 0 20px; padding: 0; margin: 0;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--background);
+  color: var(--primary-foreground); cursor: pointer; box-shadow: none; vertical-align: middle;
+}
+html[data-theme] [data-slot="checkbox"][data-state="checked"],
+html[data-theme] [data-slot="checkbox"][data-state="indeterminate"] { background: var(--primary); border-color: var(--primary); }
+html[data-theme] [data-slot="checkbox"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+[data-slot="checkbox-indicator"] { display: flex; }
+[data-slot="checkbox-indicator"] svg { width: 14px; height: 14px; stroke-width: 3px; }
+[data-slot="checkbox-indicator"][data-state="checked"] [data-slot="checkbox-mixed"],
+[data-slot="checkbox-indicator"][data-state="indeterminate"] [data-slot="checkbox-check"] { display: none; }
+.nova-checkbox-pixel-edge { display: none; }
+html[data-theme="8bitcn"] [data-slot="checkbox"] { border-radius: 0; border-width: 2px; }
+html[data-theme="8bitcn"] .nova-checkbox-pixel-edge { display: block; position: absolute; inset: -2px; border-inline: 2px solid var(--foreground); pointer-events: none; }
+html[data-theme="minecraft"] [data-slot="checkbox"] { border-radius: 0; border-width: 2px; box-shadow: inset 1px 1px rgb(255 255 255 / 18%); }
+html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"]):disabled { opacity: .45; cursor: not-allowed; }
+html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"]):hover:not(:disabled) { border-color: var(--ring); }
+html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"])[aria-invalid="true"] { border-color: var(--destructive); }
+
+.nova-scroll-area { position: relative; overflow: hidden; min-width: 0; min-height: 0; }
+.nova-scroll-area > [data-slot="scroll-area-viewport"] { width: 100%; height: 100%; min-width: 0; border-radius: inherit; overscroll-behavior: contain; outline: none; }
+.nova-scroll-area > [data-slot="scroll-area-viewport"]:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.nova-scroll-area > [data-slot="scroll-area-viewport"] > div { display: block !important; min-width: 100%; }
+[data-slot="scroll-area-scrollbar"] { display: flex; user-select: none; touch-action: none; padding: 3px; background: var(--ln-scroll-track); transition: background-color 120ms; }
+[data-slot="scroll-area-scrollbar"][data-orientation="vertical"] { width: var(--ln-scroll-size); }
+[data-slot="scroll-area-scrollbar"][data-orientation="horizontal"] { height: var(--ln-scroll-size); flex-direction: column; }
+[data-slot="scroll-area-thumb"] { flex: 1; position: relative; border-radius: var(--ln-scroll-radius); background: var(--ln-scroll-thumb); box-shadow: var(--ln-scroll-shadow); }
+[data-slot="scroll-area-thumb"]::before { content: ""; position: absolute; inset: -3px; min-height: 28px; min-width: 8px; }
+[data-slot="scroll-area-scrollbar"]:hover [data-slot="scroll-area-thumb"] { background: var(--ln-scroll-hover); }
+[data-slot="scroll-area-thumb"]:active { background: var(--ln-scroll-active); }
+[data-slot="scroll-area-corner"] { background: var(--ln-scroll-track); }
+.dialog-surface > .dialog-body.nova-scroll-area { flex: 1 1 auto; overflow: hidden; }
+.sidebar > .nav-scroll-area { flex: 1; min-height: 0; }
+.sidebar .nav-scroll-area .nav-list { margin: 0; padding: 4px 8px; }
+
+html[data-theme] [data-slot="slider"] { position: relative; display: flex; align-items: center; width: 100%; min-width: 4rem; min-height: 28px; touch-action: none; user-select: none; }
+[data-slot="slider-track"] { position: relative; flex: 1; height: 6px; overflow: hidden; border-radius: var(--radius, 0px); background: var(--muted); }
+[data-slot="slider-range"] { position: absolute; height: 100%; background: var(--primary); }
+[data-slot="slider-thumb"] { display: block; width: 18px; height: 18px; border: 2px solid var(--primary); border-radius: var(--radius, 0px); background: var(--card); }
+[data-slot="slider-thumb"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+[data-slot="slider"][data-disabled] { opacity: .45; }
+
+/* Content is separated by tone and spacing, not nested boxes. */
+html[data-theme] .group-box { border: 0; box-shadow: none; margin-top: 0; padding: 16px; background: var(--card); border-radius: var(--radius, 0px); }
+html[data-theme] .group-box .group-box { padding: 12px 0 0; background: transparent; }
+html[data-theme] .group-box-title { position: static; top: auto; left: auto; padding: 0; margin: 0 0 12px; background: transparent; font-size: 1rem; font-weight: 600; }
+html[data-theme] [data-slot="table"] { border: 0; border-collapse: collapse; width: 100%; }
+html[data-theme] [data-slot="table-head"], html[data-theme] [data-slot="table-cell"] { border: 0; padding: 10px 12px; }
+html[data-theme] [data-slot="table-head"] { text-align: left; background: var(--muted); font-weight: 500; color: var(--muted-foreground); }
+html[data-theme] [data-slot="table-row"] { border: 0; }
+html[data-theme] [data-slot="table-body"] [data-slot="table-row"]:nth-child(even) { background: color-mix(in srgb, var(--muted) 42%, transparent); }
+html[data-theme] [data-slot="table-body"] [data-slot="table-row"]:hover { background: var(--accent); }
+html[data-theme] ::selection { background: var(--primary); color: var(--primary-foreground); }
+html[data-theme] :where(input, textarea) { caret-color: var(--primary); }
+[data-slot="radio-group"] { display: flex; flex-wrap: wrap; gap: 16px; }
+html[data-theme] button[data-slot="radio-group-item"] { display: inline-flex; justify-content: center; align-items: center; border: 1px solid var(--border); color: var(--primary); background: var(--background); }
+html[data-theme] [data-slot="radio-group-item"][data-choice-layout="control"] { width: 20px; height: 20px; min-width: 20px; max-width: 20px; min-height: 20px; padding: 0; border-radius: 50%; flex: 0 0 20px; }
+html[data-theme] [data-slot="radio-group-item"][data-state="checked"] { border-color: var(--primary); }
+[data-slot="radio-group-indicator"] { display: flex; position: relative; }
+[data-slot="radio-group-indicator"] svg { position: static; width: 10px; height: 10px; transform: none; fill: currentColor; }
+html[data-theme="8bitcn"] [data-slot="radio-group-item"][data-choice-layout="control"] { border-radius: 0; border-width: 2px; }
+html[data-theme] [data-slot="radio-group-item"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+[data-slot="radio-group-item"][data-state="unchecked"] [data-slot="radio-choice-mark"] { visibility: hidden; }
+html[data-theme] .flake-page__creative-slot[data-slot="button"],
+html[data-theme] .flake-page__creative-hotbar-slot[data-slot="button"] { min-height: 0; padding: 0; border-image: none; border-radius: 0; width: 100%; height: 100%; }
+.flake-page__tool-panel-body.nova-scroll-area { overflow: hidden; }
+.flake-page__tool-panel-body [data-slot="scroll-area-viewport"] > div { display: flex !important; flex-direction: column; gap: 12px; padding-right: 8px; }
+.ui-control-gallery { height: 100%; }
+.ui-control-gallery [data-slot="scroll-area-viewport"] > div { padding: 16px; }
+@media (prefers-reduced-motion: reduce) { .nova-control, [data-slot="scroll-area-scrollbar"] { transition: none !important; } }

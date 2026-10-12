@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 pub const LBA_DATA_ROOT_ENV: &str = "LBA_DATA_ROOT";
+pub const PRODUCT_DATA_DIRECTORY: &str = "Litematica-Nova";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimePathEntry {
@@ -133,7 +134,26 @@ fn data_root_with_source() -> Result<(PathBuf, String)> {
         return Ok((path, LBA_DATA_ROOT_ENV.to_string()));
     }
 
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        let Some(local_app_data) = env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty())
+        else {
+            bail!(
+                "LOCALAPPDATA is unavailable; refusing to place mutable Litematica-Nova data beside the installed executable"
+            );
+        };
+        return Ok((
+            product_local_data_root(Path::new(&local_app_data)),
+            "LOCALAPPDATA/Litematica-Nova".to_owned(),
+        ));
+    }
+
+    #[cfg(any(not(windows), debug_assertions))]
     Ok((app_root()?.join("data"), "app_root/data".to_string()))
+}
+
+fn product_local_data_root(local_data_dir: &Path) -> PathBuf {
+    local_data_dir.join(PRODUCT_DATA_DIRECTORY)
 }
 
 fn locate_app_root() -> Result<PathBuf> {
@@ -209,6 +229,16 @@ mod tests {
             stockpile_root().expect("stockpile root"),
             data.join("stockpile")
         );
+    }
+
+    #[test]
+    fn product_runtime_root_uses_the_formal_product_directory() {
+        let local_data = Path::new(r"C:\Users\viewer\AppData\Local");
+        assert_eq!(
+            product_local_data_root(local_data),
+            local_data.join("Litematica-Nova")
+        );
+        assert_eq!(PRODUCT_DATA_DIRECTORY, "Litematica-Nova");
     }
 
     #[test]

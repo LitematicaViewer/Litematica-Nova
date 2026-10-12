@@ -318,7 +318,7 @@ export async function createMockPlan(prompt: string, context: GenerationContext 
     version: 1,
     metadata: {
       name: prompt.trim() ? `Mock - ${prompt.trim().slice(0, 24)}` : "Mock Generated Projection",
-      author: "Litematica-BA",
+      author: "Litematica-Nova",
       description: "Mock provider generated a local plan only.",
     },
     minecraft_data_version: context.minecraftDataVersion,

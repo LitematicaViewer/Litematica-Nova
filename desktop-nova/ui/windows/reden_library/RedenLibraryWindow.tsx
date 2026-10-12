@@ -1,4 +1,9 @@
-import { useEffect, useState } from "react";
+import { X } from "lucide-react";
+import { Button } from "../../components/ui/button";
+import { ScrollArea } from "../../components/ui/scroll-area";
+import { Dialog } from "../../components/Dialog";
+import { Input } from "../../components/ui/input";
+import { useEffect, useLayoutEffect, useState } from "react";
 
 import {
   downloadRedenAttachment,
@@ -23,6 +28,7 @@ import {
   themeClassName,
 } from "../../shell/themeRuntime";
 import { projectionLibraryImportedEvent } from "../libraryEvents";
+import "../main/pages/library/library.css";
 
 function formatSize(numBytes: number): string {
   let value = Math.max(0, numBytes);
@@ -170,33 +176,34 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
   ].filter(Boolean).join(" ");
 
   return (
-    <section className="subwindow-panel-shell">
+    <section className="subwindow-panel-shell library-aux-panel library-reden-panel">
       <div className="subwindow-title-bar">
         <div className="subwindow-title-stack">
           <h3 className="subwindow-title">在线投影库 / RedenMC</h3>
         </div>
-        {onClose ? <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</button> : null}
+        {onClose ? <Button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}><X size={18} aria-hidden="true" /></Button> : null}
       </div>
       <p className="muted subwindow-subtitle">搜索、查看详情并直接导入投影库</p>
 
       <div className="subwindow-body">
         <div className="subwindow-toolbar subwindow-wrap-row">
-          <input
+          <Input
             className="input nova-input-flex"
             value={redenQuery}
+            aria-label="搜索在线投影"
             placeholder="搜索机器，例如：刷石机、世界吞噬者"
             onChange={(event) => setRedenQuery(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter") handleRedenSearch(); }}
           />
-          <button className="btn" disabled={redenBusy === "search"} onClick={handleRedenSearch}>
+          <Button className="btn" disabled={redenBusy === "search"} onClick={handleRedenSearch}>
             {redenBusy === "search" ? "搜索中..." : "搜索"}
-          </button>
+          </Button>
         </div>
 
         <div className="reden-content-grid">
           <div className="reden-results-pane">
             <div className="reden-pane-title">搜索结果</div>
-            <div className="reden-result-list">
+            <ScrollArea className="library-online-results-scroll"><div className="reden-result-list">
               {redenResults.length > 0 ? redenResults.map((item) => {
                 const resultClassName = [
                   "library-card",
@@ -204,23 +211,17 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
                   redenDetail?.key === item.key ? "library-card-current" : "",
                 ].filter(Boolean).join(" ");
                 return (
-                  <div
+                  <Button
                     key={item.key}
                     className={resultClassName}
-                    role="button"
-                    tabIndex={0}
-                    aria-disabled={redenBusy === `detail:${item.key}`}
+                    variant="ghost"
+                    disabled={!!redenBusy}
+                    aria-pressed={redenDetail?.key === item.key}
                     onClick={() => {
                       if (redenBusy === `detail:${item.key}`) return;
                       handleRedenDetail(item.key);
                     }}
-                    onKeyDown={(event) => {
-                      if (redenBusy === `detail:${item.key}`) return;
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        handleRedenDetail(item.key);
-                      }
-                    }}
+
                   >
                     <div className="lib-card-left reden-result-card-body">
                       <div className="lib-card-line-main">
@@ -237,17 +238,17 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
                       <div className="reden-result-date">更新：{formatRedenDate(item.updatedAt)}</div>
                       {redenSummary(item) && <div className="reden-result-summary">{redenSummary(item).slice(0, 120)}</div>}
                     </div>
-                  </div>
+                  </Button>
                 );
               }) : (
                 <div className="subwindow-empty-state">
                   暂无结果。请输入关键词后开始搜索。
                 </div>
               )}
-            </div>
+            </div></ScrollArea>
           </div>
 
-          <div className="reden-detail-pane">
+          <ScrollArea className="reden-detail-pane">
             {redenDetail ? (
               <div className="reden-detail-stack">
                 <div>
@@ -265,9 +266,9 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
                           <div>{index + 1}. {attachment.name || `attachment-${index + 1}.litematic`}</div>
                           <div className="reden-attachment-meta">{attachment.size ? formatSize(attachment.size) : "-"} {attachment.description || ""}</div>
                         </div>
-                        <button className="btn" disabled={redenBusy === `download:${index}`} onClick={() => handleRedenDownloadAttachment(redenDetail, index)}>
+                        <Button className="btn" disabled={redenBusy === `download:${index}`} onClick={() => handleRedenDownloadAttachment(redenDetail, index)}>
                           {redenBusy === `download:${index}` ? "下载中..." : "下载并入库"}
-                        </button>
+                        </Button>
                       </div>
                     ))}
                   </div>
@@ -290,7 +291,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
                         return (
                           <label key={axis} className="reden-size-field">
                             <span>{axis.toUpperCase()} ({hint || "no rule"})</span>
-                            <input
+                            <Input
                               className="input"
                               type="number"
                               value={redenSizes[field] ?? ""}
@@ -300,16 +301,16 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
                         );
                       })}
                     </div>
-                    <button className="btn reden-parametric-button" disabled={redenBusy === "download:parametric"} onClick={() => handleRedenDownloadParametric(redenDetail)}>
+                    <Button className="btn reden-parametric-button" disabled={redenBusy === "download:parametric"} onClick={() => handleRedenDownloadParametric(redenDetail)}>
                       {redenBusy === "download:parametric" ? "生成下载中..." : "生成下载并入库"}
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>
             ) : (
               <div className="subwindow-status-text reden-empty-detail">请选择左侧搜索结果查看详情。</div>
             )}
-          </div>
+          </ScrollArea>
         </div>
 
         {redenStatus && (
@@ -329,11 +330,9 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
  */
 export function RedenLibraryDialog({ onClose }: { onClose: () => void }) {
   return (
-    <div className="dialog-overlay" onClick={onClose}>
-      <div className="dialog-content subwindow-frame subwindow-frame-wide" onClick={(event) => event.stopPropagation()}>
-        <RedenLibraryPanel onClose={onClose} />
-      </div>
-    </div>
+    <Dialog title="下载投影" width="lg" className="library-window-dialog" onClose={onClose}>
+      <RedenLibraryPanel />
+    </Dialog>
   );
 }
 
@@ -341,9 +340,9 @@ export function RedenLibraryDialog({ onClose }: { onClose: () => void }) {
  * Renders the standalone desktop window used for the online projection library.
  */
 export function RedenLibraryWindow() {
-  const [themeId, setThemeId] = useState(currentThemeId());
+  const [themeId, setThemeId] = useState(currentThemeId);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     applyThemeStylesheet(themeId);
   }, [themeId]);
 
