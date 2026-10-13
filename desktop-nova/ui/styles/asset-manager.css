@@ -176,12 +176,12 @@
 
 /* ── configuration form ───────────────────────────────────────────────────── */
 
-/* Two form groups per row (2×2 for the four primary fields). */
+/* Line.2 来源 spans the row; Line.3 子选项1 + 子选项2 sit side by side (2×2). */
 .asset-manager-config {
-    display: grid;
+    display: flex;
     flex: 0 0 auto;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px 16px;
+    flex-direction: column;
+    gap: 8px;
 }
 
 .asset-manager-form-row {
@@ -189,6 +189,16 @@
     min-width: 0;
     align-items: center;
     gap: 12px;
+}
+
+.asset-manager-form-row-suboptions {
+    align-items: center;
+}
+
+/* The two sub-option selects share the available width evenly. */
+.asset-manager-form-row-suboptions .asset-manager-inline-controls > .asset-manager-select {
+    flex: 1 1 0;
+    min-width: 0;
 }
 
 .asset-manager-form-row-top {
@@ -313,8 +323,9 @@
     gap: 8px;
 }
 
-@media (max-width: 720px) {
-    .asset-manager-config {
-        grid-template-columns: minmax(0, 1fr);
+/* Narrow windows: stack the two sub-option selects. */
+@media (max-width: 640px) {
+    .asset-manager-form-row-suboptions .asset-manager-inline-controls > .asset-manager-select {
+        flex: 1 1 100%;
     }
 }

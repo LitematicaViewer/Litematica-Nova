@@ -4,7 +4,6 @@ import { Boxes, Database, Languages, ListTree, Package } from "lucide-react";
 import {
   activateGameResource,
   checkGameResourceHealth,
-  cleanupLocalTempFiles,
   deleteGameResource,
   downloadRemoteMinecraftLanguage,
   downloadVaultBlockIconsFromVault,
@@ -24,8 +23,6 @@ import {
   openDialog,
   openWorkspacePath,
   registerExternalIconDirectory,
-  resolveBlockIconVariant,
-  supportsBlockIconLayering,
   type BlockIconSlot,
   type GameResourceEntry,
   type GameResourceHealthRow,
@@ -34,16 +31,23 @@ import {
 } from "../../../src/business/facade";
 import { Button } from "../../components/ui/button";
 
+/**
+ * Game resources module — layout and wording follow `docs/design.md` §2.11.2.
+ *
+ * Per category (Line.1..Line.5):
+ *   Line.1  title + subtitle
+ *   Line.2  source dropdown (default 内建)
+ *   Line.3  sub-option 1 / sub-option 2 (placeholders unless the source needs them)
+ *   Line.4  primary action: 重新解包 (内建) / 导入... (本地) / 下载 (远端)
+ *   Line.5  content table
+ * Common footer: status text on the left; 刷新 / 健康检查 / 打开根目录... on the right.
+ */
+
 type AssetRoute = GameResourceKind;
 type BlockIconResourceSlot = BlockIconSlot;
-type AssetSource =
-  | "builtin"
-  | "local_directory"
-  | "vault"
-  | "wiki"
-  | "wiki_zh"
-  | "local_json"
-  | "github";
+
+/** Source values from the spec: builtin / local / vault / wiki / github. */
+type AssetSource = "builtin" | "local_directory" | "local_json" | "vault" | "wiki" | "wiki_zh" | "github";
 
 interface AssetNavItem {
   key: AssetRoute;
@@ -59,32 +63,16 @@ const ASSET_NAV_ITEMS: AssetNavItem[] = [
   { key: "enum_catalog", label: "枚举全集", icon: ListTree },
 ];
 
-const ROUTE_INTRO: Record<AssetRoute, string> = {
-  block_icon: "管理方块图标来源，材料列表与分层画布可使用不同的图标包。",
-  item_icon: "管理物品图标来源，用于创造模式物品栏与物品形态方块。",
-  language: "管理语言包来源，切换后界面与方块名称会立即使用新的语言文件。",
-  game_data: "管理 BlockState 数据库与其属性翻译，决定方块状态提示可用的版本。",
-  enum_catalog: "管理枚举全集（方块／物品／魔咒／实体），可跟随 Minecraft 版本更新。",
+/** Line.1 subtitle per category. */
+const ROUTE_SUBTITLE: Record<AssetRoute, string> = {
+  block_icon: "方块图标用于材料列表与分层画布，两个用途可分别指定来源。",
+  item_icon: "物品图标用于创造模式物品栏与物品形态方块。",
+  language: "语言包决定界面文字与方块名称的显示。",
+  game_data: "游戏数据为 BlockState 数据库及其属性翻译。",
+  enum_catalog: "枚举全集提供方块／物品／魔咒／实体的完整数据值列表。",
 };
 
-/** Sources that can be fetched automatically (`获取` button). */
-const FETCHABLE: Record<AssetRoute, AssetSource[]> = {
-  block_icon: ["builtin", "vault", "wiki", "wiki_zh"],
-  item_icon: ["builtin", "vault"],
-  language: ["github"],
-  game_data: [],
-  enum_catalog: ["wiki"],
-};
-
-/** Sources that import from a local file/directory (`导入` button). */
-const IMPORTABLE: Record<AssetRoute, AssetSource[]> = {
-  block_icon: ["local_directory"],
-  item_icon: ["local_directory"],
-  language: ["local_json"],
-  game_data: ["local_json"],
-  enum_catalog: [],
-};
-
+/** Line.2 options, exactly as listed in the spec. */
 const SOURCE_OPTIONS_BY_ROUTE: Record<AssetRoute, { value: AssetSource; label: string }[]> = {
   block_icon: [
     { value: "builtin", label: "内建" },
@@ -122,29 +110,49 @@ const DEFAULT_SOURCE_BY_ROUTE: Record<AssetRoute, AssetSource> = {
   enum_catalog: "builtin",
 };
 
-function sourceLabel(route: AssetRoute, source: AssetSource): string {
-  return SOURCE_OPTIONS_BY_ROUTE[route].find((option) => option.value === source)?.label || source;
+/** Source column values shown in the table, per spec. */
+const SOURCE_TAG: Record<string, string> = {
+  builtin: "builtin",
+  imported: "local",
+  external: "local",
+  vault: "vault",
+  wiki: "wiki",
+  wiki_zh: "wiki",
+  github: "github",
+};
+
+/** Spec: builtin/local version is 未知 until the enumerator supplies it. */
+function versionOf(entry: GameResourceEntry): string {
+  if (entry.source === "builtin" || entry.source === "imported" || entry.source === "external") {
+    return entry.version || "未知";
+  }
+  return entry.version || "未知";
 }
 
-function sourceTag(entry: GameResourceEntry): string {
-  switch (entry.source) {
-    case "builtin":
-      return "内建";
-    case "imported":
-      return "导入";
-    case "external":
-      return "本地目录";
-    case "github":
-      return "Github";
-    case "vault":
-      return "CCVault";
-    case "wiki":
-      return "Minecraft Wiki";
-    case "wiki_zh":
-      return "中文维基";
-    default:
-      return entry.source;
+/** Spec Line.5 name column per source. */
+function displayName(route: AssetRoute, entry: GameResourceEntry): string {
+  if (entry.source === "builtin") {
+    const label = entry.label.replace(/^（内建）/, "");
+    // 语言 category: show the language code after the builtin marker.
+    if (route === "language") return `（内建）${entry.language || label}`;
+    return `（内建）${label}`;
   }
+  if (entry.source === "external") {
+    // Local directory: show `目录名称/` (trailing separator per spec).
+    const dir = entry.root_path || entry.label;
+    const normalized = dir.replace(/\\/g, "/").replace(/\/+$/, "");
+    const base = normalized.split("/").filter(Boolean).pop() || normalized;
+    return `${base}/`;
+  }
+  if (entry.source === "imported") {
+    // Local JSON: show the file name including its extension.
+    const file = entry.file_relpath || entry.label;
+    return file.split(/[\\/]/).filter(Boolean).pop() || file;
+  }
+  if (entry.source === "vault") return "CCVault";
+  if (entry.source === "wiki" || entry.source === "wiki_zh") return "Minecraft Wiki";
+  if (entry.source === "github") return entry.language || entry.label;
+  return entry.label;
 }
 
 function formatDate(value?: string): string {
@@ -156,38 +164,14 @@ function formatDate(value?: string): string {
   }
 }
 
-function activationLabel(route: AssetRoute, entry: GameResourceEntry): string {
-  if (route === "block_icon") {
-    const slots: string[] = [];
-    if (entry.active_material_list) slots.push("材料列表");
-    if (entry.active_layering) slots.push("分层");
-    return slots.length ? slots.join(" / ") : "--";
+function isActiveFor(entry: GameResourceEntry, slot: BlockIconResourceSlot): boolean {
+  if (entry.kind === "block_icon") {
+    return slot === "layering" ? !!entry.active_layering : !!entry.active_material_list;
   }
-  if (route === "item_icon") return entry.active_layering ? "分层" : "--";
-  return entry.active ? "已激活" : "--";
+  if (entry.kind === "item_icon") return !!entry.active_layering;
+  return !!entry.active;
 }
 
-function usageLabel(entry: GameResourceEntry): string {
-  const variant = entry.block_icon_variant || "2d";
-  const parts = [variant === "3d" ? "3D" : "2D"];
-  if (supportsBlockIconLayering(entry)) parts.push("可用于分层");
-  return parts.join(" · ");
-}
-
-function versionOf(route: AssetRoute, entry: GameResourceEntry): string {
-  if (route === "language") return entry.language || entry.version || "--";
-  if (route === "enum_catalog") return entry.source === "builtin" ? "内建" : formatDate(entry.installed_at);
-  return entry.version || "--";
-}
-
-/**
- * Game-resource manager window.
- *
- * Layout follows the pre-merge design: fixed category sidebar, then a content
- * column of heading → configuration form → actions → resource list → footer.
- * Every picker is a native `<select>` styled like a text input, so keyboard
- * navigation works without a custom popup.
- */
 export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
   const [route, setRoute] = useState<AssetRoute>("block_icon");
   const [blockIconSlot, setBlockIconSlot] = useState<BlockIconResourceSlot>("material_list");
@@ -195,7 +179,6 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
   const [snapshot, setSnapshot] = useState<GameResourceSnapshot | null>(null);
   const [health, setHealth] = useState<GameResourceHealthRow[]>([]);
   const [statusText, setStatusText] = useState("");
-  const [log, setLog] = useState("");
   const [busy, setBusy] = useState(false);
   const [languageBranches, setLanguageBranches] = useState<string[]>([]);
   const [remoteLanguages, setRemoteLanguages] = useState<string[]>([]);
@@ -209,7 +192,7 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
     try {
       setSnapshot(await listGameResourceRegistry());
     } catch (error: any) {
-      setLog(String(error?.message || error));
+      setStatusText(String(error?.message || error));
     }
   }, []);
 
@@ -218,26 +201,6 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
   }, [refreshGameResources]);
 
   const entries = snapshot ? snapshot.entries[route] || [] : [];
-
-  const activeEntryId = useMemo(() => {
-    if (!snapshot) return "";
-    switch (route) {
-      case "block_icon":
-        return blockIconSlot === "layering"
-          ? snapshot.active_layering_block_icons.id
-          : snapshot.active_material_list_icons.id;
-      case "item_icon":
-        return snapshot.active_layering_item_icons.id;
-      case "language":
-        return snapshot.active_language.id;
-      case "game_data":
-        return snapshot.active_game_data.id;
-      case "enum_catalog":
-        return snapshot.active_enum_catalog.id;
-      default:
-        return "";
-    }
-  }, [blockIconSlot, route, snapshot]);
 
   /** Drops the runtime caches fed by the activated resource kind. */
   const invalidateFor = useCallback(async (kind: AssetRoute) => {
@@ -254,13 +217,10 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
     async (label: string, action: () => Promise<string>) => {
       setBusy(true);
       setStatusText(`${label}…`);
-      setLog("");
       try {
         setStatusText(await action());
       } catch (error: any) {
-        const message = String(error?.message || error);
-        setStatusText(`${label}失败`);
-        setLog(message);
+        setStatusText(`${label}失败：${String(error?.message || error)}`);
       } finally {
         setBusy(false);
         await refreshGameResources();
@@ -269,32 +229,73 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
     [refreshGameResources],
   );
 
-  const handleFetch = () => {
+  // ── Line.4: primary action, label depends on the selected source ──────────
+  const primaryActionLabel = useMemo(() => {
+    if (selectedSource === "builtin") return "重新解包";
+    if (selectedSource === "local_directory" || selectedSource === "local_json") return "导入...";
+    return "下载";
+  }, [selectedSource]);
+
+  const handlePrimaryAction = () => {
     const source = selectedSource;
-    void run(`正在从 ${sourceLabel(route, source)} 获取`, async () => {
-      if (route === "block_icon" && source === "builtin") {
+    const label = primaryActionLabel;
+    void run(label === "导入..." ? "正在导入" : label === "下载" ? "正在下载" : "正在解包", async () => {
+      // 内建 -> repack
+      if (source === "builtin") {
+        if (route === "item_icon") {
+          const result = await ensureBuiltinItemIconsExtractedNative(true);
+          return `已重新解包内建物品图标（${result.extracted} 个文件）`;
+        }
         const result = await ensureBuiltinBlockIconsExtractedNative(true);
-        return `内建方块图标已解包（${result.extracted} 个文件）`;
+        return `已重新解包内建方块图标（${result.extracted} 个文件）`;
       }
-      if (route === "item_icon" && source === "builtin") {
-        const result = await ensureBuiltinItemIconsExtractedNative(true);
-        return `内建物品图标已解包（${result.extracted} 个文件）`;
+
+      // 本地 -> import
+      if (source === "local_directory") {
+        const picked = await openDialog({ directory: true });
+        const dir = typeof picked === "string" ? picked : null;
+        if (!dir) return "已取消导入";
+        const slot: BlockIconResourceSlot = route === "block_icon" ? blockIconSlot : "layering";
+        await registerExternalIconDirectory(route as "block_icon" | "item_icon", dir, slot);
+        invalidateBlockIconCache();
+        return `已导入目录 ${dir}`;
       }
+      if (source === "local_json") {
+        if (route === "language") {
+          const picked = await openDialog({ filters: [{ name: "Language JSON", extensions: ["json"] }] });
+          const path = typeof picked === "string" ? picked : null;
+          if (!path) return "已取消导入";
+          await importLanguageResource(path);
+          invalidateI18nCache();
+          return `已导入语言文件 ${path}`;
+        }
+        if (route === "game_data") {
+          const picked = await openDialog({ filters: [{ name: "BlockState JSON", extensions: ["json"] }] });
+          const path = typeof picked === "string" ? picked : null;
+          if (!path) return "已取消导入";
+          await importGameDataResource(path);
+          invalidateBlockstateDbCache();
+          return `已导入游戏数据 ${path}`;
+        }
+        throw new Error("该分类不支持本地 JSON 导入");
+      }
+
+      // 远端 -> download
       if (route === "block_icon" && source === "vault") {
         const result = await downloadVaultBlockIconsFromVault();
-        return `CCVault 方块图标 ${result.downloaded}/${result.total}`;
+        return `已下载 CCVault 方块图标 ${result.downloaded}/${result.total}`;
       }
       if (route === "item_icon" && source === "vault") {
         const result = await downloadVaultItemIconsFromVault();
-        return `CCVault 物品图标 ${result.downloaded}/${result.total}`;
+        return `已下载 CCVault 物品图标 ${result.downloaded}/${result.total}`;
       }
       if (route === "block_icon" && (source === "wiki" || source === "wiki_zh")) {
         const result = await downloadWikiBlockIconsFromMinecraftWiki(blockIconSlot, source);
-        return `Wiki 方块图标 ${result.downloaded}/${result.total}`;
+        return `已下载 Wiki 方块图标 ${result.downloaded}/${result.total}`;
       }
       if (route === "enum_catalog" && source === "wiki") {
         const result = await downloadWikiEnumCatalogsFromMinecraftWiki();
-        return `枚举全集：方块 ${result.blocks}、物品 ${result.items}、魔咒 ${result.enchantments}、实体 ${result.entities}`;
+        return `已下载枚举全集：方块 ${result.blocks}、物品 ${result.items}、魔咒 ${result.enchantments}、实体 ${result.entities}`;
       }
       if (route === "language" && source === "github") {
         if (!selectedLanguageBranch || !selectedRemoteLanguage) {
@@ -304,86 +305,50 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
         invalidateI18nCache();
         return `已下载语言 ${selectedLanguageBranch}/${selectedRemoteLanguage}`;
       }
-      throw new Error(`来源「${sourceLabel(route, source)}」不支持自动获取`);
-    });
-  };
-
-  const handleImport = () => {
-    const source = selectedSource;
-    void run("正在导入", async () => {
-      if (route === "language" && source === "local_json") {
-        const picked = await openDialog({
-          filters: [{ name: "Language JSON", extensions: ["json"] }],
-        });
-        const path = typeof picked === "string" ? picked : null;
-        if (!path) return "已取消导入";
-        await importLanguageResource(path);
-        invalidateI18nCache();
-        return `已导入语言包 ${path}`;
-      }
-      if (route === "game_data" && source === "local_json") {
-        const picked = await openDialog({
-          filters: [{ name: "BlockState JSON", extensions: ["json"] }],
-        });
-        const dbPath = typeof picked === "string" ? picked : null;
-        if (!dbPath) return "已取消导入";
-        await importGameDataResource(dbPath);
-        invalidateBlockstateDbCache();
-        return `已导入游戏数据 ${dbPath}`;
-      }
-      if ((route === "block_icon" || route === "item_icon") && source === "local_directory") {
-        const picked = await openDialog({ directory: true });
-        const dir = typeof picked === "string" ? picked : null;
-        if (!dir) return "已取消导入";
-        const slot: BlockIconResourceSlot = route === "block_icon" ? blockIconSlot : "layering";
-        await registerExternalIconDirectory(route, dir, slot);
-        invalidateBlockIconCache();
-        return `已登记外部图标目录 ${dir}`;
-      }
-      throw new Error(`来源「${sourceLabel(route, source)}」不支持本地导入`);
+      throw new Error(`来源「${source}」不支持该分类`);
     });
   };
 
   const handleResetRemoteCatalog = () => {
-    void run("正在刷新远端语言列表", async () => {
+    void run("正在刷新远端列表", async () => {
       const branches = await listRemoteMinecraftLanguageBranches();
       setLanguageBranches(branches);
       setSelectedLanguageBranch("");
       setRemoteLanguages([]);
       setSelectedRemoteLanguage("");
-      return `远端分支 ${branches.length} 个`;
+      return `已获取远端版本 ${branches.length} 个`;
     });
   };
 
   const handleBranchChange = (branch: string) => {
     setSelectedLanguageBranch(branch);
     setSelectedRemoteLanguage("");
-    void run(`正在获取分支 ${branch} 的语言`, async () => {
+    void run(`正在获取版本 ${branch} 的语言`, async () => {
       const languages = await listRemoteMinecraftLanguages(branch);
       setRemoteLanguages(languages);
-      return `分支 ${branch} 有 ${languages.length} 种语言`;
+      return `版本 ${branch} 有 ${languages.length} 种语言`;
     });
   };
 
-  const handleActivate = (entry: GameResourceEntry) => {
-    void run(`正在激活「${entry.label}」`, async () => {
-      const slot = entry.kind === "block_icon" ? blockIconSlot : undefined;
+  // ── Line.5: 操作 buttons ──────────────────────────────────────────────────
+  const handleApply = (entry: GameResourceEntry, slot?: BlockIconResourceSlot) => {
+    void run(`正在应用「${displayName(route, entry)}」`, async () => {
       await activateGameResource(entry.kind, entry.id, slot);
       await invalidateFor(entry.kind);
-      return `已激活「${entry.label}」`;
+      return `已应用「${displayName(route, entry)}」`;
     });
   };
 
   const handleDelete = (entry: GameResourceEntry) => {
-    void run(`正在删除登记「${entry.label}」`, async () => {
+    void run("正在删除登记", async () => {
       await deleteGameResource(entry.kind, entry.id);
       await invalidateFor(entry.kind);
-      return `已删除登记「${entry.label}」`;
+      return `已删除登记「${displayName(route, entry)}」`;
     });
   };
 
   const handleHealth = () => {
-    void run("正在健康检查", async () => {
+    void run("正在进行健康检查", async () => {
       const rows = await checkGameResourceHealth();
       setHealth(rows);
       const bad = rows.filter((row) => !row.ok).length;
@@ -399,45 +364,14 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
     });
   };
 
-  const canFetch = FETCHABLE[route].includes(selectedSource);
-  const canImport = IMPORTABLE[route].includes(selectedSource);
-  const fetchDisabled =
-    busy ||
-    !canFetch ||
-    (route === "language" &&
-      selectedSource === "github" &&
-      (!selectedLanguageBranch || !selectedRemoteLanguage));
-
-  /** Tab-specific selects, rendered in the `子选项` row. */
+  // ── Line.3: sub-option dropdowns ──────────────────────────────────────────
   const renderSubOptionControls = () => {
-    if (route === "block_icon") {
-      return (
-        <>
-          <select
-            className="input asset-manager-select"
-            aria-label="方块图标激活槽位"
-            value={blockIconSlot}
-            onChange={(event) => setBlockIconSlot(event.target.value as BlockIconResourceSlot)}
-          >
-            <option value="material_list">3D 槽（材料列表）</option>
-            <option value="layering">2D 槽（分层）</option>
-          </select>
-          <select className="input asset-manager-select" aria-label="方块图标变体" disabled value="">
-            <option value="">
-              {blockIconSlot === "layering"
-                ? "3D 图标不可用于分层，切换槽位时会自动限制"
-                : "可使用 2D / 3D 图标"}
-            </option>
-          </select>
-        </>
-      );
-    }
     if (route === "language" && selectedSource === "github") {
       return (
         <>
           <select
             className="input asset-manager-select"
-            aria-label="远端版本分支"
+            aria-label="子选项1：版本"
             value={selectedLanguageBranch}
             disabled={busy || languageBranches.length === 0}
             onChange={(event) => handleBranchChange(event.target.value)}
@@ -451,7 +385,7 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
           </select>
           <select
             className="input asset-manager-select"
-            aria-label="远端语言"
+            aria-label="子选项2：语言"
             value={selectedRemoteLanguage}
             disabled={busy || remoteLanguages.length === 0}
             onChange={(event) => setSelectedRemoteLanguage(event.target.value)}
@@ -466,60 +400,80 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
         </>
       );
     }
-    const hints: Record<AssetRoute, string> = {
-      block_icon: "",
-      item_icon: "物品图标使用 16px 原生尺寸",
-      language: selectedSource === "local_json" ? "选择 .json 语言文件" : "内建语言包始终作为回退",
-      game_data:
-        selectedSource === "local_json"
-          ? "选择 BlockState 数据库 .json（属性翻译同名 .zh_cn.json 会自动匹配）"
-          : "内建为当前随包版本",
-      enum_catalog: selectedSource === "wiki" ? "从 Minecraft Wiki 抓取四个目录" : "内建枚举全集",
-    };
+    // Spec: sub-options are placeholders for every other category.
     return (
       <>
-        <select className="input asset-manager-select" aria-label="子选项" disabled value="">
-          <option value="">{hints[route] || "无额外子选项"}</option>
+        <select className="input asset-manager-select" aria-label="子选项1" disabled value="">
+          <option value="">子选项1</option>
+        </select>
+        <select className="input asset-manager-select" aria-label="子选项2" disabled value="">
+          <option value="">子选项2</option>
         </select>
       </>
     );
   };
 
-  const tableColumns = [
-    { key: "name" as const, label: "名称" },
-    { key: "source" as const, label: "来源" },
-    { key: "version" as const, label: "版本" },
-    ...(route === "block_icon" ? [{ key: "usage" as const, label: "用于" }] : []),
-    { key: "active" as const, label: "激活" },
-    { key: "installed" as const, label: "日期" },
-    { key: "actions" as const, label: "操作" },
-  ];
+  // ── Line.5: table columns per spec ────────────────────────────────────────
+  const tableColumns = useMemo(() => {
+    const columns: { key: string; label: string }[] = [{ key: "name", label: "名称" }];
+    columns.push({ key: "source", label: "来源" });
+    if (route === "language") columns.push({ key: "language", label: "语言" });
+    columns.push({ key: "version", label: "版本" });
+    if (route === "enum_catalog") columns.push({ key: "installed", label: "日期" });
+    if (route === "block_icon") columns.push({ key: "usage", label: "用于" });
+    if (route !== "block_icon") columns.push({ key: "active", label: "状态" });
+    columns.push({ key: "actions", label: "操作" });
+    return columns;
+  }, [route]);
 
   const renderCell = (entry: GameResourceEntry, key: string) => {
     switch (key) {
       case "name":
-        return entry.label;
+        return displayName(route, entry);
       case "source":
-        return sourceTag(entry);
+        return SOURCE_TAG[entry.source] || entry.source;
+      case "language":
+        return entry.language || "--";
       case "version":
-        return versionOf(route, entry);
-      case "usage":
-        return usageLabel(entry);
-      case "active":
-        return activationLabel(route, entry);
+        return versionOf(entry);
       case "installed":
-        return formatDate(entry.installed_at);
+        return entry.source === "builtin" ? "2025/4/22" : formatDate(entry.installed_at);
+      case "usage": {
+        // Spec: 材料 / 分层 / 材料/分层, from the slots this entry currently serves.
+        const slots: string[] = [];
+        if (entry.active_material_list) slots.push("材料");
+        if (entry.active_layering) slots.push("分层");
+        return slots.length ? slots.join("/") : "--";
+      }
+      case "active":
+        return isActiveFor(entry, blockIconSlot) ? "已激活" : "--";
       case "actions":
         return (
           <div className="game-resource-row-actions">
-            <button
-              className="btn"
-              type="button"
-              disabled={busy || entry.id === activeEntryId}
-              onClick={() => handleActivate(entry)}
-            >
-              {entry.id === activeEntryId ? "当前" : "激活"}
-            </button>
+            {route === "block_icon" ? (
+              <>
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => handleApply(entry, "material_list")}
+                >
+                  用于材料
+                </button>
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => handleApply(entry, "layering")}
+                >
+                  用于分层
+                </button>
+              </>
+            ) : (
+              <button className="btn" type="button" disabled={busy} onClick={() => handleApply(entry)}>
+                应用
+              </button>
+            )}
             {entry.builtin ? null : (
               <button className="btn" type="button" disabled={busy} onClick={() => handleDelete(entry)}>
                 删除登记
@@ -542,8 +496,9 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
           </button>
         ) : null}
       </div>
+
       <div className="asset-manager-body">
-        <aside className="sidebar asset-manager-sidebar">
+        <aside className="asset-manager-sidebar">
           <nav className="asset-manager-nav" aria-label="游戏资源分类">
             {ASSET_NAV_ITEMS.map((item) => {
               const Icon = item.icon;
@@ -565,14 +520,16 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
         </aside>
 
         <section className="asset-manager-content">
+          {/* Line.1 标题与副标题 */}
           <div className="asset-manager-heading">
             <h3>{selectedNavItem.label}</h3>
-            <p className="muted">{ROUTE_INTRO[route]}</p>
+            <p className="muted">{ROUTE_SUBTITLE[route]}</p>
           </div>
 
           <div className="asset-manager-panel">
             <div className="asset-manager-config">
-              <div className="asset-manager-form-row">
+              {/* Line.2 来源 */}
+              <div className="asset-manager-form-row asset-manager-form-row-source">
                 <label className="asset-manager-form-label" htmlFor="asset-manager-source">
                   来源
                 </label>
@@ -595,27 +552,25 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
                 </select>
               </div>
 
-              <div className="asset-manager-form-row asset-manager-form-row-top">
+              {/* Line.3 子选项1 / 子选项2 */}
+              <div className="asset-manager-form-row asset-manager-form-row-suboptions">
                 <span className="asset-manager-form-label">子选项</span>
-                <div className="asset-manager-inline-controls">{renderSubOptionControls()}</div>
+                <div className="asset-manager-inline-controls">
+                  {renderSubOptionControls()}
+                  {route === "language" && selectedSource === "github" ? (
+                    <button className="btn" type="button" disabled={busy} onClick={handleResetRemoteCatalog}>
+                      刷新远端列表
+                    </button>
+                  ) : null}
+                </div>
               </div>
             </div>
 
-            {/* Actions sit directly below the form, above the list. */}
+            {/* Line.4 【获取】 */}
             <div className="asset-manager-actions">
-              <button className="btn" type="button" disabled={fetchDisabled} onClick={handleFetch}>
-                {route === "block_icon" && selectedSource === "builtin" ? "提取内建图标" : "获取"}
+              <button className="btn" type="button" disabled={busy} onClick={handlePrimaryAction}>
+                {primaryActionLabel}
               </button>
-              {canImport ? (
-                <button className="btn" type="button" disabled={busy} onClick={handleImport}>
-                  导入
-                </button>
-              ) : null}
-              {route === "language" && selectedSource === "github" ? (
-                <button className="btn" type="button" disabled={busy} onClick={handleResetRemoteCatalog}>
-                  刷新远端列表
-                </button>
-              ) : null}
             </div>
 
             {health.length > 0 ? (
@@ -628,8 +583,9 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
               </div>
             ) : null}
 
-            <div className="table-wrap asset-manager-table-wrap">
-              <table className="table">
+            {/* Line.5 内容表格 */}
+            <div className="asset-manager-table-wrap">
+              <table>
                 <thead>
                   <tr>
                     {tableColumns.map((column) => (
@@ -658,14 +614,9 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
                 </tbody>
               </table>
             </div>
-
-            <div className="game-resource-note">
-              内建资源始终作为离线回退；导入目录会登记外部路径，导入 JSON 与远端下载会复制到用户配置目录下的
-              `minecraft-assets` 或 `enumerator/base`。
-            </div>
-            {log ? <pre className="subwindow-error asset-manager-log">{log}</pre> : null}
           </div>
 
+          {/* 通用页脚 */}
           <footer className="asset-manager-footer">
             <span className="subwindow-status-text asset-manager-footer-status">{statusText}</span>
             <div className="asset-manager-footer-actions">
@@ -678,14 +629,6 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
               <button className="btn" type="button" onClick={handleOpenRoot}>
                 打开根目录...
               </button>
-              <button className="btn" type="button" onClick={() => void cleanupLocalTempFiles()}>
-                清理本地临时文件
-              </button>
-              {onClose ? (
-                <button className="btn" type="button" onClick={onClose}>
-                  关闭窗口
-                </button>
-              ) : null}
             </div>
           </footer>
         </section>
