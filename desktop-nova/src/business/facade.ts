@@ -15,6 +15,12 @@ export * from "../services/libraryStore";
 export * from "../services/redenLibrary";
 export * from "../services/renderMode";
 export * from "../services/renderService";
+// Read-only core results cached in the Rust process (shared across windows).
+export * from "../services/coreReadCache";
+export * from "../services/renderCacheStore";
+// NOTE: `services/layerService.ts` is restored for parity with the pre-merge tree,
+// but its slice/palette surface is superseded by `services/flakeService.ts`
+// (same five type names). Only the live implementation is re-exported here.
 export * from "../platform/applicationRender";
 export * from "../services/statsService";
 export * from "../services/userConfig";

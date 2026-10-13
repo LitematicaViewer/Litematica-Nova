@@ -1,5 +1,10 @@
 import { invoke } from "../platform/tauri";
 
+// Backend execution channels: the process-level helpers are defined in
+// platform/backendProcess.ts and re-exported here so services keep importing
+// from a single backend seam.
+export * from "../platform/backendProcess";
+
 export {
   chooseUserConfigDir,
   cleanupLocalTempFiles,

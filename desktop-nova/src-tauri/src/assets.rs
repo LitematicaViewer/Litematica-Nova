@@ -15,6 +15,7 @@
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
@@ -239,23 +240,327 @@ pub(crate) async fn execute_backend(
 }
 
 fn run_backend(binary_name: &str, args: &[String]) -> Result<String, String> {
+    let trace = run_backend_trace(binary_name, args)?;
+    if trace.backend_exit_code == Some(0) {
+        return Ok(trace.backend_stdout);
+    }
+    Err(format!(
+        "Exit code: {:?}\nStdout: {}\nStderr: {}",
+        trace.backend_exit_code, trace.backend_stdout, trace.backend_stderr
+    ))
+}
+
+/// Full trace of one backend invocation, including the resolved executable identity.
+#[derive(Serialize)]
+pub(crate) struct BackendTrace {
+    pub actual_core_exe_path: String,
+    pub actual_core_exe_exists: bool,
+    pub actual_core_exe_modified_time: Option<String>,
+    pub actual_core_exe_file_size: Option<u64>,
+    pub actual_core_exe_sha256: Option<String>,
+    pub command_args: Vec<String>,
+    pub backend_stdout: String,
+    pub backend_stderr: String,
+    pub backend_exit_code: Option<i32>,
+}
+
+fn run_backend_trace(binary_name: &str, args: &[String]) -> Result<BackendTrace, String> {
     let exe_path = crate::required_backend_exe_path(binary_name)?;
     let current_dir = get_root();
+    let metadata = std::fs::metadata(&exe_path).ok();
     let output = std::process::Command::new(&exe_path)
         .args(args)
         .current_dir(&current_dir)
         .output()
         .map_err(|e| format!("执行 {} 失败: {e}", exe_path.display()))?;
 
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+    Ok(BackendTrace {
+        actual_core_exe_path: exe_path.display().to_string(),
+        actual_core_exe_exists: exe_path.is_file(),
+        actual_core_exe_modified_time: metadata
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .map(|t| format!("{t:?}")),
+        actual_core_exe_file_size: metadata.as_ref().map(|m| m.len()),
+        actual_core_exe_sha256: None,
+        command_args: args.to_vec(),
+        backend_stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        backend_stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        backend_exit_code: output.status.code(),
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn execute_backend_trace(
+    binary_name: String,
+    args: Vec<String>,
+) -> Result<BackendTrace, String> {
+    tauri::async_runtime::spawn_blocking(move || run_backend_trace(&binary_name, &args))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+// ---------------------------------------------------------------------------
+// Shared read-only backend cache.
+//
+// The backend runs as a fresh subprocess per call and a renderer-only Map cannot
+// be shared between windows (each WebView has its own JS heap), so read-only
+// results are cached in Rust and validated against the source file's mtime.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct CoreCacheEntry {
+    mtime_ms: u128,
+    output: String,
+}
+
+fn core_read_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, CoreCacheEntry>> {
+    static CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, CoreCacheEntry>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn file_mtime_ms(path: &Path) -> u128 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// Runs a read-only backend command, reusing the cached output while the source
+/// file's mtime is unchanged.
+#[tauri::command]
+pub(crate) async fn execute_backend_cached(
+    binary_name: String,
+    args: Vec<String>,
+    cache_key_path: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let input = PathBuf::from(&cache_key_path);
+        let full_path = if input.is_absolute() {
+            input
+        } else {
+            get_root().join(input)
+        };
+        let mtime_ms = file_mtime_ms(&full_path);
+        let cache_key = format!("{binary_name}\u{0}{}", args.join("\u{0}"));
+
+        if mtime_ms != 0 {
+            if let Ok(cache) = core_read_cache().lock() {
+                if let Some(entry) = cache.get(&cache_key) {
+                    if entry.mtime_ms == mtime_ms {
+                        return Ok(entry.output.clone());
+                    }
+                }
+            }
+        }
+
+        let output = run_backend(&binary_name, &args)?;
+        if mtime_ms != 0 {
+            if let Ok(mut cache) = core_read_cache().lock() {
+                cache.insert(
+                    cache_key,
+                    CoreCacheEntry {
+                        mtime_ms,
+                        output: output.clone(),
+                    },
+                );
+            }
+        }
+        Ok(output)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Drops cached read-only results. An empty path clears every entry.
+#[tauri::command]
+pub(crate) async fn invalidate_backend_cache(path: String) -> Result<(), String> {
+    if let Ok(mut cache) = core_read_cache().lock() {
+        if path.trim().is_empty() {
+            cache.clear();
+        } else {
+            let target = PathBuf::from(&path);
+            let full_path = if target.is_absolute() {
+                target
+            } else {
+                get_root().join(target)
+            };
+            let mtime_ms = file_mtime_ms(&full_path);
+            cache.retain(|_, entry| entry.mtime_ms != mtime_ms);
+        }
     }
-    Err(format!(
-        "Exit code: {:?}\nStdout: {}\nStderr: {}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    ))
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 3D cache build task.
+//
+// Runs the native viewer's cache build as a detached child so the UI can poll
+// progress instead of blocking. Progress/output land in a per-run temp directory.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub(crate) struct CacheBuildLaunch {
+    pub file_path: String,
+    pub progress_file: String,
+    pub cache_file: String,
+    pub stdout_file: String,
+    pub stderr_file: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CacheBuildSnapshot {
+    pub running: bool,
+    pub exit_code: Option<i32>,
+    pub progress_file: Option<String>,
+    pub cache_file: Option<String>,
+    pub stdout_file: Option<String>,
+    pub stderr_file: Option<String>,
+    pub progress_json: Option<String>,
+    pub stdout_tail: String,
+    pub stderr_tail: String,
+    pub cache_exists: bool,
+}
+
+struct CacheBuildTask {
+    child: std::process::Child,
+    launch: CacheBuildLaunch,
+}
+
+fn cache_build_task() -> &'static std::sync::Mutex<Option<CacheBuildTask>> {
+    static TASK: OnceLock<std::sync::Mutex<Option<CacheBuildTask>>> = OnceLock::new();
+    TASK.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn read_tail(path: &Path, max_chars: usize) -> String {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    if text.chars().count() <= max_chars {
+        return text;
+    }
+    text.chars().rev().take(max_chars).collect::<Vec<_>>().into_iter().rev().collect()
+}
+
+/// Starts a cache build and returns the file layout the UI polls.
+#[tauri::command]
+pub(crate) async fn start_cache_build_task(
+    file_path: String,
+    build_mode: String,
+) -> Result<CacheBuildLaunch, String> {
+    // A previous task must not leak its child process.
+    if let Ok(mut guard) = cache_build_task().lock() {
+        if let Some(mut existing) = guard.take() {
+            let _ = existing.child.kill();
+            let _ = existing.child.wait();
+        }
+    }
+
+    let _ = build_mode;
+    let exe_path = crate::required_backend_exe_path("litematica_native_viewer")?;
+    let run_dir = current_user_config_dir()?.join("render").join("cache-build");
+    std::fs::create_dir_all(&run_dir).map_err(|e| e.to_string())?;
+
+    let progress_file = run_dir.join("progress.json");
+    let cache_file = run_dir.join("cache.bin");
+    let stdout_file = run_dir.join("stdout.log");
+    let stderr_file = run_dir.join("stderr.log");
+    let _ = std::fs::remove_file(&progress_file);
+    let _ = std::fs::remove_file(&stderr_file);
+
+    let stdout = std::fs::File::create(&stdout_file).map_err(|e| e.to_string())?;
+    let stderr = std::fs::File::create(&stderr_file).map_err(|e| e.to_string())?;
+
+    let child = std::process::Command::new(&exe_path)
+        .args([
+            "build-cache",
+            "--input",
+            &file_path,
+            "--output",
+            &cache_file.display().to_string(),
+            "--progress",
+            &progress_file.display().to_string(),
+        ])
+        .current_dir(get_root())
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
+        .map_err(|e| format!("启动缓存构建失败: {e}"))?;
+
+    let launch = CacheBuildLaunch {
+        file_path,
+        progress_file: progress_file.display().to_string(),
+        cache_file: cache_file.display().to_string(),
+        stdout_file: stdout_file.display().to_string(),
+        stderr_file: stderr_file.display().to_string(),
+    };
+    if let Ok(mut guard) = cache_build_task().lock() {
+        *guard = Some(CacheBuildTask {
+            child,
+            launch: CacheBuildLaunch {
+                file_path: launch.file_path.clone(),
+                progress_file: launch.progress_file.clone(),
+                cache_file: launch.cache_file.clone(),
+                stdout_file: launch.stdout_file.clone(),
+                stderr_file: launch.stderr_file.clone(),
+            },
+        });
+    }
+    Ok(launch)
+}
+
+/// Stops the running cache build, if any.
+#[tauri::command]
+pub(crate) async fn kill_cache_build_task() -> Result<(), String> {
+    if let Ok(mut guard) = cache_build_task().lock() {
+        if let Some(mut task) = guard.take() {
+            let _ = task.child.kill();
+            let _ = task.child.wait();
+        }
+    }
+    Ok(())
+}
+
+/// Reports cache build progress, including the progress JSON when present.
+#[tauri::command]
+pub(crate) async fn poll_cache_build_task() -> Result<CacheBuildSnapshot, String> {
+    let Ok(mut guard) = cache_build_task().lock() else {
+        return Err("缓存构建状态不可用".to_string());
+    };
+    let Some(task) = guard.as_mut() else {
+        return Ok(CacheBuildSnapshot {
+            running: false,
+            exit_code: None,
+            progress_file: None,
+            cache_file: None,
+            stdout_file: None,
+            stderr_file: None,
+            progress_json: None,
+            stdout_tail: String::new(),
+            stderr_tail: String::new(),
+            cache_exists: false,
+        });
+    };
+
+    let exit_code = task.child.try_wait().map_err(|e| e.to_string())?.and_then(|s| s.code());
+    let progress_path = PathBuf::from(&task.launch.progress_file);
+    let cache_path = PathBuf::from(&task.launch.cache_file);
+
+    Ok(CacheBuildSnapshot {
+        running: exit_code.is_none(),
+        exit_code,
+        progress_file: Some(task.launch.progress_file.clone()),
+        cache_file: Some(task.launch.cache_file.clone()),
+        stdout_file: Some(task.launch.stdout_file.clone()),
+        stderr_file: Some(task.launch.stderr_file.clone()),
+        progress_json: std::fs::read_to_string(&progress_path).ok(),
+        stdout_tail: read_tail(Path::new(&task.launch.stdout_file), 2000),
+        stderr_tail: read_tail(Path::new(&task.launch.stderr_file), 2000),
+        cache_exists: cache_path.is_file(),
+    })
 }
 
 /// Opens the native picker for a `.litematic` file and returns the chosen path.
