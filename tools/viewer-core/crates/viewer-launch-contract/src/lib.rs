@@ -206,6 +206,13 @@ impl ViewerSessionCommand {
         )
     }
 
+    /// Capture the next actual fast-rendered frame into the session-owned PNG.
+    /// No source, GPU lifetime or presentation parameters change.
+    pub fn capture_frame(session_id: String, sequence: u64) -> Result<Self, String> {
+        Self::presentation_command(session_id, sequence, ViewerSessionCommandKind::CaptureFrame,
+            None, None, None, None, None, None)
+    }
+
     fn presentation_command(
         session_id: String,
         sequence: u64,
@@ -282,6 +289,7 @@ impl ViewerSessionCommand {
             }
             ViewerSessionCommandKind::ShowPopup
             | ViewerSessionCommandKind::Hide
+            | ViewerSessionCommandKind::CaptureFrame
             | ViewerSessionCommandKind::Release => self.require_no_payload_fields(),
             ViewerSessionCommandKind::Resize => {
                 if self.launch_contract.is_some() || self.host_hwnd.is_some() {
@@ -350,6 +358,7 @@ pub enum ViewerSessionCommandKind {
     Hide,
     Resize,
     Release,
+    CaptureFrame,
 }
 
 impl ViewerSessionCommandKind {
@@ -362,6 +371,7 @@ impl ViewerSessionCommandKind {
             Self::Hide => "hide",
             Self::Resize => "resize",
             Self::Release => "release",
+            Self::CaptureFrame => "capture_frame",
         }
     }
 }
@@ -509,6 +519,7 @@ impl ViewerSessionEvent {
 )]
 pub enum ViewerSessionState {
     Ready,
+    Captured,
     SceneReady {
         request_id: String,
     },
@@ -543,7 +554,7 @@ pub enum ViewerSessionState {
 impl ViewerSessionState {
     fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Ready | Self::PopupVisible | Self::Hidden | Self::Released => Ok(()),
+            Self::Ready | Self::Captured | Self::PopupVisible | Self::Hidden | Self::Released => Ok(()),
             Self::SceneReady { request_id } => validate_request_id(request_id),
             Self::Attached {
                 host_hwnd,

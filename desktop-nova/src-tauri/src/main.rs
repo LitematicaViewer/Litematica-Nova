@@ -837,15 +837,62 @@ const FULL_MODE_UNAVAILABLE: &str = "Beta 公共版未提供完整模式；请�
 
 // Retained legacy command names fail explicitly; no private renderer is linked.
 #[tauri::command]
-async fn render_preview_image(file_path: String, display_mode: String, cache_input: Option<String>) -> Result<ProductPreviewImage, String> {
-    let _ = (file_path, display_mode, cache_input);
-    Err(FULL_MODE_UNAVAILABLE.into())
+async fn render_preview_image(file_path: String, display_mode: String, cache_input: Option<String>, host: tauri::State<'_, QuickPreviewHost>) -> Result<ProductPreviewImage, String> {
+    let _ = cache_input;
+    if display_mode != "fast_experimental" { return Err(FULL_MODE_UNAVAILABLE.into()); }
+    let host = host.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
+        let expected = application::thumbnails::cache_path(&source)?;
+        let view = host.snapshot()?.filter(|view| view.source_path == source && view.state == "ready").ok_or("请先启动该投影的快速渲染")?;
+        let (source, frame) = host.capture_frame(&view.preview_id)?;
+        application::thumbnails::save(&source, &frame, &expected)
+    }).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-async fn generate_preview_image(file_path: String, display_mode: String) -> Result<ProductPreviewImage, String> {
-    let _ = (file_path, display_mode);
-    Err(FULL_MODE_UNAVAILABLE.into())
+async fn generate_preview_image(file_path: String, display_mode: String, window: tauri::WebviewWindow, host: tauri::State<'_, QuickPreviewHost>, operations: tauri::State<'_, ApplicationOperations>) -> Result<ProductPreviewImage, String> {
+    if display_mode != "fast_experimental" { return Err(FULL_MODE_UNAVAILABLE.into()); }
+    let host = host.inner().clone();
+    let operations = operations.inner().clone();
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
+    let parent = ::viewer_launch_contract::QuickPreviewHostWindow { hwnd: hwnd.to_string(), process_id: std::process::id() };
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
+        let cache = application::thumbnails::cache_path(&source)?;
+        if cache.is_file() { return application::thumbnails::load(&cache); }
+        // Existing embedded previews are genuine projection data, not fabricated images.
+        if let Some(preview) = operations.read_embedded_preview(InspectProjectInput { source_path: source.to_string_lossy().into() })? {
+            let bytes = base64::engine::general_purpose::STANDARD.decode(preview.data_url.split_once(',').ok_or("投影预览编码错误")?.1).map_err(|error| error.to_string())?;
+            let temporary = application::thumbnails::temporary_preview_path();
+            std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+            let output = application::thumbnails::save(&source, &temporary, &cache);
+            let _ = std::fs::remove_file(&temporary);
+            return output;
+        }
+        if let Some(view) = host.snapshot()?.filter(|view| view.source_path == source && view.state == "ready") {
+            let (source, frame) = host.capture_frame(&view.preview_id)?;
+            return application::thumbnails::save(&source, &frame, &cache);
+        }
+        // Reuse QuickPreviewHost for an independent hidden WS_CHILD session; an
+        // existing interactive Viewer and its camera/GPU lifetime stay untouched.
+        let temporary = host.thumbnail_session();
+        let view = temporary.start(StartQuickPreviewInput { source_path: source.clone() }, parent)?;
+        let output = (|| {
+            let started = std::time::Instant::now();
+            loop {
+                let current = temporary.snapshot()?.ok_or("缩略图预览会话结束")?;
+                if let Some(error) = current.error { return Err(error); }
+                if current.state == "ready" { break; }
+                if matches!(current.state, "failed" | "closed") || started.elapsed() > Duration::from_secs(120) { return Err("缩略图预览准备未完成".into()); }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let (source, frame) = temporary.capture_frame(&view.preview_id)?;
+            application::thumbnails::save(&source, &frame, &cache)
+        })();
+        let _ = temporary.close(&view.preview_id);
+        output
+    }).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -2210,7 +2257,6 @@ mod public_host_tests {
     async fn full_commands_are_explicitly_unavailable() {
         let err = application_render_start(serde_json::json!({"sourcePath":"test.litematic","buildMode":"prebuilt"})).await.unwrap_err();
         assert_eq!(err, FULL_MODE_UNAVAILABLE);
-        assert_eq!(generate_preview_image("test.litematic".into(), "full".into()).await.unwrap_err(), FULL_MODE_UNAVAILABLE);
     }
     #[test]
     fn public_snapshot_never_claims_private_operations() {

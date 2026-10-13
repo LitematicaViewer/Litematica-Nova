@@ -79,11 +79,15 @@ struct QuickSession {
     next_status: u64,
     next_event: u64,
     pending_intents: BTreeMap<u64, QuickPresentationIntent>,
+    capture_errors: BTreeMap<u64, String>,
     host_window: QuickPreviewHostWindow,
     launch_accepted: bool,
 }
 
 impl QuickPreviewHost {
+    pub(crate) fn thumbnail_session(&self) -> Self {
+        Self { session: Arc::new(Mutex::new(None)), ..self.clone() }
+    }
     pub(crate) fn new(supervisor: Arc<ProcessSupervisor>, viewer_exe: PathBuf, data_root: PathBuf) -> Self {
         Self { supervisor, viewer_exe, data_root, sequence: Arc::new(AtomicU64::new(1)), session: Arc::new(Mutex::new(None)) }
     }
@@ -136,7 +140,7 @@ impl QuickPreviewHost {
             presentation: QuickPresentationIntent::default(), presentation_revision: 0, visible: false, error: None };
         *slot = Some(QuickSession { view: view.clone(), child, contract, directory: session_directory, stdout, stderr,
             source_bytes: meta.len(), source_modified: meta.modified().ok(), next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(),
-            launch_accepted: false, host_window });
+            launch_accepted: false, capture_errors: BTreeMap::new(), host_window });
         Ok(view)
     }
 
@@ -175,6 +179,41 @@ impl QuickPreviewHost {
         let mut slot = self.session.lock().map_err(|_| "快速预览状态锁异常".to_owned())?;
         if let Some(session) = slot.as_mut().filter(|session| session.view.preview_id == id) { self.stop_session(session)?; }
         Ok(())
+    }
+
+    pub(crate) fn capture_frame(&self, id: &str) -> Result<(PathBuf, PathBuf), String> {
+        let (source, output, sequence) = {
+            let mut slot = self.session.lock().map_err(|error| error.to_string())?;
+            let session = slot.as_mut().filter(|session| session.view.preview_id == id).ok_or("预览会话已改变")?;
+            session.refresh(&self.supervisor)?;
+            if session.view.state != "ready" { return Err("请先等待快速预览准备完成".into()); }
+            let metadata = fs::metadata(&session.view.source_path).map_err(|error| error.to_string())?;
+            if metadata.len() != session.source_bytes || metadata.modified().ok() != session.source_modified { return Err("投影已修改，请重新加载预览".into()); }
+            let sequence = session.next_command;
+            publish_command(&session.directory, &ViewerSessionCommand::capture_frame(id.into(), sequence)?)?;
+            session.next_command += 1;
+            (session.view.source_path.clone(), session.directory.join(format!("capture-{sequence:020}.png")), sequence)
+        };
+        let started = std::time::Instant::now();
+        loop {
+            {
+                let mut slot = self.session.lock().map_err(|error| error.to_string())?;
+                let session = slot.as_mut().filter(|session| session.view.preview_id == id).ok_or("预览会话已改变，截图未保存")?;
+                session.refresh(&self.supervisor)?;
+                if let Some(error) = session.capture_errors.remove(&sequence) { return Err(error); }
+                if let Some(error) = &session.view.error { return Err(error.clone()); }
+                if matches!(session.view.state, "closed" | "failed") { return Err("预览已关闭，截图未保存".into()); }
+            }
+            if output.is_file() {
+                let slot = self.session.lock().map_err(|error| error.to_string())?;
+                let session = slot.as_ref().filter(|session| session.view.preview_id == id).ok_or("预览会话已改变")?;
+                let metadata = fs::metadata(&source).map_err(|error| error.to_string())?;
+                if metadata.len() != session.source_bytes || metadata.modified().ok() != session.source_modified { return Err("截图期间投影发生修改，未保存旧帧".into()); }
+                return Ok((source, output));
+            }
+            if started.elapsed() > Duration::from_secs(75) { return Err("真实帧读取尚未完成，请稍后重试".into()); }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     fn stop_session(&self, session: &mut QuickSession) -> Result<(), String> {
@@ -216,7 +255,9 @@ impl QuickSession {
                 if !matches!(&status.state, ViewerSessionState::Error { .. }) && status.sequence + 1 == self.next_command {
                     if let Some(intent) = self.pending_intents.get(&status.sequence) { self.view.presentation = intent.clone(); }
                 }
-                self.view.apply_status(&status.state, status.sequence + 1 == self.next_command);
+                if let ViewerSessionState::Error { command_kind: viewer_launch_contract::ViewerSessionCommandKind::CaptureFrame, message } = &status.state {
+                    self.capture_errors.insert(status.sequence, message.clone());
+                } else { self.view.apply_status(&status.state, status.sequence + 1 == self.next_command); }
                 self.pending_intents.remove(&self.next_status);
                 self.next_status += 1;
                 fs::remove_file(path).map_err(|error| error.to_string())?;

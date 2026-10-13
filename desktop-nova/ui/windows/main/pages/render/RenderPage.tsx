@@ -1,5 +1,8 @@
-import React from "react";
-import { Box, EyeOff, Play, X } from "lucide-react";
+import React, { useState } from "react";
+import { Box, EyeOff, Play, X, Image } from "lucide-react";
+import { loadLibrary, setRecordPreview, renderPreviewImage } from "../../../../../src/business/facade";
+import { emitEvent } from "../../../../../src/platform/events";
+import { projectionLibraryStateChangedEvent } from "../../../libraryEvents";
 import { Button } from "../../../../components/ui/button";
 import { useQuickPreview } from "../../useQuickPreview";
 import "./render.css";
@@ -7,6 +10,18 @@ import "./render.css";
 /** Beta exposes the historical fast preview only. The public binary contains only the existing fast renderer. */
 export function RenderPage({ currentFile }: { currentFile: string }) {
   const preview = useQuickPreview(currentFile || "", false);
+  const [capturing, setCapturing] = useState(false);
+  const [captureMessage, setCaptureMessage] = useState("");
+  const capture = async () => {
+    setCapturing(true); setCaptureMessage("");
+    try {
+      const image = await renderPreviewImage(currentFile, "fast_experimental");
+      await setRecordPreview(await loadLibrary(), currentFile, image.preview_path);
+      await emitEvent(projectionLibraryStateChangedEvent, {}).catch(() => undefined);
+      setCaptureMessage("已保存当前真实渲染帧，投影库与Explorer共用此缩略图。");
+    } catch (error) { setCaptureMessage(String(error)); }
+    finally { setCapturing(false); }
+  };
   const operation = preview.operation;
   const ready = operation?.state === "ready";
   const loading = operation?.state === "starting" && !operation.error;
@@ -29,8 +44,10 @@ export function RenderPage({ currentFile }: { currentFile: string }) {
       <Button variant="ghost" disabled={!operation?.presentation.visible || preview.pending} onClick={() => void preview.hide()}><EyeOff size={16} aria-hidden="true" />隐藏预览</Button>
       <Button variant="ghost" disabled={!operation || !["starting", "ready"].includes(operation.state) || preview.pending} onClick={() => void preview.close()}><X size={16} aria-hidden="true" />{loading ? "取消加载" : "关闭预览"}</Button>
       <div className="render-full-placeholder"><Button disabled>完整模式</Button><span>完整模式未包含在公开版</span></div>
+      <Button variant="ghost" disabled={!ready || capturing} onClick={() => void capture()}><Image size={16} aria-hidden="true" />{capturing ? "正在读取真实帧…" : "设为缩略图"}</Button>
     </div>
     {error && <pre className="render-error" role="alert">{error}</pre>}
+    {captureMessage && <div role="status">{captureMessage}</div>}
     <div className="render-preview-group">
       <div ref={preview.hostRef} className="render-preview-host" aria-label="快速 Viewer 页内视口">
         <div className="render-preview-placeholder"><Box size={40} aria-hidden="true" /><strong>{name}</strong><span>{status}</span></div>

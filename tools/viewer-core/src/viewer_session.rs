@@ -64,6 +64,10 @@ impl ViewerSessionWatcher {
         &self.session_id
     }
 
+    pub(crate) fn capture_path(&self, sequence: u64) -> PathBuf {
+        self.directory.join(format!("capture-{sequence:020}.png"))
+    }
+
     pub(crate) fn poll_next(&self) -> Result<Option<ViewerSessionCommand>> {
         let mut next = None::<ViewerSessionCommand>;
         for entry in fs::read_dir(&self.directory).with_context(|| {

@@ -4932,6 +4932,38 @@ fn read_shadow_depth_values(
     Some(values)
 }
 
+fn unpack_frame_pixels(mapped: &[u8], width: u32, height: u32, stride: u32, bgra: bool) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+    for row in mapped.chunks(stride as usize).take(height as usize) { pixels.extend_from_slice(&row[..width as usize * 4]); }
+    if bgra { for pixel in pixels.chunks_exact_mut(4) { pixel.swap(0, 2); } }
+    pixels
+}
+
+#[cfg(test)]
+mod frame_capture_tests {
+    use super::unpack_frame_pixels;
+    #[test]
+    fn actual_frame_readback_removes_padding_and_converts_bgra_without_flipping_rows() {
+        let mapped = [1,2,3,255,4,5,6,128,99,99,99,99,7,8,9,255,10,11,12,0,99,99,99,99];
+        assert_eq!(unpack_frame_pixels(&mapped, 2, 2, 12, true), [3,2,1,255,6,5,4,128,9,8,7,255,12,11,10,0]);
+    }
+}
+
+fn save_gpu_frame(device: &wgpu::Device, buffer: &wgpu::Buffer, path: &Path, width: u32, height: u32, stride: u32, format: wgpu::TextureFormat) -> Result<()> {
+    let slice = buffer.slice(..);
+    let (tx, rx) = mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| { let _ = tx.send(result); });
+    device.poll(wgpu::Maintain::Wait);
+    rx.recv().context("receive actual frame readback")?.context("map actual frame readback")?;
+    let view = slice.get_mapped_range();
+    let pixels = unpack_frame_pixels(&view, width, height, stride, matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb));
+    drop(view); buffer.unmap();
+    let temporary = path.with_extension("png.tmp");
+    image::save_buffer_with_format(&temporary, &pixels, width, height, image::ColorType::Rgba8, image::ImageFormat::Png)?;
+    std::fs::rename(&temporary, path)?;
+    Ok(())
+}
+
 struct ViewerState {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -5015,6 +5047,8 @@ struct ViewerState {
     last_camera_diag_frame: u64,
     shadow_debug: bool,
     shadow_debug_logged: bool,
+    capture_output: Option<PathBuf>,
+    capture_error: Option<String>,
 }
 
 impl ViewerState {
@@ -5109,7 +5143,7 @@ impl ViewerState {
             wgpu::PresentMode::Fifo
         };
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | (capabilities.usages & wgpu::TextureUsages::COPY_SRC),
             format: surface_format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -5451,6 +5485,8 @@ impl ViewerState {
             last_camera_diag_frame: 0,
             shadow_debug: args.shadow_debug,
             shadow_debug_logged: false,
+            capture_output: None,
+            capture_error: None,
         };
         state.install_bootstrap_meshes(bootstrap_meshes);
         println!(
@@ -8224,7 +8260,21 @@ impl ViewerState {
             overlay.draw(&mut label_pass);
         }
 
+        let capture = self.capture_output.take().map(|path| {
+            let stride = (self.config.width * 4 + 255) & !255;
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("nova_real_frame_readback"), size: stride as u64 * self.config.height as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(wgpu::ImageCopyTexture { texture: &output.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::ImageCopyBuffer { buffer: &buffer, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: Some(self.config.height) } },
+                wgpu::Extent3d { width: self.config.width, height: self.config.height, depth_or_array_layers: 1 });
+            (path, buffer, stride)
+        });
         self.queue.submit(Some(encoder.finish()));
+        if let Some((path, buffer, stride)) = capture {
+            self.capture_error = save_gpu_frame(&self.device, &buffer, &path, self.config.width, self.config.height, stride, self.config.format).err().map(|error| error.to_string());
+        }
         output.present();
         if let Some((buffer, byte_len)) = shadow_debug_readback {
             if let Some(depth_values) = read_shadow_depth_values(&self.device, &buffer, byte_len) {
@@ -9293,6 +9343,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
         native_child::verify(window.as_ref(), host)?;
     }
     let mut state = pollster::block_on(ViewerState::new(window.clone(), scene, &args))?;
+    let mut pending_capture: Option<(ViewerSessionCommand, PathBuf, Instant)> = None;
     #[cfg(target_os = "windows")]
     let legacy_window_hwnd = window_hwnd(window.as_ref())?;
     #[cfg(not(target_os = "windows"))]
@@ -9501,6 +9552,15 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         }
                     };
                     if let Some(command) = command {
+                        if command.kind == ViewerSessionCommandKind::CaptureFrame {
+                            if pending_capture.is_some() {
+                                let _ = reject_viewer_session_command(watcher, &command, &anyhow!("另一个真实帧读取尚未结束"), legacy_window_hwnd);
+                            } else {
+                                let path = watcher.capture_path(command.sequence);
+                                if let Err(error) = watcher.acknowledge(command.sequence) { *event_error.lock().expect("capture error mutex") = Some(error.to_string()); event_loop_window_target.exit(); return; }
+                                pending_capture = Some((command, path, Instant::now()));
+                            }
+                        } else {
                         #[cfg(target_os = "windows")]
                         let child_outcome = quick_host.as_ref().map(|host|
                             native_child::apply(window.as_ref(), host, &command, &mut presentation_mode));
@@ -9545,6 +9605,27 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             record_viewer_shutdown("session_release", 0, "Nova released the independent quick Viewer");
                             event_loop_window_target.exit();
                             return;
+                        }
+                        }
+                    }
+                    if let Some((command, path, started)) = pending_capture.as_ref() {
+                        let ready = state.frame_index > 0 && state.pending_build_queue.is_empty() && state.in_flight_build_keys.is_empty() && state.pending_upload_queue.is_empty();
+                        let outcome = (|| -> Result<bool> {
+                            if started.elapsed() > Duration::from_secs(60) { bail!("快速预览仍在构建，请稍后生成缩略图"); }
+                            if !state.config.usage.contains(wgpu::TextureUsages::COPY_SRC) { bail!("当前GPU表面不支持真实帧读取"); }
+                            if ready { state.capture_error = None; state.capture_output = Some(path.clone()); }
+                            state.render(window.as_ref(), viewer_started_at).context("read actual preview frame")?;
+                            if let Some(error) = state.capture_error.take() { bail!("{error}"); }
+                            Ok(ready)
+                        })();
+                        let status = match outcome {
+                            Ok(false) => None,
+                            Ok(true) => Some(ViewerSessionState::Captured),
+                            Err(error) => Some(ViewerSessionState::Error { command_kind: command.kind, message: error.to_string() }),
+                        };
+                        if let Some(status) = status {
+                            let _ = watcher.publish_status(command.sequence, status, std::process::id(), legacy_window_hwnd);
+                            pending_capture = None;
                         }
                     }
                     if presentation_mode == PersistentPresentationMode::Hidden {
