@@ -1,5 +1,9 @@
-﻿import React from 'react';
-import { openProjectionViewer, selectLitematicFile } from '../../../../../src/business/facade';
+import { Button } from "../../../../components/ui/button";
+import { ScrollArea } from "../../../../components/ui/scroll-area";
+import { FolderOpen, FileText, BarChart3, Box, Library, ArrowRight } from "lucide-react";
+import "./home.css";
+import React from 'react';
+import { selectLitematicFile } from '../../../../../src/business/facade';
 import { loadLibrary, addOrUpdateRecord } from '../../../../../src/business/facade';
 
 export function HomePage({ currentFile, setCurrentFile, setRoute }: any) {
@@ -8,7 +12,7 @@ export function HomePage({ currentFile, setCurrentFile, setRoute }: any) {
     if (res) {
       setCurrentFile(res);
       setRoute("properties");
-      
+
       const state = await loadLibrary();
       await addOrUpdateRecord(state, res);
     }
@@ -19,36 +23,43 @@ export function HomePage({ currentFile, setCurrentFile, setRoute }: any) {
   };
 
   const handleRender = () => {
-    if (currentFile) {
-      openProjectionViewer(currentFile);
-    } else {
-      setRoute("render");
-    }
+    setRoute("render");
   };
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-      <div style={{ textAlign: 'center', maxWidth: 600 }}>
-        <h1 style={{ fontSize: '2em', marginBottom: 16 }}>Litematica Blueprint Assistant</h1>
-        <p style={{ opacity: 0.8, marginBottom: 40, lineHeight: 1.6 }}>
-          第一阶段主链：打开 .litematic、做结构分析、构建单一 3D cache，<br />
-          再用同一份 cache 驱动嵌入式预览和弹窗 viewer。
-        </p>
+  const currentName = currentFile ? String(currentFile).split(/[\\/]/).pop() : "";
 
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18 }}>
-          <button className="btn mc-btn-large" onClick={handleOpenLitematic}>
-            打开 .litematic
-          </button>
-          <button className="btn mc-btn-large" onClick={handleStats}>
-            查看分析统计
-          </button>
-          <button className="btn mc-btn-large" onClick={handleRender}>
-            进入 3D 渲染页
-          </button>
-        </div>
+  return (
+    <ScrollArea className="home-scroll-area" aria-label="开始使用 Nova">
+      <div className="home-page">
+        <section className="home-introduction">
+          <h1>Litematica-Nova</h1>
+          <p className="home-lead">查看材料和结构，整理你的每一份投影。</p>
+          <div className="home-start-actions">
+            <Button variant="default" size="lg" onClick={handleOpenLitematic}><FolderOpen size={20} aria-hidden="true" />打开投影文件</Button>
+            <Button variant="ghost" onClick={() => setRoute("library")}><Library size={18} aria-hidden="true" />浏览投影库<ArrowRight size={16} aria-hidden="true" /></Button>
+          </div>
+          <p className="home-beta-note">Beta 0.1 开发中 · 三维预览仍为实验功能</p>
+        </section>
+
+        <section className="home-current" aria-labelledby="home-current-title">
+          <h2 id="home-current-title">{currentFile ? "继续当前投影" : "打开后，从这里继续"}</h2>
+          {currentFile ? <div className="home-current-file">
+            <FileText size={28} aria-hidden="true" />
+            <div><strong>{currentName}</strong><span title={currentFile}>{currentFile}</span></div>
+          </div> : <p className="home-empty">选择一个 .litematic 文件，即可查看属性、材料和结构。</p>}
+          <div className="home-workflows">
+            <Button variant="ghost" aria-label="查看投影属性" onClick={() => setRoute("properties")} disabled={!currentFile}>
+              <FileText size={22} aria-hidden="true" /><span><strong>投影属性</strong><small>名称、区域与快速预览</small></span><ArrowRight size={18} aria-hidden="true" />
+            </Button>
+            <Button variant="ghost" aria-label="查看材料与统计" onClick={handleStats} disabled={!currentFile}>
+              <BarChart3 size={22} aria-hidden="true" /><span><strong>材料与统计</strong><small>准备材料，核对数量</small></span><ArrowRight size={18} aria-hidden="true" />
+            </Button>
+            <Button variant="ghost" aria-label="打开三维预览" onClick={handleRender} disabled={!currentFile}>
+              <Box size={22} aria-hidden="true" /><span><strong>三维预览</strong><small>在实验 Viewer 中查看投影</small></span><ArrowRight size={18} aria-hidden="true" />
+            </Button>
+          </div>
+        </section>
       </div>
-    </div>
+    </ScrollArea>
   );
 }
-
-

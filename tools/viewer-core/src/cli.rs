@@ -64,6 +64,9 @@ pub fn parse_args() -> Result<CliArgs> {
     if command == "runtime-paths" {
         return parse_runtime_paths_args(command, args.collect());
     }
+    if command == "projection-preview" {
+        return parse_projection_preview_args(command, args.collect());
+    }
     if command == "stockpile" {
         return parse_stockpile_args(args.collect());
     }
@@ -144,14 +147,23 @@ pub fn parse_args() -> Result<CliArgs> {
             _ if arg.starts_with("--layer=") => {
                 layer = Some(arg.trim_start_matches("--layer=").parse()?);
             }
+            "--x" | "--y" | "--z" => {
+                let value = args.next().ok_or_else(|| anyhow::anyhow!("missing value after {arg}"))?;
+                let value = value.parse()?;
+                match arg.as_str() {
+                    "--x" => x = Some(value),
+                    "--y" => y = Some(value),
+                    _ => z = Some(value),
+                }
+            }
             _ if arg.starts_with("--x=") => {
                 x = Some(arg.trim_start_matches("--x=").parse()?);
             }
-            _ if arg.starts_with("--y=") => {
-                y = Some(arg.trim_start_matches("--y=").parse()?);
-            }
             _ if arg.starts_with("--z=") => {
                 z = Some(arg.trim_start_matches("--z=").parse()?);
+            }
+            _ if arg.starts_with("--y=") => {
+                y = Some(arg.trim_start_matches("--y=").parse()?);
             }
             _ if arg.starts_with("--y-start=") => {
                 y_start = Some(arg.trim_start_matches("--y-start=").parse()?);
@@ -225,6 +237,128 @@ pub fn parse_args() -> Result<CliArgs> {
         cz,
         offset,
         limit,
+        minecraft_version: None,
+        bind: None,
+        yes: false,
+        replace: false,
+        session_input: None,
+        config_key: None,
+        config_value: None,
+        user: None,
+        password_stdin: false,
+        stockpile_mode: None,
+        access_password_stdin: false,
+        admin_password_stdin: false,
+        whitelist_file: None,
+        allow_guest_readonly: None,
+        admin_page_enabled: None,
+        stockpile_targets: Vec::new(),
+    })
+}
+
+fn parse_projection_preview_args(command: String, raw_args: Vec<String>) -> Result<CliArgs> {
+    let mut input = None;
+    let mut output = None;
+    let mut json = false;
+    let mut args = raw_args.into_iter();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--input" => {
+                if input.is_some() {
+                    bail!("projection-preview accepts --input exactly once");
+                }
+                let Some(path) = args.next() else {
+                    bail!("missing path after --input");
+                };
+                input = Some(PathBuf::from(path));
+            }
+            "--output" => {
+                if output.is_some() {
+                    bail!("projection-preview accepts --output exactly once");
+                }
+                let Some(path) = args.next() else {
+                    bail!("missing path after --output");
+                };
+                output = Some(PathBuf::from(path));
+            }
+            "--json" => {
+                if json {
+                    bail!("projection-preview accepts --json exactly once");
+                }
+                json = true;
+            }
+            _ if arg.starts_with("--input=") => {
+                if input.is_some() {
+                    bail!("projection-preview accepts --input exactly once");
+                }
+                let value = arg.trim_start_matches("--input=");
+                if value.is_empty() {
+                    bail!("missing path after --input=");
+                }
+                input = Some(PathBuf::from(value));
+            }
+            _ if arg.starts_with("--output=") => {
+                if output.is_some() {
+                    bail!("projection-preview accepts --output exactly once");
+                }
+                let value = arg.trim_start_matches("--output=");
+                if value.is_empty() {
+                    bail!("missing path after --output=");
+                }
+                output = Some(PathBuf::from(value));
+            }
+            _ if arg.starts_with('-') => bail!("unknown argument: {arg}"),
+            _ => bail!("unexpected positional argument: {arg}"),
+        }
+    }
+
+    let input = input
+        .ok_or_else(|| anyhow::anyhow!("projection-preview requires --input <absolute path>"))?;
+    let output = output
+        .ok_or_else(|| anyhow::anyhow!("projection-preview requires --output <absolute path>"))?;
+    if !input.is_absolute() {
+        bail!(
+            "projection-preview --input must be an absolute path: {}",
+            input.display()
+        );
+    }
+    if !output.is_absolute() {
+        bail!(
+            "projection-preview --output must be an absolute path: {}",
+            output.display()
+        );
+    }
+    if !json {
+        bail!("projection-preview requires --json");
+    }
+
+    Ok(CliArgs {
+        command,
+        input,
+        include_entities: false,
+        include_container_items: false,
+        json,
+        chunk_size: 32,
+        output: Some(output),
+        plan: None,
+        patch: None,
+        rules: None,
+        dry_run: false,
+        force: false,
+        scope: None,
+        region: None,
+        layer: None,
+        x: None,
+        y: None,
+        z: None,
+        y_start: None,
+        y_end: None,
+        cx: None,
+        cy: None,
+        cz: None,
+        offset: 0,
+        limit: 64,
         minecraft_version: None,
         bind: None,
         yes: false,
@@ -1030,4 +1164,66 @@ fn parse_edit_metadata_args(command: String, raw_args: Vec<String>) -> Result<Cl
         admin_page_enabled: None,
         stockpile_targets: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn absolute_path(name: &str) -> String {
+        std::env::temp_dir().join(name).display().to_string()
+    }
+
+    #[test]
+    fn projection_preview_requires_strict_absolute_json_contract() {
+        let input = absolute_path("projection-preview-input.litematic");
+        let output = absolute_path("projection-preview-output.png");
+        let parsed = parse_projection_preview_args(
+            "projection-preview".to_string(),
+            vec![
+                "--input".to_string(),
+                input.clone(),
+                format!("--output={output}"),
+                "--json".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(parsed.command, "projection-preview");
+        assert_eq!(parsed.input, PathBuf::from(input));
+        assert_eq!(parsed.output, Some(PathBuf::from(output)));
+        assert!(parsed.json);
+    }
+
+    #[test]
+    fn projection_preview_rejects_ambiguous_or_incomplete_invocations() {
+        let input = absolute_path("projection-preview-input.litematic");
+        let output = absolute_path("projection-preview-output.png");
+        let parse = |arguments: &[&str]| {
+            parse_projection_preview_args(
+                "projection-preview".to_string(),
+                arguments.iter().map(|value| (*value).to_string()).collect(),
+            )
+        };
+
+        assert!(parse(&["--input", &input, "--output", &output]).is_err());
+        assert!(
+            parse(&[
+                "--input",
+                "relative.litematic",
+                "--output",
+                &output,
+                "--json"
+            ])
+            .is_err()
+        );
+        assert!(parse(&["--input", &input, "--output", "relative.png", "--json"]).is_err());
+        assert!(
+            parse(&[
+                "--input", &input, "--input", &input, "--output", &output, "--json",
+            ])
+            .is_err()
+        );
+        assert!(parse(&["--input", &input, "--output", &output, "--json", "extra"]).is_err());
+    }
 }

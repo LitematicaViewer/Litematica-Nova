@@ -1,6 +1,10 @@
+import { Dropdown } from "../../../../components/Dropdown";
+import { Dialog } from "../../../../components/Dialog";
+import { Button } from "../../../../components/ui/button";
+import { Input } from "../../../../components/ui/input";
 import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from "react";
-import { type EnumeratorCollection, loadEnumeratorCollections } from "../../../../../src/services/enumeratorService";
-import { translateBlockId } from "../../../../../src/services/i18n";
+import { type EnumeratorCollection, loadEnumeratorCollections } from "../../../../../src/business/facade";
+import { translateBlockId } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { CreativeInventoryTooltip } from "./function";
 
@@ -136,7 +140,7 @@ export function CreativeInventoryDialog({
     preview.style.setProperty("--flake-carry-y", `${carryPosition.y}px`);
   }, [carryBlockId, carryPosition.x, carryPosition.y]);
 
-  const handleHoverItem = (blockId: string, event: React.MouseEvent<HTMLDivElement>) => {
+  const handleHoverItem = (blockId: string, event: React.MouseEvent<HTMLButtonElement>) => {
     if (carryBlockId || !blockId) return;
     setHoverItem({ id: blockId, name: translateBlockId(blockId) });
     setHoverPosition({ x: event.clientX, y: event.clientY });
@@ -156,7 +160,7 @@ export function CreativeInventoryDialog({
     });
   };
 
-  const handleInventorySlotClick = (blockId: string, event: React.MouseEvent<HTMLDivElement>) => {
+  const handleInventorySlotClick = (blockId: string, event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     setHoverItem(null);
     if (!blockId) return;
@@ -168,7 +172,7 @@ export function CreativeInventoryDialog({
     setCarryPosition({ x: event.clientX, y: event.clientY });
   };
 
-  const handleCreativeHotbarSlotClick = (index: number, event: React.MouseEvent<HTMLDivElement>) => {
+  const handleCreativeHotbarSlotClick = (index: number, event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     setHoverItem(null);
     const slotBlockId = quickbarSlots[index] || "";
@@ -192,26 +196,17 @@ export function CreativeInventoryDialog({
   const rangeEnd = filteredValues.length ? Math.min(filteredValues.length, pageStart + 45) : 0;
 
   return (
-    <div className="dialog-overlay" onClick={onClose}>
-      <section className="dialog-content flake-page__inventory-dialog" onClick={(event) => { event.stopPropagation(); handleDropOutside(); }}>
-        <div className="subwindow-title-row">
-          <div>
-            <h3 className="subwindow-title">创造模式物品栏</h3>
-          </div>
-          <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</button>
-        </div>
+    <Dialog title="创造模式物品栏" onClose={onClose} width="lg" className="flake-page__inventory-dialog">
+      <section onClick={handleDropOutside}>
         <div className="flake-page__inventory-dialog-body">
           <div className="flake-page__creative-inventory-controls">
             <label className="flake-page__creative-inventory-control">
               <span className="nova-muted">分类</span>
-              <select className="input" value={selectedCollectionId} onChange={(event) => setSelectedCollectionId(event.target.value)}>
-                {collectionOptions.length === 0 ? <option value="">选择创造模式分类</option> : null}
-                {collectionOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
+              <Dropdown value={selectedCollectionId} onChange={setSelectedCollectionId} options={collectionOptions} ariaLabel="创造模式分类" />
             </label>
             <label className="flake-page__creative-inventory-control flake-page__creative-inventory-search">
               <span className="nova-muted">搜索</span>
-              <input className="input" value={search} placeholder="按方块名或 ID 过滤" onChange={(event) => setSearch(event.target.value)} />
+              <Input className="input" value={search} placeholder="按方块名或 ID 过滤" onChange={(event) => setSearch(event.target.value)} />
             </label>
             <div className="flake-page__creative-inventory-range nova-muted nova-small">
               {loading ? "加载中..." : `${rangeStart}-${rangeEnd} / ${filteredValues.length}`}
@@ -222,18 +217,17 @@ export function CreativeInventoryDialog({
             <div className="flake-page__creative-inventory-surface" onWheel={handleWheel}>
               <div className="flake-page__creative-inventory-grid">
                 {visibleValues.map((blockId, index) => blockId ? (
-                  <div
+                  <Button variant="ghost"
                     key={`${blockId}-${index}`}
                     className={carryBlockId === blockId ? "flake-page__creative-slot is-carried-source" : "flake-page__creative-slot"}
-                    role="button"
-                    tabIndex={0}
+                    aria-label={translateBlockId(blockId)}
                     onClick={(event) => handleInventorySlotClick(blockId, event)}
                     onMouseEnter={(event) => handleHoverItem(blockId, event)}
                     onMouseMove={(event) => handleHoverItem(blockId, event)}
                     onMouseLeave={handleHoverLeave}
                   >
                     <BlockIcon blockId={blockId} />
-                  </div>
+                  </Button>
                 ) : (
                   <div key={`empty-${index}`} className="flake-page__creative-slot is-empty" aria-hidden />
                 ))}
@@ -241,18 +235,17 @@ export function CreativeInventoryDialog({
 
               <div className="flake-page__creative-hotbar-grid">
                 {quickbarSlots.map((blockId, index) => (
-                  <div
+                  <Button variant="ghost"
                     key={`creative-hotbar-${index + 1}`}
                     className={blockId ? "flake-page__creative-hotbar-slot has-item" : "flake-page__creative-hotbar-slot"}
-                    role="button"
-                    tabIndex={0}
+                    aria-label={`快捷栏 ${index + 1}${blockId ? `：${translateBlockId(blockId)}` : "：空"}`}
                     onClick={(event) => handleCreativeHotbarSlotClick(index, event)}
                     onMouseEnter={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
                     onMouseMove={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
                     onMouseLeave={blockId ? handleHoverLeave : undefined}
                   >
                     {blockId ? <BlockIcon blockId={blockId} /> : null}
-                  </div>
+                  </Button>
                 ))}
               </div>
 
@@ -271,6 +264,6 @@ export function CreativeInventoryDialog({
         </div>
       ) : null}
       {!carryBlockId ? <CreativeInventoryTooltip x={hoverPosition.x} y={hoverPosition.y} item={hoverItem} /> : null}
-    </div>
+    </Dialog>
   );
 }

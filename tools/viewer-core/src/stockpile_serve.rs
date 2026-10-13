@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -163,6 +163,7 @@ pub struct DeployDbOptions {
     pub access_password: Option<String>,
     pub admin_password: Option<String>,
     pub whitelist: Vec<String>,
+    pub whitelist_enabled: Option<bool>,
     pub allow_guest_readonly: Option<bool>,
     pub admin_page_enabled: Option<bool>,
 }
@@ -187,6 +188,7 @@ pub struct ClaimState {
 pub struct MaterialSyncState {
     pub material_id: String,
     pub required_count: u64,
+    pub stack_size: u64,
     pub preparing_count: u64,
     pub done_count: u64,
     pub remaining_count: u64,
@@ -198,14 +200,24 @@ pub struct MaterialSyncState {
     pub storage_location: Option<String>,
     pub locked: bool,
     pub updated_by: Option<String>,
+    pub updated_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StockpileSyncState {
     pub updated_at: u64,
     pub participants: Vec<ParticipantState>,
+    #[serde(default)]
+    pub presence: Vec<PresenceState>,
     pub materials: BTreeMap<String, MaterialSyncState>,
     pub summaries: StockpileStateSummaries,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PresenceState {
+    pub user_id: String,
+    pub last_seen_at: u64,
+    pub readonly: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -239,9 +251,69 @@ pub struct ActivitySummaryState {
     pub created_at: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminBackupData {
+    pub schema_version: u32,
+    pub exported_at: u64,
+    pub participants: Vec<ParticipantState>,
+    pub material_claims: Vec<ClaimState>,
+    pub whitelist: Vec<WhitelistEntry>,
+    pub material_notes: Vec<MaterialNoteState>,
+    pub stack_overrides: Vec<MaterialStackOverrideState>,
+    pub config: StockpileConfig,
+    #[serde(default)]
+    pub audit_log: Vec<AuditLogEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AdminImportReport {
+    pub imported_participants: usize,
+    pub imported_claims: usize,
+    pub imported_whitelist: usize,
+    pub imported_material_notes: usize,
+    pub imported_stack_overrides: usize,
+    pub imported_audit_log: usize,
+    pub skipped_claims_missing_material: usize,
+    pub skipped_notes_missing_material: usize,
+    pub skipped_stack_overrides_missing_material: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MaterialStackOverrideState {
+    pub material_id: String,
+    pub stack_size: u64,
+    pub updated_by: Option<String>,
+    pub updated_at: u64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct ParticipantRequest {
     user_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UserMergeRequest {
+    from_user_id: String,
+    to_user_id: String,
+    mode: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AdminUserDeleteRequest {
+    mode: Option<String>,
+    target_user_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AdminClaimRequest {
+    user_id: String,
+    status: String,
+    quantity: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PresenceRequest {
+    user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -266,6 +338,7 @@ struct MaterialNoteRequest {
     public_note: Option<String>,
     storage_location: Option<String>,
     locked: Option<bool>,
+    stack_size: Option<u64>,
     user_id: Option<String>,
 }
 
@@ -489,28 +562,31 @@ fn route_request_inner(
             let state = build_state(db_path, &project.materials)?;
             return Ok(json_response(200, state, "OK"));
         }
+        ("GET", "/api/revision") => {
+            ensure_can_read(&config, &auth)?;
+            return Ok(json_response(200, revision_json(&conn)?, "OK"));
+        }
         ("GET", "/api/auth/status") => {
             return Ok(json_response(200, auth_status_json(&config, &auth), "OK"));
         }
         ("POST", "/api/auth/access") => {
             let body: AuthRequest = serde_json::from_slice(&request.body)
                 .context("parse access auth request failed")?;
-            return login_response(&conn, "access", body, client_rate_limit_key(request));
+            return login_response(&conn, "access", body, request);
         }
         ("POST", "/api/auth/admin") => {
             let body: AuthRequest =
                 serde_json::from_slice(&request.body).context("parse admin auth request failed")?;
-            return login_response(&conn, "admin", body, client_rate_limit_key(request));
+            return login_response(&conn, "admin", body, request);
         }
         ("POST", "/api/auth/logout") => {
             if let Some(token) = cookie_value(request, "lba_stockpile_session") {
                 conn.execute("DELETE FROM auth_sessions WHERE token = ?1", params![token])?;
             }
             let mut response = json_response(200, json!({"ok": true}), "OK");
-            response.headers.push((
-                "Set-Cookie".to_string(),
-                "lba_stockpile_session=; Path=/; Max-Age=0; SameSite=Lax".to_string(),
-            ));
+            response
+                .headers
+                .push(("Set-Cookie".to_string(), expired_session_cookie(request)));
             return Ok(response);
         }
         ("GET", "/api/config") => {
@@ -527,6 +603,36 @@ fn route_request_inner(
                 .context("parse participant request failed")?;
             upsert_participant(db_path, &body.user_id)?;
             eprintln!("stockpile participant upserted: {}", body.user_id);
+            let state = build_state(db_path, &project.materials)?;
+            return Ok(json_response(200, state, "OK"));
+        }
+        ("POST", "/api/presence") => {
+            ensure_can_read(&config, &auth)?;
+            let body: PresenceRequest =
+                serde_json::from_slice(&request.body).context("parse presence request failed")?;
+            let user_id = body.user_id.unwrap_or_else(|| "guest".to_string());
+            upsert_presence(&conn, &user_id, !auth.access)?;
+            return Ok(json_response(200, load_presence(&conn)?, "OK"));
+        }
+        ("GET", "/api/presence") => {
+            ensure_can_read(&config, &auth)?;
+            return Ok(json_response(200, load_presence(&conn)?, "OK"));
+        }
+        ("POST", "/api/users/merge") => {
+            ensure_can_read(&config, &auth)?;
+            let body: UserMergeRequest =
+                serde_json::from_slice(&request.body).context("parse user merge request failed")?;
+            if !auth.admin && config.access_password_enabled && !auth.access {
+                bail!("unauthorized");
+            }
+            merge_user_conn(
+                &conn,
+                &body.from_user_id,
+                &body.to_user_id,
+                &body.mode,
+                auth.actor(),
+                client_ip(request).as_deref(),
+            )?;
             let state = build_state(db_path, &project.materials)?;
             return Ok(json_response(200, state, "OK"));
         }
@@ -567,9 +673,35 @@ fn route_request_inner(
             let state = build_state(db_path, &project.materials)?;
             return Ok(json_response(200, state.materials, "OK"));
         }
+        ("GET", "/api/admin/claims") => {
+            require_admin(&auth)?;
+            return Ok(json_response(200, load_claims(&conn)?, "OK"));
+        }
         ("GET", "/api/admin/audit-log") => {
             require_admin(&auth)?;
             return Ok(json_response(200, load_audit_log(&conn, 200)?, "OK"));
+        }
+        ("GET", "/api/admin/export") => {
+            require_admin(&auth)?;
+            return Ok(json_response(200, export_admin_backup(&conn)?, "OK"));
+        }
+        ("POST", "/api/admin/import") => {
+            require_admin(&auth)?;
+            let body: AdminBackupData = serde_json::from_slice(&request.body)
+                .context("parse admin import request failed")?;
+            let report = import_admin_backup(
+                &conn,
+                &project.materials,
+                &body,
+                auth.actor(),
+                client_ip(request).as_deref(),
+            )?;
+            let state = build_state(db_path, &project.materials)?;
+            return Ok(json_response(
+                200,
+                json!({ "state": state, "report": report }),
+                "OK",
+            ));
         }
         _ => {}
     }
@@ -638,9 +770,62 @@ fn route_request_inner(
             let state = build_state(db_path, &project.materials)?;
             return Ok(json_response(200, state, "OK"));
         }
+        if let Some(user_id) = path.strip_prefix("/api/admin/users/") {
+            require_admin(&auth)?;
+            let user_id = percent_decode(user_id)?;
+            let body = if request.body.is_empty() {
+                AdminUserDeleteRequest {
+                    mode: None,
+                    target_user_id: None,
+                }
+            } else {
+                serde_json::from_slice(&request.body).context("parse admin user delete failed")?
+            };
+            delete_or_merge_user_conn(
+                &conn,
+                &user_id,
+                body.mode.as_deref().unwrap_or("clear"),
+                body.target_user_id.as_deref(),
+                auth.actor(),
+                client_ip(request).as_deref(),
+            )?;
+            let state = build_state(db_path, &project.materials)?;
+            return Ok(json_response(200, state, "OK"));
+        }
     }
 
     if request.method == "PUT" {
+        if let Some((material_id, user_id)) = parse_admin_claim_path(path)? {
+            require_admin(&auth)?;
+            let body: AdminClaimRequest = serde_json::from_slice(&request.body)
+                .context("parse admin claim request failed")?;
+            let target_user = if body.user_id.trim().is_empty() {
+                user_id
+            } else {
+                body.user_id
+            };
+            put_claim_conn(
+                &conn,
+                &material_id,
+                &target_user,
+                &body.status,
+                body.quantity,
+            )?;
+            write_audit_conn(
+                &conn,
+                auth.actor(),
+                "admin_claim_update",
+                &material_id,
+                None,
+                Some(
+                    json!({"material_id": material_id, "user_id": target_user, "status": body.status, "quantity": body.quantity}),
+                ),
+                client_ip(request).as_deref(),
+            )?;
+            touch_meta(&conn)?;
+            let state = build_state(db_path, &project.materials)?;
+            return Ok(json_response(200, state, "OK"));
+        }
         if let Some(material_id) = path.strip_prefix("/api/admin/materials/") {
             require_admin(&auth)?;
             let material_id = percent_decode(material_id)?;
@@ -664,6 +849,28 @@ fn route_request_inner(
     }
 
     if request.method == "PUT" || request.method == "DELETE" {
+        if request.method == "DELETE" {
+            if let Some((material_id, user_id)) = parse_admin_claim_path(path)? {
+                require_admin(&auth)?;
+                let before = load_claim_for_audit(&conn, &material_id, &user_id)?;
+                conn.execute(
+                    "DELETE FROM material_claims WHERE material_id = ?1 AND user_id = ?2",
+                    params![material_id, user_id],
+                )?;
+                write_audit_conn(
+                    &conn,
+                    auth.actor(),
+                    "admin_claim_delete",
+                    &material_id,
+                    before,
+                    None,
+                    client_ip(request).as_deref(),
+                )?;
+                touch_meta(&conn)?;
+                let state = build_state(db_path, &project.materials)?;
+                return Ok(json_response(200, state, "OK"));
+            }
+        }
         if let Some((material_id, user_id)) = parse_claim_path(path)? {
             ensure_can_write(&conn, &config, &auth, &user_id, &material_id)?;
             if request.method == "PUT" {
@@ -716,6 +923,19 @@ fn route_request_inner(
 
 fn parse_claim_path(path: &str) -> Result<Option<(String, String)>> {
     let Some(rest) = path.strip_prefix("/api/materials/") else {
+        return Ok(None);
+    };
+    let Some((material_id, user_id)) = rest.split_once("/claims/") else {
+        return Ok(None);
+    };
+    Ok(Some((
+        percent_decode(material_id)?,
+        percent_decode(user_id)?,
+    )))
+}
+
+fn parse_admin_claim_path(path: &str) -> Result<Option<(String, String)>> {
+    let Some(rest) = path.strip_prefix("/api/admin/materials/") else {
         return Ok(None);
     };
     let Some((material_id, user_id)) = rest.split_once("/claims/") else {
@@ -785,8 +1005,9 @@ fn login_response(
     conn: &Connection,
     kind: &str,
     body: AuthRequest,
-    client_key: String,
+    request: &HttpRequest,
 ) -> Result<HttpResponse> {
+    let client_key = client_rate_limit_key(request);
     if let Some(retry_after) = auth_rate_limit_retry_after(conn, kind, &client_key)? {
         let mut response = error_response(
             429,
@@ -834,7 +1055,7 @@ fn login_response(
     let mut response = json_response(200, json!({"ok": true, "role": kind}), "OK");
     response.headers.push((
         "Set-Cookie".to_string(),
-        format!("lba_stockpile_session={token}; Path=/; Max-Age={ttl}; SameSite=Lax"),
+        session_cookie(&token, ttl, request),
     ));
     Ok(response)
 }
@@ -889,13 +1110,118 @@ fn cookie_value(request: &HttpRequest, name: &str) -> Option<String> {
     })
 }
 
-fn client_ip(request: &HttpRequest) -> Option<String> {
+fn session_cookie(token: &str, ttl: u64, request: &HttpRequest) -> String {
+    let mut cookie =
+        format!("lba_stockpile_session={token}; Path=/; Max-Age={ttl}; HttpOnly; SameSite=Lax");
+    if is_secure_request(request) {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+fn expired_session_cookie(request: &HttpRequest) -> String {
+    let mut cookie =
+        "lba_stockpile_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax".to_string();
+    if is_secure_request(request) {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+fn is_secure_request(request: &HttpRequest) -> bool {
+    if !can_trust_forwarded_headers(request) {
+        return false;
+    }
+    header_first_value(request, "x-forwarded-proto")
+        .map(|value| value.eq_ignore_ascii_case("https"))
+        .unwrap_or(false)
+        || request
+            .headers
+            .get("x-forwarded-ssl")
+            .map(|value| value.eq_ignore_ascii_case("on"))
+            .unwrap_or(false)
+        || forwarded_proto(request)
+            .map(|value| value.eq_ignore_ascii_case("https"))
+            .unwrap_or(false)
+}
+
+fn can_trust_forwarded_headers(request: &HttpRequest) -> bool {
+    request
+        .remote_addr
+        .map(|remote_addr| remote_addr.is_loopback())
+        .unwrap_or(true)
+}
+
+fn header_first_value<'a>(request: &'a HttpRequest, name: &str) -> Option<&'a str> {
     request
         .headers
-        .get("x-forwarded-for")
+        .get(name)
         .and_then(|value| value.split(',').next())
-        .map(|value| value.trim().to_string())
+        .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn forwarded_proto(request: &HttpRequest) -> Option<String> {
+    let forwarded = header_first_value(request, "forwarded")?;
+    forwarded.split(';').find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        if key.trim().eq_ignore_ascii_case("proto") {
+            let value = value.trim().trim_matches('"');
+            (!value.is_empty()).then(|| value.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn forwarded_client_ip(request: &HttpRequest) -> Option<String> {
+    header_first_value(request, "x-forwarded-for")
+        .and_then(normalize_client_ip)
+        .or_else(|| {
+            let forwarded = header_first_value(request, "forwarded")?;
+            forwarded.split(';').find_map(|part| {
+                let (key, value) = part.trim().split_once('=')?;
+                key.trim()
+                    .eq_ignore_ascii_case("for")
+                    .then_some(value)
+                    .and_then(normalize_client_ip)
+            })
+        })
+}
+
+fn normalize_client_ip(value: &str) -> Option<String> {
+    let value = value.trim().trim_matches('"');
+    if value.is_empty() || value.eq_ignore_ascii_case("unknown") {
+        return None;
+    }
+    if let Ok(ip) = value.parse::<IpAddr>() {
+        return Some(ip.to_string());
+    }
+    if let Ok(addr) = value.parse::<std::net::SocketAddr>() {
+        return Some(addr.ip().to_string());
+    }
+    let unbracketed = value.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = unbracketed.parse::<IpAddr>() {
+        return Some(ip.to_string());
+    }
+    if value.matches(':').count() == 1 {
+        if let Some((host, _port)) = value.rsplit_once(':') {
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn client_ip(request: &HttpRequest) -> Option<String> {
+    if let Some(remote_addr) = request.remote_addr {
+        if can_trust_forwarded_headers(request) {
+            return Some(forwarded_client_ip(request).unwrap_or_else(|| remote_addr.to_string()));
+        }
+        return Some(remote_addr.to_string());
+    }
+    forwarded_client_ip(request)
 }
 
 fn client_rate_limit_key(request: &HttpRequest) -> String {
@@ -1042,7 +1368,9 @@ pub fn create_initialized_deploy_db(
     config.mode = "multi".to_string();
     config.access_password_enabled = options.access_password.is_some();
     config.admin_password_enabled = options.admin_password.is_some();
-    config.whitelist_enabled = !options.whitelist.is_empty();
+    config.whitelist_enabled = options
+        .whitelist_enabled
+        .unwrap_or_else(|| !options.whitelist.is_empty());
     if let Some(value) = options.allow_guest_readonly {
         config.allow_guest_readonly = value;
     }
@@ -1126,6 +1454,12 @@ fn init_db_conn(conn: &Connection) -> Result<()> {
             updated_by TEXT,
             updated_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS material_stack_overrides (
+            material_id TEXT PRIMARY KEY NOT NULL,
+            stack_size INTEGER NOT NULL CHECK(stack_size >= 1 AND stack_size <= 99),
+            updated_by TEXT,
+            updated_at INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             actor TEXT NOT NULL,
@@ -1149,6 +1483,11 @@ fn init_db_conn(conn: &Connection) -> Result<()> {
             first_failed_at INTEGER NOT NULL,
             locked_until INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS presence (
+            user_id TEXT PRIMARY KEY NOT NULL,
+            last_seen_at INTEGER NOT NULL,
+            readonly INTEGER NOT NULL CHECK(readonly IN (0, 1))
         );
         "#,
     )
@@ -1278,6 +1617,113 @@ fn touch_meta(conn: &Connection) -> Result<()> {
     set_meta(conn, "updated_at", &current_unix_timestamp()?.to_string())
 }
 
+fn revision_json(conn: &Connection) -> Result<Value> {
+    let meta_updated = meta_value(conn, "updated_at")?
+        .unwrap_or_default()
+        .parse::<u64>()
+        .unwrap_or(0);
+    let (audit_count, audit_updated) = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(MAX(created_at), 0) FROM audit_log",
+            [],
+            |row| {
+                Ok((
+                    i64_to_u64(row.get::<_, i64>(0)?),
+                    i64_to_u64(row.get::<_, i64>(1)?),
+                ))
+            },
+        )
+        .unwrap_or((0, 0));
+    let (claim_count, claim_updated, claim_quantity) = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(MAX(updated_at), 0), COALESCE(SUM(quantity), 0) FROM material_claims",
+            [],
+            |row| {
+                Ok((
+                    i64_to_u64(row.get::<_, i64>(0)?),
+                    i64_to_u64(row.get::<_, i64>(1)?),
+                    i64_to_u64(row.get::<_, i64>(2)?),
+                ))
+            },
+        )
+        .unwrap_or((0, 0, 0));
+    let (note_count, note_updated) = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(MAX(updated_at), 0) FROM material_notes",
+            [],
+            |row| {
+                Ok((
+                    i64_to_u64(row.get::<_, i64>(0)?),
+                    i64_to_u64(row.get::<_, i64>(1)?),
+                ))
+            },
+        )
+        .unwrap_or((0, 0));
+    let stack_override_count = conn
+        .query_row("SELECT COUNT(*) FROM material_stack_overrides", [], |row| {
+            Ok(i64_to_u64(row.get::<_, i64>(0)?))
+        })
+        .unwrap_or(0);
+    let whitelist_count = conn
+        .query_row("SELECT COUNT(*) FROM stockpile_whitelist", [], |row| {
+            Ok(i64_to_u64(row.get::<_, i64>(0)?))
+        })
+        .unwrap_or(0);
+    let config_updated = conn
+        .query_row(
+            "SELECT COALESCE(MAX(updated_at), 0) FROM stockpile_config",
+            [],
+            |row| Ok(i64_to_u64(row.get::<_, i64>(0)?)),
+        )
+        .unwrap_or(0);
+    let updated_at = meta_updated
+        .max(audit_updated)
+        .max(claim_updated)
+        .max(note_updated)
+        .max(config_updated);
+    let revision = format!(
+        "{updated_at}:{audit_count}:{claim_count}:{claim_quantity}:{note_count}:{stack_override_count}:{whitelist_count}"
+    );
+    Ok(json!({
+        "updated_at": updated_at,
+        "revision": revision,
+    }))
+}
+
+fn upsert_presence(conn: &Connection, user_id: &str, readonly: bool) -> Result<()> {
+    validate_user_id(user_id)?;
+    let now = current_unix_timestamp()?;
+    conn.execute(
+        r#"
+        INSERT INTO presence(user_id, last_seen_at, readonly)
+        VALUES(?1, ?2, ?3)
+        ON CONFLICT(user_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, readonly = excluded.readonly
+        "#,
+        params![user_id, now as i64, bool_to_i64(readonly)],
+    )?;
+    Ok(())
+}
+
+fn load_presence(conn: &Connection) -> Result<Vec<PresenceState>> {
+    let now = current_unix_timestamp()?;
+    let stale_before = now.saturating_sub(90);
+    conn.execute(
+        "DELETE FROM presence WHERE last_seen_at < ?1",
+        params![stale_before as i64],
+    )?;
+    let mut stmt =
+        conn.prepare("SELECT user_id, last_seen_at, readonly FROM presence ORDER BY user_id")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(PresenceState {
+            user_id: row.get(0)?,
+            last_seen_at: i64_to_u64(row.get(1)?),
+            readonly: i64_to_bool(row.get(2)?),
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("load presence failed")
+}
+
 pub(crate) fn upsert_participant(path: &Path, user_id: &str) -> Result<()> {
     validate_user_id(user_id)?;
     let conn = Connection::open(path)?;
@@ -1308,6 +1754,23 @@ pub(crate) fn put_claim(
     }
     let conn = Connection::open(path)?;
     init_db_conn(&conn)?;
+    put_claim_conn(&conn, material_id, user_id, status, quantity)?;
+    touch_meta(&conn)?;
+    Ok(())
+}
+
+fn put_claim_conn(
+    conn: &Connection,
+    material_id: &str,
+    user_id: &str,
+    status: &str,
+    quantity: u64,
+) -> Result<()> {
+    validate_material_id(material_id)?;
+    validate_user_id(user_id)?;
+    if !matches!(status, "preparing" | "done") {
+        bail!("claim status must be preparing or done");
+    }
     let now = current_unix_timestamp()?;
     conn.execute(
         r#"
@@ -1326,7 +1789,6 @@ pub(crate) fn put_claim(
         "#,
         params![material_id, user_id, status, quantity as i64, now],
     )?;
-    touch_meta(&conn)?;
     Ok(())
 }
 
@@ -1343,6 +1805,165 @@ pub(crate) fn delete_claim(path: &Path, material_id: &str, user_id: &str) -> Res
     Ok(())
 }
 
+fn merge_user_conn(
+    conn: &Connection,
+    from_user_id: &str,
+    to_user_id: &str,
+    mode: &str,
+    actor: &str,
+    ip: Option<&str>,
+) -> Result<()> {
+    validate_user_id(from_user_id)?;
+    validate_user_id(to_user_id)?;
+    if from_user_id == to_user_id {
+        return Ok(());
+    }
+    if !matches!(mode, "switch" | "migrate" | "merge") {
+        bail!("mode must be switch, migrate, or merge");
+    }
+    let before = json!({
+        "from_user_id": from_user_id,
+        "to_user_id": to_user_id,
+        "mode": mode,
+        "from_claims": load_claims_for_user(conn, from_user_id)?,
+        "to_claims": load_claims_for_user(conn, to_user_id)?,
+    });
+    let now = current_unix_timestamp()?;
+    conn.execute(
+        "INSERT INTO participants(user_id, first_seen_at, last_seen_at) VALUES(?1, ?2, ?2) ON CONFLICT(user_id) DO UPDATE SET last_seen_at = excluded.last_seen_at",
+        params![to_user_id, now as i64],
+    )?;
+    if mode == "switch" {
+        conn.execute(
+            "DELETE FROM participants WHERE user_id = ?1 AND NOT EXISTS (SELECT 1 FROM material_claims WHERE user_id = ?1)",
+            params![from_user_id],
+        )?;
+    } else {
+        merge_claim_rows(conn, from_user_id, to_user_id)?;
+        conn.execute(
+            "DELETE FROM participants WHERE user_id = ?1 AND NOT EXISTS (SELECT 1 FROM material_claims WHERE user_id = ?1)",
+            params![from_user_id],
+        )?;
+    }
+    write_audit_conn(
+        conn,
+        actor,
+        if mode == "switch" {
+            "user_switch"
+        } else {
+            "user_merge"
+        },
+        from_user_id,
+        Some(before),
+        Some(json!({"from_user_id": from_user_id, "to_user_id": to_user_id, "mode": mode})),
+        ip,
+    )?;
+    touch_meta(conn)?;
+    Ok(())
+}
+
+fn delete_or_merge_user_conn(
+    conn: &Connection,
+    user_id: &str,
+    mode: &str,
+    target_user_id: Option<&str>,
+    actor: &str,
+    ip: Option<&str>,
+) -> Result<()> {
+    validate_user_id(user_id)?;
+    let before = json!({
+        "user_id": user_id,
+        "claims": load_claims_for_user(conn, user_id)?,
+    });
+    match mode {
+        "migrate" | "merge" => {
+            let Some(target) = target_user_id else {
+                bail!("target_user_id is required for merge");
+            };
+            validate_user_id(target)?;
+            merge_claim_rows(conn, user_id, target)?;
+            conn.execute(
+                "DELETE FROM participants WHERE user_id = ?1",
+                params![user_id],
+            )?;
+            conn.execute(
+                "DELETE FROM stockpile_whitelist WHERE user_id = ?1",
+                params![user_id],
+            )?;
+        }
+        "clear" | "delete" => {
+            conn.execute(
+                "DELETE FROM material_claims WHERE user_id = ?1",
+                params![user_id],
+            )?;
+            conn.execute(
+                "DELETE FROM participants WHERE user_id = ?1",
+                params![user_id],
+            )?;
+            conn.execute(
+                "DELETE FROM stockpile_whitelist WHERE user_id = ?1",
+                params![user_id],
+            )?;
+            conn.execute("DELETE FROM presence WHERE user_id = ?1", params![user_id])?;
+        }
+        _ => bail!("mode must be clear, delete, migrate, or merge"),
+    }
+    write_audit_conn(
+        conn,
+        actor,
+        "admin_user_delete",
+        user_id,
+        Some(before),
+        Some(json!({"mode": mode, "target_user_id": target_user_id})),
+        ip,
+    )?;
+    touch_meta(conn)?;
+    Ok(())
+}
+
+fn merge_claim_rows(conn: &Connection, from_user_id: &str, to_user_id: &str) -> Result<()> {
+    let claims = load_claims_for_user(conn, from_user_id)?;
+    for claim in claims {
+        let existing = load_claim(conn, &claim.material_id, to_user_id)?;
+        let (status, quantity) = if let Some(existing) = existing {
+            let status = if existing.status == "done" || claim.status == "done" {
+                "done"
+            } else {
+                "preparing"
+            };
+            (
+                status.to_string(),
+                existing.quantity.saturating_add(claim.quantity),
+            )
+        } else {
+            (claim.status.clone(), claim.quantity)
+        };
+        put_claim_conn(conn, &claim.material_id, to_user_id, &status, quantity)?;
+    }
+    conn.execute(
+        "DELETE FROM material_claims WHERE user_id = ?1",
+        params![from_user_id],
+    )?;
+    Ok(())
+}
+
+fn load_claims_for_user(conn: &Connection, user_id: &str) -> Result<Vec<ClaimState>> {
+    let mut stmt = conn.prepare(
+        "SELECT material_id, user_id, status, quantity, updated_at FROM material_claims WHERE user_id = ?1 ORDER BY updated_at DESC",
+    )?;
+    let rows = stmt.query_map(params![user_id], |row| {
+        Ok(ClaimState {
+            material_id: row.get(0)?,
+            user_id: row.get(1)?,
+            status: row.get(2)?,
+            quantity: i64_to_u64(row.get(3)?),
+            updated_at: i64_to_u64(row.get(4)?),
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("load user claims failed")
+}
+
 pub(crate) fn build_state(
     path: &Path,
     materials: &StockpileMaterialsData,
@@ -1352,12 +1973,16 @@ pub(crate) fn build_state(
     let participants = load_participants(&conn)?;
     let claims = load_claims(&conn)?;
     let notes = load_material_notes(&conn)?;
+    let stack_overrides = load_stack_overrides(&conn)?;
     let audit = load_audit_log(&conn, 20).unwrap_or_default();
+    let presence = load_presence(&conn).unwrap_or_default();
     Ok(aggregate_state(
         materials,
         participants,
+        presence,
         claims,
         notes,
+        stack_overrides,
         audit,
         current_unix_timestamp()?,
     ))
@@ -1841,8 +2466,10 @@ pub fn session_export(zip_path: &Path, output: &Path) -> Result<SessionExportDat
     let state = aggregate_state(
         &project.materials,
         participants.clone(),
+        Vec::new(),
         claims.clone(),
         load_material_notes(&conn)?,
+        load_stack_overrides(&conn)?,
         load_audit_log(&conn, 20).unwrap_or_default(),
         current_unix_timestamp()?,
     );
@@ -1976,8 +2603,10 @@ fn summarize_state(state: &StockpileSyncState) -> SessionInfoSummary {
 fn aggregate_state(
     materials: &StockpileMaterialsData,
     participants: Vec<ParticipantState>,
+    presence: Vec<PresenceState>,
     claims: Vec<ClaimState>,
     notes: BTreeMap<String, MaterialNoteState>,
+    stack_overrides: BTreeMap<String, u64>,
     audit: Vec<AuditLogEntry>,
     updated_at: u64,
 ) -> StockpileSyncState {
@@ -2080,11 +2709,25 @@ fn aggregate_state(
         {
             noted_materials.push(material.namespace_id.clone());
         }
+        let latest_claim = material_claims.iter().max_by_key(|claim| claim.updated_at);
+        let updated_at = latest_claim
+            .map(|claim| claim.updated_at)
+            .into_iter()
+            .chain((note.updated_at > 0).then_some(note.updated_at))
+            .max();
+        let updated_by = note
+            .updated_by
+            .clone()
+            .or_else(|| latest_claim.map(|claim| claim.user_id.clone()));
         material_states.insert(
             material.namespace_id.clone(),
             MaterialSyncState {
                 material_id: material.namespace_id.clone(),
                 required_count: material.required_count,
+                stack_size: stack_overrides
+                    .get(&material.namespace_id)
+                    .copied()
+                    .unwrap_or(material.stack_size),
                 preparing_count,
                 done_count,
                 remaining_count,
@@ -2095,13 +2738,15 @@ fn aggregate_state(
                 public_note: note.public_note,
                 storage_location: note.storage_location,
                 locked: note.locked,
-                updated_by: note.updated_by,
+                updated_by,
+                updated_at,
             },
         );
     }
     StockpileSyncState {
         updated_at,
         participants,
+        presence,
         materials: material_states,
         summaries: StockpileStateSummaries {
             user_summaries: user_acc.into_values().collect(),
@@ -2155,6 +2800,24 @@ fn load_claims(conn: &Connection) -> Result<Vec<ClaimState>> {
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .context("load claims failed")
+}
+
+fn load_claim(conn: &Connection, material_id: &str, user_id: &str) -> Result<Option<ClaimState>> {
+    conn.query_row(
+        "SELECT material_id, user_id, status, quantity, updated_at FROM material_claims WHERE material_id = ?1 AND user_id = ?2",
+        params![material_id, user_id],
+        |row| {
+            Ok(ClaimState {
+                material_id: row.get(0)?,
+                user_id: row.get(1)?,
+                status: row.get(2)?,
+                quantity: i64_to_u64(row.get(3)?),
+                updated_at: i64_to_u64(row.get(4)?),
+            })
+        },
+    )
+    .optional()
+    .context("load claim failed")
 }
 
 fn load_claim_for_audit(
@@ -2241,6 +2904,22 @@ fn save_material_note_conn(
     let locked = request
         .locked
         .unwrap_or_else(|| before.as_ref().map(|value| value.locked).unwrap_or(false));
+    if let Some(stack_size) = request.stack_size {
+        if !(1..=99).contains(&stack_size) {
+            bail!("stack_size must be between 1 and 99");
+        }
+        conn.execute(
+            r#"
+            INSERT INTO material_stack_overrides(material_id, stack_size, updated_by, updated_at)
+            VALUES(?1, ?2, ?3, ?4)
+            ON CONFLICT(material_id) DO UPDATE SET
+                stack_size = excluded.stack_size,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            "#,
+            params![material_id, stack_size as i64, actor, now],
+        )?;
+    }
     conn.execute(
         r#"
         INSERT INTO material_notes(material_id, public_note, storage_location, locked, updated_by, updated_at)
@@ -2266,6 +2945,185 @@ fn save_material_note_conn(
     )?;
     touch_meta(conn)?;
     Ok(after)
+}
+
+fn load_stack_overrides(conn: &Connection) -> Result<BTreeMap<String, u64>> {
+    let mut stmt = conn.prepare(
+        "SELECT material_id, stack_size FROM material_stack_overrides ORDER BY material_id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, i64_to_u64(row.get(1)?)))
+    })?;
+    rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()
+        .context("load material stack overrides failed")
+}
+
+fn load_stack_override_states(conn: &Connection) -> Result<Vec<MaterialStackOverrideState>> {
+    let mut stmt = conn.prepare(
+        "SELECT material_id, stack_size, updated_by, updated_at FROM material_stack_overrides ORDER BY material_id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(MaterialStackOverrideState {
+            material_id: row.get(0)?,
+            stack_size: i64_to_u64(row.get(1)?),
+            updated_by: row.get(2)?,
+            updated_at: i64_to_u64(row.get(3)?),
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("load material stack override states failed")
+}
+
+fn export_admin_backup(conn: &Connection) -> Result<AdminBackupData> {
+    Ok(AdminBackupData {
+        schema_version: 1,
+        exported_at: current_unix_timestamp()?,
+        participants: load_participants(conn)?,
+        material_claims: load_claims(conn)?,
+        whitelist: load_whitelist(conn)?,
+        material_notes: load_material_notes(conn)?.into_values().collect(),
+        stack_overrides: load_stack_override_states(conn)?,
+        config: load_config_conn(conn)?,
+        audit_log: load_audit_log(conn, 10_000)?,
+    })
+}
+
+fn import_admin_backup(
+    conn: &Connection,
+    materials: &StockpileMaterialsData,
+    data: &AdminBackupData,
+    actor: &str,
+    ip: Option<&str>,
+) -> Result<AdminImportReport> {
+    if data.schema_version != 1 {
+        bail!(
+            "unsupported admin backup schema_version {}",
+            data.schema_version
+        );
+    }
+    let valid_materials = materials
+        .materials
+        .iter()
+        .map(|material| material.namespace_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut report = AdminImportReport::default();
+    conn.execute("DELETE FROM participants", [])?;
+    conn.execute("DELETE FROM material_claims", [])?;
+    conn.execute("DELETE FROM stockpile_whitelist", [])?;
+    conn.execute("DELETE FROM material_notes", [])?;
+    conn.execute("DELETE FROM material_stack_overrides", [])?;
+    conn.execute("DELETE FROM audit_log", [])?;
+    for participant in &data.participants {
+        validate_user_id(&participant.user_id)?;
+        conn.execute(
+            "INSERT INTO participants(user_id, first_seen_at, last_seen_at) VALUES(?1, ?2, ?3)",
+            params![
+                participant.user_id,
+                participant.first_seen_at as i64,
+                participant.last_seen_at as i64
+            ],
+        )?;
+        report.imported_participants += 1;
+    }
+    for claim in &data.material_claims {
+        validate_material_id(&claim.material_id)?;
+        if !valid_materials.contains(claim.material_id.as_str()) {
+            report.skipped_claims_missing_material += 1;
+            continue;
+        }
+        validate_user_id(&claim.user_id)?;
+        conn.execute(
+            "INSERT INTO material_claims(material_id, user_id, status, quantity, updated_at) VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![
+                claim.material_id,
+                claim.user_id,
+                claim.status,
+                claim.quantity as i64,
+                claim.updated_at as i64
+            ],
+        )?;
+        report.imported_claims += 1;
+    }
+    for entry in &data.whitelist {
+        validate_user_id(&entry.user_id)?;
+        conn.execute(
+            "INSERT INTO stockpile_whitelist(user_id, created_at) VALUES(?1, ?2)",
+            params![entry.user_id, entry.created_at as i64],
+        )?;
+        report.imported_whitelist += 1;
+    }
+    for note in &data.material_notes {
+        validate_material_id(&note.material_id)?;
+        if !valid_materials.contains(note.material_id.as_str()) {
+            report.skipped_notes_missing_material += 1;
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO material_notes(material_id, public_note, storage_location, locked, updated_by, updated_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                note.material_id,
+                note.public_note,
+                note.storage_location,
+                bool_to_i64(note.locked),
+                note.updated_by,
+                note.updated_at as i64
+            ],
+        )?;
+        report.imported_material_notes += 1;
+    }
+    for stack in &data.stack_overrides {
+        validate_material_id(&stack.material_id)?;
+        if !valid_materials.contains(stack.material_id.as_str()) {
+            report.skipped_stack_overrides_missing_material += 1;
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO material_stack_overrides(material_id, stack_size, updated_by, updated_at) VALUES(?1, ?2, ?3, ?4)",
+            params![
+                stack.material_id,
+                stack.stack_size as i64,
+                stack.updated_by,
+                stack.updated_at as i64
+            ],
+        )?;
+        report.imported_stack_overrides += 1;
+    }
+    for entry in &data.audit_log {
+        conn.execute(
+            "INSERT INTO audit_log(actor, action, target, before_json, after_json, ip, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                entry.actor,
+                entry.action,
+                entry.target,
+                entry.before_json,
+                entry.after_json,
+                entry.ip,
+                entry.created_at as i64,
+            ],
+        )?;
+        report.imported_audit_log += 1;
+    }
+    let mut config = data.config.clone();
+    config.updated_at = current_unix_timestamp()?;
+    save_config_conn(conn, &config)?;
+    write_audit_conn(
+        conn,
+        actor,
+        "admin_data_import",
+        "admin_backup",
+        None,
+        Some(json!({
+            "participants": data.participants.len(),
+            "claims": data.material_claims.len(),
+            "whitelist": data.whitelist.len(),
+            "material_notes": data.material_notes.len(),
+            "stack_overrides": data.stack_overrides.len(),
+            "imported": &report
+        })),
+        ip,
+    )?;
+    touch_meta(conn)?;
+    Ok(report)
 }
 
 fn load_whitelist(conn: &Connection) -> Result<Vec<WhitelistEntry>> {
@@ -2500,13 +3358,19 @@ fn serve_zip_asset(zip_path: &Path, path: &str) -> Result<HttpResponse> {
     };
     let mut bytes = Vec::new();
     entry.read_to_end(&mut bytes)?;
-    Ok(HttpResponse {
+    let mut response = HttpResponse {
         status: 200,
         reason: "OK".to_string(),
         content_type: content_type(&name).to_string(),
-        headers: Vec::new(),
+        headers: static_asset_headers(&name, &bytes),
         body: bytes,
-    })
+    };
+    if name.ends_with(".html") {
+        response
+            .headers
+            .push(("Cache-Control".to_string(), "no-cache".to_string()));
+    }
+    Ok(response)
 }
 
 fn serve_root_asset(root: &Path, path: &str) -> Result<HttpResponse> {
@@ -2530,13 +3394,36 @@ fn serve_root_asset(root: &Path, path: &str) -> Result<HttpResponse> {
     }
     let bytes =
         fs::read(&path).with_context(|| format!("read asset failed: {}", path.display()))?;
-    Ok(HttpResponse {
+    let mut response = HttpResponse {
         status: 200,
         reason: "OK".to_string(),
         content_type: content_type(&name).to_string(),
-        headers: Vec::new(),
+        headers: static_asset_headers(&name, &bytes),
         body: bytes,
-    })
+    };
+    if name.ends_with(".html") {
+        response
+            .headers
+            .push(("Cache-Control".to_string(), "no-cache".to_string()));
+    }
+    Ok(response)
+}
+
+fn static_asset_headers(name: &str, bytes: &[u8]) -> Vec<(String, String)> {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let etag = format!("\"{}\"", to_hex(&hasher.finalize()));
+    let cache = if name.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else if name.starts_with("data/") {
+        "public, max-age=60"
+    } else {
+        "no-cache"
+    };
+    vec![
+        ("Cache-Control".to_string(), cache.to_string()),
+        ("ETag".to_string(), etag),
+    ]
 }
 
 fn admin_page_response() -> HttpResponse {
@@ -2557,36 +3444,26 @@ fn admin_page_html() -> &'static str {
 <body><div id="admin" class="shell"></div><script>
 (function(){
 const i18n={
-zh:{title:'缁狅紕鎮婇崨?,login:'缁狅紕鎮婇崨妯兼瑜?,password:'缁狅紕鎮婇崨妯虹槕閻?,enter:'閻ц缍?,project:'婢跺洩鎻ｉ崡?,summary:'妞ゅ湱娲伴幀鏄忣潔',users:'閻劍鍩?,whitelist:'閻ц棄鎮曢崡?,materials:'閺夋劖鏋＄粻锛勬倞',audit:'鐎孤ゎ吀閺冦儱绻?,add:'濞ｈ濮?,remove:'缁夊娅?,lock:'闁夸礁鐣?,unlock:'鐟欙綁鏀?,save:'娣囨繂鐡?,clearMaterial:'濞撳懐鈹栭弶鎰灐婢跺洩鎻?,clearUser:'濞撳懐鈹栭悽銊﹀煕婢跺洩鎻?,note:'婢跺洦鏁?,location:'鐎涙ɑ鏂佹担宥囩枂',language:'鐠囶叀鈻?,back:'鏉╂柨娲栨径鍥彛閸?,filter:'缁涙盯鈧?,all:'閸忋劑鍎?,unclaimed:'閺冪姳姹夌拋銈夘暙',overfilled:'鐡掑懘顤?,stalled:'瀹告彃顦拹褎婀€瑰本鍨?,notStarted:'閺堫亜绱戞慨?,locked:'闁夸礁鐣?,noted:'閺堝顦▔?,userSummary:'閻劍鍩涘Ч鍥ㄢ偓?,materialCount:'閺夋劖鏋￠弫?,preparing:'婢跺洩鎻ｆ稉?,done:'瀹告彃鐣幋?,preparingQty:'婢跺洩鎻ｆ稉顓熸殶闁?,doneQty:'鐎瑰本鍨氶弫浼村櫤',actor:'閹垮秳缍旈懓?,action:'閸斻劋缍?,target:'閻╊喗鐖?,time:'閺冨爼妫?,success:'閹垮秳缍旈幋鎰',error:'闁挎瑨顕?,showPassword:'閺勫墽銇氱€靛棛鐖?,claim_put:'閺囧瓨鏌婃径鍥彛',claim_delete:'閸欐牗绉锋径鍥彛',material_note_update:'閺囧瓨鏌婇弶鎰灐婢跺洦鏁?,claims_clear_material:'濞撳懐鈹栭弶鎰灐婢跺洩鎻?,claims_clear_user:'濞撳懐鈹栭悽銊﹀煕婢跺洩鎻?,whitelist_add:'濞ｈ濮為惂钘夋倳閸?,whitelist_remove:'缁夊娅庨惂钘夋倳閸?,session_reset:'闁插秶鐤嗘导姘崇樈',session_import:'鐎电厧鍙嗘导姘崇樈',session_import_replace:'閺囨寧宕叉导姘崇樈',access_password_set:'鐠佸墽鐤嗙拋鍧楁６鐎靛棛鐖?,admin_password_set:'鐠佸墽鐤嗙粻锛勬倞閸涙ê鐦戦惍?,access_password_clear:'濞撳懘娅庣拋鍧楁６鐎靛棛鐖?,admin_password_clear:'濞撳懘娅庣粻锛勬倞閸涙ê鐦戦惍?},
-en:{title:'Admin',login:'Admin login',password:'Admin password',enter:'Login',project:'Stockpile',summary:'Summary',users:'Users',whitelist:'Whitelist',materials:'Materials',audit:'Audit log',add:'Add',remove:'Remove',lock:'Lock',unlock:'Unlock',save:'Save',clearMaterial:'Clear material claims',clearUser:'Clear user claims',note:'Note',location:'Storage',language:'Language',back:'Back to stockpile',filter:'Filter',all:'All',unclaimed:'Unclaimed',overfilled:'Overfilled',stalled:'Prepared not done',notStarted:'Not started',locked:'Locked',noted:'With notes',userSummary:'User summary',materialCount:'Materials',preparing:'Preparing',done:'Done',preparingQty:'Preparing qty',doneQty:'Done qty',actor:'Actor',action:'Action',target:'Target',time:'Time',success:'Saved',error:'Error',showPassword:'Show password',claim_put:'Updated claim',claim_delete:'Removed claim',material_note_update:'Updated material note',claims_clear_material:'Cleared material claims',claims_clear_user:'Cleared user claims',whitelist_add:'Added whitelist user',whitelist_remove:'Removed whitelist user',session_reset:'Reset session',session_import:'Imported session',session_import_replace:'Replaced session',access_password_set:'Set access password',admin_password_set:'Set admin password',access_password_clear:'Cleared access password',admin_password_clear:'Cleared admin password'}};
-let lang=(localStorage.getItem('lba-stockpile-lang')||navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en';
-let filter='all'; let flash=''; const root=document.getElementById('admin'); const t=k=>i18n[lang][k]||i18n.en[k]||k;
-async function send(path,method='GET',body){const r=await fetch(path,{method,headers:{'Content-Type':'application/json',Accept:'application/json'},body:body?JSON.stringify(body):undefined}); if(!r.ok) throw new Error(await r.text()); return r.json();}
+zh:{title:'管理后台',login:'管理员登录',password:'管理员密码',enter:'登录',project:'备货单',summary:'统计',users:'用户',whitelist:'白名单',materials:'材料',audit:'审计记录',data:'数据',exportData:'导出当前数据',importData:'导入数据',importReplaceHint:'导入会替换白名单、任务、备注和配置；不存在于当前包的材料会跳过',add:'添加',remove:'移除',lock:'锁定',unlock:'解锁',save:'保存',refresh:'刷新',edit:'编辑',delete:'删除',showMore:'显示更多',clearMaterial:'清空材料认领',clearUser:'清空用户认领',deleteUser:'删除 ID',mergeUser:'合并/迁移 ID',note:'备注',location:'存放位置',back:'返回备货单',all:'全部',unclaimed:'无人认领',overfilled:'超额',stalled:'已备货但未完成',notStarted:'未开始',locked:'已锁定',noted:'有备注',userSummary:'用户汇总',materialCount:'材料项数',claimManage:'认领管理',claimUser:'认领人',claimQuantity:'认领数量',claimStatus:'认领状态',claimTargetUser:'改为用户 ID',userClaims:'该用户认领材料',materialClaims:'该材料认领人',preparing:'备货中',done:'已完成',preparingQty:'备货中数量',doneQty:'已完成数量',actor:'操作人',target:'目标',time:'时间',success:'已保存',copied:'已导出',imported:'已导入',error:'错误',showPassword:'显示',hidePassword:'隐藏',newUser:'用户 ID',targetUser:'目标用户 ID',deleteMode:'模式：clear/delete/migrate/merge',stackSize:'每组数量',recentBy:'最近修改人',recentAt:'最近修改时间',whitelistEnabled:'启用白名单',participants_count:'参与人数',claims_count:'认领数',materials_count:'材料数',done_count:'已完成数',preparing_count:'备货中数',remaining_count:'剩余数',overfilled_count:'超额数',not_started:'未开始',partial_done:'部分完成',readonly:'只读',guest:'访客',whitelist_enabled:'白名单启用',claim_put:'更新认领',claim_delete:'移除认领',admin_claim_update:'管理员更新认领',admin_claim_delete:'管理员删除认领',admin_user_delete:'管理员删除/合并 ID',user_switch:'切换用户 ID',user_merge:'合并用户 ID',material_note_update:'更新材料备注',claims_clear_material:'清空材料认领',claims_clear_user:'清空用户认领',whitelist_add:'添加白名单用户',whitelist_remove:'移除白名单用户',config_update:'更新配置',admin_data_import:'导入管理数据'},
+en:{title:'Admin',login:'Admin login',password:'Admin password',enter:'Login',project:'Stockpile',summary:'Summary',users:'Users',whitelist:'Whitelist',materials:'Materials',audit:'Audit log',data:'Data',exportData:'Export current data',importData:'Import data',importReplaceHint:'Import replaces whitelist, tasks, notes, and config; missing materials are skipped',add:'Add',remove:'Remove',lock:'Lock',unlock:'Unlock',save:'Save',refresh:'Refresh',edit:'Edit',delete:'Delete',showMore:'Show more',clearMaterial:'Clear material claims',clearUser:'Clear user claims',deleteUser:'Delete ID',mergeUser:'Merge/migrate ID',note:'Note',location:'Storage',back:'Back to stockpile',all:'All',unclaimed:'Unclaimed',overfilled:'Overfilled',stalled:'Prepared not done',notStarted:'Not started',locked:'Locked',noted:'With notes',userSummary:'User summary',materialCount:'Materials',claimManage:'Claim management',claimUser:'Claim user',claimQuantity:'Claim quantity',claimStatus:'Claim status',claimTargetUser:'Move to user ID',userClaims:'User claims',materialClaims:'Material claimers',preparing:'Preparing',done:'Done',preparingQty:'Preparing qty',doneQty:'Done qty',actor:'Actor',target:'Target',time:'Time',success:'Saved',copied:'Exported',imported:'Imported',error:'Error',showPassword:'Show',hidePassword:'Hide',newUser:'User ID',targetUser:'Target user ID',deleteMode:'Mode: clear/delete/migrate/merge',stackSize:'Stack size',recentBy:'Last changed by',recentAt:'Last changed at',whitelistEnabled:'Enable whitelist',participants_count:'Participants',claims_count:'Claims',materials_count:'Materials',done_count:'Done',preparing_count:'Preparing',remaining_count:'Remaining',overfilled_count:'Overfilled',not_started:'Not started',partial_done:'Partial done',readonly:'Read-only',guest:'Guest',whitelist_enabled:'Whitelist enabled',claim_put:'Updated claim',claim_delete:'Removed claim',admin_claim_update:'Admin updated claim',admin_claim_delete:'Admin deleted claim',admin_user_delete:'Admin deleted/merged ID',user_switch:'Switched user ID',user_merge:'Merged user ID',material_note_update:'Updated material note',claims_clear_material:'Cleared material claims',claims_clear_user:'Cleared user claims',whitelist_add:'Added whitelist user',whitelist_remove:'Removed whitelist user',config_update:'Updated config',admin_data_import:'Imported admin data'}};
+let lang=(localStorage.getItem('lba-stockpile-lang')||'zh-CN').toLowerCase().startsWith('zh')?'zh':'en';
+let filter='all'; let materialLimit=60; let flash=''; let cache=null; const root=document.getElementById('admin'); const t=k=>i18n[lang][k]||i18n.en[k]||k;
+async function send(path,method='GET',body){const r=await fetch(path,{method,headers:{'Content-Type':'application/json',Accept:'application/json'},body:body===undefined?undefined:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.headers.get('content-type')?.includes('application/json')?r.json():{};}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function actionLabel(action){return t(action);}
+function fmt(n){return `${Number(n||0)}${lang==='zh'?'个':' items'}`;}
+function when(ts){return ts?new Date(Number(ts)*1000).toLocaleString():'-';}
+function statusLabel(v){return t(v)||v;}
+function actionLabel(v){return t(v)||v;}
+function summaryFromState(state){const materials=Object.values(state.materials||{});return {participants_count:(state.participants||[]).length,claims_count:materials.reduce((s,m)=>s+(m.claims||[]).length,0),materials_count:materials.length,done_count:materials.filter(m=>m.overall_status==='done').length,preparing_count:materials.filter(m=>m.overall_status==='preparing'||m.overall_status==='partial_done').length,remaining_count:materials.reduce((s,m)=>s+Number(m.remaining_count||0),0),overfilled_count:materials.reduce((s,m)=>s+Number(m.overfilled_count||0),0)}}
 function matchesFilter(m){if(filter==='unclaimed')return !(m.participants||[]).length;if(filter==='overfilled')return m.overfilled_count>0;if(filter==='stalled')return m.preparing_count>0&&m.done_count<m.required_count;if(filter==='not_started')return m.overall_status==='not_started';if(filter==='locked')return !!m.locked;if(filter==='noted')return !!(m.public_note||m.storage_location);return true;}
-async function render(){
-let auth=await send('/api/auth/status');
-if(!auth.admin){root.innerHTML=`<section class="modal-card"><h1>${t('login')}</h1><div class="password-row"><input class="field" id="pw" type="password" placeholder="${t('password')}"/><button class="button icon-button" id="togglePw" type="button" title="${t('showPassword')}">棣冩啑</button></div><div class="actions"><button class="button primary" id="login">${t('enter')}</button></div><p class="sub" id="err"></p></section>`;document.getElementById('togglePw').onclick=()=>{const pw=document.getElementById('pw');pw.type=pw.type==='password'?'text':'password';};document.getElementById('login').onclick=async()=>{try{await send('/api/auth/admin','POST',{password:document.getElementById('pw').value});flash=t('success');render();}catch(e){document.getElementById('err').textContent=`${t('error')}: ${e.message}`;}};return;}
-const [summary,users,white,materials,audit,state]=await Promise.all([send('/api/admin/summary'),send('/api/users'),send('/api/whitelist'),send('/api/admin/materials'),send('/api/admin/audit-log'),send('/api/state')]);
-const visibleMaterials=Object.values(materials).filter(matchesFilter); const userSummaries=state.summaries?.user_summaries||[];
-root.innerHTML=`<header class="topbar"><div class="brand"><strong>${t('title')}</strong><span>${t('project')}</span></div><div class="identity"><select class="field" id="lang"><option value="zh" ${lang==='zh'?'selected':''}>娑擃厽鏋?/option><option value="en" ${lang==='en'?'selected':''}>English</option></select><a class="button" href="/">${t('back')}</a></div></header>
-${flash?`<div class="empty">${esc(flash)}</div>`:''}
-<section class="summary">${Object.entries(summary).map(([k,v])=>`<div class="metric"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('')}</section>
-<section class="section"><h2>${t('userSummary')}</h2><div class="list">${userSummaries.map(u=>`<div class="card"><div class="card-main"><div><b>${esc(u.user_id)}</b><div class="sub">${t('materialCount')}: ${u.material_count} / ${t('preparingQty')}: ${u.preparing_quantity} / ${t('doneQty')}: ${u.done_quantity}</div></div><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button></div></div>`).join('')}</div></section>
-<section class="section"><h2>${t('whitelist')}</h2><div class="toolbar"><input class="field" id="newUser"/><button class="button primary" id="addUser">${t('add')}</button></div><div class="list">${white.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-rm="${esc(u.user_id)}">${t('remove')}</button></div></div>`).join('')}</div></section>
-<section class="section"><h2>${t('users')}</h2><div class="list">${users.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button></div></div>`).join('')}</div></section>
-<section class="section"><h2>${t('materials')}</h2><div class="toolbar"><select class="field" id="filter"><option value="all">${t('all')}</option><option value="unclaimed">${t('unclaimed')}</option><option value="overfilled">${t('overfilled')}</option><option value="stalled">${t('stalled')}</option><option value="not_started">${t('notStarted')}</option><option value="locked">${t('locked')}</option><option value="noted">${t('noted')}</option></select></div><div class="list">${visibleMaterials.map(m=>`<div class="card"><div class="card-main"><div><b>${esc(m.material_id)}</b><div class="sub">${t('note')}: ${esc(m.public_note||'')} / ${t('location')}: ${esc(m.storage_location||'')}</div><div class="badges"><span class="badge">${esc(m.overall_status)}</span>${m.locked?`<span class="badge missing">${t('locked')}</span>`:''}</div></div><div class="actions"><button class="button" data-note="${esc(m.material_id)}" data-note-value="${esc(m.public_note||'')}" data-location-value="${esc(m.storage_location||'')}">${t('save')}</button><button class="button" data-lock="${esc(m.material_id)}" data-locked="${m.locked?'1':'0'}">${m.locked?t('unlock'):t('lock')}</button><button class="button danger" data-clear-mat="${esc(m.material_id)}">${t('clearMaterial')}</button></div></div></div>`).join('')}</div></section>
-<section class="section"><h2>${t('audit')}</h2><div class="list">${audit.map(a=>`<div class="card"><div class="card-main"><div><b>${esc(actionLabel(a.action))}</b><div class="sub">${t('actor')}: ${esc(a.actor)} / ${t('target')}: ${esc(a.target)} / ${t('time')}: ${esc(new Date(a.created_at*1000).toLocaleString())}</div></div></div></div>`).join('')}</div></section>`;
-document.getElementById('lang').onchange=e=>{lang=e.target.value;localStorage.setItem('lba-stockpile-lang',lang==='zh'?'zh-CN':'en-US');render();};
-document.getElementById('filter').value=filter;document.getElementById('filter').onchange=e=>{filter=e.target.value;render();};
-document.getElementById('addUser').onclick=async()=>{try{await send('/api/whitelist','POST',{user_id:document.getElementById('newUser').value});flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}};
-document.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{try{await send('/api/whitelist/'+encodeURIComponent(b.dataset.rm),'DELETE');flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
-document.querySelectorAll('[data-clear-user]').forEach(b=>b.onclick=async()=>{try{await send('/api/admin/users/'+encodeURIComponent(b.dataset.clearUser)+'/claims','DELETE');flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
-document.querySelectorAll('[data-clear-mat]').forEach(b=>b.onclick=async()=>{try{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.clearMat)+'/claims','DELETE');flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
-document.querySelectorAll('[data-lock]').forEach(b=>b.onclick=async()=>{try{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.lock),'PUT',{locked:b.dataset.locked!=='1'});flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
-document.querySelectorAll('[data-note]').forEach(b=>b.onclick=async()=>{const public_note=prompt(t('note'),b.dataset.noteValue||'');if(public_note===null)return;const storage_location=prompt(t('location'),b.dataset.locationValue||'');if(storage_location===null)return;try{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.note),'PUT',{public_note,storage_location});flash=t('success');render();}catch(e){flash=`${t('error')}: ${e.message}`;render();}});
-}
+function materialName(id){return cache?.state?.materials?.[id]?.material_id||id;}
+function claimsForUser(userId){return Object.values(cache?.state?.materials||{}).flatMap(m=>(m.claims||[]).filter(c=>c.user_id===userId).map(c=>({...c,material_id:m.material_id})));}
+async function loadAdmin(){const [users,white,audit,state,config,claims]=await Promise.all([send('/api/users'),send('/api/whitelist'),send('/api/admin/audit-log'),send('/api/state'),send('/api/config'),send('/api/admin/claims')]);cache={users,white,audit,state,config,claims};}
+function renderClaimChip(c){return `<span class="claim-chip">${esc(c.user_id)} · ${esc(statusLabel(c.status))} · ${fmt(c.quantity)} <button class="link-button" data-edit-claim="${esc(c.material_id)}" data-claim-user="${esc(c.user_id)}">${t('edit')}</button> <button class="link-button" data-del-claim="${esc(c.material_id)}" data-claim-user="${esc(c.user_id)}">${t('delete')}</button></span>`;}
+async function render(){let auth=await send('/api/auth/status');if(!auth.admin){root.innerHTML=`<section class="modal-card"><h1>${t('login')}</h1><div class="password-row"><input class="field" id="pw" type="password" autocomplete="current-password" placeholder="${t('password')}"/><button class="button icon-button" id="togglePw" type="button">${t('showPassword')}</button></div><div class="actions"><button class="button primary" id="login">${t('enter')}</button></div><p class="sub" id="err"></p></section>`;document.getElementById('togglePw').onclick=()=>{const pw=document.getElementById('pw');const show=pw.type==='password';pw.type=show?'text':'password';document.getElementById('togglePw').textContent=t(show?'hidePassword':'showPassword');};document.getElementById('login').onclick=async()=>{try{await send('/api/auth/admin','POST',{password:document.getElementById('pw').value});flash=t('success');cache=null;render();}catch(e){document.getElementById('err').textContent=`${t('error')}: ${e.message}`;}};return;}if(!cache)await loadAdmin();const {users,white,audit,state,config}=cache;const summary=summaryFromState(state);const allMaterials=Object.values(state.materials||{}).filter(matchesFilter);const visibleMaterials=allMaterials.slice(0,materialLimit);const userSummaries=state.summaries?.user_summaries||[];
+root.innerHTML=`<header class="topbar"><div class="brand"><strong>${t('title')}</strong><span>${t('project')}</span></div><div class="identity"><select class="field" id="lang"><option value="zh" ${lang==='zh'?'selected':''}>中文</option><option value="en" ${lang==='en'?'selected':''}>English</option></select><button class="button" id="refresh">${t('refresh')}</button><a class="button" href="/">${t('back')}</a></div></header>${flash?`<div class="empty">${esc(flash)}</div>`:''}<section class="summary">${Object.entries(summary).map(([k,v])=>`<div class="metric"><b>${esc(v)}</b><span>${esc(t(k))}</span></div>`).join('')}</section><section class="section"><h2>${t('data')}</h2><div class="toolbar"><button class="button primary" id="exportData">${t('exportData')}</button><input class="field" id="importFile" type="file" accept="application/json,.json"/><button class="button danger" id="importData">${t('importData')}</button></div><p class="sub">${t('importReplaceHint')}</p></section><section class="section"><h2>${t('userSummary')}</h2><div class="list">${userSummaries.map(u=>{const uc=claimsForUser(u.user_id);return `<div class="card"><div class="card-main"><div><b>${esc(u.user_id)}</b><div class="sub">${t('materialCount')}: ${u.material_count} / ${t('preparing')}: ${u.preparing_count} / ${t('done')}: ${u.done_count}</div><div class="sub">${t('preparingQty')}: ${fmt(u.preparing_quantity)} / ${t('doneQty')}: ${fmt(u.done_quantity)}</div><details><summary class="sub">${t('userClaims')} (${uc.length})</summary><div class="claim-list">${uc.map(c=>renderClaimChip(c)).join('')}</div></details></div><div class="actions"><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button><button class="button danger" data-delete-user="${esc(u.user_id)}">${t('deleteUser')}</button></div></div></div>`}).join('')}</div></section><section class="section"><h2>${t('whitelist')}</h2><div class="toolbar"><label class="badge"><input type="checkbox" id="whitelistEnabled" ${config.whitelist_enabled?'checked':''}/> ${t('whitelistEnabled')}</label><input class="field" id="newUser" placeholder="${t('newUser')}"/><button class="button primary" id="addUser">${t('add')}</button></div><div class="list">${white.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><button class="button danger" data-rm="${esc(u.user_id)}">${t('remove')}</button></div></div>`).join('')}</div></section><section class="section"><h2>${t('users')}</h2><div class="list">${users.map(u=>`<div class="card"><div class="card-main"><b>${esc(u.user_id)}</b><div class="actions"><button class="button danger" data-clear-user="${esc(u.user_id)}">${t('clearUser')}</button><button class="button danger" data-delete-user="${esc(u.user_id)}">${t('deleteUser')}</button></div></div></div>`).join('')}</div></section><section class="section"><h2>${t('materials')}</h2><div class="toolbar"><select class="field" id="filter"><option value="all">${t('all')}</option><option value="unclaimed">${t('unclaimed')}</option><option value="overfilled">${t('overfilled')}</option><option value="stalled">${t('stalled')}</option><option value="not_started">${t('notStarted')}</option><option value="locked">${t('locked')}</option><option value="noted">${t('noted')}</option></select><span class="badge">${visibleMaterials.length}/${allMaterials.length}</span>${visibleMaterials.length<allMaterials.length?`<button class="button" id="showMore">${t('showMore')}</button>`:''}</div><div class="list">${visibleMaterials.map(m=>`<div class="card"><div class="card-main"><div><b>${esc(m.material_id)}</b><div class="sub">${t('note')}: ${esc(m.public_note||'')} / ${t('location')}: ${esc(m.storage_location||'')} / ${t('stackSize')}: ${esc(m.stack_size||64)}</div><div class="sub">${t('recentBy')}: ${esc(m.updated_by||'-')} / ${t('recentAt')}: ${esc(when(m.updated_at))}</div><div class="badges"><span class="badge">${esc(statusLabel(m.overall_status))}</span>${m.locked?`<span class="badge missing">${t('locked')}</span>`:''}</div><details><summary class="sub">${t('materialClaims')} (${(m.claims||[]).length})</summary><div class="claim-list">${(m.claims||[]).map(c=>renderClaimChip({...c,material_id:m.material_id})).join('')}</div></details></div><div class="actions"><button class="button" data-add-claim="${esc(m.material_id)}">${t('add')}</button><button class="button" data-note="${esc(m.material_id)}" data-note-value="${esc(m.public_note||'')}" data-location-value="${esc(m.storage_location||'')}" data-stack-size="${esc(m.stack_size||64)}">${t('save')}</button><button class="button" data-lock="${esc(m.material_id)}" data-locked="${m.locked?'1':'0'}">${m.locked?t('unlock'):t('lock')}</button><button class="button danger" data-clear-mat="${esc(m.material_id)}">${t('clearMaterial')}</button></div></div></div>`).join('')}</div></section><section class="section"><h2>${t('audit')}</h2><div class="list">${audit.slice(0,80).map(a=>`<div class="card"><div class="card-main"><div><b>${esc(actionLabel(a.action))}</b><div class="sub">${t('actor')}: ${esc(a.actor)} / ${t('target')}: ${esc(a.target)} / ${t('time')}: ${esc(when(a.created_at))}</div></div></div></div>`).join('')}</div></section>`;bind();}
+async function updateClaim(materialId, oldUser){const current=(cache.state.materials[materialId]?.claims||[]).find(c=>c.user_id===oldUser)||{user_id:oldUser||'',status:'preparing',quantity:0};const user_id=prompt(t('claimTargetUser'),current.user_id);if(user_id===null||!user_id.trim())return;const status=prompt(t('claimStatus'),current.status||'preparing');if(status===null)return;const quantity=Number(prompt(t('claimQuantity'),String(current.quantity||0)));if(!Number.isFinite(quantity)||quantity<0)return;await send('/api/admin/materials/'+encodeURIComponent(materialId)+'/claims/'+encodeURIComponent(oldUser||user_id),'PUT',{user_id,status,quantity});cache=null;flash=t('success');render();}
+function bind(){document.getElementById('lang').onchange=e=>{lang=e.target.value;localStorage.setItem('lba-stockpile-lang',lang==='zh'?'zh-CN':'en-US');render();};document.getElementById('refresh').onclick=()=>{cache=null;render();};document.getElementById('filter').value=filter;document.getElementById('filter').onchange=e=>{filter=e.target.value;materialLimit=60;render();};document.getElementById('showMore')?.addEventListener('click',()=>{materialLimit+=60;render();});document.getElementById('exportData').onclick=async()=>{const data=await send('/api/admin/export');const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`stockpile-admin-${Date.now()}.json`;a.click();URL.revokeObjectURL(a.href);flash=t('copied');render();};document.getElementById('importData').onclick=async()=>{const file=document.getElementById('importFile').files?.[0];if(!file)return;const data=JSON.parse(await file.text());await send('/api/admin/import','POST',data);cache=null;flash=t('imported');render();};document.getElementById('whitelistEnabled').onchange=async e=>{await send('/api/config','PUT',{whitelist_enabled:e.target.checked});cache=null;flash=t('success');render();};document.getElementById('addUser').onclick=async()=>{await send('/api/whitelist','POST',{user_id:document.getElementById('newUser').value});cache=null;flash=t('success');render();};document.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{await send('/api/whitelist/'+encodeURIComponent(b.dataset.rm),'DELETE');cache=null;flash=t('success');render();});document.querySelectorAll('[data-clear-user]').forEach(b=>b.onclick=async()=>{await send('/api/admin/users/'+encodeURIComponent(b.dataset.clearUser)+'/claims','DELETE');cache=null;flash=t('success');render();});document.querySelectorAll('[data-delete-user]').forEach(b=>b.onclick=async()=>{const mode=prompt(t('deleteMode'),'clear');if(mode===null)return;let target_user_id=null;if(mode==='migrate'||mode==='merge'){target_user_id=prompt(t('targetUser'),'');if(target_user_id===null||!target_user_id.trim())return;}await send('/api/admin/users/'+encodeURIComponent(b.dataset.deleteUser),'DELETE',{mode,target_user_id});cache=null;flash=t('success');render();});document.querySelectorAll('[data-clear-mat]').forEach(b=>b.onclick=async()=>{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.clearMat)+'/claims','DELETE');cache=null;flash=t('success');render();});document.querySelectorAll('[data-lock]').forEach(b=>b.onclick=async()=>{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.lock),'PUT',{locked:b.dataset.locked!=='1'});cache=null;flash=t('success');render();});document.querySelectorAll('[data-note]').forEach(b=>b.onclick=async()=>{const public_note=prompt(t('note'),b.dataset.noteValue||'');if(public_note===null)return;const storage_location=prompt(t('location'),b.dataset.locationValue||'');if(storage_location===null)return;const stack=prompt(t('stackSize'),b.dataset.stackSize||'64');if(stack===null)return;await send('/api/admin/materials/'+encodeURIComponent(b.dataset.note),'PUT',{public_note,storage_location,stack_size:Number(stack)});cache=null;flash=t('success');render();});document.querySelectorAll('[data-add-claim]').forEach(b=>b.onclick=()=>updateClaim(b.dataset.addClaim,''));document.querySelectorAll('[data-edit-claim]').forEach(b=>b.onclick=()=>updateClaim(b.dataset.editClaim,b.dataset.claimUser));document.querySelectorAll('[data-del-claim]').forEach(b=>b.onclick=async()=>{await send('/api/admin/materials/'+encodeURIComponent(b.dataset.delClaim)+'/claims/'+encodeURIComponent(b.dataset.claimUser),'DELETE');cache=null;flash=t('success');render();});}
 render().catch(e=>{root.innerHTML='<pre class="empty">'+esc(e.message)+'</pre>';});
 }());
 </script></body></html>"#
@@ -2733,6 +3610,7 @@ struct HttpRequest {
     method: String,
     path: String,
     headers: BTreeMap<String, String>,
+    remote_addr: Option<IpAddr>,
     body: Vec<u8>,
 }
 
@@ -2745,6 +3623,7 @@ struct HttpResponse {
 }
 
 fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
+    let remote_addr = stream.peer_addr().ok().map(|addr| addr.ip());
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
@@ -2781,6 +3660,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         method,
         path,
         headers,
+        remote_addr,
         body,
     })
 }
@@ -2927,7 +3807,9 @@ mod tests {
         let state = aggregate_state(
             &materials,
             Vec::new(),
+            Vec::new(),
             claims,
+            BTreeMap::new(),
             BTreeMap::new(),
             Vec::new(),
             1,
@@ -3635,6 +4517,83 @@ mod tests {
     }
 
     #[test]
+    fn auth_cookie_uses_httponly_and_secure_only_for_https_requests() {
+        let fixture = exported_fixture("auth_cookie_flags");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        set_access_password(&fixture, "secret").expect("set password");
+        let project = load_project_from_zip(&fixture).expect("project");
+        let source = AssetSource::Zip(fixture.clone());
+
+        let plain_login = route_request_inner(
+            &request(
+                "POST",
+                "/api/auth/access",
+                br#"{"password":"secret","user_id":"alex"}"#,
+            ),
+            &source,
+            &db,
+            &project,
+        )
+        .expect("plain login");
+        let plain_cookie = plain_login
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Set-Cookie")
+            .map(|(_, value)| value.clone())
+            .expect("plain cookie");
+        assert!(plain_cookie.contains("HttpOnly"));
+        assert!(plain_cookie.contains("SameSite=Lax"));
+        assert!(!plain_cookie.contains("Secure"));
+
+        let mut https_request = request(
+            "POST",
+            "/api/auth/access",
+            br#"{"password":"secret","user_id":"alex"}"#,
+        );
+        https_request
+            .headers
+            .insert("x-forwarded-proto".to_string(), "https".to_string());
+        let https_login =
+            route_request_inner(&https_request, &source, &db, &project).expect("https login");
+        let https_cookie = https_login
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Set-Cookie")
+            .map(|(_, value)| value.clone())
+            .expect("https cookie");
+        assert!(https_cookie.contains("HttpOnly"));
+        assert!(https_cookie.contains("Secure"));
+
+        let mut spoofed = request("POST", "/api/auth/access", b"");
+        spoofed.remote_addr = Some("203.0.113.7".parse().expect("remote ip"));
+        spoofed
+            .headers
+            .insert("x-forwarded-proto".to_string(), "https".to_string());
+        assert!(!session_cookie("token", 60, &spoofed).contains("Secure"));
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn rate_limit_key_trusts_forwarded_for_only_from_loopback_peer() {
+        let mut direct = request("POST", "/api/auth/access", b"");
+        direct.remote_addr = Some("203.0.113.7".parse().expect("remote ip"));
+        direct
+            .headers
+            .insert("x-forwarded-for".to_string(), "198.51.100.9".to_string());
+        assert_eq!(client_rate_limit_key(&direct), "203.0.113.7");
+
+        let mut proxied = request("POST", "/api/auth/access", b"");
+        proxied.remote_addr = Some("127.0.0.1".parse().expect("loopback ip"));
+        proxied.headers.insert(
+            "x-forwarded-for".to_string(),
+            "198.51.100.9, 127.0.0.1".to_string(),
+        );
+        assert_eq!(client_rate_limit_key(&proxied), "198.51.100.9");
+    }
+
+    #[test]
     fn whitelist_and_locked_materials_block_non_admin_writes() {
         let fixture = exported_fixture("whitelist_locked");
         let db = session_db_path(&fixture).expect("session db");
@@ -3665,6 +4624,7 @@ mod tests {
                 public_note: None,
                 storage_location: None,
                 locked: Some(true),
+                stack_size: None,
                 user_id: None,
             },
             "admin",
@@ -3743,10 +4703,172 @@ mod tests {
     }
 
     #[test]
+    fn revision_presence_and_user_merge_apis_work() {
+        let fixture = exported_fixture("revision_presence_merge");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        let project = load_project_from_zip(&fixture).expect("project");
+        let source = AssetSource::Zip(fixture.clone());
+
+        let initial_revision = route_request(
+            &request("GET", "/api/revision", b""),
+            &source,
+            &db,
+            &project,
+        );
+        assert_eq!(initial_revision.status, 200);
+        let initial_json: Value =
+            serde_json::from_slice(&initial_revision.body).expect("initial revision");
+        let initial_updated_at = initial_json["updated_at"].as_u64().unwrap_or(0);
+        assert!(initial_updated_at > 0);
+
+        let claim = route_request(
+            &request(
+                "PUT",
+                "/api/materials/minecraft%3Astone/claims/alex",
+                br#"{"status":"preparing","quantity":4}"#,
+            ),
+            &source,
+            &db,
+            &project,
+        );
+        assert_eq!(claim.status, 200);
+        let after_claim = route_request(
+            &request("GET", "/api/revision", b""),
+            &source,
+            &db,
+            &project,
+        );
+        let after_json: Value = serde_json::from_slice(&after_claim.body).expect("revision");
+        assert!(after_json["updated_at"].as_u64().unwrap_or(0) >= initial_updated_at);
+
+        let presence = route_request(
+            &request("POST", "/api/presence", br#"{"user_id":"alex"}"#),
+            &source,
+            &db,
+            &project,
+        );
+        assert_eq!(presence.status, 200);
+        let viewers: Vec<PresenceState> = serde_json::from_slice(&presence.body).expect("presence");
+        assert!(viewers.iter().any(|viewer| viewer.user_id == "alex"));
+
+        let merged = route_request(
+            &request(
+                "POST",
+                "/api/users/merge",
+                br#"{"from_user_id":"alex","to_user_id":"steve","mode":"migrate"}"#,
+            ),
+            &source,
+            &db,
+            &project,
+        );
+        assert_eq!(merged.status, 200);
+        let state: StockpileSyncState = serde_json::from_slice(&merged.body).expect("merged state");
+        let stone = state.materials.get("minecraft:stone").expect("stone state");
+        assert!(stone.claims.iter().any(|claim| claim.user_id == "steve"));
+        assert!(!stone.claims.iter().any(|claim| claim.user_id == "alex"));
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
+    fn admin_claim_update_delete_and_user_delete_work() {
+        let fixture = exported_fixture("admin_claim_management");
+        let db = session_db_path(&fixture).expect("session db");
+        let _ = std::fs::remove_file(&db);
+        set_admin_password(&fixture, "admin-secret").expect("set admin password");
+        let project = load_project_from_zip(&fixture).expect("project");
+        let source = AssetSource::Zip(fixture.clone());
+        let login = route_request_inner(
+            &request(
+                "POST",
+                "/api/auth/admin",
+                br#"{"password":"admin-secret","user_id":"root"}"#,
+            ),
+            &source,
+            &db,
+            &project,
+        )
+        .expect("admin login");
+        let cookie = login
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Set-Cookie")
+            .map(|(_, value)| value.clone())
+            .expect("cookie");
+
+        let updated = route_request(
+            &request_with_cookie(
+                "PUT",
+                "/api/admin/materials/minecraft%3Astone/claims/alex",
+                br#"{"user_id":"alex","status":"done","quantity":7}"#,
+                &cookie,
+            ),
+            &source,
+            &db,
+            &project,
+        );
+        assert_eq!(updated.status, 200);
+        let state: StockpileSyncState = serde_json::from_slice(&updated.body).expect("state");
+        assert_eq!(state.materials["minecraft:stone"].claims[0].quantity, 7);
+
+        let deleted = route_request(
+            &request_with_cookie(
+                "DELETE",
+                "/api/admin/materials/minecraft%3Astone/claims/alex",
+                b"",
+                &cookie,
+            ),
+            &source,
+            &db,
+            &project,
+        );
+        assert_eq!(deleted.status, 200);
+        let state: StockpileSyncState = serde_json::from_slice(&deleted.body).expect("state");
+        assert!(state.materials["minecraft:stone"].claims.is_empty());
+
+        let _ = route_request(
+            &request(
+                "PUT",
+                "/api/materials/minecraft%3Aglass/claims/old-id",
+                br#"{"status":"preparing","quantity":2}"#,
+            ),
+            &source,
+            &db,
+            &project,
+        );
+        let removed = route_request(
+            &request_with_cookie(
+                "DELETE",
+                "/api/admin/users/old-id",
+                br#"{"mode":"delete"}"#,
+                &cookie,
+            ),
+            &source,
+            &db,
+            &project,
+        );
+        assert_eq!(removed.status, 200);
+        let state: StockpileSyncState = serde_json::from_slice(&removed.body).expect("state");
+        assert!(
+            !state
+                .materials
+                .values()
+                .flat_map(|material| &material.claims)
+                .any(|claim| claim.user_id == "old-id")
+        );
+
+        cleanup_fixture(&fixture, &db, Path::new(""));
+    }
+
+    #[test]
     fn admin_page_i18n_and_collaboration_controls_are_present() {
         let html = admin_page_html();
         assert!(html.contains("const i18n="));
         assert!(html.contains("userSummary"));
+        assert!(html.contains("claimManage"));
+        assert!(html.contains("data-edit-claim"));
+        assert!(html.contains("data-delete-user"));
         assert!(html.contains("actionLabel"));
         assert!(html.contains("overfilled"));
         assert!(html.contains("stalled"));
@@ -3776,6 +4898,7 @@ mod tests {
                 material("minecraft:chest", 4),
                 material("minecraft:empty", 1),
             ],
+            diagnostics: Vec::new(),
         }
     }
 
@@ -3794,6 +4917,8 @@ mod tests {
             item_icon_key: id.to_string(),
             icon_path: String::new(),
             icon_available: false,
+            icon_diagnostic: None,
+            normalized_from: Vec::new(),
             display_names: BTreeMap::new(),
             source_regions: vec!["main".to_string()],
             recipe_status: "missing".to_string(),
@@ -3866,6 +4991,7 @@ mod tests {
             method: method.to_string(),
             path: path.to_string(),
             headers: BTreeMap::new(),
+            remote_addr: None,
             body: body.to_vec(),
         }
     }

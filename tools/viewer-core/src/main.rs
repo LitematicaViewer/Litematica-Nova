@@ -3,8 +3,9 @@ use std::io::{self, BufWriter, Read, Write};
 
 use anyhow::Result;
 use litematica_core::{
-    analyze, block_entity, cache_layer, cli, generate_projection, mesh, metadata_edit, recipe_cache,
-    replace_blocks, runtime_paths, stats_api, stockpile, stockpile_serve, stockpile_zip, visual,
+    analyze, block_entity, cache_layer, cli, generate_projection, mesh, metadata_edit, projection_marker, projection_preview,
+    recipe_cache, replace_blocks, runtime_paths, stats_api, stockpile, stockpile_serve,
+    stockpile_zip, visual,
 };
 use serde::Serialize;
 
@@ -28,6 +29,11 @@ fn emit_output<T: Serialize>(value: &T, output: Option<&std::path::Path>) -> Res
 }
 
 fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--public-build-info") {
+        println!("{}", serde_json::json!({"schema":"nova.public.beta.build.v1","flavor":"fast-only","fullMode":false,"publicBeta":true,"gitSha":env!("LBA_BACKEND_GIT_SHA")}));
+        return Ok(());
+    }
+
     let args = cli::parse_args()?;
     let runtime_paths = runtime_paths::ensure_runtime_layout()?;
     match args.command.as_str() {
@@ -73,6 +79,7 @@ fn main() -> Result<()> {
                     false,
                 )?,
                 whitelist: read_whitelist_file(args.whitelist_file.as_deref())?,
+                whitelist_enabled: None,
                 allow_guest_readonly: args.allow_guest_readonly,
                 admin_page_enabled: args.admin_page_enabled,
                 targets: stockpile_zip::parse_deploy_targets(&args.stockpile_targets)?,
@@ -180,6 +187,14 @@ fn main() -> Result<()> {
             let output = stats_api::build_stats_output(&args.input, args.include_container_items)?;
             emit_output(&output, args.output.as_deref())?;
         }
+        "projection-preview" => {
+            let output_path = args
+                .output
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing --output for projection-preview"))?;
+            let output = projection_preview::extract_projection_preview(&args.input, output_path)?;
+            emit_output(&output, None)?;
+        }
         "materials" => {
             let scope = match (args.scope.as_deref(), args.region.as_ref(), args.layer) {
                 (_, Some(region), None) => stats_api::MaterialScope::Region(region.clone()),
@@ -199,6 +214,32 @@ fn main() -> Result<()> {
         }
         "analyze" => {
             let output = analyze::analyze_litematic(&args.input, args.include_entities)?;
+            emit_output(&output, args.output.as_deref())?;
+        }
+        "projection-markers" => {
+            let output = projection_marker::read_projection_markers(&args.input)?;
+            emit_output(&output, args.output.as_deref())?;
+        }
+        "set-origin" => {
+            let x = args.x.ok_or_else(|| anyhow::anyhow!("missing --x for set-origin"))?;
+            let y = args.y.ok_or_else(|| anyhow::anyhow!("missing --y for set-origin"))?;
+            let z = args.z.ok_or_else(|| anyhow::anyhow!("missing --z for set-origin"))?;
+            let output = projection_marker::set_projection_origin(&args.input, args.output.as_deref(), x, y, z)?;
+            emit_output(&output, None)?;
+        }
+        "remove-origin" => {
+            let output = projection_marker::remove_projection_origin(&args.input, args.output.as_deref())?;
+            emit_output(&output, None)?;
+        }
+        "read-block-entity" | "read-layer-container" => {
+            let x = args.x.ok_or_else(|| anyhow::anyhow!("missing --x for {}", args.command))?;
+            let y = args.y.ok_or_else(|| anyhow::anyhow!("missing --y for {}", args.command))?;
+            let z = args.z.ok_or_else(|| anyhow::anyhow!("missing --z for {}", args.command))?;
+            let output = if args.command == "read-layer-container" {
+                block_entity::read_layer_container(&args.input, x, y, z)?
+            } else {
+                block_entity::read_block_entity_at(&args.input, x, y, z)?
+            };
             emit_output(&output, args.output.as_deref())?;
         }
         "visual-meta" => {
@@ -221,10 +262,6 @@ fn main() -> Result<()> {
                 .y
                 .ok_or_else(|| anyhow::anyhow!("missing --y for cache-layer"))?;
             let output = cache_layer::build_cache_layer_output(&args.input, y)?;
-            emit_output(&output, args.output.as_deref())?;
-        }
-        "cache-layers-all" => {
-            let output = cache_layer::build_cache_all_layers_output(&args.input)?;
             emit_output(&output, args.output.as_deref())?;
         }
         "visualize" => {
@@ -281,13 +318,6 @@ fn main() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("missing --patch for edit-metadata"))?;
             let summary = metadata_edit::edit_metadata(&args.input, args.output.as_deref(), patch)?;
             emit_output(&summary, None)?;
-        }
-        "read-block-entity" => {
-            let x = args.x.ok_or_else(|| anyhow::anyhow!("missing --x"))?;
-            let y = args.y.ok_or_else(|| anyhow::anyhow!("missing --y"))?;
-            let z = args.z.ok_or_else(|| anyhow::anyhow!("missing --z"))?;
-            let output = litematica_core::block_entity::read_block_entity_at(&args.input, x, y, z)?;
-            emit_output(&output, args.output.as_deref())?;
         }
         other => anyhow::bail!("unknown command: {other}"),
     }

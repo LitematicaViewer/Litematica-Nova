@@ -1,0 +1,41 @@
+@import "../modern.css";
+
+:root {
+    --background: #fafafa;
+    --foreground: #18181b;
+    --card: #ffffff;
+    --popover: #ffffff;
+    --primary: #18181b;
+    --primary-foreground: #ffffff;
+    --secondary: #e4e4e7;
+    --muted: #f4f4f5;
+    --muted-foreground: #63636c;
+    --accent: #eeeeef;
+    --destructive: #b42332;
+    --border: #dcdce0;
+    --ring: #71717a;
+    --radius: 6px;
+    --edge-width: 1px;
+    --control-shadow: 0 1px 2px rgb(0 0 0 / 3%);
+    --panel-shadow: 0 12px 36px rgb(0 0 0 / 14%), 0 2px 6px rgb(0 0 0 / 6%);
+    --ln-body-font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    --ln-body-font-size: 14px;
+}
+
+:root[data-color-scheme="dark"] {
+    --background: #141416;
+    --foreground: #f4f4f5;
+    --card: #1c1c1f;
+    --popover: #242427;
+    --primary: #f4f4f5;
+    --primary-foreground: #18181b;
+    --secondary: #303034;
+    --muted: #252528;
+    --muted-foreground: #b1b1bb;
+    --accent: #34343a;
+    --destructive: #f07884;
+    --border: #3b3b42;
+    --ring: #a1a1aa;
+    --control-shadow: 0 1px 2px rgb(0 0 0 / 15%);
+    --panel-shadow: 0 12px 36px rgb(0 0 0 / 35%), 0 2px 6px rgb(0 0 0 / 16%);
+}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 
 import {
     applyThemeStylesheet,
@@ -11,9 +11,9 @@ import {
  * Minimal standalone window used to verify child-window theme styling.
  */
 export function DemoWindow() {
-    const [themeId, setThemeId] = useState(currentThemeId());
+    const [themeId, setThemeId] = useState(currentThemeId);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         applyThemeStylesheet(themeId);
     }, [themeId]);
 

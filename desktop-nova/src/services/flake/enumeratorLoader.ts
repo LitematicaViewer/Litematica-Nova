@@ -7,7 +7,7 @@ const enumeratorCache = new Map<string, Set<string>>();
 
 /**
  * 加载并缓存枚举器文件
- * 
+ *
  * @param relativePath - 枚举器文件的相对路径（如 "enumerator/system_enum/state_waterlogged.json"）
  * @returns 方块ID集合
  */
@@ -28,7 +28,7 @@ async function loadEnumerator(relativePath: string): Promise<Set<string>> {
     const normalized = parsed
       .map((id) => String(id || "").trim().toLowerCase())
       .filter(Boolean);
-    
+
     const result = new Set(normalized);
     enumeratorCache.set(relativePath, result);
     return result;
@@ -40,7 +40,7 @@ async function loadEnumerator(relativePath: string): Promise<Set<string>> {
 
 /**
  * 检查方块ID是否在指定的枚举器中
- * 
+ *
  * @param blockId - 方块ID（已规范化）
  * @param enumeratorPath - 枚举器文件相对路径
  * @returns 是否匹配

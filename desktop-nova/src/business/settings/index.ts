@@ -18,21 +18,20 @@ export {
   saveUserConfig,
   setUserConfigDir,
 } from "../../services/backend";
-export type { MaterialListWindowBehavior, ThemeName } from "../../services/userConfig";
+export type { MaterialListWindowBehavior, ThemeName, ColorMode } from "../../services/userConfig";
 export {
-  DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES,
   loadUserConfigMigratingLocalStorage,
   normalizeLocalLibraryTailPathCount,
   normalizeMaterialListWindowBehavior,
   normalizeShowUiTestPage,
-  normalizeStatisticsEnumeratorInfoRules,
   normalizeTheme,
+  normalizeColorMode,
+  saveColorModeConfig,
   saveLocalLibraryTailPathCountConfig,
   saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
   saveRenderDisplayModeConfig,
   saveShowUiTestPageConfig,
-  saveStatisticsEnumeratorInfoRulesConfig,
   saveThemeConfig,
 } from "../../services/userConfig";
 export type { DisplayMode } from "../../services/renderMode";

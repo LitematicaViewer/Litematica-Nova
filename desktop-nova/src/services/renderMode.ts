@@ -1,27 +1,14 @@
-export type DisplayMode = "normal" | "fast_experimental" | "full";
-
+export type DisplayMode = "fast_experimental";
 export const RENDER_DISPLAY_MODE_KEY = "lba.render.displayMode";
-
 export const DISPLAY_MODE_OPTIONS: Array<{ label: string; value: DisplayMode }> = [
-  { label: "普通模式", value: "normal" },
-  { label: "快速模式（实验）", value: "fast_experimental" },
-  { label: "完整模式", value: "full" },
+  { label: "快速模式", value: "fast_experimental" },
 ];
 
-export function normalizeDisplayMode(value: unknown): DisplayMode {
-  if (value === "fast_experimental" || value === "full") return value;
-  return "normal";
-}
-
-export function loadDisplayMode(): DisplayMode {
-  const displayMode = normalizeDisplayMode(localStorage.getItem(RENDER_DISPLAY_MODE_KEY));
-  console.log("[LBA_RENDER_MODE]", { loaded_from_cache: true, display_mode: displayMode });
-  return displayMode;
-}
-
+/** Old full/normal settings never select a private or unavailable implementation. */
+export function normalizeDisplayMode(_value: unknown): DisplayMode { return "fast_experimental"; }
+export function loadDisplayMode(): DisplayMode { return normalizeDisplayMode(localStorage.getItem(RENDER_DISPLAY_MODE_KEY)); }
 export function saveDisplayMode(value: string): DisplayMode {
-  const displayMode = normalizeDisplayMode(value);
-  localStorage.setItem(RENDER_DISPLAY_MODE_KEY, displayMode);
-  console.log("[LBA_RENDER_MODE]", { saved_to_cache: true, display_mode: displayMode });
-  return displayMode;
+  const mode = normalizeDisplayMode(value);
+  localStorage.setItem(RENDER_DISPLAY_MODE_KEY, mode);
+  return mode;
 }

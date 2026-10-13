@@ -1,29 +1,33 @@
-﻿import React, { useState, useRef, useEffect } from "react";
+import React from "react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
-export function Dropdown({ value, options, onChange, renderValue }: { value: string, options: {label: string, value: string}[], onChange: (v: string) => void, renderValue?: (v: string) => string }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
-  
-  const display = renderValue ? renderValue(value) : (options.find(o => o.value === value)?.label || value);
+export function Dropdown({ value, options, onChange, renderValue, disabled = false, ariaLabel, id, className = "" }: {
+  value: string;
+  options: { label: string; value: string }[];
+  onChange: (value: string) => void;
+  renderValue?: (value: string) => string;
+  disabled?: boolean;
+  ariaLabel?: string;
+  id?: string;
+  className?: string;
+}) {
+  // Radix reserves an empty item value for its placeholder. Prefix every domain
+  // value rather than inventing a sentinel that could collide with user values.
+  const encodeValue = (entry: string) => `value:${entry}`;
+  const selected = options.find((option) => option.value === value);
+  const display = renderValue ? renderValue(value) : (selected?.label || value);
   return (
-    <div className="dropdown-container" ref={ref}>
-      <button type="button" className="btn" onClick={() => setOpen(!open)}>{display} ▾</button>
-      {open && (
-        <div className="dropdown-menu">
-          {options.map(o => (
-            <div key={o.value} className="dropdown-item" onClick={() => { onChange(o.value); setOpen(false); }}>
-              {o.label}
-            </div>
-          ))}
-        </div>
-      )}
+    <div className={`dropdown-container ${className}`}>
+      <Select value={selected ? encodeValue(value) : ""}
+        disabled={disabled || options.length === 0}
+        onValueChange={(next) => onChange(next.slice("value:".length))}>
+        <SelectTrigger id={id} aria-label={ariaLabel}>
+          <SelectValue placeholder="请选择"><span className="dropdown-value">{display || "请选择"}</span></SelectValue>
+        </SelectTrigger>
+        <SelectContent position="popper" align="start" collisionPadding={8} aria-label={ariaLabel || display || "请选择"}>
+          {options.map((option) => <SelectItem key={option.value} value={encodeValue(option.value)}>{option.label}</SelectItem>)}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
-
-

@@ -1,3 +1,3 @@
-.theme-minecraft .nav-icon {
-    image-rendering: pixelated;
-}
+/* Functional navigation uses the same vector icons as the other themes.
+   Minecraft material/item images remain game resources. */
+.theme-minecraft .nav-icon { image-rendering: auto; }

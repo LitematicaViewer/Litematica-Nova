@@ -109,7 +109,7 @@ pub fn load_visual_catalog(path: &Path) -> Result<(LitematicRoot, VisualCatalog)
     }
 
     Ok((
-        (*root).clone(),
+        root,
         VisualCatalog {
             metadata,
             bounds,

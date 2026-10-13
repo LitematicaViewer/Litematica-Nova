@@ -195,12 +195,20 @@ pub struct CompactSurfaceOutput {
     pub palette_id: u32,
 }
 
+fn default_vertex_light() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TexturedVertexOutput {
     pub position: [f32; 3],
     pub uv: [f32; 2],
     #[serde(default)]
     pub emissive_tag: f32,
+    /// 烘焙顶点亮度 = 原版方向 shade（CardinalLighting）x 顶点 AO
+    /// （BlockModelLighter 四块平均）。vanilla 光照模式直接使用。
+    #[serde(default = "default_vertex_light")]
+    pub light: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,10 +255,60 @@ pub struct EntityNbt {
     pub id_lower: Option<String>,
     #[serde(rename = "Id")]
     pub id_upper: Option<String>,
+    /// All entity payload outside the discriminator. Ordinary entity
+    /// rendering depends on fields such as `Pos`, `Rotation`, `variant`,
+    /// equipment and inventories, so a typed litematic round trip must not
+    /// discard them after DataFix has produced the MC 26.2 representation.
+    #[serde(default, flatten)]
+    pub data: BTreeMap<String, fastnbt::Value>,
 }
 
 impl EntityNbt {
     pub fn entity_id(&self) -> Option<&str> {
         self.id_lower.as_deref().or(self.id_upper.as_deref())
+    }
+
+    pub fn field(&self, name: &str) -> Option<&fastnbt::Value> {
+        self.data.get(name)
+    }
+
+    pub fn fields(&self) -> &BTreeMap<String, fastnbt::Value> {
+        &self.data
+    }
+}
+
+#[cfg(test)]
+mod entity_tests {
+    use fastnbt::Value;
+
+    use super::EntityNbt;
+
+    #[test]
+    fn entity_nbt_preserves_render_payload_through_nbt_round_trip() {
+        let mut entity = EntityNbt {
+            id_lower: Some("minecraft:painting".to_owned()),
+            ..EntityNbt::default()
+        };
+        entity.data.insert(
+            "Pos".to_owned(),
+            Value::List(vec![
+                Value::Double(1.5),
+                Value::Double(2.0),
+                Value::Double(-3.5),
+            ]),
+        );
+        entity.data.insert(
+            "variant".to_owned(),
+            Value::String("minecraft:unpacked".to_owned()),
+        );
+        entity.data.insert("facing".to_owned(), Value::Byte(4));
+
+        let encoded = fastnbt::to_bytes(&entity).expect("serialize entity NBT");
+        let decoded: EntityNbt = fastnbt::from_bytes(&encoded).expect("deserialize entity NBT");
+
+        assert_eq!(decoded.entity_id(), Some("minecraft:painting"));
+        assert_eq!(decoded.field("Pos"), entity.field("Pos"));
+        assert_eq!(decoded.field("variant"), entity.field("variant"));
+        assert_eq!(decoded.field("facing"), entity.field("facing"));
     }
 }

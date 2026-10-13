@@ -1,49 +1,127 @@
-#![allow(
-    clippy::too_many_arguments,
-    clippy::result_large_err,
-    clippy::while_let_loop,
-    clippy::question_mark,
-    clippy::format_in_format_args,
-    clippy::explicit_counter_loop
-)]
-
-use std::collections::HashMap;
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::borrow::Cow;
+use std::collections::{HashMap,BTreeMap,HashSet,VecDeque};
 use std::f32::consts::FRAC_PI_4;
 use std::fs::File;
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufWriter,Read,Write};
 use std::mem::size_of;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
-
-use anyhow::{Context, Result, anyhow, bail};
-use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec2, Vec3};
-use image::{Rgb, RgbImage, Rgba, RgbaImage};
-use serde::{Deserialize, Serialize};
+use std::path::{Path,PathBuf};
+use std::sync::atomic::{AtomicBool,AtomicIsize,AtomicU64,AtomicUsize,Ordering};
+use std::sync::mpsc::{self,Receiver,Sender,TryRecvError};
+use std::sync::{Arc,Mutex,OnceLock};
+use std::thread::{self,JoinHandle};
+use std::time::{Duration,Instant};
+use anyhow::{Context,Result,anyhow,bail};
+use bytemuck::{Pod,Zeroable};
+use glam::{Mat4,Vec2,Vec3};
+use image::{Rgb,RgbImage,Rgba,RgbaImage};
+use serde::{Serialize,Deserialize};
 use serde_json::Value as JsonValue;
+use sha2::{Digest,Sha256};
+use viewer_launch_contract::{VIEWER_LAUNCH_ACK_PREFIX,VIEWER_LAUNCH_ACK_SCHEMA,VIEWER_LAUNCH_SCHEMA,ViewerLaunchAck,ViewerLaunchContract,ViewerSessionCommand,ViewerSessionCommandKind,ViewerSessionState,ViewerTask};
 use wgpu::util::DeviceExt;
-use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
-#[cfg(target_os = "windows")]
-use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use winit::dpi::{PhysicalPosition,PhysicalSize};
+use winit::event::{ElementState,Event,MouseButton,MouseScrollDelta,WindowEvent};
+use winit::event_loop::{ControlFlow,EventLoop};
+use winit::keyboard::{KeyCode,PhysicalKey};
+#[cfg(target_os="windows")]
+use winit::raw_window_handle::{HasWindowHandle,RawWindowHandle};
 use winit::window::WindowBuilder;
-
-use crate::build_mode::{
-    compact_cache_v2_enabled, headless_prebuild_enabled, writer_pipeline_enabled,
-};
-use crate::full_mode::FullModeMaterialCache;
-use crate::full_mode_v2::build_full_mode_v2_scene_assets;
-use crate::mesh::{ChunkKey, ChunkSceneIndex};
-use crate::model::{CompactSurfaceOutput, MeshChunkOutput, MetadataOutput, TexturedVertexOutput};
+#[cfg(target_os="windows")]
+#[path="native_child.rs"]
+mod native_child;
+use crate::backend_provenance::BackendProvenance;
+use crate::build_mode::{ViewerBuildMode,compact_cache_v2_enabled,install_viewer_build_mode,writer_pipeline_enabled};
+use crate::mesh::{ChunkKey,ChunkSceneIndex};
+use crate::model::{CompactSurfaceOutput,MeshChunkOutput,MetadataOutput,TexturedVertexOutput};
+use crate::process_io::read_process_file;
+use crate::viewer_session::ViewerSessionWatcher;
 use crate::runtime_paths;
+const QUICK_MESH_CACHE_FORMAT: &str="native_fast_preview_cache_v1";
+#[derive(Clone, Debug)]
+struct ViewerShutdownRecord {
+    reason: String,
+    detail: String,
+    exit_code: i32,
+}
 
+static VIEWER_SHUTDOWN_RECORD: OnceLock<Mutex<Option<ViewerShutdownRecord>>> = OnceLock::new();
+static VIEWER_SHUTDOWN_EMITTED: AtomicBool = AtomicBool::new(false);
+static VIEWER_SHUTDOWN_HWND: AtomicIsize = AtomicIsize::new(0);
+static VIEWER_SHUTDOWN_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+
+
+fn viewer_shutdown_record() -> &'static Mutex<Option<ViewerShutdownRecord>> {
+    VIEWER_SHUTDOWN_RECORD.get_or_init(|| Mutex::new(None))
+}
+
+fn register_viewer_shutdown_hwnd(hwnd: isize) {
+    VIEWER_SHUTDOWN_HWND.store(hwnd, Ordering::SeqCst);
+}
+
+fn register_viewer_shutdown_generation(generation: u64) {
+    VIEWER_SHUTDOWN_GENERATION.store(generation, Ordering::SeqCst);
+}
+
+fn record_viewer_shutdown(reason: &str, exit_code: i32, detail: impl Into<String>) {
+    let next = ViewerShutdownRecord {
+        reason: reason.to_owned(),
+        detail: detail.into(),
+        exit_code,
+    };
+    let mut record = viewer_shutdown_record()
+        .lock()
+        .expect("Viewer shutdown record mutex");
+    if record
+        .as_ref()
+        .is_none_or(|current| current.exit_code == 0 && next.exit_code != 0)
+    {
+        *record = Some(next);
+    }
+}
+
+fn emit_viewer_shutdown() {
+    if VIEWER_SHUTDOWN_EMITTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let record = viewer_shutdown_record()
+        .lock()
+        .expect("Viewer shutdown record mutex")
+        .clone()
+        .unwrap_or_else(|| ViewerShutdownRecord {
+            reason: "unknown".to_owned(),
+            detail: "no shutdown reason was recorded".to_owned(),
+            exit_code: 1,
+        });
+    let detail = serde_json::to_string(&record.detail)
+        .unwrap_or_else(|_| "\"failed to serialize shutdown detail\"".to_owned());
+    eprintln!(
+        "[VIEWER_SHUTDOWN] reason={} pid={} hwnd={} generation={} exit_code={} detail={}",
+        record.reason,
+        std::process::id(),
+        VIEWER_SHUTDOWN_HWND.load(Ordering::SeqCst),
+        VIEWER_SHUTDOWN_GENERATION.load(Ordering::SeqCst),
+        record.exit_code,
+        detail,
+    );
+    let _ = std::io::stderr().flush();
+}
+
+pub fn install_viewer_shutdown_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        record_viewer_shutdown("panic", 101, panic_info.to_string());
+        emit_viewer_shutdown();
+        previous(panic_info);
+    }));
+}
+
+pub fn finish_viewer_main(reason: &str, exit_code: i32, detail: impl Into<String>) {
+    record_viewer_shutdown(reason, exit_code, detail);
+    emit_viewer_shutdown();
+}
+
+/// Geometry cache version for textured full-mode chunk meshes. **Bump this
 const VIEWER_SHADER: &str = r#"
 struct CameraUniform {
     view_proj: mat4x4<f32>,
@@ -76,7 +154,7 @@ struct LightingUniform {
     ao_distance_fade_end: f32,
     ao_edge_guard: f32,
     ao_max_occlusion: f32,
-    ao_padding: f32,
+    vanilla_lighting: f32,
     tone_preset: f32,
     tone_exposure: f32,
     tone_gamma: f32,
@@ -186,6 +264,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         }
         color = vec4<f32>(sampled.rgb, sampled.a * input.color.a);
         sampled_base_rgb = sampled.rgb;
+        // 原版 26.2 光照模式：顶点烘焙亮度（方向 shade x 4 顶点 AO，
+        // mesh 阶段按 BlockModelLighter 算好存进顶点色 r），无
+        // shadow mapping/SSAO/tone（原版没有这些），直接相乘输出。
+        if (lighting.vanilla_lighting > 0.5) {
+            return vec4<f32>(sampled.rgb * input.color.r, color.a);
+        }
     }
     if (lighting.enabled > 0.5) {
         let normal = normalize(input.normal);
@@ -596,7 +680,7 @@ struct LightingUniform {
     ao_distance_fade_end: f32,
     ao_edge_guard: f32,
     ao_max_occlusion: f32,
-    ao_padding: f32,
+    vanilla_lighting: f32,
     tone_preset: f32,
     tone_exposure: f32,
     tone_gamma: f32,
@@ -658,7 +742,7 @@ impl LightingUniform {
             ao_distance_fade_end: ao.distance_fade_end,
             ao_edge_guard: ao.edge_guard,
             ao_max_occlusion: ao.max_occlusion,
-            ao_padding: 0.0,
+            vanilla_lighting: if vanilla_lighting_enabled() { 1.0 } else { 0.0 },
             tone_preset: tone.preset.shader_code(),
             tone_exposure: tone.exposure,
             tone_gamma: tone.gamma,
@@ -680,10 +764,19 @@ impl LightingUniform {
 }
 
 struct ViewerArgs {
+    launch_request_id: String,
+    launch_contract_sha256: String,
     input: Option<PathBuf>,
+    /// Frozen product geometry-lifetime contract received by the isolated
+    /// Build Worker. This is intentionally unrelated to legacy
+    /// `ViewerBuildMode`, which only selects an internal mesh implementation.
     chunk_size: u32,
     probe_scene: bool,
     prebuild_only: bool,
+    build_cache_and_warm: bool,
+    prepare_viewer_only: bool,
+    persistent_popup_presentation: bool,
+    initial_visible: bool,
     auto_exit_seconds: Option<u64>,
     prebuild_before_show: bool,
     cache_input: Option<PathBuf>,
@@ -697,6 +790,7 @@ struct ViewerArgs {
     resident_max_bytes: usize,
     stress_limits: bool,
     embed_parent_hwnd: Option<isize>,
+    quick_host: Option<viewer_launch_contract::QuickPreviewHostWindow>,
     preview_mode: bool,
     preview_spin: bool,
     display_mode: ViewerDisplayMode,
@@ -707,36 +801,29 @@ struct ViewerArgs {
     shadow_force_test: bool,
 }
 
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ViewerDisplayMode {
     Standard,
     FastExperimental,
-    Full,
 }
 
 impl ViewerDisplayMode {
-    fn parse(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "full" | "complete" => Self::Full,
-            "fast" | "fast_experimental" | "experimental" => Self::FastExperimental,
-            _ => Self::Standard,
-        }
-    }
+
 
     fn label(self) -> &'static str {
         match self {
             Self::Standard => "standard",
             Self::FastExperimental => "fast_experimental",
-            Self::Full => "full",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct EmbeddedViewportInfo {
-    parent_hwnd: isize,
-    client_size: PhysicalSize<u32>,
-}
+fn display_mode_for_launch_task(_: &ViewerTask) -> ViewerDisplayMode { ViewerDisplayMode::FastExperimental }
+
+fn build_mode_for_launch_task(_: &ViewerTask) -> ViewerBuildMode { ViewerBuildMode::FastExperimental }
+
 
 #[derive(Debug, Clone, Copy)]
 struct CacheBudgetConfig {
@@ -804,7 +891,7 @@ const FACE_VERTICES_RUNTIME: [[[f32; 3]; 4]; 6] = [
 const NATIVE_CACHE_CHUNK_BINARY_MAGIC_V2: &[u8; 8] = b"LPNC2\0\0\0";
 const NATIVE_CACHE_CHUNK_BINARY_MAGIC_V3: &[u8; 8] = b"LPNC3\0\0\0";
 const NATIVE_CACHE_CHUNK_BINARY_MAGIC_V4: &[u8; 8] = b"LPNC4\0\0\0";
-const NATIVE_CACHE_CHUNK_BINARY_MAGIC_V5: &[u8; 8] = b"LPNC5\0\0\0";
+const NATIVE_CACHE_CHUNK_BINARY_MAGIC_REVISION5: &[u8; 8] = b"LPNC5\0\0\0";
 static BLOCK_COLOR_CACHE: OnceLock<HashMap<String, [f32; 3]>> = OnceLock::new();
 
 #[derive(Debug, Default)]
@@ -849,11 +936,12 @@ impl TraceCounters {
 
 #[cfg(target_os = "windows")]
 unsafe extern "system" {
-    fn SetParent(hwnd_child: isize, hwnd_new_parent: isize) -> isize;
     fn ShowWindow(hwnd: isize, n_cmd_show: i32) -> i32;
+    fn IsWindowVisible(hwnd: isize) -> i32;
+    fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
     fn SetWindowLongPtrW(hwnd: isize, n_index: i32, dw_new_long: isize) -> isize;
     fn GetWindowLongPtrW(hwnd: isize, n_index: i32) -> isize;
-    fn GetClientRect(hwnd: isize, lp_rect: *mut WinRect) -> i32;
+    fn GetWindowRect(hwnd: isize, lp_rect: *mut WinRect) -> i32;
     fn SetWindowPos(
         hwnd: isize,
         hwnd_insert_after: isize,
@@ -863,6 +951,8 @@ unsafe extern "system" {
         cy: i32,
         flags: u32,
     ) -> i32;
+    fn SetFocus(hwnd: isize) -> isize;
+    fn GetFocus() -> isize;
 }
 
 #[cfg(target_os = "windows")]
@@ -978,28 +1068,6 @@ fn rgb_to_rgba(color: [f32; 3]) -> [f32; 4] {
     [color[0], color[1], color[2], 1.0]
 }
 
-fn load_full_mode_scene_assets(
-    chunk_scene_index: &ChunkSceneIndex,
-    litematic_path: &Path,
-) -> Result<(Option<Arc<FullModeMaterialCache>>, Option<RgbaImage>)> {
-    let (materials, atlas) = build_full_mode_v2_scene_assets(chunk_scene_index, litematic_path)?;
-    println!(
-        "[LBA_FULL_MODE_V2] runtime_assets_loaded palette_entries={} material_slots={} baked_palette_entries={} fallback_palette_entries={}",
-        materials.palette_materials.len(),
-        materials.materials.len(),
-        materials
-            .stats
-            .as_ref()
-            .map(|stats| stats.baked_palette_entries)
-            .unwrap_or(0),
-        materials
-            .stats
-            .as_ref()
-            .map(|stats| stats.fallback_palette_entries)
-            .unwrap_or(0)
-    );
-    Ok((Some(Arc::new(materials)), Some(atlas)))
-}
 
 #[derive(Debug, Clone, Copy)]
 struct ChunkBounds {
@@ -1070,8 +1138,10 @@ struct ViewerScene {
     chunk_scene_index: Option<ChunkSceneIndex>,
     bootstrap_meshes: Vec<PreparedChunkMesh>,
     bootstrap_visible_first: usize,
-    full_mode_materials: Option<Arc<FullModeMaterialCache>>,
+
     texture_atlas: Option<RgbaImage>,
+    /// Precomputed debug block-number labels (empty unless LBA_BLOCK_LABELS_DEBUG).
+    label_anchors: Vec<LabelAnchor>,
 }
 
 impl ViewerScene {
@@ -1085,8 +1155,9 @@ impl ViewerScene {
             chunk_scene_index: None,
             bootstrap_meshes: vec![prepared],
             bootstrap_visible_first: 1,
-            full_mode_materials: None,
+
             texture_atlas: None,
+            label_anchors: Vec::new(),
         }
     }
 
@@ -1102,11 +1173,7 @@ impl ViewerScene {
         );
         let chunk_scene_index = ChunkSceneIndex::load(path, chunk_size)?;
         let palette_colors = resolve_scene_palette_colors(&chunk_scene_index, display_mode);
-        let (full_mode_materials, texture_atlas) = if display_mode == ViewerDisplayMode::Full {
-            load_full_mode_scene_assets(&chunk_scene_index, path)?
-        } else {
-            (None, None)
-        };
+        let texture_atlas = None;
         let bounds = SceneBounds::from_metadata(chunk_scene_index.metadata());
         println!(
             "[VIEWER_CHUNK] index_ready total_chunks={} chunk_size={} scene_radius={:.2}",
@@ -1129,20 +1196,7 @@ impl ViewerScene {
             .copied()
             .take(INITIAL_BOOTSTRAP_CHUNKS)
             .collect::<Vec<_>>();
-        let bootstrap_meshes = if let Some(materials) = full_mode_materials.as_ref() {
-            chunk_scene_index
-                .build_textured_chunk_meshes(&bootstrap_keys, materials)?
-                .into_iter()
-                .filter_map(|chunk| {
-                    PreparedChunkMesh::from_mesh_chunk(
-                        chunk,
-                        palette_colors.as_slice(),
-                        chunk_scene_index.chunk_size(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        } else {
-            chunk_scene_index
+        let bootstrap_meshes = chunk_scene_index
                 .build_chunk_meshes(&bootstrap_keys)?
                 .into_iter()
                 .filter_map(|chunk| {
@@ -1152,8 +1206,7 @@ impl ViewerScene {
                         chunk_scene_index.chunk_size(),
                     )
                 })
-                .collect::<Vec<_>>()
-        };
+                .collect::<Vec<_>>();
         println!(
             "[VIEWER_BOOTSTRAP] bootstrap_chunks={} visible_first={} target_chunks={} retain_chunks={}",
             bootstrap_meshes.len(),
@@ -1161,6 +1214,11 @@ impl ViewerScene {
             bootstrap_plan.visible_target_chunks,
             bootstrap_plan.retain_chunks
         );
+        let label_anchors = if block_labels_enabled() {
+            compute_case_label_anchors(&chunk_scene_index)
+        } else {
+            Vec::new()
+        };
         Ok(Self {
             label: path
                 .file_name()
@@ -1172,168 +1230,12 @@ impl ViewerScene {
             chunk_scene_index: Some(chunk_scene_index),
             bootstrap_meshes,
             bootstrap_visible_first: bootstrap_keys.len(),
-            full_mode_materials,
+
             texture_atlas,
+            label_anchors,
         })
     }
 
-    fn from_prebuild_cache(
-        path: &Path,
-        chunk_size: u32,
-        display_mode: ViewerDisplayMode,
-        litematic_path: Option<&Path>,
-    ) -> Result<Self> {
-        println!(
-            "[VIEWER_CACHE] loading_prebuild_cache path={}",
-            path.display()
-        );
-        let manifest_text = std::fs::read_to_string(path)
-            .with_context(|| format!("read cache manifest failed: {}", path.display()))?;
-        let manifest: NativePreviewCacheManifest = serde_json::from_str(&manifest_text)
-            .with_context(|| format!("parse cache manifest failed: {}", path.display()))?;
-        let chunk_dir = path
-            .parent()
-            .map(|parent| parent.join(&manifest.chunk_data_dir))
-            .ok_or_else(|| anyhow!("invalid cache manifest path: {}", path.display()))?;
-
-        let mut meshes = Vec::with_capacity(manifest.chunks.len());
-        for chunk in &manifest.chunks {
-            let chunk_path = chunk_dir.join(&chunk.file);
-            if chunk_path.extension().and_then(|ext| ext.to_str()) == Some("bin") {
-                let prepared = read_prepared_cache_chunk_binary(&chunk_path, chunk_size)?;
-                if !prepared.vertices.is_empty()
-                    && (!prepared.indices.is_empty() || !prepared.translucent_indices.is_empty())
-                {
-                    meshes.push(prepared);
-                }
-            } else {
-                let chunk_text = std::fs::read_to_string(&chunk_path).with_context(|| {
-                    format!("read cache chunk failed: {}", chunk_path.display())
-                })?;
-                let payload: NativePreviewCacheChunkFile = serde_json::from_str(&chunk_text)
-                    .with_context(|| {
-                        format!("parse cache chunk failed: {}", chunk_path.display())
-                    })?;
-                let vertices = payload
-                    .vertices
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, position)| GpuVertex {
-                        position,
-                        color: rgb_to_rgba(
-                            payload
-                                .colors
-                                .get(index)
-                                .copied()
-                                .unwrap_or(DEFAULT_BLOCK_COLOR),
-                        ),
-                        uv: [0.0, 0.0],
-                        use_texture: 0.0,
-                        normal: default_vertex_normal(),
-                        emissive_tag: 0.0,
-                    })
-                    .collect::<Vec<_>>();
-                if vertices.is_empty() || payload.indices.is_empty() {
-                    continue;
-                }
-                let key = ChunkKey::new(payload.cx, payload.cy, payload.cz);
-                meshes.push(PreparedChunkMesh {
-                    key,
-                    bounds: ChunkBounds::from_key(key, chunk_size),
-                    vertices,
-                    indices: payload.indices,
-                    translucent_indices: Vec::new(),
-                    compact_surfaces: Vec::new(),
-                });
-            }
-        }
-
-        let bounds = SceneBounds::from_meshes(&meshes);
-        let uses_textures = meshes
-            .iter()
-            .any(|mesh| mesh.vertices.iter().any(|vertex| vertex.use_texture > 0.5));
-        let (full_mode_materials, texture_atlas) = if display_mode == ViewerDisplayMode::Full {
-            let litematic_path = litematic_path.ok_or_else(|| {
-                anyhow!(
-                    "[VIEWER_CACHE] full mode cache-input requires original litematic path to rebuild runtime_v2_texture_atlas"
-                )
-            })?;
-            if !uses_textures {
-                bail!(
-                    "[VIEWER_CACHE] incompatible full mode cache: cache_input={} format={} has no textured vertices; rebuild 3D cache with current native viewer",
-                    path.display(),
-                    manifest.format
-                );
-            }
-            let chunk_scene_index = ChunkSceneIndex::load(litematic_path, chunk_size)?;
-            let assets = load_full_mode_scene_assets(&chunk_scene_index, litematic_path)?;
-            println!(
-                "[VIEWER_CACHE] full_mode_cache_input_assets restored=true runtime_v2_texture_atlas={} material_slots={} fallback_palette_entries={}",
-                assets.1.is_some(),
-                assets
-                    .0
-                    .as_ref()
-                    .map(|materials| materials.materials.len())
-                    .unwrap_or(0),
-                assets
-                    .0
-                    .as_ref()
-                    .and_then(|materials| materials.stats.as_ref())
-                    .map(|stats| stats.fallback_palette_entries)
-                    .unwrap_or(0)
-            );
-            assets
-        } else {
-            (None, None)
-        };
-        println!(
-            "[VIEWER_CACHE] prebuild_cache_ready chunks={} format={} color_chain={} loaded_from_cache=true runtime_v2_texture_atlas={} textured_vertices={} scene_radius={:.2} scene_center=({:.2},{:.2},{:.2}) bounds_source=full_mesh_bounds metadata_size_center=({:.2},{:.2},{:.2})",
-            meshes.len(),
-            manifest.format,
-            manifest.color_chain,
-            texture_atlas.is_some(),
-            uses_textures,
-            bounds.radius,
-            bounds.center.x,
-            bounds.center.y,
-            bounds.center.z,
-            manifest.metadata.enclosing_size.x.max(1) as f32 * 0.5,
-            manifest.metadata.enclosing_size.y.max(1) as f32 * 0.5,
-            manifest.metadata.enclosing_size.z.max(1) as f32 * 0.5,
-        );
-        println!("[VIEWER_COLOR] vertex_color_enabled=true");
-        println!("[VIEWER_COLOR] shading_mode=vertex_color_flat");
-        println!(
-            "[VIEWER_COLOR] display_mode={} color_source={} native_chain={} cache_path={} loaded_from_cache=true runtime_v2_texture_atlas={}",
-            display_mode.label(),
-            if texture_atlas.is_some() {
-                "runtime_v2_texture_atlas"
-            } else {
-                "prebuild_cache"
-            },
-            if texture_atlas.is_some() {
-                "cache_textured_vertices+runtime_atlas_sample"
-            } else {
-                "cache_vertex_color"
-            },
-            path.display(),
-            texture_atlas.is_some()
-        );
-        Ok(Self {
-            label: path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| path.display().to_string()),
-            bounds,
-            palette_colors: Vec::new(),
-            chunk_scene_index: None,
-            bootstrap_visible_first: meshes.len(),
-            bootstrap_meshes: meshes,
-            full_mode_materials,
-            texture_atlas,
-        })
-    }
 }
 
 fn resolve_scene_palette_colors(
@@ -1371,32 +1273,16 @@ fn resolve_scene_palette_colors(
         .saturating_sub(fallback_hits)
         .saturating_sub(default_hits);
     let palette_hits = resolved_palette_colors.len().saturating_sub(default_hits);
-    let cached_entries = if display_mode == ViewerDisplayMode::Full {
-        0
-    } else {
-        block_color_cache().len()
-    };
+    let cached_entries = block_color_cache().len();
     println!("[VIEWER_COLOR] vertex_color_enabled=true");
     println!("[VIEWER_COLOR] shading_mode=vertex_color_flat");
-    let color_source = if display_mode == ViewerDisplayMode::Full {
-        "runtime_v2_texture_atlas"
-    } else {
-        "data/blockColorCache.json+material_fallback"
-    };
+    let color_source = "data/blockColorCache.json+material_fallback";
     println!(
         "[VIEWER_COLOR] display_mode={} color_source={} preview_chain={} native_chain={} palette_entries={} cache_entries={} cache_hits={} fallback_material_hits={} default_gray_hits={} palette_hits={} palette_misses={}",
         display_mode.label(),
         color_source,
-        if display_mode == ViewerDisplayMode::Full {
-            "runtime_v2_texture_atlas"
-        } else {
-            "block_color_cache_or_material_fallback"
-        },
-        if display_mode == ViewerDisplayMode::Full {
-            "runtime_atlas_sample"
-        } else {
-            "palette_vertex_color"
-        },
+        "block_color_cache_or_material_fallback",
+        "palette_vertex_color",
         palette_colors.len(),
         cached_entries,
         cache_hits,
@@ -1615,6 +1501,30 @@ fn cache_chunk_file_name(key: ChunkKey) -> String {
 }
 
 impl PreparedChunkMesh {
+    fn gpu_upload_mesh(&self) -> Cow<'_, Self> {
+        if self.compact_surfaces.is_empty() {
+            return Cow::Borrowed(self);
+        }
+        // The cache reader expands compact faces, but a live fast-mode build
+        // reaches the GPU without a disk round trip. Use the very same face
+        // expansion here; retain the compact CPU/cache representation.
+        let mut expanded = self.clone();
+        expanded.vertices.reserve(self.compact_surfaces.len() * 4);
+        expanded.indices.reserve(self.compact_surfaces.len() * 6);
+        for surface in std::mem::take(&mut expanded.compact_surfaces) {
+            append_compact_quad(
+                &mut expanded.vertices,
+                &mut expanded.indices,
+                usize::from(surface.face_index),
+                surface.min,
+                surface.max,
+                surface.color,
+            )
+            .expect("mesher compact surfaces must use one of the six cube faces");
+        }
+        Cow::Owned(expanded)
+    }
+
     fn placeholder() -> Self {
         let vertices = vec![
             GpuVertex {
@@ -1716,11 +1626,13 @@ impl PreparedChunkMesh {
         }
 
         let vertices = if !mesh_chunk.textured_vertices.is_empty() {
-            mesh_chunk
+            let mut vertices = mesh_chunk
                 .textured_vertices
                 .into_iter()
                 .map(textured_vertex_from_output)
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            assign_textured_quad_normals(&mut vertices);
+            vertices
         } else {
             let mut vertices = Vec::<GpuVertex>::with_capacity(mesh_chunk.vertices.len());
             for (vertex_index, position) in mesh_chunk.vertices.into_iter().enumerate() {
@@ -1795,14 +1707,57 @@ impl PreparedChunkMesh {
     }
 }
 
+/// 原版 26.2 光照默认开启；LBA_VANILLA_LIGHTING_OFF=1 回退自研
+/// hemisphere/shadow/SSAO 光照。
+fn vanilla_lighting_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("LBA_VANILLA_LIGHTING_OFF")
+            .map(|value| {
+                let normalized = value.trim().to_ascii_lowercase();
+                normalized.is_empty() || normalized == "0" || normalized == "false"
+            })
+            .unwrap_or(true)
+    })
+}
+
 fn textured_vertex_from_output(vertex: TexturedVertexOutput) -> GpuVertex {
     GpuVertex {
         position: vertex.position,
-        color: [1.0, 1.0, 1.0, 1.0],
+        // 顶点色 r=g=b= 烘焙亮度（原版方向 shade x AO），vanilla 光照
+        // 模式在 shader 里与纹理相乘；自研光照模式忽略（读法线路径）。
+        color: [vertex.light, vertex.light, vertex.light, 1.0],
         uv: vertex.uv,
         use_texture: 1.0,
         normal: default_vertex_normal(),
         emissive_tag: 0.0,
+    }
+}
+
+/// Legacy textured quads are emitted as sequential groups of 4 vertices
+/// (see `emit_textured_quad` in mesh.rs). They carry no per-face normal, so the
+/// lighting pipeline previously treated every face as up-facing and could not
+/// shade side/down faces differently. Derive a flat geometric normal per quad
+/// from its first three vertices so the existing directional/side shading reads
+/// correctly (e.g. the thin step of a pressure plate on a matching floor).
+fn assign_textured_quad_normals(vertices: &mut [GpuVertex]) {
+    for quad in vertices.chunks_mut(4) {
+        if quad.len() < 3 {
+            continue;
+        }
+        let a = Vec3::from(quad[0].position);
+        let b = Vec3::from(quad[1].position);
+        let c = Vec3::from(quad[2].position);
+        let normal = (b - a).cross(c - a);
+        let normal = if normal.length_squared() > 1e-12 {
+            normal.normalize()
+        } else {
+            Vec3::from(default_vertex_normal())
+        };
+        let normal = normal.to_array();
+        for vertex in quad.iter_mut() {
+            vertex.normal = normal;
+        }
     }
 }
 
@@ -1881,7 +1836,7 @@ fn write_prepared_cache_chunk_binary_v5(
     mesh: &PreparedChunkMesh,
 ) -> std::io::Result<usize> {
     let mut writer = BufWriter::new(File::create(path)?);
-    writer.write_all(NATIVE_CACHE_CHUNK_BINARY_MAGIC_V5)?;
+    writer.write_all(NATIVE_CACHE_CHUNK_BINARY_MAGIC_REVISION5)?;
     writer.write_all(&mesh.key.cx.to_le_bytes())?;
     writer.write_all(&mesh.key.cy.to_le_bytes())?;
     writer.write_all(&mesh.key.cz.to_le_bytes())?;
@@ -2144,15 +2099,15 @@ fn read_prepared_cache_chunk_binary(path: &Path, chunk_size: u32) -> Result<Prep
     let is_v2 = magic == NATIVE_CACHE_CHUNK_BINARY_MAGIC_V2;
     let is_v3 = magic == NATIVE_CACHE_CHUNK_BINARY_MAGIC_V3;
     let is_v4 = magic == NATIVE_CACHE_CHUNK_BINARY_MAGIC_V4;
-    let is_v5 = magic == NATIVE_CACHE_CHUNK_BINARY_MAGIC_V5;
-    if !is_v2 && !is_v3 && !is_v4 && !is_v5 {
+    let is_revision5 = magic == NATIVE_CACHE_CHUNK_BINARY_MAGIC_REVISION5;
+    if !is_v2 && !is_v3 && !is_v4 && !is_revision5 {
         bail!("invalid binary cache chunk magic: {}", path.display());
     }
     let mut offset = NATIVE_CACHE_CHUNK_BINARY_MAGIC_V2.len();
     let cx = read_i32_le(&bytes, &mut offset)?;
     let cy = read_i32_le(&bytes, &mut offset)?;
     let cz = read_i32_le(&bytes, &mut offset)?;
-    if is_v5 {
+    if is_revision5 {
         let vertex_count = read_u32_le(&bytes, &mut offset)? as usize;
         let index_count = read_u32_le(&bytes, &mut offset)? as usize;
         let translucent_index_count = read_u32_le(&bytes, &mut offset)? as usize;
@@ -2403,7 +2358,7 @@ fn default_build_worker_count() -> usize {
 fn spawn_build_worker_pool(
     scene_index: Arc<ChunkSceneIndex>,
     palette_colors: Arc<Vec<[f32; 3]>>,
-    full_mode_materials: Option<Arc<FullModeMaterialCache>>,
+
     worker_count: usize,
     trace: Arc<TraceCounters>,
 ) -> (
@@ -2420,7 +2375,7 @@ fn spawn_build_worker_pool(
         let result_tx = result_tx.clone();
         let scene_index = scene_index.clone();
         let palette_colors = palette_colors.clone();
-        let full_mode_materials = full_mode_materials.clone();
+
         let trace = trace.clone();
         let worker = thread::spawn(move || {
             let execution = std::panic::catch_unwind(move || {
@@ -2471,11 +2426,7 @@ fn spawn_build_worker_pool(
                         request.batch_id,
                         requested_keys.len()
                     );
-                    let build_result = if let Some(materials) = full_mode_materials.as_ref() {
-                        scene_index.build_textured_chunk_meshes(&requested_keys, materials)
-                    } else {
-                        scene_index.build_chunk_meshes(&requested_keys)
-                    };
+                    let build_result = scene_index.build_chunk_meshes(&requested_keys);
                     match build_result {
                         Ok(chunk_meshes) => {
                             let worker_busy_elapsed = worker_started_at.elapsed();
@@ -2904,6 +2855,10 @@ struct BudgetUsage {
     indices: usize,
 }
 
+#[cfg(test)]
+#[path = "quick_streaming_tests.rs"]
+mod quick_streaming_tests;
+
 impl BudgetUsage {
     fn can_fit(
         self,
@@ -2914,8 +2869,15 @@ impl BudgetUsage {
         max_indices: usize,
     ) -> bool {
         self.chunks < max_chunks
-            && self.vertices + vertex_count <= max_vertices
-            && self.indices + index_count <= max_indices
+            && max_vertices > 0
+            && max_indices > 0
+            // Chunk work is indivisible. An empty, enabled frame budget must
+            // admit one oversized chunk or it is deferred forever (especially
+            // in the smaller background preload budget). Later chunks still
+            // obey the normal frame limits; no geometry is truncated.
+            && (self.chunks == 0
+                || (self.vertices.saturating_add(vertex_count) <= max_vertices
+                    && self.indices.saturating_add(index_count) <= max_indices))
     }
 
     fn consume(&mut self, vertex_count: usize, index_count: usize) {
@@ -3673,6 +3635,93 @@ fn create_atlas_bind_group(
             },
         ],
     })
+}
+
+/// Build the solid + translucent render pipelines used by both the interactive
+/// window path (`ViewerState::new`) and the headless GPU offscreen preview.
+/// Centralizing this guarantees the offscreen capture rasterizes with the exact
+/// same state as the on-screen GPU pipeline — most importantly `cull_mode=Back`
+/// and `front_face=Ccw`, which is the whole reason the offscreen path exists
+/// (CPU preview does not back-face cull and therefore hides winding bugs).
+fn create_viewer_render_pipelines(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    color_format: wgpu::TextureFormat,
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    let solid = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("native_viewer_pipeline_solid"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: "vs_main",
+            buffers: &[GpuVertex::desc()],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: "fs_main",
+            targets: &[Some(wgpu::ColorTargetState {
+                format: color_format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Back),
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24Plus,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+    });
+    let translucent = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("native_viewer_pipeline_translucent"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: "vs_main",
+            buffers: &[GpuVertex::desc()],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: "fs_main",
+            targets: &[Some(wgpu::ColorTargetState {
+                format: color_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Back),
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24Plus,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+    });
+    (solid, translucent)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4616,53 +4665,6 @@ fn log_tone_startup_debug(config: ToneConfig) {
     );
 }
 
-fn log_emissive_bloom_debug(
-    config: EmissiveBloomConfig,
-    materials: Option<&FullModeMaterialCache>,
-) {
-    let matched_material_count = materials
-        .map(count_emissive_material_candidates)
-        .unwrap_or(0);
-    let unmatched_emissive_looking_count = materials
-        .map(count_unmatched_emissive_looking_material_candidates)
-        .unwrap_or(0);
-    let material_slots = materials
-        .map(|materials| materials.materials.len())
-        .unwrap_or(0);
-    println!(
-        "[LBA_EMISSIVE_BLOOM_DEBUG] emissive_effective={} emissive_strength={:.3} emissive_debug_view={} bloom_effective={} threshold={:.3} intensity={:.3} radius={:.3} bloom_debug_view={} material_id_available=false emissive_tag_available=true matched_emissive_count={} unmatched_emissive_looking_candidates={} material_slots={} emissive_mask_mode=emissive_tag fallback_reason=none",
-        config.emissive_enabled,
-        config.emissive_strength,
-        config.emissive_debug_view.label(),
-        config.bloom_enabled,
-        config.bloom_threshold,
-        config.bloom_intensity,
-        config.bloom_radius,
-        config.bloom_debug_view.label(),
-        matched_material_count,
-        unmatched_emissive_looking_count,
-        material_slots,
-    );
-    if let Some(materials) = materials {
-        for (index, key) in unmatched_emissive_looking_material_candidates(materials)
-            .into_iter()
-            .take(32)
-        {
-            println!(
-                "[LBA_EMISSIVE_UNMATCHED_CANDIDATE] material_index={} key={}",
-                index, key
-            );
-        }
-    }
-}
-
-fn count_emissive_material_candidates(materials: &FullModeMaterialCache) -> usize {
-    materials
-        .materials
-        .iter()
-        .filter(|slot| emissive_material_key_candidate(&slot.key))
-        .count()
-}
 
 fn emissive_material_key_candidate(key: &str) -> bool {
     emissive_material_key_match(key).is_some()
@@ -4704,26 +4706,6 @@ fn emissive_material_key_match(key: &str) -> Option<(&'static str, f32)> {
         })
 }
 
-fn count_unmatched_emissive_looking_material_candidates(
-    materials: &FullModeMaterialCache,
-) -> usize {
-    unmatched_emissive_looking_material_candidates(materials).len()
-}
-
-fn unmatched_emissive_looking_material_candidates(
-    materials: &FullModeMaterialCache,
-) -> Vec<(usize, String)> {
-    materials
-        .materials
-        .iter()
-        .enumerate()
-        .filter(|(_, slot)| {
-            !emissive_material_key_candidate(&slot.key)
-                && emissive_looking_material_key_candidate(&slot.key)
-        })
-        .map(|(index, slot)| (index, slot.key.clone()))
-        .collect()
-}
 
 fn emissive_looking_material_key_candidate(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
@@ -4965,6 +4947,8 @@ struct ViewerState {
     shadow_resources: ShadowMapResources,
     atlas_bind_group: wgpu::BindGroup,
     depth_texture: DepthTexture,
+    label_overlay: Option<LabelOverlay>,
+    label_anchors: Vec<LabelAnchor>,
     drag_mode: Option<DragMode>,
     last_cursor_position: Option<Vec2>,
     scene_bounds: SceneBounds,
@@ -5020,7 +5004,7 @@ struct ViewerState {
     prebuild_last_completed_at: Instant,
     residency_dirty: bool,
     frame_index: u64,
-    embedded_viewport: Option<EmbeddedViewportInfo>,
+    embedded_overlay: bool,
     preview_mode: bool,
     preview_spin: bool,
     last_focus_chunk: Option<ChunkKey>,
@@ -5052,8 +5036,9 @@ impl ViewerState {
             chunk_scene_index: scene_chunk_scene_index,
             bootstrap_meshes,
             bootstrap_visible_first,
-            full_mode_materials,
+
             texture_atlas,
+            label_anchors: scene_label_anchors,
         } = scene;
 
         let instance_started_at = Instant::now();
@@ -5298,10 +5283,6 @@ impl ViewerState {
             || lighting_config.emissive_bloom().emissive_debug_view != EmissiveDebugViewMode::Off
             || lighting_config.emissive_bloom().bloom_debug_view != BloomDebugViewMode::Off
         {
-            log_emissive_bloom_debug(
-                lighting_config.emissive_bloom(),
-                full_mode_materials.as_deref(),
-            );
         }
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -5314,80 +5295,16 @@ impl ViewerState {
                 ],
                 push_constant_ranges: &[],
             });
-        let render_pipeline_solid =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("native_viewer_pipeline_solid"),
-                layout: Some(&render_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: "vs_main",
-                    buffers: &[GpuVertex::desc()],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: "fs_main",
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: config.format,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: Some(wgpu::Face::Back),
-                    unclipped_depth: false,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    conservative: false,
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth24Plus,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Less,
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState::default(),
-                multiview: None,
-            });
-        let render_pipeline_translucent =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("native_viewer_pipeline_translucent"),
-                layout: Some(&render_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: "vs_main",
-                    buffers: &[GpuVertex::desc()],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: "fs_main",
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: config.format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: Some(wgpu::Face::Back),
-                    unclipped_depth: false,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    conservative: false,
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth24Plus,
-                    depth_write_enabled: false,
-                    depth_compare: wgpu::CompareFunction::Less,
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState::default(),
-                multiview: None,
-            });
+        // Shared with the GPU offscreen preview path so the headless render
+        // reflects the exact same rasterizer state (cull_mode=Back, Ccw winding,
+        // blend modes). Do not inline-duplicate these — see
+        // create_viewer_render_pipelines.
+        let (render_pipeline_solid, render_pipeline_translucent) = create_viewer_render_pipelines(
+            &device,
+            &shader,
+            &render_pipeline_layout,
+            config.format,
+        );
 
         let depth_texture = DepthTexture::create(&device, &config);
         println!(
@@ -5423,7 +5340,7 @@ impl ViewerState {
                 let (request_tx, result_rx, workers) = spawn_build_worker_pool(
                     scene_index.clone(),
                     Arc::new(palette_colors.clone()),
-                    full_mode_materials.clone(),
+
                     args.build_workers,
                     trace.clone(),
                 );
@@ -5439,6 +5356,15 @@ impl ViewerState {
             .as_ref()
             .map(|index| index.chunk_count())
             .unwrap_or(bootstrap_meshes.len());
+        let label_overlay = if block_labels_enabled() && !scene_label_anchors.is_empty() {
+            Some(LabelOverlay::new(
+                &device,
+                config.format,
+                wgpu::TextureFormat::Depth24Plus,
+            ))
+        } else {
+            None
+        };
         let mut state = Self {
             surface,
             device,
@@ -5454,6 +5380,8 @@ impl ViewerState {
             shadow_resources,
             atlas_bind_group,
             depth_texture,
+            label_overlay,
+            label_anchors: scene_label_anchors,
             drag_mode: None,
             last_cursor_position: None,
             scene_bounds,
@@ -5512,12 +5440,7 @@ impl ViewerState {
             prebuild_last_completed_at: Instant::now(),
             residency_dirty: true,
             frame_index: 0,
-            embedded_viewport: args
-                .embed_parent_hwnd
-                .map(|parent_hwnd| EmbeddedViewportInfo {
-                    parent_hwnd,
-                    client_size: size,
-                }),
+            embedded_overlay: args.embed_parent_hwnd.is_some(),
             preview_mode: args.preview_mode,
             preview_spin: args.preview_spin,
             last_focus_chunk: None,
@@ -6215,7 +6138,7 @@ impl ViewerState {
     }
 
     fn upload_chunk_mesh(&self, prepared: &PreparedChunkMesh) -> ResidentChunkMesh {
-        log_chest_front_gpu_vertices("upload", &prepared.vertices, &prepared.indices);
+        let prepared = prepared.gpu_upload_mesh();
         let vertex_count = prepared.vertices.len() as u32;
         let solid_index_count = prepared.indices.len() as u32;
         let translucent_index_count = prepared.translucent_indices.len() as u32;
@@ -6661,7 +6584,7 @@ impl ViewerState {
                             QueuePriority::Target => stats.target_submitted_builds += submitted,
                             QueuePriority::Preload => stats.preload_submitted_builds += submitted,
                         }
-                    }
+                    };
                 } else {
                     let submitted = self.submit_build_batch(
                         &request_tx,
@@ -7595,8 +7518,8 @@ impl ViewerState {
     }
 
     fn launch_mode_label(&self) -> &'static str {
-        if self.embedded_viewport.is_some() {
-            "embedded"
+        if self.embedded_overlay {
+            "embedded_overlay"
         } else {
             "popup"
         }
@@ -7872,36 +7795,11 @@ impl ViewerState {
         self.mark_residency_dirty();
     }
 
-    #[cfg(target_os = "windows")]
-    fn sync_embedded_viewport_if_needed(&mut self, window: &winit::window::Window) {
-        let Some(embedded) = self.embedded_viewport.as_mut() else {
-            return;
-        };
-        match sync_embedded_window_to_parent(window, embedded.parent_hwnd) {
-            Ok(client_size) => {
-                if embedded.client_size != client_size {
-                    embedded.client_size = client_size;
-                    self.resize(client_size);
-                }
-            }
-            Err(error) => {
-                println!(
-                    "[VIEWER_CAMERA] launch_mode=embedded event=sync_failed error={}",
-                    error
-                );
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn sync_embedded_viewport_if_needed(&mut self, _window: &winit::window::Window) {}
-
     fn render(
         &mut self,
         window: &winit::window::Window,
         viewer_started_at: Instant,
     ) -> Result<(), wgpu::SurfaceError> {
-        self.sync_embedded_viewport_if_needed(window);
         if self.config.width == 0 || self.config.height == 0 {
             return Ok(());
         }
@@ -8224,6 +8122,10 @@ impl ViewerState {
             );
         }
 
+        if let Some(overlay) = self.label_overlay.as_mut() {
+            overlay.prepare(&self.device, &self.queue, &self.label_anchors, &self.camera);
+        }
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("native_viewer_render_pass"),
@@ -8268,7 +8170,22 @@ impl ViewerState {
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_bind_group(2, &self.lighting_bind_group, &[]);
             render_pass.set_bind_group(3, &self.shadow_resources.bind_group, &[]);
-            for resident in self.resident_chunks.values() {
+            // Translucent geometry must be drawn back-to-front so nearer alpha
+            // surfaces (glass, slime, water, ice) blend over farther ones instead
+            // of whichever chunk happens to come first in iteration order. Sort
+            // resident chunks by distance from the camera, farthest first.
+            let eye = self.camera.eye();
+            let mut translucent_chunks: Vec<&ResidentChunkMesh> = self
+                .resident_chunks
+                .values()
+                .filter(|resident| resident.gpu.translucent_index_buffer.is_some())
+                .collect();
+            translucent_chunks.sort_by(|a, b| {
+                let da = a.bounds.center.distance_squared(eye);
+                let db = b.bounds.center.distance_squared(eye);
+                db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for resident in translucent_chunks {
                 let Some(translucent_index_buffer) = resident.gpu.translucent_index_buffer.as_ref()
                 else {
                     continue;
@@ -8280,6 +8197,31 @@ impl ViewerState {
                 );
                 render_pass.draw_indexed(0..resident.gpu.translucent_index_count, 0, 0..1);
             }
+        }
+
+        if let Some(overlay) = self.label_overlay.as_ref() {
+            let mut label_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("native_viewer_label_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+            overlay.draw(&mut label_pass);
         }
 
         self.queue.submit(Some(encoder.finish()));
@@ -8325,218 +8267,12 @@ impl Drop for ViewerState {
     }
 }
 
-fn parse_args() -> Result<Option<ViewerArgs>> {
-    let mut input: Option<PathBuf> = None;
-    let mut chunk_size = 32_u32;
-    let mut probe_scene = false;
-    let mut prebuild_only = false;
-    let mut auto_exit_seconds = None;
-    let mut prebuild_before_show = false;
-    let mut cache_input = None;
-    let mut ready_file = None;
-    let mut cache_file = None;
-    let mut preview_output = None;
-    let mut build_workers = default_build_worker_count();
-    let mut cpu_cache_budget = DEFAULT_CPU_CACHE_BUDGET;
-    let mut resident_budget = DEFAULT_RESIDENT_BUDGET;
-    let mut stress_limits = false;
-    let mut embed_parent_hwnd = None;
-    let mut preview_mode = false;
-    let mut preview_spin = false;
-    let mut basic_lighting = std::env::var("LBA_VIEWER_BASIC_LIGHTING")
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "on"
-            )
-        })
-        .unwrap_or(false);
-    let mut shadow_debug = env_bool("LBA_SHADOW_DEBUG") || shadow_smoke_check_enabled();
-    let shadow_debug_view_env = std::env::var("LBA_SHADOW_DEBUG_VIEW")
-        .ok()
-        .map(|value| ShadowDebugViewMode::parse(&value));
-    let mut shadow_debug_view = ShadowDebugViewMode::Off;
-    let shadow_force_test = std::env::var("LBA_SHADOW_FORCE_TEST")
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "on"
-            )
-        })
-        .unwrap_or(false);
-    let mut basic_shadows = std::env::var("LBA_VIEWER_BASIC_SHADOWS")
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "on"
-            )
-        })
-        .unwrap_or(false);
-    let mut display_mode = std::env::var("LBA_VIEWER_DISPLAY_MODE")
-        .ok()
-        .map(|value| ViewerDisplayMode::parse(&value))
-        .unwrap_or(ViewerDisplayMode::Standard);
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--help" | "-h" => {
-                println!(
-                    "usage: litematica_native_viewer [file] [--chunk-size=N] [--probe-scene] [--prebuild-only] [--auto-exit-seconds=N] [--prebuild-before-show] [--ready-file=PATH] [--cache-file=PATH] [--preview-output=PATH] [--build-workers=N] [--stress-limits] [--preview-mode] [--preview-spin] [--display-mode=normal|fast_experimental|full] [--basic-lighting] [--basic-shadows] [--shadow-debug] [--shadow-debug-view] [--cpu-cache-max-chunks=N] [--cpu-cache-max-bytes=SIZE] [--resident-max-chunks=N] [--resident-max-bytes=SIZE] [--embed-parent-hwnd=HWND]"
-                );
-                println!(
-                    "controls: left-drag rotate, right-drag pan, mouse-wheel zoom, R reset, Esc exit"
-                );
-                return Ok(None);
-            }
-            "--probe-scene" => probe_scene = true,
-            "--prebuild-only" => prebuild_only = true,
-            "--prebuild-before-show" => prebuild_before_show = true,
-            "--preview-mode" => preview_mode = true,
-            "--preview-spin" => {
-                preview_mode = true;
-                preview_spin = true;
-            }
-            "--basic-lighting" => basic_lighting = true,
-            "--basic-shadows" => basic_shadows = true,
-            "--shadow-debug" => shadow_debug = true,
-            "--shadow-debug-view" => {
-                shadow_debug = true;
-                shadow_debug_view = shadow_debug_view_env.unwrap_or(ShadowDebugViewMode::Factor);
-            }
-            "--stress-limits" => {
-                stress_limits = true;
-                cpu_cache_budget = STRESS_CPU_CACHE_BUDGET;
-                resident_budget = STRESS_RESIDENT_BUDGET;
-            }
-            _ if arg.starts_with("--chunk-size=") => {
-                chunk_size = arg.trim_start_matches("--chunk-size=").parse()?;
-            }
-            _ if arg.starts_with("--auto-exit-seconds=") => {
-                auto_exit_seconds = Some(
-                    arg.trim_start_matches("--auto-exit-seconds=")
-                        .parse::<u64>()?
-                        .max(1),
-                );
-            }
-            _ if arg.starts_with("--ready-file=") => {
-                ready_file = Some(PathBuf::from(arg.trim_start_matches("--ready-file=")));
-            }
-            _ if arg.starts_with("--cache-input=") => {
-                cache_input = Some(PathBuf::from(arg.trim_start_matches("--cache-input=")));
-            }
-            _ if arg.starts_with("--cache-file=") => {
-                cache_file = Some(PathBuf::from(arg.trim_start_matches("--cache-file=")));
-            }
-            _ if arg.starts_with("--display-mode=") => {
-                display_mode = ViewerDisplayMode::parse(arg.trim_start_matches("--display-mode="));
-            }
-            _ if arg.starts_with("--preview-output=") => {
-                preview_output = Some(PathBuf::from(arg.trim_start_matches("--preview-output=")));
-            }
-            _ if arg.starts_with("--build-workers=") => {
-                build_workers = arg
-                    .trim_start_matches("--build-workers=")
-                    .parse::<usize>()?
-                    .max(1);
-            }
-            _ if arg.starts_with("--cpu-cache-max-chunks=") => {
-                cpu_cache_budget.max_chunks =
-                    arg.trim_start_matches("--cpu-cache-max-chunks=").parse()?;
-            }
-            _ if arg.starts_with("--cpu-cache-max-bytes=") => {
-                cpu_cache_budget.max_bytes =
-                    parse_byte_size(arg.trim_start_matches("--cpu-cache-max-bytes="))?;
-            }
-            _ if arg.starts_with("--resident-max-chunks=") => {
-                resident_budget.max_chunks =
-                    arg.trim_start_matches("--resident-max-chunks=").parse()?;
-            }
-            _ if arg.starts_with("--resident-max-bytes=") => {
-                resident_budget.max_bytes =
-                    parse_byte_size(arg.trim_start_matches("--resident-max-bytes="))?;
-            }
-            _ if arg.starts_with("--embed-parent-hwnd=") => {
-                embed_parent_hwnd = Some(
-                    arg.trim_start_matches("--embed-parent-hwnd=")
-                        .parse::<isize>()?,
-                );
-            }
-            _ if arg.starts_with('-') => bail!("unknown argument: {arg}"),
-            _ => {
-                if input.is_some() {
-                    bail!("multiple input files provided");
-                }
-                input = Some(PathBuf::from(arg));
-            }
-        }
-    }
-    if basic_shadows && !basic_lighting {
-        println!(
-            "[NATIVE_VIEWER] basic_shadows_requested=true basic_lighting=false shadow_effect=disabled"
-        );
-        basic_shadows = false;
-    }
-    Ok(Some(ViewerArgs {
-        input,
-        chunk_size,
-        probe_scene,
-        prebuild_only,
-        auto_exit_seconds,
-        prebuild_before_show,
-        cache_input,
-        ready_file,
-        cache_file,
-        preview_output,
-        build_workers,
-        cpu_cache_max_chunks: cpu_cache_budget.max_chunks,
-        cpu_cache_max_bytes: cpu_cache_budget.max_bytes,
-        resident_max_chunks: resident_budget.max_chunks,
-        resident_max_bytes: resident_budget.max_bytes,
-        stress_limits,
-        embed_parent_hwnd,
-        preview_mode,
-        preview_spin,
-        display_mode,
-        basic_lighting,
-        basic_shadows,
-        shadow_debug,
-        shadow_debug_view,
-        shadow_force_test,
-    }))
-}
-
-fn env_bool(name: &str) -> bool {
-    std::env::var(name)
-        .ok()
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "on"
-            )
-        })
-        .unwrap_or(false)
-}
-
 fn resolve_palette_color(
     block_id: &str,
     properties: Option<&BTreeMap<String, String>>,
     display_mode: ViewerDisplayMode,
 ) -> ResolvedBlockColor {
-    if display_mode == ViewerDisplayMode::Full {
-        let stripped_state = block_id.split('[').next().unwrap_or(block_id);
-        return ResolvedBlockColor {
-            rgb: [1.0, 1.0, 1.0],
-            normalized_key: stripped_state
-                .split(':')
-                .next_back()
-                .unwrap_or(stripped_state)
-                .to_string(),
-            matched_key: Some("runtime_v2_texture_atlas".to_string()),
-            used_default: false,
-        };
-    }
+    
     let stripped_state = block_id.split('[').next().unwrap_or(block_id);
     let normalized_key = stripped_state
         .split(':')
@@ -8857,955 +8593,424 @@ fn dye_family(local: &str, material: &str) -> &'static str {
     DEFAULT_BLOCK_COLOR_FAMILY
 }
 
-fn load_scene(args: &ViewerArgs) -> Result<ViewerScene> {
-    if let Some(path) = args.cache_input.as_deref() {
-        match ViewerScene::from_prebuild_cache(
-            path,
-            args.chunk_size,
-            args.display_mode,
-            args.input.as_deref(),
-        ) {
-            Ok(scene) => return Ok(scene),
-            Err(error) => {
-                if args.display_mode == ViewerDisplayMode::Full {
-                    anyhow::bail!(
-                        "[VIEWER_CACHE] load_failed cache_input={} error={} fallback=disabled_for_full_mode_v2",
-                        path.display(),
-                        error
-                    );
-                }
-                println!(
-                    "[VIEWER_CACHE] load_failed cache_input={} error={} fallback=placeholder",
-                    path.display(),
-                    error
-                );
-                return Ok(ViewerScene::placeholder());
-            }
-        }
-    }
-    match args.input.as_deref() {
-        Some(path) => match ViewerScene::from_litematic(path, args.chunk_size, args.display_mode) {
-            Ok(scene) => Ok(scene),
-            Err(error) => {
-                if args.display_mode == ViewerDisplayMode::Full {
-                    anyhow::bail!(
-                        "[VIEWER_SCENE] load_failed file={} error={} fallback=disabled_for_full_mode_v2",
-                        path.display(),
-                        error
-                    );
-                }
-                println!(
-                    "[VIEWER_SCENE] load_failed file={} error={} fallback=placeholder",
-                    path.display(),
-                    error
-                );
-                Ok(ViewerScene::placeholder())
-            }
-        },
-        None => {
-            println!("[VIEWER_SCENE] no_input_provided using_placeholder=true");
-            Ok(ViewerScene::placeholder())
-        }
-    }
+fn load_scene(args: &ViewerArgs) -> Result<ViewerScene> { ViewerScene::from_litematic(args.input.as_deref().context("quick preview requires a scene")?,args.chunk_size,args.display_mode) }
+
+
+// ------------------------------------------------------------------------
+// Debug block-number overlay (LBA_BLOCK_LABELS_DEBUG)
+//
+// Floats a 1-based index label above each block "column" so renders can be
+// matched to a legend by number instead of guessing. Temporary verification
+// aid: opt-in via the LBA_BLOCK_LABELS_DEBUG env var, never on the normal path.
+// Used by both the GPU offscreen preview and the live window (shared pipeline
+// shape) so the same numbering is visible wherever you look.
+// ------------------------------------------------------------------------
+
+fn block_labels_enabled() -> bool {
+    env_bool("LBA_BLOCK_LABELS_DEBUG")
 }
 
-fn render_offscreen_preview(
-    scene: &ViewerScene,
-    output: &Path,
-    lighting: LightingConfig,
-) -> Result<()> {
-    let basic_lighting = lighting.basic();
-    let debug_labels = std::env::var_os("LBA_FULL_MODE_V2_PISTON_DEBUG").is_some()
-        || std::env::var_os("LBA_FULL_MODE_V2_CHEST_DEBUG").is_some()
-        || std::env::var_os("LBA_FULL_MODE_V2_OBSERVER_DEBUG").is_some();
-    let (width, height) = if debug_labels {
-        (1600_u32, 1000_u32)
-    } else {
-        (320_u32, 200_u32)
+#[derive(Clone)]
+struct LabelAnchor {
+    position: Vec3,
+    text: String,
+}
+
+/// Group the scene's non-floor blocks into per-X "case columns" (the attach
+/// test fixture spaces one case every few cells on X) and place a 1-based index
+/// label just above each column's tallest block, left-to-right. The bottom-most
+/// occupied Y layer is treated as ground and skipped so a floor slab doesn't
+/// become hundreds of columns. For the fixture this reproduces the
+/// `attach_legend.txt` numbering (01..N); for any other scene it still labels
+/// each occupied X column in order. Debug-only.
+fn compute_case_label_anchors(index: &ChunkSceneIndex) -> Vec<LabelAnchor> {
+    let visual = match index.build_layer_index_output() {
+        Ok(visual) => visual,
+        Err(error) => {
+            println!("[BLOCK_LABELS] enumerate_failed error={error}");
+            return Vec::new();
+        }
     };
-    let mut camera = OrbitCamera::from_bounds(scene.bounds, width, height);
-    camera.yaw = FRAC_PI_4;
-    camera.pitch = 0.45;
-    camera.distance = (OrbitCamera::fit_distance(scene.bounds) * 1.08).min(camera.max_distance);
-    let view_proj = camera.view_proj_matrix();
-    let mut image = RgbImage::from_pixel(width, height, Rgb([22, 24, 29]));
-    let mut opaque_depth = vec![f32::INFINITY; (width * height) as usize];
-    let mut translucent_triangles = Vec::<PreviewTriangle>::new();
-    let mut chest_debug_stats = (std::env::var_os("LBA_FULL_MODE_V2_CHEST_DEBUG").is_some())
-        .then(ChestDebugPreviewStats::default);
-    let mut observer_debug_stats = (std::env::var_os("LBA_FULL_MODE_V2_OBSERVER_DEBUG").is_some())
-        .then(ObserverDebugPreviewStats::default);
-    for mesh in &scene.bootstrap_meshes {
-        for tri in mesh.indices.chunks_exact(3) {
-            if let Some(triangle) =
-                project_preview_triangle(mesh.vertices.as_slice(), tri, view_proj, width, height)
-            {
-                raster_preview_triangle(
-                    &mut image,
-                    &mut opaque_depth,
-                    width,
-                    height,
-                    &triangle,
-                    scene.texture_atlas.as_ref(),
-                    basic_lighting,
-                    PreviewRasterMode::Opaque,
-                    chest_debug_stats.as_mut(),
-                    observer_debug_stats.as_mut(),
-                );
-            }
-        }
-        for tri in mesh.translucent_indices.chunks_exact(3) {
-            if let Some(triangle) =
-                project_preview_triangle(mesh.vertices.as_slice(), tri, view_proj, width, height)
-            {
-                translucent_triangles.push(triangle);
-            }
+    let mut blocks: Vec<(i32, i32, i32)> = Vec::new();
+    for layer in &visual.visual.layers {
+        for block in &layer.blocks {
+            blocks.push((block.x, layer.y, block.z));
         }
     }
-    translucent_triangles.sort_by(|left, right| {
-        right
-            .average_depth()
-            .partial_cmp(&left.average_depth())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    for triangle in &translucent_triangles {
-        raster_preview_triangle(
-            &mut image,
-            &mut opaque_depth,
-            width,
-            height,
-            triangle,
-            scene.texture_atlas.as_ref(),
-            basic_lighting,
-            PreviewRasterMode::Translucent,
-            chest_debug_stats.as_mut(),
-            observer_debug_stats.as_mut(),
-        );
+    if blocks.is_empty() {
+        return Vec::new();
     }
-    if let Some(stats) = chest_debug_stats.as_ref() {
-        stats.log_summary();
+    let min_y = blocks.iter().map(|(_, y, _)| *y).min().unwrap_or(0);
+    let above_floor: Vec<(i32, i32, i32)> = blocks
+        .iter()
+        .copied()
+        .filter(|(_, y, _)| *y > min_y)
+        .collect();
+    // Flat scene with a single layer: keep everything rather than label nothing.
+    let working = if above_floor.is_empty() {
+        blocks
+    } else {
+        above_floor
+    };
+    // gx -> (tallest_y, z_of_tallest)
+    let mut columns: BTreeMap<i32, (i32, i32)> = BTreeMap::new();
+    for (x, y, z) in working {
+        columns
+            .entry(x)
+            .and_modify(|(top_y, top_z)| {
+                if y > *top_y {
+                    *top_y = y;
+                    *top_z = z;
+                }
+            })
+            .or_insert((y, z));
     }
-    if let Some(stats) = observer_debug_stats.as_ref() {
-        stats.log_summary();
-    }
-    if let Some(parent) = output.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create preview output dir failed: {}", parent.display()))?;
-    }
-    image
-        .save(output)
-        .with_context(|| format!("write preview image failed: {}", output.display()))?;
+    let anchors: Vec<LabelAnchor> = columns
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (gx, (top_y, gz)))| {
+            let number = idx + 1;
+            let text = if number < 100 {
+                format!("{number:02}")
+            } else {
+                number.to_string()
+            };
+            LabelAnchor {
+                position: Vec3::new(gx as f32 + 0.5, (top_y + 1) as f32 + 0.6, gz as f32 + 0.5),
+                text,
+            }
+        })
+        .collect();
     println!(
-        "[PREVIEW_RENDER] offscreen_ready output={} width={} height={} chunks={} center=({:.2},{:.2},{:.2}) radius={:.2}",
-        output.display(),
-        width,
-        height,
-        scene.bootstrap_meshes.len(),
-        scene.bounds.center.x,
-        scene.bounds.center.y,
-        scene.bounds.center.z,
-        scene.bounds.radius,
+        "[BLOCK_LABELS] columns={} (enabled via LBA_BLOCK_LABELS_DEBUG)",
+        anchors.len()
     );
-    Ok(())
+    anchors
 }
 
-fn project_preview_vertex(
-    view_proj: Mat4,
-    position: [f32; 3],
-    width: u32,
-    height: u32,
-) -> Option<[f32; 3]> {
-    let clip = view_proj * Vec3::from_array(position).extend(1.0);
-    if clip.w.abs() <= f32::EPSILON {
-        return None;
-    }
-    let ndc = clip.truncate() / clip.w;
-    if ndc.z < -1.0 || ndc.z > 1.0 {
-        return None;
-    }
-    Some([
-        (ndc.x * 0.5 + 0.5) * (width as f32 - 1.0),
-        (1.0 - (ndc.y * 0.5 + 0.5)) * (height as f32 - 1.0),
-        ndc.z,
-    ])
+const OVERLAY_SHADER: &str = r#"
+struct CameraUniform {
+    view_proj: mat4x4<f32>,
+    camera_position: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> camera: CameraUniform;
+
+struct VsIn {
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec4<f32>,
+};
+struct VsOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(input: VsIn) -> VsOut {
+    var out: VsOut;
+    out.position = camera.view_proj * vec4<f32>(input.position, 1.0);
+    out.color = input.color;
+    return out;
 }
 
-#[derive(Clone, Copy)]
-struct PreviewProjectedVertex {
+@fragment
+fn fs_main(input: VsOut) -> @location(0) vec4<f32> {
+    return input.color;
+}
+"#;
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct OverlayVertex {
     position: [f32; 3],
     color: [f32; 4],
-    uv: [f32; 2],
-    use_texture: f32,
-    normal: [f32; 3],
 }
 
-#[derive(Clone)]
-struct PreviewTriangle {
-    vertices: [PreviewProjectedVertex; 3],
-    chest_debug: Option<ChestDebugTriangleInfo>,
-    observer_debug: Option<ObserverDebugTriangleInfo>,
-}
+/// 3x5 bitmap glyphs for digits 0-9. Each row's low 3 bits are columns, bit 2 =
+/// leftmost. Row 0 is the top row.
+const DIGIT_FONT: [[u8; 5]; 10] = [
+    [0b111, 0b101, 0b101, 0b101, 0b111], // 0
+    [0b010, 0b110, 0b010, 0b010, 0b111], // 1
+    [0b111, 0b001, 0b111, 0b100, 0b111], // 2
+    [0b111, 0b001, 0b111, 0b001, 0b111], // 3
+    [0b101, 0b101, 0b111, 0b001, 0b001], // 4
+    [0b111, 0b100, 0b111, 0b001, 0b111], // 5
+    [0b111, 0b100, 0b111, 0b101, 0b111], // 6
+    [0b111, 0b001, 0b001, 0b001, 0b001], // 7
+    [0b111, 0b101, 0b111, 0b101, 0b111], // 8
+    [0b111, 0b101, 0b111, 0b001, 0b111], // 9
+];
 
-impl PreviewTriangle {
-    fn average_depth(&self) -> f32 {
-        (self.vertices[0].position[2] + self.vertices[1].position[2] + self.vertices[2].position[2])
-            / 3.0
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PreviewRasterMode {
-    Opaque,
-    Translucent,
-}
-
-fn project_preview_triangle(
-    vertices: &[GpuVertex],
-    tri: &[u32],
-    view_proj: Mat4,
-    width: u32,
-    height: u32,
-) -> Option<PreviewTriangle> {
-    let Some(v0) = vertices.get(*tri.first()? as usize) else {
-        return None;
-    };
-    let Some(v1) = vertices.get(*tri.get(1)? as usize) else {
-        return None;
-    };
-    let Some(v2) = vertices.get(*tri.get(2)? as usize) else {
-        return None;
-    };
-    let chest_debug = classify_chest_debug_triangle([v0, v1, v2]);
-    let observer_debug = classify_observer_debug_triangle([v0, v1, v2]);
-    log_chest_front_triangle("preview_input", [v0, v1, v2], chest_debug.as_ref());
-    let p0 = project_preview_vertex(view_proj, v0.position, width, height)?;
-    let p1 = project_preview_vertex(view_proj, v1.position, width, height)?;
-    let p2 = project_preview_vertex(view_proj, v2.position, width, height)?;
-    Some(PreviewTriangle {
-        vertices: [
-            PreviewProjectedVertex {
-                position: p0,
-                color: v0.color,
-                uv: v0.uv,
-                use_texture: v0.use_texture,
-                normal: v0.normal,
-            },
-            PreviewProjectedVertex {
-                position: p1,
-                color: v1.color,
-                uv: v1.uv,
-                use_texture: v1.use_texture,
-                normal: v1.normal,
-            },
-            PreviewProjectedVertex {
-                position: p2,
-                color: v2.color,
-                uv: v2.uv,
-                use_texture: v2.use_texture,
-                normal: v2.normal,
-            },
-        ],
-        chest_debug,
-        observer_debug,
-    })
-}
-
-fn raster_preview_triangle(
-    image: &mut RgbImage,
-    depth: &mut [f32],
-    width: u32,
-    height: u32,
-    triangle: &PreviewTriangle,
-    atlas: Option<&RgbaImage>,
-    lighting: BasicLightingConfig,
-    mode: PreviewRasterMode,
-    chest_debug_stats: Option<&mut ChestDebugPreviewStats>,
-    observer_debug_stats: Option<&mut ObserverDebugPreviewStats>,
+/// Push two triangles for the screen-aligned rectangle `[x0,x1] x [y0,y1]`
+/// (label space, in glyph pixels) billboarded at `anchor` using camera `right`
+/// and `up`, scaled by world units-per-pixel `px`.
+fn push_overlay_quad(
+    vertices: &mut Vec<OverlayVertex>,
+    anchor: Vec3,
+    right: Vec3,
+    up: Vec3,
+    px: f32,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    color: [f32; 4],
 ) {
-    let p0 = triangle.vertices[0].position;
-    let p1 = triangle.vertices[1].position;
-    let p2 = triangle.vertices[2].position;
-    let area = edge_preview(p0, p1, p2[0], p2[1]);
-    if area.abs() <= f32::EPSILON {
-        return;
-    }
-    let mut chest_debug_stats = chest_debug_stats;
-    let mut observer_debug_stats = observer_debug_stats;
-    if let (Some(stats), Some(debug)) = (
-        chest_debug_stats.as_deref_mut(),
-        triangle.chest_debug.as_ref(),
-    ) {
-        stats.note_triangle(debug, mode);
-    }
-    if let (Some(stats), Some(debug)) = (
-        observer_debug_stats.as_deref_mut(),
-        triangle.observer_debug.as_ref(),
-    ) {
-        stats.note_triangle(debug, mode);
-    }
-    let min_x = p0[0].min(p1[0]).min(p2[0]).floor().max(0.0) as u32;
-    let max_x = p0[0].max(p1[0]).max(p2[0]).ceil().min(width as f32 - 1.0) as u32;
-    let min_y = p0[1].min(p1[1]).min(p2[1]).floor().max(0.0) as u32;
-    let max_y = p0[1].max(p1[1]).max(p2[1]).ceil().min(height as f32 - 1.0) as u32;
-    let sign = area.signum();
-    for y in min_y..=max_y {
-        for x in min_x..=max_x {
-            let px = x as f32 + 0.5;
-            let py = y as f32 + 0.5;
-            let w0 = edge_preview(p1, p2, px, py) * sign;
-            let w1 = edge_preview(p2, p0, px, py) * sign;
-            let w2 = edge_preview(p0, p1, px, py) * sign;
-            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
-                continue;
-            }
-            if let (Some(stats), Some(debug)) = (
-                chest_debug_stats.as_deref_mut(),
-                triangle.chest_debug.as_ref(),
-            ) {
-                stats.note_candidate(debug);
-            }
-            if let (Some(stats), Some(debug)) = (
-                observer_debug_stats.as_deref_mut(),
-                triangle.observer_debug.as_ref(),
-            ) {
-                stats.note_candidate(debug);
-            }
-            let inv_area = 1.0 / area.abs();
-            let b0 = w0 * inv_area;
-            let b1 = w1 * inv_area;
-            let b2 = w2 * inv_area;
-            let z = p0[2] * b0 + p1[2] * b1 + p2[2] * b2;
-            let index = (y * width + x) as usize;
-            if z >= depth[index] {
-                continue;
-            }
-            let mut color = [
-                triangle.vertices[0].color[0] * b0
-                    + triangle.vertices[1].color[0] * b1
-                    + triangle.vertices[2].color[0] * b2,
-                triangle.vertices[0].color[1] * b0
-                    + triangle.vertices[1].color[1] * b1
-                    + triangle.vertices[2].color[1] * b2,
-                triangle.vertices[0].color[2] * b0
-                    + triangle.vertices[1].color[2] * b1
-                    + triangle.vertices[2].color[2] * b2,
-                triangle.vertices[0].color[3] * b0
-                    + triangle.vertices[1].color[3] * b1
-                    + triangle.vertices[2].color[3] * b2,
-            ];
-            let use_texture = triangle.vertices[0].use_texture * b0
-                + triangle.vertices[1].use_texture * b1
-                + triangle.vertices[2].use_texture * b2;
-            let normal = normalize_lighting_direction([
-                triangle.vertices[0].normal[0] * b0
-                    + triangle.vertices[1].normal[0] * b1
-                    + triangle.vertices[2].normal[0] * b2,
-                triangle.vertices[0].normal[1] * b0
-                    + triangle.vertices[1].normal[1] * b1
-                    + triangle.vertices[2].normal[1] * b2,
-                triangle.vertices[0].normal[2] * b0
-                    + triangle.vertices[1].normal[2] * b1
-                    + triangle.vertices[2].normal[2] * b2,
-            ]);
-            if use_texture > 0.5 {
-                let uv = [
-                    triangle.vertices[0].uv[0] * b0
-                        + triangle.vertices[1].uv[0] * b1
-                        + triangle.vertices[2].uv[0] * b2,
-                    triangle.vertices[0].uv[1] * b0
-                        + triangle.vertices[1].uv[1] * b1
-                        + triangle.vertices[2].uv[1] * b2,
-                ];
-                let sampled = sample_preview_atlas(atlas, uv);
-                if sampled[3] <= 0.01 {
-                    continue;
-                }
-                color = [sampled[0], sampled[1], sampled[2], color[3] * sampled[3]];
-            }
-            let lit_rgb = apply_basic_lighting([color[0], color[1], color[2]], normal, lighting);
-            color[0] = lit_rgb[0];
-            color[1] = lit_rgb[1];
-            color[2] = lit_rgb[2];
-            if color[3] <= 0.01 {
-                continue;
-            }
-            if let (Some(stats), Some(debug)) = (
-                chest_debug_stats.as_deref_mut(),
-                triangle.chest_debug.as_ref(),
-            ) {
-                stats.note_drawn(debug);
-            }
-            if let (Some(stats), Some(debug)) = (
-                observer_debug_stats.as_deref_mut(),
-                triangle.observer_debug.as_ref(),
-            ) {
-                stats.note_drawn(debug);
-            }
-            if mode == PreviewRasterMode::Opaque {
-                if let (Some(stats), Some(debug)) = (
-                    chest_debug_stats.as_deref_mut(),
-                    triangle.chest_debug.as_ref(),
-                ) {
-                    stats.note_depth_result(debug, z < depth[index]);
-                }
-                if let (Some(stats), Some(debug)) = (
-                    observer_debug_stats.as_deref_mut(),
-                    triangle.observer_debug.as_ref(),
-                ) {
-                    stats.note_depth_result(debug, z < depth[index]);
-                }
-                depth[index] = z;
-                image.put_pixel(
-                    x,
-                    y,
-                    Rgb([
-                        (color[0].clamp(0.0, 1.0) * 255.0) as u8,
-                        (color[1].clamp(0.0, 1.0) * 255.0) as u8,
-                        (color[2].clamp(0.0, 1.0) * 255.0) as u8,
-                    ]),
-                );
-                continue;
-            }
-            if let (Some(stats), Some(debug)) = (
-                chest_debug_stats.as_deref_mut(),
-                triangle.chest_debug.as_ref(),
-            ) {
-                stats.note_depth_result(debug, true);
-            }
-            if let (Some(stats), Some(debug)) = (
-                observer_debug_stats.as_deref_mut(),
-                triangle.observer_debug.as_ref(),
-            ) {
-                stats.note_depth_result(debug, true);
-            }
-            let dst = image.get_pixel(x, y).0;
-            let alpha = color[3].clamp(0.0, 1.0);
-            let blended = [
-                color[0] * alpha + (dst[0] as f32 / 255.0) * (1.0 - alpha),
-                color[1] * alpha + (dst[1] as f32 / 255.0) * (1.0 - alpha),
-                color[2] * alpha + (dst[2] as f32 / 255.0) * (1.0 - alpha),
-            ];
-            image.put_pixel(
-                x,
-                y,
-                Rgb([
-                    (blended[0].clamp(0.0, 1.0) * 255.0) as u8,
-                    (blended[1].clamp(0.0, 1.0) * 255.0) as u8,
-                    (blended[2].clamp(0.0, 1.0) * 255.0) as u8,
-                ]),
-            );
-        }
-    }
-}
-
-fn sample_preview_atlas(atlas: Option<&RgbaImage>, uv: [f32; 2]) -> [f32; 4] {
-    let Some(atlas) = atlas else {
-        return [1.0, 1.0, 1.0, 1.0];
+    let world = |a: f32, b: f32| -> [f32; 3] {
+        let p = anchor + right * (a * px) + up * (b * px);
+        [p.x, p.y, p.z]
     };
-    let width = atlas.width().max(1);
-    let height = atlas.height().max(1);
-    let x = (uv[0].clamp(0.0, 0.999_999) * width as f32).floor() as u32;
-    let y = (uv[1].clamp(0.0, 0.999_999) * height as f32).floor() as u32;
-    let pixel = atlas.get_pixel(x.min(width - 1), y.min(height - 1)).0;
-    [
-        pixel[0] as f32 / 255.0,
-        pixel[1] as f32 / 255.0,
-        pixel[2] as f32 / 255.0,
-        pixel[3] as f32 / 255.0,
-    ]
-}
-
-#[derive(Clone)]
-struct ChestDebugTriangleInfo {
-    block_label: &'static str,
-    face_role: &'static str,
-    pair_half: &'static str,
-    world_face: &'static str,
-    candidate_label: &'static str,
-    group_key: String,
-    world_bounds: String,
-    uv_bounds: String,
-}
-
-impl ChestDebugTriangleInfo {
-    fn target_label(&self) -> String {
-        format!("{}-{}", self.face_role, self.pair_half)
+    let p00 = world(x0, y0);
+    let p10 = world(x1, y0);
+    let p11 = world(x1, y1);
+    let p01 = world(x0, y1);
+    for position in [p00, p10, p11, p00, p11, p01] {
+        vertices.push(OverlayVertex { position, color });
     }
 }
 
-#[derive(Default)]
-struct ChestDebugPreviewStats {
-    groups: HashMap<String, ChestDebugPreviewGroupStats>,
+/// Self-contained billboard text pass: own pipeline (depth-compare Always so
+/// labels draw on top), own camera uniform (only `view_proj` is read), digits
+/// rendered as small solid quads. Reused by the offscreen and window paths.
+struct LabelOverlay {
+    pipeline: wgpu::RenderPipeline,
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
+    vertex_buffer: Option<wgpu::Buffer>,
+    vertex_count: u32,
+    vertex_capacity: usize,
 }
 
-#[derive(Clone)]
-struct ChestDebugPreviewGroupStats {
-    block_label: &'static str,
-    face_role: &'static str,
-    pair_half: &'static str,
-    world_face: &'static str,
-    candidate_label: &'static str,
-    world_bounds: String,
-    uv_bounds: String,
-    opaque_triangles: usize,
-    translucent_triangles: usize,
-    candidate_pixels: usize,
-    drawn_pixels: usize,
-    visible_pixels: usize,
-}
-
-impl ChestDebugPreviewStats {
-    fn note_triangle(&mut self, info: &ChestDebugTriangleInfo, mode: PreviewRasterMode) {
-        let entry = self
-            .groups
-            .entry(info.group_key.clone())
-            .or_insert_with(|| ChestDebugPreviewGroupStats {
-                block_label: info.block_label,
-                face_role: info.face_role,
-                pair_half: info.pair_half,
-                world_face: info.world_face,
-                candidate_label: info.candidate_label,
-                world_bounds: info.world_bounds.clone(),
-                uv_bounds: info.uv_bounds.clone(),
-                opaque_triangles: 0,
-                translucent_triangles: 0,
-                candidate_pixels: 0,
-                drawn_pixels: 0,
-                visible_pixels: 0,
+impl LabelOverlay {
+    fn new(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        depth_format: wgpu::TextureFormat,
+    ) -> Self {
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("label_overlay_camera_layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
             });
-        match mode {
-            PreviewRasterMode::Opaque => entry.opaque_triangles += 1,
-            PreviewRasterMode::Translucent => entry.translucent_triangles += 1,
-        }
-    }
-
-    fn note_candidate(&mut self, info: &ChestDebugTriangleInfo) {
-        if let Some(entry) = self.groups.get_mut(&info.group_key) {
-            entry.candidate_pixels += 1;
-        }
-    }
-
-    fn note_drawn(&mut self, info: &ChestDebugTriangleInfo) {
-        if let Some(entry) = self.groups.get_mut(&info.group_key) {
-            entry.drawn_pixels += 1;
-        }
-    }
-
-    fn note_depth_result(&mut self, info: &ChestDebugTriangleInfo, visible: bool) {
-        if visible && let Some(entry) = self.groups.get_mut(&info.group_key) {
-            entry.visible_pixels += 1;
-        }
-    }
-
-    fn log_summary(&self) {
-        let mut groups = self.groups.values().cloned().collect::<Vec<_>>();
-        groups.sort_by(|left, right| {
-            right
-                .visible_pixels
-                .cmp(&left.visible_pixels)
-                .then(right.drawn_pixels.cmp(&left.drawn_pixels))
-                .then(left.block_label.cmp(right.block_label))
+        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("label_overlay_camera"),
+            size: std::mem::size_of::<CameraUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        for group in groups {
-            println!(
-                "[LBA_FULL_MODE_V2_CHEST_PREVIEW] block={} target={} candidate={} world_face={} opaque_triangles={} translucent_triangles={} candidate_pixels={} drawn_pixels={} visible_pixels={} world_bounds={} uv_bounds={}",
-                group.block_label,
-                format!("{}-{}", group.face_role, group.pair_half),
-                group.candidate_label,
-                group.world_face,
-                group.opaque_triangles,
-                group.translucent_triangles,
-                group.candidate_pixels,
-                group.drawn_pixels,
-                group.visible_pixels,
-                group.world_bounds,
-                group.uv_bounds,
-            );
-        }
-    }
-}
-
-#[derive(Clone)]
-struct ObserverDebugTriangleInfo {
-    block_label: &'static str,
-    face_number: &'static str,
-    world_face: &'static str,
-    group_key: String,
-    world_bounds: String,
-    uv_bounds: String,
-}
-
-#[derive(Default)]
-struct ObserverDebugPreviewStats {
-    groups: HashMap<String, ObserverDebugPreviewGroupStats>,
-}
-
-#[derive(Clone)]
-struct ObserverDebugPreviewGroupStats {
-    block_label: &'static str,
-    face_number: &'static str,
-    world_face: &'static str,
-    world_bounds: String,
-    uv_bounds: String,
-    opaque_triangles: usize,
-    translucent_triangles: usize,
-    candidate_pixels: usize,
-    drawn_pixels: usize,
-    visible_pixels: usize,
-}
-
-impl ObserverDebugPreviewStats {
-    fn note_triangle(&mut self, info: &ObserverDebugTriangleInfo, mode: PreviewRasterMode) {
-        let entry = self
-            .groups
-            .entry(info.group_key.clone())
-            .or_insert_with(|| ObserverDebugPreviewGroupStats {
-                block_label: info.block_label,
-                face_number: info.face_number,
-                world_face: info.world_face,
-                world_bounds: info.world_bounds.clone(),
-                uv_bounds: info.uv_bounds.clone(),
-                opaque_triangles: 0,
-                translucent_triangles: 0,
-                candidate_pixels: 0,
-                drawn_pixels: 0,
-                visible_pixels: 0,
-            });
-        match mode {
-            PreviewRasterMode::Opaque => entry.opaque_triangles += 1,
-            PreviewRasterMode::Translucent => entry.translucent_triangles += 1,
-        }
-    }
-
-    fn note_candidate(&mut self, info: &ObserverDebugTriangleInfo) {
-        if let Some(entry) = self.groups.get_mut(&info.group_key) {
-            entry.candidate_pixels += 1;
-        }
-    }
-
-    fn note_drawn(&mut self, info: &ObserverDebugTriangleInfo) {
-        if let Some(entry) = self.groups.get_mut(&info.group_key) {
-            entry.drawn_pixels += 1;
-        }
-    }
-
-    fn note_depth_result(&mut self, info: &ObserverDebugTriangleInfo, visible: bool) {
-        if visible && let Some(entry) = self.groups.get_mut(&info.group_key) {
-            entry.visible_pixels += 1;
-        }
-    }
-
-    fn log_summary(&self) {
-        let mut groups = self.groups.values().cloned().collect::<Vec<_>>();
-        groups.sort_by(|left, right| {
-            left.block_label
-                .cmp(right.block_label)
-                .then(left.face_number.cmp(right.face_number))
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("label_overlay_camera_bind_group"),
+            layout: &camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
         });
-        for group in groups {
-            println!(
-                "[LBA_FULL_MODE_V2_OBSERVER_PREVIEW] block={} face={} world_face={} opaque_triangles={} translucent_triangles={} candidate_pixels={} drawn_pixels={} visible_pixels={} world_bounds={} uv_bounds={}",
-                group.block_label,
-                group.face_number,
-                group.world_face,
-                group.opaque_triangles,
-                group.translucent_triangles,
-                group.candidate_pixels,
-                group.drawn_pixels,
-                group.visible_pixels,
-                group.world_bounds,
-                group.uv_bounds,
-            );
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("label_overlay_shader"),
+            source: wgpu::ShaderSource::Wgsl(OVERLAY_SHADER.into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("label_overlay_pipeline_layout"),
+            bind_group_layouts: &[&camera_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("label_overlay_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<OverlayVertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 12,
+                            shader_location: 1,
+                            format: wgpu::VertexFormat::Float32x4,
+                        },
+                    ],
+                }],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+        });
+        Self {
+            pipeline,
+            camera_buffer,
+            camera_bind_group,
+            vertex_buffer: None,
+            vertex_count: 0,
+            vertex_capacity: 0,
         }
     }
-}
 
-fn classify_chest_debug_triangle(vertices: [&GpuVertex; 3]) -> Option<ChestDebugTriangleInfo> {
-    std::env::var_os("LBA_FULL_MODE_V2_CHEST_DEBUG")?;
-    let positions = vertices.map(|vertex| vertex.position);
-    let centroid = [
-        (positions[0][0] + positions[1][0] + positions[2][0]) / 3.0,
-        (positions[0][1] + positions[1][1] + positions[2][1]) / 3.0,
-        (positions[0][2] + positions[1][2] + positions[2][2]) / 3.0,
-    ];
-    let ab = [
-        positions[1][0] - positions[0][0],
-        positions[1][1] - positions[0][1],
-        positions[1][2] - positions[0][2],
-    ];
-    let ac = [
-        positions[2][0] - positions[0][0],
-        positions[2][1] - positions[0][1],
-        positions[2][2] - positions[0][2],
-    ];
-    let normal = [
-        ab[1] * ac[2] - ab[2] * ac[1],
-        ab[2] * ac[0] - ab[0] * ac[2],
-        ab[0] * ac[1] - ab[1] * ac[0],
-    ];
-    let within_block = |origin: [f32; 3]| {
-        centroid[0] >= origin[0] - 0.01
-            && centroid[0] <= origin[0] + 1.01
-            && centroid[1] >= origin[1] - 0.01
-            && centroid[1] <= origin[1] + 1.01
-            && centroid[2] >= origin[2] - 0.01
-            && centroid[2] <= origin[2] + 1.01
-    };
-    let world_face = if normal[0] > 0.0001 && normal[0].abs() >= normal[2].abs() {
-        Some("east")
-    } else if normal[0] < -0.0001 && normal[0].abs() >= normal[2].abs() {
-        Some("west")
-    } else {
-        None
-    }?;
-    let (block_label, face_role, pair_half) = match world_face {
-        "east" if within_block([47.0, 1.0, 114.0]) => ("C49-6", "F", "R"),
-        "west" if within_block([47.0, 1.0, 114.0]) => ("C49-6", "B", "L"),
-        "east" if within_block([47.0, 1.0, 115.0]) => ("C55-6", "F", "L"),
-        "west" if within_block([47.0, 1.0, 115.0]) => ("C55-6", "B", "R"),
-        "west" if within_block([33.0, 1.0, 115.0]) => ("C54-5", "F", "L"),
-        "east" if within_block([33.0, 1.0, 115.0]) => ("C54-5", "B", "R"),
-        "west" if within_block([33.0, 1.0, 116.0]) => ("C56-5", "F", "R"),
-        "east" if within_block([33.0, 1.0, 116.0]) => ("C56-5", "B", "L"),
-        _ => return None,
-    };
-    let candidate_label = classify_chest_debug_candidate(face_role, positions);
-    Some(ChestDebugTriangleInfo {
-        block_label,
-        face_role,
-        pair_half,
-        world_face,
-        candidate_label,
-        group_key: format!(
-            "{}|{}-{}|{}|{}|{}|{}",
-            block_label,
-            face_role,
-            pair_half,
-            candidate_label,
-            world_face,
-            quantized_world_bounds(positions),
-            quantized_uv_bounds(vertices),
-        ),
-        world_bounds: quantized_world_bounds(positions),
-        uv_bounds: quantized_uv_bounds(vertices),
-    })
-}
-
-fn classify_observer_debug_triangle(
-    vertices: [&GpuVertex; 3],
-) -> Option<ObserverDebugTriangleInfo> {
-    std::env::var_os("LBA_FULL_MODE_V2_OBSERVER_DEBUG")?;
-    let positions = vertices.map(|vertex| vertex.position);
-    let centroid = [
-        (positions[0][0] + positions[1][0] + positions[2][0]) / 3.0,
-        (positions[0][1] + positions[1][1] + positions[2][1]) / 3.0,
-        (positions[0][2] + positions[1][2] + positions[2][2]) / 3.0,
-    ];
-    let Some(block_label) = observer_debug_block_label(centroid) else {
-        return None;
-    };
-    let world_face = dominant_world_face_from_positions(positions)?;
-    let face_number = match world_face {
-        "up" => "1",
-        "down" => "2",
-        "north" => "3",
-        "south" => "4",
-        "west" => "5",
-        "east" => "6",
-        _ => return None,
-    };
-    if !matches!(
-        (block_label, face_number),
-        ("O05", "1") | ("O06", "1") | ("O11", "1") | ("O12", "1")
+    /// Rebuild the billboarded glyph geometry for the current camera and upload
+    /// the matching `view_proj`. Cheap (a few thousand verts), called per frame.
+    fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        anchors: &[LabelAnchor],
+        camera: &OrbitCamera,
     ) {
-        return None;
-    }
-    Some(ObserverDebugTriangleInfo {
-        block_label,
-        face_number,
-        world_face,
-        group_key: format!("{block_label}-{face_number}"),
-        world_bounds: quantized_world_bounds(positions),
-        uv_bounds: quantized_uv_bounds(vertices),
-    })
-}
+        let view_proj = camera.view_proj_matrix();
+        let eye = camera.eye();
+        queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::bytes_of(&CameraUniform::from_matrix_and_eye(view_proj, eye)),
+        );
 
-fn observer_debug_block_label(centroid: [f32; 3]) -> Option<&'static str> {
-    if (centroid[1] - 2.025).abs() > 0.15 {
-        return None;
-    }
-    const TARGETS: [(&str, f32, f32); 4] = [
-        ("O05", 54.0, 5.0),
-        ("O06", 66.0, 5.0),
-        ("O11", 54.0, 15.0),
-        ("O12", 66.0, 15.0),
-    ];
-    TARGETS
-        .into_iter()
-        .find(|(_, x, z)| (centroid[0] - *x).abs() <= 1.2 && (centroid[2] - *z).abs() <= 1.2)
-        .map(|(label, _, _)| label)
-}
+        let forward = (camera.target - eye).normalize_or_zero();
+        let mut right = forward.cross(Vec3::Y);
+        if right.length_squared() < 1.0e-6 {
+            right = Vec3::X;
+        }
+        let right = right.normalize();
+        let up = right.cross(forward).normalize();
 
-fn dominant_world_face_from_positions(positions: [[f32; 3]; 3]) -> Option<&'static str> {
-    let ab = [
-        positions[1][0] - positions[0][0],
-        positions[1][1] - positions[0][1],
-        positions[1][2] - positions[0][2],
-    ];
-    let ac = [
-        positions[2][0] - positions[0][0],
-        positions[2][1] - positions[0][1],
-        positions[2][2] - positions[0][2],
-    ];
-    let normal = [
-        ab[1] * ac[2] - ab[2] * ac[1],
-        ab[2] * ac[0] - ab[0] * ac[2],
-        ab[0] * ac[1] - ab[1] * ac[0],
-    ];
-    let abs = [normal[0].abs(), normal[1].abs(), normal[2].abs()];
-    if abs[0] <= f32::EPSILON && abs[1] <= f32::EPSILON && abs[2] <= f32::EPSILON {
-        return None;
-    }
-    Some(if abs[1] >= abs[0] && abs[1] >= abs[2] {
-        if normal[1] >= 0.0 { "up" } else { "down" }
-    } else if abs[0] >= abs[2] {
-        if normal[0] >= 0.0 { "east" } else { "west" }
-    } else if normal[2] >= 0.0 {
-        "south"
-    } else {
-        "north"
-    })
-}
+        let background = [0.05, 0.05, 0.07, 0.72];
+        let digit_color = [1.0, 0.92, 0.15, 1.0];
+        let mut vertices: Vec<OverlayVertex> = Vec::new();
+        for anchor in anchors {
+            let dist = (anchor.position - eye).length().max(0.001);
+            // Keep labels at a roughly constant on-screen size regardless of zoom.
+            let px = dist * 0.012;
+            let digits: Vec<usize> = anchor
+                .text
+                .chars()
+                .filter_map(|c| c.to_digit(10).map(|d| d as usize))
+                .collect();
+            if digits.is_empty() {
+                continue;
+            }
+            let total_w = (digits.len() * 4 - 1) as f32;
+            let half_w = total_w * 0.5;
+            push_overlay_quad(
+                &mut vertices,
+                anchor.position,
+                right,
+                up,
+                px,
+                -half_w - 1.0,
+                -3.0,
+                half_w + 1.0,
+                4.0,
+                background,
+            );
+            for (ci, &digit) in digits.iter().enumerate() {
+                let glyph = DIGIT_FONT[digit.min(9)];
+                let base_x = (ci * 4) as f32 - half_w;
+                for (row, bits) in glyph.iter().enumerate() {
+                    let ly = (4 - row) as f32 - 2.0;
+                    for col in 0..3u32 {
+                        if (bits >> (2 - col)) & 1 == 1 {
+                            let lx = base_x + col as f32;
+                            push_overlay_quad(
+                                &mut vertices,
+                                anchor.position,
+                                right,
+                                up,
+                                px,
+                                lx,
+                                ly,
+                                lx + 1.0,
+                                ly + 1.0,
+                                digit_color,
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
-fn log_chest_front_triangle(
-    stage: &str,
-    vertices: [&GpuVertex; 3],
-    debug: Option<&ChestDebugTriangleInfo>,
-) {
-    let Some(debug) = debug else {
-        return;
-    };
-    println!(
-        "[LBA_FULL_MODE_V2_CHEST_NATIVE] stage={} block={} target={} candidate={} world_face={} positions={} uvs={} world_bounds={} uv_bounds={} use_texture={:.1}/{:.1}/{:.1}",
-        stage,
-        debug.block_label,
-        debug.target_label(),
-        debug.candidate_label,
-        debug.world_face,
-        format_gpu_positions(vertices),
-        format_gpu_uvs(vertices),
-        debug.world_bounds,
-        debug.uv_bounds,
-        vertices[0].use_texture,
-        vertices[1].use_texture,
-        vertices[2].use_texture,
-    );
-}
-
-fn log_chest_front_gpu_vertices(stage: &str, vertices: &[GpuVertex], indices: &[u32]) {
-    if std::env::var_os("LBA_FULL_MODE_V2_CHEST_DEBUG").is_none() {
-        return;
+        self.vertex_count = vertices.len() as u32;
+        if vertices.is_empty() {
+            return;
+        }
+        let data: &[u8] = bytemuck::cast_slice(&vertices);
+        if vertices.len() > self.vertex_capacity {
+            self.vertex_buffer = Some(device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("label_overlay_vertices"),
+                    contents: data,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                },
+            ));
+            self.vertex_capacity = vertices.len();
+        } else if let Some(buffer) = &self.vertex_buffer {
+            queue.write_buffer(buffer, 0, data);
+        }
     }
-    for tri in indices.chunks_exact(3) {
-        let Some(v0) = vertices.get(tri[0] as usize) else {
-            continue;
+
+    fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        if self.vertex_count == 0 {
+            return;
+        }
+        let Some(buffer) = &self.vertex_buffer else {
+            return;
         };
-        let Some(v1) = vertices.get(tri[1] as usize) else {
-            continue;
-        };
-        let Some(v2) = vertices.get(tri[2] as usize) else {
-            continue;
-        };
-        let debug = classify_chest_debug_triangle([v0, v1, v2]);
-        log_chest_front_triangle(stage, [v0, v1, v2], debug.as_ref());
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_vertex_buffer(0, buffer.slice(..));
+        pass.draw(0..self.vertex_count, 0..1);
     }
 }
 
-fn classify_chest_debug_candidate(face_role: &str, positions: [[f32; 3]; 3]) -> &'static str {
-    let min_y = positions.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
-    let max_y = positions
-        .iter()
-        .map(|p| p[1])
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_z = positions.iter().map(|p| p[2]).fold(f32::INFINITY, f32::min);
-    let max_z = positions
-        .iter()
-        .map(|p| p[2])
-        .fold(f32::NEG_INFINITY, f32::max);
-    let y_span = max_y - min_y;
-    let z_span = max_z - min_z;
-    match (face_role, y_span, z_span, min_y) {
-        ("F", y, z, min) if y >= 0.5 && z >= 0.8 && min < 1.1 => "base_front_candidate_A",
-        ("B", y, z, min) if y >= 0.5 && z >= 0.8 && min < 1.1 => "base_back_candidate_A",
-        ("F", y, z, min) if y >= 0.2 && z >= 0.8 && min >= 1.5 => "lid_front_candidate_B",
-        ("B", y, z, min) if y >= 0.2 && z >= 0.8 && min >= 1.5 => "lid_back_candidate_B",
-        ("F", y, z, _) if y <= 0.3 && z <= 0.1 => "lock_front_candidate_C",
-        ("B", y, z, _) if y <= 0.3 && z <= 0.1 => "lock_back_candidate_C",
-        ("F", ..) => "other_front_candidate_Z",
-        _ => "other_back_candidate_Z",
-    }
-}
-
-fn format_gpu_positions(vertices: [&GpuVertex; 3]) -> String {
-    format!(
-        "[{:?},{:?},{:?}]",
-        vertices[0].position, vertices[1].position, vertices[2].position
-    )
-}
-
-fn format_gpu_uvs(vertices: [&GpuVertex; 3]) -> String {
-    format!(
-        "[{:?},{:?},{:?}]",
-        vertices[0].uv, vertices[1].uv, vertices[2].uv
-    )
-}
-
-fn quantized_world_bounds(positions: [[f32; 3]; 3]) -> String {
-    let min_x = positions.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
-    let max_x = positions
-        .iter()
-        .map(|p| p[0])
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_y = positions.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
-    let max_y = positions
-        .iter()
-        .map(|p| p[1])
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_z = positions.iter().map(|p| p[2]).fold(f32::INFINITY, f32::min);
-    let max_z = positions
-        .iter()
-        .map(|p| p[2])
-        .fold(f32::NEG_INFINITY, f32::max);
-    format!(
-        "[{:.4}..{:.4},{:.4}..{:.4},{:.4}..{:.4}]",
-        min_x, max_x, min_y, max_y, min_z, max_z
-    )
-}
-
-fn quantized_uv_bounds(vertices: [&GpuVertex; 3]) -> String {
-    let min_u = vertices
-        .iter()
-        .map(|vertex| vertex.uv[0])
-        .fold(f32::INFINITY, f32::min);
-    let max_u = vertices
-        .iter()
-        .map(|vertex| vertex.uv[0])
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_v = vertices
-        .iter()
-        .map(|vertex| vertex.uv[1])
-        .fold(f32::INFINITY, f32::min);
-    let max_v = vertices
-        .iter()
-        .map(|vertex| vertex.uv[1])
-        .fold(f32::NEG_INFINITY, f32::max);
-    format!("[{:.6}..{:.6},{:.6}..{:.6}]", min_u, max_u, min_v, max_v)
-}
-
-fn edge_preview(a: [f32; 3], b: [f32; 3], x: f32, y: f32) -> f32 {
-    (x - a[0]) * (b[1] - a[1]) - (y - a[1]) * (b[0] - a[0])
-}
-
+/// GPU offscreen preview: renders one frame through the real wgpu pipeline
+/// (identical shader, blend state and most importantly `cull_mode=Back` /
+/// `front_face=Ccw`) to an offscreen texture, reads it back and writes a PNG.
+///
+/// Unlike [`render_offscreen_preview`] (a CPU rasterizer with *no* back-face
+/// culling), this path faithfully reproduces winding / back-face / translucent
+/// sorting behaviour. That makes it the only headless way to validate the
+/// GPU-only bugs the CPU preview silently hides: water, glass panes, sign
+/// front/back, single-sided geometry and over-cull.
+///
+/// Selected by setting `LBA_PREVIEW_GPU=1` alongside `--preview-output`.
+/// View can be steered with `LBA_PREVIEW_GPU_SIZE=WxH`,
+/// `LBA_PREVIEW_GPU_YAW`/`LBA_PREVIEW_GPU_PITCH` (degrees) and
+/// `LBA_PREVIEW_GPU_DIST` (multiplier on the fit distance).
 fn write_headless_progress_signal(
     args: &ViewerArgs,
     scene_index: &ChunkSceneIndex,
@@ -9971,422 +9176,6 @@ fn write_native_cache_manifest(
     Ok(manifest_bytes + total_chunk_bytes)
 }
 
-fn run_headless_prebuild(args: &ViewerArgs, total_trace_started_at: Instant) -> Result<()> {
-    let Some(input) = args.input.as_deref() else {
-        bail!("headless prebuild requires an input .litematic file");
-    };
-    let Some(cache_file) = args.cache_file.as_deref() else {
-        bail!("headless prebuild requires --cache-file");
-    };
-    let prebuild_started_at = Instant::now();
-    println!("[TRACE_STARTUP] mode=headless_prebuild reason=skip_window_wgpu_bootstrap");
-    println!(
-        "[VIEWER_SCENE] loading_litematic file={} chunk_size={}",
-        input.display(),
-        args.chunk_size
-    );
-    let scene_index = Arc::new(ChunkSceneIndex::load(input, args.chunk_size)?);
-    let palette_colors = Arc::new(resolve_scene_palette_colors(
-        &scene_index,
-        args.display_mode,
-    ));
-    let (full_mode_materials, texture_atlas) = if args.display_mode == ViewerDisplayMode::Full {
-        load_full_mode_scene_assets(&scene_index, input)?
-    } else {
-        (None, None)
-    };
-    println!(
-        "[VIEWER_CACHE] headless_prebuild_assets display_mode={} runtime_v2_texture_atlas={} material_slots={} fallback_palette_entries={}",
-        args.display_mode.label(),
-        texture_atlas.is_some(),
-        full_mode_materials
-            .as_ref()
-            .map(|materials| materials.materials.len())
-            .unwrap_or(0),
-        full_mode_materials
-            .as_ref()
-            .and_then(|materials| materials.stats.as_ref())
-            .map(|stats| stats.fallback_palette_entries)
-            .unwrap_or(0)
-    );
-    let bounds = SceneBounds::from_metadata(scene_index.metadata());
-    println!(
-        "[VIEWER_CHUNK] index_ready total_chunks={} chunk_size={} scene_radius={:.2}",
-        scene_index.chunk_count(),
-        args.chunk_size,
-        bounds.radius
-    );
-    println!("[TRACE_STARTUP] stage=wgpu_total elapsed_ms=0 mode=headless_prebuild");
-
-    let trace = Arc::new(TraceCounters::default());
-    let mut pipeline = if writer_pipeline_enabled() {
-        Some(PrebuildCachePipeline::start(cache_file, trace.clone())?)
-    } else {
-        println!("[TRACE_WALL] stage=cache_write event=pipeline_disabled reason=env_disabled");
-        None
-    };
-    let (request_tx, result_rx, workers) = spawn_build_worker_pool(
-        scene_index.clone(),
-        palette_colors,
-        full_mode_materials.clone(),
-        args.build_workers,
-        trace.clone(),
-    );
-
-    let entries = scene_index.chunk_entries().to_vec();
-    let total_chunks = entries.len();
-    let batch_size = if total_chunks > 512 {
-        32_usize
-    } else {
-        16_usize
-    };
-    println!(
-        "[TRACE_WALL] stage=chunk_task event=headless_batch_plan total_chunks={} batch_size={} worker_count={}",
-        total_chunks, batch_size, args.build_workers
-    );
-    let mut submitted_batches = 0_usize;
-    for chunk in entries.chunks(batch_size) {
-        let keys = chunk.iter().map(|entry| entry.key).collect::<Vec<_>>();
-        request_tx.send(BuildWorkerRequest {
-            batch_id: submitted_batches as u64 + 1,
-            keys: keys.clone(),
-            priority: QueuePriority::Target,
-            enqueued_at: Instant::now(),
-        })?;
-        trace.build_enqueue_batches.fetch_add(1, Ordering::Relaxed);
-        trace
-            .build_enqueue_chunks
-            .fetch_add(keys.len(), Ordering::Relaxed);
-        TraceCounters::update_max(
-            &trace.max_in_flight_builds,
-            (submitted_batches + 1) * batch_size,
-        );
-        submitted_batches += 1;
-    }
-    TraceCounters::update_max(&trace.max_pending_build_queue, total_chunks);
-    drop(request_tx);
-
-    let mut completed_chunks = 0_usize;
-    let mut renderable_chunks = 0_usize;
-    let mut empty_mesh_chunks = 0_usize;
-    let mut manifest_chunks = Vec::<NativePreviewCacheManifestChunk>::new();
-    let mut total_chunk_bytes = 0_usize;
-    let mut writer_submitted_chunks = 0_usize;
-    let mut writer_completed_chunks = 0_usize;
-    let mut cache_written_keys = HashSet::<ChunkKey>::new();
-    let mut cpu_meshes = Vec::<PreparedChunkMesh>::new();
-    let mut textured_mesh_chunks = 0_usize;
-    let mut textured_vertices = 0_usize;
-    let mut last_progress = Instant::now();
-
-    while completed_chunks < total_chunks {
-        match result_rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(result) => {
-                if let Some(error) = result.error {
-                    bail!(
-                        "headless build failed for chunk ({}, {}, {}): {}",
-                        result.key.cx,
-                        result.key.cy,
-                        result.key.cz,
-                        error
-                    );
-                }
-                completed_chunks += 1;
-                if let Some(mesh) = result.mesh {
-                    renderable_chunks += 1;
-                    if prepared_mesh_uses_full_texture_data(&mesh) {
-                        textured_mesh_chunks += 1;
-                        textured_vertices += mesh
-                            .vertices
-                            .iter()
-                            .filter(|vertex| vertex.use_texture > 0.5)
-                            .count();
-                    }
-                    if let Some(pipeline) = pipeline.as_ref() {
-                        if let Some(request_tx) = pipeline.request_tx.as_ref() {
-                            request_tx.send(CacheWriterRequest {
-                                mesh,
-                                priority: QueuePriority::Target,
-                                submitted_at: Instant::now(),
-                            })?;
-                            writer_submitted_chunks += 1;
-                        }
-                    } else {
-                        cpu_meshes.push(mesh);
-                    }
-                } else {
-                    empty_mesh_chunks += 1;
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-        if let Some(pipeline) = pipeline.as_ref() {
-            while let Ok(result) = pipeline.result_rx.try_recv() {
-                if let Some(error) = result.error {
-                    bail!("headless cache write failed: {error}");
-                }
-                if let Some(chunk) = result.manifest_chunk {
-                    cache_written_keys.insert(result.mesh.key);
-                    total_chunk_bytes = total_chunk_bytes.saturating_add(result.bytes);
-                    manifest_chunks.push(chunk);
-                    writer_completed_chunks += 1;
-                }
-            }
-        }
-        if last_progress.elapsed() >= Duration::from_millis(500) {
-            last_progress = Instant::now();
-            write_headless_progress_signal(
-                args,
-                &scene_index,
-                total_chunks,
-                completed_chunks,
-                renderable_chunks,
-                empty_mesh_chunks,
-                total_chunk_bytes,
-                prebuild_started_at.elapsed(),
-                false,
-            );
-        }
-    }
-    for worker in workers {
-        let _ = worker.join();
-    }
-
-    let finalize_started_at = Instant::now();
-    let cache_write_started_at = Instant::now();
-    let (chunk_dir_name, chunk_dir) = if let Some(mut pipeline) = pipeline.take() {
-        if let Some(request_tx) = pipeline.request_tx.take() {
-            drop(request_tx);
-        }
-        if let Some(worker) = pipeline.worker.take() {
-            let _ = worker.join();
-        }
-        while let Ok(result) = pipeline.result_rx.try_recv() {
-            if let Some(error) = result.error {
-                bail!("headless cache write failed: {error}");
-            }
-            if let Some(chunk) = result.manifest_chunk
-                && cache_written_keys.insert(result.mesh.key)
-            {
-                total_chunk_bytes = total_chunk_bytes.saturating_add(result.bytes);
-                manifest_chunks.push(chunk);
-                writer_completed_chunks += 1;
-            }
-        }
-        (pipeline.chunk_dir_name, pipeline.chunk_dir)
-    } else {
-        if let Some(parent) = cache_file.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let manifest_name = cache_file
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| "native_preview_cache.json".to_string());
-        let chunk_dir_name = format!("{manifest_name}.chunks");
-        let chunk_dir = cache_file
-            .parent()
-            .map(|parent| parent.join(&chunk_dir_name))
-            .unwrap_or_else(|| PathBuf::from(&chunk_dir_name));
-        let _ = std::fs::remove_dir_all(&chunk_dir);
-        std::fs::create_dir_all(&chunk_dir)?;
-        for mesh in &cpu_meshes {
-            let file_name = cache_chunk_file_name(mesh.key);
-            let chunk_path = chunk_dir.join(&file_name);
-            let chunk_started_at = Instant::now();
-            let bytes = write_prepared_cache_chunk_binary(&chunk_path, mesh)?;
-            TraceCounters::add_ms(&trace.writer_busy_ms, chunk_started_at.elapsed());
-            trace.writer_chunks.fetch_add(1, Ordering::Relaxed);
-            total_chunk_bytes = total_chunk_bytes.saturating_add(bytes);
-            manifest_chunks.push(NativePreviewCacheManifestChunk {
-                cx: mesh.key.cx,
-                cy: mesh.key.cy,
-                cz: mesh.key.cz,
-                file: file_name,
-                vertex_count: mesh.vertex_count(),
-                index_count: mesh.index_count(),
-                bytes,
-            });
-        }
-        (chunk_dir_name, chunk_dir)
-    };
-    let layer_index_file = Some(write_native_cache_layer_index(cache_file, &scene_index)?);
-    let cache_manifest_format =
-        if args.display_mode == ViewerDisplayMode::Full && textured_mesh_chunks > 0 {
-            "native_preview_cache_manifest_v5"
-        } else {
-            "native_preview_cache_manifest_v3"
-        };
-    let cache_color_chain =
-        if args.display_mode == ViewerDisplayMode::Full && textured_mesh_chunks > 0 {
-            "runtime_v2_texture_atlas_cache"
-        } else {
-            "shared_native_cache"
-        };
-    let total_bytes = write_native_cache_manifest(
-        cache_file,
-        &chunk_dir,
-        chunk_dir_name,
-        cache_manifest_format,
-        cache_color_chain,
-        scene_index.metadata().clone(),
-        total_chunks,
-        empty_mesh_chunks,
-        manifest_chunks,
-        total_chunk_bytes,
-        cache_write_started_at,
-        layer_index_file,
-    )?;
-    let cache_write_ms = cache_write_started_at.elapsed().as_millis();
-    write_headless_progress_signal(
-        args,
-        &scene_index,
-        total_chunks,
-        total_chunks,
-        renderable_chunks,
-        empty_mesh_chunks,
-        total_bytes,
-        prebuild_started_at.elapsed(),
-        true,
-    );
-    let finalize_ms = finalize_started_at.elapsed().as_millis();
-    let total_wall_ms = prebuild_started_at.elapsed().as_millis();
-    println!(
-        "[VIEWER_CACHE] headless_prebuild_mesh_summary display_mode={} renderable_chunks={} textured_mesh_chunks={} textured_vertices={} cache_chunk_format={}",
-        args.display_mode.label(),
-        renderable_chunks,
-        textured_mesh_chunks,
-        textured_vertices,
-        if textured_mesh_chunks > 0 {
-            "LPNC5"
-        } else {
-            "LPNC3_or_LPNC4"
-        }
-    );
-    println!(
-        "[PREBUILD_TIMING] finalize_ms={} cache_write_ms={} total_elapsed_ms={}",
-        finalize_ms, cache_write_ms, total_wall_ms
-    );
-    println!(
-        "[TRACE_SUMMARY] total_wall_ms={} worker_busy_ms={} worker_wait_ms={} worker_batches={} worker_chunks={} worker_result_send_ms={} build_enqueue_ms={} build_enqueue_batches={} build_enqueue_chunks={} build_dequeue_wait_ms={} build_dequeue_batches={} build_dequeue_chunks={} writer_queue_wait_ms={} writer_busy_ms={} writer_chunks={} writer_errors={} writer_submitted_chunks={} writer_completed_chunks={} cache_file_create_ms={} max_pending_build_queue={} max_in_flight_builds={} max_pending_upload_queue=0 pending_builds=0 in_flight_builds=0 pending_uploads=0 writer_model={}",
-        total_wall_ms,
-        trace.worker_busy_ms.load(Ordering::Relaxed),
-        trace.worker_wait_ms.load(Ordering::Relaxed),
-        trace.worker_batches.load(Ordering::Relaxed),
-        trace.worker_chunks.load(Ordering::Relaxed),
-        trace.worker_result_send_ms.load(Ordering::Relaxed),
-        trace.build_enqueue_ms.load(Ordering::Relaxed),
-        trace.build_enqueue_batches.load(Ordering::Relaxed),
-        trace.build_enqueue_chunks.load(Ordering::Relaxed),
-        trace.build_dequeue_ms.load(Ordering::Relaxed),
-        trace.build_dequeue_batches.load(Ordering::Relaxed),
-        trace.build_dequeue_chunks.load(Ordering::Relaxed),
-        trace.writer_wait_ms.load(Ordering::Relaxed),
-        trace.writer_busy_ms.load(Ordering::Relaxed),
-        trace.writer_chunks.load(Ordering::Relaxed),
-        trace.writer_errors.load(Ordering::Relaxed),
-        writer_submitted_chunks,
-        writer_completed_chunks,
-        trace.cache_file_create_ms.load(Ordering::Relaxed),
-        total_chunks,
-        trace.max_in_flight_builds.load(Ordering::Relaxed),
-        if writer_pipeline_enabled() {
-            "headless_pipeline"
-        } else {
-            "headless_synchronous"
-        }
-    );
-    println!(
-        "[TRACE_CRITICAL_PATH] total_wall_ms={} finalize_ms={} cache_write_ms={} writer_queue_wait_ms={} writer_busy_ms_cumulative={} worker_busy_ms_cumulative={} worker_wait_ms_cumulative={} build_queue_wait_ms_cumulative={}",
-        total_wall_ms,
-        finalize_ms,
-        cache_write_ms,
-        trace.writer_wait_ms.load(Ordering::Relaxed),
-        trace.writer_busy_ms.load(Ordering::Relaxed),
-        trace.worker_busy_ms.load(Ordering::Relaxed),
-        trace.worker_wait_ms.load(Ordering::Relaxed),
-        trace.build_dequeue_ms.load(Ordering::Relaxed)
-    );
-    println!(
-        "[TRACE_WALL] stage=total event=end elapsed_ms={}",
-        total_trace_started_at.elapsed().as_millis()
-    );
-    println!("[NATIVE_VIEWER] prebuild_only=true exit_after_prebuild=true");
-    Ok(())
-}
-
-fn probe_scene(scene: &ViewerScene) -> Result<()> {
-    match scene.chunk_scene_index.as_ref() {
-        Some(scene_index) => {
-            let camera = OrbitCamera::from_bounds(scene.bounds, 1280, 800);
-            let plan = ChunkResidencyPlan::build(
-                scene_index,
-                &camera,
-                &ChunkStreamingConfig::default(),
-                0,
-                false,
-                false,
-            );
-            let probe_keys = plan
-                .upload_order
-                .iter()
-                .copied()
-                .take(8)
-                .collect::<Vec<_>>();
-            let probe_meshes = if let Some(materials) = scene.full_mode_materials.as_ref() {
-                scene_index.build_textured_chunk_meshes(&probe_keys, materials)?
-            } else {
-                scene_index.build_chunk_meshes(&probe_keys)?
-            };
-            let probe_vertex_count = probe_meshes
-                .iter()
-                .map(|chunk| {
-                    chunk
-                        .vertices
-                        .len()
-                        .saturating_add(chunk.textured_vertices.len())
-                })
-                .sum::<usize>();
-            let probe_index_count = probe_meshes
-                .iter()
-                .map(|chunk| {
-                    chunk
-                        .indices
-                        .len()
-                        .saturating_add(chunk.translucent_indices.len())
-                })
-                .sum::<usize>();
-            println!(
-                "[NATIVE_VIEWER] probe_scene_ready total_chunks={} probe_chunks={} probe_vertices={} probe_indices={} radius={:.2}",
-                scene_index.chunk_count(),
-                probe_keys.len(),
-                probe_vertex_count,
-                probe_index_count,
-                scene.bounds.radius
-            );
-        }
-        None => {
-            println!(
-                "[NATIVE_VIEWER] probe_scene_ready total_chunks={} probe_chunks={} probe_vertices={} probe_indices={} radius={:.2}",
-                scene.bootstrap_meshes.len(),
-                scene.bootstrap_meshes.len(),
-                scene
-                    .bootstrap_meshes
-                    .iter()
-                    .map(|mesh| mesh.vertices.len())
-                    .sum::<usize>(),
-                scene
-                    .bootstrap_meshes
-                    .iter()
-                    .map(|mesh| mesh.indices.len())
-                    .sum::<usize>(),
-                scene.bounds.radius
-            );
-        }
-    }
-    Ok(())
-}
-
 #[cfg(target_os = "windows")]
 fn window_hwnd(window: &winit::window::Window) -> Result<isize> {
     match window.window_handle()?.as_raw() {
@@ -10395,194 +9184,131 @@ fn window_hwnd(window: &winit::window::Window) -> Result<isize> {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn embedded_parent_client_size(parent_hwnd: isize) -> Result<PhysicalSize<u32>> {
-    let mut rect = WinRect::default();
-    let ok = unsafe { GetClientRect(parent_hwnd, &mut rect) };
-    if ok == 0 {
-        bail!("GetClientRect failed for parent_hwnd={parent_hwnd}");
-    }
-    let width = (rect.right - rect.left).max(1) as u32;
-    let height = (rect.bottom - rect.top).max(1) as u32;
-    Ok(PhysicalSize::new(width, height))
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PersistentPresentationMode {
+    Hidden,
+    Popup,
+    Embedded,
 }
 
 #[cfg(target_os = "windows")]
-fn sync_embedded_window_to_parent(
-    window: &winit::window::Window,
-    parent_hwnd: isize,
-) -> Result<PhysicalSize<u32>> {
-    let hwnd = window_hwnd(window)?;
-    let client_size = embedded_parent_client_size(parent_hwnd)?;
-    let swp_no_zorder = 0x0004_u32;
-    let swp_no_activate = 0x0010_u32;
-    let swp_frame_changed = 0x0020_u32;
-    let ok = unsafe {
-        SetWindowPos(
-            hwnd,
-            0,
-            0,
-            0,
-            client_size.width as i32,
-            client_size.height as i32,
-            swp_no_zorder | swp_no_activate | swp_frame_changed,
-        )
-    };
-    if ok == 0 {
-        bail!(
-            "SetWindowPos failed for hwnd={} parent_hwnd={} target={}x{}",
-            hwnd,
-            parent_hwnd,
-            client_size.width,
-            client_size.height
-        );
-    }
-    Ok(client_size)
+
+
+#[derive(Debug)]
+enum ViewerPresentationCommandOutcome {
+    NotPresentation,
+    Applied(ViewerSessionState),
+    Release(ViewerSessionState),
 }
 
-#[cfg(target_os = "windows")]
-fn attach_window_to_parent(window: &winit::window::Window, parent_hwnd: isize) -> Result<()> {
-    let hwnd = window_hwnd(window)?;
-    let gwl_style = -16_i32;
-    let ws_child = 0x40000000_isize;
-    let ws_popup = 0x80000000_isize;
-    let ws_caption = 0x00C00000_isize;
-    let ws_thickframe = 0x00040000_isize;
-    unsafe {
-        let style = GetWindowLongPtrW(hwnd, gwl_style);
-        let style = (style | ws_child) & !ws_popup & !ws_caption & !ws_thickframe;
-        SetWindowLongPtrW(hwnd, gwl_style, style);
-        SetParent(hwnd, parent_hwnd);
-        ShowWindow(hwnd, 5);
-    }
-    let client_size = sync_embedded_window_to_parent(window, parent_hwnd)?;
-    println!(
-        "[NATIVE_VIEWER] launch_mode=embedded external_window_created=false reparent=true hwnd={} parent_hwnd={} viewport_w={} viewport_h={}",
-        hwnd, parent_hwnd, client_size.width, client_size.height,
-    );
-    Ok(())
+
+fn complete_viewer_session_command(
+    watcher: &mut ViewerSessionWatcher,
+    command: &ViewerSessionCommand,
+    state: ViewerSessionState,
+    hwnd: isize,
+) -> Result<()> {
+    watcher.publish_status(command.sequence, state, std::process::id(), hwnd)?;
+    watcher.acknowledge(command.sequence)
 }
 
-pub fn run() -> Result<()> {
-    runtime_paths::ensure_runtime_layout()?;
-    let Some(args) = parse_args()? else {
-        return Ok(());
-    };
-    println!(
-        "[NATIVE_VIEWER] startup file={} chunk_size={} probe_scene={} prebuild_only={} auto_exit_seconds={} prebuild_before_show={} cache_input={} ready_file={} cache_file={} preview_output={} build_workers={} cpu_cache_max_chunks={} cpu_cache_max_bytes={} resident_max_chunks={} resident_max_bytes={} stress_limits={} preview_mode={} preview_spin={} display_mode={} basic_lighting={} basic_shadows={} shadow_debug={} shadow_debug_view={} shadow_force_test={} launch_mode={} embed_parent_hwnd={}",
-        args.input
-            .as_deref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "<placeholder>".to_string()),
-        args.chunk_size,
-        args.probe_scene,
-        args.prebuild_only,
-        args.auto_exit_seconds
-            .map(|seconds| seconds.to_string())
-            .unwrap_or_else(|| "none".to_string()),
-        args.prebuild_before_show,
-        args.cache_input
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "none".to_string()),
-        args.ready_file
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "none".to_string()),
-        args.cache_file
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "none".to_string()),
-        args.preview_output
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "none".to_string()),
-        args.build_workers,
-        args.cpu_cache_max_chunks,
-        args.cpu_cache_max_bytes,
-        args.resident_max_chunks,
-        args.resident_max_bytes,
-        args.stress_limits,
-        args.preview_mode,
-        args.preview_spin,
-        args.display_mode.label(),
-        args.basic_lighting,
-        args.basic_shadows,
-        args.shadow_debug,
-        args.shadow_debug_view.label(),
-        args.shadow_force_test,
-        if args.embed_parent_hwnd.is_some() {
-            "embedded"
-        } else {
-            "popup"
+fn reject_viewer_session_command(
+    watcher: &mut ViewerSessionWatcher,
+    command: &ViewerSessionCommand,
+    error: &anyhow::Error,
+    hwnd: isize,
+) -> Result<()> {
+    complete_viewer_session_command(
+        watcher,
+        command,
+        ViewerSessionState::Error {
+            command_kind: command.kind,
+            message: format!("{error:#}"),
         },
-        args.embed_parent_hwnd
-            .map(|hwnd| hwnd.to_string())
-            .unwrap_or_else(|| "none".to_string())
-    );
-    let total_trace_started_at = Instant::now();
-    println!("[TRACE_WALL] stage=total event=start");
-    if args.prebuild_only
-        && args.prebuild_before_show
-        && args.cache_input.is_none()
-        && args.input.is_some()
-        && args.cache_file.is_some()
-        && headless_prebuild_enabled()
-    {
-        return run_headless_prebuild(&args, total_trace_started_at);
-    }
-    let scene = load_scene(&args)?;
-    if let Some(output) = args.preview_output.as_deref() {
-        return render_offscreen_preview(
-            &scene,
-            output,
-            LightingConfig::from_args(
-                args.basic_lighting,
-                args.basic_shadows,
-                args.shadow_debug_view,
-                args.shadow_force_test,
-                scene.bounds,
-            ),
-        );
-    }
-    if args.probe_scene {
-        probe_scene(&scene)?;
-        return Ok(());
-    }
+        hwnd,
+    )
+}
 
-    let title = format!("Litematica Native Viewer - {}", scene.label);
+fn publish_viewer_hidden_event(
+    watcher: Option<&mut ViewerSessionWatcher>,
+    hwnd: isize,
+    backend: &str,
+    reason: &str,
+) {
+    let Some(watcher) = watcher else {
+        return;
+    };
+    match watcher.publish_event(ViewerSessionState::Hidden, std::process::id(), hwnd) {
+        Ok(path) => println!(
+            "[QUICK_SESSION] status=event_published event=hidden backend={} reason={} path={}",
+            backend,
+            reason,
+            path.display(),
+        ),
+        Err(error) => println!(
+            "[QUICK_SESSION] status=event_publish_error event=hidden backend={} reason={} fatal=false error={error:#}",
+            backend, reason,
+        ),
+    }
+}
+
+
+pub fn run(provenance: &BackendProvenance) -> Result<()> {
+    let Some(args) = parse_launch_contract_args(provenance)? else { return Ok(()); };
+    runtime_paths::ensure_runtime_layout()?;
+    println!("[NATIVE_VIEWER] startup public_beta=true route=legacy-wgpu mode=fast_experimental request_id={}",args.launch_request_id);
+    let total_trace_started_at=Instant::now();
+    let mut session_watcher = if args.persistent_popup_presentation {
+        Some(ViewerSessionWatcher::from_environment()?.context(
+            "quick_preview requires a persistent Viewer session directory and ID",
+        )?)
+    } else {
+        None
+    };
+    let scene = load_scene(&args)?;
+    let title = format!("Litematica-Nova Viewer - {}", scene.label);
     let event_loop = EventLoop::new()?;
     let viewer_started_at = Instant::now();
     let auto_exit_after = args.auto_exit_seconds.map(Duration::from_secs);
-    let window = Arc::new(
-        WindowBuilder::new()
+    let window_builder = WindowBuilder::new()
             .with_title(title)
             .with_inner_size(PhysicalSize::new(1280_u32, 800_u32))
-            .with_decorations(args.embed_parent_hwnd.is_none())
-            .with_visible(!args.prebuild_before_show && args.embed_parent_hwnd.is_none())
-            .build(&event_loop)
+            .with_decorations(true)
+            .with_visible(
+                args.initial_visible
+                    && !args.prebuild_before_show
+                    && args.embed_parent_hwnd.is_none(),
+            );
+    #[cfg(target_os = "windows")]
+    let (window_builder, _child_dpi_context) = if let Some(host) = &args.quick_host {
+        let (builder, context) = native_child::builder(window_builder, host)?;
+        (builder, Some(context))
+    } else { (window_builder, None) };
+    let window = Arc::new(
+        window_builder.build(&event_loop)
             .context("failed to create native viewer window")?,
     );
     #[cfg(target_os = "windows")]
-    if let Some(parent_hwnd) = args.embed_parent_hwnd {
-        attach_window_to_parent(window.as_ref(), parent_hwnd)?;
-    } else {
-        println!("[NATIVE_VIEWER] launch_mode=popup external_window_created=true reparent=false");
+    if let Some(host) = &args.quick_host {
+        native_child::verify(window.as_ref(), host)?;
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        if args.embed_parent_hwnd.is_some() {
-            println!(
-                "[NATIVE_VIEWER] launch_mode=embedded external_window_created=true reparent=false reason=unsupported_platform"
-            );
-        } else {
-            println!(
-                "[NATIVE_VIEWER] launch_mode=popup external_window_created=true reparent=false"
-            );
-        }
-    }
-
     let mut state = pollster::block_on(ViewerState::new(window.clone(), scene, &args))?;
+    #[cfg(target_os = "windows")]
+    let legacy_window_hwnd = window_hwnd(window.as_ref())?;
+    #[cfg(not(target_os = "windows"))]
+    let legacy_window_hwnd = 0_isize;
+    register_viewer_shutdown_hwnd(legacy_window_hwnd);
+    #[cfg(target_os = "windows")]
+    let _popup_style = unsafe { GetWindowLongPtrW(legacy_window_hwnd, -16) };
+    #[cfg(not(target_os = "windows"))]
+    let _popup_style = 0_isize;
+
+    let mut presentation_mode = if args.initial_visible {
+        PersistentPresentationMode::Popup
+    } else {
+        PersistentPresentationMode::Hidden
+    };
+
     if args.prebuild_before_show {
         state.run_prebuild_until_ready(window.as_ref(), viewer_started_at)?;
     }
@@ -10597,12 +9323,60 @@ pub fn run() -> Result<()> {
     println!(
         "[NATIVE_VIEWER] controls left-drag=rotate right-drag=pan wheel=zoom R=reset Esc=exit"
     );
+    println!("[NATIVE_VIEWER] runtime_ready route=legacy-wgpu");
+    if let Some(watcher) = session_watcher.as_ref() {
+        watcher.publish_status(
+            0,
+            ViewerSessionState::Ready,
+            std::process::id(),
+            legacy_window_hwnd,
+        )?;
+        println!(
+            "[QUICK_PREVIEW] status=ready session_id={} mode=fast_experimental full_mode=false",
+            watcher.session_id(),
+        );
+        std::io::stdout().flush().context("flush quick preview readiness")?;
+    }
+    let fatal_error = Arc::new(Mutex::new(None::<String>));
+    let event_error = Arc::clone(&fatal_error);
+    let quick_host = args.quick_host.clone();
 
-    event_loop.run(move |event, event_loop_window_target| {
-        event_loop_window_target.set_control_flow(ControlFlow::Poll);
+    let event_loop_result = event_loop.run(move |event, event_loop_window_target| {
+        event_loop_window_target.set_control_flow(if session_watcher.is_some()
+            && presentation_mode == PersistentPresentationMode::Hidden
+        {
+            ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(40))
+        } else {
+            ControlFlow::Poll
+        });
         match event {
             Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
-                WindowEvent::CloseRequested => event_loop_window_target.exit(),
+                WindowEvent::Destroyed => {
+                    record_viewer_shutdown("native_child_destroyed", 0, "native host destroyed the Viewer child");
+                    event_loop_window_target.exit();
+                }
+                WindowEvent::CloseRequested => {
+                    if session_watcher.is_some() {
+                        if let Err(error) = hide_quick_preview_window(window.as_ref(), quick_host.as_ref()) {
+                            let message = format!("quick preview hide failed: {error:#}");
+                            record_viewer_shutdown("quick_preview_hide", 1, &message);
+                            *event_error.lock().expect("quick preview event error mutex") = Some(message);
+                            event_loop_window_target.exit();
+                            return;
+                        }
+                        presentation_mode = PersistentPresentationMode::Hidden;
+                        state.drag_mode = None;
+                        state.last_cursor_position = None;
+                        publish_viewer_hidden_event(session_watcher.as_mut(), legacy_window_hwnd, "quick-wgpu", "window_close");
+                        return;
+                    }
+                    record_viewer_shutdown(
+                        "window_close_requested",
+                        0,
+                        "user closed the legacy Viewer window",
+                    );
+                    event_loop_window_target.exit();
+                }
                 WindowEvent::Resized(new_size) => state.resize(new_size),
                 WindowEvent::ScaleFactorChanged { .. } => state.resize(window.inner_size()),
                 WindowEvent::MouseInput {
@@ -10610,12 +9384,19 @@ pub fn run() -> Result<()> {
                     button,
                     ..
                 } => {
+                    if element_state == ElementState::Pressed && quick_host.is_some() {
+                        window.focus_window();
+                    }
                     state.process_mouse_input(element_state, button);
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     state.process_cursor_moved(position);
                 }
                 WindowEvent::CursorLeft { .. } => {
+                    state.last_cursor_position = None;
+                }
+                WindowEvent::Focused(false) if session_watcher.is_some() => {
+                    state.drag_mode = None;
                     state.last_cursor_position = None;
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
@@ -10625,12 +9406,42 @@ pub fn run() -> Result<()> {
                     if event.state == ElementState::Pressed =>
                 {
                     match event.physical_key {
-                        PhysicalKey::Code(KeyCode::Escape) => event_loop_window_target.exit(),
+                        #[cfg(target_os = "windows")]
+                        PhysicalKey::Code(KeyCode::Tab) if quick_host.is_some() => {
+                            native_child::focus_host(quick_host.as_ref().unwrap());
+                        }
+                        PhysicalKey::Code(KeyCode::Escape) => {
+                            if session_watcher.is_some() {
+                                if let Err(error) = hide_quick_preview_window(window.as_ref(), quick_host.as_ref()) {
+                                    let message = format!("quick preview hide failed: {error:#}");
+                                    record_viewer_shutdown("quick_preview_hide", 1, &message);
+                                    *event_error.lock().expect("quick preview event error mutex") = Some(message);
+                                    event_loop_window_target.exit();
+                                    return;
+                                }
+                                presentation_mode = PersistentPresentationMode::Hidden;
+                                state.drag_mode = None;
+                                state.last_cursor_position = None;
+                                publish_viewer_hidden_event(session_watcher.as_mut(), legacy_window_hwnd, "quick-wgpu", "escape_key");
+                                return;
+                            }
+                            record_viewer_shutdown(
+                                "escape_key",
+                                0,
+                                "user closed the legacy Viewer with Escape",
+                            );
+                            event_loop_window_target.exit();
+                        }
                         PhysicalKey::Code(KeyCode::KeyR) => state.reset_camera(),
                         _ => {}
                     }
                 }
                 WindowEvent::RedrawRequested => {
+                    if session_watcher.is_some()
+                        && presentation_mode == PersistentPresentationMode::Hidden
+                    {
+                        return;
+                    }
                     match state.render(window.as_ref(), viewer_started_at) {
                         Ok(()) => {}
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -10638,6 +9449,11 @@ pub fn run() -> Result<()> {
                         }
                         Err(wgpu::SurfaceError::OutOfMemory) => {
                             println!("[WGPU_INIT] surface_out_of_memory");
+                            record_viewer_shutdown(
+                                "legacy_surface_out_of_memory",
+                                1,
+                                "legacy wgpu surface reported out of memory",
+                            );
                             event_loop_window_target.exit();
                         }
                         Err(wgpu::SurfaceError::Timeout) => {
@@ -10648,12 +9464,107 @@ pub fn run() -> Result<()> {
                 _ => {}
             },
             Event::AboutToWait => {
+                #[cfg(target_os = "windows")]
+                if let Some(host) = &quick_host {
+                    let parent = match native_child::validate_host(host) {
+                        Ok(parent) => parent,
+                        Err(_) => {
+                            record_viewer_shutdown("native_host_closed", 0, "native Viewer host has ended");
+                            event_loop_window_target.exit();
+                            return;
+                        }
+                    };
+                    if native_child::host_needs_hide(parent, presentation_mode) {
+                        if let Err(error) = native_child::hide(window.as_ref(), host) {
+                            let message = format!("quick preview host hide failed: {error:#}");
+                            record_viewer_shutdown("quick_preview_hide", 1, &message);
+                            *event_error.lock().expect("quick preview event error mutex") = Some(message);
+                            event_loop_window_target.exit();
+                            return;
+                        }
+                        // Clear WS_VISIBLE before the host can reappear. Only a
+                        // fresh sequenced attach may restore the child viewport.
+                        presentation_mode = PersistentPresentationMode::Hidden;
+                        state.drag_mode = None;
+                        state.last_cursor_position = None;
+                    }
+                }
+                if let Some(watcher) = session_watcher.as_mut() {
+                    let command = match watcher.poll_next() {
+                        Ok(command) => command,
+                        Err(error) => {
+                            let message = format!("quick preview session poll failed: {error:#}");
+                            record_viewer_shutdown("quick_preview_session_poll", 1, &message);
+                            *event_error.lock().expect("quick preview event error mutex") = Some(message);
+                            event_loop_window_target.exit();
+                            return;
+                        }
+                    };
+                    if let Some(command) = command {
+                        #[cfg(target_os = "windows")]
+                        let child_outcome = quick_host.as_ref().map(|host|
+                            native_child::apply(window.as_ref(), host, &command, &mut presentation_mode));
+                        #[cfg(not(target_os = "windows"))]
+                        let child_outcome: Option<Result<ViewerPresentationCommandOutcome>> = None;
+                        let outcome = child_outcome.unwrap_or_else(|| Err(anyhow!("native quick preview requires its original Windows host")));
+                        if matches!(command.kind, ViewerSessionCommandKind::Hide
+                            | ViewerSessionCommandKind::AttachEmbedded
+                            | ViewerSessionCommandKind::ShowOverlay
+                            | ViewerSessionCommandKind::ShowPopup)
+                        {
+                            state.drag_mode = None;
+                            state.last_cursor_position = None;
+                        }
+                        let mut release = false;
+                        let completion = match outcome {
+                            Ok(ViewerPresentationCommandOutcome::Applied(status)) => {
+                                if state.size != window.inner_size() {
+                                    state.resize(window.inner_size());
+                                }
+                                complete_viewer_session_command(watcher, &command, status, legacy_window_hwnd)
+                            }
+                            Ok(ViewerPresentationCommandOutcome::Release(status)) => {
+                                release = true;
+                                complete_viewer_session_command(watcher, &command, status, legacy_window_hwnd)
+                            }
+                            Ok(ViewerPresentationCommandOutcome::NotPresentation) => {
+                                reject_viewer_session_command(watcher, &command,
+                                    &anyhow!("quick_preview does not support replace_scene; launch a new quick preview"),
+                                    legacy_window_hwnd)
+                            }
+                            Err(error) => reject_viewer_session_command(watcher, &command, &error, legacy_window_hwnd),
+                        };
+                        if let Err(error) = completion {
+                            let message = format!("quick preview session acknowledgement failed: {error:#}");
+                            record_viewer_shutdown("quick_preview_session_ack", 1, &message);
+                            *event_error.lock().expect("quick preview event error mutex") = Some(message);
+                            event_loop_window_target.exit();
+                            return;
+                        }
+                        if release {
+                            record_viewer_shutdown("session_release", 0, "Nova released the independent quick Viewer");
+                            event_loop_window_target.exit();
+                            return;
+                        }
+                    }
+                    if presentation_mode == PersistentPresentationMode::Hidden {
+                        return;
+                    }
+                }
                 if let Some(auto_exit_after) = auto_exit_after
                     && viewer_started_at.elapsed() >= auto_exit_after
                 {
                     println!(
                         "[NATIVE_VIEWER] auto_exit elapsed_seconds={} reason=auto_exit_seconds",
                         auto_exit_after.as_secs()
+                    );
+                    record_viewer_shutdown(
+                        "auto_exit_seconds",
+                        0,
+                        format!(
+                            "configured legacy auto-exit after {}s",
+                            auto_exit_after.as_secs()
+                        ),
                     );
                     event_loop_window_target.exit();
                     return;
@@ -10662,7 +9573,58 @@ pub fn run() -> Result<()> {
             }
             _ => {}
         }
-    })?;
+    });
 
+    if let Err(error) = event_loop_result {
+        let message = format!("legacy event loop returned an error: {error:#}");
+        record_viewer_shutdown("legacy_event_loop_error", 1, &message);
+        emit_viewer_shutdown();
+        return Err(error.into());
+    }
+    if let Some(error) = fatal_error.lock().expect("quick preview event error mutex").take() {
+        emit_viewer_shutdown();
+        bail!("{error}");
+    }
+
+    record_viewer_shutdown(
+        "legacy_event_loop_returned",
+        0,
+        "legacy event loop returned after an explicit shutdown request",
+    );
+    emit_viewer_shutdown();
     Ok(())
+}
+
+/// Runs the cache-generation process role without creating a renderer or event loop.
+///
+/// The launch contract is role-checked before its ACK is emitted. This keeps
+/// Interactive, Preview, combined warmup, and PrepareViewer tasks in the
+/// dedicated Viewer executable even if a caller addresses the wrong binary.
+
+fn parse_launch_contract_args(provenance: &BackendProvenance) -> Result<Option<ViewerArgs>> {
+ let args=std::env::args().skip(1).collect::<Vec<_>>();
+ if args==["--help"] || args==["-h"] { println!("usage: litematica_native_viewer --launch-contract=<ABS_JSON>");return Ok(None); }
+ if args==["--contract-info"] { println!("{}",serde_json::json!({"schema":VIEWER_LAUNCH_SCHEMA,"ackSchema":VIEWER_LAUNCH_ACK_SCHEMA,"renderCore":"legacy-wgpu","publicBeta":true,"acceptedTasks":["quick_preview"],"quickPreview":{"task":"quick_preview","renderCore":"legacy-wgpu","buildMode":"fast_experimental","initialVisible":false}}));return Ok(None); }
+ let [value]=args.as_slice() else { bail!("expected exactly one --launch-contract=<ABS_JSON>"); };
+ let path=value.strip_prefix("--launch-contract=").map(PathBuf::from).context("expected --launch-contract=<ABS_JSON>")?;
+ if !path.is_absolute() { bail!("launch contract path must be absolute"); }
+ let bytes=read_process_file(&path)?;let hash=format!("{:x}",Sha256::digest(&bytes));
+ let contract=ViewerLaunchContract::from_json_slice(&bytes).map_err(|error|anyhow!("invalid launch contract: {error}"))?;
+ #[cfg(not(target_os="windows"))]
+ bail!("native embedded quick preview is not supported on this platform in Beta 0.1");
+ let ViewerTask::QuickPreview(task)=&contract.task else { bail!("public beta accepts only quick_preview; complete mode is not included"); };
+ if task.host.is_none() { bail!("public quick preview requires a native child host"); }
+ install_viewer_build_mode(ViewerBuildMode::FastExperimental).map_err(|error|anyhow!("build mode conflict: {error:?}"))?;
+ let ack=ViewerLaunchAck{schema:VIEWER_LAUNCH_ACK_SCHEMA.to_owned(),contract_schema:VIEWER_LAUNCH_SCHEMA.to_owned(),request_id:contract.request_id.clone(),contract_sha256:hash.clone(),backend_git_sha:provenance.git_sha().to_owned(),backend_profile:provenance.profile().to_owned(),backend_exe_path:provenance.exe_path().to_path_buf(),backend_sha256:provenance.sha256().to_owned()};
+ println!("{VIEWER_LAUNCH_ACK_PREFIX}{}",serde_json::to_string(&ack)?);std::io::stdout().flush()?;
+ Ok(Some(ViewerArgs{launch_request_id:contract.request_id,launch_contract_sha256:hash,input:Some(contract.scene),chunk_size:32,probe_scene:false,prebuild_only:false,build_cache_and_warm:false,prepare_viewer_only:false,persistent_popup_presentation:true,initial_visible:task.initial_visible,auto_exit_seconds:None,prebuild_before_show:false,cache_input:None,ready_file:None,cache_file:None,preview_output:None,build_workers:default_build_worker_count(),cpu_cache_max_chunks:DEFAULT_CPU_CACHE_BUDGET.max_chunks,cpu_cache_max_bytes:DEFAULT_CPU_CACHE_BUDGET.max_bytes,resident_max_chunks:DEFAULT_RESIDENT_BUDGET.max_chunks,resident_max_bytes:DEFAULT_RESIDENT_BUDGET.max_bytes,stress_limits:false,embed_parent_hwnd:None,quick_host:task.host.clone(),preview_mode:false,preview_spin:false,display_mode:ViewerDisplayMode::FastExperimental,basic_lighting:true,basic_shadows:true,shadow_debug:false,shadow_debug_view:ShadowDebugViewMode::Off,shadow_force_test:false}))
+}
+
+fn env_bool(name: &str) -> bool { matches!(std::env::var(name).ok().as_deref(),Some("1"|"true"|"on"|"yes")) }
+fn hide_quick_preview_window(window: &winit::window::Window, host: Option<&viewer_launch_contract::QuickPreviewHostWindow>) -> Result<()> {
+ #[cfg(target_os="windows")]
+ if let Some(host)=host { return native_child::hide(window,host); }
+ #[cfg(not(target_os="windows"))]
+ let _=host;
+ window.set_visible(false);Ok(())
 }

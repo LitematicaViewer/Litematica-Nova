@@ -1,4 +1,7 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Popover } from "radix-ui";
 import { BlockIcon } from "./BlockIcon";
 import { getAllBlocks, loadDatabases } from "../../src/business/facade";
 import { initI18n, translateBlockId } from "../../src/business/facade";
@@ -36,7 +39,6 @@ export function BlockSearchSelect({
   const [query, setQuery] = useState("");
   const [blocks, setBlocks] = useState<string[]>(() => getAllBlocks().sort());
   const [activeIndex, setActiveIndex] = useState(0);
-  const closeTimer = useRef<number | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -83,15 +85,6 @@ export function BlockSearchSelect({
     setOpen(false);
   };
 
-  const closeSoon = () => {
-    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => setOpen(false), 120);
-  };
-
-  const cancelClose = () => {
-    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
-  };
-
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (disabled) return;
     if (event.key === "ArrowDown") {
@@ -115,65 +108,76 @@ export function BlockSearchSelect({
   };
 
   return (
-    <div className="block-search-select" onMouseDown={cancelClose}>
-      <button
-        className="block-search-button input"
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen(true)}
-      >
-        <BlockIcon blockId={currentId} />
-        <span className="block-search-current">
-          <strong>{current.label}</strong>
-          <span>{current.id}</span>
-        </span>
-      </button>
-      {open && (
-        <div className="block-search-menu" onMouseDown={(event) => event.preventDefault()}>
-          <input
-            className="input block-search-input"
-            autoFocus
-            value={query}
-            placeholder="搜索中文名 / minecraft:id / 短 ID"
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={handleKeyDown}
-            onBlur={closeSoon}
-          />
-          {blocks.length === 0 ? (
-            <div className="block-search-empty">
-              BlockState 数据库未加载，仍可在下方手动输入 ID。
-            </div>
-          ) : (
-            <div
-              ref={listRef}
-              className="block-search-list"
-              onWheel={(event) => event.stopPropagation()}
-            >
-              {filtered.map((option, index) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  data-active={index === activeIndex}
-                  className={`block-search-item ${index === activeIndex ? "active" : ""}`}
-                  onMouseEnter={() => setActiveIndex(index)}
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    commit(option.id);
-                  }}
-                >
-                  <BlockIcon blockId={option.id} />
-                  <span>
-                    <strong>{option.label}</strong>
-                    <small>{option.id}</small>
-                  </span>
-                </button>
-              ))}
-              {filtered.length === 0 && <div className="block-search-empty">没有匹配方块</div>}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <div className="block-search-select">
+        <Popover.Trigger asChild>
+          <Button
+            className="block-search-button input"
+            type="button"
+            disabled={disabled}
+          >
+            <BlockIcon blockId={currentId} />
+            <span className="block-search-current">
+              <strong>{current.label}</strong>
+              <span>{current.id}</span>
+            </span>
+          </Button>
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            className="block-search-menu"
+            data-slot="block-search-content"
+            aria-label="选择方块"
+            align="start"
+            sideOffset={4}
+            collisionPadding={8}
+          >
+            <Input
+              className="input block-search-input"
+              autoFocus
+              aria-label="搜索方块"
+              value={query}
+              placeholder="搜索中文名 / minecraft:id / 短 ID"
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={handleKeyDown}
+            />
+            {blocks.length === 0 ? (
+              <div className="block-search-empty">
+                BlockState 数据库未加载，仍可在下方手动输入 ID。
+              </div>
+            ) : (
+              <div
+                ref={listRef}
+                className="block-search-list"
+                onWheel={(event) => event.stopPropagation()}
+              >
+                {filtered.map((option, index) => (
+                  <Button
+                    key={option.id}
+                    type="button"
+                    tabIndex={-1}
+                    data-active={index === activeIndex}
+                    className={`block-search-item ${index === activeIndex ? "active" : ""}`}
+                    onMouseEnter={() => setActiveIndex(index)}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                    }}
+                    onClick={() => commit(option.id)}
+                  >
+                    <BlockIcon blockId={option.id} />
+                    <span>
+                      <strong>{option.label}</strong>
+                      <small>{option.id}</small>
+                    </span>
+                  </Button>
+                ))}
+                {filtered.length === 0 && <div className="block-search-empty">没有匹配方块</div>}
+              </div>
+            )}
+          </Popover.Content>
+        </Popover.Portal>
+      </div>
+    </Popover.Root>
   );
 }
 

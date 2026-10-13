@@ -189,7 +189,7 @@ impl LangCache {
                     .ok_or_else(|| anyhow!("minecraft client URL not found: {minecraft_version}"))
             })?;
             let client = reqwest::blocking::Client::builder()
-                .user_agent("Litematica-BA item-names/0.1")
+                .user_agent("Litematica-Nova item-names/0.1")
                 .build()
                 .context("build item name HTTP client failed")?;
             let jar = client
@@ -346,7 +346,7 @@ struct MinecraftClientAssets {
 
 fn client_assets_from_mojang_manifest(minecraft_version: &str) -> Result<MinecraftClientAssets> {
     let client = reqwest::blocking::Client::builder()
-        .user_agent("Litematica-BA item-names/0.1")
+        .user_agent("Litematica-Nova item-names/0.1")
         .build()
         .context("build item name HTTP client failed")?;
     let manifest: Value = client
@@ -623,11 +623,14 @@ mod tests {
                 item_icon_key: "minecraft:stone".to_string(),
                 icon_path: String::new(),
                 icon_available: false,
+                icon_diagnostic: None,
+                normalized_from: Vec::new(),
                 display_names: BTreeMap::new(),
                 source_regions: vec!["main".to_string()],
                 recipe_status: "missing".to_string(),
                 craft_complexity: 0,
             }],
+            diagnostics: Vec::new(),
         }
     }
 }

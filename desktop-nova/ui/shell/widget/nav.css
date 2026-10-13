@@ -22,6 +22,7 @@
     min-width: 220px;
     min-height: 0;
     flex-direction: column;
+    overflow: hidden;
     /* border-right: 1px solid ThreeDShadow; */
     background: var(--ln-navigation-background-color, #ffffff);
 }
@@ -52,23 +53,6 @@
     padding: 0;
 }
 
-.nav-scroll-area {
-    display: flex;
-    flex: 1 1 auto;
-    min-height: 0;
-    flex-direction: column;
-    overflow-x: hidden;
-    overflow-y: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-}
-
-.nav-scroll-area::-webkit-scrollbar {
-    display: none;
-    width: 0;
-    height: 0;
-}
-
 .nav-list {
     display: flex;
     flex-direction: column;
@@ -76,6 +60,20 @@
 
 .nav-list-bottom {
     margin-top: auto;
+}
+
+/* Only the main navigation shrinks and scrolls in short desktop windows. */
+.sidebar > .nav-list:not(.nav-list-bottom) {
+    min-height: 0;
+    flex: 0 1 auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+}
+
+.sidebar > .nav-expand,
+.sidebar > .nav-list-bottom {
+    flex: 0 0 auto;
 }
 
 .nav-label {

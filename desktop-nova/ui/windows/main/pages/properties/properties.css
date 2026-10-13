@@ -1,0 +1,70 @@
+.properties-page { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--ln-space-3, 12px); container-type: inline-size; }
+.properties-header, .properties-toolbar, .properties-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--ln-space-2, 8px); }
+.properties-header { justify-content: space-between; }
+.properties-title { margin: 0; font-size: 1.3em; line-height: 1.3; }
+.properties-file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ln-muted-text-color, GrayText); }
+.properties-workspace { flex: 1; min-height: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: clamp(16px, 2vw, 32px); }
+.properties-editor-scroll { min-width: 0; min-height: 0; }
+.properties-editor-viewport { padding-right: var(--ln-space-4, 16px); }
+.properties-editor { border: 0; padding: 0 0 16px; margin: 0; min-width: 0; }
+.properties-section h3, .properties-preview h3 { margin: 0 0 16px; font-size: 1.05em; line-height: 1.4; }
+.properties-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 14px 0; }
+.properties-field > :is(input, textarea) { width: 100%; min-width: 0; max-width: none; }
+.properties-field > span { line-height: 1.4; color: var(--ln-muted-text-color, GrayText); }
+.properties-field textarea { resize: vertical; min-height: 92px; }
+.properties-facts { margin: 24px 0 0; padding: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 16px; background: var(--ln-inset-background, var(--ln-ui-background-color)); border-radius: var(--ln-card-radius, 6px); }
+.properties-facts > div { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.properties-facts dt { color: var(--ln-muted-text-color, GrayText); font-size: .9em; }
+.properties-facts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.properties-details { margin-top: var(--ln-space-6, 24px); padding-top: 16px; border-top: 1px solid var(--ln-divider-color, var(--ln-card-border-color, ThreeDShadow)); }
+.properties-details > summary { cursor: pointer; padding: 4px 0; font-weight: 600; }
+.properties-details > p { margin: 12px 0; }
+.properties-table-scroll { margin-top: 12px; min-width: 0; }
+.properties-table-scroll table { min-width: 28rem; }
+.properties-table-scroll td { font-variant-numeric: tabular-nums; }
+.properties-table-scroll td:not(:first-child) { white-space: nowrap; }
+.properties-table-scroll .input { width: 100%; min-width: 120px; }
+.properties-preview { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: 10px; }
+.properties-preview-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.properties-preview-toolbar h3 { margin: 0; flex: 1; min-width: 5em; }
+/* The native Viewer is a sibling of the scrollable form, never a child of a
+   clipping/scrolling DOM surface. Geometry is owned by useEmbeddedViewer. */
+.properties-preview-host { flex: 1; min-height: 0; min-width: 0; position: relative; background: var(--ln-inset-background, var(--ln-ui-background-color)); }
+.properties-preview-placeholder { position: absolute; inset: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 16px; padding: 24px; text-align: center; color: var(--ln-muted-text-color, GrayText); }
+.properties-preview-status { flex: none; color: var(--ln-muted-text-color, GrayText); font-size: .9em; line-height: 1.5; overflow-wrap: anywhere; }
+.properties-preview-error { flex: none; max-height: 5rem; overflow: auto; color: var(--ln-error-color, crimson); overflow-wrap: anywhere; white-space: pre-wrap; }
+.properties-actions { flex: none; padding-top: 12px; border-top: 1px solid var(--ln-divider-color, var(--ln-card-border-color, ThreeDShadow)); }
+.properties-actions > span { flex: 1; min-width: 8em; }
+.properties-message { flex: none; padding: 10px 12px; background: var(--ln-inset-background, var(--ln-ui-background-color)); border-radius: var(--ln-card-radius, 6px); overflow-wrap: anywhere; white-space: pre-wrap; }
+.properties-error { color: var(--ln-error-color, crimson); }
+.properties-empty { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 16px; padding: var(--ln-space-6, 24px); color: var(--ln-muted-text-color, GrayText); }
+.properties-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+@container (max-width: 56rem) {
+  .properties-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1.15fr); gap: 16px; }
+  .properties-preview { grid-row: 1; }
+  .properties-editor-scroll { grid-row: 2; }
+  .properties-editor-viewport { padding-right: 12px; }
+  .properties-preview-toolbar h3 { font-size: 1em; }
+  .properties-preview-toolbar .btn { padding-block: 4px; min-height: 28px; }
+  .properties-actions > span { flex-basis: 100%; }
+}
+@container (max-width: 32rem) {
+  .properties-header { align-items: flex-start; }
+  .properties-toolbar { width: 100%; }
+  .properties-facts { grid-template-columns: minmax(0, 1fr); }
+  .properties-actions { gap: 6px; }
+  .properties-actions .btn { flex: 1 0 auto; }
+}
+/* The default desktop window is only 480px high. Stacking both panes there
+   would leave the native viewport a few pixels tall; keep them alongside. */
+@media (max-height: 620px) {
+  @container (min-width: 32rem) {
+    .properties-workspace { grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); grid-template-rows: minmax(0, 1fr); gap: 16px; }
+    .properties-preview { grid-row: 1; grid-column: 2; }
+    .properties-editor-scroll { grid-row: 1; grid-column: 1; }
+    .properties-preview-toolbar h3 { flex-basis: 100%; }
+    .properties-preview-placeholder { gap: 8px; padding: 12px; }
+    .properties-preview-placeholder > svg { width: 28px; height: 28px; }
+  }
+}
+.properties-full-placeholder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ln-muted-text-color, GrayText); font-size: .9em; }

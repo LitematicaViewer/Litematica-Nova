@@ -1,11 +1,83 @@
 import { emitEvent, listenEvent } from "../../src/platform/events";
 
-export const webDefaultThemeId = "WebDefault";
+export const defaultThemeId = "shadcn";
+export type ThemeId = "shadcn" | "8bitcn" | "Minecraft";
+export type ColorMode = "light" | "dark" | "system";
 
-const legacyDefaultThemeId = "QTDefault";
 const themeStylesheetLinkId = "litematicanova-theme-css";
 const themeStorageKey = "litematicanova-theme-id";
 const themeChangedEvent = "litematicanova-theme-changed";
+let memoryThemeId: ThemeId | undefined;
+const colorModeStorageKey = "litematicanova-color-mode";
+const colorModeChangedEvent = "litematicanova-color-mode-changed";
+let memoryColorMode: ColorMode | undefined;
+let systemColorQuery: MediaQueryList | undefined;
+
+export const normalizeColorMode = (mode: unknown): ColorMode =>
+    mode === "light" || mode === "dark" ? mode : "system";
+
+const storedColorMode = () => {
+    try { return window.localStorage.getItem(colorModeStorageKey); }
+    catch { return null; }
+};
+
+export const currentColorMode = (): ColorMode => memoryColorMode ?? normalizeColorMode(storedColorMode());
+
+/** System changes update every mounted document without changing the saved preference. */
+const applyColorMode = () => {
+    if (!systemColorQuery && window.matchMedia) {
+        systemColorQuery = window.matchMedia("(prefers-color-scheme: dark)");
+        systemColorQuery.addEventListener("change", applyColorMode);
+    }
+    const mode = currentColorMode();
+    const resolved = mode === "system" ? (systemColorQuery?.matches ? "dark" : "light") : mode;
+    document.documentElement.dataset.colorMode = mode;
+    document.documentElement.dataset.colorScheme = resolved;
+    document.documentElement.classList.toggle("dark", resolved === "dark");
+};
+
+const cacheColorMode = (mode: unknown) => {
+    const normalized = normalizeColorMode(mode);
+    memoryColorMode = normalized;
+    try {
+        if (window.localStorage.getItem(colorModeStorageKey) !== normalized) {
+            window.localStorage.setItem(colorModeStorageKey, normalized);
+        }
+    } catch { /* Native window events still synchronize storage-denied windows. */ }
+    return normalized;
+};
+
+export const announceColorModeChange = (mode: string) => {
+    const normalized = cacheColorMode(mode);
+    applyColorMode();
+    window.dispatchEvent(new CustomEvent(colorModeChangedEvent, { detail: normalized }));
+    emitEvent(colorModeChangedEvent, normalized).catch(() => undefined);
+    return normalized;
+};
+
+const subscribeToColorModeChanges = (callback: (mode: ColorMode) => void) => {
+    let previous = currentColorMode();
+    let active = true;
+    const apply = (mode: unknown) => {
+        if (!active) return;
+        const next = cacheColorMode(mode);
+        applyColorMode();
+        if (next !== previous) { previous = next; callback(next); }
+    };
+    const onStorage = (event: StorageEvent) => {
+        if (event.key === colorModeStorageKey && event.newValue) apply(storedColorMode());
+    };
+    const onCustom = (event: Event) => apply((event as CustomEvent).detail);
+    window.addEventListener("storage", onStorage);
+    window.addEventListener(colorModeChangedEvent, onCustom);
+    const unlisten = listenEvent<string>(colorModeChangedEvent, (event) => apply(event.payload)).catch(() => undefined);
+    return () => {
+        active = false;
+        window.removeEventListener("storage", onStorage);
+        window.removeEventListener(colorModeChangedEvent, onCustom);
+        unlisten.then((off) => off?.());
+    };
+};
 
 const themeStylesheetUrls = Object.entries(
     (import.meta as ImportMeta & { glob: <T>(pattern: string, options: Record<string, unknown>) => Record<string, T> }).glob<string>("../themes/*/theme.css", {
@@ -15,119 +87,154 @@ const themeStylesheetUrls = Object.entries(
     })
 ).reduce<Record<string, string>>((themes, [path, url]) => {
     const themeKey = path.match(/\.\.\/themes\/([^/]+)\//)?.[1];
-    if (themeKey) {
-        themes[themeKey] = url;
-    }
+    if (themeKey) themes[themeKey] = url;
     return themes;
 }, {});
 
-/**
- * Converts a theme id into the normalized resource key used by theme asset maps.
- */
 export const themeResourceKey = (themeId: string) => themeId.trim().toLowerCase();
 
-/**
- * Resolves legacy and unknown theme ids to a theme supported by the web UI.
- */
-export const normalizeThemeId = (themeId: string) => {
-    const trimmedThemeId = themeId.trim();
-    const themeKey = themeResourceKey(trimmedThemeId);
-    if (!trimmedThemeId || trimmedThemeId === legacyDefaultThemeId || themeKey === themeResourceKey(webDefaultThemeId)) {
-        return webDefaultThemeId;
+/** Canonical IDs do not depend on which stylesheets happen to be installed. */
+export const normalizeThemeId = (themeId: unknown): ThemeId => {
+    const key = String(themeId || "").trim().toLowerCase();
+    if (key === "minecraft") return "Minecraft";
+    if (key === "8bitcn") return "8bitcn";
+    return defaultThemeId;
+};
+
+export const themeClassName = (themeId: string) => `theme-${themeResourceKey(normalizeThemeId(themeId))}`;
+
+const stylesheetReady = new Map<string, Promise<void>>();
+
+/** Preload each sheet once; inactive Minecraft CSS must never affect other themes. */
+const ensureThemeStylesheets = () => {
+    for (const key of ["shadcn", "8bitcn", "minecraft"]) {
+        const href = themeStylesheetUrls[key];
+        if (!href || stylesheetReady.has(key)) continue;
+        const link = document.createElement("link");
+        link.id = `${themeStylesheetLinkId}-${key}`;
+        link.rel = "stylesheet";
+        link.media = "not all";
+        stylesheetReady.set(key, new Promise<void>((resolve) => {
+            link.onload = () => resolve();
+            link.onerror = () => resolve();
+        }));
+        link.href = href;
+        document.head.appendChild(link);
     }
-    return themeStylesheetUrls[themeKey] ? trimmedThemeId : webDefaultThemeId;
 };
 
-/**
- * Returns the root class name that activates theme-scoped CSS rules.
- */
-export const themeClassName = (themeId: string) => {
-    const themeKey = themeResourceKey(normalizeThemeId(themeId));
-    return themeStylesheetUrls[themeKey] ? `theme-${themeKey}` : "";
-};
-
-const themeStylesheetUrl = (themeId: string) =>
-    themeStylesheetUrls[themeResourceKey(normalizeThemeId(themeId))];
-
-/**
- * Applies the selected theme stylesheet to the current window document.
- */
+/** Apply to the document as well as the React root, including body-hosted portals. */
 export const applyThemeStylesheet = (themeId: string) => {
-    const href = themeStylesheetUrl(themeId);
-    const existingLink = document.getElementById(themeStylesheetLinkId) as HTMLLinkElement | null;
-
-    if (!href) {
-        existingLink?.remove();
-        return;
-    }
-
-    if (existingLink) {
-        existingLink.href = href;
-        return;
-    }
-
-    const link = document.createElement("link");
-    link.id = themeStylesheetLinkId;
-    link.rel = "stylesheet";
-    link.href = href;
-    document.head.appendChild(link);
-};
-
-/**
- * Reads the most recent theme selected by any UI window.
- */
-export const currentThemeId = (fallbackThemeId = webDefaultThemeId) => {
-    try {
-        return normalizeThemeId(window.localStorage.getItem(themeStorageKey) || fallbackThemeId);
-    } catch {
-        return normalizeThemeId(fallbackThemeId);
-    }
-};
-
-const persistThemeId = (themeId: string) => {
-    const normalizedThemeId = normalizeThemeId(themeId);
-    try {
-        window.localStorage.setItem(themeStorageKey, normalizedThemeId);
-    } catch {
-        // Storage may be unavailable in some test/browser contexts.
-    }
-    return normalizedThemeId;
-};
-
-/**
- * Stores and broadcasts a theme change so secondary windows can follow the shell.
- */
-export const announceThemeChange = (themeId: string) => {
-    const normalizedThemeId = persistThemeId(themeId);
-    window.dispatchEvent(new CustomEvent(themeChangedEvent, { detail: normalizedThemeId }));
-    emitEvent(themeChangedEvent, normalizedThemeId).catch(() => undefined);
-    return normalizedThemeId;
-};
-
-/**
- * Subscribes to theme changes from local storage, same-window events, and Tauri window events.
- */
-export const subscribeToThemeChanges = (callback: (themeId: string) => void) => {
-    const apply = (themeId: string) => callback(normalizeThemeId(themeId));
-    const onStorage = (event: StorageEvent) => {
-        if (event.key === themeStorageKey && event.newValue) {
-            apply(event.newValue);
+    const normalized = normalizeThemeId(themeId);
+    const themeKey = themeResourceKey(normalized);
+    document.documentElement.dataset.theme = themeKey;
+    applyColorMode();
+    for (const className of Array.from(document.body.classList)) {
+        if (/^theme-(shadcn|8bitcn|minecraft|webdefault|bootstrap5|metro10|qtdefault)$/.test(className)) {
+            document.body.classList.remove(className);
         }
+    }
+    document.body.classList.add(themeClassName(normalized));
+    ensureThemeStylesheets();
+    for (const key of stylesheetReady.keys()) {
+        const link = document.getElementById(`${themeStylesheetLinkId}-${key}`) as HTMLLinkElement | null;
+        if (link) link.media = key === themeKey ? "all" : "not all";
+    }
+};
+
+const storedThemeId = () => {
+    try {
+        return window.localStorage.getItem(themeStorageKey) || window.localStorage.getItem("theme");
+    } catch {
+        return null;
+    }
+};
+
+/** Memory also works when storage is unavailable in a native child window. */
+export const currentThemeId = (fallbackThemeId = defaultThemeId): ThemeId =>
+    memoryThemeId ?? normalizeThemeId(storedThemeId() || fallbackThemeId);
+
+const cacheThemeId = (themeId: unknown) => {
+    const normalized = normalizeThemeId(themeId);
+    memoryThemeId = normalized;
+    try {
+        if (window.localStorage.getItem(themeStorageKey) !== normalized) {
+            window.localStorage.setItem(themeStorageKey, normalized);
+        }
+    } catch {
+        // The native event channel and memory cache remain available.
+    }
+    return normalized;
+};
+
+/** User changes are broadcast; receiving them never broadcasts again. */
+export const announceThemeChange = (themeId: string) => {
+    const normalized = cacheThemeId(themeId);
+    applyThemeStylesheet(normalized);
+    window.dispatchEvent(new CustomEvent(themeChangedEvent, { detail: normalized }));
+    emitEvent(themeChangedEvent, normalized).catch(() => undefined);
+    return normalized;
+};
+
+/** Coalesce native/storage echoes, but keep main and child windows bidirectional. */
+export const subscribeToThemeChanges = (callback: (themeId: ThemeId) => void, onColorModeChange: (mode: ColorMode) => void = () => {}) => {
+    const offColorMode = subscribeToColorModeChanges(onColorModeChange);
+    let lastThemeId = currentThemeId();
+    let active = true;
+    const apply = (themeId: unknown) => {
+        if (!active) return;
+        const normalized = cacheThemeId(themeId);
+        applyThemeStylesheet(normalized);
+        if (normalized !== lastThemeId) {
+            lastThemeId = normalized;
+            callback(normalized);
+        }
+    };
+    const onStorage = (event: StorageEvent) => {
+        if (event.key !== themeStorageKey || !event.newValue) return;
+        // A queued storage event can arrive after a newer native event. Read
+        // the current shared value instead of resurrecting its stale payload.
+        const latest = storedThemeId();
+        if (latest) apply(latest);
     };
     const onCustom = (event: Event) => {
         const detail = (event as CustomEvent<string>).detail;
-        if (detail) {
-            apply(detail);
-        }
+        if (typeof detail === "string") apply(detail);
     };
-
     window.addEventListener("storage", onStorage);
     window.addEventListener(themeChangedEvent, onCustom);
     const unlistenPromise = listenEvent<string>(themeChangedEvent, (event) => apply(event.payload)).catch(() => undefined);
-
     return () => {
+        active = false;
+        offColorMode();
         window.removeEventListener("storage", onStorage);
         window.removeEventListener(themeChangedEvent, onCustom);
         unlistenPromise.then((unlisten) => unlisten?.());
     };
+};
+
+/** Before React's first frame, prefer live cache in children and disk on app startup. */
+export const initializeWindowTheme = async (
+    readSavedConfig: () => Promise<{ config: { theme: string; color_mode?: string } }>,
+    preferSavedConfig = false,
+) => {
+    const cached = memoryThemeId !== undefined || storedThemeId() !== null;
+    applyThemeStylesheet(currentThemeId());
+    if (cached && !preferSavedConfig) {
+        await Promise.all(stylesheetReady.values());
+        return;
+    }
+    let receivedChange = false;
+    let receivedColorChange = false;
+    const unsubscribe = subscribeToThemeChanges(() => { receivedChange = true; }, () => { receivedColorChange = true; });
+    try {
+        const info = await readSavedConfig();
+        if (!receivedChange) announceThemeChange(info.config.theme);
+        if (!receivedColorChange) announceColorModeChange(info.config.color_mode || "system");
+    } catch {
+        // Cached/default styling still opens the app if the config command fails.
+    } finally {
+        await Promise.all(stylesheetReady.values());
+        unsubscribe();
+    }
 };

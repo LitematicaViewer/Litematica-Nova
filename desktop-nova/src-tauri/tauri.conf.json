@@ -1,7 +1,8 @@
 {
-  "productName": "Litematica Nova BA",
-  "version": "0.1.0",
-  "identifier": "com.litematicaba.nova",
+  "productName": "Litematica Nova",
+  "mainBinaryName": "Litematica-Nova",
+  "version": "0.1.1",
+  "identifier": "com.litematica.nova",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -9,12 +10,70 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "Litematica Nova BA", "width": 854, "height": 480 }],
-    "security": { "csp": null }
+    "windows": [
+      {
+        "title": "Litematica-Nova",
+        "width": 854,
+        "height": 480
+      }
+    ],
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
-    "icon": ["icons/icon.ico"]
+    "targets": [
+      "nsis"
+    ],
+    "publisher": "Litematica-Nova",
+    "shortDescription": "Litematica-Nova desktop viewer for Minecraft .litematic projections",
+    "longDescription": "Litematica-Nova manages, analyzes, builds, and renders Minecraft .litematic projections.",
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "installer/nsis-hooks.nsh"
+      },
+      "wix": {
+        "upgradeCode": "30d2825f-22c4-594d-a998-8bbede2e81d3",
+        "fragmentPaths": [
+          "installer/legacy-name-cleanup.wxs"
+        ],
+        "componentGroupRefs": [
+          "LegacyNameCleanup"
+        ]
+      }
+    },
+    "resources": {
+      "../../pack-in/enumerator": "pack-in/enumerator",
+      "../../pack-in/flake": "pack-in/flake",
+      "../../pack-in/lang/zh_cn.json": "pack-in/lang/zh_cn.json",
+      "../../pack-in/item-icons-26.3": "pack-in/item-icons-26.3",
+      "../../data/generation-templates": "data/generation-templates",
+      "../../data/minecraft_blockstates": "data/minecraft_blockstates",
+      "gen/block-icons": "block",
+      "../../bin/public-beta": "bin/public-beta",
+      "../../tools/viewer-core/target/public-beta/release/stockpile_server.exe": "bin/stockpile-server/windows-x64/stockpile_server.exe",
+      "../../LICENSE": "licenses/LICENSE",
+      "../../docs/THIRD_PARTY_UI.md": "licenses/THIRD_PARTY_UI.md",
+      "../../docs/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt",
+      "../../pack-in/materials/minecraft-26.3.json": "pack-in/materials/minecraft-26.3.json"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1NzZBN0MyNkE1Qjg5Q0QKUldUTmlWdHF3cWQydFVuaENKU3ZjQ1EvWEUyUmdvd3RlNlF0ZEdiWXdZNW1OSTlMVUdGK2ZNWHMK",
+      "endpoints": [
+        "https://raw.githubusercontent.com/LitematicaViewer/Litematica-Nova/main/updates/latest.json",
+        "https://45-62-112-121.sslip.io:8448/nova-updates/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

@@ -1,0 +1,202 @@
+/* Keep the existing pixel font, texture borders and inventory assets in both modes. */
+html[data-theme="minecraft"] {
+    color-scheme: dark;
+    --background: #3c3c3c;
+    --foreground: #ffffff;
+    --card: #303030;
+    --popover: #262626;
+    --primary: #b8d49c;
+    --primary-foreground: #172414;
+    --secondary: #4a4a4a;
+    --muted: #353535;
+    --muted-foreground: #c7c7c7;
+    --accent: #50564b;
+    --destructive: #ffb3b3;
+    --border: #808080;
+    --ring: #ffffff;
+    --radius: 0px;
+    --ln-ui-background-color: var(--background);
+    --ln-navigation-background-color: var(--background);
+    --ln-body-text-color: var(--foreground);
+    --ln-muted-text-color: var(--muted-foreground);
+    --ln-card-border-color: var(--border);
+    --ln-card-background-color-active: var(--accent);
+    --ln-option-active-background: var(--accent);
+    --ln-option-active-color: var(--foreground);
+    --ln-focus-color: var(--ring);
+    --ln-error-color: var(--destructive);
+    --ln-success-color: #b8d49c;
+    --ln-warning-color: #ffd18a;
+    --ln-minecraft-input-background: #151515;
+    --ln-minecraft-input-color: var(--foreground);
+    --ln-minecraft-input-border: var(--border);
+    --ln-minecraft-input-border-focus: var(--ring);
+    --ln-scroll-track: #242424;
+    --ln-scroll-track-hover: #303030;
+    --ln-scroll-thumb: #808080;
+    --ln-scroll-hover: #a0a0a0;
+    --ln-scroll-active: #c0c0c0;
+}
+
+html[data-theme="minecraft"][data-color-scheme="light"] {
+    color-scheme: light;
+    --background: #deded6;
+    --foreground: #24251f;
+    --card: #f0f0e9;
+    --popover: #f5f5ed;
+    --primary: #3d6033;
+    --primary-foreground: #ffffff;
+    --secondary: #c4c8b8;
+    --muted: #d2d4c9;
+    --muted-foreground: #55594e;
+    --accent: #c8d7b8;
+    --destructive: #aa2c2c;
+    --border: #7d8274;
+    --ring: #344b29;
+    --ln-success-color: #3d6033;
+    --ln-warning-color: #825014;
+    --ln-minecraft-input-background: #f7f7f0;
+    --ln-minecraft-input-disabled-color: #65665f;
+    --ln-minecraft-table-row-background-odd: #f0f0e9;
+    --ln-minecraft-table-row-background-even: #e4e5dc;
+    --ln-minecraft-table-row-background-hover: #d1d8c3;
+    --ln-table-row-selected-background: #c8d7b8;
+    --ln-scroll-track: #cccec3;
+    --ln-scroll-track-hover: #bbc0ae;
+    --ln-scroll-thumb: #777f6b;
+    --ln-scroll-hover: #58664b;
+    --ln-scroll-active: #344b29;
+    --ln-scroll-shadow: inset 2px 2px #c0c6b5, inset -2px -2px #454b3d;
+}
+
+html[data-theme="minecraft"] :where(input, textarea)::placeholder { color: var(--muted-foreground); }
+html[data-theme="minecraft"] :where(button, input, textarea, select, a):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+html[data-theme="minecraft"] .material-list-hover-popup {
+    border-color: var(--border);
+    background-color: var(--popover);
+    color: var(--foreground);
+}
+html[data-theme="minecraft"] :where(.dropdown-menu, .block-search-menu, .dialog-surface, .dialog-content) {
+    background: var(--popover);
+    color: var(--foreground);
+    border-color: var(--border);
+}
+html[data-theme="minecraft"] ::selection { background: var(--primary); color: var(--primary-foreground); }
+
+/* Texture-backed actions use the original white/yellow/disabled-gray text rules.
+   Do not apply those colors to borderless cards, labels, inventory slots or close images. */
+html[data-theme="minecraft"] button[data-slot="button"]:is([data-variant="default"], [data-variant="secondary"], [data-variant="outline"], [data-variant="destructive"]):not(:where(.dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
+    text-shadow: 1px 1px 0 #3f3f3f;
+}
+html[data-theme="minecraft"] button[data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)) {
+    border-image: none;
+    color: var(--foreground);
+    text-shadow: none;
+}
+html[data-theme="minecraft"] button[data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)):disabled {
+    color: var(--muted-foreground);
+}
+html[data-theme="minecraft"] .home-workflows > button[data-variant="ghost"] small { color: var(--muted-foreground); }
+
+/* Radix Checkbox keeps the shipped Minecraft checkbox textures and keyboard semantics. */
+html[data-theme="minecraft"] button[data-slot="checkbox"] {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px;
+    padding: 0;
+    border: 0;
+    border-image: none;
+    border-radius: 0;
+    background: transparent url("./resource/form/checkbox_default.png") center / 20px 20px no-repeat;
+    image-rendering: pixelated;
+    box-shadow: none;
+}
+html[data-theme="minecraft"] button[data-slot="checkbox"]:hover:not(:disabled) {
+    background-image: url("./resource/form/checkbox_hover.png");
+}
+html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="checked"] {
+    background-image: url("./resource/form/checkbox_checked.png");
+}
+html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="checked"]:hover:not(:disabled) {
+    background-image: url("./resource/form/checkbox_checked_hover.png");
+}
+html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="checked"] svg { visibility: hidden; }
+html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="indeterminate"] { color: #ffffff; }
+
+/* The original radio textures replace generic Minecraft action-button borders. */
+html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"] {
+    border: 0;
+    border-image: none;
+    background: transparent url("./resource/form/radio_default.png") center / 20px 20px no-repeat;
+    image-rendering: pixelated;
+}
+html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"]:hover:not(:disabled) {
+    background-image: url("./resource/form/radio_hover.png");
+}
+html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"] {
+    background-image: url("./resource/form/radio_checked.png");
+}
+html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"]:hover:not(:disabled) {
+    background-image: url("./resource/form/radio_checked_hover.png");
+}
+html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"] [data-slot="radio-group-indicator"] { visibility: hidden; }
+
+/* Three-pane library: the original font and texture-backed action buttons stay
+   intact; inventory surfaces, selection and scroll tracks follow light/dark. */
+html[data-theme="minecraft"] .library-page {
+    --library-surface: var(--card);
+    --library-muted: var(--muted);
+    --library-line: var(--border);
+    --library-bevel-light: color-mix(in srgb, var(--foreground) 24%, var(--card));
+    --library-bevel-dark: color-mix(in srgb, var(--background) 65%, var(--border));
+    --ln-scroll-radius: 0;
+    --ln-scroll-track: var(--ln-minecraft-input-background);
+    --ln-scroll-track-hover: var(--muted);
+}
+html[data-theme="minecraft"] .library-toolbar {
+    padding: 8px;
+    background: var(--card);
+}
+html[data-theme="minecraft"] .library-categories,
+html[data-theme="minecraft"] .library-inspector {
+    background: var(--card);
+}
+html[data-theme="minecraft"] .library-collection {
+    background: var(--ln-minecraft-input-background);
+}
+html[data-theme="minecraft"] .library-collection-toolbar,
+html[data-theme="minecraft"] .library-collection-footer {
+    background: var(--card);
+}
+html[data-theme="minecraft"] .library-tile {
+    box-shadow: inset 1px 1px var(--library-bevel-light), inset -1px -1px var(--library-bevel-dark);
+}
+html[data-theme="minecraft"] .library-tile-image,
+html[data-theme="minecraft"] .library-detail-preview {
+    background: var(--background);
+}
+html[data-theme="minecraft"] .library-tile-image { margin: 1px; width: calc(100% - 2px); }
+html[data-theme="minecraft"] .library-current-marker {
+    color: var(--primary-foreground);
+    background: var(--primary);
+    border-radius: 0;
+}
+html[data-theme="minecraft"] .library-category small {
+    padding: 1px 4px;
+    background: var(--background);
+}
+/* Ghost utility actions must also have feedback without the old gray texture. */
+html[data-theme="minecraft"] .library-page button[data-slot="button"][data-variant="ghost"]:not(.library-tile-open):hover:not(:disabled) {
+    background: var(--accent);
+}
+html[data-theme="minecraft"] .library-page button[data-slot="button"][data-variant="ghost"]:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+html[data-theme="minecraft"] .library-tag-chip { background: var(--muted); color: var(--foreground); }
+html[data-theme="minecraft"] .library-detail-section { border-color: var(--library-line); }
+html[data-theme="minecraft"] .library-page [data-slot="scroll-area-scrollbar"]:hover { background: var(--ln-scroll-track-hover); }

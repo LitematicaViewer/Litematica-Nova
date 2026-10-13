@@ -1,7 +1,6 @@
-import { image } from "@tauri-apps/api";
-import { getUserConfigFilePath, getWorkspaceRoot, readImageBase64 } from "./backend";
+import { getUserConfigFilePath, readImageBase64 } from "./backend";
 import { getBlockIconDataUrl } from "./blockIconResolver";
-import type { LayerPaletteEntry } from "./layerService";
+import type { LayerPaletteEntry } from "./flakeService";
 import { isBlockInEnumerator } from "./flake/enumeratorLoader";
 import { resolveManualStateHintRule } from "./flake/stateHintRules/stateDefault";
 import { resolveRedstoneWireStateHintImage } from "./flake/stateHintRules/blockRedstone";
@@ -51,11 +50,6 @@ const MASK_FALLBACK_PREFIXES = ["data/flake/state_hint/", "data/flake/state_over
 function isMaskRelPath(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, "/");
   return MASK_FALLBACK_PREFIXES.some((prefix) => normalized.startsWith(prefix));
-}
-
-function joinPath(root: string, relativePath: string): string {
-  const separator = root.includes("\\") ? "\\" : "/";
-  return `${root.replace(/[\\/]+$/, "")}${separator}${relativePath.replace(/^[\\/]+/, "").replace(/\//g, separator)}`;
 }
 
 export function normalizeBlockId(blockId: string): string {
@@ -125,21 +119,8 @@ async function readHintImageDataUrlRaw(relativePath: string): Promise<string | n
   if (!hintImageCache.has(relativePath)) {
     hintImageCache.set(relativePath, (async () => {
       try {
-        const workspaceRoot = await getWorkspaceRoot();
-        const candidates = [
-          joinPath(workspaceRoot, relativePath),
-          joinPath(workspaceRoot, `desktop-nova/${relativePath}`),
-          await getUserConfigFilePath(relativePath),
-        ];
-        for (const candidate of candidates) {
-          try {
-            const dataUrl = await readImageBase64(candidate);
-            if (dataUrl) return dataUrl;
-          } catch {
-            // Try the next path.
-          }
-        }
-        return null;
+        const path = await getUserConfigFilePath(relativePath.replace(/^data\//, ""));
+        return await readImageBase64(path);
       } catch {
         return null;
       }
@@ -228,13 +209,13 @@ export async function composeImageDataUrls(layerUrls: string[]): Promise<string 
   }
 }
 
-/** 读取图标数据URL 
+/** 读取图标数据URL
  * @param blockIds - 图标ID列表
  * @returns 图标数据URL列表
 */
 async function readLayeringIconDataUrls(blockIds: string[]): Promise<string[] | null> {
   try {
-    const urls = await Promise.all(blockIds.map((blockId) => getBlockIconDataUrl(blockId, "layering")));
+    const urls = await Promise.all(blockIds.map((blockId) => getBlockIconDataUrl(blockId)));
     if (urls.some((url) => !url)) return null;
     return urls.filter((url): url is string => !!url);
   } catch {
@@ -420,7 +401,7 @@ export async function resolveFlakeLayerBlockImage({
   propertyPool,
   enabled,
 }: ResolveFlakeLayerBlockImageInput): Promise<string | null> {
-  const baseIconUrl = await getBlockIconDataUrl(blockId, "layering");
+  const baseIconUrl = await getBlockIconDataUrl(blockId);
   if (!enabled) return baseIconUrl;
 
   const states = extractLayerPaletteStates(paletteEntry, propertyPool);

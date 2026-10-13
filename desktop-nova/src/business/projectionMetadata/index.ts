@@ -1,6 +1,6 @@
 export type { ProjectionRecord } from "../../services/libraryStore";
 export { analyzeFile } from "../../services/libraryStore";
-export type { PathInfo, ProjectionPreviewImageOutput, RenderPreviewOutput } from "../../services/backend";
+export type { PathInfo, ProductPreviewImage, ProjectionPreviewImageOutput } from "../../services/backend";
 export {
   checkFileExists,
   generatePreviewImage,
@@ -9,6 +9,5 @@ export {
   readImageBase64,
   readProjectionPreviewImage,
   renderPreviewImage,
-  startNativeViewer,
 } from "../../services/backend";
 

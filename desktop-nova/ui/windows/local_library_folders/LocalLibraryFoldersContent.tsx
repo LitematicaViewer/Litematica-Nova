@@ -1,5 +1,10 @@
+import { X, Folder, FileText, File } from "lucide-react";
+import { Button } from "../../components/ui/button";
+import { ScrollArea } from "../../components/ui/scroll-area";
+import { Dialog } from "../../components/Dialog";
+import { Checkbox } from "../../components/ui/checkbox";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../../components/ui/table";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { SyntheticEvent } from "react";
 
 import {
   activateProjectionRecord,
@@ -24,65 +29,14 @@ import {
   syncLocalLibraryFolder,
   updateLocalLibraryFolder,
 } from "../../../src/business/facade";
-import { confirmDialog } from "../../../src/platform/dialogs";
 import { emitEvent } from "../../../src/platform/events";
-import { currentThemeId, subscribeToThemeChanges, themeResourceKey } from "../../shell/themeRuntime";
 import { projectionLibraryImportedEvent, projectionLibraryStateChangedEvent } from "../libraryEvents";
 import { SendProjectionDialog } from "../main/pages/library/sendDialog";
 import { ensureLitematicFileName } from "../main/pages/library/function";
 import { compactFolderPath } from "../main/pages/library/function";
+import "../main/pages/library/library.css";
 
-type FileIconUrls = Record<string, string>;
 type HoverPreviewEntry = { entry: DirectoryEntryInfo; x: number; y: number };
-
-const iconNameFromPath = (path: string) => path.split("/").pop()?.replace(/\.[^.]+$/, "") || "";
-
-const shellFileIconUrls = Object.entries(
-  import.meta.glob<string>("../../shell/resource/icon/file/*.{svg,png}", {
-    eager: true,
-    import: "default",
-    query: "?url",
-  }),
-).reduce<FileIconUrls>((icons, [path, url]) => {
-  const iconName = iconNameFromPath(path);
-  if (iconName) icons[iconName] = url;
-  return icons;
-}, {});
-
-const themedFileIconUrls = Object.entries(
-  import.meta.glob<string>("../../themes/*/resource/icon/file/*.{svg,png}", {
-    eager: true,
-    import: "default",
-    query: "?url",
-  }),
-).reduce<Record<string, FileIconUrls>>((themes, [path, url]) => {
-  const themeKey = path.match(/\.\.\/\.\.\/themes\/([^/]+)\//)?.[1];
-  const iconName = iconNameFromPath(path);
-  if (themeKey && iconName) {
-    themes[themeKey] = themes[themeKey] || {};
-    themes[themeKey][iconName] = url;
-  }
-  return themes;
-}, {});
-
-function fallbackFileIconUrl(iconName: string): string {
-  return shellFileIconUrls[iconName] || shellFileIconUrls.unknown || shellFileIconUrls.undefined || "";
-}
-
-function fileIconUrl(themeId: string, iconName: string): string {
-  const themeKey = themeResourceKey(themeId);
-  return themedFileIconUrls[themeKey]?.[iconName]
-    || themedFileIconUrls[themeKey]?.unknown
-    || themedFileIconUrls[themeKey]?.undefined
-    || fallbackFileIconUrl(iconName);
-}
-
-function handleFileIconError(event: SyntheticEvent<HTMLImageElement>, iconName: string) {
-  const fallbackUrl = fallbackFileIconUrl(iconName);
-  if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
-    event.currentTarget.src = fallbackUrl;
-  }
-}
 
 function formatDate(timestamp: number): string {
   if (!timestamp) return "-";
@@ -233,7 +187,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
   const [state, setState] = useState<LibraryState>({ records: [], folders: [] });
   const [busyKey, setBusyKey] = useState("");
   const [status, setStatus] = useState("");
-  const [themeId, setThemeId] = useState(() => currentThemeId());
+  const [removeFolder, setRemoveFolder] = useState<LocalLibraryFolder | null>(null);
   const [localLibraryTailPathCount, setLocalLibraryTailPathCount] = useState(3);
   const [browserRootFolder, setBrowserRootFolder] = useState<LocalLibraryFolder | null>(null);
   const [browserPath, setBrowserPath] = useState("");
@@ -260,7 +214,6 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
       .catch(() => undefined);
   }, []);
 
-  useEffect(() => subscribeToThemeChanges(setThemeId), []);
 
   useEffect(() => {
     if (!browserPath) {
@@ -326,16 +279,13 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
   };
 
   const handleRemoveFolder = async (folder: LocalLibraryFolder) => {
-    const ok = await confirmDialog(`确定移除本地库文件夹？\n${folder.path}`, {
-      title: "移除本地库文件夹",
-      kind: "warning",
-    });
-    if (!ok) return;
+    if (busyKey) return;
     setBusyKey(`remove:${folder.path}`);
     try {
       const nextState = await removeLocalLibraryFolder(state, folder.path);
       setState(nextState);
       setStatus(`已移除本地库文件夹：${folder.path}`);
+      setRemoveFolder(null);
       await emitLibraryStateChanged();
     } catch (error: any) {
       setStatus(`移除本地库文件夹失败：${String(error)}`);
@@ -483,25 +433,25 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
   ].filter(Boolean).join(" ");
 
   return (
-    <section className="subwindow-panel-shell">
+    <section className="subwindow-panel-shell library-aux-panel library-folders-panel">
       <div className="subwindow-title-bar">
           <h3 className="subwindow-title">本地库管理</h3>
-          {onClose && <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</button>}
+          {onClose && <Button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}><X size={18} aria-hidden="true" /></Button>}
       </div>
       <p className="muted subwindow-subtitle">管理挂载目录，并把目录中的 .litematic 文件同步到投影库记录。</p>
 
       <fieldset>
         <legend>操作</legend>
         <div className="button-row subwindow-wrap-row subwindow-toolbar-group">
-          <button className="btn" type="button" disabled={!!busyKey} onClick={handleAddFolder}>添加文件夹...</button>
-          <button
+          <Button className="btn" type="button" disabled={!!busyKey} onClick={handleAddFolder}>添加文件夹...</Button>
+          <Button
             className="btn"
             type="button"
             disabled={!!busyKey || enabledCount === 0}
             onClick={handleSyncAll}
           >
             {busyKey === "sync-all" ? "同步中..." : "同步全部已启用文件夹"}
-          </button>
+          </Button>
         </div>
         <div className="muted subwindow-status-text">当前已挂载 {state.folders.length} 个文件夹，其中 {enabledCount} 个已启用。</div>
         {status ? <div className={statusClassName}>{status}</div> : null}
@@ -509,34 +459,34 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
 
       <fieldset className="subwindow-list-fieldset">
         <legend>{browserRootFolder ? "文件浏览器" : "文件夹列表"}</legend>
-        <div className="subwindow-list">
+        <ScrollArea className="library-folder-scroll"><div className="subwindow-list">
           {browserRootFolder ? (
             <>
               <div className="local-browser-toolbar">
-                <button className="btn" type="button" onClick={handleCloseBrowser}>返回文件夹列表</button>
-                <button className="btn" type="button" disabled={!canGoBrowserUp} onClick={handleGoBrowserUp}>上一级</button>
+                <Button className="btn" type="button" onClick={handleCloseBrowser}>返回文件夹列表</Button>
+                <Button className="btn" type="button" disabled={!canGoBrowserUp} onClick={handleGoBrowserUp}>上一级</Button>
                 <div className="local-browser-path" title={browserPath}>{browserPath}</div>
               </div>
-              <table className="local-browser-table">
-                <thead>
-                  <tr>
-                    <th className="local-browser-icon-col">图标</th>
-                    <th>文件名</th>
-                    <th className="local-browser-size-col">大小</th>
-                    <th className="local-browser-actions-col">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <Table className="local-browser-table">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="local-browser-icon-col">图标</TableHead>
+                    <TableHead>文件名</TableHead>
+                    <TableHead className="local-browser-size-col">大小</TableHead>
+                    <TableHead className="local-browser-actions-col">操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {isBrowserLoading ? (
-                    <tr><td colSpan={4}>加载中...</td></tr>
+                    <TableRow><TableCell colSpan={4}>加载中...</TableCell></TableRow>
                   ) : browserEntries.length === 0 ? (
-                    <tr><td colSpan={4}>这个文件夹里没有内容。</td></tr>
+                    <TableRow><TableCell colSpan={4}>这个文件夹里没有内容。</TableCell></TableRow>
                   ) : browserEntries.map((entry) => {
-                    const iconName = entry.is_dir ? "folder" : isLitematicEntry(entry) ? "litematic" : "unknown";
+                    const FileIcon = entry.is_dir ? Folder : isLitematicEntry(entry) ? FileText : File;
                     const canActivate = isLitematicEntry(entry) && !busyKey;
                     const isSelected = selectedBrowserEntryPath === entry.path;
                     return (
-                      <tr
+                      <TableRow
                         key={entry.path}
                         className={isSelected ? "table-row-selected" : ""}
                         aria-selected={isSelected}
@@ -563,20 +513,14 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                           }
                         }}
                       >
-                        <td className="local-browser-icon-cell">
-                          <img
-                            className="local-browser-file-icon"
-                            src={fileIconUrl(themeId, iconName)}
-                            alt=""
-                            aria-hidden="true"
-                            onError={(event) => handleFileIconError(event, iconName)}
-                          />
-                        </td>
-                        <td className="local-browser-name-cell" title={entry.path}>{entry.name}</td>
-                        <td className="local-browser-size-cell">{entry.is_dir ? "-" : formatSize(entry.file_size)}</td>
-                        <td>
+                        <TableCell className="local-browser-icon-cell">
+                          <FileIcon className="local-browser-file-icon" aria-hidden="true" focusable="false" />
+                        </TableCell>
+                        <TableCell className="local-browser-name-cell" title={entry.path}>{entry.name}</TableCell>
+                        <TableCell className="local-browser-size-cell">{entry.is_dir ? "-" : formatSize(entry.file_size)}</TableCell>
+                        <TableCell className="local-browser-actions-cell">
                           <div className="button-row subwindow-wrap-row">
-                            <button
+                            <Button
                               className="btn"
                               type="button"
                               onClick={(event) => {
@@ -586,8 +530,8 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                               }}
                             >
                               打开目录
-                            </button>
-                            <button
+                            </Button>
+                            <Button
                               className="btn"
                               type="button"
                               disabled={!canActivate}
@@ -597,8 +541,8 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                               }}
                             >
                               {busyKey === `activate:${entry.path}` ? "激活中..." : "激活"}
-                            </button>
-                            <button
+                            </Button>
+                            <Button
                               className="btn"
                               type="button"
                               disabled={!canActivate}
@@ -608,14 +552,14 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                               }}
                             >
                               发送...
-                            </button>
+                            </Button>
                           </div>
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     );
                   })}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </>
           ) : state.folders.length === 0 ? (
             <div className="subwindow-empty-state">还没有挂载任何本地库文件夹。</div>
@@ -632,42 +576,46 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                 {folder.lastError ? <div className="subwindow-status-text-error">{folder.lastError}</div> : null}
                 <div className="button-row subwindow-wrap-row">
                   <label className="setting-row subwindow-check-row">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={folder.enabled}
                       disabled={!!busyKey}
-                      onChange={(event) => handleToggleFolder(folder, { enabled: event.target.checked })}
+                      onCheckedChange={(checked) => handleToggleFolder(folder, { enabled: checked === true })}
                     />
                     启用此文件夹
                   </label>
                   <label className="setting-row subwindow-check-row">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={folder.recursive}
                       disabled={!!busyKey}
-                      onChange={(event) => handleToggleFolder(folder, { recursive: event.target.checked })}
+                      onCheckedChange={(checked) => handleToggleFolder(folder, { recursive: checked === true })}
                     />
                     递归扫描子目录
                   </label>
                 </div>
                 <div className="button-row subwindow-wrap-row">
-                  <button className="btn" type="button" disabled={!!busyKey} onClick={() => handleOpenBrowser(folder)}>浏览目录</button>
-                  <button className="btn" type="button" disabled={!!busyKey} onClick={() => openWorkspacePath(folder.path)}>{fileManagerLabel}</button>
-                  <button
+                  <Button className="btn" type="button" disabled={!!busyKey} onClick={() => handleOpenBrowser(folder)}>浏览目录</Button>
+                  <Button className="btn" type="button" disabled={!!busyKey} onClick={() => openWorkspacePath(folder.path)}>{fileManagerLabel}</Button>
+                  <Button
                     className="btn"
                     type="button"
                     disabled={!!busyKey}
                     onClick={() => handleSyncFolder(folder)}
                   >
                     {busyKey === `sync:${folder.path}` ? "同步中..." : "立即同步"}
-                  </button>
-                  <button className="btn" type="button" disabled={!!busyKey} onClick={() => handleRemoveFolder(folder)}>移除</button>
+                  </Button>
+                  <Button className="btn" type="button" disabled={!!busyKey} onClick={() => { setStatus(""); setRemoveFolder(folder); }}>移除</Button>
                 </div>
               </div>
             </div>
           ))}
-        </div>
+        </div></ScrollArea>
       </fieldset>
+      {removeFolder && <Dialog title="移除本地库文件夹？" subtitle="只取消这个文件夹的挂载，已有投影记录与电脑上的文件都保持不变。"
+        width="sm" busy={!!busyKey} onClose={() => setRemoveFolder(null)}
+        footer={<><Button disabled={!!busyKey} onClick={() => setRemoveFolder(null)}>保留</Button><Button variant="destructive" disabled={!!busyKey} onClick={() => handleRemoveFolder(removeFolder)}>{busyKey ? "正在移除…" : "移除挂载"}</Button></>}>
+        <div className="dialog-path-preview">{removeFolder.path}</div>
+        {status && <div className="dialog-message dialog-message-error" role="alert">{status}</div>}
+      </Dialog>}
       {sendDialogRecord ? (
         <SendProjectionDialog
           record={sendDialogRecord}
@@ -698,10 +646,8 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
  */
 export function LocalLibraryFoldersDialog({ onClose }: { onClose: () => void }) {
   return (
-    <div className="dialog-overlay" onClick={onClose}>
-      <div className="dialog-content subwindow-frame subwindow-frame-wide" onClick={(event) => event.stopPropagation()}>
-        <LocalLibraryFoldersPanel onClose={onClose} />
-      </div>
-    </div>
+    <Dialog title="本地库管理" width="lg" className="library-window-dialog" onClose={onClose}>
+      <LocalLibraryFoldersPanel />
+    </Dialog>
   );
 }

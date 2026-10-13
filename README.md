@@ -1,157 +1,95 @@
-﻿# Litematica-BA
+# Litematica-Nova
 
-Litematica-BA 是面向 Minecraft `.litematic` 投影文件的桌面工具。当前主线是 `desktop-nova`，使用 React + Tauri 提供 UI，调用 Rust 后端完成解析、统计、生成、替换、cache 和原生 viewer。
+**不用进入游戏，也能整理投影、查看材料、按层施工。**
 
-## 当前主线
+面向 Minecraft 玩家的 Windows 桌面工具。打开 `.litematic` 文件，就能查看投影信息和材料清单，也可以修改属性、批量替换方块，或从模板生成一份新投影。
 
-- `desktop-nova/`：当前桌面端主线，包含 UI、Tauri 后端桥接、Nova 主题和页面入口。
-- `tools/viewer-core/`：Rust 后端源码，提供 `litematica_core`、`litematica_native_viewer` 和轻量 `stockpile_server`。
-- `bin/viewer-backend/`：桌面应用运行时读取的后端 exe 目录，文件应由 `tools/viewer-core` release build 同步而来。
-- `data/`：运行资源和用户态数据，包括生成模板、AI prompt、BlockState DB、中文翻译、投影库、cache、stockpile、Reden 下载和导出物。
-- `scripts/`：维护脚本、诊断导出、索引生成和数据生成脚本。
+**Beta 0.1 公开测试版 · Windows x64 · 版本 0.1.1**
 
-`desktop-js` 已从 Git 主线排除。若本地工作区仍存在 `desktop-js/`，它只作为历史参考，不上传、不作为功能规格、不参与当前验证。
+[反馈问题](https://github.com/LitematicaViewer/Litematica-Nova/issues) · **开发交流 QQ 群：1044260630**
 
-## 已接入能力
+## 为准备材料和施工而设计
 
-- 选择本地 `.litematic` 并 analyze。
-- `data/` 投影库。
-- RedenMC 在线投影库搜索、详情、普通下载、参数化下载、入库。
-- 属性页 metadata 编辑、保存、另存、恢复。
-- 统计页和材料列表，支持可选统计容器内物品。
-- 材料 CSV 导出，UTF-8 BOM，列为 `名称,数字,统计数据`。
-- Stockpile 材料数据导出、合成表缓存 preflight、离线/多人网页 ZIP 导出和轻量 `stockpile_server`/SQLite 协作。
-- 渲染页 3D cache 构建、进度轮询、静态预览、嵌入 viewer、弹窗 viewer。
-- 分层页读取真实 cache。
-- 替换页 dry-run/apply。
-- 生成页模板、AI plan、API 对话、dry-run/apply。
-- 选项页主题、用户数据配置、后端检查、AI 设置。
+- **材料一目了然**：主要材料用图标、中文名称和数量组成清爽列表，支持按区域、按层查看及导出 CSV；可选择统计容器内物品。
+- **按自己的习惯计数**：材料可用「箱盒－盒－组－个」或直接数量显示，不用重新分析文件。
+- **逐层看清结构**：拖动、缩放、切换层级，用下层半透明参考辅助定位；查看箱子、潜影盒、木桶和漏斗内容。
+- **先看影响，再保存**：替换方块和模板生成均可先预览；属性编辑支持另存为。
+- **集中管理投影**：左侧按标签筛选，中间查看预览卡片，右侧查看详情；支持搜索、批量选择和拖动归类。「下载投影」直接打开 RedenMC 在线投影库。没有预览图时显示占位，不使用其他图片冒充。
+- **三种外观，操作不变**：shadcn/ui 现代简洁，8bitcn/ui 精致像素，Minecraft 保留游戏字体与纹理风格。三主题都支持**浅色、深色、跟随系统**；选择会保存，主窗口和辅助窗口同步更新。
+- **属性与预览放在一起**：属性页可直接启动实验性快速渲染，在主窗口内的原生预览区旋转、缩放，查看加载进度与错误，不必先跳转到渲染页。
 
-## Stockpile 网页导出速览
+## 界面预览
 
-Stockpile 网页导出分为两个角色：`litematica_core` 在本地/CI 负责解析 `.litematic` 并构建 `single` 或 `multi` `.stockpile.zip`；部署端只运行轻量 `stockpile_server`，读取包内 JSON 并把多人状态写入 `db/stockpile.sqlite`。完整交接见 `docs/STOCKPILE_HANDOFF.md`，Linux/VPS 部署见 `docs/STOCKPILE_LINUX_DEPLOYMENT.md`。
+三主题共用功能，不必重新学习操作。以下是先前开发阶段留存的截图，展示 **shadcn/ui 浅色主题**；数据由 CLI 读取真实投影后接入，细节以最新测试版为准。
 
-常用导出形态：
+**投影库：标签、预览卡片与详情分区显示。** 原投影文件没有预览图，因此卡片与详情按实际状态显示占位。
 
-```powershell
-# 单人/离线：解压后直接打开 index.html，状态存在浏览器 localStorage
-bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project-single.stockpile.zip --minecraft-version 1.21.10 --mode single
+**统计页：主要材料以物品图标、中文名称和数量呈现。** 示例使用「投影测试」目录中的真实投影数据。
 
-# 多人/可运行：构建期写入 access/admin 密码、白名单、默认访问策略和 admin 页面开关
-"access-pass`nadmin-pass`n" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input <file.litematic> --output data\stockpile\exports\project-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly false --admin-page-enabled true
-```
+## 开始使用
 
-`multi --target` 支持 `windows-x64`、`linux-x64`、`macos-x64`、`macos-arm64` 和 `all`。部署 VPS 时上传目标平台 `.stockpile.zip`，不要上传源码、`.litematic`、`data/cache/`、本地 `data/stockpile/` 工作区或未打包的真实二进制。
+1. 从 [Beta 0.1 发布页](https://github.com/LitematicaViewer/Litematica-Nova/releases/tag/beta-0.1.1-r2) 下载 Windows x64 `Setup.exe`，运行安装；所需资源已包含在单个安装包内。安装到所有用户，需要确认 UAC。
+2. 点击「打开投影文件」，选择自己的 `.litematic`。它是独立软件，**不需要放进游戏的 mods 文件夹**。
+3. 在左侧切换统计、材料、分层等页面。首次尝试修改时，请保留原件，选择「另存为」。
 
-## 怎么运行 desktop-nova
+当前版本仅支持 Windows x64；**macOS 和 Linux 将在下个版本支持。** 其他投影格式尚未作为正式发行功能提供。详细变化见 [Beta 0.1 更新说明](docs/releases/BETA_0_1.md)。
 
-安装依赖：
+## Beta 0.1 进度
 
-```powershell
-cd C:\Users\27232\Documents\Litematica-BA\desktop-nova
-npm install
-```
-
-开发运行：
-
-```powershell
-cd C:\Users\27232\Documents\Litematica-BA\desktop-nova
-npm run tauri dev
-```
-
-构建前端：
-
-```powershell
-cd C:\Users\27232\Documents\Litematica-BA\desktop-nova
-npm run build
-```
-
-检查层边界：
-
-```powershell
-cd C:\Users\27232\Documents\Litematica-BA\desktop-nova
-npm run check:layers
-```
-
-检查 Tauri 后端：
-
-```powershell
-cd C:\Users\27232\Documents\Litematica-BA\desktop-nova\src-tauri
-cargo check
-```
-
-## 关键目录
-
-| 路径 | 用途 |
+| 状态  | 功能  |
 | --- | --- |
-| `desktop-nova/src/ui/` | UI 层：AppShell、页面、组件、样式。 |
-| `desktop-nova/src/business/` | 业务层：投影库、属性、统计、替换、生成、AI、Reden、渲染 cache 等 facade/actions。 |
-| `desktop-nova/src/platform/` | 平台层：Tauri、文件、data 用户目录、后端进程、viewer、HTTP、key storage。 |
-| `desktop-nova/src/services/` | 兼容旧 import 的薄服务入口，逐步收敛到 business/platform。 |
-| `desktop-nova/src-tauri/` | Tauri Rust 端命令和窗口桥接。 |
-| `tools/viewer-core/` | Rust 核心库和两个运行时二进制源码。 |
-| `bin/viewer-backend/` | desktop-nova 调用的运行时 exe。 |
-| `data/ai-projection/` | AI prompt 和 plan 相关运行配置，不能当普通文档删除。 |
-| `data/minecraft_blockstates/` | BlockState DB 和 overrides，运行资源。 |
-| `data/generation-templates/` | 内置生成模板，运行资源。 |
+| 已接入 | 打开投影、属性编辑、本地与在线投影库、材料统计和 CSV 导出 |
+| 已接入 | 方块替换、模板生成 |
+| 已接入 | 三主题的浅色/深色/跟随系统、共享控件、响应式排版、滚动条与多窗口同步 |
+| 已接入 | 三栏投影库、批量标签整理、属性页与渲染页的独立快速渲染及页内预览区 |
+| 部分完成 | 二维分层查看、容器查看、测量，以及原点设置、移动、移除和保存 |
+| 未包含在公开版 | 完整模式（FullMode）、Prebuilt、Realtime 与完整光影 |
+| 尚未完成 | 格式转换、分层画笔/橡皮/填充/文字，以及方块状态草稿保存 |
 
-## 常用命令
+## 开发路线图
 
-```powershell
-# 生成维护索引
-python scripts\build_assistant_index.py
+以下均为**计划功能，尚未包含在当前 Beta 0.1.1 中**。下一版以投影库、系统集成和多平台支持为重点；世界导出、完整渲染与高级编辑属于更后续的开发方向。
 
-# 导出诊断包
-python scripts\export_diagnostics.py
+### 下一版本：Beta 0.2（计划）
 
-# 检查 viewer-core
-cd tools\viewer-core
-cargo check
+- **多平台适配**：在 Windows 之外支持 **macOS 和 Linux**，处理各系统的窗口、文件关联、资源路径与安装发布。
+- **扩充投影下载源**：接入更多投影分享/整合网站，支持从网站提供的网盘分享链接下载并导入投影。
+- **双击打开投影**：注册系统文件关联，双击 `.litematic` 文件直接在 Nova 中打开，无需先手动进入程序选择文件。
+- **完善投影库**：补全文件夹分类、标签、搜索筛选及投影整理等管理能力。
+- **文件管理器缩略图**：在系统文件夹内直接预览投影缩略图，作为文件关联功能的延伸；按操作系统分别适配（优先 Windows 资源管理器）。
 
-# stockpile 合成表缓存状态/抓取
-cd ..\..
-bin\viewer-backend\litematica_core.exe stockpile recipe-status --minecraft-version 1.21.10
-bin\viewer-backend\litematica_core.exe stockpile recipe-fetch --minecraft-version 1.21.10
-bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test.stockpile.zip --minecraft-version 1.21.10 --mode single
-"access-pass`nadmin-pass`n" | bin\viewer-backend\litematica_core.exe stockpile export-zip --input tools\viewer-core\tests\fixtures\stats_water_fixture.litematic --output data\stockpile\exports\test-linux.stockpile.zip --minecraft-version 1.21.10 --mode multi --target linux-x64 --access-password-stdin --admin-password-stdin --whitelist-file users.txt --allow-guest-readonly false --admin-page-enabled true
-bin\viewer-backend\litematica_core.exe stockpile serve --zip data\stockpile\exports\test.stockpile.zip --bind 127.0.0.1:8787
-bin\viewer-backend\stockpile_server.exe --root <unzipped-stockpile-dir> --bind 127.0.0.1:8787
-bin\viewer-backend\litematica_core.exe stockpile session-info --zip data\stockpile\exports\test.stockpile.zip
-bin\viewer-backend\litematica_core.exe stockpile session-export --zip data\stockpile\exports\test.stockpile.zip --output data\stockpile\sessions\test.state.json
-bin\viewer-backend\litematica_core.exe stockpile session-reset --zip data\stockpile\exports\test.stockpile.zip --yes
-bin\viewer-backend\litematica_core.exe stockpile session-import --zip data\stockpile\exports\test.stockpile.zip --input data\stockpile\sessions\test.state.json --replace
-bin\viewer-backend\litematica_core.exe stockpile config-show --zip data\stockpile\exports\test.stockpile.zip
-bin\viewer-backend\litematica_core.exe stockpile config-set --zip data\stockpile\exports\test.stockpile.zip --key mode --value single
-bin\viewer-backend\litematica_core.exe stockpile config-reset --zip data\stockpile\exports\test.stockpile.zip --yes
+### 后续版本（规划中）
 
-# 构建并同步 litematica_core
-cd tools\viewer-core
-cargo build --release --bin litematica_core
-Copy-Item target\release\litematica_core.exe ..\..\bin\viewer-backend\litematica_core.exe -Force
+- **导出为 Minecraft 世界**：将投影方块生成可加载的世界存档，**默认采用虚空世界背景**。
+- **更多投影格式**：在 `.litematic` 之外，支持原版结构方块的 `.nbt`、机械动力及铁砧工艺相关结构格式，以及「复制粘贴小帮手」使用的格式。
+- **模组方块替换**：支持导入模组并将方块替换为模组内方块。
+- **投影组合与拆分**：同时打开多个投影，按相对位置装配成大型投影；也可以将大型投影拆分为多个独立部件。
+- **末端原材料统计**：将建造材料进一步换算为基础原料，例如原木、铁锭等，复用现有网页端的计算能力。
+- **完整渲染（FullMode）**：提供区别于现有实验性快速模式的完整模型渲染能力。
+- **3D 分层查看**：在三维视口中按高度或选定范围逐层检查结构。
+- **无光照完整渲染**：在完整渲染基础上提供关闭光照影响的显示模式，便于辨认结构细节。
+- **完整渲染中的方块修改**：直接在三维完整渲染视口内选择、修改方块。
+- **独立投影工作台**：开发类似 Axiom 操作体验的外置投影编辑工作台，支持可视化构建与编辑。
 
-# 构建并同步 stockpile_server
-cd tools\viewer-core
-cargo build --release --bin stockpile_server
-Copy-Item target\release\stockpile_server.exe ..\..\bin\viewer-backend\stockpile_server.exe -Force
-Copy-Item target\release\stockpile_server.exe ..\..\bin\stockpile-server\windows-x64\stockpile_server.exe -Force
 
-# 检查/下载跨平台 stockpile_server artifacts
-cd ..\..
-scripts\stockpile\verify_stockpile_server_bins.ps1
-scripts\stockpile\fetch_stockpile_server_artifacts.ps1 -Target linux-x64
+### 使用前需要知道
 
-# 构建并同步 native viewer
-cd tools\viewer-core
-cargo build --release --bin litematica_native_viewer
-Copy-Item target\release\litematica_native_viewer.exe ..\..\bin\viewer-backend\litematica_native_viewer.exe -Force
-```
+- 属性页使用原有的独立实验性快速渲染，适合查看形体，不是 Full / Realtime，也不承诺完整材质或光影效果。预览区复用原生 Viewer；预览在创建时即属于主窗口的原生子窗口，不使用桌面悬浮窗口、截图或 SetParent。小窗口、DPI 缩放、弹窗遮挡和窗口切换仍需统一人工确认。
+- **完整模式未包含在公开版**。属性页与渲染页只开放独立快速渲染；完整模式将会在不久的将来为大家呈现
+- 二维分层是施工参考，不是游戏画面。缺少地图基色时，缩小显示会使用区分色；部分 Mod 方块或状态可能缺图。
+- 分层页面的保存只写入**原点修改**。测量、快捷栏与调试棒状态草稿仅在当前会话生效；灰色绘制工具仍是占位。
+- 材料以原版 26.3 的实际物品映射为依据；活塞头、流体等没有独立物品的状态只计入结构与单独说明，不伪造物品或重复计料。特殊方块、Mod 内容和自定义物品组件需留意提示，不保证代表生存模式中的全部获取成本。
+- 已提供 1643 个静态物品图标，覆盖原版可放置材料对应的全部 1141 种物品。另有 14 种非放置物品的默认着色、组件或场景图标暂未覆盖，仍用问号占位。图标不展示自定义头颅皮肤、附魔动画或季节变化；无直接对应物品的技术方块会单独标注。
+- AI 辅助需要额外配置服务、模型及密钥，可能产生费用；Gemini 入口尚未接入。在线投影库依赖网络及第三方服务。
 
-## 维护文档
+## 更新程序
 
-主文档只保留三份：
+启动后会在后台检查更新。有新版本时显示版本、日期及新增/优化/修复/注意事项；可以更新、取消，或跳过当前版本。确认更新后显示下载进度，使用签名校验，保存当前草稿并等待后台写任务退出，再安装重启。GitHub 接口失败时切换专用 HTTPS 镜像。
 
-- `README.md`：项目入口和运行方式。
-- `docs/ARCHITECTURE.md`：架构、分层、后端桥接和禁区。
-- `docs/DEVELOPMENT.md`：开发、验证、schema、Reden、BlockState、清理和排障。
-- `docs/STOCKPILE_HANDOFF.md`：Stockpile 网页导出、CLI、session、权限和跨平台部署交接。
-- `docs/STOCKPILE_LINUX_DEPLOYMENT.md`：Stockpile Linux/VPS 运行包部署说明。
+更新源使用 GitHub HTTPS 清单及专用 HTTPS 镜像，下载的是同一签名 NSIS 安装包，不使用便携 EXE 或 ZIP 更新。实际安装与重启仍需用户实机反馈；具体配置见[更新维护说明](docs/UPDATER.md)。
+
+## 一起完善 Nova
+
+遇到问题，请保留原文件和报错，带上「刚才做了什么、期望什么、实际怎样」以及截图，到 [Issues](https://github.com/LitematicaViewer/Litematica-Nova/issues) 或 **QQ 1044260630** 反馈。分享前请遮住密钥及个人信息。
+
+想参与开发或自行构建？请阅读[开发说明](docs/DEVELOPMENT.md)。
