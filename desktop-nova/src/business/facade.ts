@@ -18,7 +18,10 @@ export * from "../services/userConfig";
 
 export * from "../services/flakeService";
 export * from "../services/containerService";
-export { loadEnumeratorCollections, buildMapColorLookup, type EnumeratorCollection } from "../services/enumeratorService";
+export * from "../services/enumeratorService";
+export {
+  openEnumeratorWindow,
+} from "../platform/nativeViewer";
 export { resolveFlakeLayerBlockImage, extractLayerPaletteStates } from "../services/flakeStateHintResolver";
 
 export * from "../platform/quickPreview";

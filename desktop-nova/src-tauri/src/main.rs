@@ -1949,6 +1949,39 @@ async fn open_material_list_window(
 }
 
 #[tauri::command]
+async fn open_enumerator_window(
+    app: AppHandle,
+    active_file: Option<String>,
+) -> Result<(), String> {
+    const LABEL: &str = "enumerator";
+
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        app.emit_to(LABEL, "enumerator-open-file", active_file)
+            .map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    let url = match active_file
+        .as_deref()
+        .filter(|file| !file.trim().is_empty())
+    {
+        Some(file) => format!("enumerator.html?file={}", query_encode(file)),
+        None => "enumerator.html".to_string(),
+    };
+
+    tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App(url.into()))
+        .title("Enumerator")
+        .inner_size(1180.0, 760.0)
+        .min_inner_size(900.0, 560.0)
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn open_reden_library_window(app: AppHandle) -> Result<(), String> {
     const LABEL: &str = "reden-library";
 
@@ -2272,6 +2305,7 @@ fn main() {
             ai_test_connection,
             ai_chat_completion,
             open_material_list_window,
+            open_enumerator_window,
             open_reden_library_window,
             open_local_library_folders_window,
             open_ui_demo_window

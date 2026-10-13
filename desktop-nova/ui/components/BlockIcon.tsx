@@ -3,9 +3,15 @@ import { getBlockIconDataUrl } from "../../src/business/facade";
 
 /**
  * Renders a Minecraft block or item icon at the shared UI icon size.
+ *
+ * `lookupMode` is accepted for call-site compatibility with the pre-merge UI
+ * (which asked the icon registry for an item-first lookup). The current
+ * resolver already maps a block to its `item_id` before falling back, so
+ * `"item_first"` needs no separate code path here.
  */
-export function BlockIcon({ blockId }: { blockId: string }) {
+export function BlockIcon({ blockId, lookupMode = "default" }: { blockId: string; lookupMode?: "default" | "item_first" }) {
   const [src, setSrc] = useState<string | null>(null);
+  void lookupMode;
 
   useEffect(() => {
     setSrc(null);

@@ -1,6 +1,6 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "windows": ["main", "material-list", "local-library-folders"],
+  "windows": ["main", "material-list", "enumerator", "local-library-folders"],
   "permissions": ["core:default", "dialog:default", "shell:default"]
 }
