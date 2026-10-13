@@ -1,6 +1,6 @@
 # 公开版开发说明
 
-公开 Beta 0.1 仅提供 Windows x64。macOS/Linux 将会在下个版本支持；当前 Application Host 的进程监督依赖 Windows Job Objects，非 Windows 启动会明确报错，不以编译成功声称支持。
+Beta 0.2 当前本地验收仍仅提供 Windows x64。macOS/Linux 为后续计划；当前 Application Host 的进程监督依赖 Windows Job Objects，非 Windows 启动会明确报错，不以编译成功声称支持。
 
 ## 环境
 
@@ -13,7 +13,8 @@ Windows、Node.js 22、Rust stable/MSVC、WebView2，以及 Tauri 官方 Windows
 ```powershell
 $ErrorActionPreference = "Stop"
 $env:LBA_BUILD_GIT_SHA = (git rev-parse HEAD).Trim()
-cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir tools/viewer-core/target/public-beta --bin litematica_core --bin litematica_native_viewer
+& .\tools\windows-thumbnail-provider\build.ps1 -Smoke
+cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir tools/viewer-core/target/public-beta --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
 if ($LASTEXITCODE -ne 0) { throw "快速后端构建失败" }
 .\desktop-nova\scripts\prepare-backend-deployment.ps1 -RepoRoot $PWD.Path -Profile release -GitSha $env:LBA_BUILD_GIT_SHA
 $env:CARGO_TARGET_DIR = Join-Path $PWD.Path 'desktop-nova/src-tauri/target/public-beta'
@@ -40,3 +41,13 @@ if ($LASTEXITCODE -ne 0) { throw "桌面构建失败" }
 - 私有开发历史不合并进公开 `main`；仅选择性导入已审计文件。允许保留的旧版公开历史不代表当前商业实现可公开。
 - Beta Tag 指向公开 `main` 的审计提交；GitHub Actions 只构建 Windows 审计产物，不自动创建正式 Release。其他平台本版不构建、不宣称可运行。
 - 更新维护见 [UPDATER.md](UPDATER.md)，组件来源见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)。
+
+## Beta 0.2 本地验收
+
+文件关联由 NSIS 安装/卸载 hook 管理；官方 single-instance 2.4.0 与 Tauri 2.11.1 配合，外部文件请求排队后交已有主窗口。Native Thumbnail Provider 仅读取按投影内容 SHA256 命名的 PNG 缓存，不启动渲染器，不解析完整投影。共享缩略图目录为 %LOCALAPPDATA%\Litematica-Nova\thumbnails。
+
+启动先绘制缓存主题，配置异步加载；分层资源按需初始化。退出停止任务接纳并在后台等待所属子进程，生命周期日志分别标记资源身份、配置迁移和子进程退出。网络更新原本已异步，未改变签名要求。
+
+统计分阶段日志由 NOVA_STATS_TIMING 开启，Host 共享同文件同参数的请求及结果；React Profiler 只报告实际挂载的提交时间。CLI 的 helper transport 不等于真实 WebView IPC，后两项留待人工读取运行日志。
+
+本轮只本地构建；不推送、不创建 Tag、不修改线上更新清单。通过 docs/releases/BETA_0_2.md 的人工清单后再发布。

@@ -1,7 +1,7 @@
 [package]
 name = "desktop-nova"
 default-run = "desktop-nova"
-version = "0.1.1"
+version = "0.2.0"
 description = "Litematica-Nova desktop viewer for Minecraft .litematic projections"
 authors = ["Litematica-Nova"]
 edition = "2021"
