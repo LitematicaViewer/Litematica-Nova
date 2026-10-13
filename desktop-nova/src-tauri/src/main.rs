@@ -1,9 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod application;
+mod assets;
 mod platform;
 mod viewer_backend;
 mod viewer_launch_contract;
+// The Minecraft Wiki block-icon scraper (`wiki_block_icons.rs`) is kept in the tree
+// but not compiled yet: it is a network-dependent download source whose parent-module
+// helpers (`fetch_wiki_html`, `element_text`, `extract_code_values_from_cell`,
+// `normalize_html_text`, `WIKI_ENUM_BLOCKS_URL`, `VaultBlockIconProgress`,
+// `VaultBlockIconDownloadOutput`) still need porting. See docs/ASSET_MANAGER_DIFF.md
+// section "恢复进展" for the remaining scope.
+// mod wiki_block_icons;
 
 use application::model::ProductPreviewImage;
 use application::operations::{
@@ -17,6 +25,9 @@ use application::quick_preview::{QuickPreviewHost, QuickPreviewView, StartQuickP
 use application::updater::{UpdateHost, application_update_snapshot, application_update_check,
     application_update_download, application_update_install, application_update_cancel, application_update_skip, application_update_restart};
 use base64::Engine;
+// `flate2` is needed by the game-data import (gunzipped NBT); the scraper imports
+// return together with the wire-up of `wiki_block_icons`.
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::Write;
@@ -2337,7 +2348,16 @@ fn main() {
             open_enumerator_window,
             open_reden_library_window,
             open_local_library_folders_window,
-            open_ui_demo_window
+            open_ui_demo_window,
+            // Game-resource manager (L1)
+            assets::ensure_builtin_block_icons_extracted,
+            assets::ensure_builtin_item_icons_extracted,
+            assets::delete_user_config_file,
+            assets::pick_litematic_file,
+            assets::download_vault_block_icons,
+            assets::download_vault_item_icons,
+            assets::download_minecraft_wiki_block_icons,
+            assets::download_minecraft_wiki_enum_catalogs
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

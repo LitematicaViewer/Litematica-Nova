@@ -12,6 +12,7 @@ export {
   setUserConfigDir,
 } from "../platform";
 export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo } from "../platform";
+export type { BuiltinIconExtractOutput, VaultBlockIconDownloadOutput, WikiEnumCatalogDownloadOutput } from "../platform/files";
 
 export {
   checkFileExists,
@@ -27,6 +28,16 @@ export {
   writeAppDataFile as writeUserConfigFile,
   writeTextFileAbsolute,
   writeWorkspaceFile,
+  // Game-resource manager channels (L1). Builtin extraction works offline; the
+  // remote download sources currently reject with an explicit message.
+  deleteAppDataFile as deleteUserConfigFile,
+  ensureBuiltinBlockIconsExtracted as ensureBuiltinBlockIconsExtractedNative,
+  ensureBuiltinItemIconsExtracted as ensureBuiltinItemIconsExtractedNative,
+  downloadVaultBlockIconsFromVault,
+  downloadVaultItemIconsFromVault,
+  downloadWikiBlockIconsFromMinecraftWiki,
+  downloadWikiEnumCatalogsFromMinecraftWiki,
+  pickLitematicFile,
 } from "../platform/files";
 
 export {

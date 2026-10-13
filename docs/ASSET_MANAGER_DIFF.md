@@ -251,3 +251,54 @@ checkGameResourceHealth() → GameResourceHealthRow[]            // 界面「健
 
 **建议顺序**：先做 L1 + L2（能力可用但无界面，可用现有设置页或命令行验证切换效果），
 确认消费方改造无回归后再决定 L3 是重写界面还是回移。
+
+## 七、恢复进展
+
+### L1 数据层 —— 已完成（本次）
+
+| 项 | 状态 |
+| --- | --- |
+| `src/services/gameResources.ts`（921 行） | 已回移，与合并前逐字节一致；`tsc --noEmit` 零错误 |
+| `src/platform/files.ts` | 补回 3 个接口（`BuiltinIconExtractOutput` / `VaultBlockIconDownloadOutput` / `WikiEnumCatalogDownloadOutput`）与 8 个函数（`pickLitematicFile`、`deleteAppDataFile`、`ensureBuiltinBlockIconsExtracted`、`ensureBuiltinItemIconsExtracted`、`downloadVaultBlockIconsFromVault`、`downloadVaultItemIconsFromVault`、`downloadWikiBlockIconsFromMinecraftWiki`、`downloadWikiEnumCatalogsFromMinecraftWiki`） |
+| `src/services/backend.ts` | 按注册表期望的别名转出（`getUserConfigFilePath` / `readUserConfigFile` / `writeUserConfigFile` / `deleteUserConfigFile` / `ensureBuiltin*ExtractedNative`） |
+| `src-tauri/src/assets.rs`（新建） | 目录辅助、`extract_builtin_icon_archive`、内建图标解包两个命令、`delete_user_config_file`、`pick_litematic_file` |
+| Rust 依赖 | 新增 `flate2 = "1.1"`、`scraper = "0.27.0"`、`zip = "2.2"`（`zip` 原仅在 build-dependencies） |
+
+**内建图标改为本地解包**：`BUILTIN_BLOCK_ARCHIVE_RELPATH` / `BUILTIN_ITEM_ARCHIVE_RELPATH`
+指向 `pack-in/game-icons/{block,item}.zip`（合并前指向 `pack-in/arr-private/`），
+目标仍是 app-data 下的 `minecraft-assets/block_2d/initial` 与 `minecraft-assets/item/initial`。
+这样 942 个 Mojang PNG **无需入库**即可让"内建图标"这一离线回退源可用。
+
+**未接入（有意为之）**：4 个远端下载命令（CCVault 方块/物品图标、Minecraft Wiki 方块图标/枚举全集）
+已注册但返回明确错误信息，不做静默 no-op。原因：
+
+1. CCVault 路径依赖**硬编码在合并前源码里的 API key**
+   （`VAULT_API_KEY` / `VAULT_LEGACY_API_KEY`，另加从站点 JS 包运行时发现 key 的逻辑）——
+   这类凭据不应原样带入；**这也是一处需要你决策的安全项**。
+2. Wiki 路径是 HTML 抓取（`wiki_block_icons.rs` 682 行），其父模块辅助
+   （`fetch_wiki_html`、`element_text`、`extract_code_values_from_cell`、`normalize_html_text`、
+   `WIKI_ENUM_BLOCKS_URL` 等）尚需回移；该文件已放入仓库但从 `main.rs` 注释掉，
+   以保持一次改动一个可验证单元。
+
+### L2 消费方改造 —— 待做
+
+`blockIconResolver` / `blockstateDb` / `i18n` / `enumeratorService` 四个硬编码读点尚未改走注册表，
+因此**现在切换资源还不会生效**。改造清单：
+
+| 消费方 | 现状 | 目标 |
+| --- | --- | --- |
+| `blockIconResolver.ts`（37 行） | `pack-in/item-icons-26.3` 单一路径 + 静态 import 的两份 JSON | `getActiveIconSearchRoots(slot)` + `readIconFromRoot` 回退链；20 个导出中的 `invalidateBlockIconCache` 等需恢复 |
+| `blockstateDb.ts` | `data/minecraft_blockstates/26.1*.json` 硬编码 | `readActiveGameDataResource()` |
+| `i18n.ts` | `pack-in/lang/zh_cn.json` 硬编码 | `readActiveLanguageResource()`（回退 `readFallbackLanguageResource()`） |
+| `enumeratorService.ts` | `pack-in/lang/zh_cn.json` + `loadDatabases()`/`getAllBlocks()` | `readActiveLanguageResource()` / `readActiveGameDataResource()` |
+
+同时需要恢复 3 个缓存失效接口（`invalidateBlockIconCache` / `invalidateI18nCache` /
+`invalidateBlockstateDbCache`）并在切换资源后调用，否则切换不会即时生效。
+
+### 仍需回移的 L1 远端部分
+
+| 单元 | 规模 | 说明 |
+| --- | --- | --- |
+| Vault 闭包 | 约 250 行 | `vault_*` 系列（URL 构造、client、token 获取与 key 发现、分类条目收集、单图标下载）+ 两个 sync 下载函数 |
+| Wiki 图标抓取 | 682 行（已放入仓库） | `wiki_block_icons.rs` + 5 个父模块辅助 + `WIKI_ENUM_*` 常量 |
+| Wiki 枚举全集抓取 | 约 150 行 | `download_minecraft_wiki_enum_catalogs_sync` + 表格解析 |

@@ -22,6 +22,13 @@ base64 = "0.22"
 sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 image = "0.25"
+# Restored with the game-resource manager (L1):
+#   flate2  - gunzip NBT payloads read while importing game data
+#   scraper - parse Minecraft Wiki HTML for block icons and enum catalogs
+#   zip     - unpack the bundled icon archives (pack-in/game-icons/*.zip)
+flate2 = "1.1"
+scraper = "0.27.0"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
 viewer-launch-contract = { path = "../../tools/viewer-core/crates/viewer-launch-contract" }
 tauri-plugin-updater = "=2.10.0"
 
