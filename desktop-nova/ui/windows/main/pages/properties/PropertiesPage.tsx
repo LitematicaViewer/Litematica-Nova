@@ -154,17 +154,15 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute }: any) {
       setForm(recovered?.form || nextForm);
       setError("");
       console.info(`[NOVA_METADATA_REQUEST] source=${source} path=${filePath} request succeeded`);
-      if (preferredAnalysis === undefined) {
-        void loadLibrary()
-          .then((state) => addOrUpdateRecordFromAnalysis(
-            state,
-            filePath,
-            projectionRecordAnalysis(parsed),
-          ))
-          .catch((error) => {
-            console.warn(`[NOVA_METADATA_REQUEST] path=${filePath} library update failed: ${String(error)}`);
-          });
-      }
+      void loadLibrary()
+        .then((state) => addOrUpdateRecordFromAnalysis(
+          state,
+          filePath,
+          projectionRecordAnalysis(parsed),
+        ))
+        .catch((error) => {
+          console.warn(`[NOVA_METADATA_REQUEST] path=${filePath} library update failed: ${String(error)}`);
+        });
     } catch (error) {
       if (generation === analysisGeneration.current) {
         console.error(`[NOVA_METADATA_REQUEST] source=${source} path=${filePath} request failed: ${String(error)}`);
@@ -195,6 +193,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute }: any) {
 
   const fileName = currentFile ? currentFile.split(/[\\/]/).pop() : "";
   const metadata = data?.metadata || {};
+  const regionNames: string[] | undefined = Array.isArray(data?.regions) && data.regions.every((region: any) => typeof region?.name === "string") ? data.regions.map((region: any) => region.name) : undefined;
   const derived = data?.derived || {};
   const density = derived.building?.density
     ?? ((data?.structure_stats?.total_non_air_blocks || 0) / Math.max(1, metadata.total_volume || 0));
@@ -285,13 +284,15 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute }: any) {
                 <legend className="properties-sr-only">投影属性</legend>
                 <section className="properties-section">
                   <h3>基本信息</h3>
-                  <TextRow label="投影名称" value={form.name} onChange={(value) => updateForm({ name: value })} />
+                  <TextRow label="内部名称" value={form.name} onChange={(value) => updateForm({ name: value })} />
                   <TextRow label="作者" value={form.author} onChange={(value) => updateForm({ author: value })} />
                   <label className="properties-field">
                     <span>描述</span>
                     <Textarea rows={4} value={form.description} onChange={(event) => updateForm({ description: event.target.value })} />
                   </label>
                   <dl className="properties-facts">
+                    <div><dt>投影名称</dt><dd>{fileName}</dd></div>
+                    <div><dt>选区名</dt><dd>{regionNames === undefined ? "未读取" : regionNames.length ? regionNames.map((name, index) => <div key={index}>{name || "（空名称）"}</div>) : "无选区"}</dd></div>
                     <div><dt>尺寸（长 × 高 × 宽）</dt><dd>{metadata.enclosing_size?.x || 0} × {metadata.enclosing_size?.y || 0} × {metadata.enclosing_size?.z || 0}</dd></div>
                     <div><dt>方块数量</dt><dd>{Number(metadata.total_blocks || 0).toLocaleString()}</dd></div>
                     <div><dt>包围体积</dt><dd>{Number(metadata.total_volume || 0).toLocaleString()}</dd></div>

@@ -95,6 +95,23 @@ function createHarness(records, overrides = {}) {
 
 const dragEvent = () => ({ preventDefault() {}, stopPropagation() {}, dataTransfer: { setData() {} } });
 
+test("投影库：主名称保持完整文件名，旧选区未读取明确提示，刷新补齐所有真实选区", async () => {
+  const original = { ...record(0), displayName: "不能作为主显示名的内部名称" };
+  const names = Array.from({ length: 25 }, (_, index) => `实际选区${index + 1}完整名字`);
+  const h = createHarness([original], { checkFileExists: async () => true, analyzeFile: async () => categories.projectionRecordAnalysis({ metadata: { name: "内部名称", region_count: names.length }, regions: names.map((name) => ({ name })) }) });
+  await h.settle(); h.cards()[0].props.onInspect(); h.render();
+  assert.equal(label(h.find((node) => node.props.className === "library-detail-name").props.children), "0.litematic");
+  const unknown = h.find((node) => node.type === "dl" && node.props.className === "library-detail-facts");
+  assert.match(label(unknown), /选区名未读取（刷新或查看属性后补齐）/);
+  assert.doesNotMatch(label(unknown), /不能作为主显示名的内部名称/);
+  await h.input("刷新投影库").props.onClick(); await h.settle();
+  const row = React.Children.toArray(h.find((node) => node.props.className === "library-detail-facts").props.children).find((node) => label(React.Children.toArray(node.props.children)[0]) === "选区名");
+  const dd = React.Children.toArray(row.props.children)[1];
+  assert.deepEqual(React.Children.toArray(dd.props.children).map(label), names);
+  assert.equal(h.library().records[0].displayName, "0.litematic"); assert.equal(h.library().records[0].internalName, "内部名称");
+  assert.deepEqual(h.library().records[0].regionNames, names); assert.deepEqual(h.calls.generated, []);
+});
+
 test("投影库：默认仅读取可见页真实预览，翻页继续读取，不隐式生成图", async () => {
   const records = Array.from({ length: 23 }, (_, i) => record(i));
   records[0].previewPath = "saved/0.png";

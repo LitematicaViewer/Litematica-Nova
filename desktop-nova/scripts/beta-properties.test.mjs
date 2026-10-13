@@ -13,6 +13,38 @@ const propertiesFacade = {
   loadLibrary: async () => ({}), addOrUpdateRecordFromAnalysis: async () => {}, projectionRecordAnalysis: (value) => value,
 };
 
+test("属性：文件名作为主名称，内部名称可编辑，所有选区名只取真实分析且不写NBT", async () => {
+  const names = Array.from({ length: 25 }, (_, index) => `真实选区${index + 1}完整名称`); let writes = 0; const cached = [];
+  const data = { ...metadata, regions: names.map((name) => ({ ...metadata.regions[0], name })) };
+  const h = harness("properties/PropertiesPage", "PropertiesPage", { ...propertiesFacade,
+    findRenderOperationForSource: () => ({ analysis: data }),
+    analyzeProjectionFile: async () => { throw new Error("已有真实Application分析不得重复解析"); },
+    projectionRecordAnalysis: (value) => ({ internalName: value.metadata.name, regionNames: value.regions.map((region) => region.name) }),
+    addOrUpdateRecordFromAnalysis: async (_, path, analysis) => { cached.push({ path, analysis }); },
+    saveProjectionMetadataPatch: async () => { writes++; },
+  });
+  const props = { currentFile: "C:\\投影\\真正文件.litematic", setCurrentFile() {}, setRoute() {} };
+  h.render(props); await nextTurn(); h.render(props);
+  assert.equal(text(h.nodes().find((node) => node.props?.className === "properties-file")), "真正文件.litematic");
+  assert.equal(h.component("TextRow").props.label, "内部名称"); assert.equal(h.component("TextRow").props.value, "原名称");
+  const row = h.nodes().find((node) => node.type === "div" && node.props?.children?.[0]?.type === "dt" && text(node.props.children[0]) === "选区名");
+  assert.deepEqual(row.props.children[1].props.children.map(text), names);
+  assert.deepEqual(cached, [{ path: props.currentFile, analysis: { internalName: "原名称", regionNames: names } }]);
+  h.component("TextRow").props.onChange("未保存内部名称"); h.render(props);
+  assert.equal(text(h.nodes().find((node) => node.props?.className === "properties-file")), "真正文件.litematic");
+  assert.equal(writes, 0);
+});
+
+test("属性：分析缺选区名明确未读取，不从内部名称或数量猜造", async () => {
+  const h = harness("properties/PropertiesPage", "PropertiesPage", { ...propertiesFacade,
+    analyzeProjectionFile: async () => ({ metadata: { name: "非选区名称", region_count: 3 } }),
+  });
+  const props = { currentFile: "未知选区.litematic", setCurrentFile() {}, setRoute() {} };
+  h.render(props); await nextTurn(); h.render(props);
+  const row = h.nodes().find((node) => node.type === "div" && node.props?.children?.[0]?.type === "dt" && text(node.props.children[0]) === "选区名");
+  assert.equal(text(row.props.children[1]), "未读取");
+});
+
 test("属性：撤销只恢复未保存内容，重复保存只提交一次", async () => {
   let writes = 0; const gate = deferred();
   const h = harness("properties/PropertiesPage", "PropertiesPage", { ...propertiesFacade,

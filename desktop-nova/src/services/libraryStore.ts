@@ -13,11 +13,15 @@ export interface ProjectionRecord {
   path: string;
   fileName: string;
   displayName: string;
+  /** NBT metadata name, separate from the file's display name. */
+  internalName?: string;
   author: string;
   description: string;
   totalBlocks: number;
   totalVolume: number;
   regionCount: number;
+  /** Missing in legacy/unread records; an empty array means the analysis has no regions. */
+  regionNames?: string[];
   enclosingSize: { x: number, y: number, z: number };
   minecraftDataVersion: number;
   fileSize: number;
@@ -141,7 +145,9 @@ export function normalizeLibraryState(raw?: Partial<LibraryState> | null): Libra
     for (const id of ids) if (!categoryIds.has(id)) {
       categories.push({ id, name: "恢复的分类", parentId: null, sort_index: categories.length, icon: { kind: "lucide", name: "Folder" } }); categoryIds.add(id);
     }
-    return { ...retained, categoryIds: ids, sort_index: record.sort_index ?? index, preview_image_path: record.preview_image_path || record.previewPath };
+    const fileName = fileNameFromPath(record.path);
+    const regionNames = Array.isArray(record.regionNames) && record.regionNames.every((name) => typeof name === "string") ? [...record.regionNames] : undefined;
+    return { ...retained, fileName, displayName: fileName, regionNames, categoryIds: ids, sort_index: record.sort_index ?? index, preview_image_path: record.preview_image_path || record.previewPath };
   });
   const folders: LocalLibraryFolder[] = [];
   const seen = new Set<string>();
@@ -216,7 +222,7 @@ function fileNameFromPath(filePath: string): string {
 }
 
 function projectionRecordFromDirectoryEntry(entry: DirectoryEntryInfo): ProjectionRecord {
-  const fileName = entry.name || fileNameFromPath(entry.path);
+  const fileName = fileNameFromPath(entry.path) || entry.name;
   return {
     id: entry.path,
     path: entry.path,
@@ -288,12 +294,14 @@ async function addOrUpdateRecordFromAnalysisInternal(
     id: filePath,
     path: filePath,
     fileName,
-    displayName: analysis.displayName || fileName,
+    displayName: fileName,
+    internalName: analysis.internalName,
     author: analysis.author || "",
     description: analysis.description || "",
     totalBlocks: analysis.totalBlocks || 0,
     totalVolume: analysis.totalVolume || 0,
     regionCount: analysis.regionCount || 0,
+    regionNames: analysis.regionNames,
     enclosingSize: analysis.enclosingSize || { x: 0, y: 0, z: 0 },
     minecraftDataVersion: analysis.minecraftDataVersion || 0,
     fileSize: existing?.fileSize || 0,
@@ -336,12 +344,13 @@ export function projectionRecordAnalysis(parsed: any): Partial<ProjectionRecord>
   return {
     status: "ok",
     lastError: "",
-    displayName: meta.name || "",
+    internalName: typeof meta.name === "string" ? meta.name : "",
     author: meta.author || "",
     description: meta.description || "",
     totalBlocks: meta.total_blocks || 0,
     totalVolume: meta.total_volume || 0,
     regionCount: meta.region_count || 0,
+    regionNames: Array.isArray(parsed?.regions) && parsed.regions.every((region: any) => typeof region?.name === "string") ? parsed.regions.map((region: any) => region.name) : undefined,
     enclosingSize: meta.enclosing_size || { x: 0, y: 0, z: 0 },
     minecraftDataVersion: meta.minecraft_data_version || 0,
   };
@@ -349,7 +358,8 @@ export function projectionRecordAnalysis(parsed: any): Partial<ProjectionRecord>
 
 export async function analyzeFile(filePath: string): Promise<Partial<ProjectionRecord>> {
   try {
-    return projectionRecordAnalysis(await inspectProject({ sourcePath: filePath }));
+    const fileName = fileNameFromPath(filePath);
+    return { ...projectionRecordAnalysis(await inspectProject({ sourcePath: filePath })), fileName, displayName: fileName };
   } catch (error: any) {
     return { status: "parse_error", lastError: String(error) };
   }

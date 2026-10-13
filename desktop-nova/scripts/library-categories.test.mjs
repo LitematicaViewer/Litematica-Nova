@@ -14,11 +14,40 @@ function compile(path, dependencies) {
 }
 const icons = compile("../src/services/libraryCategoryIcons.ts", () => { throw new Error("Unexpected icon import"); });
 export function categoryStore(backend = {}) {
-  return compile("../src/services/libraryStore.ts", (name) => name === "./libraryCategoryIcons" ? icons : name === "./backend" ? backend : name.endsWith("applicationOperations") ? { inspectProject: async () => ({ metadata: { name: "新名称", total_blocks: 44 } }) } : (() => { throw new Error(name); })());
+  return compile("../src/services/libraryStore.ts", (name) => name === "./libraryCategoryIcons" ? icons : name === "./backend" ? backend : name.endsWith("applicationOperations") ? { inspectProject: async () => ({ metadata: { name: "新名称", total_blocks: 44 }, regions: [{ name: "第一选区" }, { name: "第二选区" }] }) } : (() => { throw new Error(name); })());
 }
 const store = categoryStore();
 const record = (path, tags = []) => ({ id: path, path, fileName: path, displayName: path, author: "作者", description: "保留描述", totalBlocks: 12, totalVolume: 18, regionCount: 1, enclosingSize: { x: 2, y: 3, z: 3 }, minecraftDataVersion: 5, fileSize: 456, mtime: 789, tags, status: "ok", lastAnalyzedAt: 1, lastError: "", previewPath: "真实预览.png", sort_index: 4 });
 const empty = () => ({ schemaVersion: 2, categories: [], records: [], folders: [] });
+
+test("文件名称：旧缓存按实际路径规范化，完整扩展保留，不猜选区名", () => {
+  const original = { ...record("C:\\投影\\真正文件.LITEMATIC"), fileName: "旧文件名", displayName: "旧内部元数据名称" };
+  const other = { ...record("/projection/完整名.litematic"), displayName: "另一个内部名称", regionNames: ["北区", "南区"] };
+  const next = store.normalizeLibraryState({ ...empty(), records: [original, other] });
+  assert.equal(next.records[0].fileName, "真正文件.LITEMATIC"); assert.equal(next.records[0].displayName, "真正文件.LITEMATIC");
+  assert.equal(next.records[0].regionNames, undefined); assert.equal(next.records[0].internalName, undefined);
+  assert.equal(next.records[1].displayName, "完整名.litematic"); assert.deepEqual(next.records[1].regionNames, ["北区", "南区"]);
+  assert.equal(next.records[0].path, original.path); assert.equal(next.records[0].previewPath, original.previewPath);
+  assert.equal(original.displayName, "旧内部元数据名称"); assert.deepEqual(store.normalizeLibraryState(next), next);
+});
+
+test("分析名称：内部名称与文件名分离，所有选区原名由真实regions映射并持久化", async () => {
+  const parsed = { metadata: { name: "NBT内部名称", region_count: 3, author: "作者" }, regions: [{ name: "一号选区" }, { name: "多层完整选区" }, { name: "末选区" }] };
+  const original = structuredClone(parsed); const analysis = store.projectionRecordAnalysis(parsed);
+  assert.equal(analysis.displayName, undefined); assert.equal(analysis.internalName, "NBT内部名称");
+  assert.deepEqual(analysis.regionNames, parsed.regions.map((region) => region.name)); assert.deepEqual(parsed, original);
+  let saved; const api = categoryStore({ writeUserConfigFile: async (_, value) => { saved = JSON.parse(value); } });
+  const path = "C:/投影/文件名.litematic";
+  const next = await api.addOrUpdateRecordFromAnalysis(empty(), path, { ...analysis, displayName: "错误显示名" });
+  assert.equal(next.records[0].displayName, "文件名.litematic"); assert.equal(next.records[0].internalName, "NBT内部名称");
+  assert.deepEqual(saved.records[0].regionNames, ["一号选区", "多层完整选区", "末选区"]);
+  const inspected = await api.analyzeFile(path);
+  assert.equal(inspected.displayName, "文件名.litematic"); assert.equal(inspected.internalName, "新名称");
+  assert.deepEqual(inspected.regionNames, ["第一选区", "第二选区"]);
+  assert.equal(store.projectionRecordAnalysis({ metadata: { name: "不能当作选区名", region_count: 2 } }).regionNames, undefined);
+  assert.equal(store.projectionRecordAnalysis({ regions: [{ name: "有效" }, {}] }).regionNames, undefined);
+  assert.deepEqual(store.projectionRecordAnalysis({ regions: [] }).regionNames, []);
+});
 
 test("旧标签幂等迁移：多分配、预览/元数据、排序与本地文件夹完整保留", () => {
   const old = { records: [record("A", ["建筑", "红石", "红石"]), record("B", ["红石"]), record("C")], folders: [{ path: "C:/投影", enabled: false, recursive: false, sort_index: 0, lastSyncedAt: 19, lastScanCount: 3, lastError: "历史状态" }] };
