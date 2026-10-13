@@ -348,3 +348,33 @@ pre {
     white-space: pre-wrap;
     word-break: break-all;
 }
+
+/* ---------------------------------------------------------------------------
+   Virtual-list rows.
+   These rules lived in the pre-merge ui/shell/widget/subwindow.css (original
+   L340-L355) and were lost with the new architecture's stylesheet swap. Without
+   `.material-list-virtual-spacer-cell { height: var(...) }` the spacer <td>
+   keeps its natural height, so the virtual list's total scroll height follows
+   the number of *rendered* rows instead of the full list. The container then
+   clamps scrollTop, the scroll listener pushes the new value back into state,
+   and the view ping-pongs between two offsets - the mid-list oscillation users
+   see in the enumerator window.
+   --------------------------------------------------------------------------- */
+.material-list-row-odd {
+    background: rgb(255 255 255 / 2%);
+}
+
+.material-list-virtual-spacer {
+    background: transparent !important;
+}
+
+.material-list-virtual-spacer td {
+    background: transparent !important;
+}
+
+.material-list-virtual-spacer-cell {
+    height: var(--material-list-virtual-spacer-height, 0px) !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+}

@@ -116,6 +116,39 @@
 | `cargo check`（src-tauri） | 通过 |
 | 前端测试套件（18 个 `*.test.mjs`） | 17 通过；`themes.test.mjs` 失败 3 例，**为既有失败**（基线同一测试同样退出 1：`MODULE_NOT_FOUND` 于 `AppShell.tsx:57`，另含 `settings.tsx` 的 `<Textarea` 断言），与本次改动无关 |
 
+### 2.4 修复：枚举器列表滚动震荡
+
+**现象**：枚举器窗口的左右两个列表，滚动到中间时会不断在两个位置之间震荡。
+
+**根因**：虚拟列表的占位行高度失效，导致滚动高度与实际渲染行数挂钩，形成"滚动位置 ↔ 渲染行数"的反馈环。
+
+- `EnumeratorWindow` 用 `useVirtualWindow(..., 40, 10)` + `VirtualSpacerCell` 实现虚拟滚动，
+  上下各插一行占位 `<tr>`。
+- 占位格的高度原本由 `ui/shell/widget/subwindow.css` 的
+  `.material-list-virtual-spacer-cell { height: var(--material-list-virtual-spacer-height, 0px) !important; }`
+  提供（合并前 L352-357）。新架构换了 `subwindow.css`，**该规则与
+  `.material-list-virtual-spacer`、`.material-list-row-odd` 一并丢失**（`subwindow.css`
+  由 550 行变为 500 行）。
+- 规则缺失后占位 `<td>` 只保留自然高度，列表的总滚动高度≈「已渲染行数 × 40px」，
+  而非「全部行数 × 40px」。于是：滚动 → `useVirtualWindow` 增减渲染行 → 滚动高度变化
+  → 容器把 `scrollTop` 收敛到新上限 → 滚动事件把新值写回 state → 再增减渲染行……
+  在两个偏移之间往复，表现为"震荡到两个不同位置"。
+
+**修复**（两处，互为保险）：
+
+1. `ui/styles/enumerator.css`：恢复三条丢失规则
+   （`.material-list-row-odd`、`.material-list-virtual-spacer`、`.material-list-virtual-spacer-cell`），
+   并注明来源与原因。
+2. `ui/components/VirtualSpacerCell.tsx`：除原有的 CSS 自定义属性外，
+   **直接用内联 `height` 样式**设置占位高度，使其不再依赖任何外部样式表。
+   这样即使将来样式表再次变动，虚拟列表也不会退化为零高度占位。
+
+**核对**：`.material-list-table th, td { height: 40px }` 与 `useVirtualWindow` 的
+`rowHeight = 40` 一致；滚动容器 `.enumerator-value-table-wrap` 为
+`height:100%; overflow:auto`，位于 `minmax(0,1fr)` 网格轨道内，尺寸稳定，不存在其它反馈源。
+
+**验收**：`tsc --noEmit` 与 `npm run build` 通过，产物 `enumerator-*.css` 中已含三条规则。
+
 ## 三、剩余（下一阶段）
 
 | 优先级 | 工作 | 来源 |
