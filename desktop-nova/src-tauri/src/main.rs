@@ -5,6 +5,7 @@ mod platform;
 mod viewer_backend;
 mod viewer_launch_contract;
 mod shell_integration;
+mod online_sources;
 
 use application::model::ProductPreviewImage;
 use application::operations::{
@@ -1550,21 +1551,7 @@ fn reden_client() -> Result<reqwest::blocking::Client, String> {
 }
 
 fn reden_get_json(url: reqwest::Url) -> Result<serde_json::Value, String> {
-    let response = reden_client()?
-        .get(url)
-        .header(reqwest::header::USER_AGENT, "Litematica-Nova desktop/0.1")
-        .header(reqwest::header::ACCEPT, "application/json")
-        .send()
-        .map_err(|e| e.to_string())?;
-    let status = response.status();
-    let text = response.text().map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(format!(
-            "RedenMC API failed: status={} body={}",
-            status, text
-        ));
-    }
-    serde_json::from_str(&text).map_err(|e| format!("RedenMC JSON parse failed: {e}; body={text}"))
+    crate::online_sources::get_json(url, None)
 }
 
 fn reden_download_dir() -> Result<PathBuf, String> {
@@ -1607,6 +1594,12 @@ fn file_name_from_headers_or_url(
             }
         }
     }
+    // MCimg's official resource endpoint carries the real attachment name in the query.
+    if url.host_str() == Some("www.mcimg.com") && url.path().ends_with("/resource") {
+        if let Some((_, name)) = url.query_pairs().find(|(key, _)| key == "name") {
+            return sanitize_reden_file_name(&name);
+        }
+    }
     let from_url = url
         .path_segments()
         .and_then(|mut segments| segments.next_back())
@@ -1619,6 +1612,7 @@ fn reden_fetch_download(
     start_url: reqwest::Url,
     fallback_name: &str,
     operations: &ApplicationOperations,
+    request_id: Option<&str>,
 ) -> Result<RedenDownloadOutput, String> {
     let client = reden_client()?;
     let mut url = start_url;
@@ -1626,13 +1620,11 @@ fn reden_fetch_download(
         if let Some(provider) = reden_external_drive(&url) {
             return Ok(RedenDownloadOutput::ExternalLink { url: url.to_string(), provider });
         }
-        let response = client
+        let response = crate::online_sources::send_request(client
             .get(url.clone())
             .header(reqwest::header::USER_AGENT, "Litematica-Nova desktop/0.1")
             .header(reqwest::header::REFERER, "https://redenmc.com/")
-            .header(reqwest::header::ORIGIN, "https://redenmc.com")
-            .send()
-            .map_err(|e| e.to_string())?;
+            .header(reqwest::header::ORIGIN, "https://redenmc.com"), request_id)?;
         let status = response.status();
         if status.is_redirection() {
             let Some(location) = response.headers().get(reqwest::header::LOCATION) else {
@@ -1662,8 +1654,7 @@ fn reden_fetch_download(
         }
         if reden_looks_html(&content_type, &bytes) {
             return Err(format!(
-                "RedenMC returned an HTML/external-drive page instead of .litematic: url={} content-type={} bytes={}",
-                final_url,
+                "RedenMC returned an HTML/external-drive page instead of .litematic: content-type={} bytes={}",
                 content_type,
                 bytes.len()
             ));
@@ -1723,7 +1714,7 @@ async fn reden_download_attachment(
             machine_id, attachment_index
         ))
         .map_err(|e| e.to_string())?;
-        reden_fetch_download(url, &format!("{machine_id}-{attachment_index}.litematic"), &operations)
+        reden_fetch_download(url, &format!("{machine_id}-{attachment_index}.litematic"), &operations, None)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1754,7 +1745,7 @@ async fn reden_download_parametric(
                 pairs.append_pair("zSize", &value.to_string());
             }
         }
-        reden_fetch_download(url, &format!("{machine_id}.litematic"), &operations)
+        reden_fetch_download(url, &format!("{machine_id}.litematic"), &operations, None)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2373,6 +2364,10 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             shell_integration::application_take_open_files,
+            online_sources::application_online_search,
+            online_sources::application_online_detail,
+            online_sources::application_online_download,
+            online_sources::application_online_cancel,
             application_update_snapshot,
             application_update_check,
             application_update_download,

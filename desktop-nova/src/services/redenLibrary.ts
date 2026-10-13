@@ -28,6 +28,9 @@ export interface RedenAttachment {
 export interface RedenMachine {
   type?: string;
   key: string;
+  pageUrl?: string;
+  sourceId?: string;
+  downloadListAvailable?: boolean;
   name?: string;
   summary?: string | null;
   description?: string | null;
@@ -68,7 +71,7 @@ export interface RedenDownloadedProjection {
 
 export interface RedenExternalLink {
   kind: "external_link";
-  provider: "quark" | "baidu";
+  provider: string;
   url: string;
 }
 

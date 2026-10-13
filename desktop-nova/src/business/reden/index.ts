@@ -13,6 +13,7 @@ export type {
 } from "../../services/redenLibrary";
 
 export { ONLINE_PROJECTION_PROVIDERS, type OnlineProjectionProvider } from "../../services/onlineProjectionProviders";
+export { searchOnlineSource, fetchOnlineSourceDetail, downloadOnlineSource, cancelOnlineRequest, onlineRequestId } from "../../services/onlineSources";
 export {
   downloadRedenAttachment,
   downloadRedenParametric,

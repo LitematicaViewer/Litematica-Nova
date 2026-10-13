@@ -21,6 +21,8 @@ tokio = { version = "1", features = ["sync", "time", "macros"] }
 base64 = "0.22"
 sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+httpdate = "=1.0.3"
+scraper = { version = "=0.24.0", default-features = false }
 image = "0.25"
 viewer-launch-contract = { path = "../../tools/viewer-core/crates/viewer-launch-contract" }
 tauri-plugin-updater = "=2.10.0"

@@ -18,9 +18,9 @@ const source = text("../ui/windows/reden_library/RedenLibraryWindow.tsx");
 const label = node => node == null || typeof node === "boolean" ? "" : Array.isArray(node) ? node.map(label).join("") : typeof node === "object" ? label(node.props?.children) : String(node);
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-function harness({ attachment, output, emitError, importError } = {}) {
+function harness({ attachment, output, emitError, importError, search } = {}) {
   const machine = { key: "test", name: "真实附件", attachments: [{ name: "scene.litematic", url: attachment }] };
-  const calls = { downloaded: 0, imported: 0, emitted: 0, opened: [] };
+  const calls = { downloaded: 0, imported: 0, emitted: 0, opened: [], searched: [], cancelled: [] };
   const facade = { ...service,
     searchRedenLitematica: async () => ({ d: [machine] }), fetchRedenMachineDetail: async () => machine,
     loadLibrary: async () => ({ records: [], folders: [] }),
@@ -28,15 +28,24 @@ function harness({ attachment, output, emitError, importError } = {}) {
     downloadRedenAttachment: async () => { calls.downloaded++; return output ?? { kind: "downloaded", path: "C:/scene.litematic", file_name: "scene.litematic", bytes: 123 }; },
     openExternalPath: async url => calls.opened.push(url),
   };
+  let nextId = 0;
+  const online = { ...providers,
+    onlineRequestId: () => `test-request-${++nextId}`,
+    searchOnlineSource: async (sourceId, query, requestId) => { calls.searched.push({ sourceId, query, requestId }); return search ? await search() : { d: [machine] }; },
+    fetchOnlineSourceDetail: async () => machine,
+    downloadOnlineSource: facade.downloadRedenAttachment,
+    cancelOnlineRequest: async id => { calls.cancelled.push(id); },
+  };
   const slots = []; let cursor = 0; let tree;
   const hooks = { ...React,
     useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = typeof initial === "function" ? initial() : initial; return [slots[i], next => { slots[i] = typeof next === "function" ? next(slots[i]) : next; }]; },
+    useRef(initial) { const i = cursor++; if (!(i in slots)) slots[i] = { current: initial }; return slots[i]; },
     useEffect() {}, useLayoutEffect() {},
   };
   const exports = moduleFrom(`${source}\nexport { RedenLibraryPanel };`, name => {
     if (name === "react") return hooks;
     if (name.endsWith("src/business/facade")) return facade;
-    if (name.endsWith("src/business/reden")) return providers;
+    if (name.endsWith("src/business/reden")) return online;
     if (name.endsWith("platform/events")) return { emitEvent: async () => { calls.emitted++; if (emitError) throw new Error(emitError); } };
     if (name.endsWith("libraryEvents")) return { projectionLibraryImportedEvent: "library-imported" };
     if (name.endsWith("Dialog")) return { Dialog: "dialog" };
@@ -94,14 +103,44 @@ test("后台重定向网盘也先确认，确认后仅系统浏览器打开", as
   assert.deepEqual(h.calls.opened, ["https://pan.baidu.com/s/abc"]); assert.equal(h.calls.imported, 0);
 });
 
-test("八个来源区分 Reden API 与原站网页，不冒充已接入搜索下载", async () => {
+test("五个真实前端适配与三站原页状态分别呈现，不以缺文档跳过", async () => {
   assert.equal(providers.ONLINE_PROJECTION_PROVIDERS.length, 8);
-  assert.equal(providers.ONLINE_PROJECTION_PROVIDERS.filter(item => item.mode === "reden_api").length, 1);
+  assert.equal(providers.ONLINE_PROJECTION_PROVIDERS.filter(item => item.mode === "native").length, 5);
   for (const item of providers.ONLINE_PROJECTION_PROVIDERS) assert.equal(new URL(item.url).protocol, "https:");
-  const h = harness(); h.button("Minemev").props.onClick(); await h.settle();
+  const h = harness(); h.button("Choculaterie").props.onClick(); await h.settle();
   assert(h.content().includes("仅网页访问")); assert.equal(h.button("搜索"), undefined);
   h.button("在系统浏览器打开原站").props.onClick(); await h.settle();
   assert.equal(h.calls.opened.length, 0);
   await h.button("确认并打开系统浏览器").props.onClick(); await h.settle();
-  assert.deepEqual(h.calls.opened, ["https://www.minemev.com/"]);
+  assert.deepEqual(h.calls.opened, ["https://choculaterie.com/"]);
+});
+
+test("统一查询带正确来源和请求ID，MCimg使用确认的真实域名", async () => {
+  const h = harness(); h.button("投影工坊").props.onClick(); await h.settle();
+  await h.button("搜索").props.onClick(); await h.settle();
+  assert.equal(h.calls.searched[0].sourceId, "projection-workshop");
+  assert.equal(h.calls.searched[0].requestId, "test-request-1");
+  assert.equal(providers.ONLINE_PROJECTION_PROVIDERS.find(p => p.id === "projection-workshop").url, "https://www.mcimg.com/");
+  assert(h.content().includes("本页 1 个结果"));
+  assert(source.includes("setTimeout(() => void handleRedenSearch(), 500)"));
+});
+
+test("切换来源取消等待任务，迟到结果不会回写新来源", async () => {
+  let resolve; const pending = new Promise(done => { resolve = done; });
+  const h = harness({ search: () => pending });
+  const completion = h.button("搜索").props.onClick(); await h.settle();
+  h.button("Choculaterie").props.onClick(); await h.settle();
+  assert.deepEqual(h.calls.cancelled, ["test-request-1"]);
+  resolve({ d: [{ key: "old", name: "迟到旧结果" }] }); await completion; await h.settle();
+  assert(!h.content().includes("迟到旧结果")); assert(h.content().includes("仅网页访问"));
+});
+
+test("用户取消查询后无入库、无迟到结果回显", async () => {
+  let resolve; const pending = new Promise(done => { resolve = done; });
+  const h = harness({ search: () => pending });
+  const completion = h.button("搜索").props.onClick(); await h.settle();
+  h.button("取消等待任务").props.onClick(); await h.settle();
+  resolve({ d: [{ key: "old", name: "不应回显" }] }); await completion; await h.settle();
+  assert.deepEqual(h.calls.cancelled, ["test-request-1"]);
+  assert(!h.content().includes("不应回显")); assert.equal(h.calls.imported, 0);
 });
