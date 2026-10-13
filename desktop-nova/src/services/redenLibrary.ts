@@ -59,10 +59,31 @@ export interface RedenDetailResponse {
   downloads?: number;
 }
 
-export interface RedenDownloadOutput {
+export interface RedenDownloadedProjection {
+  kind: "downloaded";
   path: string;
   file_name: string;
   bytes: number;
+}
+
+export interface RedenExternalLink {
+  kind: "external_link";
+  provider: "quark" | "baidu";
+  url: string;
+}
+
+export type RedenDownloadOutput = RedenDownloadedProjection | RedenExternalLink;
+
+/** Drive pages are never treated as projection downloads or opened without confirmation. */
+export function redenExternalDriveLink(value: string | undefined): RedenExternalLink | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    const provider = url.hostname === "pan.quark.cn" ? "quark"
+      : ["pan.baidu.com", "yun.baidu.com"].includes(url.hostname) ? "baidu" : null;
+    return provider ? { kind: "external_link", provider, url: url.href } : null;
+  } catch { return null; }
 }
 
 export interface RedenSizes {
@@ -151,4 +172,10 @@ export async function importDownloadedLitematic(state: LibraryState, path: strin
     throw new Error(`下载文件不是 .litematic：${path}`);
   }
   return await addOrUpdateRecord(state, path);
+}
+
+/** Persistence succeeded before notifying other windows; a broadcast failure is only a refresh warning. */
+export async function notifyRedenImport(notify: () => Promise<void>): Promise<string | null> {
+  try { await notify(); return null; }
+  catch (error) { return `已入库，但主窗口刷新通知失败，请手动刷新：${String(error)}`; }
 }

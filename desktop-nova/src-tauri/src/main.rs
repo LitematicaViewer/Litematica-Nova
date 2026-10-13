@@ -1416,10 +1416,58 @@ struct RedenSizesInput {
 }
 
 #[derive(Serialize)]
-struct RedenDownloadOutput {
-    path: String,
-    file_name: String,
-    bytes: usize,
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum RedenDownloadOutput {
+    Downloaded { path: String, file_name: String, bytes: usize },
+    ExternalLink { url: String, provider: &'static str },
+}
+
+fn reden_external_drive(url: &reqwest::Url) -> Option<&'static str> {
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() { return None; }
+    match url.host_str()? {
+        "pan.quark.cn" => Some("quark"),
+        "pan.baidu.com" | "yun.baidu.com" => Some("baidu"),
+        _ => None,
+    }
+}
+
+fn reden_looks_html(content_type: &str, bytes: &[u8]) -> bool {
+    let trimmed = bytes.iter().position(|byte| !byte.is_ascii_whitespace()).map(|at| &bytes[at..]).unwrap_or(bytes);
+    content_type.to_ascii_lowercase().contains("text/html")
+        || trimmed.get(..9).is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"<!doctype"))
+        || trimmed.get(..5).is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"<html"))
+}
+
+fn reden_save_projection(
+    directory: &Path, file_name: &str, bytes: &[u8],
+    validate: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<RedenDownloadOutput, String> {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = directory.join(format!(".nova-reden-{}-{sequence}.litematic", std::process::id()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|e| e.to_string())?;
+        file.write_all(bytes).map_err(|e| e.to_string())?;
+        drop(file);
+        // Reuse the existing core NBT/projection parser, not extension, MIME, or magic-only checks.
+        validate(&temporary).map_err(|error| format!("下载内容不是有效的 NBT 投影，未保存或入库：{error}"))?;
+        let original = Path::new(file_name);
+        let stem = original.file_stem().and_then(|name| name.to_str()).unwrap_or("reden-download");
+        let mut destination = directory.join(file_name);
+        let mut suffix = 1;
+        while destination.exists() {
+            destination = directory.join(format!("{stem}-{suffix}.litematic"));
+            suffix += 1;
+        }
+        std::fs::rename(&temporary, &destination).map_err(|e| e.to_string())?;
+        Ok(RedenDownloadOutput::Downloaded {
+            path: destination.display().to_string(),
+            file_name: destination.file_name().and_then(|name| name.to_str()).unwrap_or(file_name).to_string(),
+            bytes: bytes.len(),
+        })
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result
 }
 
 fn reden_client() -> Result<reqwest::blocking::Client, String> {
@@ -1499,10 +1547,14 @@ fn file_name_from_headers_or_url(
 fn reden_fetch_download(
     start_url: reqwest::Url,
     fallback_name: &str,
+    operations: &ApplicationOperations,
 ) -> Result<RedenDownloadOutput, String> {
     let client = reden_client()?;
     let mut url = start_url;
     for _ in 0..6 {
+        if let Some(provider) = reden_external_drive(&url) {
+            return Ok(RedenDownloadOutput::ExternalLink { url: url.to_string(), provider });
+        }
         let response = client
             .get(url.clone())
             .header(reqwest::header::USER_AGENT, "Litematica-Nova desktop/0.1")
@@ -1537,11 +1589,7 @@ fn reden_fetch_download(
                 bytes.len()
             ));
         }
-        let looks_html = content_type.contains("text/html")
-            || bytes.starts_with(b"<!DOCTYPE")
-            || bytes.starts_with(b"<!doctype")
-            || bytes.starts_with(b"<html");
-        if looks_html {
+        if reden_looks_html(&content_type, &bytes) {
             return Err(format!(
                 "RedenMC returned an HTML/external-drive page instead of .litematic: url={} content-type={} bytes={}",
                 final_url,
@@ -1553,17 +1601,8 @@ fn reden_fetch_download(
             return Err("RedenMC download returned an empty file.".to_string());
         }
         let file_name = file_name_from_headers_or_url(&headers, &final_url, fallback_name);
-        let path = reden_download_dir()?.join(file_name);
-        let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-        file.write_all(&bytes).map_err(|e| e.to_string())?;
-        return Ok(RedenDownloadOutput {
-            path: path.display().to_string(),
-            file_name: path
-                .file_name()
-                .and_then(|v| v.to_str())
-                .unwrap_or("reden-download.litematic")
-                .to_string(),
-            bytes: bytes.len(),
+        return reden_save_projection(&reden_download_dir()?, &file_name, &bytes, |temporary| {
+            operations.inspect_project(InspectProjectInput { source_path: temporary.display().to_string() }).map(|_| ())
         });
     }
     Err("RedenMC download redirected too many times.".to_string())
@@ -1601,7 +1640,9 @@ async fn reden_machine_detail(machine_id: String) -> Result<serde_json::Value, S
 async fn reden_download_attachment(
     machine_id: String,
     attachment_index: u32,
+    operations: tauri::State<'_, ApplicationOperations>,
 ) -> Result<RedenDownloadOutput, String> {
+    let operations = operations.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         if attachment_index == 0 {
             return Err("RedenMC attachment index is 1-based; index 0 is invalid.".to_string());
@@ -1611,7 +1652,7 @@ async fn reden_download_attachment(
             machine_id, attachment_index
         ))
         .map_err(|e| e.to_string())?;
-        reden_fetch_download(url, &format!("{machine_id}-{attachment_index}.litematic"))
+        reden_fetch_download(url, &format!("{machine_id}-{attachment_index}.litematic"), &operations)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1621,7 +1662,9 @@ async fn reden_download_attachment(
 async fn reden_download_parametric(
     machine_id: String,
     sizes: RedenSizesInput,
+    operations: tauri::State<'_, ApplicationOperations>,
 ) -> Result<RedenDownloadOutput, String> {
+    let operations = operations.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut url = reqwest::Url::parse(&format!(
             "https://redenmc.com/api/mc-services/yisibite/{}",
@@ -1640,10 +1683,43 @@ async fn reden_download_parametric(
                 pairs.append_pair("zSize", &value.to_string());
             }
         }
-        reden_fetch_download(url, &format!("{machine_id}.litematic"))
+        reden_fetch_download(url, &format!("{machine_id}.litematic"), &operations)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod reden_download_tests {
+    use super::*;
+
+    #[test]
+    fn drive_links_are_explicit_and_never_match_lookalikes() {
+        for (value, expected) in [("https://pan.quark.cn/s/abc", Some("quark")), ("https://pan.baidu.com/s/abc", Some("baidu")), ("https://yun.baidu.com/s/abc", Some("baidu")), ("https://pan.baidu.com.evil.test/a", None), ("http://pan.quark.cn/a", None), ("https://user:pass@pan.baidu.com/a", None)] {
+            assert_eq!(reden_external_drive(&reqwest::Url::parse(value).unwrap()), expected);
+        }
+    }
+
+    #[test]
+    fn html_cannot_be_hidden_by_whitespace_case_or_mime() {
+        assert!(reden_looks_html("application/octet-stream", b" \r\n<HTML><body>login</body>"));
+        assert!(reden_looks_html("application/octet-stream", b"<!DoCtYpE html>"));
+        assert!(reden_looks_html("TEXT/HTML; charset=utf8", b"page"));
+        assert!(!reden_looks_html("application/octet-stream", &[0x1f, 0x8b, 8, 0]));
+    }
+
+    #[test]
+    fn invalid_projection_is_removed_before_final_file_or_import() {
+        let directory = std::env::temp_dir().join(format!("nova-reden-validation-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let result = reden_save_projection(&directory, "not-a-projection.litematic", b"not NBT", |temporary| {
+            assert_eq!(std::fs::read(temporary).unwrap(), b"not NBT");
+            Err("NBT decode rejected".into())
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+        std::fs::remove_dir(&directory).unwrap();
+    }
 }
 
 #[tauri::command]

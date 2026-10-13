@@ -1,6 +1,6 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "windows": ["main", "material-list", "local-library-folders"],
-  "permissions": ["core:default", "dialog:default", "shell:default"]
+  "windows": ["main", "material-list", "local-library-folders", "reden-library"],
+  "permissions": ["core:default", "core:event:allow-emit", "core:event:allow-listen", "dialog:default", "shell:default"]
 }
