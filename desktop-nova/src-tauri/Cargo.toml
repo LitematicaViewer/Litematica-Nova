@@ -20,7 +20,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["sync", "time", "macros"] }
 base64 = "0.22"
 sha2 = "0.10"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "cookies", "json", "rustls-tls"] }
 image = "0.25"
 # Restored with the game-resource manager (L1):
 #   flate2  - gunzip NBT payloads read while importing game data

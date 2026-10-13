@@ -269,16 +269,19 @@ checkGameResourceHealth() → GameResourceHealthRow[]            // 界面「健
 目标仍是 app-data 下的 `minecraft-assets/block_2d/initial` 与 `minecraft-assets/item/initial`。
 这样 942 个 Mojang PNG **无需入库**即可让"内建图标"这一离线回退源可用。
 
-**未接入（有意为之）**：4 个远端下载命令（CCVault 方块/物品图标、Minecraft Wiki 方块图标/枚举全集）
-已注册但返回明确错误信息，不做静默 no-op。原因：
+**未接入（有意为之）**：Minecraft Wiki 的两个下载命令（方块图标 / 枚举全集）
+返回明确错误信息，不做静默 no-op。原因是 Wiki 路径为 HTML 抓取
+（`wiki_block_icons.rs` 682 行），其父模块辅助（`fetch_wiki_html`、`element_text`、
+`extract_code_values_from_cell`、`normalize_html_text`、`WIKI_ENUM_BLOCKS_URL` 等）
+尚需回移；该文件已放入仓库但从 `main.rs` 注释掉，保持一次改动一个可验证单元。
 
-1. CCVault 路径依赖**硬编码在合并前源码里的 API key**
-   （`VAULT_API_KEY` / `VAULT_LEGACY_API_KEY`，另加从站点 JS 包运行时发现 key 的逻辑）——
-   这类凭据不应原样带入；**这也是一处需要你决策的安全项**。
-2. Wiki 路径是 HTML 抓取（`wiki_block_icons.rs` 682 行），其父模块辅助
-   （`fetch_wiki_html`、`element_text`、`extract_code_values_from_cell`、`normalize_html_text`、
-   `WIKI_ENUM_BLOCKS_URL` 等）尚需回移；该文件已放入仓库但从 `main.rs` 注释掉，
-   以保持一次改动一个可验证单元。
+**CCVault 已接入，且不再存任何凭据**：合并前源码里带有两个硬编码 API key
+（`VAULT_API_KEY` / `VAULT_LEGACY_API_KEY`，由当时的 Agent 填入）。现在改为
+**运行时自动获取**——`discover_vault_api_key()` 先从站点首页 HTML 定位
+`static/js/index.*.js`，再从中提取 key（先找 `/api/token` POST 前绑定的 `const e="…"`，
+退化为找字面量 `x-api-key` 头值），然后用它调 `/api/token` 换 token。
+仓库内已无任何 key 字符串。若站点 JS 结构变化导致发现失败，会返回
+「未能从 ccvaults.com 自动获取 API Key（站点 JS 结构可能已变化）」而不是静默失败。
 
 ### L2 消费方改造 —— 已完成（本次）
 
@@ -303,12 +306,22 @@ checkGameResourceHealth() → GameResourceHealthRow[]            // 界面「健
 ### L2 之后的已知缺口
 
 1. **图标包目录布局**：合并前的 `blockIconResolver`（207 行）还有一层
-   `ActiveIconLayout` 解析（把搜索根拆成 `block_itemLike` / `item` / `block_2d` / `block_icon`
-   四类，并按 `item_like` / `block` 分支选包），本次采用的最小接入版未含该层。
-   当某个图标包内部不是"根目录平铺 PNG"时，需要补回该层。
-2. **图标候选规则**：合并前版本对 `_slab` → `_planks`、`potted_*` → `flower_pot`
-   有额外候选，当前沿用公开线的 `item_id` 映射规则。若发现个别方块缺图标，可从
-   `refs/merge-safety-pre-resolution:desktop-nova/src/services/blockIconResolver.ts` 补。
+   `ActiveIconLayout` 解析，把搜索根拆成 `block_itemLike` / `item` / `block_2d` /
+   `block_icon` 四类目录，并据此拼 `buildStorageRelativePath` 候选路径；本次采用
+   的最小接入版只做「按搜索根逐根尝试」，未含该层。当某个图标包内部不是
+   "根目录平铺 PNG" 时（例如内建解包后的 `block_2d/initial/...` 布局），需要补回该层。
+2. **图标候选由规则文件驱动**（与 L3 相关，已确认来源）：
+   `iconCandidates` 的两个额外分支不是写死的业务规则，而是读枚举器集合：
+   - `item_like` 分支 ← `custom:itemlike_block` 集合，即
+     **`pack-in/enumerator/custom/itemlike_block.json`**（已随包，另含
+     `survival_impossible` / `functional_blocks` / `tools_n_Utilities` 等 9 个集合）；
+   - `_slab` → `_planks`、`potted_*` → `flower_pot` 属 `iconCandidates` 内的字面规则。
+
+   合并前版本通过 `loadEnumeratorCollections()` 取集合、并用 `normalizeBlockId`
+   归一化后组成 membership，再按 `item_like` / `block` 两分支选包。L3 若发现
+   个别方块缺图标（典型是台阶、花盆、物品形态方块），按此恢复到注册表搜索根
+   的分支选择即可；参考
+   `refs/merge-safety-pre-resolution:desktop-nova/src/services/blockIconResolver.ts`。
 
 ### 仍需回移的 L1 远端部分
 
