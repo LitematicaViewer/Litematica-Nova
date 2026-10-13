@@ -2028,6 +2028,26 @@ async fn open_enumerator_window(
 }
 
 #[tauri::command]
+async fn open_asset_manager_window(app: AppHandle) -> Result<(), String> {
+    const LABEL: &str = "asset-manager";
+
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App("asset_manager.html".into()))
+        .title("Game Resources")
+        .inner_size(1100.0, 720.0)
+        .min_inner_size(820.0, 520.0)
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn open_reden_library_window(app: AppHandle) -> Result<(), String> {
     const LABEL: &str = "reden-library";
 
@@ -2352,6 +2372,7 @@ fn main() {
             ai_chat_completion,
             open_material_list_window,
             open_enumerator_window,
+            open_asset_manager_window,
             open_reden_library_window,
             open_local_library_folders_window,
             open_ui_demo_window,

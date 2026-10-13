@@ -1,0 +1,106 @@
+/* Game-resource manager window (L3).
+   Layout only: colours come from the active theme's design tokens. */
+
+.asset-manager-root {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.asset-manager-window {
+    display: grid;
+    grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto;
+    gap: 10px;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    padding: 12px;
+    color: var(--ln-body-text-color, CanvasText);
+    background: var(--ln-ui-background-color, Canvas);
+}
+
+.asset-manager-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.asset-manager-header h1 {
+    margin: 0;
+    font-size: 1.15em;
+}
+
+.asset-manager-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.asset-manager-nav-item.active {
+    font-weight: 700;
+    outline: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+}
+
+.asset-manager-slot-row,
+.asset-manager-source-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.asset-manager-slot-row > span:first-child,
+.asset-manager-source-row > span:first-child {
+    min-width: 32px;
+    color: var(--ln-muted-text-color, GrayText);
+}
+
+.asset-manager-hint {
+    color: var(--ln-muted-text-color, GrayText);
+    font-size: 0.9em;
+}
+
+.asset-manager-status {
+    min-height: 1.4em;
+    color: var(--ln-muted-text-color, GrayText);
+    font-size: 0.9em;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.asset-manager-table-wrap {
+    min-height: 0;
+    overflow: auto;
+    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+}
+
+.asset-manager-health {
+    min-height: 0;
+    max-height: 30%;
+    overflow: auto;
+    font-size: 0.9em;
+}
+
+.asset-manager-health h2 {
+    margin: 0 0 4px;
+    font-size: 1em;
+}
+
+.asset-manager-health ul {
+    margin: 0;
+    padding-left: 18px;
+}
+
+.asset-manager-health li.error {
+    color: var(--ln-error-text-color, #b3261e);
+}
+
+.asset-manager-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}

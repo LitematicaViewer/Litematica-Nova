@@ -35,6 +35,7 @@ import {
   normalizeShowUiTestPage,
   normalizeTheme,
   normalizeColorMode,
+  openAssetManagerWindow,
   saveLocalLibraryTailPathCountConfig,
   saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
@@ -338,6 +339,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
           <Button className="btn" onClick={() => openUserConfigDir()}>打开目录</Button>
           <Button className="btn" onClick={resetConfigDir}>恢复默认目录</Button>
           <Button className="btn" onClick={migrateConfigDir}>迁移当前配置到新目录</Button>
+          <Button className="btn" onClick={() => void openAssetManagerWindow()}>游戏资源管理</Button>
         </div>
         <div className="settings-help-text">
           用户态文件会写入 projection-library/js_library.json、previews/、render/、generation-templates/custom/ 和普通 config。API Key 不写入普通 config。

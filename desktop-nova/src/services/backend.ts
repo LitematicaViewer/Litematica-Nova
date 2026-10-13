@@ -41,6 +41,7 @@ export {
 } from "../platform/files";
 
 export {
+  openAssetManagerWindow,
   openLocalLibraryFoldersWindow,
   openMaterialListWindow,
   openRedenLibraryWindow,

@@ -17,6 +17,13 @@ export function openEnumeratorWindow(activeFile?: string | null): Promise<void> 
 }
 
 /**
+ * Opens or focuses the desktop game-resource manager window.
+ */
+export function openAssetManagerWindow(): Promise<void> {
+  return invoke("open_asset_manager_window");
+}
+
+/**
  * Opens or focuses the desktop RedenMC online-library window.
  */
 export function openRedenLibraryWindow(): Promise<void> {
