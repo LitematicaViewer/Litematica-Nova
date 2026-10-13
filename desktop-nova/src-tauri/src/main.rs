@@ -75,6 +75,8 @@ struct UserConfig {
     show_ui_test_page: bool,
     #[serde(default = "default_local_library_tail_path_count")]
     local_library_tail_path_count: u32,
+    #[serde(default = "default_statistics_enumerator_info_rules")]
+    statistics_enumerator_info_rules: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -86,6 +88,7 @@ struct UserConfigInput {
     material_list_window_behavior: Option<String>,
     show_ui_test_page: Option<bool>,
     local_library_tail_path_count: Option<u32>,
+    statistics_enumerator_info_rules: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -477,6 +480,7 @@ fn default_user_config() -> UserConfig {
         material_list_window_behavior: default_material_list_window_behavior(),
         show_ui_test_page: default_show_ui_test_page(),
         local_library_tail_path_count: default_local_library_tail_path_count(),
+        statistics_enumerator_info_rules: default_statistics_enumerator_info_rules(),
     }
 }
 
@@ -520,6 +524,26 @@ fn normalize_local_library_tail_path_count(value: u32) -> u32 {
         value
     } else {
         default_local_library_tail_path_count()
+    }
+}
+
+fn default_statistics_enumerator_info_rules() -> Vec<String> {
+    vec![
+        "理论版本 = version(L)".to_string(),
+        "生存不可达 = any(L & survival_impossible)".to_string(),
+    ]
+}
+
+fn normalize_statistics_enumerator_info_rules(values: Vec<String>) -> Vec<String> {
+    let normalized: Vec<String> = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    if normalized.is_empty() {
+        default_statistics_enumerator_info_rules()
+    } else {
+        normalized
     }
 }
 
@@ -600,6 +624,8 @@ fn read_user_config_data(dir: &Path) -> UserConfig {
         normalize_material_list_window_behavior(&config.material_list_window_behavior);
     config.local_library_tail_path_count =
         normalize_local_library_tail_path_count(config.local_library_tail_path_count);
+    config.statistics_enumerator_info_rules =
+        normalize_statistics_enumerator_info_rules(config.statistics_enumerator_info_rules);
     config
 }
 
@@ -884,6 +910,9 @@ fn save_user_config(input: UserConfigInput) -> Result<UserConfigInfo, String> {
     }
     if let Some(count) = input.local_library_tail_path_count {
         config.local_library_tail_path_count = normalize_local_library_tail_path_count(count);
+    }
+    if let Some(rules) = input.statistics_enumerator_info_rules {
+        config.statistics_enumerator_info_rules = normalize_statistics_enumerator_info_rules(rules);
     }
     write_user_config_data(&dir, &config)?;
     Ok(UserConfigInfo {

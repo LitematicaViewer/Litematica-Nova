@@ -72,47 +72,60 @@
 | `npm run build` | 通过，1634 模块；产出 `dist/enumerator.html`、`enumerator-*.css`、`enumerator-*.js`、`enumeratorService-*.js` |
 | `cargo check`（src-tauri） | 通过 |
 
-## 二、下一阶段（未完成）
+## 二、已完成（第二阶段）
 
-统计页的枚举器对接仍未恢复，原因是它依赖一条**在新架构中完全缺失的配置链**。
+### 2.1 `statistics_enumerator_info_rules` 配置链（前置阻塞项已解除）
 
-### 2.1 阻塞项：`statistics_enumerator_info_rules` 配置字段
+| 层 | 改动 |
+| --- | --- |
+| Rust `src-tauri/src/main.rs` | `UserConfig` 加 `statistics_enumerator_info_rules: Vec<String>`（`#[serde(default = ...)]`）；`UserConfigInput` 加 `Option<Vec<String>>`；新增 `default_statistics_enumerator_info_rules()`（默认 `理论版本 = version(L)` / `生存不可达 = any(L & survival_impossible)`）与 `normalize_statistics_enumerator_info_rules()`；`read_user_config_data` 载入时归一化；`save_user_config` 接受该字段；`default_user_config()` 补齐字段 |
+| TS `src/platform/appData.ts` | `UserConfig` 加 `statistics_enumerator_info_rules: string[]` |
+| TS `src/services/userConfig.ts` | 回移 `DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES`、`normalizeStatisticsEnumeratorInfoRules()`、`saveStatisticsEnumeratorInfoRulesConfig()`；经 facade 的 `export * from "../services/userConfig"` 转出 |
 
-该字段在两侧都不存在，需先恢复整条链：
+### 2.2 统计页：自定义统计接口 + 最低版本判断
 
-| 层 | 合并前实现位置 | 需恢复内容 |
-| --- | --- | --- |
-| Rust 配置结构 | `src-tauri/src/main.rs`：L189-190、L201、L494、L510-524、L575-576、L1735-1736 | `statistics_enumerator_info_rules: Vec<String>` 字段、`Option<Vec<String>>` 输入、`default_statistics_enumerator_info_rules()`、`normalize_statistics_enumerator_info_rules()` |
-| TS 类型 | `src/platform/appData.ts:10` | `statistics_enumerator_info_rules: string[]` |
-| 服务 | `src/services/userConfig.ts` | `DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES`（默认两条规则）、`normalizeStatisticsEnumeratorInfoRules()`、`saveStatisticsEnumeratorInfoRulesConfig()` |
+`ui/windows/main/pages/statistics/StatisticsPage.tsx`：**392 行 → 805 行**（与合并前同规模）。
 
-### 2.2 统计页待回移内容
-
-`ui/windows/main/pages/statistics/StatisticsPage.tsx`：HEAD 392 行 / 合并前 805 行。
-需回移（合并前 L26–L195、L488–L584、L589–L701、L783–L856）：
+回移内容（全部来自合并前 L26–L195、L488–L584、L589–L701、L783–L856）：
 
 | 回移项 | 说明 |
 | --- | --- |
-| `interface EnumeratorInfoRule` / `EnumeratorInfoResult` | 规则与结果结构 |
-| `parseEnumeratorInfoRules()` / `parseFunctionCall()` / `uniqValues()` | 规则解析 |
-| `buildBaseUniverse()` / `buildVersionUniverse()` / `parseVersionToken()` / `compareVersionCollections()` / `formatVersionResult()` | **最低版本判断**（依赖枚举器 `version` 类别） |
-| `evaluateEnumeratorInfoRule()` / `buildEnumeratorInfoResults()` | 规则求值，支持 `version()` / `any()` / `ratio()` 三个函数 |
-| `EnumeratorInfoEditorDialog` | 规则编辑对话框（97 行） |
-| state/effects | `enumeratorCollections`、`enumeratorInfoRules`、`showEnumeratorInfoEditor` 等，含加载与保存 |
-| JSX | 「打开枚举器…」按钮、信息结果列表、「编辑规则」按钮、`<EnumeratorDialog>` 渲染 |
+| `EnumeratorInfoRule` / `EnumeratorInfoResult` | 规则与结果结构 |
+| `parseEnumeratorInfoRules()` / `parseFunctionCall()` / `uniqValues()` | `标题 = 函数(集合表达式)` 解析 |
+| `buildBaseUniverse()` / `buildVersionUniverse()` / `parseVersionToken()` / `compareVersionCollections()` / `formatVersionResult()` | **最低版本判断**：从枚举器 `version` 类别解析版本号（含 `v_older` → 1.12.2 之前），比对目标投影引用版本，输出 `x.y.z` / `x.y.z / 更高版本` / `更高版本` / `未配置版本集合` |
+| `evaluateEnumeratorInfoRule()` / `buildEnumeratorInfoResults()` | 规则求值，支持 `version()` / `any()` / `ratio()` |
+| `EnumeratorInfoEditorDialog` | 规则编辑器（多行编辑 + 实时预览 + 恢复默认 + 保存） |
+| state / effects | `enumeratorInfoRules` 自用户配置载入；`runtimeCollection` 由统计结果生成并驱动 `loadEnumeratorCollections` |
+| JSX | 「打开枚举器…」按钮、「枚举器信息」结果区（含「编辑规则」）、`<EnumeratorDialog>`、`<EnumeratorInfoEditorDialog>` |
 
-注意：合并前统计页的 `StatisticsPage({ currentFile, theme })` 签名与新架构的
-`StatisticsPage({ currentFile })` 不同，且旧页基于自研 CSS、新页基于 shadcn/Tailwind，
-因此**不能整文件覆盖**，只能按上述段落逐段回移并适配样式。
+**适配点**（与原版不同之处）：
 
-### 2.3 后续可选
+- `StatisticsPage` 签名保持新架构的 `({ currentFile }: any)`（旧签名是 `({ currentFile, theme })`），
+  旧页基于自研 CSS、新页基于 shadcn/Tailwind，故**没有整文件覆盖**，而是按段落回移。
+- `<EnumeratorDialog>` 需要 `theme` prop，改用 `currentThemeId()`（来自 `ui/shell/themeRuntime`）提供。
+- 新增 CSS 文件 `ui/styles/statistics-enumerator.css`（205 行 + 新增区块样式）：
+  自合并前 `base.css` 的统计枚举器块（原 L2358–L2557，200 行）恢复，
+  并补上本次新标记 `.beta-statistics-enumerator-info` 的布局。
 
-- `gameResources`（40 个导出）与 Asset Manager：枚举器的 `loadBaseCollections`
-  原本可读游戏资源注册表，新架构已改为读 `pack-in/enumerator`，故非阻塞。
-- 替换组规则系统（v2 units / 预设 / 会话持久化）。
-- 投影内嵌预览图导入/清除。
+### 2.3 第二阶段验收
 
-## 三、回退方式
+| 检查 | 结果 |
+| --- | --- |
+| `tsc --noEmit` | 通过 |
+| `npm run build` | 通过，1635 模块；`StatisticsPage` chunk 由 392 行版增至 21.32 kB |
+| `cargo check`（src-tauri） | 通过 |
+| 前端测试套件（18 个 `*.test.mjs`） | 17 通过；`themes.test.mjs` 失败 3 例，**为既有失败**（基线同一测试同样退出 1：`MODULE_NOT_FOUND` 于 `AppShell.tsx:57`，另含 `settings.tsx` 的 `<Textarea` 断言），与本次改动无关 |
+
+## 三、剩余（下一阶段）
+
+| 优先级 | 工作 | 来源 |
+| --- | --- | --- |
+| 1 | 替换组规则系统：v2 units、预设管理、会话持久化、`EnumerablePickerDialog`、`ui/styles/replace.css` | `refs/merge-safety-pre-resolution`：`src/business/replace/**`、`src/services/replaceSessionStore.ts`、`tools/viewer-core/src/replace_blocks.rs` |
+| 2 | 游戏资源管理（`gameResources.ts` 40 个导出）+ Asset Manager 窗口 | `refs/merge-safety-pre-resolution`：`src/services/gameResources.ts`、`ui/windows/asset_manager/**` |
+| 3 | 投影内嵌预览图导入/清除（`clearProjectionPreviewImage` / `importProjectionPreviewImage` / `selectPreviewImageFile`） | `refs/merge-safety-pre-resolution`：`src/business/actions.ts` |
+| 4 | 渲染进度与缓存构建机制（`renderCacheStore` 9 导出、`coreReadCache` 3 导出、`RenderProgress`） | 建议按 `render-ir`/`viewer_session` 事件流重建，而非回退旧实现 |
+
+## 四、回退方式
 
 本阶段所有改动均在 `main` 的普通提交中，未改写历史。
 恢复前的基线为 `refs/merge-safety-pre-resolution`（`c9060f96`）。
