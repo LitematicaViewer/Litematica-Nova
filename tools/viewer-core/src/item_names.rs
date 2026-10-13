@@ -50,6 +50,16 @@ pub fn resolve_stockpile_item_names(
     Ok(build_payload_from_cache(materials, recipe_trees, cache))
 }
 
+pub(crate) fn resolve_stockpile_item_names_cached(minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_trees: &BTreeMap<String, RecipeTreeNode>) -> Result<StockpileItemNamesPayload> {
+    let root = cache_dir(minecraft_version)?;
+    let cache = if ["manifest.json", "en_us.json", "zh_cn.json"].iter().all(|name| root.join(name).is_file()) {
+        LangCache { manifest: Some(read_json(&root.join("manifest.json"))?), en_us: read_json(&root.join("en_us.json"))?, zh_cn: read_json(&root.join("zh_cn.json"))? }
+    } else { LangCache::empty() };
+    // The material rows already carry the verified bundled Chinese item name.
+    // Missing extra translations stay explicit, without silently fetching a JAR.
+    Ok(build_payload_from_cache(materials, recipe_trees, cache))
+}
+
 fn build_payload_from_cache(
     materials: &mut StockpileMaterialsData,
     recipe_trees: &BTreeMap<String, RecipeTreeNode>,

@@ -7,12 +7,14 @@ import { Dialog } from "../../../../components/Dialog";
 import { X } from "lucide-react";
 ﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  exportMaterials,
+  exportMaterialListWithOptions,
+  fetchMaterialRecipeCache,
   formatMaterialQuantity,
   hasInventoryMaterialSemantics,
   loadMaterialsScope,
   loadStructureStats,
   mapStructureStats,
+  recordStatisticsCommit,
   findRenderOperationForSource,
   getApplicationRenderState,
   isApplicationRenderPending,
@@ -160,8 +162,15 @@ export function MaterialListContent({
   const [multiplier, setMultiplier] = useState(1);
   const [includeContainerItems, setIncludeContainerItems] = useState(data.containerScan.enabled);
   const [asItems, setAsItems] = useState(false);
+  const [exportFormat, setExportFormat] = useState<"svg" | "txt" | "html" | "csv">("svg");
+  const [terminalRawMaterials, setTerminalRawMaterials] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isPreparingRecipes, setIsPreparingRecipes] = useState(false);
+  const [recipeStatus, setRecipeStatus] = useState("");
   const [search, setSearch] = useState("");
   const requestGeneration = useRef(0);
+  const exportInFlight = useRef(false);
+  const prepareRecipesInFlight = useRef(false);
   const [workbook, setWorkbook] = useState("scope:all");
   const [materials, setMaterials] = useState<MaterialItem[]>(
     () => [...(data.materials || [])].sort((a, b) => b.totalCount - a.totalCount),
@@ -240,13 +249,28 @@ export function MaterialListContent({
   const [exportStatus, setExportStatus] = useState("");
   const filteredMaterials = materials.filter(material => `${material.name} ${material.id}`.toLowerCase().includes(search.trim().toLowerCase()));
   const handleExport = async () => {
+    if (exportInFlight.current) return;
+    exportInFlight.current = true;
+    setIsExporting(true);
     setExportStatus("");
     try {
-      const ok = await exportMaterials(currentFile, materials, multiplier);
+      const ok = await exportMaterialListWithOptions(currentFile, {
+        scope: materialScope(workbook), includeContainerItems, multiplier,
+        minecraftVersion: "26.3", terminalRawMaterials, format: exportFormat,
+      });
       if (ok) setExportStatus("材料列表已导出");
     } catch (err: any) {
       setError(`导出失败：${err}`);
-    }
+    } finally { exportInFlight.current = false; setIsExporting(false); }
+  };
+
+  const handlePrepareRecipes = async () => {
+    if (prepareRecipesInFlight.current) return;
+    prepareRecipesInFlight.current = true;
+    setIsPreparingRecipes(true); setRecipeStatus(""); setError("");
+    try { await fetchMaterialRecipeCache(); setRecipeStatus("Minecraft 26.3 配方缓存已就绪"); }
+    catch (error: any) { setError(`准备配方失败：${error}`); }
+    finally { prepareRecipesInFlight.current = false; setIsPreparingRecipes(false); }
   };
 
   return (
@@ -264,7 +288,8 @@ export function MaterialListContent({
             <span>范围</span>
             <Dropdown value={workbook} options={options} onChange={setWorkbook} ariaLabel="材料统计范围" />
             <Button className="btn" onClick={() => loadMats(workbook)} disabled={isLoading}>重新加载</Button>
-            <Button className="btn" onClick={handleExport} disabled={isLoading || materials.length === 0}>导出材料列表</Button>
+            <Dropdown value={exportFormat} options={[{ label: "SVG", value: "svg" }, { label: "TXT", value: "txt" }, { label: "网页 HTML", value: "html" }, { label: "CSV", value: "csv" }]} onChange={value => setExportFormat(value as typeof exportFormat)} ariaLabel="材料列表导出格式" />
+            <Button className="btn" onClick={handleExport} disabled={isPreparingRecipes || isExporting || isLoading || materials.length === 0}>{isExporting ? "正在导出…" : "导出材料列表"}</Button>
             <div className="subwindow-toolbar-spacer" />
             <span>建造份数</span>
             <Input
@@ -281,6 +306,8 @@ export function MaterialListContent({
           <div className="beta-material-options">
           <Input className="input beta-material-search" type="search" aria-label="搜索材料" placeholder="搜索材料名称或 ID" value={search} onChange={event => setSearch(event.target.value)} />
           <QuantitySwitch checked={asItems} onChange={setAsItems} />
+          <label className="beta-material-check"><Checkbox checked={terminalRawMaterials} onCheckedChange={checked => setTerminalRawMaterials(checked === true)} />导出末端原料（本地配方）</label>
+          <Button className="btn" title="点击后联网下载 Minecraft 客户端提取配方，下载可能较大" onClick={handlePrepareRecipes} disabled={isPreparingRecipes || isExporting}>{isPreparingRecipes ? "正在准备配方…" : "准备26.3配方（需联网）"}</Button>
           <label className="beta-material-check">
             <Checkbox
 
@@ -294,6 +321,8 @@ export function MaterialListContent({
           <div className="subwindow-status-text">
             {isLoading ? "正在分析..." : includeContainerItems ? "已包含箱子等容器中的物品。" : "当前仅统计建造所需材料。"}
           </div>
+          {terminalRawMaterials && <div className="subwindow-status-text">末端原料使用本地配方；未确定标签、循环和特殊配方会报告，不猜测替代物；烧制燃料另计。准备配方将联网下载 Minecraft 客户端提取数据，只在点击准备按钮后进行。</div>}
+          {recipeStatus && <div className="subwindow-status-text" role="status">{recipeStatus}</div>}
           {exportStatus && <div className="subwindow-status-text" role="status">{exportStatus}</div>}
           {error && <pre className="subwindow-error" role="alert">{error}</pre>}
 
@@ -377,9 +406,9 @@ export function StatisticsPage({ currentFile }: any) {
   }
   const topMaterials = data ? [...data.materials].sort((a, b) => b.totalCount - a.totalCount) : [];
   const scan = data?.containerScan;
-  return <div className="beta-statistics-page">
+  return <React.Profiler id="statistics" onRender={recordStatisticsCommit}><div className="beta-statistics-page">
     <div className="beta-statistics-toolbar">
-      <Button className="btn" onClick={() => applicationAnalysis ? setShowMaterials(true) : openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!data || isLoading}>材料列表与导出</Button>
+      <Button className="btn" onClick={() => applicationAnalysis ? setShowMaterials(true) : openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true))} disabled={!data || isLoading}>导出材料列表</Button>
       <label className="beta-material-check"><Checkbox  checked={includeContainerItems} onCheckedChange={checked => setIncludeContainerItems((checked === true))} />统计容器内物品</label>
       <QuantitySwitch checked={asItems} onChange={setAsItems} />
       <span className="beta-statistics-file" title={currentFile}>{currentFile.split(/[\\/]/).pop()}</span>
@@ -415,7 +444,7 @@ export function StatisticsPage({ currentFile }: any) {
       </section>
     </div>
     {showMaterials && data && <MaterialsDialog data={data} onClose={() => setShowMaterials(false)} currentFile={currentFile} />}
-  </div>;
+  </div></React.Profiler>;
 }
 
 function ReadOnlyRow({ label, value }: { label: string; value: string | number }) {

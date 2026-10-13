@@ -179,6 +179,12 @@ fn build_stockpile_materials_data(
     })
 }
 
+/// Reuses the existing Stockpile mapping without reopening the schematic.
+pub(crate) fn build_materials_data_from_stats(input: &Path, stats: StableStructureOutput, minecraft_version: &str) -> Result<StockpileMaterialsData> {
+    let availability = resolve_recipe_availability(minecraft_version)?;
+    build_stockpile_materials_data(input, stats, &availability)
+}
+
 fn stockpile_material_item(
     item: &NormalizedMaterialItem,
     breakdown: StackBreakdown,

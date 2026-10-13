@@ -62,8 +62,17 @@ pub fn resolve_stockpile_icons(
     materials: &mut StockpileMaterialsData,
     recipe_trees: &BTreeMap<String, RecipeTreeNode>,
 ) -> Result<StockpileIconAssets> {
+    resolve_stockpile_icons_with_network(minecraft_version, materials, recipe_trees, true)
+}
+
+pub(crate) fn resolve_stockpile_icons_cached(minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_trees: &BTreeMap<String, RecipeTreeNode>) -> Result<StockpileIconAssets> {
+    resolve_stockpile_icons_with_network(minecraft_version, materials, recipe_trees, false)
+}
+
+fn resolve_stockpile_icons_with_network(minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_trees: &BTreeMap<String, RecipeTreeNode>, allow_network: bool) -> Result<StockpileIconAssets> {
     let keys = collect_icon_keys(materials, recipe_trees);
     let mut resolver = IconResolver::new(minecraft_version)?;
+    resolver.allow_network = allow_network;
     let mut by_key = BTreeMap::<String, IconRef>::new();
     let mut files = Vec::<IconZipAsset>::new();
 
@@ -199,6 +208,7 @@ struct IconResolver {
     cache_dir: PathBuf,
     source: String,
     jar_bytes: Option<Vec<u8>>,
+    allow_network: bool,
 }
 
 impl IconResolver {
@@ -216,11 +226,24 @@ impl IconResolver {
                 .and_then(|status| status.source)
                 .unwrap_or_else(|| "fallback_generated".to_string()),
             jar_bytes: None,
+            allow_network: true,
         })
     }
 
     fn resolve(&mut self, key: &str) -> Result<ResolvedIcon> {
         let zip_path = format!("assets/icons/{}.png", safe_icon_name(key));
+        if self.minecraft_version == "26.3" {
+            if let Some(local) = key.strip_prefix("minecraft:").filter(|local| !local.is_empty() && local.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')) {
+                let bundled = runtime_paths::app_root()?.join("pack-in/item-icons-26.3").join(format!("{local}.png"));
+                if bundled.is_file() {
+                    let bytes = fs::read(&bundled)?;
+                    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+                        self.source = "bundled_minecraft_26.3_item_icons".into();
+                        return Ok(ResolvedIcon { zip_path, bytes, available: true });
+                    }
+                }
+            }
+        }
         if !key.starts_with("minecraft:") {
             return Ok(ResolvedIcon {
                 zip_path,
@@ -240,6 +263,7 @@ impl IconResolver {
             });
         }
 
+        if self.allow_network {
         if let Some(bytes) = self.extract_from_client_jar(key)? {
             fs::write(&cache_path, &bytes)
                 .with_context(|| format!("write cached icon failed: {}", cache_path.display()))?;
@@ -248,6 +272,7 @@ impl IconResolver {
                 bytes,
                 available: true,
             });
+        }
         }
 
         Ok(ResolvedIcon {

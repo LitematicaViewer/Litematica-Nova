@@ -2,6 +2,8 @@ import { saveDialog } from "../platform/dialogs";
 import {
   getProjectMaterials,
   getProjectStats,
+  exportMaterialList,
+  prepareMaterialRecipes,
   type ApplicationMaterialScope,
 } from "../platform/applicationOperations";
 import { writeTextFileAbsolute } from "./backend";
@@ -142,11 +144,33 @@ export function mapStructureStats(parsed: any, includeContainerItems = false): S
 }
 
 export async function loadStructureStats(filePath: string, includeContainerItems = false): Promise<StatsData> {
-  const analysis = await getProjectStats({
-    sourcePath: filePath,
-    includeContainerItems,
+  const key = JSON.stringify([filePath, includeContainerItems]);
+  const existing = statsInFlight.get(key);
+  if (existing) return existing;
+  const started = performance.now();
+  const pending = getProjectStats({ sourcePath: filePath, includeContainerItems }).then(analysis => {
+    const received = performance.now();
+    const result = mapStructureStats(analysis, includeContainerItems);
+    console.info(`[NOVA_STATS_TIMING] webview_request_roundtrip_ms=${(received - started).toFixed(3)} map_ms=${(performance.now() - received).toFixed(3)}`);
+    return result;
   });
-  return mapStructureStats(analysis, includeContainerItems);
+  statsInFlight.set(key, pending);
+  try { return await pending; }
+  finally { if (statsInFlight.get(key) === pending) statsInFlight.delete(key); }
+}
+
+// Only concurrent calls share a promise. Completed results are revalidated by
+// the Application Host against source metadata, never cached by file name here.
+const statsInFlight = new Map<string, Promise<StatsData>>();
+const materialsInFlight = new Map<string, Promise<MaterialItem[]>>();
+
+export async function fetchMaterialRecipeCache(): Promise<void> {
+  const status = await prepareMaterialRecipes("26.3");
+  if (status.status !== "available" || !status.has_recipes) throw new Error("26.3 配方缓存尚未就绪，请查看准备失败原因后重试");
+}
+
+export function recordStatisticsCommit(id: string, phase: string, actualDuration: number, baseDuration: number, startTime: number, commitTime: number): void {
+  console.info(`[NOVA_STATS_REACT] id=${id} phase=${phase} actual_ms=${actualDuration.toFixed(3)} base_ms=${baseDuration.toFixed(3)} start=${startTime.toFixed(3)} commit=${commitTime.toFixed(3)}`);
 }
 
 export async function loadMaterialsScope(
@@ -154,12 +178,17 @@ export async function loadMaterialsScope(
   scope: ApplicationMaterialScope,
   includeContainerItems = false,
 ): Promise<MaterialItem[]> {
-  const result = await getProjectMaterials({
+  const key = JSON.stringify([filePath, scope.kind, scope.value, includeContainerItems]);
+  const existing = materialsInFlight.get(key);
+  if (existing) return existing;
+  const pending = getProjectMaterials({
     sourcePath: filePath,
     scope,
     includeContainerItems,
-  });
-  return (result.material_items || []).filter((entry: any) => entry.material_status === "item").map(mapMaterial);
+  }).then(result => (result.material_items || []).filter((entry: any) => entry.material_status === "item").map(mapMaterial));
+  materialsInFlight.set(key, pending);
+  try { return await pending; }
+  finally { if (materialsInFlight.get(key) === pending) materialsInFlight.delete(key); }
 }
 
 export function formatMaterialUnits(count: number, stackSize = 64): string {
@@ -227,5 +256,19 @@ export async function exportMaterials(
   }
 
   await writeTextFileAbsolute(savePath, csv);
+  return true;
+}
+
+export async function exportMaterialListWithOptions(filePath: string, options: {
+  scope: ApplicationMaterialScope; includeContainerItems: boolean; multiplier: number;
+  minecraftVersion: string; terminalRawMaterials: boolean; format: "svg" | "txt" | "html" | "csv";
+}): Promise<boolean> {
+  const extension = options.format;
+  const savePath = await saveDialog({
+    defaultPath: defaultExportName(filePath).replace(/\.csv$/, `.${extension}`),
+    filters: [{ name: extension.toUpperCase(), extensions: [extension] }],
+  });
+  if (!savePath) return false;
+  await exportMaterialList({ sourcePath: filePath, ...options, outputPath: savePath });
   return true;
 }

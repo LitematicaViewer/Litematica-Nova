@@ -1850,6 +1850,17 @@ pub struct RegionBounds {
 }
 
 pub fn load_litematic_root(path: &Path) -> Result<LitematicRoot> {
+    if std::env::var_os("NOVA_STATS_TIMING").is_some() {
+        let started = Instant::now();
+        let compressed = std::fs::read(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let read_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let parse = Instant::now();
+        let root = from_reader(GzDecoder::new(std::io::Cursor::new(compressed)))
+            .with_context(|| format!("failed to parse {}", path.display()))?;
+        eprintln!("[NOVA_STATS_TIMING] read_ms={read_ms:.3} parse_ms={:.3}", parse.elapsed().as_secs_f64() * 1000.0);
+        return Ok(root);
+    }
     let file = open_process_read_file(path)
         .with_context(|| format!("failed to open {}", path.display()))?;
     let decoder = GzDecoder::new(file);

@@ -16,8 +16,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 
 const CORE_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const CORE_TERMINATE_WAIT: Duration = Duration::from_secs(3);
@@ -30,6 +30,25 @@ pub(crate) struct ApplicationOperations {
     data_root: PathBuf,
     backend_dir: PathBuf,
     next_generation: Arc<AtomicU64>,
+    analysis_cache: Arc<Mutex<BTreeMap<AnalysisKey, Arc<OnceLock<Result<Value, String>>>>>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct AnalysisKey {
+    source: PathBuf,
+    bytes: u64,
+    modified: SystemTime,
+    args: Vec<String>,
+}
+
+impl AnalysisKey {
+    fn new(source: &Path, args: Vec<String>) -> Result<Self, String> {
+        let source = fs::canonicalize(source).map_err(|error| format!("Resolve statistics source: {error}"))?;
+        let metadata = fs::metadata(&source).map_err(|error| format!("Inspect statistics source: {error}"))?;
+        if !metadata.is_file() { return Err("Statistics source must be a file".into()); }
+        let modified = metadata.modified().map_err(|error| format!("Read statistics source revision: {error}"))?;
+        Ok(Self { source, bytes: metadata.len(), modified, args })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +201,27 @@ pub(crate) struct ProjectMaterialsInput {
     pub(crate) include_container_items: bool,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MaterialExportFormat { Svg, Txt, Html, Csv }
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ExportMaterialListInput {
+    pub(crate) source_path: String,
+    pub(crate) scope: MaterialScope,
+    pub(crate) include_container_items: bool,
+    pub(crate) multiplier: u64,
+    pub(crate) minecraft_version: String,
+    pub(crate) terminal_raw_materials: bool,
+    pub(crate) format: MaterialExportFormat,
+    pub(crate) output_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct MaterialRecipeCacheInput { pub(crate) minecraft_version: String }
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct GenerateProjectInput {
@@ -284,6 +324,7 @@ impl ApplicationOperations {
             data_root,
             backend_dir,
             next_generation: Arc::new(AtomicU64::new(1)),
+            analysis_cache: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
@@ -392,22 +433,80 @@ impl ApplicationOperations {
 
     pub(crate) fn project_stats(&self, input: ProjectStatsInput) -> Result<Value, String> {
         let source = self.resolve_path(&input.source_path);
-        self.run_core_json(stats_args(&source, input.include_container_items))
+        self.cached_analysis(&source, stats_args(&source, input.include_container_items))
     }
 
     pub(crate) fn project_materials(&self, input: ProjectMaterialsInput) -> Result<Value, String> {
         let source = self.resolve_path(&input.source_path);
-        let result = self.run_core_json(materials_args(
-            &source,
-            &input.scope,
-            input.include_container_items,
-        )?)?;
+        let result = self.material_snapshot(&source, &input.scope, input.include_container_items)?;
         Ok(json!({
             "material_items": result
                 .get("material_items")
                 .cloned()
                 .unwrap_or_else(|| Value::Array(Vec::new()))
         }))
+    }
+
+    pub(crate) fn export_material_list(&self, input: ExportMaterialListInput) -> Result<Value, String> {
+        if !(1..=1_000_000).contains(&input.multiplier) || input.minecraft_version.trim().is_empty() {
+            return Err("材料导出需要有效的建造份数和 Minecraft 版本".into());
+        }
+        let source = self.resolve_path(&input.source_path);
+        let output = self.resolve_path(&input.output_path);
+        if output == source || !output.parent().is_some_and(Path::is_dir) {
+            return Err("材料列表必须另存到现有目录，不能覆盖原投影".into());
+        }
+        let snapshot = self.material_snapshot(&source, &input.scope, input.include_container_items)?;
+        let (generation, prefix) = self.next_operation("materials-export");
+        let mut files = OperationFiles::new();
+        let request_path = files.track(self.operation_path(&prefix, "request.json"));
+        write_json(&request_path, &json!({
+            "source_path": path_text(&source), "stats": snapshot,
+            "multiplier": input.multiplier, "minecraft_version": input.minecraft_version,
+            "terminal_raw_materials": input.terminal_raw_materials, "format": input.format,
+        }))?;
+        let result = self.run_core(generation, &prefix, vec!["materials-export".into(), path_text(&request_path), "--output".into(), path_text(&output)], &mut files)?;
+        parse_core_json(&result.stdout)
+    }
+
+    pub(crate) fn prepare_material_recipes(&self, input: MaterialRecipeCacheInput) -> Result<Value, String> {
+        if input.minecraft_version != "26.3" { return Err("当前材料语义需要 Minecraft 26.3 配方".into()); }
+        self.run_core_json(vec!["stockpile".into(), "recipe-fetch".into(), "--minecraft-version".into(), input.minecraft_version, "--json".into()])
+    }
+
+    fn material_snapshot(&self, source: &Path, scope: &MaterialScope, include_container_items: bool) -> Result<Value, String> {
+        // `stats` already contains the entire projection's material list. All-
+        // scope export and child windows reuse it rather than another analysis.
+        let args = if scope.kind == MaterialScopeKind::All {
+            stats_args(source, include_container_items)
+        } else { materials_args(source, scope, include_container_items)? };
+        self.cached_analysis(source, args)
+    }
+
+    fn cached_analysis(&self, source: &Path, args: Vec<String>) -> Result<Value, String> {
+        let key = AnalysisKey::new(source, args)?;
+        let slot = {
+            let mut cache = self.analysis_cache.lock().map_err(|_| "Statistics cache lock failed")?;
+            // A small completed-result cache, shared across all WebViews. Never
+            // evict an in-flight slot or allow two leaders for the same request.
+            cache.retain(|old, slot| old.source != key.source || old.modified == key.modified && old.bytes == key.bytes || slot.get().is_none());
+            if !cache.contains_key(&key) && cache.len() >= 8 {
+                if let Some(old) = cache.iter().find(|(_, slot)| slot.get().is_some()).map(|(old, _)| old.clone()) { cache.remove(&old); }
+            }
+            Arc::clone(cache.entry(key.clone()).or_insert_with(|| Arc::new(OnceLock::new())))
+        };
+        let result = slot.get_or_init(|| {
+            let value = self.run_core_json(key.args.clone())?;
+            let current = AnalysisKey::new(source, key.args.clone())?;
+            if current != key { return Err("Projection changed during statistics analysis; reload its latest version".into()); }
+            Ok(value)
+        }).clone();
+        if result.is_err() {
+            if let Ok(mut cache) = self.analysis_cache.lock() {
+                if cache.get(&key).is_some_and(|current| Arc::ptr_eq(current, &slot)) { cache.remove(&key); }
+            }
+        }
+        result
     }
 
     pub(crate) fn generate_project(
@@ -577,8 +676,15 @@ impl ApplicationOperations {
     }
 
     fn run_core_json(&self, args: Vec<String>) -> Result<Value, String> {
+        let started = Instant::now();
         let output = self.run_core_text(args)?;
-        parse_core_json(&output)
+        let helper_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let decode = Instant::now();
+        let result = parse_core_json(&output);
+        if std::env::var_os("NOVA_STATS_TIMING").is_some() {
+            eprintln!("[NOVA_STATS_TIMING] supervised_helper_and_transport_ms={helper_ms:.3} host_json_decode_ms={:.3} payload_bytes={}", decode.elapsed().as_secs_f64() * 1000.0, output.len());
+        }
+        result
     }
 
     fn run_core_text(&self, args: Vec<String>) -> Result<String, String> {
@@ -639,6 +745,9 @@ impl ApplicationOperations {
         };
         let stdout = read_output(&stdout_path)?;
         let stderr = read_output(&stderr_path)?;
+        if std::env::var_os("NOVA_STATS_TIMING").is_some() {
+            eprint!("{stderr}");
+        }
         if exit.wait_error.is_some() {
             return Err(format!(
                 "Core operation could not be reaped: {}",
@@ -884,6 +993,64 @@ fn validate_png_dimensions(bytes: &[u8], width: u32, height: u32) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "manual CLI real-input measurement; NOVA_STATS_FIXTURE and NOVA_STATS_CORE required"]
+    #[cfg(windows)]
+    fn real_stats_request_profile() {
+        use crate::platform::process_supervisor::ExecutableAllowlist;
+        let source = std::env::var("NOVA_STATS_FIXTURE").unwrap();
+        let core = PathBuf::from(std::env::var_os("NOVA_STATS_CORE").unwrap());
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf();
+        let data = root.join(".tmp/beta-ui-corrections/stats-profile-data");
+        let mut allowed = ExecutableAllowlist::new();
+        allowed.allow(ExecutableRole::CoreHelper, &core).unwrap();
+        let (supervisor, _events) = ProcessSupervisor::new(allowed).unwrap();
+        let operations = ApplicationOperations::new(Arc::new(supervisor), root, data, core.parent().unwrap().to_path_buf()).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let started = Instant::now();
+        let workers = (0..2).map(|_| {
+            let operations = operations.clone();
+            let source = source.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                operations.project_stats(ProjectStatsInput { source_path: source, include_container_items: false }).unwrap()
+            })
+        }).collect::<Vec<_>>();
+        let results = workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>();
+        assert_eq!(results[0], results[1]);
+        assert_eq!(results[0]["structure_stats"]["total_non_air_blocks"], 88534);
+        write_json(&operations.data_root.join("snapshot.json"), &results[0]).unwrap();
+        println!("[NOVA_STATS_PROFILE] concurrent_requests=2 core_launches={} total_ms={:.3} non_air={} materials={} react_commit=UNMEASURED tauri_webview_ipc=UNMEASURED", operations.next_generation.load(Ordering::Relaxed) - 1, started.elapsed().as_secs_f64() * 1000.0, results[0]["structure_stats"]["total_non_air_blocks"], results[0]["material_items"].as_array().unwrap().len());
+    }
+
+    #[test]
+    fn statistics_cache_revalidates_file_revisions_and_separates_parameters() {
+        let temp = std::env::temp_dir().join(format!("nova-stats-key-{}", std::process::id()));
+        fs::write(&temp, b"first").unwrap();
+        let all = AnalysisKey::new(&temp, vec!["stats".into()]).unwrap();
+        let containers = AnalysisKey::new(&temp, vec!["stats".into(), "--include-container-items".into()]).unwrap();
+        assert_ne!(all, containers);
+        fs::write(&temp, b"changed size").unwrap();
+        assert_ne!(all, AnalysisKey::new(&temp, vec!["stats".into()]).unwrap());
+        fs::remove_file(temp).unwrap();
+    }
+
+    #[test]
+    fn statistics_singleflight_has_one_leader_and_same_success_for_waiters() {
+        let slot = Arc::new(OnceLock::<Result<Value, String>>::new());
+        let calls = Arc::new(AtomicU64::new(0));
+        let handles = (0..4).map(|_| {
+            let slot = Arc::clone(&slot); let calls = Arc::clone(&calls);
+            std::thread::spawn(move || slot.get_or_init(|| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                std::thread::sleep(Duration::from_millis(10)); Ok(json!({"material_semantics":"minecraft-26.3-inventory-v2"}))
+            }).clone())
+        }).collect::<Vec<_>>();
+        for handle in handles { assert!(handle.join().unwrap().is_ok()); }
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
 
     #[test]
     fn flake_requests_reject_process_and_cache_fields() {

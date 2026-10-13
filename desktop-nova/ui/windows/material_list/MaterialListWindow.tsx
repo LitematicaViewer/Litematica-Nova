@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Profiler, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import {
     findRenderOperationForSource,
@@ -6,6 +6,7 @@ import {
     getApplicationRenderState,
     loadStructureStats,
     mapStructureStats,
+    recordStatisticsCommit,
     subscribeApplicationRender,
     StatsData,
 } from "../../../src/business/facade";
@@ -109,7 +110,7 @@ export function MaterialListWindow() {
             ) : error ? (
                 <pre className="material-list-window-state material-list-window-error">{error}</pre>
             ) : data ? (
-                <MaterialListContent key={currentFile} data={data} currentFile={currentFile} standalone />
+                <Profiler id="material-list" onRender={recordStatisticsCommit}><MaterialListContent key={currentFile} data={data} currentFile={currentFile} standalone /></Profiler>
             ) : (
                 <div className="material-list-window-state">暂无材料数据。</div>
             )}

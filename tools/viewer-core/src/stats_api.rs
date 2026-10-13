@@ -6,7 +6,7 @@ mod material_catalog;
 
 use anyhow::{Result, bail};
 use fastnbt::Value as NbtValue;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model::MetadataOutput;
 use crate::nbt::{
@@ -16,9 +16,9 @@ use crate::nbt::{
 use crate::canonical_ir::{CanonicalRegion, CanonicalWorld};
 use crate::visual::{build_metadata_output, compute_bounds};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StableStructureOutput {
-    pub material_semantics: &'static str,
+    pub material_semantics: String,
     pub metadata: MetadataOutput,
     pub structure_stats: StructureStatsOutput,
     pub material_items: Vec<MaterialItemOutput>,
@@ -29,9 +29,20 @@ pub struct StableStructureOutput {
     pub container_scan: ContainerScanOutput,
 }
 
+pub(crate) fn inventory_requirement(id: String, count: u64) -> Option<MaterialItemOutput> {
+    let item = material_catalog::item(&id)?;
+    Some(MaterialItemOutput {
+        display_name: material_catalog::name(&id), icon_hint: id.clone(), block_id: id,
+        count, block_count: count, container_item_count: 0, total_count: count,
+        stack_size: item.stack_size, can_fit_container: item.can_fit_container,
+        material_status: "item".into(), has_custom_stack_size: false,
+        region_counts: None, layer_counts: None,
+    })
+}
+
 /// Structural states with no registered inventory item are visible diagnostics,
 /// not material rows. `count` remains a count of blocks, never required items.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NonItemBlockOutput {
     pub block_id: String,
     pub display_name: String,
@@ -39,7 +50,7 @@ pub struct NonItemBlockOutput {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StructureStatsOutput {
     pub scope: ScopeOutput,
     pub total_non_air_blocks: u64,
@@ -50,7 +61,7 @@ pub struct StructureStatsOutput {
     pub total_tile_entities: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScopeOutput {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,7 +72,7 @@ pub struct ScopeOutput {
     pub world_y: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialItemOutput {
     pub block_id: String,
     pub display_name: String,
@@ -80,20 +91,20 @@ pub struct MaterialItemOutput {
     pub layer_counts: Option<Vec<LayerCountOutput>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegionCountOutput {
     pub region: String,
     pub count: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayerCountOutput {
     pub layer: i32,
     pub world_y: i32,
     pub count: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegionSummaryOutput {
     pub name: String,
     pub position: RegionPositionOutput,
@@ -105,21 +116,21 @@ pub struct RegionSummaryOutput {
     pub total_tile_entities: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegionPositionOutput {
     pub x: i32,
     pub y: i32,
     pub z: i32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegionSizeOutput {
     pub x: i32,
     pub y: i32,
     pub z: i32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegionBoundsOutput {
     pub min_x: i32,
     pub max_x: i32,
@@ -129,7 +140,7 @@ pub struct RegionBoundsOutput {
     pub max_z: i32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayerSummaryOutput {
     pub layer: i32,
     pub world_y: i32,
@@ -137,19 +148,19 @@ pub struct LayerSummaryOutput {
     pub unique_block_types: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntitySummaryOutput {
     pub total_entities: usize,
     pub items: Vec<EntityCountOutput>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityCountOutput {
     pub entity_id: String,
     pub count: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ContainerScanOutput {
     pub enabled: bool,
     pub containers_scanned: usize,
@@ -190,7 +201,12 @@ pub fn build_stats_output(
     include_container_items: bool,
 ) -> Result<StableStructureOutput> {
     let root = load_litematic_root(path)?;
-    build_stats_output_from_root(&root, include_container_items)
+    let started = std::time::Instant::now();
+    let result = build_stats_output_from_root(&root, include_container_items);
+    if std::env::var_os("NOVA_STATS_TIMING").is_some() {
+        eprintln!("[NOVA_STATS_TIMING] aggregate_ms={:.3}", started.elapsed().as_secs_f64() * 1000.0);
+    }
+    result
 }
 
 /// Builds the legacy source-NBT analysis summary without reopening its input.
@@ -340,7 +356,7 @@ pub(crate) fn build_stats_output_from_canonical(
     let unique_block_types = selected_block_types.len();
 
     Ok(StableStructureOutput {
-        material_semantics: "minecraft-26.3-inventory-v2",
+        material_semantics: "minecraft-26.3-inventory-v2".into(),
         metadata,
         structure_stats: StructureStatsOutput {
             scope: ResolvedScope::All.to_output(resolved_bounds.min_y),
@@ -615,7 +631,7 @@ fn build_structure_output_from_root(
     };
 
     Ok(StableStructureOutput {
-        material_semantics: "minecraft-26.3-inventory-v2",
+        material_semantics: "minecraft-26.3-inventory-v2".into(),
         metadata,
         structure_stats: StructureStatsOutput {
             scope: resolved_scope.to_output(resolved_bounds.min_y),

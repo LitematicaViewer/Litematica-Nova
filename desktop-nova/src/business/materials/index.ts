@@ -7,6 +7,8 @@ export type {
 } from "../../services/statsService";
 export {
   exportMaterials,
+  exportMaterialListWithOptions,
+  fetchMaterialRecipeCache,
   formatMaterialUnits,
   loadMaterialsScope,
   loadStructureStats,

@@ -12,6 +12,7 @@ use application::operations::{
     ProjectStatsInput, ReplaceBlocksInput, ReplaceBlocksResult, RuntimeHealth,
     LayerContainerData, LayerSliceData, LayerSliceMeta, ProjectionMarkerEditSummary,
     ProjectionMarkers, ReadLayerContainerInput, ReadLayerInput,
+    ExportMaterialListInput, MaterialRecipeCacheInput,
 };
 use application::quick_preview::{QuickPreviewHost, QuickPreviewView, StartQuickPreviewInput, QuickPresentationIntent};
 use application::updater::{UpdateHost, application_update_snapshot, application_update_check,
@@ -845,6 +846,18 @@ async fn render_preview_image(file_path: String, display_mode: String, cache_inp
 async fn generate_preview_image(file_path: String, display_mode: String) -> Result<ProductPreviewImage, String> {
     let _ = (file_path, display_mode);
     Err(FULL_MODE_UNAVAILABLE.into())
+}
+
+#[tauri::command]
+async fn application_export_material_list(input: ExportMaterialListInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let operations = operations.inner().clone();
+    run_application_operation(move || operations.export_material_list(input)).await
+}
+
+#[tauri::command]
+async fn application_prepare_material_recipes(input: MaterialRecipeCacheInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let operations = operations.inner().clone();
+    run_application_operation(move || operations.prepare_material_recipes(input)).await
 }
 
 #[tauri::command]
@@ -2298,6 +2311,8 @@ fn main() {
             application_edit_project_origin,
             application_replace_blocks,
             application_get_project_stats,
+            application_export_material_list,
+            application_prepare_material_recipes,
             application_get_project_materials,
             application_generate_project,
             application_runtime_health,

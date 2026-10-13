@@ -273,10 +273,14 @@ fn build_payload_with_trees(
     recipe_trees: BTreeMap<String, RecipeTreeNode>,
     mode: StockpileExportMode,
 ) -> Result<StockpileZipPayload> {
-    let icon_assets =
-        item_icons::resolve_stockpile_icons(minecraft_version, materials, &recipe_trees)?;
-    let item_names =
-        item_names::resolve_stockpile_item_names(minecraft_version, materials, &recipe_trees)?;
+    build_payload_with_assets(input, minecraft_version, materials, recipe_status, recipe_trees, mode, true)
+}
+
+fn build_payload_with_assets(input: &Path, minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_status: RecipeCacheStatusOutput, recipe_trees: BTreeMap<String, RecipeTreeNode>, mode: StockpileExportMode, allow_network: bool) -> Result<StockpileZipPayload> {
+    let icon_assets = if allow_network { item_icons::resolve_stockpile_icons(minecraft_version, materials, &recipe_trees)? }
+        else { item_icons::resolve_stockpile_icons_cached(minecraft_version, materials, &recipe_trees)? };
+    let item_names = if allow_network { item_names::resolve_stockpile_item_names(minecraft_version, materials, &recipe_trees)? }
+        else { item_names::resolve_stockpile_item_names_cached(minecraft_version, materials, &recipe_trees)? };
     let manifest = StockpileZipManifest {
         schema_version: STOCKPILE_ZIP_SCHEMA_VERSION,
         materials_schema_version: STOCKPILE_MATERIALS_SCHEMA_VERSION,
@@ -518,6 +522,25 @@ fn escape_script_json(value: &str) -> String {
         .replace('&', "\\u0026")
         .replace('\u{2028}', "\\u2028")
         .replace('\u{2029}', "\\u2029")
+}
+
+/// Reuses the existing single-player webpage, recipe trees and icons.
+pub(crate) fn render_standalone_materials_html(input: &Path, version: &str, materials: StockpileMaterialsData) -> Result<String> {
+    use base64::Engine;
+    let status = recipe_cache::recipe_status(version)?;
+    let mut materials = materials;
+    let trees = recipe_tree::resolve_recipe_trees_for_materials(version, &materials)?;
+    let mut payload = build_payload_with_assets(input, version, &mut materials, status, trees, StockpileExportMode::Single, false)?;
+    let urls = payload.icon_files.iter().map(|icon| (icon.path.clone(), format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&icon.bytes)))).collect::<BTreeMap<_, _>>();
+    for icon in payload.icons.by_key.values_mut() {
+        if let Some(url) = urls.get(&icon.path) { icon.path = url.clone(); }
+    }
+    for item in &mut payload.materials.materials {
+        if let Some(url) = urls.get(&item.icon_path) { item.icon_path = url.clone(); }
+    }
+    Ok(render_index_html(&payload)?
+        .replace("<link rel=\"stylesheet\" href=\"assets/app.css\" />", &format!("<style>{STOCKPILE_APP_CSS}</style>"))
+        .replace("<script src=\"assets/app.js\"></script>", &format!("<script>{}</script>", STOCKPILE_APP_JS.replace("</script", "<\\/script"))))
 }
 
 fn resolve_output_path(input: &Path, output: Option<&Path>) -> Result<PathBuf> {

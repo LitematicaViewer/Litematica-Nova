@@ -105,6 +105,22 @@ export interface ApplicationProjectMaterialsOutput {
   material_items: MaterialAnalysisItem[];
 }
 
+export interface ApplicationExportMaterialListInput extends ApplicationProjectMaterialsInput {
+  multiplier: number;
+  minecraftVersion: string;
+  terminalRawMaterials: boolean;
+  format: "svg" | "txt" | "html" | "csv";
+  outputPath: string;
+}
+
+export function exportMaterialList(input: ApplicationExportMaterialListInput): Promise<{ output: string; material_count: number }> {
+  return invoke("application_export_material_list", { input });
+}
+
+export function prepareMaterialRecipes(minecraftVersion: string): Promise<{ status: string; has_recipes: boolean }> {
+  return invoke("application_prepare_material_recipes", { input: { minecraftVersion } });
+}
+
 export interface ApplicationGenerateProjectInput<TPlan = unknown> {
   plan: TPlan;
   outputPath: string | null;
