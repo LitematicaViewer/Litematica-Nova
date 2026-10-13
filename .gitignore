@@ -56,6 +56,15 @@ logs/
 cleanup_manifest.json
 cleanup_report.md
 
+# Mojang 私有资产：不得分发、不得入库。
+# 解包后的原始客户端资源（wiki 贴图、item/block/lang 解包目录等）只允许存在于本地工作区；
+# 对外分发只使用 docs/THIRD_PARTY_NOTICES.txt 界定的「公开资源范围」。
+data/minecraft-assets/
+data/flake/
+data/enumerator/
+data/ai_config.json
+data/config.json
+
 # Local packaging state
 bin/pack_state.json
 bin/launcher/*.exe
@@ -68,6 +77,10 @@ bin/viewer-backend/backend-deployment.json
 bin/stockpile-server/**/stockpile_server
 bin/stockpile-server/**/stockpile_server.exe
 !bin/stockpile-server/**/.gitkeep
+# 旧 .NET 启动器已被 Tauri/NSIS 取代，只余本机构建缓存。
+# 注意 bin/stockpile-server/**/.gitkeep 的例外写法在此目录同样无效
+# （排除父目录后 git 不再进入），故这里不使用 ! 例外。
+tools/launcher/
 
 # Local preview / verify outputs
 *.tmp
@@ -95,9 +108,14 @@ _lava*
 .dsh-acl-recovery/
 
 # Public-beta binaries and signing secrets remain local
+# bin/public-beta 是本机打包产物目录。注意 desktop-nova/src-tauri/build.rs 的
+# validate_public_backends 要求该目录「要么不存在，要么恰好包含
+# litematica_core / litematica_native_viewer / backend-deployment.json 三个文件」，
+# 因此不能放 .gitkeep 之类的占位文件。
 /bin/public-beta/
 *.key
 *.pem
 *.pfx
 *.p12
 *.dpapi
+/ref

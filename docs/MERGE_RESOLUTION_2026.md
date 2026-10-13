@@ -110,3 +110,40 @@
 | `npm run build`（`tsc && vite build`） | 通过 |
 | `cargo build --features public-beta` | 通过 |
 | 旧主题与资源在仓库中可见 | 113 个文件 |
+
+## 后续跟进（合并后新增）
+
+### 打包与开发启动链路
+
+公开线架构把打包改为 **Tauri NSIS + public-beta 后端部署门禁**，与合并前 `bin/*.bat` 的 `target/release` 老路径不兼容。已按新架构重整：
+
+| 脚本 | 变更 |
+| --- | --- |
+| `bin/dev-win-ts.bat` | 改为 `cargo build --locked --release --features public-beta --target-dir target/public-beta`（含 `stockpile_server`）；新增 Node ≥ 20.19 与 cargo 工具链守卫；补建 `bin/public-beta` 空目录（Tauri 资源）；CRLF + 纯 ASCII 以兼容 cmd |
+| `bin/build-win-ts.bat` | 改为「public-beta 构建 → `prepare-backend-deployment.ps1 -StageOnly` → `check:layers` → `tauri:build`」，与 `.github/workflows/beta-public.yml` 一致 |
+
+**合并前 `bin/dev-win-ts.bat` 是无法启动的**，两个独立原因：
+
+1. `tauri.conf.json` 把 `tools/viewer-core/target/public-beta/release/stockpile_server.exe` 与 `bin/public-beta` 声明为必需资源，脚本既不构建前者、也不创建后者，`tauri dev` 直接以 `resource path ... doesn't exist` 失败（exit 101）。
+2. 未按 `public-beta` 特性与共享 target 目录构建，且没有 Node 版本守卫（vite 7 需要 ≥ 20.19）。
+
+另有一个独立坑：`desktop-nova/src-tauri/build.rs` 的 `validate_public_backends` 要求 `bin/public-beta` **要么不存在，要么恰好包含 3 个文件**（两个后端 + `backend-deployment.json`），因此该目录**不能放 `.gitkeep`**。
+
+`bin/dev-mac-ts.sh` / `bin/build-mac-ts.sh` 仍是旧路径实现（且 `dev-mac-ts.sh` 在 macOS 上检查 `.exe`），未改动；CI 的 `platform-status` 已声明 macOS/Linux 支持留待下一版本。`bin/pack_state.json` 与 `tools/launcher/obj/**` 是旧 .NET 启动器残留，新架构无引用。
+
+### Mojang 私有资产
+
+`data/minecraft-assets/`（本机 8863 个文件）此前在 `main` 上被跟踪（`c9060f96` 有 942 个文件）。合并已让该目录在提交中归零，并已在 `.gitignore` 显式排除，同时排除 `data/flake/`、`data/enumerator/`、`data/{ai_config,config}.json` 等本地运行时副本。
+
+对外分发的资产范围以 `docs/THIRD_PARTY_NOTICES.txt` 的「公开资源范围」为准：`pack-in/game-icons/block.zip`、`pack-in/item-icons-26.3`、`pack-in/lang/zh_cn.json`、`pack-in/enumerator`、`pack-in/flake`、`data/generation-templates`、`data/minecraft_blockstates`、`desktop-nova/ui/themes` 内资源。
+
+> 注意：`data/minecraft-assets` 仍存在于合并前的 git 历史（`c9060f96` 及更早）。若该仓库曾推送到公开远端，历史中仍含这批资产；彻底清除需要重写历史（`git filter-repo`）或作废公开仓库。
+
+### 暂搁置项（下一阶段）
+
+- `replace_blocks.rs` 的 v2 units 格式与加权随机多输出（`ReplaceUnitsFile` / `replace_blocks_v2` / `weighted_random_pick` / `OutputDistEntry` / `validate_units_file` / `properties_subset_match`）。当前采用公开线版本以匹配前端 `ReplacePage.tsx` 的 `ReplaceRulesFile` / `per_rule` 契约。恢复参考：`refs/merge-safety-pre-resolution:tools/viewer-core/src/replace_blocks.rs`。
+- 渲染迁移的能力损失清单（见上文「渲染迁移的已知能力损失」），其中 `mesh.rs` 纹理化网格与 `stripped_birch` 需在 `render-ir` 层重建。
+
+### 旧主题恢复
+
+尺寸与字号基准见 [THEME_RESTORATION_METRICS.md](THEME_RESTORATION_METRICS.md)：`metro10` 对齐 Windows 10 度量、`minecraft` 对齐 Minecraft 度量、`bootstrap5` 对齐 Bootstrap 5 官方值，融入 Tailwind 4 时不得用近似刻度替换原始像素/磅值。

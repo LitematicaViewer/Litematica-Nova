@@ -11,7 +11,14 @@ export default defineConfig({
     server: {
         strictPort: true,
         watch: {
-            ignored: ["**/tauri/**"]
+            // tauri dev runs `cargo build` in parallel with this dev server. The
+            // linker writes src-tauri/target/debug/deps/<app>.exe while the build
+            // is in flight, and chokidar then fails with
+            //   EBUSY: resource busy or locked, watch '...\deps\desktop_nova.exe'
+            // which kills the dev server and therefore the whole tauri dev run.
+            // The previous pattern `**/tauri/**` never matched `src-tauri`, so the
+            // whole Cargo target tree was being watched.
+            ignored: ["**/src-tauri/**"]
         }
     },
     build: {
