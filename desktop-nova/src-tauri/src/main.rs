@@ -5,13 +5,17 @@ mod assets;
 mod platform;
 mod viewer_backend;
 mod viewer_launch_contract;
-// The Minecraft Wiki block-icon scraper (`wiki_block_icons.rs`) is kept in the tree
-// but not compiled yet: it is a network-dependent download source whose parent-module
-// helpers (`fetch_wiki_html`, `element_text`, `extract_code_values_from_cell`,
-// `normalize_html_text`, `WIKI_ENUM_BLOCKS_URL`, `VaultBlockIconProgress`,
-// `VaultBlockIconDownloadOutput`) still need porting. See docs/ASSET_MANAGER_DIFF.md
-// section "恢复进展" for the remaining scope.
-// mod wiki_block_icons;
+// Minecraft Wiki block-icon scraper. New Minecraft releases ship blocks that no
+// bundled icon pack covers, so this is what keeps new blocks visible.
+mod wiki_block_icons;
+
+// The Wiki scraper resolves its helpers through `use super::*`, so the shared
+// pieces live in `assets` and are re-exported here. Only what the scraper
+// actually names is re-exported.
+pub(crate) use assets::{
+    element_text, extract_code_values_from_cell, fetch_wiki_html, WIKI_ENUM_BLOCKS_URL,
+};
+pub(crate) use assets::{VaultBlockIconDownloadOutput, VaultBlockIconProgress};
 
 use application::model::ProductPreviewImage;
 use application::operations::{
@@ -25,12 +29,14 @@ use application::quick_preview::{QuickPreviewHost, QuickPreviewView, StartQuickP
 use application::updater::{UpdateHost, application_update_snapshot, application_update_check,
     application_update_download, application_update_install, application_update_cancel, application_update_skip, application_update_restart};
 use base64::Engine;
-// `flate2` is needed by the game-data import (gunzipped NBT); the scraper imports
-// return together with the wire-up of `wiki_block_icons`.
+// `flate2` is needed by the game-data import (gunzipped NBT).
 use flate2::read::GzDecoder;
+// `GenericImageView` provides `dimensions()`; `Cursor` backs the in-memory PNG encode.
+use image::GenericImageView;
+use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::io::Write;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
@@ -2356,7 +2362,8 @@ fn main() {
             assets::pick_litematic_file,
             assets::download_vault_block_icons,
             assets::download_vault_item_icons,
-            assets::download_minecraft_wiki_block_icons,
+            // Scrapes Minecraft Wiki, so new-release blocks keep getting icons.
+            wiki_block_icons::download_minecraft_wiki_block_icons,
             assets::download_minecraft_wiki_enum_catalogs
         ])
         .run(tauri::generate_context!())

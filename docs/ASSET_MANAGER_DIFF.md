@@ -269,11 +269,42 @@ checkGameResourceHealth() → GameResourceHealthRow[]            // 界面「健
 目标仍是 app-data 下的 `minecraft-assets/block_2d/initial` 与 `minecraft-assets/item/initial`。
 这样 942 个 Mojang PNG **无需入库**即可让"内建图标"这一离线回退源可用。
 
-**未接入（有意为之）**：Minecraft Wiki 的两个下载命令（方块图标 / 枚举全集）
-返回明确错误信息，不做静默 no-op。原因是 Wiki 路径为 HTML 抓取
-（`wiki_block_icons.rs` 682 行），其父模块辅助（`fetch_wiki_html`、`element_text`、
-`extract_code_values_from_cell`、`normalize_html_text`、`WIKI_ENUM_BLOCKS_URL` 等）
-尚需回移；该文件已放入仓库但从 `main.rs` 注释掉，保持一次改动一个可验证单元。
+**Minecraft Wiki 方块图标抓取已接入**（这是必需能力，不是可选增强）：
+`wiki_block_icons.rs`（682 行）现在参与编译，其父模块辅助
+（`fetch_wiki_html` / `element_text` / `extract_code_values_from_cell` /
+`normalize_html_text` / `normalize_resource_location` / `wiki_client` /
+`WIKI_ENUM_BLOCKS_URL`）已补入 `assets.rs` 并在 `main.rs` re-export。
+命令 `download_minecraft_wiki_block_icons(slot, source)` 已注册，
+支持英文 `minecraft.wiki` 与中文 `zh.minecraft.wiki`。
+
+**为什么它是必需**：新版本 Minecraft 新增的方块在任何随包图标集里都没有图标，
+没有 Wiki 抓取就会"直接不显示"。
+
+**仍未接入**：`download_minecraft_wiki_enum_catalogs`（Wiki 枚举全集的表格解析，
+约 150 行）。它影响的是枚举器的 `base:dv-*` 集合，不影响方块图标显示。
+
+### L3 界面接线清单（供界面适配用）
+
+当前**没有管理器界面与入口**，需要新建并接回以下五处（与枚举器恢复时同样的模式）：
+
+| 位置 | 需要做什么 | 参考 |
+| --- | --- | --- |
+| `desktop-nova/asset_manager.html` | 新建入口页（12 行的标准样板） | `enumerator.html` |
+| `desktop-nova/ui/windows/asset_manager/` | 新建窗口与内容组件 | 逻辑 API 全部已从 `business/facade` 转出 |
+| `src-tauri/capabilities/default.json` | `windows` 数组加 `"asset-manager"` | 现有 `"enumerator"` 条目 |
+| `desktop-nova/vite.config.ts` | `rollupOptions.input` 加 `assetManager: resolve(__dirname, "asset_manager.html")` | 现有 `enumerator` 条目 |
+| `src-tauri/src/main.rs` | 新增 `open_asset_manager_window` 命令并注册 | `open_enumerator_window` |
+| `src/platform/nativeViewer.ts` | 新增 `openAssetManagerWindow()` | `openEnumeratorWindow` |
+| 主界面入口 | 从设置页或工具菜单加一个「游戏资源管理」按钮 | 任意现有 `open*Window` 调用点 |
+
+打开窗口的调用形态（与其它子窗口一致）：
+
+```ts
+import { openAssetManagerWindow } from "../../../src/platform/nativeViewer";
+await openAssetManagerWindow();   // invoke("open_asset_manager_window")
+```
+
+界面可绑定的注册表 API 与失效接口见上文表格与第 7 节。
 
 **CCVault 已接入，且不再存任何凭据**：合并前源码里带有两个硬编码 API key
 （`VAULT_API_KEY` / `VAULT_LEGACY_API_KEY`，由当时的 Agent 填入）。现在改为

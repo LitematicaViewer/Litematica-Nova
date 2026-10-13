@@ -15,6 +15,7 @@
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 use zip::ZipArchive;
@@ -225,6 +226,79 @@ pub(crate) async fn pick_litematic_file(app: AppHandle) -> Result<Option<String>
         .add_filter("Litematica", &["litematic"])
         .blocking_pick_file();
     Ok(picked.map(|path| path.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Minecraft Wiki (minecraft.wiki / zh.minecraft.wiki) download source.
+//
+// New Minecraft releases add blocks that ship no icon in any bundled pack, so the
+// Wiki scraper is what keeps new blocks visible. `wiki_block_icons.rs` does the
+// page/table parsing; the helpers below are the parent-module pieces it expects.
+// ---------------------------------------------------------------------------
+
+pub(crate) const WIKI_ENUM_BLOCKS_URL: &str =
+    "https://minecraft.wiki/w/Java_Edition_data_values/Blocks";
+const WIKI_ENUM_ITEMS_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values/Items";
+const WIKI_ENUM_MAIN_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values";
+const WIKI_ENUM_ENTITIES_URL: &str =
+    "https://minecraft.wiki/w/Java_Edition_data_values/Entities";
+pub(crate) const WIKI_ENUM_ROOT_RELPATH: &str = "enumerator/base/wiki";
+
+/// Collapses runs of whitespace, matching the pre-merge normalisation.
+pub(crate) fn normalize_html_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub(crate) fn wiki_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("Litematica-Nova-enum-catalog/1.0")
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) fn fetch_wiki_html(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> Result<String, String> {
+    let response = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml")
+        .send()
+        .map_err(|e| format!("请求 {url} 失败: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("请求 {url} 失败: HTTP {status}"));
+    }
+    response.text().map_err(|e| e.to_string())
+}
+
+pub(crate) fn element_text(element: &scraper::ElementRef<'_>) -> String {
+    normalize_html_text(&element.text().collect::<Vec<_>>().join(" "))
+}
+
+pub(crate) fn extract_code_values_from_cell(
+    cell: &scraper::ElementRef<'_>,
+    code_selector: &scraper::Selector,
+) -> Vec<String> {
+    cell.select(code_selector)
+        .map(|code| normalize_html_text(&code.text().collect::<Vec<_>>().join(" ")))
+        .map(|value| value.trim_matches('`').trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+/// Normalises a namespaced resource location (`minecraft:stone`).
+pub(crate) fn normalize_resource_location(value: &str) -> String {
+    let trimmed = value.trim().trim_matches('`').trim().to_lowercase();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.contains(':') {
+        trimmed
+    } else {
+        format!("minecraft:{trimmed}")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -785,15 +859,7 @@ pub(crate) async fn download_vault_item_icons(
 }
 
 #[tauri::command]
-pub(crate) async fn download_minecraft_wiki_block_icons(
-    _slot: String,
-    _source: String,
-) -> Result<VaultBlockIconDownloadOutput, String> {
-    Err("Minecraft Wiki 方块图标下载尚未接入（HTML 抓取模块待回移），本地内建解包可用。".to_string())
-}
-
-#[tauri::command]
 pub(crate) async fn download_minecraft_wiki_enum_catalogs(
 ) -> Result<WikiEnumCatalogDownloadOutput, String> {
-    Err("Minecraft Wiki 枚举全集下载尚未接入（HTML 抓取模块待回移）。".to_string())
+    Err("Minecraft Wiki 枚举全集下载尚未接入（表格解析待回移），方块图标抓取已可用。".to_string())
 }
