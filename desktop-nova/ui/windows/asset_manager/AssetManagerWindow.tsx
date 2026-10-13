@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { listenEvent } from "../../../src/platform/events";
 import {
@@ -15,6 +16,10 @@ import { AssetManagerContent } from "./AssetManagerContent";
 export function AssetManagerWindow() {
   const [themeId, setThemeId] = useState(currentThemeId);
   const [openedSection, setOpenedSection] = useState("");
+
+  const handleClose = useCallback(() => {
+    void getCurrentWindow().close();
+  }, []);
 
   useLayoutEffect(() => {
     applyThemeStylesheet(themeId);
@@ -36,7 +41,7 @@ export function AssetManagerWindow() {
 
   return (
     <div className={["asset-manager-root", themeClassName(themeId)].filter(Boolean).join(" ")}>
-      <AssetManagerContent key={openedSection} />
+      <AssetManagerContent key={openedSection} onClose={handleClose} />
     </div>
   );
 }
