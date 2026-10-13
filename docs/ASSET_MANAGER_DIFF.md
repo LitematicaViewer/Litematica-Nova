@@ -280,20 +280,35 @@ checkGameResourceHealth() → GameResourceHealthRow[]            // 界面「健
    `WIKI_ENUM_BLOCKS_URL` 等）尚需回移；该文件已放入仓库但从 `main.rs` 注释掉，
    以保持一次改动一个可验证单元。
 
-### L2 消费方改造 —— 待做
+### L2 消费方改造 —— 已完成（本次）
 
-`blockIconResolver` / `blockstateDb` / `i18n` / `enumeratorService` 四个硬编码读点尚未改走注册表，
-因此**现在切换资源还不会生效**。改造清单：
+四个硬编码读点已改走注册表，切换资源现在会真正生效：
 
-| 消费方 | 现状 | 目标 |
-| --- | --- | --- |
-| `blockIconResolver.ts`（37 行） | `pack-in/item-icons-26.3` 单一路径 + 静态 import 的两份 JSON | `getActiveIconSearchRoots(slot)` + `readIconFromRoot` 回退链；20 个导出中的 `invalidateBlockIconCache` 等需恢复 |
-| `blockstateDb.ts` | `data/minecraft_blockstates/26.1*.json` 硬编码 | `readActiveGameDataResource()` |
-| `i18n.ts` | `pack-in/lang/zh_cn.json` 硬编码 | `readActiveLanguageResource()`（回退 `readFallbackLanguageResource()`） |
-| `enumeratorService.ts` | `pack-in/lang/zh_cn.json` + `loadDatabases()`/`getAllBlocks()` | `readActiveLanguageResource()` / `readActiveGameDataResource()` |
+| 消费方 | 改动 |
+| --- | --- |
+| `services/i18n.ts` | `readWorkspaceFile("pack-in/lang/zh_cn.json")` → `readActiveLanguageResource()`；失败时回退 `readFallbackLanguageResource()`；新增 `invalidateI18nCache()` |
+| `services/blockstateDb.ts` | 两个硬编码 `26.1*.json` → `readActiveGameDataResource()`（返回 `dbText` / `i18nText` / `entry`）；新增 `invalidateBlockstateDbCache()` |
+| `services/blockIconResolver.ts` | 硬编码 `pack-in/item-icons-26.3` → **注册表搜索根优先**（`getActiveIconSearchRoots(slot)` + `readIconFromRoot` 逐根尝试），打包目录作为最后兜底；新增 `getBlockIconDataUrl(blockId, slot)` 的槽位参数、`invalidateBlockIconCache()`、`getActiveIconFingerprint()` |
+| `services/enumeratorService.ts` | 语言映射改走 `readActiveLanguageResource()`；方块全集改走 `readActiveGameDataResource()`（顺带让内建集合的 `version` 从写死的 `"bundled"` 变为真实版本号） |
+| `business/facade.ts` | 新增 `export * from "../services/gameResources"`，供 L3 界面绑定 |
 
-同时需要恢复 3 个缓存失效接口（`invalidateBlockIconCache` / `invalidateI18nCache` /
-`invalidateBlockstateDbCache`）并在切换资源后调用，否则切换不会即时生效。
+路径解析已核对：`readEntryFile` 对 `source === "builtin"` 的条目走**工作区**读取
+（`data/minecraft_blockstates/26.1.json` 等），其余走 app-data；语言包在首次运行由
+`ensureInitialLanguageSeeded()` 从 `pack-in/lang/zh_cn.json` 播种到 app-data。
+
+**验证现状**：`tsc --noEmit` 与 `npm run build` 通过（1636 模块）。
+因为 L3 界面尚未适配，暂时没有界面入口触发资源切换；L3 完成后可用
+"切换图标/语言/游戏数据 → 调对应的 invalidate → 重新打开页面"来验证四条链路。
+
+### L2 之后的已知缺口
+
+1. **图标包目录布局**：合并前的 `blockIconResolver`（207 行）还有一层
+   `ActiveIconLayout` 解析（把搜索根拆成 `block_itemLike` / `item` / `block_2d` / `block_icon`
+   四类，并按 `item_like` / `block` 分支选包），本次采用的最小接入版未含该层。
+   当某个图标包内部不是"根目录平铺 PNG"时，需要补回该层。
+2. **图标候选规则**：合并前版本对 `_slab` → `_planks`、`potted_*` → `flower_pot`
+   有额外候选，当前沿用公开线的 `item_id` 映射规则。若发现个别方块缺图标，可从
+   `refs/merge-safety-pre-resolution:desktop-nova/src/services/blockIconResolver.ts` 补。
 
 ### 仍需回移的 L1 远端部分
 

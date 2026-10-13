@@ -1,6 +1,5 @@
 import { getAppDataFilePath, listDirectoryEntries, readAppDataFile, writeAppDataFile } from "../platform/files";
-import { readWorkspaceFile } from "../platform/files";
-import { getAllBlocks, loadDatabases } from "./blockstateDb";
+import { readActiveGameDataResource, readActiveLanguageResource } from "./gameResources";
 import { translateBlockId } from "./i18n";
 import type { MaterialItem } from "./statsService";
 
@@ -210,7 +209,7 @@ async function resolveCollectionDir(relativeDir: string): Promise<{ absDir: stri
 }
 
 async function loadActiveLanguageMap(): Promise<ActiveLanguageMap> {
-  const raw = await readWorkspaceFile("pack-in/lang/zh_cn.json").catch(() => "");
+  const raw = await readActiveLanguageResource().catch(() => "");
   const parsed = readJson<Record<string, string>>(raw) || {};
   const blocks: string[] = [];
   const items: string[] = [];
@@ -244,8 +243,16 @@ async function loadActiveLanguageMap(): Promise<ActiveLanguageMap> {
 }
 
 async function loadActiveBlocks(): Promise<{ version: string; values: string[] }> {
-  await loadDatabases();
-  return { version: "bundled", values: getAllBlocks() };
+  try {
+    const active = await readActiveGameDataResource();
+    const parsed = readJson<{ version_id?: string; blocks?: Record<string, unknown> }>(active.dbText) || {};
+    return {
+      version: String(parsed.version_id || active.entry.version || "unknown").trim() || "unknown",
+      values: uniq(Object.keys(parsed.blocks || {})),
+    };
+  } catch {
+    return { version: "unknown", values: [] };
+  }
 }
 
 async function loadBaseCollections(): Promise<EnumeratorCollection[]> {

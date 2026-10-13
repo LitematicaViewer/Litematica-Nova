@@ -19,6 +19,9 @@ export * from "../services/userConfig";
 export * from "../services/flakeService";
 export * from "../services/containerService";
 export * from "../services/enumeratorService";
+// Game-resource registry (L1): consumers above already read through it; the
+// L3 asset-manager UI binds to these APIs.
+export * from "../services/gameResources";
 export {
   openEnumeratorWindow,
 } from "../platform/nativeViewer";

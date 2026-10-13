@@ -1,4 +1,4 @@
-import { readWorkspaceFile } from "./backend";
+import { readActiveGameDataResource } from "./gameResources";
 
 export interface BlockStateDb {
   blocks: Record<string, { properties: Record<string, string[]>; default_properties?: Record<string, string> }>;
@@ -12,21 +12,30 @@ export interface I18nDb {
 let dbCache: BlockStateDb | null = null;
 let i18nCache: I18nDb | null = null;
 
+/**
+ * Loads the active BlockState database and its property translations from the
+ * game-resource registry, so activating another `game_data` entry takes effect
+ * after `invalidateBlockstateDbCache()` + `loadDatabases()`.
+ */
 export async function loadDatabases() {
-  if (!dbCache) {
-    try {
-      dbCache = JSON.parse(await readWorkspaceFile("data/minecraft_blockstates/26.1.json"));
-    } catch (e) {
-      console.warn(e);
-    }
+  if (dbCache && i18nCache) return;
+  try {
+    const active = await readActiveGameDataResource();
+    dbCache = JSON.parse(active.dbText);
+    i18nCache = JSON.parse(active.i18nText);
+  } catch (e) {
+    console.warn(e);
+    // Leave both caches empty so a later call can retry after the user fixes
+    // the active resource.
+    dbCache = null;
+    i18nCache = null;
   }
-  if (!i18nCache) {
-    try {
-      i18nCache = JSON.parse(await readWorkspaceFile("data/minecraft_blockstates/26.1.zh_cn.json"));
-    } catch (e) {
-      console.warn(e);
-    }
-  }
+}
+
+/** Drops the cached BlockState database so the next load re-reads the active resource. */
+export function invalidateBlockstateDbCache(): void {
+  dbCache = null;
+  i18nCache = null;
 }
 
 export function hasBlockDatabase(): boolean {
