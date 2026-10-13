@@ -1,0 +1,253 @@
+# 游戏资源管理器：flake 版 vs 现状
+
+> 对比对象：`dev/flake`（`63270f47`，与合并前 main 的 `gameResources.ts` **逐字节一致**）与当前 `HEAD`。
+>
+> 结论先行：**现状不是"简化版"，而是该功能整块被移除**——公开 Beta 线没有这个管理器，
+> 它把资源读取改成了硬编码路径 + 构建期静态 import。两侧不是同一套东西的不同版本。
+
+## 一、总体架构差异
+
+| | flake / 合并前 main | 当前 HEAD |
+| --- | --- | --- |
+| 资源管理 | **运行时注册表**（5 类资源 × 7 种来源 × 6 个激活槽位） | 无注册表 |
+| 资源路径 | 动态解析，可切换、可多版本共存 | **硬编码常量** |
+| 元数据索引 | 每类资源一份 `installed.json` | 无 |
+| 多版本 | 支持，可登记多个版本并按槽位分别激活 | 不支持（单一内建版本） |
+| 下载/抓取 | CCVault + Minecraft Wiki（中英）+ GitHub + 本地导入 | 无（仅随包内建） |
+| 相关文件 | `gameResources.ts` 921 行、`AssetManagerContent.tsx` 959 行、`AssetManagerWindow.tsx` 62 行、`wiki_block_icons.rs` 682 行、`asset_manager.html` | **全部不存在** |
+
+现状的实际读取方式（全部硬编码）：
+
+```ts
+// services/blockIconResolver.ts
+import catalogData from "../../../pack-in/materials/minecraft-26.3.json";
+import iconManifest from "../../../pack-in/materials/item-icons-26.3.json";
+const paths = ["pack-in/item-icons-26.3"];          // 唯一图标根，无变体、无回退链
+
+// services/blockstateDb.ts
+readWorkspaceFile("data/minecraft_blockstates/26.1.json")        // 版本写死在文件名
+readWorkspaceFile("data/minecraft_blockstates/26.1.zh_cn.json")
+
+// services/i18n.ts
+readWorkspaceFile("pack-in/lang/zh_cn.json")                     // 唯一语言包
+```
+
+## 二、可管理的配置（flake 版）
+
+### 2.1 六个激活槽位
+
+「多版本」的本质是**同一类资源可以登记多份，并按槽位分别激活**。这是现状完全没有的能力。
+
+| 槽位 | 字段 | 用途 |
+| --- | --- | --- |
+| 语言 | `active` | 界面/方块/物品名翻译 |
+| 材料图标 | `active_material_list` | 材料列表等界面的方块图标 |
+| 分层方块图标 | `active_layering` | 分层画布（Flake）的方块图标 |
+| 分层物品图标 | `active_layering`（`item_icon` 类） | 分层画布的物品图标 |
+| 游戏数据 | `active` | BlockState 数据库 + 属性翻译 |
+| 枚举全集 | `active` | 枚举器基础集合 |
+
+关键设计：`block_icon` 与 `item_icon` **用 `active_layering` 共享一个槽位**，即分层画布的
+方块与物品图标是统一选定的；而 `block_icon` 另有独立的 `active_material_list` 槽，
+两类界面的图标包可以不同。
+
+### 2.2 五类资源 / 七种来源 / 各自可用来源
+
+| 资源类（`GameResourceKind`） | 落盘目录 | 可用来源 |
+| --- | --- | --- |
+| `language`（语言） | `minecraft-assets/language` | 内建、本地 JSON、GitHub/InventivetalentDev |
+| `block_icon`（方块图标） | `minecraft-assets/block_2d` | 内建、本地目录、CCVault、Minecraft Wiki、中文 Minecraft 维基 |
+| `item_icon`（物品图标） | `minecraft-assets/item` | 内建、本地目录、CCVault、Minecraft Wiki |
+| `game_data`（游戏数据） | `minecraft-assets/game-data` | 内建、本地 JSON |
+| `enum_catalog`（枚举全集） | `enumerator/base` | 内建、Minecraft Wiki |
+
+来源语义（`GameResourceSource`）：`builtin` 内建 / `imported` 导入 / `external` 外部目录登记 /
+`github` / `vault`（CCVault）/ `wiki`（英文维基）/ `wiki_zh`（中文维基）。
+
+### 2.3 方块图标的 2D/3D 变体与槽位约束
+
+```ts
+export type BlockIconVariant = "2d" | "3d";
+export type BlockIconSlot = "material_list" | "layering";
+
+resolveBlockIconVariant(entry)      // 从 block_icon_variant / source / root_relpath / active_layering 推断
+supportsBlockIconLayering(entry)    // 是否可用于分层槽
+```
+
+- **3D 方块图标不能用于分层槽**，激活时会抛错：
+  「3D 方块图标不能用于分层槽。请改用 2D 方块图标资源。」
+- 界面据此做槽位锁定（`lockedBlockIconSlotForSource`）与来源提示（`blockIconSourceHint`）——
+  不同来源只产出特定变体，选择来源时会锁定对应槽位。
+
+### 2.4 资源条目的字段（`GameResourceEntry`）
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` / `kind` / `label` | 标识、类别、显示名 |
+| `source` | 来源 |
+| `installed_at` | 安装时间（界面「日期」列） |
+| `language` / `branch` / `version` | 语言代码、GitHub 分支、版本号 |
+| `file_relpath` | 单文件资源的相对路径（语言包） |
+| `root_relpath` | 目录型资源的根（图标包、枚举全集） |
+| `manifest_relpath` / `root_path` | 清单路径 / 外部绝对根 |
+| `data_relpath` / `i18n_relpath` | 游戏数据的 DB 与翻译两个文件 |
+| `block_icon_variant` | `2d` / `3d` |
+| `active` | 语言/游戏数据/枚举全集的激活标记 |
+| `active_material_list` / `active_layering` | 图标的两槽激活标记 |
+| `builtin` | 是否内建（内建资源作为离线回退） |
+
+### 2.5 注册表持久化
+
+每类资源一份索引，写在 **app_data**（用户配置目录）下：
+
+```
+minecraft-assets/language/installed.json     → { schema_version: 1, kind: "language",  entries: [...] }
+minecraft-assets/block_icon/installed.json
+minecraft-assets/item/installed.json
+minecraft-assets/game-data/installed.json
+enumerator/base/installed.json
+```
+
+四类索引落在 `minecraft-assets/` 下，都属**本机用户数据、不入库**
+（`data/minecraft-assets/` 已在 `.gitignore`）。唯一例外是枚举全集的
+`data/enumerator/base/installed.json`：它在 `pack-in/enumerator` 的公开资源范围内，
+已随包入库。
+
+### 2.6 内建资源（离线回退基线，不可删除）
+
+| 内建项 | id | 指向 |
+| --- | --- | --- |
+| 内建 zh_cn | `builtin:language:zh_cn` | `minecraft-assets/language/initial/zh_cn.json`（随包为 `pack-in/lang/zh_cn.json`） |
+| 内建 Nova 方块图标 | `builtin:block_icon:nova` | `minecraft-assets/block_2d/initial`，变体 `2d`，两槽均激活 |
+| 内建 Nova 物品图标 | `builtin:item_icon:nova` | `minecraft-assets/item/initial` |
+| 内建 BlockState 26.1 | `builtin:game_data:26.1` | `data/minecraft_blockstates/26.1.json` + `26.1.zh_cn.json` |
+| 内建枚举全集 | `builtin:enum_catalog:base` | `enumerator/base/builtin` |
+
+激活内建资源时会把该类的其它条目全部置为非激活（`selectingBuiltin` 分支），
+但**内建条目本身始终保留**，作为离线回退。
+
+#### ⚠️ 与"不分发 Mojang 资产"的冲突（恢复时必须处理）
+
+flake / 合并前 main **把这批内建图标提交入库了**：
+
+| 分支 | `data/minecraft-assets` 入库文件数 |
+| --- | --- |
+| `dev/flake` | **942**（941 个 `block_2d/initial/*.png` + 1 个 `language/initial/zh_cn.json`） |
+| 合并前 `main` | 942 |
+| 公开线 | 0 |
+| 当前 `HEAD` | **0** |
+
+这些是方块贴图，属 Mojang 资产。**恢复资源管理器时不要把它们重新入库**——
+按此前约定，Mojang 资产只留在本地并走 `.gitignore`；可分发的是
+`pack-in/game-icons/block.zip` 与 `pack-in/item-icons-26.3`（见
+`docs/THIRD_PARTY_NOTICES.txt` 的「公开资源范围」）。
+内建图标应改为**首次运行时从 `block.zip` 按需解包**
+（flake 版已有 `ensure_builtin_block_icons_extracted`，正好用于此）。
+
+## 三、下载与抓取能力
+
+### 3.1 后端命令（Tauri）
+
+| 命令 | 来源 | 产出 |
+| --- | --- | --- |
+| `download_vault_block_icons` | `https://ccvaults.com/` | 方块图标（2D/3D） |
+| `download_vault_item_icons` | CCVault | 物品图标 |
+| `ensure_builtin_block_icons_extracted` | 内建 `pack-in/game-icons/block.zip` | 解包到图标根 |
+| `ensure_builtin_item_icons_extracted` | 内建 `pack-in/game-icons/item.zip` | 解包到物品图标根 |
+| `download_minecraft_wiki_enum_catalogs` | `minecraft.wiki` 的 Java Edition data values 四个页面 | 枚举全集 |
+
+`wiki_block_icons.rs`（682 行）的抓取源：
+
+- 英文：`https://minecraft.wiki/api.php?...page=Template:BlockSprite/doc`、
+  `Template:BlockLink`
+- 中文：`https://zh.minecraft.wiki/api.php?...`、
+  `Java版数据值/方块ID`
+- 并发：`WIKI_ICON_DOWNLOAD_CONCURRENCY = 6`
+
+### 3.2 语言资源
+
+| 能力 | 实现 |
+| --- | --- |
+| 列分支 | 抓取 `github.com/InventivetalentDev/minecraft-assets/branches` 页面解析 `/tree/<branch>` |
+| 列语言 | 抓取分支目录页面解析 `([a-z0-9_]+)\.json` |
+| 下载 | `raw.githubusercontent.com/.../<branch>/<language>.json`，写回 app_data |
+| 过滤 | 只保留 `block.` / `effect.` / `enchantment.` / `entity.` / `item.` 前缀的键 |
+| 分支排序 | `languageBranchSortKey` 做版本化排序 |
+
+### 3.3 本地导入
+
+| 能力 | 命令/函数 |
+| --- | --- |
+| 导入语言 JSON | `importLanguageResource(sourcePath, language?)` |
+| 导入游戏数据 | `importGameDataResource(dataPath, i18nPath?, version?)` |
+| 登记外部图标目录 | `registerExternalIconDirectory(...)`（登记为 `external` 来源，记绝对根 `root_path`） |
+
+## 四、运行期消费与健康检查
+
+flake 版把"资源"与"消费方"解耦，消费方都走注册表：
+
+```ts
+readActiveLanguageResource()                                   // ← i18n
+readActiveGameDataResource() → { dbText, i18nText, entry }      // ← BlockState 数据库
+getActiveIconSearchRoots(slot) → IconSearchRoot[]              // ← 图标解析，按槽位给多个搜索根
+readIconFromRoot(root, relativePath)                           // 逐根尝试，形成回退链
+getActiveResourceFingerprint()                                 // 缓存失效指纹
+checkGameResourceHealth() → GameResourceHealthRow[]            // 界面「健康检查」
+```
+
+配套的缓存失效接口：`invalidateBlockIconCache`、`invalidateI18nCache`、
+`invalidateBlockstateDbCache`——切换资源后立即生效。
+
+**图标回退链**是现状完全没有的：`getActiveIconSearchRoots` 按槽位返回多个搜索根
+（内建 → 外部登记 → 已下载），`readIconFromRoot` 依次尝试，任何一层缺失都能继续回退。
+
+## 五、差异总表
+
+| 能力 | flake / 合并前 main | 现状 |
+| --- | --- | --- |
+| 资源注册表 | ✅ 5 类 × 每类多条目 | ❌ |
+| 多版本共存 | ✅ 同类型多份，独立激活 | ❌ 单版本 |
+| 六个激活槽位 | ✅ | ❌ |
+| 2D/3D 图标变体 | ✅ 且槽位约束 | ❌ 仅 2D 等效 |
+| 图标回退链 | ✅ 多搜索根依次回退 | ❌ 单一路径 |
+| CCVault 下载（方块/物品图标） | ✅ | ❌ |
+| Minecraft Wiki 抓取（图标，中英） | ✅ 682 行实现 | ❌ |
+| Minecraft Wiki 抓取（枚举全集） | ✅ 4 个数据值页面 | ❌ |
+| GitHub 语言包（分支/语言/下载） | ✅ | ❌ |
+| 本地导入（语言/游戏数据/外部图标目录） | ✅ | ❌ |
+| 内建图标解包 | ✅ `block.zip` / `item.zip` 按需解包 | ❌ 直接读 `pack-in/item-icons-26.3` |
+| 资源健康检查 | ✅ | ❌ |
+| 缓存失效接口 | ✅ 3 个 | ❌ |
+| 独立管理窗口 | ✅ `asset_manager.html` + 窗口 + 侧栏入口 | ❌ 入口与窗口都已移除 |
+| 资源落盘 | `minecraft-assets/**`（942 个文件曾入库，现应为本地 + gitignore） | 仅读 `pack-in/**` 与 `data/minecraft_blockstates/**` |
+
+## 六、恢复的判断与建议
+
+**这不是"把界面加回来"就能解决的**。flake 版的资源读取是注册表驱动，
+而现状的消费方（`blockIconResolver`、`blockstateDb`、`i18n`、`enumeratorService`）
+全部是硬编码路径——恢复管理器必然要同步改造这四个消费方，否则界面切了资源也不生效。
+
+建议分三层推进，每层可独立验收：
+
+| 层 | 内容 | 说明 |
+| --- | --- | --- |
+| L1 数据层 | 回移 `gameResources.ts`（921 行）+ 其依赖的 `platform/files.ts` 下载通道 | 纯数据能力，不动界面；可先用脚本验证注册表读写正确 |
+| L2 消费方改造 | 让 `blockIconResolver` / `blockstateDb` / `i18n` / `enumeratorService` 改走注册表 | **关键一步**；改完切换资源才会真正生效 |
+| L3 界面层 | 回移 `AssetManagerContent.tsx`（959 行）+ 窗口 + 入口 + 侧栏 + `capabilities`/vite | 依赖 L1、L2 |
+
+**风险与取舍**：
+
+1. `AssetManagerContent.tsx` 依赖 `NavIcon` 组件与一批 `asset-manager-*` 样式类，
+   这些在新架构中同样缺失，需一并回移或改用 shadcn 组件重写。
+2. 界面基于旧自研 CSS 主题，新架构是 shadcn/Tailwind——**建议 L3 用新组件重写界面**，
+   只保留 L1/L2 的逻辑层（与枚举器恢复时的策略一致：逻辑回移、界面适配）。
+3. 下载能力依赖外网（CCVault、minecraft.wiki、GitHub），且 `wiki_block_icons.rs`
+   含页面解析逻辑，长期看有失效风险；恢复后建议保留"内建资源始终作为离线回退"这一设计。
+4. **Mojang 资产不要重新入库**：flake 版把 942 个 `data/minecraft-assets` 文件提交了，
+   恢复时内建图标必须改为从 `pack-in/game-icons/block.zip` 按需解包
+   （`ensure_builtin_block_icons_extracted` 已具备该能力）。详见 2.6 节。
+5. 消费方改造会影响**现有图标/语言行为**，需要回归验证：材料列表图标、分层画布图标、
+   BlockState 数据库、i18n 文案、枚举器集合——这五条链路都依赖被改造的服务。
+
+**建议顺序**：先做 L1 + L2（能力可用但无界面，可用现有设置页或命令行验证切换效果），
+确认消费方改造无回归后再决定 L3 是重写界面还是回移。
