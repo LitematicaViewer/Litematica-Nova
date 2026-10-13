@@ -252,7 +252,7 @@ checkGameResourceHealth() → GameResourceHealthRow[]            // 界面「健
 **建议顺序**：先做 L1 + L2（能力可用但无界面，可用现有设置页或命令行验证切换效果），
 确认消费方改造无回归后再决定 L3 是重写界面还是回移。
 
-## 八、合并丢弃功能的整体恢复状态
+## 七、合并丢弃功能的整体恢复状态
 
 本次合并（`main` ← `111a0c50`）把我方 26 个既有代码文件整块丢弃。已按"回归修复"逐项恢复，
 而非作为新特性开发。
@@ -298,7 +298,7 @@ checkGameResourceHealth() → GameResourceHealthRow[]            // 界面「健
 - `cargo test --workspace`（viewer-core）：**232 项通过，0 失败**
   （含 `replace_blocks` v2 units 5 项：多输入、单输出、加权多输出、子集匹配、v1 兼容）
 
-## 七、恢复进展
+## 八、逐项恢复进展
 
 ### L1 数据层 —— 已完成（本次）
 
