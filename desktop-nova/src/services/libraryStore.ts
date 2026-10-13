@@ -1,3 +1,4 @@
+import { normalizeLibraryCategoryIcon } from "./libraryCategoryIcons";
 import {
   readUserConfigFile,
   writeUserConfigFile,
@@ -21,7 +22,9 @@ export interface ProjectionRecord {
   minecraftDataVersion: number;
   fileSize: number;
   mtime: number;
-  tags: string[];
+  /** Legacy migration input only; not exposed as an editable tag system. */
+  tags?: string[];
+  categoryIds?: string[];
   status: "ok" | "missing" | "parse_error";
   lastAnalyzedAt: number;
   lastError: string;
@@ -48,9 +51,24 @@ export interface SyncLibraryFoldersResult {
   errors: string[];
 }
 
+export type LibraryCategoryIcon =
+  | { kind: "lucide"; name: string }
+  | { kind: "minecraft"; blockId: string }
+  | { kind: "image"; dataUrl: string };
+
+export interface LibraryCategory {
+  id: string;
+  name: string;
+  parentId: string | null;
+  sort_index: number;
+  icon: LibraryCategoryIcon;
+}
+
 export interface LibraryState {
   records: ProjectionRecord[];
   folders: LocalLibraryFolder[];
+  categories?: LibraryCategory[];
+  schemaVersion?: number;
 }
 
 const LIB_PATH = "projection-library/js_library.json";
@@ -73,12 +91,58 @@ function normalizeFolder(folder: Partial<LocalLibraryFolder>, index: number): Lo
   };
 }
 
-function normalizeLibraryState(raw?: Partial<LibraryState> | null): LibraryState {
-  const records = (raw?.records || []).map((record, index) => ({
-    ...record,
-    sort_index: record.sort_index ?? index,
-    preview_image_path: record.preview_image_path || record.previewPath,
-  }));
+export const LIBRARY_CATEGORY_PRESETS = [
+  ["warehouse", "仓库", "Warehouse"], ["packer", "打包机", "Package"], ["crafting", "合成站", "Hammer"],
+  ["building", "建筑", "Building2"], ["farm", "农场", "Wheat"], ["cannon", "各类炮", "Crosshair"],
+  ["all-items", "全物品", "Boxes"], ["furnace", "熔炉组", "Flame"], ["trees", "树场", "Trees"],
+  ["mobs", "刷怪塔", "Skull"], ["stone", "刷石机", "Mountain"], ["iron", "刷铁机", "Anvil"], ["other", "杂项", "Folder"],
+] as const;
+
+export function normalizeLibraryState(raw?: Partial<LibraryState> | null): LibraryState {
+  const categories: LibraryCategory[] = [];
+  const categoryIds = new Set<string>();
+  for (const [index, entry] of (Array.isArray(raw?.categories) ? raw.categories : []).entries()) {
+    if (!entry || typeof entry.id !== "string" || !entry.id || categoryIds.has(entry.id)) continue;
+    categoryIds.add(entry.id);
+    categories.push({ id: entry.id, name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : "恢复的分类",
+      parentId: typeof entry.parentId === "string" ? entry.parentId : null,
+      sort_index: Number.isFinite(entry.sort_index) ? entry.sort_index : index,
+      icon: normalizeLibraryCategoryIcon(entry.icon) });
+  }
+  // Seed only the initial migration. A user can rename/delete presets without their resurrection.
+  if ((raw?.schemaVersion || 0) < 2 && !categories.length) {
+    for (const [id, name, icon] of LIBRARY_CATEGORY_PRESETS) categories.push({ id: `builtin:${id}`, name, parentId: null, sort_index: categories.length, icon: { kind: "lucide", name: icon } });
+    for (const entry of categories) categoryIds.add(entry.id);
+  }
+  for (const entry of categories) {
+    if (!entry.parentId || !categoryIds.has(entry.parentId)) { entry.parentId = null; continue; }
+    const visited = new Set([entry.id]); let parent: LibraryCategory | undefined = entry;
+    while (parent?.parentId) {
+      if (visited.has(parent.parentId)) { entry.parentId = null; break; }
+      visited.add(parent.parentId); parent = categories.find((item) => item.id === parent!.parentId);
+    }
+  }
+  const records = (Array.isArray(raw?.records) ? raw.records : []).map((record, index) => {
+    const { tags, ...retained } = record;
+    const ids = [...new Set((record.categoryIds || []).filter((id): id is string => typeof id === "string" && !!id))];
+    // Multiple old tags become multiple memberships, never just the first tag.
+    for (const tag of (Array.isArray(tags) ? tags : [])) {
+      if (typeof tag !== "string" || !tag.trim()) continue;
+      const name = tag.trim();
+      let category = categories.find((item) => item.parentId === null && item.name === name);
+      if (!category) {
+        let id = `migrated:${encodeURIComponent(name)}`;
+        while (categoryIds.has(id)) id += ":legacy";
+        category = { id, name, parentId: null, sort_index: categories.length, icon: { kind: "lucide", name: "Folder" } };
+        categories.push(category); categoryIds.add(id);
+      }
+      if (!ids.includes(category.id)) ids.push(category.id);
+    }
+    for (const id of ids) if (!categoryIds.has(id)) {
+      categories.push({ id, name: "恢复的分类", parentId: null, sort_index: categories.length, icon: { kind: "lucide", name: "Folder" } }); categoryIds.add(id);
+    }
+    return { ...retained, categoryIds: ids, sort_index: record.sort_index ?? index, preview_image_path: record.preview_image_path || record.previewPath };
+  });
   const folders: LocalLibraryFolder[] = [];
   const seen = new Set<string>();
   for (const [index, folder] of (raw?.folders || []).entries()) {
@@ -93,7 +157,58 @@ function normalizeLibraryState(raw?: Partial<LibraryState> | null): LibraryState
   folders.forEach((folder, index) => {
     folder.sort_index = index;
   });
-  return { records, folders };
+  return { records, folders, categories, schemaVersion: 2 };
+}
+
+export function categoryDescendants(state: LibraryState, id: string): Set<string> {
+  const result = new Set<string>([id]); let changed = true;
+  while (changed) { changed = false; for (const entry of state.categories || []) if (entry.parentId && result.has(entry.parentId) && !result.has(entry.id)) { result.add(entry.id); changed = true; } }
+  return result;
+}
+
+export function categoryPath(state: LibraryState, id: string): string {
+  const names: string[] = []; const seen = new Set<string>(); let entry = state.categories?.find((item) => item.id === id);
+  while (entry && !seen.has(entry.id)) { seen.add(entry.id); names.unshift(entry.name); entry = state.categories?.find((item) => item.id === entry!.parentId); }
+  return names.join(" / ");
+}
+
+function categoryName(name: string): string {
+  const value = name.trim();
+  if (!value || value.length > 80 || /[\\/\x00-\x1f]/.test(value)) throw new Error("分类名称需为 1–80 个字符，且不包含斜线或控制字符。");
+  return value;
+}
+
+function assertCategoryParent(state: LibraryState, parentId: string | null): void {
+  if (parentId && !state.categories?.some((item) => item.id === parentId)) throw new Error("目标分类已不存在，请刷新后重试。");
+}
+
+export function createLibraryCategory(state: LibraryState, name: string, parentId: string | null = null, id = `category:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`): LibraryState {
+  const next = normalizeLibraryState(state); assertCategoryParent(next, parentId); const value = categoryName(name);
+  if (next.categories!.some((entry) => entry.id === id || (entry.parentId === parentId && entry.name === value))) throw new Error("同一位置已存在此分类，请换一个名称。");
+  return { ...next, categories: [...next.categories!, { id, name: value, parentId, sort_index: next.categories!.length, icon: { kind: "lucide", name: "Folder" } }] };
+}
+
+export function updateLibraryCategory(state: LibraryState, id: string, patch: Partial<Pick<LibraryCategory, "name" | "parentId" | "icon">>): LibraryState {
+  const next = normalizeLibraryState(state); const entry = next.categories!.find((item) => item.id === id);
+  if (!entry) throw new Error("分类已不存在，请刷新后重试。");
+  const parentId = patch.parentId === undefined ? entry.parentId : patch.parentId; assertCategoryParent(next, parentId);
+  if (parentId && categoryDescendants(next, id).has(parentId)) throw new Error("分类不能移动到自身或子分类中。");
+  const name = patch.name === undefined ? entry.name : categoryName(patch.name);
+  if (next.categories!.some((item) => item.id !== id && item.parentId === parentId && item.name === name)) throw new Error("目标位置存在同名分类。");
+  return { ...next, categories: next.categories!.map((item) => item.id === id ? { ...item, name, parentId, icon: patch.icon === undefined ? item.icon : normalizeLibraryCategoryIcon(patch.icon) } : item) };
+}
+
+export function deleteLibraryCategory(state: LibraryState, id: string): LibraryState {
+  const next = normalizeLibraryState(state); const entry = next.categories!.find((item) => item.id === id);
+  if (!entry) return next;
+  // Children and projection memberships move one level up; files and other memberships stay intact.
+  return { ...next, categories: next.categories!.filter((item) => item.id !== id).map((item) => item.parentId === id ? { ...item, parentId: entry.parentId } : item),
+    records: next.records.map((record) => ({ ...record, categoryIds: [...new Set((record.categoryIds || []).flatMap((categoryId) => categoryId === id ? (entry.parentId ? [entry.parentId] : []) : [categoryId]))] })) };
+}
+
+export function moveLibraryRecordsToCategory(state: LibraryState, paths: string[], categoryId: string | null): LibraryState {
+  const next = normalizeLibraryState(state); assertCategoryParent(next, categoryId); const selected = new Set(paths);
+  return { ...next, records: next.records.map((record) => selected.has(record.path) ? { ...record, categoryIds: categoryId ? [categoryId] : [] } : record) };
 }
 
 function fileNameFromPath(filePath: string): string {
@@ -116,7 +231,7 @@ function projectionRecordFromDirectoryEntry(entry: DirectoryEntryInfo): Projecti
     minecraftDataVersion: 0,
     fileSize: entry.file_size || 0,
     mtime: entry.mtime_ms || 0,
-    tags: [],
+    categoryIds: [],
     status: "ok",
     lastAnalyzedAt: entry.mtime_ms || 0,
     lastError: "",
@@ -183,7 +298,7 @@ async function addOrUpdateRecordFromAnalysisInternal(
     minecraftDataVersion: analysis.minecraftDataVersion || 0,
     fileSize: existing?.fileSize || 0,
     mtime: existing?.mtime || 0,
-    tags: existing?.tags || [],
+    categoryIds: existing?.categoryIds || [],
     status: analysis.status || "ok",
     lastAnalyzedAt: Date.now(),
     lastError: analysis.lastError || "",
@@ -203,12 +318,13 @@ async function addOrUpdateRecordFromAnalysisInternal(
 }
 
 export async function loadLibrary(): Promise<LibraryState> {
-  try {
-    const data = await readUserConfigFile(LIB_PATH);
-    return normalizeLibraryState(JSON.parse(data) as LibraryState);
-  } catch {
-    return { records: [], folders: [] };
-  }
+  let raw: LibraryState;
+  try { raw = JSON.parse(await readUserConfigFile(LIB_PATH)) as LibraryState; }
+  catch { return normalizeLibraryState({ records: [], folders: [] }); }
+  const state = normalizeLibraryState(raw);
+  // Commit migration once. A failed write is surfaced, not silently turned into an empty library.
+  if (JSON.stringify(raw) !== JSON.stringify(state)) await writeUserConfigFile(LIB_PATH, JSON.stringify(state, null, 2));
+  return state;
 }
 
 export async function saveLibrary(state: LibraryState): Promise<void> {

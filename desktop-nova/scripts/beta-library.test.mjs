@@ -10,6 +10,15 @@ const source = readFileSync(new URL("../ui/windows/main/pages/library/LibraryPag
 const compiled = ts.transpileModule(source, { fileName: "LibraryPage.tsx", compilerOptions: {
   jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true,
 } }).outputText;
+function categoryMethods() {
+  const load = (relative, dependencies) => {
+    const code = ts.transpileModule(readFileSync(new URL(relative, import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+    const module = { exports: {} }; vm.runInThisContext(`(function(require,module,exports){${code}})`)(dependencies, module, module.exports); return module.exports;
+  };
+  const icons = load("../src/services/libraryCategoryIcons.ts", () => ({}));
+  return load("../src/services/libraryStore.ts", (name) => name === "./libraryCategoryIcons" ? icons : {});
+}
+const categories = categoryMethods();
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const record = (index, tags = []) => ({ id: `id-${index}`, path: `C:/library/${index}.litematic`, fileName: `${index}.litematic`,
   displayName: `投影 ${index}`, author: "作者", description: "真实元数据", totalBlocks: 100 + index, totalVolume: 300, regionCount: 1,
@@ -23,9 +32,10 @@ function label(value) {
   return String(value);
 }
 function createHarness(records, overrides = {}) {
-  let library = { records: structuredClone(records), folders: [{ path: "C:/library", enabled: true, recursive: true }] };
-  const calls = { saved: [], previews: [], generated: [], images: [], online: 0, selected: [], reordered: [], events: [] };
+  let library = categories.normalizeLibraryState({ records: structuredClone(records), folders: [{ path: "C:/library", enabled: true, recursive: true }] });
+  const calls = { saved: [], previews: [], generated: [], generatedModes: [], images: [], online: 0, selected: [], reordered: [], events: [] };
   const facade = {
+    ...categories,
     loadLibrary: async () => structuredClone(library),
     saveLibrary: async (next) => { calls.saved.push(structuredClone(next)); library = structuredClone(next); },
     loadUserConfigMigratingLocalStorage: async () => ({ config: { preview_mode: "normal" } }),
@@ -33,7 +43,7 @@ function createHarness(records, overrides = {}) {
     readProjectionPreviewImage: async (path) => { calls.previews.push(path); return { data_url: `data:preview,${path}` }; },
     readImageBase64: async (path) => { calls.images.push(path); return `data:saved,${path}`; },
     searchLocalLibraryFolderRecords: async () => [],
-    generatePreviewImage: async (path) => { calls.generated.push(path); return { preview_path: `${path}.png`, data_url: "data:generated" }; },
+    generatePreviewImage: async (path, mode) => { calls.generated.push(path); calls.generatedModes.push(mode); return { preview_path: `${path}.png`, data_url: "data:generated" }; },
     setRecordPreview: async (state, path, previewPath) => ({ ...state, records: state.records.map((item) => item.path === path ? { ...item, previewPath } : item) }),
     reorderLibraryRecords: async (state, paths) => { calls.reordered.push(paths); library = { ...state, records: state.records.map((item) => ({ ...item, sort_index: paths.indexOf(item.path) })) }; return library; },
     activateProjectionRecord: async (state) => state,
@@ -49,6 +59,8 @@ function createHarness(records, overrides = {}) {
   const module = { exports: {} };
   vm.runInThisContext(`(function(require,module,exports){${compiled}\n})`)((name) => {
     if (name === "react") return hooks;
+    if (name === "radix-ui") return { ContextMenu: { Root: "context-root", Trigger: "context-trigger", Portal: "context-portal", Content: "context-content", Item: "context-item", Separator: "context-separator" } };
+    if (name === "./categoryIcon") return { CategoryIcon: "category-icon", CategoryIconDialog: "category-icon-dialog" };
     if (name === "lucide-react") return new Proxy({}, { get: (_, key) => `icon-${String(key)}` });
     if (name.endsWith("facade")) return facade;
     if (name.endsWith(".css")) return {};
@@ -99,7 +111,7 @@ test("投影库：默认仅读取可见页真实预览，翻页继续读取，�
   assert.equal(h.calls.previews.length, 23);
 });
 
-test("投影库：搜索真实标签、未分类及状态筛选，在线下载使用已有入口", async () => {
+test("投影库：搜索迁移分类、未分类及状态筛选，在线下载使用已有入口", async () => {
   const records = [record(0, ["红石"]), record(1, ["建筑"]), record(2)]; records[2].status = "missing";
   const h = createHarness(records); await h.settle();
   h.input("搜索投影").props.onChange({ target: { value: "红石" } }); await h.settle();
@@ -114,23 +126,36 @@ test("投影库：搜索真实标签、未分类及状态筛选，在线下载�
   await h.button("下载投影").props.onClick(); assert.equal(h.calls.online, 1);
 });
 
-test("投影库：批量标签持久化保留已有元数据，拖放标签不移动文件", async () => {
-  const records = [record(0, ["原标签"]), record(1), record(2, ["目标标签"])];
+test("投影库：批量移动分类与拖放只改归类，原文件/元数据和隐藏记录保留", async () => {
+  const records = [record(0, ["原标签", "旧次标签"]), record(1), record(2, ["目标分类"])];
   const h = createHarness(records); await h.settle();
   h.cards()[0].props.onToggle(true); h.render(); h.cards()[1].props.onToggle(true); h.render();
-  h.button("添加标签").props.onClick(); h.render();
-  h.find((node) => node.props.id === "library-tag-name").props.onChange({ target: { value: "新标签" } }); h.render();
-  await h.button("添加").props.onClick(); await h.settle();
-  assert.deepEqual(h.library().records[0].tags, ["原标签", "新标签"]);
-  assert.deepEqual(h.library().records[1].tags, ["新标签"]);
-  assert.deepEqual(h.library().folders, [{ path: "C:/library", enabled: true, recursive: true }]);
-  assert.equal(h.library().records[0].description, records[0].description);
-  assert.equal(h.library().records[0].path, records[0].path);
+  h.button("移动到分类…").props.onClick(); h.render();
+  const target = h.library().categories.find((item) => item.name === "目标分类").id;
+  h.find((node) => node.type === "dropdown" && node.props.ariaLabel === "目标分类").props.onChange(target); h.render();
+  await h.button("移动").props.onClick(); await h.settle();
+  assert.deepEqual(h.library().records[0].categoryIds, [target]); assert.deepEqual(h.library().records[1].categoryIds, [target]);
+  assert.equal("tags" in h.library().records[0], false); assert.equal(h.library().folders[0].path, "C:/library");
+  assert.equal(h.library().records[0].description, records[0].description); assert.equal(h.library().records[0].path, records[0].path);
   h.cards()[0].props.onDragStart(dragEvent()); h.render();
-  h.category("目标标签").props.onDrop(dragEvent()); await h.settle();
-  assert.deepEqual(h.library().records[0].tags, ["原标签", "新标签", "目标标签"]);
-  assert.deepEqual(h.library().records[1].tags, ["新标签", "目标标签"]);
-  assert.ok(h.calls.events.some(([event]) => event === "changed"));
+  h.category("未分类").props.onDrop(dragEvent()); await h.settle();
+  assert.deepEqual(h.library().records[0].categoryIds, []); assert.deepEqual(h.library().records[1].categoryIds, []);
+  assert.deepEqual(h.library().records[2].categoryIds, [target]); assert.ok(h.calls.events.some(([event]) => event === "changed"));
+});
+
+test("投影库：右键创建子分类、稳定展开树、父级筛选涵盖子分类，预览仍走真实服务", async () => {
+  const h = createHarness([record(0)]); await h.settle();
+  const create = h.find((node) => node.type === "context-item" && label(node.props.children) === "新建子分类");
+  create.props.onSelect(); h.render();
+  h.find((node) => node.props.id === "library-category-name").props.onChange({ target: { value: "木头库存" } }); h.render();
+  await h.button("保存").props.onClick(); await h.settle();
+  const child = h.library().categories.find((item) => item.name === "木头库存");
+  assert.equal(child.parentId, "builtin:warehouse"); assert.equal(h.category("木头库存").props["aria-level"], 2);
+  h.cards()[0].props.onToggle(true); h.render(); h.button("移动到分类…").props.onClick(); h.render();
+  h.find((node) => node.type === "dropdown" && node.props.ariaLabel === "目标分类").props.onChange(child.id); h.render();
+  await h.button("移动").props.onClick(); await h.settle(); h.category("仓库").props.onClick(); await h.settle();
+  assert.equal(h.cards().length, 1); h.cards()[0].props.onInspect(); h.render();
+  await h.button("生成预览图").props.onClick(); await h.settle(); assert.deepEqual(h.calls.generated, [record(0).path]); assert.deepEqual(h.calls.generatedModes, ["fast_experimental"]);
 });
 
 test("投影库：批量移除需要确认，只保存剩余记录，不调用文件删除", async () => {

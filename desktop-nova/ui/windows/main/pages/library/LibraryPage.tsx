@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Download, FolderOpen, FolderPlus, ImageOff, LayoutGrid, Plus, RefreshCw, Search, Tag, Trash2, X } from "lucide-react";
+import { Box, Download, FolderOpen, FolderPlus, ImageOff, LayoutGrid, Plus, RefreshCw, Search, ChevronDown, ChevronRight, Folder, Trash2, X } from "lucide-react";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
 import { Checkbox } from "../../../../components/ui/checkbox";
@@ -11,6 +11,15 @@ import {
   activateProjectionRecord,
   copyFileToDirectory,
   LibraryState,
+  LibraryCategory,
+  LibraryCategoryIcon,
+  categoryDescendants,
+  categoryPath,
+  createLibraryCategory,
+  deleteLibraryCategory,
+  moveLibraryRecordsToCategory,
+  normalizeLibraryState,
+  updateLibraryCategory,
   loadLibrary,
   LocalLibraryFolder,
   ProjectionRecord,
@@ -19,6 +28,8 @@ import {
   searchLocalLibraryFolderRecords,
   setRecordPreview,
 } from "../../../../../src/business/facade";
+import { ContextMenu } from "radix-ui";
+import { CategoryIcon, CategoryIconDialog } from "./categoryIcon";
 import { SendProjectionDialog } from "./sendDialog";
 import { Dialog } from "../../../../components/Dialog";
 import "./library.css";
@@ -26,8 +37,6 @@ import { ensureLitematicFileName } from "./function";
 import { checkFileExists, generatePreviewImage, openFileParentDir, readImageBase64, readProjectionPreviewImage, selectLitematicFile } from "../../../../../src/business/facade";
 import { LocalLibraryFoldersDialog, openLocalLibraryFoldersWithWindowBehavior } from "../../../local_library_folders";
 import { RedenLibraryDialog, openRedenLibraryWithWindowBehavior } from "../../../reden_library";
-import { loadUserConfigMigratingLocalStorage } from "../../../../../src/business/facade";
-import { DisplayMode, normalizeDisplayMode } from "../../../../../src/business/facade";
 import { emitEvent, listenEvent } from "../../../../../src/platform/events";
 import { projectionLibraryImportedEvent, projectionLibraryStateChangedEvent } from "../../../libraryEvents";
 
@@ -105,7 +114,7 @@ function ProjectionCard({ record, isCurrent, isInspected, checked, previewUrl, l
 export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [state, setState] = useState<LibraryState>({ records: [], folders: [] });
   const [search, setSearch] = useState("");
-  const [tagFilter, setTagFilter] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [sortMode, setSortMode] = useState("manual");
   const [pageSize, setPageSize] = useState(20);
@@ -116,7 +125,6 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [removeRecords, setRemoveRecords] = useState<ProjectionRecord[]>([]);
   const [isRemoving, setIsRemoving] = useState(false);
   const [removeError, setRemoveError] = useState("");
-  const [previewMode, setPreviewMode] = useState<DisplayMode>("fast_experimental");
   const [generatingPreviewPath, setGeneratingPreviewPath] = useState("");
   const [previewError, setPreviewError] = useState("");
   const [previewDataUrls, setPreviewDataUrls] = useState<Record<string, string>>({});
@@ -129,10 +137,15 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [inspectedPath, setInspectedPath] = useState("");
   const [untaggedOnly, setUntaggedOnly] = useState(false);
-  const [tagDialogPaths, setTagDialogPaths] = useState<string[]>([]);
-  const [tagDraft, setTagDraft] = useState("");
-  const [isTagging, setIsTagging] = useState(false);
-  const [tagError, setTagError] = useState("");
+  const [moveDialogPaths, setMoveDialogPaths] = useState<string[]>([]);
+  const [moveCategoryId, setMoveCategoryId] = useState("");
+  const [isCategorizing, setIsCategorizing] = useState(false);
+  const [categoryError, setCategoryError] = useState("");
+  const [categoryDialog, setCategoryDialog] = useState<{ kind: "create" | "rename" | "move" | "delete"; id: string; parentId: string | null } | null>(null);
+  const [categoryNameDraft, setCategoryNameDraft] = useState("");
+  const [categoryParentDraft, setCategoryParentDraft] = useState("");
+  const [expandedCategories, setExpandedCategories] = useState<string[]>([]);
+  const [iconCategoryId, setIconCategoryId] = useState("");
   const [dropTarget, setDropTarget] = useState("");
   const [detailImageKind, setDetailImageKind] = useState<"auto" | "preview">("auto");
   const [failedDetailImage, setFailedDetailImage] = useState("");
@@ -146,18 +159,16 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [folderSearchRecords, setFolderSearchRecords] = useState<ProjectionRecord[]>([]);
   const [isFolderSearchLoading, setIsFolderSearchLoading] = useState(false);
   const [folderSearchError, setFolderSearchError] = useState("");
-  const libraryBusy = isRefreshing || isOpening || isRemoving || isSending || isTagging;
+  const libraryBusy = isRefreshing || isOpening || isRemoving || isSending || isCategorizing;
 
   useEffect(() => {
-    loadLibrary().then(setState).catch((error) => setPreviewError(`读取投影库失败，请点击刷新重试：${String(error)}`));
-    loadUserConfigMigratingLocalStorage()
-      .then((info) => setPreviewMode(normalizeDisplayMode(info.config.preview_mode)))
-      .catch(() => setPreviewMode("fast_experimental"));
+    loadLibrary().then((library) => setState(normalizeLibraryState(library))).catch((error) => setPreviewError(`读取投影库失败，请点击刷新重试：${String(error)}`));
+
   }, []);
 
   useEffect(() => {
     const unlistenPromise = listenEvent<{ path?: string }>(projectionLibraryImportedEvent, async (event) => {
-      setState(await loadLibrary());
+      setState(normalizeLibraryState(await loadLibrary()));
       if (event.payload?.path) {
         setCurrentFile(event.payload.path);
       }
@@ -169,7 +180,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
 
   useEffect(() => {
     const unlistenPromise = listenEvent(projectionLibraryStateChangedEvent, async () => {
-      setState(await loadLibrary());
+      setState(normalizeLibraryState(await loadLibrary()));
     }).catch(() => undefined);
     return () => {
       unlistenPromise.then((unlisten) => unlisten?.());
@@ -314,7 +325,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     setPreviewError("");
     setGeneratingPreviewPath(record.path);
     try {
-      const output = await generatePreviewImage(record.path, previewMode);
+      const output = await generatePreviewImage(record.path, "fast_experimental");
       const newState = await setRecordPreview(await loadLibrary(), record.path, output.preview_path);
       setState(newState);
       setPreviewDataUrls((current) => ({ ...current, [record.path]: output.data_url }));
@@ -354,62 +365,80 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     setDragPaths([]);
   };
 
-  const applyTag = async (paths: string[], tag: string, remove = false) => {
-    if (!paths.length || libraryBusy) return;
-    const value = tag.trim();
-    if (!value && !remove) return;
-    setIsTagging(true);
-    setTagError("");
-    setPreviewError("");
+  const commitCategories = async (operation: (latest: LibraryState) => LibraryState) => {
+    if (libraryBusy) return;
+    setIsCategorizing(true); setCategoryError("");
     try {
-      const latest = await loadLibrary();
-      const byPath = new Map(latest.records.map((record) => [record.path, record]));
-      // Search may find a file in a mounted folder that is not yet a library record.
-      for (const record of folderSearchRecords) if (paths.includes(record.path) && !byPath.has(record.path)) byPath.set(record.path, record);
-      const targets = new Set(paths);
-      const next = { ...latest, records: [...byPath.values()].map((record) => {
-        if (!targets.has(record.path)) return record;
-        const tags = record.tags || [];
-        return { ...record, tags: remove ? (value ? tags.filter((entry) => entry !== value) : []) : [...new Set([...tags, value])] };
-      }) };
-      await saveLibrary(next);
-      setState(next);
-      setTagDialogPaths([]);
-      setTagDraft("");
+      const next = operation(normalizeLibraryState(await loadLibrary()));
+      await saveLibrary(next); setState(next);
       void emitEvent(projectionLibraryStateChangedEvent).catch(() => undefined);
-    } catch (error) {
-      const message = `保存标签失败，请重试：${String(error)}`;
-      setTagError(message);
-      setPreviewError(message);
-    } finally {
-      setIsTagging(false);
-      setDragPaths([]);
-      setDropTarget("");
-    }
+    } catch (error) { const message = String(error); setCategoryError(message); throw error; }
+    finally { setIsCategorizing(false); setDragPaths([]); setDropTarget(""); }
   };
-
-  const openTagDialog = (paths: string[]) => {
-    setTagDialogPaths(paths); setTagDraft(""); setTagError("");
+  const openCategoryDialog = (kind: "create" | "rename" | "move" | "delete", category?: LibraryCategory) => {
+    setCategoryDialog({ kind, id: category?.id || "", parentId: kind === "create" ? category?.id || null : category?.parentId || null });
+    setCategoryNameDraft(kind === "create" ? "" : category?.name || "");
+    setCategoryParentDraft(kind === "create" ? category?.id || "" : category?.parentId || ""); setCategoryError("");
   };
+  const confirmCategory = async () => {
+    if (!categoryDialog) return;
+    const dialog = categoryDialog;
+    await commitCategories((latest) => dialog.kind === "create" ? createLibraryCategory(latest, categoryNameDraft, categoryParentDraft || null)
+      : dialog.kind === "delete" ? deleteLibraryCategory(latest, dialog.id)
+      : updateLibraryCategory(latest, dialog.id, dialog.kind === "rename" ? { name: categoryNameDraft } : { parentId: categoryParentDraft || null }));
+    if (dialog.kind === "delete" && categoryFilter === dialog.id) setCategoryFilter(dialog.parentId || "");
+    if (dialog.kind === "create" && categoryParentDraft) setExpandedCategories((current) => [...new Set([...current, categoryParentDraft])]);
+    setCategoryDialog(null);
+  };
+  const moveRecords = async (paths: string[], id: string) => {
+    if (!paths.length) return;
+    await commitCategories((latest) => {
+      const byPath = new Map(latest.records.map((record) => [record.path, record]));
+      for (const record of folderSearchRecords) if (paths.includes(record.path) && !byPath.has(record.path)) byPath.set(record.path, record);
+      return moveLibraryRecordsToCategory({ ...latest, records: [...byPath.values()] }, paths, id || null);
+    });
+    setMoveDialogPaths([]);
+  };
+  const openMoveDialog = (paths: string[]) => { setMoveDialogPaths(paths); setMoveCategoryId(""); setCategoryError(""); };
   const toggleSelected = (path: string, checked: boolean) => {
     setSelectedPaths((current) => checked ? [...new Set([...current, path])] : current.filter((entry) => entry !== path));
     if (checked) setInspectedPath(path);
   };
-  const tagDropProps = (tag: string) => ({
-    onDragOver: (event: React.DragEvent) => {
-      if (!dragPaths.length || libraryBusy) return;
-      event.preventDefault(); event.dataTransfer.dropEffect = "link"; setDropTarget(tag || "untagged");
-    },
+  const categoryDropProps = (id: string) => ({
+    onDragOver: (event: React.DragEvent) => { if (!dragPaths.length || libraryBusy) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDropTarget(id || "untagged"); },
     onDragLeave: () => setDropTarget(""),
-    onDrop: (event: React.DragEvent) => {
-      event.preventDefault(); event.stopPropagation();
-      void applyTag(dragPaths, tag, !tag);
-    },
+    onDrop: (event: React.DragEvent) => { event.preventDefault(); event.stopPropagation(); void moveRecords(dragPaths, id).catch((error) => setPreviewError(`移动分类失败：${String(error)}`)); },
   });
-
-  const tagOptions = useMemo(() => {
-    return Array.from(new Set(state.records.flatMap((record) => record.tags || []))).sort((a, b) => a.localeCompare(b));
-  }, [state.records]);
+  const categories = state.categories || [];
+  const categoryOptions = useMemo(() => categories.map((category) => ({ value: category.id, label: categoryPath(state, category.id) })), [state.categories]);
+  const selectedCategoryIds = useMemo(() => categoryDescendants(state, categoryFilter), [state.categories, categoryFilter]);
+  const toggleExpanded = (id: string) => setExpandedCategories((current) => current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]);
+  const renderCategoryTree = (parentId: string | null, depth = 1): React.ReactNode => (
+    <ul className="library-category-tree" role={parentId ? "group" : "tree"} aria-label={parentId ? undefined : "分类树"}>
+      {categories.filter((entry) => entry.parentId === parentId).sort((a, b) => a.sort_index - b.sort_index).map((category) => {
+        const hasChildren = categories.some((item) => item.parentId === category.id); const expanded = expandedCategories.includes(category.id);
+        const descendants = categoryDescendants(state, category.id);
+        return <li key={category.id} role="none"><ContextMenu.Root><ContextMenu.Trigger asChild><div className="library-category-row">
+          {hasChildren ? <Button className="library-category-expander" variant="ghost" size="icon-sm" disabled={libraryBusy} aria-label={`${expanded ? "收起" : "展开"} ${category.name}`} onClick={() => toggleExpanded(category.id)}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</Button> : <span className="library-category-expander-spacer" />}
+          <Button variant="ghost" className="library-category" role="treeitem" aria-level={depth} aria-expanded={hasChildren ? expanded : undefined} aria-selected={categoryFilter === category.id} aria-pressed={categoryFilter === category.id} data-category-tree-node={category.id} disabled={libraryBusy}
+            data-drop-target={dropTarget === category.id || undefined} onClick={() => { setCategoryFilter(category.id); setUntaggedOnly(false); }} onKeyDown={(event) => {
+              const treeNodes = () => Array.from(event.currentTarget.closest('[role="tree"]')?.querySelectorAll<HTMLButtonElement>('[data-category-tree-node]') || []);
+              const focusCategory = (id?: string | null) => treeNodes().find((node) => node.dataset.categoryTreeNode === id)?.focus();
+              if (event.key === "ArrowRight" && hasChildren) { event.preventDefault(); if (!expanded) toggleExpanded(category.id); else focusCategory(categories.filter((item) => item.parentId === category.id).sort((a, b) => a.sort_index - b.sort_index)[0]?.id); }
+              else if (event.key === "ArrowLeft") { event.preventDefault(); if (hasChildren && expanded) toggleExpanded(category.id); else focusCategory(category.parentId); }
+              else if (["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) { event.preventDefault(); const nodes = treeNodes(); const index = nodes.indexOf(event.currentTarget); nodes[event.key === "Home" ? 0 : event.key === "End" ? nodes.length - 1 : Math.max(0, Math.min(nodes.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))]?.focus(); }
+            }} {...categoryDropProps(category.id)}><CategoryIcon icon={category.icon} /><span title={categoryPath(state, category.id)}>{category.name}</span><small>{state.records.filter((record) => record.categoryIds?.some((id) => descendants.has(id))).length}</small></Button>
+        </div></ContextMenu.Trigger><ContextMenu.Portal><ContextMenu.Content className="library-category-menu" collisionPadding={8}>
+          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("create", category)}>新建子分类</ContextMenu.Item>
+          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("rename", category)}>重命名</ContextMenu.Item>
+          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("move", category)}>移动分类…</ContextMenu.Item>
+          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => { setIconCategoryId(category.id); setCategoryError(""); }}>更换图标…</ContextMenu.Item>
+          <ContextMenu.Separator className="library-category-menu-separator" />
+          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("delete", category)}>删除分类…</ContextMenu.Item>
+        </ContextMenu.Content></ContextMenu.Portal></ContextMenu.Root>{hasChildren && expanded && renderCategoryTree(category.id, depth + 1)}</li>;
+      })}
+    </ul>
+  );
 
   const filteredRecords = useMemo(() => {
     const recordsByPath = new Map<string, ProjectionRecord>();
@@ -422,10 +451,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     let records = [...recordsByPath.values()].filter((r) => {
       if (search) {
         const q = search.toLowerCase();
-        if (!`${r.displayName} ${r.fileName} ${r.path} ${r.author} ${r.description} ${(r.tags || []).join(" ")}`.toLowerCase().includes(q)) return false;
+        if (!`${r.displayName} ${r.fileName} ${r.path} ${r.author} ${r.description} ${(r.categoryIds || []).map((id) => categoryPath(state, id)).join(" ")}`.toLowerCase().includes(q)) return false;
       }
-      if (tagFilter && !(r.tags || []).includes(tagFilter)) return false;
-      if (untaggedOnly && r.tags?.length) return false;
+      if (categoryFilter && !(r.categoryIds || []).some((id) => selectedCategoryIds.has(id))) return false;
+      if (untaggedOnly && r.categoryIds?.length) return false;
       if (statusFilter && r.status !== statusFilter) return false;
       return true;
     });
@@ -439,7 +468,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       records = [...records].sort((a, b) => a.displayName.localeCompare(b.displayName));
     }
     return records;
-  }, [state.records, folderSearchRecords, search, tagFilter, untaggedOnly, statusFilter, sortMode]);
+  }, [state.records, state.categories, selectedCategoryIds, folderSearchRecords, search, categoryFilter, untaggedOnly, statusFilter, sortMode]);
 
   const pageCount = pageSize === 0 ? 1 : Math.max(1, Math.ceil(filteredRecords.length / pageSize));
   const currentPage = Math.min(page, pageCount);
@@ -458,7 +487,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const inspectedRecord = availableRecords.find((record) => record.path === inspectedPath) || null;
   const allPageSelected = visibleRecords.length > 0 && visibleRecords.every((record) => selectedPaths.includes(record.path));
   const somePageSelected = visibleRecords.some((record) => selectedPaths.includes(record.path));
-  const activeCategory = untaggedOnly ? "未分类" : tagFilter || "全部投影";
+  const activeCategory = untaggedOnly ? "未分类" : categoryPath(state, categoryFilter) || "全部投影";
   const detailPreviewUrl = inspectedRecord
     ? (detailImageKind === "auto" ? previewDataUrls[inspectedRecord.path] || projectionPreviewDataUrls[inspectedRecord.path] : projectionPreviewDataUrls[inspectedRecord.path]) || ""
     : "";
@@ -484,7 +513,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
 
   useEffect(() => {
     setPage(1);
-  }, [search, tagFilter, untaggedOnly, statusFilter, sortMode, pageSize]);
+  }, [search, categoryFilter, untaggedOnly, statusFilter, sortMode, pageSize]);
 
   useEffect(() => {
     const trimmedSearch = search.trim();
@@ -525,7 +554,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         <h2>投影库</h2>
         <Button variant="default" onClick={handleSelect} disabled={libraryBusy} aria-busy={isOpening}><FolderPlus size={16} />{isOpening ? "正在导入…" : "导入投影"}</Button>
         <Button onClick={() => handleOpenRedenLibrary().catch((error) => setPreviewError(`打开在线投影库失败：${String(error)}`))}><Download size={16} />下载投影</Button>
-        <div className="library-search"><Search size={16} aria-hidden="true" /><Input type="search" aria-label="搜索投影" placeholder="搜索名称、作者、标签…" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
+        <div className="library-search"><Search size={16} aria-hidden="true" /><Input type="search" aria-label="搜索投影" placeholder="搜索名称、作者、分类…" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
         <Button variant="ghost" onClick={() => handleOpenLocalLibraryFolders().catch((error) => setPreviewError(`打开本地库文件夹失败：${String(error)}`))}><FolderOpen size={16} />管理文件夹</Button>
         <Button variant="ghost" size="icon" aria-label={isRefreshing ? "正在刷新投影库" : "刷新投影库"} title="刷新投影库" disabled={libraryBusy} aria-busy={isRefreshing} onClick={handleRefresh}><RefreshCw size={16} /></Button>
       </header>
@@ -536,16 +565,15 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       <div className="library-workspace">
         <aside className="library-categories" aria-label="投影分类">
           <div className="library-pane-heading"><h3>我的投影</h3><span>{state.records.length}</span></div>
-          <ScrollArea className="library-category-scroll" horizontal>
-            <nav className="library-category-list" aria-label="标签筛选">
-              <Button variant="ghost" className="library-category" aria-pressed={!tagFilter && !untaggedOnly} onClick={() => { setTagFilter(""); setUntaggedOnly(false); }}><LayoutGrid size={16} /><span>全部投影</span><small>{state.records.length}</small></Button>
-              <Button variant="ghost" className="library-category" aria-pressed={untaggedOnly} data-drop-target={dropTarget === "untagged" || undefined} onClick={() => { setTagFilter(""); setUntaggedOnly(true); }} {...tagDropProps("")}><Box size={16} /><span>未分类</span><small>{state.records.filter((record) => !record.tags?.length).length}</small></Button>
-              <div className="library-tag-heading"><span>标签</span><Button size="icon-sm" variant="ghost" aria-label="为选中投影添加标签" title={selectedRecords.length ? "为选中投影添加标签" : "先勾选投影，再添加标签"} disabled={!selectedRecords.length || libraryBusy} onClick={() => openTagDialog(selectedRecords.map((record) => record.path))}><Plus size={15} /></Button></div>
-              {tagOptions.map((tag) => <Button key={tag} variant="ghost" className="library-category" aria-pressed={tagFilter === tag} data-drop-target={dropTarget === tag || undefined} onClick={() => { setTagFilter(tag); setUntaggedOnly(false); }} {...tagDropProps(tag)}><Tag size={15} /><span title={tag}>{tag}</span><small>{state.records.filter((record) => record.tags?.includes(tag)).length}</small></Button>)}
-              {!tagOptions.length && <p className="library-category-hint">选中投影后添加标签。</p>}
+          <div className="library-category-tools"><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => openCategoryDialog("create")}><FolderPlus size={14} />新建分类</Button></div>
+          <ScrollArea className="library-category-scroll">
+            <nav className="library-category-list" aria-label="分类筛选">
+              <Button variant="ghost" className="library-category" aria-pressed={!categoryFilter && !untaggedOnly} onClick={() => { setCategoryFilter(""); setUntaggedOnly(false); }}><LayoutGrid size={16} /><span>全部投影</span><small>{state.records.length}</small></Button>
+              <Button variant="ghost" className="library-category" aria-pressed={untaggedOnly} data-drop-target={dropTarget === "untagged" || undefined} onClick={() => { setCategoryFilter(""); setUntaggedOnly(true); }} {...categoryDropProps("")}><Box size={16} /><span>未分类</span><small>{state.records.filter((record) => !record.categoryIds?.length).length}</small></Button>
+              {renderCategoryTree(null)}
             </nav>
           </ScrollArea>
-          <div className="library-category-footnote">拖到标签即可归类，文件保持原位。</div>
+          <div className="library-category-footnote">右键管理分类；拖入分类只改变归类，不移动原文件。</div>
         </aside>
 
         <section className="library-collection" aria-label="投影卡片">
@@ -555,14 +583,14 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
             <div className="library-filter-control"><Dropdown ariaLabel="筛选文件状态" value={statusFilter} onChange={setStatusFilter} options={[{ value: "", label: "全部状态" }, { value: "ok", label: "正常" }, { value: "missing", label: "文件丢失" }, { value: "parse_error", label: "解析失败" }]} /></div>
             <div className="library-filter-control"><Dropdown ariaLabel="投影排序" value={sortMode} onChange={setSortMode} options={[{ value: "manual", label: "手动排序" }, { value: "recent_analyzed", label: "最近分析" }, { value: "blocks", label: "方块数量" }, { value: "name", label: "名称 A–Z" }]} /></div>
           </div>
-          {selectedRecords.length > 0 && <div className="library-batch-toolbar"><Button size="sm" onClick={() => openTagDialog(selectedRecords.map((record) => record.path))} disabled={libraryBusy}><Tag size={14} />添加标签</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords(selectedRecords); }}><Trash2 size={14} />从列表移除</Button><Button size="sm" variant="ghost" onClick={() => setSelectedPaths([])}>取消选择</Button></div>}
+          {selectedRecords.length > 0 && <div className="library-batch-toolbar"><Button size="sm" onClick={() => openMoveDialog(selectedRecords.map((record) => record.path))} disabled={libraryBusy}><Folder size={14} />移动到分类…</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords(selectedRecords); }}><Trash2 size={14} />从列表移除</Button><Button size="sm" variant="ghost" onClick={() => setSelectedPaths([])}>取消选择</Button></div>}
           <ScrollArea className="library-grid-scroll">
             {visibleRecords.length > 0 ? <div className="library-card-grid">{visibleRecords.map((record) => <ProjectionCard key={record.path} record={record} isCurrent={currentFile === record.path} isInspected={inspectedRecord?.path === record.path} checked={selectedPaths.includes(record.path)} busy={libraryBusy}
               previewUrl={previewDataUrls[record.path] || projectionPreviewDataUrls[record.path] || ""} loading={!!projectionPreviewLoadingPaths[record.path]}
               onInspect={() => { setInspectedPath(record.path); setDetailImageKind("auto"); }} onToggle={(checked) => toggleSelected(record.path, checked)} onActivate={() => handleActivateRecord(record.path)}
               onDragStart={(event) => { const paths = selectedPaths.includes(record.path) ? selectedRecords.map((entry) => entry.path) : [record.path]; setDragPaths(paths); event.dataTransfer.effectAllowed = "all"; event.dataTransfer.setData("application/x-nova-library-records", JSON.stringify(paths)); }}
               onDragEnd={() => { setDragPaths([]); setDropTarget(""); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); handleDrop(record.path).catch((error) => setPreviewError(`排序失败：${String(error)}`)); }}
-            />)}</div> : <div className="library-empty-state"><Box size={40} aria-hidden="true" /><h3>{state.records.length || search ? "没有找到投影" : "把你的第一份投影放进来"}</h3><p>{state.records.length || search ? "换个关键词或清除筛选，再试一次。" : "导入本地 .litematic，或从在线投影库下载。"}</p><div className="library-empty-actions">{state.records.length || search ? <Button onClick={() => { setSearch(""); setTagFilter(""); setUntaggedOnly(false); setStatusFilter(""); }}>清除筛选</Button> : <Button variant="default" onClick={handleSelect} disabled={libraryBusy}><Plus size={16} />导入投影</Button>}</div></div>}
+            />)}</div> : <div className="library-empty-state"><Box size={40} aria-hidden="true" /><h3>{state.records.length || search ? "没有找到投影" : "把你的第一份投影放进来"}</h3><p>{state.records.length || search ? "换个关键词或清除筛选，再试一次。" : "导入本地 .litematic，或从在线投影库下载。"}</p><div className="library-empty-actions">{state.records.length || search ? <Button onClick={() => { setSearch(""); setCategoryFilter(""); setUntaggedOnly(false); setStatusFilter(""); }}>清除筛选</Button> : <Button variant="default" onClick={handleSelect} disabled={libraryBusy}><Plus size={16} />导入投影</Button>}</div></div>}
           </ScrollArea>
           <footer className="library-collection-footer"><span>{issueCount ? `${issueCount} 项需关注` : "双击卡片设为当前投影"}</span><div className="library-page-limit"><Dropdown ariaLabel="每页条目" value={String(pageSize)} onChange={(value) => setPageSize(Number(value))} options={[20, 50, 100, 200, 0].map((count) => ({ value: String(count), label: count ? `${count} 项 / 页` : "全部显示" }))} /></div><Button size="sm" variant="ghost" disabled={currentPage <= 1 || pageSize === 0} onClick={() => setPage(currentPage - 1)}>上一页</Button><span>{currentPage} / {pageCount}</span><Button size="sm" variant="ghost" disabled={currentPage >= pageCount || pageSize === 0} onClick={() => setPage(currentPage + 1)}>下一页</Button></footer>
         </section>
@@ -578,7 +606,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
               <div className="library-detail-actions"><Button variant="default" disabled={libraryBusy || inspectedRecord.status !== "ok" || currentFile === inspectedRecord.path} onClick={() => handleActivateRecord(inspectedRecord.path)}>{currentFile === inspectedRecord.path ? "当前投影" : "设为当前投影"}</Button><Button disabled={libraryBusy || inspectedRecord.status === "missing"} onClick={() => { setCurrentFile(inspectedRecord.path); setRoute("properties"); }}>查看属性</Button></div>
               <dl className="library-detail-facts"><div><dt>方块数量</dt><dd>{inspectedRecord.totalBlocks.toLocaleString()}</dd></div><div><dt>尺寸</dt><dd>{inspectedRecord.enclosingSize.x} × {inspectedRecord.enclosingSize.y} × {inspectedRecord.enclosingSize.z}</dd></div><div><dt>区域</dt><dd>{inspectedRecord.regionCount}</dd></div><div><dt>文件大小</dt><dd>{formatSize(inspectedRecord.fileSize)}</dd></div><div><dt>最近分析</dt><dd>{formatDate(inspectedRecord.lastAnalyzedAt)}</dd></div></dl>
               {inspectedRecord.description && <p className="library-detail-description">{inspectedRecord.description}</p>}
-              <div className="library-detail-section"><div className="library-detail-section-heading"><h4>标签</h4><Button size="icon-sm" variant="ghost" aria-label="添加标签" disabled={libraryBusy} onClick={() => openTagDialog([inspectedRecord.path])}><Plus size={15} /></Button></div><div className="library-detail-tags">{inspectedRecord.tags?.length ? inspectedRecord.tags.map((tag) => <span className="library-tag-chip" key={tag}>{tag}<Button size="icon-sm" variant="ghost" aria-label={`移除标签 ${tag}`} disabled={libraryBusy} onClick={() => applyTag([inspectedRecord.path], tag, true)}><X size={12} /></Button></span>) : <span className="muted">未分类</span>}</div></div>
+              <div className="library-detail-section"><h4>分类</h4><div className="library-detail-categories">{inspectedRecord.categoryIds?.length ? inspectedRecord.categoryIds.map((id) => <span className="library-category-membership" key={id}>{categoryPath(state, id)}</span>) : <span className="muted">未分类</span>}</div><Button size="sm" disabled={libraryBusy} onClick={() => openMoveDialog([inspectedRecord.path])}>移动到分类…</Button></div>
               <div className="library-detail-section"><h4>预览图</h4><div className="library-detail-actions">{previewDataUrls[inspectedRecord.path] && projectionPreviewDataUrls[inspectedRecord.path] && <Button size="sm" onClick={() => setDetailImageKind(detailImageKind === "auto" ? "preview" : "auto")}>{detailImageKind === "auto" ? "查看内嵌图" : "查看渲染图"}</Button>}<Button size="sm" disabled={libraryBusy || !!generatingPreviewPath || inspectedRecord.status !== "ok"} aria-busy={generatingPreviewPath === inspectedRecord.path} onClick={() => handleGeneratePreview(inspectedRecord)}>{generatingPreviewPath === inspectedRecord.path ? "正在生成…" : "生成预览图"}</Button></div></div>
               <div className="library-detail-section"><h4>文件</h4><p className="library-detail-path" title={inspectedRecord.path}>{inspectedRecord.path}</p><div className="library-detail-actions"><Button size="sm" onClick={() => openFileParentDir(inspectedRecord.path).catch((error) => setPreviewError(`打开文件夹失败：${String(error)}`))}>打开文件夹</Button><Button size="sm" disabled={libraryBusy || inspectedRecord.status === "missing"} onClick={() => handleOpenSendDialog(inspectedRecord)}>复制到…</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords([inspectedRecord]); }}><Trash2 size={14} />从列表移除</Button></div></div>
             </div> : <div className="library-inspector-empty"><Box size={32} /><p>点击卡片查看详情</p></div>}
@@ -586,7 +614,13 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         </aside>
       </div>
       {removeRecords.length > 0 && <Dialog title={`从投影库移除${removeRecords.length > 1 ? ` ${removeRecords.length} 项` : "此投影"}？`} subtitle="只移除列表记录，不会删除电脑上的投影文件。" width="sm" busy={isRemoving} onClose={() => setRemoveRecords([])} footer={<><Button onClick={() => setRemoveRecords([])} disabled={isRemoving}>保留</Button><Button variant="destructive" onClick={handleRemove} disabled={isRemoving} aria-busy={isRemoving}>{isRemoving ? "正在移除…" : "从列表移除"}</Button></>}><ul className="library-remove-list">{removeRecords.slice(0, 8).map((record) => <li key={record.path}>{record.displayName || record.fileName}</li>)}</ul>{removeRecords.length > 8 && <p>以及另外 {removeRecords.length - 8} 项</p>}{removeError && <div className="dialog-message dialog-message-error" role="alert">{removeError}</div>}</Dialog>}
-      {tagDialogPaths.length > 0 && <Dialog title="添加标签" subtitle={`为 ${tagDialogPaths.length} 个投影归类，已有标签会保留。`} width="sm" busy={isTagging} onClose={() => setTagDialogPaths([])} footer={<><Button disabled={isTagging} onClick={() => setTagDialogPaths([])}>取消</Button><Button variant="default" disabled={isTagging || !tagDraft.trim()} onClick={() => applyTag(tagDialogPaths, tagDraft)}>{isTagging ? "保存中…" : "添加"}</Button></>}><form className="library-tag-form" onSubmit={(event) => { event.preventDefault(); void applyTag(tagDialogPaths, tagDraft); }}><label htmlFor="library-tag-name">标签名称</label><Input id="library-tag-name" autoFocus value={tagDraft} disabled={isTagging} onChange={(event) => setTagDraft(event.target.value)} placeholder="例如：红石机器" />{tagOptions.length > 0 && <Dropdown ariaLabel="选择已有标签" value={tagOptions.includes(tagDraft) ? tagDraft : ""} onChange={setTagDraft} options={[{ value: "", label: "或选择已有标签" }, ...tagOptions.map((tag) => ({ value: tag, label: tag }))]} />}</form>{tagError && <div className="dialog-message dialog-message-error" role="alert">{tagError}</div>}</Dialog>}
+      {moveDialogPaths.length > 0 && <Dialog title="移动到分类" subtitle={`为 ${moveDialogPaths.length} 个投影更换归类，原文件保持原位。旧多分类分配只在你确认移动后替换。`} width="sm" busy={isCategorizing} onClose={() => setMoveDialogPaths([])} footer={<><Button disabled={isCategorizing} onClick={() => setMoveDialogPaths([])}>取消</Button><Button variant="default" disabled={isCategorizing} onClick={() => void moveRecords(moveDialogPaths, moveCategoryId).catch(() => undefined)}>移动</Button></>}><Dropdown ariaLabel="目标分类" value={moveCategoryId} onChange={setMoveCategoryId} options={[{ value: "", label: "未分类" }, ...categoryOptions]} />{categoryError && <p className="dialog-message dialog-message-error" role="alert">{categoryError}</p>}</Dialog>}
+      {categoryDialog && <Dialog title={categoryDialog.kind === "create" ? "新建分类" : categoryDialog.kind === "rename" ? "重命名分类" : categoryDialog.kind === "move" ? "移动分类" : "删除分类？"} subtitle={categoryDialog.kind === "delete" ? "子分类和此分类内的投影移到上一级；根分类内的投影变为未分类。不会删除投影或原文件。" : undefined} width="sm" busy={isCategorizing} onClose={() => setCategoryDialog(null)} footer={<><Button disabled={isCategorizing} onClick={() => setCategoryDialog(null)}>取消</Button><Button variant={categoryDialog.kind === "delete" ? "destructive" : "default"} disabled={isCategorizing || (["create", "rename"].includes(categoryDialog.kind) && !categoryNameDraft.trim())} onClick={() => void confirmCategory().catch(() => undefined)}>{categoryDialog.kind === "delete" ? "删除分类" : "保存"}</Button></>}>
+        {["create", "rename"].includes(categoryDialog.kind) && <div className="library-category-form"><label htmlFor="library-category-name">分类名称</label><Input id="library-category-name" autoFocus maxLength={80} disabled={isCategorizing} value={categoryNameDraft} onChange={(event) => setCategoryNameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && categoryNameDraft.trim()) { event.preventDefault(); void confirmCategory().catch(() => undefined); } }} /></div>}
+        {["create", "move"].includes(categoryDialog.kind) && <Dropdown ariaLabel="上级分类" value={categoryParentDraft} onChange={setCategoryParentDraft} options={[{ value: "", label: "分类根目录" }, ...categoryOptions.filter((item) => categoryDialog.kind !== "move" || !categoryDescendants(state, categoryDialog.id).has(item.value))]} />}
+        {categoryError && <p className="dialog-message dialog-message-error" role="alert">{categoryError}</p>}
+      </Dialog>}
+      {iconCategoryId && categories.find((category) => category.id === iconCategoryId) && <CategoryIconDialog name={categories.find((category) => category.id === iconCategoryId)!.name} icon={categories.find((category) => category.id === iconCategoryId)!.icon} busy={isCategorizing} onClose={() => setIconCategoryId("")} onSubmit={async (icon: LibraryCategoryIcon) => { await commitCategories((latest) => updateLibraryCategory(latest, iconCategoryId, { icon })); setIconCategoryId(""); }} />}
       {sendDialogRecord ? (
         <SendProjectionDialog
           record={sendDialogRecord}
