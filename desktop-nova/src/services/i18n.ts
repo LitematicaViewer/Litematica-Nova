@@ -8,8 +8,11 @@ let langMap: Record<string, string> = {};
  * The registry resolves the activated `language` entry (builtin by default, or a
  * locally imported / downloaded pack), so switching language packs takes effect
  * after `invalidateI18nCache()` + `initI18n()`.
+ *
+ * @param force Re-read even when a map is already cached (used after switching).
  */
-export async function initI18n() {
+export async function initI18n(force = false) {
+  if (!force && Object.keys(langMap).length > 0) return;
   try {
     const raw = await readActiveLanguageResource();
     langMap = JSON.parse(raw);

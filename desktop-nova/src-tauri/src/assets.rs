@@ -1104,7 +1104,7 @@ fn download_vault_block_icons_sync(app: AppHandle) -> Result<VaultBlockIconDownl
 }
 
 fn download_vault_item_icons_sync(app: AppHandle) -> Result<VaultBlockIconDownloadOutput, String> {
-    emit_vault_block_icon_progress(&app, 0, 1, 0, "正在连接到 ccvaults.com...");
+    emit_vault_item_icon_progress(&app, 0, 1, 0, "正在连接到 ccvaults.com...");
     let client = vault_client()?;
     let home = client
         .get(VAULT_SITE_LABEL)
@@ -1115,10 +1115,10 @@ fn download_vault_item_icons_sync(app: AppHandle) -> Result<VaultBlockIconDownlo
     }
     let home_html = home.text().unwrap_or_default();
 
-    emit_vault_block_icon_progress(&app, 0, 1, 0, "正在自动获取访问令牌...");
+    emit_vault_item_icon_progress(&app, 0, 1, 0, "正在自动获取访问令牌...");
     let token = acquire_vault_token(&client, &home_html)?;
 
-    emit_vault_block_icon_progress(&app, 0, 1, 0, "正在获取物品图标索引...");
+    emit_vault_item_icon_progress(&app, 0, 1, 0, "正在获取物品图标索引...");
     let items_payload = vault_fetch_json_with_auth(&client, VAULT_API_ITEMS_PATH, &token)?;
     let mut entries = collect_vault_category_entries(&items_payload, VAULT_ITEM_CATEGORY_NAME);
     if entries.is_empty() {
@@ -1132,10 +1132,10 @@ fn download_vault_item_icons_sync(app: AppHandle) -> Result<VaultBlockIconDownlo
     let target_dir = current_user_config_dir()?.join(VAULT_ITEM_ICON_ROOT_RELPATH);
     std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
     let total = entries.len();
-    emit_vault_block_icon_progress(&app, 0, total, 0, format!("准备并行下载 {total} 个图标..."));
+    emit_vault_item_icon_progress(&app, 0, total, 0, format!("准备下载 {total} 个图标..."));
 
     let mut downloaded = 0;
-    for (item_id, file_url) in entries {
+    for (index, (item_id, file_url)) in entries.into_iter().enumerate() {
         // Item icons keep their native size; no resampling is applied.
         if download_one_vault_icon(
             &client,
@@ -1147,17 +1147,24 @@ fn download_vault_item_icons_sync(app: AppHandle) -> Result<VaultBlockIconDownlo
         ) {
             downloaded += 1;
         }
-        emit_vault_block_icon_progress(
+        emit_vault_item_icon_progress(
             &app,
-            downloaded,
+            index + 1,
             total,
             downloaded,
-            format!("正在下载图标: {item_id}（成功 {downloaded}）"),
+            format!("正在下载图标: {item_id}"),
         );
     }
     if downloaded == 0 {
         return Err("未成功下载任何物品图标".to_string());
     }
+    emit_vault_item_icon_progress(
+        &app,
+        total,
+        total,
+        downloaded,
+        format!("下载完成：{downloaded}/{total}"),
+    );
 
     Ok(VaultBlockIconDownloadOutput {
         total,
@@ -1174,9 +1181,31 @@ fn emit_vault_block_icon_progress(
     downloaded: usize,
     status: impl Into<String>,
 ) {
+    emit_vault_icon_progress(app, "vault-block-icons-download-progress", current, total, downloaded, status);
+}
+
+fn emit_vault_item_icon_progress(
+    app: &AppHandle,
+    current: usize,
+    total: usize,
+    downloaded: usize,
+    status: impl Into<String>,
+) {
+    emit_vault_icon_progress(app, "vault-item-icons-download-progress", current, total, downloaded, status);
+}
+
+/// Emits one icon-download progress tick on the event name its window listens to.
+fn emit_vault_icon_progress(
+    app: &AppHandle,
+    event: &str,
+    current: usize,
+    total: usize,
+    downloaded: usize,
+    status: impl Into<String>,
+) {
     use tauri::Emitter;
     let _ = app.emit(
-        "vault-block-icons-download-progress",
+        event,
         VaultBlockIconProgress {
             current,
             total,

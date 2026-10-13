@@ -16,9 +16,11 @@ let i18nCache: I18nDb | null = null;
  * Loads the active BlockState database and its property translations from the
  * game-resource registry, so activating another `game_data` entry takes effect
  * after `invalidateBlockstateDbCache()` + `loadDatabases()`.
+ *
+ * @param force Re-read even when both caches are already populated.
  */
-export async function loadDatabases() {
-  if (dbCache && i18nCache) return;
+export async function loadDatabases(force = false) {
+  if (!force && dbCache && i18nCache) return;
   try {
     const active = await readActiveGameDataResource();
     dbCache = JSON.parse(active.dbText);
