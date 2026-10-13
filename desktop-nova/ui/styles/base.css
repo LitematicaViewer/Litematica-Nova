@@ -1,6 +1,9 @@
 @import "../shell/theme.css";
 @import "./widgets.css";
 @import "./controls.css";
+/* Replace-group units UI (restored): enum block picker + unit cards.
+   Kept under its own file because the live pages ship their own `replace.css`. */
+@import "./replace-units.css";
 
 :root {
     --ln-space-1: 4px;
