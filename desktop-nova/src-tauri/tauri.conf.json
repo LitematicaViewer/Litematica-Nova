@@ -57,6 +57,7 @@
       "gen/block-icons": "block",
       "../../bin/public-beta": "bin/public-beta",
       "../../tools/viewer-core/target/public-beta/release/stockpile_server.exe": "bin/stockpile-server/windows-x64/stockpile_server.exe",
+      "../../tools/windows-thumbnail-provider/target/release/litematica_thumbnail.dll": "litematica_thumbnail.dll",
       "../../LICENSE": "licenses/LICENSE",
       "../../docs/THIRD_PARTY_UI.md": "licenses/THIRD_PARTY_UI.md",
       "../../docs/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt",

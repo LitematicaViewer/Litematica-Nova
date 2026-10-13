@@ -4,6 +4,7 @@ mod application;
 mod platform;
 mod viewer_backend;
 mod viewer_launch_contract;
+mod shell_integration;
 
 use application::model::ProductPreviewImage;
 use application::operations::{
@@ -24,6 +25,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -31,6 +33,7 @@ use tauri_plugin_dialog::DialogExt;
 static APP_RESOURCE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static APP_LOCAL_DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
 const PRODUCT_DATA_DIRECTORY: &str = "Litematica-Nova";
+static SHUTDOWN_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize)]
 struct PathInfo {
@@ -606,9 +609,11 @@ fn read_user_config_data(dir: &Path) -> UserConfig {
 
 fn write_user_config_data(dir: &Path, config: &UserConfig) -> Result<(), String> {
     ensure_user_config_layout(dir)?;
+    let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+    if std::fs::read_to_string(user_config_path(dir)).ok().as_deref() == Some(content.as_str()) { return Ok(()); }
     std::fs::write(
         user_config_path(dir),
-        serde_json::to_string_pretty(config).map_err(|e| e.to_string())?,
+        content,
     )
     .map_err(|e| e.to_string())
 }
@@ -835,7 +840,6 @@ async fn application_read_embedded_preview(
 
 const FULL_MODE_UNAVAILABLE: &str = "Beta 公共版未提供完整模式；请使用快速渲染。";
 
-// Retained legacy command names fail explicitly; no private renderer is linked.
 #[tauri::command]
 async fn render_preview_image(file_path: String, display_mode: String, cache_input: Option<String>, host: tauri::State<'_, QuickPreviewHost>) -> Result<ProductPreviewImage, String> {
     let _ = cache_input;
@@ -908,11 +912,18 @@ async fn application_prepare_material_recipes(input: MaterialRecipeCacheInput, o
 }
 
 #[tauri::command]
-fn get_user_config() -> Result<UserConfigInfo, String> {
+async fn get_user_config() -> Result<UserConfigInfo, String> {
+    tauri::async_runtime::spawn_blocking(load_user_config_info).await.map_err(|error| error.to_string())?
+}
+
+fn load_user_config_info() -> Result<UserConfigInfo, String> {
+    let started = std::time::Instant::now();
     let dir = current_user_config_dir()?;
     migrate_legacy_library_if_needed(&dir)?;
     let config = read_user_config_data(&dir);
-    write_user_config_data(&dir, &config)?;
+    // Reading normalized preferences must not overwrite a newer concurrent save.
+    // Defaults are returned in memory; only explicit changes persist configuration.
+    eprintln!("[NOVA_LIFECYCLE] stage=config_read_migration elapsed_ms={}", started.elapsed().as_millis());
     Ok(UserConfigInfo {
         config_dir: dir.display().to_string(),
         default_config_dir: default_user_config_dir()?.display().to_string(),
@@ -1025,7 +1036,7 @@ fn set_user_config_dir(path: String, migrate: bool) -> Result<UserConfigInfo, St
     )
     .map_err(|e| e.to_string())?;
     initialize_flake_user_resources()?;
-    get_user_config()
+    load_user_config_info()
 }
 
 #[tauri::command]
@@ -1041,7 +1052,7 @@ fn reset_user_config_dir(migrate: bool) -> Result<UserConfigInfo, String> {
         std::fs::remove_file(pointer).map_err(|e| e.to_string())?;
     }
     initialize_flake_user_resources()?;
-    get_user_config()
+    load_user_config_info()
 }
 
 #[tauri::command]
@@ -2230,13 +2241,14 @@ struct ApplicationHostComponents {
 }
 
 fn initialize_application_host(project_root: PathBuf, app_local_data_root: PathBuf) -> Result<ApplicationHostComponents, String> {
+    let started = std::time::Instant::now();
     if !cfg!(windows) {
         return Err("Beta 公共版桌面 Application Host 与原生嵌入当前仅支持 Windows；macOS/Linux 尚未提供。".into());
     }
-    initialize_flake_user_resources()?;
     let viewer_exe = required_backend_exe_path("litematica_native_viewer")?;
     let core_exe = required_backend_exe_path("litematica_core")?;
     viewer_backend::verify_public_deployment(core_exe.parent().ok_or("public backend has no directory")?)?;
+    eprintln!("[NOVA_LIFECYCLE] stage=backend_resource_identity elapsed_ms={}", started.elapsed().as_millis());
     let mut allowlist = platform::process_supervisor::ExecutableAllowlist::new();
     for (role, executable) in [
         (platform::process_supervisor::ExecutableRole::NativeViewer, &viewer_exe),
@@ -2247,6 +2259,7 @@ fn initialize_application_host(project_root: PathBuf, app_local_data_root: PathB
     let supervisor = Arc::new(supervisor);
     let operations = ApplicationOperations::new(Arc::clone(&supervisor), project_root, app_local_data_root,
         core_exe.parent().map(Path::to_path_buf).ok_or_else(|| "backend executable has no directory".to_owned())?)?;
+    eprintln!("[NOVA_LIFECYCLE] stage=application_host elapsed_ms={} flake_seed=lazy update_network=async", started.elapsed().as_millis());
     Ok(ApplicationHostComponents { supervisor, operations })
 }
 
@@ -2292,7 +2305,15 @@ fn main() {
         return;
     }
     tauri::Builder::default()
+        .manage(shell_integration::OpenFiles::default())
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            shell_integration::queue_open_files(app, args.iter().skip(1).map(String::as_str), Path::new(&cwd));
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize(); let _ = window.show(); let _ = window.set_focus();
+            }
+        }))
         .setup(|app| {
+            shell_integration::queue_open_files(app.handle(), env::args().skip(1).collect::<Vec<_>>().iter().map(String::as_str), &env::current_dir()?);
             let resource_root = app.path().resource_dir()?;
             let app_local_data_root = product_local_data_root(&app.path().local_data_dir()?);
             let _ = APP_RESOURCE_ROOT.set(resource_root);
@@ -2325,22 +2346,33 @@ fn main() {
                 && matches!(event, tauri::WindowEvent::CloseRequested { .. })
             {
                 let supervisor = window
-                    .try_state::<Arc<platform::process_supervisor::ProcessSupervisor>>();
+                    .try_state::<Arc<platform::process_supervisor::ProcessSupervisor>>()
+                    .map(|state| Arc::clone(state.inner()));
                 if let Some(supervisor) = supervisor.as_ref() {
                     supervisor.stop_admitting();
                 }
-                if let Some(supervisor) = supervisor {
-                    let report = supervisor.shutdown(Duration::from_secs(3), Duration::from_secs(2));
-                    if !report.remaining.is_empty() {
-                        eprintln!(
-                            "[NOVA_PROCESS_SUPERVISOR] shutdown left {} process handle(s) pending reap",
-                            report.remaining.len()
-                        );
-                    }
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
                 }
+                if SHUTDOWN_STARTED.swap(true, Ordering::AcqRel) { return; }
+                let app = window.app_handle().clone();
+                let quick = window.try_state::<QuickPreviewHost>().map(|host| host.inner().clone());
+                let _ = window.set_title("Litematica-Nova — 正在结束后台任务…");
+                tauri::async_runtime::spawn_blocking(move || {
+                    let started = std::time::Instant::now();
+                    if let Some(quick) = quick {
+                        if let Ok(Some(view)) = quick.snapshot() { let _ = quick.close(&view.preview_id); }
+                    }
+                    if let Some(supervisor) = supervisor {
+                        let report = supervisor.shutdown(Duration::from_secs(3), Duration::from_secs(2));
+                        eprintln!("[NOVA_LIFECYCLE] stage=child_shutdown elapsed_ms={} pending={}", started.elapsed().as_millis(), report.remaining.len());
+                    }
+                    app.exit(0);
+                });
             }
         })
         .invoke_handler(tauri::generate_handler![
+            shell_integration::application_take_open_files,
             application_update_snapshot,
             application_update_check,
             application_update_download,

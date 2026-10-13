@@ -1,6 +1,8 @@
 import { Button } from "../components/ui/button";
 import { ScrollArea } from "../components/ui/scroll-area";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { invoke } from "../../src/platform/tauri";
+import { addOrUpdateRecord, loadLibrary } from "../../src/business/projectionLibrary";
 import { Menu, Home, Library, FileText, BarChart3, Layers, Box, Replace, Wand2, Settings, LayoutDashboard, type LucideIcon } from "lucide-react";
 import { listenEvent } from "../../src/platform/events";
 import { loadDatabases } from "../../src/business/facade";
@@ -55,6 +57,27 @@ export function App() {
   const [route, setRoute] = useState(() => readUpdateDraft<{route: string}>("shell")?.route || "home");
   useUpdateDraft("shell", { currentFile, route });
   useEffect(() => { takeUpdateDraft("shell"); }, []);
+  useEffect(() => {
+    let active = true;
+    let imports = Promise.resolve();
+    const receive = async () => {
+      if (!active) return;
+      const paths = await invoke<string[]>("application_take_open_files");
+      if (active && paths.length) {
+        setCurrentFile(paths[paths.length - 1]); setRoute("properties");
+        // Keep every requested file in the library; the latest request becomes
+        // the single active projection without silently dropping earlier ones.
+        imports = imports.catch(console.error).then(async () => {
+          let library = await loadLibrary();
+          for (const path of paths) { library = await addOrUpdateRecord(library, path); }
+        });
+        void imports.catch(console.error);
+      }
+    };
+    const subscribed = listenEvent("nova-open-projection", () => { void receive().catch(console.error); });
+    void subscribed.then(receive).catch(console.error);
+    return () => { active = false; void subscribed.then((off) => off()); };
+  }, []);
   const [expanded, setExpanded] = useState(true);
   const [showUiTestPage, setShowUiTestPage] = useState(true);
 

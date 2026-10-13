@@ -6,10 +6,10 @@ import "../styles/base.css";
 import { loadUserConfigMigratingLocalStorage } from "../../src/business/facade";
 import { initializeWindowTheme } from "../shell/themeRuntime";
 
-initializeWindowTheme(loadUserConfigMigratingLocalStorage, true).then(() => {
+// Paint the cached/default shell immediately; disk config hydration is asynchronous.
+void initializeWindowTheme(loadUserConfigMigratingLocalStorage, true);
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <App />
     </React.StrictMode>,
   );
-});

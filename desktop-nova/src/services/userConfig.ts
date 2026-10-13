@@ -38,7 +38,14 @@ export function normalizeLocalLibraryTailPathCount(value: unknown): number {
   return Number.isFinite(numeric) && numeric >= 1 ? numeric : DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT;
 }
 
-export async function loadUserConfigMigratingLocalStorage(): Promise<UserConfigInfo> {
+let configHydration: Promise<UserConfigInfo> | null = null;
+export function loadUserConfigMigratingLocalStorage(): Promise<UserConfigInfo> {
+  if (configHydration) return configHydration;
+  configHydration = hydrateUserConfig().finally(() => { configHydration = null; });
+  return configHydration;
+}
+
+async function hydrateUserConfig(): Promise<UserConfigInfo> {
   const info = await getUserConfig();
   if (localStorage.getItem(MIGRATION_KEY) !== "1") {
     const patch: Record<string, string> = {};

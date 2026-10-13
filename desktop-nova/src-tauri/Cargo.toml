@@ -29,4 +29,5 @@ tauri-plugin-updater = "=2.10.0"
 minisign-verify = "=0.2.5"
 
 [target.'cfg(windows)'.dependencies]
+tauri-plugin-single-instance = "=2.4.0"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Threading"] }
