@@ -58,6 +58,8 @@ function harness(page, name, facade = {}) {
     if (id === "react") return mockReact;
     if (id.endsWith(".css")) return {};
     if (id.endsWith("facade")) return resolvedFacade;
+    if (id.endsWith("platform/events")) return { emitEvent: async () => {} };
+    if (id.endsWith("libraryEvents")) return { projectionLibraryStateChangedEvent: "projection-library-state-changed" };
     if (id.endsWith("updateRecovery")) {
       if (!recoveryHook) {
         const source = readFileSync(new URL("../../ui/windows/main/updateRecovery.ts", import.meta.url), "utf8");
