@@ -217,6 +217,47 @@ pub(crate) fn delete_user_config_file(relative_path: String) -> Result<(), Strin
     std::fs::remove_file(path).map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Core backend execution.
+//
+// The pre-merge build exposed `execute_backend(binaryName, args)` and resolved
+// the binary through `bin/viewer-backend`. That directory no longer exists: the
+// public-beta layout keeps its helpers in `bin/public-beta`, and the host already
+// restricts that set to an exact allowlist. The command is restored against that
+// layout so callers (e.g. the replace-group rules) keep working.
+// ---------------------------------------------------------------------------
+
+/// Runs one of the isolated public helpers and returns its stdout.
+#[tauri::command]
+pub(crate) async fn execute_backend(
+    binary_name: String,
+    args: Vec<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || run_backend(&binary_name, &args))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn run_backend(binary_name: &str, args: &[String]) -> Result<String, String> {
+    let exe_path = crate::required_backend_exe_path(binary_name)?;
+    let current_dir = get_root();
+    let output = std::process::Command::new(&exe_path)
+        .args(args)
+        .current_dir(&current_dir)
+        .output()
+        .map_err(|e| format!("执行 {} 失败: {e}", exe_path.display()))?;
+
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+    }
+    Err(format!(
+        "Exit code: {:?}\nStdout: {}\nStderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
 /// Opens the native picker for a `.litematic` file and returns the chosen path.
 #[tauri::command]
 pub(crate) async fn pick_litematic_file(app: AppHandle) -> Result<Option<String>, String> {

@@ -1,5 +1,8 @@
 export * from "./actions";
 export * from "./resourcePreflightUnits";
+// Replace-group rules (units format, presets, session persistence).
+export * from "./replace/actions";
+export type * from "./replace/types";
 export { openDialog, saveDialog } from "../platform/dialogs";
 export * from "../services/aiProjection";
 export * from "../services/backend";

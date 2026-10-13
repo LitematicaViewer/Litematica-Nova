@@ -1,3 +1,5 @@
+import { invoke } from "../platform/tauri";
+
 export {
   chooseUserConfigDir,
   cleanupLocalTempFiles,
@@ -13,6 +15,24 @@ export {
 } from "../platform";
 export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo } from "../platform";
 export type { BuiltinIconExtractOutput, VaultBlockIconDownloadOutput, WikiEnumCatalogDownloadOutput } from "../platform/files";
+
+export function executeBackend(binaryName: string, args: string[]): Promise<string> {
+  return invoke("execute_backend", { binaryName, args });
+}
+
+/**
+ * Runs the isolated public core helper (`litematica_core`) and returns its stdout.
+ */
+export function executeCoreBackend(args: string[]): Promise<string> {
+  return executeBackend("litematica_core", args);
+}
+
+/**
+ * Runs the isolated public fast-preview helper and returns its stdout.
+ */
+export function executeNativeViewerBackend(args: string[]): Promise<string> {
+  return executeBackend("litematica_native_viewer", args);
+}
 
 export {
   checkFileExists,

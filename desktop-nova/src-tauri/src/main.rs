@@ -2380,6 +2380,7 @@ fn main() {
             assets::ensure_builtin_block_icons_extracted,
             assets::ensure_builtin_item_icons_extracted,
             assets::delete_user_config_file,
+            assets::execute_backend,
             assets::pick_litematic_file,
             assets::download_vault_block_icons,
             assets::download_vault_item_icons,
