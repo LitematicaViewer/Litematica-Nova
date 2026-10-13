@@ -1204,8 +1204,138 @@ pub(crate) async fn download_vault_item_icons(
         .map_err(|e| e.to_string())?
 }
 
+/// Pulls every `resource location` cell value out of the HTML tables.
+fn extract_resource_locations_from_html(html: &str) -> Result<Vec<String>, String> {
+    let table_selector = scraper::Selector::parse("table").map_err(|e| e.to_string())?;
+    let row_selector = scraper::Selector::parse("tr").map_err(|e| e.to_string())?;
+    let cell_selector = scraper::Selector::parse("th, td").map_err(|e| e.to_string())?;
+    let code_selector = scraper::Selector::parse("code").map_err(|e| e.to_string())?;
+    let document = scraper::Html::parse_document(html);
+    let mut seen = std::collections::HashSet::new();
+    let mut output = Vec::new();
+
+    for table in document.select(&table_selector) {
+        let rows: Vec<_> = table.select(&row_selector).collect();
+        let mut resource_column = None;
+        let mut data_start = 0usize;
+        for (row_index, row) in rows.iter().enumerate() {
+            let cells: Vec<_> = row.select(&cell_selector).collect();
+            let labels: Vec<_> = cells
+                .iter()
+                .map(|cell| element_text(cell).to_ascii_lowercase())
+                .collect();
+            if let Some(column_index) = labels
+                .iter()
+                .position(|label| label.contains("resource location"))
+            {
+                resource_column = Some(column_index);
+                data_start = row_index + 1;
+                break;
+            }
+        }
+        let Some(resource_column) = resource_column else {
+            continue;
+        };
+        for row in rows.iter().skip(data_start) {
+            let cells: Vec<_> = row.select(&cell_selector).collect();
+            let Some(cell) = cells.get(resource_column) else {
+                continue;
+            };
+            for value in extract_code_values_from_cell(cell, &code_selector) {
+                if seen.insert(value.clone()) {
+                    output.push(value);
+                }
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+/// Cuts the enchantment section out of the aggregated data-values page.
+fn extract_enchantment_section_html(html: &str) -> Option<&str> {
+    let lower = html.to_ascii_lowercase();
+    let markers = [
+        "id=\"enchantments\"",
+        "id='enchantments'",
+        "id=\"enchantment\"",
+        "id='enchantment'",
+    ];
+    let start_hint = markers.iter().filter_map(|marker| lower.find(marker)).max()?;
+    let start = lower[..start_hint]
+        .rfind("<div class=\"mw-heading")
+        .or_else(|| lower[..start_hint].rfind("<h"))
+        .unwrap_or(start_hint);
+    let search_start = (start_hint + 1).min(html.len());
+    let end = lower[search_start..]
+        .find("<div class=\"mw-heading")
+        .map(|offset| search_start + offset)
+        .unwrap_or(html.len());
+    Some(&html[start..end])
+}
+
+fn write_json_catalog(path: &Path, values: &[String]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(values).map_err(|e| e.to_string())?;
+    std::fs::write(path, content).map_err(|e| e.to_string())
+}
+
+fn download_minecraft_wiki_enum_catalogs_sync() -> Result<WikiEnumCatalogDownloadOutput, String> {
+    let client = wiki_client()?;
+    let blocks_html = fetch_wiki_html(&client, WIKI_ENUM_BLOCKS_URL)?;
+    let items_html = fetch_wiki_html(&client, WIKI_ENUM_ITEMS_URL)?;
+    let main_html = fetch_wiki_html(&client, WIKI_ENUM_MAIN_URL)?;
+    let entities_html = fetch_wiki_html(&client, WIKI_ENUM_ENTITIES_URL)?;
+
+    let blocks = extract_resource_locations_from_html(&blocks_html)?;
+    let items = extract_resource_locations_from_html(&items_html)?;
+    let enchantment_section = extract_enchantment_section_html(&main_html)
+        .ok_or_else(|| "无法定位 Minecraft Wiki 魔咒数据值分节".to_string())?;
+    let enchantments = extract_resource_locations_from_html(enchantment_section)?;
+    let entities = extract_resource_locations_from_html(&entities_html)?;
+
+    if blocks.is_empty() || items.is_empty() || enchantments.is_empty() || entities.is_empty() {
+        return Err("Minecraft Wiki 枚举全集解析结果为空。".to_string());
+    }
+
+    let target_dir = current_user_config_dir()?.join(WIKI_ENUM_ROOT_RELPATH);
+    std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    write_json_catalog(&target_dir.join("DV_Blocks.json"), &blocks)?;
+    write_json_catalog(&target_dir.join("DV_Items.json"), &items)?;
+    write_json_catalog(&target_dir.join("DV_Enchantments.json"), &enchantments)?;
+    write_json_catalog(&target_dir.join("DV_Entities.json"), &entities)?;
+    let manifest = serde_json::json!({
+        "source": "minecraft_wiki",
+        "root_relpath": WIKI_ENUM_ROOT_RELPATH,
+        "catalogs": {
+            "blocks": { "file": "DV_Blocks.json", "url": WIKI_ENUM_BLOCKS_URL, "count": blocks.len() },
+            "items": { "file": "DV_Items.json", "url": WIKI_ENUM_ITEMS_URL, "count": items.len() },
+            "enchantments": { "file": "DV_Enchantments.json", "url": WIKI_ENUM_MAIN_URL, "count": enchantments.len() },
+            "entities": { "file": "DV_Entities.json", "url": WIKI_ENUM_ENTITIES_URL, "count": entities.len() }
+        }
+    });
+    std::fs::write(
+        target_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(WikiEnumCatalogDownloadOutput {
+        target_dir: target_dir.display().to_string(),
+        root_relpath: WIKI_ENUM_ROOT_RELPATH.to_string(),
+        blocks: blocks.len(),
+        items: items.len(),
+        enchantments: enchantments.len(),
+        entities: entities.len(),
+    })
+}
+
 #[tauri::command]
 pub(crate) async fn download_minecraft_wiki_enum_catalogs(
 ) -> Result<WikiEnumCatalogDownloadOutput, String> {
-    Err("Minecraft Wiki 枚举全集下载尚未接入（表格解析待回移），方块图标抓取已可用。".to_string())
+    tauri::async_runtime::spawn_blocking(download_minecraft_wiki_enum_catalogs_sync)
+        .await
+        .map_err(|e| e.to_string())?
 }

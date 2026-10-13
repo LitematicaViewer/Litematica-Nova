@@ -81,6 +81,28 @@ export async function saveProjectionMetadataPatch({ currentFile, patch, outputPa
   return result.message;
 }
 
+// ---------------------------------------------------------------------------
+// Embedded projection preview image (restored; dropped by the merge).
+// ---------------------------------------------------------------------------
+
+/** Picks an image file to use as the projection's embedded preview. */
+export async function selectPreviewImageFile(): Promise<string | null> {
+  const selected = await openDialog({
+    filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+/** Removes the projection's embedded preview image data. */
+export async function clearProjectionPreviewImage(currentFile: string): Promise<string> {
+  return saveProjectionMetadataPatch({ currentFile, patch: { preview_image_data: [] } });
+}
+
+/** Points the projection's metadata at an external preview image path. */
+export async function importProjectionPreviewImage(currentFile: string, imagePath: string): Promise<string> {
+  return saveProjectionMetadataPatch({ currentFile, patch: { preview_image_path: imagePath } });
+}
+
 export async function dryRunReplaceBlocks(currentFile: string, rules: any[]): Promise<string> {
   const cleanRules = rules.map((rule) => {
     const next = JSON.parse(JSON.stringify(rule));
