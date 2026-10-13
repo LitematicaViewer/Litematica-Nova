@@ -252,6 +252,52 @@ checkGameResourceHealth() → GameResourceHealthRow[]            // 界面「健
 **建议顺序**：先做 L1 + L2（能力可用但无界面，可用现有设置页或命令行验证切换效果），
 确认消费方改造无回归后再决定 L3 是重写界面还是回移。
 
+## 八、合并丢弃功能的整体恢复状态
+
+本次合并（`main` ← `111a0c50`）把我方 26 个既有代码文件整块丢弃。已按"回归修复"逐项恢复，
+而非作为新特性开发。
+
+| # | 能力 | 状态 | 提交 |
+| --- | --- | --- | --- |
+| 1 | 游戏资源注册表（L1，921 行） | 已恢复 | `f78c44e6` |
+| 2 | 四个消费方改走注册表（L2） | 已恢复 | `963be12a` |
+| 3 | CCVault 下载 + 运行时自动获取 Key | 已恢复（无硬编码凭据） | `d6cdb441` |
+| 4 | 规则文件驱动的图标候选（`itemlike_block.json`、`_slab`/`potted_*`） | 已恢复 | `ec8ddab9` |
+| 5 | Wiki 方块图标抓取（中/英） | 已恢复 | `4edf90d5` |
+| 6 | 资源管理器界面与入口（L3） | 已恢复 | `f3b48bac` |
+| 7 | 替换组规则 TS 层 + `execute_backend` | 已恢复 | `3c2cb355` |
+| 8 | 渲染进度/缓存构建链路 | 已恢复 | `e3b19a7d` |
+| 9 | Wiki 枚举全集抓取 | 已恢复 | `eb7fc83c` |
+| 10 | 投影内嵌预览图导入/清除 | 已恢复 | `eb7fc83c` |
+| 11 | 替换组规则 v2 units（含加权随机） | 已恢复 | `cf9ade1d` |
+| 12 | units 样式表接线 | 已恢复 | （见 git log） |
+
+### 有意未恢复的项（均无功能影响）
+
+| 文件 | 原因 |
+| --- | --- |
+| `ui/windows/main/pages/properties/function.tsx` | 合并前后**都无人引用**，且 `PropertiesPage` 已不再导出其依赖的 `MetadataForm` / `RegionEdit`；属死代码 |
+| `ui/shell/NavIcon.tsx` | 现役 `AppShell.tsx` 已内置同名 `NavIcon`（lucide 版）；恢复会重复导出 |
+| `src/platform/embeddedViewer.ts`、`src/services/embeddedViewer.ts` | 现役为 `ui/windows/main/useEmbeddedViewer.ts` + `embeddedViewerGeometry` + viewer-launch-contract；旧文件无人引用 |
+| `ui/styles/replace.css` | 归档版已以 `replace-units.css` 恢复并接入 `base.css`；现役页面另有自己的 `replace.css`（36 行简化版），两者并存无冲突 |
+| `performance-test.html`、`run-tauri-with-rust-path.mjs`、`gen/schemas/macOS-schema.json` | 开发工具/平台专用产物，无任何引用，且 `performance-test.html` 未注册到 vite input（恢复后不可达） |
+| `src-tauri/icons/icon.png` | `tauri.conf.json` 的 `bundle.icon` 只列 `icons/icon.ico`（已存在） |
+
+### 两处架构差异（已适配，非字面回移）
+
+1. **`execute_backend` 的路径解析**：归档版走 `bin/viewer-backend`（已废弃），
+   现改用 `required_backend_exe_path` 的严格白名单 + `bin/public-beta` 布局。
+2. **`layerService` 的转出**：其 slice/palette 表面已被 `flakeService` 取代
+   （5 个同名类型），文件已恢复但只让现役实现参与 facade 转出。
+
+### 验证基线
+
+- `npm run build`：通过（1648 模块，产出 `dist/asset_manager.html`）
+- `tsc --noEmit`：通过
+- `cargo check`（desktop-nova）：通过
+- `cargo test --workspace`（viewer-core）：**232 项通过，0 失败**
+  （含 `replace_blocks` v2 units 5 项：多输入、单输出、加权多输出、子集匹配、v1 兼容）
+
 ## 七、恢复进展
 
 ### L1 数据层 —— 已完成（本次）
