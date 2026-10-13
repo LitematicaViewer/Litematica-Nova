@@ -14,7 +14,7 @@ Windows、Node.js 22、Rust stable/MSVC、WebView2，以及 Tauri 官方 Windows
 $ErrorActionPreference = "Stop"
 $env:LBA_BUILD_GIT_SHA = (git rev-parse HEAD).Trim()
 & .\tools\windows-thumbnail-provider\build.ps1 -Smoke
-cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir tools/viewer-core/target/public-beta --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
+cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir tools/viewer-core/target/public-beta --no-default-features --features public-beta --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
 if ($LASTEXITCODE -ne 0) { throw "快速后端构建失败" }
 .\desktop-nova\scripts\prepare-backend-deployment.ps1 -RepoRoot $PWD.Path -Profile release -GitSha $env:LBA_BUILD_GIT_SHA
 $env:CARGO_TARGET_DIR = Join-Path $PWD.Path 'desktop-nova/src-tauri/target/public-beta'
@@ -25,7 +25,7 @@ npm run tauri -- build --bundles nsis
 if ($LASTEXITCODE -ne 0) { throw "桌面构建失败" }
 ```
 
-输出为 `desktop-nova/src-tauri/target/public-beta/release/bundle/nsis/*-setup.exe`。NSIS 使用 perMachine 安装，将显式映射的资源与快速后端包含在同一个 Setup.exe 内；不发布 ZIP/MSI。签名构建须从仓库外提供 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，或在 CI 构建后用官方 `tauri signer sign --app-version 0.1.1` 对原始安装包签名。运行 `Litematica-Nova.exe --verify-public-resources` 核对后端身份、哈希及游戏资源；此 CLI 不启动界面。
+输出为 `desktop-nova/src-tauri/target/public-beta/release/bundle/nsis/*-setup.exe`。NSIS 使用 perMachine 安装，将显式映射的资源与快速后端包含在同一个 Setup.exe 内；不发布 ZIP/MSI。签名构建须从仓库外提供 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，或在 CI 构建后用官方 `tauri signer sign --app-version 0.2.0` 对原始安装包签名。运行 `Litematica-Nova.exe --verify-public-resources` 核对后端身份、哈希及游戏资源；此 CLI 不启动界面。
 
 ## 验证
 
