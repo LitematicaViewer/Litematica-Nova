@@ -1,0 +1,4 @@
+LIBRARY litematica_thumbnail
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
