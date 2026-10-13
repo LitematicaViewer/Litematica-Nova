@@ -305,22 +305,24 @@ checkGameResourceHealth() → GameResourceHealthRow[]            // 界面「健
 
 ### L2 之后的已知缺口
 
-1. **图标包目录布局**：合并前的 `blockIconResolver`（207 行）还有一层
-   `ActiveIconLayout` 解析，把搜索根拆成 `block_itemLike` / `item` / `block_2d` /
-   `block_icon` 四类目录，并据此拼 `buildStorageRelativePath` 候选路径；本次采用
-   的最小接入版只做「按搜索根逐根尝试」，未含该层。当某个图标包内部不是
-   "根目录平铺 PNG" 时（例如内建解包后的 `block_2d/initial/...` 布局），需要补回该层。
-2. **图标候选由规则文件驱动**（与 L3 相关，已确认来源）：
-   `iconCandidates` 的两个额外分支不是写死的业务规则，而是读枚举器集合：
-   - `item_like` 分支 ← `custom:itemlike_block` 集合，即
-     **`pack-in/enumerator/custom/itemlike_block.json`**（已随包，另含
-     `survival_impossible` / `functional_blocks` / `tools_n_Utilities` 等 9 个集合）；
-   - `_slab` → `_planks`、`potted_*` → `flower_pot` 属 `iconCandidates` 内的字面规则。
+1. **图标包目录布局**：已补上候选路径的目录层
+   （`block_itemLike` / `item` / `block_2d` / `block_icon` + 平铺兜底）。
+   与合并前的差异：合并前是**解析**搜索根得到精确的 `{folder}/{pack}` 组合，
+   当前是按上述固定次序逐个尝试。功能上等价（多试几次路径），
+   代价是文件系统调用增多。若图标包命名规则有例外，再改为解析式。
+2. **图标候选规则 —— 已按你的说明补齐并纠正来源**：
+   - `item_like` 分支由**枚举器规则文件**驱动，即
+     **`pack-in/enumerator/custom/itemlike_block.json`**（集合 id `custom:itemlike_block`，
+     随包已含 `survival_impossible` / `functional_blocks` / `tools_n_Utilities` 等 9 个集合），
+     不是写死的业务规则；`loadItemLikeBlocks()` 读它，并据此把 item 风格目录排在前面。
+   - `_slab` → `_planks`、`potted_*` → `flower_pot` 属 `iconCandidates` 内的**字面规则**，
+     已恢复（且 `_planks` / `flower_pot` 只作为**回退**候选，不覆盖方块自身的贴图）。
+   - 新增 `invalidateItemLikeRuleCache()`：切换枚举器集合后与
+     `invalidateBlockIconCache()` 一起调用即可生效。
 
-   合并前版本通过 `loadEnumeratorCollections()` 取集合、并用 `normalizeBlockId`
-   归一化后组成 membership，再按 `item_like` / `block` 两分支选包。L3 若发现
-   个别方块缺图标（典型是台阶、花盆、物品形态方块），按此恢复到注册表搜索根
-   的分支选择即可；参考
+   合并前的实现顺序是「先按 `iconCandidates` 的通用候选探路径，再用
+   `registryCandidates` 的 `item_id` 别名兜底」，当前实现采用同样次序
+   （`[...literal, ...alias]` 去重）。若 L3 中发现个别方块缺图标，参考
    `refs/merge-safety-pre-resolution:desktop-nova/src/services/blockIconResolver.ts`。
 
 ### 仍需回移的 L1 远端部分
