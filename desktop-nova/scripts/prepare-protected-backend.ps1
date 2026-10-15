@@ -66,6 +66,14 @@ try {
             $destination = [IO.Path]::GetFullPath((Join-Path $runtimeRoot $entry.FullName))
             if (-not $destination.StartsWith($runtimeRoot + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -or $entry.Length -gt 100MB) { throw 'Runtime resource exceeds its path/size boundary.' }
             New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+            if ((Test-Path -LiteralPath $destination -PathType Leaf) -and (Get-Item -LiteralPath $destination).Length -eq $entry.Length) {
+                $existing = [IO.File]::Open($destination, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+                $packed = $null
+                try {
+                    $packed = $entry.Open()
+                    if ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($existing)) -ceq [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($packed))) { continue }
+                } finally { if ($packed) { $packed.Dispose() }; $existing.Dispose() }
+            }
             [IO.Compression.ZipFileExtensions]::ExtractToFile($entry,$destination,$true)
         }
     } finally { $archive.Dispose() }

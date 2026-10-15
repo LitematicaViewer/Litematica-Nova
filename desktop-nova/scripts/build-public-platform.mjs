@@ -59,7 +59,7 @@ async function prepareAssets() {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'pack-in/minecraft-runtime-26.3.manifest.json'), 'utf8'));
   if (manifest.schema !== 'nova.minecraft-runtime-resources.v1' || manifest.java_class_entries !== 0 || manifest.executable_entries !== 0 || await hash(archive) !== manifest.archive_sha256) throw new Error('Bundled runtime resource identity differs.');
   const python = String.raw`
-import os,re,stat,sys,zipfile
+import hashlib,os,re,stat,sys,zipfile
 archive,root,count=sys.argv[1:]
 with zipfile.ZipFile(archive) as z:
     entries=z.infolist()
@@ -67,6 +67,9 @@ with zipfile.ZipFile(archive) as z:
     for e in entries:
         if not re.fullmatch(r'26\.3/(oracle/[a-z_]+\.jsonl|oracle/oracle-manifest\.json|client\.jar|assets/indexes/34\.json|assets/objects/[a-f0-9]{2}/[a-f0-9]{40})',e.filename) or e.file_size>100*1024**2 or stat.S_ISLNK(e.external_attr>>16): raise ValueError('Unexpected resource entry')
         target=os.path.join(root,*e.filename.split('/'));os.makedirs(os.path.dirname(target),exist_ok=True)
+        if os.path.isfile(target) and os.path.getsize(target)==e.file_size:
+            with open(target,'rb') as cached,z.open(e) as packed:
+                if hashlib.file_digest(cached,'sha256').digest()==hashlib.file_digest(packed,'sha256').digest(): continue
         with z.open(e) as src,open(target,'wb') as dst:
             while True:
                 b=src.read(1024*1024)
