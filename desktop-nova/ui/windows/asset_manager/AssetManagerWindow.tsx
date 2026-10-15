@@ -23,7 +23,7 @@ export function AssetManagerDialog({ theme, onClose }: { theme: string; onClose:
   return <div className="dialog-overlay"><section
     className={["dialog-content", "subwindow-frame", "subwindow-frame-wide", "asset-manager-window", themeClassName(theme)].filter(Boolean).join(" ")}
     role="dialog" aria-modal="true" aria-label="游戏资源管理" onClick={(event) => event.stopPropagation()}>
-    <AssetManagerContent onClose={onClose} />
+    <AssetManagerContent theme={theme} onClose={onClose} />
   </section></div>;
 }
 
@@ -58,7 +58,7 @@ export function AssetManagerWindow() {
 
   return (
     <div className={["asset-manager-root", themeClassName(themeId)].filter(Boolean).join(" ")}>
-      <AssetManagerContent key={openedSection} onClose={handleClose} />
+      <AssetManagerContent key={openedSection} theme={themeId} onClose={handleClose} />
     </div>
   );
 }

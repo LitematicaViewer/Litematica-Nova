@@ -3,7 +3,6 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "../../src/platform/tauri";
 import { addOrUpdateRecord, loadLibrary } from "../../src/business/projectionLibrary";
-import { Menu, Home, Library, FileText, BarChart3, Layers, Box, Replace, Wand2, Settings, LayoutDashboard, ListTree, type LucideIcon } from "lucide-react";
 import { listenEvent } from "../../src/platform/events";
 import { initI18n, loadStructuralBlocks, createRuntimeProjectionCollection, type EnumeratorCollection } from "../../src/business/facade";
 import { HomePage } from "../windows/main/pages/home/HomePage";
@@ -30,20 +29,10 @@ import {
 import { projectionLibraryImportedEvent } from "../windows/libraryEvents";
 import { UpdateDialog } from "../windows/main/UpdateDialog";
 import { readUpdateDraft, takeUpdateDraft, useUpdateDraft, useApplicationCloseRecovery } from "../windows/main/updateRecovery";
+import { NavIcon } from "./NavIcon";
 
 import { EnumeratorDialog, openEnumeratorWithWindowBehavior } from "../windows/enumerator";
 import "../styles/enumerator.css";
-
-const navigationIcons: Record<string, LucideIcon> = {
-  hamburger: Menu, home: Home, gallery: Library, properties: FileText,
-  statistics: BarChart3, flake: Layers, render: Box, replace: Replace,
-  generate: Wand2, options: Settings, ui_debug: LayoutDashboard, enumerator: ListTree,
-};
-
-function NavIcon({ name }: { name: string }) {
-  const Icon = navigationIcons[name] || Box;
-  return <Icon className="nav-icon" aria-hidden="true" focusable="false" />;
-}
 
 /**
  * Renders the Nova desktop shell and keeps page logic behind the UI boundary.
@@ -186,7 +175,7 @@ export function App() {
           onClick={() => setExpanded(!expanded)}
           title={expanded ? "收起侧栏" : "展开侧栏"}
         >
-          <NavIcon name="hamburger" />
+          <NavIcon name="hamburger" theme={theme} />
           {expanded ? <strong>Litematica-Nova</strong> : null}
         </Button>
 
@@ -203,7 +192,7 @@ export function App() {
                 aria-pressed={active}
                 aria-label={value.name}
               >
-                <NavIcon name={value.icon} />
+                <NavIcon name={value.icon} theme={theme} />
                 {expanded && <span className="nav-label">{value.name}</span>}
               </Button>
             );
@@ -213,9 +202,9 @@ export function App() {
         <nav className="nav-list nav-list-bottom" aria-label="选项">
           <Button variant="ghost" className="sidebar-item nav-item" type="button" aria-label="枚举器" title={!expanded ? "枚举器" : ""}
             onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true)).catch((error) => setEnumeratorError(String(error)))}>
-            <NavIcon name="enumerator" />{expanded && <span className="nav-label">枚举器</span>}
+            <NavIcon name="enumerator" theme={theme} />{expanded && <span className="nav-label">枚举器</span>}
           </Button>
-          <UpdateDialog />
+          <UpdateDialog theme={theme} />
           {Object.entries(bottomPages).map(([key, value]) => {
             const active = route === key;
             return (
@@ -228,7 +217,7 @@ export function App() {
                 aria-pressed={active}
                 aria-label={value.name}
               >
-                <NavIcon name={value.icon} />
+                <NavIcon name={value.icon} theme={theme} />
                 {expanded && <span className="nav-label">{value.name}</span>}
               </Button>
             );

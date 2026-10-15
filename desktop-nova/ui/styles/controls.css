@@ -62,7 +62,25 @@ html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"])[ari
 [data-slot="scroll-area-corner"] { background: var(--ln-scroll-track); }
 .dialog-surface > .dialog-body.nova-scroll-area { flex: 1 1 auto; overflow: hidden; }
 .sidebar > .nav-scroll-area { flex: 1; min-height: 0; }
-.sidebar .nav-scroll-area .nav-list { margin: 0; padding: 4px 8px; }
+/* The list must not inset its own buttons: the collapsed sidebar is sized so a
+   full-width button stays exactly square, and the anchored bottom list has no
+   inset either. */
+.sidebar .nav-scroll-area .nav-list { margin: 0; padding: 0; }
+/* The sidebar scrollbar overlays the list instead of reserving width, so it can
+   never narrow a button, and it only appears while the pointer is over the list
+   area or the list holds keyboard focus. */
+.sidebar .nav-scroll-area [data-slot="scroll-area-scrollbar"] {
+  padding: 0;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms;
+}
+.sidebar .nav-scroll-area:hover [data-slot="scroll-area-scrollbar"],
+.sidebar .nav-scroll-area:focus-within [data-slot="scroll-area-scrollbar"] {
+  opacity: 1;
+  pointer-events: auto;
+}
 
 html[data-theme] [data-slot="slider"] { position: relative; display: flex; align-items: center; width: 100%; min-width: 4rem; min-height: 28px; touch-action: none; user-select: none; }
 [data-slot="slider-track"] { position: relative; flex: 1; height: 6px; overflow: hidden; border-radius: var(--radius, 0px); background: var(--muted); }

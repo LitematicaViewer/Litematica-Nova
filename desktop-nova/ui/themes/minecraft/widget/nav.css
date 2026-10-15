@@ -48,9 +48,11 @@
     padding: 0;
 }
 
-.sidebar-collapsed .nav-icon {
-    position: static;
-    transform: none;
+/* Entries that always render a label must lose it too, or the collapsed sidebar
+   can no longer keep every button square. */
+.sidebar-collapsed .nav-expand strong,
+.sidebar-collapsed .nav-item .nav-label {
+    display: none;
 }
 
 .nav-list {
@@ -64,14 +66,25 @@
 
 .nav-icon {
     display: block;
-    position: absolute;
-    top: 50%;
-    left: calc(16px - var(--ln-minecraft-button-border, 4px));
     flex: 0 0 auto;
     width: 16px;
     height: 16px;
     object-fit: contain;
+}
+
+/* Sidebar buttons keep their icon in a fixed leading slot, so only the shell
+   positions the icon; the game-resource sidebar leaves it in the flow. */
+.sidebar .nav-icon {
+    position: absolute;
+    top: 50%;
+    left: calc(16px - var(--ln-minecraft-button-border, 4px));
     transform: translateY(-50%);
+}
+
+/* Collapsed buttons centre the icon, so it must leave that leading slot. */
+.sidebar-collapsed .nav-icon {
+    position: static;
+    transform: none;
 }
 
 .nav-item.nav-item-active {

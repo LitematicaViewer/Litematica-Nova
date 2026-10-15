@@ -49,6 +49,9 @@ REM                   Clear or override it to change that behaviour.
 REM ===========================================================================
 
 set "SCRIPT_DIR=%~dp0"
+REM Captured before the argument loop: "shift" moves %0 as well, so %~nx0 would
+REM name the last argument by the time the messages below print a command.
+set "SCRIPT_NAME=%~nx0"
 set "REPO_ROOT=%SCRIPT_DIR%.."
 for %%I in ("%REPO_ROOT%") do set "REPO_ROOT=%%~fI"
 set "DESKTOP_DIR=%REPO_ROOT%\desktop-nova"
@@ -147,14 +150,24 @@ if not defined PWSH (
 echo [dev-win] pwsh: %PWSH%
 
 REM --- Branch gate -----------------------------------------------------------
-REM prepare-protected-backend.ps1 refuses any branch other than main, so report
-REM that here instead of failing halfway through a long build.
+REM Only the preparation step is main-only: prepare-protected-backend.ps1 signs the
+REM audited public candidate, so it must never consume a development branch. Report
+REM that here instead of failing halfway through a long build, but keep the runs
+REM that never invoke it usable while debugging a topic branch: --skip-prepare
+REM reuses the backend that is already staged and --check only reports.
 for /f "delims=" %%B in ('git -C "%REPO_ROOT%" branch --show-current 2^>nul') do set "BRANCH=%%B"
-if /i not "%BRANCH%"=="main" (
-    echo [dev-win] FAIL current branch is "%BRANCH%"; the prepared backend refuses anything but main.
-    echo [dev-win]      Run:  git -C "%REPO_ROOT%" checkout main
-    goto fail
-)
+set "BRANCH_IS_MAIN=0"
+if /i "%BRANCH%"=="main" set "BRANCH_IS_MAIN=1"
+if "%BRANCH_IS_MAIN%"=="1" goto branch_gate_done
+if /i "%MODE%"=="check" goto branch_gate_done
+if /i "%MODE%"=="dev-noprepare" goto branch_gate_done
+echo [dev-win] FAIL backend preparation is main-only; the current branch is "%BRANCH%".
+echo [dev-win]      prepare-protected-backend.ps1 signs the audited public candidate,
+echo [dev-win]      so it refuses to consume a development branch.
+echo [dev-win]      To debug this branch with the backend that is already staged:
+echo [dev-win]          "%SCRIPT_NAME%" --skip-prepare
+goto fail
+:branch_gate_done
 
 REM --- Inputs the preparation consumes --------------------------------------
 call :need "%RUNTIME_ZIP%" "pack-in\minecraft-runtime-26.3.zip (unpacked into data\mc26\26.3)"
@@ -188,6 +201,12 @@ if /i "%MODE%"=="check" (
     echo [dev-win]   4. copy %VIEWER_RELEASE_DIR%\stockpile_server.exe  ^-^>  %VIEWER_BACKEND_DIR%\ and %STOCKPILE_DEST_DIR%\
     echo [dev-win]   5. set LBA_DATA_ROOT=%REPO_ROOT%\data
     echo [dev-win]   6. cd /d "%DESKTOP_DIR%" ^&^& npm ci ^(only when node_modules is absent^) ^&^& npm run tauri:dev
+    if "%BRANCH_IS_MAIN%"=="0" (
+        echo.
+        echo [dev-win] NOTE branch "%BRANCH%" is not main, so step 1 would be refused.
+        echo [dev-win]      Debug this branch with the backend already staged:
+        echo [dev-win]          "%SCRIPT_NAME%" --skip-prepare
+    )
     endlocal
     exit /b 0
 )
@@ -327,3 +346,5 @@ echo.
 echo [dev-win] Startup aborted. See the messages above.
 endlocal
 exit /b 1
+
+pause

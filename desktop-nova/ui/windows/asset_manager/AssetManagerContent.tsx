@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Boxes, Database, Languages, ListTree, Package } from "lucide-react";
 
 import {
   activateGameResource,
@@ -34,6 +33,7 @@ import {
 } from "../../../src/business/facade";
 import { listenEvent } from "../../../src/platform/events";
 import { Button } from "../../components/ui/button";
+import { NavIcon } from "../../shell/NavIcon";
 
 /**
  * Game resources module — layout, wording and behaviour follow `docs/design.md`
@@ -61,7 +61,8 @@ type AssetSource =
 interface AssetNavItem {
   key: AssetRoute;
   label: string;
-  icon: typeof Boxes;
+  /** Theme navigation icon name, shared with the main shell sidebar. */
+  icon: string;
 }
 
 /** Progress payload emitted by the icon download commands. */
@@ -73,11 +74,11 @@ interface IconDownloadProgressPayload {
 }
 
 const ASSET_NAV_ITEMS: AssetNavItem[] = [
-  { key: "block_icon", label: "方块图标", icon: Boxes },
-  { key: "item_icon", label: "物品图标", icon: Package },
-  { key: "language", label: "语言", icon: Languages },
-  { key: "game_data", label: "游戏数据", icon: Database },
-  { key: "enum_catalog", label: "枚举全集", icon: ListTree },
+  { key: "block_icon", label: "方块图标", icon: "asset-block" },
+  { key: "item_icon", label: "物品图标", icon: "asset-item" },
+  { key: "language", label: "语言", icon: "asset-language" },
+  { key: "game_data", label: "游戏数据", icon: "asset-db" },
+  { key: "enum_catalog", label: "枚举全集", icon: "asset-enum" },
 ];
 
 const BUILTIN_BLOCK_ICON_ID = "builtin:block_icon:nova";
@@ -256,7 +257,7 @@ function resourceActiveText(snapshot: GameResourceSnapshot | null): string {
   ].join(" / ");
 }
 
-export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
+export function AssetManagerContent({ theme, onClose }: { theme: string; onClose?: () => void }) {
   const [route, setRoute] = useState<AssetRoute>("block_icon");
   const [sourceByRoute, setSourceByRoute] = useState(DEFAULT_SOURCE_BY_ROUTE);
   const [selectedBlockIconSlot, setSelectedBlockIconSlot] = useState<BlockIconResourceSlot>("layering");
@@ -798,7 +799,6 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
         <aside className="asset-manager-sidebar">
           <nav className="asset-manager-nav" aria-label="游戏资源分类">
             {ASSET_NAV_ITEMS.map((item) => {
-              const Icon = item.icon;
               const active = route === item.key;
               return (
                 <Button
@@ -808,7 +808,7 @@ export function AssetManagerContent({ onClose }: { onClose?: () => void }) {
                   aria-pressed={active}
                   onClick={() => setRoute(item.key)}
                 >
-                  <Icon className="asset-manager-nav-icon" aria-hidden="true" />
+                  <NavIcon name={item.icon} theme={theme} className="asset-manager-nav-icon" />
                   <span>{item.label}</span>
                 </Button>
               );
