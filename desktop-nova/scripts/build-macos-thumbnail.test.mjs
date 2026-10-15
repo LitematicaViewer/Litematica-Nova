@@ -10,8 +10,8 @@ const script = fileURLToPath(new URL('./build-macos-thumbnail.mjs', import.meta.
 const desktop = path.resolve(path.dirname(script), '..');
 
 test('macOS extension target matches both actual supported architectures', () => {
-  assert.deepEqual(thumbnailTarget({}, 'arm64'), { arch: 'arm64', minimum: '11.0' });
-  assert.deepEqual(thumbnailTarget({}, 'x64'), { arch: 'x86_64', minimum: '10.15' });
+  assert.deepEqual(thumbnailTarget({}, 'arm64'), { arch: 'arm64', minimum: '13.0' });
+  assert.deepEqual(thumbnailTarget({}, 'x64'), { arch: 'x86_64', minimum: '13.0' });
   assert.equal(thumbnailTarget({ TAURI_ENV_ARCH: 'aarch64' }, 'x64').arch, 'arm64');
   assert.equal(thumbnailTarget({ TAURI_ENV_ARCH: 'x86_64' }, 'arm64').arch, 'x86_64');
 });
@@ -40,6 +40,7 @@ test('configured signing uses the extension sandbox entitlements and hardened ru
 test('Tauri builds and embeds the actual extension and registers the same UTI', () => {
   const config = JSON.parse(fs.readFileSync(path.join(desktop, 'src-tauri/tauri.conf.json'), 'utf8'));
   assert.match(config.build.beforeBuildCommand, /node scripts\/build-macos-thumbnail\.mjs/);
+  assert.equal(config.bundle.macOS.minimumSystemVersion, '13.0');
   const extension = config.bundle.macOS.files['PlugIns/NovaThumbnail.appex'];
   assert.equal(extension, '../../tools/macos-thumbnail-extension/target/NovaThumbnail.appex');
   assert.ok(config.bundle.macOS.frameworks.includes('target/platform-frameworks/libMoltenVK.dylib'));

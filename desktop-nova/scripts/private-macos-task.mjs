@@ -84,6 +84,9 @@ async function execute() {
     const tools = JSON.parse(fs.readFileSync(config, 'utf8'));
     process.env.RUSTUP_TOOLCHAIN = tools.rustToolchain;
     process.env.PATH = [path.join(os.homedir(), '.cargo/bin'), path.join(tools.llvmRoot, 'bin'), process.env.PATH].join(path.delimiter);
+    // Keep Rust and all Cargo C/C++ dependencies on the same deployment target.
+    // Toolchain bootstrap above runs on the native runner and is not distributed.
+    process.env.MACOSX_DEPLOYMENT_TARGET = '13.0';
     phase = 'module';
     run('pwsh', ['-NoProfile','-File',path.join(source, 'desktop-nova/scripts/build-private-protected.ps1'),'-Stage','backend','-RepoRoot',source,'-SourceSnapshotManifest',path.join(source,'snapshot.json'),'-Seed',task.seed,'-TargetTriple',task.target,'-LlvmRoot',tools.llvmRoot,'-AmicePlugin',tools.amicePlugin,'-VmProfile',tools.vmProfile,'-ManifestPublicKey',task.manifestPublicKey,'-ProtectedEndpoint',task.protectedEndpoint], { cwd: source, log });
   } catch { exitCode = 1; }

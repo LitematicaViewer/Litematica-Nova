@@ -8,7 +8,7 @@ export function thumbnailTarget(env = process.env, architecture = process.arch) 
   const arch = /^(?:aarch64|arm64)(?:-apple-darwin)?$/.test(target) ? 'arm64'
     : /^(?:x86_64|x64)(?:-apple-darwin)?$/.test(target) ? 'x86_64' : null;
   if (!arch) throw new Error(`QuickLook extension has no matching macOS target: ${target}`);
-  return { arch, minimum: arch === 'arm64' ? '11.0' : '10.15' };
+  return { arch, minimum: '13.0' };
 }
 
 export function thumbnailSigningArguments(identity, bundle, entitlements) {

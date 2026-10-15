@@ -83,6 +83,7 @@
       }
     ],
     "macOS": {
+      "minimumSystemVersion": "13.0",
       "infoPlist": "macos/Info.plist",
       "frameworks": [
         "target/platform-frameworks/libMoltenVK.dylib"
