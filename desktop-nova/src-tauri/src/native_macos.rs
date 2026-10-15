@@ -128,7 +128,12 @@ extern "C" {
     fn SecRandomCopyBytes(random: *const c_void, count: usize, bytes: *mut u8) -> i32;
 }
 #[link(name = "AppKit", kind = "framework")]
-extern "C" {}
+extern "C" {
+    static NSWindowDidChangeOcclusionStateNotification: *mut Object;
+    static NSWindowDidMiniaturizeNotification: *mut Object;
+    static NSWindowDidDeminiaturizeNotification: *mut Object;
+    static NSWindowWillCloseNotification: *mut Object;
+}
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -219,6 +224,7 @@ struct Shared {
     popup_minimized: AtomicBool,
     popup_requested_visible: AtomicBool,
     popup_closed_epoch: AtomicU64,
+    host_suspended: AtomicBool,
     sink: Option<InputSink>,
 }
 
@@ -228,6 +234,7 @@ pub struct MacNativeView {
     parent: *mut Object,
     popup: *mut Object,
     popup_delegate: *mut Object,
+    host_observers: Vec<*mut Object>,
     mode: NativePresentationMode,
     layer: MetalLayer,
     shared: Arc<Shared>,
@@ -397,7 +404,7 @@ impl MacNativeView {
         self.shared.scale.store(placement.scale.to_bits(), Ordering::Release);
         drop(gate);
         self.shared.request_focus.store(
-            visible && focused && (!self.focused || !previous_visible || new_surface),
+            presentation_allowed(&self.shared, visible) && focused && (!self.focused || !previous_visible || new_surface),
             Ordering::Release,
         );
         unsafe {
@@ -436,10 +443,10 @@ impl MacNativeView {
                     let _: () = msg_send![self.popup, orderOut: ptr::null_mut::<Object>()];
                 }
             }
-            if visible && self.shared.presented_epoch.load(Ordering::Acquire) == epoch {
+            if presentation_allowed(&self.shared, visible) && self.shared.presented_epoch.load(Ordering::Acquire) == epoch {
                 let _: () = msg_send![self.view, setHidden: NO];
             }
-            if visible && focused && (!self.focused || !previous_visible) {
+            if presentation_allowed(&self.shared, visible) && focused && (!self.focused || !previous_visible) {
                 let window: *mut Object = msg_send![self.view, window];
                 let did_focus: BOOL = msg_send![window, makeFirstResponder: self.view];
                 if did_focus == YES {
@@ -496,6 +503,11 @@ impl MacNativeView {
             gate.epoch = gate.epoch.saturating_add(1);
         }
         unsafe {
+            let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
+            for observer in self.host_observers.drain(..) {
+                let _: () = msg_send![center, removeObserver: observer];
+                let _: () = msg_send![observer, release];
+            }
             let _: () = msg_send![self.view, setHidden: YES];
             (*self.view).set_ivar::<usize>("novaInput", 0);
             let _: () = msg_send![self.view, removeFromSuperview];
@@ -590,6 +602,7 @@ pub unsafe fn create(
         popup_minimized: AtomicBool::new(false),
         popup_requested_visible: AtomicBool::new(false),
         popup_closed_epoch: AtomicU64::new(u64::MAX),
+        host_suspended: AtomicBool::new(false),
         sink: input_sink,
     });
     let mut input_context = Box::new(Arc::clone(&shared));
@@ -621,6 +634,7 @@ pub unsafe fn create(
         parent,
         popup: ptr::null_mut(),
         popup_delegate: ptr::null_mut(),
+        host_observers: Vec::new(),
         mode: NativePresentationMode::Embedded,
         layer: layer.clone(),
         shared: Arc::clone(&shared),
@@ -630,6 +644,29 @@ pub unsafe fn create(
         focused: false,
         _main_thread: PhantomData,
     };
+    let host_window: *mut Object = msg_send![parent, window];
+    if host_window.is_null() { return Err("native macOS parent window is missing".into()); }
+    let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
+    let queue: *mut Object = msg_send![class!(NSOperationQueue), mainQueue];
+    for (name, closing) in [
+        (NSWindowDidChangeOcclusionStateNotification, false),
+        (NSWindowDidMiniaturizeNotification, false),
+        (NSWindowDidDeminiaturizeNotification, false),
+        (NSWindowWillCloseNotification, true),
+    ] {
+        let observed = Arc::clone(&shared);
+        let callback = block::ConcreteBlock::new(move |_: *mut Object| {
+            update_host_visibility(&observed, host_window, closing);
+        }).copy();
+        // Observe the real NSWindow without replacing Tao's window delegate.
+        // AppKit copies the block; removal and queued callbacks are guarded by
+        // stopped, so no callback dereferences the disposed view/window.
+        let observer: *mut Object = msg_send![center, addObserverForName: name object: host_window queue: queue usingBlock: &*callback];
+        if observer.is_null() { return Err("register native macOS window lifecycle failed".into()); }
+        let _: *mut Object = msg_send![observer, retain];
+        native.host_observers.push(observer);
+    }
+    update_host_visibility(&shared, host_window, false);
     let receiver = match Receiver::new(&service_name) {
         Ok(receiver) => receiver,
         Err(error) => {
@@ -949,13 +986,79 @@ impl Presenter {
     }
 }
 
+fn native_presentation_visible(requested: bool, popup: bool, host_suspended: bool) -> bool {
+    requested && (popup || !host_suspended)
+}
+
+#[cfg(test)]
+mod host_visibility_tests {
+    use super::native_presentation_visible;
+
+    #[test]
+    fn embedded_view_suspends_and_restores_without_losing_page_intent() {
+        assert!(native_presentation_visible(true, false, false));
+        assert!(!native_presentation_visible(true, false, true));
+        assert!(native_presentation_visible(true, false, false));
+    }
+
+    #[test]
+    fn restoring_the_host_never_reopens_a_page_hidden_view() {
+        assert!(!native_presentation_visible(false, false, true));
+        assert!(!native_presentation_visible(false, false, false));
+        assert!(!native_presentation_visible(false, true, false));
+    }
+
+    #[test]
+    fn explicit_popup_is_independent_of_main_window_occlusion() {
+        assert!(native_presentation_visible(true, true, true));
+        assert!(!native_presentation_visible(false, true, true));
+    }
+}
+
+fn presentation_allowed(shared: &Shared, requested: bool) -> bool {
+    native_presentation_visible(requested,
+        shared.popup_active.load(Ordering::Acquire), shared.host_suspended.load(Ordering::Acquire))
+}
+
+// Only AppKit's main operation queue invokes this function. OS occlusion is
+// separate from the page/owner intent: restoration never revives a hidden page
+// or advances its epoch, and does not destroy the Viewer or its GPU resources.
+fn update_host_visibility(shared: &Shared, window: *mut Object, closing: bool) {
+    if shared.stopped.load(Ordering::Acquire) || window.is_null() { return; }
+    let suspended = unsafe {
+        let visible: BOOL = msg_send![window, isVisible];
+        let minimized: BOOL = msg_send![window, isMiniaturized];
+        let occlusion: u64 = msg_send![window, occlusionState];
+        closing || visible != YES || minimized == YES || occlusion & 2 == 0
+    };
+    let was_suspended = shared.host_suspended.swap(suspended, Ordering::AcqRel);
+    if shared.popup_active.load(Ordering::Acquire) { return; }
+    let view = shared.view.load(Ordering::Acquire) as *mut Object;
+    if view.is_null() { return; }
+    if suspended {
+        shared.request_focus.store(false, Ordering::Release);
+        unsafe { let _: () = msg_send![view, setHidden: YES]; }
+        if !was_suspended { forward_input(shared, 7, 0, 0.0, 0.0, 0.0, 0.0, 0, 0, String::new()); }
+    } else if was_suspended {
+        let restored = shared.gate.lock().ok().and_then(|gate| gate.visible.then_some(gate.epoch));
+        if let Some(epoch) = restored {
+            if shared.presented_epoch.load(Ordering::Acquire) == epoch {
+                unsafe { let _: () = msg_send![view, setHidden: NO]; }
+            }
+            // Request a current frame through the existing bounded viewport
+            // channel even if the producer was idle before minimization.
+            send_viewport_size(shared);
+        }
+    }
+}
+
 fn current_frame(shared: &Shared, frame: FrameHeader) -> bool {
     !shared.stopped.load(Ordering::Acquire)
         && shared
             .gate
             .lock()
             .map(|gate| {
-                gate.visible
+                presentation_allowed(shared, gate.visible)
                     && gate.generation == frame.generation
                     && gate.epoch == frame.epoch
                     && gate.width == frame.width
@@ -973,7 +1076,7 @@ fn schedule_visible(shared: Arc<Shared>, epoch: u64) {
         let visible = shared
             .gate
             .lock()
-            .map(|gate| gate.visible && gate.epoch == epoch)
+            .map(|gate| presentation_allowed(&shared, gate.visible) && gate.epoch == epoch)
             .unwrap_or(false);
         let view = shared.view.load(Ordering::Acquire) as *mut Object;
         if visible && !view.is_null() {
@@ -1099,7 +1202,8 @@ fn forward_input_at_epoch(
         return;
     };
     if expected_epoch.is_some_and(|epoch| epoch != gate.epoch) { return; }
-    if !gate.visible && !matches!(kind, 7 | 8 | 9) {
+    if (!presentation_allowed(shared, gate.visible) && !matches!(kind, 7 | 8 | 9))
+        || (kind == 7 && flags != 0 && !presentation_allowed(shared, gate.visible)) {
         return;
     }
     if kind == 8 {

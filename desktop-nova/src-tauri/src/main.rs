@@ -3245,7 +3245,9 @@ fn main() {
         .on_window_event(|window, event| {
             #[cfg(target_os="macos")]
             if window.label() == "main" {
-                if matches!(event, tauri::WindowEvent::Occluded(true) | tauri::WindowEvent::CloseRequested { .. })
+                // Occlusion/minimization uses native AppKit notifications in
+                // MacNativeView; the locked Tauri WindowEvent has no Occluded.
+                if matches!(event, tauri::WindowEvent::CloseRequested { .. })
                     || matches!(event, tauri::WindowEvent::Resized(size) if size.width == 0 || size.height == 0) {
                     if let Some(host) = window.app_handle().get_webview_window("main") {
                         let _ = platform::native_preview_host::suspend_current(&host);
