@@ -137,14 +137,11 @@ if not defined PWSH (
 )
 echo [dev-win] pwsh: %PWSH%
 
-REM --- Branch gate -----------------------------------------------------------
-REM prepare-protected-backend.ps1 refuses any branch other than main, so report
-REM that here instead of failing halfway through a long build.
-for /f "delims=" %%B in ('git -C "%REPO_ROOT%" branch --show-current 2^>nul') do set "BRANCH=%%B"
-if /i not "%BRANCH%"=="main" (
-    echo [dev-win] FAIL current branch is "%BRANCH%"; the prepared backend refuses anything but main.
-    echo [dev-win]      Run:  git -C "%REPO_ROOT%" checkout main
-    goto fail
+REM The common preflight validates the public source graph and signed runtime.
+REM Feature branch names are not a release boundary.
+if /i "%MODE%"=="check" (
+    "%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%" -Development -CheckOnly
+    if errorlevel 1 goto fail
 )
 
 REM --- Inputs the preparation consumes --------------------------------------
@@ -173,7 +170,7 @@ echo.
 if /i "%MODE%"=="check" (
     echo [dev-win] --check only; nothing was written and nothing was built.
     echo [dev-win] Commands a real run would execute:
-    echo [dev-win]   1. "%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%"
+    echo [dev-win]   1. "%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%" -Development
     echo [dev-win]   2. copy %PUBLIC_BETA_DIR%\ ^(5 entries^)  ^-^>  %VIEWER_BACKEND_DIR%
     echo [dev-win]   3. copy %PROTECTED_DIR%\*  ^-^>  %VIEWER_BACKEND_DIR%\protected\
     echo [dev-win]   4. copy %VIEWER_RELEASE_DIR%\stockpile_server.exe  ^-^>  %VIEWER_BACKEND_DIR%\ and %STOCKPILE_DEST_DIR%\
@@ -186,12 +183,14 @@ if /i "%MODE%"=="check" (
 REM --- Stage the reviewed public backend ------------------------------------
 if /i "%MODE%"=="dev-noprepare" (
     echo [dev-win] --skip-prepare: reusing the existing staging.
-    goto after_prepare
+    "%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%" -Development -ReuseExisting
+    if errorlevel 1 goto fail
+    goto mirror_staging
 )
 
 echo [dev-win] Preparing the reviewed public backend ^(release build; this takes a while^)...
 echo [dev-win]   signature check + data\mc26 unpack + 4 helper builds + thumbnail provider
-"%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%"
+"%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%" -Development
 if errorlevel 1 (
     echo [dev-win] FAIL prepare-protected-backend.ps1 failed; see its output above.
     goto fail
@@ -202,6 +201,7 @@ REM main.rs backend_exe_path() reads get_root()\bin\viewer-backend. In a bundled
 REM build tauri.conf.json creates that directory from bin\public-beta; a
 REM development build that resolves get_root() to this checkout needs the same
 REM files here, plus the protected package the resource map expects.
+:mirror_staging
 echo [dev-win] Mirroring staging into bin\viewer-backend...
 if not exist "%VIEWER_BACKEND_DIR%" mkdir "%VIEWER_BACKEND_DIR%"
 copy /Y "%PUBLIC_BETA_DIR%\litematica_core.exe" "%VIEWER_BACKEND_DIR%\" >nul
