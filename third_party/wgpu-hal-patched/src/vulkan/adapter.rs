@@ -1519,6 +1519,8 @@ impl super::Adapter {
             workarounds: self.workarounds,
             render_passes: Mutex::new(Default::default()),
             framebuffers: Mutex::new(Default::default()),
+            #[cfg(windows)]
+            native_composition_submit: Mutex::new(None),
         });
         let mut relay_semaphores = [vk::Semaphore::null(); 2];
         for sem in relay_semaphores.iter_mut() {
@@ -1599,7 +1601,13 @@ impl crate::Adapter<super::Api> for super::Adapter {
         features: wgt::Features,
         _limits: &wgt::Limits,
     ) -> Result<crate::OpenDevice<super::Api>, crate::DeviceError> {
-        let enabled_extensions = self.required_device_extensions(features);
+        let mut enabled_extensions = self.required_device_extensions(features);
+        #[cfg(windows)]
+        for extension in [vk::KhrExternalMemoryWin32Fn::name(), vk::KhrWin32KeyedMutexFn::name()] {
+            if self.phd_capabilities.supports_extension(extension) && !enabled_extensions.contains(&extension) {
+                enabled_extensions.push(extension);
+            }
+        }
         let mut enabled_phd_features = self.physical_device_features(&enabled_extensions, features);
 
         let family_index = 0; //TODO

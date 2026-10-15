@@ -30,6 +30,10 @@ mod command;
 mod conv;
 mod device;
 mod instance;
+#[cfg(windows)]
+mod windows_composition;
+#[cfg(windows)]
+pub use windows_composition::NativeCompositionImage;
 
 use std::{
     borrow::Borrow,
@@ -332,6 +336,8 @@ struct DeviceShared {
     workarounds: Workarounds,
     render_passes: Mutex<rustc_hash::FxHashMap<RenderPassKey, vk::RenderPass>>,
     framebuffers: Mutex<rustc_hash::FxHashMap<FramebufferKey, vk::Framebuffer>>,
+    #[cfg(windows)]
+    native_composition_submit: Mutex<Option<std::sync::Weak<NativeCompositionImage>>>,
 }
 
 pub struct Device {
@@ -591,6 +597,13 @@ impl crate::Queue<Api> for Queue {
             .iter()
             .map(|cmd| cmd.raw)
             .collect::<Vec<_>>();
+        #[cfg(windows)]
+        let native = self.device.native_composition_submit.lock().take().and_then(|target| target.upgrade());
+        #[cfg(windows)]
+        let vk_cmd_buffers = if let Some(target) = native.as_ref() {
+            let commands = target.commands();
+            std::iter::once(commands[0]).chain(vk_cmd_buffers).chain(std::iter::once(commands[1])).collect::<Vec<_>>()
+        } else { vk_cmd_buffers };
 
         let mut vk_info = vk::SubmitInfo::builder().command_buffers(&vk_cmd_buffers);
 
@@ -647,6 +660,14 @@ impl crate::Queue<Api> for Queue {
             2
         };
         vk_info = vk_info.signal_semaphores(&signal_semaphores[..signal_count]);
+        #[cfg(windows)]
+        let memory = [native.as_ref().map_or(vk::DeviceMemory::null(), |target| target.memory)];
+        #[cfg(windows)]
+        let mut native_mutex = vk::Win32KeyedMutexAcquireReleaseInfoKHR::builder()
+            .acquire_syncs(&memory).acquire_keys(&[0]).acquire_timeouts(&[5000])
+            .release_syncs(&memory).release_keys(&[1]);
+        #[cfg(windows)]
+        if native.is_some() { vk_info = vk_info.push_next(&mut native_mutex); }
 
         profiling::scope!("vkQueueSubmit");
         unsafe {
@@ -654,6 +675,8 @@ impl crate::Queue<Api> for Queue {
                 .raw
                 .queue_submit(self.raw, &[vk_info.build()], fence_raw)?
         };
+        #[cfg(windows)]
+        if let Some(target) = native { target.submitted(); }
         Ok(())
     }
 
