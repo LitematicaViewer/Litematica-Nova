@@ -54,6 +54,17 @@ export function tauriOverride(base, { platform, stage, runtime, stockpile, icon,
   if (platform.os === 'win32') resources[path.join(root, 'tools/windows-thumbnail-provider/target/release/litematica_thumbnail.dll')] = 'litematica_thumbnail.dll';
   return { bundle: { targets: platform.bundles.split(','), resources, ...(platform.os !== 'win32' ? { icon: platform.os === 'darwin' ? [path.join(path.dirname(icon), 'icon.png'), icon] : [icon], windows: null } : {}), ...(candidate ? { createUpdaterArtifacts: false } : {}) } };
 }
+export async function stageRuntimeResources(runtime, target, platform) {
+  if (platform.os !== 'win32' || path.parse(runtime).root.toLowerCase() === path.parse(tauri).root.toLowerCase()) return runtime;
+  const identity = await validatePackage(runtime, platform.module);
+  const directory = path.join(root, '.tmp/ci-runtime', target);
+  const names = ['protected-build.json', identity.manifestFile, identity.ciphertextFile];
+  fs.mkdirSync(directory, { recursive: true });
+  if (fs.readdirSync(directory).some(name => !names.includes(name))) throw new Error('Unexpected file in runtime resource staging.');
+  for (const name of names) fs.copyFileSync(path.join(runtime, name), path.join(directory, name));
+  await validatePackage(directory, platform.module);
+  return directory;
+}
 async function prepareAssets() {
   const archive = path.join(root, 'pack-in/minecraft-runtime-26.3.zip');
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'pack-in/minecraft-runtime-26.3.manifest.json'), 'utf8'));
@@ -189,6 +200,7 @@ export async function build(args = process.argv.slice(2)) {
     run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/nova-protected-loader/Cargo.toml', '--target-dir', `tools/nova-protected-loader/target/public-beta-${target}`, '--bins']);
   }
   const stage = path.join(root, '.tmp/ci-backends', target); await stageBackends(target, platform, identity, sha, stage);
+  const resourceRuntime = await stageRuntimeResources(runtime, target, platform);
   process.env.NOVA_PUBLIC_BACKEND_DIR = stage;
   const temporary = path.join(root, '.tmp/ci-config', target); fs.mkdirSync(temporary, { recursive: true });
   let icon;
@@ -198,7 +210,7 @@ export async function build(args = process.argv.slice(2)) {
     icon = path.join(temporary, 'icons', platform.os === 'darwin' ? 'icon.icns' : 'icon.png');
   }
   const stockpile = path.join(root, 'tools/viewer-core/target', platform.os === 'win32' ? 'public-beta' : `public-beta-${target}`, 'release', `stockpile_server${platform.suffix}`);
-  const config = path.join(temporary, 'tauri.json'); fs.writeFileSync(config, JSON.stringify(tauriOverride(base, { platform, stage, runtime, stockpile, icon, candidate }), null, 2));
+  const config = path.join(temporary, 'tauri.json'); fs.writeFileSync(config, JSON.stringify(tauriOverride(base, { platform, stage, runtime: resourceRuntime, stockpile, icon, candidate }), null, 2));
   const cargoTarget = path.resolve(process.env.CARGO_TARGET_DIR || path.join(tauri, 'target', `ci-${target}`)); process.env.CARGO_TARGET_DIR = cargoTarget;
   removePreviousDistributables(cargoTarget, platform);
   run(process.execPath, [npm, 'run', 'tauri', '--', 'build', '--config', config, '--bundles', platform.bundles], { cwd: desktop });
