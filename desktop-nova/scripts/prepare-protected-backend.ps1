@@ -165,6 +165,12 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
     $deployment = [ordered]@{ schema='lba.backend.deployment.v1'; gitSha=$sha; profile='release'; artifacts=$artifacts }
     [IO.File]::WriteAllText((Join-Path $stage 'backend-deployment.json'), ($deployment | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
     foreach ($entry in $resources.PSObject.Properties) {
+        # build.rs owns generation AND validation of every flat PNG in this map.
+        # A fresh checkout has the source archive, not the derived directory yet.
+        if ($entry.Name -eq 'gen/block-icons') {
+            if (-not (Test-Path -LiteralPath (Join-Path $repo 'pack-in/game-icons/block.zip') -PathType Leaf)) { throw 'Missing source archive for generated block icons.' }
+            continue
+        }
         $source = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $tauriPath) $entry.Name))
         if (-not (Test-Path -LiteralPath $source)) { throw "Missing required product resource: $($entry.Name)" }
     }
