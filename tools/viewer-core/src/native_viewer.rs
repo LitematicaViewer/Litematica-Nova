@@ -5475,7 +5475,6 @@ impl ViewerState {
             chunk_scene_index: scene_chunk_scene_index,
             bootstrap_meshes,
             bootstrap_visible_first,
-            full_mode_materials,
             texture_atlas,
             label_anchors: scene_label_anchors,
         } = scene;
@@ -5708,16 +5707,6 @@ impl ViewerState {
         {
             log_tone_startup_debug(lighting_config.tone());
         }
-        if env_bool("LBA_EMISSIVE_DEBUG")
-            || env_bool("LBA_BLOOM_DEBUG")
-            || lighting_config.emissive_bloom().emissive_debug_view != EmissiveDebugViewMode::Off
-            || lighting_config.emissive_bloom().bloom_debug_view != BloomDebugViewMode::Off
-        {
-            log_emissive_bloom_debug(
-                lighting_config.emissive_bloom(),
-                full_mode_materials.as_deref(),
-            );
-        }
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("native_viewer_pipeline_layout"),
@@ -5775,7 +5764,6 @@ impl ViewerState {
                 let (request_tx, result_rx, workers) = spawn_build_worker_pool(
                     scene_index.clone(),
                     Arc::new(palette_colors.clone()),
-                    full_mode_materials.clone(),
                     args.build_workers,
                     trace.clone(),
                     Some(Arc::clone(&build_cancellation)),
@@ -5960,7 +5948,7 @@ impl ViewerState {
         self.device.poll(wgpu::Maintain::WaitForSubmissionIndex(retirement));
         let mut bootstrap = Vec::new();
         if let Some(scene) = scene {
-            ensure!(scene.full_mode_materials.is_none() && scene.texture_atlas.is_none(), "Fast scene replacement cannot carry Full materials");
+            ensure!(scene.texture_atlas.is_none(), "Fast scene replacement cannot carry a material atlas");
             self.build_cancellation.store(true, Ordering::Release);
             self.build_request_tx.take();
             self.retired_build_workers.append(&mut self.build_workers);
@@ -5975,7 +5963,7 @@ impl ViewerState {
             bootstrap = scene.bootstrap_meshes;
             self.build_cancellation = Arc::new(AtomicBool::new(false));
             let index = self.chunk_scene_index.as_ref().context("Fast replacement has no actual scene index")?;
-            let (tx, rx, workers) = spawn_build_worker_pool(Arc::clone(index), Arc::new(scene.palette_colors), None,
+            let (tx, rx, workers) = spawn_build_worker_pool(Arc::clone(index), Arc::new(scene.palette_colors),
                 args.build_workers, Arc::clone(&self.trace), Some(Arc::clone(&self.build_cancellation)));
             self.build_request_tx = Some(tx); self.build_result_rx = rx; self.build_workers = workers;
             self.build_worker_count = args.build_workers;
@@ -6709,7 +6697,6 @@ impl ViewerState {
         self.trace.gpu_buffer_upload_requests.fetch_add(1, Ordering::Relaxed);
         let gpu_upper = self.quick_adapter.as_ref().map(|_| quick_gpu_geometry_upper(prepared));
         let prepared = prepared.gpu_upload_mesh();
-        log_chest_front_gpu_vertices("upload", &prepared.vertices, &prepared.indices);
         let vertex_count = prepared.vertices.len() as u32;
         let solid_index_count = prepared.indices.len() as u32;
         let translucent_index_count = prepared.translucent_indices.len() as u32;
@@ -9913,7 +9900,7 @@ fn write_native_cache_manifest(
 }
 
 #[cfg(target_os = "windows")]
-fn window_hwnd(window: &NativeViewportWindow) -> Result<isize> {
+fn window_hwnd(window: &impl HasWindowHandle) -> Result<isize> {
     match window.window_handle()?.as_raw() {
         RawWindowHandle::Win32(handle) => Ok(handle.hwnd.get()),
         other => bail!("embed_parent_hwnd requires Win32 window handle, got {other:?}"),
