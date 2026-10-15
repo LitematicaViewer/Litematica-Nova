@@ -44,11 +44,12 @@ function npmCli() {
 export function tauriOverride(base, { platform, stage, runtime, stockpile, icon, candidate }) {
   const resources = Object.fromEntries(Object.keys(base.bundle.resources).map((key) => [key, null]));
   for (const [key, destination] of Object.entries(base.bundle.resources)) {
-    if (key.includes('/bin/public-beta') || key.includes('/bin/protected') || /stockpile_server\.exe|litematica_thumbnail\.dll/.test(key)) continue;
+    if (key.includes('/bin/public-beta') || key.includes('/bin/protected') || destination.startsWith('bin/viewer-backend') || /stockpile_server\.exe|litematica_thumbnail\.dll/.test(key)) continue;
     resources[path.resolve(tauri, key)] = destination;
   }
   resources[stage] = 'bin/viewer-backend';
   resources[runtime] = 'bin/viewer-backend/protected';
+  resources[path.join(root, 'data/mc26/26.3')] = 'data/mc26/26.3';
   resources[stockpile] = `bin/stockpile-server/${platform.stockpile}/stockpile_server${platform.suffix}`;
   if (platform.os === 'win32') resources[path.join(root, 'tools/windows-thumbnail-provider/target/release/litematica_thumbnail.dll')] = 'litematica_thumbnail.dll';
   return { bundle: { targets: platform.bundles.split(','), resources, ...(platform.os !== 'win32' ? { icon: platform.os === 'darwin' ? [path.join(path.dirname(icon), 'icon.png'), icon] : [icon], windows: null } : {}), ...(candidate ? { createUpdaterArtifacts: false } : {}) } };

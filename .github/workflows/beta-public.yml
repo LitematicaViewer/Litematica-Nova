@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 180
     env:
       NOVA_LOCAL_REPOSITORY: ${{ vars.NOVA_LOCAL_REPOSITORY }}
+      NOVA_WINDOWS_RUNTIME_PACKAGE_DIR: D:\NovaCI\runtime\x86_64-pc-windows-msvc
     steps:
       # Reuse the existing workspace. Never checkout, clean or switch it.
       - name: Build Windows x64 locally
