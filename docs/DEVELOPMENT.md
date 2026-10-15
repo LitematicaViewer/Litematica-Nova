@@ -1,53 +1,64 @@
-# 公开版开发说明
+# 开发与构建
 
-Beta 0.2 当前本地验收仍仅提供 Windows x64。macOS/Linux 为后续计划；当前 Application Host 的进程监督依赖 Windows Job Objects，非 Windows 启动会明确报错，不以编译成功声称支持。
+Nova 使用 Tauri、React、TypeScript 和 Rust。请保留仓库内的锁文件及配套资源。
 
-## 环境
+## 开发环境
 
-Windows、Node.js 22、Rust stable/MSVC、WebView2，以及 Tauri 官方 Windows 构建依赖。公开快速模式不需要 Java、Iris 或完整模式适配产物。仓库包含获准再分发的游戏图标与统计资源。
+- Node.js 22、npm，以及 Rust 对应平台工具链。
+- Windows：MSVC、Windows SDK、PowerShell 7 和 WebView2。
+- Linux：GTK 3、WebKitGTK 4.1、OpenSSL、DBus 及系统编译工具。
+- macOS：Xcode Command Line Tools 及对应架构的 Rust 工具链。
 
-## Windows NSIS 安装包
+## Windows 日常开发
 
-从仓库根目录执行 PowerShell：
+从仓库根目录执行：
 
 ```powershell
-$ErrorActionPreference = "Stop"
-$env:LBA_BUILD_GIT_SHA = (git rev-parse HEAD).Trim()
-& .\tools\windows-thumbnail-provider\build.ps1 -Smoke
-cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir tools/viewer-core/target/public-beta --no-default-features --features public-beta --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
-if ($LASTEXITCODE -ne 0) { throw "快速后端构建失败" }
-.\desktop-nova\scripts\prepare-backend-deployment.ps1 -RepoRoot $PWD.Path -Profile release -GitSha $env:LBA_BUILD_GIT_SHA
-$env:CARGO_TARGET_DIR = Join-Path $PWD.Path 'desktop-nova/src-tauri/target/public-beta'
-Set-Location desktop-nova
-npm ci
-if ($LASTEXITCODE -ne 0) { throw "前端依赖安装失败" }
-npm run tauri -- build --bundles nsis
-if ($LASTEXITCODE -ne 0) { throw "桌面构建失败" }
+bin\dev-win.cmd --check
+bin\dev-win.cmd
 ```
 
-输出为 `desktop-nova/src-tauri/target/public-beta/release/bundle/nsis/*-setup.exe`。NSIS 使用 perMachine 安装，将显式映射的资源与快速后端包含在同一个 Setup.exe 内；不发布 ZIP/MSI。签名构建须从仓库外提供 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，或在 CI 构建后用官方 `tauri signer sign --app-version 0.2.0` 对原始安装包签名。运行 `Litematica-Nova.exe --verify-public-resources` 核对后端身份、哈希及游戏资源；此 CLI 不启动界面。
+`--check` 只检查环境、资源和组件，不构建、不启动界面。普通功能分支可以开发，不要求切换到 `main`。
 
-## 验证
+已有匹配组件时，可减少重复准备：
 
-- 前端：`npm run build`、`npm run check:layers`、`npm run check:application-boundaries`；相关业务测试使用 `node --test`。
-- 后端：分别运行 viewer-core lib、viewer-launch-contract 和 Tauri Application Host 的 CLI 单测。
-- 公开构建门禁：`node desktop-nova/scripts/check-public-build.mjs`，产物检查参数见该脚本。
-- 原生预览、DPI、焦点、遮挡、主题视觉与实际安装更新交给人工验收，不以编译、CLI 单测替代。
+```powershell
+bin\dev-win.cmd --skip-prepare
+```
 
-## 公开边界与发布
+该选项仍会检查组件的完整性和版本匹配；提示不匹配时，重新运行不带该选项的入口。
 
-- 公开版物理只保留原有 Fast/wgpu 渲染路径，以及投影读写、材料统计、生成和 Stockpile。Full/V5/Iris 源码、Cargo 依赖、服务程序与专用资源不进入当前公开树和产物。
-- 缺失完整模式明确显示“完整模式未包含在公开版”。快速模式不冒充 Full，不复制另一套渲染算法。
-- 私有开发历史不合并进公开 `main`；仅选择性导入已审计文件。允许保留的旧版公开历史不代表当前商业实现可公开。
-- Beta Tag 指向公开 `main` 的审计提交；GitHub Actions 只构建 Windows 审计产物，不自动创建正式 Release。其他平台本版不构建、不宣称可运行。
-- 更新维护见 [UPDATER.md](UPDATER.md)，组件来源见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)。
+## 必要检查
 
-## Beta 0.2 本地验收
+```powershell
+cd desktop-nova
+npm ci
+npm run build
+npm run check:layers
+npm run check:application-boundaries
+```
 
-文件关联由 NSIS 安装/卸载 hook 管理；官方 single-instance 2.4.0 与 Tauri 2.11.1 配合，外部文件请求排队后交已有主窗口。Native Thumbnail Provider 仅读取按投影内容 SHA256 命名的 PNG 缓存，不启动渲染器，不解析完整投影。共享缩略图目录为 %LOCALAPPDATA%\Litematica-Nova\thumbnails。
+脚本状态测试可从仓库根目录运行：
 
-启动先绘制缓存主题，配置异步加载；分层资源按需初始化。退出停止任务接纳并在后台等待所属子进程，生命周期日志分别标记资源身份、配置迁移和子进程退出。网络更新原本已异步，未改变签名要求。
+```powershell
+node --test desktop-nova/scripts/public-development-launcher.test.mjs
+```
 
-统计分阶段日志由 NOVA_STATS_TIMING 开启，Host 共享同文件同参数的请求及结果；React Profiler 只报告实际挂载的提交时间。CLI 的 helper transport 不等于真实 WebView IPC，后两项留待人工读取运行日志。
+按改动运行对应的 Rust 或前端定向测试，不用完整界面验收替代状态测试，也不用编译成功替代图形验证。
 
-本轮只本地构建；不推送、不创建 Tag、不修改线上更新清单。通过 docs/releases/BETA_0_2.md 的人工清单后再发布。
+## CI 与发行构建
+
+- Windows 和 Linux 使用本地构建环境；Linux 在 WSL 中以普通用户运行。
+- macOS 使用云端 macOS 构建机，区分 Intel 和 Apple Silicon。
+- 正式构建使用 `main` 的确定提交；日常开发分支不受该发布规则限制。
+- 本地 CI 只运行可信的手动工作流，不接收外部 PR 自动执行，不自动清理或切换已有工作区。
+- 安装包必须包含匹配的运行组件、材料数据、语言、图标及平台资源。
+- 当前各平台的实际产物以成功的工作流和发布页为准；未通过的平台不标为已支持。
+
+## 人工验收
+
+集中检查原生预览、页面切换、DPI、焦点、遮挡、主题、文件关联和安装更新。构建及 CLI 通过不代表这些项目已实机通过。
+
+Windows 文件管理器缩略图读取共享缓存；没有缓存时不启动渲染器。日志可在「选项 → 导出日志 ZIP…」保存，分享前注意个人路径和其它诊断信息。
+
+更新日志见 [Beta 0.2](releases/BETA_0_2.md)，更新维护见 [UPDATER.md](UPDATER.md)，组件来源见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)。
