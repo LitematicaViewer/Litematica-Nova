@@ -30,7 +30,7 @@ def source(request_file, tar_file, destination):
             raise ValueError("The immutable source archive is incomplete")
         manifest = {"schema": "nova.private-source-snapshot.v1", "sourceSha": request["sourceSha"], "target": request["target"], "files": sorted(records, key=lambda entry: entry["path"])}
         output.writestr("source/snapshot.json", json.dumps(manifest, separators=(",", ":")))
-        extensions = {".rs", ".toml", ".lock", ".cc", ".cpp", ".c", ".h", ".hpp", ".vm", ".txt", ".md", ".def", ".inc"}
+        extensions = {".rs", ".toml", ".lock", ".cc", ".cpp", ".c", ".h", ".hh", ".hpp", ".vm", ".txt", ".md", ".def", ".inc"}
         for directory, names, files in os.walk(amice):
             names[:] = [name for name in names if name not in {"target", ".git", ".idea"} and not (Path(directory) / name).is_symlink()]
             for name in files:
