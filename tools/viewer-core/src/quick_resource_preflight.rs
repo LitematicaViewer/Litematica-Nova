@@ -75,6 +75,7 @@ pub fn query_selected_adapter_budget(adapter: &wgpu::Adapter) -> Result<QuickGpu
 pub fn query_selected_adapter_budget(adapter: &wgpu::Adapter) -> Result<QuickGpuBudget> {
     let identity = adapter.get_info();
     let measured = match identity.backend {
+        #[cfg(not(target_os = "macos"))]
         wgpu::Backend::Vulkan => unsafe {
             adapter.as_hal::<wgpu::hal::api::Vulkan, _, _>(|selected| {
                 selected.and_then(|selected| selected.local_memory_budget())

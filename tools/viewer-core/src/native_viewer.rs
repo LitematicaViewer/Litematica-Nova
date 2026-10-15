@@ -5796,6 +5796,8 @@ impl ViewerState {
             composition,
             #[cfg(target_os = "windows")]
             vulkan_composition,
+            #[cfg(target_os = "macos")]
+            mac_composition,
             composition_dpi: window.scale_factor(),
             presentation_error: None,
             quick_gpu_failure,
