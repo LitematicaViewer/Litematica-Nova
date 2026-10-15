@@ -75,7 +75,55 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  macos-runtime:
+    if: >-
+      github.repository == 'LitematicaViewer/Litematica-Nova' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' && inputs.platforms != 'local'
+    runs-on: [self-hosted, Windows, X64, nova-local]
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+    env:
+      NOVA_LOCAL_REPOSITORY: ${{ vars.NOVA_LOCAL_REPOSITORY }}
+      NOVA_RUNTIME_TARGET: ${{ matrix.target }}
+      BUILD_SHA: ${{ github.sha }}
+    steps:
+      # This local job sends the three approved runtime files only, never a checkout.
+      - name: Verify the approved target runtime
+        id: runtime
+        shell: pwsh
+        run: |
+          . 'D:\NovaCI\toolchains\windows\Activate.ps1'
+          $verify = @'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          import { execFileSync } from 'node:child_process';
+          const repo = process.env.NOVA_LOCAL_REPOSITORY;
+          const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+          if (sha !== process.env.BUILD_SHA) throw new Error('The local public source differs from the requested candidate.');
+          const { validatePackage } = await import(pathToFileURL(path.join(repo, 'desktop-nova/scripts/check-public-checkout.mjs')));
+          const target = process.env.NOVA_RUNTIME_TARGET, directory = path.join('D:/NovaCI/runtime', target);
+          const identity = await validatePackage(directory, 'libnova_protected_module.dylib');
+          const version = JSON.parse(fs.readFileSync(path.join(repo, 'desktop-nova/src-tauri/tauri.conf.json'), 'utf8')).version;
+          if (identity.version !== version || !identity.buildId.endsWith('-' + target)) throw new Error('The runtime version/target differs from the candidate.');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'directory=' + directory + '\n');
+          console.log('Approved runtime ready: ' + target);
+          '@
+          node --input-type=module -e $verify
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Transfer approved runtime files only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Nova-runtime-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ steps.runtime.outputs.directory }}/*
+          if-no-files-found: error
+          retention-days: 1
+
   macos:
+    needs: macos-runtime
     if: >-
       github.repository == 'LitematicaViewer/Litematica-Nova' &&
       github.ref == 'refs/heads/main' &&
@@ -101,11 +149,13 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
-      - name: Fetch approved macOS runtime package
-        env:
-          NOVA_RUNTIME_URL: ${{ matrix.architecture == 'x64' && vars.NOVA_RUNTIME_MACOS_X64_URL || vars.NOVA_RUNTIME_MACOS_ARM64_URL }}
-          NOVA_RUNTIME_SHA256: ${{ matrix.architecture == 'x64' && vars.NOVA_RUNTIME_MACOS_X64_SHA256 || vars.NOVA_RUNTIME_MACOS_ARM64_SHA256 }}
-        run: node desktop-nova/scripts/fetch-ci-runtime.mjs --target '${{ matrix.target }}'
+      - name: Receive approved target runtime files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: Nova-runtime-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ runner.temp }}/nova-runtime/${{ matrix.target }}
+      - name: Select the approved target runtime
+        run: printf 'NOVA_RUNTIME_PACKAGE_DIR=%s\n' "$RUNNER_TEMP/nova-runtime/${{ matrix.target }}" >> "$GITHUB_ENV"
       - name: Prepare target-native Vulkan implementation
         shell: bash
         env:
