@@ -320,9 +320,10 @@ fn get_root() -> PathBuf {
         }
     }
     let current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    find_workspace_root(&current_dir)
-        .or_else(|| find_workspace_root(Path::new(env!("CARGO_MANIFEST_DIR"))))
-        .unwrap_or(current_dir)
+    let root = find_workspace_root(&current_dir);
+    #[cfg(debug_assertions)]
+    let root = root.or_else(|| find_workspace_root(Path::new(env!("CARGO_MANIFEST_DIR"))));
+    root.unwrap_or(current_dir)
 }
 
 fn find_workspace_root(start: &Path) -> Option<PathBuf> {
