@@ -90,7 +90,7 @@ Linux 需要 glibc 2.39 或更新版本，以及 GTK 3、WebKitGTK 4.1 等桌面
 
 启动后会在后台检查更新。有新版本时显示版本、日期及新增/优化/修复/注意事项；可以更新、取消，或跳过当前版本。确认更新后显示下载进度，使用签名校验，保存当前草稿并等待后台写任务退出，再安装重启。GitHub 接口失败时切换专用 HTTPS 镜像。
 
-更新源使用 GitHub HTTPS 清单及专用 HTTPS 镜像。Windows 下载签名 NSIS 安装包，Linux 使用签名 AppImage，macOS 使用对应架构的签名应用更新归档；同平台主源和镜像提供相同版本与签名。实际安装与重启仍需用户实机反馈；具体配置见 [更新维护说明](docs/UPDATER.md)。
+更新源使用 GitHub HTTPS 清单及专用 HTTPS 镜像。Windows 下载签名 NSIS 安装包，Linux 按安装形式使用签名 AppImage 或 Debian 安装包，macOS 使用对应架构的签名应用更新归档；同平台主源和镜像提供相同版本与签名。实际安装与重启仍需用户实机反馈；具体配置见 [更新维护说明](docs/UPDATER.md)。
 
 ## 已知 Bug
 
