@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import zlib from 'node:zlib';
 import test from 'node:test';
-import { platformFor, tauriOverride, iconPng, tauriBuildStages } from './build-public-platform.mjs';
+import { platformFor, tauriOverride, iconPng, tauriBuildStages, cargoDirectories } from './build-public-platform.mjs';
 
 const base = JSON.parse(fs.readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'));
 const make = (platform) => tauriOverride(base, { platform, stage: '/build/helpers', runtime: '/build/runtime', stockpile: '/build/stockpile_server', icon: '/build/icons/icon.icns', candidate: false });
@@ -20,6 +20,18 @@ test('macOS 先真实编译但不打包，通过后同配置 bundle；其他平�
     ['bundle', '--config', '/build/config.json', '--bundles', 'app,dmg'],
   ]);
   assert.deepEqual(tauriBuildStages({ os: 'win32', bundles: 'nsis' }, '/build/config.json'), [['build', '--config', '/build/config.json', '--bundles', 'nsis']]);
+});
+test('仅 macOS 公开三 crate 共用 Cargo target；Windows/Linux 既有输出位置不变', () => {
+  const selected = path.resolve('/build/public-cargo');
+  const mac = cargoDirectories('aarch64-apple-darwin', { os: 'darwin' }, selected);
+  assert.deepEqual(mac, { host: selected, core: selected, loader: selected });
+  for (const [target, osName, directory] of [['x86_64-pc-windows-msvc', 'win32', 'public-beta'], ['x86_64-unknown-linux-gnu', 'linux', 'public-beta-x86_64-unknown-linux-gnu']]) {
+    const paths = cargoDirectories(target, { os: osName }, selected);
+    assert.equal(paths.host, selected);
+    assert.ok(paths.core.endsWith(path.join('tools/viewer-core/target', directory)));
+    assert.ok(paths.loader.endsWith(path.join('tools/nova-protected-loader/target', directory)));
+    assert.notEqual(paths.core, paths.host);
+  }
 });
 test('Linux/mac 资源覆盖显式移除旧 EXE/COM/DLL 包映射并保留普通资源', () => {
   for (const target of ['x86_64-unknown-linux-gnu', 'x86_64-apple-darwin']) {

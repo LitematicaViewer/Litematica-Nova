@@ -27,6 +27,15 @@ export function tauriBuildStages(platform, config) {
     ? [[...build, '--no-bundle'], ['bundle', '--config', config, '--bundles', platform.bundles]]
     : [[...build, '--bundles', platform.bundles]];
 }
+export function cargoDirectories(target, platform, targetDirectory) {
+  const host = path.resolve(targetDirectory || path.join(tauri, 'target', `ci-${target}`));
+  const directory = platform.os === 'win32' ? 'public-beta' : `public-beta-${target}`;
+  return {
+    host,
+    core: platform.os === 'darwin' ? host : path.join(root, 'tools/viewer-core/target', directory),
+    loader: platform.os === 'darwin' ? host : path.join(root, 'tools/nova-protected-loader/target', directory),
+  };
+}
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, env: process.env, stdio: 'inherit', windowsHide: true, ...options });
   if (result.error || result.status !== 0) throw new Error(`${path.basename(command)} failed (${result.status ?? result.error?.code}).`);
@@ -123,14 +132,13 @@ export function iconPng(outputDirectory) {
   fs.writeFileSync(filename, Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]));
   return filename;
 }
-async function stageBackends(target, platform, identity, sha, directory) {
+async function stageBackends(target, platform, identity, sha, directory, cargo) {
   const names = ['litematica_core', 'litematica_native_viewer', 'nova-render-service', 'nova-build-worker'].map((name) => name + platform.suffix);
   fs.mkdirSync(directory, { recursive: true });
   if (fs.readdirSync(directory).some((name) => ![...names, 'backend-deployment.json'].includes(name))) throw new Error('Unexpected file in the platform backend staging directory.');
   const artifacts = {};
   for (const name of names) {
-    const crate = name.startsWith('nova-') ? 'nova-protected-loader' : 'viewer-core';
-    const source = platform.os === 'win32' ? path.join(root, 'bin/public-beta', name) : path.join(root, 'tools', crate, 'target', `public-beta-${target}`, 'release', name);
+    const source = platform.os === 'win32' ? path.join(root, 'bin/public-beta', name) : path.join(name.startsWith('nova-') ? cargo.loader : cargo.core, 'release', name);
     const destination = path.join(directory, name); fs.copyFileSync(source, destination);
     if (platform.os !== 'win32') fs.chmodSync(destination, 0o755);
     artifacts[name] = { bytes: fs.statSync(destination).size, sha256: await hash(destination) };
@@ -204,14 +212,17 @@ export async function build(args = process.argv.slice(2)) {
   Object.assign(process.env, { NOVA_RUNTIME_PACKAGE_DIR: runtime, NOVA_PROTECTED_BUILD_ID: identity.buildId, NOVA_PROTECTED_MANIFEST_PUBLIC_KEY: identity.manifestPublicKey, NOVA_PROTECTED_ENDPOINT: identity.endpoint, LBA_BUILD_GIT_SHA: sha, CARGO_PROFILE_RELEASE_STRIP: 'symbols', CARGO_PROFILE_RELEASE_DEBUG: '0' });
   process.env.CARGO_ENCODED_RUSTFLAGS = [`--remap-path-prefix=${root}=/nova/public`, `--remap-path-prefix=${process.env.CARGO_HOME || path.join(os.homedir(), '.cargo')}=/nova/cargo`, `--remap-path-prefix=${process.env.RUSTUP_HOME || path.join(os.homedir(), '.rustup')}=/nova/rust`].join('\x1f');
   delete process.env.RUSTFLAGS;
+  const cargo = cargoDirectories(target, platform, process.env.CARGO_TARGET_DIR);
+  // Cargo retains the crate-specific profiles/features and only reuses matching fingerprints.
+  if (platform.os === 'darwin') process.env.CARGO_TARGET_DIR = cargo.host;
   const npm = npmCli(); run(process.execPath, [npm, 'ci'], { cwd: desktop });
   if (platform.os === 'win32') run('pwsh', ['-NoProfile', '-File', path.join(desktop, 'scripts/prepare-protected-backend.ps1'), '-RepoRoot', root]);
   else {
     await prepareAssets();
-    run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/viewer-core/Cargo.toml', '--target-dir', `tools/viewer-core/target/public-beta-${target}`, '--no-default-features', '--features', 'public-beta', '--bin', 'litematica_core', '--bin', 'litematica_native_viewer', '--bin', 'stockpile_server']);
-    run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/nova-protected-loader/Cargo.toml', '--target-dir', `tools/nova-protected-loader/target/public-beta-${target}`, '--bins']);
+    run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/viewer-core/Cargo.toml', '--target-dir', cargo.core, '--no-default-features', '--features', 'public-beta', '--bin', 'litematica_core', '--bin', 'litematica_native_viewer', '--bin', 'stockpile_server']);
+    run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/nova-protected-loader/Cargo.toml', '--target-dir', cargo.loader, '--bins']);
   }
-  const stage = path.join(root, '.tmp/ci-backends', target); await stageBackends(target, platform, identity, sha, stage);
+  const stage = path.join(root, '.tmp/ci-backends', target); await stageBackends(target, platform, identity, sha, stage, cargo);
   const resourceRuntime = await stageRuntimeResources(runtime, target, platform);
   process.env.NOVA_PUBLIC_BACKEND_DIR = stage;
   const temporary = path.join(root, '.tmp/ci-config', target); fs.mkdirSync(temporary, { recursive: true });
@@ -221,9 +232,9 @@ export async function build(args = process.argv.slice(2)) {
     run(process.execPath, [npm, 'run', 'tauri', '--', 'icon', png, '-o', path.join(temporary, 'icons')], { cwd: desktop });
     icon = path.join(temporary, 'icons', platform.os === 'darwin' ? 'icon.icns' : 'icon.png');
   }
-  const stockpile = path.join(root, 'tools/viewer-core/target', platform.os === 'win32' ? 'public-beta' : `public-beta-${target}`, 'release', `stockpile_server${platform.suffix}`);
+  const stockpile = path.join(cargo.core, 'release', `stockpile_server${platform.suffix}`);
   const config = path.join(temporary, 'tauri.json'); fs.writeFileSync(config, JSON.stringify(tauriOverride(base, { platform, stage, runtime: resourceRuntime, stockpile, icon, candidate }), null, 2));
-  const cargoTarget = path.resolve(process.env.CARGO_TARGET_DIR || path.join(tauri, 'target', `ci-${target}`)); process.env.CARGO_TARGET_DIR = cargoTarget;
+  const cargoTarget = cargo.host; process.env.CARGO_TARGET_DIR = cargoTarget;
   removePreviousDistributables(cargoTarget, platform);
   for (const command of tauriBuildStages(platform, config)) {
     console.log(`Public candidate phase=${command[0]} target=${target}`);
