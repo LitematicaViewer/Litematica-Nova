@@ -926,18 +926,33 @@ pub enum ViewerTask {
     QuickGpuContext(QuickGpuContextTask),
 }
 
+/// OS graphics API for a new GPU task, independent from the V5/Iris route.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphicsApiPreference {
+    #[default]
+    Auto,
+    Dx12,
+    Vulkan,
+}
+
 /// Ordinary asynchronous static GPU initialization. The legacy top-level
-/// `scene` field identifies the runtime context directory for this task only;
-/// it is never opened as a projection or compiled into scene geometry.
+/// `scene` identifies the runtime context directory, never projection geometry.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct QuickGpuContextTask { pub host: QuickPreviewHostWindow }
+pub struct QuickGpuContextTask {
+    pub host: QuickPreviewHostWindow,
+    #[serde(default)]
+    pub graphics_backend: GraphicsApiPreference,
+}
 
 /// The historical independent quick renderer, never a Full/V5 build task.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct QuickPreviewTask {
     pub initial_visible: bool,
+    #[serde(default)]
+    pub graphics_backend: GraphicsApiPreference,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<QuickPreviewHostWindow>,
     #[serde(default)]
@@ -1714,6 +1729,7 @@ mod tests {
         let contract = ViewerLaunchContract::new("gpu-context".into(), absolute("runtime-context"),
             ViewerContent::default(), None, ViewerTask::QuickGpuContext(QuickGpuContextTask {
                 host: QuickPreviewHostWindow { hwnd: "42".into(), process_id: 100 },
+                graphics_backend: GraphicsApiPreference::Auto,
             })).unwrap();
         let bytes = contract.to_json_bytes().unwrap();
         assert_eq!(ViewerLaunchContract::from_json_slice(&bytes).unwrap(), contract);
@@ -1724,6 +1740,42 @@ mod tests {
         resource_contract.content.resource_packs.push(absolute("pack.zip"));
         assert!(resource_contract.validate().is_err());
     }
+    #[test]
+    fn quick_graphics_api_is_task_bound_defaults_to_auto_and_keeps_v5_route_separate() {
+        for (preference, encoded) in [(GraphicsApiPreference::Auto, "auto"), (GraphicsApiPreference::Dx12, "dx12"), (GraphicsApiPreference::Vulkan, "vulkan")] {
+            let contract = ViewerLaunchContract::new("quick-api".into(), absolute("scene.litematic"),
+                ViewerContent::default(), None, ViewerTask::QuickPreview(QuickPreviewTask {
+                    graphics_backend: preference, ..Default::default()
+                })).unwrap();
+            let mut value = serde_json::to_value(&contract).unwrap();
+            assert_eq!(value["task"]["graphicsBackend"], encoded);
+            assert!(value["renderer"].is_null());
+            assert_eq!(ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).unwrap(), contract);
+            value["task"].as_object_mut().unwrap().remove("graphicsBackend");
+            let decoded = ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert!(matches!(decoded.task, ViewerTask::QuickPreview(QuickPreviewTask { graphics_backend: GraphicsApiPreference::Auto, .. })));
+        }
+        assert!(serde_json::from_str::<GraphicsApiPreference>("\"iris-gl46\"").is_err());
+        assert!(serde_json::from_str::<ViewerBackend>("\"dx12\"").is_err());
+    }
+
+    #[test]
+    fn quick_gpu_context_round_trips_explicit_graphics_api_and_accepts_old_auto_context() {
+        for preference in [GraphicsApiPreference::Auto, GraphicsApiPreference::Dx12, GraphicsApiPreference::Vulkan] {
+            let contract = ViewerLaunchContract::new("quick-context-api".into(), absolute("runtime-context"),
+                ViewerContent::default(), None, ViewerTask::QuickGpuContext(QuickGpuContextTask {
+                    host: QuickPreviewHostWindow { hwnd: "42".into(), process_id: 100 }, graphics_backend: preference,
+                })).unwrap();
+            let mut value = serde_json::to_value(&contract).unwrap();
+            assert_eq!(ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).unwrap(), contract);
+            value["task"].as_object_mut().unwrap().remove("graphicsBackend");
+            let legacy = ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert!(matches!(legacy.task, ViewerTask::QuickGpuContext(QuickGpuContextTask { graphics_backend: GraphicsApiPreference::Auto, .. })));
+            value["task"]["graphicsBackend"] = "iris-gl46".into();
+            assert!(ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+    }
+
     #[test]
     fn quick_preview_contract_is_independent_hidden_and_strict() {
         let mut contract = ViewerLaunchContract::new(

@@ -1,6 +1,7 @@
 import {
   getUserConfig,
   saveUserConfig,
+  GraphicsApiPreference,
   UserConfigInfo,
 } from "./backend";
 import { normalizeDisplayMode, DisplayMode } from "./renderMode";
@@ -13,6 +14,14 @@ const MIGRATION_KEY = "lba.appdataConfigMigrated.v1";
 export type ThemeName = "shadcn" | "8bitcn" | "Minecraft";
 export type ColorMode = "light" | "dark" | "system";
 export type MaterialListWindowBehavior = "independent_window" | "main_window_overlay";
+
+export function normalizeGraphicsBackend(value: unknown): GraphicsApiPreference {
+  return value === "dx12" || value === "vulkan" ? value : "auto";
+}
+
+export async function saveGraphicsBackendConfig(value: string): Promise<UserConfigInfo> {
+  return await saveUserConfig({ graphics_backend: normalizeGraphicsBackend(value) });
+}
 const DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT = 3;
 const DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES = [
   "理论版本 = version(L)",

@@ -1,5 +1,7 @@
 import { invoke } from "./tauri";
 
+export type GraphicsApiPreference = "auto" | "dx12" | "vulkan";
+
 export interface V5CompatibilityConfig {
   backend: "auto" | "vulkan" | "iris-gl46";
   shaderpack_root: string;
@@ -19,6 +21,7 @@ export interface UserConfig {
   color_mode: "light" | "dark" | "system";
   render_display_mode: string;
   preview_mode: string;
+  graphics_backend: GraphicsApiPreference;
   material_list_window_behavior: string;
   show_ui_test_page: boolean;
   local_library_tail_path_count: number;

@@ -214,6 +214,8 @@ struct UserConfig {
     v5_compatibility: V5CompatibilityConfig,
     #[serde(default)]
     viewer_controls: ViewerControlConfig,
+    #[serde(default)]
+    graphics_backend: ::viewer_launch_contract::GraphicsApiPreference,
 }
 
 #[derive(Deserialize)]
@@ -228,6 +230,7 @@ struct UserConfigInput {
     local_library_tail_path_count: Option<u32>,
     v5_compatibility: Option<V5CompatibilityConfigInput>,
     viewer_controls: Option<ViewerControlConfig>,
+    graphics_backend: Option<::viewer_launch_contract::GraphicsApiPreference>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -722,6 +725,7 @@ fn default_user_config() -> UserConfig {
         local_library_tail_path_count: default_local_library_tail_path_count(),
         v5_compatibility: V5CompatibilityConfig::default(),
         viewer_controls: ViewerControlConfig::default(),
+        graphics_backend: Default::default(),
     }
 }
 
@@ -736,6 +740,22 @@ fn default_statistics_enumerator_info_rules() -> Vec<String> {
 #[cfg(test)]
 mod viewer_control_config_tests {
     use super::{UserConfig, ViewerControlConfig};
+
+    #[test]
+    fn graphics_backend_defaults_persists_and_does_not_disguise_exact_modes() {
+        use ::viewer_launch_contract::GraphicsApiPreference as Api;
+        let old = serde_json::json!({"theme":"shadcn","render_display_mode":"full","preview_mode":"full"});
+        assert_eq!(serde_json::from_value::<UserConfig>(old.clone()).unwrap().graphics_backend, Api::Auto);
+        for backend in [Api::Auto, Api::Dx12, Api::Vulkan] {
+            let mut value = old.clone();
+            value["graphics_backend"] = serde_json::to_value(backend).unwrap();
+            let saved: UserConfig = serde_json::from_value(value).unwrap();
+            assert_eq!(serde_json::from_slice::<UserConfig>(&serde_json::to_vec(&saved).unwrap()).unwrap().graphics_backend, backend);
+            assert_eq!(super::validate_exact_graphics_preference(backend).is_ok(), backend != Api::Dx12);
+        }
+        let mut bad = old; bad["graphics_backend"] = "opengl".into();
+        assert!(serde_json::from_value::<UserConfig>(bad).is_err());
+    }
 
     #[test]
     fn statistics_rules_survive_native_config_save_and_reload() {
@@ -1246,6 +1266,7 @@ async fn generate_preview_image(
     let operations = operations.inner().clone();
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
     let parent = ::viewer_launch_contract::QuickPreviewHostWindow { hwnd: hwnd.to_string(), process_id: std::process::id() };
+    let graphics_backend = read_user_config_data(&current_user_config_dir()?).graphics_backend;
     return tauri::async_runtime::spawn_blocking(move || {
         let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
         let cache = application::thumbnails::cache_path(&source)?;
@@ -1266,7 +1287,7 @@ async fn generate_preview_image(
         // Reuse QuickPreviewHost for an independent hidden WS_CHILD session; an
         // existing interactive Viewer and its camera/GPU lifetime stay untouched.
         let temporary = host.thumbnail_session();
-        let view = temporary.start(StartQuickPreviewInput { source_path: source.clone(), preload: false, click_started_at_epoch_ms: None }, parent)?;
+        let view = temporary.start(StartQuickPreviewInput { source_path: source.clone(), preload: false, click_started_at_epoch_ms: None, graphics_backend }, parent)?;
         let output = (|| {
             let started = std::time::Instant::now();
             loop {
@@ -1357,6 +1378,7 @@ fn save_user_config_inner(input: UserConfigInput) -> Result<UserConfigInfo, Stri
     let _serial = CONFIG_WRITE_LOCK.lock().map_err(|_| "配置保存锁异常")?;
     let dir = current_user_config_dir()?;
     let mut config = read_user_config_data(&dir);
+    if let Some(backend) = input.graphics_backend { config.graphics_backend = backend; }
     if let Some(theme) = input.theme {
         config.theme = normalize_theme(&theme);
     }
@@ -2745,6 +2767,13 @@ mod full_launch_plan_tests {
     }
 }
 
+fn validate_exact_graphics_preference(backend: ::viewer_launch_contract::GraphicsApiPreference) -> Result<(), String> {
+    if backend == ::viewer_launch_contract::GraphicsApiPreference::Dx12 {
+        return Err("标准和完整模式当前使用 Vulkan；DX12 仅适用于快速模式。请选择自动或 Vulkan 后重试。".into());
+    }
+    Ok(())
+}
+
 fn application_render_request(
     input: RenderServiceStartBuildInput,
 ) -> Result<(UserVisibleRenderRequest, RenderEnvironmentInputs), String> {
@@ -2758,7 +2787,11 @@ fn application_render_request(
     if !matches!(input.display_mode, RenderDisplayMode::Full | RenderDisplayMode::Standard) {
         return Err("精确渲染入口只接受 full 或 standard；快速模式保持独立启动链".to_owned());
     }
+    validate_exact_graphics_preference(config.graphics_backend)?;
     let mut compatibility = config.v5_compatibility.clone();
+    if config.graphics_backend == ::viewer_launch_contract::GraphicsApiPreference::Vulkan {
+        compatibility.backend = "vulkan".into();
+    }
     let unlit = input.display_mode == RenderDisplayMode::Standard;
     if unlit {
         compatibility.backend = "vulkan".to_owned();
@@ -2848,7 +2881,7 @@ async fn application_quick_preview_resource_decision(
 }
 
 #[tauri::command]
-async fn application_quick_preview_start(window: tauri::WebviewWindow, input: StartQuickPreviewInput, host: tauri::State<'_, QuickPreviewHost>) -> Result<QuickPreviewView, String> {
+async fn application_quick_preview_start(window: tauri::WebviewWindow, mut input: StartQuickPreviewInput, host: tauri::State<'_, QuickPreviewHost>) -> Result<QuickPreviewView, String> {
     if window.label() != "main" { return Err("快速预览只属于主窗口。".into()); }
     #[cfg(windows)]
     let host_window = ::viewer_launch_contract::QuickPreviewHostWindow {
@@ -2857,6 +2890,7 @@ async fn application_quick_preview_start(window: tauri::WebviewWindow, input: St
     };
     #[cfg(not(windows))]
     return Err("原生页内预览当前以 Windows 为目标。".into());
+    input.graphics_backend = read_user_config_data(&current_user_config_dir()?).graphics_backend;
     let host = host.inner().clone();
     #[cfg(windows)]
     return tauri::async_runtime::spawn_blocking(move || host.start(input, host_window)).await.map_err(|error| error.to_string())?;
@@ -3123,8 +3157,9 @@ fn main() {
             let quick_window = ::viewer_launch_contract::QuickPreviewHostWindow {
                 hwnd: (main_window.hwnd()?.0 as isize).to_string(), process_id: std::process::id(),
             };
+            let graphics_backend = read_user_config_data(&current_user_config_dir().map_err(std::io::Error::other)?).graphics_backend;
             tauri::async_runtime::spawn_blocking(move || {
-                if let Err(error) = quick.prepare_gpu_context(quick_window) {
+                if let Err(error) = quick.prepare_gpu_context(quick_window, graphics_backend) {
                     eprintln!("[NOVA_GPU_INITIALIZATION] stage=ordinary_startup_not_ready error={error} projection_reads=0 scene_mesh_builds=0");
                 }
             });

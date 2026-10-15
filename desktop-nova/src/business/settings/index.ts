@@ -4,6 +4,7 @@ export type {
   AiTestResult,
   UserConfig,
   UserConfigInfo,
+  GraphicsApiPreference,
 } from "../../services/backend";
 export {
   aiClearKey,
@@ -26,7 +27,9 @@ export {
   normalizeShowUiTestPage,
   normalizeTheme,
   normalizeColorMode,
+  normalizeGraphicsBackend,
   saveColorModeConfig,
+  saveGraphicsBackendConfig,
   saveLocalLibraryTailPathCountConfig,
   saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
