@@ -5,6 +5,7 @@
 //! little-endian length followed by one UTF-8 JSON [`Envelope`]. The first
 //! packet on every connection must be [`Payload::Hello`].
 
+pub use viewer_launch_contract::ProtectedTask;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -14,7 +15,7 @@ pub mod host_supervision;
 pub mod identity;
 
 pub const PROTOCOL_SCHEMA: &str = "litematica-nova.render-service.v1";
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 20;
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 /// Two concrete upload/decode payload slots plus one metadata-only queued
@@ -155,6 +156,8 @@ pub struct ServerHello {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Request {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protected_task: Option<ProtectedTask>,
     pub request_id: String,
     pub command: UiCommand,
 }
@@ -162,6 +165,11 @@ pub struct Request {
 impl Request {
     fn validate(&self) -> Result<(), String> {
         require_id("requestId", &self.request_id)?;
+        if let Some(task) = &self.protected_task {
+            if !task.ticket_path.is_absolute() || !task.module_path.is_absolute() {
+                return Err("protected task runtime paths must be absolute".into());
+            }
+        }
         self.command.validate()
     }
 }
@@ -182,6 +190,12 @@ pub enum UiCommand {
     StartBuild(AdmittedBuildStart),
     CancelBuild {
         build_id: String,
+    },
+    SetBoundPresentation {
+        session_id: String,
+        build_id: String,
+        generation: u64,
+        state: ViewerPresentationState,
     },
     ShowPopup {
         session_id: String,
@@ -208,6 +222,12 @@ pub const HEADLESS_CAMERA_STRESS_FRAMES: u32 = 28;
 impl UiCommand {
     fn validate(&self) -> Result<(), String> {
         match self {
+            Self::SetBoundPresentation { session_id, build_id, generation, .. } => {
+                require_id("sessionId", session_id)?;
+                require_id("buildId", build_id)?;
+                if *generation == 0 { return Err("Presentation requires a build generation".to_owned()); }
+            }
+
             Self::PreflightBuild(request) => {
                 if request.build_mode != RenderBuildMode::Prebuilt {
                     return Err("resource preflight is only valid for prebuilt mode".to_owned());
@@ -297,7 +317,8 @@ impl BuildAdmission {
     }
 }
 
-/// Renderer-owned result of the sub-second prebuilt resource estimate.
+/// Sub-second result using same-input GPU-owner storage measurements when present.
+/// Cold inputs remain Unmeasured; values are not driver physical-memory totals.
 ///
 /// `admission_token` is absent at the hard limit. The Application Host keeps
 /// any returned token private and exposes a separate product-level preflight
@@ -319,6 +340,8 @@ pub struct BuildResourcePreflight {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourcePressure {
+    /// No complete same-input allocator measurement exists yet. Not zero/Normal.
+    Unmeasured,
     Normal,
     Warning,
     HardLimit,
@@ -333,7 +356,49 @@ pub struct ConservativeVramComponents {
     pub block_entity_bytes: u64,
     pub texture_and_shader_bytes: u64,
     pub render_target_bytes: u64,
+    /// Measured auxiliary GPU storage, despite the historical wire name.
     pub runtime_reserve_bytes: u64,
+}
+
+/// Actual GPU-owner resource storage at a completed preparation boundary.
+/// This is not a driver physical-residency/peak counter.
+/// Diagnostic payload/vertex/index bytes are subsets, not additional allocations.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ResourceMemoryMeasurement {
+    pub backend: RenderBackend,
+    pub viewport_width: u32,
+    pub viewport_height: u32,
+    pub geometry_payload_bytes: u64,
+    pub terrain_vertex_bytes: u64,
+    pub terrain_index_bytes: u64,
+    pub terrain_allocated_bytes: u64,
+    pub draw_metadata_bytes: u64,
+    pub dynamic_geometry_bytes: u64,
+    pub texture_bytes: u64,
+    pub render_target_bytes: u64,
+    pub shader_resource_bytes: u64,
+    pub runtime_auxiliary_bytes: u64,
+    pub complete_terrain: bool,
+    /// Counter-collection time only, not scene preparation or driver residency.
+    #[serde(default)]
+    pub calculation_elapsed_micros: u64,
+}
+
+impl ResourceMemoryMeasurement {
+    pub fn total_allocated_bytes(self) -> Option<u64> {
+        [
+            self.terrain_allocated_bytes,
+            self.draw_metadata_bytes,
+            self.dynamic_geometry_bytes,
+            self.texture_bytes,
+            self.render_target_bytes,
+            self.shader_resource_bytes,
+            self.runtime_auxiliary_bytes,
+        ]
+        .into_iter()
+        .try_fold(0u64, |total, bytes| total.checked_add(bytes))
+    }
 }
 
 /// Product-selected geometry lifetime contract for one immutable build.
@@ -603,6 +668,11 @@ pub struct ScreenRect {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "update", content = "data", rename_all = "snake_case")]
 pub enum WorkerUpdate {
+    /// Actual projection-independent readiness of a resident build process.
+    ResourcesPrepared { ready_epoch_ms: u64, elapsed_ms: u64 },
+    /// A single task finished all publication/drain work; its duplex connection
+    /// may now close while the supervised resource owner remains alive.
+    TaskFinished { build_id: String, generation: u64 },
     Connected {
         build_id: String,
         generation: u64,
@@ -641,6 +711,10 @@ pub enum WorkerUpdate {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "command", content = "data", rename_all = "snake_case")]
 pub enum WorkerControl {
+    /// Private resident-worker control pipe only. No scene or resource payload
+    /// is transported; the same validated BuildCache contract is read once.
+    BeginTask { build_id: String, generation: u64, launch_contract: PathBuf },
+    Shutdown,
     RealtimeDemand {
         build_id: String,
         generation: u64,
@@ -690,6 +764,13 @@ pub enum WorkerControl {
 
 impl WorkerControl {
     fn validate(&self) -> Result<(), String> {
+        if let Self::BeginTask { build_id, generation, launch_contract } = self {
+            require_id("buildId", build_id)?;
+            if *generation == 0 { return Err("resident worker task requires a non-zero generation".to_owned()); }
+            if !launch_contract.is_absolute() || launch_contract.to_string_lossy().len() > 32768 {
+                return Err("resident task contract must be an absolute bounded path".to_owned());
+            }
+        }
         if let Self::RealtimeDemand {
             build_id,
             generation,
@@ -709,6 +790,12 @@ impl WorkerControl {
 impl WorkerUpdate {
     fn validate(&self) -> Result<(), String> {
         match self {
+            Self::ResourcesPrepared { ready_epoch_ms, .. } if *ready_epoch_ms == 0 => Err("resource readiness epoch must be non-zero".to_owned()),
+            Self::TaskFinished { build_id, generation } => {
+                require_id("buildId", build_id)?;
+                if *generation == 0 { return Err("finished task generation must be non-zero".to_owned()); }
+                Ok(())
+            }
             Self::RealtimeBootstrap {
                 build_id,
                 generation,
@@ -722,6 +809,11 @@ impl WorkerUpdate {
                 validate_realtime_bootstrap(descriptor, section_positions)
             }
             Self::ArtifactPublishing { descriptor, .. } => descriptor.validate(),
+            Self::StreamStarted(start) => start.validate_shared_transport(),
+            Self::SectionCommitted(commit) => commit.validate_shared_transport(),
+            Self::ArtifactFinalized(finalized) => {
+                for segment in &finalized.shared_segments { segment.validate()?; } Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -765,6 +857,10 @@ pub struct BuildProgress {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ArtifactStreamStart {
+    #[serde(default)]
+    pub shared_memory: bool,
+    #[serde(default)]
+    pub shared_segments: Vec<SharedArtifactSegment>,
     pub build_id: String,
     /// Render-resource generation persisted in the artifact. This is distinct
     /// from the render-service Build Job generation below.
@@ -787,6 +883,19 @@ pub struct ArtifactBootstrapRange {
     pub range: CommittedRange,
 }
 
+impl ArtifactStreamStart {
+    fn validate_shared_transport(&self) -> Result<(), String> {
+        if self.shared_memory && self.payload_profile != ArtifactPayloadProfile::RealtimeStreamed {
+            return Err("shared memory is exclusive to Realtime streaming".to_owned());
+        }
+        if !self.shared_memory && !self.shared_segments.is_empty() {
+            return Err("file-backed artifact unexpectedly carries shared records".to_owned());
+        }
+        for segment in &self.shared_segments { segment.validate()?; }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactBootstrapKind {
@@ -802,6 +911,8 @@ pub enum ArtifactBootstrapKind {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SectionCommit {
+    #[serde(default)]
+    pub shared_segment: Option<SharedArtifactSegment>,
     pub build_id: String,
     /// Render-resource generation carried by the packed section record.
     pub resource_generation: u64,
@@ -818,6 +929,10 @@ pub struct SectionCommit {
     /// unless this range is present.
     #[serde(default)]
     pub vulkan_packed: Option<CommittedRange>,
+    /// Standard Realtime exact actor/atlas data for this Cell, authenticated
+    /// in the same append-only section aggregate. Legacy/Full/Prebuilt: None.
+    #[serde(default)]
+    pub realtime_dynamic: Option<CommittedRange>,
     /// Expanded largest-backend upload bytes, including semantic light data.
     /// Disk compression/content references never reduce GPU byte credit.
     #[serde(default)]
@@ -828,10 +943,24 @@ pub struct SectionCommit {
 }
 
 impl SectionCommit {
+    fn validate_shared_transport(&self) -> Result<(), String> {
+        if let Some(segment) = &self.shared_segment {
+            segment.validate()?;
+            let end = self.record.offset.checked_add(self.record.length)
+                .ok_or_else(|| "shared section record range overflow".to_owned())?;
+            if self.record.offset < segment.logical_offset || end > segment.logical_offset + segment.length {
+                return Err("shared segment does not contain its authenticated section record".to_owned());
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate_payload_profile(&self, profile: ArtifactPayloadProfile) -> Result<(), String> {
+        self.validate_shared_transport()?;
         match profile {
             ArtifactPayloadProfile::PrebuiltExact => {
-                if self.panorama.is_some() || self.light_proxies.is_some() {
+                if self.shared_segment.is_some() { return Err("Prebuilt must not use transient shared records".to_owned()); }
+                if self.panorama.is_some() || self.light_proxies.is_some() || self.realtime_dynamic.is_some() {
                     return Err(
                         "prebuilt_exact section carries realtime fallback/proxy payload".to_owned(),
                     );
@@ -858,6 +987,31 @@ pub struct CommittedRange {
     pub sha256: [u8; 32],
 }
 
+/// Small authenticated control-plane description of one immutable OS memory
+/// record. Integrity remains the original CRC/SHA in `CommittedRange`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SharedArtifactSegment {
+    pub id: u64,
+    pub mapping_name: String,
+    pub logical_offset: u64,
+    pub length: u64,
+}
+
+impl SharedArtifactSegment {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id == 0 || self.length == 0 || self.logical_offset.checked_add(self.length).is_none() {
+            return Err("invalid shared artifact record identity/range".to_owned());
+        }
+        if !self.mapping_name.starts_with("Local\\NovaRt-")
+            || self.mapping_name.len() > 128
+            || !self.mapping_name.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'\\' | b'-')) {
+            return Err("invalid shared artifact mapping name".to_owned());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RuntimeBootstrapStats {
@@ -877,6 +1031,10 @@ pub struct RuntimeBootstrapStats {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RuntimeBootstrapDescriptor {
+    #[serde(default)]
+    pub shared_segments: Vec<SharedArtifactSegment>,
+    #[serde(default)]
+    pub realtime_cell_dynamic: bool,
     pub resource_generation: u64,
     pub payload_profile: ArtifactPayloadProfile,
     pub stats: RuntimeBootstrapStats,
@@ -890,6 +1048,13 @@ pub struct RuntimeBootstrapDescriptor {
 
 impl RuntimeBootstrapDescriptor {
     pub fn validate(&self) -> Result<(), String> {
+        for segment in &self.shared_segments { segment.validate()?; }
+        if !self.shared_segments.is_empty() && self.payload_profile != ArtifactPayloadProfile::RealtimeStreamed {
+            return Err("shared bootstrap requires Realtime streaming".to_owned());
+        }
+        if self.realtime_cell_dynamic && self.payload_profile != ArtifactPayloadProfile::RealtimeStreamed {
+            return Err("Cell dynamic bootstrap requires realtime_streamed".to_owned());
+        }
         if self.resource_generation == 0 {
             return Err("runtime bootstrap resource generation must be non-zero".to_owned());
         }
@@ -948,6 +1113,8 @@ fn validate_realtime_bootstrap(
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ArtifactFinalized {
+    #[serde(default)]
+    pub shared_segments: Vec<SharedArtifactSegment>,
     pub build_id: String,
     pub generation: u64,
     pub final_path: PathBuf,
@@ -963,6 +1130,13 @@ pub struct ArtifactFinalized {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "update", content = "data", rename_all = "snake_case")]
 pub enum ViewerUpdate {
+    /// Resource-only readiness, never a scene/first-pixel milestone.
+    GpuContextReady {
+        session_id: String,
+        device_generation: u64,
+        ready_epoch_ms: u64,
+        elapsed_ms: u64,
+    },
     RealtimeReady {
         session_id: String,
         build_id: String,
@@ -1010,11 +1184,15 @@ pub enum ViewerUpdate {
     },
     Connected {
         session_id: String,
+        build_id: String,
+        generation: u64,
         pid: u32,
         device_generation: u64,
     },
     Progress {
         session_id: String,
+        build_id: String,
+        generation: u64,
         sections_gpu_accepted: u64,
         sections_gpu_completed: u64,
         elapsed_ms: u64,
@@ -1063,9 +1241,14 @@ pub enum ViewerUpdate {
         sections_gpu_accepted: u64,
         sections_gpu_completed: u64,
         elapsed_ms: u64,
+        measurement: Option<ResourceMemoryMeasurement>,
     },
     Hidden {
         session_id: String,
+        #[serde(default)]
+        build_id: Option<String>,
+        #[serde(default)]
+        generation: Option<u64>,
     },
     PresentationVisible {
         session_id: String,
@@ -1083,6 +1266,10 @@ pub enum ViewerUpdate {
     },
     Failed {
         session_id: String,
+        #[serde(default)]
+        build_id: Option<String>,
+        #[serde(default)]
+        generation: Option<u64>,
         error: ServiceError,
     },
 }
@@ -1195,11 +1382,28 @@ impl ViewerUpdate {
                 require_id("sessionId", session_id)?;
                 require_id("buildId", build_id)?;
             }
-            Self::Connected { session_id, .. }
-            | Self::Progress { session_id, .. }
-            | Self::Hidden { session_id }
-            | Self::Released { session_id }
-            | Self::Failed { session_id, .. } => require_id("sessionId", session_id)?,
+            Self::GpuContextReady { session_id, device_generation, ready_epoch_ms, .. } => {
+                require_id("sessionId", session_id)?;
+                if *device_generation == 0 || *ready_epoch_ms == 0 {
+                    return Err("GPU context readiness requires device generation and actual ready epoch".to_owned());
+                }
+            }
+            Self::Connected { session_id, build_id, generation, .. }
+            | Self::Progress { session_id, build_id, generation, .. } => {
+                require_id("sessionId", session_id)?;
+                require_id("buildId", build_id)?;
+                if *generation == 0 { return Err("Viewer update requires a build generation".to_owned()); }
+            }
+            Self::Hidden { session_id, build_id, generation }
+            | Self::Failed { session_id, build_id, generation, .. } => {
+                require_id("sessionId", session_id)?;
+                match (build_id, generation) {
+                    (None, None) => {},
+                    (Some(id), Some(value)) if *value != 0 => require_id("buildId", id)?,
+                    _ => return Err("optional Viewer binding must include both build and generation".to_owned()),
+                }
+            }
+            Self::Released { session_id } => require_id("sessionId", session_id)?,
             Self::PresentationVisible {
                 session_id,
                 build_id,
@@ -1232,6 +1436,12 @@ impl ViewerUpdate {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "command", content = "data", rename_all = "snake_case")]
 pub enum ViewerControl {
+    /// Allocate only the original renderer GPU/static resources, with no projection.
+    PrepareGpu {
+        session_id: String,
+        content: SceneContent,
+        presentation: PresentationSpec,
+    },
     RealtimeBootstrap {
         session_id: String,
         build_id: String,
@@ -1270,6 +1480,12 @@ pub enum ViewerControl {
         descriptor: RuntimeBootstrapDescriptor,
     },
     ArtifactFinalized(ArtifactFinalized),
+    SetBoundPresentation {
+        session_id: String,
+        build_id: String,
+        generation: u64,
+        state: ViewerPresentationState,
+    },
     ShowPopup {
         session_id: String,
     },
@@ -1292,6 +1508,25 @@ pub enum ViewerControl {
 impl ViewerControl {
     fn validate(&self) -> Result<(), String> {
         match self {
+            Self::StreamStarted(start) => { start.validate_shared_transport()?; },
+            Self::SectionCommitted(commit) => { commit.validate_shared_transport()?; },
+            Self::ArtifactFinalized(finalized) => {
+                for segment in &finalized.shared_segments { segment.validate()?; }
+            }
+            Self::PrepareGpu { session_id, presentation, .. } => {
+                require_id("sessionId", session_id)?;
+                if presentation.backend != RenderBackend::Vulkan || presentation.shaderpack.is_some()
+                    || presentation.render_settings.get("effectsProfile").map(String::as_str) != Some("unlit") {
+                    return Err("resource-only GPU preparation requires Standard Vulkan without a shader pack".to_owned());
+                }
+            }
+
+            Self::SetBoundPresentation { session_id, build_id, generation, .. } => {
+                require_id("sessionId", session_id)?;
+                require_id("buildId", build_id)?;
+                if *generation == 0 { return Err("Presentation requires a build generation".to_owned()); }
+            }
+
             Self::RealtimeBootstrap {
                 session_id,
                 build_id,
@@ -1467,6 +1702,18 @@ mod tests {
     }
 
     #[test]
+    fn protected_authorization_stays_outside_build_identity_and_is_optional_on_old_wire() {
+        let command=UiCommand::GetSnapshot;
+        let old=r#"{"requestId":"old-wire","command":{"command":"get_snapshot"}}"#;
+        let request:Request=serde_json::from_str(old).unwrap();
+        assert!(request.protected_task.is_none());
+        request.validate().unwrap();
+        let task=ProtectedTask {ticket_path:std::env::temp_dir().join("ticket.json"),module_path:std::env::temp_dir().join("core.dll")};
+        let round=framed_round_trip(Payload::Request(Request {request_id:"protected-one".into(),command,protected_task:Some(task.clone())}));
+        assert!(matches!(round,Payload::Request(Request {protected_task:Some(actual),..}) if actual==task));
+    }
+
+    #[test]
     fn hide_viewer_remains_distinct_from_releasing_viewer_on_the_wire() {
         let payload = framed_round_trip(Payload::ViewerControl(ViewerControl::Hide {
             session_id: "viewer-7".to_owned(),
@@ -1483,6 +1730,7 @@ mod tests {
     fn headless_camera_stress_keeps_session_generation_and_presented_frame_count() {
         let session_id = "viewer-7".to_owned();
         let request = framed_round_trip(Payload::Request(Request {
+            protected_task: None,
             request_id: "stress-7".to_owned(),
             command: UiCommand::HeadlessCameraStress {
                 session_id: session_id.clone(),
@@ -1726,6 +1974,8 @@ mod tests {
             sha256: [1; 32],
         };
         let mut section = SectionCommit {
+            shared_segment: None,
+            realtime_dynamic: None,
             build_id: "build-profile".to_owned(),
             resource_generation: 3,
             generation: 5,
@@ -1807,6 +2057,8 @@ mod tests {
     #[test]
     fn runtime_bootstrap_descriptor_round_trips_without_scene_payload() {
         let descriptor = RuntimeBootstrapDescriptor {
+            shared_segments: Vec::new(),
+            realtime_cell_dynamic: false,
             resource_generation: 17,
             payload_profile: ArtifactPayloadProfile::PrebuiltExact,
             stats: RuntimeBootstrapStats {
@@ -1864,6 +2116,8 @@ mod tests {
             sha256: [1; 32],
         };
         let mut descriptor = RuntimeBootstrapDescriptor {
+            shared_segments: Vec::new(),
+            realtime_cell_dynamic: false,
             resource_generation: 17,
             payload_profile: ArtifactPayloadProfile::PrebuiltExact,
             stats: RuntimeBootstrapStats {
@@ -1893,6 +2147,8 @@ mod tests {
 
     fn runtime_bootstrap_wire_fixture(section_count: u64) -> RuntimeBootstrapDescriptor {
         RuntimeBootstrapDescriptor {
+            shared_segments: Vec::new(),
+            realtime_cell_dynamic: false,
             resource_generation: 17,
             payload_profile: ArtifactPayloadProfile::PrebuiltExact,
             stats: RuntimeBootstrapStats {
@@ -1927,6 +2183,37 @@ mod tests {
                 sha256: [3; 32],
             },
         }
+    }
+
+    #[test]
+    fn shared_realtime_controls_round_trip_only_record_descriptors_and_keep_range_integrity() {
+        let segment = SharedArtifactSegment { id: 7, mapping_name: "Local\\NovaRt-123-0000000000000007".to_owned(),
+            logical_offset: 64, length: 1024 };
+        let range = CommittedRange { offset: 64, length: 1024, crc32: 37, sha256: [9; 32] };
+        let mut commit = SectionCommit { shared_segment: Some(segment.clone()), build_id: "shared-rt".to_owned(),
+            resource_generation: 17, generation: 11, index: 0, directory_index: 0, position: [3, 1, -4],
+            record: range.clone(), exact: range.clone(), vulkan_packed: Some(range.clone()), realtime_dynamic: None,
+            packed_gpu_bytes: 17 * 1024 * 1024, panorama: None, camera_light: range, light_proxies: None };
+        commit.validate_payload_profile(ArtifactPayloadProfile::RealtimeStreamed).unwrap();
+        let restored = framed_round_trip(Payload::ViewerControl(ViewerControl::SectionCommitted(commit.clone())));
+        match restored {
+            Payload::ViewerControl(ViewerControl::SectionCommitted(actual)) => assert_eq!(actual, commit),
+            other => panic!("expected shared section descriptor, got {other:?}"),
+        }
+        assert!(serde_json::to_vec(&commit).unwrap().len() < 2048, "large payloads must never enter control JSON");
+        assert!(commit.validate_payload_profile(ArtifactPayloadProfile::PrebuiltExact).is_err());
+        commit.shared_segment.as_mut().unwrap().length -= 1;
+        assert!(commit.validate_payload_profile(ArtifactPayloadProfile::RealtimeStreamed).is_err());
+        let mut bootstrap = runtime_bootstrap_wire_fixture(1);
+        bootstrap.payload_profile = ArtifactPayloadProfile::RealtimeStreamed;
+        bootstrap.shared_segments = vec![segment.clone()];
+        bootstrap.validate().unwrap();
+        let start = ArtifactStreamStart { shared_memory: true, shared_segments: vec![segment], build_id: "shared-rt".to_owned(),
+            resource_generation: 17, generation: 11, temporary_path: PathBuf::from("logical-shared-artifact"),
+            format: "gpu-scene-artifact".to_owned(), layout: "v15".to_owned(), payload_profile: ArtifactPayloadProfile::RealtimeStreamed,
+            section_count: 1, bootstrap: Vec::new() };
+        assert!(matches!(framed_round_trip(Payload::WorkerUpdate(WorkerUpdate::StreamStarted(start))),
+            Payload::WorkerUpdate(WorkerUpdate::StreamStarted(ArtifactStreamStart { shared_memory: true, .. }))));
     }
 
     #[test]
@@ -2167,6 +2454,8 @@ mod tests {
     fn frozen_directory_identity_round_trips_for_zero_and_reordered_streams() {
         let zero = framed_round_trip(Payload::ViewerControl(ViewerControl::StreamStarted(
             ArtifactStreamStart {
+                shared_memory: false,
+                shared_segments: Vec::new(),
                 build_id: "build-empty".to_owned(),
                 resource_generation: 3,
                 generation: 5,
@@ -2192,6 +2481,8 @@ mod tests {
             sha256: [42; 32],
         };
         let commit = SectionCommit {
+            shared_segment: None,
+            realtime_dynamic: None,
             build_id: "build-reordered".to_owned(),
             resource_generation: 3,
             generation: 5,
@@ -2389,6 +2680,7 @@ mod tests {
                 sections_gpu_accepted: 45_276,
                 sections_gpu_completed: 4_096,
                 elapsed_ms: 30,
+                measurement: None,
             },
         ];
 

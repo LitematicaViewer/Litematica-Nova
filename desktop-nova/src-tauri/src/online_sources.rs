@@ -51,10 +51,12 @@ struct Http {
     cache: Mutex<Cache>,
     items: Mutex<VecDeque<(String, Value)>>,
 }
+static HTTP: OnceLock<Result<Http, String>> = OnceLock::new();
+static CLOSING: AtomicBool = AtomicBool::new(false);
 fn http() -> Result<&'static Http, String> {
-    static HTTP: OnceLock<Result<Http, String>> = OnceLock::new();
     HTTP.get_or_init(|| {
         Client::builder()
+            .cookie_store(true)
             .timeout(Duration::from_secs(120))
             .connect_timeout(Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::none())
@@ -90,12 +92,25 @@ fn token(id: Option<&str>) -> Result<Arc<AtomicBool>, String> {
     }
 }
 fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
-    if cancel.load(Ordering::Acquire) {
+    if CLOSING.load(Ordering::Acquire) || cancel.load(Ordering::Acquire) {
         Err("请求已取消，未新增网站请求".into())
     } else {
         Ok(())
     }
 }
+pub(crate) fn cancel_for_shutdown() {
+    CLOSING.store(true, Ordering::Release);
+    // Do not initialize a networking client just to shut it down.
+    if let Some(Ok(http)) = HTTP.get() {
+        if let Ok(tokens) = http.cancelled.lock() {
+            for token in tokens.values() { token.store(true, Ordering::Release); }
+        }
+        if let Ok(lanes) = http.lanes.lock() {
+            for lane in lanes.values() { lane.changed.notify_all(); }
+        }
+    }
+}
+pub(crate) fn resume_after_cancelled_shutdown() { CLOSING.store(false, Ordering::Release); }
 fn acquire(lane: Arc<Lane>, cancel: &AtomicBool) -> Result<Permit, String> {
     let ticket = TICKET.fetch_add(1, Ordering::Relaxed);
     let mut state = lane.state.lock().map_err(|error| error.to_string())?;
@@ -239,6 +254,23 @@ pub(crate) fn send_request(
     }
     let cancel = token(id)?;
     let permit = acquire(lane_for(request.url())?, &cancel)?;
+    execute(request, permit, cancel)
+}
+
+/// The existing resource source issues one public-session token POST. It shares
+/// the same host lane, cancellation and Retry-After handling as every GET.
+pub(crate) fn send_resource_request(builder: RequestBuilder, id: Option<&str>) -> Result<LimitedResponse, String> {
+    let request = builder.build().map_err(|error| error.without_url().to_string())?;
+    let url = request.url();
+    let token_post = request.method() == reqwest::Method::POST
+        && url.scheme() == "https" && url.host_str() == Some("ccvaults.com")
+        && url.port_or_known_default() == Some(443) && url.path() == "/api/token"
+        && url.query().is_none() && url.username().is_empty() && url.password().is_none();
+    if request.method() != reqwest::Method::GET && !token_post {
+        return Err("资源请求仅接受只读GET或原站会话接口".into());
+    }
+    let cancel = token(id)?;
+    let permit = acquire(lane_for(url)?, &cancel)?;
     execute(request, permit, cancel)
 }
 fn cache_get(key: &str) -> Result<Option<Value>, String> {

@@ -43,6 +43,9 @@ pub struct ViewerSessionCommand {
     pub height: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused: Option<bool>,
+    /// Original user action clock for presentation-only end-to-end timing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click_started_at_epoch_ms: Option<u64>,
 }
 
 impl ViewerSessionCommand {
@@ -73,6 +76,7 @@ impl ViewerSessionCommand {
             width: None,
             height: None,
             focused: None,
+            click_started_at_epoch_ms: None,
         };
         command.validate()?;
         Ok(command)
@@ -236,12 +240,18 @@ impl ViewerSessionCommand {
             width,
             height,
             focused,
+            click_started_at_epoch_ms: None,
         };
         command.validate()?;
         Ok(command)
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(click) = self.click_started_at_epoch_ms {
+            if click == 0 || !matches!(self.kind, ViewerSessionCommandKind::AttachEmbedded | ViewerSessionCommandKind::ShowOverlay | ViewerSessionCommandKind::ShowPopup) {
+                return Err("clickStartedAtEpochMs requires a visible presentation action and non-zero epoch".into());
+            }
+        }
         if self.schema != VIEWER_SESSION_COMMAND_SCHEMA {
             return Err(format!(
                 "unsupported Viewer session command schema {:?}; expected {:?}",
@@ -646,9 +656,19 @@ fn validate_extent(width: Option<u32>, height: Option<u32>, operation: &str) -> 
     Ok(())
 }
 
+/// Current-user runtime references. These are not part of scene/build identity.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProtectedTask {
+    pub ticket_path: PathBuf,
+    pub module_path: PathBuf,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ViewerLaunchContract {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protected_task: Option<ProtectedTask>,
     pub schema: String,
     pub request_id: String,
     pub scene: PathBuf,
@@ -666,6 +686,7 @@ impl ViewerLaunchContract {
         task: ViewerTask,
     ) -> Result<Self, String> {
         let contract = Self {
+            protected_task: None,
             schema: VIEWER_LAUNCH_SCHEMA.to_owned(),
             request_id,
             scene,
@@ -746,12 +767,31 @@ impl ViewerLaunchContract {
                 if task.initial_visible {
                     return Err("quick_preview task.initialVisible must be false".to_owned());
                 }
+                match (&task.resource_report_path, &task.resource_decision_path) {
+                    (Some(report), Some(decision)) => {
+                        require_absolute("task.resourceReportPath", report)?;
+                        require_absolute("task.resourceDecisionPath", decision)?;
+                        if report == decision || report == &self.scene || decision == &self.scene {
+                            return Err("quick resource report/decision/source paths must differ".to_owned());
+                        }
+                    }
+                    (None, None) if !task.preload => {}
+                    _ => return Err("quick resource report/decision paths must be paired; preload requires both".to_owned()),
+                }
                 if let Some(host) = &task.host {
                     validate_hwnd("task.host.hwnd", &host.hwnd)?;
                     if host.process_id == 0 {
                         return Err("quick_preview host processId must be non-zero".to_owned());
                     }
                 }
+                Ok(())
+            }
+            ViewerTask::QuickGpuContext(task) => {
+                if self.renderer.is_some() || self.content != ViewerContent::default() {
+                    return Err("quick_gpu_context cannot contain renderer/content or projection preparation".into());
+                }
+                validate_hwnd("task.host.hwnd", &task.host.hwnd)?;
+                if task.host.process_id == 0 { return Err("quick_gpu_context host processId must be non-zero".into()); }
                 Ok(())
             }
         }
@@ -883,15 +923,52 @@ pub enum ViewerTask {
     Interactive(InteractiveTask),
     Preview(PreviewTask),
     QuickPreview(QuickPreviewTask),
+    QuickGpuContext(QuickGpuContextTask),
 }
 
-/// The historical independent quick renderer, never a Full/V5 build task.
+/// Ordinary asynchronous static GPU initialization. The legacy top-level
+/// `scene` field identifies the runtime context directory for this task only;
+/// it is never opened as a projection or compiled into scene geometry.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct QuickGpuContextTask { pub host: QuickPreviewHostWindow }
+
+/// The historical independent quick renderer, never a Full/V5 build task.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct QuickPreviewTask {
     pub initial_visible: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<QuickPreviewHostWindow>,
+    #[serde(default)]
+    pub preload: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_report_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_decision_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuickResourceAction { Preload, Realtime, ReducedRealtime, Cancel }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct QuickResourceDecision {
+    pub schema: String,
+    pub request_id: String,
+    pub action: QuickResourceAction,
+    #[serde(default)]
+    pub warning_confirmed: bool,
+}
+
+impl QuickResourceDecision {
+    pub fn validate(&self, expected_request: &str) -> Result<(), String> {
+        if self.schema != "nova.quick.decision.v1" || self.request_id != expected_request {
+            return Err("quick resource decision belongs to another launch/schema".to_owned());
+        }
+        Ok(())
+    }
 }
 
 /// Native child creation target, supplied by the desktop host, never by page JavaScript.
@@ -920,6 +997,22 @@ pub struct BuildCacheTask {
     pub ready_file: PathBuf,
     pub cache_file: PathBuf,
     pub build_mode: RenderBuildMode,
+    #[serde(default, skip_serializing_if = "ViewerEffectsProfile::is_full")]
+    pub effects_profile: ViewerEffectsProfile,
+}
+
+/// Presentation effects do not select a different geometry renderer. Unlit
+/// retains Full's exact model/fluid meshes, atlas and material identities.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerEffectsProfile {
+    #[default]
+    Full,
+    Unlit,
+}
+
+impl ViewerEffectsProfile {
+    pub const fn is_full(&self) -> bool { matches!(self, Self::Full) }
 }
 
 impl BuildCacheTask {
@@ -1601,7 +1694,7 @@ mod tests {
         let mut contract = ViewerLaunchContract::new(
             "native-child".into(), absolute("scene.litematic"), ViewerContent::default(), None,
             ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false,
-                host: Some(QuickPreviewHostWindow { hwnd: "42".into(), process_id: 100 }) }),
+                host: Some(QuickPreviewHostWindow { hwnd: "42".into(), process_id: 100 }), ..Default::default() }),
         ).unwrap();
         let bytes = contract.to_json_bytes().unwrap();
         assert_eq!(ViewerLaunchContract::from_json_slice(&bytes).unwrap(), contract);
@@ -1615,6 +1708,22 @@ mod tests {
         }
         assert!(contract.validate().is_err());
     }
+
+    #[test]
+    fn quick_gpu_context_is_host_only_and_rejects_projection_preparation_options() {
+        let contract = ViewerLaunchContract::new("gpu-context".into(), absolute("runtime-context"),
+            ViewerContent::default(), None, ViewerTask::QuickGpuContext(QuickGpuContextTask {
+                host: QuickPreviewHostWindow { hwnd: "42".into(), process_id: 100 },
+            })).unwrap();
+        let bytes = contract.to_json_bytes().unwrap();
+        assert_eq!(ViewerLaunchContract::from_json_slice(&bytes).unwrap(), contract);
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value["task"]["preload"] = true.into();
+        assert!(ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+        let mut resource_contract = contract;
+        resource_contract.content.resource_packs.push(absolute("pack.zip"));
+        assert!(resource_contract.validate().is_err());
+    }
     #[test]
     fn quick_preview_contract_is_independent_hidden_and_strict() {
         let mut contract = ViewerLaunchContract::new(
@@ -1622,7 +1731,7 @@ mod tests {
             absolute("scene.litematic"),
             ViewerContent::default(),
             None,
-            ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: None }),
+            ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: None, ..Default::default() }),
         ).unwrap();
         let json = contract.to_json_bytes().unwrap();
         let value: serde_json::Value = serde_json::from_slice(&json).unwrap();
@@ -1640,7 +1749,7 @@ mod tests {
         contract.content.fabric_mods_dir = Some(absolute("mods"));
         assert!(contract.validate().unwrap_err().contains("content resources"));
         contract.content = ViewerContent::default();
-        contract.task = ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: true, host: None });
+        contract.task = ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: true, host: None, ..Default::default() });
         assert!(contract.validate().unwrap_err().contains("initialVisible must be false"));
 
         let mut unknown = value;
@@ -1744,6 +1853,7 @@ mod tests {
     #[test]
     fn build_cache_rejects_renderer_only_settings() {
         let contract = ViewerLaunchContract {
+            protected_task: None,
             schema: VIEWER_LAUNCH_SCHEMA.to_owned(),
             request_id: "build-contract-test".to_owned(),
             scene: absolute("scene.litematic"),
@@ -1753,6 +1863,7 @@ mod tests {
                 ready_file: absolute("ready.json"),
                 cache_file: absolute("scene.cache"),
                 build_mode: RenderBuildMode::Prebuilt,
+                effects_profile: ViewerEffectsProfile::Full,
             }),
         };
         assert!(
@@ -1775,6 +1886,7 @@ mod tests {
                     ready_file: absolute("ready.json"),
                     cache_file: absolute("scene.cache"),
                     build_mode,
+                    effects_profile: ViewerEffectsProfile::Full,
                 }),
             )
             .unwrap();
@@ -1799,6 +1911,7 @@ mod tests {
                 ready_file: absolute("ready.json"),
                 cache_file: absolute("scene.cache"),
                 build_mode: RenderBuildMode::Prebuilt,
+                effects_profile: ViewerEffectsProfile::Full,
             }),
         )
         .unwrap();

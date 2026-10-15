@@ -27,7 +27,7 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
     SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, TerminateJobObject,
 };
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::{
@@ -46,6 +46,8 @@ const TERMINATE_EXIT_RACE_WAIT: Duration = Duration::from_millis(250);
 /// viewers are both [`ExecutableRole::NativeViewer`].
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ExecutableRole {
+    RenderService,
+    BuildWorker,
     NativeViewer,
     CoreHelper,
 }
@@ -245,6 +247,9 @@ pub(crate) struct ShutdownReport {
     pub(crate) graceful_exits: usize,
     pub(crate) terminate_requests: usize,
     pub(crate) remaining: Vec<ChildLease>,
+    pub(crate) elapsed_ms: u128,
+    pub(crate) graceful_wait_ms: u128,
+    pub(crate) forced_wait_ms: u128,
 }
 
 struct ChildRecord {
@@ -579,6 +584,17 @@ impl ProcessSupervisor {
         }
     }
 
+    /// Request cancellation concurrently. A natural-exit race on one child
+    /// must not impose its bounded wait separately on all later children.
+    pub(crate) fn terminate_many(&self, children: &[ChildLease], exit_code: u32) -> usize {
+        std::thread::scope(|scope| {
+            let workers = children.iter().map(|child| scope.spawn(move || {
+                matches!(self.terminate(child, exit_code), Ok(TerminateOutcome::Requested | TerminateOutcome::AlreadyRequested))
+            })).collect::<Vec<_>>();
+            workers.into_iter().map(|worker| worker.join().unwrap_or(false)).filter(|requested| *requested).count()
+        })
+    }
+
     /// Complete bounded application shutdown after graceful transports were
     /// requested by the owning Application Host.
     pub(crate) fn shutdown(
@@ -586,24 +602,30 @@ impl ProcessSupervisor {
         graceful_wait: Duration,
         forced_wait: Duration,
     ) -> ShutdownReport {
+        let started = Instant::now();
         let initially_active = self.stop_admitting().len();
         wait_until_empty(&self.shared, graceful_wait);
+        let graceful_wait_ms = started.elapsed().as_millis();
         let remaining_before_terminate = self.active_children();
         let graceful_exits = initially_active.saturating_sub(remaining_before_terminate.len());
-        let mut terminate_requests = 0;
-        for child in &remaining_before_terminate {
-            if matches!(
-                self.terminate(child, 1),
-                Ok(TerminateOutcome::Requested | TerminateOutcome::AlreadyRequested)
-            ) {
-                terminate_requests += 1;
-            }
-        }
+        let forced = Instant::now();
+        let terminate_requests = self.terminate_many(&remaining_before_terminate, 1);
         wait_until_empty(&self.shared, forced_wait);
+        #[cfg(windows)]
+        if !self.active_children().is_empty() {
+            // Owned descendants are in this exact Job from suspended birth.
+            // This is a final fallback only after the Host has drained writes;
+            // never reopen a PID or target a process outside Nova's Job.
+            unsafe { TerminateJobObject(self.job.as_raw_handle() as HANDLE, 1); }
+            wait_until_empty(&self.shared, Duration::from_millis(500));
+        }
         ShutdownReport {
             graceful_exits,
             terminate_requests,
             remaining: self.active_children(),
+            elapsed_ms: started.elapsed().as_millis(),
+            graceful_wait_ms,
+            forced_wait_ms: forced.elapsed().as_millis(),
         }
     }
 }
@@ -1047,9 +1069,9 @@ mod tests {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\cmd.exe"));
         let mut allowlist = ExecutableAllowlist::new();
-        allowlist
-            .allow(ExecutableRole::CoreHelper, command)
-            .unwrap();
+        for role in [ExecutableRole::CoreHelper, ExecutableRole::RenderService, ExecutableRole::NativeViewer, ExecutableRole::BuildWorker] {
+            allowlist.allow(role, &command).unwrap();
+        }
         ProcessSupervisor::new(allowlist).unwrap()
     }
 
@@ -1246,6 +1268,37 @@ mod tests {
             .spawn(command_spec(&supervisor, "after-shutdown", "exit 0"))
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn shutdown_idle_has_no_fixed_grace_delay() {
+        let (supervisor, _) = test_supervisor();
+        let report = supervisor.shutdown(Duration::from_millis(500), Duration::from_millis(1500));
+        assert_eq!(report.terminate_requests, 0);
+        assert!(report.remaining.is_empty());
+        assert!(report.elapsed_ms < 1000, "idle must not spend its configured shutdown budget waiting");
+        println!("[NOVA_LIFECYCLE_PROFILE] case=idle child_ms={} actual_children=0 remaining=0 window_response=UNMEASURED", report.elapsed_ms);
+    }
+
+    #[test]
+    fn shutdown_multiple_children_share_one_deadline_and_leave_no_owned_process() {
+        let (supervisor, events) = test_supervisor();
+        let children = [ExecutableRole::CoreHelper, ExecutableRole::RenderService, ExecutableRole::NativeViewer, ExecutableRole::BuildWorker]
+            .into_iter().enumerate().map(|(index, role)| {
+                let mut spec = command_spec(&supervisor, &format!("parallel-exit-{index}"), "ping -n 30 127.0.0.1");
+                spec.role = role;
+                supervisor.spawn(spec).unwrap().child
+            }).collect::<Vec<_>>();
+        let started = Instant::now();
+        let report = supervisor.shutdown(Duration::from_millis(25), Duration::from_millis(750));
+        assert!(report.remaining.is_empty());
+        assert_eq!(report.terminate_requests, 4);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        for _ in children {
+            let ProcessEvent::Exited(exit) = events.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert!(exit.termination_requested);
+        }
+        println!("[NOVA_LIFECYCLE_PROFILE] case=render_process_roles child_fixture=cmd_ping count=4 child_ms={} graceful_ms={} forced_ms={} remaining=0 gui=UNMEASURED gpu_release=UNMEASURED", report.elapsed_ms, report.graceful_wait_ms, report.forced_wait_ms);
     }
 
     #[test]

@@ -119,18 +119,16 @@ fn validate_public_backends(repo_root: &Path) {
     // backend build. Real Tauri packaging itself rejects a missing directory.
     if !directory.exists() { return; }
     let suffix = if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") { ".exe" } else { "" };
-    let expected: HashSet<_> = [format!("litematica_core{suffix}"), format!("litematica_native_viewer{suffix}"), "backend-deployment.json".into()].into_iter().collect();
+    let expected: HashSet<_> = [format!("litematica_core{suffix}"), format!("litematica_native_viewer{suffix}"), format!("nova-render-service{suffix}"), format!("nova-build-worker{suffix}"), "backend-deployment.json".into()].into_iter().collect();
     let mut actual = HashSet::new();
     for entry in fs::read_dir(&directory).expect("read isolated public backend directory") {
         let entry = entry.expect("read public backend entry");
         assert!(entry.file_type().expect("read public backend type").is_file(), "public backend resource must be a regular file");
         actual.insert(entry.file_name().to_str().expect("public backend UTF-8 name").to_owned());
     }
-    assert_eq!(actual, expected, "public backend directory must contain only the two isolated helpers and manifest");
+    assert_eq!(actual, expected, "public backend directory must contain only the four public helpers and manifest");
     let manifest: serde_json::Value = serde_json::from_slice(&fs::read(directory.join("backend-deployment.json")).expect("read public deployment manifest")).expect("parse public deployment manifest");
-    assert_eq!(manifest["schema"], "nova.public.beta.backends.v1");
-    assert_eq!(manifest["publicBeta"], true);
-    assert_eq!(manifest["flavor"], "fast-only");
+    assert_eq!(manifest["schema"], "lba.backend.deployment.v1");
     let names: HashSet<_> = manifest["artifacts"].as_object().expect("public deployment artifacts").keys().cloned().collect();
     assert_eq!(names, expected.into_iter().filter(|name| name != "backend-deployment.json").collect());
 }

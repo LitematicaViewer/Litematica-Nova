@@ -6,10 +6,18 @@ description = "Litematica-Nova desktop viewer for Minecraft .litematic projectio
 authors = ["Litematica-Nova"]
 edition = "2021"
 
+[features]
+popup-smoke = []
+
+[[bin]]
+name = "popup_smoke"
+path = "src/bin/popup_smoke.rs"
+required-features = ["popup-smoke"]
+
 [build-dependencies]
+serde_json = "1"
 tauri-build = { version = "2", features = [] }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
-serde_json = "1"
 
 [dependencies]
 tauri = { version = "=2.11.1", features = [] }
@@ -20,11 +28,15 @@ serde_json = "1"
 tokio = { version = "1", features = ["sync", "time", "macros"] }
 base64 = "0.22"
 sha2 = "0.10"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "cookies"] }
 httpdate = "=1.0.3"
 scraper = { version = "=0.24.0", default-features = false }
 image = "0.25"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
 viewer-launch-contract = { path = "../../tools/viewer-core/crates/viewer-launch-contract" }
+nova-render-protocol = { path = "../../tools/viewer-core/crates/nova-render-protocol" }
+nova-protection = { path = "../../tools/nova-protection", default-features = false, features = ["client"] }
+nova-protected-loader = { path = "../../tools/nova-protected-loader" }
 tauri-plugin-updater = "=2.10.0"
 
 [dev-dependencies]
@@ -32,4 +44,4 @@ minisign-verify = "=0.2.5"
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-single-instance = "=2.4.0"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_Console"] }

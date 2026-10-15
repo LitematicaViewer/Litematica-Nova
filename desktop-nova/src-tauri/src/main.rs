@@ -1,13 +1,26 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod application;
+mod headless_e2e;
 mod platform;
+mod render_service_client;
 mod viewer_backend;
+mod viewer_compatibility;
 mod viewer_launch_contract;
 mod shell_integration;
 mod online_sources;
+mod assets;
+mod wiki_block_icons;
 
-use application::model::ProductPreviewImage;
+use crate::viewer_backend::ViewerBackendIdentity;
+use crate::viewer_launch_contract::ViewerLaunchContext;
+use ::viewer_launch_contract::ViewerControls;
+use application::model::{
+    ApplicationRenderSnapshot, GraphicsBackendPreference, IrisFallbackPreference, LayerSelection,
+    OperationId, PresentationIntent, PresentationMode, ProductPreviewImage, ProjectRenderSettings,
+    ProjectSource, RenderBuildMode, RenderDisplayMode, ResourcePreflightId, ResourcePreflightView,
+    ShaderSelection, UserVisibleRenderRequest, WeatherPreference,
+};
 use application::operations::{
     ApplicationOperations, EditProjectMetadataInput, EditProjectOriginInput, EmbeddedPreview, GenerateProjectInput,
     GenerateProjectResult, InspectProjectInput, ProjectMaterialsInput, ProjectMutationResult,
@@ -19,22 +32,137 @@ use application::operations::{
 use application::quick_preview::{QuickPreviewHost, QuickPreviewView, StartQuickPreviewInput, QuickPresentationIntent};
 use application::updater::{UpdateHost, application_update_snapshot, application_update_check,
     application_update_download, application_update_install, application_update_cancel, application_update_skip, application_update_restart};
+use application::render_facade::{
+    RenderEnvironmentInputs, RenderFacade, RenderStartAuthorization, APPLICATION_RENDER_STATE_EVENT,
+};
 use base64::Engine;
+use render_service_client::RenderServiceClient;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
+use viewer_compatibility::{
+    CompatibilityScope, V5CompatibilityConfig, V5CompatibilityConfigInput,
+    ViewerCompatibilityInputs, ViewerCompatibilityPlan,
+};
 
 static APP_RESOURCE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static APP_LOCAL_DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
 const PRODUCT_DATA_DIRECTORY: &str = "Litematica-Nova";
 static SHUTDOWN_STARTED: AtomicBool = AtomicBool::new(false);
+static CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
+static FLAKE_RESOURCE_SEED_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+const CLOSE_DRAFT_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Default)]
+struct ApplicationCloseGate(Mutex<CloseGateState>);
+#[derive(Default)]
+struct CloseGateState { sequence: u64, pending: Option<CloseAttempt> }
+struct CloseAttempt { request_id: u64, started: std::time::Instant, approved: bool }
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplicationCloseRequest { request_id: u64 }
+enum CloseDecision {
+    AwaitDrafts { request: ApplicationCloseRequest, created: bool },
+    Approved { request_id: u64, started: std::time::Instant },
+}
+impl ApplicationCloseGate {
+    fn native_request(&self) -> CloseDecision {
+        let mut state = self.0.lock().unwrap();
+        if let Some(attempt) = state.pending.as_ref() {
+            if attempt.approved {
+                let attempt = state.pending.take().unwrap();
+                return CloseDecision::Approved { request_id: attempt.request_id, started: attempt.started };
+            }
+            return CloseDecision::AwaitDrafts { request: ApplicationCloseRequest { request_id: attempt.request_id }, created: false };
+        }
+        state.sequence += 1;
+        let request_id = state.sequence;
+        state.pending = Some(CloseAttempt { request_id, started: std::time::Instant::now(), approved: false });
+        CloseDecision::AwaitDrafts { request: ApplicationCloseRequest { request_id }, created: true }
+    }
+    fn snapshot(&self) -> Option<ApplicationCloseRequest> {
+        self.0.lock().unwrap().pending.as_ref().filter(|attempt| !attempt.approved)
+            .map(|attempt| ApplicationCloseRequest { request_id: attempt.request_id })
+    }
+    fn acknowledge(&self, request_id: u64, preserved: bool) -> Result<bool, String> {
+        let mut state = self.0.lock().unwrap();
+        let attempt = state.pending.as_mut().filter(|attempt| attempt.request_id == request_id)
+            .ok_or("关闭请求已取消，请再次关闭窗口")?;
+        if !preserved { state.pending = None; return Ok(false); }
+        if attempt.approved { return Ok(false); }
+        attempt.approved = true;
+        eprintln!("[NOVA_LIFECYCLE] stage=close_drafts_preserved request_id={request_id} elapsed_ms={}", attempt.started.elapsed().as_millis());
+        Ok(true)
+    }
+    fn cancel_pending(&self, request_id: u64) -> Option<Duration> {
+        let mut state = self.0.lock().unwrap();
+        if state.pending.as_ref().is_some_and(|attempt| attempt.request_id == request_id) {
+            return Some(state.pending.take().unwrap().started.elapsed());
+        }
+        None
+    }
+}
+
+#[tauri::command]
+fn application_get_close_request(window: tauri::WebviewWindow, gate: tauri::State<'_, ApplicationCloseGate>) -> Result<Option<ApplicationCloseRequest>, String> {
+    if window.label() != "main" { return Err("关闭操作仅由主窗口执行".into()); }
+    Ok(gate.snapshot())
+}
+#[tauri::command]
+fn application_confirm_close(window: tauri::WebviewWindow, gate: tauri::State<'_, ApplicationCloseGate>, request_id: u64, drafts_preserved: bool) -> Result<(), String> {
+    if window.label() != "main" { return Err("关闭操作仅由主窗口执行".into()); }
+    if window.try_state::<UpdateHost>().is_some_and(|host| !host.prepare_for_close(window.app_handle())) {
+        let _ = gate.cancel_pending(request_id);
+        return Err("正在安装更新，请完成后再关闭".into());
+    }
+    if gate.acknowledge(request_id, drafts_preserved)? {
+        if let Err(error) = window.close() { let _ = gate.cancel_pending(request_id); return Err(error.to_string()); }
+    }
+    Ok(())
+}
+#[tauri::command]
+fn application_request_close(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" { return Err("关闭操作仅由主窗口执行".into()); }
+    window.close().map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod close_gate_tests {
+    use super::*;
+    #[test]
+    fn native_close_requires_storage_ack_deduplicates_and_keeps_the_first_clock() {
+        let gate = ApplicationCloseGate::default();
+        let CloseDecision::AwaitDrafts { request, created } = gate.native_request() else { panic!("first X must await drafts"); };
+        assert!(created);
+        let first = gate.0.lock().unwrap().pending.as_ref().unwrap().started;
+        let CloseDecision::AwaitDrafts { request: duplicate, created } = gate.native_request() else { panic!("unapproved X must not exit"); };
+        assert!(!created); assert_eq!(duplicate.request_id, request.request_id);
+        assert!(gate.acknowledge(request.request_id + 1, true).is_err());
+        assert!(gate.acknowledge(request.request_id, true).unwrap());
+        let CloseDecision::Approved { started, request_id } = gate.native_request() else { panic!("valid storage ACK must permit bounded teardown"); };
+        assert_eq!(started, first); assert_eq!(request_id, request.request_id); assert!(gate.snapshot().is_none());
+    }
+    #[test]
+    fn failed_storage_and_missing_ack_keep_the_window_open_and_allow_retry() {
+        let gate = ApplicationCloseGate::default();
+        let CloseDecision::AwaitDrafts { request, .. } = gate.native_request() else { unreachable!() };
+        assert!(!gate.acknowledge(request.request_id, false).unwrap());
+        assert!(gate.snapshot().is_none());
+        let CloseDecision::AwaitDrafts { request: retry, created } = gate.native_request() else { unreachable!() };
+        assert!(created); assert_ne!(retry.request_id, request.request_id);
+        assert!(gate.cancel_pending(retry.request_id).is_some());
+        assert!(gate.acknowledge(retry.request_id, true).is_err());
+        assert!(matches!(gate.native_request(), CloseDecision::AwaitDrafts { created: true, .. }));
+    }
+}
 
 #[derive(Serialize)]
 struct PathInfo {
@@ -76,10 +204,16 @@ struct UserConfig {
     preview_mode: String,
     #[serde(default = "default_material_list_window_behavior")]
     material_list_window_behavior: String,
+    #[serde(default = "default_statistics_enumerator_info_rules")]
+    statistics_enumerator_info_rules: Vec<String>,
     #[serde(default = "default_show_ui_test_page")]
     show_ui_test_page: bool,
     #[serde(default = "default_local_library_tail_path_count")]
     local_library_tail_path_count: u32,
+    #[serde(default)]
+    v5_compatibility: V5CompatibilityConfig,
+    #[serde(default)]
+    viewer_controls: ViewerControlConfig,
 }
 
 #[derive(Deserialize)]
@@ -89,8 +223,37 @@ struct UserConfigInput {
     render_display_mode: Option<String>,
     preview_mode: Option<String>,
     material_list_window_behavior: Option<String>,
+    statistics_enumerator_info_rules: Option<Vec<String>>,
     show_ui_test_page: Option<bool>,
     local_library_tail_path_count: Option<u32>,
+    v5_compatibility: Option<V5CompatibilityConfigInput>,
+    viewer_controls: Option<ViewerControlConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct ViewerControlConfig {
+    #[serde(default = "default_true")]
+    allow_time_modification: bool,
+    #[serde(default = "default_true")]
+    allow_weather_modification: bool,
+}
+
+impl Default for ViewerControlConfig {
+    fn default() -> Self {
+        Self {
+            allow_time_modification: true,
+            allow_weather_modification: true,
+        }
+    }
+}
+
+impl From<ViewerControlConfig> for ViewerControls {
+    fn from(value: ViewerControlConfig) -> Self {
+        Self {
+            allow_time_modification: value.allow_time_modification,
+            allow_weather_modification: value.allow_weather_modification,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -152,7 +315,7 @@ struct AiChatCompletionOutput {
 
 fn get_root() -> PathBuf {
     if let Some(resource_root) = APP_RESOURCE_ROOT.get() {
-        if resource_root.join("bin").join("public-beta").is_dir() {
+        if resource_root.join("bin").join("viewer-backend").is_dir() {
             return resource_root.clone();
         }
     }
@@ -164,18 +327,18 @@ fn get_root() -> PathBuf {
 
 fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     for candidate in start.ancestors() {
-        if candidate.join("bin").join("public-beta").is_dir() {
+        if candidate.join("bin").join("viewer-backend").is_dir() {
             return Some(candidate.to_path_buf());
         }
         if candidate.ends_with("src-tauri") {
             let maybe_root = candidate.parent()?.parent()?;
-            if maybe_root.join("bin").join("public-beta").is_dir() {
+            if maybe_root.join("bin").join("viewer-backend").is_dir() {
                 return Some(maybe_root.to_path_buf());
             }
         }
         if candidate.ends_with("desktop-nova") {
             let maybe_root = candidate.parent()?;
-            if maybe_root.join("bin").join("public-beta").is_dir() {
+            if maybe_root.join("bin").join("viewer-backend").is_dir() {
                 return Some(maybe_root.to_path_buf());
             }
         }
@@ -186,17 +349,30 @@ fn find_workspace_root(start: &Path) -> Option<PathBuf> {
 fn backend_exe_path(binary_name: &str) -> PathBuf {
     get_root()
         .join("bin")
-        .join("public-beta")
+        .join("viewer-backend")
         .join(binary_name)
 }
 
 fn required_backend_exe_path(binary_name: &str) -> Result<PathBuf, String> {
-    if !matches!(binary_name, "litematica_core" | "litematica_native_viewer") {
-        return Err(format!("不允许的后端可执行文件名 {binary_name:?}；Beta 公共版仅包含统计核心与快速预览。"));
+    let binary_name = match binary_name {
+        "litematica_core.exe" => "litematica_core.exe",
+        "litematica_native_viewer.exe" => "litematica_native_viewer.exe",
+        "nova-build-worker.exe" => "nova-build-worker.exe",
+        "nova-render-service.exe" => "nova-render-service.exe",
+        _ => {
+            return Err(format!(
+                "不允许的后端可执行文件名 {binary_name:?}；仅允许 litematica_core.exe、litematica_native_viewer.exe、nova-build-worker.exe 或 nova-render-service.exe，且不得包含路径、别名或大小写变体。"
+            ));
+        }
+    };
+    let path = backend_exe_path(binary_name);
+    if path.is_file() {
+        return Ok(path);
     }
-    let path = backend_exe_path(&format!("{binary_name}{}", std::env::consts::EXE_SUFFIX));
-    if path.is_file() { return Ok(path); }
-    Err(format!("缺少公共版后端可执行文件：{}。", path.display()))
+    Err(format!(
+        "缺少后端可执行文件：{}。请将 tools/viewer-core 构建出的 litematica_core.exe、litematica_native_viewer.exe、nova-build-worker.exe 和 nova-render-service.exe 一并部署到 bin/viewer-backend。",
+        path.display()
+    ))
 }
 
 #[cfg(test)]
@@ -214,6 +390,46 @@ mod backend_executable_path_tests {
             let error = required_backend_exe_path(alias).unwrap_err();
             assert!(error.contains("不允许的后端可执行文件名"));
         }
+    }
+
+    #[test]
+    #[ignore = "actual staged Release backend Host initialization only; no GUI or service launch"]
+    #[cfg(windows)]
+    fn startup_host_initialization_profile() {
+        assert!(!cfg!(debug_assertions), "启动阶段测量必须使用 Release Host");
+        let project = super::get_root();
+        let data = project.join(".tmp/beta-ui-corrections/startup-profile-data");
+        let binaries = ["litematica_core.exe", "litematica_native_viewer.exe", "nova-build-worker.exe", "nova-render-service.exe"]
+            .into_iter().map(|name| {
+                let path = required_backend_exe_path(name).unwrap();
+                let bytes = std::fs::metadata(&path).unwrap().len();
+                assert!(bytes > 0);
+                serde_json::json!({"name":name,"path":path,"bytes":bytes})
+            }).collect::<Vec<_>>();
+        let seeds_before = super::FLAKE_RESOURCE_SEED_CALLS.load(super::Ordering::Relaxed);
+        let render = super::RenderServiceClient::default();
+        let started = std::time::Instant::now();
+        let host = super::initialize_application_host(project.clone(), data, &render).unwrap();
+        let initialize_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let activity = host.operations.lifecycle_snapshot();
+        let seeds_after = super::FLAKE_RESOURCE_SEED_CALLS.load(super::Ordering::Relaxed);
+        assert!(activity["coreCalls"].as_object().unwrap().is_empty(), "Host初始化不得启动读取/资源扫描Core");
+        assert_eq!(activity["activeReads"], 0); assert_eq!(activity["pendingWrites"], 0);
+        assert_eq!(seeds_before, 0); assert_eq!(seeds_after, 0, "初始化不能复制扫描Flake资源");
+        assert!(host.supervisor.active_children().is_empty(), "本测试不启动后台服务或Viewer");
+        render.request_shutdown();
+        let stopped = host.supervisor.shutdown(std::time::Duration::ZERO, std::time::Duration::from_millis(500));
+        assert!(stopped.remaining.is_empty()); assert_eq!(stopped.terminate_requests, 0);
+        let report = serde_json::json!({
+            "profile":"Release","measurement":"actual synchronous initialize_application_host only; no GUI/service launch",
+            "hostInitializeMs":initialize_ms,"operations":activity,"resourceSeedCallsBefore":seeds_before,"resourceSeedCallsAfter":seeds_after,
+            "backendFiles":binaries,"ownedChildren":0,"remainingChildren":0,
+            "updateQuery":"initializer has no updater/AppHandle invocation; frontend async query not exercised",
+            "mainWindowResponse":"UNMEASURED","backgroundServiceConnect":"UNMEASURED","WebViewBootstrap":"UNMEASURED"
+        });
+        let output = project.join(".tmp/beta-ui-corrections/beta02-startup-host-release.json");
+        std::fs::write(&output, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        println!("[NOVA_LIFECYCLE_PROFILE] startup={report} output={}", output.display());
     }
 }
 
@@ -274,6 +490,16 @@ fn legacy_appdata_config_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+fn render_tmp_path(prefix: &str, ext: &str) -> Result<PathBuf, String> {
+    let dir = data_root()?.join("cache").join("render");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+    Ok(dir.join(format!("{prefix}_{now}_{:x}.{ext}", std::process::id())))
+}
+
 fn app_config_dir() -> Result<PathBuf, String> {
     let dir = data_root()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -314,6 +540,8 @@ fn copy_dir_files_if_missing(source: &Path, target: &Path) -> Result<(), String>
 /// These editable defaults belong to the selected user directory, not to the
 /// executable directory. Fill missing files without replacing custom content.
 fn seed_flake_resources(resource_root: &Path, user_root: &Path) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    let call = FLAKE_RESOURCE_SEED_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
     for name in ["enumerator", "flake"] {
         let source = resource_root.join("pack-in").join(name);
         if !source.is_dir() {
@@ -321,6 +549,7 @@ fn seed_flake_resources(resource_root: &Path, user_root: &Path) -> Result<(), St
         }
         copy_dir_files_if_missing(&source, &user_root.join(name))?;
     }
+    eprintln!("[NOVA_LIFECYCLE] stage=resource_seed calls={call} elapsed_ms={}", started.elapsed().as_millis());
     Ok(())
 }
 
@@ -403,6 +632,10 @@ mod flake_resource_tests {
 }
 
 fn migrate_legacy_appdata_if_needed(target_root: &Path) -> Result<(), String> {
+    static MIGRATED_ROOTS: OnceLock<Mutex<std::collections::BTreeSet<PathBuf>>> = OnceLock::new();
+    let mut migrated = MIGRATED_ROOTS.get_or_init(Mutex::default).lock().map_err(|_| "配置迁移锁异常")?;
+    if migrated.contains(target_root) { return Ok(()); }
+    let started = std::time::Instant::now();
     for legacy_root in legacy_appdata_config_dirs() {
         if legacy_root == target_root || !legacy_root.is_dir() {
             continue;
@@ -414,6 +647,8 @@ fn migrate_legacy_appdata_if_needed(target_root: &Path) -> Result<(), String> {
             copy_dir_files_if_missing(&legacy_root.join(dir), &target_root.join(dir))?;
         }
     }
+    migrated.insert(target_root.to_path_buf());
+    eprintln!("[NOVA_LIFECYCLE] stage=legacy_config_migration elapsed_ms={}", started.elapsed().as_millis());
     Ok(())
 }
 
@@ -467,6 +702,7 @@ fn ensure_user_config_layout(dir: &Path) -> Result<(), String> {
         "exports",
         "generation-templates",
         "generation-templates/custom",
+        "replace/presets",
     ] {
         std::fs::create_dir_all(dir.join(relative)).map_err(|e| e.to_string())?;
     }
@@ -477,27 +713,78 @@ fn default_user_config() -> UserConfig {
     UserConfig {
         theme: "shadcn".to_string(),
         color_mode: default_color_mode(),
-        render_display_mode: "fast_experimental".to_string(),
-        preview_mode: "fast_experimental".to_string(),
+        render_display_mode: "full".to_string(),
+        preview_mode: "full".to_string(),
         material_list_window_behavior: default_material_list_window_behavior(),
+        statistics_enumerator_info_rules: default_statistics_enumerator_info_rules(),
         show_ui_test_page: default_show_ui_test_page(),
         local_library_tail_path_count: default_local_library_tail_path_count(),
+        v5_compatibility: V5CompatibilityConfig::default(),
+        viewer_controls: ViewerControlConfig::default(),
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_statistics_enumerator_info_rules() -> Vec<String> {
+    vec!["理论版本 = version(L)".into(), "生存不可达 = any(L & survival_impossible)".into()]
+}
+
 #[cfg(test)]
-mod public_user_config_tests {
-    use super::UserConfig;
+mod viewer_control_config_tests {
+    use super::{UserConfig, ViewerControlConfig};
+
     #[test]
-    fn legacy_private_settings_are_ignored_not_persisted() {
+    fn statistics_rules_survive_native_config_save_and_reload() {
+        let dir = std::env::temp_dir().join(format!("nova-rules-config-{}", std::process::id()));
+        let mut config = super::default_user_config();
+        config.statistics_enumerator_info_rules = vec!["红石比例 = ratio(L & redstone / L)".into()];
+        super::write_user_config_data(&dir, &config).unwrap();
+        let mut loaded = super::read_user_config_data(&dir);
+        assert_eq!(loaded.statistics_enumerator_info_rules, config.statistics_enumerator_info_rules);
+        loaded.theme = "minecraft".into();
+        super::write_user_config_data(&dir, &loaded).unwrap();
+        assert_eq!(super::read_user_config_data(&dir).statistics_enumerator_info_rules, config.statistics_enumerator_info_rules);
+        let old = serde_json::json!({"theme":"shadcn","render_display_mode":"full","preview_mode":"full"});
+        assert_eq!(serde_json::from_value::<UserConfig>(old).unwrap().statistics_enumerator_info_rules, super::default_statistics_enumerator_info_rules());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn old_user_config_defaults_both_manual_world_controls_to_enabled() {
         let config = serde_json::from_value::<UserConfig>(serde_json::json!({
-            "theme":"shadcn", "render_display_mode":"full", "preview_mode":"full",
-            "v5_compatibility": {"shaderpack":"private.zip"},
-            "viewer_controls": {"allow_weather_modification":true}
-        })).unwrap();
+            "theme": "WebDefault",
+            "render_display_mode": "full",
+            "preview_mode": "full",
+            "material_list_window_behavior": "independent_window",
+            "show_ui_test_page": true,
+            "local_library_tail_path_count": 3,
+            "v5_compatibility": {}
+        }))
+        .unwrap();
+        assert_eq!(config.viewer_controls, ViewerControlConfig::default());
         let serialized = serde_json::to_value(config).unwrap();
-        assert!(serialized.get("v5_compatibility").is_none());
-        assert!(serialized.get("viewer_controls").is_none());
+        assert_eq!(
+            serialized["viewer_controls"]["allow_time_modification"],
+            true
+        );
+        assert_eq!(
+            serialized["viewer_controls"]["allow_weather_modification"],
+            true
+        );
+    }
+
+    #[test]
+    fn explicit_disabled_controls_are_not_overwritten_by_defaults() {
+        let controls = serde_json::from_value::<ViewerControlConfig>(serde_json::json!({
+            "allow_time_modification": false,
+            "allow_weather_modification": false
+        }))
+        .unwrap();
+        assert!(!controls.allow_time_modification);
+        assert!(!controls.allow_weather_modification);
     }
 }
 
@@ -584,7 +871,7 @@ mod theme_config_tests {
 
 fn normalize_mode_string(value: &str) -> String {
     let _ = value;
-    "fast_experimental".to_string()
+    "full".to_string()
 }
 
 fn user_config_path(dir: &Path) -> PathBuf {
@@ -617,6 +904,46 @@ fn write_user_config_data(dir: &Path, config: &UserConfig) -> Result<(), String>
         content,
     )
     .map_err(|e| e.to_string())
+}
+
+fn current_viewer_launch_context(
+    scope: CompatibilityScope,
+    requested_display_mode: &str,
+) -> Result<ViewerLaunchContext, String> {
+    current_launch_context_for_backend(
+        scope,
+        requested_display_mode,
+        "litematica_native_viewer.exe",
+    )
+}
+
+fn current_launch_context_for_backend(
+    scope: CompatibilityScope,
+    _requested_display_mode: &str,
+    binary_name: &str,
+) -> Result<ViewerLaunchContext, String> {
+    let config_dir = current_user_config_dir()?;
+    let config = read_user_config_data(&config_dir);
+    let compatibility = config.v5_compatibility;
+    let plan = ViewerCompatibilityPlan::build(&compatibility, &get_root(), scope)?;
+    let exe_path = required_backend_exe_path(binary_name)?;
+    let backend = ViewerBackendIdentity::capture(&exe_path)?;
+    Ok(ViewerLaunchContext::new(
+        plan,
+        config.viewer_controls.into(),
+        backend,
+    ))
+}
+
+async fn prepare_viewer_launch_context(
+    scope: CompatibilityScope,
+    requested_display_mode: String,
+) -> Result<ViewerLaunchContext, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        current_viewer_launch_context(scope, &requested_display_mode)
+    })
+    .await
+    .map_err(|error| format!("prepare Viewer launch context worker failed: {error}"))?
 }
 
 fn migrate_legacy_library_if_needed(dir: &Path) -> Result<(), String> {
@@ -787,6 +1114,24 @@ async fn application_edit_project_origin(
 }
 
 #[tauri::command]
+async fn application_convert_project_version(
+    input: application::operations::ConvertProjectVersionInput,
+    operations: tauri::State<'_, ApplicationOperations>,
+) -> Result<serde_json::Value, String> {
+    let operations = operations.inner().clone();
+    run_application_operation(move || operations.convert_project_version(input)).await
+}
+
+#[tauri::command]
+async fn application_query_block_database(
+    input: application::operations::BlockDatabaseQueryInput,
+    operations: tauri::State<'_, ApplicationOperations>,
+) -> Result<serde_json::Value, String> {
+    let operations=operations.inner().clone();
+    run_application_operation(move ||operations.query_block_database(input)).await
+}
+
+#[tauri::command]
 async fn application_replace_blocks(
     input: ReplaceBlocksInput,
     operations: tauri::State<'_, ApplicationOperations>,
@@ -795,13 +1140,25 @@ async fn application_replace_blocks(
     run_application_operation(move || operations.replace_blocks(input)).await
 }
 
+struct StatisticsResponse(serde_json::Value);
+impl Serialize for StatisticsResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let started = std::time::Instant::now();
+        let result = self.0.serialize(serializer);
+        if env::var_os("NOVA_STATS_TIMING").is_some() {
+            eprintln!("[NOVA_STATS_TIMING] host_ipc_json_encode_ms={:.3}", started.elapsed().as_secs_f64() * 1000.0);
+        }
+        result
+    }
+}
+
 #[tauri::command]
 async fn application_get_project_stats(
     input: ProjectStatsInput,
     operations: tauri::State<'_, ApplicationOperations>,
-) -> Result<serde_json::Value, String> {
+) -> Result<StatisticsResponse, String> {
     let operations = operations.inner().clone();
-    run_application_operation(move || operations.project_stats(input)).await
+    run_application_operation(move || operations.project_stats(input)).await.map(StatisticsResponse)
 }
 
 #[tauri::command]
@@ -839,30 +1196,56 @@ async fn application_read_embedded_preview(
     run_application_operation(move || operations.read_embedded_preview(input)).await
 }
 
-const FULL_MODE_UNAVAILABLE: &str = "Beta 公共版未提供完整模式；请使用快速渲染。";
-
 #[tauri::command]
-async fn render_preview_image(file_path: String, display_mode: String, cache_input: Option<String>, host: tauri::State<'_, QuickPreviewHost>) -> Result<ProductPreviewImage, String> {
+async fn render_preview_image(
+    file_path: String,
+    display_mode: String,
+    cache_input: Option<String>,
+    facade: tauri::State<'_, RenderFacade>,
+    host: tauri::State<'_, QuickPreviewHost>,
+) -> Result<ProductPreviewImage, String> {
+    if display_mode == "fast_experimental" {
+
     let _ = cache_input;
-    if display_mode != "fast_experimental" { return Err(FULL_MODE_UNAVAILABLE.into()); }
     let host = host.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    return tauri::async_runtime::spawn_blocking(move || {
         let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
         let expected = application::thumbnails::cache_path(&source)?;
         let view = host.snapshot()?.filter(|view| view.source_path == source && view.state == "ready").ok_or("请先启动该投影的快速渲染")?;
         let (source, frame) = host.capture_frame(&view.preview_id)?;
         application::thumbnails::save(&source, &frame, &expected)
-    }).await.map_err(|error| error.to_string())?
+    }).await.map_err(|error| error.to_string())?;
+    }
+
+    let launch = prepare_viewer_launch_context(CompatibilityScope::Render, display_mode).await?;
+    let resolved_input = normalized_input_path(&file_path);
+    let resolved_cache_input = cache_input
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| normalized_input_path(&value));
+    let output_path = render_tmp_path("litematica_nova_native_preview", "png")?;
+    let launch_contract =
+        launch.prepare_preview(resolved_input, output_path.clone(), resolved_cache_input)?;
+    facade
+        .run_viewer_preview(&launch, &launch_contract, output_path)
+        .await
 }
 
 #[tauri::command]
-async fn generate_preview_image(file_path: String, display_mode: String, window: tauri::WebviewWindow, host: tauri::State<'_, QuickPreviewHost>, operations: tauri::State<'_, ApplicationOperations>) -> Result<ProductPreviewImage, String> {
-    if display_mode != "fast_experimental" { return Err(FULL_MODE_UNAVAILABLE.into()); }
+async fn generate_preview_image(
+    file_path: String,
+    display_mode: String,
+    facade: tauri::State<'_, RenderFacade>,
+    window: tauri::WebviewWindow,
+    host: tauri::State<'_, QuickPreviewHost>,
+    operations: tauri::State<'_, ApplicationOperations>,
+) -> Result<ProductPreviewImage, String> {
+    if display_mode == "fast_experimental" {
+
     let host = host.inner().clone();
     let operations = operations.inner().clone();
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
     let parent = ::viewer_launch_contract::QuickPreviewHostWindow { hwnd: hwnd.to_string(), process_id: std::process::id() };
-    tauri::async_runtime::spawn_blocking(move || {
+    return tauri::async_runtime::spawn_blocking(move || {
         let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
         let cache = application::thumbnails::cache_path(&source)?;
         if cache.is_file() { return application::thumbnails::load(&cache); }
@@ -882,11 +1265,14 @@ async fn generate_preview_image(file_path: String, display_mode: String, window:
         // Reuse QuickPreviewHost for an independent hidden WS_CHILD session; an
         // existing interactive Viewer and its camera/GPU lifetime stay untouched.
         let temporary = host.thumbnail_session();
-        let view = temporary.start(StartQuickPreviewInput { source_path: source.clone() }, parent)?;
+        let view = temporary.start(StartQuickPreviewInput { source_path: source.clone(), preload: false, click_started_at_epoch_ms: None }, parent)?;
         let output = (|| {
             let started = std::time::Instant::now();
             loop {
                 let current = temporary.snapshot()?.ok_or("缩略图预览会话结束")?;
+                if current.resource.as_ref().is_some_and(|report| report.decision_required) {
+                    return Err("缩略图需要显存决策：请先在属性或渲染页打开快速模式并确认加载方式。".into());
+                }
                 if let Some(error) = current.error { return Err(error); }
                 if current.state == "ready" { break; }
                 if matches!(current.state, "failed" | "closed") || started.elapsed() > Duration::from_secs(120) { return Err("缩略图预览准备未完成".into()); }
@@ -897,7 +1283,32 @@ async fn generate_preview_image(file_path: String, display_mode: String, window:
         })();
         let _ = temporary.close(&view.preview_id);
         output
-    }).await.map_err(|error| error.to_string())?
+    }).await.map_err(|error| error.to_string())?;
+    }
+
+    let launch = prepare_viewer_launch_context(CompatibilityScope::Render, display_mode).await?;
+    let mode = launch.display_mode();
+    let resolved_input = normalized_input_path(&file_path);
+    let preview_dir = data_root()?.join("projection-library").join("previews");
+    std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    hasher.update(resolved_input.to_string_lossy().as_bytes());
+    hasher.update(mode.as_bytes());
+    hasher.update(launch.compatibility_fingerprint().as_bytes());
+    if let Ok(meta) = std::fs::metadata(&resolved_input) {
+        hasher.update(meta.len().to_le_bytes());
+        if let Ok(modified) = meta.modified() {
+            if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                hasher.update(duration.as_nanos().to_le_bytes());
+            }
+        }
+    }
+    let digest = hasher.finalize();
+    let output_path = preview_dir.join(format!("{mode}_{:x}.png", digest));
+    let launch_contract = launch.prepare_preview(resolved_input, output_path.clone(), None)?;
+    facade
+        .run_viewer_preview(&launch, &launch_contract, output_path)
+        .await
 }
 
 #[tauri::command]
@@ -933,7 +1344,16 @@ fn load_user_config_info() -> Result<UserConfigInfo, String> {
 }
 
 #[tauri::command]
-fn save_user_config(input: UserConfigInput) -> Result<UserConfigInfo, String> {
+async fn save_user_config(input: UserConfigInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<UserConfigInfo, String> {
+    let write = operations.begin_write()?;
+    run_application_operation(move || {
+        let _write = write;
+        save_user_config_inner(input)
+    }).await
+}
+
+fn save_user_config_inner(input: UserConfigInput) -> Result<UserConfigInfo, String> {
+    let _serial = CONFIG_WRITE_LOCK.lock().map_err(|_| "配置保存锁异常")?;
     let dir = current_user_config_dir()?;
     let mut config = read_user_config_data(&dir);
     if let Some(theme) = input.theme {
@@ -951,11 +1371,32 @@ fn save_user_config(input: UserConfigInput) -> Result<UserConfigInfo, String> {
     if let Some(behavior) = input.material_list_window_behavior {
         config.material_list_window_behavior = normalize_material_list_window_behavior(&behavior);
     }
+    if let Some(rules) = input.statistics_enumerator_info_rules {
+        config.statistics_enumerator_info_rules = rules;
+    }
     if let Some(show) = input.show_ui_test_page {
         config.show_ui_test_page = show;
     }
     if let Some(count) = input.local_library_tail_path_count {
         config.local_library_tail_path_count = normalize_local_library_tail_path_count(count);
+    }
+    if let Some(compatibility) = input.v5_compatibility {
+        config.v5_compatibility.apply_input(compatibility)?;
+        let workspace_root = get_root();
+        if config.v5_compatibility.requires_full_mode() {
+            config.render_display_mode = "full".to_owned();
+        }
+        // Saving a small UI preference must not recursively fingerprint every
+        // configured pack in the Nova process. The render service computes
+        // the authoritative content identities when a Build starts.
+        ViewerCompatibilityInputs::resolve(
+            &config.v5_compatibility,
+            &workspace_root,
+            CompatibilityScope::Render,
+        )?;
+    }
+    if let Some(viewer_controls) = input.viewer_controls {
+        config.viewer_controls = viewer_controls;
     }
     write_user_config_data(&dir, &config)?;
     Ok(UserConfigInfo {
@@ -981,20 +1422,7 @@ fn choose_user_config_dir(app: AppHandle) -> Result<Option<String>, String> {
 #[tauri::command]
 fn open_user_config_dir() -> Result<(), String> {
     let dir = current_user_config_dir()?;
-    #[cfg(windows)]
-    {
-        Command::new("explorer")
-            .arg(&dir)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(not(windows))]
-    {
-        Command::new("xdg-open")
-            .arg(&dir)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
+    local_path_open_command(&dir)?.spawn().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1065,13 +1493,16 @@ fn read_user_config_file(relative_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn write_user_config_file(relative_path: String, content: String) -> Result<(), String> {
-    let dir = current_user_config_dir()?;
-    let path = dir.join(user_runtime_relative_path(&relative_path)?);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(path, content).map_err(|e| e.to_string())
+async fn write_user_config_file(relative_path: String, content: String, operations: tauri::State<'_, ApplicationOperations>) -> Result<(), String> {
+    let write = operations.begin_write()?;
+    run_application_operation(move || {
+        let _write = write;
+        let _serial = CONFIG_WRITE_LOCK.lock().map_err(|_| "配置保存锁异常")?;
+        let dir = current_user_config_dir()?;
+        let path = dir.join(user_runtime_relative_path(&relative_path)?);
+        if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+        std::fs::write(path, content).map_err(|e| e.to_string())
+    }).await
 }
 
 #[tauri::command]
@@ -1090,24 +1521,26 @@ fn read_file_string(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn write_file_string(path: String, content: String) -> Result<(), String> {
-    let full_path = get_root().join(path);
-    if let Some(p) = full_path.parent() {
-        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&full_path, content).map_err(|e| e.to_string())
+async fn write_file_string(path: String, content: String, operations: tauri::State<'_, ApplicationOperations>) -> Result<(), String> {
+    let write = operations.begin_write()?;
+    run_application_operation(move || {
+        let _write = write;
+        let full_path = get_root().join(path);
+        if let Some(p) = full_path.parent() { std::fs::create_dir_all(p).map_err(|e| e.to_string())?; }
+        std::fs::write(&full_path, content).map_err(|e| e.to_string())
+    }).await
 }
 
 #[tauri::command]
-fn write_text_file_absolute(path: String, content: String) -> Result<(), String> {
-    let full_path = PathBuf::from(path);
-    if !full_path.is_absolute() {
-        return Err("output path must be absolute".to_string());
-    }
-    if let Some(parent) = full_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&full_path, content).map_err(|e| e.to_string())
+async fn write_text_file_absolute(path: String, content: String, operations: tauri::State<'_, ApplicationOperations>) -> Result<(), String> {
+    let write = operations.begin_write()?;
+    run_application_operation(move || {
+        let _write = write;
+        let full_path = PathBuf::from(path);
+        if !full_path.is_absolute() { return Err("output path must be absolute".to_string()); }
+        if let Some(parent) = full_path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+        std::fs::write(&full_path, content).map_err(|e| e.to_string())
+    }).await
 }
 
 #[tauri::command]
@@ -1343,7 +1776,7 @@ fn open_file_parent_dir(file_path: String) -> Result<(), String> {
         eprintln!("{message}");
         return Err(message);
     }
-    let result = Command::new("explorer").arg(&parent).spawn();
+    let result = local_path_open_command(&parent)?.spawn();
     match result {
         Ok(_) => {
             eprintln!(
@@ -1436,6 +1869,45 @@ fn copy_file_to_directory(
     })
 }
 
+// Local paths go to the existing native Explorer route, never the shell URL regex.
+fn local_path_open_command(path: &Path) -> Result<Command, String> {
+    if !path.exists() { return Err("文件或文件夹不存在，请刷新后重试".into()); }
+    #[cfg(windows)]
+    let mut command = Command::new("explorer");
+    #[cfg(not(windows))]
+    let mut command = Command::new("xdg-open");
+    let raw = path.to_string_lossy();
+    let display = if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") { format!(r"\\{unc}") }
+        else { raw.strip_prefix(r"\\?\").unwrap_or(&raw).to_owned() };
+    command.arg(display);
+    Ok(command)
+}
+
+#[cfg(test)]
+mod local_path_open_tests {
+    use super::*;
+    #[test]
+    fn config_layout_creates_presets_and_native_command_preserves_unicode_spaces_and_long_paths() {
+        let root = std::env::temp_dir().join(format!("nova-local-path-{}",std::process::id())).join("中文 配置").join("x".repeat(180));
+        ensure_user_config_layout(&root).unwrap();
+        let presets=root.join("replace/presets");
+        assert!(presets.is_dir());
+        let command=local_path_open_command(&presets).unwrap();
+        assert_eq!(command.get_args().count(),1);
+        assert_eq!(command.get_args().next().unwrap().to_string_lossy(),presets.to_string_lossy());
+        #[cfg(windows)] {
+            let canonical=std::fs::canonicalize(&presets).unwrap();
+            let command=local_path_open_command(&canonical).unwrap();
+            assert_eq!(command.get_program(),"explorer");
+            assert!(!command.get_args().next().unwrap().to_string_lossy().starts_with(r"\\?\"));
+        }
+        assert!(local_path_open_command(&root.join("missing")).is_err());
+        let cleanup=root.ancestors().nth(2).unwrap();
+        assert_eq!(cleanup,std::env::temp_dir().join(format!("nova-local-path-{}",std::process::id())));
+        std::fs::remove_dir_all(cleanup).unwrap();
+    }
+}
+
 #[tauri::command]
 fn open_workspace_path(path: String) -> Result<(), String> {
     let input = PathBuf::from(&path);
@@ -1444,10 +1916,7 @@ fn open_workspace_path(path: String) -> Result<(), String> {
     } else {
         get_root().join(input)
     };
-    Command::new("explorer")
-        .arg(full_path)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    local_path_open_command(&full_path)?.spawn().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -2057,14 +2526,17 @@ fn query_encode(value: &str) -> String {
 async fn open_material_list_window(
     app: AppHandle,
     active_file: Option<String>,
+    view_mode: Option<String>,
 ) -> Result<(), String> {
     const LABEL: &str = "material-list";
+    let mode = if view_mode.as_deref() == Some("export") { "export" } else { "details" };
 
     if let Some(window) = app.get_webview_window(LABEL) {
         window.show().map_err(|err| err.to_string())?;
         window.set_focus().map_err(|err| err.to_string())?;
         app.emit_to(LABEL, "material-list-open-file", active_file)
             .map_err(|err| err.to_string())?;
+        app.emit_to(LABEL, "material-list-open-mode", mode).map_err(|err| err.to_string())?;
         return Ok(());
     }
 
@@ -2072,17 +2544,46 @@ async fn open_material_list_window(
         .as_deref()
         .filter(|file| !file.trim().is_empty())
     {
-        Some(file) => format!("material_list.html?file={}", query_encode(file)),
-        None => "material_list.html".to_string(),
+        Some(file) => format!("material_list.html?file={}&viewMode={mode}", query_encode(file)),
+        None => format!("material_list.html?viewMode={mode}"),
     };
 
     tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App(url.into()))
-        .title("Material List")
+        .title(if mode == "export" { "导出材料列表" } else { "材料列表" })
         .inner_size(720.0, 520.0)
         .min_inner_size(560.0, 420.0)
         .build()
         .map_err(|err| err.to_string())?;
 
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_enumerator_window(app: AppHandle, active_file: Option<String>) -> Result<(), String> {
+    const LABEL: &str = "enumerator";
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        app.emit_to(LABEL, "enumerator-open-file", active_file).map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    let url = active_file.filter(|file| !file.trim().is_empty())
+        .map(|file| format!("enumerator.html?file={}", query_encode(&file))).unwrap_or_else(|| "enumerator.html".into());
+    tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App(url.into()))
+        .title("枚举器").inner_size(840.0, 580.0).min_inner_size(600.0, 400.0).build().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_asset_manager_window(app: AppHandle) -> Result<(), String> {
+    const LABEL: &str = "asset-manager";
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App("asset_manager.html".into()))
+        .title("游戏资源管理").inner_size(980.0, 680.0).min_inner_size(720.0, 480.0).build().map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -2158,6 +2659,193 @@ async fn open_ui_demo_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderServiceStartBuildInput {
+    source_path: PathBuf,
+    build_mode: RenderBuildMode,
+    #[serde(default)]
+    display_mode: RenderDisplayMode,
+    #[serde(default)]
+    preflight_id: Option<ResourcePreflightId>,
+    #[serde(default)]
+    resource_warning_confirmed: bool,
+    #[serde(default)]
+    realtime_decision_id: Option<ResourcePreflightId>,
+    #[serde(default)]
+    click_started_at_epoch_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderLaunchPlan {
+    source_bytes: u64,
+    direct_realtime: bool,
+    preflight: Option<ResourcePreflightView>,
+}
+
+const DIRECT_REALTIME_MAX_BYTES: u64 = 500 * 1024;
+
+fn launch_requires_preflight(source_bytes: u64, preload: bool) -> bool {
+    preload || source_bytes > DIRECT_REALTIME_MAX_BYTES
+}
+
+#[tauri::command]
+async fn application_render_launch_plan(
+    source_path: PathBuf,
+    preload: bool,
+    display_mode: Option<RenderDisplayMode>,
+    facade: tauri::State<'_, RenderFacade>,
+) -> Result<RenderLaunchPlan, String> {
+    let plan_started = std::time::Instant::now();
+    let input = RenderServiceStartBuildInput {
+        source_path,
+        build_mode: RenderBuildMode::Prebuilt,
+        display_mode: display_mode.unwrap_or_default(),
+        preflight_id: None,
+        resource_warning_confirmed: false,
+        realtime_decision_id: None,
+        click_started_at_epoch_ms: None,
+    };
+    let (source_bytes, prepared) = tauri::async_runtime::spawn_blocking(move || {
+        if !input.source_path.is_absolute() { return Err("投影路径必须是绝对路径".to_owned()); }
+        let metadata = std::fs::metadata(&input.source_path).map_err(|error| error.to_string())?;
+        if !metadata.is_file() { return Err("投影不是文件".to_owned()); }
+        let bytes = metadata.len();
+        // Small direct-Realtime starts do not run the heavy Prebuilt admission probe.
+        let compatibility_started = std::time::Instant::now();
+        let prepared = if launch_requires_preflight(bytes, preload) { Some(application_render_request(input)?) } else { None };
+        eprintln!("[NOVA_RESOURCE_PHASE] stage=launch_compatibility_prepare elapsed_ms={:.3} preflight_required={}", compatibility_started.elapsed().as_secs_f64() * 1000.0, prepared.is_some());
+        Ok::<_, String>((bytes, prepared))
+    }).await.map_err(|error| error.to_string())??;
+    let preflight = match prepared {
+        Some((request, environment)) => Some(facade.preflight_render(request, environment).await?),
+        None => None,
+    };
+    eprintln!("[NOVA_RESOURCE_PHASE] stage=launch_plan_complete elapsed_ms={:.3} preload={preload} preflight_performed={}", plan_started.elapsed().as_secs_f64() * 1000.0, preflight.is_some());
+    Ok(RenderLaunchPlan { source_bytes, direct_realtime: !preload && preflight.is_none(), preflight })
+}
+
+#[cfg(test)]
+mod full_launch_plan_tests {
+    use super::*;
+    #[test]
+    fn small_direct_realtime_skips_prebuilt_probe() {
+        assert!(!launch_requires_preflight(DIRECT_REALTIME_MAX_BYTES - 1, false));
+    }
+    #[test]
+    fn threshold_and_large_sources_require_live_budget() {
+        assert!(!launch_requires_preflight(DIRECT_REALTIME_MAX_BYTES, false));
+        assert!(launch_requires_preflight(DIRECT_REALTIME_MAX_BYTES + 1, false));
+    }
+    #[test]
+    fn requested_preload_always_uses_existing_prebuilt_admission() {
+        assert!(launch_requires_preflight(1, true));
+    }
+}
+
+fn application_render_request(
+    input: RenderServiceStartBuildInput,
+) -> Result<(UserVisibleRenderRequest, RenderEnvironmentInputs), String> {
+    if !input.source_path.is_absolute() || !input.source_path.is_file() {
+        return Err(format!(
+            "投影文件不存在或不是绝对路径：{}",
+            input.source_path.display()
+        ));
+    }
+    let config = read_user_config_data(&current_user_config_dir()?);
+    if !matches!(input.display_mode, RenderDisplayMode::Full | RenderDisplayMode::Standard) {
+        return Err("精确渲染入口只接受 full 或 standard；快速模式保持独立启动链".to_owned());
+    }
+    let mut compatibility = config.v5_compatibility.clone();
+    let unlit = input.display_mode == RenderDisplayMode::Standard;
+    if unlit {
+        compatibility.backend = "vulkan".to_owned();
+        compatibility.iris_fallback = "fail".to_owned();
+        compatibility.shaderpack_root.clear();
+        compatibility.shaderpack_name.clear();
+    }
+    let plan = ViewerCompatibilityInputs::resolve(
+        &compatibility,
+        &get_root(),
+        CompatibilityScope::Render,
+    )?;
+    let renderer = plan
+        .renderer()
+        .ok_or_else(|| "render compatibility plan 缺少 renderer".to_owned())?;
+    let backend = match renderer.backend {
+        ::viewer_launch_contract::ViewerBackend::Auto => GraphicsBackendPreference::Auto,
+        ::viewer_launch_contract::ViewerBackend::Vulkan => GraphicsBackendPreference::Vulkan,
+        ::viewer_launch_contract::ViewerBackend::IrisGl46 => GraphicsBackendPreference::IrisGl46,
+    };
+    let iris_fallback = match renderer.iris_fallback {
+        ::viewer_launch_contract::IrisFallback::Fail => IrisFallbackPreference::Fail,
+        ::viewer_launch_contract::IrisFallback::Vulkan => IrisFallbackPreference::Vulkan,
+    };
+    let precipitation = match renderer.precipitation {
+        ::viewer_launch_contract::WeatherPrecipitation::Auto => WeatherPreference::Auto,
+        ::viewer_launch_contract::WeatherPrecipitation::Rain => WeatherPreference::Rain,
+        ::viewer_launch_contract::WeatherPrecipitation::Snow => WeatherPreference::Snow,
+        ::viewer_launch_contract::WeatherPrecipitation::None => WeatherPreference::None,
+    };
+    let content = plan.content();
+    let settings = ProjectRenderSettings {
+        display_mode: input.display_mode,
+        build_mode: input.build_mode,
+        layers: LayerSelection::All,
+        highlights: Default::default(),
+        backend,
+        shader: ShaderSelection {
+            path: renderer.shaderpack.as_ref().map(|value| value.path.clone()),
+        },
+        iris_fallback,
+        precipitation: if unlit { WeatherPreference::None } else { precipitation },
+        allow_time_modification: !unlit && config.viewer_controls.allow_time_modification,
+        allow_weather_modification: !unlit && config.viewer_controls.allow_weather_modification,
+        fabric_mods_dir: content.fabric_mods_dir.clone(),
+        resource_packs: content.resource_packs.clone(),
+    };
+    let root = get_root();
+    let asset_inputs = [
+        root.join("mc26-oracle").join("verified-schema3-26.3"),
+        root.join("tools")
+            .join("mc26-oracle")
+            .join("build")
+            .join("verified-schema3-26.3"),
+        root.join("bin")
+            .join("viewer-backend")
+            .join("backend-deployment.json"),
+    ]
+    .into_iter()
+    .filter(|path| path.exists())
+    .collect();
+    Ok((
+        UserVisibleRenderRequest {
+            source: ProjectSource {
+                path: input.source_path,
+            },
+            settings,
+            presentation: PresentationIntent {
+                mode: PresentationMode::Hidden,
+                visible: false,
+                placement: None,
+            },
+        },
+        RenderEnvironmentInputs { asset_inputs },
+    ))
+}
+
+#[tauri::command]
+async fn application_quick_preview_resource_decision(
+    preview_id: String,
+    action: application::quick_preview::QuickResourceAction,
+    warning_confirmed: bool,
+    host: tauri::State<'_, QuickPreviewHost>,
+) -> Result<QuickPreviewView, String> {
+    let host = host.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || host.resource_decision(&preview_id, action, warning_confirmed)).await.map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 async fn application_quick_preview_start(window: tauri::WebviewWindow, input: StartQuickPreviewInput, host: tauri::State<'_, QuickPreviewHost>) -> Result<QuickPreviewView, String> {
     if window.label() != "main" { return Err("快速预览只属于主窗口。".into()); }
@@ -2192,110 +2880,211 @@ async fn application_quick_preview_close(preview_id: String, host: tauri::State<
 }
 
 #[tauri::command]
-async fn application_render_preflight(input: serde_json::Value) -> Result<serde_json::Value, String> {
-    let _ = input;
-    Err(FULL_MODE_UNAVAILABLE.into())
+async fn application_render_preflight(
+    input: RenderServiceStartBuildInput,
+    facade: tauri::State<'_, RenderFacade>,
+) -> Result<ResourcePreflightView, String> {
+    if input.preflight_id.is_some() || input.resource_warning_confirmed {
+        return Err("resource preflight request cannot carry a prior admission".to_owned());
+    }
+    let (request, environment) =
+        tauri::async_runtime::spawn_blocking(move || application_render_request(input))
+            .await
+            .map_err(|error| format!("准备 Application resource preflight 失败：{error}"))??;
+    facade.preflight_render(request, environment).await
 }
+
 #[tauri::command]
-async fn application_render_use_basic_vulkan(preflight_id: String, source_path: PathBuf) -> Result<serde_json::Value, String> {
-    let _ = (preflight_id, source_path);
-    Err(FULL_MODE_UNAVAILABLE.into())
+async fn application_render_use_basic_vulkan(
+    preflight_id: ResourcePreflightId,
+    source_path: PathBuf,
+    facade: tauri::State<'_, RenderFacade>,
+) -> Result<ResourcePreflightView, String> {
+    facade
+        .use_basic_vulkan(&preflight_id, &ProjectSource { path: source_path })
+        .await
 }
+
 #[tauri::command]
-async fn application_render_start(input: serde_json::Value) -> Result<serde_json::Value, String> {
-    let _ = input;
-    Err(FULL_MODE_UNAVAILABLE.into())
+async fn application_render_start(
+    input: RenderServiceStartBuildInput,
+    app: AppHandle,
+    facade: tauri::State<'_, RenderFacade>,
+) -> Result<application::model::RenderOperationView, String> {
+    let click_started_at_epoch_ms = input.click_started_at_epoch_ms;
+    let authorization = RenderStartAuthorization {
+        click_started_at_epoch_ms,
+        preflight_id: input.preflight_id.clone(),
+        resource_warning_confirmed: input.resource_warning_confirmed,
+    };
+    let operation = match input.build_mode {
+        RenderBuildMode::Prebuilt => {
+            if input.realtime_decision_id.is_some() { return Err("预构建不能携带实时加载决策".into()); }
+            facade
+                .start_prebuilt_render(
+                    ProjectSource {
+                        path: input.source_path,
+                    },
+                    authorization,
+                )
+                .await
+        }
+        RenderBuildMode::Realtime => {
+            if authorization.preflight_id.is_some() || authorization.resource_warning_confirmed {
+                return Err(
+                    "realtime build must not carry a prebuilt resource admission".to_owned(),
+                );
+            }
+            if let Some(id) = input.realtime_decision_id {
+                let operation = facade.start_realtime_from_preflight_with_click(&id, ProjectSource { path: input.source_path }, click_started_at_epoch_ms).await?.operation;
+                emit_application_render_snapshot(&app, &facade)?;
+                return Ok(operation);
+            }
+            let (request, environment) =
+                tauri::async_runtime::spawn_blocking(move || application_render_request(input))
+                    .await
+                    .map_err(|error| format!("准备 Application render request 失败：{error}"))??;
+            facade.start_realtime_render_with_click(request, environment, click_started_at_epoch_ms).await
+        }
+    }
+    .map(|result| result.operation)?;
+    emit_application_render_snapshot(&app, &facade)?;
+    Ok(operation)
 }
+
 #[tauri::command]
-fn application_render_discard_preflight(preflight_id: String) -> Result<(), String> {
-    let _ = preflight_id;
-    Err(FULL_MODE_UNAVAILABLE.into())
+fn application_render_discard_preflight(
+    preflight_id: ResourcePreflightId,
+    facade: tauri::State<'_, RenderFacade>,
+) {
+    facade.discard_preflight(&preflight_id);
 }
+
 #[tauri::command]
-async fn application_render_cancel(operation_id: String) -> Result<(), String> {
-    let _ = operation_id;
-    Err(FULL_MODE_UNAVAILABLE.into())
+async fn application_render_cancel(
+    operation_id: OperationId,
+    app: AppHandle,
+    facade: tauri::State<'_, RenderFacade>,
+) -> Result<(), String> {
+    facade.cancel_render(&operation_id).await?;
+    emit_application_render_snapshot(&app, &facade)
 }
+
 #[tauri::command]
-async fn application_render_update_presentation(operation_id: String, intent: serde_json::Value) -> Result<serde_json::Value, String> {
-    let _ = (operation_id, intent);
-    Err(FULL_MODE_UNAVAILABLE.into())
+async fn application_render_update_presentation(
+    operation_id: OperationId,
+    intent: PresentationIntent,
+    app: AppHandle,
+    facade: tauri::State<'_, RenderFacade>,
+) -> Result<application::model::RenderOperationView, String> {
+    let operation = facade.update_presentation(&operation_id, intent).await?;
+    emit_application_render_snapshot(&app, &facade)?;
+    Ok(operation)
 }
+
+fn emit_application_render_snapshot(app: &AppHandle, facade: &RenderFacade) -> Result<(), String> {
+    app.emit(
+        APPLICATION_RENDER_STATE_EVENT,
+        ApplicationRenderSnapshot {
+            operations: facade.render_states(),
+        },
+    )
+    .map_err(|error| format!("publish Application render state: {error}"))
+}
+
 #[tauri::command]
-fn application_render_get_snapshot() -> serde_json::Value {
-    serde_json::json!({ "operations": [] })
+fn application_render_get_snapshot(
+    facade: tauri::State<'_, RenderFacade>,
+) -> ApplicationRenderSnapshot {
+    ApplicationRenderSnapshot {
+        operations: facade.render_states(),
+    }
 }
 
 struct ApplicationHostComponents {
     supervisor: Arc<platform::process_supervisor::ProcessSupervisor>,
     operations: ApplicationOperations,
+    service_exe: PathBuf,
 }
 
-fn initialize_application_host(project_root: PathBuf, app_local_data_root: PathBuf) -> Result<ApplicationHostComponents, String> {
+/// Both the WebView host and the product E2E client enter through this same
+/// process ownership and Application operation setup.
+fn initialize_application_host(
+    project_root: PathBuf,
+    app_local_data_root: PathBuf,
+    render_service: &RenderServiceClient,
+) -> Result<ApplicationHostComponents, String> {
     let started = std::time::Instant::now();
     if !cfg!(windows) {
-        return Err("Beta 公共版桌面 Application Host 与原生嵌入当前仅支持 Windows；macOS/Linux 尚未提供。".into());
+        return Err("桌面 Application Host 与原生预览当前仅支持 Windows；macOS/Linux 尚未提供。".into());
     }
-    let viewer_exe = required_backend_exe_path("litematica_native_viewer")?;
-    let core_exe = required_backend_exe_path("litematica_core")?;
-    viewer_backend::verify_public_deployment(core_exe.parent().ok_or("public backend has no directory")?)?;
-    eprintln!("[NOVA_LIFECYCLE] stage=backend_resource_identity elapsed_ms={}", started.elapsed().as_millis());
+    let service_exe = required_backend_exe_path("nova-render-service.exe")?;
+    let worker_exe = required_backend_exe_path("nova-build-worker.exe")?;
+    let viewer_exe = required_backend_exe_path("litematica_native_viewer.exe")?;
+    let core_exe = required_backend_exe_path("litematica_core.exe")?;
     let mut allowlist = platform::process_supervisor::ExecutableAllowlist::new();
     for (role, executable) in [
-        (platform::process_supervisor::ExecutableRole::NativeViewer, &viewer_exe),
-        (platform::process_supervisor::ExecutableRole::CoreHelper, &core_exe),
-    ] { allowlist.allow(role, executable).map_err(|error| error.to_string())?; }
-    let (supervisor, _process_events) = platform::process_supervisor::ProcessSupervisor::new(allowlist)
-        .map_err(|error| format!("initialize Application process supervisor: {error}"))?;
+        (
+            platform::process_supervisor::ExecutableRole::RenderService,
+            &service_exe,
+        ),
+        (
+            platform::process_supervisor::ExecutableRole::BuildWorker,
+            &worker_exe,
+        ),
+        (
+            platform::process_supervisor::ExecutableRole::NativeViewer,
+            &viewer_exe,
+        ),
+        (
+            platform::process_supervisor::ExecutableRole::CoreHelper,
+            &core_exe,
+        ),
+    ] {
+        allowlist.allow(role, executable).map_err(|error| error.to_string())?;
+    }
+    let (supervisor, process_events) =
+        platform::process_supervisor::ProcessSupervisor::new(allowlist)
+            .map_err(|error| format!("initialize Application process supervisor: {error}"))?;
     let supervisor = Arc::new(supervisor);
-    let operations = ApplicationOperations::new(Arc::clone(&supervisor), project_root, app_local_data_root,
-        core_exe.parent().map(Path::to_path_buf).ok_or_else(|| "backend executable has no directory".to_owned())?)?;
-    eprintln!("[NOVA_LIFECYCLE] stage=application_host elapsed_ms={} flake_seed=lazy update_network=async", started.elapsed().as_millis());
-    Ok(ApplicationHostComponents { supervisor, operations })
+    let operations = ApplicationOperations::new(
+        Arc::clone(&supervisor),
+        project_root,
+        app_local_data_root,
+        service_exe
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| "backend executable has no directory".to_owned())?,
+    )?;
+    render_service.observe_process_events(process_events);
+    eprintln!("[NOVA_LIFECYCLE] stage=application_host elapsed_ms={} resource_seed_calls={} operations={}", started.elapsed().as_millis(), FLAKE_RESOURCE_SEED_CALLS.load(Ordering::Relaxed), operations.lifecycle_snapshot());
+    Ok(ApplicationHostComponents {
+        supervisor,
+        operations,
+        service_exe,
+    })
 }
 
-#[cfg(test)]
-mod public_host_tests {
-    use super::*;
-    #[tokio::test]
-    async fn full_commands_are_explicitly_unavailable() {
-        let err = application_render_start(serde_json::json!({"sourcePath":"test.litematic","buildMode":"prebuilt"})).await.unwrap_err();
-        assert_eq!(err, FULL_MODE_UNAVAILABLE);
-    }
-    #[test]
-    fn public_snapshot_never_claims_private_operations() {
-        assert_eq!(application_render_get_snapshot(), serde_json::json!({"operations":[]}));
-        assert_eq!(normalize_mode_string("full"), "fast_experimental");
-    }
+#[tauri::command]
+async fn application_export_logs_zip(path: String) -> Result<application::diagnostics::LogExportResult, String> {
+    tauri::async_runtime::spawn_blocking(move || application::diagnostics::export_zip(Path::new(&path)))
+        .await.map_err(|error| error.to_string())?
 }
 
 fn main() {
     let args: Vec<_> = env::args_os().skip(1).collect();
-    if args.len() == 1 && args[0] == "--public-build-info" {
-        println!("{}", serde_json::json!({"schema":"nova.public.beta.build.v1", "flavor":"fast-only", "publicBeta":true, "fullMode":false, "gitSha":env!("LBA_NOVA_GIT_SHA"), "desktopHostSupported":cfg!(windows)}));
-        return;
+    if args
+        .iter()
+        .any(|arg| arg.as_os_str() == std::ffi::OsStr::new("--headless-e2e"))
+    {
+        std::process::exit(headless_e2e::run(&args));
     }
-    if args.len() == 1 && args[0] == "--verify-public-resources" {
-        let result = (|| -> Result<(), String> {
-            let exe = env::current_exe().map_err(|error| error.to_string())?;
-            let root = exe.parent().ok_or("public app executable has no directory")?;
-            viewer_backend::verify_public_deployment(&root.join("bin/public-beta"))?;
-            for directory in ["pack-in/enumerator", "pack-in/flake", "pack-in/item-icons-26.3", "data/generation-templates", "data/minecraft_blockstates", "block"] {
-                let path = root.join(directory);
-                if !path.is_dir() || std::fs::read_dir(&path).map_err(|error| error.to_string())?.next().is_none() {
-                    return Err(format!("公共版运行资源缺失：{directory}"));
-                }
-            }
-            if !root.join("pack-in/lang/zh_cn.json").is_file() { return Err("公共版运行语言资源缺失。".into()); }
-            Ok(())
-        })();
-        match result {
-            Ok(()) => println!("public_resources=verified; backends=fast-only; full_mode=absent"),
-            Err(error) => { eprintln!("{error}"); std::process::exit(1); }
-        }
-        return;
-    }
+    let render_service = RenderServiceClient::default();
+    let render_facade = RenderFacade::new(render_service.clone());
     tauri::Builder::default()
+        .manage(ApplicationCloseGate::default())
+        .manage(render_service)
+        .manage(render_facade)
         .manage(shell_integration::OpenFiles::default())
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             shell_integration::queue_open_files(app, args.iter().skip(1).map(String::as_str), Path::new(&cwd));
@@ -2309,16 +3098,38 @@ fn main() {
             let app_local_data_root = product_local_data_root(&app.path().local_data_dir()?);
             let _ = APP_RESOURCE_ROOT.set(resource_root);
             let _ = APP_LOCAL_DATA_ROOT.set(app_local_data_root.clone());
+            std::env::set_var("NOVA_USER_DATA_ROOT", &app_local_data_root);
+            application::diagnostics::init(&app_local_data_root, env!("CARGO_PKG_VERSION"),
+                option_env!("LBA_BUILD_GIT_SHA").unwrap_or("unknown"))?;
             app.manage(UpdateHost::new(app.package_info().version.to_string(), app_local_data_root.clone()));
             let host = initialize_application_host(
                 get_root(),
                 app_local_data_root.clone(),
+                app.state::<RenderServiceClient>().inner(),
             )
             .map_err(std::io::Error::other)?;
             app.manage(QuickPreviewHost::new(Arc::clone(&host.supervisor),
-                required_backend_exe_path("litematica_native_viewer").map_err(std::io::Error::other)?, app_local_data_root.clone()));
+                required_backend_exe_path("litematica_native_viewer.exe").map_err(std::io::Error::other)?, app_local_data_root.clone()));
+            assets::bind_operations(host.operations.clone());
             app.manage(Arc::clone(&host.supervisor));
             app.manage(host.operations);
+            app.state::<RenderFacade>()
+                .start_event_bridge(app.handle().clone())
+                .map_err(std::io::Error::other)?;
+            let main_window = app.get_webview_window("main")
+                .ok_or_else(|| std::io::Error::other("主窗口尚未创建"))?;
+            let quick = app.state::<QuickPreviewHost>().inner().clone();
+            let quick_window = ::viewer_launch_contract::QuickPreviewHostWindow {
+                hwnd: (main_window.hwnd()?.0 as isize).to_string(), process_id: std::process::id(),
+            };
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = quick.prepare_gpu_context(quick_window) {
+                    eprintln!("[NOVA_GPU_INITIALIZATION] stage=ordinary_startup_not_ready error={error} projection_reads=0 scene_mesh_builds=0");
+                }
+            });
+            app.state::<RenderServiceClient>().set_native_parent(main_window.hwnd()?.0 as isize);
+            app.state::<RenderServiceClient>()
+                .launch_in_background(host.supervisor, host.service_exe, app_local_data_root);
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
@@ -2327,7 +3138,7 @@ fn main() {
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    if window.try_state::<UpdateHost>().is_some_and(|host| host.prevents_close()) {
+                    if window.try_state::<UpdateHost>().is_some_and(|host| !host.prepare_for_close(window.app_handle())) {
                         api.prevent_close();
                         return;
                     }
@@ -2336,33 +3147,99 @@ fn main() {
             if window.label() == "main"
                 && matches!(event, tauri::WindowEvent::CloseRequested { .. })
             {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event { api.prevent_close(); }
+                if SHUTDOWN_STARTED.load(Ordering::Acquire) { return; }
+                let (request_id, started) = match window.state::<ApplicationCloseGate>().native_request() {
+                    CloseDecision::AwaitDrafts { request, created } => {
+                        if created {
+                            eprintln!("[NOVA_LIFECYCLE] stage=close_native_request request_id={} elapsed_ms=0", request.request_id);
+                            let app = window.app_handle().clone();
+                            let _ = app.emit_to("main", "nova-close-requested", request);
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(CLOSE_DRAFT_ACK_TIMEOUT).await;
+                                if let Some(elapsed) = app.state::<ApplicationCloseGate>().cancel_pending(request.request_id) {
+                                    let message = "关闭请求未完成，窗口保持打开。请重试关闭。";
+                                    let _ = app.emit_to("main", "nova-close-cancelled", serde_json::json!({ "message": message }));
+                                    if let Some(window) = app.get_webview_window("main") { let _ = window.set_title("Litematica-Nova — 关闭未完成，请重试"); }
+                                    eprintln!("[NOVA_LIFECYCLE] stage=close_draft_ack_timeout request_id={} elapsed_ms={}", request.request_id, elapsed.as_millis());
+                                }
+                            });
+                        }
+                        return;
+                    }
+                    CloseDecision::Approved { request_id, started } => (request_id, started),
+                };
                 let supervisor = window
                     .try_state::<Arc<platform::process_supervisor::ProcessSupervisor>>()
                     .map(|state| Arc::clone(state.inner()));
-                if let Some(supervisor) = supervisor.as_ref() {
-                    supervisor.stop_admitting();
-                }
+                let render_service = window.try_state::<RenderServiceClient>().map(|state| state.inner().clone());
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                 }
                 if SHUTDOWN_STARTED.swap(true, Ordering::AcqRel) { return; }
                 let app = window.app_handle().clone();
                 let quick = window.try_state::<QuickPreviewHost>().map(|host| host.inner().clone());
-                let _ = window.set_title("Litematica-Nova — 正在结束后台任务…");
+                let operations = window.try_state::<ApplicationOperations>().map(|host| host.inner().clone());
+                // Parent-native child visibility follows this immediately.
+                // Do not run disk/network/process waits on the UI callback.
+                for (_, window) in app.webview_windows() { let _ = window.hide(); }
+                eprintln!("[NOVA_LIFECYCLE] stage=close_window_response request_id={request_id} elapsed_ms={}", started.elapsed().as_millis());
                 tauri::async_runtime::spawn_blocking(move || {
-                    let started = std::time::Instant::now();
-                    if let Some(quick) = quick {
-                        if let Ok(Some(view)) = quick.snapshot() { let _ = quick.close(&view.preview_id); }
+                    if let Some(update) = app.try_state::<UpdateHost>() { update.cancel_for_shutdown(); }
+                    online_sources::cancel_for_shutdown();
+                    assets::cancel_for_shutdown();
+                    let reads = operations.as_ref().map(ApplicationOperations::begin_shutdown).unwrap_or_default();
+                    if let Some(supervisor) = supervisor.as_ref() { supervisor.terminate_many(&reads, 0); }
+                    let writes = std::time::Instant::now();
+                    if operations.as_ref().is_some_and(|operations| !operations.wait_for_writes(Duration::from_secs(8))) {
+                        // A stalled persistent write is not safe to force-kill.
+                        // Cancel closing, restore a usable window and let the
+                        // user retry after the existing save finishes.
+                        operations.as_ref().unwrap().cancel_shutdown();
+                        if let Some(update) = app.try_state::<UpdateHost>() { update.resume_after_cancelled_shutdown(); }
+                        online_sources::resume_after_cancelled_shutdown();
+                        assets::resume_after_cancelled_shutdown();
+                        SHUTDOWN_STARTED.store(false, Ordering::Release);
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.set_title("Litematica-Nova — 保存仍在进行，请完成后再次关闭");
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                        let _ = app.emit_to("main", "nova-close-cancelled", serde_json::json!({ "message": "保存仍在进行，请完成后再次关闭。" }));
+                        eprintln!("[NOVA_LIFECYCLE] stage=close_deferred_save request_id={request_id} elapsed_ms={}", started.elapsed().as_millis());
+                        return;
                     }
+                    eprintln!("[NOVA_LIFECYCLE] stage=close_writes_drained request_id={request_id} elapsed_ms={} total_ms={}", writes.elapsed().as_millis(), started.elapsed().as_millis());
+                    if let Some(supervisor) = supervisor.as_ref() { supervisor.stop_admitting(); }
+                    // Both graceful intents are non-waiting; all children
+                    // share one deadline instead of close(wait)+shutdown(wait).
+                    if let Some(service) = render_service { service.request_shutdown(); }
+                    if let Some(quick) = quick { let _ = quick.request_shutdown(); }
                     if let Some(supervisor) = supervisor {
-                        let report = supervisor.shutdown(Duration::from_secs(3), Duration::from_secs(2));
-                        eprintln!("[NOVA_LIFECYCLE] stage=child_shutdown elapsed_ms={} pending={}", started.elapsed().as_millis(), report.remaining.len());
+                        let report = supervisor.shutdown(Duration::from_millis(500), Duration::from_millis(1500));
+                        eprintln!("[NOVA_LIFECYCLE] stage=close_children_reaped request_id={request_id} total_ms={} child_ms={} graceful_ms={} forced_ms={} pending={}", started.elapsed().as_millis(), report.elapsed_ms, report.graceful_wait_ms, report.forced_wait_ms, report.remaining.len());
                     }
+                    eprintln!("[NOVA_LIFECYCLE] stage=application_exit_requested request_id={request_id} elapsed_ms={}", started.elapsed().as_millis());
                     app.exit(0);
                 });
             }
         })
         .invoke_handler(tauri::generate_handler![
+            application_export_logs_zip,
+            assets::ensure_builtin_block_icons_extracted,
+            assets::ensure_builtin_item_icons_extracted,
+            assets::delete_user_config_file,
+            assets::pick_litematic_file,
+            assets::download_vault_block_icons,
+            assets::download_vault_item_icons,
+            assets::download_minecraft_wiki_enum_catalogs,
+            assets::read_game_resource_remote_text,
+            wiki_block_icons::download_minecraft_wiki_block_icons,
+            open_enumerator_window,
+            open_asset_manager_window,
+            application_get_close_request,
+            application_confirm_close,
+            application_request_close,
             shell_integration::application_take_open_files,
             online_sources::application_online_search,
             online_sources::application_online_detail,
@@ -2383,6 +3260,8 @@ fn main() {
             application_read_project_markers,
             application_edit_project_origin,
             application_replace_blocks,
+            application_convert_project_version,
+            application_query_block_database,
             application_get_project_stats,
             application_export_material_list,
             application_prepare_material_recipes,
@@ -2393,10 +3272,12 @@ fn main() {
             render_preview_image,
             generate_preview_image,
             application_quick_preview_start,
+            application_quick_preview_resource_decision,
             application_quick_preview_snapshot,
             application_quick_preview_present,
             application_quick_preview_close,
             application_render_preflight,
+            application_render_launch_plan,
             application_render_use_basic_vulkan,
             application_render_start,
             application_render_discard_preflight,

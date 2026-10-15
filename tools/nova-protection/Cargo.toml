@@ -1,0 +1,36 @@
+[package]
+name = "nova-protection"
+version = "0.2.0"
+edition = "2024"
+license = "MPL-2.0"
+
+[workspace]
+
+[features]
+default = ["client"]
+client = ["dep:reqwest", "dep:fs2"]
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+hex = "0.4"
+hpke = { version = "=0.13.0", default-features = false, features = ["alloc", "x25519"] }
+rand = "0.9"
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets", "zeroize"] }
+ring = "=0.17.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroize = { version = "1", features = ["derive"] }
+fs2 = { version = "0.4", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_System_Memory", "Win32_System_Threading", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+debug = 0

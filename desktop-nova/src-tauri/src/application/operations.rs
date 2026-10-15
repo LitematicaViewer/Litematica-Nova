@@ -6,7 +6,7 @@
 //! [`ProcessSupervisor`].
 
 use crate::platform::process_supervisor::{
-    ExecutableRole, LaunchIdentity, LaunchSpec, LaunchToken, OutputTarget, ProcessSupervisor,
+    ChildLease, ExecutableRole, LaunchIdentity, LaunchSpec, LaunchToken, OutputTarget, ProcessSupervisor,
     WaitOutcome,
 };
 use base64::Engine;
@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 const CORE_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -31,6 +31,34 @@ pub(crate) struct ApplicationOperations {
     backend_dir: PathBuf,
     next_generation: Arc<AtomicU64>,
     analysis_cache: Arc<Mutex<BTreeMap<AnalysisKey, Arc<OnceLock<Result<Value, String>>>>>>,
+    layer_cache: Arc<Mutex<BTreeMap<AnalysisKey, Arc<OnceLock<Result<Arc<LayerCatalog>, String>>>>>>,
+    lifecycle: Arc<(Mutex<OperationLifecycle>, Condvar)>,
+}
+
+#[derive(Default)]
+struct OperationLifecycle {
+    closing: bool,
+    writes: usize,
+    reads: BTreeMap<u64, ChildLease>,
+    core_launches: BTreeMap<String, u64>,
+}
+
+pub(crate) struct ApplicationWriteGuard(Arc<(Mutex<OperationLifecycle>, Condvar)>);
+impl Drop for ApplicationWriteGuard {
+    fn drop(&mut self) {
+        let (state, changed) = &*self.0;
+        let mut state = state.lock().unwrap();
+        state.writes = state.writes.saturating_sub(1);
+        changed.notify_all();
+    }
+}
+
+struct CoreReadGuard {
+    lifecycle: Arc<(Mutex<OperationLifecycle>, Condvar)>,
+    generation: u64,
+}
+impl Drop for CoreReadGuard {
+    fn drop(&mut self) { self.lifecycle.0.lock().unwrap().reads.remove(&self.generation); }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -42,12 +70,23 @@ struct AnalysisKey {
 }
 
 impl AnalysisKey {
-    fn new(source: &Path, args: Vec<String>) -> Result<Self, String> {
+    fn new(source: &Path, mut args: Vec<String>) -> Result<Self, String> {
         let source = fs::canonicalize(source).map_err(|error| format!("Resolve statistics source: {error}"))?;
         let metadata = fs::metadata(&source).map_err(|error| format!("Inspect statistics source: {error}"))?;
         if !metadata.is_file() { return Err("Statistics source must be a file".into()); }
         let modified = metadata.modified().map_err(|error| format!("Read statistics source revision: {error}"))?;
+        // The source in the argument list must share the same identity too;
+        // otherwise drive case/long-path aliases defeat the single-flight key.
+        if let Some(index) = args.iter().position(|arg| arg == "--input") {
+            if let Some(arg) = args.get_mut(index + 1) { *arg = path_text(&source); }
+        }
         Ok(Self { source, bytes: metadata.len(), modified, args })
+    }
+
+    fn revision(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let stamp = format!("{:?}\0{}\0{:?}\0{:?}", self.source, self.bytes, self.modified, self.args);
+        format!("{:x}", Sha256::digest(stamp.as_bytes()))
     }
 }
 
@@ -89,14 +128,39 @@ pub(crate) struct EditProjectOriginInput {
     pub(crate) output_path: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ConvertProjectVersionInput {
+    pub(crate) source_path: String,
+    pub(crate) target_version: String,
+    #[serde(default)]
+    pub(crate) replacements: BTreeMap<String, String>,
+    pub(crate) expected_source_sha256: Option<String>,
+    pub(crate) output_path: Option<String>,
+    #[serde(default)]
+    pub(crate) overwrite: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct BlockDatabaseQueryInput {
+    pub(crate) version: Option<String>,
+    #[serde(default)]
+    pub(crate) query: String,
+    pub(crate) state: Option<String>,
+    pub(crate) states: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct LayerPaletteEntry {
     pub(crate) block_id: String,
     pub(crate) property_id: usize,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct LayerSliceMeta {
+    #[serde(default)]
+    pub(crate) minecraft_data_version: Option<i32>,
     pub(crate) chunk_size: u32,
     pub(crate) size_x: i32,
     pub(crate) size_y: i32,
@@ -105,17 +169,35 @@ pub(crate) struct LayerSliceMeta {
     pub(crate) property_pool: Vec<BTreeMap<String, String>>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct LayerSliceBlock {
     pub(crate) x: i32,
     pub(crate) z: i32,
     pub(crate) palette_id: usize,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct LayerSliceData {
     pub(crate) y: i32,
     pub(crate) blocks: Vec<LayerSliceBlock>,
+}
+
+struct LayerCatalog {
+    meta: LayerSliceMeta,
+    layers: BTreeMap<i32, LayerSliceData>,
+}
+
+impl LayerCatalog {
+    fn decode(mut result: Value) -> Result<Self, String> {
+        let minecraft_data_version = result.pointer("/metadata/minecraft_data_version")
+            .and_then(Value::as_i64).filter(|value| *value > 0).and_then(|value| i32::try_from(value).ok());
+        let mut visual = result.get_mut("visual").map(Value::take).ok_or("分层数据缺少目录")?;
+        let layers = visual.as_object_mut().ok_or("分层目录格式错误")?.remove("layers").ok_or("分层数据缺少层列表")?;
+        let mut meta: LayerSliceMeta = decode_product(visual)?;
+        meta.minecraft_data_version = minecraft_data_version;
+        let layers: Vec<LayerSliceData> = decode_product(layers)?;
+        Ok(Self { meta, layers: layers.into_iter().map(|layer| (layer.y, layer)).collect() })
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -160,7 +242,12 @@ pub(crate) struct ProjectMutationResult {
 pub(crate) struct ReplaceBlocksInput {
     pub(crate) source_path: String,
     pub(crate) output_path: Option<String>,
+    #[serde(default)]
     pub(crate) rules: Vec<Value>,
+    #[serde(default)]
+    pub(crate) units: Option<Vec<Value>>,
+    #[serde(default)]
+    pub(crate) stages: Option<Vec<Vec<Value>>>,
     pub(crate) dry_run: bool,
 }
 
@@ -176,6 +263,8 @@ pub(crate) struct ReplaceBlocksResult {
 pub(crate) struct ProjectStatsInput {
     pub(crate) source_path: String,
     pub(crate) include_container_items: bool,
+    #[serde(default)]
+    pub(crate) known_revision: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -205,7 +294,20 @@ pub(crate) struct ProjectMaterialsInput {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MaterialExportFormat { Svg, Txt, Html, Csv }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct MaterialWebExportOptions {
+    pub(crate) mode: String,
+    pub(crate) access_password: Option<String>,
+    pub(crate) admin_password: Option<String>,
+    pub(crate) whitelist: Vec<String>,
+    pub(crate) whitelist_enabled: bool,
+    pub(crate) allow_guest_readonly: bool,
+    pub(crate) admin_page_enabled: bool,
+    pub(crate) targets: Vec<String>,
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ExportMaterialListInput {
     pub(crate) source_path: String,
@@ -215,6 +317,8 @@ pub(crate) struct ExportMaterialListInput {
     pub(crate) minecraft_version: String,
     pub(crate) terminal_raw_materials: bool,
     pub(crate) format: MaterialExportFormat,
+    #[serde(default)]
+    pub(crate) web_options: Option<MaterialWebExportOptions>,
     pub(crate) output_path: String,
 }
 
@@ -325,8 +429,45 @@ impl ApplicationOperations {
             backend_dir,
             next_generation: Arc::new(AtomicU64::new(1)),
             analysis_cache: Arc::new(Mutex::new(BTreeMap::new())),
+            layer_cache: Arc::new(Mutex::new(BTreeMap::new())),
+            lifecycle: Arc::new((Mutex::new(OperationLifecycle::default()), Condvar::new())),
         })
     }
+
+    /// Covers actual persistent writes (including small Host-side config
+    /// saves), not ordinary reads or discarded temporary request files.
+    pub(crate) fn begin_write(&self) -> Result<ApplicationWriteGuard, String> {
+        let mut state = self.lifecycle.0.lock().map_err(|_| "任务状态锁异常")?;
+        if state.closing { return Err("应用正在关闭，新的保存尚未开始".into()); }
+        state.writes += 1;
+        Ok(ApplicationWriteGuard(Arc::clone(&self.lifecycle)))
+    }
+
+    pub(crate) fn begin_shutdown(&self) -> Vec<ChildLease> {
+        let mut state = self.lifecycle.0.lock().unwrap();
+        state.closing = true;
+        eprintln!("[NOVA_LIFECYCLE] stage=core_activity_at_close core_calls={} active_reads={} pending_writes={}", json!(state.core_launches), state.reads.len(), state.writes);
+        state.reads.values().cloned().collect()
+    }
+
+    pub(crate) fn lifecycle_snapshot(&self) -> Value {
+        let state = self.lifecycle.0.lock().unwrap();
+        json!({"coreCalls":state.core_launches,"activeReads":state.reads.len(),"pendingWrites":state.writes,"closing":state.closing})
+    }
+
+    pub(crate) fn wait_for_writes(&self, timeout: Duration) -> bool {
+        let (state, changed) = &*self.lifecycle;
+        let deadline = Instant::now() + timeout;
+        let mut state = state.lock().unwrap();
+        while state.writes > 0 {
+            let now = Instant::now();
+            if now >= deadline { return false; }
+            state = changed.wait_timeout(state, deadline.saturating_duration_since(now)).unwrap().0;
+        }
+        true
+    }
+
+    pub(crate) fn cancel_shutdown(&self) { self.lifecycle.0.lock().unwrap().closing = false; }
 
     pub(crate) fn inspect_project(&self, input: InspectProjectInput) -> Result<Value, String> {
         let source = self.resolve_path(&input.source_path);
@@ -335,13 +476,41 @@ impl ApplicationOperations {
 
     pub(crate) fn read_layer_meta(&self, input: InspectProjectInput) -> Result<LayerSliceMeta, String> {
         let source = self.resolve_path(&input.source_path);
-        let result = self.run_core_json(vec!["visual-meta".to_owned(), path_text(&source)])?;
-        decode_product(result.get("visual").cloned().unwrap_or(Value::Null))
+        Ok(self.cached_layers(&source)?.meta.clone())
     }
 
     pub(crate) fn read_layer(&self, input: ReadLayerInput) -> Result<LayerSliceData, String> {
         let source = self.resolve_path(&input.source_path);
-        decode_product(self.run_core_json(layer_args(&source, input.y)?)?)
+        if input.y < 0 { return Err("分层高度不能为负数".into()); }
+        Ok(self.cached_layers(&source)?.layers.get(&input.y).cloned()
+            .unwrap_or(LayerSliceData { y: input.y, blocks: Vec::new() }))
+    }
+
+    fn cached_layers(&self, source: &Path) -> Result<Arc<LayerCatalog>, String> {
+        let mut key = AnalysisKey::new(source, vec!["visual-layers-all".into()])?;
+        key.args.push(path_text(&key.source));
+        let slot = {
+            let mut cache = self.layer_cache.lock().map_err(|_| "分层缓存锁异常")?;
+            // Keep one completed source catalog, and never evict an in-flight
+            // leader. Only the requested layer is copied back through IPC.
+            cache.retain(|old, slot| old == &key || slot.get().is_none());
+            Arc::clone(cache.entry(key.clone()).or_insert_with(|| Arc::new(OnceLock::new())))
+        };
+        let result = slot.get_or_init(|| {
+            let started = Instant::now();
+            let value = self.run_core_json(key.args.clone())?;
+            let current = AnalysisKey::new(source, key.args.clone())?;
+            if current != key { return Err("投影已改变，请重新读取分层".into()); }
+            let catalog = LayerCatalog::decode(value)?;
+            eprintln!("[NOVA_LAYER_TIMING] stage=source_catalog elapsed_ms={} layers={} blocks={} source_reads=1", started.elapsed().as_millis(), catalog.layers.len(), catalog.layers.values().map(|layer| layer.blocks.len()).sum::<usize>());
+            Ok(Arc::new(catalog))
+        }).clone();
+        if result.is_err() {
+            if let Ok(mut cache) = self.layer_cache.lock() {
+                if cache.get(&key).is_some_and(|current| Arc::ptr_eq(current, &slot)) { cache.remove(&key); }
+            }
+        }
+        result
     }
 
     pub(crate) fn read_layer_container(
@@ -401,12 +570,51 @@ impl ApplicationOperations {
         })
     }
 
+    pub(crate) fn convert_project_version(&self, input: ConvertProjectVersionInput) -> Result<Value, String> {
+        let source = self.resolve_path(&input.source_path);
+        let output = input.output_path.as_deref().map(|path| self.resolve_path(path));
+        if output.is_some() && input.expected_source_sha256.is_none() {
+            return Err("另存前须确认转换差异".into());
+        }
+        let (generation, prefix) = self.next_operation("version-convert");
+        let mut files = OperationFiles::new();
+        let request_path = files.track(self.operation_path(&prefix, "request.json"));
+        write_json(&request_path, &json!({ "targetVersion": input.target_version, "replacements": input.replacements,
+            "expectedSourceSha256": input.expected_source_sha256, "overwrite": input.overwrite }))?;
+        let mut args = vec!["version-convert".into(), "--input".into(), path_text(&source), "--request".into(), path_text(&request_path)];
+        if let Some(output) = output { args.extend(["--output".into(), path_text(&output)]); }
+        let result = self.run_core(generation, &prefix, args, &mut files)?;
+        serde_json::from_str(result.stdout.trim()).map_err(|error| format!("解析版本转换结果：{error}"))
+    }
+
+    pub(crate) fn query_block_database(&self, input: BlockDatabaseQueryInput) -> Result<Value, String> {
+        let (generation, prefix) = self.next_operation("block-database");
+        let mut files=OperationFiles::new();
+        let mut args=vec!["block-db".into()];
+        if let Some(version)=input.version { args.extend(["--version".into(),version]); } else { args.push("--versions".into()); }
+        if !input.query.is_empty() { args.extend(["--query".into(),input.query]); }
+        if let Some(state)=input.state { args.extend(["--state".into(),state]); }
+        if let Some(states)=input.states {
+            let path=files.track(self.operation_path(&prefix,"states.json"));
+            write_json(&path,&serde_json::json!(states))?;
+            args.extend(["--states-json".into(),path_text(&path)]);
+        }
+        let result=self.run_core(generation,&prefix,args,&mut files)?;
+        serde_json::from_str(result.stdout.trim()).map_err(|error|format!("读取方块数据库结果：{error}"))
+    }
+
     pub(crate) fn replace_blocks(
         &self,
         input: ReplaceBlocksInput,
     ) -> Result<ReplaceBlocksResult, String> {
-        if input.rules.is_empty() {
+        if input.rules.is_empty() && input.units.as_ref().is_none_or(Vec::is_empty) && input.stages.as_ref().is_none_or(Vec::is_empty) {
             return Err("At least one replacement rule is required".to_owned());
+        }
+        if [!input.rules.is_empty(), input.units.is_some(), input.stages.is_some()].into_iter().filter(|value| *value).count() != 1 {
+            return Err("请选择单一替换规则格式".into());
+        }
+        if input.stages.as_ref().is_some_and(|stages| stages.iter().any(Vec::is_empty)) {
+            return Err("串行分组不能包含空步骤".into());
         }
         if input.dry_run && input.output_path.is_some() {
             return Err("A dry-run replacement may not specify an output path".to_owned());
@@ -422,7 +630,10 @@ impl ApplicationOperations {
         let (generation, prefix) = self.next_operation("replace");
         let mut files = OperationFiles::new();
         let rules_path = files.track(self.operation_path(&prefix, "rules.json"));
-        write_json(&rules_path, &json!({ "rules": input.rules }))?;
+        let document = if let Some(stages) = input.stages { json!({ "schema_version": 2, "stages": stages }) }
+            else if let Some(units) = input.units { json!({ "schema_version": 2, "units": units }) }
+            else { json!({ "rules": input.rules }) };
+        write_json(&rules_path, &document)?;
         let args = replacement_args(&source, &rules_path, output.as_deref(), input.dry_run);
         let result = self.run_core(generation, &prefix, args, &mut files)?;
         Ok(ReplaceBlocksResult {
@@ -433,7 +644,22 @@ impl ApplicationOperations {
 
     pub(crate) fn project_stats(&self, input: ProjectStatsInput) -> Result<Value, String> {
         let source = self.resolve_path(&input.source_path);
-        self.cached_analysis(&source, stats_args(&source, input.include_container_items))
+        let args = stats_args(&source, input.include_container_items);
+        let key = AnalysisKey::new(&source, args.clone())?;
+        let revision = key.revision();
+        // A re-mounted page revalidates the file, not an unbounded frontend
+        // filename cache. Once unchanged, don't clone/encode/transfer the
+        // complete region/layer material breakdown again.
+        if input.known_revision.as_deref() == Some(revision.as_str()) {
+            if self.analysis_cache.lock().map_err(|_| "Statistics cache lock failed")?
+                .get(&key).and_then(|slot| slot.get()).is_some_and(Result::is_ok) {
+                return Ok(json!({ "source_revision": revision, "cache_unchanged": true }));
+            }
+        }
+        let mut analysis = self.cached_analysis(&source, args)?;
+        strip_material_scope_cache(&mut analysis);
+        if let Some(analysis) = analysis.as_object_mut() { analysis.insert("source_revision".into(), revision.into()); }
+        Ok(analysis)
     }
 
     pub(crate) fn project_materials(&self, input: ProjectMaterialsInput) -> Result<Value, String> {
@@ -464,6 +690,7 @@ impl ApplicationOperations {
             "source_path": path_text(&source), "stats": snapshot,
             "multiplier": input.multiplier, "minecraft_version": input.minecraft_version,
             "terminal_raw_materials": input.terminal_raw_materials, "format": input.format,
+            "web_options": input.web_options,
         }))?;
         let result = self.run_core(generation, &prefix, vec!["materials-export".into(), path_text(&request_path), "--output".into(), path_text(&output)], &mut files)?;
         parse_core_json(&result.stdout)
@@ -471,16 +698,14 @@ impl ApplicationOperations {
 
     pub(crate) fn prepare_material_recipes(&self, input: MaterialRecipeCacheInput) -> Result<Value, String> {
         if input.minecraft_version != "26.3" { return Err("当前材料语义需要 Minecraft 26.3 配方".into()); }
-        self.run_core_json(vec!["stockpile".into(), "recipe-fetch".into(), "--minecraft-version".into(), input.minecraft_version, "--json".into()])
+        self.run_core_json(material_recipe_fetch_args(input.minecraft_version))
     }
 
     fn material_snapshot(&self, source: &Path, scope: &MaterialScope, include_container_items: bool) -> Result<Value, String> {
-        // `stats` already contains the entire projection's material list. All-
-        // scope export and child windows reuse it rather than another analysis.
-        let args = if scope.kind == MaterialScopeKind::All {
-            stats_args(source, include_container_items)
-        } else { materials_args(source, scope, include_container_items)? };
-        self.cached_analysis(source, args)
+        // Revalidate the same all-scope snapshot for every selection/export.
+        // Joint block/container channels were collected in the original pass;
+        // changing a scope must not reopen/decompress/parse the projection.
+        material_snapshot_for_scope(self.cached_analysis(source, stats_args(source, include_container_items))?, scope)
     }
 
     fn cached_analysis(&self, source: &Path, args: Vec<String>) -> Result<Value, String> {
@@ -565,9 +790,9 @@ impl ApplicationOperations {
     }
 
     pub(crate) fn runtime_health(&self) -> RuntimeHealth {
-        let viewer_available = cfg!(windows) && self
+        let viewer_available = self
             .backend_dir
-            .join(format!("litematica_native_viewer{}", std::env::consts::EXE_SUFFIX))
+            .join("litematica_native_viewer.exe")
             .is_file();
         let core = match self.run_core_text(vec!["--help".to_owned()]) {
             Ok(help) if !help.trim().is_empty() => RuntimeComponentHealth {
@@ -701,8 +926,17 @@ impl ApplicationOperations {
         args: Vec<String>,
         files: &mut OperationFiles,
     ) -> Result<CoreOutput, String> {
+        let command = args.first().cloned().unwrap_or_default();
+        let writing = core_command_writes(&args);
+        let _write = if writing { Some(self.begin_write()?) } else { None };
         let stdout_path = files.track(self.operation_path(prefix, "stdout.log"));
-        let stderr_path = files.track(self.operation_path(prefix, "stderr.log"));
+        // stdout is the Core business response, not a diagnostic archive. Its
+        // existing temporary lifetime stays unchanged; stderr survives crashes.
+        let stderr_path = if super::diagnostics::has_session() {
+            super::diagnostics::log_path("core", &format!("{prefix}-stderr.log"), self.operation_path(prefix, "stderr.log").parent().unwrap())?
+        } else {
+            files.track(self.operation_path(prefix, "stderr.log"))
+        };
         let identity = LaunchIdentity {
             owner_epoch: self.supervisor.owner_epoch(),
             generation,
@@ -724,11 +958,19 @@ impl ApplicationOperations {
             path: stderr_path.clone(),
             append: false,
         };
-        let child = self
-            .supervisor
-            .spawn(launch)
-            .map_err(|error| format!("start core operation: {error}"))?
-            .child;
+        let spawn_started = Instant::now();
+        let child = {
+            let mut state = self.lifecycle.0.lock().map_err(|_| "任务状态锁异常")?;
+            if state.closing && !writing { return Err("读取已取消，应用正在关闭".into()); }
+            let child = self.supervisor.spawn(launch)
+                .map_err(|error| format!("start core operation: {error}"))?.child;
+            if !writing { state.reads.insert(generation, child.clone()); }
+              *state.core_launches.entry(command.clone()).or_default() += 1;
+            child
+        };
+        let spawn_ms = spawn_started.elapsed().as_secs_f64() * 1000.0;
+        let _read = CoreReadGuard { lifecycle: Arc::clone(&self.lifecycle), generation };
+        let wait_started = Instant::now();
         let exit = match self
             .supervisor
             .wait_for_exit(&child, CORE_OPERATION_TIMEOUT)
@@ -743,10 +985,13 @@ impl ApplicationOperations {
                 return Err("Core operation lost its supervised process lease".to_owned())
             }
         };
+        let wait_ms = wait_started.elapsed().as_secs_f64() * 1000.0;
+        let transport_started = Instant::now();
         let stdout = read_output(&stdout_path)?;
         let stderr = read_output(&stderr_path)?;
         if std::env::var_os("NOVA_STATS_TIMING").is_some() {
             eprint!("{stderr}");
+            eprintln!("[NOVA_STATS_TIMING] host_process_spawn_ms={spawn_ms:.3} host_child_wait_ms={wait_ms:.3} host_output_transport_ms={:.3}", transport_started.elapsed().as_secs_f64() * 1000.0);
         }
         if exit.wait_error.is_some() {
             return Err(format!(
@@ -843,6 +1088,104 @@ fn decode_product<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Str
     serde_json::from_value(value).map_err(|error| format!("Core operation returned invalid product data: {error}"))
 }
 
+fn strip_material_scope_cache(snapshot: &mut Value) {
+    for field in ["material_items", "non_item_blocks", "structural_block_counts"] {
+        if let Some(rows) = snapshot.get_mut(field).and_then(Value::as_array_mut) {
+            for row in rows { if let Some(row) = row.as_object_mut() { row.remove("scope_counts"); } }
+        }
+    }
+    if let Some(scan) = snapshot.get_mut("container_scan").and_then(Value::as_object_mut) { scan.remove("scope_entries"); }
+}
+
+fn material_snapshot_for_scope(mut snapshot: Value, scope: &MaterialScope) -> Result<Value, String> {
+    if scope.kind == MaterialScopeKind::All { strip_material_scope_cache(&mut snapshot); return Ok(snapshot); }
+    // Whole-structure derivation is not a material-scope result. Never retain
+    // global ratios on a selected-region/layer DTO. Scoped Core omits it too.
+    snapshot.as_object_mut().ok_or("统计快照格式异常")?.remove("derived");
+    let value = scope.value.as_deref().filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "请选择有效统计范围".to_owned())?;
+    let selected_layer = if scope.kind == MaterialScopeKind::Layer {
+        Some(value.parse::<i32>().map_err(|_| "层数必须是整数".to_owned())?)
+    } else { None };
+    let summaries = snapshot[if selected_layer.is_some() { "layers_summary" } else { "regions" }]
+        .as_array().ok_or_else(|| "统计快照缺少范围信息".to_owned())?;
+    let summary = summaries.iter().find(|row| if let Some(layer) = selected_layer {
+        row["layer"].as_i64() == Some(i64::from(layer))
+    } else { row["name"].as_str() == Some(value) }).cloned().ok_or_else(|| "统计范围已不存在，请重新选择".to_owned())?;
+    let layer_y = snapshot["layers_summary"].as_array().unwrap().iter()
+        .filter_map(|row| Some((row["layer"].as_i64()?, row["world_y"].as_i64()?))).collect::<BTreeMap<_, _>>();
+    let min_world_y = layer_y.get(&0).copied().unwrap_or(0);
+    let matches = |row: &Value| if let Some(layer) = selected_layer {
+        row["layer"].as_i64() == Some(i64::from(layer))
+    } else { row["region"].as_str() == Some(value) };
+    let source_rows = snapshot["material_items"].as_array().ok_or_else(|| "统计快照缺少材料".to_owned())?;
+    let mut materials = Vec::new();
+    for source in source_rows {
+        let joints = source["scope_counts"].as_array().ok_or_else(|| "统计核心未返回分范围数据，请更新统计核心".to_owned())?;
+        let (mut blocks, mut containers, mut custom) = (0_u64, 0_u64, false);
+        let mut regions = BTreeMap::<String, u64>::new();
+        let mut layers = BTreeMap::<i64, u64>::new();
+        for joint in joints.iter().filter(|row| matches(row)) {
+            let block = joint["block_count"].as_u64().unwrap_or(0);
+            let container = joint["container_item_count"].as_u64().unwrap_or(0);
+            blocks += block; containers += container; custom |= joint["has_custom_stack_size"].as_bool().unwrap_or(false);
+            *regions.entry(joint["region"].as_str().unwrap_or("").to_owned()).or_default() += block + container;
+            if let Some(layer) = joint["layer"].as_i64() { *layers.entry(layer).or_default() += block + container; }
+        }
+        if blocks + containers == 0 { continue; }
+        let mut row = source.clone();
+        row.as_object_mut().unwrap().remove("scope_counts");
+        row["block_count"] = blocks.into(); row["container_item_count"] = containers.into();
+        row["count"] = (blocks + containers).into(); row["total_count"] = (blocks + containers).into();
+        row["has_custom_stack_size"] = custom.into();
+        row["region_counts"] = Value::Array(regions.into_iter().map(|(region, count)| json!({"region":region,"count":count})).collect());
+        row["layer_counts"] = Value::Array(layers.into_iter().map(|(layer, count)| json!({"layer":layer,"world_y":min_world_y+layer,"count":count})).collect());
+        materials.push(row);
+    }
+    materials.sort_by(|left, right| right["total_count"].as_u64().cmp(&left["total_count"].as_u64())
+        .then_with(|| left["block_id"].as_str().cmp(&right["block_id"].as_str())));
+    snapshot["material_items"] = Value::Array(materials);
+    let mut non_items = Vec::new();
+    for source in snapshot["non_item_blocks"].as_array().ok_or_else(|| "统计快照缺少结构说明".to_owned())? {
+        let count = source["scope_counts"].as_array().ok_or_else(|| "统计核心未返回分范围结构说明".to_owned())?
+            .iter().filter(|row| matches(row)).map(|row| row["count"].as_u64().unwrap_or(0)).sum::<u64>();
+        if count == 0 { continue; }
+        let mut row = source.clone(); row.as_object_mut().unwrap().remove("scope_counts"); row["count"] = count.into(); non_items.push(row);
+    }
+    snapshot["non_item_blocks"] = Value::Array(non_items);
+    let mut structural = Vec::new();
+    for source in snapshot["structural_block_counts"].as_array().ok_or_else(|| "统计快照缺少原结构分布，请刷新统计核心".to_owned())? {
+        let count = source["scope_counts"].as_array().ok_or_else(|| "统计核心未返回原结构范围数据".to_owned())?
+            .iter().filter(|row| matches(row)).map(|row| row["count"].as_u64().unwrap_or(0)).sum::<u64>();
+        if count == 0 { continue; }
+        let mut row = source.clone(); row.as_object_mut().unwrap().remove("scope_counts"); row["count"] = count.into(); structural.push(row);
+    }
+    snapshot["structural_block_counts"] = Value::Array(structural);
+    if snapshot["container_scan"]["enabled"].as_bool() == Some(true) {
+        let entries = snapshot["container_scan"]["scope_entries"].as_array().ok_or_else(|| "统计核心未返回分范围容器信息".to_owned())?;
+        let (mut containers, mut stacks) = (0_u64, 0_u64); let mut warnings = Vec::new();
+        for entry in entries {
+            if matches(entry) {
+                containers += entry["containers_scanned"].as_u64().unwrap_or(0);
+                stacks += entry["item_stacks_scanned"].as_u64().unwrap_or(0);
+                warnings.extend(entry["warnings"].as_array().into_iter().flatten().cloned());
+            } else if selected_layer.is_some() && entry["layer"].is_null() {
+                if let Some(warning) = entry["missing_layer_warning"].as_str() { warnings.push(warning.into()); }
+            }
+        }
+        snapshot["container_scan"]["containers_scanned"] = containers.into();
+        snapshot["container_scan"]["item_stacks_scanned"] = stacks.into();
+        snapshot["container_scan"]["warnings"] = Value::Array(warnings);
+    }
+    snapshot["structure_stats"]["scope"] = if let Some(layer) = selected_layer {
+        json!({"kind":"layer","layer":layer,"world_y":summary["world_y"]})
+    } else { json!({"kind":"region","region":value}) };
+    snapshot["structure_stats"]["total_non_air_blocks"] = summary["total_non_air_blocks"].clone();
+    snapshot["structure_stats"]["unique_block_types"] = summary["unique_block_types"].clone();
+    strip_material_scope_cache(&mut snapshot);
+    Ok(snapshot)
+}
+
 fn stats_args(source: &Path, include_container_items: bool) -> Vec<String> {
     let mut args = vec![
         "stats".to_owned(),
@@ -854,6 +1197,18 @@ fn stats_args(source: &Path, include_container_items: bool) -> Vec<String> {
         args.push("--include-container-items".to_owned());
     }
     args
+}
+
+fn core_command_writes(args: &[String]) -> bool {
+    let command = args.first().map(String::as_str).unwrap_or("");
+    match command {
+        "edit-metadata" | "set-origin" | "remove-origin" | "materials-export" => true,
+        "version-convert" => args.iter().any(|arg| arg == "--output" || arg == "--overwrite"),
+        "replace-blocks" | "generate" | "generate-projection" => !args.iter().any(|arg| arg == "--dry-run"),
+        // Recipe downloads/extraction only write validated replaceable caches;
+        // they can be cancelled without interrupting a user projection save.
+        _ => false,
+    }
 }
 
 fn materials_args(
@@ -990,19 +1345,159 @@ fn validate_png_dimensions(bytes: &[u8], width: u32, height: u32) -> Result<(), 
     Ok(())
 }
 
+fn material_recipe_fetch_args(version: String) -> Vec<String> {
+    // Stockpile recipe commands always emit JSON; their parser does not accept --json.
+    vec!["stockpile".into(), "recipe-fetch".into(), "--minecraft-version".into(), version]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn layer_catalog_keeps_source_version_palette_properties_and_only_requested_slice() {
+        let catalog = LayerCatalog::decode(json!({
+            "metadata":{"minecraft_data_version":3953},
+            "visual":{"chunk_size":16,"size_x":3,"size_y":2,"size_z":4,
+                "palette":[{"block_id":"minecraft:oak_log","property_id":0}],"property_pool":[{"axis":"x"}],
+                "layers":[{"y":0,"blocks":[{"x":2,"z":3,"palette_id":0}]},{"y":1,"blocks":[]}],"chunks":[]}
+        })).unwrap();
+        assert_eq!(catalog.meta.minecraft_data_version, Some(3953));
+        assert_eq!(catalog.meta.property_pool[0]["axis"], "x");
+        assert_eq!(catalog.layers[&0].blocks[0].x, 2);
+        assert_eq!(catalog.layers[&0].blocks[0].z, 3);
+        assert!(catalog.layers[&1].blocks.is_empty());
+    }
+
+    #[test]
+    #[ignore = "CLI real-input integration; NOVA_INTEGRATION_CORE required"]
+    #[cfg(windows)]
+    fn restored_host_layer_preview_and_v2_replace_save_reload() {
+        use crate::platform::process_supervisor::ExecutableAllowlist;
+        let core = PathBuf::from(std::env::var_os("NOVA_INTEGRATION_CORE").unwrap());
+        let source = PathBuf::from(r"C:\Users\27232\Documents\投影测试\16核刷铁机.litematic");
+        let original = fs::read(&source).unwrap();
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf();
+        let data = root.join(".tmp/beta-ui-corrections/restored-host-behavior");
+        fs::create_dir_all(&data).unwrap();
+        let input = data.join("source.litematic"); fs::copy(&source, &input).unwrap();
+        let mut allow = ExecutableAllowlist::new(); allow.allow(ExecutableRole::CoreHelper, &core).unwrap();
+        let (supervisor, _) = ProcessSupervisor::new(allow).unwrap();
+        let operations = ApplicationOperations::new(Arc::new(supervisor), root, data.clone(), core.parent().unwrap().to_path_buf()).unwrap();
+        let started = Instant::now();
+        let meta = operations.read_layer_meta(InspectProjectInput { source_path: path_text(&input) }).unwrap();
+        let first_ms = started.elapsed().as_secs_f64()*1000.0;
+        assert_eq!(meta.minecraft_data_version, Some(3953));
+        let hot = Instant::now();
+        for y in [0, 1, meta.size_y-1] {
+            let slice = operations.read_layer(ReadLayerInput { source_path: path_text(&input), y }).unwrap();
+            let direct = std::process::Command::new(&core).args(layer_args(&input,y).unwrap()).output().unwrap();
+            assert!(direct.status.success());
+            let direct: LayerSliceData = decode_product(serde_json::from_slice(&direct.stdout).unwrap()).unwrap();
+            assert_eq!(serde_json::to_value(slice).unwrap(), serde_json::to_value(direct).unwrap());
+        }
+        assert_eq!(operations.lifecycle_snapshot()["coreCalls"]["visual-layers-all"], 1);
+        let layer_checks_ms = hot.elapsed().as_secs_f64()*1000.0;
+        let preview_path = data.join("with-preview.litematic"); if preview_path.exists() { fs::remove_file(&preview_path).unwrap(); }
+        operations.edit_project_metadata(EditProjectMetadataInput { source_path:path_text(&input),output_path:Some(path_text(&preview_path)),patch:json!({"preview_image_data":[0x80445566_u32 as i32]}) }).unwrap();
+        let preview = operations.read_embedded_preview(InspectProjectInput { source_path:path_text(&preview_path) }).unwrap().unwrap();
+        assert_eq!((preview.width,preview.height),(1,1)); assert!(preview.data_url.starts_with("data:image/png;base64,"));
+        let source_id = meta.palette[0].block_id.clone();
+        let output = data.join("serial-replaced.litematic"); if output.exists() { fs::remove_file(&output).unwrap(); }
+        let unit = |from:&str,to:&str|json!({"input":[{"name":from,"properties":{}}],"output":[{"name":to,"properties":{},"weight":1}]});
+        let result = operations.replace_blocks(ReplaceBlocksInput { source_path:path_text(&input),output_path:Some(path_text(&output)),rules:vec![],units:None,
+            stages:Some(vec![vec![unit(&source_id,"minecraft:stone")],vec![unit("minecraft:stone","minecraft:gold_block")]]),dry_run:false }).unwrap();
+        assert_eq!(result.output_path,Some(path_text(&output)));
+        let before = operations.project_stats(ProjectStatsInput { source_path:path_text(&input),include_container_items:true,known_revision:None }).unwrap();
+        let after = operations.project_stats(ProjectStatsInput { source_path:path_text(&output),include_container_items:true,known_revision:None }).unwrap();
+        for field in ["total_non_air_blocks","total_regions","total_layers","total_entities","total_tile_entities"] {
+            assert_eq!(before["structure_stats"][field],after["structure_stats"][field]);
+        }
+        assert_eq!(before["container_scan"],after["container_scan"]);
+        assert!(after["structural_block_counts"].as_array().unwrap().iter().any(|row|row["block_id"]=="minecraft:gold_block"&&row["count"].as_u64().unwrap_or(0)>0));
+        assert_eq!(operations.lifecycle_snapshot()["coreCalls"]["replace-blocks"],1);
+        assert_eq!(fs::read(&input).unwrap(),original); assert_eq!(fs::read(&source).unwrap(),original);
+        let report=json!({"source":path_text(&source),"version":3953,"sourceCatalogMs":first_ms,"independentLayerComparisonMs":layer_checks_ms,
+            "layerSourceLoads":1,"selectedSlices":3,"layerExactOldCli":true,"previewImportRead":true,"serialStagesOneCore":true,"saveReload":true,"sourceUnchanged":true,"coreCalls":operations.lifecycle_snapshot()["coreCalls"]});
+        write_json(&data.join("result.json"),&report).unwrap(); println!("[NOVA_RESTORED_HOST] {report}");
+    }
+
+    #[test]
+    fn cached_scope_preserves_joint_channels_custom_limits_and_container_diagnostics() {
+        let all = json!({
+            "material_items":[{"block_id":"minecraft:stone","count":19,"total_count":19,"block_count":14,"container_item_count":5,"has_custom_stack_size":true,
+                "region_counts":[],"layer_counts":[],"scope_counts":[
+                    {"region":"A","layer":0,"block_count":2,"container_item_count":3,"has_custom_stack_size":true},
+                    {"region":"A","layer":1,"block_count":7,"container_item_count":0,"has_custom_stack_size":false},
+                    {"region":"B","layer":0,"block_count":5,"container_item_count":0,"has_custom_stack_size":false},
+                    {"region":"B","layer":null,"block_count":0,"container_item_count":2,"has_custom_stack_size":true}]}],
+            "non_item_blocks":[{"block_id":"minecraft:water","count":10,"scope_counts":[{"region":"A","layer":0,"count":4},{"region":"B","layer":1,"count":6}]}],
+            "structural_block_counts":[
+                {"block_id":"minecraft:stone","count":14,"scope_counts":[{"region":"A","layer":0,"count":2},{"region":"A","layer":1,"count":7},{"region":"B","layer":0,"count":5}]},
+                {"block_id":"minecraft:water","count":10,"scope_counts":[{"region":"A","layer":0,"count":4},{"region":"B","layer":1,"count":6}]}],
+            "regions":[{"name":"A","total_non_air_blocks":13,"unique_block_types":2},{"name":"B","total_non_air_blocks":11,"unique_block_types":2}],
+            "layers_summary":[{"layer":0,"world_y":-4,"total_non_air_blocks":11,"unique_block_types":2},{"layer":1,"world_y":-3,"total_non_air_blocks":13,"unique_block_types":2}],
+            "structure_stats":{"scope":{"kind":"all"},"total_non_air_blocks":24,"unique_block_types":2,"total_regions":2},
+            "container_scan":{"enabled":true,"containers_scanned":2,"item_stacks_scanned":3,"warnings":["A0","missing-Y-content","B1"],"scope_entries":[
+                {"region":"A","layer":0,"containers_scanned":1,"item_stacks_scanned":2,"warnings":["A0"],"missing_layer_warning":null},
+                {"region":"B","layer":null,"containers_scanned":1,"item_stacks_scanned":1,"warnings":["missing-Y-content"],"missing_layer_warning":"missing numeric Y"},
+                {"region":"B","layer":1,"containers_scanned":0,"item_stacks_scanned":0,"warnings":["B1"],"missing_layer_warning":null}]}
+        });
+        let region = material_snapshot_for_scope(all.clone(), &MaterialScope { kind: MaterialScopeKind::Region, value: Some("A".into()) }).unwrap();
+        assert_eq!(region["material_items"][0]["block_count"], 9);
+        assert_eq!(region["material_items"][0]["container_item_count"], 3);
+        assert_eq!(region["material_items"][0]["has_custom_stack_size"], true);
+        assert_eq!(region["material_items"][0]["layer_counts"], json!([{"layer":0,"world_y":-4,"count":5},{"layer":1,"world_y":-3,"count":7}]));
+        assert_eq!(region["non_item_blocks"][0]["count"], 4);
+        assert_eq!(region["structural_block_counts"], json!([{"block_id":"minecraft:stone","count":9},{"block_id":"minecraft:water","count":4}]));
+        assert_eq!(region["container_scan"]["warnings"], json!(["A0"]));
+        let layer = material_snapshot_for_scope(all.clone(), &MaterialScope { kind: MaterialScopeKind::Layer, value: Some("1".into()) }).unwrap();
+        assert_eq!(layer["material_items"][0]["block_count"], 7);
+        assert_eq!(layer["material_items"][0]["container_item_count"], 0);
+        assert_eq!(layer["material_items"][0]["has_custom_stack_size"], false);
+        assert_eq!(layer["material_items"][0]["region_counts"], json!([{"region":"A","count":7}]));
+        assert_eq!(layer["non_item_blocks"][0]["count"], 6);
+        assert_eq!(layer["structural_block_counts"], json!([{"block_id":"minecraft:stone","count":7},{"block_id":"minecraft:water","count":6}]));
+        assert_eq!(layer["container_scan"]["warnings"], json!(["missing numeric Y","B1"]));
+        assert_eq!(layer["container_scan"]["containers_scanned"], 0);
+        assert_eq!(layer["structure_stats"]["scope"], json!({"kind":"layer","layer":1,"world_y":-3}));
+        for selected in [region, layer, material_snapshot_for_scope(all.clone(), &MaterialScope { kind: MaterialScopeKind::All, value: None }).unwrap()] {
+            let text = serde_json::to_string(&selected).unwrap();
+            assert!(!text.contains("scope_counts")); assert!(!text.contains("scope_entries"));
+        }
+        assert!(material_snapshot_for_scope(all.clone(), &MaterialScope { kind: MaterialScopeKind::Layer, value: Some("2".into()) }).is_err());
+        assert!(material_snapshot_for_scope(all, &MaterialScope { kind: MaterialScopeKind::Region, value: Some("missing".into()) }).is_err());
+    }
+
+    #[test]
+    fn material_recipe_fetch_uses_actual_stockpile_cli_contract() {
+        assert_eq!(material_recipe_fetch_args("26.3".into()), ["stockpile", "recipe-fetch", "--minecraft-version", "26.3"]);
+    }
+
+    #[test]
     #[ignore = "manual CLI real-input measurement; NOVA_STATS_FIXTURE and NOVA_STATS_CORE required"]
     #[cfg(windows)]
     fn real_stats_request_profile() {
+        assert!(!cfg!(debug_assertions), "统计性能对账必须使用 --release，禁止用 Debug Host 对比 Release CLI");
         use crate::platform::process_supervisor::ExecutableAllowlist;
         let source = std::env::var("NOVA_STATS_FIXTURE").unwrap();
         let core = PathBuf::from(std::env::var_os("NOVA_STATS_CORE").unwrap());
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf();
         let data = root.join(".tmp/beta-ui-corrections/stats-profile-data");
+        // Explicitly warm the same filesystem input for both transports; don't
+        // label an uncontrolled Windows file cache as an OS-cold benchmark.
+        let input_before = fs::read(&source).unwrap();
+        let direct_started = Instant::now();
+        let direct = std::process::Command::new(&core).args(stats_args(Path::new(&source), false))
+              .current_dir(core.parent().unwrap()).env("LBA_DATA_ROOT", &data).env("NOVA_STATS_TIMING", "1").output().unwrap();
+        let direct_ms = direct_started.elapsed().as_secs_f64() * 1000.0;
+        assert!(direct.status.success(), "{}", String::from_utf8_lossy(&direct.stderr));
+        eprint!("{}", String::from_utf8_lossy(&direct.stderr));
+          let mut direct_snapshot: Value = serde_json::from_slice(&direct.stdout).unwrap();
+            let core_snapshot_bytes = serde_json::to_vec(&direct_snapshot).unwrap().len();
+          strip_material_scope_cache(&mut direct_snapshot);
+            let dto_snapshot_bytes = serde_json::to_vec(&direct_snapshot).unwrap().len();
+            let production_stage_log = String::from_utf8_lossy(&direct.stderr).lines().filter(|line|line.contains("NOVA_STATS_TIMING")).map(str::to_owned).collect::<Vec<_>>();
         let mut allowed = ExecutableAllowlist::new();
         allowed.allow(ExecutableRole::CoreHelper, &core).unwrap();
         let (supervisor, _events) = ProcessSupervisor::new(allowed).unwrap();
@@ -1015,14 +1510,151 @@ mod tests {
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
                 barrier.wait();
-                operations.project_stats(ProjectStatsInput { source_path: source, include_container_items: false }).unwrap()
+                operations.project_stats(ProjectStatsInput { source_path: source, include_container_items: false, known_revision: None }).unwrap()
             })
         }).collect::<Vec<_>>();
         let results = workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>();
         assert_eq!(results[0], results[1]);
+        let cold_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let mut host_snapshot = results[0].clone();
+        host_snapshot.as_object_mut().unwrap().remove("source_revision");
+        assert_eq!(host_snapshot, direct_snapshot, "CLI 与真实 Application operation 的范围、容器和所有明细必须完全一致");
         assert_eq!(results[0]["structure_stats"]["total_non_air_blocks"], 88534);
         write_json(&operations.data_root.join("snapshot.json"), &results[0]).unwrap();
-        println!("[NOVA_STATS_PROFILE] concurrent_requests=2 core_launches={} total_ms={:.3} non_air={} materials={} react_commit=UNMEASURED tauri_webview_ipc=UNMEASURED", operations.next_generation.load(Ordering::Relaxed) - 1, started.elapsed().as_secs_f64() * 1000.0, results[0]["structure_stats"]["total_non_air_blocks"], results[0]["material_items"].as_array().unwrap().len());
+        let revision = results[0]["source_revision"].as_str().unwrap().to_owned();
+        let hot_started = Instant::now();
+        let hot = operations.project_stats(ProjectStatsInput { source_path: source.clone(), include_container_items: false, known_revision: Some(revision) }).unwrap();
+        let hot_ms = hot_started.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(hot["cache_unchanged"], true);
+        assert_eq!(operations.next_generation.load(Ordering::Relaxed) - 1, 1);
+          let mut scope_checks = Vec::new();
+          for include_containers in [false, true] {
+              let before = operations.next_generation.load(Ordering::Relaxed);
+              let all = operations.project_stats(ProjectStatsInput { source_path: source.clone(), include_container_items: include_containers, known_revision: None }).unwrap();
+              let region = all["regions"].as_array().unwrap().iter().max_by_key(|row| row["total_non_air_blocks"].as_u64()).unwrap()["name"].as_str().unwrap().to_owned();
+              let layer = all["layers_summary"].as_array().unwrap().iter().max_by_key(|row| row["total_non_air_blocks"].as_u64()).unwrap()["layer"].as_i64().unwrap().to_string();
+              for scope in [MaterialScope { kind: MaterialScopeKind::Region, value: Some(region) }, MaterialScope { kind: MaterialScopeKind::Layer, value: Some(layer) }] {
+                  let selected_at = Instant::now();
+                  let selected = operations.material_snapshot(Path::new(&source), &scope, include_containers).unwrap();
+                  let cached_scope_ms = selected_at.elapsed().as_secs_f64() * 1000.0;
+                  let cli = std::process::Command::new(&core).args(materials_args(Path::new(&source), &scope, include_containers).unwrap())
+                      .current_dir(core.parent().unwrap()).env("LBA_DATA_ROOT", &operations.data_root).output().unwrap();
+                  assert!(cli.status.success(), "{}", String::from_utf8_lossy(&cli.stderr));
+                  let independent: Value = serde_json::from_slice(&cli.stdout).unwrap();
+                  assert_eq!(selected, independent, "缓存范围必须与独立 CLI 的结构、材料两通道、跨选区/层明细、容器计数及诊断完全一致");
+                  assert!(!serde_json::to_string(&selected).unwrap().contains("scope_counts"));
+                  scope_checks.push(json!({"scope":selected["structure_stats"]["scope"],"includeContainers":include_containers,"cachedScopeMs":cached_scope_ms,"exactCliMatch":true}));
+              }
+              assert_eq!(operations.next_generation.load(Ordering::Relaxed) - before, u64::from(include_containers), "同参数选范围不能重复启动 Core");
+          }
+          assert_eq!(operations.next_generation.load(Ordering::Relaxed) - 1, 2, "只允许容器开关的两个不同分析快照");
+        assert_eq!(fs::read(&source).unwrap(), input_before);
+        let baseline_path = operations.project_root.join(".tmp/beta-ui-corrections/beta02-stats-release-baseline-snapshot.json");
+        if baseline_path.is_file() {
+            let mut baseline: Value = serde_json::from_slice(&fs::read(baseline_path).unwrap()).unwrap();
+            let mut current = direct_snapshot.clone();
+            baseline.as_object_mut().unwrap().remove("material_semantics");
+            current.as_object_mut().unwrap().remove("material_semantics");
+            let structural = current.as_object_mut().unwrap().remove("structural_block_counts").unwrap();
+            assert_eq!(structural.as_array().unwrap().iter().map(|row| row["count"].as_u64().unwrap()).sum::<u64>(), 88534);
+            assert!(structural.as_array().unwrap().iter().any(|row| row["block_id"] == "minecraft:piston_head" && row["count"] == 2851));
+            assert_eq!(current, baseline, "真实840基线的全部结构、材料、堆叠、区域/层与容器明细不能减少");
+        }
+        let report = json!({ "profile": "release", "scope": "all", "includeContainers": false,
+            "cacheCondition": "OS explicitly warmed; Application cold then validated hot",
+            "directCliMs": direct_ms, "applicationColdMs": cold_ms, "applicationHotMs": hot_ms,
+            "directPayloadBytes": direct.stdout.len(), "hotPayloadBytes": serde_json::to_vec(&hot).unwrap().len(),
+              "coreSnapshotCompactBytes":core_snapshot_bytes,"dtoCompactBytes":dto_snapshot_bytes,"internalScopeCacheBytes":core_snapshot_bytes-dto_snapshot_bytes,
+              "productionCoreStageLog":production_stage_log,"applicationCoreCalls":operations.lifecycle_snapshot()["coreCalls"],
+            "coreLaunches": operations.next_generation.load(Ordering::Relaxed) - 1,
+              "scopeChecks": scope_checks,
+            "nonAir": results[0]["structure_stats"]["total_non_air_blocks"], "materials": results[0]["material_items"].as_array().unwrap().len(),
+            "WebViewIPC": "UNMEASURED", "ReactCommit": "UNMEASURED" });
+        write_json(&operations.project_root.join(".tmp/beta-ui-corrections/beta02-stats-release-modified.json"), &report).unwrap();
+        println!("[NOVA_STATS_PROFILE] {report}");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn shutdown_drains_writes_and_can_cancel_a_deferred_close_without_data_loss() {
+        use crate::platform::process_supervisor::ExecutableAllowlist;
+        let command = PathBuf::from(std::env::var_os("COMSPEC").unwrap());
+        let mut allowed = ExecutableAllowlist::new();
+        allowed.allow(ExecutableRole::CoreHelper, &command).unwrap();
+        let (supervisor, _) = ProcessSupervisor::new(allowed).unwrap();
+        let root = std::env::temp_dir().join(format!("nova-close-write-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let operations = ApplicationOperations::new(Arc::new(supervisor), root.clone(), root.clone(), command.parent().unwrap().to_path_buf()).unwrap();
+        let write = operations.begin_write().unwrap();
+        assert!(operations.begin_shutdown().is_empty());
+        assert!(operations.begin_write().is_err());
+        assert!(!operations.wait_for_writes(Duration::ZERO));
+        let destination = root.join("retained-user-write.txt");
+        let saved_path = destination.clone();
+        let worker = std::thread::spawn(move || {
+            use std::io::Write;
+            let mut file = fs::File::create(saved_path).unwrap();
+            file.write_all(b"existing save completed before process teardown").unwrap();
+            std::thread::sleep(Duration::from_millis(25));
+            file.sync_all().unwrap();
+            drop(file); drop(write);
+        });
+        let started = Instant::now();
+        assert!(operations.wait_for_writes(Duration::from_secs(1)));
+        worker.join().unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"existing save completed before process teardown");
+        println!("[NOVA_LIFECYCLE_PROFILE] case=save write_drained_ms={} file_synced=true pending_writes=0 source_projection=UNCHANGED window_response=UNMEASURED", started.elapsed().as_millis());
+        operations.cancel_shutdown();
+        assert!(operations.begin_write().is_ok());
+        let absolute = fs::canonicalize(&root).unwrap();
+        assert!(absolute.starts_with(fs::canonicalize(std::env::temp_dir()).unwrap()));
+        assert!(root.file_name().unwrap().to_string_lossy().starts_with("nova-close-write-"));
+        fs::remove_dir_all(absolute).unwrap();
+    }
+
+    #[test]
+    #[ignore = "actual Release Core read cancellation; NOVA_STATS_FIXTURE and NOVA_STATS_CORE required"]
+    #[cfg(windows)]
+    fn real_core_read_is_cancelled_and_owned_process_is_reaped_on_close() {
+        use crate::platform::process_supervisor::ExecutableAllowlist;
+        let source = std::env::var("NOVA_STATS_FIXTURE").unwrap();
+        let core = PathBuf::from(std::env::var_os("NOVA_STATS_CORE").unwrap());
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf();
+        let input_before = fs::read(&source).unwrap();
+        let mut allowed = ExecutableAllowlist::new(); allowed.allow(ExecutableRole::CoreHelper, &core).unwrap();
+        let (supervisor, _) = ProcessSupervisor::new(allowed).unwrap();
+        let supervisor = Arc::new(supervisor);
+        let operations = ApplicationOperations::new(Arc::clone(&supervisor), root.clone(), root.join(".tmp/beta-ui-corrections/close-read-data"), core.parent().unwrap().to_path_buf()).unwrap();
+        let running = operations.clone(); let running_source = source.clone();
+        let worker = std::thread::spawn(move || running.project_stats(ProjectStatsInput { source_path: running_source, include_container_items: true, known_revision: None }));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while operations.lifecycle.0.lock().unwrap().reads.is_empty() && !worker.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let started = Instant::now();
+        let reads = operations.begin_shutdown();
+        assert!(operations.wait_for_writes(Duration::ZERO));
+        let requested = supervisor.terminate_many(&reads, 0);
+        let report = supervisor.shutdown(Duration::ZERO, Duration::from_millis(1500));
+        let result = worker.join().unwrap();
+        assert!(report.remaining.is_empty()); assert!(supervisor.active_children().is_empty());
+        assert!(operations.lifecycle.0.lock().unwrap().reads.is_empty());
+        assert!(operations.inspect_project(InspectProjectInput { source_path: source.clone() }).is_err(), "closing cannot start another read");
+        assert_eq!(fs::read(&source).unwrap(), input_before);
+        println!("[NOVA_LIFECYCLE_PROFILE] case=statistics_read actual_release_core=true tracked_reads={} terminate_requests={} read_result={} all_owned_exit_ms={} remaining=0 window_response=UNMEASURED", reads.len(), requested, if result.is_err() {"cancelled"} else {"completed_at_checkpoint"}, started.elapsed().as_millis());
+    }
+
+    #[test]
+    fn shutdown_only_protects_real_user_writes_not_preview_reads_or_replace_dry_runs() {
+        for command in ["stats", "analyze", "visual-meta", "projection-markers"] {
+            assert!(!core_command_writes(&[command.into()]));
+        }
+        assert!(!core_command_writes(&["replace-blocks".into(), "--dry-run".into()]));
+        assert!(!core_command_writes(&["version-convert".into(), "--request".into(), "preview.json".into()]));
+        for command in ["edit-metadata", "set-origin", "remove-origin", "materials-export", "generate", "replace-blocks"] {
+            assert!(core_command_writes(&[command.into()]));
+        }
+        assert!(core_command_writes(&["version-convert".into(), "--output".into(), "new.litematic".into()]));
     }
 
     #[test]
@@ -1045,7 +1677,7 @@ mod tests {
             let slot = Arc::clone(&slot); let calls = Arc::clone(&calls);
             std::thread::spawn(move || slot.get_or_init(|| {
                 calls.fetch_add(1, Ordering::Relaxed);
-                std::thread::sleep(Duration::from_millis(10)); Ok(json!({"material_semantics":"minecraft-26.3-inventory-v2"}))
+                std::thread::sleep(Duration::from_millis(10)); Ok(json!({"material_semantics":"minecraft-inventory-v3"}))
             }).clone())
         }).collect::<Vec<_>>();
         for handle in handles { assert!(handle.join().unwrap().is_ok()); }

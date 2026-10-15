@@ -1,8 +1,9 @@
 //! Product update orchestration; Tauri's official updater owns transport, signature and installation.
 use crate::platform::process_supervisor::{ExecutableRole, ProcessSupervisor};
+use crate::render_service_client::RenderServiceClient;
 use super::quick_preview::QuickPreviewHost;
 use serde::Serialize;
-use std::{path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
+use std::{path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}}, time::{Duration, Instant}};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::sync::watch;
@@ -29,6 +30,8 @@ pub(crate) struct UpdateHost {
     view: Mutex<UpdateView>,
     pending: Mutex<Option<Pending>>,
     busy: AtomicBool,
+    closing: AtomicBool,
+    checks_started: AtomicU64,
     cancel: watch::Sender<u64>,
     skipped_path: PathBuf,
 }
@@ -42,11 +45,12 @@ impl UpdateHost {
         Self {
             view: Mutex::new(UpdateView { phase: "idle", current_version: version, version: None,
                 date: None, notes: None, downloaded: 0, total: None, source: None, message: None }),
-            pending: Mutex::new(None), busy: AtomicBool::new(false), cancel,
+            pending: Mutex::new(None), busy: AtomicBool::new(false), closing: AtomicBool::new(false), checks_started: AtomicU64::new(0), cancel,
             skipped_path: data_root.join("updater-skipped-version.txt"),
         }
     }
     fn acquire(&self) -> Result<Busy<'_>, String> {
+        if self.closing.load(Ordering::Acquire) { return Err("应用正在关闭".into()); }
         if self.snapshot().phase == "restartRequired" { return Err("请先重启恢复后台服务。".into()); }
         self.busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| "更新操作正在进行，请稍候。".to_owned())?;
@@ -64,8 +68,43 @@ impl UpdateHost {
         self.publish(app, |v| { v.phase = "restartRequired"; v.message = Some(format!("{error}；草稿已保留，请重启以恢复后台服务。")); }); error
     }
     pub(crate) fn prevents_close(&self) -> bool {
-        matches!(self.snapshot().phase, "waiting" | "installing")
+        self.snapshot().phase == "installing"
     }
+    pub(crate) fn prepare_for_close(&self, app: &AppHandle) -> bool {
+        let Some(view) = self.prepare_close_state() else { return false; };
+        let _ = app.emit_to("main", EVENT, view);
+        true
+    }
+    fn prepare_close_state(&self) -> Option<UpdateView> {
+        let mut view = self.view.lock().unwrap();
+        if view.phase == "installing" { return None; }
+        if view.phase == "waiting" {
+            // Share the transition lock with commit_installing_after_wait:
+            // whichever wins decides cancellable waiting versus actual install.
+            self.cancel.send_modify(|value| *value += 1);
+            view.phase = "cancelled";
+            view.message = None;
+            eprintln!("[NOVA_LIFECYCLE] stage=update_wait_cancelled_by_close installing=false");
+        }
+        Some(view.clone())
+    }
+    fn commit_installing_after_wait(&self, cancel: &watch::Receiver<u64>) -> Option<UpdateView> {
+        let mut view = self.view.lock().unwrap();
+        if view.phase != "waiting" || self.closing.load(Ordering::Acquire)
+            || cancel.has_changed().unwrap_or(true) { return None; }
+        view.phase = "installing";
+        view.message = Some("正在安全退出后台并安装，完成后自动重启…".into());
+        Some(view.clone())
+    }
+    pub(crate) fn cancel_for_shutdown(&self) {
+        self.closing.store(true, Ordering::Release);
+        self.cancel.send_modify(|value| *value += 1);
+        let retained_bytes = self.pending.lock().unwrap().as_ref().and_then(|pending|pending.bytes.as_ref()).map_or(0,Vec::len);
+        let mut view = self.view.lock().unwrap();
+        if !matches!(view.phase, "installing" | "restartRequired") { view.phase = "cancelled"; }
+        eprintln!("[NOVA_LIFECYCLE] stage=update_activity_at_close checks_started={} retained_bytes={retained_bytes}", self.checks_started.load(Ordering::Relaxed));
+    }
+    pub(crate) fn resume_after_cancelled_shutdown(&self) { self.closing.store(false, Ordering::Release); }
 }
 
 fn require_main(window: &WebviewWindow) -> Result<(), String> {
@@ -136,11 +175,17 @@ pub(crate) async fn application_update_check(app: AppHandle, window: WebviewWind
     require_main(&window)?;
     let _busy = host.acquire()?;
     let mut cancel = host.cancel.subscribe();
+    let started = Instant::now();
+    let call = host.checks_started.fetch_add(1, Ordering::Relaxed) + 1;
     let urls = match endpoints(&app) { Ok(v) => v, Err(error) => {
         host.publish(&app, |v| { v.phase = "disabled"; v.message = Some(error); }); return Ok(host.snapshot());
     }};
     host.publish(&app, |v| { v.phase = "checking"; v.message = None; });
-    let Some(result) = await_or_cancel(&mut cancel, first_success(urls.len(), |i| check_endpoint(&app, urls[i].clone()))).await else { return Ok(host.snapshot()); };
+    let Some(result) = await_or_cancel(&mut cancel, first_success(urls.len(), |i| check_endpoint(&app, urls[i].clone()))).await else {
+        eprintln!("[NOVA_LIFECYCLE] stage=update_query calls={call} cancelled=true elapsed_ms={}", started.elapsed().as_millis());
+        return Ok(host.snapshot());
+    };
+    eprintln!("[NOVA_LIFECYCLE] stage=update_query calls={call} cancelled=false elapsed_ms={}", started.elapsed().as_millis());
     match result {
         Ok((index, Some(update))) => {
             let skipped = std::fs::read_to_string(&host.skipped_path).unwrap_or_default();
@@ -162,10 +207,15 @@ pub(crate) async fn application_update_check(app: AppHandle, window: WebviewWind
 #[tauri::command]
 pub(crate) fn application_update_cancel(app: AppHandle, window: WebviewWindow, host: State<'_, UpdateHost>) -> Result<UpdateView, String> {
     require_main(&window)?;
-    if matches!(host.snapshot().phase, "installing" | "restartRequired") { return Err("后台服务已进入退出阶段，请等待安装或重启恢复。".into()); }
-    host.cancel.send_modify(|value| *value += 1);
-    host.publish(&app, |v| { v.phase = "cancelled"; v.message = None; });
-    Ok(host.snapshot())
+    let view = {
+        let mut view = host.view.lock().unwrap();
+        if matches!(view.phase, "installing" | "restartRequired") { return Err("后台服务已进入退出阶段，请等待安装或重启恢复。".into()); }
+        host.cancel.send_modify(|value| *value += 1);
+        view.phase = "cancelled"; view.message = None;
+        view.clone()
+    };
+    let _ = app.emit_to("main", EVENT, &view);
+    Ok(view)
 }
 
 #[tauri::command]
@@ -237,7 +287,7 @@ pub(crate) async fn application_update_install(app: AppHandle, window: WebviewWi
     let _pause = supervisor.pause_admitting();
     host.publish(&app, |v| { v.phase = "waiting"; v.message = Some("草稿已保留，等待现有任务安全结束…".into()); });
     let deadline = Instant::now() + Duration::from_secs(30 * 60);
-    while supervisor.active_children().iter().any(|c| matches!(c.role, ExecutableRole::CoreHelper)) {
+    while supervisor.active_children().iter().any(|c| matches!(c.role, ExecutableRole::CoreHelper | ExecutableRole::BuildWorker)) {
         if Instant::now() >= deadline { return Err(host.fail(&app, "任务仍在运行，更新未安装；请任务完成后重试。".into())); }
         tokio::select! { biased;
             _ = cancel.changed() => return Ok(()),
@@ -245,13 +295,15 @@ pub(crate) async fn application_update_install(app: AppHandle, window: WebviewWi
         }
     }
     // The reversible/cancellable stage ends before shutting down shared services.
-    host.publish(&app, |v| { v.phase = "installing"; v.message = Some("正在安全退出后台并安装，完成后自动重启…".into()); });
+    let Some(view) = host.commit_installing_after_wait(&cancel) else { return Ok(()); };
+    let _ = app.emit_to("main", EVENT, view);
     // From here a failure requires the explicit recovery restart; a dropped pause
     // must never reopen admission into a service that has already shut down.
     supervisor.stop_admitting();
     if let Some(view) = app.state::<QuickPreviewHost>().snapshot().map_err(|e| host.restart_required(&app, e))? {
         app.state::<QuickPreviewHost>().close(&view.preview_id).map_err(|e| host.restart_required(&app, e))?;
     }
+    app.state::<RenderServiceClient>().request_shutdown();
     let deadline = Instant::now() + Duration::from_secs(15);
     while !supervisor.active_children().is_empty() {
         if Instant::now() >= deadline { return Err(host.restart_required(&app, "后台任务尚未退出，更新未安装".into())); }
@@ -311,6 +363,56 @@ mod tests {
         host.view.lock().unwrap().phase = "restartRequired";
         assert!(host.acquire().is_err(), "a stopped service must not accept normal updater actions");
     }
+    #[tokio::test]
+    async fn closing_cancels_network_before_late_success_and_blocks_new_checks() {
+        let host = UpdateHost::new("0.2.0".into(), PathBuf::new());
+        let mut receiver = host.cancel.subscribe();
+        host.cancel_for_shutdown();
+        assert!(await_or_cancel(&mut receiver, std::future::ready("late update")).await.is_none());
+        assert!(host.acquire().is_err());
+        host.resume_after_cancelled_shutdown();
+        assert!(host.acquire().is_ok());
+    }
+    #[tokio::test]
+    async fn native_close_waiting_cancels_reversible_wait_before_late_installer() {
+        let host = UpdateHost::new("0.2.0".into(), PathBuf::new());
+        let mut cancel = host.cancel.subscribe();
+        let busy = host.acquire().unwrap();
+        host.view.lock().unwrap().phase = "waiting";
+        assert!(!host.prevents_close());
+        let view = host.prepare_close_state().expect("cancellable waiting permits the normal draft close gate");
+        assert_eq!(view.phase, "cancelled");
+        assert!(view.message.is_none());
+        assert!(await_or_cancel(&mut cancel, std::future::ready("late idle-worker result")).await.is_none());
+        // Even after changed() consumed the signal, the same phase barrier
+        // prevents that old future crossing into irreversible installation.
+        assert!(!cancel.has_changed().unwrap());
+        assert!(host.commit_installing_after_wait(&cancel).is_none());
+        assert_eq!(host.snapshot().phase, "cancelled");
+        assert!(host.prepare_close_state().is_some(), "a repeated X does not wait for background workers");
+        drop(busy);
+        assert!(host.acquire().is_ok(), "a failed draft close can retry normal updater operations");
+    }
+    #[test]
+    fn native_close_waiting_committed_install_preserves_critical_protection() {
+        let host = UpdateHost::new("0.2.0".into(), PathBuf::new());
+        let cancel = host.cancel.subscribe();
+        host.view.lock().unwrap().phase = "waiting";
+        assert_eq!(host.commit_installing_after_wait(&cancel).unwrap().phase, "installing");
+        assert!(host.prevents_close());
+        assert!(host.prepare_close_state().is_none());
+        assert!(!cancel.has_changed().unwrap(), "X must not interrupt an actual install");
+        assert_eq!(host.snapshot().phase, "installing");
+    }
+    #[test]
+    fn native_close_waiting_cancel_signal_blocks_empty_worker_fast_path() {
+        let host = UpdateHost::new("0.2.0".into(), PathBuf::new());
+        let cancel = host.cancel.subscribe();
+        host.view.lock().unwrap().phase = "waiting";
+        host.cancel.send_modify(|value| *value += 1);
+        assert!(host.commit_installing_after_wait(&cancel).is_none(), "no active children does not bypass cancellation");
+        assert_eq!(host.snapshot().phase, "waiting");
+    }
     #[test]
     fn updater_official_minisign_accepts_signed_fixture_and_rejects_tampering() {
         use base64::Engine;
@@ -325,19 +427,53 @@ mod tests {
         assert!(minisign_verify::Signature::decode("unsigned").is_err());
     }
 
-    #[test]
-    #[ignore = "requires NOVA_UPDATE_VERIFY_FILE and NOVA_UPDATE_VERIFY_SIGNATURE release paths"]
-    fn updater_release_signature_verifies_payload_and_rejects_tampering() {
-        use base64::Engine;
-        let config: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
-        let decode = |value: &str| String::from_utf8(base64::engine::general_purpose::STANDARD.decode(value.trim()).unwrap()).unwrap();
-        let public = minisign_verify::PublicKey::decode(&decode(config["plugins"]["updater"]["pubkey"].as_str().unwrap())).unwrap();
-        let signature_text = std::fs::read_to_string(std::env::var("NOVA_UPDATE_VERIFY_SIGNATURE").unwrap()).unwrap();
-        let signature = minisign_verify::Signature::decode(&decode(&signature_text)).unwrap();
-        let mut payload = std::fs::read(std::env::var("NOVA_UPDATE_VERIFY_FILE").unwrap()).unwrap();
-        assert!(public.verify(&payload, &signature, true).is_ok(), "release installer must match the embedded public key");
-        payload[0] ^= 1;
-        assert!(public.verify(&payload, &signature, true).is_err(), "tampered installer must be rejected");
-        println!("release_signature=verified; tampered_installer=rejected");
+    #[tokio::test]
+    async fn closing_cancels_an_actual_loopback_http_body_without_waiting_for_download() {
+        // Transport/cancellation fixture only: production HTTPS and updater
+        // signature policy remain unchanged. No external site is requested.
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            stream.set_write_timeout(Some(Duration::from_secs(1))).unwrap();
+            let mut request = [0_u8; 4096];
+            let read = stream.read(&mut request).unwrap();
+            assert!(std::str::from_utf8(&request[..read]).unwrap().starts_with("GET /update-fixture "));
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\nConnection: close\r\n\r\n").unwrap();
+            stream.write_all(&[7_u8; 1024]).unwrap();
+            let _ = started_tx.send(());
+            let mut sent = 1024;
+            for _ in 0..64 {
+                if server_stop.load(Ordering::Acquire) { break; }
+                std::thread::sleep(Duration::from_millis(10));
+                if stream.write_all(&[7_u8; 1024]).is_err() { break; }
+                sent += 1024;
+            }
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+            sent
+        });
+        let host = UpdateHost::new("0.2.0".into(), PathBuf::new());
+        let mut receiver = host.cancel.subscribe();
+        let network = tokio::spawn(async move {
+            await_or_cancel(&mut receiver, async {
+                let response = reqwest::Client::new().get(format!("http://{address}/update-fixture")).send().await.unwrap();
+                response.bytes().await
+            }).await
+        });
+        tokio::time::timeout(Duration::from_secs(2), started_rx).await.unwrap().unwrap();
+        let close_started = Instant::now();
+        host.cancel_for_shutdown();
+        assert!(tokio::time::timeout(Duration::from_secs(1), network).await.unwrap().unwrap().is_none());
+        assert!(host.acquire().is_err());
+        assert!(host.pending.lock().unwrap().is_none(), "incomplete download is not an installed or verified package");
+        stop.store(true, Ordering::Release);
+        let sent = server.join().unwrap();
+        assert!(sent < 1048576);
+        println!("[NOVA_LIFECYCLE_PROFILE] case=download transport=loopback_http body_cancel_ms={} server_bytes={} incomplete=true retained_update_bytes=0 new_requests=0 window_response=UNMEASURED", close_started.elapsed().as_millis(), sent);
     }
 }

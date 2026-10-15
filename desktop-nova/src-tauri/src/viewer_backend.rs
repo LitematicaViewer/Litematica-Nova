@@ -5,40 +5,6 @@ use std::path::{Path, PathBuf};
 
 const HASH_BUFFER_BYTES: usize = 256 * 1024;
 
-/// Fail closed before the host admits either public helper. This validates the
-/// resource manifest and bytes, never probes the legacy private backend path.
-pub(crate) fn verify_public_deployment(directory: &Path) -> Result<(), String> {
-    use std::collections::BTreeSet;
-    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(directory.join("backend-deployment.json"))
-        .map_err(|error| format!("读取公共版部署清单失败：{error}"))?)
-        .map_err(|error| format!("公共版部署清单格式错误：{error}"))?;
-    if manifest["schema"] != "nova.public.beta.backends.v1" || manifest["publicBeta"] != true || manifest["flavor"] != "fast-only" {
-        return Err("后端不是已隔离的 Beta 公共版部署。".into());
-    }
-    let expected: BTreeSet<_> = ["litematica_core", "litematica_native_viewer"].into_iter()
-        .map(|name| format!("{name}{}", std::env::consts::EXE_SUFFIX)).collect();
-    let records = manifest["artifacts"].as_object().ok_or("公共版部署清单缺少后端校验记录。")?;
-    if records.keys().cloned().collect::<BTreeSet<_>>() != expected {
-        return Err("公共版部署清单包含非公共后端或缺少快速预览后端。".into());
-    }
-    let mut files = BTreeSet::new();
-    for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        if !entry.file_type().map_err(|error| error.to_string())?.is_file() { return Err("公共版后端目录包含非普通文件。".into()); }
-        files.insert(entry.file_name().to_string_lossy().into_owned());
-    }
-    let mut expected_files = expected.clone();
-    expected_files.insert("backend-deployment.json".into());
-    if files != expected_files { return Err("公共版后端目录包含额外文件。".into()); }
-    for name in expected {
-        let identity = ViewerBackendIdentity::capture(&directory.join(&name))?;
-        if records[&name]["sha256"].as_str() != Some(identity.sha256()) || records[&name]["bytes"].as_u64() != Some(identity.bytes()) {
-            return Err(format!("公共版后端完整性校验失败：{name}"));
-        }
-    }
-    Ok(())
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ViewerBackendIdentity {
     exe_path: PathBuf,
@@ -169,47 +135,6 @@ mod tests {
             "lba-viewer-backend-{name}-{}-{nonce}.exe",
             std::process::id()
         ))
-    }
-
-    fn public_fixture() -> PathBuf {
-        let path = fixture_path("public-deployment");
-        fs::create_dir(&path).unwrap();
-        let mut artifacts = serde_json::Map::new();
-        for name in ["litematica_core", "litematica_native_viewer"] {
-            let name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
-            let bytes = b"test helper bytes";
-            fs::write(path.join(&name), bytes).unwrap();
-            artifacts.insert(name, serde_json::json!({"sha256":format!("{:x}", Sha256::digest(bytes)),"bytes":bytes.len()}));
-        }
-        fs::write(path.join("backend-deployment.json"), serde_json::to_vec(&serde_json::json!({
-            "schema":"nova.public.beta.backends.v1","publicBeta":true,"flavor":"fast-only","artifacts":artifacts
-        })).unwrap()).unwrap();
-        path
-    }
-
-    #[test]
-    fn public_deployment_accepts_exact_verified_helpers() {
-        let path = public_fixture();
-        verify_public_deployment(&path).unwrap();
-        fs::remove_dir_all(path).unwrap();
-    }
-    #[test]
-    fn public_deployment_rejects_extra_files_and_tampering() {
-        let path = public_fixture();
-        let extra = path.join("extra.bin");
-        fs::write(&extra, b"unexpected").unwrap();
-        assert!(verify_public_deployment(&path).unwrap_err().contains("额外文件"));
-        fs::remove_file(extra).unwrap();
-        fs::write(path.join(format!("litematica_core{}", std::env::consts::EXE_SUFFIX)), b"modified").unwrap();
-        assert!(verify_public_deployment(&path).unwrap_err().contains("完整性校验失败"));
-        fs::remove_dir_all(path).unwrap();
-    }
-    #[test]
-    fn public_deployment_rejects_legacy_manifest() {
-        let path = public_fixture();
-        fs::write(path.join("backend-deployment.json"), br#"{"schema":"lba.backend.deployment.v1","publicBeta":false}"#).unwrap();
-        assert!(verify_public_deployment(&path).is_err());
-        fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
