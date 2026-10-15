@@ -31,7 +31,7 @@ try {
             if ($env:NOVA_WINDOWS_RUNTIME_PACKAGE_DIR) { $env:NOVA_RUNTIME_PACKAGE_DIR = $env:NOVA_WINDOWS_RUNTIME_PACKAGE_DIR }
             & node desktop-nova/scripts/build-public-platform.mjs --target x86_64-pc-windows-msvc --candidate
         } else {
-            $linuxRepo = (& wsl.exe -d NovaCI-Debian -u nova-ci -- wslpath -a -u $repo).Trim()
+            $linuxRepo = (& wsl.exe -d NovaCI-Debian -u nova-ci -- wslpath -a -u $repo.Replace('\','/') | Out-String).Trim()
             if ($LASTEXITCODE -ne 0 -or -not $linuxRepo) { throw 'Unable to resolve the existing repository in WSL.' }
             $script = @'
 set -euo pipefail
@@ -51,7 +51,7 @@ node desktop-nova/scripts/build-public-platform.mjs --target x86_64-unknown-linu
                 if (-not $gitAutocrlf) { $gitAutocrlf = 'false' }
                 if ($gitAutocrlf -notin @('true','false','input')) { throw 'The Windows checkout line-ending setting is invalid.' }
                 [IO.File]::WriteAllText($shellScript, $script.Replace([string][char]13, ''), [Text.UTF8Encoding]::new($false))
-                $linuxScript = (& wsl.exe -d NovaCI-Debian -u nova-ci -- wslpath -a -u $shellScript).Trim()
+                $linuxScript = (& wsl.exe -d NovaCI-Debian -u nova-ci -- wslpath -a -u $shellScript.Replace('\','/') | Out-String).Trim()
                 if ($LASTEXITCODE -ne 0 -or -not $linuxScript) { throw 'Unable to resolve the CI shell script in WSL.' }
                 & wsl.exe -d NovaCI-Debian -u nova-ci -- bash -l $linuxScript $linuxRepo $gitAutocrlf
                 if ($LASTEXITCODE -ne 0) { throw "Linux candidate build failed with exit $LASTEXITCODE." }

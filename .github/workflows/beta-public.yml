@@ -8,7 +8,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, local, macos]
+        options: [all, local, linux, macos]
 
 permissions:
   contents: read
@@ -31,12 +31,14 @@ jobs:
     steps:
       # Reuse the existing workspace. Never checkout, clean or switch it.
       - name: Build Windows x64 locally
+        if: inputs.platforms != 'linux'
         shell: pwsh
         env:
           BUILD_SHA: ${{ github.sha }}
         run: |
           & (Join-Path $env:NOVA_LOCAL_REPOSITORY 'desktop-nova/scripts/run-local-ci.ps1') -ExpectedSha $env:BUILD_SHA -Platform Windows
       - name: Select Windows distributables
+        if: inputs.platforms != 'linux'
         id: windows
         shell: pwsh
         env:
@@ -46,6 +48,7 @@ jobs:
           node (Join-Path $env:NOVA_LOCAL_REPOSITORY 'desktop-nova/scripts/stage-ci-artifacts.mjs') --target x86_64-pc-windows-msvc --sha $env:BUILD_SHA
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload Windows Setup only
+        if: inputs.platforms != 'linux'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: Nova-Windows-x64-${{ github.sha }}
@@ -79,7 +82,7 @@ jobs:
     if: >-
       github.repository == 'LitematicaViewer/Litematica-Nova' &&
       github.ref == 'refs/heads/main' &&
-      github.event_name == 'workflow_dispatch' && inputs.platforms != 'local'
+      github.event_name == 'workflow_dispatch' && inputs.platforms != 'local' && inputs.platforms != 'linux'
     runs-on: [self-hosted, Windows, X64, nova-local]
     timeout-minutes: 15
     strategy:
@@ -127,7 +130,7 @@ jobs:
     if: >-
       github.repository == 'LitematicaViewer/Litematica-Nova' &&
       github.ref == 'refs/heads/main' &&
-      github.event_name == 'workflow_dispatch' && inputs.platforms != 'local'
+      github.event_name == 'workflow_dispatch' && inputs.platforms != 'local' && inputs.platforms != 'linux'
     strategy:
       fail-fast: false
       matrix:
