@@ -1,0 +1,47 @@
+{
+  "schema": "nova.minecraft-runtime-resources.v1",
+  "minecraft": "26.3",
+  "archive_root": "26.3",
+  "extract_to": "data/mc26",
+  "oracle_schema": 3,
+  "oracle_artifacts": 11,
+  "oracle_manifest_sha256": "8695e3ca9071fed8eda548b9e518968cf852ee604d78cf691a459544b6557531",
+  "source_client_sha256": "4508d006323f24fa02876310c192d739af56516eb259000ac50f0909a68c9a2d",
+  "runtime_client_kind": "assets-data-only-no-java",
+  "runtime_client_sha256": "2484967e9fc36516dc46819471390fd42cd5edddc73cca7cf81025903dae74ba",
+  "runtime_client_bytes": 11658796,
+  "runtime_client_entries": 21491,
+  "java_class_entries": 0,
+  "executable_entries": 0,
+  "asset_index": "34",
+  "font_assets": [
+    {
+      "logical": "minecraft/font/include/unifont.json",
+      "sha1": "402ded0eebd448033ef415e861a17513075f80e7",
+      "bytes": 3993
+    },
+    {
+      "logical": "minecraft/font/include/unifont_pua.json",
+      "sha1": "db5582c177aca966ba1a9b062cead233a262a939",
+      "bytes": 136
+    },
+    {
+      "logical": "minecraft/font/unifont.zip",
+      "sha1": "ccd5ac4767ce0a9c71d1dd62f2dc25449789b5dd",
+      "bytes": 1559654
+    },
+    {
+      "logical": "minecraft/font/unifont_jp.zip",
+      "sha1": "590470ab0f17afb73a4e41d9cb56fdbe069d275a",
+      "bytes": 234900
+    },
+    {
+      "logical": "minecraft/font/unifont_pua.zip",
+      "sha1": "d7caa0e3aa5eb656c51817ae4bfbf3c4d72cdaad",
+      "bytes": 100360
+    }
+  ],
+  "archive_entries": 19,
+  "archive_bytes": 26214574,
+  "archive_sha256": "280715e4b97175a0d303c40227ab3f7aa9165d29c44980d92c6405083312e2b3"
+}

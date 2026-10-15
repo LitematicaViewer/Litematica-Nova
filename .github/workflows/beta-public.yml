@@ -1,54 +1,34 @@
-name: Beta public Windows build
+name: Beta Windows protected candidate
 
 on:
   push:
-    tags: ['beta-0.1.*']
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      beta_tag:
-        description: 'Beta tag to build (beta-0.1.*)'
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: beta-public-${{ github.event.inputs.beta_tag || github.ref_name }}
+  group: beta-public-windows-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  platform-status:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Report actual platform support
-        run: |
-          echo 'Windows x64: one NSIS Setup.exe.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'macOS x64 / ARM64: support will follow in the next version.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Linux x64 / ARM64: support will follow in the next version.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'No portable ZIP, MSI, empty platform packages, or GitHub Release will be published by this build.' >> "$GITHUB_STEP_SUMMARY"
-
   windows-x64:
+    if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}\desktop-nova\src-tauri\target\public-beta
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ github.event.inputs.beta_tag || github.ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
-      - name: Set build source commit
-        shell: pwsh
-        run: |
-          $sha = (git rev-parse HEAD).Trim()
-          "LBA_BUILD_GIT_SHA=$sha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Install official Node.js toolchain
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
-      - name: Prepare official toolchains and frontend dependencies
+      - name: Prepare official Windows toolchains
         shell: pwsh
         run: |
           rustup toolchain install stable --profile minimal
@@ -57,18 +37,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm ci --prefix desktop-nova
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build only isolated public helpers
+      - name: Verify signed protected payload and build public helpers
         shell: pwsh
         run: |
-          cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir tools/viewer-core/target/public-beta --no-default-features --features public-beta --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./desktop-nova/scripts/prepare-backend-deployment.ps1 -RepoRoot $env:GITHUB_WORKSPACE -Profile release -GitSha $env:LBA_BUILD_GIT_SHA -StageOnly
-      - name: Disable CI updater signing without changing product configuration
+          ./desktop-nova/scripts/prepare-protected-backend.ps1 -RepoRoot $env:GITHUB_WORKSPACE
+      - name: Configure unsigned updater candidate only
         shell: pwsh
         run: |
-          # Signing keys stay outside CI. The exact installer is signed locally.
+          # Module signature checks remain mandatory. CI has no installer updater
+          # signing key and does not publish any release, tag or update metadata.
           '{"bundle":{"targets":["nsis"],"createUpdaterArtifacts":false}}' | Set-Content -LiteralPath desktop-nova/src-tauri/tauri.ci.json -Encoding utf8
-      - name: Build official Tauri NSIS installer without publishing
+      - name: Build single-file NSIS candidate with official Tauri action
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5
         with:
           projectPath: desktop-nova
@@ -78,19 +57,22 @@ jobs:
           includeUpdaterJson: false
           uploadPlainBinary: false
           retryAttempts: 0
-          # No tagName/releaseId/releaseName and no GitHub write token.
-      - name: Stage single NSIS Setup.exe
+          # No tagName, releaseId, releaseName or write token: build only.
+      - name: Stage only the Windows Setup.exe
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $source = Join-Path $env:CARGO_TARGET_DIR 'release'
-          $destination = Join-Path $env:GITHUB_WORKSPACE 'dist/public-beta'
+          $installers = @(Get-ChildItem -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'release/bundle/nsis') -Filter '*-setup.exe' -File)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one real Windows x64 NSIS installer.' }
+          $destination = Join-Path $env:GITHUB_WORKSPACE 'dist/public-beta-candidate'
           New-Item -ItemType Directory -Path $destination -Force | Out-Null
-          Copy-Item -Path (Join-Path $source 'bundle/nsis/*-setup.exe') -Destination (Join-Path $destination 'Setup.exe')
-      - name: Upload single Setup.exe
+          Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $destination 'Setup.exe')
+          'Windows x64: single NSIS candidate; no automatic GitHub Release or tag.' >> $env:GITHUB_STEP_SUMMARY
+          'macOS 和 Linux 将在下个版本支持。' >> $env:GITHUB_STEP_SUMMARY
+      - name: Upload Setup.exe only
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: Litematica-Nova-Beta-windows-x64-${{ github.run_id }}
-          path: dist/public-beta/Setup.exe
+          name: Litematica-Nova-Beta-Windows-x64-${{ github.sha }}
+          path: dist/public-beta-candidate/Setup.exe
           if-no-files-found: error
           retention-days: 14

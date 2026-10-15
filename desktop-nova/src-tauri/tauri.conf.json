@@ -55,13 +55,19 @@
       "../../data/generation-templates": "data/generation-templates",
       "../../data/minecraft_blockstates": "data/minecraft_blockstates",
       "gen/block-icons": "block",
-      "../../bin/public-beta": "bin/public-beta",
+      "../../bin/public-beta": "bin/viewer-backend",
       "../../tools/viewer-core/target/public-beta/release/stockpile_server.exe": "bin/stockpile-server/windows-x64/stockpile_server.exe",
       "../../tools/windows-thumbnail-provider/target/release/litematica_thumbnail.dll": "litematica_thumbnail.dll",
       "../../LICENSE": "licenses/LICENSE",
       "../../docs/THIRD_PARTY_UI.md": "licenses/THIRD_PARTY_UI.md",
       "../../docs/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt",
-      "../../pack-in/materials/minecraft-26.3.json": "pack-in/materials/minecraft-26.3.json"
+      "../../pack-in/materials/minecraft-26.3.json": "pack-in/materials/minecraft-26.3.json",
+      "../../bin/protected": "bin/viewer-backend/protected",
+      "../../LICENSE-MIT": "licenses/LICENSE-MIT",
+      "../../licenses/AMICE-APACHE-2.0.txt": "licenses/AMICE-APACHE-2.0.txt",
+      "../../licenses/PROTECTED-MODULE.txt": "licenses/PROTECTED-MODULE.txt",
+      "../../data/mc26/26.3": "data/mc26/26.3",
+      "../../licenses/BLOCK-DATABASE-RESOURCES.txt": "licenses/BLOCK-DATABASE-RESOURCES.txt"
     },
     "createUpdaterArtifacts": true
   },

@@ -1,0 +1,13 @@
+{
+  "manifest": {
+    "protocol": 1,
+    "build_id": "0.2.0-2774af6e8a8d-nova-beta02-release-r2",
+    "module_id": "nova_protected_module.dll",
+    "plaintext_sha256": "3e5259dc9e88b61e29b87831461dc5d39d8295e15d8ff448b0c175e4c52035ad",
+    "ciphertext_sha256": "19ff75c70d81d9c0c55e80d6cc5b7cfa71c71f20de95cf8a5a7347292be54b6b",
+    "ciphertext_bytes": 51477520,
+    "nonce": "iUUSgIAEvZW3xgiD",
+    "created_ms": 1792065441433
+  },
+  "signature": "cSpvuH8VOR1vHZj2VrQSXNRfWeqGGjm5f9kZISWjx94mfDJmArxVYE0bpH9JsCwDE+6dBLAgGCnPEe1l1HVSDw=="
+}

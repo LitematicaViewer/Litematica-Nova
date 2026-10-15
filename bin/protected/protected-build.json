@@ -1,0 +1,10 @@
+{
+  "schema": "nova.protected-build.v1",
+  "version": "0.2.0",
+  "buildId": "0.2.0-2774af6e8a8d-nova-beta02-release-r2",
+  "moduleId": "nova_protected_module.dll",
+  "manifestPublicKey": "U3kxvpUDPRuJI2Ou0HmdLKVpATe2E2gw+L7dAq8EHiw=",
+  "endpoint": "https://45-62-112-121.sslip.io:8448/nova-core",
+  "manifestFile": "nova_protected_module.dll.manifest.json",
+  "ciphertextFile": "nova_protected_module.dll.enc"
+}
