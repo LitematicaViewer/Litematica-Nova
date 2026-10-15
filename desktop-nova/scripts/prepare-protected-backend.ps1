@@ -15,7 +15,8 @@ $backendNames = @('litematica_core.exe','litematica_native_viewer.exe','nova-ren
 Push-Location -LiteralPath $repo
 try {
     # GitHub checkout binds an exact commit, so an empty detached result is valid.
-    $branch = ([string](& git branch --show-current)).Trim()
+    $branch = & git branch --show-current
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to resolve public checkout state.' }
     if ($branch -ne 'main' -and -not ($env:GITHUB_ACTIONS -eq 'true' -and $env:GITHUB_REF -eq 'refs/heads/main' -and -not $branch)) {
         throw 'Compile the audited public main only; never use private dev as public build input.'
     }
