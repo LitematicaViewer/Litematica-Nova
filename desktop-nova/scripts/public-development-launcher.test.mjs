@@ -20,13 +20,13 @@ function publicMetadata(root) {
     targets: ['derive_resource_pack_32x', 'litematica_core', 'litematica_native_viewer', 'stockpile_server'].map(name => ({ name, kind: ['bin'], src_path: path.join(root, `tools/viewer-core/src/bin/${name}.rs`) })),
   }] };
 }
-function packageFixture(root) {
+function packageFixture(root, moduleId = 'nova_protected_module.dll') {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const ciphertext = Buffer.alloc(48, 7);
   const config = {
-    schema: 'nova.protected-build.v1', version: '0.2.0', buildId: 'test-build', moduleId: 'nova_protected_module.dll',
+    schema: 'nova.protected-build.v1', version: '0.2.0', buildId: 'test-build', moduleId,
     manifestPublicKey: publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64'), endpoint: 'https://example.invalid/nova',
-    manifestFile: 'nova_protected_module.dll.manifest.json', ciphertextFile: 'nova_protected_module.dll.enc',
+    manifestFile: `${moduleId}.manifest.json`, ciphertextFile: `${moduleId}.enc`,
   };
   const manifest = { protocol: 1, build_id: config.buildId, module_id: config.moduleId, plaintext_sha256: 'd'.repeat(64), ciphertext_sha256: hash(ciphertext), ciphertext_bytes: ciphertext.length, nonce: Buffer.alloc(12, 3).toString('base64'), created_ms: 1000 };
   const signed = { manifest, signature: sign(null, Buffer.from(JSON.stringify(manifest)), privateKey).toString('base64') };
@@ -89,6 +89,14 @@ test('签名有效也必须验证实际模块内容；缺失结果不放行', as
   await assert.rejects(validatePackage(root), /payload content mismatch/);
   rmSync(path.join(root, config.ciphertextFile));
   await assert.rejects(validatePackage(root), /ENOENT/);
+});
+
+test('平台包明确绑定 DLL/SO/dylib；默认 Windows 验证不能接受 Unix 包', async t => {
+  for (const moduleId of ['libnova_protected_module.so', 'libnova_protected_module.dylib']) {
+    const root = fixture(t); packageFixture(root, moduleId);
+    await assert.rejects(validatePackage(root), /package paths/);
+    assert.equal((await validatePackage(root, moduleId)).moduleId, moduleId);
+  }
 });
 
 test('UI 提交改变可复用真实旧 helper；正式发行必须当前 source', async t => {

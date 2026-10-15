@@ -5,7 +5,7 @@
   "identifier": "com.litematica.nova",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && node scripts/build-macos-thumbnail.mjs",
     "devUrl": "http://127.0.0.1:1430",
     "frontendDist": "../dist"
   },
@@ -69,7 +69,28 @@
       "../../data/mc26/26.3": "data/mc26/26.3",
       "../../licenses/BLOCK-DATABASE-RESOURCES.txt": "licenses/BLOCK-DATABASE-RESOURCES.txt"
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "fileAssociations": [
+      {
+        "ext": [
+          "litematic"
+        ],
+        "name": "Litematica projection",
+        "description": "Minecraft Litematica projection",
+        "mimeType": "application/x-litematic",
+        "role": "Viewer",
+        "rank": "Owner"
+      }
+    ],
+    "macOS": {
+      "infoPlist": "macos/Info.plist",
+      "frameworks": [
+        "target/platform-frameworks/libMoltenVK.dylib"
+      ],
+      "files": {
+        "PlugIns/NovaThumbnail.appex": "../../tools/macos-thumbnail-extension/target/NovaThumbnail.appex"
+      }
+    }
   },
   "plugins": {
     "updater": {

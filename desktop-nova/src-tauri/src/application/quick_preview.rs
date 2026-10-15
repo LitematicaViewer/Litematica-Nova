@@ -23,6 +23,8 @@ pub(crate) struct QuickPresentationIntent {
     pub(crate) mode: QuickPresentationMode,
     pub(crate) visible: bool,
     pub(crate) placement: Option<PresentationPlacement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) presentation_epoch: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -379,6 +381,20 @@ impl QuickPreviewHost {
         Ok(session.view.clone())
     }
 
+    #[cfg(target_os="macos")]
+    pub(crate) fn renew_native_presentation(&self, id: &str) -> Result<QuickPreviewView, String> {
+        if let Some(pending) = self.pending_resource.lock().map_err(|_| "快速预览状态锁异常")?.as_mut().filter(|pending| pending.view.preview_id == id) {
+            pending.view.presentation.presentation_epoch = Some(crate::platform::native_preview_host::advance_owner(id)?);
+            return Ok(pending.view.clone());
+        }
+        let mut slot = self.session.lock().map_err(|_| "快速预览状态锁异常".to_owned())?;
+        let session = slot.as_mut().filter(|session| session.view.preview_id == id).ok_or("快速预览已切换")?;
+        session.view.presentation.presentation_epoch = Some(crate::platform::native_preview_host::advance_owner(id)?);
+        session.deferred_presentation = true;
+        session.refresh(&self.supervisor)?;
+        Ok(session.view.clone())
+    }
+
     pub(crate) fn snapshot(&self) -> Result<Option<QuickPreviewView>, String> {
         if let Some(request) = self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.as_ref() {
             return Ok(Some(request.view.clone()));
@@ -394,7 +410,7 @@ impl QuickPreviewHost {
         Ok(slot.as_ref().filter(|session| !session.gpu_context_only).map(|session| session.view.clone()))
     }
 
-    pub(crate) fn present(&self, id: &str, intent: QuickPresentationIntent, revision: u64) -> Result<QuickPreviewView, String> {
+    pub(crate) fn present(&self, id: &str, mut intent: QuickPresentationIntent, revision: u64) -> Result<QuickPreviewView, String> {
         if let Some(request) = self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.as_mut().filter(|request| request.view.preview_id == id) {
             if request.view.accepts_presentation(revision) { request.view.presentation_revision = revision; }
             // A pending choice has no prepared scene and cannot admit a Show.
@@ -404,6 +420,14 @@ impl QuickPreviewHost {
         let session = slot.as_mut().filter(|session| session.view.preview_id == id).ok_or("快速预览已切换，请重新加载。")?;
         if !session.view.accepts_presentation(revision) { return Ok(session.view.clone()); }
         if !matches!(session.view.state, "starting" | "ready") { return Ok(session.view.clone()); }
+        #[cfg(target_os="macos")]
+        {
+            intent.presentation_epoch = match crate::platform::native_preview_host::advance_owner(id) {
+                Ok(epoch) => Some(epoch),
+                Err(error) if intent.visible => return Err(error),
+                Err(_) => None, // An old owner may still hide its own retained Viewer.
+            };
+        }
         // Validate the same native command now, but keep the child hidden while
         // its current scene is preparing. The existing ready receipt admits it.
         presentation_command(&session.session_id, session.next_command, &intent, &session.host_window)?;
@@ -639,12 +663,20 @@ impl QuickSession {
 }
 
 fn presentation_command(id: &str, sequence: u64, intent: &QuickPresentationIntent, host: &QuickPreviewHostWindow) -> Result<ViewerSessionCommand, String> {
-    if !intent.visible || intent.mode == QuickPresentationMode::Hidden { return ViewerSessionCommand::hide(id.to_owned(), sequence); }
+    if !intent.visible || intent.mode == QuickPresentationMode::Hidden {
+        let mut command = ViewerSessionCommand::hide(id.to_owned(), sequence)?;
+        command.presentation_epoch = intent.presentation_epoch;
+        return Ok(command);
+    }
     match intent.mode {
         QuickPresentationMode::Embedded => {
             let rect = intent.placement.ok_or("快速预览缺少视口位置。")?;
             if !rect.dpi_scale.is_finite() || rect.dpi_scale <= 0.0 { return Err("快速预览 DPI 无效。".to_owned()); }
-            let mut command = ViewerSessionCommand::attach_embedded(id.to_owned(), sequence, host.hwnd.clone(), rect.width, rect.height)?;
+            let mut command = if let Some(endpoint) = &host.native_composition {
+                ViewerSessionCommand::attach_native_composition(id.to_owned(), sequence, endpoint.clone(), rect.width, rect.height)?
+            } else { ViewerSessionCommand::attach_embedded(id.to_owned(), sequence, host.hwnd.clone(), rect.width, rect.height)? };
+            command.presentation_epoch = intent.presentation_epoch;
+            command.dpi_scale = Some(rect.dpi_scale);
             command.screen_x = Some(rect.x);
             command.screen_y = Some(rect.y);
             command.validate()?;
@@ -742,7 +774,7 @@ mod tests {
             .map(|entry| entry.path()).filter(|path| path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("litematic"))).take(2).collect::<Vec<_>>();
         assert_eq!(sources.len(), 2);
         let source = fs::canonicalize(&sources[0]).unwrap(); let metadata = fs::metadata(&source).unwrap();
-        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() };
+        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() , native_composition: None };
         let backend = ViewerBackendIdentity::capture(&command).unwrap();
         let launch = ViewerLaunchContract::new("quick-one".into(), source.clone(), ViewerContent::default(), None, ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(window.clone()), ..Default::default() })).unwrap();
         let contract = ViewerLaunchContractFile::create(directory.0.join("launch.json"), &launch, &backend).unwrap();
@@ -763,7 +795,7 @@ mod tests {
 
         let embedded = |x, scale| QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true,
             placement: Some(PresentationPlacement { x, y: 120, width: (600.0 * scale) as u32,
-                height: (400.0 * scale) as u32, dpi_scale: scale, focused: false }) };
+                height: (400.0 * scale) as u32, dpi_scale: scale, focused: false }) , presentation_epoch: None };
         host.present("quick-one", embedded(10, 1.0), 1).unwrap();
         host.present("quick-one", embedded(900, 1.5), 2).unwrap();
         assert!(!directory.0.join("command-00000000000000000001.json").exists(), "Preparing cannot attach an empty child");
@@ -847,7 +879,7 @@ mod tests {
             .map(|entry| entry.path()).filter(|path| path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("litematic"))).take(2).collect::<Vec<_>>();
         assert_eq!(sources.len(), 2);
         let source = fs::canonicalize(&sources[0]).unwrap(); let metadata = fs::metadata(&source).unwrap();
-        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() };
+        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() , native_composition: None };
         let backend = ViewerBackendIdentity::capture(&command).unwrap();
         let launch = ViewerLaunchContract::new("quick-one".into(), source.clone(), ViewerContent::default(), None, ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(window.clone()), ..Default::default() })).unwrap();
         let contract = ViewerLaunchContractFile::create(directory.0.join("launch.json"), &launch, &backend).unwrap();
@@ -941,7 +973,7 @@ mod tests {
         assert!(!view.visible);
         view.apply_status(&ViewerSessionState::Ready, false);
         assert_eq!(view.state, "ready"); assert!(!view.visible);
-        view.presentation = QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true, placement: None };
+        view.presentation = QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true, placement: None , presentation_epoch: None };
         view.apply_status(&attached, true);
         assert!(view.visible);
         view.apply_status(&ViewerSessionState::Hidden, false);
@@ -951,12 +983,13 @@ mod tests {
     }
     #[test]
     fn quick_presentation_keeps_physical_rect_and_rejects_missing_host() {
-        let host = QuickPreviewHostWindow { hwnd: "42".into(), process_id: 1 };
-        let mut intent = QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true, placement: None };
+        let host = QuickPreviewHostWindow { hwnd: "42".into(), process_id: 1 , native_composition: None };
+        let mut intent = QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true, placement: None , presentation_epoch: None };
         assert!(presentation_command("quick-one", 1, &intent, &host).is_err());
         intent.placement = Some(PresentationPlacement { x: -120, y: 40, width: 640, height: 480, dpi_scale: 1.5, focused: false });
         let cmd = presentation_command("quick-one", 1, &intent, &host).unwrap();
         assert_eq!(cmd.screen_x, Some(-120)); assert_eq!(cmd.width, Some(640)); assert_eq!(cmd.host_hwnd.as_deref(), Some("42"));
+        assert_eq!(cmd.dpi_scale, Some(1.5));
         intent.visible = false; assert_eq!(presentation_command("quick-one", 2, &intent, &host).unwrap().kind, viewer_launch_contract::ViewerSessionCommandKind::Hide);
     }
 }
@@ -990,7 +1023,7 @@ mod quick_resource_tests {
         let (supervisor, _) = ProcessSupervisor::new(ExecutableAllowlist::new()).unwrap();
         let supervisor = Arc::new(supervisor);
         let host = QuickPreviewHost::new(supervisor.clone(), root.0.join("deliberately-absent-viewer.exe"), root.0.clone());
-        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() };
+        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() , native_composition: None };
         let input = |source_path| StartQuickPreviewInput { graphics_backend: Default::default(), source_path, preload: true, click_started_at_epoch_ms: Some(123) };
         let first = host.start(input(source.clone()), window.clone()).unwrap();
         assert_eq!(first.state, "starting"); assert!(!first.visible);
@@ -998,7 +1031,7 @@ mod quick_resource_tests {
         assert!(host.session.lock().unwrap().is_none()); assert!(supervisor.active_children().is_empty());
         assert_eq!(host.start(input(source.clone()), window.clone()).unwrap().preview_id, first.preview_id);
         let show = QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true,
-            placement: Some(PresentationPlacement { x: 0, y: 0, width: 640, height: 480, dpi_scale: 1.0, focused: true }) };
+            placement: Some(PresentationPlacement { x: 0, y: 0, width: 640, height: 480, dpi_scale: 1.0, focused: true }) , presentation_epoch: None };
         assert!(!host.present(&first.preview_id, show, 2).unwrap().visible);
         assert!(host.resource_decision(&first.preview_id, QuickResourceAction::Preload, true).is_err());
         let mut manual = input(source.clone());
@@ -1029,7 +1062,7 @@ mod quick_resource_tests {
         let (supervisor, _) = ProcessSupervisor::new(ExecutableAllowlist::new()).unwrap(); let supervisor = Arc::new(supervisor);
         let host = QuickPreviewHost::new(supervisor.clone(), root.join("absent-viewer.exe"), root.clone());
         let view = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source.clone(), preload: true, click_started_at_epoch_ms: None },
-            QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() }).unwrap();
+            QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() , native_composition: None }).unwrap();
         fs::write(&source, b"changed input content").unwrap();
         let error = host.resource_decision(&view.preview_id, QuickResourceAction::Realtime, false).unwrap_err();
         assert!(error.contains("投影已修改")); assert!(supervisor.active_children().is_empty());

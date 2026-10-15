@@ -31,7 +31,7 @@ pub(super) fn application_host() -> Result<Option<QuickPreviewHostWindow>> {
     let process_id = std::env::var("LITEMATICA_NOVA_NATIVE_PARENT_PID")
         .context("native host process identity missing")?.parse::<u32>()
         .context("invalid native host process identity")?;
-    let host = QuickPreviewHostWindow { hwnd: hwnd.to_string_lossy().into_owned(), process_id };
+    let host = QuickPreviewHostWindow { hwnd: hwnd.to_string_lossy().into_owned(), process_id , native_composition: None };
     validate_host(&host)?;
     Ok(Some(host))
 }
@@ -188,8 +188,8 @@ mod tests {
     use super::*;
     #[test]
     fn native_child_does_not_accept_closed_or_zero_host() {
-        assert!(validate_host(&QuickPreviewHostWindow { hwnd: "0".into(), process_id: 1 }).is_err());
-        assert!(validate_host(&QuickPreviewHostWindow { hwnd: "invalid".into(), process_id: 1 }).is_err());
+        assert!(validate_host(&QuickPreviewHostWindow { hwnd: "0".into(), process_id: 1 , native_composition: None }).is_err());
+        assert!(validate_host(&QuickPreviewHostWindow { hwnd: "invalid".into(), process_id: 1 , native_composition: None }).is_err());
     }
     #[test]
     fn native_child_uses_creation_parent_not_reparenting() {

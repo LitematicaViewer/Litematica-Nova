@@ -97,7 +97,10 @@ fn active_file(path: &Path, create: bool) -> io::Result<File> {
         use std::os::windows::fs::OpenOptionsExt;
         options.share_mode(0);
     }
-    options.open(path)
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    fs2::FileExt::try_lock_exclusive(&file)?;
+    Ok(file)
 }
 
 /// Child processes inherit these two environment variables through the
@@ -241,9 +244,14 @@ fn catalog_guard(root: &Path) -> io::Result<File> {
             use std::os::windows::fs::OpenOptionsExt;
             options.share_mode(0);
         }
-        match options.open(&path) {
+        let opened = options.open(&path).and_then(|file| {
+            #[cfg(unix)]
+            fs2::FileExt::try_lock_exclusive(&file)?;
+            Ok(file)
+        });
+        match opened {
             Ok(file) => return Ok(file),
-            Err(error) if matches!(error.raw_os_error(), Some(32 | 33)) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock || matches!(error.raw_os_error(), Some(32 | 33)) => std::thread::sleep(std::time::Duration::from_millis(50)),
             Err(error) => return Err(error),
         }
     }
@@ -258,7 +266,26 @@ fn redirect_main_output(stdout: &File, stderr: &File) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+fn redirect_main_output(stdout: &File, stderr: &File) -> io::Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    std::io::stdout().flush()?;
+    std::io::stderr().flush()?;
+    let previous = unsafe { libc::dup(libc::STDOUT_FILENO) };
+    if previous < 0 { return Err(io::Error::last_os_error()); }
+    let previous = unsafe { OwnedFd::from_raw_fd(previous) };
+    if unsafe { libc::dup2(stdout.as_raw_fd(), libc::STDOUT_FILENO) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::dup2(stderr.as_raw_fd(), libc::STDERR_FILENO) } < 0 {
+        let error = io::Error::last_os_error();
+        let _ = unsafe { libc::dup2(previous.as_raw_fd(), libc::STDOUT_FILENO) };
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(not(any(windows, unix)))]
 fn redirect_main_output(_stdout: &File, _stderr: &File) -> io::Result<()> { Ok(()) }
 
 fn system_information() -> serde_json::Value {
@@ -329,7 +356,7 @@ mod tests {
         assert!(!text.contains("session-1 exit"));
         assert!(text.contains("session-4 exit") && text.contains("session-3 exit") && text.contains("session-2 exit"));
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     #[test]
     fn diagnostics_retention_preserves_active_old_instance_and_crashed_sessions() {
         let fixture = Fixture::new();
@@ -355,7 +382,7 @@ mod tests {
         cleanup_sessions(&fixture.0.join("logs/sessions")).unwrap();
         assert!(pending.exists());
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     #[test]
     fn diagnostics_export_lock_defers_retention_without_blocking_session_creation() {
         let fixture = Fixture::new();
@@ -376,5 +403,30 @@ mod tests {
         finished_rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap().unwrap();
         cleanup.join().unwrap();
         drop(newest);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diagnostics_unix_output_redirect_child() {
+        let Some(root) = std::env::var_os("NOVA_DIAGNOSTIC_REDIRECT_TEST_DIR") else { return; };
+        let root = PathBuf::from(root);
+        let stdout = File::create(root.join("stdout.log")).unwrap();
+        let stderr = File::create(root.join("stderr.log")).unwrap();
+        redirect_main_output(&stdout, &stderr).unwrap();
+        std::io::stdout().write_all(b"unix stdout diagnostic\n").unwrap();
+        std::io::stderr().write_all(b"unix stderr diagnostic\n").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diagnostics_unix_redirect_preserves_stdout_and_stderr_in_session_files() {
+        let fixture = Fixture::new();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", concat!(module_path!(), "::diagnostics_unix_output_redirect_child"), "--nocapture"])
+            .env("NOVA_DIAGNOSTIC_REDIRECT_TEST_DIR", &fixture.0)
+            .output().unwrap();
+        assert!(output.status.success());
+        assert!(fs::read_to_string(fixture.0.join("stdout.log")).unwrap().contains("unix stdout diagnostic"));
+        assert!(fs::read_to_string(fixture.0.join("stderr.log")).unwrap().contains("unix stderr diagnostic"));
     }
 }

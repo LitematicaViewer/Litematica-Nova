@@ -264,12 +264,73 @@ struct SupervisedProcess {
     pid: u32,
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+struct SupervisedProcess {
+    child: std::process::Child,
+    pid: u32,
+    group_live: bool,
+}
+
+#[cfg(unix)]
+impl SupervisedProcess {
+    fn signal_group(&self, signal: i32) -> io::Result<()> {
+        if !self.group_live { return Ok(()); }
+        // The group is created by Command::process_group(0), never obtained
+        // from a peer, external PID lookup, or the parent's process group.
+        let group = libc::pid_t::try_from(self.pid)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid owned process group"))?;
+        if group <= 1 { return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid owned process group")); }
+        if unsafe { libc::kill(-group, signal) } == 0 { return Ok(()); }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) { Ok(()) } else { Err(error) }
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<i32>> {
+        use std::os::unix::process::ExitStatusExt;
+        let Some(status) = self.child.try_wait()? else { return Ok(None); };
+        if self.group_live {
+            // A normally exited leader must not leave its own helpers running.
+            self.signal_group(libc::SIGKILL)?;
+            self.group_live = false;
+        }
+        Ok(Some(status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0))))
+    }
+
+    fn terminate(&mut self, _exit_code: u32) -> io::Result<()> {
+        self.signal_group(libc::SIGTERM)?;
+        if !self.wait_for_exit(Duration::from_millis(250))? {
+            self.signal_group(libc::SIGKILL)?;
+        }
+        Ok(())
+    }
+
+    fn wait_for_exit(&mut self, timeout: Duration) -> io::Result<bool> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.try_wait()?.is_some() { return Ok(true); }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() { return Ok(false); }
+            std::thread::sleep(remaining.min(Duration::from_millis(10)));
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SupervisedProcess {
+    fn drop(&mut self) {
+        if self.group_live {
+            let _ = self.signal_group(libc::SIGKILL);
+            let _ = self.wait_for_exit(Duration::from_secs(1));
+        }
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
 struct SupervisedProcess {
     pid: u32,
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, unix)))]
 impl SupervisedProcess {
     fn try_wait(&mut self) -> io::Result<Option<i32>> {
         Err(io::Error::new(
@@ -335,7 +396,7 @@ impl ProcessSupervisor {
     pub(crate) fn new(
         allowlist: ExecutableAllowlist,
     ) -> io::Result<(Self, mpsc::Receiver<ProcessEvent>)> {
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, unix)))]
         {
             let _ = allowlist;
             return Err(io::Error::new(
@@ -362,6 +423,23 @@ impl ProcessSupervisor {
                 job,
             };
             Ok((supervisor, receiver))
+        }
+
+        #[cfg(unix)]
+        {
+            let (events, receiver) = mpsc::channel();
+            let mut table = ProcessTable::default();
+            table.accepting = true;
+            Ok((Self {
+                allowlist,
+                owner_epoch: fresh_owner_epoch(),
+                next_child_id: AtomicU64::new(1),
+                shared: Arc::new(SharedState {
+                    table: Mutex::new(table),
+                    changed: Condvar::new(),
+                    events,
+                }),
+            }, receiver))
         }
     }
 
@@ -405,7 +483,9 @@ impl ProcessSupervisor {
 
         #[cfg(windows)]
         let child = spawn_suspended_in_job(&self.job, executable, &spec)?;
-        #[cfg(not(windows))]
+        #[cfg(unix)]
+        let child = spawn_in_owned_group(executable, &spec)?;
+        #[cfg(not(any(windows, unix)))]
         let child = {
             let _ = executable;
             return Err(io::Error::new(
@@ -630,6 +710,33 @@ impl ProcessSupervisor {
     }
 }
 
+#[cfg(unix)]
+impl Drop for ProcessSupervisor {
+    fn drop(&mut self) {
+        // Graceful protocol shutdown is owned by Application Host. This is its
+        // final bounded normal-exit/unwind backstop, not a SIGKILL guarantee.
+        let _ = self.shutdown(Duration::ZERO, Duration::from_secs(2));
+    }
+}
+
+#[cfg(unix)]
+fn spawn_in_owned_group(executable: &Path, spec: &LaunchSpec) -> io::Result<SupervisedProcess> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(executable);
+    command.args(&spec.args).envs(spec.environment.iter().cloned())
+        .current_dir(spec.current_dir.as_deref().or_else(|| executable.parent()).unwrap_or_else(|| Path::new(".")))
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(open_output(&spec.stdout)?))
+        .stderr(Stdio::from(open_output(&spec.stderr)?))
+        // All owned children need a group, even when a Windows caller does not
+        // request CREATE_NEW_PROCESS_GROUP (that flag has different semantics).
+        .process_group(0);
+    let child = command.spawn()?;
+    let pid = child.id();
+    Ok(SupervisedProcess { child, pid, group_live: true })
+}
+
 fn validate_launch(owner_epoch: OwnerEpoch, spec: &LaunchSpec) -> io::Result<()> {
     if spec.identity.owner_epoch != owner_epoch {
         return Err(io::Error::new(
@@ -815,7 +922,12 @@ fn open_null(read: bool) -> io::Result<File> {
     options.open("NUL")
 }
 
-#[cfg(windows)]
+#[cfg(unix)]
+fn open_null(read: bool) -> io::Result<File> {
+    OpenOptions::new().read(read).write(!read).open("/dev/null")
+}
+
+#[cfg(any(windows, unix))]
 fn open_output(target: &OutputTarget) -> io::Result<File> {
     match target {
         OutputTarget::Null => open_null(false),
@@ -1058,6 +1170,98 @@ fn create_application_job() -> io::Result<OwnedHandle> {
         return Err(io::Error::last_os_error());
     }
     Ok(job)
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use super::*;
+
+    fn supervisor() -> (ProcessSupervisor, mpsc::Receiver<ProcessEvent>) {
+        let mut allowed = ExecutableAllowlist::new();
+        allowed.allow(ExecutableRole::CoreHelper, "/bin/sh").unwrap();
+        ProcessSupervisor::new(allowed).unwrap()
+    }
+
+    fn spec(supervisor: &ProcessSupervisor, token: &str, script: &str) -> LaunchSpec {
+        let identity = LaunchIdentity {
+            owner_epoch: supervisor.owner_epoch(), generation: 7,
+            launch_token: LaunchToken::new(token).unwrap(),
+        };
+        let mut spec = LaunchSpec::new(ExecutableRole::CoreHelper, identity);
+        spec.args = vec!["-c".into(), script.into()];
+        spec
+    }
+
+    #[test]
+    fn unix_reaper_preserves_real_child_exit_status() {
+        let (supervisor, events) = supervisor();
+        let child = supervisor.spawn(spec(&supervisor, "exit", "exit 7")).unwrap().child;
+        let ProcessEvent::Exited(exit) = events.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(exit.child, child);
+        assert_eq!(exit.exit_code, Some(7));
+        assert!(!exit.termination_requested);
+        assert!(supervisor.active_children().is_empty());
+    }
+
+    #[test]
+    fn unix_owns_process_group_and_preserves_admission_and_lease_identity() {
+        let (supervisor, events) = supervisor();
+        let mut request = spec(&supervisor, "same", "exec sleep 30");
+        request.new_process_group = false;
+        let first = supervisor.spawn(request.clone()).unwrap();
+        let repeated = supervisor.spawn(request).unwrap();
+        assert_eq!(repeated.disposition, SpawnDisposition::Reused);
+        assert_eq!(first.child, repeated.child);
+        assert_eq!(unsafe { libc::getpgid(first.child.pid as i32) }, first.child.pid as i32);
+        assert_ne!(first.child.pid as i32, unsafe { libc::getpgrp() });
+        let mut foreign = first.child.clone();
+        foreign.pid = std::process::id();
+        assert_eq!(supervisor.terminate(&foreign, 1).unwrap(), TerminateOutcome::Stale);
+        let pause = supervisor.pause_admitting();
+        assert_eq!(supervisor.spawn(spec(&supervisor, "paused", "exit 0")).unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+        drop(pause);
+        let report = supervisor.shutdown(Duration::ZERO, Duration::from_secs(2));
+        assert!(report.remaining.is_empty());
+        let ProcessEvent::Exited(exit) = events.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(exit.child, first.child);
+        assert!(exit.termination_requested);
+        assert_eq!(supervisor.terminate(&first.child, 1).unwrap(), TerminateOutcome::AlreadyExited);
+        assert_eq!(supervisor.spawn(spec(&supervisor, "closed", "exit 0")).unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn unix_ignored_sigterm_escalates_within_bounded_time() {
+        let (supervisor, events) = supervisor();
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let ready = std::env::temp_dir().join(format!("nova-supervisor-ready-{}-{nonce}", std::process::id()));
+        let mut request = spec(&supervisor, "ignore-term", "trap '' TERM; printf ready > \"$1\"; while :; do sleep 30; done");
+        request.args.extend(["nova-test".into(), ready.as_os_str().to_owned()]);
+        let child = supervisor.spawn(request).unwrap().child;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !ready.exists() && Instant::now() < deadline { std::thread::sleep(Duration::from_millis(10)); }
+        assert!(ready.is_file(), "child installed its TERM handler");
+        let started = Instant::now();
+        assert_eq!(supervisor.terminate(&child, 1).unwrap(), TerminateOutcome::Requested);
+        let ProcessEvent::Exited(exit) = events.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(exit.exit_code, Some(128 + libc::SIGKILL));
+        assert!(exit.termination_requested);
+        assert!(started.elapsed() < Duration::from_secs(3));
+        fs::remove_file(ready).unwrap();
+    }
+
+    #[test]
+    fn unix_drop_reaps_own_children_without_touching_another_supervisor_group() {
+        let (first, first_events) = supervisor();
+        let (second, second_events) = supervisor();
+        let owned = first.spawn(spec(&first, "first", "exec sleep 30")).unwrap().child;
+        let unrelated = second.spawn(spec(&second, "second", "exec sleep 30")).unwrap().child;
+        drop(first);
+        let ProcessEvent::Exited(exit) = first_events.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(exit.child, owned);
+        assert!(second_events.try_recv().is_err());
+        assert_eq!(second.active_children(), vec![unrelated]);
+        assert!(second.shutdown(Duration::ZERO, Duration::from_secs(2)).remaining.is_empty());
+    }
 }
 
 #[cfg(all(test, windows))]

@@ -72,8 +72,29 @@ pub fn query_selected_adapter_budget(adapter: &wgpu::Adapter) -> Result<QuickGpu
 }
 
 #[cfg(not(windows))]
-pub fn query_selected_adapter_budget(_adapter: &wgpu::Adapter) -> Result<QuickGpuBudget> {
-    bail!("当前平台没有选定 DX12 适配器的 DXGI 实时预算，预算状态未知")
+pub fn query_selected_adapter_budget(adapter: &wgpu::Adapter) -> Result<QuickGpuBudget> {
+    let identity = adapter.get_info();
+    let measured = match identity.backend {
+        wgpu::Backend::Vulkan => unsafe {
+            adapter.as_hal::<wgpu::hal::api::Vulkan, _, _>(|selected| {
+                selected.and_then(|selected| selected.local_memory_budget())
+            })
+        },
+        #[cfg(target_os = "macos")]
+        wgpu::Backend::Metal => unsafe {
+            adapter.as_hal::<wgpu::hal::api::Metal, _, _>(|selected| {
+                selected.and_then(|selected| selected.local_memory_budget())
+            })
+        },
+        _ => None,
+    };
+    let (budget_bytes, current_usage_bytes) = measured.context("选定 GPU 未提供有效实时预算，预算状态未知")?;
+    ensure!(budget_bytes > 0, "驱动返回零显存预算，预算状态未知");
+    Ok(QuickGpuBudget {
+        adapter_name: identity.name, budget_bytes, current_usage_bytes,
+        available_for_reservation_bytes: 0, current_reservation_bytes: 0,
+        safe_available_bytes: budget_bytes.saturating_sub(current_usage_bytes),
+    })
 }
 
 #[derive(Debug, Clone)]

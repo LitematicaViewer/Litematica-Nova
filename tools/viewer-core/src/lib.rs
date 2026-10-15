@@ -19,6 +19,13 @@ pub mod mesh;
 pub mod metadata_edit;
 pub mod model;
 pub mod native_viewer;
+pub(crate) mod native_viewport;
+#[cfg(target_os = "macos")]
+pub(crate) mod macos_presentation;
+#[cfg(target_os = "macos")]
+pub(crate) mod mac_shared_viewport;
+#[cfg(target_os = "macos")]
+pub(crate) mod mac_fast_composition;
 pub mod quick_resource_preflight;
 #[cfg(target_os = "windows")]
 mod windows_composition;

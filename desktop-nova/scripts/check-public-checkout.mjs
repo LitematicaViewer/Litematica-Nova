@@ -93,12 +93,13 @@ export function validateSource(repo) {
   }
 }
 
-export async function validatePackage(root) {
+export async function validatePackage(root, expectedModuleId = 'nova_protected_module.dll') {
+  if (!['nova_protected_module.dll', 'libnova_protected_module.so', 'libnova_protected_module.dylib'].includes(expectedModuleId)) fail('Unsupported runtime module platform.');
   const config = json(path.join(root, 'protected-build.json'), 16384);
   const fields = ['schema', 'version', 'buildId', 'moduleId', 'manifestPublicKey', 'endpoint', 'manifestFile', 'ciphertextFile'];
   if (Object.keys(config).some(key => !fields.includes(key))) fail('Unexpected runtime build metadata field.');
   if (config.schema !== 'nova.protected-build.v1' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(config.buildId)) fail('Invalid runtime build identity.');
-  if (config.moduleId !== 'nova_protected_module.dll' || config.manifestFile !== config.moduleId + '.manifest.json' || config.ciphertextFile !== config.moduleId + '.enc') fail('Invalid runtime package paths.');
+  if (config.moduleId !== expectedModuleId || config.manifestFile !== config.moduleId + '.manifest.json' || config.ciphertextFile !== config.moduleId + '.enc') fail('Invalid runtime package paths.');
   const endpoint = new URL(config.endpoint);
   if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) fail('The runtime endpoint must be ordinary HTTPS.');
   const publicKey = Buffer.from(config.manifestPublicKey, 'base64');
@@ -138,13 +139,13 @@ export async function validateStaging(stage, { sha, requireCurrentSource = false
   return deployment;
 }
 
-export async function checkCheckout(repo, { development = false, reuseExisting = false } = {}) {
+export async function checkCheckout(repo, { development = false, reuseExisting = false, runtimePackageDir = process.env.NOVA_RUNTIME_PACKAGE_DIR } = {}) {
   repo = realpathSync(repo);
   const branch = run(repo, 'git', ['branch', '--show-current']);
   const sha = run(repo, 'git', ['rev-parse', '--verify', 'HEAD']);
   validateRef({ branch, sha, development });
   validateSource(repo);
-  const identity = await validatePackage(path.join(repo, 'bin/protected'));
+  const identity = await validatePackage(runtimePackageDir || path.join(repo, 'bin/protected'));
   const deployment = reuseExisting ? await validateStaging(path.join(repo, 'bin/public-beta'), { sha, requireCurrentSource: !development, identity }) : null;
   return { sha, identity, backendSource: deployment?.gitSha ?? null };
 }

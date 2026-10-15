@@ -1285,6 +1285,30 @@ impl super::Adapter {
         self.raw
     }
 
+    /// Current process-local budget on this exact Vulkan physical device.
+    /// Driver estimates are queried afresh; physical heap capacity is not a budget.
+    pub fn local_memory_budget(&self) -> Option<(u64, u64)> {
+        if !self.phd_capabilities.supports_extension(vk::ExtMemoryBudgetFn::name()) {
+            return None;
+        }
+        let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+        let mut properties = vk::PhysicalDeviceMemoryProperties2::builder().push_next(&mut budget);
+        unsafe { self.instance.raw.get_physical_device_memory_properties2(self.raw, &mut properties); }
+        let memory = properties.memory_properties;
+        let mut total_budget = 0_u64;
+        let mut total_usage = 0_u64;
+        let mut found = false;
+        for index in 0..memory.memory_heap_count as usize {
+            if memory.memory_heaps[index].flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL) {
+                if budget.heap_budget[index] == 0 { return None; }
+                total_budget = total_budget.checked_add(budget.heap_budget[index])?;
+                total_usage = total_usage.checked_add(budget.heap_usage[index])?;
+                found = true;
+            }
+        }
+        found.then_some((total_budget, total_usage))
+    }
+
     pub fn physical_device_capabilities(&self) -> &PhysicalDeviceCapabilities {
         &self.phd_capabilities
     }

@@ -28,6 +28,7 @@ use winit::raw_window_handle::{HasWindowHandle,RawWindowHandle};
 #[cfg(target_os="windows")]
 use winit::platform::windows::WindowBuilderExtWindows;
 use winit::window::WindowBuilder;
+use crate::native_viewport::NativeViewportWindow;
 #[cfg(target_os="windows")]
 #[path="native_child.rs"]
 mod native_child;
@@ -5271,7 +5272,7 @@ fn quick_native_backend_manual_selection_never_silently_falls_back() {
 }
 
 #[cfg(target_os = "windows")]
-async fn initialize_quick_gpu(window: Arc<winit::window::Window>, index: Option<&ChunkSceneIndex>,
+async fn initialize_quick_gpu(window: Arc<NativeViewportWindow>, index: Option<&ChunkSceneIndex>,
     atlas: Option<&RgbaImage>, bounds: SceneBounds, args: &mut ViewerArgs) -> Result<QuickGpuInitialization> {
     use viewer_launch_contract::GraphicsApiPreference as Backend;
     let embedded = args.quick_host.is_some();
@@ -5342,7 +5343,9 @@ async fn initialize_quick_gpu(window: Arc<winit::window::Window>, index: Option<
 }
 
 struct ViewerState {
-    surface: wgpu::Surface<'static>,
+    surface: Option<wgpu::Surface<'static>>,
+    #[cfg(target_os = "macos")]
+    mac_composition: Option<crate::mac_fast_composition::MacFastComposition>,
     // Surface owns the DXGI swapchain and must drop before its visual/target.
     #[cfg(target_os = "windows")]
     composition: Option<crate::windows_composition::WindowsComposition>,
@@ -5448,117 +5451,16 @@ struct ViewerState {
     capture_error: Option<String>,
     // CompositionVisual surfaces do not own the child HWND. Keep it alive until
     // after every GPU surface and composition COM reference has been dropped.
-    _window: Arc<winit::window::Window>,
+    _window: Arc<NativeViewportWindow>,
 }
 
 impl ViewerState {
-    fn quick_input_is_current(&self, args: &ViewerArgs) -> bool {
-        self.quick_source_identity.is_some() && args.input.as_ref().and_then(|path| std::fs::metadata(path).ok().map(|meta|
-            (path.clone(), meta.len(), meta.modified().ok()))) == self.quick_source_identity
-    }
-
-    fn take_quick_gpu_failure(&self) -> Option<String> {
-        self.quick_gpu_failure.lock().unwrap_or_else(|error| error.into_inner()).take()
-    }
-
-    fn replace_quick_scene(&mut self, scene: Option<ViewerScene>, args: &mut ViewerArgs) -> Result<()> {
-        ensure!(args.display_mode == ViewerDisplayMode::FastExperimental && args.quick_host.is_some(), "Only the independent embedded Fast session can reuse this GPU context");
-        let started = Instant::now();
-        self.quick_visible_sample_query.cancel(); self.quick_scene_revision = self.quick_scene_revision.wrapping_add(1);
-        self.drag_mode = None; self.last_cursor_position = None;
-        self.capture_output = None; self.capture_error = None;
-        self.resident_chunks.clear(); self.pending_upload_queue.clear(); self.pending_upload_keys.clear();
-        // Retire already submitted references before querying real live usage;
-        // no old/new scene double residency and no fixed timeout sleep.
-        let retirement = self.queue.submit([]);
-        self.device.poll(wgpu::Maintain::WaitForSubmissionIndex(retirement));
-        let mut bootstrap = Vec::new();
-        if let Some(scene) = scene {
-            ensure!(scene.texture_atlas.is_none(), "Fast scene replacement cannot carry Full materials");
-            self.build_cancellation.store(true, Ordering::Release);
-            self.build_request_tx.take();
-            self.retired_build_workers.append(&mut self.build_workers);
-            self.pending_build_queue.clear(); self.pending_build_keys.clear(); self.in_flight_build_keys.clear();
-            self.cpu_mesh_cache = ChunkMeshCpuCache::new(args.cpu_cache_max_chunks, args.cpu_cache_max_bytes);
-            self.cpu_mesh_cache.retain_complete_source = true;
-            self.prebuild_empty_mesh_keys.clear(); self.sticky_target_keys.clear(); self.warm_cache_keys.clear();
-            self.scene_bounds = scene.bounds;
-            self.chunk_scene_index = scene.chunk_scene_index.map(Arc::new);
-            self.bootstrap_visible_first = scene.bootstrap_visible_first;
-            self.label_anchors = scene.label_anchors;
-            bootstrap = scene.bootstrap_meshes;
-            self.build_cancellation = Arc::new(AtomicBool::new(false));
-            let index = self.chunk_scene_index.as_ref().context("Fast replacement has no actual scene index")?;
-            let (tx, rx, workers) = spawn_build_worker_pool(Arc::clone(index), Arc::new(scene.palette_colors),
-                args.build_workers, Arc::clone(&self.trace), Some(Arc::clone(&self.build_cancellation)));
-            self.build_request_tx = Some(tx); self.build_result_rx = rx; self.build_workers = workers;
-            self.build_worker_count = args.build_workers;
-            self.max_in_flight_builds = self.build_worker_count.max(1) * 16;
-            self.quick_source_identity = args.input.as_ref().and_then(|path| std::fs::metadata(path).ok().map(|meta|
-                (path.clone(), meta.len(), meta.modified().ok())));
-        }
-        self.reap_retired_build_workers();
-        prepare_quick_gpu_resources(self.quick_adapter.as_ref().context("Fast session lost its actual selected GPU adapter")?,
-            self.chunk_scene_index.as_deref(), None, self.size, self.scene_bounds, args, Some(self.shadow_resources.config.resolution.max(1)))?;
-        let lighting = LightingConfig::from_args(args.basic_lighting, args.basic_shadows, args.shadow_debug_view, args.shadow_force_test, self.scene_bounds);
-        self.queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&LightingUniform::from_config(lighting)));
-        let shadow = lighting.shadow();
-        if shadow.resolution.max(1) != self.shadow_resources.config.resolution.max(1) {
-            self.shadow_resources = create_shadow_map_resources(&self.device, shadow,
-                &self.render_pipeline_solid.get_bind_group_layout(3),
-                &self.shadow_resources.depth_pipeline.get_bind_group_layout(0), None,
-                Some(Arc::clone(&self.shadow_resources.depth_pipeline)));
-        } else {
-            let camera = CameraUniform { view_proj: shadow.light_camera.map(|camera| camera.view_proj).unwrap_or(Mat4::IDENTITY).to_cols_array_2d(),
-                camera_position: [0.0;4] };
-            self.queue.write_buffer(&self.shadow_resources.camera_buffer, 0, bytemuck::bytes_of(&camera));
-            self.shadow_resources.config = shadow;
-        }
-        self.camera = OrbitCamera::from_bounds(self.scene_bounds, self.config.width, self.config.height);
-        self.current_target_keys.clear(); self.current_preload_keys.clear(); self.current_retain_keys.clear();
-        self.deferred_quick_preloads.clear(); self.quick_upload_retry_at = None;
-        self.last_focus_chunk = None; self.last_target_radius_chunks = None;
-        self.prebuild_finished_keys.clear(); self.prebuild_cache_written_keys.clear(); self.prebuild_manifest_chunks.clear();
-        self.prebuild_before_show = args.prebuild_before_show; self.prebuild_cache_only = false;
-        self.prebuild_completed = !args.prebuild_before_show; self.background_fill_enabled = true;
-        self.show_after_prebuild = false; self.max_resident_chunks = args.resident_max_chunks; self.max_resident_bytes = args.resident_max_bytes;
-        self.quick_request_id = args.launch_request_id.clone(); self.quick_decision_path = args.quick_resource_decision.clone();
-        self.total_scene_chunks = self.chunk_scene_index.as_ref().map_or(0, |index| index.chunk_count());
-        self.prebuild_eta_seconds = None; self.prebuild_eta_sample_resident = 0;
-        self.prebuild_eta_sample_time = Instant::now(); self.prebuild_last_eta_update = Instant::now();
-        self.prebuild_last_completed_count = 0; self.prebuild_last_completed_at = Instant::now();
-        self.residency_dirty = true;
-        self.install_bootstrap_meshes(bootstrap);
-        self.sync_chunk_residency()?;
-        let _ = self.process_pending_uploads();
-        if let Some(error) = self.take_quick_gpu_failure() { bail!(error); }
-        if let Some(error) = self.presentation_error.take() { bail!(error); }
-        eprintln!("[NOVA_RENDER_PHASE] stage=fast_scene_installed elapsed_ms={:.3} existing_gpu_context=true new_gpu_devices=0 new_composition_surfaces=0 scene_chunks={} resident_chunks={} preload={} old_worker_receivers_reused=false", started.elapsed().as_secs_f64()*1000.0,
-            self.total_scene_chunks, self.resident_chunks.len(), self.prebuild_before_show);
-        Ok(())
-    }
-
-    fn reap_retired_build_workers(&mut self) {
-        let mut index = 0;
-        while index < self.retired_build_workers.len() {
-            if self.retired_build_workers[index].is_finished() {
-                let _ = self.retired_build_workers.swap_remove(index).join();
-            } else { index += 1; }
-        }
-    }
-
-    fn admit_quick_chunk_upload(&mut self, _prepared: &PreparedChunkMesh, _priority: QueuePriority) -> QuickChunkUploadAdmission {
-        // The complete Quick source stays resident. Actual GPU failures are
-        // reported by the device error handler; no cache rank retires a chunk.
-        QuickChunkUploadAdmission::Admitted { evicted_chunks: 0 }
-    }
-
     async fn new(
-        window: Arc<winit::window::Window>,
+        window: Arc<NativeViewportWindow>,
         scene: ViewerScene,
         args: &ViewerArgs,
     ) -> Result<Self> {
-        let mut effective_args = (*args).clone();
+        let mut effective_args = args.clone();
         let args = &mut effective_args;
         let wgpu_init_started_at = Instant::now();
         let size = window.inner_size();
@@ -5573,6 +5475,7 @@ impl ViewerState {
             chunk_scene_index: scene_chunk_scene_index,
             bootstrap_meshes,
             bootstrap_visible_first,
+            full_mode_materials,
             texture_atlas,
             label_anchors: scene_label_anchors,
         } = scene;
@@ -5584,92 +5487,63 @@ impl ViewerState {
                 scene_bounds, args).await?;
         #[cfg(not(target_os = "windows"))]
         let (surface, adapter, device, queue, config) = {
-        #[cfg(target_os="linux")]
-        ensure!(args.graphics_backend != viewer_launch_contract::GraphicsApiPreference::Dx12,
-            "DX12 is not available on Linux; select Auto or Vulkan");
-        let instance_started_at = Instant::now();
-        let embedded_composition = args.quick_host.is_some();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: {
-                #[cfg(target_os="linux")] { wgpu::Backends::VULKAN }
-                #[cfg(target_os="macos")] { wgpu::Backends::METAL }
-                #[cfg(not(any(target_os="linux",target_os="macos")))] { wgpu::Backends::all() }
-            },
-            ..Default::default()
-        });
-        println!(
-            "[TRACE_STARTUP] stage=wgpu_instance elapsed_ms={}",
-            instance_started_at.elapsed().as_millis()
-        );
-        let surface_started_at = Instant::now();
-        #[cfg(target_os = "windows")]
-        let composition = if embedded_composition {
-            Some(crate::windows_composition::WindowsComposition::new(window_hwnd(window.as_ref())?)?)
-        } else {
-            None
-        };
-        #[cfg(target_os = "windows")]
-        let surface = if let Some(composition) = composition.as_ref() {
-            // This is the existing renderer's DX12 GPU swapchain, not a copied
-            // frame or a top-level overlay. wgpu-hal owns its AddRef on visual.
-            unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(composition.visual_ptr())) }
-                .context("failed to create native child DX12 composition surface")?
-        } else {
-            instance.create_surface(window.clone()).context("failed to create wgpu surface")?
-        };
-        #[cfg(not(target_os = "windows"))]
-        let surface = {
-            #[cfg(not(target_os="linux"))]
-            ensure!(!embedded_composition, "The native platform viewport is not initialized");
-            instance.create_surface(window.clone()).context("failed to create wgpu surface")?
-        };
-        println!(
-            "[TRACE_STARTUP] stage=wgpu_surface elapsed_ms={}",
-            surface_started_at.elapsed().as_millis()
-        );
-
-        let adapter_started_at = Instant::now();
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: if cfg!(target_os = "macos") { wgpu::Backends::METAL } else { wgpu::Backends::VULKAN },
+                ..Default::default()
+            });
+            #[cfg(target_os = "macos")]
+            let shared = window.shared().is_some();
+            #[cfg(not(target_os = "macos"))]
+            let shared = false;
+            let surface = if shared { None } else {
+                Some(instance.create_surface(window.clone()).context("create native GPU surface")?)
+            };
+            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .context("failed to acquire suitable GPU adapter")?;
-        println!(
-            "[TRACE_STARTUP] stage=wgpu_adapter elapsed_ms={}",
-            adapter_started_at.elapsed().as_millis()
-        );
-        let adapter_info = adapter.get_info();
-        println!(
-            "[WGPU_INIT] adapter name={} backend={:?} device_type={:?}",
-            adapter_info.name, adapter_info.backend, adapter_info.device_type
-        );
-        prepare_quick_gpu_resources(&adapter, scene_chunk_scene_index.as_ref(), texture_atlas.as_ref(), size, scene_bounds, args, None)?;
-
-        let device_started_at = Instant::now();
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("native_viewer_device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                },
-                None,
-            )
-            .await
-            .context("failed to create wgpu device")?;
-        let capabilities = surface.get_capabilities(&adapter);
-        let config = wgpu::SurfaceConfiguration { usage: wgpu::TextureUsages::RENDER_ATTACHMENT | (capabilities.usages & wgpu::TextureUsages::COPY_SRC),
-            format: capabilities.formats.iter().copied().find(wgpu::TextureFormat::is_srgb).unwrap_or(capabilities.formats[0]),
-            width: size.width.max(1), height: size.height.max(1),
-            present_mode: if capabilities.present_modes.contains(&wgpu::PresentMode::Mailbox) { wgpu::PresentMode::Mailbox } else { wgpu::PresentMode::Fifo },
-            alpha_mode: quick_surface_alpha_mode(embedded_composition, &capabilities.alpha_modes)?,
-            view_formats: vec![], desired_maximum_frame_latency: 2 };
-        surface.configure(&device, &config);
-        (surface, adapter, device, queue, config)
+                compatible_surface: surface.as_ref(), force_fallback_adapter: false,
+            }).await.context("no GPU supports the native viewport backend")?;
+            prepare_quick_gpu_resources(&adapter, scene_chunk_scene_index.as_ref(), texture_atlas.as_ref(), size, scene_bounds, args, None)?;
+            let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("native_viewer_device"), required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+            }, None).await.context("create native GPU device")?;
+            let config = if let Some(surface) = surface.as_ref() {
+                let capabilities = surface.get_capabilities(&adapter);
+                wgpu::SurfaceConfiguration {
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | (capabilities.usages & wgpu::TextureUsages::COPY_SRC),
+                    format: capabilities.formats.iter().copied().find(wgpu::TextureFormat::is_srgb).context("native surface has no sRGB color format")?,
+                    width: size.width.max(1), height: size.height.max(1),
+                    present_mode: wgpu::PresentMode::Fifo,
+                    alpha_mode: quick_surface_alpha_mode(false, &capabilities.alpha_modes)?,
+                    view_formats: vec![], desired_maximum_frame_latency: 2,
+                }
+            } else { wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                format: wgpu::TextureFormat::Bgra8UnormSrgb,
+                width: size.width.max(1), height: size.height.max(1),
+                present_mode: wgpu::PresentMode::Fifo,
+                alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+                view_formats: vec![], desired_maximum_frame_latency: 2,
+            }};
+            if let Some(surface) = surface.as_ref() { surface.configure(&device, &config); }
+            println!("[NOVA_GPU_BACKEND] mode=fast platform={} selected={:?} adapter={:?} driver={:?} native_embedded={}",
+                std::env::consts::OS, adapter.get_info().backend, adapter.get_info().name, adapter.get_info().driver, embedded_composition);
+            (surface, adapter, device, queue, config)
         };
+        #[cfg(target_os = "windows")]
+        let surface = Some(surface);
+        #[cfg(target_os = "macos")]
+        let mac_composition = if let Some(viewport) = window.shared() {
+            let budget = crate::quick_resource_preflight::query_selected_adapter_budget(&adapter)?;
+            let available = budget.budget_bytes.saturating_mul(95) / 100;
+            let available = available.saturating_sub(budget.current_usage_bytes);
+            let color_bytes = u64::from(config.width).checked_mul(u64::from(config.height))
+                .and_then(|pixels| pixels.checked_mul(4 * 6)).context("native presentation size overflow")?;
+            ensure!(available >= color_bytes, "native GPU presentation does not fit the current selected-device budget");
+            viewport.set_presentation_budget(available);
+            Some(crate::mac_fast_composition::MacFastComposition::new(
+                Arc::clone(viewport), &adapter, &device, config.width, config.height, config.format)?)
+        } else { None };
         let quick_gpu_failure = Arc::new(Mutex::new(None));
         if embedded_composition {
             let failure = Arc::clone(&quick_gpu_failure);
@@ -5839,6 +5713,10 @@ impl ViewerState {
             || lighting_config.emissive_bloom().emissive_debug_view != EmissiveDebugViewMode::Off
             || lighting_config.emissive_bloom().bloom_debug_view != BloomDebugViewMode::Off
         {
+            log_emissive_bloom_debug(
+                lighting_config.emissive_bloom(),
+                full_mode_materials.as_deref(),
+            );
         }
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -5897,6 +5775,7 @@ impl ViewerState {
                 let (request_tx, result_rx, workers) = spawn_build_worker_pool(
                     scene_index.clone(),
                     Arc::new(palette_colors.clone()),
+                    full_mode_materials.clone(),
                     args.build_workers,
                     trace.clone(),
                     Some(Arc::clone(&build_cancellation)),
@@ -6054,6 +5933,104 @@ impl ViewerState {
         state.sync_chunk_residency()?;
         if let Some(error) = state.quick_gpu_failure.lock().unwrap_or_else(|error| error.into_inner()).take() { bail!(error); }
         Ok(state)
+    }
+
+    fn quick_input_is_current(&self, args: &ViewerArgs) -> bool {
+        self.quick_source_identity.is_some() && args.input.as_ref().and_then(|path| std::fs::metadata(path).ok().map(|meta|
+            (path.clone(), meta.len(), meta.modified().ok()))) == self.quick_source_identity
+    }
+
+    fn take_quick_gpu_failure(&self) -> Option<String> {
+        self.quick_gpu_failure.lock().unwrap_or_else(|error| error.into_inner()).take()
+    }
+
+    /// Replace only projection-owned state on the same native composition
+    /// surface, device, queue and pipelines. A distinct result receiver plus
+    /// cancellation prevents old workers from publishing into the new scene.
+    fn replace_quick_scene(&mut self, scene: Option<ViewerScene>, args: &mut ViewerArgs) -> Result<()> {
+        ensure!(args.display_mode == ViewerDisplayMode::FastExperimental && args.quick_host.is_some(), "Only the independent embedded Fast session can reuse this GPU context");
+        let started = Instant::now();
+        self.quick_visible_sample_query.cancel(); self.quick_scene_revision = self.quick_scene_revision.wrapping_add(1);
+        self.drag_mode = None; self.last_cursor_position = None;
+        self.capture_output = None; self.capture_error = None;
+        self.resident_chunks.clear(); self.pending_upload_queue.clear(); self.pending_upload_keys.clear();
+        // Retire already submitted references before querying real live usage;
+        // no old/new scene double residency and no fixed timeout sleep.
+        let retirement = self.queue.submit([]);
+        self.device.poll(wgpu::Maintain::WaitForSubmissionIndex(retirement));
+        let mut bootstrap = Vec::new();
+        if let Some(scene) = scene {
+            ensure!(scene.full_mode_materials.is_none() && scene.texture_atlas.is_none(), "Fast scene replacement cannot carry Full materials");
+            self.build_cancellation.store(true, Ordering::Release);
+            self.build_request_tx.take();
+            self.retired_build_workers.append(&mut self.build_workers);
+            self.pending_build_queue.clear(); self.pending_build_keys.clear(); self.in_flight_build_keys.clear();
+            self.cpu_mesh_cache = ChunkMeshCpuCache::new(args.cpu_cache_max_chunks, args.cpu_cache_max_bytes);
+            self.cpu_mesh_cache.retain_complete_source = true;
+            self.prebuild_empty_mesh_keys.clear(); self.sticky_target_keys.clear(); self.warm_cache_keys.clear();
+            self.scene_bounds = scene.bounds;
+            self.chunk_scene_index = scene.chunk_scene_index.map(Arc::new);
+            self.bootstrap_visible_first = scene.bootstrap_visible_first;
+            self.label_anchors = scene.label_anchors;
+            bootstrap = scene.bootstrap_meshes;
+            self.build_cancellation = Arc::new(AtomicBool::new(false));
+            let index = self.chunk_scene_index.as_ref().context("Fast replacement has no actual scene index")?;
+            let (tx, rx, workers) = spawn_build_worker_pool(Arc::clone(index), Arc::new(scene.palette_colors), None,
+                args.build_workers, Arc::clone(&self.trace), Some(Arc::clone(&self.build_cancellation)));
+            self.build_request_tx = Some(tx); self.build_result_rx = rx; self.build_workers = workers;
+            self.build_worker_count = args.build_workers;
+            self.max_in_flight_builds = self.build_worker_count.max(1) * 16;
+            self.quick_source_identity = args.input.as_ref().and_then(|path| std::fs::metadata(path).ok().map(|meta|
+                (path.clone(), meta.len(), meta.modified().ok())));
+        }
+        self.reap_retired_build_workers();
+        prepare_quick_gpu_resources(self.quick_adapter.as_ref().context("Fast session lost its actual selected GPU adapter")?,
+            self.chunk_scene_index.as_deref(), None, self.size, self.scene_bounds, args, Some(self.shadow_resources.config.resolution.max(1)))?;
+        let lighting = LightingConfig::from_args(args.basic_lighting, args.basic_shadows, args.shadow_debug_view, args.shadow_force_test, self.scene_bounds);
+        self.queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&LightingUniform::from_config(lighting)));
+        let shadow = lighting.shadow();
+        if shadow.resolution.max(1) != self.shadow_resources.config.resolution.max(1) {
+            self.shadow_resources = create_shadow_map_resources(&self.device, shadow,
+                &self.render_pipeline_solid.get_bind_group_layout(3),
+                &self.shadow_resources.depth_pipeline.get_bind_group_layout(0), None,
+                Some(Arc::clone(&self.shadow_resources.depth_pipeline)));
+        } else {
+            let camera = CameraUniform { view_proj: shadow.light_camera.map(|camera| camera.view_proj).unwrap_or(Mat4::IDENTITY).to_cols_array_2d(),
+                camera_position: [0.0;4] };
+            self.queue.write_buffer(&self.shadow_resources.camera_buffer, 0, bytemuck::bytes_of(&camera));
+            self.shadow_resources.config = shadow;
+        }
+        self.camera = OrbitCamera::from_bounds(self.scene_bounds, self.config.width, self.config.height);
+        self.current_target_keys.clear(); self.current_preload_keys.clear(); self.current_retain_keys.clear();
+        self.deferred_quick_preloads.clear(); self.quick_upload_retry_at = None;
+        self.last_focus_chunk = None; self.last_target_radius_chunks = None;
+        self.prebuild_finished_keys.clear(); self.prebuild_cache_written_keys.clear(); self.prebuild_manifest_chunks.clear();
+        self.prebuild_before_show = args.prebuild_before_show; self.prebuild_cache_only = false;
+        self.prebuild_completed = !args.prebuild_before_show; self.background_fill_enabled = true;
+        self.show_after_prebuild = false; self.max_resident_chunks = args.resident_max_chunks; self.max_resident_bytes = args.resident_max_bytes;
+        self.quick_request_id = args.launch_request_id.clone(); self.quick_decision_path = args.quick_resource_decision.clone();
+        self.total_scene_chunks = self.chunk_scene_index.as_ref().map_or(0, |index| index.chunk_count());
+        self.prebuild_eta_seconds = None; self.prebuild_eta_sample_resident = 0;
+        self.prebuild_eta_sample_time = Instant::now(); self.prebuild_last_eta_update = Instant::now();
+        self.prebuild_last_completed_count = 0; self.prebuild_last_completed_at = Instant::now();
+        self.residency_dirty = true;
+        self.install_bootstrap_meshes(bootstrap);
+        self.sync_chunk_residency()?;
+        let _ = self.process_pending_uploads();
+        if let Some(error) = self.take_quick_gpu_failure() { bail!(error); }
+        if let Some(error) = self.presentation_error.take() { bail!(error); }
+        eprintln!("[NOVA_RENDER_PHASE] stage=fast_scene_installed elapsed_ms={:.3} existing_gpu_context=true new_gpu_devices=0 new_composition_surfaces=0 scene_chunks={} resident_chunks={} preload={} old_worker_receivers_reused=false", started.elapsed().as_secs_f64()*1000.0,
+            self.total_scene_chunks, self.resident_chunks.len(), self.prebuild_before_show);
+        Ok(())
+    }
+
+    fn reap_retired_build_workers(&mut self) {
+        let mut index = 0;
+        while index < self.retired_build_workers.len() {
+            if self.retired_build_workers[index].is_finished() {
+                let _ = self.retired_build_workers.swap_remove(index).join();
+            } else { index += 1; }
+        }
     }
 
     fn install_bootstrap_meshes(&mut self, bootstrap_meshes: Vec<PreparedChunkMesh>) {
@@ -6289,7 +6266,7 @@ impl ViewerState {
         }
     }
 
-    fn finalize_prebuild(&mut self, window: &winit::window::Window, viewer_started_at: Instant) {
+    fn finalize_prebuild(&mut self, window: &NativeViewportWindow, viewer_started_at: Instant) {
         if self.prebuild_completed {
             return;
         }
@@ -6651,7 +6628,7 @@ impl ViewerState {
 
     fn run_prebuild_until_ready(
         &mut self,
-        window: &winit::window::Window,
+        window: &NativeViewportWindow,
         viewer_started_at: Instant,
     ) -> Result<()> {
         if !self.prebuild_before_show || self.prebuild_completed {
@@ -6732,6 +6709,7 @@ impl ViewerState {
         self.trace.gpu_buffer_upload_requests.fetch_add(1, Ordering::Relaxed);
         let gpu_upper = self.quick_adapter.as_ref().map(|_| quick_gpu_geometry_upper(prepared));
         let prepared = prepared.gpu_upload_mesh();
+        log_chest_front_gpu_vertices("upload", &prepared.vertices, &prepared.indices);
         let vertex_count = prepared.vertices.len() as u32;
         let solid_index_count = prepared.indices.len() as u32;
         let translucent_index_count = prepared.translucent_indices.len() as u32;
@@ -6771,6 +6749,12 @@ impl ViewerState {
             last_touched_frame: self.frame_index,
             estimated_bytes: gpu_upper.unwrap_or_else(|| prepared.estimated_bytes()),
         }
+    }
+
+    fn admit_quick_chunk_upload(&mut self, _prepared: &PreparedChunkMesh, _priority: QueuePriority) -> QuickChunkUploadAdmission {
+        // The complete Quick source stays resident. Actual GPU failures are
+        // reported by the device error handler; no cache rank retires a chunk.
+        QuickChunkUploadAdmission::Admitted { evicted_chunks: 0 }
     }
 
     fn enqueue_chunk_upload_with_cost(
@@ -8279,7 +8263,7 @@ impl ViewerState {
     fn native_present_statistics(&mut self) -> Option<(u32, Option<(u32, i64)>)> {
         if let Some(composition) = self.vulkan_composition.as_ref() {
             composition.present_count().map(|count| (count, composition.displayed()))
-        } else { unsafe { self.surface.as_hal::<wgpu::hal::api::Dx12, _, _>(|surface|
+        } else { unsafe { self.surface.as_mut().unwrap().as_hal::<wgpu::hal::api::Dx12, _, _>(|surface|
             surface.and_then(|surface| surface.native_present_statistics())) }.flatten() }
     }
 
@@ -8308,6 +8292,12 @@ impl ViewerState {
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         self.camera.update_aspect(new_size.width, new_size.height);
+        #[cfg(target_os = "macos")]
+        if let Some(composition) = self.mac_composition.as_mut() {
+            if let Err(error) = composition.resize(new_size.width, new_size.height) {
+                record_quick_gpu_failure(&self.quick_gpu_failure, format!("native Metal resize failed: {error:#}"));
+            }
+        }
         #[cfg(target_os = "windows")]
         if self.vulkan_composition.is_some() {
             self.device.poll(wgpu::Maintain::Wait);
@@ -8322,9 +8312,9 @@ impl ViewerState {
                 Ok(composition) => self.vulkan_composition = Some(composition),
                 Err(error) => { self.presentation_error = Some(format!("Vulkan native viewport resize failed: {error:#}")); return; }
             }
-        } else { self.surface.configure(&self.device, &self.config); }
+        } else { if let Some(surface) = self.surface.as_ref() { surface.configure(&self.device, &self.config); } }
         #[cfg(not(target_os = "windows"))]
-        self.surface.configure(&self.device, &self.config);
+        if let Some(surface) = self.surface.as_ref() { surface.configure(&self.device, &self.config); }
         #[cfg(target_os = "windows")]
         if let Some(composition) = self.composition.as_ref() {
             if let Err(error) = composition.commit() {
@@ -8460,7 +8450,7 @@ impl ViewerState {
 
     fn render(
         &mut self,
-        window: &winit::window::Window,
+        window: &NativeViewportWindow,
         viewer_started_at: Instant,
     ) -> Result<(), wgpu::SurfaceError> {
         if self.config.width == 0 || self.config.height == 0 {
@@ -8696,11 +8686,26 @@ impl ViewerState {
         let has_vulkan_composition = self.vulkan_composition.is_some();
         #[cfg(not(target_os = "windows"))]
         let has_vulkan_composition = false;
-        let output = if has_vulkan_composition { None } else { Some(self.surface.get_current_texture()?) };
+        #[cfg(target_os = "macos")]
+        let mac_frame = if let Some(composition) = self.mac_composition.as_mut() {
+            match composition.begin_frame(&self.device).map_err(|error| {
+                record_quick_gpu_failure(&self.quick_gpu_failure, format!("native Metal presentation failed: {error:#}"));
+                wgpu::SurfaceError::Lost
+            })? { Some(frame) => Some(frame), None => { self.device.poll(wgpu::Maintain::Poll); return Ok(()); } }
+        } else { None };
+        #[cfg(target_os = "macos")]
+        let has_offscreen_presentation = has_vulkan_composition || mac_frame.is_some();
+        #[cfg(not(target_os = "macos"))]
+        let has_offscreen_presentation = has_vulkan_composition;
+        let output = if has_offscreen_presentation { None } else {
+            Some(self.surface.as_ref().ok_or(wgpu::SurfaceError::Lost)?.get_current_texture()?)
+        };
         let output_texture = if let Some(output) = output.as_ref() { &output.texture } else {
             #[cfg(target_os = "windows")]
             { self.vulkan_composition.as_ref().expect("Vulkan native target exists").source() }
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(target_os = "macos")]
+            { mac_frame.as_ref().expect("native Metal frame lease exists").texture() }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             { unreachable!() }
         };
         let view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -8931,6 +8936,16 @@ impl ViewerState {
             self.capture_error = save_gpu_frame(&self.device, &buffer, &path, self.config.width, self.config.height, stride, self.config.format).err().map(|error| error.to_string());
         }
         if let Some(output) = output { output.present(); }
+        #[cfg(target_os = "macos")]
+        if let Some(frame) = mac_frame {
+            let real_geometry = self.resident_chunks.values().any(|resident|
+                resident.gpu.solid_index_count > 0 || resident.gpu.translucent_index_count > 0);
+            self.mac_composition.as_mut().expect("native Metal presenter exists")
+                .submit(frame, &self.device, &self.queue, real_geometry).map_err(|error| {
+                    record_quick_gpu_failure(&self.quick_gpu_failure, format!("native Metal submission failed: {error:#}"));
+                    wgpu::SurfaceError::Lost
+                })?;
+        }
         #[cfg(target_os = "windows")]
         if let Some(composition) = self.vulkan_composition.as_ref() {
             composition.present().map_err(|error| {
@@ -8992,7 +9007,7 @@ fn resolve_palette_color(
     properties: Option<&BTreeMap<String, String>>,
     display_mode: ViewerDisplayMode,
 ) -> ResolvedBlockColor {
-    
+
     let stripped_state = block_id.split('[').next().unwrap_or(block_id);
     let normalized_key = stripped_state
         .split(':')
@@ -9898,7 +9913,7 @@ fn write_native_cache_manifest(
 }
 
 #[cfg(target_os = "windows")]
-fn window_hwnd(window: &winit::window::Window) -> Result<isize> {
+fn window_hwnd(window: &NativeViewportWindow) -> Result<isize> {
     match window.window_handle()?.as_raw() {
         RawWindowHandle::Win32(handle) => Ok(handle.hwnd.get()),
         other => bail!("embed_parent_hwnd requires Win32 window handle, got {other:?}"),
@@ -10017,10 +10032,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
     let window_builder = if let Some(host) = &args.quick_host {
         native_child::builder(window_builder, host)?
     } else { window_builder };
-    let window = Arc::new(
-        window_builder.build(&event_loop)
-            .context("failed to create native viewer window")?,
-    );
+    let window = crate::native_viewport::build(window_builder, &event_loop, args.quick_host.as_ref())?;
     #[cfg(target_os = "windows")]
     if let Some(host) = &args.quick_host {
         native_child::verify(window.as_ref(), host)?;
@@ -10105,9 +10117,72 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
     #[cfg(target_os = "windows")]
     let mut quick_first_block_timing = first_block_timing::FirstBlockTiming::new_fast(
         args.input.as_deref().unwrap_or_else(|| Path::new("<empty>")));
+    #[cfg(target_os = "macos")]
+    let mut last_mac_display_epoch = None;
     let event_loop_result = event_loop.run(move |event, event_loop_window_target| {
         event_loop_window_target.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(40)));
+        #[cfg(target_os = "macos")]
+        let event = if let Some(viewport) = window.shared() {
+            state.device.poll(wgpu::Maintain::Poll);
+            let mut escape = false;
+            for input in viewport.poll_events() {
+                use crate::macos_presentation::ProducerEvent;
+                match input {
+                    ProducerEvent::Input(input) => match input.kind {
+                        1 => { state.process_cursor_moved(PhysicalPosition::new(input.x, input.y)); quick_redraw.request(); }
+                        2 | 3 => {
+                            let button = match input.code {
+                                0 => MouseButton::Left, 1 => MouseButton::Right, 2 => MouseButton::Middle,
+                                other => MouseButton::Other(u16::try_from(other).unwrap_or(u16::MAX)),
+                            };
+                            state.process_mouse_input(if input.kind == 2 { ElementState::Pressed } else { ElementState::Released }, button);
+                            quick_redraw.request();
+                        }
+                        4 => {
+                            let delta = if input.flags & 2 != 0 {
+                                MouseScrollDelta::PixelDelta(PhysicalPosition::new(input.dx, input.dy))
+                            } else { MouseScrollDelta::LineDelta(input.dx as f32, input.dy as f32) };
+                            state.process_scroll(delta); quick_redraw.request();
+                        }
+                        5 if input.code == 15 => { state.reset_camera(); quick_redraw.request(); }
+                        5 if input.code == 53 => { escape = true; }
+                        7 if input.flags & 1 == 0 => { state.drag_mode = None; state.last_cursor_position = None; }
+                        _ => {}
+                    },
+                    ProducerEvent::ResetInput { .. } => { state.drag_mode = None; state.last_cursor_position = None; }
+                    ProducerEvent::ViewportResized { .. } => { state.resize(window.inner_size()); quick_redraw.request(); }
+                    ProducerEvent::Hidden { .. } => {
+                        presentation_mode = PersistentPresentationMode::Hidden;
+                        quick_redraw.hide(); state.drag_mode = None; state.last_cursor_position = None;
+                        publish_viewer_hidden_event(session_watcher.as_mut(), 0, "quick-metal", "popup_close");
+                    }
+                    ProducerEvent::Displayed { epoch, frame_id, presented_time_seconds, .. } => {
+                        if last_mac_display_epoch != Some(epoch) {
+                            eprintln!("[NOVA_GPU_PRESENT] platform=macos mode=fast epoch={epoch} frame_id={frame_id} presented_time_seconds={presented_time_seconds:.9} native_compositor_receipt=true visible_pixel_sample=not_measured");
+                            last_mac_display_epoch = Some(epoch);
+                        }
+                    }
+                    ProducerEvent::Failed(message) => {
+                        record_viewer_shutdown("native_presentation_failed", 1, &message);
+                        *event_error.lock().expect("quick native error mutex") = Some(message);
+                        event_loop_window_target.exit(); return;
+                    }
+                    ProducerEvent::FrameRejected { .. } => { quick_redraw.request(); }
+                }
+            }
+            if escape {
+                viewport.suspend(); presentation_mode = PersistentPresentationMode::Hidden;
+                quick_redraw.hide(); state.drag_mode = None; state.last_cursor_position = None;
+                publish_viewer_hidden_event(session_watcher.as_mut(), 0, "quick-metal", "escape_key");
+            }
+            if viewport.closed() { event_loop_window_target.exit(); return; }
+            let size = window.inner_size();
+            if size != state.size { state.resize(size); quick_redraw.request(); }
+            if viewport.visible() && matches!(event, Event::NewEvents(_)) && viewport.take_redraw() {
+                Event::WindowEvent { window_id: window.id(), event: WindowEvent::RedrawRequested }
+            } else { event }
+        } else { event };
         match event {
             Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
                 WindowEvent::Destroyed => {
@@ -10400,7 +10475,27 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         #[cfg(any(target_os="windows",target_os="linux"))]
                         let child_outcome = quick_host.as_ref().map(|host|
                             native_child::apply(window.as_ref(), host, &command, &mut presentation_mode));
-                        #[cfg(not(any(target_os="windows",target_os="linux")))]
+                        #[cfg(target_os="macos")]
+                        let child_outcome = window.shared().map(|shared| (|| -> Result<ViewerPresentationCommandOutcome> {
+                            if !shared.apply(&command)? { return Ok(ViewerPresentationCommandOutcome::NotPresentation); }
+                            let status = match command.kind {
+                                ViewerSessionCommandKind::AttachEmbedded => {
+                                    presentation_mode = PersistentPresentationMode::Embedded;
+                                    ViewerSessionState::Attached { host_hwnd: "0".into(), width: shared.extent()[0], height: shared.extent()[1] }
+                                }
+                                ViewerSessionCommandKind::Resize => ViewerSessionState::Resized {
+                                    width: shared.extent()[0], height: shared.extent()[1], focused: command.focused,
+                                },
+                                ViewerSessionCommandKind::ShowPopup => { presentation_mode = PersistentPresentationMode::Popup; ViewerSessionState::PopupVisible }
+                                ViewerSessionCommandKind::Release => {
+                                    presentation_mode = PersistentPresentationMode::Hidden;
+                                    return Ok(ViewerPresentationCommandOutcome::Release(ViewerSessionState::Released));
+                                }
+                                _ => { presentation_mode = PersistentPresentationMode::Hidden; ViewerSessionState::Hidden }
+                            };
+                            Ok(ViewerPresentationCommandOutcome::Applied(status))
+                        })());
+                        #[cfg(not(any(target_os="windows",target_os="linux",target_os="macos")))]
                         let child_outcome: Option<Result<ViewerPresentationCommandOutcome>> = None;
                         let outcome = child_outcome.unwrap_or_else(|| Err(anyhow!("native quick preview requires its original platform Host")));
                         if matches!(command.kind, ViewerSessionCommandKind::Hide
@@ -10570,8 +10665,7 @@ fn parse_launch_contract_path(provenance: &BackendProvenance, path: &Path) -> Re
 fn parse_launch_contract_path_inner(provenance: &BackendProvenance, path: &Path, require_native_host: bool) -> Result<ViewerArgs> {
  let bytes=read_process_file(path)?;let hash=format!("{:x}",Sha256::digest(&bytes));
  let contract=ViewerLaunchContract::from_json_slice(&bytes).map_err(|error|anyhow!("invalid launch contract: {error}"))?;
- #[cfg(not(target_os="windows"))]
- bail!("native embedded quick preview is not supported on this platform in Beta 0.1");
+
  let (host, initial_visible, preload, gpu_context_only, resource_report, resource_decision, graphics_backend) = match &contract.task {
      ViewerTask::QuickPreview(task) => (task.host.clone(),task.initial_visible,task.preload,false,task.resource_report_path.clone(),task.resource_decision_path.clone(),task.graphics_backend),
      ViewerTask::QuickGpuContext(task) => (Some(task.host.clone()),false,false,true,None,None,task.graphics_backend),
@@ -10586,7 +10680,7 @@ fn parse_launch_contract_path_inner(provenance: &BackendProvenance, path: &Path,
 
 fn env_bool(name: &str) -> bool { matches!(std::env::var(name).ok().as_deref(),Some("1"|"true"|"on"|"yes")) }
 fn hide_quick_preview_window(
-    window: &winit::window::Window,
+    window: &NativeViewportWindow,
     host: Option<&viewer_launch_contract::QuickPreviewHostWindow>,
 ) -> Result<()> {
     #[cfg(any(target_os="windows",target_os="linux"))]

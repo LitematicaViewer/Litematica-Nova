@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn x11_host_rejects_zero_and_process_local_pointers() {
         for id in ["0", "0x1234", "18446744073709551615", "wl_surface:42"] {
-            assert!(parent_id(&QuickPreviewHostWindow { hwnd: id.into(), process_id: 1 }).is_err());
+            assert!(parent_id(&QuickPreviewHostWindow { hwnd: id.into(), process_id: 1 , native_composition: None }).is_err());
         }
     }
     #[test]
