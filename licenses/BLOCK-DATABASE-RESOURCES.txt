@@ -1,0 +1,25 @@
+Litematica-Nova block-database resource attribution
+
+Original language, model and texture resource pack:
+  https://github.com/heiheids/schematic-manager
+  Source commit: d09c9ba71be77142a6d1183e14bc245b1fc3544b
+  Author: 黑山大叔
+  The source README states: “本程序仅限于免费分享，禁止任何销售行为”.
+  This condition and original attribution are retained. Nova does not relicense
+  that application as MPL-2.0 and does not incorporate its application/UI code.
+
+Registry and legacy numeric data:
+  https://github.com/PrismarineJS/minecraft-data/tree/dd01127457231e7da629d645b3c6738068018eb0
+  The pinned upstream README identifies its data license as MIT:
+  https://github.com/PrismarineJS/minecraft-data/blob/dd01127457231e7da629d645b3c6738068018eb0/README.md#license
+  Upstream source notice: some data was extracted manually or automatically
+  from wiki.vg and minecraft.gamepedia.com; upstream notes that its license may
+  change if one of those sources requires it.
+
+Minecraft game assets/data remain the property of their respective owners.
+The distributor has stated that redistribution permission has been obtained.
+The Nova MPL-2.0 source license does not replace third-party resource terms.
+
+plains-tints.dat.z contains concrete Plains/origin color metadata for the
+ordinary block-data browser, bound to blocks.dat.z. It contains no renderer
+source, shader source, tint solver, executable rules or private export tool.

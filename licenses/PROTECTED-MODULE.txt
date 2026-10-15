@@ -1,0 +1,1 @@
+Nova standard/full rendering modules are separately licensed proprietary components. The MPL-2.0 public-source grant does not grant source rights to these separate components. Third-party license notices remain applicable.
