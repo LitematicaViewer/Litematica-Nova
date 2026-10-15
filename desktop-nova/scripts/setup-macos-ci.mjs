@@ -80,6 +80,16 @@ export function validateMachObject(bytes, target) {
   }
 }
 
+export function amiceBuildArguments(manifest, targetDirectory, hostArchitecture, llvmRoot, mode) {
+  const features = hostArchitecture === 'arm64' ? 'llvm22-1,amice-plugin/target-aarch64' : 'llvm22-1';
+  const link = mode === 'static' ? ['-C', 'link-arg=-Wl,-undefined,dynamic_lookup'] : [];
+  // `cargo rustc --lib` needs an actual package, not the supplied virtual
+  // workspace manifest. The default-members setting is not sufficient here.
+  return [`+${RUST_TOOLCHAIN}`, 'rustc', '--locked', '--release', '--manifest-path', manifest,
+    '-p', 'amice', '--target-dir', targetDirectory, '--no-default-features', '--features', features,
+    '--lib', '--', ...link, '-C', `link-arg=-Wl,-rpath,${path.join(llvmRoot, 'lib')}`];
+}
+
 async function digest(file) {
   const hash = crypto.createHash('sha256');
   for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
@@ -194,14 +204,10 @@ export async function setupMacosCi(options) {
     env.AMICE_LLVM_STATIC_HOST = '1';
   }
   const amiceTarget = path.join(scratch, 'amice-target');
-  const features = arch === 'arm64' ? 'llvm22-1,amice-plugin/target-aarch64' : 'llvm22-1';
   // dynamic_lookup resolves the static opt host's real exported LLVM symbols;
   // it does not link another LLVM core or provide stub C APIs. The probe below
   // must actually load, virtualize, codegen and run or no output is admitted.
-  const link = mode === 'static' ? ['-C', 'link-arg=-Wl,-undefined,dynamic_lookup'] : [];
-  run('build-amice', 'cargo', [`+${RUST_TOOLCHAIN}`, 'rustc', '--locked', '--release', '--manifest-path', manifest,
-    '--target-dir', amiceTarget, '--no-default-features', '--features', features, '--lib', '--',
-    ...link, '-C', `link-arg=-Wl,-rpath,${path.join(llvmRoot, 'lib')}`], { cwd: amice });
+  run('build-amice', 'cargo', amiceBuildArguments(manifest, amiceTarget, arch, llvmRoot, mode), { cwd: amice });
   const amicePlugin = path.join(amiceTarget, 'release/libamice.dylib');
   run('amice-native-architecture', 'xcrun', ['lipo', amicePlugin, '-verify_arch', arch]);
   const vmProfile = path.join(amice, 'crates/amice-vm/profiles/ruoke');

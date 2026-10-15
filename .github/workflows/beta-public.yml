@@ -2,12 +2,19 @@ name: Beta desktop candidates
 
 on:
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: Candidate build platforms
+        required: true
+        default: all
+        type: choice
+        options: [all, local, macos]
 
 permissions:
   contents: read
 
 concurrency:
-  group: nova-local-build
+  group: nova-public-candidates
   cancel-in-progress: false
 
 jobs:
@@ -15,7 +22,7 @@ jobs:
     if: >-
       github.repository == 'LitematicaViewer/Litematica-Nova' &&
       github.ref == 'refs/heads/main' &&
-      github.event_name == 'workflow_dispatch'
+      github.event_name == 'workflow_dispatch' && inputs.platforms != 'macos'
     runs-on: [self-hosted, Windows, X64, nova-local]
     timeout-minutes: 180
     env:
@@ -72,7 +79,7 @@ jobs:
     if: >-
       github.repository == 'LitematicaViewer/Litematica-Nova' &&
       github.ref == 'refs/heads/main' &&
-      github.event_name == 'workflow_dispatch'
+      github.event_name == 'workflow_dispatch' && inputs.platforms != 'local'
     strategy:
       fail-fast: false
       matrix:

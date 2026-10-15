@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { LLVM_DOWNLOADS, LLVM_VERSION, RUST_TOOLCHAIN, parseArguments, targetArchitecture,
-  sourceBuildArguments, validateVersions, validateMachObject, setupMacosCi } from './setup-macos-ci.mjs';
+  sourceBuildArguments, validateVersions, validateMachObject, setupMacosCi, amiceBuildArguments } from './setup-macos-ci.mjs';
 
 test('CLI requires one explicit supported target and existing-input/output locations', () => {
   const result = parseArguments(['--target', 'aarch64-apple-darwin', '--tooling-root', 'fixture/tooling', '--output', 'fixture/result.json']);
@@ -32,6 +32,15 @@ test('every real lipo invocation puts its input before the variadic verify_arch 
     assert.ok(argumentsSource.endsWith(", '-verify_arch', arch"), stage);
     assert.ok(!argumentsSource.startsWith("'lipo', '-verify_arch'"), stage);
   }
+});
+
+test('actual Amice build selects the package inside its virtual workspace', () => {
+  const args = amiceBuildArguments('tooling/amice/Cargo.toml', 'amice-target', 'arm64', 'llvm22', 'static');
+  assert.equal(args[args.indexOf('-p') + 1], 'amice');
+  assert.ok(args.indexOf('-p') < args.indexOf('--'));
+  assert.equal(args[args.indexOf('--features') + 1], 'llvm22-1,amice-plugin/target-aarch64');
+  assert.ok(args.includes('link-arg=-Wl,-undefined,dynamic_lookup'));
+  assert.ok(!amiceBuildArguments('manifest', 'target', 'arm64', 'llvm22', 'shared').includes('link-arg=-Wl,-undefined,dynamic_lookup'));
 });
 
 function versions() {
