@@ -400,6 +400,7 @@ fn build_root(plan: &ProjectionPlan) -> Result<BuiltRoot> {
                 .saturating_sub(bounds_min[2])
                 .saturating_add(1),
         }),
+        preview_image_data: None,
     };
     let root = LitematicRoot {
         metadata,
@@ -407,6 +408,7 @@ fn build_root(plan: &ProjectionPlan) -> Result<BuiltRoot> {
         version: 6,
         sub_version: Some(1),
         minecraft_data_version: plan.minecraft_data_version,
+        preview_image_data: None,
     };
     Ok(BuiltRoot {
         root,

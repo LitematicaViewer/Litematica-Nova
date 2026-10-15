@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use fastnbt::{Value, from_reader, to_writer};
+use fastnbt::{IntArray, Value, from_reader, to_writer};
 use flate2::Compression;
 use flate2::bufread::GzDecoder as BufReadGzDecoder;
 use flate2::read::GzDecoder;
@@ -814,6 +814,7 @@ struct LitematicRootFields {
 enum RootFieldName {
     MinecraftDataVersion,
     PreviewImageData,
+    Metadata,
     Other,
 }
 
@@ -888,9 +889,12 @@ where
         let mut fields = LitematicRootFields::default();
         let mut data_version_seen = false;
         let mut preview_image_seen = false;
+        let mut metadata_preview = None;
+        let mut metadata_preview_seen = false;
         loop {
             let tag = self.read_u8("root compound child tag type")?;
             if tag == 0 {
+                if metadata_preview_seen { fields.preview_image = metadata_preview; }
                 return Ok(fields);
             }
             validate_payload_tag(tag, "root compound child")?;
@@ -921,6 +925,25 @@ where
                     }
                     self.add_logical_values(1)?;
                     fields.preview_image = self.read_preview_image_data()?;
+                }
+                RootFieldName::Metadata if capture_preview && tag == 10 => {
+                    self.add_logical_values(1)?;
+                    self.record_container_depth(2)?;
+                    loop {
+                        let child_tag = self.read_u8("Metadata child tag type")?;
+                        if child_tag == 0 { break; }
+                        validate_payload_tag(child_tag, "Metadata child")?;
+                        match self.read_root_field_name()? {
+                            RootFieldName::PreviewImageData => {
+                                if metadata_preview_seen { bail!("Metadata has duplicate PreviewImageData fields"); }
+                                metadata_preview_seen = true;
+                                if child_tag != 11 { bail!("Metadata PreviewImageData expected TAG_Int_Array (11)"); }
+                                self.add_logical_values(1)?;
+                                metadata_preview = self.read_preview_image_data()?;
+                            }
+                            _ => self.skip_payload(child_tag, 2)?,
+                        }
+                    }
                 }
                 _ => self.skip_payload(tag, 1)?,
             }
@@ -1070,6 +1093,8 @@ where
             RootFieldName::MinecraftDataVersion
         } else if &name[..length] == PREVIEW_IMAGE_DATA_NAME {
             RootFieldName::PreviewImageData
+        } else if &name[..length] == PREFLIGHT_METADATA_NAME {
+            RootFieldName::Metadata
         } else {
             RootFieldName::Other
         })
@@ -1294,6 +1319,8 @@ pub struct LitematicRoot {
     pub sub_version: Option<i32>,
     #[serde(rename = "MinecraftDataVersion")]
     pub minecraft_data_version: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_image_data: Option<IntArray>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1308,6 +1335,8 @@ pub struct MetadataNbt {
     pub total_volume: Option<i32>,
     pub region_count: Option<i32>,
     pub enclosing_size: Option<EnclosingSize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_image_data: Option<IntArray>,
 }
 
 #[derive(Clone)]
@@ -1850,21 +1879,44 @@ pub struct RegionBounds {
 }
 
 pub fn load_litematic_root(path: &Path) -> Result<LitematicRoot> {
-    if std::env::var_os("NOVA_STATS_TIMING").is_some() {
-        let started = Instant::now();
-        let compressed = std::fs::read(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        let read_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let parse = Instant::now();
-        let root = from_reader(GzDecoder::new(std::io::Cursor::new(compressed)))
-            .with_context(|| format!("failed to parse {}", path.display()))?;
-        eprintln!("[NOVA_STATS_TIMING] read_ms={read_ms:.3} parse_ms={:.3}", parse.elapsed().as_secs_f64() * 1000.0);
-        return Ok(root);
-    }
     let file = open_process_read_file(path)
         .with_context(|| format!("failed to open {}", path.display()))?;
+    if std::env::var_os("NOVA_STATS_TIMING").is_some() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        #[derive(Default)]
+        struct Metrics { nanos: Cell<u128>, calls: Cell<u64>, bytes: Cell<u64> }
+        struct Meter<R> { inner: R, metrics: Rc<Metrics> }
+        impl<R: Read> Read for Meter<R> {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                let started = Instant::now();
+                let result = self.inner.read(output);
+                self.metrics.nanos.set(self.metrics.nanos.get() + started.elapsed().as_nanos());
+                self.metrics.calls.set(self.metrics.calls.get() + 1);
+                if let Ok(bytes) = &result { self.metrics.bytes.set(self.metrics.bytes.get() + *bytes as u64); }
+                result
+            }
+        }
+        // Instrument the production streaming reader itself. Do not inflate
+        // into a second full Vec just to obtain diagnostic phase timings.
+        let reads = Rc::new(Metrics::default());
+        let decoded = Rc::new(Metrics::default());
+        let started = Instant::now();
+        let decoder = GzDecoder::new(Meter { inner: file, metrics: reads.clone() });
+        let result = from_reader(BufReader::with_capacity(NBT_STREAM_BUFFER_BYTES, Meter { inner: decoder, metrics: decoded.clone() }))
+            .with_context(|| format!("failed to parse {}", path.display()));
+        let total = started.elapsed().as_nanos();
+        let read_ns = reads.nanos.get();
+        let decode_ns = decoded.nanos.get();
+        eprintln!("[NOVA_STATS_TIMING] read_ms={:.3} decompress_reader_ms={:.3} parse_ms={:.3} compressed_bytes={} decoded_bytes={} file_read_calls={} decoder_read_calls={} source_reads=1 parse_runs=1 extra_uncompressed_buffer_bytes={} full_inflate_buffer_bytes=0 timing=production_streaming_inclusive_reads",
+            read_ns as f64 / 1_000_000.0, decode_ns.saturating_sub(read_ns) as f64 / 1_000_000.0,
+            total.saturating_sub(decode_ns) as f64 / 1_000_000.0, reads.bytes.get(), decoded.bytes.get(), reads.calls.get(), decoded.calls.get(), NBT_STREAM_BUFFER_BYTES);
+        return result;
+    }
     let decoder = GzDecoder::new(file);
-    from_reader(decoder).with_context(|| format!("failed to parse {}", path.display()))
+    // Buffer decompressed bytes too: fastnbt can make tiny reads for NBT
+    // primitive arrays. Keep an 8KiB bounded stream, never a full inflate Vec.
+    from_reader(BufReader::with_capacity(NBT_STREAM_BUFFER_BYTES, decoder)).with_context(|| format!("failed to parse {}", path.display()))
 }
 
 /// Loads a litematic for the V5 renderer without retaining its potentially
@@ -1938,7 +1990,13 @@ fn load_litematic_root_file_backed_in_with_progress_and_fingerprint(
     // the spool, avoiding a second full mmap scan that would fault every
     // BlockStates page back into the process working set.
     let mut spool = wrap_process_io(&mut spool_file);
-    let spooling = SpoolingReader::new(decoder, &mut spool);
+    // The validating scanner reads scalar tags in 1/2/4-byte pieces. Buffer
+    // outside the tee, so neither gzip decoding nor the actual spool file
+    // receives a syscall-sized operation for every scalar.
+    let spooling = BufReader::with_capacity(
+        NBT_STREAM_BUFFER_BYTES,
+        SpoolingReader::new(decoder, &mut spool),
+    );
     let (scan, mut spooling) =
         scan_minecraft_data_version_from_nbt_with_progress(spooling, progress)
             .with_context(|| format!("failed to validate NBT in {}", path.display()))?;
@@ -1953,6 +2011,9 @@ fn load_litematic_root_file_backed_in_with_progress_and_fingerprint(
             path.display()
         );
     }
+    // The EOF check above consumed the complete buffer and gzip footer; no
+    // prefetched byte is discarded when the original tee is recovered.
+    let spooling = spooling.into_inner();
     let decompressed_bytes = spooling.spooled_bytes();
     let decoder = spooling.into_inner();
     spool
@@ -2061,9 +2122,144 @@ enum PalettePacking {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct PaletteLayout {
+pub(crate) struct PaletteLayout {
     packing: PalettePacking,
     nbits: usize,
+}
+
+impl PaletteLayout {
+    // The owning immutable region resolves its packing once; selected chunk
+    // reads reuse that exact decision without inflating another region copy.
+    pub(crate) fn palette_index(self, block_states: &BigEndianLongArray, index: usize) -> usize {
+        palette_index_at_with_packing(block_states, self.nbits, index, self.packing)
+    }
+
+    // Sequential range reads retain the current/crossing long. In particular,
+    // a nonzero word is decoded once, not fetched again for every palette item.
+    // Returns actual backing-array word reads for the stage's aggregate ledger.
+    pub(crate) fn visit_palette_range<F>(self, block_states: &BigEndianLongArray,
+        start: usize, end: usize, zero_is_air: bool, mut visit: F) -> usize
+    where F: FnMut(usize, usize) {
+        if start >= end { return 0; }
+        let mask = palette_mask(self.nbits);
+        let mut word_reads = 0;
+        match self.packing {
+            PalettePacking::CompactBitstream => {
+                let last_word = (end * self.nbits).div_ceil(64);
+                let mut index = start;
+                let mut word_index = (index * self.nbits) >> 6;
+                let mut word = block_states.u64_at(word_index);
+                word_reads += 1;
+                let mut following: Option<(usize, u64)> = None;
+                while index < end {
+                    if zero_is_air && word == 0 {
+                        let mut next_word = word_index + 1;
+                        let mut next_value = 0;
+                        while next_word < last_word {
+                            next_value = if let Some((cached_index, cached_word)) = following.take() {
+                                debug_assert_eq!(cached_index, next_word);
+                                cached_word
+                            } else {
+                                word_reads += 1;
+                                block_states.u64_at(next_word)
+                            };
+                            if next_value != 0 { break; }
+                            next_word += 1;
+                        }
+                        // The value touching the first nonzero word is decoded,
+                        // even when its preceding word contains only AIR bits.
+                        index = ((next_word * 64) / self.nbits).min(end).max(index);
+                        if index >= end { break; }
+                        word_index = (index * self.nbits) >> 6;
+                        if word_index == next_word {
+                            word = next_value;
+                        } else {
+                            debug_assert_eq!(word_index + 1, next_word);
+                            word = 0;
+                            following = Some((next_word, next_value));
+                        }
+                    }
+                    let bit = (index * self.nbits) & 63;
+                    let mut value = word >> bit;
+                    if bit + self.nbits > 64 {
+                        let next = if let Some((cached_index, cached_word)) = following {
+                            debug_assert_eq!(cached_index, word_index + 1);
+                            cached_word
+                        } else {
+                            word_reads += 1;
+                            let next = block_states.u64_at(word_index + 1);
+                            following = Some((word_index + 1, next));
+                            next
+                        };
+                        value |= next << (64 - bit);
+                    }
+                    let value = (value & mask) as usize;
+                    if !zero_is_air || value != 0 { visit(index, value); }
+                    index += 1;
+                    let next_word = (index * self.nbits) >> 6;
+                    if index < end && next_word != word_index {
+                        word = if let Some((cached_index, cached_word)) = following.take() {
+                            debug_assert_eq!(cached_index, next_word);
+                            cached_word
+                        } else {
+                            word_reads += 1;
+                            block_states.u64_at(next_word)
+                        };
+                        word_index = next_word;
+                    }
+                }
+            }
+            PalettePacking::PaddedLongs => {
+                let per_word = (64 / self.nbits).max(1);
+                let mut index = start;
+                let mut word_index = index / per_word;
+                while index < end {
+                    let word = block_states.u64_at(word_index);
+                    word_reads += 1;
+                    let word_end = ((word_index + 1) * per_word).min(end);
+                    if zero_is_air && word == 0 {
+                        index = word_end;
+                    } else {
+                        let mut bit = (index - word_index * per_word) * self.nbits;
+                        while index < word_end {
+                            let value = ((word >> bit) & mask) as usize;
+                            if !zero_is_air || value != 0 { visit(index, value); }
+                            index += 1;
+                            bit += self.nbits;
+                        }
+                    }
+                    word_index += 1;
+                }
+            }
+        }
+        word_reads
+    }
+
+    // Only fully-contained entries in an actually zero long word are skipped.
+    // A compact entry spanning this word and the next still needs its exact read.
+    pub(crate) fn zero_word_run_end(self, block_states: &BigEndianLongArray, index: usize, limit: usize) -> usize {
+        if index >= limit { return index; }
+        let (mut word, last_word, values_per_long) = match self.packing {
+            PalettePacking::CompactBitstream => {
+                ((index * self.nbits) >> 6, (limit * self.nbits).div_ceil(64), 0)
+            }
+            PalettePacking::PaddedLongs => {
+                let values_per_long = (64 / self.nbits).max(1);
+                (index / values_per_long, limit.div_ceil(values_per_long), values_per_long)
+            }
+        };
+        let first_word = word;
+        let last_word = last_word.min(block_states.len());
+        while word < last_word && block_states.u64_at(word) == 0 { word += 1; }
+        if word == first_word { return index; }
+        // A compact value straddling the first nonzero word is not proven AIR.
+        // Stop before that value, even when its earlier bits are all zero.
+        let fully_contained_end = match self.packing {
+            PalettePacking::CompactBitstream => (word * 64) / self.nbits,
+            PalettePacking::PaddedLongs => word * values_per_long,
+        };
+        fully_contained_end.min(limit).max(index)
+    }
 }
 
 fn compact_block_states_len(size: usize, nbits: usize) -> usize {
@@ -2115,7 +2311,7 @@ fn palette_index_at_with_packing(
     }
 }
 
-fn choose_palette_packing(
+pub(crate) fn choose_palette_packing(
     block_states: &BigEndianLongArray,
     size: usize,
     nbits: usize,
@@ -2425,11 +2621,13 @@ mod tests {
                 total_volume: None,
                 region_count: Some(regions.len() as i32),
                 enclosing_size: None,
+                preview_image_data: None,
             },
             regions,
             version: 6,
             sub_version: Some(1),
             minecraft_data_version: Some(4_903),
+            preview_image_data: None,
         }
     }
 
@@ -2449,6 +2647,34 @@ mod tests {
 
     fn directory_is_empty(path: &Path) -> bool {
         fs::read_dir(path).unwrap().next().is_none()
+    }
+
+    #[test]
+    fn buffered_root_preserves_long_arrays_and_container_nbt_across_buffer_boundaries() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("buffered.litematic");
+        let values = (0..(NBT_STREAM_BUFFER_BYTES * 3 / 8 + 19))
+            .map(|index| i64::MIN.wrapping_add(index as i64 * 7919))
+            .collect::<Vec<_>>();
+        let mut region = fixture_region(values);
+        region.tile_entities.push(Value::Compound(std::collections::HashMap::from([
+            ("id".into(), Value::String("minecraft:chest".into())),
+            ("Items".into(), Value::List(vec![Value::Compound(std::collections::HashMap::from([
+                ("Slot".into(), Value::Byte(13)),
+                ("id".into(), Value::String("minecraft:stone".into())),
+                ("count".into(), Value::Int(64)),
+            ]))])),
+        ])));
+        let root = fixture_root(BTreeMap::from([("选区".into(), region)]));
+        save_litematic_root(&path, &root).unwrap();
+        let expected: Value = fastnbt::from_bytes(&fastnbt::to_bytes(&root).unwrap()).unwrap();
+        let actual = load_litematic_root(&path).unwrap();
+        let actual: Value = fastnbt::from_bytes(&fastnbt::to_bytes(&actual).unwrap()).unwrap();
+        assert_eq!(actual, expected);
+
+        let compressed = fs::read(&path).unwrap();
+        fs::write(&path, &compressed[..compressed.len() / 2]).unwrap();
+        assert!(load_litematic_root(&path).is_err());
     }
 
     #[test]
@@ -2690,6 +2916,54 @@ mod tests {
         })
         .unwrap();
         assert_eq!(actual_empty, expected_empty);
+    }
+
+    #[test]
+    fn file_backed_scalar_scan_batches_spool_writes_without_changing_bytes() {
+        #[derive(Default)]
+        struct CountingSpool { bytes: Vec<u8>, writes: usize }
+        impl Write for CountingSpool {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.writes += 1;
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let values = (0..6000).map(|index| Value::Compound(std::collections::HashMap::from([
+            ("count".to_owned(), Value::Int(index)),
+            ("flag".to_owned(), Value::Byte(1)),
+        ]))).collect();
+        let nbt = fastnbt::to_bytes(&std::collections::HashMap::from([
+            ("MinecraftDataVersion".to_owned(), Value::Int(3953)),
+            ("records".to_owned(), Value::List(values)),
+        ])).unwrap();
+        let compressed = gzip(&nbt);
+        for buffered in [false, true] {
+            let decoder = BufReadGzDecoder::new(std::io::Cursor::new(&compressed));
+            let mut spool = CountingSpool::default();
+            let tee = SpoolingReader::new(decoder, &mut spool);
+            let writes;
+            let scan;
+            if buffered {
+                let (result, mut reader) = scan_minecraft_data_version_from_nbt_with_progress(
+                    BufReader::with_capacity(NBT_STREAM_BUFFER_BYTES, tee), &mut |_| {},
+                ).unwrap();
+                assert_eq!(reader.read(&mut [0_u8; 1]).unwrap(), 0);
+                assert_eq!(reader.into_inner().spooled_bytes(), nbt.len() as u64);
+                scan = result;
+            } else {
+                let (result, mut reader) = scan_minecraft_data_version_from_nbt_with_progress(tee, &mut |_| {}).unwrap();
+                assert_eq!(reader.read(&mut [0_u8; 1]).unwrap(), 0);
+                scan = result;
+            }
+            writes = spool.writes;
+            assert_eq!(scan.minecraft_data_version(), Some(3953));
+            assert_eq!(scan.decompressed_bytes(), nbt.len() as u64);
+            assert_eq!(spool.bytes, nbt);
+            if buffered { assert!(writes <= nbt.len().div_ceil(NBT_STREAM_BUFFER_BYTES) + 1, "{writes}"); }
+            else { assert!(writes > 12_000, "fixture must exercise actual small-write bottleneck: {writes}"); }
+        }
     }
 
     #[test]
@@ -3346,6 +3620,25 @@ mod tests {
     }
 
     #[test]
+    fn preview_scan_reads_metadata_and_keeps_legacy_top_level_compatible() {
+        let mut nested = Vec::new();
+        push_named_header(&mut nested, 10, b"Metadata");
+        push_named_header(&mut nested, 8, b"Name");
+        push_name(&mut nested, b"projection");
+        push_preview_image(&mut nested, &[0x8044_5566]);
+        nested.push(0);
+        let preview = scan_preview_image_from_nbt(Cursor::new(root_with_children(&nested))).unwrap().0.unwrap();
+        assert_eq!((preview.width, preview.height), (1, 1));
+        assert_eq!(preview.rgba, [0x44, 0x55, 0x66, 0x80]);
+        let mut legacy_and_clear = Vec::new();
+        push_preview_image(&mut legacy_and_clear, &[0xff11_2233]);
+        push_named_header(&mut legacy_and_clear, 10, b"Metadata");
+        push_preview_image(&mut legacy_and_clear, &[]);
+        legacy_and_clear.push(0);
+        assert!(scan_preview_image_from_nbt(Cursor::new(root_with_children(&legacy_and_clear))).unwrap().0.is_none());
+    }
+
+    #[test]
     fn preview_gzip_scan_rejects_trailing_members_and_accepts_missing_preview() {
         let root = root_with_children(&[]);
         assert_eq!(
@@ -3640,6 +3933,107 @@ mod tests {
                 .to_string()
                 .contains("second member or trailing compressed bytes")
         );
+    }
+
+    #[test]
+    fn resolved_palette_layout_reuses_compact_padded_and_legacy_decoding_for_selected_indices() {
+        let cases = [(17, 5), (33, 5)];
+        for (palette_len, packed_bits) in cases {
+            let used = if palette_len == 33 { 32 } else { palette_len };
+            let expected = (0..139).map(|i| (i * 7 + 13) % used).collect::<Vec<_>>();
+            let compact = pack_palette_indices(&expected, packed_bits);
+            let per_word = 64 / packed_bits;
+            let mut padded_words = vec![0_i64; expected.len().div_ceil(per_word)];
+            for (index, value) in expected.iter().enumerate() {
+                padded_words[index / per_word] |= ((*value as u64) << ((index % per_word) * packed_bits)) as i64;
+            }
+            let padded = BigEndianLongArray::new(padded_words);
+            for packed in [&compact, &padded] {
+                let layout = choose_palette_packing(packed, expected.len(), bits_for_palette(palette_len), palette_len).unwrap();
+                let mut baseline = Vec::new();
+                for_each_palette_index(packed, expected.len(), bits_for_palette(palette_len), palette_len, |_, value| { baseline.push(value); Ok(()) }).unwrap();
+                assert_eq!(baseline, expected);
+                for selected in [0, 1, 11, 12, 13, 31, 32, 64, 138] {
+                    assert_eq!(layout.palette_index(packed, selected), baseline[selected]);
+                }
+                for (start, end) in [(0, 139), (1, 31), (7, 64), (11, 13), (32, 139), (138, 139)] {
+                    for zero_is_air in [false, true] {
+                        let mut actual = Vec::new();
+                        let reads = layout.visit_palette_range(packed, start, end, zero_is_air,
+                            |index, value| actual.push((index, value)));
+                        let expected_range = (start..end).filter_map(|i| {
+                            (!zero_is_air || baseline[i] != 0).then_some((i, baseline[i]))
+                        }).collect::<Vec<_>>();
+                        assert_eq!(actual, expected_range);
+                        let expected_reads = match layout.packing {
+                            PalettePacking::CompactBitstream => (end * layout.nbits).div_ceil(64) - ((start * layout.nbits) >> 6),
+                            PalettePacking::PaddedLongs => {
+                                let per_word = 64 / layout.nbits;
+                                end.div_ceil(per_word) - start / per_word
+                            }
+                        };
+                        assert_eq!(reads, expected_reads, "each backing word must be fetched once per range");
+                    }
+                }
+            }
+        }
+        assert!(choose_palette_packing(&BigEndianLongArray::new(vec![0]), 1000, bits_for_palette(33), 33).is_err());
+    }
+
+    #[test]
+    fn zero_palette_word_runs_never_skip_a_compact_cross_word_nonzero_entry() {
+        let mut values = vec![0; 139];
+        values[6] = 512; // Its only set bit is in the next long word.
+        values[12] = 13;
+        values[138] = 1;
+        let compact = pack_palette_indices(&values, 10);
+        assert_eq!(compact.u64_at(0), 0);
+        let layout = choose_palette_packing(&compact, values.len(), 10, 1001).unwrap();
+        assert_eq!(layout.zero_word_run_end(&compact, 0, values.len()), 6);
+        assert_eq!(layout.zero_word_run_end(&compact, 6, values.len()), 6);
+        assert_eq!(layout.palette_index(&compact, 6), 512);
+        assert_eq!(layout.zero_word_run_end(&compact, 0, 3), 3);
+        let mut observed = Vec::new();
+        let mut index = 0;
+        while index < values.len() {
+            let end = layout.zero_word_run_end(&compact, index, values.len());
+            if end > index { index = end; continue; }
+            let value = layout.palette_index(&compact, index);
+            if value != 0 { observed.push((index, value)); }
+            index += 1;
+        }
+        assert_eq!(observed, vec![(6, 512), (12, 13), (138, 1)]);
+        let padded = BigEndianLongArray::new(vec![0; 24]);
+        let padded_layout = PaletteLayout { packing: PalettePacking::PaddedLongs, nbits: 10 };
+        assert_eq!(padded_layout.zero_word_run_end(&padded, 0, 139), 139);
+        assert_eq!(padded_layout.zero_word_run_end(&padded, 6, 8), 8);
+        let compact_air = pack_palette_indices(&vec![0; 139], 10);
+        assert_eq!(layout.zero_word_run_end(&compact_air, 0, 139), 139);
+        assert_eq!(layout.zero_word_run_end(&compact_air, 7, 31), 31);
+        let mut padded_words = vec![0_i64; 24];
+        padded_words[3] = 512;
+        let padded_nonzero = BigEndianLongArray::new(padded_words);
+        assert_eq!(padded_layout.zero_word_run_end(&padded_nonzero, 0, 139), 18);
+        assert_eq!(padded_layout.palette_index(&padded_nonzero, 18), 512);
+        for (packed, layout) in [(&compact, layout), (&compact_air, layout), (&padded_nonzero, padded_layout), (&padded, padded_layout)] {
+            for (start, end) in [(0, 139), (0, 3), (6, 7), (7, 31), (17, 19), (138, 139)] {
+                for zero_is_air in [false, true] {
+                    let expected = (start..end).filter_map(|i| {
+                        let value = layout.palette_index(packed, i);
+                        (!zero_is_air || value != 0).then_some((i, value))
+                    }).collect::<Vec<_>>();
+                    let mut actual = Vec::new();
+                    let reads = layout.visit_palette_range(packed, start, end, zero_is_air,
+                        |i, value| actual.push((i, value)));
+                    assert_eq!(actual, expected);
+                    let expected_reads = match layout.packing {
+                        PalettePacking::CompactBitstream => (end * layout.nbits).div_ceil(64) - ((start * layout.nbits) >> 6),
+                        PalettePacking::PaddedLongs => end.div_ceil(6) - start / 6,
+                    };
+                    assert_eq!(reads, expected_reads);
+                }
+            }
+        }
     }
 
     #[test]

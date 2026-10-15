@@ -1,0 +1,253 @@
+{
+  "source": "Derived labels from data/blockdb/blocks.dat.z; not a block/state database",
+  "versions": [
+    {
+      "version": "1.9",
+      "dataVersion": 169
+    },
+    {
+      "version": "1.9.2",
+      "dataVersion": 176
+    },
+    {
+      "version": "1.9.4",
+      "dataVersion": 184
+    },
+    {
+      "version": "1.10",
+      "dataVersion": 510
+    },
+    {
+      "version": "1.10.1",
+      "dataVersion": 511
+    },
+    {
+      "version": "1.10.2",
+      "dataVersion": 512
+    },
+    {
+      "version": "1.11",
+      "dataVersion": 819
+    },
+    {
+      "version": "1.11.2",
+      "dataVersion": 922
+    },
+    {
+      "version": "1.12",
+      "dataVersion": 1139
+    },
+    {
+      "version": "1.12.1",
+      "dataVersion": 1241
+    },
+    {
+      "version": "1.12.2",
+      "dataVersion": 1343
+    },
+    {
+      "version": "1.13",
+      "dataVersion": 1519
+    },
+    {
+      "version": "1.13.1",
+      "dataVersion": 1628
+    },
+    {
+      "version": "1.13.2",
+      "dataVersion": 1631
+    },
+    {
+      "version": "1.14",
+      "dataVersion": 1952
+    },
+    {
+      "version": "1.14.1",
+      "dataVersion": 1957
+    },
+    {
+      "version": "1.14.2",
+      "dataVersion": 1963
+    },
+    {
+      "version": "1.14.3",
+      "dataVersion": 1968
+    },
+    {
+      "version": "1.14.4",
+      "dataVersion": 1976
+    },
+    {
+      "version": "1.15",
+      "dataVersion": 2225
+    },
+    {
+      "version": "1.15.1",
+      "dataVersion": 2227
+    },
+    {
+      "version": "1.15.2",
+      "dataVersion": 2230
+    },
+    {
+      "version": "1.16",
+      "dataVersion": 2566
+    },
+    {
+      "version": "1.16.1",
+      "dataVersion": 2567
+    },
+    {
+      "version": "1.16.2",
+      "dataVersion": 2578
+    },
+    {
+      "version": "1.16.3",
+      "dataVersion": 2580
+    },
+    {
+      "version": "1.16.4",
+      "dataVersion": 2584
+    },
+    {
+      "version": "1.16.5",
+      "dataVersion": 2586
+    },
+    {
+      "version": "1.17",
+      "dataVersion": 2724
+    },
+    {
+      "version": "1.17.1",
+      "dataVersion": 2730
+    },
+    {
+      "version": "1.18",
+      "dataVersion": 2860
+    },
+    {
+      "version": "1.18.1",
+      "dataVersion": 2865
+    },
+    {
+      "version": "1.18.2",
+      "dataVersion": 2975
+    },
+    {
+      "version": "1.19",
+      "dataVersion": 3105
+    },
+    {
+      "version": "1.19.1",
+      "dataVersion": 3117
+    },
+    {
+      "version": "1.19.2",
+      "dataVersion": 3120
+    },
+    {
+      "version": "1.19.3",
+      "dataVersion": 3218
+    },
+    {
+      "version": "1.19.4",
+      "dataVersion": 3337
+    },
+    {
+      "version": "1.20",
+      "dataVersion": 3463
+    },
+    {
+      "version": "1.20.1",
+      "dataVersion": 3465
+    },
+    {
+      "version": "1.20.2",
+      "dataVersion": 3578
+    },
+    {
+      "version": "1.20.3",
+      "dataVersion": 3698
+    },
+    {
+      "version": "1.20.4",
+      "dataVersion": 3700
+    },
+    {
+      "version": "1.20.5",
+      "dataVersion": 3837
+    },
+    {
+      "version": "1.20.6",
+      "dataVersion": 3839
+    },
+    {
+      "version": "1.21",
+      "dataVersion": 3953
+    },
+    {
+      "version": "1.21.1",
+      "dataVersion": 3955
+    },
+    {
+      "version": "1.21.2",
+      "dataVersion": 4080
+    },
+    {
+      "version": "1.21.3",
+      "dataVersion": 4082
+    },
+    {
+      "version": "1.21.4",
+      "dataVersion": 4189
+    },
+    {
+      "version": "1.21.5",
+      "dataVersion": 4325
+    },
+    {
+      "version": "1.21.6",
+      "dataVersion": 4435
+    },
+    {
+      "version": "1.21.7",
+      "dataVersion": 4438
+    },
+    {
+      "version": "1.21.8",
+      "dataVersion": 4440
+    },
+    {
+      "version": "1.21.9",
+      "dataVersion": 4554
+    },
+    {
+      "version": "1.21.10",
+      "dataVersion": 4556
+    },
+    {
+      "version": "1.21.11",
+      "dataVersion": 4671
+    },
+    {
+      "version": "26.1",
+      "dataVersion": 4786
+    },
+    {
+      "version": "26.1.1",
+      "dataVersion": 4788
+    },
+    {
+      "version": "26.1.2",
+      "dataVersion": 4790
+    },
+    {
+      "version": "26.2",
+      "dataVersion": 4903
+    },
+    {
+      "version": "26.3",
+      "dataVersion": 5023
+    }
+  ]
+}

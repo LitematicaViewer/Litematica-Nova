@@ -1170,6 +1170,16 @@ fn parse_edit_metadata_args(command: String, raw_args: Vec<String>) -> Result<Cl
 mod tests {
     use super::*;
 
+    #[test]
+    fn recipe_fetch_contract_emits_json_without_a_json_flag() {
+        let parsed = parse_stockpile_args(["recipe-fetch", "--minecraft-version", "26.3"].map(str::to_owned).to_vec()).unwrap();
+        assert_eq!(parsed.command, "stockpile recipe-fetch");
+        assert_eq!(parsed.minecraft_version.as_deref(), Some("26.3"));
+        assert!(parsed.json);
+        let invalid = parse_stockpile_args(["recipe-fetch", "--minecraft-version", "26.3", "--json"].map(str::to_owned).to_vec()).err().unwrap();
+        assert_eq!(invalid.to_string(), "unknown argument: --json");
+    }
+
     fn absolute_path(name: &str) -> String {
         std::env::temp_dir().join(name).display().to_string()
     }

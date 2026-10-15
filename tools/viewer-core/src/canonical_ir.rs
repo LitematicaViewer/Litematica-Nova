@@ -314,6 +314,10 @@ pub struct CanonicalRegion {
     position: Vec3i,
     size: Vec3i,
     palette: Box<[CanonicalBlockStateId]>,
+    /// Source-version palette semantics for business analysis. This small
+    /// sidecar retains each original ID/properties even when distinct source
+    /// entries intern to the same renderer state; packed block data stays single.
+    source_palette: Box<[BlockStateNbt]>,
     block_states: BigEndianLongArray,
     entities: Box<[CanonicalEntity]>,
     block_entities: Box<[CanonicalBlockEntity]>,
@@ -339,6 +343,10 @@ impl CanonicalRegion {
 
     pub fn palette(&self) -> &[CanonicalBlockStateId] {
         &self.palette
+    }
+
+    pub(crate) fn source_palette(&self) -> &[BlockStateNbt] {
+        &self.source_palette
     }
 
     pub fn entities(&self) -> &[CanonicalEntity] {
@@ -405,6 +413,7 @@ impl CanonicalWorld {
             version: _,
             sub_version: _,
             minecraft_data_version: _,
+            preview_image_data: _,
         } = root;
 
         let mut state_ids = BTreeMap::<BlockStateKey, CanonicalBlockStateId>::new();
@@ -623,7 +632,9 @@ impl NativeVersionAdapter {
                 context: "region palette",
                 detail: source.to_string(),
             })?;
+        let mut source_palette = Vec::with_capacity(block_state_palette.len());
         for state in block_state_palette {
+            source_palette.push(state.clone());
             let state = normalize_block_state(state, self.source_data_version)?;
             let key = BlockStateKey {
                 identifier: state.identifier.0.clone(),
@@ -691,6 +702,7 @@ impl NativeVersionAdapter {
             position,
             size,
             palette: palette.into_boxed_slice(),
+            source_palette: source_palette.into_boxed_slice(),
             block_states,
             entities: canonical_entities.into_boxed_slice(),
             block_entities: canonical_block_entities.into_boxed_slice(),

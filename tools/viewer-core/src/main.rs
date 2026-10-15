@@ -29,7 +29,18 @@ fn emit_output<T: Serialize>(value: &T, output: Option<&std::path::Path>) -> Res
 }
 
 fn main() -> Result<()> {
+    if let Some(code) = nova_protected_loader::maybe_run_cpu_audit()? { std::process::exit(code); }
+
     let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    if raw.first().is_some_and(|command| command == "render-cpu-audit") {
+        return litematica_core::native_viewer::audit_render_cpu(&raw[1..]);
+    }
+    if raw.first().is_some_and(|command| command == "version-convert") {
+        return litematica_core::version_conversion::run_cli(&raw[1..]);
+    }
+    if raw.first().is_some_and(|command| command == "block-db") {
+        return litematica_core::block_database::run_cli(&raw[1..]);
+    }
     if raw.first().is_some_and(|command| command == "materials-export") {
         return litematica_core::material_export::run_cli(&raw[1..]);
     }
@@ -246,6 +257,10 @@ fn main() -> Result<()> {
             };
             emit_output(&output, args.output.as_deref())?;
         }
+        "visual-layers-all" => {
+            let output = mesh::build_source_all_layers_output(&args.input, args.chunk_size)?;
+            emit_output(&output, args.output.as_deref())?;
+        }
         "visual-meta" => {
             let output = visual::build_visual_meta_output(&args.input, args.chunk_size)?;
             emit_output(&output, args.output.as_deref())?;
@@ -266,6 +281,10 @@ fn main() -> Result<()> {
                 .y
                 .ok_or_else(|| anyhow::anyhow!("missing --y for cache-layer"))?;
             let output = cache_layer::build_cache_layer_output(&args.input, y)?;
+            emit_output(&output, args.output.as_deref())?;
+        }
+        "cache-layers-all" => {
+            let output = cache_layer::build_cache_all_layers_output(&args.input)?;
             emit_output(&output, args.output.as_deref())?;
         }
         "visualize" => {

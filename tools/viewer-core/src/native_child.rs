@@ -25,6 +25,17 @@ unsafe extern "system" {
     fn SetThreadDpiAwarenessContext(context: isize) -> isize;
 }
 
+/// Application Host supplies these only to its supervised exact Viewer.
+pub(super) fn application_host() -> Result<Option<QuickPreviewHostWindow>> {
+    let Some(hwnd) = std::env::var_os("LITEMATICA_NOVA_NATIVE_PARENT_HWND") else { return Ok(None); };
+    let process_id = std::env::var("LITEMATICA_NOVA_NATIVE_PARENT_PID")
+        .context("native host process identity missing")?.parse::<u32>()
+        .context("invalid native host process identity")?;
+    let host = QuickPreviewHostWindow { hwnd: hwnd.to_string_lossy().into_owned(), process_id };
+    validate_host(&host)?;
+    Ok(Some(host))
+}
+
 pub(super) struct DpiContext(isize);
 impl Drop for DpiContext {
     fn drop(&mut self) { unsafe { SetThreadDpiAwarenessContext(self.0); } }
@@ -104,6 +115,10 @@ pub(super) fn apply(
             }
             if command.kind == ViewerSessionCommandKind::AttachEmbedded {
                 *mode = PersistentPresentationMode::Embedded;
+            }
+            if let Some(focused) = command.focused {
+                if focused { unsafe { SetFocus(hwnd); } }
+                else if unsafe { GetFocus() } == hwnd { focus_host(host); }
             }
             window.request_redraw();
             Ok(ViewerPresentationCommandOutcome::Applied(ViewerSessionState::Attached {

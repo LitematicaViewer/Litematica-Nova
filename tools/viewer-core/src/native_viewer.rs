@@ -10,7 +10,7 @@ use std::sync::mpsc::{self,Receiver,Sender,TryRecvError};
 use std::sync::{Arc,Mutex,OnceLock};
 use std::thread::{self,JoinHandle};
 use std::time::{Duration,Instant};
-use anyhow::{Context,Result,anyhow,bail};
+use anyhow::{Context,Result,anyhow,bail,ensure};
 use bytemuck::{Pod,Zeroable};
 use glam::{Mat4,Vec2,Vec3};
 use image::{Rgb,RgbImage,Rgba,RgbaImage};
@@ -25,10 +25,15 @@ use winit::event_loop::{ControlFlow,EventLoop};
 use winit::keyboard::{KeyCode,PhysicalKey};
 #[cfg(target_os="windows")]
 use winit::raw_window_handle::{HasWindowHandle,RawWindowHandle};
+#[cfg(target_os="windows")]
+use winit::platform::windows::WindowBuilderExtWindows;
 use winit::window::WindowBuilder;
 #[cfg(target_os="windows")]
 #[path="native_child.rs"]
 mod native_child;
+#[cfg(target_os="windows")]
+#[path="first_block_timing.rs"]
+mod first_block_timing;
 use crate::backend_provenance::BackendProvenance;
 use crate::build_mode::{ViewerBuildMode,compact_cache_v2_enabled,install_viewer_build_mode,writer_pipeline_enabled};
 use crate::mesh::{ChunkKey,ChunkSceneIndex};
@@ -763,6 +768,7 @@ impl LightingUniform {
     }
 }
 
+#[derive(Clone)]
 struct ViewerArgs {
     launch_request_id: String,
     launch_contract_sha256: String,
@@ -791,6 +797,9 @@ struct ViewerArgs {
     stress_limits: bool,
     embed_parent_hwnd: Option<isize>,
     quick_host: Option<viewer_launch_contract::QuickPreviewHostWindow>,
+    quick_gpu_context_only: bool,
+    quick_resource_report: Option<PathBuf>,
+    quick_resource_decision: Option<PathBuf>,
     preview_mode: bool,
     preview_spin: bool,
     display_mode: ViewerDisplayMode,
@@ -900,6 +909,7 @@ struct TraceCounters {
     worker_wait_ms: AtomicU64,
     worker_batches: AtomicUsize,
     worker_chunks: AtomicUsize,
+    gpu_buffer_upload_requests: AtomicUsize,
     worker_result_send_ms: AtomicU64,
     writer_busy_ms: AtomicU64,
     writer_wait_ms: AtomicU64,
@@ -1145,6 +1155,12 @@ struct ViewerScene {
 }
 
 impl ViewerScene {
+    fn gpu_context_only() -> Self {
+        Self { label: "GPU context".into(), bounds: SceneBounds { center: Vec3::ZERO, radius: 1.0 },
+            palette_colors: Vec::new(), chunk_scene_index: None, bootstrap_meshes: Vec::new(),
+            bootstrap_visible_first: 0, texture_atlas: None, label_anchors: Vec::new() }
+    }
+
     fn placeholder() -> Self {
         let prepared = PreparedChunkMesh::placeholder();
         let bounds = SceneBounds::from_prepared_mesh(&prepared);
@@ -2361,6 +2377,7 @@ fn spawn_build_worker_pool(
 
     worker_count: usize,
     trace: Arc<TraceCounters>,
+    cancellation: Option<Arc<AtomicBool>>,
 ) -> (
     Sender<BuildWorkerRequest>,
     Receiver<BuildWorkerResult>,
@@ -2377,9 +2394,11 @@ fn spawn_build_worker_pool(
         let palette_colors = palette_colors.clone();
 
         let trace = trace.clone();
+        let cancellation = cancellation.clone();
         let worker = thread::spawn(move || {
             let execution = std::panic::catch_unwind(move || {
                 loop {
+                    if cancellation.as_ref().is_some_and(|flag| flag.load(Ordering::Acquire)) { break; }
                     let wait_started_at = Instant::now();
                     let request = match request_rx.lock() {
                         Ok(receiver) => match receiver.recv() {
@@ -2402,6 +2421,7 @@ fn spawn_build_worker_pool(
                     };
                     TraceCounters::add_ms(&trace.worker_wait_ms, wait_started_at.elapsed());
 
+                    if cancellation.as_ref().is_some_and(|flag| flag.load(Ordering::Acquire)) { break; }
                     let requested_keys = request.keys;
                     let build_queue_wait_ms = request.enqueued_at.elapsed().as_millis() as u64;
                     trace
@@ -2427,6 +2447,7 @@ fn spawn_build_worker_pool(
                         requested_keys.len()
                     );
                     let build_result = scene_index.build_chunk_meshes(&requested_keys);
+                    if cancellation.as_ref().is_some_and(|flag| flag.load(Ordering::Acquire)) { break; }
                     match build_result {
                         Ok(chunk_meshes) => {
                             let worker_busy_elapsed = worker_started_at.elapsed();
@@ -2542,6 +2563,7 @@ struct ChunkMeshCpuCache {
     max_chunks: usize,
     max_bytes: usize,
     current_bytes: usize,
+    retain_complete_source: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -2586,6 +2608,7 @@ struct QueueProcessingStats {
     preload_submitted_builds: usize,
     deferred_target_chunks: usize,
     deferred_preload_chunks: usize,
+    gpu_evicted_chunks: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2628,6 +2651,7 @@ impl ChunkMeshCpuCache {
             max_chunks,
             max_bytes,
             current_bytes: 0,
+            retain_complete_source: false,
         }
     }
 
@@ -2681,6 +2705,11 @@ impl ChunkMeshCpuCache {
     ) -> EvictionStats {
         let before_count = self.entries.len();
         let before_bytes = self.current_bytes;
+        if self.retain_complete_source {
+            return EvictionStats { candidate_count: 0, evicted_count: 0,
+                evicted_recent_count: 0, before_count, after_count: before_count,
+                before_bytes, after_bytes: before_bytes, evicted_bytes: 0 };
+        }
         let mut evictable = self
             .entries
             .iter()
@@ -3073,6 +3102,17 @@ struct ChunkResidencyPlan {
     preload_order: Vec<ChunkKey>,
 }
 
+fn complete_projection_upload_order(keys: impl Iterator<Item = ChunkKey>, focus: ChunkKey) -> Vec<ChunkKey> {
+    let mut order = keys.collect::<Vec<_>>();
+    order.sort_by_key(|key| {
+        let dx = i128::from(key.cx) - i128::from(focus.cx);
+        let dy = i128::from(key.cy) - i128::from(focus.cy);
+        let dz = i128::from(key.cz) - i128::from(focus.cz);
+        (dx * dx + dy * dy + dz * dz, key.cy, key.cx, key.cz)
+    });
+    order
+}
+
 impl ChunkResidencyPlan {
     fn build(
         scene_index: &ChunkSceneIndex,
@@ -3159,11 +3199,9 @@ impl ChunkResidencyPlan {
         }
 
         if force_full_scene {
-            let upload_order = scene_index
-                .chunk_entries()
-                .iter()
-                .map(|entry| entry.key)
-                .collect::<Vec<_>>();
+            let upload_order = complete_projection_upload_order(
+                scene_index.chunk_entries().iter().map(|entry| entry.key), focus_chunk,
+            );
             let target_keys = upload_order.iter().copied().collect::<HashSet<_>>();
             let retain_keys = target_keys.clone();
             return Self {
@@ -3442,7 +3480,8 @@ struct ShadowMapResources {
     config: ShadowMapConfig,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
-    depth_pipeline: wgpu::RenderPipeline,
+    depth_pipeline: Arc<wgpu::RenderPipeline>,
+    camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     bind_group: wgpu::BindGroup,
 }
@@ -3452,7 +3491,8 @@ fn create_shadow_map_resources(
     config: ShadowMapConfig,
     shadow_bind_group_layout: &wgpu::BindGroupLayout,
     camera_bind_group_layout: &wgpu::BindGroupLayout,
-    depth_shader: &wgpu::ShaderModule,
+    depth_shader: Option<&wgpu::ShaderModule>,
+    existing_pipeline: Option<Arc<wgpu::RenderPipeline>>,
 ) -> ShadowMapResources {
     let resolution = config.resolution.max(1);
     let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -3491,7 +3531,7 @@ fn create_shadow_map_resources(
     let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("native_viewer_shadow_camera"),
         contents: bytemuck::bytes_of(&camera_uniform),
-        usage: wgpu::BufferUsages::UNIFORM,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("native_viewer_shadow_camera_bind_group"),
@@ -3520,11 +3560,11 @@ fn create_shadow_map_resources(
         bind_group_layouts: &[camera_bind_group_layout],
         push_constant_ranges: &[],
     });
-    let depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let depth_pipeline = existing_pipeline.unwrap_or_else(|| Arc::new(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("native_viewer_shadow_depth_pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
-            module: depth_shader,
+            module: depth_shader.expect("initial shadow pipeline requires its existing shader"),
             entry_point: "vs_main",
             buffers: &[GpuVertex::desc()],
         },
@@ -3543,12 +3583,13 @@ fn create_shadow_map_resources(
         }),
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
-    });
+    })));
     ShadowMapResources {
         config,
         depth_texture,
         depth_view,
         depth_pipeline,
+        camera_buffer,
         camera_bind_group,
         bind_group,
     }
@@ -4964,8 +5005,254 @@ fn save_gpu_frame(device: &wgpu::Device, buffer: &wgpu::Buffer, path: &Path, wid
     Ok(())
 }
 
+fn quick_surface_alpha_mode(embedded: bool, supported: &[wgpu::CompositeAlphaMode]) -> Result<wgpu::CompositeAlphaMode> {
+    if embedded {
+        ensure!(supported.contains(&wgpu::CompositeAlphaMode::PreMultiplied),
+            "Selected DX12 composition surface does not support premultiplied alpha");
+        Ok(wgpu::CompositeAlphaMode::PreMultiplied)
+    } else {
+        supported.first().copied().context("GPU surface exposes no alpha mode")
+    }
+}
+
+fn quick_clear_color(alpha_mode: wgpu::CompositeAlphaMode) -> wgpu::Color {
+    if alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied {
+        wgpu::Color::TRANSPARENT
+    } else {
+        wgpu::Color { r: 0.08, g: 0.09, b: 0.11, a: 1.0 }
+    }
+}
+
+fn read_quick_resource_decision(path: &Path, request: &str) -> Result<Option<viewer_launch_contract::QuickResourceDecision>> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    ensure!(metadata.is_file() && metadata.len() <= 4096, "Quick resource decision must be a bounded JSON file");
+    let decision: viewer_launch_contract::QuickResourceDecision = serde_json::from_slice(&std::fs::read(path)?)?;
+    decision.validate(request).map_err(|error| anyhow!(error))?;
+    Ok(Some(decision))
+}
+
+fn quick_gpu_geometry_upper(mesh: &PreparedChunkMesh) -> usize {
+    let mesh = mesh.gpu_upload_mesh();
+    let aligned = |bytes: usize| if bytes == 0 { 0 } else { bytes.saturating_add(65_535) / 65_536 * 65_536 };
+    aligned(mesh.vertices.len().saturating_mul(size_of::<GpuVertex>()))
+        .saturating_add(aligned(mesh.indices.len().saturating_mul(size_of::<u32>())))
+        .saturating_add(aligned(mesh.translucent_indices.len().saturating_mul(size_of::<u32>())))
+}
+
+fn quick_preload_allowed(pressure: &str, warning_confirmed: bool) -> bool {
+    pressure == "normal" || (pressure == "warning" && warning_confirmed)
+}
+
+fn quick_resource_action(
+    requested_preload: bool, pressure: &str, complete_estimate: bool,
+    decision: Option<viewer_launch_contract::QuickResourceDecision>,
+) -> Result<viewer_launch_contract::QuickResourceAction> {
+    use viewer_launch_contract::QuickResourceAction as Action;
+    let warning_confirmed = decision.as_ref().is_some_and(|choice| choice.warning_confirmed);
+    let action = decision.map(|choice| choice.action).unwrap_or(if requested_preload { Action::Preload } else { Action::Realtime });
+    ensure!(action != Action::Cancel, "Quick preview was cancelled before GPU allocation");
+    ensure!(action != Action::Preload || (complete_estimate && quick_preload_allowed(pressure, warning_confirmed)),
+        "快速模式尚未取得有效完整投影显存需求及预加载准入，请明确选择实时加载或取消。");
+    Ok(action)
+}
+
+fn quick_upload_should_queue(deferred_preloads: &mut HashSet<ChunkKey>, key: ChunkKey, priority: QueuePriority) -> bool {
+    if priority == QueuePriority::Target { deferred_preloads.remove(&key); return true; }
+    !deferred_preloads.contains(&key)
+}
+
+fn quick_upload_refresh_demand(deferred_preloads: &mut HashSet<ChunkKey>, retry_at: &mut Option<Instant>, changed: bool) {
+    if changed { deferred_preloads.clear(); *retry_at = None; }
+}
+
+fn prepare_quick_gpu_resources(
+    adapter: &wgpu::Adapter, index: Option<&ChunkSceneIndex>, _atlas: Option<&RgbaImage>,
+    size: PhysicalSize<u32>, bounds: SceneBounds, args: &mut ViewerArgs,
+    retained_shadow_resolution: Option<u32>,
+) -> Result<()> {
+    if args.quick_host.is_none() { return Ok(()); }
+    use crate::quick_resource_preflight::{QuickResourceInput, estimate_quick_resources, query_selected_adapter_budget};
+    use viewer_launch_contract::QuickResourceAction as Action;
+    if args.quick_gpu_context_only {
+        let budget = query_selected_adapter_budget(adapter)?;
+        let estimate = estimate_quick_resources(&QuickResourceInput { vertices_upper_bound: 0,
+            vertex_stride_bytes: size_of::<GpuVertex>() as u64, indices_upper_bound: 0, geometry_buffer_count_upper_bound: 0,
+            atlas_width: 1, atlas_height: 1, viewport_width: size.width.max(1), viewport_height: size.height.max(1),
+            surface_buffer_count: 3, shadow_resolution: Some(LightingConfig::from_args(args.basic_lighting,
+                args.basic_shadows, args.shadow_debug_view, args.shadow_force_test, bounds).shadow().resolution.max(1)),
+            uniform_buffer_bytes: vec![size_of::<CameraUniform>() as u64, size_of::<CameraUniform>() as u64, size_of::<LightingUniform>() as u64] })?;
+        eprintln!("[NOVA_GPU_INITIALIZATION] stage=static_budget_admitted budget_bytes={} current_usage_bytes={} pending_fixed_upper_bytes={} projection_reads=0 scene_mesh_builds=0", budget.budget_bytes, budget.current_usage_bytes, estimate.gpu_peak_upper_bytes);
+        return Ok(());
+    }
+    let report_path = args.quick_resource_report.as_deref().context("Managed Fast launch is missing its resource report path")?;
+    let decision_path = args.quick_resource_decision.as_deref().context("Managed Fast launch is missing its resource decision path")?;
+    let source_bytes = std::fs::metadata(args.input.as_deref().context("Fast source is missing")?)?.len();
+    let index = index.context("Fast resource estimate requires actual projection chunk metadata")?;
+    let budget_result = query_selected_adapter_budget(adapter);
+    let invalid_reason = budget_result.as_ref().err().map(|error| format!("{error:#}"));
+    let report = serde_json::json!({"schema":"nova.quick.resource.v1", "requestId":args.launch_request_id,
+        "sourceBytes":source_bytes, "preload":args.prebuild_before_show, "pressure":"unmeasured",
+        "pressureBasisPoints":null, "budget":budget_result.as_ref().ok(),
+        "estimate":null, "invalidReason":invalid_reason, "decisionRequired":args.prebuild_before_show,
+        "fixedGpuResourcesAlreadyInLiveBudget":retained_shadow_resolution.is_some()});
+    let temporary = report_path.with_extension("json.tmp");
+    std::fs::write(&temporary, serde_json::to_vec(&report)?)?;
+    std::fs::rename(&temporary, report_path)?;
+    // The index has chunk metadata, not full model/vertex/index demand. A
+    // static-context estimate cannot admit a real projection. The Host handles
+    // the nonblocking user choice before submitting ReplaceScene; this guard
+    // rejects managed launch bypasses without stalling native Session events.
+    let action = quick_resource_action(args.prebuild_before_show, "unmeasured", false,
+        read_quick_resource_decision(decision_path, &args.launch_request_id)?)?;
+    if action == Action::ReducedRealtime {
+        // This is an explicit user option, never a silent budget downgrade.
+        args.basic_shadows = false; args.shadow_force_test = false;
+    }
+    args.prebuild_before_show = action == Action::Preload;
+    match budget_result {
+        Ok(budget) => println!("[QUICK_RESOURCE] policy=complete_projection requested_preload={} actual_budget_bytes={} current_usage_bytes={} source_chunks={} artificial_residency_caps=false geometry_measurement=not_prepared renderer=legacy-wgpu",
+            args.prebuild_before_show, budget.budget_bytes, budget.current_usage_bytes, index.chunk_count()),
+        Err(error) => eprintln!("[QUICK_RESOURCE] policy=complete_projection actual_budget_unavailable={error:#} artificial_residency_caps=false allocation_failure_not_inferred=true"),
+    }
+    Ok(())
+}
+
+fn record_quick_gpu_failure(failure: &Mutex<Option<String>>, message: String) {
+    let mut error = failure.lock().unwrap_or_else(|error| error.into_inner());
+    if error.is_none() {
+        eprintln!("[NOVA_QUICK_GPU_FAILURE] {message}");
+        *error = Some(message);
+    }
+}
+
+enum QuickChunkUploadAdmission {
+    Admitted { evicted_chunks: usize },
+    DeferredPreload,
+    RetryBudget,
+}
+
+struct QuickVisibleSampleQuery {
+    query: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    readback: wgpu::Buffer,
+    armed: bool,
+    sample_attempts: u8,
+    generation: u64,
+    pending: Option<(Receiver<std::result::Result<(), wgpu::BufferAsyncError>>, u32, u64, u64)>,
+    evidence: Option<(u32, u64)>,
+}
+
+struct QuickRedrawState {
+    dirty: bool,
+    next_progress_at: Option<Instant>,
+    retry_after: Option<Instant>,
+}
+
+impl QuickVisibleSampleQuery {
+    fn new(device: &wgpu::Device) -> Self {
+        Self {
+            query: device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("fast_first_terrain_visible_samples"), ty: wgpu::QueryType::Occlusion, count: 1 }),
+            resolve: device.create_buffer(&wgpu::BufferDescriptor { label: Some("fast_first_samples_resolve"), size: 256, usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false }),
+            readback: device.create_buffer(&wgpu::BufferDescriptor { label: Some("fast_first_samples_readback"), size: 8, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false }),
+            armed: false, sample_attempts: 0, generation: 0, pending: None, evidence: None,
+        }
+    }
+    fn cancel(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.armed = false; self.sample_attempts = 0; self.evidence = None;
+        if self.pending.take().is_some() { self.readback.unmap(); }
+    }
+    fn arm(&mut self) { self.cancel(); self.armed = true; }
+    fn retry(&mut self) {
+        if !self.armed && self.pending.is_none() && self.sample_attempts < 8 {
+            self.armed = true;
+        }
+    }
+    fn should_query(&self) -> bool { self.armed && self.pending.is_none() && self.sample_attempts < 8 }
+    fn submitted(&mut self, present_count: u32, scene_revision: u64) {
+        self.sample_attempts = self.sample_attempts.saturating_add(1);
+        let (tx, rx) = mpsc::channel();
+        self.readback.slice(..).map_async(wgpu::MapMode::Read, move |result| { let _ = tx.send(result); });
+        self.pending = Some((rx, present_count, scene_revision, self.generation));
+    }
+    fn poll(&mut self, device: &wgpu::Device, scene_revision: u64) -> Option<(u32, u64)> {
+        if self.pending.is_some() { device.poll(wgpu::Maintain::Poll); }
+        let result = self.pending.as_ref().and_then(|(rx, count, revision, generation)| match rx.try_recv() {
+            Ok(result) => Some((result, *count, *revision, *generation)),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some((Err(wgpu::BufferAsyncError), *count, *revision, *generation)),
+        });
+        if let Some((result, count, revision, generation)) = result {
+            self.pending = None;
+            if result.is_ok() {
+                let bytes = self.readback.slice(..).get_mapped_range();
+                let samples = u64::from_le_bytes(bytes[..8].try_into().expect("eight-byte occlusion result"));
+                drop(bytes); self.readback.unmap();
+                if generation == self.generation && revision == scene_revision && samples > 0 {
+                    self.evidence = Some((count, revision)); self.armed = false;
+                    eprintln!("[NOVA_FIRST_BLOCK] stage=fast_terrain_visible_samples samples={} sampled_present_count={} scene_revision={} bytes_read=8 asynchronous=true", samples, count, revision);
+                }
+            } else {
+                self.readback.unmap(); self.armed = false;
+                eprintln!("[NOVA_FIRST_BLOCK] stage=fast_sample_read_failed first_display=not_measured");
+            }
+            if self.sample_attempts == 8 && self.evidence.is_none() {
+                self.armed = false;
+                eprintln!("[NOVA_FIRST_BLOCK] stage=fast_visible_sample_limit attempts=8 first_display=not_measured");
+            }
+        }
+        self.evidence.take()
+    }
+}
+
+impl QuickRedrawState {
+    fn new() -> Self { Self { dirty: true, next_progress_at: None, retry_after: None } }
+    fn request(&mut self) { self.dirty = true; self.retry_after = None; }
+    fn hide(&mut self) { self.dirty = false; self.next_progress_at = None; self.retry_after = None; }
+    fn presented(&mut self, now: Instant) {
+        self.dirty = false;
+        self.retry_after = None;
+        self.next_progress_at = Some(now + Duration::from_millis(16));
+    }
+    fn retry(&mut self, now: Instant) {
+        self.dirty = true;
+        self.retry_after = Some(now + Duration::from_millis(40));
+    }
+    fn needs_redraw(&self, now: Instant, presentable: bool, pending_work: bool,
+        animated: bool, sample_retry: bool) -> bool {
+        presentable && self.retry_after.is_none_or(|retry| now >= retry)
+            && (self.dirty || ((pending_work || animated || sample_retry)
+                && self.next_progress_at.is_none_or(|next| now >= next)))
+    }
+    fn poll_deadline(&self, now: Instant, pending_work: bool, awaiting_receipt: bool) -> Instant {
+        if let Some(retry) = self.retry_after.filter(|retry| *retry > now) { return retry; }
+        if pending_work {
+            self.next_progress_at.filter(|next| *next > now)
+                .unwrap_or(now + Duration::from_millis(16))
+        } else {
+            now + Duration::from_millis(if awaiting_receipt { 16 } else { 40 })
+        }
+    }
+}
+
 struct ViewerState {
     surface: wgpu::Surface<'static>,
+    // Surface owns the DXGI swapchain and must drop before its visual/target.
+    #[cfg(target_os = "windows")]
+    composition: Option<crate::windows_composition::WindowsComposition>,
+    composition_dpi: f64,
+    presentation_error: Option<String>,
+    quick_gpu_failure: Arc<Mutex<Option<String>>>,
+    quick_adapter: Option<wgpu::Adapter>,
+    quick_visible_sample_query: QuickVisibleSampleQuery,
+    quick_scene_revision: u64,
+    quick_decision_path: Option<PathBuf>,
+    quick_request_id: String,
+    show_after_prebuild: bool,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -4976,6 +5263,7 @@ struct ViewerState {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     lighting_bind_group: wgpu::BindGroup,
+    lighting_buffer: wgpu::Buffer,
     shadow_resources: ShadowMapResources,
     atlas_bind_group: wgpu::BindGroup,
     depth_texture: DepthTexture,
@@ -4993,11 +5281,16 @@ struct ViewerState {
     build_request_tx: Option<Sender<BuildWorkerRequest>>,
     build_result_rx: Receiver<BuildWorkerResult>,
     build_workers: Vec<JoinHandle<()>>,
+    build_cancellation: Arc<AtomicBool>,
+    retired_build_workers: Vec<JoinHandle<()>>,
+    quick_source_identity: Option<(PathBuf, u64, Option<std::time::SystemTime>)>,
     build_worker_count: usize,
     trace: Arc<TraceCounters>,
     build_budget: BuildBudget,
     pending_upload_queue: VecDeque<PendingChunkUpload>,
     pending_upload_keys: HashSet<ChunkKey>,
+    deferred_quick_preloads: HashSet<ChunkKey>,
+    quick_upload_retry_at: Option<Instant>,
     upload_budget: UploadBudget,
     current_target_keys: HashSet<ChunkKey>,
     current_preload_keys: HashSet<ChunkKey>,
@@ -5049,14 +5342,120 @@ struct ViewerState {
     shadow_debug_logged: bool,
     capture_output: Option<PathBuf>,
     capture_error: Option<String>,
+    // CompositionVisual surfaces do not own the child HWND. Keep it alive until
+    // after every GPU surface and composition COM reference has been dropped.
+    _window: Arc<winit::window::Window>,
 }
 
 impl ViewerState {
+    fn quick_input_is_current(&self, args: &ViewerArgs) -> bool {
+        self.quick_source_identity.is_some() && args.input.as_ref().and_then(|path| std::fs::metadata(path).ok().map(|meta|
+            (path.clone(), meta.len(), meta.modified().ok()))) == self.quick_source_identity
+    }
+
+    fn take_quick_gpu_failure(&self) -> Option<String> {
+        self.quick_gpu_failure.lock().unwrap_or_else(|error| error.into_inner()).take()
+    }
+
+    fn replace_quick_scene(&mut self, scene: Option<ViewerScene>, args: &mut ViewerArgs) -> Result<()> {
+        ensure!(args.display_mode == ViewerDisplayMode::FastExperimental && args.quick_host.is_some(), "Only the independent embedded Fast session can reuse this GPU context");
+        let started = Instant::now();
+        self.quick_visible_sample_query.cancel(); self.quick_scene_revision = self.quick_scene_revision.wrapping_add(1);
+        self.drag_mode = None; self.last_cursor_position = None;
+        self.capture_output = None; self.capture_error = None;
+        self.resident_chunks.clear(); self.pending_upload_queue.clear(); self.pending_upload_keys.clear();
+        // Retire already submitted references before querying real live usage;
+        // no old/new scene double residency and no fixed timeout sleep.
+        let retirement = self.queue.submit([]);
+        self.device.poll(wgpu::Maintain::WaitForSubmissionIndex(retirement));
+        let mut bootstrap = Vec::new();
+        if let Some(scene) = scene {
+            ensure!(scene.texture_atlas.is_none(), "Fast scene replacement cannot carry Full materials");
+            self.build_cancellation.store(true, Ordering::Release);
+            self.build_request_tx.take();
+            self.retired_build_workers.append(&mut self.build_workers);
+            self.pending_build_queue.clear(); self.pending_build_keys.clear(); self.in_flight_build_keys.clear();
+            self.cpu_mesh_cache = ChunkMeshCpuCache::new(args.cpu_cache_max_chunks, args.cpu_cache_max_bytes);
+            self.cpu_mesh_cache.retain_complete_source = true;
+            self.prebuild_empty_mesh_keys.clear(); self.sticky_target_keys.clear(); self.warm_cache_keys.clear();
+            self.scene_bounds = scene.bounds;
+            self.chunk_scene_index = scene.chunk_scene_index.map(Arc::new);
+            self.bootstrap_visible_first = scene.bootstrap_visible_first;
+            self.label_anchors = scene.label_anchors;
+            bootstrap = scene.bootstrap_meshes;
+            self.build_cancellation = Arc::new(AtomicBool::new(false));
+            let index = self.chunk_scene_index.as_ref().context("Fast replacement has no actual scene index")?;
+            let (tx, rx, workers) = spawn_build_worker_pool(Arc::clone(index), Arc::new(scene.palette_colors),
+                args.build_workers, Arc::clone(&self.trace), Some(Arc::clone(&self.build_cancellation)));
+            self.build_request_tx = Some(tx); self.build_result_rx = rx; self.build_workers = workers;
+            self.build_worker_count = args.build_workers;
+            self.max_in_flight_builds = self.build_worker_count.max(1) * 16;
+            self.quick_source_identity = args.input.as_ref().and_then(|path| std::fs::metadata(path).ok().map(|meta|
+                (path.clone(), meta.len(), meta.modified().ok())));
+        }
+        self.reap_retired_build_workers();
+        prepare_quick_gpu_resources(self.quick_adapter.as_ref().context("Fast session lost its actual selected GPU adapter")?,
+            self.chunk_scene_index.as_deref(), None, self.size, self.scene_bounds, args, Some(self.shadow_resources.config.resolution.max(1)))?;
+        let lighting = LightingConfig::from_args(args.basic_lighting, args.basic_shadows, args.shadow_debug_view, args.shadow_force_test, self.scene_bounds);
+        self.queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&LightingUniform::from_config(lighting)));
+        let shadow = lighting.shadow();
+        if shadow.resolution.max(1) != self.shadow_resources.config.resolution.max(1) {
+            self.shadow_resources = create_shadow_map_resources(&self.device, shadow,
+                &self.render_pipeline_solid.get_bind_group_layout(3),
+                &self.shadow_resources.depth_pipeline.get_bind_group_layout(0), None,
+                Some(Arc::clone(&self.shadow_resources.depth_pipeline)));
+        } else {
+            let camera = CameraUniform { view_proj: shadow.light_camera.map(|camera| camera.view_proj).unwrap_or(Mat4::IDENTITY).to_cols_array_2d(),
+                camera_position: [0.0;4] };
+            self.queue.write_buffer(&self.shadow_resources.camera_buffer, 0, bytemuck::bytes_of(&camera));
+            self.shadow_resources.config = shadow;
+        }
+        self.camera = OrbitCamera::from_bounds(self.scene_bounds, self.config.width, self.config.height);
+        self.current_target_keys.clear(); self.current_preload_keys.clear(); self.current_retain_keys.clear();
+        self.deferred_quick_preloads.clear(); self.quick_upload_retry_at = None;
+        self.last_focus_chunk = None; self.last_target_radius_chunks = None;
+        self.prebuild_finished_keys.clear(); self.prebuild_cache_written_keys.clear(); self.prebuild_manifest_chunks.clear();
+        self.prebuild_before_show = args.prebuild_before_show; self.prebuild_cache_only = false;
+        self.prebuild_completed = !args.prebuild_before_show; self.background_fill_enabled = true;
+        self.show_after_prebuild = false; self.max_resident_chunks = args.resident_max_chunks; self.max_resident_bytes = args.resident_max_bytes;
+        self.quick_request_id = args.launch_request_id.clone(); self.quick_decision_path = args.quick_resource_decision.clone();
+        self.total_scene_chunks = self.chunk_scene_index.as_ref().map_or(0, |index| index.chunk_count());
+        self.prebuild_eta_seconds = None; self.prebuild_eta_sample_resident = 0;
+        self.prebuild_eta_sample_time = Instant::now(); self.prebuild_last_eta_update = Instant::now();
+        self.prebuild_last_completed_count = 0; self.prebuild_last_completed_at = Instant::now();
+        self.residency_dirty = true;
+        self.install_bootstrap_meshes(bootstrap);
+        self.sync_chunk_residency()?;
+        let _ = self.process_pending_uploads();
+        if let Some(error) = self.take_quick_gpu_failure() { bail!(error); }
+        if let Some(error) = self.presentation_error.take() { bail!(error); }
+        eprintln!("[NOVA_RENDER_PHASE] stage=fast_scene_installed elapsed_ms={:.3} existing_gpu_context=true new_gpu_devices=0 new_composition_surfaces=0 scene_chunks={} resident_chunks={} preload={} old_worker_receivers_reused=false", started.elapsed().as_secs_f64()*1000.0,
+            self.total_scene_chunks, self.resident_chunks.len(), self.prebuild_before_show);
+        Ok(())
+    }
+
+    fn reap_retired_build_workers(&mut self) {
+        let mut index = 0;
+        while index < self.retired_build_workers.len() {
+            if self.retired_build_workers[index].is_finished() {
+                let _ = self.retired_build_workers.swap_remove(index).join();
+            } else { index += 1; }
+        }
+    }
+
+    fn admit_quick_chunk_upload(&mut self, _prepared: &PreparedChunkMesh, _priority: QueuePriority) -> QuickChunkUploadAdmission {
+        // The complete Quick source stays resident. Actual GPU failures are
+        // reported by the device error handler; no cache rank retires a chunk.
+        QuickChunkUploadAdmission::Admitted { evicted_chunks: 0 }
+    }
+
     async fn new(
         window: Arc<winit::window::Window>,
         scene: ViewerScene,
         args: &ViewerArgs,
     ) -> Result<Self> {
+        let mut effective_args = (*args).clone();
+        let args = &mut effective_args;
         let wgpu_init_started_at = Instant::now();
         let size = window.inner_size();
         println!(
@@ -5070,21 +5469,41 @@ impl ViewerState {
             chunk_scene_index: scene_chunk_scene_index,
             bootstrap_meshes,
             bootstrap_visible_first,
-
             texture_atlas,
             label_anchors: scene_label_anchors,
         } = scene;
 
         let instance_started_at = Instant::now();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let embedded_composition = args.quick_host.is_some();
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: if embedded_composition { wgpu::Backends::DX12 } else { wgpu::Backends::all() },
+            ..Default::default()
+        });
         println!(
             "[TRACE_STARTUP] stage=wgpu_instance elapsed_ms={}",
             instance_started_at.elapsed().as_millis()
         );
         let surface_started_at = Instant::now();
-        let surface = instance
-            .create_surface(window.clone())
-            .context("failed to create wgpu surface")?;
+        #[cfg(target_os = "windows")]
+        let composition = if embedded_composition {
+            Some(crate::windows_composition::WindowsComposition::new(window_hwnd(window.as_ref())?)?)
+        } else {
+            None
+        };
+        #[cfg(target_os = "windows")]
+        let surface = if let Some(composition) = composition.as_ref() {
+            // This is the existing renderer's DX12 GPU swapchain, not a copied
+            // frame or a top-level overlay. wgpu-hal owns its AddRef on visual.
+            unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(composition.visual_ptr())) }
+                .context("failed to create native child DX12 composition surface")?
+        } else {
+            instance.create_surface(window.clone()).context("failed to create wgpu surface")?
+        };
+        #[cfg(not(target_os = "windows"))]
+        let surface = {
+            ensure!(!embedded_composition, "Native child composition requires Windows DX12");
+            instance.create_surface(window.clone()).context("failed to create wgpu surface")?
+        };
         println!(
             "[TRACE_STARTUP] stage=wgpu_surface elapsed_ms={}",
             surface_started_at.elapsed().as_millis()
@@ -5108,6 +5527,7 @@ impl ViewerState {
             "[WGPU_INIT] adapter name={} backend={:?} device_type={:?}",
             adapter_info.name, adapter_info.backend, adapter_info.device_type
         );
+        prepare_quick_gpu_resources(&adapter, scene_chunk_scene_index.as_ref(), texture_atlas.as_ref(), size, scene_bounds, args, None)?;
 
         let device_started_at = Instant::now();
         let (device, queue) = adapter
@@ -5121,6 +5541,19 @@ impl ViewerState {
             )
             .await
             .context("failed to create wgpu device")?;
+        let quick_gpu_failure = Arc::new(Mutex::new(None));
+        if embedded_composition {
+            let failure = Arc::clone(&quick_gpu_failure);
+            device.on_uncaptured_error(Box::new(move |error: wgpu::Error| {
+                record_quick_gpu_failure(&failure, format!("快速预览显卡执行失败：{error}。请关闭其他占用显卡资源的程序后重试。"));
+            }));
+            let failure = Arc::clone(&quick_gpu_failure);
+            device.set_device_lost_callback(move |reason, detail| {
+                if matches!(reason, wgpu::DeviceLostReason::Unknown) {
+                    record_quick_gpu_failure(&failure, format!("快速预览显卡设备失去响应：{detail}。请关闭其他占用显卡资源的程序后重试。"));
+                }
+            });
+        }
         println!(
             "[TRACE_STARTUP] stage=wgpu_device elapsed_ms={}",
             device_started_at.elapsed().as_millis()
@@ -5128,6 +5561,7 @@ impl ViewerState {
 
         let surface_config_started_at = Instant::now();
         let capabilities = surface.get_capabilities(&adapter);
+        let alpha_mode = quick_surface_alpha_mode(embedded_composition, &capabilities.alpha_modes)?;
         let surface_format = capabilities
             .formats
             .iter()
@@ -5148,11 +5582,16 @@ impl ViewerState {
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode,
-            alpha_mode: capabilities.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
+        #[cfg(target_os = "windows")]
+        if let Some(composition) = composition.as_ref() {
+            composition.resize(config.width, config.height, window.scale_factor())?;
+            composition.commit()?;
+        }
         println!(
             "[TRACE_STARTUP] stage=wgpu_surface_config elapsed_ms={}",
             surface_config_started_at.elapsed().as_millis()
@@ -5292,7 +5731,8 @@ impl ViewerState {
             lighting_config.shadow(),
             &shadow_bind_group_layout,
             &camera_bind_group_layout,
-            &shadow_depth_shader,
+            Some(&shadow_depth_shader),
+            None,
         );
         if args.shadow_debug {
             log_shadow_startup_debug(
@@ -5369,14 +5809,15 @@ impl ViewerState {
             }
             None
         };
+        let build_cancellation = Arc::new(AtomicBool::new(false));
         let (build_request_tx, build_result_rx, build_workers, build_worker_count) =
             if let Some(scene_index) = chunk_scene_index.as_ref() {
                 let (request_tx, result_rx, workers) = spawn_build_worker_pool(
                     scene_index.clone(),
                     Arc::new(palette_colors.clone()),
-
                     args.build_workers,
                     trace.clone(),
+                    Some(Arc::clone(&build_cancellation)),
                 );
                 (Some(request_tx), result_rx, workers, args.build_workers)
             } else {
@@ -5399,8 +5840,19 @@ impl ViewerState {
         } else {
             None
         };
+        let quick_visible_sample_query = QuickVisibleSampleQuery::new(&device);
         let mut state = Self {
             surface,
+            #[cfg(target_os = "windows")]
+            composition,
+            composition_dpi: window.scale_factor(),
+            presentation_error: None,
+            quick_gpu_failure,
+            quick_adapter: args.quick_host.is_some().then_some(adapter),
+            quick_visible_sample_query, quick_scene_revision: 0,
+            quick_decision_path: args.quick_resource_decision.clone(),
+            quick_request_id: args.launch_request_id.clone(),
+            show_after_prebuild: args.initial_visible,
             device,
             queue,
             config,
@@ -5411,6 +5863,7 @@ impl ViewerState {
             camera_buffer,
             camera_bind_group,
             lighting_bind_group,
+            lighting_buffer,
             shadow_resources,
             atlas_bind_group,
             depth_texture,
@@ -5431,11 +5884,16 @@ impl ViewerState {
             build_request_tx,
             build_result_rx,
             build_workers,
+            build_cancellation,
+            retired_build_workers: Vec::new(),
+            quick_source_identity: args.input.as_ref().and_then(|path| std::fs::metadata(path).ok().map(|meta| (path.clone(), meta.len(), meta.modified().ok()))),
             build_worker_count,
             trace,
             build_budget: BuildBudget::default(),
             pending_upload_queue: VecDeque::new(),
             pending_upload_keys: HashSet::new(),
+            deferred_quick_preloads: HashSet::new(),
+            quick_upload_retry_at: None,
             upload_budget: UploadBudget::default(),
             current_target_keys: HashSet::new(),
             current_preload_keys: HashSet::new(),
@@ -5450,7 +5908,7 @@ impl ViewerState {
             next_build_batch_id: 1,
             streaming_config: ChunkStreamingConfig::default(),
             stress_camera_sweep: args.stress_limits,
-            background_fill_enabled: args.prebuild_before_show,
+            background_fill_enabled: args.prebuild_before_show || args.quick_host.is_some(),
             bootstrap_visible_first,
             prebuild_before_show: args.prebuild_before_show,
             prebuild_cache_only: args.prebuild_only,
@@ -5487,15 +5945,18 @@ impl ViewerState {
             shadow_debug_logged: false,
             capture_output: None,
             capture_error: None,
+            _window: window,
         };
+        state.cpu_mesh_cache.retain_complete_source = args.quick_host.is_some();
         state.install_bootstrap_meshes(bootstrap_meshes);
         println!(
-            "[VIEWER_CACHE] config cpu_max_chunks={} cpu_max_bytes={} resident_max_chunks={} resident_max_bytes={} stress_limits={}",
+            "[VIEWER_CACHE] config cpu_max_chunks={} cpu_max_bytes={} resident_max_chunks={} resident_max_bytes={} stress_limits={} artificial_caps_enforced={}",
             args.cpu_cache_max_chunks,
             args.cpu_cache_max_bytes,
             args.resident_max_chunks,
             args.resident_max_bytes,
-            args.stress_limits
+            args.stress_limits,
+            !args.quick_host.is_some()
         );
         state.log_camera_viewport_diagnostics("initial", true);
         println!(
@@ -5507,6 +5968,7 @@ impl ViewerState {
             wgpu_init_started_at.elapsed().as_millis()
         );
         state.sync_chunk_residency()?;
+        if let Some(error) = state.quick_gpu_failure.lock().unwrap_or_else(|error| error.into_inner()).take() { bail!(error); }
         Ok(state)
     }
 
@@ -5515,7 +5977,8 @@ impl ViewerState {
         for prepared in bootstrap_meshes {
             self.cpu_mesh_cache
                 .insert(prepared.clone(), self.frame_index);
-            if !self.prebuild_cache_only {
+            if !self.prebuild_cache_only && matches!(self.admit_quick_chunk_upload(&prepared, QueuePriority::Target),
+                QuickChunkUploadAdmission::Admitted { .. }) {
                 let resident = self.upload_chunk_mesh(&prepared);
                 self.resident_chunks.insert(resident.key, resident);
             }
@@ -5763,7 +6226,7 @@ impl ViewerState {
             cache_write_ms
         );
         self.write_prebuild_progress_signal(viewer_started_at.elapsed(), true, true);
-        window.set_visible(true);
+        if self.show_after_prebuild { window.set_visible(true); }
         let finalize_ms = finalize_started_at.elapsed().as_millis();
         let total_wall_ms = viewer_started_at.elapsed().as_millis();
         println!(
@@ -5833,12 +6296,13 @@ impl ViewerState {
             self.cpu_mesh_cache.len()
         );
         println!(
-            "[NATIVE_VIEWER] prebuild_completed elapsed_ms={} ready_file={} visible=true",
+            "[NATIVE_VIEWER] prebuild_completed elapsed_ms={} ready_file={} visible_requested={}",
             viewer_started_at.elapsed().as_millis(),
             self.ready_file
                 .as_ref()
                 .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "none".to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            self.show_after_prebuild
         );
     }
 
@@ -6111,6 +6575,13 @@ impl ViewerState {
         }
         let mut last_log = Instant::now();
         loop {
+            if let Some(error) = self.take_quick_gpu_failure() { bail!(error); }
+            if let Some(error) = self.presentation_error.take() { bail!(error); }
+            if let Some(path) = self.quick_decision_path.as_deref() {
+                if read_quick_resource_decision(path, &self.quick_request_id)?.is_some_and(|decision| decision.action == viewer_launch_contract::QuickResourceAction::Cancel) {
+                    bail!("快速预加载已取消");
+                }
+            }
             if self.residency_dirty {
                 self.sync_chunk_residency()?;
             }
@@ -6174,6 +6645,8 @@ impl ViewerState {
     }
 
     fn upload_chunk_mesh(&self, prepared: &PreparedChunkMesh) -> ResidentChunkMesh {
+        self.trace.gpu_buffer_upload_requests.fetch_add(1, Ordering::Relaxed);
+        let gpu_upper = self.quick_adapter.as_ref().map(|_| quick_gpu_geometry_upper(prepared));
         let prepared = prepared.gpu_upload_mesh();
         let vertex_count = prepared.vertices.len() as u32;
         let solid_index_count = prepared.indices.len() as u32;
@@ -6212,7 +6685,7 @@ impl ViewerState {
                 translucent_index_count,
             },
             last_touched_frame: self.frame_index,
-            estimated_bytes: prepared.estimated_bytes(),
+            estimated_bytes: gpu_upper.unwrap_or_else(|| prepared.estimated_bytes()),
         }
     }
 
@@ -6232,6 +6705,7 @@ impl ViewerState {
             self.promote_pending_upload_priority(key, priority);
             return false;
         }
+        if !quick_upload_should_queue(&mut self.deferred_quick_preloads, key, priority) { return false; }
         let (vertex_count, index_count) = mesh_cost
             .or_else(|| self.cpu_mesh_cache.mesh_cost(key, self.frame_index))
             .unwrap_or((0, 0));
@@ -6992,6 +7466,10 @@ impl ViewerState {
             self.pending_upload_keys.clear();
             return QueueProcessingStats::default();
         }
+        if self.quick_upload_retry_at.is_some_and(|at| Instant::now() < at) {
+            return QueueProcessingStats::default();
+        }
+        self.quick_upload_retry_at = None;
         let budget_split = self.upload_budget_split();
         let mut stats = QueueProcessingStats::default();
         let mut target_queue = VecDeque::<PendingChunkUpload>::new();
@@ -7008,7 +7486,8 @@ impl ViewerState {
         }
 
         let mut next_queue = VecDeque::<PendingChunkUpload>::new();
-        for mut pending in target_queue.into_iter().chain(preload_queue) {
+        let mut uploads = target_queue.into_iter().chain(preload_queue);
+        while let Some(mut pending) = uploads.next() {
             let Some(priority) = self.current_queue_priority(pending.key) else {
                 continue;
             };
@@ -7052,6 +7531,20 @@ impl ViewerState {
             else {
                 continue;
             };
+            match self.admit_quick_chunk_upload(&prepared, priority) {
+                QuickChunkUploadAdmission::Admitted { evicted_chunks } => stats.gpu_evicted_chunks += evicted_chunks,
+                QuickChunkUploadAdmission::DeferredPreload => {
+                    self.deferred_quick_preloads.insert(pending.key);
+                    stats.deferred_preload_chunks += 1;
+                    continue;
+                }
+                QuickChunkUploadAdmission::RetryBudget => {
+                    self.quick_upload_retry_at = Some(Instant::now() + Duration::from_millis(250));
+                    next_queue.push_back(pending);
+                    next_queue.extend(uploads);
+                    break;
+                }
+            }
             let resident = self.upload_chunk_mesh(&prepared);
             self.resident_chunks.insert(resident.key, resident);
             self.touch_warm_cache_key(pending.key);
@@ -7068,7 +7561,7 @@ impl ViewerState {
     }
 
     fn prune_cpu_mesh_cache(&mut self) -> EvictionStats {
-        if self.prebuild_before_show {
+        if self.prebuild_before_show || self.quick_adapter.is_some() {
             return EvictionStats {
                 candidate_count: 0,
                 evicted_count: 0,
@@ -7104,7 +7597,7 @@ impl ViewerState {
     }
 
     fn prune_resident_chunks(&mut self, retain_keys: &HashSet<ChunkKey>) -> EvictionStats {
-        if self.prebuild_before_show {
+        if self.prebuild_before_show || self.quick_adapter.is_some() {
             let before_count = self.resident_chunks.len();
             let before_bytes = self
                 .resident_chunks
@@ -7288,13 +7781,16 @@ impl ViewerState {
             &self.streaming_config,
             self.frame_index,
             self.background_fill_enabled,
-            self.prebuild_before_show,
+            self.prebuild_before_show || self.quick_adapter.is_some(),
         );
         let indexed_chunks = scene_index.chunk_count();
-        self.current_target_keys = plan.target_keys.clone();
-        self.current_preload_keys = plan.preload_keys.clone();
+        let previous_targets = std::mem::replace(&mut self.current_target_keys, plan.target_keys.clone());
+        let previous_preloads = std::mem::replace(&mut self.current_preload_keys, plan.preload_keys.clone());
         self.current_retain_keys = plan.retain_keys.clone();
         self.refresh_sticky_target_keys(&plan);
+        quick_upload_refresh_demand(&mut self.deferred_quick_preloads, &mut self.quick_upload_retry_at,
+            previous_targets != self.current_target_keys || previous_preloads != self.current_preload_keys
+                || self.last_focus_chunk != Some(plan.focus_chunk));
 
         for key in &self.current_target_keys {
             if let Some(resident) = self.resident_chunks.get_mut(key) {
@@ -7696,6 +8192,13 @@ impl ViewerState {
     }
 
     fn resize(&mut self, new_size: PhysicalSize<u32>) {
+        #[cfg(target_os = "windows")]
+        if let Some(composition) = self.composition.as_ref() {
+            if let Err(error) = composition.resize(new_size.width, new_size.height, self.composition_dpi) {
+                self.presentation_error = Some(format!("native composition resize failed: {error:#}"));
+                return;
+            }
+        }
         if new_size.width == 0 || new_size.height == 0 {
             self.size = new_size;
             return;
@@ -7705,6 +8208,13 @@ impl ViewerState {
         self.config.height = new_size.height;
         self.camera.update_aspect(new_size.width, new_size.height);
         self.surface.configure(&self.device, &self.config);
+        #[cfg(target_os = "windows")]
+        if let Some(composition) = self.composition.as_ref() {
+            if let Err(error) = composition.commit() {
+                self.presentation_error = Some(format!("native composition commit failed: {error:#}"));
+                return;
+            }
+        }
         self.depth_texture = DepthTexture::create(&self.device, &self.config);
         self.write_camera();
         self.mark_residency_dirty();
@@ -7983,7 +8493,7 @@ impl ViewerState {
                 .map(|pending| self.frame_index.saturating_sub(pending.enqueued_frame))
                 .unwrap_or(0);
             println!(
-                "[VIEWER_STREAM] frame_uploads target_upload_chunks={} target_upload_vertices={} target_upload_indices={} preload_upload_chunks={} preload_upload_vertices={} preload_upload_indices={} preload_budget_chunks={} preload_budget_vertices={} preload_budget_indices={} target_deferred_chunks={} preload_deferred_chunks={} pending_uploads={} oldest_pending_age_frames={} cpu_cache_chunks={} resident_chunks={}",
+                "[VIEWER_STREAM] frame_uploads target_upload_chunks={} target_upload_vertices={} target_upload_indices={} preload_upload_chunks={} preload_upload_vertices={} preload_upload_indices={} preload_budget_chunks={} preload_budget_vertices={} preload_budget_indices={} target_deferred_chunks={} preload_deferred_chunks={} pending_uploads={} oldest_pending_age_frames={} cpu_cache_chunks={} resident_chunks={} admission_evicted_chunks={}",
                 upload_stats.target_usage.chunks,
                 upload_stats.target_usage.vertices,
                 upload_stats.target_usage.indices,
@@ -8004,7 +8514,8 @@ impl ViewerState {
                 self.pending_upload_queue.len(),
                 oldest_pending_age_frames,
                 self.cpu_mesh_cache.len(),
-                self.resident_chunks.len()
+                self.resident_chunks.len(),
+                upload_stats.gpu_evicted_chunks
             );
             println!(
                 "[VIEWER_PRELOAD] frame_uploads preload_budget_chunks={} preload_budget_vertices={} preload_budget_indices={} preload_used_chunks={} preload_used_vertices={} preload_used_indices={} preload_deferred_chunks={} target_used_chunks={} target_used_vertices={} target_used_indices={}",
@@ -8053,6 +8564,16 @@ impl ViewerState {
             );
         }
         self.log_runtime_visibility_diagnostics();
+
+        if (self.frame_index < 5 || self.frame_index.is_multiple_of(120))
+            && let Some(adapter) = self.quick_adapter.as_ref() {
+            match crate::quick_resource_preflight::query_selected_adapter_budget(adapter) {
+                Ok(budget) => println!("[QUICK_RESOURCE] stage=actual_usage frame={} current_usage_bytes={} actual_budget_bytes={} resident_chunks={} source_chunks={} artificial_residency_caps=false",
+                    self.frame_index, budget.current_usage_bytes, budget.budget_bytes,
+                    self.resident_chunks.len(), self.total_scene_chunks),
+                Err(error) => eprintln!("[QUICK_RESOURCE] stage=actual_usage measurement_unavailable={error:#} allocation_failure_not_inferred=true"),
+            }
+        }
 
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -8162,6 +8683,7 @@ impl ViewerState {
             overlay.prepare(&self.device, &self.queue, &self.label_anchors, &self.camera);
         }
 
+        let query_visible_samples = self.quick_visible_sample_query.should_query();
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("native_viewer_render_pass"),
@@ -8169,12 +8691,7 @@ impl ViewerState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.08,
-                            g: 0.09,
-                            b: 0.11,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(quick_clear_color(self.config.alpha_mode)),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -8186,9 +8703,10 @@ impl ViewerState {
                     }),
                     stencil_ops: None,
                 }),
-                occlusion_query_set: None,
+                occlusion_query_set: query_visible_samples.then_some(&self.quick_visible_sample_query.query),
                 timestamp_writes: None,
             });
+            if query_visible_samples { render_pass.begin_occlusion_query(0); }
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_bind_group(1, &self.atlas_bind_group, &[]);
             render_pass.set_bind_group(2, &self.lighting_bind_group, &[]);
@@ -8233,6 +8751,7 @@ impl ViewerState {
                 );
                 render_pass.draw_indexed(0..resident.gpu.translucent_index_count, 0, 0..1);
             }
+            if query_visible_samples { render_pass.end_occlusion_query(); }
         }
 
         if let Some(overlay) = self.label_overlay.as_ref() {
@@ -8271,11 +8790,22 @@ impl ViewerState {
                 wgpu::Extent3d { width: self.config.width, height: self.config.height, depth_or_array_layers: 1 });
             (path, buffer, stride)
         });
+        if query_visible_samples {
+            encoder.resolve_query_set(&self.quick_visible_sample_query.query, 0..1, &self.quick_visible_sample_query.resolve, 0);
+            encoder.copy_buffer_to_buffer(&self.quick_visible_sample_query.resolve, 0, &self.quick_visible_sample_query.readback, 0, 8);
+        }
         self.queue.submit(Some(encoder.finish()));
         if let Some((path, buffer, stride)) = capture {
             self.capture_error = save_gpu_frame(&self.device, &buffer, &path, self.config.width, self.config.height, stride, self.config.format).err().map(|error| error.to_string());
         }
         output.present();
+        #[cfg(target_os = "windows")]
+        if query_visible_samples {
+            let present_count = unsafe { self.surface.as_hal::<wgpu::hal::api::Dx12, _, _>(|surface|
+                surface.and_then(|surface| surface.native_present_statistics()).map(|receipt| receipt.0)) }.flatten();
+            if let Some(count) = present_count { self.quick_visible_sample_query.submitted(count, self.quick_scene_revision); }
+            else { self.quick_visible_sample_query.cancel(); }
+        }
         if let Some((buffer, byte_len)) = shadow_debug_readback {
             if let Some(depth_values) = read_shadow_depth_values(&self.device, &buffer, byte_len) {
                 let shadow_depth_stats = collect_shadow_depth_stats(&depth_values);
@@ -8305,7 +8835,9 @@ impl ViewerState {
 
 impl Drop for ViewerState {
     fn drop(&mut self) {
+        self.build_cancellation.store(true, Ordering::Release);
         self.build_request_tx.take();
+        self.build_workers.append(&mut self.retired_build_workers);
         for (worker_index, worker) in self.build_workers.drain(..).enumerate() {
             if worker.join().is_err() {
                 println!(
@@ -8643,7 +9175,8 @@ fn dye_family(local: &str, material: &str) -> &'static str {
     DEFAULT_BLOCK_COLOR_FAMILY
 }
 
-fn load_scene(args: &ViewerArgs) -> Result<ViewerScene> { ViewerScene::from_litematic(args.input.as_deref().context("quick preview requires a scene")?,args.chunk_size,args.display_mode) }
+fn load_scene(args: &ViewerArgs) -> Result<ViewerScene> {
+ if args.quick_gpu_context_only { return Ok(ViewerScene::gpu_context_only()); } ViewerScene::from_litematic(args.input.as_deref().context("quick preview requires a scene")?,args.chunk_size,args.display_mode) }
 
 
 // ------------------------------------------------------------------------
@@ -9315,6 +9848,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
     } else {
         None
     };
+
     let scene = load_scene(&args)?;
     let title = format!("Litematica-Nova Viewer - {}", scene.label);
     let event_loop = EventLoop::new()?;
@@ -9331,7 +9865,9 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
             );
     #[cfg(target_os = "windows")]
     let (window_builder, _child_dpi_context) = if let Some(host) = &args.quick_host {
-        let (builder, context) = native_child::builder(window_builder, host)?;
+        // A redirection bitmap would remain an opaque HWND background below
+        // the premultiplied composition visual. This child is GPU-only content.
+        let (builder, context) = native_child::builder(window_builder.with_no_redirection_bitmap(true), host)?;
         (builder, Some(context))
     } else { (window_builder, None) };
     let window = Arc::new(
@@ -9342,25 +9878,37 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
     if let Some(host) = &args.quick_host {
         native_child::verify(window.as_ref(), host)?;
     }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if args.embed_parent_hwnd.is_some() {
+            println!(
+                "[NATIVE_VIEWER] launch_mode=embedded external_window_created=true reparent=false reason=unsupported_platform"
+            );
+        } else {
+            println!(
+                "[NATIVE_VIEWER] launch_mode=popup external_window_created=true reparent=false"
+            );
+        }
+    }
+
     let mut state = pollster::block_on(ViewerState::new(window.clone(), scene, &args))?;
+    if args.quick_gpu_context_only {
+        ensure!(state.chunk_scene_index.is_none() && state.resident_chunks.is_empty(), "Static GPU preparation unexpectedly owns projection geometry");
+        eprintln!("[NOVA_GPU_INITIALIZATION] stage=static_context_ready epoch_ms={} total_prepare_ms={:.3} projection_reads=0 scene_parse_runs=0 scene_mesh_builds=0 resident_chunks=0 window_visible=false first_display=not_measured",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |value| value.as_millis()), total_trace_started_at.elapsed().as_secs_f64()*1000.0);
+    }
     let mut pending_capture: Option<(ViewerSessionCommand, PathBuf, Instant)> = None;
     #[cfg(target_os = "windows")]
     let legacy_window_hwnd = window_hwnd(window.as_ref())?;
     #[cfg(not(target_os = "windows"))]
     let legacy_window_hwnd = 0_isize;
     register_viewer_shutdown_hwnd(legacy_window_hwnd);
-    #[cfg(target_os = "windows")]
-    let _popup_style = unsafe { GetWindowLongPtrW(legacy_window_hwnd, -16) };
-    #[cfg(not(target_os = "windows"))]
-    let _popup_style = 0_isize;
-
     let mut presentation_mode = if args.initial_visible {
         PersistentPresentationMode::Popup
     } else {
         PersistentPresentationMode::Hidden
     };
-
-    if args.prebuild_before_show {
+    if state.prebuild_before_show {
         state.run_prebuild_until_ready(window.as_ref(), viewer_started_at)?;
     }
     if args.prebuild_only {
@@ -9383,8 +9931,8 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
             legacy_window_hwnd,
         )?;
         println!(
-            "[QUICK_PREVIEW] status=ready session_id={} mode=fast_experimental full_mode=false",
-            watcher.session_id(),
+            "[QUICK_PREVIEW] status={} session_id={} mode=fast_experimental scene_loaded={} full_mode=false",
+            if args.quick_gpu_context_only { "gpu_context_ready" } else { "ready" }, watcher.session_id(), !args.quick_gpu_context_only,
         );
         std::io::stdout().flush().context("flush quick preview readiness")?;
     }
@@ -9392,14 +9940,16 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
     let event_error = Arc::clone(&fatal_error);
     let quick_host = args.quick_host.clone();
 
+    let quick_request_id = args.launch_request_id.clone();
+    let mut quick_presentation_audit = None::<(usize, usize)>;
+    let mut quick_redraw = QuickRedrawState::new();
+    let mut quick_occluded = false;
+    #[cfg(target_os = "windows")]
+    let mut quick_first_block_timing = first_block_timing::FirstBlockTiming::new_fast(
+        args.input.as_deref().unwrap_or_else(|| Path::new("<empty>")));
     let event_loop_result = event_loop.run(move |event, event_loop_window_target| {
-        event_loop_window_target.set_control_flow(if session_watcher.is_some()
-            && presentation_mode == PersistentPresentationMode::Hidden
-        {
-            ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(40))
-        } else {
-            ControlFlow::Poll
-        });
+        event_loop_window_target.set_control_flow(ControlFlow::WaitUntil(
+            Instant::now() + Duration::from_millis(40)));
         match event {
             Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
                 WindowEvent::Destroyed => {
@@ -9416,9 +9966,12 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             return;
                         }
                         presentation_mode = PersistentPresentationMode::Hidden;
+                        quick_redraw.hide();
                         state.drag_mode = None;
                         state.last_cursor_position = None;
                         publish_viewer_hidden_event(session_watcher.as_mut(), legacy_window_hwnd, "quick-wgpu", "window_close");
+                        #[cfg(target_os = "windows")]
+                        quick_first_block_timing.hide(); state.quick_visible_sample_query.cancel();
                         return;
                     }
                     record_viewer_shutdown(
@@ -9428,8 +9981,16 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                     );
                     event_loop_window_target.exit();
                 }
-                WindowEvent::Resized(new_size) => state.resize(new_size),
-                WindowEvent::ScaleFactorChanged { .. } => state.resize(window.inner_size()),
+                WindowEvent::Resized(new_size) => { state.resize(new_size); quick_redraw.request(); },
+                WindowEvent::Occluded(occluded) => {
+                    quick_occluded = occluded;
+                    if occluded { quick_redraw.hide(); } else { quick_redraw.request(); }
+                }
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    state.composition_dpi = scale_factor;
+                    state.resize(window.inner_size());
+                    quick_redraw.request();
+                }
                 WindowEvent::MouseInput {
                     state: element_state,
                     button,
@@ -9439,8 +10000,10 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         window.focus_window();
                     }
                     state.process_mouse_input(element_state, button);
+                    quick_redraw.request();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
+                    if state.drag_mode.is_some() { quick_redraw.request(); }
                     state.process_cursor_moved(position);
                 }
                 WindowEvent::CursorLeft { .. } => {
@@ -9452,6 +10015,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
                     state.process_scroll(delta);
+                    quick_redraw.request();
                 }
                 WindowEvent::KeyboardInput { event, .. }
                     if event.state == ElementState::Pressed =>
@@ -9471,9 +10035,12 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                                     return;
                                 }
                                 presentation_mode = PersistentPresentationMode::Hidden;
+                                quick_redraw.hide();
                                 state.drag_mode = None;
                                 state.last_cursor_position = None;
                                 publish_viewer_hidden_event(session_watcher.as_mut(), legacy_window_hwnd, "quick-wgpu", "escape_key");
+                                #[cfg(target_os = "windows")]
+                                quick_first_block_timing.hide(); state.quick_visible_sample_query.cancel();
                                 return;
                             }
                             record_viewer_shutdown(
@@ -9483,20 +10050,40 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             );
                             event_loop_window_target.exit();
                         }
-                        PhysicalKey::Code(KeyCode::KeyR) => state.reset_camera(),
+                        PhysicalKey::Code(KeyCode::KeyR) => { state.reset_camera(); quick_redraw.request(); },
                         _ => {}
                     }
                 }
                 WindowEvent::RedrawRequested => {
-                    if session_watcher.is_some()
-                        && presentation_mode == PersistentPresentationMode::Hidden
+                    if quick_occluded || state.size.width == 0 || state.size.height == 0
+                        || (session_watcher.is_some()
+                            && (presentation_mode == PersistentPresentationMode::Hidden || state.chunk_scene_index.is_none()))
                     {
                         return;
                     }
                     match state.render(window.as_ref(), viewer_started_at) {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            quick_redraw.presented(Instant::now());
+                            #[cfg(target_os = "windows")]
+                            if state.config.width != 0 && state.config.height != 0 && state.resident_chunks.iter().any(|(key, chunk)|
+                                (chunk.gpu.solid_index_count != 0 || chunk.gpu.translucent_index_count != 0)
+                                    && (state.uses_full_scene_cache_runtime() || state.current_target_keys.contains(key))) {
+                                let receipt = unsafe { state.surface.as_hal::<wgpu::hal::api::Dx12, _, _>(
+                                    |surface| surface.and_then(|surface| surface.native_present_statistics())) }.flatten();
+                                if let Some((submitted, displayed)) = receipt {
+                                    quick_first_block_timing.exact_present_submitted(Some(submitted));
+                                    quick_first_block_timing.observe_display(displayed);
+                                    if quick_first_block_timing.needs_visible_sample() { state.quick_visible_sample_query.retry(); }
+                                }
+                            }
+                            if let Some((before_mesh, before_upload)) = quick_presentation_audit.take() {
+                                eprintln!("[NOVA_RENDER_PHASE] stage=fast_restore_render_call loading={} async_mesh_chunks_delta={} gpu_buffer_upload_requests_delta={} resident_chunks={} cold_scene=false display_completion=not_inferred",
+                                    if state.prebuild_before_show { "preloaded" } else { "realtime" }, state.trace.worker_chunks.load(Ordering::Relaxed).saturating_sub(before_mesh), state.trace.gpu_buffer_upload_requests.load(Ordering::Relaxed).saturating_sub(before_upload), state.resident_chunks.len());
+                            }
+                        }
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                            state.resize(state.size)
+                            state.resize(state.size);
+                            quick_redraw.retry(Instant::now());
                         }
                         Err(wgpu::SurfaceError::OutOfMemory) => {
                             println!("[WGPU_INIT] surface_out_of_memory");
@@ -9509,12 +10096,30 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         }
                         Err(wgpu::SurfaceError::Timeout) => {
                             println!("[WGPU_INIT] surface_timeout");
+                            quick_redraw.retry(Instant::now());
                         }
                     }
                 }
                 _ => {}
             },
             Event::AboutToWait => {
+                state.reap_retired_build_workers();
+                if let Some(message) = state.take_quick_gpu_failure() {
+                    record_viewer_shutdown("quick_gpu_failure", 1, &message);
+                    *event_error.lock().expect("quick GPU failure mutex") = Some(message);
+                    event_loop_window_target.exit();
+                    return;
+                }
+                #[cfg(target_os = "windows")]
+                if let Some((count, revision)) = state.quick_visible_sample_query.poll(&state.device, state.quick_scene_revision) {
+                    quick_first_block_timing.visible_projection_present_submitted(Some(count), revision);
+                }
+                if let Some(message) = state.presentation_error.take() {
+                    record_viewer_shutdown("native_composition_failed", 1, &message);
+                    *event_error.lock().expect("quick preview event error mutex") = Some(message);
+                    event_loop_window_target.exit();
+                    return;
+                }
                 #[cfg(target_os = "windows")]
                 if let Some(host) = &quick_host {
                     let parent = match native_child::validate_host(host) {
@@ -9536,11 +10141,18 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         // Clear WS_VISIBLE before the host can reappear. Only a
                         // fresh sequenced attach may restore the child viewport.
                         presentation_mode = PersistentPresentationMode::Hidden;
+                        quick_redraw.hide();
                         state.drag_mode = None;
                         state.last_cursor_position = None;
+                        #[cfg(target_os = "windows")]
+                        quick_first_block_timing.hide(); state.quick_visible_sample_query.cancel();
                     }
                 }
                 if let Some(watcher) = session_watcher.as_mut() {
+                    // Win32 may coalesce wakeups. Drain a bounded batch so
+                    // Hide -> ReplaceScene -> Attach does not wait 40ms per
+                    // command; every command retains its sequence validation.
+                    for _ in 0..16 {
                     let command = match watcher.poll_next() {
                         Ok(command) => command,
                         Err(error) => {
@@ -9551,8 +10163,60 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             return;
                         }
                     };
-                    if let Some(command) = command {
-                        if command.kind == ViewerSessionCommandKind::CaptureFrame {
+                    let Some(command) = command else { break; };
+                    {
+                        if state.chunk_scene_index.is_none() && matches!(command.kind,
+                            ViewerSessionCommandKind::AttachEmbedded | ViewerSessionCommandKind::ShowOverlay
+                            | ViewerSessionCommandKind::ShowPopup | ViewerSessionCommandKind::CaptureFrame) {
+                            if let Err(error) = reject_viewer_session_command(watcher, &command, &anyhow!("请先加载投影。"), legacy_window_hwnd) {
+                                *event_error.lock().expect("quick static context error mutex") = Some(error.to_string());
+                                event_loop_window_target.exit(); return;
+                            }
+                        } else if command.kind == ViewerSessionCommandKind::ReplaceScene {
+                            let started = Instant::now();
+                            let replacement = (|| -> Result<()> {
+                                hide_quick_preview_window(window.as_ref(), quick_host.as_ref())?;
+                                presentation_mode = PersistentPresentationMode::Hidden;
+                                quick_redraw.hide();
+                                quick_presentation_audit = None;
+                                #[cfg(target_os = "windows")]
+                                quick_first_block_timing.hide(); state.quick_visible_sample_query.cancel();
+                                if let Some((capture, _, _)) = pending_capture.take() {
+                                    watcher.publish_status(capture.sequence, ViewerSessionState::Error { command_kind: capture.kind, message: "投影已切换，旧帧未保存。".into() }, std::process::id(), legacy_window_hwnd)?;
+                                }
+                                let path = command.launch_contract.as_deref().context("Fast scene replacement has no launch contract")?;
+                                let mut next_args = parse_launch_contract_path(&provenance, path)?;
+                                ensure!(next_args.display_mode == ViewerDisplayMode::FastExperimental
+                                    && next_args.persistent_popup_presentation && next_args.quick_host == quick_host
+                                    && next_args.launch_request_id == watcher.session_id(), "Fast replacement differs from the existing native session/host");
+                                let same_input = state.quick_input_is_current(&next_args);
+                                if !same_input {
+                                    state.build_cancellation.store(true, Ordering::Release);
+                                    state.build_request_tx.take();
+                                }
+                                let scene = if same_input { None } else { Some(load_scene(&next_args)?) };
+                                #[cfg(target_os = "windows")]
+                                { quick_first_block_timing = first_block_timing::FirstBlockTiming::new_fast(next_args.input.as_deref().context("Fast replacement source missing")?); }
+                                state.replace_quick_scene(scene, &mut next_args)?;
+                                quick_redraw.request();
+                                if state.prebuild_before_show { state.run_prebuild_until_ready(window.as_ref(), started)?; }
+                                // Replace old swapchain pixels while still
+                                // hidden. GPU submission is not monitor display
+                                // and does not complete the first-block timer.
+                                state.render(window.as_ref(), started).context("submit new Fast scene before native visibility")?;
+                                if let Some(error) = state.take_quick_gpu_failure() { bail!(error); }
+                                eprintln!("[NOVA_RENDER_PHASE] stage=fast_scene_ready elapsed_ms={:.3} same_input_parsing_reused={} existing_gpu_context=true new_gpu_devices=0 new_composition_surfaces=0 display_verified=false", started.elapsed().as_secs_f64()*1000.0, same_input);
+                                Ok(())
+                            })();
+                            let status = match replacement {
+                                Ok(()) => ViewerSessionState::SceneReady { request_id: watcher.session_id().to_owned() },
+                                Err(error) => ViewerSessionState::Error { command_kind: command.kind, message: format!("快速预览加载失败：{error:#}") },
+                            };
+                            if let Err(error) = complete_viewer_session_command(watcher, &command, status, legacy_window_hwnd) {
+                                *event_error.lock().expect("quick replacement error mutex") = Some(error.to_string());
+                                event_loop_window_target.exit(); return;
+                            }
+                        } else if command.kind == ViewerSessionCommandKind::CaptureFrame {
                             if pending_capture.is_some() {
                                 let _ = reject_viewer_session_command(watcher, &command, &anyhow!("另一个真实帧读取尚未结束"), legacy_window_hwnd);
                             } else {
@@ -9561,6 +10225,21 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                                 pending_capture = Some((command, path, Instant::now()));
                             }
                         } else {
+                        let mesh_before = state.trace.worker_chunks.load(Ordering::Relaxed);
+                        let upload_before = state.trace.gpu_buffer_upload_requests.load(Ordering::Relaxed);
+                        if matches!(command.kind, ViewerSessionCommandKind::AttachEmbedded | ViewerSessionCommandKind::ShowPopup) {
+                            quick_presentation_audit = Some((mesh_before, upload_before));
+                            #[cfg(target_os = "windows")]
+                            {
+                                if let Some(click) = command.click_started_at_epoch_ms { quick_first_block_timing.set_click_for_presentation(click); }
+                                quick_first_block_timing.begin_presentation();
+                                state.quick_visible_sample_query.arm();
+                            }
+                        } else { quick_presentation_audit = None; }
+                        #[cfg(target_os = "windows")]
+                        if matches!(command.kind, ViewerSessionCommandKind::Hide | ViewerSessionCommandKind::Release) {
+                            quick_first_block_timing.hide(); state.quick_visible_sample_query.cancel();
+                        }
                         #[cfg(target_os = "windows")]
                         let child_outcome = quick_host.as_ref().map(|host|
                             native_child::apply(window.as_ref(), host, &command, &mut presentation_mode));
@@ -9578,6 +10257,8 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         let mut release = false;
                         let completion = match outcome {
                             Ok(ViewerPresentationCommandOutcome::Applied(status)) => {
+                                if presentation_mode == PersistentPresentationMode::Hidden { quick_redraw.hide(); }
+                                else { quick_redraw.request(); }
                                 if state.size != window.inner_size() {
                                     state.resize(window.inner_size());
                                 }
@@ -9589,11 +10270,13 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             }
                             Ok(ViewerPresentationCommandOutcome::NotPresentation) => {
                                 reject_viewer_session_command(watcher, &command,
-                                    &anyhow!("quick_preview does not support replace_scene; launch a new quick preview"),
+                                    &anyhow!("当前快速预览命令无效。"),
                                     legacy_window_hwnd)
                             }
                             Err(error) => reject_viewer_session_command(watcher, &command, &error, legacy_window_hwnd),
                         };
+                        eprintln!("[NOVA_RENDER_PHASE] stage=fast_presentation_applied request_id={} command={:?} sequence={} loading={} async_mesh_chunks_delta={} gpu_buffer_upload_requests_delta={} resident_chunks={} scope=control_handler GPU_completion=not_inferred",
+                            quick_request_id, command.kind, command.sequence, if state.prebuild_before_show { "preloaded" } else { "realtime" }, state.trace.worker_chunks.load(Ordering::Relaxed).saturating_sub(mesh_before), state.trace.gpu_buffer_upload_requests.load(Ordering::Relaxed).saturating_sub(upload_before), state.resident_chunks.len());
                         if let Err(error) = completion {
                             let message = format!("quick preview session acknowledgement failed: {error:#}");
                             record_viewer_shutdown("quick_preview_session_ack", 1, &message);
@@ -9607,6 +10290,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             return;
                         }
                         }
+                    }
                     }
                     if let Some((command, path, started)) = pending_capture.as_ref() {
                         let ready = state.frame_index > 0 && state.pending_build_queue.is_empty() && state.in_flight_build_keys.is_empty() && state.pending_upload_queue.is_empty();
@@ -9632,6 +10316,15 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         return;
                     }
                 }
+                #[cfg(target_os = "windows")]
+                if presentation_mode != PersistentPresentationMode::Hidden
+                    && state.chunk_scene_index.is_some()
+                    && quick_first_block_timing.needs_display_confirmation() {
+                    let displayed = unsafe { state.surface.as_hal::<wgpu::hal::api::Dx12, _, _>(
+                        |surface| surface.and_then(|surface| surface.native_present_statistics()).and_then(|receipt| receipt.1)) }.flatten();
+                    quick_first_block_timing.observe_display(displayed);
+                    if quick_first_block_timing.needs_visible_sample() { state.quick_visible_sample_query.retry(); }
+                }
                 if let Some(auto_exit_after) = auto_exit_after
                     && viewer_started_at.elapsed() >= auto_exit_after
                 {
@@ -9650,7 +10343,29 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                     event_loop_window_target.exit();
                     return;
                 }
-                window.request_redraw();
+                let now = Instant::now();
+                let pending_work = state.residency_dirty || !state.pending_build_queue.is_empty()
+                    || !state.in_flight_build_keys.is_empty()
+                    || (!state.pending_upload_queue.is_empty()
+                        && state.quick_upload_retry_at.is_none_or(|at| now >= at))
+                    || state.prebuild_writer_completed_chunks < state.prebuild_writer_submitted_chunks
+                    || (!state.prebuild_before_show && !state.background_fill_enabled
+                        && state.chunk_scene_index.is_some());
+                let animated = (state.preview_mode && state.preview_spin) || state.stress_camera_sweep;
+                let presentable = !quick_occluded && state.size.width != 0 && state.size.height != 0
+                    && (session_watcher.is_none() || (presentation_mode != PersistentPresentationMode::Hidden
+                        && state.chunk_scene_index.is_some()));
+                let sample_retry = state.quick_visible_sample_query.should_query();
+                #[cfg(target_os = "windows")]
+                let awaiting_receipt = quick_first_block_timing.needs_display_confirmation();
+                #[cfg(not(target_os = "windows"))]
+                let awaiting_receipt = false;
+                if quick_redraw.needs_redraw(now, presentable, pending_work, animated, sample_retry) {
+                    window.request_redraw();
+                }
+                event_loop_window_target.set_control_flow(ControlFlow::WaitUntil(
+                    quick_redraw.poll_deadline(now, presentable && (pending_work || animated || sample_retry),
+                        presentable && (awaiting_receipt || state.quick_visible_sample_query.pending.is_some()))));
             }
             _ => {}
         }
@@ -9685,27 +10400,219 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
 fn parse_launch_contract_args(provenance: &BackendProvenance) -> Result<Option<ViewerArgs>> {
  let args=std::env::args().skip(1).collect::<Vec<_>>();
  if args==["--help"] || args==["-h"] { println!("usage: litematica_native_viewer --launch-contract=<ABS_JSON>");return Ok(None); }
- if args==["--contract-info"] { println!("{}",serde_json::json!({"schema":VIEWER_LAUNCH_SCHEMA,"ackSchema":VIEWER_LAUNCH_ACK_SCHEMA,"renderCore":"legacy-wgpu","publicBeta":true,"acceptedTasks":["quick_preview"],"quickPreview":{"task":"quick_preview","renderCore":"legacy-wgpu","buildMode":"fast_experimental","initialVisible":false}}));return Ok(None); }
+ if args==["--contract-info"] { println!("{}",serde_json::json!({"schema":VIEWER_LAUNCH_SCHEMA,"ackSchema":VIEWER_LAUNCH_ACK_SCHEMA,"renderCore":"legacy-wgpu","publicBeta":true,"acceptedTasks":["quick_preview","quick_gpu_context"],"quickPreview":{"task":"quick_preview","renderCore":"legacy-wgpu","buildMode":"fast_experimental","initialVisible":false}}));return Ok(None); }
  let [value]=args.as_slice() else { bail!("expected exactly one --launch-contract=<ABS_JSON>"); };
  let path=value.strip_prefix("--launch-contract=").map(PathBuf::from).context("expected --launch-contract=<ABS_JSON>")?;
  if !path.is_absolute() { bail!("launch contract path must be absolute"); }
- let bytes=read_process_file(&path)?;let hash=format!("{:x}",Sha256::digest(&bytes));
+ parse_launch_contract_path(provenance, &path).map(Some)
+}
+
+fn parse_launch_contract_path(provenance: &BackendProvenance, path: &Path) -> Result<ViewerArgs> {
+ parse_launch_contract_path_inner(provenance, path, true)
+}
+
+fn parse_launch_contract_path_inner(provenance: &BackendProvenance, path: &Path, require_native_host: bool) -> Result<ViewerArgs> {
+ let bytes=read_process_file(path)?;let hash=format!("{:x}",Sha256::digest(&bytes));
  let contract=ViewerLaunchContract::from_json_slice(&bytes).map_err(|error|anyhow!("invalid launch contract: {error}"))?;
  #[cfg(not(target_os="windows"))]
  bail!("native embedded quick preview is not supported on this platform in Beta 0.1");
- let ViewerTask::QuickPreview(task)=&contract.task else { bail!("public beta accepts only quick_preview; complete mode is not included"); };
- if task.host.is_none() { bail!("public quick preview requires a native child host"); }
+ let (host, initial_visible, preload, gpu_context_only, resource_report, resource_decision) = match &contract.task {
+     ViewerTask::QuickPreview(task) => (task.host.clone(),task.initial_visible,task.preload,false,task.resource_report_path.clone(),task.resource_decision_path.clone()),
+     ViewerTask::QuickGpuContext(task) => (Some(task.host.clone()),false,false,true,None,None),
+     _ => bail!("the public Fast executable accepts only Quick tasks; protected tasks require the authenticated module loader"),
+ };
+ if require_native_host && host.is_none() { bail!("public quick preview requires a native child host"); }
  install_viewer_build_mode(ViewerBuildMode::FastExperimental).map_err(|error|anyhow!("build mode conflict: {error:?}"))?;
  let ack=ViewerLaunchAck{schema:VIEWER_LAUNCH_ACK_SCHEMA.to_owned(),contract_schema:VIEWER_LAUNCH_SCHEMA.to_owned(),request_id:contract.request_id.clone(),contract_sha256:hash.clone(),backend_git_sha:provenance.git_sha().to_owned(),backend_profile:provenance.profile().to_owned(),backend_exe_path:provenance.exe_path().to_path_buf(),backend_sha256:provenance.sha256().to_owned()};
  println!("{VIEWER_LAUNCH_ACK_PREFIX}{}",serde_json::to_string(&ack)?);std::io::stdout().flush()?;
- Ok(Some(ViewerArgs{launch_request_id:contract.request_id,launch_contract_sha256:hash,input:Some(contract.scene),chunk_size:32,probe_scene:false,prebuild_only:false,build_cache_and_warm:false,prepare_viewer_only:false,persistent_popup_presentation:true,initial_visible:task.initial_visible,auto_exit_seconds:None,prebuild_before_show:false,cache_input:None,ready_file:None,cache_file:None,preview_output:None,build_workers:default_build_worker_count(),cpu_cache_max_chunks:DEFAULT_CPU_CACHE_BUDGET.max_chunks,cpu_cache_max_bytes:DEFAULT_CPU_CACHE_BUDGET.max_bytes,resident_max_chunks:DEFAULT_RESIDENT_BUDGET.max_chunks,resident_max_bytes:DEFAULT_RESIDENT_BUDGET.max_bytes,stress_limits:false,embed_parent_hwnd:None,quick_host:task.host.clone(),preview_mode:false,preview_spin:false,display_mode:ViewerDisplayMode::FastExperimental,basic_lighting:true,basic_shadows:true,shadow_debug:false,shadow_debug_view:ShadowDebugViewMode::Off,shadow_force_test:false}))
+ Ok(ViewerArgs{launch_request_id:contract.request_id,launch_contract_sha256:hash,input:(!gpu_context_only).then_some(contract.scene),chunk_size:32,probe_scene:false,prebuild_only:false,build_cache_and_warm:false,prepare_viewer_only:false,persistent_popup_presentation:true,initial_visible,auto_exit_seconds:None,prebuild_before_show:preload,cache_input:None,ready_file:None,cache_file:None,preview_output:None,build_workers:default_build_worker_count(),cpu_cache_max_chunks:DEFAULT_CPU_CACHE_BUDGET.max_chunks,cpu_cache_max_bytes:DEFAULT_CPU_CACHE_BUDGET.max_bytes,resident_max_chunks:DEFAULT_RESIDENT_BUDGET.max_chunks,resident_max_bytes:DEFAULT_RESIDENT_BUDGET.max_bytes,stress_limits:false,embed_parent_hwnd:None,quick_host:host,quick_gpu_context_only:gpu_context_only,quick_resource_report:resource_report,quick_resource_decision:resource_decision,preview_mode:false,preview_spin:false,display_mode:ViewerDisplayMode::FastExperimental,basic_lighting:true,basic_shadows:true,shadow_debug:false,shadow_debug_view:ShadowDebugViewMode::Off,shadow_force_test:false})
 }
 
 fn env_bool(name: &str) -> bool { matches!(std::env::var(name).ok().as_deref(),Some("1"|"true"|"on"|"yes")) }
-fn hide_quick_preview_window(window: &winit::window::Window, host: Option<&viewer_launch_contract::QuickPreviewHostWindow>) -> Result<()> {
- #[cfg(target_os="windows")]
- if let Some(host)=host { return native_child::hide(window,host); }
- #[cfg(not(target_os="windows"))]
- let _=host;
- window.set_visible(false);Ok(())
+fn hide_quick_preview_window(
+    window: &winit::window::Window,
+    host: Option<&viewer_launch_contract::QuickPreviewHostWindow>,
+) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    if let Some(host) = host {
+        return native_child::hide(window, host);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = host;
+    window.set_visible(false);
+    Ok(())
+}
+
+#[cfg(test)]
+mod quick_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn quick_redraw_completed_scene_is_idle_but_controls_and_receipts_still_poll() {
+        let now = Instant::now();
+        let mut redraw = QuickRedrawState::new();
+        assert!(redraw.needs_redraw(now, true, false, false, false));
+        redraw.presented(now);
+        for elapsed in [0, 16, 40, 120_000] {
+            assert!(!redraw.needs_redraw(now + Duration::from_millis(elapsed), true, false, false, false));
+        }
+        assert_eq!(redraw.poll_deadline(now, false, false), now + Duration::from_millis(40));
+        assert_eq!(redraw.poll_deadline(now, false, true), now + Duration::from_millis(16));
+    }
+
+    #[test]
+    fn quick_redraw_real_inputs_and_new_scene_resume_immediately_without_hidden_draws() {
+        let now = Instant::now();
+        let mut redraw = QuickRedrawState::new();
+        redraw.presented(now);
+        // Production input, resize, reset, expose and Show all invalidate the
+        // same scheduler. An input does not wait for the async progress tick.
+        for _ in 0..5 {
+            redraw.request();
+            assert!(redraw.needs_redraw(now, true, false, false, false));
+            redraw.presented(now);
+        }
+        redraw.hide();
+        assert!(!redraw.needs_redraw(now, false, true, true, true));
+        redraw.request(); // New source / restored page: its first draw is fresh.
+        assert!(!redraw.needs_redraw(now, false, true, true, true));
+        assert!(redraw.needs_redraw(now, true, false, false, false));
+        redraw.presented(now);
+        assert!(!redraw.needs_redraw(now, true, false, false, false));
+    }
+
+    #[test]
+    fn quick_redraw_async_animation_and_surface_retry_keep_bounded_progress() {
+        let now = Instant::now();
+        let mut redraw = QuickRedrawState::new();
+        redraw.presented(now);
+        for (pending, animated, sample) in [(true, false, false), (false, true, false), (false, false, true)] {
+            assert!(!redraw.needs_redraw(now, true, pending, animated, sample));
+            assert_eq!(redraw.poll_deadline(now, true, false), now + Duration::from_millis(16));
+            assert!(redraw.needs_redraw(now + Duration::from_millis(16), true, pending, animated, sample));
+            assert!(!redraw.needs_redraw(now + Duration::from_millis(16), false, pending, animated, sample));
+        }
+        let completed_at = now + Duration::from_millis(16);
+        assert!(redraw.needs_redraw(completed_at, true, true, false, false));
+        redraw.presented(completed_at); // The same loop consumes an async result.
+        assert!(!redraw.needs_redraw(completed_at, true, true, false, false));
+        assert!(!redraw.needs_redraw(completed_at + Duration::from_millis(40), true, false, false, false),
+            "drained build/upload queues become idle instead of drawing another unchanged frame");
+        redraw.retry(now); // Real Surface timeout/outdated, not a failed task.
+        assert!(!redraw.needs_redraw(now, true, false, false, false));
+        assert_eq!(redraw.poll_deadline(now, true, false), now + Duration::from_millis(40));
+        assert!(redraw.needs_redraw(now + Duration::from_millis(40), true, false, false, false));
+        redraw.hide(); // A delayed retry must not reopen a hidden/minimized page.
+        assert!(!redraw.needs_redraw(now + Duration::from_millis(40), false, true, true, true));
+    }
+
+    #[test]
+    fn quick_complete_upload_order_preserves_all_chunks_nearest_first() {
+        let focus = ChunkKey { cx: 0, cy: 0, cz: 0 };
+        let input = vec![ChunkKey { cx: 20_000, cy: 0, cz: 0 },
+            ChunkKey { cx: 1, cy: 0, cz: 0 }, focus,
+            ChunkKey { cx: -1, cy: 0, cz: 0 }];
+        let order = complete_projection_upload_order(input.iter().copied(), focus);
+        assert_eq!(order, vec![focus, input[3], input[1], input[0]]);
+        assert_eq!(order.iter().copied().collect::<HashSet<_>>(), input.iter().copied().collect());
+        let large = complete_projection_upload_order((0..65_536).map(|cx| ChunkKey { cx, cy: 0, cz: 0 }), focus);
+        assert_eq!(large.len(), 65_536, "complete Fast scene must not be clipped by a residency cap");
+        assert_eq!(large.last().unwrap().cx, 65_535);
+    }
+
+    #[test]
+    fn quick_unknown_or_incomplete_estimate_never_enables_preload() {
+        use viewer_launch_contract::QuickResourceAction;
+        assert!(!quick_preload_allowed("unknown", true));
+        assert!(!quick_preload_allowed("over_budget", true));
+        assert!(!quick_preload_allowed("warning", false));
+        assert!(quick_preload_allowed("normal", false));
+        assert!(quick_preload_allowed("warning", true));
+        assert!(quick_resource_action(true, "normal", false, None).is_err());
+        assert!(quick_resource_action(true, "unknown", true, None).is_err());
+        assert_eq!(quick_resource_action(false, "unknown", false, None).unwrap(), QuickResourceAction::Realtime);
+    }
+}
+
+
+/// CPU-only Fast diagnosis: no Window, GPU admission proof or presentation receipt.
+pub fn audit_render_cpu(arguments: &[String]) -> Result<()> {
+    ensure!(arguments.len() == 1, "usage: render-cpu-audit --launch-contract=<ABS_JSON>");
+    let path = arguments[0].strip_prefix("--launch-contract=")
+        .context("render-cpu-audit requires --launch-contract=<ABS_JSON>")?;
+    let provenance = crate::backend_provenance::collect_backend_provenance()?;
+    let args = parse_launch_contract_path_inner(&provenance, Path::new(path), false)?;
+    ensure!(args.display_mode == ViewerDisplayMode::FastExperimental
+        && args.persistent_popup_presentation && !args.prebuild_only,
+        "render-cpu-audit accepts only the independent QuickPreview contract; exact modes use nova-build-worker");
+    ensure!(args.quick_host.is_none(), "CPU-only audit must not reference a live HWND");
+    let source = args.input.as_deref().context("Fast CPU audit needs a real projection")?;
+    let started = Instant::now();
+    println!("[NOVA_RENDER_CPU_AUDIT] stage=start request_id={} mode=fast loading={} source={} source_bytes={} scope=CPU_only existing_scene_in_process=false os_file_cache=not_flushed existing_gpu_state=not_measured gpu_initialized=false presentation=not_executed",
+        args.launch_request_id, if args.prebuild_before_show { "preloaded" } else { "realtime" }, source.display(), std::fs::metadata(source)?.len());
+    let scene = load_scene(&args)?;
+    ensure!(scene.texture_atlas.is_none(),
+        "Fast unexpectedly prepared Full resources");
+    let bootstrap_elapsed = started.elapsed();
+    let index = Arc::new(scene.chunk_scene_index.context("Fast input did not produce an actual scene index")?);
+    let camera = OrbitCamera::from_bounds(scene.bounds, 1280, 800);
+    let config = ChunkStreamingConfig::default();
+    let plan = ChunkResidencyPlan::build(&index, &camera, &config, 0, false, false);
+    let keys = if args.prebuild_before_show {
+        index.chunk_entries().iter().map(|entry| entry.key).collect::<Vec<_>>()
+    } else {
+        // Same fitted-camera demand and configured residency bound as the live
+        // Fast queue; subsequent camera moves remain a manual runtime check.
+        plan.upload_order.iter().copied().take(args.resident_max_chunks).collect::<Vec<_>>()
+    };
+    let source_blocks = index.chunk_entries().iter().map(|entry| entry.non_air_blocks as u64).sum::<u64>();
+    let mut cache = ChunkMeshCpuCache::new(args.cpu_cache_max_chunks, args.cpu_cache_max_bytes);
+    let mut completed_keys = HashSet::new();
+    let mut vertices = 0_usize;
+    let mut indices = 0_usize;
+    for mesh in scene.bootstrap_meshes {
+        vertices = vertices.saturating_add(mesh.vertex_count());
+        indices = indices.saturating_add(mesh.index_count());
+        completed_keys.insert(mesh.key);
+        cache.insert(mesh, 0);
+    }
+    let bootstrap_count = completed_keys.len();
+    let pending = keys.iter().copied().filter(|key| !completed_keys.contains(key)).collect::<Vec<_>>();
+    println!("[NOVA_RENDER_CPU_AUDIT] stage=index_and_bootstrap executions=1 source_non_air_blocks={} total_chunks={} bootstrap_chunks={} scope_chunks={} bootstrap_cpu_meshes_reused={} elapsed_ms={} wait=read_decompress_parse_initial_mesh full_resource_initializations=0",
+        source_blocks, index.chunk_count(), bootstrap_count, keys.len(), bootstrap_count, bootstrap_elapsed.as_millis());
+    let trace = Arc::new(TraceCounters::default());
+    let worker_count = args.build_workers.max(1);
+    let (request_tx, result_rx, workers) = spawn_build_worker_pool(Arc::clone(&index), Arc::new(scene.palette_colors), worker_count, Arc::clone(&trace), None);
+    let mesh_started = Instant::now();
+    let mut result_wait = Duration::ZERO;
+    let mut batch_id = 0_u64;
+    let mut empty_meshes = 0_usize;
+    // Keep the production Fast in-flight bound (workers*16). Receive a wave
+    // of asynchronous batch results, never per-cell read/upload/wait lockstep.
+    for wave in pending.chunks(worker_count.saturating_mul(16).max(1)) {
+        for batch in wave.chunks(16) {
+            batch_id += 1;
+            request_tx.send(BuildWorkerRequest { batch_id, keys: batch.to_vec(), priority: QueuePriority::Target, enqueued_at: Instant::now() })?;
+        }
+        for _ in 0..wave.len() {
+            let wait = Instant::now();
+            let result = result_rx.recv().context("Fast CPU worker results disconnected")?;
+            result_wait += wait.elapsed();
+            if let Some(error) = result.error { bail!("Fast CPU worker failed: {error}"); }
+            ensure!(completed_keys.insert(result.key), "Fast CPU build repeated a previously prepared chunk");
+            if let Some(mesh) = result.mesh {
+                vertices = vertices.saturating_add(mesh.vertex_count());
+                indices = indices.saturating_add(mesh.index_count());
+                cache.insert(mesh, 0);
+            } else { empty_meshes += 1; }
+        }
+        cache.prune(&HashSet::new(), 0);
+    }
+    drop(request_tx);
+    for worker in workers { worker.join().map_err(|_| anyhow!("Fast CPU worker panicked"))?; }
+    let missing = keys.iter().filter(|key| !completed_keys.contains(key)).count();
+    ensure!(missing == 0, "Fast CPU audit omitted {missing} requested chunks");
+    println!("[NOVA_RENDER_CPU_AUDIT] stage=complete mode=fast loading={} source_non_air_blocks={} total_chunks={} scope_chunks={} completed_unique_chunks={} pending_mesh_executions={} empty_meshes={} vertices={} indices={} batches={} worker_count={} bounded_in_flight={} cpu_cache_chunks={} cpu_cache_bytes={} mesh_elapsed_ms={} worker_result_wait_ms={} worker_busy_ms_cumulative={} worker_queue_wait_ms_cumulative={} total_elapsed_ms={} GPU_uploads=not_executed UI=not_executed first_display=not_measured",
+        if args.prebuild_before_show { "preloaded" } else { "realtime" }, source_blocks, index.chunk_count(), keys.len(), completed_keys.len(), pending.len(), empty_meshes, vertices, indices, batch_id, worker_count, worker_count.saturating_mul(16), cache.len(), cache.current_bytes, mesh_started.elapsed().as_millis(), result_wait.as_millis(), trace.worker_busy_ms.load(Ordering::Relaxed), trace.build_dequeue_ms.load(Ordering::Relaxed), started.elapsed().as_millis());
+    Ok(())
 }

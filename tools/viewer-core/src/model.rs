@@ -157,6 +157,13 @@ pub struct VisualLayerOutput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VisualAllLayersOutput {
+    pub metadata: MetadataOutput,
+    pub chunk_size: u32,
+    pub layers: Vec<LayerSliceOutput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkCoordOutput {
     pub cx: i32,
     pub cy: i32,

@@ -177,6 +177,7 @@ mod tests {
                 total_volume: None,
                 region_count: None,
                 enclosing_size: None,
+                preview_image_data: None,
             },
             regions: BTreeMap::from([
                 (
@@ -202,6 +203,7 @@ mod tests {
                     ),
                 ),
             ]),
+            preview_image_data: None,
         }
     }
 

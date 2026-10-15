@@ -1,6 +1,12 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 fn main() {
+    match nova_protected_loader::maybe_run_native() {
+        Ok(Some(code)) => std::process::exit(code),
+        Ok(None) => {},
+        Err(error) => { eprintln!("[NOVA_PROTECTED_TASK_FAILED] {error:#}"); std::process::exit(1); }
+    }
+
     if std::env::args().nth(1).as_deref() == Some("--public-build-info") {
         println!("{}", serde_json::json!({"schema":"nova.public.beta.build.v1","flavor":"fast-only","fullMode":false,"publicBeta":true,"gitSha":env!("LBA_BACKEND_GIT_SHA")}));
         return ;

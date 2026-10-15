@@ -2755,3 +2755,103 @@ pub fn build_mesh_output(path: &Path, chunk_size: u32) -> Result<MeshOutput> {
     })
 }
 
+
+
+pub fn build_source_all_layers_output(path: &Path, chunk_size: u32) -> Result<VisualOutput> {
+    let (root, catalog) = load_visual_catalog(path)?;
+    build_layer_index_output_from_catalog(&root, &catalog, chunk_size)
+}
+
+
+fn build_layer_index_output_from_catalog(
+    root: &crate::nbt::LitematicRoot,
+    catalog: &VisualCatalog,
+    chunk_size: u32,
+) -> Result<VisualOutput> {
+    let Some(bounds) = catalog.bounds else {
+        return Ok(VisualOutput {
+            metadata: catalog.metadata.clone(),
+            visual: VisualSummaryOutput {
+                chunk_size,
+                size_x: catalog.metadata.enclosing_size.x,
+                size_y: catalog.metadata.enclosing_size.y,
+                size_z: catalog.metadata.enclosing_size.z,
+                palette: catalog.palette.clone(),
+                property_pool: catalog.property_pool.clone(),
+                layers: Vec::new(),
+                chunks: Vec::new(),
+            },
+        });
+    };
+
+    let size_y = catalog.metadata.enclosing_size.y.max(0) as usize;
+    let mut layers = (0..size_y)
+        .map(|y| LayerSliceOutput {
+            y: y as i32,
+            blocks: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+
+    for region in root.regions.values() {
+        let volume = region_volume(&region.size)?;
+        let width = i64::from(region.size.x).unsigned_abs() as usize;
+        let length = i64::from(region.size.z).unsigned_abs() as usize;
+        let nbits = bits_for_palette(region.block_state_palette.len());
+        let mut region_palette_ids =
+            Vec::<Option<usize>>::with_capacity(region.block_state_palette.len());
+        for block in &region.block_state_palette {
+            let state = format_block_state(block);
+            if is_air_state(&state) {
+                region_palette_ids.push(None);
+            } else {
+                let palette_id = catalog
+                    .state_lookup
+                    .get(&state)
+                    .copied()
+                    .ok_or_else(|| anyhow!("missing palette entry for state {}", state))?;
+                region_palette_ids.push(Some(palette_id));
+            }
+        }
+
+        for_each_palette_index(
+            &region.block_states,
+            volume,
+            nbits,
+            region.block_state_palette.len(),
+            |index, palette_index| {
+                let Some(Some(palette_id)) = region_palette_ids.get(palette_index) else {
+                    return Ok(());
+                };
+                let y = index / (width * length);
+                let i_in_layer = index % (width * length);
+                let z = i_in_layer / width;
+                let x = i_in_layer % width;
+                let (rx, ry, rz) = storage_to_region_coords(x, y, z, &region.size);
+                let global_y = region.position.y + ry - bounds.min_y;
+                if global_y < 0 || global_y as usize >= layers.len() {
+                    return Ok(());
+                }
+                layers[global_y as usize].blocks.push(LayerBlockOutput {
+                    x: region.position.x + rx - bounds.min_x,
+                    z: region.position.z + rz - bounds.min_z,
+                    palette_id: *palette_id,
+                });
+                Ok(())
+            },
+        )?;
+    }
+
+    Ok(VisualOutput {
+        metadata: catalog.metadata.clone(),
+        visual: VisualSummaryOutput {
+            chunk_size,
+            size_x: catalog.metadata.enclosing_size.x,
+            size_y: catalog.metadata.enclosing_size.y,
+            size_z: catalog.metadata.enclosing_size.z,
+            palette: catalog.palette.clone(),
+            property_pool: catalog.property_pool.clone(),
+            layers,
+            chunks: Vec::new(),
+        },
+    })
+}

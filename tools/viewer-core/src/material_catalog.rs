@@ -33,10 +33,23 @@ pub(super) fn status(id: &str) -> &'static str {
 // item to bill. Keep these states in a separate structural diagnostic channel.
 pub(super) fn non_item_status(id: &str) -> Option<&'static str> {
     let Some(block) = catalog().blocks.get(id) else { return Some("unknown"); };
-    if block.classes.iter().any(|class| class == "AirBlock") || block.potted_item.is_some() {
+    if block.classes.iter().any(|class| class == "AirBlock" || class == "TallSeagrassBlock" || class == "CaveVinesPlantBlock") || block.potted_item.is_some() {
         return None;
     }
     (block.item_id == "minecraft:air").then_some("no_item")
+}
+
+// Mojang DataFixers v4541 renames the historical registry entry, not a name heuristic.
+fn current_registry_id(id: &str, source_data_version: Option<i32>) -> &str {
+    if source_data_version.is_some_and(|version| version < 4541) && id == "minecraft:chain" { "minecraft:iron_chain" } else { id }
+}
+
+pub(super) fn non_item_status_for_version(id: &str, source_data_version: Option<i32>) -> Option<&'static str> {
+    non_item_status(current_registry_id(id, source_data_version))
+}
+
+pub(super) fn requirements_for_version(id: &str, properties: &BTreeMap<String, String>, source_data_version: Option<i32>) -> Vec<(String, u64)> {
+    requirements(current_registry_id(id, source_data_version), properties)
 }
 
 pub(super) fn requirements(id: &str, properties: &BTreeMap<String, String>) -> Vec<(String, u64)> {
@@ -47,11 +60,24 @@ pub(super) fn requirements(id: &str, properties: &BTreeMap<String, String>) -> V
     // DoorBlock.setPlacedBy / DoublePlantBlock.setPlacedBy / AbstractBedBlock.setPlacedBy.
     if ((class("DoorBlock") || class("DoublePlantBlock")) && prop("half") == "upper")
         || (class("AbstractBedBlock") && prop("part") == "head") { return Vec::new(); }
+    // TallSeagrassBlock.getCloneItemStack points at SEAGRASS. SeagrassBlock.performBonemeal
+    // grows one placed seagrass into lower+upper states; only the lower half consumes inputs.
+    if class("TallSeagrassBlock") {
+        return vec![("minecraft:seagrass".into(), 1), ("minecraft:bone_meal".into(), 1)];
+    }
     // FlowerPotBlock.useItemOn consumes one plant in addition to the existing pot.
     if let Some(plant) = &block.potted_item {
         if plant != "minecraft:air" { return vec![("minecraft:flower_pot".into(), 1), (plant.clone(), 1)]; }
     }
-    // Flowing fluids and technical blocks have no directly placeable inventory item.
+    // CaveVinesPlantBlock.getCloneItemStack returns GLOW_BERRIES like the head.
+    if class("CaveVinesPlantBlock") { return vec![("minecraft:glow_berries".into(), 1)]; }
+    // LiquidBlock.pickupBlock returns the actual fluid bucket only at level=0.
+    // Flowing cells remain in structural counts; they are not extra buckets.
+    if class("LiquidBlock") && (prop("level").is_empty() || prop("level") == "0") {
+        let bucket = match id { "minecraft:water" => "minecraft:water_bucket", "minecraft:lava" => "minecraft:lava_bucket", _ => return Vec::new() };
+        return vec![(bucket.into(), 1)];
+    }
+    // Other technical states have no directly placeable inventory item.
     // Structure counts and non_item_blocks diagnostics preserve them; never guess items.
     if block.item_id == "minecraft:air" { return Vec::new(); }
     let mut count = if class("SlabBlock") && prop("type") == "double" { 2 } else { 1 };
@@ -90,20 +116,38 @@ mod tests {
         assert_eq!(status("example:custom"), "unknown");
     }
     #[test]
+    fn source_bucket_and_cave_vines_clone_mappings_follow_actual_game_classes() {
+        assert_eq!(material("water", &[("level","0")]),vec![("minecraft:water_bucket".into(),1)]);
+        assert_eq!(material("lava", &[("level","0")]),vec![("minecraft:lava_bucket".into(),1)]);
+        assert!(material("water", &[("level","3")]).is_empty());
+        for block in ["cave_vines","cave_vines_plant"] { assert_eq!(material(block, &[("berries","false")]),vec![("minecraft:glow_berries".into(),1)]); }
+        assert_eq!(non_item_status("minecraft:cave_vines_plant"),None);
+        assert_eq!(non_item_status("minecraft:piston_head"),Some("no_item"));
+    }
+    #[test]
     fn every_air_mapping_is_diagnostic_not_an_inventory_requirement() {
         for (id, block) in &catalog().blocks {
             if block.item_id == "minecraft:air" && block.potted_item.is_none()
-                && !block.classes.iter().any(|class| class == "AirBlock") {
+                && !block.classes.iter().any(|class| class == "AirBlock" || class == "TallSeagrassBlock" || class == "CaveVinesPlantBlock" || class == "LiquidBlock") {
                 assert!(requirements(id, &BTreeMap::new()).is_empty(), "{id}");
                 assert_eq!(non_item_status(id), Some("no_item"), "{id}");
             }
         }
-        for block in ["piston_head", "moving_piston", "water", "bubble_column", "fire", "end_portal", "attached_melon_stem", "candle_cake"] {
+        for block in ["piston_head", "moving_piston", "bubble_column", "fire", "end_portal", "attached_melon_stem", "candle_cake"] {
             assert!(material(block, &[]).is_empty(), "{block}");
         }
         assert!(requirements("example:unregistered", &BTreeMap::new()).is_empty());
         assert_eq!(non_item_status("example:unregistered"), Some("unknown"));
         assert_eq!(non_item_status("minecraft:potted_dandelion"), None);
+    }
+    #[test]
+    fn historical_chain_rename_and_tall_seagrass_placement_are_source_backed() {
+        assert_eq!(requirements_for_version("minecraft:chain", &BTreeMap::new(), Some(3465)), vec![("minecraft:iron_chain".into(), 1)]);
+        assert_eq!(non_item_status_for_version("minecraft:chain", Some(3465)), None);
+        assert_eq!(non_item_status_for_version("minecraft:chain", Some(5023)), Some("unknown"));
+        assert_eq!(material("tall_seagrass", &[("half", "lower")]), vec![("minecraft:seagrass".into(), 1), ("minecraft:bone_meal".into(), 1)]);
+        assert!(material("tall_seagrass", &[("half", "upper")]).is_empty());
+        assert_eq!(non_item_status("minecraft:tall_seagrass"), None);
     }
     #[test]
     fn every_registered_multi_block_item_is_billed_once() {

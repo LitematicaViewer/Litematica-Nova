@@ -12,7 +12,35 @@ use crate::stats_api::StableStructureOutput;
 #[serde(rename_all = "snake_case")]
 pub enum MaterialExportFormat { Svg, Txt, Html, Csv }
 
-#[derive(Debug, Deserialize)]
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct MaterialWebOptions {
+    pub mode: MaterialWebMode,
+    pub access_password: Option<String>,
+    pub admin_password: Option<String>,
+    pub whitelist: Vec<String>,
+    pub whitelist_enabled: Option<bool>,
+    pub allow_guest_readonly: Option<bool>,
+    pub admin_page_enabled: Option<bool>,
+    pub targets: Vec<String>,
+}
+
+#[derive(Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterialWebMode { #[default] Single, Multi }
+
+impl MaterialWebOptions {
+    fn deploy_options(self) -> Result<stockpile_zip::StockpileDeployOptions> {
+        Ok(stockpile_zip::StockpileDeployOptions {
+            access_password: self.access_password, admin_password: self.admin_password,
+            whitelist: self.whitelist, whitelist_enabled: self.whitelist_enabled,
+            allow_guest_readonly: self.allow_guest_readonly, admin_page_enabled: self.admin_page_enabled,
+            targets: stockpile_zip::parse_deploy_targets(&self.targets)?,
+        })
+    }
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaterialExportRequest {
     pub source_path: String,
@@ -21,6 +49,8 @@ pub struct MaterialExportRequest {
     pub minecraft_version: String,
     pub terminal_raw_materials: bool,
     pub format: MaterialExportFormat,
+    #[serde(default)]
+    pub web_options: Option<MaterialWebOptions>,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,7 +72,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
 }
 
 pub fn export(mut request: MaterialExportRequest, output: &Path) -> Result<MaterialExportSummary> {
-    ensure!(request.stats.material_semantics == "minecraft-26.3-inventory-v2", "材料导出需要 Minecraft 26.3 inventory-v2 统计快照");
+    ensure!(request.stats.material_semantics == "minecraft-inventory-v3", "材料快照已过期，请刷新材料列表后导出");
     ensure!((1..=1_000_000).contains(&request.multiplier), "建造份数必须在 1 至 1000000 之间");
     ensure!(!request.minecraft_version.is_empty(), "材料导出必须指定 Minecraft 版本");
     let source = Path::new(&request.source_path);
@@ -83,6 +113,11 @@ pub fn export(mut request: MaterialExportRequest, output: &Path) -> Result<Mater
     }
     let context = format!("{} · {} · {} 份 · 容器物品：{} · 末端原料：{}", source.file_name().unwrap_or_default().to_string_lossy(), scope_text, request.multiplier, if included { "包含" } else { "不包含" }, if request.terminal_raw_materials { "是（使用本地配方；烧制燃料另计）" } else { "否" });
     materials.diagnostics.push(stockpile::StockpileDiagnostic { kind: "export_context".into(), source: request.source_path.clone(), target: String::new(), message: context.clone() });
+    let web = request.web_options.unwrap_or_default();
+    if matches!(request.format, MaterialExportFormat::Html) && web.mode == MaterialWebMode::Multi {
+        stockpile_zip::export_stockpile_zip_from_materials(source, Some(output), &request.minecraft_version,
+            materials.clone(), stockpile_zip::StockpileExportMode::Multi, web.deploy_options()?)?;
+    } else {
     let text = match request.format {
         MaterialExportFormat::Html => stockpile_zip::render_standalone_materials_html(source, &request.minecraft_version, materials.clone())?,
         MaterialExportFormat::Txt => format!("材料列表\n{context}\n\n名称\t物品 ID\t数量\n{}", materials.materials.iter().map(|row| format!("{}\t{}\t{}\n", row.display_name, row.namespace_id, row.required_count)).collect::<String>()),
@@ -90,6 +125,7 @@ pub fn export(mut request: MaterialExportRequest, output: &Path) -> Result<Mater
         MaterialExportFormat::Csv => format!("\u{feff}名称,物品ID,数量\r\n{}", materials.materials.iter().map(|row| format!("{},{},{}\r\n", csv(&row.display_name), csv(&row.namespace_id), row.required_count)).collect::<String>()),
     };
     std::fs::write(output, text.as_bytes()).with_context(|| format!("写入材料列表 {}", output.display()))?;
+    }
     Ok(MaterialExportSummary { output: output.display().to_string(), format: request.format, material_count: materials.materials.len(), multiplier: request.multiplier, terminal_raw_materials: request.terminal_raw_materials, include_container_items: included })
 }
 
@@ -127,6 +163,57 @@ fn svg(materials: &stockpile::StockpileMaterialsData, context: &str) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn multiplayer_web_options_reuse_stockpile_deployment_contract() {
+        let options: MaterialWebOptions = serde_json::from_value(serde_json::json!({
+            "mode":"multi", "accessPassword":"fixture-access", "adminPassword":"fixture-admin",
+            "whitelist":["FixturePlayer"], "whitelistEnabled":true, "allowGuestReadonly":true,
+            "adminPageEnabled":false, "targets":["windows-x64","linux-x64"]
+        })).unwrap();
+        assert!(options.mode == MaterialWebMode::Multi);
+        let deployed = options.deploy_options().unwrap();
+        assert!(deployed.access_password.is_some() && deployed.admin_password.is_some());
+        assert_eq!(deployed.whitelist, ["FixturePlayer"]);
+        assert_eq!(deployed.whitelist_enabled, Some(true));
+        assert_eq!(deployed.allow_guest_readonly, Some(true));
+        assert_eq!(deployed.admin_page_enabled, Some(false));
+        assert_eq!(deployed.targets, [stockpile_zip::StockpileDeployTarget::WindowsX64, stockpile_zip::StockpileDeployTarget::LinuxX64]);
+        assert!(MaterialWebOptions { targets:vec!["not-a-platform".into()], ..Default::default() }.deploy_options().is_err());
+    }
+
+    #[test]
+    #[ignore = "CLI real snapshot export; requires an existing actual Windows Stockpile server, no reanalysis"]
+    fn real_snapshot_multiplayer_web_package() {
+        use std::io::Read;
+        let snapshot = std::env::var("NOVA_STATS_SNAPSHOT").unwrap();
+        let source = std::env::var("NOVA_STATS_FIXTURE").unwrap();
+        let stats: StableStructureOutput = serde_json::from_reader(std::fs::File::open(&snapshot).unwrap()).unwrap();
+        let directory = Path::new(&snapshot).parent().unwrap();
+        let output = directory.join("840FTL-materials-2x-multi.zip");
+        let original_rows = stats.material_items.clone();
+        export(MaterialExportRequest {source_path:source, stats, multiplier:2, minecraft_version:"26.3".into(),
+            terminal_raw_materials:false, format:MaterialExportFormat::Html, web_options:Some(MaterialWebOptions {
+                mode:MaterialWebMode::Multi, access_password:Some("fixture-access".into()), admin_password:Some("fixture-admin".into()),
+                whitelist:vec!["FixturePlayer".into()], whitelist_enabled:Some(true), allow_guest_readonly:Some(true),
+                admin_page_enabled:Some(false), targets:vec!["windows-x64".into()]
+            }) }, &output).unwrap();
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
+        let mut text = String::new(); archive.by_name("data/materials.json").unwrap().read_to_string(&mut text).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(payload["materials"].as_array().unwrap().len(), 59);
+        for row in original_rows {
+            let item = payload["materials"].as_array().unwrap().iter().find(|item| item["namespace_id"] == row.block_id).unwrap();
+            assert_eq!(item["required_count"], row.total_count * 2);
+        }
+        assert!(archive.by_name("server/windows-x64/stockpile_server.exe").unwrap().size() > 1_000_000);
+        let database = directory.join("840FTL-materials-2x-multi-auth.sqlite");
+        { let mut file = std::fs::File::create(&database).unwrap(); std::io::copy(&mut archive.by_name("db/stockpile.sqlite").unwrap(), &mut file).unwrap(); }
+        let db = rusqlite::Connection::open(&database).unwrap();
+        let values:(i64,i64,i64,i64,i64) = db.query_row("SELECT access_password_enabled, admin_password_enabled, whitelist_enabled, allow_guest_readonly, admin_page_enabled FROM stockpile_config WHERE id=1",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).unwrap();
+        assert_eq!(values,(1,1,1,1,0));
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM password_hashes",[],|row|row.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(db.query_row("SELECT user_id FROM stockpile_whitelist",[],|row|row.get::<_,String>(0)).unwrap(),"FixturePlayer");
+    }
+    #[test]
     fn terminal_counts_reuse_existing_recipe_tree_rounding() {
         let recipes = BTreeMap::from([("planks".into(), serde_json::json!({"type":"minecraft:crafting_shapeless","ingredients":[{"item":"minecraft:oak_log"}],"result":{"id":"minecraft:oak_planks","count":4}}))]);
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stats_water_fixture.litematic");
@@ -160,7 +247,7 @@ mod tests {
         let directory = Path::new(&snapshot).parent().unwrap();
         for (extension, format) in [("svg", MaterialExportFormat::Svg), ("txt", MaterialExportFormat::Txt), ("html", MaterialExportFormat::Html)] {
             let path = directory.join(format!("840FTL-materials-2x.{extension}"));
-            let summary = export(MaterialExportRequest { source_path: source.clone(), stats: stats.clone(), multiplier: 2, minecraft_version: "26.3".into(), terminal_raw_materials: false, format }, &path).unwrap();
+            let summary = export(MaterialExportRequest { source_path: source.clone(), stats: stats.clone(), multiplier: 2, minecraft_version: "26.3".into(), terminal_raw_materials: false, format, web_options: None }, &path).unwrap();
             assert_eq!(summary.material_count, 59);
             let content = std::fs::read_to_string(&path).unwrap();
             assert!(content.contains("材料列表") || extension == "html");

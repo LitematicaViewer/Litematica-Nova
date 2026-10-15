@@ -215,10 +215,37 @@ pub fn export_stockpile_zip(
     let minecraft_version = minecraft_version.unwrap_or(DEFAULT_MINECRAFT_VERSION);
     let materials =
         stockpile::build_materials_data(input, include_container_items, Some(minecraft_version))?;
+    let output_path = resolve_output_path(input, output)?;
+    ensure_stockpile_export_output(&output_path)?;
+    export_stockpile_zip_from_materials(input, Some(&output_path), minecraft_version, materials, mode, deploy_options)
+}
+
+/// Export the Application's source-validated scoped snapshot without analyzing the projection again.
+pub(crate) fn export_stockpile_zip_from_materials(
+    input: &Path,
+    output: Option<&Path>,
+    minecraft_version: &str,
+    materials: StockpileMaterialsData,
+    mode: StockpileExportMode,
+    deploy_options: StockpileDeployOptions,
+) -> Result<StockpileZipSummary> {
+    if mode == StockpileExportMode::Multi {
+        validate_multi_deploy_options(&deploy_options)?;
+        // Check actual selected server binaries before creating any output file.
+        let targets = if deploy_options.targets.is_empty() { vec![default_deploy_target()] } else { deploy_options.targets.clone() };
+        stockpile_server_binaries(&targets)?;
+    }
     let recipe_status = recipe_cache::recipe_status(minecraft_version)?;
     let output_path = resolve_output_path(input, output)?;
+    anyhow::ensure!(output_path.is_absolute() && output_path != input && output_path.parent().is_some_and(Path::is_dir), "材料网页包必须另存到现有目录");
+    if output_path.exists() {
+        anyhow::ensure!(fs::canonicalize(&output_path)? != fs::canonicalize(input)?, "材料网页包不能覆盖原投影");
+    }
     let payload = build_payload(input, minecraft_version, materials, recipe_status, mode)?;
-    write_zip(&output_path, &payload, mode, &deploy_options)?;
+    // The materials-export caller has validated the user-selected Save As path.
+    // Legacy Stockpile CLI still enforces its exports-root contract above.
+    let file = File::create(&output_path).with_context(|| format!("create stockpile zip failed: {}", output_path.display()))?;
+    write_zip_contents(file, &payload, mode, &deploy_options)?;
     Ok(summary(&output_path, &payload, mode, &deploy_options))
 }
 
@@ -317,6 +344,15 @@ fn write_zip(
     ensure_stockpile_export_output(output_path)?;
     let file = File::create(output_path)
         .with_context(|| format!("create stockpile zip failed: {}", output_path.display()))?;
+    write_zip_contents(file, payload, mode, deploy_options)
+}
+
+fn write_zip_contents(
+    file: File,
+    payload: &StockpileZipPayload,
+    mode: StockpileExportMode,
+    deploy_options: &StockpileDeployOptions,
+) -> Result<()> {
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
