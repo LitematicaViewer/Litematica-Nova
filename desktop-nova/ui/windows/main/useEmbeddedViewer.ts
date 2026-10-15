@@ -1,9 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
+  ensureApplicationRenderSubscription,
+  isApplicationViewerPrepared,
+  restoreApplicationRenderPresentationForRoute,
+  suspendApplicationRenderPresentationForRoute,
+  updateApplicationRenderOverlayPlacement,
+  updateApplicationRenderPresentation,
   type PresentationIntent,
   type PresentationPlacement,
+  type RenderOperationView,
 } from "../../../src/business/facade";
 import {
+  elementToPresentationPlacement,
   elementToNativeChildPlacement,
   isUsableEmbeddedRect,
   subscribeNativeWindowGeometry,
@@ -20,30 +28,57 @@ export interface PresentationViewportOperation {
   presentation: PresentationIntent;
 }
 export interface PresentationViewportController {
-  inlineMode?: "embedded";
+  inlineMode?: "overlay" | "embedded";
+  deferPresentationUntilReady?: boolean;
   ensureSubscription(): Promise<void>;
   restore(id: string, placement: PresentationPlacement): Promise<boolean>;
   suspend(id: string, observed: PresentationIntent): Promise<boolean>;
   updatePlacement(id: string, placement: PresentationPlacement, observed: PresentationIntent): Promise<boolean>;
   present(id: string, intent: PresentationIntent): Promise<void>;
 }
-/** Existing quick Viewer Presentation; no Full runtime controller or overlay implementation. */
+const applicationController: PresentationViewportController = {
+  inlineMode: "embedded",
+  deferPresentationUntilReady: true,
+  ensureSubscription: ensureApplicationRenderSubscription,
+  restore: restoreApplicationRenderPresentationForRoute,
+  suspend: suspendApplicationRenderPresentationForRoute,
+  updatePlacement: updateApplicationRenderOverlayPlacement,
+  present: updateApplicationRenderPresentation,
+};
+
+/** The full Viewer keeps its existing Application operation and admission contract. */
+export function useEmbeddedViewer(operation: RenderOperationView | null, blocked = false) {
+  return usePresentationViewport(operation ? {
+    operationId: operation.operationId, prepared: isApplicationViewerPrepared(operation), presentation: operation.presentation,
+  } : null, blocked, applicationController);
+}
+
+/** Presentation only: both existing Viewers share placement/route/focus handling, not render state. */
 export function usePresentationViewport(operation: PresentationViewportOperation | null, blocked: boolean, controller: PresentationViewportController) {
-  const inlineMode = "embedded" as const;
-  const resolvePlacement = elementToNativeChildPlacement;
-  const useRouteEffect = useLayoutEffect;
+  const inlineMode = controller.inlineMode ?? "overlay";
+  const resolvePlacement = inlineMode === "embedded" ? elementToNativeChildPlacement : elementToPresentationPlacement;
+  const useRouteEffect = inlineMode === "embedded" ? useLayoutEffect : useEffect;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState("");
+  const leasedOperation = useRef(operation);
+  if (operation?.operationId === leasedOperation.current?.operationId) leasedOperation.current = operation;
   const current = useRef({ operation, blocked });
   current.current = { operation, blocked };
   const routeLease = useRef(0);
   const presentationRevision = useRef(0);
   const lastPlacement = useRef("");
+  // Host can accept the deferred intent before its event stream catches up.
+  const queuedInlineIntent = useRef<{ operationId: string; presentation: PresentationIntent } | null>(null);
   const geometrySuspended = useRef(false);
   const pageHidden = useRef(false);
   const [visibilityRevision, setVisibilityRevision] = useState(0);
   const [requestedOperationId, requestPresentationWhenReady] = useState<string | null>(null);
   const ready = Boolean(operation?.prepared);
+  const mayQueuePresentation = ready || controller.deferPresentationUntilReady === true;
+  if (operation && queuedInlineIntent.current?.operationId === operation.operationId
+    && placementKey(operation.presentation) === placementKey(queuedInlineIntent.current.presentation)) {
+    queuedInlineIntent.current = null;
+  }
 
   useEffect(() => {
     let active = true;
@@ -57,7 +92,10 @@ export function usePresentationViewport(operation: PresentationViewportOperation
   // and modal changes must not recreate a Viewer or release an exact artifact.
   useRouteEffect(() => {
     ++routeLease.current;
+    leasedOperation.current = operation;
+    console.info("[NOVA_RENDER_PHASE]", { stage: "presentation_route_mounted", operationId: operation?.operationId, lease: routeLease.current, inlineMode });
     lastPlacement.current = "";
+    queuedInlineIntent.current = null;
     geometrySuspended.current = false;
     setError("");
     const operationId = operation?.operationId;
@@ -66,8 +104,10 @@ export function usePresentationViewport(operation: PresentationViewportOperation
       ++routeLease.current;
       ++presentationRevision.current;
       if (!operationId || !observedIntent) return;
-      const latest = current.current.operation;
-      const intent = latest?.operationId === operationId ? latest.presentation : observedIntent;
+      const latest = leasedOperation.current;
+      const intent = queuedInlineIntent.current?.operationId === operationId ? queuedInlineIntent.current.presentation
+        : latest?.operationId === operationId ? latest.presentation : observedIntent;
+      console.info("[NOVA_RENDER_PHASE]", { stage: "presentation_route_suspended", operationId, lease: routeLease.current, previousMode: intent.mode });
       void controller.suspend(operationId, intent).catch(() => undefined);
     };
   }, [operation?.operationId]);
@@ -79,14 +119,19 @@ export function usePresentationViewport(operation: PresentationViewportOperation
     let cancelled = false;
     let unsubscribeNativeWindow: (() => void) | null = null;
     const suspendPage = () => {
+      console.info("[NOVA_RENDER_PHASE]", { stage: "presentation_page_hidden", operationId: current.current.operation?.operationId, lease: routeLease.current });
       pageHidden.current = true;
       geometrySuspended.current = true;
       ++presentationRevision.current;
       const target = current.current.operation;
-      if (target) void controller.suspend(target.operationId, target.presentation).catch(() => undefined);
+      if (target) {
+        const intent = queuedInlineIntent.current?.operationId === target.operationId ? queuedInlineIntent.current.presentation : target.presentation;
+        void controller.suspend(target.operationId, intent).catch(() => undefined);
+      }
     };
     const restorePage = () => {
       if (document.visibilityState === "hidden") return;
+      console.info("[NOVA_RENDER_PHASE]", { stage: "presentation_page_restored", operationId: current.current.operation?.operationId, lease: routeLease.current });
       pageHidden.current = false;
       setVisibilityRevision((revision) => revision + 1);
     };
@@ -114,7 +159,7 @@ export function usePresentationViewport(operation: PresentationViewportOperation
   async function showOverlay() {
     const { operation: target, blocked: suspended } = current.current;
     const host = hostRef.current;
-    if (!target || !target.prepared || suspended || pageHidden.current || !host) return;
+    if (!target || (!target.prepared && !controller.deferPresentationUntilReady) || suspended || pageHidden.current || !host) return;
     requestPresentationWhenReady(null);
     const lease = routeLease.current;
     const revision = ++presentationRevision.current;
@@ -122,6 +167,7 @@ export function usePresentationViewport(operation: PresentationViewportOperation
     if (routeLease.current !== lease || presentationRevision.current !== revision || current.current.blocked || pageHidden.current
       || current.current.operation?.operationId !== target.operationId || !isUsableEmbeddedRect(placement)) return;
     const intent: PresentationIntent = { mode: inlineMode, visible: true, placement };
+    if (controller.deferPresentationUntilReady) queuedInlineIntent.current = { operationId: target.operationId, presentation: intent };
     await controller.present(target.operationId, intent);
     lastPlacement.current = placementKey(intent);
     setError("");
@@ -131,21 +177,24 @@ export function usePresentationViewport(operation: PresentationViewportOperation
     const target = current.current.operation;
     if (!target) return;
     requestPresentationWhenReady(null);
+    queuedInlineIntent.current = null;
     ++presentationRevision.current;
     await controller.present(target.operationId, intent);
     setError("");
   }
 
-  // A modal temporarily hides the native overlay (CSS z-index cannot occlude a
-  // native window). Popup and an explicit Hide remain the user's own intent.
+  // The Service keeps native visibility hidden until real GPU readiness. The
+  // route can update or suspend its pending desired placement before that gate.
   useEffect(() => {
-    if (!operation || !ready) return;
+    if (!operation || !mayQueuePresentation) return;
     let cancelled = false;
     const lease = routeLease.current;
     const revision = presentationRevision.current;
     const operationId = operation.operationId;
     if (blocked) {
-      void controller.suspend(operationId, operation.presentation)
+      ++presentationRevision.current;
+      const intent = queuedInlineIntent.current?.operationId === operationId ? queuedInlineIntent.current.presentation : operation.presentation;
+      void controller.suspend(operationId, intent)
         .catch((reason) => { if (!cancelled) setError(`暂停页内预览失败：${String(reason)}`); });
       return () => { cancelled = true; };
     }
@@ -153,25 +202,35 @@ export function usePresentationViewport(operation: PresentationViewportOperation
       const host = hostRef.current;
       if (!host) return;
       const placement = await resolvePlacement(host);
-      if (cancelled || current.current.blocked || pageHidden.current || routeLease.current !== lease || presentationRevision.current !== revision || !isUsableEmbeddedRect(placement)) return;
+      if (cancelled || current.current.blocked || pageHidden.current || routeLease.current !== lease || presentationRevision.current !== revision
+        || current.current.operation?.operationId !== operationId || !isUsableEmbeddedRect(placement)) return;
       const restored = await controller.restore(operationId, placement);
       if (cancelled || current.current.blocked || pageHidden.current || routeLease.current !== lease || presentationRevision.current !== revision) return;
-      if (restored) lastPlacement.current = placementKey({ mode: inlineMode, visible: true, placement });
-      // Hidden is also a valid explicit user intent. Only a start action on
-      // this mounted page grants automatic presentation after the ready gate.
+      const intent: PresentationIntent = { mode: inlineMode, visible: true, placement };
+      if (restored) {
+        if (controller.deferPresentationUntilReady) queuedInlineIntent.current = { operationId, presentation: intent };
+        lastPlacement.current = placementKey(intent);
+      }
+      // Only an explicit start on this mounted page owns a deferred Show.
       if (!restored && requestedOperationId === operationId && operation.presentation.mode === "hidden") {
+        if (controller.deferPresentationUntilReady) queuedInlineIntent.current = { operationId, presentation: intent };
         requestPresentationWhenReady(null);
-        await showOverlay();
+        await controller.present(operationId, intent);
+        if (!cancelled && routeLease.current === lease && presentationRevision.current === revision
+          && current.current.operation?.operationId === operationId && !current.current.blocked && !pageHidden.current) {
+          lastPlacement.current = placementKey(intent);
+        }
       }
     };
     void restore().catch((reason) => { if (!cancelled) setError(`显示页内预览失败：${String(reason)}`); });
     return () => { cancelled = true; };
-  }, [operation?.operationId, ready, blocked, requestedOperationId, visibilityRevision]);
+  }, [operation?.operationId, mayQueuePresentation, blocked, requestedOperationId, visibilityRevision]);
 
   useEffect(() => {
-    if (!operation || !ready || blocked || operation.presentation.mode !== inlineMode || (!operation.presentation.visible && !geometrySuspended.current)) return;
+    if (!operation || !mayQueuePresentation || blocked) return;
     const operationId = operation.operationId;
-    const observedIntent = operation.presentation;
+    const observedIntent = queuedInlineIntent.current?.operationId === operationId ? queuedInlineIntent.current.presentation : operation.presentation;
+    if (observedIntent.mode !== inlineMode || (!observedIntent.visible && !geometrySuspended.current)) return;
     let cancelled = false;
     let scheduled = 0;
     let inFlight = false;
@@ -206,7 +265,11 @@ export function usePresentationViewport(operation: PresentationViewportOperation
         const intent: PresentationIntent = { mode: inlineMode, visible: true, placement };
         const key = placementKey(intent);
         if (key === lastPlacement.current) return;
-        if (await controller.updatePlacement(operationId, placement, observedIntent)) lastPlacement.current = key;
+        if (await controller.updatePlacement(operationId, placement, observedIntent)
+          && isCurrent() && !pageHidden.current && presentationRevision.current === revision) {
+          if (controller.deferPresentationUntilReady) queuedInlineIntent.current = { operationId, presentation: intent };
+          lastPlacement.current = key;
+        }
       } catch (reason) {
         if (!cancelled) setError(`更新预览位置失败：${String(reason)}`);
       } finally {
@@ -238,7 +301,7 @@ export function usePresentationViewport(operation: PresentationViewportOperation
       window.removeEventListener("focus", schedule);
       window.removeEventListener("blur", schedule);
     };
-  }, [operation?.operationId, ready, blocked, operation?.presentation.mode, operation?.presentation.visible, visibilityRevision]);
+  }, [operation?.operationId, mayQueuePresentation, blocked, operation?.presentation.mode, operation?.presentation.visible, requestedOperationId, visibilityRevision]);
 
   return { hostRef, error, showOverlay, setPresentation, requestPresentationWhenReady };
 }

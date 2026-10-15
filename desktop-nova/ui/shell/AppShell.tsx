@@ -3,10 +3,9 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "../../src/platform/tauri";
 import { addOrUpdateRecord, loadLibrary } from "../../src/business/projectionLibrary";
-import { Menu, Home, Library, FileText, BarChart3, Layers, Box, Replace, Wand2, Settings, LayoutDashboard, type LucideIcon } from "lucide-react";
+import { Menu, Home, Library, FileText, BarChart3, Layers, Box, Replace, Wand2, Settings, LayoutDashboard, ListTree, type LucideIcon } from "lucide-react";
 import { listenEvent } from "../../src/platform/events";
-import { loadDatabases } from "../../src/business/facade";
-import { initI18n } from "../../src/business/facade";
+import { initI18n, loadStructuralBlocks, createRuntimeProjectionCollection, type EnumeratorCollection } from "../../src/business/facade";
 import { HomePage } from "../windows/main/pages/home/HomePage";
 import { LibraryPage } from "../windows/main/pages/library/LibraryPage";
 import { PropertiesPage } from "../windows/main/pages/properties/PropertiesPage";
@@ -30,12 +29,15 @@ import {
 } from "./themeRuntime";
 import { projectionLibraryImportedEvent } from "../windows/libraryEvents";
 import { UpdateDialog } from "../windows/main/UpdateDialog";
-import { readUpdateDraft, takeUpdateDraft, useUpdateDraft } from "../windows/main/updateRecovery";
+import { readUpdateDraft, takeUpdateDraft, useUpdateDraft, useApplicationCloseRecovery } from "../windows/main/updateRecovery";
+
+import { EnumeratorDialog, openEnumeratorWithWindowBehavior } from "../windows/enumerator";
+import "../styles/enumerator.css";
 
 const navigationIcons: Record<string, LucideIcon> = {
   hamburger: Menu, home: Home, gallery: Library, properties: FileText,
   statistics: BarChart3, flake: Layers, render: Box, replace: Replace,
-  generate: Wand2, options: Settings, ui_debug: LayoutDashboard,
+  generate: Wand2, options: Settings, ui_debug: LayoutDashboard, enumerator: ListTree,
 };
 
 function NavIcon({ name }: { name: string }) {
@@ -47,6 +49,7 @@ function NavIcon({ name }: { name: string }) {
  * Renders the Nova desktop shell and keeps page logic behind the UI boundary.
  */
 export function App() {
+  const closeRecovery = useApplicationCloseRecovery();
   const [currentFile, setCurrentFile] = useState<string>(() => readUpdateDraft<{currentFile: string}>("shell")?.currentFile || "");
   const [theme, setThemeState] = useState(currentThemeId);
   const themeRef = useRef(theme);
@@ -78,6 +81,19 @@ export function App() {
     void subscribed.then(receive).catch(console.error);
     return () => { active = false; void subscribed.then((off) => off()); };
   }, []);
+  const [showEnumerator, setShowEnumerator] = useState(false);
+  const [enumeratorRuntime, setEnumeratorRuntime] = useState<EnumeratorCollection | null>(null);
+  const [enumeratorError, setEnumeratorError] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    setEnumeratorRuntime(null); setEnumeratorError("");
+    if (showEnumerator && currentFile) {
+      void loadStructuralBlocks(currentFile).then((blocks) => {
+        if (!cancelled) setEnumeratorRuntime(createRuntimeProjectionCollection(currentFile, blocks));
+      }).catch((error) => { if (!cancelled) setEnumeratorError(String(error)); });
+    }
+    return () => { cancelled = true; };
+  }, [showEnumerator, currentFile]);
   const [expanded, setExpanded] = useState(true);
   const [showUiTestPage, setShowUiTestPage] = useState(true);
 
@@ -117,7 +133,6 @@ export function App() {
   };
 
   useEffect(() => {
-    loadDatabases();
     initI18n();
     loadUserConfigMigratingLocalStorage()
       .then((info) => {
@@ -196,6 +211,10 @@ export function App() {
         </nav></ScrollArea>
 
         <nav className="nav-list nav-list-bottom" aria-label="选项">
+          <Button variant="ghost" className="sidebar-item nav-item" type="button" aria-label="枚举器" title={!expanded ? "枚举器" : ""}
+            onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true)).catch((error) => setEnumeratorError(String(error)))}>
+            <NavIcon name="enumerator" />{expanded && <span className="nav-label">枚举器</span>}
+          </Button>
           <UpdateDialog />
           {Object.entries(bottomPages).map(([key, value]) => {
             const active = route === key;
@@ -217,9 +236,12 @@ export function App() {
         </nav>
       </aside>
       <main className="content">
+        {closeRecovery.error && <div role="alert"><p>{closeRecovery.error}</p><Button onClick={() => void closeRecovery.retry()}>重试关闭</Button></div>}
         {themeSaveError && <p role="alert">{themeSaveError}</p>}
-        <Page currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} setShowUiTestPage={setShowUiTestPage} />
+        {enumeratorError && <p role="alert">枚举器：{enumeratorError}</p>}
+        <Page presentationBlocked={showEnumerator} currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} setShowUiTestPage={setShowUiTestPage} />
       </main>
+      {showEnumerator && <EnumeratorDialog theme={theme} currentFile={currentFile} runtimeCollection={enumeratorRuntime} onClose={() => setShowEnumerator(false)} />}
     </div>
   );
 }

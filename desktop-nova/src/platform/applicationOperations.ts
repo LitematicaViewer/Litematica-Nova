@@ -4,6 +4,11 @@ import type {
 } from "./applicationRender";
 import { invoke } from "./tauri";
 
+export interface ApplicationCloseRequest { requestId: number }
+export const getApplicationCloseRequest = (): Promise<ApplicationCloseRequest | null> => invoke("application_get_close_request");
+export const confirmApplicationClose = (requestId: number, draftsPreserved: boolean): Promise<void> => invoke("application_confirm_close", { requestId, draftsPreserved });
+export const requestApplicationClose = (): Promise<void> => invoke("application_request_close");
+
 export interface ApplicationInspectProjectInput {
   sourcePath: string;
 }
@@ -34,6 +39,7 @@ export interface LayerPaletteEntry {
 }
 
 export interface LayerSliceMeta {
+  minecraft_data_version: number | null;
   chunk_size: number;
   size_x: number;
   size_y: number;
@@ -79,7 +85,76 @@ export interface ApplicationReplaceBlocksInput {
   sourcePath: string;
   outputPath: string | null;
   rules: unknown[];
+  units?: unknown[];
+  stages?: unknown[][];
   dryRun: boolean;
+}
+
+export interface ApplicationConvertVersionInput {
+  sourcePath: string;
+  targetVersion: string;
+  replacements: Record<string, string>;
+  expectedSourceSha256?: string;
+  outputPath?: string;
+  overwrite?: boolean;
+}
+
+export interface BlockDatabaseVersion {
+  version: string;
+  dataVersion: number;
+  blockCount: number;
+  stateCount: number;
+  legacy: boolean;
+  outputExtension: string;
+}
+export interface BlockDatabaseBlock {
+  id: string;
+  name: string;
+  defaultState: string;
+  properties: Record<string, string[]>;
+  stateCount: number;
+  iconState: string;
+}
+export interface BlockDatabaseState {
+  state: string;
+  name: string;
+  sideTextureDataUrl: string | null;
+  mapColor: { id: number; rgb: number } | null;
+  tintIndices: number[];
+  faces: { texture: string; tintIndex: number; side: number; rotationX: number; rotationY: number }[];
+  projection: "model-side" | "no-side-model" | "missing";
+  missing?: boolean;
+  error?: string;
+  biomeProfile?: string;
+  tintProfileVersion?: string;
+}
+export interface BlockDatabaseResult extends Partial<BlockDatabaseState> {
+  version?: string;
+  versions?: BlockDatabaseVersion[];
+  mapColorVersions?: Array<Pick<BlockDatabaseVersion, "version" | "blockCount" | "stateCount"> & { dataVersion: number | null; colorOnly: boolean }>;
+  blocks?: BlockDatabaseBlock[];
+  states?: Record<string, BlockDatabaseState>;
+}
+export function queryBlockDatabase(input: { version?: string; query?: string; state?: string; states?: string[] }): Promise<BlockDatabaseResult> {
+  return invoke("application_query_block_database", { input });
+}
+
+export interface ConversionPreview {
+  sourceSha256: string;
+  sourceDataVersion: number;
+  targetVersion: string;
+  targetDataVersion: number;
+  entries: { sourceState: string; sourceName?: string; sourceIconState?: string; targetName?: string; category?: string; targetState: string | null; count: number; reason: string; valid: boolean }[];
+  blockedPayloads: string[];
+  payloadIssues?: { kind: "unsupported" | "unimplemented" | "invalid"; typeName: string; count: number; message: string }[];
+  payloadChanges: string[];
+  writable: boolean;
+  changedBlockCount: number;
+  outputPath: string | null;
+}
+
+export function convertProjectVersion(input: ApplicationConvertVersionInput): Promise<ConversionPreview> {
+  return invoke("application_convert_project_version", { input });
 }
 
 export interface ApplicationOperationResult {
@@ -95,9 +170,10 @@ export type ApplicationMaterialScope =
 export interface ApplicationProjectStatsInput {
   sourcePath: string;
   includeContainerItems: boolean;
+  knownRevision?: string;
 }
 
-export interface ApplicationProjectMaterialsInput extends ApplicationProjectStatsInput {
+export interface ApplicationProjectMaterialsInput extends Omit<ApplicationProjectStatsInput, "knownRevision"> {
   scope: ApplicationMaterialScope;
 }
 
@@ -105,11 +181,23 @@ export interface ApplicationProjectMaterialsOutput {
   material_items: MaterialAnalysisItem[];
 }
 
+export interface MaterialWebExportOptions {
+  mode: "single" | "multi";
+  accessPassword?: string;
+  adminPassword?: string;
+  whitelist: string[];
+  whitelistEnabled: boolean;
+  allowGuestReadonly: boolean;
+  adminPageEnabled: boolean;
+  targets: ("windows-x64" | "linux-x64" | "macos-x64" | "macos-arm64")[];
+}
+
 export interface ApplicationExportMaterialListInput extends ApplicationProjectMaterialsInput {
   multiplier: number;
   minecraftVersion: string;
   terminalRawMaterials: boolean;
   format: "svg" | "txt" | "html" | "csv";
+  webOptions?: MaterialWebExportOptions;
   outputPath: string;
 }
 
@@ -191,7 +279,7 @@ export function replaceProjectBlocks(
   return invoke("application_replace_blocks", { input });
 }
 
-export function getProjectStats(input: ApplicationProjectStatsInput): Promise<ProjectAnalysis> {
+export function getProjectStats(input: ApplicationProjectStatsInput): Promise<ProjectAnalysis & { source_revision?: string; cache_unchanged?: boolean }> {
   return invoke("application_get_project_stats", { input });
 }
 

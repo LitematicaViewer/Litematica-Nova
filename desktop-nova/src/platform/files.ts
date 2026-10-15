@@ -1,6 +1,17 @@
 import { invoke } from "./tauri";
 import { readEmbeddedPreview } from "./applicationOperations";
 
+export interface LogExportResult {
+  path: string;
+  sessionIds: string[];
+  fileCount: number;
+  snapshotBytes: number;
+}
+
+export function exportSessionLogs(path: string): Promise<LogExportResult> {
+  return invoke<LogExportResult>("application_export_logs_zip", { path });
+}
+
 export interface PathInfo {
   raw: string;
   normalized: string;
@@ -33,6 +44,31 @@ export interface DirectoryEntryInfo {
   file_size: number;
   mtime_ms: number;
   extension: string;
+}
+
+/** Result of unpacking a bundled icon archive into its app-data icon root. */
+export interface BuiltinIconExtractOutput {
+  target_dir: string;
+  root_relpath: string;
+  extracted: number;
+}
+
+/** Result of an icon download into an app-data icon root. */
+export interface VaultBlockIconDownloadOutput {
+  total: number;
+  downloaded: number;
+  target_dir: string;
+  root_relpath: string;
+}
+
+/** Result of downloading the Minecraft Wiki enum catalogs. */
+export interface WikiEnumCatalogDownloadOutput {
+  target_dir: string;
+  root_relpath: string;
+  blocks: number;
+  items: number;
+  enchantments: number;
+  entities: number;
 }
 
 export function readWorkspaceFile(path: string): Promise<string> {
@@ -111,4 +147,60 @@ export function readProjectionPreviewImage(path: string): Promise<ProjectionPrev
 
 export function cleanupLocalTempFiles(): Promise<string> {
   return invoke("cleanup_local_temp_files");
+}
+/**
+ * Opens the native picker for a `.litematic` file.
+ *
+ * @returns The chosen absolute path, or `null` when the user cancels.
+ */
+export function pickLitematicFile(): Promise<string | null> {
+  return invoke("pick_litematic_file");
+}
+
+/** Deletes a file inside the app-data (user config) directory. */
+export function deleteAppDataFile(relativePath: string): Promise<void> {
+  return invoke("delete_user_config_file", { relativePath });
+}
+
+/**
+ * Unpacks the bundled block-icon archive into the app-data block icon root.
+ *
+ * The archives live in `pack-in/game-icons/` and are listed in the distributable
+ * resource set, so the ~940 Mojang PNGs stay out of the repository.
+ */
+export function ensureBuiltinBlockIconsExtracted(force = false): Promise<BuiltinIconExtractOutput> {
+  return invoke("ensure_builtin_block_icons_extracted", { force });
+}
+
+/** Unpacks the bundled item-icon archive into the app-data item icon root. */
+export function ensureBuiltinItemIconsExtracted(force = false): Promise<BuiltinIconExtractOutput> {
+  return invoke("ensure_builtin_item_icons_extracted", { force });
+}
+
+/** Downloads block icons from CCVault (`https://ccvaults.com/`). */
+export function downloadVaultBlockIconsFromVault(): Promise<VaultBlockIconDownloadOutput> {
+  return invoke("download_vault_block_icons");
+}
+
+/** Downloads block icons scraped from Minecraft Wiki (English or Chinese). */
+export function downloadWikiBlockIconsFromMinecraftWiki(
+  slot: "material_list" | "layering",
+  source: "wiki" | "wiki_zh" = "wiki",
+): Promise<VaultBlockIconDownloadOutput> {
+  return invoke("download_minecraft_wiki_block_icons", { slot, source });
+}
+
+/** Downloads item icons from CCVault (`https://ccvaults.com/`). */
+export function downloadVaultItemIconsFromVault(): Promise<VaultBlockIconDownloadOutput> {
+  return invoke("download_vault_item_icons");
+}
+
+/** Downloads the Minecraft Wiki enum catalogs (blocks/items/enchantments/entities). */
+export function downloadWikiEnumCatalogsFromMinecraftWiki(): Promise<WikiEnumCatalogDownloadOutput> {
+  return invoke("download_minecraft_wiki_enum_catalogs");
+}
+
+/** Reads the original GitHub language/catalog source through the Host request limiter. */
+export function readGameResourceRemoteText(url: string): Promise<string> {
+  return invoke("read_game_resource_remote_text", { url });
 }

@@ -1,14 +1,76 @@
-export type DisplayMode = "fast_experimental";
+export type DisplayMode = "normal" | "fast_experimental" | "full";
+export type RenderBuildMode = "prebuilt" | "realtime";
+
+export interface V5RenderModeConfig {
+  backend?: unknown;
+  shaderpack_root?: unknown;
+  shaderpack_name?: unknown;
+  fabric_mods_dir?: unknown;
+  resource_packs?: readonly unknown[] | null;
+}
+
 export const RENDER_DISPLAY_MODE_KEY = "lba.render.displayMode";
+export const RENDER_BUILD_MODE_KEY = "lba.render.buildMode";
+
 export const DISPLAY_MODE_OPTIONS: Array<{ label: string; value: DisplayMode }> = [
-  { label: "快速模式", value: "fast_experimental" },
+  { label: "完整模式", value: "full" },
 ];
 
-/** Old full/normal settings never select a private or unavailable implementation. */
-export function normalizeDisplayMode(_value: unknown): DisplayMode { return "fast_experimental"; }
-export function loadDisplayMode(): DisplayMode { return normalizeDisplayMode(localStorage.getItem(RENDER_DISPLAY_MODE_KEY)); }
+export const RENDER_BUILD_MODE_OPTIONS: Array<{ label: string; value: RenderBuildMode }> = [
+  { label: "预构建", value: "prebuilt" },
+  { label: "实时构建", value: "realtime" },
+];
+
+export function normalizeRenderBuildMode(value: unknown): RenderBuildMode {
+  return value === "realtime" ? "realtime" : "prebuilt";
+}
+
+export function loadRenderBuildMode(): RenderBuildMode {
+  return normalizeRenderBuildMode(localStorage.getItem(RENDER_BUILD_MODE_KEY));
+}
+
+export function saveRenderBuildMode(value: string): RenderBuildMode {
+  const buildMode = normalizeRenderBuildMode(value);
+  localStorage.setItem(RENDER_BUILD_MODE_KEY, buildMode);
+  return buildMode;
+}
+
+export function normalizeDisplayMode(_value: unknown): DisplayMode {
+  return "full";
+}
+
+function hasText(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * V5-only inputs cannot be represented by the legacy normal/fast render paths.
+ */
+export function requiresV5FullMode(config: V5RenderModeConfig | null | undefined): boolean {
+  if (!config) return false;
+  const backend = typeof config.backend === "string" ? config.backend.trim().toLowerCase() : "auto";
+  return (
+    (backend !== "" && backend !== "auto")
+    || hasText(config.shaderpack_root)
+    || hasText(config.shaderpack_name)
+    || hasText(config.fabric_mods_dir)
+    || (Array.isArray(config.resource_packs) && config.resource_packs.some(hasText))
+  );
+}
+
+export function resolveV5DisplayMode(value: unknown, config: V5RenderModeConfig | null | undefined): DisplayMode {
+  return requiresV5FullMode(config) ? "full" : normalizeDisplayMode(value);
+}
+
+export function loadDisplayMode(): DisplayMode {
+  const displayMode = normalizeDisplayMode(localStorage.getItem(RENDER_DISPLAY_MODE_KEY));
+  console.log("[LBA_RENDER_MODE]", { loaded_from_cache: true, display_mode: displayMode });
+  return displayMode;
+}
+
 export function saveDisplayMode(value: string): DisplayMode {
-  const mode = normalizeDisplayMode(value);
-  localStorage.setItem(RENDER_DISPLAY_MODE_KEY, mode);
-  return mode;
+  const displayMode = normalizeDisplayMode(value);
+  localStorage.setItem(RENDER_DISPLAY_MODE_KEY, displayMode);
+  console.log("[LBA_RENDER_MODE]", { saved_to_cache: true, display_mode: displayMode });
+  return displayMode;
 }

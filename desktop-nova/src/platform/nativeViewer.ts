@@ -5,8 +5,22 @@ import { invoke } from "./tauri";
 /**
  * Opens or focuses the desktop material-list window for the active projection.
  */
-export function openMaterialListWindow(activeFile?: string | null): Promise<void> {
-  return invoke("open_material_list_window", { activeFile: activeFile || null });
+export function openMaterialListWindow(activeFile?: string | null, viewMode: "details" | "export" = "details"): Promise<void> {
+  return invoke("open_material_list_window", { activeFile: activeFile || null, viewMode });
+}
+
+/**
+ * Opens or focuses the desktop enumerator window for the active projection.
+ */
+export function openEnumeratorWindow(activeFile?: string | null): Promise<void> {
+  return invoke("open_enumerator_window", { activeFile: activeFile || null });
+}
+
+/**
+ * Opens or focuses the desktop game-resource manager window.
+ */
+export function openAssetManagerWindow(): Promise<void> {
+  return invoke("open_asset_manager_window");
 }
 
 /**
@@ -31,5 +45,9 @@ export function openUiDemoWindow(): Promise<void> {
 }
 
 export function openPath(path: string): Promise<void> {
-  return openShell(path);
+  return invoke("open_workspace_path", { path });
+}
+
+export function openExternalUrl(url: string): Promise<void> {
+  return openShell(url);
 }

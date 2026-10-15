@@ -1,5 +1,13 @@
 import type { LibraryCategoryIcon } from "./libraryStore";
 
+/** Suggested icon uses, not automatically created library categories. */
+export const LIBRARY_ICON_PRESETS = [
+  ["warehouse", "仓库", "Warehouse"], ["packer", "打包机", "Package"], ["crafting", "合成站", "Hammer"],
+  ["building", "建筑", "Building2"], ["farm", "农场", "Wheat"], ["cannon", "各类炮", "Crosshair"],
+  ["all-items", "全物品", "Boxes"], ["furnace", "熔炉组", "Flame"], ["trees", "树场", "Trees"],
+  ["mobs", "刷怪塔", "Skull"], ["stone", "刷石机", "Mountain"], ["iron", "刷铁机", "Anvil"], ["other", "杂项", "Folder"],
+] as const;
+
 export const LIBRARY_LUCIDE_ICON_NAMES = ["Folder", "Warehouse", "Package", "Hammer", "Building2", "Wheat", "Crosshair", "Boxes", "Flame", "Trees", "Skull", "Mountain", "Anvil", "Box", "Cpu", "Cog", "Layers", "Star", "BookOpen"] as const;
 const MAX_IMAGE_BYTES = 1024 * 1024;
 const MAX_SVG_BYTES = 64 * 1024;

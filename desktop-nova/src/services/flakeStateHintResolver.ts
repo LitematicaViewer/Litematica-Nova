@@ -1,24 +1,8 @@
 import { getUserConfigFilePath, readImageBase64 } from "./backend";
 import { getBlockIconDataUrl } from "./blockIconResolver";
 import type { LayerPaletteEntry } from "./flakeService";
-import { isBlockInEnumerator } from "./flake/enumeratorLoader";
 import { resolveManualStateHintRule } from "./flake/stateHintRules/stateDefault";
 import { resolveRedstoneWireStateHintImage } from "./flake/stateHintRules/blockRedstone";
-
-// 含水方块枚举器的同步缓存
-let waterloggedBlocksSet: Set<string> | null = null;
-
-// 预加载含水方块枚举器（在模块初始化时异步加载）
-(async () => {
-  try {
-    // 触发加载，利用 enumeratorLoader 的内部缓存
-    const testBlock = "minecraft:chest";
-    await isBlockInEnumerator(testBlock, "enumerator/system_enum/state_waterlogged.json");
-    // 注意：这里只是预热缓存，实际检查仍然需要调用 isBlockInEnumerator
-  } catch (error) {
-    console.warn("Failed to preload waterlogged enumerator:", error);
-  }
-})();
 
 type FlakeStateHintMode = "mask" | "replace";
 
@@ -38,9 +22,14 @@ interface ResolveFlakeLayerBlockImageInput {
   paletteEntry: LayerPaletteEntry | null | undefined;
   propertyPool: Array<Record<string, string>>;
   enabled: boolean;
+  sideTextureDataUrl: string | null;
 }
 
 const hintImageCache = new Map<string, Promise<string | null>>();
+
+export function clearFlakeStateHintImageCache(): void {
+  hintImageCache.clear();
+}
 
 // 缺失遮罩贴图时使用的万能兜底遮罩。
 const ALT_HINT_RELPATH = "data/flake/state_hint/alt.png";
@@ -215,7 +204,7 @@ export async function composeImageDataUrls(layerUrls: string[]): Promise<string 
 */
 async function readLayeringIconDataUrls(blockIds: string[]): Promise<string[] | null> {
   try {
-    const urls = await Promise.all(blockIds.map((blockId) => getBlockIconDataUrl(blockId)));
+    const urls = await Promise.all(blockIds.map((blockId) => getBlockIconDataUrl(blockId, "layering")));
     if (urls.some((url) => !url)) return null;
     return urls.filter((url): url is string => !!url);
   } catch {
@@ -400,8 +389,11 @@ export async function resolveFlakeLayerBlockImage({
   paletteEntry,
   propertyPool,
   enabled,
+  sideTextureDataUrl,
 }: ResolveFlakeLayerBlockImageInput): Promise<string | null> {
-  const baseIconUrl = await getBlockIconDataUrl(blockId);
+  // The source-version database already applied model UVs, Alpha and tint.
+  // Only an explicit state-hint rule may replace that plane with its layering resource.
+  const baseIconUrl = sideTextureDataUrl;
   if (!enabled) return baseIconUrl;
 
   const states = extractLayerPaletteStates(paletteEntry, propertyPool);
@@ -426,7 +418,7 @@ export async function resolveFlakeLayerBlockImage({
     return resolvedBaseIconUrl;
   }
 
-  if (!hasNormalOverlays && !hasSubtractOverlays) return baseIconUrl;
+  if (!hasNormalOverlays && !hasSubtractOverlays) return resolvedBaseIconUrl;
   if (!resolvedBaseIconUrl) return baseIconUrl;
 
   let composedIconUrl = resolvedBaseIconUrl;

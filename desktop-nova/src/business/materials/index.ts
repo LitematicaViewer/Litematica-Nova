@@ -9,6 +9,7 @@ export {
   exportMaterials,
   exportMaterialListWithOptions,
   fetchMaterialRecipeCache,
+  filterMaterialItems,
   formatMaterialUnits,
   loadMaterialsScope,
   loadStructureStats,

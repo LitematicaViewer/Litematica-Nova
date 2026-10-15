@@ -24,3 +24,8 @@ export async function subscribeApplicationWindowGeometry(
   ]);
   return () => unlisteners.forEach((unlisten) => unlisten());
 }
+
+/** Requests closing the current auxiliary window through the native platform seam. */
+export function closeApplicationWindow(): Promise<void> {
+  return getCurrentWindow().close();
+}

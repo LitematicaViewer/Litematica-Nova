@@ -11,7 +11,7 @@ export {
   saveUserConfig,
   setUserConfigDir,
 } from "../platform";
-export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo } from "../platform";
+export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo, V5CompatibilityConfig, ViewerControlConfig } from "../platform";
 
 export {
   checkFileExists,
@@ -27,9 +27,20 @@ export {
   writeAppDataFile as writeUserConfigFile,
   writeTextFileAbsolute,
   writeWorkspaceFile,
+  deleteAppDataFile as deleteUserConfigFile,
+  ensureBuiltinBlockIconsExtracted as ensureBuiltinBlockIconsExtractedNative,
+  ensureBuiltinItemIconsExtracted as ensureBuiltinItemIconsExtractedNative,
+  downloadVaultBlockIconsFromVault,
+  downloadVaultItemIconsFromVault,
+  downloadWikiBlockIconsFromMinecraftWiki,
+  downloadWikiEnumCatalogsFromMinecraftWiki,
+  pickLitematicFile,
+  readGameResourceRemoteText,
 } from "../platform/files";
 
 export {
+  openAssetManagerWindow,
+  openEnumeratorWindow,
   openLocalLibraryFoldersWindow,
   openMaterialListWindow,
   openRedenLibraryWindow,

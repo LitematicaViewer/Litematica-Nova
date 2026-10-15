@@ -67,7 +67,7 @@ export function UpdateDialog() {
     <Button variant="ghost" className="sidebar-item nav-item updater-check" onClick={manualCheck} disabled={running} title="检查更新" aria-label="检查更新">
       <Download className="nav-icon" aria-hidden="true" /><span className="nav-label">检查更新</span>
     </Button>
-    {open && <Dialog title={view?.version ? `更新至 ${view.version}` : "软件更新"} subtitle="使用官方 Tauri Updater；安装前验证签名，保留当前草稿并等待任务退出。" onClose={() => void cancel()} busy={installing} width="md"
+    {open && <Dialog title={view?.version ? `更新至 ${view.version}` : "软件更新"} subtitle="更新完成后将自动重启。" onClose={() => void cancel()} busy={installing} width="md"
       footer={<>
         <Button variant="ghost" onClick={() => void skip()} disabled={!view?.version || running || installing}>跳过当前版本</Button>
         <Button variant="secondary" onClick={() => void cancel()} disabled={installing}>取消</Button>

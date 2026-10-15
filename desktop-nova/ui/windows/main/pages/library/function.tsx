@@ -1,4 +1,5 @@
 import { DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT } from "./sendDialog";
+import { displayFilePath } from "../../../../../src/business/projectionLibrary";
 
 /**
  * 压缩文件夹路径，保留最后 N 级目录。
@@ -7,12 +8,18 @@ import { DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT } from "./sendDialog";
  * @returns 压缩后的文件夹路径
  */
 export function compactFolderPath(path: string, tailCount: number): string {
-  const normalized = path.trim().replace(/[\\/]+$/, "");
+  const readable = displayFilePath(path.trim());
+  const normalized = /^[a-z]:[\\/]$/i.test(readable) || readable === "/" ? readable : readable.replace(/[\\/]+$/, "");
   const separator = normalized.includes("\\") ? "\\" : "/";
   const parts = normalized.split(/[\\/]+/).filter(Boolean);
   const safeTailCount = Number.isFinite(tailCount) && tailCount >= 1 ? Math.floor(tailCount) : DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT;
   const hasWindowsDrive = /^[A-Za-z]:/.test(normalized);
   const hasUnixRoot = normalized.startsWith("/");
+  const uncRoot = normalized.match(/^\\\\[^\\]+\\[^\\]+/);
+  if (uncRoot) {
+    const tail = normalized.slice(uncRoot[0].length).split(/[\\/]+/).filter(Boolean);
+    return tail.length <= safeTailCount ? normalized : `${uncRoot[0]}\\...\\${tail.slice(-safeTailCount).join("\\")}`;
+  }
   const visiblePrefixSegments = hasWindowsDrive || !hasUnixRoot ? 1 : 0;
   if (parts.length <= safeTailCount + visiblePrefixSegments) return normalized;
   const driveOrRoot = hasWindowsDrive ? normalized.match(/^[A-Za-z]:/)?.[0] || "" : hasUnixRoot ? "" : parts[0];

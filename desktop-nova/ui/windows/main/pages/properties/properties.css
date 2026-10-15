@@ -7,15 +7,16 @@
 .properties-editor-scroll { min-width: 0; min-height: 0; }
 .properties-editor-viewport { padding-right: var(--ln-space-4, 16px); }
 .properties-editor { border: 0; padding: 0 0 16px; margin: 0; min-width: 0; }
-.properties-section h3, .properties-preview h3 { margin: 0 0 16px; font-size: 1.05em; line-height: 1.4; }
+.properties-preview h3 { margin: 0 0 16px; font-size: 1.05em; line-height: 1.4; }
 .properties-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 14px 0; }
 .properties-field > :is(input, textarea) { width: 100%; min-width: 0; max-width: none; }
 .properties-field > span { line-height: 1.4; color: var(--ln-muted-text-color, GrayText); }
 .properties-field textarea { resize: vertical; min-height: 92px; }
-.properties-facts { margin: 24px 0 0; padding: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 16px; background: var(--ln-inset-background, var(--ln-ui-background-color)); border-radius: var(--ln-card-radius, 6px); }
-.properties-facts > div { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.properties-facts dt { color: var(--ln-muted-text-color, GrayText); font-size: .9em; }
-.properties-facts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.properties-facts { margin: 20px 0; padding: 0; display: grid; gap: 14px; background: none; border: 0; border-radius: 0; }
+.properties-facts > div { min-width: 0; display: grid; grid-template-columns: minmax(7em, .7fr) minmax(0, 1.3fr); align-items: baseline; gap: 12px; }
+.properties-facts dt { color: var(--ln-muted-text-color, GrayText); }
+.properties-facts dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.properties-format-row dd { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .properties-details { margin-top: var(--ln-space-6, 24px); padding-top: 16px; border-top: 1px solid var(--ln-divider-color, var(--ln-card-border-color, ThreeDShadow)); }
 .properties-details > summary { cursor: pointer; padding: 4px 0; font-weight: 600; }
 .properties-details > p { margin: 12px 0; }
@@ -27,6 +28,9 @@
 .properties-preview { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: 10px; }
 .properties-preview-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .properties-preview-toolbar h3 { margin: 0; flex: 1; min-width: 5em; }
+.properties-file-preview { margin-top: 24px; display: grid; gap: 12px; }
+.properties-file-preview-canvas { min-height: 160px; max-height: 280px; display: grid; place-items: center; overflow: auto; color: var(--ln-muted-text-color, GrayText); background: var(--ln-inset-background, var(--ln-ui-background-color)); }
+.properties-file-preview-canvas img { display: block; max-width: 100%; max-height: 280px; object-fit: contain; image-rendering: pixelated; }
 /* The native Viewer is a sibling of the scrollable form, never a child of a
    clipping/scrolling DOM surface. Geometry is owned by useEmbeddedViewer. */
 .properties-preview-host { flex: 1; min-height: 0; min-width: 0; position: relative; background: var(--ln-inset-background, var(--ln-ui-background-color)); }
@@ -68,3 +72,16 @@
   }
 }
 .properties-full-placeholder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ln-muted-text-color, GrayText); font-size: .9em; }
+.properties-conversion-target { display: flex; align-items: center; gap: 12px; }
+.properties-conversion-target select { padding: 6px 10px; color: var(--ln-ui-text-color); background: var(--ln-inset-background, var(--ln-ui-background-color)); border: 1px solid var(--ln-divider-color); }
+.properties-conversion-table code { overflow-wrap: anywhere; }
+.properties-conversion-table td { vertical-align: top; }
+.properties-conversion-table .input { min-width: 16em; }
+
+.properties-conversion-source { display: flex; align-items: center; gap: 10px; }
+.properties-conversion-source > strong { flex: 1; min-width: 0; }
+.properties-conversion-table td { max-width: 20rem; overflow-wrap: anywhere; }
+.properties-conversion-table .replace-property-list { display: grid; gap: 8px; margin: 12px 0; }
+.properties-conversion-table .replace-property { display: grid; grid-template-columns: minmax(5em, 1fr) minmax(0, 1fr); align-items: center; gap: 8px; }
+.properties-overwrite-confirm { display: flex; flex-wrap: wrap; gap: 12px; }
+.properties-overwrite-confirm p { flex-basis: 100%; }

@@ -16,17 +16,23 @@ import {
   checkApplicationRuntimeHealth,
   chooseUserConfigDir,
   cleanupLocalTempFiles,
+  exportDiagnosticLogs,
   getNovaRuntimePathInfo,
   getPathInfo,
   getUserConfig,
   openUserConfigDir,
+  openDialog,
   openWorkspacePath,
   PathInfo,
   readWorkspaceFile,
   resetUserConfigDir,
+  saveUserConfig,
   setUserConfigDir,
   UserConfigInfo,
+  V5CompatibilityConfig,
+  ViewerControlConfig,
 } from "../../../../../src/business/facade";
+import { queryBlockDatabase } from "../../../../../src/business/projectionLibrary";
 import { DISPLAY_MODE_OPTIONS, DisplayMode, normalizeDisplayMode } from "../../../../../src/business/facade";
 import {
   loadUserConfigMigratingLocalStorage,
@@ -41,6 +47,8 @@ import {
   saveShowUiTestPageConfig,
 } from "../../../../../src/business/facade";
 
+import { AssetManagerDialog, openAssetManagerWithWindowBehavior } from "../../../asset_manager";
+import "../../../../styles/asset-manager.css";
 import "./settings.css";
 
 const BLOCKSTATE_DB = "data/minecraft_blockstates/26.1.json";
@@ -55,9 +63,59 @@ const MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS = [
   { value: "independent_window", label: "独立窗口" },
   { value: "main_window_overlay", label: "主窗口遮罩" },
 ];
+const DEFAULT_V5_COMPATIBILITY: V5CompatibilityConfig = {
+  backend: "auto",
+  shaderpack_root: "",
+  shaderpack_name: "",
+  iris_fallback: "fail",
+  fabric_mods_dir: "",
+  resource_packs: [],
+};
+const DEFAULT_VIEWER_CONTROLS: ViewerControlConfig = {
+  allow_time_modification: true,
+  allow_weather_modification: true,
+};
+
 function statusText(ok: boolean | null) {
   if (ok === null) return "未检查";
   return ok ? "OK" : "失败";
+}
+
+function trimPackPath(path: string): string {
+  let value = path.trim();
+  while (value.length > 1 && /[\\/]$/.test(value) && !/^[A-Za-z]:[\\/]$/.test(value)) {
+    value = value.slice(0, -1);
+  }
+  return value;
+}
+
+function splitPackPath(path: string): { root: string; name: string } | null {
+  const value = trimPackPath(path);
+  if (!value) return null;
+  const separatorIndex = Math.max(value.lastIndexOf("\\"), value.lastIndexOf("/"));
+  if (separatorIndex < 0) return { root: "", name: value };
+  const name = value.slice(separatorIndex + 1);
+  if (!name) return null;
+  let root = value.slice(0, separatorIndex);
+  if (!root && value.startsWith("/")) root = "/";
+  if (/^[A-Za-z]:$/.test(root)) root += value[separatorIndex];
+  return { root, name };
+}
+
+function selectedPaths(value: string | string[] | null): string[] {
+  if (!value) return [];
+  return (Array.isArray(value) ? value : [value]).map(trimPackPath).filter(Boolean);
+}
+
+function appendPackPaths(existing: string[], selected: string[]): string[] {
+  const uniqueSelected = selected.filter(
+    (path, index, paths) => paths.findIndex((candidate) => candidate.replace(/\//g, "\\").toLocaleLowerCase() === path.replace(/\//g, "\\").toLocaleLowerCase()) === index,
+  );
+  const selectedKeys = new Set(uniqueSelected.map((path) => path.replace(/\//g, "\\").toLocaleLowerCase()));
+  return [
+    ...existing.map(trimPackPath).filter((path) => path && !selectedKeys.has(path.replace(/\//g, "\\").toLocaleLowerCase())),
+    ...uniqueSelected,
+  ];
 }
 
 function PathRow({ label, path, info }: { label: string; path: string; info?: PathInfo | null }) {
@@ -89,8 +147,9 @@ function compactFolderPathDemo(path: string, tailCount: number): string {
 }
 
 export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShowUiTestPage }: any) {
+  const [showAssetManager, setShowAssetManager] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
-  const [previewMode, setPreviewMode] = useState<DisplayMode>("fast_experimental");
+  const [previewMode, setPreviewMode] = useState<DisplayMode>("full");
   const [materialListWindowBehavior, setMaterialListWindowBehavior] = useState("independent_window");
   const [localLibraryTailPathCount, setLocalLibraryTailPathCount] = useState(3);
   const [showUiTestPage, setShowUiTestPageState] = useState(true);
@@ -102,6 +161,8 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
   const [dbOk, setDbOk] = useState<boolean | null>(null);
   const [iconOk, setIconOk] = useState<boolean | null>(null);
   const [log, setLog] = useState("");
+  const [exportingLogs, setExportingLogs] = useState(false);
+  const [logExportStatus, setLogExportStatus] = useState("");
   const [aiConfig, setAiConfig] = useState<AiPublicConfig | null>(null);
   const [aiProvider, setAiProvider] = useState("mock");
   const [aiBaseUrl, setAiBaseUrl] = useState("https://api.openai.com/v1");
@@ -112,6 +173,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
   const [aiStatus, setAiStatus] = useState("未保存");
   const [aiSaveMessage, setAiSaveMessage] = useState("");
   const [aiTestStatus, setAiTestStatus] = useState("");
+  const [v5Compatibility, setV5Compatibility] = useState<V5CompatibilityConfig>(DEFAULT_V5_COMPATIBILITY);
+  const [viewerControls, setViewerControls] = useState<ViewerControlConfig>(DEFAULT_VIEWER_CONTROLS);
+  const [v5PickerBusy, setV5PickerBusy] = useState(false);
 
   const applyUserConfig = (info: UserConfigInfo, changedConfigDirectory = false) => {
     const showUiTest = normalizeShowUiTestPage(info.config.show_ui_test_page);
@@ -123,6 +187,8 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
     setShowUiTestPage?.(showUiTest);
     if (changedConfigDirectory) setTheme(normalizeTheme(info.config.theme));
     if (changedConfigDirectory) setColorMode(normalizeColorMode(info.config.color_mode));
+    setV5Compatibility(info.config.v5_compatibility || DEFAULT_V5_COMPATIBILITY);
+    setViewerControls(info.config.viewer_controls || DEFAULT_VIEWER_CONTROLS);
   };
 
   const refreshPathInfo = async () => {
@@ -176,6 +242,99 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
     applyUserConfig(await saveLocalLibraryTailPathCountConfig(count));
   };
 
+  const saveViewerControls = async (next: ViewerControlConfig) => {
+    const previous = viewerControls;
+    setViewerControls(next);
+    try {
+      applyUserConfig(await saveUserConfig({ viewer_controls: next }));
+      setLog("Viewer 时间 / 天气修改权限已保存；下一次启动 Viewer 时生效。");
+    } catch (err) {
+      setViewerControls(previous);
+      setLog(`Viewer 修改权限保存失败：${String(err)}`);
+    }
+  };
+
+  const saveV5Compatibility = async () => {
+    try {
+      const normalized: V5CompatibilityConfig = {
+        ...v5Compatibility,
+        shaderpack_root: v5Compatibility.shaderpack_root.trim(),
+        shaderpack_name: v5Compatibility.shaderpack_name.trim(),
+        fabric_mods_dir: v5Compatibility.fabric_mods_dir.trim(),
+        resource_packs: v5Compatibility.resource_packs.map((value) => value.trim()).filter(Boolean),
+      };
+      const info = await saveUserConfig({ v5_compatibility: normalized });
+      applyUserConfig(info);
+      setLog("渲染设置已保存，下次打开预览时生效。");
+    } catch (err) {
+      setLog(`渲染设置保存失败：${String(err)}`);
+    }
+  };
+
+  const chooseShaderpack = async (directory: boolean) => {
+    if (v5PickerBusy) return;
+    setV5PickerBusy(true);
+    try {
+      const selection = await openDialog({
+        directory,
+        multiple: false,
+        defaultPath: v5Compatibility.shaderpack_root || undefined,
+        ...(directory ? {} : { filters: [{ name: "Minecraft 光影包", extensions: ["zip"] }] }),
+      });
+      const path = selectedPaths(selection)[0];
+      if (!path) return;
+      const parts = splitPackPath(path);
+      if (!parts?.root || !parts.name) {
+        setLog(`无法从所选路径识别光影包根目录和名称：${path}`);
+        return;
+      }
+      setV5Compatibility((current) => ({
+        ...current,
+        backend: current.backend === "vulkan" ? "iris-gl46" : current.backend,
+        shaderpack_root: parts.root,
+        shaderpack_name: parts.name,
+      }));
+      setLog(`已选择光影包：${path}\n点击“保存渲染设置”后生效。`);
+    } catch (err) {
+      setLog(`选择光影包失败：${String(err)}`);
+    } finally {
+      setV5PickerBusy(false);
+    }
+  };
+
+  const clearShaderpack = () => {
+    setV5Compatibility((current) => ({
+      ...current,
+      backend: current.backend === "iris-gl46" ? "auto" : current.backend,
+      shaderpack_root: "",
+      shaderpack_name: "",
+    }));
+    setLog("已清除光影包草稿；点击“保存渲染设置”后生效。");
+  };
+
+  const addResourcePacks = async (directory: boolean) => {
+    if (v5PickerBusy) return;
+    setV5PickerBusy(true);
+    try {
+      const selection = await openDialog({
+        directory,
+        multiple: true,
+        ...(directory ? {} : { filters: [{ name: "Minecraft 资源包", extensions: ["zip"] }] }),
+      });
+      const paths = selectedPaths(selection);
+      if (paths.length === 0) return;
+      setV5Compatibility((current) => ({
+        ...current,
+        resource_packs: appendPackPaths(current.resource_packs, paths),
+      }));
+      setLog(`已添加 ${paths.length} 个资源包；新选择的项目位于最高优先级。\n点击“保存渲染设置”后生效。`);
+    } catch (err) {
+      setLog(`选择资源包失败：${String(err)}`);
+    } finally {
+      setV5PickerBusy(false);
+    }
+  };
+
   const checkApplicationRuntime = async () => {
     try {
       const result = await checkApplicationRuntimeHealth();
@@ -193,22 +352,11 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
 
   const checkDatabase = async () => {
     try {
-      const [db, zh, dbText, zhText] = await Promise.all([
-        getPathInfo(BLOCKSTATE_DB),
-        getPathInfo(BLOCKSTATE_ZH),
-        readWorkspaceFile(BLOCKSTATE_DB),
-        readWorkspaceFile(BLOCKSTATE_ZH),
-      ]);
-      setDbInfo(db);
-      setZhInfo(zh);
-      JSON.parse(dbText);
-      JSON.parse(zhText);
+      const result = await queryBlockDatabase({});
+      if (!result.versions?.length) throw new Error("方块数据未加载，请重试。");
       setDbOk(true);
-      setLog(`检查 BlockState 数据库：OK\n${db.normalized}\n${zh.normalized}`);
-    } catch (err: any) {
-      setDbOk(false);
-      setLog(`检查 BlockState 数据库失败：${err}`);
-    }
+      setLog(`方块数据正常：${result.versions.length} 个版本`);
+    } catch (error) { setDbOk(false); setLog(`方块数据检查失败：${String(error)}`); }
   };
 
   const checkIcons = async () => {
@@ -291,6 +439,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
   };
 
   return (
+    <>
     <ScrollArea className="settings-scroll-area" aria-label="设置">
     <div className="settings-page">
       <h2 className="settings-title">选项</h2>
@@ -459,31 +608,149 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
 
       <div className="group-box">
         <div className="group-box-title">数据文件</div>
-        <PathRow label="BlockState DB" path={BLOCKSTATE_DB} info={dbInfo} />
-        <PathRow label="中文翻译 DB" path={BLOCKSTATE_ZH} info={zhInfo} />
+        <div className="form-row"><div className="form-label">方块数据库</div><div>内置多版本方块库</div></div>
         <PathRow label="block 图标库" path={BLOCK_ICON_DIR} info={iconDirInfo} />
         <div className="settings-actions settings-actions-spaced">
-          <Button className="btn" onClick={checkDatabase}>检查 BlockState 数据库</Button>
+          <Button className="btn" onClick={() => openAssetManagerWithWindowBehavior(() => setShowAssetManager(true)).catch((error) => setLog(String(error)))}>游戏资源管理</Button>
+          <Button className="btn" onClick={checkDatabase}>检查方块数据</Button>
           <Button className="btn" onClick={checkIcons}>检查图标库</Button>
-          <Button className="btn" onClick={() => openWorkspacePath("data/minecraft_blockstates")}>打开数据目录</Button>
           <span className="settings-status" data-state={dbOk === false || iconOk === false ? "error" : "normal"}>
-            DB: {statusText(dbOk)} / 图标: {statusText(iconOk)}
+            方块数据: {statusText(dbOk)} / 图标: {statusText(iconOk)}
           </span>
         </div>
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">公开版快速渲染</div>
+        <div className="group-box-title">渲染</div>
         <div className="form-row">
           <div className="form-label">预览图生成</div>
-          <Dropdown ariaLabel="预览图生成" value={previewMode} options={DISPLAY_MODE_OPTIONS} onChange={handlePreviewMode} />
+          <div className="form-field">
+            <Dropdown ariaLabel="预览图生成" value={previewMode} options={DISPLAY_MODE_OPTIONS} onChange={handlePreviewMode} />
+            <Button className="btn" onClick={() => handlePreviewMode("full")}>重置为完整模式</Button>
+          </div>
         </div>
-        <div className="settings-help-text">公开 Beta 仅提供独立快速模式，不包含完整模式、光影包或完整模式配置。</div>
+        <div className="form-row">
+          <div className="form-label">时间修改</div>
+          <label className="form-field">
+            <Checkbox
+              aria-label="允许修改时间"
+              checked={viewerControls.allow_time_modification}
+              onCheckedChange={(checked) => saveViewerControls({
+                ...viewerControls,
+                allow_time_modification: checked === true,
+              })}
+            />
+            <span>允许在 Viewer 中按 T 修改时间</span>
+          </label>
+        </div>
+        <div className="form-row">
+          <div className="form-label">天气修改</div>
+          <label className="form-field">
+            <Checkbox
+              aria-label="允许修改天气"
+              checked={viewerControls.allow_weather_modification}
+              onCheckedChange={(checked) => saveViewerControls({
+                ...viewerControls,
+                allow_weather_modification: checked === true,
+              })}
+            />
+            <span>允许在 Viewer 中按 Y 修改天气</span>
+          </label>
+        </div>
+        <div className="settings-help-text">
+          时间和天气可在预览中调整。
+        </div>
+      </div>
+
+      <div className="group-box">
+        <div className="group-box-title">渲染兼容设置</div>
+        <div className="settings-help-text">标准/完整模式的新任务会联网验证持久设备密钥并领取本次解密材料；必要的光照与顶点烘焙数据由 Nova 服务计算。不上传硬件序列号。设备身份可重建，不代表官方程序证明；快速模式、日志和更新独立运行。</div>
+        <div className="form-row">
+          <div className="form-label">渲染后端</div>
+          <Dropdown ariaLabel="渲染后端" value={v5Compatibility.backend}
+            onChange={(value) => setV5Compatibility((current) => ({ ...current, backend: value as V5CompatibilityConfig["backend"] }))}
+            options={[{ value: "auto", label: "自动" }, { value: "vulkan", label: "Vulkan" }, { value: "iris-gl46", label: "光影模式" }]} />
+        </div>
+        <div className="form-row">
+          <div className="form-label">光影包文件夹</div>
+          <Input
+            className="input"
+            aria-label="光影包文件夹" value={v5Compatibility.shaderpack_root}
+            onChange={(event) => setV5Compatibility((current) => ({ ...current, shaderpack_root: event.target.value }))}
+            placeholder="例如 D:\\.minecraft\\shaderpacks"
+          />
+        </div>
+        <div className="form-row">
+          <div className="form-label">光影包名称</div>
+          <div className="form-field v5-pack-picker-row">
+            <Input
+              className="input"
+              aria-label="光影包名称" value={v5Compatibility.shaderpack_name}
+              onChange={(event) => setV5Compatibility((current) => ({ ...current, shaderpack_name: event.target.value }))}
+              placeholder="根目录下的 zip 文件名或目录名"
+            />
+            <Button className="btn" type="button" disabled={v5PickerBusy} onClick={() => chooseShaderpack(false)}>选择 ZIP</Button>
+            <Button className="btn" type="button" disabled={v5PickerBusy} onClick={() => chooseShaderpack(true)}>选择目录</Button>
+            <Button className="btn" type="button" disabled={v5PickerBusy || (!v5Compatibility.shaderpack_root && !v5Compatibility.shaderpack_name)} onClick={clearShaderpack}>清除</Button>
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-label">光影加载失败时</div>
+          <Dropdown ariaLabel="光影加载失败时" value={v5Compatibility.iris_fallback}
+            onChange={(value) => setV5Compatibility((current) => ({ ...current, iris_fallback: value as V5CompatibilityConfig["iris_fallback"] }))}
+            options={[{ value: "fail", label: "直接报错" }, { value: "vulkan", label: "使用基础渲染" }]} />
+        </div>
+        <div className="form-row">
+          <div className="form-label">Fabric mods 目录</div>
+          <Input
+            className="input"
+            aria-label="Fabric mods 目录" value={v5Compatibility.fabric_mods_dir}
+            onChange={(event) => setV5Compatibility((current) => ({ ...current, fabric_mods_dir: event.target.value }))}
+            placeholder="留空禁用；仅加载 Fabric data-only 资源"
+          />
+        </div>
+        <div className="form-row">
+          <div className="form-label">资源包</div>
+          <div className="v5-pack-picker-row v5-resource-pack-picker">
+            <Textarea
+              aria-label="资源包列表"
+              className="input v5-resource-pack-list"
+              value={v5Compatibility.resource_packs.join("\n")}
+              onChange={(event) => setV5Compatibility((current) => ({ ...current, resource_packs: event.target.value.split(/\r?\n/) }))}
+              placeholder="每行一个 zip 或目录；按从低到高优先级填写"
+            />
+            <div className="v5-pack-actions">
+              <Button className="btn" type="button" disabled={v5PickerBusy} onClick={() => addResourcePacks(false)}>添加 ZIP</Button>
+              <Button className="btn" type="button" disabled={v5PickerBusy} onClick={() => addResourcePacks(true)}>添加目录</Button>
+              <Button
+                className="btn"
+                type="button"
+                disabled={v5PickerBusy || v5Compatibility.resource_packs.every((path) => !path.trim())}
+                onClick={() => setV5Compatibility((current) => ({ ...current, resource_packs: [] }))}
+              >清空</Button>
+            </div>
+          </div>
+        </div>
+        <Button className="btn" onClick={saveV5Compatibility}>保存渲染设置</Button>
+        <div className="settings-help-text">
+          列表下方的资源包优先级更高。
+        </div>
       </div>
 
       <div className="group-box">
         <div className="group-box-title">维护</div>
         <Button className="btn" onClick={async () => setLog(await cleanupLocalTempFiles())}>清理本地临时文件</Button>
+        <Button className="btn" type="button" disabled={exportingLogs} onClick={async () => {
+          setExportingLogs(true); setLogExportStatus("");
+          try {
+            const result = await exportDiagnosticLogs();
+            if (result) setLogExportStatus(`日志已导出：${result.path}（${result.sessionIds.length} 次启动）`);
+          } catch (reason) {
+            setLogExportStatus(`日志导出失败：${String(reason)}`);
+          } finally { setExportingLogs(false); }
+        }}>{exportingLogs ? "正在导出日志…" : "导出日志 ZIP…"}</Button>
+        <div className="settings-help-text">保留最近 3 次启动的日志。仅导出日志和必要诊断，不包含投影或完整配置。</div>
+        {logExportStatus && <div className="settings-feedback" role="status" aria-live="polite">{logExportStatus}</div>}
       </div>
 
       {log && (
@@ -491,6 +758,8 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
       )}
     </div>
     </ScrollArea>
+    {showAssetManager && <AssetManagerDialog theme={theme} onClose={() => setShowAssetManager(false)} />}
+    </>
   );
 }
 

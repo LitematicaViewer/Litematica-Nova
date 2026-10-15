@@ -2,11 +2,13 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   closeQuickPreview, startQuickPreview, getQuickPreviewState, quickPreviewForSource, refreshQuickPreview, restoreQuickPreview,
   subscribeQuickPreview, suspendQuickPreview, updateQuickPreviewPlacement, presentQuickPreview,
+  decideQuickPreviewResources, type QuickResourceAction,
 } from "../../../src/business/facade";
 import { usePresentationViewport, type PresentationViewportController } from "./useEmbeddedViewer";
 
 const quickController: PresentationViewportController = {
   inlineMode: "embedded",
+  deferPresentationUntilReady: true,
   ensureSubscription: refreshQuickPreview,
   restore: restoreQuickPreview,
   suspend: suspendQuickPreview,
@@ -15,12 +17,12 @@ const quickController: PresentationViewportController = {
 };
 
 /** One historical fast_experimental entry for Properties and Render. Full is not a fallback. */
-export function useQuickPreview(sourcePath: string, blocked: boolean) {
+export function useQuickPreview(sourcePath: string, blocked: boolean, preload = false) {
   const snapshot = useSyncExternalStore(subscribeQuickPreview, getQuickPreviewState, getQuickPreviewState);
   const operation = quickPreviewForSource(sourcePath, snapshot);
   const viewport = usePresentationViewport(operation ? {
     operationId: operation.previewId, prepared: operation.state === "ready", presentation: operation.presentation,
-  } : null, blocked, quickController);
+  } : null, blocked || operation?.resource?.decisionRequired === true, quickController);
   const [pending, setPending] = useState(false);
   const [commandError, setCommandError] = useState("");
   const inFlight = useRef(false);
@@ -38,12 +40,29 @@ export function useQuickPreview(sourcePath: string, blocked: boolean) {
     finally { inFlight.current = false; setPending(false); }
   }
   const start = () => execute(async () => {
-    if (operation?.state === "ready") { await viewport.showOverlay(); return; }
+    if (operation?.resource?.decisionRequired) return;
+    const clickStartedAtEpochMs = Date.now();
+    console.info("[NOVA_FIRST_BLOCK]", { stage: "user_click", mode: "fast", epochMs: clickStartedAtEpochMs, sourcePath, preload,
+      existingGpuAndSceneReady: operation?.state === "ready" && (operation.preload ?? false) === preload });
+    if (operation?.state === "ready" && (operation.preload ?? false) === preload) {
+      // Host dedupe retains the same Viewer/GPU and forwards only this click's
+      // clock to the next native presentation command.
+      await startQuickPreview(sourcePath, preload, clickStartedAtEpochMs);
+      await viewport.showOverlay(); return;
+    }
     if (operation?.state === "starting" && !operation.error) return;
-    const started = await startQuickPreview(sourcePath);
+    const started = await startQuickPreview(sourcePath, preload, clickStartedAtEpochMs);
     if (source.current === sourcePath) viewport.requestPresentationWhenReady(started.previewId);
   });
   const close = () => execute(async () => { if (operation) await closeQuickPreview(operation.previewId); });
   const hide = () => execute(async () => { if (operation) await viewport.setPresentation({ ...operation.presentation, visible: false }); });
-  return { ...viewport, operation, pending, error: commandError || viewport.error, start, close, hide };
+  const chooseResources = (action: QuickResourceAction) => execute(async () => {
+    if (!operation) return;
+    if (action === "cancel") { await closeQuickPreview(operation.previewId); return; }
+    const started = await decideQuickPreviewResources(operation.previewId, action, action === "preload" && operation.resource?.pressure === "warning");
+    if (source.current === sourcePath && getQuickPreviewState()?.previewId === started.previewId) {
+      viewport.requestPresentationWhenReady(started.previewId);
+    }
+  });
+  return { ...viewport, operation, pending, error: commandError || viewport.error || (operation?.error ? "预览加载失败，请重新加载。" : ""), start, close, hide, chooseResources };
 }

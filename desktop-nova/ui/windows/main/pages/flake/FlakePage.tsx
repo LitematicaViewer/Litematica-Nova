@@ -17,15 +17,15 @@ import React, {
   useState,
 } from "react";
 import {
-  getBlockColor, type LayerSliceData, type LayerSliceMeta,
+  loadLayerPaletteVisuals, layerMapColor, isLayerAirBlock, UNKNOWN_LAYER_COLOR,
+  type LayerPaletteVisuals, type LayerSliceData, type LayerSliceMeta,
   readLayerMeta, readLayer, loadProjectionMarkers, loadStructureStats,
   type ProjectionMarkerPoint, removeProjectionOrigin, selectLitematicSavePath,
-  setProjectionOrigin, type StatsData, getBlockProperties,
+  setProjectionOrigin, type StatsData, getBlockProperties, loadDatabases,
   translateBlockId, translateKey, translateValue,
 } from "../../../../../src/business/facade";
 import "../../../../styles/flake.css";
-import { loadMaterialsScope } from "../../../../../src/business/facade";
-import { buildMapColorLookup, loadEnumeratorCollections } from "../../../../../src/business/facade";
+import { loadStructuralBlocks } from "../../../../../src/business/facade";
 import { resolveFlakeLayerBlockImage, extractLayerPaletteStates } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { Dialog } from "../../../../components/Dialog";
@@ -36,6 +36,8 @@ import { fitView, FlakeBlockTooltip, formatStateRecord } from "./function";
 import { CreativeInventoryDialog } from "./creativeInventoryDialog";
 import { ContainerDialog } from "./containerDialog";
 import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem, type ContainerType } from "../../../../../src/business/facade";
+import { listenEvent } from "../../../../../src/platform/events";
+import { clearFlakeStateHintImageCache } from "../../../../../src/business/facade";
 import noteCsvText from "../../../../../note.csv?raw";
 
 // 缩放范围：scale 表示每个方块占用的像素数（像素/格）。
@@ -176,19 +178,22 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
 const globalIconCache = new Map<string, Promise<string | null>>();
 
 function getCachedIconImage(
+  minecraftDataVersion: number | null,
   blockId: string,
   paletteEntry: any,
   propertyPool: any[],
-  enabled: boolean
+  enabled: boolean,
+  sideTextureDataUrl: string | null,
 ): Promise<string | null> {
   // 缓存键必须基于解析后的真实状态，而非 paletteEntry.property_id 下标。
   // property_id 只是指向当前投影 propertyPool 的索引，不同投影的 propertyPool
   // 各自独立——同一个 property_id 在投影 A 可能是 level=0，在投影 B 却是 level=3。
   // 若只用 property_id 作键，跨投影会命中错误的旧图标（如水的 level 遮罩错乱）。
   const resolvedStates = extractLayerPaletteStates(paletteEntry, propertyPool);
-  const cacheKey = `${blockId}::${JSON.stringify(resolvedStates)}::${enabled}`;
+  const cacheKey = `${minecraftDataVersion}::${blockId}::${JSON.stringify(Object.entries(resolvedStates).sort(([left], [right]) => left.localeCompare(right)))}::${enabled}`;
 
   if (!globalIconCache.has(cacheKey)) {
+    if (globalIconCache.size >= 1024) globalIconCache.delete(globalIconCache.keys().next().value!);
     globalIconCache.set(
       cacheKey,
       resolveFlakeLayerBlockImage({
@@ -196,6 +201,7 @@ function getCachedIconImage(
         paletteEntry,
         propertyPool,
         enabled,
+        sideTextureDataUrl,
       })
     );
   }
@@ -220,6 +226,7 @@ export interface FlakeHoverBlock {
   stateRecord: Record<string, string>;
   originalStateRecord: Record<string, string>;
   hasStates: boolean;
+  minecraftVersion?: string;
 }
 
 interface FlakeRenderSlice {
@@ -305,12 +312,6 @@ function findFirstBlockAtOrAfterX(blocks: VisibleLayerBlock[], minX: number): nu
     else high = mid;
   }
   return low;
-}
-
-function normalizeFlakeBlockId(blockId: string): string {
-  const normalized = String(blockId || "").trim().toLowerCase();
-  if (!normalized) return "";
-  return normalized.includes(":") ? normalized : `minecraft:${normalized}`;
 }
 
 function layerTileKey(tileX: number, tileZ: number): string {
@@ -435,8 +436,8 @@ function buildLayerTile(
   context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
   context.imageSmoothingEnabled = false;
   for (const visibleBlock of tileBlocks) {
-    const color = colorMap.get(visibleBlock.block.palette_id) || "#f0f";
-    if (color === "transparent") continue;
+    const color = colorMap.get(visibleBlock.block.palette_id) || UNKNOWN_LAYER_COLOR;
+    if (color === "transparent" && !iconImages) continue;
 
     const localX = visibleBlock.block.x - originX;
     const localZ = visibleBlock.block.z - originZ;
@@ -450,8 +451,14 @@ function buildLayerTile(
     if (iconImage) {
       context.drawImage(iconImage, left, top, right - left, bottom - top);
     } else {
-      context.fillStyle = color;
+      // The detailed view does not masquerade a map color as a texture.
+      // Missing/not-yet-decoded side assets remain visible neutral markers.
+      context.fillStyle = iconImages ? UNKNOWN_LAYER_COLOR : color;
       context.fillRect(left, top, right - left, bottom - top);
+      if (iconImages) {
+        context.strokeStyle = "rgba(0,0,0,0.35)";
+        context.beginPath(); context.moveTo(left, top); context.lineTo(right, bottom); context.stroke();
+      }
     }
   }
   context.globalAlpha = 1;
@@ -494,7 +501,17 @@ const LayerCanvas = forwardRef<
   const [iconImages, setIconImages] = useState<Map<number, string>>(new Map());
   const [tileImageRevision, setTileImageRevision] = useState(0);
   const [isTextureInteractionActive, setIsTextureInteractionActive] = useState(false);
-  const [mapColorByBlockId, setMapColorByBlockId] = useState<Map<string, string>>(new Map());
+  const [paletteVisuals, setPaletteVisuals] = useState<LayerPaletteVisuals | null>(null);
+  const [visualError, setVisualError] = useState("");
+  const [visualReload, setVisualReload] = useState(0);
+  useEffect(() => {
+    const pending = listenEvent("game-resources-changed", () => {
+      globalIconCache.clear();
+      clearFlakeStateHintImageCache();
+      setVisualReload((value) => value + 1);
+    }).catch(() => undefined);
+    return () => { void pending.then((unlisten) => unlisten?.()); };
+  }, []);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const dragFrameRef = useRef<number | null>(null);
   const pendingOffsetRef = useRef(offset);
@@ -750,39 +767,33 @@ const LayerCanvas = forwardRef<
 
   useEffect(() => {
     let cancelled = false;
-    loadEnumeratorCollections()
-      .then((collections) => {
-        if (!cancelled) setMapColorByBlockId(buildMapColorLookup(collections));
+    setPaletteVisuals(null);
+    setVisualError("");
+    if (!meta) return;
+    loadLayerPaletteVisuals(meta)
+      .then((visuals) => {
+        if (!cancelled) setPaletteVisuals(visuals);
       })
       .catch((error) => {
         if (cancelled) return;
-        console.warn("Failed to load map base colors:", error);
-        setMapColorByBlockId(new Map());
+        console.warn("Failed to resolve source-version layer visuals:", error);
+        setVisualError("颜色与贴图加载失败，请重新加载");
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [meta, visualReload]);
 
   const colorMap = useMemo(() => {
     const next = new Map<number, string>();
     if (!meta) return next;
     meta.palette.forEach((entry, index) => {
-      const normalizedBlockId = normalizeFlakeBlockId(entry.block_id);
-      const mapColor = mapColorByBlockId.get(normalizedBlockId);
-      let color = mapColor || getBlockColor(entry.block_id);
-      if (!mapColor) {
-        if (normalizedBlockId.includes("stone")) color = "#888";
-        else if (normalizedBlockId.includes("dirt")) color = "#754";
-        else if (normalizedBlockId.includes("grass")) color = "#583";
-        else if (normalizedBlockId.includes("quartz")) color = "#eee";
-        else if (normalizedBlockId.includes("glass")) color = "rgba(200,200,255,0.5)";
-      }
-      if (normalizedBlockId.includes("air")) color = "transparent";
-      next.set(index, color);
+      next.set(index, isLayerAirBlock(entry.block_id) ? "transparent" : layerMapColor(paletteVisuals?.byPalette.get(index)));
     });
     return next;
-  }, [mapColorByBlockId, meta]);
+  }, [paletteVisuals, meta]);
+  const missingMapColors = paletteVisuals && meta ? meta.palette.filter((_entry, index) => !paletteVisuals.byPalette.get(index)?.mapColor).length : 0;
+  const missingSideTextures = paletteVisuals && meta ? meta.palette.filter((_entry, index) => !paletteVisuals.byPalette.get(index)?.sideTextureDataUrl).length : 0;
 
   const visibleLayerIndex = useMemo<VisibleLayerIndex>(() => {
     const byPosition = new Map<number, VisibleLayerBlock>();
@@ -794,6 +805,7 @@ const LayerCanvas = forwardRef<
 
     for (const renderSlice of renderSlices) {
       for (const block of renderSlice.sliceData.blocks) {
+        if (scale < ICON_NATIVE_SIZE && colorMap.get(block.palette_id) === "transparent") continue;
         const positionKey = block.z * meta.size_x + block.x;
         if (byPosition.has(positionKey)) continue;
         const visibleBlock = {
@@ -828,7 +840,7 @@ const LayerCanvas = forwardRef<
       rows.set(z, Array.from(row.values()).sort((a, b) => a.block.x - b.block.x));
     }
     return { byPosition, rows, tiles: tileMaps };
-  }, [meta, renderSlices]);
+  }, [meta, renderSlices, scale, colorMap]);
 
   const visibleBlockWindow = useMemo<VisibleBlockWindow | null>(() => {
     if (!meta) return null;
@@ -868,7 +880,7 @@ const LayerCanvas = forwardRef<
 
         const paletteId = visibleBlock.block.palette_id;
         const entry = meta.palette[paletteId];
-        if (!entry?.block_id || normalizeFlakeBlockId(entry.block_id).includes("air")) continue;
+        if (!entry?.block_id || isLayerAirBlock(entry.block_id)) continue;
         const dx = visibleBlock.block.x - centerX;
         const dz = visibleBlock.block.z - centerZ;
         const priority = dx * dx + dz * dz;
@@ -1125,13 +1137,14 @@ const LayerCanvas = forwardRef<
     tileIconImageCacheRef.current.clear();
     setTileImageRevision((current) => current + 1);
     setIconImages(emptyImages);
-  }, [meta, showStateHints]);
+  }, [meta, showStateHints, paletteVisuals, visualReload]);
 
   useEffect(() => {
     let cancelled = false;
 
     if (
       !meta
+      || !paletteVisuals
       || scale < ICON_NATIVE_SIZE
       || isDragging
       || isTextureInteractionActive
@@ -1165,10 +1178,12 @@ const LayerCanvas = forwardRef<
 
         try {
           const dataUrl = await getCachedIconImage(
+            meta.minecraft_data_version,
             entry.block_id,
             entry,
             meta.property_pool || [],
-            showStateHints
+            showStateHints,
+            paletteVisuals.byPalette.get(paletteId)?.sideTextureDataUrl || null,
           );
           if (!dataUrl || cancelled || textureJobVersionRef.current !== jobVersion) continue;
           setIconImages((current) => {
@@ -1190,7 +1205,7 @@ const LayerCanvas = forwardRef<
     return () => {
       cancelled = true;
     };
-  }, [isDragging, isTextureInteractionActive, meta, scale, slicePaletteIds, showStateHints]);
+  }, [isDragging, isTextureInteractionActive, meta, scale, slicePaletteIds, showStateHints, paletteVisuals, visualReload]);
 
   // 滚轮事件
   const handleWheel = (event: React.WheelEvent) => {
@@ -1226,7 +1241,8 @@ const LayerCanvas = forwardRef<
       z: bz,
       paletteId,
       id: paletteEntry.block_id,
-      name: translateBlockId(paletteEntry.block_id),
+      name: paletteVisuals?.byPalette.get(paletteId)?.name || translateBlockId(paletteEntry.block_id),
+      minecraftVersion: paletteVisuals?.version,
       states: layerStateRecordText(stateRecord),
       stateRecord,
       originalStateRecord,
@@ -1353,6 +1369,10 @@ const LayerCanvas = forwardRef<
       }}
       onContextMenu={handleContextMenu}
     >
+      {(visualError || missingMapColors > 0 || missingSideTextures > 0) && <div className="flake-visual-status" role="status" onMouseDown={event => event.stopPropagation()}>
+        <span>{visualError || `${missingMapColors ? `${missingMapColors} 种方块缺少地图色` : ""}${missingMapColors && missingSideTextures ? " · " : ""}${missingSideTextures ? `${missingSideTextures} 种方块缺少侧面贴图` : ""}`}</span>
+        {visualError && <Button className="btn" onClick={event => { event.stopPropagation(); setVisualReload(previous => previous + 1); }}>重新加载</Button>}
+      </div>}
       <canvas
         ref={layerTileCanvasRef}
         className="flake-layer-tile-canvas"
@@ -1433,11 +1453,17 @@ function FlakeDebugStateDialog({
   const [draftState, setDraftState] = useState<Record<string, string>>(() => ({ ...block.stateRecord }));
   const [selectedNoteScaleName, setSelectedNoteScaleName] = useState(DEFAULT_NOTE_SCALE_NAME);
   const propertyKeys = useMemo(() => Object.keys(block.stateRecord).sort(), [block.stateRecord]);
-  const knownProperties = getBlockProperties(block.id);
+  const [knownProperties, setKnownProperties] = useState<Record<string, string[]>>({});
   const selectedNoteScale = NOTE_SCALE_OPTIONS.find((option) => option.name === selectedNoteScaleName) || NOTE_SCALE_OPTIONS[0];
 
   useEffect(() => {
     setDraftState({ ...block.stateRecord });
+    setKnownProperties({});
+    let cancelled = false;
+    if (block.minecraftVersion) void loadDatabases(block.minecraftVersion).then(() => {
+      if (!cancelled) setKnownProperties(getBlockProperties(block.id, block.minecraftVersion));
+    }).catch(error => console.warn("Source-version state options unavailable", error));
+    return () => { cancelled = true; };
   }, [block]);
 
   const setProperty = (key: string, value: string) => {
@@ -1691,7 +1717,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   useEffect(() => {
     if (!showInventoryDialog || !currentFile || materialBlocks.length > 0) return;
     let active = true;
-    loadMaterialsScope(currentFile, { kind: "all", value: null })
+    loadStructuralBlocks(currentFile)
       .then((mats) => { if (active) setMaterialBlocks(mats.map((m) => m.id).filter(Boolean)); })
       .catch((error) => { if (active) setLayerError(`物品栏材料读取失败：${String(error)}`); });
     return () => { active = false; };
@@ -2044,8 +2070,8 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const ready = !!meta;
   const building = isLoadingLayers;
   const statusText = layerError || (!ready
-    ? (building ? "正在直接读取投影的二维分层数据，无需构建三维场景。" : "分层尚未就绪，请重新读取。")
-    : !sliceData ? `正在读取第 ${layerY} 层……` : `Y=${layerY}; 当前层 ${sliceData?.blocks?.length || 0} 个非空气方块；洋葱皮 ${onionSkinDepth} 层。滚轮缩放，拖拽平移。`);
+    ? (building ? "正在读取分层…" : "分层尚未就绪，请重新读取。")
+    : !sliceData ? `正在读取第 ${layerY} 层…` : `第 ${layerY} 层 · ${sliceData?.blocks?.length || 0} 个方块 · 洋葱皮 ${onionSkinDepth} 层`);
 
   if (!currentFile) {
     return (
@@ -2131,9 +2157,6 @@ export function FlakePage({ currentFile, setRoute }: any) {
             onChange={(event) => setOnionSkinDepth(Math.min(5, Math.max(0, Number(event.target.value) || 0)))}
             disabled={!ready}
           />
-        </div>
-        <div className="nova-muted nova-small flake-page__onion-hint">
-          0 表示关闭；下方层按厚度比例半透明补显。缩小时优先用地图色，无映射时用区分色（非真实地图色）。
         </div>
 
         <div className="flake-page__layer-row flake-page__zoom-row">
@@ -2271,8 +2294,8 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 </div>
 
                 <div className="flake-page__tool-panel-section">
-                  <div className="flake-page__tool-panel-heading">编辑工具（灰色项未完成）</div>
-                  <div className="flake-page__tool-palette" role="toolbar" aria-label="编辑工具（灰色项未完成）按钮">
+                  <div className="flake-page__tool-panel-heading">编辑工具</div>
+                  <div className="flake-page__tool-palette" role="toolbar" aria-label="编辑工具">
                     {EDIT_TOOL_PLACEHOLDERS.map((tool) => (
                       <Button
                         key={tool.id}
@@ -2280,7 +2303,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                         type="button"
                         onClick={() => setSelectedEditTool(tool.id)}
                         title={`${tool.name}：${tool.description}`}
-                        aria-label={`${tool.name}，${tool.description}`}
+                        aria-label={tool.name}
                         disabled={!["hand", "debug-stick", "measure", "marker"].includes(tool.id)}
                         aria-pressed={effectiveEditTool === tool.id}
                       >
@@ -2327,7 +2350,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                   aria-pressed={isSelected}
                   onClick={() => setSelectedQuickbarSlot(index)}
                 >
-                  {blockId ? <BlockIcon blockId={blockId} /> : <span className="flake-page__quickbar-slot-icon" aria-hidden />}
+                  {blockId ? <BlockIcon blockId={blockId} lookupMode="block_first" /> : <span className="flake-page__quickbar-slot-icon" aria-hidden />}
                   <span className="flake-page__quickbar-slot-label">{blockId || "空槽"}</span>
                 </Button>
               );
@@ -2389,7 +2412,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
           onChangeQuickbarSlots={(updater) => setQuickbarSlots((current) => updater([...current]))}
           extraCollections={
             materialBlocks.length > 0
-              ? [{ id: '__current__', name: '当前统计结果', values: materialBlocks }]
+              ? [{ id: '__current__', name: '当前投影方块', values: materialBlocks }]
               : []
           }
         />

@@ -1,9 +1,10 @@
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Dropdown } from "./Dropdown";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "radix-ui";
 import { BlockIcon } from "./BlockIcon";
-import { getAllBlocks, loadDatabases } from "../../src/business/facade";
+import { getAllBlocks, loadDatabases, getBlockProperties, translateKey, translateValue } from "../../src/business/facade";
 import { initI18n, translateBlockId } from "../../src/business/facade";
 
 export interface BlockSearchOption {
@@ -30,11 +31,16 @@ export function BlockSearchSelect({
   value,
   onChange,
   disabled = false,
+  allowedBlocks,
+  blockNames,
 }: {
   value: string;
   onChange: (blockId: string) => void;
   disabled?: boolean;
+  allowedBlocks?: string[];
+  blockNames?: Record<string, string>;
 }) {
+  const [loadError, setLoadError] = useState("");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [blocks, setBlocks] = useState<string[]>(() => getAllBlocks().sort());
@@ -42,18 +48,19 @@ export function BlockSearchSelect({
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    if (allowedBlocks) { setBlocks([...allowedBlocks].sort()); return; }
     let active = true;
     Promise.all([loadDatabases(), initI18n()]).then(() => {
       if (active) setBlocks(getAllBlocks().sort());
-    });
+    }).catch((error) => { if (active) setLoadError(String(error)); });
     return () => {
       active = false;
     };
-  }, []);
+  }, [allowedBlocks]);
 
   const currentId = normalizeBlockId(value);
-  const current = useMemo(() => buildOption(currentId), [currentId]);
-  const options = useMemo(() => blocks.map(buildOption), [blocks]);
+  const current = useMemo(() => ({ ...buildOption(currentId), label: blockNames?.[currentId] || translateBlockId(currentId) }), [currentId, blockNames, blocks]);
+  const options = useMemo(() => blocks.map((id) => ({ ...buildOption(id), label: blockNames?.[id] || translateBlockId(id) })), [blocks, blockNames]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return options.slice(0, 160);
@@ -143,7 +150,7 @@ export function BlockSearchSelect({
             />
             {blocks.length === 0 ? (
               <div className="block-search-empty">
-                BlockState 数据库未加载，仍可在下方手动输入 ID。
+                {loadError || "正在加载方块…"}
               </div>
             ) : (
               <div
@@ -182,3 +189,21 @@ export function BlockSearchSelect({
 }
 
 
+
+
+/** Shared state editor used by block replacement and cross-version conversion. */
+export function BlockPropertySelector({ blockId, value, onChange, isTo, properties, exact = false }: {
+  blockId: string; value: Record<string, string>; onChange: (value: Record<string, string>) => void;
+  isTo: boolean; properties?: Record<string, string[]>; exact?: boolean;
+}) {
+  const props = properties || getBlockProperties(blockId);
+  const keys = Object.keys(props).sort();
+  if (!keys.length) return null;
+  return <div className="replace-property-list">{keys.map((key) => <div className="replace-property" key={key}>
+    <span>{translateKey(key)}</span>
+    <Dropdown ariaLabel={translateKey(key)} value={value[key] || (exact ? props[key][0] : isTo ? "$keep" : "")} options={[
+      ...(exact ? [] : isTo ? [{ label: "保持原状态", value: "$keep" }] : [{ label: "全部状态", value: "" }]),
+      ...props[key].map((item) => ({ label: translateValue(key, item), value: item })),
+    ]} onChange={(item) => { const next = { ...value }; if (!item) delete next[key]; else next[key] = item; onChange(next); }} />
+  </div>)}</div>;
+}

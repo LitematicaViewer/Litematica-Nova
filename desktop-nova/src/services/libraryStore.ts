@@ -1,4 +1,5 @@
-import { normalizeLibraryCategoryIcon } from "./libraryCategoryIcons";
+import { LIBRARY_ICON_PRESETS, normalizeLibraryCategoryIcon } from "./libraryCategoryIcons";
+import { windowsPathKey } from "./filePathIdentity";
 import {
   readUserConfigFile,
   writeUserConfigFile,
@@ -73,18 +74,30 @@ export interface LibraryState {
   folders: LocalLibraryFolder[];
   categories?: LibraryCategory[];
   schemaVersion?: number;
+  trash?: LibraryTrashEntry[];
+}
+
+export interface LibraryTrashEntry {
+  id: string;
+  deletedAt: number;
+  name: string;
+  kind: "projection" | "category";
+  records: ProjectionRecord[];
+  /** Stable identities, including ancestors needed to restore a missing path. */
+  categories: LibraryCategory[];
 }
 
 const LIB_PATH = "projection-library/js_library.json";
 
 function folderKey(path: string): string {
-  return path.trim().replace(/[\\/]+$/, "").toLowerCase();
+  return windowsPathKey(path);
 }
 
 function normalizeFolder(folder: Partial<LocalLibraryFolder>, index: number): LocalLibraryFolder | null {
-  const path = typeof folder.path === "string" ? folder.path.trim().replace(/[\\/]+$/, "") : "";
+  const path = typeof folder.path === "string" ? folder.path.trim() : "";
   if (!path) return null;
   return {
+    ...folder,
     path,
     enabled: folder.enabled !== false,
     recursive: folder.recursive !== false,
@@ -95,12 +108,28 @@ function normalizeFolder(folder: Partial<LocalLibraryFolder>, index: number): Lo
   };
 }
 
-export const LIBRARY_CATEGORY_PRESETS = [
-  ["warehouse", "仓库", "Warehouse"], ["packer", "打包机", "Package"], ["crafting", "合成站", "Hammer"],
-  ["building", "建筑", "Building2"], ["farm", "农场", "Wheat"], ["cannon", "各类炮", "Crosshair"],
-  ["all-items", "全物品", "Boxes"], ["furnace", "熔炉组", "Flame"], ["trees", "树场", "Trees"],
-  ["mobs", "刷怪塔", "Skull"], ["stone", "刷石机", "Mountain"], ["iron", "刷铁机", "Anvil"], ["other", "杂项", "Folder"],
-] as const;
+function mergeRecordAliases(aliases: ProjectionRecord[]): ProjectionRecord {
+  const latest = [...aliases].sort((left, right) => right.lastAnalyzedAt - left.lastAnalyzedAt)[0];
+  const successful = aliases.filter((record) => record.status === "ok").sort((left, right) => right.lastAnalyzedAt - left.lastAnalyzedAt)[0] || latest;
+  const previews = aliases.filter((record) => record.preview_image_path || record.previewPath).sort((left, right) => (right.previewUpdatedAt || 0) - (left.previewUpdatedAt || 0));
+  const preview = previews[0];
+  return {
+    ...Object.assign({}, ...[...aliases].reverse()),
+    internalName: successful.internalName,
+    author: successful.author, description: successful.description,
+    totalBlocks: successful.totalBlocks, totalVolume: successful.totalVolume,
+    regionCount: successful.regionCount, regionNames: successful.regionNames,
+    enclosingSize: successful.enclosingSize, minecraftDataVersion: successful.minecraftDataVersion,
+    fileSize: latest.fileSize || aliases.find((record) => record.fileSize)?.fileSize || 0,
+    mtime: Math.max(...aliases.map((record) => record.mtime || 0)),
+    status: latest.status, lastError: latest.lastError, lastAnalyzedAt: latest.lastAnalyzedAt,
+    categoryIds: [...new Set(aliases.flatMap((record) => record.categoryIds || []))],
+    previewPath: preview?.previewPath || preview?.preview_image_path,
+    preview_image_path: preview?.preview_image_path || preview?.previewPath,
+    previewUpdatedAt: preview?.previewUpdatedAt,
+    sort_index: Math.min(...aliases.map((record) => record.sort_index ?? 0)),
+  };
+}
 
 export function normalizeLibraryState(raw?: Partial<LibraryState> | null): LibraryState {
   const categories: LibraryCategory[] = [];
@@ -108,15 +137,10 @@ export function normalizeLibraryState(raw?: Partial<LibraryState> | null): Libra
   for (const [index, entry] of (Array.isArray(raw?.categories) ? raw.categories : []).entries()) {
     if (!entry || typeof entry.id !== "string" || !entry.id || categoryIds.has(entry.id)) continue;
     categoryIds.add(entry.id);
-    categories.push({ id: entry.id, name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : "恢复的分类",
+    categories.push({ ...entry, id: entry.id, name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : "恢复的分类",
       parentId: typeof entry.parentId === "string" ? entry.parentId : null,
       sort_index: Number.isFinite(entry.sort_index) ? entry.sort_index : index,
       icon: normalizeLibraryCategoryIcon(entry.icon) });
-  }
-  // Seed only the initial migration. A user can rename/delete presets without their resurrection.
-  if ((raw?.schemaVersion || 0) < 2 && !categories.length) {
-    for (const [id, name, icon] of LIBRARY_CATEGORY_PRESETS) categories.push({ id: `builtin:${id}`, name, parentId: null, sort_index: categories.length, icon: { kind: "lucide", name: icon } });
-    for (const entry of categories) categoryIds.add(entry.id);
   }
   for (const entry of categories) {
     if (!entry.parentId || !categoryIds.has(entry.parentId)) { entry.parentId = null; continue; }
@@ -126,7 +150,8 @@ export function normalizeLibraryState(raw?: Partial<LibraryState> | null): Libra
       visited.add(parent.parentId); parent = categories.find((item) => item.id === parent!.parentId);
     }
   }
-  const records = (Array.isArray(raw?.records) ? raw.records : []).map((record, index) => {
+  const recordsByKey = new Map<string, ProjectionRecord[]>();
+  for (const [index, record] of (Array.isArray(raw?.records) ? raw.records : []).entries()) {
     const { tags, ...retained } = record;
     const ids = [...new Set((record.categoryIds || []).filter((id): id is string => typeof id === "string" && !!id))];
     // Multiple old tags become multiple memberships, never just the first tag.
@@ -147,23 +172,45 @@ export function normalizeLibraryState(raw?: Partial<LibraryState> | null): Libra
     }
     const fileName = fileNameFromPath(record.path);
     const regionNames = Array.isArray(record.regionNames) && record.regionNames.every((name) => typeof name === "string") ? [...record.regionNames] : undefined;
-    return { ...retained, fileName, displayName: fileName, regionNames, categoryIds: ids, sort_index: record.sort_index ?? index, preview_image_path: record.preview_image_path || record.previewPath };
-  });
-  const folders: LocalLibraryFolder[] = [];
-  const seen = new Set<string>();
+    const normalized = { ...retained, fileName, displayName: fileName, regionNames, categoryIds: ids, sort_index: record.sort_index ?? index, preview_image_path: record.preview_image_path || record.previewPath };
+    const key = windowsPathKey(record.path); const aliases = recordsByKey.get(key) || [];
+    aliases.push(normalized); recordsByKey.set(key, aliases);
+  }
+  const records = [...recordsByKey.values()].map((aliases) => aliases.length === 1 ? aliases[0] : mergeRecordAliases(aliases));
+  // Remove only untouched, unreferenced accidental v2 seeds. Unknown/custom fields are evidence to keep.
+  if ((raw?.schemaVersion || 0) < 3) {
+    const usedIds = new Set(records.flatMap((record) => record.categoryIds || []));
+    for (const category of raw?.categories || []) if (category.parentId) usedIds.add(category.parentId);
+    for (const [index, [id, name, icon]] of LIBRARY_ICON_PRESETS.entries()) {
+      const seedId = `builtin:${id}`; const original = raw?.categories?.find((category) => category.id === seedId);
+      if (!original || usedIds.has(seedId) || original.name !== name || original.parentId !== null || original.sort_index !== index || original.icon?.kind !== "lucide" || original.icon.name !== icon) continue;
+      if (Object.keys(original).some((key) => !["id", "name", "parentId", "sort_index", "icon"].includes(key)) || Object.keys(original.icon).some((key) => !["kind", "name"].includes(key))) continue;
+      const at = categories.findIndex((category) => category.id === seedId);
+      if (at >= 0) categories.splice(at, 1);
+    }
+  }
+  const foldersByKey = new Map<string, LocalLibraryFolder>();
   for (const [index, folder] of (raw?.folders || []).entries()) {
     const normalized = normalizeFolder(folder, index);
     if (!normalized) continue;
     const key = folderKey(normalized.path);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    folders.push(normalized);
+    const previous = foldersByKey.get(key);
+    if (!previous) foldersByKey.set(key, normalized);
+    else {
+      const latest = normalized.lastSyncedAt > previous.lastSyncedAt ? normalized : previous;
+      // Conservative migration: a disabled alias stays disabled; preserve either alias's scan coverage.
+      foldersByKey.set(key, { ...normalized, ...previous, enabled: previous.enabled && normalized.enabled, recursive: previous.recursive || normalized.recursive,
+        sort_index: Math.min(previous.sort_index, normalized.sort_index), lastSyncedAt: latest.lastSyncedAt, lastScanCount: latest.lastScanCount, lastError: latest.lastError });
+    }
   }
+  const folders = [...foldersByKey.values()];
   folders.sort((left, right) => left.sort_index - right.sort_index || left.path.localeCompare(right.path));
   folders.forEach((folder, index) => {
     folder.sort_index = index;
   });
-  return { records, folders, categories, schemaVersion: 2 };
+  const trash = (Array.isArray(raw?.trash) ? raw.trash : []).filter((entry) => entry && typeof entry.id === "string" && Array.isArray(entry.records) && Array.isArray(entry.categories))
+    .map((entry) => ({ ...entry, categories: entry.categories.map((category) => ({ ...category, icon: normalizeLibraryCategoryIcon(category.icon) })) }));
+  return { ...raw, records, folders, categories, trash, schemaVersion: 4 };
 }
 
 export function categoryDescendants(state: LibraryState, id: string): Set<string> {
@@ -207,14 +254,62 @@ export function updateLibraryCategory(state: LibraryState, id: string, patch: Pa
 export function deleteLibraryCategory(state: LibraryState, id: string): LibraryState {
   const next = normalizeLibraryState(state); const entry = next.categories!.find((item) => item.id === id);
   if (!entry) return next;
-  // Children and projection memberships move one level up; files and other memberships stay intact.
-  return { ...next, categories: next.categories!.filter((item) => item.id !== id).map((item) => item.parentId === id ? { ...item, parentId: entry.parentId } : item),
-    records: next.records.map((record) => ({ ...record, categoryIds: [...new Set((record.categoryIds || []).flatMap((categoryId) => categoryId === id ? (entry.parentId ? [entry.parentId] : []) : [categoryId]))] })) };
+  const removedIds = categoryDescendants(next, id);
+  const records = next.records.filter((record) => record.categoryIds?.some((categoryId) => removedIds.has(categoryId)));
+  const paths = new Set(records.map((record) => windowsPathKey(record.path)));
+  const snapshot = snapshotCategories(next, [...removedIds, ...records.flatMap((record) => record.categoryIds || [])]);
+  return { ...next, categories: next.categories!.filter((item) => !removedIds.has(item.id)),
+    records: next.records.filter((record) => !paths.has(windowsPathKey(record.path))),
+    trash: [...next.trash!, { id: trashId(), deletedAt: Date.now(), name: entry.name, kind: "category", records, categories: snapshot }] };
+}
+
+function trashId(): string { return `trash:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; }
+
+function snapshotCategories(state: LibraryState, ids: string[]): LibraryCategory[] {
+  const included = new Set<string>();
+  for (let id of ids) while (id && !included.has(id)) {
+    const category = state.categories?.find((entry) => entry.id === id);
+    if (!category) break;
+    included.add(id); id = category.parentId || "";
+  }
+  return state.categories!.filter((entry) => included.has(entry.id)).map((entry) => ({ ...entry, icon: { ...entry.icon } }));
+}
+
+/** Remove library memberships only. Original files and cached previews remain untouched. */
+export function trashLibraryRecords(state: LibraryState, records: ProjectionRecord[]): LibraryState {
+  const next = normalizeLibraryState(state);
+  const keys = new Set(records.map((record) => windowsPathKey(record.path)));
+  const selected = [...new Map([...records, ...next.records.filter((record) => keys.has(windowsPathKey(record.path)))].map((record) => [windowsPathKey(record.path), record])).values()];
+  if (!selected.length) return next;
+  return { ...next, records: next.records.filter((record) => !keys.has(windowsPathKey(record.path))),
+    trash: [...next.trash!, { id: trashId(), deletedAt: Date.now(), name: selected.length === 1 ? selected[0].displayName : `${selected.length} 个投影`,
+      kind: "projection", records: selected, categories: snapshotCategories(next, selected.flatMap((record) => record.categoryIds || [])) }] };
+}
+
+export function restoreLibraryTrash(state: LibraryState, id: string): LibraryState {
+  const next = normalizeLibraryState(state); const entry = next.trash!.find((item) => item.id === id);
+  if (!entry) return next;
+  const categories = [...next.categories!];
+  // Never resolve by name: a newly created namesake is a different category.
+  for (const saved of entry.categories) if (!categories.some((category) => category.id === saved.id)) categories.push({ ...saved, icon: { ...saved.icon } });
+  const records = [...next.records];
+  for (const saved of entry.records) {
+    const index = records.findIndex((record) => windowsPathKey(record.path) === windowsPathKey(saved.path));
+    if (index < 0) records.push({ ...saved, categoryIds: [...(saved.categoryIds || [])] });
+    else records[index] = { ...records[index], categoryIds: [...new Set([...(records[index].categoryIds || []), ...(saved.categoryIds || [])])] };
+  }
+  return normalizeLibraryState({ ...next, records, categories, trash: next.trash!.filter((item) => item.id !== id) });
+}
+
+/** Permanently discard Nova records, not user files. */
+export function discardLibraryTrash(state: LibraryState, id?: string): LibraryState {
+  const next = normalizeLibraryState(state);
+  return { ...next, trash: id ? next.trash!.filter((entry) => entry.id !== id) : [] };
 }
 
 export function moveLibraryRecordsToCategory(state: LibraryState, paths: string[], categoryId: string | null): LibraryState {
-  const next = normalizeLibraryState(state); assertCategoryParent(next, categoryId); const selected = new Set(paths);
-  return { ...next, records: next.records.map((record) => selected.has(record.path) ? { ...record, categoryIds: categoryId ? [categoryId] : [] } : record) };
+  const next = normalizeLibraryState(state); assertCategoryParent(next, categoryId); const selected = new Set(paths.map(windowsPathKey));
+  return { ...next, records: next.records.map((record) => selected.has(windowsPathKey(record.path)) ? { ...record, categoryIds: categoryId ? [categoryId] : [] } : record) };
 }
 
 function fileNameFromPath(filePath: string): string {
@@ -263,7 +358,7 @@ async function addOrUpdateRecordInternal(
     folders: [...state.folders],
   });
   if (!exists) {
-    const existingIdx = nextState.records.findIndex((record) => record.path === filePath);
+    const existingIdx = nextState.records.findIndex((record) => windowsPathKey(record.path) === windowsPathKey(filePath));
     if (existingIdx >= 0) {
       nextState.records[existingIdx].status = "missing";
       if (persist) return await persistLibraryState(nextState);
@@ -286,13 +381,14 @@ async function addOrUpdateRecordFromAnalysisInternal(
     records: [...state.records],
     folders: [...state.folders],
   });
-  const fileName = fileNameFromPath(filePath);
-  const existingIdx = nextState.records.findIndex((record) => record.path === filePath);
+  const existingIdx = nextState.records.findIndex((record) => windowsPathKey(record.path) === windowsPathKey(filePath));
   const existing = existingIdx >= 0 ? nextState.records[existingIdx] : null;
+  const retainedPath = existing?.path || filePath;
+  const fileName = fileNameFromPath(retainedPath);
 
   const record: ProjectionRecord = {
-    id: filePath,
-    path: filePath,
+    id: existing?.id || retainedPath,
+    path: retainedPath,
     fileName,
     displayName: fileName,
     internalName: analysis.internalName,
@@ -381,9 +477,9 @@ export async function addOrUpdateRecordFromAnalysis(
 export async function activateProjectionRecord(state: LibraryState, filePath: string): Promise<LibraryState> {
   const updatedState = normalizeLibraryState(state);
   const orderedRecords = [
-    ...updatedState.records.filter((record) => record.path === filePath),
+    ...updatedState.records.filter((record) => windowsPathKey(record.path) === windowsPathKey(filePath)),
     ...updatedState.records
-      .filter((record) => record.path !== filePath)
+      .filter((record) => windowsPathKey(record.path) !== windowsPathKey(filePath))
       .sort((left, right) => (left.sort_index ?? 0) - (right.sort_index ?? 0)),
   ].map((record, index) => ({ ...record, sort_index: index }));
   return await persistLibraryState({ ...updatedState, records: orderedRecords });
@@ -399,7 +495,7 @@ export async function searchLocalLibraryFolderRecords(
   const normalizedState = normalizeLibraryState(state);
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
-  const existingByPath = new Map(normalizedState.records.map((record) => [record.path, record]));
+  const existingByPath = new Map(normalizedState.records.map((record) => [windowsPathKey(record.path), record]));
   const foundByPath = new Map<string, ProjectionRecord>();
   for (const folder of normalizedState.folders.filter((item) => item.enabled)) {
     const entries = await listLitematicFileEntriesInDirectory(folder.path, folder.recursive);
@@ -407,14 +503,14 @@ export async function searchLocalLibraryFolderRecords(
       const fileName = entry.name || fileNameFromPath(entry.path);
       const searchable = `${fileName} ${entry.path}`.toLowerCase();
       if (!searchable.includes(needle)) continue;
-      foundByPath.set(entry.path, existingByPath.get(entry.path) || projectionRecordFromDirectoryEntry(entry));
+      foundByPath.set(windowsPathKey(entry.path), existingByPath.get(windowsPathKey(entry.path)) || projectionRecordFromDirectoryEntry(entry));
     }
   }
   return [...foundByPath.values()].sort((left, right) => left.fileName.localeCompare(right.fileName));
 }
 
 export async function addLocalLibraryFolder(state: LibraryState, folderPath: string): Promise<LibraryState> {
-  const normalizedPath = folderPath.trim().replace(/[\\/]+$/, "");
+  const normalizedPath = folderPath.trim();
   if (!normalizedPath) {
     return normalizeLibraryState(state);
   }
@@ -548,7 +644,7 @@ export async function setRecordPreview(state: LibraryState, filePath: string, pr
   const nextState = normalizeLibraryState({
     ...state,
     records: state.records.map((record) => {
-      if (record.path !== filePath) return record;
+      if (windowsPathKey(record.path) !== windowsPathKey(filePath)) return record;
       return {
         ...record,
         previewPath,
@@ -561,10 +657,10 @@ export async function setRecordPreview(state: LibraryState, filePath: string, pr
 }
 
 export async function reorderLibraryRecords(state: LibraryState, orderedPaths: string[]): Promise<LibraryState> {
-  const order = new Map(orderedPaths.map((path, index) => [path, index]));
+  const order = new Map(orderedPaths.map((path, index) => [windowsPathKey(path), index]));
   const records = state.records.map((record) => ({
     ...record,
-    sort_index: order.has(record.path) ? order.get(record.path)! : (record.sort_index ?? orderedPaths.length),
+    sort_index: order.has(windowsPathKey(record.path)) ? order.get(windowsPathKey(record.path))! : (record.sort_index ?? orderedPaths.length),
   }));
   return await persistLibraryState({ ...state, records });
 }

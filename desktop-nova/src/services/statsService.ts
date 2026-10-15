@@ -5,13 +5,16 @@ import {
   exportMaterialList,
   prepareMaterialRecipes,
   type ApplicationMaterialScope,
+  type MaterialWebExportOptions,
 } from "../platform/applicationOperations";
 import { writeTextFileAbsolute } from "./backend";
-import { translateBlockId, translateBuildingType } from "./i18n";
+import { translateBuildingType, resolveBlockDisplayName, subscribeI18nChanges } from "./i18n";
+import { windowsPathKey } from "./filePathIdentity";
 
 export interface MaterialItem {
   id: string;
   name: string;
+  sourceDisplayName?: string;
   count: number;
   blockCount: number;
   containerItemCount: number;
@@ -28,6 +31,7 @@ export interface MaterialItem {
 export interface NonItemBlock {
   id: string;
   name: string;
+  sourceDisplayName?: string;
   count: number;
   reason: "no_item" | "unknown";
 }
@@ -53,6 +57,8 @@ export interface LayerInfo {
   unique_block_types: number;
 }
 
+export interface StructuralBlockCount { id: string; count: number }
+
 export interface StatsData {
   totalNonAirBlocks: number;
   regionCount: number;
@@ -63,11 +69,14 @@ export interface StatsData {
   fluidRatio: number | null;
   entityCount: number;
   materials: MaterialItem[];
+  structuralBlocks: StructuralBlockCount[];
+  hasStructuralBlockCounts: boolean;
   nonItemBlocks: NonItemBlock[];
   regions: RegionInfo[];
   layers: LayerInfo[];
   containerScan: ContainerScanSummary;
   raw: any;
+  timing?: { requestStarted: number; mappedAt: number; cacheReused: boolean };
 }
 
 function mapMaterial(raw: any): MaterialItem {
@@ -77,7 +86,8 @@ function mapMaterial(raw: any): MaterialItem {
   const totalCount = Number(raw.total_count ?? raw.count ?? blockCount + containerItemCount);
   return {
     id,
-    name: raw.display_name || translateBlockId(id) || id,
+    name: resolveBlockDisplayName(id, raw.display_name),
+    sourceDisplayName: String(raw.display_name || ""),
     count: totalCount,
     blockCount,
     containerItemCount,
@@ -115,14 +125,15 @@ export function mapStructureStats(parsed: any, includeContainerItems = false): S
   const nonItemBlocks = (parsed.non_item_blocks || matList.filter((entry: any) => entry.material_status !== "item"))
     .map((entry: any): NonItemBlock => ({
       id: entry.block_id || entry.id || "",
-      name: entry.display_name || translateBlockId(entry.block_id || entry.id || ""),
+      name: resolveBlockDisplayName(entry.block_id || entry.id || "", entry.display_name),
+      sourceDisplayName: String(entry.display_name || ""),
       count: Number(entry.block_count ?? entry.count ?? 0),
       reason: entry.reason === "no_item" || entry.material_status === "no_item" ? "no_item" : "unknown",
     }));
 
   return {
     totalNonAirBlocks: stats.total_non_air_blocks || 0,
-    regionCount: stats.total_regions || meta.region_count || 0,
+    regionCount: stats.total_regions ?? meta.region_count ?? 0,
     enclosingSize: meta.enclosing_size || { x: 0, y: 0, z: 0 },
     density,
     buildingType: parsed.derived?.building?.building_type ? translateBuildingType(parsed.derived.building.building_type) : "未提供",
@@ -130,6 +141,8 @@ export function mapStructureStats(parsed: any, includeContainerItems = false): S
     fluidRatio: Number.isFinite(parsed.derived?.building?.fluid_ratio) ? parsed.derived.building.fluid_ratio : null,
     entityCount: entitySum.total_entities || 0,
     materials,
+    structuralBlocks: (parsed.structural_block_counts || []).map((row: any) => ({ id: String(row.block_id || ""), count: Number(row.count || 0) })),
+    hasStructuralBlockCounts: Array.isArray(parsed.structural_block_counts),
     nonItemBlocks,
     regions,
     layers,
@@ -144,14 +157,27 @@ export function mapStructureStats(parsed: any, includeContainerItems = false): S
 }
 
 export async function loadStructureStats(filePath: string, includeContainerItems = false): Promise<StatsData> {
-  const key = JSON.stringify([filePath, includeContainerItems]);
+  const key = JSON.stringify([windowsPathKey(filePath), includeContainerItems]);
   const existing = statsInFlight.get(key);
   if (existing) return existing;
+  const cached = statsCompleted.get(key);
   const started = performance.now();
-  const pending = getProjectStats({ sourcePath: filePath, includeContainerItems }).then(analysis => {
+  const pending = getProjectStats({ sourcePath: filePath, includeContainerItems, knownRevision: cached?.data.hasStructuralBlockCounts ? cached.revision : undefined }).then(analysis => {
     const received = performance.now();
+    if (analysis.cache_unchanged) {
+      if (!cached || analysis.source_revision !== cached.revision) throw new Error("统计缓存已变化，请重新分析");
+      cached.data.timing = { requestStarted: started, mappedAt: received, cacheReused: true };
+      console.info(`[NOVA_STATS_TIMING] webview_request_roundtrip_ms=${(received - started).toFixed(3)} map_ms=0.000 cache_reused=true`);
+      return cached.data;
+    }
     const result = mapStructureStats(analysis, includeContainerItems);
-    console.info(`[NOVA_STATS_TIMING] webview_request_roundtrip_ms=${(received - started).toFixed(3)} map_ms=${(performance.now() - received).toFixed(3)}`);
+    result.timing = { requestStarted: started, mappedAt: performance.now(), cacheReused: false };
+    if (analysis.source_revision) {
+      statsCompleted.delete(key);
+      if (statsCompleted.size >= 8) statsCompleted.delete(statsCompleted.keys().next().value!);
+      statsCompleted.set(key, { revision: analysis.source_revision, data: result });
+    }
+    console.info(`[NOVA_STATS_TIMING] webview_request_roundtrip_ms=${(received - started).toFixed(3)} map_ms=${(performance.now() - received).toFixed(3)} cache_reused=false`);
     return result;
   });
   statsInFlight.set(key, pending);
@@ -159,10 +185,26 @@ export async function loadStructureStats(filePath: string, includeContainerItems
   finally { if (statsInFlight.get(key) === pending) statsInFlight.delete(key); }
 }
 
-// Only concurrent calls share a promise. Completed results are revalidated by
-// the Application Host against source metadata, never cached by file name here.
+// Completed mappings are reused only after Application Host source-revision
+// validation. No full analysis or unvalidated filename cache on page switches.
 const statsInFlight = new Map<string, Promise<StatsData>>();
+const statsCompleted = new Map<string, { revision: string; data: StatsData }>();
 const materialsInFlight = new Map<string, Promise<MaterialItem[]>>();
+
+export function materialDisplayName(material: Pick<MaterialItem, "id" | "name" | "sourceDisplayName">): string {
+  return resolveBlockDisplayName(material.id, material.sourceDisplayName ?? material.name);
+}
+
+/** Keep quantities, channels, scopes and source revisions untouched. */
+export function refreshStatisticsNames(data: StatsData): StatsData {
+  for (const material of data.materials) material.name = materialDisplayName(material);
+  for (const block of data.nonItemBlocks) block.name = materialDisplayName(block);
+  return data;
+}
+
+subscribeI18nChanges(() => {
+  for (const cached of statsCompleted.values()) refreshStatisticsNames(cached.data);
+});
 
 export async function fetchMaterialRecipeCache(): Promise<void> {
   const status = await prepareMaterialRecipes("26.3");
@@ -178,7 +220,7 @@ export async function loadMaterialsScope(
   scope: ApplicationMaterialScope,
   includeContainerItems = false,
 ): Promise<MaterialItem[]> {
-  const key = JSON.stringify([filePath, scope.kind, scope.value, includeContainerItems]);
+  const key = JSON.stringify([windowsPathKey(filePath), scope.kind, scope.value, includeContainerItems]);
   const existing = materialsInFlight.get(key);
   if (existing) return existing;
   const pending = getProjectMaterials({
@@ -218,8 +260,14 @@ export function formatMaterialQuantity(material: MaterialItem, count: number, as
   return formatMaterialUnits(total, material.stackSize);
 }
 
+export async function loadStructuralBlocks(filePath: string): Promise<StructuralBlockCount[]> {
+  const data = await loadStructureStats(filePath);
+  if (!data.hasStructuralBlockCounts) throw new Error("统计核心缺少原始结构方块数据，请更新统计核心");
+  return data.structuralBlocks;
+}
+
 export function hasInventoryMaterialSemantics(analysis: any): boolean {
-  return analysis?.material_semantics === "minecraft-26.3-inventory-v2";
+  return analysis?.material_semantics === "minecraft-inventory-v5";
 }
 
 function csvEscape(value: string | number): string {
@@ -262,8 +310,14 @@ export async function exportMaterials(
 export async function exportMaterialListWithOptions(filePath: string, options: {
   scope: ApplicationMaterialScope; includeContainerItems: boolean; multiplier: number;
   minecraftVersion: string; terminalRawMaterials: boolean; format: "svg" | "txt" | "html" | "csv";
+  webOptions?: MaterialWebExportOptions;
 }): Promise<boolean> {
-  const extension = options.format;
+  const multiplayer = options.format === "html" && options.webOptions?.mode === "multi";
+  if (multiplayer && (!options.webOptions?.accessPassword?.trim() || !options.webOptions?.adminPassword?.trim())) {
+    throw new Error("多人网页包需要访问密码和管理员密码");
+  }
+  if (multiplayer && !options.webOptions?.targets.length) throw new Error("请至少选择一个真实 Stockpile 服务平台");
+  const extension = multiplayer ? "zip" : options.format;
   const savePath = await saveDialog({
     defaultPath: defaultExportName(filePath).replace(/\.csv$/, `.${extension}`),
     filters: [{ name: extension.toUpperCase(), extensions: [extension] }],
@@ -271,4 +325,9 @@ export async function exportMaterialListWithOptions(filePath: string, options: {
   if (!savePath) return false;
   await exportMaterialList({ sourcePath: filePath, ...options, outputPath: savePath });
   return true;
+}
+
+export function filterMaterialItems(materials: readonly MaterialItem[], query: string): MaterialItem[] {
+  const search = query.trim().toLocaleLowerCase();
+  return materials.filter(material => `${material.name} ${material.id}`.toLocaleLowerCase().includes(search));
 }

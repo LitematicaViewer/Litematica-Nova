@@ -14,6 +14,12 @@ export type ThemeName = "shadcn" | "8bitcn" | "Minecraft";
 export type ColorMode = "light" | "dark" | "system";
 export type MaterialListWindowBehavior = "independent_window" | "main_window_overlay";
 const DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT = 3;
+const DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES = [
+  "理论版本 = version(L)",
+  "生存不可达 = any(L & survival_impossible)",
+] as const;
+
+
 
 export function normalizeShowUiTestPage(value: unknown): boolean {
   return value !== false;
@@ -36,6 +42,14 @@ export function normalizeMaterialListWindowBehavior(value: unknown): MaterialLis
 export function normalizeLocalLibraryTailPathCount(value: unknown): number {
   const numeric = Math.floor(Number(value));
   return Number.isFinite(numeric) && numeric >= 1 ? numeric : DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT;
+}
+
+export function normalizeStatisticsEnumeratorInfoRules(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES];
+  const normalized = value
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : [...DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES];
 }
 
 let configHydration: Promise<UserConfigInfo> | null = null;
@@ -100,3 +114,10 @@ export async function saveLocalLibraryTailPathCountConfig(count: number): Promis
 export async function saveShowUiTestPageConfig(show: boolean): Promise<UserConfigInfo> {
   return await saveUserConfig({ show_ui_test_page: normalizeShowUiTestPage(show) });
 }
+export async function saveStatisticsEnumeratorInfoRulesConfig(rules: string[]): Promise<UserConfigInfo> {
+  return await saveUserConfig({
+    statistics_enumerator_info_rules: normalizeStatisticsEnumeratorInfoRules(rules),
+  });
+}
+
+export { DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES };

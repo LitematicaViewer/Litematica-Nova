@@ -10,7 +10,7 @@ import {
   importDownloadedLitematic,
   notifyRedenImport,
   redenExternalDriveLink,
-  openExternalPath,
+  openExternalUrl,
   loadLibrary,
   loadUserConfigMigratingLocalStorage,
   normalizeMaterialListWindowBehavior,
@@ -168,7 +168,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
       const drive = ["quark", "baidu"].includes(output.provider);
       const label = output.provider === "quark" ? "夸克网盘" : output.provider === "baidu" ? "百度网盘" : ONLINE_PROJECTION_PROVIDERS.find(item => item.id === output.provider)?.name || "原站";
       setExternalLink({ url: output.url, label, drive });
-      setRedenStatus("附件需在原站/网盘完成；尚未下载或入库，请确认是否在系统浏览器打开。");
+      setRedenStatus("此附件需在原站下载，是否打开浏览器？");
       return;
     }
     try {
@@ -183,7 +183,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
     if (!externalLink) return;
     setRedenBusy("external:open");
     try {
-      await openExternalPath(externalLink.url);
+      await openExternalUrl(externalLink.url);
       setRedenStatus(`已在系统浏览器打开 ${externalLink.label}；下载后请从本地导入。`);
       setExternalLink(null);
     } catch (error) { setRedenStatus(`系统浏览器打开失败：${String(error)}`); }
@@ -243,7 +243,6 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
         </div>
         {onClose ? <Button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}><X size={18} aria-hidden="true" /></Button> : null}
       </div>
-      <p className="muted subwindow-subtitle">真实前端接口适配 · 每站并发 1 / 间隔至少 2 秒 · 查询缓存 30 秒</p>
 
       <div className="subwindow-body">
         <div className="subwindow-toolbar subwindow-wrap-row" aria-label="在线资源来源">
@@ -252,11 +251,9 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
         </div>
         {provider.mode === "website" ? <section className="reden-detail-stack">
           <h4>{provider.name} · 仅网页访问</h4>
-          <p>{provider.note}</p><p>{provider.url}</p>
+          <p>{provider.url}</p>
           <Button disabled={!!redenBusy} onClick={() => setExternalLink({ url: provider.url, label: provider.name, drive: false })}>在系统浏览器打开原站</Button>
-          <p className="muted">限制来自本轮实际站点响应/链路验证状态，不以缺公开文档为理由跳过。</p>
         </section> : <>
-        <p className="muted">{provider.note}</p>
         <div className="subwindow-toolbar subwindow-wrap-row">
           <Input
             className="input nova-input-flex"

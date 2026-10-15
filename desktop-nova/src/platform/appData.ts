@@ -1,5 +1,19 @@
 import { invoke } from "./tauri";
 
+export interface V5CompatibilityConfig {
+  backend: "auto" | "vulkan" | "iris-gl46";
+  shaderpack_root: string;
+  shaderpack_name: string;
+  iris_fallback: "fail" | "vulkan";
+  fabric_mods_dir: string;
+  resource_packs: string[];
+}
+
+export interface ViewerControlConfig {
+  allow_time_modification: boolean;
+  allow_weather_modification: boolean;
+}
+
 export interface UserConfig {
   theme: string;
   color_mode: "light" | "dark" | "system";
@@ -8,6 +22,9 @@ export interface UserConfig {
   material_list_window_behavior: string;
   show_ui_test_page: boolean;
   local_library_tail_path_count: number;
+  statistics_enumerator_info_rules: string[];
+  v5_compatibility: V5CompatibilityConfig;
+  viewer_controls: ViewerControlConfig;
 }
 
 export interface UserConfigInfo {

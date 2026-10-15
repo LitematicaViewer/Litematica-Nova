@@ -178,7 +178,8 @@ export function CreativeInventoryDialog({
     const slotBlockId = quickbarSlots[index] || "";
     if (carryBlockId) {
       onChangeQuickbarSlots((current) => current.map((value, slotIndex) => slotIndex === index ? carryBlockId : value));
-      setCarryBlockId("");
+      setCarryBlockId(slotBlockId);
+      setCarryPosition({ x: event.clientX, y: event.clientY });
       return;
     }
     if (!slotBlockId) return;
@@ -226,7 +227,7 @@ export function CreativeInventoryDialog({
                     onMouseMove={(event) => handleHoverItem(blockId, event)}
                     onMouseLeave={handleHoverLeave}
                   >
-                    <BlockIcon blockId={blockId} />
+                    <BlockIcon blockId={blockId} lookupMode="block_first" />
                   </Button>
                 ) : (
                   <div key={`empty-${index}`} className="flake-page__creative-slot is-empty" aria-hidden />
@@ -244,7 +245,7 @@ export function CreativeInventoryDialog({
                     onMouseMove={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
                     onMouseLeave={blockId ? handleHoverLeave : undefined}
                   >
-                    {blockId ? <BlockIcon blockId={blockId} /> : null}
+                    {blockId ? <BlockIcon blockId={blockId} lookupMode="block_first" /> : null}
                   </Button>
                 ))}
               </div>
@@ -260,7 +261,7 @@ export function CreativeInventoryDialog({
       </section>
       {carryBlockId ? (
         <div ref={carryPreviewRef} className="flake-page__creative-carry-preview">
-          <BlockIcon blockId={carryBlockId} />
+          <BlockIcon blockId={carryBlockId} lookupMode="block_first" />
         </div>
       ) : null}
       {!carryBlockId ? <CreativeInventoryTooltip x={hoverPosition.x} y={hoverPosition.y} item={hoverItem} /> : null}

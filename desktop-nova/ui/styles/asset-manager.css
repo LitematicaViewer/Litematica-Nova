@@ -1,0 +1,333 @@
+/* Game-resource manager window.
+   Adapted from the pre-merge design (base.css L200-395), which was dropped by the
+   merge. Structure: fixed sidebar nav + content column (heading / form / actions /
+   list / footer). Downstream selectors are keyboard-friendly native <select>
+   elements styled like text inputs. */
+
+.game-resource-active {
+    line-height: 1.5;
+    opacity: .82;
+}
+
+.game-resource-actions,
+.game-resource-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.game-resource-actions {
+    margin-bottom: 8px;
+}
+
+.game-resource-health {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.game-resource-health-ok {
+    color: var(--foreground);
+}
+
+.game-resource-health-failed {
+    color: var(--destructive);
+}
+
+.game-resource-kind {
+    margin-top: 10px;
+}
+
+.game-resource-kind-title {
+    margin-bottom: 6px;
+    font-weight: 700;
+}
+
+.game-resource-path {
+    word-break: break-all;
+}
+
+.game-resource-note {
+    margin-top: 8px;
+    font-size: .9em;
+    opacity: .72;
+}
+
+.game-resource-row-actions {
+    gap: 6px;
+}
+
+/* ── window frame ─────────────────────────────────────────────────────────── */
+
+.asset-manager-window {
+    min-width: 0;
+}
+
+/* Window chrome: title row, then the sidebar/body split. */
+.asset-manager-window {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    box-sizing: border-box;
+}
+
+.asset-manager-header {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+}
+
+.asset-manager-title {
+    margin: 0;
+    font-size: 1em;
+}
+
+.asset-manager-window .subwindow-close-button {
+    min-width: 28px;
+    line-height: 1;
+}
+
+.asset-manager-window > .asset-manager-body {
+    display: flex;
+    min-height: 0;
+    flex-direction: row;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.asset-manager-sidebar {
+    flex-basis: 188px;
+    width: 188px;
+    min-width: 188px;
+    border-right: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+}
+
+/* Sidebar category list (self-contained: the pre-merge `.sidebar`/`.nav-list`
+   classes no longer exist in this architecture). */
+.asset-manager-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+    overflow: auto;
+    height: 100%;
+    box-sizing: border-box;
+}
+
+.asset-manager-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    justify-content: flex-start;
+    text-align: left;
+}
+
+.asset-manager-nav-item.active {
+    font-weight: 700;
+    outline: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+}
+
+.asset-manager-nav-icon {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+}
+
+.asset-manager-content {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    overflow: hidden;
+}
+
+.asset-manager-heading {
+    flex: 0 0 auto;
+}
+
+.asset-manager-heading h3 {
+    margin: 0 0 4px;
+}
+
+.asset-manager-heading p {
+    margin: 0;
+}
+
+.asset-manager-panel {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+}
+
+/* ── configuration form ───────────────────────────────────────────────────── */
+
+/* Line.2 来源 spans the row; Line.3 子选项1 + 子选项2 sit side by side (2×2). */
+.asset-manager-config {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.asset-manager-form-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 12px;
+}
+
+.asset-manager-form-row-suboptions {
+    align-items: center;
+}
+
+/* The two sub-option selects share the available width evenly. */
+.asset-manager-form-row-suboptions .asset-manager-inline-controls > .asset-manager-select {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.asset-manager-form-row-top {
+    align-items: flex-start;
+}
+
+.asset-manager-form-row-wide {
+    grid-column: 1 / -1;
+}
+
+.asset-manager-form-label {
+    flex: 0 0 72px;
+    color: var(--ln-muted-text-color, GrayText);
+}
+
+.asset-manager-inline-controls {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* Native <select> keeps keyboard behaviour while looking like a text input. */
+.asset-manager-select {
+    min-width: 0;
+    flex: 1;
+}
+
+.asset-manager-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.asset-manager-fetch-row {
+    align-items: center;
+}
+
+.asset-manager-health {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
+}
+
+.asset-manager-table-wrap {
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+}
+
+/* Self-contained table styling: the pre-merge `.table` / `.table-wrap` helpers
+   are not part of this architecture. */
+.asset-manager-table-wrap table {
+    width: 100%;
+    border-collapse: collapse;
+    font: inherit;
+}
+
+.asset-manager-table-wrap th,
+.asset-manager-table-wrap td {
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+}
+
+.asset-manager-table-wrap thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    font-weight: 700;
+    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
+}
+
+.asset-manager-table-wrap tbody tr:hover {
+    background: var(--ln-ui-hover-background-color, rgba(128, 128, 128, .12));
+}
+
+.asset-manager-heading .muted {
+    color: var(--ln-muted-text-color, GrayText);
+}
+
+.asset-manager-empty-row {
+    padding: 18px 12px;
+    color: var(--ln-muted-text-color, GrayText);
+    text-align: center;
+}
+
+.asset-manager-log {
+    max-height: 180px;
+    overflow: auto;
+}
+
+.asset-manager-footer {
+    display: flex;
+    flex: 0 0 auto;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
+}
+
+.asset-manager-footer-status {
+    min-width: 0;
+    flex: 1;
+}
+
+.asset-manager-footer-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+/* Narrow windows: stack the two sub-option selects. */
+@media (max-width: 640px) {
+    .asset-manager-form-row-suboptions .asset-manager-inline-controls > .asset-manager-select {
+        flex: 1 1 100%;
+    }
+}
+
+.asset-manager-root { width: 100%; height: 100%; min-width: 0; min-height: 0; }

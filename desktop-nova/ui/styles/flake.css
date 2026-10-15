@@ -9,7 +9,22 @@
     overflow: hidden;
     cursor: grab;
     image-rendering: pixelated;
-    background: #1b1b1b;
+    background: var(--ln-ui-control-background-color, var(--background, Canvas));
+}
+
+.flake-visual-status {
+    position: absolute;
+    left: var(--ln-space-2);
+    bottom: var(--ln-space-2);
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: var(--ln-space-2);
+    max-width: calc(100% - 1rem);
+    padding: var(--ln-space-2);
+    font-size: .8125rem;
+    color: var(--ln-body-text-color, var(--foreground, CanvasText));
+    background: var(--ln-ui-control-background-color, var(--background, Canvas));
 }
 
 .flake-canvas.is-dragging {

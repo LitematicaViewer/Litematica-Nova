@@ -7,6 +7,9 @@ import {
     loadStructureStats,
     mapStructureStats,
     recordStatisticsCommit,
+    refreshStatisticsNames,
+    getI18nRevision,
+    subscribeI18nChanges,
     subscribeApplicationRender,
     StatsData,
 } from "../../../src/business/facade";
@@ -30,9 +33,10 @@ const initialFileFromUrl = () => {
 };
 
 /**
- * Standalone material-list window that follows the main shell theme.
+ * Standalone material export settings that follow the main shell theme.
  */
 export function MaterialListWindow() {
+    const languageRevision = useSyncExternalStore(subscribeI18nChanges,getI18nRevision,getI18nRevision);
     const applicationRender = useSyncExternalStore(
         subscribeApplicationRender,
         getApplicationRenderState,
@@ -40,9 +44,11 @@ export function MaterialListWindow() {
     );
     const [themeId, setThemeId] = useState(currentThemeId);
     const [currentFile, setCurrentFile] = useState(initialFileFromUrl());
+    const [viewMode, setViewMode] = useState<"details" | "export">(() => new URLSearchParams(window.location.search).get("viewMode") === "export" ? "export" : "details");
     const [data, setData] = useState<StatsData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState("");
+    const namedData = useMemo(() => data ? refreshStatisticsNames(data) : null,[data,languageRevision]);
     const renderOperation = useMemo(
         () => findRenderOperationForSource(currentFile, applicationRender),
         [applicationRender.operations, currentFile],
@@ -65,6 +71,11 @@ export function MaterialListWindow() {
         return () => {
             unlistenPromise.then((unlisten) => unlisten?.());
         };
+    }, []);
+
+    useEffect(() => {
+        const pending = listenEvent<string>("material-list-open-mode", (event) => setViewMode(event.payload === "export" ? "export" : "details")).catch(() => undefined);
+        return () => { void pending.then((unlisten) => unlisten?.()); };
     }, []);
 
     useEffect(() => {
@@ -104,13 +115,13 @@ export function MaterialListWindow() {
     return (
         <main className={["material-list-window", themeClassName(themeId)].filter(Boolean).join(" ")}>
             {!currentFile ? (
-                <div className="material-list-window-state">请先从主窗口选择一个投影文件并打开材料列表。</div>
+                <div className="material-list-window-state">请先从主窗口选择投影并打开材料列表。</div>
             ) : isLoading ? (
-                <div className="material-list-window-state">正在分析材料列表...</div>
+                <div className="material-list-window-state">正在读取材料列表...</div>
             ) : error ? (
                 <pre className="material-list-window-state material-list-window-error">{error}</pre>
-            ) : data ? (
-                <Profiler id="material-list" onRender={recordStatisticsCommit}><MaterialListContent key={currentFile} data={data} currentFile={currentFile} standalone /></Profiler>
+            ) : namedData ? (
+                <Profiler id="material-list" onRender={recordStatisticsCommit}><MaterialListContent key={currentFile} data={namedData} currentFile={currentFile} viewMode={viewMode} onViewModeChange={setViewMode} standalone /></Profiler>
             ) : (
                 <div className="material-list-window-state">暂无材料数据。</div>
             )}

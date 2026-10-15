@@ -1,5 +1,6 @@
 import { invoke } from "./tauri";
 import type { PresentationIntent, PresentationPlacement } from "./applicationRender";
+import { windowsPathKey } from "../services/filePathIdentity";
 
 export interface QuickPreviewView {
   previewId: string;
@@ -10,7 +11,23 @@ export interface QuickPreviewView {
   presentationRevision: number;
   visible: boolean;
   error: string | null;
+  preload?: boolean;
+  resource?: QuickResourceReport | null;
 }
+
+export interface QuickResourceReport {
+  schema: "nova.quick.resource.v1";
+  requestId: string;
+  sourceBytes: number;
+  preload: boolean;
+  pressure: "unmeasured" | "normal" | "warning" | "hard" | "invalid";
+  pressureBasisPoints: number | null;
+  budget: { adapterName: string; budgetBytes: number; currentUsageBytes: number; safeAvailableBytes: number } | null;
+  estimate: { gpuResidentUpperBytes: number; gpuPeakUpperBytes: number; uploadStagingUpperBytes: number } | null;
+  invalidReason: string | null;
+  decisionRequired: boolean;
+}
+export type QuickResourceAction = "preload" | "realtime" | "reduced_realtime" | "cancel";
 
 let snapshot: QuickPreviewView | null = null;
 const listeners = new Set<() => void>();
@@ -32,8 +49,7 @@ function publish(next: QuickPreviewView | null) {
 }
 export function getQuickPreviewState() { return snapshot; }
 export function quickPreviewForSource(sourcePath: string, value = snapshot) {
-  const key = (path: string) => path.replace(/^\\\\\?\\/, "").replace(/\//g, "\\").toLowerCase();
-  return value && key(value.sourcePath) === key(sourcePath) ? value : null;
+  return value && windowsPathKey(value.sourcePath) === windowsPathKey(sourcePath) ? value : null;
 }
 export function refreshQuickPreview(): Promise<void> {
   if (refreshing) return refreshing;
@@ -51,7 +67,7 @@ function schedule() {
     void refreshQuickPreview().catch((error) => {
       if (snapshot) publish({ ...snapshot, error: String(error) });
     }).finally(schedule);
-  }, snapshot?.state === "starting" ? 250 : 750);
+  }, snapshot?.state === "starting" || (snapshot && desired.get(snapshot.previewId)?.visible && !snapshot.visible) ? 8 : 750);
 }
 export function subscribeQuickPreview(listener: () => void) {
   listeners.add(listener);
@@ -61,11 +77,20 @@ export function subscribeQuickPreview(listener: () => void) {
     if (!listeners.size && timer) { clearTimeout(timer); timer = undefined; }
   };
 }
-export async function startQuickPreview(sourcePath: string) {
+export async function startQuickPreview(sourcePath: string, preload = false, clickStartedAtEpochMs = Date.now()) {
   ++snapshotRevision;
-  const value = await invoke<QuickPreviewView>("application_quick_preview_start", { input: { sourcePath } });
+  const value = await invoke<QuickPreviewView>("application_quick_preview_start", { input: { sourcePath, ...(preload ? { preload } : {}), clickStartedAtEpochMs } });
   ++snapshotRevision;
   publish(value);
+  schedule();
+  return value;
+}
+export async function decideQuickPreviewResources(previewId: string, action: QuickResourceAction, warningConfirmed = false) {
+  if (snapshot?.previewId !== previewId) throw new Error("预算决策不属于当前快速预览");
+  ++snapshotRevision;
+  const value = await invoke<QuickPreviewView>("application_quick_preview_resource_decision", { previewId, action, warningConfirmed });
+  ++snapshotRevision;
+  if (snapshot?.previewId === previewId) publish(value);
   return value;
 }
 export async function closeQuickPreview(previewId: string) {
@@ -85,11 +110,12 @@ function enqueue(previewId: string, intent: PresentationIntent): Promise<void> {
   pending.set(previewId, (pending.get(previewId) ?? 0) + 1);
   const immutable = { ...intent, placement: intent.placement ? { ...intent.placement } : null };
   desired.set(previewId, immutable);
+  schedule();
   const send = async () => {
     if (presentationRevisions.get(previewId) !== revision) return;
     const value = await invoke<QuickPreviewView>("application_quick_preview_present", { previewId, intent: immutable, revision });
     ++snapshotRevision;
-    if (snapshot?.previewId === previewId && presentationRevisions.get(previewId) === revision) publish(value);
+    if (snapshot?.previewId === previewId && presentationRevisions.get(previewId) === revision) { publish(value); schedule(); }
   };
   // Hide is a visibility barrier, not a queued layout update. It must reach the
   // Host without waiting for an obsolete show; the Host rejects older revisions.

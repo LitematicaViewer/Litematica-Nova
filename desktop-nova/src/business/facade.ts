@@ -12,13 +12,15 @@ export * from "../services/libraryStore";
 export * from "../services/redenLibrary";
 export * from "../services/renderMode";
 export * from "../services/renderService";
+export { windowsPathKey } from "../services/filePathIdentity";
 export * from "../platform/applicationRender";
 export * from "../services/statsService";
 export * from "../services/userConfig";
 
 export * from "../services/flakeService";
 export * from "../services/containerService";
-export { loadEnumeratorCollections, buildMapColorLookup, type EnumeratorCollection } from "../services/enumeratorService";
-export { resolveFlakeLayerBlockImage, extractLayerPaletteStates } from "../services/flakeStateHintResolver";
+export * from "../services/enumeratorService";
+export * from "../services/gameResources";
+export { resolveFlakeLayerBlockImage, extractLayerPaletteStates, clearFlakeStateHintImageCache } from "../services/flakeStateHintResolver";
 
 export * from "../platform/quickPreview";

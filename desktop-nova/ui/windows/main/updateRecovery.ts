@@ -1,7 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { listenEvent } from "../../../src/platform/events";
+import { confirmApplicationClose, getApplicationCloseRequest, requestApplicationClose, type ApplicationCloseRequest } from "../../../src/platform/applicationOperations";
 
 const KEY = "nova.update-recovery.v1";
 const captures = new Map<string, () => unknown>();
+const closingRequests = new Set<number>();
+const handledCloseRequests = new Set<number>();
 
 function readAll(): Record<string, unknown> {
   const raw = localStorage.getItem(KEY);
@@ -38,6 +42,53 @@ export function preserveUpdateDrafts() {
   localStorage.setItem(KEY, JSON.stringify(all));
 }
 
+/** Native X stays visible until this synchronous storage transaction succeeds.
+ * It preserves recovery drafts, never writes edits back into the source file. */
+export async function preserveDraftsForClose(requestId: number): Promise<void> {
+  if (closingRequests.has(requestId) || handledCloseRequests.has(requestId)) return;
+  closingRequests.add(requestId);
+  try {
+    try { preserveUpdateDrafts(); }
+    catch (error) {
+      await confirmApplicationClose(requestId, false).catch(() => undefined);
+      console.error("[NOVA_LIFECYCLE] draft preservation failed; close cancelled", error);
+      throw new Error("草稿保留失败，请先保存当前编辑，再重试关闭。当前窗口仍保持打开。");
+    }
+    await confirmApplicationClose(requestId, true);
+    handledCloseRequests.add(requestId);
+    if (handledCloseRequests.size > 32) handledCloseRequests.delete(handledCloseRequests.values().next().value!);
+  } finally { closingRequests.delete(requestId); }
+}
+
+export function useApplicationCloseRecovery() {
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    const accept = (request: ApplicationCloseRequest) => {
+      if (!active) return;
+      setError("");
+      void preserveDraftsForClose(request.requestId).catch(reason => { if (active) setError(String(reason)); });
+    };
+    // Register independently of config hydration and network updater checks.
+    const listening = listenEvent<ApplicationCloseRequest>("nova-close-requested", event => accept(event.payload));
+    void listening.then(async () => {
+      // An X pressed before the asynchronous listener finished is not lost.
+      const pending = await getApplicationCloseRequest();
+      if (pending) accept(pending);
+    }).catch(reason => { if (active) setError(`关闭保护未连接，请重试关闭：${String(reason)}`); });
+    const cancelled = listenEvent<{ message: string }>("nova-close-cancelled", event => { if (active) setError(event.payload.message); });
+    return () => {
+      active = false;
+      void listening.then(stop => stop()).catch(() => undefined);
+      void cancelled.then(stop => stop()).catch(() => undefined);
+    };
+  }, []);
+  return { error, retry: async () => {
+    setError("");
+    try { await requestApplicationClose(); } catch (reason) { setError(String(reason)); }
+  } };
+}
+
 export function clearCurrentUpdateDrafts() {
   const all = readAll();
   for (const key of captures.keys()) delete all[key];
@@ -45,17 +96,14 @@ export function clearCurrentUpdateDrafts() {
 }
 
 export function releaseNoteSections(notes: string | null) {
-  const labels = ["版本与发布日期", "新增功能", "功能优化", "问题修复", "已知问题", "后续计划"];
-  const aliases: Record<string, string> = { 新增: "新增功能", 优化: "功能优化", 修复: "问题修复", 注意事项: "已知问题" };
+  const labels = ["新增", "优化", "修复", "注意事项"];
   const sections = new Map(labels.map((label) => [label, [] as string[]]));
-  let active = "已知问题";
+  let active = "注意事项";
   for (const raw of (notes || "").split(/\r?\n/)) {
     const line = raw.trim();
-    if (!line || /^#\s/.test(line)) continue;
+    if (!line || /^(?:#+\s*)?(?:版本|日期)\s*[：:]/.test(line)) continue;
     const heading = line.replace(/^#+\s*/, "").replace(/[：:]$/, "").trim();
-    const label = aliases[heading] || heading;
-    if (sections.has(label)) { active = label; continue; }
-    if (/^(?:版本|日期)\s*[：:]/.test(line)) { sections.get("版本与发布日期")!.push(line); continue; }
+    if (sections.has(heading)) { active = heading; continue; }
     sections.get(active)!.push(line.replace(/^[-*]\s+/, ""));
   }
   return labels.map((label) => ({ label, lines: sections.get(label)!.length ? sections.get(label)! : ["未提供"] }));
