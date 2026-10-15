@@ -31,6 +31,9 @@ use winit::window::WindowBuilder;
 #[cfg(target_os="windows")]
 #[path="native_child.rs"]
 mod native_child;
+#[cfg(target_os="linux")]
+#[path="native_child_x11.rs"]
+mod native_child;
 #[cfg(target_os="windows")]
 #[path="first_block_timing.rs"]
 mod first_block_timing;
@@ -5581,10 +5584,17 @@ impl ViewerState {
                 scene_bounds, args).await?;
         #[cfg(not(target_os = "windows"))]
         let (surface, adapter, device, queue, config) = {
+        #[cfg(target_os="linux")]
+        ensure!(args.graphics_backend != viewer_launch_contract::GraphicsApiPreference::Dx12,
+            "DX12 is not available on Linux; select Auto or Vulkan");
         let instance_started_at = Instant::now();
         let embedded_composition = args.quick_host.is_some();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: if embedded_composition { wgpu::Backends::DX12 } else { wgpu::Backends::all() },
+            backends: {
+                #[cfg(target_os="linux")] { wgpu::Backends::VULKAN }
+                #[cfg(target_os="macos")] { wgpu::Backends::METAL }
+                #[cfg(not(any(target_os="linux",target_os="macos")))] { wgpu::Backends::all() }
+            },
             ..Default::default()
         });
         println!(
@@ -5609,7 +5619,8 @@ impl ViewerState {
         };
         #[cfg(not(target_os = "windows"))]
         let surface = {
-            ensure!(!embedded_composition, "Native child composition requires Windows DX12");
+            #[cfg(not(target_os="linux"))]
+            ensure!(!embedded_composition, "The native platform viewport is not initialized");
             instance.create_surface(window.clone()).context("failed to create wgpu surface")?
         };
         println!(
@@ -9901,9 +9912,6 @@ enum PersistentPresentationMode {
     Embedded,
 }
 
-#[cfg(target_os = "windows")]
-
-
 #[derive(Debug)]
 enum ViewerPresentationCommandOutcome {
     NotPresentation,
@@ -9978,6 +9986,14 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
 
     let scene = load_scene(&args)?;
     let title = format!("Litematica-Nova Viewer - {}", scene.label);
+    #[cfg(target_os="linux")]
+    let event_loop = {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        let mut builder = winit::event_loop::EventLoopBuilder::new();
+        if args.quick_host.is_some() { builder.with_x11(); }
+        builder.build()?
+    };
+    #[cfg(not(target_os="linux"))]
     let event_loop = EventLoop::new()?;
     let viewer_started_at = Instant::now();
     let auto_exit_after = args.auto_exit_seconds.map(Duration::from_secs);
@@ -9997,6 +10013,10 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
         let (builder, context) = native_child::builder(window_builder.with_no_redirection_bitmap(true), host)?;
         (builder, Some(context))
     } else { (window_builder, None) };
+    #[cfg(target_os="linux")]
+    let window_builder = if let Some(host) = &args.quick_host {
+        native_child::builder(window_builder, host)?
+    } else { window_builder };
     let window = Arc::new(
         window_builder.build(&event_loop)
             .context("failed to create native viewer window")?,
@@ -10005,8 +10025,10 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
     if let Some(host) = &args.quick_host {
         native_child::verify(window.as_ref(), host)?;
     }
+    #[cfg(target_os="linux")]
+    if let Some(host) = &args.quick_host { native_child::verify(window.as_ref(), host)?; }
     #[cfg(not(target_os = "windows"))]
-    {
+    if args.quick_host.is_none() {
         if args.embed_parent_hwnd.is_some() {
             println!(
                 "[NATIVE_VIEWER] launch_mode=embedded external_window_created=true reparent=false reason=unsupported_platform"
@@ -10027,7 +10049,16 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
     let mut pending_capture: Option<(ViewerSessionCommand, PathBuf, Instant)> = None;
     #[cfg(target_os = "windows")]
     let legacy_window_hwnd = window_hwnd(window.as_ref())?;
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os="linux")]
+    let legacy_window_hwnd = {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        match window.window_handle()?.as_raw() {
+            RawWindowHandle::Xlib(handle) => handle.window as isize,
+            RawWindowHandle::Xcb(handle) => handle.window.get() as isize,
+            _ => 0,
+        }
+    };
+    #[cfg(not(any(target_os="windows",target_os="linux")))]
     let legacy_window_hwnd = 0_isize;
     register_viewer_shutdown_hwnd(legacy_window_hwnd);
     let mut presentation_mode = if args.initial_visible {
@@ -10148,7 +10179,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                     if event.state == ElementState::Pressed =>
                 {
                     match event.physical_key {
-                        #[cfg(target_os = "windows")]
+                        #[cfg(any(target_os="windows",target_os="linux"))]
                         PhysicalKey::Code(KeyCode::Tab) if quick_host.is_some() => {
                             native_child::focus_host(quick_host.as_ref().unwrap());
                         }
@@ -10246,7 +10277,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                     event_loop_window_target.exit();
                     return;
                 }
-                #[cfg(target_os = "windows")]
+                #[cfg(any(target_os="windows",target_os="linux"))]
                 if let Some(host) = &quick_host {
                     let parent = match native_child::validate_host(host) {
                         Ok(parent) => parent,
@@ -10271,7 +10302,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         state.drag_mode = None;
                         state.last_cursor_position = None;
                         #[cfg(target_os = "windows")]
-                        quick_first_block_timing.hide(); state.quick_visible_sample_query.cancel();
+                        { quick_first_block_timing.hide(); state.quick_visible_sample_query.cancel(); }
                     }
                 }
                 if let Some(watcher) = session_watcher.as_mut() {
@@ -10366,12 +10397,12 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         if matches!(command.kind, ViewerSessionCommandKind::Hide | ViewerSessionCommandKind::Release) {
                             quick_first_block_timing.hide(); state.quick_visible_sample_query.cancel();
                         }
-                        #[cfg(target_os = "windows")]
+                        #[cfg(any(target_os="windows",target_os="linux"))]
                         let child_outcome = quick_host.as_ref().map(|host|
                             native_child::apply(window.as_ref(), host, &command, &mut presentation_mode));
-                        #[cfg(not(target_os = "windows"))]
+                        #[cfg(not(any(target_os="windows",target_os="linux")))]
                         let child_outcome: Option<Result<ViewerPresentationCommandOutcome>> = None;
-                        let outcome = child_outcome.unwrap_or_else(|| Err(anyhow!("native quick preview requires its original Windows host")));
+                        let outcome = child_outcome.unwrap_or_else(|| Err(anyhow!("native quick preview requires its original platform Host")));
                         if matches!(command.kind, ViewerSessionCommandKind::Hide
                             | ViewerSessionCommandKind::AttachEmbedded
                             | ViewerSessionCommandKind::ShowOverlay
@@ -10558,11 +10589,11 @@ fn hide_quick_preview_window(
     window: &winit::window::Window,
     host: Option<&viewer_launch_contract::QuickPreviewHostWindow>,
 ) -> Result<()> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os="windows",target_os="linux"))]
     if let Some(host) = host {
         return native_child::hide(window, host);
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os="windows",target_os="linux")))]
     let _ = host;
     window.set_visible(false);
     Ok(())
