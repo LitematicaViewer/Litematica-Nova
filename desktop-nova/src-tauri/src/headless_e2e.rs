@@ -26,7 +26,6 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const PROJECTION_ROOT: &str = r"C:\Users\27232\Documents\投影测试";
 const DEPLOYMENT_SCHEMA: &str = "lba.backend.deployment.v1";
 const REPORT_SCHEMA: &str = "nova.headless-e2e.v1";
 const SERVICE_START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -935,7 +934,10 @@ fn mode_name(mode: RenderBuildMode) -> &'static str {
 }
 
 fn validate_projection(path: &Path) -> Result<PathBuf, String> {
-    let allowed = fs::canonicalize(PROJECTION_ROOT)
+    let projection_root = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from).ok_or("current user profile is unavailable")?
+        .join("Documents").join("投影测试");
+    let allowed = fs::canonicalize(projection_root)
         .map_err(|error| format!("resolve projection allowlist directory: {error}"))?;
     let projection = fs::canonicalize(path)
         .map_err(|error| format!("resolve projection {}: {error}", path.display()))?;

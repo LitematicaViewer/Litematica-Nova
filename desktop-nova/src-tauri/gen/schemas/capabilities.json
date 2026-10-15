@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"","local":true,"windows":["main","material-list","local-library-folders","reden-library"],"permissions":["core:default","core:event:allow-emit","core:event:allow-listen","dialog:default","shell:default"]}}
+{"default":{"identifier":"default","description":"","local":true,"windows":["main","material-list","local-library-folders","reden-library","enumerator","asset-manager"],"permissions":["core:default","core:event:allow-emit","core:event:allow-listen","core:window:allow-close","dialog:default","shell:default"]}}
