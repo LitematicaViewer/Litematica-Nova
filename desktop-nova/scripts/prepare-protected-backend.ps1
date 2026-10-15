@@ -105,7 +105,7 @@ const crypto = require('node:crypto');
         }
     } finally { $archive.Dispose() }
     $jar = [IO.Compression.ZipFile]::OpenRead((Join-Path $runtimeRoot '26.3/client.jar'))
-    try { foreach ($entry in $jar.Entries) { if ($entry.FullName -match '(?i)\.(class|java|dll|exe|rs|wgsl|ll|pdb)$' -or $entry.FullName -match '(?i)^META-INF/') { throw 'The Minecraft asset jar contains implementation/executable material.' } } }
+    try { foreach ($entry in $jar.Entries) { if ($entry.FullName -match '(?i)\.(class|java|dll|exe|rs|wgsl|ll|pdb)$' -or ($entry.FullName -match '(?i)^META-INF/' -and $entry.FullName -cne 'META-INF/LICENSE')) { throw 'The Minecraft asset jar contains implementation/executable material.' } } }
     finally { $jar.Dispose() }
     # The browser/version database is embedded in the public Core executable.
     # Verify its concrete tint sidecar before compiling, not after packaging.
