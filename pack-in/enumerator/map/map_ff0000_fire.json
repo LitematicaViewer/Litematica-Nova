@@ -1,0 +1,12 @@
+[
+  "minecraft:redstone_block",
+  "minecraft:lava",
+  "minecraft:fire",
+  "minecraft:redstone_torch",
+  "minecraft:redstone_wall_torch",
+  "minecraft:comparator",
+  "minecraft:repeater",
+  "minecraft:trapped_chest",
+  "minecraft:tnt",
+  "minecraft:tripwire_hook"
+]

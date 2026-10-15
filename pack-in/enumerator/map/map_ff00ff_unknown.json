@@ -1,0 +1,18 @@
+[
+  "minecraft:air",
+  "minecraft:command_block",
+  "minecraft:repeating_command_block",
+  "minecraft:chain_command_block",
+  "minecraft:barrier",
+  "minecraft:cave_air",
+  "minecraft:void_air",
+  "minecraft:end_gateway",
+  "minecraft:end_portal",
+  "minecraft:structure_void",
+  "minecraft:moving_piston",
+  "minecraft:nether_portal",
+  "minecraft:test_block",
+  "minecraft:test_instance_block",
+  "minecraft:jigsaw",
+  "minecraft:structure_block"
+]
