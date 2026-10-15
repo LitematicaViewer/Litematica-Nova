@@ -120,12 +120,22 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
 '@
     $verifyBlockData | & node --input-type=commonjs - $repo
     if ($LASTEXITCODE -ne 0) { throw 'The required embedded block-data resources are missing or mismatched.' }
+    # Keep public helper and desktop artifacts free of local checkout/cache paths.
+    # The private module was separately compiled and protected in its private environment.
+    $env:CARGO_ENCODED_RUSTFLAGS = @(
+        "--remap-path-prefix=$repo=/nova/public",
+        "--remap-path-prefix=$HOME/.cargo=/nova/cargo",
+        "--remap-path-prefix=$HOME/.rustup=/nova/rust"
+    ) -join [char]31
+    $env:RUSTFLAGS = $null
+    $env:CARGO_PROFILE_RELEASE_STRIP = 'symbols'
+    $env:CARGO_PROFILE_RELEASE_DEBUG = '0'
     $env:NOVA_PROTECTED_BUILD_ID = $identity.buildId
     $env:NOVA_PROTECTED_MANIFEST_PUBLIC_KEY = $identity.manifestPublicKey
     $env:NOVA_PROTECTED_ENDPOINT = $identity.endpoint
     $env:LBA_BUILD_GIT_SHA = $sha
     if ($env:GITHUB_ENV) {
-        @("NOVA_PROTECTED_BUILD_ID=$($identity.buildId)","NOVA_PROTECTED_MANIFEST_PUBLIC_KEY=$($identity.manifestPublicKey)","NOVA_PROTECTED_ENDPOINT=$($identity.endpoint)","LBA_BUILD_GIT_SHA=$sha") | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+        @("NOVA_PROTECTED_BUILD_ID=$($identity.buildId)","NOVA_PROTECTED_MANIFEST_PUBLIC_KEY=$($identity.manifestPublicKey)","NOVA_PROTECTED_ENDPOINT=$($identity.endpoint)","LBA_BUILD_GIT_SHA=$sha","CARGO_ENCODED_RUSTFLAGS=$($env:CARGO_ENCODED_RUSTFLAGS)","CARGO_PROFILE_RELEASE_STRIP=symbols","CARGO_PROFILE_RELEASE_DEBUG=0") | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
     }
     & cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir tools/viewer-core/target/public-beta --no-default-features --features public-beta --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
     if ($LASTEXITCODE -ne 0) { throw 'Public Fast/core/stockpile compilation failed.' }
