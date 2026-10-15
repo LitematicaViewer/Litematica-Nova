@@ -143,6 +143,9 @@ jobs:
             architecture: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    env:
+      RUSTUP_TOOLCHAIN: '1.99.0'
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -152,6 +155,15 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
+      - name: Prepare the pinned native public Rust compiler
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --target "$TARGET"
+          rustc -vV
+          rustc -vV | grep -Fx "host: $TARGET"
+          test "$(rustc --version | cut -d' ' -f2)" = '1.99.0'
       - name: Receive approved target runtime files
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -170,6 +182,8 @@ jobs:
           test -f "$library"
           xcrun lipo "$library" -verify_arch "$TARGET_ARCH"
           printf 'NOVA_MOLTENVK_LIBRARY=%s\n' "$library" >> "$GITHUB_ENV"
+      - name: Check actual macOS dependencies and QuickLook before the App build
+        run: node desktop-nova/scripts/build-public-platform.mjs --target '${{ matrix.target }}' --preflight
       - name: Build macOS candidate
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/desktop-nova/src-tauri/target/ci-${{ matrix.target }}

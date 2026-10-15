@@ -21,6 +21,12 @@ export function platformFor(target, host = { platform: process.platform, arch: p
   if (platform.os !== host.platform || platform.arch !== host.arch) throw new Error('Use a real native runner for the selected desktop target.');
   return platform;
 }
+export function tauriBuildStages(platform, config) {
+  const build = ['build', '--config', config];
+  return platform.os === 'darwin'
+    ? [[...build, '--no-bundle'], ['bundle', '--config', config, '--bundles', platform.bundles]]
+    : [[...build, '--bundles', platform.bundles]];
+}
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, env: process.env, stdio: 'inherit', windowsHide: true, ...options });
   if (result.error || result.status !== 0) throw new Error(`${path.basename(command)} failed (${result.status ?? result.error?.code}).`);
@@ -52,7 +58,7 @@ export function tauriOverride(base, { platform, stage, runtime, stockpile, icon,
   resources[path.join(root, 'data/mc26/26.3')] = 'data/mc26/26.3';
   resources[stockpile] = `bin/stockpile-server/${platform.stockpile}/stockpile_server${platform.suffix}`;
   if (platform.os === 'win32') resources[path.join(root, 'tools/windows-thumbnail-provider/target/release/litematica_thumbnail.dll')] = 'litematica_thumbnail.dll';
-  return { bundle: { targets: platform.bundles.split(','), resources, ...(platform.os !== 'win32' ? { icon: platform.os === 'darwin' ? [path.join(path.dirname(icon), 'icon.png'), icon] : [icon], windows: null } : {}), ...(candidate ? { createUpdaterArtifacts: false } : {}) } };
+  return { bundle: { targets: platform.bundles.split(','), resources, ...(platform.os !== 'win32' ? { icon: platform.os === 'darwin' ? [path.join(path.dirname(icon), 'icon.png'), icon] : [icon], windows: null } : {}), ...(platform.os === 'linux' ? { linux: { deb: { depends: [...new Set([...(base.bundle.linux?.deb?.depends ?? []), 'libvulkan1', 'libdbus-1-3', 'libc6 (>= 2.39)'])] } } } : {}), ...(candidate ? { createUpdaterArtifacts: false } : {}) } };
 }
 export async function stageRuntimeResources(runtime, target, platform) {
   if (platform.os !== 'win32' || path.parse(runtime).root.toLowerCase() === path.parse(tauri).root.toLowerCase()) return runtime;
@@ -188,6 +194,12 @@ export async function build(args = process.argv.slice(2)) {
   if (output('rustc', ['-vV']).split('\n').find((line) => line.startsWith('host: ')) !== `host: ${target}`) throw new Error('The active Rust toolchain is not native to this target.');
   if (checkOnly) { console.log(`Platform build inputs verified: target=${target} source=${sha}; no build started.`); return; }
   run('git', ['diff', '--quiet', 'HEAD', '--']);
+  if (args.includes('--preflight')) {
+    if (platform.os !== 'darwin') throw new Error('The concentrated native preflight is macOS-only.');
+    const { preflightMacosPublic } = await import('./preflight-macos-public.mjs');
+    preflightMacosPublic({ target });
+    return;
+  }
   if (!candidate && base.bundle.createUpdaterArtifacts && !process.env.TAURI_SIGNING_PRIVATE_KEY) throw new Error('The updater signing key is missing; use --candidate only for an unpublished candidate.');
   Object.assign(process.env, { NOVA_RUNTIME_PACKAGE_DIR: runtime, NOVA_PROTECTED_BUILD_ID: identity.buildId, NOVA_PROTECTED_MANIFEST_PUBLIC_KEY: identity.manifestPublicKey, NOVA_PROTECTED_ENDPOINT: identity.endpoint, LBA_BUILD_GIT_SHA: sha, CARGO_PROFILE_RELEASE_STRIP: 'symbols', CARGO_PROFILE_RELEASE_DEBUG: '0' });
   process.env.CARGO_ENCODED_RUSTFLAGS = [`--remap-path-prefix=${root}=/nova/public`, `--remap-path-prefix=${process.env.CARGO_HOME || path.join(os.homedir(), '.cargo')}=/nova/cargo`, `--remap-path-prefix=${process.env.RUSTUP_HOME || path.join(os.homedir(), '.rustup')}=/nova/rust`].join('\x1f');
@@ -213,7 +225,10 @@ export async function build(args = process.argv.slice(2)) {
   const config = path.join(temporary, 'tauri.json'); fs.writeFileSync(config, JSON.stringify(tauriOverride(base, { platform, stage, runtime: resourceRuntime, stockpile, icon, candidate }), null, 2));
   const cargoTarget = path.resolve(process.env.CARGO_TARGET_DIR || path.join(tauri, 'target', `ci-${target}`)); process.env.CARGO_TARGET_DIR = cargoTarget;
   removePreviousDistributables(cargoTarget, platform);
-  run(process.execPath, [npm, 'run', 'tauri', '--', 'build', '--config', config, '--bundles', platform.bundles], { cwd: desktop });
+  for (const command of tauriBuildStages(platform, config)) {
+    console.log(`Public candidate phase=${command[0]} target=${target}`);
+    run(process.execPath, [npm, 'run', 'tauri', '--', ...command], { cwd: desktop });
+  }
   if (platform.os === 'darwin') archiveMacApplication(cargoTarget);
   if (output('git', ['rev-parse', '--verify', 'HEAD']) !== sha) throw new Error('Source commit changed during the platform build.');
   await collect(target, platform, sha, cargoTarget, base.version);
