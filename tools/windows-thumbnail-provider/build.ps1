@@ -1,11 +1,28 @@
 [CmdletBinding()]
-param([switch]$Smoke)
+param([switch]$Smoke, [switch]$Force)
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $root = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 $target = [IO.Path]::GetFullPath((Join-Path $root "target/release"))
 if (-not $target.StartsWith($root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw "Build output leaves provider directory" }
 New-Item -ItemType Directory -Path $target -Force | Out-Null
+
+# Reuse an up-to-date DLL instead of paying a full cl.exe compile on every
+# development launch. The check also skips the Visual Studio environment setup
+# below, which costs about a second by itself. Pass -Force to rebuild anyway.
+$dll = Join-Path $target "litematica_thumbnail.dll"
+$smokeExe = Join-Path $target "thumbnail_smoke.exe"
+$sourcePaths = @("thumbnail_provider.cpp", "thumbnail_smoke.cpp", "provider_abi.h", "litematica_thumbnail.def", "build.ps1") | ForEach-Object { Join-Path $root $_ }
+$sourceItems = @(Get-Item -LiteralPath $sourcePaths -ErrorAction SilentlyContinue)
+if (-not $Force -and $sourceItems.Count -gt 0 -and (Test-Path -LiteralPath $dll) -and (Test-Path -LiteralPath $smokeExe)) {
+    $newestSource = ($sourceItems | Measure-Object -Property LastWriteTimeUtc -Maximum).Maximum
+    if ((Get-Item -LiteralPath $dll).LastWriteTimeUtc -ge $newestSource -and (Get-Item -LiteralPath $smokeExe).LastWriteTimeUtc -ge $newestSource) {
+        Write-Host "[thumbnail-provider] sources unchanged; reusing litematica_thumbnail.dll"
+        Get-FileHash -LiteralPath $dll -Algorithm SHA256 | Format-List
+        if ($Smoke) { & $smokeExe $dll; if ($LASTEXITCODE -ne 0) { throw "Thumbnail CLI smoke failed: $LASTEXITCODE" } }
+        return
+    }
+}
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
 if (-not (Test-Path -LiteralPath $vswhere)) { throw "vswhere is missing" }
 $vs = (& $vswhere -products '*' -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)

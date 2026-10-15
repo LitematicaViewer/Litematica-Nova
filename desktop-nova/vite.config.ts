@@ -11,7 +11,12 @@ export default defineConfig({
     server: {
         strictPort: true,
         watch: {
-            ignored: ["**/tauri/**"]
+            // The old entry named a "tauri" directory that does not exist; the
+            // real one is "src-tauri", so Vite watched src-tauri/target/** and
+            // died with EBUSY whenever cargo relinked desktop_nova.exe. That
+            // relink happens on every build, because build.rs rewrites
+            // gen/block-icons and then watches that directory.
+            ignored: ["**/src-tauri/**"]
         }
     },
     build: {

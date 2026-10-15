@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string] $RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
+    [string] $RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path,
+    [switch] $Force
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -11,6 +12,29 @@ $configPath = Join-Path $packageRoot 'protected-build.json'
 $stage = [IO.Path]::GetFullPath((Join-Path $repo 'bin/public-beta'))
 if (-not $stage.StartsWith($repo + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Public staging leaves the repository.' }
 $backendNames = @('litematica_core.exe','litematica_native_viewer.exe','nova-render-service.exe','nova-build-worker.exe')
+
+# Development launches run this script on every start. Rewriting a file whose
+# bytes did not change only refreshes its mtime, and desktop-nova/src-tauri/build.rs
+# watches bin/public-beta, so an unconditional copy forces a full crate rebuild
+# (about 14 s) on every launch. All writes below are therefore content-aware;
+# -Force restores unconditional rewriting.
+function Test-IdenticalFile([string] $Source, [string] $Destination) {
+    if (-not (Test-Path -LiteralPath $Destination -PathType Leaf)) { return $false }
+    if ((Get-Item -LiteralPath $Source).Length -ne (Get-Item -LiteralPath $Destination).Length) { return $false }
+    return (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+}
+
+function Copy-IfChanged([string] $Source, [string] $Destination) {
+    if (-not $Force -and (Test-IdenticalFile $Source $Destination)) { return $false }
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    return $true
+}
+
+function Write-TextIfChanged([string] $Path, [string] $Content) {
+    if (-not $Force -and (Test-Path -LiteralPath $Path -PathType Leaf) -and ([IO.File]::ReadAllText($Path) -ceq $Content)) { return $false }
+    [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
+    return $true
+}
 
 Push-Location -LiteralPath $repo
 try {
@@ -98,12 +122,28 @@ const crypto = require('node:crypto');
     $archive = [IO.Compression.ZipFile]::OpenRead($runtimeArchive)
     try {
         if ($archive.Entries.Count -ne $runtimeManifest.archive_entries) { throw 'Runtime resource entry count mismatch.' }
+        # Validate every entry first, then only rewrite the tree when something is
+        # actually missing or truncated: the payload is about 158 MB.
+        $plan = @()
         foreach ($entry in $archive.Entries) {
             if ($entry.FullName -notmatch '^26\.3/(oracle/[a-z_]+\.jsonl|oracle/oracle-manifest\.json|client\.jar|assets/indexes/34\.json|assets/objects/[a-f0-9]{2}/[a-f0-9]{40})$') { throw 'Unexpected runtime resource path.' }
             $destination = [IO.Path]::GetFullPath((Join-Path $runtimeRoot $entry.FullName))
             if (-not $destination.StartsWith($runtimeRoot + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -or $entry.Length -gt 100MB) { throw 'Runtime resource exceeds its path/size boundary.' }
-            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry,$destination,$true)
+            $plan += [pscustomobject]@{ Entry = $entry; Destination = $destination }
+        }
+        $stale = 0
+        foreach ($item in $plan) {
+            $existing = Get-Item -LiteralPath $item.Destination -ErrorAction SilentlyContinue
+            if (-not $existing -or $existing.Length -ne $item.Entry.Length) { $stale++ }
+        }
+        if ($Force -or $stale -gt 0) {
+            foreach ($item in $plan) {
+                New-Item -ItemType Directory -Path (Split-Path -Parent $item.Destination) -Force | Out-Null
+                [IO.Compression.ZipFileExtensions]::ExtractToFile($item.Entry,$item.Destination,$true)
+            }
+            Write-Host "[protected-backend] runtime resources extracted ($stale entries were missing or stale)"
+        } else {
+            Write-Host "[protected-backend] runtime resources already complete ($($plan.Count) entries match by size)"
         }
     } finally { $archive.Dispose() }
     $jar = [IO.Compression.ZipFile]::OpenRead((Join-Path $runtimeRoot '26.3/client.jar'))
@@ -143,7 +183,11 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
     if ($LASTEXITCODE -ne 0) { throw 'Public Fast/core/stockpile compilation failed.' }
     & cargo build --locked --release --manifest-path tools/nova-protected-loader/Cargo.toml --target-dir tools/nova-protected-loader/target/public-beta --bins
     if ($LASTEXITCODE -ne 0) { throw 'Public authenticated loader compilation failed.' }
-    & (Join-Path $repo 'tools/windows-thumbnail-provider/build.ps1')
+    # The up-to-date shortcut in build.ps1 compares mtimes. A release/CI runner may
+    # restore a cached target directory whose timestamps are newer than the freshly
+    # checked-out sources, so never reuse the provider DLL there.
+    if ($Force -or $env:GITHUB_ACTIONS -eq 'true') { & (Join-Path $repo 'tools/windows-thumbnail-provider/build.ps1') -Force }
+    else { & (Join-Path $repo 'tools/windows-thumbnail-provider/build.ps1') }
     if ($LASTEXITCODE -ne 0) { throw 'The normal Windows thumbnail provider resource failed to build.' }
     New-Item -ItemType Directory -Path $stage -Force | Out-Null
     foreach ($existing in Get-ChildItem -LiteralPath $stage -Force) {
@@ -156,15 +200,19 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
         'nova-build-worker.exe' = Join-Path $repo 'tools/nova-protected-loader/target/public-beta/release/nova-build-worker.exe'
     }
     $artifacts = [ordered]@{}
+    $restaged = 0
     foreach ($entry in $sources.GetEnumerator()) {
         $destination = Join-Path $stage $entry.Key
-        Copy-Item -LiteralPath $entry.Value -Destination $destination -Force
+        if (Copy-IfChanged $entry.Value $destination) { $restaged++ }
         $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($hash -ne (Get-FileHash -LiteralPath $entry.Value -Algorithm SHA256).Hash.ToLowerInvariant()) { throw "Public helper staging is incomplete: $($entry.Key)" }
         $artifacts[$entry.Key] = [ordered]@{ bytes=(Get-Item -LiteralPath $destination).Length; sha256=$hash }
     }
     $deployment = [ordered]@{ schema='lba.backend.deployment.v1'; gitSha=$sha; profile='release'; artifacts=$artifacts }
-    [IO.File]::WriteAllText((Join-Path $stage 'backend-deployment.json'), ($deployment | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+    $manifestWritten = Write-TextIfChanged (Join-Path $stage 'backend-deployment.json') ($deployment | ConvertTo-Json -Depth 5)
+    if ($restaged -eq 0 -and -not $manifestWritten) {
+        Write-Host "[protected-backend] staging already current; helper timestamps left untouched"
+    }
     foreach ($entry in $resources.PSObject.Properties) {
         # build.rs owns generation AND validation of every flat PNG in this map.
         # A fresh checkout has the source archive, not the derived directory yet.
@@ -176,7 +224,7 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
         if (-not (Test-Path -LiteralPath $source)) { throw "Missing required product resource: $($entry.Name)" }
     }
     if ((& git rev-parse HEAD).Trim() -ne $sha) { throw 'Public source commit changed during the candidate build.' }
-    Write-Host "Public backend ready source=$sha protected_build=$($identity.buildId) helpers=4 staging=$stage"
+    Write-Host "Public backend ready source=$sha protected_build=$($identity.buildId) helpers=4 restaged=$restaged staging=$stage"
 } finally {
     Remove-Item -LiteralPath Env:NOVA_VERIFY_PROTECTED_PACKAGE -ErrorAction SilentlyContinue
     Pop-Location

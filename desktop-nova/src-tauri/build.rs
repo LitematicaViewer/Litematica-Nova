@@ -27,16 +27,31 @@ fn valid_git_sha(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+/// Register a `rerun-if-changed` path only when it actually exists.
+///
+/// Cargo treats a registered path that is missing as modified on *every* build,
+/// so watching a file that is not there reruns this build script - and rebuilds
+/// the whole crate - forever. That is exactly what happened while
+/// `.git/refs/heads/<branch>` was watched in a checkout whose branch tips live
+/// in `packed-refs`, and it also hits a fresh clone before `bin/public-beta` is
+/// staged.
+fn watch_if_present(path: &Path) {
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
+
 fn watch_git_identity(repo_root: &Path) {
     let Some(git_dir) = git_output(repo_root, &["rev-parse", "--absolute-git-dir"]) else {
         return;
     };
     let git_dir = PathBuf::from(git_dir);
-    println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
-    println!(
-        "cargo:rerun-if-changed={}",
-        git_dir.join("packed-refs").display()
-    );
+    watch_if_present(&git_dir.join("HEAD"));
+    watch_if_present(&git_dir.join("packed-refs"));
+    // A branch tip is either packed (packed-refs) or loose. Watching the
+    // directory catches a tip that is written as a loose ref for the first time,
+    // which is what a commit does even when packed-refs itself stays untouched.
+    watch_if_present(&git_dir.join("refs/heads"));
 
     let Some(symbolic_ref) = git_output(repo_root, &["symbolic-ref", "-q", "HEAD"]) else {
         return;
@@ -50,7 +65,7 @@ fn watch_git_identity(repo_root: &Path) {
             &symbolic_ref,
         ],
     ) {
-        println!("cargo:rerun-if-changed={reference_path}");
+        watch_if_present(Path::new(&reference_path));
     }
 }
 
@@ -74,7 +89,7 @@ fn build_git_sha(repo_root: &Path) -> String {
 
 fn prepare_block_icons(repo_root: &Path, manifest_dir: &Path) {
     let source = repo_root.join("pack-in/game-icons/block.zip");
-    println!("cargo:rerun-if-changed={}", source.display());
+    watch_if_present(&source);
     let target = manifest_dir.join("gen/block-icons");
     fs::create_dir_all(&target).expect("create generated block icon directory");
     let mut archive = zip::ZipArchive::new(fs::File::open(source).expect("open bundled block icon archive"))
@@ -114,10 +129,12 @@ fn prepare_block_icons(repo_root: &Path, manifest_dir: &Path) {
 // Release directories never enter the public resource map.
 fn validate_public_backends(repo_root: &Path) {
     let directory = repo_root.join("bin/public-beta");
-    println!("cargo:rerun-if-changed={}", directory.display());
     // CLI-only type/unit checks may override bundle.resources=[] before any
     // backend build. Real Tauri packaging itself rejects a missing directory.
     if !directory.exists() { return; }
+    // Registered only once the directory is there, so an unstaged checkout does
+    // not pin a missing path and recompile on every build (see watch_if_present).
+    watch_if_present(&directory);
     let suffix = if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") { ".exe" } else { "" };
     let expected: HashSet<_> = [format!("litematica_core{suffix}"), format!("litematica_native_viewer{suffix}"), format!("nova-render-service{suffix}"), format!("nova-build-worker{suffix}"), "backend-deployment.json".into()].into_iter().collect();
     let mut actual = HashSet::new();
