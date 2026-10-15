@@ -80,9 +80,20 @@ export function validateMachObject(bytes, target) {
   }
 }
 
+export function validateLtoVersion(version) {
+  if (!/\bLLVM version 22\.1\.2(?:\s|$)/.test(version)) {
+    throw new Error('The static LLVM archive requires this exact LLVM 22.1.2 libLTO, not Apple LLVM 17.');
+  }
+}
+
 export function amiceBuildArguments(manifest, targetDirectory, hostArchitecture, llvmRoot, mode) {
   const features = hostArchitecture === 'arm64' ? 'llvm22-1,amice-plugin/target-aarch64' : 'llvm22-1';
-  const link = mode === 'static' ? ['-C', 'link-arg=-Wl,-undefined,dynamic_lookup'] : [];
+  const link = mode === 'static' ? [
+    '-C', 'link-arg=-Wl,-undefined,dynamic_lookup',
+    // Official LLVM component archives contain LLVM 22 bitcode. Keep LTO
+    // enabled, but give Apple's linker the matching verified reader/codegen.
+    '-C', `link-arg=-Wl,-lto_library,${path.join(llvmRoot, 'lib/libLTO.dylib')}`,
+  ] : [];
   // `cargo rustc --lib` needs an actual package, not the supplied virtual
   // workspace manifest. The default-members setting is not sufficient here.
   return [`+${RUST_TOOLCHAIN}`, 'rustc', '--locked', '--release', '--manifest-path', manifest,
@@ -201,6 +212,12 @@ export async function setupMacosCi(options) {
       throw new Error('The verified static-host Amice tool patch is missing.');
     }
     if (!fs.existsSync(path.join(llvmRoot, 'lib/libLLVMExecutionEngine.a'))) throw new Error('Exact official LLVMExecutionEngine component archive is missing.');
+    const lto = path.join(llvmRoot, 'lib/libLTO.dylib');
+    if (!fs.existsSync(lto)) throw new Error('Exact LLVM 22.1.2 libLTO.dylib is missing.');
+    run('llvm-lto-native-architecture', 'xcrun', ['lipo', lto, '-verify_arch', arch]);
+    const ltoVersion = run('llvm-lto-version', 'python3', ['-c',
+      'import ctypes,sys; lib=ctypes.CDLL(sys.argv[1]); lib.lto_get_version.restype=ctypes.c_char_p; print(lib.lto_get_version().decode())', lto], { capture: true });
+    validateLtoVersion(ltoVersion);
     env.AMICE_LLVM_STATIC_HOST = '1';
   }
   const amiceTarget = path.join(scratch, 'amice-target');

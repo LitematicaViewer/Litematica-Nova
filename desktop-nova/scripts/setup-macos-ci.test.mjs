@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { LLVM_DOWNLOADS, LLVM_VERSION, RUST_TOOLCHAIN, parseArguments, targetArchitecture,
-  sourceBuildArguments, validateVersions, validateMachObject, setupMacosCi, amiceBuildArguments } from './setup-macos-ci.mjs';
+  sourceBuildArguments, validateVersions, validateMachObject, setupMacosCi, amiceBuildArguments, validateLtoVersion } from './setup-macos-ci.mjs';
 
 test('CLI requires one explicit supported target and existing-input/output locations', () => {
   const result = parseArguments(['--target', 'aarch64-apple-darwin', '--tooling-root', 'fixture/tooling', '--output', 'fixture/result.json']);
@@ -40,6 +40,8 @@ test('actual Amice build selects the package inside its virtual workspace', () =
   assert.ok(args.indexOf('-p') < args.indexOf('--'));
   assert.equal(args[args.indexOf('--features') + 1], 'llvm22-1,amice-plugin/target-aarch64');
   assert.ok(args.includes('link-arg=-Wl,-undefined,dynamic_lookup'));
+  assert.ok(args.some(value => value.startsWith('link-arg=-Wl,-lto_library,') && value.endsWith('libLTO.dylib')));
+  assert.ok(!args.some(value => /(?:no-lto|lto=off|lto=no)/.test(value)));
   assert.ok(!amiceBuildArguments('manifest', 'target', 'arm64', 'llvm22', 'shared').includes('link-arg=-Wl,-undefined,dynamic_lookup'));
 });
 
@@ -83,4 +85,12 @@ test('VM object gate rejects non-Mach-O, wrong CPU, linked dylib or truncated da
 
 test('a non-macOS machine never downloads tools or pretends to execute the native probe', { skip: process.platform === 'darwin' }, async () => {
   await assert.rejects(setupMacosCi({ target: 'aarch64-apple-darwin' }), /actual macOS runner/);
+});
+
+
+test('static LLVM component bitcode requires the matching real libLTO reader', () => {
+  assert.doesNotThrow(() => validateLtoVersion('LLVM version 22.1.2\n'));
+  for (const version of ['LLVM version 17.0.0', 'LLVM version 22.1.20', 'LLVM version 23.0.0', '']) {
+    assert.throws(() => validateLtoVersion(version));
+  }
 });
