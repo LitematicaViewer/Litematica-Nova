@@ -6,8 +6,8 @@ Nova 使用 Tauri、React、TypeScript 和 Rust。请保留仓库内的锁文件
 
 - Node.js 22、npm，以及 Rust 对应平台工具链。
 - Windows：MSVC、Windows SDK、PowerShell 7 和 WebView2。
-- Linux：GTK 3、WebKitGTK 4.1、OpenSSL、DBus 及系统编译工具。
-- macOS：Xcode Command Line Tools 及对应架构的 Rust 工具链。
+- Linux：glibc 2.39 或更新版本、GTK 3、WebKitGTK 4.1、OpenSSL、DBus 及系统编译工具；Wayland 桌面需有 XWayland。
+- macOS：Xcode Command Line Tools、对应架构的 Rust 工具链和 MoltenVK。构建钩子编译 Quick Look 扩展并将图形运行库放入应用包；缺少 Apple 签名及公证条件时不得标记为已公证。
 
 ## Windows 日常开发
 

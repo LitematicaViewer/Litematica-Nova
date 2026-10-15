@@ -13,19 +13,19 @@ Nova 使用 **Tauri 官方 Updater 2.10.0**，与锁定的 Tauri 2.11.1 运行�
 
 更新前的确认不会跨重启恢复，恢复替换或生成草稿后须重新预览。分层方块状态与测量恢复为会话草稿，不伪称写入投影。
 
-Beta 使用 Windows x64 单文件 NSIS Setup.exe，包含匹配快速后端及全部映射资源。CI 构建审计后由发布者在本机使用官方 Tauri signer 签名，安装包字节不变，签名放入更新清单。GitHub Pre-release 不会出现在 `/releases/latest`，因此主更新接口使用公开 `main/updates/latest.json`。真实安装、重启和主题显示未进行 GUI 验收；CLI 签名与安装包静态检查不等于安装端到端验收。
+Beta 0.2 的 Windows x64 使用单文件 NSIS Setup.exe，Linux x64 使用 AppImage，macOS Intel/Apple Silicon 分别使用对应应用更新归档；安装与更新载荷包含匹配的运行组件和全部映射资源。CI 构建审计后由发布者在本机使用官方 Tauri signer 签名，安装包字节不变，签名放入更新清单。GitHub Pre-release 不会出现在 `/releases/latest`，因此主更新接口使用公开 `main/updates/latest.json`。真实安装、重启和主题显示未进行 GUI 验收；CLI 签名与安装包静态检查不等于安装端到端验收。
 
 ## 发布与密钥边界
 
 更新签名私钥与密码仅由发布者在仓库外管理，不进入源码、服务器、构建产物或 CI 日志。客户端只内置公钥。CI 当前只生成审计用构建产物，不自动创建正式 GitHub Release，不配置签名私钥。
 
-更新载荷只使用通过审计、包含全部资源的签名 NSIS Setup.exe。便携 EXE、ZIP、MSI 不作为本版发行载荷。签名、安装包 SHA256、版本一致性及双 HTTPS 源通过 CLI 检查后发布清单；无清单时镜像返回 204。VPS 每个版本只保存安装包、更新说明和更新所需最小元数据，不存源码、ZIP 或构建缓存。
+Windows 更新载荷为包含全部资源的签名 NSIS Setup.exe，不提供便携 EXE、ZIP 或 MSI；Linux 更新载荷为 AppImage，macOS 为官方更新格式的 `.app.tar.gz`（DMG 用于初次安装）。签名、安装包 SHA256、版本一致性及双 HTTPS 源通过 CLI 检查后发布清单；无清单时镜像返回 204。VPS 每个版本只保存安装包、平台更新载荷、更新说明和必要元数据，不存源码或构建缓存。
 
 更新简介使用对应版本的更新日志；Beta 0.2 见 [更新日志](releases/BETA_0_2.md)。
 
 ## 唯一更新说明格式
 
-`latest.json` 遵循官方静态清单：`version`、RFC3339 `pub_date`、`notes`、`platforms.windows-x86_64.url` 与 `.signature`。后者是 `.sig` 内容，不是路径。GitHub 与镜像使用完全相同的已签名包和版本，URL 可不同。以下仅为说明模板，不代表已发布版本：
+平台键为 `windows-x86_64`、`linux-x86_64`、`darwin-x86_64` 和 `darwin-aarch64`。`latest.json` 遵循官方静态清单：`version`、RFC3339 `pub_date`、`notes`、`platforms.<平台-架构>.url` 与 `.signature`。后者是 `.sig` 内容，不是路径。GitHub 与镜像使用完全相同的已签名包和版本，URL 可不同。以下仅为说明模板，不代表已发布版本：
 
 ```text
 # <版本> 更新日志
