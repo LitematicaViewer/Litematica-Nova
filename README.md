@@ -37,7 +37,7 @@
 2. 点击「打开投影文件」，选择自己的 `.litematic`。它是独立软件，**不需要放进游戏的 mods 文件夹**。
 3. 在左侧切换统计、材料、分层等页面。首次尝试修改时，请保留原件，选择「另存为」。
 
-Linux 需要 glibc 2.39 或更新版本，以及 GTK 3、WebKitGTK 4.1 等桌面运行库；Wayland 桌面通过 XWayland 运行原生嵌入视口。macOS 安装包尚未获得 Apple 公证，系统可能提示确认来源。其它投影格式尚未作为正式发行功能提供。
+Linux 需要 glibc 2.39 或更新版本、GTK 3、WebKitGTK 4.1、系统 Vulkan loader（Debian/Ubuntu 通常为 `libvulkan1`）及正常显卡驱动；AppImage 不包含显卡驱动。Wayland 桌面通过 XWayland 运行原生嵌入视口。macOS 需要 13.0 或更新版本；安装包尚未获得 Apple 公证，系统可能提示确认来源。其它投影格式尚未作为正式发行功能提供。
 
 ## 当前进度
 
