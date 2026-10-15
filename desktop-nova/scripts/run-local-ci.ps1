@@ -36,17 +36,28 @@ try {
             $script = @'
 set -euo pipefail
 cd "$1"
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=core.autocrlf
+export GIT_CONFIG_VALUE_0="$2"
 export CARGO_TARGET_DIR="$PWD/desktop-nova/src-tauri/target/ci-linux-x64"
 export NOVA_RUNTIME_PACKAGE_DIR=/mnt/d/NovaCI/runtime/x86_64-unknown-linux-gnu
 node desktop-nova/scripts/build-public-platform.mjs --target x86_64-unknown-linux-gnu --candidate
 '@
             $linuxFailure = $null
             $restoreFailure = $null
+            $shellScript = Join-Path $env:RUNNER_TEMP ('nova-linux-' + [guid]::NewGuid().ToString('N') + '.sh')
             try {
-                & wsl.exe -d NovaCI-Debian -u nova-ci -- bash -lc $script nova-ci $linuxRepo
+                $gitAutocrlf = (& git config --get core.autocrlf | Out-String).Trim()
+                if (-not $gitAutocrlf) { $gitAutocrlf = 'false' }
+                if ($gitAutocrlf -notin @('true','false','input')) { throw 'The Windows checkout line-ending setting is invalid.' }
+                [IO.File]::WriteAllText($shellScript, $script.Replace([string][char]13, ''), [Text.UTF8Encoding]::new($false))
+                $linuxScript = (& wsl.exe -d NovaCI-Debian -u nova-ci -- wslpath -a -u $shellScript).Trim()
+                if ($LASTEXITCODE -ne 0 -or -not $linuxScript) { throw 'Unable to resolve the CI shell script in WSL.' }
+                & wsl.exe -d NovaCI-Debian -u nova-ci -- bash -l $linuxScript $linuxRepo $gitAutocrlf
                 if ($LASTEXITCODE -ne 0) { throw "Linux candidate build failed with exit $LASTEXITCODE." }
             } catch { $linuxFailure = $_ }
             finally {
+                if (Test-Path -LiteralPath $shellScript -PathType Leaf) { Remove-Item -LiteralPath $shellScript }
                 try {
                     # WSL installs its own native Node dependencies. Restore the
                     # Windows developer environment in this same checkout.

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 import { LLVM_DOWNLOADS, LLVM_VERSION, RUST_TOOLCHAIN, parseArguments, targetArchitecture,
   sourceBuildArguments, validateVersions, validateMachObject, setupMacosCi } from './setup-macos-ci.mjs';
@@ -20,6 +21,17 @@ test('exact LLVM archives are pinned and Intel uses real same-version source', (
   assert.ok(args.includes('-DLLVM_BUILD_LLVM_DYLIB=ON'));
   assert.ok(args.includes('-DLLVM_LINK_LLVM_DYLIB=ON'));
   assert.ok(args.some(value => value.includes('opt;llc;llvm-config;llvm-nm')));
+});
+
+test('every real lipo invocation puts its input before the variadic verify_arch option', () => {
+  const source = fs.readFileSync(new URL('./setup-macos-ci.mjs', import.meta.url), 'utf8');
+  const invocations = [...source.matchAll(/run\('(llvm-native-architecture|amice-native-architecture|moltenvk-native-architecture)', 'xcrun', \[([^\r\n]+)\]\);/g)];
+  assert.equal(invocations.length, 3);
+  for (const [, stage, argumentsSource] of invocations) {
+    assert.ok(argumentsSource.startsWith("'lipo', "), stage);
+    assert.ok(argumentsSource.endsWith(", '-verify_arch', arch"), stage);
+    assert.ok(!argumentsSource.startsWith("'lipo', '-verify_arch'"), stage);
+  }
 });
 
 function versions() {

@@ -176,7 +176,7 @@ export async function setupMacosCi(options) {
     versions[tool] = run(`llvm-version-${tool}`, path.join(llvmRoot, 'bin', tool), ['--version'], { capture: true });
   }
   validateVersions(rustVersion, versions, options.target, hostTriple);
-  run('llvm-native-architecture', 'xcrun', ['lipo', '-verify_arch', arch, path.join(llvmRoot, 'bin/opt')]);
+  run('llvm-native-architecture', 'xcrun', ['lipo', path.join(llvmRoot, 'bin/opt'), '-verify_arch', arch]);
   env.LLVM_SYS_221_PREFIX = llvmRoot;
   env.LLVM_CONFIG_PATH = path.join(llvmRoot, 'bin/llvm-config');
   env.PATH = `${path.join(llvmRoot, 'bin')}${path.delimiter}${env.PATH}`;
@@ -203,7 +203,7 @@ export async function setupMacosCi(options) {
     '--target-dir', amiceTarget, '--no-default-features', '--features', features, '--lib', '--',
     ...link, '-C', `link-arg=-Wl,-rpath,${path.join(llvmRoot, 'lib')}`], { cwd: amice });
   const amicePlugin = path.join(amiceTarget, 'release/libamice.dylib');
-  run('amice-native-architecture', 'xcrun', ['lipo', '-verify_arch', arch, amicePlugin]);
+  run('amice-native-architecture', 'xcrun', ['lipo', amicePlugin, '-verify_arch', arch]);
   const vmProfile = path.join(amice, 'crates/amice-vm/profiles/ruoke');
   if (!fs.existsSync(path.join(vmProfile, 'manifest.toml'))) throw new Error('The real release VM profile is missing.');
   const wrapper = path.join(options.toolingRoot, 'protect-rustc.py');
@@ -260,7 +260,7 @@ fn main() {
     const prefix = run('moltenvk-prefix', 'brew', ['--prefix', 'molten-vk'], { capture: true }).trim();
     moltenVk = moltenVkLibrary({ NOVA_MOLTENVK_LIBRARY: path.join(prefix, 'lib/libMoltenVK.dylib') });
   }
-  run('moltenvk-native-architecture', 'xcrun', ['lipo', '-verify_arch', arch, moltenVk]);
+  run('moltenvk-native-architecture', 'xcrun', ['lipo', moltenVk, '-verify_arch', arch]);
   // This library is for the private build host only. Each public target's own
   // packaging runner must locate and lipo-check its target-native MoltenVK;
   // never copy an ARM host library into an Intel candidate.

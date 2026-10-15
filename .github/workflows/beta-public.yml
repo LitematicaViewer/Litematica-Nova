@@ -98,6 +98,17 @@ jobs:
           NOVA_RUNTIME_URL: ${{ matrix.architecture == 'x64' && vars.NOVA_RUNTIME_MACOS_X64_URL || vars.NOVA_RUNTIME_MACOS_ARM64_URL }}
           NOVA_RUNTIME_SHA256: ${{ matrix.architecture == 'x64' && vars.NOVA_RUNTIME_MACOS_X64_SHA256 || vars.NOVA_RUNTIME_MACOS_ARM64_SHA256 }}
         run: node desktop-nova/scripts/fetch-ci-runtime.mjs --target '${{ matrix.target }}'
+      - name: Prepare target-native Vulkan implementation
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.architecture == 'x64' && 'x86_64' || 'arm64' }}
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          brew install molten-vk
+          library="$(brew --prefix molten-vk)/lib/libMoltenVK.dylib"
+          test -f "$library"
+          xcrun lipo "$library" -verify_arch "$TARGET_ARCH"
+          printf 'NOVA_MOLTENVK_LIBRARY=%s\n' "$library" >> "$GITHUB_ENV"
       - name: Build macOS candidate
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/desktop-nova/src-tauri/target/ci-${{ matrix.target }}

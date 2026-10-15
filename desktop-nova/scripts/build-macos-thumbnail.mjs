@@ -67,7 +67,7 @@ function run(command, args) {
 
 // Check the actual Mach-O slices before copying. Tauri embeds this framework
 // in Contents/Frameworks and signs it as nested code using the app identity.
-run('xcrun', ['lipo', '-verify_arch', arch, moltenVk]);
+run('xcrun', ['lipo', moltenVk, '-verify_arch', arch]);
 fs.mkdirSync(path.dirname(framework), { recursive: true });
 fs.copyFileSync(fs.realpathSync(moltenVk), framework);
 
