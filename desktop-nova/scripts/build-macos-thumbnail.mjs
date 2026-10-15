@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 
 export function thumbnailTarget(env = process.env, architecture = process.arch) {
   const target = env.TAURI_ENV_TARGET_TRIPLE || env.CARGO_BUILD_TARGET || env.TAURI_ENV_ARCH || architecture;
@@ -40,7 +41,7 @@ export function moltenVkLibrary(env = process.env, isFile = candidate => {
   return library;
 }
 
-export function buildMacosThumbnail() {
+export function buildMacosThumbnail({ thumbnailOnly = false } = {}) {
 // Tauri beforeBuildCommand runs on every platform. Only a real macOS SDK may
 // produce this extension; no stub executable is put in another platform's app.
 if (process.platform !== 'darwin') return;
@@ -52,7 +53,6 @@ const bundle = path.join(source, 'target/NovaThumbnail.appex');
 const contents = path.join(bundle, 'Contents');
 const executable = path.join(contents, 'MacOS/NovaThumbnail');
 const { arch, minimum } = thumbnailTarget();
-const moltenVk = moltenVkLibrary();
 const framework = path.join(desktop, 'src-tauri/target/platform-frameworks/libMoltenVK.dylib');
 const config = JSON.parse(fs.readFileSync(path.join(desktop, 'src-tauri/tauri.conf.json'), 'utf8'));
 if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(config.version)) throw new Error('Invalid application version for the QuickLook bundle.');
@@ -65,11 +65,35 @@ function run(command, args) {
   if (result.status !== 0) throw new Error(`macOS thumbnail build failed (${command}, exit ${result.status}).`);
 }
 
-// Check the actual Mach-O slices before copying. Tauri embeds this framework
-// in Contents/Frameworks and signs it as nested code using the app identity.
-run('xcrun', ['lipo', moltenVk, '-verify_arch', arch]);
-fs.mkdirSync(path.dirname(framework), { recursive: true });
-fs.copyFileSync(fs.realpathSync(moltenVk), framework);
+if (!thumbnailOnly) {
+  // Preflight can compile Swift independently even when another dependency
+  // fails. Normal Tauri packaging still requires the real matching library.
+  const moltenVk = moltenVkLibrary();
+  run('xcrun', ['lipo', moltenVk, '-verify_arch', arch]);
+  fs.mkdirSync(path.dirname(framework), { recursive: true });
+  fs.copyFileSync(fs.realpathSync(moltenVk), framework);
+}
+
+const identity = process.env.APPLE_SIGNING_IDENTITY?.trim() || '-';
+const fingerprint = crypto.createHash('sha256');
+for (const filename of ['ThumbnailProvider.swift', 'Info.plist', 'entitlements.plist']) fingerprint.update(fs.readFileSync(path.join(source, filename)));
+fingerprint.update(JSON.stringify({ arch, minimum, version, identity }));
+for (const args of [['swiftc', '--version'], ['--sdk', 'macosx', '--show-sdk-version']]) {
+  const result = spawnSync('xcrun', args, { encoding: 'utf8' });
+  if (result.error || result.status !== 0) throw new Error('The real Swift/macOS SDK identity could not be read.');
+  fingerprint.update(result.stdout);
+}
+const stamp = path.join(source, 'target/NovaThumbnail.build.json');
+const digest = fingerprint.digest('hex');
+let previous;
+try { previous = JSON.parse(fs.readFileSync(stamp, 'utf8')); } catch { /* No reusable successful compile. */ }
+if (previous?.fingerprint === digest && fs.existsSync(executable)) {
+  const verified = spawnSync('codesign', ['--verify', '--strict', bundle], { stdio: 'ignore' });
+  if (!verified.error && verified.status === 0) {
+    console.log(`[nova-macos-thumbnail] architecture=${arch} compile=reused signing=${identity === '-' ? 'ad-hoc' : 'configured'} notarization=not_performed runtime=not_verified`);
+    return;
+  }
+}
 
 fs.mkdirSync(path.dirname(executable), { recursive: true });
 fs.writeFileSync(path.join(contents, 'Info.plist'),
@@ -83,8 +107,8 @@ run('xcrun', ['--sdk', 'macosx', 'swiftc', '-parse-as-library', '-O',
   path.join(source, 'ThumbnailProvider.swift'), '-o', executable]);
 run('xcrun', ['strip', '-S', '-x', executable]);
 
-const identity = process.env.APPLE_SIGNING_IDENTITY?.trim() || '-';
 run('codesign', thumbnailSigningArguments(identity, bundle, path.join(source, 'entitlements.plist')));
+fs.writeFileSync(stamp, JSON.stringify({ fingerprint: digest, architecture: arch, minimumSystemVersion: minimum }) + '\n');
 console.log(`[nova-macos-thumbnail] architecture=${arch} signing=${identity === '-' ? 'ad-hoc' : 'configured'} notarization=not_performed runtime=not_verified`);
 }
 
