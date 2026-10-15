@@ -36,6 +36,8 @@ use std::{
 use viewer_launch_contract::NativeCompositionEndpoint;
 use wire::{AckStatus, FrameGate, FrameHeader, InputPacket};
 
+// TASK_BOOTSTRAP_PORT is a selector, not a Mach port name.
+const TASK_BOOTSTRAP_PORT: i32 = 4;
 const MACH_SEND_MSG: u32 = 1;
 const MACH_RCV_MSG: u32 = 2;
 const MACH_SEND_TIMEOUT: u32 = 0x10;
@@ -83,7 +85,7 @@ struct DataMessage<const N: usize> {
 #[link(name = "System")]
 extern "C" {
     static mach_task_self_: u32;
-    fn task_get_bootstrap_port(task: u32, port: *mut u32) -> i32;
+    fn task_get_special_port(task: u32, which_port: i32, port: *mut u32) -> i32;
     fn mach_port_allocate(task: u32, right: i32, name: *mut u32) -> i32;
     fn mach_port_insert_right(task: u32, name: u32, right: u32, disposition: u32) -> i32;
     fn mach_port_deallocate(task: u32, name: u32) -> i32;
@@ -664,7 +666,7 @@ impl Receiver {
         let (mut port, mut bootstrap) = (0, 0);
         unsafe {
             let task = mach_task_self_;
-            if task_get_bootstrap_port(task, &mut bootstrap) != 0 {
+            if task_get_special_port(task, TASK_BOOTSTRAP_PORT, &mut bootstrap) != 0 {
                 return Err("get Host bootstrap port failed".into());
             }
             if mach_port_allocate(task, 1, &mut port) != 0 {

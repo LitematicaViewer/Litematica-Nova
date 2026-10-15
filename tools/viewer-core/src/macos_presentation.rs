@@ -12,6 +12,8 @@ use std::{collections::{HashSet, VecDeque}, ffi::{c_char, c_void, CString},
     sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 use viewer_launch_contract::{NativeCompositionEndpoint, native_macos_wire as wire};
 
+// TASK_BOOTSTRAP_PORT is a selector, not a Mach port name.
+const TASK_BOOTSTRAP_PORT: i32 = 4;
 const RING_SLOTS: usize = 3;
 const EVENT_LIMIT: usize = 256;
 const INPUT_QUEUE_LIMIT: u32 = 128;
@@ -41,7 +43,7 @@ struct PortLimits { queue_limit: u32 }
 #[link(name = "System")]
 unsafe extern "C" {
     static mach_task_self_: u32;
-    fn task_get_bootstrap_port(task: u32, port: *mut u32) -> i32;
+    fn task_get_special_port(task: u32, which_port: i32, port: *mut u32) -> i32;
     fn bootstrap_look_up(bootstrap: u32, name: *const c_char, service: *mut u32) -> i32;
     fn mach_port_allocate(task: u32, right: i32, port: *mut u32) -> i32;
     fn mach_port_insert_right(task: u32, name: u32, right: u32, disposition: u32) -> i32;
@@ -210,7 +212,7 @@ impl MacPresentationProducer {
         let name = CString::new(endpoint.service_name.as_str()).map_err(|_| "invalid Mach service name")?;
         let mut bootstrap = 0; let mut destination = 0;
         unsafe {
-            if task_get_bootstrap_port(mach_task_self_, &mut bootstrap) != 0 { return Err("read renderer bootstrap port failed".into()); }
+            if task_get_special_port(mach_task_self_, TASK_BOOTSTRAP_PORT, &mut bootstrap) != 0 { return Err("read renderer bootstrap port failed".into()); }
             let bootstrap = SendRight(bootstrap);
             if bootstrap_look_up(bootstrap.0, name.as_ptr(), &mut destination) != 0 || destination == 0 {
                 return Err("connect Host presentation Mach service failed".into());
