@@ -7,6 +7,8 @@ use std::{path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Orde
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::sync::watch;
+#[path = "updater_network.rs"]
+mod network;
 
 const EVENT: &str = "nova-update-state";
 
@@ -24,7 +26,8 @@ pub(crate) struct UpdateView {
     message: Option<String>,
 }
 
-struct Pending { update: Update, endpoint: usize, bytes: Option<Vec<u8>> }
+struct CheckedUpdate { update: Update, trace: network::Trace }
+struct Pending { update: Update, endpoint: usize, bytes: Option<Vec<u8>>, trace: network::Trace }
 
 pub(crate) struct UpdateHost {
     view: Mutex<UpdateView>,
@@ -121,6 +124,10 @@ fn validate_https(url: &str) -> Result<reqwest::Url, String> {
 
 fn endpoints(app: &AppHandle) -> Result<Vec<reqwest::Url>, String> {
     let config = app.config().plugins.0.get("updater").ok_or("尚未配置更新服务。")?;
+    configured_endpoints(config)
+}
+
+fn configured_endpoints(config: &serde_json::Value) -> Result<Vec<reqwest::Url>, String> {
     if config.get("pubkey").and_then(|v| v.as_str()).unwrap_or("").trim().is_empty() {
         return Err("尚未配置更新签名公钥。".into());
     }
@@ -129,17 +136,25 @@ fn endpoints(app: &AppHandle) -> Result<Vec<reqwest::Url>, String> {
     if result.is_empty() { Err("尚未配置更新服务。".into()) } else { Ok(result) }
 }
 
-async fn check_endpoint(app: &AppHandle, url: reqwest::Url) -> Result<Option<Update>, String> {
+async fn check_endpoint(app: &AppHandle, url: reqwest::Url) -> Result<Option<CheckedUpdate>, String> {
+    let trace = network::Trace::new("manifest", &url);
+    let client_trace = trace.clone();
     let result = app.updater_builder().endpoints(vec![url]).map_err(|e| e.to_string())?
         .timeout(Duration::from_secs(15))
         // This applies to manifest AND binary, including redirects. No insecure TLS switches.
-        .configure_client(|client| client.https_only(true))
-        .build().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
+        .configure_client(move |client| client_trace.configure(client))
+        .build().map_err(|e| e.to_string())?.check().await;
+    trace.finish(if result.is_ok() { "success" } else { "failed" });
+    let result = result.map_err(|error| {
+        let reason = trace.failure(network::error_details(&error));
+        eprintln!("[NOVA_UPDATE] stage=manifest_failed fallback_reason={reason}");
+        reason
+    })?;
     if let Some(update) = &result {
         validate_https(update.download_url.as_str())?;
         if update.signature.trim().is_empty() { return Err("更新包缺少签名。".into()); }
     }
-    Ok(result)
+    Ok(result.map(|update| CheckedUpdate { update, trace }))
 }
 
 async fn first_success<T, F, Fut>(count: usize, mut check: F) -> Result<(usize, Option<T>), String>
@@ -187,18 +202,26 @@ pub(crate) async fn application_update_check(app: AppHandle, window: WebviewWind
     };
     eprintln!("[NOVA_LIFECYCLE] stage=update_query calls={call} cancelled=false elapsed_ms={}", started.elapsed().as_millis());
     match result {
-        Ok((index, Some(update))) => {
+        Ok((index, Some(checked))) => {
+            let CheckedUpdate { update, trace } = checked;
             let skipped = std::fs::read_to_string(&host.skipped_path).unwrap_or_default();
             host.publish(&app, |v| {
                 v.phase = if !manual && skipped.trim() == update.version { "skipped" } else { "available" };
                 v.version = Some(update.version.clone()); v.notes = update.body.clone();
                 v.date = update.date.map(|d| d.date().to_string());
-                v.source = Some(if index == 0 { "GitHub" } else { "镜像服务器" }.into());
+                v.source = Some(network::source_name(&urls[index]));
                 v.downloaded = 0; v.total = None;
             });
-            *host.pending.lock().unwrap() = Some(Pending { update, endpoint: index, bytes: None });
+            eprintln!("[NOVA_UPDATE] stage=release_selected manifest_origin={} download_origin={} version={} target={} signature_present=true unrequested_sources={}",
+                network::origin(&urls[index]), network::origin(&update.download_url), update.version, update.target,
+                urls[index + 1..].iter().map(network::origin).collect::<Vec<_>>().join(","));
+            *host.pending.lock().unwrap() = Some(Pending { update, endpoint: index, bytes: None, trace });
         }
-        Ok((_, None)) => { *host.pending.lock().unwrap() = None; host.publish(&app, |v| { v.phase = "current"; v.message = None; }); }
+        Ok((index, None)) => {
+            eprintln!("[NOVA_UPDATE] stage=current manifest_origin={} unrequested_sources={}", network::origin(&urls[index]),
+                urls[index + 1..].iter().map(network::origin).collect::<Vec<_>>().join(","));
+            *host.pending.lock().unwrap() = None; host.publish(&app, |v| { v.phase = "current"; v.message = None; v.source = Some(network::source_name(&urls[index])); });
+        }
         Err(error) => { return Err(host.fail(&app, format!("更新检查失败：{error}"))); }
     }
     Ok(host.snapshot())
@@ -233,26 +256,29 @@ pub(crate) async fn application_update_download(app: AppHandle, window: WebviewW
     require_main(&window)?;
     let _busy = host.acquire()?;
     let mut cancel = host.cancel.subscribe();
-    let (original, endpoint) = host.pending.lock().unwrap().as_ref().map(|p| (p.update.clone(), p.endpoint)).ok_or("请先检查更新。")?;
+    let (original, endpoint, original_trace) = host.pending.lock().unwrap().as_ref().map(|p| (p.update.clone(), p.endpoint, p.trace.clone())).ok_or("请先检查更新。")?;
     let urls = endpoints(&app)?;
     let mut last_error = String::new();
     // Original first, then each configured mirror at most once; never switch release identity.
     let order = std::iter::once(endpoint).chain((0..urls.len()).filter(|i| *i != endpoint));
     for index in order {
-        let mut update = if index == endpoint { original.clone() } else {
+        let CheckedUpdate { mut update, trace } = if index == endpoint { CheckedUpdate { update: original.clone(), trace: original_trace.clone() } } else {
+            eprintln!("[NOVA_UPDATE] stage=download_fallback next_manifest_origin={} reason={} expected_version={} signature_identity=unchanged",
+                network::origin(&urls[index]), last_error, original.version);
             let checked = tokio::select! { biased;
                 _ = cancel.changed() => return Ok(host.snapshot()),
                 result = check_endpoint(&app, urls[index].clone()) => result,
             };
             match checked {
-                Ok(Some(value)) if same_release(&original.version, &original.signature, &value) => value,
-                Ok(_) => { last_error = "镜像尚无同版本、同签名更新包。".into(); continue; }
+                Ok(Some(value)) if same_release(&original.version, &original.signature, &value.update) && value.update.target == original.target => value,
+                Ok(_) => { last_error = "镜像尚无同版本、同目标、同签名更新包。".into(); continue; }
                 Err(error) => { last_error = error; continue; }
             }
         };
         update.timeout = Some(Duration::from_secs(600));
+        trace.begin("download", &update.download_url);
         host.publish(&app, |v| { v.phase = "downloading"; v.downloaded = 0; v.total = None; v.message = None;
-            v.source = Some(if index == 0 { "GitHub" } else { "镜像服务器" }.into()); });
+            v.source = Some(network::source_name(&update.download_url)); });
         let mut downloaded = 0u64;
         let mut last_progress = Instant::now() - Duration::from_secs(1);
         let result = tokio::select! { biased;
@@ -267,11 +293,12 @@ pub(crate) async fn application_update_download(app: AppHandle, window: WebviewW
         };
         match result {
             Ok(bytes) => {
+                trace.finish("signature_verified");
                 // Official download returns bytes only AFTER mandatory minisign verification.
-                *host.pending.lock().unwrap() = Some(Pending { update, endpoint: index, bytes: Some(bytes) });
+                *host.pending.lock().unwrap() = Some(Pending { update, endpoint: index, bytes: Some(bytes), trace });
                 host.publish(&app, |v| v.phase = "downloaded"); return Ok(host.snapshot());
             }
-            Err(error) => last_error = error.to_string(),
+            Err(error) => { trace.finish("failed"); last_error = trace.failure(network::error_details(&error)); },
         }
     }
     Err(host.fail(&app, format!("更新下载或签名校验失败：{last_error}")))
@@ -312,11 +339,53 @@ pub(crate) async fn application_update_install(app: AppHandle, window: WebviewWi
     host.publish(&app, |v| { v.phase = "installing"; v.message = Some("正在安装，完成后自动重启…".into()); });
     let pending = host.pending.lock().unwrap().take().ok_or_else(|| host.restart_required(&app, "更新包已失效".into()))?;
     let bytes = pending.bytes.ok_or_else(|| host.restart_required(&app, "更新包已失效".into()))?;
+    eprintln!("[NOVA_UPDATE] stage=install version={} target={} bundle_type={:?} data_cleanup=false permission_flow=official_updater restart=after_install", pending.update.version, pending.update.target, tauri::utils::platform::bundle_type());
     let result = pending.update.install(bytes);
     result.map_err(|e| host.restart_required(&app, format!("更新安装失败：{e}")))?;
     #[cfg(not(windows))]
     app.restart();
     Ok(())
+}
+
+/// Dispatch before graphics, windows, backend services and single-instance setup.
+/// The plan is inspection only; real installation always stays behind the
+/// existing draft preservation, shutdown, signature and official installer path.
+pub(crate) fn run_cli(args: &[std::ffi::OsString], config: &tauri::utils::config::Config, version: &str) -> Option<i32> {
+    let has = |flag: &str| args.iter().any(|value| value == flag);
+    let diagnostic = has("--updater-diagnostics");
+    let plan = has("--updater-install-plan");
+    if !diagnostic && !plan { return None; }
+    let argument = |flag: &str| args.iter().position(|value| value == flag).and_then(|index| args.get(index + 1)).and_then(|value| value.to_str()).map(str::to_owned);
+    let result = (|| {
+        let updater = config.plugins.0.get("updater").ok_or("尚未配置更新服务。")?;
+        let mut urls = configured_endpoints(updater)?;
+        // Explicit fault injection for this diagnostic process only. The
+        // application configuration and regular update chain are never changed.
+        if let Some(primary) = argument("--updater-primary") { urls[0] = validate_https(&primary)?; }
+        let bundle = tauri::utils::platform::bundle_type();
+        let base = tauri_plugin_updater::target().ok_or("当前平台没有更新目标。")?;
+        let target = argument("--updater-target").unwrap_or_else(|| match bundle {
+            Some(tauri::utils::config::BundleType::Deb) => format!("{base}-deb"),
+            Some(tauri::utils::config::BundleType::AppImage) => format!("{base}-appimage"),
+            _ => base,
+        });
+        let mut report = serde_json::json!({ "currentVersion": version, "target": target, "bundleType": format!("{bundle:?}"),
+            "officialUpdaterVersion": "2.10.0", "systemProxyFeature": true,
+            "installPlan": {
+                "linuxDeb": "signed .deb; official dpkg -i with pkexec / graphical sudo / sudo permission flow",
+                "linuxAppImage": "signed AppImage or AppImage tar.gz; official in-place executable replacement",
+                "macOS": "signed architecture-specific .app.tar.gz, not DMG; official bundle replacement with administrator permission when needed",
+                "windows": "signed NSIS payload; official passive /P /R preserving the existing installation identity",
+                "dataCleanup": false, "restart": "only after successful installation", "installationExecuted": false, "restartVerified": false
+            }
+        });
+        if diagnostic { report["network"] = tauri::async_runtime::block_on(network::probe(&urls, &target))?; }
+        Ok::<_, String>(report)
+    })();
+    match result {
+        Ok(report) => { println!("{}", serde_json::to_string_pretty(&report).unwrap()); Some(0) }
+        Err(error) => { eprintln!("[NOVA_UPDATE_DIAGNOSTIC] result=failed reason={error}"); Some(1) }
+    }
 }
 
 #[tauri::command]

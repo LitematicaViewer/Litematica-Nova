@@ -1,6 +1,7 @@
 import { Button } from "../components/ui/button";
 import { ScrollArea } from "../components/ui/scroll-area";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { getApplicationVersion } from "../../src/platform/appData";
 import { invoke } from "../../src/platform/tauri";
 import { addOrUpdateRecord, loadLibrary } from "../../src/business/projectionLibrary";
 import { listenEvent } from "../../src/platform/events";
@@ -15,7 +16,7 @@ import { GeneratePage } from "../windows/main/pages/generate/GeneratePage";
 import { RenderPage } from "../windows/main/pages/render/RenderPage";
 import { SettingsPage } from "../windows/main/pages/settings/SettingsPage";
 import { UiTestPage } from "../windows/main/pages/ui-test/UiTestPage";
-import { loadUserConfigMigratingLocalStorage, normalizeShowUiTestPage, saveThemeConfig, saveColorModeConfig } from "../../src/business/facade";
+import { loadUserConfigMigratingLocalStorage, normalizeDebugMode, saveThemeConfig, saveColorModeConfig } from "../../src/business/facade";
 import {
   announceThemeChange,
   announceColorModeChange,
@@ -84,7 +85,9 @@ export function App() {
     return () => { cancelled = true; };
   }, [showEnumerator, currentFile]);
   const [expanded, setExpanded] = useState(true);
-  const [showUiTestPage, setShowUiTestPage] = useState(true);
+  const [debugMode, setDebugMode] = useState(false);
+  const [buildVersion, setBuildVersion] = useState("");
+  useEffect(() => { void getApplicationVersion().then(setBuildVersion).catch(console.error); }, []);
 
   useLayoutEffect(() => {
     applyThemeStylesheet(theme);
@@ -125,7 +128,7 @@ export function App() {
     initI18n();
     loadUserConfigMigratingLocalStorage()
       .then((info) => {
-        setShowUiTestPage(normalizeShowUiTestPage(info.config.show_ui_test_page));
+        setDebugMode(normalizeDebugMode(info.config.debug_mode));
       })
       .catch(() => undefined);
   }, []);
@@ -142,10 +145,18 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!showUiTestPage && route === "ui_test") {
+    if (!debugMode) setShowEnumerator(false);
+    if (!debugMode && route === "ui_test") {
       setRoute("settings");
     }
-  }, [showUiTestPage, route]);
+  }, [debugMode, route]);
+
+  useEffect(() => {
+    const listening = listenEvent<{ enabled: boolean }>("nova-debug-mode-changed", event => {
+      setDebugMode(normalizeDebugMode(event.payload?.enabled));
+    });
+    return () => { void listening.then(off => off()); };
+  }, []);
 
   const topPages: Record<string, { name: string; icon: string; comp: React.FC<any> }> = {
     home: { name: "主页", icon: "home", comp: HomePage },
@@ -159,7 +170,7 @@ export function App() {
   };
 
   const bottomPages: Record<string, { name: string; icon: string; comp: React.FC<any> }> = {
-    ...(showUiTestPage ? { ui_test: { name: "UI 测试", icon: "ui_debug", comp: UiTestPage } } : {}),
+    ...(debugMode ? { ui_test: { name: "UI 测试", icon: "ui_debug", comp: UiTestPage } } : {}),
     settings: { name: "选项", icon: "options", comp: SettingsPage },
   };
 
@@ -200,10 +211,10 @@ export function App() {
         </nav></ScrollArea>
 
         <nav className="nav-list nav-list-bottom" aria-label="选项">
-          <Button variant="ghost" className="sidebar-item nav-item" type="button" aria-label="枚举器" title={!expanded ? "枚举器" : ""}
+          {debugMode && <Button variant="ghost" className="sidebar-item nav-item" type="button" aria-label="枚举器" title={!expanded ? "枚举器" : ""}
             onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true)).catch((error) => setEnumeratorError(String(error)))}>
             <NavIcon name="enumerator" theme={theme} />{expanded && <span className="nav-label">枚举器</span>}
-          </Button>
+          </Button>}
           <UpdateDialog theme={theme} />
           {Object.entries(bottomPages).map(([key, value]) => {
             const active = route === key;
@@ -228,7 +239,7 @@ export function App() {
         {closeRecovery.error && <div role="alert"><p>{closeRecovery.error}</p><Button onClick={() => void closeRecovery.retry()}>重试关闭</Button></div>}
         {themeSaveError && <p role="alert">{themeSaveError}</p>}
         {enumeratorError && <p role="alert">枚举器：{enumeratorError}</p>}
-        <Page presentationBlocked={showEnumerator} currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} setShowUiTestPage={setShowUiTestPage} />
+        <Page presentationBlocked={showEnumerator} currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} debugMode={debugMode} setDebugMode={setDebugMode} buildVersion={buildVersion} />
       </main>
       {showEnumerator && <EnumeratorDialog theme={theme} currentFile={currentFile} runtimeCollection={enumeratorRuntime} onClose={() => setShowEnumerator(false)} />}
     </div>

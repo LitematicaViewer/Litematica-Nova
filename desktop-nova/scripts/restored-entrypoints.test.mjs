@@ -13,8 +13,9 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 function harness(file, exportName, options = {}) {
   let cursor = 0, tree;
   const slots = [], effects = [], cache = new Map();
+  const events = new Map();
   const calls = { window: [], stats: [], structural: [], quick: [], full: [], starts: [], cancels: [] };
-  const config = { config: { material_list_window_behavior: options.behavior || "main_window_overlay", theme: "shadcn", color_mode: "light", preview_mode: "full", show_ui_test_page: false, local_library_tail_path_count: 3 } };
+  const config = { config: { material_list_window_behavior: options.behavior || "main_window_overlay", theme: "shadcn", color_mode: "light", preview_mode: "full", debug_mode: options.debugMode ?? false, show_ui_test_page: false, local_library_tail_path_count: 3 } };
   const hooks = {
     ...React,
     useState(initial) { const index = cursor++; slots[index] ??= { value: typeof initial === "function" ? initial() : initial }; return [slots[index].value, next => { slots[index].value = typeof next === "function" ? next(slots[index].value) : next; }]; },
@@ -30,7 +31,7 @@ function harness(file, exportName, options = {}) {
     loadStructureStats: async source => { calls.stats.push(source); return { marker: source, materials: [{ id: "minecraft:stone", totalCount: 2 }] }; },
     loadStructuralBlocks: async source => { calls.structural.push(source); return [{ id: "minecraft:stone", count: 2 }]; },
     createRuntimeProjectionCollection: (source, blocks) => ({ id: source, symbol: "L", values: blocks.map(block => block.id) }),
-    normalizeShowUiTestPage: value => value !== false, normalizeTheme: value => value || "shadcn", normalizeColorMode: value => value || "light", normalizeDisplayMode: value => value || "full", normalizeLocalLibraryTailPathCount: value => value || 3,
+    normalizeShowUiTestPage: value => value === true, normalizeDebugMode: value => value === true, displayFilePath: value => value, displayPathText: value => value, normalizeTheme: value => value || "shadcn", normalizeColorMode: value => value || "light", normalizeDisplayMode: value => value || "full", normalizeLocalLibraryTailPathCount: value => value || 3,
     normalizeGraphicsBackend: value => value === "dx12" || value === "vulkan" ? value : "auto",
     getNovaRuntimePathInfo: async () => ({ workspaceRoot: "C:/fixture", dbInfo: null, zhInfo: null, iconDirInfo: null }),
     aiGetConfig: async () => ({ provider: "mock", base_url: "", model: "", has_key: false }),
@@ -64,9 +65,10 @@ function harness(file, exportName, options = {}) {
       if (id.endsWith("useEmbeddedViewer")) return { useEmbeddedViewer: () => ({ hostRef: { current: null }, error: "", requestPresentationWhenReady() {}, setPresentation: async () => {}, showOverlay: async () => {} }) };
       if (id.endsWith("themeRuntime")) return { currentThemeId: () => "shadcn", currentColorMode: () => "light", themeClassName: value => value, applyThemeStylesheet() {}, subscribeToThemeChanges: () => () => {}, announceThemeChange() {}, announceColorModeChange() {} };
       if (id.endsWith("updateRecovery")) return { readUpdateDraft: () => ({ currentFile: "C:/fixture/source.litematic", route: "render" }), takeUpdateDraft() {}, useUpdateDraft() {}, useApplicationCloseRecovery: () => ({ error: "" }) };
-      if (id.endsWith("platform/events")) return { emitEvent: async () => {}, listenEvent: async () => () => {} };
+      if (id.endsWith("platform/events")) return { emitEvent: async () => {}, listenEvent: async (name, handler) => { events.set(name, handler); return () => events.delete(name); } };
       if (id.endsWith("platform/tauri")) return { invoke: async () => [] };
       if (id.endsWith("libraryEvents")) return {};
+      if (id === "@tauri-apps/api/app") return { getVersion: async () => "0.2.1-fixture" };
       if (id === "@tauri-apps/api/window") return { getCurrentWindow: () => ({ close: async () => {} }) };
       if (id === "lucide-react") return new Proxy({}, { get: () => "svg" });
       if (id.includes("components/ui/")) return ui;
@@ -79,7 +81,7 @@ function harness(file, exportName, options = {}) {
   function nodes() { const values = []; const visit = value => { if (!value || typeof value !== "object") return; if (Array.isArray(value)) return value.forEach(visit); values.push(value); visit(value.props?.children); }; visit(tree); return values; }
   const text = value => value == null ? "" : Array.isArray(value) ? value.map(text).join("") : typeof value === "object" ? text(value.props?.children) : String(value);
   return {
-    calls, render(props = {}) { cursor = 0; tree = module[exportName](props); while (effects.length) effects.shift()(); return tree; }, nodes,
+    calls, emit(name, payload) { events.get(name)?.({ payload }); }, render(props = {}) { cursor = 0; tree = module[exportName](props); while (effects.length) effects.shift()(); return tree; }, nodes,
     button(label) { return nodes().find(node => node.type === "button" && text(node.props.children) === label); },
     component(name) { return nodes().find(node => node.type?.name === name); },
     text() { return text(tree); },
@@ -121,8 +123,7 @@ test("图形API读取持久配置，异步保存受控状态；失败恢复且�
   assert.equal(lightRoute().props.value, "iris-gl46", "saving graphics API must not discard an unsaved shader configuration draft");
   assert.deepEqual(saved, ["dx12"]);
   assert.equal(h.calls.starts.length, 0); assert.equal(h.calls.cancels.length, 0);
-  assert.match(h.text(), /标准和完整模式当前使用 Vulkan/);
-  assert.match(h.text(), /不会替换成快速模式/);
+  assert.doesNotMatch(h.text(), /自动按设备能力|不会替换成快速模式|不重建现有预览/);
   const restarted = harness("ui/windows/main/pages/settings/SettingsPage.tsx", "SettingsPage", { facade: {
     ...facade, saveGraphicsBackendConfig: async () => { throw new Error("write failed"); },
   } });
@@ -135,16 +136,13 @@ test("图形API读取持久配置，异步保存受控状态；失败恢复且�
   assert.equal(restarted.calls.starts.length, 0);
 });
 
-test("渲染材料浏览只在遮罩需要时读取数据，关闭恢复Preview阻挡状态且保留三模式", async () => {
+test("渲染模式区域只保留快速/标准/完整，不再从渲染页读取材料", async () => {
   const props = { currentFile: "C:/fixture/source.litematic" };
-  const independent = harness("ui/windows/main/pages/render/RenderPage.tsx", "RenderPage", { behavior: "independent_window" });
-  independent.render(props); independent.render(props); independent.button("材料列表").props.onClick(); await tick(); independent.render(props);
-  assert.deepEqual(independent.calls.window, [["materials", props.currentFile, "details"]]); assert.deepEqual(independent.calls.stats, []);
-  const h = harness("ui/windows/main/pages/render/RenderPage.tsx", "RenderPage"); h.render(props); h.render(props);
-  h.button("材料列表").props.onClick(); await tick(); h.render(props);
-  const dialog = h.component("MaterialsDialog"); assert.equal(dialog.props.data.marker, props.currentFile); assert.equal(h.calls.quick.at(-1)[1], true);
-  dialog.props.onClose(); h.render(props); assert.equal(h.calls.quick.at(-1)[1], false);
+  const h = harness("ui/windows/main/pages/render/RenderPage.tsx", "RenderPage");
+  h.render(props); h.render(props);
+  assert.equal(h.button("材料列表"), undefined);
   for (const name of ["标准模式", "完整模式", "快速模式"]) { h.button(name).props.onClick(); h.render(props); }
+  assert.deepEqual(h.calls.window, []); assert.deepEqual(h.calls.stats, []);
   assert.equal(h.calls.starts.length, 0); assert.equal(h.calls.cancels.length, 0);
 });
 
@@ -156,9 +154,24 @@ test("真实进度DTO驱动阶段、百分比与完成量，取消仍调用原Fu
 });
 
 test("Shell枚举器非新路由，遮罩加载原始结构集合并向活动页面传Presentation阻挡", async () => {
-  const h = harness("ui/shell/AppShell.tsx", "App"); h.render(); await tick(); h.render();
+  const h = harness("ui/shell/AppShell.tsx", "App", { debugMode: true }); h.render(); await tick(); h.render();
   const entry = h.nodes().find(node => node.type === "button" && node.props["aria-label"] === "枚举器"); await entry.props.onClick(); h.render(); await tick(); h.render();
   const dialog = h.component("EnumeratorDialog"); assert.equal(dialog.props.runtimeCollection.symbol, "L"); assert.deepEqual(dialog.props.runtimeCollection.values, ["minecraft:stone"]);
   const page = h.component("RenderPage"); assert.equal(page.props.presentationBlocked, true); dialog.props.onClose(); h.render(); assert.equal(h.component("RenderPage").props.presentationBlocked, false);
   assert.deepEqual(h.calls.structural, ["C:/fixture/source.litematic"]);
+});
+
+test("发行版调试入口默认隐藏，持久加载后才显示，关闭事件立即关闭页面与遮罩", async () => {
+  const normal = harness("ui/shell/AppShell.tsx", "App");
+  normal.render();
+  const debugEntries = h => h.nodes().filter(node => node.type === "button" && ["枚举器", "UI 测试"].includes(node.props["aria-label"]));
+  assert.equal(debugEntries(normal).length, 0);
+  await tick(); normal.render(); assert.equal(debugEntries(normal).length, 0);
+  const enabled = harness("ui/shell/AppShell.tsx", "App", { debugMode: true });
+  enabled.render(); assert.equal(debugEntries(enabled).length, 0);
+  await tick(); enabled.render(); assert.equal(debugEntries(enabled).length, 2);
+  await enabled.nodes().find(node => node.props["aria-label"] === "枚举器").props.onClick();
+  enabled.render(); await tick(); enabled.render(); assert.ok(enabled.component("EnumeratorDialog"));
+  enabled.emit("nova-debug-mode-changed", { enabled: false }); enabled.render(); enabled.render();
+  assert.equal(debugEntries(enabled).length, 0); assert.equal(enabled.component("EnumeratorDialog"), undefined);
 });

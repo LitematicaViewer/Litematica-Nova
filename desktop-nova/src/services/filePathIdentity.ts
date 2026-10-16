@@ -20,3 +20,9 @@ export function windowsPathKey(path: string): string {
   }
   return `native:${path === "/" ? path : path.replace(/\/+$/, "")}`;
 }
+
+/** Format paths embedded in a status/error message without changing stored errors or IO arguments. */
+export function displayPathText(text: string): string {
+  return text.replace(/\\\\\?\\UNC\\(?=[^\\]+\\[^\\]+)/gi, "\\\\")
+    .replace(/\\\\\?\\(?=[a-z]:[\\/])/gi, "");
+}

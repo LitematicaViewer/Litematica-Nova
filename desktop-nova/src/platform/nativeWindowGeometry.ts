@@ -29,3 +29,5 @@ export async function subscribeApplicationWindowGeometry(
 export function closeApplicationWindow(): Promise<void> {
   return getCurrentWindow().close();
 }
+
+export function getApplicationWindowLabel(): string { return getCurrentWindow().label; }

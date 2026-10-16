@@ -1,62 +1,44 @@
+import { displayPathText } from "../../../../../src/business/facade";
 import React, { useEffect, useRef, useState } from "react";
 import { Box, EyeOff, Play, X, Image } from "lucide-react";
-import { loadLibrary, setRecordPreview, renderPreviewImage, loadStructureStats, type StatsData } from "../../../../../src/business/facade";
+import { loadLibrary, setRecordPreview, renderPreviewImage, readProjectionPreviewImage } from "../../../../../src/business/facade";
 import { emitEvent } from "../../../../../src/platform/events";
 import { projectionLibraryStateChangedEvent } from "../../../libraryEvents";
 import { Button } from "../../../../components/ui/button";
 import { Checkbox } from "../../../../components/ui/checkbox";
 import { useQuickPreview } from "../../useQuickPreview";
 import { useFullPreview } from "../../useFullPreview";
-import { QuickResourceDialog } from "../../QuickResourceDialog";
 import { formatResourceBytes } from "../../../../../src/business/resourcePreflightUnits";
-import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
+import { displayFilePath } from "../../../../../src/business/facade";
 import "./render.css";
 
 /** Separate historical Fast and real private Full service paths; no algorithm substitution. */
 export function RenderPage({ currentFile, presentationBlocked = false }: { currentFile: string; presentationBlocked?: boolean }) {
-  const [showMaterials, setShowMaterials] = useState(false);
-  const [materialsData, setMaterialsData] = useState<StatsData | null>(null);
-  const [materialsBusy, setMaterialsBusy] = useState(false);
-  const [materialsError, setMaterialsError] = useState("");
-  const materialsGeneration = useRef(0);
-  useEffect(() => {
-    materialsGeneration.current++; setShowMaterials(false); setMaterialsData(null); setMaterialsBusy(false); setMaterialsError("");
-    return () => { materialsGeneration.current++; };
-  }, [currentFile]);
-  const openMaterials = async () => {
-    setMaterialsError("");
-    try {
-      await openMaterialsWithWindowBehavior(currentFile, () => {
-        const generation = ++materialsGeneration.current;
-        setMaterialsBusy(true);
-        void loadStructureStats(currentFile).then((data) => {
-          if (materialsGeneration.current !== generation) return;
-          setMaterialsData(data); setShowMaterials(true);
-        }).catch((error) => {
-          if (materialsGeneration.current === generation) setMaterialsError(String(error));
-        }).finally(() => {
-          if (materialsGeneration.current === generation) setMaterialsBusy(false);
-        });
-      });
-    } catch (error) { setMaterialsError(String(error)); }
-  };
   const [mode, setMode] = useState<"fast" | "standard" | "full">("fast");
   const [preloads, setPreloads] = useState({ full: false, standard: false, fast: false });
   const exactMode = mode === "standard" ? "standard" : "full";
   const preload = preloads[mode];
-  const preview = useQuickPreview(currentFile || "", mode !== "fast" || showMaterials || presentationBlocked, preload);
-  const full = useFullPreview(currentFile || "", preload, mode === "fast" || showMaterials || presentationBlocked, exactMode);
+  const preview = useQuickPreview(currentFile || "", mode !== "fast" || presentationBlocked, preload);
+  const full = useFullPreview(currentFile || "", preload, mode === "fast" || presentationBlocked, exactMode);
   const [capturing, setCapturing] = useState(false);
   const [captureMessage, setCaptureMessage] = useState("");
+  const captureInFlight = useRef(false);
+  const captureSource = useRef(currentFile); captureSource.current = currentFile;
+  useEffect(() => { setCaptureMessage(""); }, [currentFile]);
   const capture = async () => {
+    if (captureInFlight.current) return;
+    const source = currentFile; captureInFlight.current = true;
     setCapturing(true); setCaptureMessage("");
     try {
-      const image = await renderPreviewImage(currentFile, "fast_experimental");
-      await setRecordPreview(await loadLibrary(), currentFile, image.preview_path);
-      await emitEvent(projectionLibraryStateChangedEvent, {}).catch(() => undefined);
-      setCaptureMessage("缩略图已保存。");
-    } catch (error) { setCaptureMessage(String(error)); }
-    finally { setCapturing(false); }
+      const image = await renderPreviewImage(source, mode === "fast" ? "fast_experimental" : mode, undefined,
+        mode === "fast" ? preview.operation?.previewId : full.operation?.operationId);
+      const embedded = await readProjectionPreviewImage(source);
+      if (!embedded?.data_url) throw new Error("预览图写回后读取失败，请重试。");
+      await setRecordPreview(await loadLibrary(), source, image.preview_path);
+      await emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: source }).catch(() => undefined);
+      if (captureSource.current === source) setCaptureMessage("缩略图已保存。");
+    } catch (error) { if (captureSource.current === source) setCaptureMessage(String(error)); }
+    finally { captureInFlight.current = false; setCapturing(false); }
   };
   const fullProgress = full.progress;
   const fullProgressBounded = fullProgress?.completed != null && fullProgress?.total != null
@@ -74,21 +56,20 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
   return <section className="render-page">
     <header className="render-page-header">
       <h2 className="render-page-title">{mode === "full" ? "完整渲染" : mode === "standard" ? "标准渲染" : "快速渲染"}</h2>
-      <div className="render-page-source" title={currentFile}>{name}</div>
+      <div className="render-page-source" title={displayFilePath(currentFile)}>{name}</div>
     </header>
     <div className="render-page-actions" aria-label="渲染模式">
-      <Button variant="secondary" disabled={!currentFile || materialsBusy} onClick={() => void openMaterials()}>{materialsBusy ? "正在读取材料…" : "材料列表"}</Button>
       <Button variant={mode === "fast" ? "default" : "ghost"} aria-pressed={mode === "fast"} onClick={() => setMode("fast")}>快速模式</Button>
       <Button variant={mode === "standard" ? "default" : "ghost"} aria-pressed={mode === "standard"} onClick={() => setMode("standard")}>标准模式</Button>
       <Button variant={mode === "full" ? "default" : "ghost"} aria-pressed={mode === "full"} onClick={() => setMode("full")}>完整模式</Button>
     </div>
-    {materialsError && <pre className="render-error" role="alert">{materialsError}</pre>}
     {mode !== "fast" ? <>
       <div className="render-page-actions">
         <label><Checkbox checked={preload} disabled={full.pending || full.loading} onCheckedChange={checked => setPreloads(previous => ({ ...previous, [exactMode]: checked === true }))} />预加载</label>
         <Button disabled={!currentFile || full.pending || full.loading} onClick={() => void full.start()}><Play size={16} aria-hidden="true" />{mode === "standard" ? "标准" : "完整"}渲染</Button>
         <Button variant="ghost" disabled={!full.operation || full.pending} onClick={() => void full.hide()}><EyeOff size={16} aria-hidden="true" />隐藏</Button>
         <Button variant="ghost" disabled={!full.operation && !full.pending && !full.preflight} onClick={() => void full.close()}><X size={16} aria-hidden="true" />关闭 / 取消</Button>
+        <Button variant="ghost" disabled={!full.ready || full.pending || capturing} onClick={() => void capture()}><Image size={16} aria-hidden="true" />{capturing ? "正在保存…" : "设为缩略图"}</Button>
       </div>
       {full.preflight && <section className="render-preview-help" role="status">
         <p>显存需求：{full.preflight.conservativeVramBytes == null ? "未知" : formatResourceBytes(full.preflight.conservativeVramBytes)}</p>
@@ -102,7 +83,7 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
           <Button variant="ghost" onClick={() => void full.close()}>取消</Button>
         </div>
       </section>}
-      {full.error && <pre className="render-error" role="alert">{full.error}</pre>}
+      {full.error && <pre className="render-error" role="alert">{displayPathText(full.error)}</pre>}
       {fullProgress && !full.visible && !full.error && <div className="render-preview-help" role="status" aria-live="polite">
         {full.progressLabel}
         {fullProgressBounded && <progress aria-label="渲染进度" max={fullProgress.total!} value={fullProgress.completed!} />}
@@ -120,8 +101,8 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
       <Button variant="ghost" disabled={!operation || !["starting", "ready"].includes(operation.state) || preview.pending} onClick={() => void preview.close()}><X size={16} aria-hidden="true" />{loading ? "取消加载" : "关闭预览"}</Button>
       <Button variant="ghost" disabled={!ready || capturing} onClick={() => void capture()}><Image size={16} aria-hidden="true" />{capturing ? "正在读取真实帧…" : "设为缩略图"}</Button>
     </div>
-    {error && <pre className="render-error" role="alert">{error}</pre>}
-    {captureMessage && <div role="status">{captureMessage}</div>}
+    {error && <pre className="render-error" role="alert">{displayPathText(error)}</pre>}
+    {captureMessage && <div role="status">{displayPathText(captureMessage)}</div>}
     <div className="render-preview-group">
       <div ref={preview.hostRef} className="render-preview-host" aria-label="快速 Viewer 页内视口">
         {!ready && <div className="render-preview-placeholder"><Box size={40} aria-hidden="true" /><strong>{name}</strong><span>{status}</span></div>}
@@ -129,10 +110,6 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
       <div className="render-preview-help" role="status" aria-live="polite">{status}</div>
     </div>
     </>}
-    {mode === "fast" && operation?.resource?.decisionRequired && <QuickResourceDialog report={operation.resource} busy={preview.pending} onChoose={async (action) => {
-      if (action !== "cancel") setPreloads((current) => ({ ...current, fast: action === "preload" }));
-      await preview.chooseResources(action);
-    }} />}
-    {showMaterials && materialsData && <MaterialsDialog data={materialsData} currentFile={currentFile} onClose={() => setShowMaterials(false)} />}
+    {mode !== "fast" && captureMessage && <div role="status">{displayPathText(captureMessage)}</div>}
   </section>;
 }

@@ -739,7 +739,7 @@ where
     Ok(scan)
 }
 
-fn scan_preview_image_from_gzip<R>(compressed: R) -> Result<Option<LitematicPreviewImage>>
+pub(crate) fn scan_preview_image_from_gzip<R>(compressed: R) -> Result<Option<LitematicPreviewImage>>
 where
     R: BufRead,
 {

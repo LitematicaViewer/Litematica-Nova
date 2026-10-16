@@ -1,3 +1,4 @@
+import { displayPathText } from "../../../../../src/business/facade";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { takeUpdateDraft, useUpdateDraft } from "../../updateRecovery";
 import {
@@ -9,8 +10,9 @@ import {
   selectPreviewImageFile,
   importProjectionPreviewImage,
   clearProjectionPreviewImage,
+  renderPreviewImage,
 } from "../../../../../src/business/facade";
-import { emitEvent } from "../../../../../src/platform/events";
+import { emitEvent, listenEvent } from "../../../../../src/platform/events";
 import { projectionLibraryStateChangedEvent } from "../../../libraryEvents";
 import {
   addOrUpdateRecordFromAnalysis,
@@ -32,10 +34,9 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from ".
 import { useQuickPreview } from "../../useQuickPreview";
 import { useFullPreview } from "../../useFullPreview";
 import { Checkbox } from "../../../../components/ui/checkbox";
-import { QuickResourceDialog } from "../../QuickResourceDialog";
 import { Dialog } from "../../../../components/Dialog";
 import "./properties.css";
-import { displayFilePath, minecraftVersionLabel } from "../../../../../src/business/projectionLibrary";
+import { displayFilePath, minecraftVersionLabel, windowsPathKey } from "../../../../../src/business/projectionLibrary";
 import { VersionConversionDialog } from "./VersionConversionDialog";
 import { formatResourceBytes } from "../../../../../src/business/resourcePreflightUnits";
 
@@ -135,6 +136,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
   const [preload, setPreload] = useState(false);
   const [filePreview, setFilePreview] = useState("");
   const [filePreviewBusy, setFilePreviewBusy] = useState(false);
+  const [capturingPreview, setCapturingPreview] = useState(false);
   const filePreviewWrite = useRef(false);
   const filePreviewRevision = useRef(0);
   const [clearPreviewConfirm, setClearPreviewConfirm] = useState(false);
@@ -166,6 +168,31 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
     }).catch((reason) => { if (filePreviewRevision.current === revision) setError(`读取预览图失败：${String(reason)}`); });
     return () => { ++filePreviewRevision.current; };
   }, [currentFile]);
+  useEffect(() => {
+    const listening = listenEvent<{ reason?: string; path?: string }>(projectionLibraryStateChangedEvent, event => {
+      if (event.payload?.reason !== "embedded-preview" || !event.payload.path
+        || windowsPathKey(event.payload.path) !== windowsPathKey(currentFile || "")) return;
+      const revision = ++filePreviewRevision.current;
+      void readProjectionPreviewImage(currentFile).then(image => {
+        if (filePreviewRevision.current === revision) setFilePreview(image?.data_url || "");
+      }).catch(reason => { if (filePreviewRevision.current === revision) setError(`读取预览图失败：${String(reason)}`); });
+    }).catch(() => undefined);
+    return () => { void listening.then(off => off?.()); };
+  }, [currentFile]);
+  const captureFilePreview = async () => {
+    if (!currentFile || filePreviewWrite.current || savingRef.current || !viewerPrepared) return;
+    const source = currentFile;
+    filePreviewWrite.current = true; setCapturingPreview(true); setError("");
+    try {
+      await renderPreviewImage(source, renderMode === "fast" ? "fast_experimental" : renderMode, undefined,
+        renderMode === "fast" ? quickOperation?.previewId : fullPreview.operation?.operationId);
+      const image = await readProjectionPreviewImage(source);
+      if (!image?.data_url) throw new Error("预览图写回后读取失败，请重试。");
+      if (sourceRef.current === source) { setFilePreview(image.data_url); setStatus("缩略图已写入投影文件。"); }
+      await emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: source });
+    } catch (reason) { if (sourceRef.current === source) setError(String(reason)); }
+    finally { filePreviewWrite.current = false; setCapturingPreview(false); }
+  };
   const updateFilePreview = async (clear: boolean) => {
     if (!currentFile || filePreviewWrite.current || savingRef.current) return;
     const source = currentFile;
@@ -275,7 +302,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
       } else {
         await refreshAnalysis(nextFile);
       }
-      setStatus(outputPath ? `已另存为：${outputPath}` : "已保存，文件中的方块保持不变。");
+      setStatus(outputPath ? `已另存为：${displayFilePath(outputPath)}` : "已保存，文件中的方块保持不变。");
       setConvertOpen(false);
     } catch (err) {
       if (sourceRef.current === source) setError(String(err));
@@ -319,13 +346,13 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
         </div>
       </header>
       <div className="properties-file" title={displayFilePath(currentFile || "")}>{fileName || "尚未选择投影"}</div>
-      {error && <div className="properties-message properties-error" role="alert">{error}</div>}
-      {status && <div className="properties-message" role="status">{status}</div>}
+      {error && <div className="properties-message properties-error" role="alert">{displayPathText(error)}</div>}
+      {status && <div className="properties-message" role="status">{displayPathText(status)}</div>}
       {!currentFile ? <div className="properties-empty"><Box size={40} aria-hidden="true" /><span>选择投影，编辑信息并查看 3D 预览。</span></div> : (
         <div className="properties-workspace">
           <ScrollArea className="properties-editor-scroll" viewportClassName="properties-editor-viewport">
             {!form ? (!error && <div className="properties-empty" role="status">正在读取投影属性…</div>) : (
-            <fieldset className="properties-editor" disabled={saving || filePreviewBusy}>
+            <fieldset className="properties-editor" disabled={saving || filePreviewBusy || capturingPreview}>
                 <legend className="properties-sr-only">投影属性</legend>
                   <TextRow label="内部名称" value={form.name} onChange={(value) => updateForm({ name: value })} />
                   <TextRow label="作者" value={form.author} onChange={(value) => updateForm({ author: value })} />
@@ -382,6 +409,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
                 <Play size={15} aria-hidden="true" />{previewPending ? "正在连接…" : renderPending ? "正在加载…" : viewerPrepared ? "页内显示" : quickOperation ? "重新加载" : `${modeLabel}渲染`}
               </Button>
               {(renderPending || (renderMode !== "fast" && previewPending)) && !viewerPrepared && <Button size="sm" variant="ghost" onClick={() => void handleCancelPreview()}>取消</Button>}
+              <Button size="sm" variant="ghost" disabled={!viewerPrepared || previewPending || saving || filePreviewBusy || capturingPreview} onClick={() => void captureFilePreview()}><ImagePlus size={15} aria-hidden="true" />{capturingPreview ? "正在保存…" : "设为缩略图"}</Button>
               <Button size="sm" variant="ghost" onClick={() => setRoute("render")} ><ExternalLink size={15} aria-hidden="true" />渲染页</Button>
             </header>
             <div ref={renderMode === "fast" ? preview.hostRef : fullPreview.hostRef} className="properties-preview-host" aria-label={`${modeLabel}预览视口`}>
@@ -399,7 +427,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
                 <Button size="sm" variant="ghost" onClick={() => void fullPreview.close()}>取消</Button>
               </div>
             </div>}
-            {previewFailure && <div className="properties-preview-error" role="alert">{previewFailure}</div>}
+            {previewFailure && <div className="properties-preview-error" role="alert">{displayPathText(previewFailure)}</div>}
             <div className="properties-preview-status" role="status" aria-live="polite">{previewStatus}</div>
           </section>
         </div>
@@ -407,15 +435,11 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
       {clearPreviewConfirm && <Dialog title="清空文件预览图" busy={filePreviewBusy} onClose={() => setClearPreviewConfirm(false)} footer={<><Button variant="ghost" disabled={filePreviewBusy} onClick={() => setClearPreviewConfirm(false)}>取消</Button><Button variant="destructive" disabled={filePreviewBusy} onClick={() => void updateFilePreview(true)}>确认清空</Button></>}><p>清空此投影文件的内嵌预览图？方块和未保存的属性编辑不会改变。</p></Dialog>}
       {currentFile && <div className="properties-actions">
         <span className="muted">{saving ? "正在保存…" : !form ? "正在读取属性…" : hasChanges ? "有未保存的修改" : "所有修改已保存"}</span>
-        <Button variant="ghost" onClick={handleRestore} disabled={!form || !hasChanges || saving || filePreviewBusy}><RotateCcw size={16} aria-hidden="true" />撤销未保存修改</Button>
+        <Button variant="ghost" onClick={handleRestore} disabled={!form || !hasChanges || saving || filePreviewBusy || capturingPreview}><RotateCcw size={16} aria-hidden="true" />撤销未保存修改</Button>
         <Button variant="ghost" onClick={() => setConvertOpen(true)} disabled={saving || filePreviewBusy || !form}>其他格式</Button>
-        <Button onClick={handleSaveAs} disabled={!form || !!regionError || saving || filePreviewBusy}>另存副本…</Button>
-        <Button variant="default" onClick={handleSave} disabled={!form || !hasChanges || !!regionError || saving || filePreviewBusy}><Save size={16} aria-hidden="true" />{saving ? "保存中…" : "保存修改"}</Button>
+        <Button onClick={handleSaveAs} disabled={!form || !!regionError || saving || filePreviewBusy || capturingPreview}>另存副本…</Button>
+        <Button variant="default" onClick={handleSave} disabled={!form || !hasChanges || !!regionError || saving || filePreviewBusy || capturingPreview}><Save size={16} aria-hidden="true" />{saving ? "保存中…" : "保存修改"}</Button>
       </div>}
-      {renderMode === "fast" && preview.operation?.resource?.decisionRequired && <QuickResourceDialog report={preview.operation.resource} busy={preview.pending} onChoose={async (action) => {
-        if (action !== "cancel") setPreload(action === "preload");
-        await preview.chooseResources(action);
-      }} />}
       {versionConvertOpen && <VersionConversionDialog sourcePath={currentFile} onClose={() => setVersionConvertOpen(false)} onSaved={(path) => { setStatus(`已转换并另存：${displayFilePath(path)}；原文件保留。`); setVersionConvertOpen(false); }} />}
       {convertOpen && <Dialog title="保存格式" busy={saving} onClose={() => setConvertOpen(false)} width="sm" footer={
         <Button disabled={saving} onClick={handleSaveAs}>另存为 .litematic…</Button>

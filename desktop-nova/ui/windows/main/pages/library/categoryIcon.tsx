@@ -5,6 +5,7 @@ import { Dialog } from "../../../../components/Dialog";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
 import type { LibraryCategoryIcon } from "../../../../../src/business/facade";
+import { displayPathText } from "../../../../../src/business/facade";
 import { LIBRARY_ICON_PRESETS, LIBRARY_LUCIDE_ICON_NAMES, validateLibraryIconDataUrl } from "../../../../../src/business/projectionLibrary";
 
 const icons: Record<string, React.ElementType> = { Folder, Warehouse, Package, Hammer, Building2, Wheat, Crosshair, Boxes, Flame, Trees, Skull, Mountain, Anvil, Box, Cpu, Cog, Layers, Star, BookOpen };
@@ -39,6 +40,6 @@ export function CategoryIconDialog({ name, icon, busy, onClose, onSubmit }: { na
     </>}
     {kind === "minecraft" && <><p>读取真实游戏物品资源，缺失时显示缺失提示。</p><div className="library-icon-grid">{minecraftIcons.map((value) => <Button key={value} variant="ghost" aria-label={`选择 minecraft:${value} 图标`} aria-pressed={choice.kind === "minecraft" && choice.blockId === `minecraft:${value}`} disabled={busy} onClick={() => { setBlockId(`minecraft:${value}`); setChoice({ kind: "minecraft", blockId: `minecraft:${value}` }); }}><CategoryIcon icon={{ kind: "minecraft", blockId: `minecraft:${value}` }} /></Button>)}</div><label htmlFor="library-icon-block-id">其他物品 ID</label><Input id="library-icon-block-id" value={blockId} disabled={busy} onChange={(event) => { const value = event.target.value; setBlockId(value); setError(""); if (/^minecraft:[a-z0-9_]+$/.test(value)) setChoice({ kind: "minecraft", blockId: value }); }} /></>}
     {kind === "image" && <div className="library-icon-upload"><label htmlFor="library-icon-file">图片 / 基础 SVG（1 MB 以内，SVG 64 KB 以内）</label><Input id="library-icon-file" type="file" disabled={busy} accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ""; }} /><p>SVG 不接受脚本、动画、样式、外链或嵌入图片。</p>{choice.kind === "image" && <img className="library-icon-upload-preview" src={choice.dataUrl} alt="图标预览" />}</div>}
-    {error && <p className="dialog-message dialog-message-error" role="alert">{error}</p>}
+    {error && <p className="dialog-message dialog-message-error" role="alert">{displayPathText(error)}</p>}
   </Dialog>;
 }

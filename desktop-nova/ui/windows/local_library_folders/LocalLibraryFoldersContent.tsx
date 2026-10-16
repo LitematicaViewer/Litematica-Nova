@@ -1,3 +1,5 @@
+import { displayPathText } from "../../../src/business/facade";
+import { displayFilePath } from "../../../src/business/facade";
 import { X, Folder, FileText, File } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { ScrollArea } from "../../components/ui/scroll-area";
@@ -255,7 +257,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
     try {
       const nextState = await addLocalLibraryFolder(state, folderPath);
       setState(nextState);
-      setStatus(`已添加本地库文件夹：${folderPath}`);
+      setStatus(`已添加本地库文件夹：${displayFilePath(folderPath)}`);
       await emitLibraryStateChanged();
     } catch (error: any) {
       setStatus(`添加本地库文件夹失败：${String(error)}`);
@@ -269,7 +271,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
     try {
       const nextState = await updateLocalLibraryFolder(state, folder.path, patch);
       setState(nextState);
-      setStatus(`已更新文件夹设置：${folder.path}`);
+      setStatus(`已更新文件夹设置：${displayFilePath(folder.path)}`);
       await emitLibraryStateChanged();
     } catch (error: any) {
       setStatus(`更新文件夹设置失败：${String(error)}`);
@@ -284,7 +286,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
     try {
       const nextState = await removeLocalLibraryFolder(state, folder.path);
       setState(nextState);
-      setStatus(`已移除本地库文件夹：${folder.path}`);
+      setStatus(`已移除本地库文件夹：${displayFilePath(folder.path)}`);
       setRemoveFolder(null);
       await emitLibraryStateChanged();
     } catch (error: any) {
@@ -356,7 +358,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
     try {
       const nextState = await activateProjectionRecord(await loadLibrary(), entry.path);
       setState(nextState);
-      setStatus(`已激活：${entry.path}`);
+      setStatus(`已激活：${displayFilePath(entry.path)}`);
       await emitEvent(projectionLibraryImportedEvent, { path: entry.path });
       await emitLibraryStateChanged();
     } catch (error: any) {
@@ -399,7 +401,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
     setSendError("");
     try {
       const output = await copyFileToDirectory(sendDialogRecord.path, sendTargetDirectory, normalizedFileName, sendOverwrite);
-      setStatus(`已发送到：${output.target_path}`);
+      setStatus(`已发送到：${displayFilePath(output.target_path)}`);
       handleCloseSendDialog();
     } catch (error: any) {
       setSendError(String(error));
@@ -454,7 +456,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
           </Button>
         </div>
         <div className="muted subwindow-status-text">当前已挂载 {state.folders.length} 个文件夹，其中 {enabledCount} 个已启用。</div>
-        {status ? <div className={statusClassName}>{status}</div> : null}
+        {status ? <div className={statusClassName}>{displayPathText(status)}</div> : null}
       </fieldset>
 
       <fieldset className="subwindow-list-fieldset">
@@ -465,7 +467,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
               <div className="local-browser-toolbar">
                 <Button className="btn" type="button" onClick={handleCloseBrowser}>返回文件夹列表</Button>
                 <Button className="btn" type="button" disabled={!canGoBrowserUp} onClick={handleGoBrowserUp}>上一级</Button>
-                <div className="local-browser-path" title={browserPath}>{browserPath}</div>
+                <div className="local-browser-path" title={displayFilePath(browserPath)}>{displayFilePath(browserPath)}</div>
               </div>
               <Table className="local-browser-table">
                 <TableHeader>
@@ -516,7 +518,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                         <TableCell className="local-browser-icon-cell">
                           <FileIcon className="local-browser-file-icon" aria-hidden="true" focusable="false" />
                         </TableCell>
-                        <TableCell className="local-browser-name-cell" title={entry.path}>{entry.name}</TableCell>
+                        <TableCell className="local-browser-name-cell" title={displayFilePath(entry.path)}>{entry.name}</TableCell>
                         <TableCell className="local-browser-size-cell">{entry.is_dir ? "-" : formatSize(entry.file_size)}</TableCell>
                         <TableCell className="local-browser-actions-cell">
                           <div className="button-row subwindow-wrap-row">
@@ -568,7 +570,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
               <div className="lib-card-left subwindow-card-stack">
                 <div className="lib-card-line-main">
                   <div className="lib-card-heading">
-                    <span className="lib-card-title" title={folder.path}>{compactFolderPath(folder.path, localLibraryTailPathCount)}</span>
+                    <span className="lib-card-title" title={displayFilePath(folder.path)}>{compactFolderPath(folder.path, localLibraryTailPathCount)}</span>
                   </div>
                 </div>
                 <div className="subwindow-status-text">最近同步：{formatDate(folder.lastSyncedAt)}</div>
@@ -613,8 +615,8 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
       {removeFolder && <Dialog title="移除本地库文件夹？" subtitle="只取消这个文件夹的挂载，已有投影记录与电脑上的文件都保持不变。"
         width="sm" busy={!!busyKey} onClose={() => setRemoveFolder(null)}
         footer={<><Button disabled={!!busyKey} onClick={() => setRemoveFolder(null)}>保留</Button><Button variant="destructive" disabled={!!busyKey} onClick={() => handleRemoveFolder(removeFolder)}>{busyKey ? "正在移除…" : "移除挂载"}</Button></>}>
-        <div className="dialog-path-preview">{removeFolder.path}</div>
-        {status && <div className="dialog-message dialog-message-error" role="alert">{status}</div>}
+        <div className="dialog-path-preview">{displayFilePath(removeFolder.path)}</div>
+        {status && <div className="dialog-message dialog-message-error" role="alert">{displayPathText(status)}</div>}
       </Dialog>}
       {sendDialogRecord ? (
         <SendProjectionDialog

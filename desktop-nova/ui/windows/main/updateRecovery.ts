@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getApplicationWindowLabel } from "../../../src/platform/nativeWindowGeometry";
 import { listenEvent } from "../../../src/platform/events";
 import { confirmApplicationClose, getApplicationCloseRequest, requestApplicationClose, type ApplicationCloseRequest } from "../../../src/platform/applicationOperations";
 
@@ -63,6 +64,7 @@ export async function preserveDraftsForClose(requestId: number): Promise<void> {
 export function useApplicationCloseRecovery() {
   const [error, setError] = useState("");
   useEffect(() => {
+    if (getApplicationWindowLabel() !== "main") return;
     let active = true;
     const accept = (request: ApplicationCloseRequest) => {
       if (!active) return;
@@ -84,6 +86,7 @@ export function useApplicationCloseRecovery() {
     };
   }, []);
   return { error, retry: async () => {
+    if (getApplicationWindowLabel() !== "main") return;
     setError("");
     try { await requestApplicationClose(); } catch (reason) { setError(String(reason)); }
   } };

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   closeQuickPreview, startQuickPreview, getQuickPreviewState, quickPreviewForSource, refreshQuickPreview, restoreQuickPreview,
   subscribeQuickPreview, suspendQuickPreview, updateQuickPreviewPlacement, presentQuickPreview,
-  decideQuickPreviewResources, type QuickResourceAction,
 } from "../../../src/business/facade";
 import { usePresentationViewport, type PresentationViewportController } from "./useEmbeddedViewer";
 
@@ -22,7 +21,7 @@ export function useQuickPreview(sourcePath: string, blocked: boolean, preload = 
   const operation = quickPreviewForSource(sourcePath, snapshot);
   const viewport = usePresentationViewport(operation ? {
     operationId: operation.previewId, prepared: operation.state === "ready", presentation: operation.presentation,
-  } : null, blocked || operation?.resource?.decisionRequired === true, quickController);
+  } : null, blocked, quickController);
   const [pending, setPending] = useState(false);
   const [commandError, setCommandError] = useState("");
   const inFlight = useRef(false);
@@ -40,7 +39,6 @@ export function useQuickPreview(sourcePath: string, blocked: boolean, preload = 
     finally { inFlight.current = false; setPending(false); }
   }
   const start = () => execute(async () => {
-    if (operation?.resource?.decisionRequired) return;
     const clickStartedAtEpochMs = Date.now();
     console.info("[NOVA_FIRST_BLOCK]", { stage: "user_click", mode: "fast", epochMs: clickStartedAtEpochMs, sourcePath, preload,
       existingGpuAndSceneReady: operation?.state === "ready" && (operation.preload ?? false) === preload });
@@ -56,13 +54,5 @@ export function useQuickPreview(sourcePath: string, blocked: boolean, preload = 
   });
   const close = () => execute(async () => { if (operation) await closeQuickPreview(operation.previewId); });
   const hide = () => execute(async () => { if (operation) await viewport.setPresentation({ ...operation.presentation, visible: false }); });
-  const chooseResources = (action: QuickResourceAction) => execute(async () => {
-    if (!operation) return;
-    if (action === "cancel") { await closeQuickPreview(operation.previewId); return; }
-    const started = await decideQuickPreviewResources(operation.previewId, action, action === "preload" && operation.resource?.pressure === "warning");
-    if (source.current === sourcePath && getQuickPreviewState()?.previewId === started.previewId) {
-      viewport.requestPresentationWhenReady(started.previewId);
-    }
-  });
-  return { ...viewport, operation, pending, error: commandError || viewport.error || (operation?.error ? "预览加载失败，请重新加载。" : ""), start, close, hide, chooseResources };
+  return { ...viewport, operation, pending, error: commandError || viewport.error || (operation?.error ? "预览加载失败，请重新加载。" : ""), start, close, hide };
 }

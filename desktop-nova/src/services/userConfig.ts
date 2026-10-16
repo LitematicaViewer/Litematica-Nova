@@ -30,8 +30,17 @@ const DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES = [
 
 
 
+export function normalizeDebugMode(value: unknown): boolean {
+  return value === true;
+}
+
+/** Legacy reader retained for callers outside the shell; it no longer opts users in. */
 export function normalizeShowUiTestPage(value: unknown): boolean {
-  return value !== false;
+  return normalizeDebugMode(value);
+}
+
+export async function saveDebugModeConfig(enabled: boolean): Promise<UserConfigInfo> {
+  return await saveUserConfig({ debug_mode: normalizeDebugMode(enabled) });
 }
 
 export function normalizeTheme(value: unknown): ThemeName {

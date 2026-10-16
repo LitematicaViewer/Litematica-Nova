@@ -47,6 +47,16 @@ pub fn extract_projection_preview(input: &Path, output: &Path) -> Result<Project
     let Some(preview) = load_litematic_preview_image(input)? else {
         return Ok(ProjectionPreviewOutput::missing());
     };
+    write_projection_preview(preview, output)
+}
+
+pub fn extract_projection_preview_stream(input: impl std::io::BufRead, output: &Path) -> Result<ProjectionPreviewOutput> {
+    require_absolute("projection preview output", output)?;
+    let Some(preview) = crate::nbt::scan_preview_image_from_gzip(input)? else { return Ok(ProjectionPreviewOutput::missing()); };
+    write_projection_preview(preview, output)
+}
+
+fn write_projection_preview(preview: crate::nbt::LitematicPreviewImage, output: &Path) -> Result<ProjectionPreviewOutput> {
     let parent = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -79,7 +89,7 @@ pub fn extract_projection_preview(input: &Path, output: &Path) -> Result<Project
                 preview.height,
                 ExtendedColorType::Rgba8,
             )
-            .with_context(|| format!("encode projection preview PNG for {}", input.display()))?;
+            .with_context(|| format!("encode projection preview PNG for {}", output.display()))?;
         writer.flush().with_context(|| {
             format!(
                 "flush projection preview temporary PNG for {}",

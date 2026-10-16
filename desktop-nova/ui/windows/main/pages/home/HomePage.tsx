@@ -4,9 +4,9 @@ import { FolderOpen, FileText, BarChart3, Box, Library, ArrowRight } from "lucid
 import "./home.css";
 import React from 'react';
 import { selectLitematicFile } from '../../../../../src/business/facade';
-import { loadLibrary, addOrUpdateRecord } from '../../../../../src/business/facade';
+import { loadLibrary, addOrUpdateRecord, displayFilePath } from '../../../../../src/business/facade';
 
-export function HomePage({ currentFile, setCurrentFile, setRoute }: any) {
+export function HomePage({ currentFile, setCurrentFile, setRoute, buildVersion }: any) {
   const handleOpenLitematic = async () => {
     const res = await selectLitematicFile();
     if (res) {
@@ -38,14 +38,14 @@ export function HomePage({ currentFile, setCurrentFile, setRoute }: any) {
             <Button variant="default" size="lg" onClick={handleOpenLitematic}><FolderOpen size={20} aria-hidden="true" />打开投影文件</Button>
             <Button variant="ghost" onClick={() => setRoute("library")}><Library size={18} aria-hidden="true" />浏览投影库<ArrowRight size={16} aria-hidden="true" /></Button>
           </div>
-          <p className="home-beta-note">Beta 0.1 开发中 · 三维预览仍为实验功能</p>
+          {buildVersion && <p className="home-beta-note">版本 {buildVersion}</p>}
         </section>
 
         <section className="home-current" aria-labelledby="home-current-title">
           <h2 id="home-current-title">{currentFile ? "继续当前投影" : "打开后，从这里继续"}</h2>
           {currentFile ? <div className="home-current-file">
             <FileText size={28} aria-hidden="true" />
-            <div><strong>{currentName}</strong><span title={currentFile}>{currentFile}</span></div>
+            <div><strong>{currentName}</strong><span title={displayFilePath(currentFile)}>{displayFilePath(currentFile)}</span></div>
           </div> : <p className="home-empty">选择一个 .litematic 文件，即可查看属性、材料和结构。</p>}
           <div className="home-workflows">
             <Button variant="ghost" aria-label="查看投影属性" onClick={() => setRoute("properties")} disabled={!currentFile}>
@@ -55,7 +55,7 @@ export function HomePage({ currentFile, setCurrentFile, setRoute }: any) {
               <BarChart3 size={22} aria-hidden="true" /><span><strong>材料与统计</strong><small>准备材料，核对数量</small></span><ArrowRight size={18} aria-hidden="true" />
             </Button>
             <Button variant="ghost" aria-label="打开三维预览" onClick={handleRender} disabled={!currentFile}>
-              <Box size={22} aria-hidden="true" /><span><strong>三维预览</strong><small>在实验 Viewer 中查看投影</small></span><ArrowRight size={18} aria-hidden="true" />
+              <Box size={22} aria-hidden="true" /><span><strong>三维预览</strong><small>查看投影的三维结构</small></span><ArrowRight size={18} aria-hidden="true" />
             </Button>
           </div>
         </section>

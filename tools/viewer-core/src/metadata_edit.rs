@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use fastnbt::IntArray;
+use fastnbt::{IntArray, Value};
+use std::io::{Read, Write};
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use image::{GenericImageView, imageops::FilterType};
 use serde::{Deserialize, Serialize};
 
-use crate::nbt::{load_litematic_root, save_litematic_root};
+
 
 #[derive(Debug, Deserialize)]
 pub struct MetadataEditPatch {
@@ -54,107 +56,84 @@ pub fn edit_metadata(
         .with_context(|| format!("failed to read patch {}", patch_path.display()))?;
     let patch: MetadataEditPatch = serde_json::from_str(patch_text.trim_start_matches('\u{feff}'))
         .with_context(|| format!("failed to parse patch {}", patch_path.display()))?;
-    let mut root = load_litematic_root(input)?;
-
-    if let Some(value) = patch.name {
-        root.metadata.name = Some(value);
-    }
-    if let Some(value) = patch.author {
-        root.metadata.author = Some(value);
-    }
-    if let Some(value) = patch.description {
-        root.metadata.description = Some(value);
-    }
-    if let Some(value) = patch.time_created {
-        root.metadata.time_created = Some(value);
-    }
-    if let Some(value) = patch.time_modified {
-        root.metadata.time_modified = Some(value);
-    }
-    if let Some(value) = patch.litematic_version {
-        root.version = value;
-    }
-    if let Some(value) = patch.litematic_subversion {
-        root.sub_version = Some(value);
-    }
-    if let Some(value) = patch.minecraft_data_version {
-        if Some(value) != root.minecraft_data_version {
+    // Value retains unknown root, region, entity and metadata fields. The typed
+    // scene representation is deliberately not used for editing persistent NBT.
+    let original = fs::read(input)?;
+    let mut plain = Vec::new();
+    GzDecoder::new(original.as_slice()).read_to_end(&mut plain)?;
+    let mut value: Value = fastnbt::from_bytes(&plain)?;
+    let Value::Compound(root) = &mut value else { bail!("projection root must be a compound"); };
+    if let Some(version) = patch.minecraft_data_version {
+        if root.get("MinecraftDataVersion") != Some(&Value::Int(version)) {
             bail!("Minecraft 数据版本变更须使用版本转换：先转换方块状态及相关 NBT，再另存新文件");
         }
     }
-
-    if let Some(image_path) = patch.preview_image_path.as_deref() {
-        root.metadata.preview_image_data = Some(load_preview_image_data(Path::new(image_path))?);
-        root.preview_image_data = None;
-    } else if let Some(value) = patch.preview_image_data {
-        let edge = (value.len() as f64).sqrt() as usize;
-        if edge * edge != value.len() || edge > 4096 {
+    if let Some(version) = patch.litematic_version { root.insert("Version".into(), Value::Int(version)); }
+    if let Some(version) = patch.litematic_subversion { root.insert("SubVersion".into(), Value::Int(version)); }
+    let preview = if let Some(path) = patch.preview_image_path.as_deref() {
+        Some(load_preview_image_data(Path::new(path))?)
+    } else if let Some(pixels) = patch.preview_image_data {
+        let edge = (pixels.len() as f64).sqrt() as usize;
+        if edge * edge != pixels.len() || edge > 4096 {
             bail!("preview_image_data must be a square ARGB pixel array with edge at most 4096");
         }
-        root.metadata.preview_image_data = Some(IntArray::new(value));
-        root.preview_image_data = None;
+        Some(IntArray::new(pixels))
+    } else { None };
+    if preview.is_some() { root.remove("PreviewImageData"); }
+    let metadata = root.entry("Metadata".into()).or_insert_with(|| Value::Compound(Default::default()));
+    let Value::Compound(metadata) = metadata else { bail!("Metadata must be a compound"); };
+    for (name, text) in [("Name", patch.name), ("Author", patch.author), ("Description", patch.description)] {
+        if let Some(text) = text { metadata.insert(name.into(), Value::String(text)); }
     }
-
+    for (name, time) in [("TimeCreated", patch.time_created), ("TimeModified", patch.time_modified)] {
+        if let Some(time) = time { metadata.insert(name.into(), Value::Long(time)); }
+    }
+    if let Some(pixels) = preview {
+        if pixels.is_empty() { metadata.remove("PreviewImageData"); }
+        else { metadata.insert("PreviewImageData".into(), Value::IntArray(pixels)); }
+    }
     let mut changed_regions = Vec::new();
     if !patch.regions.is_empty() {
+        let Some(Value::Compound(regions)) = root.get_mut("Regions") else { bail!("Regions must be a compound"); };
         let mut targets = BTreeSet::new();
+        let mut lookup = BTreeMap::new();
         for rename in &patch.regions {
-            let new_name = rename.new_name.trim();
-            if new_name.is_empty() {
-                bail!("region name cannot be empty");
-            }
-            if !root.regions.contains_key(&rename.old_name) {
-                bail!("region not found: {}", rename.old_name);
-            }
-            if !targets.insert(new_name.to_string()) {
-                bail!("duplicate target region name: {new_name}");
+            let next = rename.new_name.trim();
+            if next.is_empty() || !regions.contains_key(&rename.old_name) || !targets.insert(next.to_owned())
+                || lookup.insert(rename.old_name.clone(), next.to_owned()).is_some() {
+                bail!("invalid or duplicate region rename: {}", rename.old_name);
             }
         }
-        let mut next = BTreeMap::new();
-        let rename_lookup: BTreeMap<_, _> = patch
-            .regions
-            .iter()
-            .map(|item| (item.old_name.as_str(), item.new_name.trim().to_string()))
-            .collect();
-        for (name, region) in root.regions {
-            let next_name = rename_lookup.get(name.as_str()).cloned().unwrap_or(name);
-            if next.contains_key(&next_name) {
-                bail!("duplicate region name after rename: {next_name}");
-            }
-            next.insert(next_name, region);
+        let mut next = std::collections::HashMap::new();
+        for (name, region) in std::mem::take(regions) {
+            let target = lookup.get(&name).cloned().unwrap_or(name);
+            if next.insert(target.clone(), region).is_some() { bail!("duplicate region name after rename: {target}"); }
         }
-        for rename in &patch.regions {
-            if !next.contains_key(rename.new_name.trim()) {
-                bail!("region not found: {}", rename.old_name);
-            }
-            changed_regions.push(RegionRenamePatchOutput {
-                old_name: rename.old_name.clone(),
-                new_name: rename.new_name.trim().to_string(),
-            });
-        }
-        root.regions = next;
+        *regions = next;
+        changed_regions = patch.regions.iter().map(|rename| RegionRenamePatchOutput {
+            old_name: rename.old_name.clone(), new_name: rename.new_name.trim().to_owned(),
+        }).collect();
     }
-
     let target = output.unwrap_or(input);
-    let mut backup_path = None;
-    if output.is_none() {
-        let backup = backup_path_for(input);
-        fs::copy(input, &backup)
-            .with_context(|| format!("failed to create backup {}", backup.display()))?;
-        backup_path = Some(backup.display().to_string());
-    } else if target.exists() {
-        bail!(
-            "refusing to overwrite existing output file: {}",
-            target.display()
-        );
+    if output.is_some() && target.exists() { bail!("refusing to overwrite existing output file: {}", target.display()); }
+    if output.is_none() && fs::metadata(input)?.permissions().readonly() { bail!("投影为只读文件，请另存后重试"); }
+    let parent = target.parent().context("projection output has no parent")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    {
+        let mut gzip = GzEncoder::new(temporary.as_file_mut(), Compression::default());
+        gzip.write_all(&fastnbt::to_bytes(&value)?)?;
+        gzip.finish()?;
     }
-
-    if let Err(error) = save_litematic_root(target, &root) {
-        if let Some(backup) = backup_path.as_ref() {
-            let _ = fs::copy(backup, input);
-        }
-        return Err(error);
-    }
+    temporary.as_file().sync_all()?;
+    // Reopen and compare the complete semantic document before committing it.
+    let mut check = Vec::new();
+    GzDecoder::new(fs::File::open(temporary.path())?).read_to_end(&mut check)?;
+    let reopened: Value = fastnbt::from_bytes(&check)?;
+    anyhow::ensure!(reopened == value, "metadata write-back verification failed");
+    anyhow::ensure!(fs::read(input)? == original, "投影在写入期间已改变，请重新加载");
+    let backup_path = None;
+    if output.is_some() { temporary.persist_noclobber(target).map_err(|error| error.error)?; }
+    else { temporary.persist(target).map_err(|error| error.error)?; }
 
     Ok(MetadataEditSummary {
         input: input.display().to_string(),
@@ -185,20 +164,6 @@ fn load_preview_image_data(path: &Path) -> Result<IntArray> {
         })
         .collect();
     Ok(IntArray::new(pixels))
-}
-
-fn backup_path_for(input: &Path) -> PathBuf {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    let mut backup = input.to_path_buf();
-    let file_name = input
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("projection.litematic");
-    backup.set_file_name(format!("{file_name}.bak.{now}"));
-    backup
 }
 
 #[cfg(test)]
@@ -237,7 +202,41 @@ mod version_guard_tests {
 #[cfg(test)]
 mod preview_image_tests {
     use super::*;
-    use crate::nbt::load_litematic_preview_image;
+    use crate::nbt::{load_litematic_preview_image, load_litematic_root};
+
+    #[test]
+    fn preview_edit_preserves_unknown_root_metadata_regions_entities_and_stream_thumbnail() {
+        use std::collections::HashMap;
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("未知字段 中文.litematic");
+        let payload = Value::Compound(HashMap::from([
+            ("Version".into(), Value::Int(6)),
+            ("Metadata".into(), Value::Compound(HashMap::from([("CustomMetadata".into(), Value::String("kept".into()))]))),
+            ("Regions".into(), Value::Compound(HashMap::from([("A".into(), Value::Compound(HashMap::from([
+                ("CustomRegion".into(), Value::LongArray(fastnbt::LongArray::new(vec![1, i64::MAX]))),
+                ("Entities".into(), Value::List(vec![Value::Compound(HashMap::from([("custom".into(), Value::Int(42))]))])),
+            ])))]))),
+            ("UnknownRoot".into(), Value::ByteArray(fastnbt::ByteArray::new(vec![-1, 0, 1]))),
+        ]));
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(&fastnbt::to_bytes(&payload).unwrap()).unwrap();
+        fs::write(&source, gzip.finish().unwrap()).unwrap();
+        let patch = dir.path().join("patch.json");
+        fs::write(&patch, r#"{"preview_image_data":[-65536]}"#).unwrap();
+        edit_metadata(&source, None, &patch).unwrap();
+        let mut plain = Vec::new();
+        GzDecoder::new(fs::File::open(&source).unwrap()).read_to_end(&mut plain).unwrap();
+        let Value::Compound(after) = fastnbt::from_bytes::<Value>(&plain).unwrap() else { panic!() };
+        let Value::Compound(before) = payload else { panic!() };
+        assert_eq!(after.get("Regions"), before.get("Regions"));
+        assert_eq!(after.get("UnknownRoot"), before.get("UnknownRoot"));
+        let Some(Value::Compound(metadata)) = after.get("Metadata") else { panic!() };
+        assert_eq!(metadata.get("CustomMetadata"), Some(&Value::String("kept".into())));
+        let out = dir.path().join("stream.png");
+        let stream = std::io::BufReader::new(fs::File::open(source).unwrap());
+        assert!(crate::projection_preview::extract_projection_preview_stream(stream, &out).unwrap().found);
+        assert_eq!(image::open(out).unwrap().to_rgba8().get_pixel(0,0).0, [255, 0, 0, 255]);
+    }
 
     #[test]
     fn png_preview_import_save_as_readback_and_clear_preserve_projection() {

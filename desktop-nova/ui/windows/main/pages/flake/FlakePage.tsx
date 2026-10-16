@@ -1,3 +1,6 @@
+import { displayPathText } from "../../../../../src/business/facade";
+import { creativeItemId } from "../../../../../src/business/facade";
+import { displayFilePath } from "../../../../../src/business/facade";
 import { Hand, Wand2, Ruler, MapPin, BoxSelect, Pencil, Eraser, Pipette, Square, Circle, PaintBucket, Type, Plus, Minus } from "lucide-react";
 import { Slider } from "../../../../components/ui/slider";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
@@ -1970,7 +1973,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
           ? `原点已保存：x=${summary.origin.x} y=${summary.origin.y} z=${summary.origin.z}`
           : "原点移除已保存。");
       } else {
-        setMarkerStatus(`原点已另存至：${savedPath}\n当前文件仍保留未保存标记。`);
+        setMarkerStatus(`原点已另存至：${displayFilePath(savedPath)}\n当前文件仍保留未保存标记。`);
       }
     } catch (error) {
       if (requestId === syncRequestIdRef.current) setMarkerStatus(`原点另存失败（草稿已保留）：${String(error)}`);
@@ -2125,7 +2128,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
           编辑模式（状态与测量仅本次会话）
         </label>
         <div className="subwindow-toolbar-spacer" />
-        <div className="flake-page__file-path" title={currentFile}>{currentFile}</div>
+        <div className="flake-page__file-path" title={displayFilePath(currentFile)}>{displayFilePath(currentFile)}</div>
       </div>
 
       <div className="group-box flake-page__control-box">
@@ -2289,7 +2292,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 <div className="flake-page__tool-panel-section">
                   <div className="flake-page__tool-panel-heading">状态</div>
                   <div className="nova-muted nova-small flake-page__status-text">{statusText}</div>
-                  {markerStatus ? <div className="nova-muted nova-small flake-page__status-text">{markerStatus}</div> : null}
+                  {markerStatus ? <div className="nova-muted nova-small flake-page__status-text">{displayPathText(markerStatus)}</div> : null}
                   {layerError ? <p className="nova-error flake-page__tool-panel-error">{layerError}</p> : null}
                 </div>
 
@@ -2346,12 +2349,12 @@ export function FlakePage({ currentFile, setRoute }: any) {
                   key={`slot-${index + 1}`}
                   className={isSelected ? "flake-page__quickbar-slot is-selected" : "flake-page__quickbar-slot"}
                   type="button"
-                  aria-label={blockId ? `${translateBlockId(blockId)}（快捷栏槽位 ${index + 1}）` : `快捷栏槽位 ${index + 1}`}
+                  aria-label={blockId ? `${translateBlockId(creativeItemId(blockId) || blockId)}（快捷栏槽位 ${index + 1}）` : `快捷栏槽位 ${index + 1}`}
                   aria-pressed={isSelected}
                   onClick={() => setSelectedQuickbarSlot(index)}
                 >
-                  {blockId ? <BlockIcon blockId={blockId} lookupMode="block_first" /> : <span className="flake-page__quickbar-slot-icon" aria-hidden />}
-                  <span className="flake-page__quickbar-slot-label">{blockId || "空槽"}</span>
+                  {blockId ? <BlockIcon blockId={creativeItemId(blockId) || blockId} lookupMode="item_first" /> : <span className="flake-page__quickbar-slot-icon" aria-hidden />}
+                  <span className="flake-page__quickbar-slot-label">{blockId ? translateBlockId(creativeItemId(blockId) || blockId) : "空槽"}</span>
                 </Button>
               );
             })}

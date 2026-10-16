@@ -32,6 +32,11 @@ fn main() -> Result<()> {
     if let Some(code) = nova_protected_loader::maybe_run_cpu_audit()? { std::process::exit(code); }
 
     let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    if raw.first().is_some_and(|command| command == "projection-preview") && raw.iter().any(|arg| arg == "--stdin") {
+        let output = raw.windows(2).find(|pair| pair[0] == "--output").map(|pair| std::path::Path::new(&pair[1]))
+            .ok_or_else(|| anyhow::anyhow!("missing --output"))?;
+        return emit_output(&projection_preview::extract_projection_preview_stream(io::BufReader::new(io::stdin().lock()), output)?, None);
+    }
     if raw.first().is_some_and(|command| command == "render-cpu-audit") {
         return litematica_core::native_viewer::audit_render_cpu(&raw[1..]);
     }

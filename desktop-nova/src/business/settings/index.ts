@@ -25,6 +25,8 @@ export {
   normalizeLocalLibraryTailPathCount,
   normalizeMaterialListWindowBehavior,
   normalizeShowUiTestPage,
+  normalizeDebugMode,
+  saveDebugModeConfig,
   normalizeTheme,
   normalizeColorMode,
   normalizeGraphicsBackend,

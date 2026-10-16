@@ -1,3 +1,5 @@
+import { displayPathText } from "../../../../../src/business/facade";
+import { displayFilePath } from "../../../../../src/business/facade";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
@@ -38,21 +40,20 @@ function PropertySelector({ blockId, value, onChange, isOutput }: {
       {keys.map((k) => (
         <div key={k} className="replace-property-item">
           <span className="replace-property-label">{translateKey(k)}:</span>
-          <select
-            className="input"
-            value={value[k] || ''}
-            onChange={(e) => {
-              const nv = { ...value };
-              if (!e.target.value) delete nv[k]; else nv[k] = e.target.value;
-              onChange(nv);
+          <Dropdown
+            ariaLabel={translateKey(k)}
+            value={value[k] || ""}
+            onChange={(nextValue) => {
+              const next = { ...value };
+              if (nextValue) next[k] = nextValue; else delete next[k];
+              onChange(next);
             }}
-          >
-            <option value="">{isOutput ? '默认' : '所有'}</option>
-            {isOutput && <option value="$keep">保持原状态</option>}
-            {props[k].map((v) => (
-              <option key={v} value={v}>{translateValue(k, v)} ({v})</option>
-            ))}
-          </select>
+            options={[
+              { value: "", label: isOutput ? "默认" : "所有" },
+              ...(isOutput ? [{ value: "$keep", label: "保持原状态" }] : []),
+              ...props[k].map(v => ({ value: v, label: `${translateValue(k, v)} (${v})` })),
+            ]}
+          />
         </div>
       ))}
     </div>
@@ -376,7 +377,7 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
       if (await checkFileExists(outPath)) { setError("此文件已存在，请选择另一个文件名。"); return; }
       const result = await applyReplaceUnits(source, outPath, preview.items);
       if (sourceRef.current !== source) return;
-      setPreview(null); setLog(`替换完成，原投影未改动。\n新文件：${outPath}\n\n${result}`);
+      setPreview(null); setLog(`替换完成，原投影未改动。\n新文件：${displayFilePath(outPath)}\n\n${result}`);
     } catch (error) { if (sourceRef.current === source) setError(`替换未完成：${error}`); }
     finally { busyRef.current = false; setBusy(null); }
   };
@@ -391,7 +392,7 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
       <Button variant="ghost" disabled={!selectedPreset} onClick={() => setDeleteConfirm(true)}>删除方案</Button>
       <Button variant="ghost" onClick={() => openReplacePresetFolder().catch(error => setError(`打开方案文件夹失败：${error}`))}>打开方案文件夹</Button>
     </fieldset>
-    {error && <pre className="replace-error" role="alert">{error}</pre>}
+    {error && <pre className="replace-error" role="alert">{displayPathText(error)}</pre>}
     <ScrollArea className="replace-scroll-area" aria-label="替换规则">
       <fieldset className="replace-rules" disabled={!!busy}>
         <legend className="replace-legend">替换组规则</legend>
@@ -403,7 +404,7 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
               onDuplicate={() => changeItems([...items,JSON.parse(JSON.stringify(item))])}
               onMoveUp={() => moveItem(index,-1)} onMoveDown={() => moveItem(index,1)} currentBlocks={currentBlocks} />)}
       </fieldset>
-      {log && <div className="replace-result" role="status"><details open><summary>替换操作结果</summary><pre>{log}</pre></details></div>}
+      {log && <div className="replace-result" role="status"><details open><summary>替换操作结果</summary><pre>{displayPathText(log)}</pre></details></div>}
     </ScrollArea>
     <div className="replace-toolbar">
       <Button variant="secondary" disabled={!!busy} onClick={() => changeItems([...items,{input:[],output:[]}])}>添加替换规则</Button>
@@ -425,9 +426,9 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
       </section>)}
       {!!preview.summary.warnings.length && <p role="alert">{preview.summary.warnings.join("；")}</p>}
       <details><summary>详细检查结果</summary><pre>{JSON.stringify(preview.summary,null,2)}</pre></details></div>
-      <label className="replace-output">新文件保存位置<Input value={outPath} readOnly /></label>
+      <label className="replace-output">新文件保存位置<Input value={displayFilePath(outPath)} readOnly /></label>
       <Button variant="secondary" disabled={!!busy} onClick={handleChooseOutput}>更改保存位置…</Button>
-      {error && <pre className="replace-error" role="alert">{error}</pre>}
+      {error && <pre className="replace-error" role="alert">{displayPathText(error)}</pre>}
     </Dialog>}
   </section>;
 }

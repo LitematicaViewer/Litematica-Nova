@@ -7,19 +7,24 @@ use tauri::{AppHandle, Emitter, Manager};
 pub(crate) struct OpenFiles(Mutex<Vec<String>>);
 
 fn projection_paths<'a>(args: impl Iterator<Item = &'a str>, cwd: &Path) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
     args.filter_map(|arg| {
         let input = PathBuf::from(arg);
         if !input.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("litematic")) { return None; }
         let path = if input.is_absolute() { input } else { cwd.join(input) };
         path.is_file().then(|| path.canonicalize().unwrap_or(path).to_string_lossy().into_owned())
-    }).collect()
+    }).filter(|path| seen.insert(path.clone())).collect()
 }
 
 pub(crate) fn queue_open_files<'a>(app: &AppHandle, args: impl Iterator<Item = &'a str>, cwd: &Path) {
     let paths = projection_paths(args, cwd);
     if paths.is_empty() { return; }
+    eprintln!("[NOVA_FILE_OPEN] receiver_pid={} version={} executable={} file_count={}", std::process::id(), env!("CARGO_PKG_VERSION"),
+        std::env::current_exe().map(|path| path.display().to_string()).unwrap_or_default(), paths.len());
     if let Some(pending) = app.try_state::<OpenFiles>() {
-        if let Ok(mut queue) = pending.0.lock() { queue.extend(paths); }
+        if let Ok(mut queue) = pending.0.lock() {
+            for path in paths { if !queue.contains(&path) { queue.push(path); } }
+        }
         let _ = app.emit_to("main", "nova-open-projection", ());
     }
 }
@@ -130,10 +135,10 @@ mod linux {
             return Err("thumbnail paths are invalid or would replace the projection".into());
         }
         let key = digest(&input)?;
-        let cache = user_root.join("thumbnails").join(format!("{key}.png"));
         let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|error| error.to_string())?.as_nanos();
         let temporary = output.with_extension(format!("nova-{}-{nonce}-raw.png", std::process::id()));
-        let source = if cache.is_file() { cache } else {
+        // Embedded data is authoritative; old external PNGs cannot invent a preview.
+        let source = {
             // Reserve an empty unique target, so a missing embedded preview
             // can never accidentally reuse an earlier extraction's PNG.
             drop(fs::OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|error| error.to_string())?);
@@ -191,5 +196,25 @@ mod tests {
         std::fs::write(root.join("炮 台.litematic"), b"fixture").unwrap();
         assert_eq!(projection_paths(["炮 台.litematic", "missing.litematic", "https://example.com", "--help"].into_iter(), &root).len(), 1);
         std::fs::remove_file(root.join("炮 台.litematic")).unwrap(); std::fs::remove_dir(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod projection_open_tests {
+    use super::*;
+    #[test]
+    fn explorer_multi_file_arguments_keep_unicode_spaces_and_deduplicate_real_identity() {
+        let root = std::env::temp_dir().join(format!("nova-open-files-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let one = root.join("中文 空格.litematic");
+        let two = root.join("另一个.litematic");
+        std::fs::write(&one, b"fixture").unwrap(); std::fs::write(&two, b"fixture").unwrap();
+        let first = one.to_string_lossy().into_owned(); let second = two.to_string_lossy().into_owned();
+        let canonical = one.canonicalize().unwrap().to_string_lossy().into_owned();
+        let result = projection_paths(["--", &first, &canonical, &second].into_iter(), &root);
+        assert_eq!(result.len(), 2);
+        assert_eq!(Path::new(&result[0]), one.canonicalize().unwrap());
+        assert_eq!(Path::new(&result[1]), two.canonicalize().unwrap());
+        std::fs::remove_file(one).unwrap(); std::fs::remove_file(two).unwrap(); std::fs::remove_dir(root).unwrap();
     }
 }

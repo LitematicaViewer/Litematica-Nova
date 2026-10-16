@@ -1,3 +1,4 @@
+import { displayFilePath } from "../../../../../src/business/facade";
 import { useEffect, useState } from "react";
 
 import { Button } from "../../../../components/ui/button";
@@ -76,7 +77,7 @@ export function SendProjectionDialog({
     >
       <div className="dialog-form-grid">
         <span className="dialog-label">源文件</span>
-        <div className="dialog-path-preview">{record.path}</div>
+        <div className="dialog-path-preview">{displayFilePath(record.path)}</div>
         <label className="dialog-label" htmlFor="library-copy-folder">复制到</label>
         <div className="dialog-field-stack">
           <Select value={targetDirectory || undefined} onValueChange={onTargetDirectoryChange} disabled={isSending || folders.length === 0}>

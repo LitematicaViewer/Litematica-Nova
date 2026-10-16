@@ -28,16 +28,23 @@ fn valid_git_sha(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn watch_if_present(path: &Path) {
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
+
 fn watch_git_identity(repo_root: &Path) {
     let Some(git_dir) = git_output(repo_root, &["rev-parse", "--absolute-git-dir"]) else {
         return;
     };
     let git_dir = PathBuf::from(git_dir);
-    println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
-    println!(
-        "cargo:rerun-if-changed={}",
-        git_dir.join("packed-refs").display()
-    );
+    watch_if_present(&git_dir.join("HEAD"));
+    watch_if_present(&git_dir.join("packed-refs"));
+    // A branch tip is either packed (packed-refs) or loose. Watching the
+    // directory catches a tip that is written as a loose ref for the first time,
+    // which is what a commit does even when packed-refs itself stays untouched.
+    watch_if_present(&git_dir.join("refs/heads"));
 
     let Some(symbolic_ref) = git_output(repo_root, &["symbolic-ref", "-q", "HEAD"]) else {
         return;
@@ -51,7 +58,7 @@ fn watch_git_identity(repo_root: &Path) {
             &symbolic_ref,
         ],
     ) {
-        println!("cargo:rerun-if-changed={reference_path}");
+        watch_if_present(Path::new(&reference_path));
     }
 }
 
@@ -75,7 +82,7 @@ fn build_git_sha(repo_root: &Path) -> String {
 
 fn prepare_block_icons(repo_root: &Path, manifest_dir: &Path) {
     let source = repo_root.join("pack-in/game-icons/block.zip");
-    println!("cargo:rerun-if-changed={}", source.display());
+    watch_if_present(&source);
     let target = manifest_dir.join("gen/block-icons");
     fs::create_dir_all(&target).expect("create generated block icon directory");
     let mut archive = zip::ZipArchive::new(fs::File::open(source).expect("open bundled block icon archive"))

@@ -1,0 +1,9 @@
+LIBRARY NovaDui
+EXPORTS
+    Attach
+    Detach
+    FindInstallLocation
+    Migrate
+    CheckRunning
+    RepairShell
+    Abi

@@ -40,13 +40,13 @@ impl ProtectedRender {
         let root = self.runtime_root.get_or_insert_with(|| data_root.join("protection/runtime").join(format!("{}-{now}", std::process::id()))).clone();
         nova_protection::client::ensure_private_directory(&root).map_err(|e|e.to_string())?;
         let hash = &ticket.response.signed_manifest.manifest.plaintext_sha256;
-        let module_path = root.join(format!("{hash}.dll"));
+        let module_path = root.join(format!("{hash}.{}", nova_protected_loader::MODULE_EXTENSION));
         // The only distributed implementation is authenticated ciphertext. Never
         // accept a module or trust root supplied by the request or source file.
         if module_path.exists() {
             TaskSession::verify_materialized_module(&config, &ticket, &module_path).map_err(|e|e.to_string())?;
         } else {
-            let ciphertext = std::fs::read(backend.join("protected/nova_protected_module.dll.enc")).map_err(|e|format!("读取受保护模块: {e}"))?;
+            let ciphertext = std::fs::read(backend.join("protected").join(format!("{}.enc", nova_protected_loader::MODULE_ID))).map_err(|e|format!("读取受保护模块: {e}"))?;
             session.decrypt_to_private_file(&ciphertext, &module_path).map_err(|e|e.to_string())?;
         }
         session.release_content_key();
@@ -70,13 +70,14 @@ fn retry_fingerprint(request: &[u8]) -> Result<String, String> {
 
 impl Drop for ProtectedRender {
     fn drop(&mut self) {
-        // Only this Host's generated directory is owned here. Windows keeps a
-        // still-loaded DLL locked; never force an unload or kill another process.
+        // Only this Host's generated directory is owned here. A live module may
+        // remain mapped by a child; never force unload or kill another process.
         if let Some(root) = &self.runtime_root {
             if let Ok(entries) = std::fs::read_dir(root) {
                 for entry in entries.flatten() {
                     let path=entry.path();
-                    if entry.file_type().is_ok_and(|kind|kind.is_file()) && matches!(path.extension().and_then(|s|s.to_str()),Some("json"|"dll")) {
+                    let extension = path.extension().and_then(|s|s.to_str());
+                    if entry.file_type().is_ok_and(|kind|kind.is_file()) && (extension == Some("json") || extension == Some(nova_protected_loader::MODULE_EXTENSION)) {
                         let _=std::fs::remove_file(path);
                     }
                 }
@@ -101,12 +102,26 @@ mod tests {
     fn normal_host_release_cleans_only_its_materialized_runtime() {
         let root=std::env::temp_dir().join(format!("nova-owned-runtime-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir(&root).unwrap();
-        std::fs::write(root.join("module.dll"),b"fixture module").unwrap();
+        std::fs::write(root.join(nova_protected_loader::MODULE_ID),b"fixture module").unwrap();
         std::fs::write(root.join("task.json"),b"fixture ticket").unwrap();
         let mut host=ProtectedRender::default();
         host.runtime_root=Some(root.clone());
         drop(host);
         assert!(!root.exists());
+    }
+    #[test]
+    fn host_runtime_cleanup_preserves_other_file_types() {
+        let root=std::env::temp_dir().join(format!("nova-owned-runtime-preserve-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join(nova_protected_loader::MODULE_ID),b"fixture module").unwrap();
+        std::fs::write(root.join("keep.txt"),b"unrelated file").unwrap();
+        let mut host=ProtectedRender::default();
+        host.runtime_root=Some(root.clone());
+        drop(host);
+        assert!(!root.join(nova_protected_loader::MODULE_ID).exists());
+        assert_eq!(std::fs::read(root.join("keep.txt")).unwrap(),b"unrelated file");
+        std::fs::remove_file(root.join("keep.txt")).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
     #[test]
     fn preflight_and_start_share_one_task_but_consume_admission_once() {
