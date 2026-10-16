@@ -91,11 +91,19 @@ export function useApplicationCloseRecovery() {
     });
     void nativeClose.catch(reason => { if (active) setError(`窗口关闭保护未连接：${String(reason)}`); });
     const cancelled = listenEvent<{ message: string }>("nova-close-cancelled", event => { if (active) setError(event.payload.message); });
+    const delayed = listenEvent<{ requestId: number; message: string }>("nova-close-delayed", event => {
+      if (!active || handledCloseRequests.has(event.payload.requestId)) return;
+      setError(event.payload.message);
+      // Retry only the same outstanding request; in-flight preservation/ACK
+      // remains deduplicated and no renderer-completion wait is introduced.
+      void recoverPendingClose().catch(reason => { if (active) setError(String(reason)); });
+    });
     return () => {
       active = false;
       void listening.then(stop => stop()).catch(() => undefined);
       void nativeClose.then(stop => stop()).catch(() => undefined);
       void cancelled.then(stop => stop()).catch(() => undefined);
+      void delayed.then(stop => stop()).catch(() => undefined);
     };
   }, []);
   return { error, retry: async () => {

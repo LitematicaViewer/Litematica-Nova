@@ -49,11 +49,30 @@ test("repeated native events for one request preserve and ACK only once", async 
   assert.equal(f.logs.filter(item => item === "store").length, 1); assert.equal(f.logs.filter(item => typeof item === "object").length, 1);
   f.release(); await first; await f.api.preserveDraftsForClose(11); assert.equal(f.logs.length, 2);
 });
-test("early independent listener recovers a pending X, timeout is actionable and unmount removes callbacks", async () => {
+test("early independent listener recovers a pending X, explicit cancellation is actionable and unmount removes callbacks", async () => {
   const f = fixture(); f.pending({ requestId: 31 }); const hook = f.api.useApplicationCloseRecovery(); f.mount(); await tick();
   assert.equal(f.logs.at(-1).requestId, 31);
   f.events.get("nova-close-cancelled")({ payload: { message: "请重试关闭" } }); assert.equal(f.states.at(-1), "请重试关闭");
   await hook.retry(); assert.equal(f.requests(), 1);
+  f.dispose(); await tick(); assert.equal(f.events.size, 0);
+});
+
+test("a delayed Host warning and repeated X keep one preserved draft and the same in-flight ACK", async () => {
+  const f = fixture(); f.api.useUpdateDraft("shell", { currentFile: "1700w苦情巨树.litematic", route: "render" });
+  f.api.useApplicationCloseRecovery(); f.mount(); await tick(); f.pending({ requestId: 51 }); f.hold();
+  f.events.get("nova-close-requested")({ payload: { requestId: 51 } }); await tick();
+  assert.equal(f.api.readUpdateDraft("shell").route, "render");
+  assert.equal(f.logs.at(-1).requestId, 51); assert.equal(f.logs.at(-1).draftsPreserved, true);
+  // The Host warning is not a cancellation: request 51 remains authoritative
+  // even while its already-sent confirmation is queued behind render IPC.
+  f.events.get("nova-close-delayed")({ payload: { requestId: 51, message: "正在保留草稿并关闭" } });
+  f.events.get("native-close")();
+  f.events.get("nova-close-requested")({ payload: { requestId: 51 } }); await tick();
+  assert.equal(f.logs.filter(item => item === "store").length, 1);
+  assert.equal(f.logs.filter(item => item?.requestId === 51).length, 1);
+  f.release(); await tick(); const messages = f.states.length;
+  f.events.get("nova-close-delayed")({ payload: { requestId: 51, message: "迟到警告" } });
+  await tick(); assert.equal(f.states.length, messages, "a delivered ACK cannot be turned into a new close error by a stale warning");
   f.dispose(); await tick(); assert.equal(f.events.size, 0);
 });
 

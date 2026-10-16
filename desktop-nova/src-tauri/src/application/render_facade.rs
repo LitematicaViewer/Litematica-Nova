@@ -23,9 +23,53 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 pub(crate) const APPLICATION_RENDER_STATE_EVENT: &str = "nova://application/render-state";
+
+// Renderer counters may advance once per Cell/upload/ACK. They are not UI
+// frames: queuing every projection in WebView blocks close/draft IPC behind
+// hundreds of thousands of evals. Only progress is coalesced; product state,
+// errors and presentation changes bypass the interval.
+const APPLICATION_PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Default)]
+struct RenderEventPublication {
+    last: Option<ApplicationRenderSnapshot>,
+    last_at: Option<Instant>,
+    pending: bool,
+}
+
+impl RenderEventPublication {
+    fn project(&mut self, snapshot: ApplicationRenderSnapshot, now: Instant) -> Option<ApplicationRenderSnapshot> {
+        if self.last.as_ref() == Some(&snapshot) {
+            self.pending = false;
+            return None;
+        }
+        let progress_only = self.last.as_ref().is_some_and(|previous| {
+            if previous.operations.len() != snapshot.operations.len() { return false; }
+            previous.operations.iter().zip(&snapshot.operations).all(|(old, new)| {
+                let mut semantic = old.clone();
+                semantic.progress = new.progress.clone();
+                semantic == *new
+            })
+        });
+        if progress_only && self.last_at.is_some_and(|last| now.duration_since(last) < APPLICATION_PROGRESS_INTERVAL) {
+            self.pending = true;
+            return None;
+        }
+        self.pending = false;
+        self.last_at = Some(now);
+        self.last = Some(snapshot.clone());
+        Some(snapshot)
+    }
+
+    fn remaining(&self) -> Duration {
+        self.last_at.map(|last| APPLICATION_PROGRESS_INTERVAL.saturating_sub(last.elapsed()))
+            .unwrap_or(Duration::ZERO)
+    }
+}
 
 /// Small environment inputs already resolved by the Application Host.
 ///
@@ -165,12 +209,41 @@ impl RenderFacade {
         std::thread::Builder::new()
             .name("nova-application-render-events".to_owned())
             .spawn(move || {
-                while let Ok(event) = receiver.recv() {
-                    let changed = facade.observe_service_event(&event);
-                    if !changed.is_empty() {
-                        publish(ApplicationRenderSnapshot {
-                            operations: facade.render_states(),
-                        });
+                let mut publication = RenderEventPublication::default();
+                loop {
+                    let incoming = if publication.pending {
+                        receiver.recv_timeout(publication.remaining())
+                    } else {
+                        receiver.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+                    };
+                    match incoming {
+                        Ok(event) => {
+                            let mut changed = !facade.observe_service_event(&event).is_empty();
+                            // Bound each drain so a continuous producer cannot
+                            // starve a due progress publication or terminal state.
+                            for _ in 0..255 {
+                                match receiver.try_recv() {
+                                    Ok(event) => changed |= !facade.observe_service_event(&event).is_empty(),
+                                    Err(_) => break,
+                                }
+                            }
+                            if changed || publication.pending {
+                                if let Some(snapshot) = publication.project(ApplicationRenderSnapshot {
+                                    operations: facade.render_states(),
+                                }, Instant::now()) { publish(snapshot); }
+                            }
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            // Read authoritative state at flush time, never an
+                            // old Running snapshot captured before cancellation.
+                            if let Some(snapshot) = publication.project(ApplicationRenderSnapshot {
+                                operations: facade.render_states(),
+                            }, Instant::now()) { publish(snapshot); }
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            if publication.pending { publish(ApplicationRenderSnapshot { operations: facade.render_states() }); }
+                            break;
+                        }
                     }
                 }
             })
@@ -1354,6 +1427,7 @@ mod tests {
         responses: Mutex<VecDeque<Result<ResponseBody, String>>>,
         deferred: Mutex<VecDeque<tokio::sync::oneshot::Receiver<Result<ResponseBody, String>>>>,
         snapshot: Mutex<ServiceSnapshot>,
+        event_subscribers: Mutex<Vec<mpsc::Sender<nova_render_protocol::ServiceEvent>>>,
     }
 
     impl FakeTransport {
@@ -1363,6 +1437,10 @@ mod tests {
 
         fn set_snapshot(&self, snapshot: ServiceSnapshot) {
             *self.snapshot.lock().unwrap() = snapshot;
+        }
+
+        fn emit(&self, event: nova_render_protocol::ServiceEvent) {
+            self.event_subscribers.lock().unwrap().retain(|sender| sender.send(event.clone()).is_ok());
         }
 
         fn defer_response(&self) -> tokio::sync::oneshot::Sender<Result<ResponseBody, String>> {
@@ -1400,9 +1478,72 @@ mod tests {
         fn subscribe_events(
             &self,
         ) -> std::sync::mpsc::Receiver<nova_render_protocol::ServiceEvent> {
-            let (_sender, receiver) = std::sync::mpsc::channel();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            self.event_subscribers.lock().unwrap().push(sender);
             receiver
         }
+    }
+
+    #[test]
+    fn progress_publication_is_bounded_but_ready_cancel_failure_are_immediate() {
+        let fake = Arc::new(FakeTransport::default());
+        fake.push_response(accepted(None));
+        let facade = facade(fake);
+        let started = tauri::async_runtime::block_on(start_for_test(&facade, request(), RenderEnvironmentInputs::default())).unwrap();
+        let mut view = started.operation;
+        let mut publication = RenderEventPublication::default();
+        let start = Instant::now();
+        let snapshot = |view: &RenderOperationView| ApplicationRenderSnapshot { operations: vec![view.clone()] };
+        assert!(publication.project(snapshot(&view), start).is_some());
+        let mut sent = 1;
+        // 100,000 upload/progress changes in one simulated second, not
+        // 100,000 WebView evals queued ahead of close/draft acknowledgements.
+        for index in 1..=100_000 {
+            view.progress.completed = Some(index);
+            if publication.project(snapshot(&view), start + Duration::from_micros(index * 10)).is_some() { sent += 1; }
+        }
+        assert_eq!(sent, 21);
+        for state in [OperationState::ViewerPrepared, OperationState::Cancelled, OperationState::Failed] {
+            view.state = state;
+            assert!(publication.project(snapshot(&view), start + Duration::from_millis(1001)).is_some(), "{state:?} must bypass progress cadence");
+        }
+        assert!(!publication.pending);
+    }
+
+    #[test]
+    fn actual_event_bridge_bounds_upload_flood_and_delivers_ready_without_another_progress_event() {
+        let fake = Arc::new(FakeTransport::default());
+        fake.push_response(accepted(Some("viewer-1")));
+        let facade = facade(fake.clone());
+        tauri::async_runtime::block_on(start_for_test(&facade, request(), RenderEnvironmentInputs::default())).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        facade.start_event_bridge_with(move |snapshot| { let _ = sender.send(snapshot); }).unwrap();
+        let start = Instant::now();
+        for count in 1..=10_000 {
+            let mut build = build_snapshot(7, BuildState::Building);
+            build.processed_units = Some(count);
+            build.total_units = Some(10_000);
+            fake.set_snapshot(ServiceSnapshot { builds: vec![build.clone()], ..ServiceSnapshot::default() });
+            fake.emit(nova_render_protocol::ServiceEvent::BuildState(build));
+        }
+        let ready = viewer_snapshot(7, ViewerRuntimeState::ViewerPrepared, ViewerPresentationState::Hidden);
+        fake.set_snapshot(ServiceSnapshot {
+            builds: vec![build_snapshot(7, BuildState::BuildCompleted)],
+            artifacts: vec![artifact_snapshot(7, ArtifactState::Ready)],
+            viewers: vec![ready.clone()],
+        });
+        fake.emit(nova_render_protocol::ServiceEvent::ViewerState(ready));
+        let mut received = 0_u128;
+        loop {
+            let snapshot = receiver.recv_timeout(Duration::from_secs(3)).expect("final ready event must not wait behind upload notifications");
+            received += 1;
+            if snapshot.operations[0].state == OperationState::ViewerPrepared {
+                assert_eq!(snapshot.operations[0].progress.completed, None);
+                break;
+            }
+        }
+        assert!(received <= start.elapsed().as_millis() / 50 + 6, "progress notifications must be bounded, got {received}");
+        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err(), "no stale running snapshot may follow ready");
     }
 
     fn request() -> UserVisibleRenderRequest {

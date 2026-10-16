@@ -61,7 +61,7 @@ const PRODUCT_DATA_DIRECTORY: &str = "Litematica-Nova";
 static SHUTDOWN_STARTED: AtomicBool = AtomicBool::new(false);
 static CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static FLAKE_RESOURCE_SEED_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-const CLOSE_DRAFT_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+const CLOSE_DRAFT_ACK_WARNING_AFTER: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 struct ApplicationCloseGate(Mutex<CloseGateState>);
@@ -110,6 +110,11 @@ impl ApplicationCloseGate {
             return Some(state.pending.take().unwrap().started.elapsed());
         }
         None
+    }
+    fn pending_elapsed(&self, request_id: u64) -> Option<Duration> {
+        self.0.lock().unwrap().pending.as_ref()
+            .filter(|attempt| attempt.request_id == request_id && !attempt.approved)
+            .map(|attempt| attempt.started.elapsed())
     }
 }
 
@@ -166,6 +171,60 @@ mod close_gate_tests {
         assert!(gate.cancel_pending(retry.request_id).is_some());
         assert!(gate.acknowledge(retry.request_id, true).is_err());
         assert!(matches!(gate.native_request(), CloseDecision::AwaitDrafts { created: true, .. }));
+    }
+    #[test]
+    fn delayed_storage_ack_keeps_the_same_close_transaction_after_warning() {
+        let gate = ApplicationCloseGate::default();
+        let CloseDecision::AwaitDrafts { request, .. } = gate.native_request() else { unreachable!() };
+        gate.0.lock().unwrap().pending.as_mut().unwrap().started -= CLOSE_DRAFT_ACK_WARNING_AFTER + Duration::from_millis(1);
+        assert!(gate.pending_elapsed(request.request_id).unwrap() >= CLOSE_DRAFT_ACK_WARNING_AFTER);
+        let CloseDecision::AwaitDrafts { request: repeated, created } = gate.native_request() else { panic!("no storage ACK means no exit"); };
+        assert!(!created); assert_eq!(repeated.request_id, request.request_id);
+        assert_eq!(gate.snapshot().unwrap().request_id, request.request_id);
+        assert!(gate.acknowledge(request.request_id, true).unwrap(), "a real delayed storage ACK is not stale merely because five seconds elapsed");
+        assert!(gate.pending_elapsed(request.request_id).is_none());
+        assert!(!gate.acknowledge(request.request_id, true).unwrap());
+        assert!(matches!(gate.native_request(), CloseDecision::Approved { request_id, .. } if request_id == request.request_id));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn acknowledged_close_reaps_owned_inflight_render_roles_without_waiting_for_build_completion() {
+        use platform::process_supervisor::{ExecutableAllowlist, ExecutableRole, LaunchIdentity, LaunchSpec, LaunchToken, ProcessSupervisor};
+        let command = std::env::var_os("COMSPEC").map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\cmd.exe"));
+        let mut allowlist = ExecutableAllowlist::new();
+        for role in [ExecutableRole::RenderService, ExecutableRole::BuildWorker, ExecutableRole::NativeViewer] {
+            allowlist.allow(role, &command).unwrap();
+        }
+        let (supervisor, _events) = ProcessSupervisor::new(allowlist).unwrap();
+        let mut owned = Vec::new();
+        for (index, role) in [ExecutableRole::RenderService, ExecutableRole::BuildWorker, ExecutableRole::NativeViewer].into_iter().enumerate() {
+            let mut spec = LaunchSpec::new(role, LaunchIdentity {
+                owner_epoch: supervisor.owner_epoch(), generation: 1,
+                launch_token: LaunchToken::new(format!("close-inflight-owned-{index}")).unwrap(),
+            });
+            // Hidden, supervisor-owned long-running fixtures stand in for busy
+            // render roles; no Nova window, projection or user process is touched.
+            spec.args = vec!["/d".into(), "/c".into(), "ping -n 30 127.0.0.1 >nul".into()];
+            owned.push(supervisor.spawn(spec).unwrap().child);
+        }
+        let gate = ApplicationCloseGate::default();
+        let CloseDecision::AwaitDrafts { request, .. } = gate.native_request() else { unreachable!() };
+        gate.0.lock().unwrap().pending.as_mut().unwrap().started -= CLOSE_DRAFT_ACK_WARNING_AFTER + Duration::from_millis(1);
+        assert!(gate.pending_elapsed(request.request_id).is_some());
+        assert_eq!(supervisor.active_children().len(), 3, "a missing draft ACK must not terminate an active render");
+        assert!(gate.acknowledge(request.request_id, true).unwrap());
+        let CloseDecision::Approved { request_id, .. } = gate.native_request() else { panic!("preserved drafts must permit closing even while a build is active"); };
+        assert_eq!(request_id, request.request_id);
+        assert_eq!(supervisor.active_children().len(), 3, "ACK does not wait for synthetic build completion");
+        let started = std::time::Instant::now();
+        supervisor.stop_admitting();
+        let report = supervisor.shutdown(Duration::from_millis(500), Duration::from_millis(1500));
+        assert!(report.remaining.is_empty());
+        assert_eq!(report.terminate_requests, 3);
+        assert!(started.elapsed() < Duration::from_secs(3), "owned teardown must use the existing shared bounded deadline, not the build's 30-second lifetime");
+        assert!(supervisor.active_children().is_empty());
+        println!("[NOVA_CLOSE_REGRESSION] same_request_after_warning=true storage_ack_required=true active_roles_before_ack={} remaining={} teardown_ms={} GUI=UNMEASURED", owned.len(), report.remaining.len(), started.elapsed().as_millis());
     }
 }
 
@@ -2812,6 +2871,129 @@ async fn application_render_launch_plan(
 #[cfg(test)]
 mod full_launch_plan_tests {
     use super::*;
+    /// Exact production CPU worker role after actual Iris/shaderpack admission.
+    /// No Viewer launch or presentation is requested. Run alone in a process.
+    #[test]
+    #[ignore = "requires NOVA_FULL_CPU_TEST_APP_ROOT/SOURCE/OUTPUT_ROOT/SHADERPACK/RESOURCE_PACKS_JSON and the registered signed runtime"]
+    fn actual_full_prebuilt_cpu_artifact_with_iris_preflight_cli() {
+        use platform::process_supervisor::{ExecutableRole, LaunchIdentity, LaunchSpec, LaunchToken, OutputTarget, WaitOutcome};
+        let app_root = PathBuf::from(env::var_os("NOVA_FULL_CPU_TEST_APP_ROOT").expect("NOVA_FULL_CPU_TEST_APP_ROOT"));
+        let source = PathBuf::from(env::var_os("NOVA_FULL_CPU_TEST_SOURCE").expect("NOVA_FULL_CPU_TEST_SOURCE"));
+        let output = PathBuf::from(env::var_os("NOVA_FULL_CPU_TEST_OUTPUT_ROOT").expect("NOVA_FULL_CPU_TEST_OUTPUT_ROOT"));
+        let shaderpack = PathBuf::from(env::var_os("NOVA_FULL_CPU_TEST_SHADERPACK").expect("actual user shaderpack is required"));
+        let resource_packs: Vec<PathBuf> = serde_json::from_str(&env::var("NOVA_FULL_CPU_TEST_RESOURCE_PACKS_JSON").expect("explicit actual resource pack list required, including []")).unwrap();
+        assert!(app_root.is_absolute() && source.is_absolute() && output.is_absolute() && shaderpack.is_absolute());
+        assert!(source.is_file() && shaderpack.is_file());
+        assert!(!output.exists(), "preserve prior measurements; use a new isolated output directory");
+        std::fs::create_dir_all(&output).unwrap();
+        let data_root = output.join("userdata");
+        env::set_var("NOVA_USER_DATA_ROOT", &data_root);
+        application::diagnostics::init(&data_root, env!("CARGO_PKG_VERSION"), "actual-full-cpu-cli").unwrap();
+        APP_RESOURCE_ROOT.set(app_root.clone()).expect("run this ignored test alone");
+        APP_LOCAL_DATA_ROOT.set(data_root.clone()).expect("run this ignored test alone");
+        let service = RenderServiceClient::default();
+        let facade = RenderFacade::new(service.clone());
+        let host = initialize_application_host(app_root.clone(), data_root.clone(), &service).unwrap();
+        service.launch_in_background(Arc::clone(&host.supervisor), host.service_exe.clone(), data_root.clone());
+        let mut protection = application::protected_render::ProtectedRender::default();
+        let result = tauri::async_runtime::block_on(async {
+            let viewport = env::var("NOVA_FULL_CPU_TEST_VIEWPORT").ok().map(|value| {
+                let (width, height) = value.split_once('x').expect("WIDTHxHEIGHT");
+                [width.parse::<u32>().unwrap(), height.parse::<u32>().unwrap()]
+            }).unwrap_or([2316, 1148]);
+            let (mut request, environment) = application_render_request(RenderServiceStartBuildInput {
+                source_path: source.clone(), build_mode: RenderBuildMode::Prebuilt, display_mode: RenderDisplayMode::Full,
+                preflight_id: None, resource_warning_confirmed: false, realtime_decision_id: None,
+                click_started_at_epoch_ms: None, viewport: Some(viewport),
+            })?;
+            request.settings.backend = GraphicsBackendPreference::IrisGl46;
+            request.settings.iris_fallback = IrisFallbackPreference::Fail;
+            request.settings.shader.path = Some(shaderpack.clone());
+            request.settings.resource_packs = resource_packs.clone();
+            if let Some(path) = env::var_os("NOVA_FULL_CPU_TEST_FABRIC_MODS_DIR") { request.settings.fabric_mods_dir = Some(PathBuf::from(path)); }
+            let preflight_started = std::time::Instant::now();
+            let preflight = facade.preflight_render(request.clone(), environment).await?;
+            let preflight_ms = preflight_started.elapsed().as_millis();
+            if !preflight.allowed_actions.contains(&application::model::ResourcePreflightAction::ContinuePrebuilt) {
+                return Err(format!("actual Iris admission did not allow original Full Prebuilt: {preflight:?}"));
+            }
+            let backend = app_root.join("bin/viewer-backend");
+            let material_started = std::time::Instant::now();
+            // A separate explicit CPU audit task receives its own real grant;
+            // it never invents or reuses a generic process authorization.
+            let task = protection.acquire(&data_root, &backend, &serde_json::to_vec(&request).map_err(|e| e.to_string())?)?;
+            let material_ms = material_started.elapsed().as_millis();
+            let ready = output.join("full-prebuilt.ready.json");
+            let artifact = output.join("full-prebuilt.gpu-scene.cache");
+            let contract_path = output.join("full-prebuilt.contract.json");
+            let contract = serde_json::json!({
+                "schema":"lba.viewer.launch.v1", "requestId":format!("full-cpu-prebuilt-{}",std::process::id()),
+                "scene":source, "content":{"resourcePacks":resource_packs,"fabricModsDir":request.settings.fabric_mods_dir},
+                "renderer":null, "protectedTask":{"ticketPath":task.ticket_path,"modulePath":task.module_path},
+                "task":{"kind":"build_cache","buildMode":"prebuilt","effectsProfile":"full","readyFile":ready,"cacheFile":artifact}
+            });
+            // BuildCache rejects renderer-only settings by design. Iris is
+            // validated above; this is the identical renderer-independent Full
+            // CPU producer used by that real Iris Prebuilt application route.
+            let parsed: ::viewer_launch_contract::ViewerLaunchContract = serde_json::from_value(contract.clone()).map_err(|e|e.to_string())?;
+            parsed.validate()?;
+            std::fs::write(&contract_path, serde_json::to_vec_pretty(&contract).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+            let mut spec = LaunchSpec::new(ExecutableRole::BuildWorker, LaunchIdentity {
+                owner_epoch: host.supervisor.owner_epoch(), generation: 1,
+                launch_token: LaunchToken::new(format!("full-cpu-prebuilt-{}", std::process::id())).map_err(|e|e.to_string())?,
+            });
+            spec.args.push(format!("--launch-contract={}", contract_path.display()).into());
+            spec.current_dir = Some(app_root.clone());
+            spec.stdout = OutputTarget::File { path: output.join("full-prebuilt.stdout.log"), append: false };
+            spec.stderr = OutputTarget::File { path: output.join("full-prebuilt.stderr.log"), append: false };
+            spec.environment = vec![
+                ("NOVA_USER_DATA_ROOT".into(), data_root.clone().into_os_string()),
+                ("NOVA_PROTECTED_TICKET_PATH".into(), task.ticket_path.into_os_string()),
+                ("NOVA_PROTECTED_MODULE_PATH".into(), task.module_path.into_os_string()),
+                ("NOVA_RENDER_PHASE_AUDIT".into(), "1".into()),
+            ];
+            let worker_started = std::time::Instant::now();
+            let child = host.supervisor.spawn(spec).map_err(|e|e.to_string())?.child;
+            let timeout = env::var("NOVA_FULL_CPU_TEST_TIMEOUT_SECS").ok().map(|v|v.parse::<u64>().unwrap()).unwrap_or(1200);
+            let exit = match host.supervisor.wait_for_exit(&child, Duration::from_secs(timeout)) {
+                WaitOutcome::Exited(exit) => exit,
+                other => return Err(format!("owned Full CPU worker did not exit normally: {other:?}")),
+            };
+            if exit.exit_code != Some(0) { return Err(format!("real protected Full CPU worker exited {:?}; inspect its private stdout/stderr", exit.exit_code)); }
+            let worker_ms = worker_started.elapsed().as_millis();
+            let ready_value: serde_json::Value = serde_json::from_slice(&std::fs::read(&ready).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+            if ready_value["ready"] != true || !artifact.is_file() { return Err("worker exited without a ready exact artifact".into()); }
+            if !facade.render_states().is_empty() || !service.snapshot().viewers.is_empty() { return Err("CPU-only fixture unexpectedly started a render operation or Viewer".into()); }
+            let mut phase_evidence = Vec::new();
+            for log_name in ["full-prebuilt.stdout.log", "full-prebuilt.stderr.log"] {
+                use std::io::BufRead;
+                let log = std::io::BufReader::new(std::fs::File::open(output.join(log_name)).map_err(|e|e.to_string())?);
+                for line in log.lines() {
+                    let line = line.map_err(|e|e.to_string())?;
+                    if line.starts_with("[V5_BUILD_TRACE]") || line.starts_with("[V5_TERRAIN_TRACE]")
+                        || line.starts_with("[NOVA_REMOTE_LIGHT]") || line.starts_with("[NOVA_REMOTE_AO]")
+                        || line.starts_with("[NOVA_RENDER_PHASE]") || line.starts_with("[V5_CACHE]") {
+                        phase_evidence.push(line);
+                    }
+                }
+            }
+            let result = serde_json::json!({"mode":"full","loading":"prebuilt","backendAdmission":"iris-gl46","shaderpack":shaderpack,
+                "preflightMs":preflight_ms,"admissionMs":preflight_ms,"admissionUnder10s":preflight_ms<=10000,
+                "preflight":preflight,"workerTaskGrantMaterializeMs":material_ms,"workerMs":worker_ms,
+                "artifact":artifact,"artifactBytes":std::fs::metadata(&artifact).map_err(|e|e.to_string())?.len(),"ready":ready_value,
+                "readySummary":{"directorySections":ready_value["total_chunks"],"builtSections":ready_value["built_chunks"],
+                    "renderableSections":ready_value["renderable_chunks"],"emptyMeshSections":ready_value["empty_mesh_chunks"]},
+                "actualPhaseEvidence":phase_evidence,
+                "workerExit":exit.exit_code,"GPU":"not_executed","firstFrame":"not_measured","viewerCount":0,
+                "shaderpackBoundary":"actual Iris preflight; BuildCache has no renderer-only fields, matching production Full CPU role"});
+            std::fs::write(output.join("full-prebuilt-result.json"), serde_json::to_vec_pretty(&result).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+            Ok::<_,String>(())
+        });
+        service.request_shutdown(); host.supervisor.stop_admitting();
+        let shutdown = host.supervisor.shutdown(Duration::from_millis(500), Duration::from_millis(1500));
+        assert!(shutdown.remaining.is_empty());
+        result.unwrap();
+    }
     /// Opt-in production Host/Service regression. This calls only resource
     /// preflight: it never starts a Build, GPU viewport, WebView or window.
     #[test]
@@ -3417,17 +3599,20 @@ fn main() {
                 if SHUTDOWN_STARTED.load(Ordering::Acquire) { return; }
                 let (request_id, started) = match window.state::<ApplicationCloseGate>().native_request() {
                     CloseDecision::AwaitDrafts { request, created } => {
+                        let app = window.app_handle().clone();
+                        // Repeated X retries delivery, not the transaction. An
+                        // already-persisted ACK queued behind render IPC must
+                        // still authorize this same outstanding close intent.
+                        let _ = app.emit_to("main", "nova-close-requested", request);
                         if created {
                             eprintln!("[NOVA_LIFECYCLE] stage=close_native_request request_id={} elapsed_ms=0", request.request_id);
-                            let app = window.app_handle().clone();
-                            let _ = app.emit_to("main", "nova-close-requested", request);
                             tauri::async_runtime::spawn(async move {
-                                tokio::time::sleep(CLOSE_DRAFT_ACK_TIMEOUT).await;
-                                if let Some(elapsed) = app.state::<ApplicationCloseGate>().cancel_pending(request.request_id) {
-                                    let message = "关闭请求未完成，窗口保持打开。请重试关闭。";
-                                    let _ = app.emit_to("main", "nova-close-cancelled", serde_json::json!({ "message": message }));
-                                    if let Some(window) = app.get_webview_window("main") { let _ = window.set_title("Litematica-Nova — 关闭未完成，请重试"); }
-                                    eprintln!("[NOVA_LIFECYCLE] stage=close_draft_ack_timeout request_id={} elapsed_ms={}", request.request_id, elapsed.as_millis());
+                                tokio::time::sleep(CLOSE_DRAFT_ACK_WARNING_AFTER).await;
+                                if let Some(elapsed) = app.state::<ApplicationCloseGate>().pending_elapsed(request.request_id) {
+                                    let message = "正在保留草稿并关闭；可再次点击关闭重试，当前草稿不会丢失。";
+                                    let _ = app.emit_to("main", "nova-close-delayed", serde_json::json!({ "requestId": request.request_id, "message": message }));
+                                    if let Some(window) = app.get_webview_window("main") { let _ = window.set_title("Litematica-Nova — 正在保留草稿并关闭"); }
+                                    eprintln!("[NOVA_LIFECYCLE] stage=close_draft_ack_delayed request_id={} elapsed_ms={} request_preserved=true", request.request_id, elapsed.as_millis());
                                 }
                             });
                         }
