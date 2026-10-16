@@ -19,7 +19,10 @@ concurrency:
 
 jobs:
   windows-linux:
+    needs: macos-runtime
     if: >-
+      !cancelled() &&
+      (needs.macos-runtime.result == 'success' || needs.macos-runtime.result == 'skipped') &&
       github.repository == 'LitematicaViewer/Litematica-Nova' &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'workflow_dispatch' && inputs.platforms != 'macos'
@@ -216,7 +219,11 @@ jobs:
             desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/nova-build-worker
             desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/Litematica-Nova
           key: nova-macos-public-v1-${{ matrix.target }}-rust1.99.0-macos13-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'desktop-nova/scripts/build-public-platform.mjs') }}-${{ steps.cache-identity.outputs.runtime }}-${{ github.sha }}
-          restore-keys: nova-macos-public-v1-${{ matrix.target }}-rust1.99.0-macos13-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'desktop-nova/scripts/build-public-platform.mjs') }}-${{ steps.cache-identity.outputs.runtime }}-
+          # Cargo revalidates source, features and compiler fingerprints. The
+          # build driver still verifies the exact current helper/runtime identity.
+          restore-keys: |
+            nova-macos-public-v1-${{ matrix.target }}-rust1.99.0-macos13-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'desktop-nova/scripts/build-public-platform.mjs') }}-${{ steps.cache-identity.outputs.runtime }}-
+            nova-macos-public-v1-${{ matrix.target }}-rust1.99.0-macos13-
       - name: Build macOS candidate
         id: macos-build
         env:
