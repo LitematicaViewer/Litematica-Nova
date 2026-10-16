@@ -1,3 +1,4 @@
+import { displayPathText } from "../../../../../src/business/facade";
 import React, { useEffect, useState } from "react";
 import { Sun, Moon, Monitor, Check } from "lucide-react";
 import { Button } from "../../../../components/ui/button";
@@ -39,14 +40,15 @@ import {
   loadUserConfigMigratingLocalStorage,
   normalizeLocalLibraryTailPathCount,
   normalizeMaterialListWindowBehavior,
-  normalizeShowUiTestPage,
+  normalizeDebugMode,
   normalizeTheme,
   normalizeColorMode,
   normalizeGraphicsBackend,
   saveLocalLibraryTailPathCountConfig,
   saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
-  saveShowUiTestPageConfig,
+  saveDebugModeConfig,
+  displayFilePath,
   saveGraphicsBackendConfig,
 } from "../../../../../src/business/facade";
 
@@ -126,7 +128,7 @@ function PathRow({ label, path, info }: { label: string; path: string; info?: Pa
     <div className="form-row">
       <div className="form-label">{label}</div>
       <div className="form-field">
-        <Input aria-label={label} className="input settings-grow" value={info?.normalized || path} readOnly />
+        <Input aria-label={label} className="input settings-grow" value={displayFilePath(info?.normalized || path)} readOnly />
         <span className="settings-path-state" data-state={info ? (info.exists ? "ok" : "error") : "unchecked"}>
           {info ? (info.exists ? "存在" : "缺失") : "未检查"}
         </span>
@@ -135,27 +137,14 @@ function PathRow({ label, path, info }: { label: string; path: string; info?: Pa
   );
 }
 
-function compactFolderPathDemo(path: string, tailCount: number): string {
-  const normalized = path.trim().replace(/[\\/]+$/, "");
-  const separator = normalized.includes("\\") ? "\\" : "/";
-  const parts = normalized.split(/[\\/]+/).filter(Boolean);
-  const safeTailCount = normalizeLocalLibraryTailPathCount(tailCount);
-  const hasWindowsDrive = /^[A-Za-z]:/.test(normalized);
-  const hasUnixRoot = normalized.startsWith("/");
-  const visiblePrefixSegments = hasWindowsDrive || !hasUnixRoot ? 1 : 0;
-  if (parts.length <= safeTailCount + visiblePrefixSegments) return normalized;
-  const driveOrRoot = hasWindowsDrive ? normalized.match(/^[A-Za-z]:/)?.[0] || "" : hasUnixRoot ? "" : parts[0];
-  const tail = parts.slice(-safeTailCount).join(separator);
-  return driveOrRoot ? `${driveOrRoot}${separator}...${separator}${tail}` : `${separator}...${separator}${tail}`;
-}
-
-export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShowUiTestPage }: any) {
+export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebugMode, buildVersion }: any) {
   const [showAssetManager, setShowAssetManager] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [previewMode, setPreviewMode] = useState<DisplayMode>("full");
   const [materialListWindowBehavior, setMaterialListWindowBehavior] = useState("independent_window");
   const [localLibraryTailPathCount, setLocalLibraryTailPathCount] = useState(3);
-  const [showUiTestPage, setShowUiTestPageState] = useState(true);
+  const [debugMode, setDebugModeState] = useState(false);
+  const [debugModeSaving, setDebugModeSaving] = useState(false);
   const [userConfig, setUserConfig] = useState<UserConfigInfo | null>(null);
   const [dbInfo, setDbInfo] = useState<PathInfo | null>(null);
   const [zhInfo, setZhInfo] = useState<PathInfo | null>(null);
@@ -183,13 +172,13 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
   const [v5PickerBusy, setV5PickerBusy] = useState(false);
 
   const applyUserConfig = (info: UserConfigInfo, changedConfigDirectory = false) => {
-    const showUiTest = normalizeShowUiTestPage(info.config.show_ui_test_page);
+    const showUiTest = normalizeDebugMode(info.config.debug_mode);
     setUserConfig(info);
     setPreviewMode(normalizeDisplayMode(info.config.preview_mode));
     setMaterialListWindowBehavior(normalizeMaterialListWindowBehavior(info.config.material_list_window_behavior));
     setLocalLibraryTailPathCount(normalizeLocalLibraryTailPathCount(info.config.local_library_tail_path_count));
-    setShowUiTestPageState(showUiTest);
-    setShowUiTestPage?.(showUiTest);
+    setDebugModeState(showUiTest);
+    setDebugMode?.(showUiTest);
     if (changedConfigDirectory) setTheme(normalizeTheme(info.config.theme));
     if (changedConfigDirectory) setColorMode(normalizeColorMode(info.config.color_mode));
     setV5Compatibility(info.config.v5_compatibility || DEFAULT_V5_COMPATIBILITY);
@@ -236,10 +225,14 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
     applyUserConfig(await saveMaterialListWindowBehaviorConfig(behavior));
   };
 
-  const handleShowUiTestPage = async (checked: boolean) => {
-    setShowUiTestPageState(checked);
-    setShowUiTestPage?.(checked);
-    applyUserConfig(await saveShowUiTestPageConfig(checked));
+  const handleDebugMode = async (checked: boolean) => {
+    if (debugModeSaving) return;
+    setDebugModeSaving(true);
+    try {
+      applyUserConfig(await saveDebugModeConfig(checked));
+    } catch (reason) {
+      setLog(`调试模式保存失败：${String(reason)}`);
+    } finally { setDebugModeSaving(false); }
   };
 
   const handleLocalLibraryTailPathCount = async (value: string) => {
@@ -310,7 +303,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
       if (!path) return;
       const parts = splitPackPath(path);
       if (!parts?.root || !parts.name) {
-        setLog(`无法从所选路径识别光影包根目录和名称：${path}`);
+        setLog(`无法从所选路径识别光影包根目录和名称：${displayFilePath(path)}`);
         return;
       }
       setV5Compatibility((current) => ({
@@ -319,7 +312,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
         shaderpack_root: parts.root,
         shaderpack_name: parts.name,
       }));
-      setLog(`已选择光影包：${path}\n点击“保存渲染设置”后生效。`);
+      setLog(`已选择光影包：${displayFilePath(path)}\n点击“保存渲染设置”后生效。`);
     } catch (err) {
       setLog(`选择光影包失败：${String(err)}`);
     } finally {
@@ -394,7 +387,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
       setIconDirInfo(iconDir);
       const ok = iconDir.exists && iconDir.is_dir && dirt.exists && grass.exists;
       setIconOk(ok);
-      setLog(`检查图标库：${ok ? "OK" : "失败"}\n目录：${iconDir.normalized}\ndirt.png=${dirt.exists}\ngrass_block.png=${grass.exists}`);
+      setLog(`检查图标库：${ok ? "OK" : "失败"}\n目录：${displayFilePath(iconDir.normalized)}\ndirt.png=${dirt.exists}\ngrass_block.png=${grass.exists}`);
     } catch (err: any) {
       setIconOk(false);
       setLog(String(err));
@@ -501,20 +494,17 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
         <div className="group-box-title">用户配置目录</div>
         <div className="form-row">
           <div className="form-label">当前目录</div>
-          <Input className="input settings-grow" aria-label="当前配置目录" value={userConfig?.config_dir || ""} readOnly />
+          <Input className="input settings-grow" aria-label="当前配置目录" value={displayFilePath(userConfig?.config_dir || "")} readOnly />
         </div>
         <div className="form-row">
           <div className="form-label">默认目录</div>
-          <Input className="input settings-grow" aria-label="默认配置目录" value={userConfig?.default_config_dir || ""} readOnly />
+          <Input className="input settings-grow" aria-label="默认配置目录" value={displayFilePath(userConfig?.default_config_dir || "")} readOnly />
         </div>
         <div className="settings-actions">
           <Button className="btn" onClick={chooseConfigDir}>选择目录</Button>
           <Button className="btn" onClick={() => openUserConfigDir()}>打开目录</Button>
           <Button className="btn" onClick={resetConfigDir}>恢复默认目录</Button>
           <Button className="btn" onClick={migrateConfigDir}>迁移当前配置到新目录</Button>
-        </div>
-        <div className="settings-help-text">
-          用户态文件会写入 projection-library/js_library.json、previews/、render/、generation-templates/custom/ 和普通 config。API Key 不写入普通 config。
         </div>
       </div>
 
@@ -567,13 +557,10 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
             {[aiSaveMessage, aiTestStatus].filter(Boolean).join("\n")}
           </pre>
         )}
-        <div className="settings-help-text">
-          API Key 不写入 localStorage、普通 config、prompt、plan 或日志；页面不会回显已保存的真实 Key。
-        </div>
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">测试功能</div>
+        <div className="group-box-title">界面行为</div>
         <div className="form-row">
           <div className="form-label">子窗口行为</div>
           <div className="form-field">
@@ -582,10 +569,10 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label">显示 UI调试页</div>
+          <div className="form-label">调试模式</div>
           <label className="form-field">
-            <Checkbox aria-label="显示 UI 调试页" checked={showUiTestPage} onCheckedChange={(checked) => handleShowUiTestPage(checked === true)} />
-            <span>在左侧导航栏显示 UI 测试入口</span>
+            <Checkbox aria-label="调试模式" checked={debugMode} disabled={!userConfig || debugModeSaving} onCheckedChange={(checked) => void handleDebugMode(checked === true)} />
+            <span>UI 测试与枚举器</span>
           </label>
         </div>
         <div className="form-row">
@@ -600,25 +587,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
               value={localLibraryTailPathCount}
               onChange={(event) => handleLocalLibraryTailPathCount(event.target.value)}
             />
-            <span className="settings-muted">本地库文件夹标题压缩时，保留最后 N 级目录</span>
           </div>
-        </div>
-        <div className="form-row">
-          <div className="form-label">演示</div>
-          <div className="form-field settings-stack">
-            <code className="settings-path-example">
-              {"C:\\Users\\LOLcat\\Documents\\Minecraft\\Schematics\\Castle\\Overworld\\North Gate"}
-            </code>
-            <div>
-              {compactFolderPathDemo(
-                "C:\\Users\\LOLcat\\Documents\\Minecraft\\Schematics\\Castle\\Overworld\\North Gate",
-                localLibraryTailPathCount,
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="settings-help-text">
-          材料列表和 UI 测试页中的演示窗口都会按照这里的子窗口行为决定使用独立窗口还是主窗口遮罩。
         </div>
       </div>
 
@@ -682,9 +651,6 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
             <span>允许在 Viewer 中按 Y 修改天气</span>
           </label>
         </div>
-        <div className="settings-help-text">
-          时间和天气可在预览中调整。
-        </div>
       </div>
 
       <div className="group-box">
@@ -703,10 +669,6 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
             {graphicsBackendSaving && <span role="status">正在保存…</span>}
           </div>
         </div>
-        <div className="settings-help-text">
-          自动按设备能力选择可用后端。DX12 仅支持 Windows 快速模式；标准和完整模式当前使用 Vulkan，强制 DX12 启动这两种模式会提示不支持，不会替换成快速模式。
-          更改仅对新任务生效，不重建现有预览。下方光影兼容选项与图形 API 独立。
-        </div>
         <div className="form-row">
           <div className="form-label">渲染后端</div>
           <Dropdown ariaLabel="渲染后端" value={v5Compatibility.backend}
@@ -717,7 +679,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
           <div className="form-label">光影包文件夹</div>
           <Input
             className="input"
-            aria-label="光影包文件夹" value={v5Compatibility.shaderpack_root}
+            aria-label="光影包文件夹" value={displayFilePath(v5Compatibility.shaderpack_root)}
             onChange={(event) => setV5Compatibility((current) => ({ ...current, shaderpack_root: event.target.value }))}
             placeholder="例如 D:\\.minecraft\\shaderpacks"
           />
@@ -746,7 +708,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
           <div className="form-label">Fabric mods 目录</div>
           <Input
             className="input"
-            aria-label="Fabric mods 目录" value={v5Compatibility.fabric_mods_dir}
+            aria-label="Fabric mods 目录" value={displayFilePath(v5Compatibility.fabric_mods_dir)}
             onChange={(event) => setV5Compatibility((current) => ({ ...current, fabric_mods_dir: event.target.value }))}
             placeholder="留空禁用；仅加载 Fabric data-only 资源"
           />
@@ -757,7 +719,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
             <Textarea
               aria-label="资源包列表"
               className="input v5-resource-pack-list"
-              value={v5Compatibility.resource_packs.join("\n")}
+              value={v5Compatibility.resource_packs.map(displayFilePath).join("\n")}
               onChange={(event) => setV5Compatibility((current) => ({ ...current, resource_packs: event.target.value.split(/\r?\n/) }))}
               placeholder="每行一个 zip 或目录；按从低到高优先级填写"
             />
@@ -774,29 +736,26 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
           </div>
         </div>
         <Button className="btn" onClick={saveV5Compatibility}>保存渲染设置</Button>
-        <div className="settings-help-text">
-          列表下方的资源包优先级更高。
-        </div>
       </div>
 
       <div className="group-box">
         <div className="group-box-title">维护</div>
+        {buildVersion && <div className="form-row"><div className="form-label">应用版本</div><div>{buildVersion}</div></div>}
         <Button className="btn" onClick={async () => setLog(await cleanupLocalTempFiles())}>清理本地临时文件</Button>
         <Button className="btn" type="button" disabled={exportingLogs} onClick={async () => {
           setExportingLogs(true); setLogExportStatus("");
           try {
             const result = await exportDiagnosticLogs();
-            if (result) setLogExportStatus(`日志已导出：${result.path}（${result.sessionIds.length} 次启动）`);
+            if (result) setLogExportStatus(`日志已导出：${displayFilePath(result.path)}（${result.sessionIds.length} 次启动）`);
           } catch (reason) {
             setLogExportStatus(`日志导出失败：${String(reason)}`);
           } finally { setExportingLogs(false); }
         }}>{exportingLogs ? "正在导出日志…" : "导出日志 ZIP…"}</Button>
-        <div className="settings-help-text">保留最近 3 次启动的日志。仅导出日志和必要诊断，不包含投影或完整配置。</div>
-        {logExportStatus && <div className="settings-feedback" role="status" aria-live="polite">{logExportStatus}</div>}
+        {logExportStatus && <div className="settings-feedback" role="status" aria-live="polite">{displayPathText(logExportStatus)}</div>}
       </div>
 
       {log && (
-        <pre className="settings-feedback">{log}</pre>
+        <pre className="settings-feedback">{displayPathText(log)}</pre>
       )}
     </div>
     </ScrollArea>

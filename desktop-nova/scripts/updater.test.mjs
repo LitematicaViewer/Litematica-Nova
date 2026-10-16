@@ -4,7 +4,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 
-function fixture() {
+function fixture(label = "main") {
   const values = new Map(), cleanups = [], exports = {};
   let failWrite = false;
   const localStorage = {
@@ -13,7 +13,10 @@ function fixture() {
   };
   const code = ts.transpileModule(fs.readFileSync(new URL("../ui/windows/main/updateRecovery.ts", import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   vm.runInNewContext(code, { exports, localStorage, require: (name) => {
-    assert.equal(name, "react"); return { useRef: (current) => ({ current }), useEffect: (fn) => cleanups.push(fn()) };
+    if (name === "../../../src/platform/nativeWindowGeometry") return { getApplicationWindowLabel: () => label };
+    if (name === "../../../src/platform/events") return {};
+    if (name === "../../../src/platform/applicationOperations") return {};
+    assert.equal(name, "react"); return { useRef: (current) => ({ current }), useEffect: (fn) => cleanups.push(fn()), useState: (current) => [current, () => {}] };
   }});
   return { api: exports, values, cleanups, fail: () => { failWrite = true; } };
 }
@@ -45,15 +48,12 @@ test("取消更新后清理当次恢复快照，后续正常保存不会复活�
   assert.equal(f.api.takeUpdateDraft("properties:one"), undefined);
 });
 
-test("更新说明：统一六段格式并兼容旧标题，实际Beta说明包含下版平台计划", () => {
+test("更新说明：始终统一新增、优化、修复、注意事项；旧文本进入注意事项", () => {
   const f = fixture();
   const sections = f.api.releaseNoteSections("版本：0.2.0\n日期：2026-10-12\n## 新增\n- A\n## 修复\n- B");
-  assert.equal(sections.map((s) => s.label).join(","), "版本与发布日期,新增功能,功能优化,问题修复,已知问题,后续计划");
-  assert.equal(sections[1].lines[0], "A"); assert.equal(sections[3].lines[0], "B");
-  assert.equal(f.api.releaseNoteSections("legacy text")[4].lines[0], "legacy text");
-  const release = f.api.releaseNoteSections(fs.readFileSync(new URL("../../docs/releases/BETA_0_1.md", import.meta.url), "utf8"));
-  assert.ok(release.every((s) => s.lines[0] !== "未提供"));
-  assert.ok(release[5].lines.includes("macOS 和 Linux 将在下个版本支持。"));
+  assert.equal(sections.map((s) => s.label).join(","), "新增,优化,修复,注意事项");
+  assert.equal(sections[0].lines[0], "A"); assert.equal(sections[2].lines[0], "B");
+  assert.equal(f.api.releaseNoteSections("legacy text")[3].lines[0], "legacy text");
 });
 
 test("更新接口：前端仅走应用命令；官方验证与HTTPS不被旁路", () => {
@@ -64,12 +64,36 @@ test("更新接口：前端仅走应用命令；官方验证与HTTPS不被旁路
   assert.ok(config.plugins.updater.endpoints.every((url) => new URL(url).protocol === "https:"));
   assert.match(source, /update\.download\(/);
   assert.match(source, /pending\.update\.install\(/);
-  assert.match(source, /https_only\(true\)/);
+  const network = fs.readFileSync(new URL("../src-tauri/src/application/updater_network.rs", import.meta.url), "utf8");
+  assert.match(source, /client_trace\.configure\(client\)/);
+  assert.match(network, /https_only\(true\)/);
   assert.match(source, /same_release\(&original\.version, &original\.signature/);
   assert.match(source, /pause_admitting\(\)/);
   const quiesce = source.indexOf("supervisor.stop_admitting();");
-  const shutdown = source.indexOf(".close(&view.preview_id)");
+  const shutdown = source.indexOf("request_shutdown();");
   assert.ok(quiesce > 0 && shutdown > quiesce);
   assert.doesNotMatch(source.slice(shutdown, source.indexOf("pending.update.install")), /cancel.changed/);
   assert.doesNotMatch(source, /danger_accept_invalid|verify_signature\s*=\s*false/);
+});
+
+test("子窗口：关闭自身不注册主窗口草稿恢复、查询或确认", async () => {
+  const f = fixture("enumerator");
+  const recovery = f.api.useApplicationCloseRecovery();
+  assert.equal(recovery.error, "");
+  await recovery.retry();
+  assert.ok(f.cleanups.every(cleanup => cleanup === undefined));
+});
+
+test("更新网络：锁定官方HTTP版本并开启系统代理，记录真实响应，不增加探针请求", () => {
+  const network = fs.readFileSync(new URL("../src-tauri/src/application/updater_network.rs", import.meta.url), "utf8");
+  const updater = fs.readFileSync(new URL("../src-tauri/src/application/updater.rs", import.meta.url), "utf8");
+  const cargo = fs.readFileSync(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
+  assert.match(cargo, /updater-http[^\n]+version = "=0\.13\.2"[^\n]+"system-proxy"/);
+  assert.match(network, /response\.status\(\)/);
+  assert.match(network, /response\.uri\(\)\.host\(\)/);
+  assert.match(network, /response\.error\(\)\.map\(error_details\)/);
+  assert.match(updater, /value\.update\.target == original\.target/);
+  const production = updater.slice(0, updater.indexOf("pub(crate) fn run_cli"));
+  assert.doesNotMatch(production, /network::probe\(/);
+  assert.doesNotMatch(network, /danger_accept_invalid|std::env::set_var|127\.0\.0\.1:7890/);
 });

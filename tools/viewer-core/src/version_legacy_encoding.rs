@@ -111,6 +111,7 @@ pub(crate) fn encode(root: &Value, registry: &Registry) -> Result<Value> {
     let mut occupied = vec![false; volume];
     let mut tile_entities = Vec::new();
     let mut entities = Vec::new();
+    let mut ticks = Vec::new();
     for region in regions.values() {
         let map = fields(region)?;
         let position = vector(map.get("Position").context("选区缺少 Position")?)?;
@@ -177,10 +178,26 @@ pub(crate) fn encode(root: &Value, registry: &Registry) -> Result<Value> {
             }
         }
         if let Some(Value::List(values)) = map.get("Entities") {
-            if !values.is_empty() {
-                bail!("旧格式实体坐标迁移未核实，转换已停止")
-            };
-            entities.extend(values.clone());
+            for value in values {
+                let mut value = value.clone();
+                shift_entity(&mut value, [position.x + (size.x + 1).min(0) - min[0], position.y + (size.y + 1).min(0) - min[1], position.z + (size.z + 1).min(0) - min[2]])?;
+                entities.push(value);
+            }
+        }
+        if let Some(Value::List(values)) = map.get("PendingBlockTicks") {
+            for value in values {
+                let source = fields(value)?;
+                let Some(Value::String(id)) = source.get("Block") else { bail!("方块计划刻缺少Block") };
+                let legacy_id = registry.legacy_state_aliases.iter().find_map(|(legacy, states)| states.iter().any(|state| parse_key(state).is_ok_and(|(name, _)| name == *id)).then(|| parse_key(legacy).map(|(name, _)| name))).transpose()?.unwrap_or_else(|| id.clone());
+                let time = match source.get("Time") { Some(Value::Long(value)) => i32::try_from(*value).context("目标旧版计划刻时间超出Int范围")?, Some(Value::Int(value)) => *value, _ => bail!("计划刻时间无效") };
+                if source.get("SubTick").is_some_and(|value| value != &Value::Long(0)) { bail!("目标旧版没有计划刻SubTick排序字段，原文件保留") }
+                let mut tick = HashMap::from([("i".into(), Value::String(legacy_id)), ("t".into(), Value::Int(time)), ("p".into(), source.get("Priority").cloned().unwrap_or(Value::Int(0)))]);
+                for (axis, name) in ["x", "y", "z"].into_iter().enumerate() {
+                    let p = [position.x, position.y, position.z][axis] + ([size.x, size.y, size.z][axis] + 1).min(0);
+                    tick.insert(name.into(), Value::Int(number(source.get(name))? + p - min[axis]));
+                }
+                ticks.push(Value::Compound(tick));
+            }
         }
     }
     let mut output = HashMap::from([
@@ -198,6 +215,7 @@ pub(crate) fn encode(root: &Value, registry: &Registry) -> Result<Value> {
         ),
         ("TileEntities".into(), Value::List(tile_entities)),
         ("Entities".into(), Value::List(entities)),
+        ("TileTicks".into(), Value::List(ticks)),
         ("WEOffsetX".into(), Value::Int(min[0])),
         ("WEOffsetY".into(), Value::Int(min[1])),
         ("WEOffsetZ".into(), Value::Int(min[2])),
@@ -222,6 +240,8 @@ pub(crate) fn encode(root: &Value, registry: &Registry) -> Result<Value> {
             "BlockStatePalette",
             "Entities",
             "TileEntities",
+            "PendingBlockTicks",
+            "PendingFluidTicks",
         ] {
             metadata.remove(key);
         }
@@ -234,6 +254,20 @@ pub(crate) fn encode(root: &Value, registry: &Registry) -> Result<Value> {
     envelope.remove("Regions");
     output.insert("NovaSourceMetadata".into(), Value::Compound(envelope));
     Ok(Value::Compound(output))
+}
+
+fn shift_entity(value: &mut Value, offset: [i32; 3]) -> Result<()> {
+    let Value::Compound(fields) = value else { bail!("实体不是Compound") };
+    if let Some(Value::List(position)) = fields.get_mut("Pos") {
+        if position.len() != 3 { bail!("实体Pos必须有三个坐标") }
+        for (axis, value) in position.iter_mut().enumerate() { let Value::Double(value) = value else { bail!("实体Pos必须为Double") }; *value += f64::from(offset[axis]); }
+    } else { bail!("实体缺少Pos") }
+    for (axis, key) in ["TileX", "TileY", "TileZ"].into_iter().enumerate() {
+        if let Some(Value::Int(value)) = fields.get_mut(key) { *value = value.checked_add(offset[axis]).context("悬挂实体坐标溢出")?; }
+    }
+    if let Some(Value::List(passengers)) = fields.get_mut("Passengers") { for passenger in passengers { shift_entity(passenger, offset)?; } }
+    if let Some(mount)=fields.get_mut("Riding"){shift_entity(mount,offset)?;}
+    Ok(())
 }
 pub(crate) fn decode(root: &Value, registry: &Registry) -> Result<Value> {
     let map = fields(root)?;
@@ -310,7 +344,7 @@ pub(crate) fn decode(root: &Value, registry: &Registry) -> Result<Value> {
             ("z".into(), Value::Int(z)),
         ]))
     };
-    let region = Value::Compound(HashMap::from([
+    let mut region = Value::Compound(HashMap::from([
         (
             "Position".into(),
             vector(
@@ -340,6 +374,19 @@ pub(crate) fn decode(root: &Value, registry: &Registry) -> Result<Value> {
             map.get("Entities").cloned().unwrap_or(Value::List(vec![])),
         ),
     ]));
+    if let Some(Value::List(ticks)) = map.get("TileTicks") {
+        let mut scheduled = Vec::new();
+        for tick in ticks {
+            let tick = fields(tick)?;
+            let Some(Value::String(id)) = tick.get("i") else { bail!("旧计划刻i不是资源名称") };
+            let modern_id = registry.legacy_state_aliases.iter().find_map(|(legacy, states)| parse_key(legacy).ok().filter(|(name, _)| name == id).and_then(|_| states.first()).and_then(|state| parse_key(state).ok().map(|(name, _)| name))).unwrap_or_else(|| id.clone());
+            let mut fields = HashMap::from([("Block".into(), Value::String(modern_id)), ("Time".into(), Value::Long(i64::from(number(tick.get("t"))?))), ("Priority".into(), tick.get("p").cloned().unwrap_or(Value::Int(0)))]);
+            for axis in ["x", "y", "z"] { fields.insert(axis.into(), Value::Int(number(tick.get(axis))?)); }
+            scheduled.push(Value::Compound(fields));
+        }
+        let Value::Compound(fields) = &mut region else { unreachable!() };
+        fields.insert("PendingBlockTicks".into(), Value::List(scheduled));
+    }
     let mut output = match map.get("NovaSourceMetadata") {
         Some(Value::Compound(m)) => m.clone(),
         _ => HashMap::new(),

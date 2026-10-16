@@ -1,3 +1,5 @@
+import { displayPathText } from "../../../src/business/facade";
+import { displayFilePath } from "../../../src/business/facade";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
@@ -774,7 +776,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   const handleOpenRoot = async () => {
     if (!resourceSnapshot) return;
     await openWorkspacePath(resourceSnapshot.config_dir);
-    reportStatus(`已打开根目录：${resourceSnapshot.config_dir}`);
+    reportStatus(`已打开根目录：${displayFilePath(resourceSnapshot.config_dir)}`);
   };
 
   const fetchDisabled =

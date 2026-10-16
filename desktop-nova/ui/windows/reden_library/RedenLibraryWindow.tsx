@@ -1,3 +1,5 @@
+import { displayPathText } from "../../../src/business/facade";
+import { displayFilePath } from "../../../src/business/facade";
 import { X } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { ScrollArea } from "../../components/ui/scroll-area";
@@ -175,7 +177,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
       const warning = await importRedenPath(output.path);
       if (isCurrent()) setRedenStatus(`${provider.name}：已${generated ? "生成、" : ""}下载并入库 ${output.file_name} (${formatSize(output.bytes)})。${warning || ""}`);
     } catch (error) {
-      if (isCurrent()) setRedenStatus(`${provider.name}：已下载 ${output.file_name}，但入库失败：${String(error)}。文件保留在 ${output.path}`);
+      if (isCurrent()) setRedenStatus(`${provider.name}：已下载 ${output.file_name}，但入库失败：${String(error)}。文件保留在 ${displayFilePath(output.path)}`);
     }
   };
 

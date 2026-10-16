@@ -210,6 +210,8 @@ struct UserConfig {
     statistics_enumerator_info_rules: Vec<String>,
     #[serde(default = "default_show_ui_test_page")]
     show_ui_test_page: bool,
+    #[serde(default)]
+    debug_mode: bool,
     #[serde(default = "default_local_library_tail_path_count")]
     local_library_tail_path_count: u32,
     #[serde(default)]
@@ -229,6 +231,7 @@ struct UserConfigInput {
     material_list_window_behavior: Option<String>,
     statistics_enumerator_info_rules: Option<Vec<String>>,
     show_ui_test_page: Option<bool>,
+    debug_mode: Option<bool>,
     local_library_tail_path_count: Option<u32>,
     v5_compatibility: Option<V5CompatibilityConfigInput>,
     viewer_controls: Option<ViewerControlConfig>,
@@ -325,10 +328,9 @@ fn get_root() -> PathBuf {
         }
     }
     let current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = find_workspace_root(&current_dir);
-    #[cfg(debug_assertions)]
-    let root = root.or_else(|| find_workspace_root(Path::new(env!("CARGO_MANIFEST_DIR"))));
-    root.unwrap_or(current_dir)
+    find_workspace_root(&current_dir)
+        .or_else(|| find_workspace_root(Path::new(env!("CARGO_MANIFEST_DIR"))))
+        .unwrap_or(current_dir)
 }
 
 fn find_workspace_root(start: &Path) -> Option<PathBuf> {
@@ -728,6 +730,7 @@ fn default_user_config() -> UserConfig {
         material_list_window_behavior: default_material_list_window_behavior(),
         statistics_enumerator_info_rules: default_statistics_enumerator_info_rules(),
         show_ui_test_page: default_show_ui_test_page(),
+        debug_mode: false,
         local_library_tail_path_count: default_local_library_tail_path_count(),
         v5_compatibility: V5CompatibilityConfig::default(),
         viewer_controls: ViewerControlConfig::default(),
@@ -746,6 +749,16 @@ fn default_statistics_enumerator_info_rules() -> Vec<String> {
 #[cfg(test)]
 mod viewer_control_config_tests {
     use super::{UserConfig, ViewerControlConfig};
+
+    #[test]
+    fn missing_debug_setting_defaults_off_and_explicit_value_survives() {
+        let old = serde_json::json!({"theme":"shadcn","render_display_mode":"full","preview_mode":"full"});
+        let config: UserConfig = serde_json::from_value(old.clone()).unwrap();
+        assert!(!config.debug_mode);
+        let mut enabled = old;
+        enabled["debug_mode"] = true.into();
+        assert!(serde_json::from_value::<UserConfig>(enabled).unwrap().debug_mode);
+    }
 
     #[test]
     fn graphics_backend_defaults_persists_and_does_not_disguise_exact_modes() {
@@ -1092,7 +1105,12 @@ async fn application_edit_project_metadata(
     operations: tauri::State<'_, ApplicationOperations>,
 ) -> Result<ProjectMutationResult, String> {
     let operations = operations.inner().clone();
-    run_application_operation(move || operations.edit_project_metadata(input)).await
+    run_application_operation(move || {
+        let preview_changed = input.patch.get("preview_image_data").is_some() || input.patch.get("preview_image_path").is_some();
+        let result = operations.edit_project_metadata(input)?;
+        if preview_changed { application::thumbnails::notify_shell(Path::new(&result.output_path)); }
+        Ok(result)
+    }).await
 }
 
 #[tauri::command]
@@ -1223,38 +1241,52 @@ async fn application_read_embedded_preview(
     run_application_operation(move || operations.read_embedded_preview(input)).await
 }
 
+fn persist_rendered_preview(operations: &ApplicationOperations, source: &Path, frame: &Path, expected: &Path) -> Result<ProductPreviewImage, String> {
+    if application::thumbnails::cache_path(source)? != expected { return Err("截图期间投影已改变，请重新加载".into()); }
+    operations.edit_project_metadata(EditProjectMetadataInput {
+        source_path: source.to_string_lossy().into(),
+        patch: serde_json::json!({"preview_image_path": frame}), output_path: None,
+    })?;
+    let preview = operations.read_embedded_preview(InspectProjectInput { source_path: source.to_string_lossy().into() })?
+        .ok_or("内嵌预览写入后未能重新读取")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(preview.data_url.split_once(',').ok_or("投影预览编码错误")?.1).map_err(|error| error.to_string())?;
+    let temporary = application::thumbnails::temporary_preview_path();
+    std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+    let result = application::thumbnails::save(source, &temporary, &application::thumbnails::cache_path(source)?);
+    let _ = std::fs::remove_file(&temporary);
+    let _ = std::fs::remove_file(frame);
+    result
+}
+
 #[tauri::command]
 async fn render_preview_image(
     file_path: String,
     display_mode: String,
     cache_input: Option<String>,
+    operation_id: Option<String>,
     facade: tauri::State<'_, RenderFacade>,
     host: tauri::State<'_, QuickPreviewHost>,
+    operations: tauri::State<'_, ApplicationOperations>,
 ) -> Result<ProductPreviewImage, String> {
+    let _ = cache_input; // Capture always uses the selected live scene, never a new build.
+    let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
+    let expected = application::thumbnails::cache_path(&source)?;
+    let operations = operations.inner().clone();
     if display_mode == "fast_experimental" {
-
-    let _ = cache_input;
-    let host = host.inner().clone();
-    return tauri::async_runtime::spawn_blocking(move || {
-        let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
-        let expected = application::thumbnails::cache_path(&source)?;
-        let view = host.snapshot()?.filter(|view| view.source_path == source && view.state == "ready").ok_or("请先启动该投影的快速渲染")?;
-        let (source, frame) = host.capture_frame(&view.preview_id)?;
-        application::thumbnails::save(&source, &frame, &expected)
-    }).await.map_err(|error| error.to_string())?;
+        let preview_id = operation_id.ok_or("请先启动该投影的快速渲染")?;
+        let host = host.inner().clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            let view = host.snapshot()?.filter(|view| view.source_path == source && view.state == "ready"
+                && preview_id == view.preview_id).ok_or("请先启动该投影的快速渲染")?;
+            let (source, frame) = host.capture_frame(&view.preview_id)?;
+            persist_rendered_preview(&operations, &source, &frame, &expected)
+        }).await.map_err(|error| error.to_string())?;
     }
-
-    let launch = prepare_viewer_launch_context(CompatibilityScope::Render, display_mode).await?;
-    let resolved_input = normalized_input_path(&file_path);
-    let resolved_cache_input = cache_input
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| normalized_input_path(&value));
-    let output_path = render_tmp_path("litematica_nova_native_preview", "png")?;
-    let launch_contract =
-        launch.prepare_preview(resolved_input, output_path.clone(), resolved_cache_input)?;
-    facade
-        .run_viewer_preview(&launch, &launch_contract, output_path)
-        .await
+    let mode = match display_mode.as_str() { "standard" => RenderDisplayMode::Standard, "full" => RenderDisplayMode::Full, _ => return Err("未知截图模式".into()) };
+    let id = operation_id.ok_or("请先启动对应渲染场景")?;
+    let frame = facade.capture_frame(&OperationId(id), &source, mode).await?;
+    tauri::async_runtime::spawn_blocking(move || persist_rendered_preview(&operations, &source, &frame, &expected))
+        .await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -1275,7 +1307,6 @@ async fn generate_preview_image(
     return tauri::async_runtime::spawn_blocking(move || {
         let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
         let cache = application::thumbnails::cache_path(&source)?;
-        if cache.is_file() { return application::thumbnails::load(&cache); }
         // Existing embedded previews are genuine projection data, not fabricated images.
         if let Some(preview) = operations.read_embedded_preview(InspectProjectInput { source_path: source.to_string_lossy().into() })? {
             let bytes = base64::engine::general_purpose::STANDARD.decode(preview.data_url.split_once(',').ok_or("投影预览编码错误")?.1).map_err(|error| error.to_string())?;
@@ -1287,7 +1318,7 @@ async fn generate_preview_image(
         }
         if let Some(view) = host.snapshot()?.filter(|view| view.source_path == source && view.state == "ready") {
             let (source, frame) = host.capture_frame(&view.preview_id)?;
-            return application::thumbnails::save(&source, &frame, &cache);
+            return persist_rendered_preview(&operations, &source, &frame, &cache);
         }
         // Reuse QuickPreviewHost for an independent hidden WS_CHILD session; an
         // existing interactive Viewer and its camera/GPU lifetime stay untouched.
@@ -1297,16 +1328,13 @@ async fn generate_preview_image(
             let started = std::time::Instant::now();
             loop {
                 let current = temporary.snapshot()?.ok_or("缩略图预览会话结束")?;
-                if current.resource.as_ref().is_some_and(|report| report.decision_required) {
-                    return Err("缩略图需要显存决策：请先在属性或渲染页打开快速模式并确认加载方式。".into());
-                }
                 if let Some(error) = current.error { return Err(error); }
                 if current.state == "ready" { break; }
                 if matches!(current.state, "failed" | "closed") || started.elapsed() > Duration::from_secs(120) { return Err("缩略图预览准备未完成".into()); }
                 std::thread::sleep(Duration::from_millis(100));
             }
             let (source, frame) = temporary.capture_frame(&view.preview_id)?;
-            application::thumbnails::save(&source, &frame, &cache)
+            persist_rendered_preview(&operations, &source, &frame, &cache)
         })();
         let _ = temporary.close(&view.preview_id);
         output
@@ -1316,6 +1344,8 @@ async fn generate_preview_image(
     let launch = prepare_viewer_launch_context(CompatibilityScope::Render, display_mode).await?;
     let mode = launch.display_mode();
     let resolved_input = normalized_input_path(&file_path);
+    let source = resolved_input.clone();
+    let expected = application::thumbnails::cache_path(&source)?;
     let preview_dir = data_root()?.join("projection-library").join("previews");
     std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
@@ -1333,9 +1363,10 @@ async fn generate_preview_image(
     let digest = hasher.finalize();
     let output_path = preview_dir.join(format!("{mode}_{:x}.png", digest));
     let launch_contract = launch.prepare_preview(resolved_input, output_path.clone(), None)?;
-    facade
-        .run_viewer_preview(&launch, &launch_contract, output_path)
-        .await
+    let image = facade.run_viewer_preview(&launch, &launch_contract, output_path).await?;
+    let operations = operations.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || persist_rendered_preview(&operations, &source, Path::new(&image.preview_path), &expected))
+        .await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -1371,12 +1402,20 @@ fn load_user_config_info() -> Result<UserConfigInfo, String> {
 }
 
 #[tauri::command]
-async fn save_user_config(input: UserConfigInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<UserConfigInfo, String> {
+async fn save_user_config(app: AppHandle, input: UserConfigInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<UserConfigInfo, String> {
     let write = operations.begin_write()?;
     run_application_operation(move || {
         let _write = write;
         save_user_config_inner(input)
-    }).await
+    }).await.map(|info| {
+        if !info.config.debug_mode {
+            for label in ["enumerator", "ui-demo-window"] {
+                if let Some(window) = app.get_webview_window(label) { let _ = window.close(); }
+            }
+        }
+        let _ = app.emit("nova-debug-mode-changed", serde_json::json!({"enabled": info.config.debug_mode}));
+        info
+    })
 }
 
 fn save_user_config_inner(input: UserConfigInput) -> Result<UserConfigInfo, String> {
@@ -1402,6 +1441,7 @@ fn save_user_config_inner(input: UserConfigInput) -> Result<UserConfigInfo, Stri
     if let Some(rules) = input.statistics_enumerator_info_rules {
         config.statistics_enumerator_info_rules = rules;
     }
+    if let Some(enabled) = input.debug_mode { config.debug_mode = enabled; }
     if let Some(show) = input.show_ui_test_page {
         config.show_ui_test_page = show;
     }
@@ -1902,9 +1942,9 @@ fn local_path_open_command(path: &Path) -> Result<Command, String> {
     if !path.exists() { return Err("文件或文件夹不存在，请刷新后重试".into()); }
     #[cfg(windows)]
     let mut command = Command::new("explorer");
-    #[cfg(target_os="macos")]
+    #[cfg(target_os = "macos")]
     let mut command = Command::new("open");
-    #[cfg(not(any(windows,target_os="macos")))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let mut command = Command::new("xdg-open");
     let raw = path.to_string_lossy();
     let display = if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") { format!(r"\\{unc}") }
@@ -2590,6 +2630,7 @@ async fn open_material_list_window(
 
 #[tauri::command]
 async fn open_enumerator_window(app: AppHandle, active_file: Option<String>) -> Result<(), String> {
+    if !read_user_config_data(&current_user_config_dir()?).debug_mode { return Err("请先启用调试模式".into()); }
     const LABEL: &str = "enumerator";
     if let Some(window) = app.get_webview_window(LABEL) {
         window.show().map_err(|error| error.to_string())?;
@@ -2667,6 +2708,7 @@ async fn open_local_library_folders_window(app: AppHandle) -> Result<(), String>
 
 #[tauri::command]
 async fn open_ui_demo_window(app: AppHandle) -> Result<(), String> {
+    if !read_user_config_data(&current_user_config_dir()?).debug_mode { return Err("请先启用调试模式".into()); }
     const LABEL: &str = "ui-demo-window";
 
     if let Some(window) = app.get_webview_window(LABEL) {
@@ -2716,8 +2758,8 @@ struct RenderLaunchPlan {
 
 const DIRECT_REALTIME_MAX_BYTES: u64 = 500 * 1024;
 
-fn launch_requires_preflight(source_bytes: u64, preload: bool) -> bool {
-    preload || source_bytes > DIRECT_REALTIME_MAX_BYTES
+fn launch_requires_preflight(source_bytes: u64, preload: bool, mode: RenderDisplayMode) -> bool {
+    mode != RenderDisplayMode::FastExperimental && (preload || source_bytes > DIRECT_REALTIME_MAX_BYTES)
 }
 
 #[tauri::command]
@@ -2744,7 +2786,7 @@ async fn application_render_launch_plan(
         let bytes = metadata.len();
         // Small direct-Realtime starts do not run the heavy Prebuilt admission probe.
         let compatibility_started = std::time::Instant::now();
-        let prepared = if launch_requires_preflight(bytes, preload) { Some(application_render_request(input)?) } else { None };
+        let prepared = if launch_requires_preflight(bytes, preload, input.display_mode) { Some(application_render_request(input)?) } else { None };
         eprintln!("[NOVA_RESOURCE_PHASE] stage=launch_compatibility_prepare elapsed_ms={:.3} preflight_required={}", compatibility_started.elapsed().as_secs_f64() * 1000.0, prepared.is_some());
         Ok::<_, String>((bytes, prepared))
     }).await.map_err(|error| error.to_string())??;
@@ -2760,17 +2802,23 @@ async fn application_render_launch_plan(
 mod full_launch_plan_tests {
     use super::*;
     #[test]
+    fn fast_skips_demand_preflight_in_both_loading_modes() {
+        assert!(!launch_requires_preflight(u64::MAX, true, RenderDisplayMode::FastExperimental));
+        assert!(!launch_requires_preflight(u64::MAX, false, RenderDisplayMode::FastExperimental));
+        assert!(launch_requires_preflight(u64::MAX, true, RenderDisplayMode::Standard));
+    }
+    #[test]
     fn small_direct_realtime_skips_prebuilt_probe() {
-        assert!(!launch_requires_preflight(DIRECT_REALTIME_MAX_BYTES - 1, false));
+        assert!(!launch_requires_preflight(DIRECT_REALTIME_MAX_BYTES - 1, false, RenderDisplayMode::Full));
     }
     #[test]
     fn threshold_and_large_sources_require_live_budget() {
-        assert!(!launch_requires_preflight(DIRECT_REALTIME_MAX_BYTES, false));
-        assert!(launch_requires_preflight(DIRECT_REALTIME_MAX_BYTES + 1, false));
+        assert!(!launch_requires_preflight(DIRECT_REALTIME_MAX_BYTES, false, RenderDisplayMode::Full));
+        assert!(launch_requires_preflight(DIRECT_REALTIME_MAX_BYTES + 1, false, RenderDisplayMode::Full));
     }
     #[test]
     fn requested_preload_always_uses_existing_prebuilt_admission() {
-        assert!(launch_requires_preflight(1, true));
+        assert!(launch_requires_preflight(1, true, RenderDisplayMode::Full));
     }
 }
 
@@ -3175,6 +3223,10 @@ fn main() {
         std::process::exit(headless_e2e::run(&args));
     }
     let application_context = tauri::generate_context!();
+    if let Some(status) = application::updater::run_cli(
+        &args, application_context.config(),
+        &application_context.package_info().version.to_string(),
+    ) { std::process::exit(status); }
     #[cfg(target_os = "linux")]
     if let Some(status) = shell_integration::dispatch_before_gui(&args, application_context.package_info()) {
         std::process::exit(status);

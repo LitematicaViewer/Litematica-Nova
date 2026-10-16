@@ -1,3 +1,4 @@
+import { displayPathText } from "../../../../../src/business/facade";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Download, FolderOpen, FolderPlus, ImageOff, LayoutGrid, Plus, RefreshCw, Search, ChevronDown, ChevronRight, Folder, Trash2, X } from "lucide-react";
 import { Button } from "../../../../components/ui/button";
@@ -38,7 +39,7 @@ import { SendProjectionDialog } from "./sendDialog";
 import { Dialog } from "../../../../components/Dialog";
 import "./library.css";
 import { ensureLitematicFileName } from "./function";
-import { checkFileExists, generatePreviewImage, openFileParentDir, readImageBase64, readProjectionPreviewImage, selectLitematicFile } from "../../../../../src/business/facade";
+import { checkFileExists, generatePreviewImage, openFileParentDir, readProjectionPreviewImage, selectLitematicFile } from "../../../../../src/business/facade";
 import { LocalLibraryFoldersDialog, openLocalLibraryFoldersWithWindowBehavior } from "../../../local_library_folders";
 import { RedenLibraryDialog, openRedenLibraryWithWindowBehavior } from "../../../reden_library";
 import { emitEvent, listenEvent } from "../../../../../src/platform/events";
@@ -139,7 +140,6 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [discardTrashId, setDiscardTrashId] = useState<string | null>(null);
   const [generatingPreviewPath, setGeneratingPreviewPath] = useState("");
   const [previewError, setPreviewError] = useState("");
-  const [previewDataUrls, setPreviewDataUrls] = useState<Record<string, string>>({});
   const [projectionPreviewDataUrls, setProjectionPreviewDataUrls] = useState<Record<string, string>>({});
   const [projectionPreviewLoadingPaths, setProjectionPreviewLoadingPaths] = useState<Record<string, boolean>>({});
   const [projectionPreviewLoadedPaths, setProjectionPreviewLoadedPaths] = useState<Record<string, boolean>>({});
@@ -159,7 +159,6 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [expandedCategories, setExpandedCategories] = useState<string[]>([]);
   const [iconCategoryId, setIconCategoryId] = useState("");
   const [dropTarget, setDropTarget] = useState("");
-  const [detailImageKind, setDetailImageKind] = useState<"auto" | "preview">("auto");
   const [failedDetailImage, setFailedDetailImage] = useState("");
   const previewRequests = useRef(new Set<string>());
   const previewRevisions = useRef(new Map<string, number>());
@@ -349,7 +348,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       const output = await generatePreviewImage(record.path, "fast_experimental");
       const newState = await setRecordPreview(await loadLibrary(), record.path, output.preview_path);
       setState(newState);
-      setPreviewDataUrls((current) => ({ ...current, [record.path]: output.data_url }));
+      const embedded = await readProjectionPreviewImage(record.path);
+      if (!embedded?.data_url) throw new Error("预览图写回后读取失败，请重试。");
+      setProjectionPreviewDataUrls(current => ({ ...current, [record.path]: embedded.data_url }));
+      await emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: record.path });
     } catch (err: any) {
       setPreviewError(String(err));
     } finally {
@@ -525,7 +527,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const somePageSelected = visibleRecords.some((record) => hasPath(selectedPaths, record.path));
   const activeCategory = untaggedOnly ? "未分类" : categoryPath(state, categoryFilter) || "全部投影";
   const detailPreviewUrl = inspectedRecord
-    ? (detailImageKind === "auto" ? previewDataUrls[inspectedRecord.path] || projectionPreviewDataUrls[inspectedRecord.path] : projectionPreviewDataUrls[inspectedRecord.path]) || ""
+    ? projectionPreviewDataUrls[inspectedRecord.path] || ""
     : "";
 
   useEffect(() => {
@@ -536,12 +538,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       for (const record of records) {
         if (cancelled) break;
         if (!projectionPreviewLoadedPaths[record.path]) await ensureProjectionPreview(record);
-        const imagePath = record.preview_image_path || record.previewPath;
-        if (imagePath && previewDataUrls[record.path] === undefined) {
-          let dataUrl = "";
-          try { dataUrl = await readImageBase64(imagePath); } catch { /* Embedded preview remains available. */ }
-          if (!cancelled) setPreviewDataUrls((current) => ({ ...current, [record.path]: dataUrl }));
-        }
+
       }
     })();
     return () => { cancelled = true; };
@@ -594,7 +591,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         <Button variant="ghost" onClick={() => handleOpenLocalLibraryFolders().catch((error) => setPreviewError(`打开本地库文件夹失败：${String(error)}`))}><FolderOpen size={16} />管理文件夹</Button>
         <Button variant="ghost" size="icon" aria-label={isRefreshing ? "正在刷新投影库" : "刷新投影库"} title="刷新投影库" disabled={libraryBusy} aria-busy={isRefreshing} onClick={handleRefresh}><RefreshCw size={16} /></Button>
       </header>
-      {previewError && <div className="library-message" role="alert">{previewError}<Button variant="ghost" size="icon-sm" aria-label="关闭错误提示" onClick={() => setPreviewError("")}><X size={14} /></Button></div>}
+      {previewError && <div className="library-message" role="alert">{displayPathText(previewError)}<Button variant="ghost" size="icon-sm" aria-label="关闭错误提示" onClick={() => setPreviewError("")}><X size={14} /></Button></div>}
       {folderSearchError && <div className="library-message" role="alert">文件夹搜索失败：{folderSearchError}</div>}
       {isRefreshing && <div className="library-progress" role="status">刷新中 {refreshProgress} / {state.records.length}</div>}
 
@@ -622,8 +619,8 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
           {selectedRecords.length > 0 && <div className="library-batch-toolbar"><Button size="sm" onClick={() => openMoveDialog(selectedRecords.map((record) => record.path))} disabled={libraryBusy}><Folder size={14} />移动到分类…</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords(selectedRecords); }}><Trash2 size={14} />移入回收站</Button><Button size="sm" variant="ghost" onClick={() => setSelectedPaths([])}>取消选择</Button></div>}
           <ScrollArea className="library-grid-scroll">
             {visibleRecords.length > 0 ? <div className="library-card-grid">{visibleRecords.map((record) => <ProjectionCard key={record.path} record={record} isCurrent={samePath(currentFile, record.path)} isInspected={!!inspectedRecord && samePath(inspectedRecord.path, record.path)} checked={hasPath(selectedPaths, record.path)} busy={libraryBusy}
-              previewUrl={previewDataUrls[record.path] || projectionPreviewDataUrls[record.path] || ""} loading={!!projectionPreviewLoadingPaths[record.path]}
-              onInspect={() => { setInspectedPath(record.path); setDetailImageKind("auto"); }} onToggle={(checked) => toggleSelected(record.path, checked)} onActivate={() => handleActivateRecord(record.path)}
+              previewUrl={projectionPreviewDataUrls[record.path] || ""} loading={!!projectionPreviewLoadingPaths[record.path]}
+              onInspect={() => { setInspectedPath(record.path); }} onToggle={(checked) => toggleSelected(record.path, checked)} onActivate={() => handleActivateRecord(record.path)}
               onDragStart={(event) => { const paths = hasPath(selectedPaths, record.path) ? selectedRecords.map((entry) => entry.path) : [record.path]; setDragPaths(paths); event.dataTransfer.effectAllowed = "all"; event.dataTransfer.setData("application/x-nova-library-records", JSON.stringify(paths)); }}
               onDragEnd={() => { setDragPaths([]); setDropTarget(""); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); handleDrop(record.path).catch((error) => setPreviewError(`排序失败：${String(error)}`)); }}
             />)}</div> : <div className="library-empty-state"><Box size={40} aria-hidden="true" /><h3>{state.records.length || search ? "没有找到投影" : "把你的第一份投影放进来"}</h3><p>{state.records.length || search ? "换个关键词或清除筛选，再试一次。" : "导入本地 .litematic，或从在线投影库下载。"}</p><div className="library-empty-actions">{state.records.length || search ? <Button onClick={() => { setSearch(""); setCategoryFilter(""); setUntaggedOnly(false); setStatusFilter(""); }}>清除筛选</Button> : <Button variant="default" onClick={handleSelect} disabled={libraryBusy}><Plus size={16} />导入投影</Button>}</div></div>}
@@ -647,13 +644,13 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
               </dl>
               {inspectedRecord.description && <p className="library-detail-description">{inspectedRecord.description}</p>}
               <div className="library-detail-section"><h4>分类</h4><div className="library-detail-categories">{inspectedRecord.categoryIds?.length ? inspectedRecord.categoryIds.map((id) => <span className="library-category-membership" key={id}>{categoryPath(state, id)}</span>) : <span className="muted">未分类</span>}</div><Button size="sm" disabled={libraryBusy} onClick={() => openMoveDialog([inspectedRecord.path])}>移动到分类…</Button></div>
-              <div className="library-detail-section"><h4>预览图</h4><div className="library-detail-actions">{previewDataUrls[inspectedRecord.path] && projectionPreviewDataUrls[inspectedRecord.path] && <Button size="sm" onClick={() => setDetailImageKind(detailImageKind === "auto" ? "preview" : "auto")}>{detailImageKind === "auto" ? "查看内嵌图" : "查看渲染图"}</Button>}<Button size="sm" disabled={libraryBusy || !!generatingPreviewPath || inspectedRecord.status !== "ok"} aria-busy={generatingPreviewPath === inspectedRecord.path} onClick={() => handleGeneratePreview(inspectedRecord)}>{generatingPreviewPath === inspectedRecord.path ? "正在生成…" : "生成预览图"}</Button></div></div>
+              <div className="library-detail-section"><h4>预览图</h4><div className="library-detail-actions"><Button size="sm" disabled={libraryBusy || !!generatingPreviewPath || inspectedRecord.status !== "ok"} aria-busy={generatingPreviewPath === inspectedRecord.path} onClick={() => handleGeneratePreview(inspectedRecord)}>{generatingPreviewPath === inspectedRecord.path ? "正在生成…" : "生成预览图"}</Button></div></div>
               <div className="library-detail-section"><h4>文件</h4><p className="library-detail-path" title={displayFilePath(inspectedRecord.path)}>{displayFilePath(inspectedRecord.path)}</p><div className="library-detail-actions"><Button size="sm" onClick={() => openFileParentDir(inspectedRecord.path).catch((error) => setPreviewError(`打开文件夹失败：${String(error)}`))}>打开文件夹</Button><Button size="sm" disabled={libraryBusy || inspectedRecord.status === "missing"} onClick={() => handleOpenSendDialog(inspectedRecord)}>复制到…</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords([inspectedRecord]); }}><Trash2 size={14} />移入回收站</Button></div></div>
             </div> : <div className="library-inspector-empty"><Box size={32} /><p>点击卡片查看详情</p></div>}
           </ScrollArea>
         </aside>
       </div>
-      {removeRecords.length > 0 && <Dialog title={`移入回收站${removeRecords.length > 1 ? ` ${removeRecords.length} 项` : "此投影"}？`} subtitle="可从 Nova 回收站恢复，原文件保持不变。" width="sm" busy={isRemoving} onClose={() => setRemoveRecords([])} footer={<><Button onClick={() => setRemoveRecords([])} disabled={isRemoving}>保留</Button><Button variant="destructive" onClick={handleRemove} disabled={isRemoving} aria-busy={isRemoving}>{isRemoving ? "正在移除…" : "移入回收站"}</Button></>}><ul className="library-remove-list">{removeRecords.slice(0, 8).map((record) => <li key={record.path}>{record.displayName || record.fileName}</li>)}</ul>{removeRecords.length > 8 && <p>以及另外 {removeRecords.length - 8} 项</p>}{removeError && <div className="dialog-message dialog-message-error" role="alert">{removeError}</div>}</Dialog>}
+      {removeRecords.length > 0 && <Dialog title={`移入回收站${removeRecords.length > 1 ? ` ${removeRecords.length} 项` : "此投影"}？`} subtitle="可从 Nova 回收站恢复，原文件保持不变。" width="sm" busy={isRemoving} onClose={() => setRemoveRecords([])} footer={<><Button onClick={() => setRemoveRecords([])} disabled={isRemoving}>保留</Button><Button variant="destructive" onClick={handleRemove} disabled={isRemoving} aria-busy={isRemoving}>{isRemoving ? "正在移除…" : "移入回收站"}</Button></>}><ul className="library-remove-list">{removeRecords.slice(0, 8).map((record) => <li key={record.path}>{record.displayName || record.fileName}</li>)}</ul>{removeRecords.length > 8 && <p>以及另外 {removeRecords.length - 8} 项</p>}{removeError && <div className="dialog-message dialog-message-error" role="alert">{displayPathText(removeError)}</div>}</Dialog>}
       {moveDialogPaths.length > 0 && <Dialog title="移动到分类" subtitle={`${moveDialogPaths.length} 个投影，原文件保持原位。`} width="sm" busy={isCategorizing} onClose={() => setMoveDialogPaths([])} footer={<><Button disabled={isCategorizing} onClick={() => setMoveDialogPaths([])}>取消</Button><Button variant="default" disabled={isCategorizing} onClick={() => void moveRecords(moveDialogPaths, moveCategoryId).catch(() => undefined)}>移动</Button></>}><Dropdown ariaLabel="目标分类" value={moveCategoryId} onChange={setMoveCategoryId} options={[{ value: "", label: "未分类" }, ...categoryOptions]} />{categoryError && <p className="dialog-message dialog-message-error" role="alert">{categoryError}</p>}</Dialog>}
       {categoryDialog && <Dialog title={categoryDialog.kind === "create" ? "新建分类" : categoryDialog.kind === "rename" ? "重命名分类" : categoryDialog.kind === "move" ? "移动分类" : "删除分类？"} subtitle={categoryDialog.kind === "delete" ? "此分类、子分类和其中的投影移入回收站，原文件保持不变。" : undefined} width="sm" busy={isCategorizing} onClose={() => setCategoryDialog(null)} footer={<><Button disabled={isCategorizing} onClick={() => setCategoryDialog(null)}>取消</Button><Button variant={categoryDialog.kind === "delete" ? "destructive" : "default"} disabled={isCategorizing || (["create", "rename"].includes(categoryDialog.kind) && !categoryNameDraft.trim())} onClick={() => void confirmCategory().catch(() => undefined)}>{categoryDialog.kind === "delete" ? "删除分类" : "保存"}</Button></>}>
         {["create", "rename"].includes(categoryDialog.kind) && <div className="library-category-form"><label htmlFor="library-category-name">分类名称</label><Input id="library-category-name" autoFocus maxLength={80} disabled={isCategorizing} value={categoryNameDraft} onChange={(event) => setCategoryNameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && categoryNameDraft.trim()) { event.preventDefault(); void confirmCategory().catch(() => undefined); } }} /></div>}

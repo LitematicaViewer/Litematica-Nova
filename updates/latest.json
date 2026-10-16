@@ -1,27 +1,27 @@
 {
-  "version": "0.2.0",
-  "pub_date": "2026-10-15T23:23:18+00:00",
-  "notes": "# Beta 0.2 更新日志\n\n版本：0.2.0。发布日期：2026-10-16。\n\n## 更新内容\n\n- 投影库增加父子分类、右键管理和分类图标，保留原有投影文件与分类引用。\n- 在线资源接入多个投影来源，完善搜索、下载确认、入库结果及取消操作。\n- 材料支持 SVG、TXT、网页和 CSV 导出，可按范围、容器、倍数及末端原料统计。\n- 完善快速、标准、完整模式的实时与预加载入口，以及页内原生预览的显示和隐藏生命周期。\n- Windows 快速模式增加自动、DirectX 12、Vulkan 选择；Linux 使用 Vulkan，macOS 快速模式使用 Metal，标准和完整模式使用 MoltenVK。\n- 接入 Linux X11/XWayland 主窗口原生视口及 macOS 原生视图，补齐平台文件关联、缩略图、进程退出与运行组件加载。\n- 增加最近三次启动会话的日志 ZIP 导出，以及有效显存需求估算的持久复用。\n- 完善文件关联、单实例打开队列、共享缩略图与退出处理。\n- 修复普通开发分支被启动脚本错误拒绝的问题，支持复用匹配的运行组件。\n\n## 已知 Bug\n\n- Windows 版本仍有概率崩溃，尚未确认消除。\n- 部分投影仍可能无法正常构建，尚未修复。\n\n- Linux/macOS 的图形、DPI、焦点与安装更新尚待实机反馈；CLI 构建通过不代表图形验收完成。\n- macOS 暂不支持要求 OpenGL 4.6 的 Iris 光影包；安装包尚未获得 Apple 公证。\n",
+  "version": "0.2.1",
+  "pub_date": "2026-10-16T03:38:45+00:00",
+  "notes": "# Beta 0.2.1\n\n版本：0.2.1  \n发布日期：2026-10-16\n\n## 更新内容\n\n- 整合三主题、导航图标、滚动条与投影库界面改进，清理过时提示。\n- 调试模式默认关闭，统一管理枚举器与 UI 测试入口；修复辅助窗口关闭职责。\n- 统一路径显示与文件身份，保留中文、空格及长路径的正常文件操作。\n- 创造模式物品选择按真实物品映射统一名称与图标，并保留方块编辑状态。\n- 快速模式的实时与预加载不再等待显存需求预估；标准与完整模式保留原有准入规则。\n- 标准与完整模式接入当前视角的方形离屏缩略图。生成、导入、清空与截图统一写入文件内嵌预览，系统缩略入口读取同一来源。\n- 补齐旧旗帜、告示牌、容器物品、实体及计划刻的版本迁移，保存前后核对数据；不兼容内容先列出影响，不静默删除。\n- 统一 Windows 安装与卸载界面，稳定升级登记并修复历史安装的文件关联与快捷方式。\n- 更新检查优先 GitHub，失败再切换镜像；补齐代理继承与实际请求诊断，保持平台对应的更新载荷和签名身份。\n\n## 已知 Bug\n\n- Windows 版本有概率崩溃，尚未确认消除。\n- 部分投影无法正常构建，尚未修复。\n",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTmlWdHF3cWQydGNqYWxUSk4wZFhkUTBnR1NvUW1NQ05wZkVkSm5rZm9LQytJN2MzL3hvOE52SWRVWnVlWFo2NzZWQkZlWUdHMVdvRnEvTmhlczVaU3RlRDVMcWlKVmc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTA1NDA2CWZpbGU6TGl0ZW1hdGljYS1Ob3ZhXzAuMi4wX21hY29zX2FybTY0LmFwcC50YXIuZ3oJdmVyc2lvbjowLjIuMApISy9sdGhpV1BTdCtjT1pmbGVjcExNcE00ZjlKV2xzZEQzcmUwVTJxcXZMVSt2SzFPMWJ4cm0zR20yZVcxSlBscDROOGFxcWF1MHdNZGZuKyt3QldBZz09Cg==",
-      "url": "https://github.com/LitematicaViewer/Litematica-Nova/releases/download/beta-0.2.0/Litematica-Nova_0.2.0_macos_arm64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTmlWdHF3cWQydFZMbWNaVnQ3L3RZbXQ4cUJTeU9ybHN5WDF6U2xMaS91RDNHYmQrUHl6REdILzNqNEdqS0F4WitkUzQzSVVqK0czdU0xUWNRbHBlQUwvZ0grY1hLZWdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTIxOTE1CWZpbGU6TGl0ZW1hdGljYS1Ob3ZhXzAuMi4xX21hY29zX2FybTY0LmFwcC50YXIuZ3oJdmVyc2lvbjowLjIuMQorSFIyUWVaNWVLeVpXUW5BL01NZ25tVS9scVNER1V2WDhYRldtU0EvOVdFMnJWQ21keVBHa0tWVnVOTDlXL1JoYTNBNFViRzRFMGRsSWpHWFZhWGVDZz09Cg==",
+      "url": "https://github.com/LitematicaViewer/Litematica-Nova/releases/download/beta-0.2.1/Litematica-Nova_0.2.1_macos_arm64.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTmlWdHF3cWQydFo0bzJsU29CSFp3YnN5cFpSbER3VWZITjRlbXFTODBUMzBMVFNId1JPNk5HUDhaNWJRT3B6dnpWNThJWENxMHQyZlYvRGdpQ1pBMUFmb0lPalpsaXdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTA2NTkxCWZpbGU6TGl0ZW1hdGljYS1Ob3ZhXzAuMi4wX21hY29zX3g2NC5hcHAudGFyLmd6CXZlcnNpb246MC4yLjAKS0FoRDNPdzlFMVZLYTRTL0s0ZmNORnNiL2dEZ2tMK0FuMTArcjdTdWF2UVRNUTVFL3l0VHkrSWpPQlo1bllDOXJMSVVjbGVvQWNWQ0Z5ZlRMOUUzQmc9PQo=",
-      "url": "https://github.com/LitematicaViewer/Litematica-Nova/releases/download/beta-0.2.0/Litematica-Nova_0.2.0_macos_x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTmlWdHF3cWQydFRFYWVUZFFvMWZSV2JIYnBRN0ZxWVp3a1FMeDhVcFZmV0FzTFA0TWRMbGFmcyszdGdQRUxPYmxPZGZSRGhFZm0rd09MakRPaTlITGhqS05OVkJYVlFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTIxOTE2CWZpbGU6TGl0ZW1hdGljYS1Ob3ZhXzAuMi4xX21hY29zX3g2NC5hcHAudGFyLmd6CXZlcnNpb246MC4yLjEKMTFCcFBJUzRJK0RJVjhoOUt6ZnBnVGZGODNoRnR4Zk96MTN0YUpmRXVZSno3aDlSTEEvc0FpMTkvclp2Y0dQMFdEc1g2UTJNYWxGbDFFZ25WYVM1RHc9PQo=",
+      "url": "https://github.com/LitematicaViewer/Litematica-Nova/releases/download/beta-0.2.1/Litematica-Nova_0.2.1_macos_x64.app.tar.gz"
     },
     "linux-x86_64-appimage": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTmlWdHF3cWQydFpGakNDY3YyOCtWaUlUL3NTaWZmU25Hby9vV1lHNzNaR2xzYjVuN3J6NGt2RVIwakdtK01wS0xGcjBUd1B4a1c4NHRHcXlJcm5ncFV1V0w5ZnBvSGdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTAxODkyCWZpbGU6TGl0ZW1hdGljYS1Ob3ZhXzAuMi4wX2xpbnV4X3g2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuMi4wCjF4QVAvR3lnRDZNREtjdWxhNHRXYzV3SkRJdHpHNlkxV1hVdGFrRUlTY09nMTM0NmJnZ2p1R3BGR1VXTk9uRGg1WThpOUlwSHY5SStKSGZOL3NWOUNBPT0K",
-      "url": "https://github.com/LitematicaViewer/Litematica-Nova/releases/download/beta-0.2.0/Litematica-Nova_0.2.0_linux_x64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTmlWdHF3cWQydFZ6WEFmUGgxZFBud01LbFluNitmSkVCQ1N5NGZ2eGkxN1dkZFIydzg3MVpmanJtcng5aUF1cnh3Uk5YOEVTVmpMdFJ6S3drTVJEb3gvc2lkZ05admdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTIxOTEzCWZpbGU6TGl0ZW1hdGljYS1Ob3ZhXzAuMi4xX2xpbnV4X3g2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuMi4xCmt2ejI3aWdGcE83aFQ4RXJ5aGV2UEQ5dFpEdVJlWFN4NUxWajZObTdGOTVIUS9CUjIzOGI5YkZHeFp2OExEZ1BoeVNES01ydTZ1WVpNbzk3NzhYcEFnPT0K",
+      "url": "https://github.com/LitematicaViewer/Litematica-Nova/releases/download/beta-0.2.1/Litematica-Nova_0.2.1_linux_x64.AppImage"
     },
     "linux-x86_64-deb": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTmlWdHF3cWQydFZGL0svby91ZmVpa2ZTVDNyS1lJa1htUXJLYkN3cnUxaFlGbmZQUW5yMWpwRXExUEp4OFB4cXdIUm5nMVo0MUMxTVU4RGpBaGMzOGJ5VjlEc3N3TmdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTAyMjk1CWZpbGU6TGl0ZW1hdGljYS1Ob3ZhXzAuMi4wX2xpbnV4X3g2NC5kZWIJdmVyc2lvbjowLjIuMAp6UXJpdHVxSmVFaFAzODMyT0drMU1tWHpQaEV4bko3YlMrK3JkVmhNQkhUR1JmaktaT0lLeCtXcXNDWTJFMkQrWCtJdlM1RWF6WFBiZS9Lbzc3QWNEUT09Cg==",
-      "url": "https://github.com/LitematicaViewer/Litematica-Nova/releases/download/beta-0.2.0/Litematica-Nova_0.2.0_linux_x64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTmlWdHF3cWQydFp6MDlZSTYwNHhTMG00YUZldFlYUTNYRmVyblhEemc3TzF5aVlEK2o3RXdxMUxPVWxnKy9JWU1aT3pycXdUNmlXOThiTVRtV3RzV3FMRXZJczVTblFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTIxOTE1CWZpbGU6TGl0ZW1hdGljYS1Ob3ZhXzAuMi4xX2xpbnV4X3g2NC5kZWIJdmVyc2lvbjowLjIuMQp1b0l2b3NOdWRHQXRCeG52YUF5NzRlK1RzY0dOMzdDeWhjUlNFVi96OGRQVDJhTTd1RTBkRTc3YTJrYnh1eWxCeUZiVFF5eHBab0pWMHQyZnVNM3lBUT09Cg==",
+      "url": "https://github.com/LitematicaViewer/Litematica-Nova/releases/download/beta-0.2.1/Litematica-Nova_0.2.1_linux_x64.deb"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTmlWdHF3cWQydFE3b1FCMldjamcvMnN2djRmV3JGcGU5ZGtjWTFzUlpFanFzSlduM050SlozY1hhOTN2ZVhOUndxN0NQZ2RlOHVJR0YxK2N5Uy9yVTVnRzNkcjVTb1FRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMDk4MjEzCWZpbGU6TGl0ZW1hdGljYS1Ob3ZhXzAuMi4wX3dpbmRvd3NfeDY0X1NldHVwLmV4ZQl2ZXJzaW9uOjAuMi4wCklGU3JqemlwWkw5STEybmoxSkNxdnZSSHpOSmoyQVpsYkl2NkJKOWRxeDF2Wkl6R3lQK0lHS1NNUzhBcjBqdlVFZmFpbmhKaEgxaHo0T1pxYW1yMEF3PT0K",
-      "url": "https://github.com/LitematicaViewer/Litematica-Nova/releases/download/beta-0.2.0/Litematica-Nova_0.2.0_windows_x64_Setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTmlWdHF3cWQydFFXSWdBaXBCcVBtb1RWcXVnMDcvT0s4UGRmU0ZzOS9kWFJaZmVmdjJiQzBGeklnQnREdm4vOTNIZjAxbllxTy9vaWV3Y055NGZFMFp5ZitoVlFOVVEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTIxOTE3CWZpbGU6TGl0ZW1hdGljYS1Ob3ZhXzAuMi4xX3dpbmRvd3NfeDY0X1NldHVwLmV4ZQl2ZXJzaW9uOjAuMi4xCk5xY0YvZDVxdUs2aU83K2hpSDZkamc0dWdoQklmUjMvL2hVZ0ZIdGszUXpIZERYSGRaZytnVThEQkZoVjdBVmxmMEVURm42Qzd0YkFzc2pYWTZyMUN3PT0K",
+      "url": "https://github.com/LitematicaViewer/Litematica-Nova/releases/download/beta-0.2.1/Litematica-Nova_0.2.1_windows_x64_Setup.exe"
     }
   }
 }

@@ -1,0 +1,17 @@
+{
+  "duilib": {
+    "repository": "https://github.com/duilib/duilib",
+    "revision": "85658d47036445626f5a24d5287f348fff871604",
+    "archive": "https://codeload.github.com/duilib/duilib/zip/85658d47036445626f5a24d5287f348fff871604",
+    "sha256": "135636230f6926ad04077cf5906800413080fa0a2b2d97a99399c28abaaf3077",
+    "licenses": ["LICENSE", "duilib license.txt", "directui license.txt"],
+    "linkage": "static, /MT, x86 Unicode (the NSIS host ABI, not the application ABI)"
+  },
+  "tauriTemplate": {
+    "repository": "https://github.com/tauri-apps/tauri",
+    "revision": "9452ddee5ebefd9b678a94ff003521379df6c9ae",
+    "tag": "tauri-cli-v2.11.5",
+    "path": "crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi",
+    "sha256": "20f4ecc730defb71f1342eaeaec4021df13be3d843abba0effe88ea5835fa079"
+  }
+}

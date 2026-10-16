@@ -616,6 +616,34 @@ impl RenderFacade {
 
     /// Product-semantic E2E operation. The protocol command and Viewer session
     /// identity remain behind the same Application boundary as Show/Hide.
+    pub(crate) async fn capture_frame(&self, operation_id: &OperationId, source: &Path, display_mode: RenderDisplayMode) -> Result<PathBuf, String> {
+        self.refresh_from_service();
+        let session_id = {
+            let state = self.inner.state.lock().unwrap();
+            let record = state.operations.get(operation_id).ok_or_else(|| unknown_operation(operation_id))?;
+            if record.view.source.path != source || record.view.display_mode != display_mode
+                || record.cancel_requested || !matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady) {
+                return Err("当前投影的渲染尚未就绪，请完成加载后截图".into());
+            }
+            record.binding.as_ref().and_then(|binding| binding.session_id.clone()).ok_or("当前渲染缺少Viewer会话")?
+        };
+        let output_path = super::thumbnails::temporary_preview_path();
+        let error_path = output_path.with_extension("error.txt");
+        match self.inner.transport.request(UiCommand::CaptureViewer { session_id, output_path: output_path.clone() }).await? {
+            ResponseBody::Ack => {}, other => return Err(format!("unexpected capture response: {other:?}")),
+        }
+        let started = std::time::Instant::now();
+        loop {
+            if error_path.is_file() {
+                let error = std::fs::read_to_string(&error_path).unwrap_or_else(|_| "截图失败".into());
+                let _ = std::fs::remove_file(&error_path); return Err(error);
+            }
+            if output_path.is_file() { return Ok(output_path); }
+            if started.elapsed() > std::time::Duration::from_secs(30) { return Err("当前场景截图超时，请重试".into()); }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+    }
+
     pub(crate) async fn headless_camera_stress(
         &self,
         operation_id: &OperationId,

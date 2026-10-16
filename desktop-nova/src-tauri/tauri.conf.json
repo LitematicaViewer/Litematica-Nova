@@ -1,11 +1,11 @@
 {
   "productName": "Litematica Nova",
   "mainBinaryName": "Litematica-Nova",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "identifier": "com.litematica.nova",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build && node scripts/build-macos-thumbnail.mjs",
+    "beforeBuildCommand": "npm run build && node scripts/build-macos-thumbnail.mjs && node scripts/build-windows-installer.mjs",
     "devUrl": "http://127.0.0.1:1430",
     "frontendDist": "../dist"
   },
@@ -35,7 +35,15 @@
     "windows": {
       "nsis": {
         "installMode": "perMachine",
-        "installerHooks": "installer/nsis-hooks.nsh"
+        "installerHooks": "installer/nsis-hooks.nsh",
+        "template": "installer/installer.nsi",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "displayLanguageSelector": false
       },
       "wix": {
         "upgradeCode": "30d2825f-22c4-594d-a998-8bbede2e81d3",

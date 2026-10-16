@@ -15,7 +15,7 @@ pub mod host_supervision;
 pub mod identity;
 
 pub const PROTOCOL_SCHEMA: &str = "litematica-nova.render-service.v1";
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 /// Two concrete upload/decode payload slots plus one metadata-only queued
@@ -211,6 +211,7 @@ pub enum UiCommand {
     HideViewer {
         session_id: String,
     },
+    CaptureViewer { session_id: String, output_path: PathBuf },
     HeadlessCameraStress {
         session_id: String,
     },
@@ -253,6 +254,10 @@ impl UiCommand {
                     );
                 }
             },
+            Self::CaptureViewer { session_id, output_path } => {
+                require_id("sessionId", session_id)?;
+                if !output_path.is_absolute() { return Err("capture output must be absolute".into()); }
+            }
             Self::HeadlessCameraStress { session_id } => require_id("sessionId", session_id)?,
             _ => {}
         }
@@ -1508,6 +1513,7 @@ pub enum ViewerControl {
     Hide {
         session_id: String,
     },
+    CaptureFrame { session_id: String, generation: u64, output_path: PathBuf },
     HeadlessCameraStress {
         session_id: String,
         generation: u64,
@@ -1593,6 +1599,10 @@ impl ViewerControl {
                     *device_generation,
                     descriptor,
                 )?;
+            }
+            Self::CaptureFrame { session_id, generation, output_path } => {
+                require_id("sessionId", session_id)?;
+                if *generation == 0 || !output_path.is_absolute() { return Err("invalid capture identity or output".into()); }
             }
             Self::HeadlessCameraStress {
                 session_id,

@@ -234,6 +234,12 @@ export async function build(args = process.argv.slice(2)) {
   }
   const stockpile = path.join(cargo.core, 'release', `stockpile_server${platform.suffix}`);
   const config = path.join(temporary, 'tauri.json'); fs.writeFileSync(config, JSON.stringify(tauriOverride(base, { platform, stage, runtime: resourceRuntime, stockpile, icon, candidate }), null, 2));
+  if (platform.os === 'win32') {
+    // Validate the effective production overlay, not just the development
+    // config. A source/output-hash receipt reuses the exact prepared plugin.
+    run('powershell.exe', ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'tools/nsis-duilib/build.ps1')]);
+    run('powershell.exe', ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'tools/nsis-duilib/check-installer.ps1'), '-TauriConfigOverlay', config, '-Compile', '-RunAbi']);
+  }
   const cargoTarget = cargo.host; process.env.CARGO_TARGET_DIR = cargoTarget;
   removePreviousDistributables(cargoTarget, platform);
   for (const command of tauriBuildStages(platform, config)) {

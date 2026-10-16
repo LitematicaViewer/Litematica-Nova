@@ -1,9 +1,11 @@
+import { displayFilePath } from "../../../src/business/facade";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import {
   loadStructuralBlocks,
   loadUserConfigMigratingLocalStorage,
   normalizeMaterialListWindowBehavior,
+  normalizeDebugMode,
   openEnumeratorWindow as openEnumeratorDesktopWindow,
 } from "../../../src/business/facade";
 import { listenEvent } from "../../../src/platform/events";
@@ -125,7 +127,8 @@ async function writeClipboardText(value: string): Promise<void> {
  * Opens the enumerator according to the user's configured child-window behavior.
  */
 export async function openEnumeratorWithWindowBehavior(currentFile: string, showOverlay: () => void): Promise<void> {
-  const info = await loadUserConfigMigratingLocalStorage().catch(() => null);
+  const info = await loadUserConfigMigratingLocalStorage();
+  if (!normalizeDebugMode(info.config.debug_mode)) return;
   const behavior = normalizeMaterialListWindowBehavior(info?.config.material_list_window_behavior);
   if (behavior === "independent_window") {
     try {
@@ -687,7 +690,7 @@ function EnumeratorContent({
 
       <div className="enumerator-footer-row">
         <div className="enumerator-footer-status">
-          <div>{error || status || runtimeStatus || (currentFile ? currentFile : "未关联当前投影文件")}</div>
+          <div>{error || status || runtimeStatus || (currentFile ? displayFilePath(currentFile) : "未关联当前投影文件")}</div>
           <div className="enumerator-footer-meta">
             {editCollectionId
               ? `正在编辑现有自定义集合，共 ${rightValues.length} 项。`

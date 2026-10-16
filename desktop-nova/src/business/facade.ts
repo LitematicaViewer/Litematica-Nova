@@ -12,7 +12,7 @@ export * from "../services/libraryStore";
 export * from "../services/redenLibrary";
 export * from "../services/renderMode";
 export * from "../services/renderService";
-export { windowsPathKey } from "../services/filePathIdentity";
+export { windowsPathKey, displayFilePath, displayPathText } from "../services/filePathIdentity";
 export * from "../platform/applicationRender";
 export * from "../services/statsService";
 export * from "../services/userConfig";
@@ -24,3 +24,5 @@ export * from "../services/gameResources";
 export { resolveFlakeLayerBlockImage, extractLayerPaletteStates, clearFlakeStateHintImageCache } from "../services/flakeStateHintResolver";
 
 export * from "../platform/quickPreview";
+
+export * from "../services/creativeItemIdentity";

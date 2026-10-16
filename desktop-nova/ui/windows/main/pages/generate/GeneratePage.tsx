@@ -1,3 +1,5 @@
+import { displayPathText } from "../../../../../src/business/facade";
+import { displayFilePath } from "../../../../../src/business/facade";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import { Button } from "../../../../components/ui/button";
 import { Textarea } from "../../../../components/ui/textarea";
@@ -599,7 +601,7 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
 
             <div className="form-row">
               <div className="form-label">保存位置</div>
-              <Input className="input generate-grow" value={outputPath} readOnly aria-label="保存位置" placeholder="预览后自动选择保存位置" />
+              <Input className="input generate-grow" value={displayFilePath(outputPath)} readOnly aria-label="保存位置" placeholder="预览后自动选择保存位置" />
             </div>
             {lastError && <Textarea readOnly className="input generate-output-error" value={lastError} />}
             {dryRunSummary && <SummaryView summary={dryRunSummary} />}
@@ -1018,7 +1020,7 @@ function SummaryView({ summary }: { summary: GenerateSummary }) {
 }
 
 function ErrorList({ errors }: { errors: string[] }) {
-  return <div className="generate-error-list">{errors.map((error) => <div key={error}>{error}</div>)}</div>;
+  return <div className="generate-error-list">{errors.map((error) => <div key={error}>{displayPathText(error)}</div>)}</div>;
 }
 
 function TextRow({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {

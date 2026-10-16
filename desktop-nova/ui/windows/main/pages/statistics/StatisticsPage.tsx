@@ -1,3 +1,4 @@
+import { displayFilePath } from "../../../../../src/business/facade";
 import { Checkbox } from "../../../../components/ui/checkbox";
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from "../../../../components/ui/table";
 import { Button } from "../../../../components/ui/button";
@@ -566,7 +567,7 @@ export function MaterialsDialog({ data, onClose, currentFile, viewMode = "detail
   );
 }
 
-export function StatisticsPage({ currentFile, theme }: any) {
+export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
   const languageRevision = useSyncExternalStore(subscribeI18nChanges,getI18nRevision,getI18nRevision);
   const applicationRender = useSyncExternalStore(
     subscribeApplicationRender,
@@ -583,6 +584,7 @@ export function StatisticsPage({ currentFile, theme }: any) {
   const [isLoading, setIsLoading] = useState(false);
   const statsGeneration = useRef(0);
   const [showEnumerator, setShowEnumerator] = useState(false);
+  useEffect(() => { if (!debugMode) setShowEnumerator(false); }, [debugMode]);
   const [showEnumeratorInfoEditor, setShowEnumeratorInfoEditor] = useState(false);
   const [enumeratorCollections, setEnumeratorCollections] = useState<EnumeratorCollection[]>([]);
   const [enumeratorError, setEnumeratorError] = useState("");
@@ -670,10 +672,10 @@ export function StatisticsPage({ currentFile, theme }: any) {
     <div className="beta-statistics-toolbar">
       <Button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("details"); setShowMaterials(true); })} disabled={!data || isLoading}>材料明细</Button>
       <Button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("export"); setShowMaterials(true); }, "export")} disabled={!data || isLoading}>导出材料列表</Button>
-      <Button variant="secondary" disabled={!data} onClick={() => openEnumeratorWithWindowBehavior(currentFile,() => setShowEnumerator(true))}>打开枚举器</Button>
+      {debugMode && <Button variant="secondary" disabled={!data} onClick={() => openEnumeratorWithWindowBehavior(currentFile,() => setShowEnumerator(true))}>打开枚举器</Button>}
       <label className="beta-material-check"><Checkbox  checked={includeContainerItems} onCheckedChange={checked => setIncludeContainerItems((checked === true))} />统计容器内物品</label>
       <QuantitySwitch checked={asItems} onChange={setAsItems} />
-      <span className="beta-statistics-file" title={currentFile}>{currentFile.split(/[\\/]/).pop()}</span>
+      <span className="beta-statistics-file" title={displayFilePath(currentFile)}>{currentFile.split(/[\\/]/).pop()}</span>
       <Button className="btn" onClick={loadStats} disabled={isLoading}>{isLoading ? "正在分析…" : "重新分析"}</Button>
     </div>
     {includeContainerItems && scan && <div className="beta-statistics-status" role="status">已扫描 {scan.containers_scanned} 个容器、{scan.item_stacks_scanned} 堆物品。</div>}

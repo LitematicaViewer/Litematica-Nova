@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 
-import { initI18n, loadDatabases, getUserConfig } from "../../../src/business/facade";
+import { initI18n, loadDatabases, getUserConfig, displayPathText } from "../../../src/business/facade";
 import "../../styles/base.css";
 import "../../styles/enumerator.css";
 import { initializeWindowTheme } from "../../shell/themeRuntime";
@@ -22,7 +22,7 @@ bootstrap().catch((error) => {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <main className="enumerator-window">
-        <pre className="material-list-window-state material-list-window-error">{String(error)}</pre>
+        <pre className="material-list-window-state material-list-window-error">{displayPathText(String(error))}</pre>
       </main>
     </React.StrictMode>,
   );

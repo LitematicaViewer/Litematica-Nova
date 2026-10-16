@@ -1,5 +1,5 @@
 //! Shared product thumbnail cache. It accepts real GPU frames or embedded images,
-//! never screenshots of UI or fabricated geometry. Explorer only reads this cache.
+//! never screenshots of UI or fabricated geometry. Embedded file data is authoritative.
 use super::model::ProductPreviewImage;
 use base64::Engine;
 use sha2::{Digest, Sha256};
@@ -65,7 +65,7 @@ pub(crate) fn save(source: &Path, frame: &Path, expected: &Path) -> Result<Produ
 }
 
 #[cfg(windows)]
-fn notify_shell(source: &Path) {
+pub(crate) fn notify_shell(source: &Path) {
     use std::os::windows::ffi::OsStrExt;
     #[link(name="shell32")]
     extern "system" { fn SHChangeNotify(event: i32, flags: u32, item: *const std::ffi::c_void, other: *const std::ffi::c_void); }
@@ -73,7 +73,7 @@ fn notify_shell(source: &Path) {
     unsafe { SHChangeNotify(0x0000_2000, 0x0005, path.as_ptr().cast(), std::ptr::null()); }
 }
 #[cfg(not(windows))]
-fn notify_shell(_: &Path) {}
+pub(crate) fn notify_shell(_: &Path) {}
 
 #[cfg(test)]
 mod tests {

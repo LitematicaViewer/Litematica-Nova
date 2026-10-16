@@ -1,3 +1,4 @@
+import { creativeItemId, creativeInventoryValues, displayPathText } from "../../../../../src/business/facade";
 import { Dropdown } from "../../../../components/Dropdown";
 import { Dialog } from "../../../../components/Dialog";
 import { Button } from "../../../../components/ui/button";
@@ -89,10 +90,10 @@ export function CreativeInventoryDialog({
 
   const filteredValues = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    const source = selectedCollection?.values || [];
+    const source = creativeInventoryValues(selectedCollection?.values || []);
     if (!keyword) return source;
     return source.filter((blockId) => {
-      const translated = translateBlockId(blockId).toLowerCase();
+      const translated = translateBlockId(creativeItemId(blockId) || blockId).toLowerCase();
       return blockId.toLowerCase().includes(keyword) || translated.includes(keyword);
     });
   }, [search, selectedCollection]);
@@ -142,7 +143,7 @@ export function CreativeInventoryDialog({
 
   const handleHoverItem = (blockId: string, event: React.MouseEvent<HTMLButtonElement>) => {
     if (carryBlockId || !blockId) return;
-    setHoverItem({ id: blockId, name: translateBlockId(blockId) });
+    setHoverItem({ id: creativeItemId(blockId) || blockId, name: translateBlockId(creativeItemId(blockId) || blockId) });
     setHoverPosition({ x: event.clientX, y: event.clientY });
   };
 
@@ -221,13 +222,13 @@ export function CreativeInventoryDialog({
                   <Button variant="ghost"
                     key={`${blockId}-${index}`}
                     className={carryBlockId === blockId ? "flake-page__creative-slot is-carried-source" : "flake-page__creative-slot"}
-                    aria-label={translateBlockId(blockId)}
+                    aria-label={translateBlockId(creativeItemId(blockId) || blockId)}
                     onClick={(event) => handleInventorySlotClick(blockId, event)}
                     onMouseEnter={(event) => handleHoverItem(blockId, event)}
                     onMouseMove={(event) => handleHoverItem(blockId, event)}
                     onMouseLeave={handleHoverLeave}
                   >
-                    <BlockIcon blockId={blockId} lookupMode="block_first" />
+                    <BlockIcon blockId={creativeItemId(blockId) || blockId} lookupMode="item_first" />
                   </Button>
                 ) : (
                   <div key={`empty-${index}`} className="flake-page__creative-slot is-empty" aria-hidden />
@@ -239,13 +240,13 @@ export function CreativeInventoryDialog({
                   <Button variant="ghost"
                     key={`creative-hotbar-${index + 1}`}
                     className={blockId ? "flake-page__creative-hotbar-slot has-item" : "flake-page__creative-hotbar-slot"}
-                    aria-label={`快捷栏 ${index + 1}${blockId ? `：${translateBlockId(blockId)}` : "：空"}`}
+                    aria-label={`快捷栏 ${index + 1}${blockId ? `：${translateBlockId(creativeItemId(blockId) || blockId)}` : "：空"}`}
                     onClick={(event) => handleCreativeHotbarSlotClick(index, event)}
                     onMouseEnter={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
                     onMouseMove={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
                     onMouseLeave={blockId ? handleHoverLeave : undefined}
                   >
-                    {blockId ? <BlockIcon blockId={blockId} lookupMode="block_first" /> : null}
+                    {blockId ? <BlockIcon blockId={creativeItemId(blockId) || blockId} lookupMode="item_first" /> : null}
                   </Button>
                 ))}
               </div>
@@ -254,14 +255,14 @@ export function CreativeInventoryDialog({
                 <div className="flake-page__creative-inventory-overlay nova-muted">没有可显示的方块。</div>
               ) : null}
               {loading ? <div className="flake-page__creative-inventory-overlay nova-muted">正在加载创造模式分类...</div> : null}
-              {!loading && error ? <div className="flake-page__creative-inventory-overlay nova-error">{error}</div> : null}
+              {!loading && error ? <div className="flake-page__creative-inventory-overlay nova-error">{displayPathText(error)}</div> : null}
             </div>
           </div>
         </div>
       </section>
       {carryBlockId ? (
         <div ref={carryPreviewRef} className="flake-page__creative-carry-preview">
-          <BlockIcon blockId={carryBlockId} lookupMode="block_first" />
+          <BlockIcon blockId={creativeItemId(carryBlockId) || carryBlockId} lookupMode="item_first" />
         </div>
       ) : null}
       {!carryBlockId ? <CreativeInventoryTooltip x={hoverPosition.x} y={hoverPosition.y} item={hoverItem} /> : null}

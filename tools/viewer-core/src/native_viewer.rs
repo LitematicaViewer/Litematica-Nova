@@ -5049,21 +5049,18 @@ fn quick_gpu_geometry_upper(mesh: &PreparedChunkMesh) -> usize {
         .saturating_add(aligned(mesh.translucent_indices.len().saturating_mul(size_of::<u32>())))
 }
 
-fn quick_preload_allowed(pressure: &str, warning_confirmed: bool) -> bool {
-    pressure == "normal" || (pressure == "warning" && warning_confirmed)
+fn quick_incremental_upload_allowed(current_usage: u64, pending_geometry_upper: usize, budget: u64) -> bool {
+    budget > 0 && (current_usage as u128 + pending_geometry_upper as u128 * 2) * 100 < budget as u128 * 95
 }
 
-fn quick_resource_action(
-    requested_preload: bool, pressure: &str, complete_estimate: bool,
-    decision: Option<viewer_launch_contract::QuickResourceDecision>,
-) -> Result<viewer_launch_contract::QuickResourceAction> {
-    use viewer_launch_contract::QuickResourceAction as Action;
-    let warning_confirmed = decision.as_ref().is_some_and(|choice| choice.warning_confirmed);
-    let action = decision.map(|choice| choice.action).unwrap_or(if requested_preload { Action::Preload } else { Action::Realtime });
-    ensure!(action != Action::Cancel, "Quick preview was cancelled before GPU allocation");
-    ensure!(action != Action::Preload || (complete_estimate && quick_preload_allowed(pressure, warning_confirmed)),
-        "快速模式尚未取得有效完整投影显存需求及预加载准入，请明确选择实时加载或取消。");
-    Ok(action)
+fn quick_runtime_upload_admission(current_usage: u64, pending_geometry_upper: usize, budget: u64, priority: QueuePriority) -> QuickChunkUploadAdmission {
+    if quick_incremental_upload_allowed(current_usage, pending_geometry_upper, budget) {
+        QuickChunkUploadAdmission::Admitted { evicted_chunks: 0 }
+    } else if priority == QueuePriority::Preload {
+        QuickChunkUploadAdmission::DeferredPreload
+    } else {
+        QuickChunkUploadAdmission::RetryBudget
+    }
 }
 
 fn quick_upload_should_queue(deferred_preloads: &mut HashSet<ChunkKey>, key: ChunkKey, priority: QueuePriority) -> bool {
@@ -5077,52 +5074,15 @@ fn quick_upload_refresh_demand(deferred_preloads: &mut HashSet<ChunkKey>, retry_
 
 fn prepare_quick_gpu_resources(
     adapter: &wgpu::Adapter, index: Option<&ChunkSceneIndex>, _atlas: Option<&RgbaImage>,
-    size: PhysicalSize<u32>, bounds: SceneBounds, args: &mut ViewerArgs,
-    retained_shadow_resolution: Option<u32>,
+    _size: PhysicalSize<u32>, _bounds: SceneBounds, args: &mut ViewerArgs,
+    _retained_shadow_resolution: Option<u32>,
 ) -> Result<()> {
-    if args.quick_host.is_none() { return Ok(()); }
-    use crate::quick_resource_preflight::{QuickResourceInput, estimate_quick_resources, query_selected_adapter_budget};
-    use viewer_launch_contract::QuickResourceAction as Action;
-    if args.quick_gpu_context_only {
-        let budget = query_selected_adapter_budget(adapter)?;
-        let estimate = estimate_quick_resources(&QuickResourceInput { vertices_upper_bound: 0,
-            vertex_stride_bytes: size_of::<GpuVertex>() as u64, indices_upper_bound: 0, geometry_buffer_count_upper_bound: 0,
-            atlas_width: 1, atlas_height: 1, viewport_width: size.width.max(1), viewport_height: size.height.max(1),
-            surface_buffer_count: if args.actual_graphics_backend == viewer_launch_contract::GraphicsApiPreference::Vulkan { 4 } else { 3 }, shadow_resolution: Some(LightingConfig::from_args(args.basic_lighting,
-                args.basic_shadows, args.shadow_debug_view, args.shadow_force_test, bounds).shadow().resolution.max(1)),
-            uniform_buffer_bytes: vec![size_of::<CameraUniform>() as u64, size_of::<CameraUniform>() as u64, size_of::<LightingUniform>() as u64] })?;
-        eprintln!("[NOVA_GPU_INITIALIZATION] stage=static_budget_admitted budget_bytes={} current_usage_bytes={} pending_fixed_upper_bytes={} projection_reads=0 scene_mesh_builds=0", budget.budget_bytes, budget.current_usage_bytes, estimate.gpu_peak_upper_bytes);
-        return Ok(());
-    }
-    let report_path = args.quick_resource_report.as_deref().context("Managed Fast launch is missing its resource report path")?;
-    let decision_path = args.quick_resource_decision.as_deref().context("Managed Fast launch is missing its resource decision path")?;
-    let source_bytes = std::fs::metadata(args.input.as_deref().context("Fast source is missing")?)?.len();
-    let index = index.context("Fast resource estimate requires actual projection chunk metadata")?;
-    let budget_result = query_selected_adapter_budget(adapter);
-    let invalid_reason = budget_result.as_ref().err().map(|error| format!("{error:#}"));
-    let report = serde_json::json!({"schema":"nova.quick.resource.v1", "requestId":args.launch_request_id,
-        "sourceBytes":source_bytes, "preload":args.prebuild_before_show, "pressure":"unmeasured",
-        "pressureBasisPoints":null, "budget":budget_result.as_ref().ok(),
-        "estimate":null, "invalidReason":invalid_reason, "decisionRequired":args.prebuild_before_show,
-        "fixedGpuResourcesAlreadyInLiveBudget":retained_shadow_resolution.is_some()});
-    let temporary = report_path.with_extension("json.tmp");
-    std::fs::write(&temporary, serde_json::to_vec(&report)?)?;
-    std::fs::rename(&temporary, report_path)?;
-    // The index has chunk metadata, not full model/vertex/index demand. A
-    // static-context estimate cannot admit a real projection. The Host handles
-    // the nonblocking user choice before submitting ReplaceScene; this guard
-    // rejects managed launch bypasses without stalling native Session events.
-    let action = quick_resource_action(args.prebuild_before_show, "unmeasured", false,
-        read_quick_resource_decision(decision_path, &args.launch_request_id)?)?;
-    if action == Action::ReducedRealtime {
-        // This is an explicit user option, never a silent budget downgrade.
-        args.basic_shadows = false; args.shadow_force_test = false;
-    }
-    args.prebuild_before_show = action == Action::Preload;
-    match budget_result {
-        Ok(budget) => println!("[QUICK_RESOURCE] policy=complete_projection requested_preload={} actual_budget_bytes={} current_usage_bytes={} source_chunks={} artificial_residency_caps=false geometry_measurement=not_prepared renderer=legacy-wgpu",
-            args.prebuild_before_show, budget.budget_bytes, budget.current_usage_bytes, index.chunk_count()),
-        Err(error) => eprintln!("[QUICK_RESOURCE] policy=complete_projection actual_budget_unavailable={error:#} artificial_residency_caps=false allocation_failure_not_inferred=true"),
+    // Fast has no demand estimator or Prebuilt admission. Actual allocation,
+    // bounded uploads and camera-driven residency remain enforced below.
+    match crate::quick_resource_preflight::query_selected_adapter_budget(adapter) {
+        Ok(budget) => eprintln!("[QUICK_RESOURCE] policy=runtime_only requested_preload={} budget_bytes={} current_usage_bytes={} source_chunks={} demand_estimation=false",
+            args.prebuild_before_show, budget.budget_bytes, budget.current_usage_bytes, index.map_or(0, |index| index.chunk_count())),
+        Err(error) => eprintln!("[QUICK_RESOURCE] policy=runtime_only budget_unavailable={error:#} allocation_checks=true"),
     }
     Ok(())
 }
@@ -6740,10 +6700,45 @@ impl ViewerState {
         }
     }
 
-    fn admit_quick_chunk_upload(&mut self, _prepared: &PreparedChunkMesh, _priority: QueuePriority) -> QuickChunkUploadAdmission {
-        // The complete Quick source stays resident. Actual GPU failures are
-        // reported by the device error handler; no cache rank retires a chunk.
-        QuickChunkUploadAdmission::Admitted { evicted_chunks: 0 }
+    fn admit_quick_chunk_upload(&mut self, prepared: &PreparedChunkMesh, priority: QueuePriority) -> QuickChunkUploadAdmission {
+        let Some(adapter) = self.quick_adapter.as_ref() else {
+            return QuickChunkUploadAdmission::Admitted { evicted_chunks: 0 };
+        };
+        let pending_geometry_upper = quick_gpu_geometry_upper(prepared);
+        match crate::quick_resource_preflight::query_selected_adapter_budget(adapter) {
+            Ok(budget) => {
+                // Account for already-created buffers even when the driver's
+                // process-usage counter has not caught up with this upload batch.
+                let resident_bytes = self.resident_chunks.values().fold(0usize,
+                    |total, resident| total.saturating_add(resident.estimated_bytes));
+                let current_usage = budget.current_usage_bytes.max(u64::try_from(resident_bytes).unwrap_or(u64::MAX));
+                match quick_runtime_upload_admission(current_usage, pending_geometry_upper, budget.budget_bytes, priority) {
+                    QuickChunkUploadAdmission::Admitted { evicted_chunks } =>
+                        return QuickChunkUploadAdmission::Admitted { evicted_chunks },
+                    // Only speculative work is deferred; the complete CPU
+                    // geometry remains available for later camera demand.
+                    QuickChunkUploadAdmission::DeferredPreload => return QuickChunkUploadAdmission::DeferredPreload,
+                    QuickChunkUploadAdmission::RetryBudget => {}
+                }
+                // Required geometry never disappears behind an admission cap.
+                // Preserve the CPU source and fail this real allocation attempt
+                // explicitly instead of showing a silently incomplete scene or
+                // waiting forever for memory occupied by our own required chunks.
+                record_quick_gpu_failure(&self.quick_gpu_failure, format!(
+                    "快速模式运行时显卡分配余量不足：当前使用 {} 字节，本次缓冲 {} 字节，当前预算 {} 字节。完整投影数据已保留。",
+                    current_usage, pending_geometry_upper, budget.budget_bytes));
+                QuickChunkUploadAdmission::RetryBudget
+            }
+            Err(error) => {
+                // Missing telemetry is not an estimate/unknown startup gate.
+                // The bounded upload queue and real wgpu OOM/device-lost
+                // callbacks remain authoritative for the actual allocation.
+                if self.frame_index == 0 && self.resident_chunks.is_empty() {
+                    eprintln!("[NOVA_QUICK_GPU] runtime_budget_unavailable={error:#} allocation_failure_callback=true");
+                }
+                QuickChunkUploadAdmission::Admitted { evicted_chunks: 0 }
+            }
+        }
     }
 
     fn enqueue_chunk_upload_with_cost(
@@ -10760,16 +10755,57 @@ mod quick_lifecycle_tests {
     }
 
     #[test]
-    fn quick_unknown_or_incomplete_estimate_never_enables_preload() {
-        use viewer_launch_contract::QuickResourceAction;
-        assert!(!quick_preload_allowed("unknown", true));
-        assert!(!quick_preload_allowed("over_budget", true));
-        assert!(!quick_preload_allowed("warning", false));
-        assert!(quick_preload_allowed("normal", false));
-        assert!(quick_preload_allowed("warning", true));
-        assert!(quick_resource_action(true, "normal", false, None).is_err());
-        assert!(quick_resource_action(true, "unknown", true, None).is_err());
-        assert_eq!(quick_resource_action(false, "unknown", false, None).unwrap(), QuickResourceAction::Realtime);
+    fn fast_prepare_uses_runtime_budget_without_estimation_wait_or_preload_changes() {
+        let source = include_str!("native_viewer.rs");
+        let implementation = source.split_once("fn prepare_quick_gpu_resources(").unwrap().1
+            .lines().take_while(|line| *line != "}").collect::<Vec<_>>().join("\n");
+        assert!(implementation.contains("query_selected_adapter_budget(adapter)"));
+        assert!(implementation.contains("policy=runtime_only"));
+        assert!(implementation.contains("args.prebuild_before_show"));
+        for forbidden in ["estimate_quick_resources(", "classify_quick_pressure(",
+            "read_quick_resource_decision(", "resource_report", "resource_decision", "cache",
+            "sleep(", "loop {", "while ", "args.prebuild_before_show =", "args.prebuild_before_show=",
+            "args.basic_shadows =", "args.basic_shadows="] {
+            assert!(!implementation.contains(forbidden), "Fast preparation contains {forbidden}");
+        }
+    }
+
+    #[test]
+    fn fast_incremental_upload_keeps_runtime_budget_guard() {
+        for priority in [super::QueuePriority::Target, super::QueuePriority::Preload] {
+            assert!(matches!(super::quick_runtime_upload_admission(80, 7, 100, priority),
+                super::QuickChunkUploadAdmission::Admitted { evicted_chunks: 0 }));
+        }
+        assert!(matches!(super::quick_runtime_upload_admission(81, 7, 100, super::QueuePriority::Preload),
+            super::QuickChunkUploadAdmission::DeferredPreload));
+        assert!(matches!(super::quick_runtime_upload_admission(81, 7, 100, super::QueuePriority::Target),
+            super::QuickChunkUploadAdmission::RetryBudget));
+        assert!(matches!(super::quick_runtime_upload_admission(0, 1, 0, super::QueuePriority::Target),
+            super::QuickChunkUploadAdmission::RetryBudget));
+        assert!(!quick_incremental_upload_allowed(u64::MAX, usize::MAX, u64::MAX));
+        // The tested policy must remain wired into the actual allocator path.
+        let source = include_str!("native_viewer.rs");
+        let admission = source.split_once("    fn admit_quick_chunk_upload(").unwrap().1
+            .lines().take_while(|line| *line != "    }").collect::<Vec<_>>().join("\n");
+        assert!(admission.contains("query_selected_adapter_budget(adapter)"));
+        assert!(admission.contains("quick_runtime_upload_admission("));
+        assert!(admission.contains("quick_gpu_geometry_upper(prepared)"));
+        assert!(admission.contains("record_quick_gpu_failure("), "required geometry must fail explicitly rather than retry forever");
+        let uploads = source.split_once("    fn process_pending_uploads(").unwrap().1
+            .lines().take_while(|line| *line != "    }").collect::<Vec<_>>().join("\n");
+        assert!(uploads.find("self.admit_quick_chunk_upload(").unwrap() < uploads.find("self.upload_chunk_mesh(").unwrap());
+    }
+
+    #[test]
+    fn fast_cancel_file_is_bounded_and_launch_scoped() {
+        let path = std::env::temp_dir().join(format!("nova-quick-decision-unit-{}.json", std::process::id()));
+        std::fs::write(&path, br#"{"schema":"nova.quick.decision.v1","requestId":"launch","action":"cancel"}"#).unwrap();
+        let decision = read_quick_resource_decision(&path, "launch").unwrap().unwrap();
+        assert_eq!(decision.action, viewer_launch_contract::QuickResourceAction::Cancel);
+        assert!(read_quick_resource_decision(&path, "old-launch").is_err());
+        std::fs::write(&path, vec![b' '; 4097]).unwrap();
+        assert!(read_quick_resource_decision(&path, "launch").is_err());
+        std::fs::remove_file(&path).unwrap();
     }
 }
 

@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 
-import { loadDatabases, initI18n, getUserConfig } from "../../../src/business/facade";
+import { loadDatabases, initI18n, getUserConfig, displayPathText } from "../../../src/business/facade";
 import "../../styles/base.css";
 import "../../styles/asset-manager.css";
 import { initializeWindowTheme } from "../../shell/themeRuntime";
@@ -22,7 +22,7 @@ bootstrap().catch((error) => {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <main className="asset-manager-window">
-        <pre className="material-list-window-state material-list-window-error">{String(error)}</pre>
+        <pre className="material-list-window-state material-list-window-error">{displayPathText(String(error))}</pre>
       </main>
     </React.StrictMode>,
   );

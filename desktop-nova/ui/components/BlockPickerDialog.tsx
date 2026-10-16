@@ -1,3 +1,4 @@
+import { creativeItemId, creativeInventoryValues, displayPathText } from "../../src/business/facade";
 import React, { useState, useEffect, useMemo } from "react";
 import { type EnumeratorCollection, loadEnumeratorCollections } from "../../src/business/facade";
 import { translateBlockId } from "../../src/business/facade";
@@ -69,7 +70,7 @@ export function BlockPickerDialog({
   );
 
   const selectedValues = useMemo(
-    () => allCollections.find((c) => c.id === selectedCollectionId)?.values || [],
+    () => creativeInventoryValues(allCollections.find((c) => c.id === selectedCollectionId)?.values || []),
     [allCollections, selectedCollectionId]
   );
 
@@ -77,7 +78,7 @@ export function BlockPickerDialog({
     const kw = search.trim().toLowerCase();
     if (!kw) return selectedValues;
     return selectedValues.filter(
-      (id) => id.toLowerCase().includes(kw) || translateBlockId(id).toLowerCase().includes(kw)
+      (id) => id.toLowerCase().includes(kw) || translateBlockId(creativeItemId(id) || id).toLowerCase().includes(kw)
     );
   }, [search, selectedValues]);
 
@@ -143,11 +144,11 @@ export function BlockPickerDialog({
                       tabIndex={0}
                       onClick={() => { onPickBlock(blockId); onClose(); }}
                       onKeyDown={event => { if(event.key === "Enter" || event.key === " ") { event.preventDefault(); onPickBlock(blockId); onClose(); } }}
-                      onMouseEnter={(e) => { setHoverItem({ id: blockId, name: translateBlockId(blockId) }); setHoverPos({ x: e.clientX, y: e.clientY }); }}
+                      onMouseEnter={(e) => { setHoverItem({ id: creativeItemId(blockId) || blockId, name: translateBlockId(creativeItemId(blockId) || blockId) }); setHoverPos({ x: e.clientX, y: e.clientY }); }}
                       onMouseMove={(e) => { setHoverPos({ x: e.clientX, y: e.clientY }); }}
                       onMouseLeave={() => setHoverItem(null)}
                     >
-                      <BlockIcon blockId={blockId} lookupMode="block_first" />
+                      <BlockIcon blockId={creativeItemId(blockId) || blockId} lookupMode="item_first" />
                     </div>
                   ) : (
                     <div key={`empty-${idx}`} className="flake-page__creative-slot is-empty" aria-hidden />
@@ -155,7 +156,7 @@ export function BlockPickerDialog({
                 )}
               </div>
               {loading && <div className="flake-page__creative-inventory-overlay nova-muted">正在加载创造模式分类...</div>}
-              {!loading && error && <div className="flake-page__creative-inventory-overlay nova-error">{error}</div>}
+            {!loading && error && <div className="flake-page__creative-inventory-overlay nova-error">{displayPathText(error)}</div>}
               {!loading && !error && !filtered.length && <div className="flake-page__creative-inventory-overlay nova-muted">没有可显示的方块。</div>}
             </div>
           </div>

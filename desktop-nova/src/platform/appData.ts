@@ -1,3 +1,4 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "./tauri";
 
 export type GraphicsApiPreference = "auto" | "dx12" | "vulkan";
@@ -24,6 +25,7 @@ export interface UserConfig {
   graphics_backend: GraphicsApiPreference;
   material_list_window_behavior: string;
   show_ui_test_page: boolean;
+  debug_mode: boolean;
   local_library_tail_path_count: number;
   statistics_enumerator_info_rules: string[];
   v5_compatibility: V5CompatibilityConfig;
@@ -59,3 +61,6 @@ export function setUserConfigDir(path: string, migrate: boolean): Promise<UserCo
 export function resetUserConfigDir(migrate: boolean): Promise<UserConfigInfo> {
   return invoke("reset_user_config_dir", { migrate });
 }
+
+/** Version of the executable hosting this webview. */
+export function getApplicationVersion(): Promise<string> { return getVersion(); }

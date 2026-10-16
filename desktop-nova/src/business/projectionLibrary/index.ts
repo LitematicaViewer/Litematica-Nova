@@ -26,5 +26,5 @@ export {
   updateLocalLibraryFolder,
 } from "../../services/libraryStore";
 export { LIBRARY_ICON_PRESETS, LIBRARY_LUCIDE_ICON_NAMES, sanitizeLibrarySvg, validateLibraryIconDataUrl } from "../../services/libraryCategoryIcons";
-export { windowsPathKey, displayFilePath } from "../../services/filePathIdentity";
+export { windowsPathKey, displayFilePath, displayPathText } from "../../services/filePathIdentity";
 export { queryBlockDatabase, convertProjectVersion, type BlockDatabaseVersion, type BlockDatabaseBlock, type BlockDatabaseState, type BlockDatabaseResult, type ConversionPreview } from "../../platform/applicationOperations";

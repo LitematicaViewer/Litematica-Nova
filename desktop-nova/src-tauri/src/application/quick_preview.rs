@@ -221,41 +221,6 @@ impl QuickPreviewHost {
         if !meta.is_file() || !source.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("litematic")) {
             return Err("快速预览需要现有的 .litematic 文件。".to_owned());
         }
-        if input.preload {
-            let mut pending = self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?;
-            if let Some(request) = pending.as_ref().filter(|request| request.view.state == "starting"
-                && request.view.source_path == source && request.source_bytes == meta.len()
-                && request.source_modified == meta.modified().ok() && request.host_window == host_window
-                && request.input.graphics_backend == input.graphics_backend) {
-                return Ok(request.view.clone());
-            }
-            let generation = self.sequence.fetch_add(1, Ordering::Relaxed);
-            let id = format!("quick-{}-resource-{generation}", self.supervisor.owner_epoch().get());
-            let directory = self.data_root.join("runtime").join("quick-preview").join(&id);
-            fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-            let resource = QuickResourceReport { schema: "nova.quick.resource.v1".into(), request_id: id.clone(),
-                source_bytes: meta.len(), preload: true, pressure: "unmeasured".into(), pressure_basis_points: None,
-                budget: None, estimate: None, invalid_reason: Some("快速模式尚未获得完整投影显存需求估算；静态 GPU 资源预算不代表投影需求。请选择实时加载或取消。".into()), decision_required: true };
-            let view = QuickPreviewView { preview_id: id.clone(), source_path: source.clone(), render_mode: "fast_experimental",
-                state: "starting", presentation: QuickPresentationIntent::default(), presentation_revision: 0,
-                visible: false, error: None, preload: true, resource: Some(resource.clone()) };
-            // No ReplaceScene or full projection work has been submitted. Only
-            // hide the old presentation; its Viewer and GPU remain owned.
-            let mut slot = self.session.lock().map_err(|_| "快速预览状态锁异常")?;
-            if let Some(session) = slot.as_mut() {
-                if !session.gpu_context_only {
-                    session.publish_command(&ViewerSessionCommand::hide(session.session_id.clone(), session.next_command)?)?;
-                    session.next_command += 1;
-                    session.pending_intents.clear(); session.deferred_presentation = false;
-                    session.view.visible = false; session.view.presentation = QuickPresentationIntent::default();
-                }
-            }
-            super::diagnostics::record_resource(&id, &resource);
-            eprintln!("[QUICK_RESOURCE] stage=await_explicit_choice request_id={id} estimate=unknown requested_preload=true preload_admitted=false scene_replace_commands=0 new_viewers=0");
-            *pending = Some(PendingQuickResource { view: view.clone(), input: StartQuickPreviewInput { source_path: source, ..input },
-                host_window, source_bytes: meta.len(), source_modified: meta.modified().ok(), decision_path: directory.join("resource-decision.json") });
-            return Ok(view);
-        }
         self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.take();
         let mut slot = self.session.lock().map_err(|_| "快速预览状态锁异常".to_owned())?;
         if let Some(session) = slot.as_mut() {
@@ -283,7 +248,7 @@ impl QuickPreviewHost {
                 let resource_decision_path = session.directory.join(format!("resource-decision-{generation:020}.json"));
                 let launch = ViewerLaunchContract::new(session.session_id.clone(), source.clone(), ViewerContent::default(), None,
                     ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(host_window), graphics_backend: input.graphics_backend, preload: input.preload,
-                        resource_report_path: Some(resource_report_path.clone()), resource_decision_path: Some(resource_decision_path.clone()) }))?;
+                        resource_report_path: None, resource_decision_path: None }))?;
                 let replacement_contract = ViewerLaunchContractFile::create(replacement.clone(), &launch, &session.backend)?;
                 let hide = ViewerSessionCommand::hide(session.session_id.clone(), session.next_command)?;
                 session.publish_command(&hide)?;
@@ -321,7 +286,7 @@ impl QuickPreviewHost {
         let backend = ViewerBackendIdentity::capture(&self.viewer_exe)?;
         let launch = ViewerLaunchContract::new(id.clone(), source.clone(), ViewerContent::default(), None,
             ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(host_window.clone()), graphics_backend: input.graphics_backend, preload: input.preload,
-                resource_report_path: Some(resource_report_path.clone()), resource_decision_path: Some(resource_decision_path.clone()) }))?;
+                resource_report_path: None, resource_decision_path: None }))?;
         let contract = ViewerLaunchContractFile::create(directory.join("launch.json"), &launch, &backend)?;
         let stdout = super::diagnostics::log_path("quick-preview", &format!("{id}-stdout.log"), &directory)?;
         let stderr = super::diagnostics::log_path("quick-preview", &format!("{id}-stderr.log"), &directory)?;

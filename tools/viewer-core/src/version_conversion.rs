@@ -73,9 +73,9 @@ pub struct ConversionPayloadIssue {
 
 fn payload_type_name(id: &str) -> &str {
     match id {
-        "minecraft:banner" => "旗帜",
+        "minecraft:banner" | "Banner" => "旗帜",
         "minecraft:hanging_sign" => "悬挂告示牌",
-        "minecraft:sign" => "告示牌",
+        "minecraft:sign" | "Sign" => "告示牌",
         "minecraft:decorated_pot" => "饰纹陶罐",
         "minecraft:armor_stand" => "盔甲架",
         "minecraft:item_frame" => "物品展示框",
@@ -140,7 +140,7 @@ fn group_payload_issue(region: &Value, issue: &str) -> (String, String, String, 
         kind.into(),
         payload_type_name(id).into(),
         format!("{field}[{index}]"),
-        message.into(),
+        issue.split_once('：').map(|(_, detail)| detail).unwrap_or(message).into(),
     )
 }
 
@@ -224,6 +224,9 @@ fn valid(registry: &BlockRegistry, value: &str) -> bool {
 /// different block family): every state property keeps its original meaning.
 /// The inverse is explicit and applies only across that same schema boundary.
 fn migrated_block_name<'a>(name: &'a str, source: i32, target: i32) -> &'a str {
+    if source >= 1519 && target < 1519 {
+        if let Some(legacy) = crate::version_payload_migration::legacy_banner_name(name) { return legacy; }
+    }
     match (source < 4541, target < 4541, name) {
         (true, false, "minecraft:chain") => "minecraft:iron_chain",
         (false, true, "minecraft:iron_chain") => "minecraft:chain",
@@ -325,6 +328,8 @@ pub fn convert(
         bail!("投影缺少 Regions")
     };
     for (region_name, region) in regions {
+        crate::version_payload_migration::migrate_head_palette(region, source_data_version, target.data_version)?;
+        crate::version_payload_migration::migrate_banner_palette(region, source_data_version, target.data_version)?;
         let Value::Compound(fields) = region else {
             bail!("选区不是 Compound")
         };
@@ -555,8 +560,10 @@ pub fn convert(
         let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
         gzip.write_all(&converted)?;
         let converted = gzip.finish()?;
+        verify_converted_payload(&converted, &root)?;
         if request.overwrite {
             atomic_replace(output, &converted)?;
+            verify_converted_payload(&fs::read(output)?, &root)?;
             preview.output_path = Some(output.display().to_string());
             return Ok(preview);
         }
@@ -570,9 +577,22 @@ pub fn convert(
             let _ = fs::remove_file(output);
             return Err(error.into());
         }
+        drop(file);
+        if let Err(error) = fs::read(output).map_err(anyhow::Error::from).and_then(|bytes| verify_converted_payload(&bytes, &root)) {
+            let _ = fs::remove_file(output);
+            return Err(error.context("另存后重新读取校验失败，未改动原文件"));
+        }
         preview.output_path = Some(output.display().to_string());
     }
     Ok(preview)
+}
+
+fn verify_converted_payload(bytes: &[u8], expected: &Value) -> Result<()> {
+    let mut raw = Vec::new();
+    GzDecoder::new(bytes).read_to_end(&mut raw).context("重新读取转换后的压缩NBT")?;
+    let actual: Value = fastnbt::from_bytes(&raw).context("重新解析转换后的完整NBT")?;
+    if &actual != expected { bail!("转换后重新读取的数据与已确认内容不一致") }
+    Ok(())
 }
 
 fn atomic_replace(output: &Path, bytes: &[u8]) -> Result<()> {
@@ -589,6 +609,7 @@ fn atomic_replace(output: &Path, bytes: &[u8]) -> Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
+        if fs::read(&temp)? != bytes { bail!("覆盖前读取临时文件校验失败，原文件保留") }
         #[cfg(windows)]
         {
             use std::os::windows::ffi::OsStrExt;
