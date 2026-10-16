@@ -30,14 +30,19 @@ html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group
   min-height: var(--ln-check-label-min-height, 24px); cursor: pointer;
 }
 html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group-item"]):disabled) { cursor: not-allowed; }
+/* Only the fill colour belongs to the shared layer. A `background` shorthand here
+   would reset `background-image`, and a theme that textures this control would then
+   have to out-specify it for the image while still losing the colour - which is
+   exactly how Minecraft's checkbox ended up showing `--primary` through the
+   transparent centre of its texture. */
 html[data-theme] button[data-slot="checkbox"] {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: 20px; min-width: 20px; max-width: 20px; min-height: 20px; flex: 0 0 20px; padding: 0; margin: 0;
-  border: 1px solid var(--border); border-radius: 4px; background: var(--background);
+  border: 1px solid var(--border); border-radius: 4px; background-color: var(--background);
   color: var(--primary-foreground); cursor: pointer; box-shadow: none; vertical-align: middle;
 }
 html[data-theme] [data-slot="checkbox"][data-state="checked"],
-html[data-theme] [data-slot="checkbox"][data-state="indeterminate"] { background: var(--primary); border-color: var(--primary); }
+html[data-theme] [data-slot="checkbox"][data-state="indeterminate"] { background-color: var(--primary); border-color: var(--primary); }
 html[data-theme] [data-slot="checkbox"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
 [data-slot="checkbox-indicator"] { display: flex; }
 [data-slot="checkbox-indicator"] svg { width: 14px; height: 14px; stroke-width: 3px; }

@@ -9,6 +9,7 @@
 | V1.4     | 2026-10-13 | Codex  | 记录 Phase 2B 完成：14 个桥接令牌退场（191 处引用），`--navigation-background` 经实测改为提升而非删除；状态色与阴影令牌化；新增 `css-hardcoded-colour` 规则并保留 33 处需设计决定的字面值 |
 | V1.5     | 2026-10-13 | Codex  | 记录 Phase 3 完成：58 个已失效的外观类直接删除、44 个仍生效的移植进 `components` 层，`tsx-appearance-utility-class` 102 → 0；记下分类工具四次误判（结构类、转义变体名、简写展开、元素选择器作用域）与一次脚本改写 `variant !== "outline"` 的事故 |
 | V1.6     | 2026-10-13 | Codex  | 记录 Phase 4.1 / 4.2 完成：`range.css` 整套伪元素规则从未命中过 Radix 滑块（删除并改写为 `[data-slot="slider-*"]`），顺带修掉共享滑块缺少 `position: relative` 的错位缺陷；最后 1 处裸 checkbox 迁移后两份 `check.css` 规则全部成为死代码，`--ln-check-size` 退场；新增 `tsx-native-control` 规则，裸 `<select>` 基数复核为 10 处 |
+| V1.7     | 2026-10-13 | Codex  | 修复两个仅运行时可见的 MC 控件缺陷（单选框被裁圆、复选框透出 `--primary`）：根因是共享层用 `background` 简写重置了 `background-image`，且共享层在 `background-color` 上优先级高于主题规则；新增 `minecraft-controls.test.mjs` 级联求解器测试，并记下该测试第一版为假绿的教训 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -725,6 +726,40 @@ Phase 1 期间我把 `modern.css` 的 Tailwind 导入从 `layer(utilities)` 改�
 **退出**：`className` 中出现遗留 `btn` 类的 `<Button>` 为 0；裸 `<button>` 为 0（组件实现自身除外）；裸 `<select>`、裸 checkbox 为 0；下拉实现收敛为 1 条路线（`BlockSearchSelect` 的搜索语义可保留为 Select 的上层封装）。
 
 **基数已复核**：实测裸 `<select>` 为 **10 处**（原估 6 处已过期），分布在 `BlockPickerDialog` 1、`AssetManagerContent` 7、`EnumeratorWindow` 1、`VersionConversionDialog` 1。
+
+---
+
+#### Phase 4.0 实施记录 ✅ 两个运行时才可见的 Minecraft 控件缺陷
+
+**这两个缺陷不是本轮计划要做的**——4.3～4.8 是 select、按钮、下拉、变体，都不会碰到复选框与单选框。由人工验收发现，故优先修复。
+
+**缺陷一：单选框贴图被裁成圆形。** `styles/controls.css:115` 为 `[data-choice-layout="control"]` 声明了 `border-radius: 50%`（其他主题想要圆形）。Minecraft 的覆盖规则 `appearance.css` 优先级更高（0,3,2 > 0,3,1），但它**只重设了 `border`/`border-image`/`background`，没有重设 `border-radius`**，于是 20×20 的方形 `radio_default.png` 被裁圆。
+
+**缺陷二：复选框贴图中心透出 `--primary`。** `styles/controls.css` 的选中态规则用**简写** `background: var(--primary)` 填充；Minecraft 的 `[data-state="checked"]` 规则**只覆盖 `background-image`**。
+关键在于两者的优先级是颠倒的：
+
+| 声明 | 选择器 | 优先级 |
+| ---- | ------ | ------ |
+| 共享层填充 | `html[data-theme] [data-slot="checkbox"][data-state="checked"]` | **0,3,1** |
+| MC 贴图基底 | `html[data-theme="minecraft"] button[data-slot="checkbox"]` | 0,2,2 |
+
+属性数目先于类型数目比较，**所以共享层赢了 `background-color`**，而 MC 的 `[data-state="checked"]`（0,3,2）只赢了 `background-image`。结果就是贴图画在 `--primary` 色块上——正好是观察到的 `#b8d49c`（深）/ `#3d6033`（浅），两者都是 MC 的 `--primary`。
+
+**修复**
+
+1. `controls.css`：把两处 `background:` 简写改为 `background-color:`。共享层只应声明填充色，**不该重置 `background-image`**——正是这个简写让"贴图的主题"和"配色的主题"在各自动一个属性上互相打架，才产生了这个bug。
+2. `appearance.css`：MC 单选框规则补 `border-radius: 0`。
+3. `appearance.css`：新增 `html[data-theme="minecraft"] button[data-slot="checkbox"][data-state] { background-color: transparent }`。`[data-state]` 是刻意的——正是它让这条规则以 0,3,2 压过共享层的 0,3,1，而不是打平。
+
+**为什么现有检查全都没发现**
+
+五条护栏规则、层叠反转分析器和测试套件读的都是**源码**，而这两个缺陷只存在于**层叠解析结果**里：声明都在、语法都对、层序也对，只是**赢家不是预期的那个**。这是"读源码"和"算结果"之间的盲区。
+
+**新增 `scripts/minecraft-controls.test.mjs`（4 个用例）** —— 一个最小的级联求解器：按"层序 → 优先级 → 文档顺序"算出某个属性的**获胜声明**，再断言它的值。它检查的不是"规则写了什么"，而是"最后谁赢"。
+
+> 这个测试第一版**是假绿的**：它只看选择器是否提到 slot，不看主题约束，于是 8bitcn 的 `[data-theme="8bitcn"] { border-radius: 0 }` 把"MC 单选框是方的"这条断言满足了——删掉修复它照样通过。补上主题过滤后，两条断言才各自可被证伪（分别单独回退修复，各自失败 1 个用例）。**一个无法失败的测试比没有测试更糟**，因为它给出的是虚假的安全感。
+
+**验证**：`check:layers` / `check:application-boundaries` / `check:ui-styles` 全部 0 违规；`build` 通过；测试套件与 HEAD 完全一致并新增 4 个用例。
 
 ---
 

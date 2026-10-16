@@ -133,11 +133,23 @@ html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="checked"]:
 }
 html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="checked"] svg { visibility: hidden; }
 html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="indeterminate"] { color: #ffffff; }
+/* The shared layer fills a checked checkbox with `--primary`, which is what the
+   other themes want. Minecraft's textures carry the whole control - a check mark on
+   a transparent centre - so that fill would show through as a `--primary` square
+   behind the texture. `[data-state]` is deliberate: it is what makes this rule
+   outrank the shared `[data-state="checked"]` fill instead of tying with it. */
+html[data-theme="minecraft"] button[data-slot="checkbox"][data-state] {
+    background-color: transparent;
+}
 
-/* The original radio textures replace generic Minecraft action-button borders. */
+/* The original radio textures replace generic Minecraft action-button borders.
+   `border-radius: 0` is required, not cosmetic: the shared layer rounds this slot
+   into a 50% circle for the other themes, and the shipped radio textures are square,
+   so without it the texture is clipped into a circle. */
 html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"] {
     border: 0;
     border-image: none;
+    border-radius: 0;
     background: transparent url("./resource/form/radio_default.png") center / 20px 20px no-repeat;
     image-rendering: pixelated;
 }
