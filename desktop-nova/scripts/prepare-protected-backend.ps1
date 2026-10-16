@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [string] $RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path,
-    [switch] $Force
+    [switch] $Development,
+    [switch] $CheckOnly,
+    [switch] $ReuseExisting
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -13,92 +15,18 @@ $stage = [IO.Path]::GetFullPath((Join-Path $repo 'bin/public-beta'))
 if (-not $stage.StartsWith($repo + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Public staging leaves the repository.' }
 $backendNames = @('litematica_core.exe','litematica_native_viewer.exe','nova-render-service.exe','nova-build-worker.exe')
 
-# Development launches run this script on every start. Rewriting a file whose
-# bytes did not change only refreshes its mtime, and desktop-nova/src-tauri/build.rs
-# watches bin/public-beta, so an unconditional copy forces a full crate rebuild
-# (about 14 s) on every launch. All writes below are therefore content-aware;
-# -Force restores unconditional rewriting.
-function Test-IdenticalFile([string] $Source, [string] $Destination) {
-    if (-not (Test-Path -LiteralPath $Destination -PathType Leaf)) { return $false }
-    if ((Get-Item -LiteralPath $Source).Length -ne (Get-Item -LiteralPath $Destination).Length) { return $false }
-    return (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
-}
-
-function Copy-IfChanged([string] $Source, [string] $Destination) {
-    if (-not $Force -and (Test-IdenticalFile $Source $Destination)) { return $false }
-    Copy-Item -LiteralPath $Source -Destination $Destination -Force
-    return $true
-}
-
-function Write-TextIfChanged([string] $Path, [string] $Content) {
-    if (-not $Force -and (Test-Path -LiteralPath $Path -PathType Leaf) -and ([IO.File]::ReadAllText($Path) -ceq $Content)) { return $false }
-    [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
-    return $true
-}
-
 Push-Location -LiteralPath $repo
 try {
-    # GitHub checkout binds an exact commit, so an empty detached result is valid.
-    $branch = & git branch --show-current
-    if ($LASTEXITCODE -ne 0) { throw 'Unable to resolve public checkout state.' }
-    if ($branch -ne 'main' -and -not ($env:GITHUB_ACTIONS -eq 'true' -and $env:GITHUB_REF -eq 'refs/heads/main' -and -not $branch)) {
-        throw 'Compile the audited public main only; never use private dev as public build input.'
-    }
-    $sha = (& git rev-parse --verify HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[a-f0-9]{40,64}$') { throw 'Unable to resolve the public source commit.' }
-    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { throw 'The signed private-environment payload and its public build identity are missing.' }
-    # The three release trust parameters come from one audited public identity.
-    # No signing key, private record, plaintext DLL, private source or old backend
-    # executable is read by this script.
-    $env:NOVA_VERIFY_PROTECTED_PACKAGE = $packageRoot
-    $verify = @'
-const fs = require('node:fs');
-const path = require('node:path');
-const crypto = require('node:crypto');
-(async () => {
-  const root = process.env.NOVA_VERIFY_PROTECTED_PACKAGE;
-  const readJson = (file, limit) => {
-    const size = fs.statSync(file).size;
-    if (!size || size > limit) throw new Error('Protected metadata exceeds its byte budget');
-    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-  };
-  const config = readJson(path.join(root, 'protected-build.json'), 16384);
-  const fields = ['schema','version','buildId','moduleId','manifestPublicKey','endpoint','manifestFile','ciphertextFile'];
-  if (Object.keys(config).some(key => !fields.includes(key))) throw new Error('Unexpected public protected-build metadata field');
-  if (config.schema !== 'nova.protected-build.v1' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(config.buildId)) throw new Error('Invalid protected build identity');
-  if (config.moduleId !== 'nova_protected_module.dll' || config.manifestFile !== config.moduleId + '.manifest.json' || config.ciphertextFile !== config.moduleId + '.enc') throw new Error('Invalid protected module package paths');
-  const endpoint = new URL(config.endpoint);
-  if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error('The protected endpoint must be ordinary HTTPS');
-  const publicKey = Buffer.from(config.manifestPublicKey, 'base64');
-  if (publicKey.length !== 32 || publicKey.toString('base64') !== config.manifestPublicKey) throw new Error('Invalid Ed25519 public key');
-  const allowed = new Set(['protected-build.json', config.manifestFile, config.ciphertextFile]);
-  for (const item of fs.readdirSync(root, { withFileTypes: true })) if (!item.isFile() || !allowed.has(item.name)) throw new Error('Unexpected file in the ciphertext-only public package');
-  const signed = readJson(path.join(root, config.manifestFile), 131072);
-  if (Object.keys(signed).sort().join(',') !== 'manifest,signature') throw new Error('Unexpected signed manifest fields');
-  const m = signed.manifest;
-  // Rust serde signs the declared struct field order. Reconstruct that order,
-  // do not trust JSON object insertion order or a platform serializer variant.
-  const keys = ['protocol','build_id','module_id','plaintext_sha256','ciphertext_sha256','ciphertext_bytes','nonce','created_ms'];
-  if (Object.keys(m).length !== keys.length || Object.keys(m).some(key => !keys.includes(key))) throw new Error('Unexpected module manifest fields');
-  const canonical = Object.fromEntries(keys.map(key => [key, m[key]]));
-  if (m.protocol !== 1 || m.build_id !== config.buildId || m.module_id !== config.moduleId) throw new Error('Module/build binding mismatch');
-  if (!/^[a-f0-9]{64}$/.test(m.plaintext_sha256) || !/^[a-f0-9]{64}$/.test(m.ciphertext_sha256)) throw new Error('Invalid module content hashes');
-  if (!Number.isSafeInteger(m.created_ms) || m.created_ms <= 0 || !Number.isSafeInteger(m.ciphertext_bytes) || m.ciphertext_bytes < 17 || m.ciphertext_bytes > 512 * 1024 * 1024) throw new Error('Invalid module size/time');
-  if (Buffer.from(m.nonce, 'base64').length !== 12) throw new Error('Invalid authenticated-encryption nonce');
-  const signature = Buffer.from(signed.signature, 'base64');
-  const key = crypto.createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100','hex'), publicKey]), format:'der', type:'spki' });
-  if (signature.length !== 64 || !crypto.verify(null, Buffer.from(JSON.stringify(canonical)), key, signature)) throw new Error('Private-build manifest signature verification failed');
-  const ciphertext = path.join(root, config.ciphertextFile);
-  if (fs.statSync(ciphertext).size !== m.ciphertext_bytes) throw new Error('Protected module ciphertext size mismatch');
-  const hash = crypto.createHash('sha256');
-  for await (const bytes of fs.createReadStream(ciphertext)) hash.update(bytes);
-  if (hash.digest('hex') !== m.ciphertext_sha256) throw new Error('Protected module ciphertext SHA256 mismatch');
-  console.log(JSON.stringify(config));
-})().catch(error => { console.error(error.message); process.exitCode = 1; });
-'@
-    $identityJson = $verify | & node --input-type=commonjs -
-    if ($LASTEXITCODE -ne 0) { throw 'The signed encrypted private build is not valid; no unprotected substitute is permitted.' }
-    $identity = ($identityJson -join "`n") | ConvertFrom-Json
+    # Release builds keep their main-only gate. Public UI feature branches use
+    # the same actual source graph/package checks, not a branch-name allowlist.
+    $checkArgs = @((Join-Path $PSScriptRoot 'check-public-checkout.mjs'), '--repo', $repo)
+    if ($Development) { $checkArgs += '--development' }
+    if ($ReuseExisting) { $checkArgs += '--reuse-existing' }
+    $checkedJson = & node @checkArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Public checkout/runtime preflight failed.' }
+    $checked = ($checkedJson -join "`n") | ConvertFrom-Json
+    $sha = $checked.sha
+    $identity = $checked.identity
     $tauriPath = Join-Path $repo 'desktop-nova/src-tauri/tauri.conf.json'
     $tauri = Get-Content -LiteralPath $tauriPath -Raw | ConvertFrom-Json
     if ($identity.version -ne $tauri.version) { throw 'Protected module and desktop candidate versions differ.' }
@@ -117,33 +45,36 @@ const crypto = require('node:crypto');
     $runtimeManifest = Get-Content -LiteralPath (Join-Path $repo 'pack-in/minecraft-runtime-26.3.manifest.json') -Raw | ConvertFrom-Json
     if ($runtimeManifest.schema -ne 'nova.minecraft-runtime-resources.v1' -or $runtimeManifest.java_class_entries -ne 0 -or $runtimeManifest.executable_entries -ne 0) { throw 'The vanilla runtime resource manifest is invalid.' }
     if ((Get-FileHash -LiteralPath $runtimeArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $runtimeManifest.archive_sha256) { throw 'The vanilla runtime resource archive changed.' }
+    foreach ($requiredInput in @('data/blockdb/blocks.dat.z', 'data/blockdb/plains-tints.dat.z', 'pack-in/game-icons/block.zip')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $repo $requiredInput) -PathType Leaf)) { throw "Missing required compile input: $requiredInput" }
+    }
+    if ($CheckOnly -or $ReuseExisting) {
+        if ($ReuseExisting) {
+            Write-Host "Existing backend verified source=$($checked.backendSource); UI source=$sha. No helper rebuild."
+        } else {
+            Write-Host "Public development inputs verified source=$sha. No files written; no build started."
+        }
+        return
+    }
     $runtimeRoot = Join-Path $repo 'data/mc26'
     New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
     $archive = [IO.Compression.ZipFile]::OpenRead($runtimeArchive)
     try {
         if ($archive.Entries.Count -ne $runtimeManifest.archive_entries) { throw 'Runtime resource entry count mismatch.' }
-        # Validate every entry first, then only rewrite the tree when something is
-        # actually missing or truncated: the payload is about 158 MB.
-        $plan = @()
         foreach ($entry in $archive.Entries) {
             if ($entry.FullName -notmatch '^26\.3/(oracle/[a-z_]+\.jsonl|oracle/oracle-manifest\.json|client\.jar|assets/indexes/34\.json|assets/objects/[a-f0-9]{2}/[a-f0-9]{40})$') { throw 'Unexpected runtime resource path.' }
             $destination = [IO.Path]::GetFullPath((Join-Path $runtimeRoot $entry.FullName))
             if (-not $destination.StartsWith($runtimeRoot + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -or $entry.Length -gt 100MB) { throw 'Runtime resource exceeds its path/size boundary.' }
-            $plan += [pscustomobject]@{ Entry = $entry; Destination = $destination }
-        }
-        $stale = 0
-        foreach ($item in $plan) {
-            $existing = Get-Item -LiteralPath $item.Destination -ErrorAction SilentlyContinue
-            if (-not $existing -or $existing.Length -ne $item.Entry.Length) { $stale++ }
-        }
-        if ($Force -or $stale -gt 0) {
-            foreach ($item in $plan) {
-                New-Item -ItemType Directory -Path (Split-Path -Parent $item.Destination) -Force | Out-Null
-                [IO.Compression.ZipFileExtensions]::ExtractToFile($item.Entry,$item.Destination,$true)
+            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+            if ((Test-Path -LiteralPath $destination -PathType Leaf) -and (Get-Item -LiteralPath $destination).Length -eq $entry.Length) {
+                $existing = [IO.File]::Open($destination, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+                $packed = $null
+                try {
+                    $packed = $entry.Open()
+                    if ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($existing)) -ceq [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($packed))) { continue }
+                } finally { if ($packed) { $packed.Dispose() }; $existing.Dispose() }
             }
-            Write-Host "[protected-backend] runtime resources extracted ($stale entries were missing or stale)"
-        } else {
-            Write-Host "[protected-backend] runtime resources already complete ($($plan.Count) entries match by size)"
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry,$destination,$true)
         }
     } finally { $archive.Dispose() }
     $jar = [IO.Compression.ZipFile]::OpenRead((Join-Path $runtimeRoot '26.3/client.jar'))
@@ -183,11 +114,7 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
     if ($LASTEXITCODE -ne 0) { throw 'Public Fast/core/stockpile compilation failed.' }
     & cargo build --locked --release --manifest-path tools/nova-protected-loader/Cargo.toml --target-dir tools/nova-protected-loader/target/public-beta --bins
     if ($LASTEXITCODE -ne 0) { throw 'Public authenticated loader compilation failed.' }
-    # The up-to-date shortcut in build.ps1 compares mtimes. A release/CI runner may
-    # restore a cached target directory whose timestamps are newer than the freshly
-    # checked-out sources, so never reuse the provider DLL there.
-    if ($Force -or $env:GITHUB_ACTIONS -eq 'true') { & (Join-Path $repo 'tools/windows-thumbnail-provider/build.ps1') -Force }
-    else { & (Join-Path $repo 'tools/windows-thumbnail-provider/build.ps1') }
+    & (Join-Path $repo 'tools/windows-thumbnail-provider/build.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'The normal Windows thumbnail provider resource failed to build.' }
     New-Item -ItemType Directory -Path $stage -Force | Out-Null
     foreach ($existing in Get-ChildItem -LiteralPath $stage -Force) {
@@ -200,19 +127,15 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
         'nova-build-worker.exe' = Join-Path $repo 'tools/nova-protected-loader/target/public-beta/release/nova-build-worker.exe'
     }
     $artifacts = [ordered]@{}
-    $restaged = 0
     foreach ($entry in $sources.GetEnumerator()) {
         $destination = Join-Path $stage $entry.Key
-        if (Copy-IfChanged $entry.Value $destination) { $restaged++ }
+        Copy-Item -LiteralPath $entry.Value -Destination $destination -Force
         $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($hash -ne (Get-FileHash -LiteralPath $entry.Value -Algorithm SHA256).Hash.ToLowerInvariant()) { throw "Public helper staging is incomplete: $($entry.Key)" }
         $artifacts[$entry.Key] = [ordered]@{ bytes=(Get-Item -LiteralPath $destination).Length; sha256=$hash }
     }
-    $deployment = [ordered]@{ schema='lba.backend.deployment.v1'; gitSha=$sha; profile='release'; artifacts=$artifacts }
-    $manifestWritten = Write-TextIfChanged (Join-Path $stage 'backend-deployment.json') ($deployment | ConvertTo-Json -Depth 5)
-    if ($restaged -eq 0 -and -not $manifestWritten) {
-        Write-Host "[protected-backend] staging already current; helper timestamps left untouched"
-    }
+    $deployment = [ordered]@{ schema='lba.backend.deployment.v1'; gitSha=$sha; profile='release'; runtimeBuildId=$identity.buildId; artifacts=$artifacts }
+    [IO.File]::WriteAllText((Join-Path $stage 'backend-deployment.json'), ($deployment | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
     foreach ($entry in $resources.PSObject.Properties) {
         # build.rs owns generation AND validation of every flat PNG in this map.
         # A fresh checkout has the source archive, not the derived directory yet.
@@ -224,8 +147,7 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
         if (-not (Test-Path -LiteralPath $source)) { throw "Missing required product resource: $($entry.Name)" }
     }
     if ((& git rev-parse HEAD).Trim() -ne $sha) { throw 'Public source commit changed during the candidate build.' }
-    Write-Host "Public backend ready source=$sha protected_build=$($identity.buildId) helpers=4 restaged=$restaged staging=$stage"
+    Write-Host "Public backend ready source=$sha protected_build=$($identity.buildId) helpers=4 staging=$stage"
 } finally {
-    Remove-Item -LiteralPath Env:NOVA_VERIFY_PROTECTED_PACKAGE -ErrorAction SilentlyContinue
     Pop-Location
 }

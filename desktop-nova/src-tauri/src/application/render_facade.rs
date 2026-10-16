@@ -597,7 +597,7 @@ impl RenderFacade {
                 mode,
                 visible: true,
                 placement,
-            },
+             presentation_epoch: None },
         )
         .await
     }
@@ -1110,7 +1110,9 @@ fn presentation_command(
             }
         }
     };
-    Ok(UiCommand::SetBoundPresentation { session_id, build_id, generation, state })
+    Ok(UiCommand::SetBoundPresentation { session_id, build_id, generation, state,
+        presentation_epoch: presentation.presentation_epoch,
+        dpi_scale: presentation.placement.map(|placement| placement.dpi_scale) })
 }
 
 fn reconcile_operation(record: &mut OperationRecord, snapshot: &ServiceSnapshot) {
@@ -1339,7 +1341,7 @@ mod tests {
                 mode: PresentationMode::Popup,
                 visible: false,
                 placement: None,
-            },
+             presentation_epoch: None },
         }
     }
 

@@ -32,13 +32,12 @@ REM  bin\viewer-backend so a development build also finds the backends when the
 REM  application resource root does not already provide bin\viewer-backend.
 REM
 REM  Usage:
-REM    dev-win.cmd                 prepare (incremental), then start the Tauri dev window
+REM    dev-win.cmd                 prepare, then start the Tauri dev window
 REM    dev-win.cmd --prepare       stage everything, do not start the GUI
-REM    dev-win.cmd --skip-prepare  start the GUI with the existing staging (fastest)
-REM    dev-win.cmd --force-prepare rewrite every staged file instead of reusing it
+REM    dev-win.cmd --skip-prepare  start the GUI with the existing staging
 REM    dev-win.cmd --check         read-only preflight report (no writes/builds)
 REM    dev-win.cmd <tauri args>    forward extra arguments to "tauri dev",
-REM                                e.g. dev-win.cmd --skip-prepare --no-watch
+REM                                e.g. dev-win.cmd --no-watch
 REM
 REM  Environment:
 REM    LBA_DATA_ROOT  Defaults to <repo>\data so a development build keeps using
@@ -68,21 +67,13 @@ set "MIN_NODE_MINOR=19"
 
 set "MODE=dev"
 set "TAURI_ARGS="
-set "FORCE_PREPARE="
-REM Parse every argument: launcher switches set MODE, anything else is forwarded
-REM to "tauri dev" so --skip-prepare composes with e.g. --no-watch.
-:arg_loop
-if "%~1"=="" goto arg_done
-if /i "%~1"=="--check" (set "MODE=check" & shift & goto arg_loop)
-if /i "%~1"=="--prepare" (set "MODE=prepare" & shift & goto arg_loop)
-if /i "%~1"=="--skip-prepare" (set "MODE=dev-noprepare" & shift & goto arg_loop)
-if /i "%~1"=="--force-prepare" (set "FORCE_PREPARE=1" & shift & goto arg_loop)
+if /i "%~1"=="--check" set "MODE=check"
+if /i "%~1"=="--prepare" set "MODE=prepare"
+if /i "%~1"=="--skip-prepare" set "MODE=dev-noprepare"
 if /i "%~1"=="--help" goto usage
 if /i "%~1"=="-h" goto usage
-set "TAURI_ARGS=%TAURI_ARGS% %~1"
-shift
-goto arg_loop
-:arg_done
+REM Anything that is not a launcher switch is passed through to "tauri dev".
+if "%MODE%"=="dev" if not "%~1"=="" set "TAURI_ARGS=%*"
 
 echo [dev-win] repo: %REPO_ROOT%
 echo [dev-win] mode: %MODE%
@@ -146,14 +137,11 @@ if not defined PWSH (
 )
 echo [dev-win] pwsh: %PWSH%
 
-REM --- Branch gate -----------------------------------------------------------
-REM prepare-protected-backend.ps1 refuses any branch other than main, so report
-REM that here instead of failing halfway through a long build.
-for /f "delims=" %%B in ('git -C "%REPO_ROOT%" branch --show-current 2^>nul') do set "BRANCH=%%B"
-if /i not "%BRANCH%"=="main" (
-    echo [dev-win] FAIL current branch is "%BRANCH%"; the prepared backend refuses anything but main.
-    echo [dev-win]      Run:  git -C "%REPO_ROOT%" checkout main
-    goto fail
+REM The common preflight validates the public source graph and signed runtime.
+REM Feature branch names are not a release boundary.
+if /i "%MODE%"=="check" (
+    "%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%" -Development -CheckOnly
+    if errorlevel 1 goto fail
 )
 
 REM --- Inputs the preparation consumes --------------------------------------
@@ -182,7 +170,7 @@ echo.
 if /i "%MODE%"=="check" (
     echo [dev-win] --check only; nothing was written and nothing was built.
     echo [dev-win] Commands a real run would execute:
-    echo [dev-win]   1. "%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%"
+    echo [dev-win]   1. "%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%" -Development
     echo [dev-win]   2. copy %PUBLIC_BETA_DIR%\ ^(5 entries^)  ^-^>  %VIEWER_BACKEND_DIR%
     echo [dev-win]   3. copy %PROTECTED_DIR%\*  ^-^>  %VIEWER_BACKEND_DIR%\protected\
     echo [dev-win]   4. copy %VIEWER_RELEASE_DIR%\stockpile_server.exe  ^-^>  %VIEWER_BACKEND_DIR%\ and %STOCKPILE_DEST_DIR%\
@@ -195,17 +183,14 @@ if /i "%MODE%"=="check" (
 REM --- Stage the reviewed public backend ------------------------------------
 if /i "%MODE%"=="dev-noprepare" (
     echo [dev-win] --skip-prepare: reusing the existing staging.
-    goto after_prepare
+    "%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%" -Development -ReuseExisting
+    if errorlevel 1 goto fail
+    goto mirror_staging
 )
 
-echo [dev-win] Preparing the reviewed public backend ^(incremental; only changed inputs are rebuilt^)...
+echo [dev-win] Preparing the reviewed public backend ^(release build; this takes a while^)...
 echo [dev-win]   signature check + data\mc26 unpack + 4 helper builds + thumbnail provider
-if defined FORCE_PREPARE (
-    echo [dev-win]   --force-prepare: rewriting every staged file
-    "%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%" -Force
-) else (
-    "%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%"
-)
+"%PWSH%" -NoProfile -File "%PREPARE_SCRIPT%" -RepoRoot "%REPO_ROOT%" -Development
 if errorlevel 1 (
     echo [dev-win] FAIL prepare-protected-backend.ps1 failed; see its output above.
     goto fail
@@ -216,6 +201,7 @@ REM main.rs backend_exe_path() reads get_root()\bin\viewer-backend. In a bundled
 REM build tauri.conf.json creates that directory from bin\public-beta; a
 REM development build that resolves get_root() to this checkout needs the same
 REM files here, plus the protected package the resource map expects.
+:mirror_staging
 echo [dev-win] Mirroring staging into bin\viewer-backend...
 if not exist "%VIEWER_BACKEND_DIR%" mkdir "%VIEWER_BACKEND_DIR%"
 copy /Y "%PUBLIC_BETA_DIR%\litematica_core.exe" "%VIEWER_BACKEND_DIR%\" >nul
@@ -268,24 +254,19 @@ if not exist "node_modules" (
     )
 )
 
-REM --- Guard: Vite must not watch the Rust build tree -------------------------
-REM vite.config.ts must ignore "**/src-tauri/**". With the wrong entry
-REM "**/tauri/**" (which matches no directory) Vite watches
-REM src-tauri\target\debug\deps\*.exe instead. build.rs rewrites gen/block-icons
-REM on every build and then watches that directory, so cargo relinks the host on
-REM every single build; the watcher hits the locked file, dies with EBUSY and
-REM takes the whole dev session down. Pre-building cannot fix that, so refuse to
-REM start with the wrong configuration and print the exact remedy.
-findstr /C:"**/tauri/**" "vite.config.ts" >nul 2>nul
-if errorlevel 1 goto vite_ok
-echo [dev-win] FAIL vite.config.ts still ignores "**/tauri/**", which matches no directory.
-echo [dev-win]      Use the real directory name instead:
-echo [dev-win]          watch: { ignored: ["**/src-tauri/**"] }
-echo [dev-win]      Otherwise Vite watches the linker output and the session dies with EBUSY.
-popd
-goto fail
-
-:vite_ok
+REM --- Pre-build the debug host ----------------------------------------------
+REM desktop-nova\vite.config.ts ignores only "**/tauri/**" while the real
+REM directory is "src-tauri", so Vite's watcher also watches
+REM src-tauri\target\debug\deps\*.exe. Linking that file while the watcher is
+REM attached fails with EBUSY and kills the whole dev session. Building the host
+REM once here means the watcher sees a finished binary instead of a moving one.
+echo [dev-win] Pre-building the debug host ^(avoids the Vite watcher/linker race^)...
+cargo build --manifest-path "%TAURI_DIR%\Cargo.toml"
+if errorlevel 1 (
+    popd
+    echo [dev-win] FAIL debug host build failed.
+    goto fail
+)
 
 echo [dev-win] Starting the Tauri development window ^(vite on 127.0.0.1:1430^)...
 if defined TAURI_ARGS (
@@ -302,13 +283,12 @@ endlocal & exit /b %EXIT_CODE%
 
 :usage
 echo Usage:
-echo   dev-win.cmd                 prepare (incremental), then start the Tauri dev window
+echo   dev-win.cmd                 prepare, then start the Tauri dev window
 echo   dev-win.cmd --prepare       stage everything, do not start the GUI
-echo   dev-win.cmd --skip-prepare  start the GUI with the existing staging (fastest)
-echo   dev-win.cmd --force-prepare rewrite every staged file instead of reusing it
+echo   dev-win.cmd --skip-prepare  start the GUI with the existing staging
 echo   dev-win.cmd --check         read-only preflight report
 echo   dev-win.cmd ^<tauri args^>     forward extra arguments to "tauri dev"
-echo                               e.g. dev-win.cmd --skip-prepare --no-watch
+echo                               e.g. dev-win.cmd --no-watch
 endlocal
 exit /b 0
 

@@ -21,27 +21,34 @@ impl DeviceKey {
             .truncate(false)
             .open(directory.join("identity.lock"))?;
         fs2::FileExt::lock_exclusive(&lock)?;
-        let path = directory.join("device-key.dpapi");
-        // A persisted software key must not turn into a different identity when a TPM appears later.
-        if path.exists() {
-            return Self::software(&path);
-        }
-        #[cfg(windows)]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            let marker = directory.join("device-provider");
-            if marker.exists() {
-                ensure!(
-                    std::fs::read(&marker)? == b"tpm-cng-v1",
-                    "invalid device provider marker"
-                );
-                return Ok(Self::Tpm(windows::TpmKey::open()?));
-            }
-            if let Ok(key) = windows::TpmKey::open() {
-                std::fs::write(marker, b"tpm-cng-v1")?;
-                return Ok(Self::Tpm(key));
-            }
+            return unix_storage::open_locked(directory, &unix_storage::SystemVault);
         }
-        Self::software(&path)
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let path = directory.join("device-key.dpapi");
+            // A persisted software key must not turn into a different identity when a TPM appears later.
+            if path.exists() {
+                return Self::software(&path);
+            }
+            #[cfg(windows)]
+            {
+                let marker = directory.join("device-provider");
+                if marker.exists() {
+                    ensure!(
+                        std::fs::read(&marker)? == b"tpm-cng-v1",
+                        "invalid device provider marker"
+                    );
+                    return Ok(Self::Tpm(windows::TpmKey::open()?));
+                }
+                if let Ok(key) = windows::TpmKey::open() {
+                    std::fs::write(marker, b"tpm-cng-v1")?;
+                    return Ok(Self::Tpm(key));
+                }
+            }
+            Self::software(&path)
+        }
     }
     fn software(path: &Path) -> Result<Self> {
         let bytes = if path.exists() {
@@ -100,6 +107,470 @@ impl DeviceKey {
                 .map_err(|_| anyhow!("device signing failed"))?
                 .as_ref()
                 .to_vec()),
+        }
+    }
+}
+
+// The selection policy is compiled for tests on Windows without opening an OS
+// vault. Native adapters are included only on their actual Unix target.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+mod unix_storage {
+    use super::*;
+    use anyhow::Context;
+    use serde::{Deserialize, Serialize};
+    use std::{
+        io::{Read, Write},
+        path::PathBuf,
+    };
+
+    const SOFTWARE_PROVIDER: &str = "private-file-pkcs8-v1";
+    const MAX_KEY_BYTES: u64 = 16 * 1024;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum VaultError {
+        Unavailable,
+        Locked,
+        Invalid,
+    }
+    impl std::fmt::Display for VaultError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str(match self {
+                Self::Unavailable => "system device key storage is unavailable",
+                Self::Locked => "system device key storage is locked or access was denied",
+                Self::Invalid => "system device key storage has an invalid or ambiguous entry",
+            })
+        }
+    }
+    impl std::error::Error for VaultError {}
+    pub(super) trait Vault {
+        fn provider(&self) -> &'static str;
+        fn get(&self) -> std::result::Result<Option<Zeroizing<Vec<u8>>>, VaultError>;
+        fn set(&self, bytes: &[u8]) -> std::result::Result<(), VaultError>;
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) struct SystemVault;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    impl SystemVault {
+        fn entry() -> std::result::Result<keyring::Entry, VaultError> {
+            // Stable across versions, restarts and per-task runtime directories;
+            // this is an application label, not an account or hardware identity.
+            keyring::Entry::new("Litematica-Nova.DeviceSigning.v1", "device-key")
+                .map_err(Self::error)
+        }
+        fn error(error: keyring::Error) -> VaultError {
+            match error {
+                keyring::Error::NoStorageAccess(_) => VaultError::Locked,
+                keyring::Error::PlatformFailure(_) => VaultError::Unavailable,
+                _ => VaultError::Invalid,
+            }
+        }
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    impl Vault for SystemVault {
+        fn provider(&self) -> &'static str {
+            #[cfg(target_os = "linux")]
+            {
+                "secret-service-v1"
+            }
+            #[cfg(target_os = "macos")]
+            {
+                "macos-keychain-v1"
+            }
+        }
+        fn get(&self) -> std::result::Result<Option<Zeroizing<Vec<u8>>>, VaultError> {
+            match Self::entry()?.get_secret() {
+                Ok(bytes) => Ok(Some(Zeroizing::new(bytes))),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(error) => Err(Self::error(error)),
+            }
+        }
+        fn set(&self, bytes: &[u8]) -> std::result::Result<(), VaultError> {
+            Self::entry()?.set_secret(bytes).map_err(Self::error)
+        }
+    }
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ProviderState {
+        schema: u32,
+        provider: String,
+        public_key_sha256: String,
+    }
+
+    fn key(bytes: &[u8]) -> Result<DeviceKey> {
+        ensure!(
+            !bytes.is_empty() && bytes.len() as u64 <= MAX_KEY_BYTES,
+            "device key exceeds its byte budget"
+        );
+        let key = signature::EcdsaKeyPair::from_pkcs8(
+            &signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+            bytes,
+            &SystemRandom::new(),
+        )
+        .map_err(|_| anyhow!("device key storage authentication failed"))?;
+        Ok(DeviceKey::Software(key))
+    }
+    fn fingerprint(key: &DeviceKey) -> Result<String> {
+        Ok(crate::crypto::sha256(&key.public_key()?))
+    }
+
+    fn read_software(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        ensure!(
+            metadata.is_file() && metadata.len() <= MAX_KEY_BYTES,
+            "invalid private software identity file"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            ensure!(
+                metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o077 == 0,
+                "software device key is not current-user private"
+            );
+        }
+        let mut bytes = Zeroizing::new(Vec::new());
+        std::fs::File::open(path)?
+            .take(MAX_KEY_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        key(&bytes)?;
+        Ok(bytes)
+    }
+    fn software_bytes(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
+        if path.exists() {
+            return read_software(path);
+        }
+        let pkcs8 = signature::EcdsaKeyPair::generate_pkcs8(
+            &signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+            &SystemRandom::new(),
+        )
+        .map_err(|_| anyhow!("device key generation failed"))?;
+        let bytes = Zeroizing::new(pkcs8.as_ref().to_vec());
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        Ok(bytes)
+    }
+    fn record(directory: &Path, provider: &str, selected: &DeviceKey) -> Result<()> {
+        let state = ProviderState {
+            schema: 1,
+            provider: provider.into(),
+            public_key_sha256: fingerprint(selected)?,
+        };
+        let temporary = directory.join(format!(
+            "device-provider-{}.tmp",
+            crate::crypto::random_id()?
+        ));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(&serde_json::to_vec(&state)?)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, directory.join("device-provider"))?;
+        Ok(())
+    }
+    fn finish(
+        software_path: &Path,
+        state: &ProviderState,
+        bytes: Zeroizing<Vec<u8>>,
+    ) -> Result<DeviceKey> {
+        let selected = key(&bytes)?;
+        ensure!(
+            fingerprint(&selected)? == state.public_key_sha256,
+            "stored device public key identity changed"
+        );
+        if state.provider != SOFTWARE_PROVIDER && software_path.exists() {
+            let old = read_software(software_path)?;
+            ensure!(
+                fingerprint(&key(&old)?)? == state.public_key_sha256,
+                "software migration identity differs"
+            );
+            std::fs::remove_file(software_path)?;
+        }
+        eprintln!(
+            "[NOVA_DEVICE_IDENTITY] provider={} hardware_signing=false",
+            state.provider
+        );
+        Ok(selected)
+    }
+
+    // DeviceKey::open owns identity.lock while this whole transaction executes.
+    // A persisted provider is authoritative, including failures: a locked vault
+    // is never an instruction to generate a new identity or fall back locally.
+    pub(super) fn open_locked(directory: &Path, vault: &impl Vault) -> Result<DeviceKey> {
+        let marker = directory.join("device-provider");
+        // This legacy filename contains raw PKCS8 on Unix, never DPAPI bytes.
+        let software_path: PathBuf = directory.join("device-key.dpapi");
+        if marker.exists() {
+            ensure!(
+                std::fs::metadata(&marker)?.len() <= 4096,
+                "invalid device provider marker size"
+            );
+            let state: ProviderState = serde_json::from_slice(&std::fs::read(&marker)?)?;
+            ensure!(state.schema == 1, "invalid device provider marker version");
+            let bytes = if state.provider == SOFTWARE_PROVIDER {
+                read_software(&software_path)?
+            } else {
+                ensure!(
+                    state.provider == vault.provider(),
+                    "device provider differs from current platform"
+                );
+                match vault.get()? {
+                    Some(bytes) => bytes,
+                    None => {
+                        // Recover an interrupted first migration only from the
+                        // already persisted identical key. Missing means fail,
+                        // not generate/re-register a replacement identity.
+                        let bytes = read_software(&software_path)
+                            .context("selected system device key is missing")?;
+                        ensure!(
+                            fingerprint(&key(&bytes)?)? == state.public_key_sha256,
+                            "pending device key identity differs"
+                        );
+                        vault.set(&bytes)?;
+                        vault
+                            .get()?
+                            .context("system device key write was not retained")?
+                    }
+                }
+            };
+            return finish(&software_path, &state, bytes);
+        }
+
+        match vault.get() {
+            Ok(Some(bytes)) => {
+                let selected = key(&bytes)?;
+                if software_path.exists() {
+                    ensure!(
+                        fingerprint(&key(&read_software(&software_path)?)?)?
+                            == fingerprint(&selected)?,
+                        "existing software and system device identities differ"
+                    );
+                }
+                record(directory, vault.provider(), &selected)?;
+                let state = ProviderState {
+                    schema: 1,
+                    provider: vault.provider().into(),
+                    public_key_sha256: fingerprint(&selected)?,
+                };
+                finish(&software_path, &state, bytes)
+            }
+            Ok(None) => {
+                let bytes = software_bytes(&software_path)?;
+                let selected = key(&bytes)?;
+                // Mark the exact identity before writing. An interrupted write
+                // can retry the same PKCS8, never produce another device key.
+                record(directory, vault.provider(), &selected)?;
+                vault.set(&bytes)?;
+                let bytes = vault
+                    .get()?
+                    .context("system device key write was not retained")?;
+                let state = ProviderState {
+                    schema: 1,
+                    provider: vault.provider().into(),
+                    public_key_sha256: fingerprint(&selected)?,
+                };
+                finish(&software_path, &state, bytes)
+            }
+            Err(VaultError::Unavailable) => {
+                let bytes = software_bytes(&software_path)?;
+                let selected = key(&bytes)?;
+                record(directory, SOFTWARE_PROVIDER, &selected)?;
+                eprintln!(
+                    "[NOVA_DEVICE_IDENTITY] provider={SOFTWARE_PROVIDER} reason=system_vault_unavailable hardware_signing=false"
+                );
+                Ok(selected)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Default)]
+        struct State {
+            secret: Option<Vec<u8>>,
+            error: Option<VaultError>,
+            write_error: Option<VaultError>,
+            writes: usize,
+        }
+        #[derive(Default)]
+        struct MockVault(Mutex<State>);
+        impl Vault for MockVault {
+            fn provider(&self) -> &'static str {
+                "fixture-system-vault-v1"
+            }
+            fn get(&self) -> std::result::Result<Option<Zeroizing<Vec<u8>>>, VaultError> {
+                let state = self.0.lock().unwrap();
+                if let Some(error) = state.error {
+                    return Err(error);
+                }
+                Ok(state.secret.clone().map(Zeroizing::new))
+            }
+            fn set(&self, bytes: &[u8]) -> std::result::Result<(), VaultError> {
+                let mut state = self.0.lock().unwrap();
+                if let Some(error) = state.write_error.or(state.error) {
+                    return Err(error);
+                }
+                state.secret = Some(bytes.to_vec());
+                state.writes += 1;
+                Ok(())
+            }
+        }
+        fn open(directory: &Path, vault: &MockVault) -> Result<DeviceKey> {
+            crate::client::ensure_private_directory(directory)?;
+            let lock = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(directory.join("identity.lock"))?;
+            fs2::FileExt::lock_exclusive(&lock)?;
+            open_locked(directory, vault)
+        }
+        #[test]
+        fn unix_vault_migration_retains_legacy_public_key_and_removes_private_copy() {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("device-key.dpapi");
+            let legacy = software_bytes(&path).unwrap();
+            let public = key(&legacy).unwrap().public_key().unwrap();
+            let vault = MockVault::default();
+            assert_eq!(
+                open(directory.path(), &vault)
+                    .unwrap()
+                    .public_key()
+                    .unwrap(),
+                public
+            );
+            assert!(!path.exists());
+            assert_eq!(
+                open(directory.path(), &vault)
+                    .unwrap()
+                    .public_key()
+                    .unwrap(),
+                public
+            );
+            assert_eq!(vault.0.lock().unwrap().writes, 1);
+        }
+        #[test]
+        fn unix_selected_vault_lock_or_missing_entry_never_regenerates_identity() {
+            let directory = tempfile::tempdir().unwrap();
+            let vault = MockVault::default();
+            let public = open(directory.path(), &vault)
+                .unwrap()
+                .public_key()
+                .unwrap();
+            vault.0.lock().unwrap().error = Some(VaultError::Locked);
+            assert!(open(directory.path(), &vault).is_err());
+            {
+                let mut state = vault.0.lock().unwrap();
+                state.error = None;
+                state.secret = None;
+            }
+            assert!(open(directory.path(), &vault).is_err());
+            assert!(!directory.path().join("device-key.dpapi").exists());
+            assert_eq!(vault.0.lock().unwrap().writes, 1);
+            assert!(!public.is_empty());
+        }
+        #[test]
+        fn unix_without_vault_keeps_one_private_file_identity_when_vault_appears() {
+            let directory = tempfile::tempdir().unwrap();
+            let vault = MockVault::default();
+            vault.0.lock().unwrap().error = Some(VaultError::Unavailable);
+            let first = open(directory.path(), &vault).unwrap();
+            let public = first.public_key().unwrap();
+            vault.0.lock().unwrap().error = None;
+            let reopened = open(directory.path(), &vault).unwrap();
+            assert_eq!(reopened.public_key().unwrap(), public);
+            crate::crypto::verify_p256(
+                &public,
+                b"device possession",
+                &reopened.sign(b"device possession").unwrap(),
+            )
+            .unwrap();
+            assert_eq!(vault.0.lock().unwrap().writes, 0);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                assert_eq!(
+                    std::fs::metadata(directory.path().join("device-key.dpapi"))
+                        .unwrap()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
+            }
+        }
+        #[test]
+        fn unix_interrupted_vault_write_retries_the_same_staged_identity() {
+            let directory = tempfile::tempdir().unwrap();
+            let vault = MockVault::default();
+            vault.0.lock().unwrap().write_error = Some(VaultError::Locked);
+            assert!(open(directory.path(), &vault).is_err());
+            let legacy_path = directory.path().join("device-key.dpapi");
+            let public = key(&read_software(&legacy_path).unwrap())
+                .unwrap()
+                .public_key()
+                .unwrap();
+            vault.0.lock().unwrap().write_error = None;
+            assert_eq!(
+                open(directory.path(), &vault)
+                    .unwrap()
+                    .public_key()
+                    .unwrap(),
+                public
+            );
+            assert!(!legacy_path.exists());
+            assert_eq!(vault.0.lock().unwrap().writes, 1);
+        }
+        #[test]
+        fn unix_conflicting_system_and_legacy_identity_is_not_overwritten() {
+            let directory = tempfile::tempdir().unwrap();
+            let other = tempfile::tempdir().unwrap();
+            let path = directory.path().join("device-key.dpapi");
+            let old = software_bytes(&path).unwrap();
+            let different = software_bytes(&other.path().join("device-key.dpapi")).unwrap();
+            let vault = MockVault::default();
+            vault.0.lock().unwrap().secret = Some(different.to_vec());
+            assert!(open(directory.path(), &vault).is_err());
+            assert_eq!(&*read_software(&path).unwrap(), &*old);
+            assert_eq!(vault.0.lock().unwrap().writes, 0);
+            assert!(!directory.path().join("device-provider").exists());
+        }
+        #[test]
+        fn unix_multiple_instances_serialize_creation_to_one_identity() {
+            let directory = tempfile::tempdir().unwrap();
+            let vault = Arc::new(MockVault::default());
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    let path = directory.path().to_owned();
+                    let vault = Arc::clone(&vault);
+                    std::thread::spawn(move || {
+                        open(&path, vault.as_ref()).unwrap().public_key().unwrap()
+                    })
+                })
+                .collect();
+            let public_keys: Vec<_> = handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect();
+            assert!(public_keys.iter().all(|key| key == &public_keys[0]));
+            assert_eq!(vault.0.lock().unwrap().writes, 1);
         }
     }
 }

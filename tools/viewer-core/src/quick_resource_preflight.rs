@@ -22,41 +22,80 @@ pub struct QuickGpuBudget {
     pub safe_available_bytes: u64,
 }
 
-/// Query the exact DXGI adapter owned by the selected wgpu DX12 adapter (local node 0).
-/// The borrowed COM pointer never transfers the HAL's ownership; QueryInterface owns
-/// its extra reference until this query ends. Unsupported/zero budgets are errors.
+/// Query the DXGI budget for the exact selected GPU, never by model/name/capacity.
+/// Vulkan supplies its driver's valid LUID; DX12 retains its own adapter COM ref.
 #[cfg(windows)]
 pub fn query_selected_adapter_budget(adapter: &wgpu::Adapter) -> Result<QuickGpuBudget> {
     use windows::core::{ComInterface, IUnknown, Interface};
-    use windows::Win32::Graphics::Dxgi::{IDXGIAdapter3, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO};
-    // Do not re-enter wgpu while its HAL adapter callback holds the adapter lock.
-    let adapter_name = adapter.get_info().name;
-    // SAFETY: as_hal holds the selected adapter alive throughout the callback. We only
-    // query its IUnknown vtable and do not release/mutate the borrowed HAL pointer.
-    unsafe {
-        adapter.as_hal::<wgpu::hal::api::Dx12, _, _>(|selected| {
-            let selected = selected.context("快速模式的选定适配器不是可查询预算的 DX12 适配器")?;
-            let raw = selected.raw_adapter().as_mut_ptr().cast::<std::ffi::c_void>();
-            let borrowed = IUnknown::from_raw_borrowed(&raw).context("选定 DX12 适配器没有有效的 DXGI 接口")?;
-            let dxgi: IDXGIAdapter3 = borrowed.cast().context("选定 DX12 适配器不支持 IDXGIAdapter3 预算查询")?;
-            let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
-            dxgi.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info)
-                .context("选定 DX12 适配器的实时显存预算查询失败")?;
-            ensure!(info.Budget > 0, "驱动返回零显存预算，预算状态未知");
-            Ok(QuickGpuBudget {
-                adapter_name,
-                budget_bytes: info.Budget, current_usage_bytes: info.CurrentUsage,
-                available_for_reservation_bytes: info.AvailableForReservation,
-                current_reservation_bytes: info.CurrentReservation,
-                safe_available_bytes: info.Budget.saturating_sub(info.CurrentUsage),
-            })
-        })
-    }
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIAdapter3, DXGI_ADAPTER_DESC1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO};
+    // Collect wgpu metadata before entering any HAL callback (adapter lock).
+    let identity = adapter.get_info();
+    let dxgi: IDXGIAdapter3 = match identity.backend {
+        wgpu::Backend::Dx12 => unsafe {
+            adapter.as_hal::<wgpu::hal::api::Dx12, _, _>(|selected| -> Result<IDXGIAdapter3> {
+                let selected = selected.context("选定的 DX12 适配器不可用")?;
+                let raw = selected.raw_adapter().as_mut_ptr().cast::<std::ffi::c_void>();
+                let borrowed = IUnknown::from_raw_borrowed(&raw).context("选定 DX12 适配器没有 DXGI 接口")?;
+                Ok(borrowed.cast().context("选定 DX12 适配器不支持实时预算查询")?)
+            })?
+        },
+        wgpu::Backend::Vulkan => {
+            let luid = unsafe {
+                adapter.as_hal::<wgpu::hal::api::Vulkan, _, _>(|selected| {
+                    selected.and_then(|selected| selected.adapter_luid())
+                })
+            }.context("Vulkan 驱动未提供选定 GPU 的有效 LUID，实时显存预算未知")?;
+            let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.context("创建 DXGI 预算查询工厂失败")?;
+            let mut index = 0;
+            loop {
+                let candidate = unsafe { factory.EnumAdapters1(index) }
+                    .context("没有找到与选定 Vulkan GPU 的 LUID 一致的 DXGI 适配器")?;
+                let mut description = DXGI_ADAPTER_DESC1::default();
+                unsafe { candidate.GetDesc1(&mut description) }.context("查询 DXGI 适配器身份失败")?;
+                let actual = (u64::from(description.AdapterLuid.LowPart)
+                    | ((description.AdapterLuid.HighPart as u32 as u64) << 32)).to_le_bytes();
+                if actual == luid { break candidate.cast().context("选定 Vulkan GPU 不支持 DXGI 实时预算查询")?; }
+                index += 1;
+            }
+        }
+        _ => bail!("选定的图形后端未提供实时显存预算查询"),
+    };
+    let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+    unsafe { dxgi.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info) }
+        .context("选定 GPU 的实时显存预算查询失败")?;
+    ensure!(info.Budget > 0, "驱动返回零显存预算，预算状态未知");
+    Ok(QuickGpuBudget {
+        adapter_name: identity.name, budget_bytes: info.Budget, current_usage_bytes: info.CurrentUsage,
+        available_for_reservation_bytes: info.AvailableForReservation, current_reservation_bytes: info.CurrentReservation,
+        safe_available_bytes: info.Budget.saturating_sub(info.CurrentUsage),
+    })
 }
 
 #[cfg(not(windows))]
-pub fn query_selected_adapter_budget(_adapter: &wgpu::Adapter) -> Result<QuickGpuBudget> {
-    bail!("当前平台没有选定 DX12 适配器的 DXGI 实时预算，预算状态未知")
+pub fn query_selected_adapter_budget(adapter: &wgpu::Adapter) -> Result<QuickGpuBudget> {
+    let identity = adapter.get_info();
+    let measured = match identity.backend {
+        #[cfg(not(target_os = "macos"))]
+        wgpu::Backend::Vulkan => unsafe {
+            adapter.as_hal::<wgpu::hal::api::Vulkan, _, _>(|selected| {
+                selected.and_then(|selected| selected.local_memory_budget())
+            })
+        },
+        #[cfg(target_os = "macos")]
+        wgpu::Backend::Metal => unsafe {
+            adapter.as_hal::<wgpu::hal::api::Metal, _, _>(|selected| {
+                selected.and_then(|selected| selected.local_memory_budget())
+            })
+        },
+        _ => None,
+    };
+    let (budget_bytes, current_usage_bytes) = measured.context("选定 GPU 未提供有效实时预算，预算状态未知")?;
+    ensure!(budget_bytes > 0, "驱动返回零显存预算，预算状态未知");
+    Ok(QuickGpuBudget {
+        adapter_name: identity.name, budget_bytes, current_usage_bytes,
+        available_for_reservation_bytes: 0, current_reservation_bytes: 0,
+        safe_available_bytes: budget_bytes.saturating_sub(current_usage_bytes),
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +214,25 @@ mod tests {
         input.vertices_upper_bound=u64::MAX;assert!(estimate_quick_resources(&input).is_err());
         input.vertices_upper_bound=1;input.atlas_width=0;assert!(estimate_quick_resources(&input).is_err());
     }
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "actual selected DX12/Vulkan GPU budget component only; no window or presentation"]
+    fn selected_dx12_and_vulkan_budget_uses_their_exact_real_adapter() {
+        for (mask, expected) in [(wgpu::Backends::DX12, wgpu::Backend::Dx12), (wgpu::Backends::VULKAN, wgpu::Backend::Vulkan)] {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: mask, ..Default::default() });
+            let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: None, force_fallback_adapter: false,
+                power_preference: wgpu::PowerPreference::HighPerformance,
+            })).expect("the local hardware/driver must expose this API for this component test");
+            assert_eq!(adapter.get_info().backend, expected);
+            let budget = query_selected_adapter_budget(&adapter).unwrap();
+            assert!(budget.budget_bytes > 0);
+            assert_eq!(budget.safe_available_bytes, budget.budget_bytes.saturating_sub(budget.current_usage_bytes));
+            println!("[NOVA_GPU_BUDGET_COMPONENT] backend={expected:?} adapter={:?} budget_bytes={} usage_bytes={} window=false presented=false",
+                budget.adapter_name, budget.budget_bytes, budget.current_usage_bytes);
+        }
+    }
+
     #[test]
     fn real_budget_usage_not_vendor_capacity_drives_80_95_boundaries() {
         let mut budget=QuickGpuBudget{adapter_name:"fixture".into(),budget_bytes:1000,current_usage_bytes:200,available_for_reservation_bytes:0,current_reservation_bytes:0,safe_available_bytes:800};

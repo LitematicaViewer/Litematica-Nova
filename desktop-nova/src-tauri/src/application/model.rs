@@ -162,6 +162,8 @@ pub(crate) struct PresentationIntent {
     pub(crate) mode: PresentationMode,
     pub(crate) visible: bool,
     pub(crate) placement: Option<PresentationPlacement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) presentation_epoch: Option<u64>,
 }
 
 /// Observed presentation state reported by the Viewer after a successful

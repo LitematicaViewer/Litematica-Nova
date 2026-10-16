@@ -3,6 +3,8 @@
 mod application;
 mod headless_e2e;
 mod platform;
+#[cfg(target_os="macos")]
+mod native_macos;
 mod render_service_client;
 mod viewer_backend;
 mod viewer_compatibility;
@@ -214,6 +216,8 @@ struct UserConfig {
     v5_compatibility: V5CompatibilityConfig,
     #[serde(default)]
     viewer_controls: ViewerControlConfig,
+    #[serde(default)]
+    graphics_backend: ::viewer_launch_contract::GraphicsApiPreference,
 }
 
 #[derive(Deserialize)]
@@ -228,6 +232,7 @@ struct UserConfigInput {
     local_library_tail_path_count: Option<u32>,
     v5_compatibility: Option<V5CompatibilityConfigInput>,
     viewer_controls: Option<ViewerControlConfig>,
+    graphics_backend: Option<::viewer_launch_contract::GraphicsApiPreference>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -354,31 +359,35 @@ fn backend_exe_path(binary_name: &str) -> PathBuf {
         .join(binary_name)
 }
 
-fn required_backend_exe_path(binary_name: &str) -> Result<PathBuf, String> {
-    let binary_name = match binary_name {
-        "litematica_core.exe" => "litematica_core.exe",
-        "litematica_native_viewer.exe" => "litematica_native_viewer.exe",
-        "nova-build-worker.exe" => "nova-build-worker.exe",
-        "nova-render-service.exe" => "nova-render-service.exe",
-        _ => {
-            return Err(format!(
-                "不允许的后端可执行文件名 {binary_name:?}；仅允许 litematica_core.exe、litematica_native_viewer.exe、nova-build-worker.exe 或 nova-render-service.exe，且不得包含路径、别名或大小写变体。"
-            ));
-        }
+fn target_backend_file_name(binary_name: &str) -> Result<String, String> {
+    // Existing callers use logical Windows names. Resolve once at the platform
+    // boundary; never accept paths, aliases or arbitrary helper executables.
+    let stem = match binary_name {
+        "litematica_core.exe" => "litematica_core",
+        "litematica_native_viewer.exe" => "litematica_native_viewer",
+        "nova-build-worker.exe" => "nova-build-worker",
+        "nova-render-service.exe" => "nova-render-service",
+        _ => return Err(format!("不允许的后端可执行文件名 {binary_name:?}；不得包含路径、别名或大小写变体。")),
     };
-    let path = backend_exe_path(binary_name);
-    if path.is_file() {
-        return Ok(path);
-    }
-    Err(format!(
-        "缺少后端可执行文件：{}。请将 tools/viewer-core 构建出的 litematica_core.exe、litematica_native_viewer.exe、nova-build-worker.exe 和 nova-render-service.exe 一并部署到 bin/viewer-backend。",
-        path.display()
-    ))
+    Ok(format!("{stem}{}", std::env::consts::EXE_SUFFIX))
+}
+
+fn required_backend_exe_path(binary_name: &str) -> Result<PathBuf, String> {
+    let path = backend_exe_path(&target_backend_file_name(binary_name)?);
+    if path.is_file() { return Ok(path); }
+    Err(format!("缺少当前平台后端可执行文件：{}；请部署与本程序版本及架构匹配的 bin/viewer-backend。",path.display()))
 }
 
 #[cfg(test)]
 mod backend_executable_path_tests {
     use super::required_backend_exe_path;
+
+    #[test]
+    fn backend_file_suffix_matches_the_current_target() {
+        assert_eq!(super::target_backend_file_name("nova-build-worker.exe").unwrap(),
+            format!("nova-build-worker{}",std::env::consts::EXE_SUFFIX));
+        assert!(super::target_backend_file_name("/tmp/nova-build-worker").is_err());
+    }
 
     #[test]
     fn backend_binary_names_are_an_exact_allowlist() {
@@ -722,6 +731,7 @@ fn default_user_config() -> UserConfig {
         local_library_tail_path_count: default_local_library_tail_path_count(),
         v5_compatibility: V5CompatibilityConfig::default(),
         viewer_controls: ViewerControlConfig::default(),
+        graphics_backend: Default::default(),
     }
 }
 
@@ -736,6 +746,22 @@ fn default_statistics_enumerator_info_rules() -> Vec<String> {
 #[cfg(test)]
 mod viewer_control_config_tests {
     use super::{UserConfig, ViewerControlConfig};
+
+    #[test]
+    fn graphics_backend_defaults_persists_and_does_not_disguise_exact_modes() {
+        use ::viewer_launch_contract::GraphicsApiPreference as Api;
+        let old = serde_json::json!({"theme":"shadcn","render_display_mode":"full","preview_mode":"full"});
+        assert_eq!(serde_json::from_value::<UserConfig>(old.clone()).unwrap().graphics_backend, Api::Auto);
+        for backend in [Api::Auto, Api::Dx12, Api::Vulkan] {
+            let mut value = old.clone();
+            value["graphics_backend"] = serde_json::to_value(backend).unwrap();
+            let saved: UserConfig = serde_json::from_value(value).unwrap();
+            assert_eq!(serde_json::from_slice::<UserConfig>(&serde_json::to_vec(&saved).unwrap()).unwrap().graphics_backend, backend);
+            assert_eq!(super::validate_exact_graphics_preference(backend).is_ok(), backend != Api::Dx12);
+        }
+        let mut bad = old; bad["graphics_backend"] = "opengl".into();
+        assert!(serde_json::from_value::<UserConfig>(bad).is_err());
+    }
 
     #[test]
     fn statistics_rules_survive_native_config_save_and_reload() {
@@ -1244,8 +1270,8 @@ async fn generate_preview_image(
 
     let host = host.inner().clone();
     let operations = operations.inner().clone();
-    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
-    let parent = ::viewer_launch_contract::QuickPreviewHostWindow { hwnd: hwnd.to_string(), process_id: std::process::id() };
+    let parent = platform::native_preview_host::host_window(&window);
+    let graphics_backend = read_user_config_data(&current_user_config_dir()?).graphics_backend;
     return tauri::async_runtime::spawn_blocking(move || {
         let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
         let cache = application::thumbnails::cache_path(&source)?;
@@ -1266,7 +1292,7 @@ async fn generate_preview_image(
         // Reuse QuickPreviewHost for an independent hidden WS_CHILD session; an
         // existing interactive Viewer and its camera/GPU lifetime stay untouched.
         let temporary = host.thumbnail_session();
-        let view = temporary.start(StartQuickPreviewInput { source_path: source.clone(), preload: false, click_started_at_epoch_ms: None }, parent)?;
+        let view = temporary.start(StartQuickPreviewInput { source_path: source.clone(), preload: false, click_started_at_epoch_ms: None, graphics_backend }, parent?)?;
         let output = (|| {
             let started = std::time::Instant::now();
             loop {
@@ -1357,6 +1383,7 @@ fn save_user_config_inner(input: UserConfigInput) -> Result<UserConfigInfo, Stri
     let _serial = CONFIG_WRITE_LOCK.lock().map_err(|_| "配置保存锁异常")?;
     let dir = current_user_config_dir()?;
     let mut config = read_user_config_data(&dir);
+    if let Some(backend) = input.graphics_backend { config.graphics_backend = backend; }
     if let Some(theme) = input.theme {
         config.theme = normalize_theme(&theme);
     }
@@ -1875,7 +1902,9 @@ fn local_path_open_command(path: &Path) -> Result<Command, String> {
     if !path.exists() { return Err("文件或文件夹不存在，请刷新后重试".into()); }
     #[cfg(windows)]
     let mut command = Command::new("explorer");
-    #[cfg(not(windows))]
+    #[cfg(target_os="macos")]
+    let mut command = Command::new("open");
+    #[cfg(not(any(windows,target_os="macos")))]
     let mut command = Command::new("xdg-open");
     let raw = path.to_string_lossy();
     let display = if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") { format!(r"\\{unc}") }
@@ -2745,6 +2774,13 @@ mod full_launch_plan_tests {
     }
 }
 
+fn validate_exact_graphics_preference(backend: ::viewer_launch_contract::GraphicsApiPreference) -> Result<(), String> {
+    if backend == ::viewer_launch_contract::GraphicsApiPreference::Dx12 {
+        return Err("标准和完整模式当前使用 Vulkan；DX12 仅适用于快速模式。请选择自动或 Vulkan 后重试。".into());
+    }
+    Ok(())
+}
+
 fn application_render_request(
     input: RenderServiceStartBuildInput,
 ) -> Result<(UserVisibleRenderRequest, RenderEnvironmentInputs), String> {
@@ -2758,7 +2794,11 @@ fn application_render_request(
     if !matches!(input.display_mode, RenderDisplayMode::Full | RenderDisplayMode::Standard) {
         return Err("精确渲染入口只接受 full 或 standard；快速模式保持独立启动链".to_owned());
     }
+    validate_exact_graphics_preference(config.graphics_backend)?;
     let mut compatibility = config.v5_compatibility.clone();
+    if config.graphics_backend == ::viewer_launch_contract::GraphicsApiPreference::Vulkan {
+        compatibility.backend = "vulkan".into();
+    }
     let unlit = input.display_mode == RenderDisplayMode::Standard;
     if unlit {
         compatibility.backend = "vulkan".to_owned();
@@ -2830,7 +2870,7 @@ fn application_render_request(
                 mode: PresentationMode::Hidden,
                 visible: false,
                 placement: None,
-            },
+             presentation_epoch: None },
         },
         RenderEnvironmentInputs { asset_inputs },
     ))
@@ -2838,44 +2878,78 @@ fn application_render_request(
 
 #[tauri::command]
 async fn application_quick_preview_resource_decision(
+    window: tauri::WebviewWindow,
     preview_id: String,
     action: application::quick_preview::QuickResourceAction,
     warning_confirmed: bool,
     host: tauri::State<'_, QuickPreviewHost>,
 ) -> Result<QuickPreviewView, String> {
+    #[cfg(target_os="macos")]
+    let native_owner = platform::native_preview_host::begin_current_owner(&window, &preview_id)?;
     let host = host.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || host.resource_decision(&preview_id, action, warning_confirmed)).await.map_err(|error| error.to_string())?
+    let deciding = host.clone();
+    let view = tauri::async_runtime::spawn_blocking(move || deciding.resource_decision(&preview_id, action, warning_confirmed)).await.map_err(|error| error.to_string())??;
+    #[cfg(target_os="macos")]
+    if platform::native_preview_host::complete_owner(native_owner, view.preview_id.clone()) {
+        let id = view.preview_id.clone();
+        let view = tauri::async_runtime::spawn_blocking(move || host.renew_native_presentation(&id)).await.map_err(|error| error.to_string())??;
+        sync_native_quick_presentation(&window, &view)?;
+        return Ok(view);
+    }
+    #[cfg(not(target_os="macos"))] let _ = window;
+    Ok(view)
 }
 
 #[tauri::command]
-async fn application_quick_preview_start(window: tauri::WebviewWindow, input: StartQuickPreviewInput, host: tauri::State<'_, QuickPreviewHost>) -> Result<QuickPreviewView, String> {
-    if window.label() != "main" { return Err("快速预览只属于主窗口。".into()); }
-    #[cfg(windows)]
-    let host_window = ::viewer_launch_contract::QuickPreviewHostWindow {
-        hwnd: (window.hwnd().map_err(|error| error.to_string())?.0 as isize).to_string(),
-        process_id: std::process::id(),
-    };
-    #[cfg(not(windows))]
-    return Err("原生页内预览当前以 Windows 为目标。".into());
+async fn application_quick_preview_start(window: tauri::WebviewWindow, mut input: StartQuickPreviewInput, host: tauri::State<'_, QuickPreviewHost>) -> Result<QuickPreviewView, String> {
+    if window.label() != "main" { return Err("原生预览只允许主窗口启动".into()); }
+    let host_window = platform::native_preview_host::host_window(&window)?;
+    input.graphics_backend = read_user_config_data(&current_user_config_dir()?).graphics_backend;
+    #[cfg(target_os="macos")]
+    let native_owner = platform::native_preview_host::begin_owner(&window)?;
     let host = host.inner().clone();
-    #[cfg(windows)]
-    return tauri::async_runtime::spawn_blocking(move || host.start(input, host_window)).await.map_err(|error| error.to_string())?;
+    let starting_host = host.clone();
+    let view = tauri::async_runtime::spawn_blocking(move || starting_host.start(input, host_window)).await.map_err(|error| error.to_string())??;
+    #[cfg(target_os="macos")]
+    if platform::native_preview_host::complete_owner(native_owner, view.preview_id.clone()) {
+        let id = view.preview_id.clone();
+        let view = tauri::async_runtime::spawn_blocking(move || host.renew_native_presentation(&id)).await.map_err(|error| error.to_string())??;
+        sync_native_quick_presentation(&window, &view)?;
+        return Ok(view);
+    }
+    Ok(view)
 }
 
 #[tauri::command]
-async fn application_quick_preview_snapshot(host: tauri::State<'_, QuickPreviewHost>) -> Result<Option<QuickPreviewView>, String> {
+async fn application_quick_preview_snapshot(window: tauri::WebviewWindow, host: tauri::State<'_, QuickPreviewHost>) -> Result<Option<QuickPreviewView>, String> {
     let host = host.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || host.snapshot()).await.map_err(|error| error.to_string())?
+    let view = tauri::async_runtime::spawn_blocking(move || host.snapshot()).await.map_err(|error| error.to_string())??;
+    #[cfg(target_os="macos")]
+    if let Some(view) = &view { sync_native_quick_presentation(&window, view)?; }
+    #[cfg(not(target_os="macos"))] let _ = window;
+    Ok(view)
 }
 
 #[tauri::command]
-async fn application_quick_preview_present(preview_id: String, intent: QuickPresentationIntent, revision: u64, host: tauri::State<'_, QuickPreviewHost>) -> Result<QuickPreviewView, String> {
+async fn application_quick_preview_present(window: tauri::WebviewWindow, preview_id: String, intent: QuickPresentationIntent, revision: u64, host: tauri::State<'_, QuickPreviewHost>) -> Result<QuickPreviewView, String> {
     let host = host.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || host.present(&preview_id, intent, revision)).await.map_err(|error| error.to_string())?
+    let view = tauri::async_runtime::spawn_blocking(move || host.present(&preview_id, intent, revision)).await.map_err(|error| error.to_string())??;
+    #[cfg(target_os="macos")] sync_native_quick_presentation(&window, &view)?;
+    #[cfg(not(target_os="macos"))] let _ = window;
+    Ok(view)
+}
+
+#[cfg(target_os="macos")]
+fn sync_native_quick_presentation(window: &tauri::WebviewWindow, view: &QuickPreviewView) -> Result<(),String> {
+    platform::native_preview_host::apply(window, view.preview_id.clone(), view.presentation.placement,
+        view.presentation.presentation_epoch, view.visible && view.state == "ready",
+        platform::native_preview_host::NativePresentationMode::Embedded)
 }
 
 #[tauri::command]
-async fn application_quick_preview_close(preview_id: String, host: tauri::State<'_, QuickPreviewHost>) -> Result<(), String> {
+async fn application_quick_preview_close(window: tauri::WebviewWindow, preview_id: String, host: tauri::State<'_, QuickPreviewHost>) -> Result<(), String> {
+    #[cfg(target_os="macos")] { let _ = platform::native_preview_host::hide_owner(&window, &preview_id); }
+    #[cfg(not(target_os="macos"))] let _ = window;
     let host = host.inner().clone();
     tauri::async_runtime::spawn_blocking(move || host.close(&preview_id)).await.map_err(|error| error.to_string())?
 }
@@ -2912,6 +2986,8 @@ async fn application_render_start(
     app: AppHandle,
     facade: tauri::State<'_, RenderFacade>,
 ) -> Result<application::model::RenderOperationView, String> {
+    #[cfg(target_os="macos")]
+    let native_owner = platform::native_preview_host::begin_owner(&app.get_webview_window("main").ok_or("主窗口尚未创建")?)?;
     let click_started_at_epoch_ms = input.click_started_at_epoch_ms;
     let authorization = RenderStartAuthorization {
         click_started_at_epoch_ms,
@@ -2938,6 +3014,8 @@ async fn application_render_start(
             }
             if let Some(id) = input.realtime_decision_id {
                 let operation = facade.start_realtime_from_preflight_with_click(&id, ProjectSource { path: input.source_path }, click_started_at_epoch_ms).await?.operation;
+                #[cfg(target_os="macos")]
+                platform::native_preview_host::complete_owner(native_owner, operation.operation_id.0.clone());
                 emit_application_render_snapshot(&app, &facade)?;
                 return Ok(operation);
             }
@@ -2949,6 +3027,8 @@ async fn application_render_start(
         }
     }
     .map(|result| result.operation)?;
+    #[cfg(target_os="macos")]
+    platform::native_preview_host::complete_owner(native_owner, operation.operation_id.0.clone());
     emit_application_render_snapshot(&app, &facade)?;
     Ok(operation)
 }
@@ -2967,6 +3047,8 @@ async fn application_render_cancel(
     app: AppHandle,
     facade: tauri::State<'_, RenderFacade>,
 ) -> Result<(), String> {
+    #[cfg(target_os="macos")]
+    if let Some(window) = app.get_webview_window("main") { let _ = platform::native_preview_host::hide_owner(&window, &operation_id.0); }
     facade.cancel_render(&operation_id).await?;
     emit_application_render_snapshot(&app, &facade)
 }
@@ -2974,10 +3056,25 @@ async fn application_render_cancel(
 #[tauri::command]
 async fn application_render_update_presentation(
     operation_id: OperationId,
-    intent: PresentationIntent,
+    mut intent: PresentationIntent,
     app: AppHandle,
     facade: tauri::State<'_, RenderFacade>,
 ) -> Result<application::model::RenderOperationView, String> {
+    #[cfg(target_os="macos")]
+    {
+        match platform::native_preview_host::advance_owner(&operation_id.0) {
+            Ok(epoch) => {
+                intent.presentation_epoch = Some(epoch);
+                let window = app.get_webview_window("main").ok_or("主窗口尚未创建")?;
+                platform::native_preview_host::apply(&window, operation_id.0.clone(), intent.placement, Some(epoch), intent.visible,
+                    if intent.mode == application::model::PresentationMode::Popup {
+                        platform::native_preview_host::NativePresentationMode::Popup
+                    } else { platform::native_preview_host::NativePresentationMode::Embedded })?;
+            }
+            Err(error) if intent.visible => return Err(error),
+            Err(_) => { intent.presentation_epoch = None; }
+        }
+    }
     let operation = facade.update_presentation(&operation_id, intent).await?;
     emit_application_render_snapshot(&app, &facade)?;
     Ok(operation)
@@ -3016,9 +3113,6 @@ fn initialize_application_host(
     render_service: &RenderServiceClient,
 ) -> Result<ApplicationHostComponents, String> {
     let started = std::time::Instant::now();
-    if !cfg!(windows) {
-        return Err("桌面 Application Host 与原生预览当前仅支持 Windows；macOS/Linux 尚未提供。".into());
-    }
     let service_exe = required_backend_exe_path("nova-render-service.exe")?;
     let worker_exe = required_backend_exe_path("nova-build-worker.exe")?;
     let viewer_exe = required_backend_exe_path("litematica_native_viewer.exe")?;
@@ -3080,23 +3174,35 @@ fn main() {
     {
         std::process::exit(headless_e2e::run(&args));
     }
+    let application_context = tauri::generate_context!();
+    #[cfg(target_os = "linux")]
+    if let Some(status) = shell_integration::dispatch_before_gui(&args, application_context.package_info()) {
+        std::process::exit(status);
+    }
+    if let Err(error) = platform::native_preview_host::configure_process_graphics() {
+        eprintln!("[NOVA_NATIVE_HOST] initialization_failed error={error}");
+        std::process::exit(1);
+    }
     let render_service = RenderServiceClient::default();
     let render_facade = RenderFacade::new(render_service.clone());
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(ApplicationCloseGate::default())
         .manage(render_service)
         .manage(render_facade)
-        .manage(shell_integration::OpenFiles::default())
-        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+        .manage(shell_integration::OpenFiles::default());
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             shell_integration::queue_open_files(app, args.iter().skip(1).map(String::as_str), Path::new(&cwd));
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize(); let _ = window.show(); let _ = window.set_focus();
             }
-        }))
-        .setup(|app| {
+        }));
+    builder.setup(|app| {
             shell_integration::queue_open_files(app.handle(), env::args().skip(1).collect::<Vec<_>>().iter().map(String::as_str), &env::current_dir()?);
             let resource_root = app.path().resource_dir()?;
             let app_local_data_root = product_local_data_root(&app.path().local_data_dir()?);
+            #[cfg(target_os = "linux")]
+            shell_integration::initialize_linux(app.package_info().clone(), app_local_data_root.clone());
             let _ = APP_RESOURCE_ROOT.set(resource_root);
             let _ = APP_LOCAL_DATA_ROOT.set(app_local_data_root.clone());
             std::env::set_var("NOVA_USER_DATA_ROOT", &app_local_data_root);
@@ -3120,15 +3226,15 @@ fn main() {
             let main_window = app.get_webview_window("main")
                 .ok_or_else(|| std::io::Error::other("主窗口尚未创建"))?;
             let quick = app.state::<QuickPreviewHost>().inner().clone();
-            let quick_window = ::viewer_launch_contract::QuickPreviewHostWindow {
-                hwnd: (main_window.hwnd()?.0 as isize).to_string(), process_id: std::process::id(),
-            };
+            let quick_window = platform::native_preview_host::host_window(&main_window)
+                .map_err(std::io::Error::other)?;
+            app.state::<RenderServiceClient>().set_native_host(&quick_window).map_err(std::io::Error::other)?;
+            let graphics_backend = read_user_config_data(&current_user_config_dir().map_err(std::io::Error::other)?).graphics_backend;
             tauri::async_runtime::spawn_blocking(move || {
-                if let Err(error) = quick.prepare_gpu_context(quick_window) {
+                if let Err(error) = quick.prepare_gpu_context(quick_window, graphics_backend) {
                     eprintln!("[NOVA_GPU_INITIALIZATION] stage=ordinary_startup_not_ready error={error} projection_reads=0 scene_mesh_builds=0");
                 }
             });
-            app.state::<RenderServiceClient>().set_native_parent(main_window.hwnd()?.0 as isize);
             app.state::<RenderServiceClient>()
                 .launch_in_background(host.supervisor, host.service_exe, app_local_data_root);
             Ok(())
@@ -3137,6 +3243,18 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
+            #[cfg(target_os="macos")]
+            if window.label() == "main" {
+                // Occlusion/minimization uses native AppKit notifications in
+                // MacNativeView; the locked Tauri WindowEvent has no Occluded.
+                if matches!(event, tauri::WindowEvent::CloseRequested { .. })
+                    || matches!(event, tauri::WindowEvent::Resized(size) if size.width == 0 || size.height == 0) {
+                    if let Some(host) = window.app_handle().get_webview_window("main") {
+                        let _ = platform::native_preview_host::suspend_current(&host);
+                    }
+                }
+                if matches!(event, tauri::WindowEvent::Destroyed) { platform::native_preview_host::dispose_current(); }
+            }
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     if window.try_state::<UpdateHost>().is_some_and(|host| !host.prepare_for_close(window.app_handle())) {
@@ -3322,6 +3440,25 @@ fn main() {
             open_local_library_folders_window,
             open_ui_demo_window
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(application_context)
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = event {
+                // Finder open requests use the same queued workflow as startup
+                // arguments; the UI still owns draft/unsaved-content decisions.
+                let files = urls.iter().filter(|url| url.scheme() == "file"
+                    && url.host_str().is_none_or(|host| host == "localhost"))
+                    .filter_map(|url| url.to_file_path().ok())
+                    .map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>();
+                shell_integration::queue_open_files(app, files.iter().map(String::as_str), Path::new("/"));
+                if !files.is_empty() {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.unminimize(); let _ = window.show(); let _ = window.set_focus();
+                    }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
