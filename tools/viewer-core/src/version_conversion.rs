@@ -328,6 +328,7 @@ pub fn convert(
         bail!("投影缺少 Regions")
     };
     for (region_name, region) in regions {
+        crate::version_payload_migration::migrate_head_palette(region, source_data_version, target.data_version)?;
         crate::version_payload_migration::migrate_banner_palette(region, source_data_version, target.data_version)?;
         let Value::Compound(fields) = region else {
             bail!("选区不是 Compound")

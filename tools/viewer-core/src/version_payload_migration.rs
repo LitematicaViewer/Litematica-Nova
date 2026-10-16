@@ -15,6 +15,18 @@ use crate::version_conversion::target_has_item;
 #[path = "version_item_components.rs"]
 mod additional_items;
 
+#[path = "version_trial_vault.rs"]
+mod trial_vault;
+
+// Same character contract as the existing MinecraftIdentifier, kept in the
+// ordinary NBT layer so file conversion does not depend on a renderer crate.
+fn valid_resource_identifier(value: &str) -> bool {
+    let (namespace, path) = value.split_once(':').unwrap_or(("minecraft", value));
+    namespace != ".."
+        && namespace.bytes().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || b"_.-".contains(&ch))
+        && path.bytes().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || b"_.-/".contains(&ch))
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct PayloadMigrationReport {
     pub changes: Vec<String>,
@@ -385,7 +397,7 @@ fn migrate_container(
                 let Some(Value::String(id)) = fields.get(&key) else {
                     unreachable!()
                 };
-                if target < 169 || id.parse::<render_ir::MinecraftIdentifier>().is_err() {
+                if target < 169 || !valid_resource_identifier(id) {
                     report
                         .issues
                         .push(format!("{path}/LootTable：目标不支持该有效资源标识"));
@@ -830,6 +842,137 @@ pub(crate) fn legacy_banner_name(name: &str) -> Option<&'static str> {
         if name == format!("minecraft:{color}_wall_banner") { return Some("minecraft:white_wall_banner"); }
     }
     None
+}
+
+// Exact ChunkPalettedStorageFix.MappingConstants.SKULL_MAP, not suffix guesses.
+const HEAD_VARIANTS: &[(&str, &str)] = &[
+    ("minecraft:skeleton_skull", "minecraft:skeleton_wall_skull"),
+    ("minecraft:wither_skeleton_skull", "minecraft:wither_skeleton_wall_skull"),
+    ("minecraft:zombie_head", "minecraft:zombie_wall_head"),
+    ("minecraft:player_head", "minecraft:player_wall_head"),
+    ("minecraft:creeper_head", "minecraft:creeper_wall_head"),
+    ("minecraft:dragon_head", "minecraft:dragon_wall_head"),
+];
+
+fn head_variant(name: &str) -> Option<(usize, bool)> {
+    HEAD_VARIANTS.iter().enumerate().find_map(|(kind, (floor, wall))| {
+        if name == *floor { Some((kind, false)) }
+        else if name == *wall { Some((kind, true)) } else { None }
+    })
+}
+
+fn head_palette_block(registry: &crate::block_database::Registry, name: &str, wall: bool, pose: &str) -> Result<Value> {
+    let definition = registry.blocks.get(name).with_context(|| format!("目标版本没有真实头颅种类 {name}，原数据保留"))?;
+    let (_, mut properties) = crate::version_conversion::parse_key(&definition.default)?;
+    properties.insert(if wall { "facing" } else { "rotation" }.into(), pose.into());
+    let state = format!("{name}[{}]", properties.iter().map(|(key, value)| format!("{key}={value}")).collect::<Vec<_>>().join(","));
+    if !definition.accepts(&state, &properties) { bail!("目标版本不能等价表示头颅状态 {state}，原数据保留") }
+    Ok(Value::Compound([
+        ("Name".into(), Value::String(name.into())),
+        ("Properties".into(), Value::Compound(properties.into_iter().map(|(key, value)| (key, Value::String(value))).collect())),
+    ].into()))
+}
+
+/// Old numeric block144 stores mounting in Blocks/Data, but species and floor
+/// yaw live in each Skull block entity. Split shared indices before generic
+/// registry conversion; inverse writes the same per-position metadata back.
+pub(crate) fn migrate_head_palette(region: &mut Value, source: i32, target: i32) -> Result<()> {
+    use crate::nbt::{BigEndianLongArray, Vec3i, bits_for_palette, for_each_palette_index, pack_palette_indices, region_volume};
+    if (source < 1519) == (target < 1519) { return Ok(()) }
+    let fields = object(region)?;
+    let Some(Value::List(original_palette)) = fields.get("BlockStatePalette") else { return Ok(()) };
+    let is_head = |value: &Value| matches!(value, Value::Compound(block) if matches!(block.get("Name"), Some(Value::String(name)) if name == "minecraft:skull" || head_variant(name).is_some() || name == "minecraft:piglin_head" || name == "minecraft:piglin_wall_head"));
+    if !original_palette.iter().any(is_head) { return Ok(()) }
+    let int = |value: Option<&Value>| -> Result<i32> { match value {
+        Some(Value::Byte(value)) => Ok(i32::from(*value)), Some(Value::Short(value)) => Ok(i32::from(*value)),
+        Some(Value::Int(value)) => Ok(*value), _ => bail!("头颅坐标/编号/旋转不是有效整数"),
+    }};
+    let Some(Value::Compound(size)) = fields.get("Size") else { bail!("头颅迁移缺少选区Size") };
+    let size = Vec3i { x: int(size.get("x"))?, y: int(size.get("y"))?, z: int(size.get("z"))? };
+    let (width, height, length) = (size.x.unsigned_abs() as usize, size.y.unsigned_abs() as usize, size.z.unsigned_abs() as usize);
+    let volume = region_volume(&size)?;
+    let Some(Value::LongArray(packed)) = fields.get("BlockStates") else { bail!("头颅迁移缺少方块索引") };
+    let mut indices = Vec::with_capacity(volume);
+    for_each_palette_index(&BigEndianLongArray::new(packed.iter().copied().collect()), volume, bits_for_palette(original_palette.len()), original_palette.len(), |_, index| { indices.push(index); Ok(()) })?;
+    let mut palette = original_palette.clone();
+    let mut tiles = match fields.get("TileEntities") { Some(Value::List(tiles)) => tiles.clone(), None => Vec::new(), _ => bail!("头颅TileEntities不是List") };
+    let registry = crate::block_database::database()?.registry_by_data_version(target)?;
+    let original_tile_count = tiles.len();
+    let mut consumed = HashSet::new();
+    let mut first_use = HashSet::new();
+    for (position, index) in indices.iter_mut().enumerate() {
+        let original_index = *index;
+        if !is_head(&original_palette[original_index]) { continue }
+        let Value::Compound(block) = &original_palette[original_index] else { unreachable!() };
+        let Some(Value::String(name)) = block.get("Name") else { unreachable!() };
+        let empty_properties = Fields::new();
+        let properties = match block.get("Properties") { Some(Value::Compound(properties)) => properties, None => &empty_properties, _ => bail!("头颅状态属性不是Compound") };
+        let x = (position % width) as i32;
+        let z = (position / width % length) as i32;
+        let y = (position / (width * length)) as i32;
+        let matches = tiles.iter().enumerate().filter_map(|(i, tile)| match tile {
+            Value::Compound(tile) if tile.get("x") == Some(&Value::Int(x)) && tile.get("y") == Some(&Value::Int(y)) && tile.get("z") == Some(&Value::Int(z)) => Some(i), _ => None,
+        }).collect::<Vec<_>>();
+        if matches.len() > 1 { bail!("头颅位置({x},{y},{z})有重复方块实体，拒绝覆盖") }
+        let tile_index = if let Some(index) = matches.first() { *index }
+        else if source < 1519 { bail!("旧头颅位置({x},{y},{z})缺少SkullType/Rot方块实体，不能猜测种类") }
+        else { tiles.push(Value::Compound([("id".into(), Value::String("minecraft:skull".into())), ("x".into(), Value::Int(x)), ("y".into(), Value::Int(y)), ("z".into(), Value::Int(z))].into())); tiles.len() - 1 };
+        consumed.insert(tile_index);
+        let tile = object(&mut tiles[tile_index])?;
+        if !matches!(tile.get("id"), Some(Value::String(id)) if id == "Skull" || id == "minecraft:skull") { bail!("头颅位置({x},{y},{z})存在其他方块实体，拒绝覆盖") }
+        let (kind, wall, pose) = if source < 1519 {
+            let kind = tile.get("SkullType").map(|value| int(Some(value))).transpose()?.unwrap_or(0);
+            if !(0..=5).contains(&kind) { bail!("旧头颅SkullType={kind}不在原版0..5注册表，原数据保留") }
+            let facing = properties.get("facing").and_then(|value| if let Value::String(value) = value { Some(value.as_str()) } else { None });
+            let wall = head_variant(name).is_some_and(|(_, wall)| wall) || matches!(facing, Some("north" | "east" | "south" | "west"));
+            let pose = if wall {
+                facing.filter(|value| ["north", "east", "south", "west"].contains(value)).context("墙头颅缺少真实水平facing")?.to_owned()
+            } else {
+                if name == "minecraft:skull" && !matches!(facing, Some("up" | "down")) { bail!("旧头颅缺少有效安装方向") }
+                let rotation = tile.get("Rot").map(|value| int(Some(value))).transpose()?.unwrap_or(0);
+                if !(0..=15).contains(&rotation) { bail!("旧头颅Rot={rotation}超出16向旋转范围") }
+                rotation.to_string()
+            };
+            tile.remove("SkullType"); tile.remove("Rot");
+            (kind as usize, wall, pose)
+        } else {
+            let (kind, wall) = head_variant(name).with_context(|| format!("目标旧版SkullType 0..5没有头颅种类 {name}，原数据保留"))?;
+            let (floor_name, _) = HEAD_VARIANTS[kind];
+            // Dragon heads first exist in release 1.9 (DataVersion 169).
+            if (kind == 5 && target < 169) || !registry.legacy_items.values().any(|item| item == floor_name) { bail!("目标旧版没有真实头颅种类 {floor_name}，不能伪装为骷髅头") }
+            let rotation = if wall { 0 } else {
+                let Some(Value::String(rotation)) = properties.get("rotation") else { bail!("站立头颅缺少rotation") };
+                let rotation: i32 = rotation.parse().context("头颅rotation不是整数")?;
+                if !(0..=15).contains(&rotation) { bail!("头颅rotation超出16向范围") }
+                rotation
+            };
+            tile.insert("SkullType".into(), Value::Byte(kind as i8)); tile.insert("Rot".into(), Value::Byte(rotation as i8));
+            let pose = if wall { let Some(Value::String(facing)) = properties.get("facing") else { bail!("墙头颅缺少facing") }; facing.clone() } else { "4".into() };
+            // The exact old registry carrier rotation=4 is numeric144:1 (up).
+            // Actual yaw remains Rot, not the carrier's synthetic rotation.
+            (0, wall, pose)
+        };
+        let (floor, wall_name) = HEAD_VARIANTS[kind];
+        let converted = head_palette_block(registry, if wall { wall_name } else { floor }, wall, &pose)?;
+        if first_use.insert(original_index) { palette[original_index] = converted.clone(); *index = original_index; }
+        else { *index = palette.iter().position(|entry| entry == &converted).unwrap_or_else(|| { palette.push(converted); palette.len() - 1 }); }
+    }
+    for (index, tile) in tiles.iter().take(original_tile_count).enumerate() {
+        if matches!(tile, Value::Compound(tile) if matches!(tile.get("id"), Some(Value::String(id)) if id == "Skull" || id == "minecraft:skull")) && !consumed.contains(&index) { bail!("头颅方块实体[{index}]坐标越界或与实际调色板不匹配（选区{width}×{height}×{length}）") }
+    }
+    // Unreferenced legacy head carriers cannot be fed to a modern registry (or
+    // unused modern species to a numeric registry). Remove only unused heads.
+    let used = indices.iter().copied().collect::<HashSet<_>>();
+    let mut remap = vec![0; palette.len()]; let mut compact = Vec::new();
+    for (index, block) in palette.into_iter().enumerate() {
+        if used.contains(&index) || !is_head(&block) { remap[index] = compact.len(); compact.push(block); }
+    }
+    for index in &mut indices { *index = remap[*index]; }
+    let packed = pack_palette_indices(&indices, bits_for_palette(compact.len()));
+    fields.insert("BlockStatePalette".into(), Value::List(compact));
+    fields.insert("BlockStates".into(), Value::LongArray(fastnbt::LongArray::new((0..packed.len()).map(|i| packed.i64_at(i)).collect())));
+    fields.insert("TileEntities".into(), Value::List(tiles));
+    Ok(())
 }
 
 /// The pre-flattening banner colour belongs to each block entity, not its
@@ -1451,6 +1594,9 @@ fn migrate_decorative(
     target: i32,
     report: &mut PayloadMigrationReport,
 ) -> Result<()> {
+    if matches!(id, "minecraft:trial_spawner" | "minecraft:vault") {
+        return trial_vault::migrate(fields, id, source, target, report);
+    }
     let extra: &[&str] = match id {
         "minecraft:banner" => &["patterns", "Patterns", "Base"],
         "minecraft:sign" | "minecraft:hanging_sign" => {
@@ -1468,7 +1614,7 @@ fn migrate_decorative(
         "minecraft:campfire" => &["Items", "CookingTimes", "CookingTotalTimes"],
         "minecraft:lectern" => &["Book", "Page"],
         "minecraft:beacon" => &["Levels", "primary_effect", "secondary_effect", "Primary", "Secondary"],
-        "minecraft:skull" => &["profile", "SkullOwner", "ExtraType", "note_block_sound", "custom_name"],
+        "minecraft:skull" => &["profile", "SkullOwner", "ExtraType", "note_block_sound", "custom_name", "SkullType", "Rot"],
         "minecraft:chiseled_bookshelf" => &["Items", "last_interacted_slot"],
         "minecraft:daylight_detector" | "minecraft:bell" => &[],
         "minecraft:bed" => &["color"],
@@ -1503,6 +1649,14 @@ fn migrate_decorative(
             if target<1125||target>=4885{if fields.keys().any(|key|!["id","x","y","z"].contains(&key.as_str())&&!(key=="components"&&matches!(fields.get(key),Some(Value::Compound(fields))if fields.is_empty()))){bail!("目标版本没有床方块实体，不能等价保存自定义床载荷")}}
         }
         "minecraft:skull" => {
+            if target >= 1519 && (fields.contains_key("SkullType") || fields.contains_key("Rot")) { bail!("头颅SkullType/Rot必须先按位置迁移到真实方块调色板") }
+            if target < 1519 {
+                let kind = match fields.get("SkullType") { Some(Value::Byte(kind @ 0..=5)) => *kind as usize, None if source < 1519 => 0, _ => bail!("旧版头颅缺少有效SkullType 0..5") };
+                let registry = crate::block_database::database()?.registry_by_data_version(target)?;
+                if (kind == 5 && target < 169) || !registry.legacy_items.values().any(|name| name == HEAD_VARIANTS[kind].0) { bail!("目标旧版没有真实头颅种类 {}", HEAD_VARIANTS[kind].0) }
+                if fields.get("Rot").is_some_and(|value| !matches!(value, Value::Byte(0..=15))) { bail!("旧版头颅Rot不是0..15的Byte") }
+            }
+            fields.insert("id".into(), Value::String(if target < 704 { "Skull" } else { "minecraft:skull" }.into()));
             if fields.contains_key("SkullOwner")&&fields.contains_key("ExtraType"){bail!("头颅同时携带两种旧玩家资料，拒绝覆盖")}
             if let Some(name)=fields.get_mut("custom_name"){if target<3837{bail!("目标1.20.5以前没有头颅custom_name持久字段")};*name=migrate_component(name,source,target)?;}
             let from = if source < 3820 { "SkullOwner" } else { "profile" };
@@ -1724,10 +1878,6 @@ fn migrate_entity_uuid(fields: &mut Fields, source: i32, target: i32) -> Result<
             migrate_entity_uuid(&mut cause,source,target)?;
             for (key,value) in cause { fields.insert(key.replacen("UUID","LoveCause",1),value); }
         }
-        if matches!(fields.get("id"),Some(Value::String(id)) if ["minecraft:horse","minecraft:parrot"].contains(&id.as_str())) {
-            let (from,to)=if target>=2514{("OwnerUUID","Owner")}else{("Owner","OwnerUUID")};
-            if let Some(value)=fields.remove(from) { let value=if target>=2514{let Value::String(text)=value else{bail!("动物OwnerUUID不是String")};uuid_value(&text)?}else{Value::String(uuid_text(&value)?)};fields.insert(to.into(),value); }
-        }
         if matches!(fields.get("id"),Some(Value::String(id)) if id=="minecraft:item") {
             for key in ["Owner","Thrower"] { if let Some(value)=fields.get_mut(key) {
                 if target>=2514 { let old=object(value)?;if old.len()!=2{bail!("掉落物{key} UUID字段无效")};let(Some(Value::Long(most)),Some(Value::Long(least)))=(old.get("M"),old.get("L"))else{bail!("掉落物{key} UUID缺少M/L")};*value=Value::IntArray(fastnbt::IntArray::new(vec![(most>>32)as i32,*most as i32,(least>>32)as i32,*least as i32])); }
@@ -1735,6 +1885,7 @@ fn migrate_entity_uuid(fields: &mut Fields, source: i32, target: i32) -> Result<
             }}
         }
     }
+    if let Some(Value::String(id))=fields.get("id").cloned(){migrate_animal_owner(fields,&id,source,target)?;}
     Ok(())
 }
 
@@ -1862,34 +2013,182 @@ fn migrate_villager(fields: &mut Fields, source: i32, target: i32, report: &mut 
     Ok(())
 }
 
-fn migrate_special_equipment(fields: &mut Fields, id: &str, source: i32, target: i32, before: bool, report: &mut PayloadMigrationReport) -> Result<()> {
-    let horse = id == "minecraft:horse";
-    if id != "minecraft:pig" && !horse { return Ok(()) }
-    if before && source >=4300 && target <4300 {
-        let saddle = if source >=4301 { match fields.get_mut("equipment") { Some(Value::Compound(map))=>map.remove("saddle"),_=>None } } else { fields.remove("saddle") };
-        if let Some(mut saddle)=saddle {
-            item_payload(&mut saddle,source,target,report)?;
-            if horse { fields.insert("SaddleItem".into(),saddle); } else {
-                let map=object(&mut saddle)?;
-                if map.len()!=2 || map.get("id")!=Some(&Value::String("minecraft:saddle".into())) || map.get(if target<3818{"Count"}else{"count"})!=Some(&if target<3818{Value::Byte(1)}else{Value::Int(1)}) { bail!("目标旧版猪鞍标志不能保存鞍物品的组件或额外数量") }
-                fields.insert("Saddle".into(),Value::Byte(1));
+// Ordinary entity fields: local BlockPosFormatAndRenamesFix(v3813),
+// EntityUUIDFix(v2514), entity codecs and official 1.21.6/1.21.11/26.1 notes.
+fn migrate_mob_common(fields:&mut Fields,source:i32,target:i32)->Result<()> {
+    for key in ["NoAI","AgeLocked"] {if let Some(value)=fields.get(key){if !matches!(value,Value::Byte(0|1)){bail!("实体{key}不是Byte布尔值")}}}
+    if target<4786 {if let Some(value)=fields.remove("AgeLocked"){if value!=Value::Byte(0){bail!("目标26.1以前不能保留AgeLocked永不长大状态")}}}
+    if let Some(value)=fields.get("DeathLootTable"){if !matches!(value,Value::String(id) if !id.is_empty() && valid_resource_identifier(id)){bail!("实体DeathLootTable不是资源ID")}}
+    if let Some(value)=fields.get("DeathLootTableSeed"){if !matches!(value,Value::Long(_)){bail!("实体DeathLootTableSeed不是Long")}}
+    if target<135 && (fields.contains_key("DeathLootTable")||fields.contains_key("DeathLootTableSeed")){bail!("目标1.8没有实体自定义死亡战利品表/种子，原数据保留")}
+    let from=if source<3813{"Leash"}else{"leash"};let to=if target<3813{"Leash"}else{"leash"};
+    if let Some(mut leash)=fields.remove(from) {
+        match &mut leash {
+            Value::Compound(map) if map.contains_key("UUID")||map.contains_key("UUIDMost")||map.contains_key("UUIDLeast")=>{
+                if map.keys().any(|key|!["UUID","UUIDMost","UUIDLeast"].contains(&key.as_str())){bail!("实体拴绳UUID与位置/未知字段冲突")}
+                migrate_entity_uuid(map,source,target)?;
+                if target<2514 {if !matches!(map.get("UUIDMost"),Some(Value::Long(_)))||!matches!(map.get("UUIDLeast"),Some(Value::Long(_)))||map.len()!=2{bail!("旧拴绳UUID字段不完整")}}
+                else{uuid_text(map.get("UUID").context("拴绳UUID缺失")?)?;if map.len()!=1{bail!("拴绳UUID有冲突")}}
             }
-            if let Some(Value::Compound(chances))=fields.get_mut("drop_chances"){if chances.remove("saddle").is_some_and(|value|value!=Value::Float(2.0)){bail!("目标旧版不能保存自定义鞍掉落概率")}}
-        }else if !horse{fields.insert("Saddle".into(),Value::Byte(0));}
-    }else if !before && source<4300 && target>=4300 {
-        let mut saddle=fields.remove("SaddleItem");
-        if let Some(flag)=fields.remove("Saddle") { if flag!=Value::Byte(0) && flag!=Value::Byte(1){bail!("鞍标志无效")};if flag==Value::Byte(1){saddle=Some(Value::Compound([("id".into(),Value::String("minecraft:saddle".into())),(if source<3818{"Count"}else{"count"}.into(),if source<3818{Value::Byte(1)}else{Value::Int(1)})].into()));} }
-        if let Some(mut saddle)=saddle{item_payload(&mut saddle,source,target,report)?;
-            if target>=4301{let equipment=fields.entry("equipment".into()).or_insert(Value::Compound(Fields::new()));object(equipment)?.insert("saddle".into(),saddle);}else{fields.insert("saddle".into(),saddle);}
-            let chances=fields.entry("drop_chances".into()).or_insert(Value::Compound(Fields::new()));object(chances)?.insert("saddle".into(),Value::Float(2.0));
+            Value::Compound(map)=>{
+                if map.len()!=3{bail!("拴绳方块位置含未知字段")};let mut pos=Vec::new();for key in ["X","Y","Z"]{let Some(Value::Int(n))=map.get(key)else{bail!("拴绳位置缺少Int {key}")};pos.push(*n);}
+                if target>=3813{leash=Value::IntArray(fastnbt::IntArray::new(pos));}
+            }
+            Value::IntArray(pos)=>{if pos.len()!=3{bail!("拴绳位置必须有三个Int")};if target<3813{leash=Value::Compound([("X".into(),Value::Int(pos[0])),("Y".into(),Value::Int(pos[1])),("Z".into(),Value::Int(pos[2]))].into());}}
+            _=>bail!("拴绳必须是UUID复合或方块坐标"),
+        }
+        fields.insert(to.into(),leash);
+    }
+    if let Some(Value::Int(n))=fields.get("home_radius"){if *n<0{bail!("家园半径不应为负数")}}else if fields.contains_key("home_radius"){bail!("home_radius不是Int")}
+    if let Some(pos)=fields.get("home_pos"){if !matches!(pos,Value::IntArray(pos)if pos.len()==3){bail!("home_pos不是三个Int")}}
+    if target<4435&&(fields.contains_key("home_pos")||fields.contains_key("home_radius")){bail!("目标1.21.6以前没有mob家园约束位置/半径")}
+    if let Some(value)=fields.get("current_impulse_context_reset_grace_time"){if !matches!(value,Value::Int(0..)){bail!("实体冲击上下文宽限时间无效")}}
+    if let Some(value)=fields.get("current_explosion_impact_pos"){if !matches!(value,Value::List(pos)if pos.len()==3&&pos.iter().all(|v|matches!(v,Value::Double(n)if n.is_finite()))){bail!("实体爆炸冲击位置不是三个Double")}}
+    if target<4786 {if fields.remove("current_impulse_context_reset_grace_time").is_some_and(|v|v!=Value::Int(0))||fields.contains_key("current_explosion_impact_pos"){bail!("目标26.1以前没有mob当前爆炸冲击上下文，原数据保留")}}
+    Ok(())
+}
+
+fn migrate_animal_owner(fields:&mut Fields,id:&str,source:i32,target:i32)->Result<()> {
+    if !["minecraft:horse","minecraft:donkey","minecraft:mule","minecraft:zombie_horse","minecraft:skeleton_horse","minecraft:llama","minecraft:cat","minecraft:wolf","minecraft:parrot"].contains(&id){return Ok(())}
+    if source>=2514&&fields.contains_key("OwnerUUID"){bail!("现代动物来源应使用Owner UUID IntArray，不能原样保留旧OwnerUUID字段")}
+    if source<2514 {if let Some(value)=fields.get("OwnerUUID"){if !matches!(value,Value::String(_)){bail!("旧动物OwnerUUID不是String")}}}
+    if source<2514&&target>=2514 {
+        if let Some(owner)=fields.get("Owner") {let Value::String(owner)=owner else{bail!("旧动物Owner不是玩家名称String")};if !fields.contains_key("OwnerUUID")&&!owner.is_empty(){if uuid_value(owner).is_ok(){fields.insert("OwnerUUID".into(),Value::String(owner.clone()));}else{bail!("旧动物仅有Owner玩家名称而无UUID，本地没有可验证账号绑定，原身份保留")}}}
+        fields.remove("Owner");
+        if let Some(owner)=fields.remove("OwnerUUID"){let Value::String(owner)=owner else{bail!("旧动物OwnerUUID不是String")};if !owner.is_empty(){fields.insert("Owner".into(),uuid_value(&owner)?);}}
+    }else if source>=2514&&target<2514 {if let Some(owner)=fields.remove("Owner"){fields.insert("OwnerUUID".into(),Value::String(uuid_text(&owner)?));}}
+    if target>=2514 {if let Some(owner)=fields.get("Owner"){uuid_text(owner)?;}}
+    Ok(())
+}
+
+fn migrate_neutral_anger(fields:&mut Fields,source:i32,target:i32)->Result<()> {
+    // Official 1.21.11 replaces relative AngerTime with an absolute game tick.
+    // A standalone projection carries no world-clock anchor. Zero is exactly
+    // representable; active anger needs explicit loss confirmation, never reset.
+    let from=if source<4671{"AngryAt"}else{"angry_at"};let to=if target<4671{"AngryAt"}else{"angry_at"};
+    if let Some(uuid)=fields.remove(from){uuid_text(&uuid)?;fields.insert(to.into(),uuid);}
+    if source<4671&&target>=4671 {if let Some(time)=fields.remove("AngerTime"){if time!=Value::Int(0){bail!("活动怒时AngerTime不能无世界game tick基准转换为绝对anger_end_time，仇恨目标和原时长保留")};fields.insert("anger_end_time".into(),Value::Long(0));}}
+    else if source>=4671&&target<4671 {if let Some(time)=fields.remove("anger_end_time"){if time!=Value::Long(0){bail!("绝对anger_end_time不能无世界game tick基准恢复旧剩余AngerTime，仇恨目标和原时间保留")};fields.insert("AngerTime".into(),Value::Int(0));}}
+    else if let Some(time)=fields.get(if target<4671{"AngerTime"}else{"anger_end_time"}){if !(target<4671&&matches!(time,Value::Int(0..)))&&!(target>=4671&&matches!(time,Value::Long(0..))){bail!("怒时编码与来源/目标版本不符")}}
+    Ok(())
+}
+
+fn migrate_extra_species(fields:&mut Fields,id:&str,source:i32,target:i32,report:&mut PayloadMigrationReport)->Result<()> {
+    for key in ["Sitting","Sleeping","Crouching","ChestedHorse","Tame","Bred","EatingHaystack","powered","ignited","Angry","Trusting"] {if let Some(value)=fields.get(key){if !matches!(value,Value::Byte(0|1)){bail!("实体{key}不是Byte布尔值")}}}
+    // Trial-spawner built-ins use these ordinary codecs too. Their schema
+    // introduction gates are v702/v701 (husk/stray), v3689 (breeze), v3816 (bogged).
+    for (kind,intro) in [("minecraft:husk",702),("minecraft:stray",701),("minecraft:breeze",3689),("minecraft:bogged",3816)]{if id==kind&&target<intro{bail!("目标版本没有实体{id}")}}
+    if id=="minecraft:slime"{if fields.get("Size").is_some_and(|v|!matches!(v,Value::Int(0..))){bail!("史莱姆Size不是非负Int")};if fields.get("wasOnGround").is_some_and(|v|!matches!(v,Value::Byte(0|1))){bail!("史莱姆wasOnGround不是Byte布尔值")}}
+    if id=="minecraft:bogged"&&fields.get("sheared").is_some_and(|v|!matches!(v,Value::Byte(0|1))){bail!("沼骸sheared不是Byte布尔值")}
+    if id=="minecraft:creeper" {if fields.get("Fuse").is_some_and(|v|!matches!(v,Value::Short(_)))||fields.get("ExplosionRadius").is_some_and(|v|!matches!(v,Value::Byte(_))){bail!("苦力怕Fuse/ExplosionRadius类型不符原版Short/Byte")}}
+    if ["minecraft:wolf","minecraft:cat"].contains(&id){
+        if let Some(color)=fields.get_mut("CollarColor"){let Value::Byte(n)=color else{bail!("项圈染料必须为Byte")};if !(0..=15).contains(n){bail!("项圈染料超出0..15")};if id=="minecraft:wolf"&&(source<1451)!=(target<1451){*n=15-*n;}}
+        let intro=if id=="minecraft:wolf"{4325}else{4786};
+        if let Some(value)=fields.get("sound_variant"){let Value::String(name)=value else{bail!("动物声音品种不是资源ID")};let allowed=if id=="minecraft:wolf"{&["classic","puglin","sad","angry","grumpy","big","cute"][..]}else{&["classic","royal"][..]};if !allowed.iter().any(|key|name==&format!("minecraft:{key}")){bail!("动物声音品种{name}不在已核实原版注册表")};if target<intro{if name!="minecraft:classic"{bail!("目标版本没有声音品种{name}，声音外观不能等价保留")};fields.remove("sound_variant");}}
+        else if source<intro&&target>=intro{fields.insert("sound_variant".into(),Value::String("minecraft:classic".into()));}
+    }
+    if id=="minecraft:wolf" {
+        if source<2566&&target>=2566{if fields.remove("Angry")==Some(Value::Byte(1)){bail!("旧狼Angry=true没有可恢复的仇恨目标/剩余时间，原状态保留")}}
+        migrate_neutral_anger(fields,source,target)?;
+        if source>=2566&&target<2566{if fields.contains_key("AngryAt"){bail!("目标1.16以前没有可保留的狼仇恨目标UUID")};if fields.remove("AngerTime").is_some_and(|v|v!=Value::Int(0)){bail!("目标旧狼只有Angry布尔标志，不能等价保存剩余怒时")};fields.insert("Angry".into(),Value::Byte(0));}
+        if let Some(value)=fields.get("variant"){let Value::String(name)=value else{bail!("狼品种不是资源ID")};if !["pale","spotted","snowy","black","ashen","rusty","woods","chestnut","striped"].iter().any(|v|name==&format!("minecraft:{v}")){bail!("狼品种{name}不在原版注册表")};if target<3837{if name!="minecraft:pale"{bail!("目标1.20.5以前没有狼外观{name}")};fields.remove("variant");}}
+        else if source<3837&&target>=3837{fields.insert("variant".into(),Value::String("minecraft:pale".into()));}
+        // Health/max_health are explicit data, not an encoding change. Keep
+        // their values: inferring default20/custom20 or default40/custom40 is
+        // irreversible. The shared attribute/Health codecs migrate their shape.
+
+    }
+    if id=="minecraft:cat" {
+        const CATS:[&str;11]=["tabby","black","red","siamese","british_shorthair","calico","persian","ragdoll","white","jellie","all_black"];
+        let variant=if source<3086{let n=match fields.remove("CatType"){Some(Value::Int(n))=>if source<1917&&n==9{10}else{n},None=>0,_=>bail!("CatType不是Int")};*CATS.get(usize::try_from(n).context("CatType为负")?).context("CatType没有原版品种映射")?}else{let name=match fields.get("variant"){Some(Value::String(s))=>s.strip_prefix("minecraft:").context("猫品种缺少minecraft注册表身份")?,None=>"tabby",_=>bail!("猫品种不是String")};let name=if source<3097&&name=="british"{"british_shorthair"}else{name};*CATS.iter().find(|v|**v==name).context("猫品种没有原版映射")?};
+        fields.remove("variant");
+        if target<1904 {let n=match variant{"black"=>1,"red"=>2,"siamese"=>3,_=>bail!("目标1.14以前仅能表达旧豹猫黑/红/暹罗三种驯服外观，不能表达{variant}")};fields.insert("id".into(),Value::String("minecraft:ocelot".into()));fields.insert("CatType".into(),Value::Int(n));if let Some(color)=fields.remove("CollarColor"){if color!=Value::Byte(14){bail!("目标旧豹猫不能等价保存自定义猫项圈颜色")}}}
+        else if target<3086{let n=CATS.iter().position(|v|*v==variant).unwrap()as i32;if target<1917&&n==9{bail!("目标猫品种节点尚无jellie")};fields.insert("CatType".into(),Value::Int(if target<1917&&n==10{9}else{n}));}
+        else{fields.insert("variant".into(),Value::String(format!("minecraft:{}",if target<3097&&variant=="british_shorthair"{"british"}else{variant})));}
+    }
+    if id=="minecraft:ocelot" {
+        if source<1904 {
+            if fields.remove("CatType").is_some_and(|v|v!=Value::Int(0)){bail!("野生豹猫CatType不是0")}
+            let mut trusting=false;
+            for key in ["Owner","OwnerUUID"]{if let Some(value)=fields.get(key){let Value::String(text)=value else{bail!("旧野生豹猫{key}不是String")};if !text.is_empty(){trusting=true;}}}
+            if target>=1904 {
+                if fields.remove("Sitting")==Some(Value::Byte(1)){bail!("目标野生豹猫没有旧驯服Sitting姿态")}
+                fields.remove("Owner");fields.remove("OwnerUUID");
+                if trusting{fields.insert("Trusting".into(),Value::Byte(1));}
+            }else{fields.insert("CatType".into(),Value::Int(0));}
+        }else if target<1904 {
+            if fields.remove("Trusting")==Some(Value::Byte(1)){bail!("目标旧野生豹猫没有可独立表达的信任状态；伪造OwnerUUID会改变身份")}
+            fields.insert("CatType".into(),Value::Int(0));
         }
     }
-    if horse && ((source<3808)!=(target<3808)||(source<4301)!=(target<4301)) && ((target<4301)==before) {
-        let armor=if source>=4301{match fields.get_mut("equipment"){Some(Value::Compound(map))=>map.remove("body"),_=>None}}else{fields.remove(if source<3808{"ArmorItem"}else{"body_armor_item"})};
-        if let Some(mut armor)=armor{item_payload(&mut armor,source,target,report)?;if target>=4301{let equipment=fields.entry("equipment".into()).or_insert(Value::Compound(Fields::new()));object(equipment)?.insert("body".into(),armor);}else{fields.insert(if target<3808{"ArmorItem"}else{"body_armor_item"}.into(),armor);}}
+    if id=="minecraft:fox" {
+        if target<1931{bail!("目标1.14以前没有狐狸实体")};if fields.get("Type").is_some_and(|v|!matches!(v,Value::String(s)if s=="red"||s=="snow")){bail!("狐狸Type不是原版red/snow")}
+        let from=if source<2514{"TrustedUUIDs"}else{"Trusted"};let to=if target<2514{"TrustedUUIDs"}else{"Trusted"};if fields.get(from).is_some_and(|v|!matches!(v,Value::List(_))){bail!("狐狸Trusted不是List")};if let Some(Value::List(mut trusted))=fields.remove(from){if trusted.len()>2{bail!("狐狸Trusted最多两个玩家")};for uuid in &mut trusted{if source<2514{let map=object(uuid)?;if map.len()!=2{bail!("狐狸旧信任UUID不是M/L")};let(Some(Value::Long(m)),Some(Value::Long(l)))=(map.get("M"),map.get("L"))else{bail!("狐狸旧信任UUID缺少Long M/L")};*uuid=Value::IntArray(fastnbt::IntArray::new(vec![(m>>32)as i32,*m as i32,(l>>32)as i32,*l as i32]));}uuid_text(uuid)?;if target<2514{let Value::IntArray(p)=uuid else{unreachable!()};*uuid=Value::Compound([("M".into(),Value::Long((i64::from(p[0])<<32)|i64::from(p[1]as u32))),("L".into(),Value::Long((i64::from(p[2])<<32)|i64::from(p[3]as u32)))].into());}}fields.insert(to.into(),Value::List(trusted));}else if fields.contains_key(from){bail!("狐狸Trusted不是List")}
+    }
+    if ["minecraft:donkey","minecraft:mule","minecraft:llama"].contains(&id){
+        if id=="minecraft:llama"&&target<819{bail!("目标1.11以前没有羊驼")}
+        let slots=if id=="minecraft:llama"{let n=match fields.get("Strength"){Some(Value::Int(n@1..=5))=>*n,None=>1,_=>bail!("羊驼Strength必须为1..5")};if fields.get("Variant").is_some_and(|v|!matches!(v,Value::Int(0..=3))){bail!("羊驼Variant必须为0..3")};(n*3)as u8}else{15};
+        if let Some(Value::List(items))=fields.get_mut("Items"){let mut seen=HashSet::new();for item in items{if source<3809{let map=object(item)?;let Some(Value::Byte(slot))=map.get_mut("Slot")else{bail!("旧马箱子物品缺少Byte Slot")};let n=(*slot as u8).checked_sub(2).context("旧马箱子Slot小于2")?;*slot=n as i8;}migrate_stack(item,source,target,slots,&mut seen,"马类箱子",report)?;if target<3809{let map=object(item)?;let slot=map.entry("Slot".into()).or_insert(Value::Byte(0));let Value::Byte(n)=slot else{unreachable!()};*n=(*n as u8).checked_add(2).context("旧马箱子槽位溢出")?as i8;}}}else if fields.contains_key("Items"){bail!("马类箱子Items不是List")}
     }
     Ok(())
 }
+
+fn migrate_special_equipment(fields:&mut Fields,id:&str,source:i32,target:i32,before:bool,report:&mut PayloadMigrationReport)->Result<()> {
+    let pig=id=="minecraft:pig";
+    let horse=["minecraft:horse","minecraft:donkey","minecraft:mule","minecraft:zombie_horse","minecraft:skeleton_horse"].contains(&id);
+    let llama=id=="minecraft:llama";let wolf=id=="minecraft:wolf";
+    if !pig&&!horse&&!llama&&!wolf{return Ok(())}
+    // Extract special slots before the shared Armor/Hand migration, then encode
+    // once afterwards. Temporary keys are rejected by the input whitelist and
+    // always removed; no migrated stack is passed through a source codec twice.
+    if before {
+        if pig||horse {
+            let mut saddle=if source>=4301{match fields.get_mut("equipment"){Some(Value::Compound(map))=>map.remove("saddle"),_=>None}}else if source>=4300{fields.remove("saddle")}else{fields.remove("SaddleItem")};
+            if let Some(flag)=fields.remove("Saddle"){if !matches!(flag,Value::Byte(0|1)){bail!("鞍标志不是Byte布尔值")};if flag==Value::Byte(1){if saddle.is_some(){bail!("鞍物品与鞍标志存在两个有效来源")};saddle=Some(Value::Compound([("id".into(),Value::String("minecraft:saddle".into())),(if source<3818{"Count"}else{"count"}.into(),if source<3818{Value::Byte(1)}else{Value::Int(1)}),("Damage".into(),Value::Short(0))].into()));if source>=1519{object(saddle.as_mut().unwrap())?.remove("Damage");}}}
+            if let Some(mut item)=saddle{item_payload(&mut item,source,target,report)?;fields.insert("__nova_saddle_item".into(),item);}
+            let chance=match fields.get_mut("drop_chances"){Some(Value::Compound(map))=>map.remove("saddle"),_=>None};
+            if let Some(chance)=chance{if !matches!(chance,Value::Float(n)if n.is_finite()){bail!("鞍掉落概率不是有限Float")};fields.insert("__nova_saddle_chance".into(),chance);}
+        }
+        if id=="minecraft:horse"||llama||wolf {
+            let old=if llama{"DecorItem"}else{"ArmorItem"};
+            let mut armor=if source>=4301{match fields.get_mut("equipment"){Some(Value::Compound(map))=>map.remove("body"),_=>None}}else{fields.remove(if source<3808{old}else{"body_armor_item"})};
+            if wolf&&source<3837&&armor.is_some(){bail!("来源1.20.5以前没有狼护甲载荷")}
+            // The horse's old chest entry is an alias of ArmorItem in the DFU
+            // schema, not a second independently owned armor item.
+            if id=="minecraft:horse"&&source<3808&&target>=3808{if let(Some(item),Some(Value::List(items)))=(&armor,fields.get_mut("ArmorItems")){if let Some(chest)=items.get_mut(2){if !matches!(chest,Value::Compound(map)if map.is_empty()){if chest!=item{bail!("旧马ArmorItems[2]与ArmorItem不同，不能将两份数据静默合并")};*chest=Value::Compound(Fields::new());}}}}
+            let chance=if source>=4293{match fields.get_mut("drop_chances"){Some(Value::Compound(map))=>map.remove("body"),_=>None}}else{fields.remove("body_armor_drop_chance")};
+            if let Some(mut item)=armor.take(){if !matches!(&item,Value::Compound(map)if map.is_empty()){item_payload(&mut item,source,target,report)?;fields.insert("__nova_body_item".into(),item);}}
+            if let Some(chance)=chance{if !matches!(chance,Value::Float(n)if n.is_finite()){bail!("身体装备掉落概率不是有限Float")};fields.insert("__nova_body_chance".into(),chance);}
+            else if fields.contains_key("__nova_body_item"){fields.insert("__nova_body_chance".into(),Value::Float(if source<3808{2.0}else{0.085}));}
+        }
+        return Ok(())
+    }
+    let saddle=fields.remove("__nova_saddle_item");let saddle_chance=fields.remove("__nova_saddle_chance");
+    if pig||horse {
+        let has_saddle=saddle.is_some();
+        if target>=4300 {if let Some(item)=saddle{if target>=4301{let map=fields.entry("equipment".into()).or_insert(Value::Compound(Fields::new()));object(map)?.insert("saddle".into(),item);}else{fields.insert("saddle".into(),item);}}
+            if let Some(chance)=saddle_chance.or_else(|| if source<4300&&has_saddle{Some(Value::Float(2.0))}else{None}){let map=fields.entry("drop_chances".into()).or_insert(Value::Compound(Fields::new()));object(map)?.insert("saddle".into(),chance);}
+        }else{
+            if saddle_chance.is_some_and(|v|v!=Value::Float(2.0)){bail!("目标旧版不能保留自定义鞍掉落概率")}
+            if let Some(mut item)=saddle{if pig||target<110{let map=object(&mut item)?;if map.get("id")!=Some(&Value::String("minecraft:saddle".into()))||map.get(if target<3818{"Count"}else{"count"})!=Some(&if target<3818{Value::Byte(1)}else{Value::Int(1)})||map.iter().any(|(key,value)|!["id","Count","count"].contains(&key.as_str())&&!(key=="Damage"&&value==&Value::Short(0))&&!(key=="tag"&&matches!(value,Value::Compound(map)if map.is_empty()))){bail!("目标旧鞍标志不能保存鞍物品额外标签/组件或数量")};fields.insert("Saddle".into(),Value::Byte(1));}else{fields.insert("SaddleItem".into(),item);}}
+            else if pig{fields.insert("Saddle".into(),Value::Byte(0));}
+        }
+    }
+    let body=fields.remove("__nova_body_item");let chance=fields.remove("__nova_body_chance");
+    if wolf&&target<3837&&(body.is_some()||chance.is_some()){bail!("目标1.20.5以前没有狼护甲槽，护甲物品/耐久/掉落设置不能等价保留")}
+    if target>=4301 {
+        if let Some(item)=body{let map=fields.entry("equipment".into()).or_insert(Value::Compound(Fields::new()));object(map)?.insert("body".into(),item);}
+        if let Some(chance)=chance{let map=fields.entry("drop_chances".into()).or_insert(Value::Compound(Fields::new()));object(map)?.insert("body".into(),chance);}
+    }else if target>=3808 {
+        if let Some(item)=body{fields.insert("body_armor_item".into(),item);}
+        if let Some(chance)=chance{if target>=4293{let map=fields.entry("drop_chances".into()).or_insert(Value::Compound(Fields::new()));object(map)?.insert("body".into(),chance);}else{fields.insert("body_armor_drop_chance".into(),chance);}}
+    }else{
+        if let Some(item)=body{fields.insert(if llama{"DecorItem"}else{"ArmorItem"}.into(),item);}
+        if chance.is_some_and(|value|value!=Value::Float(2.0)){bail!("目标旧版没有独立身体装备掉落概率")}
+    }
+    Ok(())
+}
+
 
 fn migrate_equipment_100(fields: &mut Fields, source: i32, target: i32, before: bool) -> Result<()> {
     for (old, armor, hand, empty) in [("Equipment","ArmorItems","HandItems",Value::Compound(Fields::new())),("DropChances","ArmorDropChances","HandDropChances",Value::Float(0.0))] {
@@ -1947,9 +2246,11 @@ fn migrate_entity_payload(
     let Some(Value::String(id)) = fields.get("id") else {
         bail!("实体名称缺失")
     };
-    let id = match id.as_str() {
-        "ArmorStand" => "minecraft:armor_stand", "ItemFrame" => "minecraft:item_frame", "Painting" => "minecraft:painting", "Boat" => "minecraft:boat", "Item" => "minecraft:item", "MinecartRideable" => "minecraft:minecart", "Villager" => "minecraft:villager", "Chicken" => "minecraft:chicken", "Cow" => "minecraft:cow", "Pig" => "minecraft:pig", "Sheep" => "minecraft:sheep", "Rabbit" => "minecraft:rabbit", "Horse" | "EntityHorse" => "minecraft:horse", "Zombie" => "minecraft:zombie", "Skeleton" => "minecraft:skeleton", other => other,
+    let mut id = match id.as_str() {
+        "ArmorStand" => "minecraft:armor_stand", "ItemFrame" => "minecraft:item_frame", "Painting" => "minecraft:painting", "Boat" => "minecraft:boat", "Item" => "minecraft:item", "MinecartRideable" => "minecraft:minecart", "Villager" => "minecraft:villager", "Chicken" => "minecraft:chicken", "Cow" => "minecraft:cow", "Pig" => "minecraft:pig", "Sheep" => "minecraft:sheep", "Rabbit" => "minecraft:rabbit", "Horse" | "EntityHorse" => "minecraft:horse", "Zombie" => "minecraft:zombie", "Skeleton" => "minecraft:skeleton", "Creeper"=>"minecraft:creeper", "Wolf"=>"minecraft:wolf", "Donkey"=>"minecraft:donkey", "Mule"=>"minecraft:mule", "Llama"=>"minecraft:llama", "ZombieHorse"=>"minecraft:zombie_horse", "SkeletonHorse"=>"minecraft:skeleton_horse", "Ozelot"|"Ocelot"=>"minecraft:ocelot", "Spider"=>"minecraft:spider","CaveSpider"=>"minecraft:cave_spider","Silverfish"=>"minecraft:silverfish","Slime"=>"minecraft:slime","Husk"=>"minecraft:husk","Stray"=>"minecraft:stray", other => other,
     }.to_owned();
+    if id=="minecraft:horse"&&source<703{if let Some(kind)=fields.remove("Type"){let Value::Int(kind)=kind else{bail!("旧EntityHorse.Type不是Int")};id=match kind{0=>"minecraft:horse",1=>"minecraft:donkey",2=>"minecraft:mule",3=>"minecraft:zombie_horse",4=>"minecraft:skeleton_horse",_=>bail!("旧EntityHorse.Type没有原版映射")}.into();}}
+    if id=="minecraft:ocelot"&&source<1904{if matches!(fields.get("CatType"),Some(Value::Int(1..=3))){id="minecraft:cat".into();}}
     fields.insert("id".into(), Value::String(id.clone()));
     migrate_entity_uuid(fields, source, target)?;
     migrate_entity_attributes(fields, source, target)?;
@@ -1998,6 +2299,18 @@ fn migrate_entity_payload(
             "minecraft:sheep" => &["Color", "Sheared"],
             "minecraft:rabbit" => &["RabbitType", "MoreCarrotTicks"],
             "minecraft:horse" => &["Variant", "Tame", "Temper", "Bred", "EatingHaystack", "Owner", "OwnerUUID", "SaddleItem", "ArmorItem", "ArmorItems", "Saddle", "body_armor_item", "body_armor_drop_chance", "saddle"],
+            "minecraft:spider"|"minecraft:cave_spider"|"minecraft:silverfish"|"minecraft:breeze"|"minecraft:stray" => &[],
+            "minecraft:bogged" => &["sheared"],
+            "minecraft:slime" => &["Size","wasOnGround"],
+            "minecraft:husk" => &["IsBaby","CanBreakDoors","InWaterTime","DrownedConversionTime"],
+            "minecraft:creeper" => &["powered","Fuse","ExplosionRadius","ignited"],
+            "minecraft:wolf" => &["Owner","OwnerUUID","Sitting","CollarColor","Angry","AngerTime","AngryAt","anger_end_time","angry_at","variant","sound_variant","body_armor_item","body_armor_drop_chance"],
+            "minecraft:cat" => &["Owner","OwnerUUID","Sitting","CollarColor","CatType","variant","sound_variant"],
+            "minecraft:ocelot" => &["CatType","Trusting","Owner","OwnerUUID","Sitting"],
+            "minecraft:fox" => &["Type","Sleeping","Sitting","Crouching","Trusted","TrustedUUIDs"],
+            "minecraft:donkey"|"minecraft:mule" => &["ChestedHorse","Items","Tame","Temper","Bred","EatingHaystack","Owner","OwnerUUID","SaddleItem","Saddle","saddle"],
+            "minecraft:llama" => &["ChestedHorse","Items","Tame","Temper","Bred","EatingHaystack","Owner","OwnerUUID","Strength","Variant","DecorItem","body_armor_item","body_armor_drop_chance"],
+            "minecraft:zombie_horse"|"minecraft:skeleton_horse" => &["Tame","Temper","Bred","EatingHaystack","Owner","OwnerUUID","SaddleItem","Saddle","saddle","SkeletonTrap","SkeletonTrapTime"],
             "minecraft:zombie" => &["IsBaby", "CanBreakDoors", "InWaterTime", "DrownedConversionTime"],
             "minecraft:skeleton" => &["StrayConversionTime"],
             "minecraft:tropical_fish" => &["Variant", "FromBucket"],
@@ -2049,12 +2362,14 @@ fn migrate_entity_payload(
         "Age", "ForcedAge", "InLove", "LoveCause", "LoveCauseMost", "LoveCauseLeast",
         "ActiveEffects", "active_effects", "Equipment", "DropChances", "HealF",
         "SleepingX", "SleepingY", "SleepingZ", "sleeping_pos",
+        "NoAI","DeathLootTable","DeathLootTableSeed","Leash","leash","AgeLocked","home_pos","home_radius","current_explosion_impact_pos","current_impulse_context_reset_grace_time",
     ];
     for key in fields.keys() {
         if !COMMON.contains(&key.as_str()) && !extra.contains(&key.as_str()) {
             bail!("实体 {id} 字段 {key} 的迁移尚未实现")
         }
     }
+    migrate_mob_common(fields,source,target)?;
     if let Some(name) = fields.get_mut("CustomName") {
         *name = migrate_component(name, source, target)?;
     }
@@ -2082,6 +2397,7 @@ fn migrate_entity_payload(
             let health=match value{Value::Short(value)=>f32::from(value),Value::Float(value)=>value,_=>bail!("旧Health类型无效")};fields.insert("Health".into(),Value::Float(health));
         }
     }else if source>=109&&target<109{if let Some(value)=fields.remove("Health"){let Value::Float(health)=value else{bail!("Health不是Float")};fields.insert("HealF".into(),Value::Float(health));}}
+    migrate_extra_species(fields,&id,source,target,report)?;
     if ["minecraft:pig","minecraft:cow","minecraft:chicken"].contains(&id.as_str()) && target <4300 {
         if let Some(value)=fields.remove("variant"){if value!=Value::String("minecraft:temperate".into()){bail!("目标旧版不能保存{id}的温度品种外观")}}
     }
@@ -2113,6 +2429,8 @@ fn migrate_entity_payload(
         "minecraft:frog",
         "minecraft:parrot",
         "minecraft:bee", "minecraft:villager", "minecraft:chicken", "minecraft:pig", "minecraft:cow", "minecraft:sheep", "minecraft:rabbit", "minecraft:horse", "minecraft:zombie", "minecraft:skeleton",
+        "minecraft:creeper","minecraft:wolf","minecraft:cat","minecraft:ocelot","minecraft:fox","minecraft:donkey","minecraft:mule","minecraft:llama","minecraft:zombie_horse","minecraft:skeleton_horse",
+        "minecraft:spider","minecraft:cave_spider","minecraft:silverfish","minecraft:slime","minecraft:husk","minecraft:stray","minecraft:bogged","minecraft:breeze",
     ]
     .contains(&id.as_str())
     {
@@ -2210,11 +2528,12 @@ fn migrate_entity_payload(
             if let Some(value) = fields.remove(from) { fields.insert(to.into(), value); }
         }
     }
+    if target<703{let kind=match fields.get("id"){Some(Value::String(id))=>match id.as_str(){"minecraft:donkey"=>Some(1),"minecraft:mule"=>Some(2),"minecraft:zombie_horse"=>Some(3),"minecraft:skeleton_horse"=>Some(4),_=>None},_=>None};if let Some(kind)=kind{fields.insert("id".into(),Value::String("minecraft:horse".into()));fields.insert("Type".into(),Value::Int(kind));}}
     if target < 705 {
         // BoatSplit may already have changed a wood-specific ID to boat.
         // Encode the actual migrated identity, not the immutable source ID.
         let canonical_id=match fields.get("id"){Some(Value::String(id))=>id.as_str(),_=>bail!("目标实体ID缺失")};
-        let old = match canonical_id { "minecraft:armor_stand" => "ArmorStand", "minecraft:item_frame" => "ItemFrame", "minecraft:painting" => "Painting", "minecraft:boat" => "Boat", "minecraft:item" => "Item", "minecraft:minecart" => "MinecartRideable", "minecraft:villager"=>"Villager", "minecraft:chicken"=>"Chicken", "minecraft:pig"=>"Pig", "minecraft:cow"=>"Cow", "minecraft:sheep"=>"Sheep", "minecraft:rabbit"=>"Rabbit", "minecraft:horse"=>"EntityHorse", "minecraft:zombie"=>"Zombie", "minecraft:skeleton"=>"Skeleton", _ => bail!("目标旧版没有该实体ID {id}") };
+        let old = match canonical_id { "minecraft:armor_stand" => "ArmorStand", "minecraft:item_frame" => "ItemFrame", "minecraft:painting" => "Painting", "minecraft:boat" => "Boat", "minecraft:item" => "Item", "minecraft:minecart" => "MinecartRideable", "minecraft:villager"=>"Villager", "minecraft:chicken"=>"Chicken", "minecraft:pig"=>"Pig", "minecraft:cow"=>"Cow", "minecraft:sheep"=>"Sheep", "minecraft:rabbit"=>"Rabbit", "minecraft:horse"=>"EntityHorse", "minecraft:zombie"=>"Zombie", "minecraft:skeleton"=>"Skeleton", "minecraft:creeper"=>"Creeper","minecraft:wolf"=>"Wolf","minecraft:ocelot"=>"Ozelot","minecraft:donkey"=>"Donkey","minecraft:mule"=>"Mule","minecraft:zombie_horse"=>"ZombieHorse","minecraft:skeleton_horse"=>"SkeletonHorse","minecraft:spider"=>"Spider","minecraft:cave_spider"=>"CaveSpider","minecraft:silverfish"=>"Silverfish","minecraft:slime"=>"Slime","minecraft:husk"=>"Husk","minecraft:stray"=>"Stray", _ => bail!("目标旧版没有该实体ID {id}") };
         fields.insert("id".into(), Value::String(old.into()));
     }
     report
@@ -2496,6 +2815,94 @@ fn migrate_component(value: &Value, source: i32, target: i32) -> Result<Value> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    fn head_test_region(palette: Vec<Value>, indices: &[usize], tiles: Vec<Value>) -> Value {
+        let packed = crate::nbt::pack_palette_indices(indices, crate::nbt::bits_for_palette(palette.len()));
+        map(&[("Size", map(&[("x", Value::Int(indices.len() as i32)), ("y", Value::Int(1)), ("z", Value::Int(1))])),
+            ("BlockStatePalette", Value::List(palette)), ("BlockStates", Value::LongArray(fastnbt::LongArray::new((0..packed.len()).map(|i| packed.i64_at(i)).collect()))), ("TileEntities", Value::List(tiles))])
+    }
+
+    fn head_test_state(name: &str, key: &str, pose: &str) -> Value {
+        map(&[("Name", Value::String(name.into())), ("Properties", map(&[(key, Value::String(pose.into()))]))])
+    }
+
+    fn head_test_block_at(region: &Value, position: usize) -> Value {
+        let Value::Compound(fields) = region else { panic!() };
+        let Value::List(palette) = &fields["BlockStatePalette"] else { panic!() };
+        let Value::LongArray(packed) = &fields["BlockStates"] else { panic!() };
+        let Value::Compound(size) = &fields["Size"] else { panic!() };
+        let Value::Int(width) = size["x"] else { panic!() };
+        let index = crate::nbt::palette_index_at(&crate::nbt::BigEndianLongArray::new(packed.iter().copied().collect()), width as usize, crate::nbt::bits_for_palette(palette.len()), palette.len(), position).unwrap();
+        palette[index].clone()
+    }
+
+    #[test]
+    fn legacy_heads_split_actual_species_rotation_wall_facing_and_restore_profile() {
+        let mut palette = vec![head_test_state("minecraft:skeleton_skull", "rotation", "4")];
+        for facing in ["north", "east", "south", "west"] { palette.push(head_test_state("minecraft:skeleton_wall_skull", "facing", facing)); }
+        let indices = [0,0,0,0,0,0,1,2,3,4];
+        let mut tiles = Vec::new();
+        for (position, _) in indices.iter().enumerate() {
+            let kind = if position < 6 { position } else { position - 6 };
+            let rotation = if position < 6 { position as i8 * 2 + 3 } else { 0 };
+            let mut skull = map(&[("id", Value::String("minecraft:skull".into())), ("x", Value::Int(position as i32)), ("y", Value::Int(0)), ("z", Value::Int(0)), ("SkullType", Value::Byte(kind as i8)), ("Rot", Value::Byte(rotation))]);
+            if kind == 3 { fields(&mut skull).insert("SkullOwner".into(), map(&[("Name", Value::String("Nova".into())), ("Id", Value::String("00000000-0000-0001-0000-000000000002".into())), ("Properties", map(&[("textures", Value::List(vec![map(&[("Value", Value::String("skin".into()))])]))]))])); }
+            tiles.push(skull);
+        }
+        let original_tiles = tiles.clone();
+        let mut value = head_test_region(palette, &indices, tiles);
+        migrate_head_palette(&mut value,1343,5023).unwrap();
+        for position in 0..6 {
+            let mut block = head_test_block_at(&value, position);
+            assert_eq!(fields(&mut block)["Name"], Value::String(HEAD_VARIANTS[position].0.into()));
+            let Value::Compound(props) = &fields(&mut block)["Properties"] else { panic!() };
+            assert_eq!(props["rotation"], Value::String((position * 2 + 3).to_string()));
+        }
+        for (offset, facing) in ["north", "east", "south", "west"].iter().enumerate() {
+            let mut block = head_test_block_at(&value, 6 + offset);
+            assert_eq!(fields(&mut block)["Name"], Value::String(HEAD_VARIANTS[offset].1.into()));
+            let Value::Compound(props) = &fields(&mut block)["Properties"] else { panic!() }; assert_eq!(props["facing"], Value::String((*facing).into()));
+        }
+        let report = migrate(&mut value,1343,5023).unwrap(); assert!(report.issues.is_empty(), "{:?}", report.issues);
+        migrate_head_palette(&mut value,5023,1343).unwrap();
+        let report = migrate(&mut value,5023,1343).unwrap(); assert!(report.issues.is_empty(), "{:?}", report.issues);
+        assert_eq!(fields(&mut value)["TileEntities"], Value::List(original_tiles));
+        for position in 0..6 { assert_eq!(head_test_block_at(&value,position), head_test_state("minecraft:skeleton_skull","rotation","4")); }
+        for (offset, facing) in ["north", "east", "south", "west"].iter().enumerate() { assert_eq!(head_test_block_at(&value,6+offset), head_test_state("minecraft:skeleton_wall_skull","facing",facing)); }
+    }
+
+    #[test]
+    fn raw_legacy_skull_mounting_uses_tile_rot_and_wall_facing() {
+        let tiles = (0..2).map(|x| map(&[("id",Value::String("Skull".into())),("x",Value::Int(x)),("y",Value::Int(0)),("z",Value::Int(0)),("SkullType",Value::Byte(3)),("Rot",Value::Byte(15))])).collect();
+        let mut value = head_test_region(vec![head_test_state("minecraft:skull","facing","up"),head_test_state("minecraft:skull","facing","east")], &[0,1], tiles);
+        migrate_head_palette(&mut value,0,5023).unwrap();
+        for (position,name,key,pose) in [(0,"minecraft:player_head","rotation","15"),(1,"minecraft:player_wall_head","facing","east")] {
+            let mut block=head_test_block_at(&value,position); assert_eq!(fields(&mut block)["Name"],Value::String(name.into()));
+            let Value::Compound(properties)=&fields(&mut block)["Properties"] else {panic!()}; assert_eq!(properties[key],Value::String(pose.into()));
+        }
+    }
+
+    #[test]
+    fn modern_head_without_empty_tile_recreates_numeric_carrier_metadata() {
+        let mut value = head_test_region(vec![head_test_state("minecraft:player_head","rotation","11")], &[0], vec![]);
+        migrate_head_palette(&mut value,5023,1343).unwrap();
+        assert_eq!(head_test_block_at(&value,0),head_test_state("minecraft:skeleton_skull","rotation","4"));
+        let Value::List(tiles) = &fields(&mut value)["TileEntities"] else { panic!() };
+        let Value::Compound(skull) = &tiles[0] else { panic!() };
+        assert_eq!(skull["SkullType"],Value::Byte(3)); assert_eq!(skull["Rot"],Value::Byte(11));
+        let source = include_str!("version_conversion.rs");
+        assert!(source.find("migrate_head_palette(region,").unwrap() < source.find("migrate_banner_palette(region,").unwrap());
+    }
+
+    #[test]
+    fn head_migration_reports_missing_species_or_bad_legacy_type_without_mutation() {
+        for (name,target) in [("minecraft:piglin_head",1343),("minecraft:dragon_head",0)] {
+            let mut value = head_test_region(vec![head_test_state(name,"rotation","7")], &[0], vec![]); let before=value.clone();
+            let error=migrate_head_palette(&mut value,5023,target).unwrap_err().to_string(); assert!(error.contains(name),"{error}"); assert_eq!(value,before);
+        }
+        let skull=map(&[("id",Value::String("Skull".into())),("x",Value::Int(0)),("y",Value::Int(0)),("z",Value::Int(0)),("SkullType",Value::Byte(6)),("Rot",Value::Byte(0))]);
+        let mut value=head_test_region(vec![head_test_state("minecraft:skeleton_skull","rotation","4")],&[0],vec![skull]);let before=value.clone();assert!(migrate_head_palette(&mut value,1343,5023).unwrap_err().to_string().contains("SkullType=6"));assert_eq!(value,before);
+    }
 
     #[test]
     fn legacy_bed_color_changes_actual_palette_and_inverse_recreates_color() {
@@ -3048,4 +3455,54 @@ mod tests {
         assert!(!migrate(&mut value, 123456, 4671).unwrap().issues.is_empty());
         assert_eq!(value, original);
     }
+
+    #[test]
+    fn extra_vanilla_creeper_fox_and_wolf_payloads_really_migrate_and_roundtrip() {
+        let mut creeper=map(&[("id",Value::String("minecraft:creeper".into())),("NoAI",Value::Byte(1)),("powered",Value::Byte(1)),("Fuse",Value::Short(40)),("ExplosionRadius",Value::Byte(5)),("ignited",Value::Byte(0)),("DeathLootTable",Value::String("minecraft:entities/creeper".into())),("DeathLootTableSeed",Value::Long(42)),("ArmorItems",Value::List(vec![map(&[]);4])),("HandItems",Value::List(vec![map(&[]);2]))]);
+        let original=creeper.clone();let mut report=PayloadMigrationReport::default();migrate_entity(&mut creeper,3700,5023,&mut report).unwrap();migrate_entity(&mut creeper,5023,3700,&mut report).unwrap();assert!(report.issues.is_empty(),"{:?}",report.issues);assert_eq!(creeper,original);
+        let mut fox=map(&[("id",Value::String("minecraft:fox".into())),("Type",Value::String("snow".into())),("Sleeping",Value::Byte(1)),("Sitting",Value::Byte(0)),("Crouching",Value::Byte(0)),("TrustedUUIDs",Value::List(vec![map(&[("M",Value::Long(1)),("L",Value::Long(2))])])),("ArmorItems",Value::List(vec![map(&[]);4])),("HandItems",Value::List(vec![map(&[]);2]))]);
+        let original=fox.clone();migrate_entity(&mut fox,2230,5023,&mut report).unwrap();assert!(fields(&mut fox).contains_key("Trusted"));migrate_entity(&mut fox,5023,2230,&mut report).unwrap();assert_eq!(fox,original);
+        let mut wolf=map(&[("id",Value::String("minecraft:wolf".into())),("Owner",Value::IntArray(fastnbt::IntArray::new(vec![0,1,0,2]))),("Sitting",Value::Byte(1)),("CollarColor",Value::Byte(14)),("AngerTime",Value::Int(0)),("Health",Value::Float(10.0)),("Attributes",Value::List(vec![map(&[("Name",Value::String("minecraft:generic.max_health".into())),("Base",Value::Double(20.0))])])),("ArmorItems",Value::List(vec![map(&[]);4])),("HandItems",Value::List(vec![map(&[]);2]))]);
+        let original=wolf.clone();migrate_entity(&mut wolf,3700,5023,&mut report).unwrap();assert_eq!(fields(&mut wolf)["Health"],Value::Float(10.0));assert_eq!(fields(&mut wolf)["anger_end_time"],Value::Long(0));assert_eq!(fields(&mut wolf)["variant"],Value::String("minecraft:pale".into()));migrate_entity(&mut wolf,5023,3700,&mut report).unwrap();assert_eq!(wolf,original);assert!(report.issues.is_empty(),"{:?}",report.issues);
+    }
+
+    #[test]
+    fn extra_vanilla_cat_old_ocelot_and_numeric_variant_nodes_keep_owner_and_style() {
+        let mut old=map(&[("id",Value::String("Ozelot".into())),("CatType",Value::Int(1)),("OwnerUUID",Value::String("00000000-0000-0001-0000-000000000002".into())),("Sitting",Value::Byte(1))]);let mut report=PayloadMigrationReport::default();migrate_entity(&mut old,0,5023,&mut report).unwrap();assert_eq!(fields(&mut old)["id"],Value::String("minecraft:cat".into()));assert_eq!(fields(&mut old)["variant"],Value::String("minecraft:black".into()));assert!(fields(&mut old).contains_key("Owner"));migrate_entity(&mut old,5023,0,&mut report).unwrap();assert_eq!(fields(&mut old)["id"],Value::String("Ozelot".into()));assert_eq!(fields(&mut old)["CatType"],Value::Int(1));assert_eq!(fields(&mut old)["OwnerUUID"],Value::String("00000000-0000-0001-0000-000000000002".into()));assert!(report.issues.is_empty(),"{:?}",report.issues);
+        let mut british=map(&[("id",Value::String("minecraft:cat".into())),("CatType",Value::Int(4)),("CollarColor",Value::Byte(5)),("Sitting",Value::Byte(0)),("ArmorItems",Value::List(vec![map(&[]);4])),("HandItems",Value::List(vec![map(&[]);2]))]);let original=british.clone();migrate_entity(&mut british,2230,5023,&mut report).unwrap();assert_eq!(fields(&mut british)["variant"],Value::String("minecraft:british_shorthair".into()));migrate_entity(&mut british,5023,2230,&mut report).unwrap();assert_eq!(british,original);
+        let mut tabby=map(&[("id",Value::String("minecraft:cat".into())),("variant",Value::String("minecraft:tabby".into()))]);assert!(migrate_entity(&mut tabby,5023,1343,&mut report).unwrap_err().to_string().contains("三种"));
+    }
+
+    #[test]
+    fn extra_vanilla_donkey_and_llama_inventory_saddles_and_carpet_cross_real_nodes() {
+        let mut donkey=map(&[("id",Value::String("minecraft:donkey".into())),("ChestedHorse",Value::Byte(1)),("Tame",Value::Byte(1)),("Temper",Value::Int(37)),("Owner",Value::IntArray(fastnbt::IntArray::new(vec![0,1,0,2]))),("Items",Value::List(vec![map(&[("id",Value::String("minecraft:stone".into())),("Count",Value::Byte(2)),("Slot",Value::Byte(2))])])),("SaddleItem",map(&[("id",Value::String("minecraft:saddle".into())),("Count",Value::Byte(1))])),("ArmorDropChances",Value::List(vec![Value::Float(0.085);4])),("HandDropChances",Value::List(vec![Value::Float(0.085);2])),("ArmorItems",Value::List(vec![map(&[]);4])),("HandItems",Value::List(vec![map(&[]);2]))]);let original=donkey.clone();let mut report=PayloadMigrationReport::default();migrate_entity(&mut donkey,3700,5023,&mut report).unwrap();let Value::List(items)=&fields(&mut donkey)["Items"]else{panic!()};let Value::Compound(item)=&items[0]else{panic!()};assert_eq!(item["Slot"],Value::Byte(0));assert_eq!(item["count"],Value::Int(2));migrate_entity(&mut donkey,5023,3700,&mut report).unwrap();assert_eq!(donkey,original);
+        let mut legacy=map(&[("id",Value::String("EntityHorse".into())),("Type",Value::Int(1)),("ChestedHorse",Value::Byte(1)),("Items",Value::List(vec![map(&[("id",Value::String("minecraft:stone".into())),("Count",Value::Byte(3)),("Damage",Value::Short(0)),("Slot",Value::Byte(2))])]))]);migrate_entity(&mut legacy,0,5023,&mut report).unwrap();assert_eq!(fields(&mut legacy)["id"],Value::String("minecraft:donkey".into()));migrate_entity(&mut legacy,5023,0,&mut report).unwrap();assert_eq!(fields(&mut legacy)["id"],Value::String("EntityHorse".into()));assert_eq!(fields(&mut legacy)["Type"],Value::Int(1));
+        let mut llama=map(&[("id",Value::String("minecraft:llama".into())),("Strength",Value::Int(3)),("Variant",Value::Int(2)),("ChestedHorse",Value::Byte(1)),("Items",Value::List(vec![map(&[("id",Value::String("minecraft:stone".into())),("Count",Value::Byte(4)),("Slot",Value::Byte(10))])])),("DecorItem",map(&[("id",Value::String("minecraft:red_carpet".into())),("Count",Value::Byte(1))])),("ArmorDropChances",Value::List(vec![Value::Float(0.085);4])),("HandDropChances",Value::List(vec![Value::Float(0.085);2])),("ArmorItems",Value::List(vec![map(&[]);4])),("HandItems",Value::List(vec![map(&[]);2]))]);let original=llama.clone();migrate_entity(&mut llama,3700,5023,&mut report).unwrap();let Value::Compound(equipment)=&fields(&mut llama)["equipment"]else{panic!()};assert!(equipment.contains_key("body"));migrate_entity(&mut llama,5023,3700,&mut report).unwrap();assert_eq!(llama,original);assert!(report.issues.is_empty(),"{:?}",report.issues);
+    }
+
+    #[test]
+    fn extra_vanilla_leash_uuid_positions_and_true_clock_or_target_loss_are_precise() {
+        let mut holder=Fields::from([("NoAI".into(),Value::Byte(1)),("Leash".into(),map(&[("UUIDMost",Value::Long(1)),("UUIDLeast",Value::Long(2))]))]);let original=holder.clone();migrate_mob_common(&mut holder,1343,5023).unwrap();let Value::Compound(leash)=&holder["leash"]else{panic!()};assert!(matches!(leash.get("UUID"),Some(Value::IntArray(_))));migrate_mob_common(&mut holder,5023,1343).unwrap();assert_eq!(holder,original);
+        let mut position=Fields::from([("Leash".into(),map(&[("X",Value::Int(-1)),("Y",Value::Int(64)),("Z",Value::Int(9))]))]);let original=position.clone();migrate_mob_common(&mut position,3700,5023).unwrap();assert_eq!(position["leash"],Value::IntArray(fastnbt::IntArray::new(vec![-1,64,9])));migrate_mob_common(&mut position,5023,3700).unwrap();assert_eq!(position,original);
+        let mut active=Fields::from([("anger_end_time".into(),Value::Long(9999))]);let original=active.clone();migrate_neutral_anger(&mut active,4671,5023).unwrap();assert_eq!(active,original);assert!(migrate_neutral_anger(&mut active,5023,3700).unwrap_err().to_string().contains("game tick基准"));
+        let mut old_angry=Fields::from([("Angry".into(),Value::Byte(1))]);let mut report=PayloadMigrationReport::default();migrate_extra_species(&mut old_angry,"minecraft:wolf",0,1343,&mut report).unwrap();assert_eq!(old_angry["Angry"],Value::Byte(1));
+        let mut loot=Fields::from([("DeathLootTable".into(),Value::String("minecraft:entities/creeper".into()))]);assert!(migrate_mob_common(&mut loot,3700,0).unwrap_err().to_string().contains("自定义死亡"));
+        let mut bad=map(&[("id",Value::String("minecraft:creeper".into())),("unknown_vanilla_schema",Value::Int(1))]);assert!(migrate_entity(&mut bad,3700,5023,&mut report).unwrap_err().to_string().contains("unknown_vanilla_schema"));
+    }
+
+    #[test]
+    fn extra_vanilla_trial_builtin_entities_use_verified_shared_codecs() {
+        let mut report=PayloadMigrationReport::default();
+        for id in ["breeze","husk","spider","bogged","stray","cave_spider","silverfish","slime"] {
+            let mut entity=map(&[("id",Value::String(format!("minecraft:{id}")))]);
+            if id=="slime"{fields(&mut entity).insert("Size".into(),Value::Int(2));}
+            migrate_entity(&mut entity,3953,5023,&mut report).unwrap();
+            migrate_entity(&mut entity,5023,3953,&mut report).unwrap();
+            assert_eq!(fields(&mut entity)["id"],Value::String(format!("minecraft:{id}")));
+        }
+        assert!(report.issues.is_empty(),"{:?}",report.issues);
+        let mut breeze=map(&[("id",Value::String("minecraft:breeze".into()))]);
+        assert!(migrate_entity(&mut breeze,5023,3465,&mut report).unwrap_err().to_string().contains("没有实体"));
+    }
+
 }
