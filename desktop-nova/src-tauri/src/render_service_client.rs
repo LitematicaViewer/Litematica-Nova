@@ -1276,6 +1276,9 @@ struct HostResourceProbeRequest {
     backend: HostResourceProbeBackend,
     iris_route: HostResourceProbeIrisRoute,
     vulkan_adapter: Option<HostResourceProbeVulkanAdapter>,
+    // Same optional GPU/PPLL planning extent as the production ResourceProbeRequest.
+    #[serde(default)]
+    viewport: Option<[u32; 2]>,
     result_path: PathBuf,
 }
 
@@ -1326,6 +1329,11 @@ fn validate_resource_preflight_request_shape(
             "unsupported resource preflight request schema {}; expected {RESOURCE_PREFLIGHT_SCHEMA}",
             request.schema
         ));
+    }
+    if request.viewport.is_some_and(|extent| {
+        extent.contains(&0) || extent.iter().any(|&value| value > 16_384)
+    }) {
+        return Err("resource preflight viewport is outside 1..=16384".to_owned());
     }
     validate_preflight_request_id(&request.request_id)?;
     let expected_request_name = format!(
@@ -1747,6 +1755,7 @@ mod tests {
                 "shaderpack_requested": false
             },
             "vulkan_adapter": null,
+            "viewport": [1280, 800],
             "result_path": result_path
         });
         std::fs::write(&request_path, serde_json::to_vec(&request).unwrap()).unwrap();
@@ -1777,6 +1786,65 @@ mod tests {
         extra_argument.args.push("--nova-stream-await".to_owned());
         assert!(validate_render_child_shape(&extra_argument, &runtime_root).is_err());
         std::fs::remove_dir_all(runtime_root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn resource_preflight_host_production_viewport_accepts_bounds_and_legacy_none() {
+        let root = std::env::temp_dir().join(format!("nova-probe-viewport-{}", std::process::id()));
+        let preflight = root.join("status/preflight");
+        let request_path = preflight.join("nova-resource-preflight-request-viewport-75.json");
+        // Exact ResourceProbeRequest wire fields emitted by render_service.rs.
+        // Keep this separate from the camelCase CPU ResourceDemandRequest.
+        let mut producer = serde_json::json!({
+            "schema":1,"request_id":"viewport-75","backend":"vulkan",
+            "iris_route":{"fallback":"fail","shaderpack_requested":false},
+            "vulkan_adapter":null,"viewport":[1280,800],
+            "result_path":preflight.join("nova-resource-preflight-result-viewport-75.json")
+        });
+        for extent in [[1280, 800], [1, 1], [16_384, 16_384]] {
+            producer["viewport"] = serde_json::json!(extent);
+            let parsed: HostResourceProbeRequest =
+                serde_json::from_slice(&serde_json::to_vec(&producer).unwrap()).unwrap();
+            assert_eq!(parsed.viewport, Some(extent));
+            validate_resource_preflight_request_shape(&request_path, &preflight, &parsed).unwrap();
+        }
+        producer.as_object_mut().unwrap().remove("viewport");
+        let parsed: HostResourceProbeRequest = serde_json::from_value(producer.clone()).unwrap();
+        assert_eq!(parsed.viewport, None);
+        validate_resource_preflight_request_shape(&request_path, &preflight, &parsed).unwrap();
+        producer["viewport"] = serde_json::Value::Null;
+        let parsed: HostResourceProbeRequest = serde_json::from_value(producer).unwrap();
+        assert_eq!(parsed.viewport, None);
+        validate_resource_preflight_request_shape(&request_path, &preflight, &parsed).unwrap();
+    }
+
+    #[test]
+    fn resource_preflight_host_production_viewport_rejects_invalid_extent_or_shape() {
+        let preflight = std::env::temp_dir().join("nova-probe-invalid-viewport/status/preflight");
+        let request_path = preflight.join("nova-resource-preflight-request-invalid-75.json");
+        let producer = serde_json::json!({
+            "schema":1,"request_id":"invalid-75","backend":"vulkan",
+            "iris_route":{"fallback":"fail","shaderpack_requested":false},
+            "vulkan_adapter":null,"viewport":[1280,800],
+            "result_path":preflight.join("nova-resource-preflight-result-invalid-75.json")
+        });
+        for extent in [[0, 800], [1280, 0], [16_385, 800], [1280, 16_385]] {
+            let mut invalid = producer.clone();
+            invalid["viewport"] = serde_json::json!(extent);
+            let parsed: HostResourceProbeRequest = serde_json::from_value(invalid).unwrap();
+            assert!(validate_resource_preflight_request_shape(&request_path, &preflight, &parsed)
+                .unwrap_err().contains("viewport"));
+        }
+        for shape in [serde_json::json!([1280]), serde_json::json!([1280,800,1]),
+            serde_json::json!([-1,800]), serde_json::json!([1280,800.5]),
+            serde_json::json!("1280x800"), serde_json::json!({"width":1280,"height":800})] {
+            let mut invalid = producer.clone();
+            invalid["viewport"] = shape;
+            assert!(serde_json::from_value::<HostResourceProbeRequest>(invalid).is_err());
+        }
+        let mut unknown = producer;
+        unknown["unexpected_viewport_field"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<HostResourceProbeRequest>(unknown).is_err());
     }
 
     #[test]
@@ -1834,6 +1902,23 @@ mod tests {
             environment:BTreeMap::from([("LBA_DATA_ROOT".to_owned(),root.display().to_string())]),
             current_directory:None, stdout:log_target(&runtime,"demand-7-stdout.log"),
             stderr:log_target(&runtime,"demand-7-stderr.log"),hidden:true,new_process_group:false };
+        validate_render_child_shape(&spec,&runtime).unwrap();
+        // CPU demand keeps its REQUIRED bounded viewport; the GPU probe's
+        // optional backwards-compatible field must not weaken this entry.
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("viewport");
+        std::fs::write(&request, serde_json::to_vec(&missing).unwrap()).unwrap();
+        assert!(validate_render_child_shape(&spec,&runtime).is_err());
+        for extent in [serde_json::Value::Null, serde_json::json!([0,700]),
+            serde_json::json!([1200,0]), serde_json::json!([16_385,700]),
+            serde_json::json!([1200,16_385]), serde_json::json!([1200]),
+            serde_json::json!([1200,700,1])] {
+            let mut invalid = value.clone();
+            invalid["viewport"] = extent;
+            std::fs::write(&request, serde_json::to_vec(&invalid).unwrap()).unwrap();
+            assert!(validate_render_child_shape(&spec,&runtime).is_err());
+        }
+        std::fs::write(&request, serde_json::to_vec(&value).unwrap()).unwrap();
         validate_render_child_shape(&spec,&runtime).unwrap();
         let mut injected=spec.clone();
         injected.environment.insert("EXTRA_ENV".to_owned(),"1".to_owned());
