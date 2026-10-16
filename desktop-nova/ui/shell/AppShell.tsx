@@ -5,7 +5,7 @@ import { getApplicationVersion } from "../../src/platform/appData";
 import { invoke } from "../../src/platform/tauri";
 import { addOrUpdateRecord, loadLibrary } from "../../src/business/projectionLibrary";
 import { listenEvent } from "../../src/platform/events";
-import { initI18n, loadStructuralBlocks, createRuntimeProjectionCollection, type EnumeratorCollection } from "../../src/business/facade";
+import { initI18n, loadStructuralBlocks, createRuntimeProjectionCollection, displayPathText, type EnumeratorCollection } from "../../src/business/facade";
 import { HomePage } from "../windows/main/pages/home/HomePage";
 import { LibraryPage } from "../windows/main/pages/library/LibraryPage";
 import { PropertiesPage } from "../windows/main/pages/properties/PropertiesPage";
@@ -238,7 +238,7 @@ export function App() {
       <main className="content">
         {closeRecovery.error && <div role="alert"><p>{closeRecovery.error}</p><Button onClick={() => void closeRecovery.retry()}>重试关闭</Button></div>}
         {themeSaveError && <p role="alert">{themeSaveError}</p>}
-        {enumeratorError && <p role="alert">枚举器：{enumeratorError}</p>}
+        {enumeratorError && <p role="alert">枚举器：{displayPathText(enumeratorError)}</p>}
         <Page presentationBlocked={showEnumerator} currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} debugMode={debugMode} setDebugMode={setDebugMode} buildVersion={buildVersion} />
       </main>
       {showEnumerator && <EnumeratorDialog theme={theme} currentFile={currentFile} runtimeCollection={enumeratorRuntime} onClose={() => setShowEnumerator(false)} />}
