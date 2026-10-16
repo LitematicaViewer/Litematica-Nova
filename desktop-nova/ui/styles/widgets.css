@@ -14,13 +14,13 @@
     max-width: min(90vw, 600px);
     max-height: min(var(--radix-select-content-available-height), 320px);
     overflow: hidden;
-    color: var(--ln-body-text-color);
-    background: var(--ln-ui-background-color);
+    color: var(--foreground);
+    background: var(--background);
 }
 .dropdown-menu [data-slot="select-viewport"] { padding: 4px; }
 .dropdown-item[data-slot="select-item"] { position: relative; padding-right: 30px; outline: none; }
 .dropdown-item[data-slot="select-item"] { white-space: normal; overflow-wrap: anywhere; }
-.dropdown-item[data-highlighted] { color: var(--ln-option-active-color); background: var(--ln-option-active-background); }
+.dropdown-item[data-highlighted] { color: var(--option-active-color); background: var(--option-active-background); }
 .dropdown-item [data-slot="select-item-indicator"] { position: absolute; right: 8px; display: flex; align-items: center; }
 [data-slot="select-scroll-up-button"], [data-slot="select-scroll-down-button"] { display: flex; justify-content: center; padding: 4px; }
 [data-slot="select-trigger"] svg { width: 16px; height: 16px; flex: 0 0 auto; }
@@ -50,7 +50,7 @@
     width: var(--radix-popover-trigger-width);
     max-width: calc(100vw - 16px);
     max-height: min(24rem, var(--radix-popover-content-available-height));
-    color: var(--ln-body-text-color);
+    color: var(--foreground);
 }
 .dropdown-menu[data-slot="select-content"] { max-height: min(var(--radix-select-content-available-height), 24rem); }
 .subwindow-standalone-page { height: 100dvh; min-height: 0; }
@@ -120,17 +120,13 @@ html[data-theme="minecraft"] {
 @layer tokens {
 
 :root {
-    --ln-control-height: 32px;
-    --ln-control-radius: 3px;
-    --ln-popup-shadow: 0 8px 24px rgb(0 0 0 / 20%);
-    --ln-focus-color: var(--ring);
-    --ln-option-active-background: var(--accent);
-    --ln-option-active-color: var(--foreground);
-    --ln-error-color: var(--destructive);
+    --control-height: 32px;
+    --radius: 3px;
+    --panel-shadow: 0 8px 24px rgb(0 0 0 / 20%);
+    --option-active-background: var(--accent);
+    --option-active-color: var(--foreground);
     --success: #306743;
     --warning: #8a4b00;
-    --ln-success-color: var(--success);
-    --ln-warning-color: var(--warning);
 }
 }
 
@@ -139,8 +135,8 @@ html[data-theme="minecraft"] {
 .btn,
 .input,
 .dropdown-trigger {
-    min-height: var(--ln-control-height);
-    border-radius: var(--ln-control-radius);
+    min-height: var(--control-height);
+    border-radius: var(--radius);
 }
 
 .btn {
@@ -157,7 +153,7 @@ button[aria-busy="true"] {
 }
 
 :where(button, input, select, textarea, summary, a):focus-visible {
-    outline: 2px solid var(--ln-focus-color);
+    outline: 2px solid var(--ring);
     outline-offset: 2px;
 }
 
@@ -218,20 +214,20 @@ td {
 
 .dropdown-menu,
 .block-search-menu {
-    border-radius: var(--ln-control-radius);
-    box-shadow: var(--ln-popup-shadow);
+    border-radius: var(--radius);
+    box-shadow: var(--panel-shadow);
 }
 
 .dropdown-menu .dropdown-item {
     display: flex;
-    min-height: var(--ln-control-height);
+    min-height: var(--control-height);
     align-items: center;
     padding: 6px 10px;
 }
 
 .dropdown-item[data-active="true"] {
-    color: var(--ln-option-active-color);
-    background: var(--ln-option-active-background);
+    color: var(--option-active-color);
+    background: var(--option-active-background);
 }
 
 .dropdown-item[aria-selected="true"] {
@@ -239,8 +235,8 @@ td {
 }
 
 .dialog-surface {
-    border-radius: var(--ln-control-radius);
-    box-shadow: var(--ln-popup-shadow);
+    border-radius: var(--radius);
+    box-shadow: var(--panel-shadow);
 }
 
 .dialog-title,
@@ -249,7 +245,7 @@ td {
 }
 
 .dialog-message-error {
-    color: var(--ln-error-color);
+    color: var(--destructive);
 }
 
 .dialog-footer > button,

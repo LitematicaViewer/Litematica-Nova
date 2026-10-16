@@ -11,10 +11,9 @@
     --ln-space-3: 12px;
     --ln-space-4: 16px;
     --ln-space-6: 24px;
-    --ln-form-max: 72rem;
     --ln-field-max: 42rem;
-    color: var(--ln-body-text-color, #000000);
-    background: var(--ln-ui-background-color, #ffffff);
+    color: var(--foreground);
+    background: var(--background);
     font-family: var(--ln-body-font-family, system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif);
     font-size: var(--ln-body-font-size, 14px);
 }
@@ -36,8 +35,8 @@ body,
 
 body {
     overflow: hidden;
-    color: var(--ln-body-text-color);
-    background: var(--ln-ui-background-color);
+    color: var(--foreground);
+    background: var(--background);
     font-family: var(--ln-body-font-family, system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif);
     font-size: var(--ln-body-font-size, 14px);
     letter-spacing: normal;
@@ -110,8 +109,8 @@ table {
 
 .block-icon-fallback {
     border: 1px solid var(--border);
-    background: var(--ln-ui-background-color);
-    color: var(--ln-muted-text-color);
+    background: var(--background);
+    color: var(--muted-foreground);
     font-size: 11px;
     font-weight: 700;
     line-height: 30px;
@@ -216,7 +215,7 @@ td {
 }
 
 .nova-muted {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
 }
 
 .nova-small {
@@ -254,7 +253,7 @@ td {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     text-align: center;
 }
 
@@ -262,7 +261,7 @@ td {
 .nova-file-chip-wide {
     min-width: 0;
     overflow: hidden;
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -283,19 +282,19 @@ td {
 }
 
 .nova-error {
-    border: 1px solid #ff6666;
-    background: rgb(255 0 0 / 10%);
-    color: #ff6666;
+    border: 1px solid var(--destructive);
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
+    color: var(--destructive);
 }
 
 .nova-warning {
-    border: 1px solid #8a6a22;
-    background: rgb(255 180 0 / 10%);
-    color: #ffcc66;
+    border: 1px solid var(--warning);
+    background: color-mix(in srgb, var(--warning) 10%, transparent);
+    color: var(--warning);
 }
 
 .nova-summary {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     cursor: pointer;
 }
 
@@ -303,7 +302,7 @@ td {
     overflow: auto;
     padding: 8px;
     border: 1px solid var(--border);
-    background: var(--ln-ui-background-color);
+    background: var(--background);
     white-space: pre-wrap;
 }
 
@@ -320,7 +319,7 @@ td {
     flex: 1;
     height: 16px;
     border: 2px solid var(--border);
-    background: var(--ln-ui-background-color);
+    background: var(--background);
 }
 
 .nova-progress-fill {
@@ -351,7 +350,7 @@ td {
 
 .nova-empty-compact {
     padding: 16px;
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
 }
 
 .empty-state {
@@ -457,7 +456,7 @@ td {
     max-width: min(28rem, 40%);
     min-width: 0;
     overflow: hidden;
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     font-size: 0.9em;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -483,7 +482,7 @@ td {
 
 .render-page-action-label,
 .render-progress-stage {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
 }
 
 .render-progress-row {
@@ -510,9 +509,9 @@ td {
 .render-error {
     margin: 0;
     padding: 8px;
-    border: 1px solid #ff6666;
-    background: rgba(255, 0, 0, 0.1);
-    color: #ff6666;
+    border: 1px solid var(--destructive);
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
+    color: var(--destructive);
     white-space: pre-wrap;
 }
 
@@ -568,7 +567,7 @@ td {
 }
 
 .render-preflight-description {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     line-height: 1.6;
 }
 
@@ -581,7 +580,7 @@ td {
 }
 
 .render-preflight-details-toggle {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     cursor: pointer;
 }
 
@@ -644,7 +643,7 @@ textarea.input,
     display: grid;
     place-items: center;
     border: 1px solid var(--border);
-    background: var(--ln-ui-background-color, #ffffff);
+    background: var(--background);
     color: var(--muted-foreground);
     text-align: center;
 }
@@ -743,8 +742,8 @@ label.setting-row:has(> input[type="radio"]) {
 .template-library-row,
 .library-card,
 .rule-row {
-    background: var(--ln-ui-background-color);
-    border: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color);
+    background: var(--background);
+    border: var(--ln-card-border-width, 1px) solid var(--border);
 }
 
 .card,
@@ -766,7 +765,7 @@ label.setting-row:has(> input[type="radio"]) {
     top: -10px;
     left: 10px;
     padding: 0 4px;
-    background: var(--ln-ui-background-color);
+    background: var(--background);
     font-weight: bold;
 }
 
@@ -836,7 +835,7 @@ label.setting-row:has(> input[type="radio"]) {
     flex-direction: column;
     align-items: center;
     padding-top: 20px;
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
 }
 
 .library-empty-text {
@@ -849,7 +848,7 @@ label.setting-row:has(> input[type="radio"]) {
 }
 
 .library-content-title {
-    color: var(--ln-body-text-color);
+    color: var(--foreground);
     font-weight: 700;
 }
 
@@ -866,7 +865,7 @@ label.setting-row:has(> input[type="radio"]) {
 .library-card-current {
     border-width: var(--edge-width);
     border-color: var(--ln-card-border-color-active, var(--primary));
-    background: var(--ln-card-background-color-active, color-mix(in srgb, var(--primary) 12%, var(--ln-ui-background-color)));
+    background: var(--ln-card-background-color-active, color-mix(in srgb, var(--primary) 12%, var(--background)));
 }
 
 .library-footer {
@@ -930,7 +929,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .lib-card-title,
 .lib-card-highlight {
-    color: var(--ln-body-text-color);
+    color: var(--foreground);
 }
 
 .lib-card-status {
@@ -939,16 +938,16 @@ label.setting-row:has(> input[type="radio"]) {
 }
 
 .lib-card-status-missing {
-    color: #d97706;
+    color: var(--warning);
 }
 
 .lib-card-status-error {
-    color: #ff6666;
+    color: var(--destructive);
 }
 
 .lib-card-error-detail {
     overflow: hidden;
-    color: #ff6666;
+    color: var(--destructive);
     font-size: .85em;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -972,7 +971,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .lib-card-image-label {
     width: 100%;
-    color: var(--ln-body-text-color);
+    color: var(--foreground);
     font-weight: 700;
     text-align: center;
 }
@@ -998,7 +997,7 @@ label.setting-row:has(> input[type="radio"]) {
     max-height: 320px;
     overflow: auto;
     border: 1px solid var(--border);
-    background: var(--ln-ui-background-color);
+    background: var(--background);
 }
 
 .dropdown-item,
@@ -1039,7 +1038,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .block-search-current > span,
 .block-search-item small {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     font-size: 0.85em;
 }
 

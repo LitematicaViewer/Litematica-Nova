@@ -2,14 +2,12 @@
 
 @layer tokens {
 :root {
-    --ln-control-height: 44px;
-    --ln-control-radius: 0;
-    --ln-focus-color: #ffffff;
-    --ln-option-active-background: #4d4d4d;
-    --ln-option-active-color: #ffff00;
-    --ln-popup-shadow: none;
-    --ln-error-color: var(--destructive);
-    --ln-warning-color: var(--warning);
+    --control-height: 44px;
+    --radius: 0;
+    --ring: #ffffff;
+    --option-active-background: #4d4d4d;
+    --option-active-color: #ffff00;
+    --panel-shadow: none;
     --ln-minecraft-button-border: 4px;
     --ln-minecraft-button-height: 44px;
 }

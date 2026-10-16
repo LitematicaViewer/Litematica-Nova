@@ -9,7 +9,7 @@
     padding: 8px;
     border: 1px solid var(--border);
     background: var(--card);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--panel-shadow);
     color: var(--foreground);
     font-size: 12px;
     pointer-events: none;
@@ -50,7 +50,7 @@
     height: 140px;
     place-items: center;
     overflow: hidden;
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     text-align: center;
 }
 

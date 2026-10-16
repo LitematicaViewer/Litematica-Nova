@@ -24,6 +24,14 @@
       "ui/windows/main/pages/settings/settings.css": 5,
       "ui/windows/main/pages/statistics/materials.css": 7
     },
+    "css-hardcoded-colour": {
+      "ui/shell/widget/dialog.css": 5,
+      "ui/shell/widget/subwindow.css": 2,
+      "ui/styles/base.css": 4,
+      "ui/styles/controls.css": 1,
+      "ui/styles/flake.css": 20,
+      "ui/windows/main/pages/home/home.css": 1
+    },
     "css-important": {
       "ui/shell/widget/subwindow.css": 1,
       "ui/styles/controls.css": 2,

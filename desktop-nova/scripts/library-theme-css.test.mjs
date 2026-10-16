@@ -53,8 +53,8 @@ test('卡片与分类不继承纹理按钮或 8bit 位移阴影，状态独立�
   assert.equal(tile.transform, 'none');
   assert.equal(tile.height, 'auto');
   assert.equal(tile.gap, '0');
-  assert.match(rule(library, '.library-tile[data-checked]').background, /var\(--ln-option-active-background/);
-  assert.match(rule(library, '.library-tile:has(.library-tile-open:focus-visible)')['outline-color'], /var\(--ln-focus-color/);
+  assert.match(rule(library, '.library-tile[data-checked]').background, /var\(--option-active-background/);
+  assert.match(rule(library, '.library-tile:has(.library-tile-open:focus-visible)')['outline-color'], /var\(--ring/);
   const category = rule(library, 'html[data-theme] .library-page [data-slot="button"].library-category');
   assert.equal(category['border-image'], 'none');
   assert.equal(category['box-shadow'], 'none');

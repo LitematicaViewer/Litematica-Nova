@@ -382,6 +382,35 @@ function checkVendorImports(filePath, source, declaredLayers, projectCeiling) {
   }
 }
 
+// A colour written straight into a style declaration cannot follow the theme: the
+// same neon red survives both light and dark. Custom-property *definitions* are
+// excluded because that is where the palette legitimately lives.
+const COLOUR_LITERAL_RE = /#[0-9a-fA-F]{3,8}\b|\b(?:rgb|rgba|hsl|hsla|oklch)\(/;
+
+/**
+ * Flags hardcoded colours in style declarations, with two deliberate exemptions:
+ * `ui/themes/**` holds the palette (a literal there is the source of truth), and
+ * the settings page swatches preview the *other* themes' colours, so resolving
+ * them to the active theme would defeat their purpose.
+ */
+function checkHardcodedColours(filePath, source, relative) {
+  if (relative.startsWith("ui/themes/") || relative.endsWith("settings/settings.css")) return;
+  const masked = maskCssText(source);
+  for (const match of masked.matchAll(/([a-z-]+)\s*:\s*([^;{}]+)[;}]/gi)) {
+    const property = match[1];
+    const value = match[2];
+    if (property.startsWith("--")) continue;
+    if (value.includes("var(")) continue;
+    if (!COLOUR_LITERAL_RE.test(value)) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-hardcoded-colour",
+      `"${property}: ${value.trim()}" hardcodes a colour; use a theme token so it follows the theme.`,
+    );
+  }
+}
+
 function checkCssFile(filePath, source) {
   const { rules, reducedMotionSpans, forcedColoursSpans, masked } = scanCss(source);
   const relative = relativePath(filePath);
@@ -643,6 +672,7 @@ export function collectFindings(rootDir) {
       report.cssFileCount += 1;
       const source = fs.readFileSync(filePath, "utf8");
       checkCssFile(filePath, source);
+      checkHardcodedColours(filePath, source, relativePath(filePath));
       checkVendorImports(filePath, source, declaredLayers, projectCeiling);
 
       for (const match of source.matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {

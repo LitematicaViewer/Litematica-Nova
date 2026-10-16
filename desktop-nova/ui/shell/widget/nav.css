@@ -6,8 +6,8 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: var(--ln-ui-background-color);
-    color: var(--ln-body-text-color);
+    background: var(--background);
+    color: var(--foreground);
 }
 
 .content {
@@ -27,7 +27,7 @@
     flex-direction: column;
     overflow: hidden;
     /* border-right: 1px solid ThreeDShadow; */
-    background: var(--ln-navigation-background-color, #ffffff);
+    background: var(--navigation-background, #ffffff);
 }
 
 .sidebar-collapsed {

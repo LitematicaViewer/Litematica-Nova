@@ -17,8 +17,8 @@
 @layer tokens {
 
 :root {
-    --ln-ui-background-color: #3c3c3c;
-    --ln-navigation-background-color: #3c3c3c;
+    --background: #3c3c3c;
+    --navigation-background: #3c3c3c;
     --ln-file-icon-size: 32px;
 }
 

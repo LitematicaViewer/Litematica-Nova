@@ -51,7 +51,7 @@
     gap: 8px;
     padding: 10px;
     border: 1px solid var(--border);
-    background: var(--ln-ui-background-color);
+    background: var(--background);
     overflow: hidden;
 }
 
@@ -64,7 +64,7 @@
     gap: 8px;
     padding: 10px;
     border: 1px solid var(--border);
-    background: var(--ln-ui-background-color);
+    background: var(--background);
     overflow: hidden;
 }
 
@@ -148,7 +148,7 @@
 .enumerator-footer-status,
 .enumerator-collection-meta,
 .enumerator-footer-meta {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     font-size: 12px;
     line-height: 1.45;
 }
@@ -190,7 +190,7 @@
     height: 100%;
     overflow: auto;
     border: 1px solid var(--border);
-    background: var(--ln-ui-background-color);
+    background: var(--background);
 }
 
 .enumerator-table {
@@ -247,7 +247,7 @@
 
 .enumerator-empty-cell {
     text-align: center;
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
 }
 
 .enumerator-type-col {
@@ -269,7 +269,7 @@
     gap: 12px;
     padding: 10px 12px 12px;
     border-top: 1px solid var(--border);
-    background: var(--ln-ui-background-color);
+    background: var(--background);
 }
 
 .enumerator-footer-status {

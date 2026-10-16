@@ -12,8 +12,8 @@
 
 :root {
     --ln-window-content-padding: 12px;
-    --ln-ui-background-color: #ffffff;
-    --ln-navigation-background-color: #ffffff;
+    --background: #ffffff;
+    --navigation-background: #ffffff;
     --ln-file-icon-size: 16px;
 }
 }

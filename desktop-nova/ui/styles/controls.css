@@ -14,7 +14,7 @@ html[data-theme] .nova-control { font: inherit; }
 html[data-theme] [data-slot="button"] { line-height: 1.35; min-width: 0; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"] { border-color: transparent; background: var(--secondary); color: var(--foreground); box-shadow: none; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"]:hover:not(:disabled) { background: var(--accent); }
-html[data-theme] [data-slot="button"][data-size^="icon"] { padding: 7px; width: var(--ln-control-height); flex: 0 0 var(--ln-control-height); }
+html[data-theme] [data-slot="button"][data-size^="icon"] { padding: 7px; width: var(--control-height); flex: 0 0 var(--control-height); }
 html[data-theme] [data-slot="button"][data-size="sm"] { min-height: 30px; padding: 5px 10px; }
 html[data-theme] [data-slot="button"]:focus-visible,
 html[data-theme] [data-slot="input"]:focus-visible,

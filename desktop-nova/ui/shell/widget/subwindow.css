@@ -46,8 +46,8 @@
     flex-direction: column;
     gap: 12px;
     overflow: hidden;
-    color: var(--ln-body-text-color);
-    background: var(--ln-ui-background-color);
+    color: var(--foreground);
+    background: var(--background);
 }
 
 .subwindow-standalone-page {
@@ -126,11 +126,11 @@
     flex: 0 0 auto;
     align-items: center;
     gap: 6px;
-    color: var(--ln-body-text-color);
+    color: var(--foreground);
 }
 
 .subwindow-status-text {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     font-size: .9em;
 }
 
@@ -144,8 +144,8 @@
 .subwindow-error {
     margin: 0;
     padding: 8px;
-    background: rgb(255 0 0 / 10%);
-    color: #ffb3b3;
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
+    color: var(--destructive);
     white-space: pre-wrap;
 }
 
@@ -166,7 +166,7 @@
     max-height: 90%;
     padding: 16px;
     overflow: auto;
-    background: var(--ln-ui-background-color);
+    background: var(--background);
     border: 1px solid var(--border);
 }
 
@@ -191,8 +191,8 @@
     width: 100%;
     height: 100%;
     min-width: 0;
-    color: var(--ln-body-text-color);
-    background: var(--ln-ui-background-color);
+    color: var(--foreground);
+    background: var(--background);
 }
 
 .material-list-content {
@@ -216,7 +216,7 @@
 
 .material-list-window-error {
     margin: 0;
-    color: #ffb3b3;
+    color: var(--destructive);
     white-space: pre-wrap;
 }
 
@@ -277,7 +277,7 @@
 
 .material-list-table {
     border: 0;
-    color: var(--ln-body-text-color);
+    color: var(--foreground);
 }
 
 .material-list-table th {
@@ -315,7 +315,7 @@
 
 .material-list-empty-cell {
     padding: 16px;
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     text-align: center;
 }
 
@@ -352,7 +352,7 @@
 }
 
 .subwindow-status-text-error {
-    color: #ff6666;
+    color: var(--destructive);
 }
 
 .reden-content-grid {
@@ -417,7 +417,7 @@
 
 .reden-result-meta,
 .reden-detail-meta {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     font-size: .85em;
 }
 
@@ -430,13 +430,13 @@
 }
 
 .reden-result-date {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     font-size: .85em;
     opacity: .8;
 }
 
 .reden-result-summary {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     font-size: .85em;
 }
 
@@ -454,7 +454,7 @@
 }
 
 .reden-attachment-meta {
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     font-size: .85em;
 }
 
@@ -511,7 +511,7 @@
 .subwindow-empty-state {
     padding: 16px;
     border: 1px dashed var(--border);
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
 }
 
 .subwindow-card-stretch {
@@ -544,7 +544,7 @@
 
 .local-browser-path {
     flex: 1;
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
 }
 
 .local-browser-table {

@@ -12,7 +12,7 @@
 :root {
     --ln-body-font-family: "Unifont", monospace;
     --ln-body-font-size: 16px;
-    --ln-body-text-color: #ffffff;
+    --foreground: #ffffff;
     font-smooth: never;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;

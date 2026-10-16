@@ -70,18 +70,18 @@ html[data-theme] .settings-page .group-box-title { padding: 0; margin-bottom: 16
 .settings-page .settings-help-text {
     max-width: 76ch;
     margin-top: var(--ln-space-2, 8px);
-    color: var(--ln-muted-text-color);
+    color: var(--muted-foreground);
     font-size: 0.92em;
     line-height: 1.5;
     overflow-wrap: anywhere;
 }
 .settings-muted,
 .settings-status,
-.settings-path-state { color: var(--ln-muted-text-color); }
+.settings-path-state { color: var(--muted-foreground); }
 .settings-path-state { flex: 0 0 auto; min-width: 4em; }
-.settings-path-state[data-state="ok"] { color: var(--ln-success-color, #8fd18f); }
-.settings-page [data-state="error"] { color: var(--ln-error-color, #ff8888); }
-.settings-path-example { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ln-muted-text-color); }
+.settings-path-state[data-state="ok"] { color: var(--success); }
+.settings-page [data-state="error"] { color: var(--destructive); }
+.settings-path-example { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted-foreground); }
 .settings-feedback {
     flex: 0 0 auto;
     max-height: 16rem;
@@ -90,9 +90,9 @@ html[data-theme] .settings-page .group-box-title { padding: 0; margin-bottom: 16
     overflow: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    background: var(--ln-ui-background-color);
-    color: var(--ln-body-text-color);
-    border: 1px solid var(--ln-card-border-color);
+    background: var(--background);
+    color: var(--foreground);
+    border: 1px solid var(--border);
 }
 .settings-theme-options[data-slot="radio-group"] { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; gap: 12px; }
 html[data-theme] .settings-page [data-slot="radio-group-item"].settings-theme-option {
@@ -105,7 +105,7 @@ html[data-theme] .settings-page [data-slot="radio-group-item"].settings-theme-op
     padding: 14px;
     min-width: 0;
     width: 100%;
-    border-radius: var(--ln-control-radius);
+    border-radius: var(--radius);
     color: var(--foreground);
     white-space: normal;
     text-align: left;
@@ -123,8 +123,8 @@ html[data-theme] .settings-page [data-slot="radio-group-item"].settings-theme-op
 .settings-theme-swatch[data-theme-preview="Minecraft"] { background: #393939; border-radius: 0; }
 .settings-theme-swatch[data-theme-preview="Minecraft"] > span { border-radius: 0; background: #828282; box-shadow: inset 2px 2px #b6b6b6, inset -2px -2px #414141; }
 .settings-theme-swatch[data-theme-preview="Minecraft"] > span:first-child { background: #688154; }
-.settings-color-options { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--muted); border-radius: var(--ln-control-radius); }
-html[data-theme] .settings-color-options > [data-slot="radio-group-item"] { gap: 8px; width: auto; height: auto; min-height: 36px; padding: 6px 12px; border-radius: var(--ln-control-radius); background: transparent; color: var(--foreground); border-color: transparent; }
+.settings-color-options { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--muted); border-radius: var(--radius); }
+html[data-theme] .settings-color-options > [data-slot="radio-group-item"] { gap: 8px; width: auto; height: auto; min-height: 36px; padding: 6px 12px; border-radius: var(--radius); background: transparent; color: var(--foreground); border-color: transparent; }
 html[data-theme] .settings-color-options > [data-slot="radio-group-item"][data-state="checked"] { background: var(--card); border-color: var(--primary); }
 @container (max-width: 42rem) {
     .settings-page .form-row > .form-label { flex-basis: 100%; text-align: left; }

@@ -16,7 +16,7 @@
     min-width: 220px;
     flex-direction: column;
     border-right: 1px solid var(--border);
-    background: var(--ln-navigation-background-color, #ffffff);
+    background: var(--navigation-background, #ffffff);
 }
 
 .sidebar-collapsed {

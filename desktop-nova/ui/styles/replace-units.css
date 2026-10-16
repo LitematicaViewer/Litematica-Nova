@@ -68,7 +68,7 @@
     align-items: center;
     gap: 6px;
     padding: 6px 10px;
-    border-bottom: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color);
+    border-bottom: var(--ln-card-border-width, 1px) solid var(--border);
 }
 
 .replace-unit-header.collapsed {
@@ -95,7 +95,7 @@
 }
 
 .replace-unit-label-input:hover {
-    border-color: var(--ln-card-border-color);
+    border-color: var(--border);
 }
 
 .replace-unit-label-input:focus {
@@ -154,11 +154,11 @@
 
 /* Entry row */
 .replace-entry-row {
-    border: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color);
+    border: var(--ln-card-border-width, 1px) solid var(--border);
     border-radius: 4px;
     padding: 6px 8px;
     margin-bottom: 4px;
-    background: var(--ln-ui-background-color);
+    background: var(--background);
 }
 
 .replace-entry-top {
@@ -258,7 +258,7 @@
     border-top: 1px solid var(--border);
     padding: 6px 10px;
     font-size: 11px;
-    color: var(--ln-warning-color, orange);
+    color: var(--warning);
 }
 
 /* Footer */
@@ -280,7 +280,7 @@
     height: 60px;
     border: 1px solid var(--border);
     background: var(--card);
-    color: var(--ln-body-text-color);
+    color: var(--foreground);
     padding: 6px;
     font-family: inherit;
     font-size: 11px;
@@ -325,7 +325,7 @@
 }
 
 .replace-confirm-warning {
-    color: var(--ln-warning-color, orange);
+    color: var(--warning);
     margin-top: 8px;
     font-size: 11px;
 }
@@ -379,12 +379,12 @@
 }
 
 .enum-picker-error {
-    color: var(--ln-error-color, crimson);
+    color: var(--destructive);
     font-size: 12px;
 }
 
 .enum-picker-warning {
-    color: var(--ln-warning-color, orange);
+    color: var(--warning);
     font-size: 12px;
 }
 
@@ -474,7 +474,7 @@
 }
 
 .replace-debug-log-warn-badge {
-    color: var(--ln-warning-color, orange);
+    color: var(--warning);
     font-weight: 600;
 }
 
@@ -516,7 +516,7 @@
 }
 
 .replace-hover-tooltip-name {
-    color: var(--ln-body-text-color);
+    color: var(--foreground);
 }
 
 .replace-hover-tooltip-id {

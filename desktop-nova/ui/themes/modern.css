@@ -38,22 +38,12 @@
 
 :root {
     color-scheme: light;
-    --ln-ui-background-color: var(--background);
-    --ln-navigation-background-color: var(--card);
-    --ln-body-text-color: var(--foreground);
-    --ln-muted-text-color: var(--muted-foreground);
-    --ln-control-height: 36px;
-    --ln-control-radius: var(--radius);
-    --ln-focus-color: var(--ring);
-    --ln-option-active-background: var(--accent);
-    --ln-option-active-color: var(--foreground);
-    --ln-popup-shadow: var(--panel-shadow);
-    --ln-error-color: var(--destructive);
+    --navigation-background: var(--card);
+    --control-height: 36px;
+    --option-active-background: var(--accent);
+    --option-active-color: var(--foreground);
     --success: #306743;
     --warning: #8a4b00;
-    --ln-warning-color: var(--warning);
-    --ln-success-color: var(--success);
-    --ln-card-border-color: var(--border);
     --ln-card-background-color-active: var(--accent);
     --ln-file-icon-size: 20px;
 }
@@ -62,8 +52,6 @@
     color-scheme: dark;
     --success: #a3d7b2;
     --warning: #ebba70;
-    --ln-warning-color: var(--warning);
-    --ln-success-color: var(--success);
 }
 }
 
@@ -82,7 +70,7 @@ html[data-theme][data-color-scheme] {
 body { line-height: 1.5; }
 :where(button, input, select, textarea) { font: inherit; }
 button, .btn, .dropdown-trigger {
-    min-height: var(--ln-control-height);
+    min-height: var(--control-height);
     border: var(--edge-width) solid var(--border);
     border-radius: var(--radius);
     background: var(--card);
@@ -101,7 +89,7 @@ button.primary:hover:not(:disabled), button.btn-primary:hover:not(:disabled), bu
 button.danger, button[data-variant="destructive"] { color: var(--primary-foreground); background: var(--destructive); border-color: var(--destructive); }
 button[data-variant="ghost"], button[data-variant="link"] { background: transparent; border-color: transparent; box-shadow: none; }
 .input, input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), select, textarea {
-    min-height: var(--ln-control-height);
+    min-height: var(--control-height);
     border: var(--edge-width) solid var(--border);
     border-radius: var(--radius);
     padding: 6px 10px;

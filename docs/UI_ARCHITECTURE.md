@@ -6,6 +6,7 @@
 | V1.1     | 2026-10-13 | Codex  | 记录 Phase 0 完成（护栏脚本、计数式基线、8+3 用例） |
 | V1.2     | 2026-10-13 | Codex  | 记录 Phase 1 完成：层序修正为 `theme, vendor, tokens, base, components, utilities`；实测 2,951 处反转后把页面 CSS 的迁入推迟到 Phase 6；48 个文件完成层化，等价性三重验证通过 |
 | V1.3     | 2026-10-13 | Codex  | 记录 Phase 2A 完成：系统色 240 → 4、未定义令牌 73 → 0；护栏扩到全部自定义属性并新增 `css-system-colour` 与 `css-vendor-layer-above-components` 两条规则；记下 `layer(vendor)` 被 `git checkout` 静默还原导致 Tailwind 工具类越层的教训 |
+| V1.4     | 2026-10-13 | Codex  | 记录 Phase 2B 完成：14 个桥接令牌退场（191 处引用），`--navigation-background` 经实测改为提升而非删除；状态色与阴影令牌化；新增 `css-hardcoded-colour` 规则并保留 33 处需设计决定的字面值 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -244,11 +245,12 @@ Minecraft 主题的控件规则以裸元素选择器为主，`[data-slot]` 引�
 | `--ring` | 焦点环 | 三主题已有 |
 | `--radius` | 圆角基数 | 三主题已有 |
 | `--edge-width` | 描边宽度（shadcn 1px / 8bitcn 2px / Minecraft 0） | **Minecraft 缺，需补 `0`** |
-| `--control-shadow` | 控件阴影（8bitcn 像素投影） | **Minecraft 缺，需补 `none`** |
-| `--panel-shadow` | 浮层阴影 | **Minecraft 缺，需补 `none`** |
-| `--success` `--warning` | 状态色 | **三主题均缺，需新增** |
-| `--control-height` | 控件基准高度（32 / 36 / 44px） | 现为 `--ln-control-height`，**升级为语义令牌** |
-| `--option-active-background` `--option-active-color` | 列表项激活态 | 现为 `--ln-option-*`，**升级**（Minecraft 需 `#4d4d4d` / `#ffff00`，与 `--accent` 语义不同，必须独立） |
+| `--control-shadow` | 控件阴影（8bitcn 像素投影） | ✅ Phase 2A 已补 Minecraft `none` |
+| `--panel-shadow` | 浮层阴影 | ✅ Phase 2A 已补 Minecraft `none` |
+| `--success` `--warning` | 状态色 | ✅ Phase 2A 已补三主题 |
+| `--control-height` | 控件基准高度（32 / 36 / 44px） | ✅ Phase 2B 已由 `--ln-control-height` 提升 |
+| `--option-active-background` `--option-active-color` | 列表项激活态 | ✅ Phase 2B 已由 `--ln-option-*` 提升（与 `--accent` 语义不同，必须独立） |
+| `--navigation-background` | 导航/侧栏表面 | ✅ Phase 2B 新增：shadcn/8bitcn 取 `--card`、Minecraft 取 `--background`，是真实的独立概念（见 Phase 2B 记录） |
 
 **Tier 2 结构令牌** —— 跨主题稳定，随控件尺寸而非随主题变化。
 
@@ -259,7 +261,7 @@ Minecraft 主题的控件规则以裸元素选择器为主，`[data-slot]` 引�
 `--ln-minecraft-button-image` `--ln-minecraft-button-height` `--ln-minecraft-button-border` `--ln-minecraft-input-*` `--ln-minecraft-table-row-*` `--ln-minecraft-nav-*` `--ln-minecraft-range-*` `--ln-minecraft-card-border-color`（拟由 `--ln-card-border-color` 改名） `--ln-table-row-selected-background` `--ln-card-border-width` `--ln-card-background-color-active` `--ln-card-border-color-active`
 
 **纯桥接、应删除**（值为另一令牌的直接别名，无独立语义）：
-`--ln-ui-background-color` `--ln-navigation-background-color` `--ln-body-text-color` `--ln-muted-text-color` `--ln-control-radius` `--ln-focus-color` `--ln-popup-shadow` `--ln-error-color`
+`--ln-body-text-color` `--ln-muted-text-color` `--ln-control-radius` `--ln-focus-color` `--ln-popup-shadow` `--ln-error-color`（均已于 Phase 2B 删除）
 
 > `--ln-card-border-color` 一名两用：`minecraft/widget/content.css:3` 定义为 `#a0a0a0`，属 Tier 3；`modern.css:46` 与 `appearance.css:22` 定义为 `var(--border)`，属桥接。处理方式：删除后两处定义，其消费者改用 `--border`；保留 Minecraft 的定义并重命名为 `--ln-minecraft-card-border-color` 以显式标明归属。
 
@@ -574,6 +576,76 @@ Phase 1 期间我把 `modern.css` 的 Tailwind 导入从 `layer(utilities)` 改�
 **待人工验收**：本次改动**会改变渲染结果**——约 90 处原本落到 Windows 系统色（灰边、系统蓝高亮、系统灰文字）的位置，现在跟随主题令牌。这正是要修的缺陷，但必须按第 5 节矩阵做三主题 × 明暗的视觉对照，重点看：资产管理器与枚举器的面板边框、属性页的预览画布底色、replacement 页的按钮与工具提示、flake 页的标记菜单高亮。
 
 **2B 待办**：删除 10 个桥接令牌（225 处引用）、替换 215 处硬编码色值、删除死令牌 `--ln-form-max`、把 `--ln-success-color`/`--ln-warning-color` 的引用直接指向 `--success`/`--warning`。
+
+---
+
+#### Phase 2B 实施记录 ✅ 已完成（第 3、4、5、6 步）
+
+**先分清两件事。** "215 处硬编码色值"这个数字把两类完全不同的东西混在一起：
+
+| 类别 | 数量 | 处置 |
+| ---- | ---- | ---- |
+| **调色板定义**（自定义属性 = 字面色值） | 157 | **保留** —— 这里就是主题色的源头，字面值是正确的 |
+| 样式声明里的字面色值 | 96 → 清理后 33 | 部分映射到令牌 |
+
+那 96 处里还有两个**必须保留**的：`ui/themes/**` 的 19 处（主题文件本身就是调色板，Tier 3），以及 `settings.css` 的 11 处 —— 那是**主题预览色块**，它展示的是*其他*主题的颜色，一旦解析成当前主题就失去意义了。加上使用 `color-mix(… var(--muted) …)` 这类**已经基于令牌**的写法被我的检测器误报，真正可动的只有 54 处。
+
+**桥接令牌退场**（29 个文件、191 处引用）
+
+按"引用改名、定义按类型处理"的规则执行：值为 `var(目标)` 的别名定义直接删除（28 条），值为字面量的定义改名为目标名保留（10 条，保住主题加载前的兜底）。
+
+| 处置 | 令牌 | 目标 |
+| ---- | ---- | ---- |
+| **提升为 Tier 1**（含义是新的，不是别名） | `--ln-control-height` → `--control-height`；`--ln-option-active-background/color` → `--option-active-*` | 保留定义，全局改名 |
+| **同上，方案修正** | `--ln-navigation-background-color` → `--navigation-background` | 见下 |
+| 退场为语义令牌 | `--ln-ui-background-color` → `--background`；`--ln-body-text-color` → `--foreground`；`--ln-muted-text-color` → `--muted-foreground`；`--ln-control-radius` → `--radius`；`--ln-focus-color` → `--ring`；`--ln-popup-shadow` → `--panel-shadow`；`--ln-error-color` → `--destructive`；`--ln-card-border-color` → `--border`；`--ln-success-color` → `--success`；`--ln-warning-color` → `--warning` | 引用改名；别名定义删除 |
+| 删除 | `--ln-form-max` | 定义了但无人引用 |
+
+> **方案修正：`--ln-navigation-background-color` 不是纯桥接。** 附录 A 写的是"删除 → `--card` / `--background`"（当时就给了两个目标，说明当时没判定清楚）。实测它按主题取不同的值：shadcn/8bitcn 是 `var(--card)`，Minecraft 是 `var(--background)`。删成任一个都会改变另一侧的外观。它是真实的独立概念（**导航/侧栏表面**），因此**提升为 Tier 1 的 `--navigation-background`**，三主题各自定义。这是 §3.2 "语义不同就必须独立"的又一例。
+
+**状态色与阴影**（6 个文件、21 处）
+
+| 字面值 | 替换为 |
+| ------ | ------ |
+| `#ff6666`、`#ffb3b3` | `var(--destructive)` |
+| `rgb(255 0 0 / 10%\|18%)`、`rgba(255,0,0,.1)` | `color-mix(in srgb, var(--destructive) N%, transparent)` |
+| `#8a6a22`、`#ffcc66`、`#d97706` | `var(--warning)` |
+| `rgb(255 180 0 / 10%)` | `color-mix(in srgb, var(--warning) 10%, transparent)` |
+| 三处弹层 `box-shadow` | `var(--panel-shadow)` |
+
+用 `color-mix` 而非固定 RGB 三元组，是为了让透明度跟着主题色走。Minecraft 的 `--panel-shadow: none`，所以它的弹层不再有阴影——与贴图风格一致。
+
+**剩余 33 处（已记入基线，不再增长）**
+
+| 文件 | 数量 | 性质 |
+| ---- | ---- | ---- |
+| `styles/flake.css` | 20 | **画布覆盖层配色**：测量线蓝、原点标记橙。属于"图表数据色"性质，是否可主题化是独立决定 |
+| `shell/widget/dialog.css` | 5 | 遮罩底色 `rgb(0 0 0 / 42%)` 与中性微调 `rgb(127 127 127 / N%)`；前者缺一个 `--overlay` 之类的语义令牌 |
+| `styles/base.css` | 4 | JSON 预览代码块的深色终端配色（`#111`/`#222`/`#ccc`/`#888`） |
+| `shell/widget/subwindow.css` | 2 | 遮罩底色 + `rgb(255 255 255 / 2%)` 微高光 |
+| `styles/controls.css` | 1 | Minecraft 控件的内嵌斜面高光 |
+| `windows/main/pages/home/home.css` | 1 | `#e0e0e0` |
+
+这些都需要"要不要为覆盖层/代码块引入新语义令牌"的设计决定，不属于机械收敛，因此**留作独立议题**，但已由新护栏规则纳入基线，不会继续增长。
+
+**护栏新增第 4 条规则：`css-hardcoded-colour`**
+
+检测样式声明里的字面色值（不含 `var()`），并**在规则内**排除 `ui/themes/**` 与 `settings/settings.css`——两者的字面值都是刻意的，放进基线反而不如直接豁免诚实。用例 12 个。
+
+**顺带修正一处过期断言**：`library-theme-css.test.mjs` 断言的 `var(--ln-option-active-background` / `var(--ln-focus-color` 是旧名，已更新为 `--option-active-background` / `--ring`。这是**测试断言过期**，不是行为回归。
+
+**Phase 2B 退出验证**
+
+| 检查 | 结果 |
+| ---- | ---- |
+| 桥接令牌 | ✅ 14 个名字全部退场，无残留引用（`--ln-card-border-color-active` 是 Tier 3 的另一个令牌，按设计保留） |
+| `check:ui-styles` | ✅ 无层规则 0、未定义令牌 0、系统色 0、vendor 层位正确；0 回归 |
+| `check:layers` / `check:application-boundaries` | ✅ 0 违规 |
+| `npm run build` | ✅ 通过；产物中 `.bg-primary` 位于 `vendor` 层 |
+| 层叠反转 | ✅ 0 |
+| 测试套件 | ✅ 与 HEAD 完全一致（仅修正 2 处过期断言） |
+
+**待人工验收**：本次同样**改变渲染结果**。重点：错误/警告态的颜色与边框（原为固定霓虹红 `#ff6666` / 暖黄）、三处弹层阴影改为统一面板阴影、Minecraft 主题下弹层阴影消失。
 
 ### Phase 3 — 组件外观类剥离
 

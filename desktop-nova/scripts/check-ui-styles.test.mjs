@@ -305,6 +305,37 @@ test("runtime-set and Radix-provided properties are exempt from the undefined ch
   assert.match(reported[0].message, /--ln-nobody-defines-this/);
 });
 
+test("hardcoded colours are flagged outside the palette and theme swatches", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "styles/leaky.css",
+    [
+      ".error {",
+      "    border: 1px solid #ff6666;",
+      "}",
+      "",
+      ".tokenised {",
+      "    border: 1px solid var(--destructive);",
+      "    background: color-mix(in srgb, var(--destructive) 10%, transparent);",
+      "}",
+      "",
+      ":root {",
+      "    --palette: #ff6666;",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  // The theme files *are* the palette, so a literal there is the source of truth.
+  fixture.write("themes/demo/theme.css", ".a {\n    color: #ff6666;\n}\n");
+  // The settings swatches preview other themes and must stay literal.
+  fixture.write("windows/main/pages/settings/settings.css", ".swatch {\n    background: #e4e4e7;\n}\n");
+
+  const reported = messagesFor(fixture.strict(), "css-hardcoded-colour");
+  assert.equal(reported.length, 1, JSON.stringify(reported.map((v) => v.message)));
+  assert.match(reported[0].file, /styles\/leaky\.css/);
+  assert.match(reported[0].message, /#ff6666/);
+});
+
 test("baseline documents are validated before use", () => {
   const fixture = makeFixture();
   fixture.write("styles/fixture.css", ".alpha {\n    color: red;\n}\n");
