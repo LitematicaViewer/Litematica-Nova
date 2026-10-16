@@ -618,14 +618,42 @@ impl RenderFacade {
     /// identity remain behind the same Application boundary as Show/Hide.
     pub(crate) async fn capture_frame(&self, operation_id: &OperationId, source: &Path, display_mode: RenderDisplayMode) -> Result<PathBuf, String> {
         self.refresh_from_service();
+        let snapshot = self.inner.transport.snapshot();
         let session_id = {
             let state = self.inner.state.lock().unwrap();
             let record = state.operations.get(operation_id).ok_or_else(|| unknown_operation(operation_id))?;
-            if record.view.source.path != source || record.view.display_mode != display_mode
-                || record.cancel_requested || !matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady) {
+            let rejection = if !capture_source_matches(&record.view.source.path, source) {
+                Some("source_identity_mismatch")
+            } else if record.view.display_mode != display_mode {
+                Some("display_mode_mismatch")
+            } else if record.cancel_requested {
+                Some("cancel_requested")
+            } else if !matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady) {
+                Some("viewer_not_ready")
+            } else { None };
+            if let Some(reason) = rejection {
+                eprintln!("[NOVA_CAPTURE] stage=guard_rejected operation_id={} state={:?} reason={reason}", operation_id.0, record.view.state);
                 return Err("当前投影的渲染尚未就绪，请完成加载后截图".into());
             }
-            record.binding.as_ref().and_then(|binding| binding.session_id.clone()).ok_or("当前渲染缺少Viewer会话")?
+            let Some((binding, session_id)) = record.binding.as_ref()
+                .and_then(|binding| binding.session_id.as_ref().map(|session| (binding, session))) else {
+                eprintln!("[NOVA_CAPTURE] stage=guard_rejected operation_id={} state={:?} reason=viewer_binding_missing", operation_id.0, record.view.state);
+                return Err("当前渲染缺少Viewer会话".into());
+            };
+            let build_live = snapshot.builds.iter().any(|build| {
+                build.build_id == binding.build_id && build.generation == binding.generation
+                    && !matches!(build.state, BuildState::Cancelled | BuildState::Failed)
+            });
+            let viewer_ready = snapshot.viewers.iter().any(|viewer| {
+                viewer.session_id == *session_id && viewer.build_id == binding.build_id
+                    && viewer.generation == binding.generation
+                    && matches!(viewer.runtime_state, ViewerRuntimeState::ViewerPrepared | ViewerRuntimeState::RealtimeReady)
+            });
+            if !build_live || !viewer_ready {
+                eprintln!("[NOVA_CAPTURE] stage=guard_rejected operation_id={} state={:?} reason=viewer_binding_stale", operation_id.0, record.view.state);
+                return Err("当前渲染会话已失效，请重新加载后截图".into());
+            }
+            session_id.clone()
         };
         let output_path = super::thumbnails::temporary_preview_path();
         let error_path = output_path.with_extension("error.txt");
@@ -1286,6 +1314,16 @@ fn expect_ack(response: ResponseBody) -> Result<(), String> {
         other => Err(format!(
             "render service returned an unexpected acknowledgement: {other:?}"
         )),
+    }
+}
+
+// Keep the existing equal-path fast path. Nonidentical representations must
+// resolve successfully on BOTH sides; two missing/inaccessible paths never match.
+fn capture_source_matches(rendered: &Path, requested: &Path) -> bool {
+    if rendered == requested { return true; }
+    match (std::fs::canonicalize(rendered), std::fs::canonicalize(requested)) {
+        (Ok(rendered), Ok(requested)) => rendered == requested,
+        _ => false,
     }
 }
 
@@ -2504,6 +2542,99 @@ mod tests {
         assert!(!second.attached);
         assert_ne!(first.operation.operation_id, second.operation.operation_id);
         assert_eq!(fake.commands.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn capture_source_identity_requires_real_canonical_match_for_different_paths() {
+        let root = std::env::temp_dir().join(format!("nova-capture-source-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        let plain = root.join("投影 空格.litematic");
+        let different = root.join("另一投影.litematic");
+        std::fs::write(&plain, b"source fixture").unwrap();
+        std::fs::write(&different, b"different source fixture").unwrap();
+        let canonical = std::fs::canonicalize(&plain).unwrap();
+        assert!(capture_source_matches(&plain, &canonical));
+        assert!(capture_source_matches(&root.join("nested/../投影 空格.litematic"), &canonical));
+        assert!(!capture_source_matches(&different, &canonical));
+        assert!(!capture_source_matches(&root.join("missing-one"), &root.join("missing-two")));
+        assert!(!capture_source_matches(&root.join("missing-one"), &canonical));
+        // Preserve the original zero-I/O equal-representation fast path.
+        assert!(capture_source_matches(&root.join("missing-one"), &root.join("missing-one")));
+        #[cfg(windows)]
+        assert_ne!(plain, canonical, "exercise plain versus verbatim Windows representation");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_realtime_and_completed_viewers_use_the_exact_bound_session() {
+        let root = std::env::temp_dir().join(format!("nova-capture-ready-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let plain = root.join("投影 空格.litematic");
+        std::fs::write(&plain, b"source fixture").unwrap();
+        let canonical = std::fs::canonicalize(&plain).unwrap();
+        let fake = Arc::new(FakeTransport::default());
+        fake.push_response(accepted(Some("viewer-1")));
+        let facade = facade(fake.clone());
+        let mut input = request();
+        input.source.path = plain;
+        input.settings.display_mode = RenderDisplayMode::Standard;
+        input.settings.build_mode = RenderBuildMode::Realtime;
+        let started = tauri::async_runtime::block_on(facade.start_realtime_render(input, RenderEnvironmentInputs::default())).unwrap();
+        for (build_state, viewer_state, artifacts) in [
+            (BuildState::Building, ViewerRuntimeState::RealtimeReady, vec![]),
+            (BuildState::BuildCompleted, ViewerRuntimeState::ViewerPrepared, vec![artifact_snapshot(7, ArtifactState::Ready)]),
+        ] {
+            fake.set_snapshot(ServiceSnapshot { builds: vec![build_snapshot(7, build_state)], artifacts,
+                viewers: vec![viewer_snapshot(7, viewer_state, ViewerPresentationState::PopupVisible)] });
+            // Stop after dispatch: this unit test asserts admission/identity, not a GPU capture.
+            fake.responses.lock().unwrap().push_back(Err("capture_fixture_dispatched".into()));
+            let error = tauri::async_runtime::block_on(facade.capture_frame(&started.operation.operation_id, &canonical, RenderDisplayMode::Standard)).unwrap_err();
+            assert_eq!(error, "capture_fixture_dispatched");
+            assert!(matches!(fake.commands.lock().unwrap().last(), Some(UiCommand::CaptureViewer { session_id, .. }) if session_id == "viewer-1"));
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_rejects_wrong_source_mode_cancel_and_stale_viewer_generation() {
+        let fake = Arc::new(FakeTransport::default());
+        fake.push_response(accepted(Some("viewer-1")));
+        let facade = facade(fake.clone());
+        let mut input = request();
+        input.settings.display_mode = RenderDisplayMode::Standard;
+        input.settings.build_mode = RenderBuildMode::Realtime;
+        let source = input.source.path.clone();
+        let started = tauri::async_runtime::block_on(facade.start_realtime_render(input, RenderEnvironmentInputs::default())).unwrap();
+        let ready = ServiceSnapshot { builds: vec![build_snapshot(7, BuildState::Building)], artifacts: vec![],
+            viewers: vec![viewer_snapshot(7, ViewerRuntimeState::RealtimeReady, ViewerPresentationState::PopupVisible)] };
+        fake.set_snapshot(ready.clone());
+        let command_count = fake.commands.lock().unwrap().len();
+        assert!(tauri::async_runtime::block_on(facade.capture_frame(&started.operation.operation_id, Path::new("different-missing-source"), RenderDisplayMode::Standard)).is_err());
+        assert!(tauri::async_runtime::block_on(facade.capture_frame(&started.operation.operation_id, &source, RenderDisplayMode::Full)).is_err());
+        facade.inner.state.lock().unwrap().operations.get_mut(&started.operation.operation_id).unwrap().cancel_requested = true;
+        assert!(tauri::async_runtime::block_on(facade.capture_frame(&started.operation.operation_id, &source, RenderDisplayMode::Standard)).is_err());
+        facade.inner.state.lock().unwrap().operations.get_mut(&started.operation.operation_id).unwrap().cancel_requested = false;
+        let mut wrong_build = viewer_snapshot(7, ViewerRuntimeState::RealtimeReady, ViewerPresentationState::PopupVisible);
+        wrong_build.build_id = "different-build".into();
+        let mut wrong_session = wrong_build.clone();
+        wrong_session.session_id = "different-viewer-session".into();
+        for snapshot in [
+            ServiceSnapshot { viewers: vec![wrong_build], ..ready.clone() },
+            ServiceSnapshot { viewers: vec![wrong_session], ..ready.clone() },
+            ServiceSnapshot { viewers: vec![viewer_snapshot(8, ViewerRuntimeState::RealtimeReady, ViewerPresentationState::PopupVisible)], ..ready.clone() },
+            ServiceSnapshot { viewers: vec![viewer_snapshot(7, ViewerRuntimeState::Released, ViewerPresentationState::Hidden)], ..ready.clone() },
+            ServiceSnapshot { viewers: vec![viewer_snapshot(7, ViewerRuntimeState::Preparing, ViewerPresentationState::Hidden)], ..ready.clone() },
+            ServiceSnapshot { builds: vec![build_snapshot(8, BuildState::Building)], ..ready.clone() },
+            ServiceSnapshot { builds: vec![build_snapshot(7, BuildState::Failed)], ..ready.clone() },
+        ] {
+            fake.set_snapshot(ready.clone());
+            facade.refresh_from_service();
+            fake.set_snapshot(snapshot);
+            assert!(tauri::async_runtime::block_on(facade.capture_frame(&started.operation.operation_id, &source, RenderDisplayMode::Standard)).is_err());
+        }
+        assert_eq!(fake.commands.lock().unwrap().len(), command_count, "rejected capture must never reach the Viewer");
     }
 
     #[test]
