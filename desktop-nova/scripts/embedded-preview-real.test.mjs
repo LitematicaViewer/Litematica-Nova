@@ -19,9 +19,9 @@ function chunk(kind,payload) {
   header.writeUInt32BE(payload.length);crc.writeUInt32BE(crc32(content));return Buffer.concat([header,content,crc]);
 }
 function testPng() {
-  const width=12,height=8,header=Buffer.alloc(13);header.writeUInt32BE(width,0);header.writeUInt32BE(height,4);header[8]=8;header[9]=6;
+  const width=140,height=70,header=Buffer.alloc(13);header.writeUInt32BE(width,0);header.writeUInt32BE(height,4);header[8]=8;header[9]=6;
   const rows=Buffer.alloc(height*(width*4+1));
-  for(let y=0;y<height;y++)for(let x=0;x<width;x++)rows.set(x>=2&&x<10?[79,123,211,143]:[255,0,0,255],y*(width*4+1)+1+x*4);
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++)rows.set(x>=20&&x<120?[79,123,211,143]:[255,0,0,255],y*(width*4+1)+1+x*4);
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk("IHDR",header),chunk("IDAT",deflateSync(rows)),chunk("IEND",Buffer.alloc(0))]);
 }
 function decodeRgbaPng(bytes) {
@@ -45,7 +45,7 @@ function decodeRgbaPng(bytes) {
   return {width,height,rgba};
 }
 
-test("真实小投影：PreviewImage中心裁切/ARGB导入、PNG读取、另存和清除重读，原件和全部统计保持",()=>{
+test("真实小投影：PreviewImage完整居中透明补边/ARGB导入、PNG读取、另存和清除重读，原件和全部统计保持",()=>{
   mkdirSync(evidence,{recursive:true});
   const sampleDirectory="C:\\Users\\27232\\Documents\\投影测试";
   const source=join(sampleDirectory,"16核刷铁机.litematic");
@@ -78,6 +78,13 @@ test("真实小投影：PreviewImage中心裁切/ARGB导入、PNG读取、另存
   const decoded=decodeRgbaPng(readFileSync(png));
   assert.equal(decoded.width,140);assert.equal(decoded.height,140);
   assert.deepEqual(decoded.rgba.subarray((70*140+70)*4,(70*140+70)*4+4),Buffer.from([79,123,211,143]));
+  const pixel=(x,y)=>decoded.rgba.subarray((y*140+x)*4,(y*140+x)*4+4);
+  assert.deepEqual(pixel(0,70),Buffer.from([255,0,0,255]),"保留原图左边缘");
+  assert.deepEqual(pixel(139,70),Buffer.from([255,0,0,255]),"保留原图右边缘");
+  assert.deepEqual(pixel(70,34),Buffer.from([0,0,0,0]),"原图上方透明补边");
+  assert.deepEqual(pixel(70,35),Buffer.from([79,123,211,143]));
+  assert.deepEqual(pixel(70,104),Buffer.from([79,123,211,143]));
+  assert.deepEqual(pixel(70,105),Buffer.from([0,0,0,0]),"原图下方透明补边");
   const invalidPatch=join(evidence,`invalid-${tag}.json`);writeFileSync(invalidPatch,JSON.stringify({preview_image_data:[1,2,3]}));
   const outputBeforeRejectedWrite=readFileSync(output),entriesBeforeRejectedWrite=readdirSync(evidence).sort();
   rejected(["edit-metadata","--input",output,"--patch",invalidPatch]);

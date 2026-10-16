@@ -150,11 +150,13 @@ fn load_preview_image_data(path: &Path) -> Result<IntArray> {
         bail!("preview image must not be empty");
     }
 
-    let size = width.min(height);
-    let x = (width - size) / 2;
-    let y = (height - size) / 2;
-    let cropped = image.crop_imm(x, y, size, size);
-    let resized = cropped.resize_exact(140, 140, FilterType::Lanczos3).to_rgba8();
+    // The embedded preview is square, but every source pixel belongs to the
+    // image. Centre it on a transparent canvas before the canonical resize.
+    let size = width.max(height);
+    let mut square = image::RgbaImage::new(size, size);
+    image::imageops::replace(&mut square, &image.to_rgba8(),
+        i64::from((size - width) / 2), i64::from((size - height) / 2));
+    let resized = image::imageops::resize(&square, 140, 140, FilterType::Lanczos3);
 
     let pixels = resized
         .pixels()
@@ -248,8 +250,8 @@ mod preview_image_tests {
         let root = load_litematic_root(&input).unwrap();
         let regions_before = fastnbt::to_bytes(&root.regions).unwrap();
         let data_version = root.minecraft_data_version;
-        let image_path = dir.path().join("cropped.png");
-        let image = image::RgbaImage::from_fn(12,8,|x,_|if (2..10).contains(&x) { image::Rgba([79,123,211,143]) } else { image::Rgba([255,0,0,255]) });
+        let image_path = dir.path().join("contained.png");
+        let image = image::RgbaImage::from_fn(140,70,|x,_|if (20..120).contains(&x) { image::Rgba([79,123,211,143]) } else { image::Rgba([255,0,0,255]) });
         image.save(&image_path).unwrap();
         let patch_path = dir.path().join("import.json");
         fs::write(&patch_path,serde_json::to_vec(&serde_json::json!({"preview_image_path":image_path.to_string_lossy()})).unwrap()).unwrap();
@@ -263,7 +265,12 @@ mod preview_image_tests {
         assert_eq!(reloaded.metadata.preview_image_data.as_ref().unwrap().len(),140*140);
         let preview = load_litematic_preview_image(&output).unwrap().unwrap();
         assert_eq!((preview.width,preview.height),(140,140));
-        assert!(preview.rgba.chunks_exact(4).all(|pixel|pixel == [79,123,211,143]));
+        let pixel = |x: usize, y: usize| &preview.rgba[(y*140+x)*4..(y*140+x)*4+4];
+        assert_eq!(pixel(70,70), [79,123,211,143]);
+        assert_eq!(pixel(0,70), [255,0,0,255], "left edge must not be cropped");
+        assert_eq!(pixel(139,70), [255,0,0,255], "right edge must not be cropped");
+        assert_eq!(pixel(70,0), [0,0,0,0]);
+        assert_eq!(pixel(70,139), [0,0,0,0]);
         let extracted = dir.path().join("extracted.png");
         let extracted_result = crate::projection_preview::extract_projection_preview(&output,&extracted).unwrap();
         assert!(extracted_result.found);
@@ -277,6 +284,53 @@ mod preview_image_tests {
         let reread = load_litematic_root(&cleared).unwrap();
         assert_eq!(fastnbt::to_bytes(&reread.regions).unwrap(),regions_before);
         assert_eq!(reread.minecraft_data_version,data_version);
+    }
+
+    #[test]
+    fn preview_contain_preserves_landscape_portrait_square_edges_and_alpha() {
+        let dir = tempfile::tempdir().unwrap();
+        for (width, height) in [(140,70), (70,140), (140,140), (5,2)] {
+            let input = image::RgbaImage::from_fn(width,height,|x,y| {
+                if x == 0 { image::Rgba([255,0,0,255]) }
+                else if x == width-1 { image::Rgba([0,255,0,255]) }
+                else if y == 0 { image::Rgba([0,0,255,255]) }
+                else if y == height-1 { image::Rgba([255,255,0,255]) }
+                else { image::Rgba([79,123,211,143]) }
+            });
+            let path = dir.path().join(format!("{width}x{height}.png"));
+            input.save(&path).unwrap();
+            let actual = load_preview_image_data(&path).unwrap();
+            let side = width.max(height);
+            let mut expected = image::RgbaImage::new(side,side);
+            image::imageops::replace(&mut expected,&input,
+                i64::from((side-width)/2),i64::from((side-height)/2));
+            let expected = image::imageops::resize(&expected,140,140,FilterType::Lanczos3);
+            let decoded: Vec<_> = actual.iter().flat_map(|argb| {
+                let p = *argb as u32;
+                [(p>>16) as u8,(p>>8) as u8,p as u8,(p>>24) as u8]
+            }).collect();
+            assert_eq!(decoded,expected.as_raw().as_slice(), "{width}x{height}");
+            let pixel = |x: usize, y: usize| &decoded[(y*140+x)*4..(y*140+x)*4+4];
+            if width == 140 {
+                let top = ((140-height)/2) as usize;
+                assert_eq!(pixel(0,70),[255,0,0,255]);
+                assert_eq!(pixel(139,70),[0,255,0,255]);
+                assert_eq!(pixel(70,70),[79,123,211,143]);
+                if top > 0 {
+                    assert_eq!(pixel(70,top-1),[0,0,0,0]);
+                    assert_eq!(pixel(70,top),[0,0,255,255]);
+                    assert_eq!(pixel(70,top+height as usize-1),[255,255,0,255]);
+                    assert_eq!(pixel(70,top+height as usize),[0,0,0,0]);
+                }
+            } else if height == 140 {
+                assert_eq!(pixel(34,70),[0,0,0,0]);
+                assert_eq!(pixel(35,70),[255,0,0,255]);
+                assert_eq!(pixel(104,70),[0,255,0,255]);
+                assert_eq!(pixel(105,70),[0,0,0,0]);
+                assert_eq!(pixel(70,0),[0,0,255,255]);
+                assert_eq!(pixel(70,139),[255,255,0,255]);
+            }
+        }
     }
 
     #[test]
