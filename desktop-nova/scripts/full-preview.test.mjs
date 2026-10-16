@@ -181,3 +181,15 @@ test('Prepared后真实GPU失败保持失败终态，仅用户重新加载才创
 
 test('Standard和Full预加载使用当前容器物理尺寸而非CSS或默认窗口值',async()=>{for(const displayMode of ['standard','full'])for(const preload of [false,true]){const h=harness({displayMode,preload,viewportSize:[2316,1178],plan:{directRealtime:false,preflight:normal}});await h.result.start();assert.deepEqual(Array.from(h.calls.plan[0][3]),[2316,1178]);assert.equal(h.calls.start.length,1);}});
 test('缺失或非法物理视口不提交预检或构建',async()=>{for(const viewportSize of [[0,720],[1280,0],[16385,720],[1280,NaN]]){const h=harness({preload:true,viewportSize,plan:{directRealtime:false,preflight:normal}});await h.result.start();assert.equal(h.calls.plan.length,0);assert.equal(h.calls.start.length,0);assert(h.result.error || (await h.settle(),h.result.error));}});
+
+test('冷预加载预估等待显示真实前置阶段，不沿用旧构建百分比或关闭状态',async()=>{
+ for(const state of ['viewer_prepared','cancelled']) {
+  let done;const deferredPlan=new Promise(resolve=>{done=resolve;});
+  const initialOperation={operationId:'old',source:{path:'C:/scene.litematic'},displayMode:'standard',buildMode:'prebuilt',state,
+   progress:{phase:'compile_existing_cells',completed:22638,total:45276},presentationState:'hidden',presentation:{mode:'hidden',visible:false,placement:null}};
+  const h=harness({preload:true,displayMode:'standard',prepared:false,deferredPlan,initialOperation});
+  const start=h.result.start();await h.settle();assert.equal(h.result.progressLabel,'正在预估显存…');assert.equal(h.result.progress,undefined);
+  await h.result.close();done({directRealtime:false,preflight:normal});await start;await h.settle();
+  assert.equal(h.calls.start.length,0);assert.notEqual(h.result.progressLabel,'正在预估显存…');
+ }
+});

@@ -24,6 +24,7 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   const operation = findRenderOperationForSource(sourcePath, snapshot, { displayMode, buildMode: selectedBuildMode });
   const [preflight, setPreflight] = useState<ResourcePreflightView | null>(null);
   const [pending, setPending] = useState(false);
+  const [launchStage, setLaunchStage] = useState<"preflight" | "starting" | null>(null);
   const [error, setError] = useState("");
   const current = useRef({ sourcePath, preload, displayMode }); current.current = { sourcePath, preload, displayMode };
   const generation = useRef(0);
@@ -60,7 +61,7 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
     if (previous.sourcePath === sourcePath && previous.preload === preload
       && previous.blocked === blocked && previous.displayMode === displayMode) return;
     console.info("[NOVA_RENDER_PHASE]", { stage: "render_context_changed", previous, current: { sourcePath, preload, blocked, displayMode }, generation: generation.current + 1 });
-    generation.current++; setError(""); setPending(false); setSelection(null);
+    generation.current++; setError(""); setPending(false); setLaunchStage(null); setSelection(null);
     void discardGrant().catch(reason => setError(String(reason)));
     viewport.requestPresentationWhenReady(null);
     if (operation) void updateApplicationRenderPresentation(operation.operationId, { mode: "hidden", visible: false, placement: null }).catch(() => undefined);
@@ -68,13 +69,14 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
 
 
   async function execute(action: (version: number) => Promise<void>) {
-    const version = ++generation.current; setPending(true); setError("");
+    const version = ++generation.current; setPending(true); setLaunchStage(null); setError("");
     try { await action(version); } catch (reason) { if (mounted.current && generation.current === version) setError(String(reason)); }
-    finally { if (mounted.current && generation.current === version) setPending(false); }
+    finally { if (mounted.current && generation.current === version) { setPending(false); setLaunchStage(null); } }
   }
   async function launch(buildMode: "prebuilt" | "realtime", version: number, grant?: ResourcePreflightView) {
     if (!mounted.current || generation.current !== version) return;
     if (grant && buildMode === "prebuilt" && !resourcePreflightAllows(grant, "continue_prebuilt")) throw new Error("当前显存门禁不允许预构建");
+    setLaunchStage("starting");
     selectedLoadingByContext.set(JSON.stringify([windowsPathKey(current.current.sourcePath), current.current.displayMode]), { preload: current.current.preload, buildMode });
     setSelection({ ...current.current, buildMode });
     inFlightLaunches.current.set(version, JSON.stringify([windowsPathKey(current.current.sourcePath), current.current.displayMode]));
@@ -105,6 +107,7 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
       sourcePath: current.current.sourcePath, displayMode: current.current.displayMode, preload: current.current.preload,
       existingOperationReady: isApplicationViewerPrepared(operation) });
     if (blocked) throw new Error("请先选择精确渲染模式");
+    setLaunchStage("preflight");
     await discardGrant();
     if (!mounted.current || generation.current !== version) return;
     const expected = { ...current.current };
@@ -164,7 +167,7 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   const loading = isApplicationRenderPending(operation);
   const closed = operation?.state === "cancelled" || operation?.state === "runtime_released";
   const cancelling = operation?.progress?.phase === "cancelling";
-  const progress = loading && !cancelling ? operation?.progress : undefined;
+  const progress = loading && !cancelling && !launchStage ? operation?.progress : undefined;
   const phaseLabel: Record<string, string> = { scan_nbt: "正在读取", nbt_scan: "正在读取", normalize: "正在整理", mesh_compile: "正在构建", compile_existing_cells: "正在构建", compile_sections: "正在构建", build_scene: "正在构建", encode: "正在保存", decode: "正在读取", artifact_publishing: "正在准备画面", viewer_preparing: "正在准备画面", cancelling: "正在取消" };
   const stage = phaseLabel[progress?.phase || ""] || "正在加载";
   const ready = isApplicationViewerPrepared(operation);
@@ -172,7 +175,9 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   const operationFailure = operation?.state === "failed" && !pending ? "预览加载失败，请重新加载。" : "";
   // CPU completion is not a visible frame. Prepared only grants the native
   // presentation command; the service's post-Present receipt removes the UI placeholder.
-  const progressLabel = closed ? "预览已关闭，可重新加载。"
+  const progressLabel = pending && launchStage === "preflight" ? "正在预估显存…"
+    : pending && launchStage === "starting" ? "正在启动渲染…"
+    : closed ? "预览已关闭，可重新加载。"
     : operationFailure ? operationFailure
     : cancelling ? "正在取消预览…"
     : !operation && !pending ? "尚未加载预览"

@@ -23,11 +23,10 @@ function publish(next: ApplicationRenderSnapshot) {
     notificationScheduled = false;
     for (const listener of listeners) listener();
   };
-  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-    window.requestAnimationFrame(notify);
-  } else {
-    queueMicrotask(notify);
-  }
+  // Render state is a control-plane receipt, not a paint callback. A native
+  // child viewport or a minimized WebView may stop rAF while Ready/Cancel must
+  // still reach React. Coalesce synchronous events without waiting for paint.
+  queueMicrotask(notify);
 }
 
 export function ensureApplicationRenderSubscription(): Promise<void> {
