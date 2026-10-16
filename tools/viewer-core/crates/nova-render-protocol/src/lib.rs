@@ -196,6 +196,10 @@ pub enum UiCommand {
         build_id: String,
         generation: u64,
         state: ViewerPresentationState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        presentation_epoch: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dpi_scale: Option<f64>,
     },
     ShowPopup {
         session_id: String,
@@ -222,7 +226,11 @@ pub const HEADLESS_CAMERA_STRESS_FRAMES: u32 = 28;
 impl UiCommand {
     fn validate(&self) -> Result<(), String> {
         match self {
-            Self::SetBoundPresentation { session_id, build_id, generation, .. } => {
+            Self::SetBoundPresentation { session_id, build_id, generation, presentation_epoch, dpi_scale, .. } => {
+                if *presentation_epoch == Some(0) { return Err("native presentationEpoch must be non-zero".into()); }
+                if dpi_scale.is_some_and(|scale| !scale.is_finite() || scale <= 0.0 || scale > 16.0) {
+                    return Err("native dpiScale must be finite and in (0, 16]".into());
+                }
                 require_id("sessionId", session_id)?;
                 require_id("buildId", build_id)?;
                 if *generation == 0 { return Err("Presentation requires a build generation".to_owned()); }
@@ -1485,6 +1493,10 @@ pub enum ViewerControl {
         build_id: String,
         generation: u64,
         state: ViewerPresentationState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        presentation_epoch: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dpi_scale: Option<f64>,
     },
     ShowPopup {
         session_id: String,
@@ -1521,7 +1533,11 @@ impl ViewerControl {
                 }
             }
 
-            Self::SetBoundPresentation { session_id, build_id, generation, .. } => {
+            Self::SetBoundPresentation { session_id, build_id, generation, presentation_epoch, dpi_scale, .. } => {
+                if *presentation_epoch == Some(0) { return Err("native presentationEpoch must be non-zero".into()); }
+                if dpi_scale.is_some_and(|scale| !scale.is_finite() || scale <= 0.0 || scale > 16.0) {
+                    return Err("native dpiScale must be finite and in (0, 16]".into());
+                }
                 require_id("sessionId", session_id)?;
                 require_id("buildId", build_id)?;
                 if *generation == 0 { return Err("Presentation requires a build generation".to_owned()); }
@@ -1687,8 +1703,50 @@ fn validate_runtime_bootstrap_tuple(
 #[cfg(windows)]
 pub mod windows_pipe;
 
+// Keep the existing local transport API; only the OS byte stream changes.
+// Framing, Hello authentication, identities and flow-control remain shared.
+#[cfg(unix)]
+#[path = "unix_socket.rs"]
+pub mod windows_pipe;
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_presentation_dpi_is_optional_finite_and_preserved_on_both_control_hops() {
+        use super::*;
+        for scale in [None, Some(1.5), Some(2.0)] {
+            let ui = UiCommand::SetBoundPresentation {
+                session_id: "native-session".into(), build_id: "native-build".into(), generation: 3,
+                state: ViewerPresentationState::Hidden, presentation_epoch: Some(7), dpi_scale: scale,
+            };
+            let viewer = ViewerControl::SetBoundPresentation {
+                session_id: "native-session".into(), build_id: "native-build".into(), generation: 3,
+                state: ViewerPresentationState::Hidden, presentation_epoch: Some(7), dpi_scale: scale,
+            };
+            assert!(ui.validate().is_ok()); assert!(viewer.validate().is_ok());
+            let ui_bytes = serde_json::to_vec(&ui).unwrap();
+            let viewer_bytes = serde_json::to_vec(&viewer).unwrap();
+            let UiCommand::SetBoundPresentation { dpi_scale, .. } = serde_json::from_slice(&ui_bytes).unwrap() else { panic!("UI control kind changed") };
+            assert_eq!(dpi_scale, scale);
+            let ViewerControl::SetBoundPresentation { dpi_scale, .. } = serde_json::from_slice(&viewer_bytes).unwrap() else { panic!("Viewer control kind changed") };
+            assert_eq!(dpi_scale, scale);
+            if scale.is_none() {
+                assert!(!String::from_utf8(ui_bytes).unwrap().contains("dpiScale"));
+                assert!(!String::from_utf8(viewer_bytes).unwrap().contains("dpiScale"));
+            }
+        }
+        for scale in [0.0, -0.5, f64::NAN, f64::INFINITY, 17.0] {
+            let ui = UiCommand::SetBoundPresentation {
+                session_id: "native-session".into(), build_id: "native-build".into(), generation: 3,
+                state: ViewerPresentationState::Hidden, presentation_epoch: Some(7), dpi_scale: Some(scale),
+            };
+            let viewer = ViewerControl::SetBoundPresentation {
+                session_id: "native-session".into(), build_id: "native-build".into(), generation: 3,
+                state: ViewerPresentationState::Hidden, presentation_epoch: Some(7), dpi_scale: Some(scale),
+            };
+            assert!(ui.validate().is_err()); assert!(viewer.validate().is_err());
+        }
+    }
     use super::*;
     use std::io::Cursor;
 

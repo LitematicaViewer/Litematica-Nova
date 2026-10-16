@@ -233,9 +233,13 @@ impl TaskSession {
             "invalid task/build/module identity"
         );
         let started = std::time::Instant::now();
+        let identity_started = std::time::Instant::now();
         let identity = Arc::new(DeviceKey::open(&config.identity_dir)?);
+        let identity_ms = identity_started.elapsed().as_secs_f64() * 1000.;
+        let registration_started = std::time::Instant::now();
         let http = http(config)?;
         let device_id = register(&http, config, &identity)?;
+        let registration_ms = registration_started.elapsed().as_secs_f64() * 1000.;
         // A process-wide pending request retains the same recipient and request_id on retry.
         // Cross-process continuation uses the signed ticket after Host has decrypted the module.
         let pending_key = format!(
@@ -270,7 +274,10 @@ impl TaskSession {
             task_id: task_id.into(),
             recipient_key: pending.recipient.public_key.clone(),
         })?;
+        let pace_started = std::time::Instant::now();
         pace_new_task(&config.identity_dir, task_id)?;
+        let pace_ms = pace_started.elapsed().as_secs_f64() * 1000.;
+        let proof_started = std::time::Instant::now();
         let proof = signed_proof(
             &identity,
             &device_id,
@@ -278,6 +285,8 @@ impl TaskSession {
             "/v1/tasks/acquire",
             &body,
         )?;
+        let proof_ms = proof_started.elapsed().as_secs_f64() * 1000.;
+        let exchange_started = std::time::Instant::now();
         let response = http
             .post(format!(
                 "{}/v1/tasks/acquire",
@@ -289,6 +298,8 @@ impl TaskSession {
             .send()
             .context("acquire protected task")?;
         let response: AcquireResponse = serde_json::from_slice(&checked(response, 128 * 1024)?)?;
+        let exchange_ms = exchange_started.elapsed().as_secs_f64() * 1000.;
+        let verification_started = std::time::Instant::now();
         let ticket = TaskTicket {
             endpoint: config.endpoint.clone(),
             response,
@@ -302,6 +313,8 @@ impl TaskSession {
             &ticket.response.wrapped_key,
             &serde_json::to_vec(ticket.binding())?,
         )?;
+        let verification_ms = verification_started.elapsed().as_secs_f64() * 1000.;
+        eprintln!("protection_acquire_phases identity_ms={identity_ms:.3} registration_ms={registration_ms:.3} pace_ms={pace_ms:.3} proof_ms={proof_ms:.3} exchange_ms={exchange_ms:.3} verification_unwrap_ms={verification_ms:.3}");
         PENDING
             .get()
             .expect("initialized pending map")
@@ -351,17 +364,17 @@ impl TaskSession {
         self.content_key = None;
     }
     pub fn compute(&self, operation: &str, input: Vec<u8>) -> Result<Vec<u8>> {
-        ensure!(
-            valid_id(operation) && input.len() <= 64 * 1024 * 1024,
-            "compute input exceeds operation/byte budget"
-        );
-        self.call(
-            &format!("/v1/compute/{operation}"),
-            input,
-            256 * 1024 * 1024,
-        )
+        self.compute_bounded(operation, input, 256 * 1024 * 1024)
+    }
+    /// A caller may narrow the response allocation budget, never enlarge it.
+    pub fn compute_bounded(&self, operation: &str, input: Vec<u8>, output_limit: usize) -> Result<Vec<u8>> {
+        ensure!(valid_id(operation) && input.len() <= 64 * 1024 * 1024 && output_limit <= 256 * 1024 * 1024,
+            "compute input/response exceeds operation/byte budget");
+        self.call(&format!("/v1/compute/{operation}"), input, output_limit)
     }
     fn call(&self, endpoint: &str, body: Vec<u8>, limit: usize) -> Result<Vec<u8>> {
+        let started = std::time::Instant::now();
+        let input_bytes = body.len();
         let request_id = crypto::random_id()?;
         let proof = signed_proof(
             &self.identity,
@@ -370,6 +383,8 @@ impl TaskSession {
             endpoint,
             &body,
         )?;
+        let proof_ms = started.elapsed().as_secs_f64() * 1000.;
+        let exchange_started = std::time::Instant::now();
         let response = self
             .http
             .post(format!(
@@ -383,7 +398,14 @@ impl TaskSession {
             .header("x-nova-token", &self.ticket.response.task_token)
             .body(body)
             .send()?;
-        checked(response, limit)
+        let headers_ms = exchange_started.elapsed().as_secs_f64() * 1000.;
+        let http_version = response.version();
+        let read_started = std::time::Instant::now();
+        let output = checked(response, limit)?;
+        if std::env::var("NOVA_RENDER_PHASE_AUDIT").as_deref() == Ok("1") {
+            eprintln!("[NOVA_PROTECTION_RPC] endpoint={endpoint} http_version={http_version:?} input_bytes={input_bytes} output_bytes={} proof_ms={proof_ms:.3} send_to_headers_ms={headers_ms:.3} body_read_ms={:.3} total_ms={:.3}", output.len(), read_started.elapsed().as_secs_f64() * 1000., started.elapsed().as_secs_f64() * 1000.);
+        }
+        Ok(output)
     }
     pub fn download_ciphertext(&self) -> Result<Vec<u8>> {
         self.call("/v1/modules/download", Vec::new(), 512 * 1024 * 1024)
@@ -423,11 +445,16 @@ impl TaskSession {
             options.mode(0o600);
         }
         let mut file = options.open(destination)?;
+        let write_started = std::time::Instant::now();
         if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
             drop(file);
             let _ = std::fs::remove_file(destination);
             return Err(error.into());
         }
+        let write_ms = write_started.elapsed().as_secs_f64() * 1000.;
+        let clear_started = std::time::Instant::now();
+        drop(bytes);
+        eprintln!("protection_materialize_phases write_sync_ms={write_ms:.3} secret_clear_ms={:.3}", clear_started.elapsed().as_secs_f64() * 1000.);
         Ok(())
     }
     pub fn verify_materialized_module(

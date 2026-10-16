@@ -19,7 +19,7 @@ pub const VIEWER_SESSION_EVENT_SCHEMA: &str = "litematica-nova.viewer-session-ev
 /// running Viewer process. Scene replacement still points at the normal,
 /// hash-bound launch contract; presentation commands only mutate the existing
 /// Viewer-owned HWND and never carry scene or renderer payloads.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ViewerSessionCommand {
     pub schema: String,
@@ -30,6 +30,12 @@ pub struct ViewerSessionCommand {
     pub launch_contract: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_hwnd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_composition: Option<NativeCompositionEndpoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation_epoch: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpi_scale: Option<f64>,
     /// Screen-space origin for an out-of-process overlay presentation. Older
     /// Nova builds may omit it and provide `hostHwnd`; the Viewer then samples
     /// that host's screen rectangle once while applying the async command.
@@ -71,6 +77,8 @@ impl ViewerSessionCommand {
             kind: ViewerSessionCommandKind::ReplaceScene,
             launch_contract: Some(launch_contract),
             host_hwnd: None,
+            native_composition: None,
+            presentation_epoch: None, dpi_scale: None,
             screen_x: None,
             screen_y: None,
             width: None,
@@ -100,6 +108,20 @@ impl ViewerSessionCommand {
             Some(height),
             None,
         )
+    }
+
+    pub fn attach_native_composition(
+        session_id: String, sequence: u64, endpoint: NativeCompositionEndpoint,
+        width: u32, height: u32,
+    ) -> Result<Self, String> {
+        let mut command = Self::hide(session_id, sequence)?;
+        command.kind = ViewerSessionCommandKind::AttachEmbedded;
+        command.host_hwnd = Some("0".into());
+        command.native_composition = Some(endpoint);
+        command.width = Some(width);
+        command.height = Some(height);
+        command.validate()?;
+        Ok(command)
     }
 
     /// Presents the Viewer as a frameless top-level overlay. The render HWND
@@ -235,6 +257,8 @@ impl ViewerSessionCommand {
             kind,
             launch_contract: None,
             host_hwnd,
+            native_composition: None,
+            presentation_epoch: None, dpi_scale: None,
             screen_x,
             screen_y,
             width,
@@ -247,6 +271,17 @@ impl ViewerSessionCommand {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.dpi_scale.is_some_and(|scale| !scale.is_finite() || scale <= 0.0 || scale > 16.0) {
+            return Err("viewer presentation DPI scale must be finite and positive".into());
+        }
+
+        if self.presentation_epoch == Some(0) { return Err("native presentationEpoch must be non-zero".into()); }
+        if self.presentation_epoch.is_some() && !matches!(self.kind, ViewerSessionCommandKind::AttachEmbedded | ViewerSessionCommandKind::Resize | ViewerSessionCommandKind::ShowPopup | ViewerSessionCommandKind::Hide | ViewerSessionCommandKind::Release) {
+            return Err("presentationEpoch requires a native presentation command".into());
+        }
+        if self.native_composition.is_some() && self.kind != ViewerSessionCommandKind::AttachEmbedded {
+            return Err("nativeComposition is only valid for attach_embedded".into());
+        }
         if let Some(click) = self.click_started_at_epoch_ms {
             if click == 0 || !matches!(self.kind, ViewerSessionCommandKind::AttachEmbedded | ViewerSessionCommandKind::ShowOverlay | ViewerSessionCommandKind::ShowPopup) {
                 return Err("clickStartedAtEpochMs requires a visible presentation action and non-zero epoch".into());
@@ -278,12 +313,11 @@ impl ViewerSessionCommand {
                             .to_owned()
                     );
                 }
-                validate_hwnd(
-                    "hostHwnd",
-                    self.host_hwnd
-                        .as_deref()
-                        .ok_or_else(|| "attach_embedded requires hostHwnd".to_owned())?,
-                )?;
+                let host = self.host_hwnd.as_deref().ok_or_else(|| "attach_embedded requires hostHwnd".to_owned())?;
+                if let Some(endpoint) = &self.native_composition {
+                    endpoint.validate()?;
+                    if host != "0" { return Err("native composition must not carry a process-local window pointer".into()); }
+                } else { validate_hwnd("hostHwnd", host)?; }
                 validate_optional_screen_origin(self.screen_x, self.screen_y, "attach_embedded")?;
                 validate_extent(self.width, self.height, "attach_embedded")
             }
@@ -779,7 +813,7 @@ impl ViewerLaunchContract {
                     _ => return Err("quick resource report/decision paths must be paired; preload requires both".to_owned()),
                 }
                 if let Some(host) = &task.host {
-                    validate_hwnd("task.host.hwnd", &host.hwnd)?;
+                    host.validate()?;
                     if host.process_id == 0 {
                         return Err("quick_preview host processId must be non-zero".to_owned());
                     }
@@ -790,7 +824,7 @@ impl ViewerLaunchContract {
                 if self.renderer.is_some() || self.content != ViewerContent::default() {
                     return Err("quick_gpu_context cannot contain renderer/content or projection preparation".into());
                 }
-                validate_hwnd("task.host.hwnd", &task.host.hwnd)?;
+                task.host.validate()?;
                 if task.host.process_id == 0 { return Err("quick_gpu_context host processId must be non-zero".into()); }
                 Ok(())
             }
@@ -926,18 +960,33 @@ pub enum ViewerTask {
     QuickGpuContext(QuickGpuContextTask),
 }
 
+/// OS graphics API for a new GPU task, independent from the V5/Iris route.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphicsApiPreference {
+    #[default]
+    Auto,
+    Dx12,
+    Vulkan,
+}
+
 /// Ordinary asynchronous static GPU initialization. The legacy top-level
-/// `scene` field identifies the runtime context directory for this task only;
-/// it is never opened as a projection or compiled into scene geometry.
+/// `scene` identifies the runtime context directory, never projection geometry.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct QuickGpuContextTask { pub host: QuickPreviewHostWindow }
+pub struct QuickGpuContextTask {
+    pub host: QuickPreviewHostWindow,
+    #[serde(default)]
+    pub graphics_backend: GraphicsApiPreference,
+}
 
 /// The historical independent quick renderer, never a Full/V5 build task.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct QuickPreviewTask {
     pub initial_visible: bool,
+    #[serde(default)]
+    pub graphics_backend: GraphicsApiPreference,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<QuickPreviewHostWindow>,
     #[serde(default)]
@@ -977,6 +1026,112 @@ impl QuickResourceDecision {
 pub struct QuickPreviewHostWindow {
     pub hwnd: String,
     pub process_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_composition: Option<NativeCompositionEndpoint>,
+}
+
+impl QuickPreviewHostWindow {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.process_id == 0 { return Err("native Host processId must be non-zero".into()); }
+        if let Some(endpoint) = &self.native_composition {
+            endpoint.validate()?;
+            if self.hwnd != "0" { return Err("native composition must not carry a process-local window pointer".into()); }
+            Ok(())
+        } else { validate_hwnd("task.host.hwnd", &self.hwnd) }
+    }
+}
+
+/// A capability-bound OS composition service, never an NSView/wl_surface pointer.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct NativeCompositionEndpoint {
+    pub kind: String,
+    pub service_name: String,
+    pub nonce_hex: String,
+    pub generation: u64,
+}
+
+impl NativeCompositionEndpoint {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.kind != "macos_iosurface_mach_v1"
+            || !self.service_name.starts_with("com.litematica.nova.viewport.")
+            || self.service_name.len() > 127
+            || !self.service_name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c,b'.'|b'-'|b'_'))
+            || self.nonce_hex.len() != 32
+            || !self.nonce_hex.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            || self.generation == 0 {
+            return Err("native composition endpoint identity is invalid".into());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod native_composition_tests {
+    use super::*;
+    #[test]
+    fn native_presentation_dpi_and_epoch_round_trip_without_changing_legacy_packets() {
+        let mut command = ViewerSessionCommand::resize("session-native".into(), 1, 1280, 720, Some(true)).unwrap();
+        let old_json = serde_json::to_value(&command).unwrap();
+        assert!(old_json.get("dpiScale").is_none());
+        assert!(old_json.get("presentationEpoch").is_none());
+        command.dpi_scale = Some(1.5);
+        command.presentation_epoch = Some(8);
+        assert_eq!(ViewerSessionCommand::from_json_slice(&command.to_json_bytes().unwrap()).unwrap(), command);
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY, 16.01] {
+            command.dpi_scale = Some(scale);
+            assert!(command.validate().is_err());
+        }
+        command.dpi_scale = Some(2.0);
+        command.presentation_epoch = Some(0);
+        assert!(command.validate().is_err());
+    }
+    #[test]
+    fn explicit_native_popup_keeps_the_host_epoch_without_carrying_a_view_pointer() {
+        let mut command = ViewerSessionCommand::show_popup("session-native".into(), 2).unwrap();
+        command.presentation_epoch = Some(9);
+        let json = command.to_json_bytes().unwrap();
+        assert_eq!(ViewerSessionCommand::from_json_slice(&json).unwrap(), command);
+        assert!(command.host_hwnd.is_none());
+        assert!(command.native_composition.is_none());
+    }
+    fn endpoint() -> NativeCompositionEndpoint {
+        NativeCompositionEndpoint { kind: "macos_iosurface_mach_v1".into(),
+            service_name: "com.litematica.nova.viewport.test".into(),
+            nonce_hex: "0123456789abcdef0123456789abcdef".into(), generation: 1 }
+    }
+    #[test]
+    fn composed_host_never_accepts_a_process_local_view_pointer() {
+        let mut host = QuickPreviewHostWindow { hwnd: "0".into(), process_id: 7, native_composition: Some(endpoint()) };
+        assert!(host.validate().is_ok());
+        host.hwnd = "1234".into();
+        assert!(host.validate().is_err());
+        host.hwnd = "0".into(); host.native_composition = None;
+        assert!(host.validate().is_err());
+    }
+    #[test]
+    fn composition_service_rejects_unbound_or_malformed_identity() {
+        let valid = endpoint();
+        assert!(valid.validate().is_ok());
+        for invalid in [
+            NativeCompositionEndpoint { generation: 0, ..valid.clone() },
+            NativeCompositionEndpoint { nonce_hex: "short".into(), ..valid.clone() },
+            NativeCompositionEndpoint { kind: "foreign_pointer".into(), ..valid.clone() },
+            NativeCompositionEndpoint { service_name: "/tmp/foreign".into(), ..valid.clone() },
+        ] { assert!(invalid.validate().is_err()); }
+    }
+    #[test]
+    fn native_attach_is_explicit_and_old_host_packets_do_not_change() {
+        let legacy = QuickPreviewHostWindow { hwnd: "42".into(), process_id: 7, native_composition: None };
+        let json = serde_json::to_value(&legacy).unwrap();
+        assert!(json.get("nativeComposition").is_none());
+        assert_eq!(serde_json::from_value::<QuickPreviewHostWindow>(json).unwrap(), legacy);
+        let mut command = ViewerSessionCommand::attach_native_composition("session-test".into(), 1, endpoint(), 640, 480).unwrap();
+        assert_eq!(command.host_hwnd.as_deref(), Some("0"));
+        assert!(command.validate().is_ok());
+        command.kind = ViewerSessionCommandKind::Hide;
+        assert!(command.validate().is_err());
+    }
 }
 
 /// Product-selected geometry lifetime for one immutable render build.
@@ -1694,7 +1849,7 @@ mod tests {
         let mut contract = ViewerLaunchContract::new(
             "native-child".into(), absolute("scene.litematic"), ViewerContent::default(), None,
             ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false,
-                host: Some(QuickPreviewHostWindow { hwnd: "42".into(), process_id: 100 }), ..Default::default() }),
+                host: Some(QuickPreviewHostWindow { hwnd: "42".into(), process_id: 100 , native_composition: None }), ..Default::default() }),
         ).unwrap();
         let bytes = contract.to_json_bytes().unwrap();
         assert_eq!(ViewerLaunchContract::from_json_slice(&bytes).unwrap(), contract);
@@ -1713,7 +1868,8 @@ mod tests {
     fn quick_gpu_context_is_host_only_and_rejects_projection_preparation_options() {
         let contract = ViewerLaunchContract::new("gpu-context".into(), absolute("runtime-context"),
             ViewerContent::default(), None, ViewerTask::QuickGpuContext(QuickGpuContextTask {
-                host: QuickPreviewHostWindow { hwnd: "42".into(), process_id: 100 },
+                host: QuickPreviewHostWindow { hwnd: "42".into(), process_id: 100 , native_composition: None },
+                graphics_backend: GraphicsApiPreference::Auto,
             })).unwrap();
         let bytes = contract.to_json_bytes().unwrap();
         assert_eq!(ViewerLaunchContract::from_json_slice(&bytes).unwrap(), contract);
@@ -1724,6 +1880,42 @@ mod tests {
         resource_contract.content.resource_packs.push(absolute("pack.zip"));
         assert!(resource_contract.validate().is_err());
     }
+    #[test]
+    fn quick_graphics_api_is_task_bound_defaults_to_auto_and_keeps_v5_route_separate() {
+        for (preference, encoded) in [(GraphicsApiPreference::Auto, "auto"), (GraphicsApiPreference::Dx12, "dx12"), (GraphicsApiPreference::Vulkan, "vulkan")] {
+            let contract = ViewerLaunchContract::new("quick-api".into(), absolute("scene.litematic"),
+                ViewerContent::default(), None, ViewerTask::QuickPreview(QuickPreviewTask {
+                    graphics_backend: preference, ..Default::default()
+                })).unwrap();
+            let mut value = serde_json::to_value(&contract).unwrap();
+            assert_eq!(value["task"]["graphicsBackend"], encoded);
+            assert!(value["renderer"].is_null());
+            assert_eq!(ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).unwrap(), contract);
+            value["task"].as_object_mut().unwrap().remove("graphicsBackend");
+            let decoded = ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert!(matches!(decoded.task, ViewerTask::QuickPreview(QuickPreviewTask { graphics_backend: GraphicsApiPreference::Auto, .. })));
+        }
+        assert!(serde_json::from_str::<GraphicsApiPreference>("\"iris-gl46\"").is_err());
+        assert!(serde_json::from_str::<ViewerBackend>("\"dx12\"").is_err());
+    }
+
+    #[test]
+    fn quick_gpu_context_round_trips_explicit_graphics_api_and_accepts_old_auto_context() {
+        for preference in [GraphicsApiPreference::Auto, GraphicsApiPreference::Dx12, GraphicsApiPreference::Vulkan] {
+            let contract = ViewerLaunchContract::new("quick-context-api".into(), absolute("runtime-context"),
+                ViewerContent::default(), None, ViewerTask::QuickGpuContext(QuickGpuContextTask {
+                    host: QuickPreviewHostWindow { hwnd: "42".into(), process_id: 100 , native_composition: None }, graphics_backend: preference,
+                })).unwrap();
+            let mut value = serde_json::to_value(&contract).unwrap();
+            assert_eq!(ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).unwrap(), contract);
+            value["task"].as_object_mut().unwrap().remove("graphicsBackend");
+            let legacy = ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert!(matches!(legacy.task, ViewerTask::QuickGpuContext(QuickGpuContextTask { graphics_backend: GraphicsApiPreference::Auto, .. })));
+            value["task"]["graphicsBackend"] = "iris-gl46".into();
+            assert!(ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+    }
+
     #[test]
     fn quick_preview_contract_is_independent_hidden_and_strict() {
         let mut contract = ViewerLaunchContract::new(
@@ -2599,3 +2791,6 @@ mod tests {
         );
     }
 }
+
+/// Native GPU presentation messages shared by Host and Viewer.
+pub mod native_macos_wire;

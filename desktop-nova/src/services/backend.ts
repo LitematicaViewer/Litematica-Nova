@@ -11,7 +11,7 @@ export {
   saveUserConfig,
   setUserConfigDir,
 } from "../platform";
-export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo, V5CompatibilityConfig, ViewerControlConfig } from "../platform";
+export type { CopyFileToDirectoryOutput, DirectoryEntryInfo, GraphicsApiPreference, PathInfo, ProjectionPreviewImageOutput, UserConfig, UserConfigInfo, V5CompatibilityConfig, ViewerControlConfig } from "../platform";
 
 export {
   checkFileExists,

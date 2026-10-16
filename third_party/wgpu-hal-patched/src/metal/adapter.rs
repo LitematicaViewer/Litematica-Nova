@@ -16,6 +16,14 @@ impl super::Adapter {
     pub(super) fn new(shared: Arc<super::AdapterShared>) -> Self {
         Self { shared }
     }
+
+    /// The OS working-set recommendation, queried on the exact selected device.
+    /// This is not advertised physical VRAM and is refreshed for every admission.
+    pub fn local_memory_budget(&self) -> Option<(u64, u64)> {
+        let device = self.shared.device.lock();
+        let budget = device.recommended_max_working_set_size();
+        (budget > 0).then_some((budget, device.current_allocated_size() as u64))
+    }
 }
 
 impl crate::Adapter<super::Api> for super::Adapter {

@@ -23,6 +23,8 @@ pub(crate) struct QuickPresentationIntent {
     pub(crate) mode: QuickPresentationMode,
     pub(crate) visible: bool,
     pub(crate) placement: Option<PresentationPlacement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) presentation_epoch: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -110,6 +112,7 @@ impl QuickPreviewView {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct StartQuickPreviewInput {
     pub(crate) source_path: PathBuf,
+    #[serde(default)] pub(crate) graphics_backend: viewer_launch_contract::GraphicsApiPreference,
     #[serde(default)] pub(crate) preload: bool,
     #[serde(default)] pub(crate) click_started_at_epoch_ms: Option<u64>,
 }
@@ -145,6 +148,7 @@ struct QuickSession {
     source_bytes: u64,
     source_modified: Option<SystemTime>,
     requested_preload: bool,
+    graphics_backend: viewer_launch_contract::GraphicsApiPreference,
     pending_click_epoch_ms: Option<u64>,
     next_command: u64,
     next_status: u64,
@@ -173,7 +177,7 @@ impl QuickPreviewHost {
 
     /// Normal startup initializes only static GPU resources asynchronously.
     /// No projection is read or prepared until an actual user start request.
-    pub(crate) fn prepare_gpu_context(&self, host_window: QuickPreviewHostWindow) -> Result<(), String> {
+    pub(crate) fn prepare_gpu_context(&self, host_window: QuickPreviewHostWindow, graphics_backend: viewer_launch_contract::GraphicsApiPreference) -> Result<(), String> {
         let mut slot = self.session.lock().map_err(|_| "快速预览状态锁异常".to_owned())?;
         if slot.is_some() { return Ok(()); }
         let started = std::time::Instant::now();
@@ -185,7 +189,7 @@ impl QuickPreviewHost {
         fs::create_dir_all(&session_directory).map_err(|error| error.to_string())?;
         let backend = ViewerBackendIdentity::capture(&self.viewer_exe)?;
         let launch = ViewerLaunchContract::new(id.clone(), self.data_root.clone(), ViewerContent::default(), None,
-            ViewerTask::QuickGpuContext(viewer_launch_contract::QuickGpuContextTask { host: host_window.clone() }))?;
+            ViewerTask::QuickGpuContext(viewer_launch_contract::QuickGpuContextTask { host: host_window.clone(), graphics_backend }))?;
         let contract = ViewerLaunchContractFile::create(directory.join("launch.json"), &launch, &backend)?;
         let stdout = super::diagnostics::log_path("quick-preview", &format!("{id}-stdout.log"), &directory)?;
         let stderr = super::diagnostics::log_path("quick-preview", &format!("{id}-stderr.log"), &directory)?;
@@ -203,7 +207,7 @@ impl QuickPreviewHost {
         let view = QuickPreviewView { preview_id: id.clone(), source_path: self.data_root.clone(), render_mode: "fast_experimental", state: "starting",
             presentation: QuickPresentationIntent::default(), presentation_revision: 0, visible: false, error: None, preload: false, resource: None };
         *slot = Some(QuickSession { view, session_id: id.clone(), child, contract, backend, directory: session_directory.clone(), stdout, stderr,
-            source_bytes: 0, source_modified: None, requested_preload: false, pending_click_epoch_ms: None, next_command: 1, next_status: 0, next_event: 1,
+            source_bytes: 0, source_modified: None, requested_preload: false, graphics_backend, pending_click_epoch_ms: None, next_command: 1, next_status: 0, next_event: 1,
             pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window, launch_accepted: false,
             gpu_context_only: true, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
             resource_report_path: session_directory.join("resource-report.json"), resource_decision_path: session_directory.join("resource-decision.json"), resource_decided: false });
@@ -221,7 +225,8 @@ impl QuickPreviewHost {
             let mut pending = self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?;
             if let Some(request) = pending.as_ref().filter(|request| request.view.state == "starting"
                 && request.view.source_path == source && request.source_bytes == meta.len()
-                && request.source_modified == meta.modified().ok() && request.host_window == host_window) {
+                && request.source_modified == meta.modified().ok() && request.host_window == host_window
+                && request.input.graphics_backend == input.graphics_backend) {
                 return Ok(request.view.clone());
             }
             let generation = self.sequence.fetch_add(1, Ordering::Relaxed);
@@ -259,14 +264,14 @@ impl QuickPreviewHost {
                 session.view.state = "failed";
                 session.view.error = Some(error);
             }
-            if session.host_window == host_window && session.view.source_path == source && session.source_bytes == meta.len()
+            if session.graphics_backend == input.graphics_backend && session.host_window == host_window && session.view.source_path == source && session.source_bytes == meta.len()
                 && session.source_modified == meta.modified().ok() && session.view.preload == input.preload && matches!(session.view.state, "starting" | "ready") {
                 session.pending_click_epoch_ms = input.click_started_at_epoch_ms;
                 return Ok(session.view.clone());
             }
             let reusable_gpu = session.gpu_ready_observed_epoch_ms.is_some()
                 && matches!(self.supervisor.wait_for_exit(&session.child, Duration::ZERO), WaitOutcome::TimedOut);
-            if session.host_window == host_window && (reusable_gpu && matches!(session.view.state, "starting" | "ready" | "closed")
+            if session.graphics_backend == input.graphics_backend && session.host_window == host_window && (reusable_gpu && matches!(session.view.state, "starting" | "ready" | "closed")
                 || session.gpu_context_only && session.view.state == "starting") {
                 if session.view.state == "starting" && !session.gpu_context_only {
                     publish_resource_decision(&session.resource_decision_path, &session.session_id, QuickResourceAction::Cancel, false)?;
@@ -277,7 +282,7 @@ impl QuickPreviewHost {
                 let resource_report_path = session.directory.join(format!("resource-report-{generation:020}.json"));
                 let resource_decision_path = session.directory.join(format!("resource-decision-{generation:020}.json"));
                 let launch = ViewerLaunchContract::new(session.session_id.clone(), source.clone(), ViewerContent::default(), None,
-                    ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(host_window), preload: input.preload,
+                    ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(host_window), graphics_backend: input.graphics_backend, preload: input.preload,
                         resource_report_path: Some(resource_report_path.clone()), resource_decision_path: Some(resource_decision_path.clone()) }))?;
                 let replacement_contract = ViewerLaunchContractFile::create(replacement.clone(), &launch, &session.backend)?;
                 let hide = ViewerSessionCommand::hide(session.session_id.clone(), session.next_command)?;
@@ -315,7 +320,7 @@ impl QuickPreviewHost {
         let resource_decision_path = session_directory.join("resource-decision.json");
         let backend = ViewerBackendIdentity::capture(&self.viewer_exe)?;
         let launch = ViewerLaunchContract::new(id.clone(), source.clone(), ViewerContent::default(), None,
-            ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(host_window.clone()), preload: input.preload,
+            ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(host_window.clone()), graphics_backend: input.graphics_backend, preload: input.preload,
                 resource_report_path: Some(resource_report_path.clone()), resource_decision_path: Some(resource_decision_path.clone()) }))?;
         let contract = ViewerLaunchContractFile::create(directory.join("launch.json"), &launch, &backend)?;
         let stdout = super::diagnostics::log_path("quick-preview", &format!("{id}-stdout.log"), &directory)?;
@@ -339,7 +344,7 @@ impl QuickPreviewHost {
         let view = QuickPreviewView { preview_id: id, source_path: source, render_mode: "fast_experimental", state: "starting",
             presentation: QuickPresentationIntent::default(), presentation_revision: 0, visible: false, error: None, preload: input.preload, resource: None };
         *slot = Some(QuickSession { view: view.clone(), session_id: view.preview_id.clone(), child, contract, backend, directory: session_directory, stdout, stderr,
-            source_bytes: meta.len(), source_modified: meta.modified().ok(), requested_preload: input.preload, pending_click_epoch_ms: input.click_started_at_epoch_ms, next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(),
+            source_bytes: meta.len(), source_modified: meta.modified().ok(), requested_preload: input.preload, graphics_backend: input.graphics_backend, pending_click_epoch_ms: input.click_started_at_epoch_ms, next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(),
             launch_accepted: false, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None, resource_report_path, resource_decision_path, resource_decided: false, capture_errors: BTreeMap::new(), host_window });
         Ok(view)
     }
@@ -376,6 +381,20 @@ impl QuickPreviewHost {
         Ok(session.view.clone())
     }
 
+    #[cfg(target_os="macos")]
+    pub(crate) fn renew_native_presentation(&self, id: &str) -> Result<QuickPreviewView, String> {
+        if let Some(pending) = self.pending_resource.lock().map_err(|_| "快速预览状态锁异常")?.as_mut().filter(|pending| pending.view.preview_id == id) {
+            pending.view.presentation.presentation_epoch = Some(crate::platform::native_preview_host::advance_owner(id)?);
+            return Ok(pending.view.clone());
+        }
+        let mut slot = self.session.lock().map_err(|_| "快速预览状态锁异常".to_owned())?;
+        let session = slot.as_mut().filter(|session| session.view.preview_id == id).ok_or("快速预览已切换")?;
+        session.view.presentation.presentation_epoch = Some(crate::platform::native_preview_host::advance_owner(id)?);
+        session.deferred_presentation = true;
+        session.refresh(&self.supervisor)?;
+        Ok(session.view.clone())
+    }
+
     pub(crate) fn snapshot(&self) -> Result<Option<QuickPreviewView>, String> {
         if let Some(request) = self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.as_ref() {
             return Ok(Some(request.view.clone()));
@@ -391,7 +410,7 @@ impl QuickPreviewHost {
         Ok(slot.as_ref().filter(|session| !session.gpu_context_only).map(|session| session.view.clone()))
     }
 
-    pub(crate) fn present(&self, id: &str, intent: QuickPresentationIntent, revision: u64) -> Result<QuickPreviewView, String> {
+    pub(crate) fn present(&self, id: &str, mut intent: QuickPresentationIntent, revision: u64) -> Result<QuickPreviewView, String> {
         if let Some(request) = self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.as_mut().filter(|request| request.view.preview_id == id) {
             if request.view.accepts_presentation(revision) { request.view.presentation_revision = revision; }
             // A pending choice has no prepared scene and cannot admit a Show.
@@ -401,6 +420,14 @@ impl QuickPreviewHost {
         let session = slot.as_mut().filter(|session| session.view.preview_id == id).ok_or("快速预览已切换，请重新加载。")?;
         if !session.view.accepts_presentation(revision) { return Ok(session.view.clone()); }
         if !matches!(session.view.state, "starting" | "ready") { return Ok(session.view.clone()); }
+        #[cfg(target_os="macos")]
+        {
+            intent.presentation_epoch = match crate::platform::native_preview_host::advance_owner(id) {
+                Ok(epoch) => Some(epoch),
+                Err(error) if intent.visible => return Err(error),
+                Err(_) => None, // An old owner may still hide its own retained Viewer.
+            };
+        }
         // Validate the same native command now, but keep the child hidden while
         // its current scene is preparing. The existing ready receipt admits it.
         presentation_command(&session.session_id, session.next_command, &intent, &session.host_window)?;
@@ -636,12 +663,20 @@ impl QuickSession {
 }
 
 fn presentation_command(id: &str, sequence: u64, intent: &QuickPresentationIntent, host: &QuickPreviewHostWindow) -> Result<ViewerSessionCommand, String> {
-    if !intent.visible || intent.mode == QuickPresentationMode::Hidden { return ViewerSessionCommand::hide(id.to_owned(), sequence); }
+    if !intent.visible || intent.mode == QuickPresentationMode::Hidden {
+        let mut command = ViewerSessionCommand::hide(id.to_owned(), sequence)?;
+        command.presentation_epoch = intent.presentation_epoch;
+        return Ok(command);
+    }
     match intent.mode {
         QuickPresentationMode::Embedded => {
             let rect = intent.placement.ok_or("快速预览缺少视口位置。")?;
             if !rect.dpi_scale.is_finite() || rect.dpi_scale <= 0.0 { return Err("快速预览 DPI 无效。".to_owned()); }
-            let mut command = ViewerSessionCommand::attach_embedded(id.to_owned(), sequence, host.hwnd.clone(), rect.width, rect.height)?;
+            let mut command = if let Some(endpoint) = &host.native_composition {
+                ViewerSessionCommand::attach_native_composition(id.to_owned(), sequence, endpoint.clone(), rect.width, rect.height)?
+            } else { ViewerSessionCommand::attach_embedded(id.to_owned(), sequence, host.hwnd.clone(), rect.width, rect.height)? };
+            command.presentation_epoch = intent.presentation_epoch;
+            command.dpi_scale = Some(rect.dpi_scale);
             command.screen_x = Some(rect.x);
             command.screen_y = Some(rect.y);
             command.validate()?;
@@ -739,7 +774,7 @@ mod tests {
             .map(|entry| entry.path()).filter(|path| path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("litematic"))).take(2).collect::<Vec<_>>();
         assert_eq!(sources.len(), 2);
         let source = fs::canonicalize(&sources[0]).unwrap(); let metadata = fs::metadata(&source).unwrap();
-        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() };
+        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() , native_composition: None };
         let backend = ViewerBackendIdentity::capture(&command).unwrap();
         let launch = ViewerLaunchContract::new("quick-one".into(), source.clone(), ViewerContent::default(), None, ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(window.clone()), ..Default::default() })).unwrap();
         let contract = ViewerLaunchContractFile::create(directory.0.join("launch.json"), &launch, &backend).unwrap();
@@ -748,7 +783,7 @@ mod tests {
         let mut initial = view(QuickPresentationIntent::default()); initial.source_path = source.clone(); initial.state = "starting"; initial.presentation_revision = 0;
         let host = QuickPreviewHost::new(Arc::clone(&supervisor), command, directory.0.clone());
         *host.session.lock().unwrap() = Some(QuickSession { view: initial, session_id: "quick-one".into(), child: child.clone(), contract, backend, directory: directory.0.clone(), stdout, stderr,
-            source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, pending_click_epoch_ms: Some(41),
+            source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, graphics_backend: Default::default(), pending_click_epoch_ms: Some(41),
             next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window: window.clone(),
             launch_accepted: true, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
             resource_report_path: directory.0.join("resource-report.json"), resource_decision_path: directory.0.join("resource-decision.json"), resource_decided: false });
@@ -760,7 +795,7 @@ mod tests {
 
         let embedded = |x, scale| QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true,
             placement: Some(PresentationPlacement { x, y: 120, width: (600.0 * scale) as u32,
-                height: (400.0 * scale) as u32, dpi_scale: scale, focused: false }) };
+                height: (400.0 * scale) as u32, dpi_scale: scale, focused: false }) , presentation_epoch: None };
         host.present("quick-one", embedded(10, 1.0), 1).unwrap();
         host.present("quick-one", embedded(900, 1.5), 2).unwrap();
         assert!(!directory.0.join("command-00000000000000000001.json").exists(), "Preparing cannot attach an empty child");
@@ -775,13 +810,13 @@ mod tests {
         status(1, ViewerSessionState::Attached { host_hwnd: "42".into(), width: 900, height: 600 });
         assert!(host.snapshot().unwrap().unwrap().visible);
 
-        let changed = host.start(StartQuickPreviewInput { source_path: sources[1].clone(), preload: true,
+        let changed = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: sources[1].clone(), preload: false,
             click_started_at_epoch_ms: Some(42) }, window.clone()).unwrap();
         assert_ne!(changed.preview_id, "quick-one");
         assert_eq!(read_command(2).kind, viewer_launch_contract::ViewerSessionCommandKind::Hide);
         let replacement = read_command(3); let replacement_path = replacement.launch_contract.unwrap();
         let launch = ViewerLaunchContract::from_json_slice(&fs::read(&replacement_path).unwrap()).unwrap();
-        assert!(matches!(launch.task, ViewerTask::QuickPreview(QuickPreviewTask { preload: true, .. })));
+        assert!(matches!(launch.task, ViewerTask::QuickPreview(QuickPreviewTask { preload: false, .. })));
         host.present(&changed.preview_id, embedded(20, 1.0), 1).unwrap();
         host.present(&changed.preview_id, embedded(800, 2.0), 2).unwrap();
         host.present(&changed.preview_id, QuickPresentationIntent::default(), 3).unwrap();
@@ -801,7 +836,7 @@ mod tests {
         status(5, ViewerSessionState::Attached { host_hwnd: "42".into(), width: 1200, height: 800 });
         assert!(host.snapshot().unwrap().unwrap().visible);
 
-        let closing = host.start(StartQuickPreviewInput { source_path: source.clone(), preload: false,
+        let closing = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source.clone(), preload: false,
             click_started_at_epoch_ms: Some(43) }, window.clone()).unwrap();
         host.present(&closing.preview_id, embedded(30, 1.0), 1).unwrap();
         host.close(&closing.preview_id).unwrap();
@@ -810,7 +845,7 @@ mod tests {
         status(7, ViewerSessionState::SceneReady { request_id: "quick-one".into() });
         assert_eq!(host.snapshot().unwrap().unwrap().state, "closed");
         assert!(!directory.0.join("command-00000000000000000009.json").exists(), "late SceneReady cannot flush the closed page's desired Show");
-        let reopened = host.start(StartQuickPreviewInput { source_path: source, preload: false,
+        let reopened = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source, preload: false,
             click_started_at_epoch_ms: Some(44) }, window).unwrap();
         assert_ne!(reopened.preview_id, closing.preview_id);
         assert!(host.present(&closing.preview_id, embedded(999, 1.0), 2).is_err());
@@ -838,13 +873,13 @@ mod tests {
         let child = supervisor.spawn(spec).unwrap().child;
         struct TestDirectory(PathBuf);
         impl Drop for TestDirectory { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
-        let directory = TestDirectory(std::env::temp_dir().join(format!("nova-quick-host-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos())));
+        let directory = TestDirectory(std::env::temp_dir().join(format!("nova-quick-close-host-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos())));
         fs::create_dir_all(&directory.0).unwrap();
         let sources = fs::read_dir(r"C:\Users\27232\Documents\投影测试").unwrap().filter_map(Result::ok)
             .map(|entry| entry.path()).filter(|path| path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("litematic"))).take(2).collect::<Vec<_>>();
         assert_eq!(sources.len(), 2);
         let source = fs::canonicalize(&sources[0]).unwrap(); let metadata = fs::metadata(&source).unwrap();
-        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() };
+        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() , native_composition: None };
         let backend = ViewerBackendIdentity::capture(&command).unwrap();
         let launch = ViewerLaunchContract::new("quick-one".into(), source.clone(), ViewerContent::default(), None, ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(window.clone()), ..Default::default() })).unwrap();
         let contract = ViewerLaunchContractFile::create(directory.0.join("launch.json"), &launch, &backend).unwrap();
@@ -853,7 +888,7 @@ mod tests {
         let mut initial = view(QuickPresentationIntent::default()); initial.source_path = source.clone();
         let host = QuickPreviewHost::new(Arc::clone(&supervisor), command, directory.0.clone());
         *host.session.lock().unwrap() = Some(QuickSession { view: initial, session_id: "quick-one".into(), child: child.clone(), contract, backend, directory: directory.0.clone(), stdout, stderr,
-            source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, pending_click_epoch_ms: None,
+            source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, graphics_backend: Default::default(), pending_click_epoch_ms: None,
             next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window: window.clone(),
             launch_accepted: true, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
             resource_report_path: directory.0.join("resource-report.json"), resource_decision_path: directory.0.join("resource-decision.json"), resource_decided: false });
@@ -868,7 +903,7 @@ mod tests {
         assert_eq!(supervisor.active_children(), vec![child.clone()]);
         status(1, ViewerSessionState::Hidden);
         assert_eq!(host.snapshot().unwrap().unwrap().state, "closed", "old Ready cannot reopen a closed preview");
-        let reopened = host.start(StartQuickPreviewInput { source_path: source.clone(), preload: false, click_started_at_epoch_ms: Some(11) }, window.clone()).unwrap();
+        let reopened = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source.clone(), preload: false, click_started_at_epoch_ms: Some(11) }, window.clone()).unwrap();
         assert_ne!(reopened.preview_id, "quick-one"); assert_eq!(reopened.state, "starting");
         let replacement = read_command(3); assert_eq!(replacement.kind, viewer_launch_contract::ViewerSessionCommandKind::ReplaceScene);
         let replacement_path = replacement.launch_contract.unwrap();
@@ -880,13 +915,13 @@ mod tests {
         assert_eq!(read_command(4).kind, viewer_launch_contract::ViewerSessionCommandKind::Hide);
         status(2, ViewerSessionState::Hidden); status(3, ViewerSessionState::SceneReady { request_id: "quick-one".into() });
         assert_eq!(host.snapshot().unwrap().unwrap().state, "closed", "actual delayed replacement completion cannot reopen a closed preview");
-        let reopened_again = host.start(StartQuickPreviewInput { source_path: source, preload: false, click_started_at_epoch_ms: Some(12) }, window.clone()).unwrap();
+        let reopened_again = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source, preload: false, click_started_at_epoch_ms: Some(12) }, window.clone()).unwrap();
         assert_ne!(reopened_again.preview_id, reopened.preview_id);
         let replacement_again = read_command(6); assert_eq!(replacement_again.kind, viewer_launch_contract::ViewerSessionCommandKind::ReplaceScene);
         let replacement_again_path = replacement_again.launch_contract.unwrap();
         status(4, ViewerSessionState::Hidden); status(5, ViewerSessionState::Hidden);
         let retired_decision = host.session.lock().unwrap().as_ref().unwrap().resource_decision_path.clone();
-        let switched = host.start(StartQuickPreviewInput { source_path: sources[1].clone(), preload: false, click_started_at_epoch_ms: Some(13) }, window).unwrap();
+        let switched = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: sources[1].clone(), preload: false, click_started_at_epoch_ms: Some(13) }, window).unwrap();
         assert_ne!(switched.preview_id, reopened_again.preview_id); assert_eq!(switched.state, "starting");
         let new_replacement = read_command(8); assert_eq!(new_replacement.kind, viewer_launch_contract::ViewerSessionCommandKind::ReplaceScene);
         let new_replacement_path = new_replacement.launch_contract.unwrap();
@@ -914,10 +949,10 @@ mod tests {
         assert!(!new_replacement_path.exists());
         assert_eq!(supervisor.active_children(), vec![child.clone()]);
         let host_window = host.session.lock().unwrap().as_ref().unwrap().host_window.clone();
-        host.start(StartQuickPreviewInput { source_path: sources[0].clone(), preload: true, click_started_at_epoch_ms: Some(14) }, host_window).unwrap();
+        host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: sources[0].clone(), preload: false, click_started_at_epoch_ms: Some(14) }, host_window).unwrap();
         let failed_replacement_path = read_command(10).launch_contract.unwrap();
         let failed_launch = ViewerLaunchContract::from_json_slice(&fs::read(&failed_replacement_path).unwrap()).unwrap();
-        assert!(matches!(failed_launch.task, ViewerTask::QuickPreview(QuickPreviewTask { preload: true, .. })));
+        assert!(matches!(failed_launch.task, ViewerTask::QuickPreview(QuickPreviewTask { preload: false, .. })));
         status(9, ViewerSessionState::Hidden);
         status(10, ViewerSessionState::Error { command_kind: viewer_launch_contract::ViewerSessionCommandKind::ReplaceScene, message: "actual failed replacement".into() });
         assert_eq!(host.snapshot().unwrap().unwrap().state, "failed");
@@ -938,7 +973,7 @@ mod tests {
         assert!(!view.visible);
         view.apply_status(&ViewerSessionState::Ready, false);
         assert_eq!(view.state, "ready"); assert!(!view.visible);
-        view.presentation = QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true, placement: None };
+        view.presentation = QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true, placement: None , presentation_epoch: None };
         view.apply_status(&attached, true);
         assert!(view.visible);
         view.apply_status(&ViewerSessionState::Hidden, false);
@@ -948,12 +983,13 @@ mod tests {
     }
     #[test]
     fn quick_presentation_keeps_physical_rect_and_rejects_missing_host() {
-        let host = QuickPreviewHostWindow { hwnd: "42".into(), process_id: 1 };
-        let mut intent = QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true, placement: None };
+        let host = QuickPreviewHostWindow { hwnd: "42".into(), process_id: 1 , native_composition: None };
+        let mut intent = QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true, placement: None , presentation_epoch: None };
         assert!(presentation_command("quick-one", 1, &intent, &host).is_err());
         intent.placement = Some(PresentationPlacement { x: -120, y: 40, width: 640, height: 480, dpi_scale: 1.5, focused: false });
         let cmd = presentation_command("quick-one", 1, &intent, &host).unwrap();
         assert_eq!(cmd.screen_x, Some(-120)); assert_eq!(cmd.width, Some(640)); assert_eq!(cmd.host_hwnd.as_deref(), Some("42"));
+        assert_eq!(cmd.dpi_scale, Some(1.5));
         intent.visible = false; assert_eq!(presentation_command("quick-one", 2, &intent, &host).unwrap().kind, viewer_launch_contract::ViewerSessionCommandKind::Hide);
     }
 }
@@ -987,17 +1023,24 @@ mod quick_resource_tests {
         let (supervisor, _) = ProcessSupervisor::new(ExecutableAllowlist::new()).unwrap();
         let supervisor = Arc::new(supervisor);
         let host = QuickPreviewHost::new(supervisor.clone(), root.0.join("deliberately-absent-viewer.exe"), root.0.clone());
-        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() };
-        let input = |source_path| StartQuickPreviewInput { source_path, preload: true, click_started_at_epoch_ms: Some(123) };
+        let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() , native_composition: None };
+        let input = |source_path| StartQuickPreviewInput { graphics_backend: Default::default(), source_path, preload: true, click_started_at_epoch_ms: Some(123) };
         let first = host.start(input(source.clone()), window.clone()).unwrap();
         assert_eq!(first.state, "starting"); assert!(!first.visible);
         assert!(first.resource.as_ref().unwrap().decision_required); assert!(first.resource.as_ref().unwrap().estimate.is_none());
         assert!(host.session.lock().unwrap().is_none()); assert!(supervisor.active_children().is_empty());
         assert_eq!(host.start(input(source.clone()), window.clone()).unwrap().preview_id, first.preview_id);
         let show = QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true,
-            placement: Some(PresentationPlacement { x: 0, y: 0, width: 640, height: 480, dpi_scale: 1.0, focused: true }) };
+            placement: Some(PresentationPlacement { x: 0, y: 0, width: 640, height: 480, dpi_scale: 1.0, focused: true }) , presentation_epoch: None };
         assert!(!host.present(&first.preview_id, show, 2).unwrap().visible);
         assert!(host.resource_decision(&first.preview_id, QuickResourceAction::Preload, true).is_err());
+        let mut manual = input(source.clone());
+        manual.graphics_backend = viewer_launch_contract::GraphicsApiPreference::Vulkan;
+        let changed_api = host.start(manual.clone(), window.clone()).unwrap();
+        assert_ne!(changed_api.preview_id, first.preview_id, "a changed backend is a new task");
+        assert_eq!(host.start(manual, window.clone()).unwrap().preview_id, changed_api.preview_id);
+        assert_eq!(host.pending_resource.lock().unwrap().as_ref().unwrap().input.graphics_backend,
+            viewer_launch_contract::GraphicsApiPreference::Vulkan, "preflight keeps the exact requested API");
         let current = host.start(input(second.clone()), window).unwrap();
         assert_ne!(current.preview_id, first.preview_id);
         assert!(host.resource_decision(&first.preview_id, QuickResourceAction::Realtime, false).is_err());
@@ -1018,8 +1061,8 @@ mod quick_resource_tests {
         let source = root.join("fixture.litematic"); fs::write(&source, b"before").unwrap();
         let (supervisor, _) = ProcessSupervisor::new(ExecutableAllowlist::new()).unwrap(); let supervisor = Arc::new(supervisor);
         let host = QuickPreviewHost::new(supervisor.clone(), root.join("absent-viewer.exe"), root.clone());
-        let view = host.start(StartQuickPreviewInput { source_path: source.clone(), preload: true, click_started_at_epoch_ms: None },
-            QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() }).unwrap();
+        let view = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source.clone(), preload: true, click_started_at_epoch_ms: None },
+            QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() , native_composition: None }).unwrap();
         fs::write(&source, b"changed input content").unwrap();
         let error = host.resource_decision(&view.preview_id, QuickResourceAction::Realtime, false).unwrap_err();
         assert!(error.contains("投影已修改")); assert!(supervisor.active_children().is_empty());

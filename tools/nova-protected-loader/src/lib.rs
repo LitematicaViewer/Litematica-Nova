@@ -1,4 +1,4 @@
-//! Public, ordinary Windows loader. This crate contains no rendering algorithms.
+//! Public, ordinary OS loader. This crate contains no rendering algorithms.
 //! The Host decrypts a signed module into its private runtime directory; this
 //! loader only verifies the materialized file and calls its documented ABI.
 use anyhow::{Context, Result, ensure};
@@ -11,7 +11,15 @@ use std::{
 use zeroize::Zeroize;
 
 pub const ABI_VERSION: u32 = 1;
+#[cfg(windows)]
 pub const MODULE_ID: &str = "nova_protected_module.dll";
+#[cfg(target_os = "linux")]
+pub const MODULE_ID: &str = "libnova_protected_module.so";
+#[cfg(target_os = "macos")]
+pub const MODULE_ID: &str = "libnova_protected_module.dylib";
+pub const MODULE_EXTENSION: &str = std::env::consts::DLL_EXTENSION;
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+compile_error!("Nova protected modules require a supported Windows, Linux or macOS target");
 const DEFAULT_ENDPOINT: &str = "https://45-62-112-121.sslip.io:8448/nova-core";
 const MAX_TICKET_BYTES: u64 = 128 * 1024;
 const MAX_MODULE_BYTES: u64 = 512 * 1024 * 1024;
@@ -128,6 +136,14 @@ fn verify_locked_module(file: &mut File, ticket: &TaskTicket) -> Result<()> {
     result
 }
 
+fn verify_abi(version: u32) -> Result<()> {
+    ensure!(
+        version == ABI_VERSION,
+        "protected module ABI version differs"
+    );
+    Ok(())
+}
+
 /// There is no fallback to a local unprotected renderer on authentication or
 /// loading failure. Callers decide how to surface the current task failure.
 pub fn run_role(role: Role) -> Result<i32> {
@@ -198,7 +214,7 @@ fn run_verified_module(path: &Path, ticket: &TaskTicket, role: Role) -> Result<i
         let abi = GetProcAddress(module, c"nova_protected_abi_version".as_ptr().cast())
             .context("protected module ABI version export is absent")?;
         let abi: unsafe extern "C" fn() -> u32 = std::mem::transmute(abi);
-        ensure!(abi() == ABI_VERSION, "protected module ABI version differs");
+        verify_abi(abi())?;
         let entry = GetProcAddress(module, c"nova_protected_entry".as_ptr().cast())
             .context("protected module entry export is absent")?;
         let entry: unsafe extern "C" fn(u32) -> i32 = std::mem::transmute(entry);
@@ -206,14 +222,188 @@ fn run_verified_module(path: &Path, ticket: &TaskTicket, role: Role) -> Result<i
     }
 }
 
-#[cfg(not(windows))]
-fn run_verified_module(_path: &Path, _ticket: &TaskTicket, _role: Role) -> Result<i32> {
-    anyhow::bail!("protected module loading is supported only by the Windows candidate")
+#[cfg(unix)]
+fn open_private_module(path: &Path) -> Result<(PathBuf, File)> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    // The Host materializes each module as 0600 in its own 0700 directory.
+    // Do not follow a symlink to a public or foreign module/runtime directory.
+    let parent = path
+        .parent()
+        .context("protected module runtime directory is absent")?;
+    let directory = std::fs::symlink_metadata(parent)?;
+    let metadata = std::fs::symlink_metadata(path)?;
+    let uid = unsafe { libc::geteuid() };
+    ensure!(
+        directory.is_dir() && directory.uid() == uid && directory.mode() & 0o077 == 0,
+        "protected module runtime directory is not current-user private"
+    );
+    ensure!(
+        metadata.is_file() && metadata.uid() == uid && metadata.mode() & 0o077 == 0,
+        "protected module file is not current-user private"
+    );
+    let absolute = path
+        .canonicalize()
+        .context("resolve protected module path")?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&absolute)
+        .context("open private protected module")?;
+    let opened = file.metadata()?;
+    ensure!(
+        metadata.dev() == opened.dev()
+            && metadata.ino() == opened.ino()
+            && opened.uid() == uid
+            && opened.mode() & 0o077 == 0,
+        "protected module changed while opening"
+    );
+    Ok((absolute, file))
+}
+
+#[cfg(unix)]
+fn run_verified_module(path: &Path, ticket: &TaskTicket, role: Role) -> Result<i32> {
+    let (absolute, mut file) = open_private_module(path)?;
+    verify_locked_module(&mut file, ticket)?;
+    unsafe {
+        // Use the system loader, eagerly resolving imports with process-local
+        // symbols. No manual mapping, injection or unprotected local fallback.
+        let library = libloading::os::unix::Library::open(
+            Some(&absolute),
+            libloading::os::unix::RTLD_NOW | libloading::os::unix::RTLD_LOCAL,
+        )
+        .context("load authenticated protected module")?;
+        // As on Windows, renderer threads may still own this code after entry
+        // returns. Keep the normal OS library loaded until child-process exit.
+        let library = std::mem::ManuallyDrop::new(library);
+        let abi = library
+            .get::<unsafe extern "C" fn() -> u32>(b"nova_protected_abi_version\0")
+            .context("protected module ABI version export is absent")?;
+        verify_abi(abi())?;
+        let entry = library
+            .get::<unsafe extern "C" fn(u32) -> i32>(b"nova_protected_entry\0")
+            .context("protected module entry export is absent")?;
+        // Keep the authenticated read descriptor alive through entry execution.
+        let result = entry(role as u32);
+        drop(file);
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn unsigned_ticket(hash: &str) -> TaskTicket {
+        use nova_protection::{
+            crypto::{ModuleManifest, SignedManifest, WrappedKey},
+            protocol::{AcquireResponse, TaskBinding},
+        };
+        TaskTicket {
+            endpoint: "https://fixture.invalid".into(),
+            response: AcquireResponse {
+                binding: TaskBinding {
+                    device_id: "fixture-device".into(),
+                    build_id: "fixture-build".into(),
+                    module_id: MODULE_ID.into(),
+                    task_id: "fixture-task".into(),
+                    expires_ms: nova_protection::unix_ms() + 60_000,
+                    ciphertext_sha256: "fixture-ciphertext".into(),
+                },
+                task_token: String::new(),
+                wrapped_key: WrappedKey {
+                    encapsulated_key: String::new(),
+                    ciphertext: String::new(),
+                },
+                signed_manifest: SignedManifest {
+                    manifest: ModuleManifest {
+                        protocol: 1,
+                        build_id: "fixture-build".into(),
+                        module_id: MODULE_ID.into(),
+                        plaintext_sha256: hash.into(),
+                        ciphertext_sha256: "fixture-ciphertext".into(),
+                        ciphertext_bytes: 1,
+                        nonce: String::new(),
+                        created_ms: 1,
+                    },
+                    signature: String::new(),
+                },
+                server_signature: String::new(),
+            },
+        }
+    }
+    #[test]
+    fn module_names_follow_target_os_conventions() {
+        assert_eq!(
+            Path::new(MODULE_ID)
+                .extension()
+                .and_then(|value| value.to_str()),
+            Some(MODULE_EXTENSION)
+        );
+        #[cfg(windows)]
+        assert_eq!(MODULE_ID, "nova_protected_module.dll");
+        #[cfg(target_os = "linux")]
+        assert_eq!(MODULE_ID, "libnova_protected_module.so");
+        #[cfg(target_os = "macos")]
+        assert_eq!(MODULE_ID, "libnova_protected_module.dylib");
+    }
+    #[test]
+    fn changed_abi_is_rejected_before_entry() {
+        assert!(verify_abi(ABI_VERSION).is_ok());
+        assert!(
+            verify_abi(ABI_VERSION + 1)
+                .unwrap_err()
+                .to_string()
+                .contains("ABI version differs")
+        );
+    }
+    #[test]
+    fn unauthenticated_ticket_and_module_are_rejected() {
+        let ticket = unsigned_ticket("not-the-file-hash");
+        let config = ClientConfig {
+            endpoint: ticket.endpoint.clone(),
+            build_id: "fixture-build".into(),
+            module_id: MODULE_ID.into(),
+            manifest_public_key: nova_protection::crypto::b64(&[0; 32]),
+            identity_dir: PathBuf::new(),
+        };
+        assert!(
+            ticket.verify(&config).is_err(),
+            "unsigned tickets must never authorize loading"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        nova_protection::client::ensure_private_directory(directory.path()).unwrap();
+        let path = directory.path().join(MODULE_ID);
+        std::fs::write(&path, b"not a shared library").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert!(
+            run_verified_module(&path, &ticket, Role::BuildWorker)
+                .unwrap_err()
+                .to_string()
+                .contains("authentication failed"),
+            "a changed module must fail before the OS loader sees it"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn unix_loader_rejects_public_runtime_and_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let module = directory.path().join(MODULE_ID);
+        std::fs::write(&module, b"fixture").unwrap();
+        std::fs::set_permissions(&module, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(open_private_module(&module).is_err());
+        std::fs::set_permissions(&module, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(open_private_module(&module).is_ok());
+        let link = directory.path().join(format!("link.{MODULE_EXTENSION}"));
+        symlink(&module, &link).unwrap();
+        assert!(open_private_module(&link).is_err());
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(open_private_module(&module).is_err());
+    }
     #[test]
     fn roles_are_stable_and_invalid_roles_fail() {
         assert_eq!(Role::try_from(1).unwrap(), Role::RenderService);

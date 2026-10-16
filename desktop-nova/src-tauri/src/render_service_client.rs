@@ -45,6 +45,7 @@ struct RenderServiceClientInner {
     supervisor: Mutex<Option<Arc<ProcessSupervisor>>>,
     backend_dir: Mutex<Option<PathBuf>>,
     native_parent: Mutex<Option<(isize, u32)>>,
+    native_composition: Mutex<Option<viewer_launch_contract::NativeCompositionEndpoint>>,
     render_click_epoch_ms: Mutex<Option<u64>>,
     render_runtime_root: Mutex<Option<PathBuf>>,
     configured_service: Mutex<Option<(PathBuf, PathBuf)>>,
@@ -88,6 +89,7 @@ impl Default for RenderServiceClient {
                 supervisor: Mutex::new(None),
                 backend_dir: Mutex::new(None),
                 native_parent: Mutex::new(None),
+                native_composition: Mutex::new(None),
                 render_click_epoch_ms: Mutex::new(None),
                 render_runtime_root: Mutex::new(None),
                 configured_service: Mutex::new(None),
@@ -106,6 +108,14 @@ impl Default for RenderServiceClient {
 impl RenderServiceClient {
     pub(crate) fn record_render_click(&self, epoch_ms: Option<u64>) {
         *self.inner.render_click_epoch_ms.lock().unwrap() = epoch_ms.filter(|value| *value != 0);
+    }
+
+    pub(crate) fn set_native_host(&self, host: &viewer_launch_contract::QuickPreviewHostWindow) -> Result<(), String> {
+        host.validate()?;
+        let native_id = host.hwnd.parse::<isize>().map_err(|error| error.to_string())?;
+        self.set_native_parent(native_id);
+        *self.inner.native_composition.lock().unwrap() = host.native_composition.clone();
+        Ok(())
     }
 
     pub(crate) fn set_native_parent(&self, hwnd: isize) {
@@ -567,7 +577,15 @@ impl RenderServiceClient {
                 self.validate_host_launch_contract(&checked_spec)?;
                 let mut launch = application_launch_spec(&supervisor, spec)?;
                 if spec.role == HostExecutableRole::NativeViewer && spec.args.iter().any(|arg| arg.starts_with("--nova-render-service-pipe=")) {
-                    if let Some((hwnd, pid)) = *self.inner.native_parent.lock().unwrap() {
+                    if let Some(endpoint) = self.inner.native_composition.lock().unwrap().as_ref() {
+                        launch.environment.push(("NOVA_NATIVE_PRESENTATION_ENDPOINT".into(),
+                            serde_json::to_string(endpoint).map_err(|error| error.to_string())?.into()));
+                        // A composition endpoint deliberately has no cross-process NSView
+                        // pointer. Keep its process identity separate from that capability.
+                        launch.environment.push(("LITEMATICA_NOVA_NATIVE_PARENT_PID".into(),
+                            std::process::id().to_string().into()));
+        }
+        if let Some((hwnd, pid)) = *self.inner.native_parent.lock().unwrap() {
                         launch.environment.push(("LITEMATICA_NOVA_NATIVE_PARENT_HWND".into(), hwnd.to_string().into()));
                         launch.environment.push(("LITEMATICA_NOVA_NATIVE_PARENT_PID".into(), pid.to_string().into()));
                     }
@@ -1495,7 +1513,7 @@ fn replace_viewer(viewers: &mut Vec<ViewerSnapshot>, value: ViewerSnapshot) {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 fn connect_with_service_startup_retry(pipe_name: &OsStr) -> Result<NamedPipeStream, String> {
     let started = std::time::Instant::now();
     loop {
@@ -1510,7 +1528,7 @@ fn connect_with_service_startup_retry(pipe_name: &OsStr) -> Result<NamedPipeStre
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, unix)))]
 fn connect_with_service_startup_retry(_pipe_name: &OsStr) -> Result<NamedPipeStream, String> {
     Err("nova-render-service named pipe transport is currently Windows-only".to_owned())
 }

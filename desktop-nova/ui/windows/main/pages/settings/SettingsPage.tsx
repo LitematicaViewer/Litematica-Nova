@@ -31,6 +31,7 @@ import {
   UserConfigInfo,
   V5CompatibilityConfig,
   ViewerControlConfig,
+  GraphicsApiPreference,
 } from "../../../../../src/business/facade";
 import { queryBlockDatabase } from "../../../../../src/business/projectionLibrary";
 import { DISPLAY_MODE_OPTIONS, DisplayMode, normalizeDisplayMode } from "../../../../../src/business/facade";
@@ -41,10 +42,12 @@ import {
   normalizeShowUiTestPage,
   normalizeTheme,
   normalizeColorMode,
+  normalizeGraphicsBackend,
   saveLocalLibraryTailPathCountConfig,
   saveMaterialListWindowBehaviorConfig,
   savePreviewModeConfig,
   saveShowUiTestPageConfig,
+  saveGraphicsBackendConfig,
 } from "../../../../../src/business/facade";
 
 import { AssetManagerDialog, openAssetManagerWithWindowBehavior } from "../../../asset_manager";
@@ -175,6 +178,8 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
   const [aiTestStatus, setAiTestStatus] = useState("");
   const [v5Compatibility, setV5Compatibility] = useState<V5CompatibilityConfig>(DEFAULT_V5_COMPATIBILITY);
   const [viewerControls, setViewerControls] = useState<ViewerControlConfig>(DEFAULT_VIEWER_CONTROLS);
+  const [graphicsBackend, setGraphicsBackend] = useState<GraphicsApiPreference>("auto");
+  const [graphicsBackendSaving, setGraphicsBackendSaving] = useState(false);
   const [v5PickerBusy, setV5PickerBusy] = useState(false);
 
   const applyUserConfig = (info: UserConfigInfo, changedConfigDirectory = false) => {
@@ -189,6 +194,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
     if (changedConfigDirectory) setColorMode(normalizeColorMode(info.config.color_mode));
     setV5Compatibility(info.config.v5_compatibility || DEFAULT_V5_COMPATIBILITY);
     setViewerControls(info.config.viewer_controls || DEFAULT_VIEWER_CONTROLS);
+    setGraphicsBackend(normalizeGraphicsBackend(info.config.graphics_backend));
   };
 
   const refreshPathInfo = async () => {
@@ -268,6 +274,25 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
       setLog("渲染设置已保存，下次打开预览时生效。");
     } catch (err) {
       setLog(`渲染设置保存失败：${String(err)}`);
+    }
+  };
+
+  const handleGraphicsBackend = async (value: string) => {
+    const next = normalizeGraphicsBackend(value);
+    if (graphicsBackendSaving || next === graphicsBackend) return;
+    const previous = graphicsBackend;
+    setGraphicsBackend(next);
+    setGraphicsBackendSaving(true);
+    try {
+      const info = await saveGraphicsBackendConfig(next);
+      setUserConfig(info);
+      setGraphicsBackend(normalizeGraphicsBackend(info.config.graphics_backend));
+      setLog("图形 API 已保存；仅对新的渲染任务生效，现有预览保持不变。");
+    } catch (err) {
+      setGraphicsBackend(previous);
+      setLog(`图形 API 保存失败：${String(err)}`);
+    } finally {
+      setGraphicsBackendSaving(false);
     }
   };
 
@@ -664,7 +689,24 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setShow
 
       <div className="group-box">
         <div className="group-box-title">渲染兼容设置</div>
-        <div className="settings-help-text">标准/完整模式的新任务会联网验证持久设备密钥并领取本次解密材料；必要的光照与顶点烘焙数据由 Nova 服务计算。不上传硬件序列号。设备身份可重建，不代表官方程序证明；快速模式、日志和更新独立运行。</div>
+        <div className="form-row">
+          <div className="form-label">图形 API</div>
+          <div className="form-field">
+            <Dropdown ariaLabel="图形 API" value={graphicsBackend}
+              disabled={graphicsBackendSaving || !userConfig}
+              onChange={handleGraphicsBackend}
+              options={[
+                { value: "auto", label: "自动（推荐）" },
+                { value: "dx12", label: "DirectX 12（Windows 快速模式）" },
+                { value: "vulkan", label: "Vulkan" },
+              ]} />
+            {graphicsBackendSaving && <span role="status">正在保存…</span>}
+          </div>
+        </div>
+        <div className="settings-help-text">
+          自动按设备能力选择可用后端。DX12 仅支持 Windows 快速模式；标准和完整模式当前使用 Vulkan，强制 DX12 启动这两种模式会提示不支持，不会替换成快速模式。
+          更改仅对新任务生效，不重建现有预览。下方光影兼容选项与图形 API 独立。
+        </div>
         <div className="form-row">
           <div className="form-label">渲染后端</div>
           <Dropdown ariaLabel="渲染后端" value={v5Compatibility.backend}

@@ -40,6 +40,7 @@ default-members = [
 ]
 
 [dependencies]
+nova-render-protocol = { path = "crates/nova-render-protocol" }
 nova-protected-loader = { path = "../nova-protected-loader" }
 ab_glyph = "=0.2.32"
 anyhow = "1.0"
@@ -72,10 +73,22 @@ tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
-windows = { version = "=0.52.0", features = ["Win32_Foundation", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
+windows = { version = "=0.52.0", features = ["Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi_Common", "Win32_Security", "Win32_Foundation", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = "=0.13.2"
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "=3.0.11"
 
 [patch.crates-io]
 wgpu-hal = { path = "../../third_party/wgpu-hal-patched" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = "=0.27.0"
+objc = "0.2.7"
+foreign-types = "0.5"
+block = "0.1.6"

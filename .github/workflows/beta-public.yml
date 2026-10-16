@@ -1,24 +1,151 @@
-name: Beta Windows protected candidate
+name: Beta desktop candidates
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: Candidate build platforms
+        required: true
+        default: all
+        type: choice
+        options: [all, local, linux, macos]
 
 permissions:
   contents: read
 
 concurrency:
-  group: beta-public-windows-${{ github.ref }}
+  group: nova-public-candidates
   cancel-in-progress: false
 
 jobs:
-  windows-x64:
-    if: github.ref == 'refs/heads/main'
-    runs-on: windows-latest
-    timeout-minutes: 90
+  windows-linux:
+    if: >-
+      github.repository == 'LitematicaViewer/Litematica-Nova' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' && inputs.platforms != 'macos'
+    runs-on: [self-hosted, Windows, X64, nova-local]
+    timeout-minutes: 180
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}\desktop-nova\src-tauri\target\public-beta
+      NOVA_LOCAL_REPOSITORY: ${{ vars.NOVA_LOCAL_REPOSITORY }}
+      NOVA_WINDOWS_RUNTIME_PACKAGE_DIR: D:\NovaCI\runtime\x86_64-pc-windows-msvc
+    steps:
+      # Reuse the existing workspace. Never checkout, clean or switch it.
+      - name: Build Windows x64 locally
+        if: inputs.platforms != 'linux'
+        shell: pwsh
+        env:
+          BUILD_SHA: ${{ github.sha }}
+        run: |
+          & (Join-Path $env:NOVA_LOCAL_REPOSITORY 'desktop-nova/scripts/run-local-ci.ps1') -ExpectedSha $env:BUILD_SHA -Platform Windows
+      - name: Select Windows distributables
+        if: inputs.platforms != 'linux'
+        id: windows
+        shell: pwsh
+        env:
+          BUILD_SHA: ${{ github.sha }}
+        run: |
+          . 'D:\NovaCI\toolchains\windows\Activate.ps1'
+          node (Join-Path $env:NOVA_LOCAL_REPOSITORY 'desktop-nova/scripts/stage-ci-artifacts.mjs') --target x86_64-pc-windows-msvc --sha $env:BUILD_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload Windows Setup only
+        if: inputs.platforms != 'linux'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Nova-Windows-x64-${{ github.sha }}
+          path: ${{ steps.windows.outputs.paths }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build Linux x64 through local WSL
+        shell: pwsh
+        env:
+          BUILD_SHA: ${{ github.sha }}
+        run: |
+          & (Join-Path $env:NOVA_LOCAL_REPOSITORY 'desktop-nova/scripts/run-local-ci.ps1') -ExpectedSha $env:BUILD_SHA -Platform Linux
+      - name: Select Linux distributables
+        id: linux
+        shell: pwsh
+        env:
+          BUILD_SHA: ${{ github.sha }}
+        run: |
+          . 'D:\NovaCI\toolchains\windows\Activate.ps1'
+          node (Join-Path $env:NOVA_LOCAL_REPOSITORY 'desktop-nova/scripts/stage-ci-artifacts.mjs') --target x86_64-unknown-linux-gnu --sha $env:BUILD_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload Linux distributables only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Nova-Linux-x64-${{ github.sha }}
+          path: ${{ steps.linux.outputs.paths }}
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-runtime:
+    if: >-
+      github.repository == 'LitematicaViewer/Litematica-Nova' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' && inputs.platforms != 'local' && inputs.platforms != 'linux'
+    runs-on: [self-hosted, Windows, X64, nova-local]
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+    env:
+      NOVA_LOCAL_REPOSITORY: ${{ vars.NOVA_LOCAL_REPOSITORY }}
+      NOVA_RUNTIME_TARGET: ${{ matrix.target }}
+      BUILD_SHA: ${{ github.sha }}
+    steps:
+      # This local job sends the three approved runtime files only, never a checkout.
+      - name: Verify the approved target runtime
+        id: runtime
+        shell: pwsh
+        run: |
+          . 'D:\NovaCI\toolchains\windows\Activate.ps1'
+          $verify = @'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          import { execFileSync } from 'node:child_process';
+          const repo = process.env.NOVA_LOCAL_REPOSITORY;
+          const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+          if (sha !== process.env.BUILD_SHA) throw new Error('The local public source differs from the requested candidate.');
+          const { validatePackage } = await import(pathToFileURL(path.join(repo, 'desktop-nova/scripts/check-public-checkout.mjs')));
+          const target = process.env.NOVA_RUNTIME_TARGET, directory = path.join('D:/NovaCI/runtime', target);
+          const identity = await validatePackage(directory, 'libnova_protected_module.dylib');
+          const version = JSON.parse(fs.readFileSync(path.join(repo, 'desktop-nova/src-tauri/tauri.conf.json'), 'utf8')).version;
+          if (identity.version !== version || !identity.buildId.endsWith('-' + target)) throw new Error('The runtime version/target differs from the candidate.');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'directory=' + directory + '\n');
+          console.log('Approved runtime ready: ' + target);
+          '@
+          node --input-type=module -e $verify
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Transfer approved runtime files only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Nova-runtime-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ steps.runtime.outputs.directory }}/*
+          if-no-files-found: error
+          retention-days: 1
+
+  macos:
+    needs: macos-runtime
+    if: >-
+      github.repository == 'LitematicaViewer/Litematica-Nova' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' && inputs.platforms != 'local' && inputs.platforms != 'linux'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            architecture: x64
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      RUSTUP_TOOLCHAIN: '1.99.0'
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -28,51 +155,100 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
-      - name: Prepare official Windows toolchains
-        shell: pwsh
+      - name: Prepare the pinned native public Rust compiler
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          rustup toolchain install stable --profile minimal
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          rustup default stable
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm ci --prefix desktop-nova
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify signed protected payload and build public helpers
-        shell: pwsh
-        run: |
-          ./desktop-nova/scripts/prepare-protected-backend.ps1 -RepoRoot $env:GITHUB_WORKSPACE
-      - name: Configure unsigned updater candidate only
-        shell: pwsh
-        run: |
-          # Module signature checks remain mandatory. CI has no installer updater
-          # signing key and does not publish any release, tag or update metadata.
-          '{"bundle":{"targets":["nsis"],"createUpdaterArtifacts":false}}' | Set-Content -LiteralPath desktop-nova/src-tauri/tauri.ci.json -Encoding utf8
-      - name: Build single-file NSIS candidate with official Tauri action
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5
+          rustup toolchain install 1.99.0 --profile minimal --target "$TARGET"
+          rustc -vV
+          rustc -vV | grep -Fx "host: $TARGET"
+          test "$(rustc --version | cut -d' ' -f2)" = '1.99.0'
+      - name: Receive approved target runtime files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          projectPath: desktop-nova
-          args: --bundles nsis --config src-tauri/tauri.ci.json
-          includeDebug: false
-          includeRelease: true
-          includeUpdaterJson: false
-          uploadPlainBinary: false
-          retryAttempts: 0
-          # No tagName, releaseId, releaseName or write token: build only.
-      - name: Stage only the Windows Setup.exe
-        shell: pwsh
+          name: Nova-runtime-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ runner.temp }}/nova-runtime/${{ matrix.target }}
+      - name: Select the approved target runtime
+        run: printf 'NOVA_RUNTIME_PACKAGE_DIR=%s\n' "$RUNNER_TEMP/nova-runtime/${{ matrix.target }}" >> "$GITHUB_ENV"
+      - name: Prepare target-native Vulkan implementation
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.architecture == 'x64' && 'x86_64' || 'arm64' }}
+          HOMEBREW_NO_AUTO_UPDATE: '1'
         run: |
-          $ErrorActionPreference = 'Stop'
-          $installers = @(Get-ChildItem -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'release/bundle/nsis') -Filter '*-setup.exe' -File)
-          if ($installers.Count -ne 1) { throw 'Expected exactly one real Windows x64 NSIS installer.' }
-          $destination = Join-Path $env:GITHUB_WORKSPACE 'dist/public-beta-candidate'
-          New-Item -ItemType Directory -Path $destination -Force | Out-Null
-          Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $destination 'Setup.exe')
-          'Windows x64: single NSIS candidate; no automatic GitHub Release or tag.' >> $env:GITHUB_STEP_SUMMARY
-          'macOS 和 Linux 将在下个版本支持。' >> $env:GITHUB_STEP_SUMMARY
-      - name: Upload Setup.exe only
+          brew install molten-vk
+          library="$(brew --prefix molten-vk)/lib/libMoltenVK.dylib"
+          test -f "$library"
+          xcrun lipo "$library" -verify_arch "$TARGET_ARCH"
+          printf 'NOVA_MOLTENVK_LIBRARY=%s\n' "$library" >> "$GITHUB_ENV"
+      - name: Check actual macOS dependencies and QuickLook before the App build
+        run: node desktop-nova/scripts/build-public-platform.mjs --target '${{ matrix.target }}' --preflight
+      - name: Bind the public build cache to the approved runtime
+        id: cache-identity
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { createHash } from 'node:crypto';
+          const directory = process.env.NOVA_RUNTIME_PACKAGE_DIR;
+          const metadata = readFileSync(join(directory, 'protected-build.json'));
+          const manifest = readFileSync(join(directory, JSON.parse(metadata).manifestFile));
+          const identity = createHash('sha256').update(metadata).update(manifest).digest('hex');
+          appendFileSync(process.env.GITHUB_OUTPUT, `runtime=${identity}\n`);
+          NODE
+      - name: Restore public macOS Cargo outputs only
+        id: macos-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/deps
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/build
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/.fingerprint
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/incremental
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/litematica_core
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/litematica_native_viewer
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/stockpile_server
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/nova-render-service
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/nova-build-worker
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/Litematica-Nova
+          key: nova-macos-public-v1-${{ matrix.target }}-rust1.99.0-macos13-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'desktop-nova/scripts/build-public-platform.mjs') }}-${{ steps.cache-identity.outputs.runtime }}-${{ github.sha }}
+          restore-keys: nova-macos-public-v1-${{ matrix.target }}-rust1.99.0-macos13-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'desktop-nova/scripts/build-public-platform.mjs') }}-${{ steps.cache-identity.outputs.runtime }}-
+      - name: Build macOS candidate
+        id: macos-build
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/desktop-nova/src-tauri/target/ci-${{ matrix.target }}
+        run: node desktop-nova/scripts/build-public-platform.mjs --target '${{ matrix.target }}' --candidate
+      - name: Save reusable public Cargo outputs after success or failure
+        if: always() && steps.macos-cache.outcome == 'success' && steps.macos-cache.outputs.cache-hit != 'true' && steps.macos-build.outcome != 'skipped'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/deps
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/build
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/.fingerprint
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/incremental
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/litematica_core
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/litematica_native_viewer
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/stockpile_server
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/nova-render-service
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/nova-build-worker
+            desktop-nova/src-tauri/target/ci-${{ matrix.target }}/release/Litematica-Nova
+          key: ${{ steps.macos-cache.outputs.cache-primary-key }}
+      - name: Select macOS distributables
+        id: macos
+        env:
+          BUILD_SHA: ${{ github.sha }}
+        run: node desktop-nova/scripts/stage-ci-artifacts.mjs --target '${{ matrix.target }}' --sha "$BUILD_SHA"
+      - name: Upload macOS distributables only
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: Litematica-Nova-Beta-Windows-x64-${{ github.sha }}
-          path: dist/public-beta-candidate/Setup.exe
+          name: Nova-macOS-${{ matrix.architecture }}-${{ github.sha }}
+          path: ${{ steps.macos.outputs.paths }}
           if-no-files-found: error
           retention-days: 14
