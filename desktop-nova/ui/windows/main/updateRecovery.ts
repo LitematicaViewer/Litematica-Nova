@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getApplicationWindowLabel } from "../../../src/platform/nativeWindowGeometry";
+import { getApplicationWindowLabel, subscribeApplicationWindowCloseRequested } from "../../../src/platform/nativeWindowGeometry";
 import { listenEvent } from "../../../src/platform/events";
 import { confirmApplicationClose, getApplicationCloseRequest, requestApplicationClose, type ApplicationCloseRequest } from "../../../src/platform/applicationOperations";
 
@@ -49,12 +49,14 @@ export async function preserveDraftsForClose(requestId: number): Promise<void> {
   if (closingRequests.has(requestId) || handledCloseRequests.has(requestId)) return;
   closingRequests.add(requestId);
   try {
+    console.info("[NOVA_LIFECYCLE]", { stage: "close_drafts_capture", requestId });
     try { preserveUpdateDrafts(); }
     catch (error) {
       await confirmApplicationClose(requestId, false).catch(() => undefined);
       console.error("[NOVA_LIFECYCLE] draft preservation failed; close cancelled", error);
       throw new Error("草稿保留失败，请先保存当前编辑，再重试关闭。当前窗口仍保持打开。");
     }
+    console.info("[NOVA_LIFECYCLE]", { stage: "close_drafts_ack_requested", requestId });
     await confirmApplicationClose(requestId, true);
     handledCloseRequests.add(requestId);
     if (handledCloseRequests.size > 32) handledCloseRequests.delete(handledCloseRequests.values().next().value!);
@@ -73,15 +75,26 @@ export function useApplicationCloseRecovery() {
     };
     // Register independently of config hydration and network updater checks.
     const listening = listenEvent<ApplicationCloseRequest>("nova-close-requested", event => accept(event.payload));
-    void listening.then(async () => {
+    const recoverPendingClose = async () => {
       // An X pressed before the asynchronous listener finished is not lost.
       const pending = await getApplicationCloseRequest();
       if (pending) accept(pending);
-    }).catch(reason => { if (active) setError(`关闭保护未连接，请重试关闭：${String(reason)}`); });
+    };
+    void listening.then(recoverPendingClose).catch(reason => { if (active) setError(`关闭保护未连接，请重试关闭：${String(reason)}`); });
+    // Native close is independent of renderer notifications and the custom
+    // event listener. Both recover the SAME pending Host request; no extra
+    // render wait, second close request, or direct WebView destruction.
+    const nativeClose = subscribeApplicationWindowCloseRequested(() => {
+      if (!active) return;
+      console.info("[NOVA_LIFECYCLE]", { stage: "close_native_event_received" });
+      void recoverPendingClose().catch(reason => { if (active) setError(String(reason)); });
+    });
+    void nativeClose.catch(reason => { if (active) setError(`窗口关闭保护未连接：${String(reason)}`); });
     const cancelled = listenEvent<{ message: string }>("nova-close-cancelled", event => { if (active) setError(event.payload.message); });
     return () => {
       active = false;
       void listening.then(stop => stop()).catch(() => undefined);
+      void nativeClose.then(stop => stop()).catch(() => undefined);
       void cancelled.then(stop => stop()).catch(() => undefined);
     };
   }, []);

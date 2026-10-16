@@ -31,3 +31,12 @@ export function closeApplicationWindow(): Promise<void> {
 }
 
 export function getApplicationWindowLabel(): string { return getCurrentWindow().label; }
+
+/** The Host remains the only exit authority, including draft ACK and owned-task teardown. */
+export function subscribeApplicationWindowCloseRequested(listener: () => void): Promise<() => void> {
+  return getCurrentWindow().onCloseRequested(event => {
+    // Never let the API's default destroy() bypass the Host close gate.
+    event.preventDefault();
+    listener();
+  });
+}

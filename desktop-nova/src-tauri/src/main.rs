@@ -116,11 +116,14 @@ impl ApplicationCloseGate {
 #[tauri::command]
 fn application_get_close_request(window: tauri::WebviewWindow, gate: tauri::State<'_, ApplicationCloseGate>) -> Result<Option<ApplicationCloseRequest>, String> {
     if window.label() != "main" { return Err("关闭操作仅由主窗口执行".into()); }
-    Ok(gate.snapshot())
+    let pending = gate.snapshot();
+    if let Some(request) = pending { eprintln!("[NOVA_LIFECYCLE] stage=close_frontend_request_received request_id={}", request.request_id); }
+    Ok(pending)
 }
 #[tauri::command]
 fn application_confirm_close(window: tauri::WebviewWindow, gate: tauri::State<'_, ApplicationCloseGate>, request_id: u64, drafts_preserved: bool) -> Result<(), String> {
     if window.label() != "main" { return Err("关闭操作仅由主窗口执行".into()); }
+    eprintln!("[NOVA_LIFECYCLE] stage=close_frontend_ack_received request_id={request_id} drafts_preserved={drafts_preserved}");
     if window.try_state::<UpdateHost>().is_some_and(|host| !host.prepare_for_close(window.app_handle())) {
         let _ = gate.cancel_pending(request_id);
         return Err("正在安装更新，请完成后再关闭".into());
@@ -2818,6 +2821,10 @@ mod full_launch_plan_tests {
         let root = PathBuf::from(env::var_os("NOVA_PREFLIGHT_TEST_APP_ROOT").expect("NOVA_PREFLIGHT_TEST_APP_ROOT"));
         let source = PathBuf::from(env::var_os("NOVA_PREFLIGHT_TEST_SOURCE").expect("NOVA_PREFLIGHT_TEST_SOURCE"));
         let output = PathBuf::from(env::var_os("NOVA_PREFLIGHT_TEST_OUTPUT_ROOT").expect("NOVA_PREFLIGHT_TEST_OUTPUT_ROOT"));
+        let viewport = env::var("NOVA_PREFLIGHT_TEST_VIEWPORT").ok().map(|value| {
+            let (width, height) = value.split_once('x').expect("viewport must be WIDTHxHEIGHT");
+            [width.parse::<u32>().unwrap(), height.parse::<u32>().unwrap()]
+        }).unwrap_or([1280, 720]);
         assert!(root.is_absolute() && source.is_absolute() && output.is_absolute() && source.is_file());
         std::fs::create_dir_all(&output).unwrap();
         let data_root = output.join("userdata");
@@ -2832,18 +2839,26 @@ mod full_launch_plan_tests {
         service.launch_in_background(Arc::clone(&host.supervisor), host.service_exe.clone(), data_root.clone());
         let result = tauri::async_runtime::block_on(async {
             let mut results = Vec::new();
-            for display_mode in [RenderDisplayMode::Standard, RenderDisplayMode::Full] {
+            // The large-input cache pair repeats Standard with identical
+            // settings; it does not accidentally run a Full lighting audit.
+            let display_modes = if env::var_os("NOVA_PREFLIGHT_TEST_STANDARD_CACHE_PAIR").is_some() {
+                vec![RenderDisplayMode::Standard, RenderDisplayMode::Standard]
+            } else {
+                vec![RenderDisplayMode::Standard, RenderDisplayMode::Full]
+            };
+            for display_mode in display_modes {
                 let input = RenderServiceStartBuildInput { source_path: source.clone(), build_mode: RenderBuildMode::Prebuilt,
                     display_mode, preflight_id: None, resource_warning_confirmed: false, realtime_decision_id: None,
-                    click_started_at_epoch_ms: None, viewport: Some([1280, 720]) };
+                    click_started_at_epoch_ms: None, viewport: Some(viewport) };
+                let started = Instant::now();
                 let (mut request, environment) = application_render_request(input)?;
                 // This fixture tests the unmodified Vulkan product route with
                 // installed resources, not whichever shader pack a user chose.
                 request.settings.backend = application::model::GraphicsBackendPreference::Vulkan;
                 request.settings.shader.path = None;
-                let started = Instant::now();
                 let view = facade.preflight_render(request, environment).await?;
                 let elapsed_ms = started.elapsed().as_millis();
+                if elapsed_ms > 10_000 { return Err(format!("actual {display_mode:?} resource preflight exceeded 10s: {elapsed_ms}ms")); }
                 let diagnostic = std::fs::read_dir(session.join("diagnostics")).map_err(|e| e.to_string())?
                     .filter_map(Result::ok).filter_map(|entry| std::fs::read(entry.path()).ok())
                     .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
@@ -2853,6 +2868,9 @@ mod full_launch_plan_tests {
                 if !measured || view.conservative_vram_bytes.is_none_or(|bytes| bytes == 0)
                     || !view.allowed_actions.contains(&application::model::ResourcePreflightAction::ContinuePrebuilt) {
                     return Err(format!("actual {display_mode:?} preflight not admitted: {view:?}; diagnostic={diagnostic}"));
+                }
+                if env::var_os("NOVA_PREFLIGHT_TEST_STANDARD_CACHE_PAIR").is_some() && !results.is_empty() && diagnostic["cacheHit"] != true {
+                    return Err(format!("identical Standard request repeated expensive demand instead of persistent cache: {diagnostic}"));
                 }
                 results.push(serde_json::json!({"mode": display_mode, "elapsedMs": elapsed_ms, "preflight": view, "diagnostic": diagnostic}));
             }
