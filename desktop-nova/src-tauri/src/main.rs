@@ -2917,6 +2917,38 @@ mod full_launch_plan_tests {
             if !preflight.allowed_actions.contains(&application::model::ResourcePreflightAction::ContinuePrebuilt) {
                 return Err(format!("actual Iris admission did not allow original Full Prebuilt: {preflight:?}"));
             }
+            if env::var("NOVA_FULL_CPU_TEST_PREFLIGHT_ONLY").as_deref() == Ok("1") {
+                if !facade.render_states().is_empty() || !service.snapshot().viewers.is_empty() {
+                    return Err("admission-only fixture unexpectedly started a render operation or Viewer".into());
+                }
+                let deployment: serde_json::Value = serde_json::from_slice(&std::fs::read(
+                    app_root.join("bin/viewer-backend/backend-deployment.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+                let build_id = deployment["runtimeBuildId"].as_str().filter(|id|!id.is_empty())
+                    .ok_or("validated runtime deployment has no build identity")?;
+                // Reuse the completed admission's persisted content identities;
+                // do not hash or decode the projection/resources for this report.
+                let mut identities = Vec::new();
+                for entry in std::fs::read_dir(data_root.join("resource-estimates")).map_err(|e|e.to_string())? {
+                    let path = entry.map_err(|e|e.to_string())?.path();
+                    if path.extension().and_then(|value|value.to_str()) != Some("json") { continue; }
+                    let certificate: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)
+                        .map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+                    if certificate["inputs"]["source_sha256"].as_str().is_some() {
+                        identities.push(serde_json::json!({"certificate":path,"key":certificate["key"],
+                            "inputs":certificate["inputs"],"estimator":certificate["estimator"],
+                            "layoutVersion":certificate["layout_version"],"deviceIdentity":certificate["device_identity"]}));
+                    }
+                }
+                if identities.is_empty() { return Err("admitted Full preflight produced no persisted content identity".into()); }
+                let result = serde_json::json!({"mode":"full","loading":"prebuilt","backendAdmission":"iris-gl46",
+                    "preflightOnly":true,"source":source,"shaderpack":shaderpack,"resourcePacks":resource_packs,
+                    "buildId":build_id,"runtimeGitSha":deployment["gitSha"],"inputResourceIdentities":identities,
+                    "preflightMs":preflight_ms,"admissionMs":preflight_ms,"admissionUnder10s":preflight_ms<=10000,
+                    "preflight":preflight,"workerLaunched":false,"GPU":"not_executed","firstFrame":"not_measured","viewerCount":0});
+                std::fs::write(output.join("full-preflight-only-result.json"), serde_json::to_vec_pretty(&result)
+                    .map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+                return Ok::<_,String>(());
+            }
             let backend = app_root.join("bin/viewer-backend");
             let material_started = std::time::Instant::now();
             // A separate explicit CPU audit task receives its own real grant;
