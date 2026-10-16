@@ -207,8 +207,8 @@ export interface RenderLaunchPlan {
   preflight: ResourcePreflightView | null;
 }
 
-export function prepareApplicationRenderLaunch(sourcePath: string, preload: boolean, displayMode: "full" | "standard" = "full"): Promise<RenderLaunchPlan> {
-  return invoke("application_render_launch_plan", { sourcePath, preload, displayMode });
+export function prepareApplicationRenderLaunch(sourcePath: string, preload: boolean, displayMode: "full" | "standard" = "full", viewport?: [number, number]): Promise<RenderLaunchPlan> {
+  return invoke("application_render_launch_plan", { sourcePath, preload, displayMode, viewport });
 }
 
 export type ResourcePreflightSeverity = "unmeasured" | "normal" | "warning" | "hard" | "invalid";

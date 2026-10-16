@@ -422,6 +422,7 @@ async fn run_pipeline(
         resource_warning_confirmed: false,
         realtime_decision_id: None,
         click_started_at_epoch_ms: None,
+        viewport: Some([1280, 720]),
     };
     let (preflight_request, preflight_environment) =
         timed("PrepareRenderRequest", ACTION_TIMEOUT, report, async move {
@@ -477,7 +478,8 @@ async fn run_pipeline(
                 preflight_id: None,
                 resource_warning_confirmed: false,
                 realtime_decision_id: None,
-        click_started_at_epoch_ms: None,
+                click_started_at_epoch_ms: None,
+                viewport: Some([1280, 720]),
             };
             let (request, environment) = timed(
                 "PrepareRealtimeRequest",

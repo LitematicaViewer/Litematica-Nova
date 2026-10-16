@@ -35,6 +35,7 @@ pub(crate) const APPLICATION_RENDER_STATE_EVENT: &str = "nova://application/rend
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RenderEnvironmentInputs {
     pub(crate) asset_inputs: Vec<PathBuf>,
+    pub(crate) viewport: Option<[u32; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1104,11 +1105,11 @@ fn derive_build_start(
         // the default product route. Layer/highlight data is not smuggled into
         // an unowned renderer map while the data-plane contract is frozen.
         build_options: BTreeMap::from([("displayMode".to_owned(), display_mode)]),
-        presentation: derive_presentation_spec(&request.settings),
+        presentation: derive_presentation_spec(&request.settings, environment.viewport),
     }
 }
 
-fn derive_presentation_spec(settings: &ProjectRenderSettings) -> PresentationSpec {
+fn derive_presentation_spec(settings: &ProjectRenderSettings, viewport: Option<[u32; 2]>) -> PresentationSpec {
     let backend = match settings.backend {
         GraphicsBackendPreference::Auto => RenderBackend::Auto,
         GraphicsBackendPreference::Vulkan => RenderBackend::Vulkan,
@@ -1124,7 +1125,7 @@ fn derive_presentation_spec(settings: &ProjectRenderSettings) -> PresentationSpe
         WeatherPreference::Snow => "snow",
         WeatherPreference::None => "none",
     };
-    PresentationSpec {
+    let mut spec = PresentationSpec {
         backend,
         shaderpack: settings.shader.path.clone(),
         render_settings: BTreeMap::from([
@@ -1140,7 +1141,14 @@ fn derive_presentation_spec(settings: &ProjectRenderSettings) -> PresentationSpe
                 settings.allow_weather_modification.to_string(),
             ),
         ]),
+    };
+    // The admission meter needs the real physical target, not a camera default
+    // or CSS size. Keep it frozen with the prospective request across the modal.
+    if let Some([width, height]) = viewport {
+        spec.render_settings.insert("width".to_owned(), width.to_string());
+        spec.render_settings.insert("height".to_owned(), height.to_string());
     }
+    spec
 }
 
 fn set_click_diagnostic(start: &mut BuildStart, click_started_at_epoch_ms: Option<u64>) {
@@ -1520,6 +1528,7 @@ mod tests {
             &request,
             RenderEnvironmentInputs {
                 asset_inputs: vec![PathBuf::from(r"C:\runtime\backend-deployment.json")],
+                viewport: Some([2316, 1178]),
             },
         );
 
@@ -1550,6 +1559,32 @@ mod tests {
             request.settings.resource_packs
         );
         assert_eq!(start.content.asset_inputs.len(), 1);
+        assert_eq!(start.presentation.render_settings.get("width").map(String::as_str), Some("2316"));
+        assert_eq!(start.presentation.render_settings.get("height").map(String::as_str), Some("1178"));
+    }
+
+    #[test]
+    fn standard_and_full_preflight_freeze_physical_viewport_for_admitted_build() {
+        for display_mode in [RenderDisplayMode::Standard, RenderDisplayMode::Full] {
+            let fake = Arc::new(FakeTransport::default());
+            fake.push_response(preflight_response(ProtocolResourcePressure::Normal, Some("physical-size-admission")));
+            fake.push_response(accepted(None));
+            let facade = facade(fake.clone());
+            let mut request = request();
+            request.settings.display_mode = display_mode;
+            let environment = RenderEnvironmentInputs { asset_inputs: Vec::new(), viewport: Some([2316, 1178]) };
+            let assessment = tauri::async_runtime::block_on(facade.preflight_render(request.clone(), environment)).unwrap();
+            tauri::async_runtime::block_on(facade.start_prebuilt_render(request.source.clone(), RenderStartAuthorization {
+                preflight_id: Some(assessment.preflight_id), resource_warning_confirmed: false, click_started_at_epoch_ms: None,
+            })).unwrap();
+            let commands = fake.commands.lock().unwrap();
+            let UiCommand::PreflightBuild(preflight) = &commands[0] else { panic!("preflight first") };
+            let UiCommand::StartBuild(start) = &commands[1] else { panic!("admitted build second") };
+            assert_eq!(preflight.presentation.render_settings.get("width").map(String::as_str), Some("2316"));
+            assert_eq!(preflight.presentation.render_settings.get("height").map(String::as_str), Some("1178"));
+            assert_eq!(&start.build, preflight);
+            assert_eq!(preflight.display_mode, display_mode.as_str());
+        }
     }
 
     #[test]
@@ -1701,6 +1736,7 @@ mod tests {
         request.settings.shader.path = Some(PathBuf::from(r"C:\packs\shader.zip"));
         let environment = RenderEnvironmentInputs {
             asset_inputs: vec![PathBuf::from(r"C:\runtime\deployment.json")],
+            viewport: Some([1280, 720]),
         };
 
         let original = tauri::async_runtime::block_on(

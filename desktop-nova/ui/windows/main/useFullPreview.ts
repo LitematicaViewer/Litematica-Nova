@@ -7,6 +7,7 @@ import {
   useBasicVulkanForApplicationRender, windowsPathKey, type ResourcePreflightView,
 } from "../../../src/business/facade";
 import { useEmbeddedViewer } from "./useEmbeddedViewer";
+import { elementToNativeChildPlacement } from "./embeddedViewerGeometry";
 
 // A user-selected VRAM fallback is a product loading choice, not a renderer.
 // Keep it across route mounts; changing the checkbox still selects a new contract.
@@ -107,7 +108,16 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
     await discardGrant();
     if (!mounted.current || generation.current !== version) return;
     const expected = { ...current.current };
-    const plan = await prepareApplicationRenderLaunch(expected.sourcePath, expected.preload, expected.displayMode);
+    const host = viewport.hostRef.current;
+    if (!host) throw new Error("预览容器尚未就绪，请在页面可见后重新加载。");
+    const placement = await elementToNativeChildPlacement(host);
+    if (!Number.isInteger(placement.width) || !Number.isInteger(placement.height)
+      || placement.width <= 8 || placement.height <= 8 || placement.width > 16384 || placement.height > 16384) {
+      throw new Error("预览容器尺寸不可用，请在页面可见后重新加载。");
+    }
+    if (!mounted.current || generation.current !== version) return;
+    const plan = await prepareApplicationRenderLaunch(expected.sourcePath, expected.preload, expected.displayMode,
+      [placement.width, placement.height]);
     if (!mounted.current || generation.current !== version) {
       if (plan.preflight) await discardApplicationRenderPreflight(plan.preflight.preflightId); return;
     }

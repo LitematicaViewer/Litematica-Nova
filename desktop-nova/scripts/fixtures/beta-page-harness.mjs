@@ -66,7 +66,8 @@ function harness(page, name, facade = {}) {
     jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, esModuleInterop: true,
   } });
   assert.deepEqual(compiled.diagnostics, []);
-  const viewport = { hostRef: { current: null }, error: "", showOverlay: async () => {}, setPresentation: async () => {}, requestPresentationWhenReady() {}, ...facade._viewport };
+  const viewportElement = { getBoundingClientRect: () => ({ left: 10, top: 20, width: 800, height: 600 }) };
+  const viewport = { hostRef: { current: viewportElement }, error: "", showOverlay: async () => {}, setPresentation: async () => {}, requestPresentationWhenReady() {}, ...facade._viewport };
   let quickHook;
   let fullHook;
   let recoveryHook;
@@ -86,6 +87,12 @@ function harness(page, name, facade = {}) {
     quickPreviewForSource: (path, value) => value?.sourcePath === path ? value : null, ...facade };
   const context = { exports: {}, React:mockReact,console, performance, URLSearchParams, setTimeout, clearTimeout, window: { confirm: () => true,...facade._window }, require(id) {
     if (id === "react") return mockReact;
+    if (id.endsWith("embeddedViewerGeometry")) return { elementToNativeChildPlacement: async element => {
+      const rect = element.getBoundingClientRect();
+      const dpiScale = facade._window?.devicePixelRatio || 1;
+      return { x: Math.round(rect.left * dpiScale), y: Math.round(rect.top * dpiScale),
+        width: Math.round(rect.width * dpiScale), height: Math.round(rect.height * dpiScale), dpiScale, focused: false };
+    } };
     if (id.endsWith("platform/nativeWindowGeometry")) return { getApplicationWindowLabel: () => "main" };
     if (id.endsWith("business/resourcePreflightUnits")) return pureService("../business/resourcePreflightUnits");
     if (id.endsWith(".css")) return {};

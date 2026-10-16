@@ -2746,6 +2746,8 @@ struct RenderServiceStartBuildInput {
     realtime_decision_id: Option<ResourcePreflightId>,
     #[serde(default)]
     click_started_at_epoch_ms: Option<u64>,
+    #[serde(default)]
+    viewport: Option<[u32; 2]>,
 }
 
 #[derive(Serialize)]
@@ -2758,6 +2760,16 @@ struct RenderLaunchPlan {
 
 const DIRECT_REALTIME_MAX_BYTES: u64 = 500 * 1024;
 
+fn validate_render_viewport(viewport: Option<[u32; 2]>, build_mode: RenderBuildMode) -> Result<(), String> {
+    if viewport.is_some_and(|[width, height]| width == 0 || height == 0 || width > 16384 || height > 16384) {
+        return Err("预览视口尺寸无效，请在页面可见后重新加载。".to_owned());
+    }
+    if build_mode == RenderBuildMode::Prebuilt && viewport.is_none() {
+        return Err("尚未取得预览容器的实际像素尺寸，请在页面可见后重新加载。".to_owned());
+    }
+    Ok(())
+}
+
 fn launch_requires_preflight(source_bytes: u64, preload: bool, mode: RenderDisplayMode) -> bool {
     mode != RenderDisplayMode::FastExperimental && (preload || source_bytes > DIRECT_REALTIME_MAX_BYTES)
 }
@@ -2767,6 +2779,7 @@ async fn application_render_launch_plan(
     source_path: PathBuf,
     preload: bool,
     display_mode: Option<RenderDisplayMode>,
+    viewport: Option<[u32; 2]>,
     facade: tauri::State<'_, RenderFacade>,
 ) -> Result<RenderLaunchPlan, String> {
     let plan_started = std::time::Instant::now();
@@ -2778,6 +2791,7 @@ async fn application_render_launch_plan(
         resource_warning_confirmed: false,
         realtime_decision_id: None,
         click_started_at_epoch_ms: None,
+        viewport,
     };
     let (source_bytes, prepared) = tauri::async_runtime::spawn_blocking(move || {
         if !input.source_path.is_absolute() { return Err("投影路径必须是绝对路径".to_owned()); }
@@ -2801,6 +2815,74 @@ async fn application_render_launch_plan(
 #[cfg(test)]
 mod full_launch_plan_tests {
     use super::*;
+    /// Opt-in production Host/Service regression. This calls only resource
+    /// preflight: it never starts a Build, GPU viewport, WebView or window.
+    #[test]
+    #[ignore = "requires NOVA_PREFLIGHT_TEST_APP_ROOT/SOURCE/OUTPUT_ROOT with existing signed runtime and live service access"]
+    fn actual_application_preflight_standard_and_full_cli() {
+        use std::time::Instant;
+        let root = PathBuf::from(env::var_os("NOVA_PREFLIGHT_TEST_APP_ROOT").expect("NOVA_PREFLIGHT_TEST_APP_ROOT"));
+        let source = PathBuf::from(env::var_os("NOVA_PREFLIGHT_TEST_SOURCE").expect("NOVA_PREFLIGHT_TEST_SOURCE"));
+        let output = PathBuf::from(env::var_os("NOVA_PREFLIGHT_TEST_OUTPUT_ROOT").expect("NOVA_PREFLIGHT_TEST_OUTPUT_ROOT"));
+        assert!(root.is_absolute() && source.is_absolute() && output.is_absolute() && source.is_file());
+        std::fs::create_dir_all(&output).unwrap();
+        let data_root = output.join("userdata");
+        env::set_var("NOVA_USER_DATA_ROOT", &data_root);
+        let metadata = application::diagnostics::init(&data_root, env!("CARGO_PKG_VERSION"), "cli-preflight-regression").unwrap();
+        let session = data_root.join("logs").join("sessions").join(metadata.session_id);
+        APP_RESOURCE_ROOT.set(root.clone()).expect("run this ignored test alone in its own process");
+        APP_LOCAL_DATA_ROOT.set(data_root.clone()).expect("run this ignored test alone in its own process");
+        let service = RenderServiceClient::default();
+        let facade = RenderFacade::new(service.clone());
+        let host = initialize_application_host(root, data_root.clone(), &service).unwrap();
+        service.launch_in_background(Arc::clone(&host.supervisor), host.service_exe.clone(), data_root.clone());
+        let result = tauri::async_runtime::block_on(async {
+            let mut results = Vec::new();
+            for display_mode in [RenderDisplayMode::Standard, RenderDisplayMode::Full] {
+                let input = RenderServiceStartBuildInput { source_path: source.clone(), build_mode: RenderBuildMode::Prebuilt,
+                    display_mode, preflight_id: None, resource_warning_confirmed: false, realtime_decision_id: None,
+                    click_started_at_epoch_ms: None, viewport: Some([1280, 720]) };
+                let (mut request, environment) = application_render_request(input)?;
+                // This fixture tests the unmodified Vulkan product route with
+                // installed resources, not whichever shader pack a user chose.
+                request.settings.backend = application::model::GraphicsBackendPreference::Vulkan;
+                request.settings.shader.path = None;
+                let started = Instant::now();
+                let view = facade.preflight_render(request, environment).await?;
+                let elapsed_ms = started.elapsed().as_millis();
+                let diagnostic = std::fs::read_dir(session.join("diagnostics")).map_err(|e| e.to_string())?
+                    .filter_map(Result::ok).filter_map(|entry| std::fs::read(entry.path()).ok())
+                    .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                    .max_by_key(|value| value["recordedAtUnixMs"].as_u64().unwrap_or(0))
+                    .ok_or_else(|| "real service preflight did not emit resource diagnostic".to_owned())?;
+                let measured = diagnostic["expensiveDemandCalculationPerformed"] == true || diagnostic["cacheHit"] == true;
+                if !measured || view.conservative_vram_bytes.is_none_or(|bytes| bytes == 0)
+                    || !view.allowed_actions.contains(&application::model::ResourcePreflightAction::ContinuePrebuilt) {
+                    return Err(format!("actual {display_mode:?} preflight not admitted: {view:?}; diagnostic={diagnostic}"));
+                }
+                results.push(serde_json::json!({"mode": display_mode, "elapsedMs": elapsed_ms, "preflight": view, "diagnostic": diagnostic}));
+            }
+            if !service.snapshot().builds.is_empty() || !service.snapshot().viewers.is_empty() {
+                return Err("resource-only regression unexpectedly created a Build or Viewer session".to_owned());
+            }
+            std::fs::write(output.join("application-preflight-result.json"), serde_json::to_vec_pretty(&results).unwrap()).map_err(|e| e.to_string())?;
+            Ok::<_, String>(())
+        });
+        service.request_shutdown(); host.supervisor.stop_admitting();
+        let shutdown = host.supervisor.shutdown(Duration::from_secs(3), Duration::from_secs(2));
+        assert!(shutdown.remaining.is_empty(), "resource-only regression left owned children");
+        result.unwrap();
+    }
+
+    #[test]
+    fn preflight_requires_actual_physical_viewport_without_defaulting() {
+        assert!(validate_render_viewport(None, RenderBuildMode::Prebuilt).is_err());
+        for viewport in [[0, 720], [1280, 0], [16385, 720], [1280, 16385]] {
+            assert!(validate_render_viewport(Some(viewport), RenderBuildMode::Prebuilt).is_err());
+        }
+        assert!(validate_render_viewport(Some([2316, 1178]), RenderBuildMode::Prebuilt).is_ok());
+        assert!(validate_render_viewport(None, RenderBuildMode::Realtime).is_ok());
+    }
     #[test]
     fn fast_skips_demand_preflight_in_both_loading_modes() {
         assert!(!launch_requires_preflight(u64::MAX, true, RenderDisplayMode::FastExperimental));
@@ -2838,6 +2920,7 @@ fn application_render_request(
             input.source_path.display()
         ));
     }
+    validate_render_viewport(input.viewport, input.build_mode)?;
     let config = read_user_config_data(&current_user_config_dir()?);
     if !matches!(input.display_mode, RenderDisplayMode::Full | RenderDisplayMode::Standard) {
         return Err("精确渲染入口只接受 full 或 standard；快速模式保持独立启动链".to_owned());
@@ -2920,7 +3003,7 @@ fn application_render_request(
                 placement: None,
              presentation_epoch: None },
         },
-        RenderEnvironmentInputs { asset_inputs },
+        RenderEnvironmentInputs { asset_inputs, viewport: input.viewport },
     ))
 }
 
