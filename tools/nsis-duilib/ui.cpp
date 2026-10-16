@@ -58,7 +58,18 @@ public:
         const auto found = std::find_if(controls.begin(), controls.end(), [&](const Mirror& m) { return m.control == event.pSender; });
         if (found == controls.end() || !IsWindow(found->native)) return;
         if (event.sType == L"click") {
-            if (found->kind == L"Button") ::PostMessageW(found->native, BM_CLICK, 0, 0);
+            if (found->kind == L"Button") {
+                const int id = GetDlgCtrlID(found->native);
+                const auto type = GetWindowLongPtrW(found->native, GWL_STYLE) & BS_TYPEMASK;
+                if (GetParent(found->native) == parent && (id == IDOK || id == IDCANCEL || id == 3) &&
+                        (type == BS_PUSHBUTTON || type == BS_DEFPUSHBUTTON)) {
+                    // MUI can enter nsDialogs::Show while processing Next. A second
+                    // BM_CLICK on that same native button is then reentrant and
+                    // ignored. Queue its normal command, outside the button proc.
+                    if (IsWindowEnabled(found->native)) ::PostMessageW(parent, WM_COMMAND,
+                        MAKEWPARAM(id, BN_CLICKED), reinterpret_cast<LPARAM>(found->native));
+                } else ::PostMessageW(found->native, BM_CLICK, 0, 0);
+            }
         } else if (event.sType == L"textchanged" && found->kind == L"Edit") {
             SetWindowTextW(found->native, event.pSender->GetText());
         }

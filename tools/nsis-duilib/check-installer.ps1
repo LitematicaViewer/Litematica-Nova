@@ -37,6 +37,17 @@ if ($template.IndexOf('!insertmacro NOVA_MIGRATE_EXISTING') -gt $template.IndexO
 foreach ($pattern in @('"MultiSelectModel" "Player"', '$\"%1$\" %*', 'NovaInstallerIdentity', 'NovaDui::RepairShell', 'NovaDui::Migrate', 'NSIS_PTR_SIZE', 'NSIS_CHAR_SIZE')) {
     if (-not $hooks.Contains($pattern)) { throw "Missing hook contract: $pattern" }
 }
+# MUI's Instfiles -> Finish transition nests nsDialogs::Show inside the Next
+# command. Reentrant BM_CLICK on that same native button drops the Finish click.
+# Navigation must queue BN_CLICKED directly; page checkboxes keep native BM_CLICK.
+$ui = Get-Content -LiteralPath (Join-Path $root 'ui.cpp') -Raw
+foreach ($pattern in @('!IsWindow(found->native)', 'GetParent(found->native) == parent',
+    '(id == IDOK || id == IDCANCEL || id == 3)', '(type == BS_PUSHBUTTON || type == BS_DEFPUSHBUTTON)',
+    'if (IsWindowEnabled(found->native)) ::PostMessageW(parent, WM_COMMAND,',
+    'MAKEWPARAM(id, BN_CLICKED), reinterpret_cast<LPARAM>(found->native)',
+    '} else ::PostMessageW(found->native, BM_CLICK, 0, 0);')) {
+    if (-not $ui.Contains($pattern)) { throw "Missing MUI navigation dispatch contract: $pattern" }
+}
 foreach ($script in @('build.ps1','check-installer.ps1')) {
     $tokens = $null; $errors = $null
     [Management.Automation.Language.Parser]::ParseFile((Join-Path $root $script), [ref]$tokens, [ref]$errors) | Out-Null
