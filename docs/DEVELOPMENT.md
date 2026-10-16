@@ -36,6 +36,7 @@ npm ci
 npm run build
 npm run check:layers
 npm run check:application-boundaries
+npm run check:ui-styles
 ```
 
 脚本状态测试可从仓库根目录运行：
@@ -61,4 +62,4 @@ node --test desktop-nova/scripts/public-development-launcher.test.mjs
 
 Windows 文件管理器缩略图读取共享缓存；没有缓存时不启动渲染器。日志可在「选项 → 导出日志 ZIP…」保存，分享前注意个人路径和其它诊断信息。
 
-更新日志见 [Beta 0.2](releases/BETA_0_2.md)，更新维护见 [UPDATER.md](UPDATER.md)，组件来源见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)。
+更新日志见 [Beta 0.2](releases/BETA_0_2.md)，更新维护见 [UPDATER.md](UPDATER.md)，组件来源见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)，UI 分层与主题契约见 [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md)。

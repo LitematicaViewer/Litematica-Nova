@@ -1,0 +1,90 @@
+{
+  "schema": "lba.ui-style-violations-baseline.v1",
+  "counts": {
+    "css-important": {
+      "ui/shell/widget/subwindow.css": 1,
+      "ui/styles/controls.css": 2,
+      "ui/styles/enumerator.css": 6,
+      "ui/styles/widgets.css": 2,
+      "ui/windows/main/pages/library/library.css": 1,
+      "ui/windows/main/pages/statistics/materials.css": 1
+    },
+    "css-legacy-button-variant": {
+      "ui/styles/replace-units.css": 6,
+      "ui/themes/modern.css": 2
+    },
+    "css-unlayered-rule": {
+      "ui/shell/nav-icons.css": 1,
+      "ui/shell/theme.css": 1,
+      "ui/shell/widget/button.css": 1,
+      "ui/shell/widget/check.css": 4,
+      "ui/shell/widget/content.css": 1,
+      "ui/shell/widget/dialog.css": 18,
+      "ui/shell/widget/input.css": 1,
+      "ui/shell/widget/nav.css": 17,
+      "ui/shell/widget/popup.css": 9,
+      "ui/shell/widget/range.css": 1,
+      "ui/shell/widget/subwindow.css": 95,
+      "ui/shell/widget/table.css": 2,
+      "ui/shell/widget/text.css": 1,
+      "ui/styles/asset-manager.css": 52,
+      "ui/styles/base.css": 173,
+      "ui/styles/controls.css": 77,
+      "ui/styles/enumerator.css": 51,
+      "ui/styles/flake.css": 141,
+      "ui/styles/replace-units.css": 101,
+      "ui/styles/statistics-enumerator.css": 45,
+      "ui/styles/updater.css": 8,
+      "ui/styles/widgets.css": 76,
+      "ui/themes/8bitcn/theme.css": 16,
+      "ui/themes/minecraft/appearance.css": 37,
+      "ui/themes/minecraft/nav-icons.css": 1,
+      "ui/themes/minecraft/theme.css": 2,
+      "ui/themes/minecraft/widget/button.css": 15,
+      "ui/themes/minecraft/widget/check.css": 14,
+      "ui/themes/minecraft/widget/content.css": 1,
+      "ui/themes/minecraft/widget/dialog.css": 1,
+      "ui/themes/minecraft/widget/input.css": 8,
+      "ui/themes/minecraft/widget/nav.css": 17,
+      "ui/themes/minecraft/widget/popup.css": 1,
+      "ui/themes/minecraft/widget/range.css": 15,
+      "ui/themes/minecraft/widget/scroll.css": 4,
+      "ui/themes/minecraft/widget/subwindow.css": 5,
+      "ui/themes/minecraft/widget/table.css": 10,
+      "ui/themes/minecraft/widget/text.css": 1,
+      "ui/themes/modern.css": 56,
+      "ui/themes/shadcn/theme.css": 2,
+      "ui/windows/main/pages/generate/generate.css": 78,
+      "ui/windows/main/pages/home/home.css": 27,
+      "ui/windows/main/pages/library/library.css": 203,
+      "ui/windows/main/pages/properties/properties.css": 74,
+      "ui/windows/main/pages/render/render.css": 16,
+      "ui/windows/main/pages/replace/replace.css": 33,
+      "ui/windows/main/pages/settings/settings.css": 49,
+      "ui/windows/main/pages/statistics/materials.css": 96
+    },
+    "token-undefined-reference": {
+      "ui/shell/widget/subwindow.css": 4,
+      "ui/styles/asset-manager.css": 10,
+      "ui/styles/base.css": 6,
+      "ui/styles/enumerator.css": 4,
+      "ui/styles/flake.css": 10,
+      "ui/styles/replace-units.css": 23,
+      "ui/styles/statistics-enumerator.css": 1,
+      "ui/windows/main/pages/library/library.css": 2,
+      "ui/windows/main/pages/properties/properties.css": 9,
+      "ui/windows/main/pages/render/render.css": 4
+    },
+    "tsx-appearance-utility-class": {
+      "ui/components/ui/button.tsx": 20,
+      "ui/components/ui/dialog.tsx": 14,
+      "ui/components/ui/input.tsx": 21,
+      "ui/components/ui/select.tsx": 32,
+      "ui/components/ui/table.tsx": 15
+    },
+    "tsx-legacy-button-variant": {
+      "ui/windows/main/pages/replace/EnumeratorBlockPickerDialog.tsx": 2,
+      "ui/windows/main/pages/replace/ReplacePage.tsx": 10
+    }
+  }
+}

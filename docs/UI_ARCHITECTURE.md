@@ -52,14 +52,16 @@
 
 ### 1.4 层叠现状：项目 CSS 全部位于无层区
 
-构建产物（`dist/assets/`）实测：
+构建产物（`dist/assets/`）实测。文件名哈希每次构建都会变，故按角色归类：
 
 | 产物 | 大小 | `@layer` 出现次数 |
 | ---- | ---- | ----------------- |
-| `base-*.css`（base + shell/widget + widgets + controls） | 42 KB | **0** |
-| `main-*.css`（全部页面 CSS） | 68 KB | **0** |
-| `theme-Cxt2oREL.css`（Minecraft） | 41 KB | **0** |
-| `theme-DGxRHTcN.css`（shadcn / 8bitcn） | 28 KB | 3（含 1 个 `@layer utilities`） |
+| `base-*.css`（base.css + shell/widget + widgets + controls） | 42.8 KB | **0** |
+| `main-*.css` 与各页面分块（`asset-manager` `enumerator` `libraryEvents` `StatisticsPage`） | 100.6 KB | **0** |
+| `theme-*.css` 中的 Minecraft（不加载 Tailwind） | 41.7 KB | **0** |
+| `theme-*.css` 中的 shadcn 与 8bitcn（各自加载 Tailwind） | 29.2 / 28.2 KB | 3（含 1 个 `@layer utilities`） |
+
+即**项目自己的约 183 KB CSS 产物全部位于无层区**，没有任何一条规则受层序保护。
 
 按 CSS 层叠规则，**无层样式永远优于任何 `@layer` 内的样式**，与选择器和源码顺序无关。因此 `ui/components/ui/` 中 36 行 Tailwind 工具类被项目自身的无层规则系统性压制，项目只能靠在 `controls.css`、`themes/modern.css` 中用 `[data-slot]` / `[data-variant]` 属性选择器**重新声明一遍**才能让颜色生效。
 
@@ -188,7 +190,7 @@ Minecraft 主题的控件规则以裸元素选择器为主，`[data-slot]` 引�
 2. **4 种样式写法并存**：同一个 `<Button>` 被裸用（45 处）、用 `variant`（126 处）、同时挂遗留 `btn` 类（75 处）、再挂遗留尺寸类（12 处）。组件化本身已达 94%（267 : 17），写法不统一源于**没有单一外观来源**。
 3. **4 种下拉实现**、**2 种复选框实现**（Radix 与原生并存）。
 4. **2 套设计令牌**加 215 处硬编码色值。
-5. **0 个层叠层**：项目 110 KB 项目 CSS 全在无层区（见 1.4），Tailwind 工具类事实上失效。
+5. **0 个层叠层**：项目自己的约 183 KB CSS 产物 @layer 出现次数为 0（见 1.4），Tailwind 工具类事实上失效。
 
 第 5 条是使前 4 条无法通过"统一写法"解决的结构性原因：在没有层约束的前提下，任何新增样式都必须考虑"是否会压过别人"，于是只能不断追加覆盖规则。**因此迁移必须先修层叠，再统一写法；顺序颠倒会得到更多覆盖规则，而不是更少。**
 
@@ -363,13 +365,67 @@ Minecraft 的独有外观全部可由"组件槽位 + 贴图"表达，无需保�
 
 各阶段可独立验证、独立回滚。**每阶段结束都必须通过第 5 节的回归矩阵。**
 
-### Phase 0 — 建立护栏（不改视觉）
+### Phase 0 — 建立护栏（不改视觉）✅ 已完成
 
-**做**：新增 `docs/UI_ARCHITECTURE.md`（本文件）；在 `desktop-nova/package.json` 增加 `check:ui-styles` 脚本，检测：无层规则、`components` 层内的裸元素选择器、新增的 `.btn-*` 类、业务代码中的外观工具类、**引用但未定义的 `--ln-*` 令牌**、`components` 层内的 `!important`。
+**产物**
 
-**退出**：脚本可运行并对现状输出基线报告；`npm run build` 与既有 `check:layers`、`check:application-boundaries` 全绿。
+| 文件 | 作用 |
+| ---- | ---- |
+| `desktop-nova/scripts/check-ui-styles.mjs` | 护栏脚本，六条检测规则 + 基线比较；可 `import` 复用 |
+| `desktop-nova/scripts/ui-styles-baseline.json` | 基线快照 |
+| `desktop-nova/scripts/check-ui-styles.test.mjs` | 8 个用例，覆盖检测、基线、校验与仓库一致性 |
+| `desktop-nova/scripts/virtual-spacer.test.mjs` | 3 个用例，锁定虚拟列表占位高度的组件/样式表契约 |
 
-**风险**：无（纯新增）。
+**六条检测规则**（对应 3.6 禁止清单）
+
+| 规则名 | 检测 | 基线计数 |
+| ------ | ---- | -------- |
+| `css-unlayered-rule` | 不在任何 `@layer` 块内的样式规则 | 1658 |
+| `css-important` | `!important`（`@media (prefers-reduced-motion: reduce)` 内除外） | 13 |
+| `css-components-bare-element-selector` | `@layer components` 内以裸元素名为主题的规则 | 0 |
+| `tsx-appearance-utility-class` | `className` 中的 Tailwind 外观工具类（变体前缀先剥离） | 102 |
+| `token-undefined-reference` | `var(--ln-*)` 引用但全项目无定义 | 73 |
+| `css-legacy-button-variant` / `tsx-legacy-button-variant` | `.btn-*` 遗留变体类的定义与使用 | 8 / 12 |
+
+**基线机制：按 (规则, 文件) 计数，而非精确行号。** 理由：Phase 1 会把每条规则搬进层里、Phase 3 会重写组件类名，精确行号记录会在每次提交时整批翻转成"已解决 + 新增"，噪声淹没信号。计数式表达的是迁移期间真正要守住的性质：**任一文件的任一规则不得增加，且所有计数必须归零**。
+
+**命令**
+
+```
+npm run check:ui-styles                 # 基线比较（CI 与日常使用）
+npm run check:ui-styles:strict          # 逐条列出全部位置
+npm run check:ui-styles:report          # 现状总量报告
+npm run check:ui-styles:update-baseline # 有意调整后刷新基线
+npm run test:ui-styles                  # 8 个用例
+```
+
+`--print-baseline` 把基线 JSON 输出到 stdout，便于在无法写工作区的环境里手工落盘。
+
+**本阶段对文档的两处收严**（实现时发现更合适的边界）
+
+1. `!important` 的禁令扩大到**全部项目 CSS**，不再限于层内——`!important` 与是否分层无关，一刀切更简单也更强。唯一豁免是 `@media (prefers-reduced-motion: reduce)` 块：那里用 `!important` 是压制动画的标准做法。
+2. `outline-none` / `outline-hidden` 不计为外观工具类：它们是 3.3 节明确要求 CVA 保留的焦点环重置；只有 `outline-<宽度|颜色>` 才算外观。
+
+**退出验证**
+
+| 检查 | 结果 |
+| ---- | ---- |
+| `npm run check:ui-styles` | ✅ 1866 项已知，0 回归，0 新增 |
+| `npm run test:ui-styles` | ✅ 8/8 通过 |
+| `npm run build` | ✅ 通过 |
+| `npm run check:application-boundaries` | ✅ 0 违规 |
+| `npm run check:layers` | ✅ 0 违规。此前 3 项 `ui-no-fixed-inline-style` 已一并修复，见下 |
+
+**顺带修复：虚拟列表占位高度不再内联声明**
+
+`check:layers` 在本阶段开始时是红的，3 项违规全部是同一个东西——虚拟列表占位元素用内联 `height` 预留滚动高度（`VirtualSpacerCell.tsx:41`、`StatisticsPage.tsx:381,389`）。这属于"上游传入导致的"，与层化无关，但它正好示范了本文件 3.3 节要推广的模式，所以一并修掉：
+
+- 参与方只有两半：组件通过 `style.setProperty` 发布 `--material-list-virtual-spacer-height`，**样式表拥有 `height` 声明**。先前的内联 `height` 是冗余的第二来源，也是 `enumerator.css:353` 不得不用 `!important` 压过它的原因。
+- `StatisticsPage` 的摘要列表分支（非表格）此前没享受到组件化，直接写内联 `<li>`；新增 `VirtualSpacerItem` 作为 `VirtualSpacerCell` 的列表项孪生体，两处都改用组件。
+- `materials.css` 的 `.material-summary-list > .material-virtual-spacer` 补上 `height: var(--material-list-virtual-spacer-height, 0px)`；两处 `var()` 统一带 `0px` 兜底。
+- 该耦合曾经出过一次线上回归（`enumerator.css:329-339` 记录了滚动条在两偏移间来回跳的现象），所以新增 `scripts/virtual-spacer.test.mjs` 把"组件发布的属性名"与"样式表消费的属性名"钉在一起：任一侧改名都会失败。
+
+这也是 3.6 禁止清单第 3、4 条之外的一条通用结论：**动态几何值走自定义属性，视觉属性留在样式表**；组件只传值，不声明样式。
 
 ### Phase 1 — 层化（不改视觉）
 
@@ -444,7 +500,8 @@ Minecraft 的独有外观全部可由"组件槽位 + 贴图"表达，无需保�
 | 控件 | 复选框 checked / unchecked / indeterminate；单选 checked / unchecked；滑块拖动、禁用、键盘；下拉打开、键盘选择、溢出滚动 | 人工 |
 | 结构 | `ui/windows/main/pages/` 下 10 个页面 + `ui/windows/` 下 6 个子窗口，在 9 组下无错位 | 人工 |
 | 层叠 | `dist/assets/*.css` 无层规则数为 0；`components` 层无裸元素选择器 | `npm run check:ui-styles` |
-| 约束 | 无新增无层规则；无新增 `.btn-*`；业务代码外观工具类为 0 | `npm run check:ui-styles` |
+| 约束 | 无新增无层规则；无新增 `.btn-*`；业务代码外观工具类为 0；无未定义令牌引用 | `npm run check:ui-styles` |
+| 护栏 | 检测规则与基线机制本身未被改坏；仓库基线未陈旧 | `npm run test:ui-styles` |
 | 既有 | `npm run build`、`check:layers`、`check:application-boundaries`、`test:layer-check`、`test:application-boundaries` | CLI |
 | 焦点 | Tab 顺序、焦点环可见性、Radix 焦点陷阱、`prefers-reduced-motion` | 人工 |
 

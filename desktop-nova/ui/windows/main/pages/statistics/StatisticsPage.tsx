@@ -40,7 +40,7 @@ import {
   normalizeMaterialListWindowBehavior,
   openMaterialListWindow,
 } from "../../../../../src/business/facade";
-import { VirtualSpacerCell } from "../../../../components/VirtualSpacerCell";
+import { VirtualSpacerCell, VirtualSpacerItem } from "../../../../components/VirtualSpacerCell";
 import { useVirtualWindow } from "../../../../components/useVirtualWindow";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { Dropdown } from "../../../../components/Dropdown";
@@ -378,7 +378,7 @@ const MaterialTable = React.memo(function MaterialTable({ materials, asItems, mu
   const virtual = useVirtualWindow(materials,scrollRef,48,8);
   useLayoutEffect(() => { if(scrollRef.current) scrollRef.current.scrollTop = 0; },[materials]);
   if (!breakdown) return <div className="material-table-scroll material-summary-scroll" ref={scrollRef}><ul className="material-summary-list" aria-label="材料列表">
-    {virtual.topSpacerHeight > 0 && <li className="material-virtual-spacer" aria-hidden style={{height:virtual.topSpacerHeight}} /> }
+    {virtual.topSpacerHeight > 0 && <VirtualSpacerItem className="material-virtual-spacer" height={virtual.topSpacerHeight} /> }
     {virtual.visibleItems.map(material => <li key={material.id} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
       <BlockIcon blockId={material.iconHint} />
       <span className="material-summary-name" title={material.id}>{material.name}
@@ -386,7 +386,7 @@ const MaterialTable = React.memo(function MaterialTable({ materials, asItems, mu
       </span>
       <span className="material-summary-quantity">{formatMaterialQuantity(material, material.totalCount * multiplier, asItems)}</span>
     </li>)}
-    {virtual.bottomSpacerHeight > 0 && <li className="material-virtual-spacer" aria-hidden style={{height:virtual.bottomSpacerHeight}} /> }
+    {virtual.bottomSpacerHeight > 0 && <VirtualSpacerItem className="material-virtual-spacer" height={virtual.bottomSpacerHeight} /> }
     {materials.length === 0 && <li className="material-summary-empty">没有符合条件的材料</li>}
   </ul></div>;
   return <div className="material-table-scroll material-detail-table-scroll" ref={scrollRef}><Table className="material-list-table beta-material-table">

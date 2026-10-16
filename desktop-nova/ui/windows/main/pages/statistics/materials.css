@@ -95,7 +95,7 @@
 .material-detail-table-scroll { height:22rem; max-height:40vh; }
 .material-summary-list > li:not(.material-virtual-spacer) { min-height:48px; max-height:48px; padding-top:6px; padding-bottom:6px; }
 .material-summary-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.material-summary-list > .material-virtual-spacer { display:block; padding:0; border:0; border-radius:0; background:none; }
+.material-summary-list > .material-virtual-spacer { display:block; height:var(--material-list-virtual-spacer-height, 0px); padding:0; border:0; border-radius:0; background:none; }
 .material-detail-table-scroll tbody tr:not(:has(.material-list-virtual-spacer-cell)) { height:48px; }
-.material-list-virtual-spacer-cell { height:var(--material-list-virtual-spacer-height); padding:0!important; border:0; }
+.material-list-virtual-spacer-cell { height:var(--material-list-virtual-spacer-height, 0px); padding:0!important; border:0; }
 .material-detail-table-scroll .beta-material-name > span { white-space:nowrap; }
