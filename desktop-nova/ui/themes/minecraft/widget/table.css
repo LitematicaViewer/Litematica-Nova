@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer tokens {
 :root {
     --ln-minecraft-table-row-min-height: 44px;
     --ln-minecraft-table-row-background-odd: #000000;
@@ -5,6 +8,9 @@
     --ln-minecraft-table-row-background-hover: #2b2b2b;
     --ln-table-row-selected-background: #4d4d4d;
 }
+}
+
+@layer components {
 
 table,
 .table {
@@ -58,4 +64,5 @@ table > tbody > tr > * > .button-row > input[type="reset"],
 .table > tbody > tr > * > .button-row > input[type="reset"] {
     margin-top: 0;
     margin-bottom: 0;
+}
 }

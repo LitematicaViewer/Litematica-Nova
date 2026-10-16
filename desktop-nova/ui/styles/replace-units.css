@@ -3,6 +3,9 @@
    ============================================================================ */
 
 /* Replace page container */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .replace-page {
     display: flex;
     height: 100%;
@@ -570,3 +573,4 @@
 .replace-unit-warnings { color:var(--destructive); }
 .replace-preview ul { overflow-wrap:anywhere; }
 @container (max-width:640px) { .replace-unit-body { flex-direction:column; } .replace-unit-arrow { align-self:center; transform:rotate(90deg); } }
+}

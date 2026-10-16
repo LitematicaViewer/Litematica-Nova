@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer tokens {
 :root {
     --ln-minecraft-input-height: 44px;
     --ln-minecraft-input-padding-y: 4px;
@@ -8,6 +11,9 @@
     --ln-minecraft-input-border-focus: #ffffff;
     --ln-minecraft-input-disabled-color: #808080;
 }
+}
+
+@layer components {
 
 input:not([type]),
 input[type="text"],
@@ -100,4 +106,5 @@ input[type="number"]:disabled,
 textarea:disabled,
 select:disabled {
     color: var(--ln-minecraft-input-disabled-color);
+}
 }

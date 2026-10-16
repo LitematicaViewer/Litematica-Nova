@@ -1,5 +1,9 @@
 /* Minecraft dialog styling */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .dialog-surface {
     border-width: 2px;
     border-radius: 0;
+}
 }

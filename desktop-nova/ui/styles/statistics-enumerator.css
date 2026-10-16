@@ -2,6 +2,9 @@
    desktop-nova/ui/styles/base.css (original L2358-L2557).
    Provides the enumerator info section and the rule editor dialog that the
    restored statistics-page logic renders. */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 
 .statistics-error {
     margin: 0;
@@ -232,3 +235,4 @@
 @media (max-width:640px) { .statistics-enumerator-editor-columns { grid-template-columns:minmax(0,1fr); } }
 
 .statistics-enumerator-row { border:0; background:transparent; color:var(--foreground); }
+}

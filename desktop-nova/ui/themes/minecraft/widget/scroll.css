@@ -3,9 +3,15 @@
    12x2 slice: its width is the scroller's own shading (light body, dark right
    edge) and it is stretched only along the track, so the bar keeps 1:1 pixels
    across its width - hence the 12px scrollbar. */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer tokens {
 html[data-theme="minecraft"] {
     --ln-scroll-size: 12px;
 }
+}
+
+@layer components {
 
 html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] {
     width: var(--ln-scroll-size);
@@ -38,4 +44,5 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
         box-shadow: none;
         image-rendering: pixelated;
     }
+}
 }

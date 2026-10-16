@@ -1,4 +1,7 @@
 /* Flake canvas and dialogs, ported from origin/dev/flake without changing other pages. */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 
 
 .flake-canvas {
@@ -1043,4 +1046,5 @@
     text-shadow: 1px 1px 0 #3f3f3f;
     pointer-events: none;
     font-family: 'MinecraftFive', monospace;
+}
 }

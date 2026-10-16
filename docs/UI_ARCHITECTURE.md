@@ -3,6 +3,8 @@
 | 文档版本 | 修改日期   | 修改人 | 修改说明 |
 | -------- | ---------- | ------ | -------- |
 | V1.0     | 2026-10-13 | Codex  | 现状基线与目标架构：分层模型、组件契约、令牌契约、主题契约、迁移路径、回归验证 |
+| V1.1     | 2026-10-13 | Codex  | 记录 Phase 0 完成（护栏脚本、计数式基线、8+3 用例） |
+| V1.2     | 2026-10-13 | Codex  | 记录 Phase 1 完成：层序修正为 `theme, vendor, tokens, base, components, utilities`；实测 2,951 处反转后把页面 CSS 的迁入推迟到 Phase 6；48 个文件完成层化，等价性三重验证通过 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -61,7 +63,7 @@
 | `theme-*.css` 中的 Minecraft（不加载 Tailwind） | 41.7 KB | **0** |
 | `theme-*.css` 中的 shadcn 与 8bitcn（各自加载 Tailwind） | 29.2 / 28.2 KB | 3（含 1 个 `@layer utilities`） |
 
-即**项目自己的约 183 KB CSS 产物全部位于无层区**，没有任何一条规则受层序保护。
+即**项目自己的约 183 KB CSS 产物全部位于无层区**，没有任何一条规则受层序保护。该状态已由 Phase 1 消除（无层规则 1658 → 0，见 Phase 1 实施记录）；本节保留为迁移前的基线记录。
 
 按 CSS 层叠规则，**无层样式永远优于任何 `@layer` 内的样式**，与选择器和源码顺序无关。因此 `ui/components/ui/` 中 36 行 Tailwind 工具类被项目自身的无层规则系统性压制，项目只能靠在 `controls.css`、`themes/modern.css` 中用 `[data-slot]` / `[data-variant]` 属性选择器**重新声明一遍**才能让颜色生效。
 
@@ -200,23 +202,26 @@ Minecraft 主题的控件规则以裸元素选择器为主，`[data-slot]` 引�
 
 ### 3.1 分层模型
 
-单一层序，五层：
+单一层序，六层：
 
 ```
-@layer theme, tokens, base, components, utilities;
+@layer theme, vendor, tokens, base, components, utilities;
 ```
 
 | 层 | 职责 | 允许内容 | 禁止内容 |
 | -- | ---- | -------- | -------- |
 | `theme` | Tailwind 自带设计令牌 | `tailwindcss/theme.css` | — |
+| `vendor` | Tailwind 生成的工具类 | `tailwindcss/utilities.css` | 项目自己的规则 |
 | `tokens` | 三主题的变量定义 | 仅自定义属性声明 | 任何选择器规则 |
 | `base` | 重置与元素默认值 | `box-sizing`、`body`、`font`、`img`、`table` 折叠 | 控件外观、品牌色 |
 | `components` | 控件外观，**按主题分文件** | `[data-slot]` / `[data-variant]` / `[data-size]` / `[data-state]` 组合选择器 | 裸元素选择器、`!important` |
-| `utilities` | 布局与一次性微调 | Tailwind 工具类、页面布局类（`.library-*`、`.flake-page__*` 等） | 颜色、边框、圆角、阴影等控件外观属性 |
+| `utilities` | 页面排布与一次性微调 | 页面布局类（`.library-*`、`.flake-page__*` 等） | 颜色、边框、圆角、阴影等控件外观属性 |
 
-**规则**：任何 CSS 文件不得有无层规则。层声明写在 `ui/styles/base.css` 顶部，并在每个 `ui/themes/*/theme.css` 顶部重复同一行——两处声明内容完全一致时，先后顺序不影响结果，因此不依赖加载时序。
+> **为什么 Tailwind 在 `vendor` 而不是 `utilities`。** 原方案把 Tailwind 工具类与页面布局类放在同一层（`utilities` 最高）。实施时发现这是错的：Tailwind 工具类今天位于 `@layer utilities`，而项目 CSS 全部无层，所以**项目 CSS 一直赢过 Tailwind**。若让它们同层且置于最高，`ui/components/ui/button.tsx` 基础串里的 `bg-primary` 会开始生效，**所有按钮都会变成主色**。把 Tailwind 移到最低的 `vendor` 层，才与"项目 CSS 压过 Tailwind"这一既有事实一致。
 
-> 为什么不用页面层：页面 CSS 收进 `utilities` 层后，它仍然可以设置 `display`、`grid-template-columns`、`gap`，但设置 `background` 会被 `components` 层压过。这恰好是想要的语义：**页面负责排布，主题负责外观。**
+> **`utilities` 高于 `components`，因此页面 CSS 会压过主题外观。** 原方案的表述（"设置 `background` 会被 `components` 压过"）与本层序相反。这直接影响 Phase 1 的取舍：把页面 CSS 现在就抬进 `utilities`，会让页面的默认值盖掉主题值（实测 **2,951 处**获胜者反转，例如 Minecraft 主题下 `html[data-theme="minecraft"] .library-page` 的 `--library-*` 令牌会被 `library.css` 的默认值取代）。因此 Phase 1 只做层化、把组件与页面规则暂留同一层，**页面 CSS 的迁入与外观属性清理留给 Phase 6 一并处理**。
+
+**层顺序在每个文件里重复声明。** 这不是冗余，而是必需：层序由文档中**首次**出现的声明确定，而开发模式下 `ui/app/main.tsx` 先 import `AppShell`（它又 import `ui/styles/enumerator.css`）、之后才 import `ui/styles/base.css`，模块求值顺序与打包后 `<link>` 顺序并不一致。每个文件都写同一行，层序就与加载顺序无关。48 个项目 CSS 文件均已写入。
 
 ### 3.2 令牌契约
 
@@ -294,7 +299,9 @@ ui/themes/
                         @layer components { [data-slot] 贴图规则 }
 ```
 
-**Minecraft 主题必须加载 Tailwind 层。** 现状 `themes/minecraft/theme.css` 不 import `modern.css`，导致它依赖"无层规则压过一切"才能工作。改为加载后，它与其他两个主题走同一条路径；同时须补齐 `--edge-width: 0`、`--control-shadow: none`、`--panel-shadow: none`。
+**层序声明在每个文件里重复，而不是只在 `base.css` 与主题文件里。** 层序由文档中首次出现的声明确定；开发模式下 `main.tsx` 先 import `AppShell`（进而 import `enumerator.css`），之后才 import `base.css`，模块求值顺序与打包后 `<link>` 顺序不一致。若只有 `base.css` 声明，先被求值的文件里的 `@layer components { … }` 会抢先确立层序，把 `components` 定在最低位。48 个项目 CSS 文件全部写入同一行后，层序与加载顺序无关（Phase 1 已落地）。
+
+**Minecraft 主题必须加载 Tailwind 层。** 现状 `themes/minecraft/theme.css` 不 import `modern.css`，导致它依赖"无层规则压过一切"才能工作。改为加载后，它与其他两个主题走同一条路径；同时须补齐 `--edge-width: 0`、`--control-shadow: none`、`--panel-shadow: none`。注意 Phase 1 已把 Tailwind 放在最低的 `vendor` 层，因此这一步不会让 shadcn 组件身上的外观工具类在 Minecraft 主题下突然生效。
 
 **共享结构放 `base` 层，共享行为放各主题 `components` 层。** 现状 `styles/controls.css` 与 `styles/widgets.css` 的正确部分（焦点环、图标尺寸、滚动条命中区、下拉浮层定位、`table-row-selected` 语义）应进入 `base`；与颜色/描边相关的部分进入各主题 `components`。
 
@@ -427,7 +434,7 @@ npm run test:ui-styles                  # 8 个用例
 
 这也是 3.6 禁止清单第 3、4 条之外的一条通用结论：**动态几何值走自定义属性，视觉属性留在样式表**；组件只传值，不声明样式。
 
-### Phase 1 — 层化（不改视觉）
+### Phase 1 — 层化（不改视觉）✅ 已完成
 
 **做**：
 1. 在 `ui/styles/base.css` 与 3 个 `ui/themes/*/theme.css`（`shadcn` `8bitcn` `minecraft`）顶部加同一行 `@layer theme, tokens, base, components, utilities;`。
@@ -437,6 +444,52 @@ npm run test:ui-styles                  # 8 个用例
 **退出**：`dist/assets/*.css` 中无层规则数为 0（除 `theme` 层的 Tailwind 声明）；三主题切换截图与迁移前逐像素一致。
 
 **风险**：高。层化会改变现有覆盖关系（原本无层互压，现在按层序）。**必须**在本阶段保留"最后写入者胜"的等效结果——必要时用选择器特异性补偿，而不是重新引入无层规则。建议本阶段单独一个提交，便于二分定位。
+
+---
+
+#### 实施记录
+
+**先量后改。** 直接按原方案切四层是不可接受的，所以先写了分析工具 `.tmp/analyze-cascade-flips.mjs`：它从 TSX 采集 `className`、`id`、`data-slot` 与元素标签的对应关系，建立元素模型，再对每一对"能匹配同一元素且设置同一属性"的跨层规则，判断今天谁赢、分层后谁赢。要点：
+
+- 三个主题样式表在运行时互斥（`themeRuntime.ts` 切换 `media="not all"`），跨主题冲突不可能发生，必须排除，否则绝大多数"冲突"是假的；
+- `themes/modern.css` 只被 shadcn / 8bitcn 引入，Minecraft 从不加载它；
+- 没有元素模型时误报率极高（`label:has(> input[type=checkbox])` 会被拿去和 `.asset-manager-header` 比较），加入模型后报告从 4.4 万条降到可信量级。
+
+**量到的结论**：原方案的四层切分会产生 **2,951 处真实获胜者反转**（`components` 今天赢、分层后 `utilities` 赢）。反向层序更糟（20,353 处，且集中在 `display` / `gap` 等布局属性上）。`tokens` 与 `base` 两层则是 **0 反转**，可以安全切出。
+
+**据此调整实施范围**：Phase 1 只切出 `tokens`（23 个令牌块）与 `base`（7 条重置规则），其余 **1,628 条规则全部暂留 `components` 一层**。单层内部特异性与顺序完全不变，因此层化是**可证明的等效变换**；`utilities` 层已声明但为空，等 Phase 6 连同页面外观属性清理一起迁入。
+
+**改动**
+
+| 项 | 内容 |
+| -- | ---- |
+| 48 个 CSS 文件 | 每个文件加层序声明，并把规则按连续同层片段包进 `@layer` 块；共 71 个层块 |
+| `ui/themes/modern.css` | `@import "tailwindcss/utilities.css"` 的层名由 `utilities` 改为 `vendor`，把 Tailwind 工具类压到项目层之下 |
+| `desktop-nova/scripts/check-ui-styles.mjs` | 期望层序常量加入 `vendor` |
+| `desktop-nova/scripts/ui-styles-baseline.json` | 刷新基线（`css-unlayered-rule` 1658 → 0；`css-components-bare-element-selector` 0 → 176） |
+
+**等价性验证**（三重）
+
+1. **规则集不变**：变换脚本对每个文件重新解析前后两份 CSS，比较"选择器 + 全部声明"的多重集，必须完全一致——48/48 通过。
+2. **字节全覆盖**：按原文节点偏移切片重组，断言切片覆盖原始文件全部字节——48/48 通过。
+3. **行不丢失**：对每个文件比较改动前后的非空行多重集，新增行只允许是 `@layer` 包装行——48/48 通过（`git diff` 显示的 13 行"删除"是行对齐噪声）。
+
+**层叠验证**：分析工具复测 **0 处获胜者反转**（含/不含元素模型均为 0）。
+
+**产物验证**：`base-*.css` 是 `dist/index.html` 中的第一个样式表，确立了全局层序；实测 `.bg-primary` 落在 `vendor` 层，**没有**升到 `project` 层之上，因此不会出现"所有按钮变主色"。
+
+**退出验证**
+
+| 检查 | 结果 |
+| ---- | ---- |
+| `check:ui-styles` | ✅ 无层规则 **0**；层序识别为 `theme, vendor, tokens, base, components, utilities`；384 项已知，0 回归 |
+| `check:layers` / `check:application-boundaries` | ✅ 0 违规 |
+| `npm run build` | ✅ 通过 |
+| 测试套件 | ✅ 与 HEAD **完全一致**（`check-ui-styles` 8/0、`virtual-spacer` 3/0、`layer-check` 2/0、`application-boundaries` 7/0、`library-theme-css` 4/0、`choice-controls` 6/0、`beta021-ui` 10/0；`functional-icons` 0/3、`widgets` 7/4、`themes` 12/2、`materials` 0/1、`restored-entrypoints` 4/2 均为**改动前既存**失败，已在 HEAD 逐一核对） |
+
+**待人工验收**：三主题 × 明暗共 9 组的视觉对照。自动化只能证明"计算值层面的获胜者未变"，不能替代像素级确认；分析工具已经把需要人眼关注的范围收敛到 0 处已知反转，但层序本身是全局机制，仍建议按第 5 节矩阵过一遍。
+
+**未做**：页面 CSS 未迁入 `utilities`（见上）。这是相对原方案第 3 条的**有意收窄**，理由与实测数据见 3.1 节与本节实施记录；Phase 6 会连同"删除页面外观属性"一起完成，届时那 2,951 处反转将由逐文件的清理显式处理，而不是靠层序偶然决定。
 
 ### Phase 2 — 令牌收敛
 

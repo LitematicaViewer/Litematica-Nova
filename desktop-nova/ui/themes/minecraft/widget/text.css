@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 @font-face {
     font-family: "Unifont";
     /* src: url("../resource/font/UnifontExMono.woff2") format("woff2"); */
@@ -14,4 +17,5 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeSpeed;
+}
 }

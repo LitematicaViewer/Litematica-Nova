@@ -1,8 +1,14 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer tokens {
 :root {
     --ln-check-size: 16px;
     --ln-check-label-gap: 6px;
     --ln-check-label-min-height: 20px;
 }
+}
+
+@layer components {
 
 label:has(> input[type="checkbox"]),
 label:has(> input[type="radio"]) {
@@ -26,4 +32,5 @@ input[type="radio"] {
 .form-row input[type="checkbox"],
 .form-row input[type="radio"] {
     width: var(--ln-check-size);
+}
 }

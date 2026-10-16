@@ -1,12 +1,18 @@
 @import "../modern.css";
 
 /* Local Chinese-capable pixel font. No Google Fonts network dependency. */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 @font-face {
     font-family: "Nova Pixel";
     src: url("../minecraft/resource/font/unifont-16.0.04.ttf") format("truetype");
     font-weight: 400 700;
     font-display: swap;
 }
+}
+
+@layer tokens {
 :root[data-color-scheme="dark"] {
     --background: #181d19;
     --foreground: #f0f0df;
@@ -45,6 +51,9 @@
     --ln-body-font-family: "Nova Pixel", "Microsoft YaHei UI", monospace;
     --ln-body-font-size: 16px;
 }
+}
+
+@layer components {
 button:not(.nav-item):not(.nav-expand):not(.dialog-close-button):not(:where([role="checkbox"], [role="radio"])) { box-shadow: var(--control-shadow); }
 button:active:not(:disabled):not(:where([role="checkbox"], [role="radio"])) { box-shadow: none; transform: translateY(1px); }
 .sidebar { border-right-width: 2px; }
@@ -60,3 +69,4 @@ button:active:not(:disabled):not(:where([role="checkbox"], [role="radio"])) { bo
 .dropdown-trigger { margin: 0; }
 th { border-bottom: 2px solid var(--border); }
 img { image-rendering: pixelated; }
+}

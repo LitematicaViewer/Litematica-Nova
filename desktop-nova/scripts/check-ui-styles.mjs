@@ -19,7 +19,9 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const defaultRootDir = path.resolve(scriptDir, "..");
 const BASELINE_SCHEMA = "lba.ui-style-violations-baseline.v1";
-const LAYER_ORDER = ["theme", "tokens", "base", "components", "utilities"];
+// Tailwind's generated utilities sit in `vendor`, below every project layer, so
+// project CSS keeps winning over them exactly as it did while it was unlayered.
+const LAYER_ORDER = ["theme", "vendor", "tokens", "base", "components", "utilities"];
 const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", ".vite", "target", ".tmp"]);
 
 // Elements that already publish a Nova data-slot contract. Styling them by element

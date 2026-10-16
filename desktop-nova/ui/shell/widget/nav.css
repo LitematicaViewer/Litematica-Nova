@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .app-shell {
     display: flex;
     width: 100%;
@@ -118,4 +121,5 @@
     .sidebar .nav-item .nav-label {
         display: none;
     }
+}
 }

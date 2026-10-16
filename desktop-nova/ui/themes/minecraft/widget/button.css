@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer tokens {
 :root {
     --ln-control-height: 44px;
     --ln-control-radius: 0;
@@ -10,6 +13,9 @@
     --ln-minecraft-button-border: 4px;
     --ln-minecraft-button-height: 44px;
 }
+}
+
+@layer components {
 
 button,
 input[type="button"],
@@ -160,4 +166,5 @@ button.flake-page__quickbar-open-inventory .flake-page__quickbar-open-inventory-
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
     border: 0;
+}
 }

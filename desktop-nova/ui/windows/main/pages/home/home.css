@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .home-scroll-area { height: 100%; min-height: 0; }
 .home-page {
     display: grid;
@@ -37,4 +40,5 @@ html[data-theme="minecraft"] .home-workflows small { color: #e0e0e0; }
     .home-page { padding: 20px 12px; }
     .home-current { padding: 18px 12px; }
     .home-start-actions { align-items: stretch; flex-direction: column; }
+}
 }

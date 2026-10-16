@@ -1,4 +1,7 @@
 /* One library workspace; theme identity comes from the shared semantic tokens. */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .library-page {
     --library-surface: var(--card, var(--ln-ui-background-color, Canvas));
     --library-muted: var(--muted, color-mix(in srgb, var(--ln-body-text-color, CanvasText) 5%, var(--library-surface)));
@@ -398,3 +401,4 @@ html[data-theme] .library-page [data-slot="button"].library-category-expander { 
 .library-trash-list :is(span, small) { color: var(--ln-muted-text-color, GrayText); }
 .library-trash-confirm { display: flex; flex-wrap: wrap; gap: 12px; }
 .library-trash-confirm p { flex-basis: 100%; }
+}

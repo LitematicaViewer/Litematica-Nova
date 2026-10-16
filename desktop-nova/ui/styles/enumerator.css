@@ -3,6 +3,9 @@
    The new architecture did not carry enumerator-* rules, so the block is
    backported verbatim; shared utility classes used by the block are kept
    at the end of this file. */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 
 .enumerator-window {
     width: 100%;
@@ -354,4 +357,5 @@
     padding: 0 !important;
     border: 0 !important;
     background: transparent !important;
+}
 }

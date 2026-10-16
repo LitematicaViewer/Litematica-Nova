@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .properties-page { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--ln-space-3, 12px); container-type: inline-size; }
 .properties-header, .properties-toolbar, .properties-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--ln-space-2, 8px); }
 .properties-header { justify-content: space-between; }
@@ -85,3 +88,4 @@
 .properties-conversion-table .replace-property { display: grid; grid-template-columns: minmax(5em, 1fr) minmax(0, 1fr); align-items: center; gap: 8px; }
 .properties-overwrite-confirm { display: flex; flex-wrap: wrap; gap: 12px; }
 .properties-overwrite-confirm p { flex-basis: 100%; }
+}

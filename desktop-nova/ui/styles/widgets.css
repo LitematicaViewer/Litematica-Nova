@@ -1,4 +1,7 @@
 /* Shared behavior and spacing; each theme keeps its own palette, font and edges. */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .nova-pixel-decoration { display: none; }
 
 /* Portal placement is shared by all themes, including Minecraft without Tailwind. */
@@ -54,6 +57,9 @@
 .subwindow-demo-fill { min-height: 8rem; }
 
 /* Every scroll surface, including body-hosted Radix portals, inherits theme tokens. */
+}
+
+@layer tokens {
 :root {
     --ln-scroll-size: 12px;
     --ln-scroll-radius: 8px;
@@ -84,6 +90,9 @@ html[data-theme="minecraft"] {
     --ln-scroll-active: #c0c0c0;
     --ln-scroll-shadow: inset 2px 2px #b8b8b8, inset -2px -2px #484848;
 }
+}
+
+@layer components {
 * { scrollbar-color: var(--ln-scroll-thumb) var(--ln-scroll-track); scrollbar-width: thin; }
 @supports selector(::-webkit-scrollbar) {
     /* Chromium ignores pseudo-element colors if CSS Scrollbars colors are also set. */
@@ -106,6 +115,9 @@ html[data-theme="minecraft"] {
     ::-webkit-scrollbar-thumb { background: ButtonText; box-shadow: none; }
     ::-webkit-scrollbar-track { background: Canvas; }
 }
+}
+
+@layer tokens {
 
 :root {
     --ln-control-height: 32px;
@@ -117,6 +129,9 @@ html[data-theme="minecraft"] {
     --ln-error-color: #a61b1b;
     --ln-warning-color: #8a4b00;
 }
+}
+
+@layer components {
 
 .btn,
 .input,
@@ -255,4 +270,5 @@ td {
     .dialog-form-grid > .dialog-label:not(:first-child) {
         margin-top: 8px;
     }
+}
 }

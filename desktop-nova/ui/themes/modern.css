@@ -27,6 +27,9 @@
     --radius-md: var(--radius);
     --radius-lg: calc(var(--radius) + 2px);
 }
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 
 :root {
     color-scheme: light;
@@ -53,6 +56,9 @@
     --ln-warning-color: #ebba70;
     --ln-success-color: #a3d7b2;
 }
+}
+
+@layer tokens {
 html[data-theme][data-color-scheme] {
     --ln-scroll-track: var(--background);
     --ln-scroll-track-hover: var(--muted);
@@ -60,6 +66,9 @@ html[data-theme][data-color-scheme] {
     --ln-scroll-hover: var(--muted-foreground);
     --ln-scroll-active: var(--foreground);
 }
+}
+
+@layer components {
 
 body { line-height: 1.5; }
 :where(button, input, select, textarea) { font: inherit; }
@@ -132,3 +141,4 @@ tr[aria-selected="true"], tr[data-state="selected"] { background: var(--accent);
 .beta-statistics-fact, .beta-statistics-note { border-color: var(--border); }
 ::selection { background: var(--primary); color: var(--primary-foreground); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+}

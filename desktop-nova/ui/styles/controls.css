@@ -1,5 +1,8 @@
 /* Shared official component structure. Theme files supply every surface/color. */
 /* Functional icons share one vector language; BlockIcon/item textures are not SVG. */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 html[data-theme] svg.lucide {
   width: var(--nova-icon-size, 18px); height: var(--nova-icon-size, 18px);
   flex-shrink: 0; stroke-width: 1.75; vertical-align: middle;
@@ -117,3 +120,4 @@ html[data-theme] .flake-page__creative-hotbar-slot[data-slot="button"] { min-hei
 .ui-control-gallery { height: 100%; }
 .ui-control-gallery [data-slot="scroll-area-viewport"] > div { padding: 16px; }
 @media (prefers-reduced-motion: reduce) { .nova-control, [data-slot="scroll-area-scrollbar"] { transition: none !important; } }
+}

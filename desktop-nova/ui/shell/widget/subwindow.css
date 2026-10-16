@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .subwindow-title-row {
     position: relative;
     display: flex;
@@ -592,4 +595,5 @@
         width: 220px;
     }
 
+}
 }

@@ -1,6 +1,9 @@
 @import "../shell/theme.css";
 @import "./widgets.css";
 @import "./controls.css";
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 
 :root {
     --ln-space-1: 4px;
@@ -19,6 +22,9 @@
 * {
     box-sizing: border-box;
 }
+}
+
+@layer base {
 
 html,
 body,
@@ -37,6 +43,9 @@ body {
     letter-spacing: normal;
     user-select: none;
 }
+}
+
+@layer components {
 
 button,
 input,
@@ -53,6 +62,9 @@ input,
 select {
     min-width: 0;
 }
+}
+
+@layer base {
 
 h1,
 h2,
@@ -77,6 +89,9 @@ table {
     width: 100%;
     border-collapse: collapse;
 }
+}
+
+@layer components {
 
 .block-icon-image,
 .block-icon-fallback {
@@ -102,6 +117,9 @@ table {
     line-height: 30px;
     text-align: center;
 }
+}
+
+@layer base {
 
 th,
 td {
@@ -109,6 +127,9 @@ td {
     border: 1px solid ThreeDShadow;
     text-align: left;
 }
+}
+
+@layer components {
 
 .ui-test-thumb {
     display: block;
@@ -1094,4 +1115,5 @@ pre {
     .library-filter-select {
         width: 100%;
     }
+}
 }

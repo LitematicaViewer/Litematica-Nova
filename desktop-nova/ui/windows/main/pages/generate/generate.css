@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .generate-page { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--ln-space-3, 12px); container-type: inline-size; }
 .generate-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--ln-space-3, 12px); }
 .generate-header, .generate-workspace { width: 100%; max-width: none; }
@@ -83,4 +86,5 @@ html[data-theme] .generate-page .generate-operation .generate-material-entry { p
     .generate-page .generate-grow { flex-basis: 100%; }
     .generate-page .generate-operation, html[data-theme] .generate-page .group-box { padding: 14px; }
     .generate-page .template-library-row { align-items: flex-start; }
+}
 }

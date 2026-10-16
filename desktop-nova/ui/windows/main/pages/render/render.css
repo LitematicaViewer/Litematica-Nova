@@ -1,3 +1,6 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .render-page .render-preview-group { border: 0; padding: 0; margin: 0; gap: 8px; }
 .render-page .render-preview-host { border: 0; border-radius: 0; margin: 0; background: var(--ln-inset-background, var(--ln-ui-background-color)); }
 .render-page .render-preview-placeholder { color: var(--ln-muted-text-color, GrayText); }
@@ -14,3 +17,4 @@
 .render-page .render-page-title { flex: 0 0 auto; margin: 0; text-align: left; }
 .render-page .render-page-source { flex: 1; max-width: none; }
 @media (max-width: 800px) { .render-full-placeholder { width: 100%; margin-left: 0; } }
+}

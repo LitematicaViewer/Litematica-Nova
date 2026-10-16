@@ -1,3 +1,7 @@
 /* Navigation artwork is 16x16 game-style pixel art in this theme, so it must stay
    crisp when the window is scaled. Themes without their own artwork keep vectors. */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .theme-minecraft .nav-icon { image-rendering: pixelated; }
+}

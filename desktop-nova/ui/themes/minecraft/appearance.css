@@ -1,4 +1,7 @@
 /* Keep the existing pixel font, texture borders and inventory assets in both modes. */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 html[data-theme="minecraft"] {
     color-scheme: dark;
     --background: #3c3c3c;
@@ -200,3 +203,4 @@ html[data-theme="minecraft"] .library-page button[data-slot="button"][data-varia
 html[data-theme="minecraft"] .library-tag-chip { background: var(--muted); color: var(--foreground); }
 html[data-theme="minecraft"] .library-detail-section { border-color: var(--library-line); }
 html[data-theme="minecraft"] .library-page [data-slot="scroll-area-scrollbar"]:hover { background: var(--ln-scroll-track-hover); }
+}

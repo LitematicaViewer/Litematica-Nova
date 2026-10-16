@@ -12,6 +12,9 @@
 @import "./widget/subwindow.css";
 @import "./widget/content.css";
 @import "./appearance.css";
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer tokens {
 
 :root {
     --ln-ui-background-color: #3c3c3c;
@@ -30,4 +33,5 @@
     --flake-edit-tool-active-image: url("./resource/button/editTool_active.png");
     --flake-chest-image: url("./resource/content/chest27.png");
     --flake-hopper-image: url("./resource/content/hopper.png");
+}
 }

@@ -1,4 +1,7 @@
 /* Minecraft child-window styling */
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer components {
 .dialog-content {
     border-width: 2px;
     border-radius: 0;
@@ -41,4 +44,5 @@ button.dialog-close-button:active:not(:disabled) {
     border-image-source: none;
     background-image: url("../resource/button/windowClose_hover.png");
     color: transparent;
+}
 }

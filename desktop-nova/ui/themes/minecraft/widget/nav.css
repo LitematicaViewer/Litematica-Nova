@@ -1,7 +1,13 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer tokens {
 :root {
     --ln-minecraft-nav-button-height: 48px;
     --ln-minecraft-sidebar-collapsed-width: 49px;
 }
+}
+
+@layer components {
 
 .sidebar {
     display: flex;
@@ -121,4 +127,5 @@
     .sidebar .nav-item .nav-label {
         display: none;
     }
+}
 }

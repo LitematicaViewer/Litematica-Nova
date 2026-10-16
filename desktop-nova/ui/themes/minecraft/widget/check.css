@@ -1,8 +1,14 @@
+@layer theme, vendor, tokens, base, components, utilities;
+
+@layer tokens {
 :root {
     --ln-check-size: 20px;
     --ln-check-label-gap: 8px;
     --ln-check-label-min-height: 24px;
 }
+}
+
+@layer components {
 
 label:has(> input[type="checkbox"]),
 label:has(> input[type="radio"]) {
@@ -76,4 +82,5 @@ input[type="radio"]:focus-visible {
 label:has(> input[type="checkbox"]:disabled),
 label:has(> input[type="radio"]:disabled) {
     color: #808080;
+}
 }

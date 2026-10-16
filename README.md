@@ -106,3 +106,4 @@ Linux 需要 glibc 2.39 或更新版本、GTK 3、WebKitGTK 4.1、系统 Vulkan 
 遇到问题，请保留原文件和报错，带上「刚才做了什么、期望什么、实际怎样」以及截图，到 [Issues](https://github.com/LitematicaViewer/Litematica-Nova/issues) 或 **QQ 1044260630** 反馈。分享前请遮住密钥及个人信息。
 
 想参与开发或自行构建？请阅读[开发说明](docs/DEVELOPMENT.md)。
+
