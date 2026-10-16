@@ -50,8 +50,8 @@
     grid-template-rows: auto auto minmax(0, 1fr);
     gap: 8px;
     padding: 10px;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-background-color, Canvas);
+    border: 1px solid var(--border);
+    background: var(--ln-ui-background-color);
     overflow: hidden;
 }
 
@@ -63,8 +63,8 @@
     align-items: stretch;
     gap: 8px;
     padding: 10px;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-background-color, Canvas);
+    border: 1px solid var(--border);
+    background: var(--ln-ui-background-color);
     overflow: hidden;
 }
 
@@ -148,7 +148,7 @@
 .enumerator-footer-status,
 .enumerator-collection-meta,
 .enumerator-footer-meta {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     font-size: 12px;
     line-height: 1.45;
 }
@@ -189,8 +189,8 @@
     min-height: 0;
     height: 100%;
     overflow: auto;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-background-color, Canvas);
+    border: 1px solid var(--border);
+    background: var(--ln-ui-background-color);
 }
 
 .enumerator-table {
@@ -247,7 +247,7 @@
 
 .enumerator-empty-cell {
     text-align: center;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
 }
 
 .enumerator-type-col {
@@ -268,8 +268,8 @@
     align-items: flex-start;
     gap: 12px;
     padding: 10px 12px 12px;
-    border-top: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-background-color, Canvas);
+    border-top: 1px solid var(--border);
+    background: var(--ln-ui-background-color);
 }
 
 .enumerator-footer-status {

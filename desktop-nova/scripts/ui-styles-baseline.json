@@ -36,18 +36,6 @@
       "ui/styles/replace-units.css": 6,
       "ui/themes/modern.css": 2
     },
-    "token-undefined-reference": {
-      "ui/shell/widget/subwindow.css": 4,
-      "ui/styles/asset-manager.css": 10,
-      "ui/styles/base.css": 6,
-      "ui/styles/enumerator.css": 4,
-      "ui/styles/flake.css": 10,
-      "ui/styles/replace-units.css": 23,
-      "ui/styles/statistics-enumerator.css": 1,
-      "ui/windows/main/pages/library/library.css": 2,
-      "ui/windows/main/pages/properties/properties.css": 9,
-      "ui/windows/main/pages/render/render.css": 4
-    },
     "tsx-appearance-utility-class": {
       "ui/components/ui/button.tsx": 20,
       "ui/components/ui/dialog.tsx": 14,

@@ -14,8 +14,8 @@
     max-width: min(90vw, 600px);
     max-height: min(var(--radix-select-content-available-height), 320px);
     overflow: hidden;
-    color: var(--ln-body-text-color, CanvasText);
-    background: var(--ln-ui-background-color, Canvas);
+    color: var(--ln-body-text-color);
+    background: var(--ln-ui-background-color);
 }
 .dropdown-menu [data-slot="select-viewport"] { padding: 4px; }
 .dropdown-item[data-slot="select-item"] { position: relative; padding-right: 30px; outline: none; }
@@ -50,7 +50,7 @@
     width: var(--radix-popover-trigger-width);
     max-width: calc(100vw - 16px);
     max-height: min(24rem, var(--radix-popover-content-available-height));
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--ln-body-text-color);
 }
 .dropdown-menu[data-slot="select-content"] { max-height: min(var(--radix-select-content-available-height), 24rem); }
 .subwindow-standalone-page { height: 100dvh; min-height: 0; }
@@ -123,11 +123,14 @@ html[data-theme="minecraft"] {
     --ln-control-height: 32px;
     --ln-control-radius: 3px;
     --ln-popup-shadow: 0 8px 24px rgb(0 0 0 / 20%);
-    --ln-focus-color: Highlight;
-    --ln-option-active-background: Highlight;
-    --ln-option-active-color: HighlightText;
-    --ln-error-color: #a61b1b;
-    --ln-warning-color: #8a4b00;
+    --ln-focus-color: var(--ring);
+    --ln-option-active-background: var(--accent);
+    --ln-option-active-color: var(--foreground);
+    --ln-error-color: var(--destructive);
+    --success: #306743;
+    --warning: #8a4b00;
+    --ln-success-color: var(--success);
+    --ln-warning-color: var(--warning);
 }
 }
 
@@ -174,8 +177,8 @@ textarea {
 }
 
 ::selection {
-    color: HighlightText;
-    background: Highlight;
+    color: var(--primary-foreground);
+    background: var(--primary);
 }
 
 td,

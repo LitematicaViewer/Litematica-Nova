@@ -18,9 +18,9 @@
     max-height: min(90vh, 820px);
     flex-direction: column;
     overflow: hidden;
-    color: var(--ln-body-text-color, CanvasText);
-    background: var(--ln-ui-background-color, Canvas);
-    border: 1px solid ThreeDShadow;
+    color: var(--ln-body-text-color);
+    background: var(--ln-ui-background-color);
+    border: 1px solid var(--border);
 }
 
 .dialog-surface-sm {
@@ -99,7 +99,7 @@
 }
 
 .dialog-label {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
 }
 
 .dialog-field-stack {

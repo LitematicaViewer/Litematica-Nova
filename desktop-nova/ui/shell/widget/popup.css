@@ -7,10 +7,10 @@
     min-width: 310px;
     max-width: calc(100vw - 8px);
     padding: 8px;
-    border: 1px solid var(--border, ThreeDShadow);
-    background: var(--surface-elevated, var(--ln-ui-background-color, Canvas));
+    border: 1px solid var(--border);
+    background: var(--card);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    color: var(--text, var(--ln-body-text-color, CanvasText));
+    color: var(--foreground);
     font-size: 12px;
     pointer-events: none;
 }
@@ -50,7 +50,7 @@
     height: 140px;
     place-items: center;
     overflow: hidden;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     text-align: center;
 }
 

@@ -5,6 +5,7 @@
 | V1.0     | 2026-10-13 | Codex  | 现状基线与目标架构：分层模型、组件契约、令牌契约、主题契约、迁移路径、回归验证 |
 | V1.1     | 2026-10-13 | Codex  | 记录 Phase 0 完成（护栏脚本、计数式基线、8+3 用例） |
 | V1.2     | 2026-10-13 | Codex  | 记录 Phase 1 完成：层序修正为 `theme, vendor, tokens, base, components, utilities`；实测 2,951 处反转后把页面 CSS 的迁入推迟到 Phase 6；48 个文件完成层化，等价性三重验证通过 |
+| V1.3     | 2026-10-13 | Codex  | 记录 Phase 2A 完成：系统色 240 → 4、未定义令牌 73 → 0；护栏扩到全部自定义属性并新增 `css-system-colour` 与 `css-vendor-layer-above-components` 两条规则；记下 `layer(vendor)` 被 `git checkout` 静默还原导致 Tailwind 工具类越层的教训 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -493,6 +494,8 @@ npm run test:ui-styles                  # 8 个用例
 
 ### Phase 2 — 令牌收敛
 
+拆成 2A（已完成）与 2B（待办）两步：2A 只做"补令牌 + 消灭系统色"，改动集中在 `styles/` 与 `shell/widget/`；2B 删除桥接令牌与硬编码色值，会触及全部 48 个文件，故分开以保持回滚粒度。
+
 **做**：
 1. 补齐 `--edge-width`、`--control-shadow`、`--panel-shadow` 到 Minecraft；新增 `--success`、`--warning` 到三主题。
 2. 处理 18 个"被引用但未定义"的令牌（见 1.7）：逐个判定是"应存在的语义令牌"还是"早期遗留的名称"。前者（如 `--ln-ui-edge-color`、`--ln-ui-control-background-color`、`--ln-inset-background`、`--ln-divider-color`）归入 Tier 1/Tier 2 并补齐三主题定义；后者（如 `--ln-primary`、`--ln-card-radius`）直接改为对应语义令牌，删除引用。**此步骤必须在 Phase 1 之后做**，因为无层区下无法判断某个 fallback 是否真的在生效。
@@ -502,6 +505,75 @@ npm run test:ui-styles                  # 8 个用例
 6. 删除只定义不引用的死令牌（`--ln-form-max`）。
 
 **退出**：Tier 1 令牌在三主题中覆盖率为 100%；"被引用但未定义"的令牌数为 0；`var(--ln-*)` 引用数从 561 降至仅 Tier 2 / Tier 3 的量；硬编码色值降至仅 Tier 3 定义处。
+
+---
+
+#### Phase 2A 实施记录 ✅ 已完成（第 1、2、5 步）
+
+**范围**：补 5 个缺口令牌 + 消灭全部系统色依赖（含死令牌引用）。**不做**桥接令牌删除与硬编码色值替换（留给 2B）。
+
+**先摸清解析链。** 把每个 `var()` 兜底按链条解开后发现，240 处系统色分三类，处理方式与验收预期都不同：
+
+| 类别 | 数量 | 处理 | 视觉影响 |
+| ---- | ---- | ---- | -------- |
+| 死令牌，兜底落到真系统色 | ~90 | 换成语义令牌 | **变色**（正是要修的 bug） |
+| 死令牌，兜底已解析到已定义令牌 | ~20 | 换成该语义令牌 | 中性 |
+| 已定义令牌的系统色兜底（不可达） | 129 | 删掉兜底 | 中性 |
+
+另外 47 处是**裸写**系统色（不经 `var()`），以及 `--flake-*` / `--material-list-virtual-spacer-height` 这类**由 TypeScript 运行时设置**的属性（不是死令牌，是护栏的误报）。
+
+**改动**（20 个文件、241 条声明）
+
+| 项 | 内容 |
+| -- | ---- |
+| 新增 Tier 1 令牌 | `--success` / `--warning`（5 处）、Minecraft 的 `--edge-width: 0` / `--control-shadow: none` / `--panel-shadow: none`；`--ln-success-color` / `--ln-warning-color` 反转为引用它们 |
+| 死令牌映射 | 21 个名字 → 语义令牌。`--ln-ui-edge-color` → `--border`（按要求改名）；`--ln-border-color`/`--ln-divider-color`/`--ln-fieldset-border-color` → `--border`；`--ln-ui-control-background-color`/`--ln-inset-background` → `--background`；`--ln-surface-background-color`/`--surface-elevated` → `--card`；`--ln-accent-color` → `--primary` 等 |
+| 系统色映射 | `ThreeDShadow` → `--border`、`GrayText` → `--muted-foreground`、`Highlight`/`HighlightText` → `--primary`/`--primary-foreground`、`ButtonFace` → `--muted`、`Canvas` → `--background` 等 |
+| **保留** | `@media (forced-colors: active)` 块（`widgets.css`）—— 那里用系统色才是正确行为，与 `prefers-reduced-motion` 的 `!important` 同理 |
+| 顺带删除 | `.flake-page__tooltip*` 4 条死规则（TSX 中 0 引用，真实 tooltip 用 `material-list-hover-popup*`） |
+
+**结果**
+
+| 指标 | 前 | 后 |
+| ---- | -- | -- |
+| 系统色提及 | 240 | **4**（2 处 forced-colors + 2 处在注释里） |
+| `token-undefined-reference` | 73 | **0** |
+| `css-system-colour`（新护栏规则，排除 forced-colors） | — | **0** |
+
+**护栏同步加强**（这三处都是 Phase 2A 暴露出来的盲区）
+
+1. `token-undefined-reference` 从只查 `--ln-*` 扩到**所有自定义属性** —— 正是这个盲区让 `--surface-elevated`、`--text`、`--popover-foreground` 三个死名字溜过了 Phase 1 的护栏。同时豁免两类合法缺失：TS 里以字符串字面量出现（运行时设置）、以及 `--radix-*`（Radix 在内容元素上发布）。
+2. 新增 `css-system-colour` 规则，排除 `forced-colors` 块。
+3. 新增 `css-vendor-layer-above-components` 规则，见下。
+
+用例从 8 个增至 **11 个**。
+
+#### 一个必须记下的教训：`layer(vendor)` 曾被静默还原
+
+Phase 1 期间我把 `modern.css` 的 Tailwind 导入从 `layer(utilities)` 改成 `layer(vendor)` 并验证过。之后为修另一个 bug 执行了 `git checkout -- desktop-nova/ui`，**这次还原把该修改一起回退了**，而我没有在最终状态上重跑"构建产物里 `.bg-primary` 落在哪一层"的检查就报告完成。
+
+后果是真实的：`utilities` 在层序中是第 6 位、`components` 是第 5 位，于是 Tailwind 的外观工具类**压在项目 CSS 之上**——`button.tsx` 基础串里的 `bg-primary` 会让所有按钮变成主色。护栏与层叠分析工具都没发现它，因为**两者都只读项目 CSS**，而 Tailwind 工具类是构建期生成的。
+
+修复后补了两道保险：
+
+- `modern.css` 的注释写明为什么必须是 `vendor`；
+- 新增护栏规则 `css-vendor-layer-above-components`：任何 `@import ... layer(X)` 只要 X 的层序位置 ≥ `components` 就报错。已用夹具验证它会失败（`layer(utilities)` 报错、`layer(vendor)` 通过）。
+
+同时把"构建产物中 `.bg-primary` 所在层"补进第 5 节回归矩阵，作为每阶段必跑的检查——这是唯一能看到 vendor CSS 位置的检查。
+
+**Phase 2A 退出验证**
+
+| 检查 | 结果 |
+| ---- | ---- |
+| `check:ui-styles` | ✅ `token-undefined-reference` 0、`css-system-colour` 0、无层规则 0；0 回归 |
+| `check:layers` / `check:application-boundaries` | ✅ 0 违规 |
+| `npm run build` | ✅ 通过；产物中 `.bg-primary` 位于 `vendor` 层 |
+| 层叠反转 | ✅ 0（改动只涉及声明取值，不涉及选择器与层序） |
+| 测试套件 | ✅ 无新增失败（`widgets` 7/4、`themes` 12/2、`materials` 0/1、`functional-icons` 0/3、`restored-entrypoints` 4/2 均与 HEAD 一致） |
+
+**待人工验收**：本次改动**会改变渲染结果**——约 90 处原本落到 Windows 系统色（灰边、系统蓝高亮、系统灰文字）的位置，现在跟随主题令牌。这正是要修的缺陷，但必须按第 5 节矩阵做三主题 × 明暗的视觉对照，重点看：资产管理器与枚举器的面板边框、属性页的预览画布底色、replacement 页的按钮与工具提示、flake 页的标记菜单高亮。
+
+**2B 待办**：删除 10 个桥接令牌（225 处引用）、替换 215 处硬编码色值、删除死令牌 `--ln-form-max`、把 `--ln-success-color`/`--ln-warning-color` 的引用直接指向 `--success`/`--warning`。
 
 ### Phase 3 — 组件外观类剥离
 
@@ -553,7 +625,8 @@ npm run test:ui-styles                  # 8 个用例
 | 控件 | 复选框 checked / unchecked / indeterminate；单选 checked / unchecked；滑块拖动、禁用、键盘；下拉打开、键盘选择、溢出滚动 | 人工 |
 | 结构 | `ui/windows/main/pages/` 下 10 个页面 + `ui/windows/` 下 6 个子窗口，在 9 组下无错位 | 人工 |
 | 层叠 | `dist/assets/*.css` 无层规则数为 0；`components` 层无裸元素选择器 | `npm run check:ui-styles` |
-| 约束 | 无新增无层规则；无新增 `.btn-*`；业务代码外观工具类为 0；无未定义令牌引用 | `npm run check:ui-styles` |
+| 层叠 | **构建产物中 `.bg-primary` 位于 `vendor` 层**（vendor CSS 一旦排到 `components` 之上，控件外观会被 Tailwind 工具类接管，而这条只有看产物才能发现） | 构建后检查 |
+| 约束 | 无新增无层规则；无新增 `.btn-*`；业务代码外观工具类为 0；无未定义令牌引用；无系统色（`forced-colors` 除外）；vendor 导入不在 `components` 之上 | `npm run check:ui-styles` |
 | 护栏 | 检测规则与基线机制本身未被改坏；仓库基线未陈旧 | `npm run test:ui-styles` |
 | 既有 | `npm run build`、`check:layers`、`check:application-boundaries`、`test:layer-check`、`test:application-boundaries` | CLI |
 | 焦点 | Tab 顺序、焦点环可见性、Radix 焦点陷阱、`prefers-reduced-motion` | 人工 |

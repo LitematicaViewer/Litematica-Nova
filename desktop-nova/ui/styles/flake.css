@@ -12,7 +12,7 @@
     overflow: hidden;
     cursor: grab;
     image-rendering: pixelated;
-    background: var(--ln-ui-control-background-color, var(--background, Canvas));
+    background: var(--background);
 }
 
 .flake-visual-status {
@@ -26,8 +26,8 @@
     max-width: calc(100% - 1rem);
     padding: var(--ln-space-2);
     font-size: .8125rem;
-    color: var(--ln-body-text-color, var(--foreground, CanvasText));
-    background: var(--ln-ui-control-background-color, var(--background, Canvas));
+    color: var(--ln-body-text-color, var(--foreground));
+    background: var(--background);
 }
 
 .flake-canvas.is-dragging {
@@ -209,7 +209,7 @@
 
 .flake-marker-menu-heading,
 .flake-marker-menu-empty {
-    color: GrayText;
+    color: var(--muted-foreground);
     font-size: 12px;
 }
 
@@ -228,12 +228,12 @@
 }
 
 .flake-marker-menu-item:hover:not(:disabled) {
-    background: Highlight;
-    color: HighlightText;
+    background: var(--primary);
+    color: var(--primary-foreground);
 }
 
 .flake-marker-menu-item:disabled {
-    color: GrayText;
+    color: var(--muted-foreground);
 }
 
 .flake-page {
@@ -262,9 +262,9 @@
     min-width: min(360px, 100%);
     max-width: min(480px, 100%);
     padding: 6px 12px;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
-    color: var(--ln-muted-text-color, GrayText);
+    border: 1px solid var(--border);
+    background: var(--background);
+    color: var(--ln-muted-text-color);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -337,7 +337,7 @@
 }
 
 .flake-page__layer-value {
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--ln-body-text-color);
     font-size: 1.1em;
     font-weight: 700;
 }
@@ -377,8 +377,8 @@
     flex: 1;
     min-height: 240px;
     overflow: hidden;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
+    border: 1px solid var(--border);
+    background: var(--background);
 }
 
 .flake-page__viewport-empty {
@@ -387,7 +387,7 @@
 
 .flake-page__viewport-title {
     margin-bottom: 8px;
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--ln-body-text-color);
     font-size: 1.2em;
 }
 
@@ -399,8 +399,8 @@
         linear-gradient(to right,
             transparent 0,
             transparent 2px,
-            var(--ln-ui-edge-color, ThreeDShadow) 2px,
-            var(--ln-ui-edge-color, ThreeDShadow) 6px,
+            var(--border) 2px,
+            var(--border) 6px,
             transparent 6px,
             transparent 100%);
 }
@@ -477,7 +477,7 @@
     overflow: hidden;
     appearance: none;
     background: transparent var(--flake-edit-tool-normal-image) center / 44px 44px no-repeat;
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--ln-body-text-color);
     font-size: 16px;
     font-weight: 700;
     image-rendering: pixelated;
@@ -625,39 +625,6 @@
     flex-wrap: wrap;
     gap: 8px;
     margin-top: auto;
-}
-
-.flake-page__tooltip {
-    position: absolute;
-    top: var(--flake-tooltip-top, 0px);
-    left: var(--flake-tooltip-left, 0px);
-    z-index: 10;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    max-width: min(420px, calc(100% - 16px));
-    padding: 8px 12px;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--surface-elevated, var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas)));
-    box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
-    color: var(--ln-body-text-color, CanvasText);
-    pointer-events: none;
-}
-
-.flake-page__tooltip-title {
-    font-size: 1.1em;
-    font-weight: 700;
-}
-
-.flake-page__tooltip-label {
-    margin-top: 4px;
-    color: var(--ln-muted-text-color, GrayText);
-    font-size: .9em;
-}
-
-.flake-page__tooltip-id {
-    font-size: .95em;
-    word-break: break-word;
 }
 
 .flake-page__quickbar {

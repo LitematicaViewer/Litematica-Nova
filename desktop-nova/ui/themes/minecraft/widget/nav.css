@@ -15,7 +15,7 @@
     width: 220px;
     min-width: 220px;
     flex-direction: column;
-    border-right: 1px solid ThreeDShadow;
+    border-right: 1px solid var(--border);
     background: var(--ln-navigation-background-color, #ffffff);
 }
 

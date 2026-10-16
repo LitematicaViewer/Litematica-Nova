@@ -8,8 +8,8 @@
     --ln-option-active-background: #4d4d4d;
     --ln-option-active-color: #ffff00;
     --ln-popup-shadow: none;
-    --ln-error-color: #ffb3b3;
-    --ln-warning-color: #ffd18a;
+    --ln-error-color: var(--destructive);
+    --ln-warning-color: var(--warning);
     --ln-minecraft-button-border: 4px;
     --ln-minecraft-button-height: 44px;
 }

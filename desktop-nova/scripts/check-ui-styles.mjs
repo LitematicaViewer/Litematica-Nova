@@ -12,6 +12,7 @@
 // Run modes mirror scripts/check-layer-boundaries.mjs.
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
 import { fileURLToPath } from "node:url";
@@ -71,6 +72,12 @@ const APPEARANCE_UTILITY_PATTERNS = [
 ];
 
 const LEGACY_BUTTON_VARIANT_RE = /^btn-[a-z0-9-]+$/;
+
+// Operating-system colours. A rule that reaches for one of these ignores the
+// theme, which is how the same border ended up themed on one page and system grey
+// on another. `@media (forced-colors: active)` is the one place they are correct.
+const SYSTEM_COLOUR_RE =
+  /\b(ThreeDShadow|ThreeDLightShadow|ThreeDFace|ThreeDHighlight|ButtonBorder|ButtonFace|ButtonText|ButtonShadow|Canvas|CanvasText|GrayText|Highlight|HighlightText|Window|WindowText|Field|FieldText|ActiveBorder|InactiveBorder|AccentColor|AccentColorText|LinkText|VisitedText)\b/g;
 
 function parseArguments(argv) {
   const options = {
@@ -236,6 +243,7 @@ function scanCss(source) {
   const masked = maskCssText(source);
   const rules = [];
   const reducedMotionSpans = [];
+  const forcedColoursSpans = [];
   const stack = [];
   let buffer = "";
   let bufferStart = -1;
@@ -268,7 +276,12 @@ function scanCss(source) {
           start: index,
         });
       } else if (/^@(?:media|supports|container|scope|document|layer)\b/.test(prelude)) {
-        stack.push({ kind: "at", start: index, reducedMotion: /prefers-reduced-motion/.test(prelude) });
+        stack.push({
+          kind: "at",
+          start: index,
+          reducedMotion: /prefers-reduced-motion/.test(prelude),
+          forcedColours: /forced-colors/.test(prelude),
+        });
       } else if (/^@/.test(prelude)) {
         stack.push({ kind: "opaque", start: index });
       } else if (insideOpaque) {
@@ -290,6 +303,9 @@ function scanCss(source) {
       const entry = stack.pop();
       if (entry && entry.kind === "at" && entry.reducedMotion) {
         reducedMotionSpans.push({ start: entry.start, end: index });
+      }
+      if (entry && entry.kind === "at" && entry.forcedColours) {
+        forcedColoursSpans.push({ start: entry.start, end: index });
       }
       buffer = "";
       bufferStart = -1;
@@ -322,7 +338,7 @@ function scanCss(source) {
     index += 1;
   }
 
-  return { rules, reducedMotionSpans, masked };
+  return { rules, reducedMotionSpans, forcedColoursSpans, masked };
 }
 
 // A selector part is "element styled" when its subject compound (the last one,
@@ -343,8 +359,31 @@ function subjectElementOf(selectorPart) {
   return match[1].toLowerCase();
 }
 
+/**
+ * Vendor stylesheets must not be injected into a project layer that ranks at or
+ * above `components`. Tailwind's generated utilities carry appearance classes
+ * (`bg-primary`) that the shadcn components apply unconditionally, so putting
+ * them above `components` repaints every control. Neither the CSS rules above nor
+ * the cascade analyzer can see this: both read project stylesheets only, while
+ * the utilities are generated at build time.
+ */
+function checkVendorImports(filePath, source, declaredLayers, projectCeiling) {
+  if (projectCeiling < 0) return;
+  for (const match of source.matchAll(/@import\s+["']([^"']+)["']\s+layer\(\s*([a-z0-9-]+)\s*\)/g)) {
+    const [, specifier, layer] = match;
+    const rank = declaredLayers.indexOf(layer);
+    if (rank < 0 || rank < projectCeiling) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(source, match.index),
+      "css-vendor-layer-above-components",
+      `@import "${specifier}" places vendor CSS in the "${layer}" layer, which ranks at or above "components"; vendor CSS must sit below every project layer.`,
+    );
+  }
+}
+
 function checkCssFile(filePath, source) {
-  const { rules, reducedMotionSpans, masked } = scanCss(source);
+  const { rules, reducedMotionSpans, forcedColoursSpans, masked } = scanCss(source);
   const relative = relativePath(filePath);
   let unlayered = 0;
 
@@ -390,6 +429,19 @@ function checkCssFile(filePath, source) {
       lineNumberAt(masked, match.index),
       "css-important",
       "!important is not allowed in project CSS; fix the cascade layer instead.",
+    );
+  }
+
+  for (const match of masked.matchAll(SYSTEM_COLOUR_RE)) {
+    // A forced-colours block exists precisely to use the OS palette.
+    if (forcedColoursSpans.some((span) => match.index > span.start && match.index < span.end)) {
+      continue;
+    }
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-system-colour",
+      `${match[1]} is an operating-system colour; use a theme token so the value follows the theme.`,
     );
   }
 }
@@ -555,28 +607,56 @@ export function collectFindings(rootDir) {
     const cssFiles = walk(uiDir, CSS_EXTENSIONS);
     const sourceFiles = walk(uiDir, SOURCE_EXTENSIONS);
 
-    // A definition anywhere in the frontend counts, whichever file shape holds it.
+    // Any custom property defined in the frontend counts, whichever file shape
+    // holds it. Properties the TypeScript sets at runtime (`--flake-*`,
+    // `--material-list-virtual-spacer-height`) are legitimately absent from CSS,
+    // so they are collected separately and exempted from the undefined check.
+    const runtimeSetTokens = new Set();
     for (const filePath of [...cssFiles, ...sourceFiles]) {
       const text = fs.readFileSync(filePath, "utf8");
-      for (const match of text.matchAll(/(--ln-[a-z0-9-]+)\s*:/g)) {
+      for (const match of text.matchAll(/(--[a-z0-9-]+)\s*:/g)) {
         report.definedTokens.add(match[1]);
       }
+      if (SOURCE_EXTENSIONS.has(path.extname(filePath))) {
+        for (const match of text.matchAll(/["'`](--[a-z0-9-]+)["'`]/g)) {
+          runtimeSetTokens.add(match[1]);
+        }
+      }
     }
+    report.runtimeSetTokens = runtimeSetTokens;
+
+    // The layer order the stylesheets declare. `components` is the rank vendor CSS
+    // must stay below: project component rules are what Tailwind utilities would
+    // otherwise override.
+    const declaredLayers = [];
+    for (const filePath of cssFiles) {
+      for (const match of fs.readFileSync(filePath, "utf8").matchAll(/@layer\s+([^{};]+);/g)) {
+        for (const name of match[1].split(",")) {
+          const trimmed = name.trim();
+          if (trimmed && !declaredLayers.includes(trimmed)) declaredLayers.push(trimmed);
+        }
+      }
+    }
+    const projectCeiling = declaredLayers.indexOf("components");
 
     for (const filePath of cssFiles) {
       report.cssFileCount += 1;
       const source = fs.readFileSync(filePath, "utf8");
       checkCssFile(filePath, source);
+      checkVendorImports(filePath, source, declaredLayers, projectCeiling);
 
-      for (const match of source.matchAll(/var\(\s*(--ln-[a-z0-9-]+)/g)) {
-        if (!report.definedTokens.has(match[1])) {
-          addViolation(
-            filePath,
-            lineNumberAt(source, match.index),
-            "token-undefined-reference",
-            `${match[1]} is referenced but never defined; it silently falls back.`,
-          );
-        }
+      for (const match of source.matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
+        const token = match[1];
+        if (report.definedTokens.has(token) || runtimeSetTokens.has(token)) continue;
+        // Radix publishes these on the content element it renders; they are part
+        // of the primitive's contract, not something the project declares.
+        if (token.startsWith("--radix-")) continue;
+        addViolation(
+          filePath,
+          lineNumberAt(source, match.index),
+          "token-undefined-reference",
+          `${token} is referenced but never defined; it silently falls back.`,
+        );
       }
     }
 
@@ -686,7 +766,10 @@ function readBaseline(filePath) {
 
 function writeBaseline(filePath, counts) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(baselineDocument(counts), null, 2)}\n`, "utf8");
+  // Match the repository's working-tree line endings so refreshing the baseline
+  // does not produce a whole-file diff.
+  const text = `${JSON.stringify(baselineDocument(counts), null, 2)}\n`.split("\n").join(os.EOL);
+  fs.writeFileSync(filePath, text.endsWith(os.EOL) ? text : `${text}${os.EOL}`, "utf8");
 }
 
 function printViolations(title, entries) {
@@ -711,7 +794,7 @@ function printReport(report) {
 
   console.log("UI style report");
   console.log(`  scanned: ${report.cssFileCount} CSS file(s), ${report.sourceFileCount} TypeScript file(s)`);
-  console.log(`  defined --ln-* tokens: ${report.definedTokens.size}`);
+  console.log(`  defined custom properties: ${report.definedTokens.size}`);
   console.log(`  unlayered CSS rules: ${totalUnlayered} across ${unlayeredFiles.length} file(s)`);
   for (const [file, count] of unlayeredFiles) {
     console.log(`    ${String(count).padStart(5)}  ${file}`);

@@ -1,6 +1,11 @@
-/* Utilities are loaded only for shadcn/ui and 8bitcn/ui. No preflight: Minecraft stays unchanged. */
+/* Utilities are loaded only for shadcn/ui and 8bitcn/ui. No preflight: Minecraft stays unchanged.
+   They go into `vendor`, which base.css ranks below every project layer. Tailwind's generated
+   utilities already lose to project CSS today (project CSS is unlayered, so it outranks any
+   @layer); the shadcn components carry appearance utilities such as `bg-primary`, and those must
+   keep losing. Assigning this import to the project's own `utilities` layer would put them above
+   `components` and give every button the primary colour. */
 @import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities);
+@import "tailwindcss/utilities.css" layer(vendor);
 @source "../";
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -44,8 +49,10 @@
     --ln-option-active-color: var(--foreground);
     --ln-popup-shadow: var(--panel-shadow);
     --ln-error-color: var(--destructive);
-    --ln-warning-color: #8a4b00;
-    --ln-success-color: #306743;
+    --success: #306743;
+    --warning: #8a4b00;
+    --ln-warning-color: var(--warning);
+    --ln-success-color: var(--success);
     --ln-card-border-color: var(--border);
     --ln-card-background-color-active: var(--accent);
     --ln-file-icon-size: 20px;
@@ -53,8 +60,10 @@
 
 :root[data-color-scheme="dark"] {
     color-scheme: dark;
-    --ln-warning-color: #ebba70;
-    --ln-success-color: #a3d7b2;
+    --success: #a3d7b2;
+    --warning: #ebba70;
+    --ln-warning-color: var(--warning);
+    --ln-success-color: var(--success);
 }
 }
 

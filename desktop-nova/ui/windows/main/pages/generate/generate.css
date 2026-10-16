@@ -6,7 +6,7 @@
 .generate-header, .generate-workspace { width: 100%; max-width: none; }
 .generate-heading { flex: 1 1 24rem; min-width: 0; }
 .generate-title { margin: 0; font-size: 1.5em; line-height: 1.3; }
-.generate-subtitle { margin: var(--ln-space-1, 4px) 0 0; color: var(--ln-muted-text-color, GrayText); font-size: .92em; line-height: 1.5; }
+.generate-subtitle { margin: var(--ln-space-1, 4px) 0 0; color: var(--ln-muted-text-color); font-size: .92em; line-height: 1.5; }
 .generate-status { flex: 0 1 auto; }
 .generate-scroll-area { flex: 1; min-height: 0; }
 .generate-primary-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 0 12px; }
@@ -40,7 +40,7 @@ html[data-theme] .generate-workspace { display: grid; grid-template-columns: min
 
 /* 固定控件样式集中于页面 CSS，保持现有主题取值。 */
 .generate-action-row { display: flex; flex-wrap: wrap; gap: var(--ln-space-2, 8px); margin-bottom: 8px; }
-.generate-ai-warnings { color: var(--ln-body-text-color, CanvasText); margin-bottom: 8px; }
+.generate-ai-warnings { color: var(--ln-body-text-color); margin-bottom: 8px; }
 .generate-page .generate-axis-input { flex: 0 1 5.85rem; width: 5.85rem; margin: 0; }
 .generate-chat-actions { display: flex; flex-wrap: wrap; gap: var(--ln-space-2, 8px); align-items: center; }
 .generate-chat-error { color: var(--ln-error-color, crimson); white-space: pre-wrap; }
@@ -52,7 +52,7 @@ html[data-theme] .generate-workspace { display: grid; grid-template-columns: min
 .generate-page .generate-output-log { width: 100%; height: 160px; margin-top: 8px; resize: vertical; font-family: monospace; }
 .generate-result-actions { display: flex; flex-wrap: wrap; gap: var(--ln-space-2, 8px); margin-top: 10px; }
 .generate-page .generate-seed-input { width: 160px; }
-.generate-summary-warning { color: var(--ln-body-text-color, CanvasText); }
+.generate-summary-warning { color: var(--ln-body-text-color); }
 
 html[data-theme] .generate-page .group-box { margin: 0; padding: 20px; }
 html[data-theme] .generate-page .generate-operation,

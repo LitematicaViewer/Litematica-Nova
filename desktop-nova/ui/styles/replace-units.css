@@ -21,7 +21,7 @@
     align-items: center;
     gap: 6px;
     padding: 8px 10px;
-    border-bottom: 1px solid var(--ln-border-color, ThreeDShadow);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 
@@ -36,7 +36,7 @@
     align-items: center;
     gap: 6px;
     padding: 6px 10px;
-    border-bottom: 1px solid var(--ln-border-color, ThreeDShadow);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 
@@ -68,7 +68,7 @@
     align-items: center;
     gap: 6px;
     padding: 6px 10px;
-    border-bottom: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color, ThreeDShadow);
+    border-bottom: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color);
 }
 
 .replace-unit-header.collapsed {
@@ -95,11 +95,11 @@
 }
 
 .replace-unit-label-input:hover {
-    border-color: var(--ln-card-border-color, ThreeDShadow);
+    border-color: var(--ln-card-border-color);
 }
 
 .replace-unit-label-input:focus {
-    border-color: var(--ln-primary, var(--primary));
+    border-color: var(--primary);
 }
 
 .replace-unit-hit-count {
@@ -154,11 +154,11 @@
 
 /* Entry row */
 .replace-entry-row {
-    border: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color, ThreeDShadow);
+    border: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color);
     border-radius: 4px;
     padding: 6px 8px;
     margin-bottom: 4px;
-    background: var(--ln-ui-background-color, Canvas);
+    background: var(--ln-ui-background-color);
 }
 
 .replace-entry-top {
@@ -224,7 +224,7 @@
 .replace-separator-line {
     flex: 1;
     height: 2px;
-    background: var(--ln-primary, var(--primary));
+    background: var(--primary);
     opacity: 0.35;
     border-radius: 1px;
 }
@@ -232,7 +232,7 @@
 .replace-separator-label {
     font-size: 11px;
     white-space: nowrap;
-    color: var(--ln-primary, var(--primary));
+    color: var(--primary);
     opacity: 0.85;
     letter-spacing: 0.03em;
 }
@@ -244,7 +244,7 @@
 
 /* Scan result details */
 .replace-unit-scan-dist {
-    border-top: 1px solid var(--ln-border-color, ThreeDShadow);
+    border-top: 1px solid var(--border);
     padding: 6px 10px;
     font-size: 11px;
     opacity: 0.7;
@@ -255,7 +255,7 @@
 }
 
 .replace-unit-warnings {
-    border-top: 1px solid var(--ln-border-color, ThreeDShadow);
+    border-top: 1px solid var(--border);
     padding: 6px 10px;
     font-size: 11px;
     color: var(--ln-warning-color, orange);
@@ -263,7 +263,7 @@
 
 /* Footer */
 .replace-footer {
-    border-top: 1px solid var(--ln-border-color, ThreeDShadow);
+    border-top: 1px solid var(--border);
     padding: 8px 10px;
     flex-shrink: 0;
 }
@@ -278,9 +278,9 @@
 .replace-log-area {
     width: 100%;
     height: 60px;
-    border: 1px solid var(--ln-border-color, ThreeDShadow);
-    background: var(--ln-surface-background-color, color-mix(in srgb, CanvasText 3%, Canvas));
-    color: var(--ln-body-text-color, CanvasText);
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--ln-body-text-color);
     padding: 6px;
     font-family: inherit;
     font-size: 11px;
@@ -300,8 +300,8 @@
 .replace-confirm-details {
     max-height: 200px;
     overflow-y: auto;
-    border: 1px solid var(--ln-border-color, ThreeDShadow);
-    background: var(--ln-surface-background-color, color-mix(in srgb, CanvasText 3%, Canvas));
+    border: 1px solid var(--border);
+    background: var(--card);
     padding: 8px;
     font-size: 12px;
 }
@@ -400,7 +400,7 @@
     gap: 4px;
     max-height: 200px;
     overflow-y: auto;
-    border: 1px solid var(--ln-border-color, ThreeDShadow);
+    border: 1px solid var(--border);
     padding: 8px;
     border-radius: 4px;
 }
@@ -410,7 +410,7 @@
     align-items: center;
     gap: 3px;
     font-size: 11px;
-    background: var(--ln-surface-background-color, color-mix(in srgb, CanvasText 5%, Canvas));
+    background: var(--card);
     padding: 2px 5px;
     border-radius: 3px;
 }
@@ -461,7 +461,7 @@
 /* ── Diagnostic debug log ───────────────────────────────────────────────── */
 .replace-debug-log {
     margin-top: 8px;
-    border: 1px solid var(--ln-border-color, ThreeDShadow);
+    border: 1px solid var(--border);
     border-radius: 4px;
     font-size: 11px;
 }
@@ -488,26 +488,26 @@
     word-break: break-all;
     max-height: 260px;
     overflow-y: auto;
-    background: var(--ln-surface-background-color, color-mix(in srgb, CanvasText 4%, Canvas));
-    border-top: 1px solid var(--ln-border-color, ThreeDShadow);
+    background: var(--card);
+    border-top: 1px solid var(--border);
 }
 
 .btn-primary {
-    background-color: var(--ln-primary-button-background, var(--primary));
-    color: var(--ln-primary-button-text, white);
+    background-color: var(--primary);
+    color: var(--primary-foreground);
     font-weight: 600;
 }
 
 .btn-primary:disabled {
-    background-color: var(--ln-disabled-background, ButtonFace);
-    color: var(--ln-disabled-text, GrayText);
+    background-color: var(--muted);
+    color: var(--muted-foreground);
 }
 
 /* Tooltip hover */
 .replace-hover-tooltip {
     position: fixed;
-    background: var(--ln-tooltip-background, color-mix(in srgb, CanvasText 95%, Canvas));
-    border: 1px solid var(--ln-border-color, ThreeDShadow);
+    background: var(--popover);
+    border: 1px solid var(--border);
     padding: 4px 8px;
     border-radius: 4px;
     font-size: 12px;
@@ -516,7 +516,7 @@
 }
 
 .replace-hover-tooltip-name {
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--ln-body-text-color);
 }
 
 .replace-hover-tooltip-id {

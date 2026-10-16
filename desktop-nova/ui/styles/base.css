@@ -36,8 +36,8 @@ body,
 
 body {
     overflow: hidden;
-    color: var(--ln-body-text-color, CanvasText);
-    background: var(--ln-ui-background-color, Canvas);
+    color: var(--ln-body-text-color);
+    background: var(--ln-ui-background-color);
     font-family: var(--ln-body-font-family, system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif);
     font-size: var(--ln-body-font-size, 14px);
     letter-spacing: normal;
@@ -78,7 +78,7 @@ fieldset {
     min-width: 0;
     margin: 0 0 12px;
     padding: 12px;
-    border: 1px solid ThreeDShadow;
+    border: 1px solid var(--border);
 }
 
 legend {
@@ -109,9 +109,9 @@ table {
 }
 
 .block-icon-fallback {
-    border: 1px solid ThreeDShadow;
-    background: var(--ln-ui-background-color, Canvas);
-    color: var(--ln-muted-text-color, GrayText);
+    border: 1px solid var(--border);
+    background: var(--ln-ui-background-color);
+    color: var(--ln-muted-text-color);
     font-size: 11px;
     font-weight: 700;
     line-height: 30px;
@@ -124,7 +124,7 @@ table {
 th,
 td {
     padding: 6px 8px;
-    border: 1px solid ThreeDShadow;
+    border: 1px solid var(--border);
     text-align: left;
 }
 }
@@ -197,7 +197,7 @@ td {
 .lib-card-text,
 .lib-card-path,
 .lib-card-size {
-    color: GrayText;
+    color: var(--muted-foreground);
 }
 
 .nova-page {
@@ -216,7 +216,7 @@ td {
 }
 
 .nova-muted {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
 }
 
 .nova-small {
@@ -254,7 +254,7 @@ td {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     text-align: center;
 }
 
@@ -262,7 +262,7 @@ td {
 .nova-file-chip-wide {
     min-width: 0;
     overflow: hidden;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -295,15 +295,15 @@ td {
 }
 
 .nova-summary {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     cursor: pointer;
 }
 
 .nova-pre {
     overflow: auto;
     padding: 8px;
-    border: 1px solid ThreeDShadow;
-    background: var(--ln-ui-background-color, Canvas);
+    border: 1px solid var(--border);
+    background: var(--ln-ui-background-color);
     white-space: pre-wrap;
 }
 
@@ -319,13 +319,13 @@ td {
     position: relative;
     flex: 1;
     height: 16px;
-    border: 2px solid ThreeDShadow;
-    background: var(--ln-ui-background-color, Canvas);
+    border: 2px solid var(--border);
+    background: var(--ln-ui-background-color);
 }
 
 .nova-progress-fill {
     height: 100%;
-    background: var(--ln-accent-color, Highlight);
+    background: var(--primary);
     transition: width .2s;
 }
 
@@ -351,14 +351,14 @@ td {
 
 .nova-empty-compact {
     padding: 16px;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
 }
 
 .empty-state {
     display: grid;
     min-height: 260px;
     place-items: center;
-    color: GrayText;
+    color: var(--muted-foreground);
     text-align: center;
 }
 
@@ -381,7 +381,7 @@ td {
     flex: 0 0 auto;
     gap: 8px;
     padding: 8px 16px 16px;
-    border-top: 1px solid ThreeDShadow;
+    border-top: 1px solid var(--border);
 }
 
 .form-row {
@@ -457,7 +457,7 @@ td {
     max-width: min(28rem, 40%);
     min-width: 0;
     overflow: hidden;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     font-size: 0.9em;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -483,7 +483,7 @@ td {
 
 .render-page-action-label,
 .render-progress-stage {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
 }
 
 .render-progress-row {
@@ -496,8 +496,8 @@ td {
     flex: 1;
     height: 16px;
     min-width: 8rem;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background-color: var(--ln-ui-control-background-color, Canvas);
+    border: 1px solid var(--border);
+    background-color: var(--background);
 }
 
 .render-progress-stage {
@@ -568,7 +568,7 @@ td {
 }
 
 .render-preflight-description {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     line-height: 1.6;
 }
 
@@ -581,7 +581,7 @@ td {
 }
 
 .render-preflight-details-toggle {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     cursor: pointer;
 }
 
@@ -643,9 +643,9 @@ textarea.input,
 .generate-json-preview {
     display: grid;
     place-items: center;
-    border: 1px solid ThreeDShadow;
+    border: 1px solid var(--border);
     background: var(--ln-ui-background-color, #ffffff);
-    color: GrayText;
+    color: var(--muted-foreground);
     text-align: center;
 }
 
@@ -663,8 +663,8 @@ textarea.input,
 .slice-canvas {
     min-height: 320px;
     background-image:
-        linear-gradient(to right, ThreeDShadow 1px, transparent 1px),
-        linear-gradient(to bottom, ThreeDShadow 1px, transparent 1px);
+        linear-gradient(to right, var(--border) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--border) 1px, transparent 1px);
     background-size: 32px 32px;
 }
 
@@ -743,8 +743,8 @@ label.setting-row:has(> input[type="radio"]) {
 .template-library-row,
 .library-card,
 .rule-row {
-    background: var(--ln-ui-background-color, Canvas);
-    border: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color, ThreeDShadow);
+    background: var(--ln-ui-background-color);
+    border: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color);
 }
 
 .card,
@@ -766,7 +766,7 @@ label.setting-row:has(> input[type="radio"]) {
     top: -10px;
     left: 10px;
     padding: 0 4px;
-    background: var(--ln-ui-background-color, Canvas);
+    background: var(--ln-ui-background-color);
     font-weight: bold;
 }
 
@@ -836,7 +836,7 @@ label.setting-row:has(> input[type="radio"]) {
     flex-direction: column;
     align-items: center;
     padding-top: 20px;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
 }
 
 .library-empty-text {
@@ -849,7 +849,7 @@ label.setting-row:has(> input[type="radio"]) {
 }
 
 .library-content-title {
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--ln-body-text-color);
     font-weight: 700;
 }
 
@@ -864,15 +864,15 @@ label.setting-row:has(> input[type="radio"]) {
 }
 
 .library-card-current {
-    border-width: var(--ln-card-border-width-active, var(--ln-card-border-width, 1px));
-    border-color: var(--ln-card-border-color-active, var(--ln-accent-color, Highlight));
-    background: var(--ln-card-background-color-active, color-mix(in srgb, var(--ln-accent-color, Highlight) 12%, var(--ln-ui-background-color, Canvas)));
+    border-width: var(--edge-width);
+    border-color: var(--ln-card-border-color-active, var(--primary));
+    background: var(--ln-card-background-color-active, color-mix(in srgb, var(--primary) 12%, var(--ln-ui-background-color)));
 }
 
 .library-footer {
     justify-content: flex-end;
     padding-top: 8px;
-    border-top: 1px solid ThreeDShadow;
+    border-top: 1px solid var(--border);
 }
 
 .library-footer > .nova-muted {
@@ -930,7 +930,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .lib-card-title,
 .lib-card-highlight {
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--ln-body-text-color);
 }
 
 .lib-card-status {
@@ -972,7 +972,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .lib-card-image-label {
     width: 100%;
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--ln-body-text-color);
     font-weight: 700;
     text-align: center;
 }
@@ -997,8 +997,8 @@ label.setting-row:has(> input[type="radio"]) {
     min-width: 100%;
     max-height: 320px;
     overflow: auto;
-    border: 1px solid ThreeDShadow;
-    background: var(--ln-ui-background-color, Canvas);
+    border: 1px solid var(--border);
+    background: var(--ln-ui-background-color);
 }
 
 .dropdown-item,
@@ -1039,7 +1039,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .block-search-current > span,
 .block-search-item small {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     font-size: 0.85em;
 }
 
@@ -1075,7 +1075,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .block-search-empty {
     padding: 10px;
-    color: GrayText;
+    color: var(--muted-foreground);
 }
 
 .generate-json-preview,

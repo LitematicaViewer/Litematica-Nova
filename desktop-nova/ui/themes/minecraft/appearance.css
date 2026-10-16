@@ -18,6 +18,12 @@ html[data-theme="minecraft"] {
     --border: #808080;
     --ring: #ffffff;
     --radius: 0px;
+    /* Minecraft keeps its texture borders, so it has no CSS edge or shadow. These
+       are declared anyway so the shared component layer can read them once the
+       Minecraft theme starts loading modern.css in a later phase. */
+    --edge-width: 0px;
+    --control-shadow: none;
+    --panel-shadow: none;
     --ln-ui-background-color: var(--background);
     --ln-navigation-background-color: var(--background);
     --ln-body-text-color: var(--foreground);
@@ -28,8 +34,10 @@ html[data-theme="minecraft"] {
     --ln-option-active-color: var(--foreground);
     --ln-focus-color: var(--ring);
     --ln-error-color: var(--destructive);
-    --ln-success-color: #b8d49c;
-    --ln-warning-color: #ffd18a;
+    --success: #b8d49c;
+    --warning: #ffd18a;
+    --ln-success-color: var(--success);
+    --ln-warning-color: var(--warning);
     --ln-minecraft-input-background: #151515;
     --ln-minecraft-input-color: var(--foreground);
     --ln-minecraft-input-border: var(--border);
@@ -56,8 +64,10 @@ html[data-theme="minecraft"][data-color-scheme="light"] {
     --destructive: #aa2c2c;
     --border: #7d8274;
     --ring: #344b29;
-    --ln-success-color: #3d6033;
-    --ln-warning-color: #825014;
+    --success: #3d6033;
+    --warning: #825014;
+    --ln-success-color: var(--success);
+    --ln-warning-color: var(--warning);
     --ln-minecraft-input-background: #f7f7f0;
     --ln-minecraft-input-disabled-color: #65665f;
     --ln-minecraft-table-row-background-odd: #f0f0e9;

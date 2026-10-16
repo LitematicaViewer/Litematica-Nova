@@ -223,6 +223,88 @@ test("appearance detection strips variants instead of matching raw text", () => 
   assert.ok(!reported.some((message) => message.includes("h-9")));
 });
 
+test("system colours are rejected except inside forced-colors blocks", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "styles/colours.css",
+    [
+      ".themed {",
+      "    border: 1px solid var(--border);",
+      "}",
+      "",
+      ".leaky {",
+      "    border: 1px solid ThreeDShadow;",
+      "    color: GrayText;",
+      "}",
+      "",
+      "@media (forced-colors: active) {",
+      "    .forced {",
+      "        background: Canvas;",
+      "        color: ButtonText;",
+      "    }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  const outcome = fixture.strict();
+  const reported = messagesFor(outcome, "css-system-colour");
+  assert.equal(reported.length, 2, JSON.stringify(reported.map((v) => v.message)));
+  assert.ok(reported.some((v) => v.message.includes("ThreeDShadow")));
+  assert.ok(reported.some((v) => v.message.includes("GrayText")));
+  // The forced-colours block exists to use the OS palette.
+  assert.ok(!reported.some((v) => v.message.includes("Canvas") || v.message.includes("ButtonText")));
+});
+
+test("vendor CSS may not be imported into a layer at or above components", () => {
+  const fixture = makeFixture();
+  fixture.write("styles/base.css", "@layer theme, vendor, components, utilities;\n\n.x { color: red; }\n");
+  fixture.write("themes/modern.css", '@import "tailwindcss/utilities.css" layer(utilities);\n');
+
+  const bad = fixture.strict();
+  const reported = messagesFor(bad, "css-vendor-layer-above-components");
+  assert.equal(reported.length, 1, JSON.stringify(reported.map((v) => v.message)));
+  assert.match(reported[0].message, /ranks at or above "components"/);
+
+  // `vendor` and `theme` both rank below `components`, so they are accepted.
+  fixture.write(
+    "themes/modern.css",
+    '@import "tailwindcss/theme.css" layer(theme);\n@import "tailwindcss/utilities.css" layer(vendor);\n',
+  );
+  assert.equal(messagesFor(fixture.strict(), "css-vendor-layer-above-components").length, 0);
+});
+
+test("runtime-set and Radix-provided properties are exempt from the undefined check", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "styles/tokens.css",
+    [
+      ":root {",
+      "    --ln-known: 1px;",
+      "}",
+      "",
+      ".runtime {",
+      "    top: var(--flake-tooltip-top, 0px);",
+      "    left: var(--radix-select-trigger-width);",
+      "}",
+      "",
+      ".dead {",
+      "    color: var(--ln-nobody-defines-this);",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  // A property set from TypeScript is legitimately absent from CSS.
+  fixture.write(
+    "styles/panel.tsx",
+    'export const P = () => <div ref={(e) => e?.style.setProperty("--flake-tooltip-top", "1px")} />;\n',
+  );
+
+  const reported = messagesFor(fixture.strict(), "token-undefined-reference");
+  assert.equal(reported.length, 1, JSON.stringify(reported.map((v) => v.message)));
+  assert.match(reported[0].message, /--ln-nobody-defines-this/);
+});
+
 test("baseline documents are validated before use", () => {
   const fixture = makeFixture();
   fixture.write("styles/fixture.css", ".alpha {\n    color: red;\n}\n");

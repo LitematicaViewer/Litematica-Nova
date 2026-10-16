@@ -20,7 +20,7 @@
 }
 
 .statistics-warnings-summary {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     cursor: pointer;
 }
 
@@ -28,8 +28,8 @@
     max-height: 120px;
     overflow: auto;
     padding: 8px;
-    border: 1px solid ThreeDShadow;
-    background: var(--ln-ui-background-color, Canvas);
+    border: 1px solid var(--border);
+    background: var(--ln-ui-background-color);
     white-space: pre-wrap;
 }
 
@@ -68,7 +68,7 @@
 
 .statistics-loading {
     padding: 16px;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
 }
 
 .statistics-materials-panel,
@@ -81,9 +81,9 @@
 .statistics-enumerator-body {
     flex: 1;
     padding: 12px;
-    border: 1px solid ThreeDShadow;
-    background: var(--ln-ui-background-color, Canvas);
-    color: var(--ln-body-text-color, CanvasText);
+    border: 1px solid var(--border);
+    background: var(--ln-ui-background-color);
+    color: var(--ln-body-text-color);
 }
 
 .statistics-materials-body {
@@ -98,7 +98,7 @@
 }
 
 .statistics-panel-note {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     line-height: 1.5;
 }
 
@@ -122,8 +122,8 @@
 .statistics-enumerator-row,
 .statistics-enumerator-preview-item {
     padding: 8px 10px;
-    border: 1px solid ThreeDShadow;
-    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
+    border: 1px solid var(--border);
+    background: var(--background);
 }
 
 .statistics-enumerator-row-main,
@@ -190,7 +190,7 @@
 }
 
 .statistics-enumerator-editor-hint {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--ln-muted-text-color);
     line-height: 1.6;
 }
 
