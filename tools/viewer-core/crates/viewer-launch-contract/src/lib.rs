@@ -809,8 +809,8 @@ impl ViewerLaunchContract {
                             return Err("quick resource report/decision/source paths must differ".to_owned());
                         }
                     }
-                    (None, None) if !task.preload => {}
-                    _ => return Err("quick resource report/decision paths must be paired; preload requires both".to_owned()),
+                    (None, None) => {}
+                    _ => return Err("quick resource report/decision paths must be paired".to_owned()),
                 }
                 if let Some(host) = &task.host {
                     host.validate()?;
@@ -1913,6 +1913,59 @@ mod tests {
             assert!(matches!(legacy.task, ViewerTask::QuickGpuContext(QuickGpuContextTask { graphics_backend: GraphicsApiPreference::Auto, .. })));
             value["task"]["graphicsBackend"] = "iris-gl46".into();
             assert!(ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn quick_preview_realtime_and_preload_without_resource_paths_round_trip() {
+        for preload in [false, true] {
+            let contract = ViewerLaunchContract::new(
+                "quick-no-estimate".into(), absolute("scene.litematic"), ViewerContent::default(), None,
+                ViewerTask::QuickPreview(QuickPreviewTask { preload,
+                    host: Some(QuickPreviewHostWindow { hwnd: "42".into(), process_id: 100, native_composition: None }),
+                    ..Default::default() }),
+            ).unwrap();
+            let bytes = contract.to_json_bytes().unwrap();
+            let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["task"]["preload"], preload);
+            assert!(!value["task"].as_object().unwrap().contains_key("resourceReportPath"));
+            assert!(!value["task"].as_object().unwrap().contains_key("resourceDecisionPath"));
+            assert_eq!(ViewerLaunchContract::from_json_slice(&bytes).unwrap(), contract);
+            value["task"]["resourceReportPath"] = serde_json::Value::Null;
+            value["task"]["resourceDecisionPath"] = serde_json::Value::Null;
+            assert_eq!(ViewerLaunchContract::from_json_slice(&serde_json::to_vec(&value).unwrap()).unwrap(), contract);
+        }
+    }
+
+    #[test]
+    fn quick_preview_resource_paths_remain_paired_absolute_and_distinct() {
+        let mut contract = ViewerLaunchContract::new(
+            "quick-path-validation".into(), absolute("scene.litematic"), ViewerContent::default(), None,
+            ViewerTask::QuickPreview(QuickPreviewTask::default()),
+        ).unwrap();
+        for preload in [false, true] {
+            for (report, decision, expected) in [
+                (Some(absolute("report.json")), None, "must be paired"),
+                (None, Some(absolute("decision.json")), "must be paired"),
+                (Some(PathBuf::from("relative-report.json")), Some(absolute("decision.json")), "resourceReportPath"),
+                (Some(absolute("report.json")), Some(PathBuf::from("relative-decision.json")), "resourceDecisionPath"),
+                (Some(absolute("same.json")), Some(absolute("same.json")), "paths must differ"),
+                (Some(absolute("scene.litematic")), Some(absolute("decision.json")), "paths must differ"),
+                (Some(absolute("report.json")), Some(absolute("scene.litematic")), "paths must differ"),
+            ] {
+                contract.task = ViewerTask::QuickPreview(QuickPreviewTask {
+                    preload, resource_report_path: report, resource_decision_path: decision, ..Default::default()
+                });
+                assert!(contract.validate().unwrap_err().contains(expected));
+                assert!(contract.to_json_bytes().is_err());
+                let bytes = serde_json::to_vec(&contract).unwrap();
+                assert!(ViewerLaunchContract::from_json_slice(&bytes).unwrap_err().contains(expected));
+            }
+            contract.task = ViewerTask::QuickPreview(QuickPreviewTask {
+                preload, resource_report_path: Some(absolute("report.json")),
+                resource_decision_path: Some(absolute("decision.json")), ..Default::default()
+            });
+            assert_eq!(ViewerLaunchContract::from_json_slice(&contract.to_json_bytes().unwrap()).unwrap(), contract);
         }
     }
 

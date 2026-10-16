@@ -720,6 +720,45 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn quick_preload_start_writes_pathless_contract_and_dispatches_supervised_child() {
+        use crate::platform::process_supervisor::ExecutableAllowlist;
+        struct TestDirectory(PathBuf);
+        impl Drop for TestDirectory { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+        let directory = TestDirectory(std::env::temp_dir().join(format!("nova-quick-preload-start-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos())));
+        fs::create_dir_all(&directory.0).unwrap();
+        let source = directory.0.join("prebuilt.litematic");
+        fs::write(&source, b"metadata-only launch fixture; never decoded by the CLI substitute").unwrap();
+        let command = std::env::var_os("COMSPEC").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\cmd.exe"));
+        let mut allowlist = ExecutableAllowlist::new();
+        allowlist.allow(ExecutableRole::NativeViewer, &command).unwrap();
+        let (supervisor, _) = ProcessSupervisor::new(allowlist).unwrap();
+        let supervisor = Arc::new(supervisor);
+        let host = QuickPreviewHost::new(supervisor.clone(), command, directory.0.clone());
+        // Exercise the production start/contract/spawn path, without a Viewer, window or GPU.
+        let result = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source.clone(),
+            preload: true, click_started_at_epoch_ms: Some(123) },
+            QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id(), native_composition: None }).unwrap();
+        assert_eq!(result.state, "starting"); assert!(result.preload); assert!(result.resource.is_none()); assert!(!result.visible);
+        assert!(host.pending_resource.lock().unwrap().is_none());
+        let child = {
+            let slot = host.session.lock().unwrap(); let session = slot.as_ref().unwrap();
+            let launch = ViewerLaunchContract::from_json_slice(&fs::read(session.contract.path()).unwrap()).unwrap();
+            assert_eq!(launch.request_id, result.preview_id);
+            assert_eq!(launch.scene, fs::canonicalize(&source).unwrap());
+            assert!(matches!(launch.task, ViewerTask::QuickPreview(QuickPreviewTask {
+                preload: true, resource_report_path: None, resource_decision_path: None, ..
+            })));
+            assert!(!session.resource_report_path.exists()); assert!(!session.resource_decision_path.exists());
+            assert_eq!(session.child.role, ExecutableRole::NativeViewer);
+            session.child.clone()
+        };
+        supervisor.terminate(&child, 0).unwrap();
+        assert!(matches!(supervisor.wait_for_exit(&child, Duration::from_secs(2)), WaitOutcome::Exited(_)));
+        assert!(supervisor.active_children().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn quick_preparing_presentation_uses_latest_ready_rect_and_hide_revision_on_live_cli_session() {
         use crate::platform::process_supervisor::ExecutableAllowlist;
         let command = std::env::var_os("COMSPEC").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\cmd.exe"));
@@ -775,13 +814,14 @@ mod tests {
         status(1, ViewerSessionState::Attached { host_hwnd: "42".into(), width: 900, height: 600 });
         assert!(host.snapshot().unwrap().unwrap().visible);
 
-        let changed = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: sources[1].clone(), preload: false,
+        let changed = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: sources[1].clone(), preload: true,
             click_started_at_epoch_ms: Some(42) }, window.clone()).unwrap();
         assert_ne!(changed.preview_id, "quick-one");
         assert_eq!(read_command(2).kind, viewer_launch_contract::ViewerSessionCommandKind::Hide);
         let replacement = read_command(3); let replacement_path = replacement.launch_contract.unwrap();
         let launch = ViewerLaunchContract::from_json_slice(&fs::read(&replacement_path).unwrap()).unwrap();
-        assert!(matches!(launch.task, ViewerTask::QuickPreview(QuickPreviewTask { preload: false, .. })));
+        assert!(matches!(launch.task, ViewerTask::QuickPreview(QuickPreviewTask { preload: true, resource_report_path: None, resource_decision_path: None, .. })));
+        assert!(changed.resource.is_none());
         host.present(&changed.preview_id, embedded(20, 1.0), 1).unwrap();
         host.present(&changed.preview_id, embedded(800, 2.0), 2).unwrap();
         host.present(&changed.preview_id, QuickPresentationIntent::default(), 3).unwrap();
