@@ -170,4 +170,11 @@ test("Fast截图IPC传原路径与精确previewId，后端拒绝缺失或其他�
   assert.match(fast, /preview_id == view\.preview_id/);
   assert.doesNotMatch(fast, /is_none_or/);
   assert.match(handler, /facade\.capture_frame\(&OperationId\(id\), &source, mode\)/);
+  assert.match(fast, /persist_rendered_preview\([^;]+"fast_experimental"\)/s);
+  assert.match(handler, /persist_rendered_preview\([^;]+&display_mode\)/s);
+  const persist = backend.split("fn persist_rendered_preview(")[1].split("#[tauri::command]")[0];
+  assert.match(persist, /"preview_image_mode": mode/);
+  const generated = backend.split("async fn generate_preview_image(")[1].split("async fn application_export_material_list(")[0];
+  assert.match(generated, /persist_rendered_preview\([^;]+&preview_mode\)/s);
+  assert.doesNotMatch(generated, /if let Some\(preview\) = operations\.read_embedded_preview/);
 });

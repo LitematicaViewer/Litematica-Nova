@@ -3684,20 +3684,15 @@ fn create_atlas_bind_group(
     })
 }
 
-/// Build the solid + translucent render pipelines used by both the interactive
-/// window path (`ViewerState::new`) and the headless GPU offscreen preview.
-/// Centralizing this guarantees the offscreen capture rasterizes with the exact
-/// same state as the on-screen GPU pipeline — most importantly `cull_mode=Back`
-/// and `front_face=Ccw`, which is the whole reason the offscreen path exists
-/// (CPU preview does not back-face cull and therefore hides winding bugs).
-fn create_viewer_render_pipelines(
+fn create_viewer_solid_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
     color_format: wgpu::TextureFormat,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    let solid = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("native_viewer_pipeline_solid"),
+    capture: bool,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(if capture { "native_viewer_capture_pipeline_solid" } else { "native_viewer_pipeline_solid" }),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
@@ -3709,7 +3704,9 @@ fn create_viewer_render_pipelines(
             entry_point: "fs_main",
             targets: &[Some(wgpu::ColorTargetState {
                 format: color_format,
-                blend: Some(wgpu::BlendState::REPLACE),
+                // A transparent capture target stores source-over premultiplied RGB.
+                // Visible solid rendering retains its existing replace semantics.
+                blend: Some(if capture { wgpu::BlendState::ALPHA_BLENDING } else { wgpu::BlendState::REPLACE }),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -3731,7 +3728,22 @@ fn create_viewer_render_pipelines(
         }),
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
-    });
+    })
+}
+
+/// Build the solid + translucent render pipelines used by both the interactive
+/// window path (`ViewerState::new`) and the headless GPU offscreen preview.
+/// Centralizing this guarantees the offscreen capture rasterizes with the exact
+/// same state as the on-screen GPU pipeline — most importantly `cull_mode=Back`
+/// and `front_face=Ccw`, which is the whole reason the offscreen path exists
+/// (CPU preview does not back-face cull and therefore hides winding bugs).
+fn create_viewer_render_pipelines(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    color_format: wgpu::TextureFormat,
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    let solid = create_viewer_solid_pipeline(device, shader, layout, color_format, false);
     let translucent = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("native_viewer_pipeline_translucent"),
         layout: Some(layout),
@@ -4986,14 +4998,162 @@ fn unpack_frame_pixels(mapped: &[u8], width: u32, height: u32, stride: u32, bgra
     pixels
 }
 
+// Both capture pipelines use source-over blending into a transparent target.
+// PNG stores straight RGBA; GPU blending happened in linear space even when the
+// texture stores sRGB bytes. Dividing encoded sRGB bytes by alpha darkens edges.
+fn capture_pixels_to_straight_rgba(pixels: &mut [u8], srgb: bool) {
+    for pixel in pixels.chunks_exact_mut(4) {
+        let alpha = f32::from(pixel[3]) / 255.0;
+        if alpha == 0.0 {
+            pixel.fill(0);
+            continue;
+        }
+        if srgb && pixel[3] == 255 { continue; }
+        for channel in &mut pixel[..3] {
+            let encoded = f32::from(*channel) / 255.0;
+            let linear = if !srgb { encoded }
+                else if encoded <= 0.04045 { encoded / 12.92 }
+                else { ((encoded + 0.055) / 1.055).powf(2.4) };
+            let straight = (linear / alpha).clamp(0.0, 1.0);
+            let encoded = if straight <= 0.0031308 { 12.92 * straight }
+                else { 1.055 * straight.powf(1.0 / 2.4) - 0.055 };
+            *channel = (encoded * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+}
+
 #[cfg(test)]
 mod frame_capture_tests {
-    use super::unpack_frame_pixels;
+    use super::{capture_pixels_to_straight_rgba, quick_clear_color, quick_frame_clear_color, unpack_frame_pixels};
     #[test]
     fn actual_frame_readback_removes_padding_and_converts_bgra_without_flipping_rows() {
         let mapped = [1,2,3,255,4,5,6,128,99,99,99,99,7,8,9,255,10,11,12,0,99,99,99,99];
         assert_eq!(unpack_frame_pixels(&mapped, 2, 2, 12, true), [3,2,1,255,6,5,4,128,9,8,7,255,12,11,10,0]);
     }
+
+    #[test]
+    fn capture_background_is_transparent_without_changing_visible_popup_or_embedded_clear() {
+        use wgpu::CompositeAlphaMode::{Opaque, PreMultiplied};
+        for mode in [Opaque, PreMultiplied] {
+            assert_eq!(quick_frame_clear_color(mode, true), wgpu::Color::TRANSPARENT);
+            assert_eq!(quick_frame_clear_color(mode, false), quick_clear_color(mode));
+        }
+        assert_eq!(quick_frame_clear_color(Opaque, false).a, 1.0);
+    }
+
+    #[test]
+    fn transparent_capture_preserves_alpha_and_unpremultiplies_in_linear_space() {
+        // Half-alpha white stores sRGB(0.5) = 188, not a gamma-space value of 128.
+        let mut srgb = [188, 188, 188, 128, 7, 31, 89, 255, 99, 44, 77, 0];
+        capture_pixels_to_straight_rgba(&mut srgb, true);
+        assert_eq!(srgb, [255, 255, 255, 128, 7, 31, 89, 255, 0, 0, 0, 0]);
+        let mut linear = [64, 32, 16, 128, 0, 0, 0, 0];
+        capture_pixels_to_straight_rgba(&mut linear, false);
+        for (actual, expected) in linear[..3].iter().zip([188_u8, 137, 99]) {
+            assert!(actual.abs_diff(expected) <= 1, "linear readback: {actual} != {expected}");
+        }
+        assert_eq!(linear[3], 128);
+        assert_eq!(&linear[4..], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn single_alpha_capture_stays_finite_and_does_not_make_background_opaque() {
+        let mut rgba = [0, 0, 0, 1, 1, 1, 1, 1, 255, 255, 255, 0];
+        capture_pixels_to_straight_rgba(&mut rgba, true);
+        assert_eq!(rgba[3], 1);
+        assert_eq!(rgba[7], 1);
+        assert_eq!(&rgba[8..], &[0, 0, 0, 0]);
+        assert!(rgba[4] > 1 && rgba[4] == rgba[5] && rgba[5] == rgba[6]);
+    }
+
+    #[test]
+    fn transparent_gpu_capture_reuses_solid_pipeline_and_writes_straight_alpha_png() -> anyhow::Result<()> {
+        use wgpu::util::DeviceExt;
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .ok_or_else(|| anyhow::anyhow!("no GPU adapter for windowless Fast capture test"))?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("fast_capture_test"), required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+        }, None))?;
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fast_capture_test_shader"), source: wgpu::ShaderSource::Wgsl(r#"
+struct Output { @builtin(position) position: vec4<f32>, @location(0) color: vec4<f32> }
+@vertex fn vs_main(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>) -> Output {
+    var output: Output; output.position = vec4<f32>(position, 1.0); output.color = color; return output;
+}
+@fragment fn fs_main(input: Output) -> @location(0) vec4<f32> { return input.color; }
+"#.into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("fast_capture_test_layout"), bind_group_layouts: &[], push_constant_ranges: &[],
+        });
+        let format = wgpu::TextureFormat::Bgra8UnormSrgb;
+        let pipeline = super::create_viewer_solid_pipeline(&device, &shader, &layout, format, true);
+        let vertices = [[-0.75, -0.75, 0.5], [0.75, -0.75, 0.5], [0.0, 0.75, 0.5]]
+            .map(|position| super::GpuVertex { position, color: [0.5, 0.25, 0.125, 0.5],
+                uv: [0.0, 0.0], use_texture: 0.0, normal: [0.0, 1.0, 0.0], emissive_tag: 0.0 });
+        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("fast_capture_test_vertices"), contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let size = wgpu::Extent3d { width: 8, height: 6, depth_or_array_layers: 1 };
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("fast_capture_test_color"), size, mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2, format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[],
+        });
+        let depth = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("fast_capture_test_depth"), size, mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth24Plus,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("fast_capture_test_readback"), size: 256 * u64::from(size.height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("fast_capture_test_pass"), color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view, resolve_target: None, ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(super::quick_frame_clear_color(wgpu::CompositeAlphaMode::Opaque, true)),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })], depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view, depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store,
+                    }), stencil_ops: None,
+                }), timestamp_writes: None, occlusion_query_set: None,
+            });
+            pass.set_pipeline(&pipeline); pass.set_vertex_buffer(0, vertices.slice(..)); pass.draw(0..3, 0..1);
+        }
+        encoder.copy_texture_to_buffer(wgpu::ImageCopyTexture {
+            texture: &target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
+        }, wgpu::ImageCopyBuffer { buffer: &readback, layout: wgpu::ImageDataLayout {
+            offset: 0, bytes_per_row: Some(256), rows_per_image: Some(size.height),
+        } }, size);
+        queue.submit(Some(encoder.finish()));
+        let requested = std::env::var_os("NOVA_CAPTURE_TEST_OUTPUT").map(std::path::PathBuf::from);
+        let path = requested.clone().unwrap_or_else(|| std::env::temp_dir().join(format!(
+            "nova-fast-transparent-capture-{}-{}.png", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())));
+        super::save_gpu_frame(&device, &readback, &path, size.width, size.height, 256, format)?;
+        let png = image::open(&path)?.into_rgba8();
+        assert_eq!(png.dimensions(), (8, 6), "capture remains the original rectangular viewport");
+        assert_eq!(png.get_pixel(0, 0).0, [0, 0, 0, 0]);
+        let model = png.pixels().find(|pixel| pixel[3] > 0).expect("real GPU triangle must be present");
+        for (actual, expected) in model.0.into_iter().zip([188_u8, 137, 99, 128]) {
+            assert!(actual.abs_diff(expected) <= 1, "GPU capture color {actual} != {expected}");
+        }
+        eprintln!("[FAST_CAPTURE_TEST] adapter={:?} backend={:?} png={} size=8x6 transparent_background=true straight_alpha=true",
+            adapter.get_info().name, adapter.get_info().backend, path.display());
+        if requested.is_none() { std::fs::remove_file(path)?; }
+        Ok(())
+    }
+
 }
 
 fn save_gpu_frame(device: &wgpu::Device, buffer: &wgpu::Buffer, path: &Path, width: u32, height: u32, stride: u32, format: wgpu::TextureFormat) -> Result<()> {
@@ -5003,8 +5163,9 @@ fn save_gpu_frame(device: &wgpu::Device, buffer: &wgpu::Buffer, path: &Path, wid
     device.poll(wgpu::Maintain::Wait);
     rx.recv().context("receive actual frame readback")?.context("map actual frame readback")?;
     let view = slice.get_mapped_range();
-    let pixels = unpack_frame_pixels(&view, width, height, stride, matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb));
+    let mut pixels = unpack_frame_pixels(&view, width, height, stride, matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb));
     drop(view); buffer.unmap();
+    capture_pixels_to_straight_rgba(&mut pixels, format.is_srgb());
     let temporary = path.with_extension("png.tmp");
     image::save_buffer_with_format(&temporary, &pixels, width, height, image::ColorType::Rgba8, image::ImageFormat::Png)?;
     std::fs::rename(&temporary, path)?;
@@ -5019,6 +5180,10 @@ fn quick_surface_alpha_mode(embedded: bool, supported: &[wgpu::CompositeAlphaMod
     } else {
         supported.first().copied().context("GPU surface exposes no alpha mode")
     }
+}
+
+fn quick_frame_clear_color(alpha_mode: wgpu::CompositeAlphaMode, capture: bool) -> wgpu::Color {
+    if capture { wgpu::Color::TRANSPARENT } else { quick_clear_color(alpha_mode) }
 }
 
 fn quick_clear_color(alpha_mode: wgpu::CompositeAlphaMode) -> wgpu::Color {
@@ -5326,6 +5491,9 @@ struct ViewerState {
     size: PhysicalSize<u32>,
     render_pipeline_solid: wgpu::RenderPipeline,
     render_pipeline_translucent: wgpu::RenderPipeline,
+    capture_pipeline_solid: Option<wgpu::RenderPipeline>,
+    render_pipeline_layout: wgpu::PipelineLayout,
+    render_shader: wgpu::ShaderModule,
     camera: OrbitCamera,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -5772,6 +5940,9 @@ impl ViewerState {
             size,
             render_pipeline_solid,
             render_pipeline_translucent,
+            capture_pipeline_solid: None,
+            render_pipeline_layout,
+            render_shader: shader,
             camera,
             camera_buffer,
             camera_bind_group,
@@ -8441,6 +8612,7 @@ impl ViewerState {
             return Ok(());
         }
 
+        let capture_requested = self.capture_output.is_some();
         self.frame_index = self.frame_index.saturating_add(1);
         if !self.prebuild_before_show
             && !self.background_fill_enabled
@@ -8456,10 +8628,13 @@ impl ViewerState {
                 self.resident_chunks.len()
             );
         }
-        if self.preview_mode {
-            self.apply_preview_camera_motion();
-        } else {
-            self.apply_stress_camera_sweep();
+        // Capture the current view; a screenshot must not advance camera motion.
+        if !capture_requested {
+            if self.preview_mode {
+                self.apply_preview_camera_motion();
+            } else {
+                self.apply_stress_camera_sweep();
+            }
         }
         if self.residency_dirty
             && let Err(error) = self.sync_chunk_residency()
@@ -8666,25 +8841,42 @@ impl ViewerState {
             }
         }
 
+        // Read back a same-format, same-viewport render target, never the window
+        // swapchain. Popup surfaces may be opaque or lack COPY_SRC support.
+        // This frame reuses the current camera, resources and resident geometry,
+        // and is never submitted to a native presentation surface.
+        let capture_texture = capture_requested.then(|| self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("native_viewer_capture_color"),
+            size: wgpu::Extent3d { width: self.config.width, height: self.config.height, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        }));
+        if capture_requested && self.capture_pipeline_solid.is_none() {
+            self.capture_pipeline_solid = Some(create_viewer_solid_pipeline(
+                &self.device, &self.render_shader, &self.render_pipeline_layout, self.config.format, true));
+        }
         #[cfg(target_os = "windows")]
         let has_vulkan_composition = self.vulkan_composition.is_some();
         #[cfg(not(target_os = "windows"))]
         let has_vulkan_composition = false;
         #[cfg(target_os = "macos")]
-        let mac_frame = if let Some(composition) = self.mac_composition.as_mut() {
+        let mac_frame = if capture_requested { None } else if let Some(composition) = self.mac_composition.as_mut() {
             match composition.begin_frame(&self.device).map_err(|error| {
                 record_quick_gpu_failure(&self.quick_gpu_failure, format!("native Metal presentation failed: {error:#}"));
                 wgpu::SurfaceError::Lost
             })? { Some(frame) => Some(frame), None => { self.device.poll(wgpu::Maintain::Poll); return Ok(()); } }
         } else { None };
         #[cfg(target_os = "macos")]
-        let has_offscreen_presentation = has_vulkan_composition || mac_frame.is_some();
+        let has_offscreen_presentation = capture_requested || has_vulkan_composition || mac_frame.is_some();
         #[cfg(not(target_os = "macos"))]
-        let has_offscreen_presentation = has_vulkan_composition;
+        let has_offscreen_presentation = capture_requested || has_vulkan_composition;
         let output = if has_offscreen_presentation { None } else {
             Some(self.surface.as_ref().ok_or(wgpu::SurfaceError::Lost)?.get_current_texture()?)
         };
-        let output_texture = if let Some(output) = output.as_ref() { &output.texture } else {
+        let output_texture = if let Some(texture) = capture_texture.as_ref() { texture }
+        else if let Some(output) = output.as_ref() { &output.texture } else {
             #[cfg(target_os = "windows")]
             { self.vulkan_composition.as_ref().expect("Vulkan native target exists").source() }
             #[cfg(target_os = "macos")]
@@ -8797,7 +8989,7 @@ impl ViewerState {
             overlay.prepare(&self.device, &self.queue, &self.label_anchors, &self.camera);
         }
 
-        let query_visible_samples = self.quick_visible_sample_query.should_query();
+        let query_visible_samples = !capture_requested && self.quick_visible_sample_query.should_query();
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("native_viewer_render_pass"),
@@ -8805,7 +8997,7 @@ impl ViewerState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(quick_clear_color(self.config.alpha_mode)),
+                        load: wgpu::LoadOp::Clear(quick_frame_clear_color(self.config.alpha_mode, capture_requested)),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -8825,7 +9017,9 @@ impl ViewerState {
             render_pass.set_bind_group(1, &self.atlas_bind_group, &[]);
             render_pass.set_bind_group(2, &self.lighting_bind_group, &[]);
             render_pass.set_bind_group(3, &self.shadow_resources.bind_group, &[]);
-            render_pass.set_pipeline(&self.render_pipeline_solid);
+            render_pass.set_pipeline(if capture_requested {
+                self.capture_pipeline_solid.as_ref().expect("capture solid pipeline initialized")
+            } else { &self.render_pipeline_solid });
             for resident in self.resident_chunks.values() {
                 render_pass.set_vertex_buffer(0, resident.gpu.vertex_buffer.slice(..));
                 render_pass.set_index_buffer(
@@ -8909,7 +9103,7 @@ impl ViewerState {
             encoder.copy_buffer_to_buffer(&self.quick_visible_sample_query.resolve, 0, &self.quick_visible_sample_query.readback, 0, 8);
         }
         #[cfg(target_os = "windows")]
-        if let Some(composition) = self.vulkan_composition.as_ref() {
+        if !capture_requested && let Some(composition) = self.vulkan_composition.as_ref() {
             composition.encode(&mut encoder).map_err(|error| {
                 record_quick_gpu_failure(&self.quick_gpu_failure, format!("Vulkan native presentation failed: {error:#}"));
                 wgpu::SurfaceError::Lost
@@ -8931,7 +9125,7 @@ impl ViewerState {
                 })?;
         }
         #[cfg(target_os = "windows")]
-        if let Some(composition) = self.vulkan_composition.as_ref() {
+        if !capture_requested && let Some(composition) = self.vulkan_composition.as_ref() {
             composition.present().map_err(|error| {
                 record_quick_gpu_failure(&self.quick_gpu_failure, format!("Vulkan native presentation failed: {error:#}"));
                 wgpu::SurfaceError::Lost
@@ -10532,7 +10726,6 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         let ready = state.frame_index > 0 && state.pending_build_queue.is_empty() && state.in_flight_build_keys.is_empty() && state.pending_upload_queue.is_empty();
                         let outcome = (|| -> Result<bool> {
                             if started.elapsed() > Duration::from_secs(60) { bail!("快速预览仍在构建，请稍后生成缩略图"); }
-                            if !state.config.usage.contains(wgpu::TextureUsages::COPY_SRC) { bail!("当前GPU表面不支持真实帧读取"); }
                             if ready { state.capture_error = None; state.capture_output = Some(path.clone()); }
                             state.render(window.as_ref(), viewer_started_at).context("read actual preview frame")?;
                             if let Some(error) = state.capture_error.take() { bail!("{error}"); }

@@ -1107,12 +1107,10 @@ where
             return Ok(None);
         }
 
-        let edge = (pixel_count as f64).sqrt() as u64;
-        if edge.checked_mul(edge) != Some(pixel_count) {
-            bail!("PreviewImageData contains {pixel_count} pixels, expected a square pixel array");
-        }
-        if edge > u64::from(MAX_PREVIEW_IMAGE_EDGE) {
-            bail!("PreviewImageData edge {edge} exceeds safety limit {MAX_PREVIEW_IMAGE_EDGE}");
+        let (width, height) = crate::projection_preview::embedded_preview_dimensions(pixel_count)
+            .ok_or_else(|| anyhow!("PreviewImageData contains {pixel_count} pixels, expected a square pixel array or 320x240 preview"))?;
+        if width > MAX_PREVIEW_IMAGE_EDGE || height > MAX_PREVIEW_IMAGE_EDGE {
+            bail!("PreviewImageData edge {} exceeds safety limit {MAX_PREVIEW_IMAGE_EDGE}", width.max(height));
         }
         let rgba_bytes = pixel_count
             .checked_mul(4)
@@ -1140,8 +1138,8 @@ where
         }
 
         Ok(Some(LitematicPreviewImage {
-            width: edge as u32,
-            height: edge as u32,
+            width,
+            height,
             rgba,
         }))
     }

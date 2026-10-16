@@ -30,13 +30,15 @@ void WriteLegacyCache(const std::wstring& path) {
     GUID format = GUID_WICPixelFormat32bppBGRA; Success(frame->SetPixelFormat(&format), "frame format"); Require(format == GUID_WICPixelFormat32bppBGRA, "BGRA encoder required");
     BYTE pixel[] = {0, 0, 255, 255}; Success(frame->WritePixels(1, 4, 4, pixel), "frame pixels"); Success(frame->Commit(), "frame commit"); Success(encoder->Commit(), "encoder commit");
 }
-std::vector<BYTE> ReadBitmap(IThumbnailProvider* thumbnail, UINT edge) {
+std::vector<BYTE> ReadBitmap(IThumbnailProvider* thumbnail, UINT edge, UINT expectedWidth = 0, UINT expectedHeight = 0) {
     HBITMAP bitmap = nullptr; WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
     Success(thumbnail->GetThumbnail(edge, &bitmap, &alpha), "embedded GetThumbnail"); Require(bitmap != nullptr, "embedded image must return a bitmap");
     DIBSECTION section{}; const int received = GetObjectW(bitmap, sizeof(section), &section);
     const bool shape = received == sizeof(section) && section.dsBm.bmWidth > 0 && section.dsBm.bmHeight > 0
         && section.dsBm.bmWidth <= static_cast<LONG>(edge) && section.dsBm.bmHeight <= static_cast<LONG>(edge)
-        && section.dsBm.bmBitsPixel == 32 && alpha == WTSAT_ARGB && section.dsBm.bmBits;
+        && section.dsBm.bmBitsPixel == 32 && alpha == WTSAT_ARGB && section.dsBm.bmBits
+        && (!expectedWidth || section.dsBm.bmWidth == static_cast<LONG>(expectedWidth))
+        && (!expectedHeight || section.dsBm.bmHeight == static_cast<LONG>(expectedHeight));
     std::vector<BYTE> pixels;
     if (shape) {
         const auto* data = static_cast<const BYTE*>(section.dsBm.bmBits);
@@ -49,7 +51,7 @@ std::vector<BYTE> ReadBitmap(IThumbnailProvider* thumbnail, UINT edge) {
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc < 2 || argc > 3) { std::fprintf(stderr, "usage: thumbnail_smoke.exe <absolute-provider.dll> [embedded-fixture.litematic]\n"); return 2; }
+    if (argc < 2 || argc > 4 || (argc == 4 && std::wstring(argv[3]) != L"--expect-preview-4x3")) { std::fprintf(stderr, "usage: thumbnail_smoke.exe <absolute-provider.dll> [embedded-fixture.litematic [--expect-preview-4x3]]\n"); return 2; }
     const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(initialized)) return 3;
     HMODULE module = LoadLibraryExW(argv[1], nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -85,13 +87,20 @@ int wmain(int argc, wchar_t** argv) {
         Require(miss == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) && !missing && missingAlpha == WTSAT_UNKNOWN, "no embedded preview must miss even when an old PNG cache exists");
         ULARGE_INTEGER cursor{}; LARGE_INTEGER zero{}; Success(original->Seek(zero, STREAM_SEEK_CUR, &cursor), "source position preserved"); Require(cursor.QuadPart == 17, "original stream cursor changed");
         std::printf("no_embedded_preview=0x%08lx legacy_png_ignored=true source_position=17 bitmap=null alpha=UNKNOWN\n", static_cast<unsigned long>(miss));
-        if (argc == 3) {
+        if (argc >= 3) {
             ComPtr<IInitializeWithFile> fileInit; Success(factory->CreateInstance(nullptr, IID_PPV_ARGS(&fileInit)), "file instance"); Success(fileInit->Initialize(argv[2], STGM_READ), "real embedded fixture file");
             ComPtr<IThumbnailProvider> fileThumbnail; Success(fileInit.As(&fileThumbnail), "file thumbnail interface"); const auto expected = ReadBitmap(fileThumbnail.Get(), 64);
             ComPtr<IStream> source; Success(SHCreateStreamOnFileEx(argv[2], STGM_READ | STGM_SHARE_DENY_NONE, FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &source), "real source stream");
             ComPtr<IInitializeWithStream> streamInit; Success(factory->CreateInstance(nullptr, IID_PPV_ARGS(&streamInit)), "stream instance"); Success(streamInit->Initialize(source.Get(), STGM_READ), "real embedded fixture stream");
             ComPtr<IThumbnailProvider> streamThumbnail; Success(streamInit.As(&streamThumbnail), "stream thumbnail interface"); Require(ReadBitmap(streamThumbnail.Get(), 64) == expected, "file and stream image pixels differ");
             ReadBitmap(streamThumbnail.Get(), 256); std::printf("embedded_file_stream_pixels=identical external_cache_required=false\n");
+            if (argc == 4) {
+                ReadBitmap(fileThumbnail.Get(), 64, 64, 48);
+                ReadBitmap(streamThumbnail.Get(), 256, 256, 192);
+                Require(ReadBitmap(fileThumbnail.Get(), 320, 320, 240) == ReadBitmap(streamThumbnail.Get(), 320, 320, 240), "rectangular file and stream previews differ");
+                ReadBitmap(streamThumbnail.Get(), 512, 320, 240);
+                std::printf("preview_320x240=file_stream_compatible aspect_4x3=preserved gui_started=false\n");
+            }
         }
         initialize.Reset(); thumbnail.Reset(); original.Reset(); Success(factory->LockServer(TRUE), "server lock"); factory.Reset(); Require(canUnload() == S_FALSE, "server lock retains DLL"); Success(getFactory(CLSID_NovaThumbnail, IID_PPV_ARGS(&factory)), "unlock factory"); Success(factory->LockServer(FALSE), "server unlock"); factory.Reset(); Require(canUnload() == S_OK, "all COM objects released");
         std::printf("com_identity=canonical reinitialize=rejected invalid_parameters=rejected aggregation=rejected lock_unload=passed\n");

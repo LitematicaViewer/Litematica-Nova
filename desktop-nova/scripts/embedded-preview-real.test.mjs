@@ -18,10 +18,10 @@ function chunk(kind,payload) {
   const content=Buffer.concat([Buffer.from(kind),payload]);const header=Buffer.alloc(4),crc=Buffer.alloc(4);
   header.writeUInt32BE(payload.length);crc.writeUInt32BE(crc32(content));return Buffer.concat([header,content,crc]);
 }
-function testPng() {
-  const width=140,height=70,header=Buffer.alloc(13);header.writeUInt32BE(width,0);header.writeUInt32BE(height,4);header[8]=8;header[9]=6;
+function testPng(width=140,height=70,pixel=(x)=>x>=20&&x<120?[79,123,211,143]:[255,0,0,255]) {
+  const header=Buffer.alloc(13);header.writeUInt32BE(width,0);header.writeUInt32BE(height,4);header[8]=8;header[9]=6;
   const rows=Buffer.alloc(height*(width*4+1));
-  for(let y=0;y<height;y++)for(let x=0;x<width;x++)rows.set(x>=20&&x<120?[79,123,211,143]:[255,0,0,255],y*(width*4+1)+1+x*4);
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++)rows.set(pixel(x,y),y*(width*4+1)+1+x*4);
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk("IHDR",header),chunk("IDAT",deflateSync(rows)),chunk("IEND",Buffer.alloc(0))]);
 }
 function decodeRgbaPng(bytes) {
@@ -45,7 +45,7 @@ function decodeRgbaPng(bytes) {
   return {width,height,rgba};
 }
 
-test("真实小投影：PreviewImage完整居中透明补边/ARGB导入、PNG读取、另存和清除重读，原件和全部统计保持",()=>{
+test("真实小投影：320×240三模式后处理、内嵌PNG读取、另存和清除重读，原件和全部统计保持",()=>{
   mkdirSync(evidence,{recursive:true});
   const sampleDirectory="C:\\Users\\27232\\Documents\\投影测试";
   const source=join(sampleDirectory,"16核刷铁机.litematic");
@@ -74,17 +74,49 @@ test("真实小投影：PreviewImage完整居中透明补边/ARGB导入、PNG读
   assert.deepEqual(readdirSync(evidence).sort(),entriesBeforeSave,"原地安全写入不遗留额外bak或临时文件");
   const png=join(evidence,`extracted-${tag}.png`);
   const extracted=run(["projection-preview","--json","--input",output,"--output",png]);
-  assert.equal(extracted.found,true);assert.equal(extracted.width,140);assert.equal(extracted.height,140);
+  assert.equal(extracted.found,true);assert.equal(extracted.width,320);assert.equal(extracted.height,240);
   const decoded=decodeRgbaPng(readFileSync(png));
-  assert.equal(decoded.width,140);assert.equal(decoded.height,140);
-  assert.deepEqual(decoded.rgba.subarray((70*140+70)*4,(70*140+70)*4+4),Buffer.from([79,123,211,143]));
-  const pixel=(x,y)=>decoded.rgba.subarray((y*140+x)*4,(y*140+x)*4+4);
-  assert.deepEqual(pixel(0,70),Buffer.from([255,0,0,255]),"保留原图左边缘");
-  assert.deepEqual(pixel(139,70),Buffer.from([255,0,0,255]),"保留原图右边缘");
-  assert.deepEqual(pixel(70,34),Buffer.from([0,0,0,0]),"原图上方透明补边");
-  assert.deepEqual(pixel(70,35),Buffer.from([79,123,211,143]));
-  assert.deepEqual(pixel(70,104),Buffer.from([79,123,211,143]));
-  assert.deepEqual(pixel(70,105),Buffer.from([0,0,0,0]),"原图下方透明补边");
+  assert.equal(decoded.width,320);assert.equal(decoded.height,240);
+  const pixel=(x,y)=>decoded.rgba.subarray((y*320+x)*4,(y*320+x)*4+4);
+  assert.deepEqual(pixel(160,120),Buffer.from([79,123,211,143]));
+  assert.deepEqual(pixel(0,120),Buffer.from([255,0,0,255]),"保留导入原图左边缘");
+  assert.deepEqual(pixel(319,120),Buffer.from([255,0,0,255]),"保留导入原图右边缘");
+  assert.deepEqual(pixel(160,39),Buffer.from([0,0,0,0]),"导入原图上方透明补边");
+  assert.deepEqual(pixel(160,40),Buffer.from([79,123,211,143]));
+  assert.deepEqual(pixel(160,199),Buffer.from([79,123,211,143]));
+  assert.deepEqual(pixel(160,200),Buffer.from([0,0,0,0]),"导入原图下方透明补边");
+  const modeResults=[];
+  for(const mode of ["fast_experimental","standard","full"]) {
+    const cases=mode==="full"?[["sky",600,300,null]]:[
+      ["tower",80,160,[30,20,20,120]],["wide",160,80,[20,30,120,20]],["ordinary",100,100,[10,20,80,60]],
+    ];
+    for(const [shape,w,h,rect] of cases) {
+      const input=join(evidence,`${tag}-${mode}-${shape}.png`),patch=join(evidence,`${tag}-${mode}-${shape}.json`);
+      const path=join(evidence,`${tag}-${mode}-${shape}.litematic`),png=join(evidence,`${tag}-${mode}-${shape}-out.png`);
+      writeFileSync(input,testPng(w,h,(x,y)=>rect
+        ?(x>=rect[0]&&x<rect[0]+rect[2]&&y>=rect[1]&&y<rect[1]+rect[3]?[40,150,70,255]:[255,0,0,0])
+        :(x<80||x>=520?[255,0,0,255]:x>=299&&x<=301?[0,200,0,255]:[30,90,170,255])));
+      writeFileSync(patch,JSON.stringify({preview_image_path:input,preview_image_mode:mode}));
+      run(["edit-metadata","--input",sample,"--patch",patch,"--output",path]);
+      const info=run(["projection-preview","--json","--input",path,"--output",png]);
+      assert.equal(info.width,320);assert.equal(info.height,240);
+      const frame=decodeRgbaPng(readFileSync(png));
+      let left=320,top=240,right=0,bottom=0;
+      for(let y=0;y<240;y++)for(let x=0;x<320;x++)if(frame.rgba[(y*320+x)*4+3]>0){left=Math.min(left,x);top=Math.min(top,y);right=Math.max(right,x+1);bottom=Math.max(bottom,y+1);}
+      if(rect){
+        const scale=Math.min(310/rect[2],230/rect[3]);
+        assert.equal(right-left,Math.floor(rect[2]*scale+1e-9));assert.equal(bottom-top,Math.floor(rect[3]*scale+1e-9));
+        assert.ok(left>=5&&top>=5&&right<=315&&bottom<=235);
+        assert.ok(Math.abs((left+right)/2-160)<=0.5&&Math.abs((top+bottom)/2-120)<=0.5);
+      }else{
+        assert.deepEqual([left,top,right,bottom],[0,0,320,240]);
+        assert.deepEqual(frame.rgba.subarray(0,4),Buffer.from([30,90,170,255]),"Full裁掉两侧而非添加透明边缘");
+        assert.deepEqual(frame.rgba.subarray((120*320+160)*4,(120*320+160)*4+4),Buffer.from([0,200,0,255]));
+        assert.ok(frame.rgba.filter((_,index)=>index%4===3).every(alpha=>alpha===255),"保留天空背景");
+      }
+      modeResults.push({mode,shape,output:path,png,width:320,height:240,alphaBounds:[left,top,right,bottom]});
+    }
+  }
   const invalidPatch=join(evidence,`invalid-${tag}.json`);writeFileSync(invalidPatch,JSON.stringify({preview_image_data:[1,2,3]}));
   const outputBeforeRejectedWrite=readFileSync(output),entriesBeforeRejectedWrite=readdirSync(evidence).sort();
   rejected(["edit-metadata","--input",output,"--patch",invalidPatch]);
@@ -107,5 +139,5 @@ test("真实小投影：PreviewImage完整居中透明补边/ARGB导入、PNG读
   assert.deepEqual(after,before);
   assert.deepEqual(readFileSync(sample),original);
   assert.equal(createHash("sha256").update(readFileSync(source)).digest("hex"),sha256);
-  writeFileSync(join(evidence,"result.json"),JSON.stringify({source,sourceSha256:sha256,originalUnchanged:true,noAdditionalBackup:true,failedInPlaceUnchanged:true,saveAsNoClobber:true,noTemporaryFilesLeft:true,allStatsUnchanged:true,totalBlocks:before.structure_stats.total_non_air_blocks,width:decoded.width,height:decoded.height,argbChannels:[79,123,211,143],output,copy,cleared,commands},null,2));
+  writeFileSync(join(evidence,"result.json"),JSON.stringify({source,sourceSha256:sha256,originalUnchanged:true,noAdditionalBackup:true,failedInPlaceUnchanged:true,saveAsNoClobber:true,noTemporaryFilesLeft:true,allStatsUnchanged:true,totalBlocks:before.structure_stats.total_non_air_blocks,width:decoded.width,height:decoded.height,argbChannels:[79,123,211,143],output,copy,cleared,modeResults,commands},null,2));
 });

@@ -1241,11 +1241,11 @@ async fn application_read_embedded_preview(
     run_application_operation(move || operations.read_embedded_preview(input)).await
 }
 
-fn persist_rendered_preview(operations: &ApplicationOperations, source: &Path, frame: &Path, expected: &Path) -> Result<ProductPreviewImage, String> {
+fn persist_rendered_preview(operations: &ApplicationOperations, source: &Path, frame: &Path, expected: &Path, mode: &str) -> Result<ProductPreviewImage, String> {
     if application::thumbnails::cache_path(source)? != expected { return Err("截图期间投影已改变，请重新加载".into()); }
     operations.edit_project_metadata(EditProjectMetadataInput {
         source_path: source.to_string_lossy().into(),
-        patch: serde_json::json!({"preview_image_path": frame}), output_path: None,
+        patch: serde_json::json!({"preview_image_path": frame, "preview_image_mode": mode}), output_path: None,
     })?;
     let preview = operations.read_embedded_preview(InspectProjectInput { source_path: source.to_string_lossy().into() })?
         .ok_or("内嵌预览写入后未能重新读取")?;
@@ -1279,13 +1279,13 @@ async fn render_preview_image(
             let view = host.snapshot()?.filter(|view| view.source_path == source && view.state == "ready"
                 && preview_id == view.preview_id).ok_or("请先启动该投影的快速渲染")?;
             let (source, frame) = host.capture_frame(&view.preview_id)?;
-            persist_rendered_preview(&operations, &source, &frame, &expected)
+            persist_rendered_preview(&operations, &source, &frame, &expected, "fast_experimental")
         }).await.map_err(|error| error.to_string())?;
     }
     let mode = match display_mode.as_str() { "standard" => RenderDisplayMode::Standard, "full" => RenderDisplayMode::Full, _ => return Err("未知截图模式".into()) };
     let id = operation_id.ok_or("请先启动对应渲染场景")?;
     let frame = facade.capture_frame(&OperationId(id), &source, mode).await?;
-    tauri::async_runtime::spawn_blocking(move || persist_rendered_preview(&operations, &source, &frame, &expected))
+    tauri::async_runtime::spawn_blocking(move || persist_rendered_preview(&operations, &source, &frame, &expected, &display_mode))
         .await.map_err(|error| error.to_string())?
 }
 
@@ -1307,18 +1307,11 @@ async fn generate_preview_image(
     return tauri::async_runtime::spawn_blocking(move || {
         let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
         let cache = application::thumbnails::cache_path(&source)?;
-        // Existing embedded previews are genuine projection data, not fabricated images.
-        if let Some(preview) = operations.read_embedded_preview(InspectProjectInput { source_path: source.to_string_lossy().into() })? {
-            let bytes = base64::engine::general_purpose::STANDARD.decode(preview.data_url.split_once(',').ok_or("投影预览编码错误")?.1).map_err(|error| error.to_string())?;
-            let temporary = application::thumbnails::temporary_preview_path();
-            std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-            let output = application::thumbnails::save(&source, &temporary, &cache);
-            let _ = std::fs::remove_file(&temporary);
-            return output;
-        }
+        // Explicit generation takes a current real frame. Ordinary reads still
+        // reuse embedded/cache previews, including legacy square images.
         if let Some(view) = host.snapshot()?.filter(|view| view.source_path == source && view.state == "ready") {
             let (source, frame) = host.capture_frame(&view.preview_id)?;
-            return persist_rendered_preview(&operations, &source, &frame, &cache);
+            return persist_rendered_preview(&operations, &source, &frame, &cache, "fast_experimental");
         }
         // Reuse QuickPreviewHost for an independent hidden WS_CHILD session; an
         // existing interactive Viewer and its camera/GPU lifetime stay untouched.
@@ -1334,7 +1327,7 @@ async fn generate_preview_image(
                 std::thread::sleep(Duration::from_millis(100));
             }
             let (source, frame) = temporary.capture_frame(&view.preview_id)?;
-            persist_rendered_preview(&operations, &source, &frame, &cache)
+            persist_rendered_preview(&operations, &source, &frame, &cache, "fast_experimental")
         })();
         let _ = temporary.close(&view.preview_id);
         output
@@ -1343,6 +1336,7 @@ async fn generate_preview_image(
 
     let launch = prepare_viewer_launch_context(CompatibilityScope::Render, display_mode).await?;
     let mode = launch.display_mode();
+    let preview_mode = mode.to_owned();
     let resolved_input = normalized_input_path(&file_path);
     let source = resolved_input.clone();
     let expected = application::thumbnails::cache_path(&source)?;
@@ -1365,7 +1359,7 @@ async fn generate_preview_image(
     let launch_contract = launch.prepare_preview(resolved_input, output_path.clone(), None)?;
     let image = facade.run_viewer_preview(&launch, &launch_contract, output_path).await?;
     let operations = operations.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || persist_rendered_preview(&operations, &source, Path::new(&image.preview_path), &expected))
+    tauri::async_runtime::spawn_blocking(move || persist_rendered_preview(&operations, &source, Path::new(&image.preview_path), &expected, &preview_mode))
         .await.map_err(|error| error.to_string())?
 }
 
