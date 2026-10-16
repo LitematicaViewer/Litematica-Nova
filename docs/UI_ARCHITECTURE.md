@@ -7,6 +7,7 @@
 | V1.2     | 2026-10-13 | Codex  | 记录 Phase 1 完成：层序修正为 `theme, vendor, tokens, base, components, utilities`；实测 2,951 处反转后把页面 CSS 的迁入推迟到 Phase 6；48 个文件完成层化，等价性三重验证通过 |
 | V1.3     | 2026-10-13 | Codex  | 记录 Phase 2A 完成：系统色 240 → 4、未定义令牌 73 → 0；护栏扩到全部自定义属性并新增 `css-system-colour` 与 `css-vendor-layer-above-components` 两条规则；记下 `layer(vendor)` 被 `git checkout` 静默还原导致 Tailwind 工具类越层的教训 |
 | V1.4     | 2026-10-13 | Codex  | 记录 Phase 2B 完成：14 个桥接令牌退场（191 处引用），`--navigation-background` 经实测改为提升而非删除；状态色与阴影令牌化；新增 `css-hardcoded-colour` 规则并保留 33 处需设计决定的字面值 |
+| V1.5     | 2026-10-13 | Codex  | 记录 Phase 3 完成：58 个已失效的外观类直接删除、44 个仍生效的移植进 `components` 层，`tsx-appearance-utility-class` 102 → 0；记下分类工具四次误判（结构类、转义变体名、简写展开、元素选择器作用域）与一次脚本改写 `variant !== "outline"` 的事故 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -654,6 +655,56 @@ Phase 1 期间我把 `modern.css` 的 Tailwind 导入从 `layer(utilities)` 改�
 **退出**：`ui/components/ui/` 中外观工具类为 0；三主题下控件外观与迁移前一致（该主题本来就是靠覆写生效的，因此应有极小差异，需逐项确认）。
 
 **风险**：中。8bitcn 的 `ButtonDecorations` 依赖 Tailwind 定位类（`absolute` `-top-0.5` `h-0.5` `w-1/2`），属于结构类，保留。
+
+---
+
+#### Phase 3 实施记录 ✅ 已完成
+
+**先判断每个类是否还在生效。** 这一步不能靠"看起来像外观类就删"：Phase 1 把 Tailwind 放进 `vendor` 层（排在 `components` 之下）之后，**绝大多数外观类其实已经失效**，但**少数属性只有 Tailwind 在设**，删掉就会真的改变外观。于是先写了一个分类工具（`.tmp/recon-phase3.mjs`），对每个类回答"项目 CSS 是否已经在设同一个属性"：
+
+| 判定 | 含义 | 处置 |
+| ---- | ---- | ---- |
+| **DEAD** | `components` 层已有规则设置该属性 | 直接删类，视觉中性 |
+| **LIVE** | 没有别的来源，Tailwind 是唯一出处 | 必须写进 `components` 层 |
+
+结果：**58 个 DEAD / 44 个 LIVE**（44 个实例对应约 15 条规则）。
+
+> **工具本身错了四次，每次都被实测纠正**，值得记下来：① 只看 `[data-slot]` 规则，漏了元素自己的结构类（`.input` `.dropdown-trigger`）；② 变体工具类（`disabled:opacity-50`）在产物里是转义过的类名，匹配不上；③ **简写 vs 长写**——项目写 `border: 0`，Tailwind 写 `border-style`/`border-width`，不展开简写就会把一大片误判成 LIVE（78 → 45）；④ 元素选择器要算数（对话框标题是 `<h3>`，`line-height` 来自 `:where(h1,h2,h3,h4)`），但**必须限定"无顶层组合器"**——否则 `.settings-theme-swatch > span` 的背景色会被拿去"覆盖"按钮里的 span（44 → 20，且修掉了一个假阳性）。
+>
+> 工具仍有它看不到的东西：它不懂 DOM。`<thead>` 里的 `tr` 身上带着 `data-slot="table-row"`，已经被 `[data-slot="table-row"] { border: 0 }` 归零，所以 `[&_tr]:border-b` 其实早就失效——这一条是我读代码确认的，不是工具报的。
+
+**写入 `controls.css` 的移植规则**（放在 `components` 层，而非方案里写的 `themes/shadcn/theme.css`）
+
+放这里是因为这些规则对 shadcn 和 8bitcn 都适用，而共享控件规则本来就集中在这个文件；三主题各自需要的差异由主题文件覆写，顺序上主题在 `base.css` 之后加载，仍然赢。
+
+| 目标 | 规则要点 |
+| ---- | -------- |
+| 8bitcn 阶梯边框 | `[data-slot="button-decorations"] > span { background-color: var(--foreground) }`，软色变体加 `nova-pixel-fill-soft` 类 → `color-mix(in oklab, var(--foreground) 20%, transparent)` |
+| 8bitcn 对话框外框 | `[data-slot="dialog-pixel-x|y"] { border-inline/block: 2px solid var(--foreground) }` |
+| 下拉 | 触发器 `box-shadow: var(--control-shadow)`、图标 `opacity: .5`、标签字号/颜色、条目字号、禁用条目 `opacity: .5`、分隔线 `background-color: var(--border)` |
+| 表格 | 页脚 `border-top` + `--muted` 半透明底 + `font-weight: 500`；说明行字号与 `--muted-foreground` |
+| 文件输入 | `[data-slot="input"]::file-selector-button`（项目 CSS 覆盖不到伪元素；仓库里确有一处 `<Input type="file">`） |
+
+**踩到的坑**：脚本第一版按"字符串字面量里出现外观词就改写"，把 `variant !== "outline"` 改成了 `variant !== ""`——`outline` 正好既是外观类名又是变体名。改成只在类上下文（`className` 属性、`cn`/`cva` 调用）内改写，并加了一条断言确认该比较式未被触碰。
+
+**预期内的差异（需人工确认）**
+
+1. `disabled:opacity-50`：删掉后 Minecraft 主题的禁用按钮少一层 50% 透明（shadcn/8bitcn 由 `button:disabled` 覆盖，无影响）。Minecraft 的禁用观感本来由贴图 + 灰字表达，去掉更符合该主题。
+2. `hover:text-accent-foreground`：shadcn 下 hover 文字色由 `--accent-foreground` 变为继承值，而两者都解析到 `--foreground`，**实际无变化**。
+3. 焦点环：删掉 `focus-visible:ring-[3px]` + `ring-ring/50`，统一用项目的 `outline: 2px solid var(--ring)`。这正是要消除的"两套焦点样式"。
+
+**Phase 3 退出验证**
+
+| 检查 | 结果 |
+| ---- | ---- |
+| `tsx-appearance-utility-class` | ✅ **102 → 0**（退出标准达成） |
+| `npx tsc --noEmit` | ✅ 0 错误 |
+| `check:layers` / `check:application-boundaries` / `check:ui-styles` | ✅ 0 违规 |
+| `npm run build` | ✅ 通过；`.bg-primary` 仍位于 `vendor` 层 |
+| 层叠反转 | ✅ 0 |
+| 测试套件 | ✅ 与 HEAD 完全一致（无新增失败） |
+
+**待人工验收**：三主题 × 明暗下逐个确认——按钮各变体（default/destructive/outline/secondary/ghost）、8bitcn 的按钮阶梯边框与对话框外框、下拉菜单（触发器阴影、标签、条目、分隔线）、表格页脚与说明行、文件选择按钮。
 
 ### Phase 4 — 控件统一
 

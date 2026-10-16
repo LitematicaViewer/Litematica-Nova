@@ -119,5 +119,45 @@ html[data-theme] .flake-page__creative-hotbar-slot[data-slot="button"] { min-hei
 .flake-page__tool-panel-body [data-slot="scroll-area-viewport"] > div { display: flex !important; flex-direction: column; gap: 12px; padding-right: 8px; }
 .ui-control-gallery { height: 100%; }
 .ui-control-gallery [data-slot="scroll-area-viewport"] > div { padding: 16px; }
+
+/* ---------------------------------------------------------------------------
+   Component appearance that used to be Tailwind utilities on the component
+   markup. Tailwind now sits in the `vendor` layer, below this one, so these
+   utilities could not win anyway; keeping them would leave the appearance
+   described in two places. Anything the shared control rules above already
+   cover was simply dropped rather than restated.
+   --------------------------------------------------------------------------- */
+
+/* 8bitcn stepped border. Visible only in the pixel theme, where
+   `.nova-pixel-decoration` becomes `display: contents`. */
+[data-slot="button-decorations"] > span { background-color: var(--foreground); }
+[data-slot="button-decorations"] > span.nova-pixel-fill-soft { background-color: color-mix(in oklab, var(--foreground) 20%, transparent); }
+
+/* 8bitcn dialog frame. Hidden outside the pixel theme. */
+html[data-theme] [data-slot="dialog-pixel-x"] { border-inline: 2px solid var(--foreground); }
+html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--foreground); }
+[data-slot="dialog-description"] { font-size: .875rem; }
+
+[data-slot="select-trigger"] { box-shadow: var(--control-shadow); }
+[data-slot="select-trigger"] svg { opacity: .5; }
+[data-slot="select-label"] { font-size: .75rem; line-height: 1rem; color: var(--muted-foreground); }
+[data-slot="select-item"] { font-size: .875rem; line-height: 1.25rem; }
+[data-slot="select-item"][data-disabled] { opacity: .5; }
+[data-slot="select-separator"] { background-color: var(--border); }
+
+/* `<input type="file">` renders a shadow button; the project's input rules do not
+   reach it, so its appearance has to be stated here. */
+[data-slot="input"]::file-selector-button {
+    border-width: 0;
+    background-color: transparent;
+    font-size: .875rem;
+    line-height: 1.25rem;
+    font-weight: 500;
+    color: var(--foreground);
+}
+
+[data-slot="table-footer"] { border-top: 1px solid currentColor; background-color: color-mix(in oklab, var(--muted) 50%, transparent); font-weight: 500; }
+[data-slot="table-caption"] { font-size: .875rem; line-height: 1.25rem; color: var(--muted-foreground); }
+
 @media (prefers-reduced-motion: reduce) { .nova-control, [data-slot="scroll-area-scrollbar"] { transition: none !important; } }
 }

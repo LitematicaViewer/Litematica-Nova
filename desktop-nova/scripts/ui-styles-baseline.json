@@ -44,13 +44,6 @@
       "ui/styles/replace-units.css": 6,
       "ui/themes/modern.css": 2
     },
-    "tsx-appearance-utility-class": {
-      "ui/components/ui/button.tsx": 20,
-      "ui/components/ui/dialog.tsx": 14,
-      "ui/components/ui/input.tsx": 21,
-      "ui/components/ui/select.tsx": 32,
-      "ui/components/ui/table.tsx": 15
-    },
     "tsx-legacy-button-variant": {
       "ui/windows/main/pages/replace/EnumeratorBlockPickerDialog.tsx": 2,
       "ui/windows/main/pages/replace/ReplacePage.tsx": 10

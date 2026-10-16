@@ -11,7 +11,7 @@ const DialogPortal = DialogPrimitive.Portal;
 const DialogOverlay = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Overlay>, React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>>(
   function DialogOverlay({ className, ...props }, ref) {
     return <DialogPrimitive.Overlay ref={ref} data-slot="dialog-overlay"
-      className={cn("dialog-overlay fixed inset-0 bg-black/50", className)} {...props} />;
+      className={cn("dialog-overlay fixed inset-0", className)} {...props} />;
   },
 );
 
@@ -21,11 +21,11 @@ const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.C
       <DialogPortal>
         <DialogOverlay>
           <DialogPrimitive.Content ref={ref} data-slot="dialog-content" asChild
-            className={cn("nova-control dialog-surface rounded-lg border bg-background shadow-lg outline-none", className)} {...props}>
+            className={cn("nova-control dialog-surface outline-none", className)} {...props}>
             <section>
               {children}
-              <div aria-hidden="true" className="nova-pixel-decoration pointer-events-none absolute inset-0 border-x-2 -mx-0.5 border-foreground" data-slot="dialog-pixel-x" />
-              <div aria-hidden="true" className="nova-pixel-decoration pointer-events-none absolute inset-0 border-y-2 -my-0.5 border-foreground" data-slot="dialog-pixel-y" />
+              <div aria-hidden="true" className="nova-pixel-decoration pointer-events-none absolute inset-0 -mx-0.5" data-slot="dialog-pixel-x" />
+              <div aria-hidden="true" className="nova-pixel-decoration pointer-events-none absolute inset-0 -my-0.5" data-slot="dialog-pixel-y" />
             </section>
           </DialogPrimitive.Content>
         </DialogOverlay>
@@ -36,12 +36,12 @@ const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.C
 
 const DialogTitle = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Title>, React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>>(
   function DialogTitle({ className, ...props }, ref) {
-    return <DialogPrimitive.Title ref={ref} data-slot="dialog-title" className={cn("dialog-title text-lg leading-none font-semibold", className)} {...props} />;
+    return <DialogPrimitive.Title ref={ref} data-slot="dialog-title" className={cn("dialog-title", className)} {...props} />;
   },
 );
 const DialogDescription = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Description>, React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>>(
   function DialogDescription({ className, ...props }, ref) {
-    return <DialogPrimitive.Description ref={ref} data-slot="dialog-description" className={cn("dialog-subtitle muted text-sm text-muted-foreground", className)} {...props} />;
+    return <DialogPrimitive.Description ref={ref} data-slot="dialog-description" className={cn("dialog-subtitle muted", className)} {...props} />;
   },
 );
 
