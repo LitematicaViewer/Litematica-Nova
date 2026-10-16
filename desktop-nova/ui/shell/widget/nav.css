@@ -62,15 +62,15 @@
     margin-top: auto;
 }
 
-/* Only the main navigation shrinks and scrolls in short desktop windows. */
-.sidebar > .nav-list:not(.nav-list-bottom) {
-    min-height: 0;
-    flex: 0 1 auto;
-    overflow-y: auto;
-    overflow-x: hidden;
-    overscroll-behavior: contain;
+/* The collapsed sidebar hides every label, including entries that always render
+   one, so all buttons stay square. */
+.sidebar-collapsed .nav-expand strong,
+.sidebar-collapsed .nav-item .nav-label {
+    display: none;
 }
 
+/* Only the main navigation shrinks and scrolls in short desktop windows; the
+   scroll area owns that behaviour (see `.sidebar > .nav-scroll-area`). */
 .sidebar > .nav-expand,
 .sidebar > .nav-list-bottom {
     flex: 0 0 auto;

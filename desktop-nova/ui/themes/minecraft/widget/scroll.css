@@ -1,0 +1,41 @@
+/* Minecraft scrollbars are drawn with the vanilla scroller texture instead of
+   the 2px light/dark bevel the control textures use. `scroll_min.png` is a
+   12x2 slice: its width is the scroller's own shading (light body, dark right
+   edge) and it is stretched only along the track, so the bar keeps 1:1 pixels
+   across its width - hence the 12px scrollbar. */
+html[data-theme="minecraft"] {
+    --ln-scroll-size: 12px;
+}
+
+html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] {
+    width: var(--ln-scroll-size);
+    padding: 0;
+}
+
+html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] [data-slot="scroll-area-thumb"] {
+    border-radius: 0;
+    /* The scroller is pinned to the scrollbar's edge at its own width instead of
+       filling the thumb box. While a scrollbar fades in, the engine paints the
+       background into the thumb's enlarged ink box - the shared hit area in
+       controls.css extends 3px past it - and a filled background would be
+       stretched across that box, briefly widening the bar and softening its dark
+       edge. Pinning the size and the right edge keeps the pixels 1:1 throughout. */
+    background-image: url("../resource/scroll_min.png");
+    background-position: right center;
+    background-size: var(--ln-scroll-size) 100%;
+    background-repeat: no-repeat;
+    box-shadow: none;
+    image-rendering: pixelated;
+}
+
+/* Horizontal scrollbars keep the shared token styling: the scroller slice has no
+   horizontal form, and stretching it sideways would distort its edge. */
+@supports selector(::-webkit-scrollbar) {
+    html[data-theme="minecraft"] ::-webkit-scrollbar-thumb:vertical {
+        border: 0;
+        border-radius: 0;
+        background: url("../resource/scroll_min.png") center / 100% 100% no-repeat;
+        box-shadow: none;
+        image-rendering: pixelated;
+    }
+}

@@ -1,14 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Download } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { Dialog } from "../../components/Dialog";
+import { NavIcon } from "../../shell/NavIcon";
 import { cancelUpdate, checkForUpdate, downloadUpdate, installUpdate, onUpdateState, readUpdateState, restartAfterUpdateFailure, skipUpdate, type UpdateView } from "../../../src/platform/updater";
 import { clearCurrentUpdateDrafts, preserveUpdateDrafts, releaseNoteSections } from "./updateRecovery";
 import "../../styles/updater.css";
 
 let startupCheck: Promise<UpdateView> | undefined;
 
-export function UpdateDialog() {
+export function UpdateDialog({ theme }: { theme: string }) {
   const [view, setView] = useState<UpdateView | null>(null);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
@@ -65,7 +65,7 @@ export function UpdateDialog() {
   const phaseText = { idle: "尚未检查", disabled: "更新尚未配置", checking: "正在检查更新…", available: "发现新版本", current: "当前已是最新可用版本", skipped: "已跳过当前版本", downloading: "正在下载并校验签名…", downloaded: "签名校验完成", waiting: "等待任务安全退出…", installing: "正在安全退出并安装…", cancelled: "已取消更新", error: "更新未完成", restartRequired: "草稿已保留，需要重启恢复后台服务" };
   return <>
     <Button variant="ghost" className="sidebar-item nav-item updater-check" onClick={manualCheck} disabled={running} title="检查更新" aria-label="检查更新">
-      <Download className="nav-icon" aria-hidden="true" /><span className="nav-label">检查更新</span>
+      <NavIcon name="update" theme={theme} /><span className="nav-label">检查更新</span>
     </Button>
     {open && <Dialog title={view?.version ? `更新至 ${view.version}` : "软件更新"} subtitle="更新完成后将自动重启。" onClose={() => void cancel()} busy={installing} width="md"
       footer={<>

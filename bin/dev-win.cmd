@@ -48,6 +48,9 @@ REM                   Clear or override it to change that behaviour.
 REM ===========================================================================
 
 set "SCRIPT_DIR=%~dp0"
+REM Captured before the argument loop: "shift" moves %0 as well, so %~nx0 would
+REM name the last argument by the time the messages below print a command.
+set "SCRIPT_NAME=%~nx0"
 set "REPO_ROOT=%SCRIPT_DIR%.."
 for %%I in ("%REPO_ROOT%") do set "REPO_ROOT=%%~fI"
 set "DESKTOP_DIR=%REPO_ROOT%\desktop-nova"
@@ -176,6 +179,12 @@ if /i "%MODE%"=="check" (
     echo [dev-win]   4. copy %VIEWER_RELEASE_DIR%\stockpile_server.exe  ^-^>  %VIEWER_BACKEND_DIR%\ and %STOCKPILE_DEST_DIR%\
     echo [dev-win]   5. set LBA_DATA_ROOT=%REPO_ROOT%\data
     echo [dev-win]   6. cd /d "%DESKTOP_DIR%" ^&^& npm ci ^(only when node_modules is absent^) ^&^& npm run tauri:dev
+    if "%BRANCH_IS_MAIN%"=="0" (
+        echo.
+        echo [dev-win] NOTE branch "%BRANCH%" is not main, so step 1 would be refused.
+        echo [dev-win]      Debug this branch with the backend already staged:
+        echo [dev-win]          "%SCRIPT_NAME%" --skip-prepare
+    )
     endlocal
     exit /b 0
 )
@@ -307,3 +316,5 @@ echo.
 echo [dev-win] Startup aborted. See the messages above.
 endlocal
 exit /b 1
+
+pause
