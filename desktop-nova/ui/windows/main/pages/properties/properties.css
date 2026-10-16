@@ -76,7 +76,7 @@
 }
 .properties-full-placeholder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted-foreground); font-size: .9em; }
 .properties-conversion-target { display: flex; align-items: center; gap: 12px; }
-.properties-conversion-target select { padding: 6px 10px; color: var(--foreground); background: var(--background); border: 1px solid var(--border); }
+.properties-conversion-target [data-slot="select-trigger"] { padding: 6px 10px; color: var(--foreground); background: var(--background); border: 1px solid var(--border); }
 .properties-conversion-table code { overflow-wrap: anywhere; }
 .properties-conversion-table td { vertical-align: top; }
 .properties-conversion-table .input { min-width: 16em; }

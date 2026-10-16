@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { type EnumeratorCollection, loadEnumeratorCollections } from "../../src/business/facade";
 import { translateBlockId } from "../../src/business/facade";
 import { BlockIcon } from "./BlockIcon";
+import { Dropdown } from "./Dropdown";
 import { CreativeInventoryTooltip } from "../windows/main/pages/flake/function";
 
 /**
@@ -117,12 +118,14 @@ export function BlockPickerDialog({
           <div className="flake-page__creative-inventory-controls">
             <label className="flake-page__creative-inventory-control">
               <span className="nova-muted">分类</span>
-              <select className="input" value={selectedCollectionId} onChange={(e) => setSelectedCollectionId(e.target.value)}>
-                {allCollections.length === 0 && <option value="">（加载中）</option>}
-                {allCollections.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+              <Dropdown
+                value={selectedCollectionId}
+                onChange={setSelectedCollectionId}
+                ariaLabel="分类"
+                options={allCollections.length === 0
+                  ? [{ label: "（加载中）", value: "" }]
+                  : allCollections.map((c) => ({ label: c.name, value: c.id }))}
+              />
             </label>
             <label className="flake-page__creative-inventory-control flake-page__creative-inventory-search">
               <span className="nova-muted">搜索</span>

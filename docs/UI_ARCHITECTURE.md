@@ -10,6 +10,7 @@
 | V1.5     | 2026-10-13 | Codex  | 记录 Phase 3 完成：58 个已失效的外观类直接删除、44 个仍生效的移植进 `components` 层，`tsx-appearance-utility-class` 102 → 0；记下分类工具四次误判（结构类、转义变体名、简写展开、元素选择器作用域）与一次脚本改写 `variant !== "outline"` 的事故 |
 | V1.6     | 2026-10-13 | Codex  | 记录 Phase 4.1 / 4.2 完成：`range.css` 整套伪元素规则从未命中过 Radix 滑块（删除并改写为 `[data-slot="slider-*"]`），顺带修掉共享滑块缺少 `position: relative` 的错位缺陷；最后 1 处裸 checkbox 迁移后两份 `check.css` 规则全部成为死代码，`--ln-check-size` 退场；新增 `tsx-native-control` 规则，裸 `<select>` 基数复核为 10 处 |
 | V1.7     | 2026-10-13 | Codex  | 修复两个仅运行时可见的 MC 控件缺陷（单选框被裁圆、复选框透出 `--primary`）：根因是共享层用 `background` 简写重置了 `background-image`，且共享层在 `background-color` 上优先级高于主题规则；新增 `minecraft-controls.test.mjs` 级联求解器测试，并记下该测试第一版为假绿的教训 |
+| V1.8     | 2026-10-13 | Codex  | 记录 Phase 4.3 完成：10 处裸 `<select>`（原估 6 处）全部换成 `Dropdown`，`tsx-native-control` 归零；MC 的 `select` 样式搬到 `[data-slot="select-trigger"]`，并补齐 hover/active 重述以对抗通用 `button:hover`/`:active`；记下 `themeOf()` 把 `[data-theme]` 判成"别的主题"导致整个共享层被排除、测试再次假绿的教训 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -798,6 +799,49 @@ Phase 1 期间我把 `modern.css` 的 Tailwind 导入从 `layer(utilities)` 改�
 | 测试套件 | ✅ 与 HEAD 完全一致 |
 
 **待人工验收**：三主题下的滑块（轨道贴图、thumb 贴图、hover、禁用、焦点环；注意共享滑块此前是错位的，**这次是修好而不是保持原样**），以及枚举器"减去右侧"复选框的外观与键盘操作。
+
+---
+
+#### Phase 4.3 实施记录 ✅ Select
+
+**10 处裸 `<select>` 全部换成 `Dropdown`**（方案里写的 6 处已过期）：
+
+| 文件 | 数量 | 说明 |
+| ---- | ---- | ---- |
+| `AssetManagerContent.tsx` | 7 | 其中 4 处是真选择（激活槽位、版本、语言、来源），3 处是**仅显示文字的禁用占位**（"子选项1/2"、来源说明），它们本来就没有可选项，改用禁用的 `Dropdown` 保持外观一致 |
+| `BlockPickerDialog.tsx` | 1 | 与 `creativeInventoryDialog.tsx:207` 的写法对齐 |
+| `EnumeratorWindow.tsx` | 1 | 分类筛选，选项表提升为模块常量 |
+| `VersionConversionDialog.tsx` | 1 | 目标版本 |
+
+**一个必须处理的连带问题：MC 的 `<button>` 会被贴图化。** `themes/minecraft/widget/button.css` 用 `button` 选择器给**所有**按钮套上 `button_normal_min.png` 贴图，而 Radix 的下拉触发器正是一个 `<button>`。若不处理，转换后的下拉会从"输入框外观"变成"贴图按钮外观"——正好和原生 `<select>` 原有的样子相反。
+
+于是按方案把 MC 的 `select` 规则搬到触发器上（`minecraft/widget/input.css`），删除已死的裸 `select` 选择器：
+
+- `[data-slot="select-trigger"]` 取 MC 输入框外观（2px `#a0a0a0` 边框、黑底、白字、44px），并用 `border-image: none` 顶掉按钮贴图，`> svg { display: none }` 让像素箭头 `spin_down.png` 取代矢量 chevron。
+- **hover / active 必须重述配色。** 通用规则 `button:hover:not(:disabled)` 与 `button:active:not(:disabled)` 的优先级 (0,2,1) **高于**基础触发器规则 (0,1,0)，否则悬停时触发器会变成按钮黄 `#ffff00`、点击时被按钮底色覆盖。这是同一类"主题规则输给通用规则"的坑，只是这次在写之前就预料到了。
+- 用同样的方式核对了它确实赢：宽度方面给 `.asset-manager-select` / `.enumerator-filter-select` 补 `> [data-slot="select-trigger"] { width: 100% }`（触发器是 `inline-flex`，不会自己撑满容器）。
+
+**顺带调整**：`.properties-conversion-target select` → `[data-slot="select-trigger"]`，保住原有的 `padding: 6px 10px` / `background: var(--background)`。
+
+**退出标准**
+
+| 检查 | 结果 |
+| ---- | ---- |
+| `tsx-native-control` | ✅ **10 → 0**（裸 `<select>`、裸 checkbox/radio/range 均为 0） |
+| `npx tsc --noEmit` | ✅ 0 错误 |
+| `check:layers` / `check:application-boundaries` / `check:ui-styles` | ✅ 0 违规 |
+| `npm run build` | ✅ 通过 |
+| 测试套件 | ✅ 与 HEAD 完全一致 |
+
+**遗留（交给 Phase 5）**：共享层里仍有一批已死的裸 `select` 选择器（`modern.css` 的 `.input, …, select, textarea` 与 `select { cursor: pointer }`、`base.css`、`widgets.css`、`generate.css` 等）。它们现在匹配不到任何元素，清理属第 5 节"僵尸层"范围，本轮不动以免混淆 diff。
+
+**待人工验收**：三主题下的四个转换点——资产管理器的"来源/子选项"两行、枚举器工具栏的分类筛选、方块选择对话框的分类、属性页版本转换的目标版本。重点看 MC 主题：下拉触发器现在应当是**输入框外观**（深色底、灰色描边、像素箭头），而不是贴图按钮；其悬停与展开状态不应变黄。另外请注意，MC 主题**其它既有的下拉**（设置页、flake 页等）也会随之从"贴图按钮外观"变为"输入框外观"——这是本轮有意的统一，但属于可见变化。
+
+> **测试自身的一个缺陷（已修正）**。给 `minecraft-controls.test.mjs` 增加触发器断言时，发现它此前**也是假绿的**：`themeOf()` 对无值的 `[data-theme]` 返回 `null`（含义是"任何主题"），而过滤条件把它当成"别的主题"排除掉了——于是**整个共享层的规则都被踢出候选集**，断言只在主题自己的规则里比较，自然怎么改都通过。
+>
+> 修正后重跑了完整的可证伪性验证，5 条断言现在**各自**单独回退对应修复都会失败：单选框 `border-radius`、复选框透明底、触发器输入框外观、触发器 hover 重述、共享层 `background-color` 简写。并补了一条自检断言，要求共享层至少有 20 条选择器处于可参与比较的状态，防止这类"候选集被清空"再次悄悄发生。
+>
+> 需要说明的是：Phase 4.0 那两个缺陷的**根因判断与修复本身**是可靠的——它们由独立的级联求解脚本和手算优先级共同确认，也不依赖这个测试；出问题的是测试对回归的**检出能力**。**一个无法失败的测试比没有测试更糟**，这已经是同一个教训的第二次。
 
 ### Phase 5 — 清理僵尸层
 

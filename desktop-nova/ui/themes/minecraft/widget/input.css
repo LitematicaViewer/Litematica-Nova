@@ -23,8 +23,7 @@ input[type="email"],
 input[type="url"],
 input[type="tel"],
 input[type="number"],
-textarea,
-select {
+textarea {
     display: inline-block;
     width: auto;
     max-width: 100%;
@@ -46,8 +45,7 @@ input[type="password"],
 input[type="email"],
 input[type="url"],
 input[type="tel"],
-input[type="number"],
-select:not([multiple]):not([size]) {
+input[type="number"] {
     height: var(--ln-minecraft-input-height);
 }
 
@@ -56,13 +54,64 @@ textarea {
     resize: vertical;
 }
 
-select:not([multiple]):not([size]) {
-    padding-right: 32px;
+/* A dropdown is a value field, not an action button, so its trigger takes the
+   Minecraft input look instead of the generic `button` texture that would otherwise
+   reach it. This replaces the bare `select` rules that styled the former native
+   selects; the pixel arrow stands in for the vector chevron the shared trigger ships. */
+[data-slot="select-trigger"] {
+    box-sizing: border-box;
+    display: inline-flex;
+    width: auto;
+    max-width: 100%;
+    height: var(--ln-minecraft-input-height);
+    min-height: var(--ln-minecraft-input-height);
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--ln-minecraft-input-padding-y) 32px var(--ln-minecraft-input-padding-y) var(--ln-minecraft-input-padding-x);
+    border: 2px solid var(--ln-minecraft-input-border);
+    border-image: none;
+    border-radius: 0;
+    appearance: none;
+    background-color: var(--ln-minecraft-input-background);
     background-image: url("../resource/form/spin_down.png");
-    background-position: right 0px center;
+    background-position: right 0 center;
     background-repeat: no-repeat;
     background-size: 40px 40px;
+    color: var(--ln-minecraft-input-color);
+    font: inherit;
+    line-height: 1.4;
     image-rendering: pixelated;
+}
+
+[data-slot="select-trigger"] > svg {
+    display: none;
+}
+
+/* The generic `button:hover` rule is more specific than the rule above, so the hover
+   state has to restate the field's colours or the trigger turns button-yellow. */
+[data-slot="select-trigger"]:hover:not(:disabled) {
+    border-color: var(--ln-minecraft-input-border);
+    background-color: var(--ln-minecraft-input-background);
+    background-image: url("../resource/form/spin_down.png");
+    color: var(--ln-minecraft-input-color);
+}
+
+[data-slot="select-trigger"]:focus-visible,
+[data-slot="select-trigger"]:focus-visible:hover {
+    border-color: var(--ln-minecraft-input-border-focus);
+    outline: 0;
+}
+
+/* The generic `button:active` rule would also repaint an open trigger. */
+[data-slot="select-trigger"]:active:not(:disabled) {
+    border-color: var(--ln-minecraft-input-border);
+    background-color: var(--ln-minecraft-input-background);
+    background-image: url("../resource/form/spin_down.png");
+    color: var(--ln-minecraft-input-color);
+}
+
+[data-slot="select-trigger"][data-placeholder] {
+    color: var(--ln-minecraft-input-disabled-color);
 }
 
 input::placeholder,
@@ -80,7 +129,6 @@ input[type="url"]:focus,
 input[type="tel"]:focus,
 input[type="number"]:focus,
 textarea:focus,
-select:focus,
 input:not([type]):focus:hover,
 input[type="text"]:focus:hover,
 input[type="search"]:focus:hover,
@@ -89,8 +137,7 @@ input[type="email"]:focus:hover,
 input[type="url"]:focus:hover,
 input[type="tel"]:focus:hover,
 input[type="number"]:focus:hover,
-textarea:focus:hover,
-select:focus:hover {
+textarea:focus:hover {
     border-color: var(--ln-minecraft-input-border-focus);
     outline: 0;
 }
@@ -103,8 +150,7 @@ input[type="email"]:disabled,
 input[type="url"]:disabled,
 input[type="tel"]:disabled,
 input[type="number"]:disabled,
-textarea:disabled,
-select:disabled {
+textarea:disabled {
     color: var(--ln-minecraft-input-disabled-color);
 }
 }

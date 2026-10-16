@@ -132,6 +132,11 @@
     width: 100%;
 }
 
+/* The trigger has to fill the container the old `<select>` used to be. */
+.enumerator-filter-select > [data-slot="select-trigger"] {
+    width: 100%;
+}
+
 .enumerator-toolbar-row {
     align-items: stretch;
 }

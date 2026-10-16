@@ -64,18 +64,54 @@ function themeOf(selector) {
   return m[1] ?? null;
 }
 
-/** The declaration that wins `property` for a Minecraft control, ranked by layer, specificity, then order. */
-function winner(rules, slot, property) {
-  const marker = `[data-slot="${slot}"]`;
+/**
+ * The declaration that wins `property` for a Minecraft control, ranked by layer,
+ * specificity, then order.
+ *
+ * `control` is `{ slot, tag, pseudos }`. `pseudos` lists the state being asked about
+ * (e.g. `['hover']`); a rule carrying any other state cannot apply. `:not(...)` is
+ * ignored: it is a negative condition, and the controls under test are enabled.
+ *
+ * A rule is eligible when its rightmost compound could actually match the element: it
+ * may not pin a *different* slot, and it must either name this slot or be a plain
+ * element rule - the generic `button` texture is exactly the competitor that matters
+ * for the dropdown trigger.
+ */
+function winner(rules, control, property) {
+  const marker = `[data-slot="${control.slot}"]`;
+  const wanted = control.pseudos ?? [];
   let best = null;
   for (const rule of rules) {
     // Only the rightmost compound may introduce the slot, or the rule targets a child.
     const tail = rule.selector.split(/\s+|>/).pop();
-    if (!tail.includes(marker)) continue;
-    // A selector pinned to another theme can never apply here. Without this filter a
-    // rule such as 8bitcn's `border-radius: 0` silently satisfies a Minecraft question.
+    const bare = tail.replace(/:(?:not|is|where)\([^)]*\)/g, " ");
+    const slots = [...bare.matchAll(/\[data-slot="([^"]+)"\]/g)].map((m) => m[1]);
+    if (slots.some((slot) => slot !== control.slot)) continue;
+    const named = bare.includes(marker);
+    const element = new RegExp(`(^|[^\\w-])${control.tag}(?![-\\w])`).test(bare);
+    if (!named && !element) continue;
+    // A class in the rightmost compound means the rule targets a differently-classed
+    // element; `button.flake-page__quickbar-slot` can never match a dropdown trigger.
+    const classes = [...bare.matchAll(/\.([\w-]+)/g)].map((m) => m[1]);
+    if (classes.some((name) => !(control.classes ?? []).includes(name))) continue;
+    // Likewise for any attribute beyond the slot itself: `button[aria-pressed="true"]`
+    // does not apply to a control that never carries that attribute. A presence-only
+    // constraint (`[data-state]`) just requires the control to carry the attribute.
+    const attrs = [...bare.matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g)]
+      .filter(([, name]) => name !== "data-slot")
+      .map(([, name, value]) => [name, value]);
+    if (attrs.some(([name, value]) => {
+      const declared = (control.attrs ?? {})[name];
+      if (declared === undefined) return true;
+      return value !== undefined && declared !== value;
+    })) continue;
+    const states = [...bare.matchAll(/:([a-z-]+)/g)].map((m) => m[1]);
+    if (states.some((state) => !wanted.includes(state))) continue;
+    // A selector pinned to another theme can never apply here. `[data-theme]` without
+    // a value means "any theme" and must stay eligible, or every shared-layer rule is
+    // filtered out and the assertions pass against the theme's own rules alone.
     const theme = themeOf(rule.selector);
-    if (theme !== undefined && theme !== "minecraft") continue;
+    if (theme !== undefined && theme !== null && theme !== "minecraft") continue;
     const decl = rule.decls.find((node) => node.prop === property);
     if (!decl) continue;
     const rank = {
@@ -90,11 +126,17 @@ function winner(rules, slot, property) {
       (rank.layer === best.rank.layer && rank.specificity === best.rank.specificity && rank.order > best.rank.order);
     if (better) best = { decl, rank, selector: rule.selector, path: rule.path };
   }
-  assert.ok(best, `no rule sets ${property} for [data-slot="${slot}"]`);
+  assert.ok(best, `no rule sets ${property} for [data-slot="${control.slot}"]`);
   return best;
 }
 
-const rules = collect(['ui/styles/controls.css', 'ui/themes/minecraft/appearance.css']);
+const rules = collect([
+  'ui/styles/controls.css',
+  'ui/styles/widgets.css',
+  'ui/themes/minecraft/appearance.css',
+  'ui/themes/minecraft/widget/button.css',
+  'ui/themes/minecraft/widget/input.css',
+]);
 
 test('the cascade filter rejects rules pinned to another theme', () => {
   // Guards the guard: without this the radio assertion passes on 8bitcn's rule.
@@ -102,16 +144,37 @@ test('the cascade filter rejects rules pinned to another theme', () => {
   assert.equal(themeOf('html[data-theme="minecraft"] button[data-slot="checkbox"]'), 'minecraft');
   assert.equal(themeOf('html[data-theme] [data-slot="checkbox"]'), null);
   assert.equal(themeOf('[data-slot="checkbox"]'), undefined);
+  // `[data-theme]` with no value is the shared layer and must stay in the running;
+  // treating it as "another theme" silently emptied the candidate set.
+  const shared = rules.filter((entry) => themeOf(entry.selector) === null);
+  assert.ok(shared.length > 20, `expected the shared layer to be eligible, got ${shared.length} selectors`);
 });
 
 test('Minecraft 单选框贴图不被共享层的圆形裁切', () => {
-  const rounded = winner(rules, 'radio-group-item', 'border-radius');
+  const control = { slot: 'radio-group-item', tag: 'button', attrs: { 'data-choice-layout': 'control', 'data-state': 'checked' } };
+  const rounded = winner(rules, control, 'border-radius');
   assert.equal(rounded.decl.value, '0', `[data-choice-layout="control"] is clipped by ${rounded.selector} in ${rounded.path}`);
 });
 
 test('Minecraft 复选框贴图中心不被共享层的 --primary 填充', () => {
-  const fill = winner(rules, 'checkbox', 'background-color');
+  const control = { slot: 'checkbox', tag: 'button', attrs: { 'data-state': 'checked' } };
+  const fill = winner(rules, control, 'background-color');
   assert.equal(fill.decl.value, 'transparent', `the checked fill leaks through from ${fill.selector} in ${fill.path}`);
+});
+
+test('Minecraft 下拉触发器采用输入框外观而非通用按钮贴图', () => {
+  // `button.css` styles every <button> with a texture, and the trigger is a <button>.
+  const control = { slot: 'select-trigger', tag: 'button' };
+  assert.equal(winner(rules, control, 'border-image').decl.value, 'none', 'the generic button texture still applies to the trigger');
+  assert.equal(winner(rules, control, 'background-color').decl.value, 'var(--ln-minecraft-input-background)');
+  assert.equal(winner(rules, control, 'background-image').decl.value, 'url("../resource/form/spin_down.png")');
+
+  // Hover and active have to restate the field colours, because the generic
+  // `button:hover` / `button:active` rules are otherwise more specific and would paint
+  // the trigger button-yellow.
+  const hover = { ...control, pseudos: ['hover'] };
+  assert.equal(winner(rules, hover, 'color').decl.value, 'var(--ln-minecraft-input-color)');
+  assert.equal(winner(rules, hover, 'border-color').decl.value, 'var(--ln-minecraft-input-border)');
 });
 
 test('共享层只声明填充色，不重置贴图', () => {

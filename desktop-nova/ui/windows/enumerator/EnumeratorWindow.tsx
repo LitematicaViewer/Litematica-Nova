@@ -20,6 +20,7 @@ import {
   type EnumeratorValueType,
 } from "../../../src/services/enumeratorService";
 import { BlockIcon } from "../../components/BlockIcon";
+import { Dropdown } from "../../components/Dropdown";
 import { VirtualSpacerCell } from "../../components/VirtualSpacerCell";
 import { useVirtualWindow } from "../../components/useVirtualWindow";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -33,6 +34,15 @@ import {
 const enumeratorOpenFileEvent = "enumerator-open-file";
 
 type CategoryFilter = "all" | "base" | "version" | "system_enum" | "creative" | "map" | "custom";
+const CATEGORY_FILTER_OPTIONS: { label: string; value: CategoryFilter }[] = [
+  { label: "所有分类", value: "all" },
+  { label: "全集", value: "base" },
+  { label: "版本", value: "version" },
+  { label: "创造模式", value: "creative" },
+  { label: "系统枚举", value: "system_enum" },
+  { label: "地图色", value: "map" },
+  { label: "自定义", value: "custom" },
+];
 type CopyToast = {
   id: number;
   value: string;
@@ -469,15 +479,13 @@ function EnumeratorContent({
               value={searchKeyword}
               onChange={(event) => setSearchKeyword(event.target.value)}
             />
-            <select className="input enumerator-filter-select" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value as CategoryFilter)}>
-              <option value="all">所有分类</option>
-              <option value="base">全集</option>
-              <option value="version">版本</option>
-              <option value="creative">创造模式</option>
-              <option value="system_enum">系统枚举</option>
-              <option value="map">地图色</option>
-              <option value="custom">自定义</option>
-            </select>
+            <Dropdown
+              className="enumerator-filter-select"
+              value={categoryFilter}
+              ariaLabel="分类筛选"
+              onChange={(next) => setCategoryFilter(next as CategoryFilter)}
+              options={CATEGORY_FILTER_OPTIONS}
+            />
           </div>
 
           <div className="enumerator-panel-note">

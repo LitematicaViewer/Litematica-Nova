@@ -225,10 +225,14 @@
     gap: 8px;
 }
 
-/* Native <select> keeps keyboard behaviour while looking like a text input. */
+/* The trigger has to fill the container the old `<select>` used to be. */
 .asset-manager-select {
     min-width: 0;
     flex: 1;
+}
+
+.asset-manager-select > [data-slot="select-trigger"] {
+    width: 100%;
 }
 
 .asset-manager-actions {

@@ -6,6 +6,7 @@ import { Dialog } from "../../../../components/Dialog";
 import { Button } from "../../../../components/ui/button";
 import { BlockSearchSelect, BlockPropertySelector } from "../../../../components/BlockSearchSelect";
 import { BlockIcon } from "../../../../components/BlockIcon";
+import { Dropdown } from "../../../../components/Dropdown";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../../../components/ui/table";
 
 function parseState(state: string) {
@@ -89,9 +90,13 @@ export function VersionConversionDialog({ sourcePath, onClose, onSaved }: {
       <Button variant="ghost" disabled={busy || dirty || !preview?.writable || target?.legacy} onClick={() => setOverwriteConfirm(true)}>覆盖原件…</Button>
       <Button disabled={busy || dirty || !preview?.writable} onClick={() => void save()}>另存为…</Button></>}>
     <label className="properties-conversion-target">目标 Minecraft 版本
-      <select value={targetVersion} disabled={busy || !versions.length} onChange={(event) => { setDirty(true); setTargetVersion(event.target.value); }}>
-        {versions.map((version) => <option key={version.version} value={version.version}>Minecraft {version.version}</option>)}
-      </select>
+      <Dropdown
+        value={targetVersion}
+        disabled={busy || !versions.length}
+        ariaLabel="目标 Minecraft 版本"
+        onChange={(next) => { setDirty(true); setTargetVersion(next); }}
+        options={versions.map((version) => ({ label: `Minecraft ${version.version}`, value: version.version }))}
+      />
     </label>
     {busy && <p role="status">正在检查投影数据…</p>}
     {error && <p role="alert" className="properties-error">{error}</p>}
