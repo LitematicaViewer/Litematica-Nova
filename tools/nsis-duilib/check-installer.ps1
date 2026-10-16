@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$Compile, [switch]$RunAbi, [string]$TauriConfigOverlay)
+param([switch]$Compile, [switch]$RunAbi, [string]$TauriConfigOverlay, [string]$GeneratedInstaller)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = $PSScriptRoot
@@ -22,11 +22,16 @@ if ($config.identifier -ne 'com.litematica.nova' -or $nsis.template -ne 'install
 foreach ($pattern in @(
     '!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${BUNDLEID}"',
     '!define MANUPRODUCTKEY "${MANUKEY}\${BUNDLEID}"',
-    'Function .onGUIInit', 'Function un.onGUIInit', 'Function .onGUIEnd', 'Function un.onGUIEnd',
+    '!define MUI_CUSTOMFUNCTION_GUIINIT NovaDuiGuiInit', '!define MUI_CUSTOMFUNCTION_UNGUIINIT un.NovaDuiGuiInit',
+    'Function NovaDuiGuiInit', 'Function un.NovaDuiGuiInit', 'Function .onGUIEnd', 'Function un.onGUIEnd',
     '{{#each resources}}', '{{#each resources_ancestors}}', '!uninstfinalize', 'Section WebView2',
     'WriteUninstaller "$INSTDIR\uninstall.exe"', 'DeleteAppDataCheckboxState = 1', '$UpdateMode <> 1',
     'NovaDui::FindInstallLocation /NOUNLOAD'
 )) { if (-not $template.Contains($pattern)) { throw "Missing installer contract: $pattern" } }
+# Page macros generate the actual NSIS callbacks; direct definitions collide.
+if ($template -match '(?m)^Function (?:un)?\.onGUIInit\s*$') { throw 'Duilib must chain through the official MUI2 GUIINIT hooks' }
+if ($template.IndexOf('!define MUI_CUSTOMFUNCTION_GUIINIT') -gt $template.IndexOf('!insertmacro MUI_PAGE_WELCOME') -or
+    $template.IndexOf('!define MUI_CUSTOMFUNCTION_UNGUIINIT') -gt $template.IndexOf('!insertmacro MUI_UNPAGE_CONFIRM')) { throw 'MUI2 GUIINIT hooks must be selected before page macros' }
 if ($template.Contains('!insertmacro CheckIfAppIsRunning') -or $template.Contains('APP_ASSOCIATE') -or $template.Contains('APP_UNASSOCIATE')) { throw 'Generic force-kill / competing ProgID remains reachable' }
 if ($template.IndexOf('!insertmacro NOVA_MIGRATE_EXISTING') -gt $template.IndexOf('Section WebView2')) { throw 'Legacy removal must precede every new application file write' }
 foreach ($pattern in @('"MultiSelectModel" "Player"', '$\"%1$\" %*', 'NovaInstallerIdentity', 'NovaDui::RepairShell', 'NovaDui::Migrate', 'NSIS_PTR_SIZE', 'NSIS_CHAR_SIZE')) {
@@ -38,12 +43,39 @@ foreach ($script in @('build.ps1','check-installer.ps1')) {
     if ($errors.Count) { throw ($errors | Out-String) }
 }
 Write-Host 'NOVA_INSTALLER_CONTRACT_OK'
-if (-not $Compile -and -not $RunAbi) { return }
+if (-not $Compile -and -not $RunAbi -and -not $GeneratedInstaller) { return }
 
 $compiler = Join-Path $env:LOCALAPPDATA 'tauri/NSIS/makensis.exe'
 if (-not (Test-Path -LiteralPath $compiler)) { $compiler = Join-Path $root '.cache/NSIS/makensis.exe' }
 $out = Join-Path $root 'target/check'
 New-Item -ItemType Directory -Path $out -Force | Out-Null
+if ($GeneratedInstaller) {
+    # Compile the full Tauri-rendered script with its actual file/resource list.
+    # Only OutFile is redirected; no installer executable is ever launched here.
+    $generatedPath = (Resolve-Path -LiteralPath $GeneratedInstaller).Path
+    $generated = Get-Content -LiteralPath $generatedPath -Raw -Encoding UTF8
+    foreach ($pattern in @('!insertmacro MUI_PAGE_WELCOME', '!insertmacro MUI_UNPAGE_CONFIRM',
+        '!define MUI_CUSTOMFUNCTION_GUIINIT NovaDuiGuiInit', '!define MUI_CUSTOMFUNCTION_UNGUIINIT un.NovaDuiGuiInit',
+        'Function NovaDuiGuiInit', 'Function un.NovaDuiGuiInit', 'Section WebView2', 'WriteUninstaller')) {
+        if (-not $generated.Contains($pattern)) { throw "Incomplete or stale production NSIS script: $pattern" }
+    }
+    if ($generated -match '(?m)^Function (?:un)?\.onGUIInit\s*$' -or $generated.Contains('{{')) { throw 'Production NSIS still contains a direct GUIINIT or unrendered template' }
+    if ($generated -notmatch '(?m)^!define UNINSTALLERSIGNCOMMAND ""\r?$') { throw 'Compile-only validation requires the unsigned candidate, not a signing command' }
+    $outputPath = Join-Path $out 'production-compile-only.exe'
+    $outputDefine = '!define OUTFILE "' + $outputPath.Replace('$','$$') + '"'
+    $outputLine = [regex]'(?m)^!define OUTFILE "[^"\r\n]*"\r?$'
+    if ($outputLine.Matches($generated).Count -ne 1) { throw 'Production NSIS output definition is ambiguous' }
+    $generated = $outputLine.Replace($generated, [Text.RegularExpressions.MatchEvaluator]{ param($match) $outputDefine })
+    $compilePath = Join-Path $out 'production-compile-only.nsi'
+    [IO.File]::WriteAllText($compilePath, $generated, [Text.UTF8Encoding]::new($true))
+    Push-Location -LiteralPath (Split-Path -Parent $generatedPath)
+    try { $compilerOutput = @(& $compiler /V2 /NOCD $compilePath 2>&1); $compilerExit = $LASTEXITCODE }
+    finally { Pop-Location }
+    $compilerOutput | ForEach-Object { Write-Host $_ }
+    if ($compilerExit -ne 0 -or ($compilerOutput -join "`n") -match '(?im)warning\s+6000:') { throw "Full production NSIS compilation failed or contains unresolved variables: $compilerExit" }
+    Write-Host 'NOVA_DUILIB_FULL_PRODUCTION_NSIS_COMPILE_OK'
+    if (-not $RunAbi) { return }
+}
 $escapedInstaller = $installer.Replace('$','$$')
 $escapedOut = $out.Replace('$','$$')
 $fixture = @'
@@ -59,8 +91,11 @@ RequestExecutionLevel user
 Name "Nova adapter compile fixture - DO NOT INSTALL"
 OutFile "__OUTPUT__\adapter-compile-only.exe"
 InstallDir "$TEMP\Nova-adapter-compile-only"
-Page instfiles
-UninstPage instfiles
+!define MUI_CUSTOMFUNCTION_GUIINIT NovaDuiGuiInit
+!define MUI_CUSTOMFUNCTION_UNGUIINIT un.NovaDuiGuiInit
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_LANGUAGE "English"
 Section
   !insertmacro NOVA_MIGRATE_EXISTING
   !insertmacro NOVA_CHECK_RUNNING
@@ -71,11 +106,11 @@ Section Uninstall
   !insertmacro NSIS_HOOK_PREUNINSTALL
   !insertmacro NSIS_HOOK_POSTUNINSTALL
 SectionEnd
-Function .onGUIInit
+Function NovaDuiGuiInit
   NovaDui::Attach /NOUNLOAD "Nova adapter compile fixture"
   Pop $0
 FunctionEnd
-Function un.onGUIInit
+Function un.NovaDuiGuiInit
   NovaDui::Attach /NOUNLOAD "Nova adapter compile fixture"
   Pop $0
 FunctionEnd

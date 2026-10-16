@@ -166,6 +166,10 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 !define MUI_LANGDLL_REGISTRY_KEY "${MANUPRODUCTKEY}"
 !define MUI_LANGDLL_REGISTRY_VALUENAME "Installer Language"
 
+; MUI2 owns .onGUIInit/un.onGUIInit; chain Duilib after its own initialization.
+!define MUI_CUSTOMFUNCTION_GUIINIT NovaDuiGuiInit
+!define MUI_CUSTOMFUNCTION_UNGUIINIT un.NovaDuiGuiInit
+
 ; Installer pages, must be ordered as they appear
 ; 1. Welcome Page
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
@@ -778,7 +782,7 @@ FunctionEnd
 
 ; The same Duilib surface handles every installer and uninstaller page.
 ; /S does not invoke GUI callbacks; /P retains the real NSIS progress page.
-Function .onGUIInit
+Function NovaDuiGuiInit
   NovaDui::Attach /NOUNLOAD "${PRODUCTNAME} ${VERSION} 安装"
   Pop $R0
   ${If} $R0 != "ok"
@@ -786,7 +790,7 @@ Function .onGUIInit
     Abort "$R0"
   ${EndIf}
 FunctionEnd
-Function un.onGUIInit
+Function un.NovaDuiGuiInit
   NovaDui::Attach /NOUNLOAD "${PRODUCTNAME} ${VERSION} 卸载"
   Pop $R0
   ${If} $R0 != "ok"
