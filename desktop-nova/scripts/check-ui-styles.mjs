@@ -575,6 +575,36 @@ function checkSourceFile(filePath, source) {
     ) {
       collectClassTexts(node.initializer, sourceFile, classTexts);
     }
+    // A native control is styled by the browser, not by the theme, so it can only
+    // ever match the active theme by accident.
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = node.tagName.getText(sourceFile);
+      const at = node.getStart(sourceFile);
+      if (tag === "select") {
+        addViolation(
+          filePath,
+          lineNumberAt(source, at),
+          "tsx-native-control",
+          'Raw <select> is not themeable; use ui/select.tsx instead.',
+        );
+      } else if (tag === "input") {
+        for (const attribute of node.attributes.properties) {
+          if (!ts.isJsxAttribute(attribute) || attribute.name.getText(sourceFile) !== "type") continue;
+          const kind =
+            attribute.initializer && ts.isStringLiteral(attribute.initializer)
+              ? attribute.initializer.text
+              : null;
+          if (kind && ["checkbox", "radio", "range"].includes(kind)) {
+            addViolation(
+              filePath,
+              lineNumberAt(source, at),
+              "tsx-native-control",
+              `Raw <input type="${kind}"> is not themeable; use the shared Radix control instead.`,
+            );
+          }
+        }
+      }
+    }
     ts.forEachChild(node, visit);
   }
 

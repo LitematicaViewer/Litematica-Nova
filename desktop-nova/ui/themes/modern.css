@@ -88,7 +88,7 @@ button.primary, button.btn-primary, button[data-variant="default"] { color: var(
 button.primary:hover:not(:disabled), button.btn-primary:hover:not(:disabled), button[data-variant="default"]:hover:not(:disabled) { filter: brightness(.94); }
 button.danger, button[data-variant="destructive"] { color: var(--primary-foreground); background: var(--destructive); border-color: var(--destructive); }
 button[data-variant="ghost"], button[data-variant="link"] { background: transparent; border-color: transparent; box-shadow: none; }
-.input, input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), select, textarea {
+.input, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="color"]), select, textarea {
     min-height: var(--control-height);
     border: var(--edge-width) solid var(--border);
     border-radius: var(--radius);
@@ -99,7 +99,7 @@ button[data-variant="ghost"], button[data-variant="link"] { background: transpar
 }
 input::placeholder, textarea::placeholder { color: var(--muted-foreground); opacity: 1; }
 input[readonly] { background: var(--muted); }
-input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color: var(--primary); }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
 input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; flex-shrink: 0; }
 select { cursor: pointer; }
 :where(button, input, select, textarea, summary, a):focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }

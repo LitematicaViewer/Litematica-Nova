@@ -47,6 +47,12 @@
     "tsx-legacy-button-variant": {
       "ui/windows/main/pages/replace/EnumeratorBlockPickerDialog.tsx": 2,
       "ui/windows/main/pages/replace/ReplacePage.tsx": 10
+    },
+    "tsx-native-control": {
+      "ui/components/BlockPickerDialog.tsx": 1,
+      "ui/windows/asset_manager/AssetManagerContent.tsx": 7,
+      "ui/windows/enumerator/EnumeratorWindow.tsx": 1,
+      "ui/windows/main/pages/properties/VersionConversionDialog.tsx": 1
     }
   }
 }

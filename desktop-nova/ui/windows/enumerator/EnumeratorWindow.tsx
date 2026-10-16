@@ -22,6 +22,7 @@ import {
 import { BlockIcon } from "../../components/BlockIcon";
 import { VirtualSpacerCell } from "../../components/VirtualSpacerCell";
 import { useVirtualWindow } from "../../components/useVirtualWindow";
+import { Checkbox } from "../../components/ui/checkbox";
 import {
   applyThemeStylesheet,
   currentThemeId,
@@ -543,7 +544,7 @@ function EnumeratorContent({
               </div>
 
               <label className="subwindow-check-row enumerator-subtract-toggle">
-                <input type="checkbox" checked={subtractRight} onChange={(event) => setSubtractRight(event.target.checked)} />
+                <Checkbox checked={subtractRight} onCheckedChange={(checked) => setSubtractRight(checked === true)} />
                 减去右侧
               </label>
 

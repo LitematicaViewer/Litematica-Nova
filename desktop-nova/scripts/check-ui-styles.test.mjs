@@ -336,6 +336,30 @@ test("hardcoded colours are flagged outside the palette and theme swatches", () 
   assert.match(reported[0].message, /#ff6666/);
 });
 
+test("native form controls are rejected in favour of the shared components", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "windows/page.tsx",
+    [
+      "export const P = () => (",
+      "    <div>",
+      '        <select value="a" onChange={() => {}}><option>a</option></select>',
+      '        <input type="checkbox" checked />',
+      '        <input type={"range"} />',
+      '        <input type="file" />',
+      "    </div>",
+      ");",
+      "",
+    ].join("\n"),
+  );
+
+  const reported = messagesFor(fixture.strict(), "tsx-native-control");
+  // select + checkbox; the range is behind an expression and the file input is legitimate.
+  assert.equal(reported.length, 2, JSON.stringify(reported.map((v) => v.message)));
+  assert.ok(reported.some((v) => v.message.includes("<select>")));
+  assert.ok(reported.some((v) => v.message.includes('type="checkbox"')));
+});
+
 test("baseline documents are validated before use", () => {
   const fixture = makeFixture();
   fixture.write("styles/fixture.css", ".alpha {\n    color: red;\n}\n");

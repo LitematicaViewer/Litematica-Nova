@@ -8,6 +8,7 @@
 | V1.3     | 2026-10-13 | Codex  | 记录 Phase 2A 完成：系统色 240 → 4、未定义令牌 73 → 0；护栏扩到全部自定义属性并新增 `css-system-colour` 与 `css-vendor-layer-above-components` 两条规则；记下 `layer(vendor)` 被 `git checkout` 静默还原导致 Tailwind 工具类越层的教训 |
 | V1.4     | 2026-10-13 | Codex  | 记录 Phase 2B 完成：14 个桥接令牌退场（191 处引用），`--navigation-background` 经实测改为提升而非删除；状态色与阴影令牌化；新增 `css-hardcoded-colour` 规则并保留 33 处需设计决定的字面值 |
 | V1.5     | 2026-10-13 | Codex  | 记录 Phase 3 完成：58 个已失效的外观类直接删除、44 个仍生效的移植进 `components` 层，`tsx-appearance-utility-class` 102 → 0；记下分类工具四次误判（结构类、转义变体名、简写展开、元素选择器作用域）与一次脚本改写 `variant !== "outline"` 的事故 |
+| V1.6     | 2026-10-13 | Codex  | 记录 Phase 4.1 / 4.2 完成：`range.css` 整套伪元素规则从未命中过 Radix 滑块（删除并改写为 `[data-slot="slider-*"]`），顺带修掉共享滑块缺少 `position: relative` 的错位缺陷；最后 1 处裸 checkbox 迁移后两份 `check.css` 规则全部成为死代码，`--ln-check-size` 退场；新增 `tsx-native-control` 规则，裸 `<select>` 基数复核为 10 处 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -722,6 +723,46 @@ Phase 1 期间我把 `modern.css` 的 Tailwind 导入从 `layer(utilities)` 改�
 | 4.8 | 变体清理：确认 `outline` / `link` 无业务使用后，删除其主题规则，或在 `UiTestPage` 中补上用例 | 4.5 |
 
 **退出**：`className` 中出现遗留 `btn` 类的 `<Button>` 为 0；裸 `<button>` 为 0（组件实现自身除外）；裸 `<select>`、裸 checkbox 为 0；下拉实现收敛为 1 条路线（`BlockSearchSelect` 的搜索语义可保留为 Select 的上层封装）。
+
+**基数已复核**：实测裸 `<select>` 为 **10 处**（原估 6 处已过期），分布在 `BlockPickerDialog` 1、`AssetManagerContent` 7、`EnumeratorWindow` 1、`VersionConversionDialog` 1。
+
+---
+
+#### Phase 4.1 实施记录 ✅ Slider
+
+**发现一整套死 CSS。** `themes/minecraft/widget/range.css` 全部选择器都是 `input[type="range"]` 及其 `::-webkit-slider-*` / `::-moz-range-*` 伪元素，但**仓库里没有任何原生 range input**——唯一的滑块是 Radix `<Slider>`（`FlakePage` 3 处、`UiTestPage` 1 处），它渲染的是 `[data-slot="slider"]` 的 span 树。**这些规则一条也不可能命中。**
+
+**还发现一个真实布局缺陷。** Radix 给 Thumb 的内联样式是 `position: absolute; left: calc(X% + Npx); transform: translateX(-50%)`，但**从不给根元素 `position: relative`**。而 `controls.css` 也没设，只有 `[data-slot="slider-track"] { position: relative; flex: 1 }`——track 不是 thumb 的祖先，`flex: 1` 也因为没有 flex 容器而无效。所以共享滑块在三个主题下都是错位的。已在 `controls.css` 补上根规则（`position: relative; display: flex; align-items: center`），thumb 的静态位置才会按 flex 居中。
+
+**改动**
+- 新增 `themes/minecraft/widget/slider.css`：把贴图从伪元素改写到 `[data-slot="slider-track"]` / `[data-slot="slider-thumb"]`。因为是同一套 DOM，**webkit/moz 两套重复规则合并成一套**。
+- 删除 `themes/minecraft/widget/range.css`，更新 `theme.css` 导入。
+- 清理 `modern.css` 中两处已死的 `input[type="range"]` 提及（`:not([type="range"])` 与 `accent-color` 列表）。
+
+#### Phase 4.2 实施记录 ✅ Checkbox
+
+`EnumeratorWindow.tsx` 的最后一处裸 checkbox 换成 `<Checkbox>`（`onCheckedChange` 返回 `boolean | "indeterminate"`，故取 `checked === true`）。
+
+**随后两份 `check.css` 的规则全部变成死代码**：`shell/widget/check.css` 与 `themes/minecraft/widget/check.css` 的选择器是 `input[type="checkbox"]` / `input[type="radio"]` / `label:has(> input[...])`，而仓库里**已无任何原生 checkbox 或 radio**（28 处 `<Checkbox>` 都是 Radix，原生 radio 为 0）。MC 那份的复选框贴图早就被 `appearance.css:108-131` 的 `button[data-slot="checkbox"]` 规则取代——是重复实现。
+
+- 删除 `themes/minecraft/widget/check.css`，其两个仍然生效的 token（`--ln-check-label-gap: 8px`、`--ln-check-label-min-height: 24px`）移入 `appearance.css` 的 MC 令牌块。
+- `shell/widget/check.css` 只保留 token 定义（`6px` / `20px`）并删除已死的 components 块。
+- **删除 `--ln-check-size`**：它的唯一引用就在这两份死规则里，Radix 复选框在 `controls.css` 与 `appearance.css` 中各自固定尺寸，无人再读它。
+
+**护栏新增第 5 条规则：`tsx-native-control`** —— 检测 TSX 中的裸 `<select>` 与 `<input type="checkbox"|"radio"|"range">`（`type="file"` 合法，不报）。用例 13 个。这让 Phase 4 剩余步骤的退出标准变成可测的。
+
+**4.1 / 4.2 退出验证**
+
+| 检查 | 结果 |
+| ---- | ---- |
+| 原生 checkbox / radio / range | ✅ **0**（4.2 退出标准达成） |
+| `tsx-native-control` | 10（均为裸 `<select>`，属 4.3 范围） |
+| `npx tsc --noEmit` | ✅ 0 错误 |
+| `check:layers` / `check:application-boundaries` / `check:ui-styles` | ✅ 0 违规 |
+| `npm run build` | ✅ 通过 |
+| 测试套件 | ✅ 与 HEAD 完全一致 |
+
+**待人工验收**：三主题下的滑块（轨道贴图、thumb 贴图、hover、禁用、焦点环；注意共享滑块此前是错位的，**这次是修好而不是保持原样**），以及枚举器"减去右侧"复选框的外观与键盘操作。
 
 ### Phase 5 — 清理僵尸层
 

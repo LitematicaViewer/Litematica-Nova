@@ -30,6 +30,10 @@ html[data-theme="minecraft"] {
     --option-active-color: var(--foreground);
     --success: #b8d49c;
     --warning: #ffd18a;
+    /* Moved out of the deleted widget/check.css: Minecraft's checkbox textures are
+       larger, so its label spacing differs from the other themes. */
+    --ln-check-label-gap: 8px;
+    --ln-check-label-min-height: 24px;
     --ln-minecraft-input-background: #151515;
     --ln-minecraft-input-color: var(--foreground);
     --ln-minecraft-input-border: var(--border);
