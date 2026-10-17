@@ -438,25 +438,8 @@
     margin-top: 4px;
 }
 
-/* Small button variants */
-.btn-xs {
-    padding: 1px 6px;
-    font-size: 11px;
-}
-
-.btn-sm {
-    padding: 2px 7px;
-    font-size: 11px;
-}
-
-.btn-md {
-    font-size: 12px;
-}
-
-.btn-action {
-    font-size: 13px;
-    font-weight: 600;
-}
+/* Small button sizes are now the `size` prop on ui/button.tsx; see
+   `[data-size="xs"]` in styles/controls.css. `.btn-action` was never referenced. */
 
 /* ── Diagnostic debug log ───────────────────────────────────────────────── */
 .replace-debug-log {
@@ -492,16 +475,8 @@
     border-top: 1px solid var(--border);
 }
 
-.btn-primary {
-    background-color: var(--primary);
-    color: var(--primary-foreground);
-    font-weight: 600;
-}
-
-.btn-primary:disabled {
-    background-color: var(--muted);
-    color: var(--muted-foreground);
-}
+/* `.btn-primary` is now `variant="default"` on ui/button.tsx; see
+   `button[data-variant="default"]` in themes/modern.css. */
 
 /* Tooltip hover */
 .replace-hover-tooltip {

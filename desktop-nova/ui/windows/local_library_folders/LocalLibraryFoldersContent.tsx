@@ -438,16 +438,16 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
     <section className="subwindow-panel-shell library-aux-panel library-folders-panel">
       <div className="subwindow-title-bar">
           <h3 className="subwindow-title">本地库管理</h3>
-          {onClose && <Button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}><X size={18} aria-hidden="true" /></Button>}
+          {onClose && <Button className="subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}><X size={18} aria-hidden="true" /></Button>}
       </div>
       <p className="muted subwindow-subtitle">管理挂载目录，并把目录中的 .litematic 文件同步到投影库记录。</p>
 
       <fieldset>
         <legend>操作</legend>
         <div className="button-row subwindow-wrap-row subwindow-toolbar-group">
-          <Button className="btn" type="button" disabled={!!busyKey} onClick={handleAddFolder}>添加文件夹...</Button>
+          <Button type="button" disabled={!!busyKey} onClick={handleAddFolder}>添加文件夹...</Button>
           <Button
-            className="btn"
+           
             type="button"
             disabled={!!busyKey || enabledCount === 0}
             onClick={handleSyncAll}
@@ -465,8 +465,8 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
           {browserRootFolder ? (
             <>
               <div className="local-browser-toolbar">
-                <Button className="btn" type="button" onClick={handleCloseBrowser}>返回文件夹列表</Button>
-                <Button className="btn" type="button" disabled={!canGoBrowserUp} onClick={handleGoBrowserUp}>上一级</Button>
+                <Button type="button" onClick={handleCloseBrowser}>返回文件夹列表</Button>
+                <Button type="button" disabled={!canGoBrowserUp} onClick={handleGoBrowserUp}>上一级</Button>
                 <div className="local-browser-path" title={displayFilePath(browserPath)}>{displayFilePath(browserPath)}</div>
               </div>
               <Table className="local-browser-table">
@@ -523,7 +523,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                         <TableCell className="local-browser-actions-cell">
                           <div className="button-row subwindow-wrap-row">
                             <Button
-                              className="btn"
+                             
                               type="button"
                               onClick={(event) => {
                                 event.stopPropagation();
@@ -534,7 +534,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                               打开目录
                             </Button>
                             <Button
-                              className="btn"
+                             
                               type="button"
                               disabled={!canActivate}
                               onClick={(event) => {
@@ -545,7 +545,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                               {busyKey === `activate:${entry.path}` ? "激活中..." : "激活"}
                             </Button>
                             <Button
-                              className="btn"
+                             
                               type="button"
                               disabled={!canActivate}
                               onClick={(event) => {
@@ -595,17 +595,17 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                   </label>
                 </div>
                 <div className="button-row subwindow-wrap-row">
-                  <Button className="btn" type="button" disabled={!!busyKey} onClick={() => handleOpenBrowser(folder)}>浏览目录</Button>
-                  <Button className="btn" type="button" disabled={!!busyKey} onClick={() => openWorkspacePath(folder.path)}>{fileManagerLabel}</Button>
+                  <Button type="button" disabled={!!busyKey} onClick={() => handleOpenBrowser(folder)}>浏览目录</Button>
+                  <Button type="button" disabled={!!busyKey} onClick={() => openWorkspacePath(folder.path)}>{fileManagerLabel}</Button>
                   <Button
-                    className="btn"
+                   
                     type="button"
                     disabled={!!busyKey}
                     onClick={() => handleSyncFolder(folder)}
                   >
                     {busyKey === `sync:${folder.path}` ? "同步中..." : "立即同步"}
                   </Button>
-                  <Button className="btn" type="button" disabled={!!busyKey} onClick={() => { setStatus(""); setRemoveFolder(folder); }}>移除</Button>
+                  <Button type="button" disabled={!!busyKey} onClick={() => { setStatus(""); setRemoveFolder(folder); }}>移除</Button>
                 </div>
               </div>
             </div>

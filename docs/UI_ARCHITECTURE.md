@@ -11,6 +11,12 @@
 | V1.6     | 2026-10-13 | Codex  | 记录 Phase 4.1 / 4.2 完成：`range.css` 整套伪元素规则从未命中过 Radix 滑块（删除并改写为 `[data-slot="slider-*"]`），顺带修掉共享滑块缺少 `position: relative` 的错位缺陷；最后 1 处裸 checkbox 迁移后两份 `check.css` 规则全部成为死代码，`--ln-check-size` 退场；新增 `tsx-native-control` 规则，裸 `<select>` 基数复核为 10 处 |
 | V1.7     | 2026-10-13 | Codex  | 修复两个仅运行时可见的 MC 控件缺陷（单选框被裁圆、复选框透出 `--primary`）：根因是共享层用 `background` 简写重置了 `background-image`，且共享层在 `background-color` 上优先级高于主题规则；新增 `minecraft-controls.test.mjs` 级联求解器测试，并记下该测试第一版为假绿的教训 |
 | V1.8     | 2026-10-13 | Codex  | 记录 Phase 4.3 完成：10 处裸 `<select>`（原估 6 处）全部换成 `Dropdown`，`tsx-native-control` 归零；MC 的 `select` 样式搬到 `[data-slot="select-trigger"]`，并补齐 hover/active 重述以对抗通用 `button:hover`/`:active`；记下 `themeOf()` 把 `[data-theme]` 判成"别的主题"导致整个共享层被排除、测试再次假绿的教训 |
+| V1.9     | 2026-10-13 | Codex  | 记录 Phase 4.4 / 4.6 完成：5 个遗留尺寸/主色类退场（`size`/`variant` 取代）；17 处裸 `<button>` 改为 `<Button>`，新增第 6 条护栏规则 `tsx-raw-button` |
+| V1.10    | 2026-10-13 | Codex  | **修正**：Phase 4.4 首版给 `[data-size="xs"]` 加了 `font-size: 11px`，会破坏 Unifont（位图字体只在整数倍字号下清晰）——已删除，并统一所有按钮字号为继承正文尺寸；同步删除 `flake.css` 的按钮字号覆盖，新增第 7 条护栏规则 `css-button-font-size`；另更正"`[data-size]` 此前无 CSS"的判断（`sm` 与 `icon*` 早已存在） |
+| V1.11    | 2026-10-13 | Codex  | **修正按钮尺寸标准**：改为按各主题上游定标准——Minecraft 44px 刻意保留、shadcn 回到组件库默认（删掉我们的 `sm` 覆盖）、8bitcn 作为小众 registry 保持现状；推翻 4.4 的 `size="xs"` 决定，replace 10 处恢复标准按钮；`icon*` 宽高钉在 `--control-height` 以保证方正与主题内统一。另修复 flake 音符盒标签全部重叠：根因是 Radix Portal 使 `.flake-page …` 选择器永不匹配，新增第 8 条护栏规则 `css-portal-scope` |
+| V1.12    | 2026-10-13 | Codex  | 完成 Phase 4.5 / 4.7 / 4.8：清理 65 处调用点遗留 `btn` 标记（新增第 9 条规则 `tsx-redundant-btn-class`），`BlockPickerDialog` 改用共享 `Dialog` 从而获得 Portal、焦点陷阱与 Esc 关闭，`UiTestPage` 补齐六种按钮变体用例；163 处裸 `<Button>` 的语义变体留待决策 |
+| V1.13    | 2026-10-13 | Codex  | Minecraft 按钮变体贴图接线：按 `button_<状态>[_<变体>]_min.png` 命名，`default`→`primary`、`outline` 独立一套、`secondary` 用基础套、`destructive` 暂无；用"变体只提供支撑变量 + 状态规则回落"实现，避免优先级竞争与漏状态静默失败；新增 2 个贴图完整性测试并修掉 `token-undefined-reference` 误读注释的假阳性 |
+| V1.14    | 2026-10-13 | Codex  | destructive 贴图接入（4 状态，disabled 刻意回落共享禁用贴图）；primary 常态文字改为深灰 #3f3f3f（悬停/按下仍黄），用 --ln-minecraft-button-normal-color 变量间接避免层叠竞争；UiTestPage 变体按钮改为点击循环 常态→按下→禁用 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -835,6 +841,141 @@ Phase 1 期间我把 `modern.css` 的 Tailwind 导入从 `layer(utilities)` 改�
 
 **遗留（交给 Phase 5）**：共享层里仍有一批已死的裸 `select` 选择器（`modern.css` 的 `.input, …, select, textarea` 与 `select { cursor: pointer }`、`base.css`、`widgets.css`、`generate.css` 等）。它们现在匹配不到任何元素，清理属第 5 节"僵尸层"范围，本轮不动以免混淆 diff。
 
+#### Phase 4.4 实施记录 ✅ 按钮尺寸
+
+**先量了一下两套尺寸系统，发现它们量的不是同一个维度**：遗留类按**字号**分档（`.btn-xs` 11px / `.btn-sm` 11px / `.btn-md` 12px / `.btn-action` 13px），`size` 变体按**盒子尺寸**分档。所以不是改名，而是**选一套**——按方案保留 `size` 变体这套，并且**尺寸不再参与字号**（见下）。
+
+**一处需要更正我自己的判断**：我起初是从 `button.tsx` 的 CVA 串读出尺寸变体的（`xs: h-6 px-2`、`sm: h-8 px-3`），据此推断"高度被 `min-height` 顶住、变体无效"。实际上 `controls.css` **早就有** `[data-size]` 规则：
+
+```css
+html[data-theme] [data-slot="button"][data-size^="icon"] { padding: 7px; width: var(--control-height); flex: 0 0 var(--control-height); }
+html[data-theme] [data-slot="button"][data-size="sm"] { min-height: 30px; padding: 5px 10px; }
+```
+
+它们在 `components` 层，**压过** Tailwind 的 `h-8`/`px-3`（`vendor` 层），所以那些 Tailwind 尺寸类从来就不生效。真正缺规则的只有 `xs`：`h-6`（24px）被基础按钮的 `min-height: var(--control-height)`（32px）顶住，永远压不下去。于是补上 `xs` 这一档——且只给内距，不给字号：
+
+```css
+html[data-theme] [data-slot="button"][data-size="xs"] { padding: 1px 6px; }
+```
+
+**字号必须是统一的，这是像素字体的硬约束。** Minecraft 主题用 Unifont 绘制正文，而 Unifont 是位图字体，**只在设计字号的整数倍下才渲染出像素风格**；11px、13px 这类中间值会让字形发虚。我最初为"保住遗留观感"给 `xs` 加了 `font-size: 11px`，恰恰制造了这个问题——已删除。
+
+正确的机制是让按钮**继承**正文尺寸：`base.css` 的 `button, input, select, textarea { font: inherit }`（`components` 层，三主题都加载），正文尺寸由 `--ln-body-font-size` 给出（shadcn 14px / 8bitcn 16px / Minecraft 16px）。因此：
+
+- 尺寸变体**只改盒子**，永不改字号；
+- `flake.css` 里 `.flake-page__edit-tool-button` 的 `font-size: 16px` 一并删除。它是画在 44px 贴图上的标签，但 Minecraft 下 16px 恰好等于继承值（删除无变化），而其他主题下它正是"逐个按钮自定义字号"的来源；
+- 新增护栏规则 `css-button-font-size`（第 7 条），只检查**最右复合选择器**是按钮的规则，因此 `.toolbar button span { font-size }` 这类后代规则不会被误报；`font: inherit` 简写不受影响。仓库当前为 **0**，没有基线条目。
+
+**处置**
+
+| 遗留类 | 改为 | 依据 |
+| ------ | ---- | ---- |
+| `.btn-xs`（8 处） | `size="xs"` | 两者都是 32px 高（基础 `min-height`）、`padding: 1px 6px`，完全一致 |
+| `.btn-sm`（2 处） | `size="xs"` | 与 `.btn-xs` 只差 1px 内距（`1px 6px` vs `2px 7px`），实为同一档。映射到 `size="sm"` 会变成 30px 高 / `5px 10px` 内距，与遗留不同 |
+| `.btn-md`（2 处） | 不传 `size`（默认档） | 它只设 `font-size: 12px`，不改盒子 |
+| `.btn-primary`（1 处） | `variant="default"` | 与 `modern.css` 的 `button[data-variant="default"]` 语义相同 |
+| `.btn-action`（0 处） | 删除 | 从未被引用 |
+
+删除这 5 个类的定义（`replace-units.css`），并移除 `modern.css` 中已成死选择器的 `button.btn-primary`。
+
+**退出标准**：`css-legacy-button-variant` 8 → **0**，`tsx-legacy-button-variant` 12 → **0**，`css-button-font-size` **0**。
+
+**已知差异**：`.btn-primary` 另设了 `font-weight: 600`，而 `variant="default"` 继承基础按钮的 500。字号差异已按上面的原则全部消除。
+
+#### Phase 4.6 实施记录 ✅ 裸 `<button>` 归零
+
+3 个文件共 **17 处**（`AssetManagerContent` 10、`EnumeratorWindow` 6、`BlockPickerDialog` 1）改为 `<Button>`。
+
+- `className="btn"` 整个删除——`<Button>` 的基础类串里已经带 `btn`，在调用点重复没有意义；`subwindow-close-button` 等其它类保留。
+- `type="button"` 保留：它与组件默认值相同，保留可减少 diff 噪音。
+- 两个文件补上 `Button` 导入（相对路径由脚本从文件位置算出，`BlockPickerDialog.tsx` 需要 `./ui/button` 而非 `../../components/ui/button`）。
+
+**护栏新增第 6 条规则：`tsx-raw-button`** —— 小写 `<button>` 会绕过 `<Button>` 的 variant/size 体系。仓库当前为 **0**，因此这条规则没有基线条目，属于"从今往后不许再出现"。用例 13 个。
+
+#### 修正：按钮字号必须统一（像素字体约束）
+
+Phase 4.4 的第一版给 `[data-size="xs"]` 加了 `font-size: 11px`，理由是"保住遗留观感"。**这是错的**：Minecraft 主题用 Unifont 绘制正文，它是位图字体，**只在设计字号的整数倍下才显示像素风格**，11px 会让字形发虚。而且"每个尺寸档一个字号"本身就是这套 UI 里字号散乱的来源之一。
+
+已按"所有按钮同一字号"修正：
+
+1. `[data-size="xs"]` 只留内距，删除字号。
+2. `flake.css` 的 `.flake-page__edit-tool-button { font-size: 16px }` 删除（Minecraft 下 16px 恰等于继承值，删除无变化；其他主题下它正是逐个按钮自定义字号的来源）。
+3. 新增第 7 条护栏规则 `css-button-font-size`，从机制上禁止再出现"某个按钮自己的字号"。
+
+统一字号的机制是**继承**：`base.css` 的 `button, input, select, textarea { font: inherit }` 在 `components` 层、三主题都加载，正文尺寸来自 `--ln-body-font-size`（shadcn 14px / 8bitcn 16px / Minecraft 16px）。护栏只检查 `font-size`，`font: inherit` 简写不受影响。
+
+#### Phase 4.4 / 4.6 退出验证
+
+| 检查 | 结果 |
+| ---- | ---- |
+| `css-legacy-button-variant` / `tsx-legacy-button-variant` | ✅ 8 → 0 / 12 → 0 |
+| `css-button-font-size`（按钮统一字号） | ✅ 0（规则在夹具上验证会触发；后代选择器不误报） |
+| 小写 `<button>`（全仓库 TSX AST 扫描） | ✅ **0** |
+| `tsx-raw-button` | ✅ 0（规则本身在夹具上已验证会触发） |
+| `npx tsc --noEmit` | ✅ 0 错误 |
+| `check:layers` / `check:application-boundaries` / `check:ui-styles` | ✅ 0 违规 |
+| `npm run build` | ✅ 通过 |
+| 测试套件 | ✅ 与 HEAD 完全一致 |
+
+**待人工验收**：replace 页的分隔符与规则卡片工具条（↑ ↓ 复制规则 删除规则）、"下一步替换"计数行、`+ 创造模式物品栏` / `+ 枚举器`、枚举器右侧的移动与保存按钮、枚举器的"新增集合/保存副本/保存集合"、资产管理器的 10 个操作按钮（含关闭按钮）、方块选择对话框的关闭按钮，以及枚举器选块对话框底部的"取消/添加 N 个条目"。重点看这些按钮在**三主题**下的尺寸与文字大小是否与改动前一致。
+
+---
+
+#### 修正：按钮尺寸按主题各自的来源定标准
+
+上一版把"标准按钮"理解成了一套尺寸，方向不对。正确的原则是**每个主题按自己上游的标准**：
+
+| 主题 | 上游性质 | 处置 |
+| ---- | -------- | ---- |
+| Minecraft | 本项目自行维护 | `--control-height: 44px` 与 `button` 纹理规则**刻意为之**，保持不变；其 `button { height/min-height: 44px; padding: 4px 12px }` 本来就压过所有 Tailwind 尺寸类，所以 Minecraft 下**所有标准按钮已经是同一尺寸** |
+| shadcn | shadcn/ui，主流组件库 | **删掉我们的自定义尺寸**，回到组件库默认：`size="sm"` 的 `h-8 px-3` 由 `button.tsx` 的 CVA 串决定，`controls.css` 不再为 shadcn 声明尺寸覆盖 |
+| 8bitcn | `TheOrcDev/8bitcn-ui`，第三方小众 registry（依据 `THIRD_PARTY_UI.md` 的来源登记，两个上游均为官方 registry，但 8bitcn 并非主流组件库） | **保持现状**：`sm` 的 `min-height: 30px; padding: 5px 10px` 原样保留，改为只作用于 `html[data-theme="8bitcn"]` |
+
+**4.4 的 `size="xs"` 决定被推翻**：`size` 只是"相对标准按钮的档位"，不该用来把工具栏按钮做成另一种尺寸。replace 页那 10 处已全部改回标准按钮（删除 `size` 属性），`[data-size="xs"]` 规则随之无引用、已删除。
+
+**图标按钮改为正方**：`[data-size^="icon"]` 原来只设了 `width: var(--control-height)`，高度仍来自 Tailwind 的 `size-9`/`size-8`/`size-10`，于是 shadcn 下 `icon` 是 32×36、`icon-sm` 是 32×32、`icon-lg` 是 32×40——**既不方也不统一**。现在宽高与 min/max 全部钉在 `--control-height`，因此每个主题内所有 `icon*` 都是同一个正方形（shadcn/8bitcn 32px、Minecraft 44px）。
+
+**B、C 两类（按 CSS 类改盒子的按钮）全部不动**：关闭按钮、物品栏槽位、flake 工具与快捷栏等本就是**方格热区**，不是标准按钮。
+
+#### 修正：flake 音符盒的标签全部叠在一起
+
+现象是"按钮没有字，所有字叠在一个地方"。根因不是布局参数，而是**层叠作用域被 Portal 切断**：
+
+`ui/components/ui/dialog.tsx` 的 `DialogContent` 用 `<DialogPortal>` 渲染，**对话框内容被移出页面子树**。而音符键的规则写成：
+
+```css
+.flake-page.flake-page--edit-mode .flake-page__state-dialog-grid .flake-page__note-keyboard button.flake-page__note-key-button.btn { position: relative; ... }
+```
+
+它要求祖先里有 `.flake-page`——Portal 之后**永远不可能匹配**。于是按钮拿不到 `position: relative`，而未被限定的 `.flake-page__note-key-label { position: absolute; inset: 0 }` 只能退到最近的已定位祖先：加载 `modern.css` 的主题退到 `.dialog-surface`，Minecraft 不加载 `modern.css`（`.dialog-surface` 没有 `position: relative`）则退到 `.dialog-overlay { position: fixed }`。两种情况下**每个键的标签都居中对齐到同一个盒子**，于是全部叠在一起。同一条规则里的 `is-sharp` 位移也因此从未生效。
+
+**修复**：把两条规则改为只锚定键盘容器本身（`.flake-page__note-keyboard button.flake-page__note-key-button...`），不再依赖页面祖先。这样：
+
+- 按钮拿到 `position: relative` 与固定宽度，标签 `inset: 0` 正确居中在各自按钮内；
+- `is-sharp` 的 `transform: translateY(calc(size * -0.5))` 开始生效——槽位是两格高、按钮居中，上移半格即贴顶，符合 dev/flake 的黑键设计。
+
+**新增第 8 条护栏规则 `css-portal-scope`**：选择器同时要求页面根（`.flake-page` / `.nova-page`）与对话框内容标记（`.dialog-*`、`[data-slot^="dialog"]`、`__state-dialog`）时报错——这正是 Portal 切断作用域的形态，而它对既有全部检查都是不可见的。用例 15 个。
+
+> 说明：音符键的高度在 shadcn 下是标准按钮的 36px，而 `--flake-state-note-button-size` 是 `--control-height` 的 32px，因此上移半格（16px）会比槽位留白（14px）多 2px。Minecraft 下两者同为 44px，完全吻合。这一点未改，因为 shadcn 的高度按你的要求应保持组件库默认。
+
+#### 本轮退出验证
+
+| 检查 | 结果 |
+| ---- | ---- |
+| `size="xs"` 残留 | ✅ 0（replace 10 处已恢复标准） |
+| `[data-size^="icon"]` | ✅ 宽高 min/max 全部 = `--control-height`，产物层位为 `components`（压过 `vendor` 的 `size-*`） |
+| `[data-size="sm"]` | ✅ 仅作用于 `8bitcn` |
+| `css-portal-scope` | ✅ 0（规则在旧选择器上验证会触发） |
+| `npx tsc --noEmit` / `check:layers` / `check:application-boundaries` / `check:ui-styles` | ✅ 全部 0 违规 |
+| `npm run build` | ✅ 通过 |
+| 测试套件 | ✅ 与 HEAD 完全一致 |
+
+**待人工验收**
+1. replace 页：10 个按钮恢复标准尺寸后，那条挤了 4 个按钮 + 输入框的 `.replace-unit-header` 是否仍然排得下（你已实测统一字号不会挤压，但高度变化仍需确认）。
+2. 三主题的图标按钮（各 3 处 `icon`/`icon-sm`、1 处 `lg` 除外）现在应为正方，且同一主题内一致。
+3. shadcn 的 `size="sm"` 按钮（library 13 处、properties 13 处）恢复组件库默认后的观感。
+4. **flake 音符盒**：打开调试棒 → 音符盒的 `note` 属性，键上应各自显示音名（不再叠在一起），带 `#` 的键应上移半格。
+
 **待人工验收**：三主题下的四个转换点——资产管理器的"来源/子选项"两行、枚举器工具栏的分类筛选、方块选择对话框的分类、属性页版本转换的目标版本。重点看 MC 主题：下拉触发器现在应当是**输入框外观**（深色底、灰色描边、像素箭头），而不是贴图按钮；其悬停与展开状态不应变黄。另外请注意，MC 主题**其它既有的下拉**（设置页、flake 页等）也会随之从"贴图按钮外观"变为"输入框外观"——这是本轮有意的统一，但属于可见变化。
 
 > **测试自身的一个缺陷（已修正）**。给 `minecraft-controls.test.mjs` 增加触发器断言时，发现它此前**也是假绿的**：`themeOf()` 对无值的 `[data-theme]` 返回 `null`（含义是"任何主题"），而过滤条件把它当成"别的主题"排除掉了——于是**整个共享层的规则都被踢出候选集**，断言只在主题自己的规则里比较，自然怎么改都通过。
@@ -842,6 +983,107 @@ Phase 1 期间我把 `modern.css` 的 Tailwind 导入从 `layer(utilities)` 改�
 > 修正后重跑了完整的可证伪性验证，5 条断言现在**各自**单独回退对应修复都会失败：单选框 `border-radius`、复选框透明底、触发器输入框外观、触发器 hover 重述、共享层 `background-color` 简写。并补了一条自检断言，要求共享层至少有 20 条选择器处于可参与比较的状态，防止这类"候选集被清空"再次悄悄发生。
 >
 > 需要说明的是：Phase 4.0 那两个缺陷的**根因判断与修复本身**是可靠的——它们由独立的级联求解脚本和手算优先级共同确认，也不依赖这个测试；出问题的是测试对回归的**检出能力**。**一个无法失败的测试比没有测试更糟**，这已经是同一个教训的第二次。
+
+---
+
+### Phase 4.5 实施记录 ✅ 遗留 `btn` 类清理
+
+**基数复核**：带遗留 `btn` 标记的 `<Button>` 为 **65 处**（原估 75），无显式 `variant` 的多达 **163 处**（原估 45）。
+
+**只做了机械的那一半**：删掉调用点上的 `btn` 标记。安全依据是 `<Button>` 的 CVA 基础串里已经有 `btn`（`"nova-control btn inline-flex …"`），调用点重复传它**只是把类名写了两遍，渲染完全不变**。49 处 `className="btn"` 整个属性删除，17 处从多类列表里摘掉 `btn`（其余类保留）。匹配用**空白切分后的精确相等**而非词边界正则——`replace-entry-remove-btn` 这类后缀包含 `btn` 的类必须保留。
+
+护栏新增第 9 条规则 `tsx-redundant-btn-class`，仓库当前为 0。
+
+**没有做的另一半：给 163 处裸 `<Button>` 指定语义变体。** 这不是清理而是产品决策——`variant` 决定"主要 / 次要 / 危险"，逐按钮判断属于设计意图；当前分布（默认 secondary 163、ghost 69、secondary 38、default 11、destructive 7）看起来是既有的一致选择而非遗漏。**这一项留给你决定**：若希望某些位置（例如各对话框 footer 的确认按钮）提升为 `variant="default"`，给出范围我一次做完。
+
+### Phase 4.7 实施记录 ✅ 下拉与对话框收敛
+
+**`BlockSearchSelect` 已经收敛**，无需改动：它用 Radix `Popover.Root/Trigger/Portal/Content` 与共享 `Input`，属性下拉复用 `Dropdown`。
+
+**`BlockPickerDialog` 已改为复用共享 `Dialog`**。它原来手写了一套 `dialog-overlay` + `dialog-content` 加自绘标题栏，等于**放弃了 Portal、焦点陷阱与 Esc 关闭**，也拿不到主题给 `.dialog-surface` 的样式。现改为 `<Dialog title={title} onClose={onClose} width="lg" className="flake-page__inventory-dialog">`，与姊妹组件 `creativeInventoryDialog` 完全一致（后者本来就这么写）。顺带把里面裸的 `<input className="input">` 换成共享 `<Input>`，移除因此不再使用的 `Button` 导入。
+
+悬停提示 `CreativeInventoryTooltip` 原挂在 overlay 内，现移到 `Dialog` 之外——它是 `position: fixed; z-index: 9999`，DOM 位置无关。
+
+**未动**：`AssetManagerWindow.tsx` 的 `AssetManagerDialog` 同样手写 overlay/content，但它用 `subwindow-frame` 外壳（不是 `.dialog-surface`），且不在本步范围。它目前缺 Esc 关闭与焦点陷阱，可作独立议题。
+
+### Phase 4.8 实施记录 ✅ 变体清理
+
+确认 `variant="outline"` 与 `variant="link"` **业务代码零使用**。按方案的第二个选项：**在 `UiTestPage` 补用例**，而不是删除主题规则。理由是这两个变体属于上游 `buttonVariants` 的 API（源码自持的上游组件），删样式会让 API 里的变体静默失效；放进控件画廊后它们**变得可见、可回归**，也更符合本项目"每个状态都要能看到和验证"的做法。现在画廊"按钮变体"一行覆盖全部六种：default / secondary / outline / ghost / link / destructive。
+
+### Phase 4 全部完成后的验证
+
+| 检查 | 结果 |
+| ---- | ---- |
+| 调用点遗留 `btn` 标记 | ✅ 65 → **0**（`tsx-redundant-btn-class` 守住） |
+| `variant` 覆盖 | ✅ 六种均有使用（outline/link 由画廊覆盖） |
+| 手写 dialog chrome | ✅ `BlockPickerDialog` 已收敛；仅 `AssetManagerDialog`（`subframe` 外壳）保留 |
+| `npx tsc --noEmit` / `check:layers` / `check:application-boundaries` / `check:ui-styles` | ✅ 全部 0 违规 |
+| `npm run build` | ✅ 通过 |
+| 测试套件 | ✅ 与 HEAD 完全一致（`check:ui-styles` 16 个用例） |
+
+**待人工验收**
+1. 方块选择对话框（replace 页与 flake 页的"选择方块"）现在走共享 `Dialog`：标题栏样式、**Esc 可关闭**、打开后焦点进入对话框、点遮罩关闭、悬停提示位置。
+2. `UiTestPage` 新增的"按钮变体"一行，在三主题下六种变体的观感。
+
+---
+
+### Minecraft 按钮变体贴图（Phase 4 之后的增量）
+
+**命名规则**：`button_<状态>[_<变体>]_min.png`，变体段可省略。状态词表 `normal / hover / check / check_hover / disabled`（`active` 复用 `normal`）。
+
+**已定案的映射**
+
+| `data-variant` | 贴图变体段 | 说明 |
+| -------------- | ---------- | ---- |
+| `secondary`（CVA 的默认变体，200 个按钮） | 无（就是不带变体段的基础那套） | `button_normal_min.png` 等 5 张即这套 |
+| `default` | **`primary`** | 代码名与贴图名不同，按决定保留；文件内已写注释记录该映射 |
+| `outline` | `outline` | 独立一套 5 张 |
+| `destructive` | `destructive` | 4 个状态；缺 `button_disabled_destructive_min.png`，禁用态刻意回落共享的禁用贴图 |
+| `ghost` / `link` | 不需要 | `appearance.css` 已给 `border-image: none`，是无边框按钮 |
+
+**实现方式：变量间接，而不是逐变体写 `url()`**
+
+朴素做法是给每个变体写 5 条规则，但每条都要**压过** `button:hover:not(:disabled)` 这类状态规则的优先级，而且**漏写一个状态就会静默沿用基础贴图**。因此改成：
+
+```css
+button[data-slot="button"][data-variant="default"] {
+    --ln-minecraft-button-normal-image: url("…button_normal_primary_min.png");
+    /* hover / check / check-hover / disabled 同上 */
+}
+/* 状态规则只读变量，未定义时回落到基础贴图 */
+button:hover:not(:disabled) {
+    --ln-minecraft-button-image: var(--ln-minecraft-button-hover-image, url("…button_hover_min.png"));
+}
+```
+
+变体规则只提供"支撑变量"，不参与贴图的层叠竞争，所以**没有优先级问题**；没有贴图集的变体（secondary、destructive）什么都不用写，自然回落。
+
+**新增 2 个测试**（`minecraft-controls.test.mjs`，现共 7 个用例）
+
+1. 每个有贴图的变体必须声明 `normal / hover / check / check_hover` 四个状态，且每个 `url()` 指向的文件**真实存在**。`disabled` 是**可选的**：禁用按钮在各变体下长得一样是合理的默认，所以 `destructive` 就刻意回落共享的禁用贴图；其余四个状态则是"变体必须看起来不同于基础套"的部分，缺一个就报错。
+2. 6 条基础回退 `url()` 指向的文件也真实存在。
+
+这两条针对变量间接带来的两个静默失败模式：漏一个状态 → 该状态沿用基础贴图；文件名拼错 → 变量解析为空、回落基础贴图。两者都不报错、只会"看起来差一点"。**均已验证可证伪**：删掉 primary 的 hover 状态 → 失败 1 个；文件名改成 `primray` → 失败 1 个。
+
+**顺带修掉护栏的一个假阳性**：`token-undefined-reference` 原来扫描原始源码，于是注释里写 `var(--ln-minecraft-button-<state>-image, …)` 被当成"引用未定义令牌"报错。已改为扫描**注释屏蔽后**的文本，并验证真实未定义引用仍会报出。新增 1 个用例（`check:ui-styles` 现共 17 个）。
+
+**主要按钮的常态文字色是深灰，不是白。** primary 是浅色底板，白字看不清，因此常态取 `#3f3f3f`（Minecraft 调色板里既有的深灰，原本用作文字投影色）；悬停、按下、选中仍然是黄色 `#ffff00`，禁用仍是 `#808080`，三者不变。
+
+实现上同样用变量间接：基础规则写 `color: var(--ln-minecraft-button-normal-color, #ffffff)`，`default` 变体只声明 `--ln-minecraft-button-normal-color: #3f3f3f`。变体只提供一个支撑变量、**不参与 `color` 的层叠竞争**，所以 `button:hover:not(:disabled)`、`button[aria-pressed="true"]`、`button:disabled` 这些更高优先级的状态规则照常生效，悬停/按下/禁用都不受它影响。
+
+### UI 测试页：变体按钮的三种状态可切换
+
+`UiTestPage` 的"按钮变体"一行原来只能看到常态（以及它的悬停），按下与禁用两个状态无法观察。现在**每个变体按钮点击后循环 常态 → 按下 → 禁用**，三个状态都能逐一检查。
+
+- 按下态用 `aria-pressed`，禁用态用真正的 `disabled`（否则主题的 `:disabled` 规则不会生效，测的就不是真东西）。
+- **一个 `<button disabled>` 会吞掉自己的点击**，所以按钮外面包了一层 `span.button-variant-demo` 作为点击目标，并在 `.ui-control-gallery` 作用域内给它 `:disabled` 时加 `pointer-events: none`，让点击穿透到外层继续循环。这两条规则只作用于控件画廊，不影响业务界面。
+- 悬停态仍然只能靠真实鼠标悬停观察（无法用状态模拟）。
+
+**待人工验收**：切到 Minecraft 主题，看三个有贴图的变体在 常态 / 悬停 / 按下选中 / 按下选中+悬停 / 禁用 下的贴图与文字色——
+`default`（主要）：常态**深灰**字，悬停与按下黄字，禁用灰字；
+`outline`（描边）：常态白字（标准）；
+`destructive`（危险）：常态白字，禁用态与其它变体同款；
+`secondary` 应仍是原来的基础观感。
 
 ### Phase 5 — 清理僵尸层
 

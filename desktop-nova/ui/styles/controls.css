@@ -3,6 +3,18 @@
 @layer theme, vendor, tokens, base, components, utilities;
 
 @layer components {
+/* Sizing rules for the `size` prop. Two constraints shape them:
+   1. NO `font-size`: every button inherits one size via `font: inherit` (`base.css`).
+      The Minecraft theme draws its body text with Unifont, a bitmap font that only
+      renders crisply at whole multiples of its design size, so a button at 11px or
+      13px would come out blurred.
+   2. Each theme keeps its own standard button size; the size variants only have to be
+      self-consistent *within* a theme. Minecraft's `--control-height: 44px` is
+      deliberate, and its own `button` rule already governs every variant. The shadcn
+      theme follows shadcn/ui's defaults, so no size override is stated for it; 8bitcn
+      is a niche registry rather than a mainstream library, so its existing sizing is
+      preserved as-is. */
+
 html[data-theme] svg.lucide {
   width: var(--nova-icon-size, 18px); height: var(--nova-icon-size, 18px);
   flex-shrink: 0; stroke-width: 1.75; vertical-align: middle;
@@ -14,8 +26,24 @@ html[data-theme] .nova-control { font: inherit; }
 html[data-theme] [data-slot="button"] { line-height: 1.35; min-width: 0; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"] { border-color: transparent; background: var(--secondary); color: var(--foreground); box-shadow: none; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"]:hover:not(:disabled) { background: var(--accent); }
-html[data-theme] [data-slot="button"][data-size^="icon"] { padding: 7px; width: var(--control-height); flex: 0 0 var(--control-height); }
-html[data-theme] [data-slot="button"][data-size="sm"] { min-height: 30px; padding: 5px 10px; }
+/* Icon buttons are square. `width` alone was not enough: the height still came from
+   Tailwind's `size-9`/`size-8`/`size-10`, so shadcn rendered 32x36 and shadcn's own
+   variants disagreed with each other. Pinning both axes to `--control-height` makes
+   every `icon*` variant one square per theme (32px for shadcn/8bitcn, 44px for
+   Minecraft). */
+html[data-theme] [data-slot="button"][data-size^="icon"] {
+  padding: 7px;
+  width: var(--control-height);
+  min-width: var(--control-height);
+  max-width: var(--control-height);
+  height: var(--control-height);
+  min-height: var(--control-height);
+  max-height: var(--control-height);
+  flex: 0 0 var(--control-height);
+}
+/* 8bitcn only: keep its existing compact size. shadcn is left to the defaults from
+   ui/button.tsx, so its `sm` is the library's `h-8 px-3`. */
+html[data-theme="8bitcn"] [data-slot="button"][data-size="sm"] { min-height: 30px; padding: 5px 10px; }
 html[data-theme] [data-slot="button"]:focus-visible,
 html[data-theme] [data-slot="input"]:focus-visible,
 html[data-theme] [data-slot="textarea"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; box-shadow: none; }
@@ -130,6 +158,11 @@ html[data-theme] .flake-page__creative-hotbar-slot[data-slot="button"] { min-hei
 .flake-page__tool-panel-body [data-slot="scroll-area-viewport"] > div { display: flex !important; flex-direction: column; gap: 12px; padding-right: 8px; }
 .ui-control-gallery { height: 100%; }
 .ui-control-gallery [data-slot="scroll-area-viewport"] > div { padding: 16px; }
+/* The gallery cycles its variant demo buttons through `disabled` so that state can be
+   inspected. A disabled <button> swallows its own clicks, so the press is let through to
+   the wrapper, which is what advances the demo out of the disabled state again. */
+.ui-control-gallery .button-variant-demo { display: inline-flex; }
+.ui-control-gallery .button-variant-demo > [data-slot="button"]:disabled { pointer-events: none; }
 
 /* ---------------------------------------------------------------------------
    Component appearance that used to be Tailwind utilities on the component

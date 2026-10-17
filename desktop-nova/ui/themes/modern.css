@@ -84,8 +84,8 @@ button:hover:not(:disabled), .btn:hover:not(:disabled) { background: var(--accen
 button:active:not(:disabled) { background: var(--secondary); }
 button[aria-pressed="true"] { background: var(--accent); border-color: var(--primary); }
 button:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .5; cursor: not-allowed; }
-button.primary, button.btn-primary, button[data-variant="default"] { color: var(--primary-foreground); background: var(--primary); border-color: var(--primary); }
-button.primary:hover:not(:disabled), button.btn-primary:hover:not(:disabled), button[data-variant="default"]:hover:not(:disabled) { filter: brightness(.94); }
+button.primary, button[data-variant="default"] { color: var(--primary-foreground); background: var(--primary); border-color: var(--primary); }
+button.primary:hover:not(:disabled), button[data-variant="default"]:hover:not(:disabled) { filter: brightness(.94); }
 button.danger, button[data-variant="destructive"] { color: var(--primary-foreground); background: var(--destructive); border-color: var(--destructive); }
 button[data-variant="ghost"], button[data-variant="link"] { background: transparent; border-color: transparent; box-shadow: none; }
 .input, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="color"]), select, textarea {

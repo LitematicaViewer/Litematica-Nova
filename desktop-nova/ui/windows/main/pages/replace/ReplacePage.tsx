@@ -73,7 +73,7 @@ function InputEntryRow({ entry, onChange, onRemove }: {
       <div className="replace-entry-top">
         <BlockIcon blockId={entry.name} lookupMode="block_first" />
 
-        <Button className="btn replace-entry-remove-btn" onClick={onRemove}>×</Button>
+        <Button className="replace-entry-remove-btn" onClick={onRemove}>×</Button>
       </div>
       <PropertySelector
         blockId={entry.name}
@@ -104,7 +104,7 @@ function OutputEntryRow({ entry, onChange, onRemove }: {
           value={entry.weight}
           onChange={(e) => onChange({ ...entry, weight: Math.max(0, parseInt(e.target.value) || 0) })}
         />
-        <Button className="btn replace-entry-remove-btn" onClick={onRemove}>×</Button>
+        <Button className="replace-entry-remove-btn" onClick={onRemove}>×</Button>
       </div>
       <PropertySelector
         blockId={entry.name}
@@ -130,9 +130,9 @@ function SerialSeparatorBar({ index, total, onRemove, onMoveUp, onMoveDown }: {
       <div className="replace-separator-line" />
       <span className="replace-separator-label">下一步替换</span>
       <div className="replace-separator-actions">
-        <Button className="btn btn-xs" disabled={index === 0} onClick={onMoveUp} title="上移">↑</Button>
-        <Button className="btn btn-xs" disabled={index === total - 1} onClick={onMoveDown} title="下移">↓</Button>
-        <Button className="btn btn-xs" onClick={onRemove} title="删除分隔符">删除</Button>
+        <Button disabled={index === 0} onClick={onMoveUp} title="上移">↑</Button>
+        <Button disabled={index === total - 1} onClick={onMoveDown} title="下移">↓</Button>
+        <Button onClick={onRemove} title="删除分隔符">删除</Button>
       </div>
       <div className="replace-separator-line" />
     </div>
@@ -196,10 +196,10 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
 
   const AddEntryButtons = ({ side }: { side: 'input' | 'output' }) => (
     <div className="replace-add-buttons">
-      <Button className="btn btn-sm" onClick={() => setPicker({ side, type: 'inventory' })}>
+      <Button onClick={() => setPicker({ side, type: 'inventory' })}>
         + 创造模式物品栏
       </Button>
-      <Button className="btn btn-sm" onClick={() => setPicker({ side, type: 'enumerator' })}>
+      <Button onClick={() => setPicker({ side, type: 'enumerator' })}>
         + 枚举器
       </Button>
     </div>
@@ -209,7 +209,7 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
     <>
       <div className="card replace-unit-card">
         <div className={`replace-unit-header${collapsed ? ' collapsed' : ''}`}>
-          <Button className="btn btn-xs" onClick={() => setCollapsed(!collapsed)}>
+          <Button onClick={() => setCollapsed(!collapsed)}>
             {collapsed ? '▶' : '▼'}
           </Button>
           <Input
@@ -223,10 +223,10 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
             <span className="replace-unit-hit-count">命中 {scanSummary.hit_count} 个方块</span>
           )}
           <div className="replace-unit-spacer" />
-          <Button className="btn btn-xs" disabled={index === 0} onClick={onMoveUp}>↑</Button>
-          <Button className="btn btn-xs" disabled={index === total - 1} onClick={onMoveDown}>↓</Button>
-          <Button className="btn btn-xs" onClick={onDuplicate}>复制规则</Button>
-          <Button className="btn btn-xs" onClick={onRemove}>删除规则</Button>
+          <Button disabled={index === 0} onClick={onMoveUp}>↑</Button>
+          <Button disabled={index === total - 1} onClick={onMoveDown}>↓</Button>
+          <Button onClick={onDuplicate}>复制规则</Button>
+          <Button onClick={onRemove}>删除规则</Button>
         </div>
 
         {!collapsed && (

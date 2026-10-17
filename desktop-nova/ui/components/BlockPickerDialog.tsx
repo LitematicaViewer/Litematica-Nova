@@ -4,6 +4,8 @@ import { type EnumeratorCollection, loadEnumeratorCollections } from "../../src/
 import { translateBlockId } from "../../src/business/facade";
 import { BlockIcon } from "./BlockIcon";
 import { Dropdown } from "./Dropdown";
+import { Dialog } from "./Dialog";
+import { Input } from "./ui/input";
 import { CreativeInventoryTooltip } from "../windows/main/pages/flake/function";
 
 /**
@@ -105,15 +107,12 @@ export function BlockPickerDialog({
   const rangeEnd = filtered.length ? Math.min(filtered.length, pageStart + 45) : 0;
 
   return (
-    <div className="dialog-overlay" onClick={onClose}>
-      <section
-        className="dialog-content flake-page__inventory-dialog"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="subwindow-title-row">
-          <h3 className="subwindow-title">{title}</h3>
-          <button className="btn subwindow-close-button" onClick={onClose}>×</button>
-        </div>
+    <>
+      {/* Was a hand-rolled `dialog-overlay` + `dialog-content` pair, which meant no
+          portal, no focus trap and no Escape-to-close. The shared Dialog supplies all
+          three and carries the same `flake-page__inventory-dialog` styling that its
+          sibling creativeInventoryDialog already uses. */}
+      <Dialog title={title} onClose={onClose} width="lg" className="flake-page__inventory-dialog">
         <div className="flake-page__inventory-dialog-body">
           <div className="flake-page__creative-inventory-controls">
             <label className="flake-page__creative-inventory-control">
@@ -129,7 +128,7 @@ export function BlockPickerDialog({
             </label>
             <label className="flake-page__creative-inventory-control flake-page__creative-inventory-search">
               <span className="nova-muted">搜索</span>
-              <input className="input" value={search} placeholder="按方块名或 ID 过滤" onChange={(e) => setSearch(e.target.value)} />
+              <Input className="input" value={search} placeholder="按方块名或 ID 过滤" onChange={(e) => setSearch(e.target.value)} />
             </label>
             <div className="flake-page__creative-inventory-range nova-muted nova-small">
               {loading ? "加载中..." : `${rangeStart}-${rangeEnd} / ${filtered.length}`}
@@ -159,13 +158,14 @@ export function BlockPickerDialog({
                 )}
               </div>
               {loading && <div className="flake-page__creative-inventory-overlay nova-muted">正在加载创造模式分类...</div>}
-            {!loading && error && <div className="flake-page__creative-inventory-overlay nova-error">{displayPathText(error)}</div>}
+              {!loading && error && <div className="flake-page__creative-inventory-overlay nova-error">{displayPathText(error)}</div>}
               {!loading && !error && !filtered.length && <div className="flake-page__creative-inventory-overlay nova-muted">没有可显示的方块。</div>}
             </div>
           </div>
         </div>
-      </section>
+      </Dialog>
+      {/* Fixed-position tooltip, so it lives beside the dialog rather than inside it. */}
       <CreativeInventoryTooltip x={hoverPos.x} y={hoverPos.y} item={hoverItem} />
-    </div>
+    </>
   );
 }

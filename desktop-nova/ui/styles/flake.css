@@ -478,7 +478,6 @@
     appearance: none;
     background: transparent var(--flake-edit-tool-normal-image) center / 44px 44px no-repeat;
     color: var(--foreground);
-    font-size: 16px;
     font-weight: 700;
     image-rendering: pixelated;
     letter-spacing: normal;
@@ -583,7 +582,15 @@
     justify-content: center;
 }
 
-.flake-page.flake-page--edit-mode .flake-page__state-dialog-grid .flake-page__note-keyboard button.flake-page__note-key-button.btn {
+/* The key buttons live inside a Dialog, and Radix renders dialog content through a
+   PORTAL: it is detached from the page subtree. These rules used to be written as
+   `.flake-page.flake-page--edit-mode .flake-page__state-dialog-grid …`, which can
+   never match portaled content - so the button never got `position: relative`, and
+   `.flake-page__note-key-label { position: absolute; inset: 0 }` resolved against the
+   nearest positioned ancestor instead (the fixed overlay, or `.dialog-surface` in the
+   themes that load modern.css). Every key label ended up centred in that one box, and
+   the `is-sharp` offset below never applied. Anchor on the keyboard container only. */
+.flake-page__note-keyboard button.flake-page__note-key-button.btn {
     position: relative;
     width: var(--flake-state-note-button-size);
     min-width: var(--flake-state-note-button-size);
@@ -596,7 +603,10 @@
     white-space: nowrap;
 }
 
-.flake-page.flake-page--edit-mode .flake-page__state-dialog-grid .flake-page__note-keyboard button.flake-page__note-key-button.is-sharp {
+/* A sharp (raised) key sits half a unit higher in its slot, which is the usual
+   keyboard offset: the slot is two units tall and centres the button, so half a unit
+   puts it flush with the top. */
+.flake-page__note-keyboard button.flake-page__note-key-button.is-sharp {
     transform: translateY(calc(var(--flake-state-note-button-size) * -0.5));
 }
 

@@ -520,7 +520,7 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
         </fieldset>
         {terminalRawMaterials && <section className="material-export-section">
           <h4>末端原料配方</h4><p className="beta-statistics-status">复用本地 26.3 配方。未确定标签、循环和特殊配方会报告；烧制燃料另计。</p>
-          <Button className="btn" title="点击后联网下载 Minecraft 客户端提取配方，下载可能较大" onClick={handlePrepareRecipes} disabled={busy}>{isPreparingRecipes ? "正在准备配方…" : "准备26.3配方（需联网）"}</Button>
+          <Button title="点击后联网下载 Minecraft 客户端提取配方，下载可能较大" onClick={handlePrepareRecipes} disabled={busy}>{isPreparingRecipes ? "正在准备配方…" : "准备26.3配方（需联网）"}</Button>
           {recipeStatus && <p role="status">{recipeStatus}</p>}
         </section>}
         {exportFormat === "html" && <fieldset className="material-export-section" disabled={busy}>
@@ -549,7 +549,7 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
       </ScrollArea>
       <div className="material-export-footer">
         <Button variant="secondary" disabled={busy} onClick={() => { const mode = contentMode === "details" ? "export" : "details"; setContentMode(mode); onViewModeChange?.(mode); setHoverItem(null); }}>{contentMode === "details" ? "打开导出设置" : "返回材料明细"}</Button>
-        {contentMode === "export" && <Button className="btn" onClick={handleExport} disabled={busy || !currentFile}>{isExporting ? "正在导出…" : "导出材料列表"}</Button>}
+        {contentMode === "export" && <Button onClick={handleExport} disabled={busy || !currentFile}>{isExporting ? "正在导出…" : "导出材料列表"}</Button>}
         {exportStatus && <span role="status">{exportStatus}</span>}
         {error && <pre className="subwindow-error" role="alert">{error}</pre>}
       </div>
@@ -670,13 +670,13 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
   const scan = data?.containerScan;
   return <React.Profiler id="statistics" onRender={recordStatisticsCommit}><div className="beta-statistics-page">
     <div className="beta-statistics-toolbar">
-      <Button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("details"); setShowMaterials(true); })} disabled={!data || isLoading}>材料明细</Button>
-      <Button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("export"); setShowMaterials(true); }, "export")} disabled={!data || isLoading}>导出材料列表</Button>
+      <Button onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("details"); setShowMaterials(true); })} disabled={!data || isLoading}>材料明细</Button>
+      <Button onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("export"); setShowMaterials(true); }, "export")} disabled={!data || isLoading}>导出材料列表</Button>
       {debugMode && <Button variant="secondary" disabled={!data} onClick={() => openEnumeratorWithWindowBehavior(currentFile,() => setShowEnumerator(true))}>打开枚举器</Button>}
       <label className="beta-material-check"><Checkbox  checked={includeContainerItems} onCheckedChange={checked => setIncludeContainerItems((checked === true))} />统计容器内物品</label>
       <QuantitySwitch checked={asItems} onChange={setAsItems} />
       <span className="beta-statistics-file" title={displayFilePath(currentFile)}>{currentFile.split(/[\\/]/).pop()}</span>
-      <Button className="btn" onClick={loadStats} disabled={isLoading}>{isLoading ? "正在分析…" : "重新分析"}</Button>
+      <Button onClick={loadStats} disabled={isLoading}>{isLoading ? "正在分析…" : "重新分析"}</Button>
     </div>
     {includeContainerItems && scan && <div className="beta-statistics-status" role="status">已扫描 {scan.containers_scanned} 个容器、{scan.item_stacks_scanned} 堆物品。</div>}
     {error && <pre className="subwindow-error" role="alert">{error}</pre>}

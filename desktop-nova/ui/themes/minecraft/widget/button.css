@@ -15,11 +15,49 @@
 
 @layer components {
 
+/* Per-variant texture sets. A variant only supplies its state images; the state rules
+   below resolve `var(--ln-minecraft-button-<state>-image, <base>)`, so a variant with a
+   set picks it up and everything else (`secondary`) keeps the unsuffixed base set.
+   Written this way on purpose: putting the `url()` straight into a variant rule would
+   have to out-specify `button:hover:not(:disabled)` and friends, and a variant that
+   forgot one state would silently keep the base texture for it.
+   `default` is drawn as "primary" - the file name says what the button is, while
+   `default` is the shadcn variant name it maps to.
+   The primary button is a LIGHT plate, so its resting label is dark grey instead of
+   white; hover / pressed / disabled keep the shared colours. */
+button[data-slot="button"][data-variant="default"] {
+    --ln-minecraft-button-normal-color: #3f3f3f;
+    --ln-minecraft-button-normal-image: url("../resource/button/button_normal_primary_min.png");
+    --ln-minecraft-button-hover-image: url("../resource/button/button_hover_primary_min.png");
+    --ln-minecraft-button-check-image: url("../resource/button/button_check_primary_min.png");
+    --ln-minecraft-button-check-hover-image: url("../resource/button/button_check_hover_primary_min.png");
+    --ln-minecraft-button-disabled-image: url("../resource/button/button_disabled_primary_min.png");
+}
+
+button[data-slot="button"][data-variant="outline"] {
+    --ln-minecraft-button-normal-image: url("../resource/button/button_normal_outline_min.png");
+    --ln-minecraft-button-hover-image: url("../resource/button/button_hover_outline_min.png");
+    --ln-minecraft-button-check-image: url("../resource/button/button_check_outline_min.png");
+    --ln-minecraft-button-check-hover-image: url("../resource/button/button_check_hover_outline_min.png");
+    --ln-minecraft-button-disabled-image: url("../resource/button/button_disabled_outline_min.png");
+}
+
+/* `destructive` has no `button_disabled_destructive_min.png` yet, so the disabled state
+   deliberately falls back to the shared disabled plate - a disabled button looking the
+   same in every variant is a defensible default. Add the file and the var to give it its
+   own. */
+button[data-slot="button"][data-variant="destructive"] {
+    --ln-minecraft-button-normal-image: url("../resource/button/button_normal_destructive_min.png");
+    --ln-minecraft-button-hover-image: url("../resource/button/button_hover_destructive_min.png");
+    --ln-minecraft-button-check-image: url("../resource/button/button_check_destructive_min.png");
+    --ln-minecraft-button-check-hover-image: url("../resource/button/button_check_hover_destructive_min.png");
+}
+
 button,
 input[type="button"],
 input[type="submit"],
 input[type="reset"] {
-    --ln-minecraft-button-image: url("../resource/button/button_normal_min.png");
+    --ln-minecraft-button-image: var(--ln-minecraft-button-normal-image, url("../resource/button/button_normal_min.png"));
 
     box-sizing: border-box;
     display: inline-flex;
@@ -36,7 +74,7 @@ input[type="reset"] {
     border-image-repeat: stretch;
     appearance: none;
     background: transparent;
-    color: #ffffff;
+    color: var(--ln-minecraft-button-normal-color, #ffffff);
     text-align: center;
     cursor: default;
 }
@@ -45,7 +83,7 @@ button:hover:not(:disabled),
 input[type="button"]:hover:not(:disabled),
 input[type="submit"]:hover:not(:disabled),
 input[type="reset"]:hover:not(:disabled) {
-    --ln-minecraft-button-image: url("../resource/button/button_hover_min.png");
+    --ln-minecraft-button-image: var(--ln-minecraft-button-hover-image, url("../resource/button/button_hover_min.png"));
     color: #ffff00;
 }
 
@@ -53,17 +91,17 @@ button:active:not(:disabled),
 input[type="button"]:active:not(:disabled),
 input[type="submit"]:active:not(:disabled),
 input[type="reset"]:active:not(:disabled) {
-    --ln-minecraft-button-image: url("../resource/button/button_normal_min.png");
+    --ln-minecraft-button-image: var(--ln-minecraft-button-normal-image, url("../resource/button/button_normal_min.png"));
     color: #ffff00;
 }
 
 button[aria-pressed="true"] {
-    --ln-minecraft-button-image: url("../resource/button/button_check_min.png");
+    --ln-minecraft-button-image: var(--ln-minecraft-button-check-image, url("../resource/button/button_check_min.png"));
     color: #ffff00;
 }
 
 button[aria-pressed="true"]:hover:not(:disabled) {
-    --ln-minecraft-button-image: url("../resource/button/button_check_hover_min.png");
+    --ln-minecraft-button-image: var(--ln-minecraft-button-check-hover-image, url("../resource/button/button_check_hover_min.png"));
     color: #ffff00;
 }
 
@@ -71,7 +109,7 @@ button:disabled,
 input[type="button"]:disabled,
 input[type="submit"]:disabled,
 input[type="reset"]:disabled {
-    --ln-minecraft-button-image: url("../resource/button/button_disabled_min.png");
+    --ln-minecraft-button-image: var(--ln-minecraft-button-disabled-image, url("../resource/button/button_disabled_min.png"));
     color: #808080;
 }
 

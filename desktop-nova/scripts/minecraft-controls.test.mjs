@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import postcss from 'postcss';
 
@@ -183,5 +183,65 @@ test('共享层只声明填充色，不重置贴图', () => {
   for (const rule of rules.filter((entry) => entry.path === 'ui/styles/controls.css')) {
     if (!rule.selector.includes('[data-slot="checkbox"]')) continue;
     assert.ok(!rule.decls.some((node) => node.prop === 'background'), `${rule.selector} resets background-image`);
+  }
+});
+
+// --- button texture sets -----------------------------------------------------
+// A variant only supplies its state images; the state rules resolve
+// `var(--ln-minecraft-button-<state>-image, <base>)`. Two failure modes are silent
+// there: a variant missing a state (it keeps the base texture for that state) and a
+// filename typo (the var resolves to nothing and the fallback wins). Both are asserted
+// here rather than discovered by eye.
+//
+// `disabled` is optional on purpose: a disabled button looking the same in every variant
+// is a sound default, so a variant may deliberately fall back to the shared disabled
+// plate (destructive does). Every other state is required, because those are the ones
+// where a variant must look different from the base.
+
+const BUTTON_REQUIRED_STATES = ['normal', 'hover', 'check', 'check-hover'];
+const BUTTON_ALL_STATES = [...BUTTON_REQUIRED_STATES, 'disabled'];
+const buttonCss = parse('ui/themes/minecraft/widget/button.css');
+
+test('Minecraft 按钮变体的状态贴图完整且文件存在', () => {
+  const sets = new Map();
+  buttonCss.walkRules((rule) => {
+    const variant = /\[data-variant="([^"]+)"\]/.exec(rule.selector);
+    if (!variant) return;
+    const defined = new Map();
+    for (const decl of rule.nodes.filter((node) => node.type === 'decl')) {
+      const state = /^--ln-minecraft-button-(.+)-image$/.exec(decl.prop);
+      if (state) defined.set(state[1], decl.value);
+    }
+    if (!defined.size) return;
+    sets.set(variant[1], defined);
+    assert.deepEqual(
+      [...defined.keys()].filter((state) => !BUTTON_ALL_STATES.includes(state)),
+      [],
+      `${variant[1]} 声明了未知状态`,
+    );
+  });
+
+  assert.ok(sets.size >= 3, `预期至少三个变体有贴图集，实际 ${sets.size}`);
+  for (const [variant, defined] of sets) {
+    const missing = BUTTON_REQUIRED_STATES.filter((state) => !defined.has(state));
+    assert.deepEqual(missing, [], `${variant} 缺少状态: ${missing.join(', ')}`);
+    for (const [state, value] of defined) {
+      const file = /url\("([^"]+)"\)/.exec(value)?.[1];
+      assert.ok(file, `${variant}/${state} 不是 url(): ${value}`);
+      const resolved = new URL(file, new URL('ui/themes/minecraft/widget/', root));
+      assert.ok(existsSync(resolved), `${variant}/${state} 贴图不存在: ${file}`);
+    }
+  }
+});
+
+test('Minecraft 按钮的基础回退贴图文件存在', () => {
+  const fallbacks = new Set();
+  buttonCss.walkDecls(/^--ln-minecraft-button-image$/, (decl) => {
+    for (const match of decl.value.matchAll(/url\("([^"]+)"\)/g)) fallbacks.add(match[1]);
+  });
+  assert.ok(fallbacks.size >= 5, `预期至少 5 张回退贴图，实际 ${fallbacks.size}`);
+  for (const file of fallbacks) {
+    const resolved = new URL(file, new URL('ui/themes/minecraft/widget/', root));
+    assert.ok(existsSync(resolved), `回退贴图不存在: ${file}`);
   }
 });

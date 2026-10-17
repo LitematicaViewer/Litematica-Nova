@@ -734,22 +734,22 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
           <div className="game-resource-row-actions">
             {route === "block_icon" ? (
               <>
-                <button className="btn" type="button" disabled={busy} onClick={() => void handleApply(entry, "material_list")}>
+                <Button type="button" disabled={busy} onClick={() => void handleApply(entry, "material_list")}>
                   用于材料
-                </button>
-                <button className="btn" type="button" disabled={busy} onClick={() => void handleApply(entry, "layering")}>
+                </Button>
+                <Button type="button" disabled={busy} onClick={() => void handleApply(entry, "layering")}>
                   用于分层
-                </button>
+                </Button>
               </>
             ) : (
-              <button className="btn" type="button" disabled={busy} onClick={() => void handleApply(entry)}>
+              <Button type="button" disabled={busy} onClick={() => void handleApply(entry)}>
                 应用
-              </button>
+              </Button>
             )}
             {entry.builtin ? null : (
-              <button className="btn" type="button" disabled={busy} onClick={() => void handleDelete(entry)}>
+              <Button type="button" disabled={busy} onClick={() => void handleDelete(entry)}>
                 删除登记
-              </button>
+              </Button>
             )}
           </div>
         );
@@ -787,9 +787,9 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       <div className="asset-manager-header">
         <h3 className="asset-manager-title">游戏资源管理</h3>
         {onClose ? (
-          <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>
+          <Button className="subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>
             ×
-          </button>
+          </Button>
         ) : null}
       </div>
 
@@ -847,23 +847,18 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                 <div className="asset-manager-inline-controls">
                   {renderSubOptionControls()}
                   {remoteLanguageEnabled ? (
-                    <button
-                      className="btn"
-                      type="button"
-                      disabled={languageCatalogBusy}
-                      onClick={() => void loadLanguageCatalog()}
-                    >
+                    <Button type="button" disabled={languageCatalogBusy} onClick={() => void loadLanguageCatalog()} >
                       刷新远端列表
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
               </div>
             </div>
 
             <div className="asset-manager-actions">
-              <button className="btn" type="button" disabled={fetchDisabled} onClick={() => void runFetchAction()}>
+              <Button type="button" disabled={fetchDisabled} onClick={() => void runFetchAction()}>
                 {fetchButtonLabel()}
-              </button>
+              </Button>
             </div>
 
             {health.length > 0 ? (
@@ -913,19 +908,15 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
           <footer className="asset-manager-footer">
             <span className="subwindow-status-text asset-manager-footer-status">{statusText}</span>
             <div className="asset-manager-footer-actions">
-              <button
-                className="btn"
-                type="button"
-                onClick={() => void refreshGameResources().catch(() => undefined)}
-              >
+              <Button type="button" onClick={() => void refreshGameResources().catch(() => undefined)} >
                 刷新
-              </button>
-              <button className="btn" type="button" onClick={() => void handleHealth()}>
+              </Button>
+              <Button type="button" onClick={() => void handleHealth()}>
                 健康检查
-              </button>
-              <button className="btn" type="button" onClick={() => void handleOpenRoot()}>
+              </Button>
+              <Button type="button" onClick={() => void handleOpenRoot()}>
                 打开根目录...
-              </button>
+              </Button>
             </div>
           </footer>
         </section>

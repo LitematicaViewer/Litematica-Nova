@@ -243,7 +243,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
         <div className="subwindow-title-stack">
           <h3 className="subwindow-title">在线投影资源库</h3>
         </div>
-        {onClose ? <Button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}><X size={18} aria-hidden="true" /></Button> : null}
+        {onClose ? <Button className="subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}><X size={18} aria-hidden="true" /></Button> : null}
       </div>
 
       <div className="subwindow-body">
@@ -265,7 +265,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
             onChange={(event) => { setRedenQuery(event.target.value); setSearchDirty(true); }}
             onKeyDown={(event) => { if (event.key === "Enter") handleRedenSearch(); }}
           />
-          <Button className="btn" disabled={!!redenBusy} onClick={handleRedenSearch}>
+          <Button disabled={!!redenBusy} onClick={handleRedenSearch}>
             {redenBusy === "search" ? "搜索中..." : "搜索"}
           </Button>
           {redenBusy && <Button variant="ghost" onClick={cancelRequest}>取消等待任务</Button>}
@@ -341,7 +341,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
                           <div>{index + 1}. {attachment.name || `attachment-${index + 1}.litematic`}</div>
                           <div className="reden-attachment-meta">{attachment.size ? formatSize(attachment.size) : "-"} {attachment.description || ""}</div>
                         </div>
-                        <Button className="btn" disabled={!!redenBusy} onClick={() => handleRedenDownloadAttachment(redenDetail, index)}>
+                        <Button disabled={!!redenBusy} onClick={() => handleRedenDownloadAttachment(redenDetail, index)}>
                           {redenBusy === `download:${index}` ? "下载中..." : "下载并入库"}
                         </Button>
                       </div>
@@ -376,7 +376,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
                         );
                       })}
                     </div>
-                    <Button className="btn reden-parametric-button" disabled={!!redenBusy} onClick={() => handleRedenDownloadParametric(redenDetail)}>
+                    <Button className="reden-parametric-button" disabled={!!redenBusy} onClick={() => handleRedenDownloadParametric(redenDetail)}>
                       {redenBusy === "download:parametric" ? "生成下载中..." : "生成下载并入库"}
                     </Button>
                   </div>

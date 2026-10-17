@@ -336,7 +336,7 @@ test("hardcoded colours are flagged outside the palette and theme swatches", () 
   assert.match(reported[0].message, /#ff6666/);
 });
 
-test("native form controls are rejected in favour of the shared components", () => {
+test("raw native form controls are rejected in favour of the shared components", () => {
   const fixture = makeFixture();
   fixture.write(
     "windows/page.tsx",
@@ -347,19 +347,109 @@ test("native form controls are rejected in favour of the shared components", () 
       '        <input type="checkbox" checked />',
       '        <input type={"range"} />',
       '        <input type="file" />',
+      '        <button onClick={() => {}}>go</button>',
+      '        <Button onClick={() => {}}>go</Button>',
       "    </div>",
       ");",
       "",
     ].join("\n"),
   );
 
-  const reported = messagesFor(fixture.strict(), "tsx-native-control");
+  const controls = messagesFor(fixture.strict(), "tsx-native-control");
   // select + checkbox; the range is behind an expression and the file input is legitimate.
-  assert.equal(reported.length, 2, JSON.stringify(reported.map((v) => v.message)));
-  assert.ok(reported.some((v) => v.message.includes("<select>")));
-  assert.ok(reported.some((v) => v.message.includes('type="checkbox"')));
+  assert.equal(controls.length, 2, JSON.stringify(controls.map((v) => v.message)));
+  assert.ok(controls.some((v) => v.message.includes("<select>")));
+  assert.ok(controls.some((v) => v.message.includes('type="checkbox"')));
+
+  // The lowercase element is flagged; the component is not.
+  const raw = messagesFor(fixture.strict(), "tsx-raw-button");
+  assert.equal(raw.length, 1, JSON.stringify(raw.map((v) => v.message)));
+  assert.match(raw[0].message, /use ui\/button\.tsx/);
 });
 
+test("buttons may not set their own font size", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "styles/buttons.css",
+    [
+      ".toolbar button { font-size: 11px; }",
+      "button.compact, .btn-xs { font-size: 13px; }",
+      /* A descendant is not the button: this must not be reported. */
+      ".toolbar button span { font-size: 11px; }",
+      /* `font: inherit` is the mechanism that keeps one size, so it is allowed. */
+      "button { font: inherit; }",
+      "",
+    ].join("\n"),
+  );
+
+  // A selector list is reported per offending selector, so the two bad rules yield three.
+  const reported = messagesFor(fixture.strict(), "css-button-font-size");
+  assert.equal(reported.length, 3, JSON.stringify(reported.map((v) => v.message)));
+  assert.ok(reported.some((v) => v.message.includes(".toolbar button")));
+  assert.ok(reported.some((v) => v.message.includes("button.compact")));
+  assert.ok(reported.some((v) => v.message.includes(".btn-xs")));
+  assert.ok(!reported.some((v) => v.message.includes("span")));
+});
+
+test("selectors cannot require a page root while targeting portaled dialog content", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "styles/portal.css",
+    [
+      /* Never matches: dialog content is portaled out of the page subtree. */
+      ".flake-page.flake-page--edit-mode .flake-page__state-dialog-grid button.key { position: relative; }",
+      ".nova-page .dialog-surface button.key { padding: 0; }",
+      /* Anchored inside the dialog, so it works. */
+      ".flake-page__state-dialog button.key { position: relative; }",
+      /* A page rule that does not reach into the dialog is fine. */
+      ".flake-page button.toolbar { padding: 0; }",
+      "",
+    ].join("\n"),
+  );
+
+  const reported = messagesFor(fixture.strict(), "css-portal-scope");
+  assert.equal(reported.length, 2, JSON.stringify(reported.map((v) => v.message)));
+  assert.ok(reported.every((v) => v.message.includes("portaled dialog content")));
+});
+
+test("a redundant btn class on <Button> is reported", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "windows/page.tsx",
+    [
+      "export const P = () => (",
+      "    <div>",
+      '        <Button className="btn">ok</Button>',
+      '        <Button className="btn panel-button">ok</Button>',
+      '        <Button className="panel-button">ok</Button>',
+      /* A class that merely contains "btn" is a different class and must survive. */
+      '        <Button className="replace-entry-remove-btn">ok</Button>',
+      "    </div>",
+      ");",
+      "",
+    ].join("\n"),
+  );
+
+  const reported = messagesFor(fixture.strict(), "tsx-redundant-btn-class");
+  assert.equal(reported.length, 2, JSON.stringify(reported.map((v) => v.message)));
+  assert.ok(reported.every((v) => v.message.includes("already carries `btn`")));
+});
+test("a var() written inside a comment is documentation, not a reference", () => {
+  const fixture = makeFixture();
+  fixture.write("styles/tokens.css", ":root { --ln-known: red; }\n");
+  fixture.write(
+    "styles/comments.css",
+    [
+      "/* The indirection resolves var(--ln-not-defined-anywhere, <fallback>). */",
+      ".a { color: var(--ln-known); }",
+      "",
+    ].join("\n"),
+  );
+
+  // Comments must be masked before scanning for references, or prose about a token
+  // gets reported as a missing token.
+  assert.equal(messagesFor(fixture.strict(), "token-undefined-reference").length, 0);
+});
 test("baseline documents are validated before use", () => {
   const fixture = makeFixture();
   fixture.write("styles/fixture.css", ".alpha {\n    color: red;\n}\n");

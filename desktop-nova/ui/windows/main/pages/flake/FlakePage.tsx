@@ -1374,7 +1374,7 @@ const LayerCanvas = forwardRef<
     >
       {(visualError || missingMapColors > 0 || missingSideTextures > 0) && <div className="flake-visual-status" role="status" onMouseDown={event => event.stopPropagation()}>
         <span>{visualError || `${missingMapColors ? `${missingMapColors} 种方块缺少地图色` : ""}${missingMapColors && missingSideTextures ? " · " : ""}${missingSideTextures ? `${missingSideTextures} 种方块缺少侧面贴图` : ""}`}</span>
-        {visualError && <Button className="btn" onClick={event => { event.stopPropagation(); setVisualReload(previous => previous + 1); }}>重新加载</Button>}
+        {visualError && <Button onClick={event => { event.stopPropagation(); setVisualReload(previous => previous + 1); }}>重新加载</Button>}
       </div>}
       <canvas
         ref={layerTileCanvasRef}
@@ -1524,7 +1524,7 @@ function FlakeDebugStateDialog({
                           return (
                             <span key={value} className="flake-page__note-key-slot">
                               <Button
-                                className={noteLabel.sharpMarks ? "btn flake-page__note-key-button is-sharp" : "btn flake-page__note-key-button"}
+                                className={noteLabel.sharpMarks ? "flake-page__note-key-buttonis-sharp" : "flake-page__note-key-button"}
                                 type="button"
                                 aria-label={`${noteLabel.raw}，音高 ${value}`}
                                 aria-pressed={currentValue === value}
@@ -2080,10 +2080,10 @@ export function FlakePage({ currentFile, setRoute }: any) {
     return (
       <div className="nova-page flake-page">
         <div className="subwindow-toolbar flake-page__topbar">
-          <Button className="btn flake-page__materials-button" disabled>
+          <Button className="flake-page__materials-button" disabled>
             材料列表
           </Button>
-          <Button className="btn flake-page__build-button" disabled>
+          <Button className="flake-page__build-button" disabled>
             重新读取分层
           </Button>
           <label className="subwindow-check-row flake-page__edit-toggle">
@@ -2100,7 +2100,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   return (
     <div ref={pageRef} className={editMode ? "nova-page flake-page flake-page--edit-mode" : "nova-page flake-page"}>
       <div className="subwindow-toolbar flake-page__topbar">
-        <Button className="btn flake-page__materials-button" onClick={async () => {
+        <Button className="flake-page__materials-button" onClick={async () => {
           try {
             const loaded = await ensureStatsData();
             if (!loaded) return;
@@ -2112,7 +2112,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
         }}>
           材料列表
         </Button>
-        <Button className="btn flake-page__build-button" onClick={loadProjectionLayers} disabled={!currentFile || isLoadingLayers || isSavingEdits}>
+        <Button className="flake-page__build-button" onClick={loadProjectionLayers} disabled={!currentFile || isLoadingLayers || isSavingEdits}>
           {isLoadingLayers ? "读取中..." : "重新读取分层"}
         </Button>
         <label className="subwindow-check-row flake-page__edit-toggle">
@@ -2198,11 +2198,11 @@ export function FlakePage({ currentFile, setRoute }: any) {
         <div className="flake-page__layer-footer">
           <div className="flake-page__layer-value">Y = {layerY}</div>
           <div className="flake-page__layer-actions">
-            <Button className="btn flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 5))}>-5</Button>
-            <Button className="btn flake-page__step-button" disabled={!ready} aria-label="上一层" onClick={() => setLayerY(Math.max(0, layerY - 1))}><Minus aria-hidden="true" /></Button>
-            <Button className="btn flake-page__step-button" disabled={!ready} aria-label="下一层" onClick={() => setLayerY(Math.min(maxY, layerY + 1))}><Plus aria-hidden="true" /></Button>
-            <Button className="btn flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 5))}>+5</Button>
-            <Button className="btn" disabled={!ready} onClick={() => canvasRef.current?.resetView()}>重置视图</Button>
+            <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 5))}>-5</Button>
+            <Button className="flake-page__step-button" disabled={!ready} aria-label="上一层" onClick={() => setLayerY(Math.max(0, layerY - 1))}><Minus aria-hidden="true" /></Button>
+            <Button className="flake-page__step-button" disabled={!ready} aria-label="下一层" onClick={() => setLayerY(Math.min(maxY, layerY + 1))}><Plus aria-hidden="true" /></Button>
+            <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 5))}>+5</Button>
+            <Button disabled={!ready} onClick={() => canvasRef.current?.resetView()}>重置视图</Button>
           </div>
         </div>
       </div>
@@ -2302,7 +2302,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                     {EDIT_TOOL_PLACEHOLDERS.map((tool) => (
                       <Button
                         key={tool.id}
-                        className="btn flake-page__edit-tool-button"
+                        className="flake-page__edit-tool-button"
                         type="button"
                         onClick={() => setSelectedEditTool(tool.id)}
                         title={`${tool.name}：${tool.description}`}
@@ -2317,19 +2317,19 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 </div>
 
                 <div className="flake-page__tool-panel-actions">
-                  <Button className="btn" type="button" onClick={handleSaveMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
+                  <Button type="button" onClick={handleSaveMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
                     {isSavingEdits ? "保存中..." : "保存原点"}
                   </Button>
-                  <Button className="btn" type="button" onClick={handleSaveMarkerEditsAs} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
+                  <Button type="button" onClick={handleSaveMarkerEditsAs} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
                     原点另存为
                   </Button>
-                  <Button className="btn" type="button" onClick={handleRestoreMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
+                  <Button type="button" onClick={handleRestoreMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
                     还原原点草稿
                   </Button>
-                  <Button className="btn" type="button" onClick={() => setShowInventoryDialog(true)} disabled={!editMode}>
+                  <Button type="button" onClick={() => setShowInventoryDialog(true)} disabled={!editMode}>
                     打开创造模式物品栏
                   </Button>
-                  <Button className="btn" type="button" onClick={() => setRoute?.("render")}>
+                  <Button type="button" onClick={() => setRoute?.("render")}>
                     打开渲染页
                   </Button>
                 </div>
@@ -2359,7 +2359,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
               );
             })}
           </div>
-          <Button className="btn flake-page__quickbar-open-inventory" type="button" onClick={() => setShowInventoryDialog(true)}>
+          <Button className="flake-page__quickbar-open-inventory" type="button" onClick={() => setShowInventoryDialog(true)}>
             <span className="flake-page__quickbar-open-inventory-text">打开物品栏</span>
           </Button>
         </div>

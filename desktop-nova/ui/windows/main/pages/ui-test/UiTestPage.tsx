@@ -18,6 +18,23 @@ import { currentThemeId, subscribeToThemeChanges, themeResourceKey } from "../..
 
 const fallbackThumbExampleUrl = new URL("../../../../shell/resource/thumb_example.png", import.meta.url).href;
 
+// The button-variant gallery cycles each demo through these three states.
+type VariantDemoState = "normal" | "check" | "disabled";
+const VARIANT_DEMO_CYCLE: VariantDemoState[] = ["normal", "check", "disabled"];
+const VARIANT_DEMO_STATE_LABELS: Record<VariantDemoState, string> = {
+  normal: "常态",
+  check: "按下",
+  disabled: "禁用",
+};
+const BUTTON_VARIANT_DEMOS = [
+  { variant: "default", label: "主要" },
+  { variant: "secondary", label: "次要" },
+  { variant: "outline", label: "描边" },
+  { variant: "ghost", label: "幽灵" },
+  { variant: "link", label: "链接" },
+  { variant: "destructive", label: "危险" },
+] as const;
+
 const themeThumbExampleUrls = Object.entries(
   import.meta.glob<string>("../../../../themes/*/resource/thumb_example.png", {
     eager: true,
@@ -55,6 +72,17 @@ export function UiTestPage() {
   const [selectedOption, setSelectedOption] = useState("first");
   const [sampleTheme, setSampleTheme] = useState("shadcn");
   const [sampleTemplate, setSampleTemplate] = useState("template-a");
+  const [variantDemoStates, setVariantDemoStates] = useState<Record<string, VariantDemoState>>({});
+
+  // Each variant button cycles through the three states a theme can style, so the
+  // pressed (`aria-pressed`) and disabled textures can be inspected, not just hover.
+  const advanceVariantDemo = (variant: string) => {
+    setVariantDemoStates((current) => {
+      const now = current[variant] ?? "normal";
+      const next = VARIANT_DEMO_CYCLE[(VARIANT_DEMO_CYCLE.indexOf(now) + 1) % VARIANT_DEMO_CYCLE.length];
+      return { ...current, [variant]: next };
+    });
+  };
   useEffect(() => subscribeToThemeChanges(setThemeId), []);
 
   const thumbExampleUrl = thumbExampleUrlForTheme(themeId);
@@ -110,6 +138,36 @@ export function UiTestPage() {
             <Button type="button">普通按钮</Button>
             <Button type="button" aria-pressed="true">可勾选</Button>
             <Button type="button" disabled>禁用</Button>
+          </div>
+        </FormRow>
+        {/* Every `variant` in buttonVariants is shown here. `outline` and `link` have no
+            business use yet, so without a gallery case their theme rules would be dead
+            CSS nobody could check.
+            Each button cycles 常态 → 按下 → 禁用 so all three states can be inspected;
+            previously only the resting state (and its hover) was reachable. A disabled
+            <button> swallows its own clicks, hence the wrapper as the click target. */}
+        <FormRow label="按钮变体（点击循环 常态 → 按下 → 禁用）：">
+          <div className="button-row">
+            {BUTTON_VARIANT_DEMOS.map((entry) => {
+              const state = variantDemoStates[entry.variant] ?? "normal";
+              return (
+                <span
+                  key={entry.variant}
+                  className="button-variant-demo"
+                  title={`${entry.label} · 当前：${VARIANT_DEMO_STATE_LABELS[state]}（点击切换）`}
+                  onClick={() => advanceVariantDemo(entry.variant)}
+                >
+                  <Button
+                    type="button"
+                    variant={entry.variant}
+                    aria-pressed={state === "check"}
+                    disabled={state === "disabled"}
+                  >
+                    {entry.label}
+                  </Button>
+                </span>
+              );
+            })}
           </div>
         </FormRow>
         <FormRow label="对话框：">

@@ -411,6 +411,64 @@ function checkHardcodedColours(filePath, source, relative) {
   }
 }
 
+// Any selector whose rightmost compound paints a button. `.btn*` counts because the
+// legacy size classes were exactly where per-button type scales used to hide.
+const BUTTON_TAIL_RE =
+  /(^|[^\w-])(button|\.btn(-[\w-]+)?|\.dropdown-trigger)(?![\w-])|\[data-slot="button"\]|input\[type="(?:button|submit|reset)"\]/;
+
+/**
+ * Every button must inherit one font size (`font: inherit` in the theme layer).
+ * The Minecraft theme paints its body text with Unifont, a bitmap font that only
+ * renders crisply at whole multiples of its design size, so a button at 11px or 13px
+ * comes out blurred - and a per-button type scale is what produced that spread.
+ *
+ * Only the rightmost compound is tested, so `.toolbar button span { font-size }` is
+ * not mistaken for a button rule. Only `font-size` is checked; the `font` shorthand
+ * is how the inherit is expressed.
+ */
+function checkButtonFontSize(filePath, source) {
+  const masked = maskCssText(source);
+  for (const match of masked.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const prelude = match[1];
+    if (prelude.trimStart().startsWith("@")) continue;
+    const declaration = /font-size\s*:/.exec(match[2]);
+    if (!declaration) continue;
+    for (const selector of prelude.split(",")) {
+      const tail = selector.trim().split(/\s+|>/).pop();
+      if (!BUTTON_TAIL_RE.test(tail)) continue;
+      addViolation(
+        filePath,
+        lineNumberAt(masked, match.index + match[1].length + declaration.index),
+        "css-button-font-size",
+        `"${selector.trim().replace(/\s+/g, " ")}" sets a button font-size; buttons must inherit one size so the pixel font stays crisp.`,
+      );
+    }
+  }
+}
+
+// Dialog content is rendered through a Radix portal, so it is detached from the page
+// subtree. A selector that requires a page root *and* reaches into dialog content can
+// therefore never match. This is how the flake note-keyboard broke: the button never
+// received `position: relative`, so its absolutely-positioned label resolved against
+// the nearest positioned ancestor and every key's text stacked in one box.
+const PAGE_ROOT_RE = /\.(?:flake-page|nova-page)(?![\w-])/;
+const DIALOG_CONTENT_RE = /\[data-slot\^="dialog"\]|\.dialog-(?:surface|content|overlay|body|header|footer|form-grid)|__state-dialog/;
+
+function checkPortaledDialogScope(filePath, source) {
+  const masked = maskCssText(source);
+  for (const match of masked.matchAll(/([^{}]+)\{/g)) {
+    const prelude = match[1].trim();
+    if (prelude.startsWith("@")) continue;
+    if (!PAGE_ROOT_RE.test(prelude) || !DIALOG_CONTENT_RE.test(prelude)) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-portal-scope",
+      `"${prelude.replace(/\s+/g, " ")}" requires a page root but targets portaled dialog content, so it can never match. Anchor it inside the dialog instead.`,
+    );
+  }
+}
+
 function checkCssFile(filePath, source) {
   const { rules, reducedMotionSpans, forcedColoursSpans, masked } = scanCss(source);
   const relative = relativePath(filePath);
@@ -580,7 +638,30 @@ function checkSourceFile(filePath, source) {
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
       const tag = node.tagName.getText(sourceFile);
       const at = node.getStart(sourceFile);
-      if (tag === "select") {
+      if (tag === "button") {
+        addViolation(
+          filePath,
+          lineNumberAt(source, at),
+          "tsx-raw-button",
+          "Raw <button> bypasses the Button component's variant/size system; use ui/button.tsx.",
+        );
+      } else if (tag === "Button") {
+        // `buttonVariants`' base string already carries `btn`; repeating it at the call
+        // site is the last remnant of the hand-rolled button classes and does nothing.
+        for (const attribute of node.attributes.properties) {
+          if (!ts.isJsxAttribute(attribute) || attribute.name.getText(sourceFile) !== "className" || !attribute.initializer) continue;
+          const literalTokens = [...attribute.initializer.getText(sourceFile).matchAll(/"([^"]*)"|'([^']*)'|`([^`]*)`/g)]
+            .flatMap((m) => (m[1] ?? m[2] ?? m[3] ?? "").split(/\s+/))
+            .filter(Boolean);
+          if (!literalTokens.includes("btn")) continue;
+          addViolation(
+            filePath,
+            lineNumberAt(source, at),
+            "tsx-redundant-btn-class",
+            "<Button> already carries `btn`; drop it from className.",
+          );
+        }
+      } else if (tag === "select") {
         addViolation(
           filePath,
           lineNumberAt(source, at),
@@ -702,10 +783,16 @@ export function collectFindings(rootDir) {
       report.cssFileCount += 1;
       const source = fs.readFileSync(filePath, "utf8");
       checkCssFile(filePath, source);
+      checkButtonFontSize(filePath, source);
+      checkPortaledDialogScope(filePath, source);
       checkHardcodedColours(filePath, source, relativePath(filePath));
       checkVendorImports(filePath, source, declaredLayers, projectCeiling);
 
-      for (const match of source.matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
+      // Scan the masked text: a `var()` written inside a comment is documentation, not
+      // a reference. (This is what flagged the comment that explains the button
+      // variant texture indirection.)
+      const maskedForTokens = maskCssText(source);
+      for (const match of maskedForTokens.matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
         const token = match[1];
         if (report.definedTokens.has(token) || runtimeSetTokens.has(token)) continue;
         // Radix publishes these on the content element it renders; they are part
@@ -713,7 +800,7 @@ export function collectFindings(rootDir) {
         if (token.startsWith("--radix-")) continue;
         addViolation(
           filePath,
-          lineNumberAt(source, match.index),
+          lineNumberAt(maskedForTokens, match.index),
           "token-undefined-reference",
           `${token} is referenced but never defined; it silently falls back.`,
         );

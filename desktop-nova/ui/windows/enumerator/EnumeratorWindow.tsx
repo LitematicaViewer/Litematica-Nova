@@ -24,6 +24,7 @@ import { Dropdown } from "../../components/Dropdown";
 import { VirtualSpacerCell } from "../../components/VirtualSpacerCell";
 import { useVirtualWindow } from "../../components/useVirtualWindow";
 import { Checkbox } from "../../components/ui/checkbox";
+import { Button } from "../../components/ui/button";
 import {
   applyThemeStylesheet,
   currentThemeId,
@@ -467,7 +468,7 @@ function EnumeratorContent({
     <div className={contentClassName}>
       <div className="subwindow-title-bar">
         <h3 className="subwindow-title">枚举器</h3>
-        {onClose ? <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</button> : null}
+        {onClose ? <Button className="subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</Button> : null}
       </div>
 
       <div className="subwindow-body enumerator-body">
@@ -624,8 +625,8 @@ function EnumeratorContent({
               </div>
 
               <div className="enumerator-actions-row">
-                <button className="btn" type="button" onClick={() => handleMoveSelected(-1)} disabled={!rightSelected.length}>上移</button>
-                <button className="btn" type="button" onClick={() => handleMoveSelected(1)} disabled={!rightSelected.length}>下移</button>
+                <Button type="button" onClick={() => handleMoveSelected(-1)} disabled={!rightSelected.length}>上移</Button>
+                <Button type="button" onClick={() => handleMoveSelected(1)} disabled={!rightSelected.length}>下移</Button>
               </div>
 
               <div className="enumerator-input-row enumerator-content-search-row">
@@ -710,9 +711,9 @@ function EnumeratorContent({
           </div>
         </div>
         <div className="enumerator-footer-actions">
-          <button className="btn" type="button" onClick={handleCreateCollection}>新增集合</button>
-          <button className="btn" type="button" onClick={() => persistCollection(true)} disabled={isSaving || !rightValues.length}>保存副本</button>
-          <button className="btn" type="button" onClick={() => persistCollection(false)} disabled={isSaving || !rightValues.length}>保存集合</button>
+          <Button type="button" onClick={handleCreateCollection}>新增集合</Button>
+          <Button type="button" onClick={() => persistCollection(true)} disabled={isSaving || !rightValues.length}>保存副本</Button>
+          <Button type="button" onClick={() => persistCollection(false)} disabled={isSaving || !rightValues.length}>保存集合</Button>
         </div>
       </div>
       {copyToast ? (
