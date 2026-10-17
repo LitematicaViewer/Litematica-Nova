@@ -505,6 +505,42 @@ function checkUnresolvedAssets(filePath, source) {
     );
   }
 }
+/**
+ * A class list is whitespace separated, so two class names fused into one token means
+ * something rewrote the attribute and dropped the separator. That happens easily to a
+ * script that removes a token from a class list, and it is invisible: the element keeps
+ * no styling from either class. `flake-page__note-key-buttonis-sharp` is exactly that
+ * shape - it matched neither `.flake-page__note-key-button` nor `.is-sharp`, so the note
+ * keyboard lost its button box and every key label escaped to one spot.
+ */
+function checkGluedClassTokens(filePath, source, knownClasses) {
+  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const visit = (node) => {
+    if (ts.isJsxAttribute(node) && node.name.getText(sourceFile) === "className" && node.initializer) {
+      const raw = node.initializer.getText(sourceFile);
+      for (const quoted of raw.matchAll(/"([^"]*)"|'([^']*)'|`([^`]*)`/g)) {
+        const text = quoted[1] ?? quoted[2] ?? quoted[3] ?? "";
+        for (const token of text.split(/\s+/)) {
+          if (!token || knownClasses.has(token) || token.length < 8) continue;
+          for (let split = 3; split < token.length - 3; split += 1) {
+            const head = token.slice(0, split);
+            const tail = token.slice(split);
+            if (!knownClasses.has(head) || !knownClasses.has(tail)) continue;
+            addViolation(
+              filePath,
+              lineNumberAt(source, node.getStart(sourceFile)),
+              "tsx-glued-class-token",
+              `Class token "${token}" is "${head}" and "${tail}" fused together; a class list needs a space between them.`,
+            );
+            return;
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+}
 function checkCssFile(filePath, source) {
   const { rules, reducedMotionSpans, forcedColoursSpans, masked } = scanCss(source);
   const relative = relativePath(filePath);
@@ -772,6 +808,7 @@ export function collectFindings(rootDir) {
     unlayeredRuleCounts: new Map(),
     layerOrderDeclarations: [],
     definedTokens: new Set(),
+    definedClasses: new Set(),
     cssFileCount: 0,
     sourceFileCount: 0,
   };
@@ -823,6 +860,7 @@ export function collectFindings(rootDir) {
       checkHardcodedColours(filePath, source, relativePath(filePath));
       checkVendorImports(filePath, source, declaredLayers, projectCeiling);
       checkUnresolvedAssets(filePath, source);
+      for (const match of maskCssText(source).matchAll(/\.([a-zA-Z][\w-]{2,})/g)) report.definedClasses.add(match[1]);
 
       // Scan the masked text: a `var()` written inside a comment is documentation, not
       // a reference. (This is what flagged the comment that explains the button
@@ -845,7 +883,9 @@ export function collectFindings(rootDir) {
 
     for (const filePath of sourceFiles) {
       report.sourceFileCount += 1;
-      checkSourceFile(filePath, fs.readFileSync(filePath, "utf8"));
+      const source = fs.readFileSync(filePath, "utf8");
+      checkSourceFile(filePath, source);
+      checkGluedClassTokens(filePath, source, report.definedClasses);
     }
 
     report.violations.sort(compareViolations);

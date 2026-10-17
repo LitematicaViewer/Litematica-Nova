@@ -1524,7 +1524,7 @@ function FlakeDebugStateDialog({
                           return (
                             <span key={value} className="flake-page__note-key-slot">
                               <Button
-                                className={noteLabel.sharpMarks ? "flake-page__note-key-buttonis-sharp" : "flake-page__note-key-button"}
+                                className={noteLabel.sharpMarks ? "flake-page__note-key-button is-sharp" : "flake-page__note-key-button"}
                                 type="button"
                                 aria-label={`${noteLabel.raw}，音高 ${value}`}
                                 aria-pressed={currentValue === value}

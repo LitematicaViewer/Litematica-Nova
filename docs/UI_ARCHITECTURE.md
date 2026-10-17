@@ -20,6 +20,8 @@
 | V1.15    | 2026-10-13 | Codex  | Phase 5 部分完成：13 个 MC 样式文件合并为 widgets.css（15 → 3 个文件，81 条规则序列逐条校验一致），并入时发现并修复 40 条相对贴图路径失效；新增第 10 条护栏规则 css-unresolved-asset；裸元素选择器未能归零——页面中 51 个裸表单/表格元素仍依赖它们，需先做标记迁移 |
 | V1.16    | 2026-10-13 | Codex  | Phase 5a 完成：51 个裸表单/表格元素全部迁移到共享 Table/Input/Textarea（枚举器 40、资产管理器 9、统计页 1、虚拟占位 1），	able.tsx 补上 ref 转发；裸元素现已为 0，5b（MC 裸元素选择器收窄）解锁。会改变那 4 个页面的表格/输入框观感，待人工确认 |
 | V1.17    | 2026-10-13 | Codex  | **Phase 5 完成**：MC 主题 116 处裸元素选择器收窄到 [data-slot]（已有槽位的删裸名、无槽位的替换；input[type=button/submit/reset] 15 处确认无元素后删除），裸元素选择器 42 → 0、文件数 15 → 3，两条退出标准均达成；副作用是 Radix 按钮不再继承按钮贴图，符合预期 |
+| V1.18    | 2026-10-13 | Codex  | 修复音符盒键盘回归：Phase 4.5 清 `btn` 的脚本把空白分隔符一并过滤，`is-sharp` 被粘成 `flake-page__note-key-buttonis-sharp`，两条 note-key 规则同时失效；全仓扫描确认仅此一处受损，已修复。护栏新增第 11 条规则 `tsx-glued-class-token` |
+| V1.19    | 2026-10-13 | Codex  | 修复 Minecraft 复选框被裁成圆角：共享层 `controls.css:66` 多带一个 `button` 元素，使其成为 (0,2,2) 而恒定压住主题的 (0,2,1) 覆盖；删除该元素后 8bitcn/Minecraft 的 `border-radius: 0` 正常胜出，shadcn 的 4px 不变。新增第 8 个 MC 用例（先失败后通过） |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -1096,6 +1098,63 @@ button:hover:not(:disabled) {
 
 ---
 
+### 回归修复：Minecraft 复选框被裁剪成圆角矩形
+
+人工验收发现 Minecraft 主题的复选框被裁成**圆角矩形**，而贴图本身是方的（单选框正常）。
+
+**根因：共享层的一条基础规则多了个 `button` 元素，压住了所有主题覆盖。**
+
+```
+ui/styles/controls.css:66
+html[data-theme] button[data-slot="checkbox"] { ... border-radius: 4px; ... }   (0,2,2)
+html[data-theme="minecraft"] [data-slot="checkbox"] { border-radius: 0 }        (0,2,1)  ← 永远输
+```
+
+`html[data-theme]`(0,1,1) + `button`(0,0,1) + `[data-slot="checkbox"]`(0,1,0) = **(0,2,2)**，比主题覆盖的 (0,2,1) 高一级，所以 `4px` 恒定胜出。`background-image` 会被 `border-radius` 裁切（`background-clip` 默认 `border-box`），方形贴图的四角因此被切掉。
+
+**单选框为什么没事**：它的共享基础规则 `html[data-theme] [data-slot="radio-group-item"][data-choice-layout="control"]` **没有** `button` 元素，是 (0,3,1)，与主题覆盖同分，靠文档顺序（`appearance.css` 在 `controls.css` 之后）取胜。
+
+**修复**：删掉那个多余的 `button` 元素 → 变成 (0,2,1)，与 8bitcn / Minecraft 的覆盖同分，后者在文件里更靠后，于是正常胜出。它仍然压得住更低的 `[data-slot="checkbox"]` 基础规则，shadcn 的 4px 不受影响。
+
+> 注意这不是"删掉 4px"——`4px` 是 shadcn 的正确取值，问题只在优先级。测试里专门加了这条反向校验：若有人图省事删掉声明，测试会失败。
+
+**新增测试**（`minecraft-controls.test.mjs` 现 8 个用例）：断言 Minecraft 复选框胜出的 `border-radius` 为 `0`，并校验共享层那条 `4px` 仍然存在。**测试先写、修复前失败**，失败信息直接指出肇事选择器：
+
+```
+the texture is clipped by html[data-theme] button[data-slot="checkbox"] in ui/styles/controls.css
+```
+
+**同类隐患（已排查，本次未改）**：`controls.css:52`（`box-shadow` 等重置）与 `controls.css:152`（单选框基础外观）也带了 `button` 元素，同样是 (0,2,2)。目前没有可见影响——这两个属性上主题覆盖或另有同分规则接管——但若将来主题想覆盖这些属性，会踩相同的坑。
+### 回归修复：音符盒键盘（`tsx-glued-class-token`）
+
+人工验收发现 Minecraft 主题下音符盒键盘整体错乱：有升调的按键**文字全部消失**、按键失去固定宽度被拉成整行、所有音阶字符串**叠在区域中央**、变音符号跑到**区域右上角**。
+
+**根因是 Phase 4.5 清理 `btn` 标记时的脚本缺陷。** 那一步把 65 处调用点的 `btn` 从 `className` 里删掉，其中 17 处 `btn` 后面还跟着别的类名。脚本用
+
+```js
+body.split(/(\s+)/).filter((piece) => !/^\s+$/.test(piece) && piece !== "btn").join("")
+```
+
+把**空白分隔符和 `btn` 一起过滤掉了**，于是
+
+```
+"btn flake-page__note-key-button is-sharp"  →  "flake-page__note-key-buttonis-sharp"
+```
+
+`is-sharp` 被粘到前一个类名上，得到一个新的、谁都不认识的类名。结果两条规则同时失效：
+
+| 失效的规则 | 丢失的声明 | 症状 |
+| ---------- | ---------- | ---- |
+| `.flake-page__note-keyboard button.flake-page__note-key-button.btn` | `position: relative`、`width/min/max-width`、`overflow: hidden` | 按键没有固定宽度；`.flake-page__note-key-label`（`position: absolute; inset: 0`）的包含块退到远处祖先，所有标签叠在该祖先中央；`overflow: hidden` 的裁剪也没了 |
+| `.flake-page__note-keyboard button.flake-page__note-key-button.is-sharp` | `transform: translateY(-50%)` | 升调按键不再上移半分；`.flake-page__note-key-sharp`（`position: absolute; top: 3px; right: 4px`）同样相对于远处祖先定位，跑到区域右上角 |
+
+第二条规则也解释了为什么**只有带升调的按键**完全没有文字：`.is-sharp` 失效后该按键的宽度约束一并消失。
+
+**修复**：恢复被粘坏的类名（`"flake-page__note-key-button is-sharp"`）。脚本对全部 17 处做了同样的粘合风险检查，**只有这一处受损**（其余 16 处 `btn` 后只有一个类名，没有粘合可能）。
+
+**护栏新增第 11 条规则：`tsx-glued-class-token`** —— 类名列表以空白分隔，若一个令牌恰好能拆成两个项目 CSS 里真实存在的类名，说明某次改写丢掉了分隔符。这类损坏对其它所有检查都是隐形的（`tsx-` 规则只看已知类名，粘合产生的是未知类名；`.btn` 由 CVA 基础串提供，元素上依然有），只有跑起来看页面才会发现，所以值得单独拦住。已用夹具验证可证伪。
+
+> 教训：批量改写 `className` 的脚本**必须按令牌边界操作**——先把字符串切成令牌，删掉目标令牌，再用单个空格重新连接；不要用「过滤掉空白片段再 `join("")`」的写法。
 ### Phase 5 实施记录（部分完成）
 
 #### ✅ 文件数：15 → 3（退出标准之一达成）

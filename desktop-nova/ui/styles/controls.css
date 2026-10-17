@@ -62,8 +62,13 @@ html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group
    would reset `background-image`, and a theme that textures this control would then
    have to out-specify it for the image while still losing the colour - which is
    exactly how Minecraft's checkbox ended up showing `--primary` through the
-   transparent centre of its texture. */
-html[data-theme] button[data-slot="checkbox"] {
+   transparent centre of its texture.
+
+   No `button` element in the selector on purpose: it would make this (0,2,2), which
+   out-ranks every per-theme override at (0,2,1) - so `border-radius: 4px` could never
+   be zeroed and Minecraft's square texture was clipped to a rounded rectangle. The
+   8bitcn and minecraft rules below rely on winning the tie at (0,2,1) by coming later. */
+html[data-theme] [data-slot="checkbox"] {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: 20px; min-width: 20px; max-width: 20px; min-height: 20px; flex: 0 0 20px; padding: 0; margin: 0;
   border: 1px solid var(--border); border-radius: 4px; background-color: var(--background);

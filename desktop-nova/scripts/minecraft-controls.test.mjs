@@ -156,6 +156,28 @@ test('Minecraft 单选框贴图不被共享层的圆形裁切', () => {
   assert.equal(rounded.decl.value, '0', `[data-choice-layout="control"] is clipped by ${rounded.selector} in ${rounded.path}`);
 });
 
+test('Minecraft 复选框贴图不被共享层的圆角裁切', () => {
+  // A background/texture is clipped by the border radius, so a stray 4px radius shows
+  // the square texture with rounded corners. The shared base rule carried a redundant
+  // `button` element, which made it (0,2,2) - more specific than every theme override at
+  // (0,2,1), so the radius could not be zeroed. The radio never had this because its
+  // shared rule has no element selector.
+  const unchecked = { slot: 'checkbox', tag: 'button' };
+  const rounded = winner(rules, unchecked, 'border-radius');
+  assert.equal(rounded.decl.value, '0', `the texture is clipped by ${rounded.selector} in ${rounded.path}`);
+
+  // The checksum: the shared rule must still round the other themes' checkboxes, so the
+  // fix has to be specificity, not deleting the declaration.
+  assert.ok(
+    rules.some(
+      (entry) =>
+        /\[data-slot="checkbox"\]/.test(entry.selector) &&
+        entry.decls.some((decl) => decl.prop === 'border-radius' && decl.value === '4px'),
+    ),
+    'the shared 4px radius disappeared instead of losing the specificity contest',
+  );
+});
+
 test('Minecraft 复选框贴图中心不被共享层的 --primary 填充', () => {
   const control = { slot: 'checkbox', tag: 'button', attrs: { 'data-state': 'checked' } };
   const fill = winner(rules, control, 'background-color');

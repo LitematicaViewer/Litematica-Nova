@@ -469,6 +469,16 @@ test("url() references must resolve to real files", () => {
   assert.equal(reported.length, 1, JSON.stringify(reported.map((v) => v.message)));
   assert.match(reported[0].message, /missing\.png/);
 });
+test("class tokens fused by a rewrite are reported", () => {
+  const fixture = makeFixture();
+  // The known-class set comes from project CSS, so both halves must exist there.
+  fixture.write("styles/note-keys.css", ".note-key-button { color: red; }\n.is-sharp { opacity: 1; }\n");
+  fixture.write("styles/keys.tsx", 'export const K = () => <button className="note-key-buttonis-sharp" />;\n');
+
+  const reported = messagesFor(fixture.strict(), "tsx-glued-class-token");
+  assert.equal(reported.length, 1, JSON.stringify(reported.map((v) => v.message)));
+  assert.match(reported[0].message, /note-key-buttonis-sharp/);
+});
 test("baseline documents are validated before use", () => {
   const fixture = makeFixture();
   fixture.write("styles/fixture.css", ".alpha {\n    color: red;\n}\n");
