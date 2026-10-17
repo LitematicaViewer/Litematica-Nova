@@ -20,9 +20,6 @@
 .properties-facts dt { color: var(--muted-foreground); }
 .properties-facts dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .properties-format-row dd { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-.properties-details { margin-top: var(--ln-space-6, 24px); padding-top: 16px; border-top: 1px solid var(--border); }
-.properties-details > summary { cursor: pointer; padding: 4px 0; font-weight: 600; }
-.properties-details > p { margin: 12px 0; }
 .properties-table-scroll { margin-top: 12px; min-width: 0; }
 .properties-table-scroll table { min-width: 28rem; }
 .properties-table-scroll td { font-variant-numeric: tabular-nums; }
@@ -74,7 +71,6 @@
     .properties-preview-placeholder > svg { width: 28px; height: 28px; }
   }
 }
-.properties-full-placeholder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted-foreground); font-size: .9em; }
 .properties-conversion-target { display: flex; align-items: center; gap: 12px; }
 .properties-conversion-target [data-slot="select-trigger"] { padding: 6px 10px; color: var(--foreground); background: var(--background); border: 1px solid var(--border); }
 .properties-conversion-table code { overflow-wrap: anywhere; }

@@ -5,7 +5,6 @@
 .beta-statistics-toolbar, .beta-material-options { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .beta-material-check { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; cursor: pointer; }
 .beta-material-check input { margin: 0; }
-.beta-material-search { flex: 1 1 16rem; min-width: 120px; max-width: var(--ln-field-max); }
 .beta-statistics-file { flex: 1 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground); text-align: right; }
 .beta-statistics-status { color: var(--muted-foreground); font-size: .9em; line-height: 1.5; }
 .beta-statistics-panes { display: grid; grid-template-columns: minmax(220px, .85fr) minmax(300px, 1.4fr); gap: 12px; flex: 1; min-height: 0; }
@@ -39,15 +38,6 @@
 .beta-statistics-facts { overflow: visible; }
 .beta-statistics-facts > div { border: 0; padding: 10px 0; }
 .beta-statistics-facts > div:nth-child(even) { background: color-mix(in srgb, var(--muted) 45%, transparent); }
-.beta-statistics-non-items { margin-top: var(--ln-space-3); font-size: .875rem; }
-.beta-statistics-non-items summary { cursor: pointer; line-height: 1.6; }
-.beta-statistics-non-items p, .beta-statistics-non-items small { color: var(--muted-foreground); line-height: 1.5; }
-.beta-statistics-non-items small { display: block; }
-.beta-statistics-non-items ul { list-style: none; padding: 0; margin: 0; }
-.beta-statistics-non-items li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; }
-.beta-statistics-non-items li > span:first-child { min-width: 0; overflow-wrap: anywhere; }
-.beta-statistics-non-items li > span:last-child { font-variant-numeric: tabular-nums; }
-.beta-statistics-fluid-name { display: flex; align-items: center; gap: var(--ln-space-2); }
 .material-summary-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding-bottom: 12px; }
 .material-summary-header > span { color: var(--muted-foreground); font-size: .875rem; }
 .material-summary-scroll { flex: 1; min-height: 0; }

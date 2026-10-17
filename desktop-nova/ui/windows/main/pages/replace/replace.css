@@ -4,17 +4,9 @@
 .replace-page { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--ln-space-3, 12px); container-type: inline-size; }
 .replace-title { margin: 0; font-size: 1.5em; line-height: 1.3; }
 .replace-intro, .replace-rules, .replace-toolbar, .replace-result { width: 100%; max-width: none; }
-.replace-intro { margin: 0; line-height: 1.5; color: var(--muted-foreground); }
 .replace-scroll-area { flex: 1; min-height: 0; }
 html[data-theme] .replace-rules { min-width: 0; margin: 0; padding: 0 16px 0 0; border: 0; background: transparent; }
 .replace-legend { font-weight: 600; margin-bottom: 16px; padding: 0; }
-html[data-theme] .replace-rule { display: flex; flex-direction: column; gap: 20px; margin-bottom: 16px; padding: 20px; min-width: 0; border: 0; border-radius: var(--radius, 0); background: var(--card); }
-.replace-rule-main { display: flex; align-items: flex-start; gap: var(--ln-space-3, 12px); flex-wrap: wrap; }
-.replace-block { flex: 1 1 18rem; min-width: 0; display: flex; flex-direction: column; gap: var(--ln-space-2, 8px); }
-.replace-block label { display: flex; flex-direction: column; gap: var(--ln-space-2, 8px); }
-.replace-rule-actions { display: flex; gap: var(--ln-space-2, 8px); padding-top: 26px; }
-.replace-advanced > summary { cursor: pointer; color: var(--muted-foreground); }
-.replace-advanced > .replace-rule-main { padding-top: 12px; }
 .replace-property-list { display: flex; flex-wrap: wrap; gap: var(--ln-space-2, 8px); }
 .replace-property { display: flex; flex-wrap: wrap; gap: var(--ln-space-2, 8px); align-items: center; min-width: 0; font-size: 0.92em; }
 .replace-property > .dropdown { max-width: 100%; }
@@ -30,11 +22,5 @@ html[data-theme] .replace-rule { display: flex; flex-direction: column; gap: 20p
 .replace-result { padding: 16px; margin-bottom: 16px; background: var(--muted); border-radius: var(--radius, 0); }
 .replace-property { background: var(--muted); padding: 8px; border-radius: var(--radius, 0); }
 .replace-output { max-width: none; }
-
-@container (max-width: 46rem) {
-    .replace-rule-main { display: grid; grid-template-columns: minmax(0, 1fr); }
-    .replace-block { max-width: none; }
-    .replace-rule-actions { padding-top: 0; justify-content: flex-end; }
-}
 @container (max-width: 30rem) { .replace-toolbar > span { flex-basis: 100%; order: -1; } }
 }

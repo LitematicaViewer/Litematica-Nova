@@ -81,7 +81,6 @@ html[data-theme] .settings-page .group-box-title { padding: 0; margin-bottom: 16
 .settings-path-state { flex: 0 0 auto; min-width: 4em; }
 .settings-path-state[data-state="ok"] { color: var(--success); }
 .settings-page [data-state="error"] { color: var(--destructive); }
-.settings-path-example { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted-foreground); }
 .settings-feedback {
     flex: 0 0 auto;
     max-height: 16rem;

@@ -22,6 +22,7 @@
 | V1.17    | 2026-10-13 | Codex  | **Phase 5 完成**：MC 主题 116 处裸元素选择器收窄到 [data-slot]（已有槽位的删裸名、无槽位的替换；input[type=button/submit/reset] 15 处确认无元素后删除），裸元素选择器 42 → 0、文件数 15 → 3，两条退出标准均达成；副作用是 Radix 按钮不再继承按钮贴图，符合预期 |
 | V1.18    | 2026-10-13 | Codex  | 修复音符盒键盘回归：Phase 4.5 清 `btn` 的脚本把空白分隔符一并过滤，`is-sharp` 被粘成 `flake-page__note-key-buttonis-sharp`，两条 note-key 规则同时失效；全仓扫描确认仅此一处受损，已修复。护栏新增第 11 条规则 `tsx-glued-class-token` |
 | V1.19    | 2026-10-13 | Codex  | 修复 Minecraft 复选框被裁成圆角：共享层 `controls.css:66` 多带一个 `button` 元素，使其成为 (0,2,2) 而恒定压住主题的 (0,2,1) 覆盖；删除该元素后 8bitcn/Minecraft 的 `border-radius: 0` 正常胜出，shadcn 的 4px 不变。新增第 8 个 MC 用例（先失败后通过） |
+| V1.20    | 2026-10-13 | Codex  | **Phase 6 完成（退出标准已修正）**：原标准「页面外观属性为 0」不成立——188 条外观声明中 106 条是页面自有设计（挂在 `<article>`/`<section>` 上，无组件可继承）、15 条是无障碍/拖放轮廓、1 条是定位变换。改为「每条留存声明都须说明为何页面必须自己拥有」，据此删除 39 条无法匹配任何元素的孤儿规则（43 行 / 6 文件）。66 条零化补丁均为合法覆盖，全部保留。记录了把语句型 `@layer` 误判为空块并修复的过程 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -1251,6 +1252,62 @@ body.split(/(\s+)/).filter((piece) => !/^\s+$/.test(piece) && piece !== "btn").j
 **退出**：页面 CSS 中外观属性为 0；无 `border-image: none` / `box-shadow: none` / `transform: none` 一类补丁。
 
 ---
+
+### Phase 6 实施记录（退出标准经修正）
+
+#### 原退出标准不成立
+
+原方案要求"页面 CSS 中外观属性为 0"。实测 `ui/windows/**/*.css` 8 个文件 913 行里有 **188 条外观声明**，按用途分：
+
+| 类别 | 数量 | 能否删 |
+| ---- | ---- | ------ |
+| 零化补丁（`0` / `none` / `transparent` / `inherit`） | 66 | 逐条判断 |
+| **真正的页面设计**（底色、圆角、边框、渐变） | 106 | **不能** |
+| `outline` 焦点环与拖放目标高亮 | 15 | **不能**（无障碍/功能） |
+| 定位变换（`translate`，用于居中） | 1 | **不能** |
+
+关键事实：这些设计挂在**普通元素**上，没有组件能给它们外观——
+
+- `.library-tile` → `<article className="library-tile">`
+- `.library-collection` → `<section className="library-collection">`
+- `.library-tag-chip` → `<span>`
+
+删掉 `background` / `border-radius` 不会"统一"到组件外观，只会让卡片、磁贴、标签变成**透明无框**。`outline` 那 15 条里包含 `.library-category[data-drop-target]` 的拖放高亮和 `.library-tile:has(.library-tile-open:focus-visible)` 的键盘焦点环，删掉是功能与无障碍回归。
+
+**修正后的退出标准**：*留下的每一条外观声明，都必须能说明"为什么这个属性必须由页面自己拥有"*。据上述分类，页面自有外观属于正当职责；只有"纯属撤销 components 规则且已无对手"的声明才算冗余。
+
+#### 实际清理：43 行僵尸规则
+
+按新标准，可**证明**冗余的只有一类：**选择器已无法匹配任何元素**（孤儿规则）。判定方式不是猜——把全部 TSX 的类名令牌（含模板字符串的静态前缀）建成集合，只有当一条规则里的**所有**类名都不在其中时才算孤儿。逐个复核 21 个候选类名，并用 AST 排除 `library-category-${kind}` 这类动态拼接的可能。
+
+删掉 39 条孤儿规则、43 行，分布在 6 个文件：`library.css`(-7)、`replace.css`(-14)、`statistics/materials.css`(-10)、`render.css`(-6)、`properties.css`(-4)、`settings.css`(-1)。典型如 `.library-tag-form`、`.replace-block`、`.beta-statistics-non-items`、`.render-progress-fill`——都是页面改版后遗留的。外观声明 188 → 181（8 条随孤儿规则一起消失），布局声明 1550 → 1440。
+
+**66 条零化补丁一条都没删**：脚本查重（同选择器重复声明、被后续同选择器覆盖）结果为 0，说明没有一条是"写了两次"。它们各自都还在压着一个真实的 `components` 规则——例如 `.library-tile-open` 上的 `border: 0` / `border-image: none` 是让磁贴里的按钮**不要**长出 Minecraft 的按钮贴图，删掉就是回归。这类"页面故意让组件变平"的声明属于合法覆盖，不是僵尸。
+
+#### 踩到的坑：`@layer a, b, c;` 是语句型 at-rule
+
+清理空 `@media` 块时，判定写成"没有子节点即为空"，于是把每个文件顶部的 **`@layer theme, vendor, tokens, base, components, utilities;`** 也当成空块删掉了——它是*语句型* at-rule，本来就没有子节点。8 个页面的层序声明全被抹掉，会静默改变层序。
+
+修复方式：判定必须先排除语句型（`at.nodes === undefined` 直接跳过），只处理 `@media` / `@supports` / `@container` 这类*块型*。教训：**"没有子节点"不等于"空"**——at-rule 有两种形态，删除类操作必须先分辨形态。
+
+#### 未做与决定
+
+- **页面 CSS 不迁入 `utilities`**。`utilities` 在 `components` 之上，迁过去会让页面压过主题；而不迁、留在 `components`（现状）已经正确：页面用 `html[data-theme]` 前缀和更高特异度拿到它需要的覆盖。那份"把页面外观属性删空再迁层"的方案在数据上不成立，故不执行。
+- **孤儿检测脚本留在 `.tmp/`**（`.tmp/phase6-redundant.mjs`），不提升为护栏规则：动态拼接类名（模板字符串）会让静态判定产生假阳性，作为常驻护栏风险大于收益。它更适合作为周期性维护工具手动跑。
+- `analyze-cascade-flips.mjs` 同样留在 `.tmp/`：它需要人工解读，不适合放进 CI 判定。
+
+#### 验证
+
+| 检查 | 结果 |
+| ---- | ---- |
+| 页面 CSS 改动 | ✅ 纯删除（6 文件 -43 行，无新增） |
+| 8 个页面 CSS 仍各含 1 条层序声明 | ✅ |
+| `check:layers` / `check:application-boundaries` / `check:ui-styles` | ✅ 0 违规 |
+| `tsc` / `build` | ✅ |
+| 测试套件 | ✅ 与 HEAD 完全一致 |
+| 发现数 | 171（未变，被删规则本就无违规） |
+
+**待人工验收**：8 个页面在 9 组主题/明暗下的外观——本次只删了匹配不到元素的规则，理论上零影响，但涉及 6 个文件，建议扫一眼 library、replace、render、statistics 四个改动最多的页面。
 
 ## 5. 回归矩阵
 
