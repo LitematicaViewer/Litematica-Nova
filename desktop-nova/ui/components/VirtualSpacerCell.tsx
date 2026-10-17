@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
+import { TableCell } from "./ui/table";
 
 /**
  * The custom property through which a virtualized list hands its spacer geometry
@@ -38,7 +39,10 @@ function useSpacerHeight<T extends HTMLElement>(height: number) {
  */
 export function VirtualSpacerCell({ colSpan, height }: { colSpan: number; height: number }) {
   const ref = useSpacerHeight<HTMLTableCellElement>(height);
-  return <td ref={ref} colSpan={colSpan} className="material-list-virtual-spacer-cell" />;
+  // `TableCell` carries `data-slot="table-cell"`, which is what lets the theme target
+  // table cells without a bare `td` selector. Its padding cannot disturb the geometry:
+  // `.material-list-virtual-spacer-cell` sets `padding: 0 !important`.
+  return <TableCell ref={ref} colSpan={colSpan} className="material-list-virtual-spacer-cell" />;
 }
 
 /**

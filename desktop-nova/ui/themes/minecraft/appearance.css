@@ -76,8 +76,8 @@ html[data-theme="minecraft"][data-color-scheme="light"] {
     --ln-scroll-shadow: inset 2px 2px #c0c6b5, inset -2px -2px #454b3d;
 }
 
-html[data-theme="minecraft"] :where(input, textarea)::placeholder { color: var(--muted-foreground); }
-html[data-theme="minecraft"] :where(button, input, textarea, select, a):focus-visible {
+html[data-theme="minecraft"] :where([data-slot="input"], [data-slot="textarea"])::placeholder { color: var(--muted-foreground); }
+html[data-theme="minecraft"] :where([data-slot="button"], [data-slot="input"], [data-slot="textarea"], a):focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
 }
@@ -95,21 +95,21 @@ html[data-theme="minecraft"] ::selection { background: var(--primary); color: va
 
 /* Texture-backed actions use the original white/yellow/disabled-gray text rules.
    Do not apply those colors to borderless cards, labels, inventory slots or close images. */
-html[data-theme="minecraft"] button[data-slot="button"]:is([data-variant="default"], [data-variant="secondary"], [data-variant="outline"], [data-variant="destructive"]):not(:where(.dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
+html[data-theme="minecraft"] [data-slot="button"]:is([data-variant="default"], [data-variant="secondary"], [data-variant="outline"], [data-variant="destructive"]):not(:where(.dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
     text-shadow: 1px 1px 0 #3f3f3f;
 }
-html[data-theme="minecraft"] button[data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)) {
+html[data-theme="minecraft"] [data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)) {
     border-image: none;
     color: var(--foreground);
     text-shadow: none;
 }
-html[data-theme="minecraft"] button[data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)):disabled {
+html[data-theme="minecraft"] [data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)):disabled {
     color: var(--muted-foreground);
 }
-html[data-theme="minecraft"] .home-workflows > button[data-variant="ghost"] small { color: var(--muted-foreground); }
+html[data-theme="minecraft"] .home-workflows > [data-slot="button"][data-variant="ghost"] small { color: var(--muted-foreground); }
 
 /* Radix Checkbox keeps the shipped Minecraft checkbox textures and keyboard semantics. */
-html[data-theme="minecraft"] button[data-slot="checkbox"] {
+html[data-theme="minecraft"] [data-slot="checkbox"] {
     width: 20px;
     height: 20px;
     min-width: 20px;
@@ -122,23 +122,23 @@ html[data-theme="minecraft"] button[data-slot="checkbox"] {
     image-rendering: pixelated;
     box-shadow: none;
 }
-html[data-theme="minecraft"] button[data-slot="checkbox"]:hover:not(:disabled) {
+html[data-theme="minecraft"] [data-slot="checkbox"]:hover:not(:disabled) {
     background-image: url("./resource/form/checkbox_hover.png");
 }
-html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="checked"] {
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"] {
     background-image: url("./resource/form/checkbox_checked.png");
 }
-html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="checked"]:hover:not(:disabled) {
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"]:hover:not(:disabled) {
     background-image: url("./resource/form/checkbox_checked_hover.png");
 }
-html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="checked"] svg { visibility: hidden; }
-html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="indeterminate"] { color: #ffffff; }
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"] svg { visibility: hidden; }
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="indeterminate"] { color: #ffffff; }
 /* The shared layer fills a checked checkbox with `--primary`, which is what the
    other themes want. Minecraft's textures carry the whole control - a check mark on
    a transparent centre - so that fill would show through as a `--primary` square
    behind the texture. `[data-state]` is deliberate: it is what makes this rule
    outrank the shared `[data-state="checked"]` fill instead of tying with it. */
-html[data-theme="minecraft"] button[data-slot="checkbox"][data-state] {
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state] {
     background-color: transparent;
 }
 
@@ -146,23 +146,23 @@ html[data-theme="minecraft"] button[data-slot="checkbox"][data-state] {
    `border-radius: 0` is required, not cosmetic: the shared layer rounds this slot
    into a 50% circle for the other themes, and the shipped radio textures are square,
    so without it the texture is clipped into a circle. */
-html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"] {
+html[data-theme="minecraft"] [data-slot="radio-group-item"][data-choice-layout="control"] {
     border: 0;
     border-image: none;
     border-radius: 0;
     background: transparent url("./resource/form/radio_default.png") center / 20px 20px no-repeat;
     image-rendering: pixelated;
 }
-html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"]:hover:not(:disabled) {
+html[data-theme="minecraft"] [data-slot="radio-group-item"][data-choice-layout="control"]:hover:not(:disabled) {
     background-image: url("./resource/form/radio_hover.png");
 }
-html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"] {
+html[data-theme="minecraft"] [data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"] {
     background-image: url("./resource/form/radio_checked.png");
 }
-html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"]:hover:not(:disabled) {
+html[data-theme="minecraft"] [data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"]:hover:not(:disabled) {
     background-image: url("./resource/form/radio_checked_hover.png");
 }
-html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"] [data-slot="radio-group-indicator"] { visibility: hidden; }
+html[data-theme="minecraft"] [data-slot="radio-group-item"][data-choice-layout="control"] [data-slot="radio-group-indicator"] { visibility: hidden; }
 
 /* Three-pane library: the original font and texture-backed action buttons stay
    intact; inventory surfaces, selection and scroll tracks follow light/dark. */
@@ -209,10 +209,10 @@ html[data-theme="minecraft"] .library-category small {
     background: var(--background);
 }
 /* Ghost utility actions must also have feedback without the old gray texture. */
-html[data-theme="minecraft"] .library-page button[data-slot="button"][data-variant="ghost"]:not(.library-tile-open):hover:not(:disabled) {
+html[data-theme="minecraft"] .library-page [data-slot="button"][data-variant="ghost"]:not(.library-tile-open):hover:not(:disabled) {
     background: var(--accent);
 }
-html[data-theme="minecraft"] .library-page button[data-slot="button"][data-variant="ghost"]:disabled {
+html[data-theme="minecraft"] .library-page [data-slot="button"][data-variant="ghost"]:disabled {
     opacity: .5;
     cursor: not-allowed;
 }

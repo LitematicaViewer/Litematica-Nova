@@ -35,6 +35,7 @@ import {
 } from "../../../src/business/facade";
 import { listenEvent } from "../../../src/platform/events";
 import { Button } from "../../components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { Dropdown } from "../../components/Dropdown";
 import { NavIcon } from "../../shell/NavIcon";
 
@@ -872,34 +873,34 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
             ) : null}
 
             <div className="asset-manager-table-wrap">
-              <table>
-                <thead>
-                  <tr>
+              <Table>
+                <TableHeader>
+                  <TableRow>
                     {tableColumns.map((column) => (
-                      <th key={column.key}>{column.label}</th>
+                      <TableHead key={column.key}>{column.label}</TableHead>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {entries.length > 0 ? (
                     entries.map((entry) => (
-                      <tr key={entry.id}>
+                      <TableRow key={entry.id}>
                         {tableColumns.map((column) => (
-                          <td key={column.key} className={column.key === "name" ? "game-resource-path" : undefined}>
+                          <TableCell key={column.key} className={column.key === "name" ? "game-resource-path" : undefined}>
                             {renderCell(entry, column.key)}
-                          </td>
+                          </TableCell>
                         ))}
-                      </tr>
+                      </TableRow>
                     ))
                   ) : (
-                    <tr>
-                      <td colSpan={tableColumns.length} className="asset-manager-empty-row">
+                    <TableRow>
+                      <TableCell colSpan={tableColumns.length} className="asset-manager-empty-row">
                         暂无已登记资源。
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   )}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
 
             {log ? <pre className="subwindow-error asset-manager-log">{log}</pre> : null}

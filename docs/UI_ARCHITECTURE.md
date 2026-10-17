@@ -17,6 +17,9 @@
 | V1.12    | 2026-10-13 | Codex  | 完成 Phase 4.5 / 4.7 / 4.8：清理 65 处调用点遗留 `btn` 标记（新增第 9 条规则 `tsx-redundant-btn-class`），`BlockPickerDialog` 改用共享 `Dialog` 从而获得 Portal、焦点陷阱与 Esc 关闭，`UiTestPage` 补齐六种按钮变体用例；163 处裸 `<Button>` 的语义变体留待决策 |
 | V1.13    | 2026-10-13 | Codex  | Minecraft 按钮变体贴图接线：按 `button_<状态>[_<变体>]_min.png` 命名，`default`→`primary`、`outline` 独立一套、`secondary` 用基础套、`destructive` 暂无；用"变体只提供支撑变量 + 状态规则回落"实现，避免优先级竞争与漏状态静默失败；新增 2 个贴图完整性测试并修掉 `token-undefined-reference` 误读注释的假阳性 |
 | V1.14    | 2026-10-13 | Codex  | destructive 贴图接入（4 状态，disabled 刻意回落共享禁用贴图）；primary 常态文字改为深灰 #3f3f3f（悬停/按下仍黄），用 --ln-minecraft-button-normal-color 变量间接避免层叠竞争；UiTestPage 变体按钮改为点击循环 常态→按下→禁用 |
+| V1.15    | 2026-10-13 | Codex  | Phase 5 部分完成：13 个 MC 样式文件合并为 widgets.css（15 → 3 个文件，81 条规则序列逐条校验一致），并入时发现并修复 40 条相对贴图路径失效；新增第 10 条护栏规则 css-unresolved-asset；裸元素选择器未能归零——页面中 51 个裸表单/表格元素仍依赖它们，需先做标记迁移 |
+| V1.16    | 2026-10-13 | Codex  | Phase 5a 完成：51 个裸表单/表格元素全部迁移到共享 Table/Input/Textarea（枚举器 40、资产管理器 9、统计页 1、虚拟占位 1），	able.tsx 补上 ref 转发；裸元素现已为 0，5b（MC 裸元素选择器收窄）解锁。会改变那 4 个页面的表格/输入框观感，待人工确认 |
+| V1.17    | 2026-10-13 | Codex  | **Phase 5 完成**：MC 主题 116 处裸元素选择器收窄到 [data-slot]（已有槽位的删裸名、无槽位的替换；input[type=button/submit/reset] 15 处确认无元素后删除），裸元素选择器 42 → 0、文件数 15 → 3，两条退出标准均达成；副作用是 Radix 按钮不再继承按钮贴图，符合预期 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -1091,6 +1094,97 @@ button:hover:not(:disabled) {
 
 **退出**：`ui/themes/minecraft/` 中裸元素选择器为 0；文件数从 15 降至不超过 6。
 
+---
+
+### Phase 5 实施记录（部分完成）
+
+#### ✅ 文件数：15 → 3（退出标准之一达成）
+
+`nav-icons.css` 与 `widget/*.css`（12 个）合并为 `widgets.css`，`theme.css` 与 `appearance.css` 保留：
+
+| 文件 | 行数 |
+| ---- | ---- |
+| `theme.css` | 25（入口 + 主题级令牌） |
+| `widgets.css` | 820（原 13 个文件） |
+| `appearance.css` | 222（调色板与逐控件外观） |
+
+**合并的唯一风险是顺序**：这些规则全在 `@layer components` 里，文件间的 `@import` 顺序就是层叠顺序。所以合并脚本按 `theme.css` 的导入顺序拼接，并在删除任何文件之前**逐条比较合并前后的 (选择器, 属性) 序列**——81 条规则完全一致才继续。
+
+**合并踩到的一个坑：相对资源路径。** 这些文件原来在 `widget/` 下，`url("../resource/…")` 指向上一级；合并到主题根目录后同样的写法会指向 `ui/themes/resource/…` —— **40 条贴图路径全部失效**。已改为 `./resource/…`，并顺带加了第 10 条护栏规则 `css-unresolved-asset`（见下）。
+
+#### 5a ✅ 标记迁移：51 个裸元素 → 0
+
+方案原本要把 MC 的裸元素选择器改写为 `[data-slot]`，但页面里还有 51 个裸的表单/表格元素**依赖**这些选择器，收窄会立刻让它们失去样式。所以先做标记迁移：
+
+| 文件 | 迁移前 | 内容 |
+| ---- | ------ | ---- |
+| `windows/enumerator/EnumeratorWindow.tsx` | 40 | 5 个 `<input>` → `<Input>`；3 组 `<table>` → `<Table>/<TableHeader>/<TableBody>/<TableRow>/<TableHead>/<TableCell>` |
+| `windows/asset_manager/AssetManagerContent.tsx` | 9 | 1 组 `<table>` |
+| `main/pages/statistics/StatisticsPage.tsx` | 1 | `<textarea>` → `<Textarea>` |
+| `components/VirtualSpacerCell.tsx` | 1 | `<td>` → `<TableCell>` |
+
+现在全仓库（`ui/components/ui` 之外）**裸表单/表格元素为 0**。
+
+**顺带让 `table.tsx` 转发 ref**（唯一一处偏离上游 registry 的改动）：`button`/`input`/`checkbox`/`textarea` 都转发 ref，只有 table 这一族没有；而虚拟占位单元格必须拿到 ref 才能发布高度。已在文件头注明原因。
+
+**虚拟占位单元格的几何没有被破坏**：`TableCell` 会带上共享的 `[data-slot="table-cell"] { padding: 10px 12px }`，而 `.material-list-virtual-spacer-cell` 早就写着 `padding: 0 !important`（`enumerator.css`、`materials.css`），`!important` 压得住，高度仍然精确。
+
+> **⚠️ 这一步会改变那 4 个页面的观感。** 加了 `data-slot` 之后，共享层的 `[data-slot="table-head"] { background: var(--muted); color: var(--muted-foreground); font-weight: 500 }`、`[data-slot="table-cell"] { padding: 10px 12px }`、表头底色、行 hover 等规则**第一次作用到这些表格上**（以前它们是裸元素，只有页面自己的 CSS）。这正是统一的目标，但属于可见变化，需要按第 5 节矩阵逐页确认。输入框同理：`<Input>` 自带 `nova-control input` 基础类，比裸 `<input class="input">` 多出 `data-slot="input"` 相关的焦点与禁用样式。
+
+#### 5b ✅ MC 裸元素选择器收窄：42 → 0
+
+标记迁移完成后，`ui/themes/minecraft/` 的裸元素选择器已全部收窄到 `[data-slot]`。**Phase 5 的两条退出标准均已达成：文件数 3（≤6）、裸元素选择器 0。**
+
+盘点后共有 **116** 处裸元素选择器，走了两条不同的改写路径，搞反就会写出永不匹配的选择器：
+
+| 形态 | 处理 | 例 |
+| ---- | ---- | -- |
+| 复合选择器里**已有** `data-slot` | **删除**多余的裸元素名 | `button[data-slot="checkbox"]` → `[data-slot="checkbox"]` |
+| 复合选择器里**没有** `data-slot` | **替换**为对应槽位 | `button.material-list-close-button` → `[data-slot="button"].material-list-close-button` |
+| `input[type="text"]` 一族 | 前缀替换，保留 type 过滤 | `[data-slot="input"][type="text"]` |
+| `:where(input, textarea)` 列表 | 逐个替换，`select` 直接丢弃 | `:where([data-slot="input"], [data-slot="textarea"])` |
+| `table > tbody > tr:nth-of-type(odd) > *` | 每个复合段分别替换，子代组合器保留 | `[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"]:nth-of-type(odd) > *` |
+| `input[type="button"\|"submit"\|"reset"]`（15 处） | **整条删除** | 已确认不存在这类元素（所有输入都是 `Input` 组件） |
+
+**`svg` 与 `a` 保留裸选择器**：它们没有对应组件、也没有槽位可挂，护栏的裸元素清单也不包含它们。
+
+**行为变化（已确认可接受）**：MC 的 `button` 规则不再作用于 Radix 渲染的按钮（复选框、单选框、下拉触发器）。它们本来就不该继承按钮贴图 —— `appearance.css` 里那一堆"撤销按钮贴图"的声明就是为抵消它而存在的。现在它们只由各自的槽位规则和 `controls.css` 决定外观，继承链更短。
+
+**改动量**：119 处选择器改写（`appearance.css` 20、`widgets.css` 99），构建产物中 `[data-slot=button]` 存在、裸 `button` 规则已消失，56 张贴图仍在。
+
+**验证**
+
+| 检查 | 结果 |
+| ---- | ---- |
+| `ui/themes/minecraft/` 裸元素选择器 | ✅ **0**（原 42） |
+| `ui/themes/minecraft/` 文件数 | ✅ **3**（原 15） |
+| 全项目 `css-components-bare-element-selector` | ✅ 167 → **125**（剩余全在共享层与其它主题） |
+| 层叠反转 | ✅ 0 |
+| `tsc` / `check:layers` / `check:application-boundaries` / `check:ui-styles` / `build` | ✅ 全部通过 |
+| 测试套件 | ✅ 与 HEAD 完全一致（`check:ui-styles` 18 个用例） |
+
+**待人工验收**：Minecraft 主题下的完整走查 —— 这次是真正改变匹配范围的一步。重点：三主题的表格（表头底色、行悬停、奇偶行）、输入框/文本域的焦点与禁用态、按钮的五个状态与三个变体、复选框/单选框/下拉触发器（它们不再继承按钮贴图）、滚动条、Unifont 字体。
+#### 新增护栏规则：`css-unresolved-asset`
+
+每个 `url()` 必须解析到真实文件。断链是**静默**的——浏览器只是不绘制，只有跑起来看才发现少了贴图；而移动/合并样式表正好会批量打断相对路径（本次就断了 40 条）。
+
+- 只屏蔽注释、**保留字符串内容**：`maskCssText` 会连字符串一起屏蔽，而 `url()` 的路径正是字符串，用它会让规则变成空转（这条是被新加的单测抓出来的，最初的"可证伪"验证也因此假通过）。
+- 跳过 `data:` / `http(s):` / `#`（文档内 SVG 引用）。
+- 仓库当前 **0** 条；测试用夹具验证会触发。
+
+#### 验证
+
+| 检查 | 结果 |
+| ---- | ---- |
+| 合并前后规则序列 | ✅ 81 条完全一致 |
+| 主题 CSS 中 `url()` 解析 | ✅ 57 条全部有效 |
+| 构建产物 | ✅ 56 张 MC 贴图以 data URI 内联在主题 chunk 中 |
+| 层叠反转 | ✅ 0 |
+| `check:layers` / `check:application-boundaries` / `check:ui-styles` | ✅ 0 违规 |
+| `test:ui-styles` | ✅ 18 个用例 |
+| 测试套件 | ✅ 与 HEAD 完全一致（本次修改顺带修正了 3 个测试里写死的旧文件路径） |
+
+**待人工验收**：三主题的 Minecraft 主题整体观感——本次只是文件重排，规则未改，但贴图路径从 `../resource/` 改成了 `./resource/`，值得确认按钮、滚动条、输入框、字体（Unifont）都正常加载。
 ### Phase 6 — 页面 CSS 收编
 
 **做**：把 `ui/windows/**/*.css`（8 个文件，913 行）收进 `utilities` 层；删除其中的外观属性（`background`、`border`、`box-shadow`、`transform`），保留布局属性。`library.css:31,56,365` 的手动清零规则在本阶段删除——层序已保证 `components` 优先。

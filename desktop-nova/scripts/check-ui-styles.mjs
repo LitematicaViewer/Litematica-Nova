@@ -469,6 +469,42 @@ function checkPortaledDialogScope(filePath, source) {
   }
 }
 
+/**
+ * Every `url()` in project CSS must resolve to a real file. A broken path is silent -
+ * the browser just paints nothing - so a moved stylesheet or a renamed texture only
+ * shows up as a missing background in the running app. This is what a theme file merge
+ * would otherwise break: moving a file one directory changes every relative asset path.
+ */
+function checkUnresolvedAssets(filePath, source) {
+  // Blank comments but KEEP string contents: `maskCssText` also blanks strings, and a
+  // url() path is exactly a string, so using it here would make the rule a no-op.
+  const characters = source.split("");
+  let cursor = 0;
+  while (cursor < source.length) {
+    if (source[cursor] === "/" && source[cursor + 1] === "*") {
+      const end = source.indexOf("*/", cursor + 2);
+      const stop = end < 0 ? source.length : end + 2;
+      blankRange(characters, source, cursor, stop);
+      cursor = stop;
+      continue;
+    }
+    cursor += 1;
+  }
+  const masked = characters.join("");
+  for (const match of masked.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]+))\s*\)/g)) {
+    const specifier = match[1] ?? match[2] ?? match[3] ?? "";
+    // Data URIs, remote URLs, and in-document SVG references are not files.
+    if (!specifier || /^(?:data:|https?:|#|\/\/)/.test(specifier)) continue;
+    const target = path.resolve(path.dirname(filePath), specifier);
+    if (fs.existsSync(target)) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-unresolved-asset",
+      `url("${specifier}") does not resolve to a file; the asset would silently not paint.`,
+    );
+  }
+}
 function checkCssFile(filePath, source) {
   const { rules, reducedMotionSpans, forcedColoursSpans, masked } = scanCss(source);
   const relative = relativePath(filePath);
@@ -594,8 +630,7 @@ function collectClassTexts(node, sourceFile, out) {
 
 // Strips Tailwind variant prefixes so `dark:bg-input/30` is judged as `bg-input/30`
 // and `data-[size=default]:h-9` is judged as `h-9` (structural, allowed).
-function stripVariants(token) {
-  let remaining = token;
+function stripVariants(token) {  let remaining = token;
   for (let guard = 0; guard < 8; guard += 1) {
     const match = /^[^:\s]+:/.exec(remaining);
     if (!match) {
@@ -787,6 +822,7 @@ export function collectFindings(rootDir) {
       checkPortaledDialogScope(filePath, source);
       checkHardcodedColours(filePath, source, relativePath(filePath));
       checkVendorImports(filePath, source, declaredLayers, projectCeiling);
+      checkUnresolvedAssets(filePath, source);
 
       // Scan the masked text: a `var()` written inside a comment is documentation, not
       // a reference. (This is what flagged the comment that explains the button

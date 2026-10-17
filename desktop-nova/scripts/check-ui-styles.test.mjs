@@ -450,6 +450,25 @@ test("a var() written inside a comment is documentation, not a reference", () =>
   // gets reported as a missing token.
   assert.equal(messagesFor(fixture.strict(), "token-undefined-reference").length, 0);
 });
+test("url() references must resolve to real files", () => {
+  const fixture = makeFixture();
+  fs.mkdirSync(path.join(fixture.root, "ui", "styles"), { recursive: true });
+  fs.writeFileSync(path.join(fixture.root, "ui", "styles", "asset.png"), "x");
+  fixture.write(
+    "styles/assets.css",
+    [
+      ".ok { background: url(\"./asset.png\"); }",
+      ".also-ok { background: url(\"data:image/png;base64,AAAA\"); }",
+      ".svg-ref { filter: url(\"#blur\"); }",
+      ".broken { background: url(\"./missing.png\"); }",
+      "",
+    ].join("\n"),
+  );
+
+  const reported = messagesFor(fixture.strict(), "css-unresolved-asset");
+  assert.equal(reported.length, 1, JSON.stringify(reported.map((v) => v.message)));
+  assert.match(reported[0].message, /missing\.png/);
+});
 test("baseline documents are validated before use", () => {
   const fixture = makeFixture();
   fixture.write("styles/fixture.css", ".alpha {\n    color: red;\n}\n");

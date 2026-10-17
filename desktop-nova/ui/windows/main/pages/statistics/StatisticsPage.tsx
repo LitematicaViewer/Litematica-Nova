@@ -3,6 +3,7 @@ import { Checkbox } from "../../../../components/ui/checkbox";
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from "../../../../components/ui/table";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
+import { Textarea } from "../../../../components/ui/textarea";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import { Dialog } from "../../../../components/Dialog";
 import { X } from "lucide-react";
@@ -335,7 +336,7 @@ function EnumeratorInfoEditorDialog({
     <div className="statistics-enumerator-editor-columns">
       <div className="statistics-enumerator-editor-column">
         <label className="statistics-enumerator-editor-heading" htmlFor="statistics-rules">统计规则（一行一项）</label>
-        <textarea id="statistics-rules" className="input statistics-enumerator-editor-textarea" value={draft} onChange={event => setDraft(event.target.value)} spellCheck={false} disabled={isSaving} />
+        <Textarea id="statistics-rules" className="statistics-enumerator-editor-textarea" value={draft} onChange={event => setDraft(event.target.value)} spellCheck={false} disabled={isSaving} />
         <div className="statistics-enumerator-editor-hint">标题 = 函数(集合表达式)。函数：version、any、ratio。集合运算：|、&amp;、-；L 表示当前结构方块集合。</div>
       </div>
       <div className="statistics-enumerator-editor-column"><h3 className="statistics-enumerator-editor-heading">实时预览</h3>

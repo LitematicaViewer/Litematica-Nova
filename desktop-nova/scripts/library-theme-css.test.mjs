@@ -78,8 +78,8 @@ test('Minecraft 三栏与工具栏使用当前明暗令牌；预览和滚动条�
   assert.match(rule(controls, '[data-slot="scroll-area-thumb"]:active')['background'], /var\(--ln-scroll-active\)/);
   assert.match(rule(library, '.library-tile-image img')['object-fit'], /contain/);
   assert.doesNotMatch(source('ui/windows/main/pages/library/library.css'), /filter:\s*(?:invert|grayscale|sepia)/);
-  assert.match(source('ui/themes/minecraft/widget/button.css'), /button_normal_min\.png/);
-  assert.match(source('ui/themes/minecraft/widget/text.css'), /unifont-16\.0\.04\.ttf/);
+  assert.match(source('ui/themes/minecraft/widgets.css'), /button_normal_min\.png/);
+  assert.match(source('ui/themes/minecraft/widgets.css'), /unifont-16\.0\.04\.ttf/);
 });
 
 test('三栏仍共享响应式结构，窄窗只保留外层纵向滚动；主题规则不重新固定列宽', () => {

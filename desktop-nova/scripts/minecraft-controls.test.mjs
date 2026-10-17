@@ -134,8 +134,8 @@ const rules = collect([
   'ui/styles/controls.css',
   'ui/styles/widgets.css',
   'ui/themes/minecraft/appearance.css',
-  'ui/themes/minecraft/widget/button.css',
-  'ui/themes/minecraft/widget/input.css',
+  // One file now: Phase 5 merged nav-icons.css and every widget/*.css into it.
+  'ui/themes/minecraft/widgets.css',
 ]);
 
 test('the cascade filter rejects rules pinned to another theme', () => {
@@ -167,7 +167,9 @@ test('Minecraft 下拉触发器采用输入框外观而非通用按钮贴图', (
   const control = { slot: 'select-trigger', tag: 'button' };
   assert.equal(winner(rules, control, 'border-image').decl.value, 'none', 'the generic button texture still applies to the trigger');
   assert.equal(winner(rules, control, 'background-color').decl.value, 'var(--ln-minecraft-input-background)');
-  assert.equal(winner(rules, control, 'background-image').decl.value, 'url("../resource/form/spin_down.png")');
+  // Relative-prefix agnostic: the theme files were merged, which moved every asset path
+  // from `../resource/` to `./resource/`. What matters is the target, not the prefix.
+  assert.match(winner(rules, control, 'background-image').decl.value, /url\("[./]*resource\/form\/spin_down\.png"\)/);
 
   // Hover and active have to restate the field colours, because the generic
   // `button:hover` / `button:active` rules are otherwise more specific and would paint
@@ -200,7 +202,7 @@ test('共享层只声明填充色，不重置贴图', () => {
 
 const BUTTON_REQUIRED_STATES = ['normal', 'hover', 'check', 'check-hover'];
 const BUTTON_ALL_STATES = [...BUTTON_REQUIRED_STATES, 'disabled'];
-const buttonCss = parse('ui/themes/minecraft/widget/button.css');
+const buttonCss = parse('ui/themes/minecraft/widgets.css');
 
 test('Minecraft 按钮变体的状态贴图完整且文件存在', () => {
   const sets = new Map();
@@ -228,7 +230,7 @@ test('Minecraft 按钮变体的状态贴图完整且文件存在', () => {
     for (const [state, value] of defined) {
       const file = /url\("([^"]+)"\)/.exec(value)?.[1];
       assert.ok(file, `${variant}/${state} 不是 url(): ${value}`);
-      const resolved = new URL(file, new URL('ui/themes/minecraft/widget/', root));
+      const resolved = new URL(file, new URL('ui/themes/minecraft/', root));
       assert.ok(existsSync(resolved), `${variant}/${state} 贴图不存在: ${file}`);
     }
   }
@@ -241,7 +243,7 @@ test('Minecraft 按钮的基础回退贴图文件存在', () => {
   });
   assert.ok(fallbacks.size >= 5, `预期至少 5 张回退贴图，实际 ${fallbacks.size}`);
   for (const file of fallbacks) {
-    const resolved = new URL(file, new URL('ui/themes/minecraft/widget/', root));
+    const resolved = new URL(file, new URL('ui/themes/minecraft/', root));
     assert.ok(existsSync(resolved), `回退贴图不存在: ${file}`);
   }
 });

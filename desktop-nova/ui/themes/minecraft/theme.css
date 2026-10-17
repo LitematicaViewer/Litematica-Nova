@@ -1,15 +1,4 @@
-@import "./nav-icons.css";
-@import "./widget/button.css";
-@import "./widget/nav.css";
-@import "./widget/scroll.css";
-@import "./widget/input.css";
-@import "./widget/popup.css";
-@import "./widget/slider.css";
-@import "./widget/table.css";
-@import "./widget/text.css";
-@import "./widget/dialog.css";
-@import "./widget/subwindow.css";
-@import "./widget/content.css";
+@import "./widgets.css";
 @import "./appearance.css";
 @layer theme, vendor, tokens, base, components, utilities;
 

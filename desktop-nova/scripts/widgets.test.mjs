@@ -184,8 +184,8 @@ test('三主题共用官方控件，Minecraft 资源与控件身份保留', () =
   assert.ok(themes);
   for (const theme of ['shadcn', '8bitcn', 'Minecraft']) assert.ok(themes.includes(`value: "${theme}"`));
   assert.doesNotMatch(themes, /WebDefault|Bootstrap5|Metro10/);
-  assert.match(source('ui/themes/minecraft/widget/button.css'), /border-image-source: var\(--ln-minecraft-button-image\)/);
-  assert.match(source('ui/themes/minecraft/widget/text.css'), /unifont-16\.0\.04\.ttf/);
+  assert.match(source('ui/themes/minecraft/widgets.css'), /border-image-source: var\(--ln-minecraft-button-image\)/);
+  assert.match(source('ui/themes/minecraft/widgets.css'), /unifont-16\.0\.04\.ttf/);
   assert.match(source('ui/components/ui/button.tsx'), /button-decorations/);
   assert.match(source('ui/components/ui/button.tsx'), /Slot.Slottable/);
   assert.match(source('ui/shell/themeRuntime.ts'), /subscribeToThemeChanges/);
