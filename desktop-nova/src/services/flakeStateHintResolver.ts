@@ -6,6 +6,24 @@ import { resolveRedstoneWireStateHintImage } from "./flake/stateHintRules/blockR
 
 type FlakeStateHintMode = "mask" | "replace";
 
+/**
+ * 需要独立变换的遮罩层。
+ *
+ * 变换顺序固定为“先水平镜像，再顺时针旋转”，且只作用于这一层，
+ * 不会影响 imageRelPaths 中的其他遮罩（例如 waterlogged）。
+ */
+export interface FlakeImageLayer {
+  imageRelPath: string;
+  flipHorizontal?: boolean;
+  rotateQuarterTurns?: number;
+  /**
+   * `overlay`（默认）：把贴图按 alpha 叠在底图上。
+   * `alpha`：按贴图亮度削减底图 alpha（黑=保持，灰=半透明，白=全透明），
+   * 用于 half=top 楼梯的“指定像素半透明”。
+   */
+  effect?: "overlay" | "alpha";
+}
+
 export interface FlakeStateHintRule {
   mode: FlakeStateHintMode;
   imageRelPaths?: string[];
@@ -15,6 +33,13 @@ export interface FlakeStateHintRule {
   baseImageRotateQuarterTurns?: number;
   overlayIconBlockIds?: string[];
   subtractOverlayIconBlockIds?: string[];
+  /** 在其他遮罩之后按顺序叠加，可独立镜像/旋转。 */
+  imageLayers?: FlakeImageLayer[];
+  /**
+   * 规则显式指定的基底贴图缺失时，是否放弃整条规则。
+   * 默认 false：保留能独立成立的普通遮罩（例如含水覆盖）。
+   */
+  requiresBase?: boolean;
 }
 
 interface ResolveFlakeLayerBlockImageInput {
@@ -280,6 +305,34 @@ async function resolveRuleBaseImageUrls(rule: FlakeStateHintRule): Promise<strin
   return rotatedUrls.filter((url): url is string => !!url);
 }
 
+interface ResolvedFlakeImageLayer {
+  url: string;
+  effect: "overlay" | "alpha";
+}
+
+async function resolveRuleImageLayers(rule: FlakeStateHintRule): Promise<ResolvedFlakeImageLayer[] | null> {
+  const layers = rule.imageLayers;
+  if (!layers || layers.length === 0) return null;
+
+  const resolved: ResolvedFlakeImageLayer[] = [];
+  for (const layer of layers) {
+    const hintUrls = await readHintImageDataUrls([layer.imageRelPath]);
+    const url = hintUrls?.[0];
+    if (!url) return null;
+
+    // 固定顺序：先水平镜像，再顺时针旋转。只作用于当前层。
+    let transformed: string | null = url;
+    if (layer.flipHorizontal) transformed = await flipImageDataUrl(transformed);
+    if (transformed && layer.rotateQuarterTurns) {
+      transformed = await rotateImageDataUrl(transformed, layer.rotateQuarterTurns);
+    }
+    if (!transformed) return null;
+    resolved.push({ url: transformed, effect: layer.effect === "alpha" ? "alpha" : "overlay" });
+  }
+
+  return resolved.length ? resolved : null;
+}
+
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -312,6 +365,26 @@ async function rotateImageDataUrl(url: string, quarterTurns: number): Promise<st
   }
 }
 
+async function flipImageDataUrl(url: string): Promise<string | null> {
+  try {
+    const image = await loadImage(url);
+    const width = Math.max(1, image.naturalWidth || image.width || 16);
+    const height = Math.max(1, image.naturalHeight || image.height || 16);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.imageSmoothingEnabled = false;
+    context.translate(width, 0);
+    context.scale(-1, 1);
+    context.drawImage(image, 0, 0, width, height);
+    return canvas.toDataURL("image/png");
+  } catch {
+    return null;
+  }
+}
+
 async function applyMaskOverlays(baseIconUrl: string, overlayUrls: string[]): Promise<string | null> {
   try {
     const images = await Promise.all([loadImage(baseIconUrl), ...overlayUrls.map((overlayUrl) => loadImage(overlayUrl))]);
@@ -329,6 +402,55 @@ async function applyMaskOverlays(baseIconUrl: string, overlayUrls: string[]): Pr
     for (const overlayImage of overlayImages) {
       context.drawImage(overlayImage, 0, 0, width, height);
     }
+    return canvas.toDataURL("image/png");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 按遮罩亮度削减底图 alpha：黑=保持，灰=半透明，白=全透明。
+ *
+ * 与 applySubtractOverlays 的区别：反色遮罩改 RGB，这里只改 A，RGB 保持不变。
+ */
+async function applyAlphaOverlay(baseIconUrl: string, maskUrl: string): Promise<string | null> {
+  try {
+    const [baseImage, maskImage] = await Promise.all([loadImage(baseIconUrl), loadImage(maskUrl)]);
+    const width = Math.max(1, baseImage.naturalWidth || baseImage.width || 16);
+    const height = Math.max(1, baseImage.naturalHeight || baseImage.height || 16);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return null;
+    context.imageSmoothingEnabled = false;
+    context.clearRect(0, 0, width, height);
+    context.drawImage(baseImage, 0, 0, width, height);
+    const baseData = context.getImageData(0, 0, width, height);
+
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = width;
+    maskCanvas.height = height;
+    const maskContext = maskCanvas.getContext("2d", { willReadFrequently: true });
+    if (!maskContext) return null;
+    maskContext.imageSmoothingEnabled = false;
+    maskContext.clearRect(0, 0, width, height);
+    maskContext.drawImage(maskImage, 0, 0, width, height);
+    const maskData = maskContext.getImageData(0, 0, width, height);
+
+    const pixels = baseData.data;
+    const maskPixels = maskData.data;
+    for (let index = 0; index < pixels.length; index += 4) {
+      const maskAlpha = maskPixels[index + 3] / 255;
+      if (maskAlpha <= 0) continue;
+      const luminance = (maskPixels[index] + maskPixels[index + 1] + maskPixels[index + 2]) / (255 * 3);
+      const factor = Math.max(0, Math.min(1, luminance * maskAlpha));
+      if (factor <= 0) continue;
+      pixels[index + 3] = Math.round(pixels[index + 3] * (1 - factor));
+    }
+
+    context.putImageData(baseData, 0, 0);
     return canvas.toDataURL("image/png");
   } catch {
     return null;
@@ -413,28 +535,34 @@ export async function resolveFlakeLayerBlockImage({
   const rule = await resolveManualStateHintRule(blockId, states);
   if (!rule) return baseIconUrl;
 
-  // A rule whose base texture is part of the rule must not compose its masks
-  // over an unrelated icon when the active 2D pack lacks that texture. Beds are
-  // one example: without *_bed_top_* the occupied mask would be drawn over the
-  // whole bed icon.
+  // A rule whose masks are authored against an explicit base must not compose
+  // them over an unrelated icon when the active 2D pack lacks that base.
+  // `requiresBase` rules (beds) abandon the whole rule; other rules keep their
+  // base-independent overlays (stairs keep the waterlogged tint) and only drop
+  // the base-dependent imageLayers.
   const wantsExplicitBase =
     (rule.iconBlockIds?.length ?? 0) > 0 || (rule.baseImageRelPaths?.length ?? 0) > 0;
   const baseImageUrls = await resolveRuleBaseImageUrls(rule);
-  if (wantsExplicitBase && !baseImageUrls) return baseIconUrl;
+  const explicitBaseResolved = !!baseImageUrls && baseImageUrls.length > 0;
+  if (rule.requiresBase && wantsExplicitBase && !explicitBaseResolved) return baseIconUrl;
 
-  const resolvedBaseIconUrl = baseImageUrls && baseImageUrls.length > 0
-    ? (baseImageUrls[baseImageUrls.length - 1] || baseIconUrl)
+  const resolvedBaseIconUrl = explicitBaseResolved
+    ? (baseImageUrls![baseImageUrls!.length - 1] || baseIconUrl)
     : baseIconUrl;
 
   const normalHintImageUrls = await resolveRuleImageUrls(rule);
   const subtractHintImageUrls = await resolveRuleSubtractImageUrls(rule);
+  const imageLayerUrls = wantsExplicitBase && !explicitBaseResolved
+    ? null
+    : await resolveRuleImageLayers(rule);
   const hasNormalOverlays = !!normalHintImageUrls && normalHintImageUrls.length > 0;
   const hasSubtractOverlays = !!subtractHintImageUrls && subtractHintImageUrls.length > 0;
-  if (rule.mode === "replace" && !hasNormalOverlays && !hasSubtractOverlays) {
+  const hasImageLayers = !!imageLayerUrls && imageLayerUrls.length > 0;
+  if (rule.mode === "replace" && !hasNormalOverlays && !hasSubtractOverlays && !hasImageLayers) {
     return resolvedBaseIconUrl;
   }
 
-  if (!hasNormalOverlays && !hasSubtractOverlays) return resolvedBaseIconUrl;
+  if (!hasNormalOverlays && !hasSubtractOverlays && !hasImageLayers) return resolvedBaseIconUrl;
   if (!resolvedBaseIconUrl) return baseIconUrl;
 
   let composedIconUrl = resolvedBaseIconUrl;
@@ -448,6 +576,18 @@ export async function resolveFlakeLayerBlockImage({
     const masked = await applyMaskOverlays(composedIconUrl, normalHintImageUrls);
     if (!masked) return baseIconUrl;
     composedIconUrl = masked;
+  }
+
+  // imageLayers 最后处理：变换只作用于各自图层。
+  // overlay 层负责形状/阴影，alpha 层负责“指定像素半透明”。
+  if (hasImageLayers && imageLayerUrls) {
+    for (const layer of imageLayerUrls) {
+      const masked = layer.effect === "alpha"
+        ? await applyAlphaOverlay(composedIconUrl, layer.url)
+        : await applyMaskOverlays(composedIconUrl, [layer.url]);
+      if (!masked) return baseIconUrl;
+      composedIconUrl = masked;
+    }
   }
 
   return composedIconUrl || baseIconUrl;

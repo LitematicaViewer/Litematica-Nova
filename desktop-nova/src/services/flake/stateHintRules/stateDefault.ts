@@ -239,6 +239,118 @@ function resolveBedStateHintRule(blockId: string, states: Record<string, string>
     iconBlockIds: [`minecraft:${color}_bed_top_${part}`],
     baseImageRotateQuarterTurns: BED_FACING_QUARTER_TURNS[states.facing || ""] ?? 0,
     subtractImageRelPaths: states.occupied === "true" ? [OCCUPIED_TRUE_RELPATH] : undefined,
+    // 没有 *_bed_top_* 时不把 occupied 遮罩盖到通用床图标上。
+    requiresBase: true,
+  };
+}
+
+// 楼梯：遮罩默认朝向 north，facing 只旋转/镜像这一层遮罩。
+const STAIRS_HALF_BOTTOM_SHAPE_STRAIGHT_RELPATH = "data/flake/state_hint/stairs_half_bottom_shape_straight.png";
+const STAIRS_HALF_BOTTOM_SHAPE_INNER_LEFT_RELPATH = "data/flake/state_hint/stairs_half_bottom_shape_inner_left.png";
+const STAIRS_HALF_BOTTOM_SHAPE_OUTER_LEFT_RELPATH = "data/flake/state_hint/stairs_half_bottom_shape_outer_left.png";
+// half=top：黑=原色，灰=半透明，白=全透明；作为 alpha 层削减底图透明度。
+const STAIRS_HALF_TOP_SHAPE_STRAIGHT_RELPATH = "data/flake/state_overlay/stairs_half_top_shape_straight.png";
+const STAIRS_HALF_TOP_SHAPE_INNER_LEFT_RELPATH = "data/flake/state_overlay/stairs_half_top_shape_inner_left.png";
+const STAIRS_HALF_TOP_SHAPE_OUTER_LEFT_RELPATH = "data/flake/state_overlay/stairs_half_top_shape_outer_left.png";
+// facing=north 时遮罩不旋转；canvas 正角度为顺时针。
+const STAIRS_FACING_QUARTER_TURNS: Record<string, number> = {
+  north: 0,
+  east: 1,
+  south: 2,
+  west: 3,
+};
+// right 系列复用 left 贴图并水平镜像（镜像先于旋转，由 imageLayers 保证）。
+const STAIRS_SHAPE_MASKS: Record<string, { imageRelPath: string; flipHorizontal?: boolean }> = {
+  straight: { imageRelPath: STAIRS_HALF_BOTTOM_SHAPE_STRAIGHT_RELPATH },
+  inner_left: { imageRelPath: STAIRS_HALF_BOTTOM_SHAPE_INNER_LEFT_RELPATH },
+  inner_right: { imageRelPath: STAIRS_HALF_BOTTOM_SHAPE_INNER_LEFT_RELPATH, flipHorizontal: true },
+  outer_left: { imageRelPath: STAIRS_HALF_BOTTOM_SHAPE_OUTER_LEFT_RELPATH },
+  outer_right: { imageRelPath: STAIRS_HALF_BOTTOM_SHAPE_OUTER_LEFT_RELPATH, flipHorizontal: true },
+};
+const STAIRS_HALF_TOP_SHAPE_MASKS: Record<string, { imageRelPath: string; flipHorizontal?: boolean }> = {
+  straight: { imageRelPath: STAIRS_HALF_TOP_SHAPE_STRAIGHT_RELPATH },
+  inner_left: { imageRelPath: STAIRS_HALF_TOP_SHAPE_INNER_LEFT_RELPATH },
+  inner_right: { imageRelPath: STAIRS_HALF_TOP_SHAPE_INNER_LEFT_RELPATH, flipHorizontal: true },
+  outer_left: { imageRelPath: STAIRS_HALF_TOP_SHAPE_OUTER_LEFT_RELPATH },
+  outer_right: { imageRelPath: STAIRS_HALF_TOP_SHAPE_OUTER_LEFT_RELPATH, flipHorizontal: true },
+};
+
+/**
+ * 楼梯母方块例外表（手动维护区）。
+ *
+ * 一般规则：去掉 `_stairs` 后缀，例如 cobblestone_stairs -> cobblestone。
+ * 若母方块贴图名与去后缀结果不同，在此补一条：
+ *   key   = 楼梯 ID（不含 minecraft:）
+ *   value = block_2d 图标名（不含 .png）
+ *
+ * 待补参考（当前 2D 包中“去掉 _stairs 后没有同名图标”的楼梯）：
+ *   暂无
+ */
+const STAIRS_BASE_BLOCK_OVERRIDES: Record<string, string> = {
+  oak_stairs: "oak_planks",
+  acacia_stairs: "acacia_planks",
+  birch_stairs: "birch_planks",
+  dark_oak_stairs: "dark_oak_planks",
+  cherry_stairs: "cherry_planks",
+  jungle_stairs: "jungle_planks",
+  pale_oak_stairs: "pale_oak_planks",
+  spruce_stairs: "spruce_planks",
+  mangrove_stairs: "mangrove_planks",
+  crimson_stairs: "crimson_planks",
+  warped_stairs: "warped_planks",
+  poplar_stairs: "poplar_planks",
+
+  brick_stairs: "bricks",
+  deepslate_brick_stairs: "deepslate_bricks",
+  deepslate_tile_stairs: "deepslate_tiles",
+  cinnabar_brick_stairs: "cinnabar_bricks",
+  end_stone_brick_stairs: "end_stone_bricks",
+  mossy_stone_brick_stairs: "mossy_stone_bricks",
+  mud_brick_stairs: "mud_bricks",
+  nether_brick_stairs: "nether_bricks",
+  polished_blackstone_brick_stairs: "polished_blackstone_bricks",
+  prismarine_brick_stairs: "prismarine_bricks",
+  resin_brick_stairs: "resin_bricks",
+  stone_brick_stairs: "stone_bricks",
+  sulfur_brick_stairs: "sulfur_bricks",
+  tuff_brick_stairs: "tuff_bricks",
+
+  purpur_stairs: "purpur_block",
+  quartz_stairs: "quartz_block",
+};
+
+async function resolveStairsStateHintRule(blockId: string, states: Record<string, string>): Promise<FlakeStateHintRule | null> {
+  const id = normalizeBlockId(blockId);
+  const half = states.half;
+  if (!id.endsWith("_stairs") || (half !== "bottom" && half !== "top")) return null;
+  if (!(await isBlockInEnumerator(id, "enumerator/system_enum/blockset_stairs.json"))) return null;
+
+  const isTop = half === "top";
+  const shapeMask = (isTop ? STAIRS_HALF_TOP_SHAPE_MASKS : STAIRS_SHAPE_MASKS)[states.shape || ""];
+  if (!shapeMask) return null;
+
+  const stairKey = id.slice("minecraft:".length);
+  const baseName = STAIRS_BASE_BLOCK_OVERRIDES[stairKey] ?? stairKey.slice(0, -"_stairs".length);
+  if (!baseName) return null;
+
+  const imageRelPaths: string[] = [];
+  const overlayIconBlockIds: string[] = [];
+  // 楼梯同时属于 state_waterlogged：把含水遮罩追加到普通遮罩里；
+  // 形状遮罩单独放进 imageLayers，旋转/镜像不会影响含水遮罩。
+  applyWaterloggedOverlay(states, imageRelPaths, overlayIconBlockIds);
+
+  return {
+    mode: "replace",
+    iconBlockIds: [`minecraft:${baseName}`],
+    imageRelPaths: imageRelPaths.length ? imageRelPaths : undefined,
+    overlayIconBlockIds: overlayIconBlockIds.length ? overlayIconBlockIds : undefined,
+    imageLayers: [{
+      imageRelPath: shapeMask.imageRelPath,
+      flipHorizontal: shapeMask.flipHorizontal,
+      rotateQuarterTurns: STAIRS_FACING_QUARTER_TURNS[states.facing || ""] ?? 0,
+      // bottom 用黑色半透明遮罩压出形状；top 用灰度图直接削减 alpha。
+      effect: isTop ? "alpha" : "overlay",
+    }],
   };
 }
 
@@ -247,6 +359,8 @@ export async function resolveManualStateHintRule(blockId: string, states: Record
   // 彩色方块在 switch 前统一解析，避免为 16 种颜色重复规则体。
   const bedRule = resolveBedStateHintRule(blockId, states);
   if (bedRule) return bedRule;
+  const stairsRule = await resolveStairsStateHintRule(blockId, states);
+  if (stairsRule) return stairsRule;
   switch (normalizeBlockId(blockId)) {
     // 草方块
     case "minecraft:grass_block": {
