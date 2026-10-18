@@ -188,7 +188,16 @@ fn http(config: &ClientConfig) -> Result<Client> {
             && url.fragment().is_none(),
         "invalid endpoint"
     );
-    Ok(Client::builder()
+    // Keep transport state only: each acquisition still creates its own task
+    // proof, recipient and grant. Endpoint-scoped clients retain established
+    // HTTPS connections without retaining task credentials or content keys.
+    static CLIENTS: OnceLock<Mutex<std::collections::HashMap<String, Client>>> = OnceLock::new();
+    let mut clients = CLIENTS.get_or_init(Default::default).lock()
+        .map_err(|_| anyhow!("protected HTTP client pool lock failed"))?;
+    if let Some(client) = clients.get(&config.endpoint) {
+        return Ok(client.clone());
+    }
+    let client = Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         // Compute may legitimately remain silent while the VPS is solving a
         // batch. Neither its total wall time nor a slow, progressing download
@@ -201,7 +210,9 @@ fn http(config: &ClientConfig) -> Result<Client> {
         .tcp_keepalive_interval(std::time::Duration::from_secs(10))
         .tcp_keepalive_retries(3)
         .redirect(reqwest::redirect::Policy::none())
-        .build()?)
+        .build()?;
+    clients.insert(config.endpoint.clone(), client.clone());
+    Ok(client)
 }
 fn checked(mut response: reqwest::blocking::Response, max: usize) -> Result<Vec<u8>> {
     let status = response.status();
@@ -677,6 +688,54 @@ mod tests {
             manifest_public_key: String::new(),
             identity_dir: PathBuf::new(),
         }, server)
+    }
+
+    #[test]
+    fn task_http_pool_reuses_connection_after_previous_client_is_dropped() {
+        let (config, server) = http_fixture(|mut stream| {
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok").unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                assert!(request.len() < 8192);
+                assert_eq!(stream.read(&mut byte).unwrap(), 1);
+                request.push(byte[0]);
+            }
+            assert!(request.starts_with(b"GET /second HTTP/1.1\r\n"));
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+        });
+        let client = http(&config).unwrap();
+        let response = client.get(format!("{}/first", config.endpoint))
+            .timeout(Duration::from_secs(2)).send().unwrap();
+        assert_eq!(checked(response, 2).unwrap(), b"ok");
+        drop(client);
+        let response = http(&config).unwrap().get(format!("{}/second", config.endpoint))
+            .timeout(Duration::from_secs(2)).send().unwrap();
+        assert_eq!(checked(response, 2).unwrap(), b"ok");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn task_http_pool_keeps_endpoint_routing_and_validation() {
+        let (first, first_server) = http_fixture(|mut stream| {
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\naa").unwrap();
+        });
+        let (second, second_server) = http_fixture(|mut stream| {
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nbb").unwrap();
+        });
+        let response = http(&first).unwrap().get(&first.endpoint)
+            .timeout(Duration::from_secs(2)).send().unwrap();
+        assert_eq!(checked(response, 2).unwrap(), b"aa");
+        let response = http(&second).unwrap().get(&second.endpoint)
+            .timeout(Duration::from_secs(2)).send().unwrap();
+        assert_eq!(checked(response, 2).unwrap(), b"bb");
+        let mut invalid = first.clone();
+        invalid.endpoint.push_str("?untrusted=true");
+        assert!(http(&invalid).is_err());
+        invalid.endpoint = "http://example.com/nova-core".into();
+        assert!(http(&invalid).is_err());
+        first_server.join().unwrap();
+        second_server.join().unwrap();
     }
 
     #[test]
