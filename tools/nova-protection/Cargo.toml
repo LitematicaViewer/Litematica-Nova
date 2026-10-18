@@ -8,7 +8,7 @@ license = "MPL-2.0"
 
 [features]
 default = ["client"]
-client = ["dep:reqwest", "dep:fs2", "dep:keyring"]
+client = ["dep:reqwest", "dep:fs2", "dep:keyring", "dep:tokio"]
 
 [dependencies]
 anyhow = "1"
@@ -23,6 +23,8 @@ serde_json = "1"
 zeroize = { version = "1", features = ["derive"] }
 fs2 = { version = "0.4", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "http2"], optional = true }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_System_Memory", "Win32_System_Threading", "Win32_Storage_FileSystem"] }

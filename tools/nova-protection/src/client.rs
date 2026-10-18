@@ -6,7 +6,7 @@ use std::{
     fs::OpenOptions,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex, OnceLock},
 };
 use zeroize::Zeroizing;
 
@@ -152,7 +152,8 @@ pub struct TaskSession {
     config: ClientConfig,
     ticket: TaskTicket,
     identity: Arc<DeviceKey>,
-    http: Client,
+    http: reqwest::Client,
+    cancelled: Option<Arc<AtomicBool>>,
     content_key: Option<Arc<Zeroizing<Vec<u8>>>>,
 }
 #[derive(Debug)]
@@ -189,7 +190,16 @@ fn http(config: &ClientConfig) -> Result<Client> {
     );
     Ok(Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(600))
+        // Compute may legitimately remain silent while the VPS is solving a
+        // batch. Neither its total wall time nor a slow, progressing download
+        // is a protocol failure. Reqwest's blocking default is also a total
+        // deadline, so disable it explicitly rather than merely removing 600s.
+        .timeout(None)
+        // Detect an unreachable transport independently of solve duration. A
+        // connected, busy server still acknowledges TCP keepalive probes.
+        .tcp_keepalive(std::time::Duration::from_secs(30))
+        .tcp_keepalive_interval(std::time::Duration::from_secs(10))
+        .tcp_keepalive_retries(3)
         .redirect(reqwest::redirect::Policy::none())
         .build()?)
 }
@@ -207,6 +217,9 @@ fn checked(mut response: reqwest::blocking::Response, max: usize) -> Result<Vec<
         .take(max as u64 + 1)
         .read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= max, "service response exceeds byte budget");
+    checked_status(status, bytes)
+}
+fn checked_status(status: reqwest::StatusCode, bytes: Vec<u8>) -> Result<Vec<u8>> {
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         let error: ApiError = serde_json::from_slice(&bytes).unwrap_or(ApiError {
             error: "rate limited".into(),
@@ -225,6 +238,71 @@ fn checked(mut response: reqwest::blocking::Response, max: usize) -> Result<Vec<
         status.as_u16()
     );
     Ok(bytes)
+}
+
+fn compute_http() -> Result<reqwest::Client> {
+    // Unlike the blocking API, reqwest's async client has no default total
+    // timeout. Do not add a read timeout: solving a batch sends no body yet.
+    Ok(reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .tcp_keepalive(std::time::Duration::from_secs(30))
+        .tcp_keepalive_interval(std::time::Duration::from_secs(10))
+        .tcp_keepalive_retries(3)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?)
+}
+
+/// All task sessions share one small I/O executor. Dropping a cancelled request
+/// drops the actual network future rather than abandoning a blocking thread.
+fn compute_runtime() -> Result<&'static tokio::runtime::Runtime> {
+    static RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> = OnceLock::new();
+    RUNTIME.get_or_init(|| tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .thread_name("nova-protected-http")
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string()))
+        .as_ref().map_err(|error| anyhow!("protected HTTP executor failed: {error}"))
+}
+
+fn execute_compute_request(
+    request: reqwest::RequestBuilder,
+    max: usize,
+    cancelled: Option<&AtomicBool>,
+) -> Result<(Vec<u8>, reqwest::Version, f64)> {
+    compute_runtime()?.block_on(async {
+        let exchange_started = std::time::Instant::now();
+        let exchange = async {
+            let mut response = request.send().await?;
+            let headers_ms = exchange_started.elapsed().as_secs_f64() * 1000.;
+            let version = response.version();
+            let status = response.status();
+            ensure!(response.content_length().is_none_or(|len| len <= max as u64),
+                "service response exceeds byte budget");
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await? {
+                ensure!(chunk.len() <= max.saturating_sub(bytes.len()),
+                    "service response exceeds byte budget");
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok((checked_status(status, bytes)?, version, headers_ms))
+        };
+        let cancel = async {
+            match cancelled {
+                Some(flag) => loop {
+                    if flag.load(Ordering::Acquire) { break; }
+                    // Cancellation polling is not a computation deadline.
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                },
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = cancel => Err(anyhow!("protected request cancelled")),
+            result = exchange => result,
+        }
+    })
 }
 impl TaskSession {
     pub fn acquire(config: &ClientConfig, task_id: &str) -> Result<Self> {
@@ -292,7 +370,6 @@ impl TaskSession {
                 "{}/v1/tasks/acquire",
                 config.endpoint.trim_end_matches('/')
             ))
-            .timeout(std::time::Duration::from_secs(30))
             .header("x-nova-proof", crypto::b64(&serde_json::to_vec(&proof)?))
             .body(body)
             .send()
@@ -332,7 +409,8 @@ impl TaskSession {
             config: config.clone(),
             ticket,
             identity,
-            http,
+            http: compute_http()?,
+            cancelled: None,
             content_key: Some(Arc::new(content_key)),
         })
     }
@@ -349,7 +427,8 @@ impl TaskSession {
             config: config.clone(),
             ticket,
             identity,
-            http,
+            http: compute_http()?,
+            cancelled: None,
             content_key: None,
         })
     }
@@ -358,6 +437,10 @@ impl TaskSession {
     }
     pub fn config(&self) -> &ClientConfig {
         &self.config
+    }
+    /// The flag belongs to this task, not to a process-global current request.
+    pub fn set_cancellation(&mut self, cancelled: Arc<AtomicBool>) {
+        self.cancelled = Some(cancelled);
     }
     /// Drops this handle's CEK immediately; other explicit session clones retain their own Arc.
     pub fn release_content_key(&mut self) {
@@ -385,7 +468,7 @@ impl TaskSession {
         )?;
         let proof_ms = started.elapsed().as_secs_f64() * 1000.;
         let exchange_started = std::time::Instant::now();
-        let response = self
+        let request = self
             .http
             .post(format!(
                 "{}{}",
@@ -396,14 +479,13 @@ impl TaskSession {
             .header("x-nova-task", &self.ticket.binding().task_id)
             .header("x-nova-module", &self.ticket.binding().module_id)
             .header("x-nova-token", &self.ticket.response.task_token)
-            .body(body)
-            .send()?;
-        let headers_ms = exchange_started.elapsed().as_secs_f64() * 1000.;
-        let http_version = response.version();
-        let read_started = std::time::Instant::now();
-        let output = checked(response, limit)?;
+            .body(body);
+        let (output, http_version, headers_ms) = execute_compute_request(
+            request, limit, self.cancelled.as_deref(),
+        )?;
+        let exchange_ms = exchange_started.elapsed().as_secs_f64() * 1000.;
         if std::env::var("NOVA_RENDER_PHASE_AUDIT").as_deref() == Ok("1") {
-            eprintln!("[NOVA_PROTECTION_RPC] endpoint={endpoint} http_version={http_version:?} input_bytes={input_bytes} output_bytes={} proof_ms={proof_ms:.3} send_to_headers_ms={headers_ms:.3} body_read_ms={:.3} total_ms={:.3}", output.len(), read_started.elapsed().as_secs_f64() * 1000., started.elapsed().as_secs_f64() * 1000.);
+            eprintln!("[NOVA_PROTECTION_RPC] endpoint={endpoint} http_version={http_version:?} input_bytes={input_bytes} output_bytes={} proof_ms={proof_ms:.3} send_to_headers_ms={headers_ms:.3} body_read_ms={:.3} total_ms={:.3}", output.len(), (exchange_ms - headers_ms).max(0.), started.elapsed().as_secs_f64() * 1000.);
         }
         Ok(output)
     }
@@ -565,6 +647,160 @@ fn pace_new_task(directory: &Path, task: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    // A loopback peer exercises the actual production HTTP builder and response
+    // reader. The previous total deadline is scaled down, not reproduced by a
+    // second implementation of the client's admission predicate.
+    fn http_fixture(
+        reply: impl FnOnce(TcpStream) + Send + 'static,
+    ) -> (ClientConfig, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                assert!(request.len() < 8192);
+                assert_eq!(stream.read(&mut byte).unwrap(), 1);
+                request.push(byte[0]);
+            }
+            reply(stream);
+        });
+        (ClientConfig {
+            endpoint,
+            build_id: "http-fixture".into(),
+            module_id: "http-fixture".into(),
+            manifest_public_key: String::new(),
+            identity_dir: PathBuf::new(),
+        }, server)
+    }
+
+    #[test]
+    fn remote_compute_waits_beyond_old_deadline_before_response_headers() {
+        let old_deadline = Duration::from_millis(30);
+        let delay = Duration::from_millis(120);
+        // Control: the old total-deadline behavior actually rejects this peer.
+        let (config, server) = http_fixture(move |mut stream| {
+            std::thread::sleep(delay);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        });
+        let error = http(&config).unwrap().get(&config.endpoint)
+            .timeout(old_deadline).send().unwrap_err();
+        assert!(error.is_timeout(), "old deadline must be crossed: {error}");
+        server.join().unwrap();
+
+        let (config, server) = http_fixture(move |mut stream| {
+            std::thread::sleep(delay);
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+        });
+        let started = Instant::now();
+        let (bytes, _, _) = execute_compute_request(
+            compute_http().unwrap().get(&config.endpoint), 2, None,
+        ).unwrap();
+        assert_eq!(bytes, b"ok");
+        assert!(started.elapsed() >= delay);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn progressing_remote_result_has_no_total_download_deadline() {
+        let (config, server) = http_fixture(|mut stream| {
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n").unwrap();
+            for byte in b"done" {
+                std::thread::sleep(Duration::from_millis(40));
+                stream.write_all(&[*byte]).unwrap();
+            }
+        });
+        let started = Instant::now();
+        let (bytes, _, _) = execute_compute_request(
+            compute_http().unwrap().get(&config.endpoint), 4, None,
+        ).unwrap();
+        assert_eq!(bytes, b"done");
+        assert!(started.elapsed() >= Duration::from_millis(160));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn remote_disconnect_and_http_failure_still_end_the_request() {
+        let (config, server) = http_fixture(|mut stream| {
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\nshort").unwrap();
+        });
+        assert!(execute_compute_request(
+            compute_http().unwrap().get(&config.endpoint), 16, None,
+        ).is_err(), "truncated result must fail, not wait forever");
+        server.join().unwrap();
+
+        let (config, server) = http_fixture(|mut stream| {
+            stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        assert!(execute_compute_request(
+            compute_http().unwrap().get(&config.endpoint), 16, None,
+        ).unwrap_err().to_string().contains("HTTP 503"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn remote_cancel_drops_live_request_without_cancelling_another_task() {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+        let (first, first_server) = http_fixture(move |mut stream| {
+            entered_tx.send(()).unwrap();
+            // TCP remains open, but this peer deliberately never sends headers.
+            // Explicit cancellation must close the real pending request.
+            let closed = match stream.read(&mut [0]) {
+                Ok(0) => true,
+                Err(error) => matches!(error.kind(), std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe),
+                _ => false,
+            };
+            closed_tx.send(closed).unwrap();
+        });
+        let old_cancel = Arc::new(AtomicBool::new(false));
+        let old_request_flag = Arc::clone(&old_cancel);
+        let http = compute_http().unwrap();
+        let old_http = http.clone();
+        let old_request = std::thread::spawn(move || execute_compute_request(
+            old_http.get(&first.endpoint), 16, Some(&old_request_flag),
+        ));
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        let (second, second_server) = http_fixture(|mut stream| {
+            std::thread::sleep(Duration::from_millis(80));
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+        });
+        let new_cancel = Arc::new(AtomicBool::new(false));
+        let new_request_flag = Arc::clone(&new_cancel);
+        let new_request = std::thread::spawn(move || execute_compute_request(
+            http.get(&second.endpoint), 16, Some(&new_request_flag),
+        ));
+        old_cancel.store(true, Ordering::Release);
+        assert!(old_request.join().unwrap().unwrap_err().to_string().contains("cancelled"));
+        assert!(closed_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "cancel must drop the actual exchange, not leave a background RPC");
+        assert_eq!(new_request.join().unwrap().unwrap().0, b"ok");
+        assert!(!new_cancel.load(Ordering::Acquire));
+        first_server.join().unwrap();
+        second_server.join().unwrap();
+    }
+
+    #[test]
+    fn already_cancelled_remote_request_never_reaches_the_peer() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let cancelled = AtomicBool::new(true);
+        let error = execute_compute_request(
+            compute_http().unwrap().get(endpoint), 16, Some(&cancelled),
+        ).unwrap_err();
+        assert!(error.to_string().contains("cancelled"));
+        assert!(matches!(listener.accept(), Err(error)
+            if error.kind() == std::io::ErrorKind::WouldBlock));
+    }
+
     #[test]
     fn multi_instance_file_queue_preserves_headroom() {
         let directory = tempfile::tempdir().unwrap();
