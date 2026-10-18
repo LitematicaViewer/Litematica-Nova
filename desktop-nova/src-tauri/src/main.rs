@@ -2906,6 +2906,8 @@ mod full_launch_plan_tests {
         let host = initialize_application_host(app_root.clone(), data_root.clone(), &service).unwrap();
         service.launch_in_background(Arc::clone(&host.supervisor), host.service_exe.clone(), data_root.clone());
         let mut protection = application::protected_render::ProtectedRender::default();
+        let mut measured = serde_json::json!({"mode":mode_name,"loading":"prebuilt",
+            "GPU":"not_executed","firstFrame":"not_measured","workerLaunched":false});
         let result = tauri::async_runtime::block_on(async {
             let viewport = env::var("NOVA_FULL_CPU_TEST_VIEWPORT").ok().map(|value| {
                 let (width, height) = value.split_once('x').expect("WIDTHxHEIGHT");
@@ -2927,8 +2929,11 @@ mod full_launch_plan_tests {
             request.settings.resource_packs = resource_packs.clone();
             if let Some(path) = env::var_os("NOVA_FULL_CPU_TEST_FABRIC_MODS_DIR") { request.settings.fabric_mods_dir = Some(PathBuf::from(path)); }
             let preflight_started = std::time::Instant::now();
-            let preflight = facade.preflight_render(request.clone(), environment).await?;
+            let preflight_result = facade.preflight_render(request.clone(), environment).await;
             let preflight_ms = preflight_started.elapsed().as_millis();
+            measured["preflightMs"]=serde_json::json!(preflight_ms);
+            let preflight = preflight_result?;
+            measured["preflight"]=serde_json::to_value(&preflight).map_err(|e|e.to_string())?;
             if !preflight.allowed_actions.contains(&application::model::ResourcePreflightAction::ContinuePrebuilt) {
                 return Err(format!("actual {backend_admission} admission did not allow original {mode_name} Prebuilt: {preflight:?}"));
             }
@@ -2968,8 +2973,10 @@ mod full_launch_plan_tests {
             let material_started = std::time::Instant::now();
             // A separate explicit CPU audit task receives its own real grant;
             // it never invents or reuses a generic process authorization.
-            let task = protection.acquire(&data_root, &backend, &serde_json::to_vec(&request).map_err(|e| e.to_string())?)?;
+            let task_result = protection.acquire(&data_root, &backend, &serde_json::to_vec(&request).map_err(|e| e.to_string())?);
             let material_ms = material_started.elapsed().as_millis();
+            measured["workerTaskGrantMaterializeMs"]=serde_json::json!(material_ms);
+            let task = task_result?;
             let ready = output.join("full-prebuilt.ready.json");
             let artifact = output.join("full-prebuilt.gpu-scene.cache");
             let contract_path = output.join("full-prebuilt.contract.json");
@@ -3001,11 +3008,15 @@ mod full_launch_plan_tests {
             ];
             let worker_started = std::time::Instant::now();
             let child = host.supervisor.spawn(spec).map_err(|e|e.to_string())?.child;
+            measured["workerLaunched"]=serde_json::json!(true);
             let timeout = env::var("NOVA_FULL_CPU_TEST_TIMEOUT_SECS").ok().map(|v|v.parse::<u64>().unwrap()).unwrap_or(1200);
-            let exit = match host.supervisor.wait_for_exit(&child, Duration::from_secs(timeout)) {
+            let wait = host.supervisor.wait_for_exit(&child, Duration::from_secs(timeout));
+            measured["workerElapsedMs"]=serde_json::json!(worker_started.elapsed().as_millis());
+            let exit = match wait {
                 WaitOutcome::Exited(exit) => exit,
                 other => return Err(format!("owned {mode_name} CPU worker did not exit normally: {other:?}")),
             };
+            measured["workerExit"]=serde_json::json!(exit.exit_code);
             if exit.exit_code != Some(0) { return Err(format!("real protected {mode_name} CPU worker exited {:?}; inspect its private stdout/stderr", exit.exit_code)); }
             let worker_ms = worker_started.elapsed().as_millis();
             let ready_value: serde_json::Value = serde_json::from_slice(&std::fs::read(&ready).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
@@ -3040,6 +3051,11 @@ mod full_launch_plan_tests {
             std::fs::write(output.join("full-prebuilt-result.json"), serde_json::to_vec_pretty(&result).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
             Ok::<_,String>(())
         });
+        if let Err(error)=&result {
+            measured["status"]=serde_json::json!("failed");
+            measured["error"]=serde_json::json!(error);
+            std::fs::write(output.join("full-prebuilt-error-result.json"),serde_json::to_vec_pretty(&measured).unwrap()).unwrap();
+        }
         service.request_shutdown(); host.supervisor.stop_admitting();
         let shutdown = host.supervisor.shutdown(Duration::from_millis(500), Duration::from_millis(1500));
         assert!(shutdown.remaining.is_empty());
