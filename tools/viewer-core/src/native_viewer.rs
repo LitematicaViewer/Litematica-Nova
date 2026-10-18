@@ -10722,10 +10722,9 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         }
                     }
                     }
-                    if let Some((command, path, started)) = pending_capture.as_ref() {
+                    if let Some((command, path, _started)) = pending_capture.as_ref() {
                         let ready = state.frame_index > 0 && state.pending_build_queue.is_empty() && state.in_flight_build_keys.is_empty() && state.pending_upload_queue.is_empty();
                         let outcome = (|| -> Result<bool> {
-                            if started.elapsed() > Duration::from_secs(60) { bail!("快速预览仍在构建，请稍后生成缩略图"); }
                             if ready { state.capture_error = None; state.capture_output = Some(path.clone()); }
                             state.render(window.as_ref(), viewer_started_at).context("read actual preview frame")?;
                             if let Some(error) = state.capture_error.take() { bail!("{error}"); }

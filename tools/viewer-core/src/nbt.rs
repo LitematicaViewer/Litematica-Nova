@@ -56,13 +56,15 @@ static NEXT_BLOCK_STATES_SPOOL_ID: AtomicU64 = AtomicU64::new(1);
 pub const DEFAULT_LITEMATIC_METADATA_SCAN_LIMITS: LitematicMetadataScanLimits =
     LitematicMetadataScanLimits {
         max_decompressed_bytes: 128 * 1024 * 1024,
-        deadline: Duration::from_millis(950),
+        deadline: None,
     };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LitematicMetadataScanLimits {
     pub max_decompressed_bytes: u64,
-    pub deadline: Duration,
+    /// Optional diagnostic/test deadline. Production scans retain the byte
+    /// and structure limits, but elapsed time alone cannot invalidate input.
+    pub deadline: Option<Duration>,
 }
 
 impl Default for LitematicMetadataScanLimits {
@@ -208,7 +210,7 @@ struct LitematicPreflightMetadataScanner<R> {
     decompressed_bytes: u64,
     max_decompressed_bytes: u64,
     started_at: Instant,
-    deadline: Duration,
+    deadline: Option<Duration>,
     fields: LitematicPreflightMetadataFields,
     frames: Vec<NbtContainerFrame>,
 }
@@ -585,7 +587,7 @@ where
     }
 
     fn check_deadline(&self) -> PreflightMetadataScanResult<()> {
-        if self.started_at.elapsed() >= self.deadline {
+        if self.deadline.is_some_and(|deadline| self.started_at.elapsed() >= deadline) {
             return Err(PreflightMetadataScanFailure::Limit(
                 LitematicMetadataUnknown::DeadlineExceeded,
             ));
@@ -3302,7 +3304,7 @@ mod tests {
     fn metadata_limits(max_decompressed_bytes: u64) -> LitematicMetadataScanLimits {
         LitematicMetadataScanLimits {
             max_decompressed_bytes,
-            deadline: Duration::from_secs(1),
+            deadline: Some(Duration::from_secs(1)),
         }
     }
 
@@ -3444,12 +3446,25 @@ mod tests {
     }
 
     #[test]
+    fn preflight_metadata_production_scan_has_no_elapsed_time_gate() {
+        let limits = DEFAULT_LITEMATIC_METADATA_SCAN_LIMITS;
+        assert!(limits.deadline.is_none());
+        assert_eq!(limits.max_decompressed_bytes, 128 * 1024 * 1024);
+        let mut scanner = LitematicPreflightMetadataScanner::new(
+            Cursor::new(root_with_children(&[])), limits,
+        );
+        scanner.started_at = Instant::now().checked_sub(Duration::from_secs(30)).unwrap();
+        assert!(scanner.check_deadline().is_ok());
+        assert!(matches!(scanner.scan_root(), Ok(PreflightMetadataFinish::MetadataMissing)));
+    }
+
+    #[test]
     fn preflight_metadata_scan_enforces_deadline_without_reading_scene_data() {
         let metadata = scan_litematic_preflight_metadata_from_nbt(
             Cursor::new(root_with_children(&[])),
             LitematicMetadataScanLimits {
                 max_decompressed_bytes: 512,
-                deadline: Duration::ZERO,
+                deadline: Some(Duration::ZERO),
             },
         )
         .unwrap();
