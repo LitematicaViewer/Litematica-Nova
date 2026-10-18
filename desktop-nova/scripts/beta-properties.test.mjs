@@ -25,13 +25,13 @@ test("属性：文件名作为主名称，内部名称可编辑，所有选区�
   });
   const props = { currentFile: "C:\\投影\\真正文件.litematic", setCurrentFile() {}, setRoute() {} };
   h.render(props); await nextTurn(); h.render(props);
-  assert.equal(text(h.nodes().find((node) => node.props?.className === "properties-file")), "真正文件.litematic");
+  assert.equal(text(h.nodes().find((node) => String(node.props?.className ?? "").split(/\s+/).includes("properties-file"))), "真正文件.litematic");
   assert.equal(h.component("TextRow").props.label, "内部名称"); assert.equal(h.component("TextRow").props.value, "原名称");
   const row = h.nodes().find((node) => node.type === "div" && node.props?.children?.[0]?.type === "dt" && text(node.props.children[0]) === "选区名");
   assert.deepEqual(row.props.children[1].props.children.map(text), names);
   assert.deepEqual(cached, [{ path: props.currentFile, analysis: { internalName: "原名称", regionNames: names } }]);
   h.component("TextRow").props.onChange("未保存内部名称"); h.render(props);
-  assert.equal(text(h.nodes().find((node) => node.props?.className === "properties-file")), "真正文件.litematic");
+  assert.equal(text(h.nodes().find((node) => String(node.props?.className ?? "").split(/\s+/).includes("properties-file"))), "真正文件.litematic");
   assert.equal(writes, 0);
 });
 

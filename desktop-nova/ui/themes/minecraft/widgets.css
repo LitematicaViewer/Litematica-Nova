@@ -8,12 +8,15 @@
    still depend on the bare element selectors below, so they cannot be narrowed yet. */
 
 @layer theme, vendor, tokens, base, components, utilities;
+/* Theme rules live in `components.theme`, above the shared and page defaults, so a
+   theme declaration takes effect without specificity games. */
+@layer components.shared, components.page, components.theme;
 
 /* ── nav-icons.css ─────────────────────────────────────────────── */
 /* Navigation artwork is 16x16 game-style pixel art in this theme, so it must stay
    crisp when the window is scaled. Themes without their own artwork keep vectors. */
 
-@layer components {
+@layer components.theme {
 .theme-minecraft .nav-icon { image-rendering: pixelated; }
 }
 
@@ -32,7 +35,7 @@
 }
 }
 
-@layer components {
+@layer components.theme {
 
 /* Per-variant texture sets. A variant only supplies its state images; the state rules
    below resolve `var(--ln-minecraft-button-<state>-image, <base>)`, so a variant with a
@@ -124,7 +127,7 @@
 }
 
 [data-slot="button"]:focus-visible {
-    outline: 2px solid #ffffff;
+    outline: 2px solid var(--ring);
     outline-offset: 2px;
 }
 
@@ -221,7 +224,7 @@
 }
 }
 
-@layer components {
+@layer components.theme {
 
 .sidebar {
     display: flex;
@@ -357,7 +360,7 @@ html[data-theme="minecraft"] {
 }
 }
 
-@layer components {
+@layer components.theme {
 
 html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] {
     width: var(--ln-scroll-size);
@@ -408,7 +411,7 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
 }
 }
 
-@layer components {
+@layer components.theme {
 
 [data-slot="input"]:not([type]),
 [data-slot="input"][type="text"],
@@ -456,7 +459,6 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
 [data-slot="select-trigger"] {
     box-sizing: border-box;
     display: inline-flex;
-    width: auto;
     max-width: 100%;
     height: var(--ln-minecraft-input-height);
     min-height: var(--ln-minecraft-input-height);
@@ -552,13 +554,10 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
 
 /* ── popup.css ─────────────────────────────────────────────── */
 
-@layer components {
+@layer components.theme {
 .theme-minecraft .material-list-hover-popup {
-    border: 2px solid #999999;
-    background-color: #000000;
+    border-width: 2px;
     box-shadow: none;
-    color: #ffffff;
-    font-size: 16px;
     image-rendering: pixelated;
 }
 }
@@ -577,7 +576,7 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
 }
 }
 
-@layer components {
+@layer components.theme {
 
 /* Replaces the old `widget/range.css`, which styled `input[type="range"]` and its
    `::-webkit-slider-*` / `::-moz-range-*` pseudo-elements. Radix renders a
@@ -661,7 +660,7 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
 }
 }
 
-@layer components {
+@layer components.theme {
 
 [data-slot="table"],
 .table {
@@ -733,7 +732,7 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
 
 /* ── text.css ─────────────────────────────────────────────── */
 
-@layer components {
+@layer components.theme {
 @font-face {
     font-family: "Unifont";
     /* src: url("./resource/font/UnifontExMono.woff2") format("woff2"); */
@@ -756,7 +755,7 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
 /* ── dialog.css ─────────────────────────────────────────────── */
 /* Minecraft dialog styling */
 
-@layer components {
+@layer components.theme {
 .dialog-surface {
     border-width: 2px;
     border-radius: 0;
@@ -766,7 +765,7 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
 /* ── subwindow.css ─────────────────────────────────────────────── */
 /* Minecraft child-window styling */
 
-@layer components {
+@layer components.theme {
 .dialog-content {
     border-width: 2px;
     border-radius: 0;

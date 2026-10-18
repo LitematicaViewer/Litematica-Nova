@@ -1,8 +1,9 @@
 /* Shared official component structure. Theme files supply every surface/color. */
 /* Functional icons share one vector language; BlockIcon/item textures are not SVG. */
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 /* Sizing rules for the `size` prop. Two constraints shape them:
    1. NO `font-size`: every button inherits one size via `font: inherit` (`base.css`).
       The Minecraft theme draws its body text with Unifont, a bitmap font that only
@@ -118,7 +119,7 @@ html[data-theme] [data-slot="checkbox"]:focus-visible { outline: 2px solid var(-
 .nova-checkbox-pixel-edge { display: none; }
 html[data-theme="8bitcn"] [data-slot="checkbox"] { border-radius: 0; border-width: 2px; }
 html[data-theme="8bitcn"] .nova-checkbox-pixel-edge { display: block; position: absolute; inset: -2px; border-inline: 2px solid var(--foreground); pointer-events: none; }
-html[data-theme="minecraft"] [data-slot="checkbox"] { border-radius: 0; border-width: 2px; box-shadow: inset 1px 1px rgb(255 255 255 / 18%); }
+html[data-theme="minecraft"] [data-slot="checkbox"] { border-radius: 0; border-width: 2px; box-shadow: inset 1px 1px color-mix(in srgb, var(--foreground) 18%, transparent); }
 html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"]):disabled { opacity: .45; cursor: not-allowed; }
 html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"]):hover:not(:disabled) { border-color: var(--ring); }
 html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"])[aria-invalid="true"] { border-color: var(--destructive); }
@@ -219,12 +220,12 @@ html[data-theme] .flake-page__creative-hotbar-slot[data-slot="button"] { min-hei
 /* 8bitcn dialog frame. Hidden outside the pixel theme. */
 html[data-theme] [data-slot="dialog-pixel-x"] { border-inline: 2px solid var(--foreground); }
 html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--foreground); }
-[data-slot="dialog-description"] { font-size: .875rem; }
+[data-slot="dialog-description"] { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
 
 [data-slot="select-trigger"] { box-shadow: var(--control-shadow); }
 [data-slot="select-trigger"] svg { opacity: .5; }
-[data-slot="select-label"] { font-size: .75rem; line-height: 1rem; color: var(--muted-foreground); }
-[data-slot="select-item"] { font-size: .875rem; line-height: 1.25rem; }
+[data-slot="select-label"] { font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); line-height: 1rem; color: var(--muted-foreground); }
+[data-slot="select-item"] { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); line-height: 1.25rem; }
 [data-slot="select-item"][data-disabled] { opacity: .5; }
 [data-slot="select-separator"] { background-color: var(--border); }
 
@@ -233,14 +234,37 @@ html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--fo
 [data-slot="input"]::file-selector-button {
     border-width: 0;
     background-color: transparent;
-    font-size: .875rem;
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
     line-height: 1.25rem;
     font-weight: 500;
     color: var(--foreground);
 }
 
 [data-slot="table-footer"] { border-top: 1px solid currentColor; background-color: color-mix(in oklab, var(--muted) 50%, transparent); font-weight: 500; }
-[data-slot="table-caption"] { font-size: .875rem; line-height: 1.25rem; color: var(--muted-foreground); }
+[data-slot="table-caption"] { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); line-height: 1.25rem; color: var(--muted-foreground); }
+
+/* Small shared primitives pages compose instead of re-declaring colour or surface.
+   They live in `components.shared`, so a theme may override any of them. */
+.nova-code {
+    padding: 14px; background: var(--muted); border-radius: var(--radius);
+    white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+}
+.nova-panel-subtle { background: var(--muted); border-radius: var(--radius); }
+.nova-box-plain { border: 0; background: transparent; padding: 0; margin: 0; }
+.nova-text-danger { color: var(--destructive); }
+
+/* Property chips rendered by BlockSearchSelect. Shared because the same component
+   appears on the replace page and inside the conversion table; styling it from page
+   CSS made the component look different depending on its host. */
+.replace-property-list { display: flex; flex-wrap: wrap; gap: var(--ln-space-2, 8px); }
+.replace-property {
+    display: flex; flex-wrap: wrap; gap: var(--ln-space-2, 8px);
+    align-items: center; min-width: 0;
+    padding: 8px; background: var(--muted); border-radius: var(--radius);
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
+}
 
 @media (prefers-reduced-motion: reduce) { .nova-control, [data-slot="scroll-area-scrollbar"] { transition: none !important; } }
 }

@@ -1,7 +1,8 @@
 /* Flake canvas and dialogs, ported from origin/dev/flake without changing other pages. */
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 
 
 .flake-canvas {

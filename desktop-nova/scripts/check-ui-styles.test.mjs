@@ -524,6 +524,93 @@ test("collectFindings is repeatable and does not leak state between calls", () =
   assert.equal(collectFindings(first.root).unlayeredRuleCounts.get("ui/styles/a.css"), 1);
 });
 
+test("rules must live in the ownership sublayer for their folder", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "windows/main/pages/home/home.css",
+    [
+      "@layer theme, vendor, tokens, base, components, utilities;",
+      "@layer components.shared, components.page, components.theme;",
+      "@layer components.shared {",
+      "    .page-layout { display: flex; }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  const outcome = fixture.strict();
+  const assigned = messagesFor(outcome, "css-sublayer-assignment");
+  assert.equal(assigned.length, 1, JSON.stringify(assigned));
+  assert.match(assigned[0].message, /components\.page/);
+});
+
+test("a file that uses component sublayers must declare their order", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "themes/probe/theme.css",
+    [
+      "@layer theme, vendor, tokens, base, components, utilities;",
+      "@layer components.theme {",
+      '    [data-slot="button"] { border-radius: 0; }',
+      "}",
+      "",
+    ].join("\n"),
+  );
+  const outcome = fixture.strict();
+  const order = messagesFor(outcome, "css-sublayer-order");
+  assert.equal(order.length, 1, JSON.stringify(order));
+  assert.match(order[0].message, /components\.shared, components\.page, components\.theme/);
+});
+
+test("page text sizes must come from the theme type scale", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "windows/main/pages/home/home.css",
+    [
+      "@layer theme, vendor, tokens, base, components, utilities;",
+      "@layer components.shared, components.page, components.theme;",
+      "@layer components.page {",
+      "    .caption { font-size: .86rem; }",
+      "    .ok { font-size: var(--nova-text-sm); }",
+      "    .display { font-size: clamp(1.8rem, 3vw, 2.7rem); }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  const outcome = fixture.strict();
+  const reported = messagesFor(outcome, "css-page-font-size");
+  assert.equal(reported.length, 1, JSON.stringify(reported));
+  assert.match(reported[0].message, /\.86rem/);
+});
+
+test("theme entries must define the text scale tokens", () => {
+  const fixture = makeFixture();
+  fixture.write("themes/plain/theme.css", ["@layer tokens {", ":root { --background: #fff; }", "}", ""].join("\n"));
+  const outcome = fixture.strict();
+  const reported = messagesFor(outcome, "css-theme-type-token");
+  assert.equal(reported.length, 4, JSON.stringify(reported));
+  assert.deepEqual(reported.map((entry) => entry.message.match(/--nova-text-[a-z]+/)[0]).sort(), ["--nova-text-base", "--nova-text-lg", "--nova-text-sm", "--nova-text-xs"]);
+});
+
+test("small text that uses the type scale must also expose the family token", () => {
+  const fixture = makeFixture();
+  fixture.write(
+    "styles/controls.css",
+    [
+      "@layer theme, vendor, tokens, base, components, utilities;",
+      "@layer components.shared, components.page, components.theme;",
+      "@layer components.shared {",
+      "    .bad { font-size: var(--nova-text-sm); }",
+      "    .good { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  const outcome = fixture.strict();
+  const reported = messagesFor(outcome, "css-text-scale-family");
+  assert.equal(reported.length, 1, JSON.stringify(reported));
+  assert.match(reported[0].message, /--nova-font-sm/);
+});
+
 test("the repository baseline is in sync with the working tree", () => {
   assert.ok(fs.existsSync(repositoryBaselinePath), "ui-styles-baseline.json must exist");
 

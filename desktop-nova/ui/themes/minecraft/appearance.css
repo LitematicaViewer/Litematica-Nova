@@ -1,7 +1,18 @@
 /* Keep the existing pixel font, texture borders and inventory assets in both modes. */
 @layer theme, vendor, tokens, base, components, utilities;
+/* Theme rules sit in their own sublayer so a declared style always wins over the
+   shared/component defaults it is replacing (the 9-slice texture already defines
+   radius, border and colour). Order: shared < page < theme. */
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.theme {
+/* Small Minecraft text uses the 12px pixel face: Unifont only stays crisp at whole
+   multiples of its 16px design size, and 11–13px labels are exactly where it blurs. */
+@font-face {
+    font-family: "Nova Pixel 12";
+    src: url("./resource/font/fusion-pixel-12px-monospaced-zh_hans.ttf") format("truetype");
+    font-display: swap;
+}
 html[data-theme="minecraft"] {
     color-scheme: dark;
     --background: #3c3c3c;
@@ -198,7 +209,6 @@ html[data-theme="minecraft"] .library-tile-image,
 html[data-theme="minecraft"] .library-detail-preview {
     background: var(--background);
 }
-html[data-theme="minecraft"] .library-tile-image { margin: 1px; width: calc(100% - 2px); }
 html[data-theme="minecraft"] .library-current-marker {
     color: var(--primary-foreground);
     background: var(--primary);

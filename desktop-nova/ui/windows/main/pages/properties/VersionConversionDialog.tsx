@@ -99,12 +99,12 @@ export function VersionConversionDialog({ sourcePath, onClose, onSaved }: {
       />
     </label>
     {busy && <p role="status">正在检查投影数据…</p>}
-    {error && <p role="alert" className="properties-error">{error}</p>}
+    {error && <p role="alert" className="properties-error nova-text-danger">{error}</p>}
     {overwriteConfirm ? <div className="properties-overwrite-confirm"><p>覆盖原投影文件？此操作会替换原有版本数据。</p>
       <Button disabled={busy} onClick={() => setOverwriteConfirm(false)}>取消覆盖</Button><Button variant="destructive" disabled={busy} onClick={() => void save(true)}>确认覆盖</Button>
     </div> : preview && <>
       <p>{minecraftVersionLabel(preview.sourceDataVersion)} → Minecraft {preview.targetVersion} · 影响 {preview.changedBlockCount.toLocaleString()} 个方块</p>
-      {!!preview.blockedPayloads.length && <div role="alert" className="properties-error">
+      {!!preview.blockedPayloads.length && <div role="alert" className="properties-error nova-text-danger">
         {preview.payloadIssues?.length ? preview.payloadIssues.map((issue) => <p key={`${issue.kind}:${issue.typeName}`}>
           <strong>{issue.typeName} · {issue.count.toLocaleString()} 处</strong>：{issue.message}
         </p>) : <p>附加数据需要处理，请选择其他目标版本。</p>}
@@ -118,7 +118,7 @@ export function VersionConversionDialog({ sourcePath, onClose, onSaved }: {
           <TableCell><BlockSearchSelect value={state.id} allowedBlocks={allowedBlocks} blockNames={blockNames} disabled={busy || !blocks.length} onChange={(id) => changeBlock(entry.sourceState, id)} />
             {block && <BlockPropertySelector blockId={block.id} value={state.properties} properties={block.properties} isTo exact onChange={(properties) => { setReplacements((current) => ({ ...current, [entry.sourceState]: stateString(block.id, properties) })); setDirty(true); }} />}
             {entry.category && block && <Button size="sm" variant="ghost" disabled={busy} onClick={() => changeBlock(entry.sourceState, block.id, true)}>应用到同类</Button>}
-            {!entry.valid && <span className="properties-error">请选择目标版本支持的方块状态</span>}</TableCell>
+            {!entry.valid && <span className="properties-error nova-text-danger">请选择目标版本支持的方块状态</span>}</TableCell>
           <TableCell>{entry.count.toLocaleString()}</TableCell>
         </TableRow>;
       })}</TableBody></Table> : <p>方块与状态兼容。</p>}

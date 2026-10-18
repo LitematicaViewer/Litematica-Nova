@@ -1,7 +1,9 @@
 import { emitEvent, listenEvent } from "../../src/platform/events";
+import { DEFAULT_THEME_ID, THEMES, normalizeThemeId as normalizeManifestThemeId, themeKeyOf } from "../../src/services/themeManifest";
 
-export const defaultThemeId = "shadcn";
-export type ThemeId = "shadcn" | "8bitcn" | "Minecraft";
+/** The theme list lives in `src/services/themeManifest.ts`; this module only applies it. */
+export const defaultThemeId = DEFAULT_THEME_ID;
+export type ThemeId = import("../../src/services/themeManifest").ThemeId;
 export type ColorMode = "light" | "dark" | "system";
 
 const themeStylesheetLinkId = "litematicanova-theme-css";
@@ -91,23 +93,19 @@ const themeStylesheetUrls = Object.entries(
     return themes;
 }, {});
 
-export const themeResourceKey = (themeId: string) => themeId.trim().toLowerCase();
+export const themeResourceKey = (themeId: string) => themeKeyOf(themeId);
 
-/** Canonical IDs do not depend on which stylesheets happen to be installed. */
-export const normalizeThemeId = (themeId: unknown): ThemeId => {
-    const key = String(themeId || "").trim().toLowerCase();
-    if (key === "minecraft") return "Minecraft";
-    if (key === "8bitcn") return "8bitcn";
-    return defaultThemeId;
-};
+/** Canonical ids do not depend on which stylesheets happen to be installed. */
+export const normalizeThemeId = (themeId: unknown): ThemeId => normalizeManifestThemeId(themeId);
 
 export const themeClassName = (themeId: string) => `theme-${themeResourceKey(normalizeThemeId(themeId))}`;
 
 const stylesheetReady = new Map<string, Promise<void>>();
 
-/** Preload each sheet once; inactive Minecraft CSS must never affect other themes. */
+/** Preload each sheet once; inactive theme CSS must never affect the active theme. */
 const ensureThemeStylesheets = () => {
-    for (const key of ["shadcn", "8bitcn", "minecraft"]) {
+    for (const theme of THEMES) {
+        const key = theme.directory;
         const href = themeStylesheetUrls[key];
         if (!href || stylesheetReady.has(key)) continue;
         const link = document.createElement("link");
@@ -130,7 +128,9 @@ export const applyThemeStylesheet = (themeId: string) => {
     document.documentElement.dataset.theme = themeKey;
     applyColorMode();
     for (const className of Array.from(document.body.classList)) {
-        if (/^theme-(shadcn|8bitcn|minecraft|webdefault|bootstrap5|metro10|qtdefault)$/.test(className)) {
+        // Any `theme-*` class is ours, including ids from retired themes and any
+        // theme added later without touching this file.
+        if (className.startsWith("theme-")) {
             document.body.classList.remove(className);
         }
     }

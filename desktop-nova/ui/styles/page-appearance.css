@@ -1,0 +1,477 @@
+/* Appearance declarations moved out of page CSS. The selectors stay the same;
+   ownership moved to `components.shared`, so `components.theme` outranks them
+   and a theme can restyle these surfaces without fighting page specificity.
+   Generated from the page stylesheets; keep layout and interaction in the page. */
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.shared {
+
+/* from ui/windows/main/pages/generate/generate.css */
+.generate-subtitle {
+    color: var(--muted-foreground);
+}
+html[data-theme] .generate-workspace {
+    border: 0;
+    background: transparent;
+}
+.generate-advanced > summary {
+    font-weight: 600;
+}
+.generate-page .generate-json-preview {
+    border: 0;
+    background: var(--muted);
+    color: var(--foreground);
+    border-radius: var(--radius, 0);
+}
+.generate-page .generate-summary {
+    border: 0;
+    background: var(--muted);
+    color: var(--foreground);
+    border-radius: var(--radius, 0);
+}
+.generate-page .generate-error-list {
+    color: var(--destructive);
+}
+.generate-ai-warnings {
+    color: var(--foreground);
+}
+.generate-chat-error {
+    color: var(--destructive);
+}
+.generate-chat-history {
+    background: var(--muted);
+    border-radius: var(--radius, 0);
+}
+.generate-page .generate-output-error {
+    color: var(--destructive);
+}
+.generate-summary-warning {
+    color: var(--foreground);
+}
+html[data-theme] .generate-page .generate-operation,
+html[data-theme] .generate-page .generate-material-entry {
+    border: 0;
+    background: var(--muted);
+    border-radius: var(--radius, 0);
+}
+html[data-theme] .generate-page .generate-operation .generate-material-entry {
+    background: transparent;
+}
+.generate-page .template-library-list {
+    border: 0;
+    background: transparent;
+}
+.generate-page .template-library-row {
+    border: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+    background: transparent;
+}
+.generate-page .template-library-row:last-child {
+    border-bottom: 0;
+}
+.generate-muted, .generate-help, .generate-template-description, .generate-template-tags, .generate-chat-role {
+    color: var(--muted-foreground);
+}
+.generate-template-empty {
+    color: var(--muted-foreground);
+}
+.generate-template-name {
+    font-weight: 600;
+}
+.generate-chat-role {
+    font-weight: 600;
+}
+.generate-material-heading {
+    font-weight: 600;
+}
+.generate-summary-heading {
+    font-weight: 600;
+}
+
+/* from ui/windows/main/pages/statistics/materials.css */
+.beta-statistics-file {
+    color: var(--muted-foreground);
+}
+.beta-statistics-status {
+    color: var(--muted-foreground);
+}
+.beta-statistics-facts > div {
+    border-bottom: 1px solid var(--border);
+}
+.beta-statistics-facts > div:last-child {
+    border-bottom: 0;
+}
+.beta-statistics-facts dt {
+    color: var(--muted-foreground);
+}
+.beta-material-table {
+    border-collapse: collapse;
+}
+.beta-material-table [data-slot="table-head"] {
+    background: var(--background);
+}
+.beta-material-name small {
+    color: var(--muted-foreground);
+}
+.beta-statistics-empty {
+    color: var(--muted-foreground);
+}
+.beta-statistics-empty h2 {
+    color: var(--foreground);
+}
+.beta-statistics-structure, .beta-statistics-materials {
+    border: 0;
+    box-shadow: none;
+    background: var(--card);
+    border-radius: var(--radius, 0);
+}
+.beta-statistics-page h2 {
+    font-weight: 600;
+}
+.beta-statistics-facts > div {
+    border: 0;
+}
+.beta-statistics-facts > div:nth-child(even) {
+    background: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+.material-summary-header > span {
+    color: var(--muted-foreground);
+}
+.material-summary-list > li {
+    border-radius: var(--radius, 0);
+}
+.material-summary-list > li.material-list-row-odd {
+    background: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+.material-summary-list > li:hover {
+    background: var(--accent);
+}
+.material-summary-name small {
+    color: var(--muted-foreground);
+}
+.material-summary-list .material-summary-empty {
+    color: var(--muted-foreground);
+}
+.material-export-section {
+    border: 1px solid var(--border);
+    border-radius: var(--radius, 0);
+}
+.material-export-section > legend, .material-export-section h4 {
+    font-weight: 600;
+}
+.material-export-targets {
+    border: 0;
+}
+.material-summary-list > .material-virtual-spacer {
+    border:0;
+    border-radius:0;
+    background:none;
+}
+.material-list-table tbody tr > .material-list-virtual-spacer-cell {
+    border:0;
+}
+
+/* from ui/windows/main/pages/library/library.css */
+.library-search > svg {
+    color: var(--muted-foreground);
+}
+.library-message {
+    color: var(--destructive);
+    background: var(--library-muted);
+}
+.library-progress {
+    color: var(--muted-foreground);
+}
+.library-pane-heading h3 {
+    font-weight: 650;
+}
+.library-pane-heading > span {
+    color: var(--muted-foreground);
+}
+html[data-theme] .library-page .library-category {
+    border: 0;
+    border-image: none;
+    box-shadow: none;
+    background: transparent;
+    color: var(--foreground);
+}
+.library-category:focus-visible, .library-category-expander:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+.library-category small {
+    color: var(--muted-foreground);
+}
+html[data-theme] .library-page .library-category:hover:not(:disabled) {
+    background: var(--library-muted);
+}
+html[data-theme] .library-page .library-category[aria-pressed="true"] {
+    background: var(--option-active-background, var(--library-muted));
+    color: var(--option-active-color, inherit);
+    font-weight: 650;
+}
+.library-page .library-category[data-drop-target] {
+    outline: 2px dashed var(--ring);
+    outline-offset: -2px;
+}
+.library-collection {
+    background: var(--library-surface);
+    border-radius: var(--radius);
+}
+.library-result-count {
+    color: var(--muted-foreground);
+}
+.library-batch-toolbar {
+    background: var(--library-muted);
+}
+.library-tile {
+    border-radius: var(--radius);
+    background: var(--library-muted);
+    outline: 1px solid transparent;
+    outline-offset: 2px;
+}
+.library-tile[data-inspected], .library-tile[data-checked] {
+    outline-color: var(--ring);
+}
+.library-tile[data-checked] {
+    background: var(--option-active-background, var(--library-muted));
+}
+.library-tile:has(.library-tile-open:focus-visible) {
+    outline: 2px solid;
+    outline-color: var(--ring);
+}
+.library-current-marker {
+    color: var(--foreground);
+    background: var(--library-surface);
+    border-radius: 3px;
+}
+html[data-theme] .library-page .library-tile-open {
+    border: 0;
+    border-image: none;
+    background: transparent;
+    box-shadow: none;
+    color: var(--foreground);
+    border-radius: inherit;
+}
+html[data-theme] .library-page .library-tile-open:hover {
+    background: var(--option-active-background, var(--library-muted));
+    color: var(--foreground);
+}
+html[data-theme] .library-page .library-tile-open:focus-visible {
+    outline: none;
+}
+.library-tile-image {
+    border-radius: inherit;
+}
+.library-preview-placeholder {
+    color: var(--muted-foreground);
+}
+.library-tile-name {
+    font-weight: 600;
+}
+.library-tile-meta {
+    color: var(--muted-foreground);
+}
+.library-collection-footer {
+    color: var(--muted-foreground);
+}
+.library-detail-preview {
+    background: var(--library-muted);
+    border-radius: var(--radius);
+}
+.library-detail-author {
+    color: var(--muted-foreground);
+}
+.library-detail-error {
+    color: var(--destructive);
+}
+.library-detail-facts dt {
+    color: var(--muted-foreground);
+}
+.library-detail-section {
+    border-top: 1px solid var(--library-line);
+}
+.library-detail-section h4 {
+    font-weight: 600;
+}
+.library-detail-path {
+    color: var(--muted-foreground);
+}
+.library-inspector-empty {
+    color: var(--muted-foreground);
+}
+.library-empty-state p, .library-empty-state > svg {
+    color: var(--muted-foreground);
+}
+@media (max-width: 48rem) {
+  .library-reden-panel .reden-detail-pane {
+      border-top: 1px solid var(--border);
+      border-left: 0;
+  }
+}
+.library-folders-panel > fieldset {
+    border: 0;
+    background: var(--card, var(--background));
+    border-radius: var(--radius);
+}
+.library-folders-panel .library-card {
+    border: 0;
+    border-image: none;
+    background: var(--muted, var(--background));
+    border-radius: var(--radius);
+}
+.library-folders-panel .subwindow-status-text-error, .library-reden-panel .subwindow-status-text-error {
+    color: var(--destructive);
+}
+.library-reden-panel .reden-result-card {
+    border: 0;
+    border-image: none;
+    background: var(--muted, var(--background));
+    color: var(--foreground);
+    border-radius: var(--radius);
+}
+.library-reden-panel .reden-result-card[aria-pressed="true"] {
+    background: var(--option-active-background);
+    outline: 1px solid var(--ring);
+    outline-offset: -1px;
+}
+.library-reden-panel .reden-detail-pane {
+    border-left-color: var(--border, var(--border));
+}
+.library-reden-panel .reden-attachment-row {
+    border: 0;
+    background: var(--muted, var(--background));
+    border-radius: var(--radius);
+}
+.library-aux-panel .subwindow-empty-state {
+    border: 0;
+}
+html[data-theme] .library-page .library-category-expander {
+    border: 0;
+    border-image: none;
+    box-shadow: none;
+    background: transparent;
+    color: var(--muted-foreground);
+}
+.library-category-menu {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--background);
+    color: var(--foreground);
+    box-shadow: var(--panel-shadow);
+}
+.library-category-menu-item {
+    border-radius: var(--radius);
+    outline: none;
+}
+.library-category-menu-item[data-highlighted] {
+    background: var(--option-active-background, var(--accent));
+    color: var(--option-active-color, inherit);
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+}
+.library-category-menu-item[data-disabled] {
+    opacity: .5;
+}
+.library-category-menu-separator {
+    background: var(--border);
+}
+.library-category-membership {
+    color: var(--muted-foreground);
+}
+.library-icon-grid button[aria-pressed="true"], .library-icon-tabs button[aria-pressed="true"] {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+}
+.library-icon-upload p {
+    color: var(--muted-foreground);
+}
+.library-trash-list :is(span, small) {
+    color: var(--muted-foreground);
+}
+
+/* from ui/windows/main/pages/settings/settings.css */
+html[data-theme] .settings-page > .group-box {
+    border: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+    background: transparent;
+    box-shadow: none;
+}
+html[data-theme] .settings-page .group-box-title {
+    font-weight: 650;
+}
+.settings-page .settings-help-text {
+    color: var(--muted-foreground);
+}
+.settings-muted,
+.settings-status,
+.settings-path-state {
+    color: var(--muted-foreground);
+}
+.settings-path-state[data-state="ok"] {
+    color: var(--success);
+}
+.settings-page [data-state="error"] {
+    color: var(--destructive);
+}
+.settings-feedback {
+    background: var(--background);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+}
+html[data-theme] .settings-page [data-slot="radio-group-item"].settings-theme-option {
+    border-radius: var(--radius);
+    color: var(--foreground);
+    background: var(--muted);
+    box-shadow: none;
+}
+html[data-theme] .settings-page [data-slot="radio-group-item"].settings-theme-option[data-state="checked"] {
+    background: var(--accent);
+    border-color: var(--primary);
+}
+.settings-color-options {
+    background: var(--muted);
+    border-radius: var(--radius);
+}
+html[data-theme] .settings-color-options > [data-slot="radio-group-item"] {
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--foreground);
+    border-color: transparent;
+}
+html[data-theme] .settings-color-options > [data-slot="radio-group-item"][data-state="checked"] {
+    background: var(--card);
+    border-color: var(--primary);
+}
+
+/* from ui/windows/main/pages/properties/properties.css */
+.properties-field > span {
+    color: var(--muted-foreground);
+}
+.properties-facts dt {
+    color: var(--muted-foreground);
+}
+.properties-file-preview-canvas {
+    color: var(--muted-foreground);
+    background: var(--background);
+}
+.properties-file-preview-canvas img {
+    image-rendering: pixelated;
+}
+.properties-preview-host {
+    background: var(--background);
+}
+.properties-actions {
+    border-top: 1px solid var(--border);
+}
+.properties-message {
+    background: var(--background);
+    border-radius: var(--radius);
+}
+.properties-conversion-target [data-slot="select-trigger"] {
+    color: var(--foreground);
+    background: var(--background);
+    border: 1px solid var(--border);
+}
+}

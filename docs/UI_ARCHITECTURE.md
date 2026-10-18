@@ -24,6 +24,18 @@
 | V1.19    | 2026-10-13 | Codex  | 修复 Minecraft 复选框被裁成圆角：共享层 `controls.css:66` 多带一个 `button` 元素，使其成为 (0,2,2) 而恒定压住主题的 (0,2,1) 覆盖；删除该元素后 8bitcn/Minecraft 的 `border-radius: 0` 正常胜出，shadcn 的 4px 不变。新增第 8 个 MC 用例（先失败后通过） |
 | V1.20    | 2026-10-13 | Codex  | **Phase 6 完成（退出标准已修正）**：原标准「页面外观属性为 0」不成立——188 条外观声明中 106 条是页面自有设计（挂在 `<article>`/`<section>` 上，无组件可继承）、15 条是无障碍/拖放轮廓、1 条是定位变换。改为「每条留存声明都须说明为何页面必须自己拥有」，据此删除 39 条无法匹配任何元素的孤儿规则（43 行 / 6 文件）。66 条零化补丁均为合法覆盖，全部保留。记录了把语句型 `@layer` 误判为空块并修复的过程 |
 | V1.21    | 2026-10-18 | Codex  | **补齐按钮选中态**：核实 shadcn/ui 与 8bitcn/ui 的 Button 上游本就没有选中态（选中态属 Toggle），而 Nova 把 Button 当开关用（23 处 `aria-pressed`）却从未画出该状态——`button[aria-pressed="true"]` 是 (0,1,1)，被共享层 `secondary` 常态规则 (0,4,1) 恒定压过。改为共享层 (0,5,1) 规则 + `--nova-selected-*` 令牌（声明在 `tokens` 层，否则 8bitcn 的覆写会被层序压掉），新增 `button-selected-state.test.mjs` 8 个用例与级联求解器夹具 |
+| V1.22 | 2026-10-18 | Codex  | **主题清单单一来源**：新增 `src/services/themeManifest.ts`，运行期预载、配置规范化、设置页选项与测试全部由它派生；`themeRuntime` 的 body class 清理改为通用 `theme-*`（退役主题不再需要名单）；新增清单自洽测试（目录存在、id/key 唯一、与 `src-tauri` 的 `normalize_theme` 一致）。新增主题从 10 处注册点降为 3 处，且漏改 Rust 会立刻测试失败而不是静默回落 shadcn |
+| V1.23 | 2026-10-18 | Codex  | **组件子层与属性归属契约**：`components` 拆出 `components.shared < components.page < components.theme`，主题声明由层序保证生效，不再靠特异性提权；主题文件迁入 `components.theme`（`8bitcn/theme.css`、`minecraft/appearance.css`、`minecraft/widgets.css`）。顺带修掉两处违反“主题不改布局”的声明（MC 下拉触发器 `width: auto`、焦点环硬编码 `#ffffff`）。新增级联用例锁定“主题低特异性仍胜出” |
+| V1.24 | 2026-10-18 | Codex  | **结构性容器不再冒充动作按钮**：`<Button>` 新增 `themeSlot`，投影库卡片/分类行/展开按钮改用 `library-tile` / `library-category` / `library-category-expander` 槽位。此前它们在子层下会被 MC 的 `[data-slot="button"]` 强制成 44px 九宫格按钮，`overflow: hidden` 把 140×140 预览图整块裁掉（表现为“不显示图标”）。同时把内嵌预览图固定为 140×140（`--library-preview-size`，px 值，不随主题根字号变化；网格列宽下限也用同一令牌），并删除 MC 主题里对 `.library-tile-image` 的宽度改写（主题不写布局） |
+| V1.25 | 2026-10-18 | Codex  | **页面外观迁移第 1 批（home / render）**：home 的卡片改用共享 `.group-box`、次要文字改用共享 `.muted`，页面只留间距与流；render 的预览容器、占位/状态文字、进度条、操作区分隔线移入 `base.css` 并改用令牌（原 `#111/#222/#ccc/#888` 全部退场），页面只留尺寸与流。删除 MC 专用的 `#e0e0e0`（其特异性始终低于主题规则，从未生效）。页面外观声明 336 → 319，硬编码色基线 33 → 28 |
+| V1.26 | 2026-10-18 | Codex  | **主题字阶令牌**：`--nova-text-xs/sm/base` 进入三主题 tokens——shadcn `.75/.875/1rem`，8bitcn 与 Minecraft 全部 `1rem`（位图字体只在整数字号下清晰，原 `.86rem` 在它们下是 13.76px）。home / render 的 `.86rem`、`.9rem`、`.9em` 全部改为 `var(--nova-text-sm)`。新增护栏 `css-page-font-size`（页面字号必须用字阶令牌或 `clamp()`，存量 39 处计入基线）与 `css-theme-type-token`（主题入口必须定义字阶，0 基线），并各配一条可证伪用例 |
+| V1.27 | 2026-10-18 | Codex  | **页面外观迁移第 2 批（replace / properties）**：新增共享原语 `.nova-code` / `.nova-panel-subtle` / `.nova-box-plain` / `.nova-text-danger`，replace 的错误块、结果面板、规则 fieldset、pre 代码块与 properties 的字段集/错误/弱化文字全部改用它们；`BlockSearchSelect` 的属性 chip（`.replace-property*`）从页面样式改为共享组件样式（此前同一组件在两个宿主页面外观不同）。页面外观声明 319 → 298（replace 13 → 2、properties 28 → 18），页面字号存量 39 → 37，基线 203 → 201 |
+| V1.28 | 2026-10-18 | Codex  | **小字号用专属位图字体**：Minecraft 的 `--nova-text-xs/sm` 定为 12px，并新增 `--nova-font-xs/sm` 指向仓库内 `fusion-pixel-12px-monospaced-zh_hans.ttf`（12px 设计字号）；Unifont 继续只用于 ≥16px 的正文。`replace-units.css` 里 34 处硬编码 `11/12/13px` 全部改为 `--nova-text-*` + `--nova-font-*` 配对。新增护栏 `css-text-scale-family`：用了小字号令牌就必须同时声明字族令牌（0 基线）。另把 replace 的「清空规则」「删除方案」改为 `destructive`、「打开方案文件夹」改为 `outline` |
+| V1.29 | 2026-10-18 | Codex  | **8bitcn 同步 12px 字阶 + 清空页面字号存量**：8bitcn 也改用 Fusion Pixel 12px（新增同一 `@font-face`），并新增 `--nova-text-lg`（shadcn `1.5rem`；8bitcn / Minecraft `24px`，即 12px 的 2 倍，仍为像素清晰倍数）与配套 `--nova-font-lg`。7 个页面里剩余 **37 处**硬编码字号全部改为 `var(--nova-text-*)` + `var(--nova-font-*)`，`css-page-font-size` 基线清零（164 项总基线中不再有该规则），页面字号由主题统一决定 |
+| V1.30 | 2026-10-18 | Codex  | **页面外观迁移第 3 批（generate / materials），改为自动拆分**：新增 `ui/styles/page-appearance.css`（`components.shared`），把两个页面样式表里的 71 条外观声明按原选择器、原 `@container` 上下文整体搬入；页面只剩布局与交互。拆分脚本按 `(选择器, 属性, 值)` 多重集校验前后一致。generate 外观 43 → **0**、materials 44 → **12**（余下为字号/字族/numeric 等排版属性），页面外观总量 298 → 264。顺带把 `.beta-material-table th/td` 收窄为 `[data-slot="table-head"/"table-cell"]`，裸元素基线 125 → 121，总基线 164 → 160 |
+| V1.31 | 2026-10-18 | Codex  | **第 4 批（library / settings）+ 悬浮提示框统一**：材料列表的 `.material-list-hover-popup` 把字号/行高收进共享层一处（`var(--nova-text-base)`，即**正文大小**：Minecraft/8bitcn 16px、shadcn 14px，字族随正文），行内 label/name/ID/加粗数字全部继承同一字号；MC 主题不再单独写 `font-size: 16px` 与 `#999/#000/#fff`（改为 `border-width` + 令牌色）。library 外观 131 条、settings 48 条中的 131 条搬入 `page-appearance.css`；`settings-theme-swatch` 因刻意展示其他主题配色而保留在页面（拆分脚本带排除规则）。页面外观总量 264 → **131**，总基线仍为 160 |
+| V1.32 | 2026-10-18 | Codex  | **第 5 批（properties）**：页面里最后一批非排版外观（`color`/`background`/`border`/`image-rendering` 等 12 条）搬入 `page-appearance.css`，properties 20 → **8**（余下为字号/字族/numeric）。页面外观总量 131 → **119**；其中非排版项只剩 home 的 1 条图标主色与 settings 的 17 条主题预览色块（刻意保留）。总基线维持 160 |
+| V1.33 | 2026-10-19 | Codex  | **令牌化遮罩与中性色，清理可去掉的 `!important`**：新增 `--overlay`（三主题 `rgb(0 0 0 / 42%)`）替代 `dialog-overlay` 与 subwindow 遮罩的字面色；dialog 的 `rgb(127 127 127 / N%)` 改为 `color-mix(... var(--foreground) N% ...)`；MC 复选框内嵌高光同样改为 `color-mix`。删除两处已无竞争者的 `!important`（`.material-list-multiplier`、library 横向布局的 viewport `overflow`）。`css-hardcoded-colour` 27 → **20**（余下全是 flake 画布测量线/原点的数据可视化配色）、`css-important` 12 → **10**（余下均用于覆盖 Radix 内联样式或虚拟占位几何），总基线 160 → **151** |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -221,10 +233,11 @@ Minecraft 主题的控件规则以裸元素选择器为主，`[data-slot]` 引�
 
 ### 3.1 分层模型
 
-单一层序，六层：
+单一层序，六层；`components` 内部再分三个子层：
 
 ```
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 ```
 
 | 层 | 职责 | 允许内容 | 禁止内容 |
@@ -233,14 +246,25 @@ Minecraft 主题的控件规则以裸元素选择器为主，`[data-slot]` 引�
 | `vendor` | Tailwind 生成的工具类 | `tailwindcss/utilities.css` | 项目自己的规则 |
 | `tokens` | 三主题的变量定义 | 仅自定义属性声明 | 任何选择器规则 |
 | `base` | 重置与元素默认值 | `box-sizing`、`body`、`font`、`img`、`table` 折叠 | 控件外观、品牌色 |
-| `components` | 控件外观，**按主题分文件** | `[data-slot]` / `[data-variant]` / `[data-size]` / `[data-state]` 组合选择器 | 裸元素选择器、`!important` |
-| `utilities` | 页面排布与一次性微调 | 页面布局类（`.library-*`、`.flake-page__*` 等） | 颜色、边框、圆角、阴影等控件外观属性 |
+| `components.shared` | 共享控件外观与默认值、shell 骨架 | `[data-slot]` 组合选择器、`.btn` 等共享类 | 页面专属布局 |
+| `components.page` | 页面布局：文档位置、分区、流动 | 页面容器类（`.library-*` 等）的 `display`/`flex`/`grid`/`gap` | 控件外观（颜色、描边、圆角、阴影） |
+| `components.theme` | 主题外观，**声明即生效** | `[data-slot]` 贴图与配色、Tier 3 令牌 | 页面位置（`position`/`order`/`float`/`grid-template`） |
+| `utilities` | 保留（当前为空） | — | — |
+
+**子层的四条契约（V1.23）**，也是"主题 / 共享 / 全局"三类优先级的判定依据：
+
+1. **主题不改布局位置。** 分区左右、元素顺序、页面级定位属于共享层；主题只声明外观。九宫格贴图已经把圆角、描边、颜色画进图里，主题可以声明 `border: 0` / `border-radius: 0` 来"接管"这些属性，但不能移动元素。
+2. **页面布局只规定文档位置，尺寸靠内容流动。** 页面 CSS 不应给控件写死宽高；硬性尺寸只用于确有像素对齐要求的场合（如 140×140 预览图）。
+3. **布局之下部件是单调的。** 同一控件在页面任何位置都用同一套尺寸与外观；页面若需要不同尺寸，应换一个 `size`/变体或专用类，而不是就地覆写。
+4. **主题声明即生效。** 主题规则位于 `components.theme`，其父层 `components` 里的共享与页面规则一律排在其下；因此主题不需要靠提高特异性来"抢"外观，新增主题也不必研究共享层的选择器权重。
+
+> 由第 4 条，`html[data-theme="x"]` 前缀在主题文件里不再是必需（主题表按 `media` 互斥加载），它的历史作用——压过共享层——已由子层承担。保留的前缀只用于同一主题表内的条件表达。
 
 > **为什么 Tailwind 在 `vendor` 而不是 `utilities`。** 原方案把 Tailwind 工具类与页面布局类放在同一层（`utilities` 最高）。实施时发现这是错的：Tailwind 工具类今天位于 `@layer utilities`，而项目 CSS 全部无层，所以**项目 CSS 一直赢过 Tailwind**。若让它们同层且置于最高，`ui/components/ui/button.tsx` 基础串里的 `bg-primary` 会开始生效，**所有按钮都会变成主色**。把 Tailwind 移到最低的 `vendor` 层，才与"项目 CSS 压过 Tailwind"这一既有事实一致。
 
 > **`utilities` 高于 `components`，因此页面 CSS 会压过主题外观。** 原方案的表述（"设置 `background` 会被 `components` 压过"）与本层序相反。这直接影响 Phase 1 的取舍：把页面 CSS 现在就抬进 `utilities`，会让页面的默认值盖掉主题值（实测 **2,951 处**获胜者反转，例如 Minecraft 主题下 `html[data-theme="minecraft"] .library-page` 的 `--library-*` 令牌会被 `library.css` 的默认值取代）。因此 Phase 1 只做层化、把组件与页面规则暂留同一层，**页面 CSS 的迁入与外观属性清理留给 Phase 6 一并处理**。
 
-**层顺序在每个文件里重复声明。** 这不是冗余，而是必需：层序由文档中**首次**出现的声明确定，而开发模式下 `ui/app/main.tsx` 先 import `AppShell`（它又 import `ui/styles/enumerator.css`）、之后才 import `ui/styles/base.css`，模块求值顺序与打包后 `<link>` 顺序并不一致。每个文件都写同一行，层序就与加载顺序无关。48 个项目 CSS 文件均已写入。
+**层顺序在每个文件里重复声明。** 这不是冗余，而是必需：层序由文档中**首次**出现的声明确定，而开发模式下 `ui/app/main.tsx` 先 import `AppShell`（它又 import `ui/styles/enumerator.css`）、之后才 import `ui/styles/base.css`，模块求值顺序与打包后 `<link>` 顺序并不一致。每个文件都写同一行，层序就与加载顺序无关。36 个项目 CSS 文件均已写入；使用组件子层的 31 个文件还各自重复了一行子层顺序声明。
 
 ### 3.2 令牌契约
 
@@ -324,6 +348,46 @@ ui/themes/
 **Minecraft 主题必须加载 Tailwind 层。** 现状 `themes/minecraft/theme.css` 不 import `modern.css`，导致它依赖"无层规则压过一切"才能工作。改为加载后，它与其他两个主题走同一条路径；同时须补齐 `--edge-width: 0`、`--control-shadow: none`、`--panel-shadow: none`。注意 Phase 1 已把 Tailwind 放在最低的 `vendor` 层，因此这一步不会让 shadcn 组件身上的外观工具类在 Minecraft 主题下突然生效。
 
 **共享结构放 `base` 层，共享行为放各主题 `components` 层。** 现状 `styles/controls.css` 与 `styles/widgets.css` 的正确部分（焦点环、图标尺寸、滚动条命中区、下拉浮层定位、`table-row-selected` 语义）应进入 `base`；与颜色/描边相关的部分进入各主题 `components`。
+
+#### 3.4.1 主题注册契约（V1.22）
+
+一个主题的全部身份信息只存在于 `desktop-nova/src/services/themeManifest.ts` 的 `THEMES` 数组：
+
+| 字段 | 含义 | 消费者 |
+| ---- | ---- | ------ |
+| `id` | 写进配置文件的规范 id（大小写敏感，`Minecraft` 是历史值） | 配置读写、设置页 `value`、Rust `normalize_theme` |
+| `key` | 小写资源键，用于 `data-theme` 与 `theme-<key>` body class | `themeRuntime`、`NavIcon` |
+| `label` | 设置页显示名 | `SettingsPage` |
+| `directory` | `ui/themes/<directory>/theme.css` 的目录名 | 运行期预载、清单自洽测试 |
+
+**新增一个主题只改三处**：`THEMES` 加一条、建 `ui/themes/<id>/theme.css`、在 `src-tauri/src/main.rs` 的 `normalize_theme` 里加一个返回该 id 的分支。第三处漏改会让 `themes.test.mjs` 的「与 Rust 规范化一致」用例失败——这是刻意的：后端读取配置时会重写主题值，漏改的后果是**静默回落 shadcn**，而不是报错。
+
+**不再允许**在 `themeRuntime`、`userConfig`、`SettingsPage` 里硬编码主题名；默认值统一取清单的 `DEFAULT_THEME_ID`。body class 清理也改为按 `theme-` 前缀通用处理，退役主题（WebDefault / Metro10 等）的残留 class 无需再登记。
+
+#### 3.4.2 页面外观迁移规则（V1.25 起）
+
+页面 CSS 每出现一条外观声明，按以下顺序决定归属：
+
+| 顺序 | 判定 | 做法 |
+| ---- | ---- | ---- |
+| 1 | 已有共享语义类（`.muted` 弱化文字、`.group-box` 卡片面） | 标记加到元素上，删除页面声明 |
+| 2 | 可复用的外观但还没有类 | 在 `components.shared` 定义类或 `[data-slot]` 规则；页面只留布局 |
+| 3 | 只属于某个主题（贴图、专属配色、字体） | 写进该主题的 `components.theme` 文件 |
+| 4 | 纯几何：`display` / `flex` / `grid` / `gap` / `order` / `position` / 尺寸上限 / 断点 | **留在页面**，这是页面唯一该拥有的东西 |
+
+迁移时**先等价搬移**（值不变、只换层），再单独讨论是否改值；这样视觉回归只会来自“主题本来就想覆盖它”的部分。每批迁移后用 `check:ui-styles` 的硬编码色基线验证，用 `tsc` + 页面测试兜底。
+
+**字号不写在页面，也不手挑数值。** 主题通过 `tokens` 层的 `--nova-text-xs` / `--nova-text-sm` / `--nova-text-base` 给出自己的字阶：
+
+| 主题 | `--nova-text-xs` | `--nova-text-sm` | `--nova-text-base` | `--nova-text-lg` | 说明 |
+| ---- | ---------------- | ---------------- | ------------------ | ---------------- | ---- |
+| shadcn | `.75rem` | `.875rem` | `1rem` | `1.5rem` | 比例字体，可按 14px 根字号缩放 |
+| 8bitcn | `12px` | `12px` | `1rem` | `24px` | 小字与标题用 Fusion Pixel 12px（24px = 2 倍设计字号） |
+| Minecraft | `12px` | `12px` | `1rem` | `24px` | 同上；Unifont 只用于 16px 正文 |
+
+页面只写 `font-size: var(--nova-text-sm)` 与 `font-family: var(--nova-font-sm, inherit)`；展示型标题可以用 `clamp()`。三条护栏守住这个约定：`css-page-font-size` 拦截页面里的 `rem/em/px` 字号（**当前 0 处**，全部由主题字阶提供），`css-text-scale-family` 要求小字号令牌必须与字族令牌配对（否则位图主题会退化成缩放 Unifont），`css-theme-type-token` 要求每个主题入口都定义 xs/sm/base/lg 四档（当前 0 违规，新主题漏定义会直接报错）。
+
+已迁移批次：`home`（20 → 12）、`render`（13 → 2）、`replace`（13 → 2）、`properties`（20 → 8）、`generate`（43 → 0）、`materials`（44 → 12）、`library`（131 → 0）、`settings`（48 → 22，其中主题预览色块刻意保留）。第 3 批起改用自动拆分：脚本把 `components.page` 里的外观声明按原选择器与 `@container` 上下文搬进 `ui/styles/page-appearance.css`（`components.shared`），并校验 `(选择器, 属性, 值)` 多重集前后一致；页面只保留布局与交互。共享原语 `.nova-code`、`.nova-panel-subtle`、`.nova-box-plain`、`.nova-text-danger` 与 `.replace-property*` 已就位，后续页面优先组合它们。
 
 ### 3.5 Minecraft 主题的接入方式
 
@@ -1475,7 +1539,7 @@ button[data-variant="ghost"]                         (0,2,1)  themes/modern.css 
 
 | 组件 | 槽位 | 状态 |
 | ---- | ---- | ---- |
-| `ui/button.tsx` | `button`, `button-decorations` | 已消费 |
+| `ui/button.tsx` | `button`, `button-decorations`；结构性容器经 `themeSlot` 改用自有槽位：`library-tile` / `library-category` / `library-category-expander` | 已消费 |
 | `ui/checkbox.tsx` | `checkbox`, `checkbox-indicator`, `checkbox-check`, `checkbox-mixed` | 已消费 |
 | `ui/dialog.tsx` | `dialog-content`✗, `dialog-description`✗, `dialog-title`✗, `dialog-overlay`, `dialog-pixel-x`, `dialog-pixel-y` | 3 个未使用 |
 | `ui/input.tsx` | `input` | 已消费 |

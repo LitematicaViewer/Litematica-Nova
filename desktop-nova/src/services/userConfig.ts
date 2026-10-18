@@ -5,13 +5,14 @@ import {
   UserConfigInfo,
 } from "./backend";
 import { normalizeDisplayMode, DisplayMode } from "./renderMode";
+import { normalizeThemeId, type ThemeId } from "./themeManifest";
 
 const THEME_KEY = "theme";
 const RENDER_MODE_KEY = "lba.render.displayMode";
 const PREVIEW_MODE_KEY = "lba.preview.displayMode";
 const MIGRATION_KEY = "lba.appdataConfigMigrated.v1";
 
-export type ThemeName = "shadcn" | "8bitcn" | "Minecraft";
+export type ThemeName = ThemeId;
 export type ColorMode = "light" | "dark" | "system";
 export type MaterialListWindowBehavior = "independent_window" | "main_window_overlay";
 
@@ -44,10 +45,7 @@ export async function saveDebugModeConfig(enabled: boolean): Promise<UserConfigI
 }
 
 export function normalizeTheme(value: unknown): ThemeName {
-  const key = String(value || "").trim().toLowerCase();
-  if (key === "8bitcn") return "8bitcn";
-  if (key === "minecraft") return "Minecraft";
-  return "shadcn";
+  return normalizeThemeId(value);
 }
 
 /**

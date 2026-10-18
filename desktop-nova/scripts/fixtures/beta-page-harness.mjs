@@ -16,6 +16,7 @@ function pureService(file) {
   vm.runInNewContext(compiled, { exports, require(id) {
     if (id.endsWith("minecraft-versions.json")) return JSON.parse(readFileSync(new URL("../../../data/minecraft-versions.json", import.meta.url), "utf8"));
     if (id === "./filePathIdentity") return pureService("filePathIdentity");
+    if (id === "./themeManifest") return pureService("themeManifest");
     if (id === "./i18n") return {translateBuildingType: id => id, resolveBlockDisplayName:(id,fallback)=>fallback||id, subscribeI18nChanges:()=>()=>{}};
     if (id === "./backend" || id === "../platform/dialogs" || id === "../platform/applicationOperations") return {};
     if (id === "./renderMode") return {normalizeDisplayMode:value=>value};

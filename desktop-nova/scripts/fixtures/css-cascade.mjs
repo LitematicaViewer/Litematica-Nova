@@ -20,6 +20,20 @@ import postcss from 'postcss';
 
 export const LAYER_ORDER = ['theme', 'vendor', 'tokens', 'base', 'components', 'utilities'];
 
+// Theme rules live in `components.theme`, above the parent layer's shared/page
+// defaults, so "a theme declaration takes effect" is structural rather than a
+// specificity contest. Rules directly in `components` rank below every sublayer.
+const SUBLAYER_ORDER = ['components.shared', 'components.page', 'components.theme'];
+
+/** Numeric rank used for cascade comparison; sublayers sit inside their parent. */
+export function layerRank(layer) {
+  if (layer === null || layer === undefined) return LAYER_ORDER.length * 10;
+  const sublayer = SUBLAYER_ORDER.indexOf(layer);
+  if (sublayer >= 0) return LAYER_ORDER.indexOf('components') * 10 + 1 + sublayer;
+  const index = LAYER_ORDER.indexOf(layer);
+  return index >= 0 ? index * 10 : LAYER_ORDER.length * 10;
+}
+
 /** Splits a selector argument list on commas that are not nested. */
 function splitArguments(text) {
   const parts = [];
@@ -183,7 +197,7 @@ export function winner(rules, control, property, themeId = 'minecraft') {
     const declaration = rule.decls.find((node) => node.prop === property);
     if (!declaration) continue;
     const rank = {
-      layer: rule.layer === null ? LAYER_ORDER.length : LAYER_ORDER.indexOf(rule.layer),
+      layer: layerRank(rule.layer),
       specificity: specificity(rule.selector),
       order: rule.order,
     };

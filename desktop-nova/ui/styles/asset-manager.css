@@ -4,8 +4,9 @@
    list / footer). Downstream selectors are keyboard-friendly native <select>
    elements styled like text inputs. */
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 
 .game-resource-active {
     line-height: 1.5;

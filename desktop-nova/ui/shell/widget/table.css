@@ -1,4 +1,5 @@
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
 @layer tokens {
 :root {
@@ -6,7 +7,7 @@
 }
 }
 
-@layer components {
+@layer components.shared {
 
 table > tbody > tr.table-row-selected > *,
 table > tbody > tr[aria-selected="true"] > *,

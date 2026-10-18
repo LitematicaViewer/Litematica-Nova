@@ -105,7 +105,7 @@ function ProjectionCard({ record, isCurrent, isInspected, checked, previewUrl, l
           onCheckedChange={(value) => onToggle(value === true)} />
       </div>
       {isCurrent && <span className="library-current-marker">当前</span>}
-      <Button className="library-tile-open" variant="ghost" aria-pressed={isInspected}
+      <Button className="library-tile-open" variant="ghost" themeSlot="library-tile" aria-pressed={isInspected}
         aria-label={`查看 ${record.displayName || record.fileName} 的详情`} onClick={onInspect}
         onDoubleClick={() => { if (!busy && record.status === "ok") onActivate(); }}>
         <span className="library-tile-image">
@@ -456,8 +456,8 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         const hasChildren = categories.some((item) => item.parentId === category.id); const expanded = expandedCategories.includes(category.id);
         const descendants = categoryDescendants(state, category.id);
         return <li key={category.id} role="none"><ContextMenu.Root><ContextMenu.Trigger asChild><div className="library-category-row">
-          {hasChildren ? <Button className="library-category-expander" variant="ghost" size="icon-sm" disabled={libraryBusy} aria-label={`${expanded ? "收起" : "展开"} ${category.name}`} onClick={() => toggleExpanded(category.id)}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</Button> : <span className="library-category-expander-spacer" />}
-          <Button variant="ghost" className="library-category" role="treeitem" aria-level={depth} aria-expanded={hasChildren ? expanded : undefined} aria-selected={categoryFilter === category.id} aria-pressed={categoryFilter === category.id} data-category-tree-node={category.id} disabled={libraryBusy}
+          {hasChildren ? <Button className="library-category-expander" variant="ghost" size="icon-sm" themeSlot="library-category-expander" disabled={libraryBusy} aria-label={`${expanded ? "收起" : "展开"} ${category.name}`} onClick={() => toggleExpanded(category.id)}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</Button> : <span className="library-category-expander-spacer" />}
+          <Button variant="ghost" className="library-category" themeSlot="library-category" role="treeitem" aria-level={depth} aria-expanded={hasChildren ? expanded : undefined} aria-selected={categoryFilter === category.id} aria-pressed={categoryFilter === category.id} data-category-tree-node={category.id} disabled={libraryBusy}
             data-drop-target={dropTarget === category.id || undefined} onClick={() => { setCategoryFilter(category.id); setUntaggedOnly(false); }} onKeyDown={(event) => {
               const treeNodes = () => Array.from(event.currentTarget.closest('[role="tree"]')?.querySelectorAll<HTMLButtonElement>('[data-category-tree-node]') || []);
               const focusCategory = (id?: string | null) => treeNodes().find((node) => node.dataset.categoryTreeNode === id)?.focus();
@@ -601,12 +601,12 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
           <div className="library-category-tools"><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => openCategoryDialog("create")}><FolderPlus size={14} />新建分类</Button></div>
           <ScrollArea className="library-category-scroll">
             <nav className="library-category-list" aria-label="分类筛选">
-              <Button variant="ghost" className="library-category" aria-pressed={!categoryFilter && !untaggedOnly} onClick={() => { setCategoryFilter(""); setUntaggedOnly(false); }}><LayoutGrid size={16} /><span>全部投影</span><small>{state.records.length}</small></Button>
-              <Button variant="ghost" className="library-category" aria-pressed={untaggedOnly} data-drop-target={dropTarget === "untagged" || undefined} onClick={() => { setCategoryFilter(""); setUntaggedOnly(true); }} {...categoryDropProps("")}><Box size={16} /><span>未分类</span><small>{state.records.filter((record) => !record.categoryIds?.length).length}</small></Button>
+              <Button variant="ghost" className="library-category" themeSlot="library-category" aria-pressed={!categoryFilter && !untaggedOnly} onClick={() => { setCategoryFilter(""); setUntaggedOnly(false); }}><LayoutGrid size={16} /><span>全部投影</span><small>{state.records.length}</small></Button>
+              <Button variant="ghost" className="library-category" themeSlot="library-category" aria-pressed={untaggedOnly} data-drop-target={dropTarget === "untagged" || undefined} onClick={() => { setCategoryFilter(""); setUntaggedOnly(true); }} {...categoryDropProps("")}><Box size={16} /><span>未分类</span><small>{state.records.filter((record) => !record.categoryIds?.length).length}</small></Button>
               {renderCategoryTree(null)}
             </nav>
           </ScrollArea>
-          <Button variant="ghost" className="library-category library-trash-button" aria-haspopup="dialog" onClick={() => { setDiscardTrashId(null); setCategoryError(""); setTrashOpen(true); }}><Trash2 size={16} /><span>回收站</span><small>{state.trash?.length || 0}</small></Button>
+          <Button variant="ghost" className="library-category library-trash-button" themeSlot="library-category" aria-haspopup="dialog" onClick={() => { setDiscardTrashId(null); setCategoryError(""); setTrashOpen(true); }}><Trash2 size={16} /><span>回收站</span><small>{state.trash?.length || 0}</small></Button>
         </aside>
 
         <section className="library-collection" aria-label="投影卡片">

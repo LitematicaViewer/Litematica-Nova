@@ -3,8 +3,9 @@
    Provides the enumerator info section and the rule editor dialog that the
    restored statistics-page logic renders. */
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 
 .statistics-error {
     margin: 0;

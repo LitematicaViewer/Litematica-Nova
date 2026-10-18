@@ -345,14 +345,14 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
           <Button variant="ghost" disabled={saving} onClick={() => setRoute("library")}><Library size={16} aria-hidden="true" />从投影库选择</Button>
         </div>
       </header>
-      <div className="properties-file" title={displayFilePath(currentFile || "")}>{fileName || "尚未选择投影"}</div>
-      {error && <div className="properties-message properties-error" role="alert">{displayPathText(error)}</div>}
+      <div className="properties-file muted" title={displayFilePath(currentFile || "")}>{fileName || "尚未选择投影"}</div>
+      {error && <div className="properties-message properties-error nova-text-danger" role="alert">{displayPathText(error)}</div>}
       {status && <div className="properties-message" role="status">{displayPathText(status)}</div>}
-      {!currentFile ? <div className="properties-empty"><Box size={40} aria-hidden="true" /><span>选择投影，编辑信息并查看 3D 预览。</span></div> : (
+      {!currentFile ? <div className="properties-empty muted"><Box size={40} aria-hidden="true" /><span>选择投影，编辑信息并查看 3D 预览。</span></div> : (
         <div className="properties-workspace">
           <ScrollArea className="properties-editor-scroll" viewportClassName="properties-editor-viewport">
-            {!form ? (!error && <div className="properties-empty" role="status">正在读取投影属性…</div>) : (
-            <fieldset className="properties-editor" disabled={saving || filePreviewBusy || capturingPreview}>
+            {!form ? (!error && <div className="properties-empty muted" role="status">正在读取投影属性…</div>) : (
+            <fieldset className="properties-editor nova-box-plain" disabled={saving || filePreviewBusy || capturingPreview}>
                 <legend className="properties-sr-only">投影属性</legend>
                   <TextRow label="内部名称" value={form.name} onChange={(value) => updateForm({ name: value })} />
                   <TextRow label="作者" value={form.author} onChange={(value) => updateForm({ author: value })} />
@@ -360,7 +360,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
                     <span>描述</span>
                     <Textarea rows={4} value={form.description} onChange={(event) => updateForm({ description: event.target.value })} />
                   </label>
-                  <dl className="properties-facts">
+                  <dl className="properties-facts nova-box-plain">
                     <div><dt>投影名称</dt><dd>{fileName}</dd></div>
                     <div><dt>Minecraft 版本</dt><dd>{minecraftVersionLabel(form.minecraft_data_version)}</dd></div>
                     <div><dt>选区名</dt><dd>{regionNames === undefined ? "未读取" : regionNames.length ? regionNames.map((name, index) => <div key={index}>{name || "（空名称）"}</div>) : "无选区"}</dd></div>
@@ -369,7 +369,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
                     <div><dt>包围体积</dt><dd>{Number(metadata.total_volume || 0).toLocaleString()}</dd></div>
                     <div><dt>空间占用</dt><dd>{(density * 100).toFixed(2)}%</dd></div>
                   </dl>
-                  {regionError && <div className="properties-error" role="alert">{regionError}</div>}
+                  {regionError && <div className="properties-error nova-text-danger" role="alert">{regionError}</div>}
                   <ScrollArea className="properties-table-scroll" horizontal>
                     <Table>
                       <TableHeader><TableRow><TableHead>区域名称（可编辑）</TableHead><TableHead>尺寸 x / y / z</TableHead><TableHead>位置 x / y / z</TableHead></TableRow></TableHeader>
@@ -388,7 +388,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
                   </ScrollArea>
                   <DateRow label="创建时间" value={form.time_created} onChange={(value) => updateForm({ time_created: value })} />
                   <DateRow label="修改时间" value={form.time_modified} onChange={(value) => updateForm({ time_modified: value })} />
-                  <dl className="properties-facts"><div className="properties-format-row"><dt>投影格式</dt><dd>Litematica v{form.litematic_version}.{form.litematic_subversion}<Button size="sm" variant="ghost" disabled={saving || hasChanges} onClick={() => setVersionConvertOpen(true)}>转换版本</Button></dd></div></dl>
+                  <dl className="properties-facts nova-box-plain"><div className="properties-format-row"><dt>投影格式</dt><dd>Litematica v{form.litematic_version}.{form.litematic_subversion}<Button size="sm" variant="ghost" disabled={saving || hasChanges} onClick={() => setVersionConvertOpen(true)}>转换版本</Button></dd></div></dl>
                 <div className="properties-file-preview">
                   <div className="properties-preview-toolbar"><h3>文件内预览图</h3>
                     <Button size="sm" variant="ghost" onClick={() => void updateFilePreview(false)}><ImagePlus size={16} aria-hidden="true" />导入图片</Button>
@@ -413,9 +413,9 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
               <Button size="sm" variant="ghost" onClick={() => setRoute("render")} ><ExternalLink size={15} aria-hidden="true" />渲染页</Button>
             </header>
             <div ref={renderMode === "fast" ? preview.hostRef : fullPreview.hostRef} className="properties-preview-host" aria-label={`${modeLabel}预览视口`}>
-              {!previewVisible && <div className="properties-preview-placeholder"><Box size={36} aria-hidden="true" /><span>{previewFailure ? "预览加载失败" : previewStatus}</span></div>}
+              {!previewVisible && <div className="properties-preview-placeholder muted"><Box size={36} aria-hidden="true" /><span>{previewFailure ? "预览加载失败" : previewStatus}</span></div>}
             </div>
-            {renderMode !== "fast" && fullPreview.preflight && <div role="status" className="properties-preview-status">
+            {renderMode !== "fast" && fullPreview.preflight && <div role="status" className="properties-preview-status muted">
               <p>显存需求：{fullPreview.preflight.conservativeVramBytes == null ? "未知" : formatResourceBytes(fullPreview.preflight.conservativeVramBytes)}</p>
               {fullPreview.preflight.severity === "warning" && <p>需求达到当前可用预算的 80%，确认后才继续预加载。</p>}
               {fullPreview.preflight.severity === "hard" && <p>需求达到当前可用预算的 95%，预加载不可用，可选择实时加载。</p>}
@@ -427,8 +427,8 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
                 <Button size="sm" variant="ghost" onClick={() => void fullPreview.close()}>取消</Button>
               </div>
             </div>}
-            {previewFailure && <div className="properties-preview-error" role="alert">{displayPathText(previewFailure)}</div>}
-            <div className="properties-preview-status" role="status" aria-live="polite">{previewStatus}</div>
+            {previewFailure && <div className="properties-preview-error nova-text-danger" role="alert">{displayPathText(previewFailure)}</div>}
+            <div className="properties-preview-status muted" role="status" aria-live="polite">{previewStatus}</div>
           </section>
         </div>
       )}

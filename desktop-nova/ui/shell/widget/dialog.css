@@ -1,6 +1,7 @@
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 .dialog-overlay {
     position: fixed;
     inset: 0;
@@ -9,7 +10,7 @@
     align-items: center;
     justify-content: center;
     padding: 20px;
-    background: rgb(0 0 0 / 42%);
+    background: var(--overlay);
 }
 
 .dialog-surface {
@@ -112,16 +113,16 @@
 .dialog-path-preview {
     padding: 8px 10px;
     overflow-wrap: anywhere;
-    background: rgb(127 127 127 / 10%);
-    border: 1px solid rgb(127 127 127 / 18%);
+    background: color-mix(in srgb, var(--foreground) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--foreground) 14%, transparent);
 }
 
 .dialog-message {
     margin: 0;
     padding: 8px 10px;
     white-space: pre-wrap;
-    border: 1px solid rgb(127 127 127 / 18%);
-    background: rgb(127 127 127 / 10%);
+    border: 1px solid color-mix(in srgb, var(--foreground) 14%, transparent);
+    background: color-mix(in srgb, var(--foreground) 8%, transparent);
 }
 
 .dialog-message-error {

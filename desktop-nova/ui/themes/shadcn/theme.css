@@ -23,6 +23,14 @@
     --panel-shadow: 0 12px 36px rgb(0 0 0 / 14%), 0 2px 6px rgb(0 0 0 / 6%);
     --ln-body-font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
     --ln-body-font-size: 14px;
+    /* Theme-owned type scale. Pages and components reference these instead of
+       hand-picking rem/em values, so one theme can keep its own text sizes. */
+    --nova-text-xs: .75rem;
+    --nova-text-sm: .875rem;
+    --nova-text-base: 1rem;
+    --nova-text-lg: 1.5rem;
+    /* Scrim behind modal dialogs and subwindows. */
+    --overlay: rgb(0 0 0 / 42%);
 }
 
 :root[data-color-scheme="dark"] {

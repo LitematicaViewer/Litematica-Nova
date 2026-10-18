@@ -411,6 +411,64 @@ function checkHardcodedColours(filePath, source, relative) {
   }
 }
 
+// Text sizes are a theme decision: a page that writes its own rem/em/px value makes
+// the same caption 12.04px in shadcn and 13.76px in the bitmap themes. Only the theme
+// type scale (or a fluid display `clamp()`) may set a page's font size.
+const PAGE_FONT_SIZE_ALLOWED = /^(?:var\(--nova-text-[a-z]+(?:,[^)]*)?\)|clamp\(|inherit$|0$)/;
+
+function checkPageFontSizes(filePath, source, relative) {
+  if (!relative.startsWith("ui/windows/")) return;
+  const masked = maskCssText(source);
+  for (const match of masked.matchAll(/font-size\s*:\s*([^;{}]+)[;}]/gi)) {
+    const value = match[1].trim();
+    if (PAGE_FONT_SIZE_ALLOWED.test(value)) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-page-font-size",
+      `page font-size "${value}" bypasses the theme type scale; use var(--nova-text-sm) or clamp() for display text.`,
+    );
+  }
+}
+
+// Every theme entry must define the type scale, or text falls back to the shadcn
+// values in the shared layer and the bitmap themes silently render blurry captions.
+function checkThemeTypeTokens(filePath, source, relative) {
+  if (!/^ui\/themes\/[^/]+\/theme\.css$/.test(relative)) return;
+  for (const token of ["--nova-text-xs", "--nova-text-sm", "--nova-text-base", "--nova-text-lg"]) {
+    if (new RegExp(`${token}\\s*:`).test(source)) continue;
+    addViolation(
+      filePath,
+      1,
+      "css-theme-type-token",
+      `theme entry does not define ${token}; every theme must own its text scale.`,
+    );
+  }
+}
+
+// A theme may need a different *face* at a small size: Minecraft switches Unifont
+// (16px design) for the 12px Fusion Pixel face instead of scaling the bitmap down.
+// Any rule that opts into the small type scale must therefore also let the theme
+// choose the family, or the text renders blurry in that theme.
+function checkTextScaleFamily(filePath, source) {
+  const masked = maskCssText(source);
+  for (const match of masked.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const head = match[1];
+    if (head.trimStart().startsWith("@")) continue;
+    const body = match[2];
+    const size = /font-size\s*:\s*var\(--nova-text-(xs|sm|lg)\)/.exec(body);
+    if (!size) continue;
+    const family = /font-family\s*:\s*var\(--nova-font-(?:xs|sm|lg)/.test(body);
+    if (family) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-text-scale-family",
+      `"${head.trim().replace(/\s+/g, " ")}" uses --nova-text-${size[1]} without --nova-font-${size[1]}; bitmap themes cannot switch to a crisp small face.`,
+    );
+  }
+}
+
 // Any selector whose rightmost compound paints a button. `.btn*` counts because the
 // legacy size classes were exactly where per-button type scales used to hide.
 const BUTTON_TAIL_RE =
@@ -546,10 +604,53 @@ function checkCssFile(filePath, source) {
   const relative = relativePath(filePath);
   let unlayered = 0;
 
+  // Each ownership tier has exactly one sublayer. A rule written into the parent
+  // `components` layer (or into the wrong sublayer) would silently change who wins,
+  // so the assignment is checked by path rather than trusted.
+  const expectedSublayer = relative.startsWith("ui/windows/")
+    ? "components.page"
+    : relative === "ui/themes/modern.css"
+      ? "components.shared"
+      : relative.startsWith("ui/themes/")
+        ? "components.theme"
+        : "components.shared";
+  const sublayerStatement = "@layer components.shared, components.page, components.theme;";
+  let hasSublayerRule = false;
+
+  for (const rule of rules) {
+    if (rule.layer === "components" && rule.selector.length > 0) {
+      addViolation(
+        filePath,
+        rule.line,
+        "css-sublayer-assignment",
+        `rule lives in the parent "components" layer; this file must use "${expectedSublayer}".`,
+      );
+    } else if (rule.layer?.startsWith("components.") && rule.layer !== expectedSublayer) {
+      addViolation(
+        filePath,
+        rule.line,
+        "css-sublayer-assignment",
+        `rule lives in "${rule.layer}" but this file owns "${expectedSublayer}".`,
+      );
+    }
+    if (rule.layer?.startsWith("components.")) hasSublayerRule = true;
+  }
+  if (hasSublayerRule) {
+    const statements = [...masked.matchAll(/@layer\s+([^{};]+);/g)].map((match) => match[1].trim());
+    if (!statements.includes("components.shared, components.page, components.theme")) {
+      addViolation(
+        filePath,
+        1,
+        "css-sublayer-order",
+        `file uses component sublayers but does not declare "${sublayerStatement}" first.`,
+      );
+    }
+  }
+
   for (const rule of rules) {
     if (rule.layer === null) {
       unlayered += 1;
-    } else if (rule.layer === "components" && rule.selector.length > 0) {
+    } else if (rule.layer?.startsWith("components") && rule.selector.length > 0) {
       for (const part of rule.selector.split(",")) {
         const element = subjectElementOf(part);
         if (element && SLOT_BACKED_ELEMENTS.has(element)) {
@@ -557,7 +658,7 @@ function checkCssFile(filePath, source) {
             filePath,
             rule.line,
             "css-components-bare-element-selector",
-            `@layer components styles <${element}> by element type; target [data-slot="..."] instead: ${part.trim()}`,
+            `@layer ${rule.layer} styles <${element}> by element type; target [data-slot="..."] instead: ${part.trim()}`,
           );
         }
       }
@@ -858,6 +959,9 @@ export function collectFindings(rootDir) {
       checkButtonFontSize(filePath, source);
       checkPortaledDialogScope(filePath, source);
       checkHardcodedColours(filePath, source, relativePath(filePath));
+      checkPageFontSizes(filePath, source, relativePath(filePath));
+      checkTextScaleFamily(filePath, source);
+      checkThemeTypeTokens(filePath, source, relativePath(filePath));
       checkVendorImports(filePath, source, declaredLayers, projectCeiling);
       checkUnresolvedAssets(filePath, source);
       for (const match of maskCssText(source).matchAll(/\.([a-zA-Z][\w-]{2,})/g)) report.definedClasses.add(match[1]);

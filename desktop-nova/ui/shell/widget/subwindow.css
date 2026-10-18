@@ -1,6 +1,7 @@
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 .subwindow-title-row {
     position: relative;
     display: flex;
@@ -156,7 +157,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgb(0 0 0 / 42%);
+    background: var(--overlay);
 }
 
 .dialog-content {
@@ -256,7 +257,7 @@
 
 .material-list-multiplier {
     width: 88px;
-    flex: 0 0 auto !important;
+    flex: 0 0 auto;
 }
 
 .material-list-source-path {

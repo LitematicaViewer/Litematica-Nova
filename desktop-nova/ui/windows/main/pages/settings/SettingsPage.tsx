@@ -42,6 +42,7 @@ import {
   normalizeMaterialListWindowBehavior,
   normalizeDebugMode,
   normalizeTheme,
+  THEMES,
   normalizeColorMode,
   normalizeGraphicsBackend,
   saveLocalLibraryTailPathCountConfig,
@@ -59,11 +60,10 @@ import "./settings.css";
 const BLOCKSTATE_DB = "data/minecraft_blockstates/26.1.json";
 const BLOCKSTATE_ZH = "data/minecraft_blockstates/26.1.zh_cn.json";
 const BLOCK_ICON_DIR = "block";
-const NOVA_THEME_OPTIONS = [
-  { value: "shadcn", label: "shadcn/ui" },
-  { value: "8bitcn", label: "8bitcn/ui" },
-  { value: "Minecraft", label: "Minecraft" },
-];
+/* One entry per theme, from `src/services/themeManifest.ts`. Do not add ids here:
+   a theme missing from the manifest cannot be loaded or stored, and the registry
+   test fails loudly instead of the picker quietly showing a dead option. */
+const NOVA_THEME_OPTIONS = THEMES.map((theme) => ({ value: theme.id, label: theme.label }));
 const MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS = [
   { value: "independent_window", label: "独立窗口" },
   { value: "main_window_overlay", label: "主窗口遮罩" },

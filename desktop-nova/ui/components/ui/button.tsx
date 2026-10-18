@@ -34,6 +34,14 @@ const buttonVariants = cva(
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {
   asChild?: boolean;
+  /**
+   * Overrides `data-slot` for structural containers that happen to use a button
+   * element (a card tile, a navigation row). Themes style `[data-slot="button"]`
+   * as an action button — 9-slice texture, fixed height, padding — and a container
+   * must not inherit that. A distinct slot keeps the container on the layout side
+   * of the contract without every theme having to exclude it by class.
+   */
+  themeSlot?: string;
 }
 
 // The stepped border and inset shadows come from the official 8bitcn button.
@@ -72,11 +80,11 @@ function ButtonDecorations({ variant, size }: Pick<ButtonProps, "variant" | "siz
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { className, variant = "secondary", size = "default", asChild = false, type = "button", children, ...props }, ref,
+  { className, variant = "secondary", size = "default", asChild = false, themeSlot = "button", type = "button", children, ...props }, ref,
 ) {
   const Comp = asChild ? Slot.Root : "button";
   return (
-    <Comp ref={ref} type={type} data-slot="button" data-variant={variant} data-size={size}
+    <Comp ref={ref} type={type} data-slot={themeSlot} data-variant={variant} data-size={size}
       className={cn(buttonVariants({ variant, size, className }))} {...props}>
       {asChild ? <Slot.Slottable>{children}</Slot.Slottable> : children}
       <ButtonDecorations variant={variant} size={size} />

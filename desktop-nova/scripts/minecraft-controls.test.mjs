@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import postcss from 'postcss';
-import { collect, themeOf, winner } from './fixtures/css-cascade.mjs';
+import { collect, layerRank, themeOf, winner } from './fixtures/css-cascade.mjs';
 
 // Source/CSS cascade contracts for the textured Minecraft controls. No browser and no
 // visual acceptance: this asserts which declaration *wins*, not merely which exist.
@@ -41,6 +41,19 @@ test('the cascade filter rejects rules pinned to another theme', () => {
   // treating it as "another theme" silently emptied the candidate set.
   const shared = rules.filter((entry) => themeOf(entry.selector) === null);
   assert.ok(shared.length > 20, `expected the shared layer to be eligible, got ${shared.length} selectors`);
+});
+
+test('主题声明结构生效：components.theme 之上的规则胜过更具体的共享规则', () => {
+  // The theme layer is `components.theme`, a sublayer of `components`. Rules directly in
+  // the parent (`styles/**`, page CSS) rank below it, so a theme declaration wins by
+  // layer instead of by specificity — this is the contract that lets a theme say
+  // "the 9-slice texture owns radius/border/colour" without out-specifying every shared rule.
+  assert.ok(layerRank('components.theme') > layerRank('components'));
+  assert.ok(layerRank('components.page') > layerRank('components.shared'));
+
+  const focus = winner(rules, { slot: 'button', tag: 'button', pseudos: ['focus-visible'] }, 'outline', 'minecraft');
+  assert.match(focus.path, /^ui\/themes\//, `shared rule ${focus.selector} still owns the focus ring`);
+  assert.equal(focus.rank.layer, layerRank('components.theme'));
 });
 
 test('Minecraft 单选框贴图不被共享层的圆形裁切', () => {

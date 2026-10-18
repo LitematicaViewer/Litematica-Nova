@@ -1,7 +1,8 @@
 /* Shared behavior and spacing; each theme keeps its own palette, font and edges. */
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 .nova-pixel-decoration { display: none; }
 
 /* Portal placement is shared by all themes, including Minecraft without Tailwind. */
@@ -92,7 +93,7 @@ html[data-theme="minecraft"] {
 }
 }
 
-@layer components {
+@layer components.shared {
 * { scrollbar-color: var(--ln-scroll-thumb) var(--ln-scroll-track); scrollbar-width: thin; }
 @supports selector(::-webkit-scrollbar) {
     /* Chromium ignores pseudo-element colors if CSS Scrollbars colors are also set. */
@@ -130,7 +131,7 @@ html[data-theme="minecraft"] {
 }
 }
 
-@layer components {
+@layer components.shared {
 
 .btn,
 .input,

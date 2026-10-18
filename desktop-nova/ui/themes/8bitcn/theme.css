@@ -2,12 +2,20 @@
 
 /* Local Chinese-capable pixel font. No Google Fonts network dependency. */
 @layer theme, vendor, tokens, base, components, utilities;
+/* Theme rules sit above the shared/component defaults they replace. */
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.theme {
 @font-face {
     font-family: "Nova Pixel";
     src: url("../minecraft/resource/font/unifont-16.0.04.ttf") format("truetype");
     font-weight: 400 700;
+    font-display: swap;
+}
+/* Small print: the 12px Fusion Pixel face instead of scaling the 16px Unifont down. */
+@font-face {
+    font-family: "Nova Pixel 12";
+    src: url("../minecraft/resource/font/fusion-pixel-12px-monospaced-zh_hans.ttf") format("truetype");
     font-display: swap;
 }
 }
@@ -50,6 +58,16 @@
     --panel-shadow: 5px 5px 0 #72775f;
     --ln-body-font-family: "Nova Pixel", "Microsoft YaHei UI", monospace;
     --ln-body-font-size: 16px;
+    /* Bitmap font: only whole multiples of 16px stay crisp, so body text keeps 16px.
+       Small print uses the 12px Fusion Pixel face (its own design size). */
+    --nova-text-xs: 12px;
+    --nova-text-sm: 12px;
+    --nova-text-base: 1rem;
+    --nova-text-lg: 24px;
+    --nova-font-xs: "Nova Pixel 12", "Microsoft YaHei UI", monospace;
+    --nova-font-sm: "Nova Pixel 12", "Microsoft YaHei UI", monospace;
+    --nova-font-lg: "Nova Pixel 12", "Microsoft YaHei UI", monospace;
+    --overlay: rgb(0 0 0 / 42%);
     /* Selected Button palette, taken from 8bitcn's own Toggle (`bg-primary`). References
        to the mode-scoped tokens above resolve per light/dark, so one declaration is
        enough; the shared grey mix in `modern.css` is what this replaces. */
@@ -59,7 +77,7 @@
 }
 }
 
-@layer components {
+@layer components.theme {
 button:not(.nav-item):not(.nav-expand):not(.dialog-close-button):not(:where([role="checkbox"], [role="radio"])) { box-shadow: var(--control-shadow); }
 button:active:not(:disabled):not(:where([role="checkbox"], [role="radio"])) { box-shadow: none; transform: translateY(1px); }
 .sidebar { border-right-width: 2px; }

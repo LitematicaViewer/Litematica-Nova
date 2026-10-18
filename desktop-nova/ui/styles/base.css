@@ -1,9 +1,11 @@
 @import "../shell/theme.css";
 @import "./widgets.css";
 @import "./controls.css";
+@import "./page-appearance.css";
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 
 :root {
     --ln-space-1: 4px;
@@ -44,7 +46,7 @@ body {
 }
 }
 
-@layer components {
+@layer components.shared {
 
 button,
 input,
@@ -90,7 +92,7 @@ table {
 }
 }
 
-@layer components {
+@layer components.shared {
 
 .block-icon-image,
 .block-icon-fallback {
@@ -128,7 +130,7 @@ td {
 }
 }
 
-@layer components {
+@layer components.shared {
 
 .ui-test-thumb {
     display: block;
@@ -457,7 +459,8 @@ td {
     min-width: 0;
     overflow: hidden;
     color: var(--muted-foreground);
-    font-size: 0.9em;
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -478,6 +481,8 @@ td {
 
 .render-page-actions {
     flex-wrap: wrap;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
 }
 
 .render-page-action-label,
@@ -493,9 +498,10 @@ td {
 .render-progress-track {
     position: relative;
     flex: 1;
-    height: 16px;
+    height: 6px;
     min-width: 8rem;
-    border: 1px solid var(--border);
+    border: 0;
+    border-radius: 3px;
     background-color: var(--background);
 }
 
@@ -532,8 +538,12 @@ td {
     justify-content: center;
     margin: 16px 8px 8px;
     overflow: hidden;
-    border: 2px solid #111;
-    background-color: #222;
+    border: 0;
+    background-color: var(--background);
+}
+
+.render-preview-help {
+    color: var(--muted-foreground);
 }
 
 .render-preview-placeholder {
@@ -542,12 +552,12 @@ td {
     align-items: center;
     gap: 12px;
     padding: 24px;
-    color: #ccc;
+    color: var(--muted-foreground);
     text-align: center;
 }
 
 .render-preview-state {
-    color: #888;
+    color: var(--muted-foreground);
     font-size: 0.85em;
 }
 

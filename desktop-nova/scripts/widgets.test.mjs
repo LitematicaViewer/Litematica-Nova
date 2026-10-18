@@ -180,10 +180,13 @@ test('弹窗保留标题、说明、忙碌关闭保护和原页面接口', () =>
 
 test('三主题共用官方控件，Minecraft 资源与控件身份保留', () => {
   const settings = source('ui/windows/main/pages/settings/SettingsPage.tsx');
-  const themes = settings.match(/const NOVA_THEME_OPTIONS = \[([\s\S]*?)\];/)?.[1];
-  assert.ok(themes);
-  for (const theme of ['shadcn', '8bitcn', 'Minecraft']) assert.ok(themes.includes(`value: "${theme}"`));
-  assert.doesNotMatch(themes, /WebDefault|Bootstrap5|Metro10/);
+  // The picker is generated from the theme manifest; the list itself lives there.
+  assert.match(settings, /const NOVA_THEME_OPTIONS = THEMES\.map\(/);
+  const manifest = source('src/services/themeManifest.ts');
+  const themeList = manifest.match(/export const THEMES = \[([\s\S]*?)\] as const;/)?.[1] ?? '';
+  assert.ok(themeList, 'THEMES array not found in themeManifest.ts');
+  for (const theme of ['shadcn', '8bitcn', 'Minecraft']) assert.ok(themeList.includes(`id: "${theme}"`), theme);
+  assert.doesNotMatch(themeList, /WebDefault|Bootstrap5|Metro10/);
   assert.match(source('ui/themes/minecraft/widgets.css'), /border-image-source: var\(--ln-minecraft-button-image\)/);
   assert.match(source('ui/themes/minecraft/widgets.css'), /unifont-16\.0\.04\.ttf/);
   assert.match(source('ui/components/ui/button.tsx'), /button-decorations/);

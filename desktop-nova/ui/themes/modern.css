@@ -33,8 +33,11 @@
     --radius-lg: calc(var(--radius) + 2px);
 }
 @layer theme, vendor, tokens, base, components, utilities;
+/* shadcn/8bitcn baselines are shared defaults: pages (layout) outrank them, themes
+   (`components.theme`) outrank both. Minecraft never loads this file. */
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 
 :root {
     color-scheme: light;
@@ -83,7 +86,7 @@ html[data-theme][data-color-scheme] {
 }
 }
 
-@layer components {
+@layer components.shared {
 
 body { line-height: 1.5; }
 :where(button, input, select, textarea) { font: inherit; }

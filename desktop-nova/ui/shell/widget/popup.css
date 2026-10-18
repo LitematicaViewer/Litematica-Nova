@@ -1,6 +1,7 @@
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 .material-list-hover-popup {
     position: fixed;
     z-index: 9999;
@@ -8,10 +9,14 @@
     max-width: calc(100vw - 8px);
     padding: 8px;
     border: 1px solid var(--border);
+    border-radius: var(--radius);
     background: var(--card);
     box-shadow: var(--panel-shadow);
     color: var(--foreground);
-    font-size: 12px;
+    /* Body size: the tooltip is reading text, not a caption. Every row (label, name,
+       id, bold numbers) inherits this one size; the theme's body face applies. */
+    font-size: var(--nova-text-base);
+    line-height: 1.6;
     pointer-events: none;
 }
 

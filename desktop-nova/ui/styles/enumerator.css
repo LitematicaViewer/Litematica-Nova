@@ -4,8 +4,9 @@
    backported verbatim; shared utility classes used by the block are kept
    at the end of this file. */
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 
 .enumerator-window {
     width: 100%;

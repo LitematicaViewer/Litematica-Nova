@@ -8,6 +8,16 @@
     --background: #3c3c3c;
     --navigation-background: #3c3c3c;
     --ln-file-icon-size: 32px;
+    /* Unifont is a bitmap face at 16px; small print switches to the 12px Fusion
+       Pixel face instead of scaling Unifont down (which blurs). */
+    --nova-text-xs: 12px;
+    --nova-text-sm: 12px;
+    --nova-text-base: 1rem;
+    --nova-text-lg: 24px;
+    --nova-font-xs: "Nova Pixel 12", "Microsoft YaHei UI", monospace;
+    --nova-font-sm: "Nova Pixel 12", "Microsoft YaHei UI", monospace;
+    --nova-font-lg: "Nova Pixel 12", "Microsoft YaHei UI", monospace;
+    --overlay: rgb(0 0 0 / 42%);
 }
 
 :root {

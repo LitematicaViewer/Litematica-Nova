@@ -1,13 +1,14 @@
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
-.render-page .render-preview-group { border: 0; padding: 0; margin: 0; gap: 8px; }
-.render-page .render-preview-host { border: 0; border-radius: 0; margin: 0; background: var(--background); }
-.render-page .render-preview-placeholder { color: var(--muted-foreground); }
-.render-page .render-preview-state { color: var(--muted-foreground); font-size: .9em; letter-spacing: 0; }
-.render-page .render-preview-help { color: var(--muted-foreground); font-size: .9em; }
-.render-page .render-progress-track { height: 6px; border: 0; border-radius: 3px; overflow: hidden; background: var(--background); }
-.render-page .render-page-actions { padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+@layer components.page {
+/* Appearance (surface, border, muted text, progress track) lives in the shared
+   component rules; this file only keeps the page's own flow and sizing. */
+.render-page .render-preview-group { margin: 0; gap: 8px; }
+.render-page .render-preview-host { margin: 0; }
+.render-page .render-preview-state { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); letter-spacing: 0; }
+.render-page .render-preview-help { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+.render-page .render-progress-track { overflow: hidden; }
 .render-page .render-error { max-height: 6rem; overflow: auto; overflow-wrap: anywhere; }
 .render-page .render-page-title { flex: 0 0 auto; margin: 0; text-align: left; }
 .render-page .render-page-source { flex: 1; max-width: none; }

@@ -4,8 +4,9 @@
 
 /* Replace page container */
 @layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
 
-@layer components {
+@layer components.shared {
 .replace-page {
     display: flex;
     height: 100%;
@@ -51,7 +52,7 @@
 .replace-content-empty {
     opacity: 0.45;
     font-style: italic;
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     padding-top: 20px;
     text-align: center;
 }
@@ -77,12 +78,12 @@
 
 .replace-unit-title {
     font-weight: 600;
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-unit-label-input {
     font-weight: 600;
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     background: transparent;
     border: 1px solid transparent;
     border-radius: 3px;
@@ -103,7 +104,7 @@
 }
 
 .replace-unit-hit-count {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.7;
     margin-left: 4px;
 }
@@ -125,7 +126,7 @@
 }
 
 .replace-unit-side-title {
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     font-weight: 600;
     margin-bottom: 6px;
     opacity: 0.8;
@@ -140,7 +141,7 @@
 }
 
 .replace-entry-empty {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.4;
     font-style: italic;
     margin-bottom: 4px;
@@ -169,23 +170,23 @@
 
 .replace-entry-name-input {
     flex: 1;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-entry-weight-label {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.7;
     white-space: nowrap;
 }
 
 .replace-entry-weight-input {
     width: 52px;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-entry-remove-btn {
     padding: 2px 6px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
 }
 
 .replace-entry-properties {
@@ -202,13 +203,13 @@
 }
 
 .replace-property-label {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.8;
     white-space: nowrap;
 }
 
 .replace-property-no-props {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.5;
 }
 
@@ -230,7 +231,7 @@
 }
 
 .replace-separator-label {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     white-space: nowrap;
     color: var(--primary);
     opacity: 0.85;
@@ -246,7 +247,7 @@
 .replace-unit-scan-dist {
     border-top: 1px solid var(--border);
     padding: 6px 10px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.7;
 }
 
@@ -257,7 +258,7 @@
 .replace-unit-warnings {
     border-top: 1px solid var(--border);
     padding: 6px 10px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     color: var(--warning);
 }
 
@@ -283,13 +284,13 @@
     color: var(--foreground);
     padding: 6px;
     font-family: inherit;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     resize: none;
 }
 
 /* Confirm dialog specific */
 .replace-confirm-summary {
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     margin-bottom: 4px;
 }
 
@@ -303,7 +304,7 @@
     border: 1px solid var(--border);
     background: var(--card);
     padding: 8px;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-confirm-unit {
@@ -316,7 +317,7 @@
 
 .replace-confirm-dist {
     margin-left: 16px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.7;
 }
 
@@ -327,12 +328,12 @@
 .replace-confirm-warning {
     color: var(--warning);
     margin-top: 8px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
 }
 
 .replace-confirm-output-label {
     margin-bottom: 4px;
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-confirm-output-row {
@@ -343,7 +344,7 @@
 
 .replace-confirm-output-input {
     flex: 1;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-confirm-buttons {
@@ -361,7 +362,7 @@
 }
 
 .enum-picker-label {
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     font-weight: 600;
     display: block;
     margin-bottom: 4px;
@@ -373,23 +374,23 @@
 }
 
 .enum-picker-hint {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.6;
     margin-top: 4px;
 }
 
 .enum-picker-error {
     color: var(--destructive);
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .enum-picker-warning {
     color: var(--warning);
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .enum-picker-preview-label {
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     opacity: 0.7;
     margin-bottom: 4px;
 }
@@ -409,7 +410,7 @@
     display: flex;
     align-items: center;
     gap: 3px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     background: var(--card);
     padding: 2px 5px;
     border-radius: 3px;
@@ -420,14 +421,14 @@
 }
 
 .enum-picker-preview-more {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.5;
     align-self: center;
 }
 
 .enum-picker-empty {
     opacity: 0.5;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     font-style: italic;
 }
 
@@ -446,7 +447,7 @@
     margin-top: 8px;
     border: 1px solid var(--border);
     border-radius: 4px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
 }
 
 .replace-debug-log-summary {
@@ -465,7 +466,7 @@
     margin: 0;
     padding: 6px 10px;
     font-family: monospace;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-all;
@@ -485,7 +486,7 @@
     border: 1px solid var(--border);
     padding: 4px 8px;
     border-radius: 4px;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     pointer-events: none;
     z-index: 9999;
 }
@@ -496,7 +497,7 @@
 
 .replace-hover-tooltip-id {
     opacity: 0.6;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
 }
 
 /* No-file placeholder */
