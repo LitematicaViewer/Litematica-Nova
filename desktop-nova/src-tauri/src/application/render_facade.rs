@@ -691,6 +691,7 @@ impl RenderFacade {
     /// Product-semantic E2E operation. The protocol command and Viewer session
     /// identity remain behind the same Application boundary as Show/Hide.
     pub(crate) async fn capture_frame(&self, operation_id: &OperationId, source: &Path, display_mode: RenderDisplayMode) -> Result<PathBuf, String> {
+        let capture_events = self.inner.transport.subscribe_events();
         self.refresh_from_service();
         let snapshot = self.inner.transport.snapshot();
         let session_id = {
@@ -731,17 +732,34 @@ impl RenderFacade {
         };
         let output_path = super::thumbnails::temporary_preview_path();
         let error_path = output_path.with_extension("error.txt");
-        match self.inner.transport.request(UiCommand::CaptureViewer { session_id, output_path: output_path.clone() }).await? {
+        match self.inner.transport.request(UiCommand::CaptureViewer { session_id: session_id.clone(), output_path: output_path.clone() }).await? {
             ResponseBody::Ack => {}, other => return Err(format!("unexpected capture response: {other:?}")),
         }
-        let started = std::time::Instant::now();
         loop {
+            loop {
+                match capture_events.try_recv() {
+                    Ok(nova_render_protocol::ServiceEvent::Error(error)) if error.fatal => return Err(error.message),
+                    Ok(nova_render_protocol::ServiceEvent::ServiceStopping) => return Err("渲染服务已停止，截图未保存".into()),
+                    Ok(_) => {},
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => return Err("渲染服务已断开，截图未保存".into()),
+                }
+            }
+            self.refresh_from_service();
+            {
+                let state = self.inner.state.lock().unwrap();
+                let record = state.operations.get(operation_id).ok_or_else(|| unknown_operation(operation_id))?;
+                if record.cancel_requested
+                    || !matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady)
+                    || record.binding.as_ref().and_then(|binding| binding.session_id.as_ref()) != Some(&session_id) {
+                    return Err(record.view.error.clone().unwrap_or_else(|| "预览会话已结束，截图未保存".into()));
+                }
+            }
             if error_path.is_file() {
                 let error = std::fs::read_to_string(&error_path).unwrap_or_else(|_| "截图失败".into());
                 let _ = std::fs::remove_file(&error_path); return Err(error);
             }
             if output_path.is_file() { return Ok(output_path); }
-            if started.elapsed() > std::time::Duration::from_secs(30) { return Err("当前场景截图超时，请重试".into()); }
             tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         }
     }
@@ -2772,6 +2790,42 @@ mod tests {
             assert!(matches!(fake.commands.lock().unwrap().last(), Some(UiCommand::CaptureViewer { session_id, .. }) if session_id == "viewer-1"));
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_waits_for_real_result_but_cancel_and_disconnect_finish_it() {
+        for disconnect in [false, true] {
+            let fake = Arc::new(FakeTransport::default());
+            fake.push_response(accepted(Some("viewer-1")));
+            let facade = facade(fake.clone());
+            let mut input = request();
+            input.settings.display_mode = RenderDisplayMode::Standard;
+            input.settings.build_mode = RenderBuildMode::Realtime;
+            let source = input.source.path.clone();
+            let started = tauri::async_runtime::block_on(facade.start_realtime_render(input, RenderEnvironmentInputs::default())).unwrap();
+            fake.set_snapshot(ServiceSnapshot { builds: vec![build_snapshot(7, BuildState::Building)], artifacts: vec![],
+                viewers: vec![viewer_snapshot(7, ViewerRuntimeState::RealtimeReady, ViewerPresentationState::PopupVisible)] });
+            fake.push_response(ResponseBody::Ack);
+            tauri::async_runtime::block_on(async {
+                let capture = facade.capture_frame(&started.operation.operation_id, &source, RenderDisplayMode::Standard);
+                tokio::pin!(capture);
+                std::future::poll_fn(|context| {
+                    assert!(capture.as_mut().poll(context).is_pending(), "a pending real frame must keep waiting");
+                    std::task::Poll::Ready(())
+                }).await;
+                fake.emit(nova_render_protocol::ServiceEvent::Error(nova_render_protocol::ServiceError::new(
+                    "unrelated_warning", "nonfatal service warning", false,
+                )));
+                if disconnect {
+                    fake.event_subscribers.lock().unwrap().clear();
+                } else {
+                    facade.inner.state.lock().unwrap().operations.get_mut(&started.operation.operation_id).unwrap().cancel_requested = true;
+                }
+                let error = tokio::time::timeout(Duration::from_secs(1), capture).await
+                    .expect("cancel/disconnect must not leave capture waiting").unwrap_err();
+                assert!(error.contains(if disconnect { "渲染服务已断开" } else { "预览会话已结束" }));
+            });
+        }
     }
 
     #[test]

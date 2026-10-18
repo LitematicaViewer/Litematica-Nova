@@ -9,11 +9,38 @@ import ts from "typescript";
 const read = name => readFileSync(new URL(name, import.meta.url), "utf8");
 const host = read("../src-tauri/src/main.rs");
 const preview = read("../src-tauri/src/application/quick_preview.rs");
+const operations = read("../src-tauri/src/application/operations.rs");
+const renderFacade = read("../src-tauri/src/application/render_facade.rs");
 const native = read("../../tools/viewer-core/src/native_viewer.rs");
 const thumbnails = read("../src-tauri/src/application/thumbnails.rs");
 const explorer = read("../../tools/windows-thumbnail-provider/thumbnail_provider.cpp");
 const shell = read("../src-tauri/src/shell_integration.rs");
 const installer = read("../src-tauri/installer/nsis-hooks.nsh");
+
+test("Core实际任务不因耗时被终止，轮询继续等待且保留进程退出和lease失效", () => {
+  const run = operations.slice(operations.indexOf("    fn run_core("), operations.indexOf("    fn operation_path("));
+  assert(!operations.includes("CORE_OPERATION_TIMEOUT"));
+  assert(!run.includes("exceeded its bounded execution time"));
+  assert(run.includes("WaitOutcome::TimedOut => continue"));
+  assert(run.includes("WaitOutcome::Exited(exit) => break exit"));
+  assert(run.includes("Core operation lost its supervised process lease"));
+  assert(!run.includes("self.supervisor.terminate"));
+  assert(operations.includes("state.reads.values().cloned().collect()"));
+});
+
+test("缩略图准备和三模式截图没有工作量耗时失败门槛，真实关闭错误仍结束等待", () => {
+  const thumbnail = host.slice(host.indexOf("let temporary = host.thumbnail_session()"), host.indexOf("let launch = prepare_viewer_launch_context", host.indexOf("let temporary = host.thumbnail_session()")));
+  assert(!thumbnail.includes("elapsed()"));
+  assert(thumbnail.includes('matches!(current.state, "failed" | "closed")'));
+  assert(thumbnail.includes('temporary.snapshot()?.ok_or("缩略图预览会话结束")'));
+  const quickCapture = preview.slice(preview.indexOf("pub(crate) fn capture_frame"), preview.indexOf("fn stop_session"));
+  assert(!quickCapture.includes("elapsed()"));
+  assert(quickCapture.includes("session.refresh(&self.supervisor)?"));
+  assert(quickCapture.includes('matches!(session.view.state, "closed" | "failed")'));
+  const exactCapture = renderFacade.slice(renderFacade.indexOf("pub(crate) async fn capture_frame"), renderFacade.indexOf("pub(crate) async fn headless_camera_stress"));
+  assert(!exactCapture.includes("elapsed()"));
+  for (const guard of ["record.cancel_requested", "Some(&session_id)", "TryRecvError::Disconnected", "ServiceEvent::ServiceStopping", "ServiceEvent::Error", "error_path.is_file()", "output_path.is_file()"]) assert(exactCapture.includes(guard), guard);
+});
 
 function openFileEffectHarness(initial = []) {
   const source = ts.createSourceFile("AppShell.tsx", read("../ui/shell/AppShell.tsx"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -87,11 +114,12 @@ test("迟到Presentation回执不能覆盖新隐藏意图，Capture等待不持�
   assert(capture.includes("std::thread::sleep(Duration::from_millis(50))"));
 });
 
-test("主窗口关闭先停止接纳，再后台退出子进程，不在UI回调中同步等待", () => {
-  const shutdown = host.slice(host.indexOf("supervisor.stop_admitting()"), host.indexOf("app.exit(0)") + 12);
+test("关闭Host静态边界守卫；实际写入收尾与进程退出由原生行为测试验证", () => {
+  const shutdown = host.slice(host.indexOf(".on_window_event("), host.indexOf("app.exit(0)") + 12);
   assert(shutdown.includes("api.prevent_close()")); assert(shutdown.includes("SHUTDOWN_STARTED.swap"));
-  assert(shutdown.indexOf("spawn_blocking") < shutdown.indexOf("quick.close"));
+  assert(shutdown.indexOf("spawn_blocking") < shutdown.indexOf("quick.request_shutdown"));
   assert(shutdown.indexOf("spawn_blocking") < shutdown.indexOf("supervisor.shutdown"));
+  assert(shutdown.indexOf("wait_for_writes") < shutdown.indexOf("supervisor.stop_admitting()"));
   assert(host.includes("tauri_plugin_single_instance::init"));
   assert(shell.includes("queue.extend(paths)")); assert(shell.includes("std::mem::take"));
 });

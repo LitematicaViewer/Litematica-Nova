@@ -458,7 +458,6 @@ impl QuickPreviewHost {
             session.next_command += 1;
             (session.view.source_path.clone(), session.directory.join(format!("capture-{sequence:020}.png")), sequence)
         };
-        let started = std::time::Instant::now();
         loop {
             {
                 let mut slot = self.session.lock().map_err(|error| error.to_string())?;
@@ -475,7 +474,6 @@ impl QuickPreviewHost {
                 if metadata.len() != session.source_bytes || metadata.modified().ok() != session.source_modified { return Err("截图期间投影发生修改，未保存旧帧".into()); }
                 return Ok((source, output));
             }
-            if started.elapsed() > Duration::from_secs(75) { return Err("真实帧读取尚未完成，请稍后重试".into()); }
             std::thread::sleep(Duration::from_millis(50));
         }
     }

@@ -19,8 +19,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
-const CORE_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-const CORE_TERMINATE_WAIT: Duration = Duration::from_secs(3);
 const MAX_DIAGNOSTIC_CHARS: usize = 16 * 1024;
 
 #[derive(Clone)]
@@ -971,18 +969,15 @@ impl ApplicationOperations {
         let spawn_ms = spawn_started.elapsed().as_secs_f64() * 1000.0;
         let _read = CoreReadGuard { lifecycle: Arc::clone(&self.lifecycle), generation };
         let wait_started = Instant::now();
-        let exit = match self
-            .supervisor
-            .wait_for_exit(&child, CORE_OPERATION_TIMEOUT)
-        {
-            WaitOutcome::Exited(exit) => exit,
-            WaitOutcome::TimedOut => {
-                let _ = self.supervisor.terminate(&child, 1);
-                let _ = self.supervisor.wait_for_exit(&child, CORE_TERMINATE_WAIT);
-                return Err("Core operation exceeded its bounded execution time".to_owned());
-            }
-            WaitOutcome::Stale => {
-                return Err("Core operation lost its supervised process lease".to_owned())
+        let exit = loop {
+            match self.supervisor.wait_for_exit(&child, Duration::from_millis(100)) {
+                WaitOutcome::Exited(exit) => break exit,
+                // Polling is not an execution deadline. Explicit shutdown still
+                // terminates owned read tasks through the existing supervisor.
+                WaitOutcome::TimedOut => continue,
+                WaitOutcome::Stale => {
+                    return Err("Core operation lost its supervised process lease".to_owned())
+                }
             }
         };
         let wait_ms = wait_started.elapsed().as_secs_f64() * 1000.0;
