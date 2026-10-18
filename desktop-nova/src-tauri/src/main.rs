@@ -3008,10 +3008,44 @@ mod full_launch_plan_tests {
             ];
             let worker_started = std::time::Instant::now();
             let child = host.supervisor.spawn(spec).map_err(|e|e.to_string())?.child;
+            // Hold this exact process object through exit; never query a PID
+            // after it might have been reused. Observation is test-only.
+            #[cfg(windows)]
+            use std::os::windows::io::{AsRawHandle, FromRawHandle};
+            #[cfg(windows)]
+            let worker_metrics_handle = {
+                use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION};
+                let handle = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, 0, child.pid) };
+                if handle.is_null() { None } else {
+                    Some(unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(handle.cast()) })
+                }
+            };
             measured["workerLaunched"]=serde_json::json!(true);
             let timeout = env::var("NOVA_FULL_CPU_TEST_TIMEOUT_SECS").ok().map(|v|v.parse::<u64>().unwrap()).unwrap_or(1200);
             let wait = host.supervisor.wait_for_exit(&child, Duration::from_secs(timeout));
             measured["workerElapsedMs"]=serde_json::json!(worker_started.elapsed().as_millis());
+            measured["workerProcessMetrics"]=serde_json::json!({"status":"not_collected"});
+            #[cfg(windows)]
+            if let Some(handle) = worker_metrics_handle.as_ref() {
+                use windows_sys::Win32::{Foundation::FILETIME, System::Threading::{GetProcessTimes, GetProcessIoCounters, IO_COUNTERS}};
+                let raw = handle.as_raw_handle().cast();
+                let mut creation: FILETIME = unsafe { std::mem::zeroed() };
+                let mut exit: FILETIME = unsafe { std::mem::zeroed() };
+                let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
+                let mut user: FILETIME = unsafe { std::mem::zeroed() };
+                if unsafe { GetProcessTimes(raw, &mut creation, &mut exit, &mut kernel, &mut user) } != 0 {
+                    let ms = |v: FILETIME| (((v.dwHighDateTime as u64) << 32) | v.dwLowDateTime as u64) as f64 / 10000.0;
+                    measured["workerProcessMetrics"]=serde_json::json!({"status":"collected","userCpuMs":ms(user),
+                        "kernelCpuMs":ms(kernel),"totalProcessCpuMs":ms(user)+ms(kernel),
+                        "scope":"all threads of the actual CPU worker, not wall time or server CPU"});
+                    let mut io: IO_COUNTERS = unsafe { std::mem::zeroed() };
+                    if unsafe { GetProcessIoCounters(raw, &mut io) } != 0 {
+                        measured["workerProcessMetrics"]["readTransferBytes"]=serde_json::json!(io.ReadTransferCount);
+                        measured["workerProcessMetrics"]["writeTransferBytes"]=serde_json::json!(io.WriteTransferCount);
+                        measured["workerProcessMetrics"]["ioMeaning"]=serde_json::json!("OS transfer counters, not physical disk wait");
+                    }
+                }
+            }
             let exit = match wait {
                 WaitOutcome::Exited(exit) => exit,
                 other => return Err(format!("owned {mode_name} CPU worker did not exit normally: {other:?}")),
@@ -3042,7 +3076,8 @@ mod full_launch_plan_tests {
                 "readySummary":{"directorySections":ready_value["total_chunks"],"builtSections":ready_value["built_chunks"],
                     "renderableSections":ready_value["renderable_chunks"],"emptyMeshSections":ready_value["empty_mesh_chunks"]},
                 "actualPhaseEvidence":phase_evidence,
-                "workerExit":exit.exit_code,"GPU":"not_executed","firstFrame":"not_measured","viewerCount":0,
+                "workerExit":exit.exit_code,"workerProcessMetrics":measured["workerProcessMetrics"],
+                "GPU":"not_executed","firstFrame":"not_measured","viewerCount":0,
                 "shaderpackBoundary":if display_mode == RenderDisplayMode::Full {
                     "actual Iris preflight; BuildCache has no renderer-only fields, matching production Full CPU role"
                 } else {
