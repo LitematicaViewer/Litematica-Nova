@@ -9,7 +9,11 @@ import { TableCell } from "./ui/table";
  * list and the detail table, `enumerator.css` for the enumerator window), so
  * markup only supplies the value and never declares a style property inline.
  * Both stylesheets must keep a `height: var(--material-list-virtual-spacer-height)`
- * rule for any surface that renders these spacers.
+ * rule *that wins the cascade* for every surface that renders these spacers:
+ * `.material-list-table th, .material-list-table td { height: 40px }` outranks a
+ * bare `.material-list-virtual-spacer-cell`, so the rule matches through
+ * `.material-list-table tbody tr` (or keeps `!important`) and
+ * `scripts/virtual-spacer.test.mjs` resolves the cascade to prove it.
  */
 const VIRTUAL_SPACER_HEIGHT_PROPERTY = "--material-list-virtual-spacer-height";
 

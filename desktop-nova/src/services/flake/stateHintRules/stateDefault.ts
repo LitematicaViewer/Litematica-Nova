@@ -10,6 +10,7 @@ export const SNOWY_TRUE_HINT_RELPATH = "data/flake/state_hint/snowy_true.png";
 export const PERSISTENT_FALSE_BLOCK_ID = "data/flake/state_hint/persistent_false.png";
 // 反色遮罩
 export const LEVEL_0_OVERLAY_RELPATH = "data/flake/state_overlay/level_0.png";
+export const OCCUPIED_TRUE_RELPATH = "data/flake/state_overlay/occupied_true.png";
 export const AXIS_X_OVERLAY_RELPATH = "data/flake/state_overlay/axis_x.png";
 export const AXIS_Z_OVERLAY_RELPATH = "data/flake/state_overlay/axis_z.png";
 export const FACING_NORTH_OVERLAY_RELPATH = "data/flake/state_overlay/facing_north.png";
@@ -209,9 +210,43 @@ export const COPPER_WALL_TORCH_BLOCK_ID = "minecraft:copper_wall_torch";
 export const REDSTONE_WALL_TORCH_BLOCK_ID = "minecraft:redstone_wall_torch";
 export const REDSTONE_WALL_TORCH_OFF_BLOCK_ID = "minecraft:redstone_wall_torch_off";
 
+// 16 种染料颜色，顺序与 Minecraft 调试模式一致。后续床、地毯、羊毛等
+// 彩色方块都可以复用这份列表并通过字符串拼接触发贴图名。
+export const DYE_COLORS = [
+  "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+  "light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black",
+] as const;
+
+// 床：颜色 + part 拼接贴图名，避免为每种颜色复制一份规则。
+const BED_BLOCK_IDS = new Set<string>(DYE_COLORS.map((color) => `minecraft:${color}_bed`));
+// block_2d 的床顶贴图默认朝向 east；canvas 正角度为顺时针，因此
+// east=0°、south=90°、west=180°、north=270°。
+const BED_FACING_QUARTER_TURNS: Record<string, number> = {
+  east: 0,
+  south: 1,
+  west: 2,
+  north: 3,
+};
+
+function resolveBedStateHintRule(blockId: string, states: Record<string, string>): FlakeStateHintRule | null {
+  const id = normalizeBlockId(blockId);
+  if (!BED_BLOCK_IDS.has(id)) return null;
+  const part = states.part;
+  if (part !== "head" && part !== "foot") return null;
+  const color = id.slice("minecraft:".length, -"_bed".length);
+  return {
+    mode: "replace",
+    iconBlockIds: [`minecraft:${color}_bed_top_${part}`],
+    baseImageRotateQuarterTurns: BED_FACING_QUARTER_TURNS[states.facing || ""] ?? 0,
+    subtractImageRelPaths: states.occupied === "true" ? [OCCUPIED_TRUE_RELPATH] : undefined,
+  };
+}
 
 /** 图标解析规则 */
 export async function resolveManualStateHintRule(blockId: string, states: Record<string, string>): Promise<FlakeStateHintRule | null> {
+  // 彩色方块在 switch 前统一解析，避免为 16 种颜色重复规则体。
+  const bedRule = resolveBedStateHintRule(blockId, states);
+  if (bedRule) return bedRule;
   switch (normalizeBlockId(blockId)) {
     // 草方块
     case "minecraft:grass_block": {

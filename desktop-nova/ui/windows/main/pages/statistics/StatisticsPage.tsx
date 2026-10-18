@@ -376,11 +376,17 @@ const MaterialTable = React.memo(function MaterialTable({ materials, asItems, mu
   onHover?: (material: MaterialItem | null) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const virtual = useVirtualWindow(materials,scrollRef,48,8);
+  // Must be the height the browser actually lays out (see materials.css): detail rows are a
+  // 32px icon plus 9px vertical padding plus the collapsed border; summary rows are pinned to
+  // 48px. A round number here would make the spacer disagree with the rendered rows.
+  const virtual = useVirtualWindow(materials,scrollRef,breakdown ? 51 : 48,8);
   useLayoutEffect(() => { if(scrollRef.current) scrollRef.current.scrollTop = 0; },[materials]);
+  // Zebra striping is keyed on the row's position in the *data*, never on its DOM slot: the
+  // virtual window slides, so a `:nth-child` stripe would invert on every scrolled row.
+  const rowParityClass = (absoluteIndex: number) => (absoluteIndex % 2 === 1 ? "material-list-row-odd" : "material-list-row-even");
   if (!breakdown) return <div className="material-table-scroll material-summary-scroll" ref={scrollRef}><ul className="material-summary-list" aria-label="材料列表">
     {virtual.topSpacerHeight > 0 && <VirtualSpacerItem className="material-virtual-spacer" height={virtual.topSpacerHeight} /> }
-    {virtual.visibleItems.map(material => <li key={material.id} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
+    {virtual.visibleItems.map((material, index) => <li key={material.id} className={rowParityClass(virtual.startIndex + index)} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
       <BlockIcon blockId={material.iconHint} />
       <span className="material-summary-name" title={material.id}>{material.name}
         {material.materialStatus !== "item" && <small>{material.materialStatus === "no_item" ? "无直接对应物品" : "未知物品"}</small>}
@@ -392,7 +398,7 @@ const MaterialTable = React.memo(function MaterialTable({ materials, asItems, mu
   </ul></div>;
   return <div className="material-table-scroll material-detail-table-scroll" ref={scrollRef}><Table className="material-list-table beta-material-table">
     <TableHeader><TableRow><TableHead scope="col">材料</TableHead>{breakdown && <><TableHead scope="col">建造用量</TableHead><TableHead scope="col">容器物品</TableHead></>}<TableHead scope="col">{breakdown ? "合计" : "数量"}</TableHead></TableRow></TableHeader>
-    <TableBody>{virtual.topSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={4} height={virtual.topSpacerHeight} /></TableRow>}{virtual.visibleItems.map(material => <TableRow key={material.id} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
+    <TableBody>{virtual.topSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={4} height={virtual.topSpacerHeight} /></TableRow>}{virtual.visibleItems.map((material, index) => <TableRow key={material.id} className={rowParityClass(virtual.startIndex + index)} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
       <TableCell><div className="beta-material-name"><BlockIcon blockId={material.iconHint} /><span title={material.id}>{material.name}{material.materialStatus !== "item" && <small>{material.materialStatus === "no_item" ? "无直接对应物品" : "未知物品"}</small>}</span></div></TableCell>
       {breakdown && <><TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.blockCount * multiplier, asItems)}</TableCell><TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.containerItemCount * multiplier, asItems)}</TableCell></>}
       <TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.totalCount * multiplier, asItems)}</TableCell>

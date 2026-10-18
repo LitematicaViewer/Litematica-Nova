@@ -26,6 +26,8 @@
 
 这些是实际组件替换，不是给三套业务页面换色。投影库卡片、导航和材料列表属于 Nova 的共享功能组合；原生 Viewer 不属于这些 Web 控件，也不宣称通过此接入获得 DOM 内嵌渲染能力。
 
+**Button 的选中态不来自这两个 registry。** 两个上游的 Button 都只描述动作状态：shadcn/ui `new-york-v4` 的 `buttonVariants` 是 `hover` / `focus-visible` / `disabled` / `aria-invalid`，8bitcn/ui 的 `button.tsx` 只额外加 `active:translate-y-1` 与像素边框装饰。选中态在两者都属于 Toggle：shadcn 为 `data-[state=on]:bg-accent data-[state=on]:text-accent-foreground`，8bitcn 覆写为 `data-[state=on]:bg-primary data-[state=on]:text-primary-foreground`。Nova 用 Button 承载开关语义（`aria-pressed`），因此按上述 Toggle 口径在共享层补齐该状态，而不是另抄一份 Toggle 组件；实现与取舍见 [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md) 的 V1.21 一节。
+
 ## MIT 许可文本
 
 以下许可适用于上述引用的组件源码。版权分别归原作者所有：

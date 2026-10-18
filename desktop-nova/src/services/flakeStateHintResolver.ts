@@ -22,7 +22,8 @@ interface ResolveFlakeLayerBlockImageInput {
   paletteEntry: LayerPaletteEntry | null | undefined;
   propertyPool: Array<Record<string, string>>;
   enabled: boolean;
-  sideTextureDataUrl: string | null;
+  /** Rasterises the +Y model plane; only consulted when the 2D slot has no icon. */
+  modelTopTexture: () => Promise<string | null>;
 }
 
 const hintImageCache = new Map<string, Promise<string | null>>();
@@ -389,11 +390,18 @@ export async function resolveFlakeLayerBlockImage({
   paletteEntry,
   propertyPool,
   enabled,
-  sideTextureDataUrl,
+  modelTopTexture,
 }: ResolveFlakeLayerBlockImageInput): Promise<string | null> {
-  // The source-version database already applied model UVs, Alpha and tint.
-  // Only an explicit state-hint rule may replace that plane with its layering resource.
-  const baseIconUrl = sideTextureDataUrl;
+  // The layer canvas is a top-down slice, so its base image is the 2D block
+  // icon. A model plane is a rasterised fallback for icon packs that do not
+  // cover the block yet, and it must use the +Y (top) face rather than -Z.
+  let baseIconUrl: string | null = null;
+  try {
+    baseIconUrl = await getBlockIconDataUrl(blockId, "layering");
+  } catch {
+    baseIconUrl = null;
+  }
+  if (!baseIconUrl) baseIconUrl = await modelTopTexture();
   if (!enabled) return baseIconUrl;
 
   const states = extractLayerPaletteStates(paletteEntry, propertyPool);
@@ -405,7 +413,15 @@ export async function resolveFlakeLayerBlockImage({
   const rule = await resolveManualStateHintRule(blockId, states);
   if (!rule) return baseIconUrl;
 
+  // A rule whose base texture is part of the rule must not compose its masks
+  // over an unrelated icon when the active 2D pack lacks that texture. Beds are
+  // one example: without *_bed_top_* the occupied mask would be drawn over the
+  // whole bed icon.
+  const wantsExplicitBase =
+    (rule.iconBlockIds?.length ?? 0) > 0 || (rule.baseImageRelPaths?.length ?? 0) > 0;
   const baseImageUrls = await resolveRuleBaseImageUrls(rule);
+  if (wantsExplicitBase && !baseImageUrls) return baseIconUrl;
+
   const resolvedBaseIconUrl = baseImageUrls && baseImageUrls.length > 0
     ? (baseImageUrls[baseImageUrls.length - 1] || baseIconUrl)
     : baseIconUrl;

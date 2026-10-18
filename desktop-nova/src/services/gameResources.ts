@@ -889,8 +889,13 @@ export async function getActiveIconSearchRoots(slot: BlockIconSlot = "material_l
     await pushRoot(itemEntry);
   }
   if (slot === "layering") {
-    await pushRoot(snapshot.active_layering_block_icons);
-    roots.push({ source: "workspace", root: "pack-in/flake/layering", label: "内建状态提示纹理" });
+    // The layer canvas is a 2D consumer; never let a stale 3D activation leak
+    // into it. Fall back to the builtin 2D pack when the active entry is 3D.
+    await pushRoot(
+      supportsBlockIconLayering(snapshot.active_layering_block_icons)
+        ? snapshot.active_layering_block_icons
+        : BUILTIN_BLOCK_ICON,
+    );
     return roots;
   }
 

@@ -50,6 +50,12 @@
     --panel-shadow: 5px 5px 0 #72775f;
     --ln-body-font-family: "Nova Pixel", "Microsoft YaHei UI", monospace;
     --ln-body-font-size: 16px;
+    /* Selected Button palette, taken from 8bitcn's own Toggle (`bg-primary`). References
+       to the mode-scoped tokens above resolve per light/dark, so one declaration is
+       enough; the shared grey mix in `modern.css` is what this replaces. */
+    --nova-selected-surface: var(--primary);
+    --nova-selected-hover: color-mix(in oklab, var(--primary) 86%, var(--background));
+    --nova-selected-foreground: var(--primary-foreground);
 }
 }
 
@@ -66,6 +72,21 @@ button:active:not(:disabled):not(:where([role="checkbox"], [role="radio"])) { bo
 [data-slot="button-decorations"] { --color-foreground: var(--border); }
 [data-slot="button"] { margin: 4px; position: relative; }
 [data-slot="button"][data-variant="ghost"], [data-slot="button"][data-variant="link"] { margin: 0; }
+/* Selected button. 8bitcn's own Toggle overrides the shared `bg-accent` to `bg-primary`,
+   so the palette above makes a selected plate a solid primary fill instead of the shared
+   grey one. Two things stay local to this theme: the stepped border is recoloured to the
+   label colour (its `--border` green would disappear into the fill) and the raised drop
+   shadow - which only `outline` still carries here, `secondary` is already flat - turns
+   into an inset edge, so the plate reads as held down. */
+html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"]:is([aria-pressed="true"], [data-state="on"]):is([data-variant="secondary"], [data-variant="outline"]) {
+    box-shadow: inset 2px 2px 0 color-mix(in oklab, var(--foreground) 35%, transparent);
+}
+html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"]:is([aria-pressed="true"], [data-state="on"]):is([data-variant="secondary"], [data-variant="outline"]) [data-slot="button-decorations"] > span {
+    background-color: var(--primary-foreground);
+}
+html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"]:is([aria-pressed="true"], [data-state="on"]):is([data-variant="secondary"], [data-variant="outline"]) [data-slot="button-decorations"] > span.nova-pixel-fill-soft {
+    background-color: color-mix(in oklab, var(--primary-foreground) 30%, transparent);
+}
 .dropdown-trigger { margin: 0; }
 th { border-bottom: 2px solid var(--border); }
 img { image-rendering: pixelated; }

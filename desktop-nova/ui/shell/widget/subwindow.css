@@ -278,6 +278,8 @@
 .material-list-table {
     border: 0;
     color: var(--foreground);
+    /* Stripe colour for virtualized rows; declared here so the rules below never hardcode it. */
+    --material-list-row-odd-background: rgb(255 255 255 / 2%);
 }
 
 .material-list-table th {
@@ -294,8 +296,30 @@
     vertical-align: middle;
 }
 
-.material-list-table tbody tr:nth-child(odd) {
-    background: rgb(255 255 255 / 2%);
+/* Virtualized rows carry their parity as a class derived from the data index
+   (`material-list-row-odd/even`), so the stripe stays attached to the same material while the
+   virtual window slides. A `:nth-child` stripe is anchored to the DOM slot instead: every
+   scrolled row changes slot, which inverts the whole pattern on each step and then once more
+   whenever the top spacer row appears. */
+.material-list-table .material-list-row-odd {
+    background: var(--material-list-row-odd-background);
+}
+
+.material-list-table .material-list-row-even {
+    background: none;
+}
+
+/* Positional fallback for rows without a parity class (non-virtualized tables such as the
+   enumerator collection list). `:where()` keeps its specificity at a single `:nth-child`, so the
+   stripes above and any hover highlight both outrank it. */
+:where(.material-list-table tbody tr):nth-child(odd) {
+    background: var(--material-list-row-odd-background);
+}
+
+/* Declared after the stripes so a virtualized row still highlights on hover. */
+.material-list-table .material-list-row-odd:hover,
+.material-list-table .material-list-row-even:hover {
+    background: var(--accent);
 }
 
 .material-list-icon-col {
@@ -563,6 +587,29 @@
     width: 300px;
 }
 
+/* The three row actions are one group and belong on one line. `Button` carries `shrink-0` and
+   `button-row` is allowed to wrap, so whenever the fixed actions column came out narrower than
+   the three buttons the last one ("发送...") dropped onto a second line - which happened in the
+   bitmap theme (16px glyphs), under a <=760px viewport, and inside the library page's narrower
+   panel. Let them shrink and ellipsize instead of wrapping; the column widths below are sized so
+   the labels normally stay whole. */
+.local-browser-action-row {
+    flex-wrap: nowrap;
+    gap: 6px;
+}
+
+.local-browser-action-row > [data-slot="button"] {
+    flex-shrink: 1;
+    min-width: 0;
+}
+
+.local-browser-action-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .local-browser-icon-cell,
 .local-browser-size-cell {
     text-align: center;
@@ -592,7 +639,7 @@
     }
 
     .local-browser-actions-col {
-        width: 220px;
+        width: 18rem;
     }
 
 }

@@ -359,18 +359,21 @@ function EnumeratorContent({
 
   const leftValueTableRef = useRef<HTMLDivElement | null>(null);
   const rightValueTableRef = useRef<HTMLDivElement | null>(null);
+  // The rendered value row is a 32px icon plus 6px vertical padding plus the collapsed
+  // border (see subwindow.css `.material-list-table th, .material-list-table td`), so the
+  // spacer must reserve 45px per row rather than the old round 40px.
   const {
     visibleItems: visibleLeftRows,
     startIndex: leftStartIndex,
     topSpacerHeight: leftTopSpacerHeight,
     bottomSpacerHeight: leftBottomSpacerHeight,
-  } = useVirtualWindow(filteredLeftRows, leftValueTableRef, 40, 10);
+  } = useVirtualWindow(filteredLeftRows, leftValueTableRef, 45, 10);
   const {
     visibleItems: visibleRightRows,
     startIndex: rightStartIndex,
     topSpacerHeight: rightTopSpacerHeight,
     bottomSpacerHeight: rightBottomSpacerHeight,
-  } = useVirtualWindow(filteredRightRows, rightValueTableRef, 40, 10);
+  } = useVirtualWindow(filteredRightRows, rightValueTableRef, 45, 10);
 
   const handleCreateCollection = () => {
     hydrateRightEditor(null);

@@ -102,12 +102,18 @@
     color: #ffff00;
 }
 
-[data-slot="button"][aria-pressed="true"] {
+/* `aria-pressed` is what the shared Button's call sites set; `data-state="on"` is the
+   attribute a Radix Toggle publishes, kept here so swapping in a Toggle does not
+   silently drop the pressed texture. Two separate selectors rather than `:is()` so the
+   cascade test can tell the pressed and resting rules apart. */
+[data-slot="button"][aria-pressed="true"],
+[data-slot="button"][data-state="on"] {
     --ln-minecraft-button-image: var(--ln-minecraft-button-check-image, url("./resource/button/button_check_min.png"));
     color: #ffff00;
 }
 
-[data-slot="button"][aria-pressed="true"]:hover:not(:disabled) {
+[data-slot="button"][aria-pressed="true"]:hover:not(:disabled),
+[data-slot="button"][data-state="on"]:hover:not(:disabled) {
     --ln-minecraft-button-image: var(--ln-minecraft-button-check-hover-image, url("./resource/button/button_check_hover_min.png"));
     color: #ffff00;
 }
@@ -672,13 +678,26 @@ html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientatio
     border: 0;
 }
 
-[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"]:nth-of-type(odd) > *,
-.table > [data-slot="table-body"] > [data-slot="table-row"]:nth-of-type(odd) > * {
+/* Virtualized rows carry their parity as a class derived from the data index; keying the stripe
+   on it keeps a row's colour stable while the virtual window slides. Rows without a parity class
+   (plain, non-virtualized tables) keep the positional stripe. */
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"]:not(.material-list-row-odd, .material-list-row-even):nth-of-type(odd) > *,
+.table > [data-slot="table-body"] > [data-slot="table-row"]:not(.material-list-row-odd, .material-list-row-even):nth-of-type(odd) > * {
     background-color: var(--ln-minecraft-table-row-background-odd);
 }
 
-[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"]:nth-of-type(even) > *,
-.table > [data-slot="table-body"] > [data-slot="table-row"]:nth-of-type(even) > * {
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"]:not(.material-list-row-odd, .material-list-row-even):nth-of-type(even) > *,
+.table > [data-slot="table-body"] > [data-slot="table-row"]:not(.material-list-row-odd, .material-list-row-even):nth-of-type(even) > * {
+    background-color: var(--ln-minecraft-table-row-background-even);
+}
+
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"].material-list-row-odd > *,
+.table > [data-slot="table-body"] > [data-slot="table-row"].material-list-row-odd > * {
+    background-color: var(--ln-minecraft-table-row-background-odd);
+}
+
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"].material-list-row-even > *,
+.table > [data-slot="table-body"] > [data-slot="table-row"].material-list-row-even > * {
     background-color: var(--ln-minecraft-table-row-background-even);
 }
 

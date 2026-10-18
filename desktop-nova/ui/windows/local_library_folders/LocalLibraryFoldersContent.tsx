@@ -521,9 +521,9 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                         <TableCell className="local-browser-name-cell" title={displayFilePath(entry.path)}>{entry.name}</TableCell>
                         <TableCell className="local-browser-size-cell">{entry.is_dir ? "-" : formatSize(entry.file_size)}</TableCell>
                         <TableCell className="local-browser-actions-cell">
-                          <div className="button-row subwindow-wrap-row">
+                          {/* One group, one line: see `.local-browser-action-row` in subwindow.css. */}
+                          <div className="button-row local-browser-action-row">
                             <Button
-                             
                               type="button"
                               onClick={(event) => {
                                 event.stopPropagation();
@@ -531,10 +531,9 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                                   .catch((error) => setStatus(`打开目录失败：${String(error)}`));
                               }}
                             >
-                              打开目录
+                              <span className="local-browser-action-label">打开目录</span>
                             </Button>
                             <Button
-                             
                               type="button"
                               disabled={!canActivate}
                               onClick={(event) => {
@@ -542,10 +541,9 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                                 handleActivateEntry(entry).catch((error) => setStatus(`激活失败：${String(error)}`));
                               }}
                             >
-                              {busyKey === `activate:${entry.path}` ? "激活中..." : "激活"}
+                              <span className="local-browser-action-label">{busyKey === `activate:${entry.path}` ? "激活中..." : "激活"}</span>
                             </Button>
                             <Button
-                             
                               type="button"
                               disabled={!canActivate}
                               onClick={(event) => {
@@ -553,7 +551,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                                 handleOpenSendDialog(entry);
                               }}
                             >
-                              发送...
+                              <span className="local-browser-action-label">发送...</span>
                             </Button>
                           </div>
                         </TableCell>

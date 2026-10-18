@@ -43,7 +43,7 @@
 .material-summary-scroll { flex: 1; min-height: 0; }
 .material-summary-list { list-style: none; margin: 0; padding: 0 10px 0 0; }
 .material-summary-list > li { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 8px; border-radius: var(--radius, 0); }
-.material-summary-list > li:nth-child(even) { background: color-mix(in srgb, var(--muted) 45%, transparent); }
+.material-summary-list > li.material-list-row-odd { background: color-mix(in srgb, var(--muted) 45%, transparent); }
 .material-summary-list > li:hover { background: var(--accent); }
 .material-summary-name { overflow-wrap: anywhere; min-width: 0; }
 .material-summary-name small { display: block; color: var(--muted-foreground); }
@@ -84,12 +84,19 @@
 .material-list-hover-popup { position:fixed; z-index:10000; pointer-events:none; max-width:min(26rem,calc(100vw - 8px)); padding:var(--ln-space-3); border:1px solid var(--border); border-radius:var(--radius); background:var(--popover); color:var(--foreground); box-shadow:var(--panel-shadow); font-size:.875rem; line-height:1.6; overflow-wrap:anywhere; }
 .material-list-hover-popup-item-row { display:flex; align-items:center; gap:var(--ln-space-2); }
 
-.material-table-scroll { min-height:0; min-width:0; overflow:auto; scrollbar-color:var(--muted-foreground) var(--background); scrollbar-width:thin; }
+.material-table-scroll { min-height:0; min-width:0; overflow:auto; overflow-anchor:none; scrollbar-gutter:stable; scrollbar-color:var(--muted-foreground) var(--background); scrollbar-width:thin; }
 .material-detail-table-scroll { height:22rem; max-height:40vh; }
 .material-summary-list > li:not(.material-virtual-spacer) { min-height:48px; max-height:48px; padding-top:6px; padding-bottom:6px; }
 .material-summary-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .material-summary-list > .material-virtual-spacer { display:block; height:var(--material-list-virtual-spacer-height, 0px); padding:0; border:0; border-radius:0; background:none; }
 .material-detail-table-scroll tbody tr:not(:has(.material-list-virtual-spacer-cell)) { height:48px; }
-.material-list-virtual-spacer-cell { height:var(--material-list-virtual-spacer-height, 0px); padding:0!important; border:0; }
+/* Virtual-list contract (see scripts/virtual-spacer.test.mjs). The spacer must *win* the
+   cascade for `height`: `.material-list-table th, .material-list-table td` declares 40px and
+   outranks a bare `.material-list-virtual-spacer-cell` (0,1,1 vs 0,1,0) in the same layer, which
+   collapsed the spacer to one row and made the scroll height track the rendered rows only - the
+   container then clamps scrollTop and the view ping-pongs between two offsets. Matching through
+   `.material-list-table tbody tr` keeps it ahead without `!important` (banned by the style
+   checker). The row it has to match is 51px: 32px icon + 9px padding + 1px collapsed border. */
+.material-list-table tbody tr > .material-list-virtual-spacer-cell { height:var(--material-list-virtual-spacer-height, 0px); padding:0; border:0; }
 .material-detail-table-scroll .beta-material-name > span { white-space:nowrap; }
 }

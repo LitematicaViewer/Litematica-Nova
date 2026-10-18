@@ -88,6 +88,54 @@ export interface LayerPaletteVisuals {
 type LayerSourceVersion = Pick<BlockDatabaseVersion, "version" | "blockCount"> & { dataVersion: number | null };
 let databaseVersions: Promise<LayerSourceVersion[]> | null = null;
 const paletteVisuals = new Map<string, Promise<LayerPaletteVisuals>>();
+const modelTopTextures = new Map<string, Promise<string | null>>();
+
+/** Drops lazily-rasterised model planes after block resources change. */
+export function clearFlakeModelTopTextureCache(): void {
+  modelTopTextures.clear();
+}
+
+/**
+ * Rasterises the top-down (+Y) model plane for one state.
+ *
+ * Only called when the 2D icon slot has no icon for the block. The result is
+ * cached per version/state because a palette can repeat the same state.
+ */
+export function loadFlakeModelTopTexture(version: string, state: string): Promise<string | null> {
+  const key = `${version}\u0000${state}`;
+  let pending = modelTopTextures.get(key);
+  if (!pending) {
+    void loadFlakeModelTopTextures(version, [state]);
+    pending = modelTopTextures.get(key) ?? Promise.resolve(null);
+  }
+  return pending;
+}
+
+/**
+ * Rasterises several missing model planes in one native call.
+ *
+ * A per-state query would spawn `litematica_core` (and decode the block
+ * database) once per icon, which is far more expensive than one batch.
+ */
+export function loadFlakeModelTopTextures(version: string, states: string[]): Promise<void> {
+  const keyOf = (state: string) => `${version}\u0000${state}`;
+  const missing = [...new Set(states)].filter(state => !modelTopTextures.has(keyOf(state)));
+  if (!missing.length) return Promise.resolve();
+
+  const batch: Promise<Record<string, BlockDatabaseState>> = queryBlockDatabase({
+    version,
+    states: missing,
+    topPlane: true,
+  })
+    .then(result => result.states ?? {})
+    .catch(() => ({}));
+
+  for (const state of missing) {
+    modelTopTextures.set(keyOf(state), batch.then(entries => entries[state]?.topTextureDataUrl ?? null));
+  }
+  while (modelTopTextures.size > 256) modelTopTextures.delete(modelTopTextures.keys().next().value!);
+  return batch.then(() => undefined);
+}
 
 /** Resolve source-version states together: one helper launch, one database
  * decode, one versioned mapping. Never use names or the latest game by default. */
@@ -101,7 +149,7 @@ export async function loadLayerPaletteVisuals(meta: LayerSliceMeta): Promise<Lay
   const key = JSON.stringify([meta.minecraft_data_version, version.version, states]);
   if (!paletteVisuals.has(key)) {
     if (paletteVisuals.size >= 4) paletteVisuals.delete(paletteVisuals.keys().next().value!);
-    paletteVisuals.set(key, queryBlockDatabase({ version: version.version, states: [...new Set(states)] }).then(result => {
+    paletteVisuals.set(key, queryBlockDatabase({ version: version.version, states: [...new Set(states)], noTextures: true }).then(result => {
       // An unavailable table/model is a retryable read, not a valid persisted
       // palette. Re-open/reload may succeed after resources finish installing.
       if (states.some(state => !result.states?.[state]?.mapColor || result.states[state].missing)) paletteVisuals.delete(key);

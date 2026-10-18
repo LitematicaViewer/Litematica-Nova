@@ -194,6 +194,11 @@
     min-height: 0;
     height: 100%;
     overflow: auto;
+    /* The virtual window replaces content above the viewport on every step; browser scroll
+       anchoring would fight those layout shifts and re-scroll the container, and a toggling
+       horizontal scrollbar would change clientHeight under the ResizeObserver. */
+    overflow-anchor: none;
+    scrollbar-gutter: stable;
     border: 1px solid var(--border);
     background: var(--background);
 }
@@ -344,9 +349,29 @@
    clamps scrollTop, the scroll listener pushes the new value back into state,
    and the view ping-pongs between two offsets - the mid-list oscillation users
    see in the enumerator window.
+
+   The same contract as materials.css: the spacer declaration must *win* the
+   cascade, which is why it keeps `!important` (it is baselined) instead of
+   relying on specificity - a theme rule can paint `.material-list-table td`
+   with any specificity.
+
+   The stripes below are keyed on the parity class that EnumeratorWindow derives
+   from `startIndex + index`, never on `:nth-child`/`:nth-of-type`: the window
+   slides, so a positional stripe would invert on every scrolled row.
    --------------------------------------------------------------------------- */
-.enumerator-window .material-list-row-odd {
+.enumerator-window .material-list-table .material-list-row-odd {
     background: var(--muted);
+}
+
+/* Declared after the stripe (same specificity) so a virtualized row still highlights on hover. */
+.enumerator-window .material-list-table .material-list-row-odd:hover,
+.enumerator-window .material-list-table .material-list-row-even:hover {
+    background: var(--accent);
+}
+
+/* Selection outranks stripe and hover, including on the non-virtualized collection list. */
+.enumerator-window .material-list-table .enumerator-row-selected {
+    background: var(--accent);
 }
 
 .enumerator-window .material-list-virtual-spacer {

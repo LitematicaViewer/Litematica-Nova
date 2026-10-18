@@ -63,6 +63,24 @@ html[data-theme][data-color-scheme] {
     --ln-scroll-hover: var(--muted-foreground);
     --ln-scroll-active: var(--foreground);
 }
+
+/* Selected (toggled) Button surface. The registries put selection on Toggle, not on
+   Button, so the value is decided here and `styles/controls.css` only spends it.
+   Deliberately not the accent fill shadcn's Toggle uses: this theme's resting button is
+   already `--secondary` (#e4e4e7), and accent (#eeeeef) would be *lighter* than an
+   unselected button - 1.09:1, i.e. no selected state at all. The mix walks one step
+   toward the action colour instead: 1.85:1 against the resting fill, 2.25:1 against the
+   page, body text still 7.6:1 (dark: 2.03 / 2.85 / 5.9). Hover goes one step further so
+   it cannot be mistaken for the selection switching off; it stays under a ratio that
+   would cost label contrast (30% keeps it above 4.5:1).
+   It has to live in `tokens`, not in the `components` block above: 8bitcn replaces all
+   three with its own Toggle's solid primary plate, and a token declared in a higher layer
+   would win that contest no matter which stylesheet loaded last. */
+:root {
+    --nova-selected-surface: color-mix(in oklab, var(--secondary) 74%, var(--primary));
+    --nova-selected-hover: color-mix(in oklab, var(--secondary) 70%, var(--primary));
+    --nova-selected-foreground: var(--foreground);
+}
 }
 
 @layer components {
@@ -82,7 +100,9 @@ button, .btn, .dropdown-trigger {
 button:not(.nav-item):not(.nav-expand) { padding: 6px 12px; }
 button:hover:not(:disabled), .btn:hover:not(:disabled) { background: var(--accent); border-color: var(--ring); }
 button:active:not(:disabled) { background: var(--secondary); }
-button[aria-pressed="true"] { background: var(--accent); border-color: var(--primary); }
+/* A pressed button is not styled here. `styles/controls.css` owns that state: it is the
+   layer that also declares the `secondary` variant fill this rule used to lose to, and
+   its (0,5,1) selected rule is what makes the state visible at all. */
 button:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .5; cursor: not-allowed; }
 button.primary, button[data-variant="default"] { color: var(--primary-foreground); background: var(--primary); border-color: var(--primary); }
 button.primary:hover:not(:disabled), button[data-variant="default"]:hover:not(:disabled) { filter: brightness(.94); }

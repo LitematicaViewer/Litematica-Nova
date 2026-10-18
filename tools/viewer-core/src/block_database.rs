@@ -12,6 +12,17 @@ use std::{
     sync::OnceLock,
 };
 
+/// The view plane used when a block state is rasterised for the layer canvas.
+///
+/// Minecraft's vertical axis is Y, so a top-down layer canvas must look at the
+/// +Y face. The legacy `-Z` side plane is kept for callers that want a front
+/// elevation, but it is not a substitute for the top view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plane {
+    Top,
+    Side,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct Registry {
     pub blocks: BTreeMap<String, TargetBlock>,
@@ -158,7 +169,13 @@ fn transform(mut point: [f32; 3], element: &Element, variant: &Variant) -> [f32;
     }
     point
 }
-fn face_plane(element: &Element, variant: &Variant, side: u8, flat: bool) -> [[f32; 2]; 4] {
+fn face_plane(
+    element: &Element,
+    variant: &Variant,
+    side: u8,
+    plane: Plane,
+    flat: bool,
+) -> [[f32; 2]; 4] {
     let (a, b, depth, value) = match side {
         0 => (0, 2, 1, element.from[1]),
         1 => (0, 2, 1, element.to[1]),
@@ -177,10 +194,17 @@ fn face_plane(element: &Element, variant: &Variant, side: u8, flat: bool) -> [[f
         point[a] = element.from[a] + (element.to[a] - element.from[a]) * u;
         point[b] = element.from[b] + (element.to[b] - element.from[b]) * v;
         out[index] = if flat {
+            // The fallback keeps the face's own axes so a model without the
+            // requested facing still produces a usable texture.
             [point[a] * 2.0, 32.0 - point[b] * 2.0]
         } else {
             let p = transform(point, element, variant);
-            [p[0] * 2.0, 32.0 - p[1] * 2.0]
+            match plane {
+                // Minecraft's height axis is Y: looking down projects X/Z.
+                Plane::Top => [p[0] * 2.0, 32.0 - p[2] * 2.0],
+                // Front elevation keeps the historical X/Y projection.
+                Plane::Side => [p[0] * 2.0, 32.0 - p[1] * 2.0],
+            }
         };
     }
     out
@@ -190,11 +214,15 @@ fn plane_area(quad: &[[f32; 2]; 4]) -> f32 {
         - (quad[1][1] - quad[0][1]) * (quad[3][0] - quad[0][0]))
         .abs()
 }
-fn select_plane<'a>(element: &'a Element, variant: &Variant) -> Option<(&'a Face, [[f32; 2]; 4])> {
+fn select_plane<'a>(
+    element: &'a Element,
+    variant: &Variant,
+    plane: Plane,
+) -> Option<(&'a Face, [[f32; 2]; 4])> {
     let mut selected = None;
     let mut largest = 0.0;
     for face in &element.faces {
-        let quad = face_plane(element, variant, face.side, false);
+        let quad = face_plane(element, variant, face.side, plane, false);
         let area = plane_area(&quad);
         let mut normal = match face.side {
             0 => [0.0, -1.0, 0.0],
@@ -215,14 +243,31 @@ fn select_plane<'a>(element: &'a Element, variant: &Variant) -> Option<(&'a Face
         }
         rotate(&mut normal, 0, -f32::from(variant.x) * 90.0);
         rotate(&mut normal, 1, -f32::from(variant.y) * 90.0);
-        if normal[2] < -0.0001 && area > largest {
+        let faces_camera = match plane {
+            Plane::Top => normal[1] > 0.0001,
+            Plane::Side => normal[2] < -0.0001,
+        };
+        if faces_camera && area > largest {
             selected = Some((face, quad));
             largest = area;
         }
     }
+    // A model can be rotated so the requested face normal is not present.
+    // Prefer horizontal faces for the top view before accepting any face.
+    if selected.is_none() && plane == Plane::Top {
+        for face in element.faces.iter().filter(|face| face.side <= 1) {
+            let quad = face_plane(element, variant, face.side, plane, true);
+            let area = plane_area(&quad);
+            if area > largest {
+                selected = Some((face, quad));
+                largest = area;
+            }
+        }
+    }
     if selected.is_none() {
+        largest = 0.0;
         for face in &element.faces {
-            let quad = face_plane(element, variant, face.side, true);
+            let quad = face_plane(element, variant, face.side, plane, true);
             let area = plane_area(&quad);
             if area > largest {
                 selected = Some((face, quad));
@@ -599,7 +644,7 @@ impl BlockDatabase {
             return Ok(serde_json::json!({"versions":versions,"mapColorVersions":colors}));
         };
         if let Some(state) = state {
-            return self.query_states(version, &[state.to_owned()])?["states"].get(state).cloned().context("方块颜色结果缺失");
+            return self.query_states(version, &[state.to_owned()], Some(Plane::Side))?["states"].get(state).cloned().context("方块颜色结果缺失");
         }
         let registry = self.registry(version)?;
         let query = query.to_lowercase();
@@ -616,14 +661,46 @@ impl BlockDatabase {
         }
         Ok(serde_json::json!({"version":version,"blocks":blocks}))
     }
-    pub fn query_states(&self, version: &str, states: &[String]) -> Result<serde_json::Value> {
+    /// `plane` selects the rasterised view. `None` skips model rasterisation
+    /// entirely and returns only the cheap metadata (name + map colour), which
+    /// is what a layer canvas needs before it knows which blocks have a 2D icon.
+    pub fn query_states(
+        &self,
+        version: &str,
+        states: &[String],
+        plane: Option<Plane>,
+    ) -> Result<serde_json::Value> {
         if !self.supplement.map_color_versions.contains_key(version) { self.version(version)?; }
         let mut values = BTreeMap::new();
         for state in states {
             if !values.contains_key(state) {
-                // A missing side model must not discard a independently verified
-                // map color (technical/fluid blocks do not have cube models).
-                let mut value=self.side(version,state).unwrap_or_else(|error|serde_json::json!({"state":state,"name":crate::version_conversion::parse_key(state).ok().map(|(id,_)|self.name(version,&id)),"sideTextureDataUrl":null,"projection":"missing","missing":true,"error":error.to_string()}));
+                let name = crate::version_conversion::parse_key(state)
+                    .ok()
+                    .map(|(id, _)| self.name(version, &id));
+                // A missing model must not discard an independently verified map
+                // colour (technical/fluid blocks do not have cube models).
+                let mut value = match plane {
+                    Some(plane) => self.plane(version, state, plane).unwrap_or_else(|error| serde_json::json!({
+                        "state": state,
+                        "name": name,
+                        "sideTextureDataUrl": null,
+                        "topTextureDataUrl": null,
+                        "tintIndices": [],
+                        "faces": [],
+                        "projection": "missing",
+                        "missing": true,
+                        "error": error.to_string(),
+                    })),
+                    None => serde_json::json!({
+                        "state": state,
+                        "name": name,
+                        "sideTextureDataUrl": null,
+                        "topTextureDataUrl": null,
+                        "tintIndices": [],
+                        "faces": [],
+                        "projection": "color-only",
+                    }),
+                };
                 let color = self.map_color(version, state);
                 value["mapColorStatus"] = serde_json::json!(match &color {
                     Some(color) if color["id"] == 0 => "none",
@@ -693,7 +770,17 @@ fn face_tint(&self, version: &str, state: &str, index: i16) -> Result<u32> {
             .with_context(|| format!("缺少实际侧纹理染色结果：{version} {state_key} tint={index}"))
     }
     fn side(&self, version: &str, state: &str) -> Result<serde_json::Value> {
+        self.plane(version, state, Plane::Side)
+    }
+    fn top(&self, version: &str, state: &str) -> Result<serde_json::Value> {
+        self.plane(version, state, Plane::Top)
+    }
+    fn plane(&self, version: &str, state: &str, plane: Plane) -> Result<serde_json::Value> {
         let (id, properties) = crate::version_conversion::parse_key(state)?;
+        let (texture_key, projection, no_model_projection) = match plane {
+            Plane::Top => ("topTextureDataUrl", "model-top", "no-top-model"),
+            Plane::Side => ("sideTextureDataUrl", "model-side", "no-side-model"),
+        };
         let special_key = if [
             "minecraft:chest",
             "minecraft:trapped_chest",
@@ -711,15 +798,29 @@ fn face_tint(&self, version: &str, state: &str, index: i16) -> Result<u32> {
         } else {
             id.clone()
         };
-        if let Some(plane) = self
+        if let Some(special) = self
             .supplement
             .special_planes
             .get(version)
             .and_then(|planes| planes.get(&special_key))
         {
-            return Ok(
-                serde_json::json!({"state":state,"name":self.name(version,&id),"sideTextureDataUrl":format!("data:image/png;base64,{}",plane["png"].as_str().context("特殊模型平面数据损坏")?),"mapColor":self.map_color(version,state),"tintIndices":[],"faces":[{"texture":plane["texture"],"rule":plane["rule"]}],"projection":"model-side","biomeProfile":"minecraft:plains","tintProfileVersion":version}),
-            );
+            let mut value = serde_json::json!({
+                "state": state,
+                "name": self.name(version, &id),
+                "sideTextureDataUrl": null,
+                "topTextureDataUrl": null,
+                "mapColor": self.map_color(version, state),
+                "tintIndices": [],
+                "faces": [{"texture": special["texture"], "rule": special["rule"]}],
+                "projection": projection,
+                "biomeProfile": "minecraft:plains",
+                "tintProfileVersion": version,
+            });
+            value[texture_key] = serde_json::json!(format!(
+                "data:image/png;base64,{}",
+                special["png"].as_str().context("特殊模型平面数据损坏")?
+            ));
+            return Ok(value);
         }
         let resource = self
             .resources
@@ -759,7 +860,7 @@ fn face_tint(&self, version: &str, state: &str, index: i16) -> Result<u32> {
                 continue;
             };
             for element in model {
-                let Some((face, quad)) = select_plane(element, variant) else {
+                let Some((face, quad)) = select_plane(element, variant, plane) else {
                     continue;
                 };
                 let Some(path) = self.strings.get(face.texture as usize) else {
@@ -853,9 +954,16 @@ fn face_tint(&self, version: &str, state: &str, index: i16) -> Result<u32> {
             }
         }
         if used.is_empty() {
-            return Ok(
-                serde_json::json!({"state":state,"name":self.name(version,&id),"sideTextureDataUrl":null,"mapColor":self.map_color(version,state),"tintIndices":[],"faces":[],"projection":"no-side-model"}),
-            );
+            return Ok(serde_json::json!({
+                "state": state,
+                "name": self.name(version, &id),
+                "sideTextureDataUrl": null,
+                "topTextureDataUrl": null,
+                "mapColor": self.map_color(version, state),
+                "tintIndices": [],
+                "faces": [],
+                "projection": no_model_projection,
+            }));
         }
         let mut png = Vec::new();
         image::codecs::png::PngEncoder::new(&mut png).write_image(
@@ -864,9 +972,23 @@ fn face_tint(&self, version: &str, state: &str, index: i16) -> Result<u32> {
             32,
             image::ExtendedColorType::Rgba8,
         )?;
-        Ok(
-            serde_json::json!({"state":state,"name":self.name(version,&id),"sideTextureDataUrl":format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(png)),"mapColor":self.map_color(version,state),"tintIndices":tints,"faces":used,"projection":"model-side","biomeProfile":"minecraft:plains","tintProfileVersion":if self.supplement.plains.contains_key(version){version}else{"26.3"}}),
-        )
+        let mut value = serde_json::json!({
+            "state": state,
+            "name": self.name(version, &id),
+            "sideTextureDataUrl": null,
+            "topTextureDataUrl": null,
+            "mapColor": self.map_color(version, state),
+            "tintIndices": tints,
+            "faces": used,
+            "projection": projection,
+            "biomeProfile": "minecraft:plains",
+            "tintProfileVersion": if self.supplement.plains.contains_key(version) { version } else { "26.3" },
+        });
+        value[texture_key] = serde_json::json!(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png)
+        ));
+        Ok(value)
     }
 }
 
@@ -911,10 +1033,14 @@ pub fn run_cli(args: &[String]) -> Result<()> {
     let mut query = "";
     let mut state = None;
     let mut states_file = None;
+    let mut no_textures = false;
+    let mut top_plane = false;
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
         match flag.as_str() {
             "--versions" => {}
+            "--no-textures" => no_textures = true,
+            "--top-plane" => top_plane = true,
             "--version" => version = Some(iter.next().context("missing --version value")?.as_str()),
             "--query" => query = iter.next().context("missing --query value")?,
             "--state" => state = Some(iter.next().context("missing --state value")?.as_str()),
@@ -924,11 +1050,24 @@ pub fn run_cli(args: &[String]) -> Result<()> {
             _ => bail!("unknown block-db argument: {flag}"),
         }
     }
+    let plane = if no_textures {
+        None
+    } else if top_plane {
+        Some(Plane::Top)
+    } else {
+        Some(Plane::Side)
+    };
     let result = if let Some(path) = states_file {
         let states: Vec<String> = serde_json::from_slice(&std::fs::read(path)?)?;
-        database()?.query_states(version.context("states query requires --version")?, &states)?
+        database()?.query_states(version.context("states query requires --version")?, &states, plane)?
+    } else if let Some(state) = state {
+        let version = version.context("state query requires --version")?;
+        database()?.query_states(version, &[state.to_owned()], plane)?["states"]
+            .get(state)
+            .cloned()
+            .context("方块颜色结果缺失")?
     } else {
-        database()?.query(version, query, state)?
+        database()?.query(version, query, None)?
     };
     println!("{}", result);
     Ok(())
@@ -966,7 +1105,7 @@ mod tests {
             assert_eq!(db.map_color(version, "minecraft:dirt").unwrap()["rgb"], dirt_rgb, "{version}");
             assert!(db.map_color(version, "minecraft:oak_log[axis=invalid]").is_none());
         }
-        let result = db.query_states("1.21.1", &["minecraft:water[level=0]".into(), "minecraft:structure_void".into()]).unwrap();
+        let result = db.query_states("1.21.1", &["minecraft:water[level=0]".into(), "minecraft:structure_void".into()], None).unwrap();
         assert_eq!(result["states"]["minecraft:water[level=0]"]["mapColor"]["id"], 12);
         assert_eq!(result["states"]["minecraft:structure_void"]["mapColorStatus"], "none");
         let a = db.map_color("1.21.1", "minecraft:oak_stairs[half=bottom,facing=north,shape=straight,waterlogged=false]");
@@ -980,7 +1119,7 @@ mod tests {
         assert_eq!(db.supplement.map_color_versions.len(), 103);
         assert!(db.supplement.map_color_versions["1.0"].data_version.is_none());
         assert!(db.version("1.0").is_err());
-        let result = db.query_states("1.0", &["1:0".into(), "3:0".into(), "0:0".into(), "9999:0".into()]).unwrap();
+        let result = db.query_states("1.0", &["1:0".into(), "3:0".into(), "0:0".into(), "9999:0".into()], None).unwrap();
         assert_eq!(result["states"]["1:0"]["mapColor"]["rgb"], 7368816);
         assert_eq!(result["states"]["3:0"]["mapColor"]["rgb"], 12020271);
         assert_eq!(result["states"]["0:0"]["mapColorStatus"], "none");
@@ -1011,6 +1150,47 @@ mod tests {
         );
     }
     #[test]
+    fn top_plane_uses_the_up_face_and_distinguishes_log_from_wood() {
+        let db = database().unwrap();
+        let log = db.top("26.3", "minecraft:oak_log[axis=y]").unwrap();
+        assert_eq!(log["projection"], "model-top");
+        assert!(
+            log["topTextureDataUrl"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+        assert!(
+            log["faces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["texture"] == "block/oak_log_top")
+        );
+        // Oak wood has bark on every face; its top plane must not become the
+        // log's ring texture.
+        let wood = db.top("26.3", "minecraft:oak_wood[axis=y]").unwrap();
+        assert_ne!(log["topTextureDataUrl"], wood["topTextureDataUrl"]);
+        let button = pixels_top("minecraft:stone_button[face=floor,facing=north,powered=false]");
+        let (width, height) = opaque_bounds(&button);
+        assert!(
+            width >= 8 && height >= 8,
+            "button top plane collapsed to {width}x{height}"
+        );
+    }
+    #[test]
+    fn color_only_queries_skip_model_rasterisation() {
+        let db = database().unwrap();
+        let result = db
+            .query_states("26.3", &["minecraft:oak_log[axis=y]".into()], None)
+            .unwrap();
+        let state = &result["states"]["minecraft:oak_log[axis=y]"];
+        assert_eq!(state["projection"], "color-only");
+        assert!(state["sideTextureDataUrl"].is_null());
+        assert!(state["topTextureDataUrl"].is_null());
+        assert!(state["mapColor"].is_object());
+    }
+    #[test]
     fn builtin_chest_and_skull_use_actual_flat_entity_atlas_and_batch_has_no_process_per_state() {
         let db = database().unwrap();
         let states = vec![
@@ -1018,7 +1198,7 @@ mod tests {
             "minecraft:skeleton_skull[rotation=0]".into(),
             "mod:missing".into(),
         ];
-        let result = db.query_states("26.3", &states).unwrap();
+        let result = db.query_states("26.3", &states, Some(Plane::Side)).unwrap();
         assert_eq!(result["states"][&states[0]]["projection"], "model-side");
         assert_eq!(
             result["states"][&states[0]]["faces"][0]["rule"],
@@ -1031,6 +1211,14 @@ mod tests {
     fn pixels(state: &str) -> RgbaImage {
         let result = database().unwrap().side("26.3", state).unwrap();
         let url = result["sideTextureDataUrl"].as_str().expect("actual plane");
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(url.split_once(',').unwrap().1)
+            .unwrap();
+        image::load_from_memory(&png).unwrap().to_rgba8()
+    }
+    fn pixels_top(state: &str) -> RgbaImage {
+        let result = database().unwrap().top("26.3", state).unwrap();
+        let url = result["topTextureDataUrl"].as_str().expect("actual top plane");
         let png = base64::engine::general_purpose::STANDARD
             .decode(url.split_once(',').unwrap().1)
             .unwrap();

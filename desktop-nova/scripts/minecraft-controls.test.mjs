@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import postcss from 'postcss';
+import { collect, themeOf, winner } from './fixtures/css-cascade.mjs';
 
 // Source/CSS cascade contracts for the textured Minecraft controls. No browser and no
 // visual acceptance: this asserts which declaration *wins*, not merely which exist.
@@ -19,124 +20,16 @@ import postcss from 'postcss';
 const root = new URL('../', import.meta.url);
 const parse = (path) => postcss.parse(readFileSync(new URL(path, root), 'utf8'), { from: path });
 
-const LAYER_ORDER = ['theme', 'vendor', 'tokens', 'base', 'components', 'utilities'];
-
-function specificity(selector) {
-  // `:where()` contributes nothing; `:not()`/`:is()` contribute their argument.
-  const flat = selector
-    .replace(/:where\([^)]*\)/g, ' ')
-    .replace(/:(?:not|is)\(([^)]*)\)/g, ' $1 ');
-  const ids = (flat.match(/#[\w-]+/g) ?? []).length;
-  const classes =
-    (flat.match(/\.[\w-]+/g) ?? []).length +
-    (flat.match(/\[[^\]]+\]/g) ?? []).length +
-    (flat.match(/:(?!:)[\w-]+/g) ?? []).length;
-  const types = (flat.match(/(?:^|[\s>+~,(])([a-z][a-z0-9]*)/g) ?? []).length;
-  return ids * 1e6 + classes * 1e3 + types;
-}
-
-function layerOf(rule) {
-  for (let parent = rule.parent; parent; parent = parent.parent) {
-    if (parent.type === 'atrule' && parent.name === 'layer' && parent.params && parent.nodes) return parent.params.trim();
-  }
-  return null;
-}
-
-function collect(files) {
-  const rules = [];
-  let order = 0;
-  for (const path of files) {
-    const css = parse(path);
-    let relative = path;
-    css.walkRules((rule) => {
-      for (const selector of rule.selectors) {
-        rules.push({ path: relative, selector, decls: rule.nodes.filter((node) => node.type === 'decl'), layer: layerOf(rule), order: order++ });
-      }
-    });
-  }
-  return rules;
-}
-
-/** The theme a selector is pinned to, or `undefined` when it applies to all themes. */
-function themeOf(selector) {
-  const m = /\[data-theme(?:="([^"]*)")?\]/.exec(selector);
-  if (!m) return undefined;
-  return m[1] ?? null;
-}
-
-/**
- * The declaration that wins `property` for a Minecraft control, ranked by layer,
- * specificity, then order.
- *
- * `control` is `{ slot, tag, pseudos }`. `pseudos` lists the state being asked about
- * (e.g. `['hover']`); a rule carrying any other state cannot apply. `:not(...)` is
- * ignored: it is a negative condition, and the controls under test are enabled.
- *
- * A rule is eligible when its rightmost compound could actually match the element: it
- * may not pin a *different* slot, and it must either name this slot or be a plain
- * element rule - the generic `button` texture is exactly the competitor that matters
- * for the dropdown trigger.
- */
-function winner(rules, control, property) {
-  const marker = `[data-slot="${control.slot}"]`;
-  const wanted = control.pseudos ?? [];
-  let best = null;
-  for (const rule of rules) {
-    // Only the rightmost compound may introduce the slot, or the rule targets a child.
-    const tail = rule.selector.split(/\s+|>/).pop();
-    const bare = tail.replace(/:(?:not|is|where)\([^)]*\)/g, " ");
-    const slots = [...bare.matchAll(/\[data-slot="([^"]+)"\]/g)].map((m) => m[1]);
-    if (slots.some((slot) => slot !== control.slot)) continue;
-    const named = bare.includes(marker);
-    const element = new RegExp(`(^|[^\\w-])${control.tag}(?![-\\w])`).test(bare);
-    if (!named && !element) continue;
-    // A class in the rightmost compound means the rule targets a differently-classed
-    // element; `button.flake-page__quickbar-slot` can never match a dropdown trigger.
-    const classes = [...bare.matchAll(/\.([\w-]+)/g)].map((m) => m[1]);
-    if (classes.some((name) => !(control.classes ?? []).includes(name))) continue;
-    // Likewise for any attribute beyond the slot itself: `button[aria-pressed="true"]`
-    // does not apply to a control that never carries that attribute. A presence-only
-    // constraint (`[data-state]`) just requires the control to carry the attribute.
-    const attrs = [...bare.matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g)]
-      .filter(([, name]) => name !== "data-slot")
-      .map(([, name, value]) => [name, value]);
-    if (attrs.some(([name, value]) => {
-      const declared = (control.attrs ?? {})[name];
-      if (declared === undefined) return true;
-      return value !== undefined && declared !== value;
-    })) continue;
-    const states = [...bare.matchAll(/:([a-z-]+)/g)].map((m) => m[1]);
-    if (states.some((state) => !wanted.includes(state))) continue;
-    // A selector pinned to another theme can never apply here. `[data-theme]` without
-    // a value means "any theme" and must stay eligible, or every shared-layer rule is
-    // filtered out and the assertions pass against the theme's own rules alone.
-    const theme = themeOf(rule.selector);
-    if (theme !== undefined && theme !== null && theme !== "minecraft") continue;
-    const decl = rule.decls.find((node) => node.prop === property);
-    if (!decl) continue;
-    const rank = {
-      layer: rule.layer === null ? LAYER_ORDER.length : LAYER_ORDER.indexOf(rule.layer),
-      specificity: specificity(rule.selector),
-      order: rule.order,
-    };
-    const better =
-      best === null ||
-      rank.layer > best.rank.layer ||
-      (rank.layer === best.rank.layer && rank.specificity > best.rank.specificity) ||
-      (rank.layer === best.rank.layer && rank.specificity === best.rank.specificity && rank.order > best.rank.order);
-    if (better) best = { decl, rank, selector: rule.selector, path: rule.path };
-  }
-  assert.ok(best, `no rule sets ${property} for [data-slot="${control.slot}"]`);
-  return best;
-}
-
+// The cascade model (LAYER_ORDER, specificity, collect, winner) lives in
+// `fixtures/css-cascade.mjs`, shared with `button-selected-state.test.mjs` so both
+// suites rank declarations identically instead of drifting apart.
 const rules = collect([
   'ui/styles/controls.css',
   'ui/styles/widgets.css',
   'ui/themes/minecraft/appearance.css',
   // One file now: Phase 5 merged nav-icons.css and every widget/*.css into it.
   'ui/themes/minecraft/widgets.css',
-]);
+], root);
 
 test('the cascade filter rejects rules pinned to another theme', () => {
   // Guards the guard: without this the radio assertion passes on 8bitcn's rule.

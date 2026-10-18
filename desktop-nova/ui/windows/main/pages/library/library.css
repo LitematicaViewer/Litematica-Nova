@@ -174,8 +174,10 @@ html[data-theme] .library-page .library-tile-open:focus-visible { outline: none;
     width: 6rem;
 }
 
+/* Wide enough for the three row actions ("打开目录" / "激活" / "发送...") to stay on one line;
+   the row no longer wraps (see `.local-browser-action-row` in subwindow.css). */
 .library-folders-panel .local-browser-actions-col {
-    width: 17rem;
+    width: 18rem;
 }
 
 .library-folders-panel .local-browser-size-cell {

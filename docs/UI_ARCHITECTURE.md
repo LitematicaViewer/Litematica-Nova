@@ -23,6 +23,7 @@
 | V1.18    | 2026-10-13 | Codex  | 修复音符盒键盘回归：Phase 4.5 清 `btn` 的脚本把空白分隔符一并过滤，`is-sharp` 被粘成 `flake-page__note-key-buttonis-sharp`，两条 note-key 规则同时失效；全仓扫描确认仅此一处受损，已修复。护栏新增第 11 条规则 `tsx-glued-class-token` |
 | V1.19    | 2026-10-13 | Codex  | 修复 Minecraft 复选框被裁成圆角：共享层 `controls.css:66` 多带一个 `button` 元素，使其成为 (0,2,2) 而恒定压住主题的 (0,2,1) 覆盖；删除该元素后 8bitcn/Minecraft 的 `border-radius: 0` 正常胜出，shadcn 的 4px 不变。新增第 8 个 MC 用例（先失败后通过） |
 | V1.20    | 2026-10-13 | Codex  | **Phase 6 完成（退出标准已修正）**：原标准「页面外观属性为 0」不成立——188 条外观声明中 106 条是页面自有设计（挂在 `<article>`/`<section>` 上，无组件可继承）、15 条是无障碍/拖放轮廓、1 条是定位变换。改为「每条留存声明都须说明为何页面必须自己拥有」，据此删除 39 条无法匹配任何元素的孤儿规则（43 行 / 6 文件）。66 条零化补丁均为合法覆盖，全部保留。记录了把语句型 `@layer` 误判为空块并修复的过程 |
+| V1.21    | 2026-10-18 | Codex  | **补齐按钮选中态**：核实 shadcn/ui 与 8bitcn/ui 的 Button 上游本就没有选中态（选中态属 Toggle），而 Nova 把 Button 当开关用（23 处 `aria-pressed`）却从未画出该状态——`button[aria-pressed="true"]` 是 (0,1,1)，被共享层 `secondary` 常态规则 (0,4,1) 恒定压过。改为共享层 (0,5,1) 规则 + `--nova-selected-*` 令牌（声明在 `tokens` 层，否则 8bitcn 的覆写会被层序压掉），新增 `button-selected-state.test.mjs` 8 个用例与级联求解器夹具 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -1308,6 +1309,65 @@ body.split(/(\s+)/).filter((piece) => !/^\s+$/.test(piece) && piece !== "btn").j
 | 发现数 | 171（未变，被删规则本就无违规） |
 
 **待人工验收**：8 个页面在 9 组主题/明暗下的外观——本次只删了匹配不到元素的规则，理论上零影响，但涉及 6 个文件，建议扫一眼 library、replace、render、statistics 四个改动最多的页面。
+
+### 按钮选中态：上游没有，我们也没画出来（V1.21）
+
+#### 先回答“是库没有，还是我们漏了”
+
+**两者都成立**，只是不在同一层：
+
+| 上游文件 | 声明的状态 | 有没有选中态 |
+| -------- | ---------- | ------------ |
+| shadcn/ui `new-york-v4/button.json` | `hover` / `focus-visible` / `disabled` / `aria-invalid` | **没有**。`buttonVariants` 只描述“动作按钮”的六个变体与四个状态 |
+| shadcn/ui `new-york-v4/toggle.json` | `hover` / `focus-visible` / `disabled` / `aria-invalid` + `data-[state=on]:bg-accent data-[state=on]:text-accent-foreground` | 有，在 **Toggle** 上 |
+| 8bitcn/ui `button.json` | 包一层 shadcn Button，只加 `active:translate-y-1` 与像素边框装饰 | **没有**（`active` 是按下瞬间，不是选中态） |
+| 8bitcn/ui `toggle.json` | `data-[state=on]:bg-primary data-[state=on]:text-primary-foreground` | 有，在 **Toggle** 上，且口径与 shadcn 不同（主色实心，不是 accent） |
+
+所以“Button 没有选中态”是这两个 registry 的标准分工：**动作**归 Button，**开关**归 Toggle。但 Nova 并没有 Toggle——它把 Button 当开关用，全仓 23 处 `aria-pressed`（9 个文件：侧栏导航、素材库分类与图标页签、Reden 提供方与结果卡、资产管理器来源、flake 工具与快捷栏、渲染/属性页模式切换、UI 测试页）。这部分是**我们自己的缺失**：`themes/modern.css` 里确实写着一条 `button[aria-pressed="true"] { background: var(--accent); border-color: var(--primary) }`，但它从来没生效过。
+
+#### 根因：一条 (0,1,1) 的规则去撞 (0,4,1)
+
+```
+button[aria-pressed="true"]                          (0,1,1)  themes/modern.css
+html[data-theme]:not(...) [data-slot="button"]
+  [data-variant="secondary"]                         (0,4,1)  styles/controls.css   ← 恒胜
+button[data-variant="ghost"]                         (0,2,1)  themes/modern.css      ← 也胜
+```
+
+`secondary` 是 CVA 的默认变体，普通 `<Button>` 全是它；`ghost` 覆盖了导航行、素材库磁贴、快捷栏槽位。两条规则都只声明“常态长什么样”，于是**按下的按钮与常态逐像素相同**。这不是本轮收敛引入的回归：`controls.css` 的 `secondary` 规则在收敛前就已存在（`706697fe^` 可查），这条 `aria-pressed` 规则从写下的那天起就没赢过。Minecraft 之所以看不出问题，是它把选中态画在 `button_check_*.png` 贴图上，走的是另一条路径。
+
+#### 修复
+
+- **共享层声明状态，不复制 Toggle 组件**：`styles/controls.css` 新增 (0,5,1) 规则，只覆盖 `secondary` / `outline`，同时认 `aria-pressed="true"` 与 Radix Toggle 的 `data-state="on"`。
+- **只动两个静默变体**：`default` / `destructive` 是实心的，填充本身就是渲染页与属性页模式切换的“选中外观”，改色会变成第二个主按钮；`ghost` / `link` 是结构控件（导航行、磁贴、快捷栏），选中外观归页面 CSS 所有，而 `controls.css` 在页面 CSS 之前加载。
+- **令牌驱动、按各主题上游定口径**：新增 `--nova-selected-surface` / `--nova-selected-hover` / `--nova-selected-foreground`。
+  - shadcn：**不用 accent**。本主题常态按钮已经是 `--secondary`（#e4e4e7），而 accent（#eeeeef）比它更亮——实测 1.09:1，等于没有选中态。改为 `color-mix(in oklab, var(--secondary) 74%, var(--primary))`，即“向动作色走一步”：与常态 1.85:1、与页面 2.25:1、正文仍有 7.6:1；深色下 2.03:1 / 2.85:1 / 5.9:1。悬停再走一步（70%），避免悬停回到更亮的 accent 造成“按下后反而被取消”的错觉，同时压住步长以保住正文对比度。
+  - 8bitcn：按其自家 Toggle 用 `--primary` 实心板，阶梯边框改 `--primary-foreground`（原 `--border` 绿会溶进填充），外投影改内嵌阴影，读起来像“压下去”的像素板。
+  - Minecraft：贴图不动，只把 `data-state="on"` 也加入 check 贴图规则，将来换成真 Toggle 不会静默掉状态。
+- 删除 `themes/modern.css` 里那条从未胜出的 `button[aria-pressed="true"]`（外观只留一处来源）。
+
+#### 踩到的坑：令牌不能声明在 `components` 层
+
+第一版把三个 `--nova-selected-*` 写在 `modern.css` 的 `@layer components :root` 里，8bitcn 的覆写写在 `@layer tokens :root`。层序是 `theme < vendor < tokens < base < components < utilities`，于是**低层的覆写被高层的基础声明压过**——截图上 8bitcn 的“选中”仍是浅绿而不是主色。把基础声明移到 `tokens` 层后，同层内按样式表顺序（8bitcn 的 sheet 在 `modern.css` 之后）决出，覆写才生效。这和 V1.7 的复选框、V1.19 的圆角是同一类错误：**先看层，再看特异性，最后才看源码顺序**。
+
+#### 验证
+
+| 检查 | 结果 |
+| ---- | ---- |
+| 新增 `button-selected-state.test.mjs` | ✅ 8 用例：三主题选中值、常态不变、实心/结构变体不被接管、两种属性等价、模型自检 |
+| 级联求解器抽成 `scripts/fixtures/css-cascade.mjs` | ✅ 与 `minecraft-controls.test.mjs` 共用；新增 `:is()`/`:where()` 展开与 `:not([data-theme="x"])` 排除 |
+| 可证伪 | ✅ 把选中底色改回 `var(--secondary)` → 用例失败；改回即通过 |
+| `check:ui-styles` / `check:layers` | ✅ 169 = 基线，0 回归；0 新增层违规 |
+| `tsc --noEmit` | ✅ |
+| 六张无头 Edge 截图（三主题 × 明暗） | ✅ 见 `.tmp/preview/`（临时验证页，未入库） |
+
+> 未能执行：`vite build`。本机沙箱禁止 esbuild 启动子进程（`spawn EPERM`），构建需在正常终端里跑一次。CSS 本身已由 postcss 解析（测试即解析全部样式表），未改任何 TSX。
+
+#### 待人工验收
+
+- 三主题 × 明暗下 `UiTestPage` 的“按钮”与“按钮变体”两行：点击循环 常态 → 按下 → 禁用，按下态现在应当**一眼可分**。
+- 业务里的 23 处 `aria-pressed`：资产管理器的来源/子选项、Reden 提供方与结果卡、素材库图标页签、flake 编辑工具与快捷栏、渲染/属性页模式切换（后者用 `default`+`ghost` 切换变体，观感应不变）。
+- 结构控件应保持原样：侧栏导航项、素材库分类行、磁贴、快捷栏槽位、音符键（它们各自有页面级选中样式，不能被通用规则接管）。
 
 ## 5. 回归矩阵
 

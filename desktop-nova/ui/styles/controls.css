@@ -26,6 +26,40 @@ html[data-theme] .nova-control { font: inherit; }
 html[data-theme] [data-slot="button"] { line-height: 1.35; min-width: 0; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"] { border-color: transparent; background: var(--secondary); color: var(--foreground); box-shadow: none; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"]:hover:not(:disabled) { background: var(--accent); }
+
+/* Selected state for a toggle Button. Neither registry declares one on Button:
+   shadcn/ui's `buttonVariants` covers hover / focus-visible / disabled / aria-invalid
+   only, and 8bitcn/ui's wrapper adds just `active:translate-y-1`. Selection is published
+   by Toggle instead (`data-[state=on]:bg-accent`, which 8bitcn overrides to
+   `bg-primary`). Nova toggles the shared Button, so the surface is declared here -
+   next to the variant rules it has to beat - rather than by copying Toggle markup.
+   Why this exact selector, and why only these two variants:
+   - (0,5,1) outranks the resting `secondary` rule above, which is (0,4,1). The previous
+     `button[aria-pressed="true"]` in `themes/modern.css` was (0,1,1), so it lost that
+     contest and a pressed secondary button rendered exactly like a resting one.
+   - `secondary` is the CVA default, i.e. what a plain <Button> renders, and `outline`
+     is the other quiet variant, so these are the two that need a selection surface.
+   - `ghost` / `link` are structural controls (navigation rows, library tiles, hotbar
+     slots); their selected look belongs to the page that lays them out. Styling them
+     here would repaint those pages, because this file loads before page CSS.
+   - `default` / `destructive` are filled, and that fill is already the selected look in
+     the render/properties mode switchers. Recolouring them would read as a second
+     primary action.
+   Only two declarations move: the fill and the label colour. The border and the focus
+   ring stay as they are, so a selected button never competes with the focus ring.
+   `data-state="on"` is the attribute a Radix Toggle publishes, so swapping in a real
+   Toggle later keeps this styling without touching markup. Minecraft is excluded on
+   purpose: it has a `check` texture set for the same state, applied in its own theme. */
+html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"]:is([aria-pressed="true"], [data-state="on"]):is([data-variant="secondary"], [data-variant="outline"]) {
+    background: var(--nova-selected-surface); color: var(--nova-selected-foreground);
+}
+/* Hover still has to answer, or a selected button would look frozen under the pointer.
+   The resting hover rule paints `--accent`, which is *lighter* than the selected fill,
+   so it would read as the button turning itself off. The selected hover goes one step
+   further from the page instead. */
+html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"]:is([aria-pressed="true"], [data-state="on"]):is([data-variant="secondary"], [data-variant="outline"]):hover:not(:disabled) {
+    background: var(--nova-selected-hover);
+}
 /* Icon buttons are square. `width` alone was not enough: the height still came from
    Tailwind's `size-9`/`size-8`/`size-10`, so shadcn rendered 32x36 and shadcn's own
    variants disagreed with each other. Pinning both axes to `--control-height` makes

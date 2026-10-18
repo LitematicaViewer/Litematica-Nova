@@ -21,6 +21,7 @@ import React, {
 } from "react";
 import {
   loadLayerPaletteVisuals, layerMapColor, isLayerAirBlock, UNKNOWN_LAYER_COLOR,
+  layerPaletteState, loadFlakeModelTopTexture, loadFlakeModelTopTextures, getBlockIconDataUrl,
   type LayerPaletteVisuals, type LayerSliceData, type LayerSliceMeta,
   readLayerMeta, readLayer, loadProjectionMarkers, loadStructureStats,
   type ProjectionMarkerPoint, removeProjectionOrigin, selectLitematicSavePath,
@@ -40,7 +41,7 @@ import { CreativeInventoryDialog } from "./creativeInventoryDialog";
 import { ContainerDialog } from "./containerDialog";
 import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem, type ContainerType } from "../../../../../src/business/facade";
 import { listenEvent } from "../../../../../src/platform/events";
-import { clearFlakeStateHintImageCache } from "../../../../../src/business/facade";
+import { clearFlakeStateHintImageCache, clearFlakeModelTopTextureCache } from "../../../../../src/business/facade";
 import noteCsvText from "../../../../../note.csv?raw";
 
 // 缩放范围：scale 表示每个方块占用的像素数（像素/格）。
@@ -181,19 +182,20 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
 const globalIconCache = new Map<string, Promise<string | null>>();
 
 function getCachedIconImage(
+  blockDatabaseVersion: string,
   minecraftDataVersion: number | null,
   blockId: string,
   paletteEntry: any,
   propertyPool: any[],
   enabled: boolean,
-  sideTextureDataUrl: string | null,
+  modelTopTexture: () => Promise<string | null>,
 ): Promise<string | null> {
   // 缓存键必须基于解析后的真实状态，而非 paletteEntry.property_id 下标。
   // property_id 只是指向当前投影 propertyPool 的索引，不同投影的 propertyPool
   // 各自独立——同一个 property_id 在投影 A 可能是 level=0，在投影 B 却是 level=3。
   // 若只用 property_id 作键，跨投影会命中错误的旧图标（如水的 level 遮罩错乱）。
   const resolvedStates = extractLayerPaletteStates(paletteEntry, propertyPool);
-  const cacheKey = `${minecraftDataVersion}::${blockId}::${JSON.stringify(Object.entries(resolvedStates).sort(([left], [right]) => left.localeCompare(right)))}::${enabled}`;
+  const cacheKey = `${blockDatabaseVersion}::${minecraftDataVersion}::${blockId}::${JSON.stringify(Object.entries(resolvedStates).sort(([left], [right]) => left.localeCompare(right)))}::${enabled}`;
 
   if (!globalIconCache.has(cacheKey)) {
     if (globalIconCache.size >= 1024) globalIconCache.delete(globalIconCache.keys().next().value!);
@@ -204,7 +206,7 @@ function getCachedIconImage(
         paletteEntry,
         propertyPool,
         enabled,
-        sideTextureDataUrl,
+        modelTopTexture,
       })
     );
   }
@@ -511,6 +513,7 @@ const LayerCanvas = forwardRef<
     const pending = listenEvent("game-resources-changed", () => {
       globalIconCache.clear();
       clearFlakeStateHintImageCache();
+      clearFlakeModelTopTextureCache();
       setVisualReload((value) => value + 1);
     }).catch(() => undefined);
     return () => { void pending.then((unlisten) => unlisten?.()); };
@@ -796,7 +799,6 @@ const LayerCanvas = forwardRef<
     return next;
   }, [paletteVisuals, meta]);
   const missingMapColors = paletteVisuals && meta ? meta.palette.filter((_entry, index) => !paletteVisuals.byPalette.get(index)?.mapColor).length : 0;
-  const missingSideTextures = paletteVisuals && meta ? meta.palette.filter((_entry, index) => !paletteVisuals.byPalette.get(index)?.sideTextureDataUrl).length : 0;
 
   const visibleLayerIndex = useMemo<VisibleLayerIndex>(() => {
     const byPosition = new Map<number, VisibleLayerBlock>();
@@ -1181,12 +1183,16 @@ const LayerCanvas = forwardRef<
 
         try {
           const dataUrl = await getCachedIconImage(
+            paletteVisuals.version,
             meta.minecraft_data_version,
             entry.block_id,
             entry,
             meta.property_pool || [],
             showStateHints,
-            paletteVisuals.byPalette.get(paletteId)?.sideTextureDataUrl || null,
+            () => loadFlakeModelTopTexture(
+              paletteVisuals.version,
+              layerPaletteState(entry, meta.property_pool || []),
+            ),
           );
           if (!dataUrl || cancelled || textureJobVersionRef.current !== jobVersion) continue;
           setIconImages((current) => {
@@ -1203,7 +1209,36 @@ const LayerCanvas = forwardRef<
       }
     };
 
-    void Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+    // Check which pending blocks have no 2D icon, then rasterise every missing
+    // model plane in one native call instead of one process per state.
+    const prefetchModelPlanes = async () => {
+      const missingStates: string[] = [];
+      const checkBatchSize = 8;
+      for (let start = 0; start < pendingPaletteIds.length; start += checkBatchSize) {
+        if (cancelled || textureJobVersionRef.current !== jobVersion) return;
+        const batch = pendingPaletteIds.slice(start, start + checkBatchSize);
+        const missing = await Promise.all(batch.map(async (paletteId) => {
+          const entry = meta.palette[paletteId];
+          if (!entry?.block_id) return null;
+          const icon = await getBlockIconDataUrl(entry.block_id, "layering").catch(() => null);
+          return icon ? null : layerPaletteState(entry, meta.property_pool || []);
+        }));
+        for (const state of missing) {
+          if (state) missingStates.push(state);
+        }
+      }
+      if (!cancelled && textureJobVersionRef.current === jobVersion && missingStates.length) {
+        // Start the batch without blocking icons that already have a 2D image;
+        // its per-state promises are registered synchronously.
+        void loadFlakeModelTopTextures(paletteVisuals.version, missingStates);
+      }
+    };
+
+    void (async () => {
+      await prefetchModelPlanes();
+      if (cancelled || textureJobVersionRef.current !== jobVersion) return;
+      await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+    })();
 
     return () => {
       cancelled = true;
@@ -1372,8 +1407,8 @@ const LayerCanvas = forwardRef<
       }}
       onContextMenu={handleContextMenu}
     >
-      {(visualError || missingMapColors > 0 || missingSideTextures > 0) && <div className="flake-visual-status" role="status" onMouseDown={event => event.stopPropagation()}>
-        <span>{visualError || `${missingMapColors ? `${missingMapColors} 种方块缺少地图色` : ""}${missingMapColors && missingSideTextures ? " · " : ""}${missingSideTextures ? `${missingSideTextures} 种方块缺少侧面贴图` : ""}`}</span>
+      {(visualError || missingMapColors > 0) && <div className="flake-visual-status" role="status" onMouseDown={event => event.stopPropagation()}>
+        <span>{visualError || `${missingMapColors} 种方块缺少地图色`}</span>
         {visualError && <Button onClick={event => { event.stopPropagation(); setVisualReload(previous => previous + 1); }}>重新加载</Button>}
       </div>}
       <canvas
