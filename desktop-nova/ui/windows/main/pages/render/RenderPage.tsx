@@ -75,7 +75,7 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
         <p>显存需求：{full.preflight.conservativeVramBytes == null ? "未知" : formatResourceBytes(full.preflight.conservativeVramBytes)}</p>
         {full.preflight.severity === "warning" && <p>需求达到当前可用预算的 80%，确认后才继续预加载。</p>}
         {full.preflight.severity === "hard" && <p>需求达到当前可用预算的 95%，预加载不可用，可选择实时加载。</p>}
-        {full.preflight.severity === "unmeasured" && <p>需求或当前预算尚未确认，预加载不可用，可选择实时加载。</p>}
+        {full.preflight.severity === "unmeasured" && <p role="alert">{full.preflight.invalidReason ? displayPathText(full.preflight.invalidReason) : "需求或当前预算尚未确认，预加载不可用，可选择实时加载。"}</p>}
         <div className="render-page-actions">
           <Button disabled={full.pending || !full.preflight.allowedActions.includes("continue_prebuilt")} onClick={() => void full.choose("prebuilt")}>确认预构建</Button>
           <Button disabled={full.pending || (full.preflight.severity !== "normal" && !full.preflight.allowedActions.includes("switch_realtime"))} onClick={() => void full.choose("realtime")}>直接打开</Button>

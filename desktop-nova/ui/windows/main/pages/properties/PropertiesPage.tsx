@@ -419,7 +419,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
               <p>显存需求：{fullPreview.preflight.conservativeVramBytes == null ? "未知" : formatResourceBytes(fullPreview.preflight.conservativeVramBytes)}</p>
               {fullPreview.preflight.severity === "warning" && <p>需求达到当前可用预算的 80%，确认后才继续预加载。</p>}
               {fullPreview.preflight.severity === "hard" && <p>需求达到当前可用预算的 95%，预加载不可用，可选择实时加载。</p>}
-              {fullPreview.preflight.severity === "unmeasured" && <p>需求或当前预算尚未确认，预加载不可用，可选择实时加载。</p>}
+              {fullPreview.preflight.severity === "unmeasured" && <p role="alert">{fullPreview.preflight.invalidReason ? displayPathText(fullPreview.preflight.invalidReason) : "需求或当前预算尚未确认，预加载不可用，可选择实时加载。"}</p>}
               <div className="properties-preview-toolbar">
                 <Button size="sm" disabled={previewPending || !fullPreview.preflight.allowedActions.includes("continue_prebuilt")} onClick={() => void fullPreview.choose("prebuilt")}>确认预构建</Button>
                 <Button size="sm" disabled={previewPending || (fullPreview.preflight.severity !== "normal" && !fullPreview.preflight.allowedActions.includes("switch_realtime"))} onClick={() => void fullPreview.choose("realtime")}>直接打开</Button>

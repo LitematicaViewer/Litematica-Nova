@@ -13,6 +13,29 @@ const manualChoice={...unmeasured,allowedActions:['switch_realtime','use_basic_v
 const pathIdentity = {};
 vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/services/filePathIdentity.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, { exports: pathIdentity });
 const tick=()=>new Promise(done=>setImmediate(done));
+test('属性和渲染页保留未知显存的真实原因，按路径显示规则处理且不重复通用说明',()=>{
+ for(const [page,binding] of [['properties/PropertiesPage','fullPreview'],['render/RenderPage','full']]) {
+  const text=readFileSync(new URL(`../ui/windows/main/pages/${page}.tsx`,import.meta.url),'utf8');
+  const parsed=ts.createSourceFile(`${page}.tsx`,text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let expression;
+  function visit(node){
+   if(ts.isJsxExpression(node)&&node.expression&&ts.isBinaryExpression(node.expression)
+    &&node.expression.left.getText(parsed)===`${binding}.preflight.severity === "unmeasured"`)expression=node.expression;
+   ts.forEachChild(node,visit);
+  }
+  visit(parsed);assert(expression,`${page} must render the unmeasured assessment`);
+  const compiled=ts.transpileModule(`const output=(${expression.getText(parsed)});`,{compilerOptions:{jsx:ts.JsxEmit.React,target:ts.ScriptTarget.ES2022}}).outputText;
+  for(const reason of ['完整资源需求预估未完成：resource demand calculation exceeded its 10000ms planning deadline',null]) {
+   const calls=[];
+   const result=vm.runInNewContext(`${compiled};output`,{[binding]:{preflight:{severity:'unmeasured',invalidReason:reason}},
+    React:{createElement:(type,props,...children)=>({type,props,children})},displayPathText:value=>{calls.push(value);return `显示：${value}`;}});
+   assert.equal(result.type,'p');assert.equal(result.props.role,'alert');
+   assert.equal(result.children.length,1);
+   assert.equal(result.children[0],reason?`显示：${reason}`:'需求或当前预算尚未确认，预加载不可用，可选择实时加载。');
+   assert.deepEqual(calls,reason?[reason]:[]);
+  }
+ }
+});
 function harness({preload=false,plan={directRealtime:true,preflight:null},deferredPlan,deferredStart,prepared=true,displayMode='full',initialOperation=null,viewportSize=[2316,1178]}={}){
  let props={source:'C:/scene.litematic',preload,blocked:false,displayMode},snapshot={operations:initialOperation?[initialOperation]:[]},cursor=0,slots=[],effects=[],output,next=0,requestedId=null;
  const calls={start:[],present:[],discard:[],cancel:[],basic:[],plan:[]};
