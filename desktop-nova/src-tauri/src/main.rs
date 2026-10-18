@@ -2870,24 +2870,35 @@ async fn application_render_launch_plan(
 #[cfg(test)]
 mod full_launch_plan_tests {
     use super::*;
-    /// Exact production CPU worker role after actual Iris/shaderpack admission.
+    /// Exact production CPU worker role after mode-specific resource admission.
     /// No Viewer launch or presentation is requested. Run alone in a process.
     #[test]
     #[ignore = "requires NOVA_FULL_CPU_TEST_APP_ROOT/SOURCE/OUTPUT_ROOT/SHADERPACK/RESOURCE_PACKS_JSON and the registered signed runtime"]
     fn actual_full_prebuilt_cpu_artifact_with_iris_preflight_cli() {
         use platform::process_supervisor::{ExecutableRole, LaunchIdentity, LaunchSpec, LaunchToken, OutputTarget, WaitOutcome};
+        let mode = env::var_os("NOVA_FULL_CPU_TEST_MODE");
+        let (display_mode, mode_name, backend_admission, effects_profile) = match mode.as_deref().map(|value| value.to_str().expect("NOVA_FULL_CPU_TEST_MODE must be UTF-8")) {
+            None | Some("full") => (RenderDisplayMode::Full, "full", "iris-gl46", "full"),
+            Some("standard") => (RenderDisplayMode::Standard, "standard", "vulkan", "unlit"),
+            Some(value) => panic!("NOVA_FULL_CPU_TEST_MODE must be standard or full, got {value:?}"),
+        };
         let app_root = PathBuf::from(env::var_os("NOVA_FULL_CPU_TEST_APP_ROOT").expect("NOVA_FULL_CPU_TEST_APP_ROOT"));
         let source = PathBuf::from(env::var_os("NOVA_FULL_CPU_TEST_SOURCE").expect("NOVA_FULL_CPU_TEST_SOURCE"));
         let output = PathBuf::from(env::var_os("NOVA_FULL_CPU_TEST_OUTPUT_ROOT").expect("NOVA_FULL_CPU_TEST_OUTPUT_ROOT"));
-        let shaderpack = PathBuf::from(env::var_os("NOVA_FULL_CPU_TEST_SHADERPACK").expect("actual user shaderpack is required"));
+        let shaderpack = if display_mode == RenderDisplayMode::Full {
+            Some(PathBuf::from(env::var_os("NOVA_FULL_CPU_TEST_SHADERPACK").expect("actual user shaderpack is required for Full")))
+        } else {
+            None
+        };
         let resource_packs: Vec<PathBuf> = serde_json::from_str(&env::var("NOVA_FULL_CPU_TEST_RESOURCE_PACKS_JSON").expect("explicit actual resource pack list required, including []")).unwrap();
-        assert!(app_root.is_absolute() && source.is_absolute() && output.is_absolute() && shaderpack.is_absolute());
-        assert!(source.is_file() && shaderpack.is_file());
+        assert!(app_root.is_absolute() && source.is_absolute() && output.is_absolute());
+        assert!(source.is_file());
+        if let Some(path) = &shaderpack { assert!(path.is_absolute() && path.is_file()); }
         assert!(!output.exists(), "preserve prior measurements; use a new isolated output directory");
         std::fs::create_dir_all(&output).unwrap();
         let data_root = output.join("userdata");
         env::set_var("NOVA_USER_DATA_ROOT", &data_root);
-        application::diagnostics::init(&data_root, env!("CARGO_PKG_VERSION"), "actual-full-cpu-cli").unwrap();
+        application::diagnostics::init(&data_root, env!("CARGO_PKG_VERSION"), &format!("actual-{mode_name}-cpu-cli")).unwrap();
         APP_RESOURCE_ROOT.set(app_root.clone()).expect("run this ignored test alone");
         APP_LOCAL_DATA_ROOT.set(data_root.clone()).expect("run this ignored test alone");
         let service = RenderServiceClient::default();
@@ -2901,20 +2912,25 @@ mod full_launch_plan_tests {
                 [width.parse::<u32>().unwrap(), height.parse::<u32>().unwrap()]
             }).unwrap_or([2316, 1148]);
             let (mut request, environment) = application_render_request(RenderServiceStartBuildInput {
-                source_path: source.clone(), build_mode: RenderBuildMode::Prebuilt, display_mode: RenderDisplayMode::Full,
+                source_path: source.clone(), build_mode: RenderBuildMode::Prebuilt, display_mode,
                 preflight_id: None, resource_warning_confirmed: false, realtime_decision_id: None,
                 click_started_at_epoch_ms: None, viewport: Some(viewport),
             })?;
-            request.settings.backend = GraphicsBackendPreference::IrisGl46;
+            request.settings.backend = if display_mode == RenderDisplayMode::Full { GraphicsBackendPreference::IrisGl46 } else { GraphicsBackendPreference::Vulkan };
             request.settings.iris_fallback = IrisFallbackPreference::Fail;
-            request.settings.shader.path = Some(shaderpack.clone());
+            request.settings.shader.path = shaderpack.clone();
+            if display_mode == RenderDisplayMode::Standard {
+                request.settings.precipitation = WeatherPreference::None;
+                request.settings.allow_time_modification = false;
+                request.settings.allow_weather_modification = false;
+            }
             request.settings.resource_packs = resource_packs.clone();
             if let Some(path) = env::var_os("NOVA_FULL_CPU_TEST_FABRIC_MODS_DIR") { request.settings.fabric_mods_dir = Some(PathBuf::from(path)); }
             let preflight_started = std::time::Instant::now();
             let preflight = facade.preflight_render(request.clone(), environment).await?;
             let preflight_ms = preflight_started.elapsed().as_millis();
             if !preflight.allowed_actions.contains(&application::model::ResourcePreflightAction::ContinuePrebuilt) {
-                return Err(format!("actual Iris admission did not allow original Full Prebuilt: {preflight:?}"));
+                return Err(format!("actual {backend_admission} admission did not allow original {mode_name} Prebuilt: {preflight:?}"));
             }
             if env::var("NOVA_FULL_CPU_TEST_PREFLIGHT_ONLY").as_deref() == Ok("1") {
                 if !facade.render_states().is_empty() || !service.snapshot().viewers.is_empty() {
@@ -2938,8 +2954,8 @@ mod full_launch_plan_tests {
                             "layoutVersion":certificate["layout_version"],"deviceIdentity":certificate["device_identity"]}));
                     }
                 }
-                if identities.is_empty() { return Err("admitted Full preflight produced no persisted content identity".into()); }
-                let result = serde_json::json!({"mode":"full","loading":"prebuilt","backendAdmission":"iris-gl46",
+                if identities.is_empty() { return Err(format!("admitted {mode_name} preflight produced no persisted content identity")); }
+                let result = serde_json::json!({"mode":mode_name,"loading":"prebuilt","backendAdmission":backend_admission,
                     "preflightOnly":true,"source":source,"shaderpack":shaderpack,"resourcePacks":resource_packs,
                     "buildId":build_id,"runtimeGitSha":deployment["gitSha"],"inputResourceIdentities":identities,
                     "preflightMs":preflight_ms,"admissionMs":preflight_ms,"admissionUnder10s":preflight_ms<=10000,
@@ -2958,20 +2974,20 @@ mod full_launch_plan_tests {
             let artifact = output.join("full-prebuilt.gpu-scene.cache");
             let contract_path = output.join("full-prebuilt.contract.json");
             let contract = serde_json::json!({
-                "schema":"lba.viewer.launch.v1", "requestId":format!("full-cpu-prebuilt-{}",std::process::id()),
+                "schema":"lba.viewer.launch.v1", "requestId":format!("{mode_name}-cpu-prebuilt-{}",std::process::id()),
                 "scene":source, "content":{"resourcePacks":resource_packs,"fabricModsDir":request.settings.fabric_mods_dir},
                 "renderer":null, "protectedTask":{"ticketPath":task.ticket_path,"modulePath":task.module_path},
-                "task":{"kind":"build_cache","buildMode":"prebuilt","effectsProfile":"full","readyFile":ready,"cacheFile":artifact}
+                "task":{"kind":"build_cache","buildMode":"prebuilt","effectsProfile":effects_profile,"readyFile":ready,"cacheFile":artifact}
             });
-            // BuildCache rejects renderer-only settings by design. Iris is
-            // validated above; this is the identical renderer-independent Full
-            // CPU producer used by that real Iris Prebuilt application route.
+            // BuildCache rejects renderer-only settings by design. Admission
+            // validates the mode-specific backend above; the CPU producer uses
+            // the same Full or Unlit effects profile as that application route.
             let parsed: ::viewer_launch_contract::ViewerLaunchContract = serde_json::from_value(contract.clone()).map_err(|e|e.to_string())?;
             parsed.validate()?;
             std::fs::write(&contract_path, serde_json::to_vec_pretty(&contract).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
             let mut spec = LaunchSpec::new(ExecutableRole::BuildWorker, LaunchIdentity {
                 owner_epoch: host.supervisor.owner_epoch(), generation: 1,
-                launch_token: LaunchToken::new(format!("full-cpu-prebuilt-{}", std::process::id())).map_err(|e|e.to_string())?,
+                launch_token: LaunchToken::new(format!("{mode_name}-cpu-prebuilt-{}", std::process::id())).map_err(|e|e.to_string())?,
             });
             spec.args.push(format!("--launch-contract={}", contract_path.display()).into());
             spec.current_dir = Some(app_root.clone());
@@ -2988,9 +3004,9 @@ mod full_launch_plan_tests {
             let timeout = env::var("NOVA_FULL_CPU_TEST_TIMEOUT_SECS").ok().map(|v|v.parse::<u64>().unwrap()).unwrap_or(1200);
             let exit = match host.supervisor.wait_for_exit(&child, Duration::from_secs(timeout)) {
                 WaitOutcome::Exited(exit) => exit,
-                other => return Err(format!("owned Full CPU worker did not exit normally: {other:?}")),
+                other => return Err(format!("owned {mode_name} CPU worker did not exit normally: {other:?}")),
             };
-            if exit.exit_code != Some(0) { return Err(format!("real protected Full CPU worker exited {:?}; inspect its private stdout/stderr", exit.exit_code)); }
+            if exit.exit_code != Some(0) { return Err(format!("real protected {mode_name} CPU worker exited {:?}; inspect its private stdout/stderr", exit.exit_code)); }
             let worker_ms = worker_started.elapsed().as_millis();
             let ready_value: serde_json::Value = serde_json::from_slice(&std::fs::read(&ready).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
             if ready_value["ready"] != true || !artifact.is_file() { return Err("worker exited without a ready exact artifact".into()); }
@@ -3008,7 +3024,7 @@ mod full_launch_plan_tests {
                     }
                 }
             }
-            let result = serde_json::json!({"mode":"full","loading":"prebuilt","backendAdmission":"iris-gl46","shaderpack":shaderpack,
+            let result = serde_json::json!({"mode":mode_name,"loading":"prebuilt","backendAdmission":backend_admission,"shaderpack":shaderpack,
                 "preflightMs":preflight_ms,"admissionMs":preflight_ms,"admissionUnder10s":preflight_ms<=10000,
                 "preflight":preflight,"workerTaskGrantMaterializeMs":material_ms,"workerMs":worker_ms,
                 "artifact":artifact,"artifactBytes":std::fs::metadata(&artifact).map_err(|e|e.to_string())?.len(),"ready":ready_value,
@@ -3016,7 +3032,11 @@ mod full_launch_plan_tests {
                     "renderableSections":ready_value["renderable_chunks"],"emptyMeshSections":ready_value["empty_mesh_chunks"]},
                 "actualPhaseEvidence":phase_evidence,
                 "workerExit":exit.exit_code,"GPU":"not_executed","firstFrame":"not_measured","viewerCount":0,
-                "shaderpackBoundary":"actual Iris preflight; BuildCache has no renderer-only fields, matching production Full CPU role"});
+                "shaderpackBoundary":if display_mode == RenderDisplayMode::Full {
+                    "actual Iris preflight; BuildCache has no renderer-only fields, matching production Full CPU role"
+                } else {
+                    "actual Vulkan preflight without shaderpack or weather; BuildCache uses the production Standard Unlit CPU role"
+                }});
             std::fs::write(output.join("full-prebuilt-result.json"), serde_json::to_vec_pretty(&result).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
             Ok::<_,String>(())
         });
