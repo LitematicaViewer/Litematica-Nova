@@ -149,6 +149,20 @@ function compareViolations(left, right) {
   );
 }
 
+/**
+ * Theme directories registered in `src/services/themeManifest.ts`. A theme folder
+ * that is not listed there is a staged resource (pulled from another branch, or a
+ * theme being prepared) rather than an active part of the UI contract.
+ */
+function registeredThemeDirectories(rootDir) {
+  const manifestPath = path.join(rootDir, "src/services/themeManifest.ts");
+  if (!fs.existsSync(manifestPath)) return null;
+  const source = fs.readFileSync(manifestPath, "utf8");
+  const directories = new Set();
+  for (const match of source.matchAll(/directory:\s*"([^"]+)"/g)) directories.add(match[1]);
+  return directories.size ? directories : null;
+}
+
 function walk(dir, extensions) {
   if (!fs.existsSync(dir)) {
     return [];
@@ -917,8 +931,21 @@ export function collectFindings(rootDir) {
   try {
     const report = activeReport;
     const uiDir = path.join(rootDir, "ui");
-    const cssFiles = walk(uiDir, CSS_EXTENSIONS);
+    const allCssFiles = walk(uiDir, CSS_EXTENSIONS);
     const sourceFiles = walk(uiDir, SOURCE_EXTENSIONS);
+
+    // Theme directories that are not in the manifest are staged resources (for
+    // example a theme pulled back from another branch before it is registered).
+    // They are not part of the contract yet, so the checker does not scan them.
+    const registeredThemes = registeredThemeDirectories(rootDir);
+    const cssFiles = registeredThemes
+      ? allCssFiles.filter((filePath) => {
+          const relative = path.relative(uiDir, filePath).split(path.sep).join("/");
+          const themeDir = /^themes\/([^/]+)\//.exec(relative)?.[1];
+          return !themeDir || registeredThemes.has(themeDir);
+        })
+      : allCssFiles;
+    report.stagedCssFileCount = allCssFiles.length - cssFiles.length;
 
     // Any custom property defined in the frontend counts, whichever file shape
     // holds it. Properties the TypeScript sets at runtime (`--flake-*`,

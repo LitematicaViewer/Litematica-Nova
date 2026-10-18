@@ -304,11 +304,11 @@ html[data-theme] .library-page .library-tile-open { display: flex; flex-directio
 
 @media (max-width: 42rem) {
     .library-folders-panel .local-browser-table,
-    .library-folders-panel .local-browser-table tbody {
+    .library-folders-panel .local-browser-table [data-slot="table-body"] {
         display: block;
     }
 
-    .library-folders-panel .local-browser-table thead {
+    .library-folders-panel .local-browser-table [data-slot="table-header"] {
         position: absolute;
         width: 1px;
         height: 1px;
@@ -316,7 +316,7 @@ html[data-theme] .library-page .library-tile-open { display: flex; flex-directio
         clip-path: inset(50%);
     }
 
-    .library-folders-panel .local-browser-table tbody > tr {
+    .library-folders-panel .local-browser-table [data-slot="table-body"] > [data-slot="table-row"] {
         display: grid;
         grid-template-columns: auto minmax(0, 1fr) auto;
         align-items: center;
@@ -326,7 +326,7 @@ html[data-theme] .library-page .library-tile-open { display: flex; flex-directio
         grid-column: 2 / -1;
     }
 
-    .library-folders-panel .local-browser-table td[colspan] {
+    .library-folders-panel .local-browser-table [data-slot="table-cell"][colspan] {
         grid-column: 1 / -1;
     }
 }
@@ -339,7 +339,7 @@ html[data-theme] .library-page .library-tile-open { display: flex; flex-directio
 .library-folder-scroll, .library-online-results-scroll { flex: 1; min-width: 0; min-height: 0; }
 .library-folders-panel .subwindow-list { overflow: visible; padding: 4px; }
 .library-folders-panel > fieldset { padding: 12px; }
-.library-folders-panel .local-browser-table td, .library-folders-panel .local-browser-table th { white-space: normal; overflow-wrap: anywhere; }
+.library-folders-panel .local-browser-table [data-slot="table-cell"], .library-folders-panel .local-browser-table [data-slot="table-head"] { white-space: normal; overflow-wrap: anywhere; }
 .library-folders-panel .local-browser-table .local-browser-size-cell { white-space: nowrap; }
 .library-reden-panel .reden-result-list { overflow: visible; }
 .library-reden-panel .reden-result-card { width: 100%; height: auto; min-height: 0; padding: 14px; text-align: left; white-space: normal; }

@@ -36,6 +36,7 @@
 | V1.31 | 2026-10-18 | Codex  | **第 4 批（library / settings）+ 悬浮提示框统一**：材料列表的 `.material-list-hover-popup` 把字号/行高收进共享层一处（`var(--nova-text-base)`，即**正文大小**：Minecraft/8bitcn 16px、shadcn 14px，字族随正文），行内 label/name/ID/加粗数字全部继承同一字号；MC 主题不再单独写 `font-size: 16px` 与 `#999/#000/#fff`（改为 `border-width` + 令牌色）。library 外观 131 条、settings 48 条中的 131 条搬入 `page-appearance.css`；`settings-theme-swatch` 因刻意展示其他主题配色而保留在页面（拆分脚本带排除规则）。页面外观总量 264 → **131**，总基线仍为 160 |
 | V1.32 | 2026-10-18 | Codex  | **第 5 批（properties）**：页面里最后一批非排版外观（`color`/`background`/`border`/`image-rendering` 等 12 条）搬入 `page-appearance.css`，properties 20 → **8**（余下为字号/字族/numeric）。页面外观总量 131 → **119**；其中非排版项只剩 home 的 1 条图标主色与 settings 的 17 条主题预览色块（刻意保留）。总基线维持 160 |
 | V1.33 | 2026-10-19 | Codex  | **令牌化遮罩与中性色，清理可去掉的 `!important`**：新增 `--overlay`（三主题 `rgb(0 0 0 / 42%)`）替代 `dialog-overlay` 与 subwindow 遮罩的字面色；dialog 的 `rgb(127 127 127 / N%)` 改为 `color-mix(... var(--foreground) N% ...)`；MC 复选框内嵌高光同样改为 `color-mix`。删除两处已无竞争者的 `!important`（`.material-list-multiplier`、library 横向布局的 viewport `overflow`）。`css-hardcoded-colour` 27 → **20**（余下全是 flake 画布测量线/原点的数据可视化配色）、`css-important` 12 → **10**（余下均用于覆盖 Radix 内联样式或虚拟占位几何），总基线 160 → **151** |
+| V1.34 | 2026-10-19 | Codex  | **裸元素第 1 批（页面表格）**：DOM 侦察确认 `tbody/thead/tr/td/th` 在 TSX 中**只以带 `data-slot` 的形式出现**，`button/input/textarea/select` 仍有不带槽位的用法（不能机械替换）。据此把 library 6 条、properties 5 条、materials 1 条表格选择器改为 `[data-slot="table-body"/"table-header"/"table-row"/"table-cell"/"table-head"]`，裸元素 121 → **110**，总基线 151 → **140** |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -1453,6 +1454,18 @@ button[data-variant="ghost"]                         (0,2,1)  themes/modern.css 
 > 说明：仓库现有文档已明确"构建及 CLI 通过不代表实机通过"（`DEVELOPMENT.md:60`）。主题视觉属于必须人工验收的项目，不得以静态检查替代。
 
 ---
+
+### 上游合并后的收敛流程
+
+上游的开发重心在渲染核心，UI 常带着未优化的样式回来。合并后按下面的顺序收敛，不要手工重做：
+
+1. **先量再改**：`npm run check:ui-styles` 会以计数基线报出回归；`npm run check:ui-styles:report` 看总量。确认新增项来自上游后，用 `npm run check:ui-styles:update-baseline` 接受现状（基线是“不再增长”的闸门，不是目标值）。
+2. **页面外观重新拆分**：页面 CSS 又混入外观声明时，运行 `node .tmp/split-page-appearance-2.mjs`（脚本顶部 `TARGETS` 改成需要处理的文件；它会按原选择器与 `@container` 上下文搬进 `ui/styles/page-appearance.css`，并用 `(选择器, 属性, 值)` 多重集校验，丢失即中止）。脚本在 `.tmp/` 下、不进版本库，丢失时按 V1.30 的记录重写。
+3. **裸元素**：先跑 `node .tmp/recon-bare-elements.mjs` 看每条的判定。`SAFE(slot-only)` 才能机械替换；`MIXED` 说明该元素存在不带槽位的用法，**不要**把 `button` 直接换成 `[data-slot="button"]`——素材库卡片/分类行用的是 `library-tile` / `library-category` 等专用槽位。
+4. **主题与字阶**：`themes.test.mjs` 校验主题目录、id 与 Rust 一致；`css-theme-type-token` 校验四档字阶；新增主题漏定义会直接失败。
+5. **层序**：`css-sublayer-assignment` 拒绝把规则写回父层 `components`，`css-vendor-layer-above-components` 拒绝 Tailwind 越层。
+
+合并冲突的取舍原则：**优先保留本文件的层序声明、`@layer` 子层包装与 `data-slot` 化选择器**；上游新增的裸元素/字面色/`!important` 先进基线，再按批次处理，避免一次合并就把 UI 重新拖回“群魔乱舞”。
 
 ## 6. 风险与放弃项
 

@@ -14,10 +14,10 @@
       "ui/themes/modern.css": 30,
       "ui/windows/main/pages/generate/generate.css": 1,
       "ui/windows/main/pages/home/home.css": 2,
-      "ui/windows/main/pages/library/library.css": 13,
-      "ui/windows/main/pages/properties/properties.css": 7,
+      "ui/windows/main/pages/library/library.css": 7,
+      "ui/windows/main/pages/properties/properties.css": 3,
       "ui/windows/main/pages/settings/settings.css": 5,
-      "ui/windows/main/pages/statistics/materials.css": 3
+      "ui/windows/main/pages/statistics/materials.css": 2
     },
     "css-hardcoded-colour": {
       "ui/styles/flake.css": 20

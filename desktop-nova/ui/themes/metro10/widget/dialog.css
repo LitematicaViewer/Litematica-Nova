@@ -1,0 +1,5 @@
+/* Metro10 dialog styling */
+.dialog-surface {
+    border-radius: 0;
+    box-shadow: 0 10px 24px rgb(0 0 0 / 24%);
+}

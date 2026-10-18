@@ -84,7 +84,7 @@
 .material-summary-list > li:not(.material-virtual-spacer) { min-height:48px; max-height:48px; padding-top:6px; padding-bottom:6px; }
 .material-summary-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .material-summary-list > .material-virtual-spacer { display:block; height:var(--material-list-virtual-spacer-height, 0px); padding:0; }
-.material-detail-table-scroll tbody tr:not(:has(.material-list-virtual-spacer-cell)) { height:48px; }
+.material-detail-table-scroll [data-slot="table-body"] [data-slot="table-row"]:not(:has(.material-list-virtual-spacer-cell)) { height:48px; }
 /* Virtual-list contract (see scripts/virtual-spacer.test.mjs). The spacer must *win* the
    cascade for `height`: `.material-list-table th, .material-list-table td` declares 40px and
    outranks a bare `.material-list-virtual-spacer-cell` (0,1,1 vs 0,1,0) in the same layer, which

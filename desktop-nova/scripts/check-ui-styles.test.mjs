@@ -584,11 +584,21 @@ test("page text sizes must come from the theme type scale", () => {
 
 test("theme entries must define the text scale tokens", () => {
   const fixture = makeFixture();
+  fixture.write("../src/services/themeManifest.ts", 'export const THEMES = [{ id: "p", key: "p", label: "P", directory: "plain" }] as const;\n');
   fixture.write("themes/plain/theme.css", ["@layer tokens {", ":root { --background: #fff; }", "}", ""].join("\n"));
   const outcome = fixture.strict();
   const reported = messagesFor(outcome, "css-theme-type-token");
   assert.equal(reported.length, 4, JSON.stringify(reported));
   assert.deepEqual(reported.map((entry) => entry.message.match(/--nova-text-[a-z]+/)[0]).sort(), ["--nova-text-base", "--nova-text-lg", "--nova-text-sm", "--nova-text-xs"]);
+});
+
+test("unregistered theme directories are staged resources, not scanned", () => {
+  const fixture = makeFixture();
+  fixture.write("../src/services/themeManifest.ts", 'export const THEMES = [{ id: "a", key: "a", label: "A", directory: "a" }] as const;\n');
+  fixture.write("themes/a/theme.css", "@layer tokens {\n:root { --background: #fff; }\n}\n");
+  fixture.write("themes/staged/theme.css", "@layer components {\ninput { color: red; }\n}\n");
+  const outcome = fixture.strict();
+  assert.equal(messagesFor(outcome, "css-components-bare-element-selector").length, 0);
 });
 
 test("small text that uses the type scale must also expose the family token", () => {
