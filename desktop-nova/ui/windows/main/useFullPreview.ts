@@ -168,8 +168,29 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   const closed = operation?.state === "cancelled" || operation?.state === "runtime_released";
   const cancelling = operation?.progress?.phase === "cancelling";
   const progress = loading && !cancelling && !launchStage ? operation?.progress : undefined;
-  const phaseLabel: Record<string, string> = { scan_nbt: "正在读取", nbt_scan: "正在读取", normalize: "正在整理", mesh_compile: "正在构建", compile_existing_cells: "正在构建", compile_sections: "正在构建", build_scene: "正在构建", encode: "正在保存", decode: "正在读取", artifact_publishing: "正在准备画面", viewer_preparing: "正在准备画面", cancelling: "正在取消" };
+  const phaseLabel: Record<string, string> = {
+    starting: "正在启动渲染", scan_nbt: "正在读取投影", nbt_scan: "正在读取投影", load_litematic: "正在读取投影",
+    identity: "正在核对输入", native_cache_identity: "正在核对输入", normalize: "正在整理投影", normalize_canonical_ir: "正在整理投影",
+    load_mc26_catalog: "正在读取方块目录", build_mc26_schemas: "正在准备方块状态", load_resource_packs: "正在加载资源",
+    bind_world: "正在关联场景资源", load_biome_tint: "正在准备生物群系颜色",
+    prepare_shared_lighting: "正在求解共享光照",
+    mesh_compile: "正在构建", compile_existing_cells: "正在构建", compile_sections: "正在构建", build_scene: "正在构建",
+    encode: "正在保存", container: "正在保存", checksum: "正在核对缓存", decode: "正在读取缓存", install: "正在保存缓存",
+    artifact_publishing: "正在准备画面", viewer_preparing: "正在准备画面", cancelling: "正在取消",
+  };
   const stage = phaseLabel[progress?.phase || ""] || "正在加载";
+  const lightingProgress = progress?.phase === "prepare_shared_lighting";
+  const geometryProgress = ["mesh_compile", "compile_existing_cells", "compile_sections", "build_scene"].includes(progress?.phase || "");
+  // A resource stage's 1/1 is not task completion. Only measured units from
+  // their own phase may drive a bounded bar; unknown work stays indeterminate.
+  const countedProgress = geometryProgress || (lightingProgress && progress?.activity === "light_sections")
+    || ["encode", "container", "checksum", "decode"].includes(progress?.phase || "");
+  const progressUnits = countedProgress && progress?.completed != null && progress.total != null
+    && Number.isSafeInteger(progress.completed) && Number.isSafeInteger(progress.total)
+    && progress.completed >= 0 && progress.total > 0 && progress.completed <= progress.total
+    ? { completed: progress.completed, total: progress.total } : null;
+  const progressRange = lightingProgress && progressUnits?.completed === 0 ? null : progressUnits;
+  const lightingPercent = progressUnits ? Math.floor(progressUnits.completed / progressUnits.total * 100) : 0;
   const ready = isApplicationViewerPrepared(operation);
   const visible = ready && isApplicationPresentationVisible(operation);
   const operationFailure = operation?.state === "failed" && !pending ? "预览加载失败，请重新加载。" : "";
@@ -183,11 +204,13 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
     : !operation && !pending ? "尚未加载预览"
     : ready && !visible
     ? operation?.presentation.visible ? "正在显示画面…" : "预览已隐藏"
-    : !ready && progress?.completed != null && progress.total != null && progress.total > 0 && progress.completed >= progress.total
+    : !ready && geometryProgress && progressRange && progressRange.completed === progressRange.total
     ? "正在准备画面…"
-    : progress?.completed != null && progress.total != null && progress.total > 0
-    ? `${stage} ${Math.min(100, Math.max(0, Math.round(progress.completed / progress.total * 100)))}%（${progress.completed.toLocaleString()} / ${progress.total.toLocaleString()}）`
+    : lightingProgress && progressUnits
+    ? `${stage}（${progressUnits.completed.toLocaleString()} / ${progressUnits.total.toLocaleString()} 光照区段${progressUnits.completed > 0 ? `，${lightingPercent === 0 ? "<1" : lightingPercent}%` : ""}）${progressUnits.completed === 0 ? "…" : ""}`
+    : progressRange
+    ? `${stage} ${Math.round(progressRange.completed / progressRange.total * 100)}%（${progressRange.completed.toLocaleString()} / ${progressRange.total.toLocaleString()}）`
     : `${stage}…`;
-  return { ...viewport, operation, pending, progress, progressLabel, error: error || viewport.error || operationFailure, preflight, start, choose, hide, close,
+  return { ...viewport, operation, pending, progress, progressRange, progressLabel, error: error || viewport.error || operationFailure, preflight, start, choose, hide, close,
     ready, visible, loading };
 }

@@ -105,13 +105,15 @@ pub fn provisional_presentation_identity(
         render_settings: &'a BTreeMap<String, String>,
     }
 
+    let mut render_settings = presentation.render_settings.clone();
+    render_settings.remove("clickStartedAtEpochMs");
     hash_identity(
         "presentation-pending",
         &Material {
             scene_identity,
             backend: presentation.backend,
             shaderpack_path: presentation.shaderpack.as_deref(),
-            render_settings: &presentation.render_settings,
+            render_settings: &render_settings,
         },
     )
 }
@@ -132,13 +134,15 @@ pub fn presentation_identity_from_digest(
         render_settings: &'a BTreeMap<String, String>,
     }
 
+    let mut render_settings = presentation.render_settings.clone();
+    render_settings.remove("clickStartedAtEpochMs");
     hash_identity(
         "presentation",
         &Material {
             scene_identity,
             backend: presentation.backend,
             shaderpack_sha256,
-            render_settings: &presentation.render_settings,
+            render_settings: &render_settings,
         },
     )
 }

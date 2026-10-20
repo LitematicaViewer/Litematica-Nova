@@ -173,6 +173,72 @@ test('标准预加载使用正式非空气构建进度，不把完整目录当�
  assert.equal(h.result.progress.total,21458);assert.equal(h.result.ready,false);
 });
 
+test('共享光照使用真实阶段和光照区段计数，完成后几何阶段独立从零开始',async()=>{
+ const h=harness({preload:true,prepared:false,plan:{directRealtime:false,preflight:normal}});
+ await h.result.start();await h.settle();
+ for(const phase of ['prepare_shared_lighting']) {
+  h.patchOperation({progress:{phase,activity:'light_sections',completed:0,total:8006,elapsedMs:29000}});
+  assert.equal(h.result.progressLabel,'正在求解共享光照（0 / 8,006 光照区段）…');
+  assert.equal(h.result.progressRange,null,'尚无已完成光照区段时使用不定进度');
+  h.patchOperation({progress:{phase,activity:'light_sections',completed:1,total:8006,elapsedMs:29500}});
+  assert.equal(h.result.progressLabel,'正在求解共享光照（1 / 8,006 光照区段，<1%）');
+  assert.equal(h.result.progressRange.completed,1);assert.equal(h.result.progressRange.total,8006);
+  h.patchOperation({progress:{phase,activity:'light_sections',completed:12,total:48,elapsedMs:30000}});
+  assert.equal(h.result.progressLabel,'正在求解共享光照（12 / 48 光照区段，25%）');
+  assert.equal(h.result.progressRange.completed,12);assert.equal(h.result.progressRange.total,48);
+  assert.equal(h.result.ready,false);
+  h.patchOperation({progress:{phase,activity:'light_sections',completed:48,total:48,elapsedMs:31000}});
+  assert.equal(h.result.progressLabel,'正在求解共享光照（48 / 48 光照区段，100%）');
+ }
+ h.patchOperation({progress:{phase:'compile_existing_cells',activity:'sections',completed:0,total:8006,elapsedMs:31001}});
+ assert.equal(h.result.progressLabel,'正在构建 0%（0 / 8,006）');
+ assert.equal(h.result.progressRange.completed,0);assert.equal(h.result.progressRange.total,8006);
+ assert.equal(h.calls.start.length,1,'阶段变化不能启动第二个任务');
+});
+
+test('资源准备的局部1/1不冒充画面就绪或全局百分比',async()=>{
+ const h=harness({preload:true,prepared:false,plan:{directRealtime:false,preflight:normal}});
+ await h.result.start();await h.settle();
+ for(const [phase,label] of [
+  ['load_litematic','正在读取投影'],['normalize_canonical_ir','正在整理投影'],
+  ['load_mc26_catalog','正在读取方块目录'],['build_mc26_schemas','正在准备方块状态'],
+  ['load_resource_packs','正在加载资源'],['bind_world','正在关联场景资源'],['load_biome_tint','正在准备生物群系颜色'],
+ ]) for(const completed of [0,1]) {
+  h.patchOperation({progress:{phase,activity:'stage_steps',completed,total:1}});
+  assert.equal(h.result.progressLabel,`${label}…`);
+  assert.equal(h.result.progressRange,null);assert.equal(h.result.ready,false);
+ }
+ h.patchOperation({progress:{phase:'artifact_publishing',completed:1,total:1}});
+ assert.equal(h.result.progressLabel,'正在准备画面…');assert.equal(h.result.progressRange,null);
+});
+
+test('共享光照未知或非法分母保持不定进度，不借用其他阶段计数',async()=>{
+ const h=harness({preload:true,prepared:false,plan:{directRealtime:false,preflight:normal}});
+ await h.result.start();await h.settle();
+ for(const [activity,completed,total] of [
+  ['light_sections',0,null],['light_sections',0,0],['light_sections',1,NaN],
+  ['light_sections',1,Infinity],['light_sections',-1,48],['light_sections',49,48],
+  ['light_sections',0.5,48],['stage_steps',1,1],['sections',0,8006],
+ ]) {
+  h.patchOperation({progress:{phase:'prepare_shared_lighting',activity,completed,total}});
+  assert.equal(h.result.progressLabel,'正在求解共享光照…');assert.equal(h.result.progressRange,null);
+ }
+});
+
+test('渲染页实际progress元素使用统一范围，未知阶段不画伪零进度',()=>{
+ const text=readFileSync(new URL('../ui/windows/main/pages/render/RenderPage.tsx',import.meta.url),'utf8');
+ const parsed=ts.createSourceFile('RenderPage.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+ let element;
+ function visit(node){if(ts.isJsxSelfClosingElement(node)&&node.tagName.getText(parsed)==='progress')element=node;ts.forEachChild(node,visit);}
+ visit(parsed);assert(element);
+ const compiled=ts.transpileModule(`const output=(${element.getText(parsed)});`,{compilerOptions:{jsx:ts.JsxEmit.React,target:ts.ScriptTarget.ES2022}}).outputText;
+ for(const progressRange of [null,{completed:12,total:48}]) {
+  const result=vm.runInNewContext(`${compiled};output`,{full:{progressRange},React:{createElement:(type,props)=>({type,props})}});
+  assert.equal(result.type,'progress');assert.equal(result.props.max,progressRange?.total);
+  assert.equal(result.props.value,progressRange?.completed);
+ }
+});
+
 test('预加载构建完成到真实Prepared和Present只推进同一任务，不自动重复构建',async()=>{
  const h=harness({prepared:false,preload:true,displayMode:'standard',plan:{directRealtime:false,preflight:normal}});
  await h.result.start();await h.settle();const id=h.result.operation.operationId;

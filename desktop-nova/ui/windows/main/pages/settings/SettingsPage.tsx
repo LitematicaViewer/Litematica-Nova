@@ -309,7 +309,6 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
       }
       setV5Compatibility((current) => ({
         ...current,
-        backend: current.backend === "vulkan" ? "iris-gl46" : current.backend,
         shaderpack_root: parts.root,
         shaderpack_name: parts.name,
       }));
@@ -671,10 +670,10 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label">渲染后端</div>
+          <div className="form-label">完整模式后端</div>
           <Dropdown ariaLabel="渲染后端" value={v5Compatibility.backend}
             onChange={(value) => setV5Compatibility((current) => ({ ...current, backend: value as V5CompatibilityConfig["backend"] }))}
-            options={[{ value: "auto", label: "自动" }, { value: "vulkan", label: "Vulkan" }, { value: "iris-gl46", label: "光影模式" }]} />
+            options={[{ value: "auto", label: "自动" }, { value: "vulkan", label: "Vulkan（支持光影包）" }, { value: "iris-gl46", label: "OpenGL 4.6（光影对照）" }]} />
         </div>
         <div className="form-row">
           <div className="form-label">光影包文件夹</div>

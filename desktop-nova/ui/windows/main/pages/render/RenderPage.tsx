@@ -42,8 +42,6 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
     finally { captureInFlight.current = false; setCapturing(false); }
   };
   const fullProgress = full.progress;
-  const fullProgressBounded = fullProgress?.completed != null && fullProgress?.total != null
-    && Number.isFinite(fullProgress.completed) && Number.isFinite(fullProgress.total) && fullProgress.total > 0;
   const operation = preview.operation;
   const ready = operation?.state === "ready";
   const loading = operation?.state === "starting" && !operation.error;
@@ -87,7 +85,7 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
       {full.error && <pre className="render-error" role="alert">{displayPathText(full.error)}</pre>}
       {fullProgress && !full.visible && !full.error && <div className="render-preview-help" role="status" aria-live="polite">
         {full.progressLabel}
-        {fullProgressBounded && <progress aria-label="渲染进度" max={fullProgress.total!} value={fullProgress.completed!} />}
+        <progress aria-label="渲染进度" max={full.progressRange?.total} value={full.progressRange?.completed} />
       </div>}
       <div className="render-preview-group"><div ref={full.hostRef} className="render-preview-host" aria-label={`${mode === "standard" ? "标准" : "完整"}预览视口`}>
         {!full.visible && <div className="render-preview-placeholder"><ThemeIcon name="empty" size={40} fallback={Box} /><strong>{name}</strong><span>{full.error ? "预览加载失败，请重新加载。" : full.progressLabel}</span></div>}

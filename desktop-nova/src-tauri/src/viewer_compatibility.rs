@@ -133,9 +133,6 @@ impl V5CompatibilityConfig {
         {
             return Err("shaderpack name 必须是 root 下的单个文件或目录名".to_owned());
         }
-        if backend == "vulkan" && root_present {
-            return Err("Vulkan backend 不能应用 shaderpack；请选择 auto 或 iris-gl46".to_owned());
-        }
         if backend == "iris-gl46" && !root_present {
             return Err("iris-gl46 backend 必须同时配置 shaderpack root 和 name".to_owned());
         }
@@ -534,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_or_contradictory_shaderpack_settings_are_rejected() {
+    fn incomplete_shaderpack_settings_are_rejected_and_explicit_vulkan_keeps_the_pack() {
         let fixture = TempFixture::new();
         let mut config = V5CompatibilityConfig {
             backend: "iris-gl46".to_owned(),
@@ -549,11 +546,30 @@ mod tests {
         config.backend = "vulkan".to_owned();
         config.shaderpack_root = "shaderpacks".to_owned();
         config.shaderpack_name = "pack.zip".to_owned();
-        assert!(
-            ViewerCompatibilityPlan::build(&config, &fixture.root, CompatibilityScope::Render)
-                .unwrap_err()
-                .contains("不能应用 shaderpack")
-        );
+        let plan = ViewerCompatibilityPlan::build(&config, &fixture.root, CompatibilityScope::Render).unwrap();
+        let renderer = plan.renderer().unwrap();
+        assert_eq!(renderer.backend, ViewerBackend::Vulkan);
+        assert_eq!(renderer.shaderpack.as_ref().unwrap().path, fixture.root.join("shaderpacks/pack.zip"));
+
+        config.shaderpack_name.clear();
+        assert!(config.normalized().unwrap_err().contains("必须同时填写"));
+    }
+
+    #[test]
+    fn full_backend_selection_preserves_auto_and_opengl_reference_semantics() {
+        let fixture = TempFixture::new();
+        for (backend, expected) in [("auto", ViewerBackend::Auto), ("iris-gl46", ViewerBackend::IrisGl46), ("vulkan", ViewerBackend::Vulkan)] {
+            let config = V5CompatibilityConfig {
+                backend: backend.into(), shaderpack_root: "shaderpacks".into(), shaderpack_name: "pack.zip".into(),
+                ..V5CompatibilityConfig::default()
+            };
+            let inputs = ViewerCompatibilityInputs::resolve(&config, &fixture.root, CompatibilityScope::Render).unwrap();
+            assert_eq!(inputs.renderer().unwrap().backend, expected);
+            assert!(inputs.renderer().unwrap().shaderpack.is_some());
+            // A cache-build request must still receive no renderer-only state.
+            let cache = ViewerCompatibilityInputs::resolve(&config, &fixture.root, CompatibilityScope::SceneCache).unwrap();
+            assert!(cache.renderer().is_none());
+        }
     }
 
     #[test]

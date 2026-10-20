@@ -1230,13 +1230,25 @@ fn validate_resource_demand_request(request_path: &Path, runtime_root: &Path) ->
     {
         return Err("resource demand contract resolves outside its owned directory".to_owned());
     }
-    match (&request.selected_backend, request.iris_capabilities.as_ref()) {
-        (HostResourceProbeBackend::Vulkan, None) => {},
-        (HostResourceProbeBackend::IrisGl46, Some(value)) if value.is_object() => {},
-        _ => return Err("resource demand must bind an explicitly selected backend and its capabilities".to_owned()),
+    validate_resource_demand_backend_route(&request.selected_backend,request.presentation.backend,
+        request.presentation.shaderpack.is_some(),request.iris_capabilities.as_ref(),cfg!(target_os="macos"))
+}
+
+// The public Host validates route facts only; it never links private core code
+// or invents MoltenVK capabilities. Auto is forwarded unchanged to the probe.
+fn validate_resource_demand_backend_route(selected:&HostResourceProbeBackend,
+    configured:nova_render_protocol::RenderBackend,shaderpack_requested:bool,
+    iris_capabilities:Option<&serde_json::Value>,macos:bool)->Result<(),String>{
+    use nova_render_protocol::RenderBackend;
+    match (selected,iris_capabilities) {
+        (HostResourceProbeBackend::Vulkan,None) if !shaderpack_requested => Ok(()),
+        (HostResourceProbeBackend::IrisVulkan,None) if shaderpack_requested
+            &&matches!(configured,RenderBackend::Auto|RenderBackend::Vulkan)=>Ok(()),
+        (HostResourceProbeBackend::IrisGl46,Some(value)) if value.is_object()&&shaderpack_requested
+            &&matches!(configured,RenderBackend::Auto|RenderBackend::IrisGl46)
+            &&!(macos&&configured==RenderBackend::Auto)=>Ok(()),
+        _=>Err("resource demand must bind its actual selected backend and capability class; macOS Auto shaderpacks require Iris Vulkan, not an OpenGL/PPLL certificate".to_owned()),
     }
-    let _ = request.presentation; // Typed deserialization preserves the existing Presentation contract.
-    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -1245,6 +1257,7 @@ enum HostResourceProbeBackend {
     Auto,
     Vulkan,
     IrisGl46,
+    IrisVulkan,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1439,8 +1452,8 @@ fn validate_resource_probe_route(request: &HostResourceProbeRequest) -> Result<(
         request.iris_route.shaderpack_requested,
         &request.iris_route.fallback,
     ) {
-        (HostResourceProbeBackend::Vulkan, true, _) => {
-            Err("Vulkan resource preflight may not claim an Iris shaderpack route".to_owned())
+        (HostResourceProbeBackend::IrisVulkan, _, _) => {
+            Err("Iris Vulkan is a selected resource backend, not a raw probe preference".to_owned())
         }
         (HostResourceProbeBackend::IrisGl46, false, _) => {
             Err("Iris resource preflight requires a shaderpack route marker".to_owned())
@@ -1786,6 +1799,42 @@ mod tests {
         extra_argument.args.push("--nova-stream-await".to_owned());
         assert!(validate_render_child_shape(&extra_argument, &runtime_root).is_err());
         std::fs::remove_dir_all(runtime_root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn resource_probe_accepts_explicit_vulkan_shaderpack_without_relabeling_it_as_gl() {
+        let request=serde_json::json!({"schema":1,"request_id":"iris-native","backend":"vulkan",
+            "iris_route":{"fallback":"fail","shaderpack_requested":true},"vulkan_adapter":null,
+            "viewport":[1280,720],"result_path":"C:/Nova/status/preflight/nova-resource-preflight-result-iris-native.json"});
+        let parsed:HostResourceProbeRequest=serde_json::from_value(request.clone()).unwrap();
+        validate_resource_probe_route(&parsed).unwrap();
+        assert!(matches!(parsed.backend,HostResourceProbeBackend::Vulkan));
+        let mut invalid=request;invalid["backend"]="iris_vulkan".into();
+        let parsed:HostResourceProbeRequest=serde_json::from_value(invalid).unwrap();
+        assert!(validate_resource_probe_route(&parsed).unwrap_err().contains("selected resource backend"));
+    }
+
+    #[test]
+    fn macos_auto_shaderpack_host_accepts_native_vulkan_and_rejects_a_stale_gl_certificate() {
+        let gl_capabilities=serde_json::json!({"actual_test_marker":true});
+        for (platform,macos) in [("windows",false),("linux",false),("macos",true)] {
+            assert!(validate_resource_demand_backend_route(&HostResourceProbeBackend::IrisVulkan,
+                RenderBackend::Auto,true,None,macos).is_ok(),"{platform}");
+            assert_eq!(validate_resource_demand_backend_route(&HostResourceProbeBackend::IrisGl46,
+                RenderBackend::Auto,true,Some(&gl_capabilities),macos).is_ok(),!macos,"{platform}");
+            assert!(validate_resource_demand_backend_route(&HostResourceProbeBackend::IrisGl46,
+                RenderBackend::IrisGl46,true,Some(&gl_capabilities),macos).is_ok(),"explicit GL remains a distinct route on {platform}");
+            assert!(validate_resource_demand_backend_route(&HostResourceProbeBackend::Vulkan,
+                RenderBackend::Auto,true,None,macos).is_err(),"PPLL cannot certify shaderpack demand on {platform}");
+            assert!(validate_resource_demand_backend_route(&HostResourceProbeBackend::Vulkan,
+                RenderBackend::Auto,false,None,macos).is_ok(),"ordinary no-pack route on {platform}");
+        }
+        let request=serde_json::json!({"schema":1,"request_id":"mac-auto","backend":"auto",
+            "iris_route":{"fallback":"fail","shaderpack_requested":true},"vulkan_adapter":null,
+            "result_path":"C:/Nova/status/preflight/nova-resource-preflight-result-mac-auto.json"});
+        let parsed:HostResourceProbeRequest=serde_json::from_value(request).unwrap();
+        validate_resource_probe_route(&parsed).unwrap();
+        assert!(matches!(parsed.backend,HostResourceProbeBackend::Auto));
     }
 
     #[test]

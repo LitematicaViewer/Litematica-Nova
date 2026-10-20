@@ -780,9 +780,12 @@ impl ViewerLaunchContract {
                     .as_ref()
                     .ok_or_else(|| "interactive launch requires renderer settings".to_owned())?;
                 renderer.validate()?;
-                if task.capture.is_some() && renderer.backend != ViewerBackend::IrisGl46 {
+                if task.capture.is_some()
+                    && !(renderer.shaderpack.is_some()
+                        && matches!(renderer.backend, ViewerBackend::IrisGl46 | ViewerBackend::Vulkan))
+                {
                     return Err(
-                        "interactive frame capture requires the iris-gl46 backend".to_owned()
+                        "interactive frame capture requires an explicit Iris OpenGL or Vulkan shaderpack backend".to_owned()
                     );
                 }
                 task.validate()
@@ -880,9 +883,6 @@ impl ViewerRenderer {
             shaderpack.validate()?;
         }
         match (self.backend, self.shaderpack.is_some()) {
-            (ViewerBackend::Vulkan, true) => {
-                Err("Vulkan backend cannot use a shaderpack".to_owned())
-            }
             (ViewerBackend::IrisGl46, false) => {
                 Err("iris-gl46 backend requires a shaderpack".to_owned())
             }
@@ -2362,6 +2362,39 @@ mod tests {
                 .unwrap_err()
                 .contains("must be derived")
         );
+    }
+
+    #[test]
+    fn explicit_vulkan_iris_keeps_shaderpack_and_real_capture_contract() {
+        for backend in [ViewerBackend::IrisGl46, ViewerBackend::Vulkan] {
+            let mut contract = interactive_contract();
+            contract.renderer.as_mut().unwrap().backend = backend;
+            if let ViewerTask::Interactive(task) = &mut contract.task {
+                task.capture = Some(ViewerFrameCapture::new(absolute("captures/iris-frame.png"), 1).unwrap());
+            }
+            contract.validate().unwrap();
+            let bytes = contract.to_json_bytes().unwrap();
+            let decoded = ViewerLaunchContract::from_json_slice(&bytes).unwrap();
+            assert_eq!(decoded.renderer.as_ref().unwrap().backend, backend);
+            assert!(decoded.renderer.as_ref().unwrap().shaderpack.is_some());
+        }
+    }
+
+    #[test]
+    fn iris_capture_does_not_relabel_plain_vulkan_or_auto_as_a_shaderpack_path() {
+        let mut contract = interactive_contract();
+        if let ViewerTask::Interactive(task) = &mut contract.task {
+            task.capture = Some(ViewerFrameCapture::new(absolute("captures/frame.png"), 1).unwrap());
+        }
+        let renderer = contract.renderer.as_mut().unwrap();
+        renderer.backend = ViewerBackend::Vulkan;
+        renderer.shaderpack = None;
+        assert!(contract.validate().unwrap_err().contains("explicit Iris"));
+
+        let renderer = contract.renderer.as_mut().unwrap();
+        renderer.backend = ViewerBackend::Auto;
+        renderer.shaderpack = Some(ViewerShaderpack { path: absolute("shaderpacks/pack.zip") });
+        assert!(contract.validate().unwrap_err().contains("explicit Iris"));
     }
 
     #[test]
