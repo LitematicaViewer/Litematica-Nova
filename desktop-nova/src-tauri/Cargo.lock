@@ -1195,6 +1195,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tauri-runtime",
  "tokio",
  "viewer-launch-contract",
  "windows-sys 0.59.0",

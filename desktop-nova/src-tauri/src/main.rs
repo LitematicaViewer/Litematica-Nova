@@ -3682,6 +3682,18 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
+            #[cfg(windows)]
+            if window.label() == "main"
+                && platform::native_preview_host::windows_clipping_needs_refresh(event)
+            {
+                // Tao rebuilds native styles on maximize/restore. Preserve the
+                // child/sibling clipping contract without touching the Viewer.
+                let result = window.hwnd().map_err(|error| error.to_string())
+                    .and_then(|hwnd| platform::native_preview_host::ensure_windows_host_clipping(hwnd.0 as isize));
+                if let Err(error) = result {
+                    eprintln!("[NOVA_NATIVE_HOST] stage=maintain_clipping error={error}");
+                }
+            }
             #[cfg(target_os="macos")]
             if window.label() == "main" {
                 // Occlusion/minimization uses native AppKit notifications in

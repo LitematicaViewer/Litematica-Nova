@@ -166,11 +166,100 @@ pub(crate) fn configure_process_graphics() -> Result<(), String> {
     Ok(())
 }
 
+/// Keep native GPU siblings outside the Host/WebView repaint regions. Tao can
+/// rewrite its parent styles on window-state changes, so callers may reapply
+/// this idempotently without moving, raising or activating any window.
+#[cfg(windows)]
+pub(crate) fn ensure_windows_host_clipping(parent: isize) -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetParent, GetWindow, GetWindowThreadProcessId,
+        GW_CHILD, GW_HWNDNEXT, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    };
+    let parent = parent as windows_sys::Win32::Foundation::HWND;
+    let own_pid = std::process::id();
+    let mut parent_pid = 0;
+    if unsafe { GetWindowThreadProcessId(parent, &mut parent_pid) } == 0 {
+        return Err(format!("读取原生预览主窗口失败：{}", std::io::Error::last_os_error()));
+    }
+    if parent_pid != own_pid {
+        return Err("原生预览主窗口不属于当前程序".into());
+    }
+    let mut webviews = Vec::new();
+    let mut child = unsafe { GetWindow(parent, GW_CHILD) };
+    while !child.is_null() {
+        let mut pid = 0;
+        if unsafe { GetParent(child) } == parent
+            && unsafe { GetWindowThreadProcessId(child, &mut pid) } != 0
+            && pid == own_pid
+        {
+            let mut class = [0_u16; 64];
+            let length = unsafe { GetClassNameW(child, class.as_mut_ptr(), class.len() as i32) };
+            if length == 0 {
+                return Err(format!("读取原生预览同胞窗口类型失败：{}", std::io::Error::last_os_error()));
+            }
+            if class[..length as usize].iter().copied().eq("WRY_WEBVIEW".encode_utf16()) {
+                webviews.push(child);
+            }
+        }
+        child = unsafe { GetWindow(child, GW_HWNDNEXT) };
+    }
+    if webviews.is_empty() {
+        return Err("原生预览主窗口的直属 WebView 尚未创建".into());
+    }
+    add_windows_clipping_style(parent, WS_CLIPCHILDREN)?;
+    for webview in webviews {
+        add_windows_clipping_style(webview, WS_CLIPSIBLINGS)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+pub(crate) fn windows_clipping_needs_refresh(event: &tauri::WindowEvent) -> bool {
+    matches!(event,
+        tauri::WindowEvent::Resized(_)
+        | tauri::WindowEvent::ScaleFactorChanged { .. }
+        | tauri::WindowEvent::Focused(true))
+}
+
+#[cfg(windows)]
+fn add_windows_clipping_style(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    clipping: u32,
+) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    };
+    unsafe {
+        SetLastError(0);
+        let before = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        if before == 0 && GetLastError() != 0 {
+            return Err(format!("读取原生预览裁剪样式失败：{}", std::io::Error::last_os_error()));
+        }
+        let after = before | clipping as isize;
+        if after == before { return Ok(()); }
+        SetLastError(0);
+        if SetWindowLongPtrW(hwnd, GWL_STYLE, after) == 0 && GetLastError() != 0 {
+            return Err(format!("设置原生预览裁剪样式失败：{}", std::io::Error::last_os_error()));
+        }
+        if SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) == 0
+        {
+            return Err(format!("应用原生预览裁剪样式失败：{}", std::io::Error::last_os_error()));
+        }
+        eprintln!("[NOVA_NATIVE_HOST] hwnd={} clipping_style_before={before:#x} clipping_style_after={after:#x} move=false resize=false zorder_change=false activate=false", hwnd as isize);
+    }
+    Ok(())
+}
+
 pub(crate) fn host_window(window: &tauri::WebviewWindow) -> Result<QuickPreviewHostWindow, String> {
     #[cfg(windows)]
     {
+        let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
+        ensure_windows_host_clipping(hwnd)?;
         return Ok(QuickPreviewHostWindow {
-            hwnd: (window.hwnd().map_err(|error| error.to_string())?.0 as isize).to_string(),
+            hwnd: hwnd.to_string(),
             process_id: std::process::id(),
          native_composition: None });
     }
@@ -201,6 +290,131 @@ pub(crate) fn host_window(window: &tauri::WebviewWindow) -> Result<QuickPreviewH
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_host_clipping_preserves_hidden_windows_and_is_idempotent() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+        use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+        static POSITION_EVENTS: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+            if message == WM_WINDOWPOSCHANGED { POSITION_EVENTS.fetch_add(1, Ordering::SeqCst); }
+            DefWindowProcW(hwnd, message, w, l)
+        }
+        struct HiddenParent(HWND);
+        impl Drop for HiddenParent {
+            fn drop(&mut self) { unsafe { DestroyWindow(self.0); } }
+        }
+        unsafe fn snapshot(hwnd: HWND) -> (isize, isize, [i32; 4], isize, isize, isize, i32) {
+            let mut rect: RECT = std::mem::zeroed();
+            assert_ne!(GetWindowRect(hwnd, &mut rect), 0);
+            (GetWindowLongPtrW(hwnd, GWL_STYLE), GetWindowLongPtrW(hwnd, GWL_EXSTYLE),
+                [rect.left, rect.top, rect.right, rect.bottom], GetParent(hwnd) as isize,
+                GetWindow(hwnd, GW_HWNDPREV) as isize, GetWindow(hwnd, GW_HWNDNEXT) as isize,
+                IsWindowVisible(hwnd))
+        }
+        unsafe {
+            let class = "WRY_WEBVIEW\0".encode_utf16().collect::<Vec<_>>();
+            let static_class = "STATIC\0".encode_utf16().collect::<Vec<_>>();
+            let instance = GetModuleHandleW(std::ptr::null());
+            let mut definition: WNDCLASSW = std::mem::zeroed();
+            definition.lpfnWndProc = Some(procedure);
+            definition.hInstance = instance;
+            definition.lpszClassName = class.as_ptr();
+            assert_ne!(RegisterClassW(&definition), 0, "{}", std::io::Error::last_os_error());
+            let create = |name: *const u16, style, parent| CreateWindowExW(0, name, std::ptr::null(),
+                style, 3, 5, 160, 120, parent, std::ptr::null_mut(), instance, std::ptr::null());
+            // WS_VISIBLE is absent everywhere; no window is shown or rendered.
+            let parent = HiddenParent(create(class.as_ptr(), WS_OVERLAPPEDWINDOW, std::ptr::null_mut()));
+            assert!(!parent.0.is_null());
+            let webview = create(class.as_ptr(), WS_CHILD | WS_CLIPCHILDREN | WS_TABSTOP, parent.0);
+            let sibling = create(static_class.as_ptr(), WS_CHILD | WS_TABSTOP, parent.0);
+            let nested = create(class.as_ptr(), WS_CHILD, sibling);
+            assert!(!webview.is_null() && !sibling.is_null() && !nested.is_null());
+            let before_parent = snapshot(parent.0);
+            let before_webview = snapshot(webview);
+            let before_sibling = snapshot(sibling);
+            let before_nested = snapshot(nested);
+            ensure_windows_host_clipping(parent.0 as isize).unwrap();
+            let mut expected_parent = before_parent;
+            expected_parent.0 |= WS_CLIPCHILDREN as isize;
+            let mut expected_webview = before_webview;
+            expected_webview.0 |= WS_CLIPSIBLINGS as isize;
+            assert_eq!(snapshot(parent.0), expected_parent);
+            assert_eq!(snapshot(webview), expected_webview);
+            assert_eq!(snapshot(sibling), before_sibling);
+            assert_eq!(snapshot(nested), before_nested, "only direct WRY siblings may change");
+            POSITION_EVENTS.store(0, Ordering::SeqCst);
+            ensure_windows_host_clipping(parent.0 as isize).unwrap();
+            ensure_windows_host_clipping(parent.0 as isize).unwrap();
+            assert_eq!(POSITION_EVENTS.load(Ordering::SeqCst), 0, "idempotent calls must not repeat SetWindowPos");
+            assert_eq!(snapshot(parent.0), expected_parent);
+            assert_eq!(snapshot(webview), expected_webview);
+            // Reproduce Tao rewriting only the parent style during restore.
+            SetWindowLongPtrW(parent.0, GWL_STYLE, before_parent.0);
+            ensure_windows_host_clipping(parent.0 as isize).unwrap();
+            assert_eq!(snapshot(parent.0), expected_parent);
+            assert_eq!(snapshot(webview), expected_webview);
+            assert_eq!(snapshot(sibling), before_sibling);
+            assert_eq!(snapshot(nested), before_nested);
+            // The WebView may independently lose its sibling-clipping bit;
+            // restoring it must not rewrite the already-correct parent.
+            SetWindowLongPtrW(webview, GWL_STYLE, before_webview.0);
+            assert_eq!(snapshot(parent.0), expected_parent);
+            ensure_windows_host_clipping(parent.0 as isize).unwrap();
+            assert_eq!(snapshot(parent.0), expected_parent);
+            assert_eq!(snapshot(webview), expected_webview);
+            assert_eq!(snapshot(sibling), before_sibling);
+            assert_eq!(snapshot(nested), before_nested);
+            let size = |width, height| tauri::PhysicalSize::new(width, height);
+            for (name, event, extent) in [
+                ("route_restore", tauri::WindowEvent::Focused(true), [854, 480]),
+                ("minimize_event", tauri::WindowEvent::Resized(size(0, 0)), [0, 0]),
+                ("restore_event", tauri::WindowEvent::Resized(size(854, 480)), [854, 480]),
+                ("maximize_event", tauri::WindowEvent::Resized(size(1920, 1080)), [1920, 1080]),
+                ("resize_event", tauri::WindowEvent::Resized(size(1234, 789)), [1234, 789]),
+                ("dpi_event", tauri::WindowEvent::from(tauri_runtime::window::WindowEvent::ScaleFactorChanged {
+                    scale_factor: 1.5, new_inner_size: size(1281, 720),
+                }), [1281, 720]),
+            ] {
+                // Exercise only owned, never-shown HWNDs. A zero-size event
+                // represents minimization without invoking ShowWindow/min/max.
+                assert_ne!(SetWindowPos(parent.0, std::ptr::null_mut(), 0, 0, extent[0], extent[1],
+                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE), 0);
+                assert_ne!(SetWindowPos(webview, std::ptr::null_mut(), 7, 11, extent[0], extent[1],
+                    SWP_NOZORDER | SWP_NOACTIVATE), 0);
+                SetWindowLongPtrW(parent.0, GWL_STYLE,
+                    GetWindowLongPtrW(parent.0, GWL_STYLE) & !(WS_CLIPCHILDREN as isize));
+                SetWindowLongPtrW(webview, GWL_STYLE,
+                    GetWindowLongPtrW(webview, GWL_STYLE) & !(WS_CLIPSIBLINGS as isize));
+                let mut expected_parent = snapshot(parent.0);
+                let mut expected_webview = snapshot(webview);
+                let expected_sibling = snapshot(sibling);
+                let expected_nested = snapshot(nested);
+                expected_parent.0 |= WS_CLIPCHILDREN as isize;
+                expected_webview.0 |= WS_CLIPSIBLINGS as isize;
+                assert!(windows_clipping_needs_refresh(&event), "{name}");
+                ensure_windows_host_clipping(parent.0 as isize).unwrap();
+                assert_eq!(snapshot(parent.0), expected_parent, "{name}: parent geometry/style");
+                assert_eq!(snapshot(webview), expected_webview, "{name}: WebView geometry/style");
+                assert_eq!(snapshot(sibling), expected_sibling, "{name}: native sibling unchanged");
+                assert_eq!(snapshot(nested), expected_nested, "{name}: descendants unchanged");
+                POSITION_EVENTS.store(0, Ordering::SeqCst);
+                ensure_windows_host_clipping(parent.0 as isize).unwrap();
+                assert_eq!(POSITION_EVENTS.load(Ordering::SeqCst), 0, "{name}: no repeated position change");
+            }
+            for event in [tauri::WindowEvent::Focused(false), tauri::WindowEvent::Destroyed,
+                tauri::WindowEvent::Moved(tauri::PhysicalPosition::new(100, 200))] {
+                assert!(!windows_clipping_needs_refresh(&event));
+            }
+            assert!(ensure_windows_host_clipping(0).is_err());
+            drop(parent);
+            assert_ne!(UnregisterClassW(class.as_ptr(), instance), 0);
+        }
+    }
+
     #[test]
     fn x11_and_xwayland_use_the_same_real_child_protocol() {
         assert_eq!(linux_windowing_plan(Some(OsStr::new(":0")), None).unwrap(), "x11");

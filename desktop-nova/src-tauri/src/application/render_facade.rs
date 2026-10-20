@@ -2591,6 +2591,61 @@ mod tests {
     }
 
     #[test]
+    fn full_window_transitions_keep_the_same_build_and_viewer_in_both_loading_modes() {
+        for mode in [RenderBuildMode::Prebuilt, RenderBuildMode::Realtime] {
+            let fake = Arc::new(FakeTransport::default());
+            fake.push_response(accepted(Some("viewer-1")));
+            let facade = facade(fake.clone());
+            let mut input = request();
+            input.settings.display_mode = RenderDisplayMode::Full;
+            input.settings.build_mode = mode;
+            let started = tauri::async_runtime::block_on(start_for_test(
+                &facade, input, RenderEnvironmentInputs::default(),
+            )).unwrap();
+            let prebuilt = mode == RenderBuildMode::Prebuilt;
+            fake.set_snapshot(ServiceSnapshot {
+                builds: vec![build_snapshot(7, if prebuilt { BuildState::BuildCompleted } else { BuildState::Building })],
+                artifacts: if prebuilt { vec![artifact_snapshot(7, ArtifactState::Ready)] } else { vec![] },
+                viewers: vec![viewer_snapshot(7,
+                    if prebuilt { ViewerRuntimeState::ViewerPrepared } else { ViewerRuntimeState::RealtimeReady },
+                    ViewerPresentationState::Hidden)],
+            });
+            facade.refresh_from_service();
+            let expected_state = if prebuilt { OperationState::ViewerPrepared } else { OperationState::RealtimeReady };
+            for (index, (visible, placement)) in [
+                (true, Some((20, 40, 800, 600, 1.0))),
+                (false, None), // Leave the route.
+                (true, Some((300, 400, 900, 700, 1.5))),
+                (false, None), // Minimize without releasing the scene.
+                (true, Some((500, 600, 1280, 720, 2.0))),
+                (true, Some((0, 0, 1920, 1080, 1.0))), // Maximize.
+                (true, Some((100, 200, 1234, 789, 1.5))), // Resize / DPI.
+            ].into_iter().enumerate() {
+                fake.push_response(ResponseBody::Ack);
+                let view = tauri::async_runtime::block_on(facade.update_presentation(
+                    &started.operation.operation_id, PresentationIntent {
+                        mode: if visible { PresentationMode::Embedded } else { PresentationMode::Hidden },
+                        visible,
+                        placement: placement.map(|(x, y, width, height, dpi_scale)| PresentationPlacement {
+                            x, y, width, height, dpi_scale, focused: false,
+                        }),
+                        presentation_epoch: Some(index as u64 + 1),
+                    },
+                )).unwrap();
+                assert_eq!(view.operation_id, started.operation.operation_id);
+                assert_eq!(view.state, expected_state);
+            }
+            let commands = fake.commands.lock().unwrap();
+            assert_eq!(commands.iter().filter(|command| matches!(command, UiCommand::StartBuild(_))).count(), 1);
+            assert_eq!(commands.len(), 8, "one initial build plus seven presentation changes");
+            assert!(commands[1..].iter().all(|command| matches!(command,
+                UiCommand::SetBoundPresentation { session_id, build_id, generation: 7, .. }
+                    if session_id == "viewer-1" && build_id == "build-1")),
+                "no new build, scene replacement, cancellation or Viewer release");
+        }
+    }
+
+    #[test]
     fn hide_and_show_never_release_the_viewer_runtime() {
         let fake = Arc::new(FakeTransport::default());
         fake.push_response(accepted(Some("viewer-1")));
