@@ -75,6 +75,7 @@ function createHarness(records, overrides = {}, initialCategories = [], persiste
     if (name.endsWith("/ui/scroll-area")) return { ScrollArea: "scroll-area" };
     if (name.endsWith("/Dropdown")) return { Dropdown: "dropdown" };
     if (name.endsWith("/Dialog")) return { Dialog: "dialog" };
+    if (name.endsWith("/ThemeIcon")) return { ThemeIcon: "theme-icon" };
     if (name === "./sendDialog") return { SendProjectionDialog: "send-dialog" };
     if (name === "./function") return { ensureLitematicFileName: (value) => `${value}.litematic` };
     if (name.endsWith("/local_library_folders")) return { LocalLibraryFoldersDialog: "folders-dialog", openLocalLibraryFoldersWithWindowBehavior: async () => {} };

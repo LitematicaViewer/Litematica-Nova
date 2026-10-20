@@ -32,6 +32,7 @@ import "../../../../styles/flake.css";
 import { loadStructuralBlocks } from "../../../../../src/business/facade";
 import { resolveFlakeLayerBlockImage, extractLayerPaletteStates } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
+import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { Dialog } from "../../../../components/Dialog";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
 
@@ -64,18 +65,18 @@ const NOTE_BLOCK_KEY_ROWS = [
   { id: "low", label: "低位音高", values: Array.from({ length: 6 }, (_unused, index) => String(index)) },
 ] as const;
 const EDIT_TOOL_PLACEHOLDERS = [
-  { id: "hand", icon: Hand, name: "手型", description: "拖拽和查看" },
-  { id: "debug-stick", icon: Wand2, name: "调试棒", description: "修改当前会话的方块状态草稿，不写入文件" },
-  { id: "measure", icon: Ruler, name: "测量工具", description: "测量欧几里得距离与曼哈顿距离，右键删除矩形" },
-  { id: "marker", icon: MapPin, name: "标记点工具", description: "在任意方格设定投影标记点" },
-  { id: "select", icon: BoxSelect, name: "框选工具", description: "框选区域" },
-  { id: "brush", icon: Pencil, name: "画笔", description: "绘制方块" },
-  { id: "eraser", icon: Eraser, name: "橡皮擦", description: "擦除方块" },
-  { id: "picker", icon: Pipette, name: "取色器", description: "拾取方块" },
-  { id: "rectangle", icon: Square, name: "矩形工具", description: "绘制矩形" },
-  { id: "circle", icon: Circle, name: "圆形工具", description: "绘制圆形" },
-  { id: "bucket", icon: PaintBucket, name: "填色工具", description: "填充区域" },
-  { id: "text", icon: Type, name: "文字工具", description: "仅支持 unifont 字体" },
+  { id: "hand", icon: Hand, themeIcon: "hand", name: "手型", description: "拖拽和查看" },
+  { id: "debug-stick", icon: Wand2, themeIcon: "stick", name: "调试棒", description: "修改当前会话的方块状态草稿，不写入文件" },
+  { id: "measure", icon: Ruler, themeIcon: "ruler", name: "测量工具", description: "测量欧几里得距离与曼哈顿距离，右键删除矩形" },
+  { id: "marker", icon: MapPin, themeIcon: "pin", name: "标记点工具", description: "在任意方格设定投影标记点" },
+  { id: "select", icon: BoxSelect, themeIcon: "select", name: "框选工具", description: "框选区域" },
+  { id: "brush", icon: Pencil, themeIcon: "pencil", name: "画笔", description: "绘制方块" },
+  { id: "eraser", icon: Eraser, themeIcon: "eraser", name: "橡皮擦", description: "擦除方块" },
+  { id: "picker", icon: Pipette, themeIcon: "pick", name: "取色器", description: "拾取方块" },
+  { id: "rectangle", icon: Square, themeIcon: "rectangle", name: "矩形工具", description: "绘制矩形" },
+  { id: "circle", icon: Circle, themeIcon: "circle", name: "圆形工具", description: "绘制圆形" },
+  { id: "bucket", icon: PaintBucket, themeIcon: "fill", name: "填色工具", description: "填充区域" },
+  { id: "text", icon: Type, themeIcon: "text", name: "文字工具", description: "仅支持 unifont 字体" },
 ] as const;
 
 type EditToolId = typeof EDIT_TOOL_PLACEHOLDERS[number]["id"];
@@ -2345,7 +2346,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                         disabled={!["hand", "debug-stick", "measure", "marker"].includes(tool.id)}
                         aria-pressed={effectiveEditTool === tool.id}
                       >
-                        <tool.icon className="flake-page__edit-tool-glyph" aria-hidden="true" focusable="false" />
+                        <ThemeIcon set="tool" name={tool.themeIcon} size={32} className="flake-page__edit-tool-glyph" fallback={tool.icon} />
                       </Button>
                     ))}
                   </div>

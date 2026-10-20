@@ -21,6 +21,7 @@ export const THEMES = [
   { id: "shadcn", key: "shadcn", label: "shadcn/ui", directory: "shadcn" },
   { id: "8bitcn", key: "8bitcn", label: "8bitcn/ui", directory: "8bitcn" },
   { id: "Minecraft", key: "minecraft", label: "Minecraft", directory: "minecraft" },
+  { id: "Metro10", key: "metro10", label: "Metro10", directory: "metro10" },
 ] as const;
 
 export type ThemeDefinition = (typeof THEMES)[number];
@@ -34,9 +35,10 @@ const byKey = new Map<string, ThemeId>(THEMES.map((theme) => [theme.key, theme.i
  * Canonicalizes a stored or transmitted theme id.
  *
  * Unknown values deliberately fall back to the default: the previous releases
- * shipped other ids (WebDefault, Bootstrap5, Metro10, QTDefault) and a config
- * written by one of them must still open. A *known* id is matched on its
- * lowercase key, so " minecraft " and "Minecraft" are the same theme.
+ * shipped other ids (WebDefault, Bootstrap5, QTDefault) and a config written by
+ * one of them must still open. A *known* id is matched on its lowercase key, so
+ * " minecraft " and "Minecraft" are the same theme. "Metro10" keeps its historical
+ * spelling because configs written before it was re-adopted already store it.
  */
 export const normalizeThemeId = (value: unknown): ThemeId => {
   const key = String(value ?? "").trim().toLowerCase();

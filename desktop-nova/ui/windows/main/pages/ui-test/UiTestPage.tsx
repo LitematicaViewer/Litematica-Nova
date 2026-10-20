@@ -122,7 +122,7 @@ export function UiTestPage() {
         <FormRow label="单行输入："><Input defaultValue="默认系统输入框" /></FormRow>
         <FormRow label="下拉框：">
           <Dropdown value={sampleTheme} onChange={setSampleTheme} ariaLabel="主题名称下拉示例" options={[
-            {value: "shadcn", label: "shadcn/ui"}, {value: "8bitcn", label: "8bitcn/ui"}, {value: "Minecraft", label: "Minecraft"},
+            {value: "shadcn", label: "shadcn/ui"}, {value: "8bitcn", label: "8bitcn/ui"}, {value: "Minecraft", label: "Minecraft"}, {value: "Metro10", label: "Metro10"},
           ]} />
         </FormRow>
         <FormRow label="键盘下拉框：">

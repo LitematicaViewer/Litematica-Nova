@@ -22,7 +22,9 @@ html[data-theme] .library-page [data-slot="button"] { gap: 8px; }
 .library-toolbar > button { flex-shrink: 0; }
 .library-toolbar h2 { margin: 0 12px 0 0; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.4; }
 .library-search { display: flex; flex: 1 1 15rem; position: relative; min-width: 10rem; }
-.library-search > svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.library-search > svg,
+.library-search > .theme-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.library-search > .theme-icon { color: var(--muted-foreground); }
 .library-page .library-search input { width: 100%; min-width: 0; padding-left: 35px; }
 .library-message { display: flex; align-items: start; justify-content: space-between; gap: 8px; padding: 8px 12px; max-height: 7rem; overflow: auto; overflow-wrap: anywhere; }
 .library-progress { font-variant-numeric: tabular-nums; }

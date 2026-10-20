@@ -20,6 +20,18 @@ html[data-theme] svg.lucide {
   width: var(--nova-icon-size, 18px); height: var(--nova-icon-size, 18px);
   flex-shrink: 0; stroke-width: 1.75; vertical-align: middle;
 }
+/* Theme-owned functional icons (`components/ThemeIcon`). SVG art is painted by
+   masking it with `currentColor`, so the glyph follows its label through
+   light/dark and button variants; PNG art stays an image for pixel themes. */
+.theme-icon {
+  display: inline-block; flex-shrink: 0;
+  -webkit-mask-position: center; mask-position: center;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-size: contain; mask-size: contain;
+  vertical-align: middle;
+}
+span.theme-icon { background-color: currentColor; }
+.theme-icon-image { object-fit: contain; }
 html[data-theme] :is(.library-preview-placeholder, .properties-preview-placeholder, .render-preview-placeholder, .properties-empty, .library-empty-state) > svg.lucide { --nova-icon-size: 32px; }
 html[data-theme] [data-slot="checkbox-indicator"] > svg.lucide { --nova-icon-size: 14px; stroke-width: 2; }
 html[data-theme] [data-slot="radio-group-indicator"] > svg.lucide { --nova-icon-size: 10px; }

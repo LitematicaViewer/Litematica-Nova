@@ -37,10 +37,12 @@
 | V1.32 | 2026-10-18 | Codex  | **第 5 批（properties）**：页面里最后一批非排版外观（`color`/`background`/`border`/`image-rendering` 等 12 条）搬入 `page-appearance.css`，properties 20 → **8**（余下为字号/字族/numeric）。页面外观总量 131 → **119**；其中非排版项只剩 home 的 1 条图标主色与 settings 的 17 条主题预览色块（刻意保留）。总基线维持 160 |
 | V1.33 | 2026-10-19 | Codex  | **令牌化遮罩与中性色，清理可去掉的 `!important`**：新增 `--overlay`（三主题 `rgb(0 0 0 / 42%)`）替代 `dialog-overlay` 与 subwindow 遮罩的字面色；dialog 的 `rgb(127 127 127 / N%)` 改为 `color-mix(... var(--foreground) N% ...)`；MC 复选框内嵌高光同样改为 `color-mix`。删除两处已无竞争者的 `!important`（`.material-list-multiplier`、library 横向布局的 viewport `overflow`）。`css-hardcoded-colour` 27 → **20**（余下全是 flake 画布测量线/原点的数据可视化配色）、`css-important` 12 → **10**（余下均用于覆盖 Radix 内联样式或虚拟占位几何），总基线 160 → **151** |
 | V1.34 | 2026-10-19 | Codex  | **裸元素第 1 批（页面表格）**：DOM 侦察确认 `tbody/thead/tr/td/th` 在 TSX 中**只以带 `data-slot` 的形式出现**，`button/input/textarea/select` 仍有不带槽位的用法（不能机械替换）。据此把 library 6 条、properties 5 条、materials 1 条表格选择器改为 `[data-slot="table-body"/"table-header"/"table-row"/"table-cell"/"table-head"]`，裸元素 121 → **110**，总基线 151 → **140** |
+| V1.35     | 2026-10-20 | Codex  | **Metro10 接入当前主题契约**：取回的 Metro10 仍是裸元素 `widget/*.css`，注册前会被护栏当作 staged 资源跳过。现改为 `theme.css`（浅色/深色 Tier 1 令牌、字阶、`--flake-*` 资源、私有尺寸）+ `widgets.css`（`[data-slot]`、`components.theme`），删除 12 个 widget 文件与 `nav-icons.css`；同时登记 `THEMES`、Rust `normalize_theme` 与设置页色块，主题从三套变四套。新主题 CSS 在 `check:ui-styles` 下 0 违规，`library-theme-css` 的明暗对比检查扩展到 Metro10 |
+| V1.36     | 2026-10-20 | Codex  | **功能图标主题化**：新增 `ui/components/ThemeIcon.tsx`，按活动主题解析 `ui/themes/<theme>/resource/icon/{button,tool}/<name>.{svg,png}`；有素材时覆盖，缺素材时回退到调用点传入的 lucide 图标，因此 Minecraft 等后续补图无需改业务代码。SVG 用 `mask + currentColor` 绘制，跟随按钮文字在浅/深色与各 variant 下变色；PNG 保留原图给像素主题。Home / Library / Properties / Render / Settings / Flake 的按钮与占位图标改用语义名（folder、gallery、import、run、empty…），`folder` 仅替换分类的默认 lucide Folder，保留用户自选图标。`functional-icons.test.mjs` 从“禁止主题位图”改为锁定新契约 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
-**目标**：三主题（shadcn / 8bitcn / Minecraft）共享同一棵组件树与同一套操作逻辑，切换主题只改外观，不改结构、不改交互、不复制页面。任何控件在任意主题下都只有一种外观来源。
+**目标**：四主题（shadcn / 8bitcn / Minecraft / Metro10）共享同一棵组件树与同一套操作逻辑，切换主题只改外观，不改结构、不改交互、不复制页面。任何控件在任意主题下都只有一种外观来源。
 
 ---
 
@@ -389,6 +391,21 @@ ui/themes/
 页面只写 `font-size: var(--nova-text-sm)` 与 `font-family: var(--nova-font-sm, inherit)`；展示型标题可以用 `clamp()`。三条护栏守住这个约定：`css-page-font-size` 拦截页面里的 `rem/em/px` 字号（**当前 0 处**，全部由主题字阶提供），`css-text-scale-family` 要求小字号令牌必须与字族令牌配对（否则位图主题会退化成缩放 Unifont），`css-theme-type-token` 要求每个主题入口都定义 xs/sm/base/lg 四档（当前 0 违规，新主题漏定义会直接报错）。
 
 已迁移批次：`home`（20 → 12）、`render`（13 → 2）、`replace`（13 → 2）、`properties`（20 → 8）、`generate`（43 → 0）、`materials`（44 → 12）、`library`（131 → 0）、`settings`（48 → 22，其中主题预览色块刻意保留）。第 3 批起改用自动拆分：脚本把 `components.page` 里的外观声明按原选择器与 `@container` 上下文搬进 `ui/styles/page-appearance.css`（`components.shared`），并校验 `(选择器, 属性, 值)` 多重集前后一致；页面只保留布局与交互。共享原语 `.nova-code`、`.nova-panel-subtle`、`.nova-box-plain`、`.nova-text-danger` 与 `.replace-property*` 已就位，后续页面优先组合它们。
+
+#### 3.4.3 主题功能图标（V1.36）
+
+页面不再把 lucide 图标当作最终外观，而是通过 `ui/components/ThemeIcon.tsx` 给主题一个覆盖点：
+
+```
+ui/themes/<theme>/resource/icon/button/<name>.{svg,png}   ← 按钮、占位图、设置选项
+ui/themes/<theme>/resource/icon/tool/<name>.{svg,png}     ← 分层编辑工具
+```
+
+- 有素材时使用主题素材；没有时回退到调用点传入的 `fallback` lucide 图标，**缺图不是错误**。后续补 `save`、`undo` 或整套 Minecraft PNG 不需要改业务代码。
+- **SVG 用 `mask + currentColor` 绘制**，因此图标跟随按钮文字颜色：浅/深色、hover、primary/destructive 填充都会同步变化。不要把主题 SVG 当 `<img>` 用，`currentColor` 在独立图片文档里会固定成黑色。
+- **PNG 保留原图**，供 Minecraft 等像素主题使用；`theme-icon` 的背景色只作用于 SVG 遮罩，不会给 PNG 透明区染色。
+- 语义名按功能区固定（`folder`、`gallery`、`import`、`download`、`delete`、`all`、`unknown`、`picture_error`、`empty`、`run`、`build`、`close`、`hide`、`save`、`undo`、`light`、`dark`、`system`、`hand`…`text`）。分类的 `folder` 只替换默认 lucide `Folder`，用户自选的分类图标保持不变。
+- `functional-icons.test.mjs` 锁定“页面使用语义名、回退图标有效、SVG 走遮罩、PNG 不用遮罩”四条契约。
 
 ### 3.5 Minecraft 主题的接入方式
 

@@ -35,8 +35,8 @@ function contrast(a, b) {
   return (values[0] + .05) / (values[1] + .05);
 }
 
-test('三主题明暗六套材料库文本与交互面板色值保持可读；不以系统媒体查询覆盖显式偏好', () => {
-  for (const theme of ['shadcn', '8bitcn', 'minecraft']) for (const mode of ['light', 'dark']) {
+test('四主题明暗八套材料库文本与交互面板色值保持可读；不以系统媒体查询覆盖显式偏好', () => {
+  for (const theme of ['shadcn', '8bitcn', 'minecraft', 'metro10']) for (const mode of ['light', 'dark']) {
     const tokens = palette(theme, mode);
     for (const [text, surface] of [['foreground', 'card'], ['muted-foreground', 'card'], ['muted-foreground', 'muted'], ['foreground', 'accent'], ['primary-foreground', 'primary']]) {
       const ratio = contrast(tokens[`--${text}`], tokens[`--${surface}`]);

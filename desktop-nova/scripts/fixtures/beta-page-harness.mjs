@@ -156,6 +156,7 @@ function harness(page, name, facade = {}) {
     if (id.endsWith("BlockSearchSelect")) return { BlockSearchSelect, BlockPropertySelector };
     if (id.endsWith("Dropdown")) return { Dropdown };
     if (id.endsWith("BlockIcon")) return { BlockIcon };
+    if (id.endsWith("ThemeIcon")) return { ThemeIcon: "theme-icon" };
     if (id.endsWith("VersionConversionDialog")) return { VersionConversionDialog: () => null };
     if (id.endsWith("QuickResourceDialog")) return { QuickResourceDialog: () => null };
     if (id.endsWith("Dialog")) return { Dialog };

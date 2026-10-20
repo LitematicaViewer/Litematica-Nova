@@ -178,17 +178,22 @@ test('弹窗保留标题、说明、忙碌关闭保护和原页面接口', () =>
   assert.equal(closed, 1);
 });
 
-test('三主题共用官方控件，Minecraft 资源与控件身份保留', () => {
+test('四主题共用官方控件，Minecraft/Metro10 资源与控件身份保留', () => {
   const settings = source('ui/windows/main/pages/settings/SettingsPage.tsx');
   // The picker is generated from the theme manifest; the list itself lives there.
   assert.match(settings, /const NOVA_THEME_OPTIONS = THEMES\.map\(/);
   const manifest = source('src/services/themeManifest.ts');
   const themeList = manifest.match(/export const THEMES = \[([\s\S]*?)\] as const;/)?.[1] ?? '';
   assert.ok(themeList, 'THEMES array not found in themeManifest.ts');
-  for (const theme of ['shadcn', '8bitcn', 'Minecraft']) assert.ok(themeList.includes(`id: "${theme}"`), theme);
-  assert.doesNotMatch(themeList, /WebDefault|Bootstrap5|Metro10/);
+  for (const theme of ['shadcn', '8bitcn', 'Minecraft', 'Metro10']) assert.ok(themeList.includes(`id: "${theme}"`), theme);
+  assert.doesNotMatch(themeList, /WebDefault|Bootstrap5|QTDefault/);
   assert.match(source('ui/themes/minecraft/widgets.css'), /border-image-source: var\(--ln-minecraft-button-image\)/);
   assert.match(source('ui/themes/minecraft/widgets.css'), /unifont-16\.0\.04\.ttf/);
+  assert.match(source('ui/themes/metro10/widgets.css'), /\[data-slot="checkbox"\]/);
+  assert.match(source('ui/themes/metro10/widgets.css'), /checkbox_default\.svg/);
+  // SVG nav artwork is served through <img>, so `currentColor` cannot inherit;
+  // dark mode has to invert the monochrome set to match the label colour.
+  assert.match(source('ui/themes/metro10/widgets.css'), /:root\[data-color-scheme="dark"\] \.theme-metro10 img\.nav-icon/);
   assert.match(source('ui/components/ui/button.tsx'), /button-decorations/);
   assert.match(source('ui/components/ui/button.tsx'), /Slot.Slottable/);
   assert.match(source('ui/shell/themeRuntime.ts'), /subscribeToThemeChanges/);

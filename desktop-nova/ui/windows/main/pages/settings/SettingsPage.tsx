@@ -7,6 +7,7 @@ import { Checkbox } from "../../../../components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "../../../../components/ui/radio-group";
 import { Textarea } from "../../../../components/ui/textarea";
 import { Dropdown } from "../../../../components/Dropdown";
+import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import {
   AiPublicConfig,
@@ -483,8 +484,8 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           <div className="form-label">明暗模式</div>
           <RadioGroup className="settings-color-options" aria-label="明暗模式" orientation="horizontal"
             value={normalizeColorMode(colorMode)} onValueChange={setColorMode}>
-            {[{ value: "light", label: "浅色", Icon: Sun }, { value: "dark", label: "深色", Icon: Moon }, { value: "system", label: "跟随系统", Icon: Monitor }].map(({ value, label, Icon }) => (
-              <RadioGroupItem key={value} value={value}><Icon size={16} aria-hidden="true" />{label}</RadioGroupItem>
+            {[{ value: "light", label: "浅色", icon: "light", Icon: Sun }, { value: "dark", label: "深色", icon: "dark", Icon: Moon }, { value: "system", label: "跟随系统", icon: "system", Icon: Monitor }].map(({ value, label, icon, Icon }) => (
+              <RadioGroupItem key={value} value={value}><ThemeIcon name={icon} size={16} fallback={Icon} />{label}</RadioGroupItem>
             ))}
           </RadioGroup>
         </div>

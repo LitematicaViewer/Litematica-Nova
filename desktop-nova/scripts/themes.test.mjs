@@ -100,16 +100,19 @@ const configNormalizer = load('src/services/userConfig.ts', {
   './backend': {}, './renderMode': { normalizeDisplayMode: () => 'full' }, './themeManifest': manifest,
 }).normalizeTheme;
 
-test('UI 与配置服务统一主题 ID，旧主题和未知值迁移到 shadcn', () => {
+test('UI 与配置服务统一主题 ID，已退役主题和未知值迁移到 shadcn', () => {
   const { runtime } = environment().createWindow();
-  const samples = ['', undefined, null, 'WebDefault', 'Bootstrap5', 'Metro10', 'QTDefault', 'unknown', ' SHADCN ', ' 8BITCN ', ' minecraft '];
+  const samples = ['', undefined, null, 'WebDefault', 'Bootstrap5', 'Metro10', 'QTDefault', 'unknown', ' SHADCN ', ' 8BITCN ', ' minecraft ', ' metro10 '];
   for (const value of samples) assert.equal(runtime.normalizeThemeId(value), configNormalizer(value));
   assert.equal(runtime.normalizeThemeId('Bootstrap5'), 'shadcn');
   assert.equal(runtime.normalizeThemeId('minecraft'), 'Minecraft');
+  assert.equal(runtime.normalizeThemeId('Metro10'), 'Metro10');
+  assert.equal(runtime.normalizeThemeId(' metro10 '), 'Metro10');
   assert.equal(runtime.themeClassName('8bitcn'), 'theme-8bitcn');
+  assert.equal(runtime.themeClassName('Metro10'), 'theme-metro10');
 });
 
-test('首次挂载读取已保存主题，三样式预载且仅当前激活，保留非主题 body class', async () => {
+test('首次挂载读取已保存主题，各主题样式预载且仅当前激活，保留非主题 body class', async () => {
   const { runtime, document, classes, elements } = environment().createWindow();
   await runtime.initializeWindowTheme(async () => ({ config: { theme: 'Minecraft' } }), true);
   assert.equal(runtime.currentThemeId(), 'Minecraft');

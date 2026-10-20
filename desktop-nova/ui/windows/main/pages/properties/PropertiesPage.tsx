@@ -26,6 +26,7 @@ import {
 } from "../../../../../src/business/facade";
 
 import { Box, FolderOpen, Library, Play, RotateCcw, Save, ExternalLink, ImagePlus, ImageOff } from "lucide-react";
+import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
 import { Textarea } from "../../../../components/ui/textarea";
@@ -341,8 +342,8 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
       <header className="properties-header">
         <h2 className="properties-title">投影属性</h2>
         <div className="properties-toolbar">
-          <Button disabled={saving} onClick={handleSelectFile}><FolderOpen size={16} aria-hidden="true" />选择投影…</Button>
-          <Button variant="ghost" disabled={saving} onClick={() => setRoute("library")}><Library size={16} aria-hidden="true" />从投影库选择</Button>
+          <Button disabled={saving} onClick={handleSelectFile}><ThemeIcon name="import" size={16} fallback={FolderOpen} />选择投影…</Button>
+          <Button variant="ghost" disabled={saving} onClick={() => setRoute("library")}><ThemeIcon name="gallery" size={16} fallback={Library} />从投影库选择</Button>
         </div>
       </header>
       <div className="properties-file muted" title={displayFilePath(currentFile || "")}>{fileName || "尚未选择投影"}</div>
@@ -391,8 +392,8 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
                   <dl className="properties-facts nova-box-plain"><div className="properties-format-row"><dt>投影格式</dt><dd>Litematica v{form.litematic_version}.{form.litematic_subversion}<Button size="sm" variant="ghost" disabled={saving || hasChanges} onClick={() => setVersionConvertOpen(true)}>转换版本</Button></dd></div></dl>
                 <div className="properties-file-preview">
                   <div className="properties-preview-toolbar"><h3>文件内预览图</h3>
-                    <Button size="sm" variant="ghost" onClick={() => void updateFilePreview(false)}><ImagePlus size={16} aria-hidden="true" />导入图片</Button>
-                    <Button size="sm" variant="ghost" disabled={!filePreview} onClick={() => setClearPreviewConfirm(true)}><ImageOff size={16} aria-hidden="true" />清空</Button>
+                    <Button size="sm" variant="ghost" onClick={() => void updateFilePreview(false)}><ThemeIcon name="picture_import" size={16} fallback={ImagePlus} />导入图片</Button>
+                    <Button size="sm" variant="ghost" disabled={!filePreview} onClick={() => setClearPreviewConfirm(true)}><ThemeIcon name="picture_error" size={16} fallback={ImageOff} />清空</Button>
                   </div>
                   <div className="properties-file-preview-canvas">{filePreview ? <img src={filePreview} alt="投影文件内嵌预览图" /> : <span>文件内暂无预览图</span>}</div>
                 </div>
@@ -406,14 +407,14 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
                 onClick={() => setRenderMode(mode)}>{mode === "fast" ? "快速模式" : mode === "standard" ? "标准模式" : "完整模式"}</Button>)}
               <label><Checkbox checked={preload} disabled={previewPending || renderPending} onCheckedChange={(checked) => setPreload(checked === true)} />预加载</label>
               <Button size="sm" onClick={() => void handlePreview()} disabled={previewPending || (renderPending && !viewerPrepared)}>
-                <Play size={15} aria-hidden="true" />{previewPending ? "正在连接…" : renderPending ? "正在加载…" : viewerPrepared ? "页内显示" : quickOperation ? "重新加载" : `${modeLabel}渲染`}
+                <ThemeIcon name={renderMode === "full" ? "build" : "run"} size={15} fallback={renderMode === "full" ? Box : Play} />{previewPending ? "正在连接…" : renderPending ? "正在加载…" : viewerPrepared ? "页内显示" : quickOperation ? "重新加载" : `${modeLabel}渲染`}
               </Button>
               {(renderPending || (renderMode !== "fast" && previewPending)) && !viewerPrepared && <Button size="sm" variant="ghost" onClick={() => void handleCancelPreview()}>取消</Button>}
-              <Button size="sm" variant="ghost" disabled={!viewerPrepared || previewPending || saving || filePreviewBusy || capturingPreview} onClick={() => void captureFilePreview()}><ImagePlus size={15} aria-hidden="true" />{capturingPreview ? "正在保存…" : "设为缩略图"}</Button>
-              <Button size="sm" variant="ghost" onClick={() => setRoute("render")} ><ExternalLink size={15} aria-hidden="true" />渲染页</Button>
+              <Button size="sm" variant="ghost" disabled={!viewerPrepared || previewPending || saving || filePreviewBusy || capturingPreview} onClick={() => void captureFilePreview()}><ThemeIcon name="picture_trans" size={15} fallback={ImagePlus} />{capturingPreview ? "正在保存…" : "设为缩略图"}</Button>
+              <Button size="sm" variant="ghost" onClick={() => setRoute("render")} ><ThemeIcon name="outlink" size={15} fallback={ExternalLink} />渲染页</Button>
             </header>
             <div ref={renderMode === "fast" ? preview.hostRef : fullPreview.hostRef} className="properties-preview-host" aria-label={`${modeLabel}预览视口`}>
-              {!previewVisible && <div className="properties-preview-placeholder muted"><Box size={36} aria-hidden="true" /><span>{previewFailure ? "预览加载失败" : previewStatus}</span></div>}
+              {!previewVisible && <div className="properties-preview-placeholder muted"><ThemeIcon name="empty" size={36} fallback={Box} /><span>{previewFailure ? "预览加载失败" : previewStatus}</span></div>}
             </div>
             {renderMode !== "fast" && fullPreview.preflight && <div role="status" className="properties-preview-status muted">
               <p>显存需求：{fullPreview.preflight.conservativeVramBytes == null ? "未知" : formatResourceBytes(fullPreview.preflight.conservativeVramBytes)}</p>
@@ -435,10 +436,10 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
       {clearPreviewConfirm && <Dialog title="清空文件预览图" busy={filePreviewBusy} onClose={() => setClearPreviewConfirm(false)} footer={<><Button variant="ghost" disabled={filePreviewBusy} onClick={() => setClearPreviewConfirm(false)}>取消</Button><Button variant="destructive" disabled={filePreviewBusy} onClick={() => void updateFilePreview(true)}>确认清空</Button></>}><p>清空此投影文件的内嵌预览图？方块和未保存的属性编辑不会改变。</p></Dialog>}
       {currentFile && <div className="properties-actions">
         <span className="muted">{saving ? "正在保存…" : !form ? "正在读取属性…" : hasChanges ? "有未保存的修改" : "所有修改已保存"}</span>
-        <Button variant="ghost" onClick={handleRestore} disabled={!form || !hasChanges || saving || filePreviewBusy || capturingPreview}><RotateCcw size={16} aria-hidden="true" />撤销未保存修改</Button>
+        <Button variant="ghost" onClick={handleRestore} disabled={!form || !hasChanges || saving || filePreviewBusy || capturingPreview}><ThemeIcon name="undo" size={16} fallback={RotateCcw} />撤销未保存修改</Button>
         <Button variant="ghost" onClick={() => setConvertOpen(true)} disabled={saving || filePreviewBusy || !form}>其他格式</Button>
         <Button onClick={handleSaveAs} disabled={!form || !!regionError || saving || filePreviewBusy || capturingPreview}>另存副本…</Button>
-        <Button variant="default" onClick={handleSave} disabled={!form || !hasChanges || !!regionError || saving || filePreviewBusy || capturingPreview}><Save size={16} aria-hidden="true" />{saving ? "保存中…" : "保存修改"}</Button>
+        <Button variant="default" onClick={handleSave} disabled={!form || !hasChanges || !!regionError || saving || filePreviewBusy || capturingPreview}><ThemeIcon name="save" size={16} fallback={Save} />{saving ? "保存中…" : "保存修改"}</Button>
       </div>}
       {versionConvertOpen && <VersionConversionDialog sourcePath={currentFile} onClose={() => setVersionConvertOpen(false)} onSaved={(path) => { setStatus(`已转换并另存：${displayFilePath(path)}；原文件保留。`); setVersionConvertOpen(false); }} />}
       {convertOpen && <Dialog title="保存格式" busy={saving} onClose={() => setConvertOpen(false)} width="sm" footer={
