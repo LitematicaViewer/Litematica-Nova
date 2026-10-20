@@ -20,16 +20,23 @@ async function loadEnumerator(relativePath: string): Promise<Set<string>> {
   try {
     const raw = await readAppDataFile(relativePath);
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      console.warn(`Enumerator file ${relativePath} is not an array`);
+    // 既有枚举器是纯数组；编辑器导出的自定义枚举器是
+    // { id, name, values: [...] } 对象。两种格式都要能读。
+    const values = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.values)
+        ? parsed.values
+        : null;
+    if (!values) {
+      console.warn(`Enumerator file ${relativePath} has no value array`);
       return new Set();
     }
 
-    const normalized = parsed
-      .map((id) => String(id || "").trim().toLowerCase())
-      .filter(Boolean);
+    const normalized: string[] = values
+      .map((id: unknown) => String(id || "").trim().toLowerCase())
+      .filter((id: string) => Boolean(id));
 
-    const result = new Set(normalized);
+    const result = new Set<string>(normalized);
     enumeratorCache.set(relativePath, result);
     return result;
   } catch (error) {

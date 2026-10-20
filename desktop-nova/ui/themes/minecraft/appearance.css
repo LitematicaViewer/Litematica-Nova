@@ -1,4 +1,18 @@
 /* Keep the existing pixel font, texture borders and inventory assets in both modes. */
+@layer theme, vendor, tokens, base, components, utilities;
+/* Theme rules sit in their own sublayer so a declared style always wins over the
+   shared/component defaults it is replacing (the 9-slice texture already defines
+   radius, border and colour). Order: shared < page < theme. */
+@layer components.shared, components.page, components.theme;
+
+@layer components.theme {
+/* Small Minecraft text uses the 12px pixel face: Unifont only stays crisp at whole
+   multiples of its 16px design size, and 11–13px labels are exactly where it blurs. */
+@font-face {
+    font-family: "Nova Pixel 12";
+    src: url("./resource/font/fusion-pixel-12px-monospaced-zh_hans.ttf") format("truetype");
+    font-display: swap;
+}
 html[data-theme="minecraft"] {
     color-scheme: dark;
     --background: #3c3c3c;
@@ -15,18 +29,22 @@ html[data-theme="minecraft"] {
     --border: #808080;
     --ring: #ffffff;
     --radius: 0px;
-    --ln-ui-background-color: var(--background);
-    --ln-navigation-background-color: var(--background);
-    --ln-body-text-color: var(--foreground);
-    --ln-muted-text-color: var(--muted-foreground);
-    --ln-card-border-color: var(--border);
+    /* Minecraft keeps its texture borders, so it has no CSS edge or shadow. These
+       are declared anyway so the shared component layer can read them once the
+       Minecraft theme starts loading modern.css in a later phase. */
+    --edge-width: 0px;
+    --control-shadow: none;
+    --panel-shadow: none;
+    --navigation-background: var(--background);
     --ln-card-background-color-active: var(--accent);
-    --ln-option-active-background: var(--accent);
-    --ln-option-active-color: var(--foreground);
-    --ln-focus-color: var(--ring);
-    --ln-error-color: var(--destructive);
-    --ln-success-color: #b8d49c;
-    --ln-warning-color: #ffd18a;
+    --option-active-background: var(--accent);
+    --option-active-color: var(--foreground);
+    --success: #b8d49c;
+    --warning: #ffd18a;
+    /* Moved out of the deleted widget/check.css: Minecraft's checkbox textures are
+       larger, so its label spacing differs from the other themes. */
+    --ln-check-label-gap: 8px;
+    --ln-check-label-min-height: 24px;
     --ln-minecraft-input-background: #151515;
     --ln-minecraft-input-color: var(--foreground);
     --ln-minecraft-input-border: var(--border);
@@ -53,8 +71,8 @@ html[data-theme="minecraft"][data-color-scheme="light"] {
     --destructive: #aa2c2c;
     --border: #7d8274;
     --ring: #344b29;
-    --ln-success-color: #3d6033;
-    --ln-warning-color: #825014;
+    --success: #3d6033;
+    --warning: #825014;
     --ln-minecraft-input-background: #f7f7f0;
     --ln-minecraft-input-disabled-color: #65665f;
     --ln-minecraft-table-row-background-odd: #f0f0e9;
@@ -69,8 +87,8 @@ html[data-theme="minecraft"][data-color-scheme="light"] {
     --ln-scroll-shadow: inset 2px 2px #c0c6b5, inset -2px -2px #454b3d;
 }
 
-html[data-theme="minecraft"] :where(input, textarea)::placeholder { color: var(--muted-foreground); }
-html[data-theme="minecraft"] :where(button, input, textarea, select, a):focus-visible {
+html[data-theme="minecraft"] :where([data-slot="input"], [data-slot="textarea"])::placeholder { color: var(--muted-foreground); }
+html[data-theme="minecraft"] :where([data-slot="button"], [data-slot="input"], [data-slot="textarea"], a):focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
 }
@@ -88,21 +106,21 @@ html[data-theme="minecraft"] ::selection { background: var(--primary); color: va
 
 /* Texture-backed actions use the original white/yellow/disabled-gray text rules.
    Do not apply those colors to borderless cards, labels, inventory slots or close images. */
-html[data-theme="minecraft"] button[data-slot="button"]:is([data-variant="default"], [data-variant="secondary"], [data-variant="outline"], [data-variant="destructive"]):not(:where(.dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
+html[data-theme="minecraft"] [data-slot="button"]:is([data-variant="default"], [data-variant="secondary"], [data-variant="outline"], [data-variant="destructive"]):not(:where(.dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
     text-shadow: 1px 1px 0 #3f3f3f;
 }
-html[data-theme="minecraft"] button[data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)) {
+html[data-theme="minecraft"] [data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)) {
     border-image: none;
     color: var(--foreground);
     text-shadow: none;
 }
-html[data-theme="minecraft"] button[data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)):disabled {
+html[data-theme="minecraft"] [data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)):disabled {
     color: var(--muted-foreground);
 }
-html[data-theme="minecraft"] .home-workflows > button[data-variant="ghost"] small { color: var(--muted-foreground); }
+html[data-theme="minecraft"] .home-workflows > [data-slot="button"][data-variant="ghost"] small { color: var(--muted-foreground); }
 
 /* Radix Checkbox keeps the shipped Minecraft checkbox textures and keyboard semantics. */
-html[data-theme="minecraft"] button[data-slot="checkbox"] {
+html[data-theme="minecraft"] [data-slot="checkbox"] {
     width: 20px;
     height: 20px;
     min-width: 20px;
@@ -115,35 +133,47 @@ html[data-theme="minecraft"] button[data-slot="checkbox"] {
     image-rendering: pixelated;
     box-shadow: none;
 }
-html[data-theme="minecraft"] button[data-slot="checkbox"]:hover:not(:disabled) {
+html[data-theme="minecraft"] [data-slot="checkbox"]:hover:not(:disabled) {
     background-image: url("./resource/form/checkbox_hover.png");
 }
-html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="checked"] {
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"] {
     background-image: url("./resource/form/checkbox_checked.png");
 }
-html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="checked"]:hover:not(:disabled) {
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"]:hover:not(:disabled) {
     background-image: url("./resource/form/checkbox_checked_hover.png");
 }
-html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="checked"] svg { visibility: hidden; }
-html[data-theme="minecraft"] button[data-slot="checkbox"][data-state="indeterminate"] { color: #ffffff; }
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"] svg { visibility: hidden; }
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="indeterminate"] { color: #ffffff; }
+/* The shared layer fills a checked checkbox with `--primary`, which is what the
+   other themes want. Minecraft's textures carry the whole control - a check mark on
+   a transparent centre - so that fill would show through as a `--primary` square
+   behind the texture. `[data-state]` is deliberate: it is what makes this rule
+   outrank the shared `[data-state="checked"]` fill instead of tying with it. */
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state] {
+    background-color: transparent;
+}
 
-/* The original radio textures replace generic Minecraft action-button borders. */
-html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"] {
+/* The original radio textures replace generic Minecraft action-button borders.
+   `border-radius: 0` is required, not cosmetic: the shared layer rounds this slot
+   into a 50% circle for the other themes, and the shipped radio textures are square,
+   so without it the texture is clipped into a circle. */
+html[data-theme="minecraft"] [data-slot="radio-group-item"][data-choice-layout="control"] {
     border: 0;
     border-image: none;
+    border-radius: 0;
     background: transparent url("./resource/form/radio_default.png") center / 20px 20px no-repeat;
     image-rendering: pixelated;
 }
-html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"]:hover:not(:disabled) {
+html[data-theme="minecraft"] [data-slot="radio-group-item"][data-choice-layout="control"]:hover:not(:disabled) {
     background-image: url("./resource/form/radio_hover.png");
 }
-html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"] {
+html[data-theme="minecraft"] [data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"] {
     background-image: url("./resource/form/radio_checked.png");
 }
-html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"]:hover:not(:disabled) {
+html[data-theme="minecraft"] [data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"]:hover:not(:disabled) {
     background-image: url("./resource/form/radio_checked_hover.png");
 }
-html[data-theme="minecraft"] button[data-slot="radio-group-item"][data-choice-layout="control"] [data-slot="radio-group-indicator"] { visibility: hidden; }
+html[data-theme="minecraft"] [data-slot="radio-group-item"][data-choice-layout="control"] [data-slot="radio-group-indicator"] { visibility: hidden; }
 
 /* Three-pane library: the original font and texture-backed action buttons stay
    intact; inventory surfaces, selection and scroll tracks follow light/dark. */
@@ -179,7 +209,6 @@ html[data-theme="minecraft"] .library-tile-image,
 html[data-theme="minecraft"] .library-detail-preview {
     background: var(--background);
 }
-html[data-theme="minecraft"] .library-tile-image { margin: 1px; width: calc(100% - 2px); }
 html[data-theme="minecraft"] .library-current-marker {
     color: var(--primary-foreground);
     background: var(--primary);
@@ -190,13 +219,14 @@ html[data-theme="minecraft"] .library-category small {
     background: var(--background);
 }
 /* Ghost utility actions must also have feedback without the old gray texture. */
-html[data-theme="minecraft"] .library-page button[data-slot="button"][data-variant="ghost"]:not(.library-tile-open):hover:not(:disabled) {
+html[data-theme="minecraft"] .library-page [data-slot="button"][data-variant="ghost"]:not(.library-tile-open):hover:not(:disabled) {
     background: var(--accent);
 }
-html[data-theme="minecraft"] .library-page button[data-slot="button"][data-variant="ghost"]:disabled {
+html[data-theme="minecraft"] .library-page [data-slot="button"][data-variant="ghost"]:disabled {
     opacity: .5;
     cursor: not-allowed;
 }
 html[data-theme="minecraft"] .library-tag-chip { background: var(--muted); color: var(--foreground); }
 html[data-theme="minecraft"] .library-detail-section { border-color: var(--library-line); }
 html[data-theme="minecraft"] .library-page [data-slot="scroll-area-scrollbar"]:hover { background: var(--ln-scroll-track-hover); }
+}

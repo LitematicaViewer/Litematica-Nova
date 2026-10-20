@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import test from 'node:test';
@@ -11,6 +11,12 @@ const root = new URL('../', import.meta.url);
 const source = (path) => readFileSync(new URL(path, root), 'utf8');
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
+// `import.meta.glob` is a build-time feature; the stub derives its map from the
+// manifest so a new theme does not also need editing here.
+const themeGlob = () => Object.fromEntries(
+  manifest.THEMES.map((theme) => [`../themes/${theme.directory}/theme.css`, `/${theme.directory}.css`]),
+);
+
 function load(path, dependencies = {}, globals = {}) {
   const module = { exports: {} };
   const compiled = ts.transpileModule(source(path).replaceAll('import.meta', '__import_meta'), {
@@ -21,11 +27,7 @@ function load(path, dependencies = {}, globals = {}) {
   assert.deepEqual(compiled.diagnostics?.filter((entry) => entry.category === ts.DiagnosticCategory.Error), []);
   const context = vm.createContext({ module, exports: module.exports, ...globals,
     require: (name) => name in dependencies ? dependencies[name] : require(name),
-    __import_meta: { glob: () => ({
-      '../themes/shadcn/theme.css': '/shadcn.css',
-      '../themes/8bitcn/theme.css': '/8bitcn.css',
-      '../themes/minecraft/theme.css': '/minecraft.css',
-    }) },
+    __import_meta: { glob: themeGlob },
   });
   vm.runInContext(compiled.outputText, context, { filename: path });
   return module.exports;
@@ -83,6 +85,7 @@ function environment(initialStorage = {}, { native = true, storage = true } = {}
           return () => nativeHandlers.delete(subscription);
         },
       },
+      '../../src/services/themeManifest': manifest,
     }, { window: target, document, CustomEvent });
     return { runtime, document, classes, elements, target, rootClasses,
       setSystemDark(dark) { mediaQuery.matches = dark; mediaQuery.dispatchEvent(new Event('change')); },
@@ -91,30 +94,35 @@ function environment(initialStorage = {}, { native = true, storage = true } = {}
   return { createWindow, storageValues, writes, broadcasts, nativeHandlers };
 }
 
+const manifest = load('src/services/themeManifest.ts');
+
 const configNormalizer = load('src/services/userConfig.ts', {
-  './backend': {}, './renderMode': { normalizeDisplayMode: () => 'full' },
+  './backend': {}, './renderMode': { normalizeDisplayMode: () => 'full' }, './themeManifest': manifest,
 }).normalizeTheme;
 
-test('UI 与配置服务统一三主题 ID，旧主题和未知值迁移到 shadcn', () => {
+test('UI 与配置服务统一主题 ID，已退役主题和未知值迁移到 shadcn', () => {
   const { runtime } = environment().createWindow();
-  const samples = ['', undefined, null, 'WebDefault', 'Bootstrap5', 'Metro10', 'QTDefault', 'unknown', ' SHADCN ', ' 8BITCN ', ' minecraft '];
+  const samples = ['', undefined, null, 'WebDefault', 'Bootstrap5', 'Metro10', 'QTDefault', 'unknown', ' SHADCN ', ' 8BITCN ', ' minecraft ', ' metro10 '];
   for (const value of samples) assert.equal(runtime.normalizeThemeId(value), configNormalizer(value));
   assert.equal(runtime.normalizeThemeId('Bootstrap5'), 'shadcn');
   assert.equal(runtime.normalizeThemeId('minecraft'), 'Minecraft');
+  assert.equal(runtime.normalizeThemeId('Metro10'), 'Metro10');
+  assert.equal(runtime.normalizeThemeId(' metro10 '), 'Metro10');
   assert.equal(runtime.themeClassName('8bitcn'), 'theme-8bitcn');
+  assert.equal(runtime.themeClassName('Metro10'), 'theme-metro10');
 });
 
-test('首次挂载读取已保存主题，三样式预载且仅当前激活，保留非主题 body class', async () => {
+test('首次挂载读取已保存主题，各主题样式预载且仅当前激活，保留非主题 body class', async () => {
   const { runtime, document, classes, elements } = environment().createWindow();
   await runtime.initializeWindowTheme(async () => ({ config: { theme: 'Minecraft' } }), true);
   assert.equal(runtime.currentThemeId(), 'Minecraft');
   assert.equal(document.documentElement.dataset.theme, 'minecraft');
   assert.deepEqual([...classes], ['unrelated-shell-class', 'theme-minecraft']);
-  assert.equal(elements.size, 3);
+  assert.equal(elements.size, manifest.THEMES.length);
   assert.equal(elements.get('litematicanova-theme-css-minecraft').media, 'all');
   assert.equal(elements.get('litematicanova-theme-css-shadcn').media, 'not all');
   runtime.announceThemeChange('8bitcn');
-  assert.equal(elements.size, 3, 'switching must reuse preloaded stylesheets');
+  assert.equal(elements.size, manifest.THEMES.length, 'switching must reuse preloaded stylesheets');
   assert.equal(elements.get('litematicanova-theme-css-minecraft').media, 'not all');
   assert.equal(document.documentElement.dataset.theme, '8bitcn');
 });
@@ -178,16 +186,44 @@ test('启动时慢配置读取不得覆盖随后收到的新主题', async () =>
   assert.equal(main.runtime.currentThemeId(), '8bitcn');
 });
 
-test('三主题选项唯一；Settings 不双写或从普通配置响应重置主题；所有窗口预初始化', () => {
+test('主题选项由清单生成；Settings 不双写或从普通配置响应重置主题；所有窗口预初始化', () => {
   const settings = source('ui/windows/main/pages/settings/SettingsPage.tsx');
-  const optionBlock = settings.match(/const NOVA_THEME_OPTIONS = \[([\s\S]+?)\];/)[1];
-  assert.deepEqual([...optionBlock.matchAll(/value: "([^"]+)"/g)].map((match) => match[1]), ['shadcn', '8bitcn', 'Minecraft']);
+  assert.match(settings, /const NOVA_THEME_OPTIONS = THEMES\.map\(/);
+  assert.doesNotMatch(settings, /const NOVA_THEME_OPTIONS = \[\s*\{\s*value:/, 'theme ids must not be hardcoded in the picker');
   assert.doesNotMatch(settings, /saveThemeConfig/);
   assert.match(settings, /if \(changedConfigDirectory\) setTheme/);
   for (const file of ['app/main.tsx', 'windows/material_list/main.tsx', 'windows/local_library_folders/main.tsx', 'windows/reden_library/main.tsx', 'windows/demo_window/main.tsx']) {
     assert.match(source(`ui/${file}`), /initializeWindowTheme\(/);
   }
   assert.doesNotMatch(source('ui/shell/AppShell.tsx'), /key=\{theme\}|key=\{themeId\}|\.metro10/);
+});
+
+test('主题清单自洽：id/key 唯一、样式表存在、与 Rust 规范化一致', () => {
+  const { THEMES, DEFAULT_THEME_ID, normalizeThemeId, themeKeyOf } = manifest;
+  assert.ok(THEMES.length > 0);
+  assert.equal(new Set(THEMES.map((theme) => theme.id)).size, THEMES.length, 'theme ids must be unique');
+  assert.equal(new Set(THEMES.map((theme) => theme.key)).size, THEMES.length, 'theme keys must be unique');
+  assert.ok(THEMES.some((theme) => theme.id === DEFAULT_THEME_ID), 'default theme must exist in the manifest');
+
+  for (const theme of THEMES) {
+    assert.match(theme.key, /^[a-z0-9-]+$/, `theme key must be lowercase: ${theme.key}`);
+    assert.ok(existsSync(new URL(`ui/themes/${theme.directory}/theme.css`, root)),
+      `missing stylesheet for theme ${theme.id}: ui/themes/${theme.directory}/theme.css`);
+    assert.equal(normalizeThemeId(theme.id), theme.id);
+    assert.equal(normalizeThemeId(theme.key.toUpperCase()), theme.id, 'lookup is case-insensitive');
+    assert.equal(themeKeyOf(theme.id), theme.key);
+  }
+
+  // The backend rewrites stored config on read, so an id it does not know would be
+  // silently replaced by the default. The canonical ids are the contract between
+  // the manifest and `normalize_theme` in src-tauri/src/main.rs.
+  const rust = source('src-tauri/src/main.rs');
+  const normalizeTheme = rust.match(/fn normalize_theme\(value: &str\) -> String \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(normalizeTheme, 'normalize_theme not found in src-tauri/src/main.rs');
+  const canonical = [...normalizeTheme.matchAll(/=>\s*"([^"]+)"\.to_string\(\)/g)].map((match) => match[1]);
+  const manifestIds = Array.from(THEMES, (theme) => theme.id); // host-realm array: deepEqual compares prototypes
+  assert.deepEqual([...canonical].sort(), manifestIds.sort(),
+    'src-tauri normalize_theme must accept every manifest id and nothing else');
 });
 
 test('快速切换时晚到的 storage 事件不回滚最新主题', async () => {
@@ -290,8 +326,8 @@ test('AppShell 单独持久化并串行保存，主题切换保留页面组件�
 });
 
 
-test('三主题均解析浅色/深色/跟随系统，系统切换只改变实际配色不写回用户偏好', async () => {
-  for (const theme of ['shadcn', '8bitcn', 'Minecraft']) {
+test('每个主题均解析浅色/深色/跟随系统，系统切换只改变实际配色不写回用户偏好', async () => {
+  for (const theme of manifest.THEMES.map((entry) => entry.id)) {
     const env = environment();
     const window = env.createWindow();
     await window.runtime.initializeWindowTheme(async () => ({ config: { theme, color_mode: 'system' } }), true);
@@ -362,6 +398,7 @@ test('配置仅保存用户明暗偏好，旧配置默认跟随系统；设置�
   const config = load('src/services/userConfig.ts', {
     './backend': { saveUserConfig: async (patch) => { saves.push(patch); return patch; } },
     './renderMode': { normalizeDisplayMode: () => 'full' },
+    './themeManifest': manifest,
   });
   const window = environment().createWindow();
   for (const mode of [undefined, '', 'unknown', 'light', 'dark', 'system']) {

@@ -1,9 +1,37 @@
 /* Shared official component structure. Theme files supply every surface/color. */
 /* Functional icons share one vector language; BlockIcon/item textures are not SVG. */
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.shared {
+/* Sizing rules for the `size` prop. Two constraints shape them:
+   1. NO `font-size`: every button inherits one size via `font: inherit` (`base.css`).
+      The Minecraft theme draws its body text with Unifont, a bitmap font that only
+      renders crisply at whole multiples of its design size, so a button at 11px or
+      13px would come out blurred.
+   2. Each theme keeps its own standard button size; the size variants only have to be
+      self-consistent *within* a theme. Minecraft's `--control-height: 44px` is
+      deliberate, and its own `button` rule already governs every variant. The shadcn
+      theme follows shadcn/ui's defaults, so no size override is stated for it; 8bitcn
+      is a niche registry rather than a mainstream library, so its existing sizing is
+      preserved as-is. */
+
 html[data-theme] svg.lucide {
   width: var(--nova-icon-size, 18px); height: var(--nova-icon-size, 18px);
   flex-shrink: 0; stroke-width: 1.75; vertical-align: middle;
 }
+/* Theme-owned functional icons (`components/ThemeIcon`). SVG art is painted by
+   masking it with `currentColor`, so the glyph follows its label through
+   light/dark and button variants; PNG art stays an image for pixel themes. */
+.theme-icon {
+  display: inline-block; flex-shrink: 0;
+  -webkit-mask-position: center; mask-position: center;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-size: contain; mask-size: contain;
+  vertical-align: middle;
+}
+span.theme-icon { background-color: currentColor; }
+.theme-icon-image { object-fit: contain; }
 html[data-theme] :is(.library-preview-placeholder, .properties-preview-placeholder, .render-preview-placeholder, .properties-empty, .library-empty-state) > svg.lucide { --nova-icon-size: 32px; }
 html[data-theme] [data-slot="checkbox-indicator"] > svg.lucide { --nova-icon-size: 14px; stroke-width: 2; }
 html[data-theme] [data-slot="radio-group-indicator"] > svg.lucide { --nova-icon-size: 10px; }
@@ -11,8 +39,58 @@ html[data-theme] .nova-control { font: inherit; }
 html[data-theme] [data-slot="button"] { line-height: 1.35; min-width: 0; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"] { border-color: transparent; background: var(--secondary); color: var(--foreground); box-shadow: none; }
 html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"][data-variant="secondary"]:hover:not(:disabled) { background: var(--accent); }
-html[data-theme] [data-slot="button"][data-size^="icon"] { padding: 7px; width: var(--ln-control-height); flex: 0 0 var(--ln-control-height); }
-html[data-theme] [data-slot="button"][data-size="sm"] { min-height: 30px; padding: 5px 10px; }
+
+/* Selected state for a toggle Button. Neither registry declares one on Button:
+   shadcn/ui's `buttonVariants` covers hover / focus-visible / disabled / aria-invalid
+   only, and 8bitcn/ui's wrapper adds just `active:translate-y-1`. Selection is published
+   by Toggle instead (`data-[state=on]:bg-accent`, which 8bitcn overrides to
+   `bg-primary`). Nova toggles the shared Button, so the surface is declared here -
+   next to the variant rules it has to beat - rather than by copying Toggle markup.
+   Why this exact selector, and why only these two variants:
+   - (0,5,1) outranks the resting `secondary` rule above, which is (0,4,1). The previous
+     `button[aria-pressed="true"]` in `themes/modern.css` was (0,1,1), so it lost that
+     contest and a pressed secondary button rendered exactly like a resting one.
+   - `secondary` is the CVA default, i.e. what a plain <Button> renders, and `outline`
+     is the other quiet variant, so these are the two that need a selection surface.
+   - `ghost` / `link` are structural controls (navigation rows, library tiles, hotbar
+     slots); their selected look belongs to the page that lays them out. Styling them
+     here would repaint those pages, because this file loads before page CSS.
+   - `default` / `destructive` are filled, and that fill is already the selected look in
+     the render/properties mode switchers. Recolouring them would read as a second
+     primary action.
+   Only two declarations move: the fill and the label colour. The border and the focus
+   ring stay as they are, so a selected button never competes with the focus ring.
+   `data-state="on"` is the attribute a Radix Toggle publishes, so swapping in a real
+   Toggle later keeps this styling without touching markup. Minecraft is excluded on
+   purpose: it has a `check` texture set for the same state, applied in its own theme. */
+html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"]:is([aria-pressed="true"], [data-state="on"]):is([data-variant="secondary"], [data-variant="outline"]) {
+    background: var(--nova-selected-surface); color: var(--nova-selected-foreground);
+}
+/* Hover still has to answer, or a selected button would look frozen under the pointer.
+   The resting hover rule paints `--accent`, which is *lighter* than the selected fill,
+   so it would read as the button turning itself off. The selected hover goes one step
+   further from the page instead. */
+html[data-theme]:not([data-theme="minecraft"]) [data-slot="button"]:is([aria-pressed="true"], [data-state="on"]):is([data-variant="secondary"], [data-variant="outline"]):hover:not(:disabled) {
+    background: var(--nova-selected-hover);
+}
+/* Icon buttons are square. `width` alone was not enough: the height still came from
+   Tailwind's `size-9`/`size-8`/`size-10`, so shadcn rendered 32x36 and shadcn's own
+   variants disagreed with each other. Pinning both axes to `--control-height` makes
+   every `icon*` variant one square per theme (32px for shadcn/8bitcn, 44px for
+   Minecraft). */
+html[data-theme] [data-slot="button"][data-size^="icon"] {
+  padding: 7px;
+  width: var(--control-height);
+  min-width: var(--control-height);
+  max-width: var(--control-height);
+  height: var(--control-height);
+  min-height: var(--control-height);
+  max-height: var(--control-height);
+  flex: 0 0 var(--control-height);
+}
+/* 8bitcn only: keep its existing compact size. shadcn is left to the defaults from
+   ui/button.tsx, so its `sm` is the library's `h-8 px-3`. */
+html[data-theme="8bitcn"] [data-slot="button"][data-size="sm"] { min-height: 30px; padding: 5px 10px; }
 html[data-theme] [data-slot="button"]:focus-visible,
 html[data-theme] [data-slot="input"]:focus-visible,
 html[data-theme] [data-slot="textarea"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; box-shadow: none; }
@@ -27,14 +105,24 @@ html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group
   min-height: var(--ln-check-label-min-height, 24px); cursor: pointer;
 }
 html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group-item"]):disabled) { cursor: not-allowed; }
-html[data-theme] button[data-slot="checkbox"] {
+/* Only the fill colour belongs to the shared layer. A `background` shorthand here
+   would reset `background-image`, and a theme that textures this control would then
+   have to out-specify it for the image while still losing the colour - which is
+   exactly how Minecraft's checkbox ended up showing `--primary` through the
+   transparent centre of its texture.
+
+   No `button` element in the selector on purpose: it would make this (0,2,2), which
+   out-ranks every per-theme override at (0,2,1) - so `border-radius: 4px` could never
+   be zeroed and Minecraft's square texture was clipped to a rounded rectangle. The
+   8bitcn and minecraft rules below rely on winning the tie at (0,2,1) by coming later. */
+html[data-theme] [data-slot="checkbox"] {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: 20px; min-width: 20px; max-width: 20px; min-height: 20px; flex: 0 0 20px; padding: 0; margin: 0;
-  border: 1px solid var(--border); border-radius: 4px; background: var(--background);
+  border: 1px solid var(--border); border-radius: 4px; background-color: var(--background);
   color: var(--primary-foreground); cursor: pointer; box-shadow: none; vertical-align: middle;
 }
 html[data-theme] [data-slot="checkbox"][data-state="checked"],
-html[data-theme] [data-slot="checkbox"][data-state="indeterminate"] { background: var(--primary); border-color: var(--primary); }
+html[data-theme] [data-slot="checkbox"][data-state="indeterminate"] { background-color: var(--primary); border-color: var(--primary); }
 html[data-theme] [data-slot="checkbox"]:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
 [data-slot="checkbox-indicator"] { display: flex; }
 [data-slot="checkbox-indicator"] svg { width: 14px; height: 14px; stroke-width: 3px; }
@@ -43,7 +131,7 @@ html[data-theme] [data-slot="checkbox"]:focus-visible { outline: 2px solid var(-
 .nova-checkbox-pixel-edge { display: none; }
 html[data-theme="8bitcn"] [data-slot="checkbox"] { border-radius: 0; border-width: 2px; }
 html[data-theme="8bitcn"] .nova-checkbox-pixel-edge { display: block; position: absolute; inset: -2px; border-inline: 2px solid var(--foreground); pointer-events: none; }
-html[data-theme="minecraft"] [data-slot="checkbox"] { border-radius: 0; border-width: 2px; box-shadow: inset 1px 1px rgb(255 255 255 / 18%); }
+html[data-theme="minecraft"] [data-slot="checkbox"] { border-radius: 0; border-width: 2px; box-shadow: inset 1px 1px color-mix(in srgb, var(--foreground) 18%, transparent); }
 html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"]):disabled { opacity: .45; cursor: not-allowed; }
 html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"]):hover:not(:disabled) { border-color: var(--ring); }
 html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"])[aria-invalid="true"] { border-color: var(--destructive); }
@@ -83,6 +171,12 @@ html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"])[ari
 }
 
 html[data-theme] [data-slot="slider"] { position: relative; display: flex; align-items: center; width: 100%; min-width: 4rem; min-height: 28px; touch-action: none; user-select: none; }
+/* Radix gives the root no positioning and no layout, so both have to be stated
+   here: without `position: relative` the absolutely-positioned thumb has no
+   containing block, and without `display: flex` the track's `flex: 1` does
+   nothing and `align-items` cannot centre the thumb. */
+[data-slot="slider"] { position: relative; display: flex; align-items: center; width: 100%; height: 18px; cursor: pointer; touch-action: none; user-select: none; }
+[data-slot="slider"][data-disabled] { cursor: default; }
 [data-slot="slider-track"] { position: relative; flex: 1; height: 6px; overflow: hidden; border-radius: var(--radius, 0px); background: var(--muted); }
 [data-slot="slider-range"] { position: absolute; height: 100%; background: var(--primary); }
 [data-slot="slider-thumb"] { display: block; width: 18px; height: 18px; border: 2px solid var(--primary); border-radius: var(--radius, 0px); background: var(--card); }
@@ -116,4 +210,73 @@ html[data-theme] .flake-page__creative-hotbar-slot[data-slot="button"] { min-hei
 .flake-page__tool-panel-body [data-slot="scroll-area-viewport"] > div { display: flex !important; flex-direction: column; gap: 12px; padding-right: 8px; }
 .ui-control-gallery { height: 100%; }
 .ui-control-gallery [data-slot="scroll-area-viewport"] > div { padding: 16px; }
+/* The gallery cycles its variant demo buttons through `disabled` so that state can be
+   inspected. A disabled <button> swallows its own clicks, so the press is let through to
+   the wrapper, which is what advances the demo out of the disabled state again. */
+.ui-control-gallery .button-variant-demo { display: inline-flex; }
+.ui-control-gallery .button-variant-demo > [data-slot="button"]:disabled { pointer-events: none; }
+
+/* ---------------------------------------------------------------------------
+   Component appearance that used to be Tailwind utilities on the component
+   markup. Tailwind now sits in the `vendor` layer, below this one, so these
+   utilities could not win anyway; keeping them would leave the appearance
+   described in two places. Anything the shared control rules above already
+   cover was simply dropped rather than restated.
+   --------------------------------------------------------------------------- */
+
+/* 8bitcn stepped border. Visible only in the pixel theme, where
+   `.nova-pixel-decoration` becomes `display: contents`. */
+[data-slot="button-decorations"] > span { background-color: var(--foreground); }
+[data-slot="button-decorations"] > span.nova-pixel-fill-soft { background-color: color-mix(in oklab, var(--foreground) 20%, transparent); }
+
+/* 8bitcn dialog frame. Hidden outside the pixel theme. */
+html[data-theme] [data-slot="dialog-pixel-x"] { border-inline: 2px solid var(--foreground); }
+html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--foreground); }
+[data-slot="dialog-description"] { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+
+[data-slot="select-trigger"] { box-shadow: var(--control-shadow); }
+[data-slot="select-trigger"] svg { opacity: .5; }
+[data-slot="select-label"] { font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); line-height: 1rem; color: var(--muted-foreground); }
+[data-slot="select-item"] { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); line-height: 1.25rem; }
+[data-slot="select-item"][data-disabled] { opacity: .5; }
+[data-slot="select-separator"] { background-color: var(--border); }
+
+/* `<input type="file">` renders a shadow button; the project's input rules do not
+   reach it, so its appearance has to be stated here. */
+[data-slot="input"]::file-selector-button {
+    border-width: 0;
+    background-color: transparent;
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
+    line-height: 1.25rem;
+    font-weight: 500;
+    color: var(--foreground);
+}
+
+[data-slot="table-footer"] { border-top: 1px solid currentColor; background-color: color-mix(in oklab, var(--muted) 50%, transparent); font-weight: 500; }
+[data-slot="table-caption"] { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); line-height: 1.25rem; color: var(--muted-foreground); }
+
+/* Small shared primitives pages compose instead of re-declaring colour or surface.
+   They live in `components.shared`, so a theme may override any of them. */
+.nova-code {
+    padding: 14px; background: var(--muted); border-radius: var(--radius);
+    white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+}
+.nova-panel-subtle { background: var(--muted); border-radius: var(--radius); }
+.nova-box-plain { border: 0; background: transparent; padding: 0; margin: 0; }
+.nova-text-danger { color: var(--destructive); }
+
+/* Property chips rendered by BlockSearchSelect. Shared because the same component
+   appears on the replace page and inside the conversion table; styling it from page
+   CSS made the component look different depending on its host. */
+.replace-property-list { display: flex; flex-wrap: wrap; gap: var(--ln-space-2, 8px); }
+.replace-property {
+    display: flex; flex-wrap: wrap; gap: var(--ln-space-2, 8px);
+    align-items: center; min-width: 0;
+    padding: 8px; background: var(--muted); border-radius: var(--radius);
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
+}
+
 @media (prefers-reduced-motion: reduce) { .nova-control, [data-slot="scroll-area-scrollbar"] { transition: none !important; } }
+}

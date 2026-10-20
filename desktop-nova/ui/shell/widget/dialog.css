@@ -1,3 +1,7 @@
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.shared {
 .dialog-overlay {
     position: fixed;
     inset: 0;
@@ -6,7 +10,7 @@
     align-items: center;
     justify-content: center;
     padding: 20px;
-    background: rgb(0 0 0 / 42%);
+    background: var(--overlay);
 }
 
 .dialog-surface {
@@ -15,9 +19,9 @@
     max-height: min(90vh, 820px);
     flex-direction: column;
     overflow: hidden;
-    color: var(--ln-body-text-color, CanvasText);
-    background: var(--ln-ui-background-color, Canvas);
-    border: 1px solid ThreeDShadow;
+    color: var(--foreground);
+    background: var(--background);
+    border: 1px solid var(--border);
 }
 
 .dialog-surface-sm {
@@ -96,7 +100,7 @@
 }
 
 .dialog-label {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
 }
 
 .dialog-field-stack {
@@ -109,20 +113,21 @@
 .dialog-path-preview {
     padding: 8px 10px;
     overflow-wrap: anywhere;
-    background: rgb(127 127 127 / 10%);
-    border: 1px solid rgb(127 127 127 / 18%);
+    background: color-mix(in srgb, var(--foreground) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--foreground) 14%, transparent);
 }
 
 .dialog-message {
     margin: 0;
     padding: 8px 10px;
     white-space: pre-wrap;
-    border: 1px solid rgb(127 127 127 / 18%);
-    background: rgb(127 127 127 / 10%);
+    border: 1px solid color-mix(in srgb, var(--foreground) 14%, transparent);
+    background: color-mix(in srgb, var(--foreground) 8%, transparent);
 }
 
 .dialog-message-error {
-    color: var(--ln-error-color, #a61b1b);
-    background: rgb(255 0 0 / 10%);
-    border-color: rgb(255 0 0 / 18%);
+    color: var(--destructive);
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
+    border-color: color-mix(in srgb, var(--destructive) 18%, transparent);
+}
 }

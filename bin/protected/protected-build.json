@@ -1,6 +1,6 @@
 {
   "schema": "nova.protected-build.v1",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "buildId": "0.2.0-aeb40730807b-nova-beta02-win-api-r1",
   "moduleId": "nova_protected_module.dll",
   "manifestPublicKey": "U3kxvpUDPRuJI2Ou0HmdLKVpATe2E2gw+L7dAq8EHiw=",

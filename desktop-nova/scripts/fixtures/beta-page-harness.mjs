@@ -16,6 +16,7 @@ function pureService(file) {
   vm.runInNewContext(compiled, { exports, require(id) {
     if (id.endsWith("minecraft-versions.json")) return JSON.parse(readFileSync(new URL("../../../data/minecraft-versions.json", import.meta.url), "utf8"));
     if (id === "./filePathIdentity") return pureService("filePathIdentity");
+    if (id === "./themeManifest") return pureService("themeManifest");
     if (id === "./i18n") return {translateBuildingType: id => id, resolveBlockDisplayName:(id,fallback)=>fallback||id, subscribeI18nChanges:()=>()=>{}};
     if (id === "./backend" || id === "../platform/dialogs" || id === "../platform/applicationOperations") return {};
     if (id === "./renderMode") return {normalizeDisplayMode:value=>value};
@@ -162,6 +163,7 @@ function harness(page, name, facade = {}) {
     if (id.endsWith("BlockSearchSelect")) return { BlockSearchSelect, BlockPropertySelector };
     if (id.endsWith("Dropdown")) return { Dropdown };
     if (id.endsWith("BlockIcon")) return { BlockIcon };
+    if (id.endsWith("ThemeIcon")) return { ThemeIcon: "theme-icon" };
     if (id.endsWith("VersionConversionDialog")) return { VersionConversionDialog: () => null };
     if (id.endsWith("QuickResourceDialog")) return { QuickResourceDialog: () => null };
     if (id.endsWith("Dialog")) return { Dialog };

@@ -1,0 +1,1296 @@
+#!/usr/bin/env node
+
+// UI style guardrail for the theme migration described in docs/UI_ARCHITECTURE.md.
+//
+// The baseline records one count per (rule, file) rather than exact file+line
+// records. Phase 1 moves every CSS rule into a cascade layer and Phase 3 rewrites
+// the component class lists, so line-exact records would flip en masse between
+// "resolved" and "new" on every commit. A per-file count expresses the property
+// that actually matters across the migration: no file may gain findings of a rule,
+// and every count must reach zero. Run `--mode=strict` to list exact locations.
+//
+// Run modes mirror scripts/check-layer-boundaries.mjs.
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import ts from "typescript";
+import { fileURLToPath } from "node:url";
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const defaultRootDir = path.resolve(scriptDir, "..");
+const BASELINE_SCHEMA = "lba.ui-style-violations-baseline.v1";
+// Tailwind's generated utilities sit in `vendor`, below every project layer, so
+// project CSS keeps winning over them exactly as it did while it was unlayered.
+const LAYER_ORDER = ["theme", "vendor", "tokens", "base", "components", "utilities"];
+const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", ".vite", "target", ".tmp"]);
+
+// Elements that already publish a Nova data-slot contract. Styling them by element
+// type inside a cascade layer bypasses the slot contract themes hook into.
+const SLOT_BACKED_ELEMENTS = new Set([
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "table",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "th",
+  "td",
+]);
+
+// Tailwind appearance utilities. Layout and structure utilities are deliberately
+// absent: components and pages are still allowed to own spacing, flow and sizing.
+// Appearance belongs to the theme files.
+const APPEARANCE_UTILITY_PATTERNS = [
+  /^bg-/,
+  /^text-(?!(?:left|center|right|justify|start|end|wrap|nowrap|ellipsis|clip|balance|pretty)$)/,
+  /^border$/,
+  /^border-(?!(?:collapse|spacing)$)/,
+  /^rounded(?:-|$)/,
+  /^shadow(?:-|$)/,
+  /^ring(?:-|$)/,
+  // `outline-none` and `outline-hidden` are focus-ring resets that components keep
+  // next to their accessibility hooks, so only width and colour variants count.
+  /^outline$/,
+  /^outline-(?!(?:none|hidden)$)/,
+  /^font-(?:thin|extralight|light|normal|medium|semibold|bold|extrabold|black|sans|serif|mono)$/,
+  /^opacity-/,
+  /^divide-(?!(?:x|y)$)/,
+  /^fill-/,
+  /^stroke-/,
+  /^(?:from|via|to)-/,
+  /^decoration-/,
+  /^placeholder-/,
+  /^caret-/,
+  /^accent-/,
+  /^drop-shadow-/,
+  /^leading-/,
+  /^tracking-/,
+];
+
+const LEGACY_BUTTON_VARIANT_RE = /^btn-[a-z0-9-]+$/;
+
+// Operating-system colours. A rule that reaches for one of these ignores the
+// theme, which is how the same border ended up themed on one page and system grey
+// on another. `@media (forced-colors: active)` is the one place they are correct.
+const SYSTEM_COLOUR_RE =
+  /\b(ThreeDShadow|ThreeDLightShadow|ThreeDFace|ThreeDHighlight|ButtonBorder|ButtonFace|ButtonText|ButtonShadow|Canvas|CanvasText|GrayText|Highlight|HighlightText|Window|WindowText|Field|FieldText|ActiveBorder|InactiveBorder|AccentColor|AccentColorText|LinkText|VisitedText)\b/g;
+
+function parseArguments(argv) {
+  const options = {
+    mode: "baseline",
+    rootDir: defaultRootDir,
+    baselinePath: path.join(scriptDir, "ui-styles-baseline.json"),
+    writeBaseline: false,
+    printBaseline: false,
+    report: false,
+  };
+
+  for (const argument of argv) {
+    if (argument === "--write-baseline") {
+      options.writeBaseline = true;
+    } else if (argument === "--print-baseline") {
+      options.printBaseline = true;
+    } else if (argument === "--report") {
+      options.report = true;
+    } else if (argument.startsWith("--mode=")) {
+      options.mode = argument.slice("--mode=".length);
+    } else if (argument.startsWith("--root-dir=")) {
+      options.rootDir = path.resolve(argument.slice("--root-dir=".length));
+    } else if (argument.startsWith("--baseline=")) {
+      options.baselinePath = path.resolve(argument.slice("--baseline=".length));
+    } else {
+      throw new Error(`Unknown UI style check argument: ${argument}`);
+    }
+  }
+
+  if (options.mode !== "strict" && options.mode !== "baseline") {
+    throw new Error(`Invalid UI style check mode ${JSON.stringify(options.mode)}; expected strict or baseline.`);
+  }
+  return options;
+}
+
+// Findings are reported as (rule, file) counts. `violations` keeps the exact
+// locations for strict mode and the report; `unlayeredRuleCounts` holds the one
+// rule that is cheaper to count directly than to enumerate.
+const UNLAYERED_RULE = "css-unlayered-rule";
+
+// Scanning state for the current collectFindings() call. The detectors share it
+// through addViolation so each one stays a small, focused function.
+let activeReport = null;
+
+function toPosix(filePath) {
+  return filePath.split(path.sep).join("/");
+}
+
+function relativePath(filePath) {
+  return toPosix(path.relative(activeReport.rootDir, filePath));
+}
+
+function addViolation(filePath, line, rule, message) {
+  const violation = { file: relativePath(filePath), line, rule, message };
+  const key = JSON.stringify([violation.file, violation.line, violation.rule, violation.message]);
+  if (activeReport.violationKeys.has(key)) {
+    return;
+  }
+  activeReport.violationKeys.add(key);
+  activeReport.violations.push(violation);
+}
+
+function compareViolations(left, right) {
+  return (
+    left.file.localeCompare(right.file) ||
+    left.line - right.line ||
+    left.rule.localeCompare(right.rule) ||
+    left.message.localeCompare(right.message)
+  );
+}
+
+/**
+ * Theme directories registered in `src/services/themeManifest.ts`. A theme folder
+ * that is not listed there is a staged resource (pulled from another branch, or a
+ * theme being prepared) rather than an active part of the UI contract.
+ */
+function registeredThemeDirectories(rootDir) {
+  const manifestPath = path.join(rootDir, "src/services/themeManifest.ts");
+  if (!fs.existsSync(manifestPath)) return null;
+  const source = fs.readFileSync(manifestPath, "utf8");
+  const directories = new Set();
+  for (const match of source.matchAll(/directory:\s*"([^"]+)"/g)) directories.add(match[1]);
+  return directories.size ? directories : null;
+}
+
+function walk(dir, extensions) {
+  if (!fs.existsSync(dir)) {
+    return [];
+  }
+
+  const files = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (!SKIPPED_DIRECTORIES.has(entry.name.toLowerCase())) {
+        files.push(...walk(fullPath, extensions));
+      }
+    } else if (extensions.has(path.extname(entry.name).toLowerCase())) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function lineNumberAt(text, index) {
+  let line = 1;
+  for (let cursor = 0; cursor < index; cursor += 1) {
+    if (text.charCodeAt(cursor) === 10) {
+      line += 1;
+    }
+  }
+  return line;
+}
+
+// ---------------------------------------------------------------------------
+// CSS scanning
+// ---------------------------------------------------------------------------
+
+function blankRange(characters, source, start, end) {
+  for (let index = start; index < end; index += 1) {
+    if (source[index] !== "\r" && source[index] !== "\n") {
+      characters[index] = " ";
+    }
+  }
+}
+
+// Comments and string bodies are blanked so that braces and semicolons inside
+// them never confuse the block scanner. Offsets and line breaks are preserved,
+// so reported line numbers still point at the original text. Attribute selector
+// values are blanked too, which is harmless: the guardrails only need to know
+// that `[data-slot` is present, never what it equals.
+function maskCssText(source) {
+  const characters = source.split("");
+  let index = 0;
+
+  while (index < source.length) {
+    if (source[index] === "/" && source[index + 1] === "*") {
+      const end = source.indexOf("*/", index + 2);
+      const stop = end < 0 ? source.length : end + 2;
+      blankRange(characters, source, index, stop);
+      index = stop;
+      continue;
+    }
+
+    if (source[index] === '"' || source[index] === "'") {
+      const quote = source[index];
+      let cursor = index + 1;
+      while (cursor < source.length) {
+        if (source[cursor] === "\\") {
+          cursor += 2;
+        } else if (source[cursor] === quote) {
+          cursor += 1;
+          break;
+        } else {
+          cursor += 1;
+        }
+      }
+      blankRange(characters, source, index, cursor);
+      index = cursor;
+      continue;
+    }
+
+    index += 1;
+  }
+
+  return characters.join("");
+}
+
+// Walks a stylesheet once and returns every style rule together with the cascade
+// layer it lives in. Nested at-rules (@media, @supports) are transparent for
+// layer purposes; at-rules with non-selector bodies (@keyframes, @font-face,
+// @theme) are opaque and never produce rules.
+function scanCss(source) {
+  const masked = maskCssText(source);
+  const rules = [];
+  const reducedMotionSpans = [];
+  const forcedColoursSpans = [];
+  const stack = [];
+  let buffer = "";
+  let bufferStart = -1;
+  let index = 0;
+
+  const layerPath = () => {
+    for (let depth = stack.length - 1; depth >= 0; depth -= 1) {
+      if (stack[depth].kind === "layer") {
+        return stack[depth].path;
+      }
+    }
+    return null;
+  };
+
+  while (index < masked.length) {
+    const character = masked[index];
+
+    if (character === "{") {
+      const prelude = buffer.trim();
+      const start = bufferStart < 0 ? index : bufferStart;
+      const insideOpaque = stack.some((entry) => entry.kind === "opaque");
+
+      if (/^@layer\b/.test(prelude)) {
+        const name = prelude.replace(/^@layer\b/, "").trim();
+        const parent = layerPath();
+        stack.push({
+          kind: "layer",
+          name,
+          path: parent ? `${parent}.${name}` : name,
+          start: index,
+        });
+      } else if (/^@(?:media|supports|container|scope|document|layer)\b/.test(prelude)) {
+        stack.push({
+          kind: "at",
+          start: index,
+          reducedMotion: /prefers-reduced-motion/.test(prelude),
+          forcedColours: /forced-colors/.test(prelude),
+        });
+      } else if (/^@/.test(prelude)) {
+        stack.push({ kind: "opaque", start: index });
+      } else if (insideOpaque) {
+        stack.push({ kind: "opaque", start: index });
+      } else if (prelude.length > 0) {
+        rules.push({ selector: prelude, layer: layerPath(), line: lineNumberAt(masked, start), bodyStart: index });
+        stack.push({ kind: "rule", start: index });
+      } else {
+        stack.push({ kind: "rule", start: index, selector: "" });
+      }
+
+      buffer = "";
+      bufferStart = -1;
+      index += 1;
+      continue;
+    }
+
+    if (character === "}") {
+      const entry = stack.pop();
+      if (entry && entry.kind === "at" && entry.reducedMotion) {
+        reducedMotionSpans.push({ start: entry.start, end: index });
+      }
+      if (entry && entry.kind === "at" && entry.forcedColours) {
+        forcedColoursSpans.push({ start: entry.start, end: index });
+      }
+      buffer = "";
+      bufferStart = -1;
+      index += 1;
+      continue;
+    }
+
+    if (character === ";" && stack.length === 0) {
+      const statement = buffer.trim();
+      if (/^@layer\b/.test(statement)) {
+        const names = statement
+          .replace(/^@layer\b/, "")
+          .split(",")
+          .map((name) => name.trim())
+          .filter(Boolean);
+        if (names.length > 0) {
+          activeReport.layerOrderDeclarations.push(names);
+        }
+      }
+      buffer = "";
+      bufferStart = -1;
+      index += 1;
+      continue;
+    }
+
+    if (bufferStart < 0 && !/\s/.test(character)) {
+      bufferStart = index;
+    }
+    buffer += character;
+    index += 1;
+  }
+
+  return { rules, reducedMotionSpans, forcedColoursSpans, masked };
+}
+
+// A selector part is "element styled" when its subject compound (the last one,
+// which is the element actually matched) begins with a bare element name.
+function subjectElementOf(selectorPart) {
+  const compounds = selectorPart
+    .trim()
+    .split(/[\s>+~]+/)
+    .filter(Boolean);
+  const subject = compounds[compounds.length - 1];
+  if (!subject) {
+    return null;
+  }
+  const match = /^([a-zA-Z][a-zA-Z0-9-]*)/.exec(subject);
+  if (!match) {
+    return null;
+  }
+  return match[1].toLowerCase();
+}
+
+/**
+ * Vendor stylesheets must not be injected into a project layer that ranks at or
+ * above `components`. Tailwind's generated utilities carry appearance classes
+ * (`bg-primary`) that the shadcn components apply unconditionally, so putting
+ * them above `components` repaints every control. Neither the CSS rules above nor
+ * the cascade analyzer can see this: both read project stylesheets only, while
+ * the utilities are generated at build time.
+ */
+function checkVendorImports(filePath, source, declaredLayers, projectCeiling) {
+  if (projectCeiling < 0) return;
+  for (const match of source.matchAll(/@import\s+["']([^"']+)["']\s+layer\(\s*([a-z0-9-]+)\s*\)/g)) {
+    const [, specifier, layer] = match;
+    const rank = declaredLayers.indexOf(layer);
+    if (rank < 0 || rank < projectCeiling) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(source, match.index),
+      "css-vendor-layer-above-components",
+      `@import "${specifier}" places vendor CSS in the "${layer}" layer, which ranks at or above "components"; vendor CSS must sit below every project layer.`,
+    );
+  }
+}
+
+// A colour written straight into a style declaration cannot follow the theme: the
+// same neon red survives both light and dark. Custom-property *definitions* are
+// excluded because that is where the palette legitimately lives.
+const COLOUR_LITERAL_RE = /#[0-9a-fA-F]{3,8}\b|\b(?:rgb|rgba|hsl|hsla|oklch)\(/;
+
+/**
+ * Flags hardcoded colours in style declarations, with two deliberate exemptions:
+ * `ui/themes/**` holds the palette (a literal there is the source of truth), and
+ * the settings page swatches preview the *other* themes' colours, so resolving
+ * them to the active theme would defeat their purpose.
+ */
+function checkHardcodedColours(filePath, source, relative) {
+  if (relative.startsWith("ui/themes/") || relative.endsWith("settings/settings.css")) return;
+  const masked = maskCssText(source);
+  for (const match of masked.matchAll(/([a-z-]+)\s*:\s*([^;{}]+)[;}]/gi)) {
+    const property = match[1];
+    const value = match[2];
+    if (property.startsWith("--")) continue;
+    if (value.includes("var(")) continue;
+    if (!COLOUR_LITERAL_RE.test(value)) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-hardcoded-colour",
+      `"${property}: ${value.trim()}" hardcodes a colour; use a theme token so it follows the theme.`,
+    );
+  }
+}
+
+// Text sizes are a theme decision: a page that writes its own rem/em/px value makes
+// the same caption 12.04px in shadcn and 13.76px in the bitmap themes. Only the theme
+// type scale (or a fluid display `clamp()`) may set a page's font size.
+const PAGE_FONT_SIZE_ALLOWED = /^(?:var\(--nova-text-[a-z]+(?:,[^)]*)?\)|clamp\(|inherit$|0$)/;
+
+function checkPageFontSizes(filePath, source, relative) {
+  if (!relative.startsWith("ui/windows/")) return;
+  const masked = maskCssText(source);
+  for (const match of masked.matchAll(/font-size\s*:\s*([^;{}]+)[;}]/gi)) {
+    const value = match[1].trim();
+    if (PAGE_FONT_SIZE_ALLOWED.test(value)) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-page-font-size",
+      `page font-size "${value}" bypasses the theme type scale; use var(--nova-text-sm) or clamp() for display text.`,
+    );
+  }
+}
+
+// Every theme entry must define the type scale, or text falls back to the shadcn
+// values in the shared layer and the bitmap themes silently render blurry captions.
+function checkThemeTypeTokens(filePath, source, relative) {
+  if (!/^ui\/themes\/[^/]+\/theme\.css$/.test(relative)) return;
+  for (const token of ["--nova-text-xs", "--nova-text-sm", "--nova-text-base", "--nova-text-lg"]) {
+    if (new RegExp(`${token}\\s*:`).test(source)) continue;
+    addViolation(
+      filePath,
+      1,
+      "css-theme-type-token",
+      `theme entry does not define ${token}; every theme must own its text scale.`,
+    );
+  }
+}
+
+// A theme may need a different *face* at a small size: Minecraft switches Unifont
+// (16px design) for the 12px Fusion Pixel face instead of scaling the bitmap down.
+// Any rule that opts into the small type scale must therefore also let the theme
+// choose the family, or the text renders blurry in that theme.
+function checkTextScaleFamily(filePath, source) {
+  const masked = maskCssText(source);
+  for (const match of masked.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const head = match[1];
+    if (head.trimStart().startsWith("@")) continue;
+    const body = match[2];
+    const size = /font-size\s*:\s*var\(--nova-text-(xs|sm|lg)\)/.exec(body);
+    if (!size) continue;
+    const family = /font-family\s*:\s*var\(--nova-font-(?:xs|sm|lg)/.test(body);
+    if (family) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-text-scale-family",
+      `"${head.trim().replace(/\s+/g, " ")}" uses --nova-text-${size[1]} without --nova-font-${size[1]}; bitmap themes cannot switch to a crisp small face.`,
+    );
+  }
+}
+
+// Any selector whose rightmost compound paints a button. `.btn*` counts because the
+// legacy size classes were exactly where per-button type scales used to hide.
+const BUTTON_TAIL_RE =
+  /(^|[^\w-])(button|\.btn(-[\w-]+)?|\.dropdown-trigger)(?![\w-])|\[data-slot="button"\]|input\[type="(?:button|submit|reset)"\]/;
+
+/**
+ * Every button must inherit one font size (`font: inherit` in the theme layer).
+ * The Minecraft theme paints its body text with Unifont, a bitmap font that only
+ * renders crisply at whole multiples of its design size, so a button at 11px or 13px
+ * comes out blurred - and a per-button type scale is what produced that spread.
+ *
+ * Only the rightmost compound is tested, so `.toolbar button span { font-size }` is
+ * not mistaken for a button rule. Only `font-size` is checked; the `font` shorthand
+ * is how the inherit is expressed.
+ */
+function checkButtonFontSize(filePath, source) {
+  const masked = maskCssText(source);
+  for (const match of masked.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const prelude = match[1];
+    if (prelude.trimStart().startsWith("@")) continue;
+    const declaration = /font-size\s*:/.exec(match[2]);
+    if (!declaration) continue;
+    for (const selector of prelude.split(",")) {
+      const tail = selector.trim().split(/\s+|>/).pop();
+      if (!BUTTON_TAIL_RE.test(tail)) continue;
+      addViolation(
+        filePath,
+        lineNumberAt(masked, match.index + match[1].length + declaration.index),
+        "css-button-font-size",
+        `"${selector.trim().replace(/\s+/g, " ")}" sets a button font-size; buttons must inherit one size so the pixel font stays crisp.`,
+      );
+    }
+  }
+}
+
+// Dialog content is rendered through a Radix portal, so it is detached from the page
+// subtree. A selector that requires a page root *and* reaches into dialog content can
+// therefore never match. This is how the flake note-keyboard broke: the button never
+// received `position: relative`, so its absolutely-positioned label resolved against
+// the nearest positioned ancestor and every key's text stacked in one box.
+const PAGE_ROOT_RE = /\.(?:flake-page|nova-page)(?![\w-])/;
+const DIALOG_CONTENT_RE = /\[data-slot\^="dialog"\]|\.dialog-(?:surface|content|overlay|body|header|footer|form-grid)|__state-dialog/;
+
+function checkPortaledDialogScope(filePath, source) {
+  const masked = maskCssText(source);
+  for (const match of masked.matchAll(/([^{}]+)\{/g)) {
+    const prelude = match[1].trim();
+    if (prelude.startsWith("@")) continue;
+    if (!PAGE_ROOT_RE.test(prelude) || !DIALOG_CONTENT_RE.test(prelude)) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-portal-scope",
+      `"${prelude.replace(/\s+/g, " ")}" requires a page root but targets portaled dialog content, so it can never match. Anchor it inside the dialog instead.`,
+    );
+  }
+}
+
+/**
+ * Every `url()` in project CSS must resolve to a real file. A broken path is silent -
+ * the browser just paints nothing - so a moved stylesheet or a renamed texture only
+ * shows up as a missing background in the running app. This is what a theme file merge
+ * would otherwise break: moving a file one directory changes every relative asset path.
+ */
+function checkUnresolvedAssets(filePath, source) {
+  // Blank comments but KEEP string contents: `maskCssText` also blanks strings, and a
+  // url() path is exactly a string, so using it here would make the rule a no-op.
+  const characters = source.split("");
+  let cursor = 0;
+  while (cursor < source.length) {
+    if (source[cursor] === "/" && source[cursor + 1] === "*") {
+      const end = source.indexOf("*/", cursor + 2);
+      const stop = end < 0 ? source.length : end + 2;
+      blankRange(characters, source, cursor, stop);
+      cursor = stop;
+      continue;
+    }
+    cursor += 1;
+  }
+  const masked = characters.join("");
+  for (const match of masked.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]+))\s*\)/g)) {
+    const specifier = match[1] ?? match[2] ?? match[3] ?? "";
+    // Data URIs, remote URLs, and in-document SVG references are not files.
+    if (!specifier || /^(?:data:|https?:|#|\/\/)/.test(specifier)) continue;
+    const target = path.resolve(path.dirname(filePath), specifier);
+    if (fs.existsSync(target)) continue;
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-unresolved-asset",
+      `url("${specifier}") does not resolve to a file; the asset would silently not paint.`,
+    );
+  }
+}
+/**
+ * A class list is whitespace separated, so two class names fused into one token means
+ * something rewrote the attribute and dropped the separator. That happens easily to a
+ * script that removes a token from a class list, and it is invisible: the element keeps
+ * no styling from either class. `flake-page__note-key-buttonis-sharp` is exactly that
+ * shape - it matched neither `.flake-page__note-key-button` nor `.is-sharp`, so the note
+ * keyboard lost its button box and every key label escaped to one spot.
+ */
+function checkGluedClassTokens(filePath, source, knownClasses) {
+  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const visit = (node) => {
+    if (ts.isJsxAttribute(node) && node.name.getText(sourceFile) === "className" && node.initializer) {
+      const raw = node.initializer.getText(sourceFile);
+      for (const quoted of raw.matchAll(/"([^"]*)"|'([^']*)'|`([^`]*)`/g)) {
+        const text = quoted[1] ?? quoted[2] ?? quoted[3] ?? "";
+        for (const token of text.split(/\s+/)) {
+          if (!token || knownClasses.has(token) || token.length < 8) continue;
+          for (let split = 3; split < token.length - 3; split += 1) {
+            const head = token.slice(0, split);
+            const tail = token.slice(split);
+            if (!knownClasses.has(head) || !knownClasses.has(tail)) continue;
+            addViolation(
+              filePath,
+              lineNumberAt(source, node.getStart(sourceFile)),
+              "tsx-glued-class-token",
+              `Class token "${token}" is "${head}" and "${tail}" fused together; a class list needs a space between them.`,
+            );
+            return;
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+}
+function checkCssFile(filePath, source) {
+  const { rules, reducedMotionSpans, forcedColoursSpans, masked } = scanCss(source);
+  const relative = relativePath(filePath);
+  let unlayered = 0;
+
+  // Each ownership tier has exactly one sublayer. A rule written into the parent
+  // `components` layer (or into the wrong sublayer) would silently change who wins,
+  // so the assignment is checked by path rather than trusted.
+  const expectedSublayer = relative.startsWith("ui/windows/")
+    ? "components.page"
+    : relative === "ui/themes/modern.css"
+      ? "components.shared"
+      : relative.startsWith("ui/themes/")
+        ? "components.theme"
+        : "components.shared";
+  const sublayerStatement = "@layer components.shared, components.page, components.theme;";
+  let hasSublayerRule = false;
+
+  for (const rule of rules) {
+    if (rule.layer === "components" && rule.selector.length > 0) {
+      addViolation(
+        filePath,
+        rule.line,
+        "css-sublayer-assignment",
+        `rule lives in the parent "components" layer; this file must use "${expectedSublayer}".`,
+      );
+    } else if (rule.layer?.startsWith("components.") && rule.layer !== expectedSublayer) {
+      addViolation(
+        filePath,
+        rule.line,
+        "css-sublayer-assignment",
+        `rule lives in "${rule.layer}" but this file owns "${expectedSublayer}".`,
+      );
+    }
+    if (rule.layer?.startsWith("components.")) hasSublayerRule = true;
+  }
+  if (hasSublayerRule) {
+    const statements = [...masked.matchAll(/@layer\s+([^{};]+);/g)].map((match) => match[1].trim());
+    if (!statements.includes("components.shared, components.page, components.theme")) {
+      addViolation(
+        filePath,
+        1,
+        "css-sublayer-order",
+        `file uses component sublayers but does not declare "${sublayerStatement}" first.`,
+      );
+    }
+  }
+
+  for (const rule of rules) {
+    if (rule.layer === null) {
+      unlayered += 1;
+    } else if (rule.layer?.startsWith("components") && rule.selector.length > 0) {
+      for (const part of rule.selector.split(",")) {
+        const element = subjectElementOf(part);
+        if (element && SLOT_BACKED_ELEMENTS.has(element)) {
+          addViolation(
+            filePath,
+            rule.line,
+            "css-components-bare-element-selector",
+            `@layer ${rule.layer} styles <${element}> by element type; target [data-slot="..."] instead: ${part.trim()}`,
+          );
+        }
+      }
+    }
+
+    if (/\.btn-[a-z0-9-]+/.test(rule.selector)) {
+      for (const className of rule.selector.match(/\.btn-[a-z0-9-]+/g) ?? []) {
+        addViolation(
+          filePath,
+          rule.line,
+          "css-legacy-button-variant",
+          `Legacy button variant class ${className} must be replaced by a size/variant prop.`,
+        );
+      }
+    }
+  }
+
+  activeReport.unlayeredRuleCounts.set(relative, unlayered);
+
+  for (const match of masked.matchAll(/!\s*important/gi)) {
+    // `@media (prefers-reduced-motion: reduce)` is the one place where !important
+    // is the standard way to win against animation declared elsewhere.
+    if (reducedMotionSpans.some((span) => match.index > span.start && match.index < span.end)) {
+      continue;
+    }
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-important",
+      "!important is not allowed in project CSS; fix the cascade layer instead.",
+    );
+  }
+
+  for (const match of masked.matchAll(SYSTEM_COLOUR_RE)) {
+    // A forced-colours block exists precisely to use the OS palette.
+    if (forcedColoursSpans.some((span) => match.index > span.start && match.index < span.end)) {
+      continue;
+    }
+    addViolation(
+      filePath,
+      lineNumberAt(masked, match.index),
+      "css-system-colour",
+      `${match[1]} is an operating-system colour; use a theme token so the value follows the theme.`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// TypeScript / TSX scanning
+// ---------------------------------------------------------------------------
+
+function collectClassTexts(node, sourceFile, out) {
+  if (!node) {
+    return;
+  }
+
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    out.push({ text: node.text, pos: node.getStart(sourceFile) });
+    return;
+  }
+
+  if (ts.isJsxExpression(node)) {
+    collectClassTexts(node.expression, sourceFile, out);
+    return;
+  }
+
+  if (ts.isTemplateExpression(node)) {
+    out.push({ text: node.head.text, pos: node.head.getStart(sourceFile) });
+    for (const span of node.templateSpans) {
+      collectClassTexts(span.literal, sourceFile, out);
+    }
+    return;
+  }
+
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    collectClassTexts(node.left, sourceFile, out);
+    collectClassTexts(node.right, sourceFile, out);
+    return;
+  }
+
+  if (ts.isConditionalExpression(node)) {
+    collectClassTexts(node.whenTrue, sourceFile, out);
+    collectClassTexts(node.whenFalse, sourceFile, out);
+    return;
+  }
+
+  if (ts.isParenthesizedExpression(node)) {
+    collectClassTexts(node.expression, sourceFile, out);
+    return;
+  }
+
+  if (ts.isArrayLiteralExpression(node)) {
+    for (const element of node.elements) {
+      collectClassTexts(element, sourceFile, out);
+    }
+    return;
+  }
+
+  if (ts.isCallExpression(node)) {
+    // Covers cn(...), clsx(...), classNames(...) and template tag helpers.
+    for (const argument of node.arguments) {
+      collectClassTexts(argument, sourceFile, out);
+    }
+  }
+}
+
+// Strips Tailwind variant prefixes so `dark:bg-input/30` is judged as `bg-input/30`
+// and `data-[size=default]:h-9` is judged as `h-9` (structural, allowed).
+function stripVariants(token) {  let remaining = token;
+  for (let guard = 0; guard < 8; guard += 1) {
+    const match = /^[^:\s]+:/.exec(remaining);
+    if (!match) {
+      return remaining;
+    }
+    remaining = remaining.slice(match[0].length);
+  }
+  return remaining;
+}
+
+function isAppearanceUtility(token) {
+  const base = stripVariants(token);
+  if (base.length === 0) {
+    return false;
+  }
+  return APPEARANCE_UTILITY_PATTERNS.some((pattern) => pattern.test(base));
+}
+
+function checkSourceFile(filePath, source) {
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+
+  const classTexts = [];
+
+  function visit(node) {
+    if (
+      ts.isJsxAttribute(node) &&
+      node.name.getText(sourceFile) === "className" &&
+      node.initializer
+    ) {
+      collectClassTexts(node.initializer, sourceFile, classTexts);
+    }
+    // A native control is styled by the browser, not by the theme, so it can only
+    // ever match the active theme by accident.
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = node.tagName.getText(sourceFile);
+      const at = node.getStart(sourceFile);
+      if (tag === "button") {
+        addViolation(
+          filePath,
+          lineNumberAt(source, at),
+          "tsx-raw-button",
+          "Raw <button> bypasses the Button component's variant/size system; use ui/button.tsx.",
+        );
+      } else if (tag === "Button") {
+        // `buttonVariants`' base string already carries `btn`; repeating it at the call
+        // site is the last remnant of the hand-rolled button classes and does nothing.
+        for (const attribute of node.attributes.properties) {
+          if (!ts.isJsxAttribute(attribute) || attribute.name.getText(sourceFile) !== "className" || !attribute.initializer) continue;
+          const literalTokens = [...attribute.initializer.getText(sourceFile).matchAll(/"([^"]*)"|'([^']*)'|`([^`]*)`/g)]
+            .flatMap((m) => (m[1] ?? m[2] ?? m[3] ?? "").split(/\s+/))
+            .filter(Boolean);
+          if (!literalTokens.includes("btn")) continue;
+          addViolation(
+            filePath,
+            lineNumberAt(source, at),
+            "tsx-redundant-btn-class",
+            "<Button> already carries `btn`; drop it from className.",
+          );
+        }
+      } else if (tag === "select") {
+        addViolation(
+          filePath,
+          lineNumberAt(source, at),
+          "tsx-native-control",
+          'Raw <select> is not themeable; use ui/select.tsx instead.',
+        );
+      } else if (tag === "input") {
+        for (const attribute of node.attributes.properties) {
+          if (!ts.isJsxAttribute(attribute) || attribute.name.getText(sourceFile) !== "type") continue;
+          const kind =
+            attribute.initializer && ts.isStringLiteral(attribute.initializer)
+              ? attribute.initializer.text
+              : null;
+          if (kind && ["checkbox", "radio", "range"].includes(kind)) {
+            addViolation(
+              filePath,
+              lineNumberAt(source, at),
+              "tsx-native-control",
+              `Raw <input type="${kind}"> is not themeable; use the shared Radix control instead.`,
+            );
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+
+  for (const entry of classTexts) {
+    const line = lineNumberAt(source, entry.pos);
+    for (const token of entry.text.split(/\s+/)) {
+      if (token.length === 0) {
+        continue;
+      }
+      if (isAppearanceUtility(token)) {
+        addViolation(
+          filePath,
+          line,
+          "tsx-appearance-utility-class",
+          `Appearance utility class "${token}" belongs in a theme component layer, not in component markup.`,
+        );
+      }
+      if (LEGACY_BUTTON_VARIANT_RE.test(stripVariants(token))) {
+        addViolation(
+          filePath,
+          line,
+          "tsx-legacy-button-variant",
+          `Legacy button variant class "${token}" must be replaced by a size/variant prop.`,
+        );
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scan entry point
+// ---------------------------------------------------------------------------
+
+const CSS_EXTENSIONS = new Set([".css"]);
+const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
+
+/**
+ * Scans every stylesheet and TypeScript/TSX module under `<rootDir>/ui` and
+ * returns the findings for one repository state. Safe to call repeatedly.
+ */
+export function collectFindings(rootDir) {
+  const previousReport = activeReport;
+  activeReport = {
+    rootDir,
+    violations: [],
+    violationKeys: new Set(),
+    unlayeredRuleCounts: new Map(),
+    layerOrderDeclarations: [],
+    definedTokens: new Set(),
+    definedClasses: new Set(),
+    cssFileCount: 0,
+    sourceFileCount: 0,
+  };
+
+  try {
+    const report = activeReport;
+    const uiDir = path.join(rootDir, "ui");
+    const allCssFiles = walk(uiDir, CSS_EXTENSIONS);
+    const sourceFiles = walk(uiDir, SOURCE_EXTENSIONS);
+
+    // Theme directories that are not in the manifest are staged resources (for
+    // example a theme pulled back from another branch before it is registered).
+    // They are not part of the contract yet, so the checker does not scan them.
+    const registeredThemes = registeredThemeDirectories(rootDir);
+    const cssFiles = registeredThemes
+      ? allCssFiles.filter((filePath) => {
+          const relative = path.relative(uiDir, filePath).split(path.sep).join("/");
+          const themeDir = /^themes\/([^/]+)\//.exec(relative)?.[1];
+          return !themeDir || registeredThemes.has(themeDir);
+        })
+      : allCssFiles;
+    report.stagedCssFileCount = allCssFiles.length - cssFiles.length;
+
+    // Any custom property defined in the frontend counts, whichever file shape
+    // holds it. Properties the TypeScript sets at runtime (`--flake-*`,
+    // `--material-list-virtual-spacer-height`) are legitimately absent from CSS,
+    // so they are collected separately and exempted from the undefined check.
+    const runtimeSetTokens = new Set();
+    for (const filePath of [...cssFiles, ...sourceFiles]) {
+      const text = fs.readFileSync(filePath, "utf8");
+      for (const match of text.matchAll(/(--[a-z0-9-]+)\s*:/g)) {
+        report.definedTokens.add(match[1]);
+      }
+      if (SOURCE_EXTENSIONS.has(path.extname(filePath))) {
+        for (const match of text.matchAll(/["'`](--[a-z0-9-]+)["'`]/g)) {
+          runtimeSetTokens.add(match[1]);
+        }
+      }
+    }
+    report.runtimeSetTokens = runtimeSetTokens;
+
+    // The layer order the stylesheets declare. `components` is the rank vendor CSS
+    // must stay below: project component rules are what Tailwind utilities would
+    // otherwise override.
+    const declaredLayers = [];
+    for (const filePath of cssFiles) {
+      for (const match of fs.readFileSync(filePath, "utf8").matchAll(/@layer\s+([^{};]+);/g)) {
+        for (const name of match[1].split(",")) {
+          const trimmed = name.trim();
+          if (trimmed && !declaredLayers.includes(trimmed)) declaredLayers.push(trimmed);
+        }
+      }
+    }
+    const projectCeiling = declaredLayers.indexOf("components");
+
+    for (const filePath of cssFiles) {
+      report.cssFileCount += 1;
+      const source = fs.readFileSync(filePath, "utf8");
+      checkCssFile(filePath, source);
+      checkButtonFontSize(filePath, source);
+      checkPortaledDialogScope(filePath, source);
+      checkHardcodedColours(filePath, source, relativePath(filePath));
+      checkPageFontSizes(filePath, source, relativePath(filePath));
+      checkTextScaleFamily(filePath, source);
+      checkThemeTypeTokens(filePath, source, relativePath(filePath));
+      checkVendorImports(filePath, source, declaredLayers, projectCeiling);
+      checkUnresolvedAssets(filePath, source);
+      for (const match of maskCssText(source).matchAll(/\.([a-zA-Z][\w-]{2,})/g)) report.definedClasses.add(match[1]);
+
+      // Scan the masked text: a `var()` written inside a comment is documentation, not
+      // a reference. (This is what flagged the comment that explains the button
+      // variant texture indirection.)
+      const maskedForTokens = maskCssText(source);
+      for (const match of maskedForTokens.matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
+        const token = match[1];
+        if (report.definedTokens.has(token) || runtimeSetTokens.has(token)) continue;
+        // Radix publishes these on the content element it renders; they are part
+        // of the primitive's contract, not something the project declares.
+        if (token.startsWith("--radix-")) continue;
+        addViolation(
+          filePath,
+          lineNumberAt(maskedForTokens, match.index),
+          "token-undefined-reference",
+          `${token} is referenced but never defined; it silently falls back.`,
+        );
+      }
+    }
+
+    for (const filePath of sourceFiles) {
+      report.sourceFileCount += 1;
+      const source = fs.readFileSync(filePath, "utf8");
+      checkSourceFile(filePath, source);
+      checkGluedClassTokens(filePath, source, report.definedClasses);
+    }
+
+    report.violations.sort(compareViolations);
+    return report;
+  } finally {
+    activeReport = previousReport;
+  }
+}
+
+/** Collapses a report into (rule, file) counts, the baseline's unit of comparison. */
+export function buildCounts(report) {
+  const counts = new Map();
+  const bump = (rule, file, amount) => {
+    const key = JSON.stringify([rule, file]);
+    counts.set(key, (counts.get(key) ?? 0) + amount);
+  };
+
+  for (const violation of report.violations) {
+    bump(violation.rule, violation.file, 1);
+  }
+  for (const [file, count] of report.unlayeredRuleCounts) {
+    if (count > 0) {
+      bump(UNLAYERED_RULE, file, count);
+    }
+  }
+  return counts;
+}
+
+/** Renders counts as the ordered, serializable baseline document body. */
+export function countsToJson(counts) {
+  const byRule = {};
+  for (const [key, count] of [...counts.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    const [rule, file] = JSON.parse(key);
+    byRule[rule] ??= {};
+    byRule[rule][file] = count;
+  }
+  const ordered = {};
+  for (const rule of Object.keys(byRule).sort()) {
+    ordered[rule] = Object.fromEntries(
+      Object.entries(byRule[rule]).sort(([left], [right]) => left.localeCompare(right)),
+    );
+  }
+  return ordered;
+}
+
+export function baselineDocument(counts) {
+  return { schema: BASELINE_SCHEMA, counts: countsToJson(counts) };
+}
+
+/** Validates a parsed baseline document and returns its counts keyed like buildCounts. */
+export function baselineCountsFromDocument(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("UI style baseline must be a JSON object.");
+  }
+  if (parsed.schema !== BASELINE_SCHEMA) {
+    throw new Error(`UI style baseline must use schema ${BASELINE_SCHEMA}.`);
+  }
+  if (!parsed.counts || typeof parsed.counts !== "object" || Array.isArray(parsed.counts)) {
+    throw new Error("UI style baseline must contain a counts object.");
+  }
+
+  const counts = new Map();
+  for (const [rule, files] of Object.entries(parsed.counts)) {
+    if (typeof rule !== "string" || rule.length === 0 || /[*?[\]{}!]/.test(rule)) {
+      throw new Error(`UI style baseline has a non-exact rule: ${JSON.stringify(rule)}`);
+    }
+    if (!files || typeof files !== "object" || Array.isArray(files)) {
+      throw new Error(`UI style baseline rule ${rule} must map files to counts.`);
+    }
+    for (const [file, count] of Object.entries(files)) {
+      if (!isExactRelativePath(file)) {
+        throw new Error(`UI style baseline has a non-exact path under ${rule}: ${JSON.stringify(file)}`);
+      }
+      if (!Number.isSafeInteger(count) || count < 0) {
+        throw new Error(`UI style baseline has an invalid count for ${rule} / ${file}.`);
+      }
+      counts.set(JSON.stringify([rule, file]), count);
+    }
+  }
+  return counts;
+}
+
+// ---------------------------------------------------------------------------
+// Baseline handling
+// ---------------------------------------------------------------------------
+
+function isExactRelativePath(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    !/[*?[\]{}!]/.test(value) &&
+    !value.includes("\\") &&
+    !path.isAbsolute(value) &&
+    !value.split("/").includes("..")
+  );
+}
+
+function readBaseline(filePath) {
+  return baselineCountsFromDocument(JSON.parse(fs.readFileSync(filePath, "utf8")));
+}
+
+function writeBaseline(filePath, counts) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  // Match the repository's working-tree line endings so refreshing the baseline
+  // does not produce a whole-file diff.
+  const text = `${JSON.stringify(baselineDocument(counts), null, 2)}\n`.split("\n").join(os.EOL);
+  fs.writeFileSync(filePath, text.endsWith(os.EOL) ? text : `${text}${os.EOL}`, "utf8");
+}
+
+function printViolations(title, entries) {
+  console.error(title);
+  for (const violation of entries) {
+    console.error(`${violation.file}:${violation.line} [${violation.rule}] ${violation.message}`);
+  }
+}
+
+function printReport(report) {
+  const counts = buildCounts(report);
+  const byRule = new Map();
+  for (const key of counts.keys()) {
+    const [rule] = JSON.parse(key);
+    byRule.set(rule, (byRule.get(rule) ?? 0) + counts.get(key));
+  }
+
+  const unlayeredFiles = [...report.unlayeredRuleCounts.entries()]
+    .filter(([, count]) => count > 0)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+  const totalUnlayered = unlayeredFiles.reduce((sum, [, count]) => sum + count, 0);
+
+  console.log("UI style report");
+  console.log(`  scanned: ${report.cssFileCount} CSS file(s), ${report.sourceFileCount} TypeScript file(s)`);
+  console.log(`  defined custom properties: ${report.definedTokens.size}`);
+  console.log(`  unlayered CSS rules: ${totalUnlayered} across ${unlayeredFiles.length} file(s)`);
+  for (const [file, count] of unlayeredFiles) {
+    console.log(`    ${String(count).padStart(5)}  ${file}`);
+  }
+
+  const declaredOrder = report.layerOrderDeclarations.find(
+    (names) => JSON.stringify(names) === JSON.stringify(LAYER_ORDER),
+  );
+  console.log(
+    declaredOrder
+      ? `  cascade layer order: declared as ${LAYER_ORDER.join(", ")}`
+      : `  cascade layer order: NOT declared; expected @layer ${LAYER_ORDER.join(", ")}; (Phase 1)`,
+  );
+
+  console.log(`  findings: ${report.violations.length}`);
+  for (const [rule, count] of [...byRule.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    console.log(`    ${String(count).padStart(5)}  ${rule}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Evaluation
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs one mode against a repository state and returns a structured outcome.
+ * `main` only formats this, so tests can assert on results without a subprocess.
+ */
+export function evaluate(options) {
+  const report = collectFindings(options.rootDir);
+  const currentCounts = buildCounts(report);
+  const unlayeredTotal = [...report.unlayeredRuleCounts.values()].reduce((sum, count) => sum + count, 0);
+  const outcome = { report, currentCounts, unlayeredTotal };
+
+  if (options.mode === "strict") {
+    return { ...outcome, mode: "strict", ok: report.violations.length === 0 && unlayeredTotal === 0 };
+  }
+
+  let baselineCounts;
+  try {
+    baselineCounts = readBaseline(options.baselinePath);
+  } catch (error) {
+    return { ...outcome, mode: "baseline", ok: false, baselineError: error.message };
+  }
+
+  const regressions = [];
+  let resolvedCount = 0;
+  for (const [key, count] of currentCounts) {
+    const allowed = baselineCounts.get(key) ?? 0;
+    if (count > allowed) {
+      const [rule, file] = JSON.parse(key);
+      regressions.push({ rule, file, count, allowed });
+    }
+  }
+  for (const [key, allowed] of baselineCounts) {
+    const count = currentCounts.get(key) ?? 0;
+    if (count < allowed) {
+      resolvedCount += allowed - count;
+    }
+  }
+  regressions.sort(
+    (left, right) => left.rule.localeCompare(right.rule) || left.file.localeCompare(right.file),
+  );
+
+  return { ...outcome, mode: "baseline", ok: regressions.length === 0, baselineCounts, regressions, resolvedCount };
+}
+
+// ---------------------------------------------------------------------------
+// Command line
+// ---------------------------------------------------------------------------
+
+function main(argv) {
+  const options = parseArguments(argv);
+
+  if (options.printBaseline || options.writeBaseline || options.report) {
+    const report = collectFindings(options.rootDir);
+    const currentCounts = buildCounts(report);
+
+    if (options.printBaseline) {
+      process.stdout.write(`${JSON.stringify(baselineDocument(currentCounts), null, 2)}\n`);
+      return 0;
+    }
+    if (options.writeBaseline) {
+      writeBaseline(options.baselinePath, currentCounts);
+      console.log(`Wrote ${currentCounts.size} (rule, file) count(s) to ${options.baselinePath}.`);
+    }
+    printReport(report);
+    return 0;
+  }
+
+  const outcome = evaluate(options);
+
+  if (outcome.mode === "strict") {
+    if (outcome.ok) {
+      console.log("UI style strict check passed with zero findings.");
+      return 0;
+    }
+    if (outcome.report.violations.length > 0) {
+      printViolations(
+        `UI style strict check failed with ${outcome.report.violations.length} violation(s):`,
+        outcome.report.violations,
+      );
+    }
+    if (outcome.unlayeredTotal > 0) {
+      const fileCount = [...outcome.report.unlayeredRuleCounts.values()].filter((count) => count > 0).length;
+      console.error(`Unlayered CSS rules remain: ${outcome.unlayeredTotal} across ${fileCount} file(s).`);
+    }
+    return 1;
+  }
+
+  if (outcome.baselineError) {
+    console.error(`UI style baseline check failed: ${outcome.baselineError}`);
+    return 1;
+  }
+
+  if (!outcome.ok) {
+    console.error(`UI style baseline check failed with ${outcome.regressions.length} regression(s):`);
+    for (const regression of outcome.regressions) {
+      console.error(
+        `  [${regression.rule}] ${regression.file}: ${regression.count}, baseline allows ${regression.allowed}`,
+      );
+    }
+    console.error('Run "npm run check:ui-styles:report" for the current totals.');
+    return 1;
+  }
+
+  const currentTotal = [...outcome.currentCounts.values()].reduce((sum, count) => sum + count, 0);
+  const baselineTotal = [...outcome.baselineCounts.values()].reduce((sum, count) => sum + count, 0);
+  console.log(
+    `UI style baseline check passed: ${currentTotal} known finding(s) (baseline ${baselineTotal}), 0 regressions, ${outcome.resolvedCount} resolved.`,
+  );
+  return 0;
+}
+
+const isMainModule =
+  typeof process.argv[1] === "string" && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMainModule) {
+  try {
+    process.exit(main(process.argv.slice(2)));
+  } catch (error) {
+    console.error(`UI style check failed: ${error.message}`);
+    process.exit(1);
+  }
+}

@@ -269,6 +269,8 @@ pub(crate) const WIKI_ENUM_BLOCKS_URL: &str =
     "https://minecraft.wiki/w/Java_Edition_data_values/Blocks";
 const WIKI_ENUM_ITEMS_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values/Items";
 const WIKI_ENUM_MAIN_URL: &str = "https://minecraft.wiki/w/Java_Edition_data_values";
+const WIKI_ENUM_ENCHANTMENTS_URL: &str =
+    "https://minecraft.wiki/w/Java_Edition_data_values/Enchantments";
 const WIKI_ENUM_ENTITIES_URL: &str =
     "https://minecraft.wiki/w/Java_Edition_data_values/Entities";
 pub(crate) const WIKI_ENUM_ROOT_RELPATH: &str = "enumerator/base/wiki";
@@ -921,8 +923,27 @@ pub(crate) async fn download_vault_item_icons(
         .map_err(|e| e.to_string())?
 }
 
+/// Column labels that carry the enum value in the data-value tables.
+///
+/// Every page labels the column "Resource location" except
+/// `Java Edition data values/Enchantments`, which uses "Identifier".
+const RESOURCE_LOCATION_HEADERS: &[&str] = &["resource location"];
+const ENCHANTMENT_VALUE_HEADERS: &[&str] = &["resource location", "identifier"];
+
 /// Pulls every `resource location` cell value out of the HTML tables.
 fn extract_resource_locations_from_html(html: &str) -> Result<Vec<String>, String> {
+    extract_values_from_html(html, RESOURCE_LOCATION_HEADERS)
+}
+
+/// Pulls every enchantment id out of the HTML tables. Enchantments moved to their
+/// own subpage, where the value column is called "Identifier" instead.
+fn extract_enchantments_from_html(html: &str) -> Result<Vec<String>, String> {
+    extract_values_from_html(html, ENCHANTMENT_VALUE_HEADERS)
+}
+
+/// Pulls every value cell out of the tables whose header row contains one of
+/// `headers`, and deduplicates the result in document order.
+fn extract_values_from_html(html: &str, headers: &[&str]) -> Result<Vec<String>, String> {
     let table_selector = scraper::Selector::parse("table").map_err(|e| e.to_string())?;
     let row_selector = scraper::Selector::parse("tr").map_err(|e| e.to_string())?;
     let cell_selector = scraper::Selector::parse("th, td").map_err(|e| e.to_string())?;
@@ -943,7 +964,7 @@ fn extract_resource_locations_from_html(html: &str) -> Result<Vec<String>, Strin
                 .collect();
             if let Some(column_index) = labels
                 .iter()
-                .position(|label| label.contains("resource location"))
+                .position(|label| headers.iter().any(|header| label.contains(header)))
             {
                 resource_column = Some(column_index);
                 data_start = row_index + 1;
@@ -999,22 +1020,63 @@ fn write_json_catalog(path: &Path, values: &[String]) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| e.to_string())
 }
 
+/// Reads the enchantment table that older wiki revisions embedded in the main
+/// data-values page (between the "Enchantments" heading and the next heading).
+fn extract_enchantments_from_main_page(main_html: &str) -> Vec<String> {
+    extract_enchantment_section_html(main_html)
+        .and_then(|section| extract_enchantments_from_html(section).ok())
+        .unwrap_or_default()
+}
+
 fn download_minecraft_wiki_enum_catalogs_sync() -> Result<WikiEnumCatalogDownloadOutput, String> {
     let client = wiki_client()?;
     let blocks_html = fetch_wiki_html(&client, WIKI_ENUM_BLOCKS_URL)?;
     let items_html = fetch_wiki_html(&client, WIKI_ENUM_ITEMS_URL)?;
-    let main_html = fetch_wiki_html(&client, WIKI_ENUM_MAIN_URL)?;
     let entities_html = fetch_wiki_html(&client, WIKI_ENUM_ENTITIES_URL)?;
 
     let blocks = extract_resource_locations_from_html(&blocks_html)?;
     let items = extract_resource_locations_from_html(&items_html)?;
-    let enchantment_section = extract_enchantment_section_html(&main_html)
-        .ok_or_else(|| "无法定位 Minecraft Wiki 魔咒数据值分节".to_string())?;
-    let enchantments = extract_resource_locations_from_html(enchantment_section)?;
     let entities = extract_resource_locations_from_html(&entities_html)?;
 
-    if blocks.is_empty() || items.is_empty() || enchantments.is_empty() || entities.is_empty() {
-        return Err("Minecraft Wiki 枚举全集解析结果为空。".to_string());
+    // Enchantments now live on their own subpage (the main data-values page only
+    // links to it). Prefer that page, but keep the old inline section as a
+    // fallback so a redirect or a wiki restructure does not break the download.
+    let (enchantments, enchantments_source) =
+        match fetch_wiki_html(&client, WIKI_ENUM_ENCHANTMENTS_URL) {
+            Ok(html) => {
+                let values = extract_enchantments_from_html(&html)?;
+                if values.is_empty() {
+                    let main_html = fetch_wiki_html(&client, WIKI_ENUM_MAIN_URL)?;
+                    (extract_enchantments_from_main_page(&main_html), WIKI_ENUM_MAIN_URL)
+                } else {
+                    (values, WIKI_ENUM_ENCHANTMENTS_URL)
+                }
+            }
+            Err(subpage_error) => {
+                let main_html = fetch_wiki_html(&client, WIKI_ENUM_MAIN_URL)
+                    .map_err(|main_error| format!("{subpage_error}；{main_error}"))?;
+                (extract_enchantments_from_main_page(&main_html), WIKI_ENUM_MAIN_URL)
+            }
+        };
+
+    let mut empty_catalogs = Vec::new();
+    if blocks.is_empty() {
+        empty_catalogs.push(format!("方块（{WIKI_ENUM_BLOCKS_URL}）"));
+    }
+    if items.is_empty() {
+        empty_catalogs.push(format!("物品（{WIKI_ENUM_ITEMS_URL}）"));
+    }
+    if enchantments.is_empty() {
+        empty_catalogs.push(format!("魔咒（{enchantments_source}）"));
+    }
+    if entities.is_empty() {
+        empty_catalogs.push(format!("实体（{WIKI_ENUM_ENTITIES_URL}）"));
+    }
+    if !empty_catalogs.is_empty() {
+        return Err(format!(
+            "Minecraft Wiki 枚举全集解析结果为空：{}。Wiki 页面结构可能已调整。",
+            empty_catalogs.join("、")
+        ));
     }
 
     let target_dir = current_user_config_dir()?.join(WIKI_ENUM_ROOT_RELPATH);
@@ -1030,7 +1092,7 @@ fn download_minecraft_wiki_enum_catalogs_sync() -> Result<WikiEnumCatalogDownloa
         "catalogs": {
             "blocks": { "file": "DV_Blocks.json", "url": WIKI_ENUM_BLOCKS_URL, "count": blocks.len() },
             "items": { "file": "DV_Items.json", "url": WIKI_ENUM_ITEMS_URL, "count": items.len() },
-            "enchantments": { "file": "DV_Enchantments.json", "url": WIKI_ENUM_MAIN_URL, "count": enchantments.len() },
+            "enchantments": { "file": "DV_Enchantments.json", "url": enchantments_source, "count": enchantments.len() },
             "entities": { "file": "DV_Entities.json", "url": WIKI_ENUM_ENTITIES_URL, "count": entities.len() }
         }
     });
@@ -1101,6 +1163,42 @@ mod resource_restoration_tests {
           <table><tr><th>Resource location</th></tr><tr><td><code>cow</code></td></tr></table>"#;
         let section = extract_enchantment_section_html(html).unwrap();
         assert_eq!(extract_resource_locations_from_html(section).unwrap(), vec!["sharpness"]);
+    }
+
+    #[test]
+    fn wiki_enchantment_page_reads_identifier_column() {
+        let html = r#"<table><tr><th>Name</th><th>Identifier</th></tr>
+          <tr><td><a>Aqua Affinity</a></td><td><code>aqua_affinity</code></td></tr>
+          <tr><td><a>Bane of Arthropods</a></td><td><code>bane_of_arthropods</code></td></tr>
+          <tr><td><a>Aqua Affinity</a></td><td><code>aqua_affinity</code></td></tr></table>"#;
+        assert_eq!(
+            extract_enchantments_from_html(html).unwrap(),
+            vec!["aqua_affinity", "bane_of_arthropods"]
+        );
+    }
+
+    #[test]
+    fn wiki_enchantment_identifier_tables_stay_out_of_the_block_catalog() {
+        let html = r#"<table><tr><th>Name</th><th>Identifier</th></tr>
+          <tr><td>Aqua Affinity</td><td><code>aqua_affinity</code></td></tr></table>"#;
+        assert!(extract_resource_locations_from_html(html).unwrap().is_empty());
+    }
+
+    #[test]
+    fn wiki_enchantment_inline_main_page_section_still_parses() {
+        let main = r#"<div class="mw-heading"><h2 id="Enchantments">Enchantments</h2></div>
+          <table><tr><th>Resource location</th></tr><tr><td><code>sharpness</code></td></tr></table>
+          <div class="mw-heading"><h2 id="Biomes">Biomes</h2></div>"#;
+        assert_eq!(extract_enchantments_from_main_page(main), vec!["sharpness"]);
+    }
+
+    #[test]
+    fn wiki_enchantment_link_only_main_page_section_yields_nothing() {
+        let main = r#"<div class="mw-heading"><h2 id="Enchantments">Enchantments</h2></div>
+          <div class="hatnote">Main article: <a href="/w/Java_Edition_data_values/Enchantments">Java Edition data values/Enchantments</a></div>
+          <div class="mw-heading"><h2 id="Biomes">Biomes</h2></div>
+          <table><tr><th>Resource location</th></tr><tr><td><code>plains</code></td></tr></table>"#;
+        assert!(extract_enchantments_from_main_page(main).is_empty());
     }
 
     #[test]

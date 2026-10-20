@@ -1,10 +1,18 @@
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer tokens {
 :root {
     --ln-table-row-selected-background: #ffffff;
 }
+}
+
+@layer components.shared {
 
 table > tbody > tr.table-row-selected > *,
 table > tbody > tr[aria-selected="true"] > *,
 .table > tbody > tr.table-row-selected > *,
 .table > tbody > tr[aria-selected="true"] > * {
     background-color: var(--ln-table-row-selected-background, #ffffff);
+}
 }

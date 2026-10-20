@@ -1,0 +1,823 @@
+/* Minecraft widget rules. This file replaced `nav-icons.css` plus every `widget/*.css`
+   (twelve files) purely to cut the layer sprawl; the rules are byte-identical and in
+   the same order they were imported, because they all live in `@layer components` and
+   order is therefore cascade-relevant. `appearance.css` still carries the palette and
+   is imported after this file.
+   Phase 5 still owes the `[data-slot]` conversion here: 51 raw form/table elements in
+   page markup (EnumeratorWindow, AssetManagerContent, StatisticsPage, VirtualSpacerCell)
+   still depend on the bare element selectors below, so they cannot be narrowed yet. */
+
+@layer theme, vendor, tokens, base, components, utilities;
+/* Theme rules live in `components.theme`, above the shared and page defaults, so a
+   theme declaration takes effect without specificity games. */
+@layer components.shared, components.page, components.theme;
+
+/* ── nav-icons.css ─────────────────────────────────────────────── */
+/* Navigation artwork is 16x16 game-style pixel art in this theme, so it must stay
+   crisp when the window is scaled. Themes without their own artwork keep vectors. */
+
+@layer components.theme {
+.theme-minecraft .nav-icon { image-rendering: pixelated; }
+}
+
+/* ── button.css ─────────────────────────────────────────────── */
+
+@layer tokens {
+:root {
+    --control-height: 44px;
+    --radius: 0;
+    --ring: #ffffff;
+    --option-active-background: #4d4d4d;
+    --option-active-color: #ffff00;
+    --panel-shadow: none;
+    --ln-minecraft-button-border: 4px;
+    --ln-minecraft-button-height: 44px;
+}
+}
+
+@layer components.theme {
+
+/* Per-variant texture sets. A variant only supplies its state images; the state rules
+   below resolve `var(--ln-minecraft-button-<state>-image, <base>)`, so a variant with a
+   set picks it up and everything else (`secondary`) keeps the unsuffixed base set.
+   Written this way on purpose: putting the `url()` straight into a variant rule would
+   have to out-specify `button:hover:not(:disabled)` and friends, and a variant that
+   forgot one state would silently keep the base texture for it.
+   `default` is drawn as "primary" - the file name says what the button is, while
+   `default` is the shadcn variant name it maps to.
+   The primary button is a LIGHT plate, so its resting label is dark grey instead of
+   white; hover / pressed / disabled keep the shared colours. */
+[data-slot="button"][data-variant="default"] {
+    --ln-minecraft-button-normal-color: #3f3f3f;
+    --ln-minecraft-button-normal-image: url("./resource/button/button_normal_primary_min.png");
+    --ln-minecraft-button-hover-image: url("./resource/button/button_hover_primary_min.png");
+    --ln-minecraft-button-check-image: url("./resource/button/button_check_primary_min.png");
+    --ln-minecraft-button-check-hover-image: url("./resource/button/button_check_hover_primary_min.png");
+    --ln-minecraft-button-disabled-image: url("./resource/button/button_disabled_primary_min.png");
+}
+
+[data-slot="button"][data-variant="outline"] {
+    --ln-minecraft-button-normal-image: url("./resource/button/button_normal_outline_min.png");
+    --ln-minecraft-button-hover-image: url("./resource/button/button_hover_outline_min.png");
+    --ln-minecraft-button-check-image: url("./resource/button/button_check_outline_min.png");
+    --ln-minecraft-button-check-hover-image: url("./resource/button/button_check_hover_outline_min.png");
+    --ln-minecraft-button-disabled-image: url("./resource/button/button_disabled_outline_min.png");
+}
+
+[data-slot="button"][data-variant="destructive"] {
+    --ln-minecraft-button-normal-image: url("./resource/button/button_normal_destructive_min.png");
+    --ln-minecraft-button-hover-image: url("./resource/button/button_hover_destructive_min.png");
+    --ln-minecraft-button-check-image: url("./resource/button/button_check_destructive_min.png");
+    --ln-minecraft-button-check-hover-image: url("./resource/button/button_check_hover_destructive_min.png");
+    --ln-minecraft-button-disabled-image: url("./resource/button/button_disabled_destructive_min.png");
+}
+
+[data-slot="button"] {
+    --ln-minecraft-button-image: var(--ln-minecraft-button-normal-image, url("./resource/button/button_normal_min.png"));
+
+    box-sizing: border-box;
+    display: inline-flex;
+    height: var(--ln-minecraft-button-height);
+    min-height: var(--ln-minecraft-button-height);
+    align-items: center;
+    justify-content: center;
+    padding: 4px 12px;
+    border: var(--ln-minecraft-button-border) solid transparent;
+    border-radius: 0;
+    border-image-source: var(--ln-minecraft-button-image);
+    border-image-slice: 4 fill;
+    border-image-width: var(--ln-minecraft-button-border);
+    border-image-repeat: stretch;
+    appearance: none;
+    background: transparent;
+    color: var(--ln-minecraft-button-normal-color, #ffffff);
+    text-align: center;
+    cursor: default;
+}
+
+[data-slot="button"]:hover:not(:disabled) {
+    --ln-minecraft-button-image: var(--ln-minecraft-button-hover-image, url("./resource/button/button_hover_min.png"));
+    color: #ffff00;
+}
+
+[data-slot="button"]:active:not(:disabled) {
+    --ln-minecraft-button-image: var(--ln-minecraft-button-normal-image, url("./resource/button/button_normal_min.png"));
+    color: #ffff00;
+}
+
+/* `aria-pressed` is what the shared Button's call sites set; `data-state="on"` is the
+   attribute a Radix Toggle publishes, kept here so swapping in a Toggle does not
+   silently drop the pressed texture. Two separate selectors rather than `:is()` so the
+   cascade test can tell the pressed and resting rules apart. */
+[data-slot="button"][aria-pressed="true"],
+[data-slot="button"][data-state="on"] {
+    --ln-minecraft-button-image: var(--ln-minecraft-button-check-image, url("./resource/button/button_check_min.png"));
+    color: #ffff00;
+}
+
+[data-slot="button"][aria-pressed="true"]:hover:not(:disabled),
+[data-slot="button"][data-state="on"]:hover:not(:disabled) {
+    --ln-minecraft-button-image: var(--ln-minecraft-button-check-hover-image, url("./resource/button/button_check_hover_min.png"));
+    color: #ffff00;
+}
+
+[data-slot="button"]:disabled {
+    --ln-minecraft-button-image: var(--ln-minecraft-button-disabled-image, url("./resource/button/button_disabled_min.png"));
+    color: #808080;
+}
+
+[data-slot="button"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+[data-slot="button"].material-list-close-button {
+    width: var(--ln-minecraft-button-height);
+    min-width: var(--ln-minecraft-button-height);
+    max-width: var(--ln-minecraft-button-height);
+    height: var(--ln-minecraft-button-height);
+    min-height: var(--ln-minecraft-button-height);
+    max-height: var(--ln-minecraft-button-height);
+    flex: 0 0 auto;
+    margin: -8px -12px 0 0;
+    padding: 0;
+    border: 0;
+    border-image-source: none;
+    overflow: hidden;
+    image-rendering: pixelated;
+    background: transparent url("./resource/button/windowClose_normal.png") center / contain no-repeat;
+    color: transparent;
+}
+
+[data-slot="button"].material-list-close-button:hover:not(:disabled) {
+    --ln-minecraft-button-image: none;
+    border-image-source: none;
+    background-image: url("./resource/button/windowClose_hover.png");
+    color: transparent;
+}
+
+[data-slot="button"].material-list-close-button:active:not(:disabled) {
+    --ln-minecraft-button-image: none;
+    border-image-source: none;
+    background-image: url("./resource/button/windowClose_hover.png");
+    color: transparent;
+}
+
+
+
+[data-slot="button"].flake-page__quickbar-slot,
+[data-slot="button"].flake-page__quickbar-slot:hover:not(:disabled),
+[data-slot="button"].flake-page__quickbar-slot:active:not(:disabled),
+[data-slot="button"].flake-page__quickbar-slot[aria-pressed="true"] {
+    --ln-minecraft-button-image: none;
+    border: 0;
+    border-image-source: none;
+    background: transparent;
+    color: transparent;
+}
+
+[data-slot="button"].flake-page__quickbar-open-inventory {
+    --ln-minecraft-button-image: none;
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    padding: 0;
+    border: 0;
+    border-image-source: none;
+    overflow: hidden;
+    image-rendering: pixelated;
+    background: transparent var(--flake-open-inventory-normal-image) center / contain no-repeat;
+    color: transparent;
+}
+
+[data-slot="button"].flake-page__quickbar-open-inventory:hover:not(:disabled),
+[data-slot="button"].flake-page__quickbar-open-inventory:active:not(:disabled) {
+    --ln-minecraft-button-image: none;
+    border: 0;
+    border-image-source: none;
+    background-image: var(--flake-open-inventory-hover-image);
+    color: transparent;
+}
+
+[data-slot="button"].flake-page__quickbar-open-inventory .flake-page__quickbar-open-inventory-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+}
+
+/* ── nav.css ─────────────────────────────────────────────── */
+
+@layer tokens {
+:root {
+    --ln-minecraft-nav-button-height: 48px;
+    --ln-minecraft-sidebar-collapsed-width: 49px;
+}
+}
+
+@layer components.theme {
+
+.sidebar {
+    display: flex;
+    flex: 0 0 220px;
+    width: 220px;
+    min-width: 220px;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    background: var(--navigation-background, #ffffff);
+}
+
+.sidebar-collapsed {
+    flex-basis: var(--ln-minecraft-sidebar-collapsed-width);
+    width: var(--ln-minecraft-sidebar-collapsed-width);
+    min-width: var(--ln-minecraft-sidebar-collapsed-width);
+}
+
+.nav-expand,
+.nav-item {
+    display: flex;
+    position: relative;
+    width: 100%;
+    height: var(--ln-minecraft-nav-button-height);
+    min-height: var(--ln-minecraft-nav-button-height);
+    max-height: var(--ln-minecraft-nav-button-height);
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 0 16px;
+    border: var(--ln-minecraft-button-border, 4px) solid transparent;
+    border-image-source: var(--ln-minecraft-button-image);
+    border-image-slice: 4 fill;
+    border-image-width: var(--ln-minecraft-button-border, 4px);
+    border-image-repeat: stretch;
+    text-align: center;
+    color: #ffffff;
+    background: transparent;
+}
+
+.sidebar-collapsed .nav-expand,
+.sidebar-collapsed .nav-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+}
+
+/* Entries that always render a label must lose it too, or the collapsed sidebar
+   can no longer keep every button square. */
+.sidebar-collapsed .nav-expand strong,
+.sidebar-collapsed .nav-item .nav-label {
+    display: none;
+}
+
+.nav-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.nav-list-bottom {
+    margin-top: auto;
+}
+
+.nav-icon {
+    display: block;
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+}
+
+/* Sidebar buttons keep their icon in a fixed leading slot, so only the shell
+   positions the icon; the game-resource sidebar leaves it in the flow. */
+.sidebar .nav-icon {
+    position: absolute;
+    top: 50%;
+    left: calc(16px - var(--ln-minecraft-button-border, 4px));
+    transform: translateY(-50%);
+}
+
+/* Collapsed buttons centre the icon, so it must leave that leading slot. */
+.sidebar-collapsed .nav-icon {
+    position: static;
+    transform: none;
+}
+
+.nav-item.nav-item-active {
+    --ln-minecraft-button-image: url("./resource/button/button_check_min.png");
+
+    color: #ffff00;
+}
+
+.nav-item.nav-item-active:hover:not(:disabled) {
+    --ln-minecraft-button-image: url("./resource/button/button_check_hover_min.png");
+    color: #ffff00;
+}
+
+@media (max-width: 760px) {
+    .sidebar {
+        flex-basis: var(--ln-minecraft-sidebar-collapsed-width);
+        width: var(--ln-minecraft-sidebar-collapsed-width);
+        min-width: var(--ln-minecraft-sidebar-collapsed-width);
+    }
+
+    .sidebar .nav-expand,
+    .sidebar .nav-item {
+        justify-content: center;
+        gap: 0;
+        padding: 0;
+    }
+
+    .sidebar .nav-icon {
+        position: static;
+        transform: none;
+    }
+
+    .sidebar .nav-expand strong,
+    .sidebar .nav-item .nav-label {
+        display: none;
+    }
+}
+}
+
+/* ── scroll.css ─────────────────────────────────────────────── */
+/* Minecraft scrollbars are drawn with the vanilla scroller texture instead of
+   the 2px light/dark bevel the control textures use. `scroll_min.png` is a
+   12x2 slice: its width is the scroller's own shading (light body, dark right
+   edge) and it is stretched only along the track, so the bar keeps 1:1 pixels
+   across its width - hence the 12px scrollbar. */
+
+@layer tokens {
+html[data-theme="minecraft"] {
+    --ln-scroll-size: 12px;
+}
+}
+
+@layer components.theme {
+
+html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] {
+    width: var(--ln-scroll-size);
+    padding: 0;
+}
+
+html[data-theme="minecraft"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] [data-slot="scroll-area-thumb"] {
+    border-radius: 0;
+    /* The scroller is pinned to the scrollbar's edge at its own width instead of
+       filling the thumb box. While a scrollbar fades in, the engine paints the
+       background into the thumb's enlarged ink box - the shared hit area in
+       controls.css extends 3px past it - and a filled background would be
+       stretched across that box, briefly widening the bar and softening its dark
+       edge. Pinning the size and the right edge keeps the pixels 1:1 throughout. */
+    background-image: url("./resource/scroll_min.png");
+    background-position: right center;
+    background-size: var(--ln-scroll-size) 100%;
+    background-repeat: no-repeat;
+    box-shadow: none;
+    image-rendering: pixelated;
+}
+
+/* Horizontal scrollbars keep the shared token styling: the scroller slice has no
+   horizontal form, and stretching it sideways would distort its edge. */
+@supports selector(::-webkit-scrollbar) {
+    html[data-theme="minecraft"] ::-webkit-scrollbar-thumb:vertical {
+        border: 0;
+        border-radius: 0;
+        background: url("./resource/scroll_min.png") center / 100% 100% no-repeat;
+        box-shadow: none;
+        image-rendering: pixelated;
+    }
+}
+}
+
+/* ── input.css ─────────────────────────────────────────────── */
+
+@layer tokens {
+:root {
+    --ln-minecraft-input-height: 44px;
+    --ln-minecraft-input-padding-y: 4px;
+    --ln-minecraft-input-padding-x: 8px;
+    --ln-minecraft-input-background: #000000;
+    --ln-minecraft-input-color: #ffffff;
+    --ln-minecraft-input-border: #a0a0a0;
+    --ln-minecraft-input-border-focus: #ffffff;
+    --ln-minecraft-input-disabled-color: #808080;
+}
+}
+
+@layer components.theme {
+
+[data-slot="input"]:not([type]),
+[data-slot="input"][type="text"],
+[data-slot="input"][type="search"],
+[data-slot="input"][type="password"],
+[data-slot="input"][type="email"],
+[data-slot="input"][type="url"],
+[data-slot="input"][type="tel"],
+[data-slot="input"][type="number"],
+[data-slot="textarea"] {
+    display: inline-block;
+    width: auto;
+    max-width: 100%;
+    min-height: var(--ln-minecraft-input-height);
+    padding: var(--ln-minecraft-input-padding-y) var(--ln-minecraft-input-padding-x);
+    border: 2px solid var(--ln-minecraft-input-border);
+    border-radius: 0;
+    appearance: none;
+    background-color: var(--ln-minecraft-input-background);
+    color: var(--ln-minecraft-input-color);
+    font: inherit;
+    line-height: 1.4;
+}
+
+[data-slot="input"]:not([type]),
+[data-slot="input"][type="text"],
+[data-slot="input"][type="search"],
+[data-slot="input"][type="password"],
+[data-slot="input"][type="email"],
+[data-slot="input"][type="url"],
+[data-slot="input"][type="tel"],
+[data-slot="input"][type="number"] {
+    height: var(--ln-minecraft-input-height);
+}
+
+[data-slot="textarea"] {
+    min-height: calc(var(--ln-minecraft-input-height) * 2);
+    resize: vertical;
+}
+
+/* A dropdown is a value field, not an action button, so its trigger takes the
+   Minecraft input look instead of the generic `button` texture that would otherwise
+   reach it. This replaces the bare `select` rules that styled the former native
+   selects; the pixel arrow stands in for the vector chevron the shared trigger ships. */
+[data-slot="select-trigger"] {
+    box-sizing: border-box;
+    display: inline-flex;
+    max-width: 100%;
+    height: var(--ln-minecraft-input-height);
+    min-height: var(--ln-minecraft-input-height);
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--ln-minecraft-input-padding-y) 32px var(--ln-minecraft-input-padding-y) var(--ln-minecraft-input-padding-x);
+    border: 2px solid var(--ln-minecraft-input-border);
+    border-image: none;
+    border-radius: 0;
+    appearance: none;
+    background-color: var(--ln-minecraft-input-background);
+    background-image: url("./resource/form/spin_down.png");
+    background-position: right 0 center;
+    background-repeat: no-repeat;
+    background-size: 40px 40px;
+    color: var(--ln-minecraft-input-color);
+    font: inherit;
+    line-height: 1.4;
+    image-rendering: pixelated;
+}
+
+[data-slot="select-trigger"] > svg {
+    display: none;
+}
+
+/* The generic `button:hover` rule is more specific than the rule above, so the hover
+   state has to restate the field's colours or the trigger turns button-yellow. */
+[data-slot="select-trigger"]:hover:not(:disabled) {
+    border-color: var(--ln-minecraft-input-border);
+    background-color: var(--ln-minecraft-input-background);
+    background-image: url("./resource/form/spin_down.png");
+    color: var(--ln-minecraft-input-color);
+}
+
+[data-slot="select-trigger"]:focus-visible,
+[data-slot="select-trigger"]:focus-visible:hover {
+    border-color: var(--ln-minecraft-input-border-focus);
+    outline: 0;
+}
+
+/* The generic `button:active` rule would also repaint an open trigger. */
+[data-slot="select-trigger"]:active:not(:disabled) {
+    border-color: var(--ln-minecraft-input-border);
+    background-color: var(--ln-minecraft-input-background);
+    background-image: url("./resource/form/spin_down.png");
+    color: var(--ln-minecraft-input-color);
+}
+
+[data-slot="select-trigger"][data-placeholder] {
+    color: var(--ln-minecraft-input-disabled-color);
+}
+
+[data-slot="input"]::placeholder,
+[data-slot="textarea"]::placeholder {
+    color: #808080;
+    opacity: 1;
+}
+
+[data-slot="input"]:not([type]):focus,
+[data-slot="input"][type="text"]:focus,
+[data-slot="input"][type="search"]:focus,
+[data-slot="input"][type="password"]:focus,
+[data-slot="input"][type="email"]:focus,
+[data-slot="input"][type="url"]:focus,
+[data-slot="input"][type="tel"]:focus,
+[data-slot="input"][type="number"]:focus,
+[data-slot="textarea"]:focus,
+[data-slot="input"]:not([type]):focus:hover,
+[data-slot="input"][type="text"]:focus:hover,
+[data-slot="input"][type="search"]:focus:hover,
+[data-slot="input"][type="password"]:focus:hover,
+[data-slot="input"][type="email"]:focus:hover,
+[data-slot="input"][type="url"]:focus:hover,
+[data-slot="input"][type="tel"]:focus:hover,
+[data-slot="input"][type="number"]:focus:hover,
+[data-slot="textarea"]:focus:hover {
+    border-color: var(--ln-minecraft-input-border-focus);
+    outline: 0;
+}
+
+[data-slot="input"]:not([type]):disabled,
+[data-slot="input"][type="text"]:disabled,
+[data-slot="input"][type="search"]:disabled,
+[data-slot="input"][type="password"]:disabled,
+[data-slot="input"][type="email"]:disabled,
+[data-slot="input"][type="url"]:disabled,
+[data-slot="input"][type="tel"]:disabled,
+[data-slot="input"][type="number"]:disabled,
+[data-slot="textarea"]:disabled {
+    color: var(--ln-minecraft-input-disabled-color);
+}
+}
+
+/* ── popup.css ─────────────────────────────────────────────── */
+
+@layer components.theme {
+.theme-minecraft .material-list-hover-popup {
+    border-width: 2px;
+    box-shadow: none;
+    image-rendering: pixelated;
+}
+}
+
+/* ── slider.css ─────────────────────────────────────────────── */
+
+@layer tokens {
+:root {
+    --ln-minecraft-range-border: 4px;
+    --ln-minecraft-range-height: 44px;
+    --ln-minecraft-range-thumb-width: 8px;
+    --ln-minecraft-range-track-image: url("./resource/button/button_disabled_min.png");
+    --ln-minecraft-range-thumb-image: url("./resource/button/button_normal_min.png");
+    --ln-minecraft-range-thumb-hover-image: url("./resource/button/button_hover_min.png");
+    --ln-minecraft-range-thumb-disabled-image: url("./resource/button/button_disabled_min.png");
+}
+}
+
+@layer components.theme {
+
+/* Replaces the old `widget/range.css`, which styled `input[type="range"]` and its
+   `::-webkit-slider-*` / `::-moz-range-*` pseudo-elements. Radix renders a
+   `[data-slot="slider"]` tree of spans instead, so none of those rules could ever
+   match. Expressing the same textures through the slot tree also removes the
+   webkit/moz duplication: one DOM means one set of rules. */
+
+[data-slot="slider"] {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    height: var(--ln-minecraft-range-height);
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+}
+
+[data-slot="slider"][data-disabled] {
+    cursor: default;
+}
+
+[data-slot="slider"]:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+}
+
+[data-slot="slider-track"] {
+    box-sizing: border-box;
+    flex: 1;
+    height: var(--ln-minecraft-range-height);
+    overflow: visible;
+    border: var(--ln-minecraft-range-border) solid transparent;
+    border-radius: 0;
+    border-image-source: var(--ln-minecraft-range-track-image);
+    border-image-slice: 4 fill;
+    border-image-width: var(--ln-minecraft-range-border);
+    border-image-repeat: stretch;
+    background: transparent;
+    image-rendering: pixelated;
+}
+
+/* The rail texture is uniform, so there is no separate progress fill. */
+[data-slot="slider-range"] {
+    background: transparent;
+}
+
+[data-slot="slider-thumb"] {
+    box-sizing: border-box;
+    width: var(--ln-minecraft-range-thumb-width);
+    height: var(--ln-minecraft-range-height);
+    border: var(--ln-minecraft-range-border) solid transparent;
+    border-radius: 0;
+    border-image-source: var(--ln-minecraft-range-thumb-image);
+    border-image-slice: 4 fill;
+    border-image-width: var(--ln-minecraft-range-border);
+    border-image-outset: 0 var(--ln-minecraft-range-border);
+    border-image-repeat: stretch;
+    background: transparent;
+    image-rendering: pixelated;
+}
+
+[data-slot="slider"]:hover:not([data-disabled]) [data-slot="slider-thumb"] {
+    border-image-source: var(--ln-minecraft-range-thumb-hover-image);
+}
+
+[data-slot="slider"][data-disabled] [data-slot="slider-thumb"] {
+    border-image-source: var(--ln-minecraft-range-thumb-disabled-image);
+}
+}
+
+/* ── table.css ─────────────────────────────────────────────── */
+
+@layer tokens {
+:root {
+    --ln-minecraft-table-row-min-height: 44px;
+    --ln-minecraft-table-row-background-odd: #000000;
+    --ln-minecraft-table-row-background-even: #1a1a1a;
+    --ln-minecraft-table-row-background-hover: #2b2b2b;
+    --ln-table-row-selected-background: #4d4d4d;
+}
+}
+
+@layer components.theme {
+
+[data-slot="table"],
+.table {
+    border-collapse: collapse;
+}
+
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"],
+.table > [data-slot="table-body"] > [data-slot="table-row"] {
+    height: var(--ln-minecraft-table-row-min-height);
+}
+
+[data-slot="table"] > :not(caption) > * > *,
+.table > :not(caption) > * > * {
+    border: 0;
+}
+
+/* Virtualized rows carry their parity as a class derived from the data index; keying the stripe
+   on it keeps a row's colour stable while the virtual window slides. Rows without a parity class
+   (plain, non-virtualized tables) keep the positional stripe. */
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"]:not(.material-list-row-odd, .material-list-row-even):nth-of-type(odd) > *,
+.table > [data-slot="table-body"] > [data-slot="table-row"]:not(.material-list-row-odd, .material-list-row-even):nth-of-type(odd) > * {
+    background-color: var(--ln-minecraft-table-row-background-odd);
+}
+
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"]:not(.material-list-row-odd, .material-list-row-even):nth-of-type(even) > *,
+.table > [data-slot="table-body"] > [data-slot="table-row"]:not(.material-list-row-odd, .material-list-row-even):nth-of-type(even) > * {
+    background-color: var(--ln-minecraft-table-row-background-even);
+}
+
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"].material-list-row-odd > *,
+.table > [data-slot="table-body"] > [data-slot="table-row"].material-list-row-odd > * {
+    background-color: var(--ln-minecraft-table-row-background-odd);
+}
+
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"].material-list-row-even > *,
+.table > [data-slot="table-body"] > [data-slot="table-row"].material-list-row-even > * {
+    background-color: var(--ln-minecraft-table-row-background-even);
+}
+
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"]:hover > *,
+.table > [data-slot="table-body"] > [data-slot="table-row"]:hover > * {
+    background-color: var(--ln-minecraft-table-row-background-hover);
+}
+
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"].table-row-selected > *,
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"][aria-selected="true"] > *,
+.table > [data-slot="table-body"] > [data-slot="table-row"].table-row-selected > *,
+.table > [data-slot="table-body"] > [data-slot="table-row"][aria-selected="true"] > * {
+    background-color: var(--ln-table-row-selected-background);
+}
+
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"] > * > .button-row,
+.table > [data-slot="table-body"] > [data-slot="table-row"] > * > .button-row {
+    margin-bottom: 0;
+}
+
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"] > * > .button-row > [data-slot="button"],
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"] > * > .button-row > [data-slot="input"][type="button"],
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"] > * > .button-row > [data-slot="input"][type="submit"],
+[data-slot="table"] > [data-slot="table-body"] > [data-slot="table-row"] > * > .button-row > [data-slot="input"][type="reset"],
+.table > [data-slot="table-body"] > [data-slot="table-row"] > * > .button-row > [data-slot="button"],
+.table > [data-slot="table-body"] > [data-slot="table-row"] > * > .button-row > [data-slot="input"][type="button"],
+.table > [data-slot="table-body"] > [data-slot="table-row"] > * > .button-row > [data-slot="input"][type="submit"],
+.table > [data-slot="table-body"] > [data-slot="table-row"] > * > .button-row > [data-slot="input"][type="reset"] {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+}
+
+/* ── text.css ─────────────────────────────────────────────── */
+
+@layer components.theme {
+@font-face {
+    font-family: "Unifont";
+    /* src: url("./resource/font/UnifontExMono.woff2") format("woff2"); */
+    src: url("./resource/font/unifont-16.0.04.ttf") format("truetype");
+    font-style: normal;
+    font-weight: normal;
+}
+
+:root {
+    --ln-body-font-family: "Unifont", monospace;
+    --ln-body-font-size: 16px;
+    --foreground: #ffffff;
+    font-smooth: never;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeSpeed;
+}
+}
+
+/* ── dialog.css ─────────────────────────────────────────────── */
+/* Minecraft dialog styling */
+
+@layer components.theme {
+.dialog-surface {
+    border-width: 2px;
+    border-radius: 0;
+}
+}
+
+/* ── subwindow.css ─────────────────────────────────────────────── */
+/* Minecraft child-window styling */
+
+@layer components.theme {
+.dialog-content {
+    border-width: 2px;
+    border-radius: 0;
+}
+
+[data-slot="button"].subwindow-close-button,
+[data-slot="button"].dialog-close-button {
+    width: var(--ln-minecraft-button-height);
+    min-width: var(--ln-minecraft-button-height);
+    max-width: var(--ln-minecraft-button-height);
+    height: var(--ln-minecraft-button-height);
+    min-height: var(--ln-minecraft-button-height);
+    max-height: var(--ln-minecraft-button-height);
+    flex: 0 0 auto;
+    margin: -8px -12px 0 0;
+    padding: 0;
+    border: 0;
+    border-image-source: none;
+    overflow: hidden;
+    image-rendering: pixelated;
+    background: transparent url("./resource/button/windowClose_normal.png") center / contain no-repeat;
+    color: transparent;
+}
+
+[data-slot="button"].subwindow-overlay-close-button {
+    margin: 0;
+}
+
+[data-slot="button"].subwindow-close-button:hover:not(:disabled),
+[data-slot="button"].dialog-close-button:hover:not(:disabled) {
+    --ln-minecraft-button-image: none;
+    border-image-source: none;
+    background-image: url("./resource/button/windowClose_hover.png");
+    color: transparent;
+}
+
+[data-slot="button"].subwindow-close-button:active:not(:disabled),
+[data-slot="button"].dialog-close-button:active:not(:disabled) {
+    --ln-minecraft-button-image: none;
+    border-image-source: none;
+    background-image: url("./resource/button/windowClose_hover.png");
+    color: transparent;
+}
+}
+
+/* ── content.css ─────────────────────────────────────────────── */
+
+@layer tokens {
+:root {
+    --ln-card-border-width: 2px;
+    --border: #a0a0a0;
+    --ln-card-border-color-active: #808080;
+    --ln-card-background-color-active: #000000;
+}
+}

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Folder, Warehouse, Package, Hammer, Building2, Wheat, Crosshair, Boxes, Flame, Trees, Skull, Mountain, Anvil, Box, Cpu, Cog, Layers, Star, BookOpen } from "lucide-react";
 import { BlockIcon } from "../../../../components/BlockIcon";
+import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { Dialog } from "../../../../components/Dialog";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
@@ -12,6 +13,9 @@ const icons: Record<string, React.ElementType> = { Folder, Warehouse, Package, H
 export function CategoryIcon({ icon }: { icon: LibraryCategoryIcon }) {
   if (icon.kind === "minecraft") return <span className="library-category-icon"><BlockIcon blockId={icon.blockId} /></span>;
   if (icon.kind === "image") return <img className="library-category-icon" src={icon.dataUrl} alt="" />;
+  /* The default category glyph is the one place a theme's `folder` art should
+     appear; user-picked lucide/Minecraft/image icons stay exactly as chosen. */
+  if (icon.name === "Folder") return <ThemeIcon name="folder" size={16} className="library-category-icon" fallback={Folder} />;
   const Icon = icons[icon.name] || Folder;
   return <Icon className="library-category-icon" size={16} strokeWidth={1.75} aria-hidden="true" />;
 }

@@ -147,6 +147,13 @@ pub(crate) struct BlockDatabaseQueryInput {
     pub(crate) query: String,
     pub(crate) state: Option<String>,
     pub(crate) states: Option<Vec<String>>,
+    /// Layer palettes only need names + map colours up front; model planes are
+    /// fetched lazily for the few blocks that have no 2D icon.
+    #[serde(default)]
+    pub(crate) no_textures: bool,
+    /// Rasterise the +Y (top-down) plane instead of the legacy -Z side plane.
+    #[serde(default)]
+    pub(crate) top_plane: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -590,6 +597,8 @@ impl ApplicationOperations {
         let mut files=OperationFiles::new();
         let mut args=vec!["block-db".into()];
         if let Some(version)=input.version { args.extend(["--version".into(),version]); } else { args.push("--versions".into()); }
+        if input.no_textures { args.push("--no-textures".into()); }
+        if input.top_plane { args.push("--top-plane".into()); }
         if !input.query.is_empty() { args.extend(["--query".into(),input.query]); }
         if let Some(state)=input.state { args.extend(["--state".into(),state]); }
         if let Some(states)=input.states {

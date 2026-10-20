@@ -1,0 +1,135 @@
+/* Metro10 — Windows 8/10 "Metro" design, adapted to the current theme contract.
+ *
+ * The theme used to be a set of unlayered, bare-element `widget/*.css` files from
+ * the pre-shadcn UI. It is now one entry file (tokens + imports) and one widget
+ * file (`widgets.css`, `components.theme`), exactly like the other three themes:
+ *   - palette/type live in `@layer tokens`, light and dark;
+ *   - component rules target `[data-slot]` in `components.theme`;
+ *   - artwork stays in `resource/` and is addressed by `--flake-*` variables.
+ *
+ * Metro is a flat, square, high-contrast desktop look: square corners, 2px
+ * borders, `Segoe UI`, and the Windows accent blue as the action colour.
+ */
+@import "./widgets.css";
+
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer tokens {
+
+:root {
+    color-scheme: light;
+    --background: #ffffff;
+    --foreground: #000000;
+    --card: #ffffff;
+    --popover: #ffffff;
+    --primary: #0072c6;
+    --primary-foreground: #ffffff;
+    --secondary: #cccccc;
+    --muted: #f2f2f2;
+    --muted-foreground: #666666;
+    --accent: #e6e6e6;
+    --destructive: #c42b1c;
+    --border: #999999;
+    --ring: #0072c6;
+    --radius: 0px;
+    --edge-width: 2px;
+    --control-height: 31px;
+    --control-shadow: none;
+    --panel-shadow: 0 10px 24px rgb(0 0 0 / 24%);
+    --overlay: rgb(0 0 0 / 42%);
+    --navigation-background: #f2f2f2;
+    --option-active-background: #cce8ff;
+    --option-active-color: #000000;
+    --success: #107c10;
+    --warning: #8a5300;
+    /* Selected (toggled) Button surface. Metro's selection is the accent-tinted
+       plate, not the hover grey, so a selected toggle cannot read as "off". */
+    --nova-selected-surface: #cce8ff;
+    --nova-selected-hover: #b3dcff;
+    --nova-selected-foreground: #000000;
+
+    --ln-body-font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    --ln-body-font-size: 14px;
+    --nova-text-xs: .75rem;
+    --nova-text-sm: .875rem;
+    --nova-text-base: 1rem;
+    --nova-text-lg: 1.5rem;
+
+    --ln-file-icon-size: 32px;
+    --ln-check-label-gap: 6px;
+    --ln-check-label-min-height: 24px;
+    --ln-card-border-width: 2px;
+    --ln-card-border-color-active: var(--primary);
+    --ln-card-background-color-active: var(--option-active-background);
+    --ln-table-row-selected-background: var(--option-active-background);
+
+    /* Scrollbars keep the 2px desktop bevel width but are flat and square. */
+    --ln-scroll-size: 12px;
+    --ln-scroll-radius: 0;
+    --ln-scroll-track: #f2f2f2;
+    --ln-scroll-track-hover: #e6e6e6;
+    --ln-scroll-thumb: #999999;
+    --ln-scroll-hover: #7a7a7a;
+    --ln-scroll-active: #666666;
+    --ln-scroll-edge: 2px;
+    --ln-scroll-shadow: none;
+
+    /* Theme-private dimensions; consumed by `widgets.css` only. */
+    --ln-metro10-input-height: 32px;
+    --ln-metro10-input-border-hover: color-mix(in srgb, var(--foreground) 55%, var(--border));
+    --ln-metro10-button-pressed: color-mix(in oklab, var(--secondary) 78%, var(--foreground));
+    --ln-metro10-window-close-width: 47px;
+    --ln-metro10-window-close-height: 31px;
+    --ln-metro10-range-height: 24px;
+    --ln-metro10-range-track: var(--muted-foreground);
+    --ln-metro10-range-thumb-image: url("./resource/form/slider_handle.svg");
+
+    /* Flake page artwork, replacing the old per-widget asset paths. */
+    --flake-hotbar-image: url("./resource/content/hotbar.png");
+    --flake-hotbar-selection-image: url("./resource/content/hotbar_selection.png");
+    --flake-creative-inventory-image: url("./resource/content/creativeInventory.png");
+    --flake-open-inventory-normal-image: url("./resource/button/openInventory_normal.png");
+    --flake-open-inventory-hover-image: url("./resource/button/openInventory_hover.png");
+    --flake-edit-tool-normal-image: url("./resource/button/editTool_normal.png");
+    --flake-edit-tool-hover-image: url("./resource/button/editTool_hover.png");
+    --flake-edit-tool-active-image: url("./resource/button/editTool_active.png");
+    --flake-chest-image: url("./resource/content/chest27.png");
+    --flake-hopper-image: url("./resource/content/hopper.png");
+}
+
+:root[data-color-scheme="dark"] {
+    color-scheme: dark;
+    --background: #1f1f1f;
+    --foreground: #ffffff;
+    --card: #2b2b2b;
+    --popover: #2b2b2b;
+    --primary: #4cc2ff;
+    --primary-foreground: #0b1c26;
+    --secondary: #3a3a3a;
+    --muted: #2b2b2b;
+    --muted-foreground: #c8c8c8;
+    --accent: #3d3d3d;
+    --destructive: #ff99a4;
+    --border: #767676;
+    --ring: #4cc2ff;
+    --control-shadow: none;
+    --panel-shadow: 0 10px 24px rgb(0 0 0 / 45%);
+    --navigation-background: #1f1f1f;
+    --option-active-background: #0a3a57;
+    --option-active-color: #ffffff;
+    --success: #6ccb5f;
+    --warning: #fce100;
+    --nova-selected-surface: #0a3a57;
+    --nova-selected-hover: #0d4a6e;
+    --nova-selected-foreground: #ffffff;
+    --ln-card-border-color-active: var(--primary);
+    --ln-card-background-color-active: var(--option-active-background);
+    --ln-table-row-selected-background: var(--option-active-background);
+    --ln-scroll-track: #1f1f1f;
+    --ln-scroll-track-hover: #2b2b2b;
+    --ln-scroll-thumb: #767676;
+    --ln-scroll-hover: #a0a0a0;
+    --ln-scroll-active: #c8c8c8;
+}
+}

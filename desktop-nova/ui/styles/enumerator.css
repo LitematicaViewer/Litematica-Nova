@@ -3,6 +3,10 @@
    The new architecture did not carry enumerator-* rules, so the block is
    backported verbatim; shared utility classes used by the block are kept
    at the end of this file. */
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.shared {
 
 .enumerator-window {
     width: 100%;
@@ -47,8 +51,8 @@
     grid-template-rows: auto auto minmax(0, 1fr);
     gap: 8px;
     padding: 10px;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-background-color, Canvas);
+    border: 1px solid var(--border);
+    background: var(--background);
     overflow: hidden;
 }
 
@@ -60,8 +64,8 @@
     align-items: stretch;
     gap: 8px;
     padding: 10px;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-background-color, Canvas);
+    border: 1px solid var(--border);
+    background: var(--background);
     overflow: hidden;
 }
 
@@ -129,6 +133,11 @@
     width: 100%;
 }
 
+/* The trigger has to fill the container the old `<select>` used to be. */
+.enumerator-filter-select > [data-slot="select-trigger"] {
+    width: 100%;
+}
+
 .enumerator-toolbar-row {
     align-items: stretch;
 }
@@ -145,7 +154,7 @@
 .enumerator-footer-status,
 .enumerator-collection-meta,
 .enumerator-footer-meta {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
     font-size: 12px;
     line-height: 1.45;
 }
@@ -186,8 +195,13 @@
     min-height: 0;
     height: 100%;
     overflow: auto;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-background-color, Canvas);
+    /* The virtual window replaces content above the viewport on every step; browser scroll
+       anchoring would fight those layout shifts and re-scroll the container, and a toggling
+       horizontal scrollbar would change clientHeight under the ResizeObserver. */
+    overflow-anchor: none;
+    scrollbar-gutter: stable;
+    border: 1px solid var(--border);
+    background: var(--background);
 }
 
 .enumerator-table {
@@ -244,7 +258,7 @@
 
 .enumerator-empty-cell {
     text-align: center;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
 }
 
 .enumerator-type-col {
@@ -265,8 +279,8 @@
     align-items: flex-start;
     gap: 12px;
     padding: 10px 12px 12px;
-    border-top: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-background-color, Canvas);
+    border-top: 1px solid var(--border);
+    background: var(--background);
 }
 
 .enumerator-footer-status {
@@ -336,9 +350,29 @@
    clamps scrollTop, the scroll listener pushes the new value back into state,
    and the view ping-pongs between two offsets - the mid-list oscillation users
    see in the enumerator window.
+
+   The same contract as materials.css: the spacer declaration must *win* the
+   cascade, which is why it keeps `!important` (it is baselined) instead of
+   relying on specificity - a theme rule can paint `.material-list-table td`
+   with any specificity.
+
+   The stripes below are keyed on the parity class that EnumeratorWindow derives
+   from `startIndex + index`, never on `:nth-child`/`:nth-of-type`: the window
+   slides, so a positional stripe would invert on every scrolled row.
    --------------------------------------------------------------------------- */
-.enumerator-window .material-list-row-odd {
+.enumerator-window .material-list-table .material-list-row-odd {
     background: var(--muted);
+}
+
+/* Declared after the stripe (same specificity) so a virtualized row still highlights on hover. */
+.enumerator-window .material-list-table .material-list-row-odd:hover,
+.enumerator-window .material-list-table .material-list-row-even:hover {
+    background: var(--accent);
+}
+
+/* Selection outranks stripe and hover, including on the non-virtualized collection list. */
+.enumerator-window .material-list-table .enumerator-row-selected {
+    background: var(--accent);
 }
 
 .enumerator-window .material-list-virtual-spacer {
@@ -354,4 +388,5 @@
     padding: 0 !important;
     border: 0 !important;
     background: transparent !important;
+}
 }

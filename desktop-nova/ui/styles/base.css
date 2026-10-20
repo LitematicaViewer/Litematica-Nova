@@ -1,6 +1,11 @@
 @import "../shell/theme.css";
 @import "./widgets.css";
 @import "./controls.css";
+@import "./page-appearance.css";
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.shared {
 
 :root {
     --ln-space-1: 4px;
@@ -8,10 +13,9 @@
     --ln-space-3: 12px;
     --ln-space-4: 16px;
     --ln-space-6: 24px;
-    --ln-form-max: 72rem;
     --ln-field-max: 42rem;
-    color: var(--ln-body-text-color, #000000);
-    background: var(--ln-ui-background-color, #ffffff);
+    color: var(--foreground);
+    background: var(--background);
     font-family: var(--ln-body-font-family, system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif);
     font-size: var(--ln-body-font-size, 14px);
 }
@@ -19,6 +23,9 @@
 * {
     box-sizing: border-box;
 }
+}
+
+@layer base {
 
 html,
 body,
@@ -30,13 +37,16 @@ body,
 
 body {
     overflow: hidden;
-    color: var(--ln-body-text-color, CanvasText);
-    background: var(--ln-ui-background-color, Canvas);
+    color: var(--foreground);
+    background: var(--background);
     font-family: var(--ln-body-font-family, system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif);
     font-size: var(--ln-body-font-size, 14px);
     letter-spacing: normal;
     user-select: none;
 }
+}
+
+@layer components.shared {
 
 button,
 input,
@@ -53,6 +63,9 @@ input,
 select {
     min-width: 0;
 }
+}
+
+@layer base {
 
 h1,
 h2,
@@ -66,7 +79,7 @@ fieldset {
     min-width: 0;
     margin: 0 0 12px;
     padding: 12px;
-    border: 1px solid ThreeDShadow;
+    border: 1px solid var(--border);
 }
 
 legend {
@@ -77,6 +90,9 @@ table {
     width: 100%;
     border-collapse: collapse;
 }
+}
+
+@layer components.shared {
 
 .block-icon-image,
 .block-icon-fallback {
@@ -94,21 +110,27 @@ table {
 }
 
 .block-icon-fallback {
-    border: 1px solid ThreeDShadow;
-    background: var(--ln-ui-background-color, Canvas);
-    color: var(--ln-muted-text-color, GrayText);
+    border: 1px solid var(--border);
+    background: var(--background);
+    color: var(--muted-foreground);
     font-size: 11px;
     font-weight: 700;
     line-height: 30px;
     text-align: center;
 }
+}
+
+@layer base {
 
 th,
 td {
     padding: 6px 8px;
-    border: 1px solid ThreeDShadow;
+    border: 1px solid var(--border);
     text-align: left;
 }
+}
+
+@layer components.shared {
 
 .ui-test-thumb {
     display: block;
@@ -176,7 +198,7 @@ td {
 .lib-card-text,
 .lib-card-path,
 .lib-card-size {
-    color: GrayText;
+    color: var(--muted-foreground);
 }
 
 .nova-page {
@@ -195,7 +217,7 @@ td {
 }
 
 .nova-muted {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
 }
 
 .nova-small {
@@ -233,7 +255,7 @@ td {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
     text-align: center;
 }
 
@@ -241,7 +263,7 @@ td {
 .nova-file-chip-wide {
     min-width: 0;
     overflow: hidden;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -262,27 +284,27 @@ td {
 }
 
 .nova-error {
-    border: 1px solid #ff6666;
-    background: rgb(255 0 0 / 10%);
-    color: #ff6666;
+    border: 1px solid var(--destructive);
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
+    color: var(--destructive);
 }
 
 .nova-warning {
-    border: 1px solid #8a6a22;
-    background: rgb(255 180 0 / 10%);
-    color: #ffcc66;
+    border: 1px solid var(--warning);
+    background: color-mix(in srgb, var(--warning) 10%, transparent);
+    color: var(--warning);
 }
 
 .nova-summary {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
     cursor: pointer;
 }
 
 .nova-pre {
     overflow: auto;
     padding: 8px;
-    border: 1px solid ThreeDShadow;
-    background: var(--ln-ui-background-color, Canvas);
+    border: 1px solid var(--border);
+    background: var(--background);
     white-space: pre-wrap;
 }
 
@@ -298,13 +320,13 @@ td {
     position: relative;
     flex: 1;
     height: 16px;
-    border: 2px solid ThreeDShadow;
-    background: var(--ln-ui-background-color, Canvas);
+    border: 2px solid var(--border);
+    background: var(--background);
 }
 
 .nova-progress-fill {
     height: 100%;
-    background: var(--ln-accent-color, Highlight);
+    background: var(--primary);
     transition: width .2s;
 }
 
@@ -330,14 +352,14 @@ td {
 
 .nova-empty-compact {
     padding: 16px;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
 }
 
 .empty-state {
     display: grid;
     min-height: 260px;
     place-items: center;
-    color: GrayText;
+    color: var(--muted-foreground);
     text-align: center;
 }
 
@@ -360,7 +382,7 @@ td {
     flex: 0 0 auto;
     gap: 8px;
     padding: 8px 16px 16px;
-    border-top: 1px solid ThreeDShadow;
+    border-top: 1px solid var(--border);
 }
 
 .form-row {
@@ -436,8 +458,9 @@ td {
     max-width: min(28rem, 40%);
     min-width: 0;
     overflow: hidden;
-    color: var(--ln-muted-text-color, GrayText);
-    font-size: 0.9em;
+    color: var(--muted-foreground);
+    font-size: var(--nova-text-sm);
+    font-family: var(--nova-font-sm, inherit);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -458,11 +481,13 @@ td {
 
 .render-page-actions {
     flex-wrap: wrap;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
 }
 
 .render-page-action-label,
 .render-progress-stage {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
 }
 
 .render-progress-row {
@@ -473,10 +498,11 @@ td {
 .render-progress-track {
     position: relative;
     flex: 1;
-    height: 16px;
+    height: 6px;
     min-width: 8rem;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background-color: var(--ln-ui-control-background-color, Canvas);
+    border: 0;
+    border-radius: 3px;
+    background-color: var(--background);
 }
 
 .render-progress-stage {
@@ -489,9 +515,9 @@ td {
 .render-error {
     margin: 0;
     padding: 8px;
-    border: 1px solid #ff6666;
-    background: rgba(255, 0, 0, 0.1);
-    color: #ff6666;
+    border: 1px solid var(--destructive);
+    background: color-mix(in srgb, var(--destructive) 10%, transparent);
+    color: var(--destructive);
     white-space: pre-wrap;
 }
 
@@ -512,8 +538,12 @@ td {
     justify-content: center;
     margin: 16px 8px 8px;
     overflow: hidden;
-    border: 2px solid #111;
-    background-color: #222;
+    border: 0;
+    background-color: var(--background);
+}
+
+.render-preview-help {
+    color: var(--muted-foreground);
 }
 
 .render-preview-placeholder {
@@ -522,12 +552,12 @@ td {
     align-items: center;
     gap: 12px;
     padding: 24px;
-    color: #ccc;
+    color: var(--muted-foreground);
     text-align: center;
 }
 
 .render-preview-state {
-    color: #888;
+    color: var(--muted-foreground);
     font-size: 0.85em;
 }
 
@@ -547,7 +577,7 @@ td {
 }
 
 .render-preflight-description {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
     line-height: 1.6;
 }
 
@@ -560,7 +590,7 @@ td {
 }
 
 .render-preflight-details-toggle {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
     cursor: pointer;
 }
 
@@ -622,9 +652,9 @@ textarea.input,
 .generate-json-preview {
     display: grid;
     place-items: center;
-    border: 1px solid ThreeDShadow;
-    background: var(--ln-ui-background-color, #ffffff);
-    color: GrayText;
+    border: 1px solid var(--border);
+    background: var(--background);
+    color: var(--muted-foreground);
     text-align: center;
 }
 
@@ -642,8 +672,8 @@ textarea.input,
 .slice-canvas {
     min-height: 320px;
     background-image:
-        linear-gradient(to right, ThreeDShadow 1px, transparent 1px),
-        linear-gradient(to bottom, ThreeDShadow 1px, transparent 1px);
+        linear-gradient(to right, var(--border) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--border) 1px, transparent 1px);
     background-size: 32px 32px;
 }
 
@@ -722,8 +752,8 @@ label.setting-row:has(> input[type="radio"]) {
 .template-library-row,
 .library-card,
 .rule-row {
-    background: var(--ln-ui-background-color, Canvas);
-    border: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color, ThreeDShadow);
+    background: var(--background);
+    border: var(--ln-card-border-width, 1px) solid var(--border);
 }
 
 .card,
@@ -745,7 +775,7 @@ label.setting-row:has(> input[type="radio"]) {
     top: -10px;
     left: 10px;
     padding: 0 4px;
-    background: var(--ln-ui-background-color, Canvas);
+    background: var(--background);
     font-weight: bold;
 }
 
@@ -815,7 +845,7 @@ label.setting-row:has(> input[type="radio"]) {
     flex-direction: column;
     align-items: center;
     padding-top: 20px;
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
 }
 
 .library-empty-text {
@@ -828,7 +858,7 @@ label.setting-row:has(> input[type="radio"]) {
 }
 
 .library-content-title {
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--foreground);
     font-weight: 700;
 }
 
@@ -843,15 +873,15 @@ label.setting-row:has(> input[type="radio"]) {
 }
 
 .library-card-current {
-    border-width: var(--ln-card-border-width-active, var(--ln-card-border-width, 1px));
-    border-color: var(--ln-card-border-color-active, var(--ln-accent-color, Highlight));
-    background: var(--ln-card-background-color-active, color-mix(in srgb, var(--ln-accent-color, Highlight) 12%, var(--ln-ui-background-color, Canvas)));
+    border-width: var(--edge-width);
+    border-color: var(--ln-card-border-color-active, var(--primary));
+    background: var(--ln-card-background-color-active, color-mix(in srgb, var(--primary) 12%, var(--background)));
 }
 
 .library-footer {
     justify-content: flex-end;
     padding-top: 8px;
-    border-top: 1px solid ThreeDShadow;
+    border-top: 1px solid var(--border);
 }
 
 .library-footer > .nova-muted {
@@ -909,7 +939,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .lib-card-title,
 .lib-card-highlight {
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--foreground);
 }
 
 .lib-card-status {
@@ -918,16 +948,16 @@ label.setting-row:has(> input[type="radio"]) {
 }
 
 .lib-card-status-missing {
-    color: #d97706;
+    color: var(--warning);
 }
 
 .lib-card-status-error {
-    color: #ff6666;
+    color: var(--destructive);
 }
 
 .lib-card-error-detail {
     overflow: hidden;
-    color: #ff6666;
+    color: var(--destructive);
     font-size: .85em;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -951,7 +981,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .lib-card-image-label {
     width: 100%;
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--foreground);
     font-weight: 700;
     text-align: center;
 }
@@ -976,8 +1006,8 @@ label.setting-row:has(> input[type="radio"]) {
     min-width: 100%;
     max-height: 320px;
     overflow: auto;
-    border: 1px solid ThreeDShadow;
-    background: var(--ln-ui-background-color, Canvas);
+    border: 1px solid var(--border);
+    background: var(--background);
 }
 
 .dropdown-item,
@@ -1018,7 +1048,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .block-search-current > span,
 .block-search-item small {
-    color: var(--ln-muted-text-color, GrayText);
+    color: var(--muted-foreground);
     font-size: 0.85em;
 }
 
@@ -1054,7 +1084,7 @@ label.setting-row:has(> input[type="radio"]) {
 
 .block-search-empty {
     padding: 10px;
-    color: GrayText;
+    color: var(--muted-foreground);
 }
 
 .generate-json-preview,
@@ -1094,4 +1124,5 @@ pre {
     .library-filter-select {
         width: 100%;
     }
+}
 }

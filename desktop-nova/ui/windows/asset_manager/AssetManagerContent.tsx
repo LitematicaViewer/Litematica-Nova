@@ -35,6 +35,8 @@ import {
 } from "../../../src/business/facade";
 import { listenEvent } from "../../../src/platform/events";
 import { Button } from "../../components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { Dropdown } from "../../components/Dropdown";
 import { NavIcon } from "../../shell/NavIcon";
 
 /**
@@ -621,64 +623,59 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     if (route === "block_icon") {
       return (
         <>
-          <select
-            className="input asset-manager-select"
-            aria-label="子选项1：激活槽位"
+          <Dropdown
+            className="asset-manager-select"
+            ariaLabel="子选项1：激活槽位"
             value={effectiveBlockIconSlot}
             disabled={!!lockedBlockIconSlot || busy}
-            onChange={(event) => setSelectedBlockIconSlot(event.target.value as BlockIconResourceSlot)}
-          >
-            <option value="layering">2D 槽（分层）</option>
-            <option value="material_list">3D 槽（材料列表）</option>
-          </select>
-          <select className="input asset-manager-select" aria-label="子选项2：来源说明" disabled value="">
-            <option value="">{blockIconSourceHint(selectedSource, effectiveBlockIconSlot)}</option>
-          </select>
+            onChange={(next) => setSelectedBlockIconSlot(next as BlockIconResourceSlot)}
+            options={[
+              { label: "2D 槽（分层）", value: "layering" },
+              { label: "3D 槽（材料列表）", value: "material_list" },
+            ]}
+          />
+          {/* A disabled field that only states the source; it has nothing to choose. */}
+          <Dropdown
+            className="asset-manager-select"
+            ariaLabel="子选项2：来源说明"
+            value=""
+            disabled
+            onChange={() => {}}
+            options={[{ label: blockIconSourceHint(selectedSource, effectiveBlockIconSlot), value: "" }]}
+          />
         </>
       );
     }
     if (remoteLanguageEnabled) {
       return (
         <>
-          <select
-            className="input asset-manager-select"
-            aria-label="子选项1：版本"
+          <Dropdown
+            className="asset-manager-select"
+            ariaLabel="子选项1：版本"
             value={selectedLanguageBranch}
             disabled={languageCatalogBusy || languageBranches.length === 0}
-            onChange={(event) => void loadLanguageCatalog(event.target.value)}
-          >
-            {languageBranches.length === 0 ? <option value="">版本</option> : null}
-            {languageBranches.map((branch) => (
-              <option key={branch} value={branch}>
-                {branch}
-              </option>
-            ))}
-          </select>
-          <select
-            className="input asset-manager-select"
-            aria-label="子选项2：语言"
+            onChange={(next) => void loadLanguageCatalog(next)}
+            options={languageBranches.length === 0
+              ? [{ label: "版本", value: "" }]
+              : languageBranches.map((branch) => ({ label: branch, value: branch }))}
+          />
+          <Dropdown
+            className="asset-manager-select"
+            ariaLabel="子选项2：语言"
             value={selectedRemoteLanguage}
             disabled={languageCatalogBusy || remoteLanguages.length === 0}
-            onChange={(event) => setSelectedRemoteLanguage(event.target.value)}
-          >
-            {remoteLanguages.length === 0 ? <option value="">语言</option> : null}
-            {remoteLanguages.map((language) => (
-              <option key={language} value={language}>
-                {language}
-              </option>
-            ))}
-          </select>
+            onChange={setSelectedRemoteLanguage}
+            options={remoteLanguages.length === 0
+              ? [{ label: "语言", value: "" }]
+              : remoteLanguages.map((language) => ({ label: language, value: language }))}
+          />
         </>
       );
     }
     return (
       <>
-        <select className="input asset-manager-select" aria-label="子选项1" disabled value="">
-          <option value="">子选项1</option>
-        </select>
-        <select className="input asset-manager-select" aria-label="子选项2" disabled value="">
-          <option value="">子选项2</option>
-        </select>
+        <Dropdown className="asset-manager-select" ariaLabel="子选项1" value="" disabled onChange={() => {}} options={[{ label: "子选项1", value: "" }]} />
+        <Dropdown className="asset-manager-select" ariaLabel="子选项2" value="" disabled onChange={() => {}} options={[{ label: "子选项2", value: "" }]} />
       </>
     );
   };
@@ -738,22 +735,22 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
           <div className="game-resource-row-actions">
             {route === "block_icon" ? (
               <>
-                <button className="btn" type="button" disabled={busy} onClick={() => void handleApply(entry, "material_list")}>
+                <Button type="button" disabled={busy} onClick={() => void handleApply(entry, "material_list")}>
                   用于材料
-                </button>
-                <button className="btn" type="button" disabled={busy} onClick={() => void handleApply(entry, "layering")}>
+                </Button>
+                <Button type="button" disabled={busy} onClick={() => void handleApply(entry, "layering")}>
                   用于分层
-                </button>
+                </Button>
               </>
             ) : (
-              <button className="btn" type="button" disabled={busy} onClick={() => void handleApply(entry)}>
+              <Button type="button" disabled={busy} onClick={() => void handleApply(entry)}>
                 应用
-              </button>
+              </Button>
             )}
             {entry.builtin ? null : (
-              <button className="btn" type="button" disabled={busy} onClick={() => void handleDelete(entry)}>
+              <Button type="button" disabled={busy} onClick={() => void handleDelete(entry)}>
                 删除登记
-              </button>
+              </Button>
             )}
           </div>
         );
@@ -791,9 +788,9 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       <div className="asset-manager-header">
         <h3 className="asset-manager-title">游戏资源管理</h3>
         {onClose ? (
-          <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>
+          <Button className="subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>
             ×
-          </button>
+          </Button>
         ) : null}
       </div>
 
@@ -830,24 +827,20 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                 <label className="asset-manager-form-label" htmlFor="asset-manager-source">
                   来源
                 </label>
-                <select
+                <Dropdown
                   id="asset-manager-source"
-                  className="input asset-manager-select"
+                  className="asset-manager-select"
+                  ariaLabel="来源"
                   value={selectedSource}
                   disabled={busy}
-                  onChange={(event) =>
+                  onChange={(next) =>
                     setSourceByRoute((current) => ({
                       ...current,
-                      [route]: event.target.value as AssetSource,
+                      [route]: next as AssetSource,
                     }))
                   }
-                >
-                  {SOURCE_OPTIONS_BY_ROUTE[route].map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                  options={SOURCE_OPTIONS_BY_ROUTE[route]}
+                />
               </div>
 
               <div className="asset-manager-form-row asset-manager-form-row-suboptions">
@@ -855,23 +848,18 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                 <div className="asset-manager-inline-controls">
                   {renderSubOptionControls()}
                   {remoteLanguageEnabled ? (
-                    <button
-                      className="btn"
-                      type="button"
-                      disabled={languageCatalogBusy}
-                      onClick={() => void loadLanguageCatalog()}
-                    >
+                    <Button type="button" disabled={languageCatalogBusy} onClick={() => void loadLanguageCatalog()} >
                       刷新远端列表
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
               </div>
             </div>
 
             <div className="asset-manager-actions">
-              <button className="btn" type="button" disabled={fetchDisabled} onClick={() => void runFetchAction()}>
+              <Button type="button" disabled={fetchDisabled} onClick={() => void runFetchAction()}>
                 {fetchButtonLabel()}
-              </button>
+              </Button>
             </div>
 
             {health.length > 0 ? (
@@ -885,34 +873,34 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
             ) : null}
 
             <div className="asset-manager-table-wrap">
-              <table>
-                <thead>
-                  <tr>
+              <Table>
+                <TableHeader>
+                  <TableRow>
                     {tableColumns.map((column) => (
-                      <th key={column.key}>{column.label}</th>
+                      <TableHead key={column.key}>{column.label}</TableHead>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {entries.length > 0 ? (
                     entries.map((entry) => (
-                      <tr key={entry.id}>
+                      <TableRow key={entry.id}>
                         {tableColumns.map((column) => (
-                          <td key={column.key} className={column.key === "name" ? "game-resource-path" : undefined}>
+                          <TableCell key={column.key} className={column.key === "name" ? "game-resource-path" : undefined}>
                             {renderCell(entry, column.key)}
-                          </td>
+                          </TableCell>
                         ))}
-                      </tr>
+                      </TableRow>
                     ))
                   ) : (
-                    <tr>
-                      <td colSpan={tableColumns.length} className="asset-manager-empty-row">
+                    <TableRow>
+                      <TableCell colSpan={tableColumns.length} className="asset-manager-empty-row">
                         暂无已登记资源。
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   )}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
 
             {log ? <pre className="subwindow-error asset-manager-log">{log}</pre> : null}
@@ -921,19 +909,15 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
           <footer className="asset-manager-footer">
             <span className="subwindow-status-text asset-manager-footer-status">{statusText}</span>
             <div className="asset-manager-footer-actions">
-              <button
-                className="btn"
-                type="button"
-                onClick={() => void refreshGameResources().catch(() => undefined)}
-              >
+              <Button type="button" onClick={() => void refreshGameResources().catch(() => undefined)} >
                 刷新
-              </button>
-              <button className="btn" type="button" onClick={() => void handleHealth()}>
+              </Button>
+              <Button type="button" onClick={() => void handleHealth()}>
                 健康检查
-              </button>
-              <button className="btn" type="button" onClick={() => void handleOpenRoot()}>
+              </Button>
+              <Button type="button" onClick={() => void handleOpenRoot()}>
                 打开根目录...
-              </button>
+              </Button>
             </div>
           </footer>
         </section>

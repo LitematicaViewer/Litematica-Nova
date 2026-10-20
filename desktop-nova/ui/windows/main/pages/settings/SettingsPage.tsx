@@ -7,6 +7,7 @@ import { Checkbox } from "../../../../components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "../../../../components/ui/radio-group";
 import { Textarea } from "../../../../components/ui/textarea";
 import { Dropdown } from "../../../../components/Dropdown";
+import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import {
   AiPublicConfig,
@@ -42,6 +43,7 @@ import {
   normalizeMaterialListWindowBehavior,
   normalizeDebugMode,
   normalizeTheme,
+  THEMES,
   normalizeColorMode,
   normalizeGraphicsBackend,
   saveLocalLibraryTailPathCountConfig,
@@ -59,11 +61,10 @@ import "./settings.css";
 const BLOCKSTATE_DB = "data/minecraft_blockstates/26.1.json";
 const BLOCKSTATE_ZH = "data/minecraft_blockstates/26.1.zh_cn.json";
 const BLOCK_ICON_DIR = "block";
-const NOVA_THEME_OPTIONS = [
-  { value: "shadcn", label: "shadcn/ui" },
-  { value: "8bitcn", label: "8bitcn/ui" },
-  { value: "Minecraft", label: "Minecraft" },
-];
+/* One entry per theme, from `src/services/themeManifest.ts`. Do not add ids here:
+   a theme missing from the manifest cannot be loaded or stored, and the registry
+   test fails loudly instead of the picker quietly showing a dead option. */
+const NOVA_THEME_OPTIONS = THEMES.map((theme) => ({ value: theme.id, label: theme.label }));
 const MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS = [
   { value: "independent_window", label: "独立窗口" },
   { value: "main_window_overlay", label: "主窗口遮罩" },
@@ -483,8 +484,8 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           <div className="form-label">明暗模式</div>
           <RadioGroup className="settings-color-options" aria-label="明暗模式" orientation="horizontal"
             value={normalizeColorMode(colorMode)} onValueChange={setColorMode}>
-            {[{ value: "light", label: "浅色", Icon: Sun }, { value: "dark", label: "深色", Icon: Moon }, { value: "system", label: "跟随系统", Icon: Monitor }].map(({ value, label, Icon }) => (
-              <RadioGroupItem key={value} value={value}><Icon size={16} aria-hidden="true" />{label}</RadioGroupItem>
+            {[{ value: "light", label: "浅色", icon: "light", Icon: Sun }, { value: "dark", label: "深色", icon: "dark", Icon: Moon }, { value: "system", label: "跟随系统", icon: "system", Icon: Monitor }].map(({ value, label, icon, Icon }) => (
+              <RadioGroupItem key={value} value={value}><ThemeIcon name={icon} size={16} fallback={Icon} />{label}</RadioGroupItem>
             ))}
           </RadioGroup>
         </div>
@@ -501,10 +502,10 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           <Input className="input settings-grow" aria-label="默认配置目录" value={displayFilePath(userConfig?.default_config_dir || "")} readOnly />
         </div>
         <div className="settings-actions">
-          <Button className="btn" onClick={chooseConfigDir}>选择目录</Button>
-          <Button className="btn" onClick={() => openUserConfigDir()}>打开目录</Button>
-          <Button className="btn" onClick={resetConfigDir}>恢复默认目录</Button>
-          <Button className="btn" onClick={migrateConfigDir}>迁移当前配置到新目录</Button>
+          <Button onClick={chooseConfigDir}>选择目录</Button>
+          <Button onClick={() => openUserConfigDir()}>打开目录</Button>
+          <Button onClick={resetConfigDir}>恢复默认目录</Button>
+          <Button onClick={migrateConfigDir}>迁移当前配置到新目录</Button>
         </div>
       </div>
 
@@ -542,15 +543,15 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
               placeholder={aiConfig?.has_key ? "已保存；输入新 Key 可替换" : "未保存"}
               autoComplete="off"
             />
-            <Button className="btn" type="button" onClick={() => setShowApiKey((value) => !value)}>
+            <Button type="button" onClick={() => setShowApiKey((value) => !value)}>
               {showApiKey ? "隐藏" : "显示"}
             </Button>
           </div>
         </div>
         <div className="settings-actions">
-          <Button className="btn" onClick={saveAi}>保存 Key</Button>
-          <Button className="btn" onClick={clearAiKey}>清除 Key</Button>
-          <Button className="btn" onClick={testAi}>测试连接</Button>
+          <Button onClick={saveAi}>保存 Key</Button>
+          <Button onClick={clearAiKey}>清除 Key</Button>
+          <Button onClick={testAi}>测试连接</Button>
         </div>
         {(aiSaveMessage || aiTestStatus) && (
           <pre className="settings-feedback" data-state={aiTestStatus.startsWith("测试失败") ? "error" : "normal"}>
@@ -595,7 +596,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         <div className="group-box-title">应用运行能力</div>
         <PathRow label="工作目录" path={workspaceRoot || "..."} info={workspaceRoot ? ({ normalized: workspaceRoot, exists: true } as PathInfo) : null} />
         <div className="settings-actions settings-actions-spaced">
-          <Button className="btn" onClick={checkApplicationRuntime}>检查运行能力</Button>
+          <Button onClick={checkApplicationRuntime}>检查运行能力</Button>
           <span className="settings-status" data-state={runtimeOk === false ? "error" : "normal"}>{statusText(runtimeOk)}</span>
         </div>
       </div>
@@ -605,9 +606,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         <div className="form-row"><div className="form-label">方块数据库</div><div>内置多版本方块库</div></div>
         <PathRow label="block 图标库" path={BLOCK_ICON_DIR} info={iconDirInfo} />
         <div className="settings-actions settings-actions-spaced">
-          <Button className="btn" onClick={() => openAssetManagerWithWindowBehavior(() => setShowAssetManager(true)).catch((error) => setLog(String(error)))}>游戏资源管理</Button>
-          <Button className="btn" onClick={checkDatabase}>检查方块数据</Button>
-          <Button className="btn" onClick={checkIcons}>检查图标库</Button>
+          <Button onClick={() => openAssetManagerWithWindowBehavior(() => setShowAssetManager(true)).catch((error) => setLog(String(error)))}>游戏资源管理</Button>
+          <Button onClick={checkDatabase}>检查方块数据</Button>
+          <Button onClick={checkIcons}>检查图标库</Button>
           <span className="settings-status" data-state={dbOk === false || iconOk === false ? "error" : "normal"}>
             方块数据: {statusText(dbOk)} / 图标: {statusText(iconOk)}
           </span>
@@ -620,7 +621,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           <div className="form-label">预览图生成</div>
           <div className="form-field">
             <Dropdown ariaLabel="预览图生成" value={previewMode} options={DISPLAY_MODE_OPTIONS} onChange={handlePreviewMode} />
-            <Button className="btn" onClick={() => handlePreviewMode("full")}>重置为完整模式</Button>
+            <Button onClick={() => handlePreviewMode("full")}>重置为完整模式</Button>
           </div>
         </div>
         <div className="form-row">
@@ -693,9 +694,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
               onChange={(event) => setV5Compatibility((current) => ({ ...current, shaderpack_name: event.target.value }))}
               placeholder="根目录下的 zip 文件名或目录名"
             />
-            <Button className="btn" type="button" disabled={v5PickerBusy} onClick={() => chooseShaderpack(false)}>选择 ZIP</Button>
-            <Button className="btn" type="button" disabled={v5PickerBusy} onClick={() => chooseShaderpack(true)}>选择目录</Button>
-            <Button className="btn" type="button" disabled={v5PickerBusy || (!v5Compatibility.shaderpack_root && !v5Compatibility.shaderpack_name)} onClick={clearShaderpack}>清除</Button>
+            <Button type="button" disabled={v5PickerBusy} onClick={() => chooseShaderpack(false)}>选择 ZIP</Button>
+            <Button type="button" disabled={v5PickerBusy} onClick={() => chooseShaderpack(true)}>选择目录</Button>
+            <Button type="button" disabled={v5PickerBusy || (!v5Compatibility.shaderpack_root && !v5Compatibility.shaderpack_name)} onClick={clearShaderpack}>清除</Button>
           </div>
         </div>
         <div className="form-row">
@@ -724,10 +725,10 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
               placeholder="每行一个 zip 或目录；按从低到高优先级填写"
             />
             <div className="v5-pack-actions">
-              <Button className="btn" type="button" disabled={v5PickerBusy} onClick={() => addResourcePacks(false)}>添加 ZIP</Button>
-              <Button className="btn" type="button" disabled={v5PickerBusy} onClick={() => addResourcePacks(true)}>添加目录</Button>
+              <Button type="button" disabled={v5PickerBusy} onClick={() => addResourcePacks(false)}>添加 ZIP</Button>
+              <Button type="button" disabled={v5PickerBusy} onClick={() => addResourcePacks(true)}>添加目录</Button>
               <Button
-                className="btn"
+               
                 type="button"
                 disabled={v5PickerBusy || v5Compatibility.resource_packs.every((path) => !path.trim())}
                 onClick={() => setV5Compatibility((current) => ({ ...current, resource_packs: [] }))}
@@ -735,14 +736,14 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
             </div>
           </div>
         </div>
-        <Button className="btn" onClick={saveV5Compatibility}>保存渲染设置</Button>
+        <Button onClick={saveV5Compatibility}>保存渲染设置</Button>
       </div>
 
       <div className="group-box">
         <div className="group-box-title">维护</div>
         {buildVersion && <div className="form-row"><div className="form-label">应用版本</div><div>{buildVersion}</div></div>}
-        <Button className="btn" onClick={async () => setLog(await cleanupLocalTempFiles())}>清理本地临时文件</Button>
-        <Button className="btn" type="button" disabled={exportingLogs} onClick={async () => {
+        <Button onClick={async () => setLog(await cleanupLocalTempFiles())}>清理本地临时文件</Button>
+        <Button type="button" disabled={exportingLogs} onClick={async () => {
           setExportingLogs(true); setLogExportStatus("");
           try {
             const result = await exportDiagnosticLogs();

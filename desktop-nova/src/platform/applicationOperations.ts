@@ -119,10 +119,12 @@ export interface BlockDatabaseState {
   state: string;
   name: string;
   sideTextureDataUrl: string | null;
+  /** Top-down (+Y) plane; only populated when the caller asks for it. */
+  topTextureDataUrl?: string | null;
   mapColor: { id: number; rgb: number } | null;
   tintIndices: number[];
-  faces: { texture: string; tintIndex: number; side: number; rotationX: number; rotationY: number }[];
-  projection: "model-side" | "no-side-model" | "missing";
+  faces: { texture: string; tintIndex?: number; side?: number; rotationX?: number; rotationY?: number; rule?: string }[];
+  projection: "model-side" | "model-top" | "no-side-model" | "no-top-model" | "color-only" | "missing";
   missing?: boolean;
   error?: string;
   biomeProfile?: string;
@@ -135,7 +137,14 @@ export interface BlockDatabaseResult extends Partial<BlockDatabaseState> {
   blocks?: BlockDatabaseBlock[];
   states?: Record<string, BlockDatabaseState>;
 }
-export function queryBlockDatabase(input: { version?: string; query?: string; state?: string; states?: string[] }): Promise<BlockDatabaseResult> {
+export function queryBlockDatabase(input: {
+  version?: string;
+  query?: string;
+  state?: string;
+  states?: string[];
+  noTextures?: boolean;
+  topPlane?: boolean;
+}): Promise<BlockDatabaseResult> {
   return invoke("application_query_block_database", { input });
 }
 

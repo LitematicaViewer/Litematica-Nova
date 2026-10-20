@@ -16,6 +16,7 @@ export { windowsPathKey, displayFilePath, displayPathText } from "../services/fi
 export * from "../platform/applicationRender";
 export * from "../services/statsService";
 export * from "../services/userConfig";
+export * from "../services/themeManifest";
 
 export * from "../services/flakeService";
 export * from "../services/containerService";

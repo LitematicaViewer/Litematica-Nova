@@ -2,6 +2,7 @@ import { displayPathText } from "../../../../../src/business/facade";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Download, FolderOpen, FolderPlus, ImageOff, LayoutGrid, Plus, RefreshCw, Search, ChevronDown, ChevronRight, Folder, Trash2, X } from "lucide-react";
 import { Button } from "../../../../components/ui/button";
+import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { Input } from "../../../../components/ui/input";
 import { Checkbox } from "../../../../components/ui/checkbox";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
@@ -105,12 +106,12 @@ function ProjectionCard({ record, isCurrent, isInspected, checked, previewUrl, l
           onCheckedChange={(value) => onToggle(value === true)} />
       </div>
       {isCurrent && <span className="library-current-marker">当前</span>}
-      <Button className="library-tile-open" variant="ghost" aria-pressed={isInspected}
+      <Button className="library-tile-open" variant="ghost" themeSlot="library-tile" aria-pressed={isInspected}
         aria-label={`查看 ${record.displayName || record.fileName} 的详情`} onClick={onInspect}
         onDoubleClick={() => { if (!busy && record.status === "ok") onActivate(); }}>
         <span className="library-tile-image">
           {hasImage ? <img src={previewUrl} alt="" loading="lazy" draggable={false} onError={() => setFailedImage(previewUrl)} />
-            : <span className="library-preview-placeholder"><ImageOff size={30} aria-hidden="true" /><span>{loading ? "预览加载中…" : "暂无预览图"}</span></span>}
+            : <span className="library-preview-placeholder"><ThemeIcon name="picture_error" size={30} fallback={ImageOff} /><span>{loading ? "预览加载中…" : "暂无预览图"}</span></span>}
         </span>
         <span className="library-tile-name" title={record.displayName || record.fileName}>{record.displayName || record.fileName}</span>
         <span className="library-tile-meta">{recordStatusLabel(record) || `${record.totalBlocks.toLocaleString()} 方块`}</span>
@@ -456,8 +457,8 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         const hasChildren = categories.some((item) => item.parentId === category.id); const expanded = expandedCategories.includes(category.id);
         const descendants = categoryDescendants(state, category.id);
         return <li key={category.id} role="none"><ContextMenu.Root><ContextMenu.Trigger asChild><div className="library-category-row">
-          {hasChildren ? <Button className="library-category-expander" variant="ghost" size="icon-sm" disabled={libraryBusy} aria-label={`${expanded ? "收起" : "展开"} ${category.name}`} onClick={() => toggleExpanded(category.id)}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</Button> : <span className="library-category-expander-spacer" />}
-          <Button variant="ghost" className="library-category" role="treeitem" aria-level={depth} aria-expanded={hasChildren ? expanded : undefined} aria-selected={categoryFilter === category.id} aria-pressed={categoryFilter === category.id} data-category-tree-node={category.id} disabled={libraryBusy}
+          {hasChildren ? <Button className="library-category-expander" variant="ghost" size="icon-sm" themeSlot="library-category-expander" disabled={libraryBusy} aria-label={`${expanded ? "收起" : "展开"} ${category.name}`} onClick={() => toggleExpanded(category.id)}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</Button> : <span className="library-category-expander-spacer" />}
+          <Button variant="ghost" className="library-category" themeSlot="library-category" role="treeitem" aria-level={depth} aria-expanded={hasChildren ? expanded : undefined} aria-selected={categoryFilter === category.id} aria-pressed={categoryFilter === category.id} data-category-tree-node={category.id} disabled={libraryBusy}
             data-drop-target={dropTarget === category.id || undefined} onClick={() => { setCategoryFilter(category.id); setUntaggedOnly(false); }} onKeyDown={(event) => {
               const treeNodes = () => Array.from(event.currentTarget.closest('[role="tree"]')?.querySelectorAll<HTMLButtonElement>('[data-category-tree-node]') || []);
               const focusCategory = (id?: string | null) => treeNodes().find((node) => node.dataset.categoryTreeNode === id)?.focus();
@@ -585,28 +586,28 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     <div className="nova-page library-page">
       <header className="library-toolbar">
         <h2>投影库</h2>
-        <Button variant="default" onClick={handleSelect} disabled={libraryBusy} aria-busy={isOpening}><FolderPlus size={16} />{isOpening ? "正在导入…" : "导入投影"}</Button>
-        <Button onClick={() => handleOpenRedenLibrary().catch((error) => setPreviewError(`打开在线投影库失败：${String(error)}`))}><Download size={16} />下载投影</Button>
-        <div className="library-search"><Search size={16} aria-hidden="true" /><Input type="search" aria-label="搜索投影" placeholder="搜索名称、作者、分类…" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
-        <Button variant="ghost" onClick={() => handleOpenLocalLibraryFolders().catch((error) => setPreviewError(`打开本地库文件夹失败：${String(error)}`))}><FolderOpen size={16} />管理文件夹</Button>
-        <Button variant="ghost" size="icon" aria-label={isRefreshing ? "正在刷新投影库" : "刷新投影库"} title="刷新投影库" disabled={libraryBusy} aria-busy={isRefreshing} onClick={handleRefresh}><RefreshCw size={16} /></Button>
+        <Button variant="default" onClick={handleSelect} disabled={libraryBusy} aria-busy={isOpening}><ThemeIcon name="import" size={16} fallback={FolderPlus} />{isOpening ? "正在导入…" : "导入投影"}</Button>
+        <Button onClick={() => handleOpenRedenLibrary().catch((error) => setPreviewError(`打开在线投影库失败：${String(error)}`))}><ThemeIcon name="download" size={16} fallback={Download} />下载投影</Button>
+        <div className="library-search"><ThemeIcon name="search" size={16} fallback={Search} /><Input type="search" aria-label="搜索投影" placeholder="搜索名称、作者、分类…" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
+        <Button variant="ghost" onClick={() => handleOpenLocalLibraryFolders().catch((error) => setPreviewError(`打开本地库文件夹失败：${String(error)}`))}><ThemeIcon name="explorer" size={16} fallback={FolderOpen} />管理文件夹</Button>
+        <Button variant="ghost" size="icon" aria-label={isRefreshing ? "正在刷新投影库" : "刷新投影库"} title="刷新投影库" disabled={libraryBusy} aria-busy={isRefreshing} onClick={handleRefresh}><ThemeIcon name="refresh" size={16} fallback={RefreshCw} /></Button>
       </header>
-      {previewError && <div className="library-message" role="alert">{displayPathText(previewError)}<Button variant="ghost" size="icon-sm" aria-label="关闭错误提示" onClick={() => setPreviewError("")}><X size={14} /></Button></div>}
+      {previewError && <div className="library-message" role="alert">{displayPathText(previewError)}<Button variant="ghost" size="icon-sm" aria-label="关闭错误提示" onClick={() => setPreviewError("")}><ThemeIcon name="close" size={14} fallback={X} /></Button></div>}
       {folderSearchError && <div className="library-message" role="alert">文件夹搜索失败：{folderSearchError}</div>}
       {isRefreshing && <div className="library-progress" role="status">刷新中 {refreshProgress} / {state.records.length}</div>}
 
       <div className="library-workspace">
         <aside className="library-categories" aria-label="投影分类">
           <div className="library-pane-heading"><h3>我的投影</h3><span>{state.records.length}</span></div>
-          <div className="library-category-tools"><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => openCategoryDialog("create")}><FolderPlus size={14} />新建分类</Button></div>
+          <div className="library-category-tools"><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => openCategoryDialog("create")}><ThemeIcon name="folder_new" size={14} fallback={FolderPlus} />新建分类</Button></div>
           <ScrollArea className="library-category-scroll">
             <nav className="library-category-list" aria-label="分类筛选">
-              <Button variant="ghost" className="library-category" aria-pressed={!categoryFilter && !untaggedOnly} onClick={() => { setCategoryFilter(""); setUntaggedOnly(false); }}><LayoutGrid size={16} /><span>全部投影</span><small>{state.records.length}</small></Button>
-              <Button variant="ghost" className="library-category" aria-pressed={untaggedOnly} data-drop-target={dropTarget === "untagged" || undefined} onClick={() => { setCategoryFilter(""); setUntaggedOnly(true); }} {...categoryDropProps("")}><Box size={16} /><span>未分类</span><small>{state.records.filter((record) => !record.categoryIds?.length).length}</small></Button>
+              <Button variant="ghost" className="library-category" themeSlot="library-category" aria-pressed={!categoryFilter && !untaggedOnly} onClick={() => { setCategoryFilter(""); setUntaggedOnly(false); }}><ThemeIcon name="all" size={16} fallback={LayoutGrid} /><span>全部投影</span><small>{state.records.length}</small></Button>
+              <Button variant="ghost" className="library-category" themeSlot="library-category" aria-pressed={untaggedOnly} data-drop-target={dropTarget === "untagged" || undefined} onClick={() => { setCategoryFilter(""); setUntaggedOnly(true); }} {...categoryDropProps("")}><ThemeIcon name="unknown" size={16} fallback={Box} /><span>未分类</span><small>{state.records.filter((record) => !record.categoryIds?.length).length}</small></Button>
               {renderCategoryTree(null)}
             </nav>
           </ScrollArea>
-          <Button variant="ghost" className="library-category library-trash-button" aria-haspopup="dialog" onClick={() => { setDiscardTrashId(null); setCategoryError(""); setTrashOpen(true); }}><Trash2 size={16} /><span>回收站</span><small>{state.trash?.length || 0}</small></Button>
+          <Button variant="ghost" className="library-category library-trash-button" themeSlot="library-category" aria-haspopup="dialog" onClick={() => { setDiscardTrashId(null); setCategoryError(""); setTrashOpen(true); }}><ThemeIcon name="delete" size={16} fallback={Trash2} /><span>回收站</span><small>{state.trash?.length || 0}</small></Button>
         </aside>
 
         <section className="library-collection" aria-label="投影卡片">
@@ -616,23 +617,23 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
             <div className="library-filter-control"><Dropdown ariaLabel="筛选文件状态" value={statusFilter} onChange={setStatusFilter} options={[{ value: "", label: "全部状态" }, { value: "ok", label: "正常" }, { value: "missing", label: "文件丢失" }, { value: "parse_error", label: "解析失败" }]} /></div>
             <div className="library-filter-control"><Dropdown ariaLabel="投影排序" value={sortMode} onChange={setSortMode} options={[{ value: "manual", label: "手动排序" }, { value: "recent_analyzed", label: "最近分析" }, { value: "blocks", label: "方块数量" }, { value: "name", label: "名称 A–Z" }]} /></div>
           </div>
-          {selectedRecords.length > 0 && <div className="library-batch-toolbar"><Button size="sm" onClick={() => openMoveDialog(selectedRecords.map((record) => record.path))} disabled={libraryBusy}><Folder size={14} />移动到分类…</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords(selectedRecords); }}><Trash2 size={14} />移入回收站</Button><Button size="sm" variant="ghost" onClick={() => setSelectedPaths([])}>取消选择</Button></div>}
+          {selectedRecords.length > 0 && <div className="library-batch-toolbar"><Button size="sm" onClick={() => openMoveDialog(selectedRecords.map((record) => record.path))} disabled={libraryBusy}><ThemeIcon name="folder" size={14} fallback={Folder} />移动到分类…</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords(selectedRecords); }}><ThemeIcon name="delete" size={14} fallback={Trash2} />移入回收站</Button><Button size="sm" variant="ghost" onClick={() => setSelectedPaths([])}>取消选择</Button></div>}
           <ScrollArea className="library-grid-scroll">
             {visibleRecords.length > 0 ? <div className="library-card-grid">{visibleRecords.map((record) => <ProjectionCard key={record.path} record={record} isCurrent={samePath(currentFile, record.path)} isInspected={!!inspectedRecord && samePath(inspectedRecord.path, record.path)} checked={hasPath(selectedPaths, record.path)} busy={libraryBusy}
               previewUrl={projectionPreviewDataUrls[record.path] || ""} loading={!!projectionPreviewLoadingPaths[record.path]}
               onInspect={() => { setInspectedPath(record.path); }} onToggle={(checked) => toggleSelected(record.path, checked)} onActivate={() => handleActivateRecord(record.path)}
               onDragStart={(event) => { const paths = hasPath(selectedPaths, record.path) ? selectedRecords.map((entry) => entry.path) : [record.path]; setDragPaths(paths); event.dataTransfer.effectAllowed = "all"; event.dataTransfer.setData("application/x-nova-library-records", JSON.stringify(paths)); }}
               onDragEnd={() => { setDragPaths([]); setDropTarget(""); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); handleDrop(record.path).catch((error) => setPreviewError(`排序失败：${String(error)}`)); }}
-            />)}</div> : <div className="library-empty-state"><Box size={40} aria-hidden="true" /><h3>{state.records.length || search ? "没有找到投影" : "把你的第一份投影放进来"}</h3><p>{state.records.length || search ? "换个关键词或清除筛选，再试一次。" : "导入本地 .litematic，或从在线投影库下载。"}</p><div className="library-empty-actions">{state.records.length || search ? <Button onClick={() => { setSearch(""); setCategoryFilter(""); setUntaggedOnly(false); setStatusFilter(""); }}>清除筛选</Button> : <Button variant="default" onClick={handleSelect} disabled={libraryBusy}><Plus size={16} />导入投影</Button>}</div></div>}
+            />)}</div> : <div className="library-empty-state"><Box size={40} aria-hidden="true" /><h3>{state.records.length || search ? "没有找到投影" : "把你的第一份投影放进来"}</h3><p>{state.records.length || search ? "换个关键词或清除筛选，再试一次。" : "导入本地 .litematic，或从在线投影库下载。"}</p><div className="library-empty-actions">{state.records.length || search ? <Button onClick={() => { setSearch(""); setCategoryFilter(""); setUntaggedOnly(false); setStatusFilter(""); }}>清除筛选</Button> : <Button variant="default" onClick={handleSelect} disabled={libraryBusy}><ThemeIcon name="import" size={16} fallback={Plus} />导入投影</Button>}</div></div>}
           </ScrollArea>
           <footer className="library-collection-footer"><span>{issueCount ? `${issueCount} 项需关注` : "双击卡片设为当前投影"}</span><div className="library-page-limit"><Dropdown ariaLabel="每页条目" value={String(pageSize)} onChange={(value) => setPageSize(Number(value))} options={[20, 50, 100, 200, 0].map((count) => ({ value: String(count), label: count ? `${count} 项 / 页` : "全部显示" }))} /></div><Button size="sm" variant="ghost" disabled={currentPage <= 1 || pageSize === 0} onClick={() => setPage(currentPage - 1)}>上一页</Button><span>{currentPage} / {pageCount}</span><Button size="sm" variant="ghost" disabled={currentPage >= pageCount || pageSize === 0} onClick={() => setPage(currentPage + 1)}>下一页</Button></footer>
         </section>
 
         <aside className="library-inspector" aria-label="投影详情">
-          <div className="library-pane-heading"><h3>详情</h3>{inspectedRecord && <Button variant="ghost" size="icon-sm" aria-label="关闭投影详情" onClick={() => setInspectedPath("")}><X size={15} /></Button>}</div>
+          <div className="library-pane-heading"><h3>详情</h3>{inspectedRecord && <Button variant="ghost" size="icon-sm" aria-label="关闭投影详情" onClick={() => setInspectedPath("")}><ThemeIcon name="close" size={15} fallback={X} /></Button>}</div>
           <ScrollArea className="library-inspector-scroll">
             {inspectedRecord ? <div className="library-detail-content">
-              <div className="library-detail-preview">{detailPreviewUrl && failedDetailImage !== detailPreviewUrl ? <img src={detailPreviewUrl} alt={`${inspectedRecord.displayName} 预览`} onError={() => setFailedDetailImage(detailPreviewUrl)} /> : <span className="library-preview-placeholder"><ImageOff size={36} /><span>{projectionPreviewLoadingPaths[inspectedRecord.path] ? "预览加载中…" : "暂无预览图"}</span></span>}</div>
+              <div className="library-detail-preview">{detailPreviewUrl && failedDetailImage !== detailPreviewUrl ? <img src={detailPreviewUrl} alt={`${inspectedRecord.displayName} 预览`} onError={() => setFailedDetailImage(detailPreviewUrl)} /> : <span className="library-preview-placeholder"><ThemeIcon name="picture_error" size={36} fallback={ImageOff} /><span>{projectionPreviewLoadingPaths[inspectedRecord.path] ? "预览加载中…" : "暂无预览图"}</span></span>}</div>
               <h3 className="library-detail-name">{inspectedRecord.displayName || inspectedRecord.fileName}</h3>
               <p className="library-detail-author">{inspectedRecord.author ? `作者 · ${inspectedRecord.author}` : "未填写作者"}</p>
               {recordStatusLabel(inspectedRecord) && <div className="library-detail-error" role="status">{recordStatusLabel(inspectedRecord)}{inspectedRecord.lastError && <p>{inspectedRecord.lastError}</p>}</div>}
@@ -645,7 +646,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
               {inspectedRecord.description && <p className="library-detail-description">{inspectedRecord.description}</p>}
               <div className="library-detail-section"><h4>分类</h4><div className="library-detail-categories">{inspectedRecord.categoryIds?.length ? inspectedRecord.categoryIds.map((id) => <span className="library-category-membership" key={id}>{categoryPath(state, id)}</span>) : <span className="muted">未分类</span>}</div><Button size="sm" disabled={libraryBusy} onClick={() => openMoveDialog([inspectedRecord.path])}>移动到分类…</Button></div>
               <div className="library-detail-section"><h4>预览图</h4><div className="library-detail-actions"><Button size="sm" disabled={libraryBusy || !!generatingPreviewPath || inspectedRecord.status !== "ok"} aria-busy={generatingPreviewPath === inspectedRecord.path} onClick={() => handleGeneratePreview(inspectedRecord)}>{generatingPreviewPath === inspectedRecord.path ? "正在生成…" : "生成预览图"}</Button></div></div>
-              <div className="library-detail-section"><h4>文件</h4><p className="library-detail-path" title={displayFilePath(inspectedRecord.path)}>{displayFilePath(inspectedRecord.path)}</p><div className="library-detail-actions"><Button size="sm" onClick={() => openFileParentDir(inspectedRecord.path).catch((error) => setPreviewError(`打开文件夹失败：${String(error)}`))}>打开文件夹</Button><Button size="sm" disabled={libraryBusy || inspectedRecord.status === "missing"} onClick={() => handleOpenSendDialog(inspectedRecord)}>复制到…</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords([inspectedRecord]); }}><Trash2 size={14} />移入回收站</Button></div></div>
+              <div className="library-detail-section"><h4>文件</h4><p className="library-detail-path" title={displayFilePath(inspectedRecord.path)}>{displayFilePath(inspectedRecord.path)}</p><div className="library-detail-actions"><Button size="sm" onClick={() => openFileParentDir(inspectedRecord.path).catch((error) => setPreviewError(`打开文件夹失败：${String(error)}`))}>打开文件夹</Button><Button size="sm" disabled={libraryBusy || inspectedRecord.status === "missing"} onClick={() => handleOpenSendDialog(inspectedRecord)}>复制到…</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords([inspectedRecord]); }}><ThemeIcon name="delete" size={14} fallback={Trash2} />移入回收站</Button></div></div>
             </div> : <div className="library-inspector-empty"><Box size={32} /><p>点击卡片查看详情</p></div>}
           </ScrollArea>
         </aside>

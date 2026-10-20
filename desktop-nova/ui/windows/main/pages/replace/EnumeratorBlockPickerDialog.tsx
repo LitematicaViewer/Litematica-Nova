@@ -143,9 +143,9 @@ export function EnumeratorBlockPickerDialog({
           )}
 
           <div className="enum-picker-buttons">
-            <Button className="btn btn-md" onClick={onClose}>取消</Button>
+            <Button onClick={onClose}>取消</Button>
             <Button
-              className={`btn btn-md${preview.length > 0 ? " btn-primary" : ""}`}
+              variant={preview.length > 0 ? "default" : "secondary"}
               disabled={preview.length === 0}
               onClick={handleConfirm}
             >

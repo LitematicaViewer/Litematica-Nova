@@ -1,0 +1,651 @@
+/* Metro10 component rules.
+ *
+ * This file replaces the twelve retired `widget/*.css` sheets. Those styled bare
+ * elements (`button`, `input`, `table`, `select`, native checkbox pseudo-classes)
+ * from the pre-shadcn UI; the app now renders Radix/shadcn controls, so almost
+ * none of them could match. Everything here targets the `[data-slot]` contract
+ * and lives in `components.theme`, which outranks the shared/page layers by
+ * sublayer order rather than by selector specificity.
+ *
+ * Palette, type scale and theme dimensions live in `theme.css`. Every value in
+ * this file is a token or a derived `color-mix`, so light/dark switch with the
+ * palette instead of duplicating rules.
+ */
+
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.theme {
+
+/* ── Navigation ──────────────────────────────────────────────────────────── */
+/* The themed nav artwork is vector `currentColor` SVG, not game pixel art, so
+   it must not inherit the pixelated rendering of the game-resource pages. */
+.theme-metro10 .nav-icon {
+    image-rendering: auto;
+}
+
+/* Those SVGs are loaded through <img>, where `currentColor` has no parent to
+   inherit from and therefore stays black. The label follows `--foreground`, so
+   without this the icons disappear against the dark sidebar. Inverting the
+   monochrome artwork keeps it in step with the label in dark mode. */
+:root[data-color-scheme="dark"] .theme-metro10 img.nav-icon {
+    filter: invert(1);
+}
+
+[data-slot="button"].nav-expand,
+[data-slot="button"].nav-item {
+    box-sizing: border-box;
+    display: flex;
+    position: relative;
+    width: 100%;
+    height: 48px;
+    min-height: 48px;
+    max-height: 48px;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 0 16px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--foreground);
+    text-align: left;
+    box-shadow: none;
+}
+
+[data-slot="button"].nav-expand:hover:not(:disabled),
+[data-slot="button"].nav-item:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--foreground);
+}
+
+/* Windows 8/10 selection: a flat accent-tinted row plus a 4x24 highlight bar.
+   The bar is a pseudo-element (not `border-left`) so the collapsed sidebar can
+   keep its icon centred. */
+[data-slot="button"].nav-item-active {
+    padding-left: 16px;
+    border-left: 0;
+    background: var(--option-active-background);
+    color: var(--option-active-color);
+}
+
+[data-slot="button"].nav-item-active::before {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 4px;
+    height: 24px;
+    background: var(--primary);
+    transform: translateY(-50%);
+    content: "";
+}
+
+/* Keep the selection tint under the pointer: the generic nav hover is lighter
+   than the selected plate and would otherwise read as "deselecting". */
+[data-slot="button"].nav-item-active:hover:not(:disabled) {
+    background: var(--option-active-background);
+    color: var(--option-active-color);
+}
+
+.sidebar {
+    border-right: 1px solid var(--border);
+    background: var(--navigation-background);
+}
+
+.sidebar-collapsed [data-slot="button"].nav-expand,
+.sidebar-collapsed [data-slot="button"].nav-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+}
+
+.sidebar-collapsed [data-slot="button"].nav-item-active {
+    padding-left: 0;
+}
+
+@media (max-width: 760px) {
+    .sidebar [data-slot="button"].nav-expand,
+    .sidebar [data-slot="button"].nav-item {
+        justify-content: center;
+        gap: 0;
+        padding: 0;
+    }
+
+    .sidebar [data-slot="button"].nav-item-active {
+        padding-left: 0;
+    }
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+/* Structural Button call sites (nav rows, window controls, flake slots and the
+   quickbar) own their own appearance and are excluded from the action-button
+   base. `:where()` keeps this selector at one attribute selector of specificity,
+   so the explicit class rules below never have to raise theirs. */
+[data-slot="button"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
+    box-sizing: border-box;
+    display: inline-flex;
+    height: var(--control-height);
+    min-height: var(--control-height);
+    max-height: var(--control-height);
+    align-items: center;
+    justify-content: center;
+    padding: 0 12px;
+    border: 2px solid transparent;
+    border-radius: 0;
+    appearance: none;
+    background: var(--secondary);
+    color: var(--foreground);
+    font: inherit;
+    text-align: center;
+    cursor: default;
+    box-shadow: none;
+}
+
+[data-slot="button"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):hover:not(:disabled) {
+    border-color: var(--muted-foreground);
+}
+
+[data-slot="button"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):active:not(:disabled) {
+    background: var(--ln-metro10-button-pressed);
+}
+
+[data-slot="button"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):disabled {
+    color: var(--muted-foreground);
+}
+
+[data-slot="button"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+/* `default` is Metro's primary action: accent blue plate, white label. */
+[data-slot="button"][data-variant="default"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: var(--primary-foreground);
+}
+
+[data-slot="button"][data-variant="default"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):hover:not(:disabled) {
+    border-color: var(--primary);
+    background: color-mix(in oklab, var(--primary) 88%, var(--foreground));
+}
+
+[data-slot="button"][data-variant="default"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):active:not(:disabled),
+[data-slot="button"][data-variant="default"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):is([aria-pressed="true"], [data-state="on"]) {
+    background: color-mix(in oklab, var(--primary) 80%, var(--foreground));
+    color: var(--primary-foreground);
+}
+
+[data-slot="button"][data-variant="destructive"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
+    border-color: var(--destructive);
+    background: var(--destructive);
+    color: var(--primary-foreground);
+}
+
+[data-slot="button"][data-variant="destructive"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):hover:not(:disabled) {
+    border-color: var(--destructive);
+    background: color-mix(in oklab, var(--destructive) 86%, var(--foreground));
+}
+
+[data-slot="button"][data-variant="outline"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
+    border-color: var(--border);
+    background: transparent;
+    color: var(--foreground);
+}
+
+[data-slot="button"][data-variant="outline"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):hover:not(:disabled) {
+    border-color: var(--ring);
+    background: var(--accent);
+}
+
+[data-slot="button"][data-variant="secondary"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
+    border-color: transparent;
+    background: var(--secondary);
+    color: var(--foreground);
+}
+
+[data-slot="button"][data-variant="ghost"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)),
+[data-slot="button"][data-variant="link"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
+    border-color: transparent;
+    background: transparent;
+    color: var(--foreground);
+}
+
+[data-slot="button"][data-variant="ghost"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):hover:not(:disabled) {
+    border-color: transparent;
+    background: var(--accent);
+}
+
+[data-slot="button"][data-variant="link"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
+    height: auto;
+    min-height: 0;
+    padding: 0;
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+/* Selected state is declared after every variant's resting fill so a pressed
+   `secondary`/`outline`/`ghost` plate cannot be repainted back to its resting
+   colour by the later, equally specific variant rule. */
+[data-slot="button"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):is([aria-pressed="true"], [data-state="on"]) {
+    background: var(--nova-selected-surface);
+    color: var(--nova-selected-foreground);
+}
+
+[data-slot="button"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):is([aria-pressed="true"], [data-state="on"]):hover:not(:disabled) {
+    background: var(--nova-selected-hover);
+}
+
+/* Filled variants keep their own fill when toggled, one step darker. */
+[data-slot="button"][data-variant="destructive"]:where(:not(.nav-item, .nav-expand, .dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__edit-tool-button, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)):is([aria-pressed="true"], [data-state="on"]) {
+    background: color-mix(in oklab, var(--destructive) 80%, var(--foreground));
+    color: var(--primary-foreground);
+}
+
+/* Window controls keep the original 47x31 Metro artwork. They are not action
+   buttons, so their class rules replace every button property at once. */
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button) {
+    width: var(--ln-metro10-window-close-width);
+    min-width: var(--ln-metro10-window-close-width);
+    max-width: var(--ln-metro10-window-close-width);
+    height: var(--ln-metro10-window-close-height);
+    min-height: var(--ln-metro10-window-close-height);
+    max-height: var(--ln-metro10-window-close-height);
+    flex: 0 0 auto;
+    margin: -8px -12px 0 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    overflow: hidden;
+    background: transparent url("./resource/button/windowClose_normal.png") center / contain no-repeat;
+    color: transparent;
+}
+
+[data-slot="button"].subwindow-overlay-close-button {
+    margin: 0;
+}
+
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button):hover:not(:disabled),
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button):active:not(:disabled) {
+    border: 0;
+    background-color: transparent;
+    background-image: url("./resource/button/windowClose_hover.png");
+    color: transparent;
+}
+
+/* The flake quickbar keeps the 44x44 inventory artwork instead of the wide
+   labelled button the page layout assumes. The label stays in the DOM for
+   screen readers. */
+[data-slot="button"].flake-page__quickbar-open-inventory {
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    overflow: hidden;
+    image-rendering: pixelated;
+    background: transparent var(--flake-open-inventory-normal-image) center / contain no-repeat;
+    color: transparent;
+}
+
+[data-slot="button"].flake-page__quickbar-open-inventory:hover:not(:disabled),
+[data-slot="button"].flake-page__quickbar-open-inventory:active:not(:disabled) {
+    border: 0;
+    background-color: transparent;
+    background-image: var(--flake-open-inventory-hover-image);
+    color: transparent;
+}
+
+[data-slot="button"].flake-page__quickbar-open-inventory .flake-page__quickbar-open-inventory-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* ── Inputs, textareas, dropdowns ────────────────────────────────────────── */
+
+[data-slot="input"],
+[data-slot="textarea"] {
+    box-sizing: border-box;
+    height: var(--ln-metro10-input-height);
+    min-height: var(--ln-metro10-input-height);
+    padding: 3px 8px;
+    border: 2px solid var(--border);
+    border-radius: 0;
+    appearance: none;
+    background-color: var(--card);
+    color: var(--foreground);
+    font: inherit;
+    line-height: 1.4;
+    box-shadow: none;
+}
+
+[data-slot="textarea"] {
+    height: auto;
+    min-height: calc(var(--ln-metro10-input-height) * 2);
+    resize: vertical;
+}
+
+[data-slot="input"]:hover:not(:disabled),
+[data-slot="textarea"]:hover:not(:disabled) {
+    border-color: var(--ln-metro10-input-border-hover);
+}
+
+[data-slot="input"]:focus,
+[data-slot="textarea"]:focus {
+    border-color: var(--ring);
+    outline: 0;
+}
+
+[data-slot="input"]:focus-visible,
+[data-slot="textarea"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+}
+
+[data-slot="input"]:disabled,
+[data-slot="textarea"]:disabled {
+    background-color: var(--muted);
+    color: var(--muted-foreground);
+}
+
+[data-slot="input"]::placeholder,
+[data-slot="textarea"]::placeholder {
+    color: var(--muted-foreground);
+    opacity: 1;
+}
+
+/* Radix's trigger is a `<button>`, not a `<select>`: the old `select` rules
+   could never match it. It keeps the Metro field look plus the pixel arrow. */
+[data-slot="select-trigger"] {
+    box-sizing: border-box;
+    display: inline-flex;
+    height: var(--ln-metro10-input-height);
+    min-height: var(--ln-metro10-input-height);
+    align-items: center;
+    justify-content: space-between;
+    padding: 3px 30px 3px 8px;
+    border: 2px solid var(--border);
+    border-radius: 0;
+    appearance: none;
+    background-color: var(--card);
+    background-image: url("./resource/form/spin_down.svg");
+    background-position: right 8px center;
+    background-repeat: no-repeat;
+    background-size: 16px 16px;
+    color: var(--foreground);
+    cursor: default;
+    box-shadow: none;
+}
+
+[data-slot="select-trigger"] > svg {
+    display: none;
+}
+
+[data-slot="select-trigger"]:hover:not(:disabled) {
+    border-color: var(--ln-metro10-input-border-hover);
+    background-color: var(--card);
+    background-image: url("./resource/form/spin_down.svg");
+}
+
+[data-slot="select-trigger"]:focus-visible {
+    border-color: var(--ring);
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+}
+
+[data-slot="select-trigger"][data-state="open"] {
+    border-color: var(--ring);
+}
+
+[data-slot="select-trigger"][data-placeholder] {
+    color: var(--muted-foreground);
+}
+
+[data-slot="select-trigger"]:disabled {
+    background-color: var(--muted);
+    color: var(--muted-foreground);
+}
+
+[data-slot="select-content"],
+.dropdown-menu,
+.block-search-menu {
+    border: 2px solid var(--border);
+    border-radius: 0;
+    background: var(--popover);
+    color: var(--foreground);
+    box-shadow: var(--panel-shadow);
+}
+
+[data-slot="select-item"] {
+    border-radius: 0;
+}
+
+[data-slot="select-item-indicator"] {
+    color: var(--primary);
+}
+
+/* ── Checkboxes and radios ───────────────────────────────────────────────── */
+/* The shared layer describes a square 20px box; Metro ships the original SVG
+   ring/check artwork, so the box itself becomes transparent. */
+
+[data-slot="checkbox"] {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px;
+    max-width: 20px;
+    max-height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent url("./resource/form/checkbox_default.svg") center / 20px 20px no-repeat;
+    image-rendering: auto;
+    box-shadow: none;
+    cursor: pointer;
+}
+
+[data-slot="checkbox"]:hover:not(:disabled) {
+    border-color: transparent;
+    background-image: url("./resource/form/checkbox_hover.svg");
+}
+
+[data-slot="checkbox"][data-state="checked"],
+[data-slot="checkbox"][data-state="indeterminate"] {
+    border-color: transparent;
+    background-color: transparent;
+    background-image: url("./resource/form/checkbox_checked.svg");
+}
+
+[data-slot="checkbox"][data-state="checked"]:hover:not(:disabled),
+[data-slot="checkbox"][data-state="indeterminate"]:hover:not(:disabled) {
+    background-image: url("./resource/form/checkbox_checked_hover.svg");
+}
+
+[data-slot="checkbox"] svg {
+    visibility: hidden;
+}
+
+[data-slot="checkbox"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"] {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px;
+    max-width: 20px;
+    max-height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent url("./resource/form/radio_default.svg") center / 20px 20px no-repeat;
+    box-shadow: none;
+    cursor: pointer;
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"]:hover:not(:disabled) {
+    border-color: transparent;
+    background-image: url("./resource/form/radio_hover.svg");
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"] {
+    border-color: transparent;
+    background-image: url("./resource/form/radio_checked.svg");
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"]:hover:not(:disabled) {
+    background-image: url("./resource/form/radio_checked_hover.svg");
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"] [data-slot="radio-group-indicator"] {
+    visibility: hidden;
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+/* A radio with children is a card/row, not the 20px control above. Keep the
+   Metro square edge and accent selection without touching the page layout. */
+[data-slot="radio-group-item"][data-choice-layout="option"] {
+    border-width: 2px;
+    border-radius: 0;
+}
+
+[data-slot="radio-group-item"][data-choice-layout="option"][data-state="checked"] {
+    border-color: var(--primary);
+}
+
+/* ── Slider ──────────────────────────────────────────────────────────────── */
+/* Replaces the old `input[type="range"]` + `::-webkit-slider-*` rules, which
+   could not match Radix's span tree at all. */
+
+[data-slot="slider"] {
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: var(--ln-metro10-range-height);
+    align-items: center;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+}
+
+[data-slot="slider"][data-disabled] {
+    cursor: default;
+    opacity: .55;
+}
+
+[data-slot="slider"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+[data-slot="slider-track"] {
+    position: relative;
+    flex: 1;
+    height: 2px;
+    overflow: hidden;
+    border-radius: 0;
+    background: var(--ln-metro10-range-track);
+}
+
+[data-slot="slider-range"] {
+    position: absolute;
+    height: 100%;
+    background: var(--primary);
+}
+
+[data-slot="slider-thumb"] {
+    display: block;
+    width: 8px;
+    height: var(--ln-metro10-range-height);
+    border: 0;
+    border-radius: 0;
+    background: transparent var(--ln-metro10-range-thumb-image) center / 8px 24px no-repeat;
+    box-shadow: none;
+}
+
+[data-slot="slider-thumb"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────────── */
+/* Shared rules already own zebra/hover/selection; Metro only adjusts the header
+   surface and relies on `--ln-table-row-selected-background`. */
+
+[data-slot="table"] {
+    border-collapse: collapse;
+}
+
+[data-slot="table-head"] {
+    background: var(--muted);
+    color: var(--foreground);
+    border-bottom: 2px solid var(--border);
+    font-weight: 600;
+}
+
+[data-slot="table-cell"] {
+    border: 0;
+}
+
+/* ── Tooltips, dialogs and child windows ─────────────────────────────────── */
+
+.material-list-hover-popup {
+    border: 2px solid var(--primary);
+    border-radius: 0;
+    background-color: var(--popover);
+    color: var(--foreground);
+    box-shadow: none;
+}
+
+.dialog-surface {
+    border: 2px solid var(--border);
+    border-radius: 0;
+    background: var(--popover);
+    box-shadow: var(--panel-shadow);
+}
+
+.dialog-content {
+    border-radius: 0;
+}
+
+/* ── Dark-mode artwork ───────────────────────────────────────────────────── */
+/* The shipped window/inventory glyphs are near-black line art. Inverting them
+   (and only them) keeps the same silhouette readable on a dark surface. */
+:root[data-color-scheme="dark"] [data-slot="button"]:is(.dialog-close-button, .subwindow-close-button),
+:root[data-color-scheme="dark"] [data-slot="button"].flake-page__quickbar-open-inventory,
+:root[data-color-scheme="dark"] .flake-page__edit-tool-button {
+    filter: invert(1);
+}
+
+/* The unchecked ring is #333; the checked artwork is already accent blue and
+   must keep its white check, so only the resting state is inverted. */
+:root[data-color-scheme="dark"] [data-slot="checkbox"][data-state="unchecked"],
+:root[data-color-scheme="dark"] [data-slot="radio-group-item"][data-choice-layout="control"][data-state="unchecked"] {
+    filter: invert(1);
+}
+
+::selection {
+    background: var(--primary);
+    color: var(--primary-foreground);
+}
+
+}

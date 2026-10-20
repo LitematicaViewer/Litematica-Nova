@@ -1,5 +1,6 @@
 import { Button } from "../../../../components/ui/button";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
+import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { FolderOpen, FileText, BarChart3, Box, Library, ArrowRight } from "lucide-react";
 import "./home.css";
 import React from 'react';
@@ -33,29 +34,29 @@ export function HomePage({ currentFile, setCurrentFile, setRoute, buildVersion }
       <div className="home-page">
         <section className="home-introduction">
           <h1>Litematica-Nova</h1>
-          <p className="home-lead">查看材料和结构，整理你的每一份投影。</p>
+          <p className="home-lead muted">查看材料和结构，整理你的每一份投影。</p>
           <div className="home-start-actions">
-            <Button variant="default" size="lg" onClick={handleOpenLitematic}><FolderOpen size={20} aria-hidden="true" />打开投影文件</Button>
-            <Button variant="ghost" onClick={() => setRoute("library")}><Library size={18} aria-hidden="true" />浏览投影库<ArrowRight size={16} aria-hidden="true" /></Button>
+            <Button variant="default" size="lg" onClick={handleOpenLitematic}><ThemeIcon name="folder" size={20} fallback={FolderOpen} />打开投影文件</Button>
+            <Button variant="ghost" onClick={() => setRoute("library")}><ThemeIcon name="gallery" size={18} fallback={Library} />浏览投影库<ArrowRight size={16} aria-hidden="true" /></Button>
           </div>
-          {buildVersion && <p className="home-beta-note">版本 {buildVersion}</p>}
+          {buildVersion && <p className="home-beta-note muted">版本 {buildVersion}</p>}
         </section>
 
-        <section className="home-current" aria-labelledby="home-current-title">
+        <section className="home-current group-box" aria-labelledby="home-current-title">
           <h2 id="home-current-title">{currentFile ? "继续当前投影" : "打开后，从这里继续"}</h2>
           {currentFile ? <div className="home-current-file">
             <FileText size={28} aria-hidden="true" />
-            <div><strong>{currentName}</strong><span title={displayFilePath(currentFile)}>{displayFilePath(currentFile)}</span></div>
-          </div> : <p className="home-empty">选择一个 .litematic 文件，即可查看属性、材料和结构。</p>}
+            <div><strong>{currentName}</strong><span className="muted" title={displayFilePath(currentFile)}>{displayFilePath(currentFile)}</span></div>
+          </div> : <p className="home-empty muted">选择一个 .litematic 文件，即可查看属性、材料和结构。</p>}
           <div className="home-workflows">
             <Button variant="ghost" aria-label="查看投影属性" onClick={() => setRoute("properties")} disabled={!currentFile}>
-              <FileText size={22} aria-hidden="true" /><span><strong>投影属性</strong><small>名称、区域与快速预览</small></span><ArrowRight size={18} aria-hidden="true" />
+              <ThemeIcon name="properties" size={22} fallback={FileText} /><span><strong>投影属性</strong><small className="muted">名称、区域与快速预览</small></span><ArrowRight size={18} aria-hidden="true" />
             </Button>
             <Button variant="ghost" aria-label="查看材料与统计" onClick={handleStats} disabled={!currentFile}>
-              <BarChart3 size={22} aria-hidden="true" /><span><strong>材料与统计</strong><small>准备材料，核对数量</small></span><ArrowRight size={18} aria-hidden="true" />
+              <ThemeIcon name="statistics" size={22} fallback={BarChart3} /><span><strong>材料与统计</strong><small className="muted">准备材料，核对数量</small></span><ArrowRight size={18} aria-hidden="true" />
             </Button>
             <Button variant="ghost" aria-label="打开三维预览" onClick={handleRender} disabled={!currentFile}>
-              <Box size={22} aria-hidden="true" /><span><strong>三维预览</strong><small>查看投影的三维结构</small></span><ArrowRight size={18} aria-hidden="true" />
+              <ThemeIcon name="render" size={22} fallback={Box} /><span><strong>三维预览</strong><small className="muted">查看投影的三维结构</small></span><ArrowRight size={18} aria-hidden="true" />
             </Button>
           </div>
         </section>

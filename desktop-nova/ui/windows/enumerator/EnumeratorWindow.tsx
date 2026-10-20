@@ -20,8 +20,13 @@ import {
   type EnumeratorValueType,
 } from "../../../src/services/enumeratorService";
 import { BlockIcon } from "../../components/BlockIcon";
+import { Dropdown } from "../../components/Dropdown";
 import { VirtualSpacerCell } from "../../components/VirtualSpacerCell";
 import { useVirtualWindow } from "../../components/useVirtualWindow";
+import { Checkbox } from "../../components/ui/checkbox";
+import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import {
   applyThemeStylesheet,
   currentThemeId,
@@ -32,6 +37,15 @@ import {
 const enumeratorOpenFileEvent = "enumerator-open-file";
 
 type CategoryFilter = "all" | "base" | "version" | "system_enum" | "creative" | "map" | "custom";
+const CATEGORY_FILTER_OPTIONS: { label: string; value: CategoryFilter }[] = [
+  { label: "所有分类", value: "all" },
+  { label: "全集", value: "base" },
+  { label: "版本", value: "version" },
+  { label: "创造模式", value: "creative" },
+  { label: "系统枚举", value: "system_enum" },
+  { label: "地图色", value: "map" },
+  { label: "自定义", value: "custom" },
+];
 type CopyToast = {
   id: number;
   value: string;
@@ -345,18 +359,21 @@ function EnumeratorContent({
 
   const leftValueTableRef = useRef<HTMLDivElement | null>(null);
   const rightValueTableRef = useRef<HTMLDivElement | null>(null);
+  // The rendered value row is a 32px icon plus 6px vertical padding plus the collapsed
+  // border (see subwindow.css `.material-list-table th, .material-list-table td`), so the
+  // spacer must reserve 45px per row rather than the old round 40px.
   const {
     visibleItems: visibleLeftRows,
     startIndex: leftStartIndex,
     topSpacerHeight: leftTopSpacerHeight,
     bottomSpacerHeight: leftBottomSpacerHeight,
-  } = useVirtualWindow(filteredLeftRows, leftValueTableRef, 40, 10);
+  } = useVirtualWindow(filteredLeftRows, leftValueTableRef, 45, 10);
   const {
     visibleItems: visibleRightRows,
     startIndex: rightStartIndex,
     topSpacerHeight: rightTopSpacerHeight,
     bottomSpacerHeight: rightBottomSpacerHeight,
-  } = useVirtualWindow(filteredRightRows, rightValueTableRef, 40, 10);
+  } = useVirtualWindow(filteredRightRows, rightValueTableRef, 45, 10);
 
   const handleCreateCollection = () => {
     hydrateRightEditor(null);
@@ -456,27 +473,25 @@ function EnumeratorContent({
     <div className={contentClassName}>
       <div className="subwindow-title-bar">
         <h3 className="subwindow-title">枚举器</h3>
-        {onClose ? <button className="btn subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</button> : null}
+        {onClose ? <Button className="subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</Button> : null}
       </div>
 
       <div className="subwindow-body enumerator-body">
         <aside className="enumerator-collections-panel">
           <div className="enumerator-toolbar-row">
-            <input
-              className="input enumerator-search-input"
+            <Input
+              className="enumerator-search-input"
               placeholder="搜索集合"
               value={searchKeyword}
               onChange={(event) => setSearchKeyword(event.target.value)}
             />
-            <select className="input enumerator-filter-select" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value as CategoryFilter)}>
-              <option value="all">所有分类</option>
-              <option value="base">全集</option>
-              <option value="version">版本</option>
-              <option value="creative">创造模式</option>
-              <option value="system_enum">系统枚举</option>
-              <option value="map">地图色</option>
-              <option value="custom">自定义</option>
-            </select>
+            <Dropdown
+              className="enumerator-filter-select"
+              value={categoryFilter}
+              ariaLabel="分类筛选"
+              onChange={(next) => setCategoryFilter(next as CategoryFilter)}
+              options={CATEGORY_FILTER_OPTIONS}
+            />
           </div>
 
           <div className="enumerator-panel-note">
@@ -484,18 +499,18 @@ function EnumeratorContent({
           </div>
 
           <div className="enumerator-collection-table-wrap">
-            <table className="material-list-table enumerator-table">
-              <thead>
-                <tr>
-                  <th>名称</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table className="material-list-table enumerator-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>名称</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {filteredCollections.map((collection) => {
                   const isSource = sourceCollectionId === collection.id;
                   const isEditing = editCollectionId === collection.id;
                   return (
-                    <tr
+                    <TableRow
                       key={collection.id}
                       className={isSource || isEditing ? "enumerator-row-selected" : ""}
                       onClick={() => handlePickSourceCollection(collection)}
@@ -504,7 +519,7 @@ function EnumeratorContent({
                         handleLoadRightCollection(collection);
                       }}
                     >
-                      <td>
+                      <TableCell>
                         <div className="enumerator-collection-name">{collection.name}</div>
                         <div className="enumerator-collection-meta">
                           <span>{collectionSummary(collection)}</span>
@@ -512,17 +527,17 @@ function EnumeratorContent({
                           {isEditing ? <span>右侧</span> : null}
                           {collection.missing ? <span className="enumerator-warning-text">缺失</span> : null}
                         </div>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
                 {!filteredCollections.length ? (
-                  <tr>
-                    <td className="enumerator-empty-cell">当前分类暂无集合</td>
-                  </tr>
+                  <TableRow>
+                    <TableCell className="enumerator-empty-cell">当前分类暂无集合</TableCell>
+                  </TableRow>
                 ) : null}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
         </aside>
 
@@ -531,8 +546,8 @@ function EnumeratorContent({
             <section className="enumerator-source-column">
               <div className="enumerator-input-row">
                 <label className="enumerator-input-label">来源集合</label>
-                <input
-                  className="input enumerator-expression-input"
+                <Input
+                  className="enumerator-expression-input"
                   value={sourceExpression}
                   onChange={(event) => {
                     setSourceCollectionId("");
@@ -543,14 +558,14 @@ function EnumeratorContent({
               </div>
 
               <label className="subwindow-check-row enumerator-subtract-toggle">
-                <input type="checkbox" checked={subtractRight} onChange={(event) => setSubtractRight(event.target.checked)} />
+                <Checkbox checked={subtractRight} onCheckedChange={(checked) => setSubtractRight(checked === true)} />
                 减去右侧
               </label>
 
               <div className="enumerator-input-row enumerator-content-search-row">
                 <label className="enumerator-input-label">搜索内容</label>
-                <input
-                  className="input enumerator-content-search-input"
+                <Input
+                  className="enumerator-content-search-input"
                   value={leftSearchKeyword}
                   onChange={(event) => setLeftSearchKeyword(event.target.value)}
                   placeholder="按名称或 ID 搜索左侧内容"
@@ -558,27 +573,27 @@ function EnumeratorContent({
               </div>
 
               <div className="enumerator-value-table-wrap" ref={leftValueTableRef}>
-                <table className="material-list-table enumerator-table">
-                  <thead>
-                    <tr>
-                      <th className="material-list-icon-col">图标</th>
-                      <th>名称</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <Table className="material-list-table enumerator-table">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="material-list-icon-col">图标</TableHead>
+                      <TableHead>名称</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {!filteredLeftRows.length ? (
-                      <tr>
-                        <td colSpan={2} className="enumerator-empty-cell">无来源数据</td>
-                      </tr>
+                      <TableRow>
+                        <TableCell colSpan={2} className="enumerator-empty-cell">无来源数据</TableCell>
+                      </TableRow>
                     ) : (
                       <>
                         {leftTopSpacerHeight > 0 ? (
-                          <tr className="material-list-virtual-spacer" aria-hidden>
+                          <TableRow className="material-list-virtual-spacer" aria-hidden>
                             <VirtualSpacerCell colSpan={2} height={leftTopSpacerHeight} />
-                          </tr>
+                          </TableRow>
                         ) : null}
                         {visibleLeftRows.map((row, index) => (
-                          <tr
+                          <TableRow
                             key={row.id}
                             className={(leftStartIndex + index) % 2 === 0 ? "material-list-row-even" : "material-list-row-odd"}
                             onClick={(event) => handleCopyValue(row.id, event)}
@@ -587,27 +602,27 @@ function EnumeratorContent({
                               handleAddValueToRight(row.id);
                             }}
                           >
-                            <td className="material-list-icon-cell"><BlockIcon blockId={row.iconHint} lookupMode={row.iconLookupMode} /></td>
-                            <td>{row.name}</td>
-                          </tr>
+                            <TableCell className="material-list-icon-cell"><BlockIcon blockId={row.iconHint} lookupMode={row.iconLookupMode} /></TableCell>
+                            <TableCell>{row.name}</TableCell>
+                          </TableRow>
                         ))}
                         {leftBottomSpacerHeight > 0 ? (
-                          <tr className="material-list-virtual-spacer" aria-hidden>
+                          <TableRow className="material-list-virtual-spacer" aria-hidden>
                             <VirtualSpacerCell colSpan={2} height={leftBottomSpacerHeight} />
-                          </tr>
+                          </TableRow>
                         ) : null}
                       </>
                     )}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
             </section>
 
             <section className="enumerator-edit-column">
               <div className="enumerator-input-row">
                 <label className="enumerator-input-label">编辑集合名称</label>
-                <input
-                  className="input enumerator-name-input"
+                <Input
+                  className="enumerator-name-input"
                   value={editName}
                   onChange={(event) => setEditName(event.target.value)}
                   placeholder="右键集合载入右侧，或新建集合"
@@ -615,14 +630,14 @@ function EnumeratorContent({
               </div>
 
               <div className="enumerator-actions-row">
-                <button className="btn" type="button" onClick={() => handleMoveSelected(-1)} disabled={!rightSelected.length}>上移</button>
-                <button className="btn" type="button" onClick={() => handleMoveSelected(1)} disabled={!rightSelected.length}>下移</button>
+                <Button type="button" onClick={() => handleMoveSelected(-1)} disabled={!rightSelected.length}>上移</Button>
+                <Button type="button" onClick={() => handleMoveSelected(1)} disabled={!rightSelected.length}>下移</Button>
               </div>
 
               <div className="enumerator-input-row enumerator-content-search-row">
                 <label className="enumerator-input-label">搜索内容</label>
-                <input
-                  className="input enumerator-content-search-input"
+                <Input
+                  className="enumerator-content-search-input"
                   value={rightSearchKeyword}
                   onChange={(event) => setRightSearchKeyword(event.target.value)}
                   placeholder="按名称或 ID 搜索右侧内容"
@@ -630,24 +645,24 @@ function EnumeratorContent({
               </div>
 
               <div className="enumerator-value-table-wrap" ref={rightValueTableRef}>
-                <table className="material-list-table enumerator-table">
-                  <thead>
-                    <tr>
-                      <th className="material-list-icon-col">图标</th>
-                      <th>名称</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <Table className="material-list-table enumerator-table">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="material-list-icon-col">图标</TableHead>
+                      <TableHead>名称</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {!filteredRightRows.length ? (
-                      <tr>
-                        <td colSpan={2} className="enumerator-empty-cell">当前右侧集合为空</td>
-                      </tr>
+                      <TableRow>
+                        <TableCell colSpan={2} className="enumerator-empty-cell">当前右侧集合为空</TableCell>
+                      </TableRow>
                     ) : (
                       <>
                         {rightTopSpacerHeight > 0 ? (
-                          <tr className="material-list-virtual-spacer" aria-hidden>
+                          <TableRow className="material-list-virtual-spacer" aria-hidden>
                             <VirtualSpacerCell colSpan={2} height={rightTopSpacerHeight} />
-                          </tr>
+                          </TableRow>
                         ) : null}
                         {visibleRightRows.map((row, index) => {
                           const active = rightSelected.includes(row.id);
@@ -656,7 +671,7 @@ function EnumeratorContent({
                             active ? "enumerator-row-selected" : "",
                           ].filter(Boolean).join(" ");
                           return (
-                            <tr
+                            <TableRow
                               key={row.id}
                               className={rowClassName}
                               onClick={(event) => {
@@ -668,20 +683,20 @@ function EnumeratorContent({
                                 handleRemoveValueFromRight(row.id);
                               }}
                             >
-                              <td className="material-list-icon-cell"><BlockIcon blockId={row.iconHint} lookupMode={row.iconLookupMode} /></td>
-                              <td>{row.name}</td>
-                            </tr>
+                              <TableCell className="material-list-icon-cell"><BlockIcon blockId={row.iconHint} lookupMode={row.iconLookupMode} /></TableCell>
+                              <TableCell>{row.name}</TableCell>
+                            </TableRow>
                           );
                         })}
                         {rightBottomSpacerHeight > 0 ? (
-                          <tr className="material-list-virtual-spacer" aria-hidden>
+                          <TableRow className="material-list-virtual-spacer" aria-hidden>
                             <VirtualSpacerCell colSpan={2} height={rightBottomSpacerHeight} />
-                          </tr>
+                          </TableRow>
                         ) : null}
                       </>
                     )}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
             </section>
           </div>
@@ -701,9 +716,9 @@ function EnumeratorContent({
           </div>
         </div>
         <div className="enumerator-footer-actions">
-          <button className="btn" type="button" onClick={handleCreateCollection}>新增集合</button>
-          <button className="btn" type="button" onClick={() => persistCollection(true)} disabled={isSaving || !rightValues.length}>保存副本</button>
-          <button className="btn" type="button" onClick={() => persistCollection(false)} disabled={isSaving || !rightValues.length}>保存集合</button>
+          <Button type="button" onClick={handleCreateCollection}>新增集合</Button>
+          <Button type="button" onClick={() => persistCollection(true)} disabled={isSaving || !rightValues.length}>保存副本</Button>
+          <Button type="button" onClick={() => persistCollection(false)} disabled={isSaving || !rightValues.length}>保存集合</Button>
         </div>
       </div>
       {copyToast ? (

@@ -73,7 +73,7 @@ function InputEntryRow({ entry, onChange, onRemove }: {
       <div className="replace-entry-top">
         <BlockIcon blockId={entry.name} lookupMode="block_first" />
 
-        <Button className="btn replace-entry-remove-btn" onClick={onRemove}>×</Button>
+        <Button className="replace-entry-remove-btn" onClick={onRemove}>×</Button>
       </div>
       <PropertySelector
         blockId={entry.name}
@@ -104,7 +104,7 @@ function OutputEntryRow({ entry, onChange, onRemove }: {
           value={entry.weight}
           onChange={(e) => onChange({ ...entry, weight: Math.max(0, parseInt(e.target.value) || 0) })}
         />
-        <Button className="btn replace-entry-remove-btn" onClick={onRemove}>×</Button>
+        <Button className="replace-entry-remove-btn" onClick={onRemove}>×</Button>
       </div>
       <PropertySelector
         blockId={entry.name}
@@ -130,9 +130,9 @@ function SerialSeparatorBar({ index, total, onRemove, onMoveUp, onMoveDown }: {
       <div className="replace-separator-line" />
       <span className="replace-separator-label">下一步替换</span>
       <div className="replace-separator-actions">
-        <Button className="btn btn-xs" disabled={index === 0} onClick={onMoveUp} title="上移">↑</Button>
-        <Button className="btn btn-xs" disabled={index === total - 1} onClick={onMoveDown} title="下移">↓</Button>
-        <Button className="btn btn-xs" onClick={onRemove} title="删除分隔符">删除</Button>
+        <Button disabled={index === 0} onClick={onMoveUp} title="上移">↑</Button>
+        <Button disabled={index === total - 1} onClick={onMoveDown} title="下移">↓</Button>
+        <Button onClick={onRemove} title="删除分隔符">删除</Button>
       </div>
       <div className="replace-separator-line" />
     </div>
@@ -196,10 +196,10 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
 
   const AddEntryButtons = ({ side }: { side: 'input' | 'output' }) => (
     <div className="replace-add-buttons">
-      <Button className="btn btn-sm" onClick={() => setPicker({ side, type: 'inventory' })}>
+      <Button onClick={() => setPicker({ side, type: 'inventory' })}>
         + 创造模式物品栏
       </Button>
-      <Button className="btn btn-sm" onClick={() => setPicker({ side, type: 'enumerator' })}>
+      <Button onClick={() => setPicker({ side, type: 'enumerator' })}>
         + 枚举器
       </Button>
     </div>
@@ -209,7 +209,7 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
     <>
       <div className="card replace-unit-card">
         <div className={`replace-unit-header${collapsed ? ' collapsed' : ''}`}>
-          <Button className="btn btn-xs" onClick={() => setCollapsed(!collapsed)}>
+          <Button onClick={() => setCollapsed(!collapsed)}>
             {collapsed ? '▶' : '▼'}
           </Button>
           <Input
@@ -223,10 +223,10 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
             <span className="replace-unit-hit-count">命中 {scanSummary.hit_count} 个方块</span>
           )}
           <div className="replace-unit-spacer" />
-          <Button className="btn btn-xs" disabled={index === 0} onClick={onMoveUp}>↑</Button>
-          <Button className="btn btn-xs" disabled={index === total - 1} onClick={onMoveDown}>↓</Button>
-          <Button className="btn btn-xs" onClick={onDuplicate}>复制规则</Button>
-          <Button className="btn btn-xs" onClick={onRemove}>删除规则</Button>
+          <Button disabled={index === 0} onClick={onMoveUp}>↑</Button>
+          <Button disabled={index === total - 1} onClick={onMoveDown}>↓</Button>
+          <Button onClick={onDuplicate}>复制规则</Button>
+          <Button onClick={onRemove}>删除规则</Button>
         </div>
 
         {!collapsed && (
@@ -389,12 +389,12 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
       <Dropdown value={selectedPreset} options={[{label:"选择方案",value:""}, ...presets.map(name => ({label:name,value:name}))]} onChange={name => void presetAction("load",name)} ariaLabel="替换方案" />
       <Input aria-label="方案名称" placeholder="方案名称" value={presetName} onChange={event => setPresetName(event.target.value)} />
       <Button variant="secondary" disabled={!presetName.trim() || !unitItems.length} onClick={() => void presetAction("save",presetName)}>保存方案</Button>
-      <Button variant="ghost" disabled={!selectedPreset} onClick={() => setDeleteConfirm(true)}>删除方案</Button>
-      <Button variant="ghost" onClick={() => openReplacePresetFolder().catch(error => setError(`打开方案文件夹失败：${error}`))}>打开方案文件夹</Button>
+      <Button variant="destructive" disabled={!selectedPreset} onClick={() => setDeleteConfirm(true)}>删除方案</Button>
+      <Button variant="outline" onClick={() => openReplacePresetFolder().catch(error => setError(`打开方案文件夹失败：${error}`))}>打开方案文件夹</Button>
     </fieldset>
-    {error && <pre className="replace-error" role="alert">{displayPathText(error)}</pre>}
+    {error && <pre className="replace-error nova-text-danger" role="alert">{displayPathText(error)}</pre>}
     <ScrollArea className="replace-scroll-area" aria-label="替换规则">
-      <fieldset className="replace-rules" disabled={!!busy}>
+      <fieldset className="replace-rules nova-box-plain" disabled={!!busy}>
         <legend className="replace-legend">替换组规则</legend>
         {!items.length && <p className="replace-empty">尚未添加替换规则。</p>}
         {items.map((item,index) => isSeparatorItem(item)
@@ -404,12 +404,12 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
               onDuplicate={() => changeItems([...items,JSON.parse(JSON.stringify(item))])}
               onMoveUp={() => moveItem(index,-1)} onMoveDown={() => moveItem(index,1)} currentBlocks={currentBlocks} />)}
       </fieldset>
-      {log && <div className="replace-result" role="status"><details open><summary>替换操作结果</summary><pre>{displayPathText(log)}</pre></details></div>}
+      {log && <div className="replace-result nova-panel-subtle" role="status"><details open><summary>替换操作结果</summary><pre className="nova-code">{displayPathText(log)}</pre></details></div>}
     </ScrollArea>
     <div className="replace-toolbar">
       <Button variant="secondary" disabled={!!busy} onClick={() => changeItems([...items,{input:[],output:[]}])}>添加替换规则</Button>
       <Button variant="secondary" disabled={!!busy || !items.length} onClick={() => changeItems([...items,{_kind:"separator"}])}>添加下一步替换</Button>
-      <Button variant="ghost" disabled={!!busy || !items.length} onClick={() => changeItems([])}>清空规则</Button>
+      <Button variant="destructive" disabled={!!busy || !items.length} onClick={() => changeItems([])}>清空规则</Button>
       <span className="muted">{unitItems.length} 个替换规则</span>
       <Button disabled={!!busy || !unitItems.length || !currentFile} onClick={handleDryRun}>{busy === "preview" ? "正在检查影响…" : "预览替换影响"}</Button>
     </div>
@@ -425,10 +425,10 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
         {!!unit.warnings.length && <p>{unit.warnings.join("；")}</p>}{!!unit.invalid_entries.length && <p role="alert">{unit.invalid_entries.join("；")}</p>}
       </section>)}
       {!!preview.summary.warnings.length && <p role="alert">{preview.summary.warnings.join("；")}</p>}
-      <details><summary>详细检查结果</summary><pre>{JSON.stringify(preview.summary,null,2)}</pre></details></div>
+      <details><summary>详细检查结果</summary><pre className="nova-code">{JSON.stringify(preview.summary,null,2)}</pre></details></div>
       <label className="replace-output">新文件保存位置<Input value={displayFilePath(outPath)} readOnly /></label>
       <Button variant="secondary" disabled={!!busy} onClick={handleChooseOutput}>更改保存位置…</Button>
-      {error && <pre className="replace-error" role="alert">{displayPathText(error)}</pre>}
+      {error && <pre className="replace-error nova-text-danger" role="alert">{displayPathText(error)}</pre>}
     </Dialog>}
   </section>;
 }

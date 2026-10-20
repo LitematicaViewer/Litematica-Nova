@@ -3,6 +3,10 @@
    ============================================================================ */
 
 /* Replace page container */
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.shared {
 .replace-page {
     display: flex;
     height: 100%;
@@ -18,7 +22,7 @@
     align-items: center;
     gap: 6px;
     padding: 8px 10px;
-    border-bottom: 1px solid var(--ln-border-color, ThreeDShadow);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 
@@ -33,7 +37,7 @@
     align-items: center;
     gap: 6px;
     padding: 6px 10px;
-    border-bottom: 1px solid var(--ln-border-color, ThreeDShadow);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 
@@ -48,7 +52,7 @@
 .replace-content-empty {
     opacity: 0.45;
     font-style: italic;
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     padding-top: 20px;
     text-align: center;
 }
@@ -65,7 +69,7 @@
     align-items: center;
     gap: 6px;
     padding: 6px 10px;
-    border-bottom: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color, ThreeDShadow);
+    border-bottom: var(--ln-card-border-width, 1px) solid var(--border);
 }
 
 .replace-unit-header.collapsed {
@@ -74,12 +78,12 @@
 
 .replace-unit-title {
     font-weight: 600;
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-unit-label-input {
     font-weight: 600;
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     background: transparent;
     border: 1px solid transparent;
     border-radius: 3px;
@@ -92,15 +96,15 @@
 }
 
 .replace-unit-label-input:hover {
-    border-color: var(--ln-card-border-color, ThreeDShadow);
+    border-color: var(--border);
 }
 
 .replace-unit-label-input:focus {
-    border-color: var(--ln-primary, var(--primary));
+    border-color: var(--primary);
 }
 
 .replace-unit-hit-count {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.7;
     margin-left: 4px;
 }
@@ -122,7 +126,7 @@
 }
 
 .replace-unit-side-title {
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     font-weight: 600;
     margin-bottom: 6px;
     opacity: 0.8;
@@ -137,7 +141,7 @@
 }
 
 .replace-entry-empty {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.4;
     font-style: italic;
     margin-bottom: 4px;
@@ -151,11 +155,11 @@
 
 /* Entry row */
 .replace-entry-row {
-    border: var(--ln-card-border-width, 1px) solid var(--ln-card-border-color, ThreeDShadow);
+    border: var(--ln-card-border-width, 1px) solid var(--border);
     border-radius: 4px;
     padding: 6px 8px;
     margin-bottom: 4px;
-    background: var(--ln-ui-background-color, Canvas);
+    background: var(--background);
 }
 
 .replace-entry-top {
@@ -166,23 +170,23 @@
 
 .replace-entry-name-input {
     flex: 1;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-entry-weight-label {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.7;
     white-space: nowrap;
 }
 
 .replace-entry-weight-input {
     width: 52px;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-entry-remove-btn {
     padding: 2px 6px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
 }
 
 .replace-entry-properties {
@@ -199,13 +203,13 @@
 }
 
 .replace-property-label {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.8;
     white-space: nowrap;
 }
 
 .replace-property-no-props {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.5;
 }
 
@@ -221,15 +225,15 @@
 .replace-separator-line {
     flex: 1;
     height: 2px;
-    background: var(--ln-primary, var(--primary));
+    background: var(--primary);
     opacity: 0.35;
     border-radius: 1px;
 }
 
 .replace-separator-label {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     white-space: nowrap;
-    color: var(--ln-primary, var(--primary));
+    color: var(--primary);
     opacity: 0.85;
     letter-spacing: 0.03em;
 }
@@ -241,9 +245,9 @@
 
 /* Scan result details */
 .replace-unit-scan-dist {
-    border-top: 1px solid var(--ln-border-color, ThreeDShadow);
+    border-top: 1px solid var(--border);
     padding: 6px 10px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.7;
 }
 
@@ -252,15 +256,15 @@
 }
 
 .replace-unit-warnings {
-    border-top: 1px solid var(--ln-border-color, ThreeDShadow);
+    border-top: 1px solid var(--border);
     padding: 6px 10px;
-    font-size: 11px;
-    color: var(--ln-warning-color, orange);
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
+    color: var(--warning);
 }
 
 /* Footer */
 .replace-footer {
-    border-top: 1px solid var(--ln-border-color, ThreeDShadow);
+    border-top: 1px solid var(--border);
     padding: 8px 10px;
     flex-shrink: 0;
 }
@@ -275,18 +279,18 @@
 .replace-log-area {
     width: 100%;
     height: 60px;
-    border: 1px solid var(--ln-border-color, ThreeDShadow);
-    background: var(--ln-surface-background-color, color-mix(in srgb, CanvasText 3%, Canvas));
-    color: var(--ln-body-text-color, CanvasText);
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--foreground);
     padding: 6px;
     font-family: inherit;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     resize: none;
 }
 
 /* Confirm dialog specific */
 .replace-confirm-summary {
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     margin-bottom: 4px;
 }
 
@@ -297,10 +301,10 @@
 .replace-confirm-details {
     max-height: 200px;
     overflow-y: auto;
-    border: 1px solid var(--ln-border-color, ThreeDShadow);
-    background: var(--ln-surface-background-color, color-mix(in srgb, CanvasText 3%, Canvas));
+    border: 1px solid var(--border);
+    background: var(--card);
     padding: 8px;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-confirm-unit {
@@ -313,7 +317,7 @@
 
 .replace-confirm-dist {
     margin-left: 16px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.7;
 }
 
@@ -322,14 +326,14 @@
 }
 
 .replace-confirm-warning {
-    color: var(--ln-warning-color, orange);
+    color: var(--warning);
     margin-top: 8px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
 }
 
 .replace-confirm-output-label {
     margin-bottom: 4px;
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-confirm-output-row {
@@ -340,7 +344,7 @@
 
 .replace-confirm-output-input {
     flex: 1;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .replace-confirm-buttons {
@@ -358,7 +362,7 @@
 }
 
 .enum-picker-label {
-    font-size: 13px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     font-weight: 600;
     display: block;
     margin-bottom: 4px;
@@ -370,23 +374,23 @@
 }
 
 .enum-picker-hint {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.6;
     margin-top: 4px;
 }
 
 .enum-picker-error {
-    color: var(--ln-error-color, crimson);
-    font-size: 12px;
+    color: var(--destructive);
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .enum-picker-warning {
-    color: var(--ln-warning-color, orange);
-    font-size: 12px;
+    color: var(--warning);
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
 }
 
 .enum-picker-preview-label {
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     opacity: 0.7;
     margin-bottom: 4px;
 }
@@ -397,7 +401,7 @@
     gap: 4px;
     max-height: 200px;
     overflow-y: auto;
-    border: 1px solid var(--ln-border-color, ThreeDShadow);
+    border: 1px solid var(--border);
     padding: 8px;
     border-radius: 4px;
 }
@@ -406,8 +410,8 @@
     display: flex;
     align-items: center;
     gap: 3px;
-    font-size: 11px;
-    background: var(--ln-surface-background-color, color-mix(in srgb, CanvasText 5%, Canvas));
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
+    background: var(--card);
     padding: 2px 5px;
     border-radius: 3px;
 }
@@ -417,14 +421,14 @@
 }
 
 .enum-picker-preview-more {
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     opacity: 0.5;
     align-self: center;
 }
 
 .enum-picker-empty {
     opacity: 0.5;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     font-style: italic;
 }
 
@@ -435,32 +439,15 @@
     margin-top: 4px;
 }
 
-/* Small button variants */
-.btn-xs {
-    padding: 1px 6px;
-    font-size: 11px;
-}
-
-.btn-sm {
-    padding: 2px 7px;
-    font-size: 11px;
-}
-
-.btn-md {
-    font-size: 12px;
-}
-
-.btn-action {
-    font-size: 13px;
-    font-weight: 600;
-}
+/* Small button sizes are now the `size` prop on ui/button.tsx; see
+   `[data-size="xs"]` in styles/controls.css. `.btn-action` was never referenced. */
 
 /* ── Diagnostic debug log ───────────────────────────────────────────────── */
 .replace-debug-log {
     margin-top: 8px;
-    border: 1px solid var(--ln-border-color, ThreeDShadow);
+    border: 1px solid var(--border);
     border-radius: 4px;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
 }
 
 .replace-debug-log-summary {
@@ -471,7 +458,7 @@
 }
 
 .replace-debug-log-warn-badge {
-    color: var(--ln-warning-color, orange);
+    color: var(--warning);
     font-weight: 600;
 }
 
@@ -479,46 +466,38 @@
     margin: 0;
     padding: 6px 10px;
     font-family: monospace;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-all;
     max-height: 260px;
     overflow-y: auto;
-    background: var(--ln-surface-background-color, color-mix(in srgb, CanvasText 4%, Canvas));
-    border-top: 1px solid var(--ln-border-color, ThreeDShadow);
+    background: var(--card);
+    border-top: 1px solid var(--border);
 }
 
-.btn-primary {
-    background-color: var(--ln-primary-button-background, var(--primary));
-    color: var(--ln-primary-button-text, white);
-    font-weight: 600;
-}
-
-.btn-primary:disabled {
-    background-color: var(--ln-disabled-background, ButtonFace);
-    color: var(--ln-disabled-text, GrayText);
-}
+/* `.btn-primary` is now `variant="default"` on ui/button.tsx; see
+   `button[data-variant="default"]` in themes/modern.css. */
 
 /* Tooltip hover */
 .replace-hover-tooltip {
     position: fixed;
-    background: var(--ln-tooltip-background, color-mix(in srgb, CanvasText 95%, Canvas));
-    border: 1px solid var(--ln-border-color, ThreeDShadow);
+    background: var(--popover);
+    border: 1px solid var(--border);
     padding: 4px 8px;
     border-radius: 4px;
-    font-size: 12px;
+    font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit);
     pointer-events: none;
     z-index: 9999;
 }
 
 .replace-hover-tooltip-name {
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--foreground);
 }
 
 .replace-hover-tooltip-id {
     opacity: 0.6;
-    font-size: 11px;
+    font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit);
 }
 
 /* No-file placeholder */
@@ -570,3 +549,4 @@
 .replace-unit-warnings { color:var(--destructive); }
 .replace-preview ul { overflow-wrap:anywhere; }
 @container (max-width:640px) { .replace-unit-body { flex-direction:column; } .replace-unit-arrow { align-self:center; transform:rotate(90deg); } }
+}

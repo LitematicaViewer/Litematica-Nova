@@ -1,6 +1,7 @@
 import { displayPathText } from "../../../../../src/business/facade";
 import React, { useEffect, useRef, useState } from "react";
 import { Box, EyeOff, Play, X, Image } from "lucide-react";
+import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { loadLibrary, setRecordPreview, renderPreviewImage, readProjectionPreviewImage } from "../../../../../src/business/facade";
 import { emitEvent } from "../../../../../src/platform/events";
 import { projectionLibraryStateChangedEvent } from "../../../libraryEvents";
@@ -66,10 +67,10 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
     {mode !== "fast" ? <>
       <div className="render-page-actions">
         <label><Checkbox checked={preload} disabled={full.pending || full.loading} onCheckedChange={checked => setPreloads(previous => ({ ...previous, [exactMode]: checked === true }))} />预加载</label>
-        <Button disabled={!currentFile || full.pending || full.loading} onClick={() => void full.start()}><Play size={16} aria-hidden="true" />{mode === "standard" ? "标准" : "完整"}渲染</Button>
-        <Button variant="ghost" disabled={!full.operation || full.pending} onClick={() => void full.hide()}><EyeOff size={16} aria-hidden="true" />隐藏</Button>
-        <Button variant="ghost" disabled={!full.operation && !full.pending && !full.preflight} onClick={() => void full.close()}><X size={16} aria-hidden="true" />关闭 / 取消</Button>
-        <Button variant="ghost" disabled={!full.ready || full.pending || capturing} onClick={() => void capture()}><Image size={16} aria-hidden="true" />{capturing ? "正在保存…" : "设为缩略图"}</Button>
+        <Button disabled={!currentFile || full.pending || full.loading} onClick={() => void full.start()}><ThemeIcon name={mode === "full" ? "build" : "run"} size={16} fallback={mode === "full" ? Box : Play} />{mode === "standard" ? "标准" : "完整"}渲染</Button>
+        <Button variant="ghost" disabled={!full.operation || full.pending} onClick={() => void full.hide()}><ThemeIcon name="hide" size={16} fallback={EyeOff} />隐藏</Button>
+        <Button variant="ghost" disabled={!full.operation && !full.pending && !full.preflight} onClick={() => void full.close()}><ThemeIcon name="close" size={16} fallback={X} />关闭 / 取消</Button>
+        <Button variant="ghost" disabled={!full.ready || full.pending || capturing} onClick={() => void capture()}><ThemeIcon name="picture_trans" size={16} fallback={Image} />{capturing ? "正在保存…" : "设为缩略图"}</Button>
       </div>
       {full.preflight && <section className="render-preview-help" role="status">
         <p>显存需求：{full.preflight.conservativeVramBytes == null ? "未知" : formatResourceBytes(full.preflight.conservativeVramBytes)}</p>
@@ -89,23 +90,23 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
         {fullProgressBounded && <progress aria-label="渲染进度" max={fullProgress.total!} value={fullProgress.completed!} />}
       </div>}
       <div className="render-preview-group"><div ref={full.hostRef} className="render-preview-host" aria-label={`${mode === "standard" ? "标准" : "完整"}预览视口`}>
-        {!full.visible && <div className="render-preview-placeholder"><Box size={40} aria-hidden="true" /><strong>{name}</strong><span>{full.error ? "预览加载失败，请重新加载。" : full.progressLabel}</span></div>}
+        {!full.visible && <div className="render-preview-placeholder"><ThemeIcon name="empty" size={40} fallback={Box} /><strong>{name}</strong><span>{full.error ? "预览加载失败，请重新加载。" : full.progressLabel}</span></div>}
       </div></div>
     </> : <>
     <div className="render-page-actions">
       <label><Checkbox checked={preload} disabled={preview.pending || loading} onCheckedChange={(checked) => setPreloads((current) => ({ ...current, fast: checked === true }))} />预加载</label>
       <Button variant="default" disabled={!currentFile || preview.pending || loading} onClick={() => void preview.start()}>
-        <Play size={16} aria-hidden="true" />{preview.pending ? "正在连接…" : loading ? "正在加载…" : ready ? "页内显示" : operation ? "重新加载" : "快速渲染"}
+        <ThemeIcon name="run" size={16} fallback={Play} />{preview.pending ? "正在连接…" : loading ? "正在加载…" : ready ? "页内显示" : operation ? "重新加载" : "快速渲染"}
       </Button>
-      <Button variant="ghost" disabled={!operation?.presentation.visible || preview.pending} onClick={() => void preview.hide()}><EyeOff size={16} aria-hidden="true" />隐藏预览</Button>
-      <Button variant="ghost" disabled={!operation || !["starting", "ready"].includes(operation.state) || preview.pending} onClick={() => void preview.close()}><X size={16} aria-hidden="true" />{loading ? "取消加载" : "关闭预览"}</Button>
-      <Button variant="ghost" disabled={!ready || capturing} onClick={() => void capture()}><Image size={16} aria-hidden="true" />{capturing ? "正在读取真实帧…" : "设为缩略图"}</Button>
+      <Button variant="ghost" disabled={!operation?.presentation.visible || preview.pending} onClick={() => void preview.hide()}><ThemeIcon name="hide" size={16} fallback={EyeOff} />隐藏预览</Button>
+      <Button variant="ghost" disabled={!operation || !["starting", "ready"].includes(operation.state) || preview.pending} onClick={() => void preview.close()}><ThemeIcon name="close" size={16} fallback={X} />{loading ? "取消加载" : "关闭预览"}</Button>
+      <Button variant="ghost" disabled={!ready || capturing} onClick={() => void capture()}><ThemeIcon name="picture_trans" size={16} fallback={Image} />{capturing ? "正在读取真实帧…" : "设为缩略图"}</Button>
     </div>
     {error && <pre className="render-error" role="alert">{displayPathText(error)}</pre>}
     {captureMessage && <div role="status">{displayPathText(captureMessage)}</div>}
     <div className="render-preview-group">
       <div ref={preview.hostRef} className="render-preview-host" aria-label="快速 Viewer 页内视口">
-        {!ready && <div className="render-preview-placeholder"><Box size={40} aria-hidden="true" /><strong>{name}</strong><span>{status}</span></div>}
+        {!ready && <div className="render-preview-placeholder"><ThemeIcon name="empty" size={40} fallback={Box} /><strong>{name}</strong><span>{status}</span></div>}
       </div>
       <div className="render-preview-help" role="status" aria-live="polite">{status}</div>
     </div>

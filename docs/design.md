@@ -819,7 +819,7 @@ $$
 首批实现不直接从 `mcmeta` 或 `client.jar` 生成全集，而是先以 **Minecraft Wiki** 作为基础全集来源。目标是先拿到可稳定落盘、可直接做集合运算的 4 个基础集合文件。
 
 统一规则：
-- 以页面表格中表头为 **`Resource location`** 的列作为提取源。
+- 以页面表格中表头为 **`Resource location`** 的列作为提取源；魔咒页（`.../Enchantments`）的表头为 **`Identifier`**，同样视为取值列。
 - 提取结果为**字符串数组**，供并集、交集、差集、去重等集合运算直接使用。
 - 同一来源页面若存在多个目标表，则按出现顺序提取后合并，再做去重。
 - 这 4 个集合均视为**基础集合**，为枚举器提供最小可用全集能力。
@@ -828,7 +828,7 @@ $$
 |------|------|------|------|
 | 方块 | `https://minecraft.wiki/w/Java_Edition_data_values/Blocks` | 提取主表 `Resource location` 列 | `DV_Blocks.json` |
 | 物品 | `https://minecraft.wiki/w/Java_Edition_data_values/Items` | 提取主表 `Resource location` 列 | `DV_Items.json` |
-| 魔咒 | `https://minecraft.wiki/w/Java_Edition_data_values` | 提取主数据值页中魔咒相关表的 `Resource location` 列 | `DV_Enchantments.json` |
+| 魔咒 | `https://minecraft.wiki/w/Java_Edition_data_values/Enchantments` | 提取魔咒页 `Identifier` 列；页面不可用时回退到主数据值页内联的魔咒表 | `DV_Enchantments.json` |
 | 实体 | `https://minecraft.wiki/w/Java_Edition_data_values/Entities` | 提取页面内多个实体表的 `Resource location` 列，合并后去重 | `DV_Entities.json` |
 
 #### 2.10.2.2 基础全集文件的生命周期约束
@@ -1062,7 +1062,7 @@ L ∩ (N ∪ Q) = ∅
 |------|------|------|------|
 | `DV_Blocks.json` | 方块基础集合 | `Java_Edition_data_values/Blocks` | JSON 字符串数组 |
 | `DV_Items.json` | 物品基础集合 | `Java_Edition_data_values/Items` | JSON 字符串数组 |
-| `DV_Enchantments.json` | 魔咒基础集合 | `Java_Edition_data_values` 主页中的魔咒表 | JSON 字符串数组 |
+| `DV_Enchantments.json` | 魔咒基础集合 | `Java_Edition_data_values/Enchantments` 的 `Identifier` 列（不可用时回退主页内联魔咒表） | JSON 字符串数组 |
 | `DV_Entities.json` | 实体基础集合 | `Java_Edition_data_values/Entities` 多表合并 | JSON 字符串数组 |
 
 约束：

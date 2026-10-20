@@ -21,6 +21,7 @@ import React, {
 } from "react";
 import {
   loadLayerPaletteVisuals, layerMapColor, isLayerAirBlock, UNKNOWN_LAYER_COLOR,
+  layerPaletteState, loadFlakeModelTopTexture, loadFlakeModelTopTextures, getBlockIconDataUrl,
   type LayerPaletteVisuals, type LayerSliceData, type LayerSliceMeta,
   readLayerMeta, readLayer, loadProjectionMarkers, loadStructureStats,
   type ProjectionMarkerPoint, removeProjectionOrigin, selectLitematicSavePath,
@@ -31,6 +32,7 @@ import "../../../../styles/flake.css";
 import { loadStructuralBlocks } from "../../../../../src/business/facade";
 import { resolveFlakeLayerBlockImage, extractLayerPaletteStates } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
+import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { Dialog } from "../../../../components/Dialog";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
 
@@ -40,7 +42,7 @@ import { CreativeInventoryDialog } from "./creativeInventoryDialog";
 import { ContainerDialog } from "./containerDialog";
 import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem, type ContainerType } from "../../../../../src/business/facade";
 import { listenEvent } from "../../../../../src/platform/events";
-import { clearFlakeStateHintImageCache } from "../../../../../src/business/facade";
+import { clearFlakeStateHintImageCache, clearFlakeModelTopTextureCache } from "../../../../../src/business/facade";
 import noteCsvText from "../../../../../note.csv?raw";
 
 // 缩放范围：scale 表示每个方块占用的像素数（像素/格）。
@@ -63,18 +65,18 @@ const NOTE_BLOCK_KEY_ROWS = [
   { id: "low", label: "低位音高", values: Array.from({ length: 6 }, (_unused, index) => String(index)) },
 ] as const;
 const EDIT_TOOL_PLACEHOLDERS = [
-  { id: "hand", icon: Hand, name: "手型", description: "拖拽和查看" },
-  { id: "debug-stick", icon: Wand2, name: "调试棒", description: "修改当前会话的方块状态草稿，不写入文件" },
-  { id: "measure", icon: Ruler, name: "测量工具", description: "测量欧几里得距离与曼哈顿距离，右键删除矩形" },
-  { id: "marker", icon: MapPin, name: "标记点工具", description: "在任意方格设定投影标记点" },
-  { id: "select", icon: BoxSelect, name: "框选工具", description: "框选区域" },
-  { id: "brush", icon: Pencil, name: "画笔", description: "绘制方块" },
-  { id: "eraser", icon: Eraser, name: "橡皮擦", description: "擦除方块" },
-  { id: "picker", icon: Pipette, name: "取色器", description: "拾取方块" },
-  { id: "rectangle", icon: Square, name: "矩形工具", description: "绘制矩形" },
-  { id: "circle", icon: Circle, name: "圆形工具", description: "绘制圆形" },
-  { id: "bucket", icon: PaintBucket, name: "填色工具", description: "填充区域" },
-  { id: "text", icon: Type, name: "文字工具", description: "仅支持 unifont 字体" },
+  { id: "hand", icon: Hand, themeIcon: "hand", name: "手型", description: "拖拽和查看" },
+  { id: "debug-stick", icon: Wand2, themeIcon: "stick", name: "调试棒", description: "修改当前会话的方块状态草稿，不写入文件" },
+  { id: "measure", icon: Ruler, themeIcon: "ruler", name: "测量工具", description: "测量欧几里得距离与曼哈顿距离，右键删除矩形" },
+  { id: "marker", icon: MapPin, themeIcon: "pin", name: "标记点工具", description: "在任意方格设定投影标记点" },
+  { id: "select", icon: BoxSelect, themeIcon: "select", name: "框选工具", description: "框选区域" },
+  { id: "brush", icon: Pencil, themeIcon: "pencil", name: "画笔", description: "绘制方块" },
+  { id: "eraser", icon: Eraser, themeIcon: "eraser", name: "橡皮擦", description: "擦除方块" },
+  { id: "picker", icon: Pipette, themeIcon: "pick", name: "取色器", description: "拾取方块" },
+  { id: "rectangle", icon: Square, themeIcon: "rectangle", name: "矩形工具", description: "绘制矩形" },
+  { id: "circle", icon: Circle, themeIcon: "circle", name: "圆形工具", description: "绘制圆形" },
+  { id: "bucket", icon: PaintBucket, themeIcon: "fill", name: "填色工具", description: "填充区域" },
+  { id: "text", icon: Type, themeIcon: "text", name: "文字工具", description: "仅支持 unifont 字体" },
 ] as const;
 
 type EditToolId = typeof EDIT_TOOL_PLACEHOLDERS[number]["id"];
@@ -181,19 +183,20 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
 const globalIconCache = new Map<string, Promise<string | null>>();
 
 function getCachedIconImage(
+  blockDatabaseVersion: string,
   minecraftDataVersion: number | null,
   blockId: string,
   paletteEntry: any,
   propertyPool: any[],
   enabled: boolean,
-  sideTextureDataUrl: string | null,
+  modelTopTexture: () => Promise<string | null>,
 ): Promise<string | null> {
   // 缓存键必须基于解析后的真实状态，而非 paletteEntry.property_id 下标。
   // property_id 只是指向当前投影 propertyPool 的索引，不同投影的 propertyPool
   // 各自独立——同一个 property_id 在投影 A 可能是 level=0，在投影 B 却是 level=3。
   // 若只用 property_id 作键，跨投影会命中错误的旧图标（如水的 level 遮罩错乱）。
   const resolvedStates = extractLayerPaletteStates(paletteEntry, propertyPool);
-  const cacheKey = `${minecraftDataVersion}::${blockId}::${JSON.stringify(Object.entries(resolvedStates).sort(([left], [right]) => left.localeCompare(right)))}::${enabled}`;
+  const cacheKey = `${blockDatabaseVersion}::${minecraftDataVersion}::${blockId}::${JSON.stringify(Object.entries(resolvedStates).sort(([left], [right]) => left.localeCompare(right)))}::${enabled}`;
 
   if (!globalIconCache.has(cacheKey)) {
     if (globalIconCache.size >= 1024) globalIconCache.delete(globalIconCache.keys().next().value!);
@@ -204,7 +207,7 @@ function getCachedIconImage(
         paletteEntry,
         propertyPool,
         enabled,
-        sideTextureDataUrl,
+        modelTopTexture,
       })
     );
   }
@@ -511,6 +514,7 @@ const LayerCanvas = forwardRef<
     const pending = listenEvent("game-resources-changed", () => {
       globalIconCache.clear();
       clearFlakeStateHintImageCache();
+      clearFlakeModelTopTextureCache();
       setVisualReload((value) => value + 1);
     }).catch(() => undefined);
     return () => { void pending.then((unlisten) => unlisten?.()); };
@@ -796,7 +800,6 @@ const LayerCanvas = forwardRef<
     return next;
   }, [paletteVisuals, meta]);
   const missingMapColors = paletteVisuals && meta ? meta.palette.filter((_entry, index) => !paletteVisuals.byPalette.get(index)?.mapColor).length : 0;
-  const missingSideTextures = paletteVisuals && meta ? meta.palette.filter((_entry, index) => !paletteVisuals.byPalette.get(index)?.sideTextureDataUrl).length : 0;
 
   const visibleLayerIndex = useMemo<VisibleLayerIndex>(() => {
     const byPosition = new Map<number, VisibleLayerBlock>();
@@ -1181,12 +1184,16 @@ const LayerCanvas = forwardRef<
 
         try {
           const dataUrl = await getCachedIconImage(
+            paletteVisuals.version,
             meta.minecraft_data_version,
             entry.block_id,
             entry,
             meta.property_pool || [],
             showStateHints,
-            paletteVisuals.byPalette.get(paletteId)?.sideTextureDataUrl || null,
+            () => loadFlakeModelTopTexture(
+              paletteVisuals.version,
+              layerPaletteState(entry, meta.property_pool || []),
+            ),
           );
           if (!dataUrl || cancelled || textureJobVersionRef.current !== jobVersion) continue;
           setIconImages((current) => {
@@ -1203,7 +1210,36 @@ const LayerCanvas = forwardRef<
       }
     };
 
-    void Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+    // Check which pending blocks have no 2D icon, then rasterise every missing
+    // model plane in one native call instead of one process per state.
+    const prefetchModelPlanes = async () => {
+      const missingStates: string[] = [];
+      const checkBatchSize = 8;
+      for (let start = 0; start < pendingPaletteIds.length; start += checkBatchSize) {
+        if (cancelled || textureJobVersionRef.current !== jobVersion) return;
+        const batch = pendingPaletteIds.slice(start, start + checkBatchSize);
+        const missing = await Promise.all(batch.map(async (paletteId) => {
+          const entry = meta.palette[paletteId];
+          if (!entry?.block_id) return null;
+          const icon = await getBlockIconDataUrl(entry.block_id, "layering").catch(() => null);
+          return icon ? null : layerPaletteState(entry, meta.property_pool || []);
+        }));
+        for (const state of missing) {
+          if (state) missingStates.push(state);
+        }
+      }
+      if (!cancelled && textureJobVersionRef.current === jobVersion && missingStates.length) {
+        // Start the batch without blocking icons that already have a 2D image;
+        // its per-state promises are registered synchronously.
+        void loadFlakeModelTopTextures(paletteVisuals.version, missingStates);
+      }
+    };
+
+    void (async () => {
+      await prefetchModelPlanes();
+      if (cancelled || textureJobVersionRef.current !== jobVersion) return;
+      await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+    })();
 
     return () => {
       cancelled = true;
@@ -1372,9 +1408,9 @@ const LayerCanvas = forwardRef<
       }}
       onContextMenu={handleContextMenu}
     >
-      {(visualError || missingMapColors > 0 || missingSideTextures > 0) && <div className="flake-visual-status" role="status" onMouseDown={event => event.stopPropagation()}>
-        <span>{visualError || `${missingMapColors ? `${missingMapColors} 种方块缺少地图色` : ""}${missingMapColors && missingSideTextures ? " · " : ""}${missingSideTextures ? `${missingSideTextures} 种方块缺少侧面贴图` : ""}`}</span>
-        {visualError && <Button className="btn" onClick={event => { event.stopPropagation(); setVisualReload(previous => previous + 1); }}>重新加载</Button>}
+      {(visualError || missingMapColors > 0) && <div className="flake-visual-status" role="status" onMouseDown={event => event.stopPropagation()}>
+        <span>{visualError || `${missingMapColors} 种方块缺少地图色`}</span>
+        {visualError && <Button onClick={event => { event.stopPropagation(); setVisualReload(previous => previous + 1); }}>重新加载</Button>}
       </div>}
       <canvas
         ref={layerTileCanvasRef}
@@ -1524,7 +1560,7 @@ function FlakeDebugStateDialog({
                           return (
                             <span key={value} className="flake-page__note-key-slot">
                               <Button
-                                className={noteLabel.sharpMarks ? "btn flake-page__note-key-button is-sharp" : "btn flake-page__note-key-button"}
+                                className={noteLabel.sharpMarks ? "flake-page__note-key-button is-sharp" : "flake-page__note-key-button"}
                                 type="button"
                                 aria-label={`${noteLabel.raw}，音高 ${value}`}
                                 aria-pressed={currentValue === value}
@@ -2080,10 +2116,10 @@ export function FlakePage({ currentFile, setRoute }: any) {
     return (
       <div className="nova-page flake-page">
         <div className="subwindow-toolbar flake-page__topbar">
-          <Button className="btn flake-page__materials-button" disabled>
+          <Button className="flake-page__materials-button" disabled>
             材料列表
           </Button>
-          <Button className="btn flake-page__build-button" disabled>
+          <Button className="flake-page__build-button" disabled>
             重新读取分层
           </Button>
           <label className="subwindow-check-row flake-page__edit-toggle">
@@ -2100,7 +2136,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   return (
     <div ref={pageRef} className={editMode ? "nova-page flake-page flake-page--edit-mode" : "nova-page flake-page"}>
       <div className="subwindow-toolbar flake-page__topbar">
-        <Button className="btn flake-page__materials-button" onClick={async () => {
+        <Button className="flake-page__materials-button" onClick={async () => {
           try {
             const loaded = await ensureStatsData();
             if (!loaded) return;
@@ -2112,7 +2148,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
         }}>
           材料列表
         </Button>
-        <Button className="btn flake-page__build-button" onClick={loadProjectionLayers} disabled={!currentFile || isLoadingLayers || isSavingEdits}>
+        <Button className="flake-page__build-button" onClick={loadProjectionLayers} disabled={!currentFile || isLoadingLayers || isSavingEdits}>
           {isLoadingLayers ? "读取中..." : "重新读取分层"}
         </Button>
         <label className="subwindow-check-row flake-page__edit-toggle">
@@ -2198,11 +2234,11 @@ export function FlakePage({ currentFile, setRoute }: any) {
         <div className="flake-page__layer-footer">
           <div className="flake-page__layer-value">Y = {layerY}</div>
           <div className="flake-page__layer-actions">
-            <Button className="btn flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 5))}>-5</Button>
-            <Button className="btn flake-page__step-button" disabled={!ready} aria-label="上一层" onClick={() => setLayerY(Math.max(0, layerY - 1))}><Minus aria-hidden="true" /></Button>
-            <Button className="btn flake-page__step-button" disabled={!ready} aria-label="下一层" onClick={() => setLayerY(Math.min(maxY, layerY + 1))}><Plus aria-hidden="true" /></Button>
-            <Button className="btn flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 5))}>+5</Button>
-            <Button className="btn" disabled={!ready} onClick={() => canvasRef.current?.resetView()}>重置视图</Button>
+            <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 5))}>-5</Button>
+            <Button className="flake-page__step-button" disabled={!ready} aria-label="上一层" onClick={() => setLayerY(Math.max(0, layerY - 1))}><Minus aria-hidden="true" /></Button>
+            <Button className="flake-page__step-button" disabled={!ready} aria-label="下一层" onClick={() => setLayerY(Math.min(maxY, layerY + 1))}><Plus aria-hidden="true" /></Button>
+            <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 5))}>+5</Button>
+            <Button disabled={!ready} onClick={() => canvasRef.current?.resetView()}>重置视图</Button>
           </div>
         </div>
       </div>
@@ -2302,7 +2338,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                     {EDIT_TOOL_PLACEHOLDERS.map((tool) => (
                       <Button
                         key={tool.id}
-                        className="btn flake-page__edit-tool-button"
+                        className="flake-page__edit-tool-button"
                         type="button"
                         onClick={() => setSelectedEditTool(tool.id)}
                         title={`${tool.name}：${tool.description}`}
@@ -2310,26 +2346,26 @@ export function FlakePage({ currentFile, setRoute }: any) {
                         disabled={!["hand", "debug-stick", "measure", "marker"].includes(tool.id)}
                         aria-pressed={effectiveEditTool === tool.id}
                       >
-                        <tool.icon className="flake-page__edit-tool-glyph" aria-hidden="true" focusable="false" />
+                        <ThemeIcon set="tool" name={tool.themeIcon} size={32} className="flake-page__edit-tool-glyph" fallback={tool.icon} />
                       </Button>
                     ))}
                   </div>
                 </div>
 
                 <div className="flake-page__tool-panel-actions">
-                  <Button className="btn" type="button" onClick={handleSaveMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
+                  <Button type="button" onClick={handleSaveMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
                     {isSavingEdits ? "保存中..." : "保存原点"}
                   </Button>
-                  <Button className="btn" type="button" onClick={handleSaveMarkerEditsAs} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
+                  <Button type="button" onClick={handleSaveMarkerEditsAs} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
                     原点另存为
                   </Button>
-                  <Button className="btn" type="button" onClick={handleRestoreMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
+                  <Button type="button" onClick={handleRestoreMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
                     还原原点草稿
                   </Button>
-                  <Button className="btn" type="button" onClick={() => setShowInventoryDialog(true)} disabled={!editMode}>
+                  <Button type="button" onClick={() => setShowInventoryDialog(true)} disabled={!editMode}>
                     打开创造模式物品栏
                   </Button>
-                  <Button className="btn" type="button" onClick={() => setRoute?.("render")}>
+                  <Button type="button" onClick={() => setRoute?.("render")}>
                     打开渲染页
                   </Button>
                 </div>
@@ -2359,7 +2395,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
               );
             })}
           </div>
-          <Button className="btn flake-page__quickbar-open-inventory" type="button" onClick={() => setShowInventoryDialog(true)}>
+          <Button className="flake-page__quickbar-open-inventory" type="button" onClick={() => setShowInventoryDialog(true)}>
             <span className="flake-page__quickbar-open-inventory-text">打开物品栏</span>
           </Button>
         </div>

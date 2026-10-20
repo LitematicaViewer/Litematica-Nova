@@ -1,8 +1,13 @@
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.shared {
 .update-version { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; }
 .update-version dd { margin: 0; overflow-wrap: anywhere; }
 .update-download { display: grid; gap: 8px; }
-.update-download progress { width: 100%; accent-color: var(--ln-option-active-color, Highlight); }
+.update-download progress { width: 100%; accent-color: var(--option-active-color); }
 .update-notes { margin-block: 16px; }
 .update-notes h4 { margin-block: 0 8px; }
 .update-notes ul { margin: 0; padding-left: 1.5em; overflow-wrap: anywhere; }
 .sidebar-collapsed .updater-check .nav-label { display: none; }
+}

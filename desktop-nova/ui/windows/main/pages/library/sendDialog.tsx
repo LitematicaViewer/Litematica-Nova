@@ -68,8 +68,8 @@ export function SendProjectionDialog({
       onClose={onClose}
       footer={(
         <>
-          <Button className="btn" type="button" onClick={onClose} disabled={isSending}>取消</Button>
-          <Button className="btn" type="button" onClick={onSubmit} aria-busy={isSending} disabled={isSending || !targetDirectory || !normalizedFileName || folders.length === 0}>
+          <Button type="button" onClick={onClose} disabled={isSending}>取消</Button>
+          <Button type="button" onClick={onSubmit} aria-busy={isSending} disabled={isSending || !targetDirectory || !normalizedFileName || folders.length === 0}>
             {isSending ? "正在复制…" : "复制"}
           </Button>
         </>

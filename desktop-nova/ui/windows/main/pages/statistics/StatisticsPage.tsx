@@ -3,6 +3,7 @@ import { Checkbox } from "../../../../components/ui/checkbox";
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from "../../../../components/ui/table";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
+import { Textarea } from "../../../../components/ui/textarea";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import { Dialog } from "../../../../components/Dialog";
 import { X } from "lucide-react";
@@ -40,7 +41,7 @@ import {
   normalizeMaterialListWindowBehavior,
   openMaterialListWindow,
 } from "../../../../../src/business/facade";
-import { VirtualSpacerCell } from "../../../../components/VirtualSpacerCell";
+import { VirtualSpacerCell, VirtualSpacerItem } from "../../../../components/VirtualSpacerCell";
 import { useVirtualWindow } from "../../../../components/useVirtualWindow";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { Dropdown } from "../../../../components/Dropdown";
@@ -335,7 +336,7 @@ function EnumeratorInfoEditorDialog({
     <div className="statistics-enumerator-editor-columns">
       <div className="statistics-enumerator-editor-column">
         <label className="statistics-enumerator-editor-heading" htmlFor="statistics-rules">统计规则（一行一项）</label>
-        <textarea id="statistics-rules" className="input statistics-enumerator-editor-textarea" value={draft} onChange={event => setDraft(event.target.value)} spellCheck={false} disabled={isSaving} />
+        <Textarea id="statistics-rules" className="statistics-enumerator-editor-textarea" value={draft} onChange={event => setDraft(event.target.value)} spellCheck={false} disabled={isSaving} />
         <div className="statistics-enumerator-editor-hint">标题 = 函数(集合表达式)。函数：version、any、ratio。集合运算：|、&amp;、-；L 表示当前结构方块集合。</div>
       </div>
       <div className="statistics-enumerator-editor-column"><h3 className="statistics-enumerator-editor-heading">实时预览</h3>
@@ -375,23 +376,29 @@ const MaterialTable = React.memo(function MaterialTable({ materials, asItems, mu
   onHover?: (material: MaterialItem | null) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const virtual = useVirtualWindow(materials,scrollRef,48,8);
+  // Must be the height the browser actually lays out (see materials.css): detail rows are a
+  // 32px icon plus 9px vertical padding plus the collapsed border; summary rows are pinned to
+  // 48px. A round number here would make the spacer disagree with the rendered rows.
+  const virtual = useVirtualWindow(materials,scrollRef,breakdown ? 51 : 48,8);
   useLayoutEffect(() => { if(scrollRef.current) scrollRef.current.scrollTop = 0; },[materials]);
+  // Zebra striping is keyed on the row's position in the *data*, never on its DOM slot: the
+  // virtual window slides, so a `:nth-child` stripe would invert on every scrolled row.
+  const rowParityClass = (absoluteIndex: number) => (absoluteIndex % 2 === 1 ? "material-list-row-odd" : "material-list-row-even");
   if (!breakdown) return <div className="material-table-scroll material-summary-scroll" ref={scrollRef}><ul className="material-summary-list" aria-label="材料列表">
-    {virtual.topSpacerHeight > 0 && <li className="material-virtual-spacer" aria-hidden style={{height:virtual.topSpacerHeight}} /> }
-    {virtual.visibleItems.map(material => <li key={material.id} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
+    {virtual.topSpacerHeight > 0 && <VirtualSpacerItem className="material-virtual-spacer" height={virtual.topSpacerHeight} /> }
+    {virtual.visibleItems.map((material, index) => <li key={material.id} className={rowParityClass(virtual.startIndex + index)} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
       <BlockIcon blockId={material.iconHint} />
       <span className="material-summary-name" title={material.id}>{material.name}
         {material.materialStatus !== "item" && <small>{material.materialStatus === "no_item" ? "无直接对应物品" : "未知物品"}</small>}
       </span>
       <span className="material-summary-quantity">{formatMaterialQuantity(material, material.totalCount * multiplier, asItems)}</span>
     </li>)}
-    {virtual.bottomSpacerHeight > 0 && <li className="material-virtual-spacer" aria-hidden style={{height:virtual.bottomSpacerHeight}} /> }
+    {virtual.bottomSpacerHeight > 0 && <VirtualSpacerItem className="material-virtual-spacer" height={virtual.bottomSpacerHeight} /> }
     {materials.length === 0 && <li className="material-summary-empty">没有符合条件的材料</li>}
   </ul></div>;
   return <div className="material-table-scroll material-detail-table-scroll" ref={scrollRef}><Table className="material-list-table beta-material-table">
     <TableHeader><TableRow><TableHead scope="col">材料</TableHead>{breakdown && <><TableHead scope="col">建造用量</TableHead><TableHead scope="col">容器物品</TableHead></>}<TableHead scope="col">{breakdown ? "合计" : "数量"}</TableHead></TableRow></TableHeader>
-    <TableBody>{virtual.topSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={4} height={virtual.topSpacerHeight} /></TableRow>}{virtual.visibleItems.map(material => <TableRow key={material.id} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
+    <TableBody>{virtual.topSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={4} height={virtual.topSpacerHeight} /></TableRow>}{virtual.visibleItems.map((material, index) => <TableRow key={material.id} className={rowParityClass(virtual.startIndex + index)} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
       <TableCell><div className="beta-material-name"><BlockIcon blockId={material.iconHint} /><span title={material.id}>{material.name}{material.materialStatus !== "item" && <small>{material.materialStatus === "no_item" ? "无直接对应物品" : "未知物品"}</small>}</span></div></TableCell>
       {breakdown && <><TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.blockCount * multiplier, asItems)}</TableCell><TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.containerItemCount * multiplier, asItems)}</TableCell></>}
       <TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.totalCount * multiplier, asItems)}</TableCell>
@@ -520,7 +527,7 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
         </fieldset>
         {terminalRawMaterials && <section className="material-export-section">
           <h4>末端原料配方</h4><p className="beta-statistics-status">复用本地 26.3 配方。未确定标签、循环和特殊配方会报告；烧制燃料另计。</p>
-          <Button className="btn" title="点击后联网下载 Minecraft 客户端提取配方，下载可能较大" onClick={handlePrepareRecipes} disabled={busy}>{isPreparingRecipes ? "正在准备配方…" : "准备26.3配方（需联网）"}</Button>
+          <Button title="点击后联网下载 Minecraft 客户端提取配方，下载可能较大" onClick={handlePrepareRecipes} disabled={busy}>{isPreparingRecipes ? "正在准备配方…" : "准备26.3配方（需联网）"}</Button>
           {recipeStatus && <p role="status">{recipeStatus}</p>}
         </section>}
         {exportFormat === "html" && <fieldset className="material-export-section" disabled={busy}>
@@ -549,7 +556,7 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
       </ScrollArea>
       <div className="material-export-footer">
         <Button variant="secondary" disabled={busy} onClick={() => { const mode = contentMode === "details" ? "export" : "details"; setContentMode(mode); onViewModeChange?.(mode); setHoverItem(null); }}>{contentMode === "details" ? "打开导出设置" : "返回材料明细"}</Button>
-        {contentMode === "export" && <Button className="btn" onClick={handleExport} disabled={busy || !currentFile}>{isExporting ? "正在导出…" : "导出材料列表"}</Button>}
+        {contentMode === "export" && <Button onClick={handleExport} disabled={busy || !currentFile}>{isExporting ? "正在导出…" : "导出材料列表"}</Button>}
         {exportStatus && <span role="status">{exportStatus}</span>}
         {error && <pre className="subwindow-error" role="alert">{error}</pre>}
       </div>
@@ -670,13 +677,13 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
   const scan = data?.containerScan;
   return <React.Profiler id="statistics" onRender={recordStatisticsCommit}><div className="beta-statistics-page">
     <div className="beta-statistics-toolbar">
-      <Button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("details"); setShowMaterials(true); })} disabled={!data || isLoading}>材料明细</Button>
-      <Button className="btn" onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("export"); setShowMaterials(true); }, "export")} disabled={!data || isLoading}>导出材料列表</Button>
+      <Button onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("details"); setShowMaterials(true); })} disabled={!data || isLoading}>材料明细</Button>
+      <Button onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("export"); setShowMaterials(true); }, "export")} disabled={!data || isLoading}>导出材料列表</Button>
       {debugMode && <Button variant="secondary" disabled={!data} onClick={() => openEnumeratorWithWindowBehavior(currentFile,() => setShowEnumerator(true))}>打开枚举器</Button>}
       <label className="beta-material-check"><Checkbox  checked={includeContainerItems} onCheckedChange={checked => setIncludeContainerItems((checked === true))} />统计容器内物品</label>
       <QuantitySwitch checked={asItems} onChange={setAsItems} />
       <span className="beta-statistics-file" title={displayFilePath(currentFile)}>{currentFile.split(/[\\/]/).pop()}</span>
-      <Button className="btn" onClick={loadStats} disabled={isLoading}>{isLoading ? "正在分析…" : "重新分析"}</Button>
+      <Button onClick={loadStats} disabled={isLoading}>{isLoading ? "正在分析…" : "重新分析"}</Button>
     </div>
     {includeContainerItems && scan && <div className="beta-statistics-status" role="status">已扫描 {scan.containers_scanned} 个容器、{scan.item_stacks_scanned} 堆物品。</div>}
     {error && <pre className="subwindow-error" role="alert">{error}</pre>}

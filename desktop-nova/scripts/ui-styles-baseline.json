@@ -1,0 +1,31 @@
+{
+  "schema": "lba.ui-style-violations-baseline.v1",
+  "counts": {
+    "css-components-bare-element-selector": {
+      "ui/shell/widget/subwindow.css": 5,
+      "ui/styles/asset-manager.css": 5,
+      "ui/styles/base.css": 16,
+      "ui/styles/controls.css": 1,
+      "ui/styles/enumerator.css": 4,
+      "ui/styles/flake.css": 8,
+      "ui/styles/replace-units.css": 1,
+      "ui/styles/widgets.css": 18,
+      "ui/themes/8bitcn/theme.css": 2,
+      "ui/themes/modern.css": 30,
+      "ui/windows/main/pages/generate/generate.css": 1,
+      "ui/windows/main/pages/home/home.css": 2,
+      "ui/windows/main/pages/library/library.css": 7,
+      "ui/windows/main/pages/properties/properties.css": 3,
+      "ui/windows/main/pages/settings/settings.css": 5,
+      "ui/windows/main/pages/statistics/materials.css": 2
+    },
+    "css-hardcoded-colour": {
+      "ui/styles/flake.css": 20
+    },
+    "css-important": {
+      "ui/styles/controls.css": 2,
+      "ui/styles/enumerator.css": 6,
+      "ui/styles/widgets.css": 2
+    }
+  }
+}

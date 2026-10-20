@@ -35,8 +35,8 @@ function contrast(a, b) {
   return (values[0] + .05) / (values[1] + .05);
 }
 
-test('三主题明暗六套材料库文本与交互面板色值保持可读；不以系统媒体查询覆盖显式偏好', () => {
-  for (const theme of ['shadcn', '8bitcn', 'minecraft']) for (const mode of ['light', 'dark']) {
+test('四主题明暗八套材料库文本与交互面板色值保持可读；不以系统媒体查询覆盖显式偏好', () => {
+  for (const theme of ['shadcn', '8bitcn', 'minecraft', 'metro10']) for (const mode of ['light', 'dark']) {
     const tokens = palette(theme, mode);
     for (const [text, surface] of [['foreground', 'card'], ['muted-foreground', 'card'], ['muted-foreground', 'muted'], ['foreground', 'accent'], ['primary-foreground', 'primary']]) {
       const ratio = contrast(tokens[`--${text}`], tokens[`--${surface}`]);
@@ -53,8 +53,8 @@ test('卡片与分类不继承纹理按钮或 8bit 位移阴影，状态独立�
   assert.equal(tile.transform, 'none');
   assert.equal(tile.height, 'auto');
   assert.equal(tile.gap, '0');
-  assert.match(rule(library, '.library-tile[data-checked]').background, /var\(--ln-option-active-background/);
-  assert.match(rule(library, '.library-tile:has(.library-tile-open:focus-visible)')['outline-color'], /var\(--ln-focus-color/);
+  assert.match(rule(library, '.library-tile[data-checked]').background, /var\(--option-active-background/);
+  assert.match(rule(library, '.library-tile:has(.library-tile-open:focus-visible)')['outline-color'], /var\(--ring/);
   const category = rule(library, 'html[data-theme] .library-page [data-slot="button"].library-category');
   assert.equal(category['border-image'], 'none');
   assert.equal(category['box-shadow'], 'none');
@@ -78,8 +78,8 @@ test('Minecraft 三栏与工具栏使用当前明暗令牌；预览和滚动条�
   assert.match(rule(controls, '[data-slot="scroll-area-thumb"]:active')['background'], /var\(--ln-scroll-active\)/);
   assert.match(rule(library, '.library-tile-image img')['object-fit'], /contain/);
   assert.doesNotMatch(source('ui/windows/main/pages/library/library.css'), /filter:\s*(?:invert|grayscale|sepia)/);
-  assert.match(source('ui/themes/minecraft/widget/button.css'), /button_normal_min\.png/);
-  assert.match(source('ui/themes/minecraft/widget/text.css'), /unifont-16\.0\.04\.ttf/);
+  assert.match(source('ui/themes/minecraft/widgets.css'), /button_normal_min\.png/);
+  assert.match(source('ui/themes/minecraft/widgets.css'), /unifont-16\.0\.04\.ttf/);
 });
 
 test('三栏仍共享响应式结构，窄窗只保留外层纵向滚动；主题规则不重新固定列宽', () => {

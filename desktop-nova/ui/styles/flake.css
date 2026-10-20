@@ -1,4 +1,8 @@
 /* Flake canvas and dialogs, ported from origin/dev/flake without changing other pages. */
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.shared {
 
 
 .flake-canvas {
@@ -9,7 +13,7 @@
     overflow: hidden;
     cursor: grab;
     image-rendering: pixelated;
-    background: var(--ln-ui-control-background-color, var(--background, Canvas));
+    background: var(--background);
 }
 
 .flake-visual-status {
@@ -23,8 +27,8 @@
     max-width: calc(100% - 1rem);
     padding: var(--ln-space-2);
     font-size: .8125rem;
-    color: var(--ln-body-text-color, var(--foreground, CanvasText));
-    background: var(--ln-ui-control-background-color, var(--background, Canvas));
+    color: var(--foreground);
+    background: var(--background);
 }
 
 .flake-canvas.is-dragging {
@@ -206,7 +210,7 @@
 
 .flake-marker-menu-heading,
 .flake-marker-menu-empty {
-    color: GrayText;
+    color: var(--muted-foreground);
     font-size: 12px;
 }
 
@@ -225,12 +229,12 @@
 }
 
 .flake-marker-menu-item:hover:not(:disabled) {
-    background: Highlight;
-    color: HighlightText;
+    background: var(--primary);
+    color: var(--primary-foreground);
 }
 
 .flake-marker-menu-item:disabled {
-    color: GrayText;
+    color: var(--muted-foreground);
 }
 
 .flake-page {
@@ -259,9 +263,9 @@
     min-width: min(360px, 100%);
     max-width: min(480px, 100%);
     padding: 6px 12px;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
-    color: var(--ln-muted-text-color, GrayText);
+    border: 1px solid var(--border);
+    background: var(--background);
+    color: var(--muted-foreground);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -334,7 +338,7 @@
 }
 
 .flake-page__layer-value {
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--foreground);
     font-size: 1.1em;
     font-weight: 700;
 }
@@ -374,8 +378,8 @@
     flex: 1;
     min-height: 240px;
     overflow: hidden;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas));
+    border: 1px solid var(--border);
+    background: var(--background);
 }
 
 .flake-page__viewport-empty {
@@ -384,7 +388,7 @@
 
 .flake-page__viewport-title {
     margin-bottom: 8px;
-    color: var(--ln-body-text-color, CanvasText);
+    color: var(--foreground);
     font-size: 1.2em;
 }
 
@@ -396,8 +400,8 @@
         linear-gradient(to right,
             transparent 0,
             transparent 2px,
-            var(--ln-ui-edge-color, ThreeDShadow) 2px,
-            var(--ln-ui-edge-color, ThreeDShadow) 6px,
+            var(--border) 2px,
+            var(--border) 6px,
             transparent 6px,
             transparent 100%);
 }
@@ -474,8 +478,7 @@
     overflow: hidden;
     appearance: none;
     background: transparent var(--flake-edit-tool-normal-image) center / 44px 44px no-repeat;
-    color: var(--ln-body-text-color, CanvasText);
-    font-size: 16px;
+    color: var(--foreground);
     font-weight: 700;
     image-rendering: pixelated;
     letter-spacing: normal;
@@ -512,7 +515,7 @@
 }
 
 .flake-page__empty-state-row {
-    color: var(--ln-error-color, crimson);
+    color: var(--destructive);
     font-weight: 700;
 }
 
@@ -531,7 +534,7 @@
 
 .flake-page__note-control,
 .flake-page__note-keyboard {
-    --flake-state-note-button-size: var(--ln-minecraft-button-height, var(--ln-control-height, 28px));
+    --flake-state-note-button-size: var(--ln-minecraft-button-height, var(--control-height, 28px));
 
     display: flex;
     flex-direction: column;
@@ -580,7 +583,15 @@
     justify-content: center;
 }
 
-.flake-page.flake-page--edit-mode .flake-page__state-dialog-grid .flake-page__note-keyboard button.flake-page__note-key-button.btn {
+/* The key buttons live inside a Dialog, and Radix renders dialog content through a
+   PORTAL: it is detached from the page subtree. These rules used to be written as
+   `.flake-page.flake-page--edit-mode .flake-page__state-dialog-grid …`, which can
+   never match portaled content - so the button never got `position: relative`, and
+   `.flake-page__note-key-label { position: absolute; inset: 0 }` resolved against the
+   nearest positioned ancestor instead (the fixed overlay, or `.dialog-surface` in the
+   themes that load modern.css). Every key label ended up centred in that one box, and
+   the `is-sharp` offset below never applied. Anchor on the keyboard container only. */
+.flake-page__note-keyboard button.flake-page__note-key-button.btn {
     position: relative;
     width: var(--flake-state-note-button-size);
     min-width: var(--flake-state-note-button-size);
@@ -593,7 +604,10 @@
     white-space: nowrap;
 }
 
-.flake-page.flake-page--edit-mode .flake-page__state-dialog-grid .flake-page__note-keyboard button.flake-page__note-key-button.is-sharp {
+/* A sharp (raised) key sits half a unit higher in its slot, which is the usual
+   keyboard offset: the slot is two units tall and centres the button, so half a unit
+   puts it flush with the top. */
+.flake-page__note-keyboard button.flake-page__note-key-button.is-sharp {
     transform: translateY(calc(var(--flake-state-note-button-size) * -0.5));
 }
 
@@ -622,39 +636,6 @@
     flex-wrap: wrap;
     gap: 8px;
     margin-top: auto;
-}
-
-.flake-page__tooltip {
-    position: absolute;
-    top: var(--flake-tooltip-top, 0px);
-    left: var(--flake-tooltip-left, 0px);
-    z-index: 10;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    max-width: min(420px, calc(100% - 16px));
-    padding: 8px 12px;
-    border: 1px solid var(--ln-ui-edge-color, ThreeDShadow);
-    background: var(--surface-elevated, var(--ln-ui-control-background-color, var(--ln-ui-background-color, Canvas)));
-    box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
-    color: var(--ln-body-text-color, CanvasText);
-    pointer-events: none;
-}
-
-.flake-page__tooltip-title {
-    font-size: 1.1em;
-    font-weight: 700;
-}
-
-.flake-page__tooltip-label {
-    margin-top: 4px;
-    color: var(--ln-muted-text-color, GrayText);
-    font-size: .9em;
-}
-
-.flake-page__tooltip-id {
-    font-size: .95em;
-    word-break: break-word;
 }
 
 .flake-page__quickbar {
@@ -1043,4 +1024,5 @@
     text-shadow: 1px 1px 0 #3f3f3f;
     pointer-events: none;
     font-family: 'MinecraftFive', monospace;
+}
 }
