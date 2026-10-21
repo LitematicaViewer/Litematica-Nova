@@ -7,7 +7,7 @@ export function allowedSnapshotPath(name) {
   if (typeof name !== 'string' || name.startsWith('/') || name.includes('\\') || name.split('/').some((part) => !part || part === '.' || part === '..' || ['.git','target','node_modules'].includes(part))) return false;
   if (/\.(?:key|pem|pk8|p12|pfx|dpapi|env|exe|dll|dylib|so|pdb|o|obj|rlib|rmeta|bc|ll|log)$/i.test(name)) return false;
   return /^(?:tools\/(?:viewer-core|nova-protected-module|nova-protected-loader|nova-protection|nova-light-wire)\/|third_party\/wgpu-hal-patched\/|data\/blockdb\/)/.test(name)
-    || /^(?:pack-in\/materials\/minecraft-26\.3\.json|pack-in\/lang\/zh_cn\.json|desktop-nova\/src-tauri\/tauri\.conf\.json|desktop-nova\/scripts\/(?:build-private-protected\.ps1|protect-rustc\.py|protect-rustc-launcher\.rs|validate-private-snapshot\.mjs))$/.test(name);
+    || /^(?:pack-in\/materials\/minecraft-26\.3\.json|pack-in\/lang\/zh_cn\.json|desktop-nova\/src-tauri\/(?:tauri\.conf\.json|icons\/icon\.(?:png|ico))|desktop-nova\/scripts\/(?:build-private-protected\.ps1|protect-rustc\.py|protect-rustc-launcher\.rs|validate-private-snapshot\.mjs))$/.test(name);
 }
 export async function validateSnapshot(repo, manifestFile, target) {
   repo = fs.realpathSync(repo);

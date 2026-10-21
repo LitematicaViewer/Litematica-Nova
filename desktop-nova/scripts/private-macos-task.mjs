@@ -45,7 +45,7 @@ async function prepare() {
   const descriptor = fs.openSync(tar, 'wx', 0o600);
   try {
     const environment = { ...process.env }; delete environment.NOVA_CI_TASK_KEY;
-    const result = spawnSync('git', ['archive', '--format=tar', ctx.sourceSha, 'tools/viewer-core','tools/nova-protected-module','tools/nova-protected-loader','tools/nova-protection','tools/nova-light-wire','third_party/wgpu-hal-patched','data/blockdb','pack-in/materials/minecraft-26.3.json','pack-in/lang/zh_cn.json','desktop-nova/scripts','desktop-nova/src-tauri/tauri.conf.json'], { cwd: root, env: environment, stdio: ['ignore', descriptor, 'pipe'], windowsHide: true });
+    const result = spawnSync('git', ['archive', '--format=tar', ctx.sourceSha, 'tools/viewer-core','tools/nova-protected-module','tools/nova-protected-loader','tools/nova-protection','tools/nova-light-wire','third_party/wgpu-hal-patched','data/blockdb','pack-in/materials/minecraft-26.3.json','pack-in/lang/zh_cn.json','desktop-nova/scripts','desktop-nova/src-tauri/tauri.conf.json','desktop-nova/src-tauri/icons/icon.png','desktop-nova/src-tauri/icons/icon.ico'], { cwd: root, env: environment, stdio: ['ignore', descriptor, 'pipe'], windowsHide: true });
     if (result.error || result.status !== 0) throw new Error('Immutable source export failed.');
   } finally { fs.closeSync(descriptor); }
   const tooling = path.join(root, '.tmp/beta-ui-corrections/amice-toolchain');

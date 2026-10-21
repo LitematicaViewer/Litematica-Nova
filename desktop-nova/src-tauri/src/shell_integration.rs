@@ -97,7 +97,7 @@ mod linux {
         let cache_argument = desktop_argument(user_root)?;
         let icon = data.join("icons/hicolor/64x64/apps/com.litematica.nova.png");
         fs::create_dir_all(icon.parent().unwrap()).map_err(|error| error.to_string())?;
-        fs::write(&icon, include_bytes!("../icons/icon.png")).map_err(|error| error.to_string())?;
+        fs::write(&icon, include_bytes!("../icons/64x64.png")).map_err(|error| error.to_string())?;
         write_owned(&data.join("applications").join(DESKTOP_ID), &format!(
             "{MARKER}\n[Desktop Entry]\nType=Application\nName=Litematica-Nova\nComment=Minecraft projection manager\nExec={executable} %f\nIcon=com.litematica.nova\nTerminal=false\nCategories=Graphics;Utility;\nMimeType=application/x-litematic;\n"))?;
         write_owned(&data.join("mime/packages/com.litematica.nova.xml"), &format!(
