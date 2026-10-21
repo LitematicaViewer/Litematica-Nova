@@ -1,4 +1,5 @@
 import { emitEvent, listenEvent } from "../../src/platform/events";
+import { synchronizeApplicationWindowBackground } from "../../src/platform/nativeWindowGeometry";
 import { DEFAULT_THEME_ID, THEMES, normalizeThemeId as normalizeManifestThemeId, themeKeyOf } from "../../src/services/themeManifest";
 
 /** The theme list lives in `src/services/themeManifest.ts`; this module only applies it. */
@@ -14,6 +15,26 @@ const colorModeStorageKey = "litematicanova-color-mode";
 const colorModeChangedEvent = "litematicanova-color-mode-changed";
 let memoryColorMode: ColorMode | undefined;
 let systemColorQuery: MediaQueryList | undefined;
+let backgroundSyncFrame: number | undefined;
+
+const synchronizeNativeBackground = () => {
+    if (backgroundSyncFrame !== undefined) cancelAnimationFrame(backgroundSyncFrame);
+    backgroundSyncFrame = requestAnimationFrame(() => {
+        backgroundSyncFrame = undefined;
+        // Resolve CSS colors through the browser, including color()/oklch(),
+        // instead of relying on the native API's narrower string parser.
+        const swatch = document.createElement("canvas");
+        swatch.width = swatch.height = 1;
+        const context = swatch.getContext("2d");
+        if (!context) return;
+        context.fillStyle = getComputedStyle(document.documentElement).backgroundColor;
+        context.fillRect(0, 0, 1, 1);
+        const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+        // Preserve the actual theme color beneath premultiplied native child
+        // surfaces. Do not replace the renderer's transparent clear with a fill.
+        synchronizeApplicationWindowBackground([red, green, blue, alpha]).catch(() => undefined);
+    });
+};
 
 export const normalizeColorMode = (mode: unknown): ColorMode =>
     mode === "light" || mode === "dark" ? mode : "system";
@@ -36,6 +57,7 @@ const applyColorMode = () => {
     document.documentElement.dataset.colorMode = mode;
     document.documentElement.dataset.colorScheme = resolved;
     document.documentElement.classList.toggle("dark", resolved === "dark");
+    synchronizeNativeBackground();
 };
 
 const cacheColorMode = (mode: unknown) => {
@@ -113,7 +135,7 @@ const ensureThemeStylesheets = () => {
         link.rel = "stylesheet";
         link.media = "not all";
         stylesheetReady.set(key, new Promise<void>((resolve) => {
-            link.onload = () => resolve();
+            link.onload = () => { resolve(); synchronizeNativeBackground(); };
             link.onerror = () => resolve();
         }));
         link.href = href;
@@ -140,6 +162,7 @@ export const applyThemeStylesheet = (themeId: string) => {
         const link = document.getElementById(`${themeStylesheetLinkId}-${key}`) as HTMLLinkElement | null;
         if (link) link.media = key === themeKey ? "all" : "not all";
     }
+    synchronizeNativeBackground();
 };
 
 const storedThemeId = () => {

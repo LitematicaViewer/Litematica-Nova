@@ -1,4 +1,11 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isTauri } from "@tauri-apps/api/core";
+
+/** Transparent GPU children expose the native parent, not the clipped WebView. */
+export async function synchronizeApplicationWindowBackground(color: [number, number, number, number]): Promise<void> {
+  if (!isTauri()) return;
+  await getCurrentWindow().setBackgroundColor(color);
+}
 
 export async function getApplicationWindowOrigin(): Promise<{ x: number; y: number }> {
   const origin = await getCurrentWindow().innerPosition();
