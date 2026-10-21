@@ -173,8 +173,7 @@ pub(crate) fn configure_process_graphics() -> Result<(), String> {
 pub(crate) fn ensure_windows_host_clipping(parent: isize) -> Result<(), String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetClassNameW, GetParent, GetWindow, GetWindowThreadProcessId,
-        GW_CHILD, GW_HWNDNEXT, GWL_STYLE, GWL_EXSTYLE,
-        WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOREDIRECTIONBITMAP,
+        GW_CHILD, GW_HWNDNEXT, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
     };
     let parent = parent as windows_sys::Win32::Foundation::HWND;
     let own_pid = std::process::id();
@@ -207,15 +206,9 @@ pub(crate) fn ensure_windows_host_clipping(parent: isize) -> Result<(), String> 
     if webviews.is_empty() {
         return Err("原生预览主窗口的直属 WebView 尚未创建".into());
     }
-    // The transparent DirectComposition child must not expose a second,
-    // opaque GDI redirection bitmap owned by the top-level host. Such a bitmap
-    // retains the old window bounds when the GPU-only child is resized.
-    // Establish this before handing the HWND to either Viewer; keep the normal
-    // WebView composition, frame, input and child/sibling clipping unchanged.
-    add_windows_style(parent, GWL_EXSTYLE, WS_EX_NOREDIRECTIONBITMAP)?;
-    add_windows_style(parent, GWL_STYLE, WS_CLIPCHILDREN)?;
+    add_windows_clipping_style(parent, WS_CLIPCHILDREN)?;
     for webview in webviews {
-        add_windows_style(webview, GWL_STYLE, WS_CLIPSIBLINGS)?;
+        add_windows_clipping_style(webview, WS_CLIPSIBLINGS)?;
     }
     Ok(())
 }
@@ -229,26 +222,25 @@ pub(crate) fn windows_clipping_needs_refresh(event: &tauri::WindowEvent) -> bool
 }
 
 #[cfg(windows)]
-fn add_windows_style(
+fn add_windows_clipping_style(
     hwnd: windows_sys::Win32::Foundation::HWND,
-    index: i32,
     clipping: u32,
 ) -> Result<(), String> {
     use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos,
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE,
         SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     };
     unsafe {
         SetLastError(0);
-        let before = GetWindowLongPtrW(hwnd, index);
+        let before = GetWindowLongPtrW(hwnd, GWL_STYLE);
         if before == 0 && GetLastError() != 0 {
             return Err(format!("读取原生预览裁剪样式失败：{}", std::io::Error::last_os_error()));
         }
         let after = before | clipping as isize;
         if after == before { return Ok(()); }
         SetLastError(0);
-        if SetWindowLongPtrW(hwnd, index, after) == 0 && GetLastError() != 0 {
+        if SetWindowLongPtrW(hwnd, GWL_STYLE, after) == 0 && GetLastError() != 0 {
             return Err(format!("设置原生预览裁剪样式失败：{}", std::io::Error::last_os_error()));
         }
         if SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
@@ -256,7 +248,7 @@ fn add_windows_style(
         {
             return Err(format!("应用原生预览裁剪样式失败：{}", std::io::Error::last_os_error()));
         }
-        eprintln!("[NOVA_NATIVE_HOST] hwnd={} style_index={index} clipping_style_before={before:#x} clipping_style_after={after:#x} move=false resize=false zorder_change=false activate=false", hwnd as isize);
+        eprintln!("[NOVA_NATIVE_HOST] hwnd={} clipping_style_before={before:#x} clipping_style_after={after:#x} move=false resize=false zorder_change=false activate=false", hwnd as isize);
     }
     Ok(())
 }
