@@ -5370,6 +5370,11 @@ impl QuickRedrawState {
     }
 }
 
+fn quick_device_loss_is_failure(reason: wgpu::DeviceLostReason, detail: &str, shutting_down: bool) -> bool {
+    matches!(reason, wgpu::DeviceLostReason::Unknown)
+        && !(shutting_down && detail == "Device dropped.")
+}
+
 #[cfg(target_os = "windows")]
 struct QuickGpuInitialization {
     surface: wgpu::Surface<'static>,
@@ -5479,6 +5484,7 @@ struct ViewerState {
     composition_dpi: f64,
     presentation_error: Option<String>,
     quick_gpu_failure: Arc<Mutex<Option<String>>>,
+    quick_gpu_shutdown: Arc<AtomicBool>,
     quick_adapter: Option<wgpu::Adapter>,
     quick_visible_sample_query: QuickVisibleSampleQuery,
     quick_scene_revision: u64,
@@ -5672,14 +5678,16 @@ impl ViewerState {
                 Arc::clone(viewport), &adapter, &device, config.width, config.height, config.format)?)
         } else { None };
         let quick_gpu_failure = Arc::new(Mutex::new(None));
+        let quick_gpu_shutdown = Arc::new(AtomicBool::new(false));
         if embedded_composition {
             let failure = Arc::clone(&quick_gpu_failure);
             device.on_uncaptured_error(Box::new(move |error: wgpu::Error| {
                 record_quick_gpu_failure(&failure, format!("快速预览显卡执行失败：{error}。请关闭其他占用显卡资源的程序后重试。"));
             }));
             let failure = Arc::clone(&quick_gpu_failure);
+            let shutting_down = Arc::clone(&quick_gpu_shutdown);
             device.set_device_lost_callback(move |reason, detail| {
-                if matches!(reason, wgpu::DeviceLostReason::Unknown) {
+                if quick_device_loss_is_failure(reason, &detail, shutting_down.load(Ordering::Acquire)) {
                     record_quick_gpu_failure(&failure, format!("快速预览显卡设备失去响应：{detail}。请关闭其他占用显卡资源的程序后重试。"));
                 }
             });
@@ -5929,6 +5937,7 @@ impl ViewerState {
             composition_dpi: window.scale_factor(),
             presentation_error: None,
             quick_gpu_failure,
+            quick_gpu_shutdown,
             quick_adapter: args.quick_host.is_some().then_some(adapter),
             quick_visible_sample_query, quick_scene_revision: 0,
             quick_decision_path: args.quick_resource_decision.clone(),
@@ -9166,6 +9175,7 @@ impl ViewerState {
 
 impl Drop for ViewerState {
     fn drop(&mut self) {
+        self.quick_gpu_shutdown.store(true, Ordering::Release);
         self.build_cancellation.store(true, Ordering::Release);
         self.build_request_tx.take();
         self.build_workers.append(&mut self.retired_build_workers);
