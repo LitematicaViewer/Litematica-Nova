@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='UTF-8'?>
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1254" height="1254" viewBox="0 0 1254 1254">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1254" height="1254" viewBox="115 110 1024 1024">
   <title>Litematica-Nova — transparent editable SVG, aligned plan-view blueprint</title>
   <desc>The existing editable icon with its plan-view drawing affinely projected onto the cube top face and centered with safe margins. All non-blueprint shapes, the V and inverted-V colors, and the transparent background are unchanged. Native SVG vector paths and gradients; no embedded raster image.</desc>
   <defs>
