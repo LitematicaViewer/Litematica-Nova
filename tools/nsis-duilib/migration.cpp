@@ -119,20 +119,31 @@ std::vector<Record> records() {
     std::stable_sort(all.begin(), all.end(), [](const auto& a, const auto& b) { return a.stable && !b.stable; });
     return all;
 }
-std::wstring processUsing(const std::vector<Record>& entries, const std::wstring& target, bool legacy) {
+std::wstring processUsing(const std::vector<Record>& entries, const std::wstring& target, bool legacy, bool updateHandoff = false) {
+    const ULONGLONG handoffDeadline = GetTickCount64() + 5000;
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) return L"进程状态读取失败，请稍后重试";
     PROCESSENTRY32W process{}; process.dwSize = sizeof(process);
     std::wstring running;
     for (BOOL more = Process32FirstW(snapshot, &process); more; more = Process32NextW(snapshot, &process)) {
         if (!equal(process.szExeFile, L"Litematica-Nova.exe") && !equal(process.szExeFile, L"Litematica Nova.exe") && !equal(process.szExeFile, L"Litematica Nova BA.exe")) continue;
-        HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process.th32ProcessID);
+        HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | (updateHandoff ? SYNCHRONIZE : 0), FALSE, process.th32ProcessID);
         wchar_t buffer[32768]{}; DWORD length = 32768;
         bool relevant = legacy; // Historical uninstallers terminate by name; never invoke one while any Nova is running.
         if (handle && QueryFullProcessImageNameW(handle, 0, buffer, &length)) {
             const std::wstring file(buffer, length);
             relevant = relevant || equal(file, target + L"\\Litematica-Nova.exe");
             for (const auto& r : entries) relevant = relevant || (!r.binary.empty() && equal(file, r.binary));
+            // The updater starts Setup before its own process exits. Wait only
+            // for that same installation's Host to release files; never kill
+            // by name and never wait for an unrelated running Nova instance.
+            if (relevant && updateHandoff && equal(file, target + L"\\Litematica-Nova.exe")) {
+                const auto now = GetTickCount64();
+                if (WaitForSingleObject(handle, static_cast<DWORD>(now < handoffDeadline ? handoffDeadline - now : 0)) == WAIT_OBJECT_0) {
+                    CloseHandle(handle);
+                    continue;
+                }
+            }
             if (relevant) running = L"请关闭正在运行的 Litematica-Nova 后重试：" + file;
         } else running = L"请关闭正在运行的 Litematica-Nova 后重试";
         if (handle) CloseHandle(handle);
@@ -218,7 +229,16 @@ NSIS_ENTRY(Migrate) {
     const auto old = records();
     migrationRecords = old;
     const bool legacy = std::any_of(old.begin(), old.end(), [](const auto& record) { return !record.stable && (!record.binary.empty() || !record.product.empty()); });
-    const auto running = processUsing(old, target, legacy);
+    int argumentCount = 0;
+    LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+    bool updateHandoff = false;
+    for (int i = 1; arguments && i < argumentCount; ++i) {
+        // Everything after /ARGS belongs to the reopened application.
+        if (equal(arguments[i], L"/ARGS")) break;
+        if (equal(arguments[i], L"/UPDATE")) updateHandoff = true;
+    }
+    if (arguments) LocalFree(arguments);
+    const auto running = processUsing(old, target, legacy, updateHandoff);
     if (!running.empty()) { stack.push(running); return; }
     std::set<std::wstring> removed;
     for (const auto& record : old) {

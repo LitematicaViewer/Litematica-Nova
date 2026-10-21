@@ -783,6 +783,12 @@ FunctionEnd
 ; The same Duilib surface handles every installer and uninstaller page.
 ; /S does not invoke GUI callbacks; /P retains the real NSIS progress page.
 Function NovaDuiGuiInit
+  ; Official updater 2.10 uses /P /R /UPDATE /ARGS. Passive installation
+  ; must advance with NSIS itself, not attach the interactive mirrored UI.
+  ${If} $PassiveMode = 1
+  ${OrIf} ${Silent}
+    Return
+  ${EndIf}
   NovaDui::Attach /NOUNLOAD "${PRODUCTNAME} ${VERSION} 安装"
   Pop $R0
   ${If} $R0 != "ok"
@@ -791,6 +797,10 @@ Function NovaDuiGuiInit
   ${EndIf}
 FunctionEnd
 Function un.NovaDuiGuiInit
+  ${If} $PassiveMode = 1
+  ${OrIf} ${Silent}
+    Return
+  ${EndIf}
   NovaDui::Attach /NOUNLOAD "${PRODUCTNAME} ${VERSION} 卸载"
   Pop $R0
   ${If} $R0 != "ok"

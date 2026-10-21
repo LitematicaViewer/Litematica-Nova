@@ -39,7 +39,10 @@ viewer-launch-contract = { path = "../../tools/viewer-core/crates/viewer-launch-
 nova-render-protocol = { path = "../../tools/viewer-core/crates/nova-render-protocol" }
 nova-protection = { path = "../../tools/nova-protection", default-features = false, features = ["client"] }
 nova-protected-loader = { path = "../../tools/nova-protected-loader" }
-tauri-plugin-updater = "=2.10.0"
+# Locked official implementation; local Windows installer-launch error fix.
+tauri-plugin-updater = { version = "=2.10.0", path = "../../third_party/tauri-plugin-updater" }
+# The locked updater uses reqwest 0.13 without default features. Explicitly
+# enable its OS proxy discovery (not the unrelated application's 0.12 client).
 updater-http = { package = "reqwest", version = "=0.13.2", default-features = false, features = ["json", "rustls-no-provider", "system-proxy"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 

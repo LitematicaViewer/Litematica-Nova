@@ -2,6 +2,7 @@
 use crate::platform::process_supervisor::{ExecutableRole, ProcessSupervisor};
 use crate::render_service_client::RenderServiceClient;
 use super::quick_preview::QuickPreviewHost;
+use super::operations::ApplicationOperations;
 use serde::Serialize;
 use std::{path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}}, time::{Duration, Instant}};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -68,7 +69,7 @@ impl UpdateHost {
         self.publish(app, |v| { v.phase = "error"; v.message = Some(error.clone()); }); error
     }
     fn restart_required(&self, app: &AppHandle, error: String) -> String {
-        self.publish(app, |v| { v.phase = "restartRequired"; v.message = Some(format!("{error}；草稿已保留，请重启以恢复后台服务。")); }); error
+        self.publish(app, |v| { v.phase = "restartRequired"; v.message = Some(format!("{error}；更新未安装，草稿已保留。重启当前版本仅恢复后台服务，也可退出后运行新版安装包覆盖升级。")); }); error
     }
     pub(crate) fn prevents_close(&self) -> bool {
         self.snapshot().phase == "installing"
@@ -139,11 +140,23 @@ fn configured_endpoints(config: &serde_json::Value) -> Result<Vec<reqwest::Url>,
 async fn check_endpoint(app: &AppHandle, url: reqwest::Url) -> Result<Option<CheckedUpdate>, String> {
     let trace = network::Trace::new("manifest", &url);
     let client_trace = trace.clone();
-    let result = app.updater_builder().endpoints(vec![url]).map_err(|e| e.to_string())?
+    let builder = app.updater_builder().endpoints(vec![url]).map_err(|e| e.to_string())?
         .timeout(Duration::from_secs(15))
         // This applies to manifest AND binary, including redirects. No insecure TLS switches.
-        .configure_client(move |client| client_trace.configure(client))
-        .build().map_err(|e| e.to_string())?.check().await;
+        .configure_client(move |client| client_trace.configure(client));
+    #[cfg(windows)]
+    let builder = {
+        let app = app.clone();
+        // The official installer handoff now calls this only AFTER a real
+        // successful launch. Cancelling elevation leaves current services usable.
+        builder.on_before_exit(move || {
+            if let Err(error) = shutdown_update_children(&app) {
+                eprintln!("[NOVA_UPDATE] stage=installer_handoff_shutdown message={error}");
+            }
+            app.cleanup_before_exit();
+        })
+    };
+    let result = builder.build().map_err(|e| e.to_string())?.check().await;
     trace.finish(if result.is_ok() { "success" } else { "failed" });
     let result = result.map_err(|error| {
         let reason = trace.failure(network::error_details(&error));
@@ -178,6 +191,19 @@ async fn await_or_cancel<T>(cancel: &mut watch::Receiver<u64>, future: impl std:
 
 fn same_release(version: &str, signature: &str, candidate: &Update) -> bool {
     candidate.version == version && candidate.signature == signature
+}
+
+fn shutdown_update_children(app: &AppHandle) -> Result<(), String> {
+    let supervisor = app.state::<Arc<ProcessSupervisor>>().inner().clone();
+    supervisor.stop_admitting();
+    // close() retains the ready GPU process by design. Installation instead
+    // releases the whole application, including an idle startup Viewer.
+    let quick = app.state::<QuickPreviewHost>().request_shutdown();
+    app.state::<RenderServiceClient>().request_shutdown();
+    let shutdown = supervisor.shutdown(Duration::from_millis(500), Duration::from_millis(1500));
+    eprintln!("[NOVA_UPDATE] stage=installer_handoff_children remaining={} elapsed_ms={}", shutdown.remaining.len(), shutdown.elapsed_ms);
+    if !shutdown.remaining.is_empty() { return Err("后台任务尚未退出".into()); }
+    quick
 }
 
 #[tauri::command]
@@ -324,24 +350,43 @@ pub(crate) async fn application_update_install(app: AppHandle, window: WebviewWi
     // The reversible/cancellable stage ends before shutting down shared services.
     let Some(view) = host.commit_installing_after_wait(&cancel) else { return Ok(()); };
     let _ = app.emit_to("main", EVENT, view);
-    // From here a failure requires the explicit recovery restart; a dropped pause
-    // must never reopen admission into a service that has already shut down.
-    supervisor.stop_admitting();
-    if let Some(view) = app.state::<QuickPreviewHost>().snapshot().map_err(|e| host.restart_required(&app, e))? {
-        app.state::<QuickPreviewHost>().close(&view.preview_id).map_err(|e| host.restart_required(&app, e))?;
+    // Preserve the same write-drain boundary as normal application close.
+    let operations = app.state::<ApplicationOperations>().inner().clone();
+    let reads = operations.begin_shutdown();
+    supervisor.terminate_many(&reads, 0);
+    let draining = operations.clone();
+    let writes_drained = tauri::async_runtime::spawn_blocking(move || draining.wait_for_writes(Duration::from_secs(8))).await;
+    if !matches!(writes_drained, Ok(true)) {
+        operations.cancel_shutdown();
+        return Err(host.fail(&app, "保存尚未安全结束，更新未安装；完成保存后可重试。".into()));
     }
-    app.state::<RenderServiceClient>().request_shutdown();
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !supervisor.active_children().is_empty() {
-        if Instant::now() >= deadline { return Err(host.restart_required(&app, "后台任务尚未退出，更新未安装".into())); }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    #[cfg(not(windows))]
+    {
+        // Other official platform installers replace files before returning.
+        let closing_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || shutdown_update_children(&closing_app))
+            .await.map_err(|e| host.restart_required(&app, format!("后台退出失败：{e}")))?
+            .map_err(|e| host.restart_required(&app, e))?;
     }
     host.publish(&app, |v| { v.phase = "installing"; v.message = Some("正在安装，完成后自动重启…".into()); });
     let pending = host.pending.lock().unwrap().take().ok_or_else(|| host.restart_required(&app, "更新包已失效".into()))?;
-    let bytes = pending.bytes.ok_or_else(|| host.restart_required(&app, "更新包已失效".into()))?;
+    let bytes = pending.bytes.as_ref().ok_or_else(|| host.restart_required(&app, "更新包已失效".into()))?;
     eprintln!("[NOVA_UPDATE] stage=install version={} target={} bundle_type={:?} data_cleanup=false permission_flow=official_updater restart=after_install", pending.update.version, pending.update.target, tauri::utils::platform::bundle_type());
     let result = pending.update.install(bytes);
-    result.map_err(|e| host.restart_required(&app, format!("更新安装失败：{e}")))?;
+    if let Err(error) = result {
+        *host.pending.lock().unwrap() = Some(pending);
+        #[cfg(windows)]
+        {
+            // Launch/UAC failed before on_before_exit: no services were stopped.
+            // Keep the signed payload and allow retry without restarting old EXE.
+            operations.cancel_shutdown();
+            let message = format!("更新安装器未启动：{error}；更新未安装，可重试或手动运行新版安装包。");
+            host.publish(&app, |v| { v.phase = "downloaded"; v.message = Some(message.clone()); });
+            return Err(message);
+        }
+        #[cfg(not(windows))]
+        return Err(host.restart_required(&app, format!("更新安装器未成功启动或安装失败：{error}")));
+    }
     #[cfg(not(windows))]
     app.restart();
     Ok(())
