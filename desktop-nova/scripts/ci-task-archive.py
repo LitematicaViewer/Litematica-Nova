@@ -13,7 +13,6 @@ def source(request_file, tar_file, destination):
     request = json.loads(Path(request_file).read_text(encoding="utf8"))
     selected = set(request.pop("files"))
     amice = Path(request.pop("amiceSource"))
-    probes = Path(request.pop("probeSource"))
     llvm = request.pop("llvmSourceArchive", None)
     records = []
     with zipfile.ZipFile(destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as output:
@@ -38,8 +37,6 @@ def source(request_file, tar_file, destination):
                 if filename.is_symlink() or filename.suffix not in extensions or filename.stat().st_size > 16 * 1024**2:
                     continue
                 output.write(filename, "tooling/amice/" + filename.relative_to(amice).as_posix())
-        for name in ("kernel_scalar.rs", "scalar_main.rs"):
-            output.write(probes / name, "tooling/probe/" + name)
         wrapper = next(entry for entry in records if entry["path"] == "desktop-nova/scripts/protect-rustc.py")
         # The same exact source bytes are used by bootstrap's target-format probe.
         with tarfile.open(tar_file, "r") as archive:

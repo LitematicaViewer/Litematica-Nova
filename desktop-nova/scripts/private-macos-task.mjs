@@ -51,7 +51,7 @@ async function prepare() {
   const tooling = path.join(root, '.tmp/beta-ui-corrections/amice-toolchain');
   const publicKey = fs.readFileSync(arg('--public-key-file') || path.join(root, '.tmp/beta-ui-corrections/protection-release/public/manifest-ed25519.pub'), 'utf8').trim();
   if (Buffer.from(publicKey, 'base64').length !== 32) throw new Error('The public build identity is invalid.');
-  const request = { sourceSha: ctx.sourceSha, target: ctx.target, taskId: ctx.taskId, seed, manifestPublicKey: publicKey, protectedEndpoint: 'https://45-62-112-121.sslip.io:8448/nova-core', files, amiceSource: path.join(tooling, 'source/fuqiuluo-amice-aa5cce0'), probeSource: path.join(tooling, 'probe') };
+  const request = { sourceSha: ctx.sourceSha, target: ctx.target, taskId: ctx.taskId, seed, manifestPublicKey: publicKey, protectedEndpoint: 'https://45-62-112-121.sslip.io:8448/nova-core', files, amiceSource: path.join(tooling, 'source/fuqiuluo-amice-aa5cce0') };
   const requestFile = path.join(directory, 'request.json'); fs.writeFileSync(requestFile, JSON.stringify(request), { mode: 0o600 });
   const output = path.resolve(arg('--output')); fs.mkdirSync(path.dirname(output), { recursive: true });
   python(['source', requestFile, tar, zip]); await sealTask(zip, output, ctx);
