@@ -803,9 +803,18 @@ impl Update {
         let current_args = &self.current_exe_args()[1..];
         let msi_args;
         let nsis_args;
+        let nsis_directory;
 
         let installer_args: Vec<&OsStr> = match &updater_type {
             WindowsUpdaterType::Nsis { .. } => {
+                // NSIS requires /D to be the final, unquoted parameter. Bind
+                // the upgrade and its restart target to the running install,
+                // not a stale registry location from another installation.
+                nsis_directory = {
+                    let mut argument = OsString::from("/D=");
+                    argument.push(&self.extract_path);
+                    argument
+                };
                 nsis_args = current_args
                     .iter()
                     .map(escape_nsis_current_exe_arg)
@@ -819,6 +828,7 @@ impl Update {
                     .chain(once(OsStr::new("/ARGS")))
                     .chain(nsis_args.iter().map(OsStr::new))
                     .chain(self.installer_args())
+                    .chain(once(nsis_directory.as_os_str()))
                     .collect()
             }
             WindowsUpdaterType::Msi { path, .. } => {

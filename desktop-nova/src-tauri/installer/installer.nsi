@@ -557,6 +557,18 @@ Function .onInstSuccess
     ${GetOptions} $CMDLINE "/R" $R0
     ${IfNot} ${Errors}
       ${GetOptions} $CMDLINE "/ARGS" $R0
+      ; The updater's final /D= belongs to NSIS, never to the restarted app.
+      ; Some NSIS hosts retain it in $CMDLINE while others remove it.
+      StrCpy $R1 " /D=$INSTDIR"
+      StrLen $R2 $R1
+      StrLen $R3 $R0
+      IntOp $R3 $R3 - $R2
+      ${If} $R3 >= 0
+        StrCpy $R4 $R0 "" $R3
+        ${If} $R4 == $R1
+          StrCpy $R0 $R0 $R3
+        ${EndIf}
+      ${EndIf}
       nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$R0"
     ${EndIf}
   ${EndIf}

@@ -242,7 +242,10 @@ NSIS_ENTRY(Migrate) {
     if (!running.empty()) { stack.push(running); return; }
     std::set<std::wstring> removed;
     for (const auto& record : old) {
-        if (record.stable) continue;
+        // Only the canonical installation at the destination is an in-place
+        // overwrite. A stable record at another directory still owns real
+        // files; overwriting its ARP key alone would strand a second version.
+        if (record.stable && equal(record.directory, target)) continue;
         DWORD code = ERROR_SUCCESS;
         if (!record.product.empty() && removed.insert(lower(record.product)).second && MsiQueryProductStateW(record.product.c_str()) != INSTALLSTATE_UNKNOWN) {
             wchar_t system[MAX_PATH]{}; GetSystemDirectoryW(system, MAX_PATH);
@@ -282,6 +285,28 @@ NSIS_ENTRY(RepairShell) {
             const auto path = std::wstring(L"Software\\Classes\\") + name + L"\\shell\\open\\command";
             Key existing(hive, path, KEY_READ | KEY_WOW64_64KEY);
             if (novaCommand(read(existing.value, L""), old)) write(hive, path, L"", command);
+        }
+    }
+    // Per-user Applications and Run entries override the repaired machine
+    // registration and can otherwise reopen a removed or obsolete executable.
+    // Preserve arguments and entries owned by any other application.
+    for (HKEY hive : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
+        for (const auto& binary : {L"Litematica-Nova.exe", L"Litematica Nova.exe", L"Litematica Nova BA.exe"}) {
+            const auto path = std::wstring(L"Software\\Classes\\Applications\\") + binary + L"\\shell\\open\\command";
+            Key existing(hive, path, KEY_READ | KEY_WOW64_64KEY);
+            if (novaCommand(read(existing.value, L""), old)) write(hive, path, L"", command);
+        }
+        const std::wstring runPath = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        Key runKey(hive, runPath, KEY_READ | KEY_WOW64_64KEY);
+        for (const auto& name : names) {
+            const auto previous = read(runKey.value, name.c_str());
+            if (!novaCommand(previous, old)) continue;
+            const auto executable = firstArgument(previous);
+            const auto quoted = L"\"" + executable + L"\"";
+            const bool quotedPrefix = previous.compare(0, quoted.size(), quoted) == 0;
+            if (!quotedPrefix && previous.compare(0, executable.size(), executable) != 0) continue;
+            const auto prefixSize = quotedPrefix ? quoted.size() : executable.size();
+            write(hive, runPath, name.c_str(), L"\"" + target + L"\\Litematica-Nova.exe\"" + previous.substr(prefixSize));
         }
     }
     const auto application = L"Software\\Classes\\Applications\\Litematica-Nova.exe";
