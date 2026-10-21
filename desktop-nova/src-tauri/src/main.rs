@@ -3374,6 +3374,11 @@ async fn application_quick_preview_present(window: tauri::WebviewWindow, preview
     Ok(view)
 }
 
+#[tauri::command]
+fn native_preview_set_background(window: tauri::WebviewWindow, color: [u8; 4]) -> Result<(), String> {
+    platform::native_preview_host::set_background(&window, color)
+}
+
 #[cfg(target_os="macos")]
 fn sync_native_quick_presentation(window: &tauri::WebviewWindow, view: &QuickPreviewView) -> Result<(),String> {
     platform::native_preview_host::apply(window, view.preview_id.clone(), view.presentation.placement,
@@ -3798,6 +3803,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            native_preview_set_background,
             application_export_logs_zip,
             assets::ensure_builtin_block_icons_extracted,
             assets::ensure_builtin_item_icons_extracted,

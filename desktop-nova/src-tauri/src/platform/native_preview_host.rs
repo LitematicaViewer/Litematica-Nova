@@ -166,6 +166,43 @@ pub(crate) fn configure_process_graphics() -> Result<(), String> {
     Ok(())
 }
 
+/// Publish only the presentation background, never a scene/render setting.
+/// The GPU child composites over this color because its sibling-clipped WebView
+/// cannot supply pixels behind it. No Host redirection styles are changed.
+pub(crate) fn set_background(window: &tauri::WebviewWindow, color: [u8; 4]) -> Result<(), String> {
+    if window.label() != "main" { return Ok(()); }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetWindow, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SetPropW,
+            GW_CHILD, GW_HWNDNEXT, WM_PAINT,
+        };
+        let parent = window.hwnd().map_err(|error| error.to_string())?.0
+            as windows_sys::Win32::Foundation::HWND;
+        let name: Vec<u16> = "Litematica.Nova.PreviewBackground\0".encode_utf16().collect();
+        let argb = 0xff00_0000_u32 | (u32::from(color[0]) << 16)
+            | (u32::from(color[1]) << 8) | u32::from(color[2]);
+        if unsafe { SetPropW(parent, name.as_ptr(), argb as usize as _) } == 0 {
+            return Err(format!("同步原生预览背景失败：{}", std::io::Error::last_os_error()));
+        }
+        // A theme change must redraw an idle, already-prepared Viewer too.
+        // WM_PAINT only asks the existing event loop to present its current
+        // attachment; it does not rebuild or replace the projection.
+        let mut child = unsafe { GetWindow(parent, GW_CHILD) };
+        while !child.is_null() {
+            let mut pid = 0;
+            if unsafe { GetWindowThreadProcessId(child, &mut pid) } != 0
+                && pid != std::process::id() && unsafe { IsWindowVisible(child) } != 0 {
+                unsafe { PostMessageW(child, WM_PAINT, 0, 0); }
+            }
+            child = unsafe { GetWindow(child, GW_HWNDNEXT) };
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = color;
+    Ok(())
+}
+
 /// Keep native GPU siblings outside the Host/WebView repaint regions. Tao can
 /// rewrite its parent styles on window-state changes, so callers may reapply
 /// this idempotently without moving, raising or activating any window.
