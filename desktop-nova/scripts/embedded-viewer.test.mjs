@@ -87,7 +87,7 @@ function fixture() {
   return { commands, platform, geometry, host, mount, start, window, document,
     setOrigin(value) { origin = value; }, setOriginGate(value) { originGate = value; },
     setFocused(value) { focused = value; }, setNativeVisible(value) { nativeVisible = value; },
-    event(name) { listeners.get(name)?.(); }, nativeEvent() { nativeListener?.(); nativeRender(); },
+    event(name) { listeners.get(name)?.(); }, nativeEvent(deferRender = false) { nativeListener?.(); if (!deferRender) nativeRender(); },
     resize() { observers.forEach((fn) => fn()); },
     flush() { const pending = [...timers.values()]; timers.clear(); pending.forEach((fn) => fn()); },
   };
@@ -335,4 +335,37 @@ test("Full 预加载和实时就绪后连续切页、最小化恢复、最大化
     assert.ok(f.commands.every(entry => entry.command === "application_render_update_presentation" && entry.operationId === id),
       "no new build, release, cancel or task authorization commands are allowed during presentation transitions");
   }
+});
+
+test("原生最小化或最大化通知在 React 提交前立即废弃旧几何读取", async () => {
+  const f = fixture(); const h = f.start(); await settle();
+  const view = () => operation(f.commands.at(-1).intent);
+  h.render(view()); await settle();
+
+  const minimizeGate = defer(); f.setOriginGate(minimizeGate);
+  f.resize(); f.flush(); await settle();
+  const beforeMinimize = f.commands.length;
+  f.setNativeVisible(false); f.nativeEvent(true);
+  minimizeGate.resolve({ x: 900, y: 1000 }); await settle();
+  assert.equal(f.commands.length, beforeMinimize, "迟到的可见 rect 不能在原生最小化后发布");
+  f.setOriginGate(null); h.render(view()); await settle();
+  assert.equal(f.commands.at(-1).intent.visible, false);
+
+  f.setNativeVisible(true); f.setOrigin({ x: 300, y: 400 });
+  f.nativeEvent(); f.flush(); await settle();
+  assert.equal(f.commands.at(-1).intent.visible, true);
+  h.render(view()); await settle();
+
+  const maximizeGate = defer(); f.setOriginGate(maximizeGate);
+  f.resize(); f.flush(); await settle();
+  const beforeMaximize = f.commands.length;
+  f.window.devicePixelRatio = 2;
+  f.host.getBoundingClientRect = () => ({ left: 20, top: 40, right: 1020, bottom: 640, width: 1000, height: 600 });
+  f.nativeEvent(true);
+  maximizeGate.resolve({ x: 700, y: 800 }); await settle();
+  assert.equal(f.commands.length, beforeMaximize, "迟到的窗口化 rect 不能覆盖最大化状态");
+  f.setOriginGate(null); f.setOrigin({ x: 0, y: 0 }); h.render(view()); await settle();
+  assert.deepEqual(f.commands.at(-1).intent.placement,
+    { x: 40, y: 80, width: 2000, height: 1200, dpiScale: 2, focused: false });
+  assert.ok(f.commands.every(entry => entry.command === "application_render_update_presentation" && entry.operationId === "one"));
 });
