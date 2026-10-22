@@ -117,61 +117,163 @@ test('共享层只声明填充色，不重置贴图', () => {
 });
 
 // --- button texture sets -----------------------------------------------------
-// A variant only supplies its state images; the state rules resolve
-// `var(--ln-minecraft-button-<state>-image, <base>)`. Two failure modes are silent
-// there: a variant missing a state (it keeps the base texture for that state) and a
-// filename typo (the var resolves to nothing and the fallback wins). Both are asserted
-// here rather than discovered by eye.
+// Files follow `button_<light|dark>_<variant>_<state>_min.png`. The CVA `default`
+// variant is the primary action, so its filename segment is `primary`; the
+// no-variant / `secondary` plate is the `default` set. `check_hover` was renamed to
+// `checkhover`. Four textured variants exist per scheme; `ghost` and `link` are
+// borderless and deliberately declare no set.
 //
-// `disabled` is optional on purpose: a disabled button looking the same in every variant
-// is a sound default, so a variant may deliberately fall back to the shared disabled
-// plate (destructive does). Every other state is required, because those are the ones
-// where a variant must look different from the base.
+// Every set must declare all five states, and every `url()` must name the exact file
+// for its scheme/variant/state. Two failure modes are silent: a state that falls back
+// to the `default` plate, and a filename typo that makes the var resolve to nothing.
+// Both are asserted here rather than discovered by eye.
 
-const BUTTON_REQUIRED_STATES = ['normal', 'hover', 'check', 'check-hover'];
-const BUTTON_ALL_STATES = [...BUTTON_REQUIRED_STATES, 'disabled'];
+const BUTTON_TEXTURE_VARIANTS = {
+  secondary: 'default',
+  default: 'primary',
+  outline: 'outline',
+  destructive: 'destructive',
+};
+const BUTTON_STATES = ['normal', 'hover', 'check', 'checkhover', 'disabled'];
+const BUTTON_SCHEMES = ['dark', 'light'];
 const buttonCss = parse('ui/themes/minecraft/widgets.css');
 
-test('Minecraft 按钮变体的状态贴图完整且文件存在', () => {
+const imageStateOf = (prop) => /^--ln-minecraft-button-(.+)-image$/.exec(prop)?.[1] ?? null;
+const variantOf = (selector) => /\[data-variant="([^"]+)"\]/.exec(selector)?.[1] ?? 'secondary';
+const schemeOf = (selector) => (/data-color-scheme="light"/.test(selector) ? 'light' : 'dark');
+
+test('Minecraft 按钮贴图按 明暗/变体/状态 命名且文件存在', () => {
   const sets = new Map();
   buttonCss.walkRules((rule) => {
-    const variant = /\[data-variant="([^"]+)"\]/.exec(rule.selector);
-    if (!variant) return;
+    if (!rule.selector.includes('[data-slot="button"]')) return;
     const defined = new Map();
     for (const decl of rule.nodes.filter((node) => node.type === 'decl')) {
-      const state = /^--ln-minecraft-button-(.+)-image$/.exec(decl.prop);
-      if (state) defined.set(state[1], decl.value);
+      const state = imageStateOf(decl.prop);
+      if (state) defined.set(state, decl.value);
     }
     if (!defined.size) return;
-    sets.set(variant[1], defined);
-    assert.deepEqual(
-      [...defined.keys()].filter((state) => !BUTTON_ALL_STATES.includes(state)),
-      [],
-      `${variant[1]} 声明了未知状态`,
-    );
+    const key = `${schemeOf(rule.selector)}:${variantOf(rule.selector)}`;
+    assert.ok(!sets.has(key), `${key} 的贴图集重复声明`);
+    sets.set(key, defined);
   });
 
-  assert.ok(sets.size >= 3, `预期至少三个变体有贴图集，实际 ${sets.size}`);
-  for (const [variant, defined] of sets) {
-    const missing = BUTTON_REQUIRED_STATES.filter((state) => !defined.has(state));
-    assert.deepEqual(missing, [], `${variant} 缺少状态: ${missing.join(', ')}`);
+  const expectedKeys = BUTTON_SCHEMES.flatMap((scheme) =>
+    Object.keys(BUTTON_TEXTURE_VARIANTS).map((variant) => `${scheme}:${variant}`),
+  ).sort();
+  assert.deepEqual([...sets.keys()].sort(), expectedKeys, '贴图集必须覆盖两种明暗 × 四个变体，ghost/link 不声明贴图');
+
+  for (const [key, defined] of sets) {
+    const [scheme, variant] = key.split(':');
+    const segment = BUTTON_TEXTURE_VARIANTS[variant];
+    assert.deepEqual([...defined.keys()].sort(), [...BUTTON_STATES].sort(), `${key} 的状态不完整`);
     for (const [state, value] of defined) {
-      const file = /url\("([^"]+)"\)/.exec(value)?.[1];
-      assert.ok(file, `${variant}/${state} 不是 url(): ${value}`);
-      const resolved = new URL(file, new URL('ui/themes/minecraft/', root));
-      assert.ok(existsSync(resolved), `${variant}/${state} 贴图不存在: ${file}`);
+      assert.equal(
+        value,
+        `url("./resource/button/button_${scheme}_${segment}_${state}_min.png")`,
+        `${key}/${state} 的文件名不符合命名规则`,
+      );
+      const resolved = new URL(/url\("([^"]+)"\)/.exec(value)[1], new URL('ui/themes/minecraft/', root));
+      assert.ok(existsSync(resolved), `${key}/${state} 贴图不存在: ${resolved.pathname}`);
     }
   }
 });
 
-test('Minecraft 按钮的基础回退贴图文件存在', () => {
-  const fallbacks = new Set();
-  buttonCss.walkDecls(/^--ln-minecraft-button-image$/, (decl) => {
-    for (const match of decl.value.matchAll(/url\("([^"]+)"\)/g)) fallbacks.add(match[1]);
+// --- button label colours ----------------------------------------------------
+// `appearance.css` owns the palette; the button rules reference it through `var()`.
+// The tests resolve one level so the contract stays about the visible colour.
+
+const PALETTE = new Map();
+parse('ui/themes/minecraft/appearance.css').walkDecls(/^--ln-minecraft-palette-/, (decl) => {
+  PALETTE.set(decl.prop, decl.value);
+});
+
+const resolvePalette = (value) => {
+  const token = /^var\((--ln-minecraft-palette-[a-z-]+)\)$/.exec(value)?.[1];
+  return token ? PALETTE.get(token) : value;
+};
+
+const BUTTON_LABEL_COLOURS = {
+  dark: {
+    secondary: ['white', 'white', 'gray'],
+    default: ['white', 'white', 'gray'],
+    outline: ['white', 'white', 'gray'],
+    destructive: ['white', 'white', 'red'],
+    ghost: ['white', 'white', 'gray'],
+    link: ['purple', 'purple', 'gray'],
+  },
+  light: {
+    secondary: ['dark-gray', 'dark-gray', 'gray'],
+    default: ['white', 'white', 'gray'],
+    outline: ['dark-gray', 'dark-gray', 'gray'],
+    destructive: ['white', 'white', 'red'],
+    ghost: ['dark-gray', 'dark-gray', 'gray'],
+    link: ['green', 'green', 'gray'],
+  },
+};
+
+test('Minecraft 按钮文字色符合 明暗/变体/状态 调色板表', () => {
+  assert.deepEqual(Object.fromEntries(PALETTE), {
+    '--ln-minecraft-palette-white': '#ffffff',
+    '--ln-minecraft-palette-dark-gray': '#3f3f3f',
+    '--ln-minecraft-palette-gray': '#808080',
+    '--ln-minecraft-palette-yellow': '#ffff00',
+    '--ln-minecraft-palette-red': '#ff5555',
+    '--ln-minecraft-palette-green': '#3c8527',
+    '--ln-minecraft-palette-purple': '#7345e5',
   });
-  assert.ok(fallbacks.size >= 5, `预期至少 5 张回退贴图，实际 ${fallbacks.size}`);
-  for (const file of fallbacks) {
-    const resolved = new URL(file, new URL('ui/themes/minecraft/', root));
-    assert.ok(existsSync(resolved), `回退贴图不存在: ${file}`);
+
+  const declared = new Map();
+  buttonCss.walkRules((rule) => {
+    if (!rule.selector.includes('[data-slot="button"]')) return;
+    if (/:(hover|active|disabled)|aria-pressed|data-state/.test(rule.selector)) return;
+    const colours = {};
+    rule.walkDecls(/^--ln-minecraft-button-(normal|hover|disabled)-color$/, (decl) => {
+      colours[decl.prop.replace('--ln-minecraft-button-', '').replace('-color', '')] = decl.value;
+    });
+    if (!Object.keys(colours).length) return;
+    declared.set(`${schemeOf(rule.selector)}:${variantOf(rule.selector)}`, colours);
+  });
+
+  for (const [scheme, variants] of Object.entries(BUTTON_LABEL_COLOURS)) {
+    for (const [variant, expected] of Object.entries(variants)) {
+      const colours = declared.get(`${scheme}:${variant}`);
+      assert.ok(colours, `${scheme}:${variant} 没有声明文字色`);
+      for (const [index, state] of ['normal', 'hover', 'disabled'].entries()) {
+        assert.equal(
+          resolvePalette(colours[state]),
+          PALETTE.get(`--ln-minecraft-palette-${expected[index]}`),
+          `${scheme}:${variant}/${state} 文字色不符合调色板表`,
+        );
+      }
+    }
   }
+
+  // The state rules must read the support variables; a hardcoded colour there would
+  // bypass the palette table above while still looking correct in one state.
+  const declaration = (selector, property) => {
+    let value;
+    buttonCss.walkRules((rule) => {
+      if (!rule.selectors.includes(selector)) return;
+      rule.walkDecls(property, (decl) => { value = decl.value; });
+    });
+    assert.ok(value, `${selector} 没有声明 ${property}`);
+    return value;
+  };
+  assert.match(declaration('[data-slot="button"]', 'color'), /^var\(--ln-minecraft-button-normal-color/);
+  assert.match(declaration('[data-slot="button"]:hover:not(:disabled)', 'color'), /^var\(--ln-minecraft-button-hover-color/);
+  assert.match(declaration('[data-slot="button"]:active:not(:disabled)', 'color'), /^var\(--ln-minecraft-button-hover-color/);
+  assert.match(declaration('[data-slot="button"]:disabled', 'color'), /^var\(--ln-minecraft-button-disabled-color/);
+  assert.equal(declaration('[data-slot="button"]:hover:not(:disabled)', '--ln-minecraft-button-image'), 'var(--ln-minecraft-button-hover-image)');
+  assert.equal(declaration('[data-slot="button"]:active:not(:disabled)', '--ln-minecraft-button-image'), 'var(--ln-minecraft-button-normal-image)');
+  assert.equal(declaration('[data-slot="button"]:disabled', '--ln-minecraft-button-image'), 'var(--ln-minecraft-button-disabled-image)');
+});
+
+test('Minecraft 选中与选中悬停始终是调色板黄色', () => {
+  const colours = [];
+  buttonCss.walkRules((rule) => {
+    if (!/^\[data-slot="button"\]\[(aria-pressed|data-state)/.test(rule.selector)) return;
+    rule.walkDecls('color', (decl) => colours.push(resolvePalette(decl.value)));
+  });
+  assert.ok(colours.length >= 2, `预期选中态与选中悬停两条规则，实际 ${colours.length}`);
+  for (const colour of colours) assert.equal(colour, PALETTE.get('--ln-minecraft-palette-yellow'));
 });

@@ -78,7 +78,7 @@ test('Minecraft 三栏与工具栏使用当前明暗令牌；预览和滚动条�
   assert.match(rule(controls, '[data-slot="scroll-area-thumb"]:active')['background'], /var\(--ln-scroll-active\)/);
   assert.match(rule(library, '.library-tile-image img')['object-fit'], /contain/);
   assert.doesNotMatch(source('ui/windows/main/pages/library/library.css'), /filter:\s*(?:invert|grayscale|sepia)/);
-  assert.match(source('ui/themes/minecraft/widgets.css'), /button_normal_min\.png/);
+  assert.match(source('ui/themes/minecraft/widgets.css'), /button_dark_default_normal_min\.png/);
   assert.match(source('ui/themes/minecraft/widgets.css'), /unifont-16\.0\.04\.ttf/);
 });
 
