@@ -154,6 +154,7 @@ fn validate_executable_target(path: &Path, target_os: &str, target_arch: &str) {
 fn validate_public_backends(repo_root: &Path) {
     println!("cargo:rerun-if-env-changed=NOVA_PUBLIC_BACKEND_DIR");
     println!("cargo:rerun-if-env-changed=NOVA_PROTECTED_BUILD_ID");
+    println!("cargo:rerun-if-env-changed=NOVA_PUBLIC_HELPER_INPUT_ID");
     let explicit_directory = env::var_os("NOVA_PUBLIC_BACKEND_DIR");
     let directory = explicit_directory.as_ref().map(PathBuf::from).unwrap_or_else(|| repo_root.join("bin/public-beta"));
     println!("cargo:rerun-if-changed={}", directory.display());
@@ -180,8 +181,17 @@ fn validate_public_backends(repo_root: &Path) {
     assert_eq!(manifest["schema"], "lba.backend.deployment.v1");
     let source = manifest["gitSha"].as_str().expect("public deployment source commit");
     assert!(valid_git_sha(source), "public deployment source identity is malformed");
-    if env::var("PROFILE").as_deref() == Ok("release") || env::var_os("LBA_BUILD_GIT_SHA").is_some() {
+    // Product/UI revisions do not change the public helper's actual inputs.
+    // Development reuse is bound to the content identity checked by the shared
+    // entry, while a formal release still records the exact application SHA.
+    if env::var("PROFILE").as_deref() == Ok("release") {
         assert_eq!(source, build_git_sha(repo_root), "public helpers and Host source commits differ");
+    }
+    if let Ok(input_id) = env::var("NOVA_PUBLIC_HELPER_INPUT_ID") {
+        assert!(input_id.len() == 64 && input_id.bytes().all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value)), "public helper input identity is malformed");
+        assert_eq!(manifest["helperInputId"].as_str(), Some(input_id.as_str()), "public helper build inputs differ from the Host selection");
+        let helper_source = manifest["helperSourceSha"].as_str().expect("public helper actual source commit");
+        assert!(valid_git_sha(helper_source), "public helper actual source identity is malformed");
     }
     if let Some(triple) = manifest.get("targetTriple") {
         assert_eq!(triple.as_str(), env::var("TARGET").ok().as_deref(), "public helper platform/architecture identity differs");
