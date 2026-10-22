@@ -8,7 +8,7 @@ import {
   type MaterialWebExportOptions,
 } from "../platform/applicationOperations";
 import { writeTextFileAbsolute } from "./backend";
-import { translateBuildingType, resolveBlockDisplayName, subscribeI18nChanges, t } from "./i18n";
+import { translateBuildingType, resolveBlockDisplayName, subscribeI18nChanges, t, getUiLocale, getMinecraftTranslations, initI18n } from "./i18n";
 import { windowsPathKey } from "./filePathIdentity";
 
 export interface MaterialItem {
@@ -324,7 +324,8 @@ export async function exportMaterialListWithOptions(filePath: string, options: {
     filters: [{ name: extension.toUpperCase(), extensions: [extension] }],
   });
   if (!savePath) return false;
-  await exportMaterialList({ sourcePath: filePath, ...options, outputPath: savePath });
+  await initI18n();
+  await exportMaterialList({ sourcePath: filePath, ...options, outputPath: savePath, uiLocale: getUiLocale(), languageMap: getMinecraftTranslations() });
   return true;
 }
 

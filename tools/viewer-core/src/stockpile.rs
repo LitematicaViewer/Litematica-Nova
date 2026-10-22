@@ -23,6 +23,10 @@ const SHULKER_STACKS: u64 = 27;
 pub struct StockpileMaterialsData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_locale: Option<String>,
+    // Request-local display overrides are reduced to names actually used by
+    // the material/recipe payload; never serialize the full UI language map.
+    #[serde(skip)]
+    pub ui_translations: BTreeMap<String, String>,
     pub schema_version: u32,
     pub project: StockpileProjectInfo,
     pub summary: StockpileSummary,
@@ -164,6 +168,7 @@ fn build_stockpile_materials_data(
 
     Ok(StockpileMaterialsData {
         ui_locale: None,
+        ui_translations: BTreeMap::new(),
         schema_version: STOCKPILE_MATERIALS_SCHEMA_VERSION,
         project: StockpileProjectInfo {
             source_file: input.display().to_string(),

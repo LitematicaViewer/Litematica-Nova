@@ -315,6 +315,10 @@ pub(crate) struct MaterialWebExportOptions {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ExportMaterialListInput {
+    #[serde(default)]
+    pub(crate) ui_locale: Option<String>,
+    #[serde(default)]
+    pub(crate) language_map: std::collections::BTreeMap<String, String>,
     pub(crate) source_path: String,
     pub(crate) scope: MaterialScope,
     pub(crate) include_container_items: bool,
@@ -698,7 +702,8 @@ impl ApplicationOperations {
             "multiplier": input.multiplier, "minecraft_version": input.minecraft_version,
             "terminal_raw_materials": input.terminal_raw_materials, "format": input.format,
             "web_options": input.web_options,
-            "ui_locale": crate::i18n::locale(),
+            "ui_locale": input.ui_locale.as_deref().unwrap_or(crate::i18n::locale()),
+            "language_map": input.language_map,
         }))?;
         let result = self.run_core(generation, &prefix, vec!["materials-export".into(), path_text(&request_path), "--output".into(), path_text(&output)], &mut files)?;
         parse_core_json(&result.stdout)

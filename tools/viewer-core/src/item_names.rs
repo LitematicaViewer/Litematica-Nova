@@ -76,7 +76,7 @@ fn build_payload_from_cache(
 ) -> StockpileItemNamesPayload {
     let keys = collect_name_keys(materials, recipe_trees);
     let minecraft_keys = keys
-        .into_iter()
+        .iter().cloned()
         .filter(|key| key.starts_with("minecraft:"))
         .collect::<BTreeSet<_>>();
     let mut names = BTreeMap::<String, BTreeMap<String, String>>::new();
@@ -90,6 +90,18 @@ fn build_payload_from_cache(
         }
         if !localized.is_empty() {
             names.insert(key.clone(), localized);
+        }
+    }
+    // UI-export names include the selected language resource and configured
+    // resource-pack priority. Apply only display values; IDs/counts stay intact.
+    let locale = materials.ui_locale.as_deref().unwrap_or("zh-CN");
+    for key in &keys {
+        let Some((namespace, path)) = key.split_once(':') else { continue; };
+        let path = path.replace('/', ".");
+        let value = materials.ui_translations.get(&format!("block.{namespace}.{path}"))
+            .or_else(|| materials.ui_translations.get(&format!("item.{namespace}.{path}")));
+        if let Some(value) = value {
+            names.entry(key.clone()).or_default().insert(locale.to_owned(), value.clone());
         }
     }
     for material in &mut materials.materials {
@@ -138,18 +150,18 @@ fn collect_name_keys(
 }
 
 fn collect_tree_keys(node: &RecipeTreeNode, keys: &mut BTreeSet<String>) {
-    if node.item_id.starts_with("minecraft:") {
+    if node.item_id.contains(':') {
         keys.insert(node.item_id.clone());
     }
-    if node.icon_key.starts_with("minecraft:") {
+    if node.icon_key.contains(':') {
         keys.insert(node.icon_key.clone());
     }
     for ingredient in &node.ingredients {
-        if ingredient.item_id.starts_with("minecraft:") {
+        if ingredient.item_id.contains(':') {
             keys.insert(ingredient.item_id.clone());
         }
         for item in &ingredient.possible_items {
-            if item.starts_with("minecraft:") {
+            if item.contains(':') {
                 keys.insert(item.clone());
             }
         }
@@ -616,6 +628,7 @@ mod tests {
     fn fixture_materials() -> StockpileMaterialsData {
         StockpileMaterialsData {
             ui_locale: None,
+            ui_translations: Default::default(),
             schema_version: crate::stockpile_schema::STOCKPILE_MATERIALS_SCHEMA_VERSION,
             project: StockpileProjectInfo {
                 source_file: "fixture.litematic".to_string(),

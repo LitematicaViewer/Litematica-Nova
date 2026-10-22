@@ -45,6 +45,8 @@ impl MaterialWebOptions {
 pub struct MaterialExportRequest {
     #[serde(default)]
     pub ui_locale: Option<String>,
+    #[serde(default)]
+    pub language_map: BTreeMap<String, String>,
     pub source_path: String,
     pub stats: StableStructureOutput,
     pub multiplier: u64,
@@ -117,8 +119,9 @@ pub fn export(mut request: MaterialExportRequest, output: &Path) -> Result<Mater
     }
     // Resolve names through the existing offline language cache. No resource download
     // or schematic rescan is introduced by exporting in another UI language.
-    crate::item_names::resolve_stockpile_item_names_cached(&request.minecraft_version, &mut materials, &BTreeMap::new())?;
     materials.ui_locale = Some(locale.into());
+    materials.ui_translations = request.language_map;
+    crate::item_names::resolve_stockpile_item_names_cached(&request.minecraft_version, &mut materials, &BTreeMap::new())?;
     for row in &mut materials.materials {
         row.display_name = row.display_names.get(locale).or_else(|| row.display_names.get("en-US"))
             .cloned().unwrap_or_else(|| if english { row.namespace_id.clone() } else { row.display_name.clone() });
@@ -212,7 +215,7 @@ mod tests {
         let directory = Path::new(&snapshot).parent().unwrap();
         let output = directory.join("840FTL-materials-2x-multi.zip");
         let original_rows = stats.material_items.clone();
-        export(MaterialExportRequest {ui_locale:None, source_path:source, stats, multiplier:2, minecraft_version:"26.3".into(),
+        export(MaterialExportRequest {ui_locale:None, language_map:BTreeMap::new(), source_path:source, stats, multiplier:2, minecraft_version:"26.3".into(),
             terminal_raw_materials:false, format:MaterialExportFormat::Html, web_options:Some(MaterialWebOptions {
                 mode:MaterialWebMode::Multi, access_password:Some("fixture-access".into()), admin_password:Some("fixture-admin".into()),
                 whitelist:vec!["FixturePlayer".into()], whitelist_enabled:Some(true), allow_guest_readonly:Some(true),
@@ -269,7 +272,7 @@ mod tests {
         let directory = Path::new(&snapshot).parent().unwrap();
         for (extension, format) in [("svg", MaterialExportFormat::Svg), ("txt", MaterialExportFormat::Txt), ("html", MaterialExportFormat::Html)] {
             let path = directory.join(format!("840FTL-materials-2x.{extension}"));
-            let summary = export(MaterialExportRequest { ui_locale:None, source_path: source.clone(), stats: stats.clone(), multiplier: 2, minecraft_version: "26.3".into(), terminal_raw_materials: false, format, web_options: None }, &path).unwrap();
+            let summary = export(MaterialExportRequest { ui_locale:None, language_map:BTreeMap::new(), source_path: source.clone(), stats: stats.clone(), multiplier: 2, minecraft_version: "26.3".into(), terminal_raw_materials: false, format, web_options: None }, &path).unwrap();
             assert_eq!(summary.material_count, 59);
             let content = std::fs::read_to_string(&path).unwrap();
             assert!(content.contains("材料列表") || extension == "html");
