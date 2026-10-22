@@ -10,7 +10,7 @@ use std::{
 };
 use zeroize::Zeroize;
 
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = nova_protection::runtime::RUNTIME_ABI;
 #[cfg(windows)]
 pub const MODULE_ID: &str = "nova_protected_module.dll";
 #[cfg(target_os = "linux")]
@@ -55,6 +55,10 @@ pub fn trusted_config(identity_dir: impl Into<PathBuf>) -> Result<ClientConfig> 
         nova_protection::crypto::unb64(public_key)?.len() == 32,
         "release manifest verification key is malformed"
     );
+    ensure!(
+        nova_protection::runtime::contract().trusted_manifest_public_keys.iter().any(|key| key == public_key),
+        "release manifest verification key is not trusted by this Host"
+    );
     let build_id = option_env!("NOVA_PROTECTED_BUILD_ID")
         .filter(|value| !value.is_empty())
         .context("protected release build identity is not configured")?;
@@ -63,6 +67,15 @@ pub fn trusted_config(identity_dir: impl Into<PathBuf>) -> Result<ClientConfig> 
         endpoint.starts_with("https://"),
         "protected production endpoint must use HTTPS"
     );
+    if let Some(compatibility) = nova_protection::runtime::compiled_compatibility()? {
+        compatibility.verify(public_key, nova_protection::runtime::target()?)?;
+        ensure!(
+            compatibility.compatibility.runtime_build_id == build_id
+                && compatibility.compatibility.module_id == MODULE_ID
+                && compatibility.compatibility.endpoint == endpoint,
+            "compiled runtime compatibility and selected component differ"
+        );
+    }
     Ok(ClientConfig {
         endpoint: endpoint.into(),
         build_id: build_id.into(),

@@ -138,6 +138,14 @@ impl TaskTicket {
                 && manifest.ciphertext_sha256 == binding.ciphertext_sha256,
             "task/manifest binding mismatch"
         );
+        if let Some(compatibility) = crate::runtime::compiled_compatibility()? {
+            compatibility.verify(&config.manifest_public_key, crate::runtime::target()?)?;
+            ensure!(
+                compatibility.compatibility.endpoint == config.endpoint,
+                "runtime compatibility endpoint differs"
+            );
+            compatibility.verify_manifest(&self.response.signed_manifest, &config.manifest_public_key)?;
+        }
         let mut unsigned = self.response.clone();
         unsigned.server_signature.clear();
         crypto::verify_server(
