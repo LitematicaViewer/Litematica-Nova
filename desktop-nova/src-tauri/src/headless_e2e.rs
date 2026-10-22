@@ -258,7 +258,7 @@ async fn run_async(options: &Options, report: &mut Report, started: Instant) -> 
     report.mark("ApplicationReady", None, started);
     service.launch_in_background(
         Arc::clone(&host.supervisor),
-        host.service_exe.clone(),
+        host.service_exe.clone().ok_or_else(|| nova_protected_loader::FEATURE_NOT_INCLUDED.to_owned())?,
         data_root,
     );
 

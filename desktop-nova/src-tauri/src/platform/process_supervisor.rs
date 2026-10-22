@@ -447,6 +447,11 @@ impl ProcessSupervisor {
         self.owner_epoch
     }
 
+    #[cfg(test)]
+    pub(crate) fn registered_role_count(&self) -> usize {
+        self.allowlist.paths.len()
+    }
+
     pub(crate) fn spawn(&self, spec: LaunchSpec) -> io::Result<SpawnResult> {
         validate_launch(self.owner_epoch, &spec)?;
         let executable = self.allowlist.executable(spec.role)?;

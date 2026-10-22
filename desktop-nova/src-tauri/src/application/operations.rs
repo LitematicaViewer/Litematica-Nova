@@ -799,7 +799,7 @@ impl ApplicationOperations {
     pub(crate) fn runtime_health(&self) -> RuntimeHealth {
         let viewer_available = self
             .backend_dir
-            .join("litematica_native_viewer.exe")
+            .join(format!("litematica_native_viewer{}", std::env::consts::EXE_SUFFIX))
             .is_file();
         let core = match self.run_core_text(vec!["--help".to_owned()]) {
             Ok(help) if !help.trim().is_empty() => RuntimeComponentHealth {

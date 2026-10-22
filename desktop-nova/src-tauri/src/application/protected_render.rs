@@ -21,6 +21,7 @@ impl ProtectedRender {
         self.admissions.insert(token, task);
     }
     pub(crate) fn acquire(&mut self, data_root: &Path, backend: &Path, request: &[u8]) -> Result<ProtectedTask, String> {
+        nova_protected_loader::require_private_runtime().map_err(|error| error.to_string())?;
         #[cfg(feature = "development-runtime")]
         {
             let _ = backend;

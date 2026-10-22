@@ -26,6 +26,22 @@ const DEFAULT_ENDPOINT: &str = "https://45-62-112-121.sslip.io:8448/nova-core";
 const MAX_TICKET_BYTES: u64 = 128 * 1024;
 const MAX_MODULE_BYTES: u64 = 512 * 1024 * 1024;
 
+pub const FEATURE_NOT_INCLUDED: &str = "此构建未包含该功能（Standard / Full 渲染）。";
+
+/// A public checkout has no optional private runtime by default. This selection
+/// is compiled in; changing a process environment variable cannot add a core.
+pub fn is_community_build() -> bool {
+    if cfg!(feature = "development-runtime") { return false; }
+    matches!(option_env!("NOVA_COMMUNITY_BUILD"), Some("1" | "true"))
+        || (option_env!("NOVA_PROTECTED_BUILD_ID").filter(|value| !value.is_empty()).is_none()
+            && option_env!("NOVA_PROTECTED_MANIFEST_PUBLIC_KEY").filter(|value| !value.is_empty()).is_none())
+}
+
+pub fn require_private_runtime() -> Result<()> {
+    ensure!(!is_community_build(), "{FEATURE_NOT_INCLUDED}");
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Role {
@@ -50,6 +66,7 @@ impl TryFrom<u32> for Role {
 /// Trust roots are compiled by the private release builder, never read from
 /// process environment or accepted from the untrusted ticket itself.
 pub fn trusted_config(identity_dir: impl Into<PathBuf>) -> Result<ClientConfig> {
+    require_private_runtime()?;
     let public_key = option_env!("NOVA_PROTECTED_MANIFEST_PUBLIC_KEY")
         .filter(|value| !value.is_empty())
         .context("release manifest verification key is not configured")?;
@@ -166,6 +183,7 @@ fn verify_abi(version: u32) -> Result<()> {
 /// There is no fallback to a local unprotected renderer on authentication or
 /// loading failure. Callers decide how to surface the current task failure.
 pub fn run_role(role: Role) -> Result<i32> {
+    require_private_runtime()?;
     let ticket_path = std::env::var_os("NOVA_PROTECTED_TICKET_PATH")
         .map(PathBuf::from)
         .context("protected task ticket path is absent")?;

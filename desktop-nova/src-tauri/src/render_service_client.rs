@@ -330,6 +330,11 @@ impl RenderServiceClient {
     }
 
     pub(crate) async fn request(&self, command: UiCommand) -> Result<ResponseBody, String> {
+        if nova_protected_loader::is_community_build()
+            && matches!(&command, UiCommand::PreflightBuild(_) | UiCommand::StartBuild(_))
+        {
+            return Err(nova_protected_loader::FEATURE_NOT_INCLUDED.to_owned());
+        }
         if self.inner.writer.lock().unwrap().is_none() {
             match &command {
                 UiCommand::GetSnapshot | UiCommand::Subscribe => return Ok(ResponseBody::Snapshot(self.snapshot())),
