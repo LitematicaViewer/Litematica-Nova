@@ -18,6 +18,7 @@ $backendNames = @('litematica_core.exe','litematica_native_viewer.exe','nova-ren
 $cargoCacheRoot = if ($env:NOVA_PUBLIC_CARGO_CACHE_ROOT) { [IO.Path]::GetFullPath($env:NOVA_PUBLIC_CARGO_CACHE_ROOT) } else { $repo }
 $coreTarget = Join-Path $cargoCacheRoot 'tools/viewer-core/target/public-beta'
 $loaderTarget = Join-Path $cargoCacheRoot 'tools/nova-protected-loader/target/public-beta'
+$stockpileSource = Join-Path $coreTarget 'release/stockpile_server.exe'
 
 # Development launches run this script on every start. Rewriting a file whose
 # bytes did not change only refreshes its mtime, and desktop-nova/src-tauri/build.rs
@@ -40,6 +41,14 @@ function Write-TextIfChanged([string] $Path, [string] $Content) {
     if (-not $Force -and (Test-Path -LiteralPath $Path -PathType Leaf) -and ([IO.File]::ReadAllText($Path) -ceq $Content)) { return $false }
     [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
     return $true
+}
+
+function Resolve-ProductResourceSource([string] $ConfigPath, [string] $SourceName, [string] $DestinationName, [string] $StockpileSource) {
+    # The platform overlay replaces the base resource with this exact Cargo
+    # output. A trusted public snapshot may intentionally share its build cache
+    # with the existing repository instead of creating a second target tree.
+    if ($DestinationName -eq 'bin/stockpile-server/windows-x64/stockpile_server.exe') { return $StockpileSource }
+    return [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $ConfigPath) $SourceName))
 }
 
 Push-Location -LiteralPath $repo
@@ -202,7 +211,7 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
             continue
         }
         if ($Development -and $entry.Name -eq '../../bin/protected') { continue }
-        $source = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $tauriPath) $entry.Name))
+        $source = Resolve-ProductResourceSource $tauriPath $entry.Name $entry.Value $stockpileSource
         if (-not (Test-Path -LiteralPath $source)) { throw "Missing required product resource: $($entry.Name)" }
     }
     if ((& git rev-parse HEAD).Trim() -ne $sha) { throw 'Public source commit changed during the candidate build.' }

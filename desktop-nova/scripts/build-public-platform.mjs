@@ -82,6 +82,19 @@ export async function stageRuntimeResources(runtime, target, platform) {
   await validatePackage(directory, platform.module, { target });
   return directory;
 }
+export async function stageStockpileResource(source, target, platform, resourceRoot = root) {
+  source = path.resolve(source);
+  resourceRoot = path.resolve(resourceRoot);
+  if (!fs.statSync(source).isFile()) throw new Error('The actual compiled stockpile resource is missing.');
+  if (platform.os !== 'win32' || path.parse(source).root.toLowerCase() === path.parse(resourceRoot).root.toLowerCase()) return source;
+  const directory = path.join(resourceRoot, '.tmp/ci-resources', target);
+  fs.mkdirSync(directory, { recursive: true });
+  const staged = path.join(directory, 'stockpile_server.exe');
+  const sourceHash = await hash(source);
+  if (!fs.existsSync(staged) || fs.statSync(staged).size !== fs.statSync(source).size || await hash(staged) !== sourceHash) fs.copyFileSync(source, staged);
+  if (await hash(staged) !== sourceHash) throw new Error('The cross-drive stockpile resource staging differs from its real Cargo output.');
+  return staged;
+}
 async function prepareAssets() {
   const archive = path.join(root, 'pack-in/minecraft-runtime-26.3.zip');
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'pack-in/minecraft-runtime-26.3.manifest.json'), 'utf8'));
@@ -258,7 +271,7 @@ export async function build(args = process.argv.slice(2)) {
     run(process.execPath, [npm, 'run', 'tauri', '--', 'icon', png, '-o', path.join(temporary, 'icons')], { cwd: desktop });
     icon = path.join(temporary, 'icons', platform.os === 'darwin' ? 'icon.icns' : 'icon.png');
   }
-  const stockpile = path.join(cargo.core, 'release', `stockpile_server${platform.suffix}`);
+  const stockpile = await stageStockpileResource(path.join(cargo.core, 'release', `stockpile_server${platform.suffix}`), target, platform);
   const config = path.join(temporary, 'tauri.json'); fs.writeFileSync(config, JSON.stringify(tauriOverride(base, { platform, stage, runtime: resourceRuntime, stockpile, icon, candidate }), null, 2));
   if (development) {
     delete process.env.LBA_BUILD_GIT_SHA;
