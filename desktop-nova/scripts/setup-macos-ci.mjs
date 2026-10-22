@@ -165,7 +165,6 @@ async function llvmPrefix(toolingRoot, scratch, arch, run, env) {
   const build = path.join(scratch, 'llvm-build');
   fs.mkdirSync(source, { recursive: true });
   run('extract-llvm-source', 'tar', ['-xf', input, '--strip-components=1', '-C', source]);
-  run('llvm-build-dependencies', 'brew', ['install', 'cmake', 'ninja']);
   run('configure-llvm-intel', 'cmake', sourceBuildArguments(source, build, prefix));
   const jobs = Math.max(1, Math.min(4, os.availableParallelism() - 1, Math.floor(os.totalmem() / (3 * 1024 ** 3))));
   run('build-llvm-intel', 'cmake', ['--build', build, '--target', 'distribution', '--parallel', String(jobs)]);
@@ -188,6 +187,9 @@ export async function setupMacosCi(options) {
   for (const name of Object.keys(env)) if (name.startsWith('AMICE_')) delete env[name];
   const run = runner(logs, env);
   run('apple-sdk', 'xcrun', ['--sdk', 'macosx', '--show-sdk-path'], { capture: true });
+  // shaderc-sys builds its pinned native compiler for every formal backend,
+  // including hosts using a prebuilt/supplied LLVM toolchain.
+  run('native-compiler-build-dependencies', 'brew', ['install', 'cmake', 'ninja']);
   run('rust-toolchain', 'rustup', ['toolchain', 'install', RUST_TOOLCHAIN, '--profile', 'minimal', '--component', 'llvm-tools-preview', '--target', options.target]);
   const rustc = run('locate-rustc', 'rustup', ['which', '--toolchain', RUST_TOOLCHAIN, 'rustc'], { capture: true }).trim();
   const rustVersion = run('rust-version', rustc, ['-vV'], { capture: true });

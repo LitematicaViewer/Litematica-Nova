@@ -102,7 +102,7 @@ async function stageResult() {
   if (result.schema !== 'nova.ci.result.v1' || result.sourceSha !== ctx.sourceSha || result.target !== ctx.target || result.taskId !== ctx.taskId || result.exitCode !== 0) throw new Error('The cloud backend task did not succeed.');
   const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'result/private-build.json'), 'utf8'));
   const module = path.join(directory, 'result/backend/libnova_protected_module.dylib');
-  if (manifest.gitSha !== ctx.sourceSha || manifest.targetTriple !== ctx.target || manifest.seed !== result.seed || manifest.amice?.vmApplied !== true || manifest.amice?.targetTriple !== ctx.target || manifest.amice?.objectFormat !== 'macho' || manifest.amice?.sourceCalls !== 1 || manifest.amice?.irCalls !== 4 || Object.keys(manifest.artifacts ?? {}).join() !== 'libnova_protected_module.dylib') throw new Error('The returned module/receipt identity differs.');
+  if (manifest.gitSha !== ctx.sourceSha || manifest.targetTriple !== ctx.target || manifest.seed !== result.seed || manifest.amice?.vmApplied !== true || manifest.amice?.targetTriple !== ctx.target || manifest.amice?.objectFormat !== 'macho' || manifest.amice?.sourceCalls !== 1 || manifest.amice?.irCalls !== 1 || Object.keys(manifest.artifacts ?? {}).join() !== 'libnova_protected_module.dylib') throw new Error('The returned module/receipt identity differs.');
   const record = manifest.artifacts['libnova_protected_module.dylib'];
   const hash = crypto.createHash('sha256'); for await (const bytes of fs.createReadStream(module)) hash.update(bytes);
   if (hash.digest('hex') !== record.sha256 || fs.statSync(module).size !== record.bytes) throw new Error('The returned module hash differs.');
