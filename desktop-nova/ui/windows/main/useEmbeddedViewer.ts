@@ -142,7 +142,13 @@ export function usePresentationViewport(operation: PresentationViewportOperation
     // Native restore notifications are needed even if Ready arrived while the
     // parent was minimized and no visible geometry effect has been mounted yet.
     void subscribeNativeWindowGeometry(() => {
-      if (!cancelled && !pageHidden.current) setVisibilityRevision((revision) => revision + 1);
+      if (!cancelled && !pageHidden.current) {
+        // Invalidate pending native geometry reads in this callback, not after
+        // React commits the state update. A resize/minimize can otherwise let
+        // the previous visible rect publish once after the native transition.
+        ++presentationRevision.current;
+        setVisibilityRevision((revision) => revision + 1);
+      }
     }).then((unsubscribe) => {
       if (cancelled) unsubscribe(); else unsubscribeNativeWindow = unsubscribe;
     }).catch((reason) => console.warn("[NOVA_PRESENTATION] subscribe window geometry failed", reason));

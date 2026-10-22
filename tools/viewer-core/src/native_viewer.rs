@@ -45,6 +45,18 @@ use crate::model::{CompactSurfaceOutput,MeshChunkOutput,MetadataOutput,TexturedV
 use crate::process_io::read_process_file;
 use crate::viewer_session::ViewerSessionWatcher;
 use crate::runtime_paths;
+pub(crate) fn product_window_icon() -> Option<winit::window::Icon> {
+    static ICON: OnceLock<winit::window::Icon> = OnceLock::new();
+    Some(ICON.get_or_init(|| {
+        let image = image::load_from_memory(include_bytes!("../../../desktop-nova/src-tauri/icons/icon.png"))
+            .expect("bundled Nova icon is a valid PNG")
+            .into_rgba8();
+        let (width, height) = image.dimensions();
+        winit::window::Icon::from_rgba(image.into_raw(), width, height)
+            .expect("bundled Nova icon has valid dimensions")
+    }).clone())
+}
+
 const QUICK_MESH_CACHE_FORMAT: &str="native_fast_preview_cache_v1";
 #[derive(Clone, Debug)]
 struct ViewerShutdownRecord {
@@ -10200,7 +10212,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
     let event_loop = EventLoop::new()?;
     let viewer_started_at = Instant::now();
     let auto_exit_after = args.auto_exit_seconds.map(Duration::from_secs);
-    let window_builder = WindowBuilder::new()
+    let window_builder = WindowBuilder::new().with_window_icon(product_window_icon())
             .with_title(title)
             .with_inner_size(PhysicalSize::new(1280_u32, 800_u32))
             .with_decorations(true)

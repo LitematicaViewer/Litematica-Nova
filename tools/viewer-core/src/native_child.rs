@@ -69,7 +69,8 @@ pub(super) fn builder(
     if context == 0 || previous == 0 { bail!("native child DPI context setup failed"); }
     let handle = Win32WindowHandle::new(NonZeroIsize::new(hwnd).context("zero native host HWND")?);
     let builder = unsafe { builder.with_parent_window(Some(RawWindowHandle::Win32(handle))) }
-        .with_decorations(false).with_visible(false).with_active(false);
+        .with_decorations(false).with_undecorated_shadow(false)
+        .with_resizable(false).with_maximized(false).with_visible(false).with_active(false);
     Ok((builder, DpiContext(previous)))
 }
 
@@ -80,7 +81,57 @@ pub(super) fn verify(window: &winit::window::Window, host: &QuickPreviewHostWind
         || unsafe { GetWindowLongPtrW(hwnd, -16) } & 0x4000_0000 == 0 {
         bail!("quick preview did not create a WS_CHILD window inside its host");
     }
+    ensure_child_frame(hwnd)?;
     println!("[QUICK_NATIVE_CHILD] parent={} hwnd={} ws_child=true top_level=false reparent=false gpu_surface=existing-wgpu", parent, hwnd);
+    Ok(())
+}
+
+/// winit 0.29 keeps overlapped frame bits even with decorations=false and
+/// implements that option through WM_NCCALCSIZE. A real embedded control must
+/// also have a child-only native style, including after winit rewrites styles.
+fn ensure_child_frame(hwnd: isize) -> Result<()> {
+    const GWL_STYLE: i32 = -16;
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_CHILD: isize = 0x4000_0000;
+    const WS_POPUP: isize = 0x8000_0000_u32 as isize;
+    const WS_CAPTION: isize = 0x00c0_0000;
+    const WS_THICKFRAME: isize = 0x0004_0000;
+    const WS_SYSMENU: isize = 0x0008_0000;
+    const WS_MINIMIZE: isize = 0x2000_0000;
+    const WS_MAXIMIZE: isize = 0x0100_0000;
+    const WS_CLIPCHILDREN: isize = 0x0200_0000;
+    const WS_CLIPSIBLINGS: isize = 0x0400_0000;
+    const WS_EX_FRAME: isize = 0x0000_0001 | 0x0000_0100 | 0x0000_0200 | 0x0002_0000;
+    const WS_EX_APPWINDOW: isize = 0x0004_0000;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+    ensure!(style & WS_CHILD != 0, "native frame normalization requires an existing WS_CHILD");
+    // WS_MINIMIZEBOX/WS_MAXIMIZEBOX share their bits with WS_GROUP/WS_TABSTOP
+    // for child controls. Keep those input-navigation bits, not an entire
+    // WS_OVERLAPPEDWINDOW mask. Never change the parent or transparency flags.
+    let child_style = (style & !(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU
+        | WS_MINIMIZE | WS_MAXIMIZE)) | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let child_ex_style = ex_style & !(WS_EX_FRAME | WS_EX_APPWINDOW);
+    if child_style == style && child_ex_style == ex_style { return Ok(()); }
+    if child_style != style
+        && unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, child_style) } == 0 {
+        bail!("set native child frame style: {}", std::io::Error::last_os_error());
+    }
+    // A changed ex-style necessarily had one of the nonzero frame bits above,
+    // so a zero previous value is an error, not SetWindowLongPtr's valid zero.
+    if child_ex_style != ex_style
+        && unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, child_ex_style) } == 0 {
+        bail!("set native child extended frame style: {}", std::io::Error::last_os_error());
+    }
+    if unsafe { SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE
+        | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) } == 0 {
+        bail!("refresh native child frame: {}", std::io::Error::last_os_error());
+    }
     Ok(())
 }
 
@@ -109,6 +160,7 @@ pub(super) fn apply(
             if command.screen_x.is_some() && unsafe { ScreenToClient(parent, &mut origin) } == 0 {
                 bail!("native child screen-to-client conversion failed");
             }
+            ensure_child_frame(hwnd)?;
             let flags = 0x0010 | if command.kind == ViewerSessionCommandKind::AttachEmbedded { 0x0040 } else { 0 };
             if unsafe { SetWindowPos(hwnd, 0, origin.x, origin.y, width as i32, height as i32, flags) } == 0 {
                 bail!("native child placement failed");

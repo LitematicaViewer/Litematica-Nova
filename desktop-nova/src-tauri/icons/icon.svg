@@ -1,0 +1,150 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1254" height="1254" viewBox="115 110 1024 1024">
+  <title>Litematica-Nova — transparent editable SVG, aligned plan-view blueprint</title>
+  <desc>The existing editable icon with its plan-view drawing affinely projected onto the cube top face and centered with safe margins. All non-blueprint shapes, the V and inverted-V colors, and the transparent background are unchanged. Native SVG vector paths and gradients; no embedded raster image.</desc>
+  <defs>
+    <path id="outline-0" d="M652.5,554.756 651.5,555.194 649.526,554.5 620.5,537.566 364.5,384.832 339.5,369.682 335.181,366.5 336.5,365.191 343.5,361.215 442.5,305.587 628.5,200.028 629.5,200.209 819.5,309.681 948.995,383.5 949.157,384.5 948.5,384.923 765.5,489.385 652.5,554.756Z"/>
+    <path id="outline-1" d="M537.5,1010.507 536.5,1010.035 531.234,1001.5 410.722,798.5 374.691,739.5 324.766,661.5 277.5,589.071 276.5,588.147 276.132,589.5 277.195,918.5 277.184,924.5 276.754,925.5 275.5,925.403 269.5,921.826 195.792,875.5 195.303,874.5 195.892,678.5 195.932,423.5 196.022,411.5 196.5,410.928 202.5,414.186 281.916,464.5 360.768,576.5 430.674,678.5 478.695,750.5 536.986,841.5 537.638,843.5 537.5,1010.507Z"/>
+    <linearGradient id="color-1" gradientUnits="userSpaceOnUse" x1="612.786" y1="821.121" x2="112.057" y2="620.208">
+      <stop stop-color="#263547"/>
+      <stop offset="1" stop-color="#243445"/>
+    </linearGradient>
+    <path id="outline-2" d="M677.5,1093.988 676.434,1093.5 688.74,1071.5 718.74,1015.5 778.5,902.349 954.757,565.5 1023.034,433.5 1024.5,431.927 1056.5,412.168 1059.5,410.794 1060.072,411.5 1060.263,535.5 1060.573,865.5 1060.492,874.5 1059.941,875.5 995.5,914.833 994.5,915.231 993.933,914.5 994.341,774.5 995.5,617.82 994.061,619.5 865.759,873.5 786.298,1029.5 781.5,1032.773 756.5,1047.162 677.5,1093.988Z"/>
+    <linearGradient id="color-2" gradientUnits="userSpaceOnUse" x1="826" y1="1113.444" x2="924.241" y2="392.633">
+      <stop stop-color="#8ea19e"/>
+      <stop offset="1" stop-color="#768c89"/>
+    </linearGradient>
+    <path id="outline-3" d="M638.5,1109.126 637.84,1108.5 637.697,1104.5 637.928,659.5 639.5,658.121 709.5,617.087 710.5,616.568 711.356,617.5 711.5,839.817 712.793,838.5 887.109,515.5 888.5,514.145 947.5,478.203 984.5,456.237 989.5,453.341 990.5,453.213 990.499,454.5 987.648,460.5 967.621,499.5 879.944,668.5 810.649,800.5 691.942,1024.5 662.919,1077.5 650.944,1095.5 641.603,1106.5 638.5,1109.126Z"/>
+    <linearGradient id="color-3" gradientUnits="userSpaceOnUse" x1="865.078" y1="744.094" x2="661.675" y2="620.148">
+      <stop stop-color="#6b8398"/>
+      <stop offset="1" stop-color="#5d748c"/>
+    </linearGradient>
+    <path id="outline-4" d="M616.5,1108.958 546.5,1063.618 543.68,1061.5 543.524,1060.5 543.154,627.5 543.302,615.5 544.5,614.992 571.5,631.688 614.5,657.258 617.207,659.5 617.426,1097.5 617.355,1107.5 617.127,1108.5 616.5,1108.958Z"/>
+    <linearGradient id="color-4" gradientUnits="userSpaceOnUse" x1="513.092" y1="853.391" x2="642.181" y2="834.795">
+      <stop stop-color="#263648"/>
+      <stop offset="1" stop-color="#253446"/>
+    </linearGradient>
+    <path id="outline-5" d="M616.5,635.841 607.5,630.714 564.5,604.183 492.5,560.792 318.5,454.807 200.5,382.721 196.082,379.5 197.5,378.088 206.5,372.257 245.5,348.255 254.5,343.091 256.5,342.902 284.5,359.199 421.5,441.866 592.5,544.269 616.5,558.961 618.342,560.5 618.768,561.5 617.707,633.5 617.667,634.5 616.5,635.841Z"/>
+    <linearGradient id="color-5" gradientUnits="userSpaceOnUse" x1="387.401" y1="595.789" x2="426.047" y2="371.468">
+      <stop stop-color="#263547"/>
+      <stop offset="1" stop-color="#253546"/>
+    </linearGradient>
+    <path id="outline-6" d="M325.5,358.83 324.5,359.092 322.5,358.758 300.5,346.622 274.532,331.5 273.255,330.5 273.427,329.5 294.5,316.253 333.5,293.285 429.5,238.132 533.5,179.292 575.5,156.094 605.5,140.356 616.5,135.207 617.5,136.122 617.984,137.5 618.881,190.5 618.804,191.5 617.5,193.002 325.5,358.83Z"/>
+    <linearGradient id="color-6" gradientUnits="userSpaceOnUse" x1="430.239" y1="189.906" x2="467.68" y2="315.896">
+      <stop stop-color="#24394e"/>
+      <stop offset="1" stop-color="#23374b"/>
+    </linearGradient>
+    <path id="outline-7" d="M639.5,633.638 638.5,633.942 637.45,632.5 637.469,605.5 638.46,576.5 638.772,575.5 640.5,573.995 958.5,391.079 960.5,390.699 965.5,393.097 996.5,411.186 1004.5,416.29 1005.492,417.5 1004.5,418.724 1001.5,420.765 974.5,436.908 715.5,588.275 639.5,633.638Z"/>
+    <linearGradient id="color-7" gradientUnits="userSpaceOnUse" x1="799.008" y1="467.28" x2="839.622" y2="527.982">
+      <stop stop-color="#60819f"/>
+      <stop offset="1" stop-color="#5f809e"/>
+    </linearGradient>
+    <path id="outline-8" d="M904.5,341.864 902.5,342.213 899.5,340.964 702.5,228.288 638.65,192.5 637.997,191.5 637.926,167.5 637.245,154.5 637.265,138.5 638.329,135.5 639.5,135.193 647.5,139.062 678.5,155.245 750.5,195.272 889.5,275.275 921.5,294.412 940.5,306.469 949.055,312.5 949.499,313.5 945.5,316.671 915.398,335.5 904.5,341.864Z"/>
+    <linearGradient id="color-8" gradientUnits="userSpaceOnUse" x1="803.411" y1="207.538" x2="769.86" y2="283.582">
+      <stop stop-color="#60819f"/>
+      <stop offset="1" stop-color="#5f7f9e"/>
+    </linearGradient>
+    <path id="outline-9" d="M964.5,372.838 962.5,373.173 960.5,372.851 924.5,352.657 922.905,351.5 922.308,350.5 922.638,349.5 923.5,348.723 927.5,345.943 958.5,326.292 962.5,324.623 965.5,325.248 987.5,337.208 1002.5,346.347 1003.27,347.5 1002.5,348.804 996.5,352.866 976.5,365.687 964.5,372.838Z"/>
+    <linearGradient id="color-9" gradientUnits="userSpaceOnUse" x1="951.068" y1="330.117" x2="973.964" y2="366.343">
+      <stop stop-color="#62819f"/>
+      <stop offset="1" stop-color="#5f7f9d"/>
+    </linearGradient>
+    <path id="outline-10" d="M1020.5,404.903 1018.5,405.018 1015.5,403.681 980.5,383.582 979.463,382.5 979.237,381.5 979.852,380.5 983.5,377.901 1003.5,365.112 1016.5,356.953 1019.5,356.074 1022.5,357.327 1040.5,367.075 1055.5,376.072 1059.891,379.5 1057.5,381.786 1051.5,385.732 1020.5,404.903Z"/>
+    <linearGradient id="color-10" gradientUnits="userSpaceOnUse" x1="1027.095" y1="358.974" x2="1009.534" y2="400.87">
+      <stop stop-color="#6282a0"/>
+      <stop offset="1" stop-color="#5f7f9d"/>
+    </linearGradient>
+    <clipPath id="panel-clip">
+      <use href="#outline-0" xlink:href="#outline-0"/>
+    </clipPath>
+    <linearGradient id="panel-fill" gradientUnits="userSpaceOnUse" x1="410" y1="235" x2="840" y2="495">
+      <stop offset="0" stop-color="#1e3954"/>
+      <stop offset="1" stop-color="#233f5d"/>
+    </linearGradient>
+  </defs>
+  <g id="background" display="none">
+    <title>Background</title>
+  </g>
+  <g id="N-left-and-diagonal">
+    <title>N-left-and-diagonal</title>
+    <use href="#outline-1" xlink:href="#outline-1" fill="url(#color-1)"/>
+  </g>
+  <g id="A-inverted-V">
+    <title>A-inverted-V</title>
+    <use href="#outline-2" xlink:href="#outline-2" fill="url(#color-2)"/>
+  </g>
+  <g id="V">
+    <title>V</title>
+    <use href="#outline-3" xlink:href="#outline-3" fill="url(#color-3)"/>
+  </g>
+  <g id="N-right-stem">
+    <title>N-right-stem</title>
+    <use href="#outline-4" xlink:href="#outline-4" fill="url(#color-4)"/>
+  </g>
+  <g id="top-front-left-rim">
+    <title>top-front-left-rim</title>
+    <use href="#outline-5" xlink:href="#outline-5" fill="url(#color-5)"/>
+  </g>
+  <g id="top-back-left-rim">
+    <title>top-back-left-rim</title>
+    <use href="#outline-6" xlink:href="#outline-6" fill="url(#color-6)"/>
+  </g>
+  <g id="top-front-right-rim">
+    <title>top-front-right-rim</title>
+    <use href="#outline-7" xlink:href="#outline-7" fill="url(#color-7)"/>
+  </g>
+  <g id="top-back-right-rim">
+    <title>top-back-right-rim</title>
+    <use href="#outline-8" xlink:href="#outline-8" fill="url(#color-8)"/>
+  </g>
+  <g id="top-right-tile-1">
+    <title>top-right-tile-1</title>
+    <use href="#outline-9" xlink:href="#outline-9" fill="url(#color-9)"/>
+  </g>
+  <g id="top-right-tile-2">
+    <title>top-right-tile-2</title>
+    <use href="#outline-10" xlink:href="#outline-10" fill="url(#color-10)"/>
+  </g>
+  <g id="blueprint" clip-path="url(#panel-clip)">
+    <title>Plan-view blueprint, centered and projected onto the top face</title>
+    <rect x="320" y="190" width="650" height="380" fill="url(#panel-fill)"/>
+    <g id="blueprint-grid" fill="none" stroke="#8fa9bc" stroke-width="1.2" stroke-linecap="butt" opacity="0.10" transform="matrix(0.862595931 0.505893526 -0.869055022 0.494715443 641.000000 376.250000)">
+      <path d="M-184.32732 -85 H184.32732 M-85 -170.29992 V170.29992"/>
+      <path d="M-184.32732 0 H184.32732 M0 -170.29992 V170.29992"/>
+      <path d="M-184.32732 85 H184.32732 M85 -170.29992 V170.29992"/>
+    </g>
+    <g id="blueprint-top-plane-projection" transform="matrix(0.828092094 0.485657785 -0.834292821 0.474926825 407.899088732 -83.472655196)">
+      <g id="blueprint-linework" fill="none" stroke="#d9e4ec" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="510,268 742,268 742,420 510,420"/>
+        <path d="M560 313H692V370H640V392H560Z"/>
+        <line x1="626" y1="250" x2="626" y2="438" opacity="0.72"/>
+        <line x1="492" y1="344" x2="760" y2="344" opacity="0.42"/>
+        <line x1="510" y1="240" x2="742" y2="240"/>
+        <line x1="510" y1="232" x2="510" y2="248"/>
+        <line x1="742" y1="232" x2="742" y2="248"/>
+        <line x1="778" y1="268" x2="778" y2="420"/>
+        <line x1="770" y1="268" x2="786" y2="268"/>
+        <line x1="770" y1="420" x2="786" y2="420"/>
+        <line x1="452" y1="300" x2="492" y2="300"/>
+        <line x1="452" y1="292" x2="452" y2="308"/>
+        <line x1="492" y1="292" x2="492" y2="308"/>
+      </g>
+      <g id="blueprint-nodes" fill="#e6eef4" opacity="0.95">
+        <circle cx="510" cy="268" r="4.7"/>
+        <circle cx="742" cy="268" r="4.7"/>
+        <circle cx="742" cy="420" r="4.7"/>
+        <circle cx="510" cy="420" r="4.7"/>
+        <circle cx="560" cy="313" r="4.2"/>
+        <circle cx="692" cy="313" r="4.2"/>
+        <circle cx="692" cy="370" r="4.2"/>
+        <circle cx="640" cy="370" r="4.2"/>
+        <circle cx="640" cy="392" r="4.2"/>
+        <circle cx="560" cy="392" r="4.2"/>
+        <circle cx="510" cy="240" r="3.8"/>
+        <circle cx="742" cy="240" r="3.8"/>
+        <circle cx="778" cy="268" r="3.8"/>
+        <circle cx="778" cy="420" r="3.8"/>
+      </g>
+    </g>
+  </g>
+</svg>

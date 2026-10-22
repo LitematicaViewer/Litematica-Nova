@@ -39,7 +39,6 @@
 | V1.34 | 2026-10-19 | Codex  | **裸元素第 1 批（页面表格）**：DOM 侦察确认 `tbody/thead/tr/td/th` 在 TSX 中**只以带 `data-slot` 的形式出现**，`button/input/textarea/select` 仍有不带槽位的用法（不能机械替换）。据此把 library 6 条、properties 5 条、materials 1 条表格选择器改为 `[data-slot="table-body"/"table-header"/"table-row"/"table-cell"/"table-head"]`，裸元素 121 → **110**，总基线 151 → **140** |
 | V1.35     | 2026-10-20 | Codex  | **Metro10 接入当前主题契约**：取回的 Metro10 仍是裸元素 `widget/*.css`，注册前会被护栏当作 staged 资源跳过。现改为 `theme.css`（浅色/深色 Tier 1 令牌、字阶、`--flake-*` 资源、私有尺寸）+ `widgets.css`（`[data-slot]`、`components.theme`），删除 12 个 widget 文件与 `nav-icons.css`；同时登记 `THEMES`、Rust `normalize_theme` 与设置页色块，主题从三套变四套。新主题 CSS 在 `check:ui-styles` 下 0 违规，`library-theme-css` 的明暗对比检查扩展到 Metro10 |
 | V1.36     | 2026-10-20 | Codex  | **功能图标主题化**：新增 `ui/components/ThemeIcon.tsx`，按活动主题解析 `ui/themes/<theme>/resource/icon/{button,tool}/<name>.{svg,png}`；有素材时覆盖，缺素材时回退到调用点传入的 lucide 图标，因此 Minecraft 等后续补图无需改业务代码。SVG 用 `mask + currentColor` 绘制，跟随按钮文字在浅/深色与各 variant 下变色；PNG 保留原图给像素主题。Home / Library / Properties / Render / Settings / Flake 的按钮与占位图标改用语义名（folder、gallery、import、run、empty…），`folder` 仅替换分类的默认 lucide Folder，保留用户自选图标。`functional-icons.test.mjs` 从“禁止主题位图”改为锁定新契约 |
-| V1.37     | 2026-10-22 | Codex  | **Minecraft 按钮贴图改名（明暗 × 变体 × 状态）**：文件名改为 `button_<light\|dark>_<变体>_<状态>_min.png`，变体段必填（无变体/次要→`default`，主要→`primary`），`check_hover`→`checkhover`；接入两套明暗贴图与七色调色板（新增红 `#ff5555`、绿 `#3c8527`、紫 `#7345e5`），明暗背景改为 `#78a7ff` / `#252525`；导航文字与图标、滑块贴图随明暗；补齐明亮描边按钮 `normal` 贴图（原文件误拼 `nomal`）；`minecraft-controls` 测试改为覆盖 2 明暗 × 4 变体 × 5 状态并校验调色板表 |
 
 本文件规定 Nova 前端的样式分层、组件契约与主题契约。组件来源与许可证见 [THIRD_PARTY_UI.md](THIRD_PARTY_UI.md)；开发与构建流程见 [DEVELOPMENT.md](DEVELOPMENT.md)；界面功能需求见 [design.md](design.md) 的 2.0 节。
 
@@ -1117,51 +1116,49 @@ Phase 4.4 的第一版给 `[data-size="xs"]` 加了 `font-size: 11px`，理由�
 
 ---
 
-### Minecraft 按钮贴图（明暗 × 变体 × 状态）
+### Minecraft 按钮变体贴图（Phase 4 之后的增量）
 
-**命名规则**：`button_<明暗>_<变体>_<状态>_min.png`，三段都不可省略。
+**命名规则**：`button_<状态>[_<变体>]_min.png`，变体段可省略。状态词表 `normal / hover / check / check_hover / disabled`（`active` 复用 `normal`）。
 
-- **明暗**：`light` / `dark`，对应 `html[data-color-scheme]`；`dark` 是不带该属性的默认分支。
-- **变体**：无变体按钮与次要按钮统一声明为 `default`；主要按钮 `primary`；危险按钮 `destructive`；边框按钮 `outline`。
-- **状态**：`normal / hover / check / checkhover / disabled`（`active` 复用 `normal`；原 `check_hover` 改名为 `checkhover`）。
-- `ghost` / `link` 是无边框按钮，不提供贴图集，只在 `widgets.css` 里声明文字色。
-
-**映射**
+**已定案的映射**
 
 | `data-variant` | 贴图变体段 | 说明 |
 | -------------- | ---------- | ---- |
-| `secondary`（CVA 默认，也是无变体按钮） | `default` | `button_<明暗>_default_<状态>_min.png` 5 张 |
-| `default` | **`primary`** | 主要按钮；代码名与贴图名不同，文件内已写注释记录 |
+| `secondary`（CVA 的默认变体，200 个按钮） | 无（就是不带变体段的基础那套） | `button_normal_min.png` 等 5 张即这套 |
+| `default` | **`primary`** | 代码名与贴图名不同，按决定保留；文件内已写注释记录该映射 |
 | `outline` | `outline` | 独立一套 5 张 |
-| `destructive` | `destructive` | 独立一套 5 张；禁用底板红偏灰，文字用醒目的红色 |
-| `ghost` / `link` | 无 | `appearance.css` 已给 `border-image: none` |
+| `destructive` | `destructive` | 4 个状态；缺 `button_disabled_destructive_min.png`，禁用态刻意回落共享的禁用贴图 |
+| `ghost` / `link` | 不需要 | `appearance.css` 已给 `border-image: none`，是无边框按钮 |
 
-**调色板与文字色**（`appearance.css` 的 `--ln-minecraft-palette-*`）
+**实现方式：变量间接，而不是逐变体写 `url()`**
 
-| 变体 | 明亮 normal / hover | 明亮 disabled | 黑暗 normal / hover | 黑暗 disabled |
-| ---- | ------------------- | ------------- | ------------------- | ------------- |
-| 次要（`default`） | 深灰 `#3f3f3f` | 灰 `#808080` | 纯白 `#ffffff` | 灰 `#808080` |
-| 主要（`primary`） | 纯白 `#ffffff` | 灰 `#808080` | 纯白 `#ffffff` | 灰 `#808080` |
-| 危险（`destructive`） | 纯白 `#ffffff` | 红 `#ff5555` | 纯白 `#ffffff` | 红 `#ff5555` |
-| 边框（`outline`） | 深灰 `#3f3f3f` | 灰 `#808080` | 纯白 `#ffffff` | 灰 `#808080` |
-| 幽灵（`ghost`） | 深灰 `#3f3f3f` | 灰 `#808080` | 纯白 `#ffffff` | 灰 `#808080` |
-| 链接（`link`） | 绿 `#3c8527` | 灰 `#808080` | 紫 `#7345e5` | 灰 `#808080` |
+朴素做法是给每个变体写 5 条规则，但每条都要**压过** `button:hover:not(:disabled)` 这类状态规则的优先级，而且**漏写一个状态就会静默沿用基础贴图**。因此改成：
 
-选中态与选中悬停态**不分变体、不分明暗**，一律用调色板黄色 `#ffff00`。明暗背景色分别是天空色 `#78a7ff` 与夜空色 `#252525`。
+```css
+button[data-slot="button"][data-variant="default"] {
+    --ln-minecraft-button-normal-image: url("…button_normal_primary_min.png");
+    /* hover / check / check-hover / disabled 同上 */
+}
+/* 状态规则只读变量，未定义时回落到基础贴图 */
+button:hover:not(:disabled) {
+    --ln-minecraft-button-image: var(--ln-minecraft-button-hover-image, url("…button_hover_min.png"));
+}
+```
 
-**实现方式：变量间接 + 明暗限定选择器**
+变体规则只提供"支撑变量"，不参与贴图的层叠竞争，所以**没有优先级问题**；没有贴图集的变体（secondary、destructive）什么都不用写，自然回落。
 
-变体规则只提供"支撑变量"（`--ln-minecraft-button-<状态>-image` 与 `-color`），状态规则统一读变量，因此变体不参与 `button:hover` 的层叠竞争，漏写一个状态也只回落到 `default` 底板而不是解析为空。明暗切换必须给**每一条变体规则**加 `html[data-theme="minecraft"][data-color-scheme="light"]` 前缀：明亮基础规则是 (0,3,1)，若不限定明暗，黑暗变体 (0,2,0) 会被它压住，明亮贴图就会在黑暗模式下生效。
+**新增 2 个测试**（`minecraft-controls.test.mjs`，现共 7 个用例）
 
-`default` 变体仍映射到 `primary` 贴图，文字取纯白；`secondary` 直接使用基础 `default` 贴图，不再保留无变体的回退文件。明亮描边按钮的 `normal` 贴图原先导出成了 `nomal`，现已改名补齐。
+1. 每个有贴图的变体必须声明 `normal / hover / check / check_hover` 四个状态，且每个 `url()` 指向的文件**真实存在**。`disabled` 是**可选的**：禁用按钮在各变体下长得一样是合理的默认，所以 `destructive` 就刻意回落共享的禁用贴图；其余四个状态则是"变体必须看起来不同于基础套"的部分，缺一个就报错。
+2. 6 条基础回退 `url()` 指向的文件也真实存在。
 
-**测试**（`minecraft-controls.test.mjs`，现共 10 个用例）
+这两条针对变量间接带来的两个静默失败模式：漏一个状态 → 该状态沿用基础贴图；文件名拼错 → 变量解析为空、回落基础贴图。两者都不报错、只会"看起来差一点"。**均已验证可证伪**：删掉 primary 的 hover 状态 → 失败 1 个；文件名改成 `primray` → 失败 1 个。
 
-1. 贴图集必须覆盖两种明暗 × 四个有贴图的变体，每套 5 个状态；每个 `url()` 的文件名必须精确等于 `button_<明暗>_<变体段>_<状态>_min.png` 且文件真实存在。`ghost` / `link` 声明贴图集会失败。
-2. 调色板必须等于上表的 7 个色值，每个明暗 × 变体的 `normal / hover / disabled` 文字色必须解析到对应调色板项。
-3. 选中态与选中悬停态的文字色必须始终解析为黄色。
+**顺带修掉护栏的一个假阳性**：`token-undefined-reference` 原来扫描原始源码，于是注释里写 `var(--ln-minecraft-button-<state>-image, …)` 被当成"引用未定义令牌"报错。已改为扫描**注释屏蔽后**的文本，并验证真实未定义引用仍会报出。新增 1 个用例（`check:ui-styles` 现共 17 个）。
 
-这三条针对变量间接带来的静默失败模式：漏状态、文件名拼错、明暗规则被另一明暗压过。**均已验证可证伪**：删掉 primary 的 hover 状态、把文件名改成 `primray`、去掉明亮变体规则的明暗前缀，都会各失败 1 个用例。
+**主要按钮的常态文字色是深灰，不是白。** primary 是浅色底板，白字看不清，因此常态取 `#3f3f3f`（Minecraft 调色板里既有的深灰，原本用作文字投影色）；悬停、按下、选中仍然是黄色 `#ffff00`，禁用仍是 `#808080`，三者不变。
+
+实现上同样用变量间接：基础规则写 `color: var(--ln-minecraft-button-normal-color, #ffffff)`，`default` 变体只声明 `--ln-minecraft-button-normal-color: #3f3f3f`。变体只提供一个支撑变量、**不参与 `color` 的层叠竞争**，所以 `button:hover:not(:disabled)`、`button[aria-pressed="true"]`、`button:disabled` 这些更高优先级的状态规则照常生效，悬停/按下/禁用都不受它影响。
 
 ### UI 测试页：变体按钮的三种状态可切换
 
@@ -1171,13 +1168,11 @@ Phase 4.4 的第一版给 `[data-size="xs"]` 加了 `font-size: 11px`，理由�
 - **一个 `<button disabled>` 会吞掉自己的点击**，所以按钮外面包了一层 `span.button-variant-demo` 作为点击目标，并在 `.ui-control-gallery` 作用域内给它 `:disabled` 时加 `pointer-events: none`，让点击穿透到外层继续循环。这两条规则只作用于控件画廊，不影响业务界面。
 - 悬停态仍然只能靠真实鼠标悬停观察（无法用状态模拟）。
 
-**待人工验收**：分别在明亮与黑暗下切到 Minecraft 主题，看四个有贴图的变体在 常态 / 悬停 / 按下选中 / 按下选中+悬停 / 禁用 下的贴图与文字色——
-`default`（主要）：常态白字，禁用灰字；
-`outline`（描边）：明亮深灰字、黑暗白字；
-`destructive`（危险）：常态白字，禁用为红字 + 红偏灰底板；
-`secondary`：明亮深灰字、黑暗白字；
-`ghost`：文字色与 `outline` 相同且无底板；
-`link`：明亮绿字、黑暗紫字。
+**待人工验收**：切到 Minecraft 主题，看三个有贴图的变体在 常态 / 悬停 / 按下选中 / 按下选中+悬停 / 禁用 下的贴图与文字色——
+`default`（主要）：常态**深灰**字，悬停与按下黄字，禁用灰字；
+`outline`（描边）：常态白字（标准）；
+`destructive`（危险）：常态白字，禁用态与其它变体同款；
+`secondary` 应仍是原来的基础观感。
 
 ### Phase 5 — 清理僵尸层
 

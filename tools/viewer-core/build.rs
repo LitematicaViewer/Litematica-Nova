@@ -84,6 +84,10 @@ fn build_profile() -> String {
 fn embed_windows_version_info() {
     let output_dir =
         PathBuf::from(env::var_os("OUT_DIR").expect("Cargo OUT_DIR is required on Windows"));
+    let icon = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo manifest directory"))
+        .join("../../desktop-nova/src-tauri/icons/icon.ico");
+    println!("cargo:rerun-if-changed={}", icon.display());
+    let icon = icon.to_string_lossy().replace('\\', "/");
     let version = env!("CARGO_PKG_VERSION");
     let version_major = env!("CARGO_PKG_VERSION_MAJOR");
     let version_minor = env!("CARGO_PKG_VERSION_MINOR");
@@ -101,6 +105,8 @@ fn embed_windows_version_info() {
         let resource_path = output_dir.join(resource_name);
         let resource = format!(
             r#"#pragma code_page(65001)
+
+1 ICON "{icon}"
 
 1 VERSIONINFO
 FILEVERSION {version_major},{version_minor},{version_patch},0

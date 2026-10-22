@@ -193,7 +193,12 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   const lightingPercent = progressUnits ? Math.floor(progressUnits.completed / progressUnits.total * 100) : 0;
   const ready = isApplicationViewerPrepared(operation);
   const visible = ready && isApplicationPresentationVisible(operation);
-  const operationFailure = operation?.state === "failed" && !pending ? "预览加载失败，请重新加载。" : "";
+  const operationFailure = operation?.state === "failed" && !pending
+    ? operation.progress.phase === "viewer_failed"
+      ? /PPLL|ZeroCaptureEpoch|CaptureStatusEpochMismatch|ResolveParameters/i.test(operation.error || "")
+        ? "透明渲染失败，请重新加载。" : "预览渲染失败，请重新加载。"
+      : "预览加载失败，请重新加载。"
+    : "";
   // CPU completion is not a visible frame. Prepared only grants the native
   // presentation command; the service's post-Present receipt removes the UI placeholder.
   const progressLabel = pending && launchStage === "preflight" ? "正在预估显存…"
@@ -211,6 +216,6 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
     : progressRange
     ? `${stage} ${Math.round(progressRange.completed / progressRange.total * 100)}%（${progressRange.completed.toLocaleString()} / ${progressRange.total.toLocaleString()}）`
     : `${stage}…`;
-  return { ...viewport, operation, pending, progress, progressRange, progressLabel, error: error || viewport.error || operationFailure, preflight, start, choose, hide, close,
+  return { ...viewport, operation, pending, progress, progressRange, progressLabel, error: operationFailure || error || viewport.error, preflight, start, choose, hide, close,
     ready, visible, loading };
 }

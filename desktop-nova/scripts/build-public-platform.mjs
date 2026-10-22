@@ -112,26 +112,13 @@ with zipfile.ZipFile(os.path.join(root,'26.3/client.jar')) as z:
   if (tint.schema !== 1 || tint.purpose !== 'block-database-side-plains-origin' || tint.blocksDatSha256 !== crypto.createHash('sha256').update(blocks).digest('hex') || !Object.keys(tint.versions ?? {}).length || Object.values(tint.versions).some((key) => !Object.hasOwn(tint.tables ?? {}, key))) throw new Error('Block database tint metadata differs.');
 }
 export function iconPng(outputDirectory) {
-  const ico = fs.readFileSync(path.join(tauri, 'icons/icon.ico'));
-  const offset = ico.readUInt32LE(18), header = ico.readUInt32LE(offset);
-  const width = ico.readInt32LE(offset + 4), height = ico.readInt32LE(offset + 8) / 2;
-  if (ico.readUInt16LE(2) !== 1 || header !== 40 || ico.readUInt16LE(offset + 14) !== 32 || ico.readUInt32LE(offset + 16) !== 0 || width < 1 || width > 1024 || height !== width) throw new Error('The product icon is not a supported RGBA bitmap.');
-  const raw = Buffer.alloc(height * (1 + width * 4));
-  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-    const source = offset + header + ((height - y - 1) * width + x) * 4, target = y * (1 + width * 4) + 1 + x * 4;
-    raw[target] = ico[source + 2]; raw[target + 1] = ico[source + 1]; raw[target + 2] = ico[source]; raw[target + 3] = ico[source + 3];
-  }
-  const chunk = (name, bytes) => {
-    const tag = Buffer.from(name), payload = Buffer.concat([tag, bytes]); let crc = 0xffffffff;
-    for (const byte of payload) { crc ^= byte; for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0); }
-    const length = Buffer.alloc(4), checksum = Buffer.alloc(4); length.writeUInt32BE(bytes.length); checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
-    return Buffer.concat([length, payload, checksum]);
-  };
-  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(width); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = 6;
+  // Share the canonical transparent artwork with the Host, Viewer and bundles.
+  // Official Tauri ICOs may contain PNG frames; do not assume legacy BMP data.
   const filename = path.join(outputDirectory, 'product-icon.png');
-  fs.writeFileSync(filename, Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]));
+  fs.copyFileSync(path.join(tauri, 'icons/icon.png'), filename);
   return filename;
 }
+
 async function stageBackends(target, platform, identity, sha, directory, cargo) {
   const names = ['litematica_core', 'litematica_native_viewer', 'nova-render-service', 'nova-build-worker'].map((name) => name + platform.suffix);
   fs.mkdirSync(directory, { recursive: true });

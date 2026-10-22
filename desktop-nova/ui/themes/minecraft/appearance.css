@@ -15,17 +15,8 @@
 }
 html[data-theme="minecraft"] {
     color-scheme: dark;
-    --background: #252525;
+    --background: #3c3c3c;
     --foreground: #ffffff;
-    /* Minecraft button palette. Labels reference these so the palette is the single
-       source of truth; red, green and purple are the V1.37 additions. */
-    --ln-minecraft-palette-white: #ffffff;
-    --ln-minecraft-palette-dark-gray: #3f3f3f;
-    --ln-minecraft-palette-gray: #808080;
-    --ln-minecraft-palette-yellow: #ffff00;
-    --ln-minecraft-palette-red: #ff5555;
-    --ln-minecraft-palette-green: #3c8527;
-    --ln-minecraft-palette-purple: #7345e5;
     --card: #303030;
     --popover: #262626;
     --primary: #b8d49c;
@@ -67,7 +58,7 @@ html[data-theme="minecraft"] {
 
 html[data-theme="minecraft"][data-color-scheme="light"] {
     color-scheme: light;
-    --background: #78a7ff;
+    --background: #deded6;
     --foreground: #24251f;
     --card: #f0f0e9;
     --popover: #f5f5ed;
@@ -113,15 +104,18 @@ html[data-theme="minecraft"] :where(.dropdown-menu, .block-search-menu, .dialog-
 }
 html[data-theme="minecraft"] ::selection { background: var(--primary); color: var(--primary-foreground); }
 
-/* Texture-backed actions keep the Minecraft text shadow. Borderless actions get their
-   label colour from the variant palette rules in `widgets.css` instead of a local
-   `--foreground`, so ghost, link and their disabled states follow the scheme. */
+/* Texture-backed actions use the original white/yellow/disabled-gray text rules.
+   Do not apply those colors to borderless cards, labels, inventory slots or close images. */
 html[data-theme="minecraft"] [data-slot="button"]:is([data-variant="default"], [data-variant="secondary"], [data-variant="outline"], [data-variant="destructive"]):not(:where(.dialog-close-button, .subwindow-close-button, .material-list-close-button, .flake-page__quickbar-slot, .flake-page__quickbar-open-inventory, .flake-page__creative-slot, .flake-page__creative-hotbar-slot)) {
-    text-shadow: 1px 1px 0 var(--ln-minecraft-palette-dark-gray);
+    text-shadow: 1px 1px 0 #3f3f3f;
 }
 html[data-theme="minecraft"] [data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)) {
     border-image: none;
+    color: var(--foreground);
     text-shadow: none;
+}
+html[data-theme="minecraft"] [data-slot="button"]:is([data-variant="ghost"], [data-variant="link"]):not(:where(.nav-item, .nav-expand)):disabled {
+    color: var(--muted-foreground);
 }
 html[data-theme="minecraft"] .home-workflows > [data-slot="button"][data-variant="ghost"] small { color: var(--muted-foreground); }
 

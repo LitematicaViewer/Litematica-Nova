@@ -42,7 +42,8 @@ export function UpdateDialog({ theme }: { theme: string }) {
     action.current = true; setRunning(true); setError("");
     try {
       preserveUpdateDrafts();
-      const next = await downloadUpdate(); setView(next);
+      const current = await readUpdateState();
+      const next = current.phase === "downloaded" ? current : await downloadUpdate(); setView(next);
       if (next.phase !== "downloaded") return;
       preserveUpdateDrafts();
       await installUpdate();
@@ -62,7 +63,7 @@ export function UpdateDialog({ theme }: { theme: string }) {
   };
   const installing = view?.phase === "installing" || view?.phase === "restartRequired";
   const canUpdate = !!view?.version && !running && ["available", "error", "cancelled", "downloaded"].includes(view.phase);
-  const phaseText = { idle: "尚未检查", disabled: "更新尚未配置", checking: "正在检查更新…", available: "发现新版本", current: "当前已是最新可用版本", skipped: "已跳过当前版本", downloading: "正在下载并校验签名…", downloaded: "签名校验完成", waiting: "等待任务安全退出…", installing: "正在安全退出并安装…", cancelled: "已取消更新", error: "更新未完成", restartRequired: "草稿已保留，需要重启恢复后台服务" };
+  const phaseText = { idle: "尚未检查", disabled: "更新尚未配置", checking: "正在检查更新…", available: "发现新版本", current: "当前已是最新可用版本", skipped: "已跳过当前版本", downloading: "正在下载并校验签名…", downloaded: "签名校验完成", waiting: "等待任务安全退出…", installing: "正在安全退出并安装…", cancelled: "已取消更新", error: "更新未完成", restartRequired: "更新未安装，后台服务需要恢复" };
   return <>
     <Button variant="ghost" className="sidebar-item nav-item updater-check" onClick={manualCheck} disabled={running} title="检查更新" aria-label="检查更新">
       <NavIcon name="update" theme={theme} /><span className="nav-label">检查更新</span>
@@ -72,7 +73,7 @@ export function UpdateDialog({ theme }: { theme: string }) {
         <Button variant="ghost" onClick={() => void skip()} disabled={!view?.version || running || installing}>跳过当前版本</Button>
         <Button variant="secondary" onClick={() => void cancel()} disabled={installing}>取消</Button>
         {view?.phase === "restartRequired"
-          ? <Button onClick={() => void restartAfterUpdateFailure().catch((e) => setError(String(e)))}>重启恢复</Button>
+          ? <Button onClick={() => void restartAfterUpdateFailure().catch((e) => setError(String(e)))}>重启当前版本</Button>
           : <Button onClick={() => void apply()} disabled={!canUpdate}>更新并重启</Button>}
       </>}>
       <p role="status" aria-live="polite">{view ? phaseText[view.phase] : "正在检查更新…"}</p>

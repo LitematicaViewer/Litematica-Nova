@@ -5,8 +5,8 @@
 @layer tokens {
 
 :root {
-    --background: #252525;
-    --navigation-background: #252525;
+    --background: #3c3c3c;
+    --navigation-background: #3c3c3c;
     --ln-file-icon-size: 32px;
     /* Unifont is a bitmap face at 16px; small print switches to the 12px Fusion
        Pixel face instead of scaling Unifont down (which blurs). */

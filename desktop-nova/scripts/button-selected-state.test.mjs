@@ -102,8 +102,7 @@ test('8bitcn：选中按钮是主色实心板，与 8bitcn 自己的 Toggle 口�
 test('Minecraft：选中仍走 check 贴图与黄字，不被共享层的填充色接管', () => {
   const pressedTexture = declared('minecraft', pressed(), '--ln-minecraft-button-image');
   assert.match(pressedTexture.decl.value, /--ln-minecraft-button-check-image/, '选中态没有换到 check 贴图');
-  // The colour is the palette token; `minecraft-controls.test.mjs` resolves it to #ffff00.
-  assert.equal(value('minecraft', pressed(), 'color'), 'var(--ln-minecraft-palette-yellow)');
+  assert.equal(value('minecraft', pressed(), 'color'), '#ffff00');
   const restingTexture = declared('minecraft', resting(), '--ln-minecraft-button-image');
   assert.match(restingTexture.decl.value, /--ln-minecraft-button-normal-image/, '常态贴图被选中规则覆盖');
   // The shared layer is scoped away from Minecraft on purpose: a fill would paint over

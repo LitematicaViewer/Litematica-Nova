@@ -917,6 +917,31 @@ impl RenderFacade {
         event: &nova_render_protocol::ServiceEvent,
     ) -> Vec<RenderOperationView> {
         match event {
+            nova_render_protocol::ServiceEvent::ViewerState(viewer)
+                if matches!(viewer.runtime_state, ViewerRuntimeState::Failed) => {
+                // Consume the actual terminal event before a later registry
+                // snapshot drops the retired Viewer or the worker saves its cache.
+                let mut state = self.inner.state.lock().unwrap();
+                let mut changed = Vec::new();
+                for record in state.operations.values_mut() {
+                    let Some(binding) = record.binding.as_ref() else { continue; };
+                    if binding.build_id != viewer.build_id || binding.generation != viewer.generation
+                        || binding.session_id.as_deref().is_some_and(|session| session != viewer.session_id.as_str())
+                        || record.cancel_requested || matches!(record.view.state,
+                            OperationState::Cancelled | OperationState::RuntimeReleased)
+                    { continue; }
+                    record.view.state = OperationState::Failed;
+                    record.view.presentation_state = PresentationState::Hidden;
+                    record.view.progress.phase = "viewer_failed".to_owned();
+                    record.view.progress.activity = None;
+                    record.view.progress.completed = None;
+                    record.view.progress.total = None;
+                    record.view.progress.elapsed_ms = viewer.elapsed_ms;
+                    record.view.error = viewer.error.as_ref().map(|error| error.message.clone());
+                    changed.push(record.view.clone());
+                }
+                changed
+            }
             nova_render_protocol::ServiceEvent::Snapshot(_)
             | nova_render_protocol::ServiceEvent::BuildState(_)
             | nova_render_protocol::ServiceEvent::ArtifactState(_)
@@ -1271,6 +1296,9 @@ fn presentation_command(
 }
 
 fn reconcile_operation(record: &mut OperationRecord, snapshot: &ServiceSnapshot) {
+    // Render failure is terminal for this operation, not for its reusable
+    // completed artifact. Worker/cache progress must never revive the preview.
+    if matches!(record.view.state, OperationState::Failed) { return; }
     let Some(binding) = record.binding.as_mut() else {
         return;
     };
@@ -1387,7 +1415,7 @@ fn reconcile_operation(record: &mut OperationRecord, snapshot: &ServiceSnapshot)
         OperationState::GpuResident => "gpu_resident",
         OperationState::ViewerPrepared => "viewer_prepared",
         OperationState::RuntimeReleased => "runtime_released",
-        OperationState::Failed => "failed",
+        OperationState::Failed => "viewer_failed",
         _ => unreachable!("Viewer runtime must map to a Viewer-stage operation state"),
     }
     .to_owned();

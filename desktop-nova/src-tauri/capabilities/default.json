@@ -14,6 +14,7 @@
     "core:event:allow-emit",
     "core:event:allow-listen",
     "core:window:allow-close",
+    "core:window:allow-set-background-color",
     "dialog:default",
     "shell:default"
   ]
