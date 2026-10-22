@@ -181,6 +181,11 @@ fn validate_public_backends(repo_root: &Path) {
     assert_eq!(actual, expected, "public backend directory must contain only the four public helpers and manifest");
     let manifest: serde_json::Value = serde_json::from_slice(&fs::read(directory.join("backend-deployment.json")).expect("read public deployment manifest")).expect("parse public deployment manifest");
     assert_eq!(manifest["schema"], "lba.backend.deployment.v1");
+    if env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some() {
+        assert_eq!(manifest["runtimeKind"].as_str(), Some("development"), "local-source Host requires explicitly development-built helpers");
+    } else {
+        assert_ne!(manifest["runtimeKind"].as_str(), Some("development"), "development helpers must not enter a production Host or installer");
+    }
     let source = manifest["gitSha"].as_str().expect("public deployment source commit");
     assert!(valid_git_sha(source), "public deployment source identity is malformed");
     // Product/UI revisions do not change the public helper's actual inputs.
