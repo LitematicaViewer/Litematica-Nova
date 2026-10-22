@@ -157,6 +157,21 @@ fn validate_public_backends(repo_root: &Path) {
     println!("cargo:rerun-if-env-changed=NOVA_PUBLIC_HELPER_INPUT_ID");
     println!("cargo:rerun-if-env-changed=NOVA_DEVELOPMENT_RUNTIME_JSON");
     println!("cargo:rerun-if-env-changed=NOVA_DEVELOPMENT_MODULE_PATH");
+    println!("cargo:rerun-if-env-changed=NOVA_COMMUNITY_BUILD");
+    println!("cargo:rerun-if-env-changed=NOVA_PROTECTED_MANIFEST_PUBLIC_KEY");
+    let explicit_community = matches!(env::var("NOVA_COMMUNITY_BUILD").as_deref(), Ok("1" | "true"));
+    if explicit_community {
+        assert!(
+            env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_none()
+                && ["NOVA_PROTECTED_BUILD_ID", "NOVA_PROTECTED_MANIFEST_PUBLIC_KEY", "NOVA_PROTECTED_RUNTIME_COMPATIBILITY", "NOVA_DEVELOPMENT_RUNTIME_JSON", "NOVA_DEVELOPMENT_MODULE_PATH"]
+                    .iter().all(|name| env::var(name).map_or(true, |value| value.is_empty())),
+            "Community selection must not inherit a signed or local private runtime identity"
+        );
+    }
+    let community = env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_none()
+        && (explicit_community
+            || (env::var("NOVA_PROTECTED_BUILD_ID").map_or(true, |value| value.is_empty())
+                && env::var("NOVA_PROTECTED_MANIFEST_PUBLIC_KEY").map_or(true, |value| value.is_empty())));
     let explicit_directory = env::var_os("NOVA_PUBLIC_BACKEND_DIR");
     let directory = explicit_directory.as_ref().map(PathBuf::from).unwrap_or_else(|| repo_root.join("bin/public-beta"));
     println!("cargo:rerun-if-changed={}", directory.display());
@@ -170,7 +185,10 @@ fn validate_public_backends(repo_root: &Path) {
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("public helper target architecture");
     assert!(matches!(target_arch.as_str(), "x86_64" | "aarch64"), "public helpers require a supported 64-bit target");
     let suffix = if target_os == "windows" { ".exe" } else { "" };
-    let expected: HashSet<_> = [format!("litematica_core{suffix}"), format!("litematica_native_viewer{suffix}"), format!("nova-render-service{suffix}"), format!("nova-build-worker{suffix}"), "backend-deployment.json".into()].into_iter().collect();
+    let mut expected: HashSet<_> = [format!("litematica_core{suffix}"), format!("litematica_native_viewer{suffix}"), "backend-deployment.json".into()].into_iter().collect();
+    if !community {
+        expected.extend([format!("nova-render-service{suffix}"), format!("nova-build-worker{suffix}")]);
+    }
     let mut actual = HashSet::new();
     for entry in fs::read_dir(&directory).expect("read isolated public backend directory") {
         let entry = entry.expect("read public backend entry");
@@ -178,10 +196,12 @@ fn validate_public_backends(repo_root: &Path) {
         println!("cargo:rerun-if-changed={}", entry.path().display());
         actual.insert(entry.file_name().to_str().expect("public backend UTF-8 name").to_owned());
     }
-    assert_eq!(actual, expected, "public backend directory must contain only the four public helpers and manifest");
+    assert!(expected.is_subset(&actual), "public backend directory lacks a required public component");
     let manifest: serde_json::Value = serde_json::from_slice(&fs::read(directory.join("backend-deployment.json")).expect("read public deployment manifest")).expect("parse public deployment manifest");
     assert_eq!(manifest["schema"], "lba.backend.deployment.v1");
-    if env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some() {
+    if community {
+        assert_eq!(manifest["runtimeKind"].as_str(), Some("community"), "community Host requires public-only helpers");
+    } else if env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some() {
         assert_eq!(manifest["runtimeKind"].as_str(), Some("development"), "local-source Host requires explicitly development-built helpers");
     } else {
         assert_ne!(manifest["runtimeKind"].as_str(), Some("development"), "development helpers must not enter a production Host or installer");
@@ -203,8 +223,10 @@ fn validate_public_backends(repo_root: &Path) {
     if let Some(triple) = manifest.get("targetTriple") {
         assert_eq!(triple.as_str(), env::var("TARGET").ok().as_deref(), "public helper platform/architecture identity differs");
     }
-    if let Ok(build_id) = env::var("NOVA_PROTECTED_BUILD_ID") {
-        assert_eq!(manifest["runtimeBuildId"].as_str(), Some(build_id.as_str()), "public helper runtime components differ from the Host build");
+    if !community {
+        if let Ok(build_id) = env::var("NOVA_PROTECTED_BUILD_ID") {
+            assert_eq!(manifest["runtimeBuildId"].as_str(), Some(build_id.as_str()), "public helper runtime components differ from the Host build");
+        }
     }
     if env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some() {
         let selected: serde_json::Value = serde_json::from_str(&env::var("NOVA_DEVELOPMENT_RUNTIME_JSON")
@@ -219,7 +241,7 @@ fn validate_public_backends(repo_root: &Path) {
     }
     let artifacts = manifest["artifacts"].as_object().expect("public deployment artifacts");
     let names: HashSet<_> = artifacts.keys().cloned().collect();
-    assert_eq!(names, expected.into_iter().filter(|name| name != "backend-deployment.json").collect());
+    assert_eq!(names, actual.into_iter().filter(|name| name != "backend-deployment.json").collect(), "public helper files and declared build inputs differ");
     for (name, record) in artifacts {
         let path = directory.join(name);
         let bytes = fs::metadata(&path).expect("public helper metadata").len();
