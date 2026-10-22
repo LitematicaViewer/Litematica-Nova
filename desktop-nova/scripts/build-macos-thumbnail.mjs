@@ -65,7 +65,7 @@ function run(command, args) {
   if (result.status !== 0) throw new Error(`macOS thumbnail build failed (${command}, exit ${result.status}).`);
 }
 
-if (!thumbnailOnly) {
+if (!thumbnailOnly && process.env.NOVA_COMMUNITY_BUILD !== '1') {
   // Preflight can compile Swift independently even when another dependency
   // fails. Normal Tauri packaging still requires the real matching library.
   const moltenVk = moltenVkLibrary();
