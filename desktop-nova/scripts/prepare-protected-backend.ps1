@@ -15,6 +15,9 @@ $configPath = Join-Path $packageRoot 'protected-build.json'
 $stage = [IO.Path]::GetFullPath((Join-Path $repo 'bin/public-beta'))
 if (-not $stage.StartsWith($repo + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Public staging leaves the repository.' }
 $backendNames = @('litematica_core.exe','litematica_native_viewer.exe','nova-render-service.exe','nova-build-worker.exe')
+$cargoCacheRoot = if ($env:NOVA_PUBLIC_CARGO_CACHE_ROOT) { [IO.Path]::GetFullPath($env:NOVA_PUBLIC_CARGO_CACHE_ROOT) } else { $repo }
+$coreTarget = Join-Path $cargoCacheRoot 'tools/viewer-core/target/public-beta'
+$loaderTarget = Join-Path $cargoCacheRoot 'tools/nova-protected-loader/target/public-beta'
 
 # Development launches run this script on every start. Rewriting a file whose
 # bytes did not change only refreshes its mtime, and desktop-nova/src-tauri/build.rs
@@ -45,15 +48,21 @@ try {
     # the same actual source graph/package checks, not a branch-name allowlist.
     $checkArgs = @((Join-Path $PSScriptRoot 'check-public-checkout.mjs'), '--repo', $repo)
     if ($Development) { $checkArgs += '--development' }
+    if ($CheckOnly) { $checkArgs += '--no-download' }
     if ($ReuseExisting) { $checkArgs += '--reuse-existing' }
     $checkedJson = & node @checkArgs
+    if ($LASTEXITCODE -eq 77) { throw 'NOVA_RUNTIME_DOWNLOAD_AUTH_REQUIRED' }
     if ($LASTEXITCODE -ne 0) { throw 'Public checkout/runtime preflight failed.' }
     $checked = ($checkedJson -join "`n") | ConvertFrom-Json
     $sha = $checked.sha
     $identity = $checked.identity
+    $packageRoot = $checked.runtimePackageDir
+    $helperSource = if ($checked.backendSource) { $checked.backendSource } else { $sha }
     $tauriPath = Join-Path $repo 'desktop-nova/src-tauri/tauri.conf.json'
     $tauri = Get-Content -LiteralPath $tauriPath -Raw | ConvertFrom-Json
-    if ($identity.version -ne $tauri.version) { throw 'Protected module and desktop candidate versions differ.' }
+    # AppVersion belongs to the Host/installer. ABI, signed capabilities and the
+    # approved runtime combination were verified by check-public-checkout.
+    # A UI/version-only change does not generate another encrypted renderer.
     $resources = $tauri.bundle.resources
     if ($resources.'../../bin/public-beta' -ne 'bin/viewer-backend' -or $resources.'../../bin/protected' -ne 'bin/viewer-backend/protected') {
         throw 'The reviewed public helpers/protected resources are not mapped to the runtime backend paths.'
@@ -78,8 +87,26 @@ try {
         } else {
             Write-Host "Public development inputs verified source=$sha. No files written; no build started."
         }
-        return
+        if ($CheckOnly) { return }
     }
+    $env:NOVA_PROTECTED_BUILD_ID = $identity.buildId
+    $env:NOVA_PROTECTED_MANIFEST_PUBLIC_KEY = $identity.manifestPublicKey
+    $env:NOVA_PROTECTED_ENDPOINT = $identity.endpoint
+    $env:NOVA_PROTECTED_RUNTIME_COMPATIBILITY = $identity.signedCompatibility | ConvertTo-Json -Depth 8 -Compress
+    $env:NOVA_PUBLIC_HELPER_INPUT_ID = $checked.helperInputId
+    $env:NOVA_RUNTIME_PACKAGE_DIR = $packageRoot
+    $runtimeStage = Join-Path $repo 'bin/protected'
+    # Development uses the verified cache plus an ignored local resource
+    # overlay. Never rewrite the release package tracked by the public tree.
+    if (-not $Development -and -not [IO.Path]::GetFullPath($packageRoot).Equals([IO.Path]::GetFullPath($runtimeStage), [StringComparison]::OrdinalIgnoreCase)) {
+        New-Item -ItemType Directory -Path $runtimeStage -Force | Out-Null
+        $runtimeNames = @('protected-build.json', 'runtime-compatibility.json', $identity.manifestFile, $identity.ciphertextFile)
+        foreach ($existing in Get-ChildItem -LiteralPath $runtimeStage -Force) {
+            if ($existing.PSIsContainer -or $existing.Name -notin $runtimeNames) { throw 'Unexpected file in the protected runtime staging directory.' }
+        }
+        foreach ($name in $runtimeNames) { Copy-IfChanged (Join-Path $packageRoot $name) (Join-Path $runtimeStage $name) | Out-Null }
+    }
+    if ($ReuseExisting) { return }
     $runtimeRoot = Join-Path $repo 'data/mc26'
     New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
     $archive = [IO.Compression.ZipFile]::OpenRead($runtimeArchive)
@@ -129,16 +156,13 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
     $env:RUSTFLAGS = $null
     $env:CARGO_PROFILE_RELEASE_STRIP = 'symbols'
     $env:CARGO_PROFILE_RELEASE_DEBUG = '0'
-    $env:NOVA_PROTECTED_BUILD_ID = $identity.buildId
-    $env:NOVA_PROTECTED_MANIFEST_PUBLIC_KEY = $identity.manifestPublicKey
-    $env:NOVA_PROTECTED_ENDPOINT = $identity.endpoint
-    $env:LBA_BUILD_GIT_SHA = $sha
+    $env:LBA_BUILD_GIT_SHA = $helperSource
     if ($env:GITHUB_ENV) {
-        @("NOVA_PROTECTED_BUILD_ID=$($identity.buildId)","NOVA_PROTECTED_MANIFEST_PUBLIC_KEY=$($identity.manifestPublicKey)","NOVA_PROTECTED_ENDPOINT=$($identity.endpoint)","LBA_BUILD_GIT_SHA=$sha","CARGO_ENCODED_RUSTFLAGS=$($env:CARGO_ENCODED_RUSTFLAGS)","CARGO_PROFILE_RELEASE_STRIP=symbols","CARGO_PROFILE_RELEASE_DEBUG=0") | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+        @("NOVA_PROTECTED_BUILD_ID=$($identity.buildId)","NOVA_PROTECTED_MANIFEST_PUBLIC_KEY=$($identity.manifestPublicKey)","NOVA_PROTECTED_ENDPOINT=$($identity.endpoint)","NOVA_PROTECTED_RUNTIME_COMPATIBILITY=$($env:NOVA_PROTECTED_RUNTIME_COMPATIBILITY)","NOVA_PUBLIC_HELPER_INPUT_ID=$($checked.helperInputId)","CARGO_ENCODED_RUSTFLAGS=$($env:CARGO_ENCODED_RUSTFLAGS)","CARGO_PROFILE_RELEASE_STRIP=symbols","CARGO_PROFILE_RELEASE_DEBUG=0") | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
     }
-    & cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir tools/viewer-core/target/public-beta --no-default-features --features public-beta --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
+    & cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir $coreTarget --no-default-features --features public-beta --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
     if ($LASTEXITCODE -ne 0) { throw 'Public Fast/core/stockpile compilation failed.' }
-    & cargo build --locked --release --manifest-path tools/nova-protected-loader/Cargo.toml --target-dir tools/nova-protected-loader/target/public-beta --bins
+    & cargo build --locked --release --manifest-path tools/nova-protected-loader/Cargo.toml --target-dir $loaderTarget --bins
     if ($LASTEXITCODE -ne 0) { throw 'Public authenticated loader compilation failed.' }
     # The up-to-date shortcut in build.ps1 compares mtimes. A release/CI runner may
     # restore a cached target directory whose timestamps are newer than the freshly
@@ -151,10 +175,10 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
         if ($existing.PSIsContainer -or $existing.Name -notin ($backendNames + 'backend-deployment.json')) { throw "Unexpected file in generated public backend staging: $($existing.Name)" }
     }
     $sources = [ordered]@{
-        'litematica_core.exe' = Join-Path $repo 'tools/viewer-core/target/public-beta/release/litematica_core.exe'
-        'litematica_native_viewer.exe' = Join-Path $repo 'tools/viewer-core/target/public-beta/release/litematica_native_viewer.exe'
-        'nova-render-service.exe' = Join-Path $repo 'tools/nova-protected-loader/target/public-beta/release/nova-render-service.exe'
-        'nova-build-worker.exe' = Join-Path $repo 'tools/nova-protected-loader/target/public-beta/release/nova-build-worker.exe'
+        'litematica_core.exe' = Join-Path $coreTarget 'release/litematica_core.exe'
+        'litematica_native_viewer.exe' = Join-Path $coreTarget 'release/litematica_native_viewer.exe'
+        'nova-render-service.exe' = Join-Path $loaderTarget 'release/nova-render-service.exe'
+        'nova-build-worker.exe' = Join-Path $loaderTarget 'release/nova-build-worker.exe'
     }
     $artifacts = [ordered]@{}
     $restaged = 0
@@ -165,7 +189,7 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
         if ($hash -ne (Get-FileHash -LiteralPath $entry.Value -Algorithm SHA256).Hash.ToLowerInvariant()) { throw "Public helper staging is incomplete: $($entry.Key)" }
         $artifacts[$entry.Key] = [ordered]@{ bytes=(Get-Item -LiteralPath $destination).Length; sha256=$hash }
     }
-    $deployment = [ordered]@{ schema='lba.backend.deployment.v1'; gitSha=$sha; profile='release'; runtimeBuildId=$identity.buildId; artifacts=$artifacts }
+    $deployment = [ordered]@{ schema='lba.backend.deployment.v1'; gitSha=$sha; helperSourceSha=$helperSource; helperInputId=$checked.helperInputId; profile='release'; runtimeBuildId=$identity.buildId; targetTriple='x86_64-pc-windows-msvc'; artifacts=$artifacts }
     $manifestWritten = Write-TextIfChanged (Join-Path $stage 'backend-deployment.json') ($deployment | ConvertTo-Json -Depth 5)
     if ($restaged -eq 0 -and -not $manifestWritten) {
         Write-Host "[protected-backend] staging already current; helper timestamps left untouched"
@@ -177,11 +201,15 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
             if (-not (Test-Path -LiteralPath (Join-Path $repo 'pack-in/game-icons/block.zip') -PathType Leaf)) { throw 'Missing source archive for generated block icons.' }
             continue
         }
+        if ($Development -and $entry.Name -eq '../../bin/protected') { continue }
         $source = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $tauriPath) $entry.Name))
         if (-not (Test-Path -LiteralPath $source)) { throw "Missing required product resource: $($entry.Name)" }
     }
     if ((& git rev-parse HEAD).Trim() -ne $sha) { throw 'Public source commit changed during the candidate build.' }
     Write-Host "Public backend ready source=$sha protected_build=$($identity.buildId) helpers=4 restaged=$restaged staging=$stage"
 } finally {
+    # Do not make the Host claim the helper's older source SHA. Its own Git
+    # identity follows the current UI checkout, independently of helper reuse.
+    if ($Development) { Remove-Item Env:LBA_BUILD_GIT_SHA -ErrorAction SilentlyContinue }
     Pop-Location
 }
