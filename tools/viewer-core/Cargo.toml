@@ -23,6 +23,7 @@ path = "src/bin/derive_resource_pack_32x.rs"
 [features]
 default = ["public-beta"]
 public-beta = []
+development-runtime = ["nova-protected-loader/development-runtime"]
 # Development/test oracle only. Production runtime normalization is native
 # Rust and must not compile or invoke the Mojang Java DataFix bridge.
 datafix-oracle = []

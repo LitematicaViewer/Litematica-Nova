@@ -566,8 +566,7 @@ impl RenderServiceClient {
                         let module_path = PathBuf::from(module).canonicalize().map_err(|e|e.to_string())?;
                         let root = protected_root.canonicalize().map_err(|e|e.to_string())?;
                         if !ticket_path.starts_with(&root) || !module_path.starts_with(&root) { return Err("protected child references leave private runtime".into()); }
-                        let ticket = nova_protected_loader::read_ticket(&ticket_path).map_err(|e|e.to_string())?;
-                        nova_protected_loader::config_for_ticket(&ticket).map_err(|e|e.to_string())?;
+                        nova_protected_loader::validate_task_context_path(&ticket_path).map_err(|e|e.to_string())?;
                     }
                     (None, None) => {
                         if self.inner.service_protection.lock().unwrap().is_some() { return Err("protected child omitted its signed task".into()); }

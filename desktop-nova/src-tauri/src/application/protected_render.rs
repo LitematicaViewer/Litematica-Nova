@@ -21,6 +21,13 @@ impl ProtectedRender {
         self.admissions.insert(token, task);
     }
     pub(crate) fn acquire(&mut self, data_root: &Path, backend: &Path, request: &[u8]) -> Result<ProtectedTask, String> {
+        #[cfg(feature = "development-runtime")]
+        {
+            let _ = backend;
+            return self.acquire_development(data_root, request);
+        }
+        #[cfg(not(feature = "development-runtime"))]
+        {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e|e.to_string())?.as_millis() as i64;
         if now < self.suspended_until_ms { return Err(format!("设备新渲染任务已暂停，解封时间={}；已有任务、快速模式、日志与更新不受影响", self.suspended_until_ms)); }
         let config = nova_protected_loader::trusted_config(data_root.join("protection/devices")).map_err(|e|e.to_string())?;
@@ -53,6 +60,61 @@ impl ProtectedRender {
         let ticket_path = root.join(format!("{task_id}.json"));
         std::fs::write(&ticket_path, serde_json::to_vec(&ticket).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
         self.retries.remove(&key);
+        Ok(ProtectedTask { ticket_path, module_path })
+        }
+    }
+
+    #[cfg(feature = "development-runtime")]
+    fn acquire_development(&mut self, data_root: &Path, request: &[u8]) -> Result<ProtectedTask, String> {
+        use nova_protected_loader::development;
+        let selected = development::runtime().map_err(|e| e.to_string())?;
+        let value: serde_json::Value = serde_json::from_slice(request).map_err(|e| e.to_string())?;
+        let mode = value.get("displayMode").or_else(|| value.pointer("/settings/displayMode"))
+            .or_else(|| value.pointer("/buildOptions/displayMode"))
+            .and_then(|value| value.as_str()).ok_or("development render request has no display mode")?;
+        let requires_shared_light = match mode {
+            "standard" => false,
+            "full" => true,
+            _ => return Err(format!("unsupported development core display mode: {mode}")),
+        };
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_millis();
+        self.sequence += 1;
+        let key = retry_fingerprint(request)?;
+        let task_id = self.retries.entry(key.clone())
+            .or_insert_with(|| format!("dev-{}-{now}-{}", std::process::id(), self.sequence)).clone();
+        let root = self.runtime_root.get_or_insert_with(|| data_root.join("protection/runtime")
+            .join(format!("dev-{}-{now}", std::process::id()))).clone();
+        nova_protection::client::ensure_private_directory(&root).map_err(|e| e.to_string())?;
+        let context = development::DevelopmentTask {
+            schema: "nova.development-task.v1".into(),
+            runtime_build_id: selected.runtime_build_id,
+            module_sha256: selected.module_sha256,
+            task_id: task_id.clone(),
+            requires_shared_light,
+            remote_ticket_path: requires_shared_light.then(|| root.join(format!("{task_id}.remote.json"))),
+        };
+        development::validate_task_context(&context).map_err(|e| e.to_string())?;
+        let module_path = root.join(format!("{}.{}", context.module_sha256, nova_protected_loader::MODULE_EXTENSION));
+        if !module_path.exists() {
+            let source = development::source_module().map_err(|e| e.to_string())?;
+            let mut file = std::fs::File::open(&source).map_err(|e| e.to_string())?;
+            development::verify_module(&mut file, &context).map_err(|e| e.to_string())?;
+            std::fs::copy(&source, &module_path).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&module_path, std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+            }
+        }
+        let mut file = std::fs::File::open(&module_path).map_err(|e| e.to_string())?;
+        development::verify_module(&mut file, &context).map_err(|e| e.to_string())?;
+        development::prepare_remote_task(&context, data_root.join("protection/devices")).map_err(|e| e.to_string())?;
+        let ticket_path = root.join(format!("{task_id}.json"));
+        std::fs::write(&ticket_path, serde_json::to_vec(&context).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        self.retries.remove(&key);
+        // This is an explicit local DevelopmentTask, never a forged signed grant.
+        // Standard makes no network request; Full has one real shared-light
+        // service grant, resumed across children independently of local loading.
         Ok(ProtectedTask { ticket_path, module_path })
     }
 }

@@ -57,6 +57,7 @@ cleanup_manifest.json
 cleanup_report.md
 
 # Local packaging state
+/bin/viewer-backend/
 bin/pack_state.json
 bin/launcher/*.exe
 bin/launcher/*.pdb

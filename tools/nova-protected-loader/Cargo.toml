@@ -7,6 +7,9 @@ publish = false
 
 [workspace]
 
+[features]
+development-runtime = ["nova-protection/development-runtime"]
+
 [dependencies]
 anyhow = "1"
 nova-protection = { path = "../nova-protection", default-features = false, features = ["client"] }

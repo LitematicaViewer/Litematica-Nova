@@ -154,6 +154,9 @@ fn validate_executable_target(path: &Path, target_os: &str, target_arch: &str) {
 fn validate_public_backends(repo_root: &Path) {
     println!("cargo:rerun-if-env-changed=NOVA_PUBLIC_BACKEND_DIR");
     println!("cargo:rerun-if-env-changed=NOVA_PROTECTED_BUILD_ID");
+    println!("cargo:rerun-if-env-changed=NOVA_PUBLIC_HELPER_INPUT_ID");
+    println!("cargo:rerun-if-env-changed=NOVA_DEVELOPMENT_RUNTIME_JSON");
+    println!("cargo:rerun-if-env-changed=NOVA_DEVELOPMENT_MODULE_PATH");
     let explicit_directory = env::var_os("NOVA_PUBLIC_BACKEND_DIR");
     let directory = explicit_directory.as_ref().map(PathBuf::from).unwrap_or_else(|| repo_root.join("bin/public-beta"));
     println!("cargo:rerun-if-changed={}", directory.display());
@@ -178,16 +181,41 @@ fn validate_public_backends(repo_root: &Path) {
     assert_eq!(actual, expected, "public backend directory must contain only the four public helpers and manifest");
     let manifest: serde_json::Value = serde_json::from_slice(&fs::read(directory.join("backend-deployment.json")).expect("read public deployment manifest")).expect("parse public deployment manifest");
     assert_eq!(manifest["schema"], "lba.backend.deployment.v1");
+    if env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some() {
+        assert_eq!(manifest["runtimeKind"].as_str(), Some("development"), "local-source Host requires explicitly development-built helpers");
+    } else {
+        assert_ne!(manifest["runtimeKind"].as_str(), Some("development"), "development helpers must not enter a production Host or installer");
+    }
     let source = manifest["gitSha"].as_str().expect("public deployment source commit");
     assert!(valid_git_sha(source), "public deployment source identity is malformed");
-    if env::var("PROFILE").as_deref() == Ok("release") || env::var_os("LBA_BUILD_GIT_SHA").is_some() {
+    // Product/UI revisions do not change the public helper's actual inputs.
+    // Development reuse is bound to the content identity checked by the shared
+    // entry, while a formal release still records the exact application SHA.
+    if env::var("PROFILE").as_deref() == Ok("release") {
         assert_eq!(source, build_git_sha(repo_root), "public helpers and Host source commits differ");
+    }
+    if let Ok(input_id) = env::var("NOVA_PUBLIC_HELPER_INPUT_ID") {
+        assert!(input_id.len() == 64 && input_id.bytes().all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value)), "public helper input identity is malformed");
+        assert_eq!(manifest["helperInputId"].as_str(), Some(input_id.as_str()), "public helper build inputs differ from the Host selection");
+        let helper_source = manifest["helperSourceSha"].as_str().expect("public helper actual source commit");
+        assert!(valid_git_sha(helper_source), "public helper actual source identity is malformed");
     }
     if let Some(triple) = manifest.get("targetTriple") {
         assert_eq!(triple.as_str(), env::var("TARGET").ok().as_deref(), "public helper platform/architecture identity differs");
     }
     if let Ok(build_id) = env::var("NOVA_PROTECTED_BUILD_ID") {
         assert_eq!(manifest["runtimeBuildId"].as_str(), Some(build_id.as_str()), "public helper runtime components differ from the Host build");
+    }
+    if env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some() {
+        let selected: serde_json::Value = serde_json::from_str(&env::var("NOVA_DEVELOPMENT_RUNTIME_JSON")
+            .expect("local-source development requires a compile-time selected runtime descriptor"))
+            .expect("parse local development runtime descriptor");
+        assert_eq!(selected["schema"].as_str(), Some("nova.development-runtime.v1"), "local development runtime schema differs");
+        assert_eq!(selected["target"].as_str(), env::var("TARGET").ok().as_deref(), "local development runtime target differs");
+        assert_eq!(manifest["runtimeBuildId"].as_str(), selected["runtime_build_id"].as_str(), "local helper and Host runtime identities differ");
+        let path = PathBuf::from(env::var_os("NOVA_DEVELOPMENT_MODULE_PATH")
+            .expect("local-source development requires its compile-time module path"));
+        assert!(path.is_absolute() && path.is_file(), "selected local development module is missing");
     }
     let artifacts = manifest["artifacts"].as_object().expect("public deployment artifacts");
     let names: HashSet<_> = artifacts.keys().cloned().collect();
@@ -211,6 +239,11 @@ fn validate_public_backends(repo_root: &Path) {
 }
 
 fn main() {
+    assert!(
+        env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_none()
+            || env::var("PROFILE").as_deref() != Ok("release"),
+        "development-runtime is a local development feature and must not enter a Release Host or installer"
+    );
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is required"));
     let repo_root = manifest_dir

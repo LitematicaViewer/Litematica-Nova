@@ -1,0 +1,46 @@
+{
+  "schema": "nova.runtime-contract.v1",
+  "runtime_abi": 1,
+  "required_capabilities": [
+    "standard",
+    "full",
+    "realtime",
+    "prebuilt",
+    "render-service",
+    "build-worker",
+    "native-viewer",
+    "cpu-audit"
+  ],
+  "targets": [
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin"
+  ],
+  "trusted_manifest_public_keys": [
+    "U3kxvpUDPRuJI2Ou0HmdLKVpATe2E2gw+L7dAq8EHiw="
+  ],
+  "approved_release_runtimes": [
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_build_id": "0.2.4-ef049e3c0a6e-beta024-release-r1",
+      "module_manifest_sha256": "2006c6a5a819885a6d411204afa76ef9a722beeebbeed115f808ed530020463c"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "runtime_build_id": "0.2.4-ef049e3c0a6e-beta024-release-r1-x86_64-unknown-linux-gnu",
+      "module_manifest_sha256": "b47f772e9af15e39d83a77399156bd9b8202c25b4b31fce19329b5f7fdcf5144"
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "runtime_build_id": "0.2.4-ef049e3c0a6e-beta024-release-r1-x86_64-apple-darwin",
+      "module_manifest_sha256": "8fd159491f801d2e592fd2bcd9951456eaade95a9bbb85b5119efc40790c9e6e"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "runtime_build_id": "0.2.4-ef049e3c0a6e-beta024-release-r1-aarch64-apple-darwin",
+      "module_manifest_sha256": "29351d69517d8d9e0f22dade121382f7fc3e5170d5583ca6bafedbb20e0964ce"
+    }
+  ]
+}

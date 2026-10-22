@@ -5,6 +5,7 @@ pub mod crypto;
 #[cfg(feature = "client")]
 mod identity;
 pub mod protocol;
+pub mod runtime;
 
 pub fn unix_ms() -> i64 {
     std::time::SystemTime::now()

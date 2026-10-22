@@ -9,6 +9,7 @@ license = "MPL-2.0"
 [features]
 default = ["client"]
 client = ["dep:reqwest", "dep:fs2", "dep:keyring", "dep:tokio"]
+development-runtime = []
 
 [dependencies]
 anyhow = "1"
