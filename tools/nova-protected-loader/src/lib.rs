@@ -9,6 +9,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use zeroize::Zeroize;
+#[cfg(feature = "development-runtime")]
+pub mod development;
 
 pub const ABI_VERSION: u32 = nova_protection::runtime::RUNTIME_ABI;
 #[cfg(windows)]
@@ -112,6 +114,10 @@ pub fn read_ticket(path: &Path) -> Result<TaskTicket> {
 }
 
 fn verify_locked_module(file: &mut File, ticket: &TaskTicket) -> Result<()> {
+    verify_module_hash(file, &ticket.response.signed_manifest.manifest.plaintext_sha256)
+}
+
+fn verify_module_hash(file: &mut File, expected_hash: &str) -> Result<()> {
     let metadata = file.metadata()?;
     ensure!(
         metadata.is_file() && metadata.len() > 0 && metadata.len() <= MAX_MODULE_BYTES,
@@ -140,7 +146,7 @@ fn verify_locked_module(file: &mut File, ticket: &TaskTicket) -> Result<()> {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         ensure!(
-            hash == ticket.response.signed_manifest.manifest.plaintext_sha256,
+            hash == expected_hash,
             "protected module authentication failed"
         );
         Ok(())
@@ -166,9 +172,47 @@ pub fn run_role(role: Role) -> Result<i32> {
     let module_path = std::env::var_os("NOVA_PROTECTED_MODULE_PATH")
         .map(PathBuf::from)
         .context("protected module path is absent")?;
+    #[cfg(feature = "development-runtime")]
+    {
+        let context = development::read_task_context(&ticket_path)?;
+        development::validate_task_context(&context)?;
+        return run_verified_module(&module_path, &ModuleAuthentication::Development(&context), role);
+    }
+    #[cfg(not(feature = "development-runtime"))]
+    {
     let ticket = read_ticket(&ticket_path)?;
     let _config = config_for_ticket(&ticket)?;
-    run_verified_module(&module_path, &ticket, role)
+    run_verified_module(&module_path, &ModuleAuthentication::Signed(&ticket), role)
+    }
+}
+
+enum ModuleAuthentication<'a> {
+    Signed(&'a TaskTicket),
+    #[cfg(feature = "development-runtime")]
+    Development(&'a development::DevelopmentTask),
+}
+
+impl ModuleAuthentication<'_> {
+    fn verify(&self, file: &mut File) -> Result<()> {
+        match self {
+            Self::Signed(ticket) => verify_locked_module(file, ticket),
+            #[cfg(feature = "development-runtime")]
+            Self::Development(context) => development::verify_module(file, context),
+        }
+    }
+}
+
+/// Supervisor validation shares the same explicit compile-time runtime mode.
+pub fn validate_task_context_path(path: &Path) -> Result<()> {
+    #[cfg(feature = "development-runtime")]
+    {
+        return development::validate_task_context(&development::read_task_context(path)?);
+    }
+    #[cfg(not(feature = "development-runtime"))]
+    {
+        config_for_ticket(&read_ticket(path)?)?;
+        Ok(())
+    }
 }
 
 pub fn maybe_run_native() -> Result<Option<i32>> {
@@ -188,7 +232,7 @@ fn maybe_run(role: Role) -> Result<Option<i32>> {
 }
 
 #[cfg(windows)]
-fn run_verified_module(path: &Path, ticket: &TaskTicket, role: Role) -> Result<i32> {
+fn run_verified_module(path: &Path, authentication: &ModuleAuthentication<'_>, role: Role) -> Result<i32> {
     use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt};
     use windows_sys::Win32::System::LibraryLoader::{
         GetProcAddress, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -204,7 +248,7 @@ fn run_verified_module(path: &Path, ticket: &TaskTicket, role: Role) -> Result<i
         .share_mode(1)
         .open(&absolute)
         .context("lock protected module against replacement")?;
-    verify_locked_module(&mut file, ticket)?;
+    authentication.verify(&mut file)?;
     let path_utf16 = absolute
         .as_os_str()
         .encode_wide()
@@ -228,6 +272,13 @@ fn run_verified_module(path: &Path, ticket: &TaskTicket, role: Role) -> Result<i
             .context("protected module ABI version export is absent")?;
         let abi: unsafe extern "C" fn() -> u32 = std::mem::transmute(abi);
         verify_abi(abi())?;
+        #[cfg(feature = "development-runtime")]
+        if matches!(authentication, ModuleAuthentication::Development(_)) {
+            let capabilities = GetProcAddress(module, c"nova_development_capabilities".as_ptr().cast())
+                .context("development module capability export is absent")?;
+            let capabilities: unsafe extern "C" fn() -> u64 = std::mem::transmute(capabilities);
+            development::verify_capabilities(capabilities())?;
+        }
         let entry = GetProcAddress(module, c"nova_protected_entry".as_ptr().cast())
             .context("protected module entry export is absent")?;
         let entry: unsafe extern "C" fn(u32) -> i32 = std::mem::transmute(entry);
@@ -274,9 +325,9 @@ fn open_private_module(path: &Path) -> Result<(PathBuf, File)> {
 }
 
 #[cfg(unix)]
-fn run_verified_module(path: &Path, ticket: &TaskTicket, role: Role) -> Result<i32> {
+fn run_verified_module(path: &Path, authentication: &ModuleAuthentication<'_>, role: Role) -> Result<i32> {
     let (absolute, mut file) = open_private_module(path)?;
-    verify_locked_module(&mut file, ticket)?;
+    authentication.verify(&mut file)?;
     unsafe {
         // Use the system loader, eagerly resolving imports with process-local
         // symbols. No manual mapping, injection or unprotected local fallback.
@@ -292,6 +343,12 @@ fn run_verified_module(path: &Path, ticket: &TaskTicket, role: Role) -> Result<i
             .get::<unsafe extern "C" fn() -> u32>(b"nova_protected_abi_version\0")
             .context("protected module ABI version export is absent")?;
         verify_abi(abi())?;
+        #[cfg(feature = "development-runtime")]
+        if matches!(authentication, ModuleAuthentication::Development(_)) {
+            let capabilities = library.get::<unsafe extern "C" fn() -> u64>(b"nova_development_capabilities\0")
+                .context("development module capability export is absent")?;
+            development::verify_capabilities(capabilities())?;
+        }
         let entry = library
             .get::<unsafe extern "C" fn(u32) -> i32>(b"nova_protected_entry\0")
             .context("protected module entry export is absent")?;
@@ -392,7 +449,7 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
         assert!(
-            run_verified_module(&path, &ticket, Role::BuildWorker)
+            run_verified_module(&path, &ModuleAuthentication::Signed(&ticket), Role::BuildWorker)
                 .unwrap_err()
                 .to_string()
                 .contains("authentication failed"),

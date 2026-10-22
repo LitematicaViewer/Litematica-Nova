@@ -4,7 +4,9 @@ param(
     [switch] $Development,
     [switch] $CheckOnly,
     [switch] $ReuseExisting,
-    [switch] $Force
+    [switch] $Force,
+    [ValidateSet('prebuilt', 'local')][string] $RuntimeSource = $(if ($env:NOVA_RUNTIME_SOURCE) { $env:NOVA_RUNTIME_SOURCE } else { 'prebuilt' }),
+    [string] $PrivateSourceDir = $env:NOVA_PRIVATE_SOURCE_DIR
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -59,12 +61,15 @@ try {
     if ($Development) { $checkArgs += '--development' }
     if ($CheckOnly) { $checkArgs += '--no-download' }
     if ($ReuseExisting) { $checkArgs += '--reuse-existing' }
+    $checkArgs += @('--runtime-source', $RuntimeSource)
+    if ($PrivateSourceDir) { $checkArgs += @('--private-source', $PrivateSourceDir) }
     $checkedJson = & node @checkArgs
     if ($LASTEXITCODE -eq 77) { throw 'NOVA_RUNTIME_DOWNLOAD_AUTH_REQUIRED' }
     if ($LASTEXITCODE -ne 0) { throw 'Public checkout/runtime preflight failed.' }
     $checked = ($checkedJson -join "`n") | ConvertFrom-Json
     $sha = $checked.sha
     $identity = $checked.identity
+    $localRuntime = $checked.runtimeSource -eq 'local'
     $packageRoot = $checked.runtimePackageDir
     $helperSource = if ($checked.backendSource) { $checked.backendSource } else { $sha }
     $tauriPath = Join-Path $repo 'desktop-nova/src-tauri/tauri.conf.json'
@@ -98,10 +103,18 @@ try {
         }
         if ($CheckOnly) { return }
     }
-    $env:NOVA_PROTECTED_BUILD_ID = $identity.buildId
-    $env:NOVA_PROTECTED_MANIFEST_PUBLIC_KEY = $identity.manifestPublicKey
-    $env:NOVA_PROTECTED_ENDPOINT = $identity.endpoint
-    $env:NOVA_PROTECTED_RUNTIME_COMPATIBILITY = $identity.signedCompatibility | ConvertTo-Json -Depth 8 -Compress
+    $env:NOVA_RUNTIME_SOURCE = $checked.runtimeSource
+    if ($localRuntime) {
+        $env:NOVA_DEVELOPMENT_RUNTIME_JSON = $identity.developmentDescriptor | ConvertTo-Json -Depth 8 -Compress
+        $env:NOVA_DEVELOPMENT_MODULE_PATH = $identity.modulePath
+        foreach ($name in @('NOVA_PROTECTED_BUILD_ID','NOVA_PROTECTED_MANIFEST_PUBLIC_KEY','NOVA_PROTECTED_ENDPOINT','NOVA_PROTECTED_RUNTIME_COMPATIBILITY')) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue }
+    } else {
+        $env:NOVA_PROTECTED_BUILD_ID = $identity.buildId
+        $env:NOVA_PROTECTED_MANIFEST_PUBLIC_KEY = $identity.manifestPublicKey
+        $env:NOVA_PROTECTED_ENDPOINT = $identity.endpoint
+        $env:NOVA_PROTECTED_RUNTIME_COMPATIBILITY = $identity.signedCompatibility | ConvertTo-Json -Depth 8 -Compress
+        Remove-Item Env:NOVA_DEVELOPMENT_RUNTIME_JSON,Env:NOVA_DEVELOPMENT_MODULE_PATH -ErrorAction SilentlyContinue
+    }
     $env:NOVA_PUBLIC_HELPER_INPUT_ID = $checked.helperInputId
     $env:NOVA_RUNTIME_PACKAGE_DIR = $packageRoot
     $runtimeStage = Join-Path $repo 'bin/protected'
@@ -166,12 +179,15 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
     $env:CARGO_PROFILE_RELEASE_STRIP = 'symbols'
     $env:CARGO_PROFILE_RELEASE_DEBUG = '0'
     $env:LBA_BUILD_GIT_SHA = $helperSource
-    if ($env:GITHUB_ENV) {
+    if ($env:GITHUB_ENV -and -not $localRuntime) {
         @("NOVA_PROTECTED_BUILD_ID=$($identity.buildId)","NOVA_PROTECTED_MANIFEST_PUBLIC_KEY=$($identity.manifestPublicKey)","NOVA_PROTECTED_ENDPOINT=$($identity.endpoint)","NOVA_PROTECTED_RUNTIME_COMPATIBILITY=$($env:NOVA_PROTECTED_RUNTIME_COMPATIBILITY)","NOVA_PUBLIC_HELPER_INPUT_ID=$($checked.helperInputId)","CARGO_ENCODED_RUSTFLAGS=$($env:CARGO_ENCODED_RUSTFLAGS)","CARGO_PROFILE_RELEASE_STRIP=symbols","CARGO_PROFILE_RELEASE_DEBUG=0") | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
     }
-    & cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir $coreTarget --no-default-features --features public-beta --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
+    $coreFeatures = if ($localRuntime) { 'public-beta,development-runtime' } else { 'public-beta' }
+    & cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir $coreTarget --no-default-features --features $coreFeatures --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
     if ($LASTEXITCODE -ne 0) { throw 'Public Fast/core/stockpile compilation failed.' }
-    & cargo build --locked --release --manifest-path tools/nova-protected-loader/Cargo.toml --target-dir $loaderTarget --bins
+    $loaderArgs = @('build','--locked','--release','--manifest-path','tools/nova-protected-loader/Cargo.toml','--target-dir',$loaderTarget,'--bins')
+    if ($localRuntime) { $loaderArgs += @('--features','development-runtime') }
+    & cargo @loaderArgs
     if ($LASTEXITCODE -ne 0) { throw 'Public authenticated loader compilation failed.' }
     # The up-to-date shortcut in build.ps1 compares mtimes. A release/CI runner may
     # restore a cached target directory whose timestamps are newer than the freshly
@@ -198,7 +214,7 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
         if ($hash -ne (Get-FileHash -LiteralPath $entry.Value -Algorithm SHA256).Hash.ToLowerInvariant()) { throw "Public helper staging is incomplete: $($entry.Key)" }
         $artifacts[$entry.Key] = [ordered]@{ bytes=(Get-Item -LiteralPath $destination).Length; sha256=$hash }
     }
-    $deployment = [ordered]@{ schema='lba.backend.deployment.v1'; gitSha=$sha; helperSourceSha=$helperSource; helperInputId=$checked.helperInputId; profile='release'; runtimeBuildId=$identity.buildId; targetTriple='x86_64-pc-windows-msvc'; artifacts=$artifacts }
+    $deployment = [ordered]@{ schema='lba.backend.deployment.v1'; gitSha=$sha; helperSourceSha=$helperSource; helperInputId=$checked.helperInputId; profile='release'; runtimeKind=$(if ($localRuntime) {'development'} else {'production'}); runtimeBuildId=$identity.buildId; targetTriple='x86_64-pc-windows-msvc'; artifacts=$artifacts }
     $manifestWritten = Write-TextIfChanged (Join-Path $stage 'backend-deployment.json') ($deployment | ConvertTo-Json -Depth 5)
     if ($restaged -eq 0 -and -not $manifestWritten) {
         Write-Host "[protected-backend] staging already current; helper timestamps left untouched"

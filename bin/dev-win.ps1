@@ -3,25 +3,32 @@
 param([Parameter(ValueFromRemainingArguments = $true)][string[]] $Arguments)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$Arguments = @($Arguments | Where-Object { $null -ne $_ })
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $desktop = Join-Path $repo 'desktop-nova'
 $prepare = Join-Path $desktop 'scripts/prepare-protected-backend.ps1'
 $mode = 'dev'
 $force = $false
+$runtimeSource = if ($env:NOVA_RUNTIME_SOURCE) { $env:NOVA_RUNTIME_SOURCE } else { 'prebuilt' }
+$privateSource = $env:NOVA_PRIVATE_SOURCE_DIR
 $tauriArguments = [Collections.Generic.List[string]]::new()
-foreach ($argument in $Arguments) {
+for ($i = 0; $i -lt $Arguments.Count; $i++) {
+    $argument = $Arguments[$i]
     switch ($argument) {
         '--check' { $mode = 'check' }
         '--prepare' { $mode = 'prepare' }
         '--skip-prepare' { $mode = 'reuse' }
         '--force-prepare' { $force = $true }
+        '--runtime-source' { if (++$i -ge $Arguments.Count) { throw '--runtime-source requires prebuilt or local.' }; $runtimeSource = $Arguments[$i] }
+        '--private-source' { if (++$i -ge $Arguments.Count) { throw '--private-source requires an authorized private source directory.' }; $privateSource = $Arguments[$i] }
         { $_ -in '--help', '-h' } {
-            Write-Host 'Usage: pwsh -NoProfile -File bin/dev-win.ps1 [--check|--prepare|--skip-prepare] [--force-prepare] [tauri dev arguments]'
+            Write-Host 'Usage: pwsh -NoProfile -File bin/dev-win.ps1 [--runtime-source prebuilt|local] [--private-source directory] [--check|--prepare|--skip-prepare] [tauri dev arguments]'
             exit 0
         }
         default { $tauriArguments.Add($argument) }
     }
 }
+if ($runtimeSource -notin @('prebuilt','local')) { throw '--runtime-source must be prebuilt or local.' }
 function Copy-DevelopmentFile([string] $Source, [string] $Destination) {
     if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) { throw "Required development component is missing: $([IO.Path]::GetFileName($Source))" }
     if ((Test-Path -LiteralPath $Destination -PathType Leaf) -and (Get-Item -LiteralPath $Source).Length -eq (Get-Item -LiteralPath $Destination).Length -and (Get-FileHash -LiteralPath $Source).Hash -eq (Get-FileHash -LiteralPath $Destination).Hash) { return }
@@ -38,18 +45,19 @@ try {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'Node.js 20.19 or newer is required.' }
     & node -e 'const [a,b]=process.versions.node.split(".").map(Number);if(a<20||(a===20&&b<19))process.exit(1)'
     if ($LASTEXITCODE -ne 0) { throw 'Node.js 20.19 or newer is required.' }
-    if (-not $env:NOVA_DEVELOPMENT_READ_TOKEN -and (Test-Path -LiteralPath $tokenFile -PathType Leaf)) {
+    if ($runtimeSource -eq 'prebuilt' -and -not $env:NOVA_DEVELOPMENT_READ_TOKEN -and (Test-Path -LiteralPath $tokenFile -PathType Leaf)) {
         $saved = (Get-Content -LiteralPath $tokenFile -Raw).Trim() | ConvertTo-SecureString
         $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($saved)
         try { $env:NOVA_DEVELOPMENT_READ_TOKEN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
         finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer); $saved.Dispose() }
     }
-    $options = @{ RepoRoot = $repo; Development = $true; Force = $force }
+    $options = @{ RepoRoot = $repo; Development = $true; Force = $force; RuntimeSource = $runtimeSource }
+    if ($privateSource) { $options.PrivateSourceDir = $privateSource }
     if ($mode -eq 'check') { $options.CheckOnly = $true }
     if ($mode -eq 'reuse') { $options.ReuseExisting = $true }
     try { & $prepare @options }
     catch {
-        if ($mode -eq 'check' -or $_.Exception.Message -notmatch 'NOVA_RUNTIME_DOWNLOAD_AUTH_REQUIRED') { throw }
+        if ($runtimeSource -ne 'prebuilt' -or $mode -eq 'check' -or $_.Exception.Message -notmatch 'NOVA_RUNTIME_DOWNLOAD_AUTH_REQUIRED') { throw }
         $secret = Read-Host 'Development runtime read-only token (not a decryption/signing key)' -AsSecureString
         if ($secret.Length -eq 0) { $secret.Dispose(); throw 'A read-only runtime credential is required for the configured channel.' }
         $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
@@ -60,7 +68,7 @@ try {
             $secret | ConvertFrom-SecureString | Set-Content -LiteralPath $tokenFile -Encoding utf8
         } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer); $secret.Dispose() }
     }
-    if ($mode -eq 'check') { Write-Host '[dev-win] Signed runtime, ABI, capabilities and source inputs verified. No files written; no GUI started.'; exit 0 }
+    if ($mode -eq 'check') { Write-Host "[dev-win] $runtimeSource runtime, ABI, capabilities and source inputs verified. No files written; no GUI started."; exit 0 }
     $stage = Join-Path $repo 'bin/public-beta'
     $backend = Join-Path $repo 'bin/viewer-backend'
     foreach ($name in @('litematica_core.exe','litematica_native_viewer.exe','nova-render-service.exe','nova-build-worker.exe','backend-deployment.json')) {
@@ -68,7 +76,9 @@ try {
     }
     $runtime = $env:NOVA_RUNTIME_PACKAGE_DIR
     if (-not $runtime) { throw 'The verified development runtime cache was not selected.' }
-    foreach ($file in Get-ChildItem -LiteralPath $runtime -File) { Copy-DevelopmentFile $file.FullName (Join-Path $backend "protected/$($file.Name)") }
+    if ($runtimeSource -eq 'prebuilt') {
+        foreach ($file in Get-ChildItem -LiteralPath $runtime -File) { Copy-DevelopmentFile $file.FullName (Join-Path $backend "protected/$($file.Name)") }
+    }
     $helperRoot = if ($env:NOVA_PUBLIC_CARGO_CACHE_ROOT) { [IO.Path]::GetFullPath($env:NOVA_PUBLIC_CARGO_CACHE_ROOT) } else { $repo }
     $stockpile = Join-Path $helperRoot 'tools/viewer-core/target/public-beta/release/stockpile_server.exe'
     $stockpileResource = Join-Path $repo 'bin/stockpile-server/windows-x64/stockpile_server.exe'
@@ -81,7 +91,7 @@ try {
     New-Item -ItemType Directory -Path $overlayDirectory -Force | Out-Null
     $overlay = Join-Path $overlayDirectory 'tauri.json'
     $resourceMap = [ordered]@{ '../../bin/protected' = $null }
-    $resourceMap[(Join-Path $backend 'protected')] = 'bin/viewer-backend/protected'
+    if ($runtimeSource -eq 'prebuilt') { $resourceMap[(Join-Path $backend 'protected')] = 'bin/viewer-backend/protected' }
     $resourceMap['../../tools/viewer-core/target/public-beta/release/stockpile_server.exe'] = $null
     $resourceMap[$stockpileResource] = 'bin/stockpile-server/windows-x64/stockpile_server.exe'
     $configuration = @{ bundle = @{ resources = $resourceMap } } | ConvertTo-Json -Depth 5
@@ -97,7 +107,8 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed.' }
         }
         Write-Host '[dev-win] Starting UI hot reload with the verified compatible runtime.'
-        & npm.cmd run tauri -- dev --config $overlay @tauriArguments
+        $features = if ($runtimeSource -eq 'local') { @('--features','development-runtime') } else { @() }
+        & npm.cmd run tauri -- dev --config $overlay @features @tauriArguments
         exit $LASTEXITCODE
     } finally { Pop-Location }
 } catch { Write-Error $_; exit 1 }
