@@ -36,6 +36,7 @@ export {
   downloadWikiEnumCatalogsFromMinecraftWiki,
   pickLitematicFile,
   readGameResourceRemoteText,
+  readResourcePackLanguage,
 } from "../platform/files";
 
 export {

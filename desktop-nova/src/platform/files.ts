@@ -204,3 +204,7 @@ export function downloadWikiEnumCatalogsFromMinecraftWiki(): Promise<WikiEnumCat
 export function readGameResourceRemoteText(url: string): Promise<string> {
   return invoke("read_game_resource_remote_text", { url });
 }
+
+export function readResourcePackLanguage(language: "zh_cn" | "en_us"): Promise<Record<string, string>> {
+  return invoke("read_resource_pack_language", { language });
+}

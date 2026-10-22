@@ -12,6 +12,7 @@ import {
   readImageBase64,
   readWorkspaceFile,
   readGameResourceRemoteText,
+  readResourcePackLanguage,
   getUserConfigFilePath,
   readUserConfigFile,
   writeUserConfigFile,
@@ -461,13 +462,15 @@ export async function readLanguageResource(language: "zh_cn" | "en_us", builtinO
     return pending;
   };
   if (builtinOnly) return bundled();
-  const snapshot = await listGameResourceRegistry();
+  const [snapshot, fallback, packs] = await Promise.all([
+    listGameResourceRegistry(),
+    bundled().then(text => JSON.parse(text) as Record<string, string>),
+    readResourcePackLanguage(language).catch(error => { console.warn("Resource-pack names:", error); return {}; }),
+  ]);
   const matches = (entry: GameResourceEntry) => !entry.builtin && entry.language?.toLowerCase().replace("-", "_") === language;
   const selected = matches(snapshot.active_language) ? snapshot.active_language : snapshot.entries.language.find(matches);
-  if (!selected) return bundled();
-  const fallback = JSON.parse(await bundled());
-  const custom = JSON.parse(await readEntryFile(selected, selected.file_relpath).catch(() => "{}"));
-  return JSON.stringify({ ...fallback, ...custom });
+  const custom = selected ? JSON.parse(await readEntryFile(selected, selected.file_relpath).catch(() => "{}")) : {};
+  return JSON.stringify({ ...fallback, ...packs, ...custom });
 }
 
 export async function ensureBuiltinBlockIconsExtracted(force = false): Promise<{ target_dir: string; root_relpath: string; extracted: number }> {

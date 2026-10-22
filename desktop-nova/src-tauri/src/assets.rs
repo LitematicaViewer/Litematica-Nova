@@ -1253,3 +1253,115 @@ mod resource_restoration_tests {
         assert!(error.contains("取消"));
     }
 }
+
+// Language resources are presentation data only. Do not invoke compatibility
+// fingerprinting, model loading or schematic analysis for a language change.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LanguageFileStamp {
+    path: PathBuf,
+    bytes: u64,
+    modified: Option<std::time::SystemTime>,
+}
+struct CachedPackLanguage {
+    files: Vec<LanguageFileStamp>,
+    values: std::sync::Arc<std::collections::BTreeMap<String, String>>,
+}
+static PACK_LANGUAGE_CACHE: std::sync::OnceLock<Mutex<std::collections::HashMap<(PathBuf, String), CachedPackLanguage>>> = std::sync::OnceLock::new();
+
+#[tauri::command]
+pub(crate) async fn read_resource_pack_language(language: String) -> Result<std::collections::BTreeMap<String, String>, String> {
+    if !matches!(language.as_str(), "zh_cn" | "en_us") {
+        return Err("Unsupported resource-pack UI language".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || configured_pack_language(&language))
+        .await.map_err(|error| error.to_string())?
+}
+
+fn configured_pack_language(language: &str) -> Result<std::collections::BTreeMap<String, String>, String> {
+    use std::collections::{BTreeMap, HashSet};
+    let config = crate::read_user_config_data(&current_user_config_dir()?);
+    let root = get_root();
+    let mut seen = HashSet::new();
+    let packs = config.v5_compatibility.resource_packs.iter().map(|value| value.trim())
+        .filter(|value| !value.is_empty()).filter(|value| seen.insert((*value).to_owned()))
+        .map(|value| { let path = PathBuf::from(value); if path.is_absolute() { path } else { root.join(path) } })
+        .collect::<Vec<_>>();
+    let cache = PACK_LANGUAGE_CACHE.get_or_init(Mutex::default);
+    cache.lock().map_err(|_| "Resource-pack language cache lock failed")?
+        .retain(|(path, _), _| packs.contains(path));
+    let mut merged = BTreeMap::new();
+    // NativeTerrainSceneInputs/ResourceSnapshot append user packs in this exact
+    // low-to-high order; later packs override earlier keys.
+    for pack in packs {
+        let files = pack_language_stamps(&pack, language)?;
+        let key = (pack.clone(), language.to_owned());
+        let cached = cache.lock().map_err(|_| "Resource-pack language cache lock failed")?
+            .get(&key).filter(|entry| entry.files == files).map(|entry| std::sync::Arc::clone(&entry.values));
+        let values = if let Some(values) = cached { values } else {
+            let values = std::sync::Arc::new(read_pack_language(&pack, language, &files)?);
+            cache.lock().map_err(|_| "Resource-pack language cache lock failed")?
+                .insert(key, CachedPackLanguage { files, values: std::sync::Arc::clone(&values) });
+            values
+        };
+        merged.extend(values.iter().map(|(key, value)| (key.clone(), value.clone())));
+    }
+    Ok(merged)
+}
+
+fn language_stamp(path: PathBuf) -> Result<LanguageFileStamp, String> {
+    let metadata = std::fs::metadata(&path).map_err(|error| format!("Read language resource metadata {}: {error}", path.display()))?;
+    Ok(LanguageFileStamp { path, bytes: metadata.len(), modified: metadata.modified().ok() })
+}
+
+fn pack_language_stamps(pack: &Path, language: &str) -> Result<Vec<LanguageFileStamp>, String> {
+    if !pack.is_dir() { return Ok(vec![language_stamp(pack.to_path_buf())?]); }
+    let assets = pack.join("assets");
+    if !assets.is_dir() { return Ok(Vec::new()); }
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(&assets).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path().join("lang").join(format!("{language}.json"));
+        if path.is_file() { paths.push(path); }
+    }
+    paths.sort();
+    paths.into_iter().map(language_stamp).collect()
+}
+
+fn parse_pack_language(bytes: &[u8], source: &str, result: &mut std::collections::BTreeMap<String, String>) -> Result<(), String> {
+    let text = std::str::from_utf8(bytes).map_err(|error| format!("Read resource-pack language {source}: {error}"))?;
+    let values: serde_json::Map<String, serde_json::Value> = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|error| format!("Parse resource-pack language {source}: {error}"))?;
+    for (key, value) in values {
+        // Vanilla language files may contain formatting metadata. Only actual
+        // string entries are names; do not coerce objects/numbers into labels.
+        if let serde_json::Value::String(value) = value { result.insert(key, value); }
+    }
+    Ok(())
+}
+
+fn read_pack_language(pack: &Path, language: &str, files: &[LanguageFileStamp]) -> Result<std::collections::BTreeMap<String, String>, String> {
+    use std::io::Read;
+    let mut result = std::collections::BTreeMap::new();
+    if pack.is_dir() {
+        for file in files {
+            let bytes = std::fs::read(&file.path).map_err(|error| format!("Read resource-pack language {}: {error}", file.path.display()))?;
+            parse_pack_language(&bytes, &file.path.display().to_string(), &mut result)?;
+        }
+    } else {
+        let file = std::fs::File::open(pack).map_err(|error| format!("Open resource pack {}: {error}", pack.display()))?;
+        let mut archive = ZipArchive::new(file).map_err(|error| format!("Open resource pack {}: {error}", pack.display()))?;
+        let wanted = format!("{language}.json");
+        let mut names = archive.file_names().filter(|name| {
+            let parts = name.split('/').collect::<Vec<_>>();
+            parts.len() == 4 && parts[0] == "assets" && !parts[1].is_empty() && parts[2] == "lang" && parts[3] == wanted
+        }).map(str::to_owned).collect::<Vec<_>>();
+        names.sort();
+        for name in names {
+            let mut entry = archive.by_name(&name).map_err(|error| error.to_string())?;
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(|error| format!("Read resource-pack language {name}: {error}"))?;
+            parse_pack_language(&bytes, &format!("{}:{name}", pack.display()), &mut result)?;
+        }
+    }
+    Ok(result)
+}

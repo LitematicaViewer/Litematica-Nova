@@ -3845,6 +3845,7 @@ fn main() {
             assets::download_vault_item_icons,
             assets::download_minecraft_wiki_enum_catalogs,
             assets::read_game_resource_remote_text,
+            assets::read_resource_pack_language,
             wiki_block_icons::download_minecraft_wiki_block_icons,
             open_enumerator_window,
             open_asset_manager_window,

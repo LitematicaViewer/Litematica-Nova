@@ -34,6 +34,7 @@ let languageLoading: Promise<void> | null = null;
 let listenersStarted = false;
 let saveQueue: Promise<unknown> = Promise.resolve();
 let pendingPreference: UiLanguagePreference | undefined;
+let resourcePackSelection: string | undefined;
 export const getUiLocale = (): UiLocale => locale;
 export const getUiLanguagePreference = (): UiLanguagePreference => preference;
 export const getI18nRevision = (): number => languageRevision;
@@ -55,7 +56,16 @@ export function initializeUiLanguage(loadConfig: () => Promise<UserConfigInfo> =
     if (!listenersStarted) {
       listenersStarted = true;
       await Promise.all([
-        listenEvent<UserConfigInfo>("user-config-changed", event => { const saved = normalizeUiLanguage(event.payload.config.ui_language); if (pendingPreference !== undefined && saved !== pendingPreference) return; pendingPreference = undefined; applyLanguage(saved); }).catch(console.warn),
+        listenEvent<UserConfigInfo>("user-config-changed", event => {
+          const config = event.payload.config;
+          const packs = JSON.stringify(config.v5_compatibility?.resource_packs ?? []);
+          if (packs !== resourcePackSelection) {
+            resourcePackSelection = packs; invalidateI18nCache(); void initI18n();
+          }
+          const saved = normalizeUiLanguage(config.ui_language);
+          if (pendingPreference !== undefined && saved !== pendingPreference) return;
+          pendingPreference = undefined; applyLanguage(saved);
+        }).catch(console.warn),
         listenEvent<{ preference: UiLanguagePreference }>("nova-ui-language-changed", event => { pendingPreference = event.payload.preference; applyLanguage(event.payload.preference); }).catch(console.warn),
       ]);
       window.addEventListener("storage", event => { if (event.key === storageKey) applyLanguage(event.newValue); });
@@ -66,7 +76,9 @@ export function initializeUiLanguage(loadConfig: () => Promise<UserConfigInfo> =
       });
     }
     try {
-      const {config} = await loadConfig(); applyLanguage(config.ui_language);
+      const {config} = await loadConfig();
+      resourcePackSelection = JSON.stringify(config.v5_compatibility?.resource_packs ?? []);
+      applyLanguage(config.ui_language);
       if (config.ui_language === "system" && config.ui_locale !== locale) await saveUserConfig({ui_language:"system",ui_locale:locale});
     }
     catch (error) { console.warn("UI language configuration:", error); applyLanguage(preference); }
@@ -125,6 +137,8 @@ let englishMap: Record<string, string> = {};
 let loading: Promise<void> | null = null;
 let languageGeneration = 0;
 let resourceListenerStarted = false;
+/** Snapshot for exports; names only, never part of renderer resource identity. */
+export const getMinecraftTranslations = (): Record<string, string> => ({ ...englishMap, ...langMap });
 export function invalidateI18nCache(): void { langMap = {}; loading = null; languageGeneration++; }
 export async function initI18n(force = false) {
   if (!resourceListenerStarted) {
@@ -136,7 +150,8 @@ export async function initI18n(force = false) {
     const generation = languageGeneration;
     const wanted = locale;
     loading = (async () => {
-      const [selected, english] = await Promise.all([readLanguageResource(wanted === "zh-CN" ? "zh_cn" : "en_us"), readLanguageResource("en_us", true)]);
+      const englishResource = readLanguageResource("en_us");
+      const [selected, english] = await Promise.all([wanted === "zh-CN" ? readLanguageResource("zh_cn") : englishResource, englishResource]);
       if (generation !== languageGeneration) return;
       langMap = JSON.parse(selected); englishMap = JSON.parse(english); notify();
     })().catch(error => { if (generation === languageGeneration) loading = null; console.warn("Minecraft names:", error); });
