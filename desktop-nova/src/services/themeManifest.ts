@@ -22,6 +22,7 @@ export const THEMES = [
   { id: "8bitcn", key: "8bitcn", label: "8bitcn/ui", directory: "8bitcn" },
   { id: "Minecraft", key: "minecraft", label: "Minecraft", directory: "minecraft" },
   { id: "Metro10", key: "metro10", label: "Metro10", directory: "metro10" },
+  { id: "aero7", key: "aero7", label: "Aero7", directory: "aero7" },
 ] as const;
 
 export type ThemeDefinition = (typeof THEMES)[number];

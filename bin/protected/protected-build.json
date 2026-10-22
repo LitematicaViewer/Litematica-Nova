@@ -5,6 +5,6 @@
   "manifestFile": "nova_protected_module.dll.manifest.json",
   "endpoint": "https://45-62-112-121.sslip.io:8448/nova-core",
   "schema": "nova.protected-build.v1",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "ciphertextFile": "nova_protected_module.dll.enc"
 }

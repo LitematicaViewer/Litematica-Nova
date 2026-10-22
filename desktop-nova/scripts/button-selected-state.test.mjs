@@ -25,6 +25,7 @@ const THEME_SHEETS = {
   shadcn: [...SHARED, 'ui/themes/modern.css', 'ui/themes/shadcn/theme.css'],
   '8bitcn': [...SHARED, 'ui/themes/modern.css', 'ui/themes/8bitcn/theme.css'],
   minecraft: [...SHARED, 'ui/themes/minecraft/widgets.css', 'ui/themes/minecraft/appearance.css'],
+  aero7: [...SHARED, 'ui/themes/aero7/widgets.css', 'ui/themes/aero7/theme.css'],
 };
 const rules = Object.fromEntries(
   Object.entries(THEME_SHEETS).map(([theme, files]) => [theme, collect(files, root)]),
@@ -130,5 +131,23 @@ test('级联模型能分辨选中与常态（护栏的护栏）', () => {
     declared('shadcn', pressed(), 'background').rank.specificity > declared('shadcn', resting(), 'background').rank.specificity,
     true,
     '选中规则必须比常态规则更具体或更靠后',
+  );
+});
+
+test('Aero7：选中换到 check 贴图，常态保持 normal，禁用优先于悬停', () => {
+  // Aero7 paints every action-button state from a nine-slice texture, so the winning
+  // declaration is `border-image-source` rather than a `background` fill.
+  const pressedTexture = declared('aero7', pressed(), 'border-image-source');
+  assert.match(pressedTexture.decl.value, /--ln-aero7-button-check-image/, '选中态没有换到 check 贴图');
+  const restingTexture = declared('aero7', resting(), 'border-image-source');
+  assert.match(restingTexture.decl.value, /--ln-aero7-button-normal-image/, '常态贴图被选中规则覆盖');
+  const selectedHover = declared('aero7', { ...pressed(), pseudos: ['hover'] }, 'border-image-source');
+  assert.match(selectedHover.decl.value, /--ln-aero7-button-checkhover-image/, '选中悬停没有换到 checkhover 贴图');
+  const disabled = declared('aero7', { ...resting(), pseudos: ['disabled'] }, 'border-image-source');
+  assert.match(disabled.decl.value, /--ln-aero7-button-disabled-image/, '禁用没有换到 disabled 贴图');
+  // `aria-pressed` and Radix Toggle's `data-state="on"` must resolve to the same texture.
+  assert.equal(
+    value('aero7', pressed('secondary', 'data-state'), 'border-image-source'),
+    value('aero7', pressed('secondary', 'aria-pressed'), 'border-image-source'),
   );
 });
