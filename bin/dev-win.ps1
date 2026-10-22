@@ -69,6 +69,11 @@ try {
     $runtime = $env:NOVA_RUNTIME_PACKAGE_DIR
     if (-not $runtime) { throw 'The verified development runtime cache was not selected.' }
     foreach ($file in Get-ChildItem -LiteralPath $runtime -File) { Copy-DevelopmentFile $file.FullName (Join-Path $backend "protected/$($file.Name)") }
+    $helperRoot = if ($env:NOVA_PUBLIC_CARGO_CACHE_ROOT) { [IO.Path]::GetFullPath($env:NOVA_PUBLIC_CARGO_CACHE_ROOT) } else { $repo }
+    $stockpile = Join-Path $helperRoot 'tools/viewer-core/target/public-beta/release/stockpile_server.exe'
+    $stockpileResource = Join-Path $repo 'bin/stockpile-server/windows-x64/stockpile_server.exe'
+    Copy-DevelopmentFile $stockpile (Join-Path $backend 'stockpile_server.exe')
+    Copy-DevelopmentFile $stockpile $stockpileResource
     # Both get_root() choices now read these exact cached bytes: the workspace
     # backend fallback, and Tauri's copied debug resources. Release config is
     # unchanged; the signed release package in bin/protected stays untouched.
@@ -77,13 +82,12 @@ try {
     $overlay = Join-Path $overlayDirectory 'tauri.json'
     $resourceMap = [ordered]@{ '../../bin/protected' = $null }
     $resourceMap[(Join-Path $backend 'protected')] = 'bin/viewer-backend/protected'
+    $resourceMap['../../tools/viewer-core/target/public-beta/release/stockpile_server.exe'] = $null
+    $resourceMap[$stockpileResource] = 'bin/stockpile-server/windows-x64/stockpile_server.exe'
     $configuration = @{ bundle = @{ resources = $resourceMap } } | ConvertTo-Json -Depth 5
     if (-not (Test-Path -LiteralPath $overlay -PathType Leaf) -or [IO.File]::ReadAllText($overlay) -cne $configuration) {
         [IO.File]::WriteAllText($overlay, $configuration, [Text.UTF8Encoding]::new($false))
     }
-    $stockpile = Join-Path $repo 'tools/viewer-core/target/public-beta/release/stockpile_server.exe'
-    Copy-DevelopmentFile $stockpile (Join-Path $backend 'stockpile_server.exe')
-    Copy-DevelopmentFile $stockpile (Join-Path $repo 'bin/stockpile-server/windows-x64/stockpile_server.exe')
     if ($mode -eq 'prepare') { Write-Host '[dev-win] Development runtime prepared. The UI was not started.'; exit 0 }
     if (-not $env:LBA_DATA_ROOT) { $env:LBA_DATA_ROOT = Join-Path $repo 'data' }
     Push-Location -LiteralPath $desktop
