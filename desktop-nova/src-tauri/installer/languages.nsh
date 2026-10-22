@@ -1,0 +1,11 @@
+﻿; Nova-owned installer strings. Standard page strings come from NSIS MUI language packs.
+LangString novaInstallTitle 2052 "${PRODUCTNAME} ${VERSION} 安装"
+LangString novaInstallTitle 1033 "${PRODUCTNAME} ${VERSION} Setup"
+LangString novaUninstallTitle 2052 "${PRODUCTNAME} ${VERSION} 卸载"
+LangString novaUninstallTitle 1033 "${PRODUCTNAME} ${VERSION} Uninstall"
+LangString novaSchematicType 2052 "Litematica 投影"
+LangString novaSchematicType 1033 "Litematica schematic"
+LangString novaApplicationDescription 2052 "查看、整理 Minecraft Litematica 投影"
+LangString novaApplicationDescription 1033 "View and organize Minecraft Litematica schematics"
+LangString novaRegistrationFailed 2052 "Windows 文件入口登记失败"
+LangString novaRegistrationFailed 1033 "Could not register Windows file integration"

@@ -52,11 +52,20 @@ pub fn resolve_stockpile_item_names(
 
 pub(crate) fn resolve_stockpile_item_names_cached(minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_trees: &BTreeMap<String, RecipeTreeNode>) -> Result<StockpileItemNamesPayload> {
     let root = cache_dir(minecraft_version)?;
-    let cache = if ["manifest.json", "en_us.json", "zh_cn.json"].iter().all(|name| root.join(name).is_file()) {
+    let mut cache = if ["manifest.json", "en_us.json", "zh_cn.json"].iter().all(|name| root.join(name).is_file()) {
         LangCache { manifest: Some(read_json(&root.join("manifest.json"))?), en_us: read_json(&root.join("en_us.json"))?, zh_cn: read_json(&root.join("zh_cn.json"))? }
     } else { LangCache::empty() };
-    // The material rows already carry the verified bundled Chinese item name.
-    // Missing extra translations stay explicit, without silently fetching a JAR.
+    // Version-specific cached resources take priority. The distributed official
+    // language assets supply missing names offline; no JAR or network fetch.
+    if let Ok(root) = runtime_paths::app_root() {
+        for (file, target) in [("en_us.json", &mut cache.en_us), ("zh_cn.json", &mut cache.zh_cn)] {
+            let path = root.join("pack-in").join("lang").join(file);
+            if path.is_file() {
+                let bundled: BTreeMap<String, String> = read_json(&path)?;
+                for (key, name) in bundled { target.entry(key).or_insert(name); }
+            }
+        }
+    }
     Ok(build_payload_from_cache(materials, recipe_trees, cache))
 }
 
@@ -606,6 +615,7 @@ mod tests {
 
     fn fixture_materials() -> StockpileMaterialsData {
         StockpileMaterialsData {
+            ui_locale: None,
             schema_version: crate::stockpile_schema::STOCKPILE_MATERIALS_SCHEMA_VERSION,
             project: StockpileProjectInfo {
                 source_file: "fixture.litematic".to_string(),

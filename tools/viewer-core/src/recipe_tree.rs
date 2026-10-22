@@ -1389,6 +1389,7 @@ mod tests {
 
     fn materials_data<const N: usize>(values: [(&str, u64, &str); N]) -> StockpileMaterialsData {
         StockpileMaterialsData {
+            ui_locale: None,
             schema_version: crate::stockpile_schema::STOCKPILE_MATERIALS_SCHEMA_VERSION,
             project: StockpileProjectInfo {
                 source_file: "fixture.litematic".to_string(),

@@ -281,6 +281,7 @@ FunctionEnd
 {{#each language_files}}
   !include "{{this}}"
 {{/each}}
+!include "${NOVA_INSTALLER_SOURCES}\languages.nsh"
 
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
@@ -298,9 +299,26 @@ Function .onInit
     StrCpy $UpdateMode 1
   ${EndIf}
 
-  !if "${DISPLAYLANGUAGESELECTOR}" == "true"
-    !insertmacro MUI_LANGDLL_DISPLAY
-  !endif
+  ; Preserve the saved NSIS language for unattended updates. Only a normal
+  ; interactive first install may show the standard language selector.
+  ReadRegStr $R9 "${MUI_LANGDLL_REGISTRY_ROOT}" "${MUI_LANGDLL_REGISTRY_KEY}" "${MUI_LANGDLL_REGISTRY_VALUENAME}"
+  ${If} $R9 != ""
+    StrCpy $LANGUAGE $R9
+  ${EndIf}
+  ${GetOptions} $CMDLINE "/LANG=" $R9
+  ${IfNot} ${Errors}
+    ${If} $R9 == "2052"
+    ${OrIf} $R9 == "1033"
+      StrCpy $LANGUAGE $R9
+    ${EndIf}
+  ${Else}
+    !if "${DISPLAYLANGUAGESELECTOR}" == "true"
+      ${If} $PassiveMode != 1
+      ${AndIfNot} ${Silent}
+        !insertmacro MUI_LANGDLL_DISPLAY
+      ${EndIf}
+    !endif
+  ${EndIf}
 
   !insertmacro SetContext
 
@@ -581,8 +599,6 @@ Function un.onInit
     !insertmacro MULTIUSER_UNINIT
   !endif
 
-  !insertmacro MUI_UNGETLANGUAGE
-
   ${GetOptions} $CMDLINE "/P" $PassiveMode
   ${IfNot} ${Errors}
     StrCpy $PassiveMode 1
@@ -591,6 +607,13 @@ Function un.onInit
   ${GetOptions} $CMDLINE "/UPDATE" $UpdateMode
   ${IfNot} ${Errors}
     StrCpy $UpdateMode 1
+  ${EndIf}
+  ReadRegStr $R9 "${MUI_LANGDLL_REGISTRY_ROOT}" "${MUI_LANGDLL_REGISTRY_KEY}" "${MUI_LANGDLL_REGISTRY_VALUENAME}"
+  ${If} $R9 != ""
+    StrCpy $LANGUAGE $R9
+  ${ElseIf} $PassiveMode != 1
+  ${AndIfNot} ${Silent}
+    !insertmacro MUI_UNGETLANGUAGE
   ${EndIf}
 FunctionEnd
 
@@ -801,7 +824,8 @@ Function NovaDuiGuiInit
   ${OrIf} ${Silent}
     Return
   ${EndIf}
-  NovaDui::Attach /NOUNLOAD "${PRODUCTNAME} ${VERSION} 安装"
+  NovaDui::SetLanguage /NOUNLOAD "$LANGUAGE"
+  NovaDui::Attach /NOUNLOAD "$(novaInstallTitle)"
   Pop $R0
   ${If} $R0 != "ok"
     SetErrorLevel 1603
@@ -813,7 +837,8 @@ Function un.NovaDuiGuiInit
   ${OrIf} ${Silent}
     Return
   ${EndIf}
-  NovaDui::Attach /NOUNLOAD "${PRODUCTNAME} ${VERSION} 卸载"
+  NovaDui::SetLanguage /NOUNLOAD "$LANGUAGE"
+  NovaDui::Attach /NOUNLOAD "$(novaUninstallTitle)"
   Pop $R0
   ${If} $R0 != "ok"
     SetErrorLevel 1603

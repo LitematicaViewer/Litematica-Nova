@@ -4878,6 +4878,7 @@ mod tests {
 
     fn fixture_materials() -> StockpileMaterialsData {
         StockpileMaterialsData {
+            ui_locale: None,
             schema_version: crate::stockpile_schema::STOCKPILE_MATERIALS_SCHEMA_VERSION,
             project: StockpileProjectInfo {
                 source_file: "fixture.litematic".to_string(),

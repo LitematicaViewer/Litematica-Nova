@@ -29,3 +29,7 @@ struct Stack {
 static_assert(sizeof(void*) == 4, "The bundled NSIS Unicode host is x86, including for an x64 application");
 static_assert(sizeof(wchar_t) == 2, "NSIS Unicode ABI requires UTF-16");
 #define NSIS_ENTRY(name) extern "C" void __cdecl name(HWND parent, int stringSize, wchar_t*, stack_t** stackTop, extra_parameters*)
+
+// The NSIS host supplies its selected/persisted language before each user-facing call.
+inline bool novaInstallerEnglish = false;
+inline const wchar_t* novaText(const wchar_t* zh, const wchar_t* en) { return novaInstallerEnglish ? en : zh; }

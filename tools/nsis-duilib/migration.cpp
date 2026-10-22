@@ -122,7 +122,7 @@ std::vector<Record> records() {
 std::wstring processUsing(const std::vector<Record>& entries, const std::wstring& target, bool legacy, bool updateHandoff = false) {
     const ULONGLONG handoffDeadline = GetTickCount64() + 5000;
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) return L"进程状态读取失败，请稍后重试";
+    if (snapshot == INVALID_HANDLE_VALUE) return novaText(L"进程状态读取失败，请稍后重试", L"Could not read running processes. Please try again later.");
     PROCESSENTRY32W process{}; process.dwSize = sizeof(process);
     std::wstring running;
     for (BOOL more = Process32FirstW(snapshot, &process); more; more = Process32NextW(snapshot, &process)) {
@@ -144,8 +144,8 @@ std::wstring processUsing(const std::vector<Record>& entries, const std::wstring
                     continue;
                 }
             }
-            if (relevant) running = L"请关闭正在运行的 Litematica-Nova 后重试：" + file;
-        } else running = L"请关闭正在运行的 Litematica-Nova 后重试";
+            if (relevant) running = std::wstring(novaText(L"请关闭正在运行的 Litematica-Nova 后重试：", L"Close the running Litematica-Nova and try again: ")) + file;
+        } else running = novaText(L"请关闭正在运行的 Litematica-Nova 后重试", L"Close the running Litematica-Nova and try again.");
         if (handle) CloseHandle(handle);
         if (!running.empty()) break;
     }
@@ -257,10 +257,10 @@ NSIS_ENTRY(Migrate) {
             // shared $INSTDIR. /UPDATE preserves the user's app data.
             code = run(parent, record.uninstaller, L"\"" + record.uninstaller + L"\" /S /UPDATE _?=" + record.directory);
         }
-        if (code != ERROR_SUCCESS) { stack.push(L"旧版迁移失败（" + record.name + L"，退出码 " + std::to_wstring(code) + L"），新文件尚未写入"); return; }
-        if (!record.binary.empty() && exists(record.binary)) { stack.push(L"旧版程序仍在原安装目录，迁移已停止：" + record.binary); return; }
+        if (code != ERROR_SUCCESS) { stack.push(std::wstring(novaText(L"旧版迁移失败（", L"Could not migrate the previous installation (")) + record.name + novaText(L"，退出码 ", L", exit code ") + std::to_wstring(code) + novaText(L"），新文件尚未写入", L"). No new files have been written.")); return; }
+        if (!record.binary.empty() && exists(record.binary)) { stack.push(std::wstring(novaText(L"旧版程序仍在原安装目录，迁移已停止：", L"Migration stopped because the previous application remains installed: ")) + record.binary); return; }
         const auto erased = erase(record);
-        if (erased != ERROR_SUCCESS) { stack.push(L"旧版安装登记迁移失败，错误码 " + std::to_wstring(erased)); return; }
+        if (erased != ERROR_SUCCESS) { stack.push(std::wstring(novaText(L"旧版安装登记迁移失败，错误码 ", L"Could not migrate the previous installation registration; error code ")) + std::to_wstring(erased)); return; }
     }
     stack.push(L"ok");
 }
@@ -325,5 +325,5 @@ NSIS_ENTRY(RepairShell) {
     }
     if (SUCCEEDED(initialized)) CoUninitialize();
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
-    stack.push(shellError == ERROR_SUCCESS ? L"ok" : L"文件入口更新失败，错误码 " + std::to_wstring(shellError));
+    stack.push(shellError == ERROR_SUCCESS ? L"ok" : std::wstring(novaText(L"文件入口更新失败，错误码 ", L"Could not update file integration; error code ")) + std::to_wstring(shellError));
 }

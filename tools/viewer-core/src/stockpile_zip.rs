@@ -548,7 +548,10 @@ fn add_json_file<T: Serialize>(
 
 fn render_index_html(payload: &StockpileZipPayload) -> Result<String> {
     let payload_json = serde_json::to_string(payload)?;
-    Ok(INDEX_HTML.replace("__STOCKPILE_PAYLOAD__", &escape_script_json(&payload_json)))
+    let english = payload.materials.ui_locale.as_deref() == Some("en-US");
+    Ok(INDEX_HTML.replace("__STOCKPILE_PAYLOAD__", &escape_script_json(&payload_json))
+        .replace("<html lang=\"zh-CN\">", if english { "<html lang=\"en-US\">" } else { "<html lang=\"zh-CN\">" })
+        .replace("<title>Litematica 备货单</title>", if english { "<title>Litematica Material List</title>" } else { "<title>Litematica 备货单</title>" }))
 }
 
 fn escape_script_json(value: &str) -> String {

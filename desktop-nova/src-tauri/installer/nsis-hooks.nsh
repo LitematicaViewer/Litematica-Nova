@@ -17,6 +17,7 @@
 !addplugindir /x86-unicode "${NOVA_INSTALLER_SOURCES}\..\..\..\tools\nsis-duilib\target\x86-unicode"
 
 !macro NOVA_MIGRATE_EXISTING
+  NovaDui::SetLanguage /NOUNLOAD "$LANGUAGE"
   NovaDui::Migrate /NOUNLOAD "$INSTDIR"
   Pop $R0
   ${If} $R0 != "ok"
@@ -26,6 +27,7 @@
 !macroend
 
 !macro NOVA_CHECK_RUNNING
+  NovaDui::SetLanguage /NOUNLOAD "$LANGUAGE"
   NovaDui::CheckRunning /NOUNLOAD "$INSTDIR"
   Pop $R0
   ${If} $R0 != "ok"
@@ -53,7 +55,7 @@
     WriteRegStr HKLM "Software\Classes\.litematic" "" "${NOVA_PROGID}"
   ${EndIf}
   WriteRegStr HKLM "Software\Classes\.litematic\OpenWithProgids" "${NOVA_PROGID}" ""
-  WriteRegStr HKLM "Software\Classes\${NOVA_PROGID}" "" "Litematica 投影"
+  WriteRegStr HKLM "Software\Classes\${NOVA_PROGID}" "" "$(novaSchematicType)"
   WriteRegStr HKLM "Software\Classes\${NOVA_PROGID}\DefaultIcon" "" '$\"$INSTDIR\${MAINBINARYNAME}.exe$\",0'
   WriteRegStr HKLM "Software\Classes\${NOVA_PROGID}\shell\open" "MultiSelectModel" "Player"
   WriteRegStr HKLM "Software\Classes\${NOVA_PROGID}\shell\open\command" "" '$\"$INSTDIR\${MAINBINARYNAME}.exe$\" $\"%1$\" %*'
@@ -62,12 +64,12 @@
   WriteRegStr HKLM "Software\Classes\CLSID\${NOVA_THUMB_CLSID}\InprocServer32" "ThreadingModel" "Apartment"
   WriteRegStr HKLM "Software\Classes\.litematic\shellex\${NOVA_THUMB_HANDLER}" "" "${NOVA_THUMB_CLSID}"
   WriteRegStr HKLM "Software\Litematica-Nova\Capabilities" "ApplicationName" "Litematica-Nova"
-  WriteRegStr HKLM "Software\Litematica-Nova\Capabilities" "ApplicationDescription" "查看、整理 Minecraft Litematica 投影"
+  WriteRegStr HKLM "Software\Litematica-Nova\Capabilities" "ApplicationDescription" "$(novaApplicationDescription)"
   WriteRegStr HKLM "Software\Litematica-Nova\Capabilities\FileAssociations" ".litematic" "${NOVA_PROGID}"
   WriteRegStr HKLM "Software\RegisteredApplications" "Litematica-Nova" "Software\Litematica-Nova\Capabilities"
   IfErrors 0 +3
     SetErrorLevel 1603
-    Abort "Windows 文件入口登记失败"
+    Abort "$(novaRegistrationFailed)"
 
   SetOutPath "$INSTDIR\licenses\duilib"
   File "${NOVA_INSTALLER_SOURCES}\licenses\LICENSE"
@@ -79,6 +81,7 @@
 
   ; Repair this same canonical shortcut even for /UPDATE and repeat installs.
   CreateShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  NovaDui::SetLanguage /NOUNLOAD "$LANGUAGE"
   NovaDui::RepairShell /NOUNLOAD "$INSTDIR"
   Pop $R0
   ${If} $R0 != "ok"

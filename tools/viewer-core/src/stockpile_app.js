@@ -28,12 +28,14 @@
   function pickInitialLang() {
     const stored = localStorage.getItem(langKey);
     if (stored === 'zh-CN' || stored === 'en-US') return stored;
+    const exported = data && data.materials && data.materials.ui_locale;
+    if (exported === 'zh-CN' || exported === 'en-US') return exported;
     return (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US';
   }
   function defaultConfig() {
     return {
       mode: 'multi',
-      default_language: 'auto',
+      default_language: data?.materials?.ui_locale || 'auto',
       poll_interval_ms: 3000,
       show_advanced_recipe_tree: true,
       show_unresolved_recipes: true,
@@ -109,6 +111,7 @@
     }
     loadOfflineState();
     document.title = t('appTitle');
+    document.documentElement.lang = lang;
     if (userId && isServeMode) await registerParticipant();
     await refreshState(true);
     render();
@@ -384,6 +387,7 @@
 
   function render() {
     document.title = t('appTitle');
+    document.documentElement.lang = lang;
     const active = document.activeElement;
     const restoreSearch = active?.id === 'search';
     const searchStart = restoreSearch ? active.selectionStart : null;
@@ -754,6 +758,7 @@
       lang = event.target.value;
       localStorage.setItem(langKey, lang);
       document.title = t('appTitle');
+      document.documentElement.lang = lang;
       render();
     });
     const search = document.getElementById('search');

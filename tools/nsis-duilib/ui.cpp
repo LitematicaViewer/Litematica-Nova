@@ -233,17 +233,22 @@ public:
 std::unique_ptr<Surface> window;
 }
 
+NSIS_ENTRY(SetLanguage) {
+    (void)parent;
+    novaInstallerEnglish = Stack{stringSize, stackTop}.pop() == L"1033";
+}
+
 NSIS_ENTRY(Attach) {
     Stack stack{stringSize, stackTop};
     const auto title = stack.pop();
-    if (!IsWindow(parent)) { stack.push(L"missing NSIS parent"); return; }
+    if (!IsWindow(parent)) { stack.push(novaText(L"安装窗口尚未创建", L"Installer window is not available")); return; }
     if (!window) {
         CPaintManagerUI::SetInstance(module);
         window = std::make_unique<Surface>();
         window->parent = parent;
         if (!window->Create(parent, title.c_str(), WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
                 WS_EX_CONTROLPARENT, 0, 0, 1, 1)) {
-            window.reset(); stack.push(L"Duilib window creation failed"); return;
+            window.reset(); stack.push(novaText(L"安装界面创建失败", L"Could not create the installer interface")); return;
         }
         SetWindowTextW(parent, title.c_str());
         window->sync();

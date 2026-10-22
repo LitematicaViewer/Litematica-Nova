@@ -21,6 +21,8 @@ const SHULKER_STACKS: u64 = 27;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockpileMaterialsData {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_locale: Option<String>,
     pub schema_version: u32,
     pub project: StockpileProjectInfo,
     pub summary: StockpileSummary,
@@ -161,6 +163,7 @@ fn build_stockpile_materials_data(
     let unique_materials = materials.len();
 
     Ok(StockpileMaterialsData {
+        ui_locale: None,
         schema_version: STOCKPILE_MATERIALS_SCHEMA_VERSION,
         project: StockpileProjectInfo {
             source_file: input.display().to_string(),

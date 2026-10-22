@@ -47,7 +47,7 @@
           "SimpChinese",
           "English"
         ],
-        "displayLanguageSelector": false
+        "displayLanguageSelector": true
       },
       "wix": {
         "upgradeCode": "30d2825f-22c4-594d-a998-8bbede2e81d3",

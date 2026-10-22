@@ -97,6 +97,7 @@ RequestExecutionLevel user
 !define PRODUCTNAME "Nova adapter compile fixture"
 !define BUNDLEID "com.litematica.nova"
 !define MAINBINARYNAME "Litematica-Nova"
+!define VERSION "0.0.0"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${BUNDLEID}"
 !include "__INSTALLER__\nsis-hooks.nsh"
 Name "Nova adapter compile fixture - DO NOT INSTALL"
@@ -107,6 +108,8 @@ InstallDir "$TEMP\Nova-adapter-compile-only"
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "SimpChinese"
+!include "__INSTALLER__\languages.nsh"
 Section
   !insertmacro NOVA_MIGRATE_EXISTING
   !insertmacro NOVA_CHECK_RUNNING
