@@ -63,6 +63,7 @@
       "../../pack-in/enumerator": "pack-in/enumerator",
       "../../pack-in/flake": "pack-in/flake",
       "../../pack-in/lang/zh_cn.json": "pack-in/lang/zh_cn.json",
+      "../../pack-in/lang/en_us.json": "pack-in/lang/en_us.json",
       "../../pack-in/item-icons-26.3": "pack-in/item-icons-26.3",
       "../../data/generation-templates": "data/generation-templates",
       "../../data/minecraft_blockstates": "data/minecraft_blockstates",
