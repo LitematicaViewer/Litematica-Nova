@@ -141,3 +141,79 @@ pub fn compiled_compatibility() -> Result<Option<SignedRuntimeCompatibility>> {
         .map(|value| serde_json::from_str(value).context("compiled runtime compatibility is invalid"))
         .transpose()
 }
+
+/// A local source build has integrity/ABI metadata, not a production signature.
+/// Only explicitly feature-enabled development Hosts/loaders consume this type.
+#[cfg(feature = "development-runtime")]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DevelopmentRuntime {
+    pub schema: String,
+    pub runtime_abi: u32,
+    pub runtime_build_id: String,
+    pub target: String,
+    pub module_id: String,
+    pub module_sha256: String,
+    pub capabilities: Vec<String>,
+}
+
+#[cfg(feature = "development-runtime")]
+impl DevelopmentRuntime {
+    pub fn verify(&self) -> Result<()> {
+        ensure!(self.schema == "nova.development-runtime.v1", "development runtime schema differs");
+        ensure!(self.runtime_abi == RUNTIME_ABI, "development runtime ABI differs");
+        ensure!(self.target == target()?, "development runtime target differs");
+        let module = if self.target.contains("windows") { "nova_protected_module.dll" }
+            else if self.target.contains("apple") { "libnova_protected_module.dylib" }
+            else { "libnova_protected_module.so" };
+        ensure!(self.module_id == module, "development runtime module differs");
+        ensure!(crate::protocol::valid_id(&self.runtime_build_id), "invalid development build identity");
+        ensure!(valid_content_hash(&self.module_sha256), "invalid development module hash");
+        ensure!(contract().required_capabilities.iter().all(|required| self.capabilities.contains(required)), "development runtime lacks required capabilities");
+        Ok(())
+    }
+}
+
+#[cfg(feature = "development-runtime")]
+pub fn compiled_development_runtime() -> Result<DevelopmentRuntime> {
+    let json = option_env!("NOVA_DEVELOPMENT_RUNTIME_JSON")
+        .filter(|value| !value.is_empty())
+        .context("development runtime metadata was not selected at compile time")?;
+    let value: DevelopmentRuntime = serde_json::from_str(json).context("invalid compiled development runtime")?;
+    value.verify()?;
+    Ok(value)
+}
+
+/// This local launch context is deliberately not a TaskTicket and grants no
+/// server access. Full separately obtains a genuine device-proven service task.
+#[cfg(feature = "development-runtime")]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DevelopmentTask {
+    pub schema: String,
+    pub runtime_build_id: String,
+    pub module_sha256: String,
+    pub task_id: String,
+    pub requires_shared_light: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_ticket_path: Option<std::path::PathBuf>,
+}
+
+#[cfg(feature = "development-runtime")]
+impl DevelopmentTask {
+    pub fn verify(&self) -> Result<()> {
+        ensure!(self.schema == "nova.development-task.v1", "development task schema differs");
+        ensure!(crate::protocol::valid_id(&self.runtime_build_id) && crate::protocol::valid_id(&self.task_id), "invalid development task identity");
+        ensure!(valid_content_hash(&self.module_sha256), "invalid development task module hash");
+        ensure!(self.requires_shared_light == self.remote_ticket_path.is_some(), "development shared-light authorization path is incomplete");
+        if let Some(path) = &self.remote_ticket_path {
+            ensure!(path.is_absolute(), "development shared-light ticket path must be absolute");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "development-runtime")]
+fn valid_content_hash(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}

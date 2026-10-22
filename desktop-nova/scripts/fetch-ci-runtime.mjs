@@ -6,7 +6,7 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { moduleForTarget, validatePackage } from './check-public-checkout.mjs';
+import { moduleForTarget, validatePackage, validateDevelopmentPackage } from './check-public-checkout.mjs';
 
 const targets = ['x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu', 'x86_64-apple-darwin', 'aarch64-apple-darwin'];
 const settingsRoot = () => process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData/Local'), 'Litematica-Nova') : path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'Litematica-Nova');
@@ -132,6 +132,22 @@ export async function ensureDevelopmentRuntime(repo, target, selected) {
   const source = await configuredDownload(target);
   if (!source) throw new Error(`No compatible signed development runtime is available for ${target}. Ask a build administrator for the read-only runtime channel (NOVA_RUNTIME_URL/NOVA_RUNTIME_SHA256 or ${path.join(settingsRoot(), 'development-runtime.json')}).${existingError ? ` Existing package: ${existingError.message}` : ''}`);
   return fetchRuntime(target, source);
+}
+export async function acquireLocalDevelopmentRuntime(repo, target, { privateSourceDir, checkOnly = false, reuseExisting = false } = {}) {
+  if (!targets.includes(target) || !privateSourceDir) throw new Error('Select an authorized private source checkout with --private-source or NOVA_PRIVATE_SOURCE_DIR for the local runtime route.');
+  const privateRoot = fs.realpathSync(path.resolve(privateSourceDir));
+  const builder = path.join(privateRoot, 'desktop-nova/scripts/build-development-runtime.ps1');
+  if (!fs.existsSync(builder) || !fs.lstatSync(builder).isFile()) throw new Error('The selected private checkout is missing its authoritative Development Runtime builder.');
+  const result = spawnSync('pwsh', ['-NoProfile', '-File', builder, '-RepoRoot', privateRoot, '-PublicRepoRoot', path.resolve(repo), '-TargetTriple', target, ...(checkOnly ? ['-CheckOnly'] : []), ...(reuseExisting ? ['-ReuseExisting'] : [])], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+  const lines = String(result.stdout || '').split(/\r?\n/);
+  const markers = lines.filter(line => line.startsWith('NOVA_DEVELOPMENT_RUNTIME='));
+  const logs = lines.filter(line => line && !line.startsWith('NOVA_DEVELOPMENT_RUNTIME=')).join('\n');
+  if (logs) process.stderr.write(logs + '\n');
+  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.error || result.status !== 0 || markers.length !== 1) throw new Error('The private Development Runtime build/reuse failed; no production key or component fallback is used.');
+  const directory = fs.realpathSync(markers[0].slice('NOVA_DEVELOPMENT_RUNTIME='.length).trim());
+  await validateDevelopmentPackage(directory, moduleForTarget(target), { target });
+  return directory;
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2), target = args[args.indexOf('--target') + 1];

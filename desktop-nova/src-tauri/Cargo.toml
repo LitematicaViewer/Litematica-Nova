@@ -8,6 +8,7 @@ edition = "2021"
 
 [features]
 popup-smoke = []
+development-runtime = ["nova-protected-loader/development-runtime", "nova-protection/development-runtime"]
 
 [[bin]]
 name = "popup_smoke"

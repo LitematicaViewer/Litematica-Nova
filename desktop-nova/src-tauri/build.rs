@@ -155,6 +155,8 @@ fn validate_public_backends(repo_root: &Path) {
     println!("cargo:rerun-if-env-changed=NOVA_PUBLIC_BACKEND_DIR");
     println!("cargo:rerun-if-env-changed=NOVA_PROTECTED_BUILD_ID");
     println!("cargo:rerun-if-env-changed=NOVA_PUBLIC_HELPER_INPUT_ID");
+    println!("cargo:rerun-if-env-changed=NOVA_DEVELOPMENT_RUNTIME_JSON");
+    println!("cargo:rerun-if-env-changed=NOVA_DEVELOPMENT_MODULE_PATH");
     let explicit_directory = env::var_os("NOVA_PUBLIC_BACKEND_DIR");
     let directory = explicit_directory.as_ref().map(PathBuf::from).unwrap_or_else(|| repo_root.join("bin/public-beta"));
     println!("cargo:rerun-if-changed={}", directory.display());
@@ -199,6 +201,17 @@ fn validate_public_backends(repo_root: &Path) {
     if let Ok(build_id) = env::var("NOVA_PROTECTED_BUILD_ID") {
         assert_eq!(manifest["runtimeBuildId"].as_str(), Some(build_id.as_str()), "public helper runtime components differ from the Host build");
     }
+    if env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some() {
+        let selected: serde_json::Value = serde_json::from_str(&env::var("NOVA_DEVELOPMENT_RUNTIME_JSON")
+            .expect("local-source development requires a compile-time selected runtime descriptor"))
+            .expect("parse local development runtime descriptor");
+        assert_eq!(selected["schema"].as_str(), Some("nova.development-runtime.v1"), "local development runtime schema differs");
+        assert_eq!(selected["target"].as_str(), env::var("TARGET").ok().as_deref(), "local development runtime target differs");
+        assert_eq!(manifest["runtimeBuildId"].as_str(), selected["runtime_build_id"].as_str(), "local helper and Host runtime identities differ");
+        let path = PathBuf::from(env::var_os("NOVA_DEVELOPMENT_MODULE_PATH")
+            .expect("local-source development requires its compile-time module path"));
+        assert!(path.is_absolute() && path.is_file(), "selected local development module is missing");
+    }
     let artifacts = manifest["artifacts"].as_object().expect("public deployment artifacts");
     let names: HashSet<_> = artifacts.keys().cloned().collect();
     assert_eq!(names, expected.into_iter().filter(|name| name != "backend-deployment.json").collect());
@@ -221,6 +234,11 @@ fn validate_public_backends(repo_root: &Path) {
 }
 
 fn main() {
+    assert!(
+        env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_none()
+            || env::var("PROFILE").as_deref() != Ok("release"),
+        "development-runtime is a local development feature and must not enter a Release Host or installer"
+    );
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is required"));
     let repo_root = manifest_dir
