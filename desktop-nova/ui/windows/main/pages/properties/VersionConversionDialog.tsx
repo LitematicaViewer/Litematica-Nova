@@ -1,3 +1,5 @@
+import { t, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight } from "lucide-react";
 import { convertProjectVersion, queryBlockDatabase, minecraftVersionLabel, type ConversionPreview, type BlockDatabaseBlock, type BlockDatabaseVersion } from "../../../../../src/business/projectionLibrary";
@@ -25,6 +27,7 @@ function targetState(block: BlockDatabaseBlock, original: Record<string, string>
 export function VersionConversionDialog({ sourcePath, onClose, onSaved }: {
   sourcePath: string; onClose: () => void; onSaved: (path: string) => void;
 }) {
+  const { locale, revision } = useI18n();
   const [versions, setVersions] = useState<BlockDatabaseVersion[]>([]);
   const [targetVersion, setTargetVersion] = useState("26.3");
   const [blocks, setBlocks] = useState<BlockDatabaseBlock[]>([]);
@@ -33,12 +36,12 @@ export function VersionConversionDialog({ sourcePath, onClose, onSaved }: {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [overwriteConfirm, setOverwriteConfirm] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiMessage>("");
   const generation = useRef(0);
   const alive = useRef(true);
   const byId = useMemo(() => new Map(blocks.map((block) => [block.id, block])), [blocks]);
   const allowedBlocks = useMemo(() => blocks.map((block) => block.id), [blocks]);
-  const blockNames = useMemo(() => Object.fromEntries(blocks.map((block) => [block.id, block.name])), [blocks]);
+  const blockNames = useMemo(() => Object.fromEntries(blocks.map((block) => [block.id, translateBlockId(block.id)])), [blocks, revision]);
   const target = versions.find((version) => version.version === targetVersion);
   useEffect(() => {
     void queryBlockDatabase({}).then((result) => { if (alive.current) setVersions((result.versions || []).filter((version) => version.stateCount > 0)); }).catch((error) => { if (alive.current) setError(String(error)); });
@@ -76,7 +79,7 @@ export function VersionConversionDialog({ sourcePath, onClose, onSaved }: {
     setBusy(true); setError("");
     try {
       const extension = target?.outputExtension || ".litematic";
-      const path = overwrite ? sourcePath : await saveDialog({ title: "保存转换后的投影", defaultPath: sourcePath.replace(/\.[^.\\/]+$/, `-${targetVersion}${extension}`), filters: [{ name: "Minecraft 投影", extensions: [extension.slice(1)] }] });
+      const path = overwrite ? sourcePath : await saveDialog({ title: t("conversion.saveTitle"), defaultPath: sourcePath.replace(/\.[^.\\/]+$/, `-${targetVersion}${extension}`), filters: [{ name: t("conversion.fileFilter"), extensions: [extension.slice(1)] }] });
       if (!path || !alive.current || token !== generation.current) return;
       const result = await convertProjectVersion({ sourcePath, targetVersion, replacements, overwrite,
         expectedSourceSha256: preview.sourceSha256, outputPath: path });
@@ -84,45 +87,45 @@ export function VersionConversionDialog({ sourcePath, onClose, onSaved }: {
     } catch (error) { if (alive.current && token === generation.current) setError(String(error)); }
     finally { if (alive.current && token === generation.current) setBusy(false); }
   }
-  return <Dialog title="转换 Minecraft 版本" width="lg" busy={busy} onClose={onClose}
-    footer={<><Button variant="ghost" disabled={busy} onClick={onClose}>取消</Button>
-      <Button disabled={busy || !preview || !dirty} onClick={() => void inspect(replacements)}>检查差异</Button>
-      <Button variant="ghost" disabled={busy || dirty || !preview?.writable || target?.legacy} onClick={() => setOverwriteConfirm(true)}>覆盖原件…</Button>
-      <Button disabled={busy || dirty || !preview?.writable} onClick={() => void save()}>另存为…</Button></>}>
-    <label className="properties-conversion-target">目标 Minecraft 版本
+  return <Dialog title={t("conversion.title")} width="lg" busy={busy} onClose={onClose}
+    footer={<><Button variant="ghost" disabled={busy} onClick={onClose}>{t("editor.cancel")}</Button>
+      <Button disabled={busy || !preview || !dirty} onClick={() => void inspect(replacements)}>{t("conversion.checkDifferences")}</Button>
+      <Button variant="ghost" disabled={busy || dirty || !preview?.writable || target?.legacy} onClick={() => setOverwriteConfirm(true)}>{t("conversion.overwrite")}</Button>
+      <Button disabled={busy || dirty || !preview?.writable} onClick={() => void save()}>{t("conversion.saveAs")}</Button></>}>
+    <label className="properties-conversion-target">{t("conversion.target")}
       <Dropdown
         value={targetVersion}
         disabled={busy || !versions.length}
-        ariaLabel="目标 Minecraft 版本"
+        ariaLabel={t("conversion.target")}
         onChange={(next) => { setDirty(true); setTargetVersion(next); }}
         options={versions.map((version) => ({ label: `Minecraft ${version.version}`, value: version.version }))}
       />
     </label>
-    {busy && <p role="status">正在检查投影数据…</p>}
-    {error && <p role="alert" className="properties-error nova-text-danger">{error}</p>}
-    {overwriteConfirm ? <div className="properties-overwrite-confirm"><p>覆盖原投影文件？此操作会替换原有版本数据。</p>
-      <Button disabled={busy} onClick={() => setOverwriteConfirm(false)}>取消覆盖</Button><Button variant="destructive" disabled={busy} onClick={() => void save(true)}>确认覆盖</Button>
+    {busy && <p role="status">{t("conversion.inspecting")}</p>}
+    {error && <p role="alert" className="properties-error nova-text-danger">{localizeMessage(error)}</p>}
+    {overwriteConfirm ? <div className="properties-overwrite-confirm"><p>{t("conversion.overwritePrompt")}</p>
+      <Button disabled={busy} onClick={() => setOverwriteConfirm(false)}>{t("conversion.cancelOverwrite")}</Button><Button variant="destructive" disabled={busy} onClick={() => void save(true)}>{t("conversion.confirmOverwrite")}</Button>
     </div> : preview && <>
-      <p>{minecraftVersionLabel(preview.sourceDataVersion)} → Minecraft {preview.targetVersion} · 影响 {preview.changedBlockCount.toLocaleString()} 个方块</p>
+      <p>{t("conversion.summary", {source:minecraftVersionLabel(preview.sourceDataVersion), target:preview.targetVersion, count:preview.changedBlockCount.toLocaleString(locale)})}</p>
       {!!preview.blockedPayloads.length && <div role="alert" className="properties-error nova-text-danger">
         {preview.payloadIssues?.length ? preview.payloadIssues.map((issue) => <p key={`${issue.kind}:${issue.typeName}`}>
-          <strong>{issue.typeName} · {issue.count.toLocaleString()} 处</strong>：{issue.message}
-        </p>) : <p>附加数据需要处理，请选择其他目标版本。</p>}
+          <strong>{t("conversion.issueCount", {type:issue.typeName, count:issue.count.toLocaleString(locale)})}</strong>: {localizeMessage(issue.message)}
+        </p>) : <p>{t("conversion.payloadBlocked")}</p>}
       </div>}
       {preview.entries.length ? <Table className="properties-conversion-table"><TableHeader><TableRow>
-        <TableHead>原方块</TableHead><TableHead>替代方块</TableHead><TableHead>影响数量</TableHead>
+        <TableHead>{t("conversion.sourceBlock")}</TableHead><TableHead>{t("conversion.targetBlock")}</TableHead><TableHead>{t("conversion.affectedCount")}</TableHead>
       </TableRow></TableHeader><TableBody>{preview.entries.map((entry) => {
         const source = parseState(entry.sourceIconState || entry.sourceState); const state = parseState(replacements[entry.sourceState] || ""); const block = byId.get(state.id);
         return <TableRow key={entry.sourceState}>
-          <TableCell><div className="properties-conversion-source"><BlockIcon blockId={source.id} /><strong>{entry.sourceName || translateBlockId(source.id)}</strong><ArrowRight size={16} aria-hidden="true" /></div><small>{entry.reason}</small></TableCell>
+          <TableCell><div className="properties-conversion-source"><BlockIcon blockId={source.id} /><strong>{translateBlockId(source.id) || entry.sourceName}</strong><ArrowRight size={16} aria-hidden="true" /></div><small>{localizeMessage(entry.reason)}</small></TableCell>
           <TableCell><BlockSearchSelect value={state.id} allowedBlocks={allowedBlocks} blockNames={blockNames} disabled={busy || !blocks.length} onChange={(id) => changeBlock(entry.sourceState, id)} />
             {block && <BlockPropertySelector blockId={block.id} value={state.properties} properties={block.properties} isTo exact onChange={(properties) => { setReplacements((current) => ({ ...current, [entry.sourceState]: stateString(block.id, properties) })); setDirty(true); }} />}
-            {entry.category && block && <Button size="sm" variant="ghost" disabled={busy} onClick={() => changeBlock(entry.sourceState, block.id, true)}>应用到同类</Button>}
-            {!entry.valid && <span className="properties-error nova-text-danger">请选择目标版本支持的方块状态</span>}</TableCell>
-          <TableCell>{entry.count.toLocaleString()}</TableCell>
+            {entry.category && block && <Button size="sm" variant="ghost" disabled={busy} onClick={() => changeBlock(entry.sourceState, block.id, true)}>{t("conversion.applyCategory")}</Button>}
+            {!entry.valid && <span className="properties-error nova-text-danger">{t("conversion.chooseState")}</span>}</TableCell>
+          <TableCell>{entry.count.toLocaleString(locale)}</TableCell>
         </TableRow>;
-      })}</TableBody></Table> : <p>方块与状态兼容。</p>}
-      {dirty && <p role="status">替代项已修改，请检查差异。</p>}
+      })}</TableBody></Table> : <p>{t("conversion.compatible")}</p>}
+      {dirty && <p role="status">{t("conversion.dirty")}</p>}
     </>}
   </Dialog>;
 }

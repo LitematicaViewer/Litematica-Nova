@@ -1,3 +1,5 @@
+import { t, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
 import { displayFilePath } from "../../../../../src/business/facade";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
@@ -18,7 +20,7 @@ import {
   type ReplaceUnit, type ReplaceItem, type ReplaceEntry, type ReplaceOutputEntry,
   type ReplacePreviewSummary, type UnitPreviewSummary,
 } from "../../../../../src/business/replace";
-import { selectLitematicSavePath, loadStructuralBlocks, windowsPathKey } from "../../../../../src/business/facade";
+import { selectLitematicSavePath, loadStructuralBlocks, windowsPathKey, translateBlockId } from "../../../../../src/business/facade";
 import { loadReplaceSession, saveReplaceSession } from "../../../../../src/services/replaceSessionStore";
 import "./replace.css";
 import "../../../../styles/replace-units.css";
@@ -32,9 +34,10 @@ function PropertySelector({ blockId, value, onChange, isOutput }: {
   onChange: (props: Record<string, string>) => void;
   isOutput: boolean;
 }) {
+  const { locale } = useI18n();
   const props = getBlockProperties(blockId);
   const keys = Object.keys(props).sort();
-  if (keys.length === 0) return <span className="replace-property-no-props">无属性</span>;
+  if (keys.length === 0) return <span className="replace-property-no-props">{t("replace.noProperties")}</span>;
   return (
     <div className="replace-entry-properties">
       {keys.map((k) => (
@@ -49,8 +52,8 @@ function PropertySelector({ blockId, value, onChange, isOutput }: {
               onChange(next);
             }}
             options={[
-              { value: "", label: isOutput ? "默认" : "所有" },
-              ...(isOutput ? [{ value: "$keep", label: "保持原状态" }] : []),
+              { value: "", label: isOutput ? t("replace.default") : t("replace.all") },
+              ...(isOutput ? [{ value: "$keep", label: t("replace.keepState") }] : []),
               ...props[k].map(v => ({ value: v, label: `${translateValue(k, v)} (${v})` })),
             ]}
           />
@@ -67,6 +70,7 @@ function InputEntryRow({ entry, onChange, onRemove }: {
   onChange: (e: ReplaceEntry) => void;
   onRemove: () => void;
 }) {
+  const { locale } = useI18n();
   return (
     <div className="replace-entry-row">
       <BlockSearchSelect value={entry.name} onChange={name => onChange({...entry,name,properties:undefined})} />
@@ -90,13 +94,14 @@ function OutputEntryRow({ entry, onChange, onRemove }: {
   onChange: (e: ReplaceOutputEntry) => void;
   onRemove: () => void;
 }) {
+  const { locale } = useI18n();
   return (
     <div className="replace-entry-row">
       <BlockSearchSelect value={entry.name} onChange={name => onChange({...entry,name,properties:undefined})} />
       <div className="replace-entry-top">
         <BlockIcon blockId={entry.name} lookupMode="block_first" />
 
-        <span className="replace-entry-weight-label">比例</span>
+        <span className="replace-entry-weight-label">{t("replace.weight")}</span>
         <Input
           className="input replace-entry-weight-input"
           type="number"
@@ -125,14 +130,15 @@ function SerialSeparatorBar({ index, total, onRemove, onMoveUp, onMoveDown }: {
   onMoveUp: () => void;
   onMoveDown: () => void;
 }) {
+  const { locale } = useI18n();
   return (
     <div className="replace-separator">
       <div className="replace-separator-line" />
-      <span className="replace-separator-label">下一步替换</span>
+      <span className="replace-separator-label">{t("replace.nextStep")}</span>
       <div className="replace-separator-actions">
-        <Button disabled={index === 0} onClick={onMoveUp} title="上移">↑</Button>
-        <Button disabled={index === total - 1} onClick={onMoveDown} title="下移">↓</Button>
-        <Button onClick={onRemove} title="删除分隔符">删除</Button>
+        <Button disabled={index === 0} onClick={onMoveUp} title={t("replace.moveUp")}>↑</Button>
+        <Button disabled={index === total - 1} onClick={onMoveDown} title={t("replace.moveDown")}>↓</Button>
+        <Button onClick={onRemove} title={t("replace.removeSeparator")}>{t("editor.delete")}</Button>
       </div>
       <div className="replace-separator-line" />
     </div>
@@ -157,6 +163,7 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
   scanSummary?: UnitPreviewSummary;
   currentBlocks?: string[];
 }) {
+  const { locale } = useI18n();
   const [collapsed, setCollapsed] = useState(false);
   const [picker, setPicker] = useState<PickerTarget>(null);
 
@@ -197,10 +204,10 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
   const AddEntryButtons = ({ side }: { side: 'input' | 'output' }) => (
     <div className="replace-add-buttons">
       <Button onClick={() => setPicker({ side, type: 'inventory' })}>
-        + 创造模式物品栏
+        {t("replace.addCreative")}
       </Button>
       <Button onClick={() => setPicker({ side, type: 'enumerator' })}>
-        + 枚举器
+        {t("replace.addEnumerator")}
       </Button>
     </div>
   );
@@ -215,37 +222,37 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
           <Input
             className="replace-unit-label-input"
             value={unit.label ?? ''}
-            placeholder={`替换规则 ${unitIndex + 1}`}
+            placeholder={t("replace.ruleName", {index:unitIndex+1})}
             onChange={(e) => onChange({ ...unit, label: e.target.value || undefined })}
             onClick={(e) => e.stopPropagation()}
           />
           {scanSummary && (
-            <span className="replace-unit-hit-count">命中 {scanSummary.hit_count} 个方块</span>
+            <span className="replace-unit-hit-count">{t("replace.hitCount", {count:scanSummary.hit_count.toLocaleString(locale)})}</span>
           )}
           <div className="replace-unit-spacer" />
           <Button disabled={index === 0} onClick={onMoveUp}>↑</Button>
           <Button disabled={index === total - 1} onClick={onMoveDown}>↓</Button>
-          <Button onClick={onDuplicate}>复制规则</Button>
-          <Button onClick={onRemove}>删除规则</Button>
+          <Button onClick={onDuplicate}>{t("replace.copyRule")}</Button>
+          <Button onClick={onRemove}>{t("replace.deleteRule")}</Button>
         </div>
 
         {!collapsed && (
           <div className="replace-unit-body">
             <div className="replace-unit-side">
-              <div className="replace-unit-side-title">要替换的方块</div>
+              <div className="replace-unit-side-title">{t("replace.sourceBlocks")}</div>
               {unit.input.map((e, i) => (
                 <InputEntryRow key={i} entry={e} onChange={(ne) => updateInput(i, ne)} onRemove={() => removeInput(i)} />
               ))}
-              {unit.input.length === 0 && <div className="replace-entry-empty">未选择方块</div>}
+              {unit.input.length === 0 && <div className="replace-entry-empty">{t("replace.noBlocks")}</div>}
               <AddEntryButtons side="input" />
             </div>
             <div className="replace-unit-arrow">→</div>
             <div className="replace-unit-side">
-              <div className="replace-unit-side-title">替换成</div>
+              <div className="replace-unit-side-title">{t("replace.targetBlocks")}</div>
               {unit.output.map((e, i) => (
                 <OutputEntryRow key={i} entry={e} onChange={(ne) => updateOutput(i, ne)} onRemove={() => removeOutput(i)} />
               ))}
-              {unit.output.length === 0 && <div className="replace-entry-empty">未选择替换结果</div>}
+              {unit.output.length === 0 && <div className="replace-entry-empty">{t("replace.noTargets")}</div>}
               <AddEntryButtons side="output" />
             </div>
           </div>
@@ -253,7 +260,7 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
 
         {!collapsed && scanSummary && scanSummary.output_distribution.length > 1 && (
           <div className="replace-unit-scan-dist">
-            输出分布预估：
+            {t("replace.distribution")}
             {scanSummary.output_distribution.map((d, i) => (
               <span key={i} className="replace-unit-scan-dist-item">{d.name}：{d.estimated_count}</span>
             ))}
@@ -268,12 +275,12 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
 
       {picker?.type === 'inventory' && (
         <BlockPickerDialog
-          title={picker.side === 'input' ? '选择要替换的方块' : '选择替换成的方块'}
+          title={picker.side === 'input' ? t("replace.chooseSource") : t("replace.chooseTarget")}
           onClose={() => setPicker(null)}
           onPickBlock={handlePickBlock}
           extraCollections={
             currentBlocks && currentBlocks.length > 0
-              ? [{ id: '__current__', name: '当前统计结果', values: currentBlocks }]
+              ? [{ id: '__current__', name: t("replace.currentResults"), values: currentBlocks }]
               : []
           }
         />
@@ -281,7 +288,7 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
 
       {picker?.type === 'enumerator' && (
         <EnumeratorBlockPickerDialog
-          title={picker.side === 'input' ? '从枚举器批量添加输入方块' : '从枚举器批量添加输出方块'}
+          title={picker.side === 'input' ? t("replace.enumeratorSource") : t("replace.enumeratorTarget")}
           onClose={() => setPicker(null)}
           onAddBlocks={handleAddBlocks}
           currentBlocks={currentBlocks}
@@ -292,13 +299,14 @@ function ReplaceUnitCard({ unit, unitIndex, index, total, onChange, onRemove, on
 }
 
 export function ReplacePage({ currentFile }: { currentFile?: string }) {
+  const { locale } = useI18n();
   const [session] = useState(loadReplaceSession);
   const [items, setItems] = useState<ReplaceItem[]>(session?.items || []);
   const [selectedPreset, setSelectedPreset] = useState(session?.selectedPreset || "");
   const [presetName, setPresetName] = useState(session?.selectedPreset || "");
   const [presets, setPresets] = useState<string[]>([]);
-  const [log, setLog] = useState("");
-  const [error, setError] = useState("");
+  const [log, setLog] = useState<UiMessage>("");
+  const [error, setError] = useState<UiMessage>("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [outPath, setOutPath] = useState(session?.outputPath || "");
   const [currentBlocks, setCurrentBlocks] = useState<string[]>([]);
@@ -321,12 +329,12 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
       setOutPath(recovered.outPath || ""); setSelectedPreset(recovered.selectedPreset || "");
     }
   }, [currentFile]);
-  useEffect(() => { listReplacePresets().then(setPresets).catch(error => setError(`读取预设失败：${error}`)); }, []);
+  useEffect(() => { listReplacePresets().then(setPresets).catch(error => setError({key:"replace.loadPresetFailed", params:{error:String(error)}})); }, []);
   useEffect(() => {
     let active = true;
     setCurrentBlocks([]);
     if (currentFile) loadStructuralBlocks(currentFile).then(blocks => { if (active) setCurrentBlocks(blocks.map(block => block.id)); })
-      .catch(error => { if (active) setError(`读取结构方块失败：${error}`); });
+      .catch(error => { if (active) setError({key:"replace.structureFailed", params:{error:String(error)}}); });
     return () => { active = false; };
   }, [currentFile]);
   const changeItems = (next: ReplaceItem[]) => { if (!busyRef.current) { setItems(next); setPreview(null); setError(""); setLog(""); } };
@@ -341,12 +349,12 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
     try {
       if (action === "load") {
         const next = await loadReplacePreset(name);
-        if (!next) throw new Error("预设格式损坏或文件不存在");
+        if (!next) { setError({key:"replace.corruptPreset"}); return; }
         setItems(next); setPreview(null); setLog(""); setSelectedPreset(name); setPresetName(name);
       } else if (action === "save") {
-        await saveReplacePreset(name, items); setPresets(await listReplacePresets()); setSelectedPreset(name); setPresetName(name); setLog("替换方案已保存");
+        await saveReplacePreset(name, items); setPresets(await listReplacePresets()); setSelectedPreset(name); setPresetName(name); setLog({key:"replace.saved"});
       } else { await deleteReplacePreset(name); setPresets(await listReplacePresets()); setSelectedPreset(""); setDeleteConfirm(false); }
-    } catch (error) { setError(`预设操作失败：${error}`); }
+    } catch (error) { setError({key:"replace.presetFailed", params:{error:String(error)}}); }
     finally { busyRef.current = false; setBusy(null); }
   };
   const handleDryRun = async () => {
@@ -358,45 +366,45 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
       if (sourceRef.current !== source) return;
       setPreview({ source, items:snapshot, summary });
       if (!outPath) setOutPath(source.replace(/\.litematic$/i, ".replaced.litematic"));
-    } catch (error) { if (sourceRef.current === source) setError(`预览未完成：${error}`); }
+    } catch (error) { if (sourceRef.current === source) setError({key:"replace.previewFailed", params:{error:String(error)}}); }
     finally { busyRef.current = false; setBusy(null); }
   };
   const handleChooseOutput = async () => {
     if (busyRef.current) return;
     busyRef.current = true; setBusy("choose"); const source = currentFile;
     try { const selected = await selectLitematicSavePath(outPath); if (selected && sourceRef.current === source) setOutPath(selected); }
-    catch (error) { setError(`选择保存位置失败：${error}`); }
+    catch (error) { setError({key:"replace.chooseFailed", params:{error:String(error)}}); }
     finally { busyRef.current = false; setBusy(null); }
   };
   const handleApply = async () => {
     if (busyRef.current || !preview || preview.source !== currentFile) return;
-    if (!outPath || windowsPathKey(outPath) === windowsPathKey(preview.source)) { setError("请选择新文件名，原投影保持不变。"); return; }
+    if (!outPath || windowsPathKey(outPath) === windowsPathKey(preview.source)) { setError({key:"replace.newNameRequired"}); return; }
     const source = preview.source;
     busyRef.current = true; setBusy("apply"); setError("");
     try {
-      if (await checkFileExists(outPath)) { setError("此文件已存在，请选择另一个文件名。"); return; }
+      if (await checkFileExists(outPath)) { setError({key:"replace.fileExists"}); return; }
       const result = await applyReplaceUnits(source, outPath, preview.items);
       if (sourceRef.current !== source) return;
-      setPreview(null); setLog(`替换完成，原投影未改动。\n新文件：${displayFilePath(outPath)}\n\n${result}`);
-    } catch (error) { if (sourceRef.current === source) setError(`替换未完成：${error}`); }
+      setPreview(null); setLog({key:"replace.completed", params:{path:displayFilePath(outPath),result:String(result)}});
+    } catch (error) { if (sourceRef.current === source) setError({key:"replace.failed", params:{error:String(error)}}); }
     finally { busyRef.current = false; setBusy(null); }
   };
   let unitIndex = 0;
   return <section className="replace-page" aria-busy={!!busy}>
-    <h2 className="replace-title">替换方块</h2>
+    <h2 className="replace-title">{t("replace.title")}</h2>
     <fieldset className="replace-presets" disabled={!!busy}>
-      <legend>替换方案</legend>
-      <Dropdown value={selectedPreset} options={[{label:"选择方案",value:""}, ...presets.map(name => ({label:name,value:name}))]} onChange={name => void presetAction("load",name)} ariaLabel="替换方案" />
-      <Input aria-label="方案名称" placeholder="方案名称" value={presetName} onChange={event => setPresetName(event.target.value)} />
-      <Button variant="secondary" disabled={!presetName.trim() || !unitItems.length} onClick={() => void presetAction("save",presetName)}>保存方案</Button>
-      <Button variant="destructive" disabled={!selectedPreset} onClick={() => setDeleteConfirm(true)}>删除方案</Button>
-      <Button variant="outline" onClick={() => openReplacePresetFolder().catch(error => setError(`打开方案文件夹失败：${error}`))}>打开方案文件夹</Button>
+      <legend>{t("replace.preset")}</legend>
+      <Dropdown value={selectedPreset} options={[{label:t("replace.choosePreset"),value:""}, ...presets.map(name => ({label:name,value:name}))]} onChange={name => void presetAction("load",name)} ariaLabel={t("replace.preset")} />
+      <Input aria-label={t("replace.presetName")} placeholder={t("replace.presetName")} value={presetName} onChange={event => setPresetName(event.target.value)} />
+      <Button variant="secondary" disabled={!presetName.trim() || !unitItems.length} onClick={() => void presetAction("save",presetName)}>{t("replace.savePreset")}</Button>
+      <Button variant="destructive" disabled={!selectedPreset} onClick={() => setDeleteConfirm(true)}>{t("replace.deletePreset")}</Button>
+      <Button variant="outline" onClick={() => openReplacePresetFolder().catch(error => setError({key:"replace.openFolderFailed", params:{error:String(error)}}))}>{t("replace.openPresetFolder")}</Button>
     </fieldset>
-    {error && <pre className="replace-error nova-text-danger" role="alert">{displayPathText(error)}</pre>}
-    <ScrollArea className="replace-scroll-area" aria-label="替换规则">
+    {error && <pre className="replace-error nova-text-danger" role="alert">{displayPathText(localizeMessage(error))}</pre>}
+    <ScrollArea className="replace-scroll-area" aria-label={t("replace.rules")}>
       <fieldset className="replace-rules nova-box-plain" disabled={!!busy}>
-        <legend className="replace-legend">替换组规则</legend>
-        {!items.length && <p className="replace-empty">尚未添加替换规则。</p>}
+        <legend className="replace-legend">{t("replace.ruleGroups")}</legend>
+        {!items.length && <p className="replace-empty">{t("replace.empty")}</p>}
         {items.map((item,index) => isSeparatorItem(item)
           ? <SerialSeparatorBar key={index} index={index} total={items.length} onRemove={() => changeItems(items.filter((_,i)=>i!==index))} onMoveUp={() => moveItem(index,-1)} onMoveDown={() => moveItem(index,1)} />
           : <ReplaceUnitCard key={index} unit={item} unitIndex={unitIndex++} index={index} total={items.length}
@@ -404,31 +412,31 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
               onDuplicate={() => changeItems([...items,JSON.parse(JSON.stringify(item))])}
               onMoveUp={() => moveItem(index,-1)} onMoveDown={() => moveItem(index,1)} currentBlocks={currentBlocks} />)}
       </fieldset>
-      {log && <div className="replace-result nova-panel-subtle" role="status"><details open><summary>替换操作结果</summary><pre className="nova-code">{displayPathText(log)}</pre></details></div>}
+      {log && <div className="replace-result nova-panel-subtle" role="status"><details open><summary>{t("replace.result")}</summary><pre className="nova-code">{displayPathText(localizeMessage(log))}</pre></details></div>}
     </ScrollArea>
     <div className="replace-toolbar">
-      <Button variant="secondary" disabled={!!busy} onClick={() => changeItems([...items,{input:[],output:[]}])}>添加替换规则</Button>
-      <Button variant="secondary" disabled={!!busy || !items.length} onClick={() => changeItems([...items,{_kind:"separator"}])}>添加下一步替换</Button>
-      <Button variant="destructive" disabled={!!busy || !items.length} onClick={() => changeItems([])}>清空规则</Button>
-      <span className="muted">{unitItems.length} 个替换规则</span>
-      <Button disabled={!!busy || !unitItems.length || !currentFile} onClick={handleDryRun}>{busy === "preview" ? "正在检查影响…" : "预览替换影响"}</Button>
+      <Button variant="secondary" disabled={!!busy} onClick={() => changeItems([...items,{input:[],output:[]}])}>{t("replace.addRule")}</Button>
+      <Button variant="secondary" disabled={!!busy || !items.length} onClick={() => changeItems([...items,{_kind:"separator"}])}>{t("replace.addStep")}</Button>
+      <Button variant="destructive" disabled={!!busy || !items.length} onClick={() => changeItems([])}>{t("replace.clearRules")}</Button>
+      <span className="muted">{t("replace.ruleCount", {count:unitItems.length.toLocaleString(locale)})}</span>
+      <Button disabled={!!busy || !unitItems.length || !currentFile} onClick={handleDryRun}>{busy === "preview" ? t("replace.checking") : t("replace.preview")}</Button>
     </div>
-    {!currentFile && <p className="beta-statistics-status">在投影库打开投影后即可预览和执行替换。</p>}
-    {deleteConfirm && <Dialog title="删除替换方案" onClose={() => setDeleteConfirm(false)} busy={!!busy} footer={<Button disabled={!!busy} onClick={() => void presetAction("delete",selectedPreset)}>确认删除方案</Button>}><p>删除方案“{selectedPreset}”，当前规则保持不变。</p></Dialog>}
-    {preview && <Dialog title="确认替换" subtitle="确认每一步影响，保存为新投影。" busy={!!busy} onClose={() => setPreview(null)} width="lg" footer={<>
-      <Button variant="secondary" disabled={!!busy} onClick={() => setPreview(null)}>返回修改</Button>
-      <Button disabled={!!busy || !outPath} onClick={handleApply}>{busy === "apply" ? "正在保存…" : "确认替换并另存"}</Button>
+    {!currentFile && <p className="beta-statistics-status">{t("replace.chooseSchematic")}</p>}
+    {deleteConfirm && <Dialog title={t("replace.deleteTitle")} onClose={() => setDeleteConfirm(false)} busy={!!busy} footer={<Button disabled={!!busy} onClick={() => void presetAction("delete",selectedPreset)}>{t("replace.confirmDelete")}</Button>}><p>{t("replace.deletePrompt", {name:selectedPreset})}</p></Dialog>}
+    {preview && <Dialog title={t("replace.confirmTitle")} subtitle={t("replace.confirmSubtitle")} busy={!!busy} onClose={() => setPreview(null)} width="lg" footer={<>
+      <Button variant="secondary" disabled={!!busy} onClick={() => setPreview(null)}>{t("replace.returnEdit")}</Button>
+      <Button disabled={!!busy || !outPath} onClick={handleApply}>{busy === "apply" ? t("editor.saving") : t("replace.confirmSave")}</Button>
     </>}>
-      <div className="replace-preview"><p>扫描 {preview.summary.regions_scanned} 个区域，预计执行 {preview.summary.block_positions_affected.toLocaleString()} 次方块替换操作。</p>
-      {preview.summary.per_unit.map((unit,index) => <section key={index}><strong>{unitItems[index]?.label || `替换规则 ${index+1}`}</strong>：命中 {unit.hit_count.toLocaleString()} 个方块
-        <ul>{unit.output_distribution.map(output => <li key={output.output_index}>{output.name}：预估 {output.estimated_count.toLocaleString()}</li>)}</ul>
-        {!!unit.warnings.length && <p>{unit.warnings.join("；")}</p>}{!!unit.invalid_entries.length && <p role="alert">{unit.invalid_entries.join("；")}</p>}
+      <div className="replace-preview"><p>{t("replace.previewSummary", {regions:preview.summary.regions_scanned.toLocaleString(locale),blocks:preview.summary.block_positions_affected.toLocaleString(locale)})}</p>
+      {preview.summary.per_unit.map((unit,index) => <section key={index}><strong>{unitItems[index]?.label || t("replace.ruleName", {index:index+1})}</strong>: {t("replace.hitCount", {count:unit.hit_count.toLocaleString(locale)})}
+        <ul>{unit.output_distribution.map(output => <li key={output.output_index}>{t("replace.outputEstimate", {name:translateBlockId(output.name),count:output.estimated_count.toLocaleString(locale)})}</li>)}</ul>
+        {!!unit.warnings.length && <p>{unit.warnings.map(localizeMessage).join(locale === "zh-CN" ? "；" : "; ")}</p>}{!!unit.invalid_entries.length && <p role="alert">{unit.invalid_entries.map(localizeMessage).join(locale === "zh-CN" ? "；" : "; ")}</p>}
       </section>)}
-      {!!preview.summary.warnings.length && <p role="alert">{preview.summary.warnings.join("；")}</p>}
-      <details><summary>详细检查结果</summary><pre className="nova-code">{JSON.stringify(preview.summary,null,2)}</pre></details></div>
-      <label className="replace-output">新文件保存位置<Input value={displayFilePath(outPath)} readOnly /></label>
-      <Button variant="secondary" disabled={!!busy} onClick={handleChooseOutput}>更改保存位置…</Button>
-      {error && <pre className="replace-error nova-text-danger" role="alert">{displayPathText(error)}</pre>}
+      {!!preview.summary.warnings.length && <p role="alert">{preview.summary.warnings.map(localizeMessage).join(locale === "zh-CN" ? "；" : "; ")}</p>}
+      <details><summary>{t("replace.details")}</summary><pre className="nova-code">{JSON.stringify(preview.summary,null,2)}</pre></details></div>
+      <label className="replace-output">{t("replace.outputPath")}<Input value={displayFilePath(outPath)} readOnly /></label>
+      <Button variant="secondary" disabled={!!busy} onClick={handleChooseOutput}>{t("editor.changeSavePath")}</Button>
+      {error && <pre className="replace-error nova-text-danger" role="alert">{displayPathText(localizeMessage(error))}</pre>}
     </Dialog>}
   </section>;
 }

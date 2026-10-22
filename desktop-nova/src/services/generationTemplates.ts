@@ -1,3 +1,4 @@
+import { getUiLocale, t } from "./i18n";
 import { readWorkspaceFile, writeWorkspaceFile } from "./backend";
 import {
   BlockStateSpec,
@@ -13,7 +14,9 @@ import {
 export interface GenerationTemplate {
   id: string;
   name_zh: string;
+  name_en?: string;
   description_zh: string;
+  description_en?: string;
   tags: string[];
   preview_hint?: string;
   plan: ProjectionPlan;
@@ -31,16 +34,16 @@ export async function loadGenerationTemplates(): Promise<GenerationTemplate[]> {
   const templates = await Promise.all(
     paths.map(async (path) => JSON.parse((await readWorkspaceFile(`data/generation-templates/${path}`)).replace(/^\uFEFF/, "")) as GenerationTemplate),
   );
-  return templates.sort((a, b) => a.name_zh.localeCompare(b.name_zh, "zh-CN"));
+  return templates.sort((a, b) => generationTemplateName(a).localeCompare(generationTemplateName(b), getUiLocale()));
 }
 
 export function templateToForm(template: GenerationTemplate): GenerateFormState {
   const region = template.plan.regions[0];
   return {
     metadata: {
-      name: template.plan.metadata?.name || template.name_zh,
+      name: template.plan.metadata?.name || generationTemplateName(template),
       author: template.plan.metadata?.author || "Litematica-Nova",
-      description: template.plan.metadata?.description || template.description_zh,
+      description: template.plan.metadata?.description || (getUiLocale() === "en-US" && !template.id.startsWith("custom-") ? template.description_en || "" : template.description_zh),
       minecraftDataVersion: template.plan.minecraft_data_version || 3953,
     },
     region: {
@@ -55,8 +58,8 @@ export function templateToForm(template: GenerationTemplate): GenerateFormState 
 export async function exportTemplate(path: string, form: GenerateFormState, plan: ProjectionPlan) {
   const template: GenerationTemplate = {
     id: `custom-${Date.now()}`,
-    name_zh: form.metadata.name || "自定义模板",
-    description_zh: form.metadata.description || "从投影生成页导出的自定义模板。",
+    name_zh: form.metadata.name || t("native.template.custom"),
+    description_zh: form.metadata.description || t("native.template.description"),
     tags: ["custom"],
     plan,
   };
@@ -122,4 +125,9 @@ function materialBlock(material: MaterialSpec | undefined): BlockStateSpec | und
   if (!material) return undefined;
   if (material.type === "single") return material.block;
   return material.entries[0]?.block;
+}
+
+export function generationTemplateName(template: GenerationTemplate): string {
+  if (template.id.startsWith("custom-") || template.tags.includes("custom")) return template.name_zh;
+  return getUiLocale() === "en-US" ? template.name_en || template.id : template.name_zh;
 }

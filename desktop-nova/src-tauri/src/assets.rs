@@ -252,7 +252,8 @@ pub(crate) async fn pick_litematic_file(app: AppHandle) -> Result<Option<String>
     let picked = app
         .dialog()
         .file()
-        .add_filter("Litematica", &["litematic"])
+        .set_title(crate::i18n::text("dialog.openSchematic"))
+        .add_filter(crate::i18n::text("dialog.schematicFilter"), &["litematic"])
         .blocking_pick_file();
     Ok(picked.map(|path| path.to_string()))
 }

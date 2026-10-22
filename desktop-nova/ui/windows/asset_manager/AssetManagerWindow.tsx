@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
+import { useI18n } from "../../i18n";
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { closeApplicationWindow } from "../../../src/platform/nativeWindowGeometry";
 
@@ -20,9 +22,10 @@ export async function openAssetManagerWithWindowBehavior(showOverlay: () => void
   showOverlay();
 }
 export function AssetManagerDialog({ theme, onClose }: { theme: string; onClose: () => void }) {
+  useI18n();
   return <div className="dialog-overlay"><section
     className={["dialog-content", "subwindow-frame", "subwindow-frame-wide", "asset-manager-window", themeClassName(theme)].filter(Boolean).join(" ")}
-    role="dialog" aria-modal="true" aria-label="游戏资源管理" onClick={(event) => event.stopPropagation()}>
+    role="dialog" aria-modal="true" aria-label={t("library.assetManagerTitle")} onClick={(event) => event.stopPropagation()}>
     <AssetManagerContent theme={theme} onClose={onClose} />
   </section></div>;
 }
@@ -31,6 +34,7 @@ export function AssetManagerDialog({ theme, onClose }: { theme: string; onClose:
  * Standalone game-resource manager window; follows the main shell theme.
  */
 export function AssetManagerWindow() {
+  useI18n();
   const [themeId, setThemeId] = useState(currentThemeId);
   const [openedSection, setOpenedSection] = useState("");
 

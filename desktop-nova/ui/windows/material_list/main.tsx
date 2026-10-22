@@ -1,3 +1,4 @@
+import { initializeUiLanguage } from "../../../src/services/i18n";
 import React from "react";
 import ReactDOM from "react-dom/client";
 
@@ -7,6 +8,7 @@ import { initializeWindowTheme } from "../../shell/themeRuntime";
 import { MaterialListWindow } from ".";
 
 async function bootstrap() {
+  await initializeUiLanguage(getUserConfig);
     loadDatabases();
     await Promise.all([initI18n(), initializeWindowTheme(getUserConfig)]);
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

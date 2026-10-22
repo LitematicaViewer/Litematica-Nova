@@ -1,3 +1,5 @@
+import { t } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { Checkbox } from "../../../../components/ui/checkbox";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import { Slider } from "../../../../components/ui/slider";
@@ -22,17 +24,17 @@ const fallbackThumbExampleUrl = new URL("../../../../shell/resource/thumb_exampl
 type VariantDemoState = "normal" | "check" | "disabled";
 const VARIANT_DEMO_CYCLE: VariantDemoState[] = ["normal", "check", "disabled"];
 const VARIANT_DEMO_STATE_LABELS: Record<VariantDemoState, string> = {
-  normal: "常态",
-  check: "按下",
-  disabled: "禁用",
+  normal: "ui.normal",
+  check: "ui.pressed",
+  disabled: "ui.disabled",
 };
 const BUTTON_VARIANT_DEMOS = [
-  { variant: "default", label: "主要" },
-  { variant: "secondary", label: "次要" },
-  { variant: "outline", label: "描边" },
-  { variant: "ghost", label: "幽灵" },
-  { variant: "link", label: "链接" },
-  { variant: "destructive", label: "危险" },
+  { variant: "default", labelKey: "ui.primary" },
+  { variant: "secondary", labelKey: "ui.secondary" },
+  { variant: "outline", labelKey: "ui.outline" },
+  { variant: "ghost", labelKey: "ui.ghost" },
+  { variant: "link", labelKey: "ui.link" },
+  { variant: "destructive", labelKey: "ui.destructive" },
 ] as const;
 
 const themeThumbExampleUrls = Object.entries(
@@ -53,6 +55,7 @@ const thumbExampleUrlForTheme = (themeId: string) =>
   themeThumbExampleUrls[themeResourceKey(themeId)] || fallbackThumbExampleUrl;
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
+  const { locale } = useI18n();
   return (
     <div className="form-row">
       <label>{label}</label>
@@ -65,6 +68,7 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
  * Renders the theme/widget smoke-test page used to validate shell styling.
  */
 export function UiTestPage() {
+  const { locale } = useI18n();
   const [themeId, setThemeId] = useState(() => currentThemeId());
   const [showDemoOverlay, setShowDemoOverlay] = useState(false);
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
@@ -87,7 +91,7 @@ export function UiTestPage() {
 
   const thumbExampleUrl = thumbExampleUrlForTheme(themeId);
   const renderThumbExample = () =>
-    thumbExampleUrl ? <img className="ui-test-thumb" src={thumbExampleUrl} alt="示例缩略图" /> : <span />;
+    thumbExampleUrl ? <img className="ui-test-thumb" src={thumbExampleUrl} alt={t("ui.thumbnail")} /> : <span />;
 
   const handleOpenDemoWindow = async () => {
     const info = await loadUserConfigMigratingLocalStorage().catch(() => null);
@@ -106,38 +110,38 @@ export function UiTestPage() {
 
   return (
     <ScrollArea className="ui-control-gallery">
-      <h2>UI 测试页（title）</h2>
-      <p className="muted">主题与排版自检（subtitle）</p>
+      <h2>{t("ui.title")}</h2>
+      <p className="muted">{t("ui.subtitle")}</p>
       <fieldset>
-        <legend>表单</legend>
-        <FormRow label="单选：">
-          <RadioGroup defaultValue="a" aria-label="单选示例">
-            <label className="setting-row"><RadioGroupItem value="a" /> 选项 A</label>
-            <label className="setting-row"><RadioGroupItem value="b" /> 选项 B</label>
+        <legend>{t("ui.form")}</legend>
+        <FormRow label={t("ui.radio")}>
+          <RadioGroup defaultValue="a" aria-label={t("ui.radioExample")}>
+            <label className="setting-row"><RadioGroupItem value="a" /> {t("ui.optionA")}</label>
+            <label className="setting-row"><RadioGroupItem value="b" /> {t("ui.optionB")}</label>
           </RadioGroup>
         </FormRow>
-        <FormRow label="复选：">
-          <label><Checkbox  /> 示例复选框</label>
+        <FormRow label={t("ui.checkbox")}>
+          <label><Checkbox  /> {t("ui.checkboxExample")}</label>
         </FormRow>
-        <FormRow label="单行输入："><Input defaultValue="默认系统输入框" /></FormRow>
-        <FormRow label="下拉框：">
-          <Dropdown value={sampleTheme} onChange={setSampleTheme} ariaLabel="主题名称下拉示例" options={[
+        <FormRow label={t("ui.singleLine")}><Input defaultValue={t("ui.defaultInput")} /></FormRow>
+        <FormRow label={t("ui.dropdown")}>
+          <Dropdown value={sampleTheme} onChange={setSampleTheme} ariaLabel={t("ui.themeExample")} options={[
             {value: "shadcn", label: "shadcn/ui"}, {value: "8bitcn", label: "8bitcn/ui"}, {value: "Minecraft", label: "Minecraft"}, {value: "Metro10", label: "Metro10"},
           ]} />
         </FormRow>
-        <FormRow label="键盘下拉框：">
-          <Dropdown ariaLabel="键盘下拉框示例" value={selectedOption} onChange={setSelectedOption} options={[
-            { value: "first", label: "第一项" },
-            { value: "second", label: "第二项" },
-            { value: "third", label: "第三项" },
+        <FormRow label={t("ui.keyboardDropdown")}>
+          <Dropdown ariaLabel={t("ui.keyboardDropdownExample")} value={selectedOption} onChange={setSelectedOption} options={[
+            { value: "first", label: t("ui.first") },
+            { value: "second", label: t("ui.second") },
+            { value: "third", label: t("ui.third") },
           ]} />
         </FormRow>
-        <FormRow label="滑动条："><Slider defaultValue={[40]} aria-label="滑动条示例" /></FormRow>
-        <FormRow label="按钮：">
+        <FormRow label={t("ui.slider")}><Slider defaultValue={[40]} aria-label={t("ui.sliderExample")} /></FormRow>
+        <FormRow label={t("ui.button")}>
           <div className="button-row">
-            <Button type="button">普通按钮</Button>
-            <Button type="button" aria-pressed="true">可勾选</Button>
-            <Button type="button" disabled>禁用</Button>
+            <Button type="button">{t("ui.regularButton")}</Button>
+            <Button type="button" aria-pressed="true">{t("ui.checkable")}</Button>
+            <Button type="button" disabled>{t("ui.disabled")}</Button>
           </div>
         </FormRow>
         {/* Every `variant` in buttonVariants is shown here. `outline` and `link` have no
@@ -146,7 +150,7 @@ export function UiTestPage() {
             Each button cycles 常态 → 按下 → 禁用 so all three states can be inspected;
             previously only the resting state (and its hover) was reachable. A disabled
             <button> swallows its own clicks, hence the wrapper as the click target. */}
-        <FormRow label="按钮变体（点击循环 常态 → 按下 → 禁用）：">
+        <FormRow label={t("ui.variantTitle")}>
           <div className="button-row">
             {BUTTON_VARIANT_DEMOS.map((entry) => {
               const state = variantDemoStates[entry.variant] ?? "normal";
@@ -154,7 +158,7 @@ export function UiTestPage() {
                 <span
                   key={entry.variant}
                   className="button-variant-demo"
-                  title={`${entry.label} · 当前：${VARIANT_DEMO_STATE_LABELS[state]}（点击切换）`}
+                  title={t("ui.variantHelp", {variant:t(entry.labelKey), state:t(VARIANT_DEMO_STATE_LABELS[state])})}
                   onClick={() => advanceVariantDemo(entry.variant)}
                 >
                   <Button
@@ -163,44 +167,44 @@ export function UiTestPage() {
                     aria-pressed={state === "check"}
                     disabled={state === "disabled"}
                   >
-                    {entry.label}
+                    {t(entry.labelKey)}
                   </Button>
                 </span>
               );
             })}
           </div>
         </FormRow>
-        <FormRow label="对话框：">
+        <FormRow label={t("ui.dialog")}>
           <div className="button-row">
-            <Button type="button" onClick={() => setShowTemplateDialog(true)}>打开标准对话框模板</Button>
+            <Button type="button" onClick={() => setShowTemplateDialog(true)}>{t("ui.openDialog")}</Button>
           </div>
         </FormRow>
-        <FormRow label="子窗口：">
+        <FormRow label={t("ui.subwindow")}>
           <div className="button-row">
-            <Button type="button" onClick={handleOpenDemoWindow}>打开空的演示窗口</Button>
+            <Button type="button" onClick={handleOpenDemoWindow}>{t("ui.openDemo")}</Button>
           </div>
         </FormRow>
       </fieldset>
       <fieldset>
-        <legend>表格</legend>
+        <legend>{t("ui.table")}</legend>
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>缩略图</TableHead>
-              <TableHead>文字</TableHead>
-              <TableHead>数据</TableHead>
-              <TableHead>空列</TableHead>
-              <TableHead>操作</TableHead>
+              <TableHead>{t("ui.tableThumbnail")}</TableHead>
+              <TableHead>{t("ui.text")}</TableHead>
+              <TableHead>{t("ui.data")}</TableHead>
+              <TableHead>{t("ui.emptyColumn")}</TableHead>
+              <TableHead>{t("ui.actions")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {[
-              ["常规数字", "999"],
-              ["大数字", "99,999"],
-              ["小数点", "9.99"],
-              ["百分比", "99%"],
-              ["带小数点的百分比", "99.99%"],
-              ["货币", "$99.00"],
+              ["ui.number", "999"],
+              ["ui.largeNumber", "99,999"],
+              ["ui.decimal", "9.99"],
+              ["ui.percent", "99%"],
+              ["ui.decimalPercent", "99.99%"],
+              ["ui.currency", "$99.00"],
             ].map(([label, value], index) => {
               const isSelected = selectedTableRow === label;
               return (
@@ -211,16 +215,16 @@ export function UiTestPage() {
                   onClick={() => setSelectedTableRow(label)}
                 >
                   <TableCell>{renderThumbExample()}</TableCell>
-                  <TableCell>{label}</TableCell>
+                  <TableCell>{t(label)}</TableCell>
                   <TableCell>{value}</TableCell>
                   <TableCell />
                   <TableCell>
                     {index < 3 ? (
                       <div className="button-row">
                         <Button type="button" disabled={index === 1} aria-pressed={index === 2}>
-                          {index === 1 ? "不可用按钮1" : index === 2 ? "可选中按钮1" : "测试按钮1"}
+                          {index === 1 ? t("ui.unavailableButton") : index === 2 ? t("ui.selectableButton") : t("ui.testButtonOne")}
                         </Button>
-                        <Button type="button">测试按钮2</Button>
+                        <Button type="button">{t("ui.testButtonTwo")}</Button>
                       </div>
                     ) : null}
                   </TableCell>
@@ -232,37 +236,37 @@ export function UiTestPage() {
       </fieldset>
       {showTemplateDialog ? (
         <Dialog
-          title="标准对话框模板"
-          subtitle="用于普通确认、表单和轻量交互；它始终是主窗口内遮罩，不提供独立窗口模式。"
+          title={t("ui.dialogTemplate")}
+          subtitle={t("ui.dialogSubtitle")}
           width="md"
           onClose={() => setShowTemplateDialog(false)}
           footer={(
             <>
-              <Button type="button" onClick={() => setShowTemplateDialog(false)}>取消</Button>
-              <Button type="button" onClick={() => setShowTemplateDialog(false)}>完成</Button>
+              <Button type="button" onClick={() => setShowTemplateDialog(false)}>{t("editor.cancel")}</Button>
+              <Button type="button" onClick={() => setShowTemplateDialog(false)}>{t("ui.done")}</Button>
             </>
           )}
         >
           <div className="dialog-form-grid">
-            <span className="dialog-label">标题区</span>
-            <span className="muted">上方包含标题、副标题和关闭按钮。</span>
-            <span className="dialog-label">正文区</span>
+            <span className="dialog-label">{t("ui.headingArea")}</span>
+            <span className="muted">{t("ui.headingHint")}</span>
+            <span className="dialog-label">{t("ui.bodyArea")}</span>
             <div className="dialog-field-stack">
-              <Input defaultValue="可直接放输入框、选择框和说明文案" />
-              <Dropdown ariaLabel="模板选项示例" value={sampleTemplate} onChange={setSampleTemplate} options={[
-                {value: "template-a", label: "模板选项 A"}, {value: "template-b", label: "模板选项 B"},
+              <Input defaultValue={t("ui.inputExample")} />
+              <Dropdown ariaLabel={t("ui.templateExample")} value={sampleTemplate} onChange={setSampleTemplate} options={[
+                {value: "template-a", label: t("ui.templateA")}, {value: "template-b", label: t("ui.templateB")},
               ]} />
-              <label className="setting-row"><Checkbox  defaultChecked /> 支持内联布尔选项</label>
+              <label className="setting-row"><Checkbox  defaultChecked /> {t("ui.inlineBoolean")}</label>
             </div>
-            <span className="dialog-label">说明区</span>
-            <div className="dialog-message">这里适合放路径预览、确认文案、结果提示或错误信息。</div>
+            <span className="dialog-label">{t("ui.explanationArea")}</span>
+            <div className="dialog-message">{t("ui.messageHint")}</div>
           </div>
         </Dialog>
       ) : null}
       {showDemoOverlay && (
-        <Dialog title="子窗口样式演示" onClose={() => setShowDemoOverlay(false)}>
+        <Dialog title={t("ui.demoTitle")} onClose={() => setShowDemoOverlay(false)}>
             <div className="subwindow-body">
-              <div className="muted">当前按“子窗口行为”设置，以主窗口遮罩方式打开这个演示窗口。</div>
+              <div className="muted">{t("ui.demoHint")}</div>
               <div className="subwindow-demo-fill" />
             </div>
         </Dialog>

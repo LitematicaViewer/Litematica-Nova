@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
+import { useI18n } from "../../i18n";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ensureApplicationRenderSubscription,
@@ -48,6 +50,7 @@ const applicationController: PresentationViewportController = {
 
 /** The full Viewer keeps its existing Application operation and admission contract. */
 export function useEmbeddedViewer(operation: RenderOperationView | null, blocked = false) {
+  useI18n();
   return usePresentationViewport(operation ? {
     operationId: operation.operationId, prepared: isApplicationViewerPrepared(operation), presentation: operation.presentation,
   } : null, blocked, applicationController);
@@ -59,7 +62,7 @@ export function usePresentationViewport(operation: PresentationViewportOperation
   const resolvePlacement = inlineMode === "embedded" ? elementToNativeChildPlacement : elementToPresentationPlacement;
   const useRouteEffect = inlineMode === "embedded" ? useLayoutEffect : useEffect;
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiMessage>("");
   const leasedOperation = useRef(operation);
   if (operation?.operationId === leasedOperation.current?.operationId) leasedOperation.current = operation;
   const current = useRef({ operation, blocked });
@@ -83,7 +86,7 @@ export function usePresentationViewport(operation: PresentationViewportOperation
   useEffect(() => {
     let active = true;
     void controller.ensureSubscription().catch((reason) => {
-      if (active) setError(`连接预览服务失败：${String(reason)}`);
+      if (active) setError(message("render.connectFailed", { error: String(reason) }));
     });
     return () => { active = false; };
   }, []);
@@ -201,7 +204,7 @@ export function usePresentationViewport(operation: PresentationViewportOperation
       ++presentationRevision.current;
       const intent = queuedInlineIntent.current?.operationId === operationId ? queuedInlineIntent.current.presentation : operation.presentation;
       void controller.suspend(operationId, intent)
-        .catch((reason) => { if (!cancelled) setError(`暂停页内预览失败：${String(reason)}`); });
+        .catch((reason) => { if (!cancelled) setError(message("render.pauseFailed", { error: String(reason) })); });
       return () => { cancelled = true; };
     }
     const restore = async () => {
@@ -228,7 +231,7 @@ export function usePresentationViewport(operation: PresentationViewportOperation
         }
       }
     };
-    void restore().catch((reason) => { if (!cancelled) setError(`显示页内预览失败：${String(reason)}`); });
+    void restore().catch((reason) => { if (!cancelled) setError(message("render.showFailed", { error: String(reason) })); });
     return () => { cancelled = true; };
   }, [operation?.operationId, mayQueuePresentation, blocked, requestedOperationId, visibilityRevision]);
 
@@ -277,7 +280,7 @@ export function usePresentationViewport(operation: PresentationViewportOperation
           lastPlacement.current = key;
         }
       } catch (reason) {
-        if (!cancelled) setError(`更新预览位置失败：${String(reason)}`);
+        if (!cancelled) setError(message("render.moveFailed", { error: String(reason) }));
       } finally {
         inFlight = false;
         if (!cancelled && queued) { queued = false; schedule(); }
@@ -309,5 +312,5 @@ export function usePresentationViewport(operation: PresentationViewportOperation
     };
   }, [operation?.operationId, mayQueuePresentation, blocked, operation?.presentation.mode, operation?.presentation.visible, requestedOperationId, visibilityRevision]);
 
-  return { hostRef, error, showOverlay, setPresentation, requestPresentationWhenReady };
+  return { hostRef, error: localizeMessage(error), showOverlay, setPresentation, requestPresentationWhenReady };
 }

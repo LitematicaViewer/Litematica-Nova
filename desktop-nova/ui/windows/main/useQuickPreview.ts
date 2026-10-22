@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
+import { useI18n } from "../../i18n";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   closeQuickPreview, startQuickPreview, getQuickPreviewState, quickPreviewForSource, refreshQuickPreview, restoreQuickPreview,
@@ -17,13 +19,14 @@ const quickController: PresentationViewportController = {
 
 /** One historical fast_experimental entry for Properties and Render. Full is not a fallback. */
 export function useQuickPreview(sourcePath: string, blocked: boolean, preload = false) {
+  useI18n();
   const snapshot = useSyncExternalStore(subscribeQuickPreview, getQuickPreviewState, getQuickPreviewState);
   const operation = quickPreviewForSource(sourcePath, snapshot);
   const viewport = usePresentationViewport(operation ? {
     operationId: operation.previewId, prepared: operation.state === "ready", presentation: operation.presentation,
   } : null, blocked, quickController);
   const [pending, setPending] = useState(false);
-  const [commandError, setCommandError] = useState("");
+  const [commandError, setCommandError] = useState<UiMessage>("");
   const inFlight = useRef(false);
   const source = useRef(sourcePath);
   source.current = sourcePath;
@@ -35,7 +38,7 @@ export function useQuickPreview(sourcePath: string, blocked: boolean, preload = 
     setPending(true);
     setCommandError("");
     try { await action(); }
-    catch (reason) { if (source.current === expectedSource) setCommandError(`快速预览失败：${String(reason)}`); }
+    catch (reason) { if (source.current === expectedSource) setCommandError(message("render.quickFailed", { error: String(reason) })); }
     finally { inFlight.current = false; setPending(false); }
   }
   const start = () => execute(async () => {
@@ -54,5 +57,5 @@ export function useQuickPreview(sourcePath: string, blocked: boolean, preload = 
   });
   const close = () => execute(async () => { if (operation) await closeQuickPreview(operation.previewId); });
   const hide = () => execute(async () => { if (operation) await viewport.setPresentation({ ...operation.presentation, visible: false }); });
-  return { ...viewport, operation, pending, error: commandError || viewport.error || (operation?.error ? "预览加载失败，请重新加载。" : ""), start, close, hide };
+  return { ...viewport, operation, pending, error: localizeMessage(commandError || viewport.error || (operation?.error ? t("render.loadingFailed") : "")), start, close, hide };
 }

@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
+import { useI18n } from "../../i18n";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   cancelApplicationRender, discardApplicationRenderPreflight, ensureApplicationRenderSubscription,
@@ -15,6 +17,7 @@ const selectedLoadingByContext = new Map<string, { preload: boolean; buildMode: 
 
 /** The existing exact renderer owns the scene; the mounted route owns presentation only. */
 export function useFullPreview(sourcePath: string, preload: boolean, blocked = false, displayMode: "full" | "standard" = "full") {
+  useI18n();
   const snapshot = useSyncExternalStore(subscribeApplicationRender, getApplicationRenderState, getApplicationRenderState);
   const [selection, setSelection] = useState<{ sourcePath: string; preload: boolean; displayMode: "full" | "standard"; buildMode: "prebuilt" | "realtime" } | null>(null);
   const contextKey = JSON.stringify([windowsPathKey(sourcePath), displayMode]);
@@ -25,7 +28,7 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   const [preflight, setPreflight] = useState<ResourcePreflightView | null>(null);
   const [pending, setPending] = useState(false);
   const [launchStage, setLaunchStage] = useState<"preflight" | "starting" | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiMessage>("");
   const current = useRef({ sourcePath, preload, displayMode }); current.current = { sourcePath, preload, displayMode };
   const generation = useRef(0);
   const pendingGrant = useRef<ResourcePreflightView | null>(null);
@@ -75,7 +78,7 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   }
   async function launch(buildMode: "prebuilt" | "realtime", version: number, grant?: ResourcePreflightView) {
     if (!mounted.current || generation.current !== version) return;
-    if (grant && buildMode === "prebuilt" && !resourcePreflightAllows(grant, "continue_prebuilt")) throw new Error("当前显存门禁不允许预构建");
+    if (grant && buildMode === "prebuilt" && !resourcePreflightAllows(grant, "continue_prebuilt")) throw new Error(t("render.preloadRejected"));
     setLaunchStage("starting");
     selectedLoadingByContext.set(JSON.stringify([windowsPathKey(current.current.sourcePath), current.current.displayMode]), { preload: current.current.preload, buildMode });
     setSelection({ ...current.current, buildMode });
@@ -106,17 +109,17 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
     console.info("[NOVA_FIRST_BLOCK]", { stage: "user_click", epochMs: clickedAt.current,
       sourcePath: current.current.sourcePath, displayMode: current.current.displayMode, preload: current.current.preload,
       existingOperationReady: isApplicationViewerPrepared(operation) });
-    if (blocked) throw new Error("请先选择精确渲染模式");
+    if (blocked) throw new Error(t("render.selectExactMode"));
     setLaunchStage("preflight");
     await discardGrant();
     if (!mounted.current || generation.current !== version) return;
     const expected = { ...current.current };
     const host = viewport.hostRef.current;
-    if (!host) throw new Error("预览容器尚未就绪，请在页面可见后重新加载。");
+    if (!host) throw new Error(t("render.containerNotReady"));
     const placement = await elementToNativeChildPlacement(host);
     if (!Number.isInteger(placement.width) || !Number.isInteger(placement.height)
       || placement.width <= 8 || placement.height <= 8 || placement.width > 16384 || placement.height > 16384) {
-      throw new Error("预览容器尺寸不可用，请在页面可见后重新加载。");
+      throw new Error(t("render.containerSizeUnavailable"));
     }
     if (!mounted.current || generation.current !== version) return;
     const plan = await prepareApplicationRenderLaunch(expected.sourcePath, expected.preload, expected.displayMode,
@@ -126,7 +129,7 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
     }
     const grant = plan.preflight;
     if (plan.directRealtime) { await launch("realtime", version); return; }
-    if (!grant) throw new Error("加载计划缺少实际显存预检");
+    if (!grant) throw new Error(t("render.missingPreflight"));
     pendingGrant.current = grant; setPreflight(grant);
     if (!expected.preload && grant.severity !== "invalid" && resourcePreflightAllows(grant, "switch_realtime")) {
       await launch("realtime", version, grant); return;
@@ -137,18 +140,18 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   });
   const choose = (action: "prebuilt" | "realtime" | "basic_vulkan" | "cancel") => execute(async version => {
     const grant = pendingGrant.current;
-    if (!grant) throw new Error("显存预检已经结束，请重新加载");
+    if (!grant) throw new Error(t("render.expiredPreflight"));
     if (action === "cancel") { await discardGrant(); return; }
     if (action === "prebuilt") { await launch("prebuilt", version, grant); return; }
     if (action === "basic_vulkan") {
-      if (!resourcePreflightAllows(grant, "use_basic_vulkan")) throw new Error("预检未允许切换 Vulkan");
+      if (!resourcePreflightAllows(grant, "use_basic_vulkan")) throw new Error(t("render.vulkanNotApproved"));
       const next = await useBasicVulkanForApplicationRender(grant.preflightId, current.current.sourcePath);
       if (!mounted.current || generation.current !== version) {
         await discardApplicationRenderPreflight(next.preflightId); return;
       }
       pendingGrant.current = next; setPreflight(next); return;
     }
-    if (grant.severity !== "normal" && !resourcePreflightAllows(grant, "switch_realtime")) throw new Error("预检未允许实时加载");
+    if (grant.severity !== "normal" && !resourcePreflightAllows(grant, "switch_realtime")) throw new Error(t("render.realtimeNotApproved"));
     await launch("realtime", version, grant);
   });
   const hide = () => execute(async () => {
@@ -169,16 +172,16 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   const cancelling = operation?.progress?.phase === "cancelling";
   const progress = loading && !cancelling && !launchStage ? operation?.progress : undefined;
   const phaseLabel: Record<string, string> = {
-    starting: "正在启动渲染", scan_nbt: "正在读取投影", nbt_scan: "正在读取投影", load_litematic: "正在读取投影",
-    identity: "正在核对输入", native_cache_identity: "正在核对输入", normalize: "正在整理投影", normalize_canonical_ir: "正在整理投影",
-    load_mc26_catalog: "正在读取方块目录", build_mc26_schemas: "正在准备方块状态", load_resource_packs: "正在加载资源",
-    bind_world: "正在关联场景资源", load_biome_tint: "正在准备生物群系颜色",
-    prepare_shared_lighting: "正在求解共享光照",
-    mesh_compile: "正在构建", compile_existing_cells: "正在构建", compile_sections: "正在构建", build_scene: "正在构建",
-    encode: "正在保存", container: "正在保存", checksum: "正在核对缓存", decode: "正在读取缓存", install: "正在保存缓存",
-    artifact_publishing: "正在准备画面", viewer_preparing: "正在准备画面", cancelling: "正在取消",
+    starting: t("render.phase.starting"), scan_nbt: t("render.phase.reading"), nbt_scan: t("render.phase.reading"), load_litematic: t("render.phase.reading"),
+    identity: t("render.phase.verifying"), native_cache_identity: t("render.phase.verifying"), normalize: t("render.phase.normalizing"), normalize_canonical_ir: t("render.phase.normalizing"),
+    load_mc26_catalog: t("render.phase.blockCatalog"), build_mc26_schemas: t("render.phase.blockStates"), load_resource_packs: t("render.phase.resources"),
+    bind_world: t("render.phase.sceneResources"), load_biome_tint: t("render.phase.biomeColors"),
+    prepare_shared_lighting: t("render.phase.sharedLighting"),
+    mesh_compile: t("render.phase.building"), compile_existing_cells: t("render.phase.building"), compile_sections: t("render.phase.building"), build_scene: t("render.phase.building"),
+    encode: t("render.phase.saving"), container: t("render.phase.saving"), checksum: t("render.phase.checkingCache"), decode: t("render.phase.readingCache"), install: t("render.phase.savingCache"),
+    artifact_publishing: t("render.phase.preparingFrame"), viewer_preparing: t("render.phase.preparingFrame"), cancelling: t("render.phase.cancelling"),
   };
-  const stage = phaseLabel[progress?.phase || ""] || "正在加载";
+  const stage = phaseLabel[progress?.phase || ""] || t("render.phase.loading");
   const lightingProgress = progress?.phase === "prepare_shared_lighting";
   const geometryProgress = ["mesh_compile", "compile_existing_cells", "compile_sections", "build_scene"].includes(progress?.phase || "");
   // A resource stage's 1/1 is not task completion. Only measured units from
@@ -196,26 +199,26 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   const operationFailure = operation?.state === "failed" && !pending
     ? operation.progress.phase === "viewer_failed"
       ? /PPLL|ZeroCaptureEpoch|CaptureStatusEpochMismatch|ResolveParameters/i.test(operation.error || "")
-        ? "透明渲染失败，请重新加载。" : "预览渲染失败，请重新加载。"
-      : "预览加载失败，请重新加载。"
+        ? t("render.transparencyFailed") : t("render.renderFailed")
+      : t("render.loadingFailed")
     : "";
   // CPU completion is not a visible frame. Prepared only grants the native
   // presentation command; the service's post-Present receipt removes the UI placeholder.
-  const progressLabel = pending && launchStage === "preflight" ? "正在预估显存…"
-    : pending && launchStage === "starting" ? "正在启动渲染…"
-    : closed ? "预览已关闭，可重新加载。"
+  const progressLabel = pending && launchStage === "preflight" ? t("render.estimatingMemory")
+    : pending && launchStage === "starting" ? t("render.starting")
+    : closed ? t("render.closed")
     : operationFailure ? operationFailure
-    : cancelling ? "正在取消预览…"
-    : !operation && !pending ? "尚未加载预览"
+    : cancelling ? t("render.cancelling")
+    : !operation && !pending ? t("render.notLoaded")
     : ready && !visible
-    ? operation?.presentation.visible ? "正在显示画面…" : "预览已隐藏"
+    ? operation?.presentation.visible ? t("render.presenting") : t("render.hidden")
     : !ready && geometryProgress && progressRange && progressRange.completed === progressRange.total
-    ? "正在准备画面…"
+    ? t("render.preparingFrame")
     : lightingProgress && progressUnits
-    ? `${stage}（${progressUnits.completed.toLocaleString()} / ${progressUnits.total.toLocaleString()} 光照区段${progressUnits.completed > 0 ? `，${lightingPercent === 0 ? "<1" : lightingPercent}%` : ""}）${progressUnits.completed === 0 ? "…" : ""}`
+    ? t("render.lightingProgress", { phase: stage, completed: progressUnits.completed, total: progressUnits.total, detail: progressUnits.completed > 0 ? `${getUiLocale() === "zh-CN" ? "，" : ", "}${lightingPercent === 0 ? "<1" : lightingPercent}%` : "", suffix: progressUnits.completed === 0 ? "…" : "" })
     : progressRange
     ? `${stage} ${Math.round(progressRange.completed / progressRange.total * 100)}%（${progressRange.completed.toLocaleString()} / ${progressRange.total.toLocaleString()}）`
     : `${stage}…`;
-  return { ...viewport, operation, pending, progress, progressRange, progressLabel, error: operationFailure || error || viewport.error, preflight, start, choose, hide, close,
+  return { ...viewport, operation, pending, progress, progressRange, progressLabel, error: localizeMessage(operationFailure || error || viewport.error), preflight, start, choose, hide, close,
     ready, visible, loading };
 }

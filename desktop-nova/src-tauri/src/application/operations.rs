@@ -698,6 +698,7 @@ impl ApplicationOperations {
             "multiplier": input.multiplier, "minecraft_version": input.minecraft_version,
             "terminal_raw_materials": input.terminal_raw_materials, "format": input.format,
             "web_options": input.web_options,
+            "ui_locale": crate::i18n::locale(),
         }))?;
         let result = self.run_core(generation, &prefix, vec!["materials-export".into(), path_text(&request_path), "--output".into(), path_text(&output)], &mut files)?;
         parse_core_json(&result.stdout)

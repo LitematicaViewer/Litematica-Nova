@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import type { LibraryCategoryIcon } from "./libraryStore";
 
 /** Suggested icon uses, not automatically created library categories. */
@@ -16,17 +17,17 @@ const SVG_ATTRIBUTES = new Set(["xmlns", "viewBox", "width", "height", "x", "y",
 
 /** Basic geometry only: no script, animation, style, link, image, use or external reference. */
 export function sanitizeLibrarySvg(source: string): string {
-  if (new TextEncoder().encode(source).length > MAX_SVG_BYTES) throw new Error("SVG 图标请控制在 64 KB 以内。");
-  if (/<!DOCTYPE|<!ENTITY|<\?/i.test(source)) throw new Error("SVG 图标不能包含文档声明或实体。");
+  if (new TextEncoder().encode(source).length > MAX_SVG_BYTES) throw new Error(t("native.icons.svgSize"));
+  if (/<!DOCTYPE|<!ENTITY|<\?/i.test(source)) throw new Error(t("native.icons.svgDocument"));
   const doc = new DOMParser().parseFromString(source, "image/svg+xml");
   const root = doc.documentElement;
-  if (root.localName !== "svg" || doc.querySelector("parsererror")) throw new Error("SVG 图标格式无效。");
+  if (root.localName !== "svg" || doc.querySelector("parsererror")) throw new Error(t("native.icons.svgInvalid"));
   for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
-    if (!SVG_ELEMENTS.has(element.localName) || (element.namespaceURI && element.namespaceURI !== "http://www.w3.org/2000/svg")) throw new Error("SVG 仅支持基础图形；请移除脚本、图片、动画或外链。");
+    if (!SVG_ELEMENTS.has(element.localName) || (element.namespaceURI && element.namespaceURI !== "http://www.w3.org/2000/svg")) throw new Error(t("native.icons.svgBasic"));
     for (const attribute of Array.from(element.attributes)) {
-      if (!SVG_ATTRIBUTES.has(attribute.name) || (attribute.namespaceURI && attribute.name !== "xmlns") || /url\s*\(|javascript:|data:|https?:|file:|@import/i.test(attribute.value) && attribute.name !== "xmlns") throw new Error("SVG 图标包含不支持的样式或外部引用。");
-      if (attribute.name === "xmlns" && attribute.value !== "http://www.w3.org/2000/svg") throw new Error("SVG 命名空间无效。");
-      if (["fill", "stroke"].includes(attribute.name) && !/^(?:none|currentColor|transparent|#[0-9a-f]{3,8}|[a-z]+|rgba?\([\d\s.,%]+\))$/i.test(attribute.value)) throw new Error("SVG 颜色需使用纯色。");
+      if (!SVG_ATTRIBUTES.has(attribute.name) || (attribute.namespaceURI && attribute.name !== "xmlns") || /url\s*\(|javascript:|data:|https?:|file:|@import/i.test(attribute.value) && attribute.name !== "xmlns") throw new Error(t("native.icons.svgReference"));
+      if (attribute.name === "xmlns" && attribute.value !== "http://www.w3.org/2000/svg") throw new Error(t("native.icons.svgNamespace"));
+      if (["fill", "stroke"].includes(attribute.name) && !/^(?:none|currentColor|transparent|#[0-9a-f]{3,8}|[a-z]+|rgba?\([\d\s.,%]+\))$/i.test(attribute.value)) throw new Error(t("native.icons.svgColor"));
     }
   }
   root.setAttribute("xmlns", "http://www.w3.org/2000/svg");
@@ -35,9 +36,9 @@ export function sanitizeLibrarySvg(source: string): string {
 
 export function validateLibraryIconDataUrl(dataUrl: string): string {
   const match = /^data:(image\/(?:png|jpeg|webp|svg\+xml));base64,([a-z0-9+/]*={0,2})$/i.exec(dataUrl);
-  if (!match || dataUrl.length > Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 100) throw new Error("请选择 1 MB 以内的 PNG、JPEG、WebP 或 SVG 图标。");
+  if (!match || dataUrl.length > Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 100) throw new Error(t("native.icons.imageSize"));
   const bytes = atob(match[2]);
-  if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw new Error("图标文件为空或超过 1 MB。");
+  if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw new Error(t("native.icons.imageEmpty"));
   const mime = match[1].toLowerCase();
   if (mime === "image/svg+xml") {
     const svg = sanitizeLibrarySvg(new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes, (character) => character.charCodeAt(0))));
@@ -47,7 +48,7 @@ export function validateLibraryIconDataUrl(dataUrl: string): string {
   const valid = mime === "image/png" ? bytes.startsWith("\x89PNG\r\n\x1a\n")
     : mime === "image/jpeg" ? bytes.startsWith("\xff\xd8\xff")
     : bytes.startsWith("RIFF") && bytes.slice(8, 12) === "WEBP";
-  if (!valid) throw new Error("图标内容与图片类型不一致，请重新选择文件。");
+  if (!valid) throw new Error(t("native.icons.imageMismatch"));
   return `data:${mime};base64,${match[2]}`;
 }
 

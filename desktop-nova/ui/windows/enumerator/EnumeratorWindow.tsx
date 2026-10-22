@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
+import { useI18n } from "../../i18n";
 import { displayFilePath } from "../../../src/business/facade";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
@@ -38,13 +40,13 @@ const enumeratorOpenFileEvent = "enumerator-open-file";
 
 type CategoryFilter = "all" | "base" | "version" | "system_enum" | "creative" | "map" | "custom";
 const CATEGORY_FILTER_OPTIONS: { label: string; value: CategoryFilter }[] = [
-  { label: "所有分类", value: "all" },
-  { label: "全集", value: "base" },
-  { label: "版本", value: "version" },
-  { label: "创造模式", value: "creative" },
-  { label: "系统枚举", value: "system_enum" },
-  { label: "地图色", value: "map" },
-  { label: "自定义", value: "custom" },
+  { get label() { return t("library.allCategories"); }, value: "all" },
+  { get label() { return t("library.baseCatalog"); }, value: "base" },
+  { get label() { return t("library.version"); }, value: "version" },
+  { get label() { return t("library.creativeMode"); }, value: "creative" },
+  { get label() { return t("library.systemEnum"); }, value: "system_enum" },
+  { get label() { return t("library.mapColors"); }, value: "map" },
+  { get label() { return t("library.custom"); }, value: "custom" },
 ];
 type CopyToast = {
   id: number;
@@ -64,19 +66,19 @@ const initialFileFromUrl = () => {
 function categoryLabel(category: EnumeratorCollectionCategory): string {
   switch (category) {
     case "base":
-      return "全集";
+      return t("library.baseCatalog");
     case "version":
-      return "版本";
+      return t("library.version");
     case "creative":
-      return "创造模式";
+      return t("library.creativeMode");
     case "system_enum":
-      return "系统枚举";
+      return t("library.systemEnum");
     case "map":
-      return "地图色";
+      return t("library.mapColors");
     case "custom":
-      return "自定义";
+      return t("library.custom");
     case "runtime":
-      return "运行时";
+      return t("library.runtime");
     default:
       return category;
   }
@@ -104,8 +106,14 @@ function reorderValues(values: string[], selected: string[], direction: -1 | 1):
   return next;
 }
 
+function collectionDisplayName(collection: EnumeratorCollection): string {
+  if (collection.readOnly && collection.category === "runtime") return t("library.collection.runtime");
+  if (collection.readOnly && ["base:dv-blocks", "base:dv-items", "base:dv-enchantments", "base:dv-entities"].includes(collection.id)) return t(`library.collection.${collection.id}`);
+  return collection.name;
+}
+
 function collectionSummary(collection: EnumeratorCollection): string {
-  return `${categoryLabel(collection.category)} · ${collection.values.length} 项`;
+  return t("library.collectionSummary", { category: categoryLabel(collection.category), count: collection.values.length });
 }
 
 async function writeClipboardText(value: string): Promise<void> {
@@ -166,6 +174,7 @@ export function EnumeratorDialog({
   runtimeCollection: EnumeratorCollection | null;
   onClose: () => void;
 }) {
+  useI18n();
   return (
     <div className={["dialog-overlay", themeClassName(theme)].filter(Boolean).join(" ")}>
       <EnumeratorContent currentFile={currentFile} runtimeCollection={runtimeCollection} onClose={onClose} />
@@ -174,10 +183,11 @@ export function EnumeratorDialog({
 }
 
 export function EnumeratorWindow() {
+  useI18n();
   const [themeId, setThemeId] = useState(currentThemeId());
   const [currentFile, setCurrentFile] = useState(initialFileFromUrl());
   const [runtimeCollection, setRuntimeCollection] = useState<EnumeratorCollection | null>(null);
-  const [runtimeStatus, setRuntimeStatus] = useState("");
+  const [runtimeStatus, setRuntimeStatus] = useState<UiMessage>("");
 
   useEffect(() => {
     applyThemeStylesheet(themeId);
@@ -204,17 +214,17 @@ export function EnumeratorWindow() {
       setRuntimeStatus("");
       return;
     }
-    setRuntimeStatus("正在从当前投影生成运行时集合...");
+    setRuntimeStatus(message("library.runtimeCollectionLoading"));
     loadStructuralBlocks(currentFile)
       .then((blocks) => {
         if (cancelled) return;
         setRuntimeCollection(createRuntimeProjectionCollection(currentFile, blocks));
-        setRuntimeStatus(`已载入当前投影的 ${blocks.length} 个结构方块项。`);
+        setRuntimeStatus(message("library.runtimeCollectionLoaded", { count: blocks.length }));
       })
       .catch((error) => {
         if (cancelled) return;
         setRuntimeCollection(null);
-        setRuntimeStatus(`读取当前投影失败：${String(error)}`);
+        setRuntimeStatus(message("library.currentSchematicReadFailed", { error: String(error) }));
       });
     return () => {
       cancelled = true;
@@ -223,7 +233,7 @@ export function EnumeratorWindow() {
 
   return (
     <main className={["subwindow-standalone-page", "enumerator-window", themeClassName(themeId)].filter(Boolean).join(" ")}>
-      <EnumeratorContent currentFile={currentFile} runtimeCollection={runtimeCollection} runtimeStatus={runtimeStatus} standalone />
+      <EnumeratorContent currentFile={currentFile} runtimeCollection={runtimeCollection} runtimeStatus={localizeMessage(runtimeStatus)} standalone />
     </main>
   );
 }
@@ -237,14 +247,15 @@ function EnumeratorContent({
 }: {
   currentFile: string;
   runtimeCollection: EnumeratorCollection | null;
-  runtimeStatus?: string;
+  runtimeStatus?: UiMessage;
   onClose?: () => void;
   standalone?: boolean;
 }) {
+  const { locale, revision } = useI18n();
   const [collections, setCollections] = useState<EnumeratorCollection[]>([]);
   const [isLoadingCollections, setIsLoadingCollections] = useState(false);
-  const [status, setStatus] = useState("");
-  const [error, setError] = useState("");
+  const [status, setStatus] = useState<UiMessage>("");
+  const [error, setError] = useState<UiMessage>("");
   const [searchKeyword, setSearchKeyword] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [sourceCollectionId, setSourceCollectionId] = useState("");
@@ -299,7 +310,7 @@ function EnumeratorContent({
         }
       }
     } catch (err: any) {
-      setError(`读取枚举器集合失败：${String(err)}`);
+      setError(message("library.collectionsReadFailed", { error: String(err) }));
       setCollections(runtimeCollection ? [runtimeCollection] : []);
     } finally {
       setIsLoadingCollections(false);
@@ -325,11 +336,11 @@ function EnumeratorContent({
           : collection.category === categoryFilter;
       if (!categoryMatch) return false;
       if (!keyword) return true;
-      return [collection.name, collection.id]
+      return [collectionDisplayName(collection), collection.name, collection.id]
         .filter(Boolean)
         .some((value) => value.toLowerCase().includes(keyword));
     });
-  }, [categoryFilter, collections, searchKeyword]);
+  }, [categoryFilter, collections, searchKeyword, locale]);
 
   const expressionResult = useMemo(
     () => evaluateEnumeratorExpression(sourceExpression, collections),
@@ -342,8 +353,8 @@ function EnumeratorContent({
     return expressionResult.values.filter((value) => !currentRight.has(value));
   }, [expressionResult.values, rightValues, subtractRight]);
 
-  const leftRows = useMemo(() => buildEnumeratorValueRows(sourceValues, collections), [collections, sourceValues]);
-  const rightRows = useMemo(() => buildEnumeratorValueRows(rightValues, collections), [collections, rightValues]);
+  const leftRows = useMemo(() => buildEnumeratorValueRows(sourceValues, collections), [collections, sourceValues, revision]);
+  const rightRows = useMemo(() => buildEnumeratorValueRows(rightValues, collections), [collections, rightValues, revision]);
 
   const filteredLeftRows = useMemo(() => {
     const keyword = leftSearchKeyword.trim().toLowerCase();
@@ -377,18 +388,18 @@ function EnumeratorContent({
 
   const handleCreateCollection = () => {
     hydrateRightEditor(null);
-    setStatus("已创建一个未保存的右侧集合草稿。");
+    setStatus(message("library.collectionDraftCreated"));
   };
 
   const handlePickSourceCollection = (collection: EnumeratorCollection) => {
     setSourceCollectionId(collection.id);
     setSourceExpression(collection.name);
-    setStatus(`已将 ${collection.name} 放入左侧来源列。`);
+    setStatus(message("library.collectionAsSource", { name: collection.readOnly && (collection.category === "runtime" || collection.id.startsWith("base:dv-")) ? message(collection.category === "runtime" ? "library.collection.runtime" : `library.collection.${collection.id}`) : collection.name }));
   };
 
   const handleLoadRightCollection = (collection: EnumeratorCollection) => {
     hydrateRightEditor(collection);
-    setStatus(collection.readOnly ? `已将 ${collection.name} 放入右侧，可另存为自定义集合。` : `已将 ${collection.name} 放入右侧进行编辑。`);
+    setStatus(collection.readOnly ? message("library.collectionAsCopy", { name: collection.readOnly && (collection.category === "runtime" || collection.id.startsWith("base:dv-")) ? message(collection.category === "runtime" ? "library.collection.runtime" : `library.collection.${collection.id}`) : collection.name }) : message("library.collectionForEdit", { name: collection.readOnly && (collection.category === "runtime" || collection.id.startsWith("base:dv-")) ? message(collection.category === "runtime" ? "library.collection.runtime" : `library.collection.${collection.id}`) : collection.name }));
   };
 
   const handleAddValueToRight = (value: string) => {
@@ -423,7 +434,7 @@ function EnumeratorContent({
       await writeClipboardText(value);
       showCopyToast(value, clientX, clientY);
     } catch (err: any) {
-      setError(`复制失败：${String(err?.message || err)}`);
+      setError(message("library.copyFailed", { error: String(err?.message || err) }));
     }
   };
 
@@ -432,8 +443,8 @@ function EnumeratorContent({
   };
 
   const persistCollection = async (asCopy: boolean) => {
-    const name = editName.trim() || (editingCollection?.name || "新建集合");
-    const inputName = asCopy ? `${name} 副本` : name;
+    const name = editName.trim() || (editingCollection?.name || t("library.newCollection"));
+    const inputName = asCopy ? t("library.collectionCopyName", { name: name }) : name;
     setIsSaving(true);
     setError("");
     try {
@@ -446,11 +457,11 @@ function EnumeratorContent({
         description: editDescription,
         values: rightValues,
       });
-      setStatus(asCopy ? `已保存集合副本：${saved.name}` : `已保存集合：${saved.name}`);
+      setStatus(asCopy ? message("library.collectionCopySaved", { name: saved.name }) : message("library.collectionSaved", { name: saved.name }));
       setEditCollectionId(saved.id);
       await reloadCollections(saved.id);
     } catch (err: any) {
-      setError(`保存集合失败：${String(err)}`);
+      setError(message("library.collectionSaveFailed", { error: String(err) }));
     } finally {
       setIsSaving(false);
     }
@@ -472,8 +483,8 @@ function EnumeratorContent({
   return (
     <div className={contentClassName}>
       <div className="subwindow-title-bar">
-        <h3 className="subwindow-title">枚举器</h3>
-        {onClose ? <Button className="subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>×</Button> : null}
+        <h3 className="subwindow-title">{t("library.enumeratorTitle")}</h3>
+        {onClose ? <Button className="subwindow-close-button" type="button" aria-label={t("library.closeWindow")} onClick={onClose}>×</Button> : null}
       </div>
 
       <div className="subwindow-body enumerator-body">
@@ -481,28 +492,28 @@ function EnumeratorContent({
           <div className="enumerator-toolbar-row">
             <Input
               className="enumerator-search-input"
-              placeholder="搜索集合"
+              placeholder={t("library.searchCollections")}
               value={searchKeyword}
               onChange={(event) => setSearchKeyword(event.target.value)}
             />
             <Dropdown
               className="enumerator-filter-select"
               value={categoryFilter}
-              ariaLabel="分类筛选"
+              ariaLabel={t("library.categoryFilter")}
               onChange={(next) => setCategoryFilter(next as CategoryFilter)}
               options={CATEGORY_FILTER_OPTIONS}
             />
           </div>
 
           <div className="enumerator-panel-note">
-            {isLoadingCollections ? "正在加载集合..." : "左键放入左侧来源，右键放入右侧编辑。版本/创造模式/系统/自定义集合均从用户配置目录 enumerator/ 对应子目录读取。"}
+            {isLoadingCollections ? t("library.collectionsLoading") : t("library.enumeratorHint")}
           </div>
 
           <div className="enumerator-collection-table-wrap">
             <Table className="material-list-table enumerator-table">
               <TableHeader>
                 <TableRow>
-                  <TableHead>名称</TableHead>
+                  <TableHead>{t("library.name")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -520,12 +531,12 @@ function EnumeratorContent({
                       }}
                     >
                       <TableCell>
-                        <div className="enumerator-collection-name">{collection.name}</div>
+                        <div className="enumerator-collection-name">{collectionDisplayName(collection)}</div>
                         <div className="enumerator-collection-meta">
                           <span>{collectionSummary(collection)}</span>
-                          {isSource ? <span>左侧</span> : null}
-                          {isEditing ? <span>右侧</span> : null}
-                          {collection.missing ? <span className="enumerator-warning-text">缺失</span> : null}
+                          {isSource ? <span>{t("library.leftPane")}</span> : null}
+                          {isEditing ? <span>{t("library.rightPane")}</span> : null}
+                          {collection.missing ? <span className="enumerator-warning-text">{t("library.missing")}</span> : null}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -533,7 +544,7 @@ function EnumeratorContent({
                 })}
                 {!filteredCollections.length ? (
                   <TableRow>
-                    <TableCell className="enumerator-empty-cell">当前分类暂无集合</TableCell>
+                    <TableCell className="enumerator-empty-cell">{t("library.noCategoryCollections")}</TableCell>
                   </TableRow>
                 ) : null}
               </TableBody>
@@ -545,7 +556,7 @@ function EnumeratorContent({
           <div className="enumerator-editor-grid">
             <section className="enumerator-source-column">
               <div className="enumerator-input-row">
-                <label className="enumerator-input-label">来源集合</label>
+                <label className="enumerator-input-label">{t("library.sourceCollection")}</label>
                 <Input
                   className="enumerator-expression-input"
                   value={sourceExpression}
@@ -553,22 +564,21 @@ function EnumeratorContent({
                     setSourceCollectionId("");
                     setSourceExpression(event.target.value);
                   }}
-                  placeholder="例：A-(map_*)；或左键点击集合填入"
+                  placeholder={t("library.collectionExpressionHint")}
                 />
               </div>
 
               <label className="subwindow-check-row enumerator-subtract-toggle">
                 <Checkbox checked={subtractRight} onCheckedChange={(checked) => setSubtractRight(checked === true)} />
-                减去右侧
-              </label>
+                {t("library.subtractRight")}</label>
 
               <div className="enumerator-input-row enumerator-content-search-row">
-                <label className="enumerator-input-label">搜索内容</label>
+                <label className="enumerator-input-label">{t("library.searchContent")}</label>
                 <Input
                   className="enumerator-content-search-input"
                   value={leftSearchKeyword}
                   onChange={(event) => setLeftSearchKeyword(event.target.value)}
-                  placeholder="按名称或 ID 搜索左侧内容"
+                  placeholder={t("library.searchLeftHint")}
                 />
               </div>
 
@@ -576,14 +586,14 @@ function EnumeratorContent({
                 <Table className="material-list-table enumerator-table">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="material-list-icon-col">图标</TableHead>
-                      <TableHead>名称</TableHead>
+                      <TableHead className="material-list-icon-col">{t("library.icon")}</TableHead>
+                      <TableHead>{t("library.name")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {!filteredLeftRows.length ? (
                       <TableRow>
-                        <TableCell colSpan={2} className="enumerator-empty-cell">无来源数据</TableCell>
+                        <TableCell colSpan={2} className="enumerator-empty-cell">{t("library.noSourceData")}</TableCell>
                       </TableRow>
                     ) : (
                       <>
@@ -620,27 +630,27 @@ function EnumeratorContent({
 
             <section className="enumerator-edit-column">
               <div className="enumerator-input-row">
-                <label className="enumerator-input-label">编辑集合名称</label>
+                <label className="enumerator-input-label">{t("library.editCollectionName")}</label>
                 <Input
                   className="enumerator-name-input"
                   value={editName}
                   onChange={(event) => setEditName(event.target.value)}
-                  placeholder="右键集合载入右侧，或新建集合"
+                  placeholder={t("library.editCollectionHint")}
                 />
               </div>
 
               <div className="enumerator-actions-row">
-                <Button type="button" onClick={() => handleMoveSelected(-1)} disabled={!rightSelected.length}>上移</Button>
-                <Button type="button" onClick={() => handleMoveSelected(1)} disabled={!rightSelected.length}>下移</Button>
+                <Button type="button" onClick={() => handleMoveSelected(-1)} disabled={!rightSelected.length}>{t("library.moveUp")}</Button>
+                <Button type="button" onClick={() => handleMoveSelected(1)} disabled={!rightSelected.length}>{t("library.moveDown")}</Button>
               </div>
 
               <div className="enumerator-input-row enumerator-content-search-row">
-                <label className="enumerator-input-label">搜索内容</label>
+                <label className="enumerator-input-label">{t("library.searchContent")}</label>
                 <Input
                   className="enumerator-content-search-input"
                   value={rightSearchKeyword}
                   onChange={(event) => setRightSearchKeyword(event.target.value)}
-                  placeholder="按名称或 ID 搜索右侧内容"
+                  placeholder={t("library.searchRightHint")}
                 />
               </div>
 
@@ -648,14 +658,14 @@ function EnumeratorContent({
                 <Table className="material-list-table enumerator-table">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="material-list-icon-col">图标</TableHead>
-                      <TableHead>名称</TableHead>
+                      <TableHead className="material-list-icon-col">{t("library.icon")}</TableHead>
+                      <TableHead>{t("library.name")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {!filteredRightRows.length ? (
                       <TableRow>
-                        <TableCell colSpan={2} className="enumerator-empty-cell">当前右侧集合为空</TableCell>
+                        <TableCell colSpan={2} className="enumerator-empty-cell">{t("library.rightCollectionEmpty")}</TableCell>
                       </TableRow>
                     ) : (
                       <>
@@ -705,20 +715,20 @@ function EnumeratorContent({
 
       <div className="enumerator-footer-row">
         <div className="enumerator-footer-status">
-          <div>{error || status || runtimeStatus || (currentFile ? displayFilePath(currentFile) : "未关联当前投影文件")}</div>
+          <div>{localizeMessage(error || status || runtimeStatus || (currentFile ? displayFilePath(currentFile) : t("library.noCurrentSchematic")))}</div>
           <div className="enumerator-footer-meta">
             {editCollectionId
-              ? `正在编辑现有自定义集合，共 ${rightValues.length} 项。`
-              : `当前为右侧草稿，共 ${rightValues.length} 项。`}
+              ? t("library.editingCollectionCount", { count: rightValues.length })
+              : t("library.draftCollectionCount", { count: rightValues.length })}
             {leftSearchKeyword || rightSearchKeyword
-              ? ` 左侧搜索结果 ${filteredLeftRows.length} / ${leftRows.length}，右侧搜索结果 ${filteredRightRows.length} / ${rightRows.length}。`
+              ? t("library.collectionSearchCounts", { leftFiltered: filteredLeftRows.length, leftTotal: leftRows.length, rightFiltered: filteredRightRows.length, rightTotal: rightRows.length })
               : ""}
           </div>
         </div>
         <div className="enumerator-footer-actions">
-          <Button type="button" onClick={handleCreateCollection}>新增集合</Button>
-          <Button type="button" onClick={() => persistCollection(true)} disabled={isSaving || !rightValues.length}>保存副本</Button>
-          <Button type="button" onClick={() => persistCollection(false)} disabled={isSaving || !rightValues.length}>保存集合</Button>
+          <Button type="button" onClick={handleCreateCollection}>{t("library.addCollection")}</Button>
+          <Button type="button" onClick={() => persistCollection(true)} disabled={isSaving || !rightValues.length}>{t("library.saveCopy")}</Button>
+          <Button type="button" onClick={() => persistCollection(false)} disabled={isSaving || !rightValues.length}>{t("library.saveCollection")}</Button>
         </div>
       </div>
       {copyToast ? (
@@ -729,7 +739,7 @@ function EnumeratorContent({
           style={{ left: copyToast.x, top: copyToast.y }}
         >
           <div className="material-list-hover-popup-row material-list-hover-popup-item-row">
-            <span className="material-list-hover-popup-label">已复制：</span>
+            <span className="material-list-hover-popup-label">{t("library.copiedLabel")}</span>
             <span className="material-list-hover-popup-name">{copyToast.value}</span>
           </div>
         </div>

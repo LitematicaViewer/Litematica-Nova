@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../src/services/i18n";
+import { useI18n } from "../i18n";
 import React, { useState, useEffect } from "react";
 import { listenEvent } from "../../src/platform/events";
 import { getBlockIconDataUrl } from "../../src/business/facade";
@@ -8,6 +10,7 @@ import { getBlockIconDataUrl } from "../../src/business/facade";
 export function BlockIcon({ blockId, lookupMode = "default", slot = "material_list" }: {
   blockId: string; lookupMode?: "default" | "item_first" | "block_first"; slot?: "material_list" | "layering";
 }) {
+  useI18n();
   const [src, setSrc] = useState<string | null>(null);
 
   const [resourceRevision, setResourceRevision] = useState(0);
@@ -35,7 +38,7 @@ export function BlockIcon({ blockId, lookupMode = "default", slot = "material_li
   }
   
   return (
-    <div className="block-icon-fallback" role="img" aria-label="暂无物品图标" title={`暂无图标：${blockId}`}>
+    <div className="block-icon-fallback" role="img" aria-label={t("library.noItemIcon")} title={t("library.noNamedIcon", { id: blockId })}>
       ?
     </div>
   );

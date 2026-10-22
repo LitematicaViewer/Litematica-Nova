@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../src/services/i18n";
+import { useI18n } from "../i18n";
 import React, { useRef } from "react";
 import { X } from "lucide-react";
 import { Button } from "./ui/button";
@@ -16,6 +18,7 @@ export interface DialogProps {
 }
 
 export function Dialog({ title, subtitle, onClose, children, footer, width = "md", className = "", busy = false }: DialogProps) {
+  useI18n();
   // Page state opens these dialogs without a Radix Trigger. Preserve that opener;
   // Radix owns the focus trap, nested dialogs and keyboard/outside dismissal.
   const previousFocus = useRef(typeof document !== "undefined" ? document.activeElement : null);
@@ -34,7 +37,7 @@ export function Dialog({ title, subtitle, onClose, children, footer, width = "md
             <DialogTitle asChild><h3>{title}</h3></DialogTitle>
             {subtitle ? <DialogDescription>{subtitle}</DialogDescription> : null}
           </div>
-          <Button className="dialog-close-button" size="icon" aria-label="关闭对话框" onClick={onClose} disabled={busy}><X size={18} aria-hidden="true" /></Button>
+          <Button className="dialog-close-button" size="icon" aria-label={t("library.closeDialog")} onClick={onClose} disabled={busy}><X size={18} aria-hidden="true" /></Button>
         </header>
         <ScrollArea className="dialog-body">{children}</ScrollArea>
         {footer ? <footer className="dialog-footer">{footer}</footer> : null}

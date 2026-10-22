@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../src/services/i18n";
+import { useI18n } from "../i18n";
 import { Button } from "../components/ui/button";
 import { ScrollArea } from "../components/ui/scroll-area";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -39,6 +41,7 @@ import "../styles/enumerator.css";
  * Renders the Nova desktop shell and keeps page logic behind the UI boundary.
  */
 export function App() {
+  useI18n();
   const closeRecovery = useApplicationCloseRecovery();
   const [currentFile, setCurrentFile] = useState<string>(() => readUpdateDraft<{currentFile: string}>("shell")?.currentFile || "");
   const [theme, setThemeState] = useState(currentThemeId);
@@ -46,7 +49,7 @@ export function App() {
   const [colorMode, setColorModeState] = useState(currentColorMode);
   const colorModeRef = useRef(colorMode);
   const themeSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
-  const [themeSaveError, setThemeSaveError] = useState("");
+  const [themeSaveError, setThemeSaveError] = useState<UiMessage>("");
   const [route, setRoute] = useState(() => readUpdateDraft<{route: string}>("shell")?.route || "home");
   useUpdateDraft("shell", { currentFile, route });
   useEffect(() => { takeUpdateDraft("shell"); }, []);
@@ -103,7 +106,7 @@ export function App() {
       themeSaveQueue.current = themeSaveQueue.current
         .then(() => saveThemeConfig(next))
         .then(() => setThemeSaveError(""))
-        .catch((error) => setThemeSaveError(`主题已切换，但保存失败：${String(error)}`));
+        .catch((error) => setThemeSaveError(message("shell.themeSaveFailed", { error: String(error) })));
     };
     const acceptColorMode = (next: ReturnType<typeof currentColorMode>) => {
       if (colorModeRef.current === next) return;
@@ -112,7 +115,7 @@ export function App() {
       themeSaveQueue.current = themeSaveQueue.current
         .then(() => saveColorModeConfig(next))
         .then(() => setThemeSaveError(""))
-        .catch((error) => setThemeSaveError(`外观已切换，但保存失败：${String(error)}`));
+        .catch((error) => setThemeSaveError(message("shell.appearanceSaveFailed", { error: String(error) })));
     };
     const unsubscribe = subscribeToThemeChanges(acceptTheme, acceptColorMode);
     acceptTheme(currentThemeId());
@@ -159,19 +162,19 @@ export function App() {
   }, []);
 
   const topPages: Record<string, { name: string; icon: string; comp: React.FC<any> }> = {
-    home: { name: "主页", icon: "home", comp: HomePage },
-    library: { name: "投影库", icon: "gallery", comp: LibraryPage },
-    properties: { name: "属性", icon: "properties", comp: PropertiesPage },
-    statistics: { name: "统计", icon: "statistics", comp: StatisticsPage },
-    flake: { name: "分层", icon: "flake", comp: FlakePage },
-    render: { name: "渲染", icon: "render", comp: RenderPage },
-    replace: { name: "替换", icon: "replace", comp: ReplacePage },
-    generate: { name: "生成", icon: "generate", comp: GeneratePage },
+    home: { name: t("shell.home"), icon: "home", comp: HomePage },
+    library: { name: t("shell.library"), icon: "gallery", comp: LibraryPage },
+    properties: { name: t("shell.properties"), icon: "properties", comp: PropertiesPage },
+    statistics: { name: t("shell.statistics"), icon: "statistics", comp: StatisticsPage },
+    flake: { name: t("shell.layers"), icon: "flake", comp: FlakePage },
+    render: { name: t("shell.render"), icon: "render", comp: RenderPage },
+    replace: { name: t("shell.replace"), icon: "replace", comp: ReplacePage },
+    generate: { name: t("shell.generate"), icon: "generate", comp: GeneratePage },
   };
 
   const bottomPages: Record<string, { name: string; icon: string; comp: React.FC<any> }> = {
-    ...(debugMode ? { ui_test: { name: "UI 测试", icon: "ui_debug", comp: UiTestPage } } : {}),
-    settings: { name: "选项", icon: "options", comp: SettingsPage },
+    ...(debugMode ? { ui_test: { name: t("shell.uiTest"), icon: "ui_debug", comp: UiTestPage } } : {}),
+    settings: { name: t("shell.settings"), icon: "options", comp: SettingsPage },
   };
 
   const allPages = { ...topPages, ...bottomPages };
@@ -184,13 +187,13 @@ export function App() {
           className="nav-expand"
           type="button"
           onClick={() => setExpanded(!expanded)}
-          title={expanded ? "收起侧栏" : "展开侧栏"}
+          title={expanded ? t("shell.collapseSidebar") : t("shell.expandSidebar")}
         >
           <NavIcon name="hamburger" theme={theme} />
           {expanded ? <strong>Litematica-Nova</strong> : null}
         </Button>
 
-        <ScrollArea className="nav-scroll-area"><nav className="nav-list" aria-label="主导航">
+        <ScrollArea className="nav-scroll-area"><nav className="nav-list" aria-label={t("shell.navigation")}>
           {Object.entries(topPages).map(([key, value]) => {
             const active = route === key;
             return (
@@ -210,10 +213,10 @@ export function App() {
           })}
         </nav></ScrollArea>
 
-        <nav className="nav-list nav-list-bottom" aria-label="选项">
-          {debugMode && <Button variant="ghost" className="sidebar-item nav-item" type="button" aria-label="枚举器" title={!expanded ? "枚举器" : ""}
+        <nav className="nav-list nav-list-bottom" aria-label={t("shell.settings")}>
+          {debugMode && <Button variant="ghost" className="sidebar-item nav-item" type="button" aria-label={t("shell.enumerator")} title={!expanded ? t("shell.enumerator") : ""}
             onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true)).catch((error) => setEnumeratorError(String(error)))}>
-            <NavIcon name="enumerator" theme={theme} />{expanded && <span className="nav-label">枚举器</span>}
+            <NavIcon name="enumerator" theme={theme} />{expanded && <span className="nav-label">{t("shell.enumerator")}</span>}
           </Button>}
           <UpdateDialog theme={theme} />
           {Object.entries(bottomPages).map(([key, value]) => {
@@ -236,9 +239,9 @@ export function App() {
         </nav>
       </aside>
       <main className="content">
-        {closeRecovery.error && <div role="alert"><p>{closeRecovery.error}</p><Button onClick={() => void closeRecovery.retry()}>重试关闭</Button></div>}
-        {themeSaveError && <p role="alert">{themeSaveError}</p>}
-        {enumeratorError && <p role="alert">枚举器：{displayPathText(enumeratorError)}</p>}
+        {closeRecovery.error && <div role="alert"><p>{localizeMessage(closeRecovery.error)}</p><Button onClick={() => void closeRecovery.retry()}>{t("shell.retryClose")}</Button></div>}
+        {themeSaveError && <p role="alert">{localizeMessage(themeSaveError)}</p>}
+        {enumeratorError && <p role="alert">{t("shell.enumeratorContext")}{displayPathText(localizeMessage(enumeratorError))}</p>}
         <Page presentationBlocked={showEnumerator} currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} debugMode={debugMode} setDebugMode={setDebugMode} buildVersion={buildVersion} />
       </main>
       {showEnumerator && <EnumeratorDialog theme={theme} currentFile={currentFile} runtimeCollection={enumeratorRuntime} onClose={() => setShowEnumerator(false)} />}

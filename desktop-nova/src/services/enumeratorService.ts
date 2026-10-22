@@ -1,6 +1,6 @@
 import { getAppDataFilePath, listDirectoryEntries, readAppDataFile, writeAppDataFile } from "../platform/files";
 import { listGameResourceRegistry, readActiveGameDataResource, readActiveLanguageResource } from "./gameResources";
-import { translateBlockId } from "./i18n";
+import { translateBlockId, t } from "./i18n";
 
 export type EnumeratorCollectionCategory = "base" | "version" | "system_enum" | "creative" | "map" | "custom" | "runtime";
 export type EnumeratorValueType = "block" | "item" | "entity" | "enchantment" | "mixed" | "unknown";
@@ -296,8 +296,8 @@ async function loadBaseCollections(): Promise<EnumeratorCollection[]> {
       version: values.length ? (snapshot?.active_enum_catalog.label || "builtin") : "missing",
       values,
       description: values.length
-        ? (sourcePath ? "来自当前激活的枚举全集资源。" : "由当前激活的游戏数据/语言资源回填。")
-        : "基础全集文件缺失，且无法从当前资源回填。",
+        ? (sourcePath ? t("native.enumerator.activeCatalog") : t("native.enumerator.activeFallback"))
+        : t("native.enumerator.noFallback"),
       updatedAt: nowIso(),
       readOnly: true,
       missing: values.length === 0,
@@ -333,7 +333,7 @@ function normalizeFolderCollection(
       valueType: inferValueType(values),
       version: category === "version" ? fileBaseName(fileName) : category,
       values,
-      description: "从枚举器目录中的 JSON 字符串数组读取。",
+      description: t("native.enumerator.jsonArray"),
       updatedAt: nowIso(),
       readOnly: category !== "custom",
       sourcePath,
@@ -436,7 +436,7 @@ export async function saveEnumeratorCollection(input: Partial<EnumeratorCollecti
   const baseId = String(input.id || "").trim();
   const existing = customCollections.find((collection) => collection.id === baseId) || null;
   const nextValues = uniq(input.values);
-  const name = String(input.name || "").trim() || "未命名集合";
+  const name = String(input.name || "").trim() || t("native.enumerator.unnamed");
   const relativePath = targetCustomRelativePath(existing, name);
   const next: EnumeratorCollection = {
     id: existing?.id || `custom:${slugify(name)}:${Date.now()}`,
@@ -472,7 +472,7 @@ export function createRuntimeProjectionCollection(filePath: string, materials: A
     valueType: "mixed",
     version: "runtime",
     values: uniq(materials.map((material) => material.id)),
-    description: `来自当前统计页：${fileName}`,
+    description: t("native.enumerator.currentStats", { name: fileName }),
     updatedAt: nowIso(),
     readOnly: true,
   };
@@ -494,10 +494,10 @@ function validateWildcardToken(token: string): void {
   const lastWildcardIndex = lookup.lastIndexOf("*");
   if (firstWildcardIndex < 0) return;
   if (firstWildcardIndex !== 0 && firstWildcardIndex !== lookup.length - 1) {
-    throw new Error(`集合名通配符只能位于开头或末尾：${token}`);
+    throw new Error(t("native.enumerator.wildcardEdge", { token }));
   }
   if (lastWildcardIndex !== firstWildcardIndex && lastWildcardIndex !== lookup.length - 1) {
-    throw new Error(`集合名通配符只能位于开头或末尾：${token}`);
+    throw new Error(t("native.enumerator.wildcardEdge", { token }));
   }
 }
 
@@ -542,7 +542,7 @@ function validateWildcardParentheses(tokens: string[]): void {
   tokens.forEach((token, index) => {
     if (!isWildcardCollectionToken(token)) return;
     if (tokens[index - 1] !== "(" || tokens[index + 1] !== ")") {
-      throw new Error(`通配符集合必须单独放在括号中，例如 A-(map_*)：${token}`);
+      throw new Error(t("native.enumerator.wildcardGroup", { token }));
     }
   });
 }
@@ -565,7 +565,7 @@ function toRpn(tokens: string[]): string[] {
       while (operators.length && operators[operators.length - 1] !== "(") {
         output.push(operators.pop()!);
       }
-      if (!operators.length) throw new Error("括号不匹配。");
+      if (!operators.length) throw new Error(t("native.enumerator.parentheses"));
       operators.pop();
       continue;
     }
@@ -580,7 +580,7 @@ function toRpn(tokens: string[]): string[] {
   }
   while (operators.length) {
     const operator = operators.pop()!;
-    if (operator === "(") throw new Error("括号不匹配。");
+    if (operator === "(") throw new Error(t("native.enumerator.parentheses"));
     output.push(operator);
   }
   return output;
@@ -614,24 +614,24 @@ export function evaluateEnumeratorExpression(expression: string, collections: En
       if (token === "∪" || token === "|" || token === "∩" || token === "&" || token === "-") {
         const right = stack.pop();
         const left = stack.pop();
-        if (!left || !right) throw new Error("表达式不完整。");
+        if (!left || !right) throw new Error(t("native.enumerator.incomplete"));
         stack.push(applyOperator(left, right, token));
         continue;
       }
       if (isWildcardCollectionToken(token)) {
         const matchedCollections = resolveWildcardCollections(token, collections);
-        if (!matchedCollections.length) throw new Error(`找不到匹配的集合：${token}`);
+        if (!matchedCollections.length) throw new Error(t("native.enumerator.noMatch", { token }));
         dependencies.push(...matchedCollections.map((collection) => collection.id));
         stack.push(new Set(matchedCollections.flatMap((collection) => collection.values)));
         continue;
       }
       const collection = resolveCollectionToken(token, collections);
-      if (!collection) throw new Error(`找不到集合：${token}`);
+      if (!collection) throw new Error(t("native.enumerator.notFound", { token }));
       dependencies.push(collection.id);
       stack.push(new Set(collection.values));
     }
 
-    if (stack.length !== 1) throw new Error("表达式不完整。");
+    if (stack.length !== 1) throw new Error(t("native.enumerator.incomplete"));
     return {
       values: [...stack[0]],
       dependencies: uniq(dependencies),
@@ -641,7 +641,7 @@ export function evaluateEnumeratorExpression(expression: string, collections: En
     return {
       values: [],
       dependencies: [],
-      error: String(error?.message || error || "表达式解析失败"),
+      error: String(error?.message || error || t("native.enumerator.parseFailure")),
     };
   }
 }

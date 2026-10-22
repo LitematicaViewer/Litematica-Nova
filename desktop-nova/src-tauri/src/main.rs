@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod application;
+mod i18n;
 mod headless_e2e;
 mod platform;
 #[cfg(target_os="macos")]
@@ -261,6 +262,10 @@ struct CopyFileToDirectoryOutput {
 
 #[derive(Deserialize, Serialize, Clone)]
 struct UserConfig {
+    #[serde(default = "default_ui_language")]
+    ui_language: String,
+    #[serde(default = "default_ui_locale")]
+    ui_locale: String,
     theme: String,
     #[serde(default = "default_color_mode")]
     color_mode: String,
@@ -286,6 +291,8 @@ struct UserConfig {
 
 #[derive(Deserialize)]
 struct UserConfigInput {
+    ui_language: Option<String>,
+    ui_locale: Option<String>,
     theme: Option<String>,
     color_mode: Option<String>,
     render_display_mode: Option<String>,
@@ -785,6 +792,8 @@ fn ensure_user_config_layout(dir: &Path) -> Result<(), String> {
 
 fn default_user_config() -> UserConfig {
     UserConfig {
+        ui_language: default_ui_language(),
+        ui_locale: default_ui_locale(),
         theme: "shadcn".to_string(),
         color_mode: default_color_mode(),
         render_display_mode: "full".to_string(),
@@ -798,6 +807,15 @@ fn default_user_config() -> UserConfig {
         viewer_controls: ViewerControlConfig::default(),
         graphics_backend: Default::default(),
     }
+}
+
+fn default_ui_language() -> String { "zh-CN".into() }
+fn default_ui_locale() -> String { "zh-CN".into() }
+fn normalize_ui_language(value: &str) -> String {
+    match value { "en-US" => "en-US", "system" => "system", _ => "zh-CN" }.into()
+}
+fn normalize_ui_locale(value: &str) -> String {
+    (if value == "en-US" { "en-US" } else { "zh-CN" }).into()
 }
 
 fn default_true() -> bool {
@@ -988,6 +1006,9 @@ fn read_user_config_data(dir: &Path) -> UserConfig {
         .ok()
         .and_then(|text| serde_json::from_str::<UserConfig>(&text).ok())
         .unwrap_or_else(default_user_config);
+    config.ui_language = normalize_ui_language(&config.ui_language);
+    config.ui_locale = normalize_ui_locale(&config.ui_locale);
+    if config.ui_language != "system" { config.ui_locale = config.ui_language.clone(); }
     config.theme = normalize_theme(&config.theme);
     config.color_mode = normalize_color_mode(&config.color_mode);
     config.render_display_mode = normalize_mode_string(&config.render_display_mode);
@@ -1470,6 +1491,9 @@ async fn save_user_config(app: AppHandle, input: UserConfigInput, operations: ta
                 if let Some(window) = app.get_webview_window(label) { let _ = window.close(); }
             }
         }
+        i18n::set_locale(&info.config.ui_locale);
+        i18n::update_window_titles(&app);
+        let _ = app.emit("user-config-changed", &info);
         let _ = app.emit("nova-debug-mode-changed", serde_json::json!({"enabled": info.config.debug_mode}));
         info
     })
@@ -1479,6 +1503,9 @@ fn save_user_config_inner(input: UserConfigInput) -> Result<UserConfigInfo, Stri
     let _serial = CONFIG_WRITE_LOCK.lock().map_err(|_| "配置保存锁异常")?;
     let dir = current_user_config_dir()?;
     let mut config = read_user_config_data(&dir);
+    if let Some(language) = input.ui_language { config.ui_language = normalize_ui_language(&language); }
+    if let Some(locale) = input.ui_locale { config.ui_locale = normalize_ui_locale(&locale); }
+    if config.ui_language != "system" { config.ui_locale = config.ui_language.clone(); }
     if let Some(backend) = input.graphics_backend { config.graphics_backend = backend; }
     if let Some(theme) = input.theme {
         config.theme = normalize_theme(&theme);
@@ -1536,6 +1563,7 @@ fn choose_user_config_dir(app: AppHandle) -> Result<Option<String>, String> {
     let Some(path) = app
         .dialog()
         .file()
+        .set_title(i18n::text("dialog.configDirectory"))
         .blocking_pick_folder()
         .and_then(|p| p.into_path().ok())
     else {
@@ -2657,10 +2685,12 @@ async fn open_material_list_window(
 ) -> Result<(), String> {
     const LABEL: &str = "material-list";
     let mode = if view_mode.as_deref() == Some("export") { "export" } else { "details" };
+    i18n::set_material_export(mode == "export");
 
     if let Some(window) = app.get_webview_window(LABEL) {
         window.show().map_err(|err| err.to_string())?;
         window.set_focus().map_err(|err| err.to_string())?;
+        let _ = window.set_title(i18n::text(if mode == "export" { "window.materialExport" } else { "window.materialList" }));
         app.emit_to(LABEL, "material-list-open-file", active_file)
             .map_err(|err| err.to_string())?;
         app.emit_to(LABEL, "material-list-open-mode", mode).map_err(|err| err.to_string())?;
@@ -2676,7 +2706,7 @@ async fn open_material_list_window(
     };
 
     tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App(url.into()))
-        .title(if mode == "export" { "导出材料列表" } else { "材料列表" })
+        .title(i18n::text(if mode == "export" { "window.materialExport" } else { "window.materialList" }))
         .inner_size(720.0, 520.0)
         .min_inner_size(560.0, 420.0)
         .build()
@@ -2698,7 +2728,7 @@ async fn open_enumerator_window(app: AppHandle, active_file: Option<String>) -> 
     let url = active_file.filter(|file| !file.trim().is_empty())
         .map(|file| format!("enumerator.html?file={}", query_encode(&file))).unwrap_or_else(|| "enumerator.html".into());
     tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App(url.into()))
-        .title("枚举器").inner_size(840.0, 580.0).min_inner_size(600.0, 400.0).build().map_err(|error| error.to_string())?;
+        .title(i18n::text("window.enumerator")).inner_size(840.0, 580.0).min_inner_size(600.0, 400.0).build().map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -2711,7 +2741,7 @@ async fn open_asset_manager_window(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
     tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App("asset_manager.html".into()))
-        .title("游戏资源管理").inner_size(980.0, 680.0).min_inner_size(720.0, 480.0).build().map_err(|error| error.to_string())?;
+        .title(i18n::text("window.assets")).inner_size(980.0, 680.0).min_inner_size(720.0, 480.0).build().map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -2730,7 +2760,7 @@ async fn open_reden_library_window(app: AppHandle) -> Result<(), String> {
         LABEL,
         tauri::WebviewUrl::App("reden_library.html".into()),
     )
-    .title("Online Projection Library")
+    .title(i18n::text("window.onlineLibrary"))
     .inner_size(1080.0, 760.0)
     .min_inner_size(760.0, 560.0)
     .build()
@@ -2754,7 +2784,7 @@ async fn open_local_library_folders_window(app: AppHandle) -> Result<(), String>
         LABEL,
         tauri::WebviewUrl::App("local_library_folders.html".into()),
     )
-    .title("Local Library Folders")
+    .title(i18n::text("window.localFolders"))
     .inner_size(920.0, 680.0)
     .min_inner_size(700.0, 520.0)
     .build()
@@ -2779,7 +2809,7 @@ async fn open_ui_demo_window(app: AppHandle) -> Result<(), String> {
         LABEL,
         tauri::WebviewUrl::App("demo_window.html".into()),
     )
-    .title("UI Demo Window")
+    .title(i18n::text("window.uiDemo"))
     .inner_size(720.0, 520.0)
     .min_inner_size(560.0, 420.0)
     .build()
@@ -3650,6 +3680,8 @@ fn main() {
             let _ = APP_RESOURCE_ROOT.set(resource_root);
             let _ = APP_LOCAL_DATA_ROOT.set(app_local_data_root.clone());
             std::env::set_var("NOVA_USER_DATA_ROOT", &app_local_data_root);
+            let ui_config = read_user_config_data(&current_user_config_dir()?);
+            i18n::set_locale(&ui_config.ui_locale);
             application::diagnostics::init(&app_local_data_root, env!("CARGO_PKG_VERSION"),
                 option_env!("LBA_BUILD_GIT_SHA").unwrap_or("unknown"))?;
             app.manage(UpdateHost::new(app.package_info().version.to_string(), app_local_data_root.clone()));
@@ -3736,9 +3768,9 @@ fn main() {
                             tauri::async_runtime::spawn(async move {
                                 tokio::time::sleep(CLOSE_DRAFT_ACK_WARNING_AFTER).await;
                                 if let Some(elapsed) = app.state::<ApplicationCloseGate>().pending_elapsed(request.request_id) {
-                                    let message = "正在保留草稿并关闭；可再次点击关闭重试，当前草稿不会丢失。";
+                                    let message = i18n::text("close.savingDrafts");
                                     let _ = app.emit_to("main", "nova-close-delayed", serde_json::json!({ "requestId": request.request_id, "message": message }));
-                                    if let Some(window) = app.get_webview_window("main") { let _ = window.set_title("Litematica-Nova — 正在保留草稿并关闭"); }
+                                    if let Some(window) = app.get_webview_window("main") { let _ = window.set_title(i18n::text("window.closing")); }
                                     eprintln!("[NOVA_LIFECYCLE] stage=close_draft_ack_delayed request_id={} elapsed_ms={} request_preserved=true", request.request_id, elapsed.as_millis());
                                 }
                             });
@@ -3779,11 +3811,11 @@ fn main() {
                         assets::resume_after_cancelled_shutdown();
                         SHUTDOWN_STARTED.store(false, Ordering::Release);
                         if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.set_title("Litematica-Nova — 保存仍在进行，请完成后再次关闭");
+                            let _ = window.set_title(i18n::text("window.saving"));
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
-                        let _ = app.emit_to("main", "nova-close-cancelled", serde_json::json!({ "message": "保存仍在进行，请完成后再次关闭。" }));
+                        let _ = app.emit_to("main", "nova-close-cancelled", serde_json::json!({ "message": i18n::text("close.stillSaving") }));
                         eprintln!("[NOVA_LIFECYCLE] stage=close_deferred_save request_id={request_id} elapsed_ms={}", started.elapsed().as_millis());
                         return;
                     }

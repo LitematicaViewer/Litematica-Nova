@@ -1,3 +1,4 @@
+import { t } from "../services/i18n";
 import { openDialog, saveDialog } from "../platform/dialogs";
 import { openPath, openExternalUrl as openUrl } from "../platform/nativeViewer";
 import {
@@ -57,9 +58,9 @@ export async function selectJsonSavePath(defaultPath: string): Promise<string | 
 
 export async function exportDiagnosticLogs(): Promise<LogExportResult | null> {
   const selected = await saveDialog({
-    title: "导出日志 ZIP…",
+    title: t("editor.logs.export"),
     defaultPath: `Litematica-Nova-日志-${new Date().toISOString().slice(0, 10)}.zip`,
-    filters: [{ name: "日志 ZIP", extensions: ["zip"] }],
+    filters: [{ name: t("editor.logs.zipFilter"), extensions: ["zip"] }],
   });
   if (!selected) return null;
   return exportSessionLogs(/\.zip$/i.test(selected) ? selected : `${selected}.zip`);
@@ -97,7 +98,7 @@ export async function saveProjectionMetadataPatch({ currentFile, patch, outputPa
 }
 
 export async function selectPreviewImageFile(): Promise<string | null> {
-  const selected = await openDialog({ filters: [{ name: "预览图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }] });
+  const selected = await openDialog({ filters: [{ name: t("editor.preview.filter"), extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }] });
   return typeof selected === "string" ? selected : null;
 }
 

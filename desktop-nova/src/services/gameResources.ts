@@ -1,3 +1,4 @@
+import { t, localizeMessage } from "./i18n";
 import { emitEvent } from "../platform/events";
 import {
   copyFileToDirectory,
@@ -127,7 +128,7 @@ const LANGUAGE_ALLOWED_PREFIXES = [
 const BUILTIN_LANGUAGE: GameResourceEntry = {
   id: "builtin:language:zh_cn",
   kind: "language",
-  label: "内建 zh_cn",
+  get label() { return t("native.resources.builtinZh"); },
   source: "builtin",
   language: "zh_cn",
   file_relpath: INITIAL_LANGUAGE_RELPATH,
@@ -138,7 +139,7 @@ const BUILTIN_LANGUAGE: GameResourceEntry = {
 const BUILTIN_BLOCK_ICON: GameResourceEntry = {
   id: "builtin:block_icon:nova",
   kind: "block_icon",
-  label: "内建 Nova 方块图标",
+  get label() { return t("native.resources.builtinBlocks"); },
   source: "builtin",
   root_relpath: "minecraft-assets/block_2d/initial",
   block_icon_variant: "2d",
@@ -150,7 +151,7 @@ const BUILTIN_BLOCK_ICON: GameResourceEntry = {
 const BUILTIN_ITEM_ICON: GameResourceEntry = {
   id: "builtin:item_icon:nova",
   kind: "item_icon",
-  label: "内建 Nova 物品图标",
+  get label() { return t("native.resources.builtinItems"); },
   source: "builtin",
   root_relpath: "minecraft-assets/item/initial",
   active_layering: true,
@@ -160,7 +161,7 @@ const BUILTIN_ITEM_ICON: GameResourceEntry = {
 const BUILTIN_GAME_DATA: GameResourceEntry = {
   id: "builtin:game_data:26.1",
   kind: "game_data",
-  label: "内建 BlockState 26.1",
+  get label() { return t("native.resources.builtinStates"); },
   source: "builtin",
   version: "26.1",
   data_relpath: "data/minecraft_blockstates/26.1.json",
@@ -172,7 +173,7 @@ const BUILTIN_GAME_DATA: GameResourceEntry = {
 const BUILTIN_ENUM_CATALOG: GameResourceEntry = {
   id: "builtin:enum_catalog:base",
   kind: "enum_catalog",
-  label: "内建枚举全集",
+  get label() { return t("native.resources.builtinEnums"); },
   source: "builtin",
   root_relpath: "enumerator/base/builtin",
   active: true,
@@ -447,6 +448,28 @@ export async function readFallbackLanguageResource(): Promise<string> {
   return readUserConfigFile(INITIAL_LANGUAGE_RELPATH);
 }
 
+const bundledLanguages = new Map<string, Promise<string>>();
+/** Select only matching installed translations; never download on a UI switch. */
+export async function readLanguageResource(language: "zh_cn" | "en_us", builtinOnly = false): Promise<string> {
+  const bundled = () => {
+    let pending = bundledLanguages.get(language);
+    if (!pending) {
+      pending = readWorkspaceFile(`pack-in/lang/${language}.json`);
+      bundledLanguages.set(language, pending);
+      void pending.catch(() => bundledLanguages.delete(language));
+    }
+    return pending;
+  };
+  if (builtinOnly) return bundled();
+  const snapshot = await listGameResourceRegistry();
+  const matches = (entry: GameResourceEntry) => !entry.builtin && entry.language?.toLowerCase().replace("-", "_") === language;
+  const selected = matches(snapshot.active_language) ? snapshot.active_language : snapshot.entries.language.find(matches);
+  if (!selected) return bundled();
+  const fallback = JSON.parse(await bundled());
+  const custom = JSON.parse(await readEntryFile(selected, selected.file_relpath).catch(() => "{}"));
+  return JSON.stringify({ ...fallback, ...custom });
+}
+
 export async function ensureBuiltinBlockIconsExtracted(force = false): Promise<{ target_dir: string; root_relpath: string; extracted: number }> {
   return ensureBuiltinBlockIconsExtractedNative(force);
 }
@@ -483,7 +506,7 @@ export async function listRemoteMinecraftLanguageBranches(source: RemoteLanguage
   }
   const output = Array.from(branches).sort(compareBranchesDesc);
   if (output.length === 0) {
-    throw new Error("无法获取 GitHub 语言版本分支列表。");
+    throw new Error(t("native.resources.noBranches"));
   }
   return output;
 }
@@ -520,7 +543,7 @@ export async function listRemoteMinecraftLanguages(branch: string, source: Remot
   } catch {
     // handled below
   }
-  throw new Error(`无法获取 ${cleanBranch} 的语言列表。`);
+  throw new Error(t("native.resources.noLanguages", { branch: cleanBranch }));
 }
 
 export async function downloadRemoteMinecraftLanguage(branch: string, language: string, source: RemoteLanguageSource = GITHUB_LANGUAGE_SOURCE): Promise<GameResourceSnapshot> {
@@ -611,7 +634,7 @@ export async function activateGameResource(kind: GameResourceKind, id: string, s
   const index = await readIndex(kind);
   const targetEntry = index.entries.find((entry) => entry.id === id);
   if (kind === "block_icon" && slot === "layering" && targetEntry && !supportsBlockIconLayering(targetEntry)) {
-    throw new Error("3D 方块图标不能用于分层槽。请改用 2D 方块图标资源。");
+    throw new Error(t("native.resources.layering3D"));
   }
   const next = index.entries.map((entry) => {
     if (kind === "language" || kind === "game_data" || kind === "enum_catalog") {
@@ -658,7 +681,7 @@ export async function importLanguageResource(sourcePath: string, language?: stri
   const entry: GameResourceEntry = {
     id: `imported:language:${lang}:${nowId()}`,
     kind: "language",
-    label: `导入语言 ${lang}`,
+    label: t("native.resources.importLanguage", { lang }),
     source: "imported",
     language: lang,
     file_relpath: `${folder}/${baseName(copied.target_path)}`,
@@ -677,7 +700,7 @@ export async function registerExternalIconDirectory(
   slot: BlockIconSlot,
   blockIconVariant?: BlockIconVariant,
 ): Promise<GameResourceSnapshot> {
-  const label = `${kind === "block_icon" ? "外部方块图标" : "外部物品图标"} ${baseName(rootPath)}`;
+  const label = t(kind === "block_icon" ? "native.resources.externalBlocks" : "native.resources.externalItems", { name: baseName(rootPath) });
   const entry: GameResourceEntry = {
     id: `external:${kind}:${normalizeResourceIdPart(baseName(rootPath))}:${nowId()}`,
     kind,
@@ -701,7 +724,7 @@ export async function downloadVaultBlockIcons(): Promise<VaultBlockIconInstallRe
   const entry: GameResourceEntry = {
     id: "vault:block_icon:ccvaults",
     kind: "block_icon",
-    label: "CCVaults 方块图标",
+    label: t("native.resources.vaultBlocks"),
     source: "vault",
     root_relpath: result.root_relpath || "minecraft-assets/block_icon/vault",
     block_icon_variant: "3d",
@@ -728,7 +751,7 @@ export async function downloadWikiBlockIcons(slot: BlockIconSlot, source: WikiBl
   const fallbackRoot = slot === "layering"
     ? (source === "wiki_zh" ? "minecraft-assets/block_2d/wiki_zh" : "minecraft-assets/block_2d/wiki")
     : (source === "wiki_zh" ? "minecraft-assets/block_icon/wiki_zh" : "minecraft-assets/block_icon/wiki");
-  const label = source === "wiki_zh" ? "中文 Minecraft 维基百科" : "Minecraft Wiki";
+  const label = source === "wiki_zh" ? t("native.resources.wikiChinese") : "Minecraft Wiki";
   const entry: GameResourceEntry = {
     id: `${source}:block_icon:minecraft_wiki:${variant}`,
     kind: "block_icon",
@@ -758,7 +781,7 @@ export async function downloadVaultItemIcons(): Promise<VaultItemIconInstallResu
   const entry: GameResourceEntry = {
     id: "vault:item_icon:ccvaults",
     kind: "item_icon",
-    label: "CCVaults 物品图标",
+    label: t("native.resources.vaultItems"),
     source: "vault",
     root_relpath: result.root_relpath || "minecraft-assets/item/vault",
     active_layering: true,
@@ -807,9 +830,9 @@ export async function downloadWikiEnumCatalog(): Promise<WikiEnumCatalogInstallR
 export async function importGameDataResource(dataPath: string, i18nPath?: string, version?: string): Promise<GameResourceSnapshot> {
   const dataName = baseName(dataPath);
   const parsed = JSON.parse(await readWorkspaceFile(dataPath)) as { version_id?: string; blocks?: Record<string, unknown> };
-  if (!parsed.blocks || !Object.keys(parsed.blocks).length) throw new Error("导入游戏数据缺少 blocks。");
+  if (!parsed.blocks || !Object.keys(parsed.blocks).length) throw new Error(t("native.resources.missingBlocks"));
   const dataVersion = String(version || parsed.version_id || stripExtension(dataName).replace(/\.zh_cn$/i, "")).trim();
-  if (!dataVersion) throw new Error("导入游戏数据缺少明确版本。");
+  if (!dataVersion) throw new Error(t("native.resources.missingVersion"));
   const folder = `minecraft-assets/game-data/imported/${normalizeResourceIdPart(dataVersion)}-${nowId()}`;
   const targetDir = await appDataDirFor(folder);
   const copiedData = await copyFileToDirectory(dataPath, targetDir, dataName, true);
@@ -821,7 +844,7 @@ export async function importGameDataResource(dataPath: string, i18nPath?: string
   const entry: GameResourceEntry = {
     id: `imported:game_data:${dataVersion}:${nowId()}`,
     kind: "game_data",
-    label: `导入 BlockState ${dataVersion}`,
+    label: t("native.resources.importStates", { version: dataVersion }),
     source: "imported",
     version: dataVersion,
     data_relpath: `${folder}/${baseName(copiedData.target_path)}`,
@@ -940,28 +963,28 @@ export async function checkGameResourceHealth(): Promise<GameResourceHealthRow[]
   try {
     JSON.parse(await readActiveLanguageResource());
     rows.push({
-      label: `语言：${snapshot.active_language.label}`,
+      label: t("native.resources.healthLanguage", { name: localizeMessage(snapshot.active_language.label) }),
       ok: true,
       detail: snapshot.active_language.file_relpath || snapshot.active_language.root_path || "",
     });
   } catch (error) {
-    rows.push({ label: `语言：${snapshot.active_language.label}`, ok: false, detail: String(error) });
+    rows.push({ label: t("native.resources.healthLanguage", { name: localizeMessage(snapshot.active_language.label) }), ok: false, detail: localizeMessage(error) });
   }
   try {
     const active = await readActiveGameDataResource();
     JSON.parse(active.dbText);
     JSON.parse(active.i18nText);
-    rows.push({ label: `BlockState：${snapshot.active_game_data.label}`, ok: true, detail: active.entry.data_relpath || "" });
+    rows.push({ label: t("native.resources.healthStates", { name: localizeMessage(snapshot.active_game_data.label) }), ok: true, detail: active.entry.data_relpath || "" });
   } catch (error) {
-    rows.push({ label: `BlockState：${snapshot.active_game_data.label}`, ok: false, detail: String(error) });
+    rows.push({ label: t("native.resources.healthStates", { name: localizeMessage(snapshot.active_game_data.label) }), ok: false, detail: localizeMessage(error) });
   }
   const materialRoots = await getActiveIconSearchRoots("material_list");
   for (const root of materialRoots.slice(0, 2)) {
     try {
       const info = await pathInfoForRoot(root);
-      rows.push({ label: `材料列表方块图标：${root.label}`, ok: info.exists && info.is_dir, detail: info.normalized });
+      rows.push({ label: t("native.resources.healthBlocks", { name: localizeMessage(root.label) }), ok: info.exists && info.is_dir, detail: info.normalized });
     } catch (error) {
-      rows.push({ label: `材料列表方块图标：${root.label}`, ok: false, detail: String(error) });
+      rows.push({ label: t("native.resources.healthBlocks", { name: localizeMessage(root.label) }), ok: false, detail: localizeMessage(error) });
     }
   }
   const itemEntry = snapshot.active_layering_item_icons;
@@ -971,17 +994,17 @@ export async function checkGameResourceHealth(): Promise<GameResourceHealthRow[]
   try {
     if (itemEntry.builtin) await ensureBuiltinItemIconsExtracted(false);
     const info = await pathInfoForRoot(itemRoot);
-    rows.push({ label: `物品图标：${itemRoot.label}`, ok: info.exists && info.is_dir, detail: info.normalized });
+    rows.push({ label: t("native.resources.healthItems", { name: localizeMessage(itemRoot.label) }), ok: info.exists && info.is_dir, detail: info.normalized });
   } catch (error) {
-    rows.push({ label: `物品图标：${itemRoot.label}`, ok: false, detail: String(error) });
+    rows.push({ label: t("native.resources.healthItems", { name: localizeMessage(itemRoot.label) }), ok: false, detail: localizeMessage(error) });
   }
   const layeringRoots = await getActiveIconSearchRoots("layering");
   for (const root of layeringRoots.slice(0, 2)) {
     try {
       const info = await pathInfoForRoot(root);
-      rows.push({ label: `分层图标：${root.label}`, ok: info.exists && info.is_dir, detail: info.normalized });
+      rows.push({ label: t("native.resources.healthLayers", { name: localizeMessage(root.label) }), ok: info.exists && info.is_dir, detail: info.normalized });
     } catch (error) {
-      rows.push({ label: `分层图标：${root.label}`, ok: false, detail: String(error) });
+      rows.push({ label: t("native.resources.healthLayers", { name: localizeMessage(root.label) }), ok: false, detail: localizeMessage(error) });
     }
   }
   try {
@@ -990,13 +1013,13 @@ export async function checkGameResourceHealth(): Promise<GameResourceHealthRow[]
     const counts = await Promise.all(names.map(async (name) => {
       const values = JSON.parse(await readUserConfigFile(`${enumRoot}/${name}`));
       if (!Array.isArray(values) || !values.length || !values.every((value) => typeof value === "string")) {
-        throw new Error(`${name} 枚举全集为空或格式错误。`);
+        throw new Error(t("native.resources.enumInvalid", { name }));
       }
       return values.length;
     }));
-    rows.push({ label: `枚举全集：${snapshot.active_enum_catalog.label}`, ok: true, detail: `${enumRoot}: ${counts.join(" / ")}` });
+    rows.push({ label: t("native.resources.healthEnums", { name: localizeMessage(snapshot.active_enum_catalog.label) }), ok: true, detail: `${enumRoot}: ${counts.join(" / ")}` });
   } catch (error) {
-    rows.push({ label: `枚举全集：${snapshot.active_enum_catalog.label}`, ok: false, detail: String(error) });
+    rows.push({ label: t("native.resources.healthEnums", { name: localizeMessage(snapshot.active_enum_catalog.label) }), ok: false, detail: localizeMessage(error) });
   }
   return rows;
 }

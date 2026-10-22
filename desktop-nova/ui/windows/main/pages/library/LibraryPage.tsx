@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Download, FolderOpen, FolderPlus, ImageOff, LayoutGrid, Plus, RefreshCw, Search, ChevronDown, ChevronRight, Folder, Trash2, X } from "lucide-react";
@@ -54,19 +56,16 @@ function formatSize(numBytes: number): string {
     value /= 1024.0;
     index++;
   }
-  return index === 0 ? `${Math.floor(value)} ${units[index]}` : `${value.toFixed(1)} ${units[index]}`;
+  return index === 0 ? `${new Intl.NumberFormat(getUiLocale()).format(Math.floor(value))} ${units[index]}` : `${new Intl.NumberFormat(getUiLocale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value)} ${units[index]}`;
 }
 
 function formatDate(timestamp: number): string {
-  if (!timestamp) return "-";
-  const d = new Date(timestamp);
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return timestamp ? new Intl.DateTimeFormat(getUiLocale(), { dateStyle: "short", timeStyle: "short" }).format(timestamp) : "-";
 }
 
 function recordStatusLabel(record: ProjectionRecord): string {
-  if (record.status === "missing") return "文件丢失";
-  if (record.status === "parse_error") return "解析失败";
+  if (record.status === "missing") return t("library.fileMissing");
+  if (record.status === "parse_error") return t("library.parseFailed");
   return "";
 }
 
@@ -95,6 +94,7 @@ function ProjectionCard({ record, isCurrent, isInspected, checked, previewUrl, l
   onInspect: () => void; onToggle: (checked: boolean) => void; onActivate: () => void;
   onDragStart: (event: React.DragEvent) => void; onDragEnd: () => void; onDrop: (event: React.DragEvent) => void;
 }) {
+  useI18n();
   const [failedImage, setFailedImage] = useState("");
   const hasImage = !!previewUrl && failedImage !== previewUrl;
   return (
@@ -102,19 +102,19 @@ function ProjectionCard({ record, isCurrent, isInspected, checked, previewUrl, l
       draggable={!busy} onDragStart={onDragStart} onDragEnd={onDragEnd}
       onDragOver={(event) => { if (!busy) event.preventDefault(); }} onDrop={onDrop}>
       <div className="library-tile-selection">
-        <Checkbox checked={checked} disabled={busy} aria-label={`选择 ${record.displayName || record.fileName}`}
+        <Checkbox checked={checked} disabled={busy} aria-label={t("library.selectNamed", { name: record.displayName || record.fileName })}
           onCheckedChange={(value) => onToggle(value === true)} />
       </div>
-      {isCurrent && <span className="library-current-marker">当前</span>}
+      {isCurrent && <span className="library-current-marker">{t("library.current")}</span>}
       <Button className="library-tile-open" variant="ghost" themeSlot="library-tile" aria-pressed={isInspected}
-        aria-label={`查看 ${record.displayName || record.fileName} 的详情`} onClick={onInspect}
+        aria-label={t("library.inspectNamed", { name: record.displayName || record.fileName })} onClick={onInspect}
         onDoubleClick={() => { if (!busy && record.status === "ok") onActivate(); }}>
         <span className="library-tile-image">
           {hasImage ? <img src={previewUrl} alt="" loading="lazy" draggable={false} onError={() => setFailedImage(previewUrl)} />
-            : <span className="library-preview-placeholder"><ThemeIcon name="picture_error" size={30} fallback={ImageOff} /><span>{loading ? "预览加载中…" : "暂无预览图"}</span></span>}
+            : <span className="library-preview-placeholder"><ThemeIcon name="picture_error" size={30} fallback={ImageOff} /><span>{loading ? t("library.previewLoading") : t("library.noPreview")}</span></span>}
         </span>
         <span className="library-tile-name" title={record.displayName || record.fileName}>{record.displayName || record.fileName}</span>
-        <span className="library-tile-meta">{recordStatusLabel(record) || `${record.totalBlocks.toLocaleString()} 方块`}</span>
+        <span className="library-tile-meta">{recordStatusLabel(record) || t("library.blockCount", { count: record.totalBlocks })}</span>
       </Button>
     </article>
   );
@@ -124,6 +124,7 @@ function ProjectionCard({ record, isCurrent, isInspected, checked, previewUrl, l
  * Renders the local projection library page.
  */
 export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
+  useI18n();
   const [state, setState] = useState<LibraryState>({ records: [], folders: [] });
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -136,11 +137,11 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [refreshProgress, setRefreshProgress] = useState(0);
   const [removeRecords, setRemoveRecords] = useState<ProjectionRecord[]>([]);
   const [isRemoving, setIsRemoving] = useState(false);
-  const [removeError, setRemoveError] = useState("");
+  const [removeError, setRemoveError] = useState<UiMessage>("");
   const [trashOpen, setTrashOpen] = useState(false);
   const [discardTrashId, setDiscardTrashId] = useState<string | null>(null);
   const [generatingPreviewPath, setGeneratingPreviewPath] = useState("");
-  const [previewError, setPreviewError] = useState("");
+  const [previewError, setPreviewError] = useState<UiMessage>("");
   const [projectionPreviewDataUrls, setProjectionPreviewDataUrls] = useState<Record<string, string>>({});
   const [projectionPreviewLoadingPaths, setProjectionPreviewLoadingPaths] = useState<Record<string, boolean>>({});
   const [projectionPreviewLoadedPaths, setProjectionPreviewLoadedPaths] = useState<Record<string, boolean>>({});
@@ -153,7 +154,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [moveDialogPaths, setMoveDialogPaths] = useState<string[]>([]);
   const [moveCategoryId, setMoveCategoryId] = useState("");
   const [isCategorizing, setIsCategorizing] = useState(false);
-  const [categoryError, setCategoryError] = useState("");
+  const [categoryError, setCategoryError] = useState<UiMessage>("");
   const [categoryDialog, setCategoryDialog] = useState<{ kind: "create" | "rename" | "move" | "delete"; id: string; parentId: string | null } | null>(null);
   const [categoryNameDraft, setCategoryNameDraft] = useState("");
   const [categoryParentDraft, setCategoryParentDraft] = useState("");
@@ -167,15 +168,15 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [sendTargetDirectory, setSendTargetDirectory] = useState("");
   const [sendTargetFileName, setSendTargetFileName] = useState("");
   const [sendOverwrite, setSendOverwrite] = useState(false);
-  const [sendError, setSendError] = useState("");
+  const [sendError, setSendError] = useState<UiMessage>("");
   const [isSending, setIsSending] = useState(false);
   const [folderSearchRecords, setFolderSearchRecords] = useState<ProjectionRecord[]>([]);
   const [isFolderSearchLoading, setIsFolderSearchLoading] = useState(false);
-  const [folderSearchError, setFolderSearchError] = useState("");
+  const [folderSearchError, setFolderSearchError] = useState<UiMessage>("");
   const libraryBusy = isRefreshing || isOpening || isRemoving || isSending || isCategorizing;
 
   useEffect(() => {
-    loadLibrary().then((library) => setState(normalizeLibraryState(library))).catch((error) => setPreviewError(`读取投影库失败，请点击刷新重试：${String(error)}`));
+    loadLibrary().then((library) => setState(normalizeLibraryState(library))).catch((error) => setPreviewError(message("library.libraryReadFailed", { error: String(error) })));
 
   }, []);
 
@@ -220,7 +221,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         setState(await addOrUpdateRecord(await loadLibrary(), res));
       }
     } catch (error) {
-      setPreviewError(`打开投影失败，请重新选择文件：${String(error)}`);
+      setPreviewError(message("library.schematicOpenFailed", { error: String(error) }));
     } finally {
       setIsOpening(false);
     }
@@ -254,11 +255,11 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     if (!sendDialogRecord || isSending) return;
     const normalizedFileName = ensureLitematicFileName(sendTargetFileName);
     if (!sendTargetDirectory) {
-      setSendError("请选择目标本地库文件夹。");
+      setSendError(message("library.selectTargetFolder"));
       return;
     }
     if (!normalizedFileName) {
-      setSendError("请输入目标文件名。");
+      setSendError(message("library.enterTargetFileName"));
       return;
     }
     setIsSending(true);
@@ -287,7 +288,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       .then(setState)
       .catch((error) => {
         console.error(`[NOVA_PROJECTION_ACTIVATION] path=${path} library refresh failed: ${String(error)}`);
-        setPreviewError(`投影已激活，但最近记录刷新失败：${String(error)}`);
+        setPreviewError(message("library.recentRefreshFailed", { error: String(error) }));
       });
   };
 
@@ -313,7 +314,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       await saveLibrary(newState);
       setState(newState);
     } catch (error) {
-      setPreviewError(`刷新失败，原有列表已保留。请检查文件后重试：${String(error)}`);
+      setPreviewError(message("library.refreshFailed", { error: String(error) }));
     } finally {
       setIsRefreshing(false);
     }
@@ -336,7 +337,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       setRemoveRecords([]);
       void emitEvent(projectionLibraryStateChangedEvent).catch(() => undefined);
     } catch (error) {
-      setRemoveError(`移除失败，请重试：${String(error)}`);
+      setRemoveError(message("library.removeFailed", { error: String(error) }));
     } finally {
       setIsRemoving(false);
     }
@@ -350,7 +351,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
       const newState = await setRecordPreview(await loadLibrary(), record.path, output.preview_path);
       setState(newState);
       const embedded = await readProjectionPreviewImage(record.path);
-      if (!embedded?.data_url) throw new Error("预览图写回后读取失败，请重试。");
+      if (!embedded?.data_url) { setPreviewError(message("library.previewReadbackFailed")); return; }
       setProjectionPreviewDataUrls(current => ({ ...current, [record.path]: embedded.data_url }));
       await emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: record.path });
     } catch (err: any) {
@@ -445,19 +446,19 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const categoryDropProps = (id: string) => ({
     onDragOver: (event: React.DragEvent) => { if (!dragPaths.length || libraryBusy) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDropTarget(id || "untagged"); },
     onDragLeave: () => setDropTarget(""),
-    onDrop: (event: React.DragEvent) => { event.preventDefault(); event.stopPropagation(); void moveRecords(dragPaths, id).catch((error) => setPreviewError(`移动分类失败：${String(error)}`)); },
+    onDrop: (event: React.DragEvent) => { event.preventDefault(); event.stopPropagation(); void moveRecords(dragPaths, id).catch((error) => setPreviewError(message("library.categoryMoveFailed", { error: String(error) }))); },
   });
   const categories = state.categories || [];
   const categoryOptions = useMemo(() => categories.map((category) => ({ value: category.id, label: categoryPath(state, category.id) })), [state.categories]);
   const selectedCategoryIds = useMemo(() => categoryDescendants(state, categoryFilter), [state.categories, categoryFilter]);
   const toggleExpanded = (id: string) => setExpandedCategories((current) => current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]);
   const renderCategoryTree = (parentId: string | null, depth = 1): React.ReactNode => (
-    <ul className="library-category-tree" role={parentId ? "group" : "tree"} aria-label={parentId ? undefined : "分类树"}>
+    <ul className="library-category-tree" role={parentId ? "group" : "tree"} aria-label={parentId ? undefined : t("library.categoryTree")}>
       {categories.filter((entry) => entry.parentId === parentId).sort((a, b) => a.sort_index - b.sort_index).map((category) => {
         const hasChildren = categories.some((item) => item.parentId === category.id); const expanded = expandedCategories.includes(category.id);
         const descendants = categoryDescendants(state, category.id);
         return <li key={category.id} role="none"><ContextMenu.Root><ContextMenu.Trigger asChild><div className="library-category-row">
-          {hasChildren ? <Button className="library-category-expander" variant="ghost" size="icon-sm" themeSlot="library-category-expander" disabled={libraryBusy} aria-label={`${expanded ? "收起" : "展开"} ${category.name}`} onClick={() => toggleExpanded(category.id)}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</Button> : <span className="library-category-expander-spacer" />}
+          {hasChildren ? <Button className="library-category-expander" variant="ghost" size="icon-sm" themeSlot="library-category-expander" disabled={libraryBusy} aria-label={t(expanded ? "library.collapseCategory" : "library.expandCategory", { name: category.name })} onClick={() => toggleExpanded(category.id)}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</Button> : <span className="library-category-expander-spacer" />}
           <Button variant="ghost" className="library-category" themeSlot="library-category" role="treeitem" aria-level={depth} aria-expanded={hasChildren ? expanded : undefined} aria-selected={categoryFilter === category.id} aria-pressed={categoryFilter === category.id} data-category-tree-node={category.id} disabled={libraryBusy}
             data-drop-target={dropTarget === category.id || undefined} onClick={() => { setCategoryFilter(category.id); setUntaggedOnly(false); }} onKeyDown={(event) => {
               const treeNodes = () => Array.from(event.currentTarget.closest('[role="tree"]')?.querySelectorAll<HTMLButtonElement>('[data-category-tree-node]') || []);
@@ -467,12 +468,12 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
               else if (["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) { event.preventDefault(); const nodes = treeNodes(); const index = nodes.indexOf(event.currentTarget); nodes[event.key === "Home" ? 0 : event.key === "End" ? nodes.length - 1 : Math.max(0, Math.min(nodes.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))]?.focus(); }
             }} {...categoryDropProps(category.id)}><CategoryIcon icon={category.icon} /><span title={categoryPath(state, category.id)}>{category.name}</span><small>{state.records.filter((record) => record.categoryIds?.some((id) => descendants.has(id))).length}</small></Button>
         </div></ContextMenu.Trigger><ContextMenu.Portal><ContextMenu.Content className="library-category-menu" collisionPadding={8}>
-          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("create", category)}>新建子分类</ContextMenu.Item>
-          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("rename", category)}>重命名</ContextMenu.Item>
-          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("move", category)}>移动分类…</ContextMenu.Item>
-          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => { setIconCategoryId(category.id); setCategoryError(""); }}>更换图标…</ContextMenu.Item>
+          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("create", category)}>{t("library.createSubcategory")}</ContextMenu.Item>
+          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("rename", category)}>{t("library.rename")}</ContextMenu.Item>
+          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("move", category)}>{t("library.moveCategoryMenu")}</ContextMenu.Item>
+          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => { setIconCategoryId(category.id); setCategoryError(""); }}>{t("library.changeIcon")}</ContextMenu.Item>
           <ContextMenu.Separator className="library-category-menu-separator" />
-          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("delete", category)}>删除分类…</ContextMenu.Item>
+          <ContextMenu.Item className="library-category-menu-item" disabled={libraryBusy} onSelect={() => openCategoryDialog("delete", category)}>{t("library.deleteCategoryMenu")}</ContextMenu.Item>
         </ContextMenu.Content></ContextMenu.Portal></ContextMenu.Root>{hasChildren && expanded && renderCategoryTree(category.id, depth + 1)}</li>;
       })}
     </ul>
@@ -526,7 +527,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const inspectedRecord = availableRecords.find((record) => samePath(record.path, inspectedPath)) || null;
   const allPageSelected = visibleRecords.length > 0 && visibleRecords.every((record) => hasPath(selectedPaths, record.path));
   const somePageSelected = visibleRecords.some((record) => hasPath(selectedPaths, record.path));
-  const activeCategory = untaggedOnly ? "未分类" : categoryPath(state, categoryFilter) || "全部投影";
+  const activeCategory = untaggedOnly ? t("library.uncategorized") : categoryPath(state, categoryFilter) || t("library.allSchematics");
   const detailPreviewUrl = inspectedRecord
     ? projectionPreviewDataUrls[inspectedRecord.path] || ""
     : "";
@@ -585,93 +586,93 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   return (
     <div className="nova-page library-page">
       <header className="library-toolbar">
-        <h2>投影库</h2>
-        <Button variant="default" onClick={handleSelect} disabled={libraryBusy} aria-busy={isOpening}><ThemeIcon name="import" size={16} fallback={FolderPlus} />{isOpening ? "正在导入…" : "导入投影"}</Button>
-        <Button onClick={() => handleOpenRedenLibrary().catch((error) => setPreviewError(`打开在线投影库失败：${String(error)}`))}><ThemeIcon name="download" size={16} fallback={Download} />下载投影</Button>
-        <div className="library-search"><ThemeIcon name="search" size={16} fallback={Search} /><Input type="search" aria-label="搜索投影" placeholder="搜索名称、作者、分类…" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
-        <Button variant="ghost" onClick={() => handleOpenLocalLibraryFolders().catch((error) => setPreviewError(`打开本地库文件夹失败：${String(error)}`))}><ThemeIcon name="explorer" size={16} fallback={FolderOpen} />管理文件夹</Button>
-        <Button variant="ghost" size="icon" aria-label={isRefreshing ? "正在刷新投影库" : "刷新投影库"} title="刷新投影库" disabled={libraryBusy} aria-busy={isRefreshing} onClick={handleRefresh}><ThemeIcon name="refresh" size={16} fallback={RefreshCw} /></Button>
+        <h2>{t("library.libraryTitle")}</h2>
+        <Button variant="default" onClick={handleSelect} disabled={libraryBusy} aria-busy={isOpening}><ThemeIcon name="import" size={16} fallback={FolderPlus} />{isOpening ? t("library.importing") : t("library.importSchematic")}</Button>
+        <Button onClick={() => handleOpenRedenLibrary().catch((error) => setPreviewError(message("library.onlineOpenFailed", { error: String(error) })))}><ThemeIcon name="download" size={16} fallback={Download} />{t("library.downloadSchematic")}</Button>
+        <div className="library-search"><ThemeIcon name="search" size={16} fallback={Search} /><Input type="search" aria-label={t("library.searchSchematics")} placeholder={t("library.searchLibraryPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} /></div>
+        <Button variant="ghost" onClick={() => handleOpenLocalLibraryFolders().catch((error) => setPreviewError(message("library.localFoldersOpenFailed", { error: String(error) })))}><ThemeIcon name="explorer" size={16} fallback={FolderOpen} />{t("library.manageFolders")}</Button>
+        <Button variant="ghost" size="icon" aria-label={isRefreshing ? t("library.libraryRefreshing") : t("library.refreshLibrary")} title={t("library.refreshLibrary")} disabled={libraryBusy} aria-busy={isRefreshing} onClick={handleRefresh}><ThemeIcon name="refresh" size={16} fallback={RefreshCw} /></Button>
       </header>
-      {previewError && <div className="library-message" role="alert">{displayPathText(previewError)}<Button variant="ghost" size="icon-sm" aria-label="关闭错误提示" onClick={() => setPreviewError("")}><ThemeIcon name="close" size={14} fallback={X} /></Button></div>}
-      {folderSearchError && <div className="library-message" role="alert">文件夹搜索失败：{folderSearchError}</div>}
-      {isRefreshing && <div className="library-progress" role="status">刷新中 {refreshProgress} / {state.records.length}</div>}
+      {previewError && <div className="library-message" role="alert">{displayPathText(localizeMessage(previewError))}<Button variant="ghost" size="icon-sm" aria-label={t("library.dismissError")} onClick={() => setPreviewError("")}><ThemeIcon name="close" size={14} fallback={X} /></Button></div>}
+      {folderSearchError && <div className="library-message" role="alert">{t("library.folderSearchFailed")}{localizeMessage(folderSearchError)}</div>}
+      {isRefreshing && <div className="library-progress" role="status">{t("library.refreshProgress", { current: refreshProgress, total: state.records.length })}</div>}
 
       <div className="library-workspace">
-        <aside className="library-categories" aria-label="投影分类">
-          <div className="library-pane-heading"><h3>我的投影</h3><span>{state.records.length}</span></div>
-          <div className="library-category-tools"><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => openCategoryDialog("create")}><ThemeIcon name="folder_new" size={14} fallback={FolderPlus} />新建分类</Button></div>
+        <aside className="library-categories" aria-label={t("library.schematicCategories")}>
+          <div className="library-pane-heading"><h3>{t("library.mySchematics")}</h3><span>{state.records.length}</span></div>
+          <div className="library-category-tools"><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => openCategoryDialog("create")}><ThemeIcon name="folder_new" size={14} fallback={FolderPlus} />{t("library.createCategory")}</Button></div>
           <ScrollArea className="library-category-scroll">
-            <nav className="library-category-list" aria-label="分类筛选">
-              <Button variant="ghost" className="library-category" themeSlot="library-category" aria-pressed={!categoryFilter && !untaggedOnly} onClick={() => { setCategoryFilter(""); setUntaggedOnly(false); }}><ThemeIcon name="all" size={16} fallback={LayoutGrid} /><span>全部投影</span><small>{state.records.length}</small></Button>
-              <Button variant="ghost" className="library-category" themeSlot="library-category" aria-pressed={untaggedOnly} data-drop-target={dropTarget === "untagged" || undefined} onClick={() => { setCategoryFilter(""); setUntaggedOnly(true); }} {...categoryDropProps("")}><ThemeIcon name="unknown" size={16} fallback={Box} /><span>未分类</span><small>{state.records.filter((record) => !record.categoryIds?.length).length}</small></Button>
+            <nav className="library-category-list" aria-label={t("library.categoryFilter")}>
+              <Button variant="ghost" className="library-category" themeSlot="library-category" aria-pressed={!categoryFilter && !untaggedOnly} onClick={() => { setCategoryFilter(""); setUntaggedOnly(false); }}><ThemeIcon name="all" size={16} fallback={LayoutGrid} /><span>{t("library.allSchematics")}</span><small>{state.records.length}</small></Button>
+              <Button variant="ghost" className="library-category" themeSlot="library-category" aria-pressed={untaggedOnly} data-drop-target={dropTarget === "untagged" || undefined} onClick={() => { setCategoryFilter(""); setUntaggedOnly(true); }} {...categoryDropProps("")}><ThemeIcon name="unknown" size={16} fallback={Box} /><span>{t("library.uncategorized")}</span><small>{state.records.filter((record) => !record.categoryIds?.length).length}</small></Button>
               {renderCategoryTree(null)}
             </nav>
           </ScrollArea>
-          <Button variant="ghost" className="library-category library-trash-button" themeSlot="library-category" aria-haspopup="dialog" onClick={() => { setDiscardTrashId(null); setCategoryError(""); setTrashOpen(true); }}><ThemeIcon name="delete" size={16} fallback={Trash2} /><span>回收站</span><small>{state.trash?.length || 0}</small></Button>
+          <Button variant="ghost" className="library-category library-trash-button" themeSlot="library-category" aria-haspopup="dialog" onClick={() => { setDiscardTrashId(null); setCategoryError(""); setTrashOpen(true); }}><ThemeIcon name="delete" size={16} fallback={Trash2} /><span>{t("library.trash")}</span><small>{state.trash?.length || 0}</small></Button>
         </aside>
 
-        <section className="library-collection" aria-label="投影卡片">
+        <section className="library-collection" aria-label={t("library.schematicCards")}>
           <div className="library-collection-toolbar">
-            <label className="library-select-all"><Checkbox checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false} disabled={!visibleRecords.length || libraryBusy} aria-label="选择本页全部投影" onCheckedChange={(checked) => setSelectedPaths((current) => checked === true ? uniquePaths([...current, ...visibleRecords.map((record) => record.path)]) : current.filter((path) => !visibleRecords.some((record) => samePath(record.path, path))))} /><span>{selectedRecords.length ? `已选 ${selectedRecords.length}` : activeCategory}</span></label>
-            <span className="library-result-count" role="status">{filteredRecords.length} 项{isFolderSearchLoading ? " · 搜索中…" : ""}</span>
-            <div className="library-filter-control"><Dropdown ariaLabel="筛选文件状态" value={statusFilter} onChange={setStatusFilter} options={[{ value: "", label: "全部状态" }, { value: "ok", label: "正常" }, { value: "missing", label: "文件丢失" }, { value: "parse_error", label: "解析失败" }]} /></div>
-            <div className="library-filter-control"><Dropdown ariaLabel="投影排序" value={sortMode} onChange={setSortMode} options={[{ value: "manual", label: "手动排序" }, { value: "recent_analyzed", label: "最近分析" }, { value: "blocks", label: "方块数量" }, { value: "name", label: "名称 A–Z" }]} /></div>
+            <label className="library-select-all"><Checkbox checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false} disabled={!visibleRecords.length || libraryBusy} aria-label={t("library.selectCurrentPage")} onCheckedChange={(checked) => setSelectedPaths((current) => checked === true ? uniquePaths([...current, ...visibleRecords.map((record) => record.path)]) : current.filter((path) => !visibleRecords.some((record) => samePath(record.path, path))))} /><span>{selectedRecords.length ? t("library.selectedCount", { count: selectedRecords.length }) : activeCategory}</span></label>
+            <span className="library-result-count" role="status">{t("library.resultItemCount", { count: filteredRecords.length })}{isFolderSearchLoading ? t("library.searchingInline") : ""}</span>
+            <div className="library-filter-control"><Dropdown ariaLabel={t("library.fileStatusFilter")} value={statusFilter} onChange={setStatusFilter} options={[{ value: "", label: t("library.allStatuses") }, { value: "ok", label: t("library.statusOk") }, { value: "missing", label: t("library.fileMissing") }, { value: "parse_error", label: t("library.parseFailed") }]} /></div>
+            <div className="library-filter-control"><Dropdown ariaLabel={t("library.schematicSort")} value={sortMode} onChange={setSortMode} options={[{ value: "manual", label: t("library.manualSort") }, { value: "recent_analyzed", label: t("library.lastAnalyzed") }, { value: "blocks", label: t("library.blockQuantity") }, { value: "name", label: t("library.nameSort") }]} /></div>
           </div>
-          {selectedRecords.length > 0 && <div className="library-batch-toolbar"><Button size="sm" onClick={() => openMoveDialog(selectedRecords.map((record) => record.path))} disabled={libraryBusy}><ThemeIcon name="folder" size={14} fallback={Folder} />移动到分类…</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords(selectedRecords); }}><ThemeIcon name="delete" size={14} fallback={Trash2} />移入回收站</Button><Button size="sm" variant="ghost" onClick={() => setSelectedPaths([])}>取消选择</Button></div>}
+          {selectedRecords.length > 0 && <div className="library-batch-toolbar"><Button size="sm" onClick={() => openMoveDialog(selectedRecords.map((record) => record.path))} disabled={libraryBusy}><ThemeIcon name="folder" size={14} fallback={Folder} />{t("library.moveToCategoryMenu")}</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords(selectedRecords); }}><ThemeIcon name="delete" size={14} fallback={Trash2} />{t("library.moveToTrash")}</Button><Button size="sm" variant="ghost" onClick={() => setSelectedPaths([])}>{t("library.clearSelection")}</Button></div>}
           <ScrollArea className="library-grid-scroll">
             {visibleRecords.length > 0 ? <div className="library-card-grid">{visibleRecords.map((record) => <ProjectionCard key={record.path} record={record} isCurrent={samePath(currentFile, record.path)} isInspected={!!inspectedRecord && samePath(inspectedRecord.path, record.path)} checked={hasPath(selectedPaths, record.path)} busy={libraryBusy}
               previewUrl={projectionPreviewDataUrls[record.path] || ""} loading={!!projectionPreviewLoadingPaths[record.path]}
               onInspect={() => { setInspectedPath(record.path); }} onToggle={(checked) => toggleSelected(record.path, checked)} onActivate={() => handleActivateRecord(record.path)}
               onDragStart={(event) => { const paths = hasPath(selectedPaths, record.path) ? selectedRecords.map((entry) => entry.path) : [record.path]; setDragPaths(paths); event.dataTransfer.effectAllowed = "all"; event.dataTransfer.setData("application/x-nova-library-records", JSON.stringify(paths)); }}
-              onDragEnd={() => { setDragPaths([]); setDropTarget(""); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); handleDrop(record.path).catch((error) => setPreviewError(`排序失败：${String(error)}`)); }}
-            />)}</div> : <div className="library-empty-state"><Box size={40} aria-hidden="true" /><h3>{state.records.length || search ? "没有找到投影" : "把你的第一份投影放进来"}</h3><p>{state.records.length || search ? "换个关键词或清除筛选，再试一次。" : "导入本地 .litematic，或从在线投影库下载。"}</p><div className="library-empty-actions">{state.records.length || search ? <Button onClick={() => { setSearch(""); setCategoryFilter(""); setUntaggedOnly(false); setStatusFilter(""); }}>清除筛选</Button> : <Button variant="default" onClick={handleSelect} disabled={libraryBusy}><ThemeIcon name="import" size={16} fallback={Plus} />导入投影</Button>}</div></div>}
+              onDragEnd={() => { setDragPaths([]); setDropTarget(""); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); handleDrop(record.path).catch((error) => setPreviewError(message("library.sortFailed", { error: String(error) }))); }}
+            />)}</div> : <div className="library-empty-state"><Box size={40} aria-hidden="true" /><h3>{state.records.length || search ? t("library.noSchematicsFound") : t("library.firstSchematic")}</h3><p>{state.records.length || search ? t("library.changeFilterHint") : t("library.importFirstHint")}</p><div className="library-empty-actions">{state.records.length || search ? <Button onClick={() => { setSearch(""); setCategoryFilter(""); setUntaggedOnly(false); setStatusFilter(""); }}>{t("library.clearFilters")}</Button> : <Button variant="default" onClick={handleSelect} disabled={libraryBusy}><ThemeIcon name="import" size={16} fallback={Plus} />{t("library.importSchematic")}</Button>}</div></div>}
           </ScrollArea>
-          <footer className="library-collection-footer"><span>{issueCount ? `${issueCount} 项需关注` : "双击卡片设为当前投影"}</span><div className="library-page-limit"><Dropdown ariaLabel="每页条目" value={String(pageSize)} onChange={(value) => setPageSize(Number(value))} options={[20, 50, 100, 200, 0].map((count) => ({ value: String(count), label: count ? `${count} 项 / 页` : "全部显示" }))} /></div><Button size="sm" variant="ghost" disabled={currentPage <= 1 || pageSize === 0} onClick={() => setPage(currentPage - 1)}>上一页</Button><span>{currentPage} / {pageCount}</span><Button size="sm" variant="ghost" disabled={currentPage >= pageCount || pageSize === 0} onClick={() => setPage(currentPage + 1)}>下一页</Button></footer>
+          <footer className="library-collection-footer"><span>{issueCount ? t("library.attentionCount", { count: issueCount }) : t("library.activateHint")}</span><div className="library-page-limit"><Dropdown ariaLabel={t("library.itemsPerPage")} value={String(pageSize)} onChange={(value) => setPageSize(Number(value))} options={[20, 50, 100, 200, 0].map((count) => ({ value: String(count), label: count ? t("library.pageItemCount", { count: count }) : t("library.showAll") }))} /></div><Button size="sm" variant="ghost" disabled={currentPage <= 1 || pageSize === 0} onClick={() => setPage(currentPage - 1)}>{t("library.previousPage")}</Button><span>{currentPage} / {pageCount}</span><Button size="sm" variant="ghost" disabled={currentPage >= pageCount || pageSize === 0} onClick={() => setPage(currentPage + 1)}>{t("library.nextPage")}</Button></footer>
         </section>
 
-        <aside className="library-inspector" aria-label="投影详情">
-          <div className="library-pane-heading"><h3>详情</h3>{inspectedRecord && <Button variant="ghost" size="icon-sm" aria-label="关闭投影详情" onClick={() => setInspectedPath("")}><ThemeIcon name="close" size={15} fallback={X} /></Button>}</div>
+        <aside className="library-inspector" aria-label={t("library.schematicDetails")}>
+          <div className="library-pane-heading"><h3>{t("library.details")}</h3>{inspectedRecord && <Button variant="ghost" size="icon-sm" aria-label={t("library.closeDetails")} onClick={() => setInspectedPath("")}><ThemeIcon name="close" size={15} fallback={X} /></Button>}</div>
           <ScrollArea className="library-inspector-scroll">
             {inspectedRecord ? <div className="library-detail-content">
-              <div className="library-detail-preview">{detailPreviewUrl && failedDetailImage !== detailPreviewUrl ? <img src={detailPreviewUrl} alt={`${inspectedRecord.displayName} 预览`} onError={() => setFailedDetailImage(detailPreviewUrl)} /> : <span className="library-preview-placeholder"><ThemeIcon name="picture_error" size={36} fallback={ImageOff} /><span>{projectionPreviewLoadingPaths[inspectedRecord.path] ? "预览加载中…" : "暂无预览图"}</span></span>}</div>
+              <div className="library-detail-preview">{detailPreviewUrl && failedDetailImage !== detailPreviewUrl ? <img src={detailPreviewUrl} alt={t("library.namedPreview", { name: inspectedRecord.displayName })} onError={() => setFailedDetailImage(detailPreviewUrl)} /> : <span className="library-preview-placeholder"><ThemeIcon name="picture_error" size={36} fallback={ImageOff} /><span>{projectionPreviewLoadingPaths[inspectedRecord.path] ? t("library.previewLoading") : t("library.noPreview")}</span></span>}</div>
               <h3 className="library-detail-name">{inspectedRecord.displayName || inspectedRecord.fileName}</h3>
-              <p className="library-detail-author">{inspectedRecord.author ? `作者 · ${inspectedRecord.author}` : "未填写作者"}</p>
-              {recordStatusLabel(inspectedRecord) && <div className="library-detail-error" role="status">{recordStatusLabel(inspectedRecord)}{inspectedRecord.lastError && <p>{inspectedRecord.lastError}</p>}</div>}
-              <div className="library-detail-actions"><Button variant="default" disabled={libraryBusy || inspectedRecord.status !== "ok" || samePath(currentFile, inspectedRecord.path)} onClick={() => handleActivateRecord(inspectedRecord.path)}>{samePath(currentFile, inspectedRecord.path) ? "当前投影" : "设为当前投影"}</Button><Button disabled={libraryBusy || inspectedRecord.status === "missing"} onClick={() => { setCurrentFile(inspectedRecord.path); setRoute("properties"); }}>查看属性</Button></div>
+              <p className="library-detail-author">{inspectedRecord.author ? t("library.authorName", { author: inspectedRecord.author }) : t("library.noAuthor")}</p>
+              {recordStatusLabel(inspectedRecord) && <div className="library-detail-error" role="status">{recordStatusLabel(inspectedRecord)}{inspectedRecord.lastError && <p>{localizeMessage(inspectedRecord.lastError)}</p>}</div>}
+              <div className="library-detail-actions"><Button variant="default" disabled={libraryBusy || inspectedRecord.status !== "ok" || samePath(currentFile, inspectedRecord.path)} onClick={() => handleActivateRecord(inspectedRecord.path)}>{samePath(currentFile, inspectedRecord.path) ? t("library.currentSchematic") : t("library.setCurrentSchematic")}</Button><Button disabled={libraryBusy || inspectedRecord.status === "missing"} onClick={() => { setCurrentFile(inspectedRecord.path); setRoute("properties"); }}>{t("library.viewProperties")}</Button></div>
               <dl className="library-detail-facts">
-                <div><dt>选区名</dt><dd>{inspectedRecord.regionNames === undefined ? "未读取（刷新或查看属性后补齐）" : inspectedRecord.regionNames.length ? inspectedRecord.regionNames.map((name, index) => <div key={index}>{name || "（空名称）"}</div>) : "无选区"}</dd></div>
-                {typeof inspectedRecord.internalName === "string" && <div><dt>内部名称</dt><dd>{inspectedRecord.internalName || "未填写"}</dd></div>}
-                <div><dt>方块数量</dt><dd>{inspectedRecord.totalBlocks.toLocaleString()}</dd></div><div><dt>尺寸</dt><dd>{inspectedRecord.enclosingSize.x} × {inspectedRecord.enclosingSize.y} × {inspectedRecord.enclosingSize.z}</dd></div><div><dt>选区数量</dt><dd>{inspectedRecord.regionCount}</dd></div><div><dt>文件大小</dt><dd>{formatSize(inspectedRecord.fileSize)}</dd></div><div><dt>最近分析</dt><dd>{formatDate(inspectedRecord.lastAnalyzedAt)}</dd></div>
+                <div><dt>{t("library.regionNames")}</dt><dd>{inspectedRecord.regionNames === undefined ? t("library.regionNamesUnread") : inspectedRecord.regionNames.length ? inspectedRecord.regionNames.map((name, index) => <div key={index}>{name || t("library.emptyName")}</div>) : t("library.noRegions")}</dd></div>
+                {typeof inspectedRecord.internalName === "string" && <div><dt>{t("library.internalName")}</dt><dd>{inspectedRecord.internalName || t("library.notSpecified")}</dd></div>}
+                <div><dt>{t("library.blockQuantity")}</dt><dd>{inspectedRecord.totalBlocks.toLocaleString(getUiLocale())}</dd></div><div><dt>{t("library.dimensions")}</dt><dd>{inspectedRecord.enclosingSize.x} × {inspectedRecord.enclosingSize.y} × {inspectedRecord.enclosingSize.z}</dd></div><div><dt>{t("library.regionCount")}</dt><dd>{inspectedRecord.regionCount}</dd></div><div><dt>{t("library.fileSize")}</dt><dd>{formatSize(inspectedRecord.fileSize)}</dd></div><div><dt>{t("library.lastAnalyzed")}</dt><dd>{formatDate(inspectedRecord.lastAnalyzedAt)}</dd></div>
               </dl>
               {inspectedRecord.description && <p className="library-detail-description">{inspectedRecord.description}</p>}
-              <div className="library-detail-section"><h4>分类</h4><div className="library-detail-categories">{inspectedRecord.categoryIds?.length ? inspectedRecord.categoryIds.map((id) => <span className="library-category-membership" key={id}>{categoryPath(state, id)}</span>) : <span className="muted">未分类</span>}</div><Button size="sm" disabled={libraryBusy} onClick={() => openMoveDialog([inspectedRecord.path])}>移动到分类…</Button></div>
-              <div className="library-detail-section"><h4>预览图</h4><div className="library-detail-actions"><Button size="sm" disabled={libraryBusy || !!generatingPreviewPath || inspectedRecord.status !== "ok"} aria-busy={generatingPreviewPath === inspectedRecord.path} onClick={() => handleGeneratePreview(inspectedRecord)}>{generatingPreviewPath === inspectedRecord.path ? "正在生成…" : "生成预览图"}</Button></div></div>
-              <div className="library-detail-section"><h4>文件</h4><p className="library-detail-path" title={displayFilePath(inspectedRecord.path)}>{displayFilePath(inspectedRecord.path)}</p><div className="library-detail-actions"><Button size="sm" onClick={() => openFileParentDir(inspectedRecord.path).catch((error) => setPreviewError(`打开文件夹失败：${String(error)}`))}>打开文件夹</Button><Button size="sm" disabled={libraryBusy || inspectedRecord.status === "missing"} onClick={() => handleOpenSendDialog(inspectedRecord)}>复制到…</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords([inspectedRecord]); }}><ThemeIcon name="delete" size={14} fallback={Trash2} />移入回收站</Button></div></div>
-            </div> : <div className="library-inspector-empty"><Box size={32} /><p>点击卡片查看详情</p></div>}
+              <div className="library-detail-section"><h4>{t("library.categories")}</h4><div className="library-detail-categories">{inspectedRecord.categoryIds?.length ? inspectedRecord.categoryIds.map((id) => <span className="library-category-membership" key={id}>{categoryPath(state, id)}</span>) : <span className="muted">{t("library.uncategorized")}</span>}</div><Button size="sm" disabled={libraryBusy} onClick={() => openMoveDialog([inspectedRecord.path])}>{t("library.moveToCategoryMenu")}</Button></div>
+              <div className="library-detail-section"><h4>{t("library.preview")}</h4><div className="library-detail-actions"><Button size="sm" disabled={libraryBusy || !!generatingPreviewPath || inspectedRecord.status !== "ok"} aria-busy={generatingPreviewPath === inspectedRecord.path} onClick={() => handleGeneratePreview(inspectedRecord)}>{generatingPreviewPath === inspectedRecord.path ? t("library.generating") : t("library.generatePreview")}</Button></div></div>
+              <div className="library-detail-section"><h4>{t("library.file")}</h4><p className="library-detail-path" title={displayFilePath(inspectedRecord.path)}>{displayFilePath(inspectedRecord.path)}</p><div className="library-detail-actions"><Button size="sm" onClick={() => openFileParentDir(inspectedRecord.path).catch((error) => setPreviewError(message("library.folderOpenFailed", { error: String(error) })))}>{t("library.openFolder")}</Button><Button size="sm" disabled={libraryBusy || inspectedRecord.status === "missing"} onClick={() => handleOpenSendDialog(inspectedRecord)}>{t("library.copyToMenu")}</Button><Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => { setRemoveError(""); setRemoveRecords([inspectedRecord]); }}><ThemeIcon name="delete" size={14} fallback={Trash2} />{t("library.moveToTrash")}</Button></div></div>
+            </div> : <div className="library-inspector-empty"><Box size={32} /><p>{t("library.inspectHint")}</p></div>}
           </ScrollArea>
         </aside>
       </div>
-      {removeRecords.length > 0 && <Dialog title={`移入回收站${removeRecords.length > 1 ? ` ${removeRecords.length} 项` : "此投影"}？`} subtitle="可从 Nova 回收站恢复，原文件保持不变。" width="sm" busy={isRemoving} onClose={() => setRemoveRecords([])} footer={<><Button onClick={() => setRemoveRecords([])} disabled={isRemoving}>保留</Button><Button variant="destructive" onClick={handleRemove} disabled={isRemoving} aria-busy={isRemoving}>{isRemoving ? "正在移除…" : "移入回收站"}</Button></>}><ul className="library-remove-list">{removeRecords.slice(0, 8).map((record) => <li key={record.path}>{record.displayName || record.fileName}</li>)}</ul>{removeRecords.length > 8 && <p>以及另外 {removeRecords.length - 8} 项</p>}{removeError && <div className="dialog-message dialog-message-error" role="alert">{displayPathText(removeError)}</div>}</Dialog>}
-      {moveDialogPaths.length > 0 && <Dialog title="移动到分类" subtitle={`${moveDialogPaths.length} 个投影，原文件保持原位。`} width="sm" busy={isCategorizing} onClose={() => setMoveDialogPaths([])} footer={<><Button disabled={isCategorizing} onClick={() => setMoveDialogPaths([])}>取消</Button><Button variant="default" disabled={isCategorizing} onClick={() => void moveRecords(moveDialogPaths, moveCategoryId).catch(() => undefined)}>移动</Button></>}><Dropdown ariaLabel="目标分类" value={moveCategoryId} onChange={setMoveCategoryId} options={[{ value: "", label: "未分类" }, ...categoryOptions]} />{categoryError && <p className="dialog-message dialog-message-error" role="alert">{categoryError}</p>}</Dialog>}
-      {categoryDialog && <Dialog title={categoryDialog.kind === "create" ? "新建分类" : categoryDialog.kind === "rename" ? "重命名分类" : categoryDialog.kind === "move" ? "移动分类" : "删除分类？"} subtitle={categoryDialog.kind === "delete" ? "此分类、子分类和其中的投影移入回收站，原文件保持不变。" : undefined} width="sm" busy={isCategorizing} onClose={() => setCategoryDialog(null)} footer={<><Button disabled={isCategorizing} onClick={() => setCategoryDialog(null)}>取消</Button><Button variant={categoryDialog.kind === "delete" ? "destructive" : "default"} disabled={isCategorizing || (["create", "rename"].includes(categoryDialog.kind) && !categoryNameDraft.trim())} onClick={() => void confirmCategory().catch(() => undefined)}>{categoryDialog.kind === "delete" ? "删除分类" : "保存"}</Button></>}>
-        {["create", "rename"].includes(categoryDialog.kind) && <div className="library-category-form"><label htmlFor="library-category-name">分类名称</label><Input id="library-category-name" autoFocus maxLength={80} disabled={isCategorizing} value={categoryNameDraft} onChange={(event) => setCategoryNameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && categoryNameDraft.trim()) { event.preventDefault(); void confirmCategory().catch(() => undefined); } }} /></div>}
-        {["create", "move"].includes(categoryDialog.kind) && <Dropdown ariaLabel="上级分类" value={categoryParentDraft} onChange={setCategoryParentDraft} options={[{ value: "", label: "分类根目录" }, ...categoryOptions.filter((item) => categoryDialog.kind !== "move" || !categoryDescendants(state, categoryDialog.id).has(item.value))]} />}
-        {categoryError && <p className="dialog-message dialog-message-error" role="alert">{categoryError}</p>}
+      {removeRecords.length > 0 && <Dialog title={t("library.trashCountConfirm", { count: removeRecords.length })} subtitle={t("library.trashConfirmHint")} width="sm" busy={isRemoving} onClose={() => setRemoveRecords([])} footer={<><Button onClick={() => setRemoveRecords([])} disabled={isRemoving}>{t("library.keep")}</Button><Button variant="destructive" onClick={handleRemove} disabled={isRemoving} aria-busy={isRemoving}>{isRemoving ? t("library.removing") : t("library.moveToTrash")}</Button></>}><ul className="library-remove-list">{removeRecords.slice(0, 8).map((record) => <li key={record.path}>{record.displayName || record.fileName}</li>)}</ul>{removeRecords.length > 8 && <p>{t("library.additionalItemCount", { count: removeRecords.length - 8 })}</p>}{removeError && <div className="dialog-message dialog-message-error" role="alert">{displayPathText(localizeMessage(removeError))}</div>}</Dialog>}
+      {moveDialogPaths.length > 0 && <Dialog title={t("library.moveToCategory")} subtitle={t("library.moveSchematicsHint", { count: moveDialogPaths.length })} width="sm" busy={isCategorizing} onClose={() => setMoveDialogPaths([])} footer={<><Button disabled={isCategorizing} onClick={() => setMoveDialogPaths([])}>{t("library.cancel")}</Button><Button variant="default" disabled={isCategorizing} onClick={() => void moveRecords(moveDialogPaths, moveCategoryId).catch(() => undefined)}>{t("library.move")}</Button></>}><Dropdown ariaLabel={t("library.targetCategory")} value={moveCategoryId} onChange={setMoveCategoryId} options={[{ value: "", label: t("library.uncategorized") }, ...categoryOptions]} />{categoryError && <p className="dialog-message dialog-message-error" role="alert">{localizeMessage(categoryError)}</p>}</Dialog>}
+      {categoryDialog && <Dialog title={categoryDialog.kind === "create" ? t("library.createCategory") : categoryDialog.kind === "rename" ? t("library.renameCategory") : categoryDialog.kind === "move" ? t("library.moveCategory") : t("library.deleteCategoryConfirm")} subtitle={categoryDialog.kind === "delete" ? t("library.deleteCategoryHint") : undefined} width="sm" busy={isCategorizing} onClose={() => setCategoryDialog(null)} footer={<><Button disabled={isCategorizing} onClick={() => setCategoryDialog(null)}>{t("library.cancel")}</Button><Button variant={categoryDialog.kind === "delete" ? "destructive" : "default"} disabled={isCategorizing || (["create", "rename"].includes(categoryDialog.kind) && !categoryNameDraft.trim())} onClick={() => void confirmCategory().catch(() => undefined)}>{categoryDialog.kind === "delete" ? t("library.deleteCategory") : t("library.save")}</Button></>}>
+        {["create", "rename"].includes(categoryDialog.kind) && <div className="library-category-form"><label htmlFor="library-category-name">{t("library.categoryName")}</label><Input id="library-category-name" autoFocus maxLength={80} disabled={isCategorizing} value={categoryNameDraft} onChange={(event) => setCategoryNameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && categoryNameDraft.trim()) { event.preventDefault(); void confirmCategory().catch(() => undefined); } }} /></div>}
+        {["create", "move"].includes(categoryDialog.kind) && <Dropdown ariaLabel={t("library.parentCategory")} value={categoryParentDraft} onChange={setCategoryParentDraft} options={[{ value: "", label: t("library.categoryRoot") }, ...categoryOptions.filter((item) => categoryDialog.kind !== "move" || !categoryDescendants(state, categoryDialog.id).has(item.value))]} />}
+        {categoryError && <p className="dialog-message dialog-message-error" role="alert">{localizeMessage(categoryError)}</p>}
       </Dialog>}
-      {trashOpen && <Dialog title="回收站" width="lg" busy={isCategorizing} onClose={() => setTrashOpen(false)}
-        footer={<><Button variant="destructive" disabled={isCategorizing || !state.trash?.length || discardTrashId !== null} onClick={() => setDiscardTrashId("")}>清空回收站…</Button><Button disabled={isCategorizing} onClick={() => setTrashOpen(false)}>关闭</Button></>}>
-        {categoryError && <p role="alert" className="dialog-message dialog-message-error">{categoryError}</p>}
+      {trashOpen && <Dialog title={t("library.trash")} width="lg" busy={isCategorizing} onClose={() => setTrashOpen(false)}
+        footer={<><Button variant="destructive" disabled={isCategorizing || !state.trash?.length || discardTrashId !== null} onClick={() => setDiscardTrashId("")}>{t("library.emptyTrash")}</Button><Button disabled={isCategorizing} onClick={() => setTrashOpen(false)}>{t("library.close")}</Button></>}>
+        {categoryError && <p role="alert" className="dialog-message dialog-message-error">{localizeMessage(categoryError)}</p>}
         {discardTrashId !== null ? <div className="library-trash-confirm">
-          <p>{discardTrashId ? "永久移除此项 Nova 记录？" : "清空全部 Nova 回收站记录？"}原投影文件不会删除。移除后不能从回收站恢复。</p>
-          <Button disabled={isCategorizing} onClick={() => setDiscardTrashId(null)}>取消</Button>
-          <Button variant="destructive" disabled={isCategorizing} onClick={() => void commitCategories((latest) => discardLibraryTrash(latest, discardTrashId || undefined)).then(() => setDiscardTrashId(null)).catch(() => undefined)}>永久移除记录</Button>
+          <p>{discardTrashId ? t("library.permanentlyRemoveConfirm") : t("library.emptyTrashConfirm")}{t("library.trashPermanentHint")}</p>
+          <Button disabled={isCategorizing} onClick={() => setDiscardTrashId(null)}>{t("library.cancel")}</Button>
+          <Button variant="destructive" disabled={isCategorizing} onClick={() => void commitCategories((latest) => discardLibraryTrash(latest, discardTrashId || undefined)).then(() => setDiscardTrashId(null)).catch(() => undefined)}>{t("library.permanentlyRemoveRecord")}</Button>
         </div> : <ul className="library-trash-list">{state.trash?.length ? state.trash.map((entry) => <li key={entry.id}>
           {entry.kind === "category" ? <Folder size={18} /> : <Box size={18} />}
-          <div><strong>{entry.name}</strong><span>{entry.records.length} 个投影 · {formatDate(entry.deletedAt)}</span>
+          <div><strong>{entry.name}</strong><span>{t("library.trashedSchematics", { count: entry.records.length, date: formatDate(entry.deletedAt) })}</span>
           <small>{[...new Set(entry.records.flatMap((record) => record.categoryIds || []).map((id) => categoryPath({ ...state, categories: entry.categories }, id)))].filter(Boolean).join("；")}</small></div>
-          <Button size="sm" disabled={isCategorizing} onClick={() => void commitCategories((latest) => restoreLibraryTrash(latest, entry.id)).catch(() => undefined)}>恢复</Button>
-          <Button size="sm" variant="ghost" disabled={isCategorizing} onClick={() => setDiscardTrashId(entry.id)}>永久移除…</Button>
-        </li>) : <li className="muted">回收站为空</li>}</ul>}
+          <Button size="sm" disabled={isCategorizing} onClick={() => void commitCategories((latest) => restoreLibraryTrash(latest, entry.id)).catch(() => undefined)}>{t("library.restore")}</Button>
+          <Button size="sm" variant="ghost" disabled={isCategorizing} onClick={() => setDiscardTrashId(entry.id)}>{t("library.permanentlyRemoveMenu")}</Button>
+        </li>) : <li className="muted">{t("library.trashEmpty")}</li>}</ul>}
       </Dialog>}
       {iconCategoryId && categories.find((category) => category.id === iconCategoryId) && <CategoryIconDialog name={categories.find((category) => category.id === iconCategoryId)!.name} icon={categories.find((category) => category.id === iconCategoryId)!.icon} busy={isCategorizing} onClose={() => setIconCategoryId("")} onSubmit={async (icon: LibraryCategoryIcon) => { await commitCategories((latest) => updateLibraryCategory(latest, iconCategoryId, { icon })); setIconCategoryId(""); }} />}
       {sendDialogRecord ? (
@@ -682,7 +683,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
           targetFileName={sendTargetFileName}
           overwrite={sendOverwrite}
           isSending={isSending}
-          error={sendError}
+          error={localizeMessage(sendError)}
           onTargetDirectoryChange={setSendTargetDirectory}
           onTargetFileNameChange={setSendTargetFileName}
           onOverwriteChange={setSendOverwrite}

@@ -1,3 +1,5 @@
+import { t, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import React, { useState, useEffect, useMemo } from "react";
 import {
   loadEnumeratorCollections,
@@ -22,7 +24,7 @@ const BLOCK_LIKE_TYPES = new Set(["block", "mixed", "unknown"]);
 export function EnumeratorBlockPickerDialog({
   onClose,
   onAddBlocks,
-  title = "从枚举器选择方块",
+  title = t("replace.pickerTitle"),
   currentBlocks = [],
 }: {
   onClose: () => void;
@@ -30,18 +32,19 @@ export function EnumeratorBlockPickerDialog({
   title?: string;
   currentBlocks?: string[];
 }) {
+  const { locale } = useI18n();
   const [collections, setCollections] = useState<EnumeratorCollection[]>([]);
   const [loading, setLoading] = useState(true);
   const [expression, setExpression] = useState("");
   const [preview, setPreview] = useState<string[]>([]);
-  const [nonBlockWarning, setNonBlockWarning] = useState<string[]>([]);
-  const [evalError, setEvalError] = useState("");
+  const [nonBlockWarning, setNonBlockWarning] = useState<UiMessage[]>([]);
+  const [evalError, setEvalError] = useState<UiMessage>("");
 
   useEffect(() => {
     let active = true;
-    loadEnumeratorCollections(currentBlocks.length ? [{ id:"runtime:replace", name:"当前统计结果", symbol:"L", category:"runtime", valueType:"block", version:"runtime", values:currentBlocks, description:"当前投影原始结构方块", updatedAt:"runtime", readOnly:true }] : [])
+    loadEnumeratorCollections(currentBlocks.length ? [{ id:"runtime:replace", name:t("replace.currentResults"), symbol:"L", category:"runtime", valueType:"block", version:"runtime", values:currentBlocks, description:t("replace.originalBlocks"), updatedAt:"runtime", readOnly:true }] : [])
       .then(collections => { if(active) setCollections(collections); })
-      .catch(error => { if(active) { setCollections([]); setEvalError(`读取枚举集合失败：${error}`); } })
+      .catch(error => { if(active) { setCollections([]); setEvalError({key:"statistics.collectionsFailed",params:{error:String(error)}}); } })
       .finally(() => { if(active) setLoading(false); });
     return () => { active = false; };
   }, [currentBlocks]);
@@ -70,7 +73,7 @@ export function EnumeratorBlockPickerDialog({
     setPreview(blockValues);
     setNonBlockWarning(
       rejected.length > 0
-        ? rejected.slice(0, 5).concat(rejected.length > 5 ? [`... 共 ${rejected.length} 项`] : [])
+        ? [...rejected.slice(0, 5), ...(rejected.length > 5 ? [{key:"replace.rejectedCount",params:{count:rejected.length}}] : [])]
         : []
     );
   }, [expression, collections, currentBlocks]);
@@ -79,9 +82,9 @@ export function EnumeratorBlockPickerDialog({
     () =>
       collections
         .filter((c) => BLOCK_LIKE_TYPES.has(c.valueType))
-        .map((c) => `${c.name}${c.symbol ? ` (${c.symbol})` : ""}`)
+        .map((c) => `${localizeMessage(c.name)}${c.symbol ? ` (${c.symbol})` : ""}`)
         .slice(0, 8),
-    [collections]
+    [collections, locale]
   );
 
   const handleConfirm = () => {
@@ -96,33 +99,33 @@ export function EnumeratorBlockPickerDialog({
         <div className="enum-picker-content">
           {/* Expression input */}
           <div>
-            <label className="enum-picker-label">集合名称 / 集合表达式</label>
+            <label className="enum-picker-label">{t("replace.expression")}</label>
             <Input
               className="input enum-picker-input"
               value={expression}
-              placeholder="例：base:dv-blocks  或  木头 ∪ 石头  或  A-(map_*)"
+              placeholder={t("replace.expressionHint")}
               onChange={(e) => setExpression(e.target.value)}
               autoFocus
             />
             {!loading && collectionHints.length > 0 && (
-              <div className="enum-picker-hint">可用集合：{collectionHints.join("、")}</div>
+              <div className="enum-picker-hint">{t("replace.availableCollections", {collections:collectionHints.join(locale === "zh-CN" ? "、" : ", ")})}</div>
             )}
           </div>
 
           {evalError && (
-            <div className="enum-picker-error">⚠ 表达式错误：{evalError}</div>
+            <div className="enum-picker-error">{t("replace.expressionError", {error:localizeMessage(evalError)})}</div>
           )}
 
           {nonBlockWarning.length > 0 && (
             <div className="enum-picker-warning">
-              ⚠ 以下条目不是方块 ID，将被过滤掉：{nonBlockWarning.join("、")}
+              {t("replace.nonBlockWarning", {entries:nonBlockWarning.map(localizeMessage).join(locale === "zh-CN" ? "、" : ", ")})}
             </div>
           )}
 
           {preview.length > 0 && (
             <div>
               <div className="enum-picker-preview-label">
-                预览（共 {preview.length} 个方块，将全部添加为条目）：
+                {t("replace.pickerPreview", {count:preview.length.toLocaleString(locale)})}
               </div>
               <div className="enum-picker-preview-grid">
                 {preview.slice(0, 100).map((id) => (
@@ -132,24 +135,24 @@ export function EnumeratorBlockPickerDialog({
                   </div>
                 ))}
                 {preview.length > 100 && (
-                  <span className="enum-picker-preview-more">...还有 {preview.length - 100} 个</span>
+                  <span className="enum-picker-preview-more">{t("replace.moreEntries", {count:(preview.length-100).toLocaleString(locale)})}</span>
                 )}
               </div>
             </div>
           )}
 
           {preview.length === 0 && !evalError && expression.trim() && !loading && (
-            <div className="enum-picker-empty">表达式计算结果为空集</div>
+            <div className="enum-picker-empty">{t("replace.emptySet")}</div>
           )}
 
           <div className="enum-picker-buttons">
-            <Button onClick={onClose}>取消</Button>
+            <Button onClick={onClose}>{t("editor.cancel")}</Button>
             <Button
               variant={preview.length > 0 ? "default" : "secondary"}
               disabled={preview.length === 0}
               onClick={handleConfirm}
             >
-              添加 {preview.length > 0 ? `${preview.length} 个` : ""}条目
+              {t("replace.addEntries", {count:preview.length.toLocaleString(locale)})}
             </Button>
           </div>
         </div>

@@ -1,3 +1,4 @@
+import { getUiLocale, t } from "./i18n";
 import { readWorkspaceFile } from "./backend";
 import { listGameResourceRegistry, readActiveGameDataResource } from "./gameResources";
 import { listenEvent } from "../platform/events";
@@ -35,7 +36,7 @@ export async function loadDatabases(version = "26.3") {
     if (!entry.builtin && entry.version === version) {
       const active = await readActiveGameDataResource();
       const db = JSON.parse(active.dbText) as BlockStateDb;
-      if (!db.blocks || !Object.keys(db.blocks).length) throw new Error(`Minecraft ${version} 导入方块数据为空。`);
+      if (!db.blocks || !Object.keys(db.blocks).length) throw new Error(t("native.db.empty", { version }));
       const blocks = Object.entries(db.blocks).map(([id, block]) => [id, {
         id, properties: block.properties || {}, defaultState: id + (
           Object.keys(block.default_properties || {}).length
@@ -47,7 +48,7 @@ export async function loadDatabases(version = "26.3") {
       i18nCache = JSON.parse(active.i18nText);
     } else {
       const result = await queryBlockDatabase({ version });
-      if (!result.blocks?.length) throw new Error(`Minecraft ${version} 方块数据未加载，请重试。`);
+      if (!result.blocks?.length) throw new Error(t("native.db.notLoaded", { version }));
       catalogs.set(version, new Map(result.blocks.map((block) => [block.id, block])));
       if (!i18nCache) i18nCache = JSON.parse(await readWorkspaceFile("data/minecraft_blockstates/26.1.zh_cn.json"));
     }
@@ -73,11 +74,12 @@ export function getDefaultProperties(blockId: string, version = "26.3"): Record<
 }
 
 export function translateKey(key: string): string {
-  return i18nCache?.property_keys?.[key] || key;
+  return getUiLocale() === "en-US" ? key : i18nCache?.property_keys?.[key] || key;
 }
 
 export function translateValue(key: string, value: string): string {
-  if (value === "$keep") return "保持原状态";
+  if (value === "$keep") return t("native.db.keepState");
+  if (getUiLocale() === "en-US") return value;
   return i18nCache?.property_values?.[key]?.[value] || value;
 }
 

@@ -1,3 +1,5 @@
+import { t, formatDate, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
+import { useI18n } from "../../i18n";
 import React, { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button";
 import { Dialog } from "../../components/Dialog";
@@ -9,9 +11,10 @@ import "../../styles/updater.css";
 let startupCheck: Promise<UpdateView> | undefined;
 
 export function UpdateDialog({ theme }: { theme: string }) {
+  useI18n();
   const [view, setView] = useState<UpdateView | null>(null);
   const [open, setOpen] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiMessage>("");
   const action = useRef(false);
   const [running, setRunning] = useState(false);
   useEffect(() => {
@@ -63,25 +66,25 @@ export function UpdateDialog({ theme }: { theme: string }) {
   };
   const installing = view?.phase === "installing" || view?.phase === "restartRequired";
   const canUpdate = !!view?.version && !running && ["available", "error", "cancelled", "downloaded"].includes(view.phase);
-  const phaseText = { idle: "尚未检查", disabled: "更新尚未配置", checking: "正在检查更新…", available: "发现新版本", current: "当前已是最新可用版本", skipped: "已跳过当前版本", downloading: "正在下载并校验签名…", downloaded: "签名校验完成", waiting: "等待任务安全退出…", installing: "正在安全退出并安装…", cancelled: "已取消更新", error: "更新未完成", restartRequired: "更新未安装，后台服务需要恢复" };
+  const phaseText = { idle: t("update.notChecked"), disabled: t("update.notConfigured"), checking: t("update.checking"), available: t("update.available"), current: t("update.current"), skipped: t("update.skipped"), downloading: t("update.downloading"), downloaded: t("update.verified"), waiting: t("update.waiting"), installing: t("update.installing"), cancelled: t("update.cancelled"), error: t("update.incomplete"), restartRequired: t("update.recoveryRequired") };
   return <>
-    <Button variant="ghost" className="sidebar-item nav-item updater-check" onClick={manualCheck} disabled={running} title="检查更新" aria-label="检查更新">
-      <NavIcon name="update" theme={theme} /><span className="nav-label">检查更新</span>
+    <Button variant="ghost" className="sidebar-item nav-item updater-check" onClick={manualCheck} disabled={running} title={t("update.check")} aria-label={t("update.check")}>
+      <NavIcon name="update" theme={theme} /><span className="nav-label">{t("update.check")}</span>
     </Button>
-    {open && <Dialog title={view?.version ? `更新至 ${view.version}` : "软件更新"} subtitle="更新完成后将自动重启。" onClose={() => void cancel()} busy={installing} width="md"
+    {open && <Dialog title={view?.version ? t("update.toVersion", { version: view.version }) : t("update.title")} subtitle={t("update.restartHint")} onClose={() => void cancel()} busy={installing} width="md"
       footer={<>
-        <Button variant="ghost" onClick={() => void skip()} disabled={!view?.version || running || installing}>跳过当前版本</Button>
-        <Button variant="secondary" onClick={() => void cancel()} disabled={installing}>取消</Button>
+        <Button variant="ghost" onClick={() => void skip()} disabled={!view?.version || running || installing}>{t("update.skip")}</Button>
+        <Button variant="secondary" onClick={() => void cancel()} disabled={installing}>{t("common.cancel")}</Button>
         {view?.phase === "restartRequired"
-          ? <Button onClick={() => void restartAfterUpdateFailure().catch((e) => setError(String(e)))}>重启当前版本</Button>
-          : <Button onClick={() => void apply()} disabled={!canUpdate}>更新并重启</Button>}
+          ? <Button onClick={() => void restartAfterUpdateFailure().catch((e) => setError(String(e)))}>{t("update.restartCurrent")}</Button>
+          : <Button onClick={() => void apply()} disabled={!canUpdate}>{t("update.installRestart")}</Button>}
       </>}>
-      <p role="status" aria-live="polite">{view ? phaseText[view.phase] : "正在检查更新…"}</p>
-      <dl className="update-version"><dt>当前版本</dt><dd>{view?.currentVersion || "—"}</dd><dt>版本</dt><dd>{view?.version || "—"}</dd><dt>日期</dt><dd>{view?.date || "未提供"}</dd></dl>
-      {view?.source && <p className="muted">更新源：{view.source}</p>}
-      {view?.phase === "downloading" && <div className="update-download"><progress aria-label="更新下载进度" max={view.total || undefined} value={view.total ? Math.min(view.downloaded, view.total) : undefined} /><span>{(view.downloaded / 1048576).toFixed(1)} MB{view.total ? ` / ${(view.total / 1048576).toFixed(1)} MB` : ""}</span></div>}
-      {view?.version && releaseNoteSections(view.notes).map(({ label, lines }) => <section className="update-notes" key={label}><h4>{label}</h4><ul>{lines.map((line, i) => <li key={i}>{line}</li>)}</ul></section>)}
-      {(error || view?.message) && <p role="alert">{error || view?.message}</p>}
+      <p role="status" aria-live="polite">{view ? phaseText[view.phase] : t("update.checking")}</p>
+      <dl className="update-version"><dt>{t("update.currentVersion")}</dt><dd>{view?.currentVersion || "—"}</dd><dt>{t("update.version")}</dt><dd>{view?.version || "—"}</dd><dt>{t("update.date")}</dt><dd>{view?.date ? formatDate(view.date, {dateStyle:"medium"}) : t("common.notProvided")}</dd></dl>
+      {view?.source && <p className="muted">{t("update.source")}{view.source}</p>}
+      {view?.phase === "downloading" && <div className="update-download"><progress aria-label={t("update.downloadProgress")} max={view.total || undefined} value={view.total ? Math.min(view.downloaded, view.total) : undefined} /><span>{(view.downloaded / 1048576).toFixed(1)} MB{view.total ? ` / ${(view.total / 1048576).toFixed(1)} MB` : ""}</span></div>}
+      {view?.version && releaseNoteSections(view.notes).map(({ label, lines }) => <section className="update-notes" key={label}><h4>{localizeMessage(label)}</h4><ul>{lines.map((line, i) => <li key={i}>{line}</li>)}</ul></section>)}
+      {(error || view?.message) && <p role="alert">{localizeMessage(error || view?.message)}</p>}
     </Dialog>}
   </>;
 }

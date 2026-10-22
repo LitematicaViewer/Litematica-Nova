@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../src/services/i18n";
+import { useI18n } from "../i18n";
 import { creativeItemId, creativeInventoryValues, displayPathText } from "../../src/business/facade";
 import React, { useState, useEffect, useMemo } from "react";
 import { type EnumeratorCollection, loadEnumeratorCollections } from "../../src/business/facade";
@@ -16,7 +18,7 @@ import { CreativeInventoryTooltip } from "../windows/main/pages/flake/function";
 export function BlockPickerDialog({
   onClose,
   onPickBlock,
-  title = "选择方块",
+  title = t("library.chooseBlock"),
   extraCollections = [],
 }: {
   onClose: () => void;
@@ -25,6 +27,7 @@ export function BlockPickerDialog({
   /** Extra collections injected at the top of the dropdown, e.g. current file's material list. */
   extraCollections?: { id: string; name: string; values: string[] }[];
 }) {
+  const { locale, revision } = useI18n();
   const [collections, setCollections] = useState<EnumeratorCollection[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState(() =>
     extraCollections.length > 0 ? extraCollections[0].id : ""
@@ -32,7 +35,7 @@ export function BlockPickerDialog({
   const [search, setSearch] = useState("");
   const [pageStart, setPageStart] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiMessage>("");
   const [hoverItem, setHoverItem] = useState<{ id: string; name: string } | null>(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
 
@@ -47,7 +50,7 @@ export function BlockPickerDialog({
           .sort((a, b) => {
             if (a.id === "base:dv-blocks") return -1;
             if (b.id === "base:dv-blocks") return 1;
-            return a.name.localeCompare(b.name, "zh-CN");
+            return a.name.localeCompare(b.name, getUiLocale());
           });
         setCollections(creative);
         setSelectedCollectionId((prev) => {
@@ -67,9 +70,9 @@ export function BlockPickerDialog({
   const allCollections = useMemo(
     () => [
       ...extraCollections.map((c) => ({ ...c, isExtra: true })),
-      ...collections.map((c) => ({ id: c.id, name: c.name, values: c.values, isExtra: false })),
+      ...collections.map((c) => ({ id: c.id, name: c.readOnly && c.id === "base:dv-blocks" ? t("library.collection.base:dv-blocks") : c.name, values: c.values, isExtra: false })),
     ],
-    [collections, extraCollections]
+    [collections, extraCollections, locale]
   );
 
   const selectedValues = useMemo(
@@ -83,7 +86,7 @@ export function BlockPickerDialog({
     return selectedValues.filter(
       (id) => id.toLowerCase().includes(kw) || translateBlockId(creativeItemId(id) || id).toLowerCase().includes(kw)
     );
-  }, [search, selectedValues]);
+  }, [search, selectedValues, revision]);
 
   const maxPage = filtered.length <= 45 ? 0 : Math.floor((filtered.length - 1) / 9) * 9;
   const visible = useMemo(() => {
@@ -116,22 +119,22 @@ export function BlockPickerDialog({
         <div className="flake-page__inventory-dialog-body">
           <div className="flake-page__creative-inventory-controls">
             <label className="flake-page__creative-inventory-control">
-              <span className="nova-muted">分类</span>
+              <span className="nova-muted">{t("library.categories")}</span>
               <Dropdown
                 value={selectedCollectionId}
                 onChange={setSelectedCollectionId}
-                ariaLabel="分类"
+                ariaLabel={t("library.categories")}
                 options={allCollections.length === 0
-                  ? [{ label: "（加载中）", value: "" }]
+                  ? [{ label: t("library.loadingOption"), value: "" }]
                   : allCollections.map((c) => ({ label: c.name, value: c.id }))}
               />
             </label>
             <label className="flake-page__creative-inventory-control flake-page__creative-inventory-search">
-              <span className="nova-muted">搜索</span>
-              <Input className="input" value={search} placeholder="按方块名或 ID 过滤" onChange={(e) => setSearch(e.target.value)} />
+              <span className="nova-muted">{t("library.search")}</span>
+              <Input className="input" value={search} placeholder={t("library.blockFilterPlaceholder")} onChange={(e) => setSearch(e.target.value)} />
             </label>
             <div className="flake-page__creative-inventory-range nova-muted nova-small">
-              {loading ? "加载中..." : `${rangeStart}-${rangeEnd} / ${filtered.length}`}
+              {loading ? t("library.loading") : `${rangeStart}-${rangeEnd} / ${filtered.length}`}
             </div>
           </div>
           <div className="flake-page__creative-inventory-stage">
@@ -157,15 +160,15 @@ export function BlockPickerDialog({
                   )
                 )}
               </div>
-              {loading && <div className="flake-page__creative-inventory-overlay nova-muted">正在加载创造模式分类...</div>}
-              {!loading && error && <div className="flake-page__creative-inventory-overlay nova-error">{displayPathText(error)}</div>}
-              {!loading && !error && !filtered.length && <div className="flake-page__creative-inventory-overlay nova-muted">没有可显示的方块。</div>}
+              {loading && <div className="flake-page__creative-inventory-overlay nova-muted">{t("library.creativeCategoriesLoading")}</div>}
+              {!loading && error && <div className="flake-page__creative-inventory-overlay nova-error">{displayPathText(localizeMessage(error))}</div>}
+              {!loading && !error && !filtered.length && <div className="flake-page__creative-inventory-overlay nova-muted">{t("library.noBlocks")}</div>}
             </div>
           </div>
         </div>
       </Dialog>
       {/* Fixed-position tooltip, so it lives beside the dialog rather than inside it. */}
-      <CreativeInventoryTooltip x={hoverPos.x} y={hoverPos.y} item={hoverItem} />
+      <CreativeInventoryTooltip x={hoverPos.x} y={hoverPos.y} item={hoverItem ? { ...hoverItem, name: translateBlockId(hoverItem.id) } : null} />
     </>
   );
 }
