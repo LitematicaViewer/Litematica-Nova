@@ -87,6 +87,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
     <Comp ref={ref} type={type} data-slot={themeSlot} data-variant={variant} data-size={size}
       className={cn(buttonVariants({ variant, size, className }))} {...props}>
       {asChild ? <Slot.Slottable>{children}</Slot.Slottable> : children}
+      <span data-slot="button-motion-layer" aria-hidden="true" hidden />
       <ButtonDecorations variant={variant} size={size} />
     </Comp>
   );

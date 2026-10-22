@@ -187,7 +187,7 @@ export function App() {
           title={expanded ? "收起侧栏" : "展开侧栏"}
         >
           <NavIcon name="hamburger" theme={theme} />
-          {expanded ? <strong>Litematica-Nova</strong> : null}
+          <strong>Litematica-Nova</strong>
         </Button>
 
         <ScrollArea className="nav-scroll-area"><nav className="nav-list" aria-label="主导航">
@@ -204,7 +204,7 @@ export function App() {
                 aria-label={value.name}
               >
                 <NavIcon name={value.icon} theme={theme} />
-                {expanded && <span className="nav-label">{value.name}</span>}
+                <span className="nav-label">{value.name}</span>
               </Button>
             );
           })}
@@ -213,7 +213,7 @@ export function App() {
         <nav className="nav-list nav-list-bottom" aria-label="选项">
           {debugMode && <Button variant="ghost" className="sidebar-item nav-item" type="button" aria-label="枚举器" title={!expanded ? "枚举器" : ""}
             onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true)).catch((error) => setEnumeratorError(String(error)))}>
-            <NavIcon name="enumerator" theme={theme} />{expanded && <span className="nav-label">枚举器</span>}
+            <NavIcon name="enumerator" theme={theme} /><span className="nav-label">枚举器</span>
           </Button>}
           <UpdateDialog theme={theme} />
           {Object.entries(bottomPages).map(([key, value]) => {
@@ -229,7 +229,7 @@ export function App() {
                 aria-label={value.name}
               >
                 <NavIcon name={value.icon} theme={theme} />
-                {expanded && <span className="nav-label">{value.name}</span>}
+                <span className="nav-label">{value.name}</span>
               </Button>
             );
           })}

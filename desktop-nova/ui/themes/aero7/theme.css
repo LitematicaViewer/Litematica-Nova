@@ -96,6 +96,12 @@
     --ln-aero7-window-close-width: 66px;
     --ln-aero7-window-close-height: 27px;
 
+    /* Motion: one duration and one easing for every Aero7 transition. This is the
+       single source; `widgets.css` only references these. Declared once in `:root`
+       so light and dark share the same timing. */
+    --ln-aero7-motion-duration: .25s;
+    --ln-aero7-motion-easing: cubic-bezier(.4, 0, .2, 1);
+
     /* Flake page artwork, addressed from this theme's own resource folder. */
     --flake-hotbar-image: url("./resource/content/hotbar.png");
     --flake-hotbar-selection-image: url("./resource/content/hotbar_selection.png");
