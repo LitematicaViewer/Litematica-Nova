@@ -2,10 +2,10 @@
   "compatibility": {
     "schema": "nova.runtime-compatibility.v1",
     "runtime_abi": 1,
-    "runtime_build_id": "runtime-1-e0aca6247c6f-five-features-20261024-r1-x86_64-pc-windows-msvc",
+    "runtime_build_id": "runtime-1-f49567dbf035-layer-camera-20261024-r1-x86_64-pc-windows-msvc",
     "target": "x86_64-pc-windows-msvc",
     "module_id": "nova_protected_module.dll",
-    "module_manifest_sha256": "14d3c843a462e5cff3adc063d1cb675b06a09af9a7c1089a750143aef4eb392f",
+    "module_manifest_sha256": "694f2ae1c3b3493b1c99a91b2425288ea0fec74d70c3893b032fef7b72250194",
     "endpoint": "https://45-62-112-121.sslip.io:8448/nova-core",
     "capabilities": [
       "standard",
@@ -17,7 +17,7 @@
       "native-viewer",
       "cpu-audit"
     ],
-    "created_ms": 1792778697150
+    "created_ms": 1792785420018
   },
-  "signature": "v5XM51ZYjLBs1EnN5zDYj1cufQy4355zKLRyDdYRKD2ilJSw9ZAIbY+qtuhRL9G0zizLQ+3jkIrgwLSDzD/GAg=="
+  "signature": "OFstyfz/1PP6z+R5xqsSoVQDEAqSQqgoDYTD82d0HIaCct/mhuLAyGuPD+e2SQsrU3/g4D63lh7dV3YBC1cwBA=="
 }
