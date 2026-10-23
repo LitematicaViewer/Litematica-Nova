@@ -5,6 +5,8 @@ pub const FRAME_MESSAGE_ID: i32 = 0x4e56_4d31;
 pub const ACK_MESSAGE_ID: i32 = 0x4e56_4d32;
 pub const INPUT_MESSAGE_ID: i32 = 0x4e56_4d33;
 pub const DISPLAY_MESSAGE_ID: i32 = 0x4e56_4d34;
+pub const POINTER_CAPTURE_MESSAGE_ID: i32 = 0x4e56_4d35;
+pub const POINTER_CAPTURE_BYTES: usize = 56;
 pub const FRAME_BYTES: usize = 64;
 pub const ACK_BYTES: usize = 32;
 pub const INPUT_BYTES: usize = 128;
@@ -14,6 +16,35 @@ pub const REAL_GEOMETRY: u32 = 2;
 pub const BGRA8_UNORM: u32 = 1;
 pub const BGRA8_SRGB: u32 = 2;
 pub const MAX_SURFACE_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Small producer-to-Host request. A real Host click/focus and the current
+/// presentation authority must still validate this request on the main thread.
+#[derive(Clone, Copy, Debug)]
+pub struct PointerCaptureRequest {
+    pub nonce: [u8; 16], pub generation: u64, pub epoch: u64,
+    pub input_sequence: u64, pub captured: bool,
+}
+impl PointerCaptureRequest {
+    pub fn encode(self) -> [u8; POINTER_CAPTURE_BYTES] {
+        let mut bytes = [0; POINTER_CAPTURE_BYTES];
+        bytes[..4].copy_from_slice(b"NVMC");
+        bytes[4..8].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[8..24].copy_from_slice(&self.nonce);
+        bytes[24..32].copy_from_slice(&self.generation.to_le_bytes());
+        bytes[32..40].copy_from_slice(&self.epoch.to_le_bytes());
+        bytes[40..48].copy_from_slice(&self.input_sequence.to_le_bytes());
+        bytes[48..52].copy_from_slice(&u32::from(self.captured).to_le_bytes());
+        bytes
+    }
+    pub fn decode(bytes: &[u8]) -> Result<Self, &'static str> {
+        if bytes.len() != POINTER_CAPTURE_BYTES || &bytes[..4] != b"NVMC" || u32_at(bytes, 4) != 1
+            || u64_at(bytes, 24) == 0 || u32_at(bytes, 48) > 1 || u32_at(bytes, 52) != 0 {
+            return Err("invalid native pointer capture request");
+        }
+        Ok(Self { nonce: bytes[8..24].try_into().unwrap(), generation: u64_at(bytes, 24),
+            epoch: u64_at(bytes, 32), input_sequence: u64_at(bytes, 40), captured: u32_at(bytes, 48) == 1 })
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameHeader {
@@ -149,7 +180,9 @@ pub fn encode_display(frame: FrameHeader, presented_time: f64) -> [u8; DISPLAY_B
     bytes
 }
 
-/// kind: move=1, down=2, up=3, wheel=4, keyDown=5, keyUp=6, focus=7.
+/// kind: move=1, down=2, up=3, wheel=4, keyDown=5, keyUp=6, focus=7,
+/// resized=8, hidden=9, pointerCapture=10. Move flags bit1 is actual capture;
+/// pointerCapture flags bit0 acknowledges the Host capture state.
 /// Coordinates and deltas use physical pixels. code is button/keycode; modifier
 /// bits retain NSEventModifierFlags. flags bit0 means repeat or focus=true.
 pub struct InputPacket<'a> {

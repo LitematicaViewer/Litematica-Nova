@@ -23,6 +23,7 @@ pub struct SceneViewControls {
     pub layer_min_y: Option<i32>,
     pub layer_max_y: Option<i32>,
     pub camera_mode: Option<String>,
+    pub camera_input_mode: Option<String>,
     pub camera_speed: Option<f32>,
     pub reset_camera: bool,
     pub reload_shader_options: bool,
@@ -37,6 +38,9 @@ impl SceneViewControls {
         if self.shaderpack_root.is_some() != self.shaderpack_name.is_some() { return Err("Shader pack root and name must be paired".into()); }
         if self.camera_mode.as_deref().is_some_and(|mode| mode != "orbit" && mode != "free") {
             return Err("Unknown camera mode".into());
+        }
+        if self.camera_input_mode.as_deref().is_some_and(|mode| mode != "drag" && mode != "pointer_lock") {
+            return Err("Unknown free camera input mode".into());
         }
         if self.camera_speed.is_some_and(|speed| !speed.is_finite() || speed <= 0.0) {
             return Err("Camera speed must be finite and positive".into());

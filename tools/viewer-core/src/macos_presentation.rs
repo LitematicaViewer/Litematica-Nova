@@ -160,7 +160,9 @@ impl State {
         if let ProducerEvent::Input(next) = &event {
             if let Some(ProducerEvent::Input(previous)) = self.events.back_mut() {
                 if next.epoch == previous.epoch && next.kind == 1 && previous.kind == 1 {
-                    *previous = next.clone(); return;
+                    let dx = previous.dx + next.dx;
+                    let dy = previous.dy + next.dy;
+                    *previous = next.clone(); previous.dx = dx; previous.dy = dy; return;
                 }
                 if next.epoch == previous.epoch && next.kind == 4 && previous.kind == 4 && next.flags == previous.flags && next.modifiers == previous.modifiers {
                     previous.dx = (previous.dx + next.dx).clamp(-1e7, 1e7);
@@ -274,8 +276,31 @@ impl MacPresentationProducer {
         Ok(layout)
     }
 
+    pub fn set_pointer_capture(&mut self, captured: bool) -> Result<(), String> {
+        let request = {
+            let state = self.transport.state.lock().map_err(|_| "presentation state lock failed")?;
+            if captured && (state.failed || !state.visible || state.last_input_sequence == 0) {
+                return Err("native pointer capture needs a current visible viewport input".into());
+            }
+            wire::PointerCaptureRequest { nonce: self.transport.nonce, generation: self.transport.generation,
+                epoch: state.epoch, input_sequence: state.last_input_sequence, captured }
+        };
+        #[repr(C)]
+        struct CaptureMessage { header: Header, payload: [u8; wire::POINTER_CAPTURE_BYTES] }
+        let mut message = CaptureMessage { header: Header { bits: u32::from(COPY_SEND),
+            size: (size_of::<Header>() + wire::POINTER_CAPTURE_BYTES) as u32,
+            remote: self.transport.destination.0, local: 0, voucher: 0, id: wire::POINTER_CAPTURE_MESSAGE_ID },
+            payload: request.encode() };
+        let size = message.header.size;
+        if unsafe { mach_msg(&mut message.header, SEND | SEND_TIMEOUT, size, 0, 0, 0, 0) } != 0 {
+            return Err("send native pointer capture request failed".into());
+        }
+        Ok(())
+    }
+
     pub fn set_presentation(&mut self, epoch: u64, visible: bool) -> Result<(), String> {
         if epoch == 0 { return Err("native presentation epoch must be non-zero".into()); }
+        if !visible { let _ = self.set_pointer_capture(false); }
         let mut state = self.transport.state.lock().map_err(|_| "presentation state lock failed")?;
         if epoch < state.epoch { return Ok(()); }
         if epoch != state.epoch || !visible {
@@ -324,7 +349,7 @@ impl MacPresentationProducer {
         Ok(())
     }
 }
-impl Drop for MacPresentationProducer { fn drop(&mut self) { self.transport.stopped.store(true, Ordering::Release); } }
+impl Drop for MacPresentationProducer { fn drop(&mut self) { let _ = self.set_pointer_capture(false); self.transport.stopped.store(true, Ordering::Release); } }
 
 pub struct SlotLease {
     transport: Arc<Transport>, surface: Arc<SurfaceTexture>, layout: RingLayout,
@@ -514,7 +539,7 @@ fn receive_input(transport: &Transport, bytes: &[u8]) {
     if bytes.len() != wire::INPUT_BYTES || &bytes[..4] != b"NVMI" || u32_at(bytes, 4) != 1
         || bytes[8..24] != transport.nonce || u64_at(bytes, 24) != transport.generation { return; }
     let (epoch, sequence, kind, flags) = (u64_at(bytes, 32), u64_at(bytes, 40), u32_at(bytes, 48), u32_at(bytes, 52));
-    if !(1..=9).contains(&kind) || sequence == 0 { return; }
+    if !(1..=10).contains(&kind) || sequence == 0 { return; }
     let (x, y, dx, dy) = (f64_at(bytes, 56), f64_at(bytes, 64), f64_at(bytes, 72), f64_at(bytes, 80));
     if ![x, y, dx, dy].iter().all(|value| value.is_finite() && value.abs() <= 1e7) { return; }
     let length = u32_at(bytes, 96) as usize;
@@ -522,7 +547,7 @@ fn receive_input(transport: &Transport, bytes: &[u8]) {
     let Ok(text) = std::str::from_utf8(&bytes[100..100 + length]) else { return; };
     let (code, modifiers) = (u32_at(bytes, 88), u32_at(bytes, 92));
     let Ok(mut state) = transport.state.lock() else { return; };
-    if state.failed || epoch != state.epoch || sequence <= state.last_input_sequence || (!state.visible && !matches!(kind, 7 | 8 | 9)) { return; }
+    if state.failed || epoch != state.epoch || sequence <= state.last_input_sequence || (!state.visible && !matches!(kind, 7 | 8 | 9 | 10)) { return; }
     if kind == 8 && (x < 1.0 || y < 1.0 || x > 16_384.0 || y > 16_384.0 || x.fract() != 0.0 || y.fract() != 0.0 || x * y * 4.0 > wire::MAX_SURFACE_BYTES as f64 || dx <= 0.0 || dx > 16.0) { return; }
     state.last_input_sequence = sequence;
     if kind == 8 {
@@ -541,7 +566,7 @@ fn receive_input(transport: &Transport, bytes: &[u8]) {
         3 => { state.pressed_buttons.remove(&code); }
         5 if code <= 255 => { state.pressed_keys.insert(code); }
         6 => { state.pressed_keys.remove(&code); }
-        7 if flags & 1 == 0 => { state.pressed_keys.clear(); state.pressed_buttons.clear(); state.push(ProducerEvent::ResetInput { epoch }); }
+        7 | 10 if flags & 1 == 0 => { state.pressed_keys.clear(); state.pressed_buttons.clear(); state.push(ProducerEvent::ResetInput { epoch }); }
         _ => {}
     }
     state.push(ProducerEvent::Input(ProducerInput { generation: transport.generation, epoch, sequence, kind, flags, x, y, dx, dy, code, modifiers, text: text.into() }));

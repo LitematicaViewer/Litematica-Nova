@@ -4,6 +4,7 @@ export interface SceneViewControls {
   layerMinY?: number | null;
   layerMaxY?: number | null;
   cameraMode?: "orbit" | "free";
+  cameraInputMode?: "drag" | "pointer_lock";
   cameraSpeed?: number;
   resetCamera?: boolean;
   reloadShaderOptions?: boolean;

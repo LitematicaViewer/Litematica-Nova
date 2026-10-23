@@ -20,7 +20,7 @@ use sha2::{Digest,Sha256};
 use viewer_launch_contract::{VIEWER_LAUNCH_ACK_PREFIX,VIEWER_LAUNCH_ACK_SCHEMA,VIEWER_LAUNCH_SCHEMA,ViewerLaunchAck,ViewerLaunchContract,ViewerSessionCommand,ViewerSessionCommandKind,ViewerSessionState,ViewerTask};
 use wgpu::util::DeviceExt;
 use winit::dpi::{PhysicalPosition,PhysicalSize};
-use winit::event::{ElementState,Event,MouseButton,MouseScrollDelta,WindowEvent};
+use winit::event::{DeviceEvent,ElementState,Event,MouseButton,MouseScrollDelta,WindowEvent};
 use winit::event_loop::{ControlFlow,EventLoop};
 use winit::keyboard::{KeyCode,PhysicalKey};
 #[cfg(target_os="windows")]
@@ -3349,12 +3349,31 @@ impl ChunkResidencyPlan {
     }
 }
 
+/// Viewport-local capture; the OS/Host owns confinement and the raw input source.
+#[derive(Default)]
+struct FreeCameraPointerCapture { captured: bool }
+impl FreeCameraPointerCapture {
+    fn capture(&mut self, window: &NativeViewportWindow) {
+        if self.captured { return; }
+        match window.set_pointer_capture(true) {
+            Ok(()) => self.captured = true,
+            Err(error) => eprintln!("[NOVA_CAMERA_INPUT] capture_failed error={error:#}"),
+        }
+    }
+    fn release(&mut self, window: &NativeViewportWindow) {
+        if !self.captured { return; }
+        if let Err(error) = window.set_pointer_capture(false) {
+            eprintln!("[NOVA_CAMERA_INPUT] release_failed error={error:#}");
+        }
+        self.captured = false;
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn free_camera_macos_key(code: u32) -> Option<KeyCode> {
     match code {
         13 => Some(KeyCode::KeyW), 1 => Some(KeyCode::KeyS),
         0 => Some(KeyCode::KeyA), 2 => Some(KeyCode::KeyD),
-        14 => Some(KeyCode::KeyE), 12 => Some(KeyCode::KeyQ),
         49 => Some(KeyCode::Space), 59 => Some(KeyCode::ControlLeft),
         62 => Some(KeyCode::ControlRight), _ => None,
     }
@@ -3363,7 +3382,8 @@ fn free_camera_macos_key(code: u32) -> Option<KeyCode> {
 #[derive(Debug, Clone, Copy)]
 struct OrbitCamera {
     free_mode: bool,
-    movement_keys: [bool; 9],
+    free_pointer_lock: bool,
+    movement_keys: [bool; 7],
     movement_updated: Instant,
     movement_speed: f32,
     target: Vec3,
@@ -3400,7 +3420,8 @@ impl OrbitCamera {
         let radius = bounds.radius.max(2.0);
         Self {
             free_mode: false,
-            movement_keys: [false; 9],
+            free_pointer_lock: false,
+            movement_keys: [false; 7],
             movement_updated: Instant::now(),
             movement_speed: 12.0,
             target: bounds.center,
@@ -3417,9 +3438,9 @@ impl OrbitCamera {
     }
 
     fn reset(&mut self, bounds: SceneBounds, width: u32, height: u32) {
-        let mode = self.free_mode; let speed = self.movement_speed;
+        let mode = self.free_mode; let input_mode = self.free_pointer_lock; let speed = self.movement_speed;
         *self = Self::from_bounds(bounds, width, height);
-        self.free_mode = mode; self.movement_speed = speed;
+        self.free_mode = mode; self.free_pointer_lock = input_mode; self.movement_speed = speed;
     }
 
     fn update_aspect(&mut self, width: u32, height: u32) {
@@ -3482,8 +3503,15 @@ impl OrbitCamera {
         self.clear_movement();
     }
 
+    fn set_free_input_mode(&mut self, mode: &str) {
+        self.free_pointer_lock = mode == "pointer_lock";
+        self.clear_movement();
+    }
+
+    fn requires_pointer_capture(&self) -> bool { self.free_mode && self.free_pointer_lock }
+
     fn clear_movement(&mut self) {
-        self.movement_keys = [false; 9];
+        self.movement_keys = [false; 7];
         self.movement_updated = Instant::now();
     }
 
@@ -3491,8 +3519,7 @@ impl OrbitCamera {
         let index = match key {
             KeyCode::KeyW => 0, KeyCode::KeyS => 1,
             KeyCode::KeyA => 2, KeyCode::KeyD => 3,
-            KeyCode::KeyE => 4, KeyCode::KeyQ => 5,
-            KeyCode::Space => 6, KeyCode::ControlLeft => 7, KeyCode::ControlRight => 8,
+            KeyCode::Space => 4, KeyCode::ControlLeft => 5, KeyCode::ControlRight => 6,
             _ => return,
         };
         if pressed && !self.movement_keys.iter().any(|value| *value) { self.movement_updated = Instant::now(); }
@@ -3506,7 +3533,7 @@ impl OrbitCamera {
         let axis = |positive: usize, negative: usize| self.movement_keys[positive] as u8 as f32 - self.movement_keys[negative] as u8 as f32;
         let forward = (self.target - self.eye()).normalize_or_zero();
         let right = forward.cross(Vec3::Y).normalize_or_zero();
-        let vertical = (self.movement_keys[4] || self.movement_keys[6]) as u8 as f32 - (self.movement_keys[5] || self.movement_keys[7] || self.movement_keys[8]) as u8 as f32;
+        let vertical = self.movement_keys[4] as u8 as f32 - (self.movement_keys[5] || self.movement_keys[6]) as u8 as f32;
         let movement = forward * axis(0, 1) + right * axis(3, 2) + Vec3::Y * vertical;
         if movement.length_squared() <= f32::EPSILON { return false; }
         self.target += movement.normalize() * self.movement_speed * dt;
@@ -8615,6 +8642,7 @@ impl ViewerState {
     fn apply_scene_view_controls(&mut self, controls: &viewer_launch_contract::SceneViewControls) -> Result<()> {
         if controls.apply_layer_range { self.set_layer_range(controls.layer_min_y, controls.layer_max_y); }
         if let Some(mode) = controls.camera_mode.as_deref() { self.camera.set_free_mode(mode == "free"); }
+        if let Some(mode) = controls.camera_input_mode.as_deref() { self.camera.set_free_input_mode(mode); }
         if let Some(speed) = controls.camera_speed { self.camera.movement_speed = speed; }
         if controls.reset_camera { self.reset_camera(); }
         self.write_camera();
@@ -8628,6 +8656,7 @@ impl ViewerState {
     }
 
     fn process_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
+        if self.camera.requires_pointer_capture() { return; }
         let next = Vec2::new(position.x as f32, position.y as f32);
         if let Some(last) = self.last_cursor_position {
             let delta = next - last;
@@ -8649,6 +8678,7 @@ impl ViewerState {
     }
 
     fn process_mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        if self.camera.requires_pointer_capture() { self.drag_mode = None; return; }
         if self.preview_mode {
             self.drag_mode = None;
             return;
@@ -10431,14 +10461,19 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
     let mut quick_presentation_audit = None::<(usize, usize)>;
     let mut quick_redraw = QuickRedrawState::new();
     let mut quick_occluded = false;
+    let mut pointer_capture = FreeCameraPointerCapture::default();
     #[cfg(target_os = "windows")]
     let mut quick_first_block_timing = first_block_timing::FirstBlockTiming::new_fast(
         args.input.as_deref().unwrap_or_else(|| Path::new("<empty>")));
     #[cfg(target_os = "macos")]
     let mut last_mac_display_epoch = None;
+    event_loop.listen_device_events(winit::event_loop::DeviceEvents::WhenFocused);
     let event_loop_result = event_loop.run(move |event, event_loop_window_target| {
         event_loop_window_target.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(40)));
+        if !state.camera.free_mode || presentation_mode == PersistentPresentationMode::Hidden || quick_occluded {
+            pointer_capture.release(window.as_ref()); state.camera.clear_movement();
+        } else if !state.camera.requires_pointer_capture() { pointer_capture.release(window.as_ref()); }
         #[cfg(target_os = "macos")]
         let event = if let Some(viewport) = window.shared() {
             state.device.poll(wgpu::Maintain::Poll);
@@ -10447,12 +10482,25 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                 use crate::macos_presentation::ProducerEvent;
                 match input {
                     ProducerEvent::Input(input) => match input.kind {
-                        1 => { state.process_cursor_moved(PhysicalPosition::new(input.x, input.y)); quick_redraw.request(); }
+                        10 => {
+                            pointer_capture.captured = input.flags & 1 != 0;
+                            if state.camera.requires_pointer_capture() && !pointer_capture.captured { state.camera.clear_movement(); }
+                        }
+                        1 => {
+                            pointer_capture.captured = input.flags & 2 != 0;
+                            if state.camera.requires_pointer_capture() && !pointer_capture.captured { state.camera.clear_movement(); }
+                            if state.camera.requires_pointer_capture() && pointer_capture.captured {
+                                state.camera.orbit(Vec2::new(input.dx as f32, input.dy as f32));
+                                state.write_camera(); state.mark_residency_dirty();
+                            } else { state.process_cursor_moved(PhysicalPosition::new(input.x, input.y)); }
+                            quick_redraw.request();
+                        }
                         2 | 3 => {
                             let button = match input.code {
                                 0 => MouseButton::Left, 1 => MouseButton::Right, 2 => MouseButton::Middle,
                                 other => MouseButton::Other(u16::try_from(other).unwrap_or(u16::MAX)),
                             };
+                            if state.camera.requires_pointer_capture() && input.kind == 2 { pointer_capture.capture(window.as_ref()); }
                             state.process_mouse_input(if input.kind == 2 { ElementState::Pressed } else { ElementState::Released }, button);
                             quick_redraw.request();
                         }
@@ -10462,18 +10510,19 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             } else { MouseScrollDelta::LineDelta(input.dx as f32, input.dy as f32) };
                             state.process_scroll(delta); quick_redraw.request();
                         }
-                        5 | 6 if free_camera_macos_key(input.code).is_some() => {
+                        5 | 6 if (!state.camera.free_pointer_lock || pointer_capture.captured) && free_camera_macos_key(input.code).is_some() => {
                             state.camera.movement_key(free_camera_macos_key(input.code).unwrap(), input.kind == 5);
                             quick_redraw.request();
                         }
                         5 if input.code == 15 => { state.reset_camera(); quick_redraw.request(); }
                         5 if input.code == 53 => { escape = true; }
-                        7 if input.flags & 1 == 0 => { state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement(); }
+                        7 if input.flags & 1 == 0 => { pointer_capture.release(window.as_ref()); state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement(); }
                         _ => {}
                     },
-                    ProducerEvent::ResetInput { .. } => { state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement(); }
+                    ProducerEvent::ResetInput { .. } => { pointer_capture.release(window.as_ref()); state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement(); }
                     ProducerEvent::ViewportResized { .. } => { state.resize(window.inner_size()); quick_redraw.request(); }
                     ProducerEvent::Hidden { .. } => {
+                        pointer_capture.release(window.as_ref());
                         presentation_mode = PersistentPresentationMode::Hidden;
                         quick_redraw.hide(); state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement();
                         publish_viewer_hidden_event(session_watcher.as_mut(), 0, "quick-metal", "popup_close");
@@ -10492,7 +10541,9 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                     ProducerEvent::FrameRejected { .. } => { quick_redraw.request(); }
                 }
             }
-            if escape {
+            if escape && state.camera.free_mode {
+                pointer_capture.release(window.as_ref()); state.camera.clear_movement();
+            } else if escape {
                 viewport.suspend(); presentation_mode = PersistentPresentationMode::Hidden;
                 quick_redraw.hide(); state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement();
                 publish_viewer_hidden_event(session_watcher.as_mut(), 0, "quick-metal", "escape_key");
@@ -10504,18 +10555,27 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                 Event::WindowEvent { window_id: window.id(), event: WindowEvent::RedrawRequested }
             } else { event }
         } else { event };
-        if let Event::WindowEvent { event, window_id } = &event {
-            if *window_id == window.id() {
-                match event {
-                    WindowEvent::KeyboardInput { event, .. } if window.has_focus() => {
-                        if let PhysicalKey::Code(key) = event.physical_key {
-                            state.camera.movement_key(key, event.state == ElementState::Pressed);
-                        }
+        match &event {
+            Event::WindowEvent { event, window_id } if *window_id == window.id() => match event {
+                WindowEvent::KeyboardInput { event, .. } if state.camera.free_mode && (!state.camera.free_pointer_lock || pointer_capture.captured) => {
+                    if let PhysicalKey::Code(key) = event.physical_key {
+                        state.camera.movement_key(key, event.state == ElementState::Pressed);
                     }
-                    WindowEvent::Focused(false) | WindowEvent::Occluded(true) => state.camera.clear_movement(),
-                    _ => {}
                 }
+                WindowEvent::Focused(false) | WindowEvent::Occluded(true) | WindowEvent::CloseRequested | WindowEvent::Destroyed => {
+                    pointer_capture.release(window.as_ref()); state.camera.clear_movement();
+                }
+                WindowEvent::Resized(size) if size.width == 0 || size.height == 0 => {
+                    pointer_capture.release(window.as_ref()); state.camera.clear_movement();
+                }
+                _ => {}
+            },
+            Event::DeviceEvent { event: DeviceEvent::MouseMotion { delta }, .. } if pointer_capture.captured => {
+                state.camera.orbit(Vec2::new(delta.0 as f32, delta.1 as f32));
+                state.write_camera(); state.mark_residency_dirty(); quick_redraw.request();
             }
+            Event::LoopExiting => { pointer_capture.release(window.as_ref()); state.camera.clear_movement(); }
+            _ => {}
         }
         match event {
             Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
@@ -10566,6 +10626,9 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                     if element_state == ElementState::Pressed && quick_host.is_some() {
                         window.focus_window();
                     }
+                    if state.camera.requires_pointer_capture() && element_state == ElementState::Pressed {
+                        pointer_capture.capture(window.as_ref());
+                    }
                     state.process_mouse_input(element_state, button);
                     quick_redraw.request();
                 }
@@ -10591,6 +10654,9 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         #[cfg(any(target_os="windows",target_os="linux"))]
                         PhysicalKey::Code(KeyCode::Tab) if quick_host.is_some() => {
                             native_child::focus_host(quick_host.as_ref().unwrap());
+                        }
+                        PhysicalKey::Code(KeyCode::Escape) if state.camera.free_mode => {
+                            pointer_capture.release(window.as_ref()); state.camera.clear_movement();
                         }
                         PhysicalKey::Code(KeyCode::Escape) => {
                             if session_watcher.is_some() {
@@ -10789,6 +10855,8 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                                 .and_then(|controls| state.apply_scene_view_controls(controls));
                             match result {
                                 Ok(()) => {
+                                    if !state.camera.requires_pointer_capture() || command.view_controls.as_ref().is_some_and(|controls| controls.camera_input_mode.is_some()) { pointer_capture.release(window.as_ref()); }
+                                    state.drag_mode = None; state.last_cursor_position = None;
                                     quick_redraw.request();
                                     if let Err(error) = watcher.acknowledge(command.sequence) {
                                         *event_error.lock().expect("scene view error mutex") = Some(error.to_string());
@@ -10817,6 +10885,9 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                                 state.quick_visible_sample_query.arm();
                             }
                         } else { quick_presentation_audit = None; }
+                        if matches!(command.kind, ViewerSessionCommandKind::Hide | ViewerSessionCommandKind::Release) {
+                            pointer_capture.release(window.as_ref()); state.camera.clear_movement();
+                        }
                         #[cfg(target_os = "windows")]
                         if matches!(command.kind, ViewerSessionCommandKind::Hide | ViewerSessionCommandKind::Release) {
                             quick_first_block_timing.hide(); state.quick_visible_sample_query.cancel();
