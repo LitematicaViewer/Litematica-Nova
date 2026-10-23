@@ -32,7 +32,8 @@ pub(crate) struct ApplicationOperations {
     layer_cache: Arc<Mutex<BTreeMap<AnalysisKey, Arc<OnceLock<Result<Arc<LayerCatalog>, String>>>>>>,
     lifecycle: Arc<(Mutex<OperationLifecycle>, Condvar)>,
     world_exports: Arc<Mutex<BTreeMap<String, WorldExportPaths>>>,
-    stockpile_tasks: Arc<Mutex<BTreeMap<String, DesktopTaskContext>>>,
+    stockpile_tasks: Arc<Mutex<()>>,
+    stockpile_project_ids: Arc<Mutex<BTreeMap<AnalysisKey, String>>>,
     iris_inspector: Arc<Mutex<(super::protected_render::ProtectedRender, Option<nova_render_protocol::ProtectedTask>)>>,
 }
 
@@ -313,10 +314,20 @@ pub(crate) struct ProjectMaterialsInput {
     pub(crate) include_container_items: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", default)]
 pub(crate) struct StockpileTaskInput {
-    source_path: String, scope: MaterialScope, include_container_items: bool, multiplier: u64,
+    source_path: Option<String>, task_id: Option<String>, scope: Option<MaterialScope>,
+    include_container_items: Option<bool>, multiplier: Option<u64>,
+}
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", default)]
+pub(crate) struct StockpileTaskCommandInput {
+    pub(crate) action: String, pub(crate) task_id: Option<String>, project_id: Option<String>, legacy_task_id: Option<String>,
+    source_revision: Option<String>, expected_revision: Option<String>, source_path: Option<String>, scope: Option<MaterialScope>,
+    include_container_items: Option<bool>, multiplier: Option<u64>, name: Option<String>,
+    preferences: Option<Value>, mutation: Option<Value>, material_id: Option<String>,
+    output_path: Option<String>, input_path: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -326,7 +337,6 @@ pub(crate) struct StockpileTaskSetInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct StockpileTaskResetInput { pub(crate) task_id: String, source_revision: String }
-struct DesktopTaskContext { key: AnalysisKey, request: Value }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -474,7 +484,8 @@ impl ApplicationOperations {
             layer_cache: Arc::new(Mutex::new(BTreeMap::new())),
             lifecycle: Arc::new((Mutex::new(OperationLifecycle::default()), Condvar::new())),
             world_exports: Arc::new(Mutex::new(BTreeMap::new())),
-            stockpile_tasks: Arc::new(Mutex::new(BTreeMap::new())),
+            stockpile_tasks: Arc::new(Mutex::new(())),
+            stockpile_project_ids: Arc::new(Mutex::new(BTreeMap::new())),
             iris_inspector: Arc::new(Mutex::new((super::protected_render::ProtectedRender::default(), None))),
         })
     }
@@ -765,46 +776,142 @@ impl ApplicationOperations {
     }
 
     pub(crate) fn stockpile_task(&self, input: StockpileTaskInput) -> Result<Value, String> {
-        if !(1..=1_000_000).contains(&input.multiplier) { return Err("建造份数必须为 1…1000000".into()); }
-        let source = self.resolve_path(&input.source_path);
-        let key = AnalysisKey::new(&source, stats_args(&source, input.include_container_items))?;
-        let snapshot = self.material_snapshot(&source, &input.scope, input.include_container_items)?;
-        if AnalysisKey::new(&source, key.args.clone())? != key { return Err("投影已更新，请重新加载备货任务".into()); }
-        let task_id = desktop_task_identity(&key.source, &input.scope, input.include_container_items, input.multiplier, &snapshot);
-        let request = json!({"taskId":task_id,"sourceRevision":key.revision(),"sourcePath":path_text(&key.source),
-            "snapshot":snapshot,"multiplier":input.multiplier});
-        let mut tasks = self.stockpile_tasks.lock().map_err(|_| "备货任务锁异常")?;
-        let result = self.run_stockpile_request(&request)?;
-        if tasks.len() >= 16 && !tasks.contains_key(&task_id) {
-            if let Some(old) = tasks.keys().next().cloned() { tasks.remove(&old); }
+        if let Some(id) = input.task_id {
+            return self.run_stockpile_request(&json!({"action":"select","taskId":id}));
         }
-        tasks.insert(task_id, DesktopTaskContext { key, request });
-        Ok(result)
-    }
-
-    pub(crate) fn set_stockpile_quantity(&self, input: StockpileTaskSetInput) -> Result<Value, String> {
-        self.mutate_stockpile(&input.task_id, &input.source_revision, json!({"materialId":input.material_id,"quantity":input.quantity}))
-    }
-    pub(crate) fn reset_stockpile(&self, input: StockpileTaskResetInput) -> Result<Value, String> {
-        self.mutate_stockpile(&input.task_id, &input.source_revision, json!({"reset":true}))
-    }
-    fn mutate_stockpile(&self, id: &str, revision: &str, mutation: Value) -> Result<Value, String> {
-        let tasks = self.stockpile_tasks.lock().map_err(|_| "备货任务锁异常")?;
-        let context = tasks.get(id).ok_or("备货任务已失效，请重新加载")?;
-        if context.key.revision() != revision || AnalysisKey::new(&context.key.source, context.key.args.clone())? != context.key {
-            return Err("投影已更新，请重新加载备货任务；原备货进度已保留".into());
-        }
-        let mut request = context.request.clone();
-        request["mutation"] = mutation;
+        let Some(path) = input.source_path.filter(|path| !path.trim().is_empty()) else {
+            return self.run_stockpile_request(&json!({"action":"open"}));
+        };
+        let source = self.resolve_path(&path);
+        let source = fs::canonicalize(&source).unwrap_or(source);
+        // A saved task owns its requirements. Opening it must work even after
+        // its source file is edited, moved, deleted, or the Viewer is closed.
+        let existing = self.run_stockpile_request(&json!({"action":"open","sourcePath":path_text(&source)}))?;
+        if existing.get("task").is_some_and(|task| !task.is_null()) { return Ok(existing); }
+        if !source.is_file() { return Ok(existing); }
+        let project_id = self.stockpile_project_id(&source)?;
+        let existing = self.run_stockpile_request(&json!({"action":"open","sourcePath":path_text(&source),"projectId":project_id}))?;
+        if existing.get("task").is_some_and(|task| !task.is_null()) { return Ok(existing); }
+        let mut request = json!({"action":"open"});
+        self.prepare_stockpile_source(&mut request, &source, input.scope, input.include_container_items.unwrap_or(false), input.multiplier.unwrap_or(1))?;
         self.run_stockpile_request(&request)
     }
+
+    pub(crate) fn stockpile_task_command(&self, input: StockpileTaskCommandInput) -> Result<Value, String> {
+        if !matches!(input.action.as_str(), "open"|"list"|"create"|"select"|"rename"|"sync"|"settings"|"mutate"|"details"|"export"|"import"|"bindLegacy") {
+            return Err("未知备货任务操作".into());
+        }
+        let mut request = json!({"action": input.action});
+        for (key, value) in [("taskId",input.task_id.map(Value::String)), ("projectId",input.project_id.map(Value::String)), ("legacyTaskId",input.legacy_task_id.map(Value::String)),
+            ("sourceRevision",input.source_revision.map(Value::String)), ("expectedRevision",input.expected_revision.map(Value::String)), ("name",input.name.map(Value::String)),
+            ("preferences",input.preferences), ("mutation",input.mutation), ("materialId",input.material_id.map(Value::String)),
+            ("multiplier",input.multiplier.map(Value::from))] {
+            if let Some(value) = value { request[key] = value; }
+        }
+        if input.action == "sync" || input.action == "bindLegacy" || input.action == "create" && request["taskId"].is_null() {
+            let source = input.source_path.as_deref().filter(|path| !path.trim().is_empty()).ok_or("请选择备货任务的来源投影")?;
+            let source = self.resolve_path(source);
+            if input.action == "sync" {
+                // Explicit requirement refresh is the only task action that
+                // discards an old resource-bound analysis. Ordinary task reads
+                // and item edits keep using their durable demand snapshot.
+                let canonical = fs::canonicalize(&source).map_err(|error| format!("读取备货来源：{error}"))?;
+                self.analysis_cache.lock().map_err(|_|"材料快照缓存锁异常")?.retain(|key,_|key.source != canonical);
+            }
+            self.prepare_stockpile_source(&mut request, &source, input.scope, input.include_container_items.unwrap_or(false), input.multiplier.unwrap_or(1))?;
+        }
+        if input.action == "select" {
+            if let Some(path) = input.source_path.as_deref() {
+                let source = self.resolve_path(path);
+                if source.is_file() && request["projectId"].as_str().is_some_and(|id|self.stockpile_project_id(&source).is_ok_and(|actual|actual==id)) {
+                    request["sourcePath"] = path_text(&fs::canonicalize(&source).map_err(|error|error.to_string())?).into();
+                }
+            }
+        }
+        if input.action == "import" {
+            let source = self.resolve_path(input.input_path.as_deref().ok_or("请选择任务备份 JSON")?);
+            let metadata = fs::metadata(&source).map_err(|error| format!("读取备份：{error}"))?;
+            if !metadata.is_file() || metadata.len() > 64 * 1024 * 1024 { return Err("任务备份不是有效文件或超过 64 MiB".into()); }
+            request["backup"] = serde_json::from_slice(&fs::read(&source).map_err(|error|format!("读取备份：{error}"))?)
+                .map_err(|error|format!("任务备份 JSON 无效：{error}"))?;
+        }
+        let mut result = self.run_stockpile_request(&request)?;
+        if input.action == "export" {
+            let _write = self.begin_write()?;
+            let destination = self.resolve_path(input.output_path.as_deref().ok_or("请选择备份保存位置")?);
+            if !destination.extension().and_then(|extension|extension.to_str()).is_some_and(|extension|extension.eq_ignore_ascii_case("json")) || !destination.parent().is_some_and(Path::is_dir) {
+                return Err("请将任务备份另存为现有目录中的 JSON 文件".into());
+            }
+            let backup = result.get("backup").filter(|backup| !backup.is_null()).ok_or("备货模块未返回有效备份")?;
+            let generation = self.next_generation.fetch_add(1,Ordering::Relaxed);
+            let temporary = destination.with_extension(format!("nova-task-{generation}.tmp"));
+            let mut files = OperationFiles::new(); files.track(temporary.clone());
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|error|format!("创建备份：{error}"))?;
+            serde_json::to_writer_pretty(&mut file,backup).map_err(|error|format!("写入备份：{error}"))?;
+            file.flush().and_then(|_|file.sync_all()).map_err(|error|format!("保存备份：{error}"))?;
+            drop(file);
+            fs::rename(&temporary,&destination).map_err(|error|format!("完成备份保存：{error}"))?;
+            result.as_object_mut().unwrap().remove("backup");
+            result["outputPath"] = path_text(&destination).into();
+        }
+        Ok(result)
+    }
+    pub(crate) fn set_stockpile_quantity(&self, input: StockpileTaskSetInput) -> Result<Value, String> {
+        self.run_stockpile_request(&json!({"action":"mutate","taskId":input.task_id,"sourceRevision":input.source_revision,
+            "mutation":{"materialId":input.material_id,"quantity":input.quantity,"status":"done"}}))
+    }
+    pub(crate) fn reset_stockpile(&self, input: StockpileTaskResetInput) -> Result<Value, String> {
+        self.run_stockpile_request(&json!({"action":"mutate","taskId":input.task_id,"sourceRevision":input.source_revision,"mutation":{"reset":true}}))
+    }
+    fn stockpile_project_id(&self, source: &Path) -> Result<String, String> {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        let key = AnalysisKey::new(source,Vec::new())?;
+        if let Some(id) = self.stockpile_project_ids.lock().map_err(|_|"备货来源身份缓存锁异常")?.get(&key).cloned() { return Ok(id); }
+        let mut file = fs::File::open(source).map_err(|error|format!("读取备货来源身份：{error}"))?;
+        let mut digest = Sha256::new(); let mut bytes = [0_u8;64*1024];
+        loop { let count = file.read(&mut bytes).map_err(|error|format!("读取备货来源身份：{error}"))?; if count == 0 { break; } digest.update(&bytes[..count]); }
+        if AnalysisKey::new(source,Vec::new())? != key { return Err("投影在读取身份时发生变化，请重试".into()); }
+        let id = format!("{:x}",digest.finalize());
+        let mut cache = self.stockpile_project_ids.lock().map_err(|_|"备货来源身份缓存锁异常")?;
+        cache.retain(|old,_| old.source != key.source);
+        if cache.len() >= 16 { if let Some(old) = cache.keys().next().cloned() { cache.remove(&old); } }
+        cache.insert(key,id.clone()); Ok(id)
+    }
+    fn prepare_stockpile_source(&self, request: &mut Value, source: &Path, scope: Option<MaterialScope>, containers: bool, multiplier: u64) -> Result<(), String> {
+        if !(1..=1_000_000).contains(&multiplier) { return Err("建造份数必须为 1…1000000".into()); }
+        let scope = scope.unwrap_or(MaterialScope {kind:MaterialScopeKind::All,value:None});
+        let key = AnalysisKey::new(source,stats_args(source,containers))?;
+        let snapshot = self.material_snapshot(source,&scope,containers)?;
+        let project_id = self.stockpile_project_id(source)?;
+        if AnalysisKey::new(source,key.args.clone())? != key { return Err("投影已更新，请重新加载备货需求".into()); }
+        if request["legacyTaskId"].is_null() { request["legacyTaskId"] = desktop_task_identity(&key.source,&scope,containers,multiplier,&snapshot).into(); }
+        request["projectId"] = project_id.clone().into();
+        request["sourcePath"] = path_text(&key.source).into(); request["sourceRevision"] = key.revision().into();
+        request["snapshot"] = snapshot; request["multiplier"] = multiplier.into();
+        request["context"] = json!({"scope":scope,"includeContainerItems":containers,"sourceContentId":project_id,"sourceFileRevision":key.revision()});
+        Ok(())
+    }
     fn run_stockpile_request(&self, request: &Value) -> Result<Value, String> {
+        let _task = self.stockpile_tasks.lock().map_err(|_|"备货任务操作锁异常")?;
         let (generation, prefix) = self.next_operation("stockpile-task");
         let mut files = OperationFiles::new();
-        let request_path = files.track(self.operation_path(&prefix, "request.json"));
-        write_json(&request_path, request)?;
-        let result = self.run_core(generation, &prefix, vec!["stockpile-task".into(), path_text(&request_path)], &mut files)?;
-        parse_core_json(&result.stdout)
+        let request_path = files.track(self.operation_path(&prefix,"request.json"));
+        write_json(&request_path,request)?;
+        let result = self.run_core(generation,&prefix,vec!["stockpile-task".into(),path_text(&request_path)],&mut files)?;
+        let mut result = parse_core_json(&result.stdout)?;
+        if let Some(task) = result.get_mut("task").filter(|task|!task.is_null()) {
+            if let Some(path) = task["sourcePath"].as_str() {
+                let source = self.resolve_path(path);
+                task["sourceStatus"] = if !source.is_file() { "missing" } else {
+                    let containers = task.pointer("/context/includeContainerItems").and_then(Value::as_bool).unwrap_or(false);
+                    let captured = task.pointer("/context/sourceFileRevision").and_then(Value::as_str);
+                    if captured.is_some_and(|captured|AnalysisKey::new(&source,stats_args(&source,containers)).is_ok_and(|current|current.revision()!=captured)) { "changed" } else { "current" }
+                }.into();
+            }
+        }
+        Ok(result)
     }
 
     pub(crate) fn export_material_list(&self, input: ExportMaterialListInput) -> Result<Value, String> {
@@ -1124,7 +1231,8 @@ impl ApplicationOperations {
         )];
         // Each helper keeps the selected immutable data identity for its lifetime.
         // Selection/import commands resolve the live store themselves.
-        if command != "game-data" && command != "iris-settings" {
+        let saved_stockpile_snapshot = command == "stockpile-task" && args_request_snapshot_only(&launch.args);
+        if command != "game-data" && command != "iris-settings" && !saved_stockpile_snapshot {
             match crate::game_data::resolve_context(
                 &crate::current_user_config_dir()?.join("game-data"),
                 &crate::get_root().join("pack-in/game-data/default"),
@@ -1382,6 +1490,18 @@ fn material_snapshot_for_scope(mut snapshot: Value, scope: &MaterialScope) -> Re
     Ok(snapshot)
 }
 
+/// This inspects only a Host-owned temporary request, never a projection.
+/// Saved Stockpile state remains usable without a live game-resource selection.
+fn args_request_snapshot_only(args: &[std::ffi::OsString]) -> bool {
+    args.get(1).and_then(|path| fs::read(Path::new(path)).ok())
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .is_some_and(|request| request.get("snapshot").is_none() && match request["action"].as_str() {
+            Some("open" | "list" | "select" | "mutate" | "rename" | "export" | "import") => true,
+            Some("settings") => request.get("multiplier").is_none(),
+            _ => false,
+        })
+}
+
 fn desktop_task_identity(source: &Path, scope: &MaterialScope, containers: bool, multiplier: u64, snapshot: &Value) -> String {
     use sha2::{Digest, Sha256};
     let source_id = path_text(source);
@@ -1560,6 +1680,52 @@ fn material_recipe_fetch_args(version: String) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stockpile_saved_tasks_do_not_require_live_game_resources() {
+        let file = std::env::temp_dir().join(format!("nova-stockpile-request-{}-{}.json",std::process::id(),SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        let args = vec!["stockpile-task".into(),file.as_os_str().to_owned()];
+        for action in ["open","list","select","mutate","rename","export","import"] {
+            write_json(&file,&json!({"action":action})).unwrap(); assert!(args_request_snapshot_only(&args));
+        }
+        write_json(&file,&json!({"action":"settings","preferences":{"search":"stone"}})).unwrap(); assert!(args_request_snapshot_only(&args));
+        for request in [json!({"action":"create"}),json!({"action":"sync"}),json!({"action":"details"}),json!({"action":"settings","multiplier":2}),json!({"action":"open","snapshot":{}})] {
+            write_json(&file,&request).unwrap(); assert!(!args_request_snapshot_only(&args));
+        }
+        fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn stockpile_source_content_identity_is_path_independent_and_revalidates_changes() {
+        use crate::platform::process_supervisor::ExecutableAllowlist;
+        let root = std::env::temp_dir().join(format!("nova-stockpile-identity-{}-{}",std::process::id(),SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(root.join("backend")).unwrap();
+        let input = root.join("before.litematic"); fs::write(&input,b"compressed schematic sample").unwrap();
+        let (supervisor,_) = ProcessSupervisor::new(ExecutableAllowlist::new()).unwrap();
+        let operations = ApplicationOperations::new(Arc::new(supervisor),root.clone(),root.join("data"),root.join("backend")).unwrap();
+        let first = operations.stockpile_project_id(&input).unwrap();
+        assert_eq!(first,operations.stockpile_project_id(&input).unwrap());
+        assert_eq!(operations.stockpile_project_ids.lock().unwrap().len(),1);
+        let moved = root.join("renamed.litematic"); fs::rename(&input,&moved).unwrap();
+        assert_eq!(first,operations.stockpile_project_id(&moved).unwrap());
+        fs::write(&moved,b"edited compressed schematic sample with changed length").unwrap();
+        assert_ne!(first,operations.stockpile_project_id(&moved).unwrap());
+        assert_eq!(operations.lifecycle_snapshot()["coreCalls"],json!({}));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn stockpile_commands_accept_only_desktop_fields_and_keep_old_revision_distinct() {
+        let command: StockpileTaskCommandInput = serde_json::from_value(json!({"action":"sync","taskId":"a".repeat(64),
+            "expectedRevision":"saved-snapshot","sourcePath":"fixture.litematic","scope":{"kind":"all","value":null}})).unwrap();
+        assert_eq!(command.expected_revision.as_deref(),Some("saved-snapshot"));
+        assert!(command.source_revision.is_none());
+        for forbidden in ["snapshot","databasePath","privateKey","commandLine"] {
+            assert!(serde_json::from_value::<StockpileTaskCommandInput>(json!({"action":"mutate",(forbidden):{}})).is_err());
+        }
+        let historical: StockpileTaskInput = serde_json::from_value(json!({"taskId":"b".repeat(64)})).unwrap();
+        assert!(historical.source_path.is_none());
+    }
 
     #[test]
     fn desktop_task_identity_tracks_context_not_source_revision_or_row_order() {

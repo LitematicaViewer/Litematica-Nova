@@ -319,14 +319,68 @@ export function readEmbeddedPreview(sourcePath: string): Promise<EmbeddedPreview
 }
 
 export interface StockpileTaskInput {
-  sourcePath: string; scope: ApplicationMaterialScope; includeContainerItems: boolean; multiplier: number;
+  sourcePath?: string; taskId?: string; scope?: ApplicationMaterialScope; includeContainerItems?: boolean; multiplier?: number;
 }
-export interface StockpileTaskView {
-  taskId: string; sourceRevision: string;
-  items: Array<{ materialId: string; requiredCount: number; preparedCount: number; remainingCount: number; complete: boolean }>;
-  requiredCount: number; preparedCount: number; remainingCount: number; completedItems: number; totalItems: number;
+export interface StockpileTaskPreferences {
+  search: string; category: string; filter: string; sort: string; view: string;
+  individualCounts: boolean; language: string;
+  showAdvancedRecipeTree: boolean; showUnresolvedRecipes: boolean; showIconFallbackBadge: boolean;
 }
-export const getStockpileTask = (input: StockpileTaskInput): Promise<StockpileTaskView> => invoke("application_stockpile_task", { input });
-export const setStockpileTaskQuantity = (input: { taskId: string; sourceRevision: string; materialId: string; quantity: number }): Promise<StockpileTaskView> => invoke("application_stockpile_task_set", { input });
-export const resetStockpileTask = (input: { taskId: string; sourceRevision: string }): Promise<StockpileTaskView> => invoke("application_stockpile_task_reset", { input });
+export interface StockpileTaskSummary {
+  taskId: string; projectId: string; name: string; sourcePath: string; sourceRevision: string;
+  multiplier: number; createdAt: number; updatedAt: number;
+}
+export interface StockpileMaterial {
+  id: string; namespace_id: string; display_name: string; required_count: number;
+  stack_size: number; stacks: number; remainder: number; shulker_boxes: number;
+  category: string; category_icon: string; item_icon_key: string; icon_path: string; icon_available: boolean;
+  icon_diagnostic?: string | null; normalized_from: string[]; display_names: Record<string,string>;
+  source_regions: string[]; recipe_status: string; craft_complexity: number;
+}
+export interface StockpileRecipeIngredient {
+  item_id: string; display_name: string; icon_key: string; needed_count: number; visual_kind: string;
+  unresolved: boolean; unresolved_reason: string | null; tag: string | null; possible_items: string[];
+}
+export interface StockpileRecipeTree extends StockpileRecipeIngredient {
+  node_id: string; output_count: number; batch_count: number; extra_output: number; recipe_type: string;
+  process_type: string; ingredients: StockpileRecipeIngredient[]; children: StockpileRecipeTree[]; depth: number;
+  requires_fuel: boolean; fuel_estimate: number | null; decorative_smithing: boolean;
+}
+export interface StockpileTaskView extends StockpileTaskSummary {
+  sourceStatus?: "current" | "changed" | "missing";
+  context: { scope?: ApplicationMaterialScope; includeContainerItems?: boolean; sourceContentId?: string; sourceFileRevision?: string };
+  preferences: StockpileTaskPreferences;
+  materials: {
+    schema_version: number; ui_locale?: string | null;
+    project: { source_file: string; created_at: number; data_version: number; regions: string[] };
+    summary: { total_blocks: number; unique_materials: number; total_stacks: number; estimated_shulker_boxes: number };
+    materials: StockpileMaterial[];
+    diagnostics: Array<{kind:string;source:string;target:string;message:string}>;
+  };
+  recipeTrees: Record<string,StockpileRecipeTree> | null;
+  iconImages?: Record<string,string>; itemNames?: Record<string,Record<string,string>>;
+  items: Array<{
+    materialId: string; requiredCount: number; preparedCount: number; remainingCount: number; complete: boolean;
+    status: string; quantity: number; preparingCount: number; doneCount: number; overfilledCount: number;
+    stackSize: number; publicNote: string | null; storageLocation: string | null; locked: boolean;
+  }>;
+  requiredCount: number; preparedCount: number; remainingCount: number; preparingCount: number; overfilledCount: number;
+  completedItems: number; totalItems: number;
+}
+export interface StockpileTaskWorkspace { legacyTasks: Array<{taskId:string;preparedCount:number;preparingCount:number;itemCount:number;updatedAt:number;sourceRevision?:string|null}>; tasks: StockpileTaskSummary[]; selectedTaskId: string | null; task: StockpileTaskView | null; outputPath?: string }
+export interface StockpileTaskMutation {
+  materialId?: string; quantity?: number; status?: "preparing" | "done"; clear?: boolean; reset?: boolean;
+  publicNote?: string; storageLocation?: string; stackSize?: number; locked?: boolean;
+}
+export interface StockpileTaskCommandInput {
+  action: "open" | "list" | "create" | "select" | "rename" | "sync" | "settings" | "mutate" | "details" | "export" | "import" | "bindLegacy";
+  taskId?: string; projectId?: string; legacyTaskId?: string; sourceRevision?: string; expectedRevision?: string; sourcePath?: string;
+  scope?: ApplicationMaterialScope; includeContainerItems?: boolean; multiplier?: number; name?: string;
+  preferences?: Partial<StockpileTaskPreferences>; mutation?: StockpileTaskMutation; materialId?: string;
+  outputPath?: string; inputPath?: string;
+}
+export const getStockpileTask = (input: StockpileTaskInput = {}): Promise<StockpileTaskWorkspace> => invoke("application_stockpile_task", { input });
+export const commandStockpileTask = (input: StockpileTaskCommandInput): Promise<StockpileTaskWorkspace> => invoke("application_stockpile_task_command", { input });
+export const setStockpileTaskQuantity = (input: { taskId: string; sourceRevision: string; materialId: string; quantity: number }): Promise<StockpileTaskWorkspace> => invoke("application_stockpile_task_set", { input });
+export const resetStockpileTask = (input: { taskId: string; sourceRevision: string }): Promise<StockpileTaskWorkspace> => invoke("application_stockpile_task_reset", { input });
 export const prepareMaterialTaskWindow = (): Promise<void> => invoke("application_prepare_material_task_window");

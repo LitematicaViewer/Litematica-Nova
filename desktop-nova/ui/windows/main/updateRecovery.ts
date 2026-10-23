@@ -20,6 +20,14 @@ export function readUpdateDraft<T>(key: string): T | undefined {
   return readAll()[key] as T | undefined;
 }
 
+/** Persist only unacknowledged, serializable edits using the existing recovery store. */
+export function saveUpdateDraft(key: string, draft: unknown | undefined): void {
+  const all = readAll();
+  if (draft === undefined) delete all[key];
+  else all[key] = draft;
+  localStorage.setItem(KEY, JSON.stringify(all));
+}
+
 export function takeUpdateDraft<T>(key: string): T | undefined {
   const all = readAll(), value = all[key] as T | undefined;
   if (value !== undefined) { delete all[key]; localStorage.setItem(KEY, JSON.stringify(all)); }
@@ -28,9 +36,13 @@ export function takeUpdateDraft<T>(key: string): T | undefined {
 
 /** Only serializable user drafts; never API keys, credentials, renderer internals or binaries. */
 export function useUpdateDraft(key: string, draft: unknown) {
-  const latest = useRef(draft); latest.current = draft;
+  const latest = useRef({ key, draft }); latest.current = { key, draft };
   useEffect(() => {
-    const capture = () => latest.current;
+    const capture = () => {
+      if (latest.current.key !== key) return readUpdateDraft(key);
+      const current = latest.current.draft;
+      return typeof current === "function" ? current() : current;
+    };
     captures.set(key, capture);
     return () => { if (captures.get(key) === capture) captures.delete(key); };
   }, [key]);

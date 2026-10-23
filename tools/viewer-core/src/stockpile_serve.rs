@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
+use base64::Engine as _;
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
@@ -386,52 +387,492 @@ fn default_config(now: u64) -> StockpileConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DesktopTaskRequest {
-    task_id: String,
-    source_revision: String,
-    source_path: PathBuf,
-    snapshot: crate::stats_api::StableStructureOutput,
-    multiplier: u64,
+    #[serde(default = "desktop_open_action")]
+    action: String,
+    #[serde(default)] project_id: String,
+    task_id: Option<String>,
+    legacy_task_id: Option<String>,
+    source_revision: Option<String>,
+    expected_revision: Option<String>,
+    source_path: Option<PathBuf>,
+    snapshot: Option<crate::stats_api::StableStructureOutput>,
+    multiplier: Option<u64>,
+    name: Option<String>,
+    material_id: Option<String>,
+    context: Option<Value>,
+    preferences: Option<Value>,
     mutation: Option<DesktopTaskMutation>,
+    backup: Option<DesktopTaskBackup>,
 }
 
-#[derive(Debug, Deserialize)]
+fn desktop_open_action() -> String { "open".into() }
+
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct DesktopTaskMutation { material_id: Option<String>, quantity: Option<u64>, #[serde(default)] reset: bool }
+struct DesktopTaskMutation {
+    material_id: Option<String>, quantity: Option<u64>, status: Option<String>,
+    #[serde(default)] clear: bool,
+    #[serde(default)] reset: bool,
+    public_note: Option<String>, storage_location: Option<String>,
+    stack_size: Option<u64>, locked: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+struct DesktopTaskPreferences {
+    search: String, category: String, filter: String, sort: String, view: String,
+    individual_counts: bool, language: String,
+    show_advanced_recipe_tree: bool, show_unresolved_recipes: bool, show_icon_fallback_badge: bool,
+}
+
+impl Default for DesktopTaskPreferences {
+    fn default() -> Self {
+        Self { search: String::new(), category: "all".into(), filter: "all".into(), sort: "name".into(), view: "list".into(),
+            individual_counts: false, language: "auto".into(), show_advanced_recipe_tree: true,
+            show_unresolved_recipes: true, show_icon_fallback_badge: false }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopTaskRecord {
+    task_id: String, project_id: String, name: String, source_path: PathBuf, source_revision: String,
+    multiplier: u64, created_at: u64, updated_at: u64,
+    #[serde(default)] last_opened_at: u64,
+    context: Value, preferences: DesktopTaskPreferences,
+    minecraft_version: String, material_semantics: String,
+    base_materials: StockpileMaterialsData,
+    recipe_trees: Option<BTreeMap<String, crate::recipe_tree::RecipeTreeNode>>,
+    #[serde(default)] icon_images:BTreeMap<String,String>,
+    #[serde(default)] item_names:BTreeMap<String,BTreeMap<String,String>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopTaskSummary {
+    task_id: String, project_id: String, name: String, source_path: PathBuf, source_revision: String,
+    multiplier: u64, created_at: u64, updated_at: u64,
+}
+
+impl DesktopTaskRecord {
+    fn summary(&self) -> DesktopTaskSummary {
+        DesktopTaskSummary { task_id:self.task_id.clone(), project_id:self.project_id.clone(), name:self.name.clone(),
+            source_path:self.source_path.clone(), source_revision:self.source_revision.clone(), multiplier:self.multiplier,
+            created_at:self.created_at, updated_at:self.updated_at }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopTaskWorkspace {
+    tasks: Vec<DesktopTaskSummary>, selected_task_id: Option<String>, task: Option<DesktopTaskDetails>,
+    legacy_tasks: Vec<DesktopLegacyTaskSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")] backup: Option<DesktopTaskBackup>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopLegacyTaskSummary {
+    task_id:String,prepared_count:u64,preparing_count:u64,item_count:usize,updated_at:u64,source_revision:Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopTaskDetails {
+    #[serde(flatten)] state: DesktopTaskView,
+    project_id: String, name: String, source_path: PathBuf, multiplier: u64, created_at: u64, updated_at: u64,
+    context: Value, preferences: DesktopTaskPreferences, materials: StockpileMaterialsData,
+    recipe_trees: Option<BTreeMap<String, crate::recipe_tree::RecipeTreeNode>>,
+    icon_images:BTreeMap<String,String>, item_names:BTreeMap<String,BTreeMap<String,String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DesktopTaskBackup {
+    schema_version: u32, task: DesktopTaskRecord, items: Vec<DesktopTaskBackupItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DesktopTaskBackupItem {
+    material_id: String, quantity: u64, status: String,
+    public_note: Option<String>, storage_location: Option<String>, stack_size: Option<u64>,
+    #[serde(default)] locked: bool,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopTaskView {
     task_id: String, source_revision: String, items: Vec<DesktopTaskItem>,
     required_count: u64, prepared_count: u64, remaining_count: u64,
+    preparing_count: u64, overfilled_count: u64,
     completed_items: usize, total_items: usize,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DesktopTaskItem { material_id: String, required_count: u64, prepared_count: u64, remaining_count: u64, complete: bool }
+struct DesktopTaskItem {
+    material_id: String, required_count: u64, prepared_count: u64, remaining_count: u64, complete: bool,
+    status: String, quantity: u64, preparing_count: u64, done_count: u64, overfilled_count: u64,
+    stack_size: u64, public_note: Option<String>, storage_location: Option<String>, locked: bool,
+}
 
-pub fn desktop_task_from_request(path: &Path) -> Result<DesktopTaskView> {
+pub fn desktop_task_from_request(path: &Path) -> Result<DesktopTaskWorkspace> {
     let request: DesktopTaskRequest = read_json_file(path)?;
-    if request.task_id.len() != 64 || !request.task_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        bail!("Invalid material task identity");
+    desktop_task_command(&runtime_paths::stockpile_sessions_root()?, request)
+}
+
+fn desktop_task_command(root: &Path, request: DesktopTaskRequest) -> Result<DesktopTaskWorkspace> {
+    fs::create_dir_all(root)?;
+    if !["open","list","select","create","rename","sync","settings","mutate","details","export","import","bindLegacy"].contains(&request.action.as_str()) {
+        bail!("Unknown material task action");
     }
-    if request.multiplier == 0 { bail!("Material task copies must be positive"); }
-    let data_version = request.snapshot.metadata.minecraft_data_version;
-    let version = crate::block_database::database()?.version_for_data_version(data_version)
-        .with_context(|| format!("Material task source data version {data_version} has no supported Minecraft version mapping"))?;
-    // The material rows are the Host's existing version/resource-aware result;
-    // the Stockpile bridge does not reopen or analyze the projection.
-    let mut materials = crate::stockpile::build_materials_data_from_stats(&request.source_path, request.snapshot, version)?;
+    let (mut records,mut legacy_tasks) = desktop_task_records(root)?;
+    if request.action == "list" {
+        return Ok(DesktopTaskWorkspace {tasks:records.iter().map(DesktopTaskRecord::summary).collect(),selected_task_id:None,task:None,backup:None,legacy_tasks});
+    }
+    let mut record = if request.action == "import" {
+        let backup = request.backup.as_ref().context("A material task backup is required")?;
+        validate_desktop_backup(backup)?;
+        let mut record = backup.task.clone();
+        record.task_id = new_desktop_task_id();
+        record.created_at = current_unix_timestamp()?;
+        record.updated_at = record.created_at;
+        record.last_opened_at = record.created_at;
+        record
+    } else if request.action == "bindLegacy" {
+        let id=request.legacy_task_id.as_deref().context("Select an unlinked legacy task")?;
+        if !legacy_tasks.iter().any(|task|task.task_id==id) {bail!("The legacy task is missing or has already been linked");}
+        desktop_task_record_from_request(&request,id.into())?
+    } else if request.action == "create" {
+        if request.snapshot.is_none() {
+            let id=request.task_id.as_deref().context("Select a saved task or open material requirements before creating a task")?;
+            let mut record=records.iter().find(|record|record.task_id==id).cloned().context("Material task no longer exists")?;
+            record.task_id=new_desktop_task_id();
+            record.name=desktop_task_name(request.name.as_deref().unwrap_or(&record.name))?;
+            if let Some(multiplier)=request.multiplier {
+                let multiplier=desktop_task_multiplier(multiplier)?;
+                if record.multiplier!=multiplier {
+                    record.multiplier=multiplier;
+                    if record.base_materials.materials.iter().any(|item|item.recipe_status=="available") {desktop_task_require_resource_identity(&record)?;}
+                    record.recipe_trees=Some(desktop_task_recipe_trees(&record.minecraft_version,&desktop_task_materials(&record)?)?);
+                }
+            }
+            record.created_at=current_unix_timestamp()?;record.updated_at=record.created_at;record.last_opened_at=record.created_at;
+            record
+        } else { desktop_task_record_from_request(&request, new_desktop_task_id())? }
+    } else if let Some(id) = request.task_id.as_deref() {
+        validate_desktop_task_id(id)?;
+        records.iter().find(|record| record.task_id == id).cloned().context("Material task no longer exists")?
+    } else if let Some(record) = records.iter().filter(|record| {
+        (!request.project_id.is_empty() && record.project_id==request.project_id)
+            || request.source_path.as_deref().is_some_and(|path|desktop_task_source_matches(path,&record.source_path))
+            || (request.project_id.is_empty() && request.source_path.is_none())
+    })
+        .max_by_key(|record| (record.last_opened_at,record.updated_at)).cloned() {
+        record
+    } else if request.action == "open" {
+        if request.snapshot.is_none() {
+            return Ok(DesktopTaskWorkspace {tasks:records.iter().map(DesktopTaskRecord::summary).collect(),selected_task_id:None,task:None,backup:None,legacy_tasks});
+        }
+        let id = match request.legacy_task_id.as_deref() {
+            Some(id) if desktop_task_path(root,id)?.is_file() => id.to_string(),
+            _ => new_desktop_task_id(),
+        };
+        // Old desktop-<id>.sqlite keeps its exact claims. Add a demand snapshot
+        // in place; never delete/recreate or copy the authoritative database.
+        desktop_task_record_from_request(&request,id)?
+    } else { bail!("A material task is required"); };
+    let database = desktop_task_path(root,&record.task_id)?;
+    init_db(&database)?;
+    let mut conn = Connection::open(&database)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    // Re-read after obtaining the write transaction: stale UI actions must not
+    // overwrite preferences or demand synchronized by another open window.
+    let existing = desktop_task_record_conn(&tx)?;
+    if let Some(saved) = existing {
+        record = saved;
+        if ["rename","sync","settings","mutate","import"].contains(&request.action.as_str())
+            && request.expected_revision.as_deref().or(request.source_revision.as_deref()) != Some(record.source_revision.as_str()) {
+            bail!("Material task changed; reload its current requirements before editing");
+        }
+    }
+    // The Host verifies this content identity before forwarding a moved path.
+    // Relink only the source association; the task's demand/progress snapshot
+    // remains unchanged until a separate explicit synchronization.
+    if ["open","select"].contains(&request.action.as_str()) && !request.project_id.is_empty()
+        && request.project_id==record.project_id {
+        if let Some(path)=request.source_path.as_ref() {record.source_path=path.clone();}
+    }
+    match request.action.as_str() {
+        "rename" => record.name = desktop_task_name(request.name.as_deref().context("A task name is required")?)?,
+        "sync" => {
+            let replacement = desktop_task_record_from_request(&request,record.task_id.clone())?;
+            record.source_revision = replacement.source_revision;
+            record.source_path = replacement.source_path;
+            record.project_id = replacement.project_id;
+            record.context = replacement.context;
+            record.base_materials = replacement.base_materials;
+            record.minecraft_version = replacement.minecraft_version;
+            record.material_semantics = replacement.material_semantics;
+            record.icon_images = replacement.icon_images;
+            record.item_names = replacement.item_names;
+            if let Some(multiplier) = request.multiplier { record.multiplier = desktop_task_multiplier(multiplier)?; }
+            record.recipe_trees = if replacement.multiplier==record.multiplier {replacement.recipe_trees}else{None};
+        }
+        "settings" => {
+            if let Some(preferences) = request.preferences.as_ref() { record.preferences = desktop_task_preferences_patch(&record.preferences,preferences)?; }
+            if let Some(multiplier) = request.multiplier {
+                let multiplier=desktop_task_multiplier(multiplier)?;
+                if record.multiplier!=multiplier {
+                    if record.base_materials.materials.iter().any(|item|item.recipe_status=="available") {desktop_task_require_resource_identity(&record)?;}
+                    record.source_revision=format!("{:x}",Sha256::digest(serde_json::to_vec(&(&record.source_revision,multiplier))?));
+                    record.multiplier=multiplier;
+                    record.recipe_trees = Some(desktop_task_recipe_trees(&record.minecraft_version,&desktop_task_materials(&record)?)?);
+                }
+            }
+        }
+        _ => {}
+    }
+    let mut materials = desktop_task_materials(&record)?;
+    if request.action == "sync" {
+        let ids=materials.materials.iter().map(|item|item.namespace_id.as_str()).collect::<BTreeSet<_>>();
+        for claim in load_claims_for_user(&tx,"desktop-local")? {
+            if !ids.contains(claim.material_id.as_str()) {
+                tx.execute("DELETE FROM material_claims WHERE user_id=?1 AND material_id=?2",params!["desktop-local",claim.material_id])?;
+            }
+        }
+    }
+    if request.action == "details" {
+        let mut needed=materials.clone();
+        if let Some(id)=request.material_id.as_deref() {
+            needed.materials.retain(|item|item.namespace_id==id);
+            if needed.materials.is_empty() {bail!("Task item no longer exists");}
+        }
+        needed.materials.retain(|item|item.recipe_status=="available");
+        if let Some(cached)=record.recipe_trees.as_ref() {needed.materials.retain(|item|!cached.contains_key(&item.namespace_id));}
+        if !needed.materials.is_empty() {
+            desktop_task_require_resource_identity(&record)?;
+            let resolved=desktop_task_recipe_trees(&record.minecraft_version,&needed)?;
+            record.recipe_trees.get_or_insert_with(BTreeMap::new).extend(resolved);
+        }
+    }
+    if request.action == "import" {
+        let backup = request.backup.as_ref().context("A material task backup is required")?;
+        for item in &backup.items {
+            put_claim_conn(&tx,&item.material_id,"desktop-local",&item.status,item.quantity)?;
+            save_material_note_conn(&tx,&item.material_id,&MaterialNoteRequest {
+                public_note:item.public_note.clone(),storage_location:item.storage_location.clone(),locked:Some(item.locked),
+                stack_size:item.stack_size,user_id:None,
+            },"desktop-local")?;
+        }
+    }
+    let mutation = if request.action == "mutate" { Some(request.mutation.as_ref().context("A task change is required")?) } else { None };
+    let state = desktop_task_state(&tx,&record.task_id,&record.source_revision,&materials,mutation)?;
+    let overrides = load_stack_overrides(&tx)?;
+    for item in &mut materials.materials { if let Some(&size)=overrides.get(&item.namespace_id) { item.stack_size=size; } }
+    desktop_task_update_units(&mut materials)?;
+    let now = current_unix_timestamp()?;
+    record.last_opened_at = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()).context("Task selection timestamp overflow")?;
+    if !["open","select","export"].contains(&request.action.as_str()) { record.updated_at = now; }
+    save_desktop_task_record(&tx,&record)?;
+    let backup = if request.action == "export" { Some(desktop_task_backup(&tx,&record,&state)?) } else { None };
+    tx.commit()?;
+    records.retain(|item| item.task_id!=record.task_id);
+    legacy_tasks.retain(|item|item.task_id!=record.task_id);
+    records.push(record.clone());
+    records.sort_by_key(|item| std::cmp::Reverse((item.updated_at,item.created_at)));
+    let tasks = records.iter().map(DesktopTaskRecord::summary).collect();
+    let task = DesktopTaskDetails { state,project_id:record.project_id,name:record.name,source_path:record.source_path,
+        multiplier:record.multiplier,created_at:record.created_at,updated_at:record.updated_at,context:record.context,
+        preferences:record.preferences,materials,recipe_trees:record.recipe_trees,icon_images:record.icon_images,item_names:record.item_names };
+    Ok(DesktopTaskWorkspace {tasks,selected_task_id:Some(task.state.task_id.clone()),task:Some(task),backup,legacy_tasks})
+}
+
+fn validate_desktop_task_id(id: &str) -> Result<()> {
+    if id.len()!=64 || !id.bytes().all(|byte|byte.is_ascii_hexdigit()) { bail!("Invalid material task identity"); }
+    Ok(())
+}
+fn desktop_task_path(root:&Path,id:&str) -> Result<PathBuf> {
+    validate_desktop_task_id(id)?;
+    Ok(root.join(format!("desktop-{id}.sqlite")))
+}
+fn desktop_task_source_matches(left:&Path,right:&Path) -> bool {
+    if cfg!(windows) { left.to_string_lossy().replace('/',"\\").eq_ignore_ascii_case(&right.to_string_lossy().replace('/',"\\")) }
+    else {left==right}
+}
+fn new_desktop_task_id() -> String {
+    let mut random=[0_u8;32]; rand::rngs::OsRng.fill_bytes(&mut random); to_hex(&random)
+}
+fn desktop_task_name(name:&str) -> Result<String> {
+    let name=name.trim();
+    if name.is_empty() || name.chars().count()>128 { bail!("Task name must contain 1 to 128 characters"); }
+    Ok(name.into())
+}
+fn desktop_task_multiplier(value:u64) -> Result<u64> {
+    if value==0 || value>i64::MAX as u64 { bail!("Material task copies must be positive and fit a database integer"); }
+    Ok(value)
+}
+fn desktop_task_preferences(preferences:DesktopTaskPreferences) -> Result<DesktopTaskPreferences> {
+    if !["auto","zh-CN","en-US"].contains(&preferences.language.as_str()) || preferences.search.len()>4096 { bail!("Invalid material task preferences"); }
+    Ok(preferences)
+}
+fn desktop_task_preferences_patch(current:&DesktopTaskPreferences,patch:&Value) -> Result<DesktopTaskPreferences> {
+    let patch=patch.as_object().context("Material task preferences must be an object")?;
+    let mut value=serde_json::to_value(current)?;
+    value.as_object_mut().context("Material task preferences are invalid")?.extend(patch.clone());
+    desktop_task_preferences(serde_json::from_value(value)?)
+}
+fn desktop_task_record_from_request(request:&DesktopTaskRequest,task_id:String) -> Result<DesktopTaskRecord> {
+    if request.project_id.is_empty() { bail!("A stable projection identity is required"); }
+    let snapshot=request.snapshot.clone().context("Material requirements are not available; open a projection or select a saved task")?;
+    let source_path=request.source_path.clone().context("Material task source is required")?;
+    let source_revision=request.source_revision.clone().context("Material requirement revision is required")?;
+    let data_version=snapshot.metadata.minecraft_data_version;
+    let version=crate::block_database::database()?.version_for_data_version(data_version)
+        .with_context(||format!("Material task source data version {data_version} has no supported Minecraft version mapping"))?.to_string();
+    let semantics=snapshot.material_semantics.clone();
+    let base_materials=crate::stockpile::build_materials_data_from_stats(&source_path,snapshot,&version)?;
+    let default_name=source_path.file_stem().and_then(|name|name.to_str()).unwrap_or("Stockpile task");
+    let now=current_unix_timestamp()?;
+    let mut record=DesktopTaskRecord {task_id,project_id:request.project_id.clone(),name:desktop_task_name(request.name.as_deref().unwrap_or(default_name))?,
+        source_path,source_revision,multiplier:desktop_task_multiplier(request.multiplier.unwrap_or(1))?,created_at:now,updated_at:now,last_opened_at:now,
+        context:request.context.clone().unwrap_or(Value::Null),preferences:match request.preferences.as_ref() {
+            Some(patch)=>desktop_task_preferences_patch(&DesktopTaskPreferences::default(),patch)?,None=>DesktopTaskPreferences::default(),
+        },
+        minecraft_version:version,material_semantics:semantics,base_materials,recipe_trees:None,icon_images:BTreeMap::new(),item_names:BTreeMap::new()};
+    let materials=desktop_task_materials(&record)?;
+    desktop_task_require_resource_identity(&record)?;
+    record.recipe_trees=Some(desktop_task_recipe_trees(&record.minecraft_version,&materials)?);
+    desktop_task_snapshot_assets(&mut record)?;
+    Ok(record)
+}
+fn desktop_task_record_conn(conn:&Connection) -> Result<Option<DesktopTaskRecord>> {
+    let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='desktop_task')",[],|row|row.get(0))?;
+    if !exists { return Ok(None); }
+    let payload:Option<String>=conn.query_row("SELECT payload FROM desktop_task WHERE id=1",[],|row|row.get(0)).optional()?;
+    payload.map(|value|serde_json::from_str(&value).context("Saved material task is invalid")).transpose()
+}
+fn save_desktop_task_record(conn:&Connection,record:&DesktopTaskRecord) -> Result<()> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS desktop_task(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);")?;
+    conn.execute("INSERT INTO desktop_task(id,payload) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",[serde_json::to_string(record)?])?;
+    set_meta(conn,"desktop_source_revision",&record.source_revision)?;
+    touch_meta(conn)
+}
+fn desktop_task_records(root:&Path) -> Result<(Vec<DesktopTaskRecord>,Vec<DesktopLegacyTaskSummary>)> {
+    let mut records=Vec::new();
+    let mut legacy=Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry=entry?; let name=entry.file_name(); let Some(name)=name.to_str() else {continue;};
+        let Some(id)=name.strip_prefix("desktop-").and_then(|value|value.strip_suffix(".sqlite")) else {continue;};
+        if validate_desktop_task_id(id).is_err() || !entry.file_type()?.is_file() {continue;}
+        let conn=Connection::open_with_flags(entry.path(),rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        if let Some(record)=desktop_task_record_conn(&conn)? {
+            if record.task_id!=id { bail!("Saved material task identity does not match its database"); }
+            records.push(record);
+        } else {
+            let claims=load_claims_for_user(&conn,"desktop-local")?;
+            let mut prepared=0_u64;let mut preparing=0_u64;
+            for claim in &claims {
+                let count=if claim.status=="done" {&mut prepared}else{&mut preparing};
+                *count=count.checked_add(claim.quantity).context("Legacy task quantity overflow")?;
+            }
+            legacy.push(DesktopLegacyTaskSummary {task_id:id.into(),prepared_count:prepared,preparing_count:preparing,item_count:claims.len(),
+                updated_at:meta_value(&conn,"updated_at")?.and_then(|value|value.parse().ok()).unwrap_or(0),source_revision:meta_value(&conn,"desktop_source_revision")?});
+        }
+    }
+    records.sort_by_key(|record|std::cmp::Reverse((record.updated_at,record.created_at)));
+    Ok((records,legacy))
+}
+fn desktop_task_materials(record:&DesktopTaskRecord) -> Result<StockpileMaterialsData> {
+    let mut materials=record.base_materials.clone();
+    let multiplier=desktop_task_multiplier(record.multiplier)?;
+    let mut total=0_u64;
     for item in &mut materials.materials {
-        item.required_count = item.required_count.checked_mul(request.multiplier)
-            .filter(|value| *value <= i64::MAX as u64).context("Material task quantity is too large")?;
+        item.required_count=item.required_count.checked_mul(multiplier).filter(|&n|n<=i64::MAX as u64).context("Material task quantity is too large")?;
+        total=total.checked_add(item.required_count).context("Task quantity overflow")?;
     }
-    let database = runtime_paths::stockpile_sessions_root()?.join(format!("desktop-{}.sqlite", request.task_id));
-    desktop_task_apply(&database, &request.task_id, &request.source_revision, &materials, request.mutation.as_ref())
+    materials.summary.total_blocks=total;
+    materials.summary.unique_materials=materials.materials.len();
+    desktop_task_update_units(&mut materials)?;
+    Ok(materials)
+}
+fn desktop_task_update_units(materials:&mut StockpileMaterialsData) -> Result<()> {
+    let mut units=0_u64;
+    for item in &mut materials.materials {
+        if item.stack_size==0 {bail!("Material stack size must be positive");}
+        item.stacks=item.required_count/item.stack_size;
+        item.remainder=item.required_count%item.stack_size;
+        let stacks=item.required_count.div_ceil(item.stack_size);
+        item.shulker_boxes=stacks.div_ceil(27);
+        units=units.checked_add(stacks).context("Task unit quantity overflow")?;
+    }
+    materials.summary.total_stacks=units;
+    materials.summary.estimated_shulker_boxes=units.div_ceil(27);
+    Ok(())
+}
+fn desktop_task_recipe_trees(version:&str,materials:&StockpileMaterialsData) -> Result<BTreeMap<String,crate::recipe_tree::RecipeTreeNode>> {
+    if !materials.materials.iter().any(|item|item.recipe_status=="available") {return Ok(BTreeMap::new());}
+    let mut ordinary=materials.clone();
+    ordinary.materials.retain(|item|item.namespace_id==item.item_icon_key);
+    let mut trees=crate::recipe_tree::resolve_recipe_trees_for_materials(version,&ordinary)?;
+    let mut one=materials.clone();
+    for item in materials.materials.iter().filter(|item|item.namespace_id!=item.item_icon_key) {
+        one.materials=vec![item.clone()];
+        one.materials[0].namespace_id=item.item_icon_key.clone();
+        let mut resolved=crate::recipe_tree::resolve_recipe_trees_for_materials(version,&one)?;
+        if let Some(tree)=resolved.remove(&item.item_icon_key) { trees.insert(item.namespace_id.clone(),tree); }
+    }
+    Ok(trees)
+}
+fn desktop_task_require_resource_identity(record:&DesktopTaskRecord) -> Result<()> {
+    let context=crate::game_data::active_context()?;
+    if !record.material_semantics.ends_with(&format!(":{}",context.content_id)) {
+        bail!("This task uses a different game-resource snapshot; select its original game data before updating recipe details");
+    }
+    Ok(())
+}
+fn desktop_task_snapshot_assets(record:&mut DesktopTaskRecord) -> Result<()> {
+    desktop_task_require_resource_identity(record)?;
+    let trees=record.recipe_trees.as_ref().context("Task recipe snapshot is missing")?;
+    let names=crate::item_names::resolve_stockpile_item_names_cached(&record.minecraft_version,&mut record.base_materials,trees)?;
+    let icons=crate::item_icons::resolve_stockpile_icons_cached(&record.minecraft_version,&mut record.base_materials,trees)?;
+    let files=icons.files.into_iter().map(|file| {
+        (file.path,format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(file.bytes)))
+    }).collect::<BTreeMap<_,_>>();
+    record.icon_images=icons.payload.by_key.into_iter().filter_map(|(key,icon)| files.get(&icon.path).cloned().map(|url|(key,url))).collect();
+    record.item_names=names.names;
+    Ok(())
+}
+fn desktop_task_backup(conn:&Connection,record:&DesktopTaskRecord,state:&DesktopTaskView) -> Result<DesktopTaskBackup> {
+    let overrides=load_stack_overrides(conn)?;
+    Ok(DesktopTaskBackup {schema_version:1,task:record.clone(),items:state.items.iter().map(|item|DesktopTaskBackupItem {
+        material_id:item.material_id.clone(),quantity:item.quantity,status:if item.status=="not_started" {"done".into()}else{item.status.clone()},
+        public_note:item.public_note.clone(),storage_location:item.storage_location.clone(),stack_size:overrides.get(&item.material_id).copied(),
+        locked:item.locked,
+    }).collect()})
+}
+fn validate_desktop_backup(backup:&DesktopTaskBackup) -> Result<()> {
+    if backup.schema_version!=1 { bail!("Unsupported material task backup version"); }
+    desktop_task_name(&backup.task.name)?;
+    desktop_task_preferences(backup.task.preferences.clone())?;
+    if backup.task.project_id.is_empty() || backup.task.source_revision.is_empty() {bail!("Task backup is missing its source identity");}
+    let materials=desktop_task_materials(&backup.task)?;
+    let ids=materials.materials.iter().map(|item|item.namespace_id.as_str()).collect::<BTreeSet<_>>();
+    if ids.len()!=materials.materials.len() {bail!("Duplicate material identity in task backup");}
+    for id in &ids {validate_material_id(id)?;}
+    let mut seen=BTreeSet::new();
+    for item in &backup.items {
+        if !ids.contains(item.material_id.as_str()) || !seen.insert(&item.material_id) {bail!("Invalid or duplicate material in task backup");}
+        if item.quantity>i64::MAX as u64 || !["done","preparing"].contains(&item.status.as_str()) {bail!("Invalid material quantity or status in task backup");}
+        if item.stack_size.is_some_and(|size|!(1..=99).contains(&size)) {bail!("stack_size must be between 1 and 99");}
+    }
+    if seen.len()!=ids.len() {bail!("Task backup does not contain every material row");}
+    Ok(())
 }
 
 fn desktop_task_apply(path: &Path, task_id: &str, revision: &str, materials: &StockpileMaterialsData,
     mutation: Option<&DesktopTaskMutation>) -> Result<DesktopTaskView> {
-    const USER: &str = "desktop-local";
     init_db(path)?; // Never use deploy-db initialization: that intentionally replaces a DB.
     let mut conn = Connection::open(path)?;
     conn.busy_timeout(Duration::from_secs(5))?;
@@ -440,47 +881,70 @@ fn desktop_task_apply(path: &Path, task_id: &str, revision: &str, materials: &St
     if mutation.is_some() && previous_revision.as_deref() != Some(revision) {
         bail!("Material task changed; reload its current requirements before editing");
     }
+    let view=desktop_task_state(&tx,task_id,revision,materials,mutation)?;
+    set_meta(&tx,"desktop_source_revision",revision)?;
+    touch_meta(&tx)?;
+    tx.commit()?;
+    Ok(view)
+}
+
+fn desktop_task_state(conn:&Connection,task_id:&str,revision:&str,materials:&StockpileMaterialsData,
+    mutation:Option<&DesktopTaskMutation>) -> Result<DesktopTaskView> {
+    const USER: &str = "desktop-local";
     let requirements = materials.materials.iter().map(|item| (item.namespace_id.as_str(), item.required_count))
         .collect::<BTreeMap<_, _>>();
     if requirements.len() != materials.materials.len() { bail!("Duplicate material identity in task requirements"); }
-    // Reconcile the authoritative claims by stable item identity. Removed rows
-    // disappear, new rows begin at zero, and reduced requirements clamp counts.
-    for claim in load_claims_for_user(&tx, USER)? {
-        match requirements.get(claim.material_id.as_str()) {
-            None => { tx.execute("DELETE FROM material_claims WHERE material_id=?1 AND user_id=?2",params![claim.material_id,USER])?; }
-            Some(&required) if claim.quantity > required => { put_claim_conn(&tx,&claim.material_id,USER,"done",required)?; }
-            _ => {},
-        }
-    }
+    // Like the web tool, quantities may exceed demand. Explicit synchronization
+    // maps by stable identity, without destroying saved quantities for old rows.
     if let Some(change) = mutation {
         if change.reset {
-            if change.material_id.is_some() || change.quantity.is_some() { bail!("Reset cannot contain an item edit"); }
-            tx.execute("DELETE FROM material_claims WHERE user_id=?1",[USER])?;
+            if change.material_id.is_some() || change.quantity.is_some() || change.status.is_some() || change.clear
+                || change.public_note.is_some() || change.storage_location.is_some() || change.stack_size.is_some() || change.locked.is_some() {
+                bail!("Reset cannot contain an item edit");
+            }
+            conn.execute("DELETE FROM material_claims WHERE user_id=?1",[USER])?;
         } else {
             let id = change.material_id.as_deref().context("A task item is required")?;
-            let required = *requirements.get(id).context("Task item no longer exists")?;
-            let quantity = change.quantity.context("A prepared quantity is required")?.min(required);
-            put_claim_conn(&tx,id,USER,"done",quantity)?;
+            requirements.get(id).context("Task item no longer exists")?;
+            if change.clear {
+                if change.quantity.is_some() || change.status.is_some() { bail!("Clearing an item cannot set its quantity or status"); }
+                conn.execute("DELETE FROM material_claims WHERE user_id=?1 AND material_id=?2",params![USER,id])?;
+            } else if change.quantity.is_some() || change.status.is_some() {
+                let previous=load_claims_for_user(conn,USER)?.into_iter().find(|claim|claim.material_id==id);
+                let quantity=change.quantity.or_else(||previous.as_ref().map(|claim|claim.quantity)).context("A prepared quantity is required")?;
+                if quantity>i64::MAX as u64 {bail!("Material task quantity is too large");}
+                let status=change.status.as_deref().or_else(||previous.as_ref().map(|claim|claim.status.as_str())).unwrap_or("done");
+                put_claim_conn(conn,id,USER,status,quantity)?;
+            }
+            if change.public_note.is_some() || change.storage_location.is_some() || change.stack_size.is_some() || change.locked.is_some() {
+                save_material_note_conn(conn,id,&MaterialNoteRequest { public_note:change.public_note.clone(),storage_location:change.storage_location.clone(),
+                    locked:change.locked,stack_size:change.stack_size,user_id:None },USER)?;
+            }
         }
     }
-    set_meta(&tx,"desktop_source_revision",revision)?;
-    touch_meta(&tx)?;
     // Build the existing Stockpile state while still in the same transaction,
     // so two instances cannot return a mixed source/claim snapshot.
-    let state = aggregate_state(materials, load_participants(&tx)?, Vec::new(), load_claims(&tx)?,
-        BTreeMap::new(), BTreeMap::new(), Vec::new(), current_unix_timestamp()?);
+    let state = aggregate_state(materials, load_participants(conn)?, Vec::new(), load_claims_for_user(conn,USER)?,
+        load_material_notes(conn)?, load_stack_overrides(conn)?, Vec::new(), current_unix_timestamp()?);
     let mut view = DesktopTaskView { task_id:task_id.into(),source_revision:revision.into(),items:Vec::new(),
-        required_count:0,prepared_count:0,remaining_count:0,completed_items:0,total_items:requirements.len() };
+        required_count:0,prepared_count:0,remaining_count:0,preparing_count:0,overfilled_count:0,completed_items:0,total_items:requirements.len() };
     for (id,required) in requirements {
-        let prepared = state.materials.get(id).map_or(0,|item|item.done_count).min(required);
-        let remaining = required.saturating_sub(prepared);
+        let item=state.materials.get(id).context("Task material state is unavailable")?;
+        let prepared=item.done_count;
+        let preparing=item.preparing_count;
+        let remaining=item.remaining_count;
+        let claim=item.claims.iter().find(|claim|claim.user_id==USER);
         view.required_count = view.required_count.checked_add(required).context("Task quantity overflow")?;
         view.prepared_count = view.prepared_count.checked_add(prepared).context("Task quantity overflow")?;
         view.remaining_count = view.remaining_count.checked_add(remaining).context("Task quantity overflow")?;
-        view.completed_items += usize::from(remaining == 0);
-        view.items.push(DesktopTaskItem {material_id:id.into(),required_count:required,prepared_count:prepared,remaining_count:remaining,complete:remaining==0});
+        view.preparing_count = view.preparing_count.checked_add(preparing).context("Task quantity overflow")?;
+        view.overfilled_count = view.overfilled_count.checked_add(item.overfilled_count).context("Task quantity overflow")?;
+        view.completed_items += usize::from(prepared>=required);
+        view.items.push(DesktopTaskItem {material_id:id.into(),required_count:required,prepared_count:prepared,remaining_count:remaining,complete:prepared>=required,
+            status:claim.map(|claim|claim.status.clone()).unwrap_or_else(||"not_started".into()),quantity:claim.map_or(0,|claim|claim.quantity),
+            preparing_count:preparing,done_count:prepared,overfilled_count:item.overfilled_count,stack_size:item.stack_size,
+            public_note:item.public_note.clone(),storage_location:item.storage_location.clone(),locked:item.locked});
     }
-    tx.commit()?;
     Ok(view)
 }
 
@@ -3845,8 +4309,229 @@ mod tests {
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+    fn desktop_test_request(value:Value) -> DesktopTaskRequest {serde_json::from_value(value).unwrap()}
+
+    fn saved_desktop_fixture(root:&Path,name:&str) -> DesktopTaskRecord {
+        fs::create_dir_all(root).unwrap();
+        let record=DesktopTaskRecord {
+            task_id:new_desktop_task_id(),project_id:"projection-content-identity".into(),name:name.into(),
+            source_path:root.join("moved-or-deleted.litematic"),source_revision:"r1".into(),multiplier:1,
+            created_at:1,updated_at:1,last_opened_at:1,
+            context:json!({"scope":{"kind":"all"},"includeContainerItems":true}),
+            preferences:DesktopTaskPreferences::default(),minecraft_version:"1.21".into(),material_semantics:"minecraft-inventory-v9:test".into(),
+            base_materials:fixture_materials(),recipe_trees:Some(BTreeMap::new()),icon_images:BTreeMap::new(),item_names:BTreeMap::new(),
+        };
+        let path=desktop_task_path(root,&record.task_id).unwrap();
+        init_db(&path).unwrap();
+        save_desktop_task_record(&Connection::open(path).unwrap(),&record).unwrap();
+        record
+    }
+
     #[test]
-    fn desktop_task_persists_quantities_and_clamps_item_edits() {
+    fn desktop_task_snapshots_real_local_names_and_png_icons_once() {
+        let root=temp_db("desktop_resource_snapshot").with_extension("tasks");
+        let mut record=saved_desktop_fixture(&root,"Resource snapshot");
+        let context=crate::game_data::active_context().expect("selected local game-resource package");
+        record.minecraft_version=context.game_version;
+        record.material_semantics=format!("minecraft-inventory-v9:{}",context.content_id);
+        desktop_task_snapshot_assets(&mut record).unwrap();
+        let stone=record.base_materials.materials.iter().find(|item|item.namespace_id=="minecraft:stone").unwrap();
+        assert!(stone.display_names.get("zh-CN").is_some_and(|value|!value.is_empty()));
+        assert!(stone.display_names.get("en-US").is_some_and(|value|!value.is_empty()));
+        assert!(stone.icon_available);
+        assert!(stone.icon_diagnostic.is_none());
+        assert!(record.item_names.get("minecraft:stone").unwrap().contains_key("zh-CN"));
+        let png=record.icon_images.get("minecraft:stone").unwrap().strip_prefix("data:image/png;base64,").unwrap();
+        let bytes=base64::engine::general_purpose::STANDARD.decode(png).unwrap();
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let image=image::load_from_memory(&bytes).unwrap();
+        assert!(image.width()>0 && image.height()>0);
+        assert!(!record.base_materials.materials.iter().find(|item|item.namespace_id=="minecraft:empty").unwrap().icon_available);
+        let path=desktop_task_path(&root,&record.task_id).unwrap();
+        // Saved names/images remain authoritative even when the original
+        // resource identity is no longer the currently selected one.
+        record.material_semantics="minecraft-inventory-v9:no-longer-selected".into();
+        save_desktop_task_record(&Connection::open(&path).unwrap(),&record).unwrap();
+        let restored=desktop_task_command(&root,desktop_test_request(json!({"action":"select","taskId":record.task_id}))).unwrap().task.unwrap();
+        assert_eq!(restored.icon_images,record.icon_images);
+        assert_eq!(restored.item_names,record.item_names);
+        assert!(restored.materials.materials.iter().find(|item|item.namespace_id=="minecraft:stone").unwrap().icon_available);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn desktop_task_relinks_moved_source_only_when_content_identity_matches() {
+        let root=temp_db("desktop_source_relink").with_extension("tasks");
+        let mut record=saved_desktop_fixture(&root,"Moved source");
+        let bytes=b"unchanged source content";
+        record.project_id=format!("{:x}",Sha256::digest(bytes));
+        let database=desktop_task_path(&root,&record.task_id).unwrap();
+        save_desktop_task_record(&Connection::open(&database).unwrap(),&record).unwrap();
+        fs::write(&record.source_path,bytes).unwrap();
+        desktop_task_command(&root,desktop_test_request(json!({"action":"mutate","taskId":record.task_id,"sourceRevision":"r1",
+            "mutation":{"materialId":"minecraft:stone","quantity":7}}))).unwrap();
+        let renamed=root.join("renamed-source.litematic");
+        fs::rename(&record.source_path,&renamed).unwrap();
+        let linked=desktop_task_command(&root,desktop_test_request(json!({"action":"open","sourcePath":renamed,"projectId":record.project_id}))).unwrap().task.unwrap();
+        assert_eq!(linked.source_path,renamed);
+        assert_eq!(linked.state.source_revision,"r1");
+        assert_eq!(linked.state.prepared_count,7);
+        assert_eq!(linked.state.required_count,30);
+        assert_eq!(linked.materials.project.source_file,"fixture.litematic");
+        let reopened=desktop_task_command(&root,desktop_test_request(json!({"action":"select","taskId":record.task_id}))).unwrap().task.unwrap();
+        assert_eq!(reopened.source_path,renamed);
+        let wrong=root.join("different-content.litematic");
+        let rejected_association=desktop_task_command(&root,desktop_test_request(json!({"action":"select","taskId":record.task_id,
+            "sourcePath":wrong,"projectId":"different-content-identity"}))).unwrap().task.unwrap();
+        assert_eq!(rejected_association.source_path,renamed);
+        let selected_path=root.join("same-content-copy.litematic");
+        fs::write(&selected_path,bytes).unwrap();
+        let selected=desktop_task_command(&root,desktop_test_request(json!({"action":"select","taskId":record.task_id,
+            "sourcePath":selected_path,"projectId":record.project_id}))).unwrap().task.unwrap();
+        assert_eq!(selected.source_path,selected_path);
+        assert_eq!(selected.state.prepared_count,7);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn desktop_task_workspace_keeps_named_tasks_and_saved_source_snapshots_independent() {
+        let root=temp_db("desktop_workspace").with_extension("tasks");
+        let first=saved_desktop_fixture(&root,"First build");
+        let first_id=first.task_id.clone();
+        let second=desktop_task_command(&root,desktop_test_request(json!({"action":"create","taskId":first_id,"name":"Second build"}))).unwrap();
+        let second_id=second.selected_task_id.unwrap();
+        assert_ne!(first.task_id,second_id);
+        assert_eq!(second.tasks.len(),2);
+        assert_eq!(second.task.unwrap().state.prepared_count,0);
+        let updated=desktop_task_command(&root,desktop_test_request(json!({"action":"mutate","taskId":first.task_id,"sourceRevision":"r1","mutation":{"materialId":"minecraft:stone","quantity":7}}))).unwrap();
+        assert_eq!(updated.task.unwrap().state.prepared_count,7);
+        let other=desktop_task_command(&root,desktop_test_request(json!({"action":"select","taskId":second_id}))).unwrap();
+        assert_eq!(other.task.unwrap().state.prepared_count,0);
+        let renamed=desktop_task_command(&root,desktop_test_request(json!({"action":"rename","taskId":first.task_id,"sourceRevision":"r1","name":"Saved task"}))).unwrap();
+        assert_eq!(renamed.task.unwrap().name,"Saved task");
+        // A changed/missing source never silently replaces the saved demand.
+        let reopened=desktop_task_command(&root,desktop_test_request(json!({"action":"open","sourcePath":first.source_path,"projectId":"new-content","sourceRevision":"changed"}))).unwrap();
+        let task=reopened.task.unwrap();
+        assert_eq!(task.state.task_id,first.task_id);
+        assert_eq!(task.state.source_revision,"r1");
+        assert_eq!(task.state.prepared_count,7);
+        assert!(!task.source_path.exists());
+        let unbound=desktop_task_command(&root,desktop_test_request(json!({"action":"open","sourcePath":root.join("another.litematic"),"projectId":"unknown"}))).unwrap();
+        assert!(unbound.task.is_none());
+        assert_eq!(unbound.tasks.len(),2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn desktop_task_workspace_persists_preferences_notes_units_and_web_status() {
+        let root=temp_db("desktop_workspace_preferences").with_extension("tasks");
+        let record=saved_desktop_fixture(&root,"Build");
+        desktop_task_command(&root,desktop_test_request(json!({"action":"settings","taskId":record.task_id,"sourceRevision":"r1","preferences":{"search":"stone","language":"en-US"}}))).unwrap();
+        desktop_task_command(&root,desktop_test_request(json!({"action":"settings","taskId":record.task_id,"sourceRevision":"r1","preferences":{"filter":"unfinished","individualCounts":true}}))).unwrap();
+        let changed=desktop_task_command(&root,desktop_test_request(json!({"action":"mutate","taskId":record.task_id,"sourceRevision":"r1","mutation":{
+            "materialId":"minecraft:stone","quantity":15,"status":"preparing","publicNote":"north wall","storageLocation":"chest 2","stackSize":16
+        }}))).unwrap();
+        let task=changed.task.unwrap();
+        assert_eq!(task.preferences.search,"stone");
+        assert_eq!(task.preferences.language,"en-US");
+        assert!(task.preferences.individual_counts);
+        let stone=task.state.items.iter().find(|item|item.material_id=="minecraft:stone").unwrap();
+        assert_eq!((stone.preparing_count,stone.done_count,stone.remaining_count,stone.overfilled_count),(15,0,0,5));
+        assert_eq!(stone.public_note.as_deref(),Some("north wall"));
+        assert_eq!(stone.storage_location.as_deref(),Some("chest 2"));
+        assert_eq!(stone.stack_size,16);
+        assert_eq!(task.materials.materials.iter().find(|item|item.namespace_id=="minecraft:stone").unwrap().stack_size,16);
+        let reopened=desktop_task_command(&root,desktop_test_request(json!({"action":"select","taskId":record.task_id}))).unwrap().task.unwrap();
+        assert_eq!(reopened.preferences.search,"stone");
+        assert_eq!(reopened.state.preparing_count,15);
+        // Missing recipes do not make the material itself disappear.
+        assert!(desktop_task_command(&root,desktop_test_request(json!({"action":"details","taskId":record.task_id,"materialId":"minecraft:stone"}))).is_ok());
+        let invalid=desktop_test_request(json!({"action":"mutate","taskId":record.task_id,"sourceRevision":"r1","mutation":{"materialId":"minecraft:stone","quantity":2,"stackSize":0}}));
+        assert!(desktop_task_command(&root,invalid).is_err());
+        let unchanged=desktop_task_command(&root,desktop_test_request(json!({"action":"select","taskId":record.task_id}))).unwrap().task.unwrap();
+        assert_eq!(unchanged.state.preparing_count,15);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn desktop_task_workspace_multiplier_invalidates_stale_reset_and_keeps_other_tasks() {
+        let root=temp_db("desktop_workspace_multiplier").with_extension("tasks");
+        let first=saved_desktop_fixture(&root,"First");
+        let second=saved_desktop_fixture(&root,"Second");
+        for (id,quantity) in [(&first.task_id,8),(&second.task_id,3)] {
+            desktop_task_command(&root,desktop_test_request(json!({"action":"mutate","taskId":id,"sourceRevision":"r1","mutation":{"materialId":"minecraft:stone","quantity":quantity}}))).unwrap();
+        }
+        let changed=desktop_task_command(&root,desktop_test_request(json!({"action":"settings","taskId":first.task_id,"sourceRevision":"r1","multiplier":2}))).unwrap().task.unwrap();
+        assert_ne!(changed.state.source_revision,"r1");
+        assert_eq!(changed.state.required_count,60);
+        assert_eq!(changed.state.prepared_count,8);
+        let stale=desktop_test_request(json!({"action":"mutate","taskId":first.task_id,"sourceRevision":"r1","mutation":{"reset":true}}));
+        assert!(desktop_task_command(&root,stale).is_err());
+        let cleared=desktop_task_command(&root,desktop_test_request(json!({"action":"mutate","taskId":first.task_id,"sourceRevision":changed.state.source_revision,"mutation":{"reset":true}}))).unwrap().task.unwrap();
+        assert_eq!(cleared.state.prepared_count,0);
+        assert_eq!(cleared.state.required_count,60);
+        assert_eq!(desktop_task_command(&root,desktop_test_request(json!({"action":"select","taskId":second.task_id}))).unwrap().task.unwrap().state.prepared_count,3);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn desktop_task_workspace_backup_import_creates_new_isolated_task() {
+        let root=temp_db("desktop_workspace_backup").with_extension("tasks");
+        let original=saved_desktop_fixture(&root,"Original");
+        desktop_task_command(&root,desktop_test_request(json!({"action":"mutate","taskId":original.task_id,"sourceRevision":"r1","mutation":{
+            "materialId":"minecraft:stone","quantity":12,"status":"done","publicNote":"keep this","storageLocation":"box","stackSize":16
+        }}))).unwrap();
+        let exported=desktop_task_command(&root,desktop_test_request(json!({"action":"export","taskId":original.task_id}))).unwrap();
+        let backup=serde_json::to_value(exported.backup.unwrap()).unwrap();
+        for field in ["participants","users","whitelist","auditLog"] {assert!(backup.get(field).is_none());}
+        let imported=desktop_task_command(&root,desktop_test_request(json!({"action":"import","backup":backup}))).unwrap();
+        let task=imported.task.unwrap();
+        assert_ne!(task.state.task_id,original.task_id);
+        assert_eq!(task.state.prepared_count,12);
+        let stone=task.state.items.iter().find(|item|item.material_id=="minecraft:stone").unwrap();
+        assert_eq!(stone.public_note.as_deref(),Some("keep this"));
+        assert_eq!(stone.stack_size,16);
+        assert_eq!(task.materials.materials.iter().find(|item|item.namespace_id=="minecraft:stone").unwrap().stack_size,16);
+        let mut invalid=backup.clone();
+        invalid["items"][0]["quantity"]=json!(-1);
+        assert!(serde_json::from_value::<DesktopTaskRequest>(json!({"action":"import","backup":invalid})).is_err());
+        assert_eq!(desktop_task_records(&root).unwrap().0.len(),2);
+        assert_eq!(desktop_task_command(&root,desktop_test_request(json!({"action":"select","taskId":original.task_id}))).unwrap().task.unwrap().state.prepared_count,12);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn desktop_task_workspace_discovers_legacy_progress_without_inventing_snapshot() {
+        let root=temp_db("desktop_workspace_legacy").with_extension("tasks");
+        fs::create_dir_all(&root).unwrap();
+        let id=new_desktop_task_id();
+        let path=desktop_task_path(&root,&id).unwrap();
+        let materials=fixture_materials();
+        desktop_task_apply(&path,&id,"old-revision",&materials,None).unwrap();
+        desktop_task_apply(&path,&id,"old-revision",&materials,Some(&DesktopTaskMutation {
+            material_id:Some("minecraft:stone".into()),quantity:Some(7),..Default::default()
+        })).unwrap();
+        let listed=desktop_task_command(&root,desktop_test_request(json!({"action":"list"}))).unwrap();
+        assert!(listed.tasks.is_empty());
+        assert_eq!(listed.legacy_tasks.len(),1);
+        assert_eq!(listed.legacy_tasks[0].prepared_count,7);
+        assert_eq!(listed.legacy_tasks[0].source_revision.as_deref(),Some("old-revision"));
+        // Completing the migration only adds metadata in the original DB.
+        let mut record=saved_desktop_fixture(&root,"Other task");
+        let unused=desktop_task_path(&root,&record.task_id).unwrap();
+        record.task_id=id.clone();
+        let mut conn=Connection::open(&path).unwrap();
+        let tx=conn.transaction().unwrap();
+        save_desktop_task_record(&tx,&record).unwrap();tx.commit().unwrap();drop(conn);
+        fs::remove_file(unused).unwrap();
+        let linked=desktop_task_command(&root,desktop_test_request(json!({"action":"select","taskId":id}))).unwrap();
+        assert_eq!(linked.task.unwrap().state.prepared_count,7);
+        assert!(linked.legacy_tasks.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn desktop_task_persists_quantities_and_preserves_web_overfill() {
         let db = temp_db("desktop_task_quantity");
         let materials = fixture_materials();
         let initial = desktop_task_apply(&db, "task", "r1", &materials, None).unwrap();
@@ -3854,7 +4539,7 @@ mod tests {
         assert_eq!(initial.required_count, 30);
         assert_eq!(initial.prepared_count, 0);
         let edit = |quantity| DesktopTaskMutation {
-            material_id: Some("minecraft:stone".into()), quantity: Some(quantity), reset: false,
+            material_id: Some("minecraft:stone".into()), quantity: Some(quantity), ..Default::default()
         };
         let partial = desktop_task_apply(&db, "task", "r1", &materials, Some(&edit(7))).unwrap();
         assert_eq!(partial.prepared_count, 7);
@@ -3863,8 +4548,10 @@ mod tests {
         let reopened = desktop_task_apply(&db, "task", "r1", &materials, None).unwrap();
         assert_eq!(reopened.prepared_count, 7);
         assert_eq!(reopened.items.iter().find(|item| item.material_id == "minecraft:stone").unwrap().prepared_count, 7);
-        let complete = desktop_task_apply(&db, "task", "r1", &materials, Some(&edit(u64::MAX))).unwrap();
-        assert_eq!(complete.prepared_count, 10);
+        assert!(desktop_task_apply(&db, "task", "r1", &materials, Some(&edit(u64::MAX))).is_err());
+        let complete = desktop_task_apply(&db, "task", "r1", &materials, Some(&edit(20))).unwrap();
+        assert_eq!(complete.prepared_count, 20);
+        assert_eq!(complete.overfilled_count, 10);
         assert_eq!(complete.completed_items, 1);
         let stone = complete.items.iter().find(|item| item.material_id == "minecraft:stone").unwrap();
         assert_eq!(stone.remaining_count, 0);
@@ -3884,28 +4571,29 @@ mod tests {
         desktop_task_apply(&db, "task", "r1", &materials, None).unwrap();
         for (id, quantity) in [("minecraft:stone", 8), ("minecraft:rail", 4)] {
             desktop_task_apply(&db, "task", "r1", &materials, Some(&DesktopTaskMutation {
-                material_id: Some(id.into()), quantity: Some(quantity), reset: false,
+                material_id: Some(id.into()), quantity: Some(quantity), ..Default::default()
             })).unwrap();
         }
         materials.materials.iter_mut().find(|item| item.namespace_id == "minecraft:stone").unwrap().required_count = 3;
         materials.materials.retain(|item| item.namespace_id != "minecraft:rail");
         materials.materials.push(material("minecraft:diamond", 6));
-        let edit = DesktopTaskMutation { material_id: Some("minecraft:diamond".into()), quantity: Some(2), reset: false };
+        let edit = DesktopTaskMutation { material_id: Some("minecraft:diamond".into()), quantity: Some(2), ..Default::default() };
         assert!(desktop_task_apply(&db, "task", "r2", &materials, Some(&edit)).is_err());
         let changed = desktop_task_apply(&db, "task", "r2", &materials, None).unwrap();
         assert_eq!(changed.required_count, 19);
-        assert_eq!(changed.prepared_count, 3);
+        assert_eq!(changed.prepared_count, 8);
+        assert_eq!(changed.overfilled_count, 5);
         assert_eq!(changed.items.iter().find(|item| item.material_id == "minecraft:diamond").unwrap().prepared_count, 0);
         let conn = Connection::open(&db).unwrap();
-        assert!(load_claims(&conn).unwrap().iter().all(|claim| claim.material_id != "minecraft:rail"));
+        assert!(load_claims(&conn).unwrap().iter().any(|claim| claim.material_id == "minecraft:rail"));
         drop(conn);
         assert!(desktop_task_apply(&db, "task", "r1", &materials, Some(&edit)).is_err());
         let edited = desktop_task_apply(&db, "task", "r2", &materials, Some(&edit)).unwrap();
-        assert_eq!(edited.prepared_count, 5);
-        let invalid_reset = DesktopTaskMutation { material_id: None, quantity: Some(1), reset: true };
+        assert_eq!(edited.prepared_count, 10);
+        let invalid_reset = DesktopTaskMutation { quantity: Some(1), reset: true, ..Default::default() };
         assert!(desktop_task_apply(&db, "task", "r2", &materials, Some(&invalid_reset)).is_err());
-        assert_eq!(desktop_task_apply(&db, "task", "r2", &materials, None).unwrap().prepared_count, 5);
-        let reset = DesktopTaskMutation { material_id: None, quantity: None, reset: true };
+        assert_eq!(desktop_task_apply(&db, "task", "r2", &materials, None).unwrap().prepared_count, 10);
+        let reset = DesktopTaskMutation { reset: true, ..Default::default() };
         let cleared = desktop_task_apply(&db, "task", "r2", &materials, Some(&reset)).unwrap();
         assert_eq!(cleared.prepared_count, 0);
         assert_eq!(cleared.remaining_count, changed.required_count);
@@ -3921,7 +4609,7 @@ mod tests {
         materials.materials = vec![material("minecraft:stone#nbt-a", 4), material("minecraft:stone#nbt-b", 3)];
         for item in &mut materials.materials { item.item_icon_key = "minecraft:stone".into(); }
         desktop_task_apply(&db, "task", "r1", &materials, None).unwrap();
-        let edit = DesktopTaskMutation { material_id: Some("minecraft:stone#nbt-a".into()), quantity: Some(2), reset: false };
+        let edit = DesktopTaskMutation { material_id: Some("minecraft:stone#nbt-a".into()), quantity: Some(2), ..Default::default() };
         let changed = desktop_task_apply(&db, "task", "r1", &materials, Some(&edit)).unwrap();
         assert_eq!(changed.items.iter().find(|item| item.material_id.ends_with("nbt-a")).unwrap().prepared_count, 2);
         assert_eq!(changed.items.iter().find(|item| item.material_id.ends_with("nbt-b")).unwrap().prepared_count, 0);

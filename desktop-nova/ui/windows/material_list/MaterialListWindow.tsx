@@ -88,6 +88,13 @@ export function MaterialListWindow() {
 
     useEffect(() => {
         let cancelled = false;
+        if (viewMode === "details") {
+            // Task snapshots are authoritative and remain usable without the
+            // original schematic or a live Viewer. Do not reanalyse on open.
+            setIsLoading(false);
+            setError("");
+            return;
+        }
         if (!currentFile) {
             setData(null);
             setError("");
@@ -118,11 +125,13 @@ export function MaterialListWindow() {
         return () => {
             cancelled = true;
         };
-    }, [currentFile, applicationAnalysisKey, reloadRevision]);
+    }, [currentFile, applicationAnalysisKey, reloadRevision, viewMode]);
 
     return (
         <main className={["material-list-window", themeClassName(themeId)].filter(Boolean).join(" ")}>
-            {!currentFile ? (
+            {viewMode === "details" ? (
+                <Profiler id="material-list" onRender={recordStatisticsCommit}><MaterialListContent key={currentFile} data={namedData} currentFile={currentFile} viewMode="details" onViewModeChange={setViewMode} standalone /></Profiler>
+            ) : !currentFile ? (
                 <div className="material-list-window-state">{t("library.materialSelectFirst")}</div>
             ) : isLoading ? (
                 <div className="material-list-window-state">{t("library.materialsLoading")}</div>

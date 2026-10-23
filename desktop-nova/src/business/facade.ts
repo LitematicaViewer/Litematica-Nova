@@ -31,4 +31,4 @@ export * from "../services/irisSettings";
 
 export * from "../services/creativeItemIdentity";
 
-export { getStockpileTask, setStockpileTaskQuantity, resetStockpileTask, prepareMaterialTaskWindow, type ApplicationMaterialScope, type StockpileTaskInput, type StockpileTaskView } from "../platform/applicationOperations";
+export { commandStockpileTask, getStockpileTask, setStockpileTaskQuantity, resetStockpileTask, prepareMaterialTaskWindow, type ApplicationMaterialScope, type StockpileTaskInput, type StockpileTaskView, type StockpileTaskWorkspace, type StockpileTaskCommandInput, type StockpileTaskPreferences, type StockpileTaskMutation, type StockpileMaterial, type StockpileRecipeTree } from "../platform/applicationOperations";

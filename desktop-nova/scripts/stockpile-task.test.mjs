@@ -4,102 +4,177 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-// Replay the production closures, not a second implementation of the queue.
-const uiFile = new URL('../ui/windows/main/pages/statistics/StatisticsPage.tsx', import.meta.url);
+// Transpile actual production helpers and closures; never duplicate queue/filter logic.
+const uiFile = new URL('../ui/windows/main/pages/statistics/StockpileTaskPanel.tsx', import.meta.url);
 const uiSource = fs.readFileSync(uiFile, 'utf8');
 const uiAst = ts.createSourceFile(uiFile.pathname, uiSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const declarations = new Map();
+const declarations = new Map(), functions = new Map(), arrows = [];
 (function visit(node) {
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) declarations.set(node.name.text, node.getText(uiAst));
+  if (ts.isFunctionDeclaration(node) && node.name) functions.set(node.name.text, node.getText(uiAst));
+  if (ts.isArrowFunction(node)) arrows.push(node);
   ts.forEachChild(node, visit);
 })(uiAst);
-const queueCode = ts.transpileModule(
-  ['drain', 'changeQuantity', 'retry'].map(name => {
-    assert(declarations.has(name), `Production ${name} closure must exist`);
-    return `const ${declarations.get(name)};`;
-  }).join('\n') + '\nglobalThis.queueApi = {drain, changeQuantity, retry};',
-  { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } },
-).outputText;
-
-function task(sourceRevision = 'revision-A') {
-  return { taskId: 'task-A', sourceRevision, items: [{ materialId: 'stone', requiredCount: 10, preparedCount: 0, remainingCount: 10, complete: false }],
-    requiredCount: 10, preparedCount: 0, remainingCount: 10, completedItems: 0, totalItems: 1 };
-}
-function setupQueue(write, read = async () => task()) {
-  const states = { views: [], errors: [], pending: [] };
-  const work = { epoch: 1, view: task(), pending: new Map(), running: false, reset: false, refresh: false };
-  const context = {
-    epoch: { current: 1 }, requestSequence: { current: 0 }, queue: { current: work },
-    inputRef: { current: { sourcePath: 'C:/schematics/A.litematic', scope: { kind: 'all', value: null }, multiplier: 1, includeContainerItems: false } },
-    setView: value => states.views.push(value), setPending: value => states.pending.push(value), setError: value => states.errors.push(value),
-    loadRef: { current: () => {} }, setStockpileTaskQuantity: write, getStockpileTask: read,
-    resetStockpileTask: async () => task(),
+const helperNames = ['stockpileUnitParts', 'itemState', 'displayLanguage', 'materialName', 'filterStockpileRows',
+  'resetConfirmationMatches', 'mergeStockpileMutation', 'recoverableStockpileCommands', 'pendingDraft', 'draftKey'];
+const transpile = source => ts.transpileModule(source, { fileName: 'replay.tsx', compilerOptions: {
+  target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
+} }).outputText;
+const helperSource = helperNames.map(name => { assert(functions.has(name), `Production ${name} must exist`); return functions.get(name); }).join('\n');
+const helperCode = transpile(`${helperSource}\nglobalThis.helpers={${helperNames.join(',')}};`);
+const queueNames = ['capturePending', 'persistPending', 'drain', 'enqueue', 'mutate', 'changeQuantity', 'retry'];
+const queueCode = transpile(`${helperSource}\n` + queueNames.map(name => {
+  assert(declarations.has(name), `Production ${name} closure must exist`); return `const ${declarations.get(name)};`;
+}).join('\n') + `\nglobalThis.queueApi={${queueNames.join(',')}};`);
+const plain = value => JSON.parse(JSON.stringify(value));
+const tick = () => new Promise(setImmediate);
+const basePreferences = { search:'',category:'all',filter:'all',sort:'grouped',view:'compact',language:'auto',individualCounts:false,
+  showAdvancedRecipeTree:true,showUnresolvedRecipes:true,showIconFallbackBadge:true };
+function row(materialId='stone', overrides={}) { return {materialId, requiredCount:10, preparedCount:0,doneCount:0,preparingCount:0,
+  remainingCount:10,overfilledCount:0,complete:false,quantity:0,status:'not_started',stackSize:64,...overrides}; }
+function task(sourceRevision='revision-A', taskId='task-A') { return {taskId,projectId:'project-A',sourceRevision,
+  preferences:{...basePreferences}, items:[row(),row('wood')], requiredCount:20,preparedCount:0,remainingCount:20,completedItems:0,totalItems:2}; }
+function setupQueue(write) {
+  const states={views:[],errors:[],pending:[],recoveries:[]}, saved=new Map();
+  const work={epoch:1,task:task(),pending:new Map(),running:false,refresh:false};
+  const context={exports:{},epoch:{current:1},sequence:{current:0},queue:{current:work},currentTask:{current:work.task},recovery:null,
+    preferencesRef:{current:{...basePreferences}},searchRef:{current:''},
+    setPending:value=>states.pending.push(value),setError:value=>states.errors.push(value),setRecoveryOpen(){},setRecovery:value=>states.recoveries.push(value),
+    accept:value=>states.views.push(value),loadRef:{current(){}},commandStockpileTask:write,
+    saveUpdateDraft:(key,value)=>value===undefined?saved.delete(key):saved.set(key,plain(value)),
+    getApplicationWindowLabel:()=>'material-list', getUiLocale:()=>'en-US',t:key=>key,
+    resolveBlockDisplayName:(id,fallback)=>`${id}:${fallback}`,
   };
-  vm.runInNewContext(queueCode, context);
-  return { context, states, work, ...context.queueApi };
+  vm.runInNewContext(queueCode,context);
+  return {context,states,work,saved,...context.queueApi};
 }
+function helpers() { const context={exports:{},getUiLocale:()=>'en-US',resolveBlockDisplayName:(id,fallback)=>`${id}:${fallback}`};
+  vm.runInNewContext(helperCode,context); return context.helpers; }
 
-test('UI queue serializes writes and coalesces the latest quantity without changing task identity', async () => {
-  const requests = [], waiters = [];
-  const state = setupQueue(input => { requests.push(input); return new Promise(resolve => waiters.push(resolve)); });
-  state.work.pending.set('stone', 1);
-  const draining = state.drain(state.work);
-  state.work.pending.set('stone', 7);
-  state.work.pending.set('wood', 4);
-  assert.equal(requests.length, 1, 'only one write may be in flight');
-  waiters.shift()({ ...task(), preparedCount: 1 });
-  await new Promise(setImmediate);
-  assert.equal(requests[1].quantity, 7);
-  waiters.shift()({ ...task(), preparedCount: 7 });
-  await new Promise(setImmediate);
-  assert.equal(requests[2].materialId, 'wood');
-  waiters.shift()({ ...task(), preparedCount: 11 });
-  await draining;
-  assert.deepEqual(requests.map(input => input.quantity), [1, 7, 4]);
-  assert(requests.every(input => input.taskId === 'task-A' && input.sourceRevision === 'revision-A'));
-  assert.equal(state.work.pending.size, 0);
-  assert.equal(state.work.running, false);
-  assert.equal(state.states.views.at(-1).preparedCount, 11);
+test('UI queue coalesces actual item commands, preserves overfill and serializes latest quantity', async()=>{
+  const requests=[],waiters=[];
+  const state=setupQueue(input=>{requests.push(input);return new Promise(resolve=>waiters.push(resolve));});
+  state.changeQuantity('stone',1); state.changeQuantity('stone',17); state.changeQuantity('wood',4);
+  assert.equal(requests.length,1); assert.equal(state.saved.size,1,'unacknowledged changes persist before dispatch');
+  waiters.shift()({task:{...task(),preparedCount:1}});await tick();
+  assert.equal(requests[1].mutation.quantity,17,'overfill is not clamped to requirement');
+  waiters.shift()({task:{...task(),preparedCount:17}});await tick();
+  assert.equal(requests[2].mutation.materialId,'wood');
+  waiters.shift()({task:{...task(),preparedCount:21}});await tick();
+  assert.deepEqual(requests.map(input=>input.mutation.quantity),[1,17,4]);
+  assert(requests.every(input=>input.taskId==='task-A'&&input.sourceRevision==='revision-A'));
+  assert.equal(state.work.pending.size,0); assert.equal(state.saved.size,0,'ACK clears recovery draft');
+  assert.equal(state.states.views.at(-1).task.preparedCount,21);
 });
 
-test('UI failed writes stay unsaved; retry rebases pending quantities onto the real latest source revision', async () => {
-  let offline = true;
-  const requests = [];
-  const updated = { ...task('revision-B'), items: [{ ...task().items[0], requiredCount: 4 }], requiredCount: 4 };
-  const state = setupQueue(async input => {
-    requests.push(input);
-    if (offline) throw Error('source revision changed');
-    return { ...updated, preparedCount: input.quantity };
-  }, async () => updated);
-  state.work.pending.set('stone', 9);
-  state.work.pending.set('removed-variant', 3);
-  await state.drain(state.work);
-  assert.equal(state.work.pending.get('stone'), 9);
-  assert.match(state.states.errors.at(-1), /source revision changed/);
-  assert.equal(state.states.views.length, 0, 'a failed save must not become an acknowledged view');
-  offline = false;
-  await state.retry();
-  assert.equal(requests.at(-1).sourceRevision, 'revision-B');
-  assert.equal(requests.at(-1).quantity, 4, 'rebase clamps to the new authoritative requirement');
-  assert.equal(state.work.pending.size, 0);
-  assert.equal(state.states.views.at(-1).preparedCount, 4);
+test('failed writes retain exact intent and retry without marking unsaved values as saved', async()=>{
+  let offline=true; const requests=[];
+  const state=setupQueue(async input=>{requests.push(input);if(input.action==='select')return {task:task()};if(offline)throw Error('storage offline');return {task:task()};});
+  state.changeQuantity('stone',19);await tick();
+  assert.equal(state.work.pending.get('item:stone').mutation.quantity,19);
+  assert.match(state.states.errors.at(-1),/storage offline/);assert.equal(state.states.views.length,0);assert.equal(state.saved.size,1);
+  offline=false; await state.retry();await tick();
+  assert.equal(requests.at(-1).mutation.quantity,19);assert.equal(state.work.pending.size,0);assert.equal(state.saved.size,0);
 });
 
-test('closing an overlay or switching source does not drop queued writes or apply old responses to the new view', async () => {
-  const requests = [], waiters = [];
-  const state = setupQueue(input => { requests.push(input); return new Promise(resolve => waiters.push(resolve)); });
-  state.work.pending.set('stone', 2);
-  const draining = state.drain(state.work);
-  state.work.pending.set('wood', 3);
-  state.context.epoch.current = 2;
-  state.context.queue.current = null;
-  waiters.shift()(task());
-  await new Promise(setImmediate);
-  assert.equal(requests.length, 2, 'the detached queue continues its remaining write');
-  waiters.shift()(task());
-  await draining;
-  assert.equal(state.work.pending.size, 0);
-  assert.equal(state.states.views.length, 0, 'old acknowledgements cannot update the new source');
+test('retry detects changed snapshot and asks before rebasing; it never repeats stale-revision edits',async()=>{
+  const requests=[];const state=setupQueue(async input=>{requests.push(input);if(input.action==='select')return{task:task('revision-B')};throw Error('source revision changed');});
+  state.changeQuantity('stone',19);await tick();await state.retry();
+  assert.equal(requests.filter(input=>input.action==='mutate').length,1);
+  assert.equal(state.states.recoveries.at(-1).sourceRevision,'revision-A');
+  assert.equal(state.states.recoveries.at(-1).commands[0][1].mutation.quantity,19);
+  assert.equal(state.work.task.sourceRevision,'revision-B');assert.equal(state.work.pending.size,0);
+});
+
+test('detached queues finish old task writes without updating a switched source', async()=>{
+  const requests=[],waiters=[];const state=setupQueue(input=>{requests.push(input);return new Promise(resolve=>waiters.push(resolve));});
+  state.changeQuantity('stone',2);state.changeQuantity('wood',3);
+  state.context.epoch.current=2;state.context.queue.current=null;state.context.currentTask.current=task('revision-B','task-B');
+  waiters.shift()({task:task()});await tick();assert.equal(requests.length,2);
+  waiters.shift()({task:task()});await tick();
+  assert.equal(state.work.pending.size,0);assert.equal(state.states.views.length,0);
+  assert(requests.every(input=>input.taskId==='task-A'));
+});
+
+test('pending search survives another item ACK and contains only idempotent patches',async()=>{
+  let resolve;const state=setupQueue(()=>new Promise(done=>{resolve=done;}));
+  state.changeQuantity('stone',2);state.context.searchRef.current='potion';
+  resolve({task:task()});await tick();
+  const draft=[...state.saved.values()][0];assert.equal(draft.commands[0][1].preferences.search,'potion');
+  const {recoverableStockpileCommands,mergeStockpileMutation}=helpers();
+  const commands=[['reset',{action:'mutate',mutation:{reset:true}}],['clear',{action:'mutate',mutation:{clear:true}}],
+    ['sync',{action:'sync'}],['import',{action:'import'}],['note',{action:'mutate',mutation:{publicNote:'x'}}],['prefs',{action:'settings',preferences:{search:'x'}}]];
+  assert.deepEqual(Array.from(recoverableStockpileCommands(commands),entry=>entry[0]),['note','prefs']);
+  assert.deepEqual(plain(mergeStockpileMutation({clear:true},{quantity:4,status:'preparing'})),{quantity:4,status:'preparing'});
+});
+
+test('web unit hierarchy uses each material stack size and retains exact raw integers',()=>{
+  const {stockpileUnitParts}=helpers();
+  for(const stack of [1,16,64,99])assert.deepEqual(Array.from(stockpileUnitParts(stack*27*27+stack*27+stack+(stack-1),stack)),[1,1,1,stack-1]);
+  assert.deepEqual(Array.from(stockpileUnitParts(0,16)),[0,0,0,0]);
+  assert.deepEqual(Array.from(stockpileUnitParts(15,16)),[0,0,0,15]);
+  assert.deepEqual(Array.from(stockpileUnitParts(27*64,64)),[0,1,0,0]);
+});
+
+test('web single-user filters/search preserve NBT identity and language/base-ID fallback',()=>{
+  const {filterStockpileRows,materialName}=helpers();
+  const items=[row('potion#A',{doneCount:3,preparedCount:3,status:'done',remainingCount:7}),
+    row('potion#B',{preparingCount:8,status:'preparing',quantity:8,publicNote:'bring',storageLocation:'A1'}),
+    row('stone',{doneCount:12,preparedCount:12,quantity:12,overfilledCount:2,complete:true,remainingCount:0})];
+  const metadata=new Map([['potion#A',{item_icon_key:'minecraft:potion',display_name:'Healing',namespace_id:'potion#A',category:'brew',recipe_status:'available',display_names:{'en-US':'Healing Potion'}}],
+    ['potion#B',{item_icon_key:'minecraft:potion',display_name:'Speed',namespace_id:'potion#B',category:'brew',recipe_status:'unresolved',display_names:{'en-US':'Speed Potion'}}],
+    ['stone',{item_icon_key:'minecraft:stone',display_name:'Stone',category:'blocks',recipe_status:'missing',display_names:{}}]]);
+  const filtered=preferences=>Array.from(filterStockpileRows(items,metadata,{...basePreferences,...preferences}),item=>item.materialId);
+  assert.deepEqual(filtered({filter:'preparing'}),['potion#A','potion#B']);
+  assert.deepEqual(filtered({filter:'noted'}),['potion#B']);assert.deepEqual(filtered({filter:'stored'}),['potion#B']);
+  assert.deepEqual(filtered({filter:'overfilled'}),['stone']);assert.deepEqual(filtered({filter:'unresolved'}),['potion#B']);
+  assert.deepEqual(filtered({search:'healing potion'}),['potion#A']);assert.deepEqual(filtered({search:'potion#B'}),['potion#B']);
+  assert.equal(materialName({item_icon_key:'minecraft:potion',namespace_id:'potion#NBT',display_name:'Potion',display_names:{}},'auto','potion#NBT'),'minecraft:potion:Potion');
+});
+
+test('actual reset cancellation writes nothing and confirmation cannot target a different task or revision',()=>{
+  const confirm=arrows.find(node=>node.body.getText(uiAst).includes('const captured = confirmation;'));
+  assert(confirm,'Production reset confirmation handler must exist');
+  let resetOpening;
+  (function find(node){if(ts.isJsxOpeningElement(node)&&node.tagName.getText(uiAst)==='Dialog'&&node.attributes.getText(uiAst).includes('title={t("stockpile.reset")}'))resetOpening=node;ts.forEachChild(node,find);})(uiAst);
+  const cancel=resetOpening.attributes.properties.find(node=>ts.isJsxAttribute(node)&&node.name.getText(uiAst)==='onClose').initializer.expression;
+  const captured={taskId:'task-A',sourceRevision:'revision-A',name:'A',scope:'all'},writes=[];
+  const context={exports:{},confirmation:captured,currentTask:{current:task()},setConfirmation(){},enqueue:(...args)=>writes.push(args)};
+  vm.runInNewContext(transpile(`${functions.get('resetConfirmationMatches')}\nglobalThis.confirm=${confirm.getText(uiAst)};globalThis.cancel=${cancel.getText(uiAst)};`),context);
+  context.cancel();assert.equal(writes.length,0);
+  context.currentTask.current=task('revision-A','task-B');context.confirm();assert.equal(writes.length,0);
+  context.currentTask.current=task('revision-B');context.confirm();assert.equal(writes.length,0);
+  context.currentTask.current=task();context.confirm();assert.equal(writes.length,1);assert.equal(writes[0][1].mutation.reset,true);
+});
+
+test('existing recovery store captures the newest getter without stale-render overwrite and clears acknowledged keys',()=>{
+  const source=fs.readFileSync(new URL('../ui/windows/main/updateRecovery.ts',import.meta.url),'utf8');
+  const storage=new Map(),refs=[],effects=[];let cursor=0;
+  const hooks={useRef(value){const index=cursor++;return refs[index]||(refs[index]={current:value});},useState(){return[null,()=>{}];},
+    useEffect(effect,deps){const index=cursor++;if(!effects[index]||deps.some((value,i)=>effects[index].deps[i]!==value)){effects[index]?.cleanup?.();effects[index]={deps,cleanup:effect()};}}};
+  const context={exports:{},console,localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},require:name=>name==='react'?hooks:{}};
+  vm.runInNewContext(transpile(source),context);
+  const api=context.exports;
+  let latest={quantity:1};api.useUpdateDraft('stockpile:A',()=>latest);
+  latest={quantity:7};cursor=0;api.useUpdateDraft('stockpile:A',()=>latest);
+  api.preserveUpdateDrafts();assert.equal(api.readUpdateDraft('stockpile:A').quantity,7);
+  api.saveUpdateDraft('stockpile:B',{quantity:3});api.saveUpdateDraft('stockpile:A',undefined);
+  assert.equal(api.readUpdateDraft('stockpile:A'),undefined);assert.equal(api.readUpdateDraft('stockpile:B').quantity,3);
+  latest=undefined;api.preserveUpdateDrafts();assert.equal(api.readUpdateDraft('stockpile:A'),undefined);
+});
+
+test('new stockpile labels exist in both locales without duplicate keys',()=>{
+  const file=new URL('../src/services/locales/editor.ts',import.meta.url),source=fs.readFileSync(file,'utf8');
+  const context={exports:{}};vm.runInNewContext(transpile(source),context);
+  const {zhCN,enUS}=context.exports;
+  const labels=[...uiSource.matchAll(/t\("(stockpile\.[^"]+)"/g)].map(match=>match[1]);
+  for(const label of labels){assert(zhCN[label],`Missing Chinese label ${label}`);assert(enUS[label],`Missing English label ${label}`);}
+  const ast=ts.createSourceFile(file.pathname,source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
+  for(const statement of ast.statements){if(!ts.isVariableStatement(statement))continue;for(const declaration of statement.declarationList.declarations){
+    if(!declaration.initializer||!ts.isObjectLiteralExpression(declaration.initializer))continue;
+    const seen=new Set();for(const property of declaration.initializer.properties){if(!ts.isPropertyAssignment(property))continue;const name=property.name.text;
+      if(!name.startsWith('stockpile.'))continue;assert(!seen.has(name),`Duplicate ${name}`);seen.add(name);}
+  }}
 });
 
 function statsModule(getProjectStats = async () => { throw Error('Unexpected project read'); }) {

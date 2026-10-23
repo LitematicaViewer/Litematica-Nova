@@ -39,7 +39,7 @@ use application::operations::{
     ProjectStatsInput, ReplaceBlocksInput, ReplaceBlocksResult, RuntimeHealth,
     LayerContainerData, LayerSliceData, LayerSliceMeta, ProjectionMarkerEditSummary,
     ProjectionMarkers, ReadLayerContainerInput, ReadLayerInput,
-    ExportMaterialListInput, MaterialRecipeCacheInput, ExportWorldInput, StockpileTaskInput, StockpileTaskSetInput, StockpileTaskResetInput,
+    ExportMaterialListInput, MaterialRecipeCacheInput, ExportWorldInput, StockpileTaskInput, StockpileTaskCommandInput, StockpileTaskSetInput, StockpileTaskResetInput,
 };
 use application::quick_preview::{QuickPreviewHost, QuickPreviewView, StartQuickPreviewInput, QuickPresentationIntent};
 use application::updater::{UpdateHost, application_update_snapshot, application_update_check,
@@ -1373,17 +1373,25 @@ async fn application_stockpile_task(input: StockpileTaskInput, operations: tauri
     run_application_operation(move || operations.stockpile_task(input)).await
 }
 #[tauri::command]
+async fn application_stockpile_task_command(app: AppHandle, input: StockpileTaskCommandInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let operations = operations.inner().clone();
+    let result = run_application_operation(move || operations.stockpile_task_command(input)).await?;
+    app.emit("stockpile-task-changed", serde_json::json!({"taskId": result["task"]["taskId"]})).map_err(|error|error.to_string())?;
+    Ok(result)
+}
+
+#[tauri::command]
 async fn application_stockpile_task_set(app: AppHandle, input: StockpileTaskSetInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
     let operations = operations.inner().clone();
     let result = run_application_operation(move || operations.set_stockpile_quantity(input)).await?;
-    app.emit("stockpile-task-changed", serde_json::json!({"taskId": result["taskId"]})).map_err(|error|error.to_string())?;
+    app.emit("stockpile-task-changed", serde_json::json!({"taskId": result["task"]["taskId"]})).map_err(|error|error.to_string())?;
     Ok(result)
 }
 #[tauri::command]
 async fn application_stockpile_task_reset(app: AppHandle, input: StockpileTaskResetInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
     let operations = operations.inner().clone();
     let result = run_application_operation(move || operations.reset_stockpile(input)).await?;
-    app.emit("stockpile-task-changed", serde_json::json!({"taskId": result["taskId"]})).map_err(|error|error.to_string())?;
+    app.emit("stockpile-task-changed", serde_json::json!({"taskId": result["task"]["taskId"]})).map_err(|error|error.to_string())?;
     Ok(result)
 }
 #[tauri::command]
@@ -4175,6 +4183,7 @@ fn main() {
             application_get_project_materials,
             application_stockpile_task,
             application_stockpile_task_set,
+            application_stockpile_task_command,
             application_stockpile_task_reset,
             application_prepare_material_task_window,
             application_generate_project,

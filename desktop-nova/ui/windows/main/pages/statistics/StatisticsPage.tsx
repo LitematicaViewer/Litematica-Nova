@@ -36,14 +36,9 @@ import {
   subscribeApplicationRender,
   MaterialItem,
   StatsData,
-  getStockpileTask,
-  setStockpileTaskQuantity,
-  resetStockpileTask,
   prepareMaterialTaskWindow,
-  type StockpileTaskView,
-  type ApplicationMaterialScope,
 } from "../../../../../src/business/facade";
-import { listenEvent } from "../../../../../src/platform/events";
+import { StockpileTaskPanel } from "./StockpileTaskPanel";
 import { useSyncExternalStore } from "react";
 import {
   loadUserConfigMigratingLocalStorage,
@@ -424,220 +419,11 @@ function QuantitySwitch({ checked, onChange }: { checked: boolean; onChange: (va
   return <label className="beta-material-check"><Checkbox  checked={checked} onCheckedChange={checked => onChange((checked === true))} />{t("statistics.individual")}</label>;
 }
 
-type StockpileWriteQueue = {
-  epoch: number;
-  view: StockpileTaskView;
-  pending: Map<string, number>;
-  running: boolean;
-  reset: boolean;
-  refresh: boolean;
-};
-
-function StockpileQuantityInput({ quantity, required, label, disabled, onQuantity }: {
-  quantity: number; required: number; label: string; disabled: boolean; onQuantity: (quantity: number) => void;
-}) {
-  const [text, setText] = useState(String(quantity));
-  const focused = useRef(false);
-  const submitted = useRef(quantity);
-  useEffect(() => {
-    if (!focused.current) { setText(String(quantity)); submitted.current = quantity; }
-  }, [quantity]);
-  return <Input className="stockpile-quantity-input" type="number" inputMode="numeric" min={0} max={required} step={1}
-    aria-label={label} disabled={disabled} value={text}
-    onFocus={() => { focused.current = true; }}
-    onChange={event => {
-      const raw = event.target.value;
-      setText(raw);
-      if (!/^\d+$/.test(raw)) return;
-      const value = Math.min(required, Math.max(0, Math.trunc(Number(raw))));
-      if (!Number.isSafeInteger(value)) return;
-      if (value !== Number(raw)) setText(String(value));
-      submitted.current = value;
-      onQuantity(value);
-    }}
-    onBlur={() => { focused.current = false; setText(String(submitted.current)); }}
-    onKeyDown={event => {
-      if (event.key === "Enter") event.currentTarget.blur();
-      if (event.key === "Escape") { event.stopPropagation(); event.currentTarget.blur(); }
-    }} />;
-}
-
-function StockpileTaskList({ sourcePath, scope, includeContainerItems, multiplier, materials, asItems, search, onSearch, loadingMaterials, onHover, onPendingChange }: {
-  sourcePath: string; scope: ApplicationMaterialScope; includeContainerItems: boolean; multiplier: number;
-  materials: MaterialItem[]; asItems: boolean; search: string; onSearch: (value: string) => void;
-  loadingMaterials: boolean; onHover: (material: MaterialItem | null) => void;
-  onPendingChange: (pending: boolean) => void;
-}) {
-  const { locale } = useI18n();
-  const [view, setView] = useState<StockpileTaskView | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [pending, setPending] = useState(0);
-  useEffect(() => { onPendingChange(pending > 0); }, [pending, onPendingChange]);
-  const [filter, setFilter] = useState("all");
-  const [resetOpen, setResetOpen] = useState(false);
-  const epoch = useRef(0);
-  const requestSequence = useRef(0);
-  const queue = useRef<StockpileWriteQueue | null>(null);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const input = useMemo(() => ({ sourcePath, scope, includeContainerItems, multiplier }), [sourcePath, scope, includeContainerItems, multiplier]);
-  const inputRef = useRef(input);
-  inputRef.current = input;
-  const loadRef = useRef<() => void>(() => {});
-  const load = async (expected = epoch.current, showLoading = false) => {
-    const sequence = ++requestSequence.current;
-    if (showLoading) setLoading(true);
-    setError("");
-    try {
-      const next = await getStockpileTask(inputRef.current);
-      if (expected !== epoch.current || sequence !== requestSequence.current) return;
-      setView(next);
-      if (!queue.current || queue.current.epoch !== expected) {
-        queue.current = { epoch: expected, view: next, pending: new Map(), running: false, reset: false, refresh: false };
-      } else { queue.current.view = next; }
-    } catch (failure) {
-      if (expected === epoch.current && sequence === requestSequence.current) setError(String(failure));
-    } finally {
-      if (expected === epoch.current && sequence === requestSequence.current) setLoading(false);
-    }
-  };
-  loadRef.current = () => { void load(epoch.current, !view); };
-  useEffect(() => {
-    const expected = ++epoch.current;
-    queue.current = null;
-    setView(null); setPending(0); setResetOpen(false);
-    void load(expected, true);
-    return () => { epoch.current += 1; requestSequence.current += 1; };
-  }, [input]);
-  useEffect(() => {
-    const unlisten = listenEvent<{ taskId: string }>("stockpile-task-changed", event => {
-      const work = queue.current;
-      if (!work || event.payload.taskId !== work.view.taskId) return;
-      if (work.running || work.pending.size || work.reset) work.refresh = true;
-      else loadRef.current();
-    }).catch(() => undefined);
-    return () => { void unlisten.then(stop => stop?.()); };
-  }, []);
-  useEffect(() => {
-    const work = queue.current;
-    if (work?.epoch === epoch.current) {
-      if (work.running || work.pending.size || work.reset) work.refresh = true;
-      else loadRef.current();
-    }
-  }, [materials]);
-
-  const drain = async (work: StockpileWriteQueue) => {
-    if (work.running) return;
-    work.running = true;
-    if (work.epoch === epoch.current) { setPending(work.pending.size + Number(work.reset)); setError(""); }
-    try {
-      while (work.reset || work.pending.size) {
-        const entry = work.pending.entries().next().value as [string, number] | undefined;
-        const next = work.reset
-          ? await resetStockpileTask({ taskId: work.view.taskId, sourceRevision: work.view.sourceRevision })
-          : await setStockpileTaskQuantity({ taskId: work.view.taskId, sourceRevision: work.view.sourceRevision, materialId: entry![0], quantity: entry![1] });
-        if (work.reset) work.reset = false;
-        else if (work.pending.get(entry![0]) === entry![1]) work.pending.delete(entry![0]);
-        work.view = next;
-        if (work.epoch === epoch.current) {
-          requestSequence.current += 1;
-          setView(next); setPending(work.pending.size + Number(work.reset));
-        }
-      }
-      if (work.refresh && work.epoch === epoch.current) { work.refresh = false; loadRef.current(); }
-    } catch (failure) {
-      if (work.epoch === epoch.current) setError(String(failure));
-    } finally {
-      work.running = false;
-      if (work.epoch === epoch.current) setPending(work.pending.size + Number(work.reset));
-    }
-  };
-  const changeQuantity = (materialId: string, quantity: number) => {
-    const work = queue.current;
-    const item = work?.view.items.find(item => item.materialId === materialId);
-    if (!work || !item || !Number.isFinite(quantity)) return;
-    work.pending.set(materialId, Math.min(item.requiredCount, Math.max(0, Math.trunc(quantity))));
-    setPending(work.pending.size + Number(work.reset));
-    void drain(work);
-  };
-  const retry = async () => {
-    const work = queue.current;
-    if (!work || (!work.pending.size && !work.reset)) { loadRef.current(); return; }
-    if (work.running) return;
-    try {
-      // A source edit invalidates the old write revision. Refresh only this
-      // task, then rebase unsaved quantities by stable item identity.
-      const next = await getStockpileTask(inputRef.current);
-      if (work.epoch !== epoch.current) return;
-      work.view = next;
-      const required = new Map(next.items.map(item => [item.materialId, item.requiredCount]));
-      for (const [id, quantity] of work.pending) {
-        if (!required.has(id)) work.pending.delete(id);
-        else work.pending.set(id, Math.min(quantity, required.get(id)!));
-      }
-      setView(next); setPending(work.pending.size + Number(work.reset));
-      await drain(work);
-    } catch (failure) {
-      if (work.epoch === epoch.current) setError(String(failure));
-    }
-  };
-  const materialsById = useMemo(() => new Map(materials.map(item => [item.id, item])), [materials]);
-  const rows = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase(locale);
-    return (view?.items || []).filter(item => {
-      if (filter === "remaining" && item.complete || filter === "done" && !item.complete) return false;
-      const material = materialsById.get(item.materialId);
-      return !query || `${material ? materialDisplayName(material) : ""} ${item.materialId}`.toLocaleLowerCase(locale).includes(query);
-    });
-  }, [view, filter, search, materialsById, locale]);
-  const virtual = useVirtualWindow(rows, scrollRef, 57, 8);
-  useLayoutEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [search, filter, input]);
-  const count = (value: number) => value.toLocaleString(locale);
-  const percent = view && view.requiredCount > 0 ? Math.min(100, view.preparedCount / view.requiredCount * 100) : view ? 100 : 0;
-  return <section className="stockpile-task" aria-busy={loading}>
-    <div className="stockpile-summary" aria-live="polite">
-      <span>{t("stockpile.quantityProgress", { prepared: count(view?.preparedCount || 0), required: count(view?.requiredCount || 0), remaining: count(view?.remainingCount || 0) })}</span>
-      <span>{t("stockpile.itemProgress", { complete: count(view?.completedItems || 0), total: count(view?.totalItems || 0) })}</span>
-      <progress value={percent} max={100} aria-label={t("stockpile.progress")} />
-    </div>
-    <div className="beta-material-options stockpile-filters">
-      <Input type="search" aria-label={t("statistics.searchDetails")} placeholder={t("editor.nameSearchHint")} value={search} onChange={event => onSearch(event.target.value)} />
-      <Dropdown value={filter} options={[{ label: t("stockpile.all"), value: "all" }, { label: t("stockpile.remaining"), value: "remaining" }, { label: t("stockpile.done"), value: "done" }]} onChange={setFilter} ariaLabel={t("stockpile.filter")} />
-      <Button size="sm" variant="ghost" disabled={!view || pending > 0 || loading} onClick={() => setResetOpen(true)}>{t("stockpile.reset")}</Button>
-    </div>
-    <div className="stockpile-save-status muted" role="status">{loading ? t("editor.loading") : error ? t("stockpile.notSaved") : pending ? t("editor.saving") : view ? t("stockpile.saved") : ""}</div>
-    {error && <div className="subwindow-error stockpile-error" role="alert"><span>{t("stockpile.failed", { error })}</span><Button size="sm" onClick={() => void retry()}>{t("stockpile.retry")}</Button></div>}
-    {loading && <p role="status">{t("stockpile.loading")}</p>}
-    <div className="material-table-scroll stockpile-table-scroll" ref={scrollRef}>
-      <Table className="material-list-table beta-material-table stockpile-table">
-        <TableHeader><TableRow><TableHead scope="col">{t("stockpile.complete")}</TableHead><TableHead scope="col">{t("statistics.material")}</TableHead><TableHead scope="col">{t("stockpile.required")}</TableHead><TableHead scope="col">{t("stockpile.prepared")}</TableHead><TableHead scope="col">{t("stockpile.remainingQuantity")}</TableHead></TableRow></TableHeader>
-        <TableBody>{virtual.topSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={5} height={virtual.topSpacerHeight} /></TableRow>}
-          {virtual.visibleItems.map((item, index) => {
-            const material = materialsById.get(item.materialId);
-            const name = material ? materialDisplayName(material) : item.materialId;
-            const quantity = (value: number) => material ? formatMaterialQuantity(material, value, asItems) : count(value);
-            return <TableRow key={item.materialId} className={(virtual.startIndex + index) % 2 ? "material-list-row-odd" : "material-list-row-even"} onMouseEnter={() => onHover(material || null)} onMouseLeave={() => onHover(null)}>
-              <TableCell><Checkbox checked={item.complete} disabled={loadingMaterials || item.requiredCount === 0} aria-label={t("stockpile.markComplete", { name })} onCheckedChange={checked => changeQuantity(item.materialId, checked === true ? item.requiredCount : 0)} /></TableCell>
-              <TableCell><div className="beta-material-name"><BlockIcon blockId={material?.iconHint || item.materialId} /><span title={item.materialId}>{name}</span></div></TableCell>
-              <TableCell className="beta-material-quantity">{quantity(item.requiredCount)}</TableCell>
-              <TableCell><StockpileQuantityInput quantity={item.preparedCount} required={item.requiredCount} label={t("stockpile.preparedFor", { name })} disabled={loadingMaterials || item.requiredCount === 0} onQuantity={value => changeQuantity(item.materialId, value)} /></TableCell>
-              <TableCell className="beta-material-quantity">{quantity(item.remainingCount)}</TableCell>
-            </TableRow>;
-          })}
-          {virtual.bottomSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={5} height={virtual.bottomSpacerHeight} /></TableRow>}
-          {!loading && view && rows.length === 0 && <TableRow><TableCell colSpan={5} className="material-list-empty-cell">{view.totalItems === 0 ? t("stockpile.empty") : t("statistics.noMatches")}</TableCell></TableRow>}
-        </TableBody>
-      </Table>
-    </div>
-    {resetOpen && <Dialog title={t("stockpile.reset")} onClose={() => setResetOpen(false)} width="sm" footer={<><Button variant="ghost" onClick={() => setResetOpen(false)}>{t("editor.cancel")}</Button><Button variant="destructive" onClick={() => { setResetOpen(false); const work = queue.current; if (work) { work.reset = true; void drain(work); } }}>{t("stockpile.confirmReset")}</Button></>}><p>{t("stockpile.resetPrompt")}</p></Dialog>}
-  </section>;
-}
-
 /**
  * Shared material-list body used by both the modal dialog and the desktop child window.
  */
 export function MaterialListContent({ data, onClose, currentFile, standalone = false, embedded = false, viewMode = "details", onViewModeChange }: {
-  data: StatsData; onClose?: () => void; currentFile: string; standalone?: boolean; embedded?: boolean; viewMode?:"details"|"export"; onViewModeChange?:(mode:"details"|"export")=>void;
+  data: StatsData | null; onClose?: () => void; currentFile: string; standalone?: boolean; embedded?: boolean; viewMode?:"details"|"export"; onViewModeChange?:(mode:"details"|"export")=>void;
 }) {
   const { locale } = useI18n();
   const languageRevision = useSyncExternalStore(subscribeI18nChanges,getI18nRevision,getI18nRevision);
@@ -645,20 +431,16 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
   useEffect(() => setContentMode(viewMode),[viewMode]);
   const [multiplier, setMultiplier] = useState(1);
   const [asItems, setAsItems] = useState(false);
-  const [search, setSearch] = useState("");
-  const [scopeMaterials, setScopeMaterials] = useState(data.materials);
-  const [detailsLoading, setDetailsLoading] = useState(false);
   const [taskPending, setTaskPending] = useState(false);
   const [hoverItem, setHoverItem] = useState<MaterialItem | null>(null);
   const [mousePos, setMousePos] = useState({ x:0, y:0 });
-  const detailsGeneration = useRef(0);
-  const [includeContainerItems, setIncludeContainerItems] = useState(data.containerScan.enabled);
+  const [includeContainerItems, setIncludeContainerItems] = useState(data?.containerScan.enabled || false);
   const [exportFormat, setExportFormat] = useState<"svg" | "txt" | "html" | "csv">("svg");
   const [terminalRawMaterials, setTerminalRawMaterials] = useState(false);
   const [workbook, setWorkbook] = useState("scope:all");
   useEffect(() => {
-    setWorkbook("scope:all"); setMultiplier(1); setSearch("");
-    setIncludeContainerItems(data.containerScan.enabled);
+    setWorkbook("scope:all"); setMultiplier(1);
+    setIncludeContainerItems(data?.containerScan.enabled || false);
   }, [currentFile]);
   const [webMode, setWebMode] = useState<"single" | "multi">("single");
   const [accessPassword, setAccessPassword] = useState("");
@@ -678,25 +460,11 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
   const busy = isExporting || isPreparingRecipes;
   const selectedScope = useMemo(() => workbook.startsWith("region:") ? { kind:"region" as const, value:workbook.slice(7) }
     : workbook.startsWith("layer:") ? { kind:"layer" as const, value:workbook.slice(6) } : { kind:"all" as const, value:null },[workbook]);
-  useEffect(() => {
-    const generation = ++detailsGeneration.current;
-    if (contentMode !== "details") return;
-    setHoverItem(null); setError("");
-    if (selectedScope.kind === "all" && includeContainerItems === data.containerScan.enabled) {
-      setScopeMaterials(data.materials); setDetailsLoading(false); return;
-    }
-    setDetailsLoading(true);
-    loadMaterialsScope(currentFile, selectedScope, includeContainerItems)
-      .then(materials => { if (generation === detailsGeneration.current) setScopeMaterials(materials); })
-      .catch(error => { if (generation === detailsGeneration.current) { setScopeMaterials([]); setError({ key: "statistics.detailsFailed", params: {error:String(error)} }); } })
-      .finally(() => { if (generation === detailsGeneration.current) setDetailsLoading(false); });
-    return () => { detailsGeneration.current += 1; };
-  },[currentFile,data,selectedScope,includeContainerItems,contentMode]);
   const contentClassName = [standalone ? "material-list-window" : embedded ? "material-list-content-embedded" : "dialog-content",
-    embedded ? "" : "subwindow-frame", "material-list-content", standalone ? "subwindow-frame-full material-list-content-standalone" : ""].filter(Boolean).join(" ");
+    embedded ? "" : "subwindow-frame", "material-list-content", contentMode === "details" ? "material-list-task-content" : "", standalone ? "subwindow-frame-full material-list-content-standalone" : ""].filter(Boolean).join(" ");
   const options = useMemo(() => [{ label: t("statistics.all"), value: "scope:all" },
-    ...(data.regions || []).map(region => ({ label: t("statistics.regionScope", {name:region.name}), value: `region:${region.name}` })),
-    ...(data.layers || []).map(layer => ({ label: t("statistics.layerScope", {y:layer.world_y, layer:layer.layer}), value: `layer:${layer.layer}` }))], [data.regions, data.layers, locale]);
+    ...(data?.regions || []).map(region => ({ label: t("statistics.regionScope", {name:region.name}), value: `region:${region.name}` })),
+    ...(data?.layers || []).map(layer => ({ label: t("statistics.layerScope", {y:layer.world_y, layer:layer.layer}), value: `layer:${layer.layer}` }))], [data?.regions, data?.layers, locale]);
   const handleExport = async () => {
     if (exportInFlight.current) return;
     exportInFlight.current = true; setIsExporting(true); setExportStatus(""); setError("");
@@ -726,18 +494,8 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
       {onClose && <Button variant="ghost" size="icon" className="subwindow-close-button" aria-label={t("editor.closeWindow")} onClick={onClose}><X size={18} /></Button>}
     </div>}
     <div className="subwindow-body">
-      <ScrollArea className="material-export-settings">
-        {contentMode === "details" && <section className="material-details-section" aria-busy={detailsLoading}>
-          <div className="material-export-grid">
-            <label className="material-export-field"><span>{t("statistics.scope")}</span><Dropdown value={workbook} options={options} onChange={setWorkbook} disabled={taskPending} ariaLabel={t("statistics.detailsScope")} /></label>
-            <label className="material-export-field"><span>{t("statistics.copies")}</span><Input type="number" min={1} max={1000000} aria-label={t("statistics.detailsCopies")} value={multiplier} disabled={taskPending} onChange={event => setMultiplier(Math.min(1000000,Math.max(1,Math.floor(Number(event.target.value)||1))))} /></label>
-          </div>
-          <label className="beta-material-check"><Checkbox checked={includeContainerItems} disabled={taskPending} onCheckedChange={checked => setIncludeContainerItems(checked === true)} />{t("statistics.includeContainers")}</label>
-          <div className="stockpile-source muted" title={displayFilePath(currentFile)}>{displayFilePath(currentFile)}</div>
-          <QuantitySwitch checked={asItems} onChange={setAsItems} />
-          <StockpileTaskList sourcePath={currentFile} scope={selectedScope} includeContainerItems={includeContainerItems} multiplier={multiplier} materials={scopeMaterials} asItems={asItems} search={search} onSearch={setSearch} loadingMaterials={detailsLoading} onHover={setHoverItem} onPendingChange={setTaskPending} />
-        </section>}
-        {contentMode === "export" && <>
+      {contentMode === "details" ? <StockpileTaskPanel sourcePath={currentFile} scope={selectedScope} includeContainerItems={includeContainerItems} multiplier={multiplier} onPendingChange={setTaskPending} /> : <ScrollArea className="material-export-settings">
+        <>
         <fieldset className="material-export-section" disabled={busy}>
           <legend>{t("statistics.materialFormat")}</legend>
           <div className="material-export-grid">
@@ -780,8 +538,8 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
             </fieldset>
           </>}
         </fieldset>}
-        </>}
-      </ScrollArea>
+        </>
+      </ScrollArea>}
       <div className="material-export-footer">
         <Button variant="secondary" disabled={busy || taskPending} onClick={() => { const mode = contentMode === "details" ? "export" : "details"; setContentMode(mode); onViewModeChange?.(mode); setHoverItem(null); }}>{contentMode === "details" ? t("statistics.openExport") : t("statistics.returnDetails")}</Button>
         {contentMode === "export" && <Button onClick={handleExport} disabled={busy || !currentFile}>{isExporting ? t("statistics.exporting") : t("editor.exportMaterials")}</Button>}
@@ -793,7 +551,7 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
   </div>;
 }
 
-export function MaterialsDialog({ data, onClose, currentFile, viewMode = "details" }: { data: StatsData; onClose: () => void; currentFile: string; viewMode?:"details"|"export" }) {
+export function MaterialsDialog({ data, onClose, currentFile, viewMode = "details" }: { data: StatsData | null; onClose: () => void; currentFile: string; viewMode?:"details"|"export" }) {
   const { locale } = useI18n();
   const [mode,setMode] = useState(viewMode);
   return (
@@ -902,12 +660,13 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
   }, [currentFile, includeContainerItems, applicationAnalysisKey]);
 
   if (!currentFile) {
-    return <div className="beta-statistics-empty"><h2>{t("statistics.title")}</h2><p>{t("statistics.empty")}</p></div>;
+    return <><div className="beta-statistics-empty"><h2>{t("statistics.title")}</h2><p>{t("statistics.empty")}</p><Button onClick={() => void openMaterialsWithWindowBehavior("", () => { setMaterialsViewMode("details"); setShowMaterials(true); }).catch(reason => setError(String(reason)))}>{t("editor.materialDetails")}</Button>{error && <p role="alert">{localizeMessage(error)}</p>}</div>
+      {showMaterials && <MaterialsDialog data={null} onClose={() => setShowMaterials(false)} currentFile="" />}</>;
   }
   const scan = data?.containerScan;
   return <React.Profiler id="statistics" onRender={recordStatisticsCommit}><div className="beta-statistics-page">
     <div className="beta-statistics-toolbar">
-      <Button onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("details"); setShowMaterials(true); })} disabled={!data || isLoading}>{t("editor.materialDetails")}</Button>
+      <Button onClick={() => void openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("details"); setShowMaterials(true); }).catch(reason => setError(String(reason)))}>{t("editor.materialDetails")}</Button>
       <Button onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("export"); setShowMaterials(true); }, "export")} disabled={!data || isLoading}>{t("editor.exportMaterials")}</Button>
       {debugMode && <Button variant="secondary" disabled={!data} onClick={() => openEnumeratorWithWindowBehavior(currentFile,() => setShowEnumerator(true))}>{t("statistics.openEnumerator")}</Button>}
       <label className="beta-material-check"><Checkbox  checked={includeContainerItems} onCheckedChange={checked => setIncludeContainerItems((checked === true))} />{t("statistics.includeContainers")}</label>
@@ -944,7 +703,7 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
     </div>
     {showEnumerator && <EnumeratorDialog currentFile={currentFile} theme={theme} runtimeCollection={runtimeCollection} onClose={() => setShowEnumerator(false)} />}
     {showEnumeratorInfoEditor && <EnumeratorInfoEditorDialog rules={enumeratorRules} data={data} collections={enumeratorCollections} onClose={() => setShowEnumeratorInfoEditor(false)} onSave={saveEnumeratorRules} />}
-    {showMaterials && data && <MaterialsDialog data={data} onClose={() => setShowMaterials(false)} currentFile={currentFile} viewMode={materialsViewMode} />}
+    {showMaterials && (materialsViewMode === "details" || data) && <MaterialsDialog data={data} onClose={() => setShowMaterials(false)} currentFile={currentFile} viewMode={materialsViewMode} />}
   </div></React.Profiler>;
 }
 
