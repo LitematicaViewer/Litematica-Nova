@@ -37,6 +37,15 @@ use application::updater::{UpdateHost, application_update_snapshot, application_
 use application::render_facade::{
     RenderEnvironmentInputs, RenderFacade, RenderStartAuthorization, APPLICATION_RENDER_STATE_EVENT,
 };
+use application::library_index::{IndexQuery, IndexQueryResult, IndexStatus};
+use application::library_tasks::{
+    validate_submission, LibraryTaskQueue, TaskEventSink, TaskFinishedEvent, TaskKind,
+    TaskProgressEvent, TaskQueueSnapshot,
+};
+use application::library_trash::{
+    TrashMoveItem, TrashMoveResult, TrashPurgeItem, TrashPurgeResult, TrashRestoreItem,
+    TrashRestoreResult,
+};
 use base64::Engine;
 use render_service_client::RenderServiceClient;
 use serde::{Deserialize, Serialize};
@@ -257,6 +266,50 @@ struct CopyFileToDirectoryOutput {
     target_path: String,
     overwritten: bool,
     bytes_copied: u64,
+}
+
+/// Emits the new `projection-library-task-*` events from the queue worker.
+struct LibraryTaskEventSink {
+    app: AppHandle,
+}
+
+impl TaskEventSink for LibraryTaskEventSink {
+    fn task_progress(&self, event: &TaskProgressEvent) {
+        let _ = self.app.emit("projection-library-task-progress", event);
+    }
+
+    fn task_finished(&self, event: &TaskFinishedEvent) {
+        let _ = self.app.emit("projection-library-task-finished", event);
+    }
+
+    fn task_queue_changed(&self, snapshot: &TaskQueueSnapshot) {
+        let _ = self.app.emit("projection-library-task-queue-changed", snapshot);
+    }
+}
+
+/// Managed state holding the single serial library task queue.
+struct LibraryTaskHost {
+    queue: Arc<LibraryTaskQueue>,
+}
+
+impl LibraryTaskHost {
+    fn new(app: AppHandle) -> Self {
+        let sink = Arc::new(LibraryTaskEventSink { app });
+        let config_directory = Arc::new(|| current_user_config_dir());
+        Self { queue: LibraryTaskQueue::new(sink, config_directory) }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryTaskSubmitOutput {
+    task_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryTaskCancelOutput {
+    cancelled: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -801,6 +854,7 @@ fn ensure_user_config_layout(dir: &Path) -> Result<(), String> {
     for relative in [
         "",
         "projection-library",
+        "projection-library/import",
         "projection-library/previews",
         "cache/render",
         "tmp/render",
@@ -1660,8 +1714,83 @@ async fn write_user_config_file(relative_path: String, content: String, operatio
         let dir = current_user_config_dir()?;
         let path = dir.join(user_runtime_relative_path(&relative_path)?);
         if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
-        std::fs::write(path, content).map_err(|e| e.to_string())
+        write_file_atomically(&path, content.as_bytes()).map_err(|e| e.to_string())
     }).await
+}
+
+/// A unique temp-file suffix: pid + monotonic counter + wall-clock nanos.
+fn unique_temp_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{:x}-{:x}", std::process::id(), nanos, sequence)
+}
+
+/// Atomically replaces `path` with `bytes`: write a sibling temp file, flush + sync it,
+/// then `rename` over the target. The temp file lives in the same directory so the
+/// rename stays on one volume and is atomic. The temp file is removed on any failure.
+fn write_file_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut temp_name = path.file_name().map(|name| name.to_os_string()).unwrap_or_default();
+    temp_name.push(format!(".tmp-{}", unique_temp_suffix()));
+    let temp_path = path.with_file_name(temp_name);
+    let result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&temp_path)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp_path, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    result
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::write_file_atomically;
+
+    #[test]
+    fn replaces_contents_and_leaves_no_temporary_siblings() {
+        let directory = std::env::temp_dir().join(format!(
+            "nova-atomic-write-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let target = directory.join("js_library.json");
+        std::fs::write(&target, b"{\"schemaVersion\":4}").unwrap();
+
+        write_file_atomically(&target, b"{\"schemaVersion\":5}").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"{\"schemaVersion\":5}");
+
+        let leftovers: Vec<String> = std::fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "temporary files leaked: {leftovers:?}");
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn creates_a_new_target_in_one_step() {
+        let directory = std::env::temp_dir().join(format!(
+            "nova-atomic-create-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let target = directory.join("index.json");
+        write_file_atomically(&target, b"payload").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"payload");
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
 }
 
 #[tauri::command]
@@ -1971,6 +2100,28 @@ fn copy_file_to_directory(
     } else {
         get_root().join(source_input)
     };
+    let target_input = PathBuf::from(&target_directory);
+    let target_dir_path = if target_input.is_absolute() {
+        target_input
+    } else {
+        get_root().join(target_input)
+    };
+    copy_file_to_directory_core(
+        &source_full_path,
+        &target_dir_path,
+        &target_file_name,
+        overwrite,
+    )
+}
+
+/// Core of `copy_file_to_directory`, reused verbatim by the background
+/// `batch-copy` task so the conflict/same-path guarantees stay identical.
+pub(crate) fn copy_file_to_directory_core(
+    source_full_path: &Path,
+    target_dir_path: &Path,
+    target_file_name: &str,
+    overwrite: bool,
+) -> Result<CopyFileToDirectoryOutput, String> {
     if !source_full_path.is_file() {
         return Err(format!(
             "source file not found: {}",
@@ -1986,19 +2137,13 @@ fn copy_file_to_directory(
         return Err("target file name must not contain path separators".to_string());
     }
 
-    let target_input = PathBuf::from(&target_directory);
-    let target_dir_path = if target_input.is_absolute() {
-        target_input
-    } else {
-        get_root().join(target_input)
-    };
     if target_dir_path.exists() && !target_dir_path.is_dir() {
         return Err(format!(
             "target path is not a directory: {}",
             target_dir_path.display()
         ));
     }
-    std::fs::create_dir_all(&target_dir_path).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(target_dir_path).map_err(|e| e.to_string())?;
 
     let target_full_path = target_dir_path.join(trimmed_file_name);
     if target_full_path == source_full_path {
@@ -2020,12 +2165,147 @@ fn copy_file_to_directory(
     }
 
     let bytes_copied =
-        std::fs::copy(&source_full_path, &target_full_path).map_err(|e| e.to_string())?;
+        std::fs::copy(source_full_path, &target_full_path).map_err(|e| e.to_string())?;
     Ok(CopyFileToDirectoryOutput {
         target_path: target_full_path.display().to_string(),
         overwritten,
         bytes_copied,
     })
+}
+
+/// Renames a replica in place: only the file name changes, the folder stays.
+/// Refuses a missing source, an identical path and an occupied target so a
+/// batch rename never silently overwrites (spec 5.5.3.2).
+pub(crate) fn rename_replica_core(
+    source_full_path: &Path,
+    target_file_name: &str,
+) -> Result<String, String> {
+    if !source_full_path.is_file() {
+        return Err(format!(
+            "source file not found: {}",
+            source_full_path.display()
+        ));
+    }
+    let trimmed_file_name = target_file_name.trim();
+    if trimmed_file_name.is_empty() {
+        return Err("target file name must not be empty".to_string());
+    }
+    if trimmed_file_name.contains('/') || trimmed_file_name.contains('\\') {
+        return Err("target file name must not contain path separators".to_string());
+    }
+    let parent = source_full_path
+        .parent()
+        .ok_or_else(|| "source file has no parent directory".to_string())?;
+    let target_full_path = parent.join(trimmed_file_name);
+    if target_full_path == source_full_path {
+        return Err("source and target path are identical".to_string());
+    }
+    if target_full_path.exists() {
+        return Err(format!(
+            "target file already exists: {}",
+            target_full_path.display()
+        ));
+    }
+    std::fs::rename(source_full_path, &target_full_path).map_err(|e| e.to_string())?;
+    Ok(target_full_path.display().to_string())
+}
+
+/// Computes the SHA-256 of a `.litematic` file's compressed bytes on the
+/// background runtime. The file name never participates and the file is only
+/// opened for reading (spec 5.2.1.1 / design 2.2.2(A)).
+#[tauri::command]
+async fn compute_litematic_checksum(
+    path: String,
+) -> Result<application::library_tasks::LitematicChecksum, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let input = PathBuf::from(&path);
+        let resolved = if input.is_absolute() { input } else { get_root().join(input) };
+        application::library_tasks::compute_litematic_checksum(&resolved)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Submits a task to the single serial queue. Path scope is validated here so an
+/// out-of-range submission fails before it ever enters the queue (spec 4.3.1).
+#[tauri::command]
+fn library_task_submit(
+    state: tauri::State<'_, LibraryTaskHost>,
+    kind: TaskKind,
+    params: serde_json::Value,
+) -> Result<LibraryTaskSubmitOutput, String> {
+    validate_submission(kind, &params)?;
+    let task_id = state.queue.submit(kind, params);
+    Ok(LibraryTaskSubmitOutput { task_id })
+}
+
+/// Requests cooperative cancellation of a pending or running task.
+#[tauri::command]
+fn library_task_cancel(
+    state: tauri::State<'_, LibraryTaskHost>,
+    task_id: String,
+) -> Result<LibraryTaskCancelOutput, String> {
+    Ok(LibraryTaskCancelOutput { cancelled: state.queue.cancel(&task_id) })
+}
+
+/// Queue snapshot for UI observation (spec 4.4.3).
+#[tauri::command]
+fn library_task_status(
+    state: tauri::State<'_, LibraryTaskHost>,
+) -> Result<TaskQueueSnapshot, String> {
+    Ok(state.queue.snapshot())
+}
+
+/// Submits a packaged-export (`export-zip`) task on the single serial queue
+/// (E.5). The params carry the whole export plan (entries + optional content
+/// flags + target path); TS awaits the terminal `-task-finished` event.
+#[tauri::command]
+fn library_export_zip(
+    state: tauri::State<'_, LibraryTaskHost>,
+    params: serde_json::Value,
+) -> Result<LibraryTaskSubmitOutput, String> {
+    validate_submission(TaskKind::ExportZip, &params)?;
+    let task_id = state.queue.submit(TaskKind::ExportZip, params);
+    Ok(LibraryTaskSubmitOutput { task_id })
+}
+
+/// Read-only index lookup (design 2.2.2(C)). Never triggers a write: the index is
+/// built by `index` tasks and kept in TS-owned derived storage.
+#[tauri::command]
+fn library_index_query(query: IndexQuery) -> Result<IndexQueryResult, String> {
+    let config_directory = current_user_config_dir()?;
+    Ok(application::library_index::shared().query(&config_directory, &query))
+}
+
+/// Index readiness for the "building, showing partial results" UI (5.8.3.1).
+#[tauri::command]
+fn library_index_status() -> Result<IndexStatus, String> {
+    let config_directory = current_user_config_dir()?;
+    Ok(application::library_index::shared().status(&config_directory))
+}
+
+/// Moves library-managed files into `projection-library/trash`, one result per
+/// item; the directory is created on demand (spec 5.6.1).
+#[tauri::command]
+fn library_trash_move(items: Vec<TrashMoveItem>) -> Result<Vec<TrashMoveResult>, String> {
+    let config_directory = current_user_config_dir()?;
+    Ok(application::library_trash::move_items(&config_directory, &items))
+}
+
+/// Restores trashed files to their original location; an occupied target is
+/// reported as `ok=false, reason="occupied"` (spec 5.6.3.1).
+#[tauri::command]
+fn library_trash_restore(
+    items: Vec<TrashRestoreItem>,
+) -> Result<Vec<TrashRestoreResult>, String> {
+    Ok(application::library_trash::restore_items(&items))
+}
+
+/// Physically deletes trashed files; unavailable items are skipped and reported
+/// (spec 5.6.3.2).
+#[tauri::command]
+fn library_trash_purge(items: Vec<TrashPurgeItem>) -> Result<Vec<TrashPurgeResult>, String> {
+    Ok(application::library_trash::purge_items(&items))
 }
 
 // Local paths go to the existing native Explorer route, never the shell URL regex.
@@ -2053,6 +2333,7 @@ mod local_path_open_tests {
         ensure_user_config_layout(&root).unwrap();
         let presets=root.join("replace/presets");
         assert!(presets.is_dir());
+        assert!(root.join("projection-library/import").is_dir());
         let command=local_path_open_command(&presets).unwrap();
         assert_eq!(command.get_args().count(),1);
         assert_eq!(command.get_args().next().unwrap().to_string_lossy(),presets.to_string_lossy());
@@ -3705,6 +3986,7 @@ fn main() {
             assets::bind_operations(host.operations.clone());
             app.manage(Arc::clone(&host.supervisor));
             app.manage(host.operations);
+            app.manage(LibraryTaskHost::new(app.handle().clone()));
             app.state::<RenderFacade>()
                 .start_event_bridge(app.handle().clone())
                 .map_err(std::io::Error::other)?;
@@ -3927,6 +4209,16 @@ fn main() {
             read_image_base64,
             open_file_parent_dir,
             copy_file_to_directory,
+            compute_litematic_checksum,
+            library_task_submit,
+            library_task_cancel,
+            library_task_status,
+            library_export_zip,
+            library_index_query,
+            library_index_status,
+            library_trash_move,
+            library_trash_restore,
+            library_trash_purge,
             open_workspace_path,
             cleanup_local_temp_files,
             reden_search_litematica,

@@ -4,6 +4,7 @@ import { X, Folder, FileText, File } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Dialog } from "../../components/Dialog";
+import { Dropdown } from "../../components/Dropdown";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../../components/ui/table";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -19,23 +20,28 @@ import {
   loadUserConfigMigratingLocalStorage,
   LocalLibraryFolder,
   LibraryState,
+  LibraryFolderType,
+  LibraryRecordView,
+  normalizeLibraryState,
   normalizeLocalLibraryTailPathCount,
   normalizeMaterialListWindowBehavior,
   openFileParentDir,
   openLocalLibraryFoldersWindow,
   openWorkspacePath,
-  ProjectionRecord,
   readProjectionPreviewImage,
   removeLocalLibraryFolder,
+  scanLibraryFolders,
   syncAllLocalLibraryFolders,
   syncLocalLibraryFolder,
   updateLocalLibraryFolder,
 } from "../../../src/business/facade";
 import { emitEvent } from "../../../src/platform/events";
 import { projectionLibraryImportedEvent, projectionLibraryStateChangedEvent } from "../libraryEvents";
-import { SendProjectionDialog } from "../main/pages/library/sendDialog";
+import { SendFileToFolderDialog } from "../main/pages/library/sendDialog";
 import { ensureLitematicFileName } from "../main/pages/library/function";
 import { compactFolderPath } from "../main/pages/library/function";
+import { BuiltinImportPanel } from "./BuiltinImportPanel";
+import { TrashPanel } from "./TrashPanel";
 import "../main/pages/library/library.css";
 
 type HoverPreviewEntry = { entry: DirectoryEntryInfo; x: number; y: number };
@@ -73,9 +79,10 @@ function systemFileManagerLabel(): string {
   return navigator.platform.toLowerCase().includes("mac") ? "在访达打开" : "在文件资源管理器打开";
 }
 
-function recordFromEntry(entry: DirectoryEntryInfo): ProjectionRecord {
+function recordFromEntry(entry: DirectoryEntryInfo): LibraryRecordView {
   return {
     id: entry.path,
+    entryId: "",
     path: entry.path,
     fileName: entry.name,
     displayName: entry.name,
@@ -89,6 +96,8 @@ function recordFromEntry(entry: DirectoryEntryInfo): ProjectionRecord {
     fileSize: entry.file_size,
     mtime: entry.mtime_ms,
     tags: [],
+    categoryIds: [],
+    checksum: null,
     status: "ok",
     lastAnalyzedAt: entry.mtime_ms,
     lastError: "",
@@ -96,7 +105,7 @@ function recordFromEntry(entry: DirectoryEntryInfo): ProjectionRecord {
   };
 }
 
-function pickDefaultSendFolder(record: ProjectionRecord, folders: LocalLibraryFolder[]): string {
+function pickDefaultSendFolder(record: LibraryRecordView, folders: LocalLibraryFolder[]): string {
   const sourceParent = parentDirectory(record.path).toLowerCase();
   return folders.find((folder) => folder.path.toLowerCase() !== sourceParent)?.path || folders[0]?.path || "";
 }
@@ -186,7 +195,7 @@ export async function openLocalLibraryFoldersWithWindowBehavior(showOverlay: () 
  * Shared content used by both the standalone child window and the main-window overlay.
  */
 export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) {
-  const [state, setState] = useState<LibraryState>({ records: [], folders: [] });
+  const [state, setState] = useState<LibraryState>(() => normalizeLibraryState(null));
   const [busyKey, setBusyKey] = useState("");
   const [status, setStatus] = useState("");
   const [removeFolder, setRemoveFolder] = useState<LocalLibraryFolder | null>(null);
@@ -195,7 +204,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
   const [browserPath, setBrowserPath] = useState("");
   const [browserEntries, setBrowserEntries] = useState<DirectoryEntryInfo[]>([]);
   const [isBrowserLoading, setIsBrowserLoading] = useState(false);
-  const [sendDialogRecord, setSendDialogRecord] = useState<ProjectionRecord | null>(null);
+  const [sendDialogRecord, setSendDialogRecord] = useState<LibraryRecordView | null>(null);
   const [sendTargetDirectory, setSendTargetDirectory] = useState("");
   const [sendTargetFileName, setSendTargetFileName] = useState("");
   const [sendOverwrite, setSendOverwrite] = useState(false);
@@ -255,9 +264,15 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
     if (!folderPath) return;
     setBusyKey("add");
     try {
-      const nextState = await addLocalLibraryFolder(state, folderPath);
+      let nextState = await addLocalLibraryFolder(state, folderPath);
       setState(nextState);
       setStatus(`已添加本地库文件夹：${displayFilePath(folderPath)}`);
+      await emitLibraryStateChanged();
+      // B.1: mounting a folder auto-imports its new files when auto-activate is on.
+      const scanned = await scanLibraryFolders(nextState, { onlyFolderPath: folderPath });
+      nextState = scanned.state;
+      setState(nextState);
+      if (scanned.failures.length) setStatus(`已添加，但有 ${scanned.failures.length} 个文件未能扫描。`);
       await emitLibraryStateChanged();
     } catch (error: any) {
       setStatus(`添加本地库文件夹失败：${String(error)}`);
@@ -266,15 +281,43 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
     }
   };
 
-  const handleToggleFolder = async (folder: LocalLibraryFolder, patch: Partial<Pick<LocalLibraryFolder, "enabled" | "recursive">>) => {
+  const handleToggleFolder = async (folder: LocalLibraryFolder, patch: Partial<Pick<LocalLibraryFolder, "enabled" | "recursive" | "autoActivate">>) => {
     setBusyKey(`toggle:${folder.path}`);
     try {
-      const nextState = await updateLocalLibraryFolder(state, folder.path, patch);
+      let nextState = await updateLocalLibraryFolder(state, folder.path, patch);
       setState(nextState);
       setStatus(`已更新文件夹设置：${displayFilePath(folder.path)}`);
+      // B.1: enabling / re-configuring a tracked folder re-scans it (new files are
+      // merged in only when auto-activate is on; the kernel enforces that).
+      const updated = nextState.folders.find((item) => item.path === folder.path);
+      if (updated && updated.enabled && updated.type !== "non_archived") {
+        const scanned = await scanLibraryFolders(nextState, { onlyFolderPath: folder.path });
+        nextState = scanned.state;
+        setState(nextState);
+      }
       await emitLibraryStateChanged();
     } catch (error: any) {
       setStatus(`更新文件夹设置失败：${String(error)}`);
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  const handleChangeFolderType = async (folder: LocalLibraryFolder, type: LibraryFolderType) => {
+    if (type === folder.type) return;
+    setBusyKey(`type:${folder.path}`);
+    try {
+      let nextState = await updateLocalLibraryFolder(state, folder.path, { type });
+      setState(nextState);
+      setStatus(type === "non_archived" ? `已设为非归档：${displayFilePath(folder.path)}` : `已设为已追踪：${displayFilePath(folder.path)}`);
+      if (type !== "non_archived") {
+        const scanned = await scanLibraryFolders(nextState, { onlyFolderPath: folder.path });
+        nextState = scanned.state;
+        setState(nextState);
+      }
+      await emitLibraryStateChanged();
+    } catch (error: any) {
+      setStatus(`更新文件夹类型失败：${String(error)}`);
     } finally {
       setBusyKey("");
     }
@@ -327,6 +370,23 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
       await emitLibraryStateChanged();
     } catch (error: any) {
       setStatus(`批量同步失败：${String(error)}`);
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  /** Explicit "重新扫描全部" entry (B.2): scope = enabled tracked / built-in folders. */
+  const handleRescanAll = async (forceRecheck: boolean) => {
+    setBusyKey(forceRecheck ? "rescan-force" : "rescan");
+    try {
+      const outcome = await scanLibraryFolders(state, { useCache: !forceRecheck, forceRecheck });
+      setState(outcome.state);
+      setStatus(outcome.failures.length
+        ? `${forceRecheck ? "强制重新校验" : "重新扫描"}完成，但有 ${outcome.failures.length} 个文件失败。`
+        : `${forceRecheck ? "已强制重新校验" : "已重新扫描"} ${outcome.scannedCount} 个文件。`);
+      await emitLibraryStateChanged();
+    } catch (error: any) {
+      setStatus(`重新扫描失败：${String(error)}`);
     } finally {
       setBusyKey("");
     }
@@ -454,10 +514,24 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
           >
             {busyKey === "sync-all" ? "同步中..." : "同步全部已启用文件夹"}
           </Button>
+          <Button type="button" disabled={!!busyKey} onClick={() => void handleRescanAll(false)}>
+            {busyKey === "rescan" ? "重新扫描中..." : "重新扫描全部"}
+          </Button>
+          <Button type="button" disabled={!!busyKey} title="忽略文件大小与修改时间缓存，强制重新计算校验值" onClick={() => void handleRescanAll(true)}>
+            {busyKey === "rescan-force" ? "强制校验中..." : "强制重新校验"}
+          </Button>
         </div>
         <div className="muted subwindow-status-text">当前已挂载 {state.folders.length} 个文件夹，其中 {enabledCount} 个已启用。</div>
         {status ? <div className={statusClassName}>{displayPathText(status)}</div> : null}
       </fieldset>
+
+      <BuiltinImportPanel
+        state={state}
+        busy={!!busyKey}
+        onBusyChange={(key) => setBusyKey(key)}
+        onStateChange={(next) => setState(next)}
+        onStatus={setStatus}
+      />
 
       <fieldset className="subwindow-list-fieldset">
         <legend>{browserRootFolder ? "文件浏览器" : "文件夹列表"}</legend>
@@ -574,6 +648,18 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                 <div className="subwindow-status-text">最近同步：{formatDate(folder.lastSyncedAt)}</div>
                 <div className="subwindow-status-text">最近扫描：{folder.lastScanCount} 个 .litematic 文件</div>
                 {folder.lastError ? <div className="subwindow-status-text-error">{folder.lastError}</div> : null}
+                <div className="setting-row subwindow-check-row library-folder-type-row">
+                  <span className="library-folder-type-label">类型</span>
+                  {folder.type === "builtin_import"
+                    ? <span className="library-folder-type-locked" data-folder-type="builtin_import">内置导入（不可改 · 不可移除）</span>
+                    : <Dropdown
+                        ariaLabel={`${compactFolderPath(folder.path, localLibraryTailPathCount)} 文件夹类型`}
+                        value={folder.type}
+                        disabled={!!busyKey}
+                        onChange={(value) => void handleChangeFolderType(folder, value as LibraryFolderType)}
+                        options={[{ value: "tracked", label: "已追踪（扫描入库）" }, { value: "non_archived", label: "非归档（不扫描）" }]}
+                      />}
+                </div>
                 <div className="button-row subwindow-wrap-row">
                   <label className="setting-row subwindow-check-row">
                     <Checkbox
@@ -591,6 +677,16 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                     />
                     递归扫描子目录
                   </label>
+                  {folder.type !== "builtin_import" && (
+                    <label className="setting-row subwindow-check-row" data-folder-auto-activate={folder.autoActivate || undefined}>
+                      <Checkbox
+                        checked={folder.autoActivate}
+                        disabled={!!busyKey}
+                        onCheckedChange={(checked) => handleToggleFolder(folder, { autoActivate: checked === true })}
+                      />
+                      自动激活（新文件自动入库）
+                    </label>
+                  )}
                 </div>
                 <div className="button-row subwindow-wrap-row">
                   <Button type="button" disabled={!!busyKey} onClick={() => handleOpenBrowser(folder)}>浏览目录</Button>
@@ -603,12 +699,22 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
                   >
                     {busyKey === `sync:${folder.path}` ? "同步中..." : "立即同步"}
                   </Button>
-                  <Button type="button" disabled={!!busyKey} onClick={() => { setStatus(""); setRemoveFolder(folder); }}>移除</Button>
+                  <Button type="button" disabled={!!busyKey || folder.type === "builtin_import"} title={folder.type === "builtin_import" ? "内置导入文件夹不可移除" : undefined} onClick={() => { setStatus(""); setRemoveFolder(folder); }}>移除</Button>
                 </div>
               </div>
             </div>
           ))}
         </div></ScrollArea>
+      </fieldset>
+      <fieldset className="subwindow-list-fieldset">
+        <legend>回收区</legend>
+        <TrashPanel
+          state={state}
+          busy={!!busyKey}
+          onBusyChange={(key) => setBusyKey(key)}
+          onStateChange={(next) => setState(next)}
+          onStatus={setStatus}
+        />
       </fieldset>
       {removeFolder && <Dialog title="移除本地库文件夹？" subtitle="只取消这个文件夹的挂载，已有投影记录与电脑上的文件都保持不变。"
         width="sm" busy={!!busyKey} onClose={() => setRemoveFolder(null)}
@@ -617,7 +723,7 @@ export function LocalLibraryFoldersPanel({ onClose }: { onClose?: () => void }) 
         {status && <div className="dialog-message dialog-message-error" role="alert">{displayPathText(status)}</div>}
       </Dialog>}
       {sendDialogRecord ? (
-        <SendProjectionDialog
+        <SendFileToFolderDialog
           record={sendDialogRecord}
           folders={state.folders}
           targetDirectory={sendTargetDirectory}

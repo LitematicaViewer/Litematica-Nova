@@ -24,6 +24,7 @@ pub struct MetadataEditPatch {
     pub preview_image_data: Option<Vec<i32>>,
     pub preview_image_path: Option<String>,
     pub preview_image_mode: Option<PreviewImageMode>,
+    pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub regions: Vec<RegionRenamePatch>,
 }
@@ -83,8 +84,41 @@ pub fn edit_metadata(
     if preview.is_some() { root.remove("PreviewImageData"); }
     let metadata = root.entry("Metadata".into()).or_insert_with(|| Value::Compound(Default::default()));
     let Value::Compound(metadata) = metadata else { bail!("Metadata must be a compound"); };
-    for (name, text) in [("Name", patch.name), ("Author", patch.author), ("Description", patch.description)] {
-        if let Some(text) = text { metadata.insert(name.into(), Value::String(text)); }
+    if let Some(text) = patch.name { metadata.insert("Name".into(), Value::String(text)); }
+    if let Some(text) = patch.author { metadata.insert("Author".into(), Value::String(text)); }
+    // NovaTags lives beside Name/Author/Description as `Metadata.NovaTags`,
+    // an untyped NBT List<String>. Omitting `tags` leaves any existing value
+    // untouched; a missing NovaTags stays absent instead of forcing a default.
+    //
+    // E.8 / 裁决 2: the library's `LibraryEntry.tags` is authoritative, but a
+    // third-party tool may drop an unknown `NovaTags` field. No matter what the
+    // verification concludes we *always* mirror a readable tag summary into
+    // `Description` (the file is secondary), stripping any previously written
+    // summary first so reapplying tags is idempotent.
+    match patch.tags {
+        Some(tags) => {
+            metadata.insert(
+                "NovaTags".into(),
+                Value::List(tags.iter().cloned().map(Value::String).collect()),
+            );
+            let base = patch
+                .description
+                .clone()
+                .or_else(|| match metadata.get("Description") {
+                    Some(Value::String(text)) => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            metadata.insert(
+                "Description".into(),
+                Value::String(merge_tags_into_description(&base, &tags)),
+            );
+        }
+        None => {
+            if let Some(text) = patch.description {
+                metadata.insert("Description".into(), Value::String(text));
+            }
+        }
     }
     for (name, time) in [("TimeCreated", patch.time_created), ("TimeModified", patch.time_modified)] {
         if let Some(time) = time { metadata.insert(name.into(), Value::Long(time)); }
@@ -347,5 +381,164 @@ mod preview_image_tests {
         fs::write(&patch,r#"{"preview_image_data":[1,2,3]}"#).unwrap();
         assert!(edit_metadata(input,Some(&invalid),&patch).is_err());
         assert!(!invalid.exists());
+    }
+}
+
+/// Separates the human description from the redundant tag summary (E.8 / 裁决 2).
+const TAGS_SUMMARY_PREFIX: &str = "标签：";
+const TAGS_SUMMARY_SEPARATOR: &str = "\n\n";
+
+/// Drops a previously mirrored tag summary so writing tags twice never accumulates.
+fn strip_tags_summary(description: &str) -> &str {
+    if let Some(index) = description.rfind(TAGS_SUMMARY_SEPARATOR) {
+        let tail = &description[index + TAGS_SUMMARY_SEPARATOR.len()..];
+        if tail.starts_with(TAGS_SUMMARY_PREFIX) && !tail.contains('\n') {
+            return &description[..index];
+        }
+    }
+    description
+}
+
+fn tags_summary(tags: &[String]) -> Option<String> {
+    if tags.is_empty() {
+        None
+    } else {
+        Some(format!("{TAGS_SUMMARY_PREFIX}{}", tags.join("、")))
+    }
+}
+
+/// `LibraryEntry.tags` stays authoritative; the file's `Description` carries a
+/// redundant, human-readable tag summary so an external tool that drops `NovaTags`
+/// still shows the tags (spec 5.7.1.2b / 5.7.3.1).
+fn merge_tags_into_description(description: &str, tags: &[String]) -> String {
+    let base = strip_tags_summary(description);
+    match tags_summary(tags) {
+        None => base.to_owned(),
+        Some(summary) if base.is_empty() => summary,
+        Some(summary) => format!("{base}{TAGS_SUMMARY_SEPARATOR}{summary}"),
+    }
+}
+
+#[cfg(test)]
+mod nova_tags_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn fixture_source(dir: &Path) -> PathBuf {
+        let source = dir.join("source.litematic");
+        let payload = Value::Compound(HashMap::from([
+            ("Version".into(), Value::Int(6)),
+            ("Metadata".into(), Value::Compound(HashMap::from([
+                ("Name".into(), Value::String("kept".into())),
+                ("Description".into(), Value::String("summary".into())),
+                ("CustomMetadata".into(), Value::String("preserved".into())),
+            ]))),
+            ("Regions".into(), Value::Compound(HashMap::from([("A".into(), Value::Compound(HashMap::new()))]))),
+            ("UnknownRoot".into(), Value::String("kept".into())),
+        ]));
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(&fastnbt::to_bytes(&payload).unwrap()).unwrap();
+        fs::write(&source, gzip.finish().unwrap()).unwrap();
+        source
+    }
+
+    fn read_root(path: &Path) -> std::collections::HashMap<String, Value> {
+        let mut plain = Vec::new();
+        GzDecoder::new(fs::File::open(path).unwrap()).read_to_end(&mut plain).unwrap();
+        let Value::Compound(root) = fastnbt::from_bytes::<Value>(&plain).unwrap() else { panic!() };
+        root
+    }
+
+    #[test]
+    fn tags_write_to_metadata_as_string_list_and_preserve_unknown_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = fixture_source(dir.path());
+        let patch = dir.path().join("tags.json");
+        fs::write(&patch, r#"{"tags":["红石","tnt"]}"#).unwrap();
+        edit_metadata(&source, None, &patch).unwrap();
+        let root = read_root(&source);
+        assert_eq!(root.get("UnknownRoot"), Some(&Value::String("kept".into())));
+        let Some(Value::Compound(metadata)) = root.get("Metadata") else { panic!() };
+        assert_eq!(metadata.get("Name"), Some(&Value::String("kept".into())));
+        assert_eq!(metadata.get("CustomMetadata"), Some(&Value::String("preserved".into())));
+        assert_eq!(
+            metadata.get("NovaTags"),
+            Some(&Value::List(vec![Value::String("红石".into()), Value::String("tnt".into())]))
+        );
+    }
+
+    #[test]
+    fn absent_tags_preserves_existing_nova_tags_and_missing_stays_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let with_tags = dir.path().join("with-tags.litematic");
+        let root = Value::Compound(HashMap::from([
+            ("Metadata".into(), Value::Compound(HashMap::from([
+                ("NovaTags".into(), Value::List(vec![Value::String("existing".into())])),
+            ]))),
+        ]));
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(&fastnbt::to_bytes(&root).unwrap()).unwrap();
+        fs::write(&with_tags, gzip.finish().unwrap()).unwrap();
+        let patch = dir.path().join("description.json");
+        // Omitting `tags` must behave exactly like before this change.
+        fs::write(&patch, r#"{"description":"updated"}"#).unwrap();
+        edit_metadata(&with_tags, None, &patch).unwrap();
+        let after = read_root(&with_tags);
+        let Some(Value::Compound(metadata)) = after.get("Metadata") else { panic!() };
+        assert_eq!(
+            metadata.get("NovaTags"),
+            Some(&Value::List(vec![Value::String("existing".into())])),
+            "omitting tags must not clear an existing NovaTags list"
+        );
+        assert_eq!(metadata.get("Description"), Some(&Value::String("updated".into())));
+
+        let without_tags = fixture_source(dir.path());
+        edit_metadata(&without_tags, None, &patch).unwrap();
+        let bare = read_root(&without_tags);
+        let Some(Value::Compound(metadata)) = bare.get("Metadata") else { panic!() };
+        assert!(metadata.get("NovaTags").is_none(), "a missing NovaTags must stay absent, not be backfilled");
+    }
+
+    #[test]
+    fn writing_tags_mirrors_a_readable_summary_into_description() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = fixture_source(dir.path());
+        let patch = dir.path().join("tags.json");
+        fs::write(&patch, r#"{"tags":["红石","tnt"]}"#).unwrap();
+        edit_metadata(&source, None, &patch).unwrap();
+        let root = read_root(&source);
+        let Some(Value::Compound(metadata)) = root.get("Metadata") else { panic!() };
+        // A previously written summary is stripped before the new one is appended.
+        assert_eq!(metadata.get("Description"), Some(&Value::String("summary\n\n标签：红石、tnt".into())));
+    }
+
+    #[test]
+    fn reapplying_tags_does_not_accumulate_the_description_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = fixture_source(dir.path());
+        let patch = dir.path().join("tags.json");
+        fs::write(&patch, r#"{"tags":["红石"]}"#).unwrap();
+        edit_metadata(&source, None, &patch).unwrap();
+        fs::write(&patch, r#"{"tags":["红石","铜"]}"#).unwrap();
+        edit_metadata(&source, None, &patch).unwrap();
+        let root = read_root(&source);
+        let Some(Value::Compound(metadata)) = root.get("Metadata") else { panic!() };
+        assert_eq!(metadata.get("Description"), Some(&Value::String("summary\n\n标签：红石、铜".into())));
+    }
+
+    #[test]
+    fn clearing_tags_removes_the_description_summary_but_keeps_the_base_description() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = fixture_source(dir.path());
+        let patch = dir.path().join("tags.json");
+        fs::write(&patch, r#"{"tags":["红石"]}"#).unwrap();
+        edit_metadata(&source, None, &patch).unwrap();
+        fs::write(&patch, r#"{"tags":[]}"#).unwrap();
+        edit_metadata(&source, None, &patch).unwrap();
+        let root = read_root(&source);
+        let Some(Value::Compound(metadata)) = root.get("Metadata") else { panic!() };
+        assert_eq!(metadata.get("Description"), Some(&Value::String("summary".into())));
+        assert_eq!(metadata.get("NovaTags"), Some(&Value::List(Vec::new())));
     }
 }

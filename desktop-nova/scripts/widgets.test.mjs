@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { posix } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +15,7 @@ const source = (path) => readFileSync(new URL(path, root), 'utf8');
 
 function loadComponent(path, react = React, dependencies = {}, cache = new Map()) {
   if (cache.has(path)) return cache.get(path);
-  const compiled = ts.transpileModule(source(path), {
+  const compiled = ts.transpileModule(source(path).replaceAll('import.meta', '__import_meta'), {
     fileName: path,
     reportDiagnostics: true,
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React, esModuleInterop: true },
@@ -26,18 +26,28 @@ function loadComponent(path, react = React, dependencies = {}, cache = new Map()
     filename: fileURLToPath(new URL(path, root)),
   });
   cache.set(path, module.exports);
-  run((name) => {
-    if (name === 'react') return react;
-    if (name in dependencies) return dependencies[name];
-    if (name.startsWith('.') || name.startsWith('@/')) {
-      const relative = name.startsWith('@/') ? `ui/${name.slice(2)}` : posix.join(posix.dirname(path), name);
-      if (relative.endsWith('.css')) return {};
-      const target = [relative, `${relative}.tsx`, `${relative}.ts`].find((candidate) => existsSync(new URL(candidate, root)));
-      assert.ok(target, `Missing local test dependency: ${relative}`);
-      return loadComponent(target, react, dependencies, cache);
-    }
-    return require(name);
-  }, module, module.exports);
+  // `import.meta.glob` is a Vite build-time feature; the stub returns an empty asset
+  // map so component modules load without a bundler (themes simply fall back to lucide).
+  const previousGlob = globalThis.__import_meta;
+  globalThis.__import_meta = { glob: () => ({}) };
+  try {
+    run((name) => {
+      if (name === 'react') return react;
+      if (name in dependencies) return dependencies[name];
+      if (name.startsWith('.') || name.startsWith('@/')) {
+        const relative = name.startsWith('@/') ? `ui/${name.slice(2)}` : posix.join(posix.dirname(path), name);
+        if (relative.endsWith('.css')) return {};
+        const target = [relative, `${relative}.tsx`, `${relative}.ts`].find((candidate) => {
+          try { return statSync(new URL(candidate, root)).isFile(); } catch { return false; }
+        });
+        assert.ok(target, `Missing local test dependency: ${relative}`);
+        return loadComponent(target, react, dependencies, cache);
+      }
+      return require(name);
+    }, module, module.exports);
+  } finally {
+    globalThis.__import_meta = previousGlob;
+  }
   return module.exports;
 }
 
@@ -235,86 +245,210 @@ test('输入与材料表保留原生语义，不添加破坏布局的包装', ()
 });
 
 test('短窗口只压缩滚动主导航，标题和底部选项保留空间', () => {
-  const css = source('ui/shell/widget/nav.css');
-  const mainNavigation = css.match(/\.sidebar > \.nav-list:not\(\.nav-list-bottom\)\s*\{([^}]+)\}/)?.[1];
-  assert.ok(mainNavigation);
-  assert.match(mainNavigation, /min-height:\s*0;/);
-  assert.match(mainNavigation, /flex:\s*0 1 auto;/);
-  assert.match(mainNavigation, /overflow-y:\s*auto;/);
-  const pinnedNavigation = css.match(/\.sidebar > \.nav-expand,\s*\.sidebar > \.nav-list-bottom\s*\{([^}]+)\}/)?.[1];
+  const navigation = source('ui/shell/widget/nav.css');
+  const controls = source('ui/styles/controls.css');
+  // The scrollable main navigation now lives inside a ScrollArea; that wrapper owns
+  // the shrink/scroll behaviour, and the pinned rows must not be compressed.
+  const scrollArea = controls.match(/\.sidebar > \.nav-scroll-area\s*\{([^}]+)\}/)?.[1];
+  assert.ok(scrollArea, '`.sidebar > .nav-scroll-area` contract should exist');
+  assert.match(scrollArea, /flex:\s*1;/);
+  assert.match(scrollArea, /min-height:\s*0;/);
+  const pinnedNavigation = navigation.match(/\.sidebar > \.nav-expand,\s*\.sidebar > \.nav-list-bottom\s*\{([^}]+)\}/)?.[1];
   assert.ok(pinnedNavigation);
   assert.match(pinnedNavigation, /flex:\s*0 0 auto;/);
 });
 
+// --- library page harness (F.1 companion) --------------------------------------
+// LibraryPage is an orchestration container (D.3): its child components are stubbed
+// to string types so the composed props contract is observable without a renderer,
+// while the real store / entry-view modules run over an in-memory disk.
+const libModuleCache = new Map();
+function libLoad(path, dependencies, fresh = false) {
+  if (!fresh && libModuleCache.has(path)) return libModuleCache.get(path);
+  const code = ts.transpileModule(source(path), { fileName: path, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const module = { exports: {} };
+  vm.runInThisContext(`(function(require,module,exports){${code}})`)(dependencies, module, module.exports);
+  if (!fresh) libModuleCache.set(path, module.exports);
+  return module.exports;
+}
+const libPaths = libLoad('src/services/filePathIdentity.ts', () => { throw new Error('unexpected path import'); });
+const libIcons = libLoad('src/services/libraryCategoryIcons.ts', () => { throw new Error('unexpected icon import'); });
+const libMigration = libLoad('src/services/libraryMigration.ts', (name) => name === './filePathIdentity' ? libPaths : name === './libraryCategoryIcons' ? libIcons : (() => { throw new Error(`migration dep ${name}`); })());
+const libContent = libLoad('src/services/libraryContent.ts', (name) => name === './filePathIdentity' ? libPaths : name === './libraryStore' ? {} : (() => { throw new Error(`content dep ${name}`); })());
+
+const libEntryFixture = (id, over = {}) => ({
+  id, createdAt: 0, checksum: null, status: 'active', categoryIds: [], displayName: `${id}.litematic`, internalName: undefined,
+  author: '作者', description: '说明', tags: [], preview: {},
+  stats: { totalBlocks: 100, totalVolume: 300, regionCount: 1, enclosingSize: { x: 2, y: 3, z: 2 }, minecraftDataVersion: 5000 },
+  sortIndex: 0, lastAnalyzedAt: 0, lastError: '', ...over,
+});
+const libReplicaFixture = (id, entryId, over = {}) => ({
+  id, entryId, path: `C:/library/${id}.litematic`, fileName: `${id}.litematic`, folderPath: 'C:/library',
+  checksum: null, fileSize: 2048, mtime: 1, status: 'active', lastAnalyzedAt: 0, lastError: '', ...over,
+});
+const libStateFixture = (entries, replicas) => ({
+  schemaVersion: 5, entries, replicas,
+  folders: [{ path: 'C:/library', type: 'tracked', enabled: true, recursive: true, sort_index: 0, lastSyncedAt: 0, lastScanCount: 0, lastError: '' }],
+  categories: [], trash: [], redirects: [], favorites: [], recent: [],
+});
+
 function libraryHarness(overrides = {}) {
-  const record = { path: 'C:/projection.litematic', displayName: '示例投影', fileName: 'projection.litematic', tags: [], status: 'ok', fileSize: 2048, lastAnalyzedAt: 1, totalBlocks: 10, totalVolume: 12, regionCount: 1, enclosingSize: { x: 2, y: 3, z: 2 }, author: '', description: '' };
-  const state = { records: [record], folders: [] };
+  const disk = { text: JSON.stringify(overrides.state) };
   const saved = [];
   const selected = [];
-  const services = {
-    loadLibrary: async () => state,
-    saveLibrary: async (next) => { saved.push(next); },
+  const backend = {
+    readUserConfigFile: async () => disk.text,
+    writeUserConfigFile: async (_path, next) => { disk.text = next; saved.push(JSON.parse(next)); },
     checkFileExists: async () => true,
-    analyzeFile: async () => { throw new Error('读取失败'); },
-    ...overrides,
+    listLitematicFileEntriesInDirectory: async () => [],
+    copyFileToDirectory: async () => ({}),
+    computeLitematicChecksum: async () => ({ sha256: 'x', byte_count: 1 }),
+    getUserConfigFilePath: async () => 'C:/builtin/import',
+    libraryTrashMove: async (items) => items.map((item) => ({ sourcePath: item.sourcePath, trashPath: `C:/trash/${item.trashName}`, ok: true })),
+    libraryTrashRestore: async (items) => items.map((item) => ({ trashPath: item.trashPath, targetPath: item.targetPath, ok: true })),
+    libraryTrashPurge: async (items) => items.map((item) => ({ trashPath: item.trashPath, ok: true })),
+    libraryExportZip: async () => ({ taskId: 'zip' }),
+    ...(overrides.backend || {}),
   };
-  const render = componentHarness('ui/windows/main/pages/library/LibraryPage.tsx', 'LibraryPage', {
-    currentFile: record.path, setCurrentFile: (path) => selected.push(path), setRoute() {},
-  }, {
-    '../../../../../src/business/facade': services,
-    './sendDialog': { SendProjectionDialog: () => null },
-    '../../../../components/Dialog': { Dialog: () => null },
+  const store = libLoad('src/services/libraryStore.ts', (name) => {
+    if (name === './libraryCategoryIcons') return libIcons;
+    if (name === './filePathIdentity') return libPaths;
+    if (name === './backend') return backend;
+    if (name === '../platform/applicationOperations') return { inspectProject: async () => ({ metadata: {}, regions: [] }), editProjectMetadata: async () => ({}) };
+    if (name === './libraryMigration') return libMigration;
+    if (name === './libraryContent') return libContent;
+    if (name === './libraryTasks') return { submitLibraryTask: async () => 't', cancelLibraryTask: async () => true, subscribeLibraryTask: async () => () => {}, submitAndAwait: async () => ({ taskId: 't', kind: 'x', status: 'completed', summary: {}, failures: [] }), awaitLibraryTask: async () => ({ taskId: 't', kind: 'x', status: 'completed', summary: {}, failures: [] }), ...(overrides.tasks || {}) };
+    if (name === './statsService') return { formatMaterialQuantity: () => '', loadStructureStats: async () => ({ materials: [] }) };
+    if (name === './minecraftVersions') return { minecraftVersionLabel: (value) => `v${value}` };
+    if (name === './libraryIndexClient') return { queryIndex: async (query) => ({ entryIds: overrides.indexMatches ? overrides.indexMatches(query) : [], ready: true }), submitIndexBuild: async () => 'idx', subscribeIndexStatus: async () => () => {} };
+    throw new Error(`store dep ${name}`);
+  }, true);
+  const facade = {
+    ...store,
+    windowsPathKey: libPaths.windowsPathKey,
+    displayPathText: libPaths.displayPathText,
+    loadUserConfigMigratingLocalStorage: async () => ({ config: {} }),
+    generatePreviewImage: async (path) => ({ preview_path: `${path}.png`, data_url: 'data:generated' }),
+    readProjectionPreviewImage: async (path) => ({ data_url: `data:preview,${path}` }),
+    getPathInfo: async (path) => ({ path }),
+    openFileParentDir: async () => {},
+    selectLitematicFile: async () => null,
+    ...(overrides.facade || {}),
+  };
+  const entryView = libLoad('ui/windows/main/pages/library/libraryEntryView.ts', (name) => {
+    if (name.endsWith('src/business/facade')) return facade;
+    if (name.endsWith('src/services/minecraftVersions')) return { minecraftVersionLabel: (value) => `v${value}` };
+    if (name === './library.css') return {};
+    throw new Error(`entryView dep ${name}`);
+  }, true);
+  const stubs = {
+    './LibraryToolbar': { LibraryToolbar: 'LibraryToolbar' },
+    './LibraryCategoryTree': { LibraryCategoryTree: 'LibraryCategoryTree' },
+    './LibraryGrid': { LibraryGrid: 'LibraryGrid' },
+    './LibraryList': { LibraryList: 'LibraryList' },
+    './LibraryDetail': { LibraryDetail: 'LibraryDetail' },
+    './LibraryGrouping': { LibraryGrouping: 'LibraryGrouping' },
+    './LibraryColumnPicker': { LibraryColumnPicker: 'LibraryColumnPicker' },
+    './LibraryTaskCenter': { LibraryTaskCenter: 'LibraryTaskCenter' },
+    './sendDialog': { SendProjectionDialog: 'SendProjectionDialog' },
+    './DropImportDialog': { DropImportDialog: 'DropImportDialog' },
+    './ExportDialog': { ExportDialog: 'ExportDialog' },
+    './ReplicaNameEditor': { ReplicaNameEditor: 'ReplicaNameEditor' },
+    './categoryIcon': { CategoryIconDialog: 'CategoryIconDialog' },
+    '../../../local_library_folders': { LocalLibraryFoldersDialog: 'LocalLibraryFoldersDialog', openLocalLibraryFoldersWithWindowBehavior: async () => {} },
+    '../../../local_library_folders/TrashPanel': { TrashPanel: 'TrashPanel' },
+    '../../../reden_library': { RedenLibraryDialog: 'RedenLibraryDialog', openRedenLibraryWithWindowBehavior: async () => {} },
+    '../../../../components/Dialog': { Dialog: 'dialog' },
+    '../../../../components/Dropdown': { Dropdown: 'dropdown' },
+    '../../../../components/ThemeIcon': { ThemeIcon: 'theme-icon' },
     '../../../../components/ui/button': { Button: 'button' },
     '../../../../components/ui/input': { Input: 'input' },
     '../../../../components/ui/checkbox': { Checkbox: 'checkbox' },
     '../../../../components/ui/scroll-area': { ScrollArea: 'scroll-area' },
+    './libraryEntryView': entryView,
     './function': { ensureLitematicFileName: (value) => value },
     './library.css': {},
-    '../../../local_library_folders': {},
-    '../../../reden_library': {},
-    '../../../../../src/platform/events': { emitEvent: async () => {} },
-    '../../../libraryEvents': {},
-  }, [state]);
-  const contentText = (value) => Array.isArray(value) ? value.map(contentText).join('') : value && typeof value === 'object' ? contentText(value.props?.children) : value == null || typeof value === 'boolean' ? '' : String(value);
-  const button = (label) => elements(render()).find((element) => element.type === 'button' && contentText(element.props.children) === label);
-  return { render, button, contentText, record, saved, selected };
+    '../../../../../src/services/libraryTasks': { submitAndAwait: async () => ({ taskId: 't', kind: 'x', status: 'completed', summary: {}, failures: [] }) },
+    '../../../../../src/business/facade': facade,
+    '../../../../../src/platform/events': { listenEvent: async () => () => {}, emitEvent: async () => {} },
+    '../../../libraryEvents': { projectionLibraryImportedEvent: 'imported', projectionLibraryStateChangedEvent: 'changed' },
+  };
+  const slots = []; const effects = []; let cursor = 0; let tree;
+  const hooks = { ...React,
+    useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial; return [slots[index], (next) => { slots[index] = typeof next === 'function' ? next(slots[index]) : next; }]; },
+    useRef(initial) { const index = cursor++; return slots[index] ??= { current: initial }; },
+    useCallback(fn) { return fn; },
+    useMemo(compute, deps) { const index = cursor++; if (!slots[index] || !deps || deps.some((dep, offset) => dep !== slots[index].deps?.[offset])) slots[index] = { deps, value: compute() }; return slots[index].value; },
+    useEffect(callback, deps) { const index = cursor++; if (!slots[index] || !deps || deps.some((dep, offset) => dep !== slots[index].deps?.[offset])) { slots[index]?.cleanup?.(); slots[index] = { deps }; effects.push(() => { slots[index].cleanup = callback(); }); } },
+  };
+  const compiled = ts.transpileModule(source('ui/windows/main/pages/library/LibraryPage.tsx'), { fileName: 'LibraryPage.tsx', compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
+  const module = { exports: {} };
+  vm.runInThisContext(`(function(require,module,exports){${compiled}\n})`)((name) => {
+    if (name === 'react') return hooks;
+    if (name === 'lucide-react') return new Proxy({}, { get: (_, key) => `icon-${String(key)}` });
+    if (name in stubs) return stubs[name];
+    throw new Error(`Unexpected dependency: ${name}`);
+  }, module, module.exports);
+  const props = { currentFile: '', setCurrentFile: (value) => { selected.push(value); props.currentFile = value; }, setRoute() {} };
+  const text = (value) => value == null || typeof value === 'boolean' ? '' : Array.isArray(value) ? value.map(text).join('') : typeof value === 'object' ? text(value.props?.children) : String(value);
+  const nodes = () => { const list = []; const visit = (value) => { if (Array.isArray(value)) return value.forEach(visit); if (!React.isValidElement(value)) return; list.push(value); visit(value.props.children); visit(value.props.footer); }; visit(tree); return list; };
+  const render = () => { cursor = 0; tree = module.exports.LibraryPage(props); while (effects.length) effects.shift()(); return tree; };
+  render();
+  return {
+    render, props, saved, selected, text,
+    nodes, find: (predicate) => nodes().find(predicate),
+    component: (type) => nodes().find((node) => node.type === type),
+    components: (type) => nodes().filter((node) => node.type === type),
+    button: (label) => nodes().find((node) => node.type === 'button' && text(node.props.children) === label),
+    async settle(rounds = 3) { for (let i = 0; i < rounds; i += 1) { await new Promise((resolve) => setImmediate(resolve)); render(); } },
+    async search(value) { this.component('LibraryToolbar').props.onSearchChange(value); render(); await new Promise((resolve) => setTimeout(resolve, 260)); render(); },
+  };
 }
 
-test('投影库空白点击保留当前文件，筛选可直接清除', () => {
-  const library = libraryHarness();
+test('投影库空白点击保留当前文件，筛选可直接清除', async () => {
+  const library = libraryHarness({ state: libStateFixture([libEntryFixture('e1')], [libReplicaFixture('r1', 'e1')]), indexMatches: () => [] });
+  await library.settle();
   assert.equal(library.render().props.onClick, undefined);
-  const search = elements(library.render()).find((element) => element.props['aria-label'] === '搜索投影');
-  search.props.onChange({ target: { value: '不存在' } });
-  assert.ok(library.button('清除筛选'));
+  await library.search('不存在');
+  assert.ok(library.button('清除筛选'), '搜索无结果时应提供清除筛选');
   library.button('清除筛选').props.onClick();
-  const cleared = elements(library.render()).find((element) => element.props['aria-label'] === '搜索投影');
-  assert.equal(cleared.props.value, '');
+  library.render();
+  assert.equal(library.component('LibraryToolbar').props.search, '');
   assert.deepEqual(library.selected, []);
 });
 
 test('投影库刷新失败恢复按钮，不覆盖原列表', async () => {
-  const library = libraryHarness();
-  const refresh = () => elements(library.render()).find((element) => element.props['aria-label'] === '刷新投影库');
-  await refresh().props.onClick();
-  assert.equal(refresh().props.disabled, false);
-  assert.equal(library.saved.length, 0);
-  assert.ok(elements(library.render()).some((element) => element.props.role === 'alert' && library.contentText(element.props.children).includes('原有列表已保留')));
-  assert.ok(elements(library.render()).some((element) => element.props.record === library.record));
+  const library = libraryHarness({ state: libStateFixture([libEntryFixture('e1')], [libReplicaFixture('r1', 'e1')]), tasks: { submitAndAwait: async () => { throw new Error('磁盘不可用'); } } });
+  await library.settle();
+  await library.component('LibraryToolbar').props.onRefresh();
+  await library.settle();
+  assert.equal(library.component('LibraryToolbar').props.isRefreshing, false);
+  const alert = library.find((element) => element.props.role === 'alert');
+  assert.ok(alert);
+  assert.match(library.text(alert.props.children), /原有列表已保留/);
+  assert.equal(library.component('LibraryGrid').props.entries.length, 1);
 });
 
 test('移除投影需要确认，只保存库记录而不删除文件', async () => {
-  const library = libraryHarness();
-  const card = elements(library.render()).find((element) => element.props.record === library.record);
-  // The card checkbox exposes batch actions; merely selecting never removes a record.
-  card.props.onToggle(true);
-  assert.equal(library.saved.length, 0);
-  library.button('从列表移除').props.onClick();
-  const dialog = elements(library.render()).find((element) => element.props.title === '从投影库移除此投影？');
-  assert.match(dialog.props.subtitle, /不会删除/);
-  assert.equal(library.saved.length, 0);
-  const confirm = elements(dialog.props.footer).find((element) => element.props.children === '从列表移除');
+  const library = libraryHarness({ state: libStateFixture([libEntryFixture('e1')], [libReplicaFixture('r1', 'e1')]) });
+  await library.settle();
+  const savesBefore = library.saved.length;
+  const grid = library.component('LibraryGrid');
+  grid.props.binding.onToggle(grid.props.entries[0], true);
+  library.render();
+  assert.equal(library.saved.length, savesBefore, '仅选择不写盘');
+  library.button('移入回收区').props.onClick();
+  library.render();
+  const dialog = library.component('dialog');
+  assert.ok(dialog);
+  assert.match(dialog.props.title, /移入回收区/);
+  assert.match(dialog.props.subtitle, /可随时还原|不会被物理删除/);
+  assert.equal(library.saved.length, savesBefore, '确认前不写盘');
+  const confirm = library.find((element) => element.type === 'button' && element.props.variant === 'destructive');
   await confirm.props.onClick();
-  assert.equal(library.saved.length, 1);
-  assert.deepEqual(library.saved[0].records, []);
-  assert.deepEqual(library.selected, ['']);
+  await library.settle();
+  assert.equal(library.saved.length, savesBefore + 1);
+  const latest = library.saved[library.saved.length - 1];
+  assert.equal(latest.trash.length, 1, '记录进入回收区');
+  assert.equal(latest.replicas.every((replica) => replica.status === 'trashed'), true, '不物理删除文件（仅标记副本）');
 });

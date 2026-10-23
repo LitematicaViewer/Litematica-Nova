@@ -13,6 +13,7 @@ function moduleFrom(source, dependencies) {
   return module.exports;
 }
 const service = moduleFrom(text("../src/services/redenLibrary.ts"), () => ({}));
+const paths = moduleFrom(text("../src/services/filePathIdentity.ts"), () => ({}));
 const providers = moduleFrom(text("../src/services/onlineProjectionProviders.ts"), () => ({}));
 const source = text("../ui/windows/reden_library/RedenLibraryWindow.tsx");
 const label = node => node == null || typeof node === "boolean" ? "" : Array.isArray(node) ? node.map(label).join("") : typeof node === "object" ? label(node.props?.children) : String(node);
@@ -20,13 +21,18 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function harness({ attachment, output, emitError, importError, search } = {}) {
   const machine = { key: "test", name: "真实附件", attachments: [{ name: "scene.litematic", url: attachment }] };
-  const calls = { downloaded: 0, imported: 0, emitted: 0, opened: [], searched: [], cancelled: [] };
+  const calls = { downloaded: 0, imported: 0, importedPaths: [], emitted: 0, opened: [], searched: [], cancelled: [] };
   const facade = { ...service,
     searchRedenLitematica: async () => ({ d: [machine] }), fetchRedenMachineDetail: async () => machine,
     loadLibrary: async () => ({ records: [], folders: [] }),
-    importDownloadedLitematic: async () => { calls.imported++; if (importError) throw new Error(importError); },
+    // E.2: the downloaded file is handed to the built-in-import pipeline (path in, scan-out), not "direct to library".
+    importDownloadedLitematic: async (_state, path) => { calls.imported++; calls.importedPaths.push(path); if (importError) throw new Error(importError); },
     downloadRedenAttachment: async () => { calls.downloaded++; return output ?? { kind: "downloaded", path: "C:/scene.litematic", file_name: "scene.litematic", bytes: 123 }; },
-    openExternalPath: async url => calls.opened.push(url),
+    // Component contract after the reden rewrite: system-browser opening goes through `openExternalUrl`.
+    openExternalUrl: async url => calls.opened.push(url),
+    // The window imports these two path-formatting helpers from `facade`.
+    displayFilePath: paths.displayFilePath,
+    displayPathText: paths.displayPathText,
   };
   let nextId = 0;
   const online = { ...providers,
@@ -79,13 +85,21 @@ test("下载已入库后广播失败只提示刷新，不伪报下载失败", as
   const h = harness({ emitError: "event denied" }); await h.selectAttachment();
   await h.button("下载并入库").props.onClick(); await h.settle();
   assert.equal(h.calls.downloaded, 1); assert.equal(h.calls.imported, 1); assert.equal(h.calls.emitted, 1);
-  assert(h.content().includes("已下载并入库")); assert(h.content().includes("刷新通知失败")); assert(!h.content().includes("RedenMC 下载失败"));
+  assert.equal(h.calls.importedPaths[0], "C:/scene.litematic", "下载落点必须交给内置导入链路");
+  assert.ok(h.content().includes("已下载并入库"), h.content());
+  assert.ok(h.content().includes("刷新通知失败"), h.content());
+  assert.ok(!h.content().includes("RedenMC 下载失败"), h.content());
 });
 
 test("下载已落盘而入库失败明确保留文件，不伪报网络失败", async () => {
   const h = harness({ importError: "library unavailable" }); await h.selectAttachment();
   await h.button("下载并入库").props.onClick(); await h.settle();
-  assert(h.content().includes("已下载 scene.litematic，但入库失败")); assert(h.content().includes("C:/scene.litematic")); assert.equal(h.calls.emitted, 0);
+  assert.equal(h.calls.downloaded, 1);
+  assert.equal(h.calls.imported, 1, "必须尝试入库");
+  assert.equal(h.calls.importedPaths[0], "C:/scene.litematic");
+  assert.ok(h.content().includes("已下载 scene.litematic，但入库失败"), h.content());
+  assert.ok(h.content().includes("C:\\scene.litematic"), h.content());
+  assert.equal(h.calls.emitted, 0, "入库失败时不得广播导入事件");
 });
 
 test("附件网盘先确认，取消不打开、不下载、不入库", async () => {

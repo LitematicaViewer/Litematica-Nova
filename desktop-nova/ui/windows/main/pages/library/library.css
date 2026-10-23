@@ -393,4 +393,116 @@ html[data-theme] .library-page .library-category-expander { padding: 0; min-heig
 .library-trash-list li > div { flex: 1; min-width: 0; display: grid; gap: 4px; overflow-wrap: anywhere; }
 .library-trash-confirm { display: flex; flex-wrap: wrap; gap: 12px; }
 .library-trash-confirm p { flex-basis: 100%; }
+
+/* ---- D.4 toolbar extras ---------------------------------------------------- */
+.library-search-status { font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.library-search-status[data-index-ready] { color: var(--muted-foreground); }
+.library-view-switch { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+
+/* ---- D.5/V1.24 replica (重数) badge: bottom-right, only when > 1 -------------- */
+.library-replica-badge { position: absolute; right: 8px; bottom: 8px; z-index: 1; min-width: 1.4rem; padding: 1px 6px; text-align: center; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); font-variant-numeric: tabular-nums; background: var(--primary, var(--accent)); color: var(--primary-foreground, var(--foreground)); }
+.library-replica-chip { display: inline-block; margin-left: 6px; padding: 0 5px; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); font-variant-numeric: tabular-nums; background: var(--muted, var(--accent)); color: var(--muted-foreground, var(--foreground)); }
+
+/* ---- D.6 list view --------------------------------------------------------- */
+.library-list-table { width: 100%; }
+.library-list-select-col { width: 2.6rem; }
+.library-list-row { cursor: default; }
+.library-list-name { overflow-wrap: anywhere; }
+.library-list-table [data-slot="table-cell"], .library-list-table [data-slot="table-head"] { padding: 6px 10px; }
+
+/* ---- D.7 detail extras ----------------------------------------------------- */
+.library-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.library-detail-heading .library-detail-name { flex: 1; min-width: 0; }
+.library-detail-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.library-detail-section-heading h4 { margin: 0; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+
+/* ---- D.7 column picker (portaled content; no page-root selector) ----------- */
+.library-column-menu { z-index: 1000; min-width: 12rem; padding: 8px; }
+.library-column-menu-title { margin: 0 0 6px; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); color: var(--muted-foreground); }
+.library-column-option { display: flex; align-items: center; gap: 8px; padding: 4px 2px; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+
+/* ---- D.8 left navigation extras ------------------------------------------- */
+.library-tree-entry { margin-top: 2px; }
+.library-tree-sublist { list-style: none; margin: 2px 0 6px; padding: 0 0 0 20px; display: flex; flex-direction: column; gap: 2px; }
+.library-tree-item { justify-content: flex-start; width: 100%; text-align: left; overflow-wrap: anywhere; }
+.library-tree-empty { margin: 2px 0 6px; padding-left: 20px; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }
+.library-drop-hint { padding: 2px 8px 6px; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }
+.library-tree-legend { display: flex; align-items: center; gap: 4px; padding: 4px 8px 0; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }
+
+/* ---- D.9 grouping / stacking ---------------------------------------------- */
+.library-group-board, .library-stack-board { display: flex; flex-direction: column; gap: 16px; }
+.library-group-heading { display: flex; align-items: center; gap: 8px; padding: 8px 12px 0; }
+.library-group-heading h3 { margin: 0; font-size: var(--nova-text-base); }
+.library-group-count { font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.library-stack-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--library-preview-size) + 12px)), 1fr)); }
+.library-stack-unit { min-width: 0; }
+
+/* ---- D.10 task centre ------------------------------------------------------ */
+.library-task-center { display: flex; flex-direction: column; gap: 16px; }
+.library-task-section { display: flex; flex-direction: column; gap: 8px; }
+.library-task-section h4 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+.library-task-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.library-task-row { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.library-task-title { flex: 1; min-width: 0; }
+.library-task-progress-text, .library-task-status { font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); font-variant-numeric: tabular-nums; }
+.library-task-bar { flex: 0 0 8rem; height: 8px; overflow: hidden; background: var(--muted, var(--accent)); }
+.library-task-bar-fill { display: block; height: 100%; background: var(--primary, var(--foreground)); }
+
+/* ---- D.11 dispatch window -------------------------------------------------- */
+.library-dispatch-table { width: 100%; }
+.library-dispatch-table [data-slot="table-cell"], .library-dispatch-table [data-slot="table-head"] { padding: 6px 10px; vertical-align: middle; }
+.library-dispatch-folder { max-width: 18rem; overflow-wrap: anywhere; }
+.library-dispatch-name { min-width: 12rem; }
+.library-dispatch-seq-col { width: 4.5rem; text-align: center; font-variant-numeric: tabular-nums; }
+.library-dispatch-select-col { width: 3.5rem; text-align: center; }
+.library-replica-name { width: 100%; min-width: 0; }
+.library-dispatch-hint { display: block; margin-top: 2px; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); color: var(--muted-foreground); }
+.library-dispatch-summary { margin-right: auto; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); font-variant-numeric: tabular-nums; }
+}
+
+/* ---- E.1 built-in import folder ------------------------------------------- */
+@layer components.page {
+.library-builtin-import { display: flex; flex-direction: column; gap: 8px; margin-inline: var(--ln-space-3, 12px); padding: 12px; }
+.library-builtin-import-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.library-builtin-import-title { margin: 0; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+.library-builtin-import-hint { font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); color: var(--muted-foreground); }
+.library-builtin-import-path { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.library-builtin-import-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); color: var(--muted-foreground); }
+.library-builtin-import-note { margin: 0; overflow-wrap: anywhere; }
+
+/* ---- E.7 folder type + trash panel --------------------------------------- */
+.library-folder-type-row { gap: 8px; }
+.library-folder-type-label { flex-shrink: 0; }
+.library-folder-type-locked { font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); color: var(--muted-foreground); }
+.library-trash-panel { display: flex; flex-direction: column; gap: 8px; }
+.library-trash-panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.library-trash-panel-title { margin: 0; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+.library-trash-panel-count { font-variant-numeric: tabular-nums; }
+.library-trash-conflict { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.library-trash-conflict .library-replica-name { flex: 1 1 12rem; min-width: 0; }
+.library-trash-actions { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
+.library-trash-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; }
+.library-trash-footer .muted { overflow-wrap: anywhere; }
+
+/* ---- E.3 OS drop dialog ---------------------------------------------------- */
+.library-drop-dialog { display: flex; flex-direction: column; gap: 16px; }
+.library-drop-group { display: flex; flex-direction: column; gap: 6px; }
+.library-drop-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.library-drop-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 8rem; overflow: auto; overflow-wrap: anywhere; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }
+.library-drop-unsupported { color: var(--muted-foreground); }
+
+/* ---- E.6 export dialog ---------------------------------------------------- */
+.library-export-dialog { display: flex; flex-direction: column; gap: 16px; }
+.library-export-content { display: flex; flex-direction: column; gap: 8px; }
+.library-export-option { display: flex; align-items: center; gap: 8px; }
+.library-export-target { display: flex; flex-direction: column; gap: 6px; }
+.library-export-target-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.library-export-path { flex: 1 1 14rem; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.library-export-note { margin: 0; }
+
+/* ---- E.4 reposition list --------------------------------------------------- */
+.library-reposition-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.library-reposition-list li { display: flex; align-items: center; gap: 8px; }
+.library-reposition-path { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }
+.library-reposition-conflict { display: flex; flex-direction: column; gap: 8px; }
 }
