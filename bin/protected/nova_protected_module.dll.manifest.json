@@ -1,13 +1,13 @@
 {
   "manifest": {
     "protocol": 1,
-    "build_id": "runtime-1-16367e0b9db3-four-features-20261023-r1-x86_64-pc-windows-msvc",
+    "build_id": "runtime-1-a9a4f949d57c-version-semantics-20261023-r1-x86_64-pc-windows-msvc",
     "module_id": "nova_protected_module.dll",
-    "plaintext_sha256": "2333254a6f18db26c68da5ceb2c47a9a212c36d69ae576d747795279c28532aa",
-    "ciphertext_sha256": "88cc19b03d8b7e7707e9f4c07e6c3074d1d3c84d10655d6df58d3f1d53d46fe8",
-    "ciphertext_bytes": 83322384,
-    "nonce": "YZsvfarQW7CxSiZ3",
-    "created_ms": 1792752588343
+    "plaintext_sha256": "c44fe993a9bcde5c7453978750f381099c0496f1a151ee2e51cb116e5226c4bc",
+    "ciphertext_sha256": "8de0389adc591e66922cb0bb1bfb9ee69ee13764f3cc5d0d3016eb2ca00bba31",
+    "ciphertext_bytes": 83724304,
+    "nonce": "6VqW9mrejRS72efS",
+    "created_ms": 1792764692692
   },
-  "signature": "klmbhDvPHpjicB8F38ASaE8JFCOBec7Dvg978TcJptneJazKyFw9khhF0wOeoO/HDvvI+mrHKc1+pH2sooIVAA=="
+  "signature": "tfDhNMg0hyIc1Ch7f2UncpbItFJsoeO5xonXqEIAP3AAavS9GCBBIg02HBwBQu1e/7XYFpphvBV8jzCGvvqtDA=="
 }
