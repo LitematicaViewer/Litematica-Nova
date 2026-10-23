@@ -37,6 +37,7 @@ import { BlockIcon } from "../../../../components/BlockIcon";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { Dialog } from "../../../../components/Dialog";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
+import { Layer3DView } from "./Layer3DView";
 
 // 同级函数
 import { fitView, FlakeBlockTooltip, formatStateRecord } from "./function";
@@ -1615,6 +1616,7 @@ function FlakeDebugStateDialog({
  */
 export function FlakePage({ currentFile, setRoute }: any) {
   const { locale } = useI18n();
+  const [viewMode, setViewMode] = useState<"2d" | "3d">("2d");
   const [meta, setMeta] = useState<LayerSliceMeta | null>(null);
   const [sliceDataByY, setSliceDataByY] = useState<Record<number, LayerSliceData | null>>({});
   const [statsData, setStatsData] = useState<StatsData | null>(null);
@@ -2145,6 +2147,10 @@ export function FlakePage({ currentFile, setRoute }: any) {
   return (
     <div ref={pageRef} className={editMode ? "nova-page flake-page flake-page--edit-mode" : "nova-page flake-page"}>
       <div className="subwindow-toolbar flake-page__topbar">
+        <div className="layer3d-view-tabs">
+          <Button aria-pressed={viewMode === "2d"} variant={viewMode === "2d" ? "default" : "outline"} onClick={() => setViewMode("2d")}>{t("layerView.2d")}</Button>
+          <Button aria-pressed={viewMode === "3d"} variant={viewMode === "3d" ? "default" : "outline"} onClick={() => { setEditMode(false); setViewMode("3d"); }}>{t("layerView.3d")}</Button>
+        </div>
         <Button className="flake-page__materials-button" onClick={async () => {
           try {
             const loaded = await ensureStatsData();
@@ -2176,6 +2182,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
         <div className="flake-page__file-path" title={displayFilePath(currentFile)}>{displayFilePath(currentFile)}</div>
       </div>
 
+      {viewMode === "3d" ? <Layer3DView key={currentFile} sourcePath={currentFile} blocked={showMaterials || showContainerDialog || !!debugStateBlock || showInventoryDialog} /> : <>
       <div className="group-box flake-page__control-box">
         <div className="group-box-title">{t("flake.layerControls")}</div>
         <div className="flake-page__layer-row">
@@ -2453,6 +2460,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
         </div>
       ) : null}
 
+      </>}
       {showInventoryDialog ? (
         <CreativeInventoryDialog
           onClose={() => setShowInventoryDialog(false)}
