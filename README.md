@@ -105,5 +105,14 @@ Linux 需要 glibc 2.39 或更新版本、GTK 3、WebKitGTK 4.1、系统 Vulkan 
 
 遇到问题，请保留原文件和报错，带上「刚才做了什么、期望什么、实际怎样」以及截图，到 [Issues](https://github.com/LitematicaViewer/Litematica-Nova/issues) 或 **QQ 1044260630** 反馈。分享前请遮住密钥及个人信息。
 
-想参与开发或自行构建？请阅读[开发说明](docs/DEVELOPMENT.md)。
+公开源码默认提供可独立构建的 **Community** 版，包含真实 Fast 和公开业务功能；Standard / Full 为可选私有组件，不阻塞社区版构建与启动。无需组织权限、私有组件或专用构建机。
+
+```powershell
+npm ci --prefix desktop-nova
+pwsh -NoProfile -File ./bin/dev-win.ps1
+# 本机 Community 安装/分发包
+npm run tauri:build --prefix desktop-nova
+```
+
+[中文贡献说明](CONTRIBUTING.md) · [English contributing guide](docs/CONTRIBUTING.en.md) · [开发说明](docs/DEVELOPMENT.md)
 

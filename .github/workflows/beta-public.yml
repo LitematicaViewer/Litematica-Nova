@@ -1,4 +1,4 @@
-name: Public application checks
+name: Public community build
 
 on:
   push:
@@ -14,9 +14,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  frontend:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  community:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      NOVA_RUNTIME_SOURCE: community
+      NOVA_COMMUNITY_BUILD: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -27,13 +30,38 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: desktop-nova/package-lock.json
+      - name: Configure the ordinary MSVC developer environment
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $install = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $install) { throw 'Visual Studio C++ tools are required.' }
+          Import-Module (Join-Path $install 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $install -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          foreach ($name in @('PATH','INCLUDE','LIB','LIBPATH','WindowsSdkDir','WindowsSDKVersion','VCToolsInstallDir','VSINSTALLDIR')) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ($value) { "$name=$value" | Add-Content $env:GITHUB_ENV }
+          }
       - name: Install public frontend dependencies
         run: npm ci --prefix desktop-nova
       - name: Check the public source boundary
         run: node desktop-nova/scripts/check-public-build.mjs --source
-      - name: Build the ordinary application frontend
-        run: npm run build --prefix desktop-nova
+      - name: Exclude optional private runtime files from this clean public build
+        shell: pwsh
+        run: |
+          $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          $optional = [IO.Path]::GetFullPath((Join-Path $workspace 'bin/protected'))
+          if (-not $optional.StartsWith($workspace + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid optional runtime path.' }
+          if (Test-Path -LiteralPath $optional) { Remove-Item -LiteralPath $optional -Recurse -Force }
+      - name: Build public Core, Fast, stockpile and desktop Host without private components
+        run: npm run tauri:build --prefix desktop-nova -- --runtime-source community --compile-only
+      - name: Run public file parsing and viewer identity without opening a window
+        shell: pwsh
+        run: |
+          & ./bin/public-beta/litematica_core.exe analyze ./tools/viewer-core/tests/fixtures/stats_water_fixture.litematic --output "$env:RUNNER_TEMP/nova-community-analysis.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Public analysis failed.' }
+          & ./bin/public-beta/litematica_native_viewer.exe --public-build-info
+          if ($LASTEXITCODE -ne 0) { throw 'Public viewer identity failed.' }
 
-# Desktop/runtime compilation and signing have one authority: the Organization
-# private repository. Public pull requests never run on a sensitive local runner
-# and cannot directly invoke a private reusable workflow.
+# Fork PRs use only public source and GitHub-hosted machines. No private runtime,
+# read token, signing secret, protected module or privileged local runner is used.
