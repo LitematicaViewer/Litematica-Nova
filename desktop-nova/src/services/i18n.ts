@@ -7,17 +7,18 @@ import * as editor from "./locales/editor";
 import * as library from "./locales/library";
 import * as native from "./locales/native";
 import * as settings from "./locales/settings";
+import * as irisSettings from "./locales/irisSettings";
 import * as worldExport from "./locales/worldExport";
 import * as layerView from "./locales/layerView";
-import * as irisSettings from "./locales/irisSettings";
+import * as freeCamera from "./locales/freeCamera";
 
 export type UiLocale = "zh-CN" | "en-US";
 export type UiLanguagePreference = UiLocale | "system";
 export type UiParams = Record<string, string | number | { key: string; params?: UiParams }>;
 export type UiMessage = string | { key: string; params?: UiParams };
 const dictionaries: Record<UiLocale, Record<string, string>> = {
-  "zh-CN": { ...editor.zhCN, ...library.zhCN, ...native.zhCN, ...settings.zhCN, ...worldExport.zhCN, ...layerView.zhCN, ...irisSettings.zhCN, ...app.zhCN },
-  "en-US": { ...editor.enUS, ...library.enUS, ...native.enUS, ...settings.enUS, ...worldExport.enUS, ...layerView.enUS, ...irisSettings.enUS, ...app.enUS },
+  "zh-CN": { ...editor.zhCN, ...library.zhCN, ...native.zhCN, ...settings.zhCN, ...irisSettings.zhCN, ...worldExport.zhCN, ...layerView.zhCN, ...freeCamera.zhCN, ...app.zhCN },
+  "en-US": { ...editor.enUS, ...library.enUS, ...native.enUS, ...settings.enUS, ...irisSettings.enUS, ...worldExport.enUS, ...layerView.enUS, ...freeCamera.enUS, ...app.enUS },
 };
 const storageKey = "nova.ui.language";
 const languageSubscribers = new Set<() => void>();

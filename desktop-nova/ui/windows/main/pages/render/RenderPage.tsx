@@ -13,6 +13,7 @@ import { useQuickPreview } from "../../useQuickPreview";
 import { useFullPreview } from "../../useFullPreview";
 import { formatResourceBytes } from "../../../../../src/business/resourcePreflightUnits";
 import { displayFilePath } from "../../../../../src/business/facade";
+import { FreeCameraControls } from "./FreeCameraControls";
 import "./render.css";
 
 /** Separate historical Fast and real private Full service paths; no algorithm substitution. */
@@ -65,6 +66,8 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
       <Button variant={mode === "standard" ? "default" : "ghost"} aria-pressed={mode === "standard"} onClick={() => setMode("standard")}>{t("render.mode.standard")}</Button>
       <Button variant={mode === "full" ? "default" : "ghost"} aria-pressed={mode === "full"} onClick={() => setMode("full")}>{t("render.mode.full")}</Button>
     </div>
+    <FreeCameraControls sourcePath={currentFile} displayMode={mode === "fast" ? "fast_experimental" : mode}
+      ready={mode === "fast" ? ready && !!operation?.presentation.visible : full.ready && full.visible} />
     {mode !== "fast" ? <>
       <div className="render-page-actions">
         <label><Checkbox checked={preload} disabled={full.pending || full.loading} onCheckedChange={checked => setPreloads(previous => ({ ...previous, [exactMode]: checked === true }))} />{t("render.preload")}</label>

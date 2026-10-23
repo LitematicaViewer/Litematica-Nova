@@ -13,3 +13,9 @@
 .render-page .render-page-title { flex: 0 0 auto; margin: 0; text-align: left; }
 .render-page .render-page-source { flex: 1; max-width: none; }
 }
+
+@layer components.page {
+.free-camera-controls label { display: inline-flex; align-items: center; gap: 6px; }
+.free-camera-controls select { min-height: 30px; }
+.free-camera-controls .render-preview-help { margin: 0; }
+}
