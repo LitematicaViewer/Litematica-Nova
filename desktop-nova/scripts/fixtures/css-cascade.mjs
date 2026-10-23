@@ -151,6 +151,32 @@ function appliesToTheme(selector, themeId) {
 }
 
 /**
+ * Does one selector compound satisfy a `{ slot, attrs, pseudos }` description?
+ *
+ * Mirrors the rightmost-compound test inside `winner`, so an ancestor compound can be
+ * checked with the same rules: a constrained attribute the description does not carry
+ * disqualifies, and the compound may only name states the description claims hold.
+ * `:is()`/`:where()`/`:not()` are stripped exactly as `winner` does (see the file header
+ * for why `:not()` is treated as always-true).
+ */
+function compoundMatches(compound, spec) {
+  const bare = compound.replace(/:(?:not|is|where)\([^)]*\)/g, ' ');
+  const slots = [...bare.matchAll(/\[data-slot="([^"]+)"\]/g)].map((match) => match[1]);
+  if (spec.slot !== undefined && !slots.includes(spec.slot)) return false;
+  const attrs = [...bare.matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g)]
+    .filter(([, name]) => name !== 'data-slot')
+    .map(([, name, value]) => [name, value]);
+  if (attrs.some(([name, value]) => {
+    const declared = (spec.attrs ?? {})[name];
+    if (declared === undefined) return true;
+    return value !== undefined && declared !== value;
+  })) return false;
+  const states = [...bare.matchAll(/:([a-z-]+)/g)].map((match) => match[1]);
+  if (states.some((state) => !(spec.pseudos ?? []).includes(state))) return false;
+  return true;
+}
+
+/**
  * The declaration that wins `property` for a control, ranked by layer, specificity then
  * order.
  *
@@ -159,6 +185,14 @@ function appliesToTheme(selector, themeId) {
  * lists the attributes the control carries: a rule may only constrain attributes that
  * are present with the same value, while a constraint the control does not carry at all
  * disqualifies the rule.
+ *
+ * `control.ancestors` is an optional escape hatch for rules whose *rightmost* compound is
+ * a different element than the state that drives it - the Aero7 motion host
+ * `[data-slot="button-motion-layer"]` is lit by its ancestral button's
+ * `[aria-pressed]`/`:hover`/`:disabled`. When present, every listed `{ slot, attrs,
+ * pseudos }` must be satisfied by one of the compounds left of the tail. It is opt-in and
+ * leaves the default rightmost-compound behaviour untouched, so existing contracts that
+ * never set it are unaffected.
  */
 export function winner(rules, control, property, themeId = 'minecraft') {
   const marker = `[data-slot="${control.slot}"]`;
@@ -190,6 +224,16 @@ export function winner(rules, control, property, themeId = 'minecraft') {
     })) continue;
     const states = [...bare.matchAll(/:([a-z-]+)/g)].map((match) => match[1]);
     if (states.some((state) => !wanted.includes(state))) continue;
+    // Opt-in: the driving state may live on an ancestor compound. Only then is the full
+    // selector split; the default path above stays byte-for-byte the same.
+    if (control.ancestors) {
+      const compounds = rule.selector.split(/\s+|>/).filter(Boolean);
+      const heads = compounds.slice(0, -1);
+      const satisfied = control.ancestors.every((ancestor) =>
+        heads.some((compound) => compoundMatches(compound, ancestor)),
+      );
+      if (!satisfied) continue;
+    }
     // A selector pinned to another theme can never apply here. `[data-theme]` without a
     // value means "any theme" and must stay eligible, or every shared-layer rule is
     // filtered out and the assertions pass against the theme's own rules alone.

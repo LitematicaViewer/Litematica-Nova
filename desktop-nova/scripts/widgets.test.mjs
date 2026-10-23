@@ -185,7 +185,7 @@ test('四主题共用官方控件，Minecraft/Metro10 资源与控件身份保�
   const manifest = source('src/services/themeManifest.ts');
   const themeList = manifest.match(/export const THEMES = \[([\s\S]*?)\] as const;/)?.[1] ?? '';
   assert.ok(themeList, 'THEMES array not found in themeManifest.ts');
-  for (const theme of ['shadcn', '8bitcn', 'Minecraft', 'Metro10']) assert.ok(themeList.includes(`id: "${theme}"`), theme);
+  for (const theme of ['shadcn', '8bitcn', 'Minecraft', 'Metro10', 'aero7']) assert.ok(themeList.includes(`id: "${theme}"`), theme);
   assert.doesNotMatch(themeList, /WebDefault|Bootstrap5|QTDefault/);
   assert.match(source('ui/themes/minecraft/widgets.css'), /border-image-source: var\(--ln-minecraft-button-image\)/);
   assert.match(source('ui/themes/minecraft/widgets.css'), /unifont-16\.0\.04\.ttf/);

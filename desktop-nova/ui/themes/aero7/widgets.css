@@ -1,0 +1,814 @@
+/* Aero7 component rules.
+ *
+ * Everything here targets the `[data-slot]` contract and lives in
+ * `components.theme`, which outranks the shared/page layers by sublayer order
+ * rather than by selector specificity. Palette, type scale and theme dimensions
+ * live in `theme.css`; every value below is a token or a texture reference.
+ *
+ * The action buttons are drawn from nine-slice artwork whose left/right slice
+ * widths differ per variant (4 / 12 / 20px). Layout width is therefore decoupled
+ * from the artwork: every variant keeps the same 4px border and 12px horizontal
+ * padding, and the wider slices are painted with `border-image-width`, which
+ * overflows the border box without changing the element's size. That keeps a
+ * button with the same label the same width in every variant.
+ */
+
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.theme {
+
+/* ── Navigation ──────────────────────────────────────────────────────────── */
+/* The nav artwork is 32x32 game-style PNG art served through <img>, so it must
+   stay crisp when the window is scaled. Aero7 never inverts it: the shipped
+   glyphs already carry their own light/dark treatment. */
+.sidebar .nav-icon {
+    position: static;
+    width: 32px;
+    height: 32px;
+    transform: none;
+    image-rendering: pixelated;
+}
+
+/* Aero7 drives the shared sidebar width from its own tokens so a full-width
+   nav button is exactly 60 / 160px; the shared `ui/shell/widget/nav.css` layout
+   contract is left untouched. */
+.sidebar {
+    flex: 0 0 var(--ln-aero7-nav-width);
+    width: var(--ln-aero7-nav-width);
+    min-width: var(--ln-aero7-nav-width);
+    border-right: 1px solid var(--border);
+    background: var(--navigation-background);
+    transition: flex-basis var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
+                width var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
+                min-width var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+}
+
+.sidebar-collapsed {
+    flex-basis: var(--ln-aero7-nav-width-collapsed);
+    width: var(--ln-aero7-nav-width-collapsed);
+    min-width: var(--ln-aero7-nav-width-collapsed);
+}
+
+.nav-expand,
+.nav-item {
+    box-sizing: border-box;
+    display: flex;
+    position: relative;
+    isolation: isolate;
+    width: 100%;
+    height: var(--ln-aero7-nav-height);
+    min-height: var(--ln-aero7-nav-height);
+    max-height: var(--ln-aero7-nav-height);
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 0 12px;
+    border: 3px solid transparent;
+    border-radius: 0;
+    border-image-source: url("./resource/button/nav_normal_min.png");
+    border-image-slice: 3 fill;
+    border-image-width: 3px;
+    border-image-repeat: stretch;
+    background: transparent;
+    color: var(--foreground);
+    text-align: left;
+    box-shadow: none;
+    font-size: 16px;
+    transition: gap var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
+                padding var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+}
+
+.nav-expand::before,
+.nav-expand::after,
+.nav-item::before,
+.nav-item::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    box-sizing: border-box;
+    pointer-events: none;
+    opacity: 0;
+    border: 3px solid transparent;
+    border-radius: 0;
+    border-image-slice: 3 fill;
+    border-image-width: 3px;
+    border-image-repeat: stretch;
+    background: transparent;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+}
+
+.nav-expand::before,
+.nav-item::before {
+    border-image-source: url("./resource/button/nav_hover_min.png");
+    z-index: -4;
+}
+
+.nav-expand::after,
+.nav-item::after {
+    border-image-source: url("./resource/button/nav_check_min.png");
+    z-index: -3;
+}
+
+.nav-expand > [data-slot="button-motion-layer"],
+.nav-item > [data-slot="button-motion-layer"] {
+    display: block;
+    position: absolute;
+    inset: -3px;
+    box-sizing: border-box;
+    pointer-events: none;
+    opacity: 0;
+    border: 3px solid transparent;
+    border-radius: 0;
+    border-image-source: url("./resource/button/nav_checkhover_min.png");
+    border-image-slice: 3 fill;
+    border-image-width: 3px;
+    border-image-repeat: stretch;
+    background: transparent;
+    z-index: -2;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+}
+
+.nav-expand > [data-slot="button-motion-layer"]::before,
+.nav-item > [data-slot="button-motion-layer"]::before {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    box-sizing: border-box;
+    pointer-events: none;
+    opacity: 0;
+    border: 3px solid transparent;
+    border-radius: 0;
+    border-image-source: url("./resource/button/nav_disabled_min.png");
+    border-image-slice: 3 fill;
+    border-image-width: 3px;
+    border-image-repeat: stretch;
+    background: transparent;
+    z-index: -1;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+}
+
+.nav-expand:hover:not(:disabled)::before,
+.nav-item:hover:not(:disabled)::before {
+    opacity: 1;
+}
+
+.nav-item.nav-item-active:not(:disabled)::after {
+    opacity: 1;
+}
+
+.nav-item.nav-item-active:hover:not(:disabled) > [data-slot="button-motion-layer"] {
+    opacity: 1;
+}
+
+.nav-expand:disabled > [data-slot="button-motion-layer"]::before,
+.nav-item:disabled > [data-slot="button-motion-layer"]::before {
+    opacity: 1;
+}
+
+.sidebar-collapsed .nav-expand,
+.sidebar-collapsed .nav-item {
+    gap: 0;
+    padding-left: calc((var(--ln-aero7-nav-width-collapsed) - 2 * 3px - 32px) / 2);
+    padding-right: 0;
+}
+
+.nav-label,
+.nav-expand strong {
+    display: block;
+    opacity: 1;
+    visibility: visible;
+    max-width: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
+                max-width var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
+                visibility 0s;
+}
+
+.sidebar-collapsed .nav-label,
+.sidebar-collapsed .nav-expand strong {
+    opacity: 0;
+    visibility: hidden;
+    max-width: 0;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
+                max-width var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
+                visibility 0s linear var(--ln-aero7-motion-duration);
+}
+
+@media (max-width: 760px) {
+    .sidebar {
+        flex-basis: var(--ln-aero7-nav-width-collapsed);
+        width: var(--ln-aero7-nav-width-collapsed);
+        min-width: var(--ln-aero7-nav-width-collapsed);
+    }
+
+    .sidebar .nav-expand,
+    .sidebar .nav-item {
+        gap: 0;
+        padding-left: calc((var(--ln-aero7-nav-width-collapsed) - 2 * 3px - 32px) / 2);
+        padding-right: 0;
+    }
+
+    .sidebar .nav-label,
+    .sidebar .nav-expand strong {
+        opacity: 0;
+        visibility: hidden;
+        max-width: 0;
+    }
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+/* Structural Button call sites (nav rows, window controls, flake slots) own
+   their own appearance and are excluded from the action-button base. `:where()`
+   keeps the selector at one attribute of specificity, so the variant and state
+   rules below never have to raise theirs. */
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot)) {
+    /* The unsuffixed base set is the transparent `default` variant, which also
+       serves `secondary` and any button that names no variant. */
+    --ln-aero7-button-normal-image: url("./resource/button/button_all_default_normal_min.png");
+    --ln-aero7-button-hover-image: url("./resource/button/button_all_default_hover_min.png");
+    --ln-aero7-button-check-image: url("./resource/button/button_all_default_check_min.png");
+    --ln-aero7-button-checkhover-image: url("./resource/button/button_all_default_checkhover_min.png");
+    --ln-aero7-button-disabled-image: url("./resource/button/button_all_default_disabled_min.png");
+
+    box-sizing: border-box;
+    display: inline-flex;
+    position: relative;
+    isolation: isolate;
+    height: var(--ln-aero7-button-height);
+    min-height: var(--ln-aero7-button-height);
+    max-height: var(--ln-aero7-button-height);
+    align-items: center;
+    justify-content: center;
+    padding: 0 var(--ln-aero7-button-padding-x);
+    border: var(--ln-aero7-button-border) solid transparent;
+    border-radius: 0;
+    --ln-aero7-button-slice: 4 fill;
+    --ln-aero7-button-image-width: var(--ln-aero7-button-border);
+    border-image-source: var(--ln-aero7-button-normal-image);
+    border-image-slice: var(--ln-aero7-button-slice);
+    border-image-width: var(--ln-aero7-button-image-width);
+    border-image-repeat: stretch;
+    appearance: none;
+    background: transparent;
+    color: var(--foreground);
+    font: inherit;
+    text-align: center;
+    cursor: default;
+    box-shadow: none;
+}
+
+/* `default` is the page's primary action: the filled Aero blue plate, always
+   labelled in white. Its artwork's left/right slices are 12px. */
+[data-slot="button"][data-variant="default"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot)) {
+    --ln-aero7-button-normal-image: url("./resource/button/button_all_primary_normal_min.png");
+    --ln-aero7-button-hover-image: url("./resource/button/button_all_primary_hover_min.png");
+    --ln-aero7-button-check-image: url("./resource/button/button_all_primary_check_min.png");
+    --ln-aero7-button-checkhover-image: url("./resource/button/button_all_primary_checkhover_min.png");
+    --ln-aero7-button-disabled-image: url("./resource/button/button_all_primary_disabled_min.png");
+    --ln-aero7-button-slice: 4 12 4 12 fill;
+    --ln-aero7-button-image-width: 4px 12px 4px 12px;
+    color: #ffffff;
+}
+
+/* `destructive` is the filled Aero red plate, always labelled in white. Its
+   artwork's left/right slices are 20px. */
+[data-slot="button"][data-variant="destructive"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot)) {
+    --ln-aero7-button-normal-image: url("./resource/button/button_all_destructive_normal_min.png");
+    --ln-aero7-button-hover-image: url("./resource/button/button_all_destructive_hover_min.png");
+    --ln-aero7-button-check-image: url("./resource/button/button_all_destructive_check_min.png");
+    --ln-aero7-button-checkhover-image: url("./resource/button/button_all_destructive_checkhover_min.png");
+    --ln-aero7-button-disabled-image: url("./resource/button/button_all_destructive_disabled_min.png");
+    --ln-aero7-button-slice: 4 20 4 20 fill;
+    --ln-aero7-button-image-width: 4px 20px 4px 20px;
+    color: #ffffff;
+}
+
+/* `outline` is another transparent variant; its artwork's slices are 4px. */
+[data-slot="button"][data-variant="outline"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot)) {
+    --ln-aero7-button-normal-image: url("./resource/button/button_all_outline_normal_min.png");
+    --ln-aero7-button-hover-image: url("./resource/button/button_all_outline_hover_min.png");
+    --ln-aero7-button-check-image: url("./resource/button/button_all_outline_check_min.png");
+    --ln-aero7-button-checkhover-image: url("./resource/button/button_all_outline_checkhover_min.png");
+    --ln-aero7-button-disabled-image: url("./resource/button/button_all_outline_disabled_min.png");
+    --ln-aero7-button-slice: 4 fill;
+    --ln-aero7-button-image-width: 4px;
+}
+
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"]))::before,
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"]))::after {
+    content: "";
+    position: absolute;
+    inset: calc(-1 * var(--ln-aero7-button-border));
+    box-sizing: border-box;
+    pointer-events: none;
+    opacity: 0;
+    border: var(--ln-aero7-button-border) solid transparent;
+    border-radius: 0;
+    border-image-slice: var(--ln-aero7-button-slice);
+    border-image-width: var(--ln-aero7-button-image-width);
+    border-image-repeat: stretch;
+    background: transparent;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+}
+
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"]))::before {
+    border-image-source: var(--ln-aero7-button-hover-image);
+    z-index: -4;
+}
+
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"]))::after {
+    border-image-source: var(--ln-aero7-button-check-image);
+    z-index: -3;
+}
+
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"])) > [data-slot="button-motion-layer"] {
+    display: block;
+    position: absolute;
+    inset: calc(-1 * var(--ln-aero7-button-border));
+    box-sizing: border-box;
+    pointer-events: none;
+    opacity: 0;
+    border: var(--ln-aero7-button-border) solid transparent;
+    border-radius: 0;
+    border-image-source: var(--ln-aero7-button-checkhover-image);
+    border-image-slice: var(--ln-aero7-button-slice);
+    border-image-width: var(--ln-aero7-button-image-width);
+    border-image-repeat: stretch;
+    background: transparent;
+    z-index: -2;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+}
+
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"])) > [data-slot="button-motion-layer"]::before {
+    content: "";
+    position: absolute;
+    inset: calc(-1 * var(--ln-aero7-button-border));
+    box-sizing: border-box;
+    pointer-events: none;
+    opacity: 0;
+    border: var(--ln-aero7-button-border) solid transparent;
+    border-radius: 0;
+    border-image-source: var(--ln-aero7-button-disabled-image);
+    border-image-slice: var(--ln-aero7-button-slice);
+    border-image-width: var(--ln-aero7-button-image-width);
+    border-image-repeat: stretch;
+    background: transparent;
+    z-index: -1;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+}
+
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"])):hover:not(:disabled)::before {
+    opacity: 1;
+}
+
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"]))[aria-pressed="true"]:not(:disabled)::after,
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"]))[data-state="on"]:not(:disabled)::after {
+    opacity: 1;
+}
+
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"]))[aria-pressed="true"]:hover:not(:disabled) > [data-slot="button-motion-layer"],
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"]))[data-state="on"]:hover:not(:disabled) > [data-slot="button-motion-layer"] {
+    opacity: 1;
+}
+
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"])):disabled {
+    color: var(--muted-foreground);
+}
+
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot,[data-variant="ghost"],[data-variant="link"])):disabled > [data-slot="button-motion-layer"]::before {
+    opacity: 1;
+}
+
+[data-slot="button"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot)):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+/* Ghost and link draw no artwork (Metro10's own presentation): every state image
+   resolves to `none`, so the generic state rules paint nothing. */
+[data-slot="button"][data-variant="ghost"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot)) {
+    --ln-aero7-button-normal-image: none;
+    --ln-aero7-button-hover-image: none;
+    --ln-aero7-button-check-image: none;
+    --ln-aero7-button-checkhover-image: none;
+    --ln-aero7-button-disabled-image: none;
+    border-image-source: none;
+    background: transparent;
+    color: var(--foreground);
+}
+
+[data-slot="button"][data-variant="ghost"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot)):hover:not(:disabled) {
+    background: var(--accent);
+}
+
+[data-slot="button"][data-variant="link"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot)) {
+    --ln-aero7-button-normal-image: none;
+    --ln-aero7-button-hover-image: none;
+    --ln-aero7-button-check-image: none;
+    --ln-aero7-button-checkhover-image: none;
+    --ln-aero7-button-disabled-image: none;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    padding: 0;
+    border-width: 0;
+    border-image-source: none;
+    background: transparent;
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+/* ── Window controls ─────────────────────────────────────────────────────── */
+/* The shipped Aero close artwork (66x27). They are not action buttons, so their
+   class rules replace every button property at once. */
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button, .material-list-close-button) {
+    width: var(--ln-aero7-window-close-width);
+    min-width: var(--ln-aero7-window-close-width);
+    max-width: var(--ln-aero7-window-close-width);
+    height: var(--ln-aero7-window-close-height);
+    min-height: var(--ln-aero7-window-close-height);
+    max-height: var(--ln-aero7-window-close-height);
+    flex: 0 0 auto;
+    margin: -8px -12px 0 0;
+    padding: 0;
+    border: 0;
+    border-image-source: none;
+    border-radius: 0;
+    overflow: hidden;
+    background: transparent url("./resource/button/windowClose_normal.png") center / contain no-repeat;
+    color: transparent;
+}
+
+[data-slot="button"].subwindow-overlay-close-button {
+    margin: 0;
+}
+
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button, .material-list-close-button):hover:not(:disabled),
+[data-slot="button"]:is(.dialog-close-button, .subwindow-close-button, .material-list-close-button):active:not(:disabled) {
+    border: 0;
+    background-color: transparent;
+    background-image: url("./resource/button/windowClose_hover.png");
+    color: transparent;
+}
+
+/* ── Inputs and textareas ────────────────────────────────────────────────── */
+
+[data-slot="input"],
+[data-slot="textarea"] {
+    box-sizing: border-box;
+    height: var(--ln-aero7-input-height);
+    min-height: var(--ln-aero7-input-height);
+    padding: 3px 8px;
+    border: 1px solid var(--ln-aero7-input-border);
+    border-radius: 1px;
+    appearance: none;
+    background-color: var(--ln-aero7-input-background);
+    color: var(--foreground);
+    font: inherit;
+    line-height: 1.4;
+    box-shadow: none;
+}
+
+[data-slot="textarea"] {
+    height: auto;
+    min-height: calc(var(--ln-aero7-input-height) * 2);
+    resize: vertical;
+}
+
+[data-slot="input"]:hover:not(:disabled),
+[data-slot="textarea"]:hover:not(:disabled) {
+    border-color: var(--ln-aero7-input-border-hover);
+}
+
+[data-slot="input"]:focus,
+[data-slot="textarea"]:focus {
+    border-color: var(--ring);
+    outline: 0;
+}
+
+[data-slot="input"]:focus-visible,
+[data-slot="textarea"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+}
+
+[data-slot="input"]:disabled,
+[data-slot="textarea"]:disabled {
+    background-color: var(--muted);
+    color: var(--muted-foreground);
+}
+
+[data-slot="input"]::placeholder,
+[data-slot="textarea"]::placeholder {
+    color: var(--muted-foreground);
+    opacity: 1;
+}
+
+/* Radix's trigger is a `<button>`, not a `<select>`. It keeps the Aero field look;
+   the shipped chevron stays as-is (no spin artwork ships with this theme). */
+[data-slot="select-trigger"] {
+    box-sizing: border-box;
+    display: inline-flex;
+    height: var(--ln-aero7-input-height);
+    min-height: var(--ln-aero7-input-height);
+    align-items: center;
+    justify-content: space-between;
+    padding: 3px 8px;
+    border: 1px solid var(--ln-aero7-input-border);
+    border-radius: 1px;
+    appearance: none;
+    background-color: var(--ln-aero7-input-background);
+    color: var(--foreground);
+    cursor: default;
+    box-shadow: none;
+}
+
+[data-slot="select-trigger"]:hover:not(:disabled) {
+    border-color: var(--ln-aero7-input-border-hover);
+}
+
+[data-slot="select-trigger"]:focus-visible {
+    border-color: var(--ring);
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+}
+
+[data-slot="select-trigger"][data-state="open"] {
+    border-color: var(--ring);
+}
+
+[data-slot="select-trigger"][data-placeholder] {
+    color: var(--muted-foreground);
+}
+
+[data-slot="select-trigger"]:disabled {
+    background-color: var(--muted);
+    color: var(--muted-foreground);
+}
+
+/* ── Checkboxes and radios ───────────────────────────────────────────────── */
+/* The 13x13 Aero artwork replaces the shared square box, so the box itself becomes
+   transparent and keeps square corners (a radius would clip the texture). */
+
+[data-slot="checkbox"] {
+    width: 13px;
+    height: 13px;
+    min-width: 13px;
+    min-height: 13px;
+    max-width: 13px;
+    max-height: 13px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    position: relative;
+    background: transparent url("./resource/form/checkbox_default.png") center / 13px 13px no-repeat;
+    image-rendering: auto;
+    box-shadow: none;
+    cursor: pointer;
+}
+
+[data-slot="checkbox"]::before,
+[data-slot="checkbox"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 13px 13px;
+    background-color: transparent;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+}
+
+[data-slot="checkbox"]::before {
+    background-image: url("./resource/form/checkbox_hover.png");
+}
+
+[data-slot="checkbox"]::after {
+    background-image: url("./resource/form/checkbox_checked_hover.png");
+}
+
+[data-slot="checkbox"][data-state="checked"],
+[data-slot="checkbox"][data-state="indeterminate"] {
+    border-color: transparent;
+    background-color: transparent;
+    background-image: url("./resource/form/checkbox_checked.png");
+}
+
+[data-slot="checkbox"]:hover:not(:disabled):not([data-state="checked"]):not([data-state="indeterminate"])::before {
+    opacity: 1;
+}
+
+[data-slot="checkbox"][data-state="checked"]:hover:not(:disabled)::after,
+[data-slot="checkbox"][data-state="indeterminate"]:hover:not(:disabled)::after {
+    opacity: 1;
+}
+
+[data-slot="checkbox"] svg {
+    visibility: hidden;
+}
+
+[data-slot="checkbox"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"] {
+    width: 13px;
+    height: 13px;
+    min-width: 13px;
+    min-height: 13px;
+    max-width: 13px;
+    max-height: 13px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    position: relative;
+    background: transparent url("./resource/form/radio_default.png") center / 13px 13px no-repeat;
+    box-shadow: none;
+    cursor: pointer;
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"]::before,
+[data-slot="radio-group-item"][data-choice-layout="control"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 13px 13px;
+    background-color: transparent;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"]::before {
+    background-image: url("./resource/form/radio_hover.png");
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"]::after {
+    background-image: url("./resource/form/radio_checked_hover.png");
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"] {
+    border-color: transparent;
+    background-image: url("./resource/form/radio_checked.png");
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"]:hover:not(:disabled):not([data-state="checked"])::before {
+    opacity: 1;
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"][data-state="checked"]:hover:not(:disabled)::after {
+    opacity: 1;
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"] [data-slot="radio-group-indicator"] {
+    visibility: hidden;
+}
+
+[data-slot="radio-group-item"][data-choice-layout="control"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+/* ── Slider ──────────────────────────────────────────────────────────────── */
+
+[data-slot="slider"] {
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: var(--ln-aero7-range-height);
+    align-items: center;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+}
+
+[data-slot="slider"][data-disabled] {
+    cursor: default;
+    opacity: .55;
+}
+
+[data-slot="slider"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+[data-slot="slider-track"] {
+    position: relative;
+    flex: 1;
+    height: 2px;
+    overflow: hidden;
+    border-radius: 0;
+    background: var(--ln-aero7-range-track);
+}
+
+[data-slot="slider-range"] {
+    position: absolute;
+    height: 100%;
+    background: var(--primary);
+}
+
+[data-slot="slider-thumb"] {
+    display: block;
+    position: relative;
+    width: 11px;
+    height: var(--ln-aero7-range-height);
+    border: 0;
+    border-radius: 0;
+    background: transparent url("./resource/form/slider_handle_default.png") center / 11px 19px no-repeat;
+    box-shadow: none;
+}
+
+[data-slot="slider-thumb"]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    background: transparent url("./resource/form/slider_handle_hover.png") center / 11px 19px no-repeat;
+    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
+}
+
+[data-slot="slider"]:hover:not([data-disabled]) [data-slot="slider-thumb"]::before {
+    opacity: 1;
+}
+
+[data-slot="slider-thumb"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+/* Aero7 draws the thumb from a 17x17 texture with an 8px nine-slice border, so the
+   corners stay 1:1 while the middle stretches along the track. Both the Radix
+   thumb tree and the native scroller are covered so they render alike. */
+
+html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] {
+    width: var(--ln-scroll-size);
+    padding: 0;
+}
+
+html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] [data-slot="scroll-area-thumb"] {
+    border: 8px solid transparent;
+    border-radius: 0;
+    border-image-source: url("./resource/scroll_min.png");
+    border-image-slice: 8 fill;
+    border-image-width: 8px;
+    border-image-repeat: stretch;
+    background: transparent;
+    box-shadow: none;
+}
+
+@supports selector(::-webkit-scrollbar) {
+    html[data-theme="aero7"] ::-webkit-scrollbar-thumb:vertical {
+        border: 8px solid transparent;
+        border-radius: 0;
+        border-image-source: url("./resource/scroll_min.png");
+        border-image-slice: 8 fill;
+        border-image-width: 8px;
+        background: transparent;
+        box-shadow: none;
+    }
+}
+
+/* ── Dark-mode artwork ───────────────────────────────────────────────────── */
+/* Aero7's nav/control glyphs carry their own light/dark treatment and must not be
+   inverted, so no `filter: invert(...)` rules are declared here. */
+
+::selection {
+    background: var(--primary);
+    color: var(--primary-foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sidebar,
+    .nav-expand,
+    .nav-item,
+    .nav-label,
+    .nav-expand strong,
+    [data-slot="button"]::before,
+    [data-slot="button"]::after,
+    [data-slot="button-motion-layer"],
+    [data-slot="button-motion-layer"]::before,
+    .nav-expand::before,
+    .nav-expand::after,
+    .nav-item::before,
+    .nav-item::after,
+    [data-slot="checkbox"]::before,
+    [data-slot="checkbox"]::after,
+    [data-slot="radio-group-item"][data-choice-layout="control"]::before,
+    [data-slot="radio-group-item"][data-choice-layout="control"]::after,
+    [data-slot="slider-thumb"]::before {
+        transition: none !important;
+    }
+}
+
+}

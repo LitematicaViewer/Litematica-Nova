@@ -981,6 +981,7 @@ fn normalize_theme(value: &str) -> String {
         "8bitcn" => "8bitcn".to_string(),
         "minecraft" => "Minecraft".to_string(),
         "metro10" => "Metro10".to_string(),
+        "aero7" => "aero7".to_string(),
         _ => "shadcn".to_string(),
     }
 }
@@ -1020,7 +1021,7 @@ mod theme_config_tests {
     }
 
     #[test]
-    fn four_theme_ids_are_canonical_and_legacy_values_migrate() {
+    fn five_theme_ids_are_canonical_and_legacy_values_migrate() {
         for value in ["", "WebDefault", "Bootstrap5", "QTDefault", "unknown"] {
             assert_eq!(normalize_theme(value), "shadcn");
         }
@@ -1028,6 +1029,7 @@ mod theme_config_tests {
         assert_eq!(normalize_theme(" 8BITCN "), "8bitcn");
         assert_eq!(normalize_theme(" minecraft "), "Minecraft");
         assert_eq!(normalize_theme(" METRO10 "), "Metro10");
+        assert_eq!(normalize_theme(" aero7 "), "aero7");
         assert_eq!(default_user_config().theme, "shadcn");
     }
 }

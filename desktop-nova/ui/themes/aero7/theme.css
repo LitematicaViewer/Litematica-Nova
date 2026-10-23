@@ -1,0 +1,148 @@
+/* Aero7 — Windows 7 "Aero" glass look, adapted to the current theme contract.
+ *
+ * Like the other themes this is one entry file (tokens + import) plus one widget
+ * file (`widgets.css`, `components.theme`):
+ *   - palette/type live in `@layer tokens`, light and dark;
+ *   - component rules target `[data-slot]` in `components.theme`;
+ *   - artwork stays in `resource/` and is addressed by `--flake-*` variables.
+ *
+ * Aero7 is a glassy desktop look: translucent action buttons drawn from nine-slice
+ * artwork, a light-blue window background, and the Aero blue / red accents for the
+ * filled variants. Every value this theme does not state explicitly is *copied*
+ * from Metro10 (its own copy, not an alias), because the two themes are expected to
+ * evolve into different looks.
+ */
+@import "./widgets.css";
+
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer tokens {
+
+:root {
+    color-scheme: light;
+    --background: #cce6ff;
+    --foreground: #000000;
+    --card: #ffffff;
+    --popover: #ffffff;
+    --primary: #0072c6;
+    --primary-foreground: #ffffff;
+    --secondary: #cccccc;
+    --muted: #f2f2f2;
+    --muted-foreground: #666666;
+    --accent: #e6e6e6;
+    --destructive: #c42b1c;
+    --border: #999999;
+    --ring: #0072c6;
+    --radius: 0px;
+    --edge-width: 2px;
+    --control-height: 30px;
+    --control-shadow: none;
+    --panel-shadow: 0 10px 24px rgb(0 0 0 / 24%);
+    --overlay: rgb(0 0 0 / 42%);
+    --navigation-background: #cce6ff;
+    --option-active-background: #cce8ff;
+    --option-active-color: #000000;
+    --success: #107c10;
+    --warning: #8a5300;
+    /* Selected (toggled) button surface: the accent-tinted plate, so a selected
+       toggle cannot read as "off". */
+    --nova-selected-surface: #cce8ff;
+    --nova-selected-hover: #b3dcff;
+    --nova-selected-foreground: #000000;
+
+    --ln-body-font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    --ln-body-font-size: 11px;
+    --nova-text-xs: .75rem;
+    --nova-text-sm: .875rem;
+    --nova-text-base: 1rem;
+    --nova-text-lg: 1.5rem;
+    --nova-font-xs: var(--ln-body-font-family);
+    --nova-font-sm: var(--ln-body-font-family);
+    --nova-font-lg: var(--ln-body-font-family);
+
+    --ln-file-icon-size: 32px;
+    --ln-check-label-gap: 6px;
+    --ln-check-label-min-height: 24px;
+    --ln-card-border-width: 2px;
+    --ln-card-border-color-active: var(--primary);
+    --ln-card-background-color-active: var(--option-active-background);
+    --ln-table-row-selected-background: var(--option-active-background);
+
+    /* Scrollbars: 17px-wide squares drawn from the Aero scroller texture. */
+    --ln-scroll-size: 17px;
+    --ln-scroll-radius: 0;
+    --ln-scroll-track: #f2f2f2;
+    --ln-scroll-track-hover: #e6e6e6;
+    --ln-scroll-thumb: #999999;
+    --ln-scroll-hover: #7a7a7a;
+    --ln-scroll-active: #666666;
+    --ln-scroll-edge: 2px;
+    --ln-scroll-shadow: none;
+
+    /* Theme-private dimensions; consumed by `widgets.css` only. */
+    --ln-aero7-button-height: 30px;
+    --ln-aero7-button-padding-x: 12px;
+    --ln-aero7-button-border: 4px;
+    --ln-aero7-nav-height: 40px;
+    --ln-aero7-nav-width: 160px;
+    --ln-aero7-nav-width-collapsed: 60px;
+    --ln-aero7-input-height: 26px;
+    --ln-aero7-input-border: #808080;
+    --ln-aero7-input-border-hover: color-mix(in srgb, var(--foreground) 55%, var(--border));
+    --ln-aero7-input-background: #00000080;
+    --ln-aero7-range-height: 19px;
+    --ln-aero7-range-track: var(--muted-foreground);
+    --ln-aero7-window-close-width: 66px;
+    --ln-aero7-window-close-height: 27px;
+
+    /* Motion: one duration and one easing for every Aero7 transition. This is the
+       single source; `widgets.css` only references these. Declared once in `:root`
+       so light and dark share the same timing. */
+    --ln-aero7-motion-duration: .25s;
+    --ln-aero7-motion-easing: cubic-bezier(.4, 0, .2, 1);
+
+    /* Flake page artwork, addressed from this theme's own resource folder. */
+    --flake-hotbar-image: url("./resource/content/hotbar.png");
+    --flake-hotbar-selection-image: url("./resource/content/hotbar_selection.png");
+    --flake-creative-inventory-image: url("./resource/content/creativeInventory.png");
+    --flake-chest-image: url("./resource/content/chest27.png");
+    --flake-hopper-image: url("./resource/content/hopper.png");
+}
+
+:root[data-color-scheme="dark"] {
+    color-scheme: dark;
+    --background: #404040;
+    --foreground: #ffffff;
+    --card: #2b2b2b;
+    --popover: #2b2b2b;
+    --primary: #4cc2ff;
+    --primary-foreground: #0b1c26;
+    --secondary: #3a3a3a;
+    --muted: #2b2b2b;
+    --muted-foreground: #c8c8c8;
+    --accent: #3d3d3d;
+    --destructive: #ff99a4;
+    --border: #767676;
+    --ring: #4cc2ff;
+    --control-shadow: none;
+    --panel-shadow: 0 10px 24px rgb(0 0 0 / 45%);
+    --navigation-background: #404040;
+    --option-active-background: #0a3a57;
+    --option-active-color: #ffffff;
+    --success: #6ccb5f;
+    --warning: #fce100;
+    --nova-selected-surface: #0a3a57;
+    --nova-selected-hover: #0d4a6e;
+    --nova-selected-foreground: #ffffff;
+    --ln-card-border-color-active: var(--primary);
+    --ln-card-background-color-active: var(--option-active-background);
+    --ln-table-row-selected-background: var(--option-active-background);
+    --ln-aero7-input-background: #ffffff80;
+    --ln-scroll-track: #2b2b2b;
+    --ln-scroll-track-hover: #3a3a3a;
+    --ln-scroll-thumb: #767676;
+    --ln-scroll-hover: #a0a0a0;
+    --ln-scroll-active: #c8c8c8;
+}
+}
