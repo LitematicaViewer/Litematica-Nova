@@ -1602,10 +1602,12 @@ fn view_class() -> &'static Class {
                     }
                 } else if kind == 5 || kind == 6 {
                     let key: u16 = msg_send![event, keyCode];
-                    // flagsChanged reports aggregate Ctrl. Canonicalize both
-                    // sides so releasing one while the other is held cannot
+                    // flagsChanged reports aggregate modifiers. Canonicalize
+                    // both sides so releasing one while the other is held cannot
                     // leave the first physical key stuck in the producer.
-                    code = if selector == sel!(flagsChanged:) && matches!(key, 59 | 62) { 59 } else { u32::from(key) };
+                    code = if selector == sel!(flagsChanged:) {
+                        match key { 59 | 62 => 59, 56 | 60 => 56, _ => u32::from(key) }
+                    } else { u32::from(key) };
                     if kind == 5 && code == 53 {
                         let _ = release_pointer_capture(shared);
                         forward_input(shared, 10, 0, 0.0, 0.0, 0.0, 0.0, 0, 0, String::new());

@@ -6,6 +6,8 @@ export interface SceneViewControls {
   cameraMode?: "orbit" | "free";
   cameraInputMode?: "drag" | "pointer_lock";
   cameraSpeed?: number;
+  cameraSensitivity?: number;
+  releaseCameraInput?: boolean;
   resetCamera?: boolean;
   reloadShaderOptions?: boolean;
 }
@@ -13,4 +15,8 @@ export async function updateSceneView(input: { sourcePath: string; displayMode?:
   const applyLayerRange = Object.prototype.hasOwnProperty.call(input.controls, "layerMinY") || Object.prototype.hasOwnProperty.call(input.controls, "layerMaxY");
   return invoke<void>("application_set_scene_view", { sourcePath: input.sourcePath, displayMode: input.displayMode ?? null,
     controls: { ...input.controls, applyLayerRange } });
+}
+
+export function releaseCameraInput(input: { sourcePath: string; displayMode?: "fast_experimental" | "standard" | "full" }) {
+  return updateSceneView({ ...input, controls: { releaseCameraInput: true } });
 }

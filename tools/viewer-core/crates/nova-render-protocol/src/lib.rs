@@ -541,6 +541,7 @@ pub enum ServiceEvent {
     BuildState(BuildSnapshot),
     ArtifactState(ArtifactSnapshot),
     ViewerState(ViewerSnapshot),
+    LayerStep { session_id: String, build_id: String, generation: u64, delta: i32 },
     Error(ServiceError),
     ServiceStopping,
 }
@@ -1145,6 +1146,7 @@ pub struct ArtifactFinalized {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "update", content = "data", rename_all = "snake_case")]
 pub enum ViewerUpdate {
+    LayerStep { session_id: String, build_id: String, generation: u64, delta: i32 },
     /// Resource-only readiness, never a scene/first-pixel milestone.
     GpuContextReady {
         session_id: String,
@@ -1292,6 +1294,11 @@ pub enum ViewerUpdate {
 impl ViewerUpdate {
     fn validate(&self) -> Result<(), String> {
         match self {
+            Self::LayerStep { session_id, build_id, generation, delta } => {
+                require_id("sessionId", session_id)?; require_id("buildId", build_id)?;
+                if *generation == 0 || !matches!(*delta, -1 | 1) { return Err("Layer step requires current generation and unit movement".into()); }
+            }
+
             Self::RealtimeReady {
                 session_id,
                 build_id,

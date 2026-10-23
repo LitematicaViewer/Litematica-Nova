@@ -25,11 +25,19 @@ pub struct SceneViewControls {
     pub camera_mode: Option<String>,
     pub camera_input_mode: Option<String>,
     pub camera_speed: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_sensitivity: Option<f32>,
+    #[serde(skip_serializing_if = "scene_control_false")]
+    pub release_camera_input: bool,
     pub reset_camera: bool,
     pub reload_shader_options: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shader_options_result_path: Option<PathBuf>,
     pub shaderpack_root: Option<PathBuf>,
     pub shaderpack_name: Option<String>,
 }
+fn scene_control_false(value: &bool) -> bool { !*value }
+
 impl SceneViewControls {
     pub fn validate(&self) -> Result<(), String> {
         if self.layer_min_y.zip(self.layer_max_y).is_some_and(|(a,b)| a > b) {
@@ -41,6 +49,12 @@ impl SceneViewControls {
         }
         if self.camera_input_mode.as_deref().is_some_and(|mode| mode != "drag" && mode != "pointer_lock") {
             return Err("Unknown free camera input mode".into());
+        }
+        if self.shader_options_result_path.as_ref().is_some_and(|path| !self.reload_shader_options || !path.is_absolute()) {
+            return Err("Shader options receipt requires a reload and an absolute result path".into());
+        }
+        if self.camera_sensitivity.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+            return Err("Camera sensitivity must be finite and positive".into());
         }
         if self.camera_speed.is_some_and(|speed| !speed.is_finite() || speed <= 0.0) {
             return Err("Camera speed must be finite and positive".into());
@@ -2937,3 +2951,27 @@ mod tests {
 
 /// Native GPU presentation messages shared by Host and Viewer.
 pub mod native_macos_wire;
+
+#[cfg(test)]
+mod scene_view_optional_control_tests {
+    use super::*;
+    #[test]
+    fn unused_new_controls_keep_existing_wire_shape() {
+        let value = serde_json::to_value(SceneViewControls::default()).unwrap();
+        assert!(value.get("cameraSensitivity").is_none());
+        assert!(value.get("releaseCameraInput").is_none());
+        assert!(value.get("shaderOptionsResultPath").is_none());
+        let input: SceneViewControls = serde_json::from_value(serde_json::json!({"releaseCameraInput": true, "cameraSensitivity": 0.5})).unwrap();
+        assert!(input.release_camera_input);
+        assert!(input.validate().is_ok());
+    }
+    #[test]
+    fn sensitivity_and_shader_receipts_validate_their_real_requirements() {
+        let input = SceneViewControls { camera_sensitivity: Some(0.0), ..Default::default() };
+        assert!(input.validate().is_err());
+        let input = SceneViewControls { shader_options_result_path: Some(PathBuf::from("relative.json")), reload_shader_options: true, ..Default::default() };
+        assert!(input.validate().is_err());
+        let input = SceneViewControls { shader_options_result_path: Some(std::env::temp_dir().join("receipt.json")), ..Default::default() };
+        assert!(input.validate().is_err());
+    }
+}

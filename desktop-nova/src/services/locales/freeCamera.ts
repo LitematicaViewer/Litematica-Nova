@@ -1,14 +1,18 @@
+// One binding description for both input methods and both UI languages.
+const cameraKeys = { movement: "WASD", up: "Space", down: "Shift", boost: "Ctrl", release: "Esc" } as const;
+const zhKeys = `${cameraKeys.movement} 移动，${cameraKeys.up} 上升，${cameraKeys.down} 下降，${cameraKeys.boost} 加速；${cameraKeys.release} 释放。`;
+const enKeys = `${cameraKeys.movement} move, ${cameraKeys.up} up, ${cameraKeys.down} down, ${cameraKeys.boost} boost; ${cameraKeys.release} release.`;
 export const zhCN: Record<string, string> = {
-  "freeCamera.title": "相机视角", "freeCamera.orbit": "轨道视角", "freeCamera.free": "自由视角",
-  "freeCamera.speed": "移动速度", "freeCamera.speedUnit": "格/秒", "freeCamera.reset": "回到场景",
-  "freeCamera.inputMode": "视线控制方式", "freeCamera.drag": "鼠标拖拽", "freeCamera.pointerLock": "锁定鼠标",
-  "freeCamera.dragHint": "聚焦视口后，拖动鼠标转动视线；WASD 移动，空格上升，Ctrl 下降。",
-  "freeCamera.lockHint": "点击视口锁定鼠标，移动鼠标转动视线；WASD 移动，空格上升，Ctrl 下降，Esc 释放鼠标。",
+  "freeCamera.title": "相机操作", "freeCamera.speed": "移动速度", "freeCamera.speedUnit": "格/秒",
+  "freeCamera.sensitivity": "鼠标灵敏度", "freeCamera.reset": "重置视角",
+  "freeCamera.inputMode": "鼠标操作", "freeCamera.drag": "鼠标拖拽", "freeCamera.pointerLock": "点击锁定鼠标",
+  "freeCamera.dragHint": `右键按住转向，松开结束。${zhKeys}`,
+  "freeCamera.lockHint": `点击视口锁定并隐藏鼠标，移动鼠标转向。${zhKeys}`,
 };
 export const enUS: Record<string, string> = {
-  "freeCamera.title": "Camera view", "freeCamera.orbit": "Orbit", "freeCamera.free": "Free camera",
-  "freeCamera.speed": "Move speed", "freeCamera.speedUnit": "blocks/s", "freeCamera.reset": "Return to scene",
-  "freeCamera.inputMode": "Look controls", "freeCamera.drag": "Mouse drag", "freeCamera.pointerLock": "Pointer lock",
-  "freeCamera.dragHint": "Focus the viewport, then drag to look. WASD to move, Space to ascend, Ctrl to descend.",
-  "freeCamera.lockHint": "Click the viewport to capture the mouse; move it to look. WASD to move, Space to ascend, Ctrl to descend, Esc to release.",
+  "freeCamera.title": "Camera controls", "freeCamera.speed": "Move speed", "freeCamera.speedUnit": "blocks/s",
+  "freeCamera.sensitivity": "Mouse sensitivity", "freeCamera.reset": "Reset view",
+  "freeCamera.inputMode": "Mouse controls", "freeCamera.drag": "Mouse drag", "freeCamera.pointerLock": "Click to lock pointer",
+  "freeCamera.dragHint": `Hold right mouse to look, release to stop. ${enKeys}`,
+  "freeCamera.lockHint": `Click the viewport to lock and hide the pointer; move to look. ${enKeys}`,
 };

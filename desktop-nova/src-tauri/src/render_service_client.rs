@@ -806,7 +806,7 @@ impl RenderServiceClient {
             ServiceEvent::ViewerState(value) => {
                 replace_viewer(&mut snapshot.viewers, value.clone())
             }
-            ServiceEvent::Error(_) | ServiceEvent::ServiceStopping => {}
+            ServiceEvent::Error(_) | ServiceEvent::ServiceStopping | ServiceEvent::LayerStep { .. } => {}
         }
     }
 
