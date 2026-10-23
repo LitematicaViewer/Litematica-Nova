@@ -12,6 +12,10 @@ public final class MaterialCatalogMain {
     private static final Class<?>[] NONE = new Class<?>[0];
 
     public static void main(String[] args) throws Exception {
+        if (args.length != 2 || !args[0].equals("--output")) {
+            VersionInventoryExporter.main(args);
+            return;
+        }
         if (args.length != 2 || !args[0].equals("--output") || Runtime.version().feature() != 25) {
             throw new IllegalArgumentException("Java 25: MaterialCatalogMain --output <json>");
         }

@@ -25,6 +25,53 @@ pub struct GameDataContext {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResourceRecord { pub bytes: u64, pub sha256: String }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct OracleInputIdentity {
+    pub minecraft: String,
+    pub world_version: i32,
+    pub protocol_version: i32,
+    pub java_major: u32,
+    pub client_jar_sha256: String,
+    pub client_jar_size: u64,
+    pub manifest_sha256: String,
+}
+
+/// Exact oracle provenance is bound to the immutable resource index, not to a
+/// hash merely self-reported by oracle-manifest.json. Old default packages can
+/// return None so their existing compile-time 26.3 pin remains authoritative.
+pub fn oracle_identity(context: &GameDataContext) -> Result<Option<OracleInputIdentity>> {
+    let index: BTreeMap<String, ResourceRecord> = read_json(&context.root.join("index.json"))?;
+    let mut package_hash = Sha256::new();
+    package_hash.update(format!("nova.game-data.v{SCHEMA}\0{}\0", context.game_version));
+    package_hash.update(serde_json::to_vec(&index)?);
+    ensure!(format!("{:x}", package_hash.finalize()) == context.content_id, "oracle resource index no longer matches its package identity");
+    let read_indexed = |relative: &str| -> Result<Option<Vec<u8>>> {
+        let Some(record) = index.get(relative) else { return Ok(None); };
+        let bytes = read_resource_from(context, relative)?.with_context(|| format!("oracle identity resource is missing: {relative}"))?;
+        ensure!(bytes.len() as u64 == record.bytes && format!("{:x}", Sha256::digest(&bytes)) == record.sha256,
+            "oracle identity resource content differs from package index: {relative}");
+        Ok(Some(bytes))
+    };
+    let Some(adapter_bytes) = read_indexed("derived/adapter.json")? else { return Ok(None); };
+    let adapter: serde_json::Value = serde_json::from_slice(&adapter_bytes)?;
+    ensure!(adapter["game_version"].as_str() == Some(context.game_version.as_str()), "oracle adapter version differs from selected game data");
+    let Some(value) = adapter.get("oracle_identity") else { return Ok(None); };
+    let identity: OracleInputIdentity = serde_json::from_value(value.clone()).context("invalid version oracle input identity")?;
+    ensure!(identity.minecraft == context.game_version, "oracle input identity version differs from selected game data");
+    let manifest_bytes = read_indexed("derived/oracle/oracle-manifest.json")?.context("oracle input manifest is missing")?;
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)?;
+    ensure!(format!("{:x}", Sha256::digest(&manifest_bytes)) == identity.manifest_sha256,
+        "oracle manifest differs from indexed adapter identity");
+    ensure!(manifest["minecraft"].as_str() == Some(identity.minecraft.as_str())
+        && manifest["world_version"].as_i64() == Some(identity.world_version as i64)
+        && manifest["protocol_version"].as_i64() == Some(identity.protocol_version as i64)
+        && manifest["java_major"].as_u64() == Some(identity.java_major as u64)
+        && manifest["client_jar_sha256"].as_str() == Some(identity.client_jar_sha256.as_str())
+        && manifest["client_jar_size"].as_u64() == Some(identity.client_jar_size), "oracle provenance differs from indexed adapter identity");
+    ensure!(identity.client_jar_sha256.len() == 64 && identity.client_jar_sha256.bytes().all(|c| c.is_ascii_hexdigit()), "invalid oracle client JAR digest");
+    Ok(Some(identity))
+}
+
 #[derive(Serialize, Deserialize)]
 struct PackageManifest {
     #[serde(flatten)]
@@ -293,7 +340,104 @@ fn copy_adapters(root: &Path, adapter: &Path, version: &str, index: &mut BTreeMa
         }
         Ok(())
     }
-    visit(adapter, adapter, root, index)
+    visit(adapter, adapter, root, index)?;
+    validate_adapter(root, "derived", version, index, false)?;
+    let versions = root.join("derived/version-adapters");
+    if versions.is_dir() {
+        for entry in fs::read_dir(versions)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type()?.is_file() && name.ends_with(".zip") {
+                let version = name.strip_suffix(".zip").context("invalid adapter archive name")?;
+                ensure!(valid_id(version), "invalid version adapter identity");
+                let mut archive = zip::ZipArchive::new(File::open(entry.path())?)?;
+                let identity = read_archived_adapter_identity(&mut archive)?;
+                ensure!(identity["game_version"].as_str() == Some(version) && identity["schema_version"].as_u64() == Some(1)
+                    && identity["content_id"].as_str().is_some_and(|id| id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit()))
+                    && identity["files"].is_object(), "版本适配归档缺少有效内容身份：{version}");
+                continue;
+            }
+            ensure!(entry.file_type()?.is_dir(), "version adapter entries must be directories or ZIP archives");
+            let version = name;
+            ensure!(valid_id(&version), "invalid version adapter identity");
+            validate_adapter(root, &format!("derived/version-adapters/{version}"), &version, index, true)?;
+        }
+    }
+    Ok(())
+}
+
+fn read_archived_adapter_identity(archive: &mut zip::ZipArchive<File>) -> Result<serde_json::Value> {
+    let mut entry = archive.by_name("adapter.json").context("version adapter archive has no identity")?;
+    ensure!(entry.size() <= 1024 * 1024, "version adapter identity is too large");
+    let mut bytes = Vec::new();
+    entry.read_to_end(&mut bytes)?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+fn unpack_version_adapter(archive_path: &Path, root: &Path, version: &str, index: &mut BTreeMap<String, ResourceRecord>) -> Result<()> {
+    let mut archive = zip::ZipArchive::new(File::open(archive_path)?)?;
+    let identity = read_archived_adapter_identity(&mut archive)?;
+    ensure!(identity["game_version"].as_str() == Some(version), "版本适配归档与所选游戏版本不一致：{version}");
+    ensure!(archive.len() <= 100_000, "version adapter archive has too many files");
+    let mut bytes = 0_u64;
+    let mut names = BTreeSet::new();
+    for position in 0..archive.len() {
+        let mut entry = archive.by_index(position)?;
+        ensure!(entry.unix_mode().is_none_or(|mode| mode & 0o170000 != 0o120000), "adapter symlinks are not admitted");
+        if entry.is_dir() { continue; }
+        let relative = normalized(entry.name())?;
+        ensure!(names.insert(relative.clone()), "duplicate version adapter archive entry: {relative}");
+        bytes = bytes.checked_add(entry.size()).context("version adapter size overflow")?;
+        ensure!(bytes <= 512 * 1024 * 1024, "version adapter archive exceeds its decompressed storage boundary");
+        record_file(root, &format!("derived/{relative}"), &mut entry, index)?;
+    }
+    validate_adapter(root, "derived", version, index, true)
+}
+
+// A version number selects a table; it is not evidence of that table's contents.
+// Bind every shipped per-version adapter to its actual immutable file records.
+fn validate_adapter(root: &Path, prefix: &str, version: &str, index: &BTreeMap<String, ResourceRecord>, required: bool) -> Result<()> {
+    let identity: serde_json::Value = read_json(&root.join(prefix).join("adapter.json"))?;
+    ensure!(identity["game_version"].as_str() == Some(version), "派生数据适配器与实际游戏版本不一致：{version}");
+    if required || identity.get("content_id").is_some() {
+        ensure!(identity["schema_version"].as_u64() == Some(1), "unsupported version adapter schema: {version}");
+        let files = identity["files"].as_object().context("version adapter has no content records")?;
+        let mut digest = Sha256::new();
+        let mut found = 0;
+        let start = format!("{prefix}/");
+        for (path, record) in index.range(start.clone()..) {
+            let Some(relative) = path.strip_prefix(&start) else { break; };
+            if relative == "adapter.json" { continue; }
+            let expected = files.get(relative).with_context(|| format!("version adapter has an unrecorded file: {version}/{relative}"))?;
+            ensure!(expected["bytes"].as_u64() == Some(record.bytes) && expected["sha256"].as_str() == Some(record.sha256.as_str()), "版本适配数据内容身份不匹配：{version}/{relative}");
+            digest.update(format!("{relative}\0{}\0{}\n", record.sha256, record.bytes));
+            found += 1;
+        }
+        ensure!(found == files.len(), "version adapter content records are incomplete: {version}");
+        ensure!(identity["content_id"].as_str() == Some(format!("{:x}", digest.finalize()).as_str()), "版本适配数据内容身份不匹配：{version}");
+    }
+    validate_semantic_versions(root, prefix, version, index)
+}
+
+fn validate_semantic_versions(root: &Path, prefix: &str, version: &str, index: &BTreeMap<String, ResourceRecord>) -> Result<()> {
+    let inventory_path = root.join(prefix).join("inventory.json");
+    if inventory_path.is_file() {
+        let inventory: serde_json::Value = read_json(&inventory_path)?;
+        ensure!(inventory["minecraft_version"].as_str() == Some(version), "物品语义适配器与实际游戏版本不一致：{version}");
+    }
+    let oracle_path = root.join(prefix).join("oracle/oracle-manifest.json");
+    if oracle_path.is_file() {
+        let manifest: serde_json::Value = read_json(&oracle_path)?;
+        ensure!(manifest["minecraft"].as_str() == Some(version), "注册表 oracle 与实际游戏版本不一致：{version}");
+        if let Some(artifacts) = manifest["artifacts"].as_array() {
+            for artifact in artifacts {
+                let path = normalized(artifact["path"].as_str().context("oracle artifact has no relative path")?)?;
+                let record = index.get(&format!("{prefix}/oracle/{path}")).with_context(|| format!("oracle artifact is missing: {version}/{path}"))?;
+                ensure!(artifact["records_sha256"].as_str() == Some(record.sha256.as_str()), "oracle 内容与版本清单不一致：{version}/{path}");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn copy_derived(source: &Path, destination: &Path, relative: &str, index: &mut BTreeMap<String, ResourceRecord>) -> Result<()> {
@@ -317,12 +461,22 @@ fn reuse_version_adapters(root: &Path, default: &Path, version: &str, index: &mu
     let default_context = package_context(default)?;
     // This contains real per-version tables, not default-version resources.
     // Consumers must still select the requested registry exactly.
-    copy_derived(default, root, "derived/blockdb", index)?;
-    if default_context.game_version == version {
+    ensure!(valid_id(version), "invalid game version adapter selector");
+    let exact = default.join("derived/version-adapters").join(version);
+    let archive = default.join("derived/version-adapters").join(format!("{version}.zip"));
+    if archive.is_file() {
+        unpack_version_adapter(&archive, root, version, index)?;
+    } else if exact.is_dir() {
+        // Flatten only the selected exact adapter into this imported package.
+        // Other versions' inventory/oracle facts never enter its active paths.
+        copy_adapters(root, &exact, version, index)?;
+        validate_adapter(root, "derived", version, index, true)?;
+    } else if default_context.game_version == version {
         for relative in ["derived/inventory.json", "derived/oracle", "derived/blockstates.json", "derived/enumerator"] {
             copy_derived(default, root, relative, index)?;
         }
     }
+    copy_derived(default, root, "derived/blockdb", index)?;
     // Visual icons and language are source-dependent; never reuse their old
     // generated results just because a modified JAR reports the same version.
     Ok(())
@@ -395,14 +549,7 @@ struct BlockProperties {
 }
 
 fn derive_registry_data(root: &Path, version: &str, index: &mut BTreeMap<String, ResourceRecord>) -> Result<()> {
-    if root.join("derived/inventory.json").is_file() {
-        let inventory: serde_json::Value = read_json(&root.join("derived/inventory.json"))?;
-        ensure!(inventory["minecraft_version"].as_str() == Some(version), "物品语义适配器与实际游戏版本不一致");
-    }
-    if root.join("derived/oracle/oracle-manifest.json").is_file() {
-        let manifest: serde_json::Value = read_json(&root.join("derived/oracle/oracle-manifest.json"))?;
-        ensure!(manifest["minecraft"].as_str() == Some(version), "注册表 oracle 与实际游戏版本不一致");
-    }
+    validate_semantic_versions(root, "derived", version, index)?;
     let mut blocks: BTreeMap<String, BlockProperties> = BTreeMap::new();
     if oracle_rows(root, "block_states.jsonl", |row| {
         let id = row["block_id"].as_str().context("oracle block state has no block_id")?;
