@@ -56,6 +56,11 @@
       "target": "x86_64-pc-windows-msvc",
       "runtime_build_id": "runtime-1-a9a4f949d57c-version-semantics-20261023-r1-x86_64-pc-windows-msvc",
       "module_manifest_sha256": "5c9d8b77db9896ef775310bca8c596c76c6fd9ad5b41ce0b3f6294d7ab9c8eb2"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_build_id": "runtime-1-e0aca6247c6f-five-features-20261024-r1-x86_64-pc-windows-msvc",
+      "module_manifest_sha256": "14d3c843a462e5cff3adc063d1cb675b06a09af9a7c1089a750143aef4eb392f"
     }
   ]
 }
