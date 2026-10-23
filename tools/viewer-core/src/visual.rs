@@ -56,6 +56,28 @@ pub fn build_metadata_output(root: &LitematicRoot, bounds: Option<RegionBounds>)
     }
 }
 
+/// 3D layer navigation needs world-Y bounds only. Ignore block arrays during
+/// NBT deserialization; never construct the 2D all-layer catalog or count blocks.
+pub fn read_layer_bounds(path: &Path) -> Result<Option<[i32; 2]>> {
+    #[derive(serde::Deserialize)]
+    struct RegionHeader {
+        #[serde(rename = "Position")] position: EnclosingSize,
+        #[serde(rename = "Size")] size: EnclosingSize,
+    }
+    #[derive(serde::Deserialize)]
+    struct Headers { #[serde(rename = "Regions")] regions: BTreeMap<String, RegionHeader> }
+    let file = crate::process_io::open_process_read_file(path)?;
+    let root: Headers = fastnbt::from_reader(std::io::BufReader::new(flate2::read::GzDecoder::new(file)))?;
+    let mut bounds: Option<[i32; 2]> = None;
+    for region in root.regions.values().filter(|region| region.size.x != 0 && region.size.y != 0 && region.size.z != 0) {
+        let end = i64::from(region.position.y) + i64::from(region.size.y) - i64::from(region.size.y.signum());
+        let end = i32::try_from(end).map_err(|_| anyhow!("Layer world-Y bounds overflow"))?;
+        let low = region.position.y.min(end); let high = region.position.y.max(end);
+        bounds = Some(bounds.map_or([low, high], |old| [old[0].min(low), old[1].max(high)]));
+    }
+    Ok(bounds)
+}
+
 pub fn compute_bounds(root: &LitematicRoot) -> Option<RegionBounds> {
     root.regions
         .values()
@@ -250,4 +272,25 @@ pub fn is_air_state(state: &str) -> bool {
         state,
         "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
     )
+}
+
+#[cfg(test)]
+mod layer_bounds_tests {
+    use super::*;
+    #[test]
+    fn layer_header_bounds_keep_negative_sizes_without_decoding_hidden_blocks() {
+        use std::io::Write;
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let point = |x, y, z| fastnbt::Value::Compound(std::collections::HashMap::from([
+            ("x".into(), fastnbt::Value::Int(x)), ("y".into(), fastnbt::Value::Int(y)), ("z".into(), fastnbt::Value::Int(z))]));
+        let region = |y, size| fastnbt::Value::Compound(std::collections::HashMap::from([
+            ("Position".into(), point(0,y,0)), ("Size".into(), point(1,size,1)),
+            // Deliberately not a block-state array: this path must ignore it.
+            ("BlockStates".into(), fastnbt::Value::String("not decoded".into()))]));
+        let root = fastnbt::Value::Compound(std::collections::HashMap::from([("Regions".into(),
+            fastnbt::Value::Compound(std::collections::HashMap::from([("negative".into(), region(-3,-4)), ("positive".into(),region(10,2))])))]));
+        let mut gzip = flate2::write::GzEncoder::new(file.reopen().unwrap(), flate2::Compression::default());
+        gzip.write_all(&fastnbt::to_bytes(&root).unwrap()).unwrap(); gzip.finish().unwrap();
+        assert_eq!(read_layer_bounds(file.path()).unwrap(), Some([-6,11]));
+    }
 }

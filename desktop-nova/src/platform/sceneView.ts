@@ -1,6 +1,7 @@
 import { invoke } from "./tauri";
 
 export interface SceneViewControls {
+  layerView?: boolean;
   layerMinY?: number | null;
   layerMaxY?: number | null;
   cameraMode?: "orbit" | "free";

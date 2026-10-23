@@ -415,6 +415,7 @@ async fn run_pipeline(
     report.mark("OpenProjection", None, started);
 
     let preflight_input = RenderServiceStartBuildInput {
+                layer_view: false, initial_layer_range: None,
         source_path: projection.to_path_buf(),
         build_mode: RenderBuildMode::Prebuilt,
         display_mode: crate::RenderDisplayMode::Full,
@@ -472,6 +473,7 @@ async fn run_pipeline(
         RenderBuildMode::Realtime => {
             facade.discard_preflight(&preflight.preflight_id);
             let realtime_input = RenderServiceStartBuildInput {
+                layer_view: false, initial_layer_range: None,
                 source_path: projection.to_path_buf(),
                 build_mode: RenderBuildMode::Realtime,
                 display_mode: crate::RenderDisplayMode::Full,

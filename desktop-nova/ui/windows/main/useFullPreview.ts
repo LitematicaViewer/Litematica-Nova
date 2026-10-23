@@ -16,15 +16,17 @@ import { elementToNativeChildPlacement } from "./embeddedViewerGeometry";
 const selectedLoadingByContext = new Map<string, { preload: boolean; buildMode: "prebuilt" | "realtime" }>();
 
 /** The existing exact renderer owns the scene; the mounted route owns presentation only. */
-export function useFullPreview(sourcePath: string, preload: boolean, blocked = false, displayMode: "full" | "standard" = "full") {
+export function useFullPreview(sourcePath: string, preload: boolean, blocked = false, displayMode: "full" | "standard" = "full", layerView?: { range: [number, number] | null }) {
   useI18n();
   const snapshot = useSyncExternalStore(subscribeApplicationRender, getApplicationRenderState, getApplicationRenderState);
   const [selection, setSelection] = useState<{ sourcePath: string; preload: boolean; displayMode: "full" | "standard"; buildMode: "prebuilt" | "realtime" } | null>(null);
-  const contextKey = JSON.stringify([windowsPathKey(sourcePath), displayMode]);
+  const isLayerView = layerView !== undefined;
+  const layerViewRef = useRef(layerView); layerViewRef.current = layerView;
+  const contextKey = JSON.stringify([windowsPathKey(sourcePath), displayMode, isLayerView]);
   const retainedSelection = selectedLoadingByContext.get(contextKey);
   const selectedBuildMode = selection?.sourcePath === sourcePath && selection.preload === preload && selection.displayMode === displayMode
     ? selection.buildMode : retainedSelection?.preload === preload ? retainedSelection.buildMode : preload ? "prebuilt" : "realtime";
-  const operation = findRenderOperationForSource(sourcePath, snapshot, { displayMode, buildMode: selectedBuildMode });
+  const operation = findRenderOperationForSource(sourcePath, snapshot, { displayMode, buildMode: selectedBuildMode, layerView: isLayerView });
   const [preflight, setPreflight] = useState<ResourcePreflightView | null>(null);
   const [pending, setPending] = useState(false);
   const [launchStage, setLaunchStage] = useState<"preflight" | "starting" | null>(null);
@@ -80,16 +82,16 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
     if (!mounted.current || generation.current !== version) return;
     if (grant && buildMode === "prebuilt" && !resourcePreflightAllows(grant, "continue_prebuilt")) throw new Error(t("render.preloadRejected"));
     setLaunchStage("starting");
-    selectedLoadingByContext.set(JSON.stringify([windowsPathKey(current.current.sourcePath), current.current.displayMode]), { preload: current.current.preload, buildMode });
+    selectedLoadingByContext.set(JSON.stringify([windowsPathKey(current.current.sourcePath), current.current.displayMode, isLayerView]), { preload: current.current.preload, buildMode });
     setSelection({ ...current.current, buildMode });
-    inFlightLaunches.current.set(version, JSON.stringify([windowsPathKey(current.current.sourcePath), current.current.displayMode]));
+    inFlightLaunches.current.set(version, JSON.stringify([windowsPathKey(current.current.sourcePath), current.current.displayMode, isLayerView]));
     let result;
     try {
       result = await startApplicationRender({ sourcePath: current.current.sourcePath, buildMode, displayMode: current.current.displayMode,
         preflightId: buildMode === "prebuilt" ? grant?.preflightId : undefined,
         resourceWarningConfirmed: buildMode === "prebuilt" && grant?.severity === "warning",
         realtimeDecisionId: buildMode === "realtime" ? grant?.preflightId : undefined,
-        clickStartedAtEpochMs: clickedAt.current });
+        clickStartedAtEpochMs: clickedAt.current, layerView: isLayerView, initialLayerRange: layerViewRef.current?.range });
     } catch (reason) {
       cancelledLaunches.current.delete(version); throw reason;
     } finally { inFlightLaunches.current.delete(version); }
@@ -122,6 +124,15 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
       throw new Error(t("render.containerSizeUnavailable"));
     }
     if (!mounted.current || generation.current !== version) return;
+    // No prediction, warning or preflight task belongs to the layer route.
+    // Runtime GPU allocation/residency safety remains in the existing Viewer.
+    if (isLayerView) {
+      if (operation && !["failed", "cancelled", "runtime_released"].includes(operation.state)) {
+        viewport.requestPresentationWhenReady(operation.operationId);
+        return;
+      }
+      await launch("realtime", version); return;
+    }
     const plan = await prepareApplicationRenderLaunch(expected.sourcePath, expected.preload, expected.displayMode,
       [placement.width, placement.height]);
     if (!mounted.current || generation.current !== version) {
@@ -159,7 +170,7 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
     if (operation) await updateApplicationRenderPresentation(operation.operationId, { mode: "hidden", visible: false, placement: null });
   });
   const close = () => execute(async () => {
-    const closingContext = JSON.stringify([windowsPathKey(current.current.sourcePath), current.current.displayMode]);
+    const closingContext = JSON.stringify([windowsPathKey(current.current.sourcePath), current.current.displayMode, isLayerView]);
     selectedLoadingByContext.delete(closingContext);
     for (const [version, context] of inFlightLaunches.current) {
       if (context === closingContext) cancelledLaunches.current.add(version);

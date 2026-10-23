@@ -102,6 +102,10 @@ pub(crate) struct ProjectRenderSettings {
     pub(crate) display_mode: RenderDisplayMode,
     pub(crate) build_mode: RenderBuildMode,
     pub(crate) layers: LayerSelection,
+    #[serde(default)]
+    pub(crate) layer_view: bool,
+    #[serde(default)]
+    pub(crate) initial_layer_range: Option<[i32; 2]>,
     pub(crate) highlights: HighlightRules,
     pub(crate) backend: GraphicsBackendPreference,
     pub(crate) shader: ShaderSelection,
@@ -119,6 +123,8 @@ impl Default for ProjectRenderSettings {
             display_mode: RenderDisplayMode::default(),
             build_mode: RenderBuildMode::default(),
             layers: LayerSelection::default(),
+            layer_view: false,
+            initial_layer_range: None,
             highlights: HighlightRules::default(),
             backend: GraphicsBackendPreference::default(),
             shader: ShaderSelection::default(),
@@ -281,6 +287,8 @@ pub(crate) struct RenderOperationView {
     pub(crate) source: ProjectSource,
     pub(crate) display_mode: RenderDisplayMode,
     pub(crate) build_mode: RenderBuildMode,
+    #[serde(default)]
+    pub(crate) layer_view: bool,
     pub(crate) state: OperationState,
     pub(crate) progress: OperationProgress,
     pub(crate) presentation: PresentationIntent,

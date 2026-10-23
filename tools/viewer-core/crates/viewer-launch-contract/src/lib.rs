@@ -20,6 +20,8 @@ pub const VIEWER_SESSION_EVENT_SCHEMA: &str = "litematica-nova.viewer-session-ev
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct SceneViewControls {
     pub apply_layer_range: bool,
+    #[serde(skip_serializing_if = "scene_control_false")]
+    pub layer_view: bool,
     pub layer_min_y: Option<i32>,
     pub layer_max_y: Option<i32>,
     pub camera_mode: Option<String>,
@@ -1219,7 +1221,13 @@ pub enum RenderBuildMode {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct InitialLayerView { pub range: Option<[i32; 2]> }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct BuildCacheTask {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_layer_view: Option<InitialLayerView>,
     pub ready_file: PathBuf,
     pub cache_file: PathBuf,
     pub build_mode: RenderBuildMode,
@@ -1243,6 +1251,12 @@ impl ViewerEffectsProfile {
 
 impl BuildCacheTask {
     fn validate(&self) -> Result<(), String> {
+        if let Some(view) = &self.initial_layer_view {
+            if self.build_mode != RenderBuildMode::Realtime || self.effects_profile != ViewerEffectsProfile::Unlit {
+                return Err("3D layers require Standard Realtime".into());
+            }
+            if view.range.is_some_and(|[low, high]| low > high) { return Err("Layer minimum exceeds maximum".into()); }
+        }
         require_absolute("task.readyFile", &self.ready_file)?;
         require_absolute("task.cacheFile", &self.cache_file)?;
         if self.ready_file == self.cache_file {
@@ -2176,7 +2190,8 @@ mod tests {
             content: ViewerContent::default(),
             renderer: interactive_contract().renderer,
             task: ViewerTask::BuildCache(BuildCacheTask {
-                ready_file: absolute("ready.json"),
+                initial_layer_view: None,
+            ready_file: absolute("ready.json"),
                 cache_file: absolute("scene.cache"),
                 build_mode: RenderBuildMode::Prebuilt,
                 effects_profile: ViewerEffectsProfile::Full,
@@ -2199,7 +2214,8 @@ mod tests {
                 ViewerContent::default(),
                 None,
                 ViewerTask::BuildCache(BuildCacheTask {
-                    ready_file: absolute("ready.json"),
+                    initial_layer_view: None,
+            ready_file: absolute("ready.json"),
                     cache_file: absolute("scene.cache"),
                     build_mode,
                     effects_profile: ViewerEffectsProfile::Full,
@@ -2224,7 +2240,8 @@ mod tests {
             ViewerContent::default(),
             None,
             ViewerTask::BuildCache(BuildCacheTask {
-                ready_file: absolute("ready.json"),
+                initial_layer_view: None,
+            ready_file: absolute("ready.json"),
                 cache_file: absolute("scene.cache"),
                 build_mode: RenderBuildMode::Prebuilt,
                 effects_profile: ViewerEffectsProfile::Full,

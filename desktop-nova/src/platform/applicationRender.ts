@@ -179,6 +179,7 @@ export interface RenderOperationView {
   source: ProjectSource;
   displayMode: "normal" | "standard" | "fast_experimental" | "full";
   buildMode: "prebuilt" | "realtime";
+  layerView?: boolean;
   state: RenderOperationState;
   progress: RenderOperationProgress;
   presentation: PresentationIntent;
@@ -192,6 +193,8 @@ export interface ApplicationRenderSnapshot {
 }
 
 export interface StartApplicationRenderInput {
+  layerView?: boolean;
+  initialLayerRange?: [number, number] | null;
   sourcePath: string;
   buildMode: "prebuilt" | "realtime";
   displayMode?: "full" | "standard";

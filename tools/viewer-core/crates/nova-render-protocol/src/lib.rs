@@ -469,6 +469,12 @@ impl ArtifactPayloadProfile {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RealtimeCellDemand {
+    #[serde(default)]
+    pub layer_view: bool,
+    #[serde(default)]
+    pub layer_min_y: Option<i32>,
+    #[serde(default)]
+    pub layer_max_y: Option<i32>,
     pub revision: u64,
     pub camera_position: [f64; 3],
     pub predicted_camera_position: [f64; 3],
@@ -480,6 +486,9 @@ impl RealtimeCellDemand {
     pub const MAX_CELLS: usize = 65_536;
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.layer_min_y.zip(self.layer_max_y).is_some_and(|(low, high)| low > high) {
+            return Err("realtime layer minimum exceeds maximum".into());
+        }
         if self.revision == 0
             || self
                 .camera_position
@@ -2107,6 +2116,7 @@ mod tests {
     #[test]
     fn realtime_demand_round_trip_and_validation() {
         let demand = RealtimeCellDemand {
+            layer_view: false, layer_min_y: None, layer_max_y: None,
             revision: 1,
             camera_position: [0.0; 3],
             predicted_camera_position: [1.0, 0.0, 0.0],

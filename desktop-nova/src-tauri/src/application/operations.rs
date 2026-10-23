@@ -502,6 +502,11 @@ impl ApplicationOperations {
         self.run_core_json(vec!["analyze".to_owned(), path_text(&source)])
     }
 
+    pub(crate) fn read_layer_bounds(&self, input: InspectProjectInput) -> Result<Value, String> {
+        let source = self.resolve_path(&input.source_path);
+        self.cached_analysis(&source, vec!["layer-bounds".into(), path_text(&source)])
+    }
+
     pub(crate) fn read_layer_meta(&self, input: InspectProjectInput) -> Result<LayerSliceMeta, String> {
         let source = self.resolve_path(&input.source_path);
         Ok(self.cached_layers(&source)?.meta.clone())

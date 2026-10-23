@@ -1751,13 +1751,23 @@ export function FlakePage({ currentFile, setRoute }: any) {
     setMarkerStatus("");
     measurementIdRef.current = 0;
     setDebugStateBlock(null);
-    void loadProjectionLayers();
+    if (viewMode === "2d") void loadProjectionLayers();
+    else { setMeta(null); setSliceDataByY({}); setIsLoadingLayers(false); }
     const requestId = syncRequestIdRef.current;
     void refreshProjectionMarkers().catch((error) => {
       if (requestId === syncRequestIdRef.current) setMarkerStatus({ key: "flake.originReadFailed", params: {error:String(error)} });
     });
     return () => { ++syncRequestIdRef.current; ++markerRequestIdRef.current; };
   }, [currentFile]);
+
+  // Selecting 3D for a new source must not start the unrelated all-layer 2D catalog.
+  // Returning to 2D loads it only if this source has not already been prepared.
+  const previousViewMode = useRef(viewMode);
+  useEffect(() => {
+    const previous = previousViewMode.current;
+    previousViewMode.current = viewMode;
+    if (previous === "3d" && viewMode === "2d" && currentFile && !meta && !isLoadingLayers) void loadProjectionLayers();
+  }, [viewMode]);
 
   useEffect(() => () => {
     handleToolSplitterPointerUp();

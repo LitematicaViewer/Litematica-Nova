@@ -1228,6 +1228,12 @@ async fn application_inspect_project(
 }
 
 #[tauri::command]
+async fn application_read_layer_bounds(input: InspectProjectInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let operations = operations.inner().clone();
+    run_application_operation(move || operations.read_layer_bounds(input)).await
+}
+
+#[tauri::command]
 async fn application_edit_project_metadata(
     input: EditProjectMetadataInput,
     operations: tauri::State<'_, ApplicationOperations>,
@@ -2949,6 +2955,10 @@ async fn open_ui_demo_window(app: AppHandle) -> Result<(), String> {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RenderServiceStartBuildInput {
+    #[serde(default)]
+    layer_view: bool,
+    #[serde(default)]
+    initial_layer_range: Option<[i32; 2]>,
     source_path: PathBuf,
     build_mode: RenderBuildMode,
     #[serde(default)]
@@ -3003,6 +3013,7 @@ async fn application_render_launch_plan(
     }
     let plan_started = std::time::Instant::now();
     let input = RenderServiceStartBuildInput {
+        layer_view: false, initial_layer_range: None,
         source_path,
         build_mode: RenderBuildMode::Prebuilt,
         display_mode: selected_mode,
@@ -3078,6 +3089,7 @@ mod full_launch_plan_tests {
                 [width.parse::<u32>().unwrap(), height.parse::<u32>().unwrap()]
             }).unwrap_or([2316, 1148]);
             let (mut request, environment) = application_render_request(RenderServiceStartBuildInput {
+                layer_view: false, initial_layer_range: None,
                 source_path: source.clone(), build_mode: RenderBuildMode::Prebuilt, display_mode,
                 preflight_id: None, resource_warning_confirmed: false, realtime_decision_id: None,
                 click_started_at_epoch_ms: None, viewport: Some(viewport),
@@ -3295,7 +3307,8 @@ mod full_launch_plan_tests {
                 vec![RenderDisplayMode::Standard, RenderDisplayMode::Full]
             };
             for display_mode in display_modes {
-                let input = RenderServiceStartBuildInput { source_path: source.clone(), build_mode: RenderBuildMode::Prebuilt,
+                let input = RenderServiceStartBuildInput { layer_view: false, initial_layer_range: None,
+                    source_path: source.clone(), build_mode: RenderBuildMode::Prebuilt,
                     display_mode, preflight_id: None, resource_warning_confirmed: false, realtime_decision_id: None,
                     click_started_at_epoch_ms: None, viewport: Some(viewport) };
                 let started = Instant::now();
@@ -3388,6 +3401,14 @@ fn application_render_request(
         ));
     }
     validate_render_viewport(input.viewport, input.build_mode)?;
+    if input.layer_view && (input.display_mode != RenderDisplayMode::Standard || input.build_mode != RenderBuildMode::Realtime
+        || input.preflight_id.is_some() || input.realtime_decision_id.is_some() || input.resource_warning_confirmed) {
+        return Err("3D layers require Standard Realtime without resource preflight".into());
+    }
+    if input.initial_layer_range.is_some_and(|[low, high]| low > high) {
+        return Err("Layer minimum exceeds maximum".into());
+    }
+    if !input.layer_view && input.initial_layer_range.is_some() { return Err("Initial layer range requires 3D layers".into()); }
     let config = read_user_config_data(&current_user_config_dir()?);
     if !matches!(input.display_mode, RenderDisplayMode::Full | RenderDisplayMode::Standard) {
         return Err("精确渲染入口只接受 full 或 standard；快速模式保持独立启动链".to_owned());
@@ -3436,6 +3457,8 @@ fn application_render_request(
         display_mode: input.display_mode,
         build_mode: input.build_mode,
         layers: LayerSelection::All,
+        layer_view: input.layer_view,
+        initial_layer_range: input.initial_layer_range,
         highlights: Default::default(),
         backend,
         shader: ShaderSelection {
@@ -4101,6 +4124,7 @@ fn main() {
             application_update_skip,
             application_update_restart,
             application_inspect_project,
+            application_read_layer_bounds,
             application_edit_project_metadata,
             application_read_layer_meta,
             application_read_layer,

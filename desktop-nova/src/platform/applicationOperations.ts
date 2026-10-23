@@ -254,6 +254,10 @@ export function inspectProject(input: ApplicationInspectProjectInput): Promise<P
   return invoke("application_inspect_project", { input });
 }
 
+export function readLayerBounds(input: ApplicationInspectProjectInput): Promise<[number, number] | null> {
+  return invoke("application_read_layer_bounds", { input });
+}
+
 export function readLayerMeta(input: ApplicationInspectProjectInput): Promise<LayerSliceMeta> {
   return invoke("application_read_layer_meta", { input });
 }

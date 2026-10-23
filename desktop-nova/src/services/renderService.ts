@@ -72,13 +72,14 @@ export function isApplicationRenderStateReady(): boolean {
 export function findRenderOperationForSource(
   sourcePath: string,
   source: ApplicationRenderSnapshot = snapshot,
-  settings?: Pick<RenderOperationView, "displayMode" | "buildMode">,
+  settings?: Pick<RenderOperationView, "displayMode" | "buildMode" | "layerView">,
 ): RenderOperationView | null {
   const normalized = windowsPathKey(sourcePath);
   return [...source.operations]
     .reverse()
     .find((operation) => windowsPathKey(operation.source.path) === normalized
-      && (!settings || (operation.displayMode === settings.displayMode && operation.buildMode === settings.buildMode))) ?? null;
+      && (!settings || (operation.displayMode === settings.displayMode && operation.buildMode === settings.buildMode
+        && !!operation.layerView === !!settings.layerView))) ?? null;
 }
 
 export type {

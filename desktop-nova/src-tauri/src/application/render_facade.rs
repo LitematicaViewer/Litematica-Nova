@@ -543,6 +543,7 @@ impl RenderFacade {
             source: request.source.clone(),
             display_mode: request.settings.display_mode,
             build_mode: request.settings.build_mode,
+            layer_view: request.settings.layer_view,
             state: OperationState::Requested,
             progress: OperationProgress {
                 phase: "requested".to_owned(),
@@ -849,7 +850,10 @@ impl RenderFacade {
                 .filter(|record| capture_source_matches(&record.view.source.path, source)
                     && display_mode.is_none_or(|mode| mode == record.view.display_mode)
                     && !record.cancel_requested
-                    && matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady))
+                    && (!controls.apply_layer_range || record.view.layer_view == controls.layer_view)
+                    && (matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady)
+                        || (controls.layer_view && controls.apply_layer_range && record.view.layer_view
+                            && !matches!(record.view.state, OperationState::Failed | OperationState::Cancelled | OperationState::RuntimeReleased))))
                 .find_map(|record| record.binding.as_ref().and_then(|binding| binding.session_id.clone()))
                 .ok_or("请先启动对应投影的预览")?
         };
@@ -1300,6 +1304,14 @@ fn derive_build_start(
     environment: RenderEnvironmentInputs,
 ) -> BuildStart {
     let display_mode = request.settings.display_mode.as_str().to_owned();
+    let mut build_options = BTreeMap::from([("displayMode".to_owned(), display_mode.clone())]);
+    if request.settings.layer_view {
+        build_options.insert("layerView".into(), "true".into());
+        if let Some([low, high]) = request.settings.initial_layer_range {
+            build_options.insert("initialLayerMinY".into(), low.to_string());
+            build_options.insert("initialLayerMaxY".into(), high.to_string());
+        }
+    }
     BuildStart {
         source_path: request.source.path.clone(),
         display_mode: display_mode.clone(),
@@ -1312,10 +1324,9 @@ fn derive_build_start(
             resource_packs: request.settings.resource_packs.clone(),
             asset_inputs: environment.asset_inputs,
         },
-        // Keep the established identity material byte-for-byte compatible for
-        // the default product route. Layer/highlight data is not smuggled into
-        // an unowned renderer map while the data-plane contract is frozen.
-        build_options: BTreeMap::from([("displayMode".to_owned(), display_mode)]),
+        // Initial layer controls seed the existing bounded Standard stream.
+        // Subsequent layer changes are display/demand updates, never new builds.
+        build_options,
         presentation: derive_presentation_spec(&request.settings, environment.viewport),
     }
 }
@@ -1353,6 +1364,13 @@ fn derive_presentation_spec(settings: &ProjectRenderSettings, viewport: Option<[
             ),
         ]),
     };
+    if settings.layer_view {
+        spec.render_settings.insert("layerView".into(), "true".into());
+        if let Some([low, high]) = settings.initial_layer_range {
+            spec.render_settings.insert("initialLayerMinY".into(), low.to_string());
+            spec.render_settings.insert("initialLayerMaxY".into(), high.to_string());
+        }
+    }
     // The admission meter needs the real physical target, not a camera default
     // or CSS size. Keep it frozen with the prospective request across the modal.
     if let Some([width, height]) = viewport {
@@ -1795,6 +1813,24 @@ mod tests {
             graphics_backend_persisted_value(GraphicsBackendPreference::IrisGl46),
             "iris-gl46"
         );
+    }
+
+    #[test]
+    fn layer_route_seeds_current_range_without_changing_normal_admission_inputs() {
+        let mut request = request();
+        request.settings.display_mode = RenderDisplayMode::Standard;
+        request.settings.build_mode = RenderBuildMode::Realtime;
+        request.settings.layer_view = true;
+        request.settings.initial_layer_range = Some([-12, -12]);
+        let start = derive_build_start(&request, RenderEnvironmentInputs::default());
+        assert_eq!(start.build_mode, ProtocolRenderBuildMode::Realtime);
+        assert_eq!(start.build_options.get("layerView").map(String::as_str), Some("true"));
+        assert_eq!(start.presentation.render_settings.get("initialLayerMinY").map(String::as_str), Some("-12"));
+        request.settings.layer_view = false;
+        request.settings.initial_layer_range = None;
+        let ordinary = derive_build_start(&request, RenderEnvironmentInputs::default());
+        assert_eq!(ordinary.build_options.len(), 1);
+        assert!(!ordinary.presentation.render_settings.contains_key("layerView"));
     }
 
     #[test]

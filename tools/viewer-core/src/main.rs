@@ -244,6 +244,9 @@ fn main() -> Result<()> {
             )?;
             emit_output(&output, args.output.as_deref())?;
         }
+        "layer-bounds" => {
+            emit_output(&visual::read_layer_bounds(&args.input)?, args.output.as_deref())?;
+        }
         "analyze" => {
             let output = analyze::analyze_litematic(&args.input, args.include_entities)?;
             emit_output(&output, args.output.as_deref())?;

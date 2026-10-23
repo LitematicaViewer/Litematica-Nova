@@ -126,6 +126,7 @@ impl ViewerLaunchContext {
             self.compatibility.content().clone(),
             None,
             ViewerTask::BuildCache(BuildCacheTask {
+                initial_layer_view: None,
                 ready_file,
                 cache_file,
                 build_mode: ::viewer_launch_contract::RenderBuildMode::Prebuilt,
@@ -456,6 +457,7 @@ mod tests {
             ViewerContent::default(),
             None,
             ViewerTask::BuildCache(BuildCacheTask {
+                initial_layer_view: None,
                 ready_file: absolute("ready.json"),
                 cache_file: absolute("scene.cache"),
                 build_mode: ::viewer_launch_contract::RenderBuildMode::Prebuilt,

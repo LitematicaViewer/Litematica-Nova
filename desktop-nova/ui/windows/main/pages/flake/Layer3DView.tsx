@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { inspectProject } from "../../../../../src/platform/applicationOperations";
+import { readLayerBounds } from "../../../../../src/platform/applicationOperations";
 import { updateSceneView } from "../../../../../src/platform/sceneView";
 import { t } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
@@ -17,12 +17,11 @@ const rememberedLayers = new Map<string, { range: [number, number]; selection: L
 
 export function Layer3DView({ sourcePath, blocked = false }: { sourcePath: string; blocked?: boolean }) {
   useI18n();
-  const preview = useFullPreview(sourcePath, false, blocked, "standard");
   const [bounds, setBounds] = useState<[number, number] | null>(null);
   const [range, setRange] = useState<[number, number]>([0, 0]);
   const [selection, setSelection] = useState<"single" | "range" | "all">("single");
   const [error, setError] = useState("");
-  const [occupied, setOccupied] = useState<number[]>([]);
+  const preview = useFullPreview(sourcePath, false, blocked, "standard", { range: selection === "all" ? null : range });
   const previousRange = useRef<[number, number]>([0, 0]);
   const operationId = preview.operation?.operationId;
   const ready = preview.ready;
@@ -33,21 +32,15 @@ export function Layer3DView({ sourcePath, blocked = false }: { sourcePath: strin
   useEffect(() => {
     let current = true;
     setBounds(null); setError("");
-    void inspectProject({ sourcePath }).then(analysis => {
+    void readLayerBounds({ sourcePath }).then(layerBounds => {
       if (!current) return;
-      const intervals = analysis.regions.filter(region => region.size.y !== 0).map(region => [
-        region.position.y + Math.min(0, region.size.y + 1),
-        region.position.y + Math.max(0, region.size.y - 1),
-      ]);
-      if (!intervals.length) throw new Error(t("layerView.noLayers"));
-      const min = Math.min(...intervals.map(value => value[0]));
-      const max = Math.max(...intervals.map(value => value[1]));
+      if (!layerBounds) throw new Error(t("layerView.noLayers"));
+      const [min, max] = layerBounds;
       const remembered = rememberedLayers.get(sourcePath);
       const clamp = (value: number) => Math.max(min, Math.min(max, value));
       const restored: [number, number] = remembered ? [clamp(remembered.range[0]), clamp(remembered.range[1])] : [min, min];
       setBounds([min, max]); setRange(restored); setSelection(remembered?.selection ?? "single");
       previousRange.current = remembered ? [clamp(remembered.previousRange[0]), clamp(remembered.previousRange[1])] : [min, min];
-      setOccupied(analysis.layers_summary.filter(layer => layer.total_non_air_blocks > 0).map(layer => layer.world_y));
     }).catch(reason => { if (current) setError(String(reason)); });
     started.current = null;
     return () => { current = false; };
@@ -66,7 +59,7 @@ export function Layer3DView({ sourcePath, blocked = false }: { sourcePath: strin
   const applying = useRef(false);
   useEffect(() => {
     const version = ++revision.current;
-    if (!ready || !bounds || blocked) { queued.current = null; return; }
+    if (!operationId || !bounds || blocked) { queued.current = null; return; }
     queued.current = { sourcePath, low: selection === "all" ? null : range[0], high: selection === "all" ? null : range[1], revision: version };
     if (applying.current) return;
     applying.current = true;
@@ -75,7 +68,7 @@ export function Layer3DView({ sourcePath, blocked = false }: { sourcePath: strin
         while (queued.current) {
           const next = queued.current; queued.current = null;
           try {
-            await updateSceneView({ sourcePath: next.sourcePath, displayMode: "standard", controls: { layerMinY: next.low, layerMaxY: next.high } });
+            await updateSceneView({ sourcePath: next.sourcePath, displayMode: "standard", controls: { layerView: true, layerMinY: next.low, layerMaxY: next.high } });
             if (revision.current === next.revision) setError("");
           } catch (reason) { if (revision.current === next.revision) setError(String(reason)); }
         }
@@ -108,7 +101,6 @@ export function Layer3DView({ sourcePath, blocked = false }: { sourcePath: strin
   useEffect(() => {
     if (bounds) rememberedLayers.set(sourcePath, { range, selection, previousRange: previousRange.current });
   }, [sourcePath, bounds, range, selection]);
-  const noBlocks = selection !== "all" && !occupied.some(y => y >= range[0] && y <= range[1]);
   return <section className="layer3d-view" onKeyDown={event => {
     if (event.target instanceof HTMLElement && event.target.closest("input,textarea,select,[contenteditable=true]")) return;
     if (event.key === "PageUp" || event.key === "PageDown") { event.preventDefault(); step(event.key === "PageUp" ? 1 : -1); }
@@ -127,7 +119,6 @@ export function Layer3DView({ sourcePath, blocked = false }: { sourcePath: strin
     <Slider className="layer3d-slider" aria-label={t("layerView.layers")} min={bounds?.[0] ?? 0} max={bounds ? Math.max(bounds[0] + 1, bounds[1]) : 1}
       value={selection === "range" ? range : [range[0]]} disabled={!bounds || bounds[0] === bounds[1]}
       onValueChange={values => change(values[0], values[1] ?? values[0], selection === "range" ? "range" : "single")} />
-    {ready && noBlocks && <div role="status">{t("layerView.noBlocks")}</div>}
     {preview.error && <Button disabled={preview.pending} onClick={() => void preview.start()}>{t("render.reload")}</Button>}
     {(error || preview.error) && <div role="alert" className="nova-error">{error || preview.error}</div>}
     <div ref={preview.hostRef} className="layer3d-viewport" aria-label={t("layerView.viewport")}>
