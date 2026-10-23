@@ -2,10 +2,10 @@
   "compatibility": {
     "schema": "nova.runtime-compatibility.v1",
     "runtime_abi": 1,
-    "runtime_build_id": "runtime-1-3d35bca301b1-game-data-20261023-r1-x86_64-pc-windows-msvc",
+    "runtime_build_id": "runtime-1-16367e0b9db3-four-features-20261023-r1-x86_64-pc-windows-msvc",
     "target": "x86_64-pc-windows-msvc",
     "module_id": "nova_protected_module.dll",
-    "module_manifest_sha256": "531ed1a10335bf0b95e0e52e67679fcc60b93a0b8249286672fc82d7154994f9",
+    "module_manifest_sha256": "eb766e3d1f95ce49a6bcb4c71de5845cffe45d75211562d9fa89e2d88ce94cbc",
     "endpoint": "https://45-62-112-121.sslip.io:8448/nova-core",
     "capabilities": [
       "standard",
@@ -17,7 +17,7 @@
       "native-viewer",
       "cpu-audit"
     ],
-    "created_ms": 1792748389148
+    "created_ms": 1792752603839
   },
-  "signature": "f7oHUbN9Y51F6sXxE5HCQimKmLkmNz4f9knuLZ/Vr7Zkrllndwh9opQoS397rKLc11FUeJblLIxsO0ia38+nCA=="
+  "signature": "hoRc9nFa/GJWD/czCbOp45t7ANKn6oVsd1e9iMf/sjMbdA0lpbFkHUbFFnvu7nRxbQC50VGxLwLRaBAKiByUCw=="
 }

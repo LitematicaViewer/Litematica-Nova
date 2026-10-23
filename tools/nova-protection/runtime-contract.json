@@ -46,6 +46,11 @@
       "target": "x86_64-pc-windows-msvc",
       "runtime_build_id": "runtime-1-3d35bca301b1-game-data-20261023-r1-x86_64-pc-windows-msvc",
       "module_manifest_sha256": "531ed1a10335bf0b95e0e52e67679fcc60b93a0b8249286672fc82d7154994f9"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_build_id": "runtime-1-16367e0b9db3-four-features-20261023-r1-x86_64-pc-windows-msvc",
+      "module_manifest_sha256": "13e151446a8a3227d87039d8aa7ad7d53259f554f08cdb56477960b02b1f0e16"
     }
   ]
 }
