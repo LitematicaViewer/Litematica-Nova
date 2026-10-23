@@ -455,6 +455,19 @@ impl QuickPreviewHost {
         Ok(())
     }
 
+    pub(crate) fn release_camera_input(&self) -> Result<(), String> {
+        let mut slot = self.session.lock().map_err(|error| error.to_string())?;
+        if let Some(session) = slot.as_mut() {
+            session.refresh(&self.supervisor)?;
+            if session.view.state == "ready" {
+                let controls = viewer_launch_contract::SceneViewControls { release_camera_input: true, ..Default::default() };
+                session.publish_command(&ViewerSessionCommand::set_view(session.session_id.clone(), session.next_command, controls)?)?;
+                session.next_command += 1;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_scene_view(&self, source: &Path, controls: viewer_launch_contract::SceneViewControls) -> Result<bool, String> {
         controls.validate()?;
         let mut slot = self.session.lock().map_err(|error| error.to_string())?;

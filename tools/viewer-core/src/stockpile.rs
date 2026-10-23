@@ -198,14 +198,14 @@ fn stockpile_material_item(
     breakdown: StackBreakdown,
     recipe_availability: &RecipeAvailability,
 ) -> StockpileMaterialItem {
-    let namespace_id = item.block_id.clone();
-    let id = namespace_id
+    let namespace_id = item.item_identity.clone().unwrap_or_else(|| item.block_id.clone());
+    let id = item.block_id
         .split(':')
         .next_back()
-        .unwrap_or(namespace_id.as_str())
+        .unwrap_or(item.block_id.as_str())
         .to_string();
-    let category = categorize_material(&namespace_id);
-    let recipe_status = recipe_status_for_material(&namespace_id, recipe_availability);
+    let category = categorize_material(&item.block_id);
+    let recipe_status = recipe_status_for_material(&item.block_id, recipe_availability);
     StockpileMaterialItem {
         id,
         namespace_id: namespace_id.clone(),
@@ -217,7 +217,7 @@ fn stockpile_material_item(
         shulker_boxes: breakdown.shulker_boxes,
         category: category.name.to_string(),
         category_icon: category.icon.to_string(),
-        item_icon_key: namespace_id.clone(),
+        item_icon_key: item.block_id.clone(),
         icon_path: String::new(),
         icon_available: false,
         icon_diagnostic: None,
@@ -232,6 +232,7 @@ fn stockpile_material_item(
 #[derive(Debug, Clone)]
 struct NormalizedMaterialItem {
     block_id: String,
+    item_identity: Option<String>,
     display_name: String,
     total_count: u64,
     region_counts: Option<Vec<RegionCountOutput>>,
@@ -257,10 +258,12 @@ fn normalize_material_items(
                 ),
             });
         }
+        let identity = item.item_identity.as_deref().unwrap_or(normalized);
         let entry = by_id
-            .entry(normalized.to_string())
+            .entry(identity.to_string())
             .or_insert_with(|| NormalizedMaterialItem {
                 block_id: normalized.to_string(),
+                item_identity: item.item_identity.clone(),
                 display_name: if normalized == item.block_id {
                     item.display_name.clone()
                 } else {
@@ -853,6 +856,39 @@ mod tests {
             recipe_status_for_material("minecraft:stone", &RecipeAvailability::Missing),
             "missing"
         );
+    }
+
+    #[test]
+    fn variant_tasks_keep_distinct_claim_keys_and_plain_catalog_ids() {
+        use crate::stats_api::MaterialItemOutput;
+        let row = |identity: Option<&str>, count| MaterialItemOutput {
+            block_id: "minecraft:stone".into(),
+            item_identity: identity.map(str::to_owned),
+            display_name: "Stone".into(),
+            count, block_count: count, container_item_count: 0, total_count: count,
+            icon_hint: "minecraft:stone".into(),
+            stack_size: 64, can_fit_container: true,
+            material_status: "item".into(), has_custom_stack_size: false,
+            region_counts: None, layer_counts: None, scope_counts: None,
+        };
+        let (items, diagnostics) = super::normalize_material_items(&[
+            row(None, 4), row(None, 3),
+            row(Some("minecraft:stone#nbt-a"), 2),
+            row(Some("minecraft:stone#nbt-b"), 5),
+            row(Some("minecraft:stone#nbt-a"), 1),
+        ]);
+        let ordinary_json = serde_json::to_value(row(None, 4)).unwrap();
+        assert!(ordinary_json.get("item_identity").is_none());
+        assert!(serde_json::from_value::<MaterialItemOutput>(ordinary_json).unwrap().item_identity.is_none());
+        assert!(diagnostics.is_empty());
+        assert_eq!(items.len(), 3);
+        let mapped = items.iter().map(|item| super::stockpile_material_item(
+            item, stack_breakdown(item.total_count, 64), &RecipeAvailability::Missing,
+        )).collect::<Vec<_>>();
+        assert_eq!(mapped.iter().find(|item| item.namespace_id == "minecraft:stone").unwrap().required_count, 7);
+        assert_eq!(mapped.iter().find(|item| item.namespace_id == "minecraft:stone#nbt-a").unwrap().required_count, 3);
+        assert_eq!(mapped.iter().find(|item| item.namespace_id == "minecraft:stone#nbt-b").unwrap().required_count, 5);
+        assert!(mapped.iter().all(|item| item.item_icon_key == "minecraft:stone" && item.id == "stone" && item.display_name == "Stone"));
     }
 
     #[test]

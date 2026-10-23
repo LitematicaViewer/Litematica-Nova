@@ -32,6 +32,7 @@ pub(crate) struct ApplicationOperations {
     layer_cache: Arc<Mutex<BTreeMap<AnalysisKey, Arc<OnceLock<Result<Arc<LayerCatalog>, String>>>>>>,
     lifecycle: Arc<(Mutex<OperationLifecycle>, Condvar)>,
     world_exports: Arc<Mutex<BTreeMap<String, WorldExportPaths>>>,
+    stockpile_tasks: Arc<Mutex<BTreeMap<String, DesktopTaskContext>>>,
     iris_inspector: Arc<Mutex<(super::protected_render::ProtectedRender, Option<nova_render_protocol::ProtectedTask>)>>,
 }
 
@@ -289,7 +290,7 @@ pub(crate) struct ProjectStatsInput {
     pub(crate) known_revision: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MaterialScopeKind {
     All,
@@ -297,7 +298,7 @@ pub(crate) enum MaterialScopeKind {
     Layer,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct MaterialScope {
     pub(crate) kind: MaterialScopeKind,
@@ -311,6 +312,21 @@ pub(crate) struct ProjectMaterialsInput {
     pub(crate) scope: MaterialScope,
     pub(crate) include_container_items: bool,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct StockpileTaskInput {
+    source_path: String, scope: MaterialScope, include_container_items: bool, multiplier: u64,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct StockpileTaskSetInput {
+    pub(crate) task_id: String, source_revision: String, material_id: String, quantity: u64,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct StockpileTaskResetInput { pub(crate) task_id: String, source_revision: String }
+struct DesktopTaskContext { key: AnalysisKey, request: Value }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -458,6 +474,7 @@ impl ApplicationOperations {
             layer_cache: Arc::new(Mutex::new(BTreeMap::new())),
             lifecycle: Arc::new((Mutex::new(OperationLifecycle::default()), Condvar::new())),
             world_exports: Arc::new(Mutex::new(BTreeMap::new())),
+            stockpile_tasks: Arc::new(Mutex::new(BTreeMap::new())),
             iris_inspector: Arc::new(Mutex::new((super::protected_render::ProtectedRender::default(), None))),
         })
     }
@@ -745,6 +762,49 @@ impl ApplicationOperations {
                 .cloned()
                 .unwrap_or_else(|| Value::Array(Vec::new()))
         }))
+    }
+
+    pub(crate) fn stockpile_task(&self, input: StockpileTaskInput) -> Result<Value, String> {
+        if !(1..=1_000_000).contains(&input.multiplier) { return Err("建造份数必须为 1…1000000".into()); }
+        let source = self.resolve_path(&input.source_path);
+        let key = AnalysisKey::new(&source, stats_args(&source, input.include_container_items))?;
+        let snapshot = self.material_snapshot(&source, &input.scope, input.include_container_items)?;
+        if AnalysisKey::new(&source, key.args.clone())? != key { return Err("投影已更新，请重新加载备货任务".into()); }
+        let task_id = desktop_task_identity(&key.source, &input.scope, input.include_container_items, input.multiplier, &snapshot);
+        let request = json!({"taskId":task_id,"sourceRevision":key.revision(),"sourcePath":path_text(&key.source),
+            "snapshot":snapshot,"multiplier":input.multiplier});
+        let mut tasks = self.stockpile_tasks.lock().map_err(|_| "备货任务锁异常")?;
+        let result = self.run_stockpile_request(&request)?;
+        if tasks.len() >= 16 && !tasks.contains_key(&task_id) {
+            if let Some(old) = tasks.keys().next().cloned() { tasks.remove(&old); }
+        }
+        tasks.insert(task_id, DesktopTaskContext { key, request });
+        Ok(result)
+    }
+
+    pub(crate) fn set_stockpile_quantity(&self, input: StockpileTaskSetInput) -> Result<Value, String> {
+        self.mutate_stockpile(&input.task_id, &input.source_revision, json!({"materialId":input.material_id,"quantity":input.quantity}))
+    }
+    pub(crate) fn reset_stockpile(&self, input: StockpileTaskResetInput) -> Result<Value, String> {
+        self.mutate_stockpile(&input.task_id, &input.source_revision, json!({"reset":true}))
+    }
+    fn mutate_stockpile(&self, id: &str, revision: &str, mutation: Value) -> Result<Value, String> {
+        let tasks = self.stockpile_tasks.lock().map_err(|_| "备货任务锁异常")?;
+        let context = tasks.get(id).ok_or("备货任务已失效，请重新加载")?;
+        if context.key.revision() != revision || AnalysisKey::new(&context.key.source, context.key.args.clone())? != context.key {
+            return Err("投影已更新，请重新加载备货任务；原备货进度已保留".into());
+        }
+        let mut request = context.request.clone();
+        request["mutation"] = mutation;
+        self.run_stockpile_request(&request)
+    }
+    fn run_stockpile_request(&self, request: &Value) -> Result<Value, String> {
+        let (generation, prefix) = self.next_operation("stockpile-task");
+        let mut files = OperationFiles::new();
+        let request_path = files.track(self.operation_path(&prefix, "request.json"));
+        write_json(&request_path, request)?;
+        let result = self.run_core(generation, &prefix, vec!["stockpile-task".into(), path_text(&request_path)], &mut files)?;
+        parse_core_json(&result.stdout)
     }
 
     pub(crate) fn export_material_list(&self, input: ExportMaterialListInput) -> Result<Value, String> {
@@ -1322,6 +1382,15 @@ fn material_snapshot_for_scope(mut snapshot: Value, scope: &MaterialScope) -> Re
     Ok(snapshot)
 }
 
+fn desktop_task_identity(source: &Path, scope: &MaterialScope, containers: bool, multiplier: u64, snapshot: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let source_id = path_text(source);
+    #[cfg(windows)]
+    let source_id = source_id.to_lowercase();
+    let identity = json!([source_id, scope, containers, multiplier, snapshot.pointer("/metadata/minecraft_data_version"), snapshot.get("material_semantics")]);
+    format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
+}
+
 fn stats_args(source: &Path, include_container_items: bool) -> Vec<String> {
     let mut args = vec![
         "stats".to_owned(),
@@ -1338,7 +1407,7 @@ fn stats_args(source: &Path, include_container_items: bool) -> Vec<String> {
 fn core_command_writes(args: &[String]) -> bool {
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
-        "edit-metadata" | "set-origin" | "remove-origin" | "materials-export" => true,
+        "edit-metadata" | "set-origin" | "remove-origin" | "materials-export" | "stockpile-task" => true,
         "world-export" => !args.iter().any(|arg|arg=="--profiles"),
         "iris-settings" => args.iter().any(|arg| arg == "--save-json" || arg == "--rollback-json"),
         "version-convert" => args.iter().any(|arg| arg == "--output" || arg == "--overwrite"),
@@ -1491,6 +1560,23 @@ fn material_recipe_fetch_args(version: String) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_task_identity_tracks_context_not_source_revision_or_row_order() {
+        let all = MaterialScope { kind: MaterialScopeKind::All, value: None };
+        let snapshot = json!({"metadata":{"minecraft_data_version":3953},"material_semantics":"minecraft-inventory-v9:resources-a","material_items":[{"count":10}]});
+        let id = desktop_task_identity(Path::new("C:/one/source.litematic"), &all, false, 1, &snapshot);
+        let mut edited = snapshot.clone(); edited["material_items"] = json!([{"count":20}]);
+        assert_eq!(id, desktop_task_identity(Path::new("C:/one/source.litematic"), &all, false, 1, &edited));
+        assert_ne!(id, desktop_task_identity(Path::new("C:/two/source.litematic"), &all, false, 1, &snapshot));
+        assert_ne!(id, desktop_task_identity(Path::new("C:/one/source.litematic"), &all, true, 1, &snapshot));
+        assert_ne!(id, desktop_task_identity(Path::new("C:/one/source.litematic"), &all, false, 2, &snapshot));
+        let layer = MaterialScope { kind: MaterialScopeKind::Layer, value: Some("1".into()) };
+        assert_ne!(id, desktop_task_identity(Path::new("C:/one/source.litematic"), &layer, false, 1, &snapshot));
+        edited["material_semantics"] = json!("minecraft-inventory-v9:resources-b");
+        assert_ne!(id, desktop_task_identity(Path::new("C:/one/source.litematic"), &all, false, 1, &edited));
+        assert!(core_command_writes(&["stockpile-task".into()]));
+    }
 
     #[test]
     fn layer_catalog_keeps_source_version_palette_properties_and_only_requested_slice() {

@@ -58,6 +58,10 @@ fn main() -> Result<()> {
     if raw.first().is_some_and(|command| command == "block-db") {
         return litematica_core::block_database::run_cli(&raw[1..]);
     }
+    if raw.first().is_some_and(|command| command == "stockpile-task") {
+        let path = raw.get(1).ok_or_else(|| anyhow::anyhow!("stockpile-task requires a Host request file"))?;
+        return emit_output(&stockpile_serve::desktop_task_from_request(std::path::Path::new(path))?, None);
+    }
     if raw.first().is_some_and(|command| command == "materials-export") {
         return litematica_core::material_export::run_cli(&raw[1..]);
     }

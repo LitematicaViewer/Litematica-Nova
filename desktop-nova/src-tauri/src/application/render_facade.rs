@@ -783,7 +783,7 @@ impl RenderFacade {
         }
     }
 
-    pub(crate) async fn release_camera_input_for_iris(&self) -> Result<(), String> {
+    pub(crate) async fn release_camera_input(&self) -> Result<(), String> {
         self.refresh_from_service();
         let sessions: Vec<_> = {
             let state = self.inner.state.lock().unwrap();

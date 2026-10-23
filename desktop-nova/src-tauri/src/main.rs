@@ -39,7 +39,7 @@ use application::operations::{
     ProjectStatsInput, ReplaceBlocksInput, ReplaceBlocksResult, RuntimeHealth,
     LayerContainerData, LayerSliceData, LayerSliceMeta, ProjectionMarkerEditSummary,
     ProjectionMarkers, ReadLayerContainerInput, ReadLayerInput,
-    ExportMaterialListInput, MaterialRecipeCacheInput, ExportWorldInput,
+    ExportMaterialListInput, MaterialRecipeCacheInput, ExportWorldInput, StockpileTaskInput, StockpileTaskSetInput, StockpileTaskResetInput,
 };
 use application::quick_preview::{QuickPreviewHost, QuickPreviewView, StartQuickPreviewInput, QuickPresentationIntent};
 use application::updater::{UpdateHost, application_update_snapshot, application_update_check,
@@ -1365,6 +1365,31 @@ async fn application_get_project_materials(
 ) -> Result<serde_json::Value, String> {
     let operations = operations.inner().clone();
     run_application_operation(move || operations.project_materials(input)).await
+}
+
+#[tauri::command]
+async fn application_stockpile_task(input: StockpileTaskInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let operations = operations.inner().clone();
+    run_application_operation(move || operations.stockpile_task(input)).await
+}
+#[tauri::command]
+async fn application_stockpile_task_set(app: AppHandle, input: StockpileTaskSetInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let operations = operations.inner().clone();
+    let result = run_application_operation(move || operations.set_stockpile_quantity(input)).await?;
+    app.emit("stockpile-task-changed", serde_json::json!({"taskId": result["taskId"]})).map_err(|error|error.to_string())?;
+    Ok(result)
+}
+#[tauri::command]
+async fn application_stockpile_task_reset(app: AppHandle, input: StockpileTaskResetInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let operations = operations.inner().clone();
+    let result = run_application_operation(move || operations.reset_stockpile(input)).await?;
+    app.emit("stockpile-task-changed", serde_json::json!({"taskId": result["taskId"]})).map_err(|error|error.to_string())?;
+    Ok(result)
+}
+#[tauri::command]
+async fn application_prepare_material_task_window(facade: tauri::State<'_, RenderFacade>, quick: tauri::State<'_, QuickPreviewHost>) -> Result<(), String> {
+    facade.release_camera_input().await?;
+    quick.release_camera_input()
 }
 
 #[tauri::command]
@@ -2750,6 +2775,7 @@ async fn open_material_list_window(
     active_file: Option<String>,
     view_mode: Option<String>,
 ) -> Result<(), String> {
+    application_prepare_material_task_window(app.state::<RenderFacade>(), app.state::<QuickPreviewHost>()).await?;
     const LABEL: &str = "material-list";
     let mode = if view_mode.as_deref() == Some("export") { "export" } else { "details" };
     i18n::set_material_export(mode == "export");
@@ -2851,7 +2877,7 @@ async fn open_iris_options_window(app: AppHandle, root: Option<String>, pack: Op
     let root = root.unwrap_or(config.v5_compatibility.shaderpack_root);
     let pack = pack.unwrap_or(config.v5_compatibility.shaderpack_name);
     if root.trim().is_empty() || pack.trim().is_empty() { return Err("请先选择光影包 / Select a shader pack first".into()); }
-    facade.release_camera_input_for_iris().await?;
+    facade.release_camera_input().await?;
     if let Some(window) = app.get_webview_window(LABEL) {
         restore_iris_window_placement(&window, None)?;
         app.emit_to(LABEL, "iris-options-select-pack", serde_json::json!({ "root": root, "pack": pack })).map_err(|error| error.to_string())?;
@@ -2871,7 +2897,7 @@ async fn open_iris_options_window(app: AppHandle, root: Option<String>, pack: Op
 }
 #[tauri::command]
 async fn close_iris_options_window(app: AppHandle, facade: tauri::State<'_, RenderFacade>) -> Result<(), String> {
-    facade.release_camera_input_for_iris().await?;
+    facade.release_camera_input().await?;
     if let Some(window) = app.get_webview_window("iris-options") {
         save_iris_window_placement(&window)?;
         window.hide().map_err(|error| error.to_string())?;
@@ -3951,6 +3977,12 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
+            if window.label() == "material-list" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
             if window.label() == "iris-options" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
@@ -3961,7 +3993,7 @@ fn main() {
                 }
                 if matches!(event, tauri::WindowEvent::Focused(true) | tauri::WindowEvent::CloseRequested { .. }) {
                     let facade = window.state::<RenderFacade>().inner().clone();
-                    tauri::async_runtime::spawn(async move { if let Err(error) = facade.release_camera_input_for_iris().await { eprintln!("[NOVA_IRIS_OPTIONS] release_input_error={error}"); } });
+                    tauri::async_runtime::spawn(async move { if let Err(error) = facade.release_camera_input().await { eprintln!("[NOVA_IRIS_OPTIONS] release_input_error={error}"); } });
                 }
                 if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. }) {
                     if let Some(webview) = window.app_handle().get_webview_window("iris-options") {
@@ -4141,6 +4173,10 @@ fn main() {
             application_export_material_list,
             application_prepare_material_recipes,
             application_get_project_materials,
+            application_stockpile_task,
+            application_stockpile_task_set,
+            application_stockpile_task_reset,
+            application_prepare_material_task_window,
             application_generate_project,
             application_runtime_health,
             application_read_embedded_preview,

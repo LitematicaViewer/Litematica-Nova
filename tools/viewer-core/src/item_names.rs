@@ -88,7 +88,7 @@ fn build_payload_from_cache(
         }
     }
     for material in &mut materials.materials {
-        if let Some(localized) = names.get(&material.namespace_id) {
+        if let Some(localized) = names.get(&material.item_icon_key) {
             material.display_names = localized.clone();
         }
     }
@@ -123,7 +123,7 @@ fn collect_name_keys(
 ) -> BTreeSet<String> {
     let mut keys = BTreeSet::<String>::new();
     for material in &materials.materials {
-        keys.insert(material.namespace_id.clone());
+        keys.insert(material.item_icon_key.clone());
         keys.insert(material.category_icon.clone());
     }
     for tree in recipe_trees.values() {
@@ -433,6 +433,18 @@ mod tests {
                 .map(String::as_str),
             Some("Stone")
         );
+    }
+
+    #[test]
+    fn variant_task_names_use_the_base_item_icon_identity() {
+        let mut materials = fixture_materials();
+        materials.materials[0].namespace_id = "minecraft:stone#nbt-variant".into();
+        materials.ui_translations.insert("block.minecraft.stone".into(), "石头".into());
+        let payload = build_payload_from_cache(&mut materials, &BTreeMap::new(), LangCache::empty());
+        assert!(payload.names.contains_key("minecraft:stone"));
+        assert!(!payload.names.contains_key("minecraft:stone#nbt-variant"));
+        assert_eq!(materials.materials[0].display_names.get("zh-CN").map(String::as_str), Some("石头"));
+        assert_eq!(materials.materials[0].namespace_id, "minecraft:stone#nbt-variant");
     }
 
     fn fixture_materials() -> StockpileMaterialsData {

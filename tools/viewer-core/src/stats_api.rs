@@ -7,6 +7,7 @@ mod material_catalog;
 use anyhow::{Context, Result, bail};
 use fastnbt::Value as NbtValue;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::model::MetadataOutput;
 use crate::nbt::{
@@ -37,6 +38,7 @@ pub(crate) fn inventory_requirement(id: String, count: u64) -> Option<MaterialIt
     let item = material_catalog::item(&id)?;
     Some(MaterialItemOutput {
         display_name: material_catalog::name(&id), icon_hint: id.clone(), block_id: id,
+        item_identity: None,
         count, block_count: count, container_item_count: 0, total_count: count,
         stack_size: item.stack_size, can_fit_container: item.can_fit_container,
         material_status: "item".into(), has_custom_stack_size: false,
@@ -116,6 +118,10 @@ pub struct ScopeOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialItemOutput {
     pub block_id: String,
+    /// Stable task/aggregation key when an item carries stack-specific data.
+    /// Catalog, translation and icon lookup always use the unchanged block ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_identity: Option<String>,
     pub display_name: String,
     pub count: u64,
     pub block_count: u64,
@@ -232,6 +238,7 @@ pub enum MaterialScope {
 
 #[derive(Default)]
 struct MaterialAccumulator {
+    item_id: Option<String>,
     block_count: u64,
     container_item_count: u64,
     has_custom_stack_size: bool,
@@ -439,7 +446,7 @@ pub(crate) fn build_stats_output_from_canonical(
     );
     Ok(StableStructureOutput {
         derived: Some(derived),
-        material_semantics: format!("minecraft-inventory-v8:{}", crate::game_data::active_context()?.content_id),
+        material_semantics: format!("minecraft-inventory-v9:{}", crate::game_data::active_context()?.content_id),
         metadata,
         structure_stats: StructureStatsOutput {
             scope: ResolvedScope::All.to_output(resolved_bounds.min_y),
@@ -778,7 +785,7 @@ fn build_structure_output_with_scope_cache(
     ));
     Ok(StableStructureOutput {
         derived,
-        material_semantics: format!("minecraft-inventory-v8:{}", crate::game_data::active_context()?.content_id),
+        material_semantics: format!("minecraft-inventory-v9:{}", crate::game_data::active_context()?.content_id),
         metadata,
         structure_stats: StructureStatsOutput {
             scope: resolved_scope.to_output(resolved_bounds.min_y),
@@ -815,13 +822,16 @@ fn build_material_items(
 ) -> Vec<MaterialItemOutput> {
     let mut items = material_counts
         .into_iter()
-        .map(|(block_id, acc)| MaterialItemOutput {
+        .map(|(identity, acc)| {
+            let block_id = acc.item_id.unwrap_or_else(|| identity.clone());
+            MaterialItemOutput {
             display_name: material_catalog::name(&block_id),
             stack_size: material_catalog::item(&block_id).map_or(1, |item| item.stack_size),
             can_fit_container: material_catalog::item(&block_id).is_some_and(|item| item.can_fit_container),
             material_status: material_catalog::status(&block_id).to_string(),
             has_custom_stack_size: acc.has_custom_stack_size,
             icon_hint: block_id.clone(),
+            item_identity: (identity != block_id).then_some(identity),
             block_id,
             count: acc.block_count + acc.container_item_count,
             block_count: acc.block_count,
@@ -844,7 +854,7 @@ fn build_material_items(
                     })
                     .collect(),
             ),
-        })
+        }})
         .collect::<Vec<_>>();
 
     items.sort_by(|left, right| {
@@ -852,6 +862,7 @@ fn build_material_items(
             .total_count
             .cmp(&left.total_count)
             .then_with(|| left.block_id.cmp(&right.block_id))
+            .then_with(|| left.item_identity.cmp(&right.item_identity))
     });
     items
 }
@@ -910,7 +921,8 @@ fn scan_region_container_items(
                 entry_scan.warnings.push(format!("{} × {} is not a registered inventory item in the selected game data; excluded from materials", stack.id, stack.count));
                 continue;
             }
-            let material = material_counts.entry(stack.id.clone()).or_default();
+            let material = material_counts.entry(stack.item_identity.unwrap_or_else(|| stack.id.clone())).or_default();
+            material.item_id = Some(stack.id.clone());
             material.has_custom_stack_size |= stack.has_custom_stack_size;
             material.container_item_count =
                 material.container_item_count.saturating_add(stack.count);
@@ -951,6 +963,7 @@ fn scan_region_container_items(
 #[derive(Debug)]
 struct ContainerStack {
     id: String,
+    item_identity: Option<String>,
     count: u64,
     has_custom_stack_size: bool,
 }
@@ -995,6 +1008,7 @@ fn collect_container_stacks(
                 if let Some(id) = nbt_string(sherd).filter(|id| !id.is_empty()) {
                     out.push(ContainerStack {
                         id: id.to_string(),
+                        item_identity: None,
                         count: 1,
                         has_custom_stack_size: false,
                     });
@@ -1047,9 +1061,71 @@ fn parse_item_stack(value: &NbtValue) -> Option<ContainerStack> {
     }
     Some(ContainerStack {
         id: id.to_string(),
+        item_identity: container_item_identity(id, map),
         count,
         has_custom_stack_size: map.get("components").and_then(|value| match value { NbtValue::Compound(c) => c.get("minecraft:max_stack_size"), _ => None }).is_some(),
     })
+}
+
+fn container_item_identity(
+    id: &str,
+    fields: &std::collections::HashMap<String, NbtValue>,
+) -> Option<String> {
+    // Count and storage slot belong to this occurrence, not the item. Keep
+    // nested counts (e.g. contents of a shulker box) and all actual item data.
+    let data = fields.iter().filter(|(key, value)| {
+        !["id", "count", "slot"].iter().any(|field| key.eq_ignore_ascii_case(field))
+            && !(matches!(key.as_str(), "tag" | "components")
+                && matches!(value, NbtValue::Compound(map) if map.is_empty()))
+    }).collect::<BTreeMap<_, _>>();
+    if data.is_empty() { return None; }
+    let mut hash = Sha256::new();
+    hash.update(b"nova-item-data-v1\0");
+    for (key, value) in data {
+        hash.update((key.len() as u64).to_be_bytes());
+        hash.update(key.as_bytes());
+        hash_item_nbt(&mut hash, value);
+    }
+    Some(format!("{id}#nbt-{:x}", hash.finalize()))
+}
+
+/// Type tags, lengths, sorted compound keys and ordered lists make the digest
+/// independent of HashMap iteration without erasing NBT types or list order.
+fn hash_item_nbt(hash: &mut Sha256, value: &NbtValue) {
+    match value {
+        NbtValue::Byte(v) => { hash.update([1]); hash.update(v.to_be_bytes()); }
+        NbtValue::Short(v) => { hash.update([2]); hash.update(v.to_be_bytes()); }
+        NbtValue::Int(v) => { hash.update([3]); hash.update(v.to_be_bytes()); }
+        NbtValue::Long(v) => { hash.update([4]); hash.update(v.to_be_bytes()); }
+        NbtValue::Float(v) => { hash.update([5]); hash.update(v.to_bits().to_be_bytes()); }
+        NbtValue::Double(v) => { hash.update([6]); hash.update(v.to_bits().to_be_bytes()); }
+        NbtValue::ByteArray(v) => {
+            hash.update([7]); hash.update((v.len() as u64).to_be_bytes());
+            for item in v.iter() { hash.update(item.to_be_bytes()); }
+        }
+        NbtValue::String(v) => {
+            hash.update([8]); hash.update((v.len() as u64).to_be_bytes()); hash.update(v.as_bytes());
+        }
+        NbtValue::List(v) => {
+            hash.update([9]); hash.update((v.len() as u64).to_be_bytes());
+            for item in v { hash_item_nbt(hash, item); }
+        }
+        NbtValue::Compound(v) => {
+            hash.update([10]); hash.update((v.len() as u64).to_be_bytes());
+            for (key, item) in v.iter().collect::<BTreeMap<_, _>>() {
+                hash.update((key.len() as u64).to_be_bytes()); hash.update(key.as_bytes());
+                hash_item_nbt(hash, item);
+            }
+        }
+        NbtValue::IntArray(v) => {
+            hash.update([11]); hash.update((v.len() as u64).to_be_bytes());
+            for item in v.iter() { hash.update(item.to_be_bytes()); }
+        }
+        NbtValue::LongArray(v) => {
+            hash.update([12]); hash.update((v.len() as u64).to_be_bytes());
+            for item in v.iter() { hash.update(item.to_be_bytes()); }
+        }
+    }
 }
 
 fn is_legacy_flower_pot(value: &NbtValue) -> bool {
@@ -1178,6 +1254,7 @@ fn parse_pot_item(value: &NbtValue) -> Option<ContainerStack> {
     match value {
         NbtValue::String(id) if !id.is_empty() => Some(ContainerStack {
             id: id.clone(),
+            item_identity: None,
             count: 1,
             has_custom_stack_size: false,
         }),
@@ -1403,7 +1480,9 @@ mod tests {
         ])));
         let cached = super::build_structure_output_with_scope_cache(&root, MaterialScope::All, true, true).unwrap();
         let regular = super::build_structure_output_from_root(&root, MaterialScope::All, true).unwrap();
-        let stone = cached.material_items.iter().find(|row| row.block_id == "minecraft:stone").unwrap();
+        let stone = cached.material_items.iter().find(|row| row.block_id == "minecraft:stone" && row.item_identity.is_some()).unwrap();
+        assert_eq!(stone.block_count, 0);
+        assert!(cached.material_items.iter().any(|row| row.block_id == "minecraft:stone" && row.item_identity.is_none() && row.container_item_count == 0));
         assert_eq!(stone.scope_counts.as_ref().unwrap().iter().map(|row|row.block_count).sum::<u64>(), stone.block_count);
         assert_eq!(stone.scope_counts.as_ref().unwrap().iter().map(|row|row.container_item_count).sum::<u64>(), 3);
         assert!(stone.scope_counts.as_ref().unwrap().iter().any(|row|row.container_item_count == 3 && row.has_custom_stack_size));
@@ -1516,7 +1595,7 @@ mod tests {
                 }
             }
             let output = build_stats_output_from_root(&root, false).unwrap();
-            assert_eq!(output.material_semantics, "minecraft-inventory-v5");
+            assert!(output.material_semantics.starts_with("minecraft-inventory-v9:"));
             assert!(output.material_items.is_empty(), "{id}");
             let structural = output.structural_block_counts.as_ref().unwrap();
             assert_eq!(structural.len(), 1);
@@ -1561,5 +1640,70 @@ mod tests {
         let result = parse_item_stack(&stack).unwrap();
         assert_eq!(result.count, 20);
         assert!(result.has_custom_stack_size);
+    }
+
+    #[test]
+    fn container_item_identity_preserves_tag_and_component_variants() {
+        let stack = |field: &str, value: &str| NbtValue::Compound(std::collections::HashMap::from([
+            ("id".into(), NbtValue::String("minecraft:stone".into())),
+            (field.into(), NbtValue::Compound(std::collections::HashMap::from([
+                ("custom_name".into(), NbtValue::String(value.into())),
+            ]))),
+        ]));
+        let tag_a = parse_item_stack(&stack("tag", "A")).unwrap();
+        let tag_b = parse_item_stack(&stack("tag", "B")).unwrap();
+        let component_a = parse_item_stack(&stack("components", "A")).unwrap();
+        let component_b = parse_item_stack(&stack("components", "B")).unwrap();
+        assert_eq!(tag_a.id, "minecraft:stone");
+        assert!(tag_a.item_identity.as_ref().unwrap().starts_with("minecraft:stone#nbt-"));
+        assert_ne!(tag_a.item_identity, tag_b.item_identity);
+        assert_ne!(component_a.item_identity, component_b.item_identity);
+        assert_ne!(tag_a.item_identity, component_a.item_identity);
+    }
+
+    #[test]
+    fn container_item_identity_ignores_dictionary_order_quantity_and_slot() {
+        use std::collections::HashMap;
+        let mut first = HashMap::from([
+            ("id".into(), NbtValue::String("minecraft:stone".into())),
+            ("Count".into(), NbtValue::Byte(1)),
+            ("Slot".into(), NbtValue::Byte(0)),
+            ("tag".into(), NbtValue::Compound(HashMap::from([
+                ("name".into(), NbtValue::String("named".into())),
+                ("damage".into(), NbtValue::Int(2)),
+            ]))),
+        ]);
+        let original = parse_item_stack(&NbtValue::Compound(first.clone())).unwrap();
+        first.remove("Count");
+        first.insert("count".into(), NbtValue::Int(64));
+        first.insert("Slot".into(), NbtValue::Byte(26));
+        first.insert("tag".into(), NbtValue::Compound(HashMap::from([
+            ("damage".into(), NbtValue::Int(2)),
+            ("name".into(), NbtValue::String("named".into())),
+        ])));
+        let mut reordered_fields = first.into_iter().collect::<Vec<_>>();
+        reordered_fields.reverse();
+        let reordered = NbtValue::Compound(reordered_fields.into_iter().collect());
+        let result = parse_item_stack(&reordered).unwrap();
+        assert_eq!(original.item_identity, result.item_identity);
+        assert_eq!(original.count, 1);
+        assert_eq!(result.count, 64);
+    }
+
+    #[test]
+    fn ordinary_container_items_keep_plain_ids_but_nested_contents_remain_distinct() {
+        use std::collections::HashMap;
+        let mut fields = HashMap::from([
+            ("id".into(), NbtValue::String("minecraft:stone".into())),
+            ("Count".into(), NbtValue::Byte(3)),
+            ("Slot".into(), NbtValue::Byte(1)),
+            ("tag".into(), NbtValue::Compound(HashMap::new())),
+            ("components".into(), NbtValue::Compound(HashMap::new())),
+        ]);
+        assert!(parse_item_stack(&NbtValue::Compound(fields.clone())).unwrap().item_identity.is_none());
+        fields.insert("tag".into(), NbtValue::Compound(HashMap::from([("Count".into(), NbtValue::Byte(1))])));
+        let one = parse_item_stack(&NbtValue::Compound(fields.clone())).unwrap().item_identity;
+        fields.insert("tag".into(), NbtValue::Compound(HashMap::from([("Count".into(), NbtValue::Byte(2))])));
+        assert_ne!(one, parse_item_stack(&NbtValue::Compound(fields)).unwrap().item_identity);
     }
 }

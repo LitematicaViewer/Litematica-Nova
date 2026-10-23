@@ -13,6 +13,7 @@ import { windowsPathKey } from "./filePathIdentity";
 
 export interface MaterialItem {
   id: string;
+  itemId?: string;
   name: string;
   sourceDisplayName?: string;
   count: number;
@@ -80,19 +81,21 @@ export interface StatsData {
 }
 
 function mapMaterial(raw: any): MaterialItem {
-  const id = raw.block_id || raw.id || "";
+  const itemId = raw.block_id || raw.id || "";
+  const id = raw.item_identity || itemId;
   const blockCount = Number(raw.block_count ?? raw.count ?? 0);
   const containerItemCount = Number(raw.container_item_count ?? 0);
   const totalCount = Number(raw.total_count ?? raw.count ?? blockCount + containerItemCount);
   return {
     id,
-    name: resolveBlockDisplayName(id, raw.display_name),
+    itemId,
+    name: resolveBlockDisplayName(itemId, raw.display_name),
     sourceDisplayName: String(raw.display_name || ""),
     count: totalCount,
     blockCount,
     containerItemCount,
     totalCount,
-    iconHint: raw.icon_hint || id,
+    iconHint: raw.icon_hint || itemId,
     stackSize: Number(raw.stack_size || 1),
     canFitContainer: raw.can_fit_container === true,
     materialStatus: raw.material_status || "unknown",
@@ -191,8 +194,8 @@ const statsInFlight = new Map<string, Promise<StatsData>>();
 const statsCompleted = new Map<string, { revision: string; data: StatsData }>();
 const materialsInFlight = new Map<string, Promise<MaterialItem[]>>();
 
-export function materialDisplayName(material: Pick<MaterialItem, "id" | "name" | "sourceDisplayName">): string {
-  return resolveBlockDisplayName(material.id, material.sourceDisplayName ?? material.name);
+export function materialDisplayName(material: Pick<MaterialItem, "id" | "name" | "sourceDisplayName"> & { itemId?: string }): string {
+  return resolveBlockDisplayName(material.itemId ?? material.id, material.sourceDisplayName ?? material.name);
 }
 
 /** Keep quantities, channels, scopes and source revisions untouched. */
@@ -268,7 +271,7 @@ export async function loadStructuralBlocks(filePath: string): Promise<Structural
 }
 
 export function hasInventoryMaterialSemantics(analysis: any): boolean {
-  return analysis?.material_semantics === "minecraft-inventory-v5";
+  return typeof analysis?.source_revision === "string" && typeof analysis?.material_semantics === "string" && analysis.material_semantics.startsWith("minecraft-inventory-v9:");
 }
 
 function csvEscape(value: string | number): string {

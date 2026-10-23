@@ -381,6 +381,109 @@ fn default_config(now: u64) -> StockpileConfig {
     }
 }
 
+/// Desktop material tasks use the same participant/claim schema as exported
+/// Stockpile projects. No HTTP service or second progress store is involved.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DesktopTaskRequest {
+    task_id: String,
+    source_revision: String,
+    source_path: PathBuf,
+    snapshot: crate::stats_api::StableStructureOutput,
+    multiplier: u64,
+    mutation: Option<DesktopTaskMutation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DesktopTaskMutation { material_id: Option<String>, quantity: Option<u64>, #[serde(default)] reset: bool }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopTaskView {
+    task_id: String, source_revision: String, items: Vec<DesktopTaskItem>,
+    required_count: u64, prepared_count: u64, remaining_count: u64,
+    completed_items: usize, total_items: usize,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopTaskItem { material_id: String, required_count: u64, prepared_count: u64, remaining_count: u64, complete: bool }
+
+pub fn desktop_task_from_request(path: &Path) -> Result<DesktopTaskView> {
+    let request: DesktopTaskRequest = read_json_file(path)?;
+    if request.task_id.len() != 64 || !request.task_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("Invalid material task identity");
+    }
+    if request.multiplier == 0 { bail!("Material task copies must be positive"); }
+    let data_version = request.snapshot.metadata.minecraft_data_version;
+    let version = crate::block_database::database()?.version_for_data_version(data_version)
+        .with_context(|| format!("Material task source data version {data_version} has no supported Minecraft version mapping"))?;
+    // The material rows are the Host's existing version/resource-aware result;
+    // the Stockpile bridge does not reopen or analyze the projection.
+    let mut materials = crate::stockpile::build_materials_data_from_stats(&request.source_path, request.snapshot, version)?;
+    for item in &mut materials.materials {
+        item.required_count = item.required_count.checked_mul(request.multiplier)
+            .filter(|value| *value <= i64::MAX as u64).context("Material task quantity is too large")?;
+    }
+    let database = runtime_paths::stockpile_sessions_root()?.join(format!("desktop-{}.sqlite", request.task_id));
+    desktop_task_apply(&database, &request.task_id, &request.source_revision, &materials, request.mutation.as_ref())
+}
+
+fn desktop_task_apply(path: &Path, task_id: &str, revision: &str, materials: &StockpileMaterialsData,
+    mutation: Option<&DesktopTaskMutation>) -> Result<DesktopTaskView> {
+    const USER: &str = "desktop-local";
+    init_db(path)?; // Never use deploy-db initialization: that intentionally replaces a DB.
+    let mut conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let previous_revision = meta_value(&tx, "desktop_source_revision")?;
+    if mutation.is_some() && previous_revision.as_deref() != Some(revision) {
+        bail!("Material task changed; reload its current requirements before editing");
+    }
+    let requirements = materials.materials.iter().map(|item| (item.namespace_id.as_str(), item.required_count))
+        .collect::<BTreeMap<_, _>>();
+    if requirements.len() != materials.materials.len() { bail!("Duplicate material identity in task requirements"); }
+    // Reconcile the authoritative claims by stable item identity. Removed rows
+    // disappear, new rows begin at zero, and reduced requirements clamp counts.
+    for claim in load_claims_for_user(&tx, USER)? {
+        match requirements.get(claim.material_id.as_str()) {
+            None => { tx.execute("DELETE FROM material_claims WHERE material_id=?1 AND user_id=?2",params![claim.material_id,USER])?; }
+            Some(&required) if claim.quantity > required => { put_claim_conn(&tx,&claim.material_id,USER,"done",required)?; }
+            _ => {},
+        }
+    }
+    if let Some(change) = mutation {
+        if change.reset {
+            if change.material_id.is_some() || change.quantity.is_some() { bail!("Reset cannot contain an item edit"); }
+            tx.execute("DELETE FROM material_claims WHERE user_id=?1",[USER])?;
+        } else {
+            let id = change.material_id.as_deref().context("A task item is required")?;
+            let required = *requirements.get(id).context("Task item no longer exists")?;
+            let quantity = change.quantity.context("A prepared quantity is required")?.min(required);
+            put_claim_conn(&tx,id,USER,"done",quantity)?;
+        }
+    }
+    set_meta(&tx,"desktop_source_revision",revision)?;
+    touch_meta(&tx)?;
+    // Build the existing Stockpile state while still in the same transaction,
+    // so two instances cannot return a mixed source/claim snapshot.
+    let state = aggregate_state(materials, load_participants(&tx)?, Vec::new(), load_claims(&tx)?,
+        BTreeMap::new(), BTreeMap::new(), Vec::new(), current_unix_timestamp()?);
+    let mut view = DesktopTaskView { task_id:task_id.into(),source_revision:revision.into(),items:Vec::new(),
+        required_count:0,prepared_count:0,remaining_count:0,completed_items:0,total_items:requirements.len() };
+    for (id,required) in requirements {
+        let prepared = state.materials.get(id).map_or(0,|item|item.done_count).min(required);
+        let remaining = required.saturating_sub(prepared);
+        view.required_count = view.required_count.checked_add(required).context("Task quantity overflow")?;
+        view.prepared_count = view.prepared_count.checked_add(prepared).context("Task quantity overflow")?;
+        view.remaining_count = view.remaining_count.checked_add(remaining).context("Task quantity overflow")?;
+        view.completed_items += usize::from(remaining == 0);
+        view.items.push(DesktopTaskItem {material_id:id.into(),required_count:required,prepared_count:prepared,remaining_count:remaining,complete:remaining==0});
+    }
+    tx.commit()?;
+    Ok(view)
+}
+
 pub fn serve_stockpile_zip(zip_path: &Path, bind: &str) -> Result<StockpileServeSummary> {
     let zip_path = absolutize(zip_path)?;
     if !zip_path.is_file() {
@@ -3741,6 +3844,94 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn desktop_task_persists_quantities_and_clamps_item_edits() {
+        let db = temp_db("desktop_task_quantity");
+        let materials = fixture_materials();
+        let initial = desktop_task_apply(&db, "task", "r1", &materials, None).unwrap();
+        assert_eq!(initial.total_items, materials.materials.len());
+        assert_eq!(initial.required_count, 30);
+        assert_eq!(initial.prepared_count, 0);
+        let edit = |quantity| DesktopTaskMutation {
+            material_id: Some("minecraft:stone".into()), quantity: Some(quantity), reset: false,
+        };
+        let partial = desktop_task_apply(&db, "task", "r1", &materials, Some(&edit(7))).unwrap();
+        assert_eq!(partial.prepared_count, 7);
+        assert_eq!(partial.remaining_count, 23);
+        assert_eq!(partial.completed_items, 0);
+        let reopened = desktop_task_apply(&db, "task", "r1", &materials, None).unwrap();
+        assert_eq!(reopened.prepared_count, 7);
+        assert_eq!(reopened.items.iter().find(|item| item.material_id == "minecraft:stone").unwrap().prepared_count, 7);
+        let complete = desktop_task_apply(&db, "task", "r1", &materials, Some(&edit(u64::MAX))).unwrap();
+        assert_eq!(complete.prepared_count, 10);
+        assert_eq!(complete.completed_items, 1);
+        let stone = complete.items.iter().find(|item| item.material_id == "minecraft:stone").unwrap();
+        assert_eq!(stone.remaining_count, 0);
+        assert!(stone.complete);
+        let cleared = desktop_task_apply(&db, "task", "r1", &materials, Some(&edit(0))).unwrap();
+        assert_eq!(cleared.prepared_count, 0);
+        assert_eq!(cleared.remaining_count, initial.required_count);
+        assert!(serde_json::from_value::<DesktopTaskMutation>(json!({"quantity":-1})).is_err());
+        assert!(serde_json::from_value::<DesktopTaskMutation>(json!({"quantity":1.5})).is_err());
+        let _ = fs::remove_file(db);
+    }
+
+    #[test]
+    fn desktop_task_reconciles_requirements_rejects_stale_edits_and_resets() {
+        let db = temp_db("desktop_task_reconcile");
+        let mut materials = fixture_materials();
+        desktop_task_apply(&db, "task", "r1", &materials, None).unwrap();
+        for (id, quantity) in [("minecraft:stone", 8), ("minecraft:rail", 4)] {
+            desktop_task_apply(&db, "task", "r1", &materials, Some(&DesktopTaskMutation {
+                material_id: Some(id.into()), quantity: Some(quantity), reset: false,
+            })).unwrap();
+        }
+        materials.materials.iter_mut().find(|item| item.namespace_id == "minecraft:stone").unwrap().required_count = 3;
+        materials.materials.retain(|item| item.namespace_id != "minecraft:rail");
+        materials.materials.push(material("minecraft:diamond", 6));
+        let edit = DesktopTaskMutation { material_id: Some("minecraft:diamond".into()), quantity: Some(2), reset: false };
+        assert!(desktop_task_apply(&db, "task", "r2", &materials, Some(&edit)).is_err());
+        let changed = desktop_task_apply(&db, "task", "r2", &materials, None).unwrap();
+        assert_eq!(changed.required_count, 19);
+        assert_eq!(changed.prepared_count, 3);
+        assert_eq!(changed.items.iter().find(|item| item.material_id == "minecraft:diamond").unwrap().prepared_count, 0);
+        let conn = Connection::open(&db).unwrap();
+        assert!(load_claims(&conn).unwrap().iter().all(|claim| claim.material_id != "minecraft:rail"));
+        drop(conn);
+        assert!(desktop_task_apply(&db, "task", "r1", &materials, Some(&edit)).is_err());
+        let edited = desktop_task_apply(&db, "task", "r2", &materials, Some(&edit)).unwrap();
+        assert_eq!(edited.prepared_count, 5);
+        let invalid_reset = DesktopTaskMutation { material_id: None, quantity: Some(1), reset: true };
+        assert!(desktop_task_apply(&db, "task", "r2", &materials, Some(&invalid_reset)).is_err());
+        assert_eq!(desktop_task_apply(&db, "task", "r2", &materials, None).unwrap().prepared_count, 5);
+        let reset = DesktopTaskMutation { material_id: None, quantity: None, reset: true };
+        let cleared = desktop_task_apply(&db, "task", "r2", &materials, Some(&reset)).unwrap();
+        assert_eq!(cleared.prepared_count, 0);
+        assert_eq!(cleared.remaining_count, changed.required_count);
+        assert_eq!(desktop_task_apply(&db, "task", "r2", &materials, None).unwrap().prepared_count, 0);
+        let _ = fs::remove_file(db);
+    }
+
+    #[test]
+    fn desktop_task_keeps_variant_claims_and_other_projects_separate() {
+        let db = temp_db("desktop_task_variants");
+        let other_db = temp_db("desktop_task_other_project");
+        let mut materials = fixture_materials();
+        materials.materials = vec![material("minecraft:stone#nbt-a", 4), material("minecraft:stone#nbt-b", 3)];
+        for item in &mut materials.materials { item.item_icon_key = "minecraft:stone".into(); }
+        desktop_task_apply(&db, "task", "r1", &materials, None).unwrap();
+        let edit = DesktopTaskMutation { material_id: Some("minecraft:stone#nbt-a".into()), quantity: Some(2), reset: false };
+        let changed = desktop_task_apply(&db, "task", "r1", &materials, Some(&edit)).unwrap();
+        assert_eq!(changed.items.iter().find(|item| item.material_id.ends_with("nbt-a")).unwrap().prepared_count, 2);
+        assert_eq!(changed.items.iter().find(|item| item.material_id.ends_with("nbt-b")).unwrap().prepared_count, 0);
+        let reopened = desktop_task_apply(&db, "task", "r1", &materials, None).unwrap();
+        assert_eq!(reopened.prepared_count, 2);
+        assert_eq!(reopened.total_items, 2);
+        assert_eq!(desktop_task_apply(&other_db, "other", "r1", &materials, None).unwrap().prepared_count, 0);
+        let _ = fs::remove_file(db);
+        let _ = fs::remove_file(other_db);
+    }
 
     #[test]
     fn sqlite_initializes_participants_and_claims() {

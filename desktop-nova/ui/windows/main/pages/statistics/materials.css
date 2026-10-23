@@ -76,6 +76,24 @@
 .material-details-section { min-width:0; margin-bottom:var(--ln-space-4); }
 .material-details-section .beta-material-options { margin-bottom:var(--ln-space-3); }
 .material-details-section input[type="search"] { flex:1 1 12rem; min-width:0; }
+.stockpile-task { display:flex; flex-direction:column; gap:var(--ln-space-2); min-width:0; }
+.stockpile-source { margin:var(--ln-space-2) 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.stockpile-summary { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:var(--ln-space-2); font-variant-numeric:tabular-nums; }
+.stockpile-summary progress { flex-basis:100%; width:100%; height:0.5rem; accent-color:var(--primary); }
+.stockpile-filters { gap:var(--ln-space-2); }
+.stockpile-filters input[type="search"] { flex:1 1 12rem; }
+.stockpile-filters .dropdown-container { flex:0 0 auto; }
+.stockpile-save-status { font-size:var(--nova-text-sm); }
+.stockpile-error { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ln-space-2); }
+.stockpile-error > span { flex:1 1 12rem; overflow-wrap:anywhere; }
+.stockpile-table-scroll { height:clamp(12rem, 38vh, 28rem); min-height:0; }
+.material-list-content .stockpile-table { min-width:38rem; }
+.stockpile-table tbody tr:not(:has(.material-list-virtual-spacer-cell)) { height:57px; }
+.stockpile-table [data-slot="table-cell"] { padding:6px 10px; }
+.stockpile-table [data-slot="table-head"]:nth-child(2) { text-align:left; }
+.stockpile-table [data-slot="table-head"]:first-child, .stockpile-table [data-slot="table-cell"]:first-child { width:3.5rem; text-align:center; }
+.stockpile-table .beta-material-name > span { max-width:22rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.material-list-content input.stockpile-quantity-input { width:7rem; min-width:6rem; margin-left:auto; text-align:right; font-variant-numeric:tabular-nums; }
 .material-list-hover-popup { position:fixed; z-index:10000; pointer-events:none; max-width:min(26rem,calc(100vw - 8px)); padding:var(--ln-space-3); overflow-wrap:anywhere; }
 .material-list-hover-popup-item-row { display:flex; align-items:center; gap:var(--ln-space-2); }
 

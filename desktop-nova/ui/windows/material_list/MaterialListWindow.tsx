@@ -23,6 +23,7 @@ import {
     themeClassName
 } from "../../shell/themeRuntime";
 import { MaterialListContent } from "../main/pages/statistics/StatisticsPage";
+import { Button } from "../../components/ui/button";
 
 const materialListOpenFileEvent = "material-list-open-file";
 
@@ -51,6 +52,7 @@ export function MaterialListWindow() {
     const [data, setData] = useState<StatsData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<UiMessage>("");
+    const [reloadRevision, setReloadRevision] = useState(0);
     const namedData = useMemo(() => data ? refreshStatisticsNames(data) : null,[data,languageRevision]);
     const renderOperation = useMemo(
         () => findRenderOperationForSource(currentFile, applicationRender),
@@ -66,6 +68,9 @@ export function MaterialListWindow() {
         setThemeId(currentThemeId());
         return subscribeToThemeChanges(setThemeId);
     }, []);
+    useEffect(() => {
+        document.title = t(viewMode === "details" ? "editor.materialDetails" : "editor.exportMaterials");
+    }, [viewMode, languageRevision]);
 
     useEffect(() => {
         const unlistenPromise = listenEvent<string | null>(materialListOpenFileEvent, (event) => {
@@ -113,7 +118,7 @@ export function MaterialListWindow() {
         return () => {
             cancelled = true;
         };
-    }, [currentFile, applicationAnalysisKey]);
+    }, [currentFile, applicationAnalysisKey, reloadRevision]);
 
     return (
         <main className={["material-list-window", themeClassName(themeId)].filter(Boolean).join(" ")}>
@@ -122,7 +127,7 @@ export function MaterialListWindow() {
             ) : isLoading ? (
                 <div className="material-list-window-state">{t("library.materialsLoading")}</div>
             ) : error ? (
-                <pre className="material-list-window-state material-list-window-error">{localizeMessage(error)}</pre>
+                <div className="material-list-window-state material-list-window-error"><pre role="alert">{localizeMessage(error)}</pre><Button onClick={() => setReloadRevision(value => value + 1)}>{t("stockpile.retry")}</Button></div>
             ) : namedData ? (
                 <Profiler id="material-list" onRender={recordStatisticsCommit}><MaterialListContent key={currentFile} data={namedData} currentFile={currentFile} viewMode={viewMode} onViewModeChange={setViewMode} standalone /></Profiler>
             ) : (

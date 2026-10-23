@@ -317,3 +317,16 @@ export function getApplicationRuntimeHealth(): Promise<ApplicationRuntimeHealth>
 export function readEmbeddedPreview(sourcePath: string): Promise<EmbeddedPreviewImage | null> {
   return invoke("application_read_embedded_preview", { input: { sourcePath } });
 }
+
+export interface StockpileTaskInput {
+  sourcePath: string; scope: ApplicationMaterialScope; includeContainerItems: boolean; multiplier: number;
+}
+export interface StockpileTaskView {
+  taskId: string; sourceRevision: string;
+  items: Array<{ materialId: string; requiredCount: number; preparedCount: number; remainingCount: number; complete: boolean }>;
+  requiredCount: number; preparedCount: number; remainingCount: number; completedItems: number; totalItems: number;
+}
+export const getStockpileTask = (input: StockpileTaskInput): Promise<StockpileTaskView> => invoke("application_stockpile_task", { input });
+export const setStockpileTaskQuantity = (input: { taskId: string; sourceRevision: string; materialId: string; quantity: number }): Promise<StockpileTaskView> => invoke("application_stockpile_task_set", { input });
+export const resetStockpileTask = (input: { taskId: string; sourceRevision: string }): Promise<StockpileTaskView> => invoke("application_stockpile_task_reset", { input });
+export const prepareMaterialTaskWindow = (): Promise<void> => invoke("application_prepare_material_task_window");
