@@ -1,7 +1,9 @@
+import { t } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import React, { useRef, useState, useLayoutEffect } from "react";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import type { FlakeHoverBlock } from "./FlakePage";
-import { LayerSliceMeta } from "../../../../../src/business/facade";
+import { translateBlockId, LayerSliceMeta } from "../../../../../src/business/facade";
 
 function resolveDefaultFlakeScale(sizeZ: number): number {
   if (sizeZ <= 20) return 32;
@@ -55,7 +57,7 @@ export function formatStateValue(value: unknown): string {
  * @returns 解析后的层块状态
  */
 export function resolveLayerBlockStates(entry: any, propertyPool: any[]): string {
-  if (!entry) return "无";
+  if (!entry) return t("editor.none");
 
   const parts: string[] = [];
   const push = (value: unknown) => {
@@ -86,7 +88,7 @@ export function resolveLayerBlockStates(entry: any, propertyPool: any[]): string
   }
 
   const normalized = Array.from(new Set(parts.flatMap((part) => part.split(",").map((item) => item.trim()).filter(Boolean))));
-  return normalized.length ? normalized.join(", ") : "无";
+  return normalized.length ? normalized.join(", ") : t("editor.none");
 }
 
 /**
@@ -107,6 +109,7 @@ export function FlakeBlockTooltip({
   item: FlakeHoverBlock | null;
   highlightEmptyState?: boolean;
 }) {
+  const { locale } = useI18n();
   const popupRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState(() => ({ left: x + 14, top: y + 14 }));
 
@@ -134,7 +137,7 @@ export function FlakeBlockTooltip({
     left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
     top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
     setPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
-  }, [x, y, item]);
+  }, [x, y, item, locale]);
 
   useLayoutEffect(() => {
     const popup = popupRef.current;
@@ -149,10 +152,10 @@ export function FlakeBlockTooltip({
     <div ref={popupRef} className="material-list-hover-popup" role="tooltip">
       <div className="material-list-hover-popup-row material-list-hover-popup-item-row">
         <BlockIcon blockId={item.id} />
-        <span className="material-list-hover-popup-name">{item.name}</span>
+        <span className="material-list-hover-popup-name">{translateBlockId(item.id)}</span>
       </div>
-      <div className="material-list-hover-popup-row">方块ID：{item.id}</div>
-      <div className={highlightEmptyState && !item.hasStates ? "material-list-hover-popup-row flake-page__empty-state-row" : "material-list-hover-popup-row"}>方块状态：{item.states}</div>
+      <div className="material-list-hover-popup-row">{t("flake.blockIdLabel")} {item.id}</div>
+      <div className={highlightEmptyState && !item.hasStates ? "material-list-hover-popup-row flake-page__empty-state-row" : "material-list-hover-popup-row"}>{t("flake.blockStatesLabel")} {item.hasStates ? item.states : t("editor.none")}</div>
       <div className="material-list-hover-popup-row">x={item.x} y={item.y} z={item.z}</div>
     </div>
   );
@@ -166,6 +169,7 @@ export function FlakeBlockTooltip({
  * @returns 悬浮提示的组件
  */
 export function CreativeInventoryTooltip({ x, y, item }: { x: number; y: number; item: { id: string; name: string; } | null; }) {
+  const { locale } = useI18n();
   const popupRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState(() => ({ left: x + 14, top: y + 14 }));
 
@@ -193,7 +197,7 @@ export function CreativeInventoryTooltip({ x, y, item }: { x: number; y: number;
     left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
     top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
     setPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
-  }, [x, y, item]);
+  }, [x, y, item, locale]);
 
   useLayoutEffect(() => {
     const popup = popupRef.current;
@@ -207,9 +211,9 @@ export function CreativeInventoryTooltip({ x, y, item }: { x: number; y: number;
   return (
     <div ref={popupRef} className="material-list-hover-popup" role="tooltip">
       <div className="material-list-hover-popup-row">
-        <strong className="material-list-hover-popup-name">{item.name}</strong>
+        <strong className="material-list-hover-popup-name">{translateBlockId(item.id)}</strong>
       </div>
-      <div className="material-list-hover-popup-row">方块ID：{item.id}</div>
+      <div className="material-list-hover-popup-row">{t("flake.blockIdLabel")} {item.id}</div>
     </div>
   );
 }

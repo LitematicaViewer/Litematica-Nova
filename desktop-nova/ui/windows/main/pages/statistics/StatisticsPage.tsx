@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { displayFilePath } from "../../../../../src/business/facade";
 import { Checkbox } from "../../../../components/ui/checkbox";
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from "../../../../components/ui/table";
@@ -68,13 +70,13 @@ function parseEnumeratorInfoRules(rules: string[]): EnumeratorInfoRule[] {
       const separatorIndex = raw.indexOf("=");
       if (separatorIndex <= 0 || separatorIndex === raw.length - 1) {
         return {
-          title: raw.trim() || "未命名项",
+          title: raw.trim() || t("statistics.unnamed"),
           expression: "",
           raw,
         };
       }
       return {
-        title: raw.slice(0, separatorIndex).trim() || "未命名项",
+        title: raw === DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES[0] ? t("statistics.defaultVersion") : raw === DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES[1] ? t("statistics.defaultSurvival") : raw.slice(0, separatorIndex).trim() || t("statistics.unnamed"),
         expression: raw.slice(separatorIndex + 1).trim(),
         raw,
       };
@@ -118,7 +120,7 @@ function parseVersionToken(collection: EnumeratorCollection): { kind: "older" | 
     const normalized = String(candidate || "").trim();
     if (!normalized) continue;
     if (normalized === "v_older") {
-      return { kind: "older", numbers: [1, 12, 2], label: "1.12.2之前" };
+      return { kind: "older", numbers: [1, 12, 2], label: t("statistics.before1122") };
     }
     if (!normalized.startsWith("v_")) continue;
     const parts = normalized
@@ -138,7 +140,7 @@ function parseVersionToken(collection: EnumeratorCollection): { kind: "older" | 
 function compareVersionCollections(left: EnumeratorCollection, right: EnumeratorCollection): number {
   const leftToken = parseVersionToken(left);
   const rightToken = parseVersionToken(right);
-  if (!leftToken && !rightToken) return left.name.localeCompare(right.name, "zh-CN");
+  if (!leftToken && !rightToken) return left.name.localeCompare(right.name, getUiLocale());
   if (!leftToken) return -1;
   if (!rightToken) return 1;
   if (leftToken.kind !== rightToken.kind) {
@@ -165,23 +167,23 @@ function formatVersionResult(values: string[], collections: EnumeratorCollection
   const latestVersion = sortedMatchedVersions.length > 0 ? sortedMatchedVersions[sortedMatchedVersions.length - 1] : null;
   if (!latestVersion) {
     if (validVersionCollections.length === 0) {
-      return "未配置版本集合";
+      return t("statistics.noVersionSets");
     }
-    return hasHigherVersion ? "更高版本" : "--";
+    return hasHigherVersion ? t("statistics.higherVersion") : "--";
   }
   const versionToken = parseVersionToken(latestVersion);
   const label = versionToken?.label || latestVersion.name;
-  return hasHigherVersion ? `${label} / 更高版本` : label;
+  return hasHigherVersion ? t("statistics.withHigherVersion", {version:label}) : label;
 }
 
 function evaluateEnumeratorInfoRule(rule: EnumeratorInfoRule, data: StatsData, collections: EnumeratorCollection[]): EnumeratorInfoResult {
   if (!rule.expression) {
-    return { title: rule.title, value: "", error: "缺少表达式。", raw: rule.raw };
+    return { title: rule.title, value: "", error: t("statistics.missingExpression"), raw: rule.raw };
   }
-  if (data && !data.hasStructuralBlockCounts) return { title: rule.title, value: "", error: "统计快照缺少原始结构方块数据，请重新分析", raw:rule.raw };
+  if (data && !data.hasStructuralBlockCounts) return { title: rule.title, value: "", error: t("statistics.missingStructure"), raw:rule.raw };
   const call = parseFunctionCall(rule.expression);
   if (!call) {
-    return { title: rule.title, value: "", error: "表达式必须为 函数(集合表达式) 形式。", raw: rule.raw };
+    return { title: rule.title, value: "", error: t("statistics.expressionForm"), raw: rule.raw };
   }
   const evaluated = evaluateEnumeratorExpression(call.argument, collections);
   if (evaluated.error) {
@@ -192,7 +194,7 @@ function evaluateEnumeratorInfoRule(rule: EnumeratorInfoRule, data: StatsData, c
     case "version":
       return { title: rule.title, value: formatVersionResult(values, collections), error: "", raw: rule.raw };
     case "any":
-      return { title: rule.title, value: values.length > 0 ? "是" : "否", error: "", raw: rule.raw };
+      return { title: rule.title, value: values.length > 0 ? t("statistics.yes") : t("statistics.no"), error: "", raw: rule.raw };
     case "ratio": {
       if (data.totalNonAirBlocks <= 0) {
         return { title: rule.title, value: "--", error: "", raw: rule.raw };
@@ -201,25 +203,26 @@ function evaluateEnumeratorInfoRule(rule: EnumeratorInfoRule, data: StatsData, c
       const numerator = values.reduce((sum, value) => sum + (countById.get(value) || 0), 0);
       return {
         title: rule.title,
-        value: `${((numerator / data.totalNonAirBlocks) * 100).toFixed(1)}%`,
+        value: `${((numerator / data.totalNonAirBlocks) * 100).toLocaleString(getUiLocale(), {minimumFractionDigits:1, maximumFractionDigits:1})}%`,
         error: "",
         raw: rule.raw,
       };
     }
     default:
-      return { title: rule.title, value: "", error: `不支持的函数：${call.name}`, raw: rule.raw };
+      return { title: rule.title, value: "", error: t("statistics.unsupportedFunction", {name:call.name}), raw: rule.raw };
   }
 }
 
 export function buildEnumeratorInfoResults(rules: string[], data: StatsData | null, collections: EnumeratorCollection[]): EnumeratorInfoResult[] {
   const parsedRules = parseEnumeratorInfoRules(rules);
   if (!data) {
-    return parsedRules.map((rule) => ({ title: rule.title, value: "等待统计结果", error: "", raw: rule.raw }));
+    return parsedRules.map((rule) => ({ title: rule.title, value: t("statistics.waiting"), error: "", raw: rule.raw }));
   }
   return parsedRules.map((rule) => evaluateEnumeratorInfoRule(rule, data, collections));
 }
 
 function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; item: MaterialItem | null; multiplier: number }) {
+  const { locale } = useI18n();
   const popupRef = useRef<HTMLDivElement | null>(null);
   const total = item ? Math.max(0, Math.floor(item.totalCount * multiplier)) : 0;
 
@@ -249,7 +252,7 @@ function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; ite
     left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
     top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
     setPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
-  }, [x, y, item, total]);
+  }, [x, y, item, total, locale]);
 
   useLayoutEffect(() => {
     const popup = popupRef.current;
@@ -267,16 +270,16 @@ function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; ite
       role="tooltip"
     >
       <div className="material-list-hover-popup-row material-list-hover-popup-item-row">
-        <span className="material-list-hover-popup-label">项目：</span>
+        <span className="material-list-hover-popup-label">{t("statistics.itemLabel")}</span>
         <BlockIcon blockId={item.iconHint} />
-        <span className="material-list-hover-popup-name">{item.name}</span>
+        <span className="material-list-hover-popup-name">{materialDisplayName(item)}</span>
       </div>
       <div className="material-list-hover-popup-row">ID：{item.id}</div>
       <div className="material-list-hover-popup-row">
-        总计：<strong>{total.toLocaleString("zh-CN")}</strong> · {formatMaterialQuantity(item, total)}
+        {t("statistics.totalLabel")}<strong>{total.toLocaleString(getUiLocale())}</strong> · {formatMaterialQuantity(item, total)}
       </div>
       <div className="material-list-hover-popup-row">
-        {item.materialStatus !== "item" ? "特殊方块：没有可直接放置的对应物品" : item.hasCustomStackSize ? "包含自定义堆叠上限，按个显示" : !item.canFitContainer ? "此物品不能装入潜影盒，按个显示" : `每组 ${item.stackSize} 个；1 盒 = 27 组；1 箱盒 = 27 盒`}
+        {item.materialStatus !== "item" ? t("statistics.nonPlaceable") : item.hasCustomStackSize ? t("statistics.customStack") : !item.canFitContainer ? t("statistics.cannotFit") : t("statistics.stackInfo", {size:item.stackSize})}
       </div>
     </div>
   );
@@ -295,9 +298,10 @@ function EnumeratorInfoEditorDialog({
   onClose: () => void;
   onSave: (rules: string[]) => Promise<void>;
 }) {
+  const { locale } = useI18n();
   const [draft, setDraft] = useState(rules.join("\n"));
   const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
+  const [saveError, setSaveError] = useState<UiMessage>("");
 
   useEffect(() => {
     setDraft(rules.join("\n"));
@@ -310,7 +314,7 @@ function EnumeratorInfoEditorDialog({
 
   const previewResults = useMemo(
     () => buildEnumeratorInfoResults(parsedDraftRules, data, collections),
-    [collections, data, parsedDraftRules],
+    [collections, data, parsedDraftRules, locale],
   );
 
   const hasErrors = previewResults.some((item) => Boolean(item.error));
@@ -322,32 +326,32 @@ function EnumeratorInfoEditorDialog({
       await onSave(parsedDraftRules);
       onClose();
     } catch (error: any) {
-      setSaveError(String(error?.message || error || "保存失败"));
+      setSaveError(error?.message || error ? String(error?.message || error) : {key:"editor.saveFailed"});
     } finally {
       setIsSaving(false);
     }
   };
 
-  return <Dialog title="自定义统计" subtitle="按原始结构方块计算，容器物品不混入比例。" onClose={onClose} busy={isSaving} width="lg" footer={<>
-    <Button variant="secondary" disabled={isSaving} onClick={() => setDraft(DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES.join("\n"))}>恢复默认</Button>
-    <Button variant="secondary" disabled={isSaving} onClick={onClose}>取消</Button>
-    <Button disabled={isSaving || hasErrors} onClick={handleSave}>{isSaving ? "正在保存…" : "保存"}</Button>
+  return <Dialog title={t("statistics.customTitle")} subtitle={t("statistics.customSubtitle")} onClose={onClose} busy={isSaving} width="lg" footer={<>
+    <Button variant="secondary" disabled={isSaving} onClick={() => setDraft(DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES.join("\n"))}>{t("statistics.restoreDefaults")}</Button>
+    <Button variant="secondary" disabled={isSaving} onClick={onClose}>{t("editor.cancel")}</Button>
+    <Button disabled={isSaving || hasErrors} onClick={handleSave}>{isSaving ? t("editor.saving") : t("editor.save")}</Button>
   </>}>
     <div className="statistics-enumerator-editor-columns">
       <div className="statistics-enumerator-editor-column">
-        <label className="statistics-enumerator-editor-heading" htmlFor="statistics-rules">统计规则（一行一项）</label>
+        <label className="statistics-enumerator-editor-heading" htmlFor="statistics-rules">{t("statistics.rules")}</label>
         <Textarea id="statistics-rules" className="statistics-enumerator-editor-textarea" value={draft} onChange={event => setDraft(event.target.value)} spellCheck={false} disabled={isSaving} />
-        <div className="statistics-enumerator-editor-hint">标题 = 函数(集合表达式)。函数：version、any、ratio。集合运算：|、&amp;、-；L 表示当前结构方块集合。</div>
+        <div className="statistics-enumerator-editor-hint">{t("statistics.rulesHint")}</div>
       </div>
-      <div className="statistics-enumerator-editor-column"><h3 className="statistics-enumerator-editor-heading">实时预览</h3>
+      <div className="statistics-enumerator-editor-column"><h3 className="statistics-enumerator-editor-heading">{t("statistics.livePreview")}</h3>
         {previewResults.map((item,index) => <div key={index} className="statistics-enumerator-preview-item">
-          <div className="statistics-enumerator-preview-main"><span>{item.title}</span><strong>{item.error ? "错误" : item.value}</strong></div>
-          {item.error && <p className="statistics-enumerator-preview-error" role="alert">{item.error}</p>}
+          <div className="statistics-enumerator-preview-main"><span>{item.title}</span><strong>{item.error ? t("editor.error") : item.value}</strong></div>
+          {item.error && <p className="statistics-enumerator-preview-error" role="alert">{localizeMessage(item.error)}</p>}
         </div>)}
       </div>
     </div>
-    {saveError && <pre className="subwindow-error" role="alert">{saveError}</pre>}
-    {hasErrors && <p className="statistics-enumerator-editor-error">存在语法或集合错误，修复后即可保存。</p>}
+    {saveError && <pre className="subwindow-error" role="alert">{localizeMessage(saveError)}</pre>}
+    {hasErrors && <p className="statistics-enumerator-editor-error">{t("statistics.fixRules")}</p>}
   </Dialog>;
 }
 
@@ -375,6 +379,7 @@ const MaterialTable = React.memo(function MaterialTable({ materials, asItems, mu
   breakdown?: boolean;
   onHover?: (material: MaterialItem | null) => void;
 }) {
+  const { locale } = useI18n();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Must be the height the browser actually lays out (see materials.css): detail rows are a
   // 32px icon plus 9px vertical padding plus the collapsed border; summary rows are pinned to
@@ -384,30 +389,31 @@ const MaterialTable = React.memo(function MaterialTable({ materials, asItems, mu
   // Zebra striping is keyed on the row's position in the *data*, never on its DOM slot: the
   // virtual window slides, so a `:nth-child` stripe would invert on every scrolled row.
   const rowParityClass = (absoluteIndex: number) => (absoluteIndex % 2 === 1 ? "material-list-row-odd" : "material-list-row-even");
-  if (!breakdown) return <div className="material-table-scroll material-summary-scroll" ref={scrollRef}><ul className="material-summary-list" aria-label="材料列表">
+  if (!breakdown) return <div className="material-table-scroll material-summary-scroll" ref={scrollRef}><ul className="material-summary-list" aria-label={t("editor.materials")}>
     {virtual.topSpacerHeight > 0 && <VirtualSpacerItem className="material-virtual-spacer" height={virtual.topSpacerHeight} /> }
     {virtual.visibleItems.map((material, index) => <li key={material.id} className={rowParityClass(virtual.startIndex + index)} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
       <BlockIcon blockId={material.iconHint} />
-      <span className="material-summary-name" title={material.id}>{material.name}
-        {material.materialStatus !== "item" && <small>{material.materialStatus === "no_item" ? "无直接对应物品" : "未知物品"}</small>}
+      <span className="material-summary-name" title={material.id}>{materialDisplayName(material)}
+        {material.materialStatus !== "item" && <small>{material.materialStatus === "no_item" ? t("statistics.noItem") : t("statistics.unknownItem")}</small>}
       </span>
       <span className="material-summary-quantity">{formatMaterialQuantity(material, material.totalCount * multiplier, asItems)}</span>
     </li>)}
     {virtual.bottomSpacerHeight > 0 && <VirtualSpacerItem className="material-virtual-spacer" height={virtual.bottomSpacerHeight} /> }
-    {materials.length === 0 && <li className="material-summary-empty">没有符合条件的材料</li>}
+    {materials.length === 0 && <li className="material-summary-empty">{t("statistics.noMatches")}</li>}
   </ul></div>;
   return <div className="material-table-scroll material-detail-table-scroll" ref={scrollRef}><Table className="material-list-table beta-material-table">
-    <TableHeader><TableRow><TableHead scope="col">材料</TableHead>{breakdown && <><TableHead scope="col">建造用量</TableHead><TableHead scope="col">容器物品</TableHead></>}<TableHead scope="col">{breakdown ? "合计" : "数量"}</TableHead></TableRow></TableHeader>
+    <TableHeader><TableRow><TableHead scope="col">{t("statistics.material")}</TableHead>{breakdown && <><TableHead scope="col">{t("statistics.buildQuantity")}</TableHead><TableHead scope="col">{t("statistics.containerItems")}</TableHead></>}<TableHead scope="col">{breakdown ? t("statistics.total") : t("statistics.quantity")}</TableHead></TableRow></TableHeader>
     <TableBody>{virtual.topSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={4} height={virtual.topSpacerHeight} /></TableRow>}{virtual.visibleItems.map((material, index) => <TableRow key={material.id} className={rowParityClass(virtual.startIndex + index)} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
-      <TableCell><div className="beta-material-name"><BlockIcon blockId={material.iconHint} /><span title={material.id}>{material.name}{material.materialStatus !== "item" && <small>{material.materialStatus === "no_item" ? "无直接对应物品" : "未知物品"}</small>}</span></div></TableCell>
+      <TableCell><div className="beta-material-name"><BlockIcon blockId={material.iconHint} /><span title={material.id}>{materialDisplayName(material)}{material.materialStatus !== "item" && <small>{material.materialStatus === "no_item" ? t("statistics.noItem") : t("statistics.unknownItem")}</small>}</span></div></TableCell>
       {breakdown && <><TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.blockCount * multiplier, asItems)}</TableCell><TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.containerItemCount * multiplier, asItems)}</TableCell></>}
       <TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.totalCount * multiplier, asItems)}</TableCell>
-    </TableRow>)}{virtual.bottomSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={4} height={virtual.bottomSpacerHeight} /></TableRow>}{materials.length === 0 && <TableRow><TableCell colSpan={breakdown ? 4 : 2} className="material-list-empty-cell">没有符合条件的材料</TableCell></TableRow>}</TableBody>
+    </TableRow>)}{virtual.bottomSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={4} height={virtual.bottomSpacerHeight} /></TableRow>}{materials.length === 0 && <TableRow><TableCell colSpan={breakdown ? 4 : 2} className="material-list-empty-cell">{t("statistics.noMatches")}</TableCell></TableRow>}</TableBody>
   </Table></div>;
 });
 
 function QuantitySwitch({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
-  return <label className="beta-material-check"><Checkbox  checked={checked} onCheckedChange={checked => onChange((checked === true))} />按个显示</label>;
+  useI18n();
+  return <label className="beta-material-check"><Checkbox  checked={checked} onCheckedChange={checked => onChange((checked === true))} />{t("statistics.individual")}</label>;
 }
 
 /**
@@ -416,6 +422,7 @@ function QuantitySwitch({ checked, onChange }: { checked: boolean; onChange: (va
 export function MaterialListContent({ data, onClose, currentFile, standalone = false, embedded = false, viewMode = "details", onViewModeChange }: {
   data: StatsData; onClose?: () => void; currentFile: string; standalone?: boolean; embedded?: boolean; viewMode?:"details"|"export"; onViewModeChange?:(mode:"details"|"export")=>void;
 }) {
+  const { locale } = useI18n();
   const languageRevision = useSyncExternalStore(subscribeI18nChanges,getI18nRevision,getI18nRevision);
   const [contentMode,setContentMode] = useState(viewMode);
   useEffect(() => setContentMode(viewMode),[viewMode]);
@@ -441,9 +448,9 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
   const [webTargets, setWebTargets] = useState<Array<"windows-x64" | "linux-x64" | "macos-x64" | "macos-arm64">>(["windows-x64"]);
   const [isExporting, setIsExporting] = useState(false);
   const [isPreparingRecipes, setIsPreparingRecipes] = useState(false);
-  const [recipeStatus, setRecipeStatus] = useState("");
-  const [exportStatus, setExportStatus] = useState("");
-  const [error, setError] = useState("");
+  const [recipeStatus, setRecipeStatus] = useState<UiMessage>("");
+  const [exportStatus, setExportStatus] = useState<UiMessage>("");
+  const [error, setError] = useState<UiMessage>("");
   const exportInFlight = useRef(false);
   const prepareRecipesInFlight = useRef(false);
   const busy = isExporting || isPreparingRecipes;
@@ -459,16 +466,16 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
     setDetailsLoading(true);
     loadMaterialsScope(currentFile, selectedScope, includeContainerItems)
       .then(materials => { if (generation === detailsGeneration.current) setScopeMaterials(materials); })
-      .catch(error => { if (generation === detailsGeneration.current) { setScopeMaterials([]); setError(`读取材料明细失败：${error}`); } })
+      .catch(error => { if (generation === detailsGeneration.current) { setScopeMaterials([]); setError({ key: "statistics.detailsFailed", params: {error:String(error)} }); } })
       .finally(() => { if (generation === detailsGeneration.current) setDetailsLoading(false); });
     return () => { detailsGeneration.current += 1; };
   },[currentFile,data,selectedScope,includeContainerItems,contentMode]);
   const detailRows = useMemo(() => filterMaterialItems(scopeMaterials.map(material => ({...material,name:materialDisplayName(material)})).sort((a,b) => b.totalCount-a.totalCount),search),[scopeMaterials,search,languageRevision]);
   const contentClassName = [standalone ? "material-list-window" : embedded ? "material-list-content-embedded" : "dialog-content",
     embedded ? "" : "subwindow-frame", "material-list-content", standalone ? "subwindow-frame-full material-list-content-standalone" : ""].filter(Boolean).join(" ");
-  const options = useMemo(() => [{ label: "整个投影", value: "scope:all" },
-    ...(data.regions || []).map(region => ({ label: `选定区域：${region.name}`, value: `region:${region.name}` })),
-    ...(data.layers || []).map(layer => ({ label: `选定层级：y=${layer.world_y}（层 ${layer.layer}）`, value: `layer:${layer.layer}` }))], [data.regions, data.layers]);
+  const options = useMemo(() => [{ label: t("statistics.all"), value: "scope:all" },
+    ...(data.regions || []).map(region => ({ label: t("statistics.regionScope", {name:region.name}), value: `region:${region.name}` })),
+    ...(data.layers || []).map(layer => ({ label: t("statistics.layerScope", {y:layer.world_y, layer:layer.layer}), value: `layer:${layer.layer}` }))], [data.regions, data.layers, locale]);
   const handleExport = async () => {
     if (exportInFlight.current) return;
     exportInFlight.current = true; setIsExporting(true); setExportStatus(""); setError("");
@@ -482,70 +489,70 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
           adminPassword: webMode === "multi" ? adminPassword : undefined,
           whitelist: whitelist.split(/[\s,，;；]+/).filter(Boolean), whitelistEnabled, allowGuestReadonly, adminPageEnabled, targets: webTargets } : undefined,
       });
-      if (ok) { setExportStatus("材料列表已导出"); setAccessPassword(""); setAdminPassword(""); }
-    } catch (error: any) { setError(`导出失败：${error}`); }
+      if (ok) { setExportStatus({key:"statistics.exported"}); setAccessPassword(""); setAdminPassword(""); }
+    } catch (error: any) { setError({ key: "statistics.exportFailed", params: {error:String(error)} }); }
     finally { exportInFlight.current = false; setIsExporting(false); }
   };
   const handlePrepareRecipes = async () => {
     if (prepareRecipesInFlight.current) return;
     prepareRecipesInFlight.current = true; setIsPreparingRecipes(true); setRecipeStatus(""); setError("");
-    try { await fetchMaterialRecipeCache(); setRecipeStatus("Minecraft 26.3 配方缓存已就绪"); }
-    catch (error: any) { setError(`准备配方失败：${error}`); }
+    try { await fetchMaterialRecipeCache(); setRecipeStatus({key:"statistics.recipesReady"}); }
+    catch (error: any) { setError({ key: "statistics.recipesFailed", params: {error:String(error)} }); }
     finally { prepareRecipesInFlight.current = false; setIsPreparingRecipes(false); }
   };
   return <div className={contentClassName} onMouseMove={event => setMousePos({ x:event.clientX, y:event.clientY })} onMouseLeave={() => setHoverItem(null)}>
-    {!embedded && <div className="subwindow-title-bar"><h3 className="subwindow-title">{contentMode === "details" ? "材料明细" : "导出材料列表"}</h3>
-      {onClose && <Button variant="ghost" size="icon" className="subwindow-close-button" aria-label="关闭窗口" onClick={onClose}><X size={18} /></Button>}
+    {!embedded && <div className="subwindow-title-bar"><h3 className="subwindow-title">{contentMode === "details" ? t("editor.materialDetails") : t("editor.exportMaterials")}</h3>
+      {onClose && <Button variant="ghost" size="icon" className="subwindow-close-button" aria-label={t("editor.closeWindow")} onClick={onClose}><X size={18} /></Button>}
     </div>}
     <div className="subwindow-body">
       <ScrollArea className="material-export-settings">
         {contentMode === "details" && <section className="material-details-section" aria-busy={detailsLoading}>
           <div className="material-export-grid">
-            <label className="material-export-field"><span>统计范围</span><Dropdown value={workbook} options={options} onChange={setWorkbook} ariaLabel="材料明细范围" /></label>
-            <label className="material-export-field"><span>建造份数</span><Input type="number" min={1} max={1000000} aria-label="材料明细份数" value={multiplier} onChange={event => setMultiplier(Math.min(1000000,Math.max(1,Math.floor(Number(event.target.value)||1))))} /></label>
+            <label className="material-export-field"><span>{t("statistics.scope")}</span><Dropdown value={workbook} options={options} onChange={setWorkbook} ariaLabel={t("statistics.detailsScope")} /></label>
+            <label className="material-export-field"><span>{t("statistics.copies")}</span><Input type="number" min={1} max={1000000} aria-label={t("statistics.detailsCopies")} value={multiplier} onChange={event => setMultiplier(Math.min(1000000,Math.max(1,Math.floor(Number(event.target.value)||1))))} /></label>
           </div>
-          <label className="beta-material-check"><Checkbox checked={includeContainerItems} onCheckedChange={checked => setIncludeContainerItems(checked === true)} />统计容器内物品</label>
-          <header className="material-summary-header"><h3>材料明细</h3><span>{detailRows.length} / {scopeMaterials.length} 种</span></header>
-          <div className="beta-material-options"><Input type="search" aria-label="搜索材料明细" placeholder="搜索名称或 ID" value={search} onChange={event => setSearch(event.target.value)} /><QuantitySwitch checked={asItems} onChange={setAsItems} /></div>
-          {detailsLoading ? <p role="status">正在读取所选范围…</p> : <MaterialTable materials={detailRows} asItems={asItems} multiplier={multiplier} breakdown onHover={setHoverItem} />}
+          <label className="beta-material-check"><Checkbox checked={includeContainerItems} onCheckedChange={checked => setIncludeContainerItems(checked === true)} />{t("statistics.includeContainers")}</label>
+          <header className="material-summary-header"><h3>{t("editor.materialDetails")}</h3><span>{t("statistics.materialKinds", {visible:detailRows.length.toLocaleString(locale), total:scopeMaterials.length.toLocaleString(locale)})}</span></header>
+          <div className="beta-material-options"><Input type="search" aria-label={t("statistics.searchDetails")} placeholder={t("editor.nameSearchHint")} value={search} onChange={event => setSearch(event.target.value)} /><QuantitySwitch checked={asItems} onChange={setAsItems} /></div>
+          {detailsLoading ? <p role="status">{t("statistics.loadingScope")}</p> : <MaterialTable materials={detailRows} asItems={asItems} multiplier={multiplier} breakdown onHover={setHoverItem} />}
         </section>}
         {contentMode === "export" && <>
         <fieldset className="material-export-section" disabled={busy}>
-          <legend>材料与格式</legend>
+          <legend>{t("statistics.materialFormat")}</legend>
           <div className="material-export-grid">
-            <label className="material-export-field"><span>统计范围</span><Dropdown value={workbook} options={options} onChange={setWorkbook} disabled={busy} ariaLabel="材料统计范围" /></label>
-            <label className="material-export-field"><span>建造份数</span><Input type="number" min={1} max={1000000} aria-label="建造份数" value={multiplier}
+            <label className="material-export-field"><span>{t("statistics.scope")}</span><Dropdown value={workbook} options={options} onChange={setWorkbook} disabled={busy} ariaLabel={t("statistics.exportScope")} /></label>
+            <label className="material-export-field"><span>{t("statistics.copies")}</span><Input type="number" min={1} max={1000000} aria-label={t("statistics.copies")} value={multiplier}
               onChange={event => setMultiplier(Math.min(1000000, Math.max(1, Math.floor(Number(event.target.value) || 1))))} /></label>
-            <label className="material-export-field"><span>导出格式</span><Dropdown value={exportFormat} options={[{ label: "SVG 艺术表", value: "svg" }, { label: "CSV", value: "csv" }, { label: "TXT", value: "txt" }, { label: "网页", value: "html" }]}
-              onChange={value => setExportFormat(value as typeof exportFormat)} disabled={busy} ariaLabel="材料列表导出格式" /></label>
+            <label className="material-export-field"><span>{t("statistics.exportFormat")}</span><Dropdown value={exportFormat} options={[{ label: t("statistics.svgArt"), value: "svg" }, { label: "CSV", value: "csv" }, { label: "TXT", value: "txt" }, { label: t("statistics.web"), value: "html" }]}
+              onChange={value => setExportFormat(value as typeof exportFormat)} disabled={busy} ariaLabel={t("statistics.exportFormatLabel")} /></label>
           </div>
           <div className="beta-material-options">
-            <label className="beta-material-check"><Checkbox checked={includeContainerItems} disabled={busy} onCheckedChange={checked => setIncludeContainerItems(checked === true)} />统计容器内物品</label>
-            <label className="beta-material-check"><Checkbox checked={terminalRawMaterials} disabled={busy} onCheckedChange={checked => setTerminalRawMaterials(checked === true)} />导出末端原料（本地配方）</label>
+            <label className="beta-material-check"><Checkbox checked={includeContainerItems} disabled={busy} onCheckedChange={checked => setIncludeContainerItems(checked === true)} />{t("statistics.includeContainers")}</label>
+            <label className="beta-material-check"><Checkbox checked={terminalRawMaterials} disabled={busy} onCheckedChange={checked => setTerminalRawMaterials(checked === true)} />{t("statistics.terminalExport")}</label>
           </div>
-          <p className="beta-statistics-status">份数与范围同时用于材料明细及实际导出；建造用量、容器物品与合计分别统计。</p>
+          <p className="beta-statistics-status">{t("statistics.scopeHint")}</p>
         </fieldset>
         {terminalRawMaterials && <section className="material-export-section">
-          <h4>末端原料配方</h4><p className="beta-statistics-status">复用本地 26.3 配方。未确定标签、循环和特殊配方会报告；烧制燃料另计。</p>
-          <Button title="点击后联网下载 Minecraft 客户端提取配方，下载可能较大" onClick={handlePrepareRecipes} disabled={busy}>{isPreparingRecipes ? "正在准备配方…" : "准备26.3配方（需联网）"}</Button>
-          {recipeStatus && <p role="status">{recipeStatus}</p>}
+          <h4>{t("statistics.terminalRecipes")}</h4><p className="beta-statistics-status">{t("statistics.recipesHint")}</p>
+          <Button title={t("statistics.prepareRecipesHint")} onClick={handlePrepareRecipes} disabled={busy}>{isPreparingRecipes ? t("statistics.preparingRecipes") : t("statistics.prepareRecipes")}</Button>
+          {recipeStatus && <p role="status">{localizeMessage(recipeStatus)}</p>}
         </section>}
         {exportFormat === "html" && <fieldset className="material-export-section" disabled={busy}>
-          <legend>网页选项</legend>
-          <label className="material-export-field"><span>使用方式</span><Dropdown value={webMode} options={[{ label: "单人离线网页（HTML）", value: "single" }, { label: "多人协作网页包（ZIP）", value: "multi" }]}
-            onChange={value => setWebMode(value as typeof webMode)} disabled={busy} ariaLabel="网页使用方式" /></label>
+          <legend>{t("statistics.webOptions")}</legend>
+          <label className="material-export-field"><span>{t("statistics.webMode")}</span><Dropdown value={webMode} options={[{ label: t("statistics.webSingle"), value: "single" }, { label: t("statistics.webMulti"), value: "multi" }]}
+            onChange={value => setWebMode(value as typeof webMode)} disabled={busy} ariaLabel={t("statistics.webUsage")} /></label>
           {webMode === "multi" && <>
             <div className="material-export-grid">
-              <label className="material-export-field"><span>访问密码</span><Input type="password" autoComplete="new-password" aria-label="网页访问密码" value={accessPassword} onChange={event => setAccessPassword(event.target.value)} /></label>
-              <label className="material-export-field"><span>管理员密码</span><Input type="password" autoComplete="new-password" aria-label="网页管理员密码" value={adminPassword} onChange={event => setAdminPassword(event.target.value)} /></label>
-              <label className="material-export-field material-export-field-wide"><span>白名单玩家</span><Input aria-label="白名单玩家" placeholder="玩家名，以逗号或空格分隔" value={whitelist} onChange={event => setWhitelist(event.target.value)} /></label>
+              <label className="material-export-field"><span>{t("statistics.accessPassword")}</span><Input type="password" autoComplete="new-password" aria-label={t("statistics.webAccessPassword")} value={accessPassword} onChange={event => setAccessPassword(event.target.value)} /></label>
+              <label className="material-export-field"><span>{t("statistics.adminPassword")}</span><Input type="password" autoComplete="new-password" aria-label={t("statistics.webAdminPassword")} value={adminPassword} onChange={event => setAdminPassword(event.target.value)} /></label>
+              <label className="material-export-field material-export-field-wide"><span>{t("statistics.whitelist")}</span><Input aria-label={t("statistics.whitelist")} placeholder={t("statistics.whitelistHint")} value={whitelist} onChange={event => setWhitelist(event.target.value)} /></label>
             </div>
             <div className="beta-material-options">
-              <label className="beta-material-check"><Checkbox checked={whitelistEnabled} disabled={busy} onCheckedChange={checked => setWhitelistEnabled(checked === true)} />启用白名单</label>
-              <label className="beta-material-check"><Checkbox checked={allowGuestReadonly} disabled={busy} onCheckedChange={checked => setAllowGuestReadonly(checked === true)} />允许访客只读</label>
-              <label className="beta-material-check"><Checkbox checked={adminPageEnabled} disabled={busy} onCheckedChange={checked => setAdminPageEnabled(checked === true)} />启用管理页面</label>
+              <label className="beta-material-check"><Checkbox checked={whitelistEnabled} disabled={busy} onCheckedChange={checked => setWhitelistEnabled(checked === true)} />{t("statistics.enableWhitelist")}</label>
+              <label className="beta-material-check"><Checkbox checked={allowGuestReadonly} disabled={busy} onCheckedChange={checked => setAllowGuestReadonly(checked === true)} />{t("statistics.guestReadonly")}</label>
+              <label className="beta-material-check"><Checkbox checked={adminPageEnabled} disabled={busy} onCheckedChange={checked => setAdminPageEnabled(checked === true)} />{t("statistics.enableAdmin")}</label>
             </div>
-            <fieldset className="material-export-targets"><legend>服务平台（至少选择一项）</legend>
+            <fieldset className="material-export-targets"><legend>{t("statistics.targets")}</legend>
               {([["windows-x64", "Windows x64"], ["linux-x64", "Linux x64"], ["macos-x64", "macOS x64"], ["macos-arm64", "macOS ARM64"]] as const).map(([value, label]) =>
                 <label className="beta-material-check" key={value}><Checkbox checked={webTargets.includes(value)} disabled={busy}
                   onCheckedChange={checked => setWebTargets(previous => checked === true ? [...previous.filter(target => target !== value), value] : previous.filter(target => target !== value))} />{label}</label>)}
@@ -555,10 +562,10 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
         </>}
       </ScrollArea>
       <div className="material-export-footer">
-        <Button variant="secondary" disabled={busy} onClick={() => { const mode = contentMode === "details" ? "export" : "details"; setContentMode(mode); onViewModeChange?.(mode); setHoverItem(null); }}>{contentMode === "details" ? "打开导出设置" : "返回材料明细"}</Button>
-        {contentMode === "export" && <Button onClick={handleExport} disabled={busy || !currentFile}>{isExporting ? "正在导出…" : "导出材料列表"}</Button>}
-        {exportStatus && <span role="status">{exportStatus}</span>}
-        {error && <pre className="subwindow-error" role="alert">{error}</pre>}
+        <Button variant="secondary" disabled={busy} onClick={() => { const mode = contentMode === "details" ? "export" : "details"; setContentMode(mode); onViewModeChange?.(mode); setHoverItem(null); }}>{contentMode === "details" ? t("statistics.openExport") : t("statistics.returnDetails")}</Button>
+        {contentMode === "export" && <Button onClick={handleExport} disabled={busy || !currentFile}>{isExporting ? t("statistics.exporting") : t("editor.exportMaterials")}</Button>}
+        {exportStatus && <span role="status">{localizeMessage(exportStatus)}</span>}
+        {error && <pre className="subwindow-error" role="alert">{localizeMessage(error)}</pre>}
       </div>
     </div>
     <MaterialTooltip x={mousePos.x} y={mousePos.y} item={hoverItem} multiplier={multiplier} />
@@ -566,15 +573,17 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
 }
 
 export function MaterialsDialog({ data, onClose, currentFile, viewMode = "details" }: { data: StatsData; onClose: () => void; currentFile: string; viewMode?:"details"|"export" }) {
+  const { locale } = useI18n();
   const [mode,setMode] = useState(viewMode);
   return (
-    <Dialog title={mode === "details" ? "材料明细" : "导出材料列表"} onClose={onClose} width="lg" className="materials-dialog">
+    <Dialog title={mode === "details" ? t("editor.materialDetails") : t("editor.exportMaterials")} onClose={onClose} width="lg" className="materials-dialog">
       <MaterialListContent data={data} currentFile={currentFile} embedded viewMode={mode} onViewModeChange={setMode} />
     </Dialog>
   );
 }
 
 export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
+  const { locale } = useI18n();
   const languageRevision = useSyncExternalStore(subscribeI18nChanges,getI18nRevision,getI18nRevision);
   const applicationRender = useSyncExternalStore(
     subscribeApplicationRender,
@@ -582,7 +591,7 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
     getApplicationRenderState,
   );
   const [data, setData] = useState<StatsData | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiMessage>("");
   const [showMaterials, setShowMaterials] = useState(false);
   const [materialsViewMode,setMaterialsViewMode] = useState<"details"|"export">("details");
   const [materialSearch, setMaterialSearch] = useState("");
@@ -594,7 +603,7 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
   useEffect(() => { if (!debugMode) setShowEnumerator(false); }, [debugMode]);
   const [showEnumeratorInfoEditor, setShowEnumeratorInfoEditor] = useState(false);
   const [enumeratorCollections, setEnumeratorCollections] = useState<EnumeratorCollection[]>([]);
-  const [enumeratorError, setEnumeratorError] = useState("");
+  const [enumeratorError, setEnumeratorError] = useState<UiMessage>("");
   const [enumeratorLoading, setEnumeratorLoading] = useState(false);
   const [enumeratorRules, setEnumeratorRules] = useState<string[]>([...DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES]);
   const [configLoading, setConfigLoading] = useState(true);
@@ -602,7 +611,7 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
   useEffect(() => {
     let active = true;
     loadUserConfigMigratingLocalStorage().then(info => { if(active) setEnumeratorRules(normalizeStatisticsEnumeratorInfoRules(info.config.statistics_enumerator_info_rules)); })
-      .catch(error => { if(active) setEnumeratorError(`读取自定义统计设置失败：${error}`); })
+      .catch(error => { if(active) setEnumeratorError({ key: "statistics.rulesFailed", params: {error:String(error)} }); })
       .finally(() => { if(active) setConfigLoading(false); });
     return () => { active = false; };
   },[]);
@@ -611,11 +620,11 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
     if(!runtimeCollection) { setEnumeratorCollections([]); setEnumeratorLoading(false); return; }
     setEnumeratorLoading(true); setEnumeratorError("");
     loadEnumeratorCollections([runtimeCollection]).then(collections => { if(active) setEnumeratorCollections(collections); })
-      .catch(error => { if(active) { setEnumeratorCollections([]); setEnumeratorError(`读取枚举集合失败：${error}`); } })
+      .catch(error => { if(active) { setEnumeratorCollections([]); setEnumeratorError({ key: "statistics.collectionsFailed", params: {error:String(error)} }); } })
       .finally(() => { if(active) setEnumeratorLoading(false); });
     return () => { active = false; };
   },[runtimeCollection]);
-  const enumeratorResults = useMemo(() => buildEnumeratorInfoResults(enumeratorRules,data,enumeratorCollections),[enumeratorRules,data,enumeratorCollections]);
+  const enumeratorResults = useMemo(() => buildEnumeratorInfoResults(enumeratorRules,data,enumeratorCollections),[enumeratorRules,data,enumeratorCollections,locale]);
   const saveEnumeratorRules = async (rules:string[]) => {
     const info = await saveStatisticsEnumeratorInfoRulesConfig(rules);
     setEnumeratorRules(normalizeStatisticsEnumeratorInfoRules(info.config.statistics_enumerator_info_rules));
@@ -672,44 +681,44 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
   }, [currentFile, includeContainerItems, applicationAnalysisKey]);
 
   if (!currentFile) {
-    return <div className="beta-statistics-empty"><h2>统计</h2><p>先在投影库选择一个投影，这里会显示尺寸和所需材料。</p></div>;
+    return <div className="beta-statistics-empty"><h2>{t("statistics.title")}</h2><p>{t("statistics.empty")}</p></div>;
   }
   const scan = data?.containerScan;
   return <React.Profiler id="statistics" onRender={recordStatisticsCommit}><div className="beta-statistics-page">
     <div className="beta-statistics-toolbar">
-      <Button onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("details"); setShowMaterials(true); })} disabled={!data || isLoading}>材料明细</Button>
-      <Button onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("export"); setShowMaterials(true); }, "export")} disabled={!data || isLoading}>导出材料列表</Button>
-      {debugMode && <Button variant="secondary" disabled={!data} onClick={() => openEnumeratorWithWindowBehavior(currentFile,() => setShowEnumerator(true))}>打开枚举器</Button>}
-      <label className="beta-material-check"><Checkbox  checked={includeContainerItems} onCheckedChange={checked => setIncludeContainerItems((checked === true))} />统计容器内物品</label>
+      <Button onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("details"); setShowMaterials(true); })} disabled={!data || isLoading}>{t("editor.materialDetails")}</Button>
+      <Button onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("export"); setShowMaterials(true); }, "export")} disabled={!data || isLoading}>{t("editor.exportMaterials")}</Button>
+      {debugMode && <Button variant="secondary" disabled={!data} onClick={() => openEnumeratorWithWindowBehavior(currentFile,() => setShowEnumerator(true))}>{t("statistics.openEnumerator")}</Button>}
+      <label className="beta-material-check"><Checkbox  checked={includeContainerItems} onCheckedChange={checked => setIncludeContainerItems((checked === true))} />{t("statistics.includeContainers")}</label>
       <QuantitySwitch checked={asItems} onChange={setAsItems} />
       <span className="beta-statistics-file" title={displayFilePath(currentFile)}>{currentFile.split(/[\\/]/).pop()}</span>
-      <Button onClick={loadStats} disabled={isLoading}>{isLoading ? "正在分析…" : "重新分析"}</Button>
+      <Button onClick={loadStats} disabled={isLoading}>{isLoading ? t("statistics.analyzing") : t("statistics.reanalyze")}</Button>
     </div>
-    {includeContainerItems && scan && <div className="beta-statistics-status" role="status">已扫描 {scan.containers_scanned} 个容器、{scan.item_stacks_scanned} 堆物品。</div>}
-    {error && <pre className="subwindow-error" role="alert">{error}</pre>}
-    {!!scan?.warnings?.length && <details className="beta-statistics-warnings"><summary>有 {scan.warnings.length} 项容器数据需要注意</summary><pre>{scan.warnings.slice(0, 40).join("\n")}</pre></details>}
+    {includeContainerItems && scan && <div className="beta-statistics-status" role="status">{t("statistics.scanned", {containers:scan.containers_scanned.toLocaleString(locale), stacks:scan.item_stacks_scanned.toLocaleString(locale)})}</div>}
+    {error && <pre className="subwindow-error" role="alert">{localizeMessage(error)}</pre>}
+    {!!scan?.warnings?.length && <details className="beta-statistics-warnings"><summary>{t("statistics.containerWarnings", {count:scan.warnings.length.toLocaleString(locale)})}</summary><pre>{scan.warnings.slice(0, 40).map(localizeMessage).join("\n")}</pre></details>}
     <div className="beta-statistics-panes">
-      <section className="beta-statistics-structure"><h2>结构分析</h2>
+      <section className="beta-statistics-structure"><h2>{t("statistics.structure")}</h2>
         {data ? <ScrollArea className="beta-statistics-facts-scroll"><dl className="beta-statistics-facts">
-          <ReadOnlyRow label="非空气方块" value={data.totalNonAirBlocks.toLocaleString("zh-CN")} />
-          <ReadOnlyRow label="区域数量" value={data.regionCount} />
-          <ReadOnlyRow label="包围尺寸" value={`${data.enclosingSize.x} × ${data.enclosingSize.y} × ${data.enclosingSize.z}`} />
-          <ReadOnlyRow label="空间占用率" value={`${(data.density * 100).toFixed(2)}%`} />
-          <ReadOnlyRow label="结构类型" value={data.buildingType} />
-          <ReadOnlyRow label="红石比例" value={data.redstoneRatio === null ? "未提供" : `${(data.redstoneRatio * 100).toFixed(2)}%`} />
-          <ReadOnlyRow label="流体比例" value={data.fluidRatio === null ? "未提供" : `${(data.fluidRatio * 100).toFixed(2)}%`} />
-          <ReadOnlyRow label="实体数量" value={data.entityCount} />
+          <ReadOnlyRow label={t("statistics.nonAir")} value={data.totalNonAirBlocks.toLocaleString(getUiLocale())} />
+          <ReadOnlyRow label={t("statistics.regions")} value={data.regionCount} />
+          <ReadOnlyRow label={t("statistics.bounds")} value={`${data.enclosingSize.x} × ${data.enclosingSize.y} × ${data.enclosingSize.z}`} />
+          <ReadOnlyRow label={t("statistics.density")} value={`${(data.density * 100).toLocaleString(locale, {minimumFractionDigits:2,maximumFractionDigits:2})}%`} />
+          <ReadOnlyRow label={t("statistics.buildingType")} value={localizeMessage(data.buildingType)} />
+          <ReadOnlyRow label={t("statistics.redstoneRatio")} value={data.redstoneRatio === null ? t("statistics.notProvided") : `${(data.redstoneRatio * 100).toLocaleString(locale, {minimumFractionDigits:2,maximumFractionDigits:2})}%`} />
+          <ReadOnlyRow label={t("statistics.fluidRatio")} value={data.fluidRatio === null ? t("statistics.notProvided") : `${(data.fluidRatio * 100).toLocaleString(locale, {minimumFractionDigits:2,maximumFractionDigits:2})}%`} />
+          <ReadOnlyRow label={t("statistics.entities")} value={data.entityCount} />
         </dl>
           <section className="statistics-enumerator-panel" aria-busy={enumeratorLoading || configLoading}>
-            <header className="material-summary-header"><h3>自定义统计</h3><Button variant="secondary" disabled={configLoading || enumeratorLoading || !enumeratorCollections.length || !!enumeratorError} onClick={() => setShowEnumeratorInfoEditor(true)}>编辑规则</Button></header>
-            {enumeratorLoading || configLoading ? <p role="status">正在读取规则与集合…</p> : enumeratorError ? <pre role="alert">{enumeratorError}</pre>
-              : enumeratorResults.map((item,index) => <div key={index} className="statistics-enumerator-row"><div className="statistics-enumerator-row-main"><span>{item.title}</span><strong>{item.error ? "错误" : item.value}</strong></div>{item.error && <p className="statistics-enumerator-row-error">{item.error}</p>}</div>)}
+            <header className="material-summary-header"><h3>{t("statistics.customTitle")}</h3><Button variant="secondary" disabled={configLoading || enumeratorLoading || !enumeratorCollections.length || !!enumeratorError} onClick={() => setShowEnumeratorInfoEditor(true)}>{t("statistics.editRules")}</Button></header>
+            {enumeratorLoading || configLoading ? <p role="status">{t("statistics.loadingRules")}</p> : enumeratorError ? <pre role="alert">{localizeMessage(enumeratorError)}</pre>
+              : enumeratorResults.map((item,index) => <div key={index} className="statistics-enumerator-row"><div className="statistics-enumerator-row-main"><span>{item.title}</span><strong>{item.error ? t("editor.error") : item.value}</strong></div>{item.error && <p className="statistics-enumerator-row-error">{localizeMessage(item.error)}</p>}</div>)}
           </section>
-        </ScrollArea> : <p className="beta-statistics-status">{renderPending ? "正在读取投影统计…" : isLoading ? "正在分析…" : "暂无统计数据"}</p>}
+        </ScrollArea> : <p className="beta-statistics-status">{renderPending ? t("statistics.reading") : isLoading ? t("statistics.analyzing") : t("statistics.noData")}</p>}
       </section>
-      <section className="beta-statistics-materials"><header className="material-summary-header"><h2>材料列表</h2>{data && <span>{topMaterials.length} / {data.materials.length} 种</span>}</header>
-        <Input className="input material-summary-search" type="search" aria-label="搜索材料" placeholder="搜索材料名称或 ID" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} />
-        {data ? <MaterialTable materials={topMaterials} asItems={asItems} /> : <p className="beta-statistics-status">{isLoading ? "正在统计材料…" : "暂无材料数据"}</p>}
+      <section className="beta-statistics-materials"><header className="material-summary-header"><h2>{t("editor.materials")}</h2>{data && <span>{t("statistics.materialKinds", {visible:topMaterials.length.toLocaleString(locale), total:data.materials.length.toLocaleString(locale)})}</span>}</header>
+        <Input className="input material-summary-search" type="search" aria-label={t("editor.materialSearch")} placeholder={t("editor.materialSearchHint")} value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} />
+        {data ? <MaterialTable materials={topMaterials} asItems={asItems} /> : <p className="beta-statistics-status">{isLoading ? t("statistics.countingMaterials") : t("statistics.noMaterials")}</p>}
       </section>
     </div>
     {showEnumerator && <EnumeratorDialog currentFile={currentFile} theme={theme} runtimeCollection={runtimeCollection} onClose={() => setShowEnumerator(false)} />}
@@ -719,5 +728,5 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
 }
 
 function ReadOnlyRow({ label, value }: { label: string; value: string | number }) {
-  return <div><dt>{label}</dt><dd>{value}</dd></div>;
+  return <div><dt>{label}</dt><dd>{typeof value === "number" ? value.toLocaleString(getUiLocale()) : value}</dd></div>;
 }

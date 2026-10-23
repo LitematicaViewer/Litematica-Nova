@@ -101,6 +101,8 @@ try {
     if ($runtimeSource -eq 'prebuilt') { $resourceMap[(Join-Path $backend 'protected')] = 'bin/viewer-backend/protected' }
     $resourceMap['../../tools/viewer-core/target/public-beta/release/stockpile_server.exe'] = $null
     $resourceMap[$stockpileResource] = 'bin/stockpile-server/windows-x64/stockpile_server.exe'
+    $gameData = Join-Path $repo 'pack-in/game-data/default'
+    if (Test-Path -LiteralPath (Join-Path $gameData 'manifest.json') -PathType Leaf) { $resourceMap[$gameData] = 'pack-in/game-data/default' }
     $configuration = @{ bundle = @{ resources = $resourceMap; createUpdaterArtifacts = $false } } | ConvertTo-Json -Depth 5
     if (-not (Test-Path -LiteralPath $overlay -PathType Leaf) -or [IO.File]::ReadAllText($overlay) -cne $configuration) {
         [IO.File]::WriteAllText($overlay, $configuration, [Text.UTF8Encoding]::new($false))

@@ -31,6 +31,7 @@ pub(crate) struct ApplicationOperations {
     analysis_cache: Arc<Mutex<BTreeMap<AnalysisKey, Arc<OnceLock<Result<Value, String>>>>>>,
     layer_cache: Arc<Mutex<BTreeMap<AnalysisKey, Arc<OnceLock<Result<Arc<LayerCatalog>, String>>>>>>,
     lifecycle: Arc<(Mutex<OperationLifecycle>, Condvar)>,
+    iris_inspector: Arc<Mutex<(super::protected_render::ProtectedRender, Option<nova_render_protocol::ProtectedTask>)>>,
 }
 
 #[derive(Default)]
@@ -124,6 +125,15 @@ pub(crate) struct EditProjectOriginInput {
     pub(crate) source_path: String,
     pub(crate) origin: Option<ProjectionMarkerPoint>,
     pub(crate) output_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ExportWorldInput {
+    pub(crate) source_path: String,
+    pub(crate) output_directory: String,
+    pub(crate) world_name: String,
+    pub(crate) origin: super::model::IntegerVector,
 }
 
 #[derive(Debug, Deserialize)]
@@ -315,6 +325,10 @@ pub(crate) struct MaterialWebExportOptions {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ExportMaterialListInput {
+    #[serde(default)]
+    pub(crate) ui_locale: Option<String>,
+    #[serde(default)]
+    pub(crate) language_map: std::collections::BTreeMap<String, String>,
     pub(crate) source_path: String,
     pub(crate) scope: MaterialScope,
     pub(crate) include_container_items: bool,
@@ -436,6 +450,7 @@ impl ApplicationOperations {
             analysis_cache: Arc::new(Mutex::new(BTreeMap::new())),
             layer_cache: Arc::new(Mutex::new(BTreeMap::new())),
             lifecycle: Arc::new((Mutex::new(OperationLifecycle::default()), Condvar::new())),
+            iris_inspector: Arc::new(Mutex::new((super::protected_render::ProtectedRender::default(), None))),
         })
     }
 
@@ -575,6 +590,15 @@ impl ApplicationOperations {
         })
     }
 
+    pub(crate) fn export_world(&self, input: ExportWorldInput) -> Result<Value, String> {
+        let source = self.resolve_path(&input.source_path);
+        if input.output_directory.trim().is_empty() { return Err("请选择世界输出目录".into()); }
+        let output = self.resolve_path(&input.output_directory);
+        self.run_core_json(vec!["world-export".into(), "--input".into(), path_text(&source),
+            "--output".into(), path_text(&output), "--name".into(), input.world_name,
+            "--x".into(), input.origin.x.to_string(), "--y".into(), input.origin.y.to_string(), "--z".into(), input.origin.z.to_string()])
+    }
+
     pub(crate) fn convert_project_version(&self, input: ConvertProjectVersionInput) -> Result<Value, String> {
         let source = self.resolve_path(&input.source_path);
         let output = input.output_path.as_deref().map(|path| self.resolve_path(path));
@@ -698,6 +722,8 @@ impl ApplicationOperations {
             "multiplier": input.multiplier, "minecraft_version": input.minecraft_version,
             "terminal_raw_materials": input.terminal_raw_materials, "format": input.format,
             "web_options": input.web_options,
+            "ui_locale": input.ui_locale.as_deref().unwrap_or(crate::i18n::locale()),
+            "language_map": input.language_map,
         }))?;
         let result = self.run_core(generation, &prefix, vec!["materials-export".into(), path_text(&request_path), "--output".into(), path_text(&output)], &mut files)?;
         parse_core_json(&result.stdout)
@@ -907,6 +933,43 @@ impl ApplicationOperations {
         }))
     }
 
+    /// Game-data selection/import uses the same supervised Core business bridge.
+    /// It deliberately resolves the current store instead of a render snapshot.
+    pub(crate) fn game_data_command(&self, args: Vec<String>) -> Result<Value, String> {
+        let writing = matches!(args.first().map(String::as_str), Some("import" | "select" | "default"));
+        let _write = if writing { Some(self.begin_write()?) } else { None };
+        let mut command = vec!["game-data".to_owned()];
+        command.extend(args);
+        command.extend([
+            "--store".to_owned(),
+            path_text(&crate::current_user_config_dir()?.join("game-data")),
+            "--default-root".to_owned(),
+            path_text(&crate::get_root().join("pack-in/game-data/default")),
+        ]);
+        self.run_core_json(command)
+    }
+
+    pub(crate) fn game_data_icon(&self, id: String) -> Result<Value, String> {
+        self.run_core_json(vec!["game-data-icon".to_owned(), "--id".to_owned(), id])
+    }
+
+    pub(crate) fn iris_settings(&self, args: Vec<String>) -> Result<Value, String> {
+        if args.first().map(String::as_str) != Some("iris-settings") || args.len() % 2 != 1 {
+            return Err("Invalid shader settings request".into());
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for pair in args[1..].chunks_exact(2) {
+            if !matches!(pair[0].as_str(), "--root" | "--pack" | "--language" | "--save-json")
+                || !seen.insert(pair[0].as_str()) || pair[1].is_empty() {
+                return Err("Invalid shader settings argument".into());
+            }
+        }
+        if !seen.contains("--root") || !seen.contains("--pack") {
+            return Err("Shaderpack root and name are required".into());
+        }
+        self.run_core_json(args)
+    }
+
     fn run_core_json(&self, args: Vec<String>) -> Result<Value, String> {
         let started = Instant::now();
         let output = self.run_core_text(args)?;
@@ -956,6 +1019,32 @@ impl ApplicationOperations {
             "LBA_DATA_ROOT".into(),
             self.data_root.as_os_str().to_owned(),
         )];
+        // Each helper keeps the selected immutable data identity for its lifetime.
+        // Selection/import commands resolve the live store themselves.
+        if command != "game-data" && command != "iris-settings" {
+            match crate::game_data::resolve_context(
+                &crate::current_user_config_dir()?.join("game-data"),
+                &crate::get_root().join("pack-in/game-data/default"),
+            ) {
+                Ok(context) => launch.environment.push(("NOVA_GAME_DATA_SNAPSHOT".into(),
+                    serde_json::to_string(&context).map_err(|error| error.to_string())?.into())),
+                Err(error) if matches!(command.as_str(), "runtime-paths" | "version" | "help") => { let _ = error; },
+                Err(error) => return Err(format!("{error:#}")),
+            }
+        }
+        if command == "iris-settings" {
+            // One Host-owned metadata inspector context, reused across reads/saves.
+            // No scene, worker, shared-light request or render task is started.
+            let mut inspector = self.iris_inspector.lock().map_err(|_| "Shader inspector lock failed")?;
+            if inspector.1.is_none() {
+                let task = inspector.0.acquire(&self.data_root, &self.backend_dir,
+                    br#"{"displayMode":"standard","purpose":"iris-settings"}"#)?;
+                inspector.1 = Some(task);
+            }
+            let task = inspector.1.as_ref().unwrap();
+            launch.environment.push(("NOVA_PROTECTED_MODULE_PATH".into(), task.module_path.as_os_str().to_owned()));
+            launch.environment.push(("NOVA_PROTECTED_TICKET_PATH".into(), task.ticket_path.as_os_str().to_owned()));
+        }
         launch.current_dir = Some(self.backend_dir.clone());
         launch.stdout = OutputTarget::File {
             path: stdout_path.clone(),
@@ -1206,7 +1295,9 @@ fn stats_args(source: &Path, include_container_items: bool) -> Vec<String> {
 fn core_command_writes(args: &[String]) -> bool {
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
-        "edit-metadata" | "set-origin" | "remove-origin" | "materials-export" => true,
+        "edit-metadata" | "set-origin" | "remove-origin" | "materials-export" | "world-export" => true,
+        "iris-settings" => args.iter().any(|arg| arg == "--save-json"),
+        "iris-settings" => args.iter().any(|arg| arg == "--save-json"),
         "version-convert" => args.iter().any(|arg| arg == "--output" || arg == "--overwrite"),
         "replace-blocks" | "generate" | "generate-projection" => !args.iter().any(|arg| arg == "--dry-run"),
         // Recipe downloads/extraction only write validated replaceable caches;

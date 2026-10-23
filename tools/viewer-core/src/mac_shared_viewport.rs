@@ -94,6 +94,14 @@ impl MacSharedViewport {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).extent = extent;
         self.request_redraw();
     }
+    pub(crate) fn set_pointer_capture(&self, captured: bool) -> Result<(), String> {
+        let state = self.snapshot();
+        if captured && (!state.visible || state.closed || state.epoch == 0) {
+            return Err("native pointer capture needs the current visible viewport".into());
+        }
+        self.producer.lock().map_err(|_| "native viewport producer lock failed")?.set_pointer_capture(captured)
+    }
+
     pub(crate) fn suspend(&self) {
         let epoch = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());

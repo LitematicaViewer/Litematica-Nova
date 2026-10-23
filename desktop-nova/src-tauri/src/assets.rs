@@ -19,7 +19,7 @@ use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use crate::application::operations::{ApplicationOperations, ApplicationWriteGuard};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::DialogExt;
 use zip::ZipArchive;
 
@@ -27,6 +27,70 @@ use crate::{current_user_config_dir, get_root, user_runtime_relative_path};
 
 static RESOURCE_SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 static RESOURCE_OPERATIONS: Mutex<Option<ApplicationOperations>> = Mutex::new(None);
+
+async fn game_data_operation(operations: ApplicationOperations, args: Vec<String>) -> Result<serde_json::Value, String> {
+    ensure_resource_work_allowed()?;
+    tauri::async_runtime::spawn_blocking(move || operations.game_data_command(args))
+        .await.map_err(|error| error.to_string())?
+}
+
+fn announce_game_data(app: &AppHandle, context: &serde_json::Value) {
+    // Only successful atomic selection/import emits a new content identity.
+    let _ = app.emit("game-resources-changed", serde_json::json!({"kind":"game_data", "content_id":context.get("content_id")}));
+    let _ = app.emit("resource-game-data-changed", context);
+    let _ = app.emit("resource-language-changed", context);
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_list(operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    game_data_operation(operations.inner().clone(), vec!["list".into()]).await
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_context(operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    game_data_operation(operations.inner().clone(), vec!["context".into()]).await
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_language(operations: tauri::State<'_, ApplicationOperations>, language: String) -> Result<serde_json::Value, String> {
+    if !matches!(language.as_str(), "zh_cn" | "en_us") { return Err("Unsupported game-data language".into()); }
+    game_data_operation(operations.inner().clone(), vec!["language".into(), "--language".into(), language]).await
+}
+
+#[tauri::command]
+pub(crate) async fn read_game_data_icon(operations: tauri::State<'_, ApplicationOperations>, id: String) -> Result<String, String> {
+    let operations = operations.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let value = operations.game_data_icon(id)?;
+        let path = value.get("path").and_then(serde_json::Value::as_str).ok_or("Game-data icon response omitted its path")?;
+        let bytes = std::fs::read(path).map_err(|error| format!("Read game-data icon: {error}"))?;
+        use base64::Engine;
+        Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+    }).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_import(app: AppHandle, operations: tauri::State<'_, ApplicationOperations>, jar_path: String, assets_dir: Option<String>) -> Result<serde_json::Value, String> {
+    let mut args = vec!["import".into(), "--jar".into(), jar_path];
+    if let Some(path) = assets_dir.filter(|path| !path.trim().is_empty()) { args.extend(["--assets-dir".into(), path]); }
+    let context = game_data_operation(operations.inner().clone(), args).await?;
+    announce_game_data(&app, &context);
+    Ok(context)
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_select(app: AppHandle, operations: tauri::State<'_, ApplicationOperations>, id: String) -> Result<serde_json::Value, String> {
+    let context = game_data_operation(operations.inner().clone(), vec!["select".into(), "--id".into(), id]).await?;
+    announce_game_data(&app, &context);
+    Ok(context)
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_default(app: AppHandle, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let context = game_data_operation(operations.inner().clone(), vec!["default".into()]).await?;
+    announce_game_data(&app, &context);
+    Ok(context)
+}
 
 pub(crate) fn bind_operations(operations: ApplicationOperations) {
     *RESOURCE_OPERATIONS.lock().expect("资源任务状态锁异常") = Some(operations);
@@ -252,7 +316,8 @@ pub(crate) async fn pick_litematic_file(app: AppHandle) -> Result<Option<String>
     let picked = app
         .dialog()
         .file()
-        .add_filter("Litematica", &["litematic"])
+        .set_title(crate::i18n::text("dialog.openSchematic"))
+        .add_filter(crate::i18n::text("dialog.schematicFilter"), &["litematic"])
         .blocking_pick_file();
     Ok(picked.map(|path| path.to_string()))
 }
@@ -1251,4 +1316,116 @@ mod resource_restoration_tests {
         let error = crate::online_sources::send_resource_request(client.post("https://ccvaults.com/api/token").body("{}"), Some(&id)).err().unwrap();
         assert!(error.contains("取消"));
     }
+}
+
+// Language resources are presentation data only. Do not invoke compatibility
+// fingerprinting, model loading or schematic analysis for a language change.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LanguageFileStamp {
+    path: PathBuf,
+    bytes: u64,
+    modified: Option<std::time::SystemTime>,
+}
+struct CachedPackLanguage {
+    files: Vec<LanguageFileStamp>,
+    values: std::sync::Arc<std::collections::BTreeMap<String, String>>,
+}
+static PACK_LANGUAGE_CACHE: std::sync::OnceLock<Mutex<std::collections::HashMap<(PathBuf, String), CachedPackLanguage>>> = std::sync::OnceLock::new();
+
+#[tauri::command]
+pub(crate) async fn read_resource_pack_language(language: String) -> Result<std::collections::BTreeMap<String, String>, String> {
+    if !matches!(language.as_str(), "zh_cn" | "en_us") {
+        return Err("Unsupported resource-pack UI language".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || configured_pack_language(&language))
+        .await.map_err(|error| error.to_string())?
+}
+
+fn configured_pack_language(language: &str) -> Result<std::collections::BTreeMap<String, String>, String> {
+    use std::collections::{BTreeMap, HashSet};
+    let config = crate::read_user_config_data(&current_user_config_dir()?);
+    let root = get_root();
+    let mut seen = HashSet::new();
+    let packs = config.v5_compatibility.resource_packs.iter().map(|value| value.trim())
+        .filter(|value| !value.is_empty()).filter(|value| seen.insert((*value).to_owned()))
+        .map(|value| { let path = PathBuf::from(value); if path.is_absolute() { path } else { root.join(path) } })
+        .collect::<Vec<_>>();
+    let cache = PACK_LANGUAGE_CACHE.get_or_init(Mutex::default);
+    cache.lock().map_err(|_| "Resource-pack language cache lock failed")?
+        .retain(|(path, _), _| packs.contains(path));
+    let mut merged = BTreeMap::new();
+    // NativeTerrainSceneInputs/ResourceSnapshot append user packs in this exact
+    // low-to-high order; later packs override earlier keys.
+    for pack in packs {
+        let files = pack_language_stamps(&pack, language)?;
+        let key = (pack.clone(), language.to_owned());
+        let cached = cache.lock().map_err(|_| "Resource-pack language cache lock failed")?
+            .get(&key).filter(|entry| entry.files == files).map(|entry| std::sync::Arc::clone(&entry.values));
+        let values = if let Some(values) = cached { values } else {
+            let values = std::sync::Arc::new(read_pack_language(&pack, language, &files)?);
+            cache.lock().map_err(|_| "Resource-pack language cache lock failed")?
+                .insert(key, CachedPackLanguage { files, values: std::sync::Arc::clone(&values) });
+            values
+        };
+        merged.extend(values.iter().map(|(key, value)| (key.clone(), value.clone())));
+    }
+    Ok(merged)
+}
+
+fn language_stamp(path: PathBuf) -> Result<LanguageFileStamp, String> {
+    let metadata = std::fs::metadata(&path).map_err(|error| format!("Read language resource metadata {}: {error}", path.display()))?;
+    Ok(LanguageFileStamp { path, bytes: metadata.len(), modified: metadata.modified().ok() })
+}
+
+fn pack_language_stamps(pack: &Path, language: &str) -> Result<Vec<LanguageFileStamp>, String> {
+    if !pack.is_dir() { return Ok(vec![language_stamp(pack.to_path_buf())?]); }
+    let assets = pack.join("assets");
+    if !assets.is_dir() { return Ok(Vec::new()); }
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(&assets).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path().join("lang").join(format!("{language}.json"));
+        if path.is_file() { paths.push(path); }
+    }
+    paths.sort();
+    paths.into_iter().map(language_stamp).collect()
+}
+
+fn parse_pack_language(bytes: &[u8], source: &str, result: &mut std::collections::BTreeMap<String, String>) -> Result<(), String> {
+    let text = std::str::from_utf8(bytes).map_err(|error| format!("Read resource-pack language {source}: {error}"))?;
+    let values: serde_json::Map<String, serde_json::Value> = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|error| format!("Parse resource-pack language {source}: {error}"))?;
+    for (key, value) in values {
+        // Vanilla language files may contain formatting metadata. Only actual
+        // string entries are names; do not coerce objects/numbers into labels.
+        if let serde_json::Value::String(value) = value { result.insert(key, value); }
+    }
+    Ok(())
+}
+
+fn read_pack_language(pack: &Path, language: &str, files: &[LanguageFileStamp]) -> Result<std::collections::BTreeMap<String, String>, String> {
+    use std::io::Read;
+    let mut result = std::collections::BTreeMap::new();
+    if pack.is_dir() {
+        for file in files {
+            let bytes = std::fs::read(&file.path).map_err(|error| format!("Read resource-pack language {}: {error}", file.path.display()))?;
+            parse_pack_language(&bytes, &file.path.display().to_string(), &mut result)?;
+        }
+    } else {
+        let file = std::fs::File::open(pack).map_err(|error| format!("Open resource pack {}: {error}", pack.display()))?;
+        let mut archive = ZipArchive::new(file).map_err(|error| format!("Open resource pack {}: {error}", pack.display()))?;
+        let wanted = format!("{language}.json");
+        let mut names = archive.file_names().filter(|name| {
+            let parts = name.split('/').collect::<Vec<_>>();
+            parts.len() == 4 && parts[0] == "assets" && !parts[1].is_empty() && parts[2] == "lang" && parts[3] == wanted
+        }).map(str::to_owned).collect::<Vec<_>>();
+        names.sort();
+        for name in names {
+            let mut entry = archive.by_name(&name).map_err(|error| error.to_string())?;
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(|error| format!("Read resource-pack language {name}: {error}"))?;
+            parse_pack_language(&bytes, &format!("{}:{name}", pack.display()), &mut result)?;
+        }
+    }
+    Ok(result)
 }

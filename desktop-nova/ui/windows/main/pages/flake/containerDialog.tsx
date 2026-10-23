@@ -1,3 +1,5 @@
+import { t } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { Dialog } from "../../../../components/Dialog";
 import React, { useMemo } from "react";
 import { BlockIcon } from "../../../../components/BlockIcon";
@@ -17,17 +19,18 @@ interface ContainerDialogProps {
   position: { x: number; y: number; z: number };
 }
 
-const CONTAINER_LAYOUTS: Record<ContainerType, { title: string; slotCount: number }> = {
-  chest: { title: "箱子", slotCount: 27 },
-  shulker_box: { title: "潜影盒", slotCount: 27 },
-  barrel: { title: "木桶", slotCount: 27 },
-  hopper: { title: "漏斗", slotCount: 5 },
+const CONTAINER_LAYOUTS: Record<ContainerType, { titleKey: string; slotCount: number }> = {
+  chest: { titleKey: "flake.container.chest", slotCount: 27 },
+  shulker_box: { titleKey: "flake.container.shulker", slotCount: 27 },
+  barrel: { titleKey: "flake.container.barrel", slotCount: 27 },
+  hopper: { titleKey: "flake.container.hopper", slotCount: 5 },
 };
 
 /**
  * Renders a container inventory dialog for flake block inspection.
  */
 export function ContainerDialog({ onClose, containerType, items, position }: ContainerDialogProps) {
+  useI18n();
   const layout = CONTAINER_LAYOUTS[containerType];
   const slots = useMemo(() => {
     const result: Array<ContainerItem | null> = Array(layout.slotCount).fill(null);
@@ -40,7 +43,7 @@ export function ContainerDialog({ onClose, containerType, items, position }: Con
   }, [items, layout.slotCount]);
 
   return (
-    <Dialog title={layout.title} subtitle={`位置：(${position.x}, ${position.y}, ${position.z})`} onClose={onClose} className="flake-page__container-dialog" width="sm">
+    <Dialog title={t(layout.titleKey)} subtitle={t("flake.containerPosition", {x:position.x,y:position.y,z:position.z})} onClose={onClose} className="flake-page__container-dialog" width="sm">
 
         <div className={`flake-page__container-body flake-page__container-body--${containerType}`}>
           <div className={`flake-page__container-grid flake-page__container-grid--${containerType}`}>

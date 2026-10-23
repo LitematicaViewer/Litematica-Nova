@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 export type DisplayMode = "normal" | "fast_experimental" | "full";
 export type RenderBuildMode = "prebuilt" | "realtime";
 
@@ -13,12 +14,12 @@ export const RENDER_DISPLAY_MODE_KEY = "lba.render.displayMode";
 export const RENDER_BUILD_MODE_KEY = "lba.render.buildMode";
 
 export const DISPLAY_MODE_OPTIONS: Array<{ label: string; value: DisplayMode }> = [
-  { label: "完整模式", value: "full" },
+  { get label() { return t("native.mode.full"); }, value: "full" },
 ];
 
 export const RENDER_BUILD_MODE_OPTIONS: Array<{ label: string; value: RenderBuildMode }> = [
-  { label: "预构建", value: "prebuilt" },
-  { label: "实时构建", value: "realtime" },
+  { get label() { return t("native.mode.prebuilt"); }, value: "prebuilt" },
+  { get label() { return t("native.mode.realtime"); }, value: "realtime" },
 ];
 
 export function normalizeRenderBuildMode(value: unknown): RenderBuildMode {

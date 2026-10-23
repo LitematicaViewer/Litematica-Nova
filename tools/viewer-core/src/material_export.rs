@@ -43,6 +43,10 @@ impl MaterialWebOptions {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaterialExportRequest {
+    #[serde(default)]
+    pub ui_locale: Option<String>,
+    #[serde(default)]
+    pub language_map: BTreeMap<String, String>,
     pub source_path: String,
     pub stats: StableStructureOutput,
     pub multiplier: u64,
@@ -72,6 +76,8 @@ pub fn run_cli(args: &[String]) -> Result<()> {
 }
 
 pub fn export(mut request: MaterialExportRequest, output: &Path) -> Result<MaterialExportSummary> {
+    let english = request.ui_locale.as_deref() == Some("en-US");
+    let locale = if english { "en-US" } else { "zh-CN" };
     ensure!(request.stats.material_semantics == "minecraft-inventory-v3", "材料快照已过期，请刷新材料列表后导出");
     ensure!((1..=1_000_000).contains(&request.multiplier), "建造份数必须在 1 至 1000000 之间");
     ensure!(!request.minecraft_version.is_empty(), "材料导出必须指定 Minecraft 版本");
@@ -92,9 +98,9 @@ pub fn export(mut request: MaterialExportRequest, output: &Path) -> Result<Mater
     }
     let scope = &request.stats.structure_stats.scope;
     let scope_text = match scope.kind.as_str() {
-        "region" => format!("区域：{}", scope.region.as_deref().unwrap_or_default()),
-        "layer" => format!("层：{}", scope.layer.unwrap_or_default()),
-        _ => "整个投影".to_owned(),
+        "region" => format!("{}{}", if english { "Region: " } else { "区域：" }, scope.region.as_deref().unwrap_or_default()),
+        "layer" => format!("{}{}", if english { "Layer: " } else { "层：" }, scope.layer.unwrap_or_default()),
+        _ => if english { "Entire schematic" } else { "整个投影" }.to_owned(),
     };
     let included = request.stats.container_scan.enabled;
     let mut materials = stockpile::build_materials_data_from_stats(source, request.stats.clone(), &request.minecraft_version)?;
@@ -111,7 +117,25 @@ pub fn export(mut request: MaterialExportRequest, output: &Path) -> Result<Mater
         }).collect::<Result<Vec<_>>>()?;
         materials = stockpile::build_materials_data_from_stats(source, request.stats, &request.minecraft_version)?;
     }
-    let context = format!("{} · {} · {} 份 · 容器物品：{} · 末端原料：{}", source.file_name().unwrap_or_default().to_string_lossy(), scope_text, request.multiplier, if included { "包含" } else { "不包含" }, if request.terminal_raw_materials { "是（使用本地配方；烧制燃料另计）" } else { "否" });
+    // Resolve names through the existing offline language cache. No resource download
+    // or schematic rescan is introduced by exporting in another UI language.
+    materials.ui_locale = Some(locale.into());
+    materials.ui_translations = request.language_map;
+    crate::item_names::resolve_stockpile_item_names_cached(&request.minecraft_version, &mut materials, &BTreeMap::new())?;
+    for row in &mut materials.materials {
+        row.display_name = row.display_names.get(locale).or_else(|| row.display_names.get("en-US"))
+            .cloned().unwrap_or_else(|| if english { row.namespace_id.clone() } else { row.display_name.clone() });
+    }
+    let filename = source.file_name().unwrap_or_default().to_string_lossy();
+    let context = if english {
+        format!("{filename} · {scope_text} · {copies} {copy_unit} · Container items: {containers} · Terminal raw materials: {terminal}",
+            copies=request.multiplier, copy_unit=if request.multiplier == 1 { "copy" } else { "copies" }, containers=if included { "included" } else { "excluded" },
+            terminal=if request.terminal_raw_materials { "yes (local recipes; smelting fuel not included)" } else { "no" })
+    } else {
+        format!("{filename} · {scope_text} · {copies} 份 · 容器物品：{containers} · 末端原料：{terminal}",
+            copies=request.multiplier, containers=if included { "包含" } else { "不包含" },
+            terminal=if request.terminal_raw_materials { "是（使用本地配方；烧制燃料另计）" } else { "否" })
+    };
     materials.diagnostics.push(stockpile::StockpileDiagnostic { kind: "export_context".into(), source: request.source_path.clone(), target: String::new(), message: context.clone() });
     let web = request.web_options.unwrap_or_default();
     if matches!(request.format, MaterialExportFormat::Html) && web.mode == MaterialWebMode::Multi {
@@ -120,9 +144,9 @@ pub fn export(mut request: MaterialExportRequest, output: &Path) -> Result<Mater
     } else {
     let text = match request.format {
         MaterialExportFormat::Html => stockpile_zip::render_standalone_materials_html(source, &request.minecraft_version, materials.clone())?,
-        MaterialExportFormat::Txt => format!("材料列表\n{context}\n\n名称\t物品 ID\t数量\n{}", materials.materials.iter().map(|row| format!("{}\t{}\t{}\n", row.display_name, row.namespace_id, row.required_count)).collect::<String>()),
-        MaterialExportFormat::Svg => svg(&materials, &context),
-        MaterialExportFormat::Csv => format!("\u{feff}名称,物品ID,数量\r\n{}", materials.materials.iter().map(|row| format!("{},{},{}\r\n", csv(&row.display_name), csv(&row.namespace_id), row.required_count)).collect::<String>()),
+        MaterialExportFormat::Txt => format!("{}\n{context}\n\n{}\n{}", if english { "Material List" } else { "材料列表" }, if english { "Name\tItem ID\tQuantity" } else { "名称\t物品 ID\t数量" }, materials.materials.iter().map(|row| format!("{}\t{}\t{}\n", row.display_name, row.namespace_id, row.required_count)).collect::<String>()),
+        MaterialExportFormat::Svg => svg(&materials, &context, english),
+        MaterialExportFormat::Csv => format!("\u{feff}{}\r\n{}", if english { "Name,Item ID,Quantity" } else { "名称,物品ID,数量" }, materials.materials.iter().map(|row| format!("{},{},{}\r\n", csv(&row.display_name), csv(&row.namespace_id), row.required_count)).collect::<String>()),
     };
     std::fs::write(output, text.as_bytes()).with_context(|| format!("写入材料列表 {}", output.display()))?;
     }
@@ -149,9 +173,10 @@ fn add_terminal(node: &recipe_tree::RecipeTreeNode, counts: &mut BTreeMap<String
 
 fn xml(value: &str) -> String { value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;") }
 fn csv(value: &str) -> String { format!("\"{}\"", value.replace('"', "\"\"")) }
-fn svg(materials: &stockpile::StockpileMaterialsData, context: &str) -> String {
+fn svg(materials: &stockpile::StockpileMaterialsData, context: &str, english: bool) -> String {
+    let (title, name, item_id, quantity) = if english { ("Material List", "Name", "Item ID", "Quantity") } else { ("材料列表", "名称", "物品 ID", "数量") };
     let height = 108 + materials.materials.len() * 32;
-    let mut result = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1000\" height=\"{height}\" viewBox=\"0 0 1000 {height}\"><rect width=\"100%\" height=\"100%\" fill=\"#fff\"/><g font-family=\"Microsoft YaHei,sans-serif\" fill=\"#111\"><text x=\"24\" y=\"32\" font-size=\"22\">材料列表</text><text x=\"24\" y=\"58\" font-size=\"12\">{}</text><text x=\"24\" y=\"90\" font-size=\"15\">名称</text><text x=\"400\" y=\"90\" font-size=\"15\">物品 ID</text><text x=\"960\" y=\"90\" font-size=\"15\" text-anchor=\"end\">数量</text>", xml(context));
+    let mut result = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1000\" height=\"{height}\" viewBox=\"0 0 1000 {height}\"><rect width=\"100%\" height=\"100%\" fill=\"#fff\"/><g font-family=\"Microsoft YaHei,sans-serif\" fill=\"#111\"><text x=\"24\" y=\"32\" font-size=\"22\">{title}</text><text x=\"24\" y=\"58\" font-size=\"12\">{}</text><text x=\"24\" y=\"90\" font-size=\"15\">{name}</text><text x=\"400\" y=\"90\" font-size=\"15\">{item_id}</text><text x=\"960\" y=\"90\" font-size=\"15\" text-anchor=\"end\">{quantity}</text>", xml(context));
     for (index, row) in materials.materials.iter().enumerate() {
         let y = 122 + index * 32;
         result.push_str(&format!("<text x=\"24\" y=\"{y}\" font-size=\"14\">{}</text><text x=\"400\" y=\"{y}\" font-size=\"12\">{}</text><text x=\"960\" y=\"{y}\" font-size=\"14\" text-anchor=\"end\">{}</text>", xml(&row.display_name), xml(&row.namespace_id), row.required_count));
@@ -190,7 +215,7 @@ mod tests {
         let directory = Path::new(&snapshot).parent().unwrap();
         let output = directory.join("840FTL-materials-2x-multi.zip");
         let original_rows = stats.material_items.clone();
-        export(MaterialExportRequest {source_path:source, stats, multiplier:2, minecraft_version:"26.3".into(),
+        export(MaterialExportRequest {ui_locale:None, language_map:BTreeMap::new(), source_path:source, stats, multiplier:2, minecraft_version:"26.3".into(),
             terminal_raw_materials:false, format:MaterialExportFormat::Html, web_options:Some(MaterialWebOptions {
                 mode:MaterialWebMode::Multi, access_password:Some("fixture-access".into()), admin_password:Some("fixture-admin".into()),
                 whitelist:vec!["FixturePlayer".into()], whitelist_enabled:Some(true), allow_guest_readonly:Some(true),
@@ -247,7 +272,7 @@ mod tests {
         let directory = Path::new(&snapshot).parent().unwrap();
         for (extension, format) in [("svg", MaterialExportFormat::Svg), ("txt", MaterialExportFormat::Txt), ("html", MaterialExportFormat::Html)] {
             let path = directory.join(format!("840FTL-materials-2x.{extension}"));
-            let summary = export(MaterialExportRequest { source_path: source.clone(), stats: stats.clone(), multiplier: 2, minecraft_version: "26.3".into(), terminal_raw_materials: false, format, web_options: None }, &path).unwrap();
+            let summary = export(MaterialExportRequest { ui_locale:None, language_map:BTreeMap::new(), source_path: source.clone(), stats: stats.clone(), multiplier: 2, minecraft_version: "26.3".into(), terminal_raw_materials: false, format, web_options: None }, &path).unwrap();
             assert_eq!(summary.material_count, 59);
             let content = std::fs::read_to_string(&path).unwrap();
             assert!(content.contains("材料列表") || extension == "html");

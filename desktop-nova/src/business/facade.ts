@@ -25,5 +25,8 @@ export * from "../services/gameResources";
 export { resolveFlakeLayerBlockImage, extractLayerPaletteStates, clearFlakeStateHintImageCache } from "../services/flakeStateHintResolver";
 
 export * from "../platform/quickPreview";
+export * from "../platform/sceneView";
+export * from "../services/worldExport";
+export * from "../services/irisSettings";
 
 export * from "../services/creativeItemIdentity";

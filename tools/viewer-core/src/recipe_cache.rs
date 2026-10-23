@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{Cursor, Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use zip::ZipArchive;
+
 
 use crate::runtime_paths;
 
@@ -17,9 +17,6 @@ const RECIPES_FILE: &str = "recipes.json";
 const ITEMS_FILE: &str = "items.json";
 const BLOCKS_FILE: &str = "blocks.json";
 const CURRENT_SCHEMA_VERSION: u32 = 1;
-const MOJANG_VERSION_MANIFEST_URL: &str =
-    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
-const SOURCE_NAME: &str = "mojang_piston_meta_client_jar";
 const SOURCE_LICENSE: &str = "Minecraft game data from Mojang client jar";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,126 +74,105 @@ pub trait RecipeProvider {
     fn fetch(&self, minecraft_version: &str) -> Result<RecipeCachePayload>;
 }
 
-pub struct MojangClientJarRecipeProvider {
-    client: reqwest::blocking::Client,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SelectedRecipeIndex {
+    schema: u32,
+    content_id: String,
+    game_version: String,
+    recipes: BTreeMap<String, Value>,
+    tags: BTreeMap<String, Vec<String>>,
+    items: BTreeSet<String>,
 }
 
-impl MojangClientJarRecipeProvider {
-    pub fn new() -> Result<Self> {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent("Litematica-Nova recipe-cache/0.1")
-            .build()
-            .context("build recipe cache HTTP client failed")?;
-        Ok(Self { client })
-    }
-}
-
-impl RecipeProvider for MojangClientJarRecipeProvider {
-    fn fetch(&self, minecraft_version: &str) -> Result<RecipeCachePayload> {
-        let manifest: Value = self.get_json(MOJANG_VERSION_MANIFEST_URL)?;
-        let version_url = manifest
-            .get("versions")
-            .and_then(Value::as_array)
-            .and_then(|versions| {
-                versions.iter().find_map(|version| {
-                    let id = version.get("id")?.as_str()?;
-                    if id == minecraft_version {
-                        version.get("url")?.as_str()
-                    } else {
-                        None
-                    }
-                })
-            })
-            .ok_or_else(|| {
-                anyhow!("minecraft version not found in Mojang manifest: {minecraft_version}")
-            })?;
-
-        let version_manifest: Value = self.get_json(version_url)?;
-        let client_url = version_manifest
-            .pointer("/downloads/client/url")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("Mojang version manifest has no downloads.client.url"))?;
-
-        let jar_bytes = self
-            .client
-            .get(client_url)
-            .send()
-            .with_context(|| format!("download Minecraft client jar failed: {client_url}"))?
-            .error_for_status()
-            .with_context(|| format!("download Minecraft client jar returned error: {client_url}"))?
-            .bytes()
-            .context("read Minecraft client jar bytes failed")?;
-
-        let mut archive = ZipArchive::new(Cursor::new(jar_bytes))
-            .context("open Minecraft client jar as zip failed")?;
-        let mut recipes = BTreeMap::<String, Value>::new();
-        let mut item_set = BTreeSet::<String>::new();
-
-        for index in 0..archive.len() {
-            let mut entry = archive.by_index(index)?;
-            let name = entry.name().replace('\\', "/");
-            if !name.starts_with("data/minecraft/recipe/") || !name.ends_with(".json") {
-                continue;
-            }
-            let mut content = String::new();
-            entry
-                .read_to_string(&mut content)
-                .with_context(|| format!("read recipe entry failed: {name}"))?;
-            let recipe: Value = serde_json::from_str(&content)
-                .with_context(|| format!("parse recipe json failed: {name}"))?;
-            let recipe_id = recipe_id_from_entry_name(&name)?;
-            collect_recipe_result_items(&recipe, &mut item_set);
-            recipes.insert(recipe_id, recipe);
+fn selected_index() -> Result<std::sync::Arc<SelectedRecipeIndex>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static INDEX: OnceLock<Mutex<BTreeMap<String, Arc<SelectedRecipeIndex>>>> = OnceLock::new();
+    let context = crate::game_data::active_context()?;
+    let cache = INDEX.get_or_init(Default::default);
+    if let Some(index) = cache.lock().map_err(|_| anyhow!("game recipe index lock poisoned"))?.get(&context.content_id).cloned() { return Ok(index); }
+    let directory = runtime_paths::recipe_cache_root()?.join(&context.content_id);
+    let file = directory.join("selected-index-v2.json");
+    if file.is_file() {
+        let index: SelectedRecipeIndex = read_json(&file)?;
+        if index.schema == 2 && index.content_id == context.content_id && index.game_version == context.game_version {
+            let index = Arc::new(index);
+            cache.lock().map_err(|_| anyhow!("game recipe index lock poisoned"))?.insert(context.content_id, index.clone());
+            return Ok(index);
         }
+    }
+    let mut recipes = BTreeMap::new();
+    let mut raw_tags = BTreeMap::<String, Value>::new();
+    let mut items = BTreeSet::new();
+    for path in crate::game_data::list_resources_from(&context, "data/")? {
+        let parts = path.split('/').collect::<Vec<_>>();
+        if parts.len() < 4 || !path.ends_with(".json") { continue; }
+        let recipe = matches!(parts[2], "recipe" | "recipes");
+        let tag = parts.len() >= 5 && parts[2] == "tags" && matches!(parts[3], "item" | "items");
+        if !recipe && !tag { continue; }
+        let Some(bytes) = crate::game_data::read_resource_from(&context, &path)? else { bail!("selected game data entry disappeared: {path}"); };
+        let value: Value = serde_json::from_slice(&bytes).with_context(|| format!("invalid selected game JSON: {path}"))?;
+        let local = parts[if recipe { 3 } else { 4 }..].join("/");
+        let id = format!("{}:{}", parts[1], local.trim_end_matches(".json"));
+        if recipe {
+            if value.get("type").and_then(Value::as_str).is_none() { bail!("recipe type missing: {id}"); }
+            collect_recipe_result_items(&value, &mut items);
+            if recipes.insert(id.clone(), value.clone()).is_some_and(|previous| previous != value) { bail!("conflicting recipe directories for {id}"); }
+        } else if raw_tags.insert(id.clone(), value.clone()).is_some_and(|previous| previous != value) { bail!("conflicting item tag directories for {id}"); }
+    }
+    let mut tags = BTreeMap::new();
+    for id in raw_tags.keys() { expand_tag(id, &raw_tags, &mut tags, &mut BTreeSet::new())?; }
+    let index = Arc::new(SelectedRecipeIndex { schema: 2, content_id: context.content_id.clone(), game_version: context.game_version, recipes, tags, items });
+    fs::create_dir_all(&directory)?;
+    let temporary = directory.join(format!("selected-index-v2.{}.tmp", std::process::id()));
+    fs::write(&temporary, serde_json::to_vec(&*index)?)?;
+    if file.exists() { fs::remove_file(&file)?; }
+    fs::rename(temporary, &file)?;
+    cache.lock().map_err(|_| anyhow!("game recipe index lock poisoned"))?.insert(context.content_id, index.clone());
+    Ok(index)
+}
 
-        if recipes.is_empty() {
-            bail!("no vanilla recipe JSON files found in Minecraft client jar");
+fn expand_tag(id: &str, raw: &BTreeMap<String, Value>, complete: &mut BTreeMap<String, Vec<String>>, visiting: &mut BTreeSet<String>) -> Result<Vec<String>> {
+    if let Some(values) = complete.get(id) { return Ok(values.clone()); }
+    if !visiting.insert(id.to_owned()) { bail!("item tag cycle: {id}"); }
+    let value = raw.get(id).with_context(|| format!("required item tag missing: {id}"))?;
+    let entries = value.get("values").and_then(Value::as_array).with_context(|| format!("item tag values missing: {id}"))?;
+    let mut values = BTreeSet::new();
+    for entry in entries {
+        let name = entry.as_str().or_else(|| entry.get("id").and_then(Value::as_str)).with_context(|| format!("invalid item tag entry: {id}"))?;
+        let required = entry.get("required").and_then(Value::as_bool).unwrap_or(true);
+        if let Some(nested) = name.strip_prefix('#') {
+            let nested = if nested.contains(':') { nested.to_owned() } else { format!("minecraft:{nested}") };
+            if !required && !raw.contains_key(&nested) { continue; }
+            values.extend(expand_tag(&nested, raw, complete, visiting)?);
+        } else {
+            values.insert(if name.contains(':') { name.to_owned() } else { format!("minecraft:{name}") });
         }
-
-        let block_ids = load_known_block_ids().unwrap_or_default();
-        let items = item_set.iter().cloned().collect::<Vec<_>>();
-        let blocks = items
-            .iter()
-            .filter(|item| block_ids.contains(*item))
-            .cloned()
-            .collect::<Vec<_>>();
-
-        Ok(RecipeCachePayload {
-            source: format!(
-                "{SOURCE_NAME}; manifest={MOJANG_VERSION_MANIFEST_URL}; client={client_url}"
-            ),
-            license: SOURCE_LICENSE.to_string(),
-            recipes,
-            items,
-            blocks,
-        })
     }
+    visiting.remove(id);
+    let values = values.into_iter().collect::<Vec<_>>();
+    complete.insert(id.to_owned(), values.clone());
+    Ok(values)
 }
 
-impl MojangClientJarRecipeProvider {
-    fn get_json(&self, url: &str) -> Result<Value> {
-        self.client
-            .get(url)
-            .send()
-            .with_context(|| format!("download JSON failed: {url}"))?
-            .error_for_status()
-            .with_context(|| format!("download JSON returned error: {url}"))?
-            .text()
-            .with_context(|| format!("read JSON response failed: {url}"))
-            .and_then(|text| {
-                serde_json::from_str(&text).with_context(|| format!("parse JSON failed: {url}"))
-            })
-    }
+pub fn load_item_tags() -> Result<BTreeMap<String, Vec<String>>> { Ok(selected_index()?.tags.clone()) }
+
+pub fn recipe_status(_minecraft_version: &str) -> Result<RecipeCacheStatusOutput> {
+    let context = crate::game_data::active_context()?;
+    let index = selected_index()?;
+    Ok(RecipeCacheStatusOutput {
+        status: if index.recipes.is_empty() { RecipeCacheStatus::Missing } else { RecipeCacheStatus::Available },
+        minecraft_version: context.game_version,
+        cache_dir: runtime_paths::recipe_cache_root()?.join(&context.content_id),
+        manifest_path: context.root.join("manifest.json"),
+        has_recipes: !index.recipes.is_empty(), has_items: !index.items.is_empty(), has_blocks: false,
+        source: Some(format!("game-data:{}", context.content_id)), fetched_at: None,
+        schema_version: Some(2), hash: Some(context.content_id),
+        warning: index.recipes.is_empty().then(|| "selected game data contains no recipe files".to_owned()),
+    })
 }
 
-pub fn recipe_status(minecraft_version: &str) -> Result<RecipeCacheStatusOutput> {
-    recipe_status_in(&runtime_paths::recipe_cache_root()?, minecraft_version)
-}
-
-pub fn fetch_recipe_cache(minecraft_version: &str) -> Result<RecipeCacheStatusOutput> {
-    let provider = MojangClientJarRecipeProvider::new()?;
-    fetch_recipe_cache_with_provider(&provider, minecraft_version)
-}
+/// Refresh the derived index from the selected installed/imported data; never downloads a client JAR.
+pub fn fetch_recipe_cache(minecraft_version: &str) -> Result<RecipeCacheStatusOutput> { recipe_status(minecraft_version) }
 
 pub fn fetch_recipe_cache_with_provider(
     provider: &dyn RecipeProvider,
@@ -208,23 +184,14 @@ pub fn fetch_recipe_cache_with_provider(
     recipe_status_in(&cache_root, minecraft_version)
 }
 
-pub fn load_available_recipe_items(minecraft_version: &str) -> Result<Option<BTreeSet<String>>> {
-    let cache_root = runtime_paths::recipe_cache_root()?;
-    if recipe_status_in(&cache_root, minecraft_version)?.status != RecipeCacheStatus::Available {
-        return Ok(None);
-    }
-    let items_path = version_cache_dir(&cache_root, minecraft_version).join(ITEMS_FILE);
-    let items = read_string_vec(&items_path)?;
-    Ok(Some(items.into_iter().collect()))
+pub fn load_available_recipe_items(_minecraft_version: &str) -> Result<Option<BTreeSet<String>>> {
+    let index = selected_index()?;
+    Ok((!index.recipes.is_empty()).then(|| index.items.clone()))
 }
 
-pub fn load_available_recipes(minecraft_version: &str) -> Result<Option<BTreeMap<String, Value>>> {
-    let cache_root = runtime_paths::recipe_cache_root()?;
-    if recipe_status_in(&cache_root, minecraft_version)?.status != RecipeCacheStatus::Available {
-        return Ok(None);
-    }
-    let recipes_path = version_cache_dir(&cache_root, minecraft_version).join(RECIPES_FILE);
-    read_json(&recipes_path).map(Some)
+pub fn load_available_recipes(_minecraft_version: &str) -> Result<Option<BTreeMap<String, Value>>> {
+    let index = selected_index()?;
+    Ok((!index.recipes.is_empty()).then(|| index.recipes.clone()))
 }
 
 pub fn recipe_status_in(
@@ -549,21 +516,6 @@ fn is_namespaced_id(value: &str) -> bool {
                 || ch == '/'
                 || ch == '.'
         })
-}
-
-fn load_known_block_ids() -> Result<BTreeSet<String>> {
-    let path = runtime_paths::app_root()?
-        .join("data")
-        .join("minecraft_blockstates")
-        .join("26.1.json");
-    let file = File::open(&path)
-        .with_context(|| format!("open blockstate DB failed: {}", path.display()))?;
-    let value: Value = serde_json::from_reader(file)
-        .with_context(|| format!("parse blockstate DB failed: {}", path.display()))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| anyhow!("blockstate DB root is not an object"))?;
-    Ok(object.keys().cloned().collect())
 }
 
 fn version_cache_dir(recipe_cache_root: &Path, minecraft_version: &str) -> PathBuf {

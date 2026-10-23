@@ -1,6 +1,7 @@
 import { getAppDataFilePath, listDirectoryEntries, readAppDataFile, writeAppDataFile } from "../platform/files";
-import { listGameResourceRegistry, readActiveGameDataResource, readActiveLanguageResource } from "./gameResources";
-import { translateBlockId } from "./i18n";
+import { listGameResourceRegistry, getSelectedGameDataContext, readActiveGameDataResource } from "./gameResources";
+import { readWorkspaceFile } from "./backend";
+import { translateBlockId, t } from "./i18n";
 
 export type EnumeratorCollectionCategory = "base" | "version" | "system_enum" | "creative" | "map" | "custom" | "runtime";
 export type EnumeratorValueType = "block" | "item" | "entity" | "enchantment" | "mixed" | "unknown";
@@ -41,14 +42,6 @@ interface PersistedEnumeratorCollection {
   updated_at?: string;
 }
 
-interface ActiveLanguageMap {
-  blockIds: string[];
-  itemIds: string[];
-  entityIds: string[];
-  enchantmentIds: string[];
-}
-
-const DEFAULT_ENUM_ROOTS = ["enumerator/base", "enumerator/base/wiki", "enumerator/base/builtin"];
 const COLLECTION_DIRS: Record<Exclude<EnumeratorCollectionCategory, "base" | "runtime">, string> = {
   version: "enumerator/version",
   system_enum: "enumerator/system_enum",
@@ -160,10 +153,6 @@ function normalizeCollectionValue(value: unknown): string {
   return `minecraft:${normalized.toLowerCase()}`;
 }
 
-function itemKeyToId(prefix: string, key: string): string {
-  return `minecraft:${key.slice(prefix.length).replace(/\./g, ":")}`;
-}
-
 function readJson<T>(rawText: string | null): T | null {
   if (!rawText) return null;
   try {
@@ -207,102 +196,34 @@ async function resolveCollectionDir(relativeDir: string): Promise<{ absDir: stri
   };
 }
 
-async function loadActiveLanguageMap(): Promise<ActiveLanguageMap> {
-  const raw = await readActiveLanguageResource().catch(() => "");
-  const parsed = readJson<Record<string, string>>(raw) || {};
-  const blocks: string[] = [];
-  const items: string[] = [];
-  const entities: string[] = [];
-  const enchantments: string[] = [];
-
-  for (const key of Object.keys(parsed)) {
-    if (key.startsWith("block.minecraft.")) {
-      blocks.push(itemKeyToId("block.minecraft.", key));
-      continue;
-    }
-    if (key.startsWith("item.minecraft.")) {
-      items.push(itemKeyToId("item.minecraft.", key));
-      continue;
-    }
-    if (key.startsWith("entity.minecraft.")) {
-      entities.push(itemKeyToId("entity.minecraft.", key));
-      continue;
-    }
-    if (key.startsWith("enchantment.minecraft.")) {
-      enchantments.push(itemKeyToId("enchantment.minecraft.", key));
-    }
-  }
-
-  return {
-    blockIds: uniq(blocks),
-    itemIds: uniq(items),
-    entityIds: uniq(entities),
-    enchantmentIds: uniq(enchantments),
-  };
-}
-
-async function loadActiveBlocks(): Promise<{ version: string; values: string[] }> {
-  const active = await readActiveGameDataResource().catch(() => null);
-  if (!active) return { version: "unknown", values: [] };
-  const parsed = readJson<{ version_id?: string; blocks?: Record<string, unknown> }>(active.dbText) || {};
-  return {
-    version: String(parsed.version_id || active.entry.version || "unknown").trim() || "unknown",
-    values: uniq(Object.keys(parsed.blocks || {})),
-  };
-}
-
 async function loadBaseCollections(): Promise<EnumeratorCollection[]> {
-  const snapshot = await listGameResourceRegistry().catch(() => null);
-  const roots = uniq([
-    snapshot?.active_enum_catalog.root_relpath || "",
-    ...DEFAULT_ENUM_ROOTS,
-  ].filter(Boolean));
-  const languageMap = await loadActiveLanguageMap();
-  const activeBlocks = await loadActiveBlocks();
-  const fallbackByType: Record<string, string[]> = {
-    block: activeBlocks.values,
-    item: languageMap.itemIds,
-    entity: languageMap.entityIds,
-    enchantment: languageMap.enchantmentIds,
-  };
-
+  const snapshot = await listGameResourceRegistry();
+  const context = await getSelectedGameDataContext();
+  const custom = snapshot.active_enum_catalog.builtin ? null : snapshot.active_enum_catalog;
   const result: EnumeratorCollection[] = [];
   for (const def of BASE_COLLECTION_DEFS) {
+    const relativePath = custom ? `${custom.root_relpath}/${def.fileName}` : "";
+    const sourcePath = custom ? await resolveSourcePath(relativePath) : `${context.root.replace(/[\\/]+$/, "")}/derived/enumerator/${def.fileName}`;
     let values: string[] = [];
-    let sourcePath = "";
-    let sourceRelativePath = "";
-    for (const root of roots) {
-      const relativePath = `${root}/${def.fileName}`;
-      const raw = await readJsonFile(relativePath);
-      const parsed = readJson<string[]>(raw);
-      if (parsed && parsed.length) {
-        values = normalizeStringArray(parsed);
-        sourcePath = await resolveSourcePath(relativePath);
-        sourceRelativePath = relativePath;
-        break;
-      }
+    let failure = "";
+    try {
+      const raw = custom ? await readAppDataFile(relativePath) : await readWorkspaceFile(sourcePath);
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed) || parsed.some(value => typeof value !== "string")) throw new Error(t("native.resources.enumInvalid", { name: def.fileName }));
+      values = normalizeStringArray(parsed);
+    } catch (error) {
+      if (!custom && def.valueType === "block") {
+        try {
+          const active = await readActiveGameDataResource();
+          values = Object.keys((JSON.parse(active.dbText) as { blocks: Record<string, unknown> }).blocks);
+        } catch (registryError) { failure = String(registryError); }
+      } else { failure = String(error); }
     }
-
-    if (!values.length) {
-      values = uniq(fallbackByType[def.valueType] || []);
-    }
-
     result.push({
-      id: def.id,
-      name: def.name,
-      symbol: def.symbol,
-      category: "base",
-      valueType: def.valueType,
-      version: values.length ? (snapshot?.active_enum_catalog.label || "builtin") : "missing",
-      values,
-      description: values.length
-        ? (sourcePath ? "来自当前激活的枚举全集资源。" : "由当前激活的游戏数据/语言资源回填。")
-        : "基础全集文件缺失，且无法从当前资源回填。",
-      updatedAt: nowIso(),
-      readOnly: true,
-      missing: values.length === 0,
-      sourcePath,
-      sourceRelativePath,
+      id: def.id, name: def.name, symbol: def.symbol, category: "base", valueType: def.valueType,
+      version: custom?.version || context.game_version, values,
+      description: failure || t("native.enumerator.activeCatalog"), updatedAt: context.content_id,
+      readOnly: true, missing: !!failure, sourcePath, sourceRelativePath: relativePath,
     });
   }
   return result;
@@ -333,7 +254,7 @@ function normalizeFolderCollection(
       valueType: inferValueType(values),
       version: category === "version" ? fileBaseName(fileName) : category,
       values,
-      description: "从枚举器目录中的 JSON 字符串数组读取。",
+      description: t("native.enumerator.jsonArray"),
       updatedAt: nowIso(),
       readOnly: category !== "custom",
       sourcePath,
@@ -436,7 +357,7 @@ export async function saveEnumeratorCollection(input: Partial<EnumeratorCollecti
   const baseId = String(input.id || "").trim();
   const existing = customCollections.find((collection) => collection.id === baseId) || null;
   const nextValues = uniq(input.values);
-  const name = String(input.name || "").trim() || "未命名集合";
+  const name = String(input.name || "").trim() || t("native.enumerator.unnamed");
   const relativePath = targetCustomRelativePath(existing, name);
   const next: EnumeratorCollection = {
     id: existing?.id || `custom:${slugify(name)}:${Date.now()}`,
@@ -472,7 +393,7 @@ export function createRuntimeProjectionCollection(filePath: string, materials: A
     valueType: "mixed",
     version: "runtime",
     values: uniq(materials.map((material) => material.id)),
-    description: `来自当前统计页：${fileName}`,
+    description: t("native.enumerator.currentStats", { name: fileName }),
     updatedAt: nowIso(),
     readOnly: true,
   };
@@ -494,10 +415,10 @@ function validateWildcardToken(token: string): void {
   const lastWildcardIndex = lookup.lastIndexOf("*");
   if (firstWildcardIndex < 0) return;
   if (firstWildcardIndex !== 0 && firstWildcardIndex !== lookup.length - 1) {
-    throw new Error(`集合名通配符只能位于开头或末尾：${token}`);
+    throw new Error(t("native.enumerator.wildcardEdge", { token }));
   }
   if (lastWildcardIndex !== firstWildcardIndex && lastWildcardIndex !== lookup.length - 1) {
-    throw new Error(`集合名通配符只能位于开头或末尾：${token}`);
+    throw new Error(t("native.enumerator.wildcardEdge", { token }));
   }
 }
 
@@ -542,7 +463,7 @@ function validateWildcardParentheses(tokens: string[]): void {
   tokens.forEach((token, index) => {
     if (!isWildcardCollectionToken(token)) return;
     if (tokens[index - 1] !== "(" || tokens[index + 1] !== ")") {
-      throw new Error(`通配符集合必须单独放在括号中，例如 A-(map_*)：${token}`);
+      throw new Error(t("native.enumerator.wildcardGroup", { token }));
     }
   });
 }
@@ -565,7 +486,7 @@ function toRpn(tokens: string[]): string[] {
       while (operators.length && operators[operators.length - 1] !== "(") {
         output.push(operators.pop()!);
       }
-      if (!operators.length) throw new Error("括号不匹配。");
+      if (!operators.length) throw new Error(t("native.enumerator.parentheses"));
       operators.pop();
       continue;
     }
@@ -580,7 +501,7 @@ function toRpn(tokens: string[]): string[] {
   }
   while (operators.length) {
     const operator = operators.pop()!;
-    if (operator === "(") throw new Error("括号不匹配。");
+    if (operator === "(") throw new Error(t("native.enumerator.parentheses"));
     output.push(operator);
   }
   return output;
@@ -614,24 +535,24 @@ export function evaluateEnumeratorExpression(expression: string, collections: En
       if (token === "∪" || token === "|" || token === "∩" || token === "&" || token === "-") {
         const right = stack.pop();
         const left = stack.pop();
-        if (!left || !right) throw new Error("表达式不完整。");
+        if (!left || !right) throw new Error(t("native.enumerator.incomplete"));
         stack.push(applyOperator(left, right, token));
         continue;
       }
       if (isWildcardCollectionToken(token)) {
         const matchedCollections = resolveWildcardCollections(token, collections);
-        if (!matchedCollections.length) throw new Error(`找不到匹配的集合：${token}`);
+        if (!matchedCollections.length) throw new Error(t("native.enumerator.noMatch", { token }));
         dependencies.push(...matchedCollections.map((collection) => collection.id));
         stack.push(new Set(matchedCollections.flatMap((collection) => collection.values)));
         continue;
       }
       const collection = resolveCollectionToken(token, collections);
-      if (!collection) throw new Error(`找不到集合：${token}`);
+      if (!collection) throw new Error(t("native.enumerator.notFound", { token }));
       dependencies.push(collection.id);
       stack.push(new Set(collection.values));
     }
 
-    if (stack.length !== 1) throw new Error("表达式不完整。");
+    if (stack.length !== 1) throw new Error(t("native.enumerator.incomplete"));
     return {
       values: [...stack[0]],
       dependencies: uniq(dependencies),
@@ -641,7 +562,7 @@ export function evaluateEnumeratorExpression(expression: string, collections: En
     return {
       values: [],
       dependencies: [],
-      error: String(error?.message || error || "表达式解析失败"),
+      error: String(error?.message || error || t("native.enumerator.parseFailure")),
     };
   }
 }

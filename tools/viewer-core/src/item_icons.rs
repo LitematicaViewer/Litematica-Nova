@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,17 +11,14 @@ use image::{ImageFormat, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use zip::ZipArchive;
 
-use crate::recipe_cache::{self, RecipeCacheStatus};
+
+
 use crate::recipe_tree::RecipeTreeNode;
 use crate::runtime_paths;
 use crate::stockpile::StockpileMaterialsData;
 
 const ICON_SCHEMA_VERSION: u32 = 1;
-const MOJANG_VERSION_MANIFEST_URL: &str =
-    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IconRef {
     pub key: String,
@@ -72,7 +69,7 @@ pub(crate) fn resolve_stockpile_icons_cached(minecraft_version: &str, materials:
 fn resolve_stockpile_icons_with_network(minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_trees: &BTreeMap<String, RecipeTreeNode>, allow_network: bool) -> Result<StockpileIconAssets> {
     let keys = collect_icon_keys(materials, recipe_trees);
     let mut resolver = IconResolver::new(minecraft_version)?;
-    resolver.allow_network = allow_network;
+    let _ = allow_network; // Historical API: all resources are now local selected game data.
     let mut by_key = BTreeMap::<String, IconRef>::new();
     let mut files = Vec::<IconZipAsset>::new();
 
@@ -86,10 +83,7 @@ fn resolve_stockpile_icons_with_network(minecraft_version: &str, materials: &mut
                 available: resolved.available,
             },
         );
-        files.push(IconZipAsset {
-            path: resolved.zip_path,
-            bytes: resolved.bytes,
-        });
+        if !resolved.bytes.is_empty() { files.push(IconZipAsset { path: resolved.zip_path, bytes: resolved.bytes }); }
     }
 
     for material in &mut materials.materials {
@@ -98,7 +92,7 @@ fn resolve_stockpile_icons_with_network(minecraft_version: &str, materials: &mut
             material.icon_available = icon.available;
             material.icon_diagnostic = (!icon.available).then(|| {
                 format!(
-                    "missing icon for {}; using generated fallback, not category fallback",
+                    "no real icon in selected game data for {}",
                     material.item_icon_key
                 )
             });
@@ -113,7 +107,7 @@ fn resolve_stockpile_icons_with_network(minecraft_version: &str, materials: &mut
                     source: material.namespace_id.clone(),
                     target: material.item_icon_key.clone(),
                     message: format!(
-                        "no real item/block icon found for {}; generated fallback used",
+                        "no real item/block icon found in selected game data for {}",
                         material.item_icon_key
                     ),
                 });
@@ -123,7 +117,7 @@ fn resolve_stockpile_icons_with_network(minecraft_version: &str, materials: &mut
     let available_count = by_key.values().filter(|icon| icon.available).count();
     let manifest =
         icon_cache_manifest(minecraft_version, &resolver.source, &files, available_count)?;
-    write_cache_manifest(minecraft_version, &manifest)?;
+    write_cache_manifest(&resolver.context.content_id, &manifest)?;
 
     Ok(StockpileIconAssets {
         payload: StockpileIconPayload {
@@ -207,49 +201,30 @@ struct IconResolver {
     minecraft_version: String,
     cache_dir: PathBuf,
     source: String,
-    jar_bytes: Option<Vec<u8>>,
-    allow_network: bool,
+    context: crate::game_data::GameDataContext,
 }
 
 impl IconResolver {
-    fn new(minecraft_version: &str) -> Result<Self> {
-        let cache_dir = runtime_paths::item_icons_cache_root()?
-            .join(version_dir_name(minecraft_version))
-            .join("icons");
-        fs::create_dir_all(&cache_dir)
-            .with_context(|| format!("create item icon cache failed: {}", cache_dir.display()))?;
-        Ok(Self {
-            minecraft_version: minecraft_version.to_string(),
-            cache_dir,
-            source: recipe_cache::recipe_status(minecraft_version)
-                .ok()
-                .and_then(|status| status.source)
-                .unwrap_or_else(|| "fallback_generated".to_string()),
-            jar_bytes: None,
-            allow_network: true,
-        })
+    fn new(_minecraft_version: &str) -> Result<Self> {
+        let context = crate::game_data::active_context()?;
+        let cache_dir = runtime_paths::item_icons_cache_root()?.join(version_dir_name(&context.content_id)).join("icons");
+        fs::create_dir_all(&cache_dir)?;
+        Ok(Self { minecraft_version: context.game_version.clone(), cache_dir, source: format!("game-data:{}", context.content_id), context })
     }
 
     fn resolve(&mut self, key: &str) -> Result<ResolvedIcon> {
         let zip_path = format!("assets/icons/{}.png", safe_icon_name(key));
-        if self.minecraft_version == "26.3" {
-            if let Some(local) = key.strip_prefix("minecraft:").filter(|local| !local.is_empty() && local.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')) {
-                let bundled = runtime_paths::app_root()?.join("pack-in/item-icons-26.3").join(format!("{local}.png"));
-                if bundled.is_file() {
-                    let bytes = fs::read(&bundled)?;
-                    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-                        self.source = "bundled_minecraft_26.3_item_icons".into();
-                        return Ok(ResolvedIcon { zip_path, bytes, available: true });
-                    }
-                }
-            }
+        if !key.contains(':') {
+            // Virtual recipe/tag UI markers are not Minecraft item geometry.
+            return Ok(ResolvedIcon { zip_path, bytes: fallback_png(key)?, available: false });
         }
-        if !key.starts_with("minecraft:") {
-            return Ok(ResolvedIcon {
-                zip_path,
-                bytes: fallback_png(key)?,
-                available: false,
-            });
+        if let Some(local) = key.strip_prefix("minecraft:").filter(|local| !local.is_empty() && local.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')) {
+            let bundled = self.context.root.join("derived/item-icons").join(format!("{local}.png"));
+            if bundled.is_file() {
+                let bytes = fs::read(&bundled)?;
+                if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") { return Err(anyhow!("invalid selected pre-generated item icon: {}", bundled.display())); }
+                return Ok(ResolvedIcon { zip_path, bytes, available: true });
+            }
         }
 
         let cache_path = self.cache_dir.join(format!("{}.png", safe_icon_name(key)));
@@ -263,7 +238,6 @@ impl IconResolver {
             });
         }
 
-        if self.allow_network {
         if let Some(bytes) = self.extract_from_client_jar(key)? {
             fs::write(&cache_path, &bytes)
                 .with_context(|| format!("write cached icon failed: {}", cache_path.display()))?;
@@ -273,117 +247,76 @@ impl IconResolver {
                 available: true,
             });
         }
-        }
 
-        Ok(ResolvedIcon {
-            zip_path,
-            bytes: fallback_png(key)?,
-            available: false,
-        })
+        Ok(ResolvedIcon { zip_path: String::new(), bytes: Vec::new(), available: false })
     }
 
     fn extract_from_client_jar(&mut self, key: &str) -> Result<Option<Vec<u8>>> {
-        let Some(local) = key.strip_prefix("minecraft:") else {
-            return Ok(None);
-        };
-        #[cfg(test)]
-        {
-            let _ = local;
-            return Ok(None);
+        let Some((namespace, local)) = key.split_once(':') else { return Ok(None); };
+        let context = &self.context;
+        for path in [format!("assets/{namespace}/textures/item/{local}.png"), format!("assets/{namespace}/textures/block/{local}.png")] {
+            if read_selected_bytes(context, &path)?.is_some() {
+                let reference = path.strip_prefix(&format!("assets/{namespace}/textures/")).and_then(|path|path.strip_suffix(".png")).context("invalid selected texture path")?;
+                return self.resolve_texture_ref(context, &format!("{namespace}:{reference}"));
+            }
         }
-        #[cfg(not(test))]
-        {
-            self.ensure_client_jar()?;
-            let Some(bytes) = self.jar_bytes.as_ref() else {
-                return Ok(None);
-            };
-            let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice()))
-                .context("open Minecraft client jar for icons failed")?;
-
-            for path in [
-                format!("assets/minecraft/textures/item/{local}.png"),
-                format!("assets/minecraft/textures/block/{local}.png"),
-            ] {
-                if let Some(bytes) = read_zip_bytes(&mut archive, &path)? {
-                    return Ok(Some(bytes));
-                }
+        if let Some(bytes) = read_selected_bytes(context, &format!("assets/{namespace}/items/{local}.json"))? {
+            let definition: Value = serde_json::from_slice(&bytes).context("parse selected item appearance")?;
+            for model in collect_blockstate_models(&definition) {
+                if let Some(bytes) = self.resolve_model_texture(context, &model, &mut BTreeSet::new())? { return Ok(Some(bytes)); }
             }
-
-            let mut visited = BTreeSet::<String>::new();
-            if let Some(bytes) = self.resolve_model_texture(
-                &mut archive,
-                &format!("minecraft:item/{local}"),
-                &mut visited,
-            )? {
-                return Ok(Some(bytes));
-            }
-            let mut visited = BTreeSet::<String>::new();
-            if let Some(bytes) = self.resolve_model_texture(
-                &mut archive,
-                &format!("minecraft:block/{local}"),
-                &mut visited,
-            )? {
-                return Ok(Some(bytes));
-            }
-            self.resolve_blockstate_texture(&mut archive, local)
         }
+        for model in [format!("{namespace}:item/{local}"), format!("{namespace}:block/{local}")] {
+            if let Some(bytes) = self.resolve_model_texture(context, &model, &mut BTreeSet::new())? { return Ok(Some(bytes)); }
+        }
+        self.resolve_blockstate_texture(context, namespace, local)
     }
 
     fn resolve_model_texture(
         &self,
-        archive: &mut ZipArchive<Cursor<&[u8]>>,
+        archive: &crate::game_data::GameDataContext,
         model_ref: &str,
         visited: &mut BTreeSet<String>,
     ) -> Result<Option<Vec<u8>>> {
-        if !visited.insert(model_ref.to_string()) || visited.len() > 12 {
-            return Ok(None);
+        let reference = if model_ref.contains(':') { model_ref.to_owned() } else { format!("minecraft:{model_ref}") };
+        let Some((namespace, local)) = reference.split_once(':') else { return Ok(None); };
+        if read_selected_bytes(archive, &format!("assets/{namespace}/models/{local}.json"))?.is_none() { return Ok(None); }
+        let model = crate::block_database::resource_model(archive, &reference, visited)?;
+        let Some(value) = best_texture_ref(&model) else { return Ok(None); };
+        let mut texture = value.to_owned();
+        let mut visited = BTreeSet::new();
+        while let Some(key) = texture.strip_prefix('#') {
+            if !visited.insert(key.to_owned()) { return Err(anyhow!("item model texture cycle: {reference}")); }
+            texture = model.get("textures").and_then(|textures| textures.get(key)).and_then(Value::as_str).with_context(|| format!("item model texture variable missing: {reference} #{key}"))?.to_owned();
         }
-        let Some((namespace, local)) = split_namespaced_model(model_ref) else {
-            return Ok(None);
-        };
-        if namespace != "minecraft" {
-            return Ok(None);
-        }
-        let model_path = format!("assets/minecraft/models/{local}.json");
-        let Some(model_text) = read_zip_string(archive, &model_path)? else {
-            return Ok(None);
-        };
-        let model: Value = serde_json::from_str(&model_text)
-            .with_context(|| format!("parse item model failed: {model_path}"))?;
-
-        if let Some(texture_ref) = best_texture_ref(&model)
-            && let Some(bytes) = self.resolve_texture_ref(archive, texture_ref)?
-        {
-            return Ok(Some(bytes));
-        }
-        if let Some(parent) = model.get("parent").and_then(Value::as_str) {
-            return self.resolve_model_texture(archive, parent, visited);
-        }
-        Ok(None)
+        self.resolve_texture_ref(archive, &texture)
     }
 
     fn resolve_texture_ref(
         &self,
-        archive: &mut ZipArchive<Cursor<&[u8]>>,
+        archive: &crate::game_data::GameDataContext,
         texture_ref: &str,
     ) -> Result<Option<Vec<u8>>> {
         let reference = texture_ref.trim_start_matches('#');
         let Some((namespace, local)) = split_namespaced_texture(reference) else {
             return Ok(None);
         };
-        if namespace != "minecraft" {
-            return Ok(None);
-        }
-        read_zip_bytes(archive, &format!("assets/minecraft/textures/{local}.png"))
+        let path = format!("assets/{namespace}/textures/{local}.png");
+        if read_selected_bytes(archive, &path)?.is_none() { return Ok(None); }
+        let texture = crate::block_database::selected_texture(archive, &format!("{namespace}:{local}"))?;
+        let mut output = Cursor::new(Vec::new());
+        texture.write_to(&mut output, ImageFormat::Png).context("encode selected item icon")?;
+        Ok(Some(output.into_inner()))
     }
 
     fn resolve_blockstate_texture(
         &self,
-        archive: &mut ZipArchive<Cursor<&[u8]>>,
+        archive: &crate::game_data::GameDataContext,
+        namespace: &str,
         local: &str,
     ) -> Result<Option<Vec<u8>>> {
-        let path = format!("assets/minecraft/blockstates/{local}.json");
-        let Some(text) = read_zip_string(archive, &path)? else {
+        let path = format!("assets/{namespace}/blockstates/{local}.json");
+        let Some(text) = read_selected_string(archive, &path)? else {
             return Ok(None);
         };
         let value: Value = serde_json::from_str(&text)
@@ -397,29 +330,6 @@ impl IconResolver {
         Ok(None)
     }
 
-    fn ensure_client_jar(&mut self) -> Result<()> {
-        if self.jar_bytes.is_some() {
-            return Ok(());
-        }
-        let client_url = client_url_from_recipe_manifest(&self.minecraft_version)
-            .or_else(|_| client_url_from_mojang_manifest(&self.minecraft_version))?;
-        let client = reqwest::blocking::Client::builder()
-            .user_agent("Litematica-Nova item-icons/0.1")
-            .build()
-            .context("build item icon HTTP client failed")?;
-        let bytes = client
-            .get(&client_url)
-            .send()
-            .with_context(|| format!("download Minecraft client jar failed: {client_url}"))?
-            .error_for_status()
-            .with_context(|| format!("download Minecraft client jar returned error: {client_url}"))?
-            .bytes()
-            .context("read Minecraft client jar bytes failed")?
-            .to_vec();
-        self.source = format!("mojang_client_jar; client={client_url}");
-        self.jar_bytes = Some(bytes);
-        Ok(())
-    }
 }
 
 fn icon_cache_manifest(
@@ -462,68 +372,6 @@ fn write_cache_manifest(minecraft_version: &str, manifest: &IconCacheManifest) -
     Ok(())
 }
 
-fn client_url_from_recipe_manifest(minecraft_version: &str) -> Result<String> {
-    let status = recipe_cache::recipe_status(minecraft_version)?;
-    if status.status != RecipeCacheStatus::Available {
-        return Err(anyhow!("recipe cache is not available"));
-    }
-    let source = status.source.unwrap_or_default();
-    source
-        .split(';')
-        .map(str::trim)
-        .find_map(|part| part.strip_prefix("client="))
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("recipe cache manifest source has no client jar URL"))
-}
-
-fn client_url_from_mojang_manifest(minecraft_version: &str) -> Result<String> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Litematica-Nova item-icons/0.1")
-        .build()
-        .context("build item icon HTTP client failed")?;
-    let manifest: Value = client
-        .get(MOJANG_VERSION_MANIFEST_URL)
-        .send()
-        .context("download Mojang version manifest failed")?
-        .error_for_status()
-        .context("download Mojang version manifest returned error")?
-        .text()
-        .context("read Mojang version manifest failed")
-        .and_then(|text| {
-            serde_json::from_str(&text).context("parse Mojang version manifest failed")
-        })?;
-    let version_url = manifest
-        .get("versions")
-        .and_then(Value::as_array)
-        .and_then(|versions| {
-            versions.iter().find_map(|version| {
-                let id = version.get("id")?.as_str()?;
-                if id == minecraft_version {
-                    version.get("url")?.as_str()
-                } else {
-                    None
-                }
-            })
-        })
-        .ok_or_else(|| anyhow!("minecraft version not found: {minecraft_version}"))?;
-    let version_manifest: Value = client
-        .get(version_url)
-        .send()
-        .context("download Mojang version details failed")?
-        .error_for_status()
-        .context("download Mojang version details returned error")?
-        .text()
-        .context("read Mojang version details failed")
-        .and_then(|text| {
-            serde_json::from_str(&text).context("parse Mojang version details failed")
-        })?;
-    version_manifest
-        .pointer("/downloads/client/url")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("Mojang version details have no client URL"))
-}
-
 fn best_texture_ref(model: &Value) -> Option<&str> {
     let textures = model.get("textures")?.as_object()?;
     for key in ["layer0", "all", "top", "side", "front", "particle"] {
@@ -534,24 +382,22 @@ fn best_texture_ref(model: &Value) -> Option<&str> {
     textures.values().find_map(Value::as_str)
 }
 
-fn read_zip_bytes(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Option<Vec<u8>>> {
-    let Ok(mut entry) = archive.by_name(name) else {
-        return Ok(None);
-    };
-    let mut bytes = Vec::new();
-    entry
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("read zip entry failed: {name}"))?;
-    Ok(Some(bytes))
+fn read_selected_bytes(context: &crate::game_data::GameDataContext, name: &str) -> Result<Option<Vec<u8>>> {
+    crate::game_data::read_resource_from(context, name)
+}
+fn read_selected_string(context: &crate::game_data::GameDataContext, name: &str) -> Result<Option<String>> {
+    read_selected_bytes(context, name)?.map(|bytes| String::from_utf8(bytes).with_context(|| format!("resource is not UTF-8: {name}"))).transpose()
 }
 
-fn read_zip_string(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Option<String>> {
-    let Some(bytes) = read_zip_bytes(archive, name)? else {
-        return Ok(None);
-    };
-    String::from_utf8(bytes)
-        .map(Some)
-        .with_context(|| format!("zip entry is not UTF-8: {name}"))
+pub fn read_game_data_icon(id: &str) -> Result<PathBuf> {
+    if !id.split_once(':').is_some_and(|(namespace, local)| !namespace.is_empty() && !local.is_empty() && namespace.bytes().chain(local.bytes()).all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-/.".contains(&byte)) && !local.contains("..")) { return Err(anyhow!("invalid namespaced item icon id: {id}")); }
+    let mut resolver = IconResolver::new("")?;
+    let output = resolver.cache_dir.join(format!("{}.png", safe_icon_name(id)));
+    if output.is_file() { return Ok(output); }
+    let value = resolver.resolve(id)?;
+    if !value.available { return Err(anyhow!("selected Minecraft {} data has no real model/texture icon for {id}", resolver.minecraft_version)); }
+    fs::write(&output, value.bytes)?;
+    Ok(output)
 }
 
 fn split_namespaced_model(value: &str) -> Option<(&str, &str)> {

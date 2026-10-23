@@ -84,3 +84,5 @@
 .properties-overwrite-confirm { display: flex; flex-wrap: wrap; gap: 12px; }
 .properties-overwrite-confirm p { flex-basis: 100%; }
 }
+.properties-world-export-path { overflow-wrap: anywhere; }
+.properties-world-export-origin { border: 0; padding: 0; margin: 1rem 0 0; }

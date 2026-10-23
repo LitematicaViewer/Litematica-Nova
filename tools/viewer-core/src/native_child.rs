@@ -187,7 +187,7 @@ pub(super) fn apply(
         // Explicitly reject all desktop presentation for a native child session.
         ViewerSessionCommandKind::ShowPopup | ViewerSessionCommandKind::ShowOverlay =>
             bail!("native child preview supports embedded presentation only"),
-        ViewerSessionCommandKind::ReplaceScene | ViewerSessionCommandKind::CaptureFrame => Ok(ViewerPresentationCommandOutcome::NotPresentation),
+        ViewerSessionCommandKind::ReplaceScene | ViewerSessionCommandKind::CaptureFrame | ViewerSessionCommandKind::SetView => Ok(ViewerPresentationCommandOutcome::NotPresentation),
     }
 }
 

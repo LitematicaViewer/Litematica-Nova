@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Plus, Trash2, X } from "lucide-react";

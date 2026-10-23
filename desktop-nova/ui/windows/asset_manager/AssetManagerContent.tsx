@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
+import { useI18n } from "../../i18n";
 import { displayPathText } from "../../../src/business/facade";
 import { displayFilePath } from "../../../src/business/facade";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -11,9 +13,8 @@ import {
   downloadVaultItemIcons,
   downloadWikiBlockIcons,
   downloadWikiEnumCatalog,
-  ensureBuiltinBlockIconsExtracted,
-  ensureBuiltinItemIconsExtracted,
-  importGameDataResource,
+  importClientGameData,
+  restoreDefaultGameDataResource,
   importLanguageResource,
   initI18n,
   invalidateBlockIconCache,
@@ -78,11 +79,11 @@ interface IconDownloadProgressPayload {
 }
 
 const ASSET_NAV_ITEMS: AssetNavItem[] = [
-  { key: "block_icon", label: "方块图标", icon: "asset-block" },
-  { key: "item_icon", label: "物品图标", icon: "asset-item" },
-  { key: "language", label: "语言", icon: "asset-language" },
-  { key: "game_data", label: "游戏数据", icon: "asset-db" },
-  { key: "enum_catalog", label: "枚举全集", icon: "asset-enum" },
+  { key: "block_icon", get label() { return t("library.blockIcons"); }, icon: "asset-block" },
+  { key: "item_icon", get label() { return t("library.itemIcons"); }, icon: "asset-item" },
+  { key: "language", get label() { return t("library.language"); }, icon: "asset-language" },
+  { key: "game_data", get label() { return t("library.gameData"); }, icon: "asset-db" },
+  { key: "enum_catalog", get label() { return t("library.enumCatalog"); }, icon: "asset-enum" },
 ];
 
 const BUILTIN_BLOCK_ICON_ID = "builtin:block_icon:nova";
@@ -90,28 +91,28 @@ const BUILTIN_ITEM_ICON_ID = "builtin:item_icon:nova";
 
 const SOURCE_OPTIONS_BY_ROUTE: Record<AssetRoute, { value: AssetSource; label: string }[]> = {
   block_icon: [
-    { value: "builtin", label: "内建" },
-    { value: "local_directory", label: "本地目录" },
+    { value: "builtin", get label() { return t("library.builtin"); } },
+    { value: "local_directory", get label() { return t("library.localDirectory"); } },
     { value: "vault", label: "CCVault" },
     { value: "wiki", label: "Minecraft Wiki" },
-    { value: "wiki_zh", label: "中文 Minecraft 维基百科" },
+    { value: "wiki_zh", get label() { return t("library.chineseWiki"); } },
   ],
   item_icon: [
-    { value: "builtin", label: "内建" },
-    { value: "local_directory", label: "本地目录" },
+    { value: "builtin", get label() { return t("library.builtin"); } },
+    { value: "local_directory", get label() { return t("library.localDirectory"); } },
     { value: "vault", label: "CCVault" },
   ],
   language: [
-    { value: "builtin", label: "内建" },
-    { value: "local_json", label: "本地JSON" },
+    { value: "builtin", get label() { return t("library.builtin"); } },
+    { value: "local_json", get label() { return t("library.localJson"); } },
     { value: "github", label: "Github/InventivetalentDev" },
   ],
   game_data: [
-    { value: "builtin", label: "内建" },
-    { value: "local_json", label: "本地JSON" },
+    { value: "builtin", get label() { return t("library.builtin"); } },
+    { value: "local_json", get label() { return t("library.localJson"); } },
   ],
   enum_catalog: [
-    { value: "builtin", label: "内建" },
+    { value: "builtin", get label() { return t("library.builtin"); } },
     { value: "wiki", label: "Minecraft Wiki" },
   ],
 };
@@ -127,15 +128,15 @@ const DEFAULT_SOURCE_BY_ROUTE: Record<AssetRoute, AssetSource> = {
 function routeIntro(route: AssetRoute): string {
   switch (route) {
     case "block_icon":
-      return "管理材料槽与 2D 槽使用的图标包；材料相关界面会按 block_icon/block_2d 与激活包名解析，分层画布只走 2D 槽。";
+      return t("library.blockIconIntro");
     case "item_icon":
-      return "管理 item/激活包；材料相关界面中的物品分支会把它作为 block_itemLike 之后的第二优先级。";
+      return t("library.itemIconIntro");
     case "language":
-      return "导入、下载并切换 Minecraft 语言 JSON。";
+      return t("library.languageIntro");
     case "game_data":
-      return "导入并切换 BlockState 数据库与属性翻译。";
+      return t("library.gameDataIntro");
     case "enum_catalog":
-      return "下载并切换枚举器使用的基础全集文件。";
+      return t("library.enumIntro");
     default:
       return "";
   }
@@ -148,10 +149,10 @@ function baseName(path: string): string {
 function sourceTag(entry: GameResourceEntry): string {
   switch (entry.source) {
     case "builtin":
-      return "builtin";
+      return t("library.builtin");
     case "imported":
     case "external":
-      return "local";
+      return t("library.localSource");
     case "vault":
       return "vault";
     case "github":
@@ -166,24 +167,22 @@ function sourceTag(entry: GameResourceEntry): string {
 }
 
 function formatDate(value?: string): string {
-  if (!value) return "未知";
+  if (!value) return t("library.unknown");
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "未知";
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
-  return `${date.getFullYear()}/${month}/${day}`;
+  if (Number.isNaN(date.getTime())) return t("library.unknown");
+  return new Intl.DateTimeFormat(getUiLocale(), { dateStyle: "short" }).format(date);
 }
 
 function blockUsageLabel(entry: GameResourceEntry): string {
-  return [entry.active_material_list ? "材料槽" : "", entry.active_layering ? "2D 槽" : ""]
+  return [entry.active_material_list ? t("library.materialSlot") : "", entry.active_layering ? t("library.slot2d") : ""]
     .filter(Boolean)
     .join("/");
 }
 
 function activationLabel(route: AssetRoute, entry: GameResourceEntry): string {
-  if (route === "item_icon") return entry.active_layering ? "已激活" : "";
+  if (route === "item_icon") return entry.active_layering ? t("library.active") : "";
   if (route === "language" || route === "game_data" || route === "enum_catalog") {
-    return entry.active ? "已激活" : "";
+    return entry.active ? t("library.active") : "";
   }
   return blockUsageLabel(entry);
 }
@@ -191,24 +190,24 @@ function activationLabel(route: AssetRoute, entry: GameResourceEntry): string {
 function displayEntryName(route: AssetRoute, entry: GameResourceEntry): string {
   if (route === "block_icon" || route === "item_icon") {
     const prefix = route === "block_icon" ? (resolveBlockIconVariant(entry) === "2d" ? "[2D] " : "[3D] ") : "";
-    if (entry.source === "builtin") return route === "block_icon" ? `${prefix}（内建）` : "（内建）";
+    if (entry.source === "builtin") return route === "block_icon" ? t("library.builtinPrefixed", { prefix: prefix }) : t("library.builtinParenthesized");
     if (entry.source === "external") return `${prefix}${baseName(entry.root_path || entry.label)}/`;
     if (entry.source === "vault") return `${prefix}CCVault`;
     return `${prefix}${entry.label}`;
   }
   if (route === "language") {
-    if (entry.source === "builtin") return `（内建）${entry.language || "zh_cn"}`;
+    if (entry.source === "builtin") return t("library.builtinLanguage", { language: entry.language || "zh_cn" });
     if (entry.source === "imported") return baseName(entry.file_relpath || entry.label);
     if (entry.source === "github") return entry.language || entry.label;
     return entry.label;
   }
   if (route === "game_data") {
-    if (entry.source === "builtin") return "（内建）";
-    if (entry.source === "imported") return baseName(entry.data_relpath || entry.label);
+    if (entry.source === "builtin") return t("library.gameDataBundled", { version: entry.version || "" });
+    if (entry.source === "imported") return entry.version || entry.label;
     return entry.label;
   }
   if (route === "enum_catalog") {
-    if (entry.source === "builtin") return "（内建）";
+    if (entry.source === "builtin") return t("library.builtinParenthesized");
     if (entry.source === "wiki") return "Minecraft Wiki";
     return entry.label;
   }
@@ -216,18 +215,19 @@ function displayEntryName(route: AssetRoute, entry: GameResourceEntry): string {
 }
 
 function displayVersion(route: AssetRoute, entry: GameResourceEntry): string {
+  if (route === "game_data") return entry.version || t("library.unknown");
   if (route === "block_icon") return resolveBlockIconVariant(entry) === "2d" ? "2D" : "3D";
   if (route === "language") {
-    return entry.source === "github" ? entry.branch || entry.version || "未知" : "未知";
+    return entry.source === "github" ? entry.branch || entry.version || t("library.unknown") : t("library.unknown");
   }
   if (route === "enum_catalog") {
     return entry.source === "builtin" ? "2025/4/22" : formatDate(entry.installed_at);
   }
-  return "未知";
+  return t("library.unknown");
 }
 
 function blockIconSlotLabel(slot: BlockIconResourceSlot): string {
-  return slot === "layering" ? "2D 槽（分层）" : "3D 槽（材料列表）";
+  return slot === "layering" ? t("library.layeringSlot") : t("library.materialListSlot");
 }
 
 /** Sources that can only write one slot; `null` means the user chooses. */
@@ -238,42 +238,45 @@ function lockedBlockIconSlotForSource(source: AssetSource): BlockIconResourceSlo
 }
 
 function blockIconSourceHint(source: AssetSource, slot: BlockIconResourceSlot): string {
-  if (source === "builtin") return "内建来源固定写入 2D 槽";
-  if (source === "vault") return "CCVault 来源固定写入 3D 槽";
+  if (source === "builtin") return t("library.builtinSlotHint");
+  if (source === "vault") return t("library.vaultSlotHint");
   if (source === "wiki" || source === "wiki_zh") {
-    const label = source === "wiki_zh" ? "中文 Wiki" : "英文 Wiki";
+    const label = source === "wiki_zh" ? t("library.wikiChineseShort") : t("library.wikiEnglishShort");
     return slot === "layering"
-      ? `2D 槽走 ${label} BlockSprite 列表，保持 16x16`
-      : `3D 槽走 ${label} 数据值页面，转为 32x32`;
+      ? t("library.wiki2dHint", { source: label })
+      : t("library.wiki3dHint", { source: label });
   }
-  return slot === "layering" ? "该槽仅接受 2D 方块图标" : "该槽可用 3D，必要时回退 2D";
+  return slot === "layering" ? t("library.slot2dHint") : t("library.slot3dHint");
 }
 
-function resourceActiveText(snapshot: GameResourceSnapshot | null): string {
-  if (!snapshot) return "未加载";
-  return [
-    `语言=${snapshot.active_language.label}`,
-    `材料图标=${snapshot.active_material_list_icons.label}`,
-    `分层方块=${snapshot.active_layering_block_icons.label}`,
-    `分层物品=${snapshot.active_layering_item_icons.label}`,
-    `数据=${snapshot.active_game_data.label}`,
-    `枚举=${snapshot.active_enum_catalog.label}`,
-  ].join(" / ");
+function resourceActiveText(snapshot: GameResourceSnapshot | null): UiMessage {
+  if (!snapshot) return message("library.notLoaded");
+  return message("library.activeResources", {
+    language: snapshot.active_language.label,
+    materials: snapshot.active_material_list_icons.label,
+    layerBlocks: snapshot.active_layering_block_icons.label,
+    layerItems: snapshot.active_layering_item_icons.label,
+    data: snapshot.active_game_data.label,
+    catalog: snapshot.active_enum_catalog.label,
+  });
 }
 
 export function AssetManagerContent({ theme, onClose }: { theme: string; onClose?: () => void }) {
+  const { locale } = useI18n();
   const [route, setRoute] = useState<AssetRoute>("block_icon");
   const [sourceByRoute, setSourceByRoute] = useState(DEFAULT_SOURCE_BY_ROUTE);
   const [selectedBlockIconSlot, setSelectedBlockIconSlot] = useState<BlockIconResourceSlot>("layering");
   const [resourceSnapshot, setResourceSnapshot] = useState<GameResourceSnapshot | null>(null);
   const [health, setHealth] = useState<GameResourceHealthRow[]>([]);
-  const [statusText, setStatusText] = useState("");
-  const [log, setLog] = useState("");
+  const [statusText, setStatusText] = useState<UiMessage>("");
+  const [log, setLog] = useState<UiMessage[]>([]);
   const [languageCatalogBusy, setLanguageCatalogBusy] = useState(false);
   const [languageDownloadBusy, setLanguageDownloadBusy] = useState(false);
   const [blockIconDownloadBusy, setBlockIconDownloadBusy] = useState(false);
   const [itemIconDownloadBusy, setItemIconDownloadBusy] = useState(false);
   const [enumCatalogDownloadBusy, setEnumCatalogDownloadBusy] = useState(false);
+  const [gameDataBusy, setGameDataBusy] = useState(false);
+  const [gameAssetsDir, setGameAssetsDir] = useState("");
   const [languageBranches, setLanguageBranches] = useState<string[]>([]);
   const [remoteLanguages, setRemoteLanguages] = useState<string[]>([]);
   const [selectedLanguageBranch, setSelectedLanguageBranch] = useState("");
@@ -291,13 +294,14 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     languageDownloadBusy ||
     blockIconDownloadBusy ||
     itemIconDownloadBusy ||
-    enumCatalogDownloadBusy;
+    enumCatalogDownloadBusy ||
+    gameDataBusy;
 
   const entries = resourceSnapshot ? resourceSnapshot.entries[route] || [] : [];
 
-  const reportStatus = useCallback((status: string, detail?: string) => {
+  const reportStatus = useCallback((status: UiMessage, detail?: UiMessage) => {
     setStatusText(status);
-    if (detail !== undefined) setLog(detail ? `${status}\n${detail}` : status);
+    if (detail !== undefined) setLog(detail ? [status, detail] : [status]);
   }, []);
 
   const reloadRuntimeResources = useCallback(async () => {
@@ -311,14 +315,21 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     async (silent = false) => {
       const snapshot = await listGameResourceRegistry();
       setResourceSnapshot(snapshot);
-      if (!silent) setStatusText("资源列表已刷新。");
+      if (!silent) setStatusText(message("library.resourcesRefreshed"));
       return snapshot;
     },
     [],
   );
 
   useEffect(() => {
-    refreshGameResources(true).catch((error) => reportStatus("加载资源列表失败。", String(error)));
+    refreshGameResources(true).catch((error) => reportStatus(message("library.resourcesLoadFailed"), String(error)));
+  }, [refreshGameResources, reportStatus]);
+
+  useEffect(() => {
+    const pending = listenEvent("resource-game-data-changed", () => {
+      void refreshGameResources(true).catch(error => reportStatus(message("library.resourcesLoadFailed"), String(error)));
+    });
+    return () => { void pending.then(unlisten => unlisten()).catch(() => undefined); };
   }, [refreshGameResources, reportStatus]);
 
   // Icon download progress: without these the UI looks frozen while working.
@@ -328,7 +339,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       (event) => {
         const payload = event.payload;
         if (!payload) return;
-        reportStatus(payload.status, `${payload.current}/${payload.total}，成功 ${payload.downloaded}`);
+        reportStatus(payload.status, message("library.resourceProgress", { current: payload.current, total: payload.total, succeeded: payload.downloaded }));
       },
     ).catch(() => undefined);
     return () => {
@@ -342,7 +353,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       (event) => {
         const payload = event.payload;
         if (!payload) return;
-        reportStatus(payload.status, `${payload.current}/${payload.total}，成功 ${payload.downloaded}`);
+        reportStatus(payload.status, message("library.resourceProgress", { current: payload.current, total: payload.total, succeeded: payload.downloaded }));
       },
     ).catch(() => undefined);
     return () => {
@@ -357,13 +368,22 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   }, [lockedBlockIconSlot]);
 
   const applyResourceSnapshot = useCallback(
-    async (snapshotPromise: Promise<GameResourceSnapshot>, message: string) => {
+    async (snapshotPromise: Promise<GameResourceSnapshot>, statusMessage: UiMessage) => {
       const snapshot = await snapshotPromise;
       setResourceSnapshot(snapshot);
-      await reloadRuntimeResources();
-      reportStatus(message, resourceActiveText(snapshot));
+      if (route === "game_data") {
+        // Import/selection is already committed by Core. A missing optional
+        // registry must be reported as such, not as a failed/rolled-back import.
+        const loaded = await Promise.allSettled([initI18n(true), loadDatabases()]);
+        invalidateBlockIconCache();
+        const failed = loaded.filter((row): row is PromiseRejectedResult => row.status === "rejected");
+        reportStatus(statusMessage, failed.length ? message("library.gameDataLimited", { error: failed.map(row => String(row.reason)).join("\n") }) : resourceActiveText(snapshot));
+      } else {
+        await reloadRuntimeResources();
+        reportStatus(statusMessage, resourceActiveText(snapshot));
+      }
     },
-    [reloadRuntimeResources, reportStatus],
+    [reloadRuntimeResources, reportStatus, route],
   );
 
   // ── Line.4 actions per category ───────────────────────────────────────────
@@ -373,10 +393,10 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     try {
       await applyResourceSnapshot(
         downloadRemoteMinecraftLanguage(selectedLanguageBranch, selectedRemoteLanguage),
-        `语言资源已下载：${selectedLanguageBranch} / ${selectedRemoteLanguage}`,
+        message("library.languageDownloaded", { version: selectedLanguageBranch, language: selectedRemoteLanguage }),
       );
     } catch (error) {
-      reportStatus("下载语言资源失败。", String(error));
+      reportStatus(message("library.languageDownloadFailed"), String(error));
     } finally {
       setLanguageDownloadBusy(false);
       await refreshGameResources(true).catch(() => undefined);
@@ -384,28 +404,28 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   };
 
   const importLanguage = async () => {
-    const selected = await openDialog({ filters: [{ name: "Minecraft language JSON", extensions: ["json"] }] });
+    const selected = await openDialog({ filters: [{ name: t("library.languageJsonFilter"), extensions: ["json"] }] });
     if (typeof selected !== "string") return;
     try {
-      await applyResourceSnapshot(importLanguageResource(selected), `语言资源已导入：${selected}`);
+      await applyResourceSnapshot(importLanguageResource(selected), message("library.languageImported", { path: selected }));
     } catch (error) {
-      reportStatus("导入语言资源失败。", String(error));
+      reportStatus(message("library.languageImportFailed"), String(error));
     }
   };
 
   const downloadBlockIcons = async () => {
     setBlockIconDownloadBusy(true);
-    reportStatus("正在下载 CCVault 方块图标...", "正在下载 CCVault 方块图标...");
+    reportStatus(message("library.vaultBlocksDownloading"), message("library.vaultBlocksDownloading"));
     try {
       const result = await downloadVaultBlockIcons();
       setResourceSnapshot(result.snapshot);
       await reloadRuntimeResources();
       reportStatus(
-        `CCVault 方块图标已下载：${result.downloaded}/${result.total}`,
-        `${result.target_dir}\n${resourceActiveText(result.snapshot)}`,
+        message("library.vaultBlocksDownloaded", { downloaded: result.downloaded, total: result.total }),
+        message("library.resourcePathSummary", { path: result.target_dir, resources: resourceActiveText(result.snapshot) }),
       );
     } catch (error) {
-      reportStatus("下载 CCVault 方块图标失败。", String(error));
+      reportStatus(message("library.vaultBlocksFailed"), String(error));
     } finally {
       setBlockIconDownloadBusy(false);
       await refreshGameResources(true).catch(() => undefined);
@@ -414,23 +434,23 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
 
   const downloadWikiBlockIconsForSlot = async (slot: BlockIconResourceSlot, source: "wiki" | "wiki_zh") => {
     setBlockIconDownloadBusy(true);
-    const label = source === "wiki_zh" ? "中文 Minecraft 维基百科" : "Minecraft Wiki";
+    const label = source === "wiki_zh" ? message("library.chineseWiki") : "Minecraft Wiki";
     reportStatus(
-      `正在下载${label} ${blockIconSlotLabel(slot)}方块图标...`,
+      message("library.wikiBlocksDownloading", { source: label, slot: message(slot === "layering" ? "library.layeringSlot" : "library.materialListSlot") }),
       slot === "layering"
-        ? "正在按 BlockSprite 列表抓取 16x16 2D 图标..."
-        : "正在按数据值页面抓取并转换 32x32 图标...",
+        ? message("library.wiki2dDownloading")
+        : message("library.wiki3dDownloading"),
     );
     try {
       const result = await downloadWikiBlockIcons(slot, source);
       setResourceSnapshot(result.snapshot);
       await reloadRuntimeResources();
       reportStatus(
-        `${label} 方块图标已下载到${blockIconSlotLabel(slot)}：${result.downloaded}/${result.total}`,
-        `${result.target_dir}\n${resourceActiveText(result.snapshot)}`,
+        message("library.wikiBlocksDownloaded", { source: label, slot: message(slot === "layering" ? "library.layeringSlot" : "library.materialListSlot"), downloaded: result.downloaded, total: result.total }),
+        message("library.resourcePathSummary", { path: result.target_dir, resources: resourceActiveText(result.snapshot) }),
       );
     } catch (error) {
-      reportStatus(`下载${label} 方块图标失败。`, String(error));
+      reportStatus(message("library.wikiBlocksFailed", { source: label }), String(error));
     } finally {
       setBlockIconDownloadBusy(false);
       await refreshGameResources(true).catch(() => undefined);
@@ -439,37 +459,28 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
 
   const reextractBuiltinBlockIcons = async (slot: BlockIconResourceSlot) => {
     setBlockIconDownloadBusy(true);
-    reportStatus("正在重新提取内建方块图标...", "正在从 block.zip 提取到 minecraft-assets/block_2d/initial ...");
     try {
-      const result = await ensureBuiltinBlockIconsExtracted(true);
       const snapshot = await activateGameResource("block_icon", BUILTIN_BLOCK_ICON_ID, slot);
       setResourceSnapshot(snapshot);
       await reloadRuntimeResources();
-      reportStatus(
-        `内建方块图标已提取并应用到${blockIconSlotLabel(slot)}：${result.extracted}`,
-        `${result.target_dir}\n${resourceActiveText(snapshot)}`,
-      );
-    } catch (error) {
-      reportStatus("重新提取内建方块图标失败。", String(error));
-    } finally {
-      setBlockIconDownloadBusy(false);
-      await refreshGameResources(true).catch(() => undefined);
-    }
+      reportStatus(message("library.resourcesRefreshed"), resourceActiveText(snapshot));
+    } catch (error) { reportStatus(message("library.resourceApplyFailed"), String(error)); }
+    finally { setBlockIconDownloadBusy(false); }
   };
 
   const downloadItemIcons = async () => {
     setItemIconDownloadBusy(true);
-    reportStatus("正在下载 CCVault 物品图标...", "正在下载 CCVault 物品图标...");
+    reportStatus(message("library.vaultItemsDownloading"), message("library.vaultItemsDownloading"));
     try {
       const result = await downloadVaultItemIcons();
       setResourceSnapshot(result.snapshot);
       await reloadRuntimeResources();
       reportStatus(
-        `CCVault 物品图标已下载：${result.downloaded}/${result.total}`,
-        `${result.target_dir}\n${resourceActiveText(result.snapshot)}`,
+        message("library.vaultItemsDownloaded", { downloaded: result.downloaded, total: result.total }),
+        message("library.resourcePathSummary", { path: result.target_dir, resources: resourceActiveText(result.snapshot) }),
       );
     } catch (error) {
-      reportStatus("下载 CCVault 物品图标失败。", String(error));
+      reportStatus(message("library.vaultItemsFailed"), String(error));
     } finally {
       setItemIconDownloadBusy(false);
       await refreshGameResources(true).catch(() => undefined);
@@ -478,34 +489,27 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
 
   const reextractBuiltinItemIcons = async () => {
     setItemIconDownloadBusy(true);
-    reportStatus("正在重新提取内建物品图标...", "正在从 item.zip 提取到 minecraft-assets/item/initial ...");
     try {
-      const result = await ensureBuiltinItemIconsExtracted(true);
-      const snapshot = await refreshGameResources(true);
+      const snapshot = await activateGameResource("item_icon", "builtin:item_icon:nova");
+      setResourceSnapshot(snapshot);
       await reloadRuntimeResources();
-      reportStatus(
-        `内建物品图标已提取：${result.extracted}`,
-        `${result.target_dir}\n${resourceActiveText(snapshot)}`,
-      );
-    } catch (error) {
-      reportStatus("重新提取内建物品图标失败。", String(error));
-    } finally {
-      setItemIconDownloadBusy(false);
-    }
+      reportStatus(message("library.resourcesRefreshed"), resourceActiveText(snapshot));
+    } catch (error) { reportStatus(message("library.resourceApplyFailed"), String(error)); }
+    finally { setItemIconDownloadBusy(false); }
   };
 
   const downloadEnumCatalogs = async () => {
     setEnumCatalogDownloadBusy(true);
-    reportStatus("正在下载 Minecraft Wiki 枚举全集...", "正在抓取方块、物品、魔咒和实体基础集合...");
+    reportStatus(message("library.enumDownloading"), message("library.enumDownloadingDetail"));
     try {
       const result = await downloadWikiEnumCatalog();
       setResourceSnapshot(result.snapshot);
       reportStatus(
-        `枚举全集已下载：B=${result.blocks} / I=${result.items} / E=${result.enchantments} / N=${result.entities}`,
-        `${result.target_dir}\n${resourceActiveText(result.snapshot)}`,
+        message("library.enumDownloaded", { blocks: result.blocks, items: result.items, enchantments: result.enchantments, entities: result.entities }),
+        message("library.resourcePathSummary", { path: result.target_dir, resources: resourceActiveText(result.snapshot) }),
       );
     } catch (error) {
-      reportStatus("下载 Minecraft Wiki 枚举全集失败。", String(error));
+      reportStatus(message("library.enumDownloadFailed"), String(error));
     } finally {
       setEnumCatalogDownloadBusy(false);
       await refreshGameResources(true).catch(() => undefined);
@@ -519,10 +523,10 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     try {
       await applyResourceSnapshot(
         registerExternalIconDirectory(route as "block_icon" | "item_icon", selected, slot),
-        `图标目录已登记：${selected}`,
+        message("library.iconDirectoryRegistered", { path: selected }),
       );
     } catch (error) {
-      reportStatus("登记图标目录失败。", String(error));
+      reportStatus(message("library.iconDirectoryRegisterFailed"), String(error));
     } finally {
       setBlockIconDownloadBusy(false);
       await refreshGameResources(true).catch(() => undefined);
@@ -530,13 +534,25 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   };
 
   const importGameData = async () => {
-    const selected = await openDialog({ filters: [{ name: "Minecraft BlockState JSON", extensions: ["json"] }] });
+    const selected = await openDialog({ filters: [{ name: t("library.clientJarFilter"), extensions: ["jar"] }] });
     if (typeof selected !== "string") return;
+    setGameDataBusy(true);
+    reportStatus(message("library.gameDataImporting"));
     try {
-      await applyResourceSnapshot(importGameDataResource(selected), `游戏数据已导入：${selected}`);
+      await applyResourceSnapshot(importClientGameData(selected, gameAssetsDir || undefined), message("library.gameDataImported", { path: selected }));
     } catch (error) {
-      reportStatus("导入游戏数据失败。", String(error));
-    }
+      reportStatus(message("library.gameDataImportFailed"), String(error));
+    } finally { setGameDataBusy(false); }
+  };
+  const restoreGameData = async () => {
+    setGameDataBusy(true);
+    try { await applyResourceSnapshot(restoreDefaultGameDataResource(), message("library.gameDataDefaultRestored")); }
+    catch (error) { reportStatus(message("library.resourceApplyFailed"), String(error)); }
+    finally { setGameDataBusy(false); }
+  };
+  const chooseGameAssets = async () => {
+    const selected = await openDialog({ directory: true });
+    if (typeof selected === "string") setGameAssetsDir(selected);
   };
 
   const loadLanguageCatalog = useCallback(
@@ -549,16 +565,16 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
           setSelectedLanguageBranch("");
           setRemoteLanguages([]);
           setSelectedRemoteLanguage("");
-          reportStatus(`远端版本已刷新：${branches.length} 个`);
+          reportStatus(message("library.remoteVersionsRefreshed", { count: branches.length }));
           return;
         }
         setSelectedLanguageBranch(branch);
         setSelectedRemoteLanguage("");
         const languages = await listRemoteMinecraftLanguages(branch);
         setRemoteLanguages(languages);
-        reportStatus(`版本 ${branch} 有 ${languages.length} 种语言`);
+        reportStatus(message("library.remoteLanguagesCount", { version: branch, count: languages.length }));
       } catch (error) {
-        reportStatus("获取远端语言列表失败。", String(error));
+        reportStatus(message("library.remoteLanguagesFailed"), String(error));
       } finally {
         setLanguageCatalogBusy(false);
       }
@@ -590,32 +606,32 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       if (selectedSource === "local_json") return importLanguage();
       if (selectedSource === "github") return downloadLanguage();
       if (selectedSource === "builtin") {
-        return applyResourceSnapshot(activateGameResource("language", "builtin:language:zh_cn"), "已切换到内建语言包。");
+        return applyResourceSnapshot(activateGameResource("language", "builtin:language:zh_cn"), message("library.builtinLanguageActivated"));
       }
     }
     if (route === "game_data") {
       if (selectedSource === "local_json") return importGameData();
-      return applyResourceSnapshot(activateGameResource("game_data", "builtin:game_data:26.1"), "已切换到内建游戏数据。");
+      return restoreGameData();
     }
     if (route === "enum_catalog") {
       if (selectedSource === "wiki") return downloadEnumCatalogs();
-      return applyResourceSnapshot(activateGameResource("enum_catalog", "builtin:enum_catalog:base"), "已切换到内建枚举全集。");
+      return applyResourceSnapshot(activateGameResource("enum_catalog", "builtin:enum_catalog:base"), message("library.builtinEnumActivated"));
     }
-    reportStatus("当前来源不支持该分类的获取操作。");
+    reportStatus(message("library.sourceUnsupported"));
   };
 
   const fetchButtonLabel = (): string => {
     if (route === "block_icon" && blockIconDownloadBusy) {
-      return selectedSource === "builtin" ? "提取中..." : "下载中...";
+      return selectedSource === "builtin" ? t("library.refresh") : t("library.downloading");
     }
     if (route === "item_icon" && itemIconDownloadBusy) {
-      return selectedSource === "builtin" ? "提取中..." : "下载中...";
+      return selectedSource === "builtin" ? t("library.refresh") : t("library.downloading");
     }
-    if (route === "language" && languageDownloadBusy) return "下载中...";
-    if (route === "enum_catalog" && enumCatalogDownloadBusy) return "下载中...";
-    if (selectedSource === "builtin") return route === "block_icon" || route === "item_icon" ? "重新解包" : "使用内建";
-    if (selectedSource === "local_directory" || selectedSource === "local_json") return "导入...";
-    return "下载";
+    if (route === "language" && languageDownloadBusy) return t("library.downloading");
+    if (route === "enum_catalog" && enumCatalogDownloadBusy) return t("library.downloading");
+    if (selectedSource === "builtin") return route === "block_icon" || route === "item_icon" ? t("library.refresh") : t("library.useBuiltin");
+    if (selectedSource === "local_directory" || selectedSource === "local_json") return t("library.importMenu");
+    return t("library.download");
   };
 
   // ── Line.3 sub-options ────────────────────────────────────────────────────
@@ -625,19 +641,19 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
         <>
           <Dropdown
             className="asset-manager-select"
-            ariaLabel="子选项1：激活槽位"
+            ariaLabel={t("library.slotOption")}
             value={effectiveBlockIconSlot}
             disabled={!!lockedBlockIconSlot || busy}
             onChange={(next) => setSelectedBlockIconSlot(next as BlockIconResourceSlot)}
             options={[
-              { label: "2D 槽（分层）", value: "layering" },
-              { label: "3D 槽（材料列表）", value: "material_list" },
+              { label: t("library.layeringSlot"), value: "layering" },
+              { label: t("library.materialListSlot"), value: "material_list" },
             ]}
           />
           {/* A disabled field that only states the source; it has nothing to choose. */}
           <Dropdown
             className="asset-manager-select"
-            ariaLabel="子选项2：来源说明"
+            ariaLabel={t("library.sourceHintOption")}
             value=""
             disabled
             onChange={() => {}}
@@ -651,22 +667,22 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
         <>
           <Dropdown
             className="asset-manager-select"
-            ariaLabel="子选项1：版本"
+            ariaLabel={t("library.versionOption")}
             value={selectedLanguageBranch}
             disabled={languageCatalogBusy || languageBranches.length === 0}
             onChange={(next) => void loadLanguageCatalog(next)}
             options={languageBranches.length === 0
-              ? [{ label: "版本", value: "" }]
+              ? [{ label: t("library.version"), value: "" }]
               : languageBranches.map((branch) => ({ label: branch, value: branch }))}
           />
           <Dropdown
             className="asset-manager-select"
-            ariaLabel="子选项2：语言"
+            ariaLabel={t("library.languageOption")}
             value={selectedRemoteLanguage}
             disabled={languageCatalogBusy || remoteLanguages.length === 0}
             onChange={setSelectedRemoteLanguage}
             options={remoteLanguages.length === 0
-              ? [{ label: "语言", value: "" }]
+              ? [{ label: t("library.language"), value: "" }]
               : remoteLanguages.map((language) => ({ label: language, value: language }))}
           />
         </>
@@ -674,8 +690,8 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     }
     return (
       <>
-        <Dropdown className="asset-manager-select" ariaLabel="子选项1" value="" disabled onChange={() => {}} options={[{ label: "子选项1", value: "" }]} />
-        <Dropdown className="asset-manager-select" ariaLabel="子选项2" value="" disabled onChange={() => {}} options={[{ label: "子选项2", value: "" }]} />
+        <Dropdown className="asset-manager-select" ariaLabel={t("library.option1")} value="" disabled onChange={() => {}} options={[{ label: t("library.option1"), value: "" }]} />
+        <Dropdown className="asset-manager-select" ariaLabel={t("library.option2")} value="" disabled onChange={() => {}} options={[{ label: t("library.option2"), value: "" }]} />
       </>
     );
   };
@@ -683,25 +699,28 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   // ── Line.5 table ──────────────────────────────────────────────────────────
   const tableColumns = useMemo(() => {
     const columns: { key: string; label: string }[] = [
-      { key: "name", label: "名称" },
-      { key: "source", label: "来源" },
+      { key: "name", label: t("library.name") },
+      { key: "source", label: t("library.source") },
     ];
-    if (route === "language") columns.push({ key: "language", label: "语言" });
-    columns.push({ key: "version", label: route === "enum_catalog" ? "日期" : "版本" });
-    if (route === "block_icon") columns.push({ key: "usage", label: "用于" });
-    if (route !== "block_icon") columns.push({ key: "active", label: "状态" });
-    columns.push({ key: "actions", label: "操作" });
+    if (route === "language") columns.push({ key: "language", label: t("library.language") });
+    columns.push({ key: "version", label: route === "enum_catalog" ? t("library.date") : t("library.version") });
+    if (route === "block_icon") columns.push({ key: "usage", label: t("library.usage") });
+    if (route !== "block_icon") columns.push({ key: "active", label: t("library.status") });
+    columns.push({ key: "actions", label: t("library.actions") });
     return columns;
-  }, [route]);
+  }, [route, locale]);
 
   const handleApply = async (entry: GameResourceEntry, slot?: BlockIconResourceSlot) => {
+    if (entry.kind === "game_data") setGameDataBusy(true);
     try {
       await applyResourceSnapshot(
         activateGameResource(entry.kind, entry.id, slot),
-        `已应用：${displayEntryName(route, entry)}`,
+        message("library.resourceApplied", { name: displayEntryName(route, entry) }),
       );
     } catch (error) {
-      reportStatus("应用资源失败。", String(error));
+      reportStatus(message("library.resourceApplyFailed"), String(error));
+    } finally {
+      if (entry.kind === "game_data") setGameDataBusy(false);
     }
   };
 
@@ -709,10 +728,10 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     try {
       await applyResourceSnapshot(
         deleteGameResource(entry.kind, entry.id),
-        `已删除登记：${displayEntryName(route, entry)}`,
+        message("library.resourceUnregistered", { name: displayEntryName(route, entry) }),
       );
     } catch (error) {
-      reportStatus("删除登记失败。", String(error));
+      reportStatus(message("library.resourceUnregisterFailed"), String(error));
     }
   };
 
@@ -736,21 +755,17 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
             {route === "block_icon" ? (
               <>
                 <Button type="button" disabled={busy} onClick={() => void handleApply(entry, "material_list")}>
-                  用于材料
-                </Button>
+                  {t("library.useForMaterials")}</Button>
                 <Button type="button" disabled={busy} onClick={() => void handleApply(entry, "layering")}>
-                  用于分层
-                </Button>
+                  {t("library.useForLayers")}</Button>
               </>
             ) : (
-              <Button type="button" disabled={busy} onClick={() => void handleApply(entry)}>
-                应用
-              </Button>
+              <Button type="button" disabled={busy || route === "game_data" && entry.active} onClick={() => void handleApply(entry)}>
+                {t("library.apply")}</Button>
             )}
-            {entry.builtin ? null : (
+            {entry.builtin || route === "game_data" ? null : (
               <Button type="button" disabled={busy} onClick={() => void handleDelete(entry)}>
-                删除登记
-              </Button>
+                {t("library.unregister")}</Button>
             )}
           </div>
         );
@@ -764,16 +779,16 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       const rows = await checkGameResourceHealth();
       setHealth(rows);
       const bad = rows.filter((row) => !row.ok).length;
-      reportStatus(bad ? `健康检查发现 ${bad} 项异常。` : "健康检查完成，未发现异常。");
+      reportStatus(bad ? message("library.healthIssues", { count: bad }) : message("library.healthOk"));
     } catch (error) {
-      reportStatus("健康检查失败。", String(error));
+      reportStatus(message("library.healthFailed"), String(error));
     }
   };
 
   const handleOpenRoot = async () => {
     if (!resourceSnapshot) return;
     await openWorkspacePath(resourceSnapshot.config_dir);
-    reportStatus(`已打开根目录：${displayFilePath(resourceSnapshot.config_dir)}`);
+    reportStatus(message("library.rootOpened", { path: displayFilePath(resourceSnapshot.config_dir) }));
   };
 
   const fetchDisabled =
@@ -786,9 +801,9 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   return (
     <main className="asset-manager-window">
       <div className="asset-manager-header">
-        <h3 className="asset-manager-title">游戏资源管理</h3>
+        <h3 className="asset-manager-title">{t("library.assetManagerTitle")}</h3>
         {onClose ? (
-          <Button className="subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}>
+          <Button className="subwindow-close-button" type="button" aria-label={t("library.closeWindow")} onClick={onClose}>
             ×
           </Button>
         ) : null}
@@ -796,7 +811,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
 
       <div className="asset-manager-body">
         <aside className="asset-manager-sidebar">
-          <nav className="asset-manager-nav" aria-label="游戏资源分类">
+          <nav className="asset-manager-nav" aria-label={t("library.resourceCategories")}>
             {ASSET_NAV_ITEMS.map((item) => {
               const active = route === item.key;
               return (
@@ -822,15 +837,30 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
           </div>
 
           <div className="asset-manager-panel">
-            <div className="asset-manager-config">
+            {route === "game_data" ? (
+              <div className="asset-manager-config">
+                <div className="asset-manager-form-row">
+                  <span className="asset-manager-form-label">{t("library.gameDataCurrent")}</span>
+                  <span>{resourceSnapshot?.active_game_data.version || t("library.gameDataNotConfigured")}</span>
+                </div>
+                <div className="asset-manager-actions">
+                  <Button type="button" disabled={busy} onClick={() => void importGameData()}>{t("library.gameDataImportJar")}</Button>
+                  <Button type="button" disabled={busy || !!(resourceSnapshot?.active_game_data.builtin && resourceSnapshot.active_game_data.version)} onClick={() => void restoreGameData()}>{t("library.gameDataRestoreDefault")}</Button>
+                  <Button type="button" disabled={busy} onClick={() => void chooseGameAssets()}>{t("library.gameDataAssets")}</Button>
+                </div>
+                {gameAssetsDir ? <div className="asset-manager-form-row">
+                  <span className="game-resource-path">{displayFilePath(gameAssetsDir)}</span>
+                  <Button type="button" disabled={busy} onClick={() => setGameAssetsDir("")}>{t("library.gameDataAssetsAutomatic")}</Button>
+                </div> : null}
+              </div>
+            ) : <div className="asset-manager-config">
               <div className="asset-manager-form-row">
                 <label className="asset-manager-form-label" htmlFor="asset-manager-source">
-                  来源
-                </label>
+                  {t("library.source")}</label>
                 <Dropdown
                   id="asset-manager-source"
                   className="asset-manager-select"
-                  ariaLabel="来源"
+                  ariaLabel={t("library.source")}
                   value={selectedSource}
                   disabled={busy}
                   onChange={(next) =>
@@ -844,29 +874,28 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
               </div>
 
               <div className="asset-manager-form-row asset-manager-form-row-suboptions">
-                <span className="asset-manager-form-label">子选项</span>
+                <span className="asset-manager-form-label">{t("library.subOptions")}</span>
                 <div className="asset-manager-inline-controls">
                   {renderSubOptionControls()}
                   {remoteLanguageEnabled ? (
                     <Button type="button" disabled={languageCatalogBusy} onClick={() => void loadLanguageCatalog()} >
-                      刷新远端列表
-                    </Button>
+                      {t("library.refreshRemoteList")}</Button>
                   ) : null}
                 </div>
               </div>
-            </div>
+            </div>}
 
-            <div className="asset-manager-actions">
+            {route !== "game_data" ? <div className="asset-manager-actions">
               <Button type="button" disabled={fetchDisabled} onClick={() => void runFetchAction()}>
                 {fetchButtonLabel()}
               </Button>
-            </div>
+            </div> : null}
 
             {health.length > 0 ? (
               <div className="asset-manager-health">
                 {health.map((row) => (
-                  <div key={row.label} className={row.ok ? "game-resource-health-ok" : "game-resource-health-failed"}>
-                    {row.ok ? "OK" : "失败"} {row.label}
+                  <div key={localizeMessage(row.label)} className={row.ok ? "game-resource-health-ok" : "game-resource-health-failed"}>
+                    {row.ok ? "OK" : t("library.failed")} {localizeMessage(row.label)}
                   </div>
                 ))}
               </div>
@@ -895,29 +924,25 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                   ) : (
                     <TableRow>
                       <TableCell colSpan={tableColumns.length} className="asset-manager-empty-row">
-                        暂无已登记资源。
-                      </TableCell>
+                        {t("library.noRegisteredResources")}</TableCell>
                     </TableRow>
                   )}
                 </TableBody>
               </Table>
             </div>
 
-            {log ? <pre className="subwindow-error asset-manager-log">{log}</pre> : null}
+            {log.length ? <pre className="subwindow-error asset-manager-log">{log.map(localizeMessage).join("\n")}</pre> : null}
           </div>
 
           <footer className="asset-manager-footer">
-            <span className="subwindow-status-text asset-manager-footer-status">{statusText}</span>
+            <span className="subwindow-status-text asset-manager-footer-status">{localizeMessage(statusText)}</span>
             <div className="asset-manager-footer-actions">
               <Button type="button" onClick={() => void refreshGameResources().catch(() => undefined)} >
-                刷新
-              </Button>
+                {t("library.refresh")}</Button>
               <Button type="button" onClick={() => void handleHealth()}>
-                健康检查
-              </Button>
+                {t("library.healthCheck")}</Button>
               <Button type="button" onClick={() => void handleOpenRoot()}>
-                打开根目录...
-              </Button>
+                {t("library.openRootMenu")}</Button>
             </div>
           </footer>
         </section>

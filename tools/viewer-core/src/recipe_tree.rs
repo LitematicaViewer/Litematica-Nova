@@ -104,7 +104,9 @@ pub fn resolve_recipe_trees_for_materials(
     let Some(recipes) = recipe_cache::load_available_recipes(minecraft_version)? else {
         return Ok(BTreeMap::new());
     };
-    Ok(resolve_recipe_trees_from_recipes(&recipes, materials))
+    let tags = recipe_cache::load_item_tags()?;
+    let resolver = RecipeTreeResolver::with_tags(&recipes, tags);
+    Ok(materials.materials.iter().filter(|material| material.recipe_status == "available").map(|material| (material.namespace_id.clone(), resolver.resolve(&material.namespace_id, material.required_count))).collect())
 }
 
 pub fn resolve_recipe_trees_from_recipes(
@@ -127,10 +129,15 @@ pub fn resolve_recipe_trees_from_recipes(
 
 struct RecipeTreeResolver {
     candidates: BTreeMap<String, Vec<RecipeCandidate>>,
+    tags: BTreeMap<String, Vec<String>>,
+    rejected: BTreeMap<String, String>,
 }
 
 impl RecipeTreeResolver {
-    fn new(recipes: &BTreeMap<String, Value>) -> Self {
+    fn new(recipes: &BTreeMap<String, Value>) -> Self { Self::with_tags(recipes, BTreeMap::new()) }
+
+    fn with_tags(recipes: &BTreeMap<String, Value>, tags: BTreeMap<String, Vec<String>>) -> Self {
+        let mut rejected = BTreeMap::new();
         let mut candidates = BTreeMap::<String, Vec<RecipeCandidate>>::new();
         for (recipe_id, recipe) in recipes {
             if let Some(candidate) = parse_supported_recipe(recipe_id, recipe) {
@@ -138,12 +145,18 @@ impl RecipeTreeResolver {
                     .entry(candidate.output_item.clone())
                     .or_default()
                     .push(candidate);
+            } else if let Some((output, _)) = recipe.get("result").and_then(parse_result) {
+                rejected.insert(output, format!("invalid_or_unsupported_recipe:{recipe_id}"));
             }
         }
         for values in candidates.values_mut() {
             values.sort_by(compare_static_candidates);
         }
-        Self { candidates }
+        Self { candidates, tags, rejected }
+    }
+
+    fn tag_items(&self, tag: &str) -> Vec<String> {
+        sorted_alternatives(self.tags.get(tag.trim_start_matches('#')).map(Vec::as_slice).unwrap_or_default())
     }
 
     fn resolve(&self, item_id: &str, needed_count: u64) -> RecipeTreeNode {
@@ -158,7 +171,7 @@ impl RecipeTreeResolver {
         stack: &mut BTreeSet<String>,
     ) -> RecipeTreeNode {
         if item_id.starts_with('#') {
-            return tag_node(item_id, needed_count, depth, Vec::new());
+            return tag_node(item_id, needed_count, depth, self.tag_items(item_id));
         }
         if stack.contains(item_id) {
             return unresolved_node(item_id, needed_count, depth, "cycle");
@@ -167,6 +180,7 @@ impl RecipeTreeResolver {
             return unresolved_node(item_id, needed_count, depth, "max_depth");
         }
         let Some(candidates) = self.candidates.get(item_id) else {
+            if let Some(reason) = self.rejected.get(item_id) { return unresolved_node(item_id, needed_count, depth, reason); }
             if is_directly_obtainable_material(item_id) {
                 return direct_node(item_id, needed_count, depth);
             }
@@ -215,13 +229,13 @@ impl RecipeTreeResolver {
         stack.insert(candidate.output_item.clone());
         for input in &candidate.ingredients {
             let ingredient_needed = input.count.saturating_mul(batch_count);
-            ingredients.push(ingredient_summary(input, ingredient_needed));
+            ingredients.push(ingredient_summary(input, ingredient_needed, &self.tags));
             children.push(match &input.spec {
                 InputSpec::Item(child_item) => {
                     self.resolve_inner(child_item, ingredient_needed, depth + 1, stack)
                 }
                 InputSpec::Tag(tag) => {
-                    tag_node(tag, ingredient_needed, depth + 1, possible_items(input))
+                    tag_node(tag, ingredient_needed, depth + 1, self.tag_items(tag))
                 }
                 InputSpec::Alternatives(values) => {
                     alternative_node(values, ingredient_needed, depth + 1)
@@ -297,11 +311,11 @@ fn parse_supported_recipe(recipe_id: &str, recipe: &Value) -> Option<RecipeCandi
                 count: 1,
             }]
         }
-        ProcessType::Smith => vec![
-            role_input("template", recipe.get("template")?)?,
-            role_input("base", recipe.get("base")?)?,
-            role_input("addition", recipe.get("addition")?)?,
-        ],
+        ProcessType::Smith => {
+            let mut inputs = vec![role_input("base", recipe.get("base")?)?, role_input("addition", recipe.get("addition")?)?];
+            if let Some(template) = recipe.get("template") { inputs.insert(0, role_input("template", template)?); }
+            inputs
+        },
         ProcessType::SmithTrim => vec![
             role_input("template", recipe.get("template")?)?,
             role_input("base", recipe.get("base")?)?,
@@ -333,7 +347,7 @@ fn process_type_from_recipe_type(recipe_type: &str) -> Option<ProcessType> {
         "minecraft:blasting" => Some(ProcessType::Blast),
         "minecraft:smoking" => Some(ProcessType::Smoke),
         "minecraft:campfire_cooking" => Some(ProcessType::Campfire),
-        "minecraft:smithing_transform" => Some(ProcessType::Smith),
+        "minecraft:smithing_transform" | "minecraft:smithing" => Some(ProcessType::Smith),
         "minecraft:smithing_trim" => Some(ProcessType::SmithTrim),
         value if value.starts_with("minecraft:crafting_special_") => Some(ProcessType::Special),
         _ => None,
@@ -350,7 +364,7 @@ fn parse_result(result: &Value) -> Option<(String, u64)> {
                 .as_str()?
                 .to_string();
             let count = object.get("count").and_then(Value::as_u64).unwrap_or(1);
-            Some((item, count.max(1)))
+            (count > 0).then_some((item, count))
         }
         _ => None,
     }
@@ -410,11 +424,11 @@ fn parse_input(value: &Value) -> Option<InputSpec> {
         Value::Array(values) => {
             let alternatives = values
                 .iter()
-                .filter_map(|value| match parse_input(value)? {
+                .map(|value| match parse_input(value)? {
                     InputSpec::Item(item) | InputSpec::Tag(item) => Some(item),
                     InputSpec::Alternatives(items) => Some(items.join("|")),
                 })
-                .collect::<Vec<_>>();
+                .collect::<Option<Vec<_>>>()?;
             if alternatives.len() == 1 {
                 Some(input_spec_from_string(&alternatives[0]))
             } else if alternatives.is_empty() {
@@ -489,10 +503,7 @@ fn candidate_ingredient_priority(candidate: &RecipeCandidate) -> u32 {
 fn input_priority(input: &InputSpec) -> u32 {
     match input {
         InputSpec::Item(item) => material_priority(item),
-        InputSpec::Tag(tag) => tag_preferred_items(tag)
-            .first()
-            .map(|item| material_priority(item))
-            .unwrap_or(5_000),
+        InputSpec::Tag(_) => 1_000,
         InputSpec::Alternatives(items) => items
             .iter()
             .map(|item| material_priority(item))
@@ -593,7 +604,7 @@ fn static_type_rank(process_type: ProcessType, stone_family_target: bool) -> u8 
     }
 }
 
-fn ingredient_summary(input: &RecipeInput, needed_count: u64) -> RecipeTreeIngredient {
+fn ingredient_summary(input: &RecipeInput, needed_count: u64, tags: &BTreeMap<String, Vec<String>>) -> RecipeTreeIngredient {
     let role_prefix = if input.role == "ingredient" {
         String::new()
     } else {
@@ -614,13 +625,13 @@ fn ingredient_summary(input: &RecipeInput, needed_count: u64) -> RecipeTreeIngre
         InputSpec::Tag(tag) => RecipeTreeIngredient {
             item_id: tag.clone(),
             display_name: format!("{role_prefix}{}", tag_display_name(tag)),
-            icon_key: tag_icon_key(tag),
+            icon_key: possible_items(input, tags).first().cloned().unwrap_or_else(|| "__tag".to_owned()),
             needed_count,
             visual_kind: "tag".to_string(),
             unresolved: false,
             unresolved_reason: None,
             tag: Some(tag.clone()),
-            possible_items: possible_items(input),
+            possible_items: possible_items(input, tags),
         },
         InputSpec::Alternatives(items) => RecipeTreeIngredient {
             item_id: items.join("|"),
@@ -656,7 +667,7 @@ fn tag_node(
         node_id: node_id(tag, depth),
         item_id: tag.to_string(),
         display_name: tag_display_name(tag),
-        icon_key: tag_icon_key(tag),
+        icon_key: sorted_alternatives(&possible_items).first().cloned().unwrap_or_else(|| "__tag".to_owned()),
         needed_count,
         output_count: 0,
         batch_count: 0,
@@ -665,16 +676,12 @@ fn tag_node(
         process_type: "tag".to_string(),
         ingredients: Vec::new(),
         children: Vec::new(),
-        unresolved: false,
-        unresolved_reason: None,
+        unresolved: possible_items.is_empty(),
+        unresolved_reason: possible_items.is_empty().then(|| "empty_or_missing_tag".to_owned()),
         visual_kind: "tag".to_string(),
         depth,
         tag: Some(tag.to_string()),
-        possible_items: if possible_items.is_empty() {
-            tag_preferred_items(tag)
-        } else {
-            sorted_alternatives(&possible_items)
-        },
+        possible_items: sorted_alternatives(&possible_items),
         requires_fuel: false,
         fuel_estimate: None,
         decorative_smithing: false,
@@ -820,9 +827,9 @@ fn is_directly_obtainable_material(item_id: &str) -> bool {
         || local.ends_with("_leaves")
 }
 
-fn possible_items(input: &RecipeInput) -> Vec<String> {
+fn possible_items(input: &RecipeInput, tags: &BTreeMap<String, Vec<String>>) -> Vec<String> {
     match &input.spec {
-        InputSpec::Tag(tag) => tag_preferred_items(tag),
+        InputSpec::Tag(tag) => sorted_alternatives(tags.get(tag.trim_start_matches('#')).map(Vec::as_slice).unwrap_or_default()),
         InputSpec::Alternatives(items) => sorted_alternatives(items),
         _ => Vec::new(),
     }
@@ -832,46 +839,6 @@ fn sorted_alternatives(items: &[String]) -> Vec<String> {
     let mut values = items.to_vec();
     values.sort_by_key(|item| (material_priority(item), item.clone()));
     values
-}
-
-fn tag_preferred_items(tag: &str) -> Vec<String> {
-    match tag {
-        "#minecraft:planks" => vec![
-            "minecraft:oak_planks",
-            "minecraft:spruce_planks",
-            "minecraft:birch_planks",
-            "minecraft:jungle_planks",
-            "minecraft:acacia_planks",
-            "minecraft:dark_oak_planks",
-            "minecraft:mangrove_planks",
-            "minecraft:cherry_planks",
-            "minecraft:bamboo_planks",
-            "minecraft:crimson_planks",
-            "minecraft:warped_planks",
-        ],
-        "#minecraft:logs" | "#minecraft:logs_that_burn" => vec![
-            "minecraft:oak_log",
-            "minecraft:spruce_log",
-            "minecraft:birch_log",
-            "minecraft:jungle_log",
-            "minecraft:acacia_log",
-            "minecraft:dark_oak_log",
-            "minecraft:mangrove_log",
-            "minecraft:cherry_log",
-            "minecraft:crimson_stem",
-            "minecraft:warped_stem",
-        ],
-        "#minecraft:stone_crafting_materials" => {
-            vec!["minecraft:cobblestone", "minecraft:blackstone"]
-        }
-        "#minecraft:stone_tool_materials" => vec!["minecraft:cobblestone", "minecraft:blackstone"],
-        "#minecraft:coals" => vec!["minecraft:coal", "minecraft:charcoal"],
-        "#minecraft:iron_ores" => vec!["minecraft:iron_ore", "minecraft:deepslate_iron_ore"],
-        _ => Vec::new(),
-    }
-    .into_iter()
-    .map(str::to_string)
-    .collect()
 }
 
 fn tag_display_name(tag: &str) -> String {
@@ -884,20 +851,6 @@ fn tag_display_name(tag: &str) -> String {
         "#minecraft:iron_ores" => "Any iron ore".to_string(),
         _ => "Alternative material group".to_string(),
     }
-}
-
-fn tag_icon_key(tag: &str) -> String {
-    match tag {
-        "#minecraft:planks" => "minecraft:oak_planks",
-        "#minecraft:logs" | "#minecraft:logs_that_burn" => "minecraft:oak_log",
-        "#minecraft:stone_crafting_materials" | "#minecraft:stone_tool_materials" => {
-            "minecraft:cobblestone"
-        }
-        "#minecraft:coals" => "minecraft:coal",
-        "#minecraft:iron_ores" => "minecraft:iron_ore",
-        _ => "__tag",
-    }
-    .to_string()
 }
 
 fn process_type_name(process_type: ProcessType) -> &'static str {
@@ -1185,7 +1138,7 @@ mod tests {
 
     #[test]
     fn tag_input_becomes_localized_alternative_tag_node() {
-        let resolver = RecipeTreeResolver::new(&recipe_map([(
+        let resolver = RecipeTreeResolver::with_tags(&recipe_map([(
             "minecraft:chest",
             json!({
                 "type": "minecraft:crafting_shaped",
@@ -1193,7 +1146,7 @@ mod tests {
                 "key": { "#": "#minecraft:planks" },
                 "result": { "id": "minecraft:chest", "count": 1 }
             }),
-        )]));
+        )]), BTreeMap::from([("minecraft:planks".to_owned(), vec!["minecraft:oak_planks".to_owned(), "minecraft:birch_planks".to_owned()])]));
         let tree = resolver.resolve("minecraft:chest", 1);
         assert_eq!(tree.children[0].visual_kind, "tag");
         assert_eq!(tree.children[0].tag.as_deref(), Some("#minecraft:planks"));
@@ -1389,6 +1342,8 @@ mod tests {
 
     fn materials_data<const N: usize>(values: [(&str, u64, &str); N]) -> StockpileMaterialsData {
         StockpileMaterialsData {
+            ui_locale: None,
+            ui_translations: Default::default(),
             schema_version: crate::stockpile_schema::STOCKPILE_MATERIALS_SCHEMA_VERSION,
             project: StockpileProjectInfo {
                 source_file: "fixture.litematic".to_string(),

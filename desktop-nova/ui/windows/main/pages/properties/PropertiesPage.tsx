@@ -1,3 +1,5 @@
+import { t, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { takeUpdateDraft, useUpdateDraft } from "../../updateRecovery";
@@ -39,6 +41,7 @@ import { Dialog } from "../../../../components/Dialog";
 import "./properties.css";
 import { displayFilePath, minecraftVersionLabel, windowsPathKey } from "../../../../../src/business/projectionLibrary";
 import { VersionConversionDialog } from "./VersionConversionDialog";
+import { WorldExportDialog } from "./WorldExportDialog";
 import { formatResourceBytes } from "../../../../../src/business/resourcePreflightUnits";
 
 type RegionEdit = {
@@ -108,18 +111,19 @@ function buildPatch(form: MetadataForm) {
   };
 }
 
-function validateRegions(regions: RegionEdit[]): string {
+function validateRegions(regions: RegionEdit[]): UiMessage {
   const names = new Set<string>();
   for (const region of regions) {
     const name = region.name.trim();
-    if (!name) return "区域名不能为空。";
-    if (names.has(name)) return `区域名重复：${name}`;
+    if (!name) return {key: "properties.emptyRegion"};
+    if (names.has(name)) return { key: "properties.duplicateRegion", params: {name} };
     names.add(name);
   }
   return "";
 }
 
 export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presentationBlocked = false }: any) {
+  const { locale } = useI18n();
   const applicationRender = React.useSyncExternalStore(
     subscribeApplicationRender,
     getApplicationRenderState,
@@ -129,9 +133,10 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
   const [initialForm, setInitialForm] = useState<MetadataForm | null>(null);
   const [form, setForm] = useState<MetadataForm | null>(null);
   useUpdateDraft(`properties:${currentFile}`, { form, initialForm });
-  const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
+  const [error, setError] = useState<UiMessage>("");
+  const [status, setStatus] = useState<UiMessage>("");
   const [convertOpen, setConvertOpen] = useState(false);
+  const [worldExportOpen, setWorldExportOpen] = useState(false);
   const [versionConvertOpen, setVersionConvertOpen] = useState(false);
   const [renderMode, setRenderMode] = useState<"fast" | "standard" | "full">("fast");
   const [preload, setPreload] = useState(false);
@@ -152,8 +157,8 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
     [applicationRender.operations, currentFile],
   );
   const applicationAnalysis = renderOperation?.analysis ?? null;
-  const preview = useQuickPreview(currentFile || "", presentationBlocked || convertOpen || versionConvertOpen || clearPreviewConfirm || filePreviewBusy || renderMode !== "fast", preload);
-  const fullPreview = useFullPreview(currentFile || "", preload, presentationBlocked || convertOpen || versionConvertOpen || clearPreviewConfirm || filePreviewBusy || renderMode === "fast", renderMode === "standard" ? "standard" : "full");
+  const preview = useQuickPreview(currentFile || "", presentationBlocked || convertOpen || worldExportOpen || versionConvertOpen || clearPreviewConfirm || filePreviewBusy || renderMode !== "fast", preload);
+  const fullPreview = useFullPreview(currentFile || "", preload, presentationBlocked || convertOpen || worldExportOpen || versionConvertOpen || clearPreviewConfirm || filePreviewBusy || renderMode === "fast", renderMode === "standard" ? "standard" : "full");
   const quickOperation = preview.operation;
   const renderPending = renderMode === "fast" ? quickOperation?.state === "starting" && !quickOperation.error : fullPreview.loading;
   const viewerPrepared = renderMode === "fast" ? quickOperation?.state === "ready" : fullPreview.ready;
@@ -166,7 +171,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
     setFilePreview(""); setClearPreviewConfirm(false);
     if (currentFile) void readProjectionPreviewImage(currentFile).then((image) => {
       if (filePreviewRevision.current === revision) setFilePreview(image?.data_url || "");
-    }).catch((reason) => { if (filePreviewRevision.current === revision) setError(`读取预览图失败：${String(reason)}`); });
+    }).catch((reason) => { if (filePreviewRevision.current === revision) setError({ key: "properties.previewReadFailed", params: {error: String(reason)} }); });
     return () => { ++filePreviewRevision.current; };
   }, [currentFile]);
   useEffect(() => {
@@ -176,7 +181,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
       const revision = ++filePreviewRevision.current;
       void readProjectionPreviewImage(currentFile).then(image => {
         if (filePreviewRevision.current === revision) setFilePreview(image?.data_url || "");
-      }).catch(reason => { if (filePreviewRevision.current === revision) setError(`读取预览图失败：${String(reason)}`); });
+      }).catch(reason => { if (filePreviewRevision.current === revision) setError({ key: "properties.previewReadFailed", params: {error: String(reason)} }); });
     }).catch(() => undefined);
     return () => { void listening.then(off => off?.()); };
   }, [currentFile]);
@@ -188,8 +193,8 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
       await renderPreviewImage(source, renderMode === "fast" ? "fast_experimental" : renderMode, undefined,
         renderMode === "fast" ? quickOperation?.previewId : fullPreview.operation?.operationId);
       const image = await readProjectionPreviewImage(source);
-      if (!image?.data_url) throw new Error("预览图写回后读取失败，请重试。");
-      if (sourceRef.current === source) { setFilePreview(image.data_url); setStatus("缩略图已写入投影文件。"); }
+      if (!image?.data_url) { if (sourceRef.current === source) setError({key:"properties.previewReadAfterWrite"}); return; }
+      if (sourceRef.current === source) { setFilePreview(image.data_url); setStatus({key:"properties.thumbnailSaved"}); }
       await emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: source });
     } catch (reason) { if (sourceRef.current === source) setError(String(reason)); }
     finally { filePreviewWrite.current = false; setCapturingPreview(false); }
@@ -208,7 +213,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
       const image = await readProjectionPreviewImage(source);
       if (filePreviewRevision.current === revision) {
         setFilePreview(image?.data_url || ""); setClearPreviewConfirm(false);
-        setStatus(clear ? "文件预览图已清空。" : "文件预览图已导入。");
+        setStatus({key:clear ? "properties.previewCleared" : "properties.previewImported"});
       }
       // Only the preview field changes; the user's unsaved form stays intact.
       await emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: source });
@@ -303,7 +308,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
       } else {
         await refreshAnalysis(nextFile);
       }
-      setStatus(outputPath ? `已另存为：${displayFilePath(outputPath)}` : "已保存，文件中的方块保持不变。");
+      setStatus(outputPath ? { key: "properties.savedAs", params: {path: displayFilePath(outputPath)} } : {key:"properties.saved"});
       setConvertOpen(false);
     } catch (err) {
       if (sourceRef.current === source) setError(String(err));
@@ -320,7 +325,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
     if (initialForm && !savingRef.current) {
       setForm(JSON.parse(JSON.stringify(initialForm)));
       setError("");
-      setStatus("已撤销修改。");
+      setStatus({key:"properties.restored"});
     }
   };
 
@@ -332,51 +337,51 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
   };
 
   const previewFailure = renderMode === "fast" ? preview.error || quickOperation?.error : fullPreview.error;
-  const modeLabel = renderMode === "fast" ? "快速" : renderMode === "standard" ? "标准" : "完整";
-  const previewStatus = !currentFile ? "请选择投影" : previewFailure ? "预览加载失败，请重新加载。"
-    : previewPending || renderPending || (viewerPrepared && !previewVisible) ? (renderMode === "fast" ? "正在加载…" : fullPreview.progressLabel)
-    : previewVisible ? "" : "尚未加载预览";
+  const modeLabel = renderMode === "fast" ? t("properties.fast") : renderMode === "standard" ? t("properties.standard") : t("properties.full");
+  const previewStatus = !currentFile ? t("properties.selectPrompt") : previewFailure ? t("properties.previewFailed")
+    : previewPending || renderPending || (viewerPrepared && !previewVisible) ? (renderMode === "fast" ? t("editor.loading") : fullPreview.progressLabel)
+    : previewVisible ? "" : t("properties.previewEmpty");
 
   return (
     <section className="properties-page" aria-busy={saving}>
       <header className="properties-header">
-        <h2 className="properties-title">投影属性</h2>
+        <h2 className="properties-title">{t("properties.title")}</h2>
         <div className="properties-toolbar">
-          <Button disabled={saving} onClick={handleSelectFile}><ThemeIcon name="import" size={16} fallback={FolderOpen} />选择投影…</Button>
-          <Button variant="ghost" disabled={saving} onClick={() => setRoute("library")}><ThemeIcon name="gallery" size={16} fallback={Library} />从投影库选择</Button>
+          <Button disabled={saving} onClick={handleSelectFile}><ThemeIcon name="import" size={16} fallback={FolderOpen} />{t("properties.select")}</Button>
+          <Button variant="ghost" disabled={saving} onClick={() => setRoute("library")}><ThemeIcon name="gallery" size={16} fallback={Library} />{t("properties.selectLibrary")}</Button>
         </div>
       </header>
-      <div className="properties-file muted" title={displayFilePath(currentFile || "")}>{fileName || "尚未选择投影"}</div>
-      {error && <div className="properties-message properties-error nova-text-danger" role="alert">{displayPathText(error)}</div>}
-      {status && <div className="properties-message" role="status">{displayPathText(status)}</div>}
-      {!currentFile ? <div className="properties-empty muted"><Box size={40} aria-hidden="true" /><span>选择投影，编辑信息并查看 3D 预览。</span></div> : (
+      <div className="properties-file muted" title={displayFilePath(currentFile || "")}>{fileName || t("properties.notSelected")}</div>
+      {error && <div className="properties-message properties-error nova-text-danger" role="alert">{displayPathText(localizeMessage(error))}</div>}
+      {status && <div className="properties-message" role="status">{displayPathText(localizeMessage(status))}</div>}
+      {!currentFile ? <div className="properties-empty muted"><Box size={40} aria-hidden="true" /><span>{t("properties.empty")}</span></div> : (
         <div className="properties-workspace">
           <ScrollArea className="properties-editor-scroll" viewportClassName="properties-editor-viewport">
-            {!form ? (!error && <div className="properties-empty muted" role="status">正在读取投影属性…</div>) : (
+            {!form ? (!error && <div className="properties-empty muted" role="status">{t("properties.reading")}</div>) : (
             <fieldset className="properties-editor nova-box-plain" disabled={saving || filePreviewBusy || capturingPreview}>
-                <legend className="properties-sr-only">投影属性</legend>
-                  <TextRow label="内部名称" value={form.name} onChange={(value) => updateForm({ name: value })} />
-                  <TextRow label="作者" value={form.author} onChange={(value) => updateForm({ author: value })} />
+                <legend className="properties-sr-only">{t("properties.title")}</legend>
+                  <TextRow label={t("properties.internalName")} value={form.name} onChange={(value) => updateForm({ name: value })} />
+                  <TextRow label={t("properties.author")} value={form.author} onChange={(value) => updateForm({ author: value })} />
                   <label className="properties-field">
-                    <span>描述</span>
+                    <span>{t("properties.description")}</span>
                     <Textarea rows={4} value={form.description} onChange={(event) => updateForm({ description: event.target.value })} />
                   </label>
                   <dl className="properties-facts nova-box-plain">
-                    <div><dt>投影名称</dt><dd>{fileName}</dd></div>
-                    <div><dt>Minecraft 版本</dt><dd>{minecraftVersionLabel(form.minecraft_data_version)}</dd></div>
-                    <div><dt>选区名</dt><dd>{regionNames === undefined ? "未读取" : regionNames.length ? regionNames.map((name, index) => <div key={index}>{name || "（空名称）"}</div>) : "无选区"}</dd></div>
-                    <div><dt>尺寸（长 × 高 × 宽）</dt><dd>{metadata.enclosing_size?.x || 0} × {metadata.enclosing_size?.y || 0} × {metadata.enclosing_size?.z || 0}</dd></div>
-                    <div><dt>方块数量</dt><dd>{Number(metadata.total_blocks || 0).toLocaleString()}</dd></div>
-                    <div><dt>包围体积</dt><dd>{Number(metadata.total_volume || 0).toLocaleString()}</dd></div>
-                    <div><dt>空间占用</dt><dd>{(density * 100).toFixed(2)}%</dd></div>
+                    <div><dt>{t("properties.schematicName")}</dt><dd>{fileName}</dd></div>
+                    <div><dt>{t("properties.minecraftVersion")}</dt><dd>{minecraftVersionLabel(form.minecraft_data_version)}</dd></div>
+                    <div><dt>{t("properties.regionNames")}</dt><dd>{regionNames === undefined ? t("properties.notRead") : regionNames.length ? regionNames.map((name, index) => <div key={index}>{name || t("properties.emptyName")}</div>) : t("properties.noRegions")}</dd></div>
+                    <div><dt>{t("properties.dimensions")}</dt><dd>{metadata.enclosing_size?.x || 0} × {metadata.enclosing_size?.y || 0} × {metadata.enclosing_size?.z || 0}</dd></div>
+                    <div><dt>{t("properties.blocks")}</dt><dd>{Number(metadata.total_blocks || 0).toLocaleString(locale)}</dd></div>
+                    <div><dt>{t("properties.volume")}</dt><dd>{Number(metadata.total_volume || 0).toLocaleString(locale)}</dd></div>
+                    <div><dt>{t("properties.density")}</dt><dd>{(density * 100).toLocaleString(locale, {minimumFractionDigits:2, maximumFractionDigits:2})}%</dd></div>
                   </dl>
-                  {regionError && <div className="properties-error nova-text-danger" role="alert">{regionError}</div>}
+                  {regionError && <div className="properties-error nova-text-danger" role="alert">{localizeMessage(regionError)}</div>}
                   <ScrollArea className="properties-table-scroll" horizontal>
                     <Table>
-                      <TableHeader><TableRow><TableHead>区域名称（可编辑）</TableHead><TableHead>尺寸 x / y / z</TableHead><TableHead>位置 x / y / z</TableHead></TableRow></TableHeader>
+                      <TableHeader><TableRow><TableHead>{t("properties.editRegion")}</TableHead><TableHead>{t("properties.regionDimensions")}</TableHead><TableHead>{t("properties.regionPosition")}</TableHead></TableRow></TableHeader>
                       <TableBody>{form.regions.map((region, index) => (
                         <TableRow key={region.originalName}>
-                          <TableCell><Input aria-label={`区域 ${index + 1} 名称`} value={region.name} onChange={(event) => {
+                          <TableCell><Input aria-label={t("properties.regionAria", {index: index+1})} value={region.name} onChange={(event) => {
                             const regions = [...form.regions];
                             regions[index] = { ...region, name: event.target.value };
                             updateForm({ regions });
@@ -387,66 +392,68 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
                       ))}</TableBody>
                     </Table>
                   </ScrollArea>
-                  <DateRow label="创建时间" value={form.time_created} onChange={(value) => updateForm({ time_created: value })} />
-                  <DateRow label="修改时间" value={form.time_modified} onChange={(value) => updateForm({ time_modified: value })} />
-                  <dl className="properties-facts nova-box-plain"><div className="properties-format-row"><dt>投影格式</dt><dd>Litematica v{form.litematic_version}.{form.litematic_subversion}<Button size="sm" variant="ghost" disabled={saving || hasChanges} onClick={() => setVersionConvertOpen(true)}>转换版本</Button></dd></div></dl>
+                  <DateRow label={t("properties.created")} value={form.time_created} onChange={(value) => updateForm({ time_created: value })} />
+                  <DateRow label={t("properties.modified")} value={form.time_modified} onChange={(value) => updateForm({ time_modified: value })} />
+                  <dl className="properties-facts nova-box-plain"><div className="properties-format-row"><dt>{t("properties.format")}</dt><dd>Litematica v{form.litematic_version}.{form.litematic_subversion}<Button size="sm" variant="ghost" disabled={saving || hasChanges} onClick={() => setVersionConvertOpen(true)}>{t("properties.convertVersion")}</Button></dd></div></dl>
                 <div className="properties-file-preview">
-                  <div className="properties-preview-toolbar"><h3>文件内预览图</h3>
-                    <Button size="sm" variant="ghost" onClick={() => void updateFilePreview(false)}><ThemeIcon name="picture_import" size={16} fallback={ImagePlus} />导入图片</Button>
-                    <Button size="sm" variant="ghost" disabled={!filePreview} onClick={() => setClearPreviewConfirm(true)}><ThemeIcon name="picture_error" size={16} fallback={ImageOff} />清空</Button>
+                  <div className="properties-preview-toolbar"><h3>{t("properties.filePreview")}</h3>
+                    <Button size="sm" variant="ghost" onClick={() => void updateFilePreview(false)}><ThemeIcon name="picture_import" size={16} fallback={ImagePlus} />{t("properties.importImage")}</Button>
+                    <Button size="sm" variant="ghost" disabled={!filePreview} onClick={() => setClearPreviewConfirm(true)}><ThemeIcon name="picture_error" size={16} fallback={ImageOff} />{t("editor.clear")}</Button>
                   </div>
-                  <div className="properties-file-preview-canvas">{filePreview ? <img src={filePreview} alt="投影文件内嵌预览图" /> : <span>文件内暂无预览图</span>}</div>
+                  <div className="properties-file-preview-canvas">{filePreview ? <img src={filePreview} alt={t("properties.embeddedPreview")} /> : <span>{t("properties.noPreview")}</span>}</div>
                 </div>
               </fieldset>
             )}
           </ScrollArea>
-          <section className="properties-preview" aria-label="投影渲染">
+          <section className="properties-preview" aria-label={t("properties.render")}>
             <header className="properties-preview-toolbar">
-              <h3>{modeLabel}预览</h3>
+              <h3>{t("properties.modePreview", {mode:modeLabel})}</h3>
               {(["fast", "standard", "full"] as const).map((mode) => <Button key={mode} size="sm" variant={renderMode === mode ? "default" : "ghost"} aria-pressed={renderMode === mode}
-                onClick={() => setRenderMode(mode)}>{mode === "fast" ? "快速模式" : mode === "standard" ? "标准模式" : "完整模式"}</Button>)}
-              <label><Checkbox checked={preload} disabled={previewPending || renderPending} onCheckedChange={(checked) => setPreload(checked === true)} />预加载</label>
+                onClick={() => setRenderMode(mode)}>{mode === "fast" ? t("properties.fastMode") : mode === "standard" ? t("properties.standardMode") : t("properties.fullMode")}</Button>)}
+              <label><Checkbox checked={preload} disabled={previewPending || renderPending} onCheckedChange={(checked) => setPreload(checked === true)} />{t("properties.preload")}</label>
               <Button size="sm" onClick={() => void handlePreview()} disabled={previewPending || (renderPending && !viewerPrepared)}>
-                <ThemeIcon name={renderMode === "full" ? "build" : "run"} size={15} fallback={renderMode === "full" ? Box : Play} />{previewPending ? "正在连接…" : renderPending ? "正在加载…" : viewerPrepared ? "页内显示" : quickOperation ? "重新加载" : `${modeLabel}渲染`}
+                <ThemeIcon name={renderMode === "full" ? "build" : "run"} size={15} fallback={renderMode === "full" ? Box : Play} />{previewPending ? t("properties.connecting") : renderPending ? t("editor.loading") : viewerPrepared ? t("properties.showEmbedded") : quickOperation ? t("editor.reload") : t("properties.modeRender", {mode:modeLabel})}
               </Button>
-              {(renderPending || (renderMode !== "fast" && previewPending)) && !viewerPrepared && <Button size="sm" variant="ghost" onClick={() => void handleCancelPreview()}>取消</Button>}
-              <Button size="sm" variant="ghost" disabled={!viewerPrepared || previewPending || saving || filePreviewBusy || capturingPreview} onClick={() => void captureFilePreview()}><ThemeIcon name="picture_trans" size={15} fallback={ImagePlus} />{capturingPreview ? "正在保存…" : "设为缩略图"}</Button>
-              <Button size="sm" variant="ghost" onClick={() => setRoute("render")} ><ThemeIcon name="outlink" size={15} fallback={ExternalLink} />渲染页</Button>
+              {(renderPending || (renderMode !== "fast" && previewPending)) && !viewerPrepared && <Button size="sm" variant="ghost" onClick={() => void handleCancelPreview()}>{t("editor.cancel")}</Button>}
+              <Button size="sm" variant="ghost" disabled={!viewerPrepared || previewPending || saving || filePreviewBusy || capturingPreview} onClick={() => void captureFilePreview()}><ThemeIcon name="picture_trans" size={15} fallback={ImagePlus} />{capturingPreview ? t("editor.saving") : t("properties.thumbnail")}</Button>
+              <Button size="sm" variant="ghost" onClick={() => setRoute("render")} ><ThemeIcon name="outlink" size={15} fallback={ExternalLink} />{t("properties.renderPage")}</Button>
             </header>
-            <div ref={renderMode === "fast" ? preview.hostRef : fullPreview.hostRef} className="properties-preview-host" aria-label={`${modeLabel}预览视口`}>
-              {!previewVisible && <div className="properties-preview-placeholder muted"><ThemeIcon name="empty" size={36} fallback={Box} /><span>{previewFailure ? "预览加载失败" : previewStatus}</span></div>}
+            <div ref={renderMode === "fast" ? preview.hostRef : fullPreview.hostRef} className="properties-preview-host" aria-label={t("properties.viewport", {mode:modeLabel})}>
+              {!previewVisible && <div className="properties-preview-placeholder muted"><ThemeIcon name="empty" size={36} fallback={Box} /><span>{previewFailure ? t("properties.previewFailedShort") : previewStatus}</span></div>}
             </div>
             {renderMode !== "fast" && fullPreview.preflight && <div role="status" className="properties-preview-status muted">
-              <p>显存需求：{fullPreview.preflight.conservativeVramBytes == null ? "未知" : formatResourceBytes(fullPreview.preflight.conservativeVramBytes)}</p>
-              {fullPreview.preflight.severity === "warning" && <p>需求达到当前可用预算的 80%，确认后才继续预加载。</p>}
-              {fullPreview.preflight.severity === "hard" && <p>需求达到当前可用预算的 95%，预加载不可用，可选择实时加载。</p>}
-              {fullPreview.preflight.severity === "unmeasured" && <p role="alert">{fullPreview.preflight.invalidReason ? displayPathText(fullPreview.preflight.invalidReason) : "需求或当前预算尚未确认，预加载不可用，可选择实时加载。"}</p>}
+              <p>{t("properties.vram", {requirement:fullPreview.preflight.conservativeVramBytes == null ? t("editor.unknown") : formatResourceBytes(fullPreview.preflight.conservativeVramBytes)})}</p>
+              {fullPreview.preflight.severity === "warning" && <p>{t("properties.vramWarning")}</p>}
+              {fullPreview.preflight.severity === "hard" && <p>{t("properties.vramHard")}</p>}
+              {fullPreview.preflight.severity === "unmeasured" && <p role="alert">{fullPreview.preflight.invalidReason ? displayPathText(localizeMessage(fullPreview.preflight.invalidReason)) : t("properties.vramUnknown")}</p>}
               <div className="properties-preview-toolbar">
-                <Button size="sm" disabled={previewPending || !fullPreview.preflight.allowedActions.includes("continue_prebuilt")} onClick={() => void fullPreview.choose("prebuilt")}>确认预构建</Button>
-                <Button size="sm" disabled={previewPending || (fullPreview.preflight.severity !== "normal" && !fullPreview.preflight.allowedActions.includes("switch_realtime"))} onClick={() => void fullPreview.choose("realtime")}>直接打开</Button>
-                {renderMode === "full" && <Button size="sm" variant="ghost" disabled={previewPending || !fullPreview.preflight.allowedActions.includes("use_basic_vulkan")} onClick={() => void fullPreview.choose("basic_vulkan")}>降低画质</Button>}
-                <Button size="sm" variant="ghost" onClick={() => void fullPreview.close()}>取消</Button>
+                <Button size="sm" disabled={previewPending || !fullPreview.preflight.allowedActions.includes("continue_prebuilt")} onClick={() => void fullPreview.choose("prebuilt")}>{t("properties.confirmPrebuild")}</Button>
+                <Button size="sm" disabled={previewPending || (fullPreview.preflight.severity !== "normal" && !fullPreview.preflight.allowedActions.includes("switch_realtime"))} onClick={() => void fullPreview.choose("realtime")}>{t("properties.openDirectly")}</Button>
+                {renderMode === "full" && <Button size="sm" variant="ghost" disabled={previewPending || !fullPreview.preflight.allowedActions.includes("use_basic_vulkan")} onClick={() => void fullPreview.choose("basic_vulkan")}>{t("properties.lowerQuality")}</Button>}
+                <Button size="sm" variant="ghost" onClick={() => void fullPreview.close()}>{t("editor.cancel")}</Button>
               </div>
             </div>}
-            {previewFailure && <div className="properties-preview-error nova-text-danger" role="alert">{displayPathText(previewFailure)}</div>}
+            {previewFailure && <div className="properties-preview-error nova-text-danger" role="alert">{displayPathText(localizeMessage(previewFailure))}</div>}
             <div className="properties-preview-status muted" role="status" aria-live="polite">{previewStatus}</div>
           </section>
         </div>
       )}
-      {clearPreviewConfirm && <Dialog title="清空文件预览图" busy={filePreviewBusy} onClose={() => setClearPreviewConfirm(false)} footer={<><Button variant="ghost" disabled={filePreviewBusy} onClick={() => setClearPreviewConfirm(false)}>取消</Button><Button variant="destructive" disabled={filePreviewBusy} onClick={() => void updateFilePreview(true)}>确认清空</Button></>}><p>清空此投影文件的内嵌预览图？方块和未保存的属性编辑不会改变。</p></Dialog>}
+      {clearPreviewConfirm && <Dialog title={t("properties.clearPreviewTitle")} busy={filePreviewBusy} onClose={() => setClearPreviewConfirm(false)} footer={<><Button variant="ghost" disabled={filePreviewBusy} onClick={() => setClearPreviewConfirm(false)}>{t("editor.cancel")}</Button><Button variant="destructive" disabled={filePreviewBusy} onClick={() => void updateFilePreview(true)}>{t("properties.confirmClear")}</Button></>}><p>{t("properties.clearPreviewPrompt")}</p></Dialog>}
       {currentFile && <div className="properties-actions">
-        <span className="muted">{saving ? "正在保存…" : !form ? "正在读取属性…" : hasChanges ? "有未保存的修改" : "所有修改已保存"}</span>
-        <Button variant="ghost" onClick={handleRestore} disabled={!form || !hasChanges || saving || filePreviewBusy || capturingPreview}><ThemeIcon name="undo" size={16} fallback={RotateCcw} />撤销未保存修改</Button>
-        <Button variant="ghost" onClick={() => setConvertOpen(true)} disabled={saving || filePreviewBusy || !form}>其他格式</Button>
-        <Button onClick={handleSaveAs} disabled={!form || !!regionError || saving || filePreviewBusy || capturingPreview}>另存副本…</Button>
-        <Button variant="default" onClick={handleSave} disabled={!form || !hasChanges || !!regionError || saving || filePreviewBusy || capturingPreview}><ThemeIcon name="save" size={16} fallback={Save} />{saving ? "保存中…" : "保存修改"}</Button>
+        <span className="muted">{saving ? t("editor.saving") : !form ? t("properties.readingShort") : hasChanges ? t("properties.unsaved") : t("properties.savedAll")}</span>
+        <Button variant="ghost" onClick={handleRestore} disabled={!form || !hasChanges || saving || filePreviewBusy || capturingPreview}><ThemeIcon name="undo" size={16} fallback={RotateCcw} />{t("properties.undoUnsaved")}</Button>
+        <Button variant="ghost" onClick={() => setConvertOpen(true)} disabled={saving || filePreviewBusy || !form}>{t("properties.otherFormats")}</Button>
+        <Button onClick={handleSaveAs} disabled={!form || !!regionError || saving || filePreviewBusy || capturingPreview}>{t("properties.saveCopy")}</Button>
+        <Button variant="default" onClick={handleSave} disabled={!form || !hasChanges || !!regionError || saving || filePreviewBusy || capturingPreview}><ThemeIcon name="save" size={16} fallback={Save} />{saving ? t("editor.saveBusy") : t("properties.saveChanges")}</Button>
       </div>}
-      {versionConvertOpen && <VersionConversionDialog sourcePath={currentFile} onClose={() => setVersionConvertOpen(false)} onSaved={(path) => { setStatus(`已转换并另存：${displayFilePath(path)}；原文件保留。`); setVersionConvertOpen(false); }} />}
-      {convertOpen && <Dialog title="保存格式" busy={saving} onClose={() => setConvertOpen(false)} width="sm" footer={
-        <Button disabled={saving} onClick={handleSaveAs}>另存为 .litematic…</Button>
+      {versionConvertOpen && <VersionConversionDialog sourcePath={currentFile} onClose={() => setVersionConvertOpen(false)} onSaved={(path) => { setStatus({ key: "properties.convertedSaved", params: {path: displayFilePath(path)} }); setVersionConvertOpen(false); }} />}
+      {worldExportOpen && <WorldExportDialog sourcePath={currentFile} name={form?.name || ""} onClose={() => setWorldExportOpen(false)} />}
+      {convertOpen && <Dialog title={t("properties.saveFormat")} busy={saving} onClose={() => setConvertOpen(false)} width="sm" footer={
+        <Button disabled={saving} onClick={handleSaveAs}>{t("properties.saveLitematic")}</Button>
       }>
-        <p>当前支持保存为 .litematic，保留投影中的方块。</p>
-        <p className="muted">.schem、.nbt 和 .schematic 导出尚未完成。</p>
+        <p>{t("properties.litematicSupported")}</p>
+        <Button variant="ghost" disabled={saving || hasChanges} onClick={() => { setConvertOpen(false); setWorldExportOpen(true); }}>{t("worldExport.title")}</Button>
+        {hasChanges && <p className="muted">{t("worldExport.saveFirst")}</p>}
       </Dialog>}
     </section>
   );

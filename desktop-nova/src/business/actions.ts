@@ -1,3 +1,5 @@
+import { t } from "../services/i18n";
+import { getSelectedGameDataContext } from "../services/gameResources";
 import { openDialog, saveDialog } from "../platform/dialogs";
 import { openPath, openExternalUrl as openUrl } from "../platform/nativeViewer";
 import {
@@ -15,9 +17,6 @@ import {
 import { sanitizeFileName } from "../services/generateService";
 import { exportSessionLogs, type LogExportResult } from "../platform/files";
 
-const BLOCKSTATE_DB_PATH = "data/minecraft_blockstates/26.1.json";
-const BLOCKSTATE_ZH_PATH = "data/minecraft_blockstates/26.1.zh_cn.json";
-const BLOCK_ICON_DIR_PATH = "block";
 
 export interface RuntimePathInfo {
   workspaceRoot: string;
@@ -57,9 +56,9 @@ export async function selectJsonSavePath(defaultPath: string): Promise<string | 
 
 export async function exportDiagnosticLogs(): Promise<LogExportResult | null> {
   const selected = await saveDialog({
-    title: "导出日志 ZIP…",
+    title: t("editor.logs.export"),
     defaultPath: `Litematica-Nova-日志-${new Date().toISOString().slice(0, 10)}.zip`,
-    filters: [{ name: "日志 ZIP", extensions: ["zip"] }],
+    filters: [{ name: t("editor.logs.zipFilter"), extensions: ["zip"] }],
   });
   if (!selected) return null;
   return exportSessionLogs(/\.zip$/i.test(selected) ? selected : `${selected}.zip`);
@@ -97,7 +96,7 @@ export async function saveProjectionMetadataPatch({ currentFile, patch, outputPa
 }
 
 export async function selectPreviewImageFile(): Promise<string | null> {
-  const selected = await openDialog({ filters: [{ name: "预览图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }] });
+  const selected = await openDialog({ filters: [{ name: t("editor.preview.filter"), extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }] });
   return typeof selected === "string" ? selected : null;
 }
 
@@ -140,11 +139,12 @@ export async function applyReplaceBlocks(currentFile: string, outputPath: string
 }
 
 export async function getNovaRuntimePathInfo(): Promise<RuntimePathInfo> {
+  const context = await getSelectedGameDataContext();
   const [workspaceRoot, dbInfo, zhInfo, iconDirInfo] = await Promise.all([
     getWorkspaceRoot(),
-    getPathInfo(BLOCKSTATE_DB_PATH),
-    getPathInfo(BLOCKSTATE_ZH_PATH),
-    getPathInfo(BLOCK_ICON_DIR_PATH),
+    getPathInfo(`${context.root}/derived/blockstates.json`),
+    getPathInfo(`${context.root}/derived/lang/zh_cn.json`),
+    getPathInfo(context.root),
   ]);
   return { workspaceRoot, dbInfo, zhInfo, iconDirInfo };
 }

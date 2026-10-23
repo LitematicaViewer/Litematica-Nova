@@ -37,6 +37,11 @@ if ($template.IndexOf('!insertmacro NOVA_MIGRATE_EXISTING') -gt $template.IndexO
 foreach ($pattern in @('"MultiSelectModel" "Player"', '$\"%1$\" %*', 'NovaInstallerIdentity', 'NovaDui::RepairShell', 'NovaDui::Migrate', 'NSIS_PTR_SIZE', 'NSIS_CHAR_SIZE')) {
     if (-not $hooks.Contains($pattern)) { throw "Missing hook contract: $pattern" }
 }
+# Optional first-install reads set NSIS's sticky error flag. Only registration
+# writes may contribute to the final IfErrors decision; do not hide write errors.
+$registration = [regex]::Match($hooks, '(?s)!macro NSIS_HOOK_POSTINSTALL\s+(.*?)\s+IfErrors').Groups[1].Value
+$writeGroup = $registration.Substring($registration.LastIndexOf('ClearErrors'))
+if ($writeGroup -match '\bReadRegStr\b' -or $writeGroup -notmatch '\bWriteRegStr\b') { throw 'Optional registry reads contaminate the registration write-error group' }
 # MUI's Instfiles -> Finish transition nests nsDialogs::Show inside the Next
 # command. Reentrant BM_CLICK on that same native button drops the Finish click.
 # Navigation must queue BN_CLICKED directly; page checkboxes keep native BM_CLICK.
@@ -97,6 +102,7 @@ RequestExecutionLevel user
 !define PRODUCTNAME "Nova adapter compile fixture"
 !define BUNDLEID "com.litematica.nova"
 !define MAINBINARYNAME "Litematica-Nova"
+!define VERSION "0.0.0"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${BUNDLEID}"
 !include "__INSTALLER__\nsis-hooks.nsh"
 Name "Nova adapter compile fixture - DO NOT INSTALL"
@@ -107,6 +113,8 @@ InstallDir "$TEMP\Nova-adapter-compile-only"
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "SimpChinese"
+!include "__INSTALLER__\languages.nsh"
 Section
   !insertmacro NOVA_MIGRATE_EXISTING
   !insertmacro NOVA_CHECK_RUNNING

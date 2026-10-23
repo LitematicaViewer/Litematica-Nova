@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../src/services/i18n";
+import { useI18n } from "../i18n";
 import React from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
@@ -11,6 +13,7 @@ export function Dropdown({ value, options, onChange, renderValue, disabled = fal
   id?: string;
   className?: string;
 }) {
+  useI18n();
   // Radix reserves an empty item value for its placeholder. Prefix every domain
   // value rather than inventing a sentinel that could collide with user values.
   const encodeValue = (entry: string) => `value:${entry}`;
@@ -22,9 +25,9 @@ export function Dropdown({ value, options, onChange, renderValue, disabled = fal
         disabled={disabled || options.length === 0}
         onValueChange={(next) => onChange(next.slice("value:".length))}>
         <SelectTrigger id={id} aria-label={ariaLabel}>
-          <SelectValue placeholder="请选择"><span className="dropdown-value">{display || "请选择"}</span></SelectValue>
+          <SelectValue placeholder={t("library.choosePlaceholder")}><span className="dropdown-value">{display || t("library.choosePlaceholder")}</span></SelectValue>
         </SelectTrigger>
-        <SelectContent position="popper" align="start" collisionPadding={8} aria-label={ariaLabel || display || "请选择"}>
+        <SelectContent position="popper" align="start" collisionPadding={8} aria-label={ariaLabel || display || t("library.choosePlaceholder")}>
           {options.map((option) => <SelectItem key={option.value} value={encodeValue(option.value)}>{option.label}</SelectItem>)}
         </SelectContent>
       </Select>

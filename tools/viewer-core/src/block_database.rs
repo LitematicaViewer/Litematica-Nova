@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
 };
 
 /// The view plane used when a block state is rasterised for the layer canvas.
@@ -298,6 +298,148 @@ struct Texture {
     offset: usize,
     len: usize,
 }
+fn namespaced(value: &str) -> String {
+    if value.contains(':') { value.to_owned() } else { format!("minecraft:{value}") }
+}
+pub(crate) fn selected_texture(context: &crate::game_data::GameDataContext, name: &str) -> Result<std::sync::Arc<RgbaImage>> {
+    use std::sync::Arc;
+    static TEXTURES: OnceLock<Mutex<BTreeMap<(String, String), Arc<RgbaImage>>>> = OnceLock::new();
+    let key = (context.content_id.clone(), name.to_owned());
+    let cache = TEXTURES.get_or_init(Default::default);
+    if let Some(value) = cache.lock().map_err(|_| anyhow::anyhow!("selected texture cache lock poisoned"))?.get(&key).cloned() { return Ok(value); }
+    let (namespace, local) = name.split_once(':').context("texture requires namespace")?;
+    let path = format!("assets/{namespace}/textures/{local}.png");
+    let bytes = crate::game_data::read_resource_from(context, &path)?.with_context(|| format!("selected texture missing: {path}"))?;
+    let image = image::load_from_memory(&bytes)?.to_rgba8();
+    // Preserve the actual first animation frame, not a stretched sprite strip.
+    let mut width = image.width();
+    let mut height = image.height();
+    if let Some(metadata) = crate::game_data::read_resource_from(context, &format!("{path}.mcmeta"))? {
+        let metadata: serde_json::Value = serde_json::from_slice(&metadata)?;
+        if let Some(animation) = metadata.get("animation") {
+            width = animation.get("width").and_then(serde_json::Value::as_u64).map(|v|v as u32).unwrap_or(image.width());
+            height = animation.get("height").and_then(serde_json::Value::as_u64).map(|v|v as u32).unwrap_or(width.min(image.height()));
+        }
+    }
+    if width == 0 || height == 0 || width > image.width() || height > image.height() { bail!("invalid selected animated texture frame: {path}"); }
+    let image = Arc::new(image::imageops::crop_imm(&image, 0, 0, width, height).to_image());
+    cache.lock().map_err(|_| anyhow::anyhow!("selected texture cache lock poisoned"))?.insert(key, image.clone());
+    Ok(image)
+}
+
+pub(crate) fn resource_model(context: &crate::game_data::GameDataContext, name: &str, visiting: &mut BTreeSet<String>) -> Result<serde_json::Value> {
+    let name = namespaced(name);
+    if !visiting.insert(name.clone()) { bail!("selected model inheritance cycle: {name}"); }
+    let (namespace, local) = name.split_once(':').context("model requires namespace")?;
+    let path = format!("assets/{namespace}/models/{local}.json");
+    let bytes = crate::game_data::read_resource_from(context, &path)?.with_context(|| format!("selected model missing: {path}"))?;
+    let own: serde_json::Value = serde_json::from_slice(&bytes).with_context(||format!("invalid selected model: {path}"))?;
+    let mut model = if let Some(parent) = own.get("parent").and_then(serde_json::Value::as_str).filter(|parent|!parent.starts_with("builtin/") && !parent.starts_with("minecraft:builtin/")) { resource_model(context, parent, visiting)? } else { serde_json::json!({}) };
+    let object = own.as_object().context("selected model is not an object")?;
+    for (key, value) in object {
+        if key == "textures" {
+            let textures = model.as_object_mut().context("model object missing")?.entry("textures").or_insert_with(||serde_json::json!({}));
+            for (key, value) in value.as_object().context("model textures must be an object")? { textures.as_object_mut().context("model textures must be an object")?.insert(key.clone(),value.clone()); }
+        } else { model.as_object_mut().context("model object missing")?.insert(key.clone(),value.clone()); }
+    }
+    visiting.remove(&name);
+    Ok(model)
+}
+fn model_vector(value: Option<&serde_json::Value>, fallback: [f32;3]) -> Result<[f32;3]> {
+    let Some(value) = value else { return Ok(fallback); };
+    let values = value.as_array().filter(|values|values.len()==3).context("model vector must contain three values")?;
+    Ok([values[0].as_f64().context("model coordinate missing")? as f32, values[1].as_f64().context("model coordinate missing")? as f32, values[2].as_f64().context("model coordinate missing")? as f32])
+}
+fn model_elements(model: &serde_json::Value) -> Result<(Vec<Element>, Vec<String>)> {
+    let textures = model.get("textures").and_then(serde_json::Value::as_object);
+    let mut strings = Vec::new();
+    let mut elements = Vec::new();
+    for raw in model.get("elements").and_then(serde_json::Value::as_array).into_iter().flatten() {
+        let from = model_vector(raw.get("from"), [0.0;3])?;
+        let to = model_vector(raw.get("to"), [16.0;3])?;
+        let mut faces = Vec::new();
+        for (direction, face) in raw.get("faces").and_then(serde_json::Value::as_object).into_iter().flatten() {
+            let side = match direction.as_str() { "down"=>0,"up"=>1,"north"=>2,"south"=>3,"west"=>4,"east"=>5,_=>bail!("invalid selected model face: {direction}") };
+            let mut texture = face.get("texture").and_then(serde_json::Value::as_str).context("model face texture missing")?.to_owned();
+            let mut seen = BTreeSet::new();
+            while let Some(variable) = texture.strip_prefix('#') {
+                if !seen.insert(variable.to_owned()) { bail!("selected texture variable cycle"); }
+                texture = textures.and_then(|textures| textures.get(variable)).and_then(serde_json::Value::as_str).with_context(||format!("selected texture variable missing: {variable}"))?.to_owned();
+            }
+            let texture = namespaced(&texture);
+            let index = strings.len() as u32; strings.push(texture);
+            let automatic = match side { 0=>[from[0],16.0-to[2],to[0],16.0-from[2]],1=>[from[0],from[2],to[0],to[2]],2=>[16.0-to[0],16.0-to[1],16.0-from[0],16.0-from[1]],3=>[from[0],16.0-to[1],to[0],16.0-from[1]],4=>[from[2],16.0-to[1],to[2],16.0-from[1]],_=>[16.0-to[2],16.0-to[1],16.0-from[2],16.0-from[1]] };
+            let uv = if let Some(uv)=face.get("uv").and_then(serde_json::Value::as_array) { if uv.len()!=4 {bail!("model UV requires four values");} [uv[0].as_f64().context("UV missing")? as f32,uv[1].as_f64().context("UV missing")? as f32,uv[2].as_f64().context("UV missing")? as f32,uv[3].as_f64().context("UV missing")? as f32] } else {automatic};
+            faces.push(Face { side,texture:index,uv,tint:face.get("tintindex").and_then(serde_json::Value::as_i64).unwrap_or(-1) as i16,rotation:face.get("rotation").and_then(serde_json::Value::as_u64).unwrap_or(0) as u16 });
+        }
+        let rotation = raw.get("rotation").map(|value| -> Result<ElementRotation> {
+            let axis = match value.get("axis").and_then(serde_json::Value::as_str) {Some("x")=>0,Some("y")=>1,Some("z")=>2,_=>bail!("invalid model rotation axis")};
+            Ok(ElementRotation { kind:0,origin:model_vector(value.get("origin"),[8.0;3])?,axis,angle:value.get("angle").and_then(serde_json::Value::as_f64).unwrap_or(0.0) as f32,rescale:value.get("rescale").and_then(serde_json::Value::as_bool).unwrap_or(false),vector:[0.0;3] })
+        }).transpose()?;
+        elements.push(Element {from,to,faces,rotation});
+    }
+    Ok((elements,strings))
+}
+fn model_condition(value: &serde_json::Value, properties: &BTreeMap<String,String>) -> bool {
+    let Some(object) = value.as_object() else {return false;};
+    object.iter().all(|(key,value)| {
+        if key=="OR" { return value.as_array().is_some_and(|values|values.iter().any(|value|model_condition(value,properties))); }
+        if key=="AND" { return value.as_array().is_some_and(|values|values.iter().all(|value|model_condition(value,properties))); }
+        value.as_str().is_some_and(|expected|properties.get(key).is_some_and(|actual|expected.split('|').any(|value|value==actual)))
+    })
+}
+type SelectedPlaneModels = Vec<(Variant, Vec<Element>, Vec<String>)>;
+fn selected_plane_models(context: &crate::game_data::GameDataContext, id: &str, properties: &BTreeMap<String,String>) -> Result<std::sync::Arc<SelectedPlaneModels>> {
+    use std::sync::Arc;
+    static MODELS: OnceLock<Mutex<BTreeMap<(String,String), Arc<SelectedPlaneModels>>>> = OnceLock::new();
+    let key = (context.content_id.clone(), format!("{id}:{}", serde_json::to_string(properties)?));
+    let cache = MODELS.get_or_init(Default::default);
+    if let Some(value) = cache.lock().map_err(|_| anyhow::anyhow!("selected model cache lock poisoned"))?.get(&key).cloned() { return Ok(value); }
+    let (namespace,local)=id.split_once(':').context("block state requires namespace")?;
+    let path=format!("assets/{namespace}/blockstates/{local}.json");
+    let bytes=crate::game_data::read_resource_from(context,&path)?.with_context(||format!("selected blockstate missing: {path}"))?;
+    let state:serde_json::Value=serde_json::from_slice(&bytes)?;
+    let mut choices=Vec::new();
+    if let Some(variants)=state.get("variants").and_then(serde_json::Value::as_object) {
+        for (condition,value) in variants {
+            if condition.is_empty() || condition.split(',').all(|part|part.split_once('=').is_some_and(|(key,expected)|properties.get(key).is_some_and(|actual|expected.split('|').any(|value|value==actual)))) {choices.push(value); break;}
+        }
+    }
+    for part in state.get("multipart").and_then(serde_json::Value::as_array).into_iter().flatten() {
+        if part.get("when").is_none_or(|condition|model_condition(condition,properties)) {choices.push(part.get("apply").context("multipart apply missing")?);}
+    }
+    let mut result=Vec::new();
+    for value in choices {
+        let value=if let Some(values)=value.as_array(){values.first().context("empty weighted model alternatives")?}else{value};
+        let name=value.get("model").and_then(serde_json::Value::as_str).context("blockstate model reference missing")?;
+        let model=resource_model(context,name,&mut BTreeSet::new())?;
+        let (elements,strings)=model_elements(&model)?;
+        result.push((Variant {condition:String::new(),model:0,x:(value.get("x").and_then(serde_json::Value::as_u64).unwrap_or(0)/90) as u8,y:(value.get("y").and_then(serde_json::Value::as_u64).unwrap_or(0)/90) as u8},elements,strings));
+    }
+    let result = Arc::new(result);
+    cache.lock().map_err(|_| anyhow::anyhow!("selected model cache lock poisoned"))?.insert(key, result.clone());
+    Ok(result)
+}
+
+/// Fast keeps its existing flat-color geometry/shading. Its representative
+/// material color is now sampled from the selected models and real textures.
+pub(crate) fn selected_palette_color(id: &str, properties: &BTreeMap<String,String>) -> Result<Option<[f32;3]>> {
+    let context = crate::game_data::active_context()?;
+    let models = selected_plane_models(&context, id, properties)?;
+    let mut textures = BTreeSet::new();
+    for (_, _, names) in models.iter() { textures.extend(names.iter().cloned()); }
+    let mut sum = [0.0f64;3]; let mut weight = 0.0f64;
+    for name in textures {
+        let texture = selected_texture(&context, &name)?;
+        for pixel in texture.pixels() {
+            let alpha = f64::from(pixel[3]);
+            for channel in 0..3 { sum[channel] += f64::from(pixel[channel]) * alpha; }
+            weight += alpha;
+        }
+    }
+    Ok((weight > 0.0).then(|| [0,1,2].map(|channel| (sum[channel]/weight/255.0) as f32)))
+}
+
 pub struct BlockDatabase {
     supplement: Supplement,
     strings: Vec<String>,
@@ -385,12 +527,19 @@ fn variants(r: &mut Reader<'_>, strings: &[String]) -> Result<Vec<Variant>> {
     }
     Ok(values)
 }
+fn registry_adapter_root(context: &crate::game_data::GameDataContext) -> Result<std::path::PathBuf> {
+    let own = context.root.join("derived/blockdb");
+    if own.join("blocks.dat.z").is_file() { return Ok(own); }
+    let common = crate::runtime_paths::app_root()?.join("pack-in/game-data/default/derived/blockdb");
+    if common.join("blocks.dat.z").is_file() { return Ok(common); }
+    bail!("selected Minecraft {} is missing the required public version-registry adapter", context.game_version)
+}
+
 impl BlockDatabase {
     fn load() -> Result<Self> {
-        let bytes = inflate(
-            include_bytes!("../../../data/blockdb/blocks.dat.z"),
-            64 * 1024 * 1024,
-        )?;
+        let context = crate::game_data::active_context()?;
+        let path = registry_adapter_root(&context)?.join("blocks.dat.z");
+        let bytes = inflate(&std::fs::read(&path).with_context(|| format!("selected Minecraft {} requires its block registry adapter: {}", context.game_version, path.display()))?, 64 * 1024 * 1024)?;
         let mut r = Reader {
             bytes: &bytes,
             pos: 0,
@@ -595,37 +744,16 @@ impl BlockDatabase {
             .context("方块注册表缺失")
     }
     pub fn name(&self, version: &str, id: &str) -> String {
-        self.version(version)
-            .ok()
-            .and_then(|v| self.resources.get(&v.resource_version))
-            .and_then(|v| {
-                v.names
-                    .get(id)
-                    .or_else(|| v.names.get(id.strip_prefix("minecraft:").unwrap_or(id)))
-            })
-            .or_else(|| {
-                self.resources.get("26.3").and_then(|v| {
-                    v.names
-                        .get(id)
-                        .or_else(|| v.names.get(id.strip_prefix("minecraft:").unwrap_or(id)))
-                })
-            })
-            .cloned()
-            .unwrap_or_else(|| {
-                self.registry(version)
-                    .ok()
-                    .and_then(|registry| registry.blocks.get(id))
-                    .map(|block| block.en.clone())
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or_else(|| {
-                        id.strip_prefix("minecraft:")
-                            .unwrap_or(id)
-                            .replace('_', " ")
-                    })
-            })
+        let local = id.replace(':', ".").replace('/', ".");
+        for key in [format!("block.{local}"), format!("item.{local}")] {
+            if let Ok(Some(value)) = crate::item_names::selected_name(&key, "zh_cn") { return value; }
+        }
+        self.registry(version).ok().and_then(|registry| registry.blocks.get(id))
+            .map(|block| block.en.clone()).filter(|name| !name.is_empty()).unwrap_or_else(|| id.to_owned())
     }
     pub(crate) fn category(&self, name: &str) -> Option<&str> {
-        self.registry("26.3")
+        let context = crate::game_data::active_context().ok()?;
+        self.registry(&context.game_version)
             .ok()?
             .blocks
             .get(name)
@@ -822,57 +950,21 @@ fn face_tint(&self, version: &str, state: &str, index: i16) -> Result<u32> {
             ));
             return Ok(value);
         }
-        let resource = self
-            .resources
-            .get(&self.version(version)?.resource_version)
-            .context("该版本没有模型资源")?;
-        let block = resource
-            .blocks
-            .get(&id)
-            .or_else(|| {
-                resource
-                    .blocks
-                    .get(id.strip_prefix("minecraft:").unwrap_or(&id))
-            })
-            .context("方块没有平面模型")?;
-        let matches = |condition: &str| {
-            condition.is_empty()
-                || condition.split('|').any(|alternative| {
-                    alternative.split(',').all(|pair| {
-                        pair.split_once('=').is_some_and(|(k, v)| {
-                            properties.get(k).is_some_and(|value| value == v)
-                        })
-                    })
-                })
-        };
-        let mut selected: Vec<&Variant> = block
-            .variants
-            .iter()
-            .filter(|v| matches(&v.condition))
-            .take(1)
-            .collect();
-        selected.extend(block.multipart.iter().filter(|v| matches(&v.condition)));
+        let context = crate::game_data::active_context()?;
+        let selected = selected_plane_models(&context, &id, &properties)?;
         let mut image = RgbaImage::new(32, 32);
         let mut tints = BTreeSet::new();
         let mut used = Vec::new();
-        for variant in selected {
-            let Some(model) = self.models.get(variant.model) else {
-                continue;
-            };
+        for (variant, model, strings) in selected.iter() {
             for element in model {
                 let Some((face, quad)) = select_plane(element, variant, plane) else {
                     continue;
                 };
-                let Some(path) = self.strings.get(face.texture as usize) else {
+                let Some(path) = strings.get(face.texture as usize) else {
                     continue;
                 };
-                let Some(index) = resource.textures.get(path) else {
-                    continue;
-                };
-                let Some(texture) = self.textures.get(*index) else {
-                    continue;
-                };
-                let pixels = &self.pixels[texture.offset..texture.offset + texture.len];
+                let texture = selected_texture(&context, path)?;
+                let pixels = texture.as_raw();
                 let tint = self.face_tint(version, state, face.tint)?;
                 let x0 = quad
                     .iter()
@@ -918,16 +1010,16 @@ fn face_tint(&self, version: &str, state: &str, index: i16) -> Result<u32> {
                             (u, v) = (v, 1.0 - u);
                         }
                         let tx = ((face.uv[0] + u * (face.uv[2] - face.uv[0]))
-                            * f32::from(texture.width)
+                            * texture.width() as f32
                             / 16.0)
-                            .clamp(0.0, f32::from(texture.width) - 1.0)
+                            .clamp(0.0, texture.width() as f32 - 1.0)
                             as usize;
                         let ty = ((face.uv[1] + v * (face.uv[3] - face.uv[1]))
-                            * f32::from(texture.height)
+                            * texture.height() as f32
                             / 16.0)
-                            .clamp(0.0, f32::from(texture.height) - 1.0)
+                            .clamp(0.0, texture.height() as f32 - 1.0)
                             as usize;
-                        let offset = (ty * usize::from(texture.width) + tx) * 4;
+                        let offset = (ty * texture.width() as usize + tx) * 4;
                         let src = &pixels[offset..offset + 4];
                         let dst = image.get_pixel_mut(x, y);
                         let alpha = f32::from(src[3]) / 255.0;
@@ -1006,28 +1098,40 @@ struct PlainsTintMetadata {
 
 fn plains_tint_metadata() -> Result<&'static PlainsTintMetadata> {
     use sha2::{Digest, Sha256};
-    static DATA: OnceLock<Result<PlainsTintMetadata, String>> = OnceLock::new();
-    DATA.get_or_init(|| (|| -> Result<PlainsTintMetadata> {
-        let data: PlainsTintMetadata = serde_json::from_slice(&inflate(
-            include_bytes!("../../../data/blockdb/plains-tints.dat.z"), 16 * 1024 * 1024,
-        )?)?;
-        let blocks_sha = format!("{:x}", Sha256::digest(include_bytes!("../../../data/blockdb/blocks.dat.z")));
-        if data.schema != 1 || data.purpose != "block-database-side-plains-origin"
-            || data.blocks_dat_sha256 != blocks_sha || data.versions.is_empty()
-            || data.versions.values().any(|key| !data.tables.contains_key(key)) {
-            bail!("侧纹理染色元数据版本或原方块数据库身份不匹配");
-        }
-        Ok(data)
-    })().map_err(|error| format!("{error:#}")))
-        .as_ref().map_err(|error| anyhow::anyhow!("读取侧纹理染色元数据：{error}"))
+    static DATA: OnceLock<Mutex<BTreeMap<String, &'static PlainsTintMetadata>>> = OnceLock::new();
+    let context = crate::game_data::active_context()?;
+    let mut cache = DATA.get_or_init(Default::default).lock().map_err(|_| anyhow::anyhow!("tint adapter cache lock poisoned"))?;
+    if let Some(value) = cache.get(&context.content_id) { return Ok(*value); }
+    let directory = registry_adapter_root(&context)?;
+    let data: PlainsTintMetadata = serde_json::from_slice(&inflate(&std::fs::read(directory.join("plains-tints.dat.z"))?, 16 * 1024 * 1024)?)?;
+    let blocks_sha = format!("{:x}", Sha256::digest(std::fs::read(directory.join("blocks.dat.z"))?));
+    if data.schema != 1 || data.purpose != "block-database-side-plains-origin" || data.blocks_dat_sha256 != blocks_sha || data.versions.is_empty() || data.versions.values().any(|key| !data.tables.contains_key(key)) { bail!("selected tint adapter does not match its actual block database"); }
+    let data: &'static PlainsTintMetadata = Box::leak(Box::new(data));
+    cache.insert(context.content_id, data);
+    Ok(data)
 }
 
 pub fn database() -> Result<&'static BlockDatabase> {
-    static DB: OnceLock<Result<BlockDatabase, String>> = OnceLock::new();
-    DB.get_or_init(|| BlockDatabase::load().map_err(|e| e.to_string()))
-        .as_ref()
-        .map_err(|e| anyhow::anyhow!("读取多版本方块数据库：{e}"))
+    static DB: OnceLock<Mutex<BTreeMap<String, &'static BlockDatabase>>> = OnceLock::new();
+    let context = crate::game_data::active_context()?;
+    let mut cache = DB.get_or_init(Default::default).lock().map_err(|_| anyhow::anyhow!("block registry cache lock poisoned"))?;
+    if let Some(value) = cache.get(&context.content_id) { return Ok(*value); }
+    let value: &'static BlockDatabase = Box::leak(Box::new(BlockDatabase::load()?));
+    cache.insert(context.content_id, value);
+    Ok(value)
 }
+
+pub fn normalized_registry(version: &str) -> Result<serde_json::Value> {
+    let database = database()?;
+    let registry = database.registry(version)?;
+    let mut blocks = BTreeMap::new();
+    for (id, block) in &registry.blocks {
+        let (_, defaults) = crate::version_conversion::parse_key(&block.default)?;
+        blocks.insert(id.clone(), serde_json::json!({"properties":block.properties,"default_properties":defaults}));
+    }
+    Ok(serde_json::json!({"version_id":version,"blocks":blocks}))
+}
+
 pub fn run_cli(args: &[String]) -> Result<()> {
     let mut version = None;
     let mut query = "";
@@ -1035,10 +1139,14 @@ pub fn run_cli(args: &[String]) -> Result<()> {
     let mut states_file = None;
     let mut no_textures = false;
     let mut top_plane = false;
+    let mut normalized = false;
+    let mut registry_items = false;
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
         match flag.as_str() {
             "--versions" => {}
+            "--normalized" => normalized = true,
+            "--registry-items" => registry_items = true,
             "--no-textures" => no_textures = true,
             "--top-plane" => top_plane = true,
             "--version" => version = Some(iter.next().context("missing --version value")?.as_str()),
@@ -1057,7 +1165,11 @@ pub fn run_cli(args: &[String]) -> Result<()> {
     } else {
         Some(Plane::Side)
     };
-    let result = if let Some(path) = states_file {
+    let result = if normalized {
+        normalized_registry(version.context("normalized registry requires --version")?)?
+    } else if registry_items {
+        serde_json::json!({"version_id": version, "items": database()?.registry(version.context("item registry requires --version")?)?.items})
+    } else if let Some(path) = states_file {
         let states: Vec<String> = serde_json::from_slice(&std::fs::read(path)?)?;
         database()?.query_states(version.context("states query requires --version")?, &states, plane)?
     } else if let Some(state) = state {

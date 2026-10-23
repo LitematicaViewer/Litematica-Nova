@@ -155,7 +155,7 @@ export async function validateDevelopmentPackage(directory, expectedModuleId, { 
 // The digest records the actual public helper source/resources/toolchain and
 // the selected signed runtime, not a conveniently similar old executable.
 export async function helperInputIdentity(repo, identity, target = nativeTarget()) {
-  const roots = ['tools/viewer-core', 'tools/nova-protected-loader', 'tools/nova-protection', 'third_party/wgpu-hal-patched', '.cargo', 'rust-toolchain.toml', 'rust-toolchain', 'data/blockdb', 'pack-in/materials/minecraft-26.3.json', 'pack-in/lang/zh_cn.json', 'desktop-nova/src-tauri/icons/icon.png'];
+  const roots = ['tools/viewer-core', 'tools/nova-protected-loader', 'tools/nova-protection', 'third_party/wgpu-hal-patched', '.cargo', 'rust-toolchain.toml', 'rust-toolchain', 'desktop-nova/src-tauri/icons/icon.png'];
   const names = [...new Set(run(repo, 'git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...roots]).split('\0').filter(Boolean))].filter(name => !/(?:^|\/)(?:tests|examples|scripts|target)\//.test(name) && /\.(?:rs|toml|lock|json|js|css|tsv|wgsl|glsl|vert|frag|h|c|cpp|rc|ico|png|z)$/.test(name)).sort();
   const digest = createHash('sha256').update(JSON.stringify({ schema: 'nova.public-helper-input.v1', target, profile: 'release', features: identity.developmentDescriptor ? ['public-beta', 'development-runtime'] : ['public-beta'], runtimeBuildId: identity.buildId, manifestPublicKey: identity.manifestPublicKey, endpoint: identity.endpoint, compatibility: identity.signedCompatibility, development: identity.developmentDescriptor, developmentModulePath: identity.modulePath, compiler: run(repo, 'rustc', ['-vV']) }));
   for (const name of names) {

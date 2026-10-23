@@ -13,6 +13,7 @@ pub mod cache_layer;
 pub mod cli;
 pub mod frame_capture;
 pub mod generate_projection;
+pub mod game_data;
 pub mod item_icons;
 pub mod item_names;
 pub mod mesh;
@@ -53,3 +54,5 @@ mod version_payload_migration;
 pub mod canonical_ir;
 mod process_io;
 mod viewer_session;
+
+pub mod world_export;

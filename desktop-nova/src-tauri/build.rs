@@ -80,44 +80,6 @@ fn build_git_sha(repo_root: &Path) -> String {
     value
 }
 
-fn prepare_block_icons(repo_root: &Path, manifest_dir: &Path) {
-    let source = repo_root.join("pack-in/game-icons/block.zip");
-    watch_if_present(&source);
-    let target = manifest_dir.join("gen/block-icons");
-    fs::create_dir_all(&target).expect("create generated block icon directory");
-    let mut archive = zip::ZipArchive::new(fs::File::open(source).expect("open bundled block icon archive"))
-        .expect("read bundled block icon archive");
-    let mut current_names = HashSet::new();
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).expect("read block icon entry");
-        if entry.is_dir() { continue; }
-        let path = entry.enclosed_name().expect("block icon entry must be enclosed");
-        // Only the public image payload is deployed, never the archive or other files.
-        if path.extension().and_then(|ext| ext.to_str()) != Some("png") { continue; }
-        assert_eq!(path.components().count(), 1, "block icon PNG must have a flat name");
-        let name = path.file_name().unwrap().to_owned();
-        let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes).expect("decode block icon PNG");
-        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "invalid block icon PNG");
-        let output = target.join(&name);
-        if fs::read(&output).ok().as_deref() != Some(bytes.as_slice()) {
-            fs::write(&output, bytes).expect("write generated block icon PNG");
-        }
-        current_names.insert(name);
-    }
-    assert!(!current_names.is_empty(), "bundled block icon archive is empty");
-    // Remove only stale files in this exact build-owned flat directory.
-    // Do not traverse another directory or touch deployed/user resources.
-    for entry in fs::read_dir(&target).expect("list generated block icons") {
-        let entry = entry.expect("read generated block icon entry");
-        if entry.file_type().expect("read generated block icon type").is_file()
-            && !current_names.contains(&entry.file_name())
-        {
-            fs::remove_file(entry.path()).expect("remove stale generated block icon");
-        }
-    }
-}
-
 // Only this freshly staged directory is bundled. Legacy private backend and
 // Release directories never enter the public resource map.
 fn validate_executable_target(path: &Path, target_os: &str, target_arch: &str) {
@@ -282,7 +244,6 @@ fn main() {
         "cargo:rustc-env=LBA_NOVA_GIT_SHA={}",
         build_git_sha(repo_root)
     );
-    prepare_block_icons(repo_root, &manifest_dir);
     validate_public_backends(repo_root);
     tauri_build::build()
 }

@@ -1,3 +1,5 @@
+import { t } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { Button } from "../../../../components/ui/button";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
@@ -8,6 +10,7 @@ import { selectLitematicFile } from '../../../../../src/business/facade';
 import { loadLibrary, addOrUpdateRecord, displayFilePath } from '../../../../../src/business/facade';
 
 export function HomePage({ currentFile, setCurrentFile, setRoute, buildVersion }: any) {
+  const { locale } = useI18n();
   const handleOpenLitematic = async () => {
     const res = await selectLitematicFile();
     if (res) {
@@ -30,33 +33,33 @@ export function HomePage({ currentFile, setCurrentFile, setRoute, buildVersion }
   const currentName = currentFile ? String(currentFile).split(/[\\/]/).pop() : "";
 
   return (
-    <ScrollArea className="home-scroll-area" aria-label="开始使用 Nova">
+    <ScrollArea className="home-scroll-area" aria-label={t("home.start")}>
       <div className="home-page">
         <section className="home-introduction">
           <h1>Litematica-Nova</h1>
-          <p className="home-lead muted">查看材料和结构，整理你的每一份投影。</p>
+          <p className="home-lead muted">{t("home.lead")}</p>
           <div className="home-start-actions">
-            <Button variant="default" size="lg" onClick={handleOpenLitematic}><ThemeIcon name="folder" size={20} fallback={FolderOpen} />打开投影文件</Button>
-            <Button variant="ghost" onClick={() => setRoute("library")}><ThemeIcon name="gallery" size={18} fallback={Library} />浏览投影库<ArrowRight size={16} aria-hidden="true" /></Button>
+            <Button variant="default" size="lg" onClick={handleOpenLitematic}><ThemeIcon name="folder" size={20} fallback={FolderOpen} />{t("home.open")}</Button>
+            <Button variant="ghost" onClick={() => setRoute("library")}><ThemeIcon name="gallery" size={18} fallback={Library} />{t("home.browse")}<ArrowRight size={16} aria-hidden="true" /></Button>
           </div>
-          {buildVersion && <p className="home-beta-note muted">版本 {buildVersion}</p>}
+          {buildVersion && <p className="home-beta-note muted">{t("home.version", {version:buildVersion})}</p>}
         </section>
 
         <section className="home-current group-box" aria-labelledby="home-current-title">
-          <h2 id="home-current-title">{currentFile ? "继续当前投影" : "打开后，从这里继续"}</h2>
+          <h2 id="home-current-title">{currentFile ? t("home.continue") : t("home.openToContinue")}</h2>
           {currentFile ? <div className="home-current-file">
             <FileText size={28} aria-hidden="true" />
             <div><strong>{currentName}</strong><span className="muted" title={displayFilePath(currentFile)}>{displayFilePath(currentFile)}</span></div>
-          </div> : <p className="home-empty muted">选择一个 .litematic 文件，即可查看属性、材料和结构。</p>}
+          </div> : <p className="home-empty muted">{t("home.empty")}</p>}
           <div className="home-workflows">
-            <Button variant="ghost" aria-label="查看投影属性" onClick={() => setRoute("properties")} disabled={!currentFile}>
-              <ThemeIcon name="properties" size={22} fallback={FileText} /><span><strong>投影属性</strong><small className="muted">名称、区域与快速预览</small></span><ArrowRight size={18} aria-hidden="true" />
+            <Button variant="ghost" aria-label={t("home.propertiesAria")} onClick={() => setRoute("properties")} disabled={!currentFile}>
+              <ThemeIcon name="properties" size={22} fallback={FileText} /><span><strong>{t("properties.title")}</strong><small className="muted">{t("home.propertiesHint")}</small></span><ArrowRight size={18} aria-hidden="true" />
             </Button>
-            <Button variant="ghost" aria-label="查看材料与统计" onClick={handleStats} disabled={!currentFile}>
-              <ThemeIcon name="statistics" size={22} fallback={BarChart3} /><span><strong>材料与统计</strong><small className="muted">准备材料，核对数量</small></span><ArrowRight size={18} aria-hidden="true" />
+            <Button variant="ghost" aria-label={t("home.statisticsAria")} onClick={handleStats} disabled={!currentFile}>
+              <ThemeIcon name="statistics" size={22} fallback={BarChart3} /><span><strong>{t("home.statistics")}</strong><small className="muted">{t("home.statisticsHint")}</small></span><ArrowRight size={18} aria-hidden="true" />
             </Button>
-            <Button variant="ghost" aria-label="打开三维预览" onClick={handleRender} disabled={!currentFile}>
-              <ThemeIcon name="render" size={22} fallback={Box} /><span><strong>三维预览</strong><small className="muted">查看投影的三维结构</small></span><ArrowRight size={18} aria-hidden="true" />
+            <Button variant="ghost" aria-label={t("home.previewAria")} onClick={handleRender} disabled={!currentFile}>
+              <ThemeIcon name="render" size={22} fallback={Box} /><span><strong>{t("home.preview")}</strong><small className="muted">{t("home.previewHint")}</small></span><ArrowRight size={18} aria-hidden="true" />
             </Button>
           </div>
         </section>

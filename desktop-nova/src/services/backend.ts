@@ -36,7 +36,7 @@ export {
   downloadWikiEnumCatalogsFromMinecraftWiki,
   pickLitematicFile,
   readGameResourceRemoteText,
-  computeLitematicChecksum,
+computeLitematicChecksum,
   libraryTaskSubmit,
   libraryTaskCancel,
   libraryTaskStatus,
@@ -46,6 +46,14 @@ export {
   libraryTrashRestore,
   libraryTrashPurge,
   libraryExportZip,
+  readResourcePackLanguage,
+  listGameData,
+  readGameDataLanguage,
+  readGameDataIcon,
+  getGameDataContext,
+  importGameDataJar,
+  selectGameData,
+  restoreDefaultGameData,
 } from "../platform/files";
 export type {
   LitematicChecksum,
@@ -72,6 +80,7 @@ export type {
   LibraryExportEntry,
   LibraryExportZipParams,
 } from "../platform/files";
+export type { GameDataContext, GameDataList } from "../platform/files";
 
 export {
   openAssetManagerWindow,

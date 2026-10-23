@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { aiChatCompletion, readWorkspaceFile } from "./backend";
 import { getAllBlocks, getBlockProperties, hasBlockDatabase } from "./blockstateDb";
 import { GenerateFormState, ProjectionPlan, normalizePlanBlockStates } from "./generateService";
@@ -85,7 +86,7 @@ export function extractPlanFromAiText(text: string): ProjectionPlan {
     if (extracted) {
       return JSON.parse(extracted);
     }
-    throw new Error("AI response does not contain parseable projection_plan JSON.");
+    throw new Error(t("native.ai.noJson"));
   }
 }
 
@@ -186,20 +187,20 @@ function normalizeFromTo(operation: any, max: [number, number, number], path: st
   operation.from = nextFrom;
   operation.to = nextTo;
   if (!sameArray(oldFrom, nextFrom) || !sameArray(oldTo, nextTo)) {
-    warnings.push(`已自动将 ${path}.from/to 调整到区域范围内并排序。`);
+    warnings.push(t("native.ai.boundsSorted", { path }));
   }
 }
 
 function normalizeCenterRadiusHeight(operation: any, size: [number, number, number], max: [number, number, number], path: string, warnings: string[], errors: string[]) {
   if (!["sphere", "ring", "cylinder"].includes(operation?.type)) return;
   if (!Array.isArray(operation.center) || operation.center.length !== 3) {
-    errors.push(`${path}.center must be [x,y,z]`);
+    errors.push(t("native.plan.centerVector", { path: path }));
     return;
   }
   const oldCenter = [...operation.center];
   operation.center = operation.center.map((value: unknown, axis: number) => clampInt(value, 0, max[axis]));
   if (!sameArray(oldCenter, operation.center)) {
-    warnings.push(`已自动将 ${path}.center 从 [${oldCenter.join(",")}] 调整为 [${operation.center.join(",")}]，避免超出区域。`);
+    warnings.push(t("native.ai.centerAdjusted", { path, before: oldCenter.join(","), after: operation.center.join(",") }));
   }
 
   const oldRadius = operation.radius;
@@ -207,7 +208,7 @@ function normalizeCenterRadiusHeight(operation: any, size: [number, number, numb
   const axes = operation.type === "cylinder" ? [0, 2] : [0, 1, 2];
   for (const axis of axes) {
     if (max[axis] < 2) {
-      errors.push(`${path}.radius cannot fit inside region axis ${axis}; region size must be at least 3`);
+      errors.push(t("native.plan.radiusNoRoom", { path: path, axis: axis }));
       continue;
     }
     const axisMaxRadius = Math.max(1, Math.floor(max[axis] / 2));
@@ -219,12 +220,12 @@ function normalizeCenterRadiusHeight(operation: any, size: [number, number, numb
     operation.center[axis] = clampInt(operation.center[axis], radius, max[axis] - radius);
     if (before !== operation.center[axis]) {
       const label = ["x", "y", "z"][axis];
-      warnings.push(`已自动将 ${path}.center.${label} 从 ${before} 调整为 ${operation.center[axis]}，避免 radius 超出区域。`);
+      warnings.push(t("native.ai.axisAdjusted", { path, axis: label, before, after: operation.center[axis] }));
     }
   }
   operation.radius = Math.max(1, radius);
   if (Number(oldRadius) !== operation.radius) {
-    warnings.push(`已自动将 ${path}.radius 从 ${oldRadius} 缩小为 ${operation.radius}，避免 radius 超出区域。`);
+    warnings.push(t("native.ai.radiusAdjusted", { path, before: oldRadius, after: operation.radius }));
   }
 
   if (operation.type === "ring" || operation.type === "cylinder") {
@@ -232,7 +233,7 @@ function normalizeCenterRadiusHeight(operation: any, size: [number, number, numb
     const maxHeight = Math.max(1, size[1] - operation.center[1]);
     operation.height = clampInt(operation.height ?? 1, 1, maxHeight);
     if (Number(oldHeight ?? 1) !== operation.height) {
-      warnings.push(`已自动将 ${path}.height 从 ${oldHeight ?? 1} 调整为 ${operation.height}，避免超出区域高度。`);
+      warnings.push(t("native.ai.heightAdjusted", { path, before: oldHeight ?? 1, after: operation.height }));
     }
   }
 }
@@ -249,21 +250,21 @@ function sameArray(a: any[], b: any[]): boolean {
 
 export function validateAiPlanBasic(plan: any): string[] {
   const errors: string[] = [];
-  if (!plan || typeof plan !== "object") return ["plan must be a JSON object"];
-  if (plan.version !== 1) errors.push("version must be 1");
-  if (!Array.isArray(plan.regions) || plan.regions.length === 0) errors.push("regions must be a non-empty array");
+  if (!plan || typeof plan !== "object") return [t("native.plan.object")];
+  if (plan.version !== 1) errors.push(t("native.plan.version"));
+  if (!Array.isArray(plan.regions) || plan.regions.length === 0) errors.push(t("native.plan.regionArray"));
 
   for (const [regionIndex, region] of (plan.regions || []).entries()) {
     const regionPath = `regions[${regionIndex}]`;
     if (!Array.isArray(region.size) || region.size.length !== 3) {
-      errors.push(`${regionPath}.size must be [x,y,z]`);
+      errors.push(t("native.plan.sizeVector", { path: regionPath }));
     } else {
       region.size.forEach((value: unknown, axis: number) => {
-        if (!Number.isFinite(value) || Number(value) <= 0) errors.push(`${regionPath}.size[${axis}] must be > 0`);
+        if (!Number.isFinite(value) || Number(value) <= 0) errors.push(t("native.plan.sizePositive", { path: regionPath, axis: axis }));
       });
     }
     if (!Array.isArray(region.operations)) {
-      errors.push(`${regionPath}.operations must be an array`);
+      errors.push(t("native.plan.operationsArray", { path: regionPath }));
       continue;
     }
     for (const [operationIndex, operation] of region.operations.entries()) {
@@ -287,7 +288,7 @@ export function getAiPlanWarnings(plan: any): string[] {
       const size = region.size.map((value: unknown) => Number(value));
       if (size.every((value: number) => Number.isFinite(value) && value > 0)) {
         size.forEach((value: number, axis: number) => {
-          if (value > 128) warnings.push(`regions[${regionIndex}].size[${axis}] exceeds recommended max 128`);
+          if (value > 128) warnings.push(t("native.ai.recommendedSize", { index: regionIndex, axis }));
         });
         totalVolume += size[0] * size[1] * size[2];
       }
@@ -296,8 +297,8 @@ export function getAiPlanWarnings(plan: any): string[] {
       collectOperationWarnings(operation, `regions[${regionIndex}].operations[${operationIndex}]`, warnings, knownBlocks, dbAvailable);
     }
   }
-  if (operationCount > 128) warnings.push(`operation count ${operationCount} exceeds recommended max 128`);
-  if (totalVolume > 1_000_000) warnings.push(`total region volume ${totalVolume} exceeds recommended max 1000000`);
+  if (operationCount > 128) warnings.push(t("native.ai.recommendedOperations", { count: operationCount }));
+  if (totalVolume > 1_000_000) warnings.push(t("native.ai.recommendedVolume", { volume: totalVolume }));
   return warnings;
 }
 
@@ -305,8 +306,8 @@ export function applyAiPlanToGenerateForm(plan: ProjectionPlan): GenerateFormSta
   const normalized = normalizeAiPlanForImport(plan).plan;
   return templateToForm({
     id: "ai-imported",
-    name_zh: normalized.metadata?.name || "AI Imported Plan",
-    description_zh: normalized.metadata?.description || "Imported AI projection plan",
+    name_zh: normalized.metadata?.name || t("native.ai.importName"),
+    description_zh: normalized.metadata?.description || t("native.ai.importDescription"),
     tags: ["ai"],
     plan: normalized,
   });
@@ -317,9 +318,9 @@ export async function createMockPlan(prompt: string, context: GenerationContext 
   return {
     version: 1,
     metadata: {
-      name: prompt.trim() ? `Mock - ${prompt.trim().slice(0, 24)}` : "Mock Generated Projection",
+      name: prompt.trim() ? `Mock - ${prompt.trim().slice(0, 24)}` : t("native.ai.mockName"),
       author: "Litematica-Nova",
-      description: "Mock provider generated a local plan only.",
+      description: t("native.ai.mockDescription"),
     },
     minecraft_data_version: context.minecraftDataVersion,
     regions: [
@@ -342,7 +343,7 @@ export async function createMockPlan(prompt: string, context: GenerationContext 
 
 export async function aiGeneratePlan(request: { provider: string; prompt: string; currentPlan?: ProjectionPlan; context: GenerationContext }): Promise<ProjectionPlan> {
   if (request.provider !== "mock") {
-    throw new Error("Real AI generation is not wired to GeneratePage in this build. Use web prompt copy/import or Mock.");
+    throw new Error(t("native.ai.notWired"));
   }
   const plan = await createMockPlan(request.prompt, request.context);
   const normalized = normalizePlanBlockStates(plan).plan;
@@ -353,7 +354,7 @@ export async function aiGeneratePlan(request: { provider: string; prompt: string
 
 export const mockProjectionProvider: AiProjectionProvider = {
   id: "mock",
-  name: "Mock Provider",
+  get name() { return t("native.ai.mockProvider"); },
   async generatePlan(prompt: string, context: GenerationContext): Promise<ProjectionPlan> {
     return createMockPlan(prompt, context);
   },
@@ -363,23 +364,23 @@ export const aiProjectionProviders: AiProjectionProvider[] = [
   mockProjectionProvider,
   {
     id: "openai-compatible-disabled",
-    name: "OpenAI Compatible（未自动接入）",
+    get name() { return t("native.ai.openAiDisabled"); },
     async generatePlan() {
-      throw new Error("OpenAI Compatible provider is configurable, but automatic generation is not enabled in GeneratePage.");
+      throw new Error(t("native.ai.openAiUnavailable"));
     },
   },
   {
     id: "gemini-compatible-disabled",
-    name: "Gemini Compatible（未接入）",
+    get name() { return t("native.ai.geminiDisabled"); },
     async generatePlan() {
-      throw new Error("Gemini Compatible provider is not connected in this build.");
+      throw new Error(t("native.ai.geminiUnavailable"));
     },
   },
 ];
 
 function validateOperation(operation: any, path: string, errors: string[]) {
   if (!OPERATION_TYPES.has(operation?.type)) {
-    errors.push(`${path}.type is not supported: ${operation?.type}`);
+    errors.push(t("native.plan.operationUnsupported", { path: path, type: String(operation?.type) }));
     return;
   }
   if (operation.type === "checkerboard_floor") {
@@ -396,7 +397,7 @@ function validateOperation(operation: any, path: string, errors: string[]) {
 
 function validateMaterial(material: any, path: string, errors: string[], required: boolean) {
   if (!material) {
-    if (required) errors.push(`${path} is required`);
+    if (required) errors.push(t("native.plan.required", { path: path }));
     return;
   }
   if (material.name) {
@@ -406,39 +407,39 @@ function validateMaterial(material: any, path: string, errors: string[], require
   if (material.type === "single") {
     validateBlock(material.block, `${path}.block`, errors, true);
   } else if (material.type === "weighted_random") {
-    if (!Array.isArray(material.entries) || material.entries.length === 0) errors.push(`${path}.entries must be non-empty`);
+    if (!Array.isArray(material.entries) || material.entries.length === 0) errors.push(t("native.plan.entriesEmpty", { path: path }));
     for (const [index, entry] of (material.entries || []).entries()) {
-      if (!Number.isFinite(entry.weight) || Number(entry.weight) <= 0) errors.push(`${path}.entries[${index}].weight must be > 0`);
+      if (!Number.isFinite(entry.weight) || Number(entry.weight) <= 0) errors.push(t("native.plan.weightPositive", { path: path, index: index }));
       validateBlock(entry.block, `${path}.entries[${index}].block`, errors, true);
     }
   } else {
-    errors.push(`${path}.type is not supported`);
+    errors.push(t("native.plan.typeUnsupported", { path: path }));
   }
 }
 
 function validateBlock(block: any, path: string, errors: string[], required: boolean) {
   if (!block) {
-    if (required) errors.push(`${path} is required`);
+    if (required) errors.push(t("native.plan.required", { path: path }));
     return;
   }
   if (typeof block.name !== "string") {
-    errors.push(`${path}.name must be a string`);
+    errors.push(t("native.plan.nameString", { path: path }));
   } else if (!block.name.trim()) {
-    errors.push(`${path}.name is empty`);
+    errors.push(t("native.plan.nameEmpty", { path: path }));
   } else if (!block.name.startsWith("minecraft:")) {
-    errors.push(`${path}.name must be minecraft:*`);
+    errors.push(t("native.plan.nameNamespace", { path: path }));
   }
   if (typeof block.name === "string" && CHINESE_RE.test(block.name)) {
-    errors.push(`${path}.name contains Chinese characters`);
+    errors.push(t("native.plan.nameChinese", { path: path }));
   }
   const properties = block.properties || {};
   if (typeof properties !== "object" || Array.isArray(properties)) {
-    errors.push(`${path}.properties must be an object`);
+    errors.push(t("native.plan.propertiesObject", { path: path }));
     return;
   }
   for (const [key, value] of Object.entries(properties)) {
-    if (typeof key !== "string" || typeof value !== "string") errors.push(`${path}.properties must be string key/value pairs`);
-    if (CHINESE_RE.test(key) || CHINESE_RE.test(String(value))) errors.push(`${path}.properties contains Chinese characters`);
+    if (typeof key !== "string" || typeof value !== "string") errors.push(t("native.plan.propertiesStrings", { path: path }));
+    if (CHINESE_RE.test(key) || CHINESE_RE.test(String(value))) errors.push(t("native.plan.propertiesChinese", { path: path }));
   }
 }
 
@@ -476,17 +477,17 @@ function collectBlockWarnings(block: any, path: string, warnings: string[], know
   if (!block || typeof block.name !== "string" || !block.name.startsWith("minecraft:")) return;
   if (!dbAvailable) return;
   if (!knownBlocks.has(block.name)) {
-    warnings.push(`${path}.name ${block.name} 不在 BlockState 数据库中，将继续保留并交给后端生成；可能导致渲染 fallback。`);
+    warnings.push(t("native.ai.unknownBlock", { path, block: block.name }));
     return;
   }
   const knownProperties = getBlockProperties(block.name);
   for (const [key, value] of Object.entries(block.properties || {})) {
     if (!Object.prototype.hasOwnProperty.call(knownProperties, key)) {
-      warnings.push(`${path}.properties.${key} 不在 ${block.name} 的 BlockState 数据库中，将继续保留；可能导致渲染 fallback。`);
+      warnings.push(t("native.ai.unknownProperty", { path, property: key, block: block.name }));
       continue;
     }
     if (!knownProperties[key].includes(String(value))) {
-      warnings.push(`${path}.properties.${key}=${value} 不在 ${block.name} 的合法值列表中，将继续保留；可能导致渲染 fallback。`);
+      warnings.push(t("native.ai.unknownValue", { path, property: key, value: String(value), block: block.name }));
     }
   }
 }

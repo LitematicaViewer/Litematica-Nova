@@ -48,6 +48,7 @@ const COPY_SEND: u8 = 19;
 const MOVE_SEND_ONCE: u8 = 18;
 const FRAME_WIRE_SIZE: u32 = 24 + 4 + 2 * 12 + wire::FRAME_BYTES as u32;
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+static POINTER_CAPTURE_OWNER: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -90,6 +91,7 @@ extern "C" {
     fn mach_port_insert_right(task: u32, name: u32, right: u32, disposition: u32) -> i32;
     fn mach_port_deallocate(task: u32, name: u32) -> i32;
     fn mach_port_destroy(task: u32, name: u32) -> i32;
+    fn mach_port_type(task: u32, name: u32, kind: *mut u32) -> i32;
     fn bootstrap_register(bootstrap: u32, name: *const c_char, service: u32) -> i32;
     fn mach_msg(
         message: *mut MachHeader,
@@ -107,6 +109,10 @@ extern "C" {
         context: *mut c_void,
         work: extern "C" fn(*mut c_void),
     );
+}
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGAssociateMouseAndMouseCursorPosition(connected: u32) -> i32;
 }
 #[link(name = "IOSurface", kind = "framework")]
 extern "C" {
@@ -133,6 +139,7 @@ extern "C" {
     static NSWindowDidMiniaturizeNotification: *mut Object;
     static NSWindowDidDeminiaturizeNotification: *mut Object;
     static NSWindowWillCloseNotification: *mut Object;
+    static NSWindowDidResignKeyNotification: *mut Object;
 }
 
 #[derive(Clone, Copy)]
@@ -219,6 +226,8 @@ struct Shared {
     presented_epoch: AtomicU64,
     reported_epoch: AtomicU64,
     request_focus: AtomicBool,
+    pointer_captured: AtomicBool,
+    capture_click_sequence: AtomicU64,
     popup: AtomicUsize,
     popup_active: AtomicBool,
     popup_minimized: AtomicBool,
@@ -254,6 +263,85 @@ fn main_thread() -> Result<(), String> {
     }
 }
 
+/// Cursor association is process-global; all mutations occur on AppKit's
+/// main thread and exactly one current, focused native viewport may own it.
+fn release_pointer_capture(shared: &Shared) -> Result<(), String> {
+    main_thread()?;
+    shared.capture_click_sequence.store(0, Ordering::Release);
+    if !shared.pointer_captured.load(Ordering::Acquire) { return Ok(()); }
+    let view = shared.view.load(Ordering::Acquire);
+    if POINTER_CAPTURE_OWNER.load(Ordering::Acquire) == view {
+        let result = unsafe { CGAssociateMouseAndMouseCursorPosition(1) };
+        if result != 0 { return Err(format!("release macOS pointer capture failed: {result}")); }
+        unsafe { let _: () = msg_send![class!(NSCursor), unhide]; }
+        POINTER_CAPTURE_OWNER.store(0, Ordering::Release);
+    }
+    shared.pointer_captured.store(false, Ordering::Release);
+    Ok(())
+}
+
+fn apply_pointer_request(shared: &Shared, request: wire::PointerCaptureRequest) -> Result<Option<bool>, String> {
+    main_thread()?;
+    let (current, visible) = {
+        let gate = shared.gate.lock().map_err(|_| "native pointer authority lock failed")?;
+        (gate.nonce == request.nonce && gate.generation == request.generation && gate.epoch == request.epoch,
+            presentation_allowed(shared, gate.visible))
+    };
+    if !current || shared.stopped.load(Ordering::Acquire) { return Ok(None); }
+    if !request.captured { release_pointer_capture(shared)?; return Ok(Some(false)); }
+    let view = shared.view.load(Ordering::Acquire) as *mut Object;
+    let click = shared.capture_click_sequence.load(Ordering::Acquire);
+    let focused = if view.is_null() { false } else { unsafe {
+        let window: *mut Object = msg_send![view, window];
+        if window.is_null() { false } else {
+            let key: BOOL = msg_send![window, isKeyWindow];
+            let responder: *mut Object = msg_send![window, firstResponder];
+            let hidden: BOOL = msg_send![view, isHiddenOrHasHiddenAncestor];
+            key == YES && responder == view && hidden != YES
+        }
+    }};
+    // A click from this focus lease is mandatory. Epoch changes, Escape,
+    // page hiding and blur invalidate it before queued capture can arrive.
+    if !visible || !focused || click == 0 || request.input_sequence < click
+        || request.input_sequence >= shared.sequence.load(Ordering::Acquire) { return Ok(Some(false)); }
+    if shared.pointer_captured.load(Ordering::Acquire) { return Ok(Some(true)); }
+    if POINTER_CAPTURE_OWNER.compare_exchange(0, view as usize, Ordering::AcqRel, Ordering::Acquire).is_err() { return Ok(Some(false)); }
+    let result = unsafe { CGAssociateMouseAndMouseCursorPosition(0) };
+    if result != 0 {
+        POINTER_CAPTURE_OWNER.store(0, Ordering::Release);
+        return Err(format!("capture macOS pointer failed: {result}"));
+    }
+    unsafe { let _: () = msg_send![class!(NSCursor), hide]; }
+    shared.pointer_captured.store(true, Ordering::Release);
+    Ok(Some(true))
+}
+
+fn schedule_pointer_request(shared: Arc<Shared>, request: wire::PointerCaptureRequest) {
+    extern "C" fn on_main(context: *mut c_void) {
+        let (shared, request) = unsafe { *Box::from_raw(context as *mut (Arc<Shared>, wire::PointerCaptureRequest)) };
+        match apply_pointer_request(&shared, request) {
+            Ok(Some(captured)) => forward_input_at_epoch(&shared, Some(request.epoch), 10, u32::from(captured),
+                0.0, 0.0, 0.0, 0.0, 0, 0, String::new()),
+            Ok(None) => {},
+            Err(error) => eprintln!("[NOVA_NATIVE_MACOS] stage=pointer_capture_failed error={error}"),
+        }
+    }
+    let context = Box::into_raw(Box::new((shared, request))) as *mut c_void;
+    unsafe { dispatch_async_f(ptr::addr_of!(_dispatch_main_q).cast(), context, on_main); }
+}
+
+fn schedule_pointer_release(shared: Arc<Shared>) {
+    extern "C" fn on_main(context: *mut c_void) {
+        let shared = unsafe { *Box::from_raw(context as *mut Arc<Shared>) };
+        if let Err(error) = release_pointer_capture(&shared) {
+            eprintln!("[NOVA_NATIVE_MACOS] stage=pointer_release_failed error={error}");
+        }
+        forward_input(&shared, 7, 0, 0.0, 0.0, 0.0, 0.0, 0, 0, String::new());
+    }
+    let context = Box::into_raw(Box::new(shared)) as *mut c_void;
+    unsafe { dispatch_async_f(ptr::addr_of!(_dispatch_main_q).cast(), context, on_main); }
+}
+
 impl MacNativeView {
     pub fn endpoint(&self) -> NativeCompositionEndpoint {
         self.endpoint.clone()
@@ -265,6 +353,7 @@ impl MacNativeView {
         main_thread()?;
         if self.mode == mode { return Ok(()); }
         if self.view.is_null() { return Err("native macOS view is disposed".into()); }
+        release_pointer_capture(&self.shared)?;
         self.shared.popup_active.store(false, Ordering::Release);
         self.shared.popup_requested_visible.store(false, Ordering::Release);
         if let Ok(mut gate) = self.shared.gate.lock() { gate.visible = false; }
@@ -371,6 +460,7 @@ impl MacNativeView {
                 visible = false;
             }
         }
+        if epoch != previous_epoch || !visible || !focused { release_pointer_capture(&self.shared)?; }
         if epoch == previous_epoch
             && previous_visible == visible
             && self.placement == Some(placement)
@@ -474,6 +564,7 @@ impl MacNativeView {
         let (width, height) = (gate.width, gate.height);
         gate.set_presentation(epoch, false, width, height);
         drop(gate);
+        release_pointer_capture(&self.shared)?;
         self.shared.request_focus.store(false, Ordering::Release);
         self.shared.popup_requested_visible.store(false, Ordering::Release);
         self.focused = false;
@@ -494,6 +585,7 @@ impl MacNativeView {
         if self.view.is_null() {
             return Ok(());
         }
+        release_pointer_capture(&self.shared)?;
         self.shared.stopped.store(true, Ordering::Release);
         self.shared.popup_active.store(false, Ordering::Release);
         self.shared.popup.store(0, Ordering::Release);
@@ -597,6 +689,8 @@ pub unsafe fn create(
         presented_epoch: AtomicU64::new(u64::MAX),
         reported_epoch: AtomicU64::new(u64::MAX),
         request_focus: AtomicBool::new(false),
+        pointer_captured: AtomicBool::new(false),
+        capture_click_sequence: AtomicU64::new(0),
         popup: AtomicUsize::new(0),
         popup_active: AtomicBool::new(false),
         popup_minimized: AtomicBool::new(false),
@@ -648,14 +742,19 @@ pub unsafe fn create(
     if host_window.is_null() { return Err("native macOS parent window is missing".into()); }
     let center: *mut Object = msg_send![class!(NSNotificationCenter), defaultCenter];
     let queue: *mut Object = msg_send![class!(NSOperationQueue), mainQueue];
-    for (name, closing) in [
-        (NSWindowDidChangeOcclusionStateNotification, false),
-        (NSWindowDidMiniaturizeNotification, false),
-        (NSWindowDidDeminiaturizeNotification, false),
-        (NSWindowWillCloseNotification, true),
+    for (name, closing, focus_lost) in [
+        (NSWindowDidChangeOcclusionStateNotification, false, false),
+        (NSWindowDidMiniaturizeNotification, false, false),
+        (NSWindowDidDeminiaturizeNotification, false, false),
+        (NSWindowWillCloseNotification, true, false),
+        (NSWindowDidResignKeyNotification, false, true),
     ] {
         let observed = Arc::clone(&shared);
         let callback = block::ConcreteBlock::new(move |_: *mut Object| {
+            if focus_lost {
+                let _ = release_pointer_capture(&observed);
+                forward_input(&observed, 7, 0, 0.0, 0.0, 0.0, 0.0, 0, 0, String::new());
+            }
             update_host_visibility(&observed, host_window, closing);
         }).copy();
         // Observe the real NSWindow without replacing Tao's window delegate.
@@ -740,11 +839,26 @@ impl Receiver {
                 )
             };
             if code == MACH_RCV_TIMED_OUT {
+                if shared.pointer_captured.load(Ordering::Acquire) {
+                    let disconnected = shared.input.lock().map(|input| input.as_ref().is_none_or(|right| {
+                        let mut kind = 0;
+                        (unsafe { mach_port_type(mach_task_self_, right.0, &mut kind) }) != 0 || kind & 0x0010_0000 != 0
+                    })).unwrap_or(true);
+                    if disconnected { schedule_pointer_release(Arc::clone(shared)); }
+                }
                 continue;
             }
             if code != 0 {
                 eprintln!("[NOVA_NATIVE_MACOS] stage=receive_failed code={code}");
                 break;
+            }
+            if message.header.id == wire::POINTER_CAPTURE_MESSAGE_ID
+                && message.header.size == (24 + wire::POINTER_CAPTURE_BYTES) as u32
+                && message.header.bits & MACH_MSGH_BITS_COMPLEX == 0 {
+                let bytes = unsafe { std::slice::from_raw_parts((&message as *const FrameMessage).cast::<u8>().add(24), wire::POINTER_CAPTURE_BYTES) };
+                if let Ok(request) = wire::PointerCaptureRequest::decode(bytes) {
+                    schedule_pointer_request(Arc::clone(shared), request);
+                }
             }
             let valid = message.header.id == wire::FRAME_MESSAGE_ID
                 && message.header.size == FRAME_WIRE_SIZE
@@ -801,9 +915,8 @@ impl Receiver {
                 mach_msg_destroy(&mut message.header);
             }
         }
-        if let Ok(mut input) = shared.input.lock() {
-            *input = None;
-        }
+        schedule_pointer_release(Arc::clone(shared));
+        if let Ok(mut input) = shared.input.lock() { *input = None; }
     }
 }
 impl Drop for Receiver {
@@ -1036,6 +1149,7 @@ fn update_host_visibility(shared: &Shared, window: *mut Object, closing: bool) {
     let view = shared.view.load(Ordering::Acquire) as *mut Object;
     if view.is_null() { return; }
     if suspended {
+        let _ = release_pointer_capture(shared);
         shared.request_focus.store(false, Ordering::Release);
         unsafe { let _: () = msg_send![view, setHidden: YES]; }
         if !was_suspended { forward_input(shared, 7, 0, 0.0, 0.0, 0.0, 0.0, 0, 0, String::new()); }
@@ -1198,11 +1312,12 @@ fn forward_input_at_epoch(
     if shared.stopped.load(Ordering::Acquire) {
         return;
     }
+    if kind == 7 && flags & 1 == 0 { let _ = release_pointer_capture(shared); }
     let Ok(gate) = shared.gate.lock() else {
         return;
     };
     if expected_epoch.is_some_and(|epoch| epoch != gate.epoch) { return; }
-    if (!presentation_allowed(shared, gate.visible) && !matches!(kind, 7 | 8 | 9))
+    if (!presentation_allowed(shared, gate.visible) && !matches!(kind, 7 | 8 | 9 | 10))
         || (kind == 7 && flags != 0 && !presentation_allowed(shared, gate.visible)) {
         return;
     }
@@ -1212,6 +1327,7 @@ fn forward_input_at_epoch(
         dx = f64::from_bits(shared.scale.load(Ordering::Acquire));
     }
     let sequence = shared.sequence.fetch_add(1, Ordering::Relaxed);
+    if kind == 2 { shared.capture_click_sequence.store(sequence, Ordering::Release); }
     let packet = InputPacket {
         nonce: gate.nonce,
         generation: gate.generation,
@@ -1433,7 +1549,12 @@ fn view_class() -> &'static Class {
             }
             let shared = unsafe { &*context };
             let scale = f64::from_bits(shared.scale.load(Ordering::Acquire));
-            let kind = if selector == sel!(scrollWheel:) {
+            let kind = if selector == sel!(flagsChanged:) {
+                let code: u16 = unsafe { msg_send![event, keyCode] };
+                let modifiers: u64 = unsafe { msg_send![event, modifierFlags] };
+                let mask = match code { 59 | 62 => 1 << 18, 56 | 60 => 1 << 17, 58 | 61 => 1 << 19, 55 | 54 => 1 << 20, 57 => 1 << 16, _ => 0 };
+                if modifiers & mask != 0 { 5 } else { 6 }
+            } else if selector == sel!(scrollWheel:) {
                 4
             } else if selector == sel!(keyDown:) {
                 5
@@ -1465,7 +1586,12 @@ fn view_class() -> &'static Class {
                     msg_send![this, convertPoint: point fromView: ptr::null_mut::<Object>()];
                 let (mut flags, mut code, mut dx, mut dy, mut text) =
                     (0, 0, 0.0, 0.0, String::new());
-                if kind == 4 {
+                if kind == 1 {
+                    dx = msg_send![event, deltaX];
+                    dy = msg_send![event, deltaY];
+                    dx *= scale; dy *= scale;
+                    if shared.pointer_captured.load(Ordering::Acquire) { flags |= 2; }
+                } else if kind == 4 {
                     dx = msg_send![event, scrollingDeltaX];
                     dy = msg_send![event, scrollingDeltaY];
                     let precise: BOOL = msg_send![event, hasPreciseScrollingDeltas];
@@ -1476,16 +1602,19 @@ fn view_class() -> &'static Class {
                     }
                 } else if kind == 5 || kind == 6 {
                     let key: u16 = msg_send![event, keyCode];
-                    code = u32::from(key);
-                    if kind == 5 && code == 53 && shared.popup_active.load(Ordering::Acquire) {
-                        close_popup(shared);
-                        return;
+                    // flagsChanged reports aggregate Ctrl. Canonicalize both
+                    // sides so releasing one while the other is held cannot
+                    // leave the first physical key stuck in the producer.
+                    code = if selector == sel!(flagsChanged:) && matches!(key, 59 | 62) { 59 } else { u32::from(key) };
+                    if kind == 5 && code == 53 {
+                        let _ = release_pointer_capture(shared);
+                        forward_input(shared, 10, 0, 0.0, 0.0, 0.0, 0.0, 0, 0, String::new());
                     }
-                    let repeat: BOOL = msg_send![event, isARepeat];
+                    let repeat: BOOL = if selector == sel!(flagsChanged:) { NO } else { msg_send![event, isARepeat] };
                     if repeat == YES {
                         flags |= 1;
                     }
-                    let chars: *mut Object = msg_send![event, charactersIgnoringModifiers];
+                    let chars: *mut Object = if selector == sel!(flagsChanged:) { ptr::null_mut() } else { msg_send![event, charactersIgnoringModifiers] };
                     if !chars.is_null() {
                         let value: *const c_char = msg_send![chars, UTF8String];
                         if !value.is_null() {
@@ -1548,6 +1677,7 @@ fn view_class() -> &'static Class {
             sel!(scrollWheel:),
             sel!(keyDown:),
             sel!(keyUp:),
+            sel!(flagsChanged:),
         ] {
             declaration.add_method(selector, event as extern "C" fn(&Object, Sel, *mut Object));
         }

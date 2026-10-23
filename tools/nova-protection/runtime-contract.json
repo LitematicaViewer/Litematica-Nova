@@ -41,6 +41,21 @@
       "target": "aarch64-apple-darwin",
       "runtime_build_id": "0.2.4-ef049e3c0a6e-beta024-release-r1-aarch64-apple-darwin",
       "module_manifest_sha256": "29351d69517d8d9e0f22dade121382f7fc3e5170d5583ca6bafedbb20e0964ce"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_build_id": "runtime-1-3d35bca301b1-game-data-20261023-r1-x86_64-pc-windows-msvc",
+      "module_manifest_sha256": "531ed1a10335bf0b95e0e52e67679fcc60b93a0b8249286672fc82d7154994f9"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_build_id": "runtime-1-16367e0b9db3-four-features-20261023-r1-x86_64-pc-windows-msvc",
+      "module_manifest_sha256": "eb766e3d1f95ce49a6bcb4c71de5845cffe45d75211562d9fa89e2d88ce94cbc"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_build_id": "runtime-1-a9a4f949d57c-version-semantics-20261023-r1-x86_64-pc-windows-msvc",
+      "module_manifest_sha256": "5c9d8b77db9896ef775310bca8c596c76c6fd9ad5b41ce0b3f6294d7ab9c8eb2"
     }
   ]
 }

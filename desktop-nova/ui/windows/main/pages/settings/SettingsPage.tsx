@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
 import React, { useEffect, useState } from "react";
 import { Sun, Moon, Monitor, Check } from "lucide-react";
@@ -20,6 +22,8 @@ import {
   cleanupLocalTempFiles,
   exportDiagnosticLogs,
   getNovaRuntimePathInfo,
+  getSelectedGameDataContext,
+  readActiveGameDataResource,
   getPathInfo,
   getUserConfig,
   openUserConfigDir,
@@ -35,7 +39,7 @@ import {
   ViewerControlConfig,
   GraphicsApiPreference,
 } from "../../../../../src/business/facade";
-import { queryBlockDatabase } from "../../../../../src/business/projectionLibrary";
+import { readGameDataIcon } from "../../../../../src/platform/files";
 import { DISPLAY_MODE_OPTIONS, DisplayMode, normalizeDisplayMode } from "../../../../../src/business/facade";
 import {
   loadUserConfigMigratingLocalStorage,
@@ -57,17 +61,15 @@ import {
 import { AssetManagerDialog, openAssetManagerWithWindowBehavior } from "../../../asset_manager";
 import "../../../../styles/asset-manager.css";
 import "./settings.css";
+import { IrisSettingsPanel } from "./IrisSettingsPanel";
 
-const BLOCKSTATE_DB = "data/minecraft_blockstates/26.1.json";
-const BLOCKSTATE_ZH = "data/minecraft_blockstates/26.1.zh_cn.json";
-const BLOCK_ICON_DIR = "block";
 /* One entry per theme, from `src/services/themeManifest.ts`. Do not add ids here:
    a theme missing from the manifest cannot be loaded or stored, and the registry
    test fails loudly instead of the picker quietly showing a dead option. */
 const NOVA_THEME_OPTIONS = THEMES.map((theme) => ({ value: theme.id, label: theme.label }));
 const MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS = [
-  { value: "independent_window", label: "独立窗口" },
-  { value: "main_window_overlay", label: "主窗口遮罩" },
+  { value: "independent_window", get label() { return t("settings.independentWindow"); } },
+  { value: "main_window_overlay", get label() { return t("settings.mainWindowDialog"); } },
 ];
 const DEFAULT_V5_COMPATIBILITY: V5CompatibilityConfig = {
   backend: "auto",
@@ -83,8 +85,8 @@ const DEFAULT_VIEWER_CONTROLS: ViewerControlConfig = {
 };
 
 function statusText(ok: boolean | null) {
-  if (ok === null) return "未检查";
-  return ok ? "OK" : "失败";
+  if (ok === null) return t("settings.unchecked");
+  return ok ? "OK" : t("settings.failed");
 }
 
 function trimPackPath(path: string): string {
@@ -125,13 +127,14 @@ function appendPackPaths(existing: string[], selected: string[]): string[] {
 }
 
 function PathRow({ label, path, info }: { label: string; path: string; info?: PathInfo | null }) {
+  useI18n();
   return (
     <div className="form-row">
       <div className="form-label">{label}</div>
       <div className="form-field">
         <Input aria-label={label} className="input settings-grow" value={displayFilePath(info?.normalized || path)} readOnly />
         <span className="settings-path-state" data-state={info ? (info.exists ? "ok" : "error") : "unchecked"}>
-          {info ? (info.exists ? "存在" : "缺失") : "未检查"}
+          {info ? (info.exists ? t("settings.exists") : t("settings.missing")) : t("settings.unchecked")}
         </span>
       </div>
     </div>
@@ -139,6 +142,7 @@ function PathRow({ label, path, info }: { label: string; path: string; info?: Pa
 }
 
 export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebugMode, buildVersion }: any) {
+  const language = useI18n();
   const [showAssetManager, setShowAssetManager] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [previewMode, setPreviewMode] = useState<DisplayMode>("full");
@@ -153,9 +157,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
   const [runtimeOk, setRuntimeOk] = useState<boolean | null>(null);
   const [dbOk, setDbOk] = useState<boolean | null>(null);
   const [iconOk, setIconOk] = useState<boolean | null>(null);
-  const [log, setLog] = useState("");
+  const [log, setLog] = useState<UiMessage>("");
   const [exportingLogs, setExportingLogs] = useState(false);
-  const [logExportStatus, setLogExportStatus] = useState("");
+  const [logExportStatus, setLogExportStatus] = useState<UiMessage>("");
   const [aiConfig, setAiConfig] = useState<AiPublicConfig | null>(null);
   const [aiProvider, setAiProvider] = useState("mock");
   const [aiBaseUrl, setAiBaseUrl] = useState("https://api.openai.com/v1");
@@ -163,9 +167,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
-  const [aiStatus, setAiStatus] = useState("未保存");
-  const [aiSaveMessage, setAiSaveMessage] = useState("");
-  const [aiTestStatus, setAiTestStatus] = useState("");
+  const [aiStatus, setAiStatus] = useState<UiMessage>(message("settings.notSaved"));
+  const [aiSaveMessage, setAiSaveMessage] = useState<UiMessage>("");
+  const [aiTestStatus, setAiTestStatus] = useState<UiMessage>("");
   const [v5Compatibility, setV5Compatibility] = useState<V5CompatibilityConfig>(DEFAULT_V5_COMPATIBILITY);
   const [viewerControls, setViewerControls] = useState<ViewerControlConfig>(DEFAULT_VIEWER_CONTROLS);
   const [graphicsBackend, setGraphicsBackend] = useState<GraphicsApiPreference>("auto");
@@ -201,7 +205,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
     setAiProvider(config.provider);
     setAiBaseUrl(config.base_url);
     setAiModel(config.model);
-    setAiStatus(config.has_key ? "已保存" : config.key_status === "cleared" ? "已清除" : "未保存");
+    setAiStatus(config.has_key ? message("settings.saved") : config.key_status === "cleared" ? message("settings.cleared") : message("settings.notSaved"));
     setApiKeyInput("");
     setApiKeyDirty(false);
   };
@@ -232,7 +236,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
     try {
       applyUserConfig(await saveDebugModeConfig(checked));
     } catch (reason) {
-      setLog(`调试模式保存失败：${String(reason)}`);
+      setLog(message("settings.debugSaveFailed", { error: String(reason) }));
     } finally { setDebugModeSaving(false); }
   };
 
@@ -247,10 +251,10 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
     setViewerControls(next);
     try {
       applyUserConfig(await saveUserConfig({ viewer_controls: next }));
-      setLog("Viewer 时间 / 天气修改权限已保存；下一次启动 Viewer 时生效。");
+      setLog(message("settings.viewerPermissionsSaved"));
     } catch (err) {
       setViewerControls(previous);
-      setLog(`Viewer 修改权限保存失败：${String(err)}`);
+      setLog(message("settings.viewerPermissionsSaveFailed", { error: String(err) }));
     }
   };
 
@@ -265,9 +269,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
       };
       const info = await saveUserConfig({ v5_compatibility: normalized });
       applyUserConfig(info);
-      setLog("渲染设置已保存，下次打开预览时生效。");
+      setLog(message("settings.renderSettingsSaved"));
     } catch (err) {
-      setLog(`渲染设置保存失败：${String(err)}`);
+      setLog(message("settings.renderSettingsSaveFailed", { error: String(err) }));
     }
   };
 
@@ -281,10 +285,10 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
       const info = await saveGraphicsBackendConfig(next);
       setUserConfig(info);
       setGraphicsBackend(normalizeGraphicsBackend(info.config.graphics_backend));
-      setLog("图形 API 已保存；仅对新的渲染任务生效，现有预览保持不变。");
+      setLog(message("settings.graphicsApiSaved"));
     } catch (err) {
       setGraphicsBackend(previous);
-      setLog(`图形 API 保存失败：${String(err)}`);
+      setLog(message("settings.graphicsApiSaveFailed", { error: String(err) }));
     } finally {
       setGraphicsBackendSaving(false);
     }
@@ -298,13 +302,13 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         directory,
         multiple: false,
         defaultPath: v5Compatibility.shaderpack_root || undefined,
-        ...(directory ? {} : { filters: [{ name: "Minecraft 光影包", extensions: ["zip"] }] }),
+        ...(directory ? {} : { filters: [{ name: t("settings.shaderpackFilter"), extensions: ["zip"] }] }),
       });
       const path = selectedPaths(selection)[0];
       if (!path) return;
       const parts = splitPackPath(path);
       if (!parts?.root || !parts.name) {
-        setLog(`无法从所选路径识别光影包根目录和名称：${displayFilePath(path)}`);
+        setLog(message("settings.shaderpackPathInvalid", { path: displayFilePath(path) }));
         return;
       }
       setV5Compatibility((current) => ({
@@ -312,9 +316,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         shaderpack_root: parts.root,
         shaderpack_name: parts.name,
       }));
-      setLog(`已选择光影包：${displayFilePath(path)}\n点击“保存渲染设置”后生效。`);
+      setLog(message("settings.shaderpackSelected", { path: displayFilePath(path) }));
     } catch (err) {
-      setLog(`选择光影包失败：${String(err)}`);
+      setLog(message("settings.shaderpackSelectionFailed", { error: String(err) }));
     } finally {
       setV5PickerBusy(false);
     }
@@ -327,7 +331,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
       shaderpack_root: "",
       shaderpack_name: "",
     }));
-    setLog("已清除光影包草稿；点击“保存渲染设置”后生效。");
+    setLog(message("settings.shaderpackCleared"));
   };
 
   const addResourcePacks = async (directory: boolean) => {
@@ -337,7 +341,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
       const selection = await openDialog({
         directory,
         multiple: true,
-        ...(directory ? {} : { filters: [{ name: "Minecraft 资源包", extensions: ["zip"] }] }),
+        ...(directory ? {} : { filters: [{ name: t("settings.resourcePackFilter"), extensions: ["zip"] }] }),
       });
       const paths = selectedPaths(selection);
       if (paths.length === 0) return;
@@ -345,9 +349,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         ...current,
         resource_packs: appendPackPaths(current.resource_packs, paths),
       }));
-      setLog(`已添加 ${paths.length} 个资源包；新选择的项目位于最高优先级。\n点击“保存渲染设置”后生效。`);
+      setLog(message("settings.resourcePacksAdded", { count: paths.length }));
     } catch (err) {
-      setLog(`选择资源包失败：${String(err)}`);
+      setLog(message("settings.resourcePackSelectionFailed", { error: String(err) }));
     } finally {
       setV5PickerBusy(false);
     }
@@ -357,11 +361,13 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
     try {
       const result = await checkApplicationRuntimeHealth();
       setRuntimeOk(result.ok);
-      setLog(
-        `检查应用运行能力：${result.ok ? "OK" : "失败"}`
-        + `\n\n核心操作：${result.core.available ? "可用" : "不可用"}\n${result.core.message.slice(0, 1200)}`
-        + `\n\n预览能力：${result.viewer.available ? "可用" : "不可用"}\n${result.viewer.message.slice(0, 1200)}`,
-      );
+      setLog(message("settings.runtimeReport", {
+        overall: result.ok ? "OK" : message("settings.failed"),
+        core: message(result.core.available ? "settings.available" : "settings.unavailable"),
+        coreDetail: result.core.message.slice(0, 1200),
+        viewer: message(result.viewer.available ? "settings.available" : "settings.unavailable"),
+        viewerDetail: result.viewer.message.slice(0, 1200),
+      }));
     } catch (err: any) {
       setRuntimeOk(false);
       setLog(String(err));
@@ -370,24 +376,26 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
 
   const checkDatabase = async () => {
     try {
-      const result = await queryBlockDatabase({});
-      if (!result.versions?.length) throw new Error("方块数据未加载，请重试。");
+      const selected = await readActiveGameDataResource();
+      const data = JSON.parse(selected.dbText) as { blocks?: Record<string, unknown> };
+      if (!data.blocks || !Object.keys(data.blocks).length) { setDbOk(false); setLog(message("settings.blockDataNotLoaded")); return; }
       setDbOk(true);
-      setLog(`方块数据正常：${result.versions.length} 个版本`);
-    } catch (error) { setDbOk(false); setLog(`方块数据检查失败：${String(error)}`); }
+      setLog(message("settings.blockDataOk", { count: 1 }));
+    } catch (error) { setDbOk(false); setLog(message("settings.blockDataCheckFailed", { error: String(error) })); }
   };
 
   const checkIcons = async () => {
     try {
+      const context = await getSelectedGameDataContext();
       const [iconDir, dirt, grass] = await Promise.all([
-        getPathInfo(BLOCK_ICON_DIR),
-        getPathInfo("block/dirt.png"),
-        getPathInfo("block/grass_block.png"),
+        getPathInfo(context.root),
+        readGameDataIcon("minecraft:dirt"),
+        readGameDataIcon("minecraft:grass_block"),
       ]);
       setIconDirInfo(iconDir);
-      const ok = iconDir.exists && iconDir.is_dir && dirt.exists && grass.exists;
+      const ok = iconDir.exists && iconDir.is_dir && !!dirt && !!grass;
       setIconOk(ok);
-      setLog(`检查图标库：${ok ? "OK" : "失败"}\n目录：${displayFilePath(iconDir.normalized)}\ndirt.png=${dirt.exists}\ngrass_block.png=${grass.exists}`);
+      setLog(message("settings.iconsCheckResult", { status: ok ? "OK" : message("settings.failed"), directory: displayFilePath(iconDir.normalized), dirt: String(!!dirt), grass: String(!!grass) }));
     } catch (err: any) {
       setIconOk(false);
       setLog(String(err));
@@ -398,19 +406,19 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
     const selected = await chooseUserConfigDir();
     if (!selected) return;
     applyUserConfig(await setUserConfigDir(selected, false), true);
-    setLog(`用户配置目录已切换：${selected}`);
+    setLog(message("settings.configDirectorySwitched", { path: selected }));
   };
 
   const migrateConfigDir = async () => {
     const selected = await chooseUserConfigDir();
     if (!selected) return;
     applyUserConfig(await setUserConfigDir(selected, true), true);
-    setLog(`用户配置已迁移到：${selected}`);
+    setLog(message("settings.configMigrated", { path: selected }));
   };
 
   const resetConfigDir = async () => {
     applyUserConfig(await resetUserConfigDir(true), true);
-    setLog("用户配置目录已恢复默认位置，并迁移当前配置。");
+    setLog(message("settings.configReset"));
   };
 
   const saveAiConfigOnly = async () => {
@@ -423,15 +431,15 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
     });
     setAiConfig(saved);
     setApiKeyDirty(false);
-    setAiStatus(saved.has_key ? "已保存" : "未保存");
-    setAiSaveMessage(typedKey ? "已保存 Key" : saved.has_key ? "保留已保存 Key" : "未保存 Key");
+    setAiStatus(saved.has_key ? message("settings.saved") : message("settings.notSaved"));
+    setAiSaveMessage(typedKey ? message("settings.keySaved") : saved.has_key ? message("settings.savedKeyRetained") : message("settings.keyNotSaved"));
     return saved;
   };
 
   const saveAi = async () => {
     const saved = await saveAiConfigOnly();
     setAiTestStatus("");
-    setLog(`AI 配置已保存。provider=${saved.provider}, model=${saved.model}`);
+    setLog(message("settings.aiConfigSaved", { provider: saved.provider, model: saved.model }));
   };
 
   const clearAiKey = async () => {
@@ -439,35 +447,43 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
     setApiKeyInput("");
     setApiKeyDirty(false);
     setAiConfig(next);
-    setAiStatus("已清除");
-    setAiSaveMessage("已清除 Key");
+    setAiStatus(message("settings.cleared"));
+    setAiSaveMessage(message("settings.keyCleared"));
     setAiTestStatus("");
-    setLog("AI API Key 已清除。");
+    setLog(message("settings.aiKeyCleared"));
   };
 
   const testAi = async () => {
-    setAiTestStatus("测试中...");
+    setAiTestStatus(message("settings.testingConnection"));
     try {
       const saved = await saveAiConfigOnly();
       const result = await aiTestConnection();
-      setAiTestStatus(result.ok ? `测试成功：${result.message}` : `测试失败：${result.message}\nprovider=${saved.provider}\nbase_url=${saved.base_url}\nmodel=${saved.model}`);
+      setAiTestStatus(result.ok ? message("settings.connectionTestOk", { detail: result.message }) : message("settings.connectionTestFailed", { error: result.message, provider: saved.provider, baseUrl: saved.base_url, model: saved.model }));
     } catch (err: any) {
-      setAiTestStatus(`测试失败：${String(err)}\nprovider=${aiProvider}\nbase_url=${aiBaseUrl}\nmodel=${aiModel}`);
+      setAiTestStatus(message("settings.connectionTestFailed", { error: String(err), provider: aiProvider, baseUrl: aiBaseUrl, model: aiModel }));
     }
   };
 
   return (
     <>
-    <ScrollArea className="settings-scroll-area" aria-label="设置">
+    <ScrollArea className="settings-scroll-area" aria-label={t("settings.settingsAria")}>
     <div className="settings-page">
-      <h2 className="settings-title">选项</h2>
+      <h2 className="settings-title">{t("settings.settingsTitle")}</h2>
 
       <div className="group-box">
-        <div className="group-box-title">外观</div>
+        <div className="group-box-title">{t("settings.appearance")}</div>
         <div className="form-row">
-          <div className="form-label">主题</div>
+          <label className="form-label" htmlFor="nova-ui-language">{language.t("settings.language")}</label>
+          <select className="input" id="nova-ui-language" value={language.preference} onChange={event => { void language.setLanguage(event.target.value as "zh-CN" | "en-US" | "system").catch(reason => setLog(message("settings.language.failed", {error: String(reason)}))); }}>
+            <option value="zh-CN">{t("settings.simplifiedChinese")}</option>
+            <option value="en-US">English</option>
+            <option value="system">{language.t("settings.language.system")}</option>
+          </select>
+        </div>
+        <div className="form-row">
+          <div className="form-label">{t("settings.theme")}</div>
           <div className="form-field">
-            <RadioGroup className="settings-theme-options" aria-label="主题"
+            <RadioGroup className="settings-theme-options" aria-label={t("settings.theme")}
               value={normalizeTheme(theme)} onValueChange={handleTheme}>
               {NOVA_THEME_OPTIONS.map((option) => (
                 <RadioGroupItem key={option.value} value={option.value} className="settings-theme-option">
@@ -480,10 +496,10 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label">明暗模式</div>
-          <RadioGroup className="settings-color-options" aria-label="明暗模式" orientation="horizontal"
+          <div className="form-label">{t("settings.colorMode")}</div>
+          <RadioGroup className="settings-color-options" aria-label={t("settings.colorMode")} orientation="horizontal"
             value={normalizeColorMode(colorMode)} onValueChange={setColorMode}>
-            {[{ value: "light", label: "浅色", icon: "light", Icon: Sun }, { value: "dark", label: "深色", icon: "dark", Icon: Moon }, { value: "system", label: "跟随系统", icon: "system", Icon: Monitor }].map(({ value, label, icon, Icon }) => (
+            {[{ value: "light", label: t("settings.light"), icon: "light", Icon: Sun }, { value: "dark", label: t("settings.dark"), icon: "dark", Icon: Moon }, { value: "system", label: t("settings.systemDefault"), icon: "system", Icon: Monitor }].map(({ value, label, icon, Icon }) => (
               <RadioGroupItem key={value} value={value}><ThemeIcon name={icon} size={16} fallback={Icon} />{label}</RadioGroupItem>
             ))}
           </RadioGroup>
@@ -491,47 +507,47 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">用户配置目录</div>
+        <div className="group-box-title">{t("settings.configDirectory")}</div>
         <div className="form-row">
-          <div className="form-label">当前目录</div>
-          <Input className="input settings-grow" aria-label="当前配置目录" value={displayFilePath(userConfig?.config_dir || "")} readOnly />
+          <div className="form-label">{t("settings.currentDirectory")}</div>
+          <Input className="input settings-grow" aria-label={t("settings.currentConfigDirectoryAria")} value={displayFilePath(userConfig?.config_dir || "")} readOnly />
         </div>
         <div className="form-row">
-          <div className="form-label">默认目录</div>
-          <Input className="input settings-grow" aria-label="默认配置目录" value={displayFilePath(userConfig?.default_config_dir || "")} readOnly />
+          <div className="form-label">{t("settings.defaultDirectory")}</div>
+          <Input className="input settings-grow" aria-label={t("settings.defaultConfigDirectoryAria")} value={displayFilePath(userConfig?.default_config_dir || "")} readOnly />
         </div>
         <div className="settings-actions">
-          <Button onClick={chooseConfigDir}>选择目录</Button>
-          <Button onClick={() => openUserConfigDir()}>打开目录</Button>
-          <Button onClick={resetConfigDir}>恢复默认目录</Button>
-          <Button onClick={migrateConfigDir}>迁移当前配置到新目录</Button>
+          <Button onClick={chooseConfigDir}>{t("settings.chooseDirectory")}</Button>
+          <Button onClick={() => openUserConfigDir()}>{t("settings.openDirectory")}</Button>
+          <Button onClick={resetConfigDir}>{t("settings.resetDirectory")}</Button>
+          <Button onClick={migrateConfigDir}>{t("settings.migrateDirectory")}</Button>
         </div>
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">AI 设置</div>
+        <div className="group-box-title">{t("settings.aiSettings")}</div>
         <div className="form-row">
-          <div className="form-label">Provider</div>
-          <Dropdown ariaLabel="AI Provider" value={aiProvider} onChange={setAiProvider}
-            options={[{ value: "mock", label: "Mock" }, { value: "openai_compatible", label: "OpenAI Compatible" }, { value: "gemini_compatible", label: "Gemini Compatible（占位）" }]} />
+          <div className="form-label">{t("settings.aiProvider")}</div>
+          <Dropdown ariaLabel={t("settings.aiProvider")} value={aiProvider} onChange={setAiProvider}
+            options={[{ value: "mock", label: t("settings.mockProvider") }, { value: "openai_compatible", label: t("settings.openAiProvider") }, { value: "gemini_compatible", label: t("settings.geminiPlaceholder") }]} />
           <span className="settings-muted" title={aiConfig ? `provider=${aiConfig.provider}` : undefined}>
-            Key 状态：{apiKeyDirty ? "本次输入未保存" : aiStatus}
+            {t("settings.keyStatus", { status: apiKeyDirty ? message("settings.unsavedKeyInput") : aiStatus })}
           </span>
         </div>
         <div className="form-row">
-          <div className="form-label">Base URL</div>
-          <Input className="input settings-grow" aria-label="Base URL" value={aiBaseUrl} onChange={(event) => setAiBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" />
+          <div className="form-label">{t("settings.aiBaseUrl")}</div>
+          <Input className="input settings-grow" aria-label={t("settings.aiBaseUrl")} value={aiBaseUrl} onChange={(event) => setAiBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" />
         </div>
         <div className="form-row">
-          <div className="form-label">Model</div>
-          <Input className="input settings-model-input" aria-label="AI Model" value={aiModel} onChange={(event) => setAiModel(event.target.value)} placeholder="gpt-4.1-mini" />
+          <div className="form-label">{t("settings.aiModel")}</div>
+          <Input className="input settings-model-input" aria-label={t("settings.aiModel")} value={aiModel} onChange={(event) => setAiModel(event.target.value)} placeholder="gpt-4.1-mini" />
         </div>
         <div className="form-row">
-          <div className="form-label">API Key</div>
+          <div className="form-label">{t("settings.aiKey")}</div>
           <div className="form-field">
             <Input
               className="input settings-grow"
-              aria-label="API Key"
+              aria-label={t("settings.aiKey")}
               type={showApiKey ? "text" : "password"}
               value={apiKeyInput}
               onChange={(event) => {
@@ -539,47 +555,47 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
                 setApiKeyDirty(true);
                 setAiSaveMessage("");
               }}
-              placeholder={aiConfig?.has_key ? "已保存；输入新 Key 可替换" : "未保存"}
+              placeholder={aiConfig?.has_key ? t("settings.replaceSavedKey") : t("settings.notSaved")}
               autoComplete="off"
             />
             <Button type="button" onClick={() => setShowApiKey((value) => !value)}>
-              {showApiKey ? "隐藏" : "显示"}
+              {showApiKey ? t("settings.hide") : t("settings.show")}
             </Button>
           </div>
         </div>
         <div className="settings-actions">
-          <Button onClick={saveAi}>保存 Key</Button>
-          <Button onClick={clearAiKey}>清除 Key</Button>
-          <Button onClick={testAi}>测试连接</Button>
+          <Button onClick={saveAi}>{t("settings.saveKey")}</Button>
+          <Button onClick={clearAiKey}>{t("settings.clearKey")}</Button>
+          <Button onClick={testAi}>{t("settings.testConnection")}</Button>
         </div>
         {(aiSaveMessage || aiTestStatus) && (
-          <pre className="settings-feedback" data-state={aiTestStatus.startsWith("测试失败") ? "error" : "normal"}>
-            {[aiSaveMessage, aiTestStatus].filter(Boolean).join("\n")}
+          <pre className="settings-feedback" data-state={(typeof aiTestStatus !== "string" && aiTestStatus.key === "settings.connectionTestFailed") ? "error" : "normal"}>
+            {[aiSaveMessage, aiTestStatus].filter(Boolean).map(localizeMessage).join("\n")}
           </pre>
         )}
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">界面行为</div>
+        <div className="group-box-title">{t("settings.interfaceBehavior")}</div>
         <div className="form-row">
-          <div className="form-label">子窗口行为</div>
+          <div className="form-label">{t("settings.childWindowBehavior")}</div>
           <div className="form-field">
-            <Dropdown ariaLabel="子窗口行为" value={materialListWindowBehavior}
+            <Dropdown ariaLabel={t("settings.childWindowBehavior")} value={materialListWindowBehavior}
               options={MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS} onChange={handleMaterialListWindowBehavior} />
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label">调试模式</div>
+          <div className="form-label">{t("settings.debugMode")}</div>
           <label className="form-field">
-            <Checkbox aria-label="调试模式" checked={debugMode} disabled={!userConfig || debugModeSaving} onCheckedChange={(checked) => void handleDebugMode(checked === true)} />
-            <span>UI 测试与枚举器</span>
+            <Checkbox aria-label={t("settings.debugMode")} checked={debugMode} disabled={!userConfig || debugModeSaving} onCheckedChange={(checked) => void handleDebugMode(checked === true)} />
+            <span>{t("settings.uiTestEnumerator")}</span>
           </label>
         </div>
         <div className="form-row">
-          <div className="form-label">保留尾部路径数</div>
+          <div className="form-label">{t("settings.pathTailSegments")}</div>
           <div className="form-field">
             <Input
-              aria-label="保留尾部路径数"
+              aria-label={t("settings.pathTailSegments")}
               className="input settings-count-input"
               type="number"
               min={1}
@@ -592,170 +608,176 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">应用运行能力</div>
-        <PathRow label="工作目录" path={workspaceRoot || "..."} info={workspaceRoot ? ({ normalized: workspaceRoot, exists: true } as PathInfo) : null} />
+        <div className="group-box-title">{t("settings.runtimeCapabilities")}</div>
+        <PathRow label={t("settings.workingDirectory")} path={workspaceRoot || "..."} info={workspaceRoot ? ({ normalized: workspaceRoot, exists: true } as PathInfo) : null} />
         <div className="settings-actions settings-actions-spaced">
-          <Button onClick={checkApplicationRuntime}>检查运行能力</Button>
+          <Button onClick={checkApplicationRuntime}>{t("settings.checkRuntime")}</Button>
           <span className="settings-status" data-state={runtimeOk === false ? "error" : "normal"}>{statusText(runtimeOk)}</span>
         </div>
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">数据文件</div>
-        <div className="form-row"><div className="form-label">方块数据库</div><div>内置多版本方块库</div></div>
-        <PathRow label="block 图标库" path={BLOCK_ICON_DIR} info={iconDirInfo} />
+        <div className="group-box-title">{t("settings.dataFiles")}</div>
+        <div className="form-row"><div className="form-label">{t("settings.blockDatabase")}</div><div>{t("settings.builtinBlockDatabase")}</div></div>
+        <PathRow label={t("settings.blockIconLibrary")} path={iconDirInfo?.normalized || "..."} info={iconDirInfo} />
         <div className="settings-actions settings-actions-spaced">
-          <Button onClick={() => openAssetManagerWithWindowBehavior(() => setShowAssetManager(true)).catch((error) => setLog(String(error)))}>游戏资源管理</Button>
-          <Button onClick={checkDatabase}>检查方块数据</Button>
-          <Button onClick={checkIcons}>检查图标库</Button>
+          <Button onClick={() => openAssetManagerWithWindowBehavior(() => setShowAssetManager(true)).catch((error) => setLog(String(error)))}>{t("settings.manageGameResources")}</Button>
+          <Button onClick={checkDatabase}>{t("settings.checkBlockData")}</Button>
+          <Button onClick={checkIcons}>{t("settings.checkIconLibrary")}</Button>
           <span className="settings-status" data-state={dbOk === false || iconOk === false ? "error" : "normal"}>
-            方块数据: {statusText(dbOk)} / 图标: {statusText(iconOk)}
+            {t("settings.dataHealth", { blocks: statusText(dbOk), icons: statusText(iconOk) })}
           </span>
         </div>
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">渲染</div>
+        <div className="group-box-title">{t("settings.rendering")}</div>
         <div className="form-row">
-          <div className="form-label">预览图生成</div>
+          <div className="form-label">{t("settings.previewGeneration")}</div>
           <div className="form-field">
-            <Dropdown ariaLabel="预览图生成" value={previewMode} options={DISPLAY_MODE_OPTIONS} onChange={handlePreviewMode} />
-            <Button onClick={() => handlePreviewMode("full")}>重置为完整模式</Button>
+            <Dropdown ariaLabel={t("settings.previewGeneration")} value={previewMode} options={DISPLAY_MODE_OPTIONS} onChange={handlePreviewMode} />
+            <Button onClick={() => handlePreviewMode("full")}>{t("settings.resetFullMode")}</Button>
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label">时间修改</div>
+          <div className="form-label">{t("settings.timeModification")}</div>
           <label className="form-field">
             <Checkbox
-              aria-label="允许修改时间"
+              aria-label={t("settings.allowTimeModification")}
               checked={viewerControls.allow_time_modification}
               onCheckedChange={(checked) => saveViewerControls({
                 ...viewerControls,
                 allow_time_modification: checked === true,
               })}
             />
-            <span>允许在 Viewer 中按 T 修改时间</span>
+            <span>{t("settings.viewerTimeHint")}</span>
           </label>
         </div>
         <div className="form-row">
-          <div className="form-label">天气修改</div>
+          <div className="form-label">{t("settings.weatherModification")}</div>
           <label className="form-field">
             <Checkbox
-              aria-label="允许修改天气"
+              aria-label={t("settings.allowWeatherModification")}
               checked={viewerControls.allow_weather_modification}
               onCheckedChange={(checked) => saveViewerControls({
                 ...viewerControls,
                 allow_weather_modification: checked === true,
               })}
             />
-            <span>允许在 Viewer 中按 Y 修改天气</span>
+            <span>{t("settings.viewerWeatherHint")}</span>
           </label>
         </div>
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">渲染兼容设置</div>
+        <div className="group-box-title">{t("settings.renderCompatibility")}</div>
         <div className="form-row">
-          <div className="form-label">图形 API</div>
+          <div className="form-label">{t("settings.graphicsApi")}</div>
           <div className="form-field">
-            <Dropdown ariaLabel="图形 API" value={graphicsBackend}
+            <Dropdown ariaLabel={t("settings.graphicsApi")} value={graphicsBackend}
               disabled={graphicsBackendSaving || !userConfig}
               onChange={handleGraphicsBackend}
               options={[
-                { value: "auto", label: "自动（推荐）" },
-                { value: "dx12", label: "DirectX 12（Windows 快速模式）" },
+                { value: "auto", label: t("settings.automaticRecommended") },
+                { value: "dx12", label: t("settings.dx12FastWindows") },
                 { value: "vulkan", label: "Vulkan" },
               ]} />
-            {graphicsBackendSaving && <span role="status">正在保存…</span>}
+            {graphicsBackendSaving && <span role="status">{t("settings.saving")}</span>}
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label">完整模式后端</div>
-          <Dropdown ariaLabel="渲染后端" value={v5Compatibility.backend}
+          <div className="form-label">{t("settings.fullBackend")}</div>
+          <Dropdown ariaLabel={t("settings.renderBackend")} value={v5Compatibility.backend}
             onChange={(value) => setV5Compatibility((current) => ({ ...current, backend: value as V5CompatibilityConfig["backend"] }))}
-            options={[{ value: "auto", label: "自动" }, { value: "vulkan", label: "Vulkan（支持光影包）" }, { value: "iris-gl46", label: "OpenGL 4.6（光影对照）" }]} />
+            options={[{ value: "auto", label: t("settings.automatic") }, { value: "vulkan", label: t("settings.vulkanShaderpacks") }, { value: "iris-gl46", label: t("settings.glShaderReference") }]} />
         </div>
         <div className="form-row">
-          <div className="form-label">光影包文件夹</div>
+          <div className="form-label">{t("settings.shaderpackFolder")}</div>
           <Input
             className="input"
-            aria-label="光影包文件夹" value={displayFilePath(v5Compatibility.shaderpack_root)}
+            aria-label={t("settings.shaderpackFolder")} value={displayFilePath(v5Compatibility.shaderpack_root)}
             onChange={(event) => setV5Compatibility((current) => ({ ...current, shaderpack_root: event.target.value }))}
-            placeholder="例如 D:\\.minecraft\\shaderpacks"
+            placeholder={t("settings.shaderpackFolderHint")}
           />
         </div>
         <div className="form-row">
-          <div className="form-label">光影包名称</div>
+          <div className="form-label">{t("settings.shaderpackName")}</div>
           <div className="form-field v5-pack-picker-row">
             <Input
               className="input"
-              aria-label="光影包名称" value={v5Compatibility.shaderpack_name}
+              aria-label={t("settings.shaderpackName")} value={v5Compatibility.shaderpack_name}
               onChange={(event) => setV5Compatibility((current) => ({ ...current, shaderpack_name: event.target.value }))}
-              placeholder="根目录下的 zip 文件名或目录名"
+              placeholder={t("settings.shaderpackNameHint")}
             />
-            <Button type="button" disabled={v5PickerBusy} onClick={() => chooseShaderpack(false)}>选择 ZIP</Button>
-            <Button type="button" disabled={v5PickerBusy} onClick={() => chooseShaderpack(true)}>选择目录</Button>
-            <Button type="button" disabled={v5PickerBusy || (!v5Compatibility.shaderpack_root && !v5Compatibility.shaderpack_name)} onClick={clearShaderpack}>清除</Button>
+            <Button type="button" disabled={v5PickerBusy} onClick={() => chooseShaderpack(false)}>{t("settings.chooseZip")}</Button>
+            <Button type="button" disabled={v5PickerBusy} onClick={() => chooseShaderpack(true)}>{t("settings.chooseDirectory")}</Button>
+            <Button type="button" disabled={v5PickerBusy || (!v5Compatibility.shaderpack_root && !v5Compatibility.shaderpack_name)} onClick={clearShaderpack}>{t("settings.clear")}</Button>
           </div>
         </div>
         <div className="form-row">
-          <div className="form-label">光影加载失败时</div>
-          <Dropdown ariaLabel="光影加载失败时" value={v5Compatibility.iris_fallback}
+          <div className="form-label">{t("settings.shaderpackFailure")}</div>
+          <Dropdown ariaLabel={t("settings.shaderpackFailure")} value={v5Compatibility.iris_fallback}
             onChange={(value) => setV5Compatibility((current) => ({ ...current, iris_fallback: value as V5CompatibilityConfig["iris_fallback"] }))}
-            options={[{ value: "fail", label: "直接报错" }, { value: "vulkan", label: "使用基础渲染" }]} />
+            options={[{ value: "fail", label: t("settings.failImmediately") }, { value: "vulkan", label: t("settings.useBasicRendering") }]} />
         </div>
         <div className="form-row">
-          <div className="form-label">Fabric mods 目录</div>
+          <div className="form-label">{t("settings.fabricModsDirectory")}</div>
           <Input
             className="input"
-            aria-label="Fabric mods 目录" value={displayFilePath(v5Compatibility.fabric_mods_dir)}
+            aria-label={t("settings.fabricModsDirectory")} value={displayFilePath(v5Compatibility.fabric_mods_dir)}
             onChange={(event) => setV5Compatibility((current) => ({ ...current, fabric_mods_dir: event.target.value }))}
-            placeholder="留空禁用；仅加载 Fabric data-only 资源"
+            placeholder={t("settings.fabricModsHint")}
           />
         </div>
         <div className="form-row">
-          <div className="form-label">资源包</div>
+          <div className="form-label">{t("settings.resourcePacks")}</div>
           <div className="v5-pack-picker-row v5-resource-pack-picker">
             <Textarea
-              aria-label="资源包列表"
+              aria-label={t("settings.resourcePackList")}
               className="input v5-resource-pack-list"
               value={v5Compatibility.resource_packs.map(displayFilePath).join("\n")}
               onChange={(event) => setV5Compatibility((current) => ({ ...current, resource_packs: event.target.value.split(/\r?\n/) }))}
-              placeholder="每行一个 zip 或目录；按从低到高优先级填写"
+              placeholder={t("settings.resourcePackListHint")}
             />
             <div className="v5-pack-actions">
-              <Button type="button" disabled={v5PickerBusy} onClick={() => addResourcePacks(false)}>添加 ZIP</Button>
-              <Button type="button" disabled={v5PickerBusy} onClick={() => addResourcePacks(true)}>添加目录</Button>
+              <Button type="button" disabled={v5PickerBusy} onClick={() => addResourcePacks(false)}>{t("settings.addZip")}</Button>
+              <Button type="button" disabled={v5PickerBusy} onClick={() => addResourcePacks(true)}>{t("settings.addDirectory")}</Button>
               <Button
                
                 type="button"
                 disabled={v5PickerBusy || v5Compatibility.resource_packs.every((path) => !path.trim())}
                 onClick={() => setV5Compatibility((current) => ({ ...current, resource_packs: [] }))}
-              >清空</Button>
+              >{t("settings.clearAll")}</Button>
             </div>
           </div>
         </div>
-        <Button onClick={saveV5Compatibility}>保存渲染设置</Button>
+        <Button onClick={saveV5Compatibility}>{t("settings.saveRenderSettings")}</Button>
+        <IrisSettingsPanel root={v5Compatibility.shaderpack_root} pack={v5Compatibility.shaderpack_name}
+          onSelectPack={(name) => setV5Compatibility((current) => ({ ...current, shaderpack_name: name }))}
+          onApplyPack={async (root, name) => {
+            const next = { ...v5Compatibility, shaderpack_root: root, shaderpack_name: name };
+            applyUserConfig(await saveUserConfig({ v5_compatibility: next }));
+          }} />
       </div>
 
       <div className="group-box">
-        <div className="group-box-title">维护</div>
-        {buildVersion && <div className="form-row"><div className="form-label">应用版本</div><div>{buildVersion}</div></div>}
-        <Button onClick={async () => setLog(await cleanupLocalTempFiles())}>清理本地临时文件</Button>
+        <div className="group-box-title">{t("settings.maintenance")}</div>
+        {buildVersion && <div className="form-row"><div className="form-label">{t("settings.appVersion")}</div><div>{buildVersion}</div></div>}
+        <Button onClick={async () => setLog(await cleanupLocalTempFiles())}>{t("settings.cleanupTemp")}</Button>
         <Button type="button" disabled={exportingLogs} onClick={async () => {
           setExportingLogs(true); setLogExportStatus("");
           try {
             const result = await exportDiagnosticLogs();
-            if (result) setLogExportStatus(`日志已导出：${displayFilePath(result.path)}（${result.sessionIds.length} 次启动）`);
+            if (result) setLogExportStatus(message("settings.logsExported", { path: displayFilePath(result.path), count: result.sessionIds.length }));
           } catch (reason) {
-            setLogExportStatus(`日志导出失败：${String(reason)}`);
+            setLogExportStatus(message("settings.logsExportFailed", { error: String(reason) }));
           } finally { setExportingLogs(false); }
-        }}>{exportingLogs ? "正在导出日志…" : "导出日志 ZIP…"}</Button>
-        {logExportStatus && <div className="settings-feedback" role="status" aria-live="polite">{displayPathText(logExportStatus)}</div>}
+        }}>{exportingLogs ? t("settings.exportingLogs") : t("settings.exportLogsZip")}</Button>
+        {logExportStatus && <div className="settings-feedback" role="status" aria-live="polite">{displayPathText(localizeMessage(logExportStatus))}</div>}
       </div>
 
       {log && (
-        <pre className="settings-feedback">{displayPathText(log)}</pre>
+        <pre className="settings-feedback">{displayPathText(localizeMessage(log))}</pre>
       )}
     </div>
     </ScrollArea>

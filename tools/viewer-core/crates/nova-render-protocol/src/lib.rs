@@ -212,6 +212,7 @@ pub enum UiCommand {
         session_id: String,
     },
     CaptureViewer { session_id: String, output_path: PathBuf },
+    SetSceneView { session_id: String, controls: viewer_launch_contract::SceneViewControls },
     HeadlessCameraStress {
         session_id: String,
     },
@@ -254,6 +255,7 @@ impl UiCommand {
                     );
                 }
             },
+            Self::SetSceneView { session_id, controls } => { require_id("sessionId", session_id)?; controls.validate()?; }
             Self::CaptureViewer { session_id, output_path } => {
                 require_id("sessionId", session_id)?;
                 if !output_path.is_absolute() { return Err("capture output must be absolute".into()); }
@@ -1514,6 +1516,7 @@ pub enum ViewerControl {
         session_id: String,
     },
     CaptureFrame { session_id: String, generation: u64, output_path: PathBuf },
+    SetSceneView { session_id: String, generation: u64, controls: viewer_launch_contract::SceneViewControls },
     HeadlessCameraStress {
         session_id: String,
         generation: u64,
@@ -1599,6 +1602,11 @@ impl ViewerControl {
                     *device_generation,
                     descriptor,
                 )?;
+            }
+            Self::SetSceneView { session_id, generation, controls } => {
+                require_id("sessionId", session_id)?;
+                if *generation == 0 { return Err("Scene view requires a generation".into()); }
+                controls.validate()?;
             }
             Self::CaptureFrame { session_id, generation, output_path } => {
                 require_id("sessionId", session_id)?;

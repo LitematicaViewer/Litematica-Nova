@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../src/services/i18n";
+import { useI18n } from "../i18n";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Dropdown } from "./Dropdown";
@@ -40,6 +42,7 @@ export function BlockSearchSelect({
   allowedBlocks?: string[];
   blockNames?: Record<string, string>;
 }) {
+  const { revision } = useI18n();
   const [loadError, setLoadError] = useState("");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -59,8 +62,8 @@ export function BlockSearchSelect({
   }, [allowedBlocks]);
 
   const currentId = normalizeBlockId(value);
-  const current = useMemo(() => ({ ...buildOption(currentId), label: blockNames?.[currentId] || translateBlockId(currentId) }), [currentId, blockNames, blocks]);
-  const options = useMemo(() => blocks.map((id) => ({ ...buildOption(id), label: blockNames?.[id] || translateBlockId(id) })), [blocks, blockNames]);
+  const current = useMemo(() => ({ ...buildOption(currentId), label: blockNames?.[currentId] || translateBlockId(currentId) }), [currentId, blockNames, blocks, revision]);
+  const options = useMemo(() => blocks.map((id) => ({ ...buildOption(id), label: blockNames?.[id] || translateBlockId(id) })), [blocks, blockNames, revision]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return options.slice(0, 160);
@@ -134,7 +137,7 @@ export function BlockSearchSelect({
           <Popover.Content
             className="block-search-menu"
             data-slot="block-search-content"
-            aria-label="选择方块"
+            aria-label={t("library.chooseBlock")}
             align="start"
             sideOffset={4}
             collisionPadding={8}
@@ -142,15 +145,15 @@ export function BlockSearchSelect({
             <Input
               className="input block-search-input"
               autoFocus
-              aria-label="搜索方块"
+              aria-label={t("library.searchBlocks")}
               value={query}
-              placeholder="搜索中文名 / minecraft:id / 短 ID"
+              placeholder={t("library.blockSearchPlaceholder")}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={handleKeyDown}
             />
             {blocks.length === 0 ? (
               <div className="block-search-empty">
-                {loadError || "正在加载方块…"}
+                {localizeMessage(loadError) || t("library.blocksLoading")}
               </div>
             ) : (
               <div
@@ -178,7 +181,7 @@ export function BlockSearchSelect({
                     </span>
                   </Button>
                 ))}
-                {filtered.length === 0 && <div className="block-search-empty">没有匹配方块</div>}
+                {filtered.length === 0 && <div className="block-search-empty">{t("library.noMatchingBlocks")}</div>}
               </div>
             )}
           </Popover.Content>
@@ -196,13 +199,14 @@ export function BlockPropertySelector({ blockId, value, onChange, isTo, properti
   blockId: string; value: Record<string, string>; onChange: (value: Record<string, string>) => void;
   isTo: boolean; properties?: Record<string, string[]>; exact?: boolean;
 }) {
+  useI18n();
   const props = properties || getBlockProperties(blockId);
   const keys = Object.keys(props).sort();
   if (!keys.length) return null;
   return <div className="replace-property-list">{keys.map((key) => <div className="replace-property" key={key}>
     <span>{translateKey(key)}</span>
     <Dropdown ariaLabel={translateKey(key)} value={value[key] || (exact ? props[key][0] : isTo ? "$keep" : "")} options={[
-      ...(exact ? [] : isTo ? [{ label: "保持原状态", value: "$keep" }] : [{ label: "全部状态", value: "" }]),
+      ...(exact ? [] : isTo ? [{ label: t("library.keepOriginalState"), value: "$keep" }] : [{ label: t("library.allStatuses"), value: "" }]),
       ...props[key].map((item) => ({ label: translateValue(key, item), value: item })),
     ]} onChange={(item) => { const next = { ...value }; if (!item) delete next[key]; else next[key] = item; onChange(next); }} />
   </div>)}</div>;

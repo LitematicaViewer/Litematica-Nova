@@ -202,6 +202,8 @@ export interface MaterialWebExportOptions {
 }
 
 export interface ApplicationExportMaterialListInput extends ApplicationProjectMaterialsInput {
+  uiLocale?: "zh-CN" | "en-US";
+  languageMap?: Record<string, string>;
   multiplier: number;
   minecraftVersion: string;
   terminalRawMaterials: boolean;

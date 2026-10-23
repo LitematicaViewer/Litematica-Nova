@@ -4,14 +4,14 @@ use std::path::Path;
 #[path = "material_catalog.rs"]
 mod material_catalog;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use fastnbt::Value as NbtValue;
 use serde::{Deserialize, Serialize};
 
 use crate::model::MetadataOutput;
 use crate::nbt::{
-    RegionBounds, bits_for_palette, for_each_palette_index, load_litematic_root, region_bounds,
-    region_volume, storage_to_region_coords,
+    RegionBounds, bits_for_palette, choose_palette_packing, load_litematic_root, region_bounds,
+    region_volume, region_coord_to_storage_coord, storage_to_region_coords,
 };
 use crate::canonical_ir::{CanonicalRegion, CanonicalWorld};
 use crate::visual::{build_metadata_output, compute_bounds};
@@ -287,6 +287,7 @@ pub(crate) fn build_stats_output_from_root(
 pub(crate) fn build_stats_output_from_canonical(
     world: &CanonicalWorld,
 ) -> Result<StableStructureOutput> {
+    material_catalog::ensure_available()?;
     let bounds = compute_canonical_bounds(world);
     let metadata = build_canonical_metadata_output(world, bounds);
     let resolved_bounds = bounds.unwrap_or_else(|| fallback_bounds(&metadata));
@@ -330,10 +331,10 @@ pub(crate) fn build_stats_output_from_canonical(
         let source_palette = region.source_palette();
         let palette_materials = source_palette.iter().map(|state| {
             material_catalog::requirements_for_version(&state.name, &state.properties, Some(world.provenance().source_minecraft_data_version()))
-        }).collect::<Vec<_>>();
+        }).collect::<Result<Vec<_>>>()?;
         let palette_non_items = source_palette.iter().map(|state| {
-            material_catalog::non_item_status_for_version(&state.name, Some(world.provenance().source_minecraft_data_version()))
-        }).collect::<Vec<_>>();
+            material_catalog::non_item_status_for_version(&state.name, &state.properties, Some(world.provenance().source_minecraft_data_version()))
+        }).collect::<Result<Vec<_>>>()?;
         let mut layer_palette_counts = vec![0_u64; region.palette().len()];
         let mut storage_y = 0_usize;
         let mut accumulate_layer = |y: usize, counts: &mut [u64]| {
@@ -366,22 +367,37 @@ pub(crate) fn build_stats_output_from_canonical(
                 }
             }
         };
-        for_each_palette_index(
-            region.block_states(),
-            volume,
-            nbits,
-            region.palette().len(),
-            |index, palette_index| {
+        let palette_layout = choose_palette_packing(region.block_states(), volume, nbits, region.palette().len())?;
+        for index in 0..volume {
+                let palette_index = palette_layout.palette_index(region.block_states(), index);
                 let y = index / (width * length);
                 if y != storage_y {
                     accumulate_layer(storage_y, &mut layer_palette_counts);
                     storage_y = y;
                 }
                 if let Some(count) = layer_palette_counts.get_mut(palette_index) { *count += 1; }
-                Ok(())
-            },
-        )?;
+        }
         accumulate_layer(storage_y, &mut layer_palette_counts);
+        for tile in region.renderer_block_entities() {
+            if world.provenance().source_minecraft_data_version() < 1519 && is_legacy_flower_pot(tile) {
+                let index = legacy_tile_storage_index(tile, &size)?;
+                let palette = palette_layout.palette_index(region.block_states(), index);
+                let baseline = palette_materials.get(palette).context("legacy flower pot palette index is invalid")?;
+                let actual = legacy_flower_pot_material(tile, Some(world.provenance().source_minecraft_data_version()))?;
+                let layer = tile_entity_layer_index(tile, position.y, resolved_bounds.min_y)
+                    .context("legacy flower pot has no numeric layer coordinate")?;
+                correct_legacy_flower_pot_material(&mut material_counts, region_name, layer, baseline, actual.as_deref(), false)?;
+            }
+            if legacy_appearance_kind(tile, Some(world.provenance().source_minecraft_data_version())).is_some() {
+                let index = legacy_tile_storage_index(tile, &size)?;
+                let palette = palette_layout.palette_index(region.block_states(), index);
+                let block = source_palette.get(palette).context("legacy appearance palette index is invalid")?;
+                if let Some((base, actual)) = legacy_appearance_material(tile, Some(world.provenance().source_minecraft_data_version()), block, &palette_materials[palette])? {
+                    let layer = tile_entity_layer_index(tile, position.y, resolved_bounds.min_y).context("legacy appearance has no layer coordinate")?;
+                    replace_legacy_block_material(&mut material_counts, region_name, layer, Some(&base), Some(&actual), false)?;
+                }
+            }
+        }
 
         regions.push(RegionSummaryOutput {
             name: region_name.to_owned(),
@@ -423,7 +439,7 @@ pub(crate) fn build_stats_output_from_canonical(
     );
     Ok(StableStructureOutput {
         derived: Some(derived),
-        material_semantics: "minecraft-inventory-v5".into(),
+        material_semantics: format!("minecraft-inventory-v8:{}", crate::game_data::active_context()?.content_id),
         metadata,
         structure_stats: StructureStatsOutput {
             scope: ResolvedScope::All.to_output(resolved_bounds.min_y),
@@ -568,6 +584,7 @@ fn build_structure_output_with_scope_cache(
     include_container_items: bool,
     include_scope_cache: bool,
 ) -> Result<StableStructureOutput> {
+    material_catalog::ensure_available()?;
     let bounds = compute_bounds(root);
     let metadata = build_metadata_output(root, bounds);
     let resolved_bounds = bounds.unwrap_or_else(|| fallback_bounds(&metadata));
@@ -609,8 +626,8 @@ fn build_structure_output_with_scope_cache(
         let length = i64::from(region.size.z).unsigned_abs() as usize;
         let nbits = bits_for_palette(region.block_state_palette.len());
 
-        let palette_materials = region.block_state_palette.iter().map(|block| material_catalog::requirements_for_version(&block.name, &block.properties, root.minecraft_data_version)).collect::<Vec<_>>();
-        let palette_non_items = region.block_state_palette.iter().map(|block| material_catalog::non_item_status_for_version(&block.name, root.minecraft_data_version)).collect::<Vec<_>>();
+        let palette_materials = region.block_state_palette.iter().map(|block| material_catalog::requirements_for_version(&block.name, &block.properties, root.minecraft_data_version)).collect::<Result<Vec<_>>>()?;
+        let palette_non_items = region.block_state_palette.iter().map(|block| material_catalog::non_item_status_for_version(&block.name, &block.properties, root.minecraft_data_version)).collect::<Result<Vec<_>>>()?;
         // Packed indices are ordered by storage Y. Count a whole palette layer
         // before updating string-keyed summaries: repeated blocks must not
         // allocate identifiers or perform five tree lookups for every voxel.
@@ -658,22 +675,41 @@ fn build_structure_output_with_scope_cache(
                 }
             }
         };
-        for_each_palette_index(
-            &region.block_states,
-            volume,
-            nbits,
-            region.block_state_palette.len(),
-            |index, palette_index| {
+        let palette_layout = choose_palette_packing(&region.block_states, volume, nbits, region.block_state_palette.len())?;
+        for index in 0..volume {
+                let palette_index = palette_layout.palette_index(&region.block_states, index);
                 let y = index / (width * length);
                 if y != storage_y {
                     accumulate_layer(storage_y, &mut layer_palette_counts);
                     storage_y = y;
                 }
                 if let Some(count) = layer_palette_counts.get_mut(palette_index) { *count += 1; }
-                Ok(())
-            },
-        )?;
+        }
         accumulate_layer(storage_y, &mut layer_palette_counts);
+        for tile in &region.tile_entities {
+            if root.minecraft_data_version.is_some_and(|source| source < 1519) && is_legacy_flower_pot(tile) {
+                let layer = tile_entity_layer_index(tile, region.position.y, resolved_bounds.min_y)
+                    .context("legacy flower pot has no numeric layer coordinate")?;
+                if resolved_scope.matches(region_name, layer) {
+                    let index = legacy_tile_storage_index(tile, &region.size)?;
+                    let palette = palette_layout.palette_index(&region.block_states, index);
+                    let baseline = palette_materials.get(palette).context("legacy flower pot palette index is invalid")?;
+                    let actual = legacy_flower_pot_material(tile, root.minecraft_data_version)?;
+                    correct_legacy_flower_pot_material(&mut material_counts, region_name, layer, baseline, actual.as_deref(), include_scope_cache)?;
+                }
+            }
+            if legacy_appearance_kind(tile, root.minecraft_data_version).is_some() {
+                let layer = tile_entity_layer_index(tile, region.position.y, resolved_bounds.min_y).context("legacy appearance has no layer coordinate")?;
+                if resolved_scope.matches(region_name, layer) {
+                    let index = legacy_tile_storage_index(tile, &region.size)?;
+                    let palette = palette_layout.palette_index(&region.block_states, index);
+                    let block = region.block_state_palette.get(palette).context("legacy appearance palette index is invalid")?;
+                    if let Some((base, actual)) = legacy_appearance_material(tile, root.minecraft_data_version, block, &palette_materials[palette])? {
+                        replace_legacy_block_material(&mut material_counts, region_name, layer, Some(&base), Some(&actual), include_scope_cache)?;
+                    }
+                }
+            }
+        }
 
         if include_container_items {
             scan_region_container_items(
@@ -681,6 +717,7 @@ fn build_structure_output_with_scope_cache(
                 region,
                 &resolved_scope,
                 resolved_bounds.min_y,
+                root.minecraft_data_version,
                 &mut material_counts,
                 &mut container_scan,
             );
@@ -741,7 +778,7 @@ fn build_structure_output_with_scope_cache(
     ));
     Ok(StableStructureOutput {
         derived,
-        material_semantics: "minecraft-inventory-v5".into(),
+        material_semantics: format!("minecraft-inventory-v8:{}", crate::game_data::active_context()?.content_id),
         metadata,
         structure_stats: StructureStatsOutput {
             scope: resolved_scope.to_output(resolved_bounds.min_y),
@@ -832,10 +869,12 @@ fn scan_region_container_items(
     region: &crate::nbt::RegionNbt,
     scope: &ResolvedScope,
     min_world_y: i32,
+    source_data_version: Option<i32>,
     material_counts: &mut BTreeMap<String, MaterialAccumulator>,
     scan: &mut ContainerScanOutput,
 ) {
     for (index, tile_entity) in region.tile_entities.iter().enumerate() {
+        if source_data_version.is_some_and(|version| version < 1519) && is_legacy_flower_pot(tile_entity) { continue; }
         let layer_index = tile_entity_layer_index(tile_entity, region.position.y, min_world_y);
         let in_scope = match scope {
             ResolvedScope::All => true,
@@ -868,7 +907,7 @@ fn scan_region_container_items(
         for stack in stacks {
             entry_scan.item_stacks_scanned += 1;
             if stack.id == "minecraft:air" || material_catalog::item(&stack.id).is_none() {
-                entry_scan.warnings.push(format!("{} × {} is not a registered Minecraft 26.3 inventory item; excluded from materials", stack.id, stack.count));
+                entry_scan.warnings.push(format!("{} × {} is not a registered inventory item in the selected game data; excluded from materials", stack.id, stack.count));
                 continue;
             }
             let material = material_counts.entry(stack.id.clone()).or_default();
@@ -1011,6 +1050,128 @@ fn parse_item_stack(value: &NbtValue) -> Option<ContainerStack> {
         count,
         has_custom_stack_size: map.get("components").and_then(|value| match value { NbtValue::Compound(c) => c.get("minecraft:max_stack_size"), _ => None }).is_some(),
     })
+}
+
+fn is_legacy_flower_pot(value: &NbtValue) -> bool {
+    let NbtValue::Compound(fields) = value else { return false; };
+    matches!(fields.get("id").and_then(nbt_string), Some("FlowerPot" | "minecraft:flower_pot"))
+}
+
+// Before flattening, the plant is in TileEntityFlowerPot.Item/Data, not a
+// palette suffix and not container contents. Resolve that version's real
+// numeric/meta registry; never borrow another release's plant/item mapping.
+fn legacy_flower_pot_material(value: &NbtValue, source_data_version: Option<i32>) -> Result<Option<String>> {
+    let Some(source) = source_data_version.filter(|version| *version < 1519) else { return Ok(None); };
+    if !is_legacy_flower_pot(value) { return Ok(None); }
+    let NbtValue::Compound(fields) = value else { unreachable!() };
+    let Some(raw) = get_case_insensitive(fields, "Item") else { return Ok(None); };
+    let registry = crate::block_database::database()?.registry_by_data_version(source)?;
+    let numeric = match raw {
+        NbtValue::String(id) if id.is_empty() || id == "minecraft:air" => return Ok(None),
+        NbtValue::String(id) => registry.legacy_item_ids.iter().find(|(_, name)| *name == id).map(|(number, _)| number.clone())
+            .ok_or_else(|| anyhow::anyhow!("legacy flower pot item {id} has no exact source-version registry mapping"))?,
+        _ => match nbt_i64(raw) { Some(0) => return Ok(None), Some(number) => number.to_string(), None => bail!("legacy flower pot Item must be a registry ID or numeric ID") },
+    };
+    let data = match get_case_insensitive(fields, "Data") {
+        None => 0,
+        Some(value) => nbt_i64(value).ok_or_else(|| anyhow::anyhow!("legacy flower pot Data is not numeric"))?,
+    };
+    let item = registry.legacy_items.get(&format!("{numeric}:{data}"))
+        .ok_or_else(|| anyhow::anyhow!("legacy flower pot {numeric}:{data} has no exact source-version item variant"))?;
+    if item == "minecraft:air" { return Ok(None); }
+    if material_catalog::item(item).is_none() { bail!("selected game data has no inventory item for legacy flower pot plant {item}"); }
+    Ok(Some(item.clone()))
+}
+
+fn legacy_appearance_kind(value: &NbtValue, source_data_version: Option<i32>) -> Option<&'static str> {
+    let source = source_data_version.filter(|version| *version < 1519)?;
+    let NbtValue::Compound(fields) = value else { return None; };
+    let id = get_case_insensitive(fields, "id").and_then(nbt_string)?.rsplit(':').next()?;
+    if id.eq_ignore_ascii_case("bed") && source >= 1125 { Some("bed") }
+    else if id.eq_ignore_ascii_case("banner") { Some("banner") }
+    else if id.eq_ignore_ascii_case("skull") { Some("skull") }
+    else { None }
+}
+
+fn legacy_tile_storage_index(value: &NbtValue, size: &crate::nbt::Vec3i) -> Result<usize> {
+    let NbtValue::Compound(fields) = value else { bail!("legacy appearance is not a block entity"); };
+    let coordinate = |key: &str, axis: i32| -> Result<usize> {
+        let value = get_case_insensitive(fields, key).and_then(nbt_i64)
+            .with_context(|| format!("legacy appearance has no numeric {key} coordinate"))?;
+        let value = i32::try_from(value).context("legacy appearance coordinate exceeds region range")?;
+        region_coord_to_storage_coord(value, axis).with_context(|| format!("legacy appearance {key} coordinate leaves its region"))
+    };
+    let (x, y, z) = (coordinate("x", size.x)?, coordinate("y", size.y)?, coordinate("z", size.z)?);
+    let width = i64::from(size.x).unsigned_abs() as usize;
+    let length = i64::from(size.z).unsigned_abs() as usize;
+    Ok((y * length + z) * width + x)
+}
+
+fn legacy_appearance_material(value: &NbtValue, source_data_version: Option<i32>, block: &crate::model::BlockStateNbt,
+    baseline: &[(String, u64)]) -> Result<Option<(String, String)>> {
+    let Some(kind) = legacy_appearance_kind(value, source_data_version) else { return Ok(None); };
+    // Head halves have already been excluded by the shared placement rules.
+    // Their NBT must not add a second bed, or move the foot's layer attribution.
+    if baseline.is_empty() { return Ok(None); }
+    let source = source_data_version.context("legacy appearance has no source version")?;
+    if material_catalog::legacy_appearance_kind(&block.name, &block.properties, source)? != Some(kind) {
+        bail!("legacy {kind} block entity does not match its source palette cell {}", block.name);
+    }
+    if baseline.len() != 1 || baseline[0].1 != 1 { bail!("legacy {kind} has inconsistent base placement requirements"); }
+    let NbtValue::Compound(fields) = value else { unreachable!() };
+    let field = match kind { "bed" => "color", "banner" => "Base", "skull" => "SkullType", _ => unreachable!() };
+    // Legacy NBTTagCompound numeric getters return zero for a present tag of
+    // the wrong type. Missing bed colour is different: its constructor default
+    // remains intact, and comes from the exported target TileEntityBed instance.
+    let variant = get_case_insensitive(fields, field).map(|value| {
+        let value = nbt_i64(value).unwrap_or(0);
+        if kind == "skull" { (value as i8) as i64 } else { (value as i32) as i64 }
+    });
+    let Some(actual) = material_catalog::legacy_appearance_item(kind, variant, source)? else { return Ok(None); };
+    let base = baseline[0].0.clone();
+    Ok((base != actual).then_some((base, actual)))
+}
+
+fn correct_legacy_flower_pot_material(counts: &mut BTreeMap<String, MaterialAccumulator>, region: &str, layer: i32,
+    baseline: &[(String, u64)], actual: Option<&str>, include_scope_cache: bool) -> Result<()> {
+    if baseline.iter().filter(|(item, count)| item == "minecraft:flower_pot" && *count == 1).count() != 1
+        || baseline.len() > 2 || baseline.iter().any(|(_, count)| *count != 1) {
+        bail!("legacy flower pot has inconsistent base placement requirements");
+    }
+    let base = baseline.iter().find(|(item, _)| item != "minecraft:flower_pot").map(|(item, _)| item.as_str());
+    replace_legacy_block_material(counts, region, layer, base, actual, include_scope_cache)
+}
+
+fn replace_legacy_block_material(counts: &mut BTreeMap<String, MaterialAccumulator>, region: &str, layer: i32,
+    base: Option<&str>, actual: Option<&str>, include_scope_cache: bool) -> Result<()> {
+    if base == actual { return Ok(()); }
+    if let Some(base) = base {
+    let remove_base = {
+        let old = counts.get_mut(base).with_context(|| format!("legacy material correction has no counted base {base}"))?;
+        old.block_count = old.block_count.checked_sub(1).context("legacy material correction exceeds the base block count")?;
+        let count = old.region_counts.get_mut(region).context("legacy material correction has no counted region")?;
+        *count = count.checked_sub(1).context("legacy material correction exceeds the region count")?;
+        if *count == 0 { old.region_counts.remove(region); }
+        let count = old.layer_counts.get_mut(&layer).context("legacy material correction has no counted layer")?;
+        *count = count.checked_sub(1).context("legacy material correction exceeds the layer count")?;
+        if *count == 0 { old.layer_counts.remove(&layer); }
+        if include_scope_cache {
+            let key = (region.to_owned(), Some(layer));
+            let scope = old.scope_counts.get_mut(&key).context("legacy material correction has no counted scope")?;
+            scope.block_count = scope.block_count.checked_sub(1).context("legacy material correction exceeds the scope count")?;
+            if scope.block_count == 0 && scope.container_item_count == 0 { old.scope_counts.remove(&key); }
+        }
+        old.block_count == 0 && old.container_item_count == 0
+    };
+    if remove_base { counts.remove(base); }
+    }
+    let Some(actual) = actual else { return Ok(()); };
+    let material = get_or_insert_material(counts, actual);
+    material.block_count += 1;
+    increment_string_count(&mut material.region_counts, region, 1);
+    *material.layer_counts.entry(layer).or_insert(0) += 1;
+    if include_scope_cache { material_scope_count(material, region, Some(layer)).block_count += 1; }
+    Ok(())
 }
 
 fn parse_pot_item(value: &NbtValue) -> Option<ContainerStack> {

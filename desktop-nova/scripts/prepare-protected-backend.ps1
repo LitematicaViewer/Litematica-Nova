@@ -90,12 +90,11 @@ try {
             throw 'A resource map still references the old private backend; use only the public staging and signed ciphertext.'
         }
     }
+    $defaultDataReady = Test-Path -LiteralPath (Join-Path $repo 'pack-in/game-data/default/manifest.json') -PathType Leaf
     $runtimeArchive = Join-Path $repo 'pack-in/minecraft-runtime-26.3.zip'
-    $runtimeManifest = Get-Content -LiteralPath (Join-Path $repo 'pack-in/minecraft-runtime-26.3.manifest.json') -Raw | ConvertFrom-Json
-    if ($runtimeManifest.schema -ne 'nova.minecraft-runtime-resources.v1' -or $runtimeManifest.java_class_entries -ne 0 -or $runtimeManifest.executable_entries -ne 0) { throw 'The vanilla runtime resource manifest is invalid.' }
-    if ((Get-FileHash -LiteralPath $runtimeArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $runtimeManifest.archive_sha256) { throw 'The vanilla runtime resource archive changed.' }
-    foreach ($requiredInput in @('data/blockdb/blocks.dat.z', 'data/blockdb/plains-tints.dat.z', 'pack-in/game-icons/block.zip')) {
-        if (-not (Test-Path -LiteralPath (Join-Path $repo $requiredInput) -PathType Leaf)) { throw "Missing required compile input: $requiredInput" }
+    $extractDefaultSource = -not $defaultDataReady -and (Test-Path -LiteralPath $runtimeArchive -PathType Leaf)
+    if (-not $defaultDataReady -and -not $extractDefaultSource -and -not $Development -and -not $community) {
+        throw 'Official bundles require a generated default game-data package or its approved source archive.'
     }
     if ($CheckOnly -or $ReuseExisting) {
         if ($ReuseExisting) {
@@ -136,6 +135,10 @@ try {
         foreach ($name in $runtimeNames) { Copy-IfChanged (Join-Path $packageRoot $name) (Join-Path $runtimeStage $name) | Out-Null }
     }
     if ($ReuseExisting) { return }
+    if ($extractDefaultSource) {
+    $runtimeManifest = Get-Content -LiteralPath (Join-Path $repo 'pack-in/minecraft-runtime-26.3.manifest.json') -Raw | ConvertFrom-Json
+    if ($runtimeManifest.schema -ne 'nova.minecraft-runtime-resources.v1' -or $runtimeManifest.java_class_entries -ne 0 -or $runtimeManifest.executable_entries -ne 0) { throw 'The vanilla runtime resource manifest is invalid.' }
+    if ((Get-FileHash -LiteralPath $runtimeArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $runtimeManifest.archive_sha256) { throw 'The vanilla runtime resource archive changed.' }
     $runtimeRoot = Join-Path $repo 'data/mc26'
     New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
     $archive = [IO.Compression.ZipFile]::OpenRead($runtimeArchive)
@@ -162,8 +165,8 @@ try {
     $jar = [IO.Compression.ZipFile]::OpenRead((Join-Path $runtimeRoot '26.3/client.jar'))
     try { foreach ($entry in $jar.Entries) { if ($entry.FullName -match '(?i)\.(class|java|dll|exe|rs|wgsl|ll|pdb)$' -or ($entry.FullName -match '(?i)^META-INF/' -and $entry.FullName -cne 'META-INF/LICENSE')) { throw 'The Minecraft asset jar contains implementation/executable material.' } } }
     finally { $jar.Dispose() }
-    # The browser/version database is embedded in the public Core executable.
-    # Verify its concrete tint sidecar before compiling, not after packaging.
+    # The browser/version adapter is a runtime resource in the common data package.
+    # Verify its concrete tint sidecar before importing, not after packaging.
     $verifyBlockData = @'
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto'), zlib = require('node:zlib');
 const directory = path.join(process.argv[2], 'data', 'blockdb');
@@ -175,6 +178,7 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
 '@
     $verifyBlockData | & node --input-type=commonjs - $repo
     if ($LASTEXITCODE -ne 0) { throw 'The required embedded block-data resources are missing or mismatched.' }
+    }
     # Keep public helper and desktop artifacts free of local checkout/cache paths.
     # The private module was separately compiled and protected in its private environment.
     $env:CARGO_ENCODED_RUSTFLAGS = @(
@@ -192,6 +196,10 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
     $coreFeatures = if ($localRuntime) { 'public-beta,development-runtime' } else { 'public-beta' }
     & cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir $coreTarget --no-default-features --features $coreFeatures --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
     if ($LASTEXITCODE -ne 0) { throw 'Public Fast/core/stockpile compilation failed.' }
+    $dataArgs = @('--core', (Join-Path $coreTarget 'release/litematica_core.exe'))
+    if ($Development -or $community) { $dataArgs += '--optional' }
+    & node (Join-Path $PSScriptRoot 'prepare-default-game-data.mjs') @dataArgs
+    if ($LASTEXITCODE -ne 0) { throw 'The default game data package could not be prepared by the common importer.' }
     if (-not $community) {
     $loaderArgs = @('build','--locked','--release','--manifest-path','tools/nova-protected-loader/Cargo.toml','--target-dir',$loaderTarget,'--bins')
     if ($localRuntime) { $loaderArgs += @('--features','development-runtime') }

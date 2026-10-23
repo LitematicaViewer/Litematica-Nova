@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
+import { useI18n } from "../../i18n";
 import { displayPathText } from "../../../src/business/facade";
 import { displayFilePath } from "../../../src/business/facade";
 import { X } from "lucide-react";
@@ -41,14 +43,11 @@ function formatSize(numBytes: number): string {
     value /= 1024.0;
     index++;
   }
-  return index === 0 ? `${Math.floor(value)} ${units[index]}` : `${value.toFixed(1)} ${units[index]}`;
+  return index === 0 ? `${new Intl.NumberFormat(getUiLocale()).format(Math.floor(value))} ${units[index]}` : `${new Intl.NumberFormat(getUiLocale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value)} ${units[index]}`;
 }
 
 function formatDate(timestamp: number): string {
-  if (!timestamp) return "-";
-  const d = new Date(timestamp);
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return timestamp ? new Intl.DateTimeFormat(getUiLocale(), { dateStyle: "short", timeStyle: "short" }).format(timestamp) : "-";
 }
 
 function formatRedenDate(timestamp?: number): string {
@@ -86,10 +85,11 @@ export async function openRedenLibraryWithWindowBehavior(showOverlay: () => void
 }
 
 function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
-  const [redenQuery, setRedenQuery] = useState("刷石机");
+  useI18n();
+  const [redenQuery, setRedenQuery] = useState(t("library.exampleCobblestoneGenerator"));
   const [redenResults, setRedenResults] = useState<RedenMachine[]>([]);
   const [redenDetail, setRedenDetail] = useState<RedenMachine | null>(null);
-  const [redenStatus, setRedenStatus] = useState("");
+  const [redenStatus, setRedenStatus] = useState<UiMessage>("");
   const [redenBusy, setRedenBusy] = useState("");
   const [redenSizes, setRedenSizes] = useState<RedenSizes>({});
   const [providerId, setProviderId] = useState("reden");
@@ -104,7 +104,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
   const cancelRequest = () => {
     const id = request.current; request.current = null; setRedenBusy(""); setSearchDirty(false);
     if (id) void cancelOnlineRequest(id).catch(() => undefined);
-    setRedenStatus("已取消等待任务；不再新增该任务的网站请求。");
+    setRedenStatus(message("library.onlineRequestCancelled"));
   };
   useEffect(() => () => { if (request.current) void cancelOnlineRequest(request.current).catch(() => undefined); }, []);
   useEffect(() => {
@@ -116,7 +116,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
   const handleRedenSearch = async () => {
     const query = redenQuery.trim();
     if (!query) {
-      setRedenStatus("请输入搜索关键词。");
+      setRedenStatus(message("library.enterSearchQuery"));
       return;
     }
     const id = beginRequest(); setSearchDirty(false); setRedenBusy("search");
@@ -127,9 +127,9 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
       if (request.current !== id) return;
       const results = response.d || [];
       setRedenResults(results);
-      setRedenStatus(results.length ? `${provider.name}：本页 ${results.length} 个结果。` : `${provider.name}：没有结果。`);
+      setRedenStatus(results.length ? message("library.providerResultCount", { provider: provider.name, count: results.length }) : message("library.providerNoResults", { provider: provider.name }));
     } catch (err: any) {
-      if (request.current === id) setRedenStatus(`${provider.name} 查询失败：${String(err)}`);
+      if (request.current === id) setRedenStatus(message("library.providerSearchFailed", { provider: provider.name, error: String(err) }));
     } finally {
       if (request.current === id) { request.current = null; setRedenBusy(""); }
     }
@@ -149,9 +149,9 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
         ySize: detail.hasY ? rules.y.min : undefined,
         zSize: detail.hasZ ? rules.z.min : undefined,
       });
-      setRedenStatus(`${provider.name}：已加载详情 ${detail.name || detail.key}。`);
+      setRedenStatus(message("library.providerDetailsLoaded", { provider: provider.name, name: detail.name || detail.key }));
     } catch (err: any) {
-      if (request.current === id) setRedenStatus(`${provider.name} 详情失败：${String(err)}`);
+      if (request.current === id) setRedenStatus(message("library.providerDetailsFailed", { provider: provider.name, error: String(err) }));
     } finally {
       if (request.current === id) { request.current = null; setRedenBusy(""); }
     }
@@ -168,16 +168,16 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
     if (!isCurrent()) return;
     if (output.kind === "external_link") {
       const drive = ["quark", "baidu"].includes(output.provider);
-      const label = output.provider === "quark" ? "夸克网盘" : output.provider === "baidu" ? "百度网盘" : ONLINE_PROJECTION_PROVIDERS.find(item => item.id === output.provider)?.name || "原站";
+      const label = output.provider === "quark" ? t("library.quarkDrive") : output.provider === "baidu" ? t("library.baiduDrive") : ONLINE_PROJECTION_PROVIDERS.find(item => item.id === output.provider)?.name || t("library.originalSite");
       setExternalLink({ url: output.url, label, drive });
-      setRedenStatus("此附件需在原站下载，是否打开浏览器？");
+      setRedenStatus(message("library.externalDownloadPrompt"));
       return;
     }
     try {
       const warning = await importRedenPath(output.path);
-      if (isCurrent()) setRedenStatus(`${provider.name}：已${generated ? "生成、" : ""}下载并入库 ${output.file_name} (${formatSize(output.bytes)})。${warning || ""}`);
+      if (isCurrent()) setRedenStatus(message(generated ? "library.providerGeneratedImported" : "library.providerImported", { provider: provider.name, name: output.file_name, size: formatSize(output.bytes), warning: warning || "" }));
     } catch (error) {
-      if (isCurrent()) setRedenStatus(`${provider.name}：已下载 ${output.file_name}，但入库失败：${String(error)}。文件保留在 ${displayFilePath(output.path)}`);
+      if (isCurrent()) setRedenStatus(message("library.providerImportFailed", { provider: provider.name, name: output.file_name, error: String(error), path: displayFilePath(output.path) }));
     }
   };
 
@@ -186,9 +186,9 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
     setRedenBusy("external:open");
     try {
       await openExternalUrl(externalLink.url);
-      setRedenStatus(`已在系统浏览器打开 ${externalLink.label}；下载后请从本地导入。`);
+      setRedenStatus(message("library.externalBrowserOpened", { site: externalLink.label }));
       setExternalLink(null);
-    } catch (error) { setRedenStatus(`系统浏览器打开失败：${String(error)}`); }
+    } catch (error) { setRedenStatus(message("library.externalBrowserFailed", { error: String(error) })); }
     finally { setRedenBusy(""); }
   };
 
@@ -206,7 +206,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
       if (request.current !== id) return;
       await finishRedenDownload(output, false, id);
     } catch (err: any) {
-      if (request.current === id) setRedenStatus(`${provider.name} 下载失败：${String(err)}`);
+      if (request.current === id) setRedenStatus(message("library.providerDownloadFailed", { provider: provider.name, error: String(err) }));
     } finally {
       if (request.current === id) { request.current = null; setRedenBusy(""); }
     }
@@ -215,7 +215,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
   const handleRedenDownloadParametric = async (detail: RedenMachine) => {
     const errors = validateRedenSizes(detail, redenSizes);
     if (errors.length) {
-      setRedenStatus(`RedenMC 尺寸不合法：${errors.join("；")}`);
+      setRedenStatus(message("library.invalidRedenDimensions", { error: errors.join("；") }));
       return;
     }
     setRedenBusy("download:parametric");
@@ -226,7 +226,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
       if (request.current !== id) return;
       await finishRedenDownload(output, true, id);
     } catch (err: any) {
-      if (request.current === id) setRedenStatus(`${provider.name} 重复结构下载失败：${String(err)}`);
+      if (request.current === id) setRedenStatus(message("library.providerStructureFailed", { provider: provider.name, error: String(err) }));
     } finally {
       if (request.current === id) { request.current = null; setRedenBusy(""); }
     }
@@ -234,47 +234,47 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
 
   const statusClassName = [
     "subwindow-status-text",
-    redenStatus.includes("失败") || redenStatus.includes("不合法") ? "subwindow-status-text-error" : "",
+    (typeof redenStatus === "string" ? /失败|不合法|failed|invalid/i.test(redenStatus) : /Failed|invalid/i.test(redenStatus.key)) ? "subwindow-status-text-error" : "",
   ].filter(Boolean).join(" ");
 
   return (
     <section className="subwindow-panel-shell library-aux-panel library-reden-panel">
       <div className="subwindow-title-bar">
         <div className="subwindow-title-stack">
-          <h3 className="subwindow-title">在线投影资源库</h3>
+          <h3 className="subwindow-title">{t("library.onlineLibraryTitle")}</h3>
         </div>
-        {onClose ? <Button className="subwindow-close-button" type="button" aria-label="关闭窗口" onClick={onClose}><X size={18} aria-hidden="true" /></Button> : null}
+        {onClose ? <Button className="subwindow-close-button" type="button" aria-label={t("library.closeWindow")} onClick={onClose}><X size={18} aria-hidden="true" /></Button> : null}
       </div>
 
       <div className="subwindow-body">
-        <div className="subwindow-toolbar subwindow-wrap-row" aria-label="在线资源来源">
+        <div className="subwindow-toolbar subwindow-wrap-row" aria-label={t("library.onlineSources")}>
           {ONLINE_PROJECTION_PROVIDERS.map((item) => <Button key={item.id} variant={item.id === providerId ? "default" : "ghost"}
             aria-pressed={item.id === providerId} onClick={() => { cancelRequest(); setProviderId(item.id); setRedenResults([]); setRedenDetail(null); setExternalLink(null); setRedenStatus(""); }}>{item.name}</Button>)}
         </div>
         {provider.mode === "website" ? <section className="reden-detail-stack">
-          <h4>{provider.name} · 仅网页访问</h4>
+          <h4>{provider.name} {t("library.webOnlySuffix")}</h4>
           <p>{provider.url}</p>
-          <Button disabled={!!redenBusy} onClick={() => setExternalLink({ url: provider.url, label: provider.name, drive: false })}>在系统浏览器打开原站</Button>
+          <Button disabled={!!redenBusy} onClick={() => setExternalLink({ url: provider.url, label: provider.name, drive: false })}>{t("library.openOriginalSite")}</Button>
         </section> : <>
         <div className="subwindow-toolbar subwindow-wrap-row">
           <Input
             className="input nova-input-flex"
             value={redenQuery}
-            aria-label="搜索在线投影"
-            placeholder="搜索机器，例如：刷石机、世界吞噬者"
+            aria-label={t("library.searchOnlineSchematics")}
+            placeholder={t("library.onlineSearchPlaceholder")}
             onChange={(event) => { setRedenQuery(event.target.value); setSearchDirty(true); }}
             onKeyDown={(event) => { if (event.key === "Enter") handleRedenSearch(); }}
           />
           <Button disabled={!!redenBusy} onClick={handleRedenSearch}>
-            {redenBusy === "search" ? "搜索中..." : "搜索"}
+            {redenBusy === "search" ? t("library.searching") : t("library.search")}
           </Button>
-          {redenBusy && <Button variant="ghost" onClick={cancelRequest}>取消等待任务</Button>}
-          <Button variant="ghost" onClick={() => setExternalLink({ url: provider.url, label: provider.name, drive: false })}>原站入口</Button>
+          {redenBusy && <Button variant="ghost" onClick={cancelRequest}>{t("library.cancelWaiting")}</Button>}
+          <Button variant="ghost" onClick={() => setExternalLink({ url: provider.url, label: provider.name, drive: false })}>{t("library.originalSiteEntry")}</Button>
         </div>
 
         <div className="reden-content-grid">
           <div className="reden-results-pane">
-            <div className="reden-pane-title">搜索结果</div>
+            <div className="reden-pane-title">{t("library.searchResults")}</div>
             <ScrollArea className="library-online-results-scroll"><div className="reden-result-list">
               {redenResults.length > 0 ? redenResults.map((item) => {
                 const resultClassName = [
@@ -301,21 +301,20 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
                           <span className="lib-card-title">{item.name || item.key}</span>
                         </div>
                       </div>
-                      <div className="lib-card-text">来源：{provider.name} · 下载遵循原站门禁</div>
-                      <div className="lib-card-text">标签：{redenTags(item)}</div>
+                      <div className="lib-card-text">{t("library.sourceAccess", { provider: provider.name })}</div>
+                      <div className="lib-card-text">{t("library.tagsLabel")}{redenTags(item)}</div>
                       <div className="reden-result-row">
-                        <div className="reden-result-meta">作者：{item.author?.username || "-"}</div>
-                        <div className="reden-result-meta reden-result-stats">下载：{item.downloads ?? "-"} / 收藏：{item.upVotes ?? "-"}</div>
+                        <div className="reden-result-meta">{t("library.authorLabel")}{item.author?.username || "-"}</div>
+                        <div className="reden-result-meta reden-result-stats">{t("library.downloadsLabel")}{item.downloads ?? "-"} {t("library.favoritesLabel")}{item.upVotes ?? "-"}</div>
                       </div>
-                      <div className="reden-result-date">更新：{formatRedenDate(item.updatedAt)}</div>
+                      <div className="reden-result-date">{t("library.updatedLabel")}{formatRedenDate(item.updatedAt)}</div>
                       {redenSummary(item) && <div className="reden-result-summary">{redenSummary(item).slice(0, 120)}</div>}
                     </div>
                   </Button>
                 );
               }) : (
                 <div className="subwindow-empty-state">
-                  暂无结果。请输入关键词后开始搜索。
-                </div>
+                  {t("library.noSearchResults")}</div>
               )}
             </div></ScrollArea>
           </div>
@@ -325,16 +324,16 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
               <div className="reden-detail-stack">
                 <div>
                   <div className="reden-detail-title">{redenDetail.name || redenDetail.key}</div>
-                  <div className="reden-detail-meta">ID：{redenDetail.key} · 类型：{redenDetail.type || "-"} · 作者：{redenDetail.author?.username || "-"}</div>
+                  <div className="reden-detail-meta">ID：{redenDetail.key} {t("library.typeLabel")}{redenDetail.type || "-"} {t("library.authorInlineLabel")}{redenDetail.author?.username || "-"}</div>
                   {redenSummary(redenDetail) && <div className="reden-detail-summary">{redenSummary(redenDetail)}</div>}
-                  {redenDetail.pageUrl && <Button variant="ghost" onClick={() => setExternalLink({ url: redenDetail.pageUrl!, label: provider.name, drive: false })}>原始详情页</Button>}
-                  {providerId === "minemev" && <Button onClick={() => void finishRedenDownload({ kind: "external_link", provider: "minemev", url: redenDetail.pageUrl || provider.url })}>在原页下载</Button>}
-                  {redenDetail.downloadListAvailable && <Button disabled={!!redenBusy} onClick={() => void handleRedenDetail(redenDetail.key, true)}>获取下载附件</Button>}
+                  {redenDetail.pageUrl && <Button variant="ghost" onClick={() => setExternalLink({ url: redenDetail.pageUrl!, label: provider.name, drive: false })}>{t("library.originalDetails")}</Button>}
+                  {providerId === "minemev" && <Button onClick={() => void finishRedenDownload({ kind: "external_link", provider: "minemev", url: redenDetail.pageUrl || provider.url })}>{t("library.downloadOriginal")}</Button>}
+                  {redenDetail.downloadListAvailable && <Button disabled={!!redenBusy} onClick={() => void handleRedenDetail(redenDetail.key, true)}>{t("library.fetchAttachments")}</Button>}
                 </div>
 
                 {(redenDetail.attachments || []).length > 0 && (
                   <div className="reden-section-stack">
-                    <div className="reden-section-title">普通附件</div>
+                    <div className="reden-section-title">{t("library.normalAttachments")}</div>
                     {(redenDetail.attachments || []).map((attachment, index) => (
                       <div key={`${attachment.name}-${index}`} className="reden-attachment-row">
                         <div className="nova-flex-1">
@@ -342,7 +341,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
                           <div className="reden-attachment-meta">{attachment.size ? formatSize(attachment.size) : "-"} {attachment.description || ""}</div>
                         </div>
                         <Button disabled={!!redenBusy} onClick={() => handleRedenDownloadAttachment(redenDetail, index)}>
-                          {redenBusy === `download:${index}` ? "下载中..." : "下载并入库"}
+                          {redenBusy === `download:${index}` ? t("library.downloading") : t("library.downloadImport")}
                         </Button>
                       </div>
                     ))}
@@ -351,7 +350,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
 
                 {(redenDetail.hasX || redenDetail.hasY || redenDetail.hasZ) && (
                   <div className="reden-section-stack">
-                    <div className="reden-section-title">重复结构尺寸</div>
+                    <div className="reden-section-title">{t("library.repeatedDimensions")}</div>
                     <div className="reden-size-grid">
                       {(["x", "y", "z"] as const).map((axis) => {
                         const enabled = axis === "x" ? redenDetail.hasX : axis === "y" ? redenDetail.hasY : redenDetail.hasZ;
@@ -365,7 +364,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
                         ].filter(Boolean).join(" / ");
                         return (
                           <label key={axis} className="reden-size-field">
-                            <span>{axis.toUpperCase()} ({hint || "no rule"})</span>
+                            <span>{axis.toUpperCase()} ({hint || t("library.noDimensionRule")})</span>
                             <Input
                               className="input"
                               type="number"
@@ -377,13 +376,13 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
                       })}
                     </div>
                     <Button className="reden-parametric-button" disabled={!!redenBusy} onClick={() => handleRedenDownloadParametric(redenDetail)}>
-                      {redenBusy === "download:parametric" ? "生成下载中..." : "生成下载并入库"}
+                      {redenBusy === "download:parametric" ? t("library.generatingDownload") : t("library.generateDownloadImport")}
                     </Button>
                   </div>
                 )}
               </div>
             ) : (
-              <div className="subwindow-status-text reden-empty-detail">请选择左侧搜索结果查看详情。</div>
+              <div className="subwindow-status-text reden-empty-detail">{t("library.selectSearchResult")}</div>
             )}
           </ScrollArea>
         </div>
@@ -392,14 +391,14 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
         {redenStatus && (
           <footer className="reden-footer">
             <div className={statusClassName}>
-              {redenStatus}
+              {localizeMessage(redenStatus)}
             </div>
           </footer>
         )}
-        {externalLink && <Dialog title={`打开 ${externalLink.label}`} onClose={() => setExternalLink(null)} busy={redenBusy === "external:open"}
-          footer={<><Button variant="ghost" disabled={redenBusy === "external:open"} onClick={() => setExternalLink(null)}>取消</Button>
-            <Button disabled={redenBusy === "external:open"} onClick={() => void confirmExternalLink()}>确认并打开系统浏览器</Button></>}>
-          <p>{externalLink.drive ? "这是外部网盘网页，不是投影直链。应用不会绕过登录，也不会把网页下载成投影。" : "将在系统浏览器打开真实原站，登录、付费与验证仍由原站处理。"}</p>
+        {externalLink && <Dialog title={t("library.openNamed", { name: externalLink.label })} onClose={() => setExternalLink(null)} busy={redenBusy === "external:open"}
+          footer={<><Button variant="ghost" disabled={redenBusy === "external:open"} onClick={() => setExternalLink(null)}>{t("library.cancel")}</Button>
+            <Button disabled={redenBusy === "external:open"} onClick={() => void confirmExternalLink()}>{t("library.confirmExternalBrowser")}</Button></>}>
+          <p>{externalLink.drive ? t("library.externalDriveHint") : t("library.externalSiteHint")}</p>
           <p>{externalLink.url}</p>
         </Dialog>}
       </div>
@@ -411,8 +410,9 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
  * Overlay dialog form of the online projection library.
  */
 export function RedenLibraryDialog({ onClose }: { onClose: () => void }) {
+  useI18n();
   return (
-    <Dialog title="下载投影" width="lg" className="library-window-dialog" onClose={onClose}>
+    <Dialog title={t("library.downloadSchematic")} width="lg" className="library-window-dialog" onClose={onClose}>
       <RedenLibraryPanel />
     </Dialog>
   );
@@ -422,6 +422,7 @@ export function RedenLibraryDialog({ onClose }: { onClose: () => void }) {
  * Renders the standalone desktop window used for the online projection library.
  */
 export function RedenLibraryWindow() {
+  useI18n();
   const [themeId, setThemeId] = useState(currentThemeId);
 
   useLayoutEffect(() => {

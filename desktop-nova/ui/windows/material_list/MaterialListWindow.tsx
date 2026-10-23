@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
+import { useI18n } from "../../i18n";
 import { Profiler, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import {
@@ -36,6 +38,7 @@ const initialFileFromUrl = () => {
  * Standalone material export settings that follow the main shell theme.
  */
 export function MaterialListWindow() {
+  useI18n();
     const languageRevision = useSyncExternalStore(subscribeI18nChanges,getI18nRevision,getI18nRevision);
     const applicationRender = useSyncExternalStore(
         subscribeApplicationRender,
@@ -47,7 +50,7 @@ export function MaterialListWindow() {
     const [viewMode, setViewMode] = useState<"details" | "export">(() => new URLSearchParams(window.location.search).get("viewMode") === "export" ? "export" : "details");
     const [data, setData] = useState<StatsData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState("");
+    const [error, setError] = useState<UiMessage>("");
     const namedData = useMemo(() => data ? refreshStatisticsNames(data) : null,[data,languageRevision]);
     const renderOperation = useMemo(
         () => findRenderOperationForSource(currentFile, applicationRender),
@@ -115,15 +118,15 @@ export function MaterialListWindow() {
     return (
         <main className={["material-list-window", themeClassName(themeId)].filter(Boolean).join(" ")}>
             {!currentFile ? (
-                <div className="material-list-window-state">请先从主窗口选择投影并打开材料列表。</div>
+                <div className="material-list-window-state">{t("library.materialSelectFirst")}</div>
             ) : isLoading ? (
-                <div className="material-list-window-state">正在读取材料列表...</div>
+                <div className="material-list-window-state">{t("library.materialsLoading")}</div>
             ) : error ? (
-                <pre className="material-list-window-state material-list-window-error">{error}</pre>
+                <pre className="material-list-window-state material-list-window-error">{localizeMessage(error)}</pre>
             ) : namedData ? (
                 <Profiler id="material-list" onRender={recordStatisticsCommit}><MaterialListContent key={currentFile} data={namedData} currentFile={currentFile} viewMode={viewMode} onViewModeChange={setViewMode} standalone /></Profiler>
             ) : (
-                <div className="material-list-window-state">暂无材料数据。</div>
+                <div className="material-list-window-state">{t("library.noMaterials")}</div>
             )}
         </main>
     );

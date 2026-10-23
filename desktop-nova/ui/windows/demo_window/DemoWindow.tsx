@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
+import { useI18n } from "../../i18n";
 import { useEffect, useLayoutEffect, useState } from "react";
 
 import {
@@ -11,6 +13,7 @@ import {
  * Minimal standalone window used to verify child-window theme styling.
  */
 export function DemoWindow() {
+  useI18n();
     const [themeId, setThemeId] = useState(currentThemeId);
 
     useLayoutEffect(() => {
@@ -26,10 +29,9 @@ export function DemoWindow() {
         <main className={["subwindow-standalone-page", themeClassName(themeId)].filter(Boolean).join(" ")}>
             <div className="subwindow-title-bar">
                 <div className="subwindow-title-stack">
-                    <h2 className="subwindow-title">子窗口样式演示</h2>
+                    <h2 className="subwindow-title">{t("library.demoTitle")}</h2>
                     <p className="muted subwindow-subtitle">
-                        这个窗口独立于遮罩层，用于检查独立子窗口的主题、背景和边框效果。
-                    </p>
+                        {t("library.demoDescription")}</p>
                 </div>
             </div>
             <div className="subwindow-body">

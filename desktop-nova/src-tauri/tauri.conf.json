@@ -47,7 +47,7 @@
           "SimpChinese",
           "English"
         ],
-        "displayLanguageSelector": false
+        "displayLanguageSelector": true
       },
       "wix": {
         "upgradeCode": "30d2825f-22c4-594d-a998-8bbede2e81d3",
@@ -62,20 +62,14 @@
     "resources": {
       "../../pack-in/enumerator": "pack-in/enumerator",
       "../../pack-in/flake": "pack-in/flake",
-      "../../pack-in/lang/zh_cn.json": "pack-in/lang/zh_cn.json",
-      "../../pack-in/item-icons-26.3": "pack-in/item-icons-26.3",
       "../../data/generation-templates": "data/generation-templates",
-      "../../data/minecraft_blockstates": "data/minecraft_blockstates",
-      "gen/block-icons": "block",
       "../../bin/public-beta": "bin/viewer-backend",
       "../../tools/viewer-core/target/public-beta/release/stockpile_server.exe": "bin/stockpile-server/windows-x64/stockpile_server.exe",
       "../../tools/windows-thumbnail-provider/target/release/litematica_thumbnail.dll": "litematica_thumbnail.dll",
       "../../LICENSE": "licenses/LICENSE",
       "../../docs/THIRD_PARTY_UI.md": "licenses/THIRD_PARTY_UI.md",
       "../../docs/THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt",
-      "../../pack-in/materials/minecraft-26.3.json": "pack-in/materials/minecraft-26.3.json",
       "../../LICENSE-MIT": "licenses/LICENSE-MIT",
-      "../../data/mc26/26.3": "data/mc26/26.3",
       "../../licenses/BLOCK-DATABASE-RESOURCES.txt": "licenses/BLOCK-DATABASE-RESOURCES.txt"
     },
     "createUpdaterArtifacts": false,

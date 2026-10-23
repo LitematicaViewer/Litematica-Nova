@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use winit::{
     dpi::{PhysicalSize, Size},
     raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle},
-    window::{Window, WindowId},
+    window::{CursorGrabMode, Window, WindowId},
 };
 
 #[cfg(target_os = "macos")]
@@ -113,6 +113,27 @@ impl NativeViewportWindow {
         if let Some(window) = &self.native { window.focus_window(); }
         // Shared-view focus is applied by the Host's native presentation/input
         // lease; no cross-process NSResponder operation is performed here.
+    }
+
+    pub(crate) fn set_pointer_capture(&self, captured: bool) -> Result<()> {
+        if let Some(window) = &self.native {
+            if captured {
+                window.set_cursor_grab(CursorGrabMode::Locked)
+                    .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
+                    .context("capture viewport pointer")?;
+                window.set_cursor_visible(false);
+            } else {
+                let released = window.set_cursor_grab(CursorGrabMode::None);
+                window.set_cursor_visible(true);
+                released.context("release viewport pointer")?;
+            }
+            return Ok(());
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(shared) = &self.shared {
+            return shared.set_pointer_capture(captured).map_err(anyhow::Error::msg);
+        }
+        anyhow::bail!("native viewport pointer owner is unavailable")
     }
 
     pub(crate) fn request_inner_size<S: Into<Size>>(&self, size: S) -> Option<PhysicalSize<u32>> {

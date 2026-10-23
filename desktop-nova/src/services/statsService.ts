@@ -8,7 +8,7 @@ import {
   type MaterialWebExportOptions,
 } from "../platform/applicationOperations";
 import { writeTextFileAbsolute } from "./backend";
-import { translateBuildingType, resolveBlockDisplayName, subscribeI18nChanges } from "./i18n";
+import { translateBuildingType, resolveBlockDisplayName, subscribeI18nChanges, t, getUiLocale, getMinecraftTranslations, initI18n } from "./i18n";
 import { windowsPathKey } from "./filePathIdentity";
 
 export interface MaterialItem {
@@ -136,7 +136,7 @@ export function mapStructureStats(parsed: any, includeContainerItems = false): S
     regionCount: stats.total_regions ?? meta.region_count ?? 0,
     enclosingSize: meta.enclosing_size || { x: 0, y: 0, z: 0 },
     density,
-    buildingType: parsed.derived?.building?.building_type ? translateBuildingType(parsed.derived.building.building_type) : "未提供",
+    buildingType: parsed.derived?.building?.building_type ? translateBuildingType(parsed.derived.building.building_type) : t("native.stats.notProvided"),
     redstoneRatio: Number.isFinite(parsed.derived?.building?.redstone_ratio) ? parsed.derived.building.redstone_ratio : null,
     fluidRatio: Number.isFinite(parsed.derived?.building?.fluid_ratio) ? parsed.derived.building.fluid_ratio : null,
     entityCount: entitySum.total_entities || 0,
@@ -165,7 +165,7 @@ export async function loadStructureStats(filePath: string, includeContainerItems
   const pending = getProjectStats({ sourcePath: filePath, includeContainerItems, knownRevision: cached?.data.hasStructuralBlockCounts ? cached.revision : undefined }).then(analysis => {
     const received = performance.now();
     if (analysis.cache_unchanged) {
-      if (!cached || analysis.source_revision !== cached.revision) throw new Error("统计缓存已变化，请重新分析");
+      if (!cached || analysis.source_revision !== cached.revision) throw new Error(t("native.stats.cacheChanged"));
       cached.data.timing = { requestStarted: started, mappedAt: received, cacheReused: true };
       console.info(`[NOVA_STATS_TIMING] webview_request_roundtrip_ms=${(received - started).toFixed(3)} map_ms=0.000 cache_reused=true`);
       return cached.data;
@@ -197,6 +197,7 @@ export function materialDisplayName(material: Pick<MaterialItem, "id" | "name" |
 
 /** Keep quantities, channels, scopes and source revisions untouched. */
 export function refreshStatisticsNames(data: StatsData): StatsData {
+  data.buildingType = data.raw?.derived?.building?.building_type ? translateBuildingType(data.raw.derived.building.building_type) : t("native.stats.notProvided");
   for (const material of data.materials) material.name = materialDisplayName(material);
   for (const block of data.nonItemBlocks) block.name = materialDisplayName(block);
   return data;
@@ -208,7 +209,7 @@ subscribeI18nChanges(() => {
 
 export async function fetchMaterialRecipeCache(): Promise<void> {
   const status = await prepareMaterialRecipes("26.3");
-  if (status.status !== "available" || !status.has_recipes) throw new Error("26.3 配方缓存尚未就绪，请查看准备失败原因后重试");
+  if (status.status !== "available" || !status.has_recipes) throw new Error(t("native.stats.recipesPending"));
 }
 
 export function recordStatisticsCommit(id: string, phase: string, actualDuration: number, baseDuration: number, startTime: number, commitTime: number): void {
@@ -246,23 +247,23 @@ export function formatMaterialUnits(count: number, stackSize = 64): string {
   const items = remaining % stackSize;
 
   const parts: string[] = [];
-  if (boxOfBoxes) parts.push(`${boxOfBoxes}箱盒`);
-  if (boxes) parts.push(`${boxes}盒`);
-  if (stacks) parts.push(`${stacks}组`);
-  if (items || parts.length === 0) parts.push(`${items}个`);
+  if (boxOfBoxes) parts.push(t("native.units.boxOfBoxes", { count: boxOfBoxes }));
+  if (boxes) parts.push(t("native.units.boxes", { count: boxes }));
+  if (stacks) parts.push(t("native.units.stacks", { count: stacks }));
+  if (items || parts.length === 0) parts.push(t("native.units.items", { count: items }));
   return parts.join(" ");
 }
 
 export function formatMaterialQuantity(material: MaterialItem, count: number, asItems = false): string {
   const total = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
-  if (material.materialStatus === "no_item") return `${total.toLocaleString("zh-CN")} 方块`;
-  if (asItems || material.materialStatus === "unknown" || !material.canFitContainer || material.hasCustomStackSize) return `${total.toLocaleString("zh-CN")} 个`;
+  if (material.materialStatus === "no_item") return t("native.units.blocks", { count: total });
+  if (asItems || material.materialStatus === "unknown" || !material.canFitContainer || material.hasCustomStackSize) return t("native.units.items", { count: total });
   return formatMaterialUnits(total, material.stackSize);
 }
 
 export async function loadStructuralBlocks(filePath: string): Promise<StructuralBlockCount[]> {
   const data = await loadStructureStats(filePath);
-  if (!data.hasStructuralBlockCounts) throw new Error("统计核心缺少原始结构方块数据，请更新统计核心");
+  if (!data.hasStructuralBlockCounts) throw new Error(t("native.stats.structuralDataMissing"));
   return data.structuralBlocks;
 }
 
@@ -292,12 +293,12 @@ export async function exportMaterials(
   });
   if (!savePath) return false;
 
-  let csv = "\uFEFF名称,数字,统计数据\r\n";
+  let csv = `\uFEFF${t("native.stats.csvHeaders")}\r\n`;
   for (const material of materials) {
     if (material.materialStatus !== "item") continue;
     const total = Math.max(0, Math.floor(material.totalCount * multiplier));
     csv += [
-      csvEscape(material.name || material.id),
+      csvEscape(materialDisplayName(material) || material.id),
       csvEscape(total),
       csvEscape(formatMaterialQuantity(material, total)),
     ].join(",") + "\r\n";
@@ -314,16 +315,17 @@ export async function exportMaterialListWithOptions(filePath: string, options: {
 }): Promise<boolean> {
   const multiplayer = options.format === "html" && options.webOptions?.mode === "multi";
   if (multiplayer && (!options.webOptions?.accessPassword?.trim() || !options.webOptions?.adminPassword?.trim())) {
-    throw new Error("多人网页包需要访问密码和管理员密码");
+    throw new Error(t("native.stats.multiPasswords"));
   }
-  if (multiplayer && !options.webOptions?.targets.length) throw new Error("请至少选择一个真实 Stockpile 服务平台");
+  if (multiplayer && !options.webOptions?.targets.length) throw new Error(t("native.stats.platformRequired"));
   const extension = multiplayer ? "zip" : options.format;
   const savePath = await saveDialog({
     defaultPath: defaultExportName(filePath).replace(/\.csv$/, `.${extension}`),
     filters: [{ name: extension.toUpperCase(), extensions: [extension] }],
   });
   if (!savePath) return false;
-  await exportMaterialList({ sourcePath: filePath, ...options, outputPath: savePath });
+  await initI18n();
+  await exportMaterialList({ sourcePath: filePath, ...options, outputPath: savePath, uiLocale: getUiLocale(), languageMap: getMinecraftTranslations() });
   return true;
 }
 

@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { creativeItemId, creativeInventoryValues, displayPathText } from "../../../../../src/business/facade";
 import { Dropdown } from "../../../../components/Dropdown";
 import { Dialog } from "../../../../components/Dialog";
@@ -19,12 +21,13 @@ export function CreativeInventoryDialog({
   /** 额外注入的分类（如"当前统计结果"），显示在分类列表顶部。 */
   extraCollections?: { id: string; name: string; values: string[] }[];
 }) {
+  const { locale, revision } = useI18n();
   const [collections, setCollections] = useState<EnumeratorCollection[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState("");
   const [search, setSearch] = useState("");
   const [pageStart, setPageStart] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiMessage>("");
   const [carryBlockId, setCarryBlockId] = useState("");
   const [carryPosition, setCarryPosition] = useState({ x: 0, y: 0 });
   const [hoverItem, setHoverItem] = useState<{ id: string; name: string; } | null>(null);
@@ -43,7 +46,7 @@ export function CreativeInventoryDialog({
           .sort((left, right) => {
             if (left.id === "base:dv-blocks") return -1;
             if (right.id === "base:dv-blocks") return 1;
-            return left.name.localeCompare(right.name, "zh-CN");
+            return left.name.localeCompare(right.name, getUiLocale());
           });
         setCollections(creativeCollections);
         setSelectedCollectionId((previous) => {
@@ -62,7 +65,7 @@ export function CreativeInventoryDialog({
         if (!active) return;
         setCollections([]);
         setSelectedCollectionId(extraCollections.length > 0 ? extraCollections[0].id : "");
-        setError(String(nextError || "创造模式枚举加载失败。"));
+        setError(nextError ? String(nextError) : {key:"flake.loadCreativeFailed"});
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -96,7 +99,7 @@ export function CreativeInventoryDialog({
       const translated = translateBlockId(creativeItemId(blockId) || blockId).toLowerCase();
       return blockId.toLowerCase().includes(keyword) || translated.includes(keyword);
     });
-  }, [search, selectedCollection]);
+  }, [search, selectedCollection, revision]);
 
   const maxPageStart = useMemo(() => {
     if (filteredValues.length <= 45) return 0;
@@ -198,20 +201,20 @@ export function CreativeInventoryDialog({
   const rangeEnd = filteredValues.length ? Math.min(filteredValues.length, pageStart + 45) : 0;
 
   return (
-    <Dialog title="创造模式物品栏" onClose={onClose} width="lg" className="flake-page__inventory-dialog">
+    <Dialog title={t("flake.inventory")} onClose={onClose} width="lg" className="flake-page__inventory-dialog">
       <section onClick={handleDropOutside}>
         <div className="flake-page__inventory-dialog-body">
           <div className="flake-page__creative-inventory-controls">
             <label className="flake-page__creative-inventory-control">
-              <span className="nova-muted">分类</span>
-              <Dropdown value={selectedCollectionId} onChange={setSelectedCollectionId} options={collectionOptions} ariaLabel="创造模式分类" />
+              <span className="nova-muted">{t("editor.category")}</span>
+              <Dropdown value={selectedCollectionId} onChange={setSelectedCollectionId} options={collectionOptions} ariaLabel={t("flake.creativeCategory")} />
             </label>
             <label className="flake-page__creative-inventory-control flake-page__creative-inventory-search">
-              <span className="nova-muted">搜索</span>
-              <Input className="input" value={search} placeholder="按方块名或 ID 过滤" onChange={(event) => setSearch(event.target.value)} />
+              <span className="nova-muted">{t("editor.search")}</span>
+              <Input className="input" value={search} placeholder={t("flake.filterBlocks")} onChange={(event) => setSearch(event.target.value)} />
             </label>
             <div className="flake-page__creative-inventory-range nova-muted nova-small">
-              {loading ? "加载中..." : `${rangeStart}-${rangeEnd} / ${filteredValues.length}`}
+              {loading ? t("flake.loadingShort") : `${rangeStart}-${rangeEnd} / ${filteredValues.length}`}
             </div>
           </div>
 
@@ -240,7 +243,7 @@ export function CreativeInventoryDialog({
                   <Button variant="ghost"
                     key={`creative-hotbar-${index + 1}`}
                     className={blockId ? "flake-page__creative-hotbar-slot has-item" : "flake-page__creative-hotbar-slot"}
-                    aria-label={`快捷栏 ${index + 1}${blockId ? `：${translateBlockId(creativeItemId(blockId) || blockId)}` : "：空"}`}
+                    aria-label={t("flake.hotbarItem", {index:index+1, item:blockId ? translateBlockId(creativeItemId(blockId) || blockId) : t("flake.emptySlot")})}
                     onClick={(event) => handleCreativeHotbarSlotClick(index, event)}
                     onMouseEnter={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
                     onMouseMove={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
@@ -252,10 +255,10 @@ export function CreativeInventoryDialog({
               </div>
 
               {!loading && !error && !filteredValues.length ? (
-                <div className="flake-page__creative-inventory-overlay nova-muted">没有可显示的方块。</div>
+                <div className="flake-page__creative-inventory-overlay nova-muted">{t("flake.noBlocks")}</div>
               ) : null}
-              {loading ? <div className="flake-page__creative-inventory-overlay nova-muted">正在加载创造模式分类...</div> : null}
-              {!loading && error ? <div className="flake-page__creative-inventory-overlay nova-error">{displayPathText(error)}</div> : null}
+              {loading ? <div className="flake-page__creative-inventory-overlay nova-muted">{t("flake.loadingCreative")}</div> : null}
+              {!loading && error ? <div className="flake-page__creative-inventory-overlay nova-error">{displayPathText(localizeMessage(error))}</div> : null}
             </div>
           </div>
         </div>

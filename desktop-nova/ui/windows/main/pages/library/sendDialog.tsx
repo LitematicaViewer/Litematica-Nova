@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { displayFilePath } from "../../../../../src/business/facade";
 import { useEffect, useMemo, useState } from "react";
 
@@ -18,7 +20,7 @@ import { ReplicaNameEditor } from "./ReplicaNameEditor";
 import type { LibraryEntryView } from "./libraryEntryView";
 
 // 同级函数
-import { compactFolderPath, ensureLitematicFileName } from "./function";
+import { compactFolderPath, ensureLitematicFileName, DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT } from "./function";
 
 export { DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT } from "./function";
 
@@ -219,14 +221,15 @@ export function SendFileToFolderDialog({
   targetFileName: string;
   overwrite: boolean;
   isSending: boolean;
-  error: string;
+  error: UiMessage;
   onTargetDirectoryChange: (value: string) => void;
   onTargetFileNameChange: (value: string) => void;
   onOverwriteChange: (value: boolean) => void;
   onClose: () => void;
   onSubmit: () => void;
 }) {
-  const [localLibraryTailPathCount, setLocalLibraryTailPathCount] = useState(3);
+useI18n();
+  const [localLibraryTailPathCount, setLocalLibraryTailPathCount] = useState(DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT);
 
   useEffect(() => {
     loadUserConfigMigratingLocalStorage()
@@ -241,42 +244,42 @@ export function SendFileToFolderDialog({
 
   return (
     <Dialog
-      title="复制投影到文件夹"
-      subtitle="原文件保持不变。复制完成后，新文件会显示在投影库中。"
+      title={t("library.copySchematicTitle")}
+      subtitle={t("library.copySchematicHint")}
       width="md"
       busy={isSending}
       onClose={onClose}
       footer={(
         <>
-          <Button type="button" onClick={onClose} disabled={isSending}>取消</Button>
+          <Button type="button" onClick={onClose} disabled={isSending}>{t("library.cancel")}</Button>
           <Button type="button" onClick={onSubmit} aria-busy={isSending} disabled={isSending || !targetDirectory || !normalizedFileName || folders.length === 0}>
-            {isSending ? "正在复制…" : "复制"}
+            {isSending ? t("library.copying") : t("library.copy")}
           </Button>
         </>
       )}
     >
       <div className="dialog-form-grid">
-        <span className="dialog-label">源文件</span>
+        <span className="dialog-label">{t("library.sourceFile")}</span>
         <div className="dialog-path-preview">{displayFilePath(record.path)}</div>
-        <label className="dialog-label" htmlFor="library-copy-folder">复制到</label>
+        <label className="dialog-label" htmlFor="library-copy-folder">{t("library.copyTo")}</label>
         <div className="dialog-field-stack">
           <Select value={targetDirectory || undefined} onValueChange={onTargetDirectoryChange} disabled={isSending || folders.length === 0}>
-            <SelectTrigger id="library-copy-folder"><SelectValue placeholder={folders.length ? "选择文件夹" : "请先添加文件夹"} /></SelectTrigger>
-            <SelectContent>{folders.map((folder) => <SelectItem key={folder.path} value={folder.path}>{compactFolderPath(folder.path, localLibraryTailPathCount)}{folder.enabled ? "" : "（未启用）"}</SelectItem>)}</SelectContent>
+            <SelectTrigger id="library-copy-folder"><SelectValue placeholder={folders.length ? t("library.chooseFolder") : t("library.addFolderFirst")} /></SelectTrigger>
+            <SelectContent>{folders.map((folder) => <SelectItem key={folder.path} value={folder.path}>{compactFolderPath(folder.path, localLibraryTailPathCount)}{folder.enabled ? "" : t("library.disabledSuffix")}</SelectItem>)}</SelectContent>
           </Select>
-          {folders.length === 0 && <span className="muted">关闭此窗口，点击投影库上方的「管理文件夹」即可添加。</span>}
+          {folders.length === 0 && <span className="muted">{t("library.addFolderHint")}</span>}
         </div>
-        <label className="dialog-label" htmlFor="library-copy-name">新文件名</label>
+        <label className="dialog-label" htmlFor="library-copy-name">{t("library.newFileName")}</label>
         <div className="dialog-field-stack">
           <Input id="library-copy-name" className="input" value={targetFileName} onChange={(event) => onTargetFileNameChange(event.target.value)} disabled={isSending} />
-          <span className="muted">无需输入 .litematic 后缀，软件会自动补全。</span>
+          <span className="muted">{t("library.extensionHint")}</span>
         </div>
-        <span className="dialog-label">同名文件</span>
-        <label className="setting-row"><Checkbox checked={overwrite} onCheckedChange={(checked) => onOverwriteChange(checked === true)} disabled={isSending} /> 允许覆盖同名文件</label>
-        <span className="dialog-label">目标路径</span>
+        <span className="dialog-label">{t("library.existingFile")}</span>
+        <label className="setting-row"><Checkbox checked={overwrite} onCheckedChange={(checked) => onOverwriteChange(checked === true)} disabled={isSending} /> {t("library.allowOverwrite")}</label>
+        <span className="dialog-label">{t("library.targetPath")}</span>
         <div className="dialog-path-preview">{targetPathPreview}</div>
       </div>
-      {error ? <div className="dialog-message dialog-message-error" role="alert">{error}</div> : null}
+      {error ? <div className="dialog-message dialog-message-error" role="alert">{localizeMessage(error)}</div> : null}
     </Dialog>
   );
 }

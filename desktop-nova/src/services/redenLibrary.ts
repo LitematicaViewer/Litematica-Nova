@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import {
   redenDownloadAttachment,
   redenDownloadParametric,
@@ -158,13 +159,13 @@ export function validateRedenSizes(detail: RedenMachine, sizes: RedenSizes): str
     const value = sizes[field];
     const rule = rules[axis];
     if (!Number.isInteger(value)) {
-      errors.push(`${axis.toUpperCase()} 必须是整数`);
+      errors.push(t("native.reden.integer", { axis: axis.toUpperCase() }));
       continue;
     }
-    if (rule.min !== undefined && value! < rule.min) errors.push(`${axis.toUpperCase()} 不能小于 ${rule.min}`);
-    if (rule.max !== undefined && value! > rule.max) errors.push(`${axis.toUpperCase()} 不能大于 ${rule.max}`);
+    if (rule.min !== undefined && value! < rule.min) errors.push(t("native.reden.minimum", { axis: axis.toUpperCase(), minimum: rule.min }));
+    if (rule.max !== undefined && value! > rule.max) errors.push(t("native.reden.maximum", { axis: axis.toUpperCase(), maximum: rule.max }));
     if (rule.mod && value! % rule.mod.step !== rule.mod.offset) {
-      errors.push(`${axis.toUpperCase()} 必须满足 ${axis} % ${rule.mod.step} = ${rule.mod.offset}`);
+      errors.push(t("native.reden.modulo", { axis: axis.toUpperCase(), property: axis, step: rule.mod.step, offset: rule.mod.offset }));
     }
   }
   return errors;
@@ -178,7 +179,7 @@ export function validateRedenSizes(detail: RedenMachine, sizes: RedenSizes): str
  */
 export async function importDownloadedLitematic(state: LibraryState, path: string): Promise<LibraryState> {
   if (!path.toLowerCase().endsWith(".litematic")) {
-    throw new Error(`下载文件不是 .litematic：${path}`);
+    throw new Error(t("native.reden.notSchematic", { path }));
   }
   return await importDownloadedToBuiltinFolder(state, path);
 }
@@ -186,5 +187,5 @@ export async function importDownloadedLitematic(state: LibraryState, path: strin
 /** Persistence succeeded before notifying other windows; a broadcast failure is only a refresh warning. */
 export async function notifyRedenImport(notify: () => Promise<void>): Promise<string | null> {
   try { await notify(); return null; }
-  catch (error) { return `已入库，但主窗口刷新通知失败，请手动刷新：${String(error)}`; }
+  catch (error) { return t("native.reden.refreshNotice", { error: String(error) }); }
 }

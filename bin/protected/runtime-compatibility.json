@@ -1,0 +1,23 @@
+{
+  "compatibility": {
+    "schema": "nova.runtime-compatibility.v1",
+    "runtime_abi": 1,
+    "runtime_build_id": "runtime-1-a9a4f949d57c-version-semantics-20261023-r1-x86_64-pc-windows-msvc",
+    "target": "x86_64-pc-windows-msvc",
+    "module_id": "nova_protected_module.dll",
+    "module_manifest_sha256": "5c9d8b77db9896ef775310bca8c596c76c6fd9ad5b41ce0b3f6294d7ab9c8eb2",
+    "endpoint": "https://45-62-112-121.sslip.io:8448/nova-core",
+    "capabilities": [
+      "standard",
+      "full",
+      "realtime",
+      "prebuilt",
+      "render-service",
+      "build-worker",
+      "native-viewer",
+      "cpu-audit"
+    ],
+    "created_ms": 1792764708373
+  },
+  "signature": "EhcGLyKtuDU4yP6Oa4KWZ5HOXIzYu9lNaqyifRVtdz6zMoxa6mtWRFA9NP3X33bjN8Zkq86yGirERcYsU5vXDA=="
+}

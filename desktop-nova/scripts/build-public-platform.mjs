@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { validateRef, validateSource, validatePackage, validateDevelopmentPackage, helperInputIdentity, validateStaging, nativeTarget, runtimeSource, communityIdentity } from './check-public-checkout.mjs';
 import { ensureDevelopmentRuntime, acquireLocalDevelopmentRuntime } from './fetch-ci-runtime.mjs';
+import { prepareDefaultGameData } from './prepare-default-game-data.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const desktop = path.join(root, 'desktop-nova'), tauri = path.join(desktop, 'src-tauri');
@@ -69,7 +70,8 @@ export function tauriOverride(base, { platform, stage, runtime, stockpile, icon,
   if (fullRuntime) {
     for (const name of ['AMICE-APACHE-2.0.txt', 'PROTECTED-MODULE.txt']) resources[path.join(root, 'licenses', name)] = `licenses/${name}`;
   }
-  resources[path.join(root, 'data/mc26/26.3')] = 'data/mc26/26.3';
+  const defaultData = path.join(root, 'pack-in/game-data/default');
+  if (fs.existsSync(path.join(defaultData, 'manifest.json'))) resources[defaultData] = 'pack-in/game-data/default';
   resources[stockpile] = `bin/stockpile-server/${platform.stockpile}/stockpile_server${platform.suffix}`;
   if (platform.os === 'win32') resources[path.join(root, 'tools/windows-thumbnail-provider/target/release/litematica_thumbnail.dll')] = 'litematica_thumbnail.dll';
   return { bundle: { targets: platform.bundles.split(','), resources, ...(platform.os !== 'win32' ? { icon: platform.os === 'darwin' ? [path.join(path.dirname(icon), 'icon.png'), icon] : [icon], windows: null } : {}), ...(platform.os === 'darwin' && fullRuntime ? { macOS: { frameworks: [path.join(tauri, 'target/platform-frameworks/libMoltenVK.dylib')] } } : {}), ...(platform.os === 'linux' ? { linux: { deb: { depends: [...new Set([...(base.bundle.linux?.deb?.depends ?? []), 'libvulkan1', 'libdbus-1-3', 'libc6 (>= 2.39)'])] } } } : {}), createUpdaterArtifacts: Boolean(runtime && !candidate) } };
@@ -98,7 +100,9 @@ export async function stageStockpileResource(source, target, platform, resourceR
   if (await hash(staged) !== sourceHash) throw new Error('The cross-drive stockpile resource staging differs from its real Cargo output.');
   return staged;
 }
-async function prepareAssets() {
+async function prepareAssets(optional = false) {
+  if (fs.existsSync(path.join(root, 'pack-in/game-data/default/manifest.json'))) return;
+  if (optional && !fs.existsSync(path.join(root, 'pack-in/minecraft-runtime-26.3.zip'))) return;
   const archive = path.join(root, 'pack-in/minecraft-runtime-26.3.zip');
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'pack-in/minecraft-runtime-26.3.manifest.json'), 'utf8'));
   if (manifest.schema !== 'nova.minecraft-runtime-resources.v1' || manifest.java_class_entries !== 0 || manifest.executable_entries !== 0 || await hash(archive) !== manifest.archive_sha256) throw new Error('Bundled runtime resource identity differs.');
@@ -266,8 +270,9 @@ export async function build(args = process.argv.slice(2)) {
     helperSourceSha = JSON.parse(fs.readFileSync(path.join(root, 'bin/public-beta/backend-deployment.json'), 'utf8')).helperSourceSha;
   }
   else if (!reuseExisting) {
-    await prepareAssets();
+    await prepareAssets(development || community || compileOnly);
     run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/viewer-core/Cargo.toml', '--target-dir', cargo.core, '--no-default-features', '--features', source === 'local' ? 'public-beta,development-runtime' : 'public-beta', '--bin', 'litematica_core', '--bin', 'litematica_native_viewer', '--bin', 'stockpile_server']);
+    prepareDefaultGameData(path.join(cargo.core, 'release', `litematica_core${platform.suffix}`), { optional: development || community || compileOnly });
     if (!community) run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/nova-protected-loader/Cargo.toml', '--target-dir', cargo.loader, '--bins', ...(source === 'local' ? ['--features','development-runtime'] : [])]);
   }
   if (!reuseExisting) await stageBackends(target, platform, identity, sha, stage, cargo, helperInputId, helperSourceSha);

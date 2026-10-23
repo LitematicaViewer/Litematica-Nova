@@ -1,3 +1,5 @@
+import { t, getUiLocale, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
 import { creativeItemId } from "../../../../../src/business/facade";
 import { displayFilePath } from "../../../../../src/business/facade";
@@ -35,6 +37,7 @@ import { BlockIcon } from "../../../../components/BlockIcon";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { Dialog } from "../../../../components/Dialog";
 import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/StatisticsPage";
+import { Layer3DView } from "./Layer3DView";
 
 // 同级函数
 import { fitView, FlakeBlockTooltip, formatStateRecord } from "./function";
@@ -59,24 +62,25 @@ const TEXTURE_LOAD_IDLE_DELAY_MS = 160;
 const TEXTURE_LOAD_CONCURRENCY = 3;
 const NOTE_BLOCK_ID = "minecraft:note_block";
 const NOTE_BLOCK_NOTE_VALUES = Array.from({ length: 25 }, (_unused, index) => String(index));
+const NOTE_SCALE_LABEL_KEYS = ["flake.note.scale.values", "flake.note.scale.westernMajor", "flake.note.scale.maqamAjam", "flake.note.scale.raagBhairav", "flake.note.scale.maqamHijaz", "flake.note.scale.dorian", "flake.note.scale.gong", "flake.note.scale.miyakoBushi", "flake.note.scale.degung", "flake.note.scale.pyongjo"];
 const NOTE_BLOCK_KEY_ROWS = [
-  { id: "high", label: "高位音高", values: Array.from({ length: 7 }, (_unused, index) => String(index + 18)) },
-  { id: "middle", label: "本位音高", values: Array.from({ length: 12 }, (_unused, index) => String(index + 6)) },
-  { id: "low", label: "低位音高", values: Array.from({ length: 6 }, (_unused, index) => String(index)) },
+  { id: "high", labelKey: "flake.note.high", values: Array.from({ length: 7 }, (_unused, index) => String(index + 18)) },
+  { id: "middle", labelKey: "flake.note.middle", values: Array.from({ length: 12 }, (_unused, index) => String(index + 6)) },
+  { id: "low", labelKey: "flake.note.low", values: Array.from({ length: 6 }, (_unused, index) => String(index)) },
 ] as const;
 const EDIT_TOOL_PLACEHOLDERS = [
-  { id: "hand", icon: Hand, themeIcon: "hand", name: "手型", description: "拖拽和查看" },
-  { id: "debug-stick", icon: Wand2, themeIcon: "stick", name: "调试棒", description: "修改当前会话的方块状态草稿，不写入文件" },
-  { id: "measure", icon: Ruler, themeIcon: "ruler", name: "测量工具", description: "测量欧几里得距离与曼哈顿距离，右键删除矩形" },
-  { id: "marker", icon: MapPin, themeIcon: "pin", name: "标记点工具", description: "在任意方格设定投影标记点" },
-  { id: "select", icon: BoxSelect, themeIcon: "select", name: "框选工具", description: "框选区域" },
-  { id: "brush", icon: Pencil, themeIcon: "pencil", name: "画笔", description: "绘制方块" },
-  { id: "eraser", icon: Eraser, themeIcon: "eraser", name: "橡皮擦", description: "擦除方块" },
-  { id: "picker", icon: Pipette, themeIcon: "pick", name: "取色器", description: "拾取方块" },
-  { id: "rectangle", icon: Square, themeIcon: "rectangle", name: "矩形工具", description: "绘制矩形" },
-  { id: "circle", icon: Circle, themeIcon: "circle", name: "圆形工具", description: "绘制圆形" },
-  { id: "bucket", icon: PaintBucket, themeIcon: "fill", name: "填色工具", description: "填充区域" },
-  { id: "text", icon: Type, themeIcon: "text", name: "文字工具", description: "仅支持 unifont 字体" },
+  { id: "hand", icon: Hand, themeIcon: "hand", nameKey: "flake.tool.hand", descriptionKey: "flake.tool.handHint" },
+  { id: "debug-stick", icon: Wand2, themeIcon: "stick", nameKey: "flake.tool.debugStick", descriptionKey: "flake.tool.debugStickHint" },
+  { id: "measure", icon: Ruler, themeIcon: "ruler", nameKey: "flake.tool.measure", descriptionKey: "flake.tool.measureHint" },
+  { id: "marker", icon: MapPin, themeIcon: "pin", nameKey: "flake.tool.marker", descriptionKey: "flake.tool.markerHint" },
+  { id: "select", icon: BoxSelect, themeIcon: "select", nameKey: "flake.tool.select", descriptionKey: "flake.tool.selectHint" },
+  { id: "brush", icon: Pencil, themeIcon: "pencil", nameKey: "flake.tool.brush", descriptionKey: "flake.tool.brushHint" },
+  { id: "eraser", icon: Eraser, themeIcon: "eraser", nameKey: "flake.tool.eraser", descriptionKey: "flake.tool.eraserHint" },
+  { id: "picker", icon: Pipette, themeIcon: "pick", nameKey: "flake.tool.picker", descriptionKey: "flake.tool.pickerHint" },
+  { id: "rectangle", icon: Square, themeIcon: "rectangle", nameKey: "flake.tool.rectangle", descriptionKey: "flake.tool.rectangleHint" },
+  { id: "circle", icon: Circle, themeIcon: "circle", nameKey: "flake.tool.circle", descriptionKey: "flake.tool.circleHint" },
+  { id: "bucket", icon: PaintBucket, themeIcon: "fill", nameKey: "flake.tool.bucket", descriptionKey: "flake.tool.bucketHint" },
+  { id: "text", icon: Type, themeIcon: "text", nameKey: "flake.tool.text", descriptionKey: "flake.tool.textHint" },
 ] as const;
 
 type EditToolId = typeof EDIT_TOOL_PLACEHOLDERS[number]["id"];
@@ -91,6 +95,7 @@ interface NoteToneLabel {
 
 interface NoteScaleOption {
   name: string;
+  labelKey: string;
   labelsByValue: Record<string, NoteToneLabel>;
 }
 
@@ -137,7 +142,7 @@ function parseNoteScaleOptions(csvText: string): NoteScaleOption[] {
   const header = rows[0] || [];
   const noteValues = header.slice(1).filter((value) => NOTE_BLOCK_NOTE_VALUES.includes(value));
 
-  return rows.slice(1).map((row) => {
+  return rows.slice(1).map((row,index) => {
     const labelsByValue: Record<string, NoteToneLabel> = {};
     noteValues.forEach((value, index) => {
       labelsByValue[value] = parseNoteToneLabel(value, row[index + 1]);
@@ -146,14 +151,15 @@ function parseNoteScaleOptions(csvText: string): NoteScaleOption[] {
       labelsByValue[value] = labelsByValue[value] || parseNoteToneLabel(value, value);
     });
     return {
-      name: row[0] || "默认调式",
+      name: row[0] || "__default__",
+      labelKey: NOTE_SCALE_LABEL_KEYS[index] || "flake.defaultScale",
       labelsByValue,
     };
   });
 }
 
 const NOTE_SCALE_OPTIONS = parseNoteScaleOptions(noteCsvText);
-const DEFAULT_NOTE_SCALE_NAME = NOTE_SCALE_OPTIONS[0]?.name || "默认调式";
+const DEFAULT_NOTE_SCALE_NAME = NOTE_SCALE_OPTIONS[0]?.name || "__default__";
 
 function flakeBlockPositionKey(x: number, y: number, z: number): string {
   return `${x}:${y}:${z}`;
@@ -170,7 +176,7 @@ function normalizeLayerStateRecord(value: Record<string, unknown> | null | undef
 }
 
 function layerStateRecordText(stateRecord: Record<string, string>): string {
-  return formatStateRecord(stateRecord) || "无";
+  return formatStateRecord(stateRecord) || t("editor.none");
 }
 
 function isTextEntryTarget(target: EventTarget | null): boolean {
@@ -412,8 +418,9 @@ function pathsLookSame(left: string, right: string): boolean {
 }
 
 function formatMeasurementDistance(value: number): string {
-  if (Number.isInteger(value)) return String(value);
-  return value < 10 ? value.toFixed(2) : value.toFixed(1);
+  if (Number.isInteger(value)) return value.toLocaleString(getUiLocale());
+  const digits = value < 10 ? 2 : 1;
+  return value.toLocaleString(getUiLocale(), {minimumFractionDigits: digits, maximumFractionDigits: digits});
 }
 
 function buildLayerTile(
@@ -493,6 +500,7 @@ const LayerCanvas = forwardRef<
     onScaleChange?: (scale: number) => void;
   }
 >(({ meta, layerY, renderSlices, showStateHints, interactionTool, editedBlockStates, originMarker, measurements, onHoverBlock, onBlockClick, onBlockRightClick, onMarkerContextMenu, onOriginChange, onAddMeasurement, onDeleteMeasurementAt, onScaleChange }, ref) => {
+  const { locale } = useI18n();
   const viewportRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const layerTileCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -508,7 +516,7 @@ const LayerCanvas = forwardRef<
   const [tileImageRevision, setTileImageRevision] = useState(0);
   const [isTextureInteractionActive, setIsTextureInteractionActive] = useState(false);
   const [paletteVisuals, setPaletteVisuals] = useState<LayerPaletteVisuals | null>(null);
-  const [visualError, setVisualError] = useState("");
+  const [visualError, setVisualError] = useState<UiMessage>("");
   const [visualReload, setVisualReload] = useState(0);
   useEffect(() => {
     const pending = listenEvent("game-resources-changed", () => {
@@ -784,7 +792,7 @@ const LayerCanvas = forwardRef<
       .catch((error) => {
         if (cancelled) return;
         console.warn("Failed to resolve source-version layer visuals:", error);
-        setVisualError("颜色与贴图加载失败，请重新加载");
+        setVisualError({key:"flake.visualFailed"});
       });
     return () => {
       cancelled = true;
@@ -1070,9 +1078,9 @@ const LayerCanvas = forwardRef<
         gridDash: scale >= 8 ? "4 4" : "2 2",
         xLabel: `x ${normalized.widthBlocks}`,
         zLabel: `z ${normalized.heightBlocks}`,
-        manhattanLabel: `曼哈顿 ${manhattan}`,
+        manhattanLabel: t("flake.manhattan", {distance:manhattan.toLocaleString(locale)}),
         insideLabel: widthPx >= 64 && heightPx >= 28
-          ? `欧氏 ${formatMeasurementDistance(euclidean)}`
+          ? t("flake.euclidean", {distance:formatMeasurementDistance(euclidean)})
           : `E ${formatMeasurementDistance(euclidean)}`,
         showInsideLabel: widthPx >= 28 && heightPx >= 18,
         diagonalStartX,
@@ -1092,7 +1100,7 @@ const LayerCanvas = forwardRef<
         >,
       };
     });
-  }, [measurementDraft, measurements, scale]);
+  }, [measurementDraft, measurements, scale, locale]);
 
   const originMarkerOverlay = useMemo(() => {
     const marker = originDragDraft || originMarker;
@@ -1280,7 +1288,7 @@ const LayerCanvas = forwardRef<
       z: bz,
       paletteId,
       id: paletteEntry.block_id,
-      name: paletteVisuals?.byPalette.get(paletteId)?.name || translateBlockId(paletteEntry.block_id),
+      name: translateBlockId(paletteEntry.block_id),
       minecraftVersion: paletteVisuals?.version,
       states: layerStateRecordText(stateRecord),
       stateRecord,
@@ -1409,8 +1417,8 @@ const LayerCanvas = forwardRef<
       onContextMenu={handleContextMenu}
     >
       {(visualError || missingMapColors > 0) && <div className="flake-visual-status" role="status" onMouseDown={event => event.stopPropagation()}>
-        <span>{visualError || `${missingMapColors} 种方块缺少地图色`}</span>
-        {visualError && <Button onClick={event => { event.stopPropagation(); setVisualReload(previous => previous + 1); }}>重新加载</Button>}
+        <span>{localizeMessage(visualError) || t("flake.missingMapColors", {count:missingMapColors.toLocaleString(locale)})}</span>
+        {visualError && <Button onClick={event => { event.stopPropagation(); setVisualReload(previous => previous + 1); }}>{t("editor.reload")}</Button>}
       </div>}
       <canvas
         ref={layerTileCanvasRef}
@@ -1489,6 +1497,7 @@ function FlakeDebugStateDialog({
   onApply: (stateRecord: Record<string, string>) => void;
   onClose: () => void;
 }) {
+  useI18n();
   const [draftState, setDraftState] = useState<Record<string, string>>(() => ({ ...block.stateRecord }));
   const [selectedNoteScaleName, setSelectedNoteScaleName] = useState(DEFAULT_NOTE_SCALE_NAME);
   const propertyKeys = useMemo(() => Object.keys(block.stateRecord).sort(), [block.stateRecord]);
@@ -1511,22 +1520,22 @@ function FlakeDebugStateDialog({
 
   return (
     <Dialog
-      title="调试棒"
-      subtitle={`${block.name} (${block.id})`}
+      title={t("flake.tool.debugStick")}
+      subtitle={`${translateBlockId(block.id)} (${block.id})`}
       width="lg"
       className="flake-page__state-dialog"
       onClose={onClose}
       footer={(
         <>
-          <Button type="button" onClick={onClose}>取消</Button>
-          <Button type="button" onClick={() => onApply(normalizeLayerStateRecord(draftState))}>应用</Button>
+          <Button type="button" onClick={onClose}>{t("editor.cancel")}</Button>
+          <Button type="button" onClick={() => onApply(normalizeLayerStateRecord(draftState))}>{t("editor.apply")}</Button>
         </>
       )}
     >
       <div className="dialog-form-grid flake-page__state-dialog-grid">
-        <span className="dialog-label">位置</span>
+        <span className="dialog-label">{t("editor.position")}</span>
         <span>x={block.x} y={block.y} z={block.z}</span>
-        <span className="dialog-label">方块ID</span>
+        <span className="dialog-label">{t("editor.blockId")}</span>
         <div className="dialog-path-preview">{block.id}</div>
         {propertyKeys.map((key) => {
           const knownValues = knownProperties[key] || [];
@@ -1543,17 +1552,17 @@ function FlakeDebugStateDialog({
                   <Dropdown
                     className="input flake-page__note-scale-select"
                     value={selectedNoteScaleName}
-                    ariaLabel="音符盒调式"
+                    ariaLabel={t("flake.note.scale")}
                     onChange={setSelectedNoteScaleName}
-                    options={NOTE_SCALE_OPTIONS.map((option) => ({value: option.name, label: option.name}))}
+                    options={NOTE_SCALE_OPTIONS.map((option) => ({value: option.name, label: t(option.labelKey)}))}
                   />
-                  <div className="flake-page__note-keyboard" role="group" aria-label="音符盒音高">
+                  <div className="flake-page__note-keyboard" role="group" aria-label={t("flake.note.pitch")}>
                     {NOTE_BLOCK_KEY_ROWS.map((row) => (
                       <div
                         key={row.id}
                         className={`flake-page__note-key-row flake-page__note-key-row--${row.id}`}
                         role="group"
-                        aria-label={row.label}
+                        aria-label={t(row.labelKey)}
                       >
                         {row.values.map((value) => {
                           const noteLabel = selectedNoteScale?.labelsByValue[value] || parseNoteToneLabel(value, value);
@@ -1562,7 +1571,7 @@ function FlakeDebugStateDialog({
                               <Button
                                 className={noteLabel.sharpMarks ? "flake-page__note-key-button is-sharp" : "flake-page__note-key-button"}
                                 type="button"
-                                aria-label={`${noteLabel.raw}，音高 ${value}`}
+                                aria-label={t("flake.note.aria", {note:noteLabel.raw,value})}
                                 aria-pressed={currentValue === value}
                                 title={`${noteLabel.raw} (${value})`}
                                 onClick={() => setProperty(key, value)}
@@ -1606,6 +1615,8 @@ function FlakeDebugStateDialog({
  * Renders the flake layer viewer and editing controls.
  */
 export function FlakePage({ currentFile, setRoute }: any) {
+  const { locale } = useI18n();
+  const [viewMode, setViewMode] = useState<"2d" | "3d">("2d");
   const [meta, setMeta] = useState<LayerSliceMeta | null>(null);
   const [sliceDataByY, setSliceDataByY] = useState<Record<number, LayerSliceData | null>>({});
   const [statsData, setStatsData] = useState<StatsData | null>(null);
@@ -1629,7 +1640,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [hasDraftOriginMarker, setHasDraftOriginMarker] = useState(false);
   const [isSavingEdits, setIsSavingEdits] = useState(false);
   const [markerMenu, setMarkerMenu] = useState<FlakeMarkerMenuState | null>(null);
-  const [markerStatus, setMarkerStatus] = useState("");
+  const [markerStatus, setMarkerStatus] = useState<UiMessage>("");
   const [debugStateBlock, setDebugStateBlock] = useState<FlakeHoverBlock | null>(null);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
   const [materialBlocks, setMaterialBlocks] = useState<string[]>([]);
@@ -1637,7 +1648,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [quickbarSlots, setQuickbarSlots] = useState<string[]>(() => Array.from({ length: 9 }, () => ""));
   const [toolPanelWidth, setToolPanelWidth] = useState(320);
   const [isLoadingLayers, setIsLoadingLayers] = useState(false);
-  const [layerError, setLayerError] = useState("");
+  const [layerError, setLayerError] = useState<UiMessage>("");
   const pageRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<LayerCanvasHandle>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -1687,7 +1698,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
       setMeta(loadedMeta);
       setLayerY(0);
     } catch (error) {
-      if (requestId === syncRequestIdRef.current) setLayerError(`分层读取失败：${String(error)}`);
+      if (requestId === syncRequestIdRef.current) setLayerError({ key: "flake.layersFailed", params: {error:String(error)} });
     } finally {
       if (requestId === syncRequestIdRef.current) setIsLoadingLayers(false);
     }
@@ -1743,7 +1754,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
     void loadProjectionLayers();
     const requestId = syncRequestIdRef.current;
     void refreshProjectionMarkers().catch((error) => {
-      if (requestId === syncRequestIdRef.current) setMarkerStatus(`原点读取失败：${String(error)}`);
+      if (requestId === syncRequestIdRef.current) setMarkerStatus({ key: "flake.originReadFailed", params: {error:String(error)} });
     });
     return () => { ++syncRequestIdRef.current; ++markerRequestIdRef.current; };
   }, [currentFile]);
@@ -1758,7 +1769,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
     let active = true;
     loadStructuralBlocks(currentFile)
       .then((mats) => { if (active) setMaterialBlocks(mats.map((m) => m.id).filter(Boolean)); })
-      .catch((error) => { if (active) setLayerError(`物品栏材料读取失败：${String(error)}`); });
+      .catch((error) => { if (active) setLayerError({ key: "flake.inventoryFailed", params: {error:String(error)} }); });
     return () => { active = false; };
   }, [showInventoryDialog, currentFile]);
 
@@ -1815,7 +1826,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
         })
         .catch((error) => {
           if (requestId !== syncRequestIdRef.current) return;
-          setLayerError(`第 ${targetY} 层读取失败：${String(error)}`);
+          setLayerError({ key: "flake.layerFailed", params: {layer:targetY,error:String(error)} });
         })
         .finally(() => inFlightSliceKeysRef.current.delete(sliceKey));
     }
@@ -1925,12 +1936,12 @@ export function FlakePage({ currentFile, setRoute }: any) {
     if (!markerPointsChanged(originMarker, point)) {
       setDraftOriginMarker(null);
       setHasDraftOriginMarker(false);
-      setMarkerStatus("原点未改变。");
+      setMarkerStatus({key:"flake.originUnchanged"});
       return;
     }
     setDraftOriginMarker(point);
     setHasDraftOriginMarker(true);
-    setMarkerStatus(`原点变更已暂存：x=${point.x} y=${point.y} z=${point.z}。点击“保存原点”后写入文件。`);
+    setMarkerStatus({ key: "flake.originDraft", params: {x:point.x,y:point.y,z:point.z} });
   }, [currentFile, originMarker, isSavingEdits]);
 
   const handleRemoveOriginMarker = useCallback(() => {
@@ -1940,12 +1951,12 @@ export function FlakePage({ currentFile, setRoute }: any) {
     if (!markerPointsChanged(originMarker, null)) {
       setDraftOriginMarker(null);
       setHasDraftOriginMarker(false);
-      setMarkerStatus("当前文件没有原点标记。");
+      setMarkerStatus({key:"flake.noOrigin"});
       return;
     }
     setDraftOriginMarker(null);
     setHasDraftOriginMarker(true);
-    setMarkerStatus("移除原点已暂存。点击“保存原点”后写入文件。");
+    setMarkerStatus({key:"flake.originRemovalDraft"});
   }, [currentFile, originMarker, isSavingEdits]);
 
   const handleShiftOriginMarker = useCallback((deltaY: number) => {
@@ -1953,7 +1964,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
     const nextY = effectiveOriginMarker.y + deltaY;
     if (nextY < 0 || nextY >= meta.size_y) {
       setMarkerMenu(null);
-      setMarkerStatus("原点已在投影边界层");
+      setMarkerStatus({key:"flake.originBoundary"});
       return;
     }
     handleStageOriginMarker({ ...effectiveOriginMarker, y: nextY });
@@ -1964,7 +1975,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
     const requestId = syncRequestIdRef.current;
     setMarkerMenu(null);
     setIsSavingEdits(true);
-    setMarkerStatus("正在保存标记...");
+    setMarkerStatus({key:"flake.savingMarker"});
     try {
       const summary = draftOriginMarker
         ? await setProjectionOrigin(currentFile, draftOriginMarker)
@@ -1975,10 +1986,10 @@ export function FlakePage({ currentFile, setRoute }: any) {
       setHasDraftOriginMarker(false);
       setStatsData(null);
       setMarkerStatus(summary.origin
-        ? `原点已保存：x=${summary.origin.x} y=${summary.origin.y} z=${summary.origin.z}`
-        : "原点移除已保存。");
+        ? { key: "flake.originSaved", params: {x:summary.origin.x,y:summary.origin.y,z:summary.origin.z} }
+        : {key:"flake.originRemoved"});
     } catch (error) {
-      if (requestId === syncRequestIdRef.current) setMarkerStatus(`原点保存失败（草稿已保留）：${String(error)}`);
+      if (requestId === syncRequestIdRef.current) setMarkerStatus({ key: "flake.originSaveFailed", params: {error:String(error)} });
     } finally {
       if (requestId === syncRequestIdRef.current) setIsSavingEdits(false);
     }
@@ -1994,7 +2005,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
       if (requestId !== syncRequestIdRef.current || !selected) return;
       const outputPath = ensureLitematicExtension(selected);
       if (!outputPath) return;
-      setMarkerStatus("正在另存原点...");
+      setMarkerStatus({key:"flake.savingOriginCopy"});
       const summary = draftOriginMarker
         ? await setProjectionOrigin(currentFile, draftOriginMarker, outputPath)
         : await removeProjectionOrigin(currentFile, outputPath);
@@ -2006,13 +2017,13 @@ export function FlakePage({ currentFile, setRoute }: any) {
         setHasDraftOriginMarker(false);
         setStatsData(null);
         setMarkerStatus(summary.origin
-          ? `原点已保存：x=${summary.origin.x} y=${summary.origin.y} z=${summary.origin.z}`
-          : "原点移除已保存。");
+          ? { key: "flake.originSaved", params: {x:summary.origin.x,y:summary.origin.y,z:summary.origin.z} }
+          : {key:"flake.originRemoved"});
       } else {
-        setMarkerStatus(`原点已另存至：${displayFilePath(savedPath)}\n当前文件仍保留未保存标记。`);
+        setMarkerStatus({ key: "flake.originSavedAs", params: {path:displayFilePath(savedPath)} });
       }
     } catch (error) {
-      if (requestId === syncRequestIdRef.current) setMarkerStatus(`原点另存失败（草稿已保留）：${String(error)}`);
+      if (requestId === syncRequestIdRef.current) setMarkerStatus({ key: "flake.originSaveAsFailed", params: {error:String(error)} });
     } finally {
       if (requestId === syncRequestIdRef.current) setIsSavingEdits(false);
     }
@@ -2023,12 +2034,12 @@ export function FlakePage({ currentFile, setRoute }: any) {
     const requestId = syncRequestIdRef.current;
     setMarkerMenu(null);
     setIsSavingEdits(true);
-    setMarkerStatus("正在还原标记...");
+    setMarkerStatus({key:"flake.restoringMarker"});
     try {
       await refreshProjectionMarkers();
-      if (requestId === syncRequestIdRef.current) setMarkerStatus("原点已还原到当前文件状态。");
+      if (requestId === syncRequestIdRef.current) setMarkerStatus({key:"flake.markerRestored"});
     } catch (error) {
-      if (requestId === syncRequestIdRef.current) setMarkerStatus(`原点还原失败：${String(error)}`);
+      if (requestId === syncRequestIdRef.current) setMarkerStatus({ key: "flake.originRestoreFailed", params: {error:String(error)} });
     } finally {
       if (requestId === syncRequestIdRef.current) setIsSavingEdits(false);
     }
@@ -2067,7 +2078,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
       if (requestId !== syncRequestIdRef.current) return;
       if (!data) {
-        setLayerError("该位置没有可读取的容器数据。");
+        setLayerError({key:"flake.noContainer"});
         return;
       }
 
@@ -2085,7 +2096,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
       });
       setShowContainerDialog(true);
     } catch (error) {
-      if (requestId === syncRequestIdRef.current) setLayerError(`容器读取失败：${String(error)}`);
+      if (requestId === syncRequestIdRef.current) setLayerError({ key: "flake.containerFailed", params: {error:String(error)} });
     } finally {
       if (requestId === syncRequestIdRef.current) setIsLoadingContainer(false);
     }
@@ -2108,27 +2119,27 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const maxY = meta ? Math.max(0, meta.size_y - 1) : 0;
   const ready = !!meta;
   const building = isLoadingLayers;
-  const statusText = layerError || (!ready
-    ? (building ? "正在读取分层…" : "分层尚未就绪，请重新读取。")
-    : !sliceData ? `正在读取第 ${layerY} 层…` : `第 ${layerY} 层 · ${sliceData?.blocks?.length || 0} 个方块 · 洋葱皮 ${onionSkinDepth} 层`);
+  const statusText = localizeMessage(layerError) || (!ready
+    ? (building ? t("flake.readingLayers") : t("flake.layersNotReady"))
+    : !sliceData ? t("flake.readingLayer", {layer:layerY}) : t("flake.layerStatus", {layer:layerY,blocks:(sliceData?.blocks?.length || 0).toLocaleString(locale),depth:onionSkinDepth}));
 
   if (!currentFile) {
     return (
       <div className="nova-page flake-page">
         <div className="subwindow-toolbar flake-page__topbar">
           <Button className="flake-page__materials-button" disabled>
-            材料列表
+            {t("editor.materials")}
           </Button>
           <Button className="flake-page__build-button" disabled>
-            重新读取分层
+            {t("flake.reloadLayers")}
           </Button>
           <label className="subwindow-check-row flake-page__edit-toggle">
             <Checkbox  disabled />
-            编辑模式（状态与测量仅本次会话）
+            {t("flake.editMode")}
           </label>
           <div className="subwindow-toolbar-spacer" />
         </div>
-        <div className="properties-empty-state">请先选择一个 .litematic 文件</div>
+        <div className="properties-empty-state">{t("flake.chooseFile")}</div>
       </div>
     );
   }
@@ -2136,6 +2147,10 @@ export function FlakePage({ currentFile, setRoute }: any) {
   return (
     <div ref={pageRef} className={editMode ? "nova-page flake-page flake-page--edit-mode" : "nova-page flake-page"}>
       <div className="subwindow-toolbar flake-page__topbar">
+        <div className="layer3d-view-tabs">
+          <Button aria-pressed={viewMode === "2d"} variant={viewMode === "2d" ? "default" : "outline"} onClick={() => setViewMode("2d")}>{t("layerView.2d")}</Button>
+          <Button aria-pressed={viewMode === "3d"} variant={viewMode === "3d" ? "default" : "outline"} onClick={() => { setEditMode(false); setViewMode("3d"); }}>{t("layerView.3d")}</Button>
+        </div>
         <Button className="flake-page__materials-button" onClick={async () => {
           try {
             const loaded = await ensureStatsData();
@@ -2143,13 +2158,13 @@ export function FlakePage({ currentFile, setRoute }: any) {
             openMaterialsWithWindowBehavior(currentFile, () => setShowMaterials(true));
           } catch (error) {
             setStatsData(null);
-            setLayerError(`材料读取失败：${String(error)}`);
+            setLayerError({ key: "flake.materialsFailed", params: {error:String(error)} });
           }
         }}>
-          材料列表
+          {t("editor.materials")}
         </Button>
         <Button className="flake-page__build-button" onClick={loadProjectionLayers} disabled={!currentFile || isLoadingLayers || isSavingEdits}>
-          {isLoadingLayers ? "读取中..." : "重新读取分层"}
+          {isLoadingLayers ? t("flake.readingShort") : t("flake.reloadLayers")}
         </Button>
         <label className="subwindow-check-row flake-page__edit-toggle">
           <Checkbox
@@ -2161,24 +2176,25 @@ export function FlakePage({ currentFile, setRoute }: any) {
               setEditMode(enabled);
             }}
           />
-          编辑模式（状态与测量仅本次会话）
+          {t("flake.editMode")}
         </label>
         <div className="subwindow-toolbar-spacer" />
         <div className="flake-page__file-path" title={displayFilePath(currentFile)}>{displayFilePath(currentFile)}</div>
       </div>
 
+      {viewMode === "3d" ? <Layer3DView key={currentFile} sourcePath={currentFile} blocked={showMaterials || showContainerDialog || !!debugStateBlock || showInventoryDialog} /> : <>
       <div className="group-box flake-page__control-box">
-        <div className="group-box-title">层级控制</div>
+        <div className="group-box-title">{t("flake.layerControls")}</div>
         <div className="flake-page__layer-row">
-          <span className="nova-muted flake-page__layer-label">层级</span>
-          <Slider className="flake-page__layer-range" aria-label="当前层" min={0} max={Math.max(1, maxY)} value={[layerY]} onValueChange={([value]) => setLayerY(Math.min(value, maxY))} disabled={!ready || maxY === 0} />
+          <span className="nova-muted flake-page__layer-label">{t("flake.layer")}</span>
+          <Slider className="flake-page__layer-range" aria-label={t("flake.currentLayer")} min={0} max={Math.max(1, maxY)} value={[layerY]} onValueChange={([value]) => setLayerY(Math.min(value, maxY))} disabled={!ready || maxY === 0} />
         </div>
 
         <div className="flake-page__layer-row flake-page__onion-row">
-          <span className="nova-muted flake-page__layer-label">洋葱皮</span>
+          <span className="nova-muted flake-page__layer-label">{t("flake.onionSkin")}</span>
           <Slider
             className="flake-page__layer-range"
-            aria-label="洋葱皮层数"
+            aria-label={t("flake.onionSkinDepth")}
             min={0}
             max={5}
             step={1}
@@ -2199,10 +2215,10 @@ export function FlakePage({ currentFile, setRoute }: any) {
         </div>
 
         <div className="flake-page__layer-row flake-page__zoom-row">
-          <span className="nova-muted flake-page__layer-label">缩放</span>
+          <span className="nova-muted flake-page__layer-label">{t("flake.zoom")}</span>
           <Slider
             className="flake-page__layer-range"
-            aria-label="分层缩放"
+            aria-label={t("flake.layerZoom")}
             min={MIN_SCALE}
             max={MAX_SCALE}
             step={0.1}
@@ -2223,22 +2239,22 @@ export function FlakePage({ currentFile, setRoute }: any) {
             }}
             disabled={!ready}
           />
-          <span className="nova-muted nova-small flake-page__zoom-unit">像素/格</span>
+          <span className="nova-muted nova-small flake-page__zoom-unit">{t("flake.pixelsPerBlock")}</span>
         </div>
 
         <label className="subwindow-check-row flake-page__edit-toggle">
           <Checkbox  checked={showStateHints} onCheckedChange={(checked) => setShowStateHints((checked === true))} disabled={!ready} />
-          状态提示图片
+          {t("flake.stateImages")}
         </label>
 
         <div className="flake-page__layer-footer">
           <div className="flake-page__layer-value">Y = {layerY}</div>
           <div className="flake-page__layer-actions">
             <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 5))}>-5</Button>
-            <Button className="flake-page__step-button" disabled={!ready} aria-label="上一层" onClick={() => setLayerY(Math.max(0, layerY - 1))}><Minus aria-hidden="true" /></Button>
-            <Button className="flake-page__step-button" disabled={!ready} aria-label="下一层" onClick={() => setLayerY(Math.min(maxY, layerY + 1))}><Plus aria-hidden="true" /></Button>
+            <Button className="flake-page__step-button" disabled={!ready} aria-label={t("flake.previousLayer")} onClick={() => setLayerY(Math.max(0, layerY - 1))}><Minus aria-hidden="true" /></Button>
+            <Button className="flake-page__step-button" disabled={!ready} aria-label={t("flake.nextLayer")} onClick={() => setLayerY(Math.min(maxY, layerY + 1))}><Plus aria-hidden="true" /></Button>
             <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 5))}>+5</Button>
-            <Button disabled={!ready} onClick={() => canvasRef.current?.resetView()}>重置视图</Button>
+            <Button disabled={!ready} onClick={() => canvasRef.current?.resetView()}>{t("flake.resetView")}</Button>
           </div>
         </div>
       </div>
@@ -2250,7 +2266,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
           <div ref={viewportRef} className="flake-page__viewport">
             {!ready ? (
               <div className="nova-empty-state flake-page__viewport-empty">
-                <div className="flake-page__viewport-title">{building ? "正在读取二维分层" : "分层数据尚未就绪"}</div>
+                <div className="flake-page__viewport-title">{building ? t("flake.reading2d") : t("flake.dataNotReady")}</div>
                 <div>{statusText}</div>
               </div>
             ) : (
@@ -2290,59 +2306,59 @@ export function FlakePage({ currentFile, setRoute }: any) {
               className="flake-page__splitter"
               role="separator"
               aria-orientation="vertical"
-              aria-label="调整编辑工具宽度"
+              aria-label={t("flake.resizeTools")}
               onPointerDown={handleToolSplitterPointerDown}
             />
 
             <aside className="group-box flake-page__tool-panel">
-              <div className="group-box-title">编辑工具</div>
+              <div className="group-box-title">{t("flake.tools")}</div>
               <ScrollArea className="flake-page__tool-panel-body">
                 <div className="flake-page__tool-panel-section">
-                  <div className="flake-page__tool-panel-heading">当前上下文</div>
+                  <div className="flake-page__tool-panel-heading">{t("flake.context")}</div>
                   <div className="flake-page__tool-panel-kv">
-                    <span className="nova-muted">区域</span>
+                    <span className="nova-muted">{t("flake.region")}</span>
                     <span>{regionName}</span>
                   </div>
                   <div className="flake-page__tool-panel-kv">
-                    <span className="nova-muted">层级</span>
+                    <span className="nova-muted">{t("flake.layer")}</span>
                     <span>Y = {layerY}</span>
                   </div>
                   <div className="flake-page__tool-panel-kv">
-                    <span className="nova-muted">二维数据</span>
-                    <span>{ready ? "已就绪" : building ? "读取中" : "未就绪"}</span>
+                    <span className="nova-muted">{t("flake.data2d")}</span>
+                    <span>{ready ? t("flake.ready") : building ? t("flake.reading") : t("flake.notReady")}</span>
                   </div>
                   <div className="flake-page__tool-panel-kv">
-                    <span className="nova-muted">测量</span>
-                    <span>{measurementRects.length} 个矩形</span>
+                    <span className="nova-muted">{t("flake.measurement")}</span>
+                    <span>{t("flake.rectangleCount", {count:measurementRects.length.toLocaleString(locale)})}</span>
                   </div>
                   <div className="flake-page__tool-panel-kv">
-                    <span className="nova-muted">标记</span>
+                    <span className="nova-muted">{t("flake.marker")}</span>
                     <span>
                       {effectiveOriginMarker
-                        ? `原点 x=${effectiveOriginMarker.x} y=${effectiveOriginMarker.y} z=${effectiveOriginMarker.z}${hasUnsavedMarkerEdits ? "（未保存）" : ""}`
-                        : hasUnsavedMarkerEdits ? "无（未保存）" : "无"}
+                        ? t("flake.originInfo", {x:effectiveOriginMarker.x,y:effectiveOriginMarker.y,z:effectiveOriginMarker.z,unsaved:hasUnsavedMarkerEdits ? t("flake.unsavedSuffix") : ""})
+                        : hasUnsavedMarkerEdits ? t("flake.unsavedNone") : t("editor.none")}
                     </span>
                   </div>
                 </div>
 
                 <div className="flake-page__tool-panel-section">
-                  <div className="flake-page__tool-panel-heading">状态</div>
+                  <div className="flake-page__tool-panel-heading">{t("flake.status")}</div>
                   <div className="nova-muted nova-small flake-page__status-text">{statusText}</div>
-                  {markerStatus ? <div className="nova-muted nova-small flake-page__status-text">{displayPathText(markerStatus)}</div> : null}
-                  {layerError ? <p className="nova-error flake-page__tool-panel-error">{layerError}</p> : null}
+                  {markerStatus ? <div className="nova-muted nova-small flake-page__status-text">{displayPathText(localizeMessage(markerStatus))}</div> : null}
+                  {layerError ? <p className="nova-error flake-page__tool-panel-error">{localizeMessage(layerError)}</p> : null}
                 </div>
 
                 <div className="flake-page__tool-panel-section">
-                  <div className="flake-page__tool-panel-heading">编辑工具</div>
-                  <div className="flake-page__tool-palette" role="toolbar" aria-label="编辑工具">
+                  <div className="flake-page__tool-panel-heading">{t("flake.tools")}</div>
+                  <div className="flake-page__tool-palette" role="toolbar" aria-label={t("flake.tools")}>
                     {EDIT_TOOL_PLACEHOLDERS.map((tool) => (
                       <Button
                         key={tool.id}
                         className="flake-page__edit-tool-button"
                         type="button"
                         onClick={() => setSelectedEditTool(tool.id)}
-                        title={`${tool.name}：${tool.description}`}
-                        aria-label={tool.name}
+                        title={t("flake.toolHelp", {name:t(tool.nameKey), description:t(tool.descriptionKey)})}
+                        aria-label={t(tool.nameKey)}
                         disabled={!["hand", "debug-stick", "measure", "marker"].includes(tool.id)}
                         aria-pressed={effectiveEditTool === tool.id}
                       >
@@ -2354,19 +2370,19 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
                 <div className="flake-page__tool-panel-actions">
                   <Button type="button" onClick={handleSaveMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
-                    {isSavingEdits ? "保存中..." : "保存原点"}
+                    {isSavingEdits ? t("flake.saveBusy") : t("flake.saveOrigin")}
                   </Button>
                   <Button type="button" onClick={handleSaveMarkerEditsAs} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
-                    原点另存为
+                    {t("flake.saveOriginAs")}
                   </Button>
                   <Button type="button" onClick={handleRestoreMarkerEdits} disabled={!editMode || !hasUnsavedMarkerEdits || isSavingEdits}>
-                    还原原点草稿
+                    {t("flake.restoreOrigin")}
                   </Button>
                   <Button type="button" onClick={() => setShowInventoryDialog(true)} disabled={!editMode}>
-                    打开创造模式物品栏
+                    {t("flake.openCreative")}
                   </Button>
                   <Button type="button" onClick={() => setRoute?.("render")}>
-                    打开渲染页
+                    {t("flake.openRender")}
                   </Button>
                 </div>
               </ScrollArea>
@@ -2376,8 +2392,8 @@ export function FlakePage({ currentFile, setRoute }: any) {
       </div>
 
       {editMode ? (
-        <div className="flake-page__quickbar" aria-label="编辑快捷栏">
-          <div className="flake-page__quickbar-body" role="toolbar" aria-label="快捷栏本体">
+        <div className="flake-page__quickbar" aria-label={t("flake.quickbar")}>
+          <div className="flake-page__quickbar-body" role="toolbar" aria-label={t("flake.quickbarBody")}>
             {quickbarSlots.map((blockId, index) => {
               const isSelected = selectedQuickbarSlot === index;
               return (
@@ -2385,18 +2401,18 @@ export function FlakePage({ currentFile, setRoute }: any) {
                   key={`slot-${index + 1}`}
                   className={isSelected ? "flake-page__quickbar-slot is-selected" : "flake-page__quickbar-slot"}
                   type="button"
-                  aria-label={blockId ? `${translateBlockId(creativeItemId(blockId) || blockId)}（快捷栏槽位 ${index + 1}）` : `快捷栏槽位 ${index + 1}`}
+                  aria-label={blockId ? t("flake.hotbarItemAria", {item:translateBlockId(creativeItemId(blockId) || blockId),index:index+1}) : t("flake.hotbarSlotAria", {index:index+1})}
                   aria-pressed={isSelected}
                   onClick={() => setSelectedQuickbarSlot(index)}
                 >
                   {blockId ? <BlockIcon blockId={creativeItemId(blockId) || blockId} lookupMode="item_first" /> : <span className="flake-page__quickbar-slot-icon" aria-hidden />}
-                  <span className="flake-page__quickbar-slot-label">{blockId ? translateBlockId(creativeItemId(blockId) || blockId) : "空槽"}</span>
+                  <span className="flake-page__quickbar-slot-label">{blockId ? translateBlockId(creativeItemId(blockId) || blockId) : t("flake.emptySlot")}</span>
                 </Button>
               );
             })}
           </div>
           <Button className="flake-page__quickbar-open-inventory" type="button" onClick={() => setShowInventoryDialog(true)}>
-            <span className="flake-page__quickbar-open-inventory-text">打开物品栏</span>
+            <span className="flake-page__quickbar-open-inventory-text">{t("flake.openInventory")}</span>
           </Button>
         </div>
       ) : null}
@@ -2410,9 +2426,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
         >
           {markerMenu.isOrigin ? (
             <>
-              <div className="dropdown-item flake-marker-menu-heading">编辑</div>
+              <div className="dropdown-item flake-marker-menu-heading">{t("flake.edit")}</div>
               <Button className="dropdown-item flake-marker-menu-item" type="button" onClick={handleRemoveOriginMarker} disabled={isSavingEdits}>
-                移除标记
+                {t("flake.removeMarker")}
               </Button>
               <Button
                 className="dropdown-item flake-marker-menu-item"
@@ -2420,7 +2436,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 disabled={isSavingEdits || !effectiveOriginMarker || !meta || effectiveOriginMarker.y >= meta.size_y - 1}
                 onClick={() => handleShiftOriginMarker(1)}
               >
-                上移一层
+                {t("flake.moveUp")}
               </Button>
               <Button
                 className="dropdown-item flake-marker-menu-item"
@@ -2428,22 +2444,23 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 disabled={isSavingEdits || !effectiveOriginMarker || effectiveOriginMarker.y <= 0}
                 onClick={() => handleShiftOriginMarker(-1)}
               >
-                下移一层
+                {t("flake.moveDown")}
               </Button>
-              <div className="dropdown-item flake-marker-menu-heading">创建/更改</div>
-              <div className="dropdown-item flake-marker-menu-empty">（无更多选项）</div>
+              <div className="dropdown-item flake-marker-menu-heading">{t("flake.createChange")}</div>
+              <div className="dropdown-item flake-marker-menu-empty">{t("flake.noOptions")}</div>
             </>
           ) : (
             <>
-              <div className="dropdown-item flake-marker-menu-heading">创建/更改（仅作提示）</div>
+              <div className="dropdown-item flake-marker-menu-heading">{t("flake.createHint")}</div>
               <Button className="dropdown-item flake-marker-menu-item" type="button" onClick={() => handleStageOriginMarker(markerMenu.point)}>
-                原点
+                {t("flake.origin")}
               </Button>
             </>
           )}
         </div>
       ) : null}
 
+      </>}
       {showInventoryDialog ? (
         <CreativeInventoryDialog
           onClose={() => setShowInventoryDialog(false)}
@@ -2451,7 +2468,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
           onChangeQuickbarSlots={(updater) => setQuickbarSlots((current) => updater([...current]))}
           extraCollections={
             materialBlocks.length > 0
-              ? [{ id: '__current__', name: '当前投影方块', values: materialBlocks }]
+              ? [{ id: '__current__', name: t("flake.currentBlocks"), values: materialBlocks }]
               : []
           }
         />
