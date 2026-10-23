@@ -50,7 +50,7 @@
     {
       "target": "x86_64-pc-windows-msvc",
       "runtime_build_id": "runtime-1-16367e0b9db3-four-features-20261023-r1-x86_64-pc-windows-msvc",
-      "module_manifest_sha256": "13e151446a8a3227d87039d8aa7ad7d53259f554f08cdb56477960b02b1f0e16"
+      "module_manifest_sha256": "eb766e3d1f95ce49a6bcb4c71de5845cffe45d75211562d9fa89e2d88ce94cbc"
     }
   ]
 }
