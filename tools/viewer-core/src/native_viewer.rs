@@ -3417,7 +3417,7 @@ impl FreeCameraPointerCapture {
         let lost = self.focused && !window.camera_has_focus()
             || self.dragging && window.camera_drag_cancelled();
         #[cfg(not(target_os = "macos"))]
-        let lost = lost || self.captured && !window.camera_capture_confirmed();
+        let lost = lost || self.captured && !window.refresh_pointer_capture();
         if lost { self.release(window); }
         lost
     }

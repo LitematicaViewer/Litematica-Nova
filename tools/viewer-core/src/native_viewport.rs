@@ -15,8 +15,20 @@ use crate::mac_shared_viewport::MacSharedViewport;
 pub(crate) struct NativeViewportWindow {
     native: Option<Arc<Window>>,
     pointer_restore: std::sync::Mutex<Option<[f64; 2]>>,
+    #[cfg(target_os = "windows")]
+    child_pointer_clip: std::sync::Mutex<Option<[i32; 4]>>,
     #[cfg(target_os = "macos")]
     shared: Option<Arc<MacSharedViewport>>,
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for NativeViewportWindow {
+    fn drop(&mut self) {
+        // Ordinary error/exit unwinding must not strand a desktop restriction.
+        if let Ok(owned) = self.child_pointer_clip.get_mut() {
+            if let Some(clip) = owned.take() { let _ = pointer_os::release_clip(clip); }
+        }
+    }
 }
 
 impl From<Window> for NativeViewportWindow {
@@ -25,7 +37,9 @@ impl From<Window> for NativeViewportWindow {
 
 impl From<Arc<Window>> for NativeViewportWindow {
     fn from(window: Arc<Window>) -> Self {
-        Self { native: Some(window), pointer_restore: std::sync::Mutex::new(None), #[cfg(target_os = "macos")] shared: None }
+        Self { native: Some(window), pointer_restore: std::sync::Mutex::new(None),
+            #[cfg(target_os = "windows")] child_pointer_clip: std::sync::Mutex::new(None),
+            #[cfg(target_os = "macos")] shared: None }
     }
 }
 
@@ -125,6 +139,10 @@ impl NativeViewportWindow {
 
     pub(crate) fn set_pointer_capture(&self, captured: bool) -> Result<()> {
         if let Some(window) = &self.native {
+            #[cfg(target_os = "windows")]
+            if pointer_os::is_child(window) {
+                return self.set_child_pointer_capture(window, captured);
+            }
             if captured {
                 anyhow::ensure!(self.camera_has_focus(), "viewport has no keyboard focus");
                 #[cfg(target_os = "windows")]
@@ -160,6 +178,69 @@ impl NativeViewportWindow {
         anyhow::bail!("native viewport pointer owner is unavailable")
     }
 
+    #[cfg(target_os = "windows")]
+    fn set_child_pointer_capture(&self, window: &Window, captured: bool) -> Result<()> {
+        let mut owned = self.child_pointer_clip.lock().expect("child pointer clip");
+        if captured {
+            anyhow::ensure!(pointer_os::has_focus(window), "viewport has no keyboard focus");
+            if owned.is_some() { return Ok(()); }
+            let restore = pointer_os::cursor_in(window).context("read viewport cursor position")?;
+            let clip = pointer_os::client_clip(window)?;
+            // Winit 0.29 tests HWND == GetActiveWindow before ClipCursor. That
+            // always excludes WS_CHILD; Confined returns Ok without clipping.
+            // This lease uses the focused child's physical client rectangle.
+            pointer_os::set_clip(Some(clip))?;
+            *owned = Some(clip);
+            *self.pointer_restore.lock().expect("pointer state") = Some(restore);
+            window.set_cursor_visible(false);
+            return Ok(());
+        }
+        if let Some(clip) = owned.take() {
+            let released = pointer_os::release_clip(clip);
+            window.set_cursor_visible(true);
+            pointer_os::release_drag(window);
+            if let Some(position) = self.pointer_restore.lock().expect("pointer state").take() {
+                let size = window.inner_size();
+                if pointer_os::has_focus(window) {
+                    let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(
+                        position[0].clamp(0.0, f64::from(size.width.saturating_sub(1))),
+                        position[1].clamp(0.0, f64::from(size.height.saturating_sub(1)))));
+                }
+            }
+            released?;
+        } else {
+            // Drag mode has no long-lived clip, but can still own button capture.
+            pointer_os::release_drag(window);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn refresh_pointer_capture(&self) -> bool {
+        #[cfg(target_os = "windows")]
+        if let Some(window) = &self.native {
+            if pointer_os::is_child(window) {
+                let mut owned = self.child_pointer_clip.lock().expect("child pointer clip");
+                let Some(previous) = *owned else { return false; };
+                if !pointer_os::has_focus(window) { return false; }
+                let refreshed = (|| -> Result<bool> {
+                    // An external focus/capture owner wins; do not reclaim its clip.
+                    if pointer_os::clip_rect()? != previous { return Ok(false); }
+                    let next = pointer_os::client_clip(window)?;
+                    if next != previous {
+                        pointer_os::set_clip(Some(next))?;
+                        *owned = Some(next);
+                    }
+                    Ok(pointer_os::clip_rect()? == next)
+                })();
+                return match refreshed {
+                    Ok(value) => value,
+                    Err(error) => { eprintln!("[NOVA_CAMERA_INPUT] capture_refresh_failed error={error:#}"); false }
+                };
+            }
+        }
+        self.camera_capture_confirmed()
+    }
+
     pub(crate) fn camera_has_focus(&self) -> bool {
         if let Some(window) = &self.native {
             #[cfg(target_os = "windows")]
@@ -174,7 +255,14 @@ impl NativeViewportWindow {
     pub(crate) fn camera_capture_confirmed(&self) -> bool {
         if let Some(window) = &self.native {
             #[cfg(target_os = "windows")]
-            { return pointer_os::is_confined(window); }
+            {
+                if pointer_os::is_child(window) {
+                    return pointer_os::has_focus(window)
+                        && self.child_pointer_clip.lock().expect("child pointer clip").is_some_and(|owned|
+                            pointer_os::clip_rect().is_ok_and(|actual| actual == owned));
+                }
+                return pointer_os::is_confined(window);
+            }
             #[cfg(not(target_os = "windows"))]
             { return window.has_focus(); }
         }
@@ -259,11 +347,70 @@ mod pointer_os {
         fn ClientToScreen(hwnd: isize, point: *mut POINT) -> i32;
         fn GetClientRect(hwnd: isize, rect: *mut RECT) -> i32;
         fn GetClipCursor(rect: *mut RECT) -> i32;
+        fn ClipCursor(rect: *const RECT) -> i32;
+        fn GetWindowDpiAwarenessContext(hwnd: isize) -> isize;
+        fn SetThreadDpiAwarenessContext(context: isize) -> isize;
+        fn GetSystemMetrics(index: i32) -> i32;
     }
     fn hwnd(window: &Window) -> isize {
         match window.window_handle().map(|handle| handle.as_raw()) {
             Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get(), _ => 0,
         }
+    }
+    pub(super) fn is_child(window: &Window) -> bool {
+        let handle = hwnd(window);
+        handle != 0 && unsafe { GetWindowLongPtrW(handle, -16) } & 0x4000_0000 != 0
+    }
+    pub(super) fn client_clip(window: &Window) -> Result<[i32; 4]> {
+        let handle = hwnd(window);
+        let context = unsafe { GetWindowDpiAwarenessContext(handle) };
+        let previous = unsafe { SetThreadDpiAwarenessContext(context) };
+        if context == 0 || previous == 0 {
+            return Err(std::io::Error::last_os_error()).context("enter viewport DPI context");
+        }
+        let result = (|| {
+            let mut client = RECT::default();
+            if unsafe { GetClientRect(handle, &mut client) } == 0 {
+                return Err(std::io::Error::last_os_error()).context("read viewport client rectangle");
+            }
+            let mut first = POINT { x: client.left, y: client.top };
+            let mut last = POINT { x: client.right, y: client.bottom };
+            if unsafe { ClientToScreen(handle, &mut first) == 0 || ClientToScreen(handle, &mut last) == 0 } {
+                return Err(std::io::Error::last_os_error()).context("map viewport clip to physical screen");
+            }
+            let [desktop_x, desktop_y, desktop_width, desktop_height] = unsafe {
+                [GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79)]
+            };
+            // A partly off-screen child has a smaller effective cursor region;
+            // account for the desktop clamp before storing the owned rectangle.
+            let clip = [first.x.max(desktop_x), first.y.max(desktop_y),
+                last.x.min(desktop_x.saturating_add(desktop_width)),
+                last.y.min(desktop_y.saturating_add(desktop_height))];
+            anyhow::ensure!(clip[2] > clip[0] && clip[3] > clip[1], "viewport has an empty pointer clip");
+            Ok(clip)
+        })();
+        if previous != 0 { unsafe { SetThreadDpiAwarenessContext(previous); } }
+        result
+    }
+    pub(super) fn clip_rect() -> Result<[i32; 4]> {
+        let mut rect = RECT::default();
+        if unsafe { GetClipCursor(&mut rect) } == 0 {
+            return Err(std::io::Error::last_os_error()).context("read pointer clip");
+        }
+        Ok([rect.left, rect.top, rect.right, rect.bottom])
+    }
+    pub(super) fn set_clip(rect: Option<[i32; 4]>) -> Result<()> {
+        let rect = rect.map(|[left, top, right, bottom]| RECT { left, top, right, bottom });
+        let pointer = rect.as_ref().map_or(std::ptr::null(), |value| value as *const RECT);
+        if unsafe { ClipCursor(pointer) } == 0 {
+            return Err(std::io::Error::last_os_error()).context("set viewport pointer clip");
+        }
+        Ok(())
+    }
+    pub(super) fn release_clip(owned: [i32; 4]) -> Result<()> {
+        // A stale release must not remove a newer owner's restriction.
+        if clip_rect()? == owned { set_clip(None)?; }
+        Ok(())
     }
     // Some(false) still denotes a child: never fall back to top-level activation
     // (which winit implements by synthesizing Alt) when its SetFocus fails.
