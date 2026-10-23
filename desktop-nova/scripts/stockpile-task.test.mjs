@@ -9,7 +9,7 @@ import postcss from 'postcss';
 const uiFile = new URL('../ui/windows/main/pages/statistics/StockpileTaskPanel.tsx', import.meta.url);
 const uiSource = fs.readFileSync(uiFile, 'utf8');
 
-test('specified workbench shares seven grid columns and real remaining height across list and details', () => {
+test('statistics-first workbench shares seven columns and gives the actual list remaining height', () => {
   const sheet = postcss.parse(fs.readFileSync(new URL('../ui/windows/main/pages/statistics/materials.css', import.meta.url), 'utf8'));
   const rule = selector => {
     const matches = [];
@@ -18,23 +18,23 @@ test('specified workbench shares seven grid columns and real remaining height ac
     return Object.fromEntries(matches.flatMap(node => node.nodes.filter(node => node.type === 'decl').map(node => [node.prop, node.value])));
   };
   const panel = rule('.stockpile-task'), controls = rule('.stockpile-task-controls'), workspace = rule('.stockpile-workspace');
-  const list = rule('.stockpile-table-scroll'), details = rule('.stockpile-detail-scroll');
+  const list = rule('.stockpile-table-scroll');
   assert.equal(panel.width, '100%'); assert.match(panel.flex, /^1 1 0/);
   assert.equal(panel['min-height'], '0');
   assert.equal(panel['min-width'], '0'); assert.equal(panel['max-width'], undefined);
   assert.match(controls.flex, /^0 [01] auto$/, 'toolbars use natural height, not stretched rows');
-  assert.equal(workspace.display, 'grid'); assert.equal(workspace['min-height'], '0'); assert.equal(workspace.gap, '14px');
+  assert.equal(workspace.display, 'grid'); assert.equal(workspace['min-height'], '0'); assert.equal(workspace['grid-template-columns'], 'minmax(0, 1fr)');
   assert.equal(list.width, '100%'); assert.match(list.flex, /^1 1 0/); assert.equal(list['min-height'], '0');
-  assert.equal(list.overflow, 'auto'); assert.equal(details['overflow-y'], 'auto');
+  assert.equal(list.overflow, 'auto');
   assert.equal(list['max-height'], undefined);
   assert.equal(rule('.material-list-task-content > .subwindow-body').overflow, 'hidden');
   assert.equal(rule('.material-list-task-content > .subwindow-body > .material-export-footer').flex, '0 0 auto');
-  assert.equal(rule('.material-list-content .stockpile-table').width, '100%');
-  assert.equal(rule('.material-list-content .stockpile-table')['min-width'], '930px');
-  assert.equal(rule('.stockpile-table .stockpile-row').height, '46px');
-  assert.equal(rule('.stockpile-detail-panel').width, '340px');
+  assert.equal(rule('.stockpile-task .stockpile-table').width, '100%');
+  assert.equal(rule('.stockpile-task .stockpile-table')['min-width'], '945px');
+  assert.equal(rule('.stockpile-table .stockpile-row').height, '44px');
+  assert.equal(rule('.stockpile-detail-drawer.dialog-surface').width, 'min(760px, calc(100vw - 48px))');
   const compact = value => value.replace(/\s+/g, '');
-  assert.equal(compact(panel['--stockpile-row-grid']), '40pxminmax(220px,2fr)minmax(125px,1fr)minmax(168px,1.1fr)minmax(135px,1fr)92px132px');
+  assert.equal(compact(panel['--stockpile-row-grid']), '40pxminmax(280px,2.2fr)minmax(145px,1fr)minmax(145px,.9fr)minmax(145px,1fr)90px100px');
   let sharedGrid = false, wideGrid = false;
   sheet.walkRules(node => {
     if (node.selector.includes('.stockpile-table-header') && node.selector.includes('.stockpile-row')) {
@@ -45,7 +45,8 @@ test('specified workbench shares seven grid columns and real remaining height ac
     }
   });
   assert(sharedGrid, 'header and virtual rows use the same grid, not separate column estimates');
-  assert(wideGrid, '1360 CSS pixels switches the actual workspace to the fixed 340px detail pane');
+  assert(!wideGrid, 'main workspace never reserves a permanent 340px detail column');
+  assert.doesNotMatch(uiSource, /className="stockpile-detail-panel"|matchMedia/, 'details open on explicit demand, not a competing pane');
   assert(!uiSource.includes('--stockpile-content-height'), 'row count must not set viewport height');
   assert.match(uiSource, /className="stockpile-task-controls"/);
   assert.match(uiSource, /stockpile-table-scroll/);
@@ -81,7 +82,7 @@ test('existing virtual list resizes its real viewport without remounting or writ
       observe(target) { assert.equal(target, container); } disconnect() { this.disconnected = true; } },
   };
   vm.runInNewContext(code, context);
-  const render = () => { cursor = 0; return context.exports.useVirtualWindow(items, ref, 46, 8); };
+  const render = () => { cursor = 0; return context.exports.useVirtualWindow(items, ref, 44, 8); };
   const flush = () => { for (const [id, callback] of frames) { frames.delete(id); callback(); } return render(); };
   render(); cleanup = effect();
   const initial = render(); assert.equal(initial.visibleItems.length, 13);
@@ -92,7 +93,7 @@ test('existing virtual list resizes its real viewport without remounting or writ
   assert.equal(narrow.startIndex, scrolled.startIndex); assert(narrow.visibleItems.length < scrolled.visibleItems.length);
   assert.equal(container.scrollTop, 840, 'resize never resets the current task list scroll offset');
   container.clientHeight = 500; headerHeight = 84; observer.callback(); const scaled = flush();
-  assert.equal(scaled.startIndex, Math.max(0, Math.floor((840 - 84) / 46) - 8));
+  assert.equal(scaled.startIndex, Math.max(0, Math.floor((840 - 84) / 44) - 8));
   assert.equal(scaled.visibleItems[0], items[scaled.startIndex]);
   assert.equal(observerCount, 1, 'reuse the existing observer, not another resize subscription');
   cleanup(); assert.equal(observer.disconnected, true); assert.equal(listeners.size, 0);
@@ -108,7 +109,7 @@ const declarations = new Map(), functions = new Map(), arrows = [];
 })(uiAst);
 const helperNames = ['stockpileUnitParts', 'itemState', 'displayLanguage', 'materialName', 'filterStockpileRows',
   'resetConfirmationMatches', 'mergeStockpileMutation', 'stockpileCompletionMutation', 'stockpileAdjustedQuantity', 'stockpileDetailSelection',
-  'recoverableStockpileCommands', 'pendingDraft', 'draftKey'];
+  'recoverableStockpileCommands', 'pendingDraft', 'draftKey', 'stockpileExportSelection'];
 const transpile = source => ts.transpileModule(source, { fileName: 'replay.tsx', compilerOptions: {
   target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
 } }).outputText;
@@ -298,6 +299,81 @@ test('detail selection follows the visible stable identity, never an old filtere
   assert.equal(stockpileDetailSelection([],'potion#B'),null);
 });
 
+test('unified export opens with zero I/O and only confirmation dispatches the chosen real export', async () => {
+  const writes = [], state = {};
+  const context = { exports: {}, preferences: { individualCounts: true }, task: task(), busy: false,
+    exportBusy: false, exportSource: 'materials', exportFormat: 'copy', exportScope: 'remaining', materialExportContent: undefined,
+    setExportSource: value => { state.source = value; }, setExportFormat: value => { state.format = value; },
+    setExportScope: value => { state.scope = value; }, setExportIndividualCounts: value => { state.individual = value; },
+    setStatus() {}, setExportOpen: value => { state.open = value; }, setExportBusy() {}, setError() {},
+    copy: (...input) => writes.push(['copy', ...input]), exportList: (...input) => writes.push(['file', ...input]),
+    backup: restore => writes.push(['backup', restore]),
+  };
+  vm.runInNewContext(transpile(`const ${declarations.get('beginExport')}; const ${declarations.get('confirmExport')}; globalThis.api={beginExport,confirmExport};`), context);
+  context.api.beginExport();
+  assert.deepEqual(state, { source: 'materials', format: 'copy', scope: 'all', individual: true, open: true });
+  assert.equal(writes.length, 0, 'opening configuration must not copy, save or mutate a task');
+  await context.api.confirmExport();
+  assert.deepEqual(writes.pop(), ['copy', 'remaining', 'materials']);
+  context.exportSource = 'task'; context.exportFormat = 'csv';
+  await context.api.confirmExport(); assert.deepEqual(writes.pop(), ['file', 'task', 'remaining', 'csv']);
+  context.exportFormat = 'json'; await context.api.confirmExport(); assert.deepEqual(writes.pop(), ['backup', false]);
+  context.exportSource = 'materials'; context.materialExportContent = {};
+  await context.api.confirmExport(); assert.equal(writes.length, 0, 'static export keeps its own explicit final confirmation');
+});
+
+test('export scopes preserve absolute task quantities and stable NBT identities without changing records', () => {
+  const { stockpileExportSelection } = helpers();
+  const items = [row('potion#A', {quantity: 5}), row('potion#B', {quantity: 12, remainingCount: 0, overfilledCount: 2})];
+  const before = JSON.stringify(items);
+  assert.deepEqual(Array.from(stockpileExportSelection(items, [items[1]], 'visible'), item => item.materialId), ['potion#B']);
+  assert.deepEqual(Array.from(stockpileExportSelection(items, [], 'remaining'), item => item.materialId), ['potion#A']);
+  assert.deepEqual(Array.from(stockpileExportSelection(items, [], 'prepared'), item => item.materialId), ['potion#A', 'potion#B']);
+  assert.deepEqual(Array.from(stockpileExportSelection(items, [], 'overfilled'), item => item.materialId), ['potion#B']);
+  assert.equal(JSON.stringify(items), before);
+});
+
+test('statistics default renders the existing task workspace even without a source, and retains genuine overview fields', () => {
+  const source = fs.readFileSync(new URL('../ui/windows/main/pages/statistics/StatisticsPage.tsx', import.meta.url), 'utf8');
+  const page = source.slice(source.indexOf('export function StatisticsPage'));
+  assert.match(page, /<StockpileTaskPanel sourcePath=\{currentFile \|\| ""\}/);
+  assert.doesNotMatch(page, /openMaterialsWithWindowBehavior|<MaterialTable|<MaterialsDialog|beta-statistics-panes/);
+  assert.match(page, /<MaterialCatalogDialog open=\{showMaterials\}/, 'lookup remains mounted to preserve filters');
+  assert.match(page, /materialExportContent=\{data && currentFile \? <MaterialListContent[^>]+exportOnly/);
+  for (const field of ['totalNonAirBlocks', 'enclosingSize.x', 'density', 'materials.length', 'entityCount', 'regionCount', 'redstoneRatio', 'fluidRatio']) {
+    assert(page.includes(`data.${field}`), `Genuine statistics field ${field} remains visible`);
+  }
+  assert.match(page, /enumeratorResults\.map/); assert.match(page, /EnumeratorInfoEditorDialog/);
+  assert.doesNotMatch(page, /if \(!currentFile\)\s*\{\s*return/);
+});
+
+test('read-only material lookup filters real snapshot channels without merging NBT identities or writing tasks', () => {
+  const source = fs.readFileSync(new URL('../ui/windows/main/pages/statistics/MaterialCatalogDialog.tsx', import.meta.url), 'utf8');
+  const ast = ts.createSourceFile('MaterialCatalogDialog.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const filter = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'filterCatalogMaterials');
+  assert(filter);
+  const context = { exports: {}, materialDisplayName: item => item.name, getUiLocale: () => 'en-US' };
+  vm.runInNewContext(transpile(`${filter.getText(ast)};globalThis.filter=filterCatalogMaterials;`), context);
+  const materials = [
+    { id: 'minecraft:potion#A', itemId: 'minecraft:potion', name: 'Healing', blockCount: 0, containerItemCount: 2, totalCount: 2 },
+    { id: 'minecraft:potion#B', itemId: 'minecraft:potion', name: 'Swiftness', blockCount: 0, containerItemCount: 7, totalCount: 7 },
+    { id: 'minecraft:stone', itemId: 'minecraft:stone', name: 'Stone', blockCount: 4, containerItemCount: 1, totalCount: 5 },
+  ];
+  const before = JSON.stringify(materials);
+  const ids = (...input) => Array.from(context.filter(materials, ...input), item => item.id);
+  assert.deepEqual(ids('', 'variants', 'count_desc'), ['minecraft:potion#B', 'minecraft:potion#A']);
+  assert.deepEqual(ids('', 'placed', 'name'), ['minecraft:stone']);
+  assert.deepEqual(ids('potion#A', 'all', 'name'), ['minecraft:potion#A']);
+  assert.equal(JSON.stringify(materials), before);
+  assert.match(source, /modal=\{false\}/);
+  assert.doesNotMatch(source, /DialogPrimitive\.Overlay|commandStockpileTask|getStockpileTask|loadStructureStats/);
+  assert.match(source, /if \(!open \|\| !recipeOpen/);
+  const host = fs.readFileSync(new URL('../src-tauri/src/application/operations.rs', import.meta.url), 'utf8');
+  const read = host.slice(host.indexOf('pub(crate) fn read_material_detail'), host.indexOf('pub(crate) fn prepare_material_recipes'));
+  assert.match(read, /vec!\["material-detail"/);
+  assert.doesNotMatch(read.replace(/\/\/[^\n]*/g, ''), /material_snapshot|cached_analysis|run_stockpile_request/);
+});
+
 test('web single-user filters/search preserve NBT identity and language/base-ID fallback',()=>{
   const {filterStockpileRows,materialName}=helpers();
   const items=[row('potion#A',{doneCount:3,preparedCount:3,status:'done',remainingCount:7}),
@@ -349,7 +425,9 @@ test('new stockpile labels exist in both locales without duplicate keys',()=>{
   const file=new URL('../src/services/locales/editor.ts',import.meta.url),source=fs.readFileSync(file,'utf8');
   const context={exports:{}};vm.runInNewContext(transpile(source),context);
   const {zhCN,enUS}=context.exports;
-  const labels=[...uiSource.matchAll(/t\("(stockpile\.[^"]+)"/g)].map(match=>match[1]);
+  const surfaces = ['StatisticsPage.tsx', 'MaterialCatalogDialog.tsx', 'RecipeTreeView.tsx']
+    .map(name => fs.readFileSync(new URL(`../ui/windows/main/pages/statistics/${name}`, import.meta.url), 'utf8'));
+  const labels=[...[uiSource, ...surfaces].join('\n').matchAll(/t\("((?:stockpile|statistics|editor)\.[^"]+)"/g)].map(match=>match[1]);
   for(const label of labels){assert(zhCN[label],`Missing Chinese label ${label}`);assert(enUS[label],`Missing English label ${label}`);}
   const ast=ts.createSourceFile(file.pathname,source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
   for(const statement of ast.statements){if(!ts.isVariableStatement(statement))continue;for(const declaration of statement.declarationList.declarations){

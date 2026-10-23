@@ -40,6 +40,7 @@ pub mod resource_pack_32x;
 pub mod runtime_paths;
 pub mod stats_api;
 pub mod material_export;
+pub mod material_detail;
 pub mod material_catalog;
 pub mod stockpile;
 pub mod stockpile_schema;

@@ -193,6 +193,17 @@ pub(crate) fn build_materials_data_from_stats(input: &Path, stats: StableStructu
     build_stockpile_materials_data(input, stats, &availability)
 }
 
+/// Maps one already analysed inventory row; never reads a schematic or task.
+pub(crate) fn material_detail_item(item: &MaterialItemOutput, minecraft_version: &str) -> Result<StockpileMaterialItem> {
+    material_detail_item_with_availability(item, &resolve_recipe_availability(minecraft_version)?)
+}
+
+fn material_detail_item_with_availability(item: &MaterialItemOutput, availability: &RecipeAvailability) -> Result<StockpileMaterialItem> {
+    let (items, _) = normalize_material_items(std::slice::from_ref(item));
+    let normalized = items.first().ok_or_else(|| anyhow::anyhow!("Material snapshot is empty"))?;
+    Ok(stockpile_material_item(normalized, stack_breakdown(item.total_count, item.stack_size.max(1)), availability))
+}
+
 fn stockpile_material_item(
     item: &NormalizedMaterialItem,
     breakdown: StackBreakdown,
@@ -777,6 +788,24 @@ mod tests {
         normalize_unobtainable_material, recipe_status_for_material, stack_breakdown,
     };
     use crate::stats_api::{MaterialScope, build_materials_output};
+
+    #[test]
+    fn material_detail_maps_one_snapshot_row_without_task_or_source() {
+        let row = crate::stats_api::MaterialItemOutput {
+            block_id: "minecraft:stone".into(), item_identity: Some("minecraft:stone#nbt-distinct".into()),
+            display_name: "Distinct stone".into(), count: 19, block_count: 3, container_item_count: 16, total_count: 19,
+            icon_hint: "minecraft:stone".into(), stack_size: 16, can_fit_container: true,
+            material_status: "item".into(), has_custom_stack_size: true,
+            region_counts: Some(vec![crate::stats_api::RegionCountOutput { region: "Region A".into(), count: 19 }]),
+            layer_counts: None, scope_counts: None,
+        };
+        let material = super::material_detail_item_with_availability(&row, &RecipeAvailability::Missing).unwrap();
+        assert_eq!(material.namespace_id, "minecraft:stone#nbt-distinct");
+        assert_eq!(material.item_icon_key, "minecraft:stone");
+        assert_eq!((material.required_count, material.stack_size, material.stacks, material.remainder), (19, 16, 1, 3));
+        assert_eq!(material.source_regions, ["Region A"]);
+        assert_eq!(material.display_name, "Distinct stone");
+    }
 
     #[test]
     fn stack_breakdown_counts_full_stacks_remainder_and_shulkers() {

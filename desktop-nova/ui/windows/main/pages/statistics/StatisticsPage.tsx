@@ -8,7 +8,7 @@ import { Input } from "../../../../components/ui/input";
 import { Textarea } from "../../../../components/ui/textarea";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import { Dialog } from "../../../../components/Dialog";
-import { X } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 ﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   exportMaterialListWithOptions,
@@ -39,6 +39,7 @@ import {
   prepareMaterialTaskWindow,
 } from "../../../../../src/business/facade";
 import { StockpileTaskPanel } from "./StockpileTaskPanel";
+import { MaterialCatalogDialog } from "./MaterialCatalogDialog";
 import { useSyncExternalStore } from "react";
 import {
   loadUserConfigMigratingLocalStorage,
@@ -422,12 +423,13 @@ function QuantitySwitch({ checked, onChange }: { checked: boolean; onChange: (va
 /**
  * Shared material-list body used by both the modal dialog and the desktop child window.
  */
-export function MaterialListContent({ data, onClose, currentFile, standalone = false, embedded = false, viewMode = "details", onViewModeChange }: {
-  data: StatsData | null; onClose?: () => void; currentFile: string; standalone?: boolean; embedded?: boolean; viewMode?:"details"|"export"; onViewModeChange?:(mode:"details"|"export")=>void;
+export function MaterialListContent({ data, onClose, currentFile, standalone = false, embedded = false, viewMode = "details", onViewModeChange, exportOnly = false }: {
+  data: StatsData | null; onClose?: () => void; currentFile: string; standalone?: boolean; embedded?: boolean; viewMode?:"details"|"export"; onViewModeChange?:(mode:"details"|"export")=>void; exportOnly?: boolean;
 }) {
   const { locale } = useI18n();
   const languageRevision = useSyncExternalStore(subscribeI18nChanges,getI18nRevision,getI18nRevision);
-  const [contentMode,setContentMode] = useState(viewMode);
+  const [selectedMode,setContentMode] = useState(viewMode);
+  const contentMode = exportOnly ? "export" : selectedMode;
   useEffect(() => setContentMode(viewMode),[viewMode]);
   const [multiplier, setMultiplier] = useState(1);
   const [asItems, setAsItems] = useState(false);
@@ -461,7 +463,7 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
   const selectedScope = useMemo(() => workbook.startsWith("region:") ? { kind:"region" as const, value:workbook.slice(7) }
     : workbook.startsWith("layer:") ? { kind:"layer" as const, value:workbook.slice(6) } : { kind:"all" as const, value:null },[workbook]);
   const contentClassName = [standalone ? "material-list-window" : embedded ? "material-list-content-embedded" : "dialog-content",
-    embedded ? "" : "subwindow-frame", "material-list-content", contentMode === "details" ? "material-list-task-content" : "", standalone ? "subwindow-frame-full material-list-content-standalone" : ""].filter(Boolean).join(" ");
+    embedded ? "" : "subwindow-frame", "material-list-content", exportOnly ? "material-export-only" : "", contentMode === "details" ? "material-list-task-content" : "", standalone ? "subwindow-frame-full material-list-content-standalone" : ""].filter(Boolean).join(" ");
   const options = useMemo(() => [{ label: t("statistics.all"), value: "scope:all" },
     ...(data?.regions || []).map(region => ({ label: t("statistics.regionScope", {name:region.name}), value: `region:${region.name}` })),
     ...(data?.layers || []).map(layer => ({ label: t("statistics.layerScope", {y:layer.world_y, layer:layer.layer}), value: `layer:${layer.layer}` }))], [data?.regions, data?.layers, locale]);
@@ -473,10 +475,10 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
         : workbook.startsWith("layer:") ? { kind: "layer" as const, value: workbook.slice(6) } : { kind: "all" as const, value: null };
       const ok = await exportMaterialListWithOptions(currentFile, {
         scope, includeContainerItems, multiplier, minecraftVersion: "26.3", terminalRawMaterials, format: exportFormat,
-        webOptions: exportFormat === "html" ? { mode: webMode,
-          accessPassword: webMode === "multi" ? accessPassword : undefined,
-          adminPassword: webMode === "multi" ? adminPassword : undefined,
-          whitelist: whitelist.split(/[\s,，;；]+/).filter(Boolean), whitelistEnabled, allowGuestReadonly, adminPageEnabled, targets: webTargets } : undefined,
+        webOptions: exportFormat === "html" ? { mode: exportOnly ? "single" : webMode,
+          accessPassword: !exportOnly && webMode === "multi" ? accessPassword : undefined,
+          adminPassword: !exportOnly && webMode === "multi" ? adminPassword : undefined,
+          whitelist: exportOnly ? [] : whitelist.split(/[\s,，;；]+/).filter(Boolean), whitelistEnabled: !exportOnly && whitelistEnabled, allowGuestReadonly: !exportOnly && allowGuestReadonly, adminPageEnabled: !exportOnly && adminPageEnabled, targets: webTargets } : undefined,
       });
       if (ok) { setExportStatus({key:"statistics.exported"}); setAccessPassword(""); setAdminPassword(""); }
     } catch (error: any) { setError({ key: "statistics.exportFailed", params: {error:String(error)} }); }
@@ -516,7 +518,7 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
           <Button title={t("statistics.prepareRecipesHint")} onClick={handlePrepareRecipes} disabled={busy}>{isPreparingRecipes ? t("statistics.preparingRecipes") : t("statistics.prepareRecipes")}</Button>
           {recipeStatus && <p role="status">{localizeMessage(recipeStatus)}</p>}
         </section>}
-        {exportFormat === "html" && <fieldset className="material-export-section" disabled={busy}>
+        {exportFormat === "html" && !exportOnly && <fieldset className="material-export-section" disabled={busy}>
           <legend>{t("statistics.webOptions")}</legend>
           <label className="material-export-field"><span>{t("statistics.webMode")}</span><Dropdown value={webMode} options={[{ label: t("statistics.webSingle"), value: "single" }, { label: t("statistics.webMulti"), value: "multi" }]}
             onChange={value => setWebMode(value as typeof webMode)} disabled={busy} ariaLabel={t("statistics.webUsage")} /></label>
@@ -541,7 +543,7 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
         </>
       </ScrollArea>}
       <div className="material-export-footer">
-        <Button variant="secondary" disabled={busy || taskPending} onClick={() => { const mode = contentMode === "details" ? "export" : "details"; setContentMode(mode); onViewModeChange?.(mode); setHoverItem(null); }}>{contentMode === "details" ? t("statistics.openExport") : t("statistics.returnDetails")}</Button>
+        {!exportOnly && <Button variant="secondary" disabled={busy || taskPending} onClick={() => { const mode = contentMode === "details" ? "export" : "details"; setContentMode(mode); onViewModeChange?.(mode); setHoverItem(null); }}>{contentMode === "details" ? t("statistics.openExport") : t("statistics.returnDetails")}</Button>}
         {contentMode === "export" && <Button onClick={handleExport} disabled={busy || !currentFile}>{isExporting ? t("statistics.exporting") : t("editor.exportMaterials")}</Button>}
         {exportStatus && <span role="status">{localizeMessage(exportStatus)}</span>}
         {error && <pre className="subwindow-error" role="alert">{localizeMessage(error)}</pre>}
@@ -572,10 +574,7 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
   const [data, setData] = useState<StatsData | null>(null);
   const [error, setError] = useState<UiMessage>("");
   const [showMaterials, setShowMaterials] = useState(false);
-  const [materialsViewMode,setMaterialsViewMode] = useState<"details"|"export">("details");
-  const [materialSearch, setMaterialSearch] = useState("");
-  const [includeContainerItems, setIncludeContainerItems] = useState(false);
-  const [asItems, setAsItems] = useState(false);
+  const includeContainerItems = false;
   const [isLoading, setIsLoading] = useState(false);
   const statsGeneration = useRef(0);
   const [showEnumerator, setShowEnumerator] = useState(false);
@@ -616,8 +615,6 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
   const applicationAnalysis = hasInventoryMaterialSemantics(renderOperation?.analysis) && Array.isArray(renderOperation?.analysis?.structural_block_counts) ? renderOperation!.analysis : null;
   const applicationAnalysisKey = applicationAnalysis ? renderOperation?.operationId ?? "analysis" : "";
   const renderPending = isApplicationRenderPending(renderOperation);
-  const sortedMaterials = useMemo(() => data ? data.materials.map(material => ({...material,name:materialDisplayName(material)})).sort((a, b) => b.totalCount - a.totalCount) : [], [data,languageRevision]);
-  const topMaterials = useMemo(() => filterMaterialItems(sortedMaterials, materialSearch), [sortedMaterials, materialSearch]);
   useLayoutEffect(() => {
     if (!data?.timing) return;
     console.info(`[NOVA_STATS_TIMING] request_to_list_commit_ms=${(performance.now() - data.timing.requestStarted).toFixed(3)} map_to_commit_ms=${(performance.now() - data.timing.mappedAt).toFixed(3)} cache_reused=${data.timing.cacheReused}`);
@@ -652,6 +649,7 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
       statsGeneration.current += 1;
       setData(null);
       setError("");
+      setIsLoading(false);
       return;
     }
     setData(null);
@@ -659,51 +657,68 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
     return () => { statsGeneration.current += 1; };
   }, [currentFile, includeContainerItems, applicationAnalysisKey]);
 
-  if (!currentFile) {
-    return <><div className="beta-statistics-empty"><h2>{t("statistics.title")}</h2><p>{t("statistics.empty")}</p><Button onClick={() => void openMaterialsWithWindowBehavior("", () => { setMaterialsViewMode("details"); setShowMaterials(true); }).catch(reason => setError(String(reason)))}>{t("editor.materialDetails")}</Button>{error && <p role="alert">{localizeMessage(error)}</p>}</div>
-      {showMaterials && <MaterialsDialog data={null} onClose={() => setShowMaterials(false)} currentFile="" />}</>;
-  }
   const scan = data?.containerScan;
-  return <React.Profiler id="statistics" onRender={recordStatisticsCommit}><div className="beta-statistics-page">
-    <div className="beta-statistics-toolbar">
-      <Button onClick={() => void openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("details"); setShowMaterials(true); }).catch(reason => setError(String(reason)))}>{t("editor.materialDetails")}</Button>
-      <Button onClick={() => openMaterialsWithWindowBehavior(currentFile, () => { setMaterialsViewMode("export"); setShowMaterials(true); }, "export")} disabled={!data || isLoading}>{t("editor.exportMaterials")}</Button>
-      {debugMode && <Button variant="secondary" disabled={!data} onClick={() => openEnumeratorWithWindowBehavior(currentFile,() => setShowEnumerator(true))}>{t("statistics.openEnumerator")}</Button>}
-      <label className="beta-material-check"><Checkbox  checked={includeContainerItems} onCheckedChange={checked => setIncludeContainerItems((checked === true))} />{t("statistics.includeContainers")}</label>
-      <QuantitySwitch checked={asItems} onChange={setAsItems} />
-      <span className="beta-statistics-file" title={displayFilePath(currentFile)}>{currentFile.split(/[\\/]/).pop()}</span>
-      <Button onClick={loadStats} disabled={isLoading}>{isLoading ? t("statistics.analyzing") : t("statistics.reanalyze")}</Button>
-    </div>
-    {includeContainerItems && scan && <div className="beta-statistics-status" role="status">{t("statistics.scanned", {containers:scan.containers_scanned.toLocaleString(locale), stacks:scan.item_stacks_scanned.toLocaleString(locale)})}</div>}
-    {error && <pre className="subwindow-error" role="alert">{localizeMessage(error)}</pre>}
-    {!!scan?.warnings?.length && <details className="beta-statistics-warnings"><summary>{t("statistics.containerWarnings", {count:scan.warnings.length.toLocaleString(locale)})}</summary><pre>{scan.warnings.slice(0, 40).map(localizeMessage).join("\n")}</pre></details>}
-    <div className="beta-statistics-panes">
-      <section className="beta-statistics-structure"><h2>{t("statistics.structure")}</h2>
-        {data ? <ScrollArea className="beta-statistics-facts-scroll"><dl className="beta-statistics-facts">
-          <ReadOnlyRow label={t("statistics.nonAir")} value={data.totalNonAirBlocks.toLocaleString(getUiLocale())} />
-          <ReadOnlyRow label={t("statistics.regions")} value={data.regionCount} />
-          <ReadOnlyRow label={t("statistics.bounds")} value={`${data.enclosingSize.x} × ${data.enclosingSize.y} × ${data.enclosingSize.z}`} />
-          <ReadOnlyRow label={t("statistics.density")} value={`${(data.density * 100).toLocaleString(locale, {minimumFractionDigits:2,maximumFractionDigits:2})}%`} />
-          <ReadOnlyRow label={t("statistics.buildingType")} value={localizeMessage(data.buildingType)} />
-          <ReadOnlyRow label={t("statistics.redstoneRatio")} value={data.redstoneRatio === null ? t("statistics.notProvided") : `${(data.redstoneRatio * 100).toLocaleString(locale, {minimumFractionDigits:2,maximumFractionDigits:2})}%`} />
-          <ReadOnlyRow label={t("statistics.fluidRatio")} value={data.fluidRatio === null ? t("statistics.notProvided") : `${(data.fluidRatio * 100).toLocaleString(locale, {minimumFractionDigits:2,maximumFractionDigits:2})}%`} />
-          <ReadOnlyRow label={t("statistics.entities")} value={data.entityCount} />
-        </dl>
+  const percent = (value: number | null) => value === null ? t("statistics.notProvided") : `${(value * 100).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+  const metrics = data ? [
+    { label: t("statistics.nonAir"), value: data.totalNonAirBlocks.toLocaleString(locale) },
+    { label: t("statistics.bounds"), value: `${data.enclosingSize.x} × ${data.enclosingSize.y} × ${data.enclosingSize.z}` },
+    { label: t("statistics.density"), value: percent(data.density) },
+    { label: t("statistics.materialKindsOverview"), value: data.materials.length.toLocaleString(locale) },
+    { label: t("statistics.entities"), value: data.entityCount.toLocaleString(locale) },
+  ] : [];
+  return <React.Profiler id="statistics" onRender={recordStatisticsCommit}><div className="beta-statistics-page statistics-page">
+    <section className="statistics-overview" aria-label={t("statistics.structure")} aria-busy={isLoading}>
+      <header className="statistics-overview-header">
+        <div className="statistics-overview-title">
+          <h2 className="statistics-overview-source" title={currentFile ? displayFilePath(currentFile) : undefined}>{currentFile ? currentFile.split(/[\\/]/).pop() : t("statistics.title")}</h2>
+          <p>{t("statistics.workbenchContext")}</p>
+        </div>
+        <Button size="sm" variant="secondary" onClick={() => void loadStats()} disabled={!currentFile || isLoading}>{isLoading ? t("statistics.analyzing") : t("statistics.reanalyze")}</Button>
+      </header>
+      {data ? <>
+        <dl className="statistics-overview-kpis statistics-kpis">{metrics.map(metric => <div className="statistics-overview-kpi statistics-kpi" key={metric.label}><dt>{metric.label}</dt><dd>{metric.value}</dd></div>)}</dl>
+        <details className="statistics-overview-details statistics-details">
+          <summary>
+            <span className="statistics-overview-secondary statistics-secondary">
+              <span>{localizeMessage(data.buildingType)}</span>
+              <span>{t("statistics.redstoneRatio")} {percent(data.redstoneRatio)}</span>
+              <span>{t("statistics.fluidRatio")} {percent(data.fluidRatio)}</span>
+              <span>{t("statistics.regions")} {data.regionCount.toLocaleString(locale)}</span>
+            </span>
+            <span className="statistics-overview-toggle">{t("statistics.structureDetails")} <ChevronDown size={14} aria-hidden="true" /></span>
+          </summary>
+          <dl className="statistics-overview-facts statistics-facts beta-statistics-facts">
+            <ReadOnlyRow label={t("statistics.nonAir")} value={data.totalNonAirBlocks} />
+            <ReadOnlyRow label={t("statistics.regions")} value={data.regionCount} />
+            <ReadOnlyRow label={t("statistics.bounds")} value={`${data.enclosingSize.x} × ${data.enclosingSize.y} × ${data.enclosingSize.z}`} />
+            <ReadOnlyRow label={t("statistics.density")} value={percent(data.density)} />
+            <ReadOnlyRow label={t("statistics.buildingType")} value={localizeMessage(data.buildingType)} />
+            <ReadOnlyRow label={t("statistics.redstoneRatio")} value={percent(data.redstoneRatio)} />
+            <ReadOnlyRow label={t("statistics.fluidRatio")} value={percent(data.fluidRatio)} />
+            <ReadOnlyRow label={t("statistics.entities")} value={data.entityCount} />
+          </dl>
           <section className="statistics-enumerator-panel" aria-busy={enumeratorLoading || configLoading}>
-            <header className="material-summary-header"><h3>{t("statistics.customTitle")}</h3><Button variant="secondary" disabled={configLoading || enumeratorLoading || !enumeratorCollections.length || !!enumeratorError} onClick={() => setShowEnumeratorInfoEditor(true)}>{t("statistics.editRules")}</Button></header>
+            <header className="material-summary-header"><h3>{t("statistics.customTitle")}</h3>
+              <Button size="sm" variant="secondary" disabled={configLoading || enumeratorLoading || !enumeratorCollections.length || !!enumeratorError} onClick={() => setShowEnumeratorInfoEditor(true)}>{t("statistics.editRules")}</Button>
+              {debugMode && <Button size="sm" variant="ghost" onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true))}>{t("statistics.openEnumerator")}</Button>}
+            </header>
             {enumeratorLoading || configLoading ? <p role="status">{t("statistics.loadingRules")}</p> : enumeratorError ? <pre role="alert">{localizeMessage(enumeratorError)}</pre>
-              : enumeratorResults.map((item,index) => <div key={index} className="statistics-enumerator-row"><div className="statistics-enumerator-row-main"><span>{item.title}</span><strong>{item.error ? t("editor.error") : item.value}</strong></div>{item.error && <p className="statistics-enumerator-row-error">{localizeMessage(item.error)}</p>}</div>)}
+              : enumeratorResults.map((item, index) => <div key={index} className="statistics-enumerator-row"><div className="statistics-enumerator-row-main"><span>{item.title}</span><strong>{item.error ? t("editor.error") : item.value}</strong></div>{item.error && <p className="statistics-enumerator-row-error">{localizeMessage(item.error)}</p>}</div>)}
           </section>
-        </ScrollArea> : <p className="beta-statistics-status">{renderPending ? t("statistics.reading") : isLoading ? t("statistics.analyzing") : t("statistics.noData")}</p>}
-      </section>
-      <section className="beta-statistics-materials"><header className="material-summary-header"><h2>{t("editor.materials")}</h2>{data && <span>{t("statistics.materialKinds", {visible:topMaterials.length.toLocaleString(locale), total:data.materials.length.toLocaleString(locale)})}</span>}</header>
-        <Input className="input material-summary-search" type="search" aria-label={t("editor.materialSearch")} placeholder={t("editor.materialSearchHint")} value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} />
-        {data ? <MaterialTable materials={topMaterials} asItems={asItems} /> : <p className="beta-statistics-status">{isLoading ? t("statistics.countingMaterials") : t("statistics.noMaterials")}</p>}
-      </section>
-    </div>
+          {scan?.enabled && <p className="beta-statistics-status">{t("statistics.scanned", { containers: scan.containers_scanned.toLocaleString(locale), stacks: scan.item_stacks_scanned.toLocaleString(locale) })}</p>}
+          {!!scan?.warnings?.length && <div className="beta-statistics-warnings"><p>{t("statistics.containerWarnings", { count: scan.warnings.length.toLocaleString(locale) })}</p><pre>{scan.warnings.slice(0, 40).map(localizeMessage).join("\n")}</pre></div>}
+        </details>
+      </> : <p className="beta-statistics-status" role="status">{!currentFile ? t("statistics.noProjectionOverview") : renderPending ? t("statistics.reading") : isLoading ? t("statistics.analyzing") : t("statistics.noData")}</p>}
+      {error && <pre className="subwindow-error" role="alert">{localizeMessage(error)}</pre>}
+    </section>
+    <section className="statistics-stockpile-workspace" aria-label={t("editor.materialDetails")}>
+      <StockpileTaskPanel sourcePath={currentFile || ""} onOpenMaterials={() => setShowMaterials(true)}
+        materialExportContent={data && currentFile ? <MaterialListContent data={data} currentFile={currentFile} embedded viewMode="export" exportOnly /> : undefined} />
+    </section>
     {showEnumerator && <EnumeratorDialog currentFile={currentFile} theme={theme} runtimeCollection={runtimeCollection} onClose={() => setShowEnumerator(false)} />}
     {showEnumeratorInfoEditor && <EnumeratorInfoEditorDialog rules={enumeratorRules} data={data} collections={enumeratorCollections} onClose={() => setShowEnumeratorInfoEditor(false)} onSave={saveEnumeratorRules} />}
-    {showMaterials && (materialsViewMode === "details" || data) && <MaterialsDialog data={data} onClose={() => setShowMaterials(false)} currentFile={currentFile} viewMode={materialsViewMode} />}
+    <MaterialCatalogDialog open={showMaterials} data={data} currentFile={currentFile || ""} onClose={() => setShowMaterials(false)}
+      onRequestContainerStats={include => loadStructureStats(currentFile, include)} />
   </div></React.Profiler>;
 }
 

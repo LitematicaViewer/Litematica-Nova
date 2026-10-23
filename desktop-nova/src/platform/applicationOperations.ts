@@ -346,6 +346,17 @@ export interface StockpileRecipeTree extends StockpileRecipeIngredient {
   process_type: string; ingredients: StockpileRecipeIngredient[]; children: StockpileRecipeTree[]; depth: number;
   requires_fuel: boolean; fuel_estimate: number | null; decorative_smithing: boolean;
 }
+export interface MaterialDetailInput {
+  material: unknown; materialSemantics: string; dataVersion: number; selectedRecipe?: string;
+}
+export interface MaterialDetail {
+  material: StockpileMaterial;
+  recipeOptions: Array<{ recipe_id: string; recipe_type: string; output_count: number }>;
+  recipeTree: StockpileRecipeTree | null;
+  iconImages: Record<string, string>;
+  itemNames: Record<string, Record<string, string>>;
+}
+export const readMaterialDetail = (input: MaterialDetailInput): Promise<MaterialDetail> => invoke("application_read_material_detail", { input });
 export interface StockpileTaskView extends StockpileTaskSummary {
   sourceStatus?: "current" | "changed" | "missing";
   context: { scope?: ApplicationMaterialScope; includeContainerItems?: boolean; sourceContentId?: string; sourceFileRevision?: string };

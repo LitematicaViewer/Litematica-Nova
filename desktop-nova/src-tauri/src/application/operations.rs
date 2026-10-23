@@ -378,6 +378,15 @@ pub(crate) struct ExportMaterialListInput {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct MaterialRecipeCacheInput { pub(crate) minecraft_version: String }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct MaterialDetailInput {
+    pub(crate) material: Value,
+    pub(crate) material_semantics: String,
+    pub(crate) data_version: i32,
+    pub(crate) selected_recipe: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct GenerateProjectInput {
@@ -936,6 +945,18 @@ impl ApplicationOperations {
             "language_map": input.language_map,
         }))?;
         let result = self.run_core(generation, &prefix, vec!["materials-export".into(), path_text(&request_path), "--output".into(), path_text(&output)], &mut files)?;
+        parse_core_json(&result.stdout)
+    }
+
+    pub(crate) fn read_material_detail(&self, input: MaterialDetailInput) -> Result<Value, String> {
+        // This lookup consumes a single row from an existing snapshot. It must
+        // not material_snapshot()/cached_analysis(), select/create a task or
+        // acquire the task writer merely because a catalog row was selected.
+        let (generation, prefix) = self.next_operation("material-detail");
+        let mut files = OperationFiles::new();
+        let request_path = files.track(self.operation_path(&prefix, "request.json"));
+        write_json(&request_path, &serde_json::to_value(input).map_err(|error| error.to_string())?)?;
+        let result = self.run_core(generation, &prefix, vec!["material-detail".into(), path_text(&request_path)], &mut files)?;
         parse_core_json(&result.stdout)
     }
 

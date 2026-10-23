@@ -10,6 +10,37 @@ use crate::stockpile::StockpileMaterialsData;
 
 pub const MAX_RECIPE_DEPTH: u32 = 12;
 
+#[derive(Debug, Serialize)]
+pub struct MaterialRecipeOption {
+    pub recipe_id: String,
+    pub recipe_type: String,
+    pub output_count: u64,
+}
+
+/// Uses the same resolver/scoring as task trees, with an optional root recipe.
+pub fn resolve_material_detail(minecraft_version: &str, item_id: &str, count: u64, selected_recipe: Option<&str>)
+    -> Result<(Vec<MaterialRecipeOption>, Option<RecipeTreeNode>)>
+{
+    let Some(recipes) = recipe_cache::load_available_recipes(minecraft_version)? else { return Ok((Vec::new(), None)); };
+    let resolver = RecipeTreeResolver::with_tags(&recipes, recipe_cache::load_item_tags()?);
+    material_detail_from_resolver(&resolver, item_id, count, selected_recipe)
+}
+
+fn material_detail_from_resolver(resolver: &RecipeTreeResolver, item_id: &str, count: u64, selected_recipe: Option<&str>)
+    -> Result<(Vec<MaterialRecipeOption>, Option<RecipeTreeNode>)>
+{
+    let candidates = resolver.candidates.get(item_id);
+    let options = candidates.into_iter().flatten().map(|candidate| MaterialRecipeOption {
+        recipe_id: candidate.recipe_id.clone(), recipe_type: candidate.recipe_type.clone(), output_count: candidate.output_count,
+    }).collect();
+    let tree = if let Some(id) = selected_recipe.filter(|id| !id.is_empty()) {
+        let candidate = candidates.into_iter().flatten().find(|candidate| candidate.recipe_id == id)
+            .ok_or_else(|| anyhow::anyhow!("Selected recipe does not produce this material"))?;
+        resolver.resolve_candidate(candidate, count, 0, &mut BTreeSet::new())
+    } else { resolver.resolve(item_id, count) };
+    Ok((options, Some(tree)))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecipeTreeNode {
     pub node_id: String,
@@ -933,6 +964,35 @@ mod tests {
         StockpileMaterialItem, StockpileMaterialsData, StockpileProjectInfo, StockpileSummary,
     };
     use serde_json::json;
+
+    #[test]
+    fn material_detail_options_use_real_outputs_and_selected_recipe_inputs() {
+        let resolver = RecipeTreeResolver::new(&recipe_map([
+            ("minecraft:stone_bricks_from_crafting", json!({
+                "type": "minecraft:crafting_shapeless", "ingredients": ["minecraft:stone", "minecraft:stone"],
+                "result": { "id": "minecraft:stone_bricks", "count": 4 }
+            })),
+            ("minecraft:stone_bricks_from_cutting", json!({
+                "type": "minecraft:stonecutting", "ingredient": "minecraft:stone",
+                "result": { "id": "minecraft:stone_bricks", "count": 1 }
+            })),
+            ("minecraft:unrelated", json!({
+                "type": "minecraft:crafting_shapeless", "ingredients": ["minecraft:oak_planks"],
+                "result": { "id": "minecraft:oak_button", "count": 1 }
+            })),
+        ]));
+        let (options, selected) = material_detail_from_resolver(&resolver, "minecraft:stone_bricks", 5, Some("minecraft:stone_bricks_from_crafting")).unwrap();
+        assert_eq!(options.len(), 2);
+        assert!(options.iter().any(|option| option.recipe_id == "minecraft:stone_bricks_from_crafting" && option.output_count == 4));
+        assert!(options.iter().any(|option| option.recipe_id == "minecraft:stone_bricks_from_cutting" && option.recipe_type == "minecraft:stonecutting"));
+        let selected = selected.unwrap();
+        assert_eq!((selected.needed_count, selected.output_count, selected.batch_count, selected.extra_output), (5, 4, 2, 3));
+        assert_eq!(selected.ingredients[0].item_id, "minecraft:stone");
+        assert_eq!(selected.ingredients[0].needed_count, 4);
+        let (_, automatic) = material_detail_from_resolver(&resolver, "minecraft:stone_bricks", 5, None).unwrap();
+        assert_eq!(automatic.unwrap(), resolver.resolve("minecraft:stone_bricks", 5));
+        assert!(material_detail_from_resolver(&resolver, "minecraft:stone_bricks", 5, Some("minecraft:unrelated")).is_err());
+    }
 
     #[test]
     fn resolves_shaped_recipe_and_batch_math() {

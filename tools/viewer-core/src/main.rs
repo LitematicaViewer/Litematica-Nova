@@ -65,6 +65,10 @@ fn main() -> Result<()> {
     if raw.first().is_some_and(|command| command == "materials-export") {
         return litematica_core::material_export::run_cli(&raw[1..]);
     }
+    if raw.first().is_some_and(|command| command == "material-detail") {
+        let path = raw.get(1).ok_or_else(|| anyhow::anyhow!("material-detail requires a snapshot request file"))?;
+        return emit_output(&litematica_core::material_detail::from_request(std::path::Path::new(path))?, None);
+    }
     if std::env::args().nth(1).as_deref() == Some("--public-build-info") {
         println!("{}", serde_json::json!({"schema":"nova.public.beta.build.v1","flavor":"fast-only","fullMode":false,"publicBeta":true,"gitSha":env!("LBA_BACKEND_GIT_SHA")}));
         return Ok(());

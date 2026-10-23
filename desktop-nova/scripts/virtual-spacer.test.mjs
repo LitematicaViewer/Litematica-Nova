@@ -298,12 +298,12 @@ test('rowHeight 常量与样式表实际行高一致', () => {
   // Stockpile is a seven-column grid inside the same table/spacer pipeline.
   // Its 24px icons and compact editors deliberately use a separate fixed row.
   const stockpileSource = source('ui/windows/main/pages/statistics/StockpileTaskPanel.tsx');
-  assert.match(stockpileSource, /const rowHeight = 46;/);
+  assert.match(stockpileSource, /const rowHeight = 44;/);
   assert.match(stockpileSource, /useVirtualWindow\(rows,\s*scrollRef,\s*rowHeight,\s*8\)/);
   const stockpileHeight = declarationsOf([STATISTICS]).find(
     entry => entry.property === 'height' && entry.selector === '.stockpile-table .stockpile-row',
   );
-  assert.equal(px(stockpileHeight?.value), 46, 'stockpile virtual row and CSS share the 46px contract');
+  assert.equal(px(stockpileHeight?.value), 44, 'stockpile virtual row and CSS share the 44px contract');
 
   const enumeratorCalls = [
     ...source('ui/windows/enumerator/EnumeratorWindow.tsx').matchAll(

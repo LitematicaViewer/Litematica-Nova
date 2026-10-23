@@ -39,7 +39,7 @@ use application::operations::{
     ProjectStatsInput, ReplaceBlocksInput, ReplaceBlocksResult, RuntimeHealth,
     LayerContainerData, LayerSliceData, LayerSliceMeta, ProjectionMarkerEditSummary,
     ProjectionMarkers, ReadLayerContainerInput, ReadLayerInput,
-    ExportMaterialListInput, MaterialRecipeCacheInput, ExportWorldInput, StockpileTaskInput, StockpileTaskCommandInput, StockpileTaskSetInput, StockpileTaskResetInput,
+    ExportMaterialListInput, MaterialRecipeCacheInput, MaterialDetailInput, ExportWorldInput, StockpileTaskInput, StockpileTaskCommandInput, StockpileTaskSetInput, StockpileTaskResetInput,
 };
 use application::quick_preview::{QuickPreviewHost, QuickPreviewView, StartQuickPreviewInput, QuickPresentationIntent};
 use application::updater::{UpdateHost, application_update_snapshot, application_update_check,
@@ -1371,6 +1371,11 @@ async fn application_get_project_materials(
 async fn application_stockpile_task(input: StockpileTaskInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
     let operations = operations.inner().clone();
     run_application_operation(move || operations.stockpile_task(input)).await
+}
+#[tauri::command]
+async fn application_read_material_detail(input: MaterialDetailInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let operations = operations.inner().clone();
+    run_application_operation(move || operations.read_material_detail(input)).await
 }
 #[tauri::command]
 async fn application_stockpile_task_command(app: AppHandle, input: StockpileTaskCommandInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
@@ -4182,6 +4187,7 @@ fn main() {
             application_prepare_material_recipes,
             application_get_project_materials,
             application_stockpile_task,
+            application_read_material_detail,
             application_stockpile_task_set,
             application_stockpile_task_command,
             application_stockpile_task_reset,
