@@ -39,7 +39,7 @@ use application::operations::{
     ProjectStatsInput, ReplaceBlocksInput, ReplaceBlocksResult, RuntimeHealth,
     LayerContainerData, LayerSliceData, LayerSliceMeta, ProjectionMarkerEditSummary,
     ProjectionMarkers, ReadLayerContainerInput, ReadLayerInput,
-    ExportMaterialListInput, MaterialRecipeCacheInput,
+    ExportMaterialListInput, MaterialRecipeCacheInput, ExportWorldInput,
 };
 use application::quick_preview::{QuickPreviewHost, QuickPreviewView, StartQuickPreviewInput, QuickPresentationIntent};
 use application::updater::{UpdateHost, application_update_snapshot, application_update_check,
@@ -1284,6 +1284,12 @@ async fn application_edit_project_origin(
 ) -> Result<ProjectionMarkerEditSummary, String> {
     let operations = operations.inner().clone();
     run_application_operation(move || operations.edit_project_origin(input)).await
+}
+
+#[tauri::command]
+async fn application_export_world(input: ExportWorldInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let operations = operations.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || operations.export_world(input)).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -3937,6 +3943,7 @@ fn main() {
             application_read_project_markers,
             application_edit_project_origin,
             application_replace_blocks,
+            application_export_world,
             application_convert_project_version,
             application_query_block_database,
             application_get_project_stats,

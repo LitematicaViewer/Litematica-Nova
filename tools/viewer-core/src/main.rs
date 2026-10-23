@@ -32,6 +32,9 @@ fn main() -> Result<()> {
     if let Some(code) = nova_protected_loader::maybe_run_cpu_audit()? { std::process::exit(code); }
 
     let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    if raw.first().is_some_and(|command| command == "world-export") {
+        return litematica_core::world_export::run_cli(&raw[1..]);
+    }
     if raw.first().is_some_and(|command| command == "game-data") {
         return litematica_core::game_data::run_cli(&raw[1..]);
     }

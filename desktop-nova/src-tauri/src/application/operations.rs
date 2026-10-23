@@ -128,6 +128,15 @@ pub(crate) struct EditProjectOriginInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ExportWorldInput {
+    pub(crate) source_path: String,
+    pub(crate) output_directory: String,
+    pub(crate) world_name: String,
+    pub(crate) origin: super::model::IntegerVector,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ConvertProjectVersionInput {
     pub(crate) source_path: String,
     pub(crate) target_version: String,
@@ -577,6 +586,15 @@ impl ApplicationOperations {
             message: semantic_message(&result.stdout),
             output_path: path_text(&output),
         })
+    }
+
+    pub(crate) fn export_world(&self, input: ExportWorldInput) -> Result<Value, String> {
+        let source = self.resolve_path(&input.source_path);
+        if input.output_directory.trim().is_empty() { return Err("请选择世界输出目录".into()); }
+        let output = self.resolve_path(&input.output_directory);
+        self.run_core_json(vec!["world-export".into(), "--input".into(), path_text(&source),
+            "--output".into(), path_text(&output), "--name".into(), input.world_name,
+            "--x".into(), input.origin.x.to_string(), "--y".into(), input.origin.y.to_string(), "--z".into(), input.origin.z.to_string()])
     }
 
     pub(crate) fn convert_project_version(&self, input: ConvertProjectVersionInput) -> Result<Value, String> {
@@ -1245,7 +1263,7 @@ fn stats_args(source: &Path, include_container_items: bool) -> Vec<String> {
 fn core_command_writes(args: &[String]) -> bool {
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
-        "edit-metadata" | "set-origin" | "remove-origin" | "materials-export" => true,
+        "edit-metadata" | "set-origin" | "remove-origin" | "materials-export" | "world-export" => true,
         "version-convert" => args.iter().any(|arg| arg == "--output" || arg == "--overwrite"),
         "replace-blocks" | "generate" | "generate-projection" => !args.iter().any(|arg| arg == "--dry-run"),
         // Recipe downloads/extraction only write validated replaceable caches;

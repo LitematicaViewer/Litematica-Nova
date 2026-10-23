@@ -27,3 +27,5 @@ export { resolveFlakeLayerBlockImage, extractLayerPaletteStates, clearFlakeState
 export * from "../platform/quickPreview";
 
 export * from "../services/creativeItemIdentity";
+
+export * from "../services/worldExport";

@@ -54,3 +54,5 @@ mod version_payload_migration;
 pub mod canonical_ir;
 mod process_io;
 mod viewer_session;
+
+pub mod world_export;

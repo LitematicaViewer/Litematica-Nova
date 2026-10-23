@@ -7,14 +7,15 @@ import * as editor from "./locales/editor";
 import * as library from "./locales/library";
 import * as native from "./locales/native";
 import * as settings from "./locales/settings";
+import * as worldExport from "./locales/worldExport";
 
 export type UiLocale = "zh-CN" | "en-US";
 export type UiLanguagePreference = UiLocale | "system";
 export type UiParams = Record<string, string | number | { key: string; params?: UiParams }>;
 export type UiMessage = string | { key: string; params?: UiParams };
 const dictionaries: Record<UiLocale, Record<string, string>> = {
-  "zh-CN": { ...editor.zhCN, ...library.zhCN, ...native.zhCN, ...settings.zhCN, ...app.zhCN },
-  "en-US": { ...editor.enUS, ...library.enUS, ...native.enUS, ...settings.enUS, ...app.enUS },
+  "zh-CN": { ...editor.zhCN, ...library.zhCN, ...native.zhCN, ...settings.zhCN, ...worldExport.zhCN, ...app.zhCN },
+  "en-US": { ...editor.enUS, ...library.enUS, ...native.enUS, ...settings.enUS, ...worldExport.enUS, ...app.enUS },
 };
 const storageKey = "nova.ui.language";
 const languageSubscribers = new Set<() => void>();

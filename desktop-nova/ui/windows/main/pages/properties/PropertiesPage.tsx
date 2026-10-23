@@ -41,6 +41,7 @@ import { Dialog } from "../../../../components/Dialog";
 import "./properties.css";
 import { displayFilePath, minecraftVersionLabel, windowsPathKey } from "../../../../../src/business/projectionLibrary";
 import { VersionConversionDialog } from "./VersionConversionDialog";
+import { WorldExportDialog } from "./WorldExportDialog";
 import { formatResourceBytes } from "../../../../../src/business/resourcePreflightUnits";
 
 type RegionEdit = {
@@ -135,6 +136,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
   const [error, setError] = useState<UiMessage>("");
   const [status, setStatus] = useState<UiMessage>("");
   const [convertOpen, setConvertOpen] = useState(false);
+  const [worldExportOpen, setWorldExportOpen] = useState(false);
   const [versionConvertOpen, setVersionConvertOpen] = useState(false);
   const [renderMode, setRenderMode] = useState<"fast" | "standard" | "full">("fast");
   const [preload, setPreload] = useState(false);
@@ -155,8 +157,8 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
     [applicationRender.operations, currentFile],
   );
   const applicationAnalysis = renderOperation?.analysis ?? null;
-  const preview = useQuickPreview(currentFile || "", presentationBlocked || convertOpen || versionConvertOpen || clearPreviewConfirm || filePreviewBusy || renderMode !== "fast", preload);
-  const fullPreview = useFullPreview(currentFile || "", preload, presentationBlocked || convertOpen || versionConvertOpen || clearPreviewConfirm || filePreviewBusy || renderMode === "fast", renderMode === "standard" ? "standard" : "full");
+  const preview = useQuickPreview(currentFile || "", presentationBlocked || convertOpen || worldExportOpen || versionConvertOpen || clearPreviewConfirm || filePreviewBusy || renderMode !== "fast", preload);
+  const fullPreview = useFullPreview(currentFile || "", preload, presentationBlocked || convertOpen || worldExportOpen || versionConvertOpen || clearPreviewConfirm || filePreviewBusy || renderMode === "fast", renderMode === "standard" ? "standard" : "full");
   const quickOperation = preview.operation;
   const renderPending = renderMode === "fast" ? quickOperation?.state === "starting" && !quickOperation.error : fullPreview.loading;
   const viewerPrepared = renderMode === "fast" ? quickOperation?.state === "ready" : fullPreview.ready;
@@ -445,11 +447,13 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
         <Button variant="default" onClick={handleSave} disabled={!form || !hasChanges || !!regionError || saving || filePreviewBusy || capturingPreview}><ThemeIcon name="save" size={16} fallback={Save} />{saving ? t("editor.saveBusy") : t("properties.saveChanges")}</Button>
       </div>}
       {versionConvertOpen && <VersionConversionDialog sourcePath={currentFile} onClose={() => setVersionConvertOpen(false)} onSaved={(path) => { setStatus({ key: "properties.convertedSaved", params: {path: displayFilePath(path)} }); setVersionConvertOpen(false); }} />}
+      {worldExportOpen && <WorldExportDialog sourcePath={currentFile} name={form?.name || ""} onClose={() => setWorldExportOpen(false)} />}
       {convertOpen && <Dialog title={t("properties.saveFormat")} busy={saving} onClose={() => setConvertOpen(false)} width="sm" footer={
         <Button disabled={saving} onClick={handleSaveAs}>{t("properties.saveLitematic")}</Button>
       }>
         <p>{t("properties.litematicSupported")}</p>
-        <p className="muted">{t("properties.otherFormatsMissing")}</p>
+        <Button variant="ghost" disabled={saving || hasChanges} onClick={() => { setConvertOpen(false); setWorldExportOpen(true); }}>{t("worldExport.title")}</Button>
+        {hasChanges && <p className="muted">{t("worldExport.saveFirst")}</p>}
       </Dialog>}
     </section>
   );
