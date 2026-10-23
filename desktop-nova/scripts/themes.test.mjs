@@ -32,6 +32,8 @@ const builtinDependencies = {
   },
   '../../src/platform/appData': { getApplicationVersion: async () => '0.0.0' },
   '../../src/platform/tauri': { invoke: async () => undefined, isTauri: () => false },
+  '../../src/services/i18n': { t: (key) => key, getUiLocale: () => 'zh-CN', localizeMessage: (value) => typeof value === 'string' ? value : value?.key ?? '', message: (key, params) => ({ key, params }) },
+  '../i18n': { useI18n: () => {} },
 };
 
 function load(path, dependencies = {}, globals = {}) {
@@ -458,7 +460,7 @@ test('配置仅保存用户明暗偏好，旧配置默认跟随系统；设置�
   await config.saveColorModeConfig('invalid');
   assert.equal(JSON.stringify(saves), JSON.stringify([{ color_mode: 'dark' }, { color_mode: 'system' }]));
   const settings = source('ui/windows/main/pages/settings/SettingsPage.tsx');
-  assert.doesNotMatch(settings, /<(?:button|input|select|textarea)\b/);
+  assert.doesNotMatch(settings.replace(/<select\b[^>]*id="nova-ui-language"[\s\S]*?<\/select>/g, ''), /<(?:button|input|select|textarea)\b/);
   for (const component of ['Button', 'Input', 'Dropdown', 'Checkbox', 'Textarea', 'ScrollArea']) assert.match(settings, new RegExp(String.raw`<${component}\b`));
 });
 

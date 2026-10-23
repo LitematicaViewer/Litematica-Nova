@@ -17,7 +17,7 @@ function compile(path, dependencies) {
   return module.exports;
 }
 
-const icons = compile("../src/services/libraryCategoryIcons.ts", () => { throw new Error("Unexpected icon import"); });
+const icons = compile("../src/services/libraryCategoryIcons.ts", (name) => name === "./i18n" ? { t: (key) => key } : (() => { throw new Error("Unexpected icon import"); })());
 const paths = compile("../src/services/filePathIdentity.ts", () => { throw new Error("Unexpected path import"); });
 const migration = compile("../src/services/libraryMigration.ts", (name) =>
   name === "./filePathIdentity" ? paths : name === "./libraryCategoryIcons" ? icons : (() => { throw new Error(`Unexpected migration dependency: ${name}`); })());

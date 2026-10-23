@@ -12,9 +12,20 @@ function moduleFrom(source, dependencies) {
   vm.runInNewContext(`(function(require,module,exports){${compiled}\n})`, { URL, console, React })((name) => dependencies(name), module, module.exports);
   return module.exports;
 }
-const service = moduleFrom(text("../src/services/redenLibrary.ts"), () => ({}));
+const libraryZh = moduleFrom(text("../src/services/locales/library.ts"), () => ({})).zhCN;
+const nativeZh = moduleFrom(text("../src/services/locales/native.ts"), () => ({})).zhCN;
+const zhDictionary = { ...libraryZh, ...nativeZh };
+const interpolate = (template, params) => template == null ? "" : String(template).replace(/\{(\w+)\}/g, (match, key) => params && key in params ? String(params[key]) : match);
+const i18n = {
+  getUiLocale: () => "zh-CN",
+  useI18n: () => {},
+  t: (key, params) => interpolate(key in zhDictionary ? zhDictionary[key] : key, params),
+  message: (key, params) => ({ key, params }),
+  localizeMessage: (value) => typeof value === "string" ? (value in zhDictionary ? zhDictionary[value] : value) : interpolate(zhDictionary[value?.key] ?? value?.key ?? "", value?.params),
+};
+const service = moduleFrom(text("../src/services/redenLibrary.ts"), (name) => name.endsWith("i18n") ? i18n : ({}));
 const paths = moduleFrom(text("../src/services/filePathIdentity.ts"), () => ({}));
-const providers = moduleFrom(text("../src/services/onlineProjectionProviders.ts"), () => ({}));
+const providers = moduleFrom(text("../src/services/onlineProjectionProviders.ts"), (name) => name.endsWith("i18n") ? i18n : ({}));
 const source = text("../ui/windows/reden_library/RedenLibraryWindow.tsx");
 const label = node => node == null || typeof node === "boolean" ? "" : Array.isArray(node) ? node.map(label).join("") : typeof node === "object" ? label(node.props?.children) : String(node);
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -54,6 +65,7 @@ function harness({ attachment, output, emitError, importError, search } = {}) {
     if (name.endsWith("src/business/reden")) return online;
     if (name.endsWith("platform/events")) return { emitEvent: async () => { calls.emitted++; if (emitError) throw new Error(emitError); } };
     if (name.endsWith("libraryEvents")) return { projectionLibraryImportedEvent: "library-imported" };
+    if (name.endsWith("i18n")) return i18n;
     if (name.endsWith("Dialog")) return { Dialog: "dialog" };
     if (name.endsWith("button")) return { Button: "button" };
     if (name.endsWith("input")) return { Input: "input" };

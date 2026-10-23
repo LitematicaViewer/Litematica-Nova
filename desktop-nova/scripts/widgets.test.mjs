@@ -37,7 +37,7 @@ function loadComponent(path, react = React, dependencies = {}, cache = new Map()
       if (name.startsWith('.') || name.startsWith('@/')) {
         const relative = name.startsWith('@/') ? `ui/${name.slice(2)}` : posix.join(posix.dirname(path), name);
         if (relative.endsWith('.css')) return {};
-        const target = [relative, `${relative}.tsx`, `${relative}.ts`].find((candidate) => {
+        const target = [relative, `${relative}.tsx`, `${relative}.ts`, `${relative}/index.tsx`, `${relative}/index.ts`].find((candidate) => {
           try { return statSync(new URL(candidate, root)).isFile(); } catch { return false; }
         });
         assert.ok(target, `Missing local test dependency: ${relative}`);
@@ -76,6 +76,7 @@ function componentHarness(path, name, props, dependencies = {}, initialSlots = [
     useId: () => `dropdown-${cursor++}`,
     useEffect: () => {},
     useMemo: (compute) => compute(),
+    useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
   };
   const component = loadComponent(path, hooks, dependencies)[name];
   return () => { cursor = 0; return component(props); };
@@ -272,7 +273,7 @@ function libLoad(path, dependencies, fresh = false) {
   return module.exports;
 }
 const libPaths = libLoad('src/services/filePathIdentity.ts', () => { throw new Error('unexpected path import'); });
-const libIcons = libLoad('src/services/libraryCategoryIcons.ts', () => { throw new Error('unexpected icon import'); });
+const libIcons = libLoad('src/services/libraryCategoryIcons.ts', (name) => name === './i18n' ? { t: (key) => key } : (() => { throw new Error('unexpected icon import'); })());
 const libMigration = libLoad('src/services/libraryMigration.ts', (name) => name === './filePathIdentity' ? libPaths : name === './libraryCategoryIcons' ? libIcons : (() => { throw new Error(`migration dep ${name}`); })());
 const libContent = libLoad('src/services/libraryContent.ts', (name) => name === './filePathIdentity' ? libPaths : name === './libraryStore' ? {} : (() => { throw new Error(`content dep ${name}`); })());
 

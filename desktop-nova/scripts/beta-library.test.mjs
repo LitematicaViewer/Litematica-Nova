@@ -25,7 +25,7 @@ function load(path, dependencies, fresh = false) {
   return module.exports;
 }
 const paths = load("src/services/filePathIdentity.ts", () => { throw new Error("unexpected"); });
-const icons = load("src/services/libraryCategoryIcons.ts", () => { throw new Error("unexpected"); });
+const icons = load("src/services/libraryCategoryIcons.ts", (name) => name === "./i18n" ? { t: (key) => key } : (() => { throw new Error("unexpected"); })());
 const migration = load("src/services/libraryMigration.ts", (name) => name === "./filePathIdentity" ? paths : name === "./libraryCategoryIcons" ? icons : (() => { throw new Error(`migration dep ${name}`); })());
 const content = load("src/services/libraryContent.ts", (name) => name === "./filePathIdentity" ? paths : name === "./libraryStore" ? {} : (() => { throw new Error(`content dep ${name}`); })());
 
