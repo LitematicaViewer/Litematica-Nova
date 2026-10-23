@@ -27,7 +27,7 @@ import {
   subscribeApplicationRender,
 } from "../../../../../src/business/facade";
 
-import { Box, FolderOpen, Library, Play, RotateCcw, Save, ExternalLink, ImagePlus, ImageOff } from "lucide-react";
+import { Box, Download, FolderOpen, Library, Play, RotateCcw, Save, ExternalLink, ImagePlus, ImageOff } from "lucide-react";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
@@ -285,6 +285,12 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
   };
 
   const hasChanges = !!form && JSON.stringify(form) !== JSON.stringify(initialForm);
+  const worldExportUnavailable = !form || hasChanges || saving || filePreviewBusy || capturingPreview;
+  const openWorldExport = () => {
+    if (worldExportUnavailable) return;
+    setConvertOpen(false);
+    setWorldExportOpen(true);
+  };
 
   const savePatch = async (saveAs = false) => {
     if (savingRef.current || filePreviewWrite.current || !currentFile || !form) return;
@@ -349,8 +355,13 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
         <div className="properties-toolbar">
           <Button disabled={saving} onClick={handleSelectFile}><ThemeIcon name="import" size={16} fallback={FolderOpen} />{t("properties.select")}</Button>
           <Button variant="ghost" disabled={saving} onClick={() => setRoute("library")}><ThemeIcon name="gallery" size={16} fallback={Library} />{t("properties.selectLibrary")}</Button>
+          {currentFile && <Button disabled={worldExportUnavailable} aria-describedby={hasChanges ? "world-export-save-first" : undefined} onClick={openWorldExport}><ThemeIcon name="download" size={16} fallback={Download} />{t("worldExport.title")}</Button>}
         </div>
       </header>
+      {currentFile && hasChanges && <div className="properties-toolbar">
+        <span className="muted" id="world-export-save-first">{t("worldExport.saveFirst")}</span>
+        <Button size="sm" variant="link" onClick={handleSave} disabled={!!regionError || saving || filePreviewBusy || capturingPreview}>{saving ? t("editor.saveBusy") : t("properties.saveChanges")}</Button>
+      </div>}
       <div className="properties-file muted" title={displayFilePath(currentFile || "")}>{fileName || t("properties.notSelected")}</div>
       {error && <div className="properties-message properties-error nova-text-danger" role="alert">{displayPathText(localizeMessage(error))}</div>}
       {status && <div className="properties-message" role="status">{displayPathText(localizeMessage(status))}</div>}
@@ -452,7 +463,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
         <Button disabled={saving} onClick={handleSaveAs}>{t("properties.saveLitematic")}</Button>
       }>
         <p>{t("properties.litematicSupported")}</p>
-        <Button variant="ghost" disabled={saving || hasChanges} onClick={() => { setConvertOpen(false); setWorldExportOpen(true); }}>{t("worldExport.title")}</Button>
+        <Button variant="ghost" disabled={worldExportUnavailable} onClick={openWorldExport}>{t("worldExport.title")}</Button>
         {hasChanges && <p className="muted">{t("worldExport.saveFirst")}</p>}
       </Dialog>}
     </section>
