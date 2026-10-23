@@ -752,12 +752,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           </div>
         </div>
         <Button onClick={saveV5Compatibility}>{t("settings.saveRenderSettings")}</Button>
-        <IrisSettingsPanel root={v5Compatibility.shaderpack_root} pack={v5Compatibility.shaderpack_name}
-          onSelectPack={(name) => setV5Compatibility((current) => ({ ...current, shaderpack_name: name }))}
-          onApplyPack={async (root, name) => {
-            const next = { ...v5Compatibility, shaderpack_root: root, shaderpack_name: name };
-            applyUserConfig(await saveUserConfig({ v5_compatibility: next }));
-          }} />
+        <IrisSettingsPanel root={v5Compatibility.shaderpack_root} pack={v5Compatibility.shaderpack_name} />
       </div>
 
       <div className="group-box">

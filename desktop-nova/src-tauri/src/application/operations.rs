@@ -31,6 +31,7 @@ pub(crate) struct ApplicationOperations {
     analysis_cache: Arc<Mutex<BTreeMap<AnalysisKey, Arc<OnceLock<Result<Value, String>>>>>>,
     layer_cache: Arc<Mutex<BTreeMap<AnalysisKey, Arc<OnceLock<Result<Arc<LayerCatalog>, String>>>>>>,
     lifecycle: Arc<(Mutex<OperationLifecycle>, Condvar)>,
+    world_exports: Arc<Mutex<BTreeMap<String, WorldExportPaths>>>,
     iris_inspector: Arc<Mutex<(super::protected_render::ProtectedRender, Option<nova_render_protocol::ProtectedTask>)>>,
 }
 
@@ -130,11 +131,17 @@ pub(crate) struct EditProjectOriginInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ExportWorldInput {
+    pub(crate) task_id: String,
+    pub(crate) target_version: String,
     pub(crate) source_path: String,
     pub(crate) output_directory: String,
     pub(crate) world_name: String,
     pub(crate) origin: super::model::IntegerVector,
 }
+
+#[derive(Clone)]
+struct WorldExportPaths { cancel: PathBuf, progress: PathBuf }
+pub(crate) struct WorldExportWork { input: ExportWorldInput, generation: u64, prefix: String, paths: WorldExportPaths }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -450,6 +457,7 @@ impl ApplicationOperations {
             analysis_cache: Arc::new(Mutex::new(BTreeMap::new())),
             layer_cache: Arc::new(Mutex::new(BTreeMap::new())),
             lifecycle: Arc::new((Mutex::new(OperationLifecycle::default()), Condvar::new())),
+            world_exports: Arc::new(Mutex::new(BTreeMap::new())),
             iris_inspector: Arc::new(Mutex::new((super::protected_render::ProtectedRender::default(), None))),
         })
     }
@@ -590,13 +598,43 @@ impl ApplicationOperations {
         })
     }
 
-    pub(crate) fn export_world(&self, input: ExportWorldInput) -> Result<Value, String> {
-        let source = self.resolve_path(&input.source_path);
+    pub(crate) fn world_export_profiles(&self, source_path: String) -> Result<Value, String> {
+        self.run_core_json(vec!["world-export".into(), "--profiles".into(), "--input".into(), path_text(&self.resolve_path(&source_path))])
+    }
+
+    pub(crate) fn begin_world_export(&self, input: ExportWorldInput) -> Result<WorldExportWork, String> {
+        if input.task_id.is_empty() || input.task_id.len() > 64 || !input.task_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') { return Err("无效的世界导出任务标识".into()); }
         if input.output_directory.trim().is_empty() { return Err("请选择世界输出目录".into()); }
-        let output = self.resolve_path(&input.output_directory);
-        self.run_core_json(vec!["world-export".into(), "--input".into(), path_text(&source),
-            "--output".into(), path_text(&output), "--name".into(), input.world_name,
-            "--x".into(), input.origin.x.to_string(), "--y".into(), input.origin.y.to_string(), "--z".into(), input.origin.z.to_string()])
+        if input.target_version.trim().is_empty() { return Err("请选择明确的目标游戏版本".into()); }
+        let (generation,prefix)=self.next_operation("world-export");
+        let paths=WorldExportPaths {cancel:self.operation_path(&prefix,"cancel"),progress:self.operation_path(&prefix,"progress.json")};
+        let mut active=self.world_exports.lock().map_err(|_|"世界导出任务状态锁异常")?;
+        if active.contains_key(&input.task_id) { return Err("世界导出任务已经存在".into()); }
+        active.insert(input.task_id.clone(),paths.clone());
+        Ok(WorldExportWork {input,generation,prefix,paths})
+    }
+
+    pub(crate) fn world_export_status(&self, task_id: &str, cancel: bool) -> Result<Value, String> {
+        let paths=self.world_exports.lock().map_err(|_|"世界导出任务状态锁异常")?.get(task_id).cloned();
+        let Some(paths)=paths else {return Ok(json!({"active":false}));};
+        if cancel {fs::write(&paths.cancel,b"cancel").map_err(|e|format!("取消世界导出：{e}"))?;}
+        // A progress file can be read between truncation and write. Keep the
+        // last UI stage instead of inventing success or resetting percentage.
+        let progress=fs::read(&paths.progress).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok());
+        Ok(json!({"active":true,"progress":progress}))
+    }
+
+    pub(crate) fn export_world(&self, work: WorldExportWork) -> Result<Value, String> {
+        let input=work.input;
+        let source=self.resolve_path(&input.source_path);let output=self.resolve_path(&input.output_directory);
+        let mut files=OperationFiles::new();files.track(work.paths.cancel.clone());files.track(work.paths.progress.clone());
+        let result=self.run_core(work.generation,&work.prefix,vec!["world-export".into(),"--input".into(),path_text(&source),
+            "--output".into(),path_text(&output),"--name".into(),input.world_name,"--target".into(),input.target_version,
+            "--cancel".into(),path_text(&work.paths.cancel),"--progress".into(),path_text(&work.paths.progress),
+            "--x".into(),input.origin.x.to_string(),"--y".into(),input.origin.y.to_string(),"--z".into(),input.origin.z.to_string()],&mut files)
+            .and_then(|result|parse_core_json(&result.stdout));
+        if let Ok(mut active)=self.world_exports.lock(){active.remove(&input.task_id);}
+        result
     }
 
     pub(crate) fn convert_project_version(&self, input: ConvertProjectVersionInput) -> Result<Value, String> {
@@ -959,7 +997,7 @@ impl ApplicationOperations {
         }
         let mut seen = std::collections::BTreeSet::new();
         for pair in args[1..].chunks_exact(2) {
-            if !matches!(pair[0].as_str(), "--root" | "--pack" | "--language" | "--save-json")
+            if !matches!(pair[0].as_str(), "--root" | "--pack" | "--language" | "--save-json" | "--rollback-json")
                 || !seen.insert(pair[0].as_str()) || pair[1].is_empty() {
                 return Err("Invalid shader settings argument".into());
             }
@@ -1295,9 +1333,9 @@ fn stats_args(source: &Path, include_container_items: bool) -> Vec<String> {
 fn core_command_writes(args: &[String]) -> bool {
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
-        "edit-metadata" | "set-origin" | "remove-origin" | "materials-export" | "world-export" => true,
-        "iris-settings" => args.iter().any(|arg| arg == "--save-json"),
-        "iris-settings" => args.iter().any(|arg| arg == "--save-json"),
+        "edit-metadata" | "set-origin" | "remove-origin" | "materials-export" => true,
+        "world-export" => !args.iter().any(|arg|arg=="--profiles"),
+        "iris-settings" => args.iter().any(|arg| arg == "--save-json" || arg == "--rollback-json"),
         "version-convert" => args.iter().any(|arg| arg == "--output" || arg == "--overwrite"),
         "replace-blocks" | "generate" | "generate-projection" => !args.iter().any(|arg| arg == "--dry-run"),
         // Recipe downloads/extraction only write validated replaceable caches;

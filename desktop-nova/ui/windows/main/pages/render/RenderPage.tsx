@@ -14,6 +14,7 @@ import { useFullPreview } from "../../useFullPreview";
 import { formatResourceBytes } from "../../../../../src/business/resourcePreflightUnits";
 import { displayFilePath } from "../../../../../src/business/facade";
 import { FreeCameraControls } from "./FreeCameraControls";
+import { openIrisSettings } from "../../../../../src/services/irisSettings";
 import "./render.css";
 
 /** Separate historical Fast and real private Full service paths; no algorithm substitution. */
@@ -72,6 +73,7 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
       <div className="render-page-actions">
         <label><Checkbox checked={preload} disabled={full.pending || full.loading} onCheckedChange={checked => setPreloads(previous => ({ ...previous, [exactMode]: checked === true }))} />{t("render.preload")}</label>
         <Button disabled={!currentFile || full.pending || full.loading} onClick={() => void full.start()}><ThemeIcon name={mode === "full" ? "build" : "run"} size={16} fallback={mode === "full" ? Box : Play} />{t(mode === "standard" ? "render.title.standard" : "render.title.full")}</Button>
+        {mode === "full" && <Button variant="ghost" onClick={() => void openIrisSettings().catch(error => setCaptureMessage(String(error)))}>{t("iris.load")}</Button>}
         <Button variant="ghost" disabled={!full.operation || full.pending} onClick={() => void full.hide()}><ThemeIcon name="hide" size={16} fallback={EyeOff} />{t("render.hide")}</Button>
         <Button variant="ghost" disabled={!full.operation && !full.pending && !full.preflight} onClick={() => void full.close()}><ThemeIcon name="close" size={16} fallback={X} />{t("render.closeCancel")}</Button>
         <Button variant="ghost" disabled={!full.ready || full.pending || capturing} onClick={() => void capture()}><ThemeIcon name="picture_trans" size={16} fallback={Image} />{capturing ? t("render.saving") : t("render.setThumbnail")}</Button>

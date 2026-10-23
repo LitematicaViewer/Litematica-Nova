@@ -183,6 +183,24 @@ impl RenderFacade {
     /// Bridges render-service notifications into an Application-owned event.
     /// The WebView never receives the renderer protocol event or snapshot.
     pub(crate) fn start_event_bridge(&self, app: AppHandle) -> Result<(), String> {
+        let layer_events = self.inner.transport.subscribe_events();
+        let layer_app = app.clone();
+        let facade = self.clone();
+        std::thread::Builder::new().name("nova-application-layer-input".into()).spawn(move || {
+            while let Ok(event) = layer_events.recv() {
+                if let nova_render_protocol::ServiceEvent::LayerStep { session_id, build_id, generation, delta } = event {
+                    let state = facade.inner.state.lock().unwrap();
+                    if let Some(record) = state.operations.values().find(|record| !record.cancel_requested
+                        && record.binding.as_ref().is_some_and(|binding| binding.build_id == build_id
+                            && binding.generation == generation && binding.session_id.as_deref() == Some(&session_id))
+                        && matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady)) {
+                        let _ = layer_app.emit("application_scene_layer_step", serde_json::json!({
+                            "sourcePath": record.view.source.path, "operationId": record.view.operation_id, "delta": delta
+                        }));
+                    }
+                }
+            }
+        }).map_err(|error| format!("start layer input bridge: {error}"))?;
         self.start_event_bridge_with(move |snapshot| {
             let _ = app.emit(APPLICATION_RENDER_STATE_EVENT, snapshot);
         })
@@ -764,6 +782,23 @@ impl RenderFacade {
         }
     }
 
+    pub(crate) async fn release_camera_input_for_iris(&self) -> Result<(), String> {
+        self.refresh_from_service();
+        let sessions: Vec<_> = {
+            let state = self.inner.state.lock().unwrap();
+            state.operations.values().filter(|record| !record.cancel_requested
+                && matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady))
+                .filter_map(|record| record.binding.as_ref().and_then(|binding| binding.session_id.clone())).collect()
+        };
+        for session_id in sessions {
+            let controls = viewer_launch_contract::SceneViewControls { release_camera_input: true, ..Default::default() };
+            match self.inner.transport.request(UiCommand::SetSceneView { session_id, controls }).await? {
+                ResponseBody::Ack => {}, other => return Err(format!("unexpected input release response: {other:?}")),
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) async fn reload_shader_options(&self, root: PathBuf, name: String) -> Result<bool, String> {
         self.refresh_from_service();
         let session_id = {
@@ -774,10 +809,34 @@ impl RenderFacade {
                 .find_map(|record| record.binding.as_ref().and_then(|binding| binding.session_id.clone()))
         };
         let Some(session_id) = session_id else { return Ok(false); };
+        let result_path = super::thumbnails::temporary_preview_path().with_extension("iris-options.json");
         let controls = viewer_launch_contract::SceneViewControls { reload_shader_options: true,
+            release_camera_input: true, shader_options_result_path: Some(result_path.clone()),
             shaderpack_root: Some(root), shaderpack_name: Some(name), ..Default::default() };
-        match self.inner.transport.request(UiCommand::SetSceneView { session_id, controls }).await? {
-            ResponseBody::Ack => Ok(true), other => Err(format!("unexpected shader options response: {other:?}")),
+        match self.inner.transport.request(UiCommand::SetSceneView { session_id: session_id.clone(), controls }).await? {
+            ResponseBody::Ack => {}, other => return Err(format!("unexpected shader options response: {other:?}")),
+        }
+        loop {
+            match std::fs::read(&result_path) {
+                Ok(bytes) => {
+                    let _ = std::fs::remove_file(&result_path);
+                    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| format!("Invalid shader application receipt: {error}"))?;
+                    if value["applied"].as_bool() == Some(true) { return Ok(true); }
+                    return Err(value["error"].as_str().unwrap_or("Shader application failed").to_owned());
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                Err(error) => return Err(format!("Read shader application receipt: {error}")),
+            }
+            self.refresh_from_service();
+            let active = {
+                let state = self.inner.state.lock().unwrap();
+                state.operations.values().any(|record| !record.cancel_requested
+                    && matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady)
+                    && record.binding.as_ref().and_then(|binding| binding.session_id.as_ref()) == Some(&session_id))
+            };
+            if !active { return Err("预览会话已结束，光影更改未应用 / Preview ended before shader application".into()); }
+            // Wait for this specific completed reload, not mere transport acceptance.
+            tokio::time::sleep(Duration::from_millis(30)).await;
         }
     }
 
@@ -988,7 +1047,7 @@ impl RenderFacade {
             nova_render_protocol::ServiceEvent::ServiceStopping => self.fail_active_operations(
                 "render service stopped before the operation completed".to_owned(),
             ),
-            nova_render_protocol::ServiceEvent::Error(_) => Vec::new(),
+            nova_render_protocol::ServiceEvent::Error(_) | nova_render_protocol::ServiceEvent::LayerStep { .. } => Vec::new(),
         }
     }
 

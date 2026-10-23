@@ -27,6 +27,7 @@ export default defineConfig({
                 redenLibrary: resolve(__dirname, "reden_library.html"),
                 localLibraryFolders: resolve(__dirname, "local_library_folders.html"),
                 assetManager: resolve(__dirname, "asset_manager.html"),
+                irisOptions: resolve(__dirname, "iris_options.html"),
                 enumerator: resolve(__dirname, "enumerator.html"),
                 demoWindow: resolve(__dirname, "demo_window.html")
             }

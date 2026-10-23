@@ -7,7 +7,8 @@
     "local-library-folders",
     "reden-library",
     "enumerator",
-    "asset-manager"
+    "asset-manager",
+    "iris-options"
   ],
   "permissions": [
     "core:default",

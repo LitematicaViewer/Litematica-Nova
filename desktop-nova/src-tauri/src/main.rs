@@ -1289,7 +1289,19 @@ async fn application_edit_project_origin(
 #[tauri::command]
 async fn application_export_world(input: ExportWorldInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
     let operations = operations.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || operations.export_world(input)).await.map_err(|error| error.to_string())?
+    let work=operations.begin_world_export(input)?;
+    tauri::async_runtime::spawn_blocking(move || operations.export_world(work)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn application_world_export_profiles(source_path: String, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let operations=operations.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || operations.world_export_profiles(source_path)).await.map_err(|error|error.to_string())?
+}
+
+#[tauri::command]
+fn application_world_export_status(task_id: String, cancel: bool, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    operations.world_export_status(&task_id,cancel)
 }
 
 #[tauri::command]
@@ -2794,6 +2806,73 @@ async fn open_asset_manager_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Serialize, Deserialize)]
+struct IrisWindowPlacement { x: i32, y: i32, width: f64, height: f64 }
+fn iris_window_placement_path() -> Result<PathBuf, String> { Ok(current_user_config_dir()?.join("iris-window.json")) }
+fn save_iris_window_placement(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.is_minimized().map_err(|error| error.to_string())? { return Ok(()); }
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let size = window.inner_size().map_err(|error| error.to_string())?.to_logical::<f64>(scale);
+    let placement = IrisWindowPlacement { x: position.x, y: position.y, width: size.width, height: size.height };
+    std::fs::write(iris_window_placement_path()?, serde_json::to_vec(&placement).map_err(|error| error.to_string())?).map_err(|error| error.to_string())
+}
+fn restore_iris_window_placement(window: &tauri::WebviewWindow, saved: Option<IrisWindowPlacement>) -> Result<(), String> {
+    let monitors = window.available_monitors().map_err(|error| error.to_string())?;
+    let current = window.outer_position().map_err(|error| error.to_string())?;
+    let position = saved.map(|p| tauri::PhysicalPosition::new(p.x, p.y)).unwrap_or(current);
+    let monitor = monitors.iter().find(|monitor| {
+        let area = monitor.work_area(); let x = i64::from(position.x); let y = i64::from(position.y);
+        x >= i64::from(area.position.x) && y >= i64::from(area.position.y)
+            && x < i64::from(area.position.x) + i64::from(area.size.width)
+            && y < i64::from(area.position.y) + i64::from(area.size.height)
+    }).or_else(|| monitors.first());
+    let Some(monitor) = monitor else { return Ok(()); };
+    let area = monitor.work_area(); let scale = monitor.scale_factor();
+    let current_size = window.inner_size().map_err(|error| error.to_string())?.to_logical::<f64>(window.scale_factor().map_err(|error| error.to_string())?);
+    let width = saved.map(|p| p.width).unwrap_or(current_size.width).clamp(360.0, (area.size.width as f64 / scale).max(360.0));
+    let height = saved.map(|p| p.height).unwrap_or(current_size.height).clamp(300.0, (area.size.height as f64 / scale - 48.0).max(300.0));
+    window.set_size(tauri::LogicalSize::new(width, height)).map_err(|error| error.to_string())?;
+    let outer = window.outer_size().map_err(|error| error.to_string())?;
+    let max_x = (i64::from(area.position.x) + i64::from(area.size.width.saturating_sub(outer.width))) as i32;
+    let max_y = (i64::from(area.position.y) + i64::from(area.size.height.saturating_sub(outer.height))) as i32;
+    window.set_position(tauri::PhysicalPosition::new(position.x.clamp(area.position.x, max_x), position.y.clamp(area.position.y, max_y))).map_err(|error| error.to_string())
+}
+#[tauri::command]
+async fn open_iris_options_window(app: AppHandle, root: Option<String>, pack: Option<String>, facade: tauri::State<'_, RenderFacade>) -> Result<(), String> {
+    const LABEL: &str = "iris-options";
+    let config = read_user_config_data(&current_user_config_dir()?);
+    let root = root.unwrap_or(config.v5_compatibility.shaderpack_root);
+    let pack = pack.unwrap_or(config.v5_compatibility.shaderpack_name);
+    if root.trim().is_empty() || pack.trim().is_empty() { return Err("请先选择光影包 / Select a shader pack first".into()); }
+    facade.release_camera_input_for_iris().await?;
+    if let Some(window) = app.get_webview_window(LABEL) {
+        restore_iris_window_placement(&window, None)?;
+        app.emit_to(LABEL, "iris-options-select-pack", serde_json::json!({ "root": root, "pack": pack })).map_err(|error| error.to_string())?;
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    let parent = app.get_webview_window("main").ok_or("Main window is unavailable")?;
+    let window = tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App(format!("iris_options.html?root={}&pack={}", query_encode(&root), query_encode(&pack)).into()))
+        .title("Iris").inner_size(480.0, 640.0).min_inner_size(360.0, 300.0).resizable(true).visible(false)
+        .parent(&parent).map_err(|error| error.to_string())?.build().map_err(|error| error.to_string())?;
+    let saved = iris_window_placement_path().ok().and_then(|path| std::fs::read(path).ok()).and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    restore_iris_window_placement(&window, saved)?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    Ok(())
+}
+#[tauri::command]
+async fn close_iris_options_window(app: AppHandle, facade: tauri::State<'_, RenderFacade>) -> Result<(), String> {
+    facade.release_camera_input_for_iris().await?;
+    if let Some(window) = app.get_webview_window("iris-options") {
+        save_iris_window_placement(&window)?;
+        window.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn open_reden_library_window(app: AppHandle) -> Result<(), String> {
     const LABEL: &str = "reden-library";
@@ -3411,16 +3490,59 @@ async fn application_set_scene_view(source_path: PathBuf, display_mode: Option<S
     facade.set_scene_view(&source, mode, controls).await
 }
 
+static IRIS_OPTIONS_TRANSACTION: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 #[tauri::command]
-async fn iris_shaderpack_settings(args: Vec<String>, operations: tauri::State<'_, ApplicationOperations>, facade: tauri::State<'_, RenderFacade>) -> Result<serde_json::Value, String> {
+async fn iris_shaderpack_settings(app: AppHandle, args: Vec<String>, operations: tauri::State<'_, ApplicationOperations>, facade: tauri::State<'_, RenderFacade>) -> Result<serde_json::Value, String> {
     let saving = args.iter().any(|arg| arg == "--save-json");
-    let operations = operations.inner().clone();
-    let mut value = tauri::async_runtime::spawn_blocking(move || operations.iris_settings(args)).await.map_err(|error| error.to_string())??;
-    if saving && value["requires_scene_reload"].as_bool() != Some(true) {
-        let root = value["root"].as_str().ok_or("Missing shader pack root")?.to_owned();
-        let pack = value["pack"].as_str().ok_or("Missing shader pack name")?.to_owned();
-        value["applied_to_active_viewer"] = serde_json::json!(facade.reload_shader_options(PathBuf::from(root), pack).await?);
+    // Reads must not observe a staged disk candidate before Viewer commit/rollback.
+    let _transaction = IRIS_OPTIONS_TRANSACTION.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+    let worker = operations.inner().clone(); let request = args.clone();
+    let mut value = tauri::async_runtime::spawn_blocking(move || worker.iris_settings(request)).await.map_err(|error| error.to_string())??;
+    if !saving {
+        let config = read_user_config_data(&current_user_config_dir()?);
+        value["selected_for_rendering"] = serde_json::json!(value["pack"].as_str() == Some(config.v5_compatibility.shaderpack_name.as_str())
+            && value["root"].as_str() == Some(config.v5_compatibility.shaderpack_root.as_str()));
+        return Ok(value);
     }
+    let previous_saved = value.as_object_mut().and_then(|value| value.remove("previous_saved")).ok_or("Shader save transaction has no previous state")?;
+    let root = value["root"].as_str().ok_or("Missing shader pack root")?.to_owned();
+    let pack = value["pack"].as_str().ok_or("Missing shader pack name")?.to_owned();
+    let mut applied = false;
+    let mut previous_config = None;
+    let apply = async {
+        // Finish fallible disk work before GPU commit. A failed config write
+        // must never require guessing/reloading the previously running pack.
+        let dir = current_user_config_dir()?;
+        let default_dir = default_user_config_dir()?;
+        let mut config = read_user_config_data(&dir);
+        previous_config = Some((dir.clone(), config.clone()));
+        config.v5_compatibility.shaderpack_root = root.clone();
+        config.v5_compatibility.shaderpack_name = pack.clone();
+        write_user_config_data(&dir, &config)?;
+        if value["requires_scene_reload"].as_bool() != Some(true) {
+            applied = facade.reload_shader_options(PathBuf::from(&root), pack.clone()).await?;
+        }
+        let info = UserConfigInfo { config_dir: dir.to_string_lossy().into(), default_config_dir: default_dir.to_string_lossy().into(), config };
+        let _ = app.emit("user-config-changed", &info);
+        Ok::<(), String>(())
+    }.await;
+    if let Err(error) = apply {
+        let mut rollback_args = Vec::new(); let mut index = 0;
+        while index < args.len() {
+            if args[index] == "--save-json" { index += 2; } else { rollback_args.push(args[index].clone()); index += 1; }
+        }
+        rollback_args.extend(["--rollback-json".into(), previous_saved.to_string()]);
+        let worker = operations.inner().clone();
+        let rollback = tauri::async_runtime::spawn_blocking(move || worker.iris_settings(rollback_args)).await
+            .map_err(|error| error.to_string()).and_then(|result| result);
+        let config_rollback = previous_config.map(|(dir, config)| write_user_config_data(&dir, &config)).unwrap_or(Ok(()));
+        let mut failure = error;
+        if let Err(restore) = rollback { failure.push_str(&format!("; restore previous shader settings: {restore}")); }
+        if let Err(restore) = config_rollback { failure.push_str(&format!("; restore selected shader pack: {restore}")); }
+        return Err(failure);
+    }
+    value["applied_to_active_viewer"] = serde_json::json!(applied);
+    value["selected_for_rendering"] = serde_json::json!(true);
     Ok(value)
 }
 
@@ -3806,6 +3928,24 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
+            if window.label() == "iris-options" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    if let Some(webview) = window.app_handle().get_webview_window("iris-options") {
+                        if let Err(error) = save_iris_window_placement(&webview) { eprintln!("[NOVA_IRIS_OPTIONS] save_window_placement_error={error}"); }
+                        let _ = webview.hide();
+                    }
+                }
+                if matches!(event, tauri::WindowEvent::Focused(true) | tauri::WindowEvent::CloseRequested { .. }) {
+                    let facade = window.state::<RenderFacade>().inner().clone();
+                    tauri::async_runtime::spawn(async move { if let Err(error) = facade.release_camera_input_for_iris().await { eprintln!("[NOVA_IRIS_OPTIONS] release_input_error={error}"); } });
+                }
+                if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. }) {
+                    if let Some(webview) = window.app_handle().get_webview_window("iris-options") {
+                        let _ = restore_iris_window_placement(&webview, None);
+                    }
+                }
+            }
             #[cfg(windows)]
             if window.label() == "main"
                 && platform::native_preview_host::windows_clipping_needs_refresh(event)
@@ -3943,6 +4083,8 @@ fn main() {
             wiki_block_icons::download_minecraft_wiki_block_icons,
             open_enumerator_window,
             open_asset_manager_window,
+            open_iris_options_window,
+            close_iris_options_window,
             application_get_close_request,
             application_confirm_close,
             application_request_close,
@@ -3967,6 +4109,8 @@ fn main() {
             application_edit_project_origin,
             application_replace_blocks,
             application_export_world,
+            application_world_export_profiles,
+            application_world_export_status,
             application_convert_project_version,
             application_query_block_database,
             application_get_project_stats,
