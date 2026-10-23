@@ -490,7 +490,7 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
     finally { prepareRecipesInFlight.current = false; setIsPreparingRecipes(false); }
   };
   return <div className={contentClassName} onMouseMove={event => setMousePos({ x:event.clientX, y:event.clientY })} onMouseLeave={() => setHoverItem(null)}>
-    {!embedded && <div className="subwindow-title-bar"><h3 className="subwindow-title">{contentMode === "details" ? t("editor.materialDetails") : t("editor.exportMaterials")}</h3>
+    {!embedded && contentMode !== "details" && <div className="subwindow-title-bar"><h3 className="subwindow-title">{t("editor.exportMaterials")}</h3>
       {onClose && <Button variant="ghost" size="icon" className="subwindow-close-button" aria-label={t("editor.closeWindow")} onClick={onClose}><X size={18} /></Button>}
     </div>}
     <div className="subwindow-body">

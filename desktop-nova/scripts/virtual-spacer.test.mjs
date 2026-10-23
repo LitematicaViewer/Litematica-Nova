@@ -270,7 +270,7 @@ test('rowHeight 常量与样式表实际行高一致', () => {
       )?.value,
     );
   const listPadding = paddingOf('ui/shell/widget/subwindow.css', '.material-list-table td');
-  const detailPadding = paddingOf(STATISTICS, '.beta-material-table td');
+  const detailPadding = paddingOf(STATISTICS, '.beta-material-table [data-slot="table-cell"]');
   const summaryHeight = declarationsOf([STATISTICS])
     .filter((entry) => entry.property === 'max-height' && entry.selector.includes('.material-summary-list'))
     .map((entry) => px(entry.value))
@@ -294,6 +294,16 @@ test('rowHeight 常量与样式表实际行高一致', () => {
     [detailRow, summaryHeight, 8],
     `MaterialTable must pass ${detailRow} for detail rows and ${summaryHeight} for summary rows`,
   );
+
+  // Stockpile is a seven-column grid inside the same table/spacer pipeline.
+  // Its 24px icons and compact editors deliberately use a separate fixed row.
+  const stockpileSource = source('ui/windows/main/pages/statistics/StockpileTaskPanel.tsx');
+  assert.match(stockpileSource, /const rowHeight = 46;/);
+  assert.match(stockpileSource, /useVirtualWindow\(rows,\s*scrollRef,\s*rowHeight,\s*8\)/);
+  const stockpileHeight = declarationsOf([STATISTICS]).find(
+    entry => entry.property === 'height' && entry.selector === '.stockpile-table .stockpile-row',
+  );
+  assert.equal(px(stockpileHeight?.value), 46, 'stockpile virtual row and CSS share the 46px contract');
 
   const enumeratorCalls = [
     ...source('ui/windows/enumerator/EnumeratorWindow.tsx').matchAll(

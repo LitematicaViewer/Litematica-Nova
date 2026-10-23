@@ -9,30 +9,49 @@ import postcss from 'postcss';
 const uiFile = new URL('../ui/windows/main/pages/statistics/StockpileTaskPanel.tsx', import.meta.url);
 const uiSource = fs.readFileSync(uiFile, 'utf8');
 
-test('task workspace passes window width and remaining height to the sole list scroll area', () => {
+test('specified workbench shares seven grid columns and real remaining height across list and details', () => {
   const sheet = postcss.parse(fs.readFileSync(new URL('../ui/windows/main/pages/statistics/materials.css', import.meta.url), 'utf8'));
   const rule = selector => {
     const matches = [];
-    sheet.walkRules(node => { if (node.selector === selector) matches.push(node); });
-    assert.equal(matches.length, 1, `one authoritative ${selector} rule`);
-    return Object.fromEntries(matches[0].nodes.filter(node => node.type === 'decl').map(node => [node.prop, node.value]));
+    sheet.walkRules(node => { if (node.selectors.includes(selector) && (node.parent.type !== 'atrule' || node.parent.name === 'layer')) matches.push(node); });
+    assert(matches.length, `production ${selector} rule exists`);
+    return Object.fromEntries(matches.flatMap(node => node.nodes.filter(node => node.type === 'decl').map(node => [node.prop, node.value])));
   };
-  const panel = rule('.stockpile-task'), controls = rule('.stockpile-task-controls');
-  const list = rule('.stockpile-table-scroll');
-  assert.equal(panel.width, '100%'); assert.equal(panel.flex, '1 0 0');
-  assert.equal(panel['min-height'], 'min-content', 'short windows scroll controls rather than overlap the footer');
+  const panel = rule('.stockpile-task'), controls = rule('.stockpile-task-controls'), workspace = rule('.stockpile-workspace');
+  const list = rule('.stockpile-table-scroll'), details = rule('.stockpile-detail-scroll');
+  assert.equal(panel.width, '100%'); assert.match(panel.flex, /^1 1 0/);
+  assert.equal(panel['min-height'], '0');
   assert.equal(panel['min-width'], '0'); assert.equal(panel['max-width'], undefined);
-  assert.equal(controls.flex, '0 0 auto', 'toolbars use natural height, not stretched rows');
-  assert.equal(list.width, '100%'); assert.equal(list.flex, '1 0 10rem');
-  assert.equal(list.height, '0'); assert.equal(list['min-height'], '10rem');
+  assert.match(controls.flex, /^0 [01] auto$/, 'toolbars use natural height, not stretched rows');
+  assert.equal(workspace.display, 'grid'); assert.equal(workspace['min-height'], '0'); assert.equal(workspace.gap, '14px');
+  assert.equal(list.width, '100%'); assert.match(list.flex, /^1 1 0/); assert.equal(list['min-height'], '0');
+  assert.equal(list.overflow, 'auto'); assert.equal(details['overflow-y'], 'auto');
   assert.equal(list['max-height'], undefined);
-  assert.equal(rule('.material-list-task-content > .subwindow-body').overflow, 'auto');
+  assert.equal(rule('.material-list-task-content > .subwindow-body').overflow, 'hidden');
   assert.equal(rule('.material-list-task-content > .subwindow-body > .material-export-footer').flex, '0 0 auto');
   assert.equal(rule('.material-list-content .stockpile-table').width, '100%');
-  assert.equal(rule('.stockpile-table .beta-material-name > span').flex, '1 1 0');
+  assert.equal(rule('.material-list-content .stockpile-table')['min-width'], '930px');
+  assert.equal(rule('.stockpile-table .stockpile-row').height, '46px');
+  assert.equal(rule('.stockpile-detail-panel').width, '340px');
+  const compact = value => value.replace(/\s+/g, '');
+  assert.equal(compact(panel['--stockpile-row-grid']), '40pxminmax(220px,2fr)minmax(125px,1fr)minmax(168px,1.1fr)minmax(135px,1fr)92px132px');
+  let sharedGrid = false, wideGrid = false;
+  sheet.walkRules(node => {
+    if (node.selector.includes('.stockpile-table-header') && node.selector.includes('.stockpile-row')) {
+      node.walkDecls('grid-template-columns', declaration => { sharedGrid ||= declaration.value === 'var(--stockpile-row-grid)'; });
+    }
+    if (node.selector === '.stockpile-workspace' && node.parent.name === 'media' && node.parent.params.includes('1360px')) {
+      node.walkDecls('grid-template-columns', declaration => { wideGrid ||= compact(declaration.value) === 'minmax(0,1fr)340px'; });
+    }
+  });
+  assert(sharedGrid, 'header and virtual rows use the same grid, not separate column estimates');
+  assert(wideGrid, '1360 CSS pixels switches the actual workspace to the fixed 340px detail pane');
   assert(!uiSource.includes('--stockpile-content-height'), 'row count must not set viewport height');
   assert.match(uiSource, /className="stockpile-task-controls"/);
-  assert.match(uiSource, /className="material-table-scroll stockpile-table-scroll" ref=\{scrollRef\}/);
+  assert.match(uiSource, /stockpile-table-scroll/);
+  assert.match(uiSource, /className="stockpile-workspace"/);
+  assert.match(uiSource, /colSpan=\{7\}/);
+  assert.doesNotMatch(uiSource, /<Checkbox checked=\{item\.complete\}/, 'bulk selection is distinct from marking complete');
   const base = fs.readFileSync(new URL('../ui/styles/base.css', import.meta.url), 'utf8');
   assert.match(base, /html,\s*body,\s*#root\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%/);
   const window = fs.readFileSync(new URL('../ui/shell/widget/subwindow.css', import.meta.url), 'utf8');
@@ -62,18 +81,18 @@ test('existing virtual list resizes its real viewport without remounting or writ
       observe(target) { assert.equal(target, container); } disconnect() { this.disconnected = true; } },
   };
   vm.runInNewContext(code, context);
-  const render = () => { cursor = 0; return context.exports.useVirtualWindow(items, ref, 50, 8); };
+  const render = () => { cursor = 0; return context.exports.useVirtualWindow(items, ref, 46, 8); };
   const flush = () => { for (const [id, callback] of frames) { frames.delete(id); callback(); } return render(); };
   render(); cleanup = effect();
-  const initial = render(); assert.equal(initial.visibleItems.length, 12);
+  const initial = render(); assert.equal(initial.visibleItems.length, 13);
   container.clientHeight = 700; observer.callback();
-  const maximized = flush(); assert.equal(maximized.visibleItems.length, 22);
+  const maximized = flush(); assert.equal(maximized.visibleItems.length, 24);
   container.scrollTop = 840; listeners.get('scroll')(); const scrolled = flush();
   container.clientHeight = 150; observer.callback(); const narrow = flush();
   assert.equal(narrow.startIndex, scrolled.startIndex); assert(narrow.visibleItems.length < scrolled.visibleItems.length);
   assert.equal(container.scrollTop, 840, 'resize never resets the current task list scroll offset');
   container.clientHeight = 500; headerHeight = 84; observer.callback(); const scaled = flush();
-  assert.equal(scaled.startIndex, Math.max(0, Math.floor((840 - 84) / 50) - 8));
+  assert.equal(scaled.startIndex, Math.max(0, Math.floor((840 - 84) / 46) - 8));
   assert.equal(scaled.visibleItems[0], items[scaled.startIndex]);
   assert.equal(observerCount, 1, 'reuse the existing observer, not another resize subscription');
   cleanup(); assert.equal(observer.disconnected, true); assert.equal(listeners.size, 0);
@@ -88,13 +107,15 @@ const declarations = new Map(), functions = new Map(), arrows = [];
   ts.forEachChild(node, visit);
 })(uiAst);
 const helperNames = ['stockpileUnitParts', 'itemState', 'displayLanguage', 'materialName', 'filterStockpileRows',
-  'resetConfirmationMatches', 'mergeStockpileMutation', 'recoverableStockpileCommands', 'pendingDraft', 'draftKey'];
+  'resetConfirmationMatches', 'mergeStockpileMutation', 'stockpileCompletionMutation', 'stockpileAdjustedQuantity', 'stockpileDetailSelection',
+  'recoverableStockpileCommands', 'pendingDraft', 'draftKey'];
 const transpile = source => ts.transpileModule(source, { fileName: 'replay.tsx', compilerOptions: {
   target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
 } }).outputText;
 const helperSource = helperNames.map(name => { assert(functions.has(name), `Production ${name} must exist`); return functions.get(name); }).join('\n');
 const helperCode = transpile(`${helperSource}\nglobalThis.helpers={${helperNames.join(',')}};`);
-const queueNames = ['capturePending', 'persistPending', 'drain', 'enqueue', 'mutate', 'changeQuantity', 'retry'];
+const queueNames = ['capturePending', 'persistPending', 'drain', 'enqueue', 'mutate', 'changeQuantity',
+  'clearQuantityDraft', 'latestQuantity', 'adjustQuantity', 'completeItem', 'rememberQuantity', 'applySelected', 'retry'];
 const queueCode = transpile(`${helperSource}\n` + queueNames.map(name => {
   assert(declarations.has(name), `Production ${name} closure must exist`); return `const ${declarations.get(name)};`;
 }).join('\n') + `\nglobalThis.queueApi={${queueNames.join(',')}};`);
@@ -110,6 +131,7 @@ function setupQueue(write) {
   const states={views:[],errors:[],pending:[],recoveries:[]}, saved=new Map();
   const work={epoch:1,task:task(),pending:new Map(),running:false,refresh:false};
   const context={exports:{},epoch:{current:1},sequence:{current:0},queue:{current:work},currentTask:{current:work.task},recovery:null,
+    quantityDrafts:{current:new Map()},selectedItems:[],setEditingQuantities(){},
     preferencesRef:{current:{...basePreferences}},searchRef:{current:''},
     setPending:value=>states.pending.push(value),setError:value=>states.errors.push(value),setRecoveryOpen(){},setRecovery:value=>states.recoveries.push(value),
     accept:value=>states.views.push(value),loadRef:{current(){}},commandStockpileTask:write,
@@ -137,6 +159,66 @@ test('UI queue coalesces actual item commands, preserves overfill and serializes
   assert(requests.every(input=>input.taskId==='task-A'&&input.sourceRevision==='revision-A'));
   assert.equal(state.work.pending.size,0); assert.equal(state.saved.size,0,'ACK clears recovery draft');
   assert.equal(state.states.views.at(-1).task.preparedCount,21);
+});
+
+test('rapid adjustments and completion read the pending absolute quantity, not stale row props', async () => {
+  const requests=[],waiters=[];
+  const state=setupQueue(input=>{requests.push(input);return new Promise(resolve=>waiters.push(resolve));});
+  const stale=state.work.task.items[0];
+  assert.equal(state.adjustQuantity(stale,1),1);
+  assert.equal(state.adjustQuantity(stale,16),17);
+  assert.equal(state.adjustQuantity(stale,-1),16);
+  state.completeItem(stale,false); state.completeItem(stale,true);
+  assert.equal(requests.length,1);
+  assert.deepEqual(plain(state.work.pending.get('item:stone').mutation),{materialId:'stone',quantity:16,status:'preparing'});
+  waiters.shift()({task:{...task(),items:[row('stone',{quantity:1,status:'preparing'}),row('wood')]}});await tick();
+  assert.equal(requests[1].mutation.quantity,16);assert.equal(requests[1].mutation.status,'preparing');
+  waiters.shift()({task:{...task(),items:[row('stone',{quantity:16,status:'preparing'}),row('wood')]}});await tick();
+  assert.equal(state.work.pending.size,0);
+});
+
+test('uncommitted valid quantity drafts persist without Host writes and survive another row ACK', async () => {
+  const requests=[],waiters=[];
+  const state=setupQueue(input=>{requests.push(input);return new Promise(resolve=>waiters.push(resolve));});
+  state.rememberQuantity('task-A','revision-A','stone',123);
+  assert.equal(requests.length,0,'typing is local until Enter or blur');
+  assert.equal(state.saved.values().next().value.commands[0][1].mutation.quantity,123);
+  state.changeQuantity('wood',4);
+  waiters.shift()({task:{...task(),items:[row('stone'),row('wood',{quantity:4,status:'preparing'})]}});await tick();
+  assert.equal(state.saved.values().next().value.commands[0][1].mutation.materialId,'stone');
+  assert.equal(state.saved.values().next().value.commands[0][1].mutation.quantity,123);
+  state.rememberQuantity('other-task','revision-A','wood',777);
+  assert.equal(state.context.quantityDrafts.current.size,1,'late edits cannot enter another task');
+  state.rememberQuantity('task-A','revision-A','stone',undefined);
+  state.changeQuantity('stone',123);
+  assert.equal(requests.at(-1).mutation.quantity,123);
+  waiters.shift()({task:{...task(),items:[row('stone',{quantity:123,status:'preparing'}),row('wood',{quantity:4,status:'preparing'})]}});await tick();
+  assert.equal(state.saved.size,0,'committed draft clears only after ACK');
+});
+
+test('batch completion targets only selected stable material identities through the same writer', async () => {
+  const requests=[];
+  const state=setupQueue(async input=>{requests.push(input);return {task:task()};});
+  state.context.selectedItems=[row('wood')];
+  state.applySelected(false);await tick();
+  assert.equal(requests.length,1);assert.equal(requests[0].mutation.materialId,'wood');
+  assert.equal(requests[0].mutation.quantity,10);assert.equal(requests[0].mutation.status,'done');
+  assert.equal(requests[0].taskId,'task-A');assert.equal(requests[0].sourceRevision,'revision-A');
+});
+
+test('a remounted quantity editor commits a recovered draft, while unchanged values never rewrite the database', async () => {
+  const requests=[];
+  const state=setupQueue(async input=>{requests.push(input);return {task:{...task(),items:[row('stone',{quantity:123,status:'preparing'}),row('wood')]}};});
+  state.changeQuantity('stone',0);assert.equal(requests.length,0);
+  state.rememberQuantity('task-A','revision-A','stone',123);
+  const context={exports:{},draft:'123',submitted:{current:123},setDraft(){},
+    onQuantity:quantity=>state.changeQuantity('stone',quantity),
+    onDraft:quantity=>state.rememberQuantity('task-A','revision-A','stone',quantity)};
+  vm.runInNewContext(transpile(`const ${declarations.get('commit')};globalThis.commit=commit;`),context);
+  context.commit();await tick();
+  assert.equal(requests.length,1);assert.equal(requests[0].mutation.quantity,123);
+  assert.equal(state.saved.size,0);assert.equal(state.context.quantityDrafts.current.size,0);
+  state.changeQuantity('stone',123);assert.equal(requests.length,1,'unchanged Enter/blur produces no second SQLite mutation');
 });
 
 test('failed writes retain exact intent and retry without marking unsaved values as saved', async()=>{
@@ -186,6 +268,34 @@ test('web unit hierarchy uses each material stack size and retains exact raw int
   assert.deepEqual(Array.from(stockpileUnitParts(0,16)),[0,0,0,0]);
   assert.deepEqual(Array.from(stockpileUnitParts(15,16)),[0,0,0,15]);
   assert.deepEqual(Array.from(stockpileUnitParts(27*64,64)),[0,1,0,0]);
+});
+
+test('completion fills the requirement, preserves overfill, and undo retains the absolute registered quantity', () => {
+  const {stockpileCompletionMutation} = helpers();
+  assert.deepEqual(plain(stockpileCompletionMutation(row('stone', {quantity:3}), 3, false)), {quantity:10,status:'done'});
+  assert.deepEqual(plain(stockpileCompletionMutation(row('stone', {quantity:22}), 22, false)), {quantity:22,status:'done'});
+  assert.deepEqual(plain(stockpileCompletionMutation(row('stone', {quantity:22}), 22, true)), {quantity:22,status:'preparing'});
+  assert.deepEqual(plain(stockpileCompletionMutation(row('stone', {quantity:3}), 17, true)), {quantity:17,status:'preparing'}, 'latest pending quantity wins over a stale ACK');
+});
+
+test('quantity adjustments retain integer units for non-64 stacks and never cross the exact integer range', () => {
+  const {stockpileAdjustedQuantity} = helpers();
+  for (const stack of [1,16,64,99]) {
+    assert.equal(stockpileAdjustedQuantity(7,stack),7+stack);
+    assert.equal(stockpileAdjustedQuantity(7,stack*27),7+stack*27);
+    assert.equal(stockpileAdjustedQuantity(7,stack*27*27),7+stack*27*27);
+  }
+  assert.equal(stockpileAdjustedQuantity(0,-1),0);
+  assert.equal(stockpileAdjustedQuantity(Number.MAX_SAFE_INTEGER,1),Number.MAX_SAFE_INTEGER);
+});
+
+test('detail selection follows the visible stable identity, never an old filtered or other variant row', () => {
+  const {stockpileDetailSelection} = helpers();
+  const visible = [row('potion#A'),row('potion#B')];
+  assert.equal(stockpileDetailSelection(visible,null),'potion#A');
+  assert.equal(stockpileDetailSelection(visible,'potion#B'),'potion#B');
+  assert.equal(stockpileDetailSelection([visible[0]],'potion#B'),'potion#A');
+  assert.equal(stockpileDetailSelection([],'potion#B'),null);
 });
 
 test('web single-user filters/search preserve NBT identity and language/base-ID fallback',()=>{
