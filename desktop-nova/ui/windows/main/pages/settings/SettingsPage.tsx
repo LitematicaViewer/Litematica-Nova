@@ -61,6 +61,7 @@ import {
 import { AssetManagerDialog, openAssetManagerWithWindowBehavior } from "../../../asset_manager";
 import "../../../../styles/asset-manager.css";
 import "./settings.css";
+import { IrisSettingsPanel } from "./IrisSettingsPanel";
 
 /* One entry per theme, from `src/services/themeManifest.ts`. Do not add ids here:
    a theme missing from the manifest cannot be loaded or stored, and the registry
@@ -751,6 +752,12 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           </div>
         </div>
         <Button onClick={saveV5Compatibility}>{t("settings.saveRenderSettings")}</Button>
+        <IrisSettingsPanel root={v5Compatibility.shaderpack_root} pack={v5Compatibility.shaderpack_name}
+          onSelectPack={(name) => setV5Compatibility((current) => ({ ...current, shaderpack_name: name }))}
+          onApplyPack={async (root, name) => {
+            const next = { ...v5Compatibility, shaderpack_root: root, shaderpack_name: name };
+            applyUserConfig(await saveUserConfig({ v5_compatibility: next }));
+          }} />
       </div>
 
       <div className="group-box">
