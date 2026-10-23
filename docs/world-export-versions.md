@@ -37,10 +37,14 @@ profile 记录实际 client JAR身份、chunk/level/flat/bit-storage/dimension/s
 
 - 语义数据覆盖：**63/63**（复用既有实际 oracle，不是本轮重新伪造）。
 - 原生格式实现覆盖：**63/63**。
-- 目标游戏无GUI读取→保存退出→重开、内容比较与新区块虚空：**59/63**，逐版结果见下表。
+- 目标游戏无GUI读取→保存退出→重开、内容比较与新区块虚空：**63/63**，逐版结果见下表。
 - **游戏画面、容器交互及应用导出对话框的人工/自动GUI验收未执行**：本会话原生GUI控制接口不可用。CLI及真实 dedicated-server验证不替代目视验收，不标为全部验收完成。
 
 每个精确版本样本均使用三个独立区域、负坐标、chunk/region边界、该版本上下高度边界；包含6个实际方块（3块石头、3只带方向状态的箱子）、3个容器（Slot2、3颗钻石、RepairCost7）及1个ArmorStand（位置、旋转、NoGravity）。1.9+额外核对Tags；1.8实际Entity存储不支持Tags，不把测试端虚构字段的丢失当导出缺陷。每版实际游戏查询这些坐标，并在新生成的(128,128)chunk检查零非空气方块。保存前后比较方块状态、位置、容器物品和实体姿态。
+
+额外对1.15.2与1.16各完成一次23种真实方块状态、4096格完整section的5bit样本：连续跨long与每long填充两种编码分别经实际游戏读取、保存、再次打开，4096个索引逐一保持一致（包括第12/13格的64位边界），实际方块查询及远端空气chunk也通过。使用同一原生writer与既有运行时脚本，记录独立位于`server-runs/1.15.2-fivebit/result-modern.json`、`server-runs/1.16-fivebit/result-modern.json`，没有覆盖63版基础样本证据。
+
+26.3实际BlockState codec会把默认属性状态保存成纯ID字符串；比较时按该精确版本真实注册表展开默认属性，不把合法规范化误判为属性丢失，也不拿字节相等代替语义一致。
 
 旧版没有forceload，使用真实启动加载三个样本出生区域和一个新空区域，各保存重开两次；1.13也走同一路径。现代版有界等待forceload真实完成，执行实际方块查询，再保存退出并第二次打开。不以只有进程exit0、日志无fatal或NBT自读代替内容检查。
 
@@ -62,7 +66,7 @@ profile 记录实际 client JAR身份、chunk/level/flat/bit-storage/dimension/s
 | 1.12.2 | 1343 | numeric | 0…255 | `.` | `8ada07da5ee7` | 通过 |
 | 1.13 | 1519 | palette_contiguous | 0…255 | `.` | `d807a5ed9428` | 通过 |
 | 1.13.1 | 1628 | palette_contiguous | 0…255 | `.` | `f0b4cf6d1a87` | 通过 |
-| 1.13.2 | 1631 | palette_contiguous | 0…255 | `.` | `3410887ba652` | 待运行 |
+| 1.13.2 | 1631 | palette_contiguous | 0…255 | `.` | `3410887ba652` | 通过 |
 | 1.14 | 1952 | palette_contiguous | 0…255 | `.` | `93907cbf0655` | 通过 |
 | 1.14.1 | 1957 | palette_contiguous | 0…255 | `.` | `7194d1326cf7` | 通过 |
 | 1.14.2 | 1963 | palette_contiguous | 0…255 | `.` | `9b740c9fd495` | 通过 |
@@ -106,11 +110,11 @@ profile 记录实际 client JAR身份、chunk/level/flat/bit-storage/dimension/s
 | 1.21.9 | 4554 | root_sections | -64…319 | `.` | `40c0a32c4660` | 通过 |
 | 1.21.10 | 4556 | root_sections | -64…319 | `.` | `e65ca028bc58` | 通过 |
 | 1.21.11 | 4671 | root_sections | -64…319 | `.` | `1473c9489ac5` | 通过 |
-| 26.1 | 4786 | root_sections | -64…319 | `dimensions/minecraft/overworld` | `bc6194c61566` | 旧失败待修正复测 |
+| 26.1 | 4786 | root_sections | -64…319 | `dimensions/minecraft/overworld` | `bc6194c61566` | 通过 |
 | 26.1.1 | 4788 | root_sections | -64…319 | `dimensions/minecraft/overworld` | `8c109be6177f` | 通过 |
-| 26.1.2 | 4790 | root_sections | -64…319 | `dimensions/minecraft/overworld` | `b1b315857266` | 待运行 |
+| 26.1.2 | 4790 | root_sections | -64…319 | `dimensions/minecraft/overworld` | `b1b315857266` | 通过 |
 | 26.2 | 4903 | root_sections | -64…319 | `dimensions/minecraft/overworld` | `40896ee9f1e2` | 通过 |
-| 26.3 | 5023 | root_sections | -64…319 | `dimensions/minecraft/overworld` | `4508d006323f` | 旧失败待修正复测 |
+| 26.3 | 5023 | root_sections | -64…319 | `dimensions/minecraft/overworld` | `4508d006323f` | 通过 |
 
 ## 已发现并修正的实际格式错误
 
