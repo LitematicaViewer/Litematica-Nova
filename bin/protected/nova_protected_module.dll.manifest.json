@@ -1,13 +1,13 @@
 {
   "manifest": {
     "protocol": 1,
-    "build_id": "runtime-1-f49567dbf035-layer-camera-20261024-r1-x86_64-pc-windows-msvc",
+    "build_id": "runtime-1-18ff27ab063c-pointer-stockpile-20261024-r1-x86_64-pc-windows-msvc",
     "module_id": "nova_protected_module.dll",
-    "plaintext_sha256": "1fb24dfd2384cbc079af4a457ced4262f2a7281fee18d5333aa0ecc9dbf4d516",
-    "ciphertext_sha256": "fb0d0aa80bac1b351a68b1b68ef6d1cb902897ca4177e94db52af3ac0c6a2911",
-    "ciphertext_bytes": 83848208,
-    "nonce": "TrlszjgvtBFUVVi6",
-    "created_ms": 1792785405473
+    "plaintext_sha256": "e06fc8000aa84d6daa580aa7981c3e8ec4b23ecab2321bcb47b2010fe056fd93",
+    "ciphertext_sha256": "4d3f6fdec1d206b40974b573985abed61daae5bb697a9a2b608d2c67d55264d8",
+    "ciphertext_bytes": 83737616,
+    "nonce": "nWCuaGL50fsSw8K9",
+    "created_ms": 1792788706333
   },
-  "signature": "y5uhXpfpLKVOjeORIBOIOW4SKBGERVmXtdjD9U9ht07qBIl8rBlwxzh1WtnM1U2urq32OlrJZBf6sZV4FC1xCw=="
+  "signature": "NpmmkujnKsMNWsgnWl+Q8FQ2WvWkQ4DBHPDWPUASeVi0iK2AgBrwui2qxqCm2tgEwh+CG484TDsVIIOQmQlcCw=="
 }

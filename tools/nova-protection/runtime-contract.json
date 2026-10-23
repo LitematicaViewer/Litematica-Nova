@@ -66,6 +66,11 @@
       "target": "x86_64-pc-windows-msvc",
       "runtime_build_id": "runtime-1-f49567dbf035-layer-camera-20261024-r1-x86_64-pc-windows-msvc",
       "module_manifest_sha256": "694f2ae1c3b3493b1c99a91b2425288ea0fec74d70c3893b032fef7b72250194"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_build_id": "runtime-1-18ff27ab063c-pointer-stockpile-20261024-r1-x86_64-pc-windows-msvc",
+      "module_manifest_sha256": "0c66227fd498f27fab4c321bcdb9739eb6b06fb012c2e63907675551bd9ef212"
     }
   ]
 }

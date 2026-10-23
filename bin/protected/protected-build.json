@@ -1,7 +1,7 @@
 {
   "schema": "nova.protected-build.v1",
   "version": "0.2.4",
-  "buildId": "runtime-1-f49567dbf035-layer-camera-20261024-r1-x86_64-pc-windows-msvc",
+  "buildId": "runtime-1-18ff27ab063c-pointer-stockpile-20261024-r1-x86_64-pc-windows-msvc",
   "moduleId": "nova_protected_module.dll",
   "manifestPublicKey": "U3kxvpUDPRuJI2Ou0HmdLKVpATe2E2gw+L7dAq8EHiw=",
   "endpoint": "https://45-62-112-121.sslip.io:8448/nova-core",
