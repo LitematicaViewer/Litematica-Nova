@@ -76,9 +76,12 @@
 .material-details-section { min-width:0; margin-bottom:var(--ln-space-4); }
 .material-details-section .beta-material-options { margin-bottom:var(--ln-space-3); }
 .material-details-section input[type="search"] { flex:1 1 12rem; min-width:0; }
-.material-list-task-content > .subwindow-body { overflow:auto; justify-content:flex-start; }
-.material-list-content-embedded.material-list-task-content { height:auto; max-height:75vh; }
-.stockpile-task { display:flex; flex-direction:column; gap:var(--ln-space-2); min-width:0; width:100%; max-width:88rem; padding-top:var(--ln-space-2); }
+.material-list-task-content > .subwindow-body { min-width:0; overflow:auto; justify-content:flex-start; }
+.material-list-task-content > .subwindow-body > .material-export-footer { flex:0 0 auto; }
+/* Carry the host's available size through to the list. The intrinsic minimum
+   keeps controls and a usable list reachable by outer scrolling in short windows. */
+.stockpile-task { display:flex; flex:1 0 0; flex-direction:column; gap:var(--ln-space-2); min-width:0; min-height:min-content; width:100%; padding-top:var(--ln-space-2); }
+.stockpile-task-controls { display:flex; flex:0 0 auto; flex-direction:column; gap:var(--ln-space-2); min-width:0; }
 .stockpile-task-toolbar, .stockpile-list-actions { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ln-space-2); }
 .stockpile-task-toolbar > .dropdown-container { flex:1 1 15rem; max-width:28rem; }
 .stockpile-source { flex:1 1 8rem; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -86,18 +89,20 @@
 .stockpile-summary progress { flex-basis:100%; width:100%; height:0.5rem; accent-color:var(--primary); }
 .stockpile-filters { gap:var(--ln-space-2); }
 .stockpile-filters input[type="search"] { flex:1 1 12rem; }
-.stockpile-filters .dropdown-container { flex:0 0 auto; }
+.stockpile-filters .dropdown-container { flex:0 0 auto; min-width:0; max-width:100%; }
 .stockpile-save-status { flex:1 1 10rem; text-align:right; font-size:var(--nova-text-sm); }
 .stockpile-error { display:flex; align-items:center; flex-wrap:wrap; gap:var(--ln-space-2); }
 .stockpile-error > span { flex:1 1 12rem; overflow-wrap:anywhere; }
-.stockpile-table-scroll { height:min(var(--stockpile-content-height, 5rem), 52vh); min-height:0; flex:none; }
-.material-list-content .stockpile-table { min-width:50rem; table-layout:auto; }
+.stockpile-table-scroll { width:100%; height:0; min-height:10rem; flex:1 0 10rem; }
+.material-list-content .stockpile-table { width:100%; min-width:50rem; table-layout:auto; }
+.stockpile-table [data-slot="table-head"]:not(:nth-child(2)), .stockpile-table [data-slot="table-cell"]:not(:nth-child(2)) { width:1%; white-space:nowrap; }
 .stockpile-table tbody tr:not(:has(.material-list-virtual-spacer-cell)) { height:50px; }
 .stockpile-density-comfortable .stockpile-table tbody tr:not(:has(.material-list-virtual-spacer-cell)) { height:64px; }
 .stockpile-table [data-slot="table-cell"] { padding:6px 10px; }
 .stockpile-table [data-slot="table-head"]:nth-child(2) { text-align:left; }
 .stockpile-table [data-slot="table-head"]:first-child, .stockpile-table [data-slot="table-cell"]:first-child { width:3.5rem; text-align:center; }
-.stockpile-table .beta-material-name > span { max-width:22rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.stockpile-table .beta-material-name { min-width:10rem; }
+.stockpile-table .beta-material-name > span { flex:1 1 0; width:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .stockpile-table .beta-material-name small { margin-top:0; }
 .stockpile-table .beta-material-quantity small { display:block; }
 .stockpile-row-actions { display:flex; align-items:center; justify-content:flex-end; gap:2px; }
@@ -125,7 +130,6 @@
   .stockpile-task-toolbar > .dropdown-container { max-width:none; }
   .stockpile-filters input[type="search"] { flex-basis:100%; }
   .stockpile-save-status { text-align:left; }
-  .stockpile-table-scroll { max-height:48vh; }
 }
 .material-list-hover-popup { position:fixed; z-index:10000; pointer-events:none; max-width:min(26rem,calc(100vw - 8px)); padding:var(--ln-space-3); overflow-wrap:anywhere; }
 .material-list-hover-popup-item-row { display:flex; align-items:center; gap:var(--ln-space-2); }

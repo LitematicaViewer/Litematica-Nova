@@ -3,10 +3,82 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import postcss from 'postcss';
 
 // Transpile actual production helpers and closures; never duplicate queue/filter logic.
 const uiFile = new URL('../ui/windows/main/pages/statistics/StockpileTaskPanel.tsx', import.meta.url);
 const uiSource = fs.readFileSync(uiFile, 'utf8');
+
+test('task workspace passes window width and remaining height to the sole list scroll area', () => {
+  const sheet = postcss.parse(fs.readFileSync(new URL('../ui/windows/main/pages/statistics/materials.css', import.meta.url), 'utf8'));
+  const rule = selector => {
+    const matches = [];
+    sheet.walkRules(node => { if (node.selector === selector) matches.push(node); });
+    assert.equal(matches.length, 1, `one authoritative ${selector} rule`);
+    return Object.fromEntries(matches[0].nodes.filter(node => node.type === 'decl').map(node => [node.prop, node.value]));
+  };
+  const panel = rule('.stockpile-task'), controls = rule('.stockpile-task-controls');
+  const list = rule('.stockpile-table-scroll');
+  assert.equal(panel.width, '100%'); assert.equal(panel.flex, '1 0 0');
+  assert.equal(panel['min-height'], 'min-content', 'short windows scroll controls rather than overlap the footer');
+  assert.equal(panel['min-width'], '0'); assert.equal(panel['max-width'], undefined);
+  assert.equal(controls.flex, '0 0 auto', 'toolbars use natural height, not stretched rows');
+  assert.equal(list.width, '100%'); assert.equal(list.flex, '1 0 10rem');
+  assert.equal(list.height, '0'); assert.equal(list['min-height'], '10rem');
+  assert.equal(list['max-height'], undefined);
+  assert.equal(rule('.material-list-task-content > .subwindow-body').overflow, 'auto');
+  assert.equal(rule('.material-list-task-content > .subwindow-body > .material-export-footer').flex, '0 0 auto');
+  assert.equal(rule('.material-list-content .stockpile-table').width, '100%');
+  assert.equal(rule('.stockpile-table .beta-material-name > span').flex, '1 1 0');
+  assert(!uiSource.includes('--stockpile-content-height'), 'row count must not set viewport height');
+  assert.match(uiSource, /className="stockpile-task-controls"/);
+  assert.match(uiSource, /className="material-table-scroll stockpile-table-scroll" ref=\{scrollRef\}/);
+  const base = fs.readFileSync(new URL('../ui/styles/base.css', import.meta.url), 'utf8');
+  assert.match(base, /html,\s*body,\s*#root\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%/);
+  const window = fs.readFileSync(new URL('../ui/shell/widget/subwindow.css', import.meta.url), 'utf8');
+  assert.match(window, /\.material-list-window\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%/);
+});
+
+test('existing virtual list resizes its real viewport without remounting or writing task state', () => {
+  const hookSource = fs.readFileSync(new URL('../ui/components/useVirtualWindow.ts', import.meta.url), 'utf8');
+  const code = ts.transpileModule(hookSource, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } }).outputText;
+  const states = [], frames = new Map(), listeners = new Map();
+  let cursor = 0, effect, cleanup, mounted = false, observer, observerCount = 0, frameId = 0, headerHeight = 42;
+  const container = { clientHeight: 200, scrollTop: 0,
+    querySelector: () => ({ getBoundingClientRect: () => ({ height: headerHeight }) }),
+    addEventListener: (name, callback) => listeners.set(name, callback),
+    removeEventListener: (name, callback) => { assert.equal(listeners.get(name), callback); listeners.delete(name); },
+  };
+  const ref = { current: container };
+  const items = Array.from({ length: 400 }, (_, id) => ({ id }));
+  const react = {
+    useState(initial) { const index = cursor++; if (!(index in states)) states[index] = initial; return [states[index], value => { states[index] = value; }]; },
+    useMemo: compute => compute(),
+    useEffect(callback) { if (!mounted) { mounted = true; effect = callback; } },
+  };
+  const context = { exports: {}, require: name => { assert.equal(name, 'react'); return react; },
+    window: { requestAnimationFrame: callback => { frames.set(++frameId, callback); return frameId; }, cancelAnimationFrame: id => frames.delete(id) },
+    ResizeObserver: class { constructor(callback) { observer = this; this.callback = callback; observerCount++; }
+      observe(target) { assert.equal(target, container); } disconnect() { this.disconnected = true; } },
+  };
+  vm.runInNewContext(code, context);
+  const render = () => { cursor = 0; return context.exports.useVirtualWindow(items, ref, 50, 8); };
+  const flush = () => { for (const [id, callback] of frames) { frames.delete(id); callback(); } return render(); };
+  render(); cleanup = effect();
+  const initial = render(); assert.equal(initial.visibleItems.length, 12);
+  container.clientHeight = 700; observer.callback();
+  const maximized = flush(); assert.equal(maximized.visibleItems.length, 22);
+  container.scrollTop = 840; listeners.get('scroll')(); const scrolled = flush();
+  container.clientHeight = 150; observer.callback(); const narrow = flush();
+  assert.equal(narrow.startIndex, scrolled.startIndex); assert(narrow.visibleItems.length < scrolled.visibleItems.length);
+  assert.equal(container.scrollTop, 840, 'resize never resets the current task list scroll offset');
+  container.clientHeight = 500; headerHeight = 84; observer.callback(); const scaled = flush();
+  assert.equal(scaled.startIndex, Math.max(0, Math.floor((840 - 84) / 50) - 8));
+  assert.equal(scaled.visibleItems[0], items[scaled.startIndex]);
+  assert.equal(observerCount, 1, 'reuse the existing observer, not another resize subscription');
+  cleanup(); assert.equal(observer.disconnected, true); assert.equal(listeners.size, 0);
+});
+
 const uiAst = ts.createSourceFile(uiFile.pathname, uiSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const declarations = new Map(), functions = new Map(), arrows = [];
 (function visit(node) {

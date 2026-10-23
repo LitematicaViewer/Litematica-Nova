@@ -439,6 +439,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   };
 
   return <section className={`stockpile-task stockpile-density-${preferences.view}`} aria-busy={loading}>
+    <div className="stockpile-task-controls">
     <div className="stockpile-task-toolbar">
       <Dropdown value={task?.taskId || ""} options={(workspace?.tasks || []).map(summary => ({ value: summary.taskId, label: summary.name }))}
         disabled={busy} onChange={taskId => { const summary = workspace?.tasks.find(entry => entry.taskId === taskId); if (summary) void action({ action: "select", taskId, projectId: summary.projectId, sourcePath: currentSource.current || undefined }); }} ariaLabel={t("stockpile.selectTask")} />
@@ -506,7 +507,8 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
         <span className="muted">{t("stockpile.createdAt", { date: new Date(task.createdAt > 1e12 ? task.createdAt : task.createdAt * 1000).toLocaleString(locale) })}</span>
         <span className="muted">{t("stockpile.updatedAt", { date: new Date(task.updatedAt > 1e12 ? task.updatedAt : task.updatedAt * 1000).toLocaleString(locale) })}</span></div>
     </section>}
-    <div className="material-table-scroll stockpile-table-scroll" ref={scrollRef} style={{ "--stockpile-content-height": `${Math.max(1, rows.length) * rowHeight + 42}px` } as React.CSSProperties}>
+    </div>
+    <div className="material-table-scroll stockpile-table-scroll" ref={scrollRef}>
       <Table className="material-list-table beta-material-table stockpile-table">
         <TableHeader><TableRow><TableHead scope="col">{t("stockpile.complete")}</TableHead><TableHead scope="col">{t("statistics.material")}</TableHead><TableHead scope="col">{t("stockpile.required")}</TableHead><TableHead scope="col">{t("stockpile.currentQuantity")}</TableHead><TableHead scope="col">{t("stockpile.remainingQuantity")}</TableHead><TableHead scope="col">{t("stockpile.actions")}</TableHead></TableRow></TableHeader>
         <TableBody>{virtual.topSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={6} height={virtual.topSpacerHeight} /></TableRow>}
@@ -514,7 +516,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
             const material = metadata.get(item.materialId), name = materialName(material, preferences.language, item.materialId);
             return <TableRow key={item.materialId} className={(virtual.startIndex + index) % 2 ? "material-list-row-odd" : "material-list-row-even"}>
               <TableCell><Checkbox checked={item.complete} aria-label={t("stockpile.markComplete", { name })} onCheckedChange={checked => mutate(item.materialId, checked === true ? { quantity: item.requiredCount, status: "done" } : { clear: true })} /></TableCell>
-              <TableCell><div className="beta-material-name">{task && <StockpileIcon task={task} iconKey={material?.item_icon_key || item.materialId.split("#")[0]} />}<span title={item.materialId}>{name}<small>{material?.category} · {t(`stockpile.state.${itemState(item)}`)}{preferences.showIconFallbackBadge && material?.icon_available === false && !!material.icon_diagnostic ? ` · ${t("stockpile.iconFallbackBadge")}` : ""}</small></span></div></TableCell>
+              <TableCell><div className="beta-material-name">{task && <StockpileIcon task={task} iconKey={material?.item_icon_key || item.materialId.split("#")[0]} />}<span title={`${name}\n${item.materialId}`}>{name}<small>{material?.category} · {t(`stockpile.state.${itemState(item)}`)}{preferences.showIconFallbackBadge && material?.icon_available === false && !!material.icon_diagnostic ? ` · ${t("stockpile.iconFallbackBadge")}` : ""}</small></span></div></TableCell>
               <TableCell className="beta-material-quantity" title={String(item.requiredCount)}>{displayQuantity(item, item.requiredCount)}</TableCell>
               <TableCell><QuantityInput value={item.quantity} label={t("stockpile.preparedFor", { name })} onQuantity={quantity => changeQuantity(item.materialId, quantity)} /></TableCell>
               <TableCell className="beta-material-quantity" title={String(item.remainingCount)}>{displayQuantity(item, item.remainingCount)}{item.overfilledCount > 0 && <small>{t("stockpile.overfilledValue", { count: item.overfilledCount })}</small>}</TableCell>
