@@ -6,13 +6,13 @@ export const zhCN: Record<string, string> = {
   "freeCamera.title": "相机操作", "freeCamera.speed": "移动速度", "freeCamera.speedUnit": "格/秒",
   "freeCamera.sensitivity": "鼠标灵敏度", "freeCamera.reset": "重置视角",
   "freeCamera.inputMode": "鼠标操作", "freeCamera.drag": "鼠标拖拽", "freeCamera.pointerLock": "点击锁定鼠标",
-  "freeCamera.dragHint": `右键按住转向，松开结束。${zhKeys}`,
+  "freeCamera.dragHint": "左键拖拽旋转，右键拖拽平移，滚轮缩放。Esc 释放。",
   "freeCamera.lockHint": `点击视口锁定并隐藏鼠标，移动鼠标转向。${zhKeys}`,
 };
 export const enUS: Record<string, string> = {
   "freeCamera.title": "Camera controls", "freeCamera.speed": "Move speed", "freeCamera.speedUnit": "blocks/s",
   "freeCamera.sensitivity": "Mouse sensitivity", "freeCamera.reset": "Reset view",
   "freeCamera.inputMode": "Mouse controls", "freeCamera.drag": "Mouse drag", "freeCamera.pointerLock": "Click to lock pointer",
-  "freeCamera.dragHint": `Hold right mouse to look, release to stop. ${enKeys}`,
+  "freeCamera.dragHint": "Left-drag to orbit, right-drag to pan, wheel to zoom. Esc releases input.",
   "freeCamera.lockHint": `Click the viewport to lock and hide the pointer; move to look. ${enKeys}`,
 };

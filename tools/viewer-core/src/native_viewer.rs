@@ -3351,15 +3351,17 @@ impl ChunkResidencyPlan {
 
 /// Viewport-local capture; the OS/Host owns confinement and the raw input source.
 #[derive(Default)]
-struct FreeCameraPointerCapture { captured: bool, focused: bool, dragging: bool }
+struct FreeCameraPointerCapture { captured: bool, focused: bool, dragging: bool, raw_keyboard: bool }
 impl FreeCameraPointerCapture {
     fn capture(&mut self, window: &NativeViewportWindow) {
-        if self.captured { return; }
+        if self.captured || !self.focused { return; }
         match window.set_pointer_capture(true) {
             Ok(()) => {
                 // A shared NSView reports success asynchronously in its Host ACK.
-                self.captured = window.camera_capture_confirmed();
-                self.focused = true;
+                self.focused = window.camera_has_focus();
+                self.captured = self.focused && window.camera_capture_confirmed();
+                #[cfg(not(target_os = "macos"))]
+                if !self.captured { let _ = window.set_pointer_capture(false); }
                 eprintln!("[NOVA_CAMERA_INPUT] pointer_locked={}", self.captured);
             }
             Err(error) => eprintln!("[NOVA_CAMERA_INPUT] capture_failed error={error:#}"),
@@ -3367,12 +3369,44 @@ impl FreeCameraPointerCapture {
     }
     fn mouse_button(&mut self, window: &NativeViewportWindow, lock: bool, button: MouseButton, state: ElementState) {
         if state == ElementState::Pressed {
-            window.focus_window(); self.focused = true;
-            if lock && button == MouseButton::Left { self.capture(window); }
+            window.focus_window(); self.focused = window.camera_has_focus();
+            if lock && button == MouseButton::Left {
+                if self.focused { self.capture(window); }
+                else { eprintln!("[NOVA_CAMERA_INPUT] pointer_locked=false reason=viewport_keyboard_focus_not_acquired"); }
+            }
         }
-        if !lock && button == MouseButton::Right { self.dragging = state == ElementState::Pressed; }
+        if !lock && matches!(button, MouseButton::Left | MouseButton::Right | MouseButton::Middle) {
+            self.dragging = self.focused && state == ElementState::Pressed;
+        }
     }
     fn input_allowed(&self, lock: bool) -> bool { self.focused && (!lock || self.captured) }
+    fn update_device_events<T: 'static>(&mut self, target: &winit::event_loop::EventLoopWindowTarget<T>) {
+        // Embedded HWND belongs to Viewer but the foreground root belongs to
+        // Host. WhenFocused filters RawInput by foreground process, dropping
+        // these keys. Lease INPUTSINK only while this viewport really owns
+        // focused capture; no hook or background camera control is installed.
+        #[cfg(target_os = "windows")]
+        {
+            let enabled = self.focused && self.captured;
+            if enabled != self.raw_keyboard {
+                target.listen_device_events(if enabled { winit::event_loop::DeviceEvents::Always }
+                    else { winit::event_loop::DeviceEvents::WhenFocused });
+                self.raw_keyboard = enabled;
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = target;
+    }
+    fn key_event<T: 'static>(&self, event: &Event<T>, window_id: winit::window::WindowId, lock: bool) -> Option<(KeyCode, bool)> {
+        if !self.input_allowed(lock) { return None; }
+        let (physical_key, state) = match event {
+            Event::DeviceEvent { event: DeviceEvent::Key(key), .. } if self.raw_keyboard => (key.physical_key, key.state),
+            Event::WindowEvent { window_id: id, event: WindowEvent::KeyboardInput { event, is_synthetic: false, .. } }
+                if *id == window_id && !self.raw_keyboard => (event.physical_key, event.state),
+            _ => return None,
+        };
+        if let PhysicalKey::Code(key) = physical_key { Some((key, state == ElementState::Pressed)) } else { None }
+    }
     #[cfg(target_os = "macos")]
     fn acknowledge_capture(&mut self, window: &NativeViewportWindow, captured: bool) {
         // A delayed Host ACK cannot undo an Esc/focus/modal release.
@@ -3400,6 +3434,58 @@ impl FreeCameraPointerCapture {
         }
         self.captured = false; self.focused = false; self.dragging = false;
         if was_active { eprintln!("[NOVA_CAMERA_INPUT] pointer_locked=false input_cleared=true"); }
+    }
+}
+
+
+#[cfg(test)]
+mod camera_input_regression_tests {
+    use super::*;
+
+    #[test]
+    fn raw_keyboard_requires_real_focus_and_capture_and_preserves_release_and_layer_keys() {
+        let window_id = unsafe { winit::window::WindowId::dummy() };
+        let event = |code, state| Event::<()>::DeviceEvent {
+            device_id: unsafe { winit::event::DeviceId::dummy() },
+            event: DeviceEvent::Key(winit::event::RawKeyEvent { physical_key: PhysicalKey::Code(code), state }),
+        };
+        let mut input = FreeCameraPointerCapture::default();
+        let down = event(KeyCode::KeyW, ElementState::Pressed);
+        assert_eq!(input.key_event(&down, window_id, true), None);
+        input.focused = true; input.raw_keyboard = true;
+        assert_eq!(input.key_event(&down, window_id, true), None, "focus alone is not capture");
+        input.captured = true;
+        assert_eq!(input.key_event(&down, window_id, true), Some((KeyCode::KeyW, true)));
+        for key in [KeyCode::KeyW, KeyCode::Space, KeyCode::ShiftLeft, KeyCode::ControlRight, KeyCode::Escape, KeyCode::PageUp, KeyCode::PageDown] {
+            assert_eq!(input.key_event(&event(key, ElementState::Released), window_id, true), Some((key, false)));
+        }
+        input.focused = false;
+        assert_eq!(input.key_event(&down, window_id, true), None, "background keys never drive the camera");
+        input.focused = true; input.raw_keyboard = false;
+        assert_eq!(input.key_event(&down, window_id, true), None, "no raw input outside the scoped lease");
+    }
+
+    #[test]
+    fn drag_and_locked_look_share_pose_without_losing_model_orbit_pan_and_zoom() {
+        let bounds = SceneBounds { center: Vec3::ZERO, radius: 20.0 };
+        let mut camera = OrbitCamera::from_bounds(bounds, 1280, 800);
+        let target = camera.target; let eye = camera.eye();
+        camera.orbit(Vec2::new(40.0, 20.0));
+        assert_eq!(camera.target, target); assert_ne!(camera.eye(), eye);
+        let yaw = camera.yaw; let pitch = camera.pitch;
+        camera.pan(Vec2::new(20.0, 10.0));
+        assert_ne!(camera.target, target); assert_eq!(camera.yaw, yaw); assert_eq!(camera.pitch, pitch);
+        let target = camera.target; let distance = camera.distance;
+        camera.zoom(1.0);
+        assert_eq!(camera.target, target); assert!(camera.distance < distance);
+        let eye = camera.eye();
+        camera.set_free_input_mode("pointer_lock");
+        assert_eq!(camera.eye(), eye);
+        camera.orbit(Vec2::new(50.0, 25.0));
+        assert!(camera.eye().distance(eye) < 0.0001);
+        let locked_eye = camera.eye(); let locked_target = camera.target;
+        camera.set_free_input_mode("drag");
+        assert_eq!(camera.eye(), locked_eye); assert_eq!(camera.target, locked_target);
     }
 }
 
@@ -3522,7 +3608,16 @@ impl OrbitCamera {
         let eye = self.eye();
         self.yaw -= delta.x * 0.006 * self.mouse_sensitivity;
         self.pitch = (self.pitch + delta.y * 0.006 * self.mouse_sensitivity).clamp(-1.54, 1.54);
-        self.target = eye - Self::offset_from_angles(self.yaw, self.pitch, self.distance);
+        if self.free_pointer_lock {
+            self.target = eye - Self::offset_from_angles(self.yaw, self.pitch, self.distance);
+        }
+    }
+
+    fn pan(&mut self, delta: Vec2) {
+        let forward = (self.target - self.eye()).normalize_or_zero();
+        let right = forward.cross(Vec3::Y).normalize_or_zero();
+        let up = right.cross(forward).normalize_or_zero();
+        self.target += (-right * delta.x + up * delta.y) * self.distance * 0.0015;
     }
 
     fn set_free_mode(&mut self, _legacy_enabled: bool) {
@@ -3570,8 +3665,18 @@ impl OrbitCamera {
     }
 
     fn zoom(&mut self, amount: f32) {
-        if amount.is_finite() {
+        if !amount.is_finite() { return; }
+        if self.free_pointer_lock {
             self.target += (self.target - self.eye()).normalize_or_zero() * amount * self.movement_speed * 0.2;
+            return;
+        }
+        let next = self.distance * (1.0 - amount * 0.12);
+        if amount < 0.0 || next >= self.min_distance {
+            self.distance = next.clamp(self.min_distance, self.max_distance);
+        } else {
+            let forward = (self.target - self.eye()).normalize_or_zero();
+            self.target += forward * (self.min_distance - next).max(0.0);
+            self.distance = self.min_distance;
         }
     }
 
@@ -3580,6 +3685,7 @@ impl OrbitCamera {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DragMode {
     Rotate,
+    Pan,
 }
 
 struct DepthTexture {
@@ -8675,6 +8781,11 @@ impl ViewerState {
                     self.write_camera();
                     self.mark_residency_dirty();
                 }
+                Some(DragMode::Pan) => {
+                    self.camera.pan(delta);
+                    self.write_camera();
+                    self.mark_residency_dirty();
+                }
                 None => {}
             }
         }
@@ -8688,8 +8799,12 @@ impl ViewerState {
             return;
         }
         match (state, button) {
-            (ElementState::Pressed, MouseButton::Right) => {
+            (ElementState::Pressed, MouseButton::Left) => {
                 self.drag_mode = Some(DragMode::Rotate);
+                self.last_cursor_position = None;
+            }
+            (ElementState::Pressed, MouseButton::Right | MouseButton::Middle) => {
+                self.drag_mode = Some(DragMode::Pan);
                 self.last_cursor_position = None;
             },
             (ElementState::Released, MouseButton::Left)
@@ -10474,6 +10589,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
     let mut last_mac_display_epoch = None;
     event_loop.listen_device_events(winit::event_loop::DeviceEvents::WhenFocused);
     let event_loop_result = event_loop.run(move |event, event_loop_window_target| {
+        pointer_capture.update_device_events(event_loop_window_target);
         event_loop_window_target.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(40)));
         if pointer_capture.refresh(window.as_ref()) || presentation_mode == PersistentPresentationMode::Hidden || quick_occluded {
@@ -10561,13 +10677,17 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                 Event::WindowEvent { window_id: window.id(), event: WindowEvent::RedrawRequested }
             } else { event }
         } else { event };
+        pointer_capture.update_device_events(event_loop_window_target);
         match &event {
-            Event::WindowEvent { event, window_id } if *window_id == window.id() => match event {
-                WindowEvent::KeyboardInput { event, is_synthetic: false, .. } if pointer_capture.input_allowed(state.camera.free_pointer_lock) => {
-                    if let PhysicalKey::Code(key) = event.physical_key {
-                        state.camera.movement_key(key, event.state == ElementState::Pressed);
-                    }
+            camera_event if pointer_capture.key_event(camera_event, window.id(), state.camera.free_pointer_lock).is_some() => {
+                let (key, pressed) = pointer_capture.key_event(camera_event, window.id(), state.camera.free_pointer_lock).unwrap();
+                if key == KeyCode::Escape && pressed && matches!(camera_event, Event::DeviceEvent { .. }) {
+                    pointer_capture.release(window.as_ref()); state.camera.clear_movement(); state.drag_mode = None; state.last_cursor_position = None;
+                } else {
+                    state.camera.movement_key(key, pressed);
                 }
+            }
+            Event::WindowEvent { event, window_id } if *window_id == window.id() => match event {
                 WindowEvent::Focused(false) | WindowEvent::Occluded(true) | WindowEvent::CloseRequested | WindowEvent::Destroyed => {
                     pointer_capture.release(window.as_ref()); state.camera.clear_movement(); state.drag_mode = None; state.last_cursor_position = None;
                 }
@@ -10630,7 +10750,8 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                     ..
                 } => {
                     pointer_capture.mouse_button(window.as_ref(), state.camera.requires_pointer_capture(), button, element_state);
-                    state.process_mouse_input(element_state, button);
+                    pointer_capture.update_device_events(event_loop_window_target);
+                    if pointer_capture.focused { state.process_mouse_input(element_state, button); }
                     quick_redraw.request();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
@@ -10656,7 +10777,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                         PhysicalKey::Code(KeyCode::Tab) if quick_host.is_some() => {
                             native_child::focus_host(quick_host.as_ref().unwrap());
                         }
-                        PhysicalKey::Code(KeyCode::Escape) if pointer_capture.focused || pointer_capture.captured || pointer_capture.dragging => {
+                        PhysicalKey::Code(KeyCode::Escape) if state.camera.requires_pointer_capture() || pointer_capture.focused || pointer_capture.captured || pointer_capture.dragging => {
                             pointer_capture.release(window.as_ref()); state.camera.clear_movement(); state.drag_mode = None; state.last_cursor_position = None;
                         }
                         PhysicalKey::Code(KeyCode::Escape) => {

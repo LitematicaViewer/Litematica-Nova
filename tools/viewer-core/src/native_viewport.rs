@@ -116,7 +116,7 @@ impl NativeViewportWindow {
             // child HWND is not the foreground top-level HWND. A genuine child
             // only needs keyboard focus inside the already active Host.
             #[cfg(target_os = "windows")]
-            if pointer_os::focus_child(window) { return; }
+            if pointer_os::focus_child(window).is_some() { return; }
             window.focus_window();
         }
         // Shared-view focus is applied by the Host's native presentation/input
@@ -126,6 +126,7 @@ impl NativeViewportWindow {
     pub(crate) fn set_pointer_capture(&self, captured: bool) -> Result<()> {
         if let Some(window) = &self.native {
             if captured {
+                anyhow::ensure!(self.camera_has_focus(), "viewport has no keyboard focus");
                 #[cfg(target_os = "windows")]
                 let restore = pointer_os::cursor_in(window);
                 #[cfg(not(target_os = "windows"))]
@@ -182,13 +183,13 @@ impl NativeViewportWindow {
 
     pub(crate) fn camera_drag_cancelled(&self) -> bool {
         #[cfg(target_os = "windows")]
-        if let Some(window) = &self.native { return pointer_os::right_drag_cancelled(window); }
+        if let Some(window) = &self.native { return pointer_os::drag_cancelled(window); }
         false
     }
 
     pub(crate) fn camera_drag_active(&self) -> bool {
         #[cfg(target_os = "windows")]
-        if let Some(window) = &self.native { return pointer_os::right_drag_active(window); }
+        if let Some(window) = &self.native { return pointer_os::drag_active(window); }
         true
     }
 
@@ -246,6 +247,8 @@ mod pointer_os {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn GetFocus() -> isize;
+        fn GetForegroundWindow() -> isize;
+        fn GetAncestor(hwnd: isize, flags: u32) -> isize;
         fn SetFocus(hwnd: isize) -> isize;
         fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
         fn GetCapture() -> isize;
@@ -262,14 +265,21 @@ mod pointer_os {
             Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get(), _ => 0,
         }
     }
-    pub(super) fn focus_child(window: &Window) -> bool {
+    // Some(false) still denotes a child: never fall back to top-level activation
+    // (which winit implements by synthesizing Alt) when its SetFocus fails.
+    pub(super) fn focus_child(window: &Window) -> Option<bool> {
         let handle = hwnd(window);
-        if handle != 0 && unsafe { GetWindowLongPtrW(handle, -16) } & 0x4000_0000 != 0 {
-            unsafe { SetFocus(handle); } return true;
-        }
-        false
+        if handle == 0 || unsafe { GetWindowLongPtrW(handle, -16) } & 0x4000_0000 == 0 { return None; }
+        if unsafe { GetAncestor(handle, 2) != GetForegroundWindow() } { return Some(false); }
+        unsafe { SetFocus(handle); }
+        Some(has_focus(window))
     }
-    pub(super) fn has_focus(window: &Window) -> bool { let handle = hwnd(window); handle != 0 && unsafe { GetFocus() == handle } }
+    pub(super) fn has_focus(window: &Window) -> bool {
+        let handle = hwnd(window);
+        // A child can retain thread-local focus after another application or
+        // an owned dialog becomes foreground. Such focus is not an input lease.
+        handle != 0 && unsafe { GetFocus() == handle && GetAncestor(handle, 2) == GetForegroundWindow() }
+    }
     pub(super) fn cursor_in(window: &Window) -> Option<[f64; 2]> {
         let mut point = POINT::default();
         (unsafe { GetCursorPos(&mut point) != 0 && ScreenToClient(hwnd(window), &mut point) != 0 })
@@ -281,11 +291,14 @@ mod pointer_os {
         if unsafe { GetClipCursor(&mut clip) == 0 || GetClientRect(hwnd(window), &mut client) == 0 || ClientToScreen(hwnd(window), &mut origin) == 0 } { return false; }
         clip.left >= origin.x && clip.top >= origin.y && clip.right <= origin.x + client.right && clip.bottom <= origin.y + client.bottom
     }
-    pub(super) fn right_drag_cancelled(window: &Window) -> bool {
-        unsafe { GetAsyncKeyState(0x02) < 0 && GetCapture() != hwnd(window) }
+    fn drag_button_down() -> bool {
+        unsafe { GetAsyncKeyState(0x01) < 0 || GetAsyncKeyState(0x02) < 0 || GetAsyncKeyState(0x04) < 0 }
     }
-    pub(super) fn right_drag_active(window: &Window) -> bool {
-        unsafe { GetCapture() == hwnd(window) && GetAsyncKeyState(0x02) < 0 }
+    pub(super) fn drag_cancelled(window: &Window) -> bool {
+        drag_button_down() && unsafe { GetCapture() != hwnd(window) }
+    }
+    pub(super) fn drag_active(window: &Window) -> bool {
+        drag_button_down() && unsafe { GetCapture() == hwnd(window) }
     }
     pub(super) fn release_drag(window: &Window) {
         if unsafe { GetCapture() == hwnd(window) } { unsafe { ReleaseCapture(); } }
