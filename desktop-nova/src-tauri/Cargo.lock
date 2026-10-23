@@ -1167,6 +1167,8 @@ dependencies = [
 name = "desktop-nova"
 version = "0.2.4"
 dependencies = [
+ "anyhow",
+ "flate2",
  "base64 0.22.1",
  "block",
  "core-graphics-types 0.1.3",
@@ -1188,6 +1190,7 @@ dependencies = [
  "scraper",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "tauri",
  "tauri-build",

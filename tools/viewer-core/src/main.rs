@@ -32,6 +32,15 @@ fn main() -> Result<()> {
     if let Some(code) = nova_protected_loader::maybe_run_cpu_audit()? { std::process::exit(code); }
 
     let raw = std::env::args().skip(1).collect::<Vec<_>>();
+    if raw.first().is_some_and(|command| command == "game-data") {
+        return litematica_core::game_data::run_cli(&raw[1..]);
+    }
+    if raw.first().is_some_and(|command| command == "game-data-icon") {
+        let id = raw.windows(2).find(|pair| pair[0] == "--id").map(|pair| pair[1].as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing --id"))?;
+        let path = litematica_core::item_icons::read_game_data_icon(id)?;
+        return emit_output(&serde_json::json!({"path": path}), None);
+    }
     if raw.first().is_some_and(|command| command == "projection-preview") && raw.iter().any(|arg| arg == "--stdin") {
         let output = raw.windows(2).find(|pair| pair[0] == "--output").map(|pair| std::path::Path::new(&pair[1]))
             .ok_or_else(|| anyhow::anyhow!("missing --output"))?;

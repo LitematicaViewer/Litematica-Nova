@@ -37,7 +37,15 @@ export {
   pickLitematicFile,
   readGameResourceRemoteText,
   readResourcePackLanguage,
+  listGameData,
+  readGameDataLanguage,
+  readGameDataIcon,
+  getGameDataContext,
+  importGameDataJar,
+  selectGameData,
+  restoreDefaultGameData,
 } from "../platform/files";
+export type { GameDataContext, GameDataList } from "../platform/files";
 
 export {
   openAssetManagerWindow,

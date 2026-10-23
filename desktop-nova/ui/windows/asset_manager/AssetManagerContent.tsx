@@ -13,9 +13,8 @@ import {
   downloadVaultItemIcons,
   downloadWikiBlockIcons,
   downloadWikiEnumCatalog,
-  ensureBuiltinBlockIconsExtracted,
-  ensureBuiltinItemIconsExtracted,
-  importGameDataResource,
+  importClientGameData,
+  restoreDefaultGameDataResource,
   importLanguageResource,
   initI18n,
   invalidateBlockIconCache,
@@ -203,8 +202,8 @@ function displayEntryName(route: AssetRoute, entry: GameResourceEntry): string {
     return entry.label;
   }
   if (route === "game_data") {
-    if (entry.source === "builtin") return t("library.builtinParenthesized");
-    if (entry.source === "imported") return baseName(entry.data_relpath || entry.label);
+    if (entry.source === "builtin") return t("library.gameDataBundled", { version: entry.version || "" });
+    if (entry.source === "imported") return entry.version || entry.label;
     return entry.label;
   }
   if (route === "enum_catalog") {
@@ -216,6 +215,7 @@ function displayEntryName(route: AssetRoute, entry: GameResourceEntry): string {
 }
 
 function displayVersion(route: AssetRoute, entry: GameResourceEntry): string {
+  if (route === "game_data") return entry.version || t("library.unknown");
   if (route === "block_icon") return resolveBlockIconVariant(entry) === "2d" ? "2D" : "3D";
   if (route === "language") {
     return entry.source === "github" ? entry.branch || entry.version || t("library.unknown") : t("library.unknown");
@@ -275,6 +275,8 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   const [blockIconDownloadBusy, setBlockIconDownloadBusy] = useState(false);
   const [itemIconDownloadBusy, setItemIconDownloadBusy] = useState(false);
   const [enumCatalogDownloadBusy, setEnumCatalogDownloadBusy] = useState(false);
+  const [gameDataBusy, setGameDataBusy] = useState(false);
+  const [gameAssetsDir, setGameAssetsDir] = useState("");
   const [languageBranches, setLanguageBranches] = useState<string[]>([]);
   const [remoteLanguages, setRemoteLanguages] = useState<string[]>([]);
   const [selectedLanguageBranch, setSelectedLanguageBranch] = useState("");
@@ -292,7 +294,8 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     languageDownloadBusy ||
     blockIconDownloadBusy ||
     itemIconDownloadBusy ||
-    enumCatalogDownloadBusy;
+    enumCatalogDownloadBusy ||
+    gameDataBusy;
 
   const entries = resourceSnapshot ? resourceSnapshot.entries[route] || [] : [];
 
@@ -320,6 +323,13 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
 
   useEffect(() => {
     refreshGameResources(true).catch((error) => reportStatus(message("library.resourcesLoadFailed"), String(error)));
+  }, [refreshGameResources, reportStatus]);
+
+  useEffect(() => {
+    const pending = listenEvent("resource-game-data-changed", () => {
+      void refreshGameResources(true).catch(error => reportStatus(message("library.resourcesLoadFailed"), String(error)));
+    });
+    return () => { void pending.then(unlisten => unlisten()).catch(() => undefined); };
   }, [refreshGameResources, reportStatus]);
 
   // Icon download progress: without these the UI looks frozen while working.
@@ -361,10 +371,19 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     async (snapshotPromise: Promise<GameResourceSnapshot>, statusMessage: UiMessage) => {
       const snapshot = await snapshotPromise;
       setResourceSnapshot(snapshot);
-      await reloadRuntimeResources();
-      reportStatus(statusMessage, resourceActiveText(snapshot));
+      if (route === "game_data") {
+        // Import/selection is already committed by Core. A missing optional
+        // registry must be reported as such, not as a failed/rolled-back import.
+        const loaded = await Promise.allSettled([initI18n(true), loadDatabases()]);
+        invalidateBlockIconCache();
+        const failed = loaded.filter((row): row is PromiseRejectedResult => row.status === "rejected");
+        reportStatus(statusMessage, failed.length ? message("library.gameDataLimited", { error: failed.map(row => String(row.reason)).join("\n") }) : resourceActiveText(snapshot));
+      } else {
+        await reloadRuntimeResources();
+        reportStatus(statusMessage, resourceActiveText(snapshot));
+      }
     },
-    [reloadRuntimeResources, reportStatus],
+    [reloadRuntimeResources, reportStatus, route],
   );
 
   // ── Line.4 actions per category ───────────────────────────────────────────
@@ -440,22 +459,13 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
 
   const reextractBuiltinBlockIcons = async (slot: BlockIconResourceSlot) => {
     setBlockIconDownloadBusy(true);
-    reportStatus(message("library.builtinBlocksExtracting"), message("library.builtinBlocksExtractDetail"));
     try {
-      const result = await ensureBuiltinBlockIconsExtracted(true);
       const snapshot = await activateGameResource("block_icon", BUILTIN_BLOCK_ICON_ID, slot);
       setResourceSnapshot(snapshot);
       await reloadRuntimeResources();
-      reportStatus(
-        message("library.builtinBlocksExtracted", { slot: message(slot === "layering" ? "library.layeringSlot" : "library.materialListSlot"), extracted: result.extracted }),
-        message("library.resourcePathSummary", { path: result.target_dir, resources: resourceActiveText(snapshot) }),
-      );
-    } catch (error) {
-      reportStatus(message("library.builtinBlocksExtractFailed"), String(error));
-    } finally {
-      setBlockIconDownloadBusy(false);
-      await refreshGameResources(true).catch(() => undefined);
-    }
+      reportStatus(message("library.resourcesRefreshed"), resourceActiveText(snapshot));
+    } catch (error) { reportStatus(message("library.resourceApplyFailed"), String(error)); }
+    finally { setBlockIconDownloadBusy(false); }
   };
 
   const downloadItemIcons = async () => {
@@ -479,20 +489,13 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
 
   const reextractBuiltinItemIcons = async () => {
     setItemIconDownloadBusy(true);
-    reportStatus(message("library.builtinItemsExtracting"), message("library.builtinItemsExtractDetail"));
     try {
-      const result = await ensureBuiltinItemIconsExtracted(true);
-      const snapshot = await refreshGameResources(true);
+      const snapshot = await activateGameResource("item_icon", "builtin:item_icon:nova");
+      setResourceSnapshot(snapshot);
       await reloadRuntimeResources();
-      reportStatus(
-        message("library.builtinItemsExtracted", { extracted: result.extracted }),
-        message("library.resourcePathSummary", { path: result.target_dir, resources: resourceActiveText(snapshot) }),
-      );
-    } catch (error) {
-      reportStatus(message("library.builtinItemsExtractFailed"), String(error));
-    } finally {
-      setItemIconDownloadBusy(false);
-    }
+      reportStatus(message("library.resourcesRefreshed"), resourceActiveText(snapshot));
+    } catch (error) { reportStatus(message("library.resourceApplyFailed"), String(error)); }
+    finally { setItemIconDownloadBusy(false); }
   };
 
   const downloadEnumCatalogs = async () => {
@@ -531,13 +534,25 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   };
 
   const importGameData = async () => {
-    const selected = await openDialog({ filters: [{ name: t("library.blockstateJsonFilter"), extensions: ["json"] }] });
+    const selected = await openDialog({ filters: [{ name: t("library.clientJarFilter"), extensions: ["jar"] }] });
     if (typeof selected !== "string") return;
+    setGameDataBusy(true);
+    reportStatus(message("library.gameDataImporting"));
     try {
-      await applyResourceSnapshot(importGameDataResource(selected), message("library.gameDataImported", { path: selected }));
+      await applyResourceSnapshot(importClientGameData(selected, gameAssetsDir || undefined), message("library.gameDataImported", { path: selected }));
     } catch (error) {
       reportStatus(message("library.gameDataImportFailed"), String(error));
-    }
+    } finally { setGameDataBusy(false); }
+  };
+  const restoreGameData = async () => {
+    setGameDataBusy(true);
+    try { await applyResourceSnapshot(restoreDefaultGameDataResource(), message("library.gameDataDefaultRestored")); }
+    catch (error) { reportStatus(message("library.resourceApplyFailed"), String(error)); }
+    finally { setGameDataBusy(false); }
+  };
+  const chooseGameAssets = async () => {
+    const selected = await openDialog({ directory: true });
+    if (typeof selected === "string") setGameAssetsDir(selected);
   };
 
   const loadLanguageCatalog = useCallback(
@@ -596,7 +611,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     }
     if (route === "game_data") {
       if (selectedSource === "local_json") return importGameData();
-      return applyResourceSnapshot(activateGameResource("game_data", "builtin:game_data:26.1"), message("library.builtinDataActivated"));
+      return restoreGameData();
     }
     if (route === "enum_catalog") {
       if (selectedSource === "wiki") return downloadEnumCatalogs();
@@ -607,14 +622,14 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
 
   const fetchButtonLabel = (): string => {
     if (route === "block_icon" && blockIconDownloadBusy) {
-      return selectedSource === "builtin" ? t("library.extracting") : t("library.downloading");
+      return selectedSource === "builtin" ? t("library.refresh") : t("library.downloading");
     }
     if (route === "item_icon" && itemIconDownloadBusy) {
-      return selectedSource === "builtin" ? t("library.extracting") : t("library.downloading");
+      return selectedSource === "builtin" ? t("library.refresh") : t("library.downloading");
     }
     if (route === "language" && languageDownloadBusy) return t("library.downloading");
     if (route === "enum_catalog" && enumCatalogDownloadBusy) return t("library.downloading");
-    if (selectedSource === "builtin") return route === "block_icon" || route === "item_icon" ? t("library.extractAgain") : t("library.useBuiltin");
+    if (selectedSource === "builtin") return route === "block_icon" || route === "item_icon" ? t("library.refresh") : t("library.useBuiltin");
     if (selectedSource === "local_directory" || selectedSource === "local_json") return t("library.importMenu");
     return t("library.download");
   };
@@ -696,6 +711,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   }, [route, locale]);
 
   const handleApply = async (entry: GameResourceEntry, slot?: BlockIconResourceSlot) => {
+    if (entry.kind === "game_data") setGameDataBusy(true);
     try {
       await applyResourceSnapshot(
         activateGameResource(entry.kind, entry.id, slot),
@@ -703,6 +719,8 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       );
     } catch (error) {
       reportStatus(message("library.resourceApplyFailed"), String(error));
+    } finally {
+      if (entry.kind === "game_data") setGameDataBusy(false);
     }
   };
 
@@ -742,10 +760,10 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                   {t("library.useForLayers")}</Button>
               </>
             ) : (
-              <Button type="button" disabled={busy} onClick={() => void handleApply(entry)}>
+              <Button type="button" disabled={busy || route === "game_data" && entry.active} onClick={() => void handleApply(entry)}>
                 {t("library.apply")}</Button>
             )}
-            {entry.builtin ? null : (
+            {entry.builtin || route === "game_data" ? null : (
               <Button type="button" disabled={busy} onClick={() => void handleDelete(entry)}>
                 {t("library.unregister")}</Button>
             )}
@@ -819,7 +837,23 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
           </div>
 
           <div className="asset-manager-panel">
-            <div className="asset-manager-config">
+            {route === "game_data" ? (
+              <div className="asset-manager-config">
+                <div className="asset-manager-form-row">
+                  <span className="asset-manager-form-label">{t("library.gameDataCurrent")}</span>
+                  <span>{resourceSnapshot?.active_game_data.version || t("library.gameDataNotConfigured")}</span>
+                </div>
+                <div className="asset-manager-actions">
+                  <Button type="button" disabled={busy} onClick={() => void importGameData()}>{t("library.gameDataImportJar")}</Button>
+                  <Button type="button" disabled={busy || !!(resourceSnapshot?.active_game_data.builtin && resourceSnapshot.active_game_data.version)} onClick={() => void restoreGameData()}>{t("library.gameDataRestoreDefault")}</Button>
+                  <Button type="button" disabled={busy} onClick={() => void chooseGameAssets()}>{t("library.gameDataAssets")}</Button>
+                </div>
+                {gameAssetsDir ? <div className="asset-manager-form-row">
+                  <span className="game-resource-path">{displayFilePath(gameAssetsDir)}</span>
+                  <Button type="button" disabled={busy} onClick={() => setGameAssetsDir("")}>{t("library.gameDataAssetsAutomatic")}</Button>
+                </div> : null}
+              </div>
+            ) : <div className="asset-manager-config">
               <div className="asset-manager-form-row">
                 <label className="asset-manager-form-label" htmlFor="asset-manager-source">
                   {t("library.source")}</label>
@@ -849,13 +883,13 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                   ) : null}
                 </div>
               </div>
-            </div>
+            </div>}
 
-            <div className="asset-manager-actions">
+            {route !== "game_data" ? <div className="asset-manager-actions">
               <Button type="button" disabled={fetchDisabled} onClick={() => void runFetchAction()}>
                 {fetchButtonLabel()}
               </Button>
-            </div>
+            </div> : null}
 
             {health.length > 0 ? (
               <div className="asset-manager-health">

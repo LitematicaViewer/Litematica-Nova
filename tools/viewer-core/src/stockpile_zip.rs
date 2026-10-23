@@ -277,8 +277,7 @@ fn build_payload(
     mode: StockpileExportMode,
 ) -> Result<StockpileZipPayload> {
     let recipe_trees = if recipe_status.status == RecipeCacheStatus::Available {
-        recipe_tree::resolve_recipe_trees_for_materials(minecraft_version, &materials)
-            .unwrap_or_default()
+        recipe_tree::resolve_recipe_trees_for_materials(minecraft_version, &materials)?
     } else {
         BTreeMap::new()
     };
@@ -304,6 +303,8 @@ fn build_payload_with_trees(
 }
 
 fn build_payload_with_assets(input: &Path, minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_status: RecipeCacheStatusOutput, recipe_trees: BTreeMap<String, RecipeTreeNode>, mode: StockpileExportMode, allow_network: bool) -> Result<StockpileZipPayload> {
+    let game_data = crate::game_data::active_context()?;
+    let minecraft_version = game_data.game_version.as_str();
     let icon_assets = if allow_network { item_icons::resolve_stockpile_icons(minecraft_version, materials, &recipe_trees)? }
         else { item_icons::resolve_stockpile_icons_cached(minecraft_version, materials, &recipe_trees)? };
     let item_names = if allow_network { item_names::resolve_stockpile_item_names(minecraft_version, materials, &recipe_trees)? }

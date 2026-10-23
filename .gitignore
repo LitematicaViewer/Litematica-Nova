@@ -100,3 +100,6 @@ _lava*
 *.p12
 *.dpapi
 
+
+# Reproducible default game-data output; never imported user packages.
+/pack-in/game-data/

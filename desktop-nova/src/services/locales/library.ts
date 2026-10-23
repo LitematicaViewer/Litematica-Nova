@@ -1,5 +1,18 @@
 /** Library, auxiliary windows and shared picker UI. */
 export const zhCN: Record<string, string> = {
+  "library.gameDataAssets": "配套 assets 目录（可选）…",
+  "library.gameDataAssetsAutomatic": "使用 JAR 附近资源",
+  "library.gameDataLimited": "数据已切换，以下数据尚不可用：{error}",
+  "library.gameDataCurrent": "当前游戏数据版本",
+  "library.gameDataNotConfigured": "尚未配置游戏数据，请导入客户端 JAR。",
+  "library.gameDataBundled": "默认数据（{version}）",
+  "library.gameDataImportJar": "导入客户端 JAR…",
+  "library.clientJarFilter": "Minecraft 客户端 JAR",
+  "library.gameDataImporting": "正在导入游戏数据，当前数据继续可用…",
+  "library.gameDataRestoreDefault": "恢复默认数据",
+  "library.gameDataDefaultRestored": "已恢复默认游戏数据。",
+  "library.gameDataKeepImported": "已导入数据保存在本机，可直接切换使用。",
+
   "library.iconInvalid": "请选择 1 MB 以内的 PNG、JPEG、WebP 或 SVG。",
   "library.iconReadFailed": "图片读取失败，请重新选择。",
   "library.categoryIconTitle": "选择「{name}」的图标",
@@ -173,7 +186,7 @@ export const zhCN: Record<string, string> = {
   "library.blockIconIntro": "管理材料槽与 2D 槽使用的图标包；材料相关界面会按 block_icon/block_2d 与激活包名解析，分层画布只走 2D 槽。",
   "library.itemIconIntro": "管理 item/激活包；材料相关界面中的物品分支会把它作为 block_itemLike 之后的第二优先级。",
   "library.languageIntro": "导入、下载并切换 Minecraft 语言 JSON。",
-  "library.gameDataIntro": "导入并切换 BlockState 数据库与属性翻译。",
+  "library.gameDataIntro": "默认数据安装即可使用；导入客户端 JAR 可切换游戏版本，不修改投影版本。",
   "library.enumIntro": "下载并切换枚举器使用的基础全集文件。",
   "library.unknown": "未知",
   "library.materialSlot": "材料槽",
@@ -521,6 +534,19 @@ export const zhCN: Record<string, string> = {
 };
 
 export const enUS: Record<string, string> = {
+  "library.gameDataAssets": "Companion assets folder (optional)…",
+  "library.gameDataAssetsAutomatic": "Use resources next to the JAR",
+  "library.gameDataLimited": "Data selected. The following data is not available: {error}",
+  "library.gameDataCurrent": "Current game data version",
+  "library.gameDataNotConfigured": "Game data is not configured. Import a client JAR.",
+  "library.gameDataBundled": "Bundled data ({version})",
+  "library.gameDataImportJar": "Import client JAR…",
+  "library.clientJarFilter": "Minecraft client JAR",
+  "library.gameDataImporting": "Importing game data. The current data remains available…",
+  "library.gameDataRestoreDefault": "Restore bundled data",
+  "library.gameDataDefaultRestored": "Bundled game data restored.",
+  "library.gameDataKeepImported": "Imported data is retained locally and can be selected again.",
+
   "library.iconInvalid": "Choose a PNG, JPEG, WebP or SVG file no larger than 1 MB.",
   "library.iconReadFailed": "Failed to read the image. Please choose it again.",
   "library.categoryIconTitle": "Choose an icon for “{name}”",
@@ -694,7 +720,7 @@ export const enUS: Record<string, string> = {
   "library.blockIconIntro": "Manage icon packs for material and 2D slots. Material views resolve block_icon/block_2d with the active pack; the layer canvas uses the 2D slot only.",
   "library.itemIconIntro": "Manage the active item pack. Material views use it after block_itemLike when resolving item icons.",
   "library.languageIntro": "Import, download and switch Minecraft language JSON files.",
-  "library.gameDataIntro": "Import and switch BlockState databases and property translations.",
+  "library.gameDataIntro": "Bundled game data works immediately. Import a client JAR to use another game version without converting schematics.",
   "library.enumIntro": "Download and switch the base catalogs used by the enumerator.",
   "library.unknown": "Unknown",
   "library.materialSlot": "Material slot",

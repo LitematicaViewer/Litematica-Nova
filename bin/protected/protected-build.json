@@ -1,10 +1,10 @@
 {
-  "buildId": "0.2.3-f7137c9442ce-beta023-release-20261021-r1",
-  "manifestPublicKey": "U3kxvpUDPRuJI2Ou0HmdLKVpATe2E2gw+L7dAq8EHiw=",
-  "moduleId": "nova_protected_module.dll",
-  "manifestFile": "nova_protected_module.dll.manifest.json",
-  "endpoint": "https://45-62-112-121.sslip.io:8448/nova-core",
   "schema": "nova.protected-build.v1",
-  "version": "0.2.3",
+  "version": "0.2.4",
+  "buildId": "runtime-1-3d35bca301b1-game-data-20261023-r1-x86_64-pc-windows-msvc",
+  "moduleId": "nova_protected_module.dll",
+  "manifestPublicKey": "U3kxvpUDPRuJI2Ou0HmdLKVpATe2E2gw+L7dAq8EHiw=",
+  "endpoint": "https://45-62-112-121.sslip.io:8448/nova-core",
+  "manifestFile": "nova_protected_module.dll.manifest.json",
   "ciphertextFile": "nova_protected_module.dll.enc"
 }

@@ -1,5 +1,6 @@
 import { getAppDataFilePath, listDirectoryEntries, readAppDataFile, writeAppDataFile } from "../platform/files";
-import { listGameResourceRegistry, readActiveGameDataResource, readActiveLanguageResource } from "./gameResources";
+import { listGameResourceRegistry, getSelectedGameDataContext, readActiveGameDataResource } from "./gameResources";
+import { readWorkspaceFile } from "./backend";
 import { translateBlockId, t } from "./i18n";
 
 export type EnumeratorCollectionCategory = "base" | "version" | "system_enum" | "creative" | "map" | "custom" | "runtime";
@@ -41,14 +42,6 @@ interface PersistedEnumeratorCollection {
   updated_at?: string;
 }
 
-interface ActiveLanguageMap {
-  blockIds: string[];
-  itemIds: string[];
-  entityIds: string[];
-  enchantmentIds: string[];
-}
-
-const DEFAULT_ENUM_ROOTS = ["enumerator/base", "enumerator/base/wiki", "enumerator/base/builtin"];
 const COLLECTION_DIRS: Record<Exclude<EnumeratorCollectionCategory, "base" | "runtime">, string> = {
   version: "enumerator/version",
   system_enum: "enumerator/system_enum",
@@ -160,10 +153,6 @@ function normalizeCollectionValue(value: unknown): string {
   return `minecraft:${normalized.toLowerCase()}`;
 }
 
-function itemKeyToId(prefix: string, key: string): string {
-  return `minecraft:${key.slice(prefix.length).replace(/\./g, ":")}`;
-}
-
 function readJson<T>(rawText: string | null): T | null {
   if (!rawText) return null;
   try {
@@ -207,102 +196,34 @@ async function resolveCollectionDir(relativeDir: string): Promise<{ absDir: stri
   };
 }
 
-async function loadActiveLanguageMap(): Promise<ActiveLanguageMap> {
-  const raw = await readActiveLanguageResource().catch(() => "");
-  const parsed = readJson<Record<string, string>>(raw) || {};
-  const blocks: string[] = [];
-  const items: string[] = [];
-  const entities: string[] = [];
-  const enchantments: string[] = [];
-
-  for (const key of Object.keys(parsed)) {
-    if (key.startsWith("block.minecraft.")) {
-      blocks.push(itemKeyToId("block.minecraft.", key));
-      continue;
-    }
-    if (key.startsWith("item.minecraft.")) {
-      items.push(itemKeyToId("item.minecraft.", key));
-      continue;
-    }
-    if (key.startsWith("entity.minecraft.")) {
-      entities.push(itemKeyToId("entity.minecraft.", key));
-      continue;
-    }
-    if (key.startsWith("enchantment.minecraft.")) {
-      enchantments.push(itemKeyToId("enchantment.minecraft.", key));
-    }
-  }
-
-  return {
-    blockIds: uniq(blocks),
-    itemIds: uniq(items),
-    entityIds: uniq(entities),
-    enchantmentIds: uniq(enchantments),
-  };
-}
-
-async function loadActiveBlocks(): Promise<{ version: string; values: string[] }> {
-  const active = await readActiveGameDataResource().catch(() => null);
-  if (!active) return { version: "unknown", values: [] };
-  const parsed = readJson<{ version_id?: string; blocks?: Record<string, unknown> }>(active.dbText) || {};
-  return {
-    version: String(parsed.version_id || active.entry.version || "unknown").trim() || "unknown",
-    values: uniq(Object.keys(parsed.blocks || {})),
-  };
-}
-
 async function loadBaseCollections(): Promise<EnumeratorCollection[]> {
-  const snapshot = await listGameResourceRegistry().catch(() => null);
-  const roots = uniq([
-    snapshot?.active_enum_catalog.root_relpath || "",
-    ...DEFAULT_ENUM_ROOTS,
-  ].filter(Boolean));
-  const languageMap = await loadActiveLanguageMap();
-  const activeBlocks = await loadActiveBlocks();
-  const fallbackByType: Record<string, string[]> = {
-    block: activeBlocks.values,
-    item: languageMap.itemIds,
-    entity: languageMap.entityIds,
-    enchantment: languageMap.enchantmentIds,
-  };
-
+  const snapshot = await listGameResourceRegistry();
+  const context = await getSelectedGameDataContext();
+  const custom = snapshot.active_enum_catalog.builtin ? null : snapshot.active_enum_catalog;
   const result: EnumeratorCollection[] = [];
   for (const def of BASE_COLLECTION_DEFS) {
+    const relativePath = custom ? `${custom.root_relpath}/${def.fileName}` : "";
+    const sourcePath = custom ? await resolveSourcePath(relativePath) : `${context.root.replace(/[\\/]+$/, "")}/derived/enumerator/${def.fileName}`;
     let values: string[] = [];
-    let sourcePath = "";
-    let sourceRelativePath = "";
-    for (const root of roots) {
-      const relativePath = `${root}/${def.fileName}`;
-      const raw = await readJsonFile(relativePath);
-      const parsed = readJson<string[]>(raw);
-      if (parsed && parsed.length) {
-        values = normalizeStringArray(parsed);
-        sourcePath = await resolveSourcePath(relativePath);
-        sourceRelativePath = relativePath;
-        break;
-      }
+    let failure = "";
+    try {
+      const raw = custom ? await readAppDataFile(relativePath) : await readWorkspaceFile(sourcePath);
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed) || parsed.some(value => typeof value !== "string")) throw new Error(t("native.resources.enumInvalid", { name: def.fileName }));
+      values = normalizeStringArray(parsed);
+    } catch (error) {
+      if (!custom && def.valueType === "block") {
+        try {
+          const active = await readActiveGameDataResource();
+          values = Object.keys((JSON.parse(active.dbText) as { blocks: Record<string, unknown> }).blocks);
+        } catch (registryError) { failure = String(registryError); }
+      } else { failure = String(error); }
     }
-
-    if (!values.length) {
-      values = uniq(fallbackByType[def.valueType] || []);
-    }
-
     result.push({
-      id: def.id,
-      name: def.name,
-      symbol: def.symbol,
-      category: "base",
-      valueType: def.valueType,
-      version: values.length ? (snapshot?.active_enum_catalog.label || "builtin") : "missing",
-      values,
-      description: values.length
-        ? (sourcePath ? t("native.enumerator.activeCatalog") : t("native.enumerator.activeFallback"))
-        : t("native.enumerator.noFallback"),
-      updatedAt: nowIso(),
-      readOnly: true,
-      missing: values.length === 0,
-      sourcePath,
-      sourceRelativePath,
+      id: def.id, name: def.name, symbol: def.symbol, category: "base", valueType: def.valueType,
+      version: custom?.version || context.game_version, values,
+      description: failure || t("native.enumerator.activeCatalog"), updatedAt: context.content_id,
+      readOnly: true, missing: !!failure, sourcePath, sourceRelativePath: relativePath,
     });
   }
   return result;

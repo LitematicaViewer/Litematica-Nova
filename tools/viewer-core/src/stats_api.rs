@@ -287,6 +287,7 @@ pub(crate) fn build_stats_output_from_root(
 pub(crate) fn build_stats_output_from_canonical(
     world: &CanonicalWorld,
 ) -> Result<StableStructureOutput> {
+    material_catalog::ensure_available()?;
     let bounds = compute_canonical_bounds(world);
     let metadata = build_canonical_metadata_output(world, bounds);
     let resolved_bounds = bounds.unwrap_or_else(|| fallback_bounds(&metadata));
@@ -423,7 +424,7 @@ pub(crate) fn build_stats_output_from_canonical(
     );
     Ok(StableStructureOutput {
         derived: Some(derived),
-        material_semantics: "minecraft-inventory-v5".into(),
+        material_semantics: format!("minecraft-inventory-v6:{}", crate::game_data::active_context()?.content_id),
         metadata,
         structure_stats: StructureStatsOutput {
             scope: ResolvedScope::All.to_output(resolved_bounds.min_y),
@@ -568,6 +569,7 @@ fn build_structure_output_with_scope_cache(
     include_container_items: bool,
     include_scope_cache: bool,
 ) -> Result<StableStructureOutput> {
+    material_catalog::ensure_available()?;
     let bounds = compute_bounds(root);
     let metadata = build_metadata_output(root, bounds);
     let resolved_bounds = bounds.unwrap_or_else(|| fallback_bounds(&metadata));
@@ -741,7 +743,7 @@ fn build_structure_output_with_scope_cache(
     ));
     Ok(StableStructureOutput {
         derived,
-        material_semantics: "minecraft-inventory-v5".into(),
+        material_semantics: format!("minecraft-inventory-v6:{}", crate::game_data::active_context()?.content_id),
         metadata,
         structure_stats: StructureStatsOutput {
             scope: resolved_scope.to_output(resolved_bounds.min_y),
@@ -868,7 +870,7 @@ fn scan_region_container_items(
         for stack in stacks {
             entry_scan.item_stacks_scanned += 1;
             if stack.id == "minecraft:air" || material_catalog::item(&stack.id).is_none() {
-                entry_scan.warnings.push(format!("{} × {} is not a registered Minecraft 26.3 inventory item; excluded from materials", stack.id, stack.count));
+                entry_scan.warnings.push(format!("{} × {} is not a registered inventory item in the selected game data; excluded from materials", stack.id, stack.count));
                 continue;
             }
             let material = material_counts.entry(stack.id.clone()).or_default();

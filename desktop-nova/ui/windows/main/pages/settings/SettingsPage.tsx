@@ -22,6 +22,8 @@ import {
   cleanupLocalTempFiles,
   exportDiagnosticLogs,
   getNovaRuntimePathInfo,
+  getSelectedGameDataContext,
+  readActiveGameDataResource,
   getPathInfo,
   getUserConfig,
   openUserConfigDir,
@@ -37,7 +39,7 @@ import {
   ViewerControlConfig,
   GraphicsApiPreference,
 } from "../../../../../src/business/facade";
-import { queryBlockDatabase } from "../../../../../src/business/projectionLibrary";
+import { readGameDataIcon } from "../../../../../src/platform/files";
 import { DISPLAY_MODE_OPTIONS, DisplayMode, normalizeDisplayMode } from "../../../../../src/business/facade";
 import {
   loadUserConfigMigratingLocalStorage,
@@ -60,9 +62,6 @@ import { AssetManagerDialog, openAssetManagerWithWindowBehavior } from "../../..
 import "../../../../styles/asset-manager.css";
 import "./settings.css";
 
-const BLOCKSTATE_DB = "data/minecraft_blockstates/26.1.json";
-const BLOCKSTATE_ZH = "data/minecraft_blockstates/26.1.zh_cn.json";
-const BLOCK_ICON_DIR = "block";
 /* One entry per theme, from `src/services/themeManifest.ts`. Do not add ids here:
    a theme missing from the manifest cannot be loaded or stored, and the registry
    test fails loudly instead of the picker quietly showing a dead option. */
@@ -376,24 +375,26 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
 
   const checkDatabase = async () => {
     try {
-      const result = await queryBlockDatabase({});
-      if (!result.versions?.length) { setDbOk(false); setLog(message("settings.blockDataNotLoaded")); return; }
+      const selected = await readActiveGameDataResource();
+      const data = JSON.parse(selected.dbText) as { blocks?: Record<string, unknown> };
+      if (!data.blocks || !Object.keys(data.blocks).length) { setDbOk(false); setLog(message("settings.blockDataNotLoaded")); return; }
       setDbOk(true);
-      setLog(message("settings.blockDataOk", { count: result.versions.length }));
+      setLog(message("settings.blockDataOk", { count: 1 }));
     } catch (error) { setDbOk(false); setLog(message("settings.blockDataCheckFailed", { error: String(error) })); }
   };
 
   const checkIcons = async () => {
     try {
+      const context = await getSelectedGameDataContext();
       const [iconDir, dirt, grass] = await Promise.all([
-        getPathInfo(BLOCK_ICON_DIR),
-        getPathInfo("block/dirt.png"),
-        getPathInfo("block/grass_block.png"),
+        getPathInfo(context.root),
+        readGameDataIcon("minecraft:dirt"),
+        readGameDataIcon("minecraft:grass_block"),
       ]);
       setIconDirInfo(iconDir);
-      const ok = iconDir.exists && iconDir.is_dir && dirt.exists && grass.exists;
+      const ok = iconDir.exists && iconDir.is_dir && !!dirt && !!grass;
       setIconOk(ok);
-      setLog(message("settings.iconsCheckResult", { status: ok ? "OK" : message("settings.failed"), directory: displayFilePath(iconDir.normalized), dirt: String(dirt.exists), grass: String(grass.exists) }));
+      setLog(message("settings.iconsCheckResult", { status: ok ? "OK" : message("settings.failed"), directory: displayFilePath(iconDir.normalized), dirt: String(!!dirt), grass: String(!!grass) }));
     } catch (err: any) {
       setIconOk(false);
       setLog(String(err));
@@ -617,7 +618,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
       <div className="group-box">
         <div className="group-box-title">{t("settings.dataFiles")}</div>
         <div className="form-row"><div className="form-label">{t("settings.blockDatabase")}</div><div>{t("settings.builtinBlockDatabase")}</div></div>
-        <PathRow label={t("settings.blockIconLibrary")} path={BLOCK_ICON_DIR} info={iconDirInfo} />
+        <PathRow label={t("settings.blockIconLibrary")} path={iconDirInfo?.normalized || "..."} info={iconDirInfo} />
         <div className="settings-actions settings-actions-spaced">
           <Button onClick={() => openAssetManagerWithWindowBehavior(() => setShowAssetManager(true)).catch((error) => setLog(String(error)))}>{t("settings.manageGameResources")}</Button>
           <Button onClick={checkDatabase}>{t("settings.checkBlockData")}</Button>

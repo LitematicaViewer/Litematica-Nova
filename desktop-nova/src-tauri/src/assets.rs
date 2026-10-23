@@ -19,7 +19,7 @@ use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use crate::application::operations::{ApplicationOperations, ApplicationWriteGuard};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::DialogExt;
 use zip::ZipArchive;
 
@@ -27,6 +27,70 @@ use crate::{current_user_config_dir, get_root, user_runtime_relative_path};
 
 static RESOURCE_SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 static RESOURCE_OPERATIONS: Mutex<Option<ApplicationOperations>> = Mutex::new(None);
+
+async fn game_data_operation(operations: ApplicationOperations, args: Vec<String>) -> Result<serde_json::Value, String> {
+    ensure_resource_work_allowed()?;
+    tauri::async_runtime::spawn_blocking(move || operations.game_data_command(args))
+        .await.map_err(|error| error.to_string())?
+}
+
+fn announce_game_data(app: &AppHandle, context: &serde_json::Value) {
+    // Only successful atomic selection/import emits a new content identity.
+    let _ = app.emit("game-resources-changed", serde_json::json!({"kind":"game_data", "content_id":context.get("content_id")}));
+    let _ = app.emit("resource-game-data-changed", context);
+    let _ = app.emit("resource-language-changed", context);
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_list(operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    game_data_operation(operations.inner().clone(), vec!["list".into()]).await
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_context(operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    game_data_operation(operations.inner().clone(), vec!["context".into()]).await
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_language(operations: tauri::State<'_, ApplicationOperations>, language: String) -> Result<serde_json::Value, String> {
+    if !matches!(language.as_str(), "zh_cn" | "en_us") { return Err("Unsupported game-data language".into()); }
+    game_data_operation(operations.inner().clone(), vec!["language".into(), "--language".into(), language]).await
+}
+
+#[tauri::command]
+pub(crate) async fn read_game_data_icon(operations: tauri::State<'_, ApplicationOperations>, id: String) -> Result<String, String> {
+    let operations = operations.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let value = operations.game_data_icon(id)?;
+        let path = value.get("path").and_then(serde_json::Value::as_str).ok_or("Game-data icon response omitted its path")?;
+        let bytes = std::fs::read(path).map_err(|error| format!("Read game-data icon: {error}"))?;
+        use base64::Engine;
+        Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+    }).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_import(app: AppHandle, operations: tauri::State<'_, ApplicationOperations>, jar_path: String, assets_dir: Option<String>) -> Result<serde_json::Value, String> {
+    let mut args = vec!["import".into(), "--jar".into(), jar_path];
+    if let Some(path) = assets_dir.filter(|path| !path.trim().is_empty()) { args.extend(["--assets-dir".into(), path]); }
+    let context = game_data_operation(operations.inner().clone(), args).await?;
+    announce_game_data(&app, &context);
+    Ok(context)
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_select(app: AppHandle, operations: tauri::State<'_, ApplicationOperations>, id: String) -> Result<serde_json::Value, String> {
+    let context = game_data_operation(operations.inner().clone(), vec!["select".into(), "--id".into(), id]).await?;
+    announce_game_data(&app, &context);
+    Ok(context)
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_default(app: AppHandle, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let context = game_data_operation(operations.inner().clone(), vec!["default".into()]).await?;
+    announce_game_data(&app, &context);
+    Ok(context)
+}
 
 pub(crate) fn bind_operations(operations: ApplicationOperations) {
     *RESOURCE_OPERATIONS.lock().expect("资源任务状态锁异常") = Some(operations);

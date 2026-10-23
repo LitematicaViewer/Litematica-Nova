@@ -805,7 +805,7 @@ impl ApplicationOperations {
     pub(crate) fn runtime_health(&self) -> RuntimeHealth {
         let viewer_available = self
             .backend_dir
-            .join("litematica_native_viewer.exe")
+            .join(format!("litematica_native_viewer{}", std::env::consts::EXE_SUFFIX))
             .is_file();
         let core = match self.run_core_text(vec!["--help".to_owned()]) {
             Ok(help) if !help.trim().is_empty() => RuntimeComponentHealth {
@@ -913,6 +913,26 @@ impl ApplicationOperations {
         }))
     }
 
+    /// Game-data selection/import uses the same supervised Core business bridge.
+    /// It deliberately resolves the current store instead of a render snapshot.
+    pub(crate) fn game_data_command(&self, args: Vec<String>) -> Result<Value, String> {
+        let writing = matches!(args.first().map(String::as_str), Some("import" | "select" | "default"));
+        let _write = if writing { Some(self.begin_write()?) } else { None };
+        let mut command = vec!["game-data".to_owned()];
+        command.extend(args);
+        command.extend([
+            "--store".to_owned(),
+            path_text(&crate::current_user_config_dir()?.join("game-data")),
+            "--default-root".to_owned(),
+            path_text(&crate::get_root().join("pack-in/game-data/default")),
+        ]);
+        self.run_core_json(command)
+    }
+
+    pub(crate) fn game_data_icon(&self, id: String) -> Result<Value, String> {
+        self.run_core_json(vec!["game-data-icon".to_owned(), "--id".to_owned(), id])
+    }
+
     fn run_core_json(&self, args: Vec<String>) -> Result<Value, String> {
         let started = Instant::now();
         let output = self.run_core_text(args)?;
@@ -962,6 +982,19 @@ impl ApplicationOperations {
             "LBA_DATA_ROOT".into(),
             self.data_root.as_os_str().to_owned(),
         )];
+        // Each helper keeps the selected immutable data identity for its lifetime.
+        // Selection/import commands resolve the live store themselves.
+        if command != "game-data" {
+            match crate::game_data::resolve_context(
+                &crate::current_user_config_dir()?.join("game-data"),
+                &crate::get_root().join("pack-in/game-data/default"),
+            ) {
+                Ok(context) => launch.environment.push(("NOVA_GAME_DATA_SNAPSHOT".into(),
+                    serde_json::to_string(&context).map_err(|error| error.to_string())?.into())),
+                Err(error) if matches!(command.as_str(), "runtime-paths" | "version" | "help") => { let _ = error; },
+                Err(error) => return Err(format!("{error:#}")),
+            }
+        }
         launch.current_dir = Some(self.backend_dir.clone());
         launch.stdout = OutputTarget::File {
             path: stdout_path.clone(),

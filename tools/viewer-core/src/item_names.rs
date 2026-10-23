@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{Cursor, Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,16 +10,13 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use zip::ZipArchive;
 
-use crate::recipe_cache::{self, RecipeCacheStatus};
+
+
 use crate::recipe_tree::RecipeTreeNode;
 use crate::runtime_paths;
 use crate::stockpile::StockpileMaterialsData;
 use crate::stockpile_schema::STOCKPILE_ITEM_NAMES_SCHEMA_VERSION;
-
-const MOJANG_VERSION_MANIFEST_URL: &str =
-    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItemNamesManifest {
@@ -46,26 +43,12 @@ pub fn resolve_stockpile_item_names(
     materials: &mut StockpileMaterialsData,
     recipe_trees: &BTreeMap<String, RecipeTreeNode>,
 ) -> Result<StockpileItemNamesPayload> {
-    let cache = LangCache::load_or_fetch(minecraft_version).unwrap_or_else(|_| LangCache::empty());
+    let cache = LangCache::load_or_fetch(minecraft_version)?;
     Ok(build_payload_from_cache(materials, recipe_trees, cache))
 }
 
 pub(crate) fn resolve_stockpile_item_names_cached(minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_trees: &BTreeMap<String, RecipeTreeNode>) -> Result<StockpileItemNamesPayload> {
-    let root = cache_dir(minecraft_version)?;
-    let mut cache = if ["manifest.json", "en_us.json", "zh_cn.json"].iter().all(|name| root.join(name).is_file()) {
-        LangCache { manifest: Some(read_json(&root.join("manifest.json"))?), en_us: read_json(&root.join("en_us.json"))?, zh_cn: read_json(&root.join("zh_cn.json"))? }
-    } else { LangCache::empty() };
-    // Version-specific cached resources take priority. The distributed official
-    // language assets supply missing names offline; no JAR or network fetch.
-    if let Ok(root) = runtime_paths::app_root() {
-        for (file, target) in [("en_us.json", &mut cache.en_us), ("zh_cn.json", &mut cache.zh_cn)] {
-            let path = root.join("pack-in").join("lang").join(file);
-            if path.is_file() {
-                let bundled: BTreeMap<String, String> = read_json(&path)?;
-                for (key, name) in bundled { target.entry(key).or_insert(name); }
-            }
-        }
-    }
+    let cache = LangCache::load_or_fetch(minecraft_version)?;
     Ok(build_payload_from_cache(materials, recipe_trees, cache))
 }
 
@@ -77,7 +60,7 @@ fn build_payload_from_cache(
     let keys = collect_name_keys(materials, recipe_trees);
     let minecraft_keys = keys
         .iter().cloned()
-        .filter(|key| key.starts_with("minecraft:"))
+        .filter(|key| key.split_once(':').is_some())
         .collect::<BTreeSet<_>>();
     let mut names = BTreeMap::<String, BTreeMap<String, String>>::new();
     for key in &minecraft_keys {
@@ -171,6 +154,7 @@ fn collect_tree_keys(node: &RecipeTreeNode, keys: &mut BTreeSet<String>) {
     }
 }
 
+#[derive(Clone)]
 struct LangCache {
     manifest: Option<ItemNamesManifest>,
     en_us: BTreeMap<String, String>,
@@ -186,104 +170,48 @@ impl LangCache {
         }
     }
 
-    fn load_or_fetch(minecraft_version: &str) -> Result<Self> {
-        let root = cache_dir(minecraft_version)?;
+    fn load_or_fetch(_minecraft_version: &str) -> Result<Self> {
+        let context = crate::game_data::active_context()?;
+        let root = cache_dir(&context.content_id)?;
         let manifest_path = root.join("manifest.json");
-        let en_path = root.join("en_us.json");
-        let zh_path = root.join("zh_cn.json");
-        if manifest_path.is_file() && en_path.is_file() && zh_path.is_file() {
-            let manifest = read_json(&manifest_path)?;
-            let en_us = read_json(&en_path)?;
-            let zh_cn = read_json(&zh_path)?;
-            return Ok(Self {
-                manifest: Some(manifest),
-                en_us,
-                zh_cn,
-            });
+        if manifest_path.is_file() {
+            let manifest: ItemNamesManifest = read_json(&manifest_path)?;
+            if manifest.source == format!("game-data:{}", context.content_id) {
+                return Ok(Self { manifest: Some(manifest), en_us: read_json(&root.join("en_us.json"))?, zh_cn: read_json(&root.join("zh_cn.json"))? });
+            }
         }
-        Self::fetch(minecraft_version)
-    }
-
-    fn fetch(minecraft_version: &str) -> Result<Self> {
-        #[cfg(test)]
-        {
-            let _ = minecraft_version;
-            return Err(anyhow!("network disabled in tests"));
+        let mut en_us = BTreeMap::new();
+        let mut zh_cn = BTreeMap::new();
+        for path in crate::game_data::list_resources_from(&context, "assets/")? {
+            let destination = if path.ends_with("/lang/en_us.json") { &mut en_us }
+                else if path.ends_with("/lang/zh_cn.json") { &mut zh_cn } else { continue; };
+            if let Some(bytes) = crate::game_data::read_resource_from(&context, &path)? {
+                let values: BTreeMap<String, String> = serde_json::from_slice(&bytes)
+                    .with_context(|| format!("parse selected game language failed: {path}"))?;
+                destination.extend(values);
+            }
         }
-        #[cfg(not(test))]
-        {
-            let assets = client_assets_from_mojang_manifest(minecraft_version).ok();
-            let client_url = client_url_from_recipe_manifest(minecraft_version).or_else(|_| {
-                assets
-                    .as_ref()
-                    .map(|assets| assets.client_url.clone())
-                    .ok_or_else(|| anyhow!("minecraft client URL not found: {minecraft_version}"))
-            })?;
-            let client = reqwest::blocking::Client::builder()
-                .user_agent("Litematica-Nova item-names/0.1")
-                .build()
-                .context("build item name HTTP client failed")?;
-            let jar = client
-                .get(&client_url)
-                .send()
-                .with_context(|| format!("download Minecraft client jar failed: {client_url}"))?
-                .error_for_status()
-                .with_context(|| {
-                    format!("download Minecraft client jar returned error: {client_url}")
-                })?
-                .bytes()
-                .context("read Minecraft client jar bytes failed")?
-                .to_vec();
-            let mut archive = ZipArchive::new(Cursor::new(jar.as_slice()))
-                .context("open Minecraft client jar for lang failed")?;
-            let en_us =
-                read_lang(&mut archive, "assets/minecraft/lang/en_us.json").or_else(|_| {
-                    fetch_lang_from_asset_index(
-                        &client,
-                        assets
-                            .as_ref()
-                            .and_then(|assets| assets.asset_index_url.as_deref()),
-                        "minecraft/lang/en_us.json",
-                    )
-                })?;
-            let zh_cn = read_lang(&mut archive, "assets/minecraft/lang/zh_cn.json")
-                .or_else(|_| {
-                    fetch_lang_from_asset_index(
-                        &client,
-                        assets
-                            .as_ref()
-                            .and_then(|assets| assets.asset_index_url.as_deref()),
-                        "minecraft/lang/zh_cn.json",
-                    )
-                })
-                .unwrap_or_default();
-            let source = assets
-                .as_ref()
-                .and_then(|assets| assets.asset_index_url.as_ref())
-                .map(|asset_index| {
-                    format!("mojang_client_jar; client={client_url}; asset_index={asset_index}")
-                })
-                .unwrap_or_else(|| format!("mojang_client_jar; client={client_url}"));
-            let manifest = manifest_for(minecraft_version, &source, &en_us, &zh_cn)?;
-            write_cache(minecraft_version, &manifest, &en_us, &zh_cn)?;
-            Ok(Self {
-                manifest: Some(manifest),
-                en_us,
-                zh_cn,
-            })
+        for (locale, destination) in [("en_us", &mut en_us), ("zh_cn", &mut zh_cn)] {
+            if let Some(bytes) = crate::game_data::read_resource_from(&context, &format!("derived/lang/{locale}.json"))? {
+                let values: BTreeMap<String, String> = serde_json::from_slice(&bytes).with_context(|| format!("invalid normalized selected language: {locale}"))?;
+                destination.extend(values);
+            }
         }
+        let manifest = manifest_for(&context.game_version, &format!("game-data:{}", context.content_id), &en_us, &zh_cn)?;
+        write_cache(&context.content_id, &manifest, &en_us, &zh_cn)?;
+        Ok(Self { manifest: Some(manifest), en_us, zh_cn })
     }
 
     fn lookup(&self, locale: &str, item_id: &str) -> Option<String> {
-        let local = item_id.strip_prefix("minecraft:")?;
+        let (namespace, local) = item_id.split_once(':')?;
         let map = if locale == "zh-CN" {
             &self.zh_cn
         } else {
             &self.en_us
         };
         for key in [
-            format!("block.minecraft.{local}"),
-            format!("item.minecraft.{local}"),
+            format!("block.{namespace}.{}", local.replace('/', ".")),
+            format!("item.{namespace}.{}", local.replace('/', ".")),
         ] {
             if let Some(value) = map.get(&key) {
                 return Some(value.clone());
@@ -293,18 +221,16 @@ impl LangCache {
     }
 }
 
-fn read_lang(
-    archive: &mut ZipArchive<Cursor<&[u8]>>,
-    path: &str,
-) -> Result<BTreeMap<String, String>> {
-    let mut entry = archive
-        .by_name(path)
-        .with_context(|| format!("client jar missing lang file: {path}"))?;
-    let mut text = String::new();
-    entry
-        .read_to_string(&mut text)
-        .with_context(|| format!("read lang file failed: {path}"))?;
-    serde_json::from_str(&text).with_context(|| format!("parse lang json failed: {path}"))
+pub(crate) fn selected_name(translation_key: &str, locale: &str) -> Result<Option<String>> {
+    use std::sync::{Mutex, OnceLock};
+    static LANGUAGES: OnceLock<Mutex<BTreeMap<String, LangCache>>> = OnceLock::new();
+    let context = crate::game_data::active_context()?;
+    let cache = LANGUAGES.get_or_init(Default::default);
+    let mut cache = cache.lock().map_err(|_| anyhow!("game language cache lock poisoned"))?;
+    if !cache.contains_key(&context.content_id) { cache.insert(context.content_id.clone(), LangCache::load_or_fetch(&context.game_version)?); }
+    let values = &cache[&context.content_id];
+    Ok(if locale == "zh_cn" { values.zh_cn.get(translation_key) } else { values.en_us.get(translation_key) }.cloned()
+        .or_else(|| values.en_us.get(translation_key).cloned()))
 }
 
 fn manifest_for(
@@ -354,122 +280,6 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let file =
         fs::File::open(path).with_context(|| format!("open JSON failed: {}", path.display()))?;
     serde_json::from_reader(file).with_context(|| format!("parse JSON failed: {}", path.display()))
-}
-
-fn client_url_from_recipe_manifest(minecraft_version: &str) -> Result<String> {
-    let status = recipe_cache::recipe_status(minecraft_version)?;
-    if status.status != RecipeCacheStatus::Available {
-        return Err(anyhow!("recipe cache is not available"));
-    }
-    let source = status.source.unwrap_or_default();
-    source
-        .split(';')
-        .map(str::trim)
-        .find_map(|part| part.strip_prefix("client="))
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("recipe cache manifest source has no client jar URL"))
-}
-
-struct MinecraftClientAssets {
-    client_url: String,
-    asset_index_url: Option<String>,
-}
-
-fn client_assets_from_mojang_manifest(minecraft_version: &str) -> Result<MinecraftClientAssets> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Litematica-Nova item-names/0.1")
-        .build()
-        .context("build item name HTTP client failed")?;
-    let manifest: Value = client
-        .get(MOJANG_VERSION_MANIFEST_URL)
-        .send()
-        .context("download Mojang version manifest failed")?
-        .error_for_status()
-        .context("download Mojang version manifest returned error")?
-        .text()
-        .context("read Mojang version manifest failed")
-        .and_then(|text| {
-            serde_json::from_str(&text).context("parse Mojang version manifest failed")
-        })?;
-    let version_url = manifest
-        .get("versions")
-        .and_then(Value::as_array)
-        .and_then(|versions| {
-            versions.iter().find_map(|version| {
-                let id = version.get("id")?.as_str()?;
-                if id == minecraft_version {
-                    version.get("url")?.as_str()
-                } else {
-                    None
-                }
-            })
-        })
-        .ok_or_else(|| anyhow!("minecraft version not found: {minecraft_version}"))?;
-    let version_manifest: Value = client
-        .get(version_url)
-        .send()
-        .context("download Mojang version details failed")?
-        .error_for_status()
-        .context("download Mojang version details returned error")?
-        .text()
-        .context("read Mojang version details failed")
-        .and_then(|text| {
-            serde_json::from_str(&text).context("parse Mojang version details failed")
-        })?;
-    let client_url = version_manifest
-        .pointer("/downloads/client/url")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("Mojang version details have no client URL"))?;
-    let asset_index_url = version_manifest
-        .pointer("/assetIndex/url")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    Ok(MinecraftClientAssets {
-        client_url,
-        asset_index_url,
-    })
-}
-
-fn fetch_lang_from_asset_index(
-    client: &reqwest::blocking::Client,
-    asset_index_url: Option<&str>,
-    lang_path: &str,
-) -> Result<BTreeMap<String, String>> {
-    let asset_index_url =
-        asset_index_url.ok_or_else(|| anyhow!("Mojang version details have no asset index URL"))?;
-    let index: Value = client
-        .get(asset_index_url)
-        .send()
-        .with_context(|| format!("download Mojang asset index failed: {asset_index_url}"))?
-        .error_for_status()
-        .with_context(|| format!("download Mojang asset index returned error: {asset_index_url}"))?
-        .text()
-        .context("read Mojang asset index failed")
-        .and_then(|text| serde_json::from_str(&text).context("parse Mojang asset index failed"))?;
-    let hash = index
-        .get("objects")
-        .and_then(Value::as_object)
-        .and_then(|objects| objects.get(lang_path))
-        .and_then(|entry| entry.get("hash"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("asset index missing language file: {lang_path}"))?;
-    let prefix = hash
-        .get(0..2)
-        .ok_or_else(|| anyhow!("invalid asset hash for {lang_path}: {hash}"))?;
-    let url = format!("https://resources.download.minecraft.net/{prefix}/{hash}");
-    client
-        .get(&url)
-        .send()
-        .with_context(|| format!("download Minecraft language asset failed: {url}"))?
-        .error_for_status()
-        .with_context(|| format!("download Minecraft language asset returned error: {url}"))?
-        .text()
-        .with_context(|| format!("read Minecraft language asset failed: {url}"))
-        .and_then(|text| {
-            serde_json::from_str(&text)
-                .with_context(|| format!("parse Minecraft language asset failed: {lang_path}"))
-        })
 }
 
 fn cache_dir(minecraft_version: &str) -> Result<PathBuf> {

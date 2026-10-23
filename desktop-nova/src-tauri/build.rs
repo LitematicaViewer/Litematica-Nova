@@ -80,44 +80,6 @@ fn build_git_sha(repo_root: &Path) -> String {
     value
 }
 
-fn prepare_block_icons(repo_root: &Path, manifest_dir: &Path) {
-    let source = repo_root.join("pack-in/game-icons/block.zip");
-    watch_if_present(&source);
-    let target = manifest_dir.join("gen/block-icons");
-    fs::create_dir_all(&target).expect("create generated block icon directory");
-    let mut archive = zip::ZipArchive::new(fs::File::open(source).expect("open bundled block icon archive"))
-        .expect("read bundled block icon archive");
-    let mut current_names = HashSet::new();
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).expect("read block icon entry");
-        if entry.is_dir() { continue; }
-        let path = entry.enclosed_name().expect("block icon entry must be enclosed");
-        // Only the public image payload is deployed, never the archive or other files.
-        if path.extension().and_then(|ext| ext.to_str()) != Some("png") { continue; }
-        assert_eq!(path.components().count(), 1, "block icon PNG must have a flat name");
-        let name = path.file_name().unwrap().to_owned();
-        let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes).expect("decode block icon PNG");
-        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "invalid block icon PNG");
-        let output = target.join(&name);
-        if fs::read(&output).ok().as_deref() != Some(bytes.as_slice()) {
-            fs::write(&output, bytes).expect("write generated block icon PNG");
-        }
-        current_names.insert(name);
-    }
-    assert!(!current_names.is_empty(), "bundled block icon archive is empty");
-    // Remove only stale files in this exact build-owned flat directory.
-    // Do not traverse another directory or touch deployed/user resources.
-    for entry in fs::read_dir(&target).expect("list generated block icons") {
-        let entry = entry.expect("read generated block icon entry");
-        if entry.file_type().expect("read generated block icon type").is_file()
-            && !current_names.contains(&entry.file_name())
-        {
-            fs::remove_file(entry.path()).expect("remove stale generated block icon");
-        }
-    }
-}
-
 // Only this freshly staged directory is bundled. Legacy private backend and
 // Release directories never enter the public resource map.
 fn validate_executable_target(path: &Path, target_os: &str, target_arch: &str) {
@@ -157,6 +119,21 @@ fn validate_public_backends(repo_root: &Path) {
     println!("cargo:rerun-if-env-changed=NOVA_PUBLIC_HELPER_INPUT_ID");
     println!("cargo:rerun-if-env-changed=NOVA_DEVELOPMENT_RUNTIME_JSON");
     println!("cargo:rerun-if-env-changed=NOVA_DEVELOPMENT_MODULE_PATH");
+    println!("cargo:rerun-if-env-changed=NOVA_COMMUNITY_BUILD");
+    println!("cargo:rerun-if-env-changed=NOVA_PROTECTED_MANIFEST_PUBLIC_KEY");
+    let explicit_community = matches!(env::var("NOVA_COMMUNITY_BUILD").as_deref(), Ok("1" | "true"));
+    if explicit_community {
+        assert!(
+            env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_none()
+                && ["NOVA_PROTECTED_BUILD_ID", "NOVA_PROTECTED_MANIFEST_PUBLIC_KEY", "NOVA_PROTECTED_RUNTIME_COMPATIBILITY", "NOVA_DEVELOPMENT_RUNTIME_JSON", "NOVA_DEVELOPMENT_MODULE_PATH"]
+                    .iter().all(|name| env::var(name).map_or(true, |value| value.is_empty())),
+            "Community selection must not inherit a signed or local private runtime identity"
+        );
+    }
+    let community = env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_none()
+        && (explicit_community
+            || (env::var("NOVA_PROTECTED_BUILD_ID").map_or(true, |value| value.is_empty())
+                && env::var("NOVA_PROTECTED_MANIFEST_PUBLIC_KEY").map_or(true, |value| value.is_empty())));
     let explicit_directory = env::var_os("NOVA_PUBLIC_BACKEND_DIR");
     let directory = explicit_directory.as_ref().map(PathBuf::from).unwrap_or_else(|| repo_root.join("bin/public-beta"));
     println!("cargo:rerun-if-changed={}", directory.display());
@@ -170,7 +147,10 @@ fn validate_public_backends(repo_root: &Path) {
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("public helper target architecture");
     assert!(matches!(target_arch.as_str(), "x86_64" | "aarch64"), "public helpers require a supported 64-bit target");
     let suffix = if target_os == "windows" { ".exe" } else { "" };
-    let expected: HashSet<_> = [format!("litematica_core{suffix}"), format!("litematica_native_viewer{suffix}"), format!("nova-render-service{suffix}"), format!("nova-build-worker{suffix}"), "backend-deployment.json".into()].into_iter().collect();
+    let mut expected: HashSet<_> = [format!("litematica_core{suffix}"), format!("litematica_native_viewer{suffix}"), "backend-deployment.json".into()].into_iter().collect();
+    if !community {
+        expected.extend([format!("nova-render-service{suffix}"), format!("nova-build-worker{suffix}")]);
+    }
     let mut actual = HashSet::new();
     for entry in fs::read_dir(&directory).expect("read isolated public backend directory") {
         let entry = entry.expect("read public backend entry");
@@ -178,10 +158,12 @@ fn validate_public_backends(repo_root: &Path) {
         println!("cargo:rerun-if-changed={}", entry.path().display());
         actual.insert(entry.file_name().to_str().expect("public backend UTF-8 name").to_owned());
     }
-    assert_eq!(actual, expected, "public backend directory must contain only the four public helpers and manifest");
+    assert!(expected.is_subset(&actual), "public backend directory lacks a required public component");
     let manifest: serde_json::Value = serde_json::from_slice(&fs::read(directory.join("backend-deployment.json")).expect("read public deployment manifest")).expect("parse public deployment manifest");
     assert_eq!(manifest["schema"], "lba.backend.deployment.v1");
-    if env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some() {
+    if community {
+        assert_eq!(manifest["runtimeKind"].as_str(), Some("community"), "community Host requires public-only helpers");
+    } else if env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some() {
         assert_eq!(manifest["runtimeKind"].as_str(), Some("development"), "local-source Host requires explicitly development-built helpers");
     } else {
         assert_ne!(manifest["runtimeKind"].as_str(), Some("development"), "development helpers must not enter a production Host or installer");
@@ -203,8 +185,10 @@ fn validate_public_backends(repo_root: &Path) {
     if let Some(triple) = manifest.get("targetTriple") {
         assert_eq!(triple.as_str(), env::var("TARGET").ok().as_deref(), "public helper platform/architecture identity differs");
     }
-    if let Ok(build_id) = env::var("NOVA_PROTECTED_BUILD_ID") {
-        assert_eq!(manifest["runtimeBuildId"].as_str(), Some(build_id.as_str()), "public helper runtime components differ from the Host build");
+    if !community {
+        if let Ok(build_id) = env::var("NOVA_PROTECTED_BUILD_ID") {
+            assert_eq!(manifest["runtimeBuildId"].as_str(), Some(build_id.as_str()), "public helper runtime components differ from the Host build");
+        }
     }
     if env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some() {
         let selected: serde_json::Value = serde_json::from_str(&env::var("NOVA_DEVELOPMENT_RUNTIME_JSON")
@@ -219,7 +203,7 @@ fn validate_public_backends(repo_root: &Path) {
     }
     let artifacts = manifest["artifacts"].as_object().expect("public deployment artifacts");
     let names: HashSet<_> = artifacts.keys().cloned().collect();
-    assert_eq!(names, expected.into_iter().filter(|name| name != "backend-deployment.json").collect());
+    assert_eq!(names, actual.into_iter().filter(|name| name != "backend-deployment.json").collect(), "public helper files and declared build inputs differ");
     for (name, record) in artifacts {
         let path = directory.join(name);
         let bytes = fs::metadata(&path).expect("public helper metadata").len();
@@ -260,7 +244,6 @@ fn main() {
         "cargo:rustc-env=LBA_NOVA_GIT_SHA={}",
         build_git_sha(repo_root)
     );
-    prepare_block_icons(repo_root, &manifest_dir);
     validate_public_backends(repo_root);
     tauri_build::build()
 }

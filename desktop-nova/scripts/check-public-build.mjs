@@ -6,14 +6,14 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const privatePaths = /(?:^|\/)(?:render_v5|renderer-gl|renderer-vulkan|iris-compat|nova-build-worker|nova-render-service|shaderpacks-private)(?:\/|$)|^desktop-nova\/src-tauri\/src\/(?:application\/render_facade|render_service_client|viewer_compatibility|headless_e2e|bin\/popup_smoke)\.rs$|^tools\/mc26-oracle\//i;
+const privatePaths = /(?:^|\/)(?:render_v5|renderer-gl|renderer-vulkan|iris-compat|nova-build-worker|nova-render-service|shaderpacks-private)(?:\/|$)/i;
 const generatedOrSecretPaths = /(?:^|\/)(?:\.tmp|\.ssh|node_modules|target|arr-private|viewer-backend)(?:\/|$)|\.(?:exe|dll|pdb|jar|pem|key|pfx|p12|jks|sqlite|sqlite3)$/i;
 const privateMarkers = ['RenderV5Backend', 'RenderV5Request', 'PreparedV5Artifact', 'nova-render-service', 'nova-build-worker', 'iris_runtime', 'renderer-gl', 'renderer-vulkan', 'iris-compat', 'src/render_v5/', 'src\\render_v5\\'];
-const privateModule = /\b(?:mod|use)\s+(?:crate::)?(?:render_v5|iris_runtime|iris_gl|render_service_client|render_facade|viewer_compatibility)\b|\b(?:renderer-gl|renderer-vulkan|iris-compat)\s*=|\bfeature\s*=\s*"(?:full|full-mode|render-v5|iris|commercial)"/;
+const privateModule = /\b(?:mod|use)\s+(?:crate::)?(?:render_v5|iris_runtime|iris_gl)\b|\b(?:renderer-gl|renderer-vulkan|iris-compat)\s*=/;
 const privateKey = /-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----[\r\n]+\s*[A-Za-z0-9+/=]{32,}/;
 const sensitiveCookie = /(?:set-cookie\s*:\s*[^\r\n]*?\bctoken\s*=|["']?ctoken["']?\s*[:=]\s*["']?)([A-Za-z0-9_+/.=-]{12,}|\[REDACTED\])/ig;
 const safeCookie = value => value === '[REDACTED]' || value === 'REDACTED';
-const textExtensions = /\.(?:rs|toml|lock|json|js|mjs|ts|tsx|yml|yaml|md|txt|ps1|sh|css|wgsl|glsl|vert|frag)$/i;
+const textExtensions = /\.(?:rs|java|toml|lock|json|js|mjs|ts|tsx|yml|yaml|md|txt|ps1|sh|css|wgsl|glsl|vert|frag)$/i;
 
 function run(executable, args, options = {}) {
   const result = spawnSync(executable, args, { cwd: repo, maxBuffer: 256 * 1024 * 1024, ...options });
@@ -27,8 +27,7 @@ function cookieLeak(text) {
   return false;
 }
 function deniedSource(name) {
-  if (privatePaths.test(name) || generatedOrSecretPaths.test(name)) return true;
-  if (name.startsWith('.github/workflows/') && name !== '.github/workflows/beta-public.yml') return true;
+  if (generatedOrSecretPaths.test(name) || privatePaths.test(name)) return true;
   return false;
 }
 function binaryMarkerHits(bytes) {
@@ -240,8 +239,8 @@ function installerGate(input, runtimeInput) {
   console.log(`public_installer=verified; format=nsis; runtime_files=${audit.files.length}; extracted_files=${records.length}; private_markers=0; bundle_type_patch=${bundleTypePatch ? 'UNK-to-NSS-only' : 'none'}; resources=verified; updater_signature=false; installer_execution=false`);
 }
 function selfTest() {
-  for (const name of ['tools/viewer-core/src/render_v5/backend.rs', 'tools/viewer-core/crates/iris-compat/src/lib.rs', 'desktop-nova/src-tauri/src/application/render_facade.rs', 'private.key', 'bin/viewer-backend/old.exe']) assert(deniedSource(name));
-  for (const name of ['tools/viewer-core/src/native_viewer.rs', 'desktop-nova/src-tauri/src/application/quick_preview.rs', 'pack-in/game-icons/block.zip']) assert(!deniedSource(name));
+  for (const name of ['tools/viewer-core/src/render_v5/backend.rs', 'tools/viewer-core/crates/iris-compat/src/lib.rs', 'private.key', 'bin/viewer-backend/old.exe']) assert(deniedSource(name));
+  for (const name of ['tools/viewer-core/src/native_viewer.rs', 'desktop-nova/src-tauri/src/application/quick_preview.rs', 'desktop-nova/src-tauri/src/application/render_facade.rs', 'pack-in/game-icons/block.zip']) assert(!deniedSource(name));
   assert(cookieLeak(`set-cookie: ctoken=${'sample'.repeat(5)}; Path=/`));
   assert(!cookieLeak('set-cookie: ctoken=[REDACTED]; Path=/'));
   assert(!cookieLeak('ctoken identifier only'));

@@ -208,3 +208,21 @@ export function readGameResourceRemoteText(url: string): Promise<string> {
 export function readResourcePackLanguage(language: "zh_cn" | "en_us"): Promise<Record<string, string>> {
   return invoke("read_resource_pack_language", { language });
 }
+
+export interface GameDataContext {
+  schema_version: number;
+  id: string;
+  game_version: string;
+  content_id: string;
+  root: string;
+  resource_jar: string;
+  source: string;
+}
+export interface GameDataList { active: GameDataContext | null; entries: GameDataContext[] }
+export const listGameData = (): Promise<GameDataList> => invoke("game_data_list");
+export const getGameDataContext = (): Promise<GameDataContext> => invoke("game_data_context");
+export const readGameDataLanguage = (language: "zh_cn" | "en_us"): Promise<{values: Record<string, string>}> => invoke("game_data_language", { language });
+export const readGameDataIcon = (id: string): Promise<string> => invoke("read_game_data_icon", { id });
+export const importGameDataJar = (jarPath: string, assetsDir?: string): Promise<GameDataContext> => invoke("game_data_import", { jarPath, assetsDir });
+export const selectGameData = (id: string): Promise<GameDataContext> => invoke("game_data_select", { id });
+export const restoreDefaultGameData = (): Promise<GameDataContext> => invoke("game_data_default");

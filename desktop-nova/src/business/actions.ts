@@ -1,4 +1,5 @@
 import { t } from "../services/i18n";
+import { getSelectedGameDataContext } from "../services/gameResources";
 import { openDialog, saveDialog } from "../platform/dialogs";
 import { openPath, openExternalUrl as openUrl } from "../platform/nativeViewer";
 import {
@@ -16,9 +17,6 @@ import {
 import { sanitizeFileName } from "../services/generateService";
 import { exportSessionLogs, type LogExportResult } from "../platform/files";
 
-const BLOCKSTATE_DB_PATH = "data/minecraft_blockstates/26.1.json";
-const BLOCKSTATE_ZH_PATH = "data/minecraft_blockstates/26.1.zh_cn.json";
-const BLOCK_ICON_DIR_PATH = "block";
 
 export interface RuntimePathInfo {
   workspaceRoot: string;
@@ -141,11 +139,12 @@ export async function applyReplaceBlocks(currentFile: string, outputPath: string
 }
 
 export async function getNovaRuntimePathInfo(): Promise<RuntimePathInfo> {
+  const context = await getSelectedGameDataContext();
   const [workspaceRoot, dbInfo, zhInfo, iconDirInfo] = await Promise.all([
     getWorkspaceRoot(),
-    getPathInfo(BLOCKSTATE_DB_PATH),
-    getPathInfo(BLOCKSTATE_ZH_PATH),
-    getPathInfo(BLOCK_ICON_DIR_PATH),
+    getPathInfo(`${context.root}/derived/blockstates.json`),
+    getPathInfo(`${context.root}/derived/lang/zh_cn.json`),
+    getPathInfo(context.root),
   ]);
   return { workspaceRoot, dbInfo, zhInfo, iconDirInfo };
 }

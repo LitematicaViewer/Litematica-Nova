@@ -1,6 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod application;
+#[path = "../../../tools/viewer-core/src/game_data.rs"]
+mod game_data;
+// Compile the same public data resolver, not a second Host-side importer.
+mod runtime_paths {
+    pub fn app_root() -> anyhow::Result<std::path::PathBuf> { Ok(crate::get_root()) }
+    pub fn data_root() -> anyhow::Result<std::path::PathBuf> {
+        crate::current_user_config_dir().map_err(anyhow::Error::msg)
+    }
+}
 mod i18n;
 mod headless_e2e;
 mod platform;
@@ -424,6 +433,12 @@ fn find_workspace_root(start: &Path) -> Option<PathBuf> {
 }
 
 fn backend_exe_path(binary_name: &str) -> PathBuf {
+    // The ordinary development entry has already built these real public
+    // helpers. Use that exact stage, not a stale installed/private backend.
+    #[cfg(debug_assertions)]
+    if let Some(directory) = option_env!("NOVA_PUBLIC_BACKEND_DIR").filter(|value| !value.is_empty()) {
+        return PathBuf::from(directory).join(binary_name);
+    }
     get_root()
         .join("bin")
         .join("viewer-backend")
@@ -471,6 +486,32 @@ mod backend_executable_path_tests {
             let error = required_backend_exe_path(alias).unwrap_err();
             assert!(error.contains("不允许的后端可执行文件名"));
         }
+    }
+
+    #[test]
+    #[ignore = "requires the actual prepared Community helpers; no GUI or child launch"]
+    fn community_host_starts_with_public_helpers_and_rejects_optional_core() {
+        assert!(nova_protected_loader::is_community_build(), "this fixture requires the Community build, not a signed/private runtime");
+        let project = super::get_root();
+        let data = project.join(".tmp/beta-ui-corrections/community-startup-data");
+        let render = super::RenderServiceClient::default();
+        // These are the actual public helpers prepared by the normal entry,
+        // not empty executables or a substitute private renderer.
+        for name in ["litematica_core.exe", "litematica_native_viewer.exe"] {
+            assert!(std::fs::metadata(super::required_backend_exe_path(name).unwrap()).unwrap().len() > 64);
+        }
+        let host = super::initialize_application_host(project, data.clone(), &render).unwrap();
+        assert!(host.service_exe.is_none());
+        assert_eq!(host.supervisor.registered_role_count(), 2);
+        assert!(host.supervisor.active_children().is_empty());
+        let mut protection = super::application::protected_render::ProtectedRender::default();
+        for mode in ["standard", "full"] {
+            let request = serde_json::to_vec(&serde_json::json!({"displayMode":mode})).unwrap();
+            assert_eq!(protection.acquire(&data, &data, &request).unwrap_err(), nova_protected_loader::FEATURE_NOT_INCLUDED);
+        }
+        render.request_shutdown();
+        let report = host.supervisor.shutdown(std::time::Duration::ZERO, std::time::Duration::from_millis(500));
+        assert!(report.remaining.is_empty());
     }
 
     #[test]
@@ -2869,11 +2910,15 @@ async fn application_render_launch_plan(
     viewport: Option<[u32; 2]>,
     facade: tauri::State<'_, RenderFacade>,
 ) -> Result<RenderLaunchPlan, String> {
+    let selected_mode = display_mode.unwrap_or_default();
+    if matches!(selected_mode, RenderDisplayMode::Standard | RenderDisplayMode::Full) {
+        nova_protected_loader::require_private_runtime().map_err(|error| error.to_string())?;
+    }
     let plan_started = std::time::Instant::now();
     let input = RenderServiceStartBuildInput {
         source_path,
         build_mode: RenderBuildMode::Prebuilt,
-        display_mode: display_mode.unwrap_or_default(),
+        display_mode: selected_mode,
         preflight_id: None,
         resource_warning_confirmed: false,
         realtime_decision_id: None,
@@ -2936,7 +2981,7 @@ mod full_launch_plan_tests {
         let service = RenderServiceClient::default();
         let facade = RenderFacade::new(service.clone());
         let host = initialize_application_host(app_root.clone(), data_root.clone(), &service).unwrap();
-        service.launch_in_background(Arc::clone(&host.supervisor), host.service_exe.clone(), data_root.clone());
+        service.launch_in_background(Arc::clone(&host.supervisor), host.service_exe.clone().expect("the exact-render fixture requires the optional private runtime"), data_root.clone());
         let mut protection = application::protected_render::ProtectedRender::default();
         let mut measured = serde_json::json!({"mode":mode_name,"loading":"prebuilt",
             "GPU":"not_executed","firstFrame":"not_measured","workerLaunched":false});
@@ -3152,7 +3197,7 @@ mod full_launch_plan_tests {
         let service = RenderServiceClient::default();
         let facade = RenderFacade::new(service.clone());
         let host = initialize_application_host(root, data_root.clone(), &service).unwrap();
-        service.launch_in_background(Arc::clone(&host.supervisor), host.service_exe.clone(), data_root.clone());
+        service.launch_in_background(Arc::clone(&host.supervisor), host.service_exe.clone().expect("the exact-render fixture requires the optional private runtime"), data_root.clone());
         let result = tauri::async_runtime::block_on(async {
             let mut results = Vec::new();
             // The large-input cache pair repeats Standard with identical
@@ -3248,6 +3293,7 @@ fn validate_exact_graphics_preference(backend: ::viewer_launch_contract::Graphic
 fn application_render_request(
     input: RenderServiceStartBuildInput,
 ) -> Result<(UserVisibleRenderRequest, RenderEnvironmentInputs), String> {
+    nova_protected_loader::require_private_runtime().map_err(|error| error.to_string())?;
     if !input.source_path.is_absolute() || !input.source_path.is_file() {
         return Err(format!(
             "投影文件不存在或不是绝对路径：{}",
@@ -3295,6 +3341,10 @@ fn application_render_request(
         ::viewer_launch_contract::WeatherPrecipitation::None => WeatherPreference::None,
     };
     let content = plan.content();
+    let game_data = game_data::resolve_context(&current_user_config_dir()?.join("game-data"),
+        &get_root().join("pack-in/game-data/default")).map_err(|error| format!("{error:#}"))?;
+    let mut resource_packs = vec![game_data.resource_jar.clone()];
+    resource_packs.extend(content.resource_packs.iter().cloned());
     let settings = ProjectRenderSettings {
         display_mode: input.display_mode,
         build_mode: input.build_mode,
@@ -3309,10 +3359,12 @@ fn application_render_request(
         allow_time_modification: !unlit && config.viewer_controls.allow_time_modification,
         allow_weather_modification: !unlit && config.viewer_controls.allow_weather_modification,
         fabric_mods_dir: content.fabric_mods_dir.clone(),
-        resource_packs: content.resource_packs.clone(),
+        resource_packs,
     };
     let root = get_root();
     let asset_inputs = [
+        game_data.root.join("manifest.json"),
+        game_data.root.join("derived/oracle"),
         root.join("mc26-oracle").join("verified-schema3-26.3"),
         root.join("tools")
             .join("mc26-oracle")
@@ -3572,7 +3624,7 @@ fn application_render_get_snapshot(
 struct ApplicationHostComponents {
     supervisor: Arc<platform::process_supervisor::ProcessSupervisor>,
     operations: ApplicationOperations,
-    service_exe: PathBuf,
+    service_exe: Option<PathBuf>,
 }
 
 /// Both the WebView host and the product E2E client enter through this same
@@ -3583,20 +3635,14 @@ fn initialize_application_host(
     render_service: &RenderServiceClient,
 ) -> Result<ApplicationHostComponents, String> {
     let started = std::time::Instant::now();
-    let service_exe = required_backend_exe_path("nova-render-service.exe")?;
-    let worker_exe = required_backend_exe_path("nova-build-worker.exe")?;
+    let service_exe = if nova_protected_loader::is_community_build() { None }
+        else { Some(required_backend_exe_path("nova-render-service.exe")?) };
+    let worker_exe = if nova_protected_loader::is_community_build() { None }
+        else { Some(required_backend_exe_path("nova-build-worker.exe")?) };
     let viewer_exe = required_backend_exe_path("litematica_native_viewer.exe")?;
     let core_exe = required_backend_exe_path("litematica_core.exe")?;
     let mut allowlist = platform::process_supervisor::ExecutableAllowlist::new();
     for (role, executable) in [
-        (
-            platform::process_supervisor::ExecutableRole::RenderService,
-            &service_exe,
-        ),
-        (
-            platform::process_supervisor::ExecutableRole::BuildWorker,
-            &worker_exe,
-        ),
         (
             platform::process_supervisor::ExecutableRole::NativeViewer,
             &viewer_exe,
@@ -3608,6 +3654,14 @@ fn initialize_application_host(
     ] {
         allowlist.allow(role, executable).map_err(|error| error.to_string())?;
     }
+    for (role, executable) in [
+        (platform::process_supervisor::ExecutableRole::RenderService, service_exe.as_ref()),
+        (platform::process_supervisor::ExecutableRole::BuildWorker, worker_exe.as_ref()),
+    ] {
+        if let Some(executable) = executable {
+            allowlist.allow(role, executable).map_err(|error| error.to_string())?;
+        }
+    }
     let (supervisor, process_events) =
         platform::process_supervisor::ProcessSupervisor::new(allowlist)
             .map_err(|error| format!("initialize Application process supervisor: {error}"))?;
@@ -3616,7 +3670,7 @@ fn initialize_application_host(
         Arc::clone(&supervisor),
         project_root,
         app_local_data_root,
-        service_exe
+        core_exe
             .parent()
             .map(Path::to_path_buf)
             .ok_or_else(|| "backend executable has no directory".to_owned())?,
@@ -3711,8 +3765,10 @@ fn main() {
                     eprintln!("[NOVA_GPU_INITIALIZATION] stage=ordinary_startup_not_ready error={error} projection_reads=0 scene_mesh_builds=0");
                 }
             });
-            app.state::<RenderServiceClient>()
-                .launch_in_background(host.supervisor, host.service_exe, app_local_data_root);
+            if let Some(service_exe) = host.service_exe {
+                app.state::<RenderServiceClient>()
+                    .launch_in_background(host.supervisor, service_exe, app_local_data_root);
+            }
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
@@ -3846,6 +3902,13 @@ fn main() {
             assets::download_minecraft_wiki_enum_catalogs,
             assets::read_game_resource_remote_text,
             assets::read_resource_pack_language,
+            assets::game_data_list,
+            assets::game_data_context,
+            assets::game_data_language,
+            assets::read_game_data_icon,
+            assets::game_data_import,
+            assets::game_data_select,
+            assets::game_data_default,
             wiki_block_icons::download_minecraft_wiki_block_icons,
             open_enumerator_window,
             open_asset_manager_window,

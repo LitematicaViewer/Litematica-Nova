@@ -1,5 +1,5 @@
 import { listenEvent } from "../platform/events";
-import { readImageBase64 } from "../platform/files";
+import { readGameDataIcon } from "../platform/files";
 import {
   getActiveIconSearchRoots,
   getActiveResourceFingerprint,
@@ -11,36 +11,12 @@ import { loadEnumeratorCollections } from "./enumeratorService";
 
 const iconCache = new Map<string, Promise<string | null>>();
 
-import catalogData from "../../../pack-in/materials/minecraft-26.3.json";
-import iconManifest from "../../../pack-in/materials/item-icons-26.3.json";
-const verifiedIcons = iconManifest.entries as Record<string, { path: string }>;
-const catalog = catalogData as { items: Record<string, unknown>; blocks: Record<string, { item_id: string }> };
-
-/** Bundled icon folder, used as the last resort when the registry has no entry. */
-const BUNDLED_ICON_ROOT = "pack-in/item-icons-26.3";
-
-/**
- * Icon candidates for a block, in lookup order.
- *
- * Two of these are literal rules (a slab is never represented by planks, so the
- * plank texture is only a *fallback*; potted plants fall back to the flower pot):
- *
- *   `_slab`    -> `_planks`
- *   `potted_*` -> `flower_pot`
- *
- * Whether a block is expected to have an *item-shaped* icon is not decided here -
- * that membership comes from the enumerator collection rule file
- * `pack-in/enumerator/custom/itemlike_block.json` (see `loadItemLikeBlocks`).
- */
-export function iconCandidates(blockId: string): string[] {
-  const id = blockId.includes(":") ? blockId : `minecraft:${blockId}`;
-  if (!id.startsWith("minecraft:")) return [];
-  const item = catalog.items[id] ? id : catalog.blocks[id]?.item_id;
-  return item && verifiedIcons[item] ? [item.slice("minecraft:".length)] : [];
-}
+/** Public helper resolves actual item aliases/models against the active content. */
+export function iconCandidates(blockId: string): string[] { return literalCandidates(blockId); }
 function literalCandidates(blockId: string): string[] {
-  const id = String(blockId || "").trim().replace(/^minecraft:/, "");
-  return id && !id.includes(":") && !id.startsWith("E/") ? [id] : [];
+  const id = String(blockId || "").trim();
+  if (!id || id.startsWith("E/")) return [];
+  return [id.replace(/^minecraft:/, "").replace(":", "/")];
 }
 
 /**
@@ -49,12 +25,7 @@ function literalCandidates(blockId: string): string[] {
  * The registry resolves a block to its `item_id` and only aliases present in the
  * bundled icon manifest are accepted, which keeps the bundled fallback honest.
  */
-function registryCandidates(blockId: string): string[] {
-  const id = blockId.includes(":") ? blockId : `minecraft:${blockId}`;
-  if (!id.startsWith("minecraft:")) return [];
-  const item = catalog.items[id] ? id : catalog.blocks[id]?.item_id;
-  return item && verifiedIcons[item] ? [item.slice("minecraft:".length)] : [];
-}
+function registryCandidates(blockId: string): string[] { return literalCandidates(blockId); }
 
 let itemLikeBlocksPromise: Promise<Set<string>> | null = null;
 
@@ -91,15 +62,6 @@ export function invalidateItemLikeRuleCache(): void {
  * This is the pre-registry behaviour and stays as the fallback so icons keep
  * rendering even when the registry holds no usable entry.
  */
-async function loadBundledIcon(candidate: string): Promise<string | null> {
-  try {
-    const dataUrl = await readImageBase64(`${BUNDLED_ICON_ROOT}/${candidate}.png`);
-    return dataUrl || null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Candidate paths inside one registry search root, most specific first.
  *
@@ -167,12 +129,10 @@ async function loadIcon(blockId: string, slot: BlockIconSlot, lookupMode: IconLo
     }
   }
 
-  if (slot === "layering") return null;
-  for (const candidate of alias) {
-    const dataUrl = await loadBundledIcon(candidate);
-    if (dataUrl) return dataUrl;
-  }
-  return null;
+  // Generate or reuse the same content-addressed icon used by all consumers.
+  // Never substitute the old bundled game's item catalog after a version switch.
+  try { return await readGameDataIcon(blockId.includes(":") ? blockId : `minecraft:${blockId}`); }
+  catch { return null; }
 }
 
 export type IconLookupMode = "default" | "item_first" | "block_first";

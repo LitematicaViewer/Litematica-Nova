@@ -1,38 +1,51 @@
 //! Inventory requirements, not loot drops or renderer state. The registry data is exported
 //! from Minecraft 26.3; rules below follow the corresponding block placement classes.
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-struct Catalog { blocks: BTreeMap<String, Block>, items: BTreeMap<String, Item> }
+struct Catalog { minecraft_version: String, blocks: BTreeMap<String, Block>, items: BTreeMap<String, Item> }
 #[derive(Deserialize)]
 struct Block { item_id: String, classes: Vec<String>, potted_item: Option<String> }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub(super) struct Item {
     pub stack_size: u64,
     pub translation_key: String,
     pub can_fit_container: bool,
 }
-fn catalog() -> &'static Catalog {
-    static DATA: OnceLock<Catalog> = OnceLock::new();
-    DATA.get_or_init(|| serde_json::from_str(include_str!("../../../pack-in/materials/minecraft-26.3.json")).expect("verified material catalog"))
+fn catalog() -> Result<&'static Catalog> {
+    static DATA: OnceLock<Mutex<BTreeMap<String, &'static Catalog>>> = OnceLock::new();
+    let context = crate::game_data::active_context()?;
+    let cache = DATA.get_or_init(Default::default);
+    let mut cache = cache.lock().map_err(|_| anyhow!("inventory adapter cache lock poisoned"))?;
+    if let Some(value) = cache.get(&context.content_id) { return Ok(*value); }
+    let path = context.root.join("derived/inventory.json");
+    let value: Catalog = serde_json::from_slice(&std::fs::read(&path)
+        .with_context(|| format!("selected Minecraft {} data requires its inventory adapter: {}", context.game_version, path.display()))?)
+        .context("invalid selected inventory adapter")?;
+    if value.minecraft_version != context.game_version { bail!("inventory adapter version {} does not match selected {}", value.minecraft_version, context.game_version); }
+    // Public callers historically borrow immutable registry records. Intern
+    // once per content identity, not per UI language/app version or material.
+    let value: &'static Catalog = Box::leak(Box::new(value));
+    cache.insert(context.content_id, value);
+    Ok(value)
 }
-pub(super) fn item(id: &str) -> Option<&'static Item> { catalog().items.get(id) }
+pub(super) fn ensure_available() -> Result<()> { catalog().map(|_| ()) }
+pub(super) fn item(id: &str) -> Option<&'static Item> { catalog().ok()?.items.get(id) }
 pub(super) fn name(id: &str) -> String {
-    static LANG: OnceLock<BTreeMap<String, String>> = OnceLock::new();
-    let lang = LANG.get_or_init(|| serde_json::from_str(include_str!("../../../pack-in/lang/zh_cn.json")).expect("verified Chinese language"));
     let key = item(id).map(|i| i.translation_key.clone()).unwrap_or_else(|| format!("block.{}", id.replace(':', ".")));
-    lang.get(&key).cloned().unwrap_or_else(|| id.to_owned())
+    crate::item_names::selected_name(&key, "zh_cn").ok().flatten().unwrap_or_else(|| id.to_owned())
 }
 pub(super) fn status(id: &str) -> &'static str {
-    if item(id).is_some() { "item" } else if catalog().blocks.contains_key(id) { "no_item" } else { "unknown" }
+    if item(id).is_some() { "item" } else if catalog().ok().is_some_and(|catalog| catalog.blocks.contains_key(id)) { "no_item" } else { "unknown" }
 }
 
 // AIR is Block.asItem's explicit "no inventory item" result, not a placeholder
 // item to bill. Keep these states in a separate structural diagnostic channel.
 pub(super) fn non_item_status(id: &str) -> Option<&'static str> {
-    let Some(block) = catalog().blocks.get(id) else { return Some("unknown"); };
+    let Some(block) = catalog().ok().and_then(|catalog| catalog.blocks.get(id)) else { return Some("unknown"); };
     if block.classes.iter().any(|class| class == "AirBlock" || class == "TallSeagrassBlock" || class == "CaveVinesPlantBlock") || block.potted_item.is_some() {
         return None;
     }
@@ -53,7 +66,7 @@ pub(super) fn requirements_for_version(id: &str, properties: &BTreeMap<String, S
 }
 
 pub(super) fn requirements(id: &str, properties: &BTreeMap<String, String>) -> Vec<(String, u64)> {
-    let Some(block) = catalog().blocks.get(id) else { return Vec::new(); };
+    let Some(block) = catalog().ok().and_then(|catalog| catalog.blocks.get(id)) else { return Vec::new(); };
     let class = |name: &str| block.classes.iter().any(|c| c == name);
     let prop = |name: &str| properties.get(name).map(String::as_str).unwrap_or("");
     if class("AirBlock") { return Vec::new(); }
@@ -126,7 +139,7 @@ mod tests {
     }
     #[test]
     fn every_air_mapping_is_diagnostic_not_an_inventory_requirement() {
-        for (id, block) in &catalog().blocks {
+        for (id, block) in &catalog().expect("selected inventory adapter").blocks {
             if block.item_id == "minecraft:air" && block.potted_item.is_none()
                 && !block.classes.iter().any(|class| class == "AirBlock" || class == "TallSeagrassBlock" || class == "CaveVinesPlantBlock" || class == "LiquidBlock") {
                 assert!(requirements(id, &BTreeMap::new()).is_empty(), "{id}");
@@ -151,7 +164,7 @@ mod tests {
     }
     #[test]
     fn every_registered_multi_block_item_is_billed_once() {
-        for (id, block) in &catalog().blocks {
+        for (id, block) in &catalog().expect("selected inventory adapter").blocks {
             if block.item_id == "minecraft:air" { continue; }
             let (key, primary, secondary) = if block.classes.iter().any(|c| c == "AbstractBedBlock") {
                 ("part", "foot", "head")

@@ -139,7 +139,7 @@ let languageGeneration = 0;
 let resourceListenerStarted = false;
 /** Snapshot for exports; names only, never part of renderer resource identity. */
 export const getMinecraftTranslations = (): Record<string, string> => ({ ...englishMap, ...langMap });
-export function invalidateI18nCache(): void { langMap = {}; loading = null; languageGeneration++; }
+export function invalidateI18nCache(): void { langMap = {}; englishMap = {}; loading = null; languageGeneration++; }
 export async function initI18n(force = false) {
   if (!resourceListenerStarted) {
     resourceListenerStarted = true;

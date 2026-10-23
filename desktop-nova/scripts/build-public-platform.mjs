@@ -5,8 +5,9 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { validateRef, validateSource, validatePackage, validateDevelopmentPackage, helperInputIdentity, validateStaging, nativeTarget, runtimeSource } from './check-public-checkout.mjs';
+import { validateRef, validateSource, validatePackage, validateDevelopmentPackage, helperInputIdentity, validateStaging, nativeTarget, runtimeSource, communityIdentity } from './check-public-checkout.mjs';
 import { ensureDevelopmentRuntime, acquireLocalDevelopmentRuntime } from './fetch-ci-runtime.mjs';
+import { prepareDefaultGameData } from './prepare-default-game-data.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const desktop = path.join(root, 'desktop-nova'), tauri = path.join(desktop, 'src-tauri');
@@ -58,7 +59,7 @@ function npmCli() {
   if (!result) throw new Error('The active Node toolchain does not contain npm-cli.js.');
   return result;
 }
-export function tauriOverride(base, { platform, stage, runtime, stockpile, icon, candidate }) {
+export function tauriOverride(base, { platform, stage, runtime, stockpile, icon, candidate, fullRuntime = Boolean(runtime) }) {
   const resources = Object.fromEntries(Object.keys(base.bundle.resources).map((key) => [key, null]));
   for (const [key, destination] of Object.entries(base.bundle.resources)) {
     if (key.includes('/bin/public-beta') || key.includes('/bin/protected') || destination.startsWith('bin/viewer-backend') || /stockpile_server\.exe|litematica_thumbnail\.dll/.test(key)) continue;
@@ -66,10 +67,14 @@ export function tauriOverride(base, { platform, stage, runtime, stockpile, icon,
   }
   resources[stage] = 'bin/viewer-backend';
   if (runtime) resources[runtime] = 'bin/viewer-backend/protected';
-  resources[path.join(root, 'data/mc26/26.3')] = 'data/mc26/26.3';
+  if (fullRuntime) {
+    for (const name of ['AMICE-APACHE-2.0.txt', 'PROTECTED-MODULE.txt']) resources[path.join(root, 'licenses', name)] = `licenses/${name}`;
+  }
+  const defaultData = path.join(root, 'pack-in/game-data/default');
+  if (fs.existsSync(path.join(defaultData, 'manifest.json'))) resources[defaultData] = 'pack-in/game-data/default';
   resources[stockpile] = `bin/stockpile-server/${platform.stockpile}/stockpile_server${platform.suffix}`;
   if (platform.os === 'win32') resources[path.join(root, 'tools/windows-thumbnail-provider/target/release/litematica_thumbnail.dll')] = 'litematica_thumbnail.dll';
-  return { bundle: { targets: platform.bundles.split(','), resources, ...(platform.os !== 'win32' ? { icon: platform.os === 'darwin' ? [path.join(path.dirname(icon), 'icon.png'), icon] : [icon], windows: null } : {}), ...(platform.os === 'linux' ? { linux: { deb: { depends: [...new Set([...(base.bundle.linux?.deb?.depends ?? []), 'libvulkan1', 'libdbus-1-3', 'libc6 (>= 2.39)'])] } } } : {}), ...(candidate ? { createUpdaterArtifacts: false } : {}) } };
+  return { bundle: { targets: platform.bundles.split(','), resources, ...(platform.os !== 'win32' ? { icon: platform.os === 'darwin' ? [path.join(path.dirname(icon), 'icon.png'), icon] : [icon], windows: null } : {}), ...(platform.os === 'darwin' && fullRuntime ? { macOS: { frameworks: [path.join(tauri, 'target/platform-frameworks/libMoltenVK.dylib')] } } : {}), ...(platform.os === 'linux' ? { linux: { deb: { depends: [...new Set([...(base.bundle.linux?.deb?.depends ?? []), 'libvulkan1', 'libdbus-1-3', 'libc6 (>= 2.39)'])] } } } : {}), createUpdaterArtifacts: Boolean(runtime && !candidate) } };
 }
 export async function stageRuntimeResources(runtime, target, platform) {
   if (platform.os !== 'win32' || path.parse(runtime).root.toLowerCase() === path.parse(tauri).root.toLowerCase()) return runtime;
@@ -95,7 +100,9 @@ export async function stageStockpileResource(source, target, platform, resourceR
   if (await hash(staged) !== sourceHash) throw new Error('The cross-drive stockpile resource staging differs from its real Cargo output.');
   return staged;
 }
-async function prepareAssets() {
+async function prepareAssets(optional = false) {
+  if (fs.existsSync(path.join(root, 'pack-in/game-data/default/manifest.json'))) return;
+  if (optional && !fs.existsSync(path.join(root, 'pack-in/minecraft-runtime-26.3.zip'))) return;
   const archive = path.join(root, 'pack-in/minecraft-runtime-26.3.zip');
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'pack-in/minecraft-runtime-26.3.manifest.json'), 'utf8'));
   if (manifest.schema !== 'nova.minecraft-runtime-resources.v1' || manifest.java_class_entries !== 0 || manifest.executable_entries !== 0 || await hash(archive) !== manifest.archive_sha256) throw new Error('Bundled runtime resource identity differs.');
@@ -135,7 +142,7 @@ export function iconPng(outputDirectory) {
 }
 
 async function stageBackends(target, platform, identity, sha, directory, cargo, helperInputId, helperSourceSha) {
-  const names = ['litematica_core', 'litematica_native_viewer', 'nova-render-service', 'nova-build-worker'].map((name) => name + platform.suffix);
+  const names = (identity.runtimeKind === 'community' ? ['litematica_core', 'litematica_native_viewer'] : ['litematica_core', 'litematica_native_viewer', 'nova-render-service', 'nova-build-worker']).map((name) => name + platform.suffix);
   fs.mkdirSync(directory, { recursive: true });
   if (fs.readdirSync(directory).some((name) => ![...names, 'backend-deployment.json'].includes(name))) throw new Error('Unexpected file in the platform backend staging directory.');
   const artifacts = {};
@@ -146,7 +153,7 @@ async function stageBackends(target, platform, identity, sha, directory, cargo, 
     if (platform.os !== 'win32') fs.chmodSync(destination, 0o755);
     artifacts[name] = { bytes: fs.statSync(destination).size, sha256: await hash(destination) };
   }
-  const deployment = JSON.stringify({ schema: 'lba.backend.deployment.v1', gitSha: sha, helperSourceSha, helperInputId, profile: 'release', runtimeKind: identity.developmentDescriptor ? 'development' : 'production', runtimeBuildId: identity.buildId, targetTriple: target, artifacts }, null, 2);
+  const deployment = JSON.stringify({ schema: 'lba.backend.deployment.v1', gitSha: sha, helperSourceSha, helperInputId, profile: 'release', runtimeKind: identity.runtimeKind || (identity.developmentDescriptor ? 'development' : 'production'), runtimeBuildId: identity.buildId, targetTriple: target, artifacts }, null, 2);
   const manifest = path.join(directory, 'backend-deployment.json');
   if (!fs.existsSync(manifest) || fs.readFileSync(manifest, 'utf8') !== deployment) fs.writeFileSync(manifest, deployment);
 }
@@ -196,38 +203,39 @@ function archiveMacApplication(cargoTarget) {
 export async function build(args = process.argv.slice(2)) {
   const targetIndex = args.indexOf('--target');
   const target = targetIndex >= 0 ? args[targetIndex + 1] : nativeTarget(), platform = platformFor(target);
-  const checkOnly = args.includes('--check'), candidate = args.includes('--candidate'), development = args.includes('--development');
+  const checkOnly = args.includes('--check'), candidate = args.includes('--candidate'), development = args.includes('--development'), compileOnly = args.includes('--compile-only');
   const take = name => { const index = args.indexOf(name); return index < 0 ? undefined : args[index + 1]; };
   const source = runtimeSource(take('--runtime-source') || runtimeSource());
+  const community = source === 'community';
   const privateSourceDir = take('--private-source') || process.env.NOVA_PRIVATE_SOURCE_DIR;
-  if (!development && (source === 'local' || process.env.NOVA_DEVELOPMENT_RUNTIME_JSON || process.env.NOVA_DEVELOPMENT_MODULE_PATH)) throw new Error('A local Development Runtime is forbidden in formal candidate/release packaging.');
+  if (!community && !development && (source === 'local' || process.env.NOVA_DEVELOPMENT_RUNTIME_JSON || process.env.NOVA_DEVELOPMENT_MODULE_PATH)) throw new Error('A local Development Runtime is forbidden in formal candidate/release packaging.');
   const valueIndexes = ['--target','--runtime-source','--private-source'].map(name => args.indexOf(name)).filter(index => index >= 0).map(index => index + 1);
   const reuseExisting = args.includes('--skip-prepare');
-  const devArguments = args.filter((value, index) => !['--development', '--prepare', '--check', '--candidate', '--target', '--runtime-source', '--private-source', '--skip-prepare', '--'].includes(value) && !valueIndexes.includes(index));
-  if (development && platform.os === 'win32' && !checkOnly) {
+  const devArguments = args.filter((value, index) => !['--development', '--prepare', '--check', '--candidate', '--compile-only', '--target', '--runtime-source', '--private-source', '--skip-prepare', '--'].includes(value) && !valueIndexes.includes(index));
+  if (development && platform.os === 'win32' && !checkOnly && !compileOnly) {
     run('pwsh', ['-NoProfile', '-File', path.join(root, 'bin/dev-win.ps1'), '--runtime-source', source, ...(privateSourceDir ? ['--private-source', privateSourceDir] : []), ...(args.includes('--prepare') ? ['--prepare'] : []), ...(reuseExisting ? ['--skip-prepare'] : []), ...devArguments]);
     return;
   }
   const sha = output('git', ['rev-parse', '--verify', 'HEAD']);
-  validateRef({ branch: output('git', ['branch', '--show-current']), sha, development });
+  validateRef({ branch: output('git', ['branch', '--show-current']), sha, development, community });
   validateSource(root);
-  const runtime = source === 'local'
+  const runtime = community ? null : source === 'local'
     ? await acquireLocalDevelopmentRuntime(root, target, { privateSourceDir, checkOnly, reuseExisting: args.includes('--skip-prepare') })
     : path.resolve(development && !checkOnly ? await ensureDevelopmentRuntime(root, target, process.env.NOVA_RUNTIME_PACKAGE_DIR) : process.env.NOVA_RUNTIME_PACKAGE_DIR || path.join(root, development ? 'bin/viewer-backend/protected' : platform.os === 'win32' ? 'bin/protected' : `bin/runtime/${target}`));
-  const identity = source === 'local' ? await validateDevelopmentPackage(runtime, platform.module, { target }) : await validatePackage(runtime, platform.module, { target, release: !development });
+  const identity = community ? communityIdentity(target) : source === 'local' ? await validateDevelopmentPackage(runtime, platform.module, { target }) : await validatePackage(runtime, platform.module, { target, release: !development });
   const base = JSON.parse(fs.readFileSync(path.join(tauri, 'tauri.conf.json'), 'utf8'));
   const helperInputId = await helperInputIdentity(root, identity, target);
   if (output('rustc', ['-vV']).split('\n').find((line) => line.startsWith('host: ')) !== `host: ${target}`) throw new Error('The active Rust toolchain is not native to this target.');
   if (checkOnly) { console.log(`Platform build inputs verified: target=${target} source=${sha}; no build started.`); return; }
-  if (!development) run('git', ['diff', '--quiet', 'HEAD', '--']);
+  if (!development && !community) run('git', ['diff', '--quiet', 'HEAD', '--']);
   if (args.includes('--preflight')) {
     if (platform.os !== 'darwin') throw new Error('The concentrated native preflight is macOS-only.');
     const { preflightMacosPublic } = await import('./preflight-macos-public.mjs');
     preflightMacosPublic({ target });
     return;
   }
-  if (!development && !candidate && base.bundle.createUpdaterArtifacts && !process.env.TAURI_SIGNING_PRIVATE_KEY) throw new Error('The updater signing key is missing; use --candidate only for an unpublished candidate.');
-  const stage = path.join(root, '.tmp/ci-backends', target);
+  if (!community && !development && !candidate && !compileOnly && !process.env.TAURI_SIGNING_PRIVATE_KEY) throw new Error('The updater signing key is missing; use --candidate only for an unpublished candidate.');
+  const stage = path.join(root, '.tmp/ci-backends', community ? 'community' : '', target);
   let helperSourceSha = sha;
   let previousDeployment = null;
   if (fs.existsSync(path.join(stage, 'backend-deployment.json'))) {
@@ -235,11 +243,18 @@ export async function build(args = process.argv.slice(2)) {
     catch (error) { if (reuseExisting) throw error; /* Changed inputs go through Cargo's normal incremental build. */ }
   }
   if (reuseExisting && !previousDeployment) throw new Error('No compatible existing helper stage is available; run normal development preparation first.');
-  Object.assign(process.env, { NOVA_RUNTIME_SOURCE: source, NOVA_RUNTIME_PACKAGE_DIR: runtime, NOVA_PUBLIC_HELPER_INPUT_ID: helperInputId, LBA_BUILD_GIT_SHA: helperSourceSha, CARGO_PROFILE_RELEASE_STRIP: 'symbols', CARGO_PROFILE_RELEASE_DEBUG: '0' });
-  if (source === 'local') {
+  Object.assign(process.env, { NOVA_RUNTIME_SOURCE: source, NOVA_PUBLIC_HELPER_INPUT_ID: helperInputId, LBA_BUILD_GIT_SHA: helperSourceSha, CARGO_PROFILE_RELEASE_STRIP: 'symbols', CARGO_PROFILE_RELEASE_DEBUG: '0' });
+  if (community) {
+    process.env.NOVA_COMMUNITY_BUILD = '1';
+    for (const name of ['NOVA_RUNTIME_PACKAGE_DIR', 'NOVA_PRIVATE_SOURCE_DIR', 'NOVA_DEVELOPMENT_RUNTIME_JSON', 'NOVA_DEVELOPMENT_MODULE_PATH', 'NOVA_PROTECTED_BUILD_ID', 'NOVA_PROTECTED_MANIFEST_PUBLIC_KEY', 'NOVA_PROTECTED_ENDPOINT', 'NOVA_PROTECTED_RUNTIME_COMPATIBILITY', 'NOVA_PROTECTED_MODULE_PATH', 'NOVA_PROTECTED_TICKET_PATH']) delete process.env[name];
+  } else if (source === 'local') {
+    delete process.env.NOVA_COMMUNITY_BUILD;
+    process.env.NOVA_RUNTIME_PACKAGE_DIR = runtime;
     Object.assign(process.env, { NOVA_DEVELOPMENT_RUNTIME_JSON: JSON.stringify(identity.developmentDescriptor), NOVA_DEVELOPMENT_MODULE_PATH: identity.modulePath });
     for (const name of ['NOVA_PROTECTED_BUILD_ID','NOVA_PROTECTED_MANIFEST_PUBLIC_KEY','NOVA_PROTECTED_ENDPOINT','NOVA_PROTECTED_RUNTIME_COMPATIBILITY']) delete process.env[name];
   } else {
+    delete process.env.NOVA_COMMUNITY_BUILD;
+    process.env.NOVA_RUNTIME_PACKAGE_DIR = runtime;
     Object.assign(process.env, { NOVA_PROTECTED_BUILD_ID: identity.buildId, NOVA_PROTECTED_MANIFEST_PUBLIC_KEY: identity.manifestPublicKey, NOVA_PROTECTED_ENDPOINT: identity.endpoint, NOVA_PROTECTED_RUNTIME_COMPATIBILITY: JSON.stringify(identity.signedCompatibility) });
     delete process.env.NOVA_DEVELOPMENT_RUNTIME_JSON; delete process.env.NOVA_DEVELOPMENT_MODULE_PATH;
   }
@@ -249,18 +264,19 @@ export async function build(args = process.argv.slice(2)) {
   // Cargo retains the crate-specific profiles/features and only reuses matching fingerprints.
   if (platform.os === 'darwin') process.env.CARGO_TARGET_DIR = cargo.host;
   const npm = npmCli();
-  if (!development || !fs.existsSync(path.join(desktop, 'node_modules'))) run(process.execPath, [npm, 'ci'], { cwd: desktop });
+  if ((!development && !community) || !fs.existsSync(path.join(desktop, 'node_modules'))) run(process.execPath, [npm, 'ci'], { cwd: desktop });
   if (platform.os === 'win32') {
-    run('pwsh', ['-NoProfile', '-File', path.join(desktop, 'scripts/prepare-protected-backend.ps1'), '-RepoRoot', root, ...(development ? ['-Development'] : [])]);
+    run('pwsh', ['-NoProfile', '-File', path.join(desktop, 'scripts/prepare-protected-backend.ps1'), '-RepoRoot', root, '-RuntimeSource', source, ...(development ? ['-Development'] : [])]);
     helperSourceSha = JSON.parse(fs.readFileSync(path.join(root, 'bin/public-beta/backend-deployment.json'), 'utf8')).helperSourceSha;
   }
   else if (!reuseExisting) {
-    await prepareAssets();
+    await prepareAssets(development || community || compileOnly);
     run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/viewer-core/Cargo.toml', '--target-dir', cargo.core, '--no-default-features', '--features', source === 'local' ? 'public-beta,development-runtime' : 'public-beta', '--bin', 'litematica_core', '--bin', 'litematica_native_viewer', '--bin', 'stockpile_server']);
-    run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/nova-protected-loader/Cargo.toml', '--target-dir', cargo.loader, '--bins', ...(source === 'local' ? ['--features','development-runtime'] : [])]);
+    prepareDefaultGameData(path.join(cargo.core, 'release', `litematica_core${platform.suffix}`), { optional: development || community || compileOnly });
+    if (!community) run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/nova-protected-loader/Cargo.toml', '--target-dir', cargo.loader, '--bins', ...(source === 'local' ? ['--features','development-runtime'] : [])]);
   }
   if (!reuseExisting) await stageBackends(target, platform, identity, sha, stage, cargo, helperInputId, helperSourceSha);
-  let resourceRuntime = source === 'local' ? null : await stageRuntimeResources(runtime, target, platform);
+  let resourceRuntime = community || source === 'local' ? null : await stageRuntimeResources(runtime, target, platform);
   if (development) {
     // Match Host get_root(): packaged debug resources are preferred, with the
     // workspace backend as its normal fallback. Neither path uses tracked
@@ -268,17 +284,17 @@ export async function build(args = process.argv.slice(2)) {
     const backend = path.join(root, 'bin/viewer-backend');
     const protectedDirectory = path.join(backend, 'protected');
     fs.mkdirSync(backend, { recursive: true });
-    if (source !== 'local') fs.mkdirSync(protectedDirectory, { recursive: true });
+    if (source === 'prebuilt') fs.mkdirSync(protectedDirectory, { recursive: true });
     for (const [sourceDirectory, destinationDirectory, names] of [
       [stage, backend, fs.readdirSync(stage)],
-      ...(source === 'local' ? [] : [[runtime, protectedDirectory, ['protected-build.json', 'runtime-compatibility.json', identity.manifestFile, identity.ciphertextFile]]]),
+      ...(source !== 'prebuilt' ? [] : [[runtime, protectedDirectory, ['protected-build.json', 'runtime-compatibility.json', identity.manifestFile, identity.ciphertextFile]]]),
     ]) {
       for (const name of names) {
         const source = path.join(sourceDirectory, name), destination = path.join(destinationDirectory, name);
         if (!fs.existsSync(destination) || fs.statSync(source).size !== fs.statSync(destination).size || await hash(source) !== await hash(destination)) fs.copyFileSync(source, destination);
       }
     }
-    resourceRuntime = source === 'local' ? null : protectedDirectory;
+    resourceRuntime = source !== 'prebuilt' ? null : protectedDirectory;
   }
   process.env.NOVA_PUBLIC_BACKEND_DIR = stage;
   const temporary = path.join(root, '.tmp/ci-config', target); fs.mkdirSync(temporary, { recursive: true });
@@ -289,7 +305,16 @@ export async function build(args = process.argv.slice(2)) {
     icon = path.join(temporary, 'icons', platform.os === 'darwin' ? 'icon.icns' : 'icon.png');
   }
   const stockpile = await stageStockpileResource(path.join(cargo.core, 'release', `stockpile_server${platform.suffix}`), target, platform);
-  const config = path.join(temporary, 'tauri.json'); fs.writeFileSync(config, JSON.stringify(tauriOverride(base, { platform, stage, runtime: resourceRuntime, stockpile, icon, candidate }), null, 2));
+  const overlay = tauriOverride(base, { platform, stage, runtime: resourceRuntime, stockpile, icon, candidate: candidate || community || compileOnly, fullRuntime: !community });
+  if (compileOnly) overlay.build = { beforeBuildCommand: 'npm run build' };
+  const config = path.join(temporary, 'tauri.json'); fs.writeFileSync(config, JSON.stringify(overlay, null, 2));
+  if (compileOnly) {
+    process.env.LBA_BUILD_GIT_SHA = sha;
+    process.env.CARGO_TARGET_DIR = cargo.host;
+    run(process.execPath, [npm, 'run', 'tauri', '--', 'build', '--debug', '--no-bundle', '--config', config], { cwd: desktop });
+    console.log(`Community desktop compiled without private components: target=${target} source=${sha} runtime=${source}; no GUI started.`);
+    return;
+  }
   if (development) {
     delete process.env.LBA_BUILD_GIT_SHA;
     process.env.LBA_DATA_ROOT ||= path.join(root, 'data');

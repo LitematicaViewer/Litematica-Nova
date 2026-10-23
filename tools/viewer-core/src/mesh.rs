@@ -132,6 +132,7 @@ pub struct ChunkIndexEntry {
 }
 
 pub struct ChunkSceneIndex {
+    game_data_content_id: String,
     root: crate::nbt::LitematicRoot,
     catalog: VisualCatalog,
     render_info: Vec<BlockRenderInfo>,
@@ -143,6 +144,7 @@ pub struct ChunkSceneIndex {
 
 impl ChunkSceneIndex {
     pub fn load(path: &Path, chunk_size: u32) -> Result<Self> {
+        let game_data_content_id = crate::game_data::active_context()?.content_id;
         let input_read_started_at = Instant::now();
         println!(
             "[TRACE_WALL] stage=input_read event=start path={} chunk_size={}",
@@ -171,6 +173,7 @@ impl ChunkSceneIndex {
         let chunk_counts = scan_chunk_counts(&root, &catalog, chunk_size)?;
         let chunk_entries = sorted_chunk_entries(&chunk_counts);
         Ok(Self {
+            game_data_content_id,
             root,
             catalog,
             render_info,
@@ -180,6 +183,8 @@ impl ChunkSceneIndex {
             chunk_entries,
         })
     }
+
+    pub fn game_data_content_id(&self) -> &str { &self.game_data_content_id }
 
     pub fn metadata(&self) -> &MetadataOutput {
         &self.catalog.metadata

@@ -149,6 +149,7 @@ struct QuickSession {
     source_modified: Option<SystemTime>,
     requested_preload: bool,
     graphics_backend: viewer_launch_contract::GraphicsApiPreference,
+    game_data_id: Option<String>,
     pending_click_epoch_ms: Option<u64>,
     next_command: u64,
     next_status: u64,
@@ -187,6 +188,8 @@ impl QuickPreviewHost {
         let directory = self.data_root.join("runtime").join("quick-preview").join(&id);
         let session_directory = directory.join("session");
         fs::create_dir_all(&session_directory).map_err(|error| error.to_string())?;
+        let game_data = crate::game_data::resolve_context(&crate::current_user_config_dir()?.join("game-data"),
+            &crate::get_root().join("pack-in/game-data/default")).ok();
         let backend = ViewerBackendIdentity::capture(&self.viewer_exe)?;
         let launch = ViewerLaunchContract::new(id.clone(), self.data_root.clone(), ViewerContent::default(), None,
             ViewerTask::QuickGpuContext(viewer_launch_contract::QuickGpuContextTask { host: host_window.clone(), graphics_backend }))?;
@@ -200,6 +203,9 @@ impl QuickPreviewHost {
         spec.args.push(contract.command_arg().into());
         spec.environment = vec![("LITEMATICA_NOVA_VIEWER_SESSION_DIRECTORY".into(), session_directory.as_os_str().to_owned()),
             ("LITEMATICA_NOVA_VIEWER_SESSION_ID".into(), id.clone().into())];
+        if let Some(context) = &game_data {
+            spec.environment.push(("NOVA_GAME_DATA_SNAPSHOT".into(), serde_json::to_string(context).map_err(|error| error.to_string())?.into()));
+        }
         spec.current_dir = self.viewer_exe.parent().map(Path::to_path_buf);
         spec.stdout = OutputTarget::File { path: stdout.clone(), append: false };
         spec.stderr = OutputTarget::File { path: stderr.clone(), append: false };
@@ -207,7 +213,7 @@ impl QuickPreviewHost {
         let view = QuickPreviewView { preview_id: id.clone(), source_path: self.data_root.clone(), render_mode: "fast_experimental", state: "starting",
             presentation: QuickPresentationIntent::default(), presentation_revision: 0, visible: false, error: None, preload: false, resource: None };
         *slot = Some(QuickSession { view, session_id: id.clone(), child, contract, backend, directory: session_directory.clone(), stdout, stderr,
-            source_bytes: 0, source_modified: None, requested_preload: false, graphics_backend, pending_click_epoch_ms: None, next_command: 1, next_status: 0, next_event: 1,
+            source_bytes: 0, source_modified: None, requested_preload: false, graphics_backend, game_data_id: game_data.map(|context| context.content_id), pending_click_epoch_ms: None, next_command: 1, next_status: 0, next_event: 1,
             pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window, launch_accepted: false,
             gpu_context_only: true, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
             resource_report_path: session_directory.join("resource-report.json"), resource_decision_path: session_directory.join("resource-decision.json"), resource_decided: false });
@@ -221,6 +227,9 @@ impl QuickPreviewHost {
         if !meta.is_file() || !source.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("litematic")) {
             return Err("快速预览需要现有的 .litematic 文件。".to_owned());
         }
+        let game_data = crate::game_data::resolve_context(&crate::current_user_config_dir()?.join("game-data"),
+            &crate::get_root().join("pack-in/game-data/default")).map_err(|error| format!("{error:#}"))?;
+        let content = ViewerContent { resource_packs: vec![game_data.resource_jar.clone()], ..Default::default() };
         self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.take();
         let mut slot = self.session.lock().map_err(|_| "快速预览状态锁异常".to_owned())?;
         if let Some(session) = slot.as_mut() {
@@ -229,14 +238,14 @@ impl QuickPreviewHost {
                 session.view.state = "failed";
                 session.view.error = Some(error);
             }
-            if session.graphics_backend == input.graphics_backend && session.host_window == host_window && session.view.source_path == source && session.source_bytes == meta.len()
+            if session.game_data_id.as_deref() == Some(game_data.content_id.as_str()) && session.graphics_backend == input.graphics_backend && session.host_window == host_window && session.view.source_path == source && session.source_bytes == meta.len()
                 && session.source_modified == meta.modified().ok() && session.view.preload == input.preload && matches!(session.view.state, "starting" | "ready") {
                 session.pending_click_epoch_ms = input.click_started_at_epoch_ms;
                 return Ok(session.view.clone());
             }
             let reusable_gpu = session.gpu_ready_observed_epoch_ms.is_some()
                 && matches!(self.supervisor.wait_for_exit(&session.child, Duration::ZERO), WaitOutcome::TimedOut);
-            if session.graphics_backend == input.graphics_backend && session.host_window == host_window && (reusable_gpu && matches!(session.view.state, "starting" | "ready" | "closed")
+            if session.game_data_id.as_deref() == Some(game_data.content_id.as_str()) && session.graphics_backend == input.graphics_backend && session.host_window == host_window && (reusable_gpu && matches!(session.view.state, "starting" | "ready" | "closed")
                 || session.gpu_context_only && session.view.state == "starting") {
                 if session.view.state == "starting" && !session.gpu_context_only {
                     publish_resource_decision(&session.resource_decision_path, &session.session_id, QuickResourceAction::Cancel, false)?;
@@ -246,7 +255,7 @@ impl QuickPreviewHost {
                 let replacement = session.directory.join(format!("replace-{generation:020}.launch.json"));
                 let resource_report_path = session.directory.join(format!("resource-report-{generation:020}.json"));
                 let resource_decision_path = session.directory.join(format!("resource-decision-{generation:020}.json"));
-                let launch = ViewerLaunchContract::new(session.session_id.clone(), source.clone(), ViewerContent::default(), None,
+                let launch = ViewerLaunchContract::new(session.session_id.clone(), source.clone(), content.clone(), None,
                     ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(host_window), graphics_backend: input.graphics_backend, preload: input.preload,
                         resource_report_path: None, resource_decision_path: None }))?;
                 let replacement_contract = ViewerLaunchContractFile::create(replacement.clone(), &launch, &session.backend)?;
@@ -284,7 +293,7 @@ impl QuickPreviewHost {
         let resource_report_path = session_directory.join("resource-report.json");
         let resource_decision_path = session_directory.join("resource-decision.json");
         let backend = ViewerBackendIdentity::capture(&self.viewer_exe)?;
-        let launch = ViewerLaunchContract::new(id.clone(), source.clone(), ViewerContent::default(), None,
+        let launch = ViewerLaunchContract::new(id.clone(), source.clone(), content.clone(), None,
             ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(host_window.clone()), graphics_backend: input.graphics_backend, preload: input.preload,
                 resource_report_path: None, resource_decision_path: None }))?;
         let contract = ViewerLaunchContractFile::create(directory.join("launch.json"), &launch, &backend)?;
@@ -299,6 +308,7 @@ impl QuickPreviewHost {
             ("LITEMATICA_NOVA_VIEWER_SESSION_DIRECTORY".into(), session_directory.as_os_str().to_owned()),
             ("LITEMATICA_NOVA_VIEWER_SESSION_ID".into(), id.clone().into()),
         ];
+        spec.environment.push(("NOVA_GAME_DATA_SNAPSHOT".into(), serde_json::to_string(&game_data).map_err(|error| error.to_string())?.into()));
         if let Some(click) = input.click_started_at_epoch_ms {
             spec.environment.push(("LITEMATICA_NOVA_CLICK_EPOCH_MS".into(), click.to_string().into()));
         }
@@ -309,7 +319,7 @@ impl QuickPreviewHost {
         let view = QuickPreviewView { preview_id: id, source_path: source, render_mode: "fast_experimental", state: "starting",
             presentation: QuickPresentationIntent::default(), presentation_revision: 0, visible: false, error: None, preload: input.preload, resource: None };
         *slot = Some(QuickSession { view: view.clone(), session_id: view.preview_id.clone(), child, contract, backend, directory: session_directory, stdout, stderr,
-            source_bytes: meta.len(), source_modified: meta.modified().ok(), requested_preload: input.preload, graphics_backend: input.graphics_backend, pending_click_epoch_ms: input.click_started_at_epoch_ms, next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(),
+            source_bytes: meta.len(), source_modified: meta.modified().ok(), requested_preload: input.preload, graphics_backend: input.graphics_backend, game_data_id: Some(game_data.content_id), pending_click_epoch_ms: input.click_started_at_epoch_ms, next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(),
             launch_accepted: false, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None, resource_report_path, resource_decision_path, resource_decided: false, capture_errors: BTreeMap::new(), host_window });
         Ok(view)
     }
@@ -785,7 +795,7 @@ mod tests {
         let mut initial = view(QuickPresentationIntent::default()); initial.source_path = source.clone(); initial.state = "starting"; initial.presentation_revision = 0;
         let host = QuickPreviewHost::new(Arc::clone(&supervisor), command, directory.0.clone());
         *host.session.lock().unwrap() = Some(QuickSession { view: initial, session_id: "quick-one".into(), child: child.clone(), contract, backend, directory: directory.0.clone(), stdout, stderr,
-            source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, graphics_backend: Default::default(), pending_click_epoch_ms: Some(41),
+            source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, graphics_backend: Default::default(), game_data_id: crate::game_data::resolve_context(&crate::current_user_config_dir().unwrap().join("game-data"), &crate::get_root().join("pack-in/game-data/default")).ok().map(|context| context.content_id), pending_click_epoch_ms: Some(41),
             next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window: window.clone(),
             launch_accepted: true, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
             resource_report_path: directory.0.join("resource-report.json"), resource_decision_path: directory.0.join("resource-decision.json"), resource_decided: false });
@@ -891,7 +901,7 @@ mod tests {
         let mut initial = view(QuickPresentationIntent::default()); initial.source_path = source.clone();
         let host = QuickPreviewHost::new(Arc::clone(&supervisor), command, directory.0.clone());
         *host.session.lock().unwrap() = Some(QuickSession { view: initial, session_id: "quick-one".into(), child: child.clone(), contract, backend, directory: directory.0.clone(), stdout, stderr,
-            source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, graphics_backend: Default::default(), pending_click_epoch_ms: None,
+            source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, graphics_backend: Default::default(), game_data_id: crate::game_data::resolve_context(&crate::current_user_config_dir().unwrap().join("game-data"), &crate::get_root().join("pack-in/game-data/default")).ok().map(|context| context.content_id), pending_click_epoch_ms: None,
             next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window: window.clone(),
             launch_accepted: true, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
             resource_report_path: directory.0.join("resource-report.json"), resource_decision_path: directory.0.join("resource-decision.json"), resource_decided: false });

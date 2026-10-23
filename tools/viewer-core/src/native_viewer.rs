@@ -1310,7 +1310,7 @@ fn resolve_scene_palette_colors(
     let cached_entries = block_color_cache().len();
     println!("[VIEWER_COLOR] vertex_color_enabled=true");
     println!("[VIEWER_COLOR] shading_mode=vertex_color_flat");
-    let color_source = "data/blockColorCache.json+material_fallback";
+    let color_source = "selected_game_data+fast_material_semantics";
     println!(
         "[VIEWER_COLOR] display_mode={} color_source={} preview_chain={} native_chain={} palette_entries={} cache_entries={} cache_hits={} fallback_material_hits={} default_gray_hits={} palette_hits={} palette_misses={}",
         display_mode.label(),
@@ -1387,6 +1387,8 @@ struct NativePreviewCacheManifestChunk {
 
 #[derive(Serialize, Deserialize)]
 struct NativePreviewCacheManifest {
+    #[serde(default)]
+    game_data_content_id: Option<String>,
     format: String,
     color_chain: String,
     metadata: MetadataOutput,
@@ -6635,6 +6637,7 @@ impl ViewerState {
         };
 
         let payload = NativePreviewCacheManifest {
+            game_data_content_id: Some(scene_index.game_data_content_id().to_owned()),
             format: "native_preview_cache_manifest_v3".to_string(),
             color_chain: "shared_native_cache".to_string(),
             metadata,
@@ -9208,6 +9211,10 @@ fn resolve_palette_color(
     display_mode: ViewerDisplayMode,
 ) -> ResolvedBlockColor {
 
+    let selected_properties = properties.cloned().unwrap_or_default();
+    if let Ok(Some(rgb)) = crate::block_database::selected_palette_color(block_id, &selected_properties) {
+        return ResolvedBlockColor { rgb, normalized_key: block_id.to_owned(), matched_key: Some("selected_game_data_texture".into()), used_default: false };
+    }
     let stripped_state = block_id.split('[').next().unwrap_or(block_id);
     let normalized_key = stripped_state
         .split(':')
@@ -9267,13 +9274,8 @@ fn block_state_color_key(block_id: &str, properties: &BTreeMap<String, String>) 
 
 fn block_color_cache() -> &'static HashMap<String, [f32; 3]> {
     BLOCK_COLOR_CACHE.get_or_init(|| {
-        let Ok(root) = runtime_paths::data_root() else {
-            println!(
-                "[VIEWER_COLOR] color_source=missing_data_root preview_chain=material_fallback native_chain=palette_vertex_color"
-            );
-            return HashMap::new();
-        };
-        let cache_path = root.join("blockColorCache.json");
+        let Ok(context) = crate::game_data::active_context() else { return HashMap::new(); };
+        let cache_path = context.root.join("derived/block-colors.json");
         let payload = match std::fs::read_to_string(&cache_path) {
             Ok(payload) => payload,
             Err(error) => {
@@ -9294,7 +9296,7 @@ fn block_color_cache() -> &'static HashMap<String, [f32; 3]> {
             HashMap::new()
         });
         println!(
-            "[VIEWER_COLOR] color_source=data/blockColorCache.json+material_fallback cache_entries={} path={}",
+            "[VIEWER_COLOR] color_source=selected_game_data+fast_material_semantics cache_entries={} path={}",
             cache.len(),
             cache_path.display()
         );
@@ -10070,6 +10072,7 @@ fn write_native_cache_manifest(
 ) -> Result<usize> {
     manifest_chunks.sort_by_key(|chunk| (chunk.cy, chunk.cx, chunk.cz));
     let payload = NativePreviewCacheManifest {
+        game_data_content_id: Some(crate::game_data::active_context()?.content_id),
         format: format.to_string(),
         color_chain: color_chain.to_string(),
         metadata,
