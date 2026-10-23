@@ -455,6 +455,17 @@ impl QuickPreviewHost {
         Ok(())
     }
 
+    pub(crate) fn set_scene_view(&self, source: &Path, controls: viewer_launch_contract::SceneViewControls) -> Result<bool, String> {
+        controls.validate()?;
+        let mut slot = self.session.lock().map_err(|error| error.to_string())?;
+        let Some(session) = slot.as_mut().filter(|session| session.view.source_path == source && session.view.state == "ready") else { return Ok(false); };
+        session.refresh(&self.supervisor)?;
+        let sequence = session.next_command;
+        session.publish_command(&ViewerSessionCommand::set_view(session.session_id.clone(), sequence, controls)?)?;
+        session.next_command += 1;
+        Ok(true)
+    }
+
     pub(crate) fn capture_frame(&self, id: &str) -> Result<(PathBuf, PathBuf), String> {
         let (source, output, sequence) = {
             let mut slot = self.session.lock().map_err(|error| error.to_string())?;

@@ -147,6 +147,7 @@ const VIEWER_SHADER: &str = r#"
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     camera_position: vec4<f32>,
+    layer_range: vec4<f32>,
 };
 
 struct LightingUniform {
@@ -267,6 +268,7 @@ fn lba_luminance(color: vec3<f32>) -> f32 {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    if (camera.layer_range.z > 0.5 && (input.world_position.y < camera.layer_range.x - 0.0001 || input.world_position.y > camera.layer_range.y + 0.0001)) { discard; }
     var color = input.color;
     var sampled_base_rgb = color.rgb;
     if (input.emissive_tag < -0.5) {
@@ -568,6 +570,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 const SHADOW_DEPTH_SHADER: &str = r#"
 struct CameraUniform {
     view_proj: mat4x4<f32>,
+    camera_position: vec4<f32>,
+    layer_range: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -582,9 +586,17 @@ struct VertexInput {
     @location(5) emissive_tag: f32,
 };
 
+struct ShadowOutput { @builtin(position) position: vec4<f32>, @location(0) world_y: f32, };
 @vertex
-fn vs_main(input: VertexInput) -> @builtin(position) vec4<f32> {
-    return camera.view_proj * vec4<f32>(input.position, 1.0);
+fn vs_main(input: VertexInput) -> ShadowOutput {
+    var output: ShadowOutput;
+    output.position = camera.view_proj * vec4<f32>(input.position, 1.0);
+    output.world_y = input.position.y;
+    return output;
+}
+@fragment
+fn fs_main(input: ShadowOutput) {
+    if (camera.layer_range.z > 0.5 && (input.world_y < camera.layer_range.x - 0.0001 || input.world_y > camera.layer_range.y + 0.0001)) { discard; }
 }
 "#;
 
@@ -662,6 +674,7 @@ fn default_vertex_normal() -> [f32; 3] {
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     camera_position: [f32; 4],
+    layer_range: [f32; 4],
 }
 
 impl CameraUniform {
@@ -669,6 +682,7 @@ impl CameraUniform {
         Self {
             view_proj: matrix.to_cols_array_2d(),
             camera_position: [eye.x, eye.y, eye.z, 0.0],
+            layer_range: [0.0; 4],
         }
     }
 }
@@ -3335,8 +3349,23 @@ impl ChunkResidencyPlan {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn free_camera_macos_key(code: u32) -> Option<KeyCode> {
+    match code {
+        13 => Some(KeyCode::KeyW), 1 => Some(KeyCode::KeyS),
+        0 => Some(KeyCode::KeyA), 2 => Some(KeyCode::KeyD),
+        14 => Some(KeyCode::KeyE), 12 => Some(KeyCode::KeyQ),
+        49 => Some(KeyCode::Space), 59 => Some(KeyCode::ControlLeft),
+        62 => Some(KeyCode::ControlRight), _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct OrbitCamera {
+    free_mode: bool,
+    movement_keys: [bool; 9],
+    movement_updated: Instant,
+    movement_speed: f32,
     target: Vec3,
     yaw: f32,
     pitch: f32,
@@ -3370,6 +3399,10 @@ impl OrbitCamera {
         };
         let radius = bounds.radius.max(2.0);
         Self {
+            free_mode: false,
+            movement_keys: [false; 9],
+            movement_updated: Instant::now(),
+            movement_speed: 12.0,
             target: bounds.center,
             yaw: 0.8,
             pitch: 0.6,
@@ -3384,7 +3417,9 @@ impl OrbitCamera {
     }
 
     fn reset(&mut self, bounds: SceneBounds, width: u32, height: u32) {
+        let mode = self.free_mode; let speed = self.movement_speed;
         *self = Self::from_bounds(bounds, width, height);
+        self.free_mode = mode; self.movement_speed = speed;
     }
 
     fn update_aspect(&mut self, width: u32, height: u32) {
@@ -3427,8 +3462,10 @@ impl OrbitCamera {
     }
 
     fn orbit_around_target(&mut self, delta: Vec2) {
+        let eye = self.eye();
         self.yaw -= delta.x * 0.01;
         self.pitch = (self.pitch + delta.y * 0.01).clamp(-1.54, 1.54);
+        if self.free_mode { self.target = eye - Self::offset_from_angles(self.yaw, self.pitch, self.distance); }
     }
 
     fn pan(&mut self, delta: Vec2) {
@@ -3440,7 +3477,47 @@ impl OrbitCamera {
         self.target += (-right * delta.x + up * delta.y) * scale;
     }
 
+    fn set_free_mode(&mut self, enabled: bool) {
+        self.free_mode = enabled;
+        self.clear_movement();
+    }
+
+    fn clear_movement(&mut self) {
+        self.movement_keys = [false; 9];
+        self.movement_updated = Instant::now();
+    }
+
+    fn movement_key(&mut self, key: KeyCode, pressed: bool) {
+        let index = match key {
+            KeyCode::KeyW => 0, KeyCode::KeyS => 1,
+            KeyCode::KeyA => 2, KeyCode::KeyD => 3,
+            KeyCode::KeyE => 4, KeyCode::KeyQ => 5,
+            KeyCode::Space => 6, KeyCode::ControlLeft => 7, KeyCode::ControlRight => 8,
+            _ => return,
+        };
+        if pressed && !self.movement_keys.iter().any(|value| *value) { self.movement_updated = Instant::now(); }
+        self.movement_keys[index] = pressed;
+    }
+
+    fn tick_movement(&mut self) -> bool {
+        let dt = self.movement_updated.elapsed().as_secs_f32().min(0.1);
+        self.movement_updated = Instant::now();
+        if !self.free_mode || !self.movement_keys.iter().any(|pressed| *pressed) { return false; }
+        let axis = |positive: usize, negative: usize| self.movement_keys[positive] as u8 as f32 - self.movement_keys[negative] as u8 as f32;
+        let forward = (self.target - self.eye()).normalize_or_zero();
+        let right = forward.cross(Vec3::Y).normalize_or_zero();
+        let vertical = (self.movement_keys[4] || self.movement_keys[6]) as u8 as f32 - (self.movement_keys[5] || self.movement_keys[7] || self.movement_keys[8]) as u8 as f32;
+        let movement = forward * axis(0, 1) + right * axis(3, 2) + Vec3::Y * vertical;
+        if movement.length_squared() <= f32::EPSILON { return false; }
+        self.target += movement.normalize() * self.movement_speed * dt;
+        true
+    }
+
     fn zoom(&mut self, amount: f32) {
+        if self.free_mode {
+            self.target += (self.target - self.eye()).normalize_or_zero() * amount * self.movement_speed * 0.2;
+            return;
+        }
         if amount.abs() <= f32::EPSILON {
             return;
         }
@@ -3547,6 +3624,7 @@ fn create_shadow_map_resources(
             .unwrap_or(Mat4::IDENTITY)
             .to_cols_array_2d(),
         camera_position: [0.0, 0.0, 0.0, 0.0],
+        layer_range: [0.0; 4],
     };
     let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("native_viewer_shadow_camera"),
@@ -3588,7 +3666,10 @@ fn create_shadow_map_resources(
             entry_point: "vs_main",
             buffers: &[GpuVertex::desc()],
         },
-        fragment: None,
+        fragment: Some(wgpu::FragmentState {
+            module: depth_shader.expect("initial shadow pipeline requires its existing shader"),
+            entry_point: "fs_main", targets: &[],
+        }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
             cull_mode: Some(wgpu::Face::Back),
@@ -5515,6 +5596,7 @@ struct ViewerState {
     render_pipeline_layout: wgpu::PipelineLayout,
     render_shader: wgpu::ShaderModule,
     camera: OrbitCamera,
+    layer_range: [f32; 4],
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     lighting_bind_group: wgpu::BindGroup,
@@ -5967,6 +6049,7 @@ impl ViewerState {
             render_pipeline_layout,
             render_shader: shader,
             camera,
+            layer_range: [0.0; 4],
             camera_buffer,
             camera_bind_group,
             lighting_bind_group,
@@ -6130,6 +6213,7 @@ impl ViewerState {
         self.reap_retired_build_workers();
         prepare_quick_gpu_resources(self.quick_adapter.as_ref().context("Fast session lost its actual selected GPU adapter")?,
             self.chunk_scene_index.as_deref(), None, self.size, self.scene_bounds, args, Some(self.shadow_resources.config.resolution.max(1)))?;
+        self.layer_range = [0.0; 4]; // A replacement source never inherits another projection's slice.
         let lighting = LightingConfig::from_args(args.basic_lighting, args.basic_shadows, args.shadow_debug_view, args.shadow_force_test, self.scene_bounds);
         self.queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&LightingUniform::from_config(lighting)));
         let shadow = lighting.shadow();
@@ -6140,7 +6224,7 @@ impl ViewerState {
                 Some(Arc::clone(&self.shadow_resources.depth_pipeline)));
         } else {
             let camera = CameraUniform { view_proj: shadow.light_camera.map(|camera| camera.view_proj).unwrap_or(Mat4::IDENTITY).to_cols_array_2d(),
-                camera_position: [0.0;4] };
+                camera_position: [0.0;4], layer_range: self.layer_range };
             self.queue.write_buffer(&self.shadow_resources.camera_buffer, 0, bytemuck::bytes_of(&camera));
             self.shadow_resources.config = shadow;
         }
@@ -8507,11 +8591,40 @@ impl ViewerState {
         self.log_camera_viewport_diagnostics("resize", true);
     }
 
+    fn set_layer_range(&mut self, minimum: Option<i32>, maximum: Option<i32>) {
+        let origin = self.chunk_scene_index.as_ref().map_or(0, |index| index.source_min_y()) as f64;
+        self.layer_range = [minimum.map_or(-1.0e30, |value| (value as f64 - origin) as f32),
+            maximum.map_or(1.0e30, |value| (value as f64 + 1.0 - origin) as f32),
+            if minimum.is_some() || maximum.is_some() { 1.0 } else { 0.0 }, 0.0];
+        self.write_camera();
+        let shadow_camera = CameraUniform {
+            view_proj: self.shadow_resources.config.light_camera.map(|camera| camera.view_proj).unwrap_or(Mat4::IDENTITY).to_cols_array_2d(),
+            camera_position: [0.0; 4], layer_range: self.layer_range,
+        };
+        self.queue.write_buffer(&self.shadow_resources.camera_buffer, 0, bytemuck::bytes_of(&shadow_camera));
+    }
+
     fn write_camera(&mut self) {
-        let camera_uniform =
+        let mut camera_uniform =
             CameraUniform::from_matrix_and_eye(self.camera.view_proj_matrix(), self.camera.eye());
+        camera_uniform.layer_range = self.layer_range;
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
+    }
+
+    fn apply_scene_view_controls(&mut self, controls: &viewer_launch_contract::SceneViewControls) -> Result<()> {
+        if controls.apply_layer_range { self.set_layer_range(controls.layer_min_y, controls.layer_max_y); }
+        if let Some(mode) = controls.camera_mode.as_deref() { self.camera.set_free_mode(mode == "free"); }
+        if let Some(speed) = controls.camera_speed { self.camera.movement_speed = speed; }
+        if controls.reset_camera { self.reset_camera(); }
+        self.write_camera();
+        self.mark_residency_dirty();
+        Ok(())
+    }
+
+    fn tick_free_camera(&mut self) -> bool {
+        if !self.camera.tick_movement() { return false; }
+        self.write_camera(); self.mark_residency_dirty(); true
     }
 
     fn process_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
@@ -9630,6 +9743,7 @@ const OVERLAY_SHADER: &str = r#"
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     camera_position: vec4<f32>,
+    layer_range: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 
@@ -10348,16 +10462,20 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             } else { MouseScrollDelta::LineDelta(input.dx as f32, input.dy as f32) };
                             state.process_scroll(delta); quick_redraw.request();
                         }
+                        5 | 6 if free_camera_macos_key(input.code).is_some() => {
+                            state.camera.movement_key(free_camera_macos_key(input.code).unwrap(), input.kind == 5);
+                            quick_redraw.request();
+                        }
                         5 if input.code == 15 => { state.reset_camera(); quick_redraw.request(); }
                         5 if input.code == 53 => { escape = true; }
-                        7 if input.flags & 1 == 0 => { state.drag_mode = None; state.last_cursor_position = None; }
+                        7 if input.flags & 1 == 0 => { state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement(); }
                         _ => {}
                     },
-                    ProducerEvent::ResetInput { .. } => { state.drag_mode = None; state.last_cursor_position = None; }
+                    ProducerEvent::ResetInput { .. } => { state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement(); }
                     ProducerEvent::ViewportResized { .. } => { state.resize(window.inner_size()); quick_redraw.request(); }
                     ProducerEvent::Hidden { .. } => {
                         presentation_mode = PersistentPresentationMode::Hidden;
-                        quick_redraw.hide(); state.drag_mode = None; state.last_cursor_position = None;
+                        quick_redraw.hide(); state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement();
                         publish_viewer_hidden_event(session_watcher.as_mut(), 0, "quick-metal", "popup_close");
                     }
                     ProducerEvent::Displayed { epoch, frame_id, presented_time_seconds, .. } => {
@@ -10376,7 +10494,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
             }
             if escape {
                 viewport.suspend(); presentation_mode = PersistentPresentationMode::Hidden;
-                quick_redraw.hide(); state.drag_mode = None; state.last_cursor_position = None;
+                quick_redraw.hide(); state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement();
                 publish_viewer_hidden_event(session_watcher.as_mut(), 0, "quick-metal", "escape_key");
             }
             if viewport.closed() { event_loop_window_target.exit(); return; }
@@ -10386,6 +10504,19 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                 Event::WindowEvent { window_id: window.id(), event: WindowEvent::RedrawRequested }
             } else { event }
         } else { event };
+        if let Event::WindowEvent { event, window_id } = &event {
+            if *window_id == window.id() {
+                match event {
+                    WindowEvent::KeyboardInput { event, .. } if window.has_focus() => {
+                        if let PhysicalKey::Code(key) = event.physical_key {
+                            state.camera.movement_key(key, event.state == ElementState::Pressed);
+                        }
+                    }
+                    WindowEvent::Focused(false) | WindowEvent::Occluded(true) => state.camera.clear_movement(),
+                    _ => {}
+                }
+            }
+        }
         match event {
             Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
                 WindowEvent::Destroyed => {
@@ -10538,6 +10669,8 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                 _ => {}
             },
             Event::AboutToWait => {
+                if presentation_mode == PersistentPresentationMode::Hidden || quick_occluded { state.camera.clear_movement(); }
+                else if state.tick_free_camera() { quick_redraw.request(); }
                 state.reap_retired_build_workers();
                 if let Some(message) = state.take_quick_gpu_failure() {
                     record_viewer_shutdown("quick_gpu_failure", 1, &message);
@@ -10650,6 +10783,19 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             if let Err(error) = complete_viewer_session_command(watcher, &command, status, legacy_window_hwnd) {
                                 *event_error.lock().expect("quick replacement error mutex") = Some(error.to_string());
                                 event_loop_window_target.exit(); return;
+                            }
+                        } else if command.kind == ViewerSessionCommandKind::SetView {
+                            let result = command.view_controls.as_ref().context("scene view controls missing")
+                                .and_then(|controls| state.apply_scene_view_controls(controls));
+                            match result {
+                                Ok(()) => {
+                                    quick_redraw.request();
+                                    if let Err(error) = watcher.acknowledge(command.sequence) {
+                                        *event_error.lock().expect("scene view error mutex") = Some(error.to_string());
+                                        event_loop_window_target.exit(); return;
+                                    }
+                                }
+                                Err(error) => { let _ = reject_viewer_session_command(watcher, &command, &error, legacy_window_hwnd); }
                             }
                         } else if command.kind == ViewerSessionCommandKind::CaptureFrame {
                             if pending_capture.is_some() {

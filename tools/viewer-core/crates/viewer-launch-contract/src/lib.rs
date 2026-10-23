@@ -15,6 +15,36 @@ pub const VIEWER_SESSION_COMMAND_SCHEMA: &str = "litematica-nova.viewer-session-
 pub const VIEWER_SESSION_STATUS_SCHEMA: &str = "litematica-nova.viewer-session-status.v1";
 pub const VIEWER_SESSION_EVENT_SCHEMA: &str = "litematica-nova.viewer-session-event.v1";
 
+/// Display-only state for a resident scene. No build or resource identity changes.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneViewControls {
+    pub apply_layer_range: bool,
+    pub layer_min_y: Option<i32>,
+    pub layer_max_y: Option<i32>,
+    pub camera_mode: Option<String>,
+    pub camera_speed: Option<f32>,
+    pub reset_camera: bool,
+    pub reload_shader_options: bool,
+    pub shaderpack_root: Option<PathBuf>,
+    pub shaderpack_name: Option<String>,
+}
+impl SceneViewControls {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.layer_min_y.zip(self.layer_max_y).is_some_and(|(a,b)| a > b) {
+            return Err("Layer minimum exceeds maximum".into());
+        }
+        if self.shaderpack_root.is_some() != self.shaderpack_name.is_some() { return Err("Shader pack root and name must be paired".into()); }
+        if self.camera_mode.as_deref().is_some_and(|mode| mode != "orbit" && mode != "free") {
+            return Err("Unknown camera mode".into());
+        }
+        if self.camera_speed.is_some_and(|speed| !speed.is_finite() || speed <= 0.0) {
+            return Err("Camera speed must be finite and positive".into());
+        }
+        Ok(())
+    }
+}
+
 /// A single atomic command published by the desktop application to an already
 /// running Viewer process. Scene replacement still points at the normal,
 /// hash-bound launch contract; presentation commands only mutate the existing
@@ -52,6 +82,8 @@ pub struct ViewerSessionCommand {
     /// Original user action clock for presentation-only end-to-end timing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub click_started_at_epoch_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_controls: Option<SceneViewControls>,
 }
 
 impl ViewerSessionCommand {
@@ -85,6 +117,7 @@ impl ViewerSessionCommand {
             height: None,
             focused: None,
             click_started_at_epoch_ms: None,
+            view_controls: None,
         };
         command.validate()?;
         Ok(command)
@@ -239,6 +272,16 @@ impl ViewerSessionCommand {
             None, None, None, None, None, None)
     }
 
+    pub fn set_view(session_id: String, sequence: u64, controls: SceneViewControls) -> Result<Self, String> {
+        controls.validate()?;
+        let mut command = Self::presentation_command(session_id, sequence,
+            ViewerSessionCommandKind::CaptureFrame, None, None, None, None, None, None)?;
+        command.kind = ViewerSessionCommandKind::SetView;
+        command.view_controls = Some(controls);
+        command.validate()?;
+        Ok(command)
+    }
+
     fn presentation_command(
         session_id: String,
         sequence: u64,
@@ -265,6 +308,7 @@ impl ViewerSessionCommand {
             height,
             focused,
             click_started_at_epoch_ms: None,
+            view_controls: None,
         };
         command.validate()?;
         Ok(command)
@@ -297,7 +341,14 @@ impl ViewerSessionCommand {
         if self.sequence == 0 {
             return Err("Viewer session command sequence must be non-zero".to_owned());
         }
+        if self.view_controls.is_some() && self.kind != ViewerSessionCommandKind::SetView {
+            return Err("viewControls only belongs to set_view".into());
+        }
         match self.kind {
+            ViewerSessionCommandKind::SetView => {
+                self.require_no_payload_fields()?;
+                self.view_controls.as_ref().ok_or("set_view requires viewControls")?.validate()
+            }
             ViewerSessionCommandKind::ReplaceScene => {
                 let launch_contract = self
                     .launch_contract
@@ -403,6 +454,7 @@ pub enum ViewerSessionCommandKind {
     Resize,
     Release,
     CaptureFrame,
+    SetView,
 }
 
 impl ViewerSessionCommandKind {
@@ -416,6 +468,7 @@ impl ViewerSessionCommandKind {
             Self::Resize => "resize",
             Self::Release => "release",
             Self::CaptureFrame => "capture_frame",
+            Self::SetView => "set_view",
         }
     }
 }

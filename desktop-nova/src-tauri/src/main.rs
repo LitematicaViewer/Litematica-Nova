@@ -3402,6 +3402,29 @@ fn application_render_request(
 }
 
 #[tauri::command]
+async fn application_set_scene_view(source_path: PathBuf, display_mode: Option<String>, controls: ::viewer_launch_contract::SceneViewControls,
+    quick: tauri::State<'_, QuickPreviewHost>, facade: tauri::State<'_, RenderFacade>) -> Result<(), String> {
+    controls.validate()?;
+    let source = std::fs::canonicalize(source_path).map_err(|error| error.to_string())?;
+    if display_mode.as_deref().is_none_or(|mode| mode == "fast_experimental") && quick.set_scene_view(&source, controls.clone())? { return Ok(()); }
+    let mode = match display_mode.as_deref() { Some("full") => Some(RenderDisplayMode::Full), Some("standard") => Some(RenderDisplayMode::Standard), None => None, _ => return Err("请先启动快速预览".into()) };
+    facade.set_scene_view(&source, mode, controls).await
+}
+
+#[tauri::command]
+async fn iris_shaderpack_settings(args: Vec<String>, operations: tauri::State<'_, ApplicationOperations>, facade: tauri::State<'_, RenderFacade>) -> Result<serde_json::Value, String> {
+    let saving = args.iter().any(|arg| arg == "--save-json");
+    let operations = operations.inner().clone();
+    let mut value = tauri::async_runtime::spawn_blocking(move || operations.iris_settings(args)).await.map_err(|error| error.to_string())??;
+    if saving && value["requires_scene_reload"].as_bool() != Some(true) {
+        let root = value["root"].as_str().ok_or("Missing shader pack root")?.to_owned();
+        let pack = value["pack"].as_str().ok_or("Missing shader pack name")?.to_owned();
+        value["applied_to_active_viewer"] = serde_json::json!(facade.reload_shader_options(PathBuf::from(root), pack).await?);
+    }
+    Ok(value)
+}
+
+#[tauri::command]
 async fn application_quick_preview_resource_decision(
     window: tauri::WebviewWindow,
     preview_id: String,
@@ -3956,6 +3979,8 @@ fn main() {
             render_preview_image,
             generate_preview_image,
             application_quick_preview_start,
+            application_set_scene_view,
+            iris_shaderpack_settings,
             application_quick_preview_resource_decision,
             application_quick_preview_snapshot,
             application_quick_preview_present,

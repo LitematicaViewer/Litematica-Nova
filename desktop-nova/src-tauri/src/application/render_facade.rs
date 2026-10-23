@@ -764,6 +764,42 @@ impl RenderFacade {
         }
     }
 
+    pub(crate) async fn reload_shader_options(&self, root: PathBuf, name: String) -> Result<bool, String> {
+        self.refresh_from_service();
+        let session_id = {
+            let state = self.inner.state.lock().unwrap();
+            state.operation_order.iter().rev().filter_map(|id| state.operations.get(id))
+                .filter(|record| record.view.display_mode == RenderDisplayMode::Full && !record.cancel_requested
+                    && matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady))
+                .find_map(|record| record.binding.as_ref().and_then(|binding| binding.session_id.clone()))
+        };
+        let Some(session_id) = session_id else { return Ok(false); };
+        let controls = viewer_launch_contract::SceneViewControls { reload_shader_options: true,
+            shaderpack_root: Some(root), shaderpack_name: Some(name), ..Default::default() };
+        match self.inner.transport.request(UiCommand::SetSceneView { session_id, controls }).await? {
+            ResponseBody::Ack => Ok(true), other => Err(format!("unexpected shader options response: {other:?}")),
+        }
+    }
+
+    pub(crate) async fn set_scene_view(&self, source: &Path, display_mode: Option<RenderDisplayMode>, controls: viewer_launch_contract::SceneViewControls) -> Result<(), String> {
+        controls.validate()?;
+        self.refresh_from_service();
+        let session_id = {
+            let state = self.inner.state.lock().unwrap();
+            state.operation_order.iter().rev().filter_map(|id| state.operations.get(id))
+                .filter(|record| capture_source_matches(&record.view.source.path, source)
+                    && display_mode.is_none_or(|mode| mode == record.view.display_mode)
+                    && !record.cancel_requested
+                    && matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady))
+                .find_map(|record| record.binding.as_ref().and_then(|binding| binding.session_id.clone()))
+                .ok_or("请先启动对应投影的预览")?
+        };
+        match self.inner.transport.request(UiCommand::SetSceneView { session_id, controls }).await? {
+            ResponseBody::Ack => Ok(()),
+            other => Err(format!("unexpected scene view response: {other:?}")),
+        }
+    }
+
     pub(crate) async fn headless_camera_stress(
         &self,
         operation_id: &OperationId,

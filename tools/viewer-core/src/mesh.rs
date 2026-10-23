@@ -186,6 +186,8 @@ impl ChunkSceneIndex {
 
     pub fn game_data_content_id(&self) -> &str { &self.game_data_content_id }
 
+    pub fn source_min_y(&self) -> i32 { self.catalog.bounds.map_or(0, |bounds| bounds.min_y) }
+
     pub fn metadata(&self) -> &MetadataOutput {
         &self.catalog.metadata
     }
