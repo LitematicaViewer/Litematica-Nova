@@ -38,19 +38,22 @@
 
 !macro NSIS_HOOK_POSTINSTALL
   SetRegView 64
+  ; Missing previous associations are normal on a first install. ReadRegStr
+  ; sets NSIS's sticky error flag; keep optional reads outside the write group
+  ; so they cannot turn successful registration into an installation failure.
+  ReadRegStr $R0 HKLM "Software\Classes\.litematic\shellex\${NOVA_THUMB_HANDLER}" ""
+  ReadRegStr $R1 HKLM "Software\Classes\.litematic" ""
   ClearErrors
   WriteRegStr SHCTX "${UNINSTKEY}" "NovaInstallerIdentity" "${BUNDLEID}"
   WriteRegStr SHCTX "${UNINSTKEY}" "QuietUninstallString" '$\"$INSTDIR\uninstall.exe$\" /S'
   WriteRegStr SHCTX "${UNINSTKEY}" "InstallLocation" "$INSTDIR"
-  ReadRegStr $R0 HKLM "Software\Classes\.litematic\shellex\${NOVA_THUMB_HANDLER}" ""
   StrCmp $R0 "${NOVA_THUMB_CLSID}" +2
     WriteRegStr HKLM "${NOVA_SHELL_STATE}" "PreviousThumbnailProvider" "$R0"
-  ReadRegStr $R0 HKLM "Software\Classes\.litematic" ""
-  ${If} $R0 == ""
-  ${OrIf} $R0 == "Litematica projection"
-  ${OrIf} $R0 == "${NOVA_PROGID}"
-    ${If} $R0 != "${NOVA_PROGID}"
-      WriteRegStr HKLM "${NOVA_SHELL_STATE}" "PreviousProgID" "$R0"
+  ${If} $R1 == ""
+  ${OrIf} $R1 == "Litematica projection"
+  ${OrIf} $R1 == "${NOVA_PROGID}"
+    ${If} $R1 != "${NOVA_PROGID}"
+      WriteRegStr HKLM "${NOVA_SHELL_STATE}" "PreviousProgID" "$R1"
     ${EndIf}
     WriteRegStr HKLM "Software\Classes\.litematic" "" "${NOVA_PROGID}"
   ${EndIf}
