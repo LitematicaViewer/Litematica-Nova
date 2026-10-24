@@ -4,11 +4,11 @@ use crate::{
     nbt::{self, LitematicRoot, PaletteLayout},
     visual::{self, VisualCatalog},
 };
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use base64::Engine;
 use image::{ImageEncoder, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -16,8 +16,8 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
     },
     time::SystemTime,
 };
@@ -45,6 +45,8 @@ struct Input {
     source_path: Option<String>,
     storage_dir: Option<PathBuf>,
     ui_locale: Option<String>,
+    #[serde(default)]
+    resource_packs: Vec<PathBuf>,
     scene_handle: Option<String>,
     generation: Option<u64>,
     request_id: Option<u64>,
@@ -88,7 +90,8 @@ struct Scene {
     generation: u64,
     source: SourceStamp,
     content_id: String,
-    resources: String,
+    resource_context: Arc<crate::layer_resources::LayerResourceContext>,
+    resource_packs: Vec<PathBuf>,
     root: Arc<LitematicRoot>,
     catalog: Arc<VisualCatalog>,
     regions: Arc<Vec<RegionIndex>>,
@@ -97,7 +100,26 @@ struct Scene {
     latest: AtomicU64,
     cancelled: AtomicU64,
     released: AtomicBool,
-    sprites: Mutex<VecDeque<(String, Arc<RgbaImage>, bool)>>,
+    visual_generation: AtomicU64,
+    sprites: Mutex<VecDeque<(String, Arc<RgbaImage>)>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VisualIssue {
+    state: String,
+    kind: String,
+    resource_key: Option<String>,
+    message: String,
+    retryable: bool,
+    block_count: usize,
+}
+#[derive(Clone)]
+struct SpriteVisual {
+    image: Arc<RgbaImage>,
+    state: String,
+    transparent: bool,
+    issue: Option<VisualIssue>,
 }
 
 /// A scene pin owns the immutable packed source. Only derived sprites are cached,
@@ -111,7 +133,6 @@ pub struct LayerService {
 #[derive(Clone)]
 struct CachedSource {
     source: SourceStamp,
-    resources: String,
     content_id: String,
     root: Arc<LitematicRoot>,
     catalog: Arc<VisualCatalog>,
@@ -148,6 +169,9 @@ impl LayerService {
                 }
             }
             Some("release") => scene.released.store(true, Ordering::Release),
+            Some("invalidateVisuals") => {
+                scene.visual_generation.fetch_add(1, Ordering::AcqRel);
+            }
             _ => {}
         }
     }
@@ -166,7 +190,7 @@ impl LayerService {
             .map_err(|_| anyhow::anyhow!("Layer registry lock failed"))?
             .get(handle)
             .cloned()
-            .context("Layer scene has been released; reopen the source")?;
+            .context("LayerSceneExpired: Layer scene has been released; reopen the source")?;
         ensure!(
             input.generation == Some(scene.generation),
             "Stale layer scene generation"
@@ -185,19 +209,21 @@ impl LayerService {
             );
         }
         ensure!(
-            SourceStamp::read(&scene.source.path)? == scene.source,
-            "Layer source changed; reload the source"
+            SourceStamp::read(&scene.source.path)
+                .context("LayerSceneExpired: Inspect layer source; reopen the source")?
+                == scene.source,
+            "LayerSceneExpired: Layer source changed; reopen the source"
         );
-        ensure!(
-            crate::game_data::active_context()?.content_id == scene.resources,
-            "Layer resources changed; reopen the source"
-        );
-        ensure!(
-            scene.assets.is_current()?,
-            "Layer icon resources changed; reopen the source"
-        );
+        scene.check_resources(&input.resource_packs)?;
         match input.action.as_str() {
             "getLayerMeta" => Ok(scene.meta(handle)),
+            "invalidateVisuals" => {
+                scene.visual_generation.fetch_add(1, Ordering::AcqRel);
+                scene.sprites.lock().unwrap().clear();
+                Ok(
+                    json!({"sceneHandle":handle,"generation":scene.generation,"resourceIdentity":scene.resource_identity(),"visualGeneration":scene.visual_generation.load(Ordering::Acquire)}),
+                )
+            }
             "requestLayerView" => {
                 let id = input
                     .request_id
@@ -208,6 +234,7 @@ impl LayerService {
                 scene.check(id, cancel)?;
                 let result = scene.render(handle, &input, id, cancel)?;
                 scene.check(id, cancel)?;
+                scene.check_resources(&input.resource_packs)?;
                 Ok(result)
             }
             "hitTest" => {
@@ -232,6 +259,7 @@ impl LayerService {
                     }
                 }
                 scene.check(id, cancel)?;
+                scene.check_resources(&input.resource_packs)?;
                 Ok(
                     json!({"sceneHandle":handle,"generation":scene.generation,"requestId":id,"hit":hit}),
                 )
@@ -247,7 +275,6 @@ impl LayerService {
                 .as_deref()
                 .context("Layer source path is missing")?,
         ))?;
-        let resources = crate::game_data::active_context()?.content_id;
         // Page lifetime is not source lifetime. Keep at most two byte-bounded,
         // immutable packed catalogs for this worker session; active scene pins
         // are separate and are never invalidated by cache eviction.
@@ -256,7 +283,7 @@ impl LayerService {
             .lock()
             .unwrap()
             .iter()
-            .find(|entry| entry.source == source && entry.resources == resources)
+            .find(|entry| entry.source == source)
             .cloned();
         if let Some(cached) = cached {
             return self.pin(cached, input);
@@ -332,7 +359,6 @@ impl LayerService {
             .saturating_add(catalog.palette.len().saturating_mul(256));
         let cached = CachedSource {
             source,
-            resources,
             content_id: format!("{:x}", digest.finalize()),
             root: Arc::new(root),
             catalog: Arc::new(catalog),
@@ -359,6 +385,10 @@ impl LayerService {
         self.pin(cached, input)
     }
     fn pin(&self, cached: CachedSource, input: &Input) -> Result<Value> {
+        let resource_context = crate::layer_resources::LayerResourceContext::resolve(
+            &cached.version,
+            &input.resource_packs,
+        )?;
         let assets = hints::HintAssets::new(
             input
                 .storage_dir
@@ -372,7 +402,8 @@ impl LayerService {
             generation,
             source: cached.source,
             content_id: cached.content_id,
-            resources: cached.resources,
+            resource_context,
+            resource_packs: input.resource_packs.clone(),
             root: cached.root,
             catalog: cached.catalog,
             regions: cached.regions,
@@ -381,6 +412,7 @@ impl LayerService {
             latest: AtomicU64::new(0),
             cancelled: AtomicU64::new(0),
             released: AtomicBool::new(false),
+            visual_generation: AtomicU64::new(1),
             sprites: Mutex::new(VecDeque::new()),
         });
         let meta = scene.meta(&handle);
@@ -410,6 +442,33 @@ struct Hit {
     property_options: BTreeMap<String, Vec<String>>,
 }
 impl Scene {
+    fn resource_identity(&self) -> String {
+        format!(
+            "{}:{}:{}",
+            self.version,
+            self.resource_context.identity(),
+            self.assets.revision()
+        )
+    }
+    fn check_resources(&self, packs: &[PathBuf]) -> Result<()> {
+        ensure!(
+            packs == self.resource_packs,
+            "LayerResourceChanged: Effective resource pack order changed; reopen the source"
+        );
+        ensure!(
+            self.resource_context
+                .is_current()
+                .context("LayerResourceChanged: Inspect versioned resource identity")?,
+            "LayerResourceChanged: Versioned model or texture resources changed; reopen the source"
+        );
+        ensure!(
+            self.assets
+                .is_current()
+                .context("LayerResourceChanged: Inspect layer annotation identity")?,
+            "LayerResourceChanged: Layer icon or state-hint assets changed; reopen the source"
+        );
+        Ok(())
+    }
     fn min(&self) -> [i32; 3] {
         self.catalog
             .bounds
@@ -429,7 +488,7 @@ impl Scene {
                     && min != [0; 3]
             })
             .map(|_| json!({"x":-min[0],"y":-min[1],"z":-min[2]}));
-        json!({"sceneHandle":handle,"generation":self.generation,"sourceIdentity":self.content_id,"resourceIdentity":format!("{}:{}",self.resources,self.assets.revision()),
+        json!({"sceneHandle":handle,"generation":self.generation,"sourceIdentity":self.content_id,"resourceIdentity":self.resource_identity(),"visualGeneration":self.visual_generation.load(Ordering::Acquire),
             "meta":{"size_x":size.x,"size_y":size.y,"size_z":size.z,"min_x":min[0],"min_y":min[1],"min_z":min[2],
             "minecraft_data_version":self.root.minecraft_data_version,"version":self.version,"name":self.catalog.metadata.name},"origin":origin})
     }
@@ -605,74 +664,104 @@ impl Scene {
         }
         Ok(None)
     }
-    fn sprite(&self, state: &str, detailed: bool, hints: bool) -> Result<(Arc<RgbaImage>, bool)> {
-        let key = format!("{detailed}:{hints}:{state}");
-        if let Some((_, image, missing)) = self
+    fn sprite(&self, state: &str, hints: bool) -> Result<SpriteVisual> {
+        let epoch = self.visual_generation.load(Ordering::Acquire);
+        let key = format!("{}:{epoch}:{hints}:{state}", self.resource_identity());
+        if let Some((_, image)) = self
             .sprites
             .lock()
             .unwrap()
             .iter()
-            .find(|(k, _, _)| k == &key)
+            .filter(|_| self.assets.can_cache())
+            .find(|(known, _)| known == &key)
         {
-            return Ok((image.clone(), *missing));
+            return Ok(SpriteVisual {
+                state: state.into(),
+                image: image.clone(),
+                transparent: image.pixels().all(|pixel| pixel.0[3] == 0),
+                issue: None,
+            });
         }
-        let db = crate::block_database::database()?;
-        let result = db.query_states(
-            &self.version,
-            &[state.to_owned()],
-            detailed.then_some(crate::block_database::Plane::Top),
-        )?;
-        let value = &result["states"][state];
-        let color = value["mapColor"]["rgb"].as_u64().filter(|v| *v <= 0xffffff);
-        let mut missing = color.is_none();
-        let mut image = if detailed {
-            if let Some(url) = value["topTextureDataUrl"].as_str() {
-                let png = base64::engine::general_purpose::STANDARD
-                    .decode(url.split_once(',').context("Invalid layer sprite PNG")?.1)?;
-                // The existing Core top-plane rasteriser returns a 32px image.
-                missing = false;
-                image::load_from_memory(&png)?.to_rgba8()
-            } else {
-                missing = true;
-                let mut marker = RgbaImage::from_pixel(32, 32, Rgba([128, 128, 128, 255]));
-                for i in 0..32 {
-                    marker.put_pixel(i, i, Rgba([32, 32, 32, 255]));
-                }
-                marker
+        let _scope = crate::layer_resources::enter(self.resource_context.clone());
+        let issue = |kind: &str, resource_key: Option<String>, message: String, retryable: bool| {
+            VisualIssue {
+                state: state.into(),
+                kind: kind.into(),
+                resource_key,
+                message,
+                retryable,
+                block_count: 0,
             }
-        } else {
-            let rgb = color.unwrap_or(0x808080);
-            RgbaImage::from_pixel(
-                1,
-                1,
-                Rgba([
-                    (rgb >> 16) as u8,
-                    (rgb >> 8) as u8,
-                    rgb as u8,
-                    if value["mapColor"]["id"] == 0 { 0 } else { 255 },
-                ]),
-            )
         };
-        if detailed {
-            image = self.assets.apply(&image, state, hints)?;
+        let produced = (|| -> std::result::Result<RgbaImage, VisualIssue> {
+            let db = crate::block_database::database()
+                .map_err(|error| issue("database_unavailable", None, format!("{error:#}"), true))?;
+            db.layer_top_sprite(&self.version, state).map_err(|error| {
+                issue(
+                    error.kind,
+                    error.resource_key,
+                    error.message,
+                    error.retryable,
+                )
+            })
+        })();
+        let (mut image, mut failure) = match produced {
+            Ok(image) => (image, None),
+            Err(error) => {
+                // An explicitly diagnosed error is not a successful grey sprite.
+                // Keep it local to this response, so the next view retries Core.
+                let mut marker = RgbaImage::from_pixel(32, 32, Rgba([128, 128, 128, 255]));
+                for index in 0..32 {
+                    marker.put_pixel(index, index, Rgba([32, 32, 32, 255]));
+                }
+                (marker, Some(error))
+            }
+        };
+        if failure.is_none() && image.pixels().any(|pixel| pixel.0[3] != 0) {
+            match self.assets.apply(&image, state, hints) {
+                Ok(annotated) => image = annotated,
+                Err(error) => {
+                    // Preserve the real top image if an optional annotation fails.
+                    let detail = error.downcast_ref::<hints::HintAssetError>();
+                    failure = Some(issue(
+                        detail.map_or("hint_asset_failure", |value| value.kind),
+                        detail.map(|value| value.resource_key.clone()),
+                        format!("{error:#}"),
+                        detail.is_none_or(|value| value.retryable),
+                    ));
+                }
+            }
         }
         let image = Arc::new(image);
-        let mut cache = self.sprites.lock().unwrap();
-        let bytes = image.as_raw().len();
-        while !cache.is_empty()
-            && cache
-                .iter()
-                .map(|(_, v, _)| v.as_raw().len())
-                .sum::<usize>()
-                + bytes
-                > SPRITE_CACHE_BYTES
+        let transparent = image.pixels().all(|pixel| pixel.0[3] == 0);
+        // Cache only complete success. Missing source assets, decode errors and
+        // temporary reads stay distinct diagnostics and may recover next request.
+        if failure.is_none()
+            && self.assets.can_cache()
+            && epoch == self.visual_generation.load(Ordering::Acquire)
         {
-            cache.pop_front();
+            let bytes = image.as_raw().len();
+            let mut cache = self.sprites.lock().unwrap();
+            while !cache.is_empty()
+                && cache
+                    .iter()
+                    .map(|(_, image)| image.as_raw().len())
+                    .sum::<usize>()
+                    .saturating_add(bytes)
+                    > SPRITE_CACHE_BYTES
+            {
+                cache.pop_front();
+            }
+            if bytes <= SPRITE_CACHE_BYTES {
+                cache.push_back((key, image.clone()));
+            }
         }
-        if bytes <= SPRITE_CACHE_BYTES {
-            cache.push_back((key, image.clone(), missing));
-        }
-        Ok((image, missing))
+        Ok(SpriteVisual {
+            state: state.into(),
+            image,
+            transparent,
+            issue: failure,
+        })
     }
     fn render(&self, handle: &str, input: &Input, id: u64, cancel: &AtomicBool) -> Result<Value> {
         let y = input.y.context("Layer Y is missing")?;
@@ -707,9 +796,12 @@ impl Scene {
         let height = (f64::from(rect.height) * pixel_scale).ceil().max(1.) as u32;
         let mut image = RgbaImage::new(width, height);
         let mut count = 0usize;
-        let mut missing = std::collections::BTreeSet::new();
-        let mut palette_sprites = BTreeMap::<usize, (Arc<RgbaImage>, bool)>::new();
-        let mut edited_sprites = BTreeMap::<String, (Arc<RgbaImage>, bool)>::new();
+        let epoch = self.visual_generation.load(Ordering::Acquire);
+        let mut issues = BTreeMap::<String, VisualIssue>::new();
+        let mut ready = std::collections::BTreeSet::new();
+        let mut transparent = std::collections::BTreeSet::new();
+        let mut palette_sprites = BTreeMap::<usize, SpriteVisual>::new();
+        let mut edited_sprites = BTreeMap::<String, SpriteVisual>::new();
         for depth in (0..=input.onion_depth.min(5) as i32).rev() {
             if y - depth < 0 {
                 continue;
@@ -737,7 +829,7 @@ impl Scene {
                     self.check(id, cancel)?;
                     let entry = &self.catalog.palette[palette_id];
                     let edited = input.overrides.get(&format!("{x}:{}:{z}", y - depth));
-                    let (sprite, unmapped) = if let Some(properties) = edited {
+                    let visual = if let Some(properties) = edited {
                         let state = state_key(&entry.block_id, properties);
                         if !edited_sprites.contains_key(&state) {
                             if edited_sprites.len() >= 512 {
@@ -751,10 +843,8 @@ impl Scene {
                                     .is_some_and(|b| b.accepts(&state, properties)),
                                 "Invalid edited block state for the source version"
                             );
-                            edited_sprites.insert(
-                                state.clone(),
-                                self.sprite(&state, scale >= 16., input.state_hints)?,
-                            );
+                            edited_sprites
+                                .insert(state.clone(), self.sprite(&state, input.state_hints)?);
                         }
                         edited_sprites[&state].clone()
                     } else {
@@ -766,18 +856,26 @@ impl Scene {
                                 &entry.block_id,
                                 &self.catalog.property_pool[entry.property_id],
                             );
-                            palette_sprites.insert(
-                                palette_id,
-                                self.sprite(&state, scale >= 16., input.state_hints)?,
-                            );
+                            palette_sprites
+                                .insert(palette_id, self.sprite(&state, input.state_hints)?);
                         }
                         palette_sprites[&palette_id].clone()
                     };
-                    if unmapped {
-                        missing.insert(palette_id);
+                    if let Some(issue) = visual.issue {
+                        let known = issues.entry(issue.state.clone()).or_insert(issue);
+                        known.block_count += 1;
+                    } else {
+                        ready.insert(visual.state.clone());
+                        if visual.transparent {
+                            transparent.insert(visual.state.clone());
+                        }
                     }
-                    let left = (f64::from(x - rect.x) * pixel_scale).floor() as u32;
-                    let top = (f64::from(z - rect.z) * pixel_scale).floor() as u32;
+                    let sprite = visual.image;
+                    // Use the same half-open edge quantizer on both sides.
+                    // floor(left)/ceil(right) draws shared pixels twice at
+                    // fractional zoom and incorrectly increases material alpha.
+                    let left = (f64::from(x - rect.x) * pixel_scale).ceil() as u32;
+                    let top = (f64::from(z - rect.z) * pixel_scale).ceil() as u32;
                     let right = (f64::from(x + 1 - rect.x) * pixel_scale)
                         .ceil()
                         .min(width as f64) as u32;
@@ -801,6 +899,10 @@ impl Scene {
             }
         }
         self.check(id, cancel)?;
+        ensure!(
+            epoch == self.visual_generation.load(Ordering::Acquire),
+            "Layer visual request superseded"
+        );
         let mut png = Vec::new();
         image::codecs::png::PngEncoder::new(&mut png).write_image(
             image.as_raw(),
@@ -808,9 +910,16 @@ impl Scene {
             height,
             image::ExtendedColorType::Rgba8,
         )?;
+        self.check(id, cancel)?;
+        ensure!(
+            epoch == self.visual_generation.load(Ordering::Acquire),
+            "Layer visual request superseded"
+        );
         Ok(
             json!({"sceneHandle":handle,"generation":self.generation,"requestId":id,"y":y,"worldY":y+self.min()[1],
-            "viewRect":rect,"pixelWidth":width,"pixelHeight":height,"blockCount":count,"missingVisuals":missing.len(),
+            "viewRect":rect,"pixelWidth":width,"pixelHeight":height,"blockCount":count,"missingVisuals":issues.len(),
+            "resourceIdentity":self.resource_identity(),"visualGeneration":epoch,
+            "visualDiagnostics":{"readyStates":ready.len(),"transparentStates":transparent.len(),"missingStates":issues.values().filter(|issue|issue.kind.starts_with("missing_")).count(),"failedStates":issues.values().filter(|issue|!issue.kind.starts_with("missing_")).count(),"retryableStates":issues.values().filter(|issue|issue.retryable).count(),"issues":issues.values().collect::<Vec<_>>()},
             "imageUrl":format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(png))}),
         )
     }
@@ -973,7 +1082,9 @@ mod tests {
                 modified: SystemTime::UNIX_EPOCH,
             },
             content_id: "fixture".into(),
-            resources: "fixture".into(),
+            resource_context: crate::layer_resources::LayerResourceContext::resolve("1.21.1", &[])
+                .unwrap(),
+            resource_packs: vec![],
             root: Arc::new(root),
             catalog: Arc::new(catalog),
             regions: Arc::new(regions),
@@ -982,6 +1093,7 @@ mod tests {
             latest: AtomicU64::new(7),
             cancelled: AtomicU64::new(0),
             released: AtomicBool::new(false),
+            visual_generation: AtomicU64::new(1),
             sprites: Mutex::new(VecDeque::new()),
         }
     }
@@ -994,6 +1106,166 @@ mod tests {
             ),
             "minecraft:oak_log[axis=y]"
         );
+    }
+    #[test]
+    fn real_transparent_sprite_is_success_and_missing_resource_is_never_positive_cached() {
+        let scene = fixture();
+        let clear = scene.sprite("minecraft:air", false).unwrap();
+        assert!(clear.issue.is_none());
+        assert!(clear.transparent);
+        assert!(clear.image.pixels().all(|pixel| pixel.0[3] == 0));
+        assert_eq!(scene.sprites.lock().unwrap().len(), 1);
+        for _ in 0..2 {
+            let missing = scene.sprite("nova_missing_resource:absent", false).unwrap();
+            let issue = missing
+                .issue
+                .expect("Missing source must remain diagnostic");
+            assert_eq!(issue.state, "nova_missing_resource:absent");
+            assert!(!issue.kind.is_empty());
+            assert_eq!(scene.sprites.lock().unwrap().len(), 1);
+        }
+        let cached_clear = scene.sprite("minecraft:air", false).unwrap();
+        assert!(cached_clear.issue.is_none() && cached_clear.transparent);
+        assert!(Arc::ptr_eq(&clear.image, &cached_clear.image));
+    }
+    #[test]
+    fn visual_invalidation_clears_success_cache_and_advances_epoch_without_reparsing() {
+        let service = LayerService::default();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("visual-epoch.litematic");
+        let mut scene = fixture();
+        nbt::save_litematic_root(&path, &scene.root).unwrap();
+        scene.source = SourceStamp::read(&path).unwrap();
+        let scene = Arc::new(scene);
+        scene.sprite("minecraft:stone", false).unwrap();
+        assert_eq!(scene.sprites.lock().unwrap().len(), 1);
+        let packed_source = scene.root.clone();
+        service
+            .scenes
+            .lock()
+            .unwrap()
+            .insert("fixture".into(), scene.clone());
+        let request = json!({"action":"invalidateVisuals","sceneHandle":"fixture","generation":1});
+        let before = scene.visual_generation.load(Ordering::Acquire);
+        service.prepare(&request);
+        let receipt = service.execute(&request, &AtomicBool::new(false)).unwrap();
+        assert!(receipt["visualGeneration"].as_u64().unwrap() > before);
+        assert!(scene.sprites.lock().unwrap().is_empty());
+        assert!(Arc::ptr_eq(&packed_source, &scene.root));
+        let changed = scene
+            .check_resources(&[PathBuf::from("new-effective-pack.zip")])
+            .unwrap_err();
+        assert!(changed.to_string().starts_with("LayerResourceChanged:"));
+    }
+    #[test]
+    fn real_hint_decode_failure_preserves_top_pixels_and_recovers_after_resource_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let overlay = directory.path().join("flake/state_overlay/axis_x.png");
+        fs::create_dir_all(overlay.parent().unwrap()).unwrap();
+        fs::write(&overlay, b"interrupted PNG download").unwrap();
+        let mut scene = fixture();
+        scene.assets = hints::HintAssets::new(directory.path().to_owned(), &scene.version).unwrap();
+        let state = "minecraft:oak_log[axis=x]";
+        let plain = scene.sprite(state, false).unwrap();
+        assert!(plain.issue.is_none());
+        assert!(plain.image.pixels().any(|pixel| pixel.0[3] != 0));
+        let failed = scene.sprite(state, true).unwrap();
+        let issue = failed.issue.unwrap();
+        assert_eq!(issue.kind, "hint_decode_failed");
+        assert!(issue.retryable);
+        assert_eq!(
+            issue.resource_key.as_deref(),
+            Some(overlay.to_str().unwrap())
+        );
+        assert_eq!(failed.image.as_raw(), plain.image.as_raw());
+        assert_eq!(scene.sprites.lock().unwrap().len(), 1);
+        let source = crate::runtime_paths::app_root()
+            .unwrap()
+            .join("pack-in/flake/state_overlay/axis_x.png");
+        fs::copy(&source, &overlay).unwrap();
+        assert!(!scene.assets.is_current().unwrap());
+        // The same request is retryable, but cannot silently bless a changed
+        // generation and keep other previously cached sprites.
+        let retried = scene.sprite(state, true).unwrap();
+        assert!(retried.issue.is_none());
+        assert!(!scene.assets.is_current().unwrap());
+        scene.assets = hints::HintAssets::new(directory.path().to_owned(), &scene.version).unwrap();
+        scene.sprites.lock().unwrap().clear();
+        let recovered = scene.sprite(state, true).unwrap();
+        assert!(recovered.issue.is_none());
+        assert!(scene.assets.is_current().unwrap());
+        assert_eq!(scene.sprites.lock().unwrap().len(), 1);
+        assert!(Arc::ptr_eq(
+            &recovered.image,
+            &scene.sprite(state, true).unwrap().image
+        ));
+    }
+    #[test]
+    fn layer_sampling_keeps_real_glass_alpha_at_low_zoom_and_fractional_edges() {
+        use image::Pixel;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("glass-alpha.litematic");
+        let mut root = Arc::try_unwrap(fixture().root).ok().unwrap();
+        root.regions.retain(|name, _| name == "a_base");
+        let region = root.regions.get_mut("a_base").unwrap();
+        region.position = crate::nbt::Vec3i { x: 0, y: 0, z: 0 };
+        region.size = crate::nbt::Vec3i { x: 2, y: 2, z: 1 };
+        region.block_state_palette[1].name = "minecraft:white_stained_glass".into();
+        region.block_states = nbt::pack_palette_indices(&[1, 1, 1, 1], 2);
+        nbt::save_litematic_root(&path, &root).unwrap();
+        let service = LayerService::default();
+        let cancel = AtomicBool::new(false);
+        let opened = service
+            .execute(&json!({"action":"openScene","sourcePath":path}), &cancel)
+            .unwrap();
+        let handle = opened["sceneHandle"].as_str().unwrap();
+        let generation = opened["generation"].as_u64().unwrap();
+        let scene = service.scenes.lock().unwrap()[handle].clone();
+        let sprite = scene.sprite("minecraft:white_stained_glass", true).unwrap();
+        assert!(sprite.issue.is_none());
+        let center = *sprite
+            .image
+            .get_pixel(sprite.image.width() / 2, sprite.image.height() / 2);
+        assert!(center.0[3] > 0 && center.0[3] < 255);
+        let decode = |view: &Value| {
+            image::load_from_memory_with_format(
+                &base64::engine::general_purpose::STANDARD
+                    .decode(
+                        view["imageUrl"]
+                            .as_str()
+                            .unwrap()
+                            .split_once(',')
+                            .unwrap()
+                            .1,
+                    )
+                    .unwrap(),
+                image::ImageFormat::Png,
+            )
+            .unwrap()
+            .to_rgba8()
+        };
+        for (id, scale) in [(1, 4.), (2, 16.), (3, 1.5)] {
+            let view = service.execute(&json!({"action":"requestLayerView","sceneHandle":handle,"generation":generation,
+                "requestId":id,"y":1,"viewRect":{"x":0,"z":0,"width":2,"height":1},"scale":scale,"stateHints":true}), &cancel).unwrap();
+            assert_eq!(view["missingVisuals"], 0);
+            let rendered = decode(&view);
+            if scale >= 4. {
+                assert_eq!(
+                    *rendered.get_pixel((scale / 2.) as u32, (scale / 2.) as u32),
+                    center
+                );
+            }
+            let source_max = sprite.image.pixels().map(|pixel| pixel.0[3]).max().unwrap();
+            assert!(rendered.pixels().all(|pixel| pixel.0[3] <= source_max));
+        }
+        let view = service.execute(&json!({"action":"requestLayerView","sceneHandle":handle,"generation":generation,
+            "requestId":4,"y":1,"onionDepth":1,"viewRect":{"x":0,"z":0,"width":2,"height":1},"scale":4.,"stateHints":true}), &cancel).unwrap();
+        let mut lower = center;
+        lower.0[3] = (f64::from(lower.0[3]) * 0.5).round() as u8;
+        let mut expected = Rgba([0, 0, 0, 0]);
+        expected.blend(&lower);
+        expected.blend(&center);
+        assert_eq!(*decode(&view).get_pixel(2, 2), expected);
     }
     #[test]
     fn input_rejects_unbounded_unknown_routing_fields() {
@@ -1031,22 +1303,20 @@ mod tests {
             scene.cells(2, rect, 7, &cancel).unwrap(),
             BTreeMap::from([((1, 1), 2)])
         );
-        assert!(
-            scene
-                .cells(
-                    2,
-                    ViewRect {
-                        x: 0,
-                        z: 0,
-                        width: 1,
-                        height: 1
-                    },
-                    7,
-                    &cancel
-                )
-                .unwrap()
-                .is_empty()
-        );
+        assert!(scene
+            .cells(
+                2,
+                ViewRect {
+                    x: 0,
+                    z: 0,
+                    width: 1,
+                    height: 1
+                },
+                7,
+                &cancel
+            )
+            .unwrap()
+            .is_empty());
         assert_eq!(scene.regions.len(), 3);
     }
     #[test]
@@ -1060,34 +1330,28 @@ mod tests {
             .insert("fixture".into(), scene.clone());
         let cancel = AtomicBool::new(false);
         service.prepare(&json!({"action":"requestLayerView","sceneHandle":"fixture","generation":1,"requestId":8}));
-        assert!(
-            scene
-                .check(7, &cancel)
-                .unwrap_err()
-                .to_string()
-                .contains("superseded")
-        );
+        assert!(scene
+            .check(7, &cancel)
+            .unwrap_err()
+            .to_string()
+            .contains("superseded"));
         assert!(scene.check(8, &cancel).is_ok());
         service.prepare(
             &json!({"action":"cancel","sceneHandle":"fixture","generation":1,"requestId":8}),
         );
-        assert!(
-            scene
-                .check(8, &cancel)
-                .unwrap_err()
-                .to_string()
-                .contains("cancelled")
-        );
+        assert!(scene
+            .check(8, &cancel)
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled"));
         service.prepare(&json!({"action":"requestLayerView","sceneHandle":"fixture","generation":1,"requestId":9}));
         assert!(scene.check(9, &cancel).is_ok());
         service.prepare(&json!({"action":"release","sceneHandle":"fixture","generation":1}));
-        assert!(
-            scene
-                .check(9, &cancel)
-                .unwrap_err()
-                .to_string()
-                .contains("released")
-        );
+        assert!(scene
+            .check(9, &cancel)
+            .unwrap_err()
+            .to_string()
+            .contains("released"));
     }
     #[test]
     fn headless_open_png_hit_cancel_and_release_share_real_source_identity() {

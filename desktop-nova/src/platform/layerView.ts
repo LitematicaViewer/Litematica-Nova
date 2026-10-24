@@ -7,13 +7,22 @@ export interface LayerViewMeta {
 }
 export interface LayerScene {
   sceneHandle: string; generation: number; sourceIdentity: string; resourceIdentity: string;
+  visualGeneration: number;
   meta: LayerViewMeta; origin: { x: number; y: number; z: number } | null;
 }
 export interface LayerViewRect { x: number; z: number; width: number; height: number }
+export interface LayerVisualIssue {
+  state: string; kind: string; resourceKey: string | null; message: string; retryable: boolean; blockCount: number;
+}
+export interface LayerVisualDiagnostics {
+  readyStates: number; transparentStates: number; missingStates: number; failedStates: number; retryableStates: number;
+  issues: LayerVisualIssue[];
+}
 export interface LayerViewImage {
   sceneHandle: string; generation: number; requestId: number; y: number; worldY: number;
   viewRect: LayerViewRect; imageUrl: string; pixelWidth: number; pixelHeight: number;
   blockCount: number; missingVisuals: number;
+  resourceIdentity: string; visualGeneration: number; visualDiagnostics: LayerVisualDiagnostics;
 }
 export interface LayerHit {
   x: number; y: number; z: number; worldX: number; worldY: number; worldZ: number;
@@ -38,4 +47,5 @@ export const getLayerMeta = (scene: LayerScene): Promise<LayerScene> => query({ 
 export const requestLayerView = (scene: LayerScene, request: LayerViewRequest): Promise<LayerViewImage> => query({ action: "requestLayerView", ...identity(scene), ...request });
 export const hitTestLayer = (scene: LayerScene, request: Pick<LayerViewRequest, "requestId" | "y" | "onionDepth" | "overrides"> & { uiLocale?: string }, x: number, z: number): Promise<{ sceneHandle: string; generation: number; requestId: number; hit: LayerHit | null }> => query({ action: "hitTest", ...identity(scene), ...request, x, z });
 export const cancelLayerView = (scene: LayerScene, requestId: number): Promise<unknown> => query({ action: "cancel", ...identity(scene), requestId });
+export const invalidateLayerVisuals = (scene: LayerScene): Promise<{ sceneHandle: string; generation: number; resourceIdentity: string; visualGeneration: number }> => query({ action: "invalidateVisuals", ...identity(scene) });
 export const releaseLayerScene = (scene: LayerScene): Promise<unknown> => query({ action: "release", ...identity(scene) });

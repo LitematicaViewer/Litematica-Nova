@@ -1,10 +1,10 @@
 //! Public layer presentation rules migrated from the pre-0.4 TS implementation.
 //! The declarative table retains the existing rule decisions; model projection,
 //! exact-version validation, file reads and all pixel operations remain in Rust.
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use image::{
-    RgbaImage,
     imageops::{self, FilterType},
+    RgbaImage,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -13,8 +13,49 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, OnceLock,
+    },
+    time::SystemTime,
 };
+
+#[derive(Debug)]
+pub(super) struct HintAssetError {
+    pub kind: &'static str,
+    pub resource_key: String,
+    pub message: String,
+    pub retryable: bool,
+}
+impl std::fmt::Display for HintAssetError {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(output, "{}: {}", self.resource_key, self.message)
+    }
+}
+impl std::error::Error for HintAssetError {}
+#[derive(Clone, PartialEq, Eq)]
+struct AssetStamp {
+    bytes: u64,
+    modified: Option<SystemTime>,
+    directory: bool,
+}
+fn asset_stamp(path: &Path) -> Result<Option<AssetStamp>> {
+    match fs::metadata(path) {
+        Ok(meta) => Ok(Some(AssetStamp {
+            bytes: meta.len(),
+            modified: meta.modified().ok(),
+            directory: meta.is_dir(),
+        })),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(HintAssetError {
+            kind: "hint_temporary_io",
+            resource_key: path.to_string_lossy().into(),
+            message: error.to_string(),
+            retryable: true,
+        }
+        .into()),
+    }
+}
 
 #[derive(Deserialize)]
 struct Catalog {
@@ -51,8 +92,7 @@ struct Layer {
 fn catalog() -> Result<&'static Catalog> {
     static DATA: OnceLock<std::result::Result<Catalog, String>> = OnceLock::new();
     DATA.get_or_init(|| {
-        serde_json::from_str::<Catalog>(include_str!("layer_hints.json"))
-            .map_err(|e| e.to_string())
+        serde_json::from_str::<Catalog>(include_str!("layer_hints.json")).map_err(|e| e.to_string())
     })
     .as_ref()
     .map_err(|e| anyhow::anyhow!(e.clone()))
@@ -84,6 +124,8 @@ pub(super) struct HintAssets {
     bundled: PathBuf,
     roots: Vec<IconRoot>,
     revision: String,
+    observed: Mutex<BTreeMap<PathBuf, Option<AssetStamp>>>,
+    cacheable: AtomicBool,
 }
 impl HintAssets {
     pub(super) fn new(config: PathBuf, version: &str) -> Result<Self> {
@@ -96,7 +138,8 @@ impl HintAssets {
             if let Some(entry) = index["entries"].as_array().into_iter().flatten().find(|v| {
                 v["active_layering"] == true
                     && v["builtin"] != true
-                    && v["block_icon_variant"] != "3d"
+                    && v["block_icon_variant"] == "2d"
+                    && v["version"].as_str() == Some(version)
             }) {
                 let path = entry["root_path"]
                     .as_str()
@@ -112,20 +155,15 @@ impl HintAssets {
                 }
             }
         }
-        let context = crate::game_data::active_context()?;
-        // A selected latest-game icon must not replace another exact source version.
-        if context.game_version == version {
-            roots.push(IconRoot {
-                path: context.root.join("derived/item-icons"),
-                label: version.into(),
-                layering: false,
-            });
-        }
+        // Ordinary inventory/3D item artwork is not a top projection. Only an
+        // explicitly registered, exact-version 2D pack may override Core pixels.
         Ok(Self {
             config,
             bundled,
             roots,
             revision: Self::digest(bytes.as_deref()),
+            observed: Mutex::new(BTreeMap::new()),
+            cacheable: AtomicBool::new(true),
         })
     }
     #[cfg(test)]
@@ -135,14 +173,17 @@ impl HintAssets {
             bundled: PathBuf::new(),
             roots: vec![],
             revision: Self::digest(None),
+            observed: Mutex::new(BTreeMap::new()),
+            cacheable: AtomicBool::new(true),
         }
     }
     fn index_bytes(config: &Path) -> Result<Option<Vec<u8>>> {
         let path = config.join("minecraft-assets/block_icon/installed.json");
-        if path.is_file() {
-            Ok(Some(fs::read(path)?))
-        } else {
-            Ok(None)
+        match fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error)
+                .with_context(|| format!("Read layering icon registry {}", path.display())),
         }
     }
     fn digest(bytes: Option<&[u8]>) -> String {
@@ -152,22 +193,69 @@ impl HintAssets {
         &self.revision
     }
     pub(super) fn is_current(&self) -> Result<bool> {
-        Ok(Self::digest(Self::index_bytes(&self.config)?.as_deref()) == self.revision)
+        if Self::digest(Self::index_bytes(&self.config)?.as_deref()) != self.revision {
+            return Ok(false);
+        }
+        for (path, stamp) in self.observed.lock().unwrap().iter() {
+            if asset_stamp(path)? != *stamp {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    pub(super) fn can_cache(&self) -> bool {
+        self.cacheable.load(Ordering::Relaxed)
+    }
+    fn observe(&self, path: &Path, stamp: Option<AssetStamp>) {
+        let mut observed = self.observed.lock().unwrap();
+        if observed.len() < 4096 || observed.contains_key(path) {
+            // Keep the first observed generation until the scene reopens. A
+            // retry must not bless a changed file and retain other old sprites.
+            observed.entry(path.to_owned()).or_insert(stamp);
+        } else {
+            self.cacheable.store(false, Ordering::Relaxed);
+        }
+    }
+    fn read_image(&self, path: &Path) -> Result<Option<RgbaImage>> {
+        let before = asset_stamp(path)?;
+        self.observe(path, before.clone());
+        if before.is_none() {
+            return Ok(None);
+        }
+        let bytes = fs::read(path).map_err(|error| HintAssetError {
+            kind: "hint_temporary_io",
+            resource_key: path.to_string_lossy().into(),
+            message: error.to_string(),
+            retryable: true,
+        })?;
+        let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+            .map_err(|error| HintAssetError {
+                kind: "hint_decode_failed",
+                resource_key: path.to_string_lossy().into(),
+                message: error.to_string(),
+                retryable: true,
+            })?
+            .to_rgba8();
+        ensure!(
+            asset_stamp(path)? == before,
+            "LayerResourceChanged: State-hint image changed while being decoded"
+        );
+        Ok(Some(image))
     }
     fn asset(&self, name: &str) -> Result<Option<RgbaImage>> {
         let relative = name.strip_prefix("data/").unwrap_or(name);
         for base in [&self.config, &self.bundled] {
             let path = base.join(relative);
-            if path.is_file() {
-                return Ok(Some(image::open(path)?.to_rgba8()));
+            if let Some(image) = self.read_image(&path)? {
+                return Ok(Some(image));
             }
         }
         if relative.starts_with("flake/state_hint/") || relative.starts_with("flake/state_overlay/")
         {
             for base in [&self.config, &self.bundled] {
                 let path = base.join("flake/state_hint/alt.png");
-                if path.is_file() {
-                    return Ok(Some(image::open(path)?.to_rgba8()));
+                if let Some(image) = self.read_image(&path)? {
+                    return Ok(Some(image));
                 }
             }
         }
@@ -194,8 +282,8 @@ impl HintAssets {
             }
             for relative in paths {
                 let path = root.path.join(relative);
-                if path.is_file() {
-                    return Ok(Some(image::open(path)?.to_rgba8()));
+                if let Some(image) = self.read_image(&path)? {
+                    return Ok(Some(image));
                 }
             }
         }
@@ -350,12 +438,10 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert!(
-            fluid
-                .subtract_image_rel_paths
-                .iter()
-                .any(|p| p.ends_with("level_0.png"))
-        );
+        assert!(fluid
+            .subtract_image_rel_paths
+            .iter()
+            .any(|p| p.ends_with("level_0.png")));
         let log = rule(
             "minecraft:oak_log",
             &BTreeMap::from([("axis".into(), "x".into())]),
