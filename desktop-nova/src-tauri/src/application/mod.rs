@@ -1,5 +1,9 @@
 pub(crate) mod model;
 pub(crate) mod diagnostics;
+pub(crate) mod library_export;
+pub(crate) mod library_index;
+pub(crate) mod library_tasks;
+pub(crate) mod library_trash;
 pub(crate) mod operations;
 pub(crate) mod render_facade;
 pub(crate) mod quick_preview;

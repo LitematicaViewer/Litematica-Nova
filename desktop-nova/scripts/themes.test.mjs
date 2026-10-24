@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { posix } from 'node:path';
 import vm from 'node:vm';
 import test from 'node:test';
 
@@ -17,6 +18,24 @@ const themeGlob = () => Object.fromEntries(
   manifest.THEMES.map((theme) => [`../themes/${theme.directory}/theme.css`, `/${theme.directory}.css`]),
 );
 
+// Local modules every UI module may import but that this suite does not need to
+// exercise: a stub keeps the import graph resolvable without pulling the Tauri seam.
+const builtinDependencies = {
+  '../../src/platform/nativeWindowGeometry': {
+    synchronizeApplicationWindowBackground: async () => {},
+    getApplicationWindowOrigin: async () => ({ x: 0, y: 0 }),
+    getApplicationWindowVisibility: async () => true,
+    subscribeApplicationWindowGeometry: async () => () => {},
+    closeApplicationWindow: async () => {},
+    getApplicationWindowLabel: () => 'main',
+    subscribeApplicationWindowCloseRequested: async () => () => {},
+  },
+  '../../src/platform/appData': { getApplicationVersion: async () => '0.0.0' },
+  '../../src/platform/tauri': { invoke: async () => undefined, isTauri: () => false },
+  '../../src/services/i18n': { t: (key) => key, getUiLocale: () => 'zh-CN', localizeMessage: (value) => typeof value === 'string' ? value : value?.key ?? '', message: (key, params) => ({ key, params }) },
+  '../i18n': { useI18n: () => {} },
+};
+
 function load(path, dependencies = {}, globals = {}) {
   const module = { exports: {} };
   const compiled = ts.transpileModule(source(path).replaceAll('import.meta', '__import_meta'), {
@@ -25,8 +44,13 @@ function load(path, dependencies = {}, globals = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React, esModuleInterop: true },
   });
   assert.deepEqual(compiled.diagnostics?.filter((entry) => entry.category === ts.DiagnosticCategory.Error), []);
-  const context = vm.createContext({ module, exports: module.exports, ...globals,
-    require: (name) => name in dependencies ? dependencies[name] : require(name),
+  const context = vm.createContext({ module, exports: module.exports,
+    // The background-sync frame is a native concern; the DOM-less environment here
+    // has no canvas, so the queued callback is intentionally dropped.
+    requestAnimationFrame: () => 0,
+    cancelAnimationFrame: () => {},
+    ...globals,
+    require: (name) => name in dependencies ? dependencies[name] : name in builtinDependencies ? builtinDependencies[name] : require(name),
     __import_meta: { glob: themeGlob },
   });
   vm.runInContext(compiled.outputText, context, { filename: path });
@@ -266,14 +290,42 @@ function appHarness(runtime, facade) {
     },
   };
   hooks.useLayoutEffect = hooks.useEffect;
+  const pageStub = (props) => React.createElement('div', props);
   const dependencies = {
     react: hooks,
     '../../src/platform/events': { listenEvent: async () => () => {} },
-    '../../src/business/facade': facade,
+    '../../src/business/facade': {
+      normalizeDebugMode: () => false, displayPathText: (value) => value, loadStructuralBlocks: async () => [],
+      createRuntimeProjectionCollection: () => ({}), saveColorModeConfig: async () => {}, ...facade,
+    },
     './themeRuntime': runtime,
     '../components/ui/button': { Button: (props) => React.createElement('button', props) },
     '../components/ui/scroll-area': { ScrollArea: (props) => React.createElement('div', props) },
     '../windows/libraryEvents': { projectionLibraryImportedEvent: 'library-import' },
+    // D-phase additions to AppShell's import surface; stubbed so the shell renders
+    // without loading every page bundle through the vm harness.
+    '../../src/business/projectionLibrary': {
+      addOrUpdateRecord: async (state) => state,
+      loadLibrary: async () => ({ entries: [], replicas: [], folders: [] }),
+    },
+    './NavIcon': { NavIcon: () => null },
+    '../windows/main/UpdateDialog': { UpdateDialog: () => null },
+    '../windows/main/updateRecovery': {
+      readUpdateDraft: () => null, takeUpdateDraft: () => null, useUpdateDraft: () => null,
+      useApplicationCloseRecovery: () => ({ error: "", retry: async () => {} }),
+    },
+    '../windows/enumerator': { EnumeratorDialog: () => null, openEnumeratorWithWindowBehavior: async () => {} },
+    '../styles/enumerator.css': {},
+    '../windows/main/pages/home/HomePage': { HomePage: pageStub },
+    '../windows/main/pages/library/LibraryPage': { LibraryPage: pageStub },
+    '../windows/main/pages/properties/PropertiesPage': { PropertiesPage: pageStub },
+    '../windows/main/pages/statistics/StatisticsPage': { StatisticsPage: pageStub },
+    '../windows/main/pages/flake/FlakePage': { FlakePage: pageStub },
+    '../windows/main/pages/replace/ReplacePage': { ReplacePage: pageStub },
+    '../windows/main/pages/generate/GeneratePage': { GeneratePage: pageStub },
+    '../windows/main/pages/render/RenderPage': { RenderPage: pageStub },
+    '../windows/main/pages/settings/SettingsPage': { SettingsPage: pageStub },
+    '../windows/main/pages/ui-test/UiTestPage': { UiTestPage: pageStub },
   };
   for (const [folder, name] of [['home', 'Home'], ['library', 'Library'], ['properties', 'Properties'], ['statistics', 'Statistics'], ['flake', 'Flake'], ['replace', 'Replace'], ['generate', 'Generate'], ['render', 'Render'], ['settings', 'Settings'], ['ui-test', 'UiTest']]) {
     dependencies[`../windows/main/pages/${folder}/${name}Page`] = { [`${name}Page`]: () => null };
@@ -408,7 +460,7 @@ test('配置仅保存用户明暗偏好，旧配置默认跟随系统；设置�
   await config.saveColorModeConfig('invalid');
   assert.equal(JSON.stringify(saves), JSON.stringify([{ color_mode: 'dark' }, { color_mode: 'system' }]));
   const settings = source('ui/windows/main/pages/settings/SettingsPage.tsx');
-  assert.doesNotMatch(settings, /<(?:button|input|select|textarea)\b/);
+  assert.doesNotMatch(settings.replace(/<select\b[^>]*id="nova-ui-language"[\s\S]*?<\/select>/g, ''), /<(?:button|input|select|textarea)\b/);
   for (const component of ['Button', 'Input', 'Dropdown', 'Checkbox', 'Textarea', 'ScrollArea']) assert.match(settings, new RegExp(String.raw`<${component}\b`));
 });
 

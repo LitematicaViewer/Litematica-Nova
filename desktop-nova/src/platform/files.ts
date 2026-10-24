@@ -205,6 +205,224 @@ export function readGameResourceRemoteText(url: string): Promise<string> {
   return invoke("read_game_resource_remote_text", { url });
 }
 
+// ---------------------------------------------------------------------------
+// Projection-library commands (C.12, design 2.2.2)
+// ---------------------------------------------------------------------------
+
+/** Backend task kinds accepted by the single serial task queue. */
+export type LibraryTaskKind =
+  | "scan"
+  | "checksum"
+  | "batch-copy"
+  | "batch-rename"
+  | "batch-trash"
+  | "restore"
+  | "export-zip"
+  | "index";
+
+/** Folder reference handed to the scanner; only `tracked` participates (includes built-in import). */
+export interface LibraryFolderRef {
+  path: string;
+  type: "tracked" | "non_archive";
+}
+
+/** Recheck granularity (four levels, smallest is a single replica). */
+export type RecheckScope =
+  | { kind: "all" }
+  | { kind: "folder"; folderPath: string }
+  | { kind: "entry"; entryId: string }
+  | { kind: "replica"; replicaId: string };
+
+export interface ScanTaskParams {
+  folders: LibraryFolderRef[];
+  useCache?: boolean;
+  forceRecheck?: boolean;
+  scope?: RecheckScope;
+}
+
+export interface ChecksumTaskParams {
+  paths: string[];
+}
+
+export interface LibraryTaskSubmitOutput {
+  taskId: string;
+}
+
+export interface LibraryTaskCancelOutput {
+  cancelled: boolean;
+}
+
+export interface TaskDescriptor {
+  taskId: string;
+  kind: LibraryTaskKind;
+}
+
+export interface TaskQueueSnapshot {
+  pending: TaskDescriptor[];
+  running: TaskDescriptor | null;
+}
+
+export interface LitematicChecksum {
+  sha256: string;
+  byte_count: number;
+}
+
+/** Computes the compressed-bytes SHA-256 of a `.litematic` file (never mutates it). */
+export function computeLitematicChecksum(path: string): Promise<LitematicChecksum> {
+  return invoke("compute_litematic_checksum", { path });
+}
+
+/** Submits a task into the single serial background queue. */
+export function libraryTaskSubmit(kind: LibraryTaskKind, params: unknown): Promise<LibraryTaskSubmitOutput> {
+  return invoke("library_task_submit", { kind, params });
+}
+
+/** Requests cooperative cancellation of a pending/running task. */
+export function libraryTaskCancel(taskId: string): Promise<LibraryTaskCancelOutput> {
+  return invoke("library_task_cancel", { taskId });
+}
+
+/** Reads the current queue snapshot (pending + running). */
+export function libraryTaskStatus(): Promise<TaskQueueSnapshot> {
+  return invoke("library_task_status");
+}
+
+export interface TrashMoveItem {
+  sourcePath: string;
+  trashName: string;
+}
+
+export interface TrashMoveResult {
+  sourcePath: string;
+  trashPath: string;
+  ok: boolean;
+  reason?: string;
+}
+
+export interface TrashRestoreItem {
+  trashPath: string;
+  targetPath: string;
+  renameTo?: string | null;
+}
+
+export interface TrashRestoreResult {
+  trashPath: string;
+  targetPath: string;
+  ok: boolean;
+  reason?: string;
+}
+
+export interface TrashPurgeItem {
+  trashPath: string;
+}
+
+export interface TrashPurgeResult {
+  trashPath: string;
+  ok: boolean;
+  reason?: string;
+}
+
+/** Moves library-managed files into `projection-library/trash`, one result per item. */
+export function libraryTrashMove(items: TrashMoveItem[]): Promise<TrashMoveResult[]> {
+  return invoke("library_trash_move", { items });
+}
+
+/** Restores trashed files; an occupied target reports `ok=false, reason="occupied"`. */
+export function libraryTrashRestore(items: TrashRestoreItem[]): Promise<TrashRestoreResult[]> {
+  return invoke("library_trash_restore", { items });
+}
+
+/** Physically deletes trashed files; unavailable items are skipped and reported. */
+export function libraryTrashPurge(items: TrashPurgeItem[]): Promise<TrashPurgeResult[]> {
+  return invoke("library_trash_purge", { items });
+}
+
+// ---------------------------------------------------------------------------
+// Projection-library index commands (D.1/D.2, design 2.2.2(C))
+// ---------------------------------------------------------------------------
+
+/** Searchable index fields; matches the Rust `IndexField` enum. */
+export type LibraryIndexField =
+  | "displayName"
+  | "fileName"
+  | "author"
+  | "description"
+  | "tags"
+  | "categoryPath"
+  | "version";
+
+export interface LibraryIndexQuery {
+  text: string;
+  /** Restrict matches to these fields; omitted means all fields. */
+  fields?: LibraryIndexField[];
+}
+
+export interface LibraryIndexQueryResult {
+  entryIds: string[];
+  /** `false` while the index is still building; results are the ready part. */
+  ready: boolean;
+}
+
+export interface LibraryIndexStatus {
+  ready: boolean;
+  indexedCount: number;
+  building: boolean;
+}
+
+/** One entry's indexable projection handed to the `index` task. */
+export interface LibraryIndexEntry {
+  entryId: string;
+  displayName: string;
+  fileName: string;
+  author: string;
+  description: string;
+  tags: string[];
+  categoryPath: string;
+  version: string;
+}
+
+/** Read-only inverted-index lookup; never mutates library data or the index. */
+export function libraryIndexQuery(query: LibraryIndexQuery): Promise<LibraryIndexQueryResult> {
+  return invoke("library_index_query", { query });
+}
+
+/** Reads index readiness/count for the "building, showing partial results" UI. */
+export function libraryIndexStatus(): Promise<LibraryIndexStatus> {
+  return invoke("library_index_status");
+}
+
+// ---------------------------------------------------------------------------
+// Packaged export (E.5, design 2.5.4)
+// ---------------------------------------------------------------------------
+
+/** One entry of a packaged export; `include.projection` is always true. */
+export interface LibraryExportEntry {
+  /** Flat zip stem (no extension). */
+  archiveName: string;
+  sourcePath: string;
+  fileName: string;
+  displayName: string;
+  author: string;
+  tags: string[];
+  checksum: string | null;
+  previewPath?: string;
+  materialListText?: string;
+}
+
+export interface LibraryExportZipParams {
+  outputPath: string;
+  exportedAt: string;
+  includePreview: boolean;
+  includeMaterialList: boolean;
+  includeManifest: boolean;
+  entries: LibraryExportEntry[];
+}
+
+/** Submits the packaged-export task; the caller awaits the `-task-finished` event. */
+export function libraryExportZip(params: LibraryExportZipParams): Promise<LibraryTaskSubmitOutput> {
+  return invoke("library_export_zip", { params });
+}
+
 export function readResourcePackLanguage(language: "zh_cn" | "en_us"): Promise<Record<string, string>> {
   return invoke("read_resource_pack_language", { language });
 }

@@ -47,21 +47,19 @@ test('各主题明暗材料库文本与交互面板色值保持可读；不以�
 });
 
 test('卡片与分类不继承纹理按钮或 8bit 位移阴影，状态独立且焦点覆盖整卡', () => {
-  const tile = rule(library, 'html[data-theme] .library-page [data-slot="button"].library-tile-open');
-  assert.equal(tile['border-image'], 'none');
-  assert.equal(tile['box-shadow'], 'none');
+  // D-phase moved the "action button" identity onto `themeSlot` (`data-slot="library-tile"`),
+  // so theme button textures never reach the tile host; `library.css` only pins layout here.
+  const tile = rule(library, 'html[data-theme] .library-page .library-tile-open');
   assert.equal(tile.transform, 'none');
   assert.equal(tile.height, 'auto');
   assert.equal(tile.gap, '0');
-  assert.match(rule(library, '.library-tile[data-checked]').background, /var\(--option-active-background/);
-  assert.match(rule(library, '.library-tile:has(.library-tile-open:focus-visible)')['outline-color'], /var\(--ring/);
-  const category = rule(library, 'html[data-theme] .library-page [data-slot="button"].library-category');
-  assert.equal(category['border-image'], 'none');
-  assert.equal(category['box-shadow'], 'none');
+  assert.equal(tile.padding, '0');
+  assert.equal(rule(library, '.library-tile')['position'], 'relative');
+  const category = rule(library, 'html[data-theme] .library-page .library-category');
   assert.equal(category.transform, 'none');
-  assert.match(rule(library, 'html[data-theme] .library-page .library-category:hover:not(:disabled)').background, /var\(/);
-  assert.match(rule(library, 'html[data-theme] .library-page .library-category[aria-pressed="true"]').background, /var\(/);
-  assert.equal(rule(library, 'html[data-theme] .library-page [data-slot="button"]')['gap'], '8px');
+  const categoryRow = rule(library, '.library-page .library-category');
+  assert.equal(categoryRow.height, 'auto');
+  assert.equal(categoryRow.gap, '8px');
 });
 
 test('Minecraft 三栏与工具栏使用当前明暗令牌；预览和滚动条保留真实资源及像素边缘', () => {

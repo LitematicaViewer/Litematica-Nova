@@ -5,7 +5,7 @@ import {
   redenMachineDetail,
   redenSearchLitematica,
 } from "../platform/http";
-import { addOrUpdateRecord, LibraryState } from "./libraryStore";
+import { importDownloadedToBuiltinFolder, LibraryState } from "./libraryStore";
 
 export interface RedenTag {
   tag?: string;
@@ -171,11 +171,17 @@ export function validateRedenSizes(detail: RedenMachine, sizes: RedenSizes): str
   return errors;
 }
 
+/**
+ * Online-library import (E.2 / 裁决 15). The "直接入库" semantics are retired:
+ * the downloaded file is copied into the built-in import folder and merged by a
+ * scan, sharing the same landing path as drag/copy imports. The name is kept so
+ * the upstream import path does not change.
+ */
 export async function importDownloadedLitematic(state: LibraryState, path: string): Promise<LibraryState> {
   if (!path.toLowerCase().endsWith(".litematic")) {
     throw new Error(t("native.reden.notSchematic", { path }));
   }
-  return await addOrUpdateRecord(state, path);
+  return await importDownloadedToBuiltinFolder(state, path);
 }
 
 /** Persistence succeeded before notifying other windows; a broadcast failure is only a refresh warning. */

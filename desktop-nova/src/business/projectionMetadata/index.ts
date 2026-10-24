@@ -1,4 +1,4 @@
-export type { ProjectionRecord } from "../../services/libraryStore";
+export type { LibraryEntry, Replica, ProjectionAnalysis } from "../../services/libraryStore";
 export { analyzeFile } from "../../services/libraryStore";
 export type { PathInfo, ProductPreviewImage, ProjectionPreviewImageOutput } from "../../services/backend";
 export {

@@ -1,5 +1,10 @@
-import { DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT } from "./sendDialog";
 import { displayFilePath } from "../../../../../src/business/projectionLibrary";
+
+/**
+ * 分发窗口与本地库浏览器共用的“尾部路径级数”默认值。
+ * 放在这里而非 `sendDialog.tsx`，避免 `function` 与 `sendDialog` 形成循环依赖。
+ */
+export const DEFAULT_LOCAL_LIBRARY_TAIL_PATH_COUNT = 3;
 
 /**
  * 压缩文件夹路径，保留最后 N 级目录。
@@ -38,3 +43,12 @@ export function ensureLitematicFileName(fileName: string): string {
   return /\.litematic$/i.test(trimmed) ? trimmed : `${trimmed}.litematic`;
 }
 
+/**
+ * 文件名校验（供分发窗口与回收区还原改名复用）。返回空字符串表示合法。
+ */
+export function replicaNameError(fileName: string): string {
+  const normalized = ensureLitematicFileName(fileName);
+  if (!normalized) return "请填写文件名。";
+  if (/[\\/:*?"<>|]/.test(normalized)) return "文件名不能包含 \\ / : * ? \" < > | 等字符。";
+  return "";
+}
