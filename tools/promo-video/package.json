@@ -1,0 +1,25 @@
+{
+  "name": "nova-promo-video",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Independent bilingual code-to-video workspace for Nova",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "studio": "remotion studio src/index.ts --no-open",
+    "render": "pwsh -NoProfile -File scripts/render.ps1",
+    "check": "pwsh -NoProfile -File scripts/check.ps1"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.538",
+    "@remotion/captions": "4.0.538",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "remotion": "4.0.538"
+  },
+  "devDependencies": {
+    "@playwright/cli": "0.1.22",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "5.9.3"
+  }
+}
