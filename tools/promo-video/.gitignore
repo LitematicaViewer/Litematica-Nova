@@ -1,9 +1,11 @@
 node_modules/
 .playwright/
 .playwright-cli/
+.reference-cache/
 output/*
 !output/.gitkeep
 assets/original/*
 !assets/original/.gitkeep
 assets/audio/*
 !assets/audio/.gitkeep
+.cache/

@@ -1,0 +1,1542 @@
+[
+  {
+    "id": "S01",
+    "inSeconds": 0,
+    "outSeconds": 2,
+    "act": "A · Find",
+    "kind": "hero",
+    "variant": 0,
+    "problemOrBenefit": "让下一座建筑，先被看见。",
+    "onScreenTextZh": "让下一座建筑，先被看见。",
+    "onScreenTextEn": "See your next build.",
+    "openingState": "真实建筑落定",
+    "userAction": "无操作，真实 GPU 主体",
+    "visibleResult": "建筑成为唯一主角",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "assets/original/hero-standard-contained.png: actual 0.4 Standard GPU output",
+    "cameraAndFraming": "single building hero, restrained 2.5D plane",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "blueprint mask / window handoff",
+    "audioCue": "soft-impact at 0.4s; swish at 1.4s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S02",
+    "inSeconds": 2,
+    "outSeconds": 4,
+    "act": "A · Find",
+    "kind": "hero",
+    "variant": 1,
+    "problemOrBenefit": "从蓝图，到真实方块。",
+    "onScreenTextZh": "从蓝图，到真实方块。",
+    "onScreenTextEn": "Blueprints. Made tangible.",
+    "openingState": "建筑转工程蓝图标注",
+    "userAction": "抽象蓝图遮罩过渡",
+    "visibleResult": "原始 GPU 图完整显现",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "assets/original/hero-standard-contained.png: actual 0.4 Standard GPU output",
+    "cameraAndFraming": "single building hero, restrained 2.5D plane",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "blueprint mask / window handoff",
+    "audioCue": "soft-impact at 0.4s; swish at 1.4s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S03",
+    "inSeconds": 4,
+    "outSeconds": 6,
+    "act": "A · Find",
+    "kind": "hero",
+    "variant": 2,
+    "problemOrBenefit": "不进游戏，也能看清。",
+    "onScreenTextZh": "不进游戏，也能看清。",
+    "onScreenTextEn": "Explore without launching Minecraft.",
+    "openingState": "真实建筑与软件窗口",
+    "userAction": "窗口从右侧滑入",
+    "visibleResult": "真实视图落在 Nova 工作区",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "assets/original/hero-standard-contained.png: actual 0.4 Standard GPU output",
+    "cameraAndFraming": "single building hero, restrained 2.5D plane",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "blueprint mask / window handoff",
+    "audioCue": "soft-impact at 0.4s; swish at 1.4s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S04",
+    "inSeconds": 6,
+    "outSeconds": 8,
+    "act": "A · Find",
+    "kind": "hero",
+    "variant": 3,
+    "problemOrBenefit": "Litematica-Nova · Beta 0.4",
+    "onScreenTextZh": "Litematica-Nova · Beta 0.4",
+    "onScreenTextEn": "Litematica-Nova · Beta 0.4",
+    "openingState": "产品与建筑同框",
+    "userAction": "无操作，品牌转场",
+    "visibleResult": "版本、产品和功能定位落定",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "assets/original/hero-standard-contained.png: actual 0.4 Standard GPU output",
+    "cameraAndFraming": "single building hero, restrained 2.5D plane",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "blueprint mask / window handoff",
+    "audioCue": "soft-impact at 0.4s; swish at 1.4s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S05",
+    "inSeconds": 8,
+    "outSeconds": 10,
+    "act": "A · Find",
+    "kind": "library",
+    "variant": 0,
+    "problemOrBenefit": "投影，都有自己的位置。",
+    "onScreenTextZh": "投影，都有自己的位置。",
+    "onScreenTextEn": "A place for every schematic.",
+    "openingState": "投影库卡片空槽",
+    "userAction": "演示导入公开原创投影",
+    "visibleResult": "卡片错峰进入真实网格槽",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "deck-deal-flyin/type-and-filter: 16f landing, 5f card stagger; actual control anchor; result starts 4f after click",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S06",
+    "inSeconds": 10,
+    "outSeconds": 12.5,
+    "act": "A · Find",
+    "kind": "library",
+    "variant": 1,
+    "problemOrBenefit": "按名字，直接找到。",
+    "onScreenTextZh": "按名字，直接找到。",
+    "onScreenTextEn": "Find it by name.",
+    "openingState": "投影库搜索框为空",
+    "userAction": "鼠标点击搜索并输入展馆关键词",
+    "visibleResult": "搜索文本逐字出现",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "deck-deal-flyin/type-and-filter: 16f landing, 5f card stagger; actual control anchor; result starts 4f after click",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S07",
+    "inSeconds": 12.5,
+    "outSeconds": 15,
+    "act": "A · Find",
+    "kind": "library",
+    "variant": 2,
+    "problemOrBenefit": "从一整库，到一个目标。",
+    "onScreenTextZh": "从一整库，到一个目标。",
+    "onScreenTextEn": "From a library to the right build.",
+    "openingState": "卡片列表待筛选",
+    "userAction": "完成搜索",
+    "visibleResult": "匹配列表收敛，目标留在网格首位",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "deck-deal-flyin/type-and-filter: 16f landing, 5f card stagger; actual control anchor; result starts 4f after click",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S08",
+    "inSeconds": 15,
+    "outSeconds": 17.5,
+    "act": "A · Find",
+    "kind": "library",
+    "variant": 3,
+    "problemOrBenefit": "分类，让整理更轻松。",
+    "onScreenTextZh": "分类，让整理更轻松。",
+    "onScreenTextEn": "Keep your collection organized.",
+    "openingState": "全部投影分类",
+    "userAction": "点击建筑分类",
+    "visibleResult": "分类高亮与对应条目同步",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "deck-deal-flyin/type-and-filter: 16f landing, 5f card stagger; actual control anchor; result starts 4f after click",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S09",
+    "inSeconds": 17.5,
+    "outSeconds": 20,
+    "act": "A · Find",
+    "kind": "library",
+    "variant": 4,
+    "problemOrBenefit": "预览与详情，一起看。",
+    "onScreenTextZh": "预览与详情，一起看。",
+    "onScreenTextEn": "Preview and details, together.",
+    "openingState": "选中蓝图展馆",
+    "userAction": "点击条目详情",
+    "visibleResult": "真实尺寸、版本与几何预览出现",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "deck-deal-flyin/type-and-filter: 16f landing, 5f card stagger; actual control anchor; result starts 4f after click",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S10",
+    "inSeconds": 20,
+    "outSeconds": 22,
+    "act": "A · Find",
+    "kind": "library",
+    "variant": 5,
+    "problemOrBenefit": "常用项目，随时回来。",
+    "onScreenTextZh": "常用项目，随时回来。",
+    "onScreenTextEn": "Keep your favorites close.",
+    "openingState": "条目未收藏",
+    "userAction": "点击收藏",
+    "visibleResult": "收藏状态与收藏夹列表同步",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "deck-deal-flyin/type-and-filter: 16f landing, 5f card stagger; actual control anchor; result starts 4f after click",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S11",
+    "inSeconds": 22,
+    "outSeconds": 25,
+    "act": "B · Build",
+    "kind": "viewer",
+    "variant": 0,
+    "problemOrBenefit": "标准模式，结构清楚。",
+    "onScreenTextZh": "标准模式，结构清楚。",
+    "onScreenTextEn": "Standard. Clear structure.",
+    "openingState": "三维页标准模式",
+    "userAction": "查看标准模式真实画面",
+    "visibleResult": "真实 Standard GPU 画面出现",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "assets/original/hero-standard-contained.png: actual 0.4 Standard GPU output",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Asset must identify distinct actual rendering mode; never reuse one frame as three modes"
+  },
+  {
+    "id": "S12",
+    "inSeconds": 25,
+    "outSeconds": 28,
+    "act": "B · Build",
+    "kind": "viewer",
+    "variant": 1,
+    "problemOrBenefit": "实时与预加载，按需选择。",
+    "onScreenTextZh": "实时与预加载，按需选择。",
+    "onScreenTextEn": "Realtime or prebuilt. Your choice.",
+    "openingState": "三维页标准模式选择",
+    "userAction": "选择加载方式",
+    "visibleResult": "只展示发布选择控件；有真实该模式素材才显示GPU画面",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published mode/loading selector UI; no GPU frame for another mode claimed",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Asset must identify distinct actual rendering mode; never reuse one frame as three modes"
+  },
+  {
+    "id": "S13",
+    "inSeconds": 28,
+    "outSeconds": 31,
+    "act": "B · Build",
+    "kind": "viewer",
+    "variant": 2,
+    "problemOrBenefit": "三种模式，同一个工作区。",
+    "onScreenTextZh": "三种模式，同一个工作区。",
+    "onScreenTextEn": "Three modes. One workspace.",
+    "openingState": "三维页完整模式选择",
+    "userAction": "选择完整模式控件",
+    "visibleResult": "不使用其他模式图像冒充；有独立真实Full素材才显示",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published mode/loading selector UI; no GPU frame for another mode claimed",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Asset must identify distinct actual rendering mode; never reuse one frame as three modes"
+  },
+  {
+    "id": "S14",
+    "inSeconds": 31,
+    "outSeconds": 34,
+    "act": "B · Build",
+    "kind": "viewer",
+    "variant": 3,
+    "problemOrBenefit": "观察方式，随手切换。",
+    "onScreenTextZh": "观察方式，随手切换。",
+    "onScreenTextEn": "Switch the way you explore.",
+    "openingState": "相机拖拽操作方式",
+    "userAction": "选择第一人称操作控件",
+    "visibleResult": "控件由拖拽变第一人称并显示WASD；真实Standard帧不假造角度变化",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "assets/original/hero-standard-contained.png: actual 0.4 Standard GPU output",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Asset must identify distinct actual rendering mode; never reuse one frame as three modes"
+  },
+  {
+    "id": "S15",
+    "inSeconds": 34,
+    "outSeconds": 36.5,
+    "act": "B · Build",
+    "kind": "layer",
+    "variant": 0,
+    "problemOrBenefit": "按层检查，从细节开始。",
+    "onScreenTextZh": "按层检查，从细节开始。",
+    "onScreenTextEn": "Inspect the build, layer by layer.",
+    "openingState": "二维分层 Y=32",
+    "userAction": "选择 Y=44",
+    "visibleResult": "真实 Core 数据对应二维切面变化",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "assets/original/layer-{32,44,60}.json: actual Core output",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S16",
+    "inSeconds": 36.5,
+    "outSeconds": 39,
+    "act": "B · Build",
+    "kind": "layer",
+    "variant": 1,
+    "problemOrBenefit": "每个高度，都有答案。",
+    "onScreenTextZh": "每个高度，都有答案。",
+    "onScreenTextEn": "Every height tells a story.",
+    "openingState": "二维分层 Y=44",
+    "userAction": "选择 Y=60",
+    "visibleResult": "真实 Core 高度60占用图，标明二维数据视图",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "assets/original/layer-{32,44,60}.json: actual Core output",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S17",
+    "inSeconds": 39,
+    "outSeconds": 42,
+    "act": "B · Build",
+    "kind": "stats",
+    "variant": 0,
+    "problemOrBenefit": "把建筑，变成清单。",
+    "onScreenTextZh": "把建筑，变成清单。",
+    "onScreenTextEn": "Turn a build into a plan.",
+    "openingState": "结构概览",
+    "userAction": "打开材料统计",
+    "visibleResult": "55,909 个非空气方块和15种材料",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "row-embed/unit-dot-swarm-regroup: 16f arrival, no fabricated totals",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S18",
+    "inSeconds": 42,
+    "outSeconds": 45,
+    "act": "B · Build",
+    "kind": "stats",
+    "variant": 1,
+    "problemOrBenefit": "材料数量，一眼掌握。",
+    "onScreenTextZh": "材料数量，一眼掌握。",
+    "onScreenTextEn": "Know what you need.",
+    "openingState": "真实材料清单",
+    "userAction": "聚焦材料行",
+    "visibleResult": "真实数量与物品身份逐行落定",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "row-embed/unit-dot-swarm-regroup: 16f arrival, no fabricated totals",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S19",
+    "inSeconds": 45,
+    "outSeconds": 48,
+    "act": "B · Build",
+    "kind": "stats",
+    "variant": 2,
+    "problemOrBenefit": "按个、按组，顺手换算。",
+    "onScreenTextZh": "按个、按组，顺手换算。",
+    "onScreenTextEn": "Items or stacks. Your choice.",
+    "openingState": "材料按个显示",
+    "userAction": "点击组单位",
+    "visibleResult": "8颗海晶灯对应1/8组；真实上限64",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "row-embed/unit-dot-swarm-regroup: 16f arrival, no fabricated totals",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S20",
+    "inSeconds": 48,
+    "outSeconds": 51,
+    "act": "B · Build",
+    "kind": "stats",
+    "variant": 3,
+    "problemOrBenefit": "容器里的物品，也能统计。",
+    "onScreenTextZh": "容器里的物品，也能统计。",
+    "onScreenTextEn": "Count container items, too.",
+    "openingState": "统计包含容器选项未选",
+    "userAction": "启用包含容器物品",
+    "visibleResult": "当前原创投影0容器，结果明确显示0而不虚构物品",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "row-embed/unit-dot-swarm-regroup: 16f arrival, no fabricated totals",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S21",
+    "inSeconds": 51,
+    "outSeconds": 54,
+    "act": "B · Build",
+    "kind": "export",
+    "variant": 0,
+    "problemOrBenefit": "清单导出，带到施工现场。",
+    "onScreenTextZh": "清单导出，带到施工现场。",
+    "onScreenTextEn": "Take the list to your build.",
+    "openingState": "材料导出 CSV",
+    "userAction": "点击导出",
+    "visibleResult": "真实正式 Core 输出的15行 CSV 文件",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Actual CSV/HTML and Java1.20.1 world files; no in-game loading claimed; raw/sanitized HTML byte sizes documented"
+  },
+  {
+    "id": "S22",
+    "inSeconds": 54,
+    "outSeconds": 57,
+    "act": "B · Build",
+    "kind": "stockpile",
+    "variant": 0,
+    "problemOrBenefit": "为一次施工，建一个任务。",
+    "onScreenTextZh": "为一次施工，建一个任务。",
+    "onScreenTextEn": "One build. One focused task.",
+    "openingState": "备货工作台任务列表",
+    "userAction": "新建展馆施工演示任务",
+    "visibleResult": "15种材料与总需求同步进入任务",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S23",
+    "inSeconds": 57,
+    "outSeconds": 60,
+    "act": "B · Build",
+    "kind": "stockpile",
+    "variant": 1,
+    "problemOrBenefit": "已备数量，直接记。",
+    "onScreenTextZh": "已备数量，直接记。",
+    "onScreenTextEn": "Log what you have prepared.",
+    "openingState": "切制铜块需求84，已备0",
+    "userAction": "输入64",
+    "visibleResult": "已备0→64，剩余84→20",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S24",
+    "inSeconds": 60,
+    "outSeconds": 63,
+    "act": "B · Build",
+    "kind": "stockpile",
+    "variant": 2,
+    "problemOrBenefit": "剩余多少，不用再心算。",
+    "onScreenTextZh": "剩余多少，不用再心算。",
+    "onScreenTextEn": "What is left? It is right there.",
+    "openingState": "切制铜块已备64",
+    "userAction": "查看同步剩余",
+    "visibleResult": "64+20=84；单材料进度76.2%",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S25",
+    "inSeconds": 63,
+    "outSeconds": 66,
+    "act": "B · Build",
+    "kind": "stockpile",
+    "variant": 3,
+    "problemOrBenefit": "不同项目，独立跟进。",
+    "onScreenTextZh": "不同项目，独立跟进。",
+    "onScreenTextEn": "Different projects. Separate progress.",
+    "openingState": "展馆施工任务已记录",
+    "userAction": "切到第二演示任务再切回",
+    "visibleResult": "两个任务状态独立，切回保留64",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S26",
+    "inSeconds": 66,
+    "outSeconds": 68,
+    "act": "B · Build",
+    "kind": "stockpile",
+    "variant": 4,
+    "problemOrBenefit": "进度自动保留，下次接着来。",
+    "onScreenTextZh": "进度自动保留，下次接着来。",
+    "onScreenTextEn": "Your progress stays with your task.",
+    "openingState": "备货任务已更新",
+    "userAction": "无虚构保存点击，展示自动持久化状态",
+    "visibleResult": "持久化状态已保存，演示数据明确标注",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S27",
+    "inSeconds": 68,
+    "outSeconds": 71,
+    "act": "B · Build",
+    "kind": "properties",
+    "variant": 0,
+    "problemOrBenefit": "结构信息，不用翻文件。",
+    "onScreenTextZh": "结构信息，不用翻文件。",
+    "onScreenTextEn": "Your structure at a glance.",
+    "openingState": "概览页",
+    "userAction": "选择结构属性",
+    "visibleResult": "真实96×100×72、1区域、0实体",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S28",
+    "inSeconds": 71,
+    "outSeconds": 74,
+    "act": "B · Build",
+    "kind": "replace",
+    "variant": 0,
+    "problemOrBenefit": "源与目标，映射清楚。",
+    "onScreenTextZh": "源与目标，映射清楚。",
+    "onScreenTextEn": "Clear source-to-target mapping.",
+    "openingState": "替换页源与目标已选择",
+    "userAction": "查看切制铜块→氧化铜映射",
+    "visibleResult": "显示84个匹配；仅演示控件，不假造 GPU 改色",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Source-derived UI demo, NOT actual composite GPU/output success"
+  },
+  {
+    "id": "S29",
+    "inSeconds": 74,
+    "outSeconds": 77,
+    "act": "B · Build",
+    "kind": "replace",
+    "variant": 1,
+    "problemOrBenefit": "改动前后，数量说清。",
+    "onScreenTextZh": "改动前后，数量说清。",
+    "onScreenTextEn": "A clear result for every change.",
+    "openingState": "替换映射确认",
+    "userAction": "点击执行替换的UI演示",
+    "visibleResult": "84个对应材料条目变化，标注演示状态",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Source-derived UI demo, NOT actual composite GPU/output success"
+  },
+  {
+    "id": "S30",
+    "inSeconds": 77,
+    "outSeconds": 79.5,
+    "act": "B · Build",
+    "kind": "replace",
+    "variant": 2,
+    "problemOrBenefit": "另存一份，保留原件。",
+    "onScreenTextZh": "另存一份，保留原件。",
+    "onScreenTextEn": "Save a copy. Keep your original.",
+    "openingState": "替换结果待保存",
+    "userAction": "选择另存为",
+    "visibleResult": "明确新文件名，不覆盖源文件的演示结果",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Source-derived UI demo, NOT actual composite GPU/output success"
+  },
+  {
+    "id": "S31",
+    "inSeconds": 79.5,
+    "outSeconds": 82,
+    "act": "B · Build",
+    "kind": "properties",
+    "variant": 1,
+    "problemOrBenefit": "可读的检查，不是盲目写出。",
+    "onScreenTextZh": "可读的检查，不是盲目写出。",
+    "onScreenTextEn": "Check first. Export with clarity.",
+    "openingState": "目标格式能力检查",
+    "userAction": "查看检查结果",
+    "visibleResult": "已发布功能明确失败原因；不承诺任意版本等价转换",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S32",
+    "inSeconds": 82,
+    "outSeconds": 85,
+    "act": "B · Build",
+    "kind": "export",
+    "variant": 1,
+    "problemOrBenefit": "需要网页，也有完整清单。",
+    "onScreenTextZh": "需要网页，也有完整清单。",
+    "onScreenTextEn": "A material list you can open anywhere.",
+    "openingState": "材料导出选择网页",
+    "userAction": "点击网页导出",
+    "visibleResult": "真实正式 Core 生成的材料 HTML 文件",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Actual CSV/HTML and Java1.20.1 world files; no in-game loading claimed; raw/sanitized HTML byte sizes documented"
+  },
+  {
+    "id": "S33",
+    "inSeconds": 85,
+    "outSeconds": 88,
+    "act": "B · Build",
+    "kind": "export",
+    "variant": 2,
+    "problemOrBenefit": "结果文件，真实可用。",
+    "onScreenTextZh": "结果文件，真实可用。",
+    "onScreenTextEn": "Real output. Ready to use.",
+    "openingState": "输出文件列表",
+    "userAction": "查看已生成 CSV 与 HTML",
+    "visibleResult": "15行清单与247230字节网页结果",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Actual CSV/HTML and Java1.20.1 world files; no in-game loading claimed; raw/sanitized HTML byte sizes documented"
+  },
+  {
+    "id": "S34",
+    "inSeconds": 88,
+    "outSeconds": 91.5,
+    "act": "B · Build",
+    "kind": "export",
+    "variant": 3,
+    "problemOrBenefit": "世界导出，也在同一工具里。",
+    "onScreenTextZh": "世界导出，也在同一工具里。",
+    "onScreenTextEn": "World export, in the same toolkit.",
+    "openingState": "世界导出选项",
+    "userAction": "点击Minecraft世界导出",
+    "visibleResult": "真实level.dat553B及region/r.0.0.mca131072B出现；未宣称游戏已加载",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Actual CSV/HTML and Java1.20.1 world files; no in-game loading claimed; raw/sanitized HTML byte sizes documented"
+  },
+  {
+    "id": "S35",
+    "inSeconds": 91.5,
+    "outSeconds": 95,
+    "act": "B · Build",
+    "kind": "export",
+    "variant": 4,
+    "problemOrBenefit": "能力检查，保护需要保留的数据。",
+    "onScreenTextZh": "能力检查，保护需要保留的数据。",
+    "onScreenTextEn": "Capability checks protect your data.",
+    "openingState": "导出数据检查",
+    "userAction": "查看目标格式能力",
+    "visibleResult": "实体、附加数据不能保留时给出具体原因",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Actual CSV/HTML and Java1.20.1 world files; no in-game loading claimed; raw/sanitized HTML byte sizes documented"
+  },
+  {
+    "id": "S36",
+    "inSeconds": 95,
+    "outSeconds": 98,
+    "act": "B · Build",
+    "kind": "export",
+    "variant": 5,
+    "problemOrBenefit": "准备好，交给下一步。",
+    "onScreenTextZh": "准备好，交给下一步。",
+    "onScreenTextEn": "Ready for your next step.",
+    "openingState": "真实CSV/HTML结果",
+    "userAction": "打开结果预览",
+    "visibleResult": "真实文件内容接到下一段组合项目",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Actual CSV/HTML and Java1.20.1 world files; no in-game loading claimed; raw/sanitized HTML byte sizes documented"
+  },
+  {
+    "id": "S37",
+    "inSeconds": 98,
+    "outSeconds": 101,
+    "act": "C · Deliver",
+    "kind": "compose",
+    "variant": 0,
+    "problemOrBenefit": "多份投影，一个组合项目。",
+    "onScreenTextZh": "多份投影，一个组合项目。",
+    "onScreenTextEn": "Multiple schematics. One project.",
+    "openingState": "组合项目实例列表",
+    "userAction": "添加同一原创投影的重复实例",
+    "visibleResult": "实例列表独立身份与变换值；UI演示不伪造组合GPU",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Source-derived UI demo, NOT actual composite GPU/output success"
+  },
+  {
+    "id": "S38",
+    "inSeconds": 101,
+    "outSeconds": 104,
+    "act": "C · Deliver",
+    "kind": "compose",
+    "variant": 1,
+    "problemOrBenefit": "移动、旋转，明确到整数。",
+    "onScreenTextZh": "移动、旋转，明确到整数。",
+    "onScreenTextEn": "Move and rotate with precision.",
+    "openingState": "实例X=0，已有90°配置",
+    "userAction": "输入X=32",
+    "visibleResult": "X字段0→32，既有90°旋转配置保持",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Source-derived UI demo, NOT actual composite GPU/output success"
+  },
+  {
+    "id": "S39",
+    "inSeconds": 104,
+    "outSeconds": 106.5,
+    "act": "C · Deliver",
+    "kind": "compose",
+    "variant": 2,
+    "problemOrBenefit": "拆分范围，清清楚楚。",
+    "onScreenTextZh": "拆分范围，清清楚楚。",
+    "onScreenTextEn": "Make the split boundaries explicit.",
+    "openingState": "XYZ拆分范围表",
+    "userAction": "设置范围0–47、48–95",
+    "visibleResult": "两个不重叠范围清楚列出，不伪造拖拽几何",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "Source-derived UI demo, NOT actual composite GPU/output success"
+  },
+  {
+    "id": "S40",
+    "inSeconds": 106.5,
+    "outSeconds": 109,
+    "act": "C · Deliver",
+    "kind": "formats",
+    "variant": 0,
+    "problemOrBenefit": "更多格式，统一工作流。",
+    "onScreenTextZh": "更多格式，统一工作流。",
+    "onScreenTextEn": "More formats. One workflow.",
+    "openingState": "格式导入选择器",
+    "userAction": "查看支持格式",
+    "visibleResult": "显示发布版本的5类格式，不宣称任意外部格式",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S41",
+    "inSeconds": 109,
+    "outSeconds": 111.5,
+    "act": "C · Deliver",
+    "kind": "settings",
+    "variant": 0,
+    "problemOrBenefit": "熟悉的界面，也能有新风格。",
+    "onScreenTextZh": "熟悉的界面，也能有新风格。",
+    "onScreenTextEn": "A familiar workspace. Your own style.",
+    "openingState": "设置外观页",
+    "userAction": "切换明暗模式",
+    "visibleResult": "真实发布shadcn明暗token变化",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S42",
+    "inSeconds": 111.5,
+    "outSeconds": 114,
+    "act": "C · Deliver",
+    "kind": "settings",
+    "variant": 1,
+    "problemOrBenefit": "界面倍率，直接设定。",
+    "onScreenTextZh": "界面倍率，直接设定。",
+    "onScreenTextEn": "Set your interface scale.",
+    "openingState": "UI缩放设置1.00×",
+    "userAction": "调整倍率设置到1.25×",
+    "visibleResult": "仅演设置数值与滑块；不伪称当前窗口已应用1.25倍，发布范围0.50×–5.00×",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S43",
+    "inSeconds": 114,
+    "outSeconds": 116,
+    "act": "C · Deliver",
+    "kind": "settings",
+    "variant": 2,
+    "problemOrBenefit": "桌面工具，不只一种系统。",
+    "onScreenTextZh": "桌面工具，不只一种系统。",
+    "onScreenTextEn": "Built for your desktop.",
+    "openingState": "平台下载列表",
+    "userAction": "选择平台包",
+    "visibleResult": "真实Windows/Linux/macOS安装包，不冒充实机全验",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "spotlight-hero-card/cursor-flyover: no shake; bezier(.22,1,.36,1); result hold >=36f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  },
+  {
+    "id": "S44",
+    "inSeconds": 116,
+    "outSeconds": 120,
+    "act": "C · Deliver",
+    "kind": "outro",
+    "variant": 0,
+    "problemOrBenefit": "从蓝图，走向下一座建筑。",
+    "onScreenTextZh": "从蓝图，走向下一座建筑。",
+    "onScreenTextEn": "From a blueprint to your next build.",
+    "openingState": "工作区结束",
+    "userAction": "进入正式下载页CTA",
+    "visibleResult": "0.4.0真实Release地址和品牌稳定停留",
+    "publishedFeatureEvidence": "beta-0.4.0 / 3cd63 / docs/releases/BETA_0_4_0.md; see source-of-truth.md",
+    "sourceAsset": "Published UI source-derived video demonstration; actual Core observatory stats/exports",
+    "cameraAndFraming": "orthographic product window at true 1.00 scale; motion comes from controls and results, not fake applied zoom",
+    "motionRecipeAndParameters": "ui-strip-away-outro: edge to centre 8f stagger, final brand hold 72f",
+    "pointerPath": [
+      [
+        1280,
+        650
+      ],
+      [
+        1030,
+        270
+      ],
+      [
+        1180,
+        490
+      ]
+    ],
+    "transitionOut": "window edge or match-cut; no white flash",
+    "audioCue": "click at .65s; confirm at 1.25s; swish at out-.18s",
+    "qaRisk": "No personal paths, hidden claims, or unreadable UI; demo state explicitly labelled"
+  }
+]

@@ -1,0 +1,23 @@
+import type {zh} from './zh-CN';
+export const en: typeof zh = {
+  language: 'English', demo: 'Published UI demonstration · demo data', real: 'Nova 0.4 · Actual Standard GPU render',
+  nav: ['Home','Library','Overview','3D','Layers','Stockpile','Replace','Compose / Split','Generate','Settings'],
+  import: 'Import schematic', search: 'Search names, authors, tags, categories…', all: 'All schematics',
+  categories: ['All schematics','Buildings','Redstone','Favorites'], gallery: 'Azure Observatory',
+  preview: 'Preview', details: 'Details', favorite: 'Favorite', searchTerm: 'Observatory', matches: 'matches',
+  name: 'Name', version: 'Data version', blocks: 'Blocks', materials: 'Material list',
+  modes: ['Fast','Standard','Full'], realtime: 'Realtime', preload: 'Prebuilt',
+  ready: 'Ready', camera: 'Free camera', drag: 'Drag mode', fly: 'First person',
+  layer: 'Layers', height: 'Height Y', overview: 'Structure overview', containers: 'Container items',
+  item: 'Item', required: 'Required', prepared: 'Prepared', remaining: 'Remaining', stacks: 'Stacks',
+  inventory: ['Stone bricks','Glass','Iron blocks','Oak planks','Lanterns'],
+  task: 'Pavilion build', create: 'New task', progress: 'Overall progress', save: 'Save', saved: 'Saved',
+  source: 'Source block', target: 'Target block', replace: 'Replace', saveAs: 'Save as',
+  export: 'Export', csv: 'Material CSV', html: 'Material webpage', world: 'Minecraft world',
+  complete: 'Export complete', files: 'Output files', targetVersion: 'Target version',
+  compose: 'Composition project', instance: 'Instance', split: 'Split', conflict: 'Check conflicts',
+  noConflict: 'No conflicts', splitRange: 'XYZ range', theme: 'Theme', scale: 'UI scale',
+  formats: 'Format recognition', platforms: 'Windows · Linux · macOS', cta: 'From a blueprint to your next build.',
+  download: 'Beta 0.4 · Available now', noGame: 'No Minecraft launch required',
+  warning: 'Some versions, entities and platform graphics have limits. See release notes.',
+};

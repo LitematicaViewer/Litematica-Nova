@@ -1,47 +1,44 @@
-# Nova 双语代码视频工程
+# Nova 0.4 双语官方代码视频
 
-本目录独立于产品前后端依赖，使用自己的 `package-lock.json`。当前仅完成 S 阶段工具和空 Composition 骨架，未编写分镜、产品文案或视频，未采集界面、启动浏览器或渲染试片。
+本目录独立于产品依赖和发布流程，使用自己的 package-lock.json。R阶段已由主Agent确认：0.4.0正式Release已发布，源Tag beta-0.4.0（3cd63），公开main 8a0ee8cd。此工程不修改产品、私有核心或正式Release。
 
-## 工具及 Skills
+## 一键复现
 
-- 官方 Remotion 4.0.538；六项 Skills 来自 `remotion-dev/skills` 的 `6c67adcd9cdbe6eb84d76342da89b225f9161cb2`。
-- `remotion-best-practices`、`remotion-create`、`remotion-markup`、`remotion-render`、`remotion-multimedia`、`remotion-captions` 均保存在 `.agents/skills/`，名称与官方一致。
-- 官方 `@playwright/cli` 0.1.22；`playwright-cli` Skill 安装到 `.agents/skills/`。使用确定脚本采集，不进行逐次看屏决策。
-- FFmpeg / ffprobe 复用本机已安装的 8.1，不安装全局依赖。
-- Skills 供后续 Agent 会话自动发现；本轮已直接读取 `SKILL.md`。
-
-官方来源：
-
-- <https://www.remotion.dev/docs/ai/skills>
-- <https://github.com/remotion-dev/skills>
-- <https://playwright.dev/agent-cli/installation>
-
-## 本地复现
-
-从仓库根目录进入本目录，使用 PowerShell；只激活当前进程的隔离 Node 工具链：
+在本目录使用PowerShell，Node 22及FFmpeg/ffprobe需可用。本机可仅激活当前进程的隔离工具链：
 
 ```powershell
 . 'D:\NovaCI\toolchains\windows\Activate.ps1'
-Set-Location tools/promo-video
 npm ci
-npm exec --no -- remotion --help
-npm exec --no -- playwright-cli --help
-pwsh -NoProfile -File scripts/check.ps1
+# 已冻结发布、素材和内部样式放行后，一条命令生成双语MP4/SRT，
+# 在两片完成后生成SVG/PNG封面，并完成最终媒体及关键帧检查。
+pwsh -NoProfile -File scripts/render.ps1 -Mode final
 ```
 
-此工程的真实 CLI 为 `playwright-cli`；不要假定 `playwright cli` 在任意安装组合下均可用。官方安装方式是 `npm exec --no -- playwright-cli install --skills=agents`。这不运行界面采集；S 阶段仅查看帮助与版本。
+独立依赖：Remotion 4.0.538、React19.3.1、TypeScript5.9.3、Playwright CLI0.1.22；本机FFmpeg/ffprobe8.1。正式影片两条均120秒、1080p60、H.264/AAC。`NovaOfficialZh`/`NovaOfficialEn`共享时间线，但导航、控件、标题和SRT各自本地化。
 
-`ZhIntro` / `EnIntro` 当前是 1 帧的空骨架，并非可交付视频。只有主 Agent 核实 R 阶段全部发布成功、发出 `R_RELEASED=true` 后，才能开始 V 阶段内容制作。
+## 工程结构
 
-## 后续渲染接线
+- `src/theme.ts`：发布shadcn色板与字体；蓝图标注使用低饱和蓝。
+- `src/timeline/shots.ts`：44镜头/120秒权威时间线；`scripts/export-story.mjs`生成shot-plan.json、双语SRT和可选录音稿。
+- `src/scenes/`：独立视频UI演出，不反写产品业务；图形只使用真实Standard最终资产。
+- `src/components/Pointer.tsx`：量取真实演出控件位置并归一到电影画布；不是独立维护一套易错坐标。
+- `assets/original/`：原创公开展馆、正式Core数据/导出、真实GPU帧；来源与冻结身份以素材清单为准。
+- `assets/audio/`：原创CC0配乐和SFX，无第三方采样；无旁白，不假称录音完成。
+- `scripts/check.ps1 -Media -Keyframes`：实际媒体参数、每镜头开头/动作/落定/出镜四帧、逐镜头contact及索引。技术通过不代替独立审美/声音/真实性审查。
+- `output/`：真实MP4/SRT、三张styleframe、Proof、证据文档、keyframes及后置SVG/PNG封面。
 
-V 阶段完成内容后，在不提交的 `output/release-manifest.json` 记录已核实的 `R_RELEASED`、`version`、`release_url` 和 `video_content_ready`，再运行：
+## 官方Skills与参考
 
-```powershell
-pwsh -NoProfile -File scripts/render.ps1
-pwsh -NoProfile -File scripts/check.ps1 -Media
-```
+六项官方Remotion Skill和官方Playwright CLI Skill安装在`.agents/skills/`，已真实读取。Remotion Skill固定上游提交6c67adcd9cdbe6eb84d76342da89b225f9161cb2。官方文档：
 
-`render.ps1` 为中英文 MP4 的统一入口，发布未确认或内容未完成时会明确终止。`check.ps1 -Media` 只读取媒体元数据并检查字幕存在，不代替最终内容验收。素材身份、字幕内容、关键帧及授权核对在 V 阶段接入，S 阶段不伪造通过结果。
+- https://www.remotion.dev/docs/ai/skills
+- https://github.com/remotion-dev/skills
+- https://playwright.dev/agent-cli/installation
 
-原始素材和音频分别保存在 `assets/original/`、`assets/audio/`；输出保存在 `output/`。这些目录默认不进入 Git。不得放入生产凭据、私有渲染源码、内部地址或个人用户文件。
+本片参考video-shotcraft的8项实际recipe/Gallery/demo TSX，固定提交43bd349a136651865ecfa6ea1cf012f6e957d304；Apache-2.0代码/文档。只借鉴镜头语法，自写Nova组件，不复制其品牌画面、音频或执行未知脚本；详细映射见reference-techniques.md。参考下载保存在Git忽略的.reference-cache，不进入产品发布。
+
+## 真实性与素材边界
+
+产品事实见source-of-truth.md；视觉/音频基准见design-spec.md。UI为发布源码派生的可重复演示，常驻演示标识；真实GPU帧、Core二维占用图与抽象蓝图图形分别明确，不互相冒充。世界导出展示实际文件，不伪造已进游戏。当前私有算法、密钥、日志、内部地址与用户路径不进入素材或影片。
+
+源素材、音频、输出默认不进入Git；本机工作区保留真实文件。重新取得工程时必须先提供同一冻结素材清单，不拿缺图占位当成功。早期Fast样片仅为内部方向预览；最终用户要求所有建筑渲染图使用真实Standard，不把Fast换标签。
