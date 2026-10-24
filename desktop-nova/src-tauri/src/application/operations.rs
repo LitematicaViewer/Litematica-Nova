@@ -1179,17 +1179,28 @@ impl ApplicationOperations {
         }
 
         if let Some(path)=input["sourcePath"].as_str().filter(|path|!path.is_empty()){input["sourcePath"]=path_text(&self.resolve_path(path)).into();}
+        let mut preview_sources = BTreeMap::new();
         if kind == super::data_worker::protocol::DataKind::Thumbnail {
             if let Some(paths) = input["sourcePaths"].as_array_mut() {
                 for path in paths {
                     let source = path.as_str().filter(|path| !path.is_empty()).ok_or("Empty preview source path")?;
-                    *path = path_text(&self.resolve_path(source)).into();
+                    let resolved = path_text(&self.resolve_path(source));
+                    preview_sources.insert(resolved.clone(), source.to_owned());
+                    *path = resolved.into();
                 }
             }
         }
         for key in ["inputPath","outputPath"]{if let Some(path)=input[key].as_str().filter(|path|!path.is_empty()){input[key]=path_text(&self.resolve_path(path)).into();}}
         let operation_id=id.unwrap_or_else(||self.next_operation("data").1);
-        self.data_worker.execute(super::data_worker::protocol::DataRequest{operation_id,kind,input})
+        let mut result = self.data_worker.execute(super::data_worker::protocol::DataRequest{operation_id,kind,input})?;
+        if let Some(rows) = result.as_array_mut().filter(|_| !preview_sources.is_empty()) {
+            for row in rows {
+                if let Some(source) = row["sourcePath"].as_str().and_then(|path| preview_sources.get(path)) {
+                    row["sourcePath"] = source.clone().into();
+                }
+            }
+        }
+        Ok(result)
     }
 
     fn resolve_path(&self, value: &str) -> PathBuf {
