@@ -1702,7 +1702,17 @@ mod tests {
         eprint!("{}", String::from_utf8_lossy(&direct.stderr));
           let mut direct_snapshot: Value = serde_json::from_slice(&direct.stdout).unwrap();
             let core_snapshot_bytes = serde_json::to_vec(&direct_snapshot).unwrap().len();
-          strip_material_scope_cache(&mut direct_snapshot);
+          // Historical manual profiling compares the public DTO size, not the
+          // Core's retained source index. Production routing no longer strips
+          // that index in Host, so keep this transformation in the fixture.
+          for name in ["material_items", "non_item_blocks", "structural_block_counts"] {
+              if let Some(rows) = direct_snapshot[name].as_array_mut() {
+                  for row in rows {
+                      if let Some(row) = row.as_object_mut() { row.remove("scope_counts"); }
+                  }
+              }
+          }
+          if let Some(scan) = direct_snapshot["container_scan"].as_object_mut() { scan.remove("scope_entries"); }
             let dto_snapshot_bytes = serde_json::to_vec(&direct_snapshot).unwrap().len();
             let production_stage_log = String::from_utf8_lossy(&direct.stderr).lines().filter(|line|line.contains("NOVA_STATS_TIMING")).map(str::to_owned).collect::<Vec<_>>();
         let mut allowed = ExecutableAllowlist::new();

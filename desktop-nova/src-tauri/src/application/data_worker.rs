@@ -15,10 +15,87 @@ use std::{
     time::Duration,
 };
 
+fn configure_data_stream(stream: &TcpStream) -> std::io::Result<()> {
+    // Windows inherits FIONBIO from the nonblocking listener. Framed read_exact
+    // runs on its own reader thread and must wait through idle/partial frames.
+    stream.set_nonblocking(false)?;
+    stream.set_nodelay(true)
+}
+
 struct Shared {
+    closed: Mutex<Option<String>>,
     pending: Mutex<BTreeMap<String, mpsc::Sender<Result<Value, String>>>>,
     states: Mutex<BTreeMap<String, DataResponse>>,
     reads: Mutex<std::collections::BTreeSet<String>>,
+}
+impl Shared {
+    fn new() -> Self {
+        Self {
+            closed: Mutex::new(None),
+            pending: Mutex::new(BTreeMap::new()),
+            states: Mutex::new(BTreeMap::new()),
+            reads: Mutex::new(Default::default()),
+        }
+    }
+    fn is_open(&self) -> bool {
+        self.closed.lock().is_ok_and(|closed| closed.is_none())
+    }
+    fn register(
+        &self,
+        request: &DataRequest,
+        sender: mpsc::Sender<Result<Value, String>>,
+    ) -> Result<(), String> {
+        // Registration and channel failure share this lock. No request may be
+        // inserted after the reader has drained its waiters and exited.
+        let closed = self
+            .closed
+            .lock()
+            .map_err(|_| "Data channel state lock failed")?;
+        if let Some(error) = closed.as_ref() {
+            return Err(error.clone());
+        }
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| "Data operation state lock failed")?;
+        if pending.contains_key(&request.operation_id) {
+            return Err("Data operation is already active".into());
+        }
+        pending.insert(request.operation_id.clone(), sender);
+        let mut states = self.states.lock().unwrap();
+        if states.len() >= 128 {
+            states.retain(|id, _| pending.contains_key(id));
+        }
+        states.insert(
+            request.operation_id.clone(),
+            DataResponse::state(&request.operation_id, DataState::Pending),
+        );
+        if request.kind != DataKind::Stockpile
+            && !(request.kind == DataKind::VersionConvert
+                && request.input["outputPath"].is_string())
+        {
+            self.reads
+                .lock()
+                .unwrap()
+                .insert(request.operation_id.clone());
+        }
+        Ok(())
+    }
+    fn close(&self, error: String) {
+        let (error, senders) = {
+            let mut closed = self.closed.lock().unwrap();
+            let error = closed.get_or_insert(error).clone();
+            let senders = std::mem::take(&mut *self.pending.lock().unwrap());
+            (error, senders)
+        };
+        self.reads.lock().unwrap().clear();
+        for (id, sender) in senders {
+            let mut state = DataResponse::state(&id, DataState::Failed);
+            state.error = Some(error.clone());
+            self.states.lock().unwrap().insert(id, state);
+            let _ = sender.send(Err(error.clone()));
+        }
+    }
 }
 struct Client {
     stream: Mutex<TcpStream>,
@@ -72,6 +149,7 @@ impl DataWorkerHost {
             .map_err(|_| "Data worker state lock failed")?;
         if let Some(client) = slot.as_ref() {
             if client.context == context
+                && client.shared.is_open()
                 && matches!(
                     self.supervisor.wait_for_exit(&client.child, Duration::ZERO),
                     WaitOutcome::TimedOut
@@ -132,7 +210,7 @@ impl DataWorkerHost {
                 Err(e) => return Err(e.to_string()),
             }
         };
-        stream.set_nodelay(true).map_err(|e| e.to_string())?;
+        configure_data_stream(&stream).map_err(|e| e.to_string())?;
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .map_err(|e| e.to_string())?;
@@ -143,11 +221,7 @@ impl DataWorkerHost {
             return Err("Core data channel identity mismatch".into());
         }
         stream.set_read_timeout(None).map_err(|e| e.to_string())?;
-        let shared = Arc::new(Shared {
-            pending: Mutex::new(BTreeMap::new()),
-            states: Mutex::new(BTreeMap::new()),
-            reads: Mutex::new(Default::default()),
-        });
+        let shared = Arc::new(Shared::new());
         let mut reader = stream.try_clone().map_err(|e| e.to_string())?;
         let shared_reader = shared.clone();
         std::thread::spawn(move || {
@@ -156,13 +230,7 @@ impl DataWorkerHost {
                     Ok(response) => response,
                     Err(error) => {
                         let message = format!("Core data channel closed: {error}");
-                        let senders = std::mem::take(&mut *shared_reader.pending.lock().unwrap());
-                        for (id, sender) in senders {
-                            let mut state = DataResponse::state(&id, DataState::Failed);
-                            state.error = Some(message.clone());
-                            shared_reader.states.lock().unwrap().insert(id, state);
-                            let _ = sender.send(Err(message.clone()));
-                        }
+                        shared_reader.close(message);
                         break;
                     }
                 };
@@ -228,39 +296,7 @@ impl DataWorkerHost {
         }
         let client = self.client()?;
         let (tx, rx) = mpsc::channel();
-        {
-            let mut pending = client
-                .shared
-                .pending
-                .lock()
-                .map_err(|_| "Data operation state lock failed")?;
-            if pending.contains_key(&request.operation_id) {
-                return Err("Data operation is already active".into());
-            }
-            pending.insert(request.operation_id.clone(), tx);
-        }
-        {
-            let mut states = client.shared.states.lock().unwrap();
-            if states.len() >= 128 {
-                let pending = client.shared.pending.lock().unwrap();
-                states.retain(|id, _| pending.contains_key(id));
-            }
-            states.insert(
-                request.operation_id.clone(),
-                DataResponse::state(&request.operation_id, DataState::Pending),
-            );
-        }
-        if request.kind != DataKind::Stockpile
-            && !(request.kind == DataKind::VersionConvert
-                && request.input["outputPath"].is_string())
-        {
-            client
-                .shared
-                .reads
-                .lock()
-                .unwrap()
-                .insert(request.operation_id.clone());
-        }
+        client.shared.register(&request, tx)?;
         let result = protocol::write_frame(
             &mut *client
                 .stream
@@ -269,13 +305,10 @@ impl DataWorkerHost {
             &request,
         );
         if let Err(error) = result {
-            client
-                .shared
-                .pending
-                .lock()
-                .unwrap()
-                .remove(&request.operation_id);
-            return Err(format!("Submit data operation: {error}"));
+            let message = format!("Submit data operation: {error}");
+            client.shared.close(message.clone());
+            let _ = client.stream.lock().unwrap().shutdown(Shutdown::Both);
+            return Err(message);
         }
         rx.recv()
             .map_err(|_| "Core data operation lost its response channel".to_owned())?
@@ -327,5 +360,97 @@ impl DataWorkerHost {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn closed_channel_fails_waiters_and_rejects_new_requests_without_replay() {
+        let shared = Shared::new();
+        let request = DataRequest {
+            operation_id: "saved-task-write".into(),
+            kind: DataKind::Stockpile,
+            input: json!({"action":"mutate"}),
+        };
+        let (tx, rx) = mpsc::channel();
+        shared.register(&request, tx).unwrap();
+        assert!(shared.is_open());
+        shared.close("test peer disconnected".into());
+        assert_eq!(rx.recv().unwrap(), Err("test peer disconnected".into()));
+        assert!(!shared.is_open());
+        assert_eq!(
+            shared.states.lock().unwrap()[&request.operation_id].state,
+            DataState::Failed
+        );
+        let (tx, _rx) = mpsc::channel();
+        assert_eq!(
+            shared.register(&request, tx),
+            Err("test peer disconnected".into())
+        );
+        assert!(shared.pending.lock().unwrap().is_empty());
+        assert!(shared.reads.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn accepted_channel_reads_delayed_fragmented_frames_after_idle() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            protocol::write_frame(&mut stream, &json!("test-proof")).unwrap();
+            ready_tx.send(()).unwrap();
+            for index in 0..3 {
+                let request: DataRequest = protocol::read_frame(&mut stream).unwrap();
+                assert_eq!(request.operation_id, format!("operation-{index}"));
+                std::thread::sleep(Duration::from_millis(30));
+                let mut response = DataResponse::state(&request.operation_id, DataState::Ready);
+                response.result = Some(json!({"index":index}));
+                let mut bytes = Vec::new();
+                protocol::write_frame(&mut bytes, &response).unwrap();
+                for part in [&bytes[..1], &bytes[1..4], &bytes[4..7], &bytes[7..]] {
+                    stream.write_all(part).unwrap();
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        });
+        ready_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        // Unix accept does not inherit this flag; exercise the same inherited
+        // nonblocking state that Windows supplies from this listener.
+        #[cfg(not(windows))]
+        stream.set_nonblocking(true).unwrap();
+        configure_data_stream(&stream).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let proof: Value = protocol::read_frame(&mut stream).unwrap();
+        assert_eq!(proof, json!("test-proof"));
+        let mut reader = stream.try_clone().unwrap();
+        for index in 0..3 {
+            protocol::write_frame(
+                &mut stream,
+                &DataRequest {
+                    operation_id: format!("operation-{index}"),
+                    kind: DataKind::Stats,
+                    input: json!({}),
+                },
+            )
+            .unwrap();
+            let response: DataResponse = protocol::read_frame(&mut reader)
+                .expect("accepted data channel must wait for the complete delayed frame");
+            assert_eq!(response.result, Some(json!({"index":index})));
+        }
+        worker.join().unwrap();
+        let error = protocol::read_frame::<DataResponse>(&mut reader).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+        ));
     }
 }
