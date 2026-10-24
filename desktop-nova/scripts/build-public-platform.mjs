@@ -25,7 +25,7 @@ export function platformFor(target, host = { platform: process.platform, arch: p
 }
 export function tauriBuildStages(platform, config) {
   const build = ['build', '--config', config];
-  return platform.os === 'darwin'
+  return platform.os === 'darwin' || platform.os === 'linux'
     ? [[...build, '--no-bundle'], ['bundle', '--config', config, '--bundles', platform.bundles]]
     : [[...build, '--bundles', platform.bundles]];
 }
@@ -214,6 +214,48 @@ function archiveMacApplication(cargoTarget) {
     run('tar', ['czf', `${application}.tar.gz`, '-C', directory, apps[0]]);
   }
 }
+export function prepareLinuxBundleTarget(cargoTarget, temporaryRoot = path.join(os.homedir(), '.cache/nova-release-tasks')) {
+  // WSL's shared Cargo cache may live on NTFS. Bundle thousands of resources on
+  // native ext4 instead; only the already compiled Host ELF crosses the mount.
+  fs.mkdirSync(temporaryRoot, { recursive: true });
+  if (fs.statfsSync(temporaryRoot).type !== 0xef53) throw new Error('Linux bundles require a native ext4 temporary directory.');
+  const destination = fs.mkdtempSync(path.join(temporaryRoot, 'nova-linux-bundle-'));
+  fs.mkdirSync(path.join(destination, 'release'));
+  const name = 'Litematica-Nova';
+  fs.copyFileSync(path.join(cargoTarget, 'release', name), path.join(destination, 'release', name));
+  fs.chmodSync(path.join(destination, 'release', name), 0o755);
+  return destination;
+}
+export async function restoreAppImageHelpers(appDirectory, stage, productName) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(stage, 'backend-deployment.json'), 'utf8'));
+  const destination = path.join(appDirectory, 'usr/lib', productName, 'bin/viewer-backend');
+  for (const [name, identity] of Object.entries(manifest.artifacts)) {
+    if (path.basename(name) !== name) throw new Error('Invalid helper basename in the deployment manifest.');
+    const original = path.join(stage, name), final = path.join(destination, name);
+    if (fs.statSync(original).size !== identity.bytes || await hash(original) !== identity.sha256) throw new Error(`Prepared helper identity changed: ${name}`);
+    // linuxdeploy adds RUNPATH to executable resources. Their signed deployment
+    // identity must keep describing the real bytes, not the transformed copy.
+    fs.copyFileSync(original, final);
+    fs.chmodSync(final, 0o755);
+    if (fs.statSync(final).size !== identity.bytes || await hash(final) !== identity.sha256) throw new Error(`Packaged helper identity differs: ${name}`);
+  }
+}
+async function finalizeLinuxAppImage(cargoTarget, stage, base, npm) {
+  const directory = path.join(cargoTarget, 'release/bundle/appimage');
+  const entries = fs.readdirSync(directory);
+  const appDirectories = entries.filter(name => name.endsWith('.AppDir') && fs.lstatSync(path.join(directory, name)).isDirectory());
+  const images = entries.filter(name => name.endsWith('.AppImage') && fs.lstatSync(path.join(directory, name)).isFile());
+  if (appDirectories.length !== 1 || images.length !== 1) throw new Error('Expected one official AppDir and AppImage.');
+  await restoreAppImageHelpers(path.join(directory, appDirectories[0]), stage, base.productName);
+  const image = path.join(directory, images[0]);
+  const plugin = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'tauri/linuxdeploy-plugin-appimage.AppImage');
+  run(plugin, ['--appdir', path.join(directory, appDirectories[0])], { cwd: directory,
+    env: { ...process.env, APPIMAGE_EXTRACT_AND_RUN: '1', ARCH: 'x86_64', VERSION: base.version, OUTPUT: image } });
+  if (fs.existsSync(image + '.sig')) {
+    fs.unlinkSync(image + '.sig');
+    run(process.execPath, [npm, 'run', 'tauri', '--', 'signer', 'sign', '--app-version', base.version, image], { cwd: desktop });
+  }
+}
 export async function build(args = process.argv.slice(2)) {
   const targetIndex = args.indexOf('--target');
   const target = targetIndex >= 0 ? args[targetIndex + 1] : nativeTarget(), platform = platformFor(target);
@@ -345,12 +387,28 @@ export async function build(args = process.argv.slice(2)) {
   }
   const cargoTarget = cargo.host; process.env.CARGO_TARGET_DIR = cargoTarget;
   removePreviousDistributables(cargoTarget, platform);
-  for (const command of tauriBuildStages(platform, config)) {
-    console.log(`Public candidate phase=${command[0]} target=${target}`);
-    run(process.execPath, [npm, 'run', 'tauri', '--', ...command], { cwd: desktop });
+  let bundleTarget = cargoTarget;
+  let collected = false;
+  try {
+    for (const command of tauriBuildStages(platform, config)) {
+      if (platform.os === 'linux' && command[0] === 'bundle') {
+        bundleTarget = prepareLinuxBundleTarget(cargoTarget);
+        process.env.CARGO_TARGET_DIR = bundleTarget;
+      }
+      console.log(`Public candidate phase=${command[0]} target=${target}`);
+      run(process.execPath, [npm, 'run', 'tauri', '--', ...command], { cwd: desktop });
+    }
+    if (platform.os === 'linux') await finalizeLinuxAppImage(bundleTarget, stage, base, npm);
+    if (platform.os === 'darwin') archiveMacApplication(bundleTarget);
+    if (output('git', ['rev-parse', '--verify', 'HEAD']) !== sha) throw new Error('Source commit changed during the platform build.');
+    await collect(target, platform, sha, bundleTarget, base.version);
+    collected = true;
+  } finally {
+    process.env.CARGO_TARGET_DIR = cargoTarget;
+    if (bundleTarget !== cargoTarget) {
+      if (collected) fs.rmSync(bundleTarget, { recursive: true, force: true });
+      else console.error(`Preserved incomplete Linux packaging for local continuation: ${bundleTarget}`);
+    }
   }
-  if (platform.os === 'darwin') archiveMacApplication(cargoTarget);
-  if (output('git', ['rev-parse', '--verify', 'HEAD']) !== sha) throw new Error('Source commit changed during the platform build.');
-  await collect(target, platform, sha, cargoTarget, base.version);
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) build().catch((error) => { console.error(error.message); process.exitCode = 1; });

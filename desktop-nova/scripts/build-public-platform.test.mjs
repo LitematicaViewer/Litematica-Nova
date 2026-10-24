@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import test from 'node:test';
-import { platformFor, tauriOverride, iconPng, tauriBuildStages, cargoDirectories, validateDistributableDirectory } from './build-public-platform.mjs';
+import { platformFor, tauriOverride, iconPng, tauriBuildStages, cargoDirectories, validateDistributableDirectory, restoreAppImageHelpers } from './build-public-platform.mjs';
 
 const base = JSON.parse(fs.readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'));
 const make = (platform) => tauriOverride(base, { platform, stage: '/build/helpers', runtime: '/build/runtime', stockpile: '/build/stockpile_server', icon: '/build/icons/icon.icns', candidate: false });
@@ -14,12 +15,37 @@ test('正式平台入口绑定真实 native host，不拿交叉构建冒充可�
   assert.throws(() => platformFor('aarch64-apple-darwin', { platform: 'win32', arch: 'x64' }), /native runner/);
 });
 
-test('macOS 先真实编译但不打包，通过后同配置 bundle；其他平台流程保持', () => {
+test('macOS和Linux编译与打包分离，Windows保持既有NSIS流程', () => {
   assert.deepEqual(tauriBuildStages({ os: 'darwin', bundles: 'app,dmg' }, '/build/config.json'), [
     ['build', '--config', '/build/config.json', '--no-bundle'],
     ['bundle', '--config', '/build/config.json', '--bundles', 'app,dmg'],
   ]);
   assert.deepEqual(tauriBuildStages({ os: 'win32', bundles: 'nsis' }, '/build/config.json'), [['build', '--config', '/build/config.json', '--bundles', 'nsis']]);
+  assert.deepEqual(tauriBuildStages({ os: 'linux', bundles: 'deb,appimage' }, '/build/config.json'), [
+    ['build', '--config', '/build/config.json', '--no-bundle'],
+    ['bundle', '--config', '/build/config.json', '--bundles', 'deb,appimage'],
+  ]);
+});
+test('AppImage恢复正式helper原始字节，不篡改部署身份以接受RPATH变换', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nova-appimage-identity-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const stage = path.join(directory, 'stage'), app = path.join(directory, 'Nova.AppDir');
+  const destination = path.join(app, 'usr/lib/Litematica Nova/bin/viewer-backend');
+  fs.mkdirSync(stage, { recursive: true }); fs.mkdirSync(destination, { recursive: true });
+  const artifacts = {};
+  for (const name of ['litematica_core', 'litematica_native_viewer', 'nova-render-service', 'nova-build-worker']) {
+    const original = Buffer.from(`original-${name}`);
+    fs.writeFileSync(path.join(stage, name), original);
+    fs.writeFileSync(path.join(destination, name), 'linuxdeploy-rpath-transform');
+    artifacts[name] = { bytes: original.length, sha256: crypto.createHash('sha256').update(original).digest('hex') };
+  }
+  const manifest = JSON.stringify({ artifacts });
+  fs.writeFileSync(path.join(stage, 'backend-deployment.json'), manifest);
+  await restoreAppImageHelpers(app, stage, 'Litematica Nova');
+  for (const name of Object.keys(artifacts)) assert.deepEqual(fs.readFileSync(path.join(destination, name)), fs.readFileSync(path.join(stage, name)));
+  assert.equal(fs.readFileSync(path.join(stage, 'backend-deployment.json'), 'utf8'), manifest);
+  fs.writeFileSync(path.join(stage, 'litematica_core'), 'changed');
+  await assert.rejects(restoreAppImageHelpers(app, stage, 'Litematica Nova'), /identity changed/);
 });
 test('仅 macOS 公开三 crate 共用 Cargo target；Windows/Linux 既有输出位置不变', () => {
   const selected = path.resolve('/build/public-cargo');
