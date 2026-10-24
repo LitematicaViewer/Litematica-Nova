@@ -255,6 +255,10 @@ impl Engine {
         let _context = crate::game_data::operation_context()?;
         progress(json!({"stage":"prepare","current":0,"total":1}));
         match req.kind {
+            DataKind::Composition => crate::composition::execute(&req.input, cancel),
+            DataKind::ReplaceRules => crate::replace_blocks::editor_view(&req.input),
+            DataKind::Format => crate::schematic_formats::execute(&req.input, cancel),
+            DataKind::Workspace => crate::workspace::recent_projects(std::path::Path::new(req.input["storageDir"].as_str().context("Workspace storage directory is missing")?)),
             DataKind::Analysis => {
                 let (mut value, revision, _, _) = self.snapshot(&req.input, cancel)?;
                 value["source_revision"] = revision.into();
@@ -579,13 +583,7 @@ pub fn run() -> Result<()> {
                     &request.operation_id,
                     if cancel.load(Ordering::Relaxed)
                         && !(result.is_ok()
-                            && (request.kind == DataKind::Stockpile
-                                || request.kind == DataKind::MaterialExport
-                                    && result
-                                        .as_ref()
-                                        .is_ok_and(|value| value["outputPath"].is_string())
-                                || request.kind == DataKind::VersionConvert
-                                    && request.input["outputPath"].is_string()))
+                            && request.kind.writes(&request.input))
                     {
                         DataState::Cancelled
                     } else if result.is_ok() {

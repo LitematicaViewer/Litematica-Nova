@@ -16,7 +16,24 @@ pub enum DataKind {
     StatisticsRules,
     Stockpile,
     VersionConvert,
+    Composition,
+    Format,
+    Workspace,
+    ReplaceRules,
     Cancel,
+}
+impl DataKind {
+    /// The Host close gate and worker cancellation share this classification.
+    pub fn writes(self, input: &Value) -> bool {
+        match self {
+            Self::Stockpile => true,
+            Self::VersionConvert => input["outputPath"].is_string(),
+            Self::MaterialExport => input["action"] == "export",
+            Self::Composition => matches!(input["action"].as_str(), Some("create" | "add" | "update" | "duplicate" | "remove" | "reorder" | "undo" | "redo" | "save" | "migrate" | "preview" | "export" | "split")),
+            Self::Format => matches!(input["action"].as_str(), Some("export" | "convert" | "encode" | "import" | "canonicalize" | "decodeToSnapshot")),
+            _ => false,
+        }
+    }
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

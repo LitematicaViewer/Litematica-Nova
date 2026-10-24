@@ -1879,6 +1879,28 @@ pub struct RegionBounds {
 }
 
 pub fn load_litematic_root(path: &Path) -> Result<LitematicRoot> {
+    match load_litematic_root_native(path) {
+        Ok(root) => Ok(root),
+        Err(native_error) => {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            match crate::schematic_formats::decode(path, &cancel) {
+                Ok(scene) => {
+                    anyhow::ensure!(scene.source_format=="litematic" || scene.data_version().is_some(),
+                        "源模板没有声明Minecraft版本，请先选择真实源版本后导入；未借用当前资源版本计料");
+                    std::sync::Arc::try_unwrap(scene.root)
+                        .map_err(|_| anyhow!("imported scene root still has an active owner"))
+                },
+                Err(format_error) => Err(native_error.context(format!(
+                    "also failed to import supported structure content: {format_error:#}"
+                ))),
+            }
+        }
+    }
+}
+
+// Keep the native litematic streaming path unchanged: a valid litematic never
+// inflates or hashes a second full representation merely to sniff its format.
+fn load_litematic_root_native(path: &Path) -> Result<LitematicRoot> {
     let file = open_process_read_file(path)
         .with_context(|| format!("failed to open {}", path.display()))?;
     if std::env::var_os("NOVA_STATS_TIMING").is_some() {

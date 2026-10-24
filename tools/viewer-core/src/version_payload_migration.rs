@@ -2955,7 +2955,13 @@ fn migrate_equipment(
 // then run the same item/entity codecs; no opaque source payload is carried
 // across a format boundary. The quoted-string escapes match Brigadier SNBT.
 fn read_snbt(input:&str)->Result<Value>{
-    if input.len()>1024*1024{bail!("悬停SNBT超过1MiB")}
+    read_snbt_bounded(input,1024*1024)
+}
+
+/// Shared typed SNBT codec. Hover components retain their existing 1 MiB
+/// capacity; external template adapters choose their explicit input capacity.
+pub(crate) fn read_snbt_bounded(input:&str,max_bytes:usize)->Result<Value>{
+    if input.len()>max_bytes{bail!("SNBT超过输入容量{max_bytes}字节")}
     struct Parser<'a>{text:&'a str,at:usize}
     impl Parser<'_>{
         fn peek(&self)->Option<char>{self.text[self.at..].chars().next()}
@@ -2988,6 +2994,10 @@ fn read_snbt(input:&str)->Result<Value>{
         }
     }
     let mut parser=Parser{text:input,at:0};let value=parser.value(0)?;parser.ws();if parser.at!=input.len(){bail!("SNBT有尾随内容")};Ok(value)
+}
+
+pub(crate) fn write_snbt_shared(value:&Value)->Result<String>{
+    additional_items::write_snbt(value)
 }
 
 fn legacy_hover_string(value:&Value)->Result<String>{

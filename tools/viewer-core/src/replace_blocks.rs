@@ -12,6 +12,49 @@ use crate::nbt::{
     pack_palette_indices, region_volume, save_litematic_root,
 };
 
+/// Read-only editor projection. Display sorting never changes execution order.
+pub fn editor_view(input: &serde_json::Value) -> Result<serde_json::Value> {
+    use serde_json::json;
+    let items = input["items"].as_array().context("替换编辑器缺少规则列表")?;
+    let query = input["query"].as_str().unwrap_or_default().trim().to_lowercase();
+    let sort = input["sort"].as_str().unwrap_or("execution");
+    if !matches!(sort, "execution" | "label") { bail!("未知的规则显示排序"); }
+    let mut unit_index = 0usize;
+    let mut rows = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        let separator = item["_kind"] == "separator";
+        let unit = if separator { None } else { let current = unit_index; unit_index += 1; Some(current) };
+        let label = item["label"].as_str().unwrap_or_default();
+        if !query.is_empty() && !serde_json::to_string(item)?.to_lowercase().contains(&query) { continue; }
+        rows.push(json!({"index": index, "unitIndex": unit, "label": label,
+            "kind": if separator { "separator" } else { "rule" }}));
+    }
+    if sort == "label" {
+        rows.sort_by(|a, b| a["label"].as_str().unwrap_or_default().to_lowercase()
+            .cmp(&b["label"].as_str().unwrap_or_default().to_lowercase())
+            .then_with(|| a["index"].as_u64().cmp(&b["index"].as_u64())));
+    }
+    Ok(json!({"rows": rows, "totalRules": unit_index}))
+}
+
+#[cfg(test)]
+mod editor_view_tests {
+    use super::*;
+    #[test]
+    fn display_indices_are_stable_and_do_not_reorder_the_rule_pipeline() {
+        let input = serde_json::json!({"items":[{"label":"Zebra"},{"_kind":"separator"},{"label":"Alpha","input":[{"name":"minecraft:stone"}]}],"query":"","sort":"label"});
+        let output = editor_view(&input).unwrap();
+        assert_eq!(output["totalRules"], 2);
+        assert_eq!(output["rows"][1]["index"], 2);
+        assert_eq!(output["rows"][1]["unitIndex"], 1);
+        assert_eq!(input["items"][0]["label"], "Zebra");
+        let mut filtered = input.clone(); filtered["query"] = "STONE".into();
+        let output = editor_view(&filtered).unwrap();
+        assert_eq!(output["rows"].as_array().unwrap().len(), 1);
+        assert_eq!(output["rows"][0]["index"], 2);
+    }
+}
+
 // ============================================================================
 // V1 (legacy) data structures
 // ============================================================================

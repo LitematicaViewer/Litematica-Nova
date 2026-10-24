@@ -60,6 +60,11 @@ pub mod world_export;
 
 pub mod data_worker_protocol;
 pub mod data_worker;
+pub mod composition_scene;
+pub mod composition_transform;
+pub mod composition;
+pub mod schematic_formats;
+pub mod workspace;
 pub mod data_view;
 mod data_scope;
 mod statistics_rules;
