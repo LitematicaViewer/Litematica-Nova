@@ -244,16 +244,17 @@ test("排序：按名称排序改变条目顺序", async () => {
   assert.deepEqual(h.component("LibraryGrid").props.entries.map((view) => view.displayName), ["Alpha", "Beta", "Gamma"]);
 });
 
-test("分页：每页 20 条并提供下一页", async () => {
-  const entries = Array.from({ length: 21 }, (_, index) => entry(`e${index}`, { sortIndex: index }));
+test("默认显示全部筛选结果，不提供每页数量选择或翻页", async () => {
+  const entries = Array.from({ length: 237 }, (_, index) => entry(`e${index}`, { sortIndex: index }));
   const h = createHarness(library(entries, entries.map((item) => replica(`r-${item.id}`, item.id))));
   await h.settle();
-  assert.equal(h.component("LibraryGrid").props.entries.length, 20);
-  const next = h.button("下一页");
-  assert.ok(next);
-  next.props.onClick();
+  assert.equal(h.component("LibraryGrid").props.entries.length, entries.length);
+  assert.equal(h.button("上一页"), undefined);
+  assert.equal(h.button("下一页"), undefined);
+  assert.doesNotMatch(source("ui/windows/main/pages/library/LibraryPage.tsx"), /pageSize|每页条目/);
+  h.component("LibraryToolbar").props.onViewChange("list");
   h.render();
-  assert.equal(h.component("LibraryGrid").props.entries.length, 1);
+  assert.equal(h.component("LibraryList").props.entries.length, entries.length);
 });
 
 test("刷新失败提示并保留原列表，不写盘不丢条目", async () => {

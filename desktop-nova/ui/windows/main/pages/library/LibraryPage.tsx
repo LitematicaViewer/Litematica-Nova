@@ -109,8 +109,6 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const [untaggedOnly, setUntaggedOnly] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [recentOnly, setRecentOnly] = useState(false);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
   const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
   const [inspectedEntryId, setInspectedEntryId] = useState("");
   const [expandedCategories, setExpandedCategories] = useState<string[]>([]);
@@ -267,13 +265,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
   const grouped = groupDimension !== "none";
   const groups = useMemo(() => grouped ? groupEntryViews(filteredEntries, groupDimension) : [], [grouped, filteredEntries, groupDimension]);
 
-  const pageCount = grouped ? 1 : (pageSize === 0 ? 1 : Math.max(1, Math.ceil(filteredEntries.length / pageSize)));
-  const currentPage = Math.min(page, pageCount);
-  const pageEntries = useMemo(() => {
-    if (grouped || pageSize === 0) return filteredEntries;
-    const start = (currentPage - 1) * pageSize;
-    return filteredEntries.slice(start, start + pageSize);
-  }, [filteredEntries, grouped, currentPage, pageSize]);
+  const pageEntries = filteredEntries;
 
   const inspectedEntry = inspectedEntryId ? entryById.get(inspectedEntryId) || null : null;
   const selectedEntries = entryViews.filter((entry) => selectedIds.has(entry.entryId));
@@ -309,10 +301,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     return () => { cancelled = true; clearTimeout(handle); };
   }, [search, state.entries.length, indexVersion]);
 
-  useEffect(() => { setPage(1); }, [search, categoryFilter, untaggedOnly, favoritesOnly, recentOnly, statusFilter, sortMode, pageSize, groupDimension]);
-  useEffect(() => { if (page > pageCount) setPage(pageCount); }, [page, pageCount]);
-
-  // --- preview loading (visible page + inspector only) ---------------------------
+  // --- preview loading (filtered entries + inspector only) -----------------------
   const ensureProjectionPreview = async (entry: LibraryEntryView) => {
     const path = entry.primary.path;
     if (entry.status === "missing" || previewRequests.current.has(path)) return;
@@ -817,10 +806,6 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
           </ScrollArea>
           <footer className="library-collection-footer">
             <span>{issueCount ? `${issueCount} 项需关注` : "双击卡片设为当前投影"}</span>
-            <div className="library-page-limit"><Dropdown ariaLabel="每页条目" value={String(pageSize)} onChange={(value) => setPageSize(Number(value))} options={[20, 50, 100, 200, 0].map((count) => ({ value: String(count), label: count ? `${count} 项 / 页` : "全部显示" }))} /></div>
-            <Button size="sm" variant="ghost" disabled={grouped || currentPage <= 1 || pageSize === 0} onClick={() => setPage(currentPage - 1)}>上一页</Button>
-            <span>{grouped ? "分组视图" : `${currentPage} / ${pageCount}`}</span>
-            <Button size="sm" variant="ghost" disabled={grouped || currentPage >= pageCount || pageSize === 0} onClick={() => setPage(currentPage + 1)}>下一页</Button>
           </footer>
         </section>
 
