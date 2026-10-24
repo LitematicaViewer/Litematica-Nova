@@ -14,6 +14,7 @@ pub mod cli;
 pub mod frame_capture;
 pub mod generate_projection;
 pub mod game_data;
+pub mod layer_resources;
 pub mod item_icons;
 pub mod item_names;
 pub mod mesh;

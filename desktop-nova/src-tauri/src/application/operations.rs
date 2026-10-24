@@ -1171,6 +1171,11 @@ impl ApplicationOperations {
     fn data_request(&self,kind:super::data_worker::protocol::DataKind,mut input:Value,id:Option<String>,writing:bool)->Result<Value,String>{
         if self.lifecycle.0.lock().map_err(|_|"任务状态锁异常")?.closing {return Err("应用正在关闭，新的数据任务已取消".into());}
         let _write=if writing{Some(self.begin_write()?)}else{None};
+        if kind == super::data_worker::protocol::DataKind::LayerView {
+            // Resource selection is Host-owned, never inferred or supplied by TS.
+            let config = crate::read_user_config_data(&crate::current_user_config_dir()?);
+            input["resourcePacks"] = serde_json::to_value(config.v5_compatibility.resource_packs).map_err(|error|error.to_string())?;
+        }
         if matches!(kind, super::data_worker::protocol::DataKind::Composition | super::data_worker::protocol::DataKind::Workspace | super::data_worker::protocol::DataKind::Format) {
             input["storageDir"] = path_text(&crate::current_user_config_dir()?).into();
         }

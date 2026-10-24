@@ -62,6 +62,7 @@
     "resources": {
       "../../pack-in/enumerator": "pack-in/enumerator",
       "../../pack-in/flake": "pack-in/flake",
+      "../../pack-in/layer-resources": "pack-in/layer-resources",
       "../../data/generation-templates": "data/generation-templates",
       "../../bin/public-beta": "bin/viewer-backend",
       "../../tools/viewer-core/target/public-beta/release/stockpile_server.exe": "bin/stockpile-server/windows-x64/stockpile_server.exe",
