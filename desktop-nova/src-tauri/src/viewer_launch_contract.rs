@@ -1,10 +1,10 @@
 use crate::viewer_backend::ViewerBackendIdentity;
 use crate::viewer_compatibility::ViewerCompatibilityPlan;
 use ::viewer_launch_contract::{
-    BuildCacheTask, InteractiveTask, PrepareViewerTask, PreviewTask, ViewerBackend, ViewerControls,
+    BuildCacheTask, InteractiveTask, PrepareViewerTask, PreviewTask, VIEWER_INTEGRITY_PREFIX,
+    VIEWER_LAUNCH_ACK_PREFIX, VIEWER_READY_PREFIX, ViewerBackend, ViewerControls,
     ViewerFrameCapture, ViewerIntegrity, ViewerInteractivePurpose, ViewerLaunchAck,
     ViewerLaunchContract, ViewerPresentation, ViewerReady, ViewerSessionCommand, ViewerTask,
-    VIEWER_INTEGRITY_PREFIX, VIEWER_LAUNCH_ACK_PREFIX, VIEWER_READY_PREFIX,
 };
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
@@ -20,6 +20,7 @@ pub(crate) struct ViewerLaunchContext {
     compatibility: ViewerCompatibilityPlan,
     controls: ViewerControls,
     backend: ViewerBackendIdentity,
+    display_mode: &'static str,
 }
 
 impl ViewerLaunchContext {
@@ -32,11 +33,21 @@ impl ViewerLaunchContext {
             compatibility,
             controls,
             backend,
+            display_mode: "full",
         }
     }
 
     pub(crate) const fn display_mode(&self) -> &'static str {
-        "full"
+        self.display_mode
+    }
+
+    pub(crate) fn with_display_mode(mut self, mode: &str) -> Result<Self, String> {
+        self.display_mode = match mode {
+            "normal" | "standard" => "standard",
+            "full" => "full",
+            _ => return Err("Protected preview mode must be Standard or Full".into()),
+        };
+        Ok(self)
     }
 
     pub(crate) fn compatibility_fingerprint(&self) -> &str {
@@ -109,6 +120,11 @@ impl ViewerLaunchContext {
             ViewerTask::Preview(PreviewTask {
                 output,
                 cache_input,
+                effects_profile: if self.display_mode == "standard" {
+                    viewer_launch_contract::ViewerEffectsProfile::Unlit
+                } else {
+                    viewer_launch_contract::ViewerEffectsProfile::Full
+                },
             }),
         )?;
         prepare_contract_file(&contract, &self.backend)
@@ -429,9 +445,9 @@ fn next_request_id() -> Result<String, String> {
 mod tests {
     use super::*;
     use ::viewer_launch_contract::{
-        BuildCacheTask, ViewerContent, ViewerIntegrity, ViewerLaunchAck, ViewerReady, ViewerTask,
-        VIEWER_INTEGRITY_PREFIX, VIEWER_LAUNCH_ACK_SCHEMA, VIEWER_LAUNCH_SCHEMA,
-        VIEWER_READY_PREFIX, VIEWER_READY_SCHEMA,
+        BuildCacheTask, VIEWER_INTEGRITY_PREFIX, VIEWER_LAUNCH_ACK_SCHEMA, VIEWER_LAUNCH_SCHEMA,
+        VIEWER_READY_PREFIX, VIEWER_READY_SCHEMA, ViewerContent, ViewerIntegrity, ViewerLaunchAck,
+        ViewerReady, ViewerTask,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -543,10 +559,12 @@ mod tests {
         assert!(contract_file.accepted_ack(&output).unwrap());
 
         let mismatched = output.replace(contract_file.sha256(), &"c".repeat(64));
-        assert!(contract_file
-            .accepted_ack(&mismatched)
-            .unwrap_err()
-            .contains("SHA-256 mismatch"));
+        assert!(
+            contract_file
+                .accepted_ack(&mismatched)
+                .unwrap_err()
+                .contains("SHA-256 mismatch")
+        );
         fs::remove_file(backend_path).unwrap();
     }
 
@@ -593,10 +611,12 @@ mod tests {
                 .1,
             9876
         );
-        assert!(contract_file
-            .accepted_hidden_viewer_ready(&output, 4243)
-            .unwrap_err()
-            .contains("PID mismatch"));
+        assert!(
+            contract_file
+                .accepted_hidden_viewer_ready(&output, 4243)
+                .unwrap_err()
+                .contains("PID mismatch")
+        );
         fs::remove_file(backend_path).unwrap();
     }
 }

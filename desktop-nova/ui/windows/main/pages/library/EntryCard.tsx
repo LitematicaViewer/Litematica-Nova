@@ -1,4 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { t } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { ImageOff } from "lucide-react";
 import { Button } from "../../../../components/ui/button";
 import { Checkbox } from "../../../../components/ui/checkbox";
@@ -18,6 +20,8 @@ export interface LibraryCardBinding {
   isChecked: (entry: LibraryEntryView) => boolean;
   previewUrl: (entry: LibraryEntryView) => string;
   previewLoading: (entry: LibraryEntryView) => boolean;
+  previewError: (entry: LibraryEntryView) => string;
+  onVisibility: (entryId: string, visible: boolean) => void;
   busy: boolean;
   onInspect: (entry: LibraryEntryView) => void;
   onToggle: (entry: LibraryEntryView, checked: boolean) => void;
@@ -35,6 +39,15 @@ export interface LibraryCardBinding {
  * action button (`themeSlot="library-tile"`, see docs/UI_ARCHITECTURE.md V1.24).
  */
 export function EntryCard({ entry, binding }: { entry: LibraryEntryView; binding: LibraryCardBinding }) {
+  useI18n();
+  const card = useRef<HTMLElement>(null);
+  const visibility = useRef(binding.onVisibility); visibility.current = binding.onVisibility;
+  useEffect(() => {
+    const element = card.current; if (!element) return;
+    const observer = new IntersectionObserver(entries => visibility.current(entry.entryId, entries.some(item => item.isIntersecting)), { rootMargin: "160px" });
+    observer.observe(element);
+    return () => { observer.disconnect(); visibility.current(entry.entryId, false); };
+  }, [entry.entryId]);
   const [failedImage, setFailedImage] = useState("");
   const previewUrl = binding.previewUrl(entry);
   const hasImage = !!previewUrl && failedImage !== previewUrl;
@@ -43,6 +56,7 @@ export function EntryCard({ entry, binding }: { entry: LibraryEntryView; binding
   const statusText = entry.status === "ok" ? `${entry.totalBlocks.toLocaleString()} 方块` : entryStatusLabel(entry);
   return (
     <article
+      ref={card}
       className="library-tile"
       data-entry-id={entry.entryId}
       data-inspected={inspected || undefined}
@@ -74,7 +88,7 @@ export function EntryCard({ entry, binding }: { entry: LibraryEntryView; binding
         <span className="library-tile-image">
           {hasImage
             ? <img src={previewUrl} alt="" loading="lazy" draggable={false} onError={() => setFailedImage(previewUrl)} />
-            : <span className="library-preview-placeholder"><ThemeIcon name="picture_error" size={30} fallback={ImageOff} /><span>{binding.previewLoading(entry) ? "预览加载中…" : "暂无预览图"}</span></span>}
+            : <span className="library-preview-placeholder" title={binding.previewError(entry)}><ThemeIcon name="picture_error" size={30} fallback={ImageOff} /><span>{binding.previewLoading(entry) ? t("library.previewLoading") : binding.previewError(entry) ? t("library.previewReadFailed", { error: binding.previewError(entry) }) : t("library.previewMissing")}</span></span>}
         </span>
         <span className="library-tile-name" title={entry.displayName || entry.fileName}>{entry.displayName || entry.fileName}</span>
         <span className="library-tile-meta">{statusText}</span>

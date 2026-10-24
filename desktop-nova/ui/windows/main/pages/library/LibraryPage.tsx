@@ -1,8 +1,10 @@
+import { PreviewDraftDialog } from "../../../../components/PreviewDraftDialog";
+import { readVisiblePreviews, cancelPreviewRead, generatePreviewImages, cancelPreviewGeneration, discardGeneratedPreview, type ProductPreviewImage } from "../../../../../src/platform/previewImage";
 import { queryComposition } from "../../../../../src/platform/composition";
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Plus, Trash2, X } from "lucide-react";
 import { Button } from "../../../../components/ui/button";
 import { Checkbox } from "../../../../components/ui/checkbox";
@@ -25,7 +27,6 @@ import {
   deleteLibraryCategory,
   exportLibraryZip,
   fileNameFromPath,
-  generatePreviewImage,
   getFavorites,
   getPathInfo,
   getRecent,
@@ -41,7 +42,6 @@ import {
   openFileParentDir,
   parentDirectory,
   queryLibraryIndex,
-  readProjectionPreviewImage,
   refreshLibraryIndex,
   removeFavorite,
   reorderLibraryRecords,
@@ -49,7 +49,6 @@ import {
   saveLibrary,
   scanLibraryFolders,
   selectLitematicFile,
-  setRecordPreview,
   subscribeIndexStatus,
   updateLibraryCategory,
   windowsPathKey,
@@ -99,6 +98,7 @@ const uniquePaths = (paths: string[]) => [...new Map(paths.map((path) => [window
  * / `-record-imported`) and refreshes the background index on every library change.
  */
 export function LibraryPage({ currentFile, setCurrentFile, setRoute, setCompositionId, onImportClipboard }: any) {
+  useI18n();
   const [state, setState] = useState<LibraryState>(() => normalizeLibraryState(null));
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -129,11 +129,22 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   const [isDispatching, setIsDispatching] = useState(false);
 
   const [generatingPreviewId, setGeneratingPreviewId] = useState("");
+  const [visiblePreviewIds, setVisiblePreviewIds] = useState<Set<string>>(new Set());
+  const [previewErrors, setPreviewErrors] = useState<Record<string, string>>({});
+  const [previewDrafts, setPreviewDrafts] = useState<Array<{ path: string; image: ProductPreviewImage }>>([]);
+  const [previewProgress, setPreviewProgress] = useState({ completed: 0, total: 0 });
+  const [previewPaused, setPreviewPaused] = useState(false);
+  const generationRequest = useRef("");
+  const libraryAlive = useRef(true);
+  const previewReadSequence = useRef(0);
+  const handlePreviewVisibility = useCallback((id: string, visible: boolean) => setVisiblePreviewIds(current => {
+    if (current.has(id) === visible) return current; const next = new Set(current); if (visible) next.add(id); else next.delete(id); return next;
+  }), []);
   const [previewDataUrls, setPreviewDataUrls] = useState<Record<string, string>>({});
   const [previewLoadingPaths, setPreviewLoadingPaths] = useState<Record<string, boolean>>({});
-  const [previewLoadedPaths, setPreviewLoadedPaths] = useState<Record<string, boolean>>({});
-  const previewRequests = useRef(new Set<string>());
-  const previewRevisions = useRef(new Map<string, number>());
+
+
+
 
   const [dragPaths, setDragPaths] = useState<string[]>([]);
   const [dropTarget, setDropTarget] = useState("");
@@ -204,11 +215,9 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     const unlistenPromise = listenEvent<{ path?: string; reason?: string }>(projectionLibraryStateChangedEvent, async (event) => {
       if (event.payload?.reason === "embedded-preview" && event.payload.path) {
         const path = event.payload.path;
-        const key = windowsPathKey(path);
-        previewRevisions.current.set(key, (previewRevisions.current.get(key) || 0) + 1);
-        for (const requested of previewRequests.current) if (samePath(requested, path)) previewRequests.current.delete(requested);
+
         const forget = <T,>(values: Record<string, T>) => Object.fromEntries(Object.entries(values).filter(([candidate]) => !samePath(candidate, path)));
-        setPreviewDataUrls(forget); setPreviewLoadedPaths(forget); setPreviewLoadingPaths(forget);
+        setPreviewDataUrls(forget); setPreviewErrors(forget); setPreviewLoadingPaths(forget);
       }
       applyState(normalizeLibraryState(await loadLibrary()));
     }).catch(() => undefined);
@@ -302,40 +311,40 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     return () => { cancelled = true; clearTimeout(handle); };
   }, [search, state.entries.length, indexVersion]);
 
-  // --- preview loading (filtered entries + inspector only) -----------------------
-  const ensureProjectionPreview = async (entry: LibraryEntryView) => {
-    const path = entry.primary.path;
-    if (entry.status === "missing" || previewRequests.current.has(path)) return;
-    const key = windowsPathKey(path);
-    const revision = previewRevisions.current.get(key) || 0;
-    previewRequests.current.add(path);
-    setPreviewLoadingPaths((current) => ({ ...current, [path]: true }));
-    try {
-      const output = await readProjectionPreviewImage(path);
-      if ((previewRevisions.current.get(key) || 0) !== revision) return;
-      setPreviewDataUrls((current) => ({ ...current, [path]: output?.data_url || "" }));
-    } catch {
-      if ((previewRevisions.current.get(key) || 0) !== revision) return;
-      setPreviewDataUrls((current) => ({ ...current, [path]: "" }));
-    } finally {
-      if ((previewRevisions.current.get(key) || 0) === revision) {
-        setPreviewLoadedPaths((current) => ({ ...current, [path]: true }));
-        setPreviewLoadingPaths((current) => ({ ...current, [path]: false }));
-      }
-    }
-  };
-
+  // DOM visibility is the only UI-side selection: Core owns identity, decode and caching.
+  const previewTargets = useMemo(() => {
+    const visible = pageEntries.filter(entry => visiblePreviewIds.has(entry.entryId) && entry.status !== "missing");
+    if (inspectedEntry && inspectedEntry.status !== "missing" && !visible.includes(inspectedEntry)) visible.unshift(inspectedEntry);
+    return visible;
+  }, [pageEntries, inspectedEntry, visiblePreviewIds]);
   useEffect(() => {
-    let cancelled = false;
-    const targets = inspectedEntry && !pageEntries.includes(inspectedEntry) ? [...pageEntries, inspectedEntry] : pageEntries;
-    void (async () => {
-      for (const entry of targets) {
-        if (cancelled) break;
-        if (!previewLoadedPaths[entry.primary.path]) await ensureProjectionPreview(entry);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [pageEntries, inspectedEntry]);
+    let active = true;
+    const paths = previewTargets.map(entry => entry.primary.path);
+    const keep = new Set(paths);
+    setPreviewDataUrls(current => Object.fromEntries(Object.entries(current).filter(([path]) => keep.has(path))));
+    setPreviewErrors(current => Object.fromEntries(Object.entries(current).filter(([path]) => keep.has(path))));
+    setPreviewLoadingPaths(Object.fromEntries(paths.map(path => [path, true])));
+    const operationIds: string[] = [];
+    for (let start = 0; start < paths.length; start += 32) {
+      const targets = paths.slice(start, start + 32);
+      const operationId = `visible-preview-${Date.now()}-${++previewReadSequence.current}`;
+      operationIds.push(operationId);
+      void readVisiblePreviews(targets, operationId).then(rows => {
+        if (!active) return;
+        setPreviewDataUrls(current => ({ ...current, ...Object.fromEntries(rows.map(row => [row.sourcePath, row.image?.data_url || ""])) }));
+        setPreviewErrors(current => ({ ...current, ...Object.fromEntries(rows.map(row => [row.sourcePath, row.error || ""])) }));
+      }).catch(error => { if (active) setPreviewErrors(current => ({ ...current, ...Object.fromEntries(targets.map(path => [path, String(error)])) })); })
+        .finally(() => { if (active) setPreviewLoadingPaths(current => ({ ...current, ...Object.fromEntries(targets.map(path => [path, false])) })); });
+    }
+    return () => { active = false; for (const operationId of operationIds) void cancelPreviewRead(operationId).catch(() => undefined); };
+  }, [previewTargets]);
+  useEffect(() => {
+    libraryAlive.current = true;
+    const events = listenEvent<{ requestId: string; completed: number; total: number }>("nova://thumbnail-progress", event => {
+      if (event.payload.requestId === generationRequest.current) setPreviewProgress({ completed: event.payload.completed, total: event.payload.total });
+    });
+    return () => { libraryAlive.current = false; if (generationRequest.current) void cancelPreviewGeneration(generationRequest.current).catch(() => undefined); void events.then(unlisten => unlisten()).catch(() => undefined); };
+  }, []);
 
   // --- actions -------------------------------------------------------------------
   const handleSelect = async () => {
@@ -407,18 +416,29 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     }
   };
 
-  const handleGeneratePreview = async (entry: LibraryEntryView) => {
-    setMessage(""); setGeneratingPreviewId(entry.entryId);
+  const handleGeneratePreviews = async (entries: LibraryEntryView[]) => {
+    if (generationRequest.current || !entries.length) return;
+    const requestId = `library-generate-${Date.now()}-${++previewReadSequence.current}`;
+    generationRequest.current = requestId; setMessage(""); setGeneratingPreviewId(entries[0].entryId); setPreviewPaused(false); setPreviewProgress({ completed: 0, total: entries.length });
     try {
-      const output = await generatePreviewImage(entry.primary.path, "fast_experimental");
-      applyState(await setRecordPreview(await loadLibrary(), entry.primary.path, output.preview_path));
-      const embedded = await readProjectionPreviewImage(entry.primary.path);
-      if (!embedded?.data_url) throw new Error("预览图写回后读取失败，请重试。");
-      setPreviewDataUrls((current) => ({ ...current, [entry.primary.path]: embedded.data_url }));
-      await emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: entry.primary.path });
-    } catch (error) {
-      setMessage(String(error));
-    } finally { setGeneratingPreviewId(""); }
+      // Rust reads the persisted preview_mode, limits work and owns this batch.
+      const output = await generatePreviewImages(entries.map(entry => entry.primary.path), requestId);
+      if (!libraryAlive.current) { for (const item of output.items) if (item.image?.draft_id) void discardGeneratedPreview(item.image.draft_id).catch(() => undefined); return; }
+      setPreviewDrafts(current => [...current, ...output.items.filter(item => !!item.image).map(item => ({ path: item.file_path, image: item.image! }))]);
+      const failures = output.items.filter(item => item.error).map(item => item.error).join("\n");
+      if (failures) setMessage(failures); else if (output.cancelled) setMessage(t("library.previewCancelled"));
+    } catch (error) { if (libraryAlive.current) setMessage(String(error)); }
+    finally { generationRequest.current = ""; if (libraryAlive.current) { setGeneratingPreviewId(""); setPreviewPaused(false); } }
+  };
+  const handleGeneratePreview = (entry: LibraryEntryView) => handleGeneratePreviews([entry]);
+  const handlePreviewControl = async (action: "pause" | "resume" | "cancel") => {
+    if (!generationRequest.current) return;
+    try { await cancelPreviewGeneration(generationRequest.current, action); setPreviewPaused(action === "pause"); }
+    catch (error) { setMessage(String(error)); }
+  };
+  const handlePreviewSaved = (path: string, image: ProductPreviewImage) => {
+    setPreviewDataUrls(current => ({ ...current, [path]: image.data_url })); setMessage(t("library.previewSaved"));
+    void emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path }).catch(error => setMessage(String(error)));
   };
 
   const commitCategories = async (operation: (latest: LibraryState) => LibraryState) => {
@@ -712,6 +732,8 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     isChecked: (entry) => selectedIds.has(entry.entryId),
     previewUrl: (entry) => previewDataUrls[entry.primary.path] || "",
     previewLoading: (entry) => !!previewLoadingPaths[entry.primary.path],
+    previewError: (entry) => previewErrors[entry.primary.path] || "",
+    onVisibility: handlePreviewVisibility,
     busy: libraryBusy,
     onInspect: (entry) => setInspectedEntryId(entry.entryId),
     onToggle: (entry, checked) => toggleSelected(entry.entryId, checked),
@@ -738,7 +760,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     ? <LibraryGrid entries={pageEntries} binding={binding} />
     : view === "list"
       ? <LibraryList entries={pageEntries} binding={binding} columns={columns} allSelected={allPageSelected} someSelected={somePageSelected} onToggleAll={(checked) => setSelectedEntryIds((current) => checked ? [...new Set([...current, ...pageEntries.map((entry) => entry.entryId)])] : current.filter((id) => !pageEntries.some((entry) => entry.entryId === id)))} />
-      : <LibraryDetail entry={inspectedEntry} variant="full" columns={columns} onToggleColumn={toggleColumn} previewUrl={inspectedEntry ? previewDataUrls[inspectedEntry.primary.path] || "" : ""} previewLoading={inspectedEntry ? !!previewLoadingPaths[inspectedEntry.primary.path] : false} busy={libraryBusy} favorite={!!inspectedEntry && favoriteIds.has(inspectedEntry.entryId)} generatingPreview={!!inspectedEntry && generatingPreviewId === inspectedEntry.entryId}
+      : <LibraryDetail entry={inspectedEntry} variant="full" columns={columns} onToggleColumn={toggleColumn} previewUrl={inspectedEntry ? previewDataUrls[inspectedEntry.primary.path] || "" : ""} previewLoading={inspectedEntry ? !!previewLoadingPaths[inspectedEntry.primary.path] : false} previewError={inspectedEntry ? previewErrors[inspectedEntry.primary.path] || "" : ""} busy={libraryBusy} favorite={!!inspectedEntry && favoriteIds.has(inspectedEntry.entryId)} generatingPreview={!!generatingPreviewId}
         onActivate={() => inspectedEntry && void handleActivate(inspectedEntry)} onOpenProperties={() => { if (inspectedEntry) { setCurrentFile(inspectedEntry.primary.path); setRoute("properties"); } }} onOpenFolder={() => inspectedEntry && void openFileParentDir(inspectedEntry.primary.path).catch((error) => setMessage(`打开文件夹失败：${String(error)}`))} onCopy={() => inspectedEntry && (setDispatchError(""), setDispatchEntryId(inspectedEntry.entryId))} onMoveCategory={() => inspectedEntry && (setMoveCategoryId(""), setCategoryError(""), setMoveEntryIds([inspectedEntry.entryId]))} onGeneratePreview={() => inspectedEntry && void handleGeneratePreview(inspectedEntry)} onTrash={() => setRemoveEntryIds(inspectedEntry ? [inspectedEntry.entryId] : [])} onToggleFavorite={() => inspectedEntry && void toggleFavorite(inspectedEntry.entryId)} categoryLabel={(id) => categoryPath(state, id) || id} onRepositionReplica={(replicaId: string) => void handleRepositionReplica(replicaId)} repositioning={isRepositioning} />;
 
   const boardContent = grouped
@@ -769,6 +791,8 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
         onExport={() => { setExportError(""); setExportOpen(true); }}
       />
       {message && <div className="library-message" role="alert">{displayPathText(message)}<Button variant="ghost" size="icon-sm" aria-label="关闭提示" onClick={() => setMessage("")}><ThemeIcon name="close" size={14} fallback={X} /></Button></div>}
+      {generatingPreviewId && <div className="library-progress" role="status"><span>{t("library.previewProgress", previewProgress)}</span><Button size="sm" onClick={() => void handlePreviewControl(previewPaused ? "resume" : "pause")}>{t(previewPaused ? "library.previewResume" : "library.previewPause")}</Button><Button size="sm" onClick={() => void handlePreviewControl("cancel")}>{t("library.previewCancel")}</Button></div>}
+      <PreviewDraftDialog draft={previewDrafts[0]?.image ?? null} sourcePath={previewDrafts[0]?.path ?? ""} onSaved={image => { if (previewDrafts[0]) handlePreviewSaved(previewDrafts[0].path, image); }} onClose={() => setPreviewDrafts(current => current.slice(1))} />
       {isRefreshing && <div className="library-progress" role="status">刷新中 {refreshProgress} / {refreshTotal}</div>}
 
       <div className="library-workspace">
@@ -802,9 +826,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
             <span className="library-result-count" role="status">{filteredEntries.length} 项{searchLoading ? " · 搜索中…" : ""}{grouped ? ` · ${groups.length} 组` : ""}</span>
             {view === "list" && <LibraryColumnPicker selected={columns} onToggle={toggleColumn} disabled={libraryBusy} />}
           </div>
-          {selectedEntries.length >= 2 && (
+          {selectedEntries.length >= 1 && (
             <div className="library-batch-toolbar">
               <span>已选 {selectedEntries.length}</span>
+              <Button size="sm" disabled={libraryBusy || !!generatingPreviewId} onClick={() => void handleGeneratePreviews(selectedEntries)}>{t("library.previewGenerateSelected")}</Button>
               <Button size="sm" disabled={libraryBusy} onClick={() => void addSelectedToComposition()}>加入组合</Button>
               <Button size="sm" disabled={libraryBusy} onClick={() => { setExportError(""); setExportOpen(true); }}>批量导出…</Button>
               <Button size="sm" onClick={() => { setMoveCategoryId(""); setCategoryError(""); setMoveEntryIds(selectedEntries.map((entry) => entry.entryId)); }} disabled={libraryBusy}>移动到分类…</Button>
@@ -828,8 +853,8 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
             <ScrollArea className="library-inspector-scroll">
               <LibraryDetail
                 entry={inspectedEntry} variant="inspector" columns={columns} onToggleColumn={toggleColumn}
-                previewUrl={inspectedEntry ? previewDataUrls[inspectedEntry.primary.path] || "" : ""} previewLoading={inspectedEntry ? !!previewLoadingPaths[inspectedEntry.primary.path] : false}
-                busy={libraryBusy} favorite={!!inspectedEntry && favoriteIds.has(inspectedEntry.entryId)} generatingPreview={!!inspectedEntry && generatingPreviewId === inspectedEntry.entryId}
+                previewUrl={inspectedEntry ? previewDataUrls[inspectedEntry.primary.path] || "" : ""} previewLoading={inspectedEntry ? !!previewLoadingPaths[inspectedEntry.primary.path] : false} previewError={inspectedEntry ? previewErrors[inspectedEntry.primary.path] || "" : ""}
+                busy={libraryBusy} favorite={!!inspectedEntry && favoriteIds.has(inspectedEntry.entryId)} generatingPreview={!!generatingPreviewId}
                 onActivate={() => inspectedEntry && void handleActivate(inspectedEntry)} onOpenProperties={() => { if (inspectedEntry) { setCurrentFile(inspectedEntry.primary.path); setRoute("properties"); } }}
                 onOpenFolder={() => inspectedEntry && void openFileParentDir(inspectedEntry.primary.path).catch((error) => setMessage(`打开文件夹失败：${String(error)}`))}
                 onCopy={() => inspectedEntry && (setDispatchError(""), setDispatchEntryId(inspectedEntry.entryId))}

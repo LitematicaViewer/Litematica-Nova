@@ -1,5 +1,5 @@
 import { t } from "./i18n";
-export type DisplayMode = "normal" | "fast_experimental" | "full";
+export type DisplayMode = "normal" | "fast_experimental" | "standard" | "full";
 export type RenderBuildMode = "prebuilt" | "realtime";
 
 export interface V5RenderModeConfig {
@@ -14,6 +14,8 @@ export const RENDER_DISPLAY_MODE_KEY = "lba.render.displayMode";
 export const RENDER_BUILD_MODE_KEY = "lba.render.buildMode";
 
 export const DISPLAY_MODE_OPTIONS: Array<{ label: string; value: DisplayMode }> = [
+  { get label() { return t("render.mode.fast"); }, value: "fast_experimental" },
+  { get label() { return t("render.mode.standard"); }, value: "standard" },
   { get label() { return t("native.mode.full"); }, value: "full" },
 ];
 
@@ -36,7 +38,9 @@ export function saveRenderBuildMode(value: string): RenderBuildMode {
   return buildMode;
 }
 
-export function normalizeDisplayMode(_value: unknown): DisplayMode {
+export function normalizeDisplayMode(value: unknown): DisplayMode {
+  if (value === "fast" || value === "fast_experimental") return "fast_experimental";
+  if (value === "normal" || value === "standard") return "standard";
   return "full";
 }
 
@@ -60,7 +64,10 @@ export function requiresV5FullMode(config: V5RenderModeConfig | null | undefined
 }
 
 export function resolveV5DisplayMode(value: unknown, config: V5RenderModeConfig | null | undefined): DisplayMode {
-  return requiresV5FullMode(config) ? "full" : normalizeDisplayMode(value);
+  // User-selected product modes are authoritative. V5 options are validated by
+  // the selected native backend, never a silent Standard/Fast -> Full switch.
+  void config;
+  return normalizeDisplayMode(value);
 }
 
 export function loadDisplayMode(): DisplayMode {

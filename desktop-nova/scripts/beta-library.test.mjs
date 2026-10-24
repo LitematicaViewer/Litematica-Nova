@@ -54,6 +54,7 @@ function createHarness(state, overrides = {}) {
     if (name === "./filePathIdentity") return paths;
     if (name === "./backend") return backend;
     if (name === "../platform/applicationOperations") return { inspectProject: async () => ({ metadata: {}, regions: [] }), editProjectMetadata: async () => ({}) };
+    if (name === "../platform/schematicFormats") return { querySchematicFormat: async () => ({}) };
     if (name === "./libraryMigration") return migration;
     if (name === "./libraryContent") return content;
     if (name === "./libraryTasks") return { submitLibraryTask: async () => "t", cancelLibraryTask: async () => true, subscribeLibraryTask: async () => () => {}, submitAndAwait: async () => ({ taskId: "t", kind: "x", status: "completed", summary: {}, failures: [] }), awaitLibraryTask: async () => ({ taskId: "t", kind: "x", status: "completed", summary: {}, failures: [] }), ...(overrides.tasks || {}) };
@@ -85,6 +86,16 @@ function createHarness(state, overrides = {}) {
     throw new Error(`entryView dep ${name}`);
   }, true);
   const elementStubs = {
+    "../../../../../src/platform/composition": { queryComposition: async () => ({ project: { id: "test-composition" } }) },
+    "../../../../components/PreviewDraftDialog": { PreviewDraftDialog: "PreviewDraftDialog" },
+    "../../../../i18n": { useI18n: () => ({ locale: "zh-CN" }) },
+    "../../../../../src/services/i18n": { t: key => key, getUiLocale: () => "zh-CN", localizeMessage: value => typeof value === "string" ? value : "", message: key => key },
+    "../../../../../src/platform/previewImage": {
+      readVisiblePreviews: async paths => Promise.all(paths.map(async path => ({ sourcePath: path, image: await facade.readProjectionPreviewImage(path) }))),
+      cancelPreviewRead: async () => undefined,
+      generatePreviewImages: async paths => ({ items: paths.map(path => ({ file_path: path, image: { preview_path: path + ".png", data_url: "data:generated", draft_id: "draft-" + path, can_embed: true, persisted: false } })), cancelled: false }),
+      cancelPreviewGeneration: async () => undefined, discardGeneratedPreview: async () => undefined,
+    },
     "./LibraryToolbar": { LibraryToolbar: "LibraryToolbar" },
     "./LibraryCategoryTree": { LibraryCategoryTree: "LibraryCategoryTree" },
     "./LibraryGrid": { LibraryGrid: "LibraryGrid" },
@@ -114,7 +125,7 @@ function createHarness(state, overrides = {}) {
     "../../../../../src/services/libraryTasks": { submitAndAwait: async () => ({ taskId: "t", kind: "x", status: "completed", summary: {}, failures: [] }) },
     "../../../../../src/business/facade": facade,
     "../../../../../src/platform/events": {
-      listenEvent: async (event, callback) => { (listeners.get(event) ?? listeners.set(event, [])).push(callback); return () => {}; },
+      listenEvent: async (event, callback) => { if (!listeners.has(event)) listeners.set(event, []); listeners.get(event).push(callback); return () => {}; },
       emitEvent: async (event, payload) => { calls.events.push({ event, payload }); },
     },
     "../../../libraryEvents": { projectionLibraryImportedEvent: "imported", projectionLibraryStateChangedEvent: "changed" },
@@ -270,4 +281,31 @@ test("刷新失败提示并保留原列表，不写盘不丢条目", async () =>
   assert.match(label(alert.props.children), /刷新失败，原有列表已保留/);
   assert.equal(h.component("LibraryGrid").props.entries.length, 2, "失败不得清空列表");
   assert.equal(h.calls.saved.length, savesBefore, "刷新失败不得新增写盘");
+});
+
+test("缩略图只读取可见卡片与检查器，不扫描整库", async () => {
+  const h = createHarness(library([entry("e1"), entry("e2")], [replica("r1", "e1"), replica("r2", "e2")]));
+  await h.settle();
+  assert.deepEqual(h.calls.previews || [], []);
+  h.component("LibraryGrid").props.binding.onVisibility("e1", true);
+  h.render(); await h.settle();
+  assert.deepEqual(h.calls.previews, ["C:/library/r1.litematic"]);
+  assert.equal(h.component("LibraryGrid").props.binding.previewUrl(h.component("LibraryGrid").props.entries[1]), "");
+});
+
+test("生成预览只产生草稿，保存确认前不写库或发布内嵌完成事件", async () => {
+  const h = createHarness(library([entry("e1")], [replica("r1", "e1")]));
+  await h.settle();
+  const grid = h.component("LibraryGrid");
+  grid.props.binding.onInspect(grid.props.entries[0]); h.render(); await h.settle();
+  const savedBefore = h.calls.saved.length;
+  await h.component("LibraryDetail").props.onGeneratePreview(); h.render(); await h.settle();
+  const confirmation = h.component("PreviewDraftDialog");
+  assert.equal(confirmation.props.draft.persisted, false);
+  assert.equal(confirmation.props.draft.can_embed, true);
+  assert.ok(confirmation.props.draft.draft_id);
+  assert.equal(h.calls.saved.length, savedBefore);
+  assert.equal(h.calls.events.filter(event => event.payload?.reason === "embedded-preview").length, 0);
+  confirmation.props.onSaved({ ...confirmation.props.draft, persisted: true });
+  assert.equal(h.calls.events.filter(event => event.payload?.reason === "embedded-preview").length, 1);
 });

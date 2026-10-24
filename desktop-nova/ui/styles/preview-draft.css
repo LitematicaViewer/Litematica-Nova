@@ -1,0 +1,11 @@
+@layer components.shared {
+  .preview-draft-image {
+    display: block;
+    width: 100%;
+    max-height: 55vh;
+    object-fit: contain;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--muted);
+  }
+}

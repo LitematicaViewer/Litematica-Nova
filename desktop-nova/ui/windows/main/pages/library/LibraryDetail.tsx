@@ -1,3 +1,5 @@
+import { t } from "../../../../../src/services/i18n";
+import { useI18n } from "../../../../i18n";
 import { Box, ImageOff, Star, Trash2, X } from "lucide-react";
 import { Button } from "../../../../components/ui/button";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
@@ -18,6 +20,7 @@ export function LibraryDetail({
   onToggleColumn,
   previewUrl,
   previewLoading,
+  previewError,
   busy,
   favorite,
   generatingPreview,
@@ -40,6 +43,7 @@ export function LibraryDetail({
   onToggleColumn: (id: string, checked: boolean) => void;
   previewUrl: string;
   previewLoading: boolean;
+  previewError: string;
   busy: boolean;
   favorite: boolean;
   generatingPreview: boolean;
@@ -56,6 +60,7 @@ export function LibraryDetail({
   onRepositionReplica: (replicaId: string) => void;
   repositioning: boolean;
 }) {
+  useI18n();
   if (!entry) {
     return (
       <div className="library-inspector-empty">
@@ -71,7 +76,7 @@ export function LibraryDetail({
       <div className="library-detail-preview">
         {previewUrl
           ? <img src={previewUrl} alt={`${entry.displayName} 预览`} />
-          : <span className="library-preview-placeholder"><ThemeIcon name="picture_error" size={36} fallback={ImageOff} /><span>{previewLoading ? "预览加载中…" : "暂无预览图"}</span></span>}
+          : <span className="library-preview-placeholder"><ThemeIcon name="picture_error" size={36} fallback={ImageOff} /><span>{previewLoading ? t("library.previewLoading") : previewError ? t("library.previewReadFailed", { error: previewError }) : t("library.previewMissing")}</span></span>}
       </div>
       <div className="library-detail-heading">
         <h3 className="library-detail-name">{entry.displayName || entry.fileName}</h3>
@@ -129,7 +134,7 @@ export function LibraryDetail({
       <div className="library-detail-section">
         <h4>预览图</h4>
         <div className="library-detail-actions">
-          <Button size="sm" disabled={busy || generatingPreview || entry.status !== "ok"} aria-busy={generatingPreview} onClick={onGeneratePreview}>{generatingPreview ? "正在生成…" : "生成预览图"}</Button>
+          <Button size="sm" disabled={busy || generatingPreview || entry.status !== "ok"} aria-busy={generatingPreview} onClick={onGeneratePreview}>{generatingPreview ? t("library.previewGenerating") : t(previewUrl ? "library.previewRegenerate" : "library.previewGenerate")}</Button>
         </div>
       </div>
 

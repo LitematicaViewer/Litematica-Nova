@@ -316,6 +316,7 @@ function libraryHarness(overrides = {}) {
     if (name === './filePathIdentity') return libPaths;
     if (name === './backend') return backend;
     if (name === '../platform/applicationOperations') return { inspectProject: async () => ({ metadata: {}, regions: [] }), editProjectMetadata: async () => ({}) };
+    if (name === "../platform/schematicFormats") return { querySchematicFormat: async () => ({}) };
     if (name === './libraryMigration') return libMigration;
     if (name === './libraryContent') return libContent;
     if (name === './libraryTasks') return { submitLibraryTask: async () => 't', cancelLibraryTask: async () => true, subscribeLibraryTask: async () => () => {}, submitAndAwait: async () => ({ taskId: 't', kind: 'x', status: 'completed', summary: {}, failures: [] }), awaitLibraryTask: async () => ({ taskId: 't', kind: 'x', status: 'completed', summary: {}, failures: [] }), ...(overrides.tasks || {}) };
@@ -343,6 +344,16 @@ function libraryHarness(overrides = {}) {
     throw new Error(`entryView dep ${name}`);
   }, true);
   const stubs = {
+    "../../../../../src/platform/composition": { queryComposition: async () => ({ project: { id: "test-composition" } }) },
+    "../../../../components/PreviewDraftDialog": { PreviewDraftDialog: "PreviewDraftDialog" },
+    "../../../../i18n": { useI18n: () => ({ locale: "zh-CN" }) },
+    "../../../../../src/services/i18n": { t: key => key, getUiLocale: () => "zh-CN", localizeMessage: value => typeof value === "string" ? value : "", message: key => key },
+    "../../../../../src/platform/previewImage": {
+      readVisiblePreviews: async paths => Promise.all(paths.map(async path => ({ sourcePath: path, image: await facade.readProjectionPreviewImage(path) }))),
+      cancelPreviewRead: async () => undefined,
+      generatePreviewImages: async paths => ({ items: paths.map(path => ({ file_path: path, image: { preview_path: path + ".png", data_url: "data:generated", draft_id: "draft-" + path, can_embed: true, persisted: false } })), cancelled: false }),
+      cancelPreviewGeneration: async () => undefined, discardGeneratedPreview: async () => undefined,
+    },
     './LibraryToolbar': { LibraryToolbar: 'LibraryToolbar' },
     './LibraryCategoryTree': { LibraryCategoryTree: 'LibraryCategoryTree' },
     './LibraryGrid': { LibraryGrid: 'LibraryGrid' },

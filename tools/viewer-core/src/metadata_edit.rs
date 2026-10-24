@@ -13,6 +13,8 @@ use crate::projection_preview::{PreviewImageMode, embedded_preview_dimensions, n
 
 #[derive(Debug, Deserialize)]
 pub struct MetadataEditPatch {
+    /// Pins an explicitly confirmed draft to the exact compressed source bytes.
+    pub expected_source_sha256: Option<String>,
     pub name: Option<String>,
     pub author: Option<String>,
     pub description: Option<String>,
@@ -61,6 +63,11 @@ pub fn edit_metadata(
     // Value retains unknown root, region, entity and metadata fields. The typed
     // scene representation is deliberately not used for editing persistent NBT.
     let original = fs::read(input)?;
+    if let Some(expected) = patch.expected_source_sha256.as_deref() {
+        use sha2::{Digest, Sha256};
+        anyhow::ensure!(format!("{:x}", Sha256::digest(&original)).eq_ignore_ascii_case(expected),
+            "Preview draft source identity changed before metadata editing; reload and generate again");
+    }
     let mut plain = Vec::new();
     GzDecoder::new(original.as_slice()).read_to_end(&mut plain)?;
     let mut value: Value = fastnbt::from_bytes(&plain)?;
