@@ -1168,10 +1168,10 @@ name = "desktop-nova"
 version = "0.2.4"
 dependencies = [
  "anyhow",
- "flate2",
  "base64 0.22.1",
  "block",
  "core-graphics-types 0.1.3",
+ "flate2",
  "foreign-types",
  "fs2",
  "httpdate",
