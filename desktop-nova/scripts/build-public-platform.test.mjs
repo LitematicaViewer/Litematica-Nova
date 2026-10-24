@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import zlib from 'node:zlib';
 import test from 'node:test';
-import { platformFor, tauriOverride, iconPng, tauriBuildStages, cargoDirectories } from './build-public-platform.mjs';
+import { platformFor, tauriOverride, iconPng, tauriBuildStages, cargoDirectories, validateDistributableDirectory } from './build-public-platform.mjs';
 
 const base = JSON.parse(fs.readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'));
 const make = (platform) => tauriOverride(base, { platform, stage: '/build/helpers', runtime: '/build/runtime', stockpile: '/build/stockpile_server', icon: '/build/icons/icon.icns', candidate: false });
@@ -78,4 +78,14 @@ test('复用现有产品 ICO 的像素生成 RGBA PNG，不替换品牌图像', 
   }
   assert.equal(rgba.length, 64 * (1 + 64 * 4));
   assert.ok(rgba.some((byte) => byte !== 0));
+});
+
+test('固定源码的可信 CI 可以复用明确绑定的 Cargo 目标，根目录及未绑定路径仍被拒绝', () => {
+  const sourceRoot = path.resolve('/ci/source'), cacheRoot = path.resolve('/ci/cache'), runnerTemp = path.resolve('/ci/runner');
+  const options = { sourceRoot, cacheRoot, runnerTemp, approvedSha: 'a'.repeat(40) };
+  const shared = path.join(cacheRoot, 'desktop-nova/src-tauri/target/ci-windows-x64');
+  assert.equal(validateDistributableDirectory(shared, options), shared);
+  assert.equal(validateDistributableDirectory(path.join(runnerTemp, 'nova-public-target'), options), path.join(runnerTemp, 'nova-public-target'));
+  for (const outside of [cacheRoot, runnerTemp, path.join(runnerTemp, 'other-target')]) assert.throws(() => validateDistributableDirectory(outside, options), /isolated/);
+  assert.throws(() => validateDistributableDirectory(shared, { ...options, approvedSha: '' }), /isolated/);
 });

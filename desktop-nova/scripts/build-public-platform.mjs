@@ -176,9 +176,23 @@ async function collect(target, platform, sha, cargoTarget, version) {
   fs.writeFileSync(path.join(destination, 'artifacts.json'), JSON.stringify({ schema: 'nova.ci.artifacts.v1', target, sourceSha: sha, files }, null, 2));
   console.log(`Desktop candidate complete: target=${target} source=${sha} distributables=${files.length}`);
 }
+export function validateDistributableDirectory(cargoTarget, { sourceRoot = root, cacheRoot = process.env.NOVA_PUBLIC_CARGO_CACHE_ROOT, runnerTemp = process.env.RUNNER_TEMP, approvedSha = process.env.NOVA_APPROVED_PUBLIC_SHA } = {}) {
+  const target = path.resolve(cargoTarget);
+  const inside = (base) => {
+    const relative = path.relative(path.resolve(base), target);
+    return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative);
+  };
+  const local = inside(path.join(sourceRoot, 'desktop-nova/src-tauri/target'));
+  // The trusted archive pipeline pins and verifies approvedSha before this
+  // stage. It deliberately retains Cargo outside the disposable source tree.
+  const frozen = /^[a-f0-9]{40}$/.test(approvedSha || '');
+  const shared = frozen && cacheRoot && inside(path.join(cacheRoot, 'desktop-nova/src-tauri/target'));
+  const hosted = frozen && runnerTemp && target === path.resolve(runnerTemp, 'nova-public-target');
+  if (!local && !shared && !hosted) throw new Error('The desktop target directory must be an isolated local or explicitly bound trusted CI target.');
+  return target;
+}
 function removePreviousDistributables(cargoTarget, platform) {
-  const relative = path.relative(path.join(tauri, 'target'), cargoTarget);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('The desktop target directory must be an isolated directory under src-tauri/target.');
+  validateDistributableDirectory(cargoTarget);
   const directories = platform.os === 'win32' ? ['nsis'] : platform.os === 'linux' ? ['deb', 'appimage'] : ['dmg', 'macos'];
   for (const directory of directories) {
     const from = path.join(cargoTarget, 'release/bundle', directory);
