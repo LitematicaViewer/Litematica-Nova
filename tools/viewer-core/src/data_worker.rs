@@ -198,6 +198,7 @@ impl AnalysisCache {
 struct Engine {
     analysis: Mutex<AnalysisCache>,
     conversion: Mutex<crate::version_conversion::ConversionCache>,
+    recipe_resources_ready: AtomicBool,
 }
 impl Engine {
     fn new() -> Self {
@@ -206,6 +207,7 @@ impl Engine {
             conversion: Mutex::new(crate::version_conversion::ConversionCache::new(
                 ANALYSIS_CACHE_BYTES,
             )),
+            recipe_resources_ready: AtomicBool::new(false),
         }
     }
     fn analysis(
@@ -317,7 +319,27 @@ impl Engine {
                 )?)?)
             }
             DataKind::MaterialRecipes => {
-                let (analysis, revision, _, _) = self.analysis(&req.input, cancel)?;
+                // Resource registry/index construction is input-independent.
+                // Overlap it with this request's real source read/count, never
+                // with work hidden before the click or outside its timing.
+                let (analysis, revision, _, _) = if self.recipe_resources_ready.load(Ordering::Relaxed) {
+                    self.analysis(&req.input, cancel)?
+                } else {
+                    std::thread::scope(|scope| -> Result<_> {
+                        let resources = std::thread::Builder::new().name("nova-recipe-resources".into()).spawn_scoped(scope, || -> Result<()> {
+                            let _context = crate::game_data::operation_context()?;
+                            crate::block_database::database()?;
+                            ensure!(!cancel.load(Ordering::Relaxed), "Data operation cancelled");
+                            crate::recipe_tree::prepare_selected_resolver()
+                        }).context("Start recipe resource preparation")?;
+                        let analysis = self.analysis(&req.input, cancel);
+                        let resources = resources.join().map_err(|_| anyhow::anyhow!("Recipe resource preparation failed"));
+                        let analysis = analysis?;
+                        resources??;
+                        self.recipe_resources_ready.store(true, Ordering::Relaxed);
+                        Ok(analysis)
+                    })?
+                };
                 let language_map: BTreeMap<String,String> = serde_json::from_value(req.input.get("languageMap").filter(|v|!v.is_null()).cloned().unwrap_or(json!({})))?;
                 let batch = crate::material_detail::read_all_cached(&analysis,&revision,req.input["uiLocale"].as_str().unwrap_or("zh-CN"),&language_map,&||cancel.load(Ordering::Relaxed))?;
                 Ok(json!({"summary":batch.summary,"sourceRevision":revision}))

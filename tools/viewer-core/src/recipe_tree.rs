@@ -218,6 +218,10 @@ fn selected_resolver(version:&str)->Result<Option<std::sync::Arc<RecipeTreeResol
     if cache.len()>=4{cache.clear();}cache.insert(identity,resolver.clone());Ok(Some(resolver))
 }
 
+pub(crate) fn prepare_selected_resolver() -> Result<()> {
+    selected_resolver("").map(|_| ())
+}
+
 pub fn recipe_type_name(kind:&str,locale:&str)->String {
     let id=kind.strip_prefix("minecraft:").unwrap_or(kind);
     let zh=locale.starts_with("zh");
