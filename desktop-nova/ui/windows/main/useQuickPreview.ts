@@ -18,7 +18,7 @@ const quickController: PresentationViewportController = {
 };
 
 /** One historical fast_experimental entry for Properties and Render. Full is not a fallback. */
-export function useQuickPreview(sourcePath: string, blocked: boolean, preload = false) {
+export function useQuickPreview(sourcePath: string, blocked: boolean, preload = false, compositionEditorPath?: string) {
   useI18n();
   const snapshot = useSyncExternalStore(subscribeQuickPreview, getQuickPreviewState, getQuickPreviewState);
   const operation = quickPreviewForSource(sourcePath, snapshot);
@@ -48,11 +48,11 @@ export function useQuickPreview(sourcePath: string, blocked: boolean, preload = 
     if (operation?.state === "ready" && (operation.preload ?? false) === preload) {
       // Host dedupe retains the same Viewer/GPU and forwards only this click's
       // clock to the next native presentation command.
-      await startQuickPreview(sourcePath, preload, clickStartedAtEpochMs);
+      await startQuickPreview(sourcePath, preload, clickStartedAtEpochMs, compositionEditorPath);
       await viewport.showOverlay(); return;
     }
     if (operation?.state === "starting" && !operation.error) return;
-    const started = await startQuickPreview(sourcePath, preload, clickStartedAtEpochMs);
+    const started = await startQuickPreview(sourcePath, preload, clickStartedAtEpochMs, compositionEditorPath);
     if (source.current === sourcePath) viewport.requestPresentationWhenReady(started.previewId);
   });
   const close = () => execute(async () => { if (operation) await closeQuickPreview(operation.previewId); });

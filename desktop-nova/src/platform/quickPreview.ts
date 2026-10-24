@@ -77,13 +77,17 @@ export function subscribeQuickPreview(listener: () => void) {
     if (!listeners.size && timer) { clearTimeout(timer); timer = undefined; }
   };
 }
-export async function startQuickPreview(sourcePath: string, preload = false, clickStartedAtEpochMs = Date.now()) {
+export async function startQuickPreview(sourcePath: string, preload = false, clickStartedAtEpochMs = Date.now(), compositionEditorPath?: string) {
   ++snapshotRevision;
-  const value = await invoke<QuickPreviewView>("application_quick_preview_start", { input: { sourcePath, ...(preload ? { preload } : {}), clickStartedAtEpochMs } });
+  const value = await invoke<QuickPreviewView>("application_quick_preview_start", { input: { sourcePath, ...(preload ? { preload } : {}), clickStartedAtEpochMs, ...(compositionEditorPath ? { compositionEditorPath } : {}) } });
   ++snapshotRevision;
   publish(value);
   schedule();
   return value;
+}
+
+export function readQuickPreviewEditorEvent(previewId: string, afterSequence = 0): Promise<import("./composition").CompositionEditorEvent | null> {
+  return invoke("application_quick_preview_editor_event", { previewId, afterSequence });
 }
 export async function decideQuickPreviewResources(previewId: string, action: QuickResourceAction, warningConfirmed = false) {
   if (snapshot?.previewId !== previewId) throw new Error("预算决策不属于当前快速预览");

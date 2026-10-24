@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use viewer_launch_contract::{QuickPreviewHostWindow, QuickPreviewTask, ViewerContent, ViewerLaunchContract, ViewerSessionCommand, ViewerSessionEvent, ViewerSessionState, ViewerSessionStatus, ViewerTask};
@@ -88,6 +88,74 @@ fn publish_resource_decision(path: &Path, id: &str, action: QuickResourceAction,
     fs::rename(&temporary, path).map_err(|error| error.to_string())
 }
 
+fn read_editor_scene(path: &Path) -> Result<viewer_launch_contract::CompositionEditorScene, String> {
+    read_editor_scene_in(path, &crate::current_user_config_dir()?)
+}
+
+fn read_editor_scene_in(path: &Path, storage: &Path) -> Result<viewer_launch_contract::CompositionEditorScene, String> {
+    if !path.is_absolute() { return Err("组合编辑描述路径必须是绝对路径".into()); }
+    let source = fs::canonicalize(path).map_err(|error| error.to_string())?;
+    let storage = fs::canonicalize(storage).map_err(|error| error.to_string())?;
+    if !source.starts_with(&storage) { return Err("组合编辑描述不属于当前用户项目目录".into()); }
+    let file = File::open(&source).map_err(|error| error.to_string())?;
+    if file.metadata().map_err(|error| error.to_string())?.len() > 8 * 1024 * 1024 { return Err("组合编辑描述超过容量".into()); }
+    let scene: viewer_launch_contract::CompositionEditorScene = serde_json::from_reader(file).map_err(|error| format!("组合编辑描述无效：{error}"))?;
+    scene.validate()?;
+    let event_parent = scene.event_path.parent().ok_or("组合交互回执没有父目录")?;
+    let event_parent = fs::canonicalize(event_parent).map_err(|error| error.to_string())?;
+    if Some(event_parent.as_path()) != source.parent() || scene.event_path.file_name() == source.file_name() {
+        return Err("组合交互回执必须位于当前编辑会话目录，且不能覆盖场景描述".into());
+    }
+    Ok(scene)
+}
+
+fn current_editor_event(scene: &viewer_launch_contract::CompositionEditorScene, event: &viewer_launch_contract::CompositionEditorEvent, after: u64) -> Result<bool, String> {
+    if event.schema != viewer_launch_contract::COMPOSITION_EDITOR_EVENT_SCHEMA || event.project_id != scene.project_id || event.scene_key != scene.scene_key {
+        return Err("组合交互回执身份不匹配".into());
+    }
+    if event.sequence <= after || event.generation != scene.generation { return Ok(false); }
+    if event.committed && event.cancelled { return Err("组合交互回执状态冲突".into()); }
+    if event.transform.is_some() && event.instance_id.is_none() { return Err("组合变换缺少部件身份".into()); }
+    if event.transform.as_ref().is_some_and(|value| !matches!(value.rotation, 0 | 90 | 180 | 270)) { return Err("组合旋转必须对齐方块网格".into()); }
+    if event.selected_instance_id.as_ref().is_some_and(|id| !scene.instances.iter().any(|instance| &instance.id == id)) {
+        return Err("组合选择指向不存在的部件".into());
+    }
+    if let Some(id) = &event.instance_id {
+        let instance = scene.instances.iter().find(|instance| &instance.id == id).ok_or("组合交互部件已移除")?;
+        if event.committed && instance.locked { return Err("锁定部件不能提交变换".into()); }
+    }
+    Ok(true)
+}
+
+fn read_native_editor_event(scene: &viewer_launch_contract::CompositionEditorScene) -> Result<Option<viewer_launch_contract::CompositionEditorEvent>, String> {
+    let file = match File::open(&scene.event_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取组合交互回执失败：{error}")),
+    };
+    if file.metadata().map_err(|error| error.to_string())?.len() > 8 * 1024 * 1024 {
+        return Err("组合交互回执超过容量".into());
+    }
+    serde_json::from_reader(file).map(Some).map_err(|error|format!("组合交互回执无效：{error}"))
+}
+
+fn commit_editor_readback(scene: &viewer_launch_contract::CompositionEditorScene, path: &Path,
+    event: &viewer_launch_contract::CompositionEditorEvent,
+    mut query: impl FnMut(&str, serde_json::Value) -> Result<serde_json::Value,String>) -> Result<viewer_launch_contract::CompositionEditorScene,String> {
+    query("commit",serde_json::json!({"action":"commitEditor","projectId":scene.project_id,"generation":event.generation,"editorEvent":event}))?;
+    let readback=query("state",serde_json::json!({"action":"editorState","projectId":scene.project_id,"editorScenePath":path,"selectedInstanceId":event.selected_instance_id,"tool":scene.tool,"acknowledgeSequence":event.sequence}))?;
+    let authority:viewer_launch_contract::CompositionEditorScene=serde_json::from_value(readback["editorScene"].clone()).map_err(|error|format!("组合编辑权威状态无效：{error}"))?;
+    authority.validate()?;
+    if authority.project_id!=scene.project_id||authority.scene_key!=scene.scene_key||authority.event_path!=scene.event_path||authority.acknowledged_event_sequence.is_none_or(|ack|ack<event.sequence) {
+        return Err("组合编辑权威状态与已提交手势不匹配".into());
+    }
+    Ok(authority)
+}
+
+fn visible_editor_event(cached: Option<&viewer_launch_contract::CompositionEditorEvent>, after: u64) -> Option<viewer_launch_contract::CompositionEditorEvent> {
+    cached.filter(|event|event.sequence>after).cloned()
+}
+
 impl QuickPreviewView {
     fn accepts_presentation(&self, revision: u64) -> bool { revision > self.presentation_revision }
 
@@ -112,6 +180,7 @@ impl QuickPreviewView {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct StartQuickPreviewInput {
     pub(crate) source_path: PathBuf,
+    #[serde(default)] pub(crate) composition_editor_path: Option<PathBuf>,
     #[serde(default)] pub(crate) graphics_backend: viewer_launch_contract::GraphicsApiPreference,
     #[serde(default)] pub(crate) preload: bool,
     #[serde(default)] pub(crate) click_started_at_epoch_ms: Option<u64>,
@@ -125,6 +194,10 @@ pub(crate) struct QuickPreviewHost {
     sequence: Arc<AtomicU64>,
     session: Arc<Mutex<Option<QuickSession>>>,
     pending_resource: Arc<Mutex<Option<PendingQuickResource>>>,
+    editor_operations: Arc<Mutex<Option<super::operations::ApplicationOperations>>>,
+    editor_submission: Arc<Mutex<()>>,
+    editor_monitor: Arc<Mutex<Option<String>>>,
+    editor_shutdown: Arc<AtomicBool>,
 }
 
 struct PendingQuickResource {
@@ -137,6 +210,12 @@ struct PendingQuickResource {
 }
 
 struct QuickSession {
+    editor: Option<viewer_launch_contract::CompositionEditorScene>,
+    editor_sync_pending: bool,
+    editor_scene_path: Option<PathBuf>,
+    editor_handled_sequence: u64,
+    editor_last_event: Option<viewer_launch_contract::CompositionEditorEvent>,
+    editor_failed_sequence: Option<u64>,
     view: QuickPreviewView,
     session_id: String,
     child: ChildLease,
@@ -170,10 +249,128 @@ struct QuickSession {
 
 impl QuickPreviewHost {
     pub(crate) fn thumbnail_session(&self) -> Self {
-        Self { session: Arc::new(Mutex::new(None)), pending_resource: Arc::new(Mutex::new(None)), ..self.clone() }
+        Self { session: Arc::new(Mutex::new(None)), pending_resource: Arc::new(Mutex::new(None)), editor_monitor: Arc::new(Mutex::new(None)), editor_shutdown: Arc::new(AtomicBool::new(false)), ..self.clone() }
     }
     pub(crate) fn new(supervisor: Arc<ProcessSupervisor>, viewer_exe: PathBuf, data_root: PathBuf) -> Self {
-        Self { supervisor, viewer_exe, data_root, sequence: Arc::new(AtomicU64::new(1)), session: Arc::new(Mutex::new(None)), pending_resource: Arc::new(Mutex::new(None)) }
+        Self { supervisor, viewer_exe, data_root, sequence: Arc::new(AtomicU64::new(1)), session: Arc::new(Mutex::new(None)), pending_resource: Arc::new(Mutex::new(None)), editor_operations: Arc::new(Mutex::new(None)), editor_submission: Arc::new(Mutex::new(())), editor_monitor: Arc::new(Mutex::new(None)), editor_shutdown: Arc::new(AtomicBool::new(false)) }
+    }
+
+    pub(crate) fn bind_editor_operations(&self, operations: super::operations::ApplicationOperations) -> Result<(), String> {
+        *self.editor_operations.lock().map_err(|_| "组合编辑持久化绑定锁异常")? = Some(operations);
+        Ok(())
+    }
+
+    fn editor_binding(&self) -> Result<Option<String>, String> {
+        let slot = self.session.lock().map_err(|_| "快速预览状态锁异常")?;
+        Ok(slot.as_ref().filter(|session| matches!(session.view.state,"starting"|"ready"))
+            .and_then(|session|session.editor.as_ref().map(|scene|format!("{}\n{}",session.view.preview_id,scene.event_path.display()))))
+    }
+
+    fn ensure_editor_monitor(&self) -> Result<(), String> {
+        let Some(binding) = self.editor_binding()? else { return Ok(()); };
+        let mut monitor = self.editor_monitor.lock().map_err(|_| "组合编辑收尾锁异常")?;
+        if monitor.as_ref() == Some(&binding) { return Ok(()); }
+        *monitor = Some(binding.clone());
+        let host = self.clone();
+        std::thread::Builder::new().name("nova-composition-events".into()).spawn(move || {
+            let mut last_failure = None;
+            loop {
+                if host.editor_shutdown.load(Ordering::Acquire) { break; }
+                let result = (|| {
+                    let _gate = host.editor_submission.lock().map_err(|_| "组合编辑提交锁异常")?;
+                    if host.editor_binding()?.as_ref() != Some(&binding) { return Ok(false); }
+                    host.flush_editor_locked(false)?;
+                    Ok::<_,String>(true)
+                })();
+                match result {
+                    Ok(false) => break,
+                    Ok(true) => last_failure = None,
+                    Err(error) => {
+                        if last_failure.as_ref() != Some(&error) {
+                            eprintln!("[COMPOSITION_EDITOR] commit_failed event_preserved=true error={error}");
+                            if let Ok(mut slot)=host.session.lock() { if let Some(session)=slot.as_mut(){session.view.error=Some(error.clone());} }
+                            last_failure=Some(error);
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            if let Ok(mut monitor)=host.editor_monitor.lock() { if monitor.as_ref()==Some(&binding){*monitor=None;} }
+        }).map_err(|error| { *monitor=None; format!("启动组合编辑收尾失败：{error}") })?;
+        Ok(())
+    }
+
+    pub(crate) fn flush_editor_pending(&self) -> Result<(), String> {
+        let _gate = self.editor_submission.lock().map_err(|_| "组合编辑提交锁异常")?;
+        self.flush_editor_locked(true)
+    }
+
+    /// Closing has its own bounded grace, not a render/performance deadline.
+    /// The durable native receipt remains available to the existing recovery
+    /// transaction if storage or the data worker cannot finish during exit.
+    pub(crate) fn flush_editor_before_shutdown(&self) -> Result<(), String> {
+        self.editor_shutdown.store(true,Ordering::Release);
+        let host=self.clone();
+        let (sender,receiver)=std::sync::mpsc::channel();
+        std::thread::Builder::new().name("nova-composition-close".into()).spawn(move|| {
+            let _=sender.send(host.flush_editor_pending());
+        }).map_err(|error|error.to_string())?;
+        receiver.recv_timeout(Duration::from_secs(2)).map_err(|_| "组合编辑保存仍未结束；原始交互回执已保留，下次打开时恢复。".to_owned())?
+    }
+
+    pub(crate) fn resume_editor_after_shutdown(&self) -> Result<(), String> {
+        self.editor_shutdown.store(false,Ordering::Release);
+        self.ensure_editor_monitor()
+    }
+
+    fn flush_editor_locked(&self, retry_failed: bool) -> Result<(), String> {
+        let (id, scene, path, handled, failed) = {
+            let mut slot=self.session.lock().map_err(|_| "快速预览状态锁异常")?;
+            let Some(session)=slot.as_mut() else{return Ok(());};
+            let Some(scene)=session.editor.clone() else{return Ok(());};
+            // Refresh only native receipts while locked. The expensive data
+            // request below deliberately holds no QuickSession lock.
+            session.refresh(&self.supervisor)?;
+            if !session.editor_sync_pending && session.editor_failed_sequence.is_some_and(|sequence|sequence<=session.editor_handled_sequence) {
+                session.editor_failed_sequence=None;
+                session.view.error=None;
+            }
+            (session.view.preview_id.clone(),scene,session.editor_scene_path.clone().ok_or("组合编辑描述路径缺失")?,session.editor_handled_sequence,session.editor_failed_sequence)
+        };
+        let Some(event)=read_native_editor_event(&scene)? else{return Ok(());};
+        if !retry_failed && failed==Some(event.sequence) {return Ok(());}
+        if !current_editor_event(&scene,&event,handled)? {return Ok(());}
+        if !event.committed {
+            let mut slot=self.session.lock().map_err(|_| "快速预览状态锁异常")?;
+            if let Some(session)=slot.as_mut().filter(|s|s.view.preview_id==id&&s.editor.as_ref().is_some_and(|v|v.event_path==scene.event_path)) {
+                session.editor_handled_sequence=event.sequence;
+                session.editor_last_event=Some(event);
+            }
+            return Ok(());
+        }
+        let operations=self.editor_operations.lock().map_err(|_| "组合编辑持久化绑定锁异常")?.clone().ok_or("组合编辑持久化未连接")?;
+        let query=|action:&str,input:serde_json::Value| {
+            let serial=self.sequence.fetch_add(1,Ordering::Relaxed);
+            operations.data_query(super::operations::DataQueryInput {operation_id:format!("editor-{action}-{serial}"),kind:super::data_worker::protocol::DataKind::Composition,input})
+        };
+        let result=(|| {
+            let authority=commit_editor_readback(&scene,&path,&event,query)?;
+            let mut slot=self.session.lock().map_err(|_| "快速预览状态锁异常")?;
+            let Some(session)=slot.as_mut().filter(|s|s.view.preview_id==id&&s.editor.as_ref().is_some_and(|v|v.event_path==scene.event_path)) else{return Ok(());};
+            session.editor=Some(authority);
+            session.editor_sync_pending=true;
+            session.editor_handled_sequence=event.sequence;
+            session.editor_last_event=Some(event.clone());
+            session.flush_editor_controls()?;
+            session.editor_failed_sequence=None;
+            session.view.error=None;
+            Ok::<_,String>(())
+        })();
+        if let Err(error)=&result {
+            let mut slot=self.session.lock().map_err(|_| "快速预览状态锁异常")?;
+            if let Some(session)=slot.as_mut().filter(|s|s.view.preview_id==id){session.editor_failed_sequence=Some(event.sequence);session.view.error=Some(format!("组合编辑保存失败：{error}"));}
+        }
+        result
     }
 
     /// Normal startup initializes only static GPU resources asynchronously.
@@ -212,7 +409,7 @@ impl QuickPreviewHost {
         let child = self.supervisor.spawn(spec).map_err(|error| error.to_string())?.child;
         let view = QuickPreviewView { preview_id: id.clone(), source_path: self.data_root.clone(), render_mode: "fast_experimental", state: "starting",
             presentation: QuickPresentationIntent::default(), presentation_revision: 0, visible: false, error: None, preload: false, resource: None };
-        *slot = Some(QuickSession { view, session_id: id.clone(), child, contract, backend, directory: session_directory.clone(), stdout, stderr,
+        *slot = Some(QuickSession { editor_scene_path: None, editor_handled_sequence: 0, editor_last_event: None, editor_failed_sequence: None, editor_sync_pending: false, editor: None, view, session_id: id.clone(), child, contract, backend, directory: session_directory.clone(), stdout, stderr,
             source_bytes: 0, source_modified: None, requested_preload: false, graphics_backend, game_data_id: game_data.map(|context| context.content_id), pending_click_epoch_ms: None, next_command: 1, next_status: 0, next_event: 1,
             pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window, launch_accepted: false,
             gpu_context_only: true, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
@@ -227,6 +424,15 @@ impl QuickPreviewHost {
     }
 
     pub(crate) fn start_with_scene(&self, input: StartQuickPreviewInput, host_window: QuickPreviewHostWindow, scene: PathBuf) -> Result<QuickPreviewView, String> {
+        let gate = self.editor_submission.lock().map_err(|_| "组合编辑提交锁异常")?;
+        self.flush_editor_locked(true)?;
+        let view = self.start_with_scene_inner(input, host_window, scene)?;
+        drop(gate);
+        self.ensure_editor_monitor()?;
+        Ok(view)
+    }
+
+    fn start_with_scene_inner(&self, input: StartQuickPreviewInput, host_window: QuickPreviewHostWindow, scene: PathBuf) -> Result<QuickPreviewView, String> {
         let source = fs::canonicalize(&input.source_path).map_err(|error| format!("读取快速预览投影失败：{error}"))?;
         let meta = fs::metadata(&source).map_err(|error| error.to_string())?;
         if !meta.is_file() || !scene.is_file() {
@@ -234,7 +440,8 @@ impl QuickPreviewHost {
         }
         let game_data = crate::game_data::resolve_context(&crate::current_user_config_dir()?.join("game-data"),
             &crate::get_root().join("pack-in/game-data/default")).map_err(|error| format!("{error:#}"))?;
-        let content = ViewerContent { resource_packs: vec![game_data.resource_jar.clone()], ..Default::default() };
+        let editor = input.composition_editor_path.as_deref().map(read_editor_scene).transpose()?;
+        let content = ViewerContent { composition_editor_path: input.composition_editor_path.clone(), resource_packs: vec![game_data.resource_jar.clone()], ..Default::default() };
         self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.take();
         let mut slot = self.session.lock().map_err(|_| "快速预览状态锁异常".to_owned())?;
         if let Some(session) = slot.as_mut() {
@@ -244,7 +451,17 @@ impl QuickPreviewHost {
                 session.view.error = Some(error);
             }
             if session.game_data_id.as_deref() == Some(game_data.content_id.as_str()) && session.graphics_backend == input.graphics_backend && session.host_window == host_window && session.view.source_path == source && session.source_bytes == meta.len()
-                && session.source_modified == meta.modified().ok() && session.view.preload == input.preload && matches!(session.view.state, "starting" | "ready") {
+                && session.source_modified == meta.modified().ok() && session.view.preload == input.preload && matches!(session.view.state, "starting" | "ready")
+                && session.editor.as_ref().map(|scene| &scene.scene_key) == editor.as_ref().map(|scene| &scene.scene_key) {
+                if session.editor != editor {
+                    session.editor = editor.clone();
+                    session.editor_scene_path = input.composition_editor_path.clone();
+                    session.editor_handled_sequence = editor.as_ref().and_then(|scene|scene.acknowledged_event_sequence).unwrap_or(0);
+                    session.editor_last_event = None;
+                    session.editor_failed_sequence = None;
+                    session.editor_sync_pending = true;
+                    session.flush_editor_controls()?;
+                }
                 session.pending_click_epoch_ms = input.click_started_at_epoch_ms;
                 return Ok(session.view.clone());
             }
@@ -280,6 +497,12 @@ impl QuickPreviewHost {
                 session.resource_report_path = resource_report_path;
                 session.resource_decision_path = resource_decision_path;
                 session.resource_decided = false;
+                session.editor = editor.clone();
+                session.editor_scene_path = input.composition_editor_path.clone();
+                session.editor_handled_sequence = editor.as_ref().and_then(|scene|scene.acknowledged_event_sequence).unwrap_or(0);
+                session.editor_last_event = None;
+                session.editor_failed_sequence = None;
+                session.editor_sync_pending = false;
                 session.pending_intents.clear();
                 session.deferred_presentation = false;
                 session.capture_errors.clear();
@@ -323,7 +546,7 @@ impl QuickPreviewHost {
         let child = self.supervisor.spawn(spec).map_err(|error| format!("启动快速预览失败：{error}"))?.child;
         let view = QuickPreviewView { preview_id: id, source_path: source, render_mode: "fast_experimental", state: "starting",
             presentation: QuickPresentationIntent::default(), presentation_revision: 0, visible: false, error: None, preload: input.preload, resource: None };
-        *slot = Some(QuickSession { view: view.clone(), session_id: view.preview_id.clone(), child, contract, backend, directory: session_directory, stdout, stderr,
+        *slot = Some(QuickSession { editor_scene_path: input.composition_editor_path.clone(), editor_handled_sequence: editor.as_ref().and_then(|scene|scene.acknowledged_event_sequence).unwrap_or(0), editor_last_event: None, editor_failed_sequence: None, editor_sync_pending: false, editor, view: view.clone(), session_id: view.preview_id.clone(), child, contract, backend, directory: session_directory, stdout, stderr,
             source_bytes: meta.len(), source_modified: meta.modified().ok(), requested_preload: input.preload, graphics_backend: input.graphics_backend, game_data_id: Some(game_data.content_id), pending_click_epoch_ms: input.click_started_at_epoch_ms, next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(),
             launch_accepted: false, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None, resource_report_path, resource_decision_path, resource_decided: false, capture_errors: BTreeMap::new(), host_window });
         Ok(view)
@@ -391,6 +614,10 @@ impl QuickPreviewHost {
     }
 
     pub(crate) fn present(&self, id: &str, mut intent: QuickPresentationIntent, revision: u64) -> Result<QuickPreviewView, String> {
+        let _gate=self.editor_submission.lock().map_err(|_|"组合编辑提交锁异常")?;
+        if !intent.visible || matches!(intent.mode,QuickPresentationMode::Hidden) {
+            if let Err(error)=self.flush_editor_locked(true) {eprintln!("[COMPOSITION_EDITOR] hide_commit_failed event_preserved=true error={error}");}
+        }
         if let Some(request) = self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.as_mut().filter(|request| request.view.preview_id == id) {
             if request.view.accepts_presentation(revision) { request.view.presentation_revision = revision; }
             // A pending choice has no prepared scene and cannot admit a Show.
@@ -417,13 +644,15 @@ impl QuickPreviewHost {
         session.view.visible &= intent.visible;
         session.view.presentation = intent;
         session.view.presentation_revision = revision;
-        session.view.error = None;
+        if session.editor_failed_sequence.is_none() {session.view.error = None;}
         session.deferred_presentation = true;
         session.refresh(&self.supervisor)?;
         Ok(session.view.clone())
     }
 
     pub(crate) fn close(&self, id: &str) -> Result<(), String> {
+        let _gate=self.editor_submission.lock().map_err(|_|"组合编辑提交锁异常")?;
+        let flush_error=self.flush_editor_locked(true).err();
         if let Some(request) = self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.as_mut().filter(|request| request.view.preview_id == id) {
             publish_resource_decision(&request.decision_path, id, QuickResourceAction::Cancel, false)?;
             request.view.state = "closed"; request.view.resource = None;
@@ -437,13 +666,14 @@ impl QuickPreviewHost {
                 session.close_presentation()?;
             } else { self.stop_session(session)?; }
         }
-        Ok(())
+        flush_error.map_or(Ok(()),Err)
     }
 
     /// Whole-application exit sends intent only. The common Supervisor owns
     /// the single parallel grace/force deadline; don't spend a separate wait
     /// here before other viewers and the render service can begin exiting.
     pub(crate) fn request_shutdown(&self) -> Result<(), String> {
+        self.editor_shutdown.store(true,Ordering::Release);
         self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.take();
         let mut slot = self.session.lock().map_err(|_| "快速预览状态锁异常".to_owned())?;
         if let Some(session) = slot.as_mut() {
@@ -474,14 +704,39 @@ impl QuickPreviewHost {
     }
 
     pub(crate) fn set_scene_view(&self, source: &Path, controls: viewer_launch_contract::SceneViewControls) -> Result<bool, String> {
+        let _gate = self.editor_submission.lock().map_err(|_| "组合编辑提交锁异常")?;
+        self.flush_editor_locked(true)?;
+        self.publish_scene_view(source, controls)
+    }
+    fn publish_scene_view(&self, source: &Path, controls: viewer_launch_contract::SceneViewControls) -> Result<bool, String> {
         controls.validate()?;
         let mut slot = self.session.lock().map_err(|error| error.to_string())?;
         let Some(session) = slot.as_mut().filter(|session| session.view.source_path == source && session.view.state == "ready") else { return Ok(false); };
         session.refresh(&self.supervisor)?;
         let sequence = session.next_command;
+        if let Some(editor) = &controls.composition_editor {
+            let active = session.editor.as_ref().ok_or("当前快速预览不是组合编辑会话")?;
+            if editor.project_id != active.project_id || editor.scene_key != active.scene_key || editor.event_path != active.event_path {
+                return Err("组合资源已变化，请更新编辑场景。".into());
+            }
+            if editor.generation < active.generation { return Ok(true); }
+        }
+        let editor = controls.composition_editor.clone();
         session.publish_command(&ViewerSessionCommand::set_view(session.session_id.clone(), sequence, controls)?)?;
+        if editor.is_some() { session.editor = editor; session.editor_sync_pending = false; }
         session.next_command += 1;
         Ok(true)
+    }
+
+    pub(crate) fn read_editor_event(&self, id: &str, after_sequence: u64) -> Result<Option<viewer_launch_contract::CompositionEditorEvent>, String> {
+        let _gate=self.editor_submission.lock().map_err(|_|"组合编辑提交锁异常")?;
+        self.flush_editor_locked(false)?;
+        let slot = self.session.lock().map_err(|error| error.to_string())?;
+        let Some(session) = slot.as_ref().filter(|session| session.view.preview_id == id && matches!(session.view.state, "starting" | "ready")) else { return Ok(None); };
+        if session.editor_failed_sequence.is_some() {return Err(session.view.error.clone().unwrap_or_else(||"组合编辑保存失败，原始交互回执已保留。".into()));}
+        // Committing advances the authoritative generation. Keep its original
+        // receipt for the UI readback instead of filtering it as an old frame.
+        Ok(visible_editor_event(session.editor_last_event.as_ref(),after_sequence))
     }
 
     pub(crate) fn capture_frame(&self, id: &str) -> Result<(PathBuf, PathBuf), String> {
@@ -540,12 +795,25 @@ impl QuickPreviewHost {
 }
 
 impl QuickSession {
+    fn flush_editor_controls(&mut self) -> Result<(), String> {
+        // A SetView before status-0/SceneReady would make that Ready no longer
+        // the newest command and could strand a new preview in `starting`.
+        if !self.editor_sync_pending || self.view.state != "ready" { return Ok(()); }
+        if let Some(editor) = &self.editor {
+            let controls = viewer_launch_contract::SceneViewControls { composition_editor: Some(editor.clone()), ..Default::default() };
+            self.publish_command(&ViewerSessionCommand::set_view(self.session_id.clone(), self.next_command, controls)?)?;
+            self.next_command += 1;
+        }
+        self.editor_sync_pending = false;
+        Ok(())
+    }
     fn close_presentation(&mut self) -> Result<(), String> {
         publish_resource_decision(&self.resource_decision_path, &self.session_id, QuickResourceAction::Cancel, false)?;
         self.publish_command(&ViewerSessionCommand::hide(self.session_id.clone(), self.next_command)?)?;
         self.next_command += 1;
         self.pending_intents.clear();
         self.deferred_presentation = false;
+        self.editor_sync_pending = false;
         self.capture_errors.clear();
         self.view.state = "closed";
         self.view.visible = false;
@@ -648,6 +916,7 @@ impl QuickSession {
                 }
             }
         }
+        self.flush_editor_controls()?;
         if self.deferred_presentation && self.view.state == "ready" && !self.gpu_context_only {
             let sequence = self.next_command;
             let intent = self.view.presentation.clone();
@@ -772,7 +1041,7 @@ mod tests {
         let supervisor = Arc::new(supervisor);
         let host = QuickPreviewHost::new(supervisor.clone(), command, directory.0.clone());
         // Exercise the production start/contract/spawn path, without a Viewer, window or GPU.
-        let result = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source.clone(),
+        let result = host.start(StartQuickPreviewInput { composition_editor_path: None, graphics_backend: Default::default(), source_path: source.clone(),
             preload: true, click_started_at_epoch_ms: Some(123) },
             QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id(), native_composition: None }).unwrap();
         assert_eq!(result.state, "starting"); assert!(result.preload); assert!(result.resource.is_none()); assert!(!result.visible);
@@ -823,7 +1092,7 @@ mod tests {
         fs::write(&stdout, "").unwrap(); fs::write(&stderr, "").unwrap();
         let mut initial = view(QuickPresentationIntent::default()); initial.source_path = source.clone(); initial.state = "starting"; initial.presentation_revision = 0;
         let host = QuickPreviewHost::new(Arc::clone(&supervisor), command, directory.0.clone());
-        *host.session.lock().unwrap() = Some(QuickSession { view: initial, session_id: "quick-one".into(), child: child.clone(), contract, backend, directory: directory.0.clone(), stdout, stderr,
+        *host.session.lock().unwrap() = Some(QuickSession { editor_scene_path: None, editor_handled_sequence: 0, editor_last_event: None, editor_failed_sequence: None, editor_sync_pending: false, editor: None, view: initial, session_id: "quick-one".into(), child: child.clone(), contract, backend, directory: directory.0.clone(), stdout, stderr,
             source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, graphics_backend: Default::default(), game_data_id: crate::game_data::resolve_context(&crate::current_user_config_dir().unwrap().join("game-data"), &crate::get_root().join("pack-in/game-data/default")).ok().map(|context| context.content_id), pending_click_epoch_ms: Some(41),
             next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window: window.clone(),
             launch_accepted: true, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
@@ -851,7 +1120,7 @@ mod tests {
         status(1, ViewerSessionState::Attached { host_hwnd: "42".into(), width: 900, height: 600 });
         assert!(host.snapshot().unwrap().unwrap().visible);
 
-        let changed = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: sources[1].clone(), preload: true,
+        let changed = host.start(StartQuickPreviewInput { composition_editor_path: None, graphics_backend: Default::default(), source_path: sources[1].clone(), preload: true,
             click_started_at_epoch_ms: Some(42) }, window.clone()).unwrap();
         assert_ne!(changed.preview_id, "quick-one");
         assert_eq!(read_command(2).kind, viewer_launch_contract::ViewerSessionCommandKind::Hide);
@@ -878,7 +1147,7 @@ mod tests {
         status(5, ViewerSessionState::Attached { host_hwnd: "42".into(), width: 1200, height: 800 });
         assert!(host.snapshot().unwrap().unwrap().visible);
 
-        let closing = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source.clone(), preload: false,
+        let closing = host.start(StartQuickPreviewInput { composition_editor_path: None, graphics_backend: Default::default(), source_path: source.clone(), preload: false,
             click_started_at_epoch_ms: Some(43) }, window.clone()).unwrap();
         host.present(&closing.preview_id, embedded(30, 1.0), 1).unwrap();
         host.close(&closing.preview_id).unwrap();
@@ -887,7 +1156,7 @@ mod tests {
         status(7, ViewerSessionState::SceneReady { request_id: "quick-one".into() });
         assert_eq!(host.snapshot().unwrap().unwrap().state, "closed");
         assert!(!directory.0.join("command-00000000000000000009.json").exists(), "late SceneReady cannot flush the closed page's desired Show");
-        let reopened = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source, preload: false,
+        let reopened = host.start(StartQuickPreviewInput { composition_editor_path: None, graphics_backend: Default::default(), source_path: source, preload: false,
             click_started_at_epoch_ms: Some(44) }, window).unwrap();
         assert_ne!(reopened.preview_id, closing.preview_id);
         assert!(host.present(&closing.preview_id, embedded(999, 1.0), 2).is_err());
@@ -929,7 +1198,7 @@ mod tests {
         fs::write(&stdout, "").unwrap(); fs::write(&stderr, "").unwrap();
         let mut initial = view(QuickPresentationIntent::default()); initial.source_path = source.clone();
         let host = QuickPreviewHost::new(Arc::clone(&supervisor), command, directory.0.clone());
-        *host.session.lock().unwrap() = Some(QuickSession { view: initial, session_id: "quick-one".into(), child: child.clone(), contract, backend, directory: directory.0.clone(), stdout, stderr,
+        *host.session.lock().unwrap() = Some(QuickSession { editor_scene_path: None, editor_handled_sequence: 0, editor_last_event: None, editor_failed_sequence: None, editor_sync_pending: false, editor: None, view: initial, session_id: "quick-one".into(), child: child.clone(), contract, backend, directory: directory.0.clone(), stdout, stderr,
             source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, graphics_backend: Default::default(), game_data_id: crate::game_data::resolve_context(&crate::current_user_config_dir().unwrap().join("game-data"), &crate::get_root().join("pack-in/game-data/default")).ok().map(|context| context.content_id), pending_click_epoch_ms: None,
             next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window: window.clone(),
             launch_accepted: true, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
@@ -945,7 +1214,7 @@ mod tests {
         assert_eq!(supervisor.active_children(), vec![child.clone()]);
         status(1, ViewerSessionState::Hidden);
         assert_eq!(host.snapshot().unwrap().unwrap().state, "closed", "old Ready cannot reopen a closed preview");
-        let reopened = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source.clone(), preload: false, click_started_at_epoch_ms: Some(11) }, window.clone()).unwrap();
+        let reopened = host.start(StartQuickPreviewInput { composition_editor_path: None, graphics_backend: Default::default(), source_path: source.clone(), preload: false, click_started_at_epoch_ms: Some(11) }, window.clone()).unwrap();
         assert_ne!(reopened.preview_id, "quick-one"); assert_eq!(reopened.state, "starting");
         let replacement = read_command(3); assert_eq!(replacement.kind, viewer_launch_contract::ViewerSessionCommandKind::ReplaceScene);
         let replacement_path = replacement.launch_contract.unwrap();
@@ -957,13 +1226,13 @@ mod tests {
         assert_eq!(read_command(4).kind, viewer_launch_contract::ViewerSessionCommandKind::Hide);
         status(2, ViewerSessionState::Hidden); status(3, ViewerSessionState::SceneReady { request_id: "quick-one".into() });
         assert_eq!(host.snapshot().unwrap().unwrap().state, "closed", "actual delayed replacement completion cannot reopen a closed preview");
-        let reopened_again = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source, preload: false, click_started_at_epoch_ms: Some(12) }, window.clone()).unwrap();
+        let reopened_again = host.start(StartQuickPreviewInput { composition_editor_path: None, graphics_backend: Default::default(), source_path: source, preload: false, click_started_at_epoch_ms: Some(12) }, window.clone()).unwrap();
         assert_ne!(reopened_again.preview_id, reopened.preview_id);
         let replacement_again = read_command(6); assert_eq!(replacement_again.kind, viewer_launch_contract::ViewerSessionCommandKind::ReplaceScene);
         let replacement_again_path = replacement_again.launch_contract.unwrap();
         status(4, ViewerSessionState::Hidden); status(5, ViewerSessionState::Hidden);
         let retired_decision = host.session.lock().unwrap().as_ref().unwrap().resource_decision_path.clone();
-        let switched = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: sources[1].clone(), preload: false, click_started_at_epoch_ms: Some(13) }, window).unwrap();
+        let switched = host.start(StartQuickPreviewInput { composition_editor_path: None, graphics_backend: Default::default(), source_path: sources[1].clone(), preload: false, click_started_at_epoch_ms: Some(13) }, window).unwrap();
         assert_ne!(switched.preview_id, reopened_again.preview_id); assert_eq!(switched.state, "starting");
         let new_replacement = read_command(8); assert_eq!(new_replacement.kind, viewer_launch_contract::ViewerSessionCommandKind::ReplaceScene);
         let new_replacement_path = new_replacement.launch_contract.unwrap();
@@ -991,7 +1260,7 @@ mod tests {
         assert!(!new_replacement_path.exists());
         assert_eq!(supervisor.active_children(), vec![child.clone()]);
         let host_window = host.session.lock().unwrap().as_ref().unwrap().host_window.clone();
-        host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: sources[0].clone(), preload: false, click_started_at_epoch_ms: Some(14) }, host_window).unwrap();
+        host.start(StartQuickPreviewInput { composition_editor_path: None, graphics_backend: Default::default(), source_path: sources[0].clone(), preload: false, click_started_at_epoch_ms: Some(14) }, host_window).unwrap();
         let failed_replacement_path = read_command(10).launch_contract.unwrap();
         let failed_launch = ViewerLaunchContract::from_json_slice(&fs::read(&failed_replacement_path).unwrap()).unwrap();
         assert!(matches!(failed_launch.task, ViewerTask::QuickPreview(QuickPreviewTask { preload: false, .. })));
@@ -1066,7 +1335,7 @@ mod quick_resource_tests {
         let supervisor = Arc::new(supervisor);
         let host = QuickPreviewHost::new(supervisor.clone(), root.0.join("deliberately-absent-viewer.exe"), root.0.clone());
         let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() , native_composition: None };
-        let input = |source_path| StartQuickPreviewInput { graphics_backend: Default::default(), source_path, preload: true, click_started_at_epoch_ms: Some(123) };
+        let input = |source_path| StartQuickPreviewInput { composition_editor_path: None, graphics_backend: Default::default(), source_path, preload: true, click_started_at_epoch_ms: Some(123) };
         let first = host.start(input(source.clone()), window.clone()).unwrap();
         assert_eq!(first.state, "starting"); assert!(!first.visible);
         assert!(first.resource.as_ref().unwrap().decision_required); assert!(first.resource.as_ref().unwrap().estimate.is_none());
@@ -1103,7 +1372,7 @@ mod quick_resource_tests {
         let source = root.join("fixture.litematic"); fs::write(&source, b"before").unwrap();
         let (supervisor, _) = ProcessSupervisor::new(ExecutableAllowlist::new()).unwrap(); let supervisor = Arc::new(supervisor);
         let host = QuickPreviewHost::new(supervisor.clone(), root.join("absent-viewer.exe"), root.clone());
-        let view = host.start(StartQuickPreviewInput { graphics_backend: Default::default(), source_path: source.clone(), preload: true, click_started_at_epoch_ms: None },
+        let view = host.start(StartQuickPreviewInput { composition_editor_path: None, graphics_backend: Default::default(), source_path: source.clone(), preload: true, click_started_at_epoch_ms: None },
             QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id() , native_composition: None }).unwrap();
         fs::write(&source, b"changed input content").unwrap();
         let error = host.resource_decision(&view.preview_id, QuickResourceAction::Realtime, false).unwrap_err();
@@ -1165,5 +1434,61 @@ mod quick_resource_tests {
         publish_resource_decision(&file.0, "quick-resource-test", QuickResourceAction::Cancel, false).unwrap();
         assert_eq!(read(), serde_json::json!({ "schema": "nova.quick.decision.v1", "requestId": "quick-resource-test", "action": "cancel", "warningConfirmed": false }));
         assert!(!file.0.with_extension("tmp").exists());
+    }
+}
+
+#[cfg(test)]
+mod composition_editor_host_tests {
+    use super::*;
+    use viewer_launch_contract::{CompositionEditorScene, CompositionEditorResource, CompositionEditorBounds, CompositionEditorInstance, CompositionEditorTransform, CompositionEditorEvent};
+    fn scene(parent: &Path) -> CompositionEditorScene {
+        CompositionEditorScene { schema: viewer_launch_contract::COMPOSITION_EDITOR_SCENE_SCHEMA.into(), project_id:"project".into(), generation:4, scene_key:"geometry".into(),
+            resources: vec![CompositionEditorResource { id:"resource".into(), bounds:CompositionEditorBounds {min:[0;3],max:[1;3]},base_offset:[0;3]}],
+            instances:vec![CompositionEditorInstance {id:"part".into(),resource_id:"resource".into(),transform:CompositionEditorTransform::default(),visible:true,locked:false}],
+            selected_instance_id:Some("part".into()),tool:"translate".into(),split_boxes:vec![],event_path:parent.join("editor-event.json"),acknowledged_event_sequence:None }
+    }
+    #[test]
+    fn editor_receipts_reject_late_generation_replay_and_locked_mutation() {
+        let mut scene=scene(&std::env::temp_dir());
+        let mut event=CompositionEditorEvent {schema:viewer_launch_contract::COMPOSITION_EDITOR_EVENT_SCHEMA.into(),project_id:"project".into(),scene_key:"geometry".into(),generation:4,sequence:7,
+            selected_instance_id:Some("part".into()),committed:true,cancelled:false,instance_id:Some("part".into()),transform:Some(CompositionEditorTransform::default()),split_boxes:None};
+        assert!(current_editor_event(&scene,&event,6).unwrap());
+        assert!(!current_editor_event(&scene,&event,7).unwrap());
+        event.generation=3;assert!(!current_editor_event(&scene,&event,0).unwrap());
+        event.generation=4;scene.instances[0].locked=true;assert!(current_editor_event(&scene,&event,0).unwrap_err().contains("锁定"));
+        scene.instances[0].locked=false;event.scene_key="old-geometry".into();assert!(current_editor_event(&scene,&event,0).is_err());
+    }
+    #[test]
+    fn editor_descriptor_keeps_writes_in_its_own_project_session() {
+        let root=std::env::temp_dir().join(format!("nova-editor-host-{}-{}",std::process::id(),SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(root.join("session")).unwrap();
+        let path=root.join("session/editor.json");let mut scene=scene(&root.join("session"));
+        fs::write(&path,serde_json::to_vec(&scene).unwrap()).unwrap();assert!(read_editor_scene_in(&path,&root).is_ok());
+        scene.event_path=root.join("outside.json");fs::write(&path,serde_json::to_vec(&scene).unwrap()).unwrap();assert!(read_editor_scene_in(&path,&root).is_err());
+        scene.event_path=path.clone();fs::write(&path,serde_json::to_vec(&scene).unwrap()).unwrap();assert!(read_editor_scene_in(&path,&root).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn committed_editor_transaction_acks_only_authority_and_survives_generation_advance() {
+        let scene=scene(&std::env::temp_dir());
+        let path=scene.event_path.with_file_name("editor-scene.json");
+        let event=CompositionEditorEvent{schema:viewer_launch_contract::COMPOSITION_EDITOR_EVENT_SCHEMA.into(),project_id:scene.project_id.clone(),scene_key:scene.scene_key.clone(),generation:4,sequence:7,
+            selected_instance_id:Some("part".into()),committed:true,cancelled:false,instance_id:Some("part".into()),transform:Some(CompositionEditorTransform{offset:[4,5,6],..Default::default()}),split_boxes:None};
+        let mut authority=scene.clone();authority.generation=5;authority.acknowledged_event_sequence=Some(7);authority.instances[0].transform=event.transform.clone().unwrap();
+        let mut actions=Vec::new();
+        let readback=commit_editor_readback(&scene,&path,&event,|stage,input| {
+            actions.push(input["action"].as_str().unwrap().to_owned());
+            if stage=="commit" {assert_eq!(input["generation"],4);return Ok(serde_json::json!({"project":{"generation":5}}));}
+            assert_eq!(input["acknowledgeSequence"],7);assert_eq!(input["editorScenePath"],serde_json::json!(path));
+            Ok(serde_json::json!({"editorScene":authority}))
+        }).unwrap();
+        assert_eq!(actions,vec!["commitEditor","editorState"]);
+        assert_eq!(readback.instances[0].transform.offset,[4,5,6]);
+        assert!(!current_editor_event(&readback,&event,0).unwrap());
+        assert_eq!(visible_editor_event(Some(&event),0).unwrap(),event);
+        assert!(visible_editor_event(Some(&event),7).is_none());
+        let mut calls=0;
+        let failure=commit_editor_readback(&scene,&path,&event,|_,_|{calls+=1;Err("storage unavailable".into())});
+        assert!(failure.is_err());assert_eq!(calls,1,"Failed persistence must never manufacture an acknowledgement");
     }
 }

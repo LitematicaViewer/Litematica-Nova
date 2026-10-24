@@ -1586,7 +1586,7 @@ async fn generate_preview_image(
         // Reuse QuickPreviewHost for an independent hidden WS_CHILD session; an
         // existing interactive Viewer and its camera/GPU lifetime stay untouched.
         let temporary = host.thumbnail_session();
-        let view = temporary.start(StartQuickPreviewInput { source_path: source.clone(), preload: false, click_started_at_epoch_ms: None, graphics_backend }, parent?)?;
+        let view = temporary.start(StartQuickPreviewInput { composition_editor_path: None, source_path: source.clone(), preload: false, click_started_at_epoch_ms: None, graphics_backend }, parent?)?;
         let output = (|| {
             loop {
                 let current = temporary.snapshot()?.ok_or("缩略图预览会话结束")?;
@@ -3859,8 +3859,14 @@ fn application_render_request(
 async fn application_set_scene_view(source_path: PathBuf, display_mode: Option<String>, controls: ::viewer_launch_contract::SceneViewControls,
     quick: tauri::State<'_, QuickPreviewHost>, facade: tauri::State<'_, RenderFacade>) -> Result<(), String> {
     controls.validate()?;
+    if controls.composition_editor.is_some() && display_mode.as_deref().is_some_and(|mode| mode != "fast_experimental") {
+        return Err("组合编辑使用快速编辑视图；标准和完整模式用于合并结果预览。".into());
+    }
     let source = std::fs::canonicalize(source_path).map_err(|error| error.to_string())?;
-    if display_mode.as_deref().is_none_or(|mode| mode == "fast_experimental") && quick.set_scene_view(&source, controls.clone())? { return Ok(()); }
+    if display_mode.as_deref().is_none_or(|mode| mode == "fast_experimental") {
+        let quick=quick.inner().clone();let input_source=source.clone();let input_controls=controls.clone();
+        if tauri::async_runtime::spawn_blocking(move||quick.set_scene_view(&input_source,input_controls)).await.map_err(|error|error.to_string())?? {return Ok(());}
+    }
     let mode = match display_mode.as_deref() { Some("full") => Some(RenderDisplayMode::Full), Some("standard") => Some(RenderDisplayMode::Standard), None => None, _ => return Err("请先启动快速预览".into()) };
     facade.set_scene_view(&source, mode, controls).await
 }
@@ -3974,6 +3980,12 @@ async fn application_quick_preview_snapshot(window: tauri::WebviewWindow, host: 
     if let Some(view) = &view { sync_native_quick_presentation(&window, view)?; }
     #[cfg(not(target_os="macos"))] let _ = window;
     Ok(view)
+}
+
+#[tauri::command]
+async fn application_quick_preview_editor_event(preview_id: String, after_sequence: u64, host: tauri::State<'_, QuickPreviewHost>) -> Result<Option<::viewer_launch_contract::CompositionEditorEvent>, String> {
+    let host = host.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || host.read_editor_event(&preview_id, after_sequence)).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -4290,8 +4302,10 @@ fn main() {
                 app.state::<RenderServiceClient>().inner(),
             )
             .map_err(std::io::Error::other)?;
-            app.manage(QuickPreviewHost::new(Arc::clone(&host.supervisor),
-                required_backend_exe_path("litematica_native_viewer.exe").map_err(std::io::Error::other)?, app_local_data_root.clone()));
+            let quick_host=QuickPreviewHost::new(Arc::clone(&host.supervisor),
+                required_backend_exe_path("litematica_native_viewer.exe").map_err(std::io::Error::other)?, app_local_data_root.clone());
+            quick_host.bind_editor_operations(host.operations.clone()).map_err(std::io::Error::other)?;
+            app.manage(quick_host);
             assets::bind_operations(host.operations.clone());
             app.manage(Arc::clone(&host.supervisor));
             let library_tasks = LibraryTaskHost::new(app.handle().clone(), host.operations.clone())?;
@@ -4425,6 +4439,11 @@ fn main() {
                     if let Some(update) = app.try_state::<UpdateHost>() { update.cancel_for_shutdown(); }
                     online_sources::cancel_for_shutdown();
                     assets::cancel_for_shutdown();
+                    if let Some(quick)=quick.as_ref() {
+                        if let Err(error)=quick.flush_editor_before_shutdown() {
+                            eprintln!("[COMPOSITION_EDITOR] shutdown_commit_incomplete event_preserved=true error={error}");
+                        }
+                    }
                     let reads = operations.as_ref().map(ApplicationOperations::begin_shutdown).unwrap_or_default();
                     if let Some(supervisor) = supervisor.as_ref() { supervisor.terminate_many(&reads, 0); }
                     let writes = std::time::Instant::now();
@@ -4433,6 +4452,7 @@ fn main() {
                         // Cancel closing, restore a usable window and let the
                         // user retry after the existing save finishes.
                         operations.as_ref().unwrap().cancel_shutdown();
+                        if let Some(quick)=quick.as_ref() {if let Err(error)=quick.resume_editor_after_shutdown(){eprintln!("[COMPOSITION_EDITOR] resume_failed error={error}");}}
                         if let Some(update) = app.try_state::<UpdateHost>() { update.resume_after_cancelled_shutdown(); }
                         online_sources::resume_after_cancelled_shutdown();
                         assets::resume_after_cancelled_shutdown();
@@ -4537,6 +4557,7 @@ fn main() {
             iris_shaderpack_settings,
             application_quick_preview_resource_decision,
             application_quick_preview_snapshot,
+            application_quick_preview_editor_event,
             application_quick_preview_present,
             application_quick_preview_close,
             application_render_preflight,

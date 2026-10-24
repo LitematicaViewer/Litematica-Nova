@@ -260,6 +260,7 @@ fn resolve_compatibility_inputs(
         resource_packs.push(path);
     }
     let content = ViewerContent {
+        composition_editor_path: None,
         fabric_mods_dir,
         resource_packs,
     };

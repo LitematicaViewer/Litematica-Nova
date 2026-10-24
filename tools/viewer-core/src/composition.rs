@@ -55,6 +55,8 @@ pub struct ProjectState {
     pub target_data_version: Option<i32>,
     #[serde(default)]
     pub conflict_policy: ConflictPolicy,
+    #[serde(default)]
+    pub split_boxes: Vec<SplitBox>,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +75,8 @@ pub struct CompositionProject {
     pub state: ProjectState,
     pub undo: Vec<ProjectState>,
     pub redo: Vec<ProjectState>,
+    #[serde(default)]
+    pub last_editor_event: Option<(String, u64)>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -896,6 +900,239 @@ fn project_view(root: &Path, project: &CompositionProject, cancel: &AtomicBool) 
 fn project_summary(project: &CompositionProject) -> Value {
     json!({"schema":project.schema,"id":project.id,"generation":project.generation,"state":project.state})
 }
+
+fn editor_resource_id(part: &PartInstance) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut regions = part.regions.clone();
+    regions.sort();
+    regions.dedup();
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(
+            &json!({"snapshot":part.snapshot_id,"selection":part.selection,"regions":regions})
+        )?)
+    ))
+}
+fn editor_resource_parts(project: &CompositionProject) -> Result<BTreeMap<String, PartInstance>> {
+    let mut unique = BTreeMap::new();
+    for part in &project.state.parts {
+        unique
+            .entry(editor_resource_id(part)?)
+            .or_insert_with(|| part.clone());
+    }
+    Ok(unique)
+}
+fn editor_scene_key(project: &CompositionProject) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(
+            &json!({"schema":"nova.composition.geometry.v1","resources":editor_resource_parts(project)?.keys().collect::<Vec<_>>(),"dataVersion":project.state.target_data_version})
+        )?)
+    ))
+}
+fn editor_instances(
+    project: &CompositionProject,
+) -> Result<Vec<viewer_launch_contract::CompositionEditorInstance>> {
+    project
+        .state
+        .parts
+        .iter()
+        .map(|p| {
+            Ok(viewer_launch_contract::CompositionEditorInstance {
+                id: p.id.clone(),
+                resource_id: editor_resource_id(p)?,
+                transform: serde_json::from_value(serde_json::to_value(p.transform)?)?,
+                visible: p.visible,
+                locked: p.locked,
+            })
+        })
+        .collect()
+}
+fn editor_boxes(project: &CompositionProject) -> Vec<viewer_launch_contract::CompositionEditorBox> {
+    project
+        .state
+        .split_boxes
+        .iter()
+        .enumerate()
+        .map(|(i, b)| viewer_launch_contract::CompositionEditorBox {
+            id: format!("split_{i}"),
+            name: b.name.clone(),
+            bounds: viewer_launch_contract::CompositionEditorBounds {
+                min: b.bounds.min,
+                max: b.bounds.max,
+            },
+        })
+        .collect()
+}
+fn resource_bounds(scene: &SceneDocument, part: &PartInstance) -> Result<SceneBounds> {
+    let mut all: Option<SceneBounds> = None;
+    for (name, region) in &scene.root.regions {
+        if !choose_region(part, name) {
+            continue;
+        }
+        let r = nbt::region_bounds(region);
+        let mut b = SceneBounds {
+            min: [r.min_x, r.min_y, r.min_z],
+            max: [r.max_x, r.max_y, r.max_z],
+        };
+        if let Some(selection) = part.selection {
+            if !b.intersects(selection) {
+                continue;
+            }
+            b = SceneBounds {
+                min: std::array::from_fn(|a| b.min[a].max(selection.min[a])),
+                max: std::array::from_fn(|a| b.max[a].min(selection.max[a])),
+            };
+        }
+        all = Some(all.map_or(b, |v| v.union(b)));
+    }
+    all.context("部件没有可显示选区")
+}
+fn validate_editor_boxes(boxes: &[SplitBox]) -> Result<()> {
+    for (i, b) in boxes.iter().enumerate() {
+        b.bounds.validate()?;
+        ensure!(!b.name.is_empty(), "拆分名称不能为空");
+        for previous in &boxes[..i] {
+            ensure!(
+                b.name != previous.name && !b.bounds.intersects(previous.bounds),
+                "拆分区域不能重名或交叉：{} / {}",
+                previous.name,
+                b.name
+            );
+        }
+    }
+    Ok(())
+}
+fn prepare_editor(
+    root: &Path,
+    project: &CompositionProject,
+    input: &Value,
+    cancel: &AtomicBool,
+) -> Result<Value> {
+    use viewer_launch_contract::{
+        CompositionEditorBounds as Bounds, CompositionEditorResource as Resource,
+        CompositionEditorScene as EditorScene,
+    };
+    let scene_key = editor_scene_key(project)?;
+    let geometry_dir = root.join("composition/editor-geometry");
+    fs::create_dir_all(&geometry_dir)?;
+    let packed_path = geometry_dir.join(format!("{scene_key}.litematic"));
+    let resource_path = geometry_dir.join(format!("{scene_key}.resources.json"));
+    let resources: Vec<Resource> = if packed_path.is_file() && resource_path.is_file() {
+        serde_json::from_slice(&fs::read(&resource_path)?)?
+    } else {
+        let unique = editor_resource_parts(project)?;
+        ensure!(!unique.is_empty(), "请先添加组合部件");
+        let mut packed = project.clone();
+        packed.state.parts.clear();
+        packed.state.conflict_policy = ConflictPolicy::Reject;
+        let mut resources = Vec::new();
+        let mut cursor = 0i32;
+        for (resource_id, mut part) in unique {
+            cancelled(cancel)?;
+            let scene = source(root, &part.snapshot_id)?;
+            let bounds = resource_bounds(&scene, &part)?;
+            let base_offset = [
+                cursor
+                    .checked_sub(bounds.min[0])
+                    .context("编辑场景坐标溢出")?,
+                bounds.min[1].checked_neg().context("编辑场景坐标溢出")?,
+                bounds.min[2].checked_neg().context("编辑场景坐标溢出")?,
+            ];
+            resources.push(Resource {
+                id: resource_id.clone(),
+                bounds: Bounds {
+                    min: bounds.min,
+                    max: bounds.max,
+                },
+                base_offset,
+            });
+            part.id = resource_id;
+            part.transform = Transform {
+                offset: base_offset,
+                ..Default::default()
+            };
+            part.visible = true;
+            part.locked = false;
+            part.clear_air = false;
+            packed.state.parts.push(part);
+            cursor = cursor
+                .checked_add(bounds.size()?[0])
+                .and_then(|v| v.checked_add(63))
+                .map(|v| v.div_euclid(32) * 32)
+                .context("编辑场景容量超出整数坐标")?;
+        }
+        let built = compose(root, &packed, cancel)?;
+        ensure!(
+            built.report.can_export,
+            "编辑源场景尚有未解决的数据问题：{}",
+            built.report.issues.join("；")
+        );
+        let minimum = built.report.bounds.context("组合没有可显示内容")?.min;
+        for resource in &mut resources {
+            for a in 0..3 {
+                resource.base_offset[a] = resource.base_offset[a]
+                    .checked_sub(minimum[a])
+                    .context("编辑场景坐标溢出")?;
+            }
+        }
+        // The mesh compiler normalizes the packed source by its true enclosing
+        // minimum. This correction binds every GPU chunk back to its owner.
+        if !packed_path.exists() {
+            schematic_formats::encode(&built.scene, FormatId::Litematic, &packed_path, cancel)?;
+        }
+        atomic_editor_json(&resource_path, &resources)?;
+        resources
+    };
+    let session_dir = root.join("composition/editor-sessions").join(identifier());
+    fs::create_dir_all(&session_dir)?;
+    let selected = input["selectedInstanceId"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| project.state.parts.first().map(|p| p.id.clone()));
+    let editor = EditorScene {
+        schema: viewer_launch_contract::COMPOSITION_EDITOR_SCENE_SCHEMA.into(),
+        project_id: project.id.clone(),
+        generation: project.generation,
+        acknowledged_event_sequence: project
+            .last_editor_event
+            .as_ref()
+            .filter(|(key, _)| key == &scene_key)
+            .map(|(_, sequence)| *sequence),
+        scene_key,
+        resources,
+        instances: editor_instances(project)?,
+        selected_instance_id: selected,
+        tool: input["tool"].as_str().unwrap_or("translate").into(),
+        split_boxes: editor_boxes(project),
+        event_path: session_dir.join("editor-event.json"),
+    };
+    editor.validate().map_err(anyhow::Error::msg)?;
+    let path = session_dir.join("editor-scene.json");
+    atomic_editor_json(&path, &editor)?;
+    atomic_editor_json(
+        &editor_session_index(root, &project.id),
+        &json!({"editorScenePath":path,"outputPath":packed_path}),
+    )?;
+    Ok(
+        json!({"projectId":project.id,"generation":project.generation,"outputPath":packed_path,"editorScenePath":path,"editorScene":editor}),
+    )
+}
+fn atomic_editor_json(path: &Path, value: &impl Serialize) -> Result<()> {
+    let mut temporary = tempfile::NamedTempFile::new_in(path.parent().context("编辑目录无效")?)?;
+    temporary.write_all(&serde_json::to_vec(value)?)?;
+    temporary.flush()?;
+    temporary.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+fn editor_session_index(root: &Path, project_id: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    root.join("composition/editor-sessions").join(format!(
+        "project-{:x}.json",
+        Sha256::digest(project_id.as_bytes())
+    ))
+}
 pub fn execute(input: &Value, cancel: &AtomicBool) -> Result<Value> {
     cancelled(cancel)?;
     let root = PathBuf::from(
@@ -929,9 +1166,11 @@ pub fn execute(input: &Value, cancel: &AtomicBool) -> Result<Value> {
                 parts: vec![],
                 target_data_version: None,
                 conflict_policy: ConflictPolicy::Reject,
+                split_boxes: vec![],
             },
             undo: vec![],
             redo: vec![],
+            last_editor_event: None,
         }
     } else {
         load(
@@ -940,11 +1179,140 @@ pub fn execute(input: &Value, cancel: &AtomicBool) -> Result<Value> {
         )?
     };
     let expected = project.generation;
+    if action == "commitEditor" {
+        let event: &Value = &input["editorEvent"];
+        if project
+            .last_editor_event
+            .as_ref()
+            .is_some_and(|(key, sequence)| {
+                event["sceneKey"].as_str() == Some(key.as_str())
+                    && event["sequence"].as_u64() == Some(*sequence)
+            })
+        {
+            ensure!(
+                event["projectId"].as_str() == Some(project.id.as_str())
+                    && event["committed"].as_bool() == Some(true)
+                    && event["cancelled"].as_bool() == Some(false),
+                "编辑手势回执无效"
+            );
+            return project_view(&root, &project, cancel);
+        }
+    }
     if let Some(g) = input["generation"].as_u64() {
         ensure!(g == expected, "组合项目已变化，请重试当前操作");
     }
     if action == "open" {
         return project_view(&root, &project, cancel);
+    }
+    if action == "previewEditor" {
+        // Recover the one durable gesture slot before opening a new native
+        // session. This also covers an application exit between mouse-up and
+        // the Host's ordinary background CAS/ack, without replaying stale edits.
+        let index_path = editor_session_index(&root, &project.id);
+        if index_path.is_file() {
+            let index: Value = serde_json::from_slice(&fs::read(index_path)?)?;
+            let path = PathBuf::from(
+                index["editorScenePath"]
+                    .as_str()
+                    .context("编辑会话索引无效")?,
+            );
+            ensure!(
+                path.starts_with(root.join("composition/editor-sessions")),
+                "编辑会话索引不属于当前数据目录"
+            );
+            if path.is_file() {
+                let previous: viewer_launch_contract::CompositionEditorScene =
+                    serde_json::from_slice(&fs::read(path)?)?;
+                previous.validate().map_err(anyhow::Error::msg)?;
+                ensure!(previous.project_id == project.id, "编辑会话索引项目不匹配");
+                ensure!(
+                    previous.event_path.parent().is_some_and(
+                        |parent| parent.starts_with(root.join("composition/editor-sessions"))
+                    ),
+                    "编辑回执目录不属于当前数据目录"
+                );
+                if previous.event_path.is_file() {
+                    let event: viewer_launch_contract::CompositionEditorEvent =
+                        serde_json::from_slice(&fs::read(&previous.event_path)?)?;
+                    let consumed =
+                        project
+                            .last_editor_event
+                            .as_ref()
+                            .is_some_and(|(key, sequence)| {
+                                key == &event.scene_key && *sequence >= event.sequence
+                            });
+                    if event.committed
+                        && !event.cancelled
+                        && !consumed
+                        && event.generation == project.generation
+                        && event.project_id == project.id
+                        && event.scene_key == previous.scene_key
+                        && event.schema == viewer_launch_contract::COMPOSITION_EDITOR_EVENT_SCHEMA
+                    {
+                        execute(
+                            &json!({"storageDir":root,"projectId":project.id,"generation":project.generation,"action":"commitEditor","editorEvent":event}),
+                            cancel,
+                        )?;
+                        project = load(&root, &project.id)?;
+                    }
+                }
+            }
+        }
+        return prepare_editor(&root, &project, input, cancel);
+    }
+    if action == "editorState" {
+        let path = if let Some(path) = input["editorScenePath"].as_str() {
+            PathBuf::from(path)
+        } else {
+            let index_path = editor_session_index(&root, &project.id);
+            if !index_path.is_file() {
+                return Ok(
+                    json!({"requiresPreparation":true,"projectId":project.id,"generation":project.generation}),
+                );
+            }
+            let index: Value = serde_json::from_slice(&fs::read(index_path)?)?;
+            PathBuf::from(
+                index["editorScenePath"]
+                    .as_str()
+                    .context("编辑会话索引无效")?,
+            )
+        };
+        ensure!(
+            path.starts_with(root.join("composition/editor-sessions")),
+            "编辑场景不属于当前项目目录"
+        );
+        let mut editor: viewer_launch_contract::CompositionEditorScene =
+            serde_json::from_slice(&fs::read(&path)?)?;
+        ensure!(editor.project_id == project.id, "编辑场景属于其他组合");
+        let instances = editor_instances(&project)?;
+        if instances
+            .iter()
+            .any(|p| !editor.resources.iter().any(|r| r.id == p.resource_id))
+        {
+            return Ok(
+                json!({"requiresGeometryUpdate":true,"projectId":project.id,"generation":project.generation}),
+            );
+        }
+        editor.generation = project.generation;
+        editor.instances = instances;
+        if let Some(selected) = input.get("selectedInstanceId") {
+            editor.selected_instance_id = selected.as_str().map(str::to_owned);
+        }
+        editor.selected_instance_id = editor
+            .selected_instance_id
+            .filter(|id| editor.instances.iter().any(|part| &part.id == id));
+        if let Some(tool) = input["tool"].as_str() {
+            editor.tool = tool.into();
+        }
+        editor.split_boxes = editor_boxes(&project);
+        if let Some(sequence) = input["acknowledgeSequence"].as_u64() {
+            editor.acknowledged_event_sequence = Some(sequence);
+        }
+        editor.validate().map_err(anyhow::Error::msg)?;
+        atomic_editor_json(&path, &editor)?;
+        return Ok(
+            json!({"outputPath":root.join("composition/editor-geometry").join(format!("{}.litematic",editor.scene_key)),"editorScene":editor,"editorScenePath":path,"projectId":project.id,"generation":project.generation}),
+        );
     }
     if matches!(action, "migrationReport" | "migrate") {
         let target = if let Some(target) = input["targetVersion"].as_str() {
@@ -1100,7 +1468,15 @@ pub fn execute(input: &Value, cancel: &AtomicBool) -> Result<Value> {
             for value in paths {
                 cancelled(cancel)?;
                 let path = PathBuf::from(value.as_str().context("源路径无效")?);
-                let scene = decode_source(&path, cancel)?;
+                let scene = schematic_formats::decode_for_import(
+                    &path,
+                    cancel,
+                    &root,
+                    input["sourceDataVersion"]
+                        .as_i64()
+                        .map(i32::try_from)
+                        .transpose()?,
+                )?;
                 if project.state.target_data_version.is_none() {
                     project.state.target_data_version = scene.data_version();
                 }
@@ -1179,6 +1555,59 @@ pub fn execute(input: &Value, cancel: &AtomicBool) -> Result<Value> {
                     "选择的源选区不存在"
                 );
             }
+        }
+        "commitEditor" => {
+            let event: viewer_launch_contract::CompositionEditorEvent =
+                serde_json::from_value(input["editorEvent"].clone())?;
+            ensure!(
+                event.schema == viewer_launch_contract::COMPOSITION_EDITOR_EVENT_SCHEMA
+                    && event.project_id == project.id
+                    && event.committed
+                    && !event.cancelled,
+                "编辑手势回执无效"
+            );
+            ensure!(
+                event.generation == expected,
+                "编辑场景已过期，请同步后重试手势"
+            );
+            if let Some((key, sequence)) = &project.last_editor_event {
+                ensure!(
+                    key != &event.scene_key || event.sequence > *sequence,
+                    "编辑手势已提交或过期"
+                );
+            }
+            if let (Some(id), Some(transform)) = (event.instance_id, event.transform) {
+                let part = project
+                    .state
+                    .parts
+                    .iter_mut()
+                    .find(|p| p.id == id)
+                    .context("选中部件已删除")?;
+                ensure!(!part.locked, "锁定部件不能变换");
+                let transform: Transform =
+                    serde_json::from_value(serde_json::to_value(transform)?)?;
+                part.transform = transform.validate()?;
+            }
+            if let Some(boxes) = event.split_boxes {
+                let boxes: Vec<SplitBox> = boxes
+                    .into_iter()
+                    .map(|b| SplitBox {
+                        name: b.name,
+                        bounds: SceneBounds {
+                            min: b.bounds.min,
+                            max: b.bounds.max,
+                        },
+                    })
+                    .collect();
+                validate_editor_boxes(&boxes)?;
+                project.state.split_boxes = boxes;
+            }
+            project.last_editor_event = Some((event.scene_key, event.sequence));
+        }
+        "setSplitBoxes" => {
+            let boxes: Vec<SplitBox> = serde_json::from_value(input["boxes"].clone())?;
+            validate_editor_boxes(&boxes)?;
+            project.state.split_boxes = boxes;
         }
         "remove" | "duplicate" => {
             let id = input["partId"].as_str().context("请选择部件")?;
@@ -1426,9 +1855,11 @@ fn split(
                 parts,
                 target_data_version: project.state.target_data_version,
                 conflict_policy: ConflictPolicy::Reject,
+                split_boxes: vec![],
             },
             undo: vec![],
             redo: vec![],
+            last_editor_event: None,
         };
         cancelled(cancel)?;
         persist(root, &next, None)?;
@@ -1616,9 +2047,11 @@ mod tests {
                 parts: vec![first, second],
                 target_data_version: Some(3465),
                 conflict_policy: ConflictPolicy::Reject,
+                split_boxes: vec![],
             },
             undo: vec![],
             redo: vec![],
+            last_editor_event: None,
         }
     }
     fn spatial(scene: &SceneDocument) -> BTreeMap<[i32; 3], String> {
@@ -1863,5 +2296,117 @@ mod tests {
             spatial(&compose(dir.path(), &next, &cancel).unwrap().scene),
             spatial(&c.scene)
         );
+    }
+    #[test]
+    fn editor_deduplicates_geometry_and_restores_authoritative_session_without_repacking() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut p = project(directory.path(), 32);
+        persist(directory.path(), &p, None).unwrap();
+        let cancel = AtomicBool::new(false);
+        let prepared=execute(&json!({"storageDir":directory.path(),"projectId":p.id,"action":"previewEditor","tool":"translate"}),&cancel).unwrap();
+        let initial: viewer_launch_contract::CompositionEditorScene =
+            serde_json::from_value(prepared["editorScene"].clone()).unwrap();
+        assert_eq!(initial.resources.len(), 1);
+        assert_eq!(initial.instances.len(), 2);
+        let packed = PathBuf::from(prepared["outputPath"].as_str().unwrap());
+        let before = fs::read(&packed).unwrap();
+        let modified = fs::metadata(&packed).unwrap().modified().unwrap();
+        let event = viewer_launch_contract::CompositionEditorEvent {
+            schema: viewer_launch_contract::COMPOSITION_EDITOR_EVENT_SCHEMA.into(),
+            project_id: p.id.clone(),
+            scene_key: initial.scene_key.clone(),
+            generation: 1,
+            sequence: 1,
+            selected_instance_id: Some("instance-a".into()),
+            committed: true,
+            cancelled: false,
+            instance_id: Some("instance-a".into()),
+            transform: Some(viewer_launch_contract::CompositionEditorTransform {
+                offset: [7, 8, 9],
+                origin: [0; 3],
+                rotation: 90,
+                mirror_x: true,
+                mirror_z: false,
+            }),
+            split_boxes: None,
+        };
+        execute(&json!({"storageDir":directory.path(),"projectId":p.id,"generation":1,"action":"commitEditor","editorEvent":event}),&cancel).unwrap();
+        // Host page-hide flush and a slow UI poll can retry the same durable
+        // event. The second delivery must not append another undo transaction.
+        execute(&json!({"storageDir":directory.path(),"projectId":p.id,"generation":1,"action":"commitEditor","editorEvent":event}),&cancel).unwrap();
+        p = load(directory.path(), &p.id).unwrap();
+        assert_eq!(p.generation, 2);
+        assert_eq!(p.state.parts[0].transform.offset, [7, 8, 9]);
+        let restored=execute(&json!({"storageDir":directory.path(),"projectId":p.id,"action":"editorState","acknowledgeSequence":1}),&cancel).unwrap();
+        let scene: viewer_launch_contract::CompositionEditorScene =
+            serde_json::from_value(restored["editorScene"].clone()).unwrap();
+        assert_eq!(scene.scene_key, initial.scene_key);
+        assert_eq!(scene.resources, initial.resources);
+        assert_eq!(scene.instances[0].transform.offset, [7, 8, 9]);
+        assert_eq!(scene.acknowledged_event_sequence, Some(1));
+        assert_eq!(restored["outputPath"], prepared["outputPath"]);
+        assert_eq!(fs::read(&packed).unwrap(), before);
+        assert_eq!(fs::metadata(&packed).unwrap().modified().unwrap(), modified);
+        let reopened = execute(
+            &json!({"storageDir":directory.path(),"projectId":p.id,"action":"previewEditor"}),
+            &cancel,
+        )
+        .unwrap();
+        assert_eq!(reopened["editorScene"]["acknowledgedEventSequence"], 1);
+        assert_ne!(reopened["editorScenePath"], prepared["editorScenePath"]);
+        assert_eq!(reopened["outputPath"], prepared["outputPath"]);
+        execute(&json!({"storageDir":directory.path(),"projectId":p.id,"generation":2,"action":"remove","partId":"instance-b"}),&cancel).unwrap();
+        let subset = execute(
+            &json!({"storageDir":directory.path(),"projectId":p.id,"action":"editorState"}),
+            &cancel,
+        )
+        .unwrap();
+        assert_eq!(subset["editorScene"]["sceneKey"], initial.scene_key);
+        assert_eq!(
+            subset["editorScene"]["resources"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            subset["editorScene"]["instances"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(fs::metadata(&packed).unwrap().modified().unwrap(), modified);
+    }
+    #[test]
+    fn opening_a_new_editor_recovers_the_last_unacknowledged_durable_gesture_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let p = project(directory.path(), 32);
+        persist(directory.path(), &p, None).unwrap();
+        let cancel = AtomicBool::new(false);
+        let input =
+            json!({"storageDir":directory.path(),"projectId":p.id,"action":"previewEditor"});
+        let first = execute(&input, &cancel).unwrap();
+        let editor: viewer_launch_contract::CompositionEditorScene =
+            serde_json::from_value(first["editorScene"].clone()).unwrap();
+        let event = viewer_launch_contract::CompositionEditorEvent {
+            schema: viewer_launch_contract::COMPOSITION_EDITOR_EVENT_SCHEMA.into(),
+            project_id: p.id.clone(),
+            scene_key: editor.scene_key.clone(),
+            generation: 1,
+            sequence: 7,
+            selected_instance_id: Some("instance-a".into()),
+            committed: true,
+            cancelled: false,
+            instance_id: Some("instance-a".into()),
+            transform: Some(viewer_launch_contract::CompositionEditorTransform {
+                offset: [4, 5, 6],
+                ..Default::default()
+            }),
+            split_boxes: None,
+        };
+        atomic_editor_json(&editor.event_path, &event).unwrap();
+        let reopened = execute(&input, &cancel).unwrap();
+        assert_eq!(reopened["editorScene"]["generation"], 2);
+        assert_eq!(reopened["editorScene"]["acknowledgedEventSequence"], 7);
+        let state = load(directory.path(), &p.id).unwrap();
+        assert_eq!(state.state.parts[0].transform.offset, [4, 5, 6]);
+        assert_eq!(state.undo.len(), 1);
+        execute(&input, &cancel).unwrap();
+        assert_eq!(load(directory.path(), &p.id).unwrap().undo.len(), 1);
     }
 }

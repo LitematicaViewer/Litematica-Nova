@@ -1,6 +1,7 @@
 import { invoke } from "./tauri";
 
 export interface SceneViewControls {
+  compositionEditor?: import("./composition").CompositionEditorScene;
   layerView?: boolean;
   layerMinY?: number | null;
   layerMaxY?: number | null;

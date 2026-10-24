@@ -15,10 +15,124 @@ pub const VIEWER_SESSION_COMMAND_SCHEMA: &str = "litematica-nova.viewer-session-
 pub const VIEWER_SESSION_STATUS_SCHEMA: &str = "litematica-nova.viewer-session-status.v1";
 pub const VIEWER_SESSION_EVENT_SCHEMA: &str = "litematica-nova.viewer-session-event.v1";
 
+pub const COMPOSITION_EDITOR_SCENE_SCHEMA: &str = "nova.composition.editor-scene.v1";
+pub const COMPOSITION_EDITOR_EVENT_SCHEMA: &str = "nova.composition.editor-event.v1";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompositionEditorBounds {
+    pub min: [i32; 3],
+    pub max: [i32; 3],
+}
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompositionEditorTransform {
+    pub offset: [i32; 3],
+    pub origin: [i32; 3],
+    pub rotation: u16,
+    pub mirror_x: bool,
+    pub mirror_z: bool,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompositionEditorResource {
+    pub id: String,
+    pub bounds: CompositionEditorBounds,
+    pub base_offset: [i32; 3],
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompositionEditorInstance {
+    pub id: String,
+    pub resource_id: String,
+    pub transform: CompositionEditorTransform,
+    pub visible: bool,
+    pub locked: bool,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompositionEditorBox {
+    pub id: String,
+    pub name: String,
+    pub bounds: CompositionEditorBounds,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompositionEditorScene {
+    pub schema: String,
+    pub project_id: String,
+    pub generation: u64,
+    pub scene_key: String,
+    pub resources: Vec<CompositionEditorResource>,
+    pub instances: Vec<CompositionEditorInstance>,
+    pub selected_instance_id: Option<String>,
+    pub tool: String,
+    pub split_boxes: Vec<CompositionEditorBox>,
+    pub event_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged_event_sequence: Option<u64>,
+}
+impl CompositionEditorScene {
+    pub fn validate(&self) -> Result<(), String> {
+        use std::collections::BTreeSet;
+        if self.schema != COMPOSITION_EDITOR_SCENE_SCHEMA || self.project_id.is_empty() || self.scene_key.is_empty() {
+            return Err("Composition editor identity is incomplete".into());
+        }
+        require_absolute("compositionEditor.eventPath", &self.event_path)?;
+        if !matches!(self.tool.as_str(), "select" | "translate" | "rotate" | "mirror" | "mirror_x" | "mirror_z" | "split") {
+            return Err("Unknown composition editor tool".into());
+        }
+        let mut resources = BTreeSet::new();
+        for resource in &self.resources {
+            if resource.id.is_empty() || !resources.insert(resource.id.as_str()) || (0..3).any(|a| resource.bounds.min[a] > resource.bounds.max[a]) {
+                return Err("Composition editor resource identity or bounds are invalid".into());
+            }
+        }
+        let mut instances = BTreeSet::new();
+        for instance in &self.instances {
+            if instance.id.is_empty() || !instances.insert(instance.id.as_str()) || !resources.contains(instance.resource_id.as_str())
+                || !matches!(instance.transform.rotation, 0 | 90 | 180 | 270) {
+                return Err("Composition editor instance or grid transform is invalid".into());
+            }
+        }
+        if self.selected_instance_id.as_ref().is_some_and(|id| !instances.contains(id.as_str())) {
+            return Err("Composition editor selection no longer exists".into());
+        }
+        let mut boxes = BTreeSet::new();
+        for item in &self.split_boxes {
+            if item.id.is_empty() || !boxes.insert(item.id.as_str()) || (0..3).any(|a| item.bounds.min[a] > item.bounds.max[a]) {
+                return Err("Composition editor split bounds are invalid".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompositionEditorEvent {
+    pub schema: String,
+    pub project_id: String,
+    pub scene_key: String,
+    pub generation: u64,
+    pub sequence: u64,
+    pub selected_instance_id: Option<String>,
+    pub committed: bool,
+    pub cancelled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<CompositionEditorTransform>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_boxes: Option<Vec<CompositionEditorBox>>,
+}
+
 /// Display-only state for a resident scene. No build or resource identity changes.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct SceneViewControls {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub composition_editor: Option<CompositionEditorScene>,
     pub apply_layer_range: bool,
     #[serde(skip_serializing_if = "scene_control_false")]
     pub layer_view: bool,
@@ -42,6 +156,7 @@ fn scene_control_false(value: &bool) -> bool { !*value }
 
 impl SceneViewControls {
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(scene) = &self.composition_editor { scene.validate()?; }
         if self.layer_min_y.zip(self.layer_max_y).is_some_and(|(a,b)| a > b) {
             return Err("Layer minimum exceeds maximum".into());
         }
@@ -823,6 +938,9 @@ impl ViewerLaunchContract {
         }
         require_absolute("scene", &self.scene)?;
         self.content.validate()?;
+        if self.content.composition_editor_path.is_some() && !matches!(self.task, ViewerTask::QuickPreview(_)) {
+            return Err("Composition editing belongs to the existing Fast viewer only".into());
+        }
         match &self.task {
             ViewerTask::BuildCache(task) => {
                 if self.renderer.is_some() {
@@ -924,12 +1042,15 @@ impl ViewerLaunchContract {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ViewerContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition_editor_path: Option<PathBuf>,
     pub fabric_mods_dir: Option<PathBuf>,
     pub resource_packs: Vec<PathBuf>,
 }
 
 impl ViewerContent {
     fn validate(&self) -> Result<(), String> {
+        if let Some(path) = &self.composition_editor_path { require_absolute("content.compositionEditorPath", path)?; }
         if let Some(path) = self.fabric_mods_dir.as_deref() {
             require_absolute("content.fabricModsDir", path)?;
         }
@@ -1906,6 +2027,7 @@ mod tests {
             "contract-test".to_owned(),
             absolute("scene.litematic"),
             ViewerContent {
+                composition_editor_path: None,
                 fabric_mods_dir: None,
                 resource_packs: vec![absolute("pack.zip")],
             },
@@ -2990,5 +3112,32 @@ mod scene_view_optional_control_tests {
         assert!(input.validate().is_err());
         let input = SceneViewControls { shader_options_result_path: Some(std::env::temp_dir().join("receipt.json")), ..Default::default() };
         assert!(input.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod composition_editor_contract_tests {
+    use super::*;
+    fn scene() -> CompositionEditorScene {
+        CompositionEditorScene { schema:COMPOSITION_EDITOR_SCENE_SCHEMA.into(),project_id:"project".into(),generation:3,scene_key:"resource-set".into(),
+            resources:vec![CompositionEditorResource{id:"source".into(),bounds:CompositionEditorBounds{min:[-3,-1,0],max:[4,2,5]},base_offset:[32,16,0]}],
+            instances:vec![CompositionEditorInstance{id:"first".into(),resource_id:"source".into(),transform:CompositionEditorTransform::default(),visible:true,locked:false},
+                CompositionEditorInstance{id:"second".into(),resource_id:"source".into(),transform:CompositionEditorTransform{offset:[-20,0,3],rotation:90,mirror_x:true,..Default::default()},visible:true,locked:false}],
+            selected_instance_id:Some("second".into()),tool:"translate".into(),split_boxes:vec![],event_path:std::env::temp_dir().join("editor-event.json"),acknowledged_event_sequence:None }
+    }
+    #[test]
+    fn editing_is_additive_and_absent_controls_do_not_change_private_runtime_wire() {
+        let controls=serde_json::to_value(SceneViewControls::default()).unwrap();assert!(controls.get("compositionEditor").is_none());
+        let content=serde_json::to_value(ViewerContent::default()).unwrap();assert!(content.get("compositionEditorPath").is_none());
+        let scene=scene();scene.validate().unwrap();let controls=SceneViewControls{composition_editor:Some(scene.clone()),..Default::default()};
+        let bytes=serde_json::to_vec(&controls).unwrap();let again:SceneViewControls=serde_json::from_slice(&bytes).unwrap();assert_eq!(again.composition_editor.as_ref(),Some(&scene));
+        assert_eq!(scene.resources.len(),1);assert_eq!(scene.instances.len(),2);
+    }
+    #[test]
+    fn editor_identity_grid_and_resource_bindings_are_validated() {
+        let mut scene=scene();scene.instances[1].transform.rotation=45;assert!(scene.validate().is_err());
+        scene.instances[1].transform.rotation=90;scene.instances[1].resource_id="missing".into();assert!(scene.validate().is_err());
+        scene.instances[1].resource_id="source".into();scene.selected_instance_id=Some("removed".into());assert!(scene.validate().is_err());
+        scene.selected_instance_id=None;scene.event_path=PathBuf::from("relative.json");assert!(scene.validate().is_err());
     }
 }

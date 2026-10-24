@@ -63,6 +63,7 @@ pub mod data_worker;
 pub mod composition_scene;
 pub mod composition_transform;
 pub mod composition;
+pub mod composition_editor;
 pub mod schematic_formats;
 pub mod workspace;
 pub mod data_view;

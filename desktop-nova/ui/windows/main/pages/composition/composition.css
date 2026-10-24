@@ -22,6 +22,12 @@
   .composition-canvas { min-width:0; min-height:0; display:flex; flex-direction:column; background:var(--background)}
   .composition-canvas-toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--border); padding:8px}
   .composition-canvas-toolbar span { font-size:12px; color:var(--muted-foreground)}
+  .composition-editor-panel,.composition-result-panel { display:flex; flex-direction:column; flex:1; min-height:0; min-width:0; overflow:auto }
+  .composition-editor-panel[hidden],.composition-result-panel[hidden] { display:none }
+  .composition-pane-switch,.composition-editor-tools { display:flex; align-items:center; gap:4px; flex-wrap:wrap }
+  .composition-editor-tools { padding:6px 8px; border-bottom:1px solid var(--border) }
+  .composition-source-version { display:flex; align-items:center; gap:6px; font-size:12px }
+  .composition-editor-help { margin:0; padding:8px; color:var(--muted-foreground); font-size:12px; line-height:1.6 }
   .composition-native-viewport { position:relative; flex:1; min-height:200px}
   .composition-empty { height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; text-align:center; color:var(--muted-foreground)}
   .composition-empty p { max-width:360px; font-size:13px; line-height:1.7}
@@ -53,8 +59,8 @@
   .composition-page button:disabled { opacity:.5; cursor:default}
   .composition-workspace.is-compact-inspector { grid-template-columns:256px minmax(0,1fr)}
   .composition-workspace.is-compact-parts { grid-template-columns:minmax(0,1fr)}
-  .composition-canvas>.render-page { flex:1; min-width:0; min-height:0; padding:8px; overflow:auto}
-  .composition-canvas>.render-page .render-preview-group { flex:1; min-height:200px}
+  .composition-result-panel>.render-page { flex:1; min-width:0; min-height:0; padding:8px; overflow:auto}
+  .composition-result-panel>.render-page .render-preview-group { flex:1; min-height:200px}
   .composition-drawer { color:var(--foreground); background:var(--card); width:min(360px,calc(100vw - 24px)); max-height:calc(100vh - 24px)}
   .composition-drawer .composition-inspector,.composition-drawer .composition-parts { border:0; padding:0; overflow:visible}
   .composition-drawer .composition-inspector>h3,.composition-drawer .composition-parts>h3 { display:none}

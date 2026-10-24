@@ -29,6 +29,8 @@ use winit::raw_window_handle::{HasWindowHandle,RawWindowHandle};
 use winit::platform::windows::WindowBuilderExtWindows;
 use winit::window::WindowBuilder;
 use crate::native_viewport::NativeViewportWindow;
+mod composition_native;
+use composition_native::EditorGpuState;
 #[cfg(target_os="windows")]
 #[path="native_child.rs"]
 mod native_child;
@@ -148,6 +150,7 @@ struct CameraUniform {
     view_proj: mat4x4<f32>,
     camera_position: vec4<f32>,
     layer_range: vec4<f32>,
+    model: mat4x4<f32>,
 };
 
 struct LightingUniform {
@@ -236,13 +239,14 @@ struct VertexOutput {
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
-    output.position = camera.view_proj * vec4<f32>(input.position, 1.0);
+    let world = camera.model * vec4<f32>(input.position, 1.0);
+    output.position = camera.view_proj * world;
     output.color = input.color;
     output.uv = input.uv;
     output.use_texture = input.use_texture;
-    output.normal = input.normal;
-    output.shadow_position = lighting.light_view_proj * vec4<f32>(input.position, 1.0);
-    output.world_position = input.position;
+    output.normal = (camera.model * vec4<f32>(input.normal, 0.0)).xyz;
+    output.shadow_position = lighting.light_view_proj * world;
+    output.world_position = world.xyz;
     output.emissive_tag = input.emissive_tag;
     return output;
 }
@@ -572,6 +576,7 @@ struct CameraUniform {
     view_proj: mat4x4<f32>,
     camera_position: vec4<f32>,
     layer_range: vec4<f32>,
+    model: mat4x4<f32>,
 };
 
 @group(0) @binding(0)
@@ -590,8 +595,9 @@ struct ShadowOutput { @builtin(position) position: vec4<f32>, @location(0) world
 @vertex
 fn vs_main(input: VertexInput) -> ShadowOutput {
     var output: ShadowOutput;
-    output.position = camera.view_proj * vec4<f32>(input.position, 1.0);
-    output.world_y = input.position.y;
+    let world = camera.model * vec4<f32>(input.position, 1.0);
+    output.position = camera.view_proj * world;
+    output.world_y = world.y;
     return output;
 }
 @fragment
@@ -675,6 +681,7 @@ struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     camera_position: [f32; 4],
     layer_range: [f32; 4],
+    model: [[f32; 4]; 4],
 }
 
 impl CameraUniform {
@@ -683,6 +690,7 @@ impl CameraUniform {
             view_proj: matrix.to_cols_array_2d(),
             camera_position: [eye.x, eye.y, eye.z, 0.0],
             layer_range: [0.0; 4],
+            model: Mat4::IDENTITY.to_cols_array_2d(),
         }
     }
 }
@@ -803,6 +811,7 @@ struct ViewerArgs {
     launch_request_id: String,
     launch_contract_sha256: String,
     input: Option<PathBuf>,
+    composition_editor_path: Option<PathBuf>,
     /// Frozen product geometry-lifetime contract received by the isolated
     /// Build Worker. This is intentionally unrelated to legacy
     /// `ViewerBuildMode`, which only selects an internal mesh implementation.
@@ -2812,6 +2821,8 @@ struct GpuChunkBuffer {
     vertex_count: u32,
     solid_index_count: u32,
     translucent_index_count: u32,
+    mirrored_solid_indices: Option<wgpu::Buffer>,
+    mirrored_translucent_indices: Option<wgpu::Buffer>,
 }
 
 struct ResidentChunkMesh {
@@ -2820,6 +2831,8 @@ struct ResidentChunkMesh {
     gpu: GpuChunkBuffer,
     last_touched_frame: u64,
     estimated_bytes: usize,
+    editor_triangles: Vec<[Vec3; 3]>,
+    editor_pick_bounds: (Vec3,Vec3),
 }
 
 struct PendingChunkUpload {
@@ -3765,6 +3778,7 @@ fn create_shadow_map_resources(
             .to_cols_array_2d(),
         camera_position: [0.0, 0.0, 0.0, 0.0],
         layer_range: [0.0; 4],
+        model: Mat4::IDENTITY.to_cols_array_2d(),
     };
     let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("native_viewer_shadow_camera"),
@@ -5708,6 +5722,10 @@ async fn initialize_quick_gpu(window: Arc<NativeViewportWindow>, index: Option<&
 }
 
 struct ViewerState {
+    editor: Option<EditorGpuState>,
+    editor_cursor: Option<Vec2>,
+    editor_cycle: bool,
+    editor_lighting: LightingConfig,
     surface: Option<wgpu::Surface<'static>>,
     #[cfg(target_os = "macos")]
     mac_composition: Option<crate::mac_fast_composition::MacFastComposition>,
@@ -6163,6 +6181,7 @@ impl ViewerState {
         };
         let quick_visible_sample_query = QuickVisibleSampleQuery::new(&device);
         let mut state = Self {
+            editor: None, editor_cursor: None, editor_cycle: false, editor_lighting: lighting_config,
             surface,
             #[cfg(target_os = "windows")]
             composition,
@@ -6278,6 +6297,7 @@ impl ViewerState {
             _window: window,
         };
         state.cpu_mesh_cache.retain_complete_source = args.quick_host.is_some();
+        state.configure_editor(args)?;
         state.install_bootstrap_meshes(bootstrap_meshes);
         println!(
             "[VIEWER_CACHE] config cpu_max_chunks={} cpu_max_bytes={} resident_max_chunks={} resident_max_bytes={} stress_limits={} artificial_caps_enforced={}",
@@ -6364,7 +6384,7 @@ impl ViewerState {
                 Some(Arc::clone(&self.shadow_resources.depth_pipeline)));
         } else {
             let camera = CameraUniform { view_proj: shadow.light_camera.map(|camera| camera.view_proj).unwrap_or(Mat4::IDENTITY).to_cols_array_2d(),
-                camera_position: [0.0;4], layer_range: self.layer_range };
+                camera_position: [0.0;4], layer_range: self.layer_range, model: Mat4::IDENTITY.to_cols_array_2d() };
             self.queue.write_buffer(&self.shadow_resources.camera_buffer, 0, bytemuck::bytes_of(&camera));
             self.shadow_resources.config = shadow;
         }
@@ -6382,6 +6402,8 @@ impl ViewerState {
         self.prebuild_eta_sample_time = Instant::now(); self.prebuild_last_eta_update = Instant::now();
         self.prebuild_last_completed_count = 0; self.prebuild_last_completed_at = Instant::now();
         self.residency_dirty = true;
+        self.editor_lighting = lighting;
+        self.configure_editor(args)?;
         self.install_bootstrap_meshes(bootstrap);
         self.sync_chunk_residency()?;
         let _ = self.process_pending_uploads();
@@ -7103,6 +7125,14 @@ impl ViewerState {
                     usage: wgpu::BufferUsages::INDEX,
                 })
         });
+        let reverse = |indices:&[u32]| indices.chunks_exact(3).flat_map(|t|[t[0],t[2],t[1]]).collect::<Vec<_>>();
+        let mirrored_solid_indices=self.editor.is_some().then(||self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
+            label:Some("composition_shared_mirrored_solid_indices"),contents:bytemuck::cast_slice(&reverse(&prepared.indices)),usage:wgpu::BufferUsages::INDEX}));
+        let mirrored_translucent_indices=(self.editor.is_some()&&!prepared.translucent_indices.is_empty()).then(||self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
+            label:Some("composition_shared_mirrored_translucent_indices"),contents:bytemuck::cast_slice(&reverse(&prepared.translucent_indices)),usage:wgpu::BufferUsages::INDEX}));
+        let editor_triangles=if self.editor.is_some(){prepared.indices.chunks_exact(3).chain(prepared.translucent_indices.chunks_exact(3)).map(|t|[t[0],t[1],t[2]].map(|i|Vec3::from_array(prepared.vertices[i as usize].position))).collect()}else{Vec::new()};
+        let mut editor_pick_bounds=(Vec3::splat(f32::INFINITY),Vec3::splat(f32::NEG_INFINITY));
+        if self.editor.is_some(){for vertex in &prepared.vertices{let p=Vec3::from_array(vertex.position);editor_pick_bounds.0=editor_pick_bounds.0.min(p);editor_pick_bounds.1=editor_pick_bounds.1.max(p);}}
         ResidentChunkMesh {
             key: prepared.key,
             bounds: prepared.bounds,
@@ -7113,9 +7143,13 @@ impl ViewerState {
                 vertex_count,
                 solid_index_count,
                 translucent_index_count,
+                mirrored_solid_indices,
+                mirrored_translucent_indices,
             },
             last_touched_frame: self.frame_index,
-            estimated_bytes: gpu_upper.unwrap_or_else(|| prepared.estimated_bytes()),
+            estimated_bytes: gpu_upper.unwrap_or_else(|| prepared.estimated_bytes()) + if self.editor.is_some(){(prepared.indices.len()+prepared.translucent_indices.len())*4}else{0},
+            editor_triangles,
+            editor_pick_bounds,
         }
     }
 
@@ -8739,7 +8773,7 @@ impl ViewerState {
         self.write_camera();
         let shadow_camera = CameraUniform {
             view_proj: self.shadow_resources.config.light_camera.map(|camera| camera.view_proj).unwrap_or(Mat4::IDENTITY).to_cols_array_2d(),
-            camera_position: [0.0; 4], layer_range: self.layer_range,
+            camera_position: [0.0; 4], layer_range: self.layer_range, model: Mat4::IDENTITY.to_cols_array_2d(),
         };
         self.queue.write_buffer(&self.shadow_resources.camera_buffer, 0, bytemuck::bytes_of(&shadow_camera));
     }
@@ -8750,15 +8784,20 @@ impl ViewerState {
         camera_uniform.layer_range = self.layer_range;
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
+        self.write_editor_cameras();
     }
 
     fn apply_scene_view_controls(&mut self, controls: &viewer_launch_contract::SceneViewControls) -> Result<()> {
+        if let Some(scene) = &controls.composition_editor {
+            self.editor.as_mut().context("当前Viewer不是组合编辑会话")?.runtime.update(scene.clone())?;
+            self.refresh_editor(false)?;
+        }
         if controls.apply_layer_range { self.set_layer_range(controls.layer_min_y, controls.layer_max_y); }
         if let Some(mode) = controls.camera_mode.as_deref() { self.camera.set_free_mode(mode == "free"); }
         if let Some(mode) = controls.camera_input_mode.as_deref() { self.camera.set_free_input_mode(mode); }
         if let Some(speed) = controls.camera_speed { self.camera.movement_speed = speed; }
         if let Some(sensitivity) = controls.camera_sensitivity { self.camera.mouse_sensitivity = sensitivity; }
-        if controls.release_camera_input { self.camera.clear_movement(); self.drag_mode = None; self.last_cursor_position = None; }
+        if controls.release_camera_input { self.cancel_editor_gesture(); self.editor_cycle=false; self.camera.clear_movement(); self.drag_mode = None; self.last_cursor_position = None; }
         if controls.reset_camera { self.reset_camera(); }
         self.write_camera();
         self.mark_residency_dirty();
@@ -8771,6 +8810,7 @@ impl ViewerState {
     }
 
     fn process_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
+        match self.editor_motion(position) { Ok(true) => return, Err(error) => { self.presentation_error=Some(format!("组合拖拽失败：{error:#}")); return; }, _=>{} }
         if self.camera.requires_pointer_capture() { return; }
         let next = Vec2::new(position.x as f32, position.y as f32);
         if let Some(last) = self.last_cursor_position {
@@ -8793,6 +8833,10 @@ impl ViewerState {
     }
 
     fn process_mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        match self.editor_mouse(state,button) { Ok(true)=>return, Err(error)=>{self.presentation_error=Some(format!("组合选择失败：{error:#}"));return;},_=>{} }
+        if self.editor.is_some() && button == MouseButton::Right {
+            self.drag_mode=(state==ElementState::Pressed).then_some(DragMode::Rotate); return;
+        }
         if self.camera.requires_pointer_capture() { self.drag_mode = None; return; }
         if self.preview_mode {
             self.drag_mode = None;
@@ -9132,6 +9176,7 @@ impl ViewerState {
         // swapchain. Popup surfaces may be opaque or lack COPY_SRC support.
         // This frame reuses the current camera, resources and resident geometry,
         // and is never submitted to a native presentation surface.
+        self.prepare_editor_overlay();
         let capture_texture = capture_requested.then(|| self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("native_viewer_capture_color"),
             size: wgpu::Extent3d { width: self.config.width, height: self.config.height, depth_or_array_layers: 1 },
@@ -9200,6 +9245,16 @@ impl ViewerState {
             shadow_pass.set_bind_group(0, &self.shadow_resources.camera_bind_group, &[]);
             for resident in self.resident_chunks.values() {
                 shadow_pass.set_vertex_buffer(0, resident.gpu.vertex_buffer.slice(..));
+                if let Some(editor)=self.editor.as_ref(){
+                    for instance in editor.draws(resident.key,self.chunk_scene_index.as_ref().map_or(32,|i|i.chunk_size())){
+                        shadow_pass.set_bind_group(0,&instance.shadow_group,&[]);
+                        let indices=if instance.mirrored{resident.gpu.mirrored_solid_indices.as_ref().expect("editor mirrored indices")}else{&resident.gpu.solid_index_buffer};
+                        shadow_pass.set_index_buffer(indices.slice(..),wgpu::IndexFormat::Uint32);
+                        shadow_pass.draw_indexed(0..resident.gpu.solid_index_count,0,0..1);
+                        shadow_draw_calls+=1;shadow_index_count+=u64::from(resident.gpu.solid_index_count);
+                    }
+                    continue;
+                }
                 shadow_pass.set_index_buffer(
                     resident.gpu.solid_index_buffer.slice(..),
                     wgpu::IndexFormat::Uint32,
@@ -9275,7 +9330,6 @@ impl ViewerState {
         if let Some(overlay) = self.label_overlay.as_mut() {
             overlay.prepare(&self.device, &self.queue, &self.label_anchors, &self.camera);
         }
-
         let query_visible_samples = !capture_requested && self.quick_visible_sample_query.should_query();
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -9309,6 +9363,15 @@ impl ViewerState {
             } else { &self.render_pipeline_solid });
             for resident in self.resident_chunks.values() {
                 render_pass.set_vertex_buffer(0, resident.gpu.vertex_buffer.slice(..));
+                if let Some(editor)=self.editor.as_ref(){
+                    for instance in editor.draws(resident.key,self.chunk_scene_index.as_ref().map_or(32,|i|i.chunk_size())){
+                        render_pass.set_bind_group(0,&instance.camera_group,&[]);
+                        let indices=if instance.mirrored{resident.gpu.mirrored_solid_indices.as_ref().expect("editor mirrored indices")}else{&resident.gpu.solid_index_buffer};
+                        render_pass.set_index_buffer(indices.slice(..),wgpu::IndexFormat::Uint32);
+                        render_pass.draw_indexed(0..resident.gpu.solid_index_count,0,0..1);
+                    }
+                    continue;
+                }
                 render_pass.set_index_buffer(
                     resident.gpu.solid_index_buffer.slice(..),
                     wgpu::IndexFormat::Uint32,
@@ -9334,7 +9397,20 @@ impl ViewerState {
                 let db = b.bounds.center.distance_squared(eye);
                 db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal)
             });
-            for resident in translucent_chunks {
+            let mut editor_translucent=Vec::new();
+            if let Some(editor)=self.editor.as_ref(){
+                for resident in &translucent_chunks{for instance in editor.draws(resident.key,self.chunk_scene_index.as_ref().map_or(32,|i|i.chunk_size())){
+                    editor_translucent.push((instance.model.transform_point3(resident.bounds.center).distance_squared(eye),*resident,instance));
+                }}
+                editor_translucent.sort_by(|a,b|b.0.total_cmp(&a.0));
+            }
+            for (_,resident,instance) in editor_translucent{
+                render_pass.set_bind_group(0,&instance.camera_group,&[]);
+                render_pass.set_vertex_buffer(0,resident.gpu.vertex_buffer.slice(..));
+                let indices=if instance.mirrored{resident.gpu.mirrored_translucent_indices.as_ref()}else{resident.gpu.translucent_index_buffer.as_ref()};
+                if let Some(indices)=indices{render_pass.set_index_buffer(indices.slice(..),wgpu::IndexFormat::Uint32);render_pass.draw_indexed(0..resident.gpu.translucent_index_count,0,0..1);}
+            }
+            for resident in translucent_chunks.into_iter().filter(|_|self.editor.is_none()) {
                 let Some(translucent_index_buffer) = resident.gpu.translucent_index_buffer.as_ref()
                 else {
                     continue;
@@ -9349,7 +9425,7 @@ impl ViewerState {
             if query_visible_samples { render_pass.end_occlusion_query(); }
         }
 
-        if let Some(overlay) = self.label_overlay.as_ref() {
+        if self.label_overlay.is_some()||self.editor.is_some() {
             let mut label_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("native_viewer_label_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -9371,7 +9447,8 @@ impl ViewerState {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
-            overlay.draw(&mut label_pass);
+            if let Some(overlay)=self.label_overlay.as_ref(){overlay.draw(&mut label_pass);}
+            if let Some(editor)=self.editor.as_ref(){editor.overlay.draw(&mut label_pass);}
         }
 
         let capture = self.capture_output.take().map(|path| {
@@ -10637,13 +10714,15 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             quick_redraw.request();
                         }
                         5 if input.code == 15 => { state.reset_camera(); quick_redraw.request(); }
+                        5 if input.code == 53 && state.editor.as_ref().is_some_and(|v|v.runtime.gesture_active()) => { state.cancel_editor_gesture(); quick_redraw.request(); }
                         5 if input.code == 53 => { escape = true; }
-                        7 if input.flags & 1 == 0 => { pointer_capture.release(window.as_ref()); state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement(); }
+                        7 if input.flags & 1 == 0 => { state.cancel_editor_gesture(); state.editor_cycle=false; pointer_capture.release(window.as_ref()); state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement(); }
                         _ => {}
                     },
-                    ProducerEvent::ResetInput { .. } => { pointer_capture.release(window.as_ref()); state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement(); }
+                    ProducerEvent::ResetInput { .. } => { state.cancel_editor_gesture(); state.editor_cycle=false; pointer_capture.release(window.as_ref()); state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement(); }
                     ProducerEvent::ViewportResized { .. } => { state.resize(window.inner_size()); quick_redraw.request(); }
                     ProducerEvent::Hidden { .. } => {
+                        state.cancel_editor_gesture(); state.editor_cycle=false;
                         pointer_capture.release(window.as_ref());
                         presentation_mode = PersistentPresentationMode::Hidden;
                         quick_redraw.hide(); state.drag_mode = None; state.last_cursor_position = None; state.camera.clear_movement();
@@ -10689,9 +10768,11 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
             }
             Event::WindowEvent { event, window_id } if *window_id == window.id() => match event {
                 WindowEvent::Focused(false) | WindowEvent::Occluded(true) | WindowEvent::CloseRequested | WindowEvent::Destroyed => {
+                    state.cancel_editor_gesture(); state.editor_cycle=false;
                     pointer_capture.release(window.as_ref()); state.camera.clear_movement(); state.drag_mode = None; state.last_cursor_position = None;
                 }
                 WindowEvent::Resized(size) if size.width == 0 || size.height == 0 => {
+                    state.cancel_editor_gesture(); state.editor_cycle=false;
                     pointer_capture.release(window.as_ref()); state.camera.clear_movement(); state.drag_mode = None; state.last_cursor_position = None;
                 }
                 _ => {}
@@ -10755,9 +10836,10 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                     quick_redraw.request();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
-                    if state.drag_mode.is_some() { quick_redraw.request(); }
+                    if state.drag_mode.is_some() || state.editor.as_ref().is_some_and(|v|v.runtime.gesture_active()) { quick_redraw.request(); }
                     state.process_cursor_moved(position);
                 }
+                WindowEvent::ModifiersChanged(modifiers)=>{state.editor_cycle=modifiers.state().control_key();}
                 WindowEvent::CursorLeft { .. } => {
                     state.last_cursor_position = None;
                 }
@@ -10773,6 +10855,9 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                     if event.state == ElementState::Pressed =>
                 {
                     match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Escape) if state.editor.as_ref().is_some_and(|v|v.runtime.gesture_active())=>{
+                            state.cancel_editor_gesture();quick_redraw.request();
+                        }
                         #[cfg(any(target_os="windows",target_os="linux"))]
                         PhysicalKey::Code(KeyCode::Tab) if quick_host.is_some() => {
                             native_child::focus_host(quick_host.as_ref().unwrap());
@@ -11008,6 +11093,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             }
                         } else { quick_presentation_audit = None; }
                         if matches!(command.kind, ViewerSessionCommandKind::Hide | ViewerSessionCommandKind::Release) {
+                            state.cancel_editor_gesture();state.editor_cycle=false;
                             pointer_capture.release(window.as_ref()); state.camera.clear_movement(); state.drag_mode = None; state.last_cursor_position = None;
                         }
                         #[cfg(target_os = "windows")]
@@ -11215,7 +11301,7 @@ fn parse_launch_contract_path_inner(provenance: &BackendProvenance, path: &Path,
  install_viewer_build_mode(ViewerBuildMode::FastExperimental).map_err(|error|anyhow!("build mode conflict: {error:?}"))?;
  let ack=ViewerLaunchAck{schema:VIEWER_LAUNCH_ACK_SCHEMA.to_owned(),contract_schema:VIEWER_LAUNCH_SCHEMA.to_owned(),request_id:contract.request_id.clone(),contract_sha256:hash.clone(),backend_git_sha:provenance.git_sha().to_owned(),backend_profile:provenance.profile().to_owned(),backend_exe_path:provenance.exe_path().to_path_buf(),backend_sha256:provenance.sha256().to_owned()};
  println!("{VIEWER_LAUNCH_ACK_PREFIX}{}",serde_json::to_string(&ack)?);std::io::stdout().flush()?;
- Ok(ViewerArgs{launch_request_id:contract.request_id,launch_contract_sha256:hash,input:(!gpu_context_only).then_some(contract.scene),chunk_size:32,probe_scene:false,prebuild_only:false,build_cache_and_warm:false,prepare_viewer_only:false,persistent_popup_presentation:true,initial_visible,auto_exit_seconds:None,prebuild_before_show:preload,cache_input:None,ready_file:None,cache_file:None,preview_output:None,build_workers:default_build_worker_count(),cpu_cache_max_chunks:DEFAULT_CPU_CACHE_BUDGET.max_chunks,cpu_cache_max_bytes:DEFAULT_CPU_CACHE_BUDGET.max_bytes,resident_max_chunks:DEFAULT_RESIDENT_BUDGET.max_chunks,resident_max_bytes:DEFAULT_RESIDENT_BUDGET.max_bytes,stress_limits:false,embed_parent_hwnd:None,quick_host:host,quick_gpu_context_only:gpu_context_only,graphics_backend,actual_graphics_backend:viewer_launch_contract::GraphicsApiPreference::Auto,quick_resource_report:resource_report,quick_resource_decision:resource_decision,preview_mode:false,preview_spin:false,display_mode:ViewerDisplayMode::FastExperimental,basic_lighting:true,basic_shadows:true,shadow_debug:false,shadow_debug_view:ShadowDebugViewMode::Off,shadow_force_test:false})
+ Ok(ViewerArgs{launch_request_id:contract.request_id,launch_contract_sha256:hash,input:(!gpu_context_only).then_some(contract.scene),composition_editor_path:contract.content.composition_editor_path.clone(),chunk_size:32,probe_scene:false,prebuild_only:false,build_cache_and_warm:false,prepare_viewer_only:false,persistent_popup_presentation:true,initial_visible,auto_exit_seconds:None,prebuild_before_show:preload,cache_input:None,ready_file:None,cache_file:None,preview_output:None,build_workers:default_build_worker_count(),cpu_cache_max_chunks:DEFAULT_CPU_CACHE_BUDGET.max_chunks,cpu_cache_max_bytes:DEFAULT_CPU_CACHE_BUDGET.max_bytes,resident_max_chunks:DEFAULT_RESIDENT_BUDGET.max_chunks,resident_max_bytes:DEFAULT_RESIDENT_BUDGET.max_bytes,stress_limits:false,embed_parent_hwnd:None,quick_host:host,quick_gpu_context_only:gpu_context_only,graphics_backend,actual_graphics_backend:viewer_launch_contract::GraphicsApiPreference::Auto,quick_resource_report:resource_report,quick_resource_decision:resource_decision,preview_mode:false,preview_spin:false,display_mode:ViewerDisplayMode::FastExperimental,basic_lighting:true,basic_shadows:true,shadow_debug:false,shadow_debug_view:ShadowDebugViewMode::Off,shadow_force_test:false})
 }
 
 fn env_bool(name: &str) -> bool { matches!(std::env::var(name).ok().as_deref(),Some("1"|"true"|"on"|"yes")) }
@@ -11236,6 +11322,15 @@ fn hide_quick_preview_window(
 #[cfg(test)]
 mod quick_lifecycle_tests {
     use super::*;
+    #[test]
+    fn composition_shared_model_uniform_shaders_validate_without_a_window() {
+        assert_eq!(std::mem::size_of::<CameraUniform>(),160);
+        for (name,source) in [("viewer",VIEWER_SHADER),("shadow",SHADOW_DEPTH_SHADER),("gizmo",OVERLAY_SHADER)] {
+            let module=wgpu::naga::front::wgsl::parse_str(source).unwrap_or_else(|error|panic!("{name}: {}",error.emit_to_string(source)));
+            wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(),wgpu::naga::valid::Capabilities::all())
+                .validate(&module).unwrap_or_else(|error|panic!("{name}: {error:?}"));
+        }
+    }
 
     #[test]
     fn quick_redraw_completed_scene_is_idle_but_controls_and_receipts_still_poll() {
