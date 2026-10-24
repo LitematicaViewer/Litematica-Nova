@@ -2,6 +2,28 @@
 @layer components.shared, components.page, components.theme;
 
 @layer components.page {
+.stockpile-sources-dialog .dialog-body { min-height:0; }
+.stockpile-source-name { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }
+.stockpile-source-picker-actions { display:flex; gap:8px; flex-wrap:wrap; margin-block:12px; }
+.stockpile-source-library { margin-bottom:16px; }
+.stockpile-source-library > summary { cursor:pointer; margin-bottom:8px; }
+.stockpile-source-library-list { max-height:220px; overflow:auto; display:flex; flex-direction:column; gap:4px; margin-top:8px; }
+.stockpile-source-library-row { display:flex; gap:8px; padding:6px; align-items:center; }
+.stockpile-source-library-row > span { display:flex; flex-direction:column; min-width:0; overflow-wrap:anywhere; }
+.stockpile-source-library-row:hover { background:var(--accent); }
+.stockpile-source-path { display:block; color:var(--muted-foreground); overflow-wrap:anywhere; font-size:var(--nova-text-xs); font-family:var(--nova-font-xs, inherit); }
+.stockpile-source-table-scroll { overflow:auto; min-width:0; }
+.stockpile-source-table { min-width:560px; width:100%; }
+.stockpile-source-table [data-slot="table-cell"] { vertical-align:top; padding:10px 8px; }
+.stockpile-source-table [data-slot="table-cell"]:first-child { width:34%; }
+.stockpile-source-scope { display:flex; flex-direction:column; gap:6px; min-width:150px; }
+.stockpile-source-copies { width:76px; font-variant-numeric:tabular-nums; }
+.stockpile-task-sources { font-size:var(--nova-text-sm); font-family:var(--nova-font-sm, inherit); }
+.stockpile-task-sources > summary { cursor:pointer; }
+.stockpile-task-sources > ul, .stockpile-demand-sources { list-style:none; padding:0; margin:8px 0; }
+.stockpile-task-sources li { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; padding:8px 0; border-bottom:1px solid var(--border); }
+.stockpile-task-sources li > div, .stockpile-demand-sources li { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.stockpile-demand-sources li { padding-block:8px; border-bottom:1px solid var(--border); }
 .beta-statistics-page, .statistics-page { display:flex; flex-direction:column; height:100%; min-height:0; min-width:0; gap:12px; overflow:hidden; container-type:inline-size; }
 .beta-statistics-toolbar, .beta-material-options { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .beta-material-check { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; cursor: pointer; }
