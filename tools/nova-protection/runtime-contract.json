@@ -86,6 +86,11 @@
       "target": "aarch64-apple-darwin",
       "runtime_build_id": "runtime-1-93651ec81250-beta030-release-r1-aarch64-apple-darwin",
       "module_manifest_sha256": "2dfc64e0c579a30b74e2c112ada6fd477201b23f9a8e1ae580c0a00a08954ea1"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_build_id": "runtime-1-de57d61728a6-iris-atlas-20261024-r1-x86_64-pc-windows-msvc",
+      "module_manifest_sha256": "9f4077ec4de1af0a3eb5f5434788395c45c0f561b19cd25b86b10df58462ee40"
     }
   ]
 }
