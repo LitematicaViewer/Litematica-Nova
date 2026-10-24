@@ -7,7 +7,7 @@ import { getApplicationVersion } from "../../src/platform/appData";
 import { invoke } from "../../src/platform/tauri";
 import { addOrUpdateRecord, loadLibrary } from "../../src/business/projectionLibrary";
 import { listenEvent } from "../../src/platform/events";
-import { initI18n, loadStructuralBlocks, createRuntimeProjectionCollection, displayPathText, type EnumeratorCollection } from "../../src/business/facade";
+import { initI18n, loadStructuralBlocks, createRuntimeProjectionCollection, displayPathText, selectLitematicFile, type EnumeratorCollection } from "../../src/business/facade";
 import { HomePage } from "../windows/main/pages/home/HomePage";
 import { LibraryPage } from "../windows/main/pages/library/LibraryPage";
 import { PropertiesPage } from "../windows/main/pages/properties/PropertiesPage";
@@ -33,7 +33,7 @@ import { projectionLibraryImportedEvent } from "../windows/libraryEvents";
 import { FormatImportDialog } from "../windows/main/FormatImportDialog";
 import { UpdateDialog } from "../windows/main/UpdateDialog";
 import { readUpdateDraft, takeUpdateDraft, useUpdateDraft, useApplicationCloseRecovery } from "../windows/main/updateRecovery";
-import { WorkbenchNavigation, isWorkbenchRoute } from "./WorkbenchNavigation";
+import { PrimaryNavigation, primaryNavigationItems, requiresProjection } from "./PrimaryNavigation";
 import { CompositionPage } from "../windows/main/pages/composition/CompositionPage";
 import { NavIcon } from "./NavIcon";
 
@@ -58,9 +58,9 @@ export function App() {
   const [formatImportOpen, setFormatImportOpen] = useState(false);
   const [clipboardImportOpen, setClipboardImportOpen] = useState(false);
   const [compositionId, setCompositionId] = useState("");
-  const lastWorkbenchRoute = useRef("properties");
-  if (isWorkbenchRoute(route)) lastWorkbenchRoute.current = route;
-  const workbench = isWorkbenchRoute(route);
+  const [compositionVisited, setCompositionVisited] = useState(route === "composition");
+  useEffect(() => { if (route === "composition") setCompositionVisited(true); }, [route]);
+  const [openFileError, setOpenFileError] = useState("");
   useEffect(() => { setProjectDirty(false); }, [currentFile]);
   useUpdateDraft("shell", { currentFile, route });
   useEffect(() => { takeUpdateDraft("shell"); }, []);
@@ -189,13 +189,16 @@ export function App() {
     settings: { name: t("shell.settings"), icon: "options", comp: SettingsPage },
   };
 
-  const navigationPages = {
-    home: topPages.home, library: topPages.library,
-    workbench: { name: getUiLocale() === "en-US" ? "Workbench" : "工作台", icon: "render" },
-    generate: topPages.generate,
-  };
   const allPages = { ...topPages, ...bottomPages };
   const Page = allPages[route]?.comp || HomePage;
+  const pageLabel = primaryNavigationItems(getUiLocale()).find(item => item.route === route)?.label;
+  const openProjection = async () => {
+    setOpenFileError("");
+    try {
+      const path = await selectLitematicFile();
+      if (path) setCurrentFile(path);
+    } catch (error) { setOpenFileError(String(error)); }
+  };
 
   return (
     <div className={["app-shell", themeClassName(theme)].filter(Boolean).join(" ")}>
@@ -210,25 +213,8 @@ export function App() {
           <strong>Litematica-Nova</strong>
         </Button>
 
-        <ScrollArea className="nav-scroll-area"><nav className="nav-list" aria-label={t("shell.navigation")}>
-          {Object.entries(navigationPages).map(([key, value]) => {
-            const active = key === "workbench" ? workbench : route === key;
-            return (
-              <Button variant="ghost"
-                key={key}
-                className={`sidebar-item nav-item ${active ? "active nav-item-active" : ""}`}
-                onClick={() => setRoute(key === "workbench" ? lastWorkbenchRoute.current : key)}
-                title={!expanded ? value.name : ""}
-                type="button"
-                aria-pressed={active}
-                aria-label={value.name}
-              >
-                <NavIcon name={value.icon} theme={theme} />
-                <span className="nav-label">{value.name}</span>
-              </Button>
-            );
-          })}
-        </nav></ScrollArea>
+        <ScrollArea className="nav-scroll-area">
+        <PrimaryNavigation route={route} onNavigate={setRoute} theme={theme} />
 
         {currentFile && <div className="workspace-project" title={currentFile}>
           <span>{getUiLocale() === "en-US" ? "Current project" : "当前项目"}</span>
@@ -241,7 +227,7 @@ export function App() {
             <NavIcon name="enumerator" theme={theme} /><span className="nav-label">{t("shell.enumerator")}</span>
           </Button>}
           <UpdateDialog theme={theme} />
-          {Object.entries(bottomPages).map(([key, value]) => {
+          {Object.entries(bottomPages).filter(([key]) => key !== "settings").map(([key, value]) => {
             const active = route === key;
             return (
               <Button variant="ghost"
@@ -259,14 +245,24 @@ export function App() {
             );
           })}
         </nav>
+        </ScrollArea>
       </aside>
       <main className="content">
         {closeRecovery.error && <div role="alert"><p>{localizeMessage(closeRecovery.error)}</p><Button onClick={() => void closeRecovery.retry()}>{t("shell.retryClose")}</Button></div>}
         {themeSaveError && <p role="alert">{localizeMessage(themeSaveError)}</p>}
         {enumeratorError && <p role="alert">{t("shell.enumeratorContext")}{displayPathText(localizeMessage(enumeratorError))}</p>}
-        {workbench && <WorkbenchNavigation route={route} onNavigate={setRoute} />}
+        {openFileError && <p role="alert">{localizeMessage(openFileError)}</p>}
         <div className="workspace-page">
+        {(compositionVisited || route === "composition") && <div className="workspace-composition-page" hidden={route !== "composition"}>
+          <CompositionPage initialProjectId={compositionId} setCompositionId={setCompositionId} currentFile={currentFile} presentationBlocked={showEnumerator || formatImportOpen || route !== "composition"} />
+        </div>}
+        {route === "composition" ? null : requiresProjection(route) && !currentFile ? <section className="workspace-empty" aria-labelledby="workspace-empty-title">
+          <h2 id="workspace-empty-title">{pageLabel}</h2>
+          <p>{getUiLocale() === "en-US" ? "Open a schematic to use this page. Your other pages and saved tasks stay unchanged." : "请先选择投影，其他页面及已保存任务会保留。"}</p>
+          <div><Button onClick={() => void openProjection()}>{t("home.open")}</Button><Button variant="outline" onClick={() => setRoute("library")}>{t("home.browse")}</Button></div>
+        </section> :
         <Page onImportClipboard={() => setClipboardImportOpen(true)} initialProjectId={compositionId} setCompositionId={setCompositionId} onDirtyChange={setProjectDirty} presentationBlocked={showEnumerator || formatImportOpen} currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} debugMode={debugMode} setDebugMode={setDebugMode} buildVersion={buildVersion} />
+        }
         </div>
       </main>
       {clipboardImportOpen ? <FormatImportDialog clipboardMode onVisibilityChange={setFormatImportOpen} onReady={path => { setCurrentFile(path); setRoute("properties"); setClipboardImportOpen(false); }} onCancel={() => setClipboardImportOpen(false)} /> : currentFile && <FormatImportDialog onVisibilityChange={setFormatImportOpen} sourcePath={currentFile} onReady={setCurrentFile} onCancel={() => { setCurrentFile(""); setRoute("library"); }} />}
