@@ -36,6 +36,7 @@ import { readUpdateDraft, takeUpdateDraft, useUpdateDraft, useApplicationCloseRe
 import { PrimaryNavigation, primaryNavigationItems, requiresProjection } from "./PrimaryNavigation";
 import { CompositionPage } from "../windows/main/pages/composition/CompositionPage";
 import { NavIcon } from "./NavIcon";
+import { animatePageChange } from "./motionRuntime";
 
 import { EnumeratorDialog, openEnumeratorWithWindowBehavior } from "../windows/enumerator";
 import "../styles/enumerator.css";
@@ -54,6 +55,8 @@ export function App() {
   const themeSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const [themeSaveError, setThemeSaveError] = useState<UiMessage>("");
   const [route, setRoute] = useState(() => readUpdateDraft<{route: string}>("shell")?.route || "home");
+  const pageRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => animatePageChange(pageRef.current), [route]);
   const [projectDirty, setProjectDirty] = useState(false);
   const [formatImportOpen, setFormatImportOpen] = useState(false);
   const [clipboardImportOpen, setClipboardImportOpen] = useState(false);
@@ -213,7 +216,7 @@ export function App() {
           <strong>Litematica-Nova</strong>
         </Button>
 
-        <ScrollArea className="nav-scroll-area">
+        <ScrollArea className="nav-scroll-area" aria-label={getUiLocale() === "en-US" ? "Scrollable navigation" : "可滚动导航"}>
         <PrimaryNavigation route={route} onNavigate={setRoute} theme={theme} />
 
         {currentFile && <div className="workspace-project" title={currentFile}>
@@ -252,7 +255,7 @@ export function App() {
         {themeSaveError && <p role="alert">{localizeMessage(themeSaveError)}</p>}
         {enumeratorError && <p role="alert">{t("shell.enumeratorContext")}{displayPathText(localizeMessage(enumeratorError))}</p>}
         {openFileError && <p role="alert">{localizeMessage(openFileError)}</p>}
-        <div className="workspace-page">
+        <div className="workspace-page" ref={pageRef}>
         {(compositionVisited || route === "composition") && <div className="workspace-composition-page" hidden={route !== "composition"}>
           <CompositionPage initialProjectId={compositionId} setCompositionId={setCompositionId} currentFile={currentFile} presentationBlocked={showEnumerator || formatImportOpen || route !== "composition"} />
         </div>}

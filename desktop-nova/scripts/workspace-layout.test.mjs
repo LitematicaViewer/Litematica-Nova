@@ -151,3 +151,172 @@ test('原生视口：各UI倍率×系统DPI只换算一次，不改变几何身�
     }
   }
 });
+
+test('导航只有Radix滚动层，独立热区10px、视觉4/6px，不改变页面滚动条', () => {
+  const controls = read('ui/styles/controls.css');
+  const workspace = read('ui/shell/workspace.css');
+  const widgets = read('ui/styles/widgets.css');
+  assert.match(workspace, /\.app-shell \.sidebar \{[^}]*overflow: visible/);
+  assert.doesNotMatch(workspace, /\.app-shell \.sidebar \{[^}]*overflow-y: auto/);
+  assert.match(controls, /--nova-nav-scroll-hit: 10px; --nova-nav-scroll-visual: 4px/);
+  assert.match(controls, /width: calc\(100% - var\(--nova-nav-scroll-hit\)\)/);
+  assert.match(controls, /\[data-slot="scroll-area-scrollbar"\]:is\(:hover, :active\) \{ --nova-nav-scroll-visual: 6px/);
+  assert.match(controls, /--radix-scroll-area-thumb-width: var\(--nova-nav-scroll-visual\)/);
+  assert.match(controls, /width: var\(--nova-nav-scroll-hit\);\s+align-items: flex-start/);
+  assert.match(controls, /border-image: none/);
+  assert.match(controls, /scroll-area-viewport"\] \{ scrollbar-width: none/);
+  assert.match(controls, /scroll-area-viewport"\]::-webkit-scrollbar \{ display: none/);
+  assert.match(controls, /scroll-area-viewport"\]:focus-visible \{ outline: 2px/);
+  assert.match(widgets, /--ln-scroll-size: 12px/);
+  assert.match(widgets, /--ln-scroll-size: 14px/);
+  assert.ok(read('ui/components/ui/scroll-area.tsx').includes('type="auto"'));
+  for (const scale of [.5, 1, 1.5, 3, 5]) {
+    // 56px collapsed rail: 10px reserved, 12px button margins, 12px padding;
+    // the 16px icon fits without entering the drag target at every WebView zoom.
+    assert.ok((56 - 10 - 12 - 12) * scale >= 16 * scale);
+    assert.equal(6 * scale / (56 * scale), 6 / 56);
+    assert.ok((40 - 10 - 4 - 4) * scale >= 16 * scale);
+  }
+});
+
+function motionWindow({ initial = 'system', reduced = false, readConfig } = {}) {
+  const exports = {}, handlers = new Map(), media = new EventTarget();
+  media.matches = reduced;
+  const document = { documentElement: { dataset: {} } };
+  const consoleMessages = [];
+  const code = ts.transpileModule(read('ui/shell/motionRuntime.ts'), { compilerOptions: {
+    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
+  } }).outputText;
+  vm.runInNewContext(code, {
+    exports, document, window: { matchMedia: () => media },
+    console: { warn: value => consoleMessages.push(value) },
+    getComputedStyle: () => ({ getPropertyValue: key => ({ '--nova-motion-page-duration': '180ms', '--nova-motion-page-distance': '8px' }[key] || '') }),
+    require: () => ({ listenEvent: async (name, callback) => { handlers.set(name, callback); return () => handlers.delete(name); } }),
+  });
+  return { api: exports, document, media, handlers, consoleMessages,
+    init: () => exports.initializeWindowMotion(readConfig ?? (async () => ({ config: { motion_preference: initial } }))),
+    broadcast: value => handlers.get('user-config-changed')({ payload: { config: { motion_preference: value } } }),
+    system: value => { media.matches = value; media.dispatchEvent(new Event('change')); },
+  };
+}
+
+test('动效默认跟随实时系统，五级手动覆盖，主子窗口只接受Rust配置回执', async () => {
+  const main = motionWindow({ reduced: true });
+  const child = motionWindow({ reduced: true });
+  await Promise.all([main.init(), child.init()]);
+  for (const win of [main, child]) {
+    assert.equal(win.document.documentElement.dataset.motionPreference, 'system');
+    assert.equal(win.document.documentElement.dataset.motion, 'reduced');
+    win.system(false); assert.equal(win.api.currentMotionState().effective, 'standard');
+    win.system(true); assert.equal(win.api.currentMotionState().effective, 'reduced');
+    for (const preference of ['off', 'reduced', 'standard', 'rich']) {
+      win.broadcast(preference);
+      assert.equal(win.api.currentMotionState().preference, preference);
+      assert.equal(win.api.currentMotionState().effective, preference);
+      win.system(false); win.system(true);
+      assert.equal(win.api.currentMotionState().effective, preference);
+    }
+    win.broadcast('invalid'); assert.equal(win.api.currentMotionState().preference, 'system');
+    assert.ok(!read('ui/shell/motionRuntime.ts').includes('localStorage'));
+  }
+  // A subsequently opened child gets the same saved manual preference at bootstrap.
+  const reopened = motionWindow({ initial: 'rich', reduced: true });
+  await reopened.init(); assert.equal(reopened.api.currentMotionState().effective, 'rich');
+  assert.match(read('ui/shell/themeRuntime.ts'), /initializeWindowMotion\(\(\) => savedConfig\)/);
+  assert.match(read('src-tauri/src/main.rs'), /motion_preference/);
+});
+
+test('晚到初始配置不覆盖运行中Rust广播，页面动画只改变呈现且即时停止', async () => {
+  let resolve;
+  const win = motionWindow({ readConfig: () => new Promise(done => { resolve = done; }) });
+  const init = win.init();
+  await new Promise(setImmediate);
+  win.broadcast('rich'); resolve({ config: { motion_preference: 'off' } });
+  await init;
+  assert.equal(win.api.currentMotionState().effective, 'rich');
+  let animations = 0, cancellations = 0, frames;
+  const element = { animate: (keyframes, options) => {
+    animations++; frames = keyframes;
+    assert.equal(options.duration, 180);
+    return { cancel: () => { cancellations++; } };
+  } };
+  const dispose = win.api.animatePageChange(element);
+  assert.equal(animations, 1); assert.equal(frames[0].transform, 'translateY(8px)');
+  let nativeFrames;
+  const disposeNative = win.api.animatePageChange({
+    querySelectorAll: () => [{ closest: () => null }],
+    animate: keyframes => { nativeFrames = keyframes; return { cancel() {} }; },
+  });
+  assert.equal('transform' in nativeFrames[0], false, '原生子HWND锚点不跟随WebView位移');
+  disposeNative();
+  win.broadcast('off'); assert.equal(cancellations, 1);
+  win.api.animatePageChange(element); assert.equal(animations, 1);
+  dispose(); assert.equal(cancellations, 2);
+  const runtime = read('ui/shell/motionRuntime.ts');
+  assert.doesNotMatch(runtime, /setTimeout|setInterval|invoke\(|startViewTransition|cloneNode/);
+  const shell = read('ui/shell/AppShell.tsx');
+  assert.match(shell, /useLayoutEffect\(\(\) => animatePageChange\(pageRef.current\), \[route\]\)/);
+  assert.match(shell, /hidden=\{route !== "composition"\}/);
+  assert.doesNotMatch(shell, /key=\{route\}/);
+});
+
+test('统一动效覆盖按钮/标签/卡片/弹层，关闭/精简/像素语言保持正确', () => {
+  const css = read('ui/styles/motion.css');
+  for (const entry of ['[data-slot="button"]', '[role="tab"]', '.library-tile', '[data-slot="dialog-content"]', '[data-slot="select-content"]', '.nav-item']) assert.ok(css.includes(entry));
+  for (const mode of ['off', 'reduced', 'rich']) assert.ok(css.includes(`html[data-motion="${mode}"]`));
+  assert.ok(css.includes('--nova-motion-overlay-scale: 1'));
+  assert.ok(css.includes('[data-theme="minecraft"]'));
+  assert.ok(css.includes('html:not([data-motion])'));
+  assert.ok(css.includes('nth-child(-n+8)'));
+  assert.doesNotMatch(css, /infinite|blur\(|spring|elastic/);
+  assert.match(read('ui/themes/modern.css'), /html:not\(\[data-motion\]\) \*/);
+  for (const key of ['motion', 'motion.system', 'motion.off', 'motion.reduced', 'motion.standard', 'motion.rich', 'motionHelp', 'motionSystemReduced', 'motionFailed']) {
+    assert.equal(read('src/services/locales/settings.ts').split(`"settings.${key}":`).length - 1, 2);
+  }
+});
+
+test('动效控件等待Rust回执后生效，保存失败保留旧有效选项并显示原错误', async () => {
+  const slots = [], effects = [], subscribers = new Set();
+  let cursor = 0, state = { preference: 'system', effective: 'standard', systemReduced: false }, settle;
+  const hooks = { ...React,
+    useState(initial) {
+      const index = cursor++;
+      if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial;
+      return [slots[index], next => { slots[index] = typeof next === 'function' ? next(slots[index]) : next; }];
+    },
+    useEffect(effect) { if (!effects.length) effects.push(effect()); },
+  };
+  hooks.default = hooks;
+  const api = load('ui/windows/main/pages/settings/MotionControl.tsx', { imports: {
+    react: hooks,
+    '../../../../../src/services/i18n': { t: (key, params) => params?.error ? `${key}: ${params.error}` : key },
+    '../../../../../src/platform/appData': { saveUserConfig: input => new Promise((resolve, reject) => {
+      assert.deepEqual(Object.keys(input), ['motion_preference']); settle = { resolve, reject };
+    }) },
+    '../../../../shell/motionRuntime': {
+      currentMotionState: () => state,
+      subscribeToMotionChanges: callback => { subscribers.add(callback); return () => subscribers.delete(callback); },
+      acceptMotionConfig: info => { state = { ...state, preference: info.config.motion_preference, effective: info.config.motion_preference }; for (const callback of subscribers) callback(); },
+    },
+    '../../../../components/Dropdown': { Dropdown: 'motion-dropdown' },
+  } });
+  const render = () => { cursor = 0; return api.MotionControl(); };
+  const all = tree => !React.isValidElement(tree) ? [] : [tree, ...React.Children.toArray(tree.props.children).flatMap(all)];
+  let tree = render();
+  all(tree).find(el => el.type === 'motion-dropdown').props.onChange('rich');
+  tree = render();
+  assert.equal(all(tree).find(el => el.type === 'motion-dropdown').props.value, 'system');
+  assert.equal(all(tree).find(el => el.type === 'motion-dropdown').props.disabled, true);
+  settle.reject(Error('disk write failed'));
+  await new Promise(setImmediate);
+  tree = render();
+  assert.equal(all(tree).find(el => el.type === 'motion-dropdown').props.value, 'system');
+  assert.match(all(tree).find(el => el.props.role === 'alert').props.children, /disk write failed/);
+  all(tree).find(el => el.type === 'motion-dropdown').props.onChange('reduced');
+  settle.resolve({ config: { motion_preference: 'reduced' } });
+  await new Promise(setImmediate);
+  tree = render();
+  assert.equal(all(tree).find(el => el.type === 'motion-dropdown').props.value, 'reduced');
+  assert.equal(all(tree).find(el => el.type === 'motion-dropdown').props.disabled, false);
+  for (const dispose of effects) dispose();
+});

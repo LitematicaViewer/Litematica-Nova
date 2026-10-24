@@ -1,6 +1,7 @@
 @import "../shell/theme.css";
 @import "./widgets.css";
 @import "./controls.css";
+@import "./motion.css";
 @import "./page-appearance.css";
 @import "../shell/workspace.css";
 @layer theme, vendor, tokens, base, components, utilities;

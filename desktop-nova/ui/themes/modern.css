@@ -160,5 +160,5 @@ tr[aria-selected="true"], tr[data-state="selected"] { background: var(--accent);
 .material-list-card, .lib-card, .library-card, .beta-workflow-card { border-color: var(--border); background: var(--card); border-radius: var(--radius); }
 .beta-statistics-fact, .beta-statistics-note { border-color: var(--border); }
 ::selection { background: var(--primary); color: var(--primary-foreground); }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+@media (prefers-reduced-motion: reduce) { html:not([data-motion]) *, html:not([data-motion]) *::before, html:not([data-motion]) *::after { transition: none !important; animation: none !important; } }
 }

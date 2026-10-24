@@ -21,6 +21,7 @@ const themeGlob = () => Object.fromEntries(
 // Local modules every UI module may import but that this suite does not need to
 // exercise: a stub keeps the import graph resolvable without pulling the Tauri seam.
 const builtinDependencies = {
+  './motionRuntime': { initializeWindowMotion: async () => {}, animatePageChange: () => () => {} },
   '../../src/platform/nativeWindowGeometry': {
     synchronizeApplicationWindowBackground: async () => {},
     getApplicationWindowOrigin: async () => ({ x: 0, y: 0 }),
@@ -310,6 +311,9 @@ function appHarness(runtime, facade) {
     },
     './NavIcon': { NavIcon: () => null },
     '../windows/main/UpdateDialog': { UpdateDialog: () => null },
+    '../windows/main/FormatImportDialog': { FormatImportDialog: () => null },
+    '../windows/main/pages/composition/CompositionPage': { CompositionPage: () => null },
+    './PrimaryNavigation': { PrimaryNavigation: () => null, primaryNavigationItems: () => [], requiresProjection: () => false },
     '../windows/main/updateRecovery': {
       readUpdateDraft: () => null, takeUpdateDraft: () => null, useUpdateDraft: () => null,
       useApplicationCloseRecovery: () => ({ error: "", retry: async () => {} }),

@@ -138,6 +138,10 @@ html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"])[ari
 
 .nova-scroll-area { position: relative; overflow: hidden; min-width: 0; min-height: 0; }
 .nova-scroll-area > [data-slot="scroll-area-viewport"] { width: 100%; height: 100%; min-width: 0; border-radius: inherit; overscroll-behavior: contain; outline: none; }
+/* Radix owns the only thumb in a ScrollArea. Native page scrollbars elsewhere
+   remain themed by widgets.css; they must not reappear inside this viewport. */
+.nova-scroll-area > [data-slot="scroll-area-viewport"] { scrollbar-width: none; }
+.nova-scroll-area > [data-slot="scroll-area-viewport"]::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .nova-scroll-area > [data-slot="scroll-area-viewport"]:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .nova-scroll-area > [data-slot="scroll-area-viewport"] > div { display: block !important; min-width: 100%; }
 [data-slot="scroll-area-scrollbar"] { display: flex; user-select: none; touch-action: none; padding: 3px; background: var(--ln-scroll-track); transition: background-color 120ms; }
@@ -154,21 +158,10 @@ html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"])[ari
    full-width button stays exactly square, and the anchored bottom list has no
    inset either. */
 .sidebar .nav-scroll-area .nav-list { margin: 0; padding: 0; }
-/* The sidebar scrollbar overlays the list instead of reserving width, so it can
-   never narrow a button, and it only appears while the pointer is over the list
-   area or the list holds keyboard focus. */
-.sidebar .nav-scroll-area [data-slot="scroll-area-scrollbar"] {
-  padding: 0;
-  background: transparent;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms;
-}
-.sidebar .nav-scroll-area:hover [data-slot="scroll-area-scrollbar"],
-.sidebar .nav-scroll-area:focus-within [data-slot="scroll-area-scrollbar"] {
-  opacity: 1;
-  pointer-events: auto;
-}
+/* A dedicated gutter separates the 10px drag target from the icon/selection.
+   Only the thumb paints 4px (6px when interacted with), not the full hit area. */
+.sidebar .nav-scroll-area { --nova-nav-scroll-hit: 10px; --nova-nav-scroll-visual: 4px; }
+.sidebar .nav-scroll-area > [data-slot="scroll-area-viewport"] { width: calc(100% - var(--nova-nav-scroll-hit)); }
 
 html[data-theme] [data-slot="slider"] { position: relative; display: flex; align-items: center; width: 100%; min-width: 4rem; min-height: 28px; touch-action: none; user-select: none; }
 /* Radix gives the root no positioning and no layout, so both have to be stated
@@ -278,5 +271,33 @@ html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--fo
     font-family: var(--nova-font-sm, inherit);
 }
 
-@media (prefers-reduced-motion: reduce) { .nova-control, [data-slot="scroll-area-scrollbar"] { transition: none !important; } }
+}
+
+@layer utilities {
+/* Navigation's slim rail is the one deliberate exception to full-width theme
+   scrollbar artwork (Aero's 8px nine-slice alone has a 16px minimum width). */
+html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] {
+  width: var(--nova-nav-scroll-hit);
+  align-items: flex-start;
+  justify-content: center;
+  padding: 0 2px;
+  background: transparent;
+}
+html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"] > [data-slot="scroll-area-thumb"] {
+  flex: none;
+  /* Radix sets width:var(...) inline even on the vertical thumb. Supply its
+     cross-axis value instead of letting an unresolved inline var compute auto. */
+  --radix-scroll-area-thumb-width: var(--nova-nav-scroll-visual);
+  width: var(--nova-nav-scroll-visual);
+  margin-inline: auto;
+  border: 0;
+  border-image: none;
+  background: var(--ln-scroll-thumb);
+  box-shadow: none;
+  transition: width var(--nova-motion-feedback-duration, 100ms) var(--nova-motion-ease, ease-out), background-color var(--nova-motion-feedback-duration, 100ms);
+}
+html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"] > [data-slot="scroll-area-thumb"]::before { inset: 0 -3px; min-width: 0; }
+html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"]:is(:hover, :active) { --nova-nav-scroll-visual: 6px; }
+html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"]:hover > [data-slot="scroll-area-thumb"] { background: var(--ln-scroll-hover); }
+html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"] > [data-slot="scroll-area-thumb"]:active { background: var(--ln-scroll-active); }
 }

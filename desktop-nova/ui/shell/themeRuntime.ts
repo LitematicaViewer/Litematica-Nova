@@ -1,6 +1,7 @@
 import { emitEvent, listenEvent } from "../../src/platform/events";
 import { synchronizeApplicationWindowBackground } from "../../src/platform/nativeWindowGeometry";
 import { DEFAULT_THEME_ID, THEMES, normalizeThemeId as normalizeManifestThemeId, themeKeyOf } from "../../src/services/themeManifest";
+import { initializeWindowMotion } from "./motionRuntime";
 
 /** The theme list lives in `src/services/themeManifest.ts`; this module only applies it. */
 export const defaultThemeId = DEFAULT_THEME_ID;
@@ -238,22 +239,28 @@ export const subscribeToThemeChanges = (callback: (themeId: ThemeId) => void, on
 
 /** Before React's first frame, prefer live cache in children and disk on app startup. */
 export const initializeWindowTheme = async (
-    readSavedConfig: () => Promise<{ config: { theme: string; color_mode?: string } }>,
+    readSavedConfig: () => Promise<{ config: { theme: string; color_mode?: string; motion_preference?: string } }>,
     preferSavedConfig = false,
 ) => {
     const cached = memoryThemeId !== undefined || storedThemeId() !== null;
     applyThemeStylesheet(currentThemeId());
     if (cached && !preferSavedConfig) {
-        await Promise.all(stylesheetReady.values());
+        // Keep live theme/color cache semantics; motion independently reads Rust.
+        await Promise.all([...stylesheetReady.values(), initializeWindowMotion()]);
         return;
     }
     let receivedChange = false;
     let receivedColorChange = false;
     const unsubscribe = subscribeToThemeChanges(() => { receivedChange = true; }, () => { receivedColorChange = true; });
     try {
-        const info = await readSavedConfig();
+        // Register theme listeners before any await; a slow preference read must
+        // not reset a newer choice made in another window during bootstrap.
+        const savedConfig = readSavedConfig();
+        const motionReady = initializeWindowMotion(() => savedConfig);
+        const info = await savedConfig;
         if (!receivedChange) announceThemeChange(info.config.theme);
         if (!receivedColorChange) announceColorModeChange(info.config.color_mode || "system");
+        await motionReady;
     } catch {
         // Cached/default styling still opens the app if the config command fails.
     } finally {

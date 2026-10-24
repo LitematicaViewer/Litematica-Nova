@@ -29,10 +29,11 @@
     font-family: "Segoe UI", Inter, "Noto Sans SC", system-ui, sans-serif; font-size: 13px;
   }
   .app-shell { --ln-window-content-padding: 20px; }
-  .app-shell .sidebar { width: 188px; min-width: 188px; flex-basis: 188px; border-right: 1px solid var(--border); overflow-y: auto; }
+  .app-shell .sidebar { width: 188px; min-width: 188px; flex-basis: 188px; border-right: 1px solid var(--border); overflow: visible; }
   .app-shell .sidebar-collapsed { width: 56px; min-width: 56px; flex-basis: 56px; }
   .app-shell .nav-item { height: 38px; min-height: 38px; flex-shrink: 0; border: 0; margin: 2px 6px; width: calc(100% - 12px); border-radius: 6px; padding: 8px 12px; font-size: 13px; }
   .app-shell .nav-icon { width: 16px; height: 16px; }
+  .app-shell .sidebar-collapsed .nav-item { padding-inline: 6px; justify-content: center; gap: 0; }
   .app-shell .sidebar > .nav-scroll-area { flex: 1 1 0; min-height: 38px; }
   .app-shell .nav-list-bottom { margin-top: 8px; padding-block: 8px; border-top: 1px solid var(--border); }
   .app-shell .nav-item-active { background: var(--accent); color: var(--foreground); box-shadow: inset 2px 0 var(--primary); }
@@ -63,6 +64,7 @@
   @media (max-width: 420px) {
     .app-shell { --ln-window-content-padding: 8px; }
     .app-shell .sidebar { width: 40px; min-width: 40px; flex-basis: 40px; }
+    .app-shell .sidebar .nav-item { margin-inline: 2px; width: calc(100% - 4px); padding-inline: 2px; }
     .workspace-page { overflow: auto; }
   }
 }

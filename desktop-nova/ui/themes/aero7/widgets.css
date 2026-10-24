@@ -789,24 +789,24 @@ html[data-theme="aero7"] [data-slot="scroll-area-scrollbar"][data-orientation="v
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .sidebar,
-    .nav-expand,
-    .nav-item,
-    .nav-label,
-    .nav-expand strong,
-    [data-slot="button"]::before,
-    [data-slot="button"]::after,
-    [data-slot="button-motion-layer"],
-    [data-slot="button-motion-layer"]::before,
-    .nav-expand::before,
-    .nav-expand::after,
-    .nav-item::before,
-    .nav-item::after,
-    [data-slot="checkbox"]::before,
-    [data-slot="checkbox"]::after,
-    [data-slot="radio-group-item"][data-choice-layout="control"]::before,
-    [data-slot="radio-group-item"][data-choice-layout="control"]::after,
-    [data-slot="slider-thumb"]::before {
+    html:not([data-motion]) .sidebar,
+    html:not([data-motion]) .nav-expand,
+    html:not([data-motion]) .nav-item,
+    html:not([data-motion]) .nav-label,
+    html:not([data-motion]) .nav-expand strong,
+    html:not([data-motion]) [data-slot="button"]::before,
+    html:not([data-motion]) [data-slot="button"]::after,
+    html:not([data-motion]) [data-slot="button-motion-layer"],
+    html:not([data-motion]) [data-slot="button-motion-layer"]::before,
+    html:not([data-motion]) .nav-expand::before,
+    html:not([data-motion]) .nav-expand::after,
+    html:not([data-motion]) .nav-item::before,
+    html:not([data-motion]) .nav-item::after,
+    html:not([data-motion]) [data-slot="checkbox"]::before,
+    html:not([data-motion]) [data-slot="checkbox"]::after,
+    html:not([data-motion]) [data-slot="radio-group-item"][data-choice-layout="control"]::before,
+    html:not([data-motion]) [data-slot="radio-group-item"][data-choice-layout="control"]::after,
+    html:not([data-motion]) [data-slot="slider-thumb"]::before {
         transition: none !important;
     }
 }

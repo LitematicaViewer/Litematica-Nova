@@ -1,0 +1,112 @@
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer tokens {
+  :root {
+    --nova-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --nova-motion-feedback-duration: 100ms;
+    --nova-motion-state-duration: 150ms;
+    --nova-motion-page-duration: 180ms;
+    --nova-motion-overlay-duration: 190ms;
+    --nova-motion-page-distance: 8px;
+    --nova-motion-overlay-distance: 6px;
+    --nova-motion-overlay-scale: .98;
+    --nova-motion-card-lift: 0px;
+  }
+  html[data-motion="rich"] { --nova-motion-card-lift: -1px; --nova-motion-overlay-scale: .975; }
+  html[data-motion="reduced"] {
+    --nova-motion-state-duration: 100ms;
+    --nova-motion-page-duration: 120ms;
+    --nova-motion-overlay-duration: 120ms;
+    --nova-motion-page-distance: 0px;
+    --nova-motion-overlay-distance: 0px;
+    --nova-motion-overlay-scale: 1;
+  }
+  html[data-motion="off"] {
+    --nova-motion-feedback-duration: 0ms;
+    --nova-motion-state-duration: 0ms;
+    --nova-motion-page-duration: 0ms;
+    --nova-motion-overlay-duration: 0ms;
+    --nova-motion-page-distance: 0px;
+    --nova-motion-overlay-distance: 0px;
+    --nova-motion-overlay-scale: 1;
+  }
+  /* Whole-pixel motion only; never blur or resample pixel fonts/textures. */
+  html:is([data-theme="8bitcn"], [data-theme="minecraft"]) {
+    --nova-motion-overlay-scale: 1;
+    --nova-motion-page-distance: 0px;
+    --nova-motion-overlay-distance: 0px;
+    --nova-motion-card-lift: 0px;
+  }
+}
+
+/* Effective motion is a user preference, above theme/page transition defaults. */
+@layer utilities {
+  html[data-theme] :is([data-slot="button"], [data-slot="radio-group-item"], [data-slot="checkbox"], .nav-item, [role="tab"], .library-icon-tabs > [data-slot="button"], .layer3d-view-tabs > [data-slot="button"]) {
+    transition-property: background-color, color, border-color, box-shadow, filter;
+    transition-duration: var(--nova-motion-feedback-duration);
+    transition-timing-function: var(--nova-motion-ease);
+  }
+  html[data-theme] :is([data-slot="button"], [data-slot="radio-group-item"], [data-slot="checkbox"]):active:not(:disabled):not([aria-disabled="true"]) { filter: brightness(.94); }
+  html[data-theme] :is(.nav-item, [role="tab"], .library-icon-tabs > [data-slot="button"], .layer3d-view-tabs > [data-slot="button"]) { transition-duration: var(--nova-motion-state-duration); }
+  html[data-theme] :is(.card, .library-card, .library-tile, .reden-result-card, .settings-theme-option) {
+    transition: border-color var(--nova-motion-state-duration) var(--nova-motion-ease),
+      box-shadow var(--nova-motion-state-duration) var(--nova-motion-ease),
+      background-color var(--nova-motion-state-duration) var(--nova-motion-ease),
+      transform var(--nova-motion-state-duration) var(--nova-motion-ease);
+  }
+  html[data-motion="rich"] :is(.library-card, .library-tile, .reden-result-card, .settings-theme-option):is(:hover, :focus-within) { transform: translateY(var(--nova-motion-card-lift)); }
+  html[data-theme] :is([role="tab"][aria-selected="true"], .layer3d-view-tabs > [data-slot="button"][aria-pressed="true"]) { box-shadow: inset 0 -2px var(--primary); }
+  /* Only the paged, nonvirtual grid's first visible group gets a bounded stagger. */
+  html[data-motion="rich"] .library-card-grid > .library-tile:nth-child(-n+8) { animation: nova-list-in var(--nova-motion-state-duration) var(--nova-motion-ease) both; }
+  html[data-motion="rich"] .library-card-grid > .library-tile:nth-child(2) { animation-delay: 12ms; }
+  html[data-motion="rich"] .library-card-grid > .library-tile:nth-child(3) { animation-delay: 24ms; }
+  html[data-motion="rich"] .library-card-grid > .library-tile:nth-child(n+4):nth-child(-n+8) { animation-delay: 36ms; }
+
+  html[data-theme] :is([data-slot="dialog-overlay"], [data-slot="dialog-content"], [data-slot="select-content"], [data-slot="block-search-content"], .dialog-surface) {
+    animation-duration: var(--nova-motion-overlay-duration);
+    animation-timing-function: var(--nova-motion-ease);
+  }
+  html[data-theme] :is([data-slot="dialog-overlay"], [data-slot="dialog-content"], [data-slot="select-content"], [data-slot="block-search-content"], .dialog-surface):not([data-state="closed"]) { animation-name: nova-surface-in; }
+  html[data-theme] [data-slot="dialog-overlay"]:not([data-state="closed"]) { animation-name: nova-opacity-in; }
+  html[data-theme] :is([data-slot="dialog-overlay"], [data-slot="dialog-content"], [data-slot="select-content"], [data-slot="block-search-content"])[data-state="closed"] { animation-name: nova-surface-out; animation-duration: var(--nova-motion-state-duration); }
+  html[data-theme] [data-slot="dialog-overlay"][data-state="closed"] { animation-name: nova-opacity-out; }
+  /* Dialogs can also contain native HWND viewports. Fade their UI only: a DOM
+     scale/translation would separate the live surface from its screen anchor. */
+  html[data-theme] :is(.dialog-surface, [data-slot="dialog-content"]):has(.render-preview-host, .properties-preview-host, .layer3d-viewport, .composition-native-viewport):not([data-state="closed"]) { animation-name: nova-opacity-in; }
+  html[data-theme] :is(.dialog-surface, [data-slot="dialog-content"]):has(.render-preview-host, .properties-preview-host, .layer3d-viewport, .composition-native-viewport)[data-state="closed"] { animation-name: nova-opacity-out; }
+
+  @keyframes nova-opacity-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes nova-opacity-out { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes nova-list-in { from { opacity: .72; } to { opacity: 1; } }
+  @keyframes nova-surface-in {
+    from { opacity: 0; transform: translateY(var(--nova-motion-overlay-distance)) scale(var(--nova-motion-overlay-scale)); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes nova-surface-out {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to { opacity: 0; transform: translateY(var(--nova-motion-overlay-distance)) scale(var(--nova-motion-overlay-scale)); }
+  }
+}
+
+@layer utilities {
+  /* Override third-party/theme animation utilities too. State colors and native
+     keyboard focus still apply immediately; no business completion is simulated. */
+  html[data-motion="off"][data-motion-preference][data-theme] *, html[data-motion="off"][data-motion-preference][data-theme] *::before, html[data-motion="off"][data-motion-preference][data-theme] *::after {
+    animation: none; transition-duration: 0s; scroll-behavior: auto;
+  }
+  html[data-motion="reduced"][data-motion-preference][data-theme] *, html[data-motion="reduced"][data-motion-preference][data-theme] *::before, html[data-motion="reduced"][data-motion-preference][data-theme] *::after {
+    animation: none; scroll-behavior: auto;
+    transition-property: color, background-color, border-color, opacity, filter;
+    transition-duration: var(--nova-motion-feedback-duration);
+  }
+  html[data-motion="reduced"][data-motion-preference][data-theme] :is([data-slot="dialog-overlay"], [data-slot="dialog-content"], [data-slot="select-content"], [data-slot="block-search-content"], .dialog-surface) {
+    animation: nova-opacity-in var(--nova-motion-overlay-duration) var(--nova-motion-ease);
+  }
+  html[data-motion="reduced"][data-motion-preference][data-theme] :is([data-slot="dialog-overlay"], [data-slot="dialog-content"], [data-slot="select-content"], [data-slot="block-search-content"])[data-state="closed"] { animation-name: nova-opacity-out; }
+  @media (prefers-reduced-motion: reduce) {
+    /* Before the Rust preference arrives, respect the OS rather than flashing
+       the standard animation. Manual choices are intentionally not overridden. */
+    html:not([data-motion]) *, html:not([data-motion]) *::before, html:not([data-motion]) *::after { animation: none !important; transition-duration: 0s !important; scroll-behavior: auto !important; }
+  }
+}
