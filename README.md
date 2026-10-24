@@ -4,11 +4,11 @@
 
 面向 Minecraft 玩家的 Windows、Linux 和 macOS 桌面工具。打开 `.litematic` 文件，就能查看投影信息和材料清单，也可以修改属性、批量替换方块，或从模板生成一份新投影。
 
-**Beta 0.2.4 · 版本 0.2.4**
+**Beta 0.3 · 版本 0.3.0（预发布）**
 
 [反馈问题](https://github.com/LitematicaViewer/Litematica-Nova/issues) · **开发交流 QQ 群：1044260630**
 
-本版变化及已知 Bug 见 [Beta 0.2.4 更新日志](docs/releases/BETA_0_2_4.md)。
+本版变化及已知 Bug 见 [Beta 0.3 更新日志](docs/releases/BETA_0_3_0.md)。
 
 ## 为准备材料和施工而设计
 
