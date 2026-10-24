@@ -6,7 +6,7 @@ export type {
   StatsData,
 } from "../../services/statsService";
 export {
-  exportMaterialListWithOptions,
+  executeConfiguredMaterialExport,
   fetchMaterialRecipeCache,
   loadStructureStats,
 } from "../../services/statsService";

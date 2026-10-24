@@ -322,28 +322,50 @@ impl Engine {
                 // Resource registry/index construction is input-independent.
                 // Overlap it with this request's real source read/count, never
                 // with work hidden before the click or outside its timing.
-                let (analysis, revision, _, _) = if self.recipe_resources_ready.load(Ordering::Relaxed) {
-                    self.analysis(&req.input, cancel)?
-                } else {
-                    std::thread::scope(|scope| -> Result<_> {
-                        let resources = std::thread::Builder::new().name("nova-recipe-resources".into()).spawn_scoped(scope, || -> Result<()> {
-                            let _context = crate::game_data::operation_context()?;
-                            crate::block_database::database()?;
-                            ensure!(!cancel.load(Ordering::Relaxed), "Data operation cancelled");
-                            crate::recipe_tree::prepare_selected_resolver()
-                        }).context("Start recipe resource preparation")?;
-                        let analysis = self.analysis(&req.input, cancel);
-                        let resources = resources.join().map_err(|_| anyhow::anyhow!("Recipe resource preparation failed"));
-                        let analysis = analysis?;
-                        resources??;
-                        self.recipe_resources_ready.store(true, Ordering::Relaxed);
-                        Ok(analysis)
-                    })?
-                };
-                let language_map: BTreeMap<String,String> = serde_json::from_value(req.input.get("languageMap").filter(|v|!v.is_null()).cloned().unwrap_or(json!({})))?;
-                let batch = crate::material_detail::read_all_cached(&analysis,&revision,req.input["uiLocale"].as_str().unwrap_or("zh-CN"),&language_map,&||cancel.load(Ordering::Relaxed))?;
+                let (analysis, revision, _, _) =
+                    if self.recipe_resources_ready.load(Ordering::Relaxed) {
+                        self.analysis(&req.input, cancel)?
+                    } else {
+                        std::thread::scope(|scope| -> Result<_> {
+                            let resources = std::thread::Builder::new()
+                                .name("nova-recipe-resources".into())
+                                .spawn_scoped(scope, || -> Result<()> {
+                                    let _context = crate::game_data::operation_context()?;
+                                    crate::block_database::database()?;
+                                    ensure!(
+                                        !cancel.load(Ordering::Relaxed),
+                                        "Data operation cancelled"
+                                    );
+                                    crate::recipe_tree::prepare_selected_resolver()
+                                })
+                                .context("Start recipe resource preparation")?;
+                            let analysis = self.analysis(&req.input, cancel);
+                            let resources = resources
+                                .join()
+                                .map_err(|_| anyhow::anyhow!("Recipe resource preparation failed"));
+                            let analysis = analysis?;
+                            resources??;
+                            self.recipe_resources_ready.store(true, Ordering::Relaxed);
+                            Ok(analysis)
+                        })?
+                    };
+                let language_map: BTreeMap<String, String> = serde_json::from_value(
+                    req.input
+                        .get("languageMap")
+                        .filter(|v| !v.is_null())
+                        .cloned()
+                        .unwrap_or(json!({})),
+                )?;
+                let batch = crate::material_detail::read_all_cached(
+                    &analysis,
+                    &revision,
+                    req.input["uiLocale"].as_str().unwrap_or("zh-CN"),
+                    &language_map,
+                    &|| cancel.load(Ordering::Relaxed),
+                )?;
                 Ok(json!({"summary":batch.summary,"sourceRevision":revision}))
-            },
+            }
+            DataKind::MaterialExport => self.material_export(req.input.clone(), cancel),
             DataKind::Stockpile => self.stockpile(req.input.clone(), cancel),
             DataKind::VersionConvert => {
                 let input = &req.input;
@@ -372,6 +394,79 @@ impl Engine {
             DataKind::Cancel => bail!("Cancellation is a control message"),
         }
     }
+    fn material_export(&self, mut input: Value, cancel: &AtomicBool) -> Result<Value> {
+        let action = input["action"].as_str().unwrap_or("configure").to_owned();
+        ensure!(
+            ["configure", "export", "reset"].contains(&action.as_str()),
+            "Unknown export action"
+        );
+        if action == "reset" {
+            input
+                .as_object_mut()
+                .context("Invalid export input")?
+                .remove("settings");
+        }
+        if crate::material_export::is_task_export(&input) {
+            let context = crate::stockpile_serve::material_export_context(&input)?;
+            let mut view = crate::material_export::configuration(&input, None, Some(&context))?;
+            view["sourceRevision"] = context["sourceRevision"].clone();
+            if action == "export" {
+                crate::stockpile_serve::material_export_task(&input, &mut view, cancel)?;
+            }
+            return Ok(view);
+        }
+        if let Some(include) = input
+            .pointer("/settings/includeContainerItems")
+            .and_then(Value::as_bool)
+        {
+            input["includeContainerItems"] = include.into();
+        }
+        let (analysis, revision, _, hit) = self.analysis(&input, cancel)?;
+        // A static projection export may also offer a saved task as another
+        // source. Read its preferences without applying the projection's file
+        // revision to that independent task identity.
+        let task_context = if input["taskId"].is_string() {
+            Some(crate::stockpile_serve::material_export_context(
+                &json!({"taskId":input["taskId"]}),
+            )?)
+        } else {
+            None
+        };
+        let mut view =
+            crate::material_export::configuration(&input, Some(&analysis), task_context.as_ref())?;
+        view["sourceRevision"] = revision.clone().into();
+        view["cacheReused"] = hit.into();
+        if action == "export" {
+            if let Some(expected) = input["sourceRevision"].as_str().filter(|s| !s.is_empty()) {
+                ensure!(
+                    expected == revision,
+                    "Projection changed; reopen export settings"
+                );
+            }
+            ensure!(view["valid"].as_bool() == Some(true), "{}", view["errors"]);
+            let settings = &view["settings"];
+            let snapshot = if settings["scope"].as_str() == Some("all") {
+                (*analysis).clone()
+            } else {
+                let kind = settings["scope"].as_str().unwrap_or("all");
+                let value = if kind == "region" {
+                    settings["region"].as_str().unwrap_or_default().to_owned()
+                } else {
+                    settings["layer"].as_i64().unwrap_or(0).to_string()
+                };
+                serde_json::from_value(
+                    crate::data_scope::material_snapshot_for_scope(
+                        serde_json::to_value(&*analysis)?,
+                        &serde_json::from_value(json!({"kind":kind,"value":value}))?,
+                    )
+                    .map_err(anyhow::Error::msg)?,
+                )?
+            };
+            crate::material_export::export_snapshot(&input, snapshot, &mut view, cancel)?;
+        }
+        Ok(view)
+    }
+
     fn stockpile(&self, mut input: Value, cancel: &AtomicBool) -> Result<Value> {
         let action = input["action"].as_str().unwrap_or("open").to_owned();
         if action == "open" && input.get("taskId").is_none_or(Value::is_null) {
@@ -485,6 +580,10 @@ pub fn run() -> Result<()> {
                     if cancel.load(Ordering::Relaxed)
                         && !(result.is_ok()
                             && (request.kind == DataKind::Stockpile
+                                || request.kind == DataKind::MaterialExport
+                                    && result
+                                        .as_ref()
+                                        .is_ok_and(|value| value["outputPath"].is_string())
                                 || request.kind == DataKind::VersionConvert
                                     && request.input["outputPath"].is_string()))
                     {

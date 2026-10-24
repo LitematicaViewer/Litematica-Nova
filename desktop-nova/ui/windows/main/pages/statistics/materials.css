@@ -84,12 +84,22 @@
 .material-export-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: var(--ln-space-3); margin-bottom: var(--ln-space-3); }
 .material-export-field { min-width: 0; display: flex; flex-direction: column; gap: var(--ln-space-2); }
 .material-export-field-wide { grid-column: 1 / -1; }
+.material-export-field > label:not(.beta-material-check) { display:flex; flex-direction:column; gap:var(--ln-space-2); min-width:0; }
+.material-export-help { margin:0; color:var(--muted-foreground); font-size:var(--nova-text-sm); line-height:1.5; overflow-wrap:anywhere; }
+.material-export-field .beta-material-check { white-space:normal; align-items:flex-start; }
+.material-export-field [data-slot="checkbox"] { flex:0 0 auto; }
+.material-export-section { border:1px solid var(--border); border-radius:var(--radius); }
+.material-export-grid:last-child { margin-bottom:0; }
+.material-export-recipes { display:flex; flex-direction:column; align-items:flex-start; gap:var(--ln-space-3); margin-bottom:var(--ln-space-4); }
+.material-export-recipes h4 { margin:0; }
+.material-export-errors { padding-left:var(--ln-space-5); color:var(--destructive); overflow-wrap:anywhere; }
+.material-export-footer-spacer { flex:1 1 auto; }
 .material-export-targets { padding: var(--ln-space-3) 0 0; margin: var(--ln-space-3) 0 0; display: flex; flex-wrap: wrap; gap: var(--ln-space-3); }
 .material-export-targets > legend { padding: 0; margin-bottom: var(--ln-space-2); }
 .material-export-footer { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ln-space-3); padding-top: var(--ln-space-3); }
 .material-export-footer .subwindow-error { flex-basis: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 .material-summary-search { margin-bottom: var(--ln-space-3); }
-.stockpile-export-dialog.dialog-surface { width:min(760px, calc(100vw - 48px)); max-height:min(760px, calc(100dvh - 48px)); }
+.stockpile-export-dialog.dialog-surface { width:min(760px, calc(100vw - 48px)); height:min(760px, calc(100dvh - 48px)); max-height:calc(100dvh - 48px); }
 .stockpile-export-dialog .dialog-header, .stockpile-export-dialog .dialog-body { padding:12px 14px; }
 .stockpile-export-dialog .dialog-footer { padding:0 14px 14px; }
 .stockpile-export-choice { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; min-width:0; padding-bottom:12px; border-bottom:1px solid var(--stockpile-border); }

@@ -6,8 +6,8 @@ import ts from "typescript";
 import { JSDOM } from "jsdom";
 
 // F.9 packaged export (tasks.md F.9 / E.5 / 5.9.1.4–5.9.1.7 / 裁决 3/4/16).
-// TS owns the flat archive naming, dedup and the material-list text; Rust only writes
-// bytes. This suite pins: flat structure, always-included body, manifest params and the
+// Material text comes from the shared Rust data worker. This suite pins the
+// library packaging handoff: flat structure, always-included body, manifest params and the
 // default `txt` material list, plus completion/failure surfacing.
 const window = new JSDOM("").window;
 function compile(path, dependencies) {
@@ -24,9 +24,9 @@ const migration = compile("../src/services/libraryMigration.ts", (name) =>
 const contentModule = compile("../src/services/libraryContent.ts", (name) =>
   name === "./filePathIdentity" ? paths : name === "./libraryStore" ? {} : (() => { throw new Error(`Unexpected content dependency: ${name}`); })());
 
-function loadStore({ backend = {}, tasks = {}, stats = {} } = {}) {
+function loadStore({ backend = {}, tasks = {}, stats = {}, operations = {} } = {}) {
   let exportParams = null;
-  const appOperations = { inspectProject: async () => ({ metadata: {}, regions: [] }), editProjectMetadata: async () => ({}) };
+  const appOperations = { inspectProject: async () => ({ metadata: {}, regions: [] }), editProjectMetadata: async () => ({}), commandMaterialExport:async()=>({exportText:""}), ...operations };
   const indexClient = { queryIndex: async () => ({ entries: [], ready: true }), submitIndexBuild: async () => "task", subscribeIndexStatus: async () => () => {} };
   const taskClient = {
     submitLibraryTask: async () => "task", cancelLibraryTask: async () => true, subscribeLibraryTask: async () => () => {},
@@ -34,7 +34,7 @@ function loadStore({ backend = {}, tasks = {}, stats = {} } = {}) {
     awaitLibraryTask: async () => ({ taskId: "task", kind: "export-zip", status: "completed", summary: {}, failures: [] }),
     ...tasks,
   };
-  const statsService = { formatMaterialQuantity: (material, count) => String(count), loadStructureStats: async () => ({ materials: [] }), ...stats };
+  const statsService = { loadStructureStats: async () => ({}), ...stats };
   const backendPath = {
     readUserConfigFile: async () => { throw new Error("no disk"); }, writeUserConfigFile: async () => {},
     checkFileExists: async () => true, listLitematicFileEntriesInDirectory: async () => [],
@@ -117,21 +117,19 @@ test("扁平去重：同名条目追加序号后缀", async () => {
   assert.deepEqual(getExportParams().entries.map((item) => item.archiveName), ["同名", "同名_2"]);
 });
 
-test("可选内容：includePreview 命中存在的预览，includeMaterialList 生成 txt 材料清单", async () => {
-  const materials = [
-    { materialStatus: "item", name: "红石", id: "minecraft:redstone", totalCount: 128 },
-    { materialStatus: "block", name: "石头", id: "minecraft:stone", totalCount: 5 },
-    { materialStatus: "item", name: "钻石", id: "minecraft:diamond", totalCount: 64 },
-  ];
+test("可选内容：预览保留，材料清单原样使用常驻 Rust 导出结果", async () => {
+  const requests=[], text="红石\t128\r\n钻石\t64";
   const { store, getExportParams } = loadStore({
     backend: { checkFileExists: async (path) => path === "C:/preview/e1.png" },
-    stats: { loadStructureStats: async () => ({ materials }) },
+    operations:{commandMaterialExport:async input=>{requests.push(input);return {exportText:text};}},
   });
   const subject = state([entry("e1", { preview: { preview_image_path: "C:/preview/e1.png" } })], [replica("r1", "e1")]);
   await store.exportLibraryZip(subject, ["e1"], options({ includePreview: true, includeMaterialList: true }));
   const [only] = getExportParams().entries;
   assert.equal(only.previewPath, "C:/preview/e1.png");
-  assert.equal(only.materialListText, "红石\t128\r\n钻石\t64", "默认 txt：仅 item，行以 \\r\\n 连接");
+  assert.equal(only.materialListText, text, "前端不重新筛选、换算或拼装 Rust 材料文本");
+  assert.equal(requests.length,1);assert.equal(requests[0].sourcePath,"C:/lib/r1.litematic");
+  assert.equal(requests[0].settings.format,"copy");assert.equal(requests[0].settings.includeContainerItems,false);
 });
 
 test("未勾选预览/材料清单时不产生对应内容；预览不存在时回退为空", async () => {

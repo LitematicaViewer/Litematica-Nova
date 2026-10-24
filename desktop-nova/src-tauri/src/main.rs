@@ -39,7 +39,7 @@ use application::operations::{
     ProjectStatsInput, ReplaceBlocksInput, ReplaceBlocksResult, RuntimeHealth,
     LayerContainerData, LayerSliceData, LayerSliceMeta, ProjectionMarkerEditSummary,
     ProjectionMarkers, ReadLayerContainerInput, ReadLayerInput,
-    ExportMaterialListInput, MaterialRecipeCacheInput, MaterialDetailInput, ExportWorldInput, StockpileTaskInput, StockpileTaskCommandInput, StockpileTaskSetInput, StockpileTaskResetInput,
+    MaterialRecipeCacheInput, MaterialDetailInput, ExportWorldInput, StockpileTaskInput, StockpileTaskCommandInput, StockpileTaskSetInput, StockpileTaskResetInput,
 };
 use application::quick_preview::{QuickPreviewHost, QuickPreviewView, StartQuickPreviewInput, QuickPresentationIntent};
 use application::updater::{UpdateHost, application_update_snapshot, application_update_check,
@@ -1615,7 +1615,7 @@ async fn generate_preview_image(
 }
 
 #[tauri::command]
-async fn application_export_material_list(input: ExportMaterialListInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+async fn application_export_material_list(input: serde_json::Value, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
     let operations = operations.inner().clone();
     run_application_operation(move || operations.export_material_list(input)).await
 }

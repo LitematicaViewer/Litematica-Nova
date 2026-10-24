@@ -73,6 +73,7 @@ impl Shared {
         if request.kind != DataKind::Stockpile
             && !(request.kind == DataKind::VersionConvert
                 && request.input["outputPath"].is_string())
+            && !(request.kind == DataKind::MaterialExport && request.input["action"] == "export")
         {
             self.reads
                 .lock()

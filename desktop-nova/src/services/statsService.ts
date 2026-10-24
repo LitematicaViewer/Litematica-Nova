@@ -1,5 +1,5 @@
 import { saveDialog } from "../platform/dialogs";
-import { getProjectStats, exportMaterialList, prepareMaterialRecipes, queryMaterialRecipes, type MaterialRecipesResult, type ApplicationMaterialScope, type MaterialWebExportOptions, type StatisticsDisplayView } from "../platform/applicationOperations";
+import { getProjectStats, commandMaterialExport, prepareMaterialRecipes, queryMaterialRecipes, type MaterialExportInput, type MaterialExportView, type MaterialRecipesResult, type StatisticsDisplayView } from "../platform/applicationOperations";
 import { t, getUiLocale, getMinecraftTranslations, getI18nRevision, initI18n } from "./i18n";
 import { windowsPathKey } from "./filePathIdentity";
 
@@ -116,19 +116,15 @@ export function hasInventoryMaterialSemantics(analysis: { source_revision?: stri
   return typeof analysis?.source_revision === "string" && typeof analysis?.material_semantics === "string" && analysis.material_semantics.startsWith("minecraft-inventory-v9:");
 }
 
-function defaultExportName(filePath: string): string {
-  return `materials_${(filePath.split(/[\\/]/).pop() || "projection").replace(/\.litematic$/i, "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")}`;
-}
-
-export async function exportMaterialListWithOptions(filePath: string, options: {
-  scope: ApplicationMaterialScope; includeContainerItems: boolean; multiplier: number;
-  minecraftVersion: string; terminalRawMaterials: boolean; format: "svg" | "txt" | "html" | "csv";
-  webOptions?: MaterialWebExportOptions;
-}): Promise<boolean> {
-  const extension = options.format === "html" && options.webOptions?.mode === "multi" ? "zip" : options.format;
-  const savePath = await saveDialog({ defaultPath: `${defaultExportName(filePath)}.${extension}`, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
-  if (!savePath) return false;
+/** System-dialog/clipboard interaction only. A cancelled picker sends no write request. */
+export async function executeConfiguredMaterialExport(input: MaterialExportInput, view: MaterialExportView): Promise<MaterialExportView | null> {
+  const outputPath = view.copy ? undefined : await saveDialog({ defaultPath: view.defaultPath, filters: [{ name: view.extension.toUpperCase(), extensions: [view.extension] }] });
+  if (!view.copy && !outputPath) return null;
   await initI18n();
-  await exportMaterialList({ sourcePath: filePath, ...options, outputPath: savePath, uiLocale: getUiLocale(), languageMap: getMinecraftTranslations() });
-  return true;
+  const result = await commandMaterialExport({ ...input, action: "export", settings: view.settings, sourceRevision: view.sourceRevision ?? input.sourceRevision, outputPath: outputPath || undefined, uiLocale: getUiLocale(), languageMap: getMinecraftTranslations() });
+  if (view.copy) {
+    if (result.exportText === undefined) throw new Error(t("stockpile.exportMissing"));
+    await navigator.clipboard.writeText(result.exportText);
+  }
+  return result;
 }

@@ -19,7 +19,7 @@ import {
   type LibraryExportEntry,
   type LibraryExportZipParams,
 } from "./backend";
-import { inspectProject, editProjectMetadata } from "../platform/applicationOperations";
+import { inspectProject, editProjectMetadata, commandMaterialExport } from "../platform/applicationOperations";
 import { migrateLibraryState, needsLibraryMigration } from "./libraryMigration";
 import {
   applyContentDiverge,
@@ -33,7 +33,7 @@ import {
 } from "./libraryContent";
 import type { DirtyReplicaMove, RedundancyReport } from "./libraryContent";
 import { cancelLibraryTask as cancelTask, submitAndAwait, submitLibraryTask as submitTask, subscribeLibraryTask as subscribeTask, awaitLibraryTask } from "./libraryTasks";
-import { formatMaterialQuantity, loadStructureStats } from "./statsService";
+import { loadStructureStats } from "./statsService";
 import { minecraftVersionLabel } from "./minecraftVersions";
 import {
   queryIndex,
@@ -2202,21 +2202,18 @@ function sanitizeArchiveStem(name: string, fallback: string): string {
 
 /** Default `txt` material list, reusing `statsService` / `stats_api` (裁决 4). */
 async function buildMaterialListText(filePath: string): Promise<string> {
-  const data = await loadStructureStats(filePath, false);
-  const lines: string[] = [];
-  for (const material of data.materials) {
-    if (material.materialStatus !== "item") continue;
-    lines.push(`${material.name || material.id}\t${formatMaterialQuantity(material, material.totalCount)}`);
-  }
-  return lines.join("\r\n");
+  const result = await commandMaterialExport({action:"export",sourcePath:filePath,
+    settings:{source:"materials",format:"copy",includeContainerItems:false,individualCounts:false}});
+  if (result.exportText === undefined) throw new Error("材料导出未返回文本。");
+  return result.exportText;
 }
 
 /**
  * Packages the given active entries into a flat zip through the single serial
  * `export-zip` task (E.5, 5.9.1.4–5.9.1.7). The projection body is always
  * included (`include.projection` is constant true, 裁决 16); preview / material
- * list / manifest are optional. TS owns the per-entry projection → zip projection
- * (flat archive stem, dedup) and the material-list text; Rust only writes bytes.
+ * list / manifest are optional. The existing data worker supplies material text;
+ * this entry only passes it to the library archive operation.
  */
 export async function exportLibraryZip(state: LibraryState, entryIds: string[], options: ExportZipOptions): Promise<ExportZipResult> {
   const normalized = normalizeLibraryState(state);

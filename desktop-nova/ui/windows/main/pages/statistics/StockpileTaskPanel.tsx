@@ -32,9 +32,13 @@ type Material = Task["materials"]["materials"][number];
 type WriteQueue = { epoch: number; task: Task; pending: Map<string, Command>; running: boolean; refresh: boolean; settled?: Promise<void>; resolveSettled?: () => void };
 type Confirmation = { taskId: string; sourceRevision: string; name: string; scope: string };
 type PendingDraft = { taskId: string; projectId: string; sourceRevision: string; commands: Array<[string, Command]> };
-type ExportScope = "all" | "visible" | "remaining" | "overfilled" | "prepared";
-type ExportSource = "materials" | "task";
-type ExportFormat = "copy" | "txt" | "csv" | "json";
+export interface StockpileExportContext {
+  taskId?: string;
+  projectId?: string;
+  sourceRevision?: string;
+  query?: { offset?: number; limit?: number };
+  beforeExport?: () => Promise<void>;
+}
 
 const defaultPreferences: Preferences = {
   search: "", category: "all", filter: "all", sort: "grouped", view: "compact", individualCounts: false,
@@ -126,9 +130,9 @@ function QuantityInput({ value, label, onQuantity, onAdjust, onDraft }: {
   </div>;
 }
 
-export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: null }, includeContainerItems = false, multiplier = 1, onPendingChange, onOpenMaterials, materialExportContent }: {
+export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: null }, includeContainerItems = false, multiplier = 1, onPendingChange, onOpenMaterials, renderExportDialog }: {
   sourcePath: string; scope?: ApplicationMaterialScope; includeContainerItems?: boolean; multiplier?: number; onPendingChange?: (pending: boolean) => void;
-  onOpenMaterials?: () => void; materialExportContent?: React.ReactNode;
+  onOpenMaterials?: () => void; renderExportDialog?: (context: StockpileExportContext, onClose: () => void) => React.ReactNode;
 }) {
   const { locale, revision } = useI18n();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -151,11 +155,6 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   const [detailId, setDetailId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
-  const [exportSource, setExportSource] = useState<ExportSource>("materials");
-  const [exportFormat, setExportFormat] = useState<ExportFormat>("copy");
-  const [exportScope, setExportScope] = useState<ExportScope>("all");
-  const [exportIndividualCounts, setExportIndividualCounts] = useState(false);
-  const [exportBusy, setExportBusy] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [pageOffset, setPageOffset] = useState(0);
   const [recipeOpen, setRecipeOpen] = useState(false);
@@ -412,18 +411,6 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     void action({ action: "details", materialId: detailId }, false).finally(() => { if (expected === detailSequence.current) setDetailBusy(false); });
   }, [drawerOpen, detailId, task?.taskId, task?.sourceRevision, busy]);
 
-  const exportView = async (format: "copy" | "csv" | "txt") => {
-    if (!task) return;
-    const path = format === "copy" ? undefined : await saveDialog({ defaultPath: `${task.name}.${format}`, filters: [{ name: format.toUpperCase(), extensions: [format] }] });
-    if (format !== "copy" && !path) return;
-    const next = await commandStockpileTask({ uiLocale: getUiLocale(), languageMap: getMinecraftTranslations(), action: "exportView", taskId: task.taskId, projectId: task.projectId, sourceRevision: task.sourceRevision,
-      query: { offset: pageOffset, limit: 200 }, export: { source: exportSource, format, scope: exportScope, individualCounts: exportIndividualCounts, outputPath: path || undefined } });
-    if (format === "copy") {
-      if (next.exportText === undefined) throw new Error(t("stockpile.exportMissing"));
-      await navigator.clipboard.writeText(next.exportText);
-    }
-    setStatus(t(format === "copy" ? "stockpile.copied" : "statistics.exported"));
-  };
   const backup = async (restore: boolean) => {
     try {
       const work = queue.current;
@@ -438,18 +425,10 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
       }
     } catch (failure) { setError(String(failure)); }
   };
-  const beginExport = (source: ExportSource = "materials", format: ExportFormat = "copy") => {
-    setExportSource(source); setExportFormat(format); setExportScope("all"); setExportIndividualCounts(preferences.individualCounts); setStatus(""); setExportOpen(true);
-  };
-  const confirmExport = async () => {
-    if (exportBusy || !task || busy || exportSource === "materials" && materialExportContent) return;
-    setExportBusy(true); setError(""); setStatus("");
-    try {
-      if (exportFormat === "copy") await exportView("copy");
-      else if (exportSource === "task" && exportFormat === "json") await backup(false);
-      else if (exportFormat === "csv" || exportFormat === "txt") await exportView(exportFormat);
-    } catch (failure) { setError(String(failure)); }
-    finally { setExportBusy(false); }
+  const settleExport = async () => {
+    const work = queue.current;
+    if (work?.pending.size || work?.running) { await drain(work); if (work.pending.size || work.running) throw new Error(t("stockpile.pendingBackup")); }
+    if (quantityDrafts.current.size) throw new Error(t("stockpile.pendingBackup"));
   };
   const showDetails = (id: string) => {
     if (id !== detailId) setRecipeOpen(false);
@@ -537,7 +516,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
       </div>
       <div className="stockpile-header-actions">
         {onOpenMaterials && <Button size="sm" variant="outline" onClick={onOpenMaterials}>{t("stockpile.materialCatalog")}</Button>}
-        <Button size="sm" variant="secondary" disabled={!task && !materialExportContent} onClick={() => beginExport()}><Download size={15} />{t("stockpile.openExport")}</Button>
+        <Button size="sm" variant="secondary" disabled={!renderExportDialog || !task && !sourcePath} onClick={() => setExportOpen(true)}><Download size={15} />{t("stockpile.openExport")}</Button>
         <Button size="sm" variant="ghost" disabled={!task} onClick={() => setSettingsOpen(true)}><Settings size={16} />{t("stockpile.taskSettings")}</Button>
         <StockpileMenu label={t("stockpile.taskMore")} iconOnly>
           <DropdownMenu.Item className="stockpile-menu-item" disabled={loading || !task?.view.capabilities.backup} title={task?.view.capabilities.reason} onSelect={() => void backup(false)}>{t("stockpile.exportBackup")}</DropdownMenu.Item>
@@ -619,27 +598,8 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
       <span>{t("statistics.pageRange", { start: task.view.offset + 1, end: task.view.offset + rows.length, total: task.view.totalRows })}</span>
       <Button size="sm" disabled={busy || task.view.offset + rows.length >= task.view.totalRows} onClick={() => { const offset = task.view.offset + task.view.limit; setPageOffset(offset); void action({ action: "select", query: { offset, limit: 200 } }, false); }}>{t("statistics.nextPage")}</Button>
     </nav>}
-    {exportOpen && <Dialog title={t("stockpile.openExport")} onClose={() => setExportOpen(false)} width="lg" className="stockpile-export-dialog" busy={exportBusy}
-      footer={<><Button variant="ghost" disabled={exportBusy} onClick={() => setExportOpen(false)}>{t("editor.cancel")}</Button>
-        {!(exportSource === "materials" && materialExportContent) && <Button disabled={exportBusy || busy || !task} onClick={() => void confirmExport()}>{t(exportFormat === "copy" ? "stockpile.confirmCopy" : "stockpile.confirmExport")}</Button>}</>}>
-      <div className="stockpile-export-choice"><label>{t("stockpile.exportContent")}<Dropdown value={exportSource} options={[
-        { label: t("stockpile.exportMaterials"), value: "materials" }, { label: t("stockpile.exportTask"), value: "task" },
-      ]} onChange={value => {
-        setExportSource(value as ExportSource); setExportScope("all");
-        if (value === "materials" && exportFormat === "json" || value === "task" && exportFormat === "txt") setExportFormat("csv");
-      }} ariaLabel={t("stockpile.exportContent")} /></label></div>
-      {exportSource === "materials" && materialExportContent ? <div className="stockpile-static-export">{materialExportContent}</div> : <>
-        <p className="stockpile-export-summary">{task ? t(exportSource === "materials" ? "stockpile.exportSnapshotSummary" : "stockpile.exportTaskSummary", { name: task.name }) : t("stockpile.noTasks")}</p>
-        <div className="stockpile-export-options">
-          <label>{t("stockpile.exportFormat")}<Dropdown value={exportFormat} options={(exportSource === "materials" ? ["copy", "txt", "csv"] : ["copy", "csv", "json"]).map(format => ({ value: format, label: t(`stockpile.exportFormat.${format}`) }))} onChange={value => setExportFormat(value as ExportFormat)} ariaLabel={t("stockpile.exportFormat")} /></label>
-          {exportFormat !== "json" && <label>{t("stockpile.exportRange")}<Dropdown value={exportScope} options={(exportSource === "materials" ? ["all", "visible"] : ["all", "visible", "remaining", "prepared", "overfilled"]).map(range => ({ value: range, label: t(`stockpile.exportRange.${range}`) }))} onChange={value => setExportScope(value as ExportScope)} ariaLabel={t("stockpile.exportRange")} /></label>}
-          {(exportFormat === "copy" || exportFormat === "txt") && <label className="beta-material-check"><Checkbox checked={exportIndividualCounts} onCheckedChange={value => setExportIndividualCounts(value === true)} />{t("statistics.individual")}</label>}
-        </div>
-        {exportFormat === "json" && <p className="muted">{t("stockpile.exportBackupSummary")}</p>}
-        {status && <p role="status">{status}</p>}
-        {error && <p className="subwindow-error" role="alert">{error}</p>}
-      </>}
-    </Dialog>}
+    {exportOpen && renderExportDialog?.({ taskId: task?.taskId, projectId: task?.projectId, sourceRevision: task?.sourceRevision,
+      query: { offset: pageOffset, limit: 200 }, beforeExport: settleExport }, () => setExportOpen(false))}
     {drawerOpen && detailItem && <Dialog title={t("stockpile.materialDetails")} onClose={() => setDrawerOpen(false)} className="stockpile-material-detail-dialog" width="lg"><div className="stockpile-detail-scroll">{detailsContent}</div></Dialog>}
     {settingsOpen && task && <Dialog title={t("stockpile.settings")} onClose={() => setSettingsOpen(false)} width="lg" className="stockpile-settings-dialog">
       <div className="stockpile-settings-grid">

@@ -7,10 +7,11 @@ import { Input } from "../../../../components/ui/input";
 import { Textarea } from "../../../../components/ui/textarea";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import { Dialog } from "../../../../components/Dialog";
-import { ChevronDown, X } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  exportMaterialListWithOptions,
+  executeConfiguredMaterialExport,
+  getMinecraftTranslations,
   fetchMaterialRecipeCache,
   hasInventoryMaterialSemantics,
   getI18nRevision,
@@ -26,7 +27,8 @@ import {
   StatsData,
   queryStatisticsRules, getDataOperationStatus, type StatisticsRuleView,
 } from "../../../../../src/business/facade";
-import { StockpileTaskPanel } from "./StockpileTaskPanel";
+import { StockpileTaskPanel, type StockpileExportContext } from "./StockpileTaskPanel";
+import { commandMaterialExport, type MaterialExportView, type MaterialExportField, type MaterialExportInput } from "../../../../../src/platform/applicationOperations";
 import { MaterialCatalogDialog } from "./MaterialCatalogDialog";
 import { useSyncExternalStore } from "react";
 import {
@@ -129,157 +131,135 @@ export async function openMaterialsWithWindowBehavior(currentFile: string, _show
   await openMaterialListWindow(currentFile, "details");
 }
 
-export function MaterialListContent({ data, onClose, currentFile, standalone = false, embedded = false, viewMode = "details", onViewModeChange, exportOnly = false }: {
-  data: StatsData | null; onClose?: () => void; currentFile: string; standalone?: boolean; embedded?: boolean; viewMode?:"details"|"export"; onViewModeChange?:(mode:"details"|"export")=>void; exportOnly?: boolean;
+/** A field renders only the Rust schema; it never decides export semantics. */
+function MaterialExportControl({ field, value, busy, onChange }: {
+  field: MaterialExportField; value: unknown; busy: boolean; onChange: (value: unknown) => void;
 }) {
-  const { locale } = useI18n();
-  const languageRevision = useSyncExternalStore(subscribeI18nChanges,getI18nRevision,getI18nRevision);
-  const [selectedMode,setContentMode] = useState(viewMode);
-  const contentMode = exportOnly ? "export" : selectedMode;
-  useEffect(() => setContentMode(viewMode),[viewMode]);
-  const [multiplier, setMultiplier] = useState(1);
-  const [asItems, setAsItems] = useState(false);
-  const [taskPending, setTaskPending] = useState(false);
-  const [includeContainerItems, setIncludeContainerItems] = useState(data?.containerScan.enabled || false);
-  const [exportFormat, setExportFormat] = useState<"svg" | "txt" | "html" | "csv">("svg");
-  const [terminalRawMaterials, setTerminalRawMaterials] = useState(false);
-  const [workbook, setWorkbook] = useState("scope:all");
-  useEffect(() => {
-    setWorkbook("scope:all"); setMultiplier(1);
-    setIncludeContainerItems(data?.containerScan.enabled || false);
-  }, [currentFile]);
-  const [webMode, setWebMode] = useState<"single" | "multi">("single");
-  const [accessPassword, setAccessPassword] = useState("");
-  const [adminPassword, setAdminPassword] = useState("");
-  const [whitelist, setWhitelist] = useState("");
-  const [whitelistEnabled, setWhitelistEnabled] = useState(false);
-  const [allowGuestReadonly, setAllowGuestReadonly] = useState(false);
-  const [adminPageEnabled, setAdminPageEnabled] = useState(true);
-  const [webTargets, setWebTargets] = useState<Array<"windows-x64" | "linux-x64" | "macos-x64" | "macos-arm64">>(["windows-x64"]);
-  const [isExporting, setIsExporting] = useState(false);
-  const [isPreparingRecipes, setIsPreparingRecipes] = useState(false);
-  const [recipeStatus, setRecipeStatus] = useState<UiMessage>("");
-  const [exportStatus, setExportStatus] = useState<UiMessage>("");
-  const [error, setError] = useState<UiMessage>("");
-  const exportInFlight = useRef(false);
-  const prepareRecipesInFlight = useRef(false);
-  const recipeOperation = useRef<string | null>(null);
-  useEffect(() => {
-    setIsPreparingRecipes(false); setRecipeStatus("");
-    return () => {
-      const operationId = recipeOperation.current; recipeOperation.current = null; prepareRecipesInFlight.current = false;
-      if (operationId) void getDataOperationStatus(operationId, true).catch(() => undefined);
-    };
-  }, [currentFile]);
-  const busy = isExporting || isPreparingRecipes;
-  const selectedScope = useMemo(() => workbook.startsWith("region:") ? { kind:"region" as const, value:workbook.slice(7) }
-    : workbook.startsWith("layer:") ? { kind:"layer" as const, value:workbook.slice(6) } : { kind:"all" as const, value:null },[workbook]);
-  const contentClassName = [standalone ? "material-list-window" : embedded ? "material-list-content-embedded" : "dialog-content",
-    embedded ? "" : "subwindow-frame", "material-list-content", exportOnly ? "material-export-only" : "", contentMode === "details" ? "material-list-task-content" : "", standalone ? "subwindow-frame-full material-list-content-standalone" : ""].filter(Boolean).join(" ");
-  const options = useMemo(() => [{ label: t("statistics.all"), value: "scope:all" },
-    ...(data?.regions || []).map(region => ({ label: t("statistics.regionScope", {name:region.name}), value: `region:${region.name}` })),
-    ...(data?.layers || []).map(layer => ({ label: t("statistics.layerScope", {y:layer.world_y, layer:layer.layer}), value: `layer:${layer.layer}` }))], [data?.regions, data?.layers, locale]);
-  const handleExport = async () => {
-    if (exportInFlight.current) return;
-    exportInFlight.current = true; setIsExporting(true); setExportStatus(""); setError("");
-    try {
-      const scope = workbook.startsWith("region:") ? { kind: "region" as const, value: workbook.slice(7) }
-        : workbook.startsWith("layer:") ? { kind: "layer" as const, value: workbook.slice(6) } : { kind: "all" as const, value: null };
-      const ok = await exportMaterialListWithOptions(currentFile, {
-        scope, includeContainerItems, multiplier, minecraftVersion: "26.3", terminalRawMaterials, format: exportFormat,
-        webOptions: exportFormat === "html" ? { mode: exportOnly ? "single" : webMode,
-          accessPassword: !exportOnly && webMode === "multi" ? accessPassword : undefined,
-          adminPassword: !exportOnly && webMode === "multi" ? adminPassword : undefined,
-          whitelist: exportOnly ? [] : whitelist.split(/[\s,，;；]+/).filter(Boolean), whitelistEnabled: !exportOnly && whitelistEnabled, allowGuestReadonly: !exportOnly && allowGuestReadonly, adminPageEnabled: !exportOnly && adminPageEnabled, targets: webTargets } : undefined,
-      });
-      if (ok) { setExportStatus({key:"statistics.exported"}); setAccessPassword(""); setAdminPassword(""); }
-    } catch (error: any) { setError({ key: "statistics.exportFailed", params: {error:String(error)} }); }
-    finally { exportInFlight.current = false; setIsExporting(false); }
-  };
-  const handlePrepareRecipes = async () => {
-    if (prepareRecipesInFlight.current) return;
-    const operationId = crypto.randomUUID(); recipeOperation.current = operationId;
-    prepareRecipesInFlight.current = true; setIsPreparingRecipes(true); setRecipeStatus(""); setError("");
-    try {
-      const result = await fetchMaterialRecipeCache(currentFile, includeContainerItems, operationId);
-      if (recipeOperation.current !== operationId) return;
-      setRecipeStatus(result ? { key: "statistics.recipesBatchReady", params: {
-        total: result.summary.totalMaterials.toLocaleString(locale), withRecipes: result.summary.materialsWithRecipes.toLocaleString(locale),
-        withoutRecipes: result.summary.materialsWithoutRecipes.toLocaleString(locale), unresolved: result.summary.unresolvedMaterials.toLocaleString(locale),
-        excluded: result.summary.excludedMaterials.toLocaleString(locale),
-      } } : { key: "statistics.recipesReady" });
-    } catch (error: unknown) { if (recipeOperation.current === operationId) setError({ key: "statistics.recipesFailed", params: {error:String(error)} }); }
-    finally { if (recipeOperation.current === operationId) { recipeOperation.current = null; prepareRecipesInFlight.current = false; setIsPreparingRecipes(false); } }
-  };
-  return <div className={contentClassName}>
-    {!embedded && contentMode !== "details" && <div className="subwindow-title-bar"><h3 className="subwindow-title">{t("editor.exportMaterials")}</h3>
-      {onClose && <Button variant="ghost" size="icon" className="subwindow-close-button" aria-label={t("editor.closeWindow")} onClick={onClose}><X size={18} /></Button>}
-    </div>}
-    <div className="subwindow-body">
-      {contentMode === "details" ? <MaterialCatalogDialog currentFile={currentFile} /> : <ScrollArea className="material-export-settings">
-        <>
-        <fieldset className="material-export-section" disabled={busy}>
-          <legend>{t("statistics.materialFormat")}</legend>
-          <div className="material-export-grid">
-            <label className="material-export-field"><span>{t("statistics.scope")}</span><Dropdown value={workbook} options={options} onChange={setWorkbook} disabled={busy} ariaLabel={t("statistics.exportScope")} /></label>
-            <label className="material-export-field"><span>{t("statistics.copies")}</span><Input type="number" min={1} max={1000000} aria-label={t("statistics.copies")} value={multiplier}
-              onChange={event => setMultiplier(Math.min(1000000, Math.max(1, Math.floor(Number(event.target.value) || 1))))} /></label>
-            <label className="material-export-field"><span>{t("statistics.exportFormat")}</span><Dropdown value={exportFormat} options={[{ label: t("statistics.svgArt"), value: "svg" }, { label: "CSV", value: "csv" }, { label: "TXT", value: "txt" }, { label: t("statistics.web"), value: "html" }]}
-              onChange={value => setExportFormat(value as typeof exportFormat)} disabled={busy} ariaLabel={t("statistics.exportFormatLabel")} /></label>
-          </div>
-          <div className="beta-material-options">
-            <label className="beta-material-check"><Checkbox checked={includeContainerItems} disabled={busy} onCheckedChange={checked => setIncludeContainerItems(checked === true)} />{t("statistics.includeContainers")}</label>
-            <label className="beta-material-check"><Checkbox checked={terminalRawMaterials} disabled={busy} onCheckedChange={checked => setTerminalRawMaterials(checked === true)} />{t("statistics.terminalExport")}</label>
-          </div>
-          <p className="beta-statistics-status">{t("statistics.scopeHint")}</p>
-        </fieldset>
-        {terminalRawMaterials && <section className="material-export-section">
-          <h4>{t("statistics.terminalRecipes")}</h4><p className="beta-statistics-status">{t("statistics.recipesHint")}</p>
-          <Button title={t("statistics.prepareRecipesHint")} onClick={handlePrepareRecipes} disabled={busy}>{isPreparingRecipes ? t("statistics.preparingRecipes") : t("statistics.prepareRecipes")}</Button>
-          {recipeStatus && <p role="status">{localizeMessage(recipeStatus)}</p>}
-        </section>}
-        {exportFormat === "html" && !exportOnly && <fieldset className="material-export-section" disabled={busy}>
-          <legend>{t("statistics.webOptions")}</legend>
-          <label className="material-export-field"><span>{t("statistics.webMode")}</span><Dropdown value={webMode} options={[{ label: t("statistics.webSingle"), value: "single" }, { label: t("statistics.webMulti"), value: "multi" }]}
-            onChange={value => setWebMode(value as typeof webMode)} disabled={busy} ariaLabel={t("statistics.webUsage")} /></label>
-          {webMode === "multi" && <>
-            <div className="material-export-grid">
-              <label className="material-export-field"><span>{t("statistics.accessPassword")}</span><Input type="password" autoComplete="new-password" aria-label={t("statistics.webAccessPassword")} value={accessPassword} onChange={event => setAccessPassword(event.target.value)} /></label>
-              <label className="material-export-field"><span>{t("statistics.adminPassword")}</span><Input type="password" autoComplete="new-password" aria-label={t("statistics.webAdminPassword")} value={adminPassword} onChange={event => setAdminPassword(event.target.value)} /></label>
-              <label className="material-export-field material-export-field-wide"><span>{t("statistics.whitelist")}</span><Input aria-label={t("statistics.whitelist")} placeholder={t("statistics.whitelistHint")} value={whitelist} onChange={event => setWhitelist(event.target.value)} /></label>
-            </div>
-            <div className="beta-material-options">
-              <label className="beta-material-check"><Checkbox checked={whitelistEnabled} disabled={busy} onCheckedChange={checked => setWhitelistEnabled(checked === true)} />{t("statistics.enableWhitelist")}</label>
-              <label className="beta-material-check"><Checkbox checked={allowGuestReadonly} disabled={busy} onCheckedChange={checked => setAllowGuestReadonly(checked === true)} />{t("statistics.guestReadonly")}</label>
-              <label className="beta-material-check"><Checkbox checked={adminPageEnabled} disabled={busy} onCheckedChange={checked => setAdminPageEnabled(checked === true)} />{t("statistics.enableAdmin")}</label>
-            </div>
-            <fieldset className="material-export-targets"><legend>{t("statistics.targets")}</legend>
-              {([["windows-x64", "Windows x64"], ["linux-x64", "Linux x64"], ["macos-x64", "macOS x64"], ["macos-arm64", "macOS ARM64"]] as const).map(([value, label]) =>
-                <label className="beta-material-check" key={value}><Checkbox checked={webTargets.includes(value)} disabled={busy}
-                  onCheckedChange={checked => setWebTargets(previous => checked === true ? [...previous.filter(target => target !== value), value] : previous.filter(target => target !== value))} />{label}</label>)}
-            </fieldset>
-          </>}
-        </fieldset>}
-        </>
-      </ScrollArea>}
-      <div className="material-export-footer">
-        {!exportOnly && <Button variant="secondary" disabled={busy || taskPending} onClick={() => { const mode = contentMode === "details" ? "export" : "details"; setContentMode(mode); onViewModeChange?.(mode); }}>{contentMode === "details" ? t("statistics.openExport") : t("statistics.returnDetails")}</Button>}
-        {contentMode === "export" && <Button onClick={handleExport} disabled={busy || !currentFile}>{isExporting ? t("statistics.exporting") : t("editor.exportMaterials")}</Button>}
-        {exportStatus && <span role="status">{localizeMessage(exportStatus)}</span>}
-      {error && <pre className="subwindow-error" role="alert">{localizeMessage(error)}</pre>}
-      </div>
-    </div>
+  const disabled = busy || !field.enabled;
+  const label = t(field.labelKey);
+  const id = `material-export-${field.key}`;
+  const options = (field.options || []).map(option => ({ value: option.value, label: option.labelKey ? t(option.labelKey) : option.label || option.value }));
+  const helpId = `${id}-help`;
+  const help = field.reasonKey ? t(field.reasonKey) : field.descriptionKey ? t(field.descriptionKey) : "";
+  const control = field.type === "boolean" ? <label className="beta-material-check" htmlFor={id}><Checkbox id={id} checked={value === true} disabled={disabled} aria-describedby={help ? helpId : undefined} onCheckedChange={checked => onChange(checked === true)} />{label}</label>
+    : field.type === "select" ? <><span>{label}</span><Dropdown id={id} ariaLabel={label} value={String(value ?? "")} options={options} disabled={disabled} onChange={onChange} /></>
+    : field.type === "multiselect" ? <fieldset className="material-export-targets" disabled={disabled} aria-describedby={help ? helpId : undefined}><legend>{label}</legend>{options.map(option => <label key={option.value} className="beta-material-check"><Checkbox checked={Array.isArray(value) && value.includes(option.value)} disabled={disabled}
+      onCheckedChange={checked => onChange(checked === true ? [...(Array.isArray(value) ? value : []).filter(entry => entry !== option.value), option.value] : (Array.isArray(value) ? value : []).filter(entry => entry !== option.value))} />{option.label}</label>)}</fieldset>
+    : field.type === "multiline" ? <><span>{label}</span><Textarea id={id} rows={3} aria-label={label} aria-describedby={help ? helpId : undefined} value={String(value ?? "")} disabled={disabled} onChange={event => onChange(event.target.value)} /></>
+    : <><span>{label}</span><Input id={id} aria-label={label} aria-describedby={help ? helpId : undefined} type={field.type === "password" ? "password" : field.type === "number" ? "number" : "text"}
+      {...(field.type === "password" ? { autoComplete: "new-password" } : {})} min={field.min} max={field.max} step={field.step} value={String(value ?? "")} disabled={disabled}
+      onChange={event => onChange(field.type === "number" && event.target.value !== "" ? Number(event.target.value) : event.target.value)} /></>;
+  return <div className={`material-export-field${field.type === "multiselect" || field.type === "multiline" ? " material-export-field-wide" : ""}`}>
+    {field.type === "boolean" || field.type === "multiselect" ? control : <label htmlFor={id}>{control}</label>}
+    {help && <p id={helpId} className="material-export-help">{help}</p>}
   </div>;
 }
 
-export function MaterialsDialog({ data, onClose, currentFile, viewMode = "details" }: { data: StatsData | null; onClose: () => void; currentFile: string; viewMode?:"details"|"export" }) {
+export function MaterialExportDialog({ sourcePath, taskId, projectId, sourceRevision, query, onClose, beforeExport }: StockpileExportContext & { sourcePath: string; onClose: () => void }) {
   const { locale } = useI18n();
-  const [mode,setMode] = useState(viewMode);
-  return (
-    <Dialog title={mode === "details" ? t("editor.materialDetails") : t("editor.exportMaterials")} onClose={onClose} width="lg" className="materials-dialog">
-      <MaterialListContent data={data} currentFile={currentFile} embedded viewMode={mode} onViewModeChange={setMode} />
-    </Dialog>
-  );
+  const [view, setView] = useState<MaterialExportView | null>(null);
+  const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const draftRef = useRef<Record<string, unknown>>({});
+  const [configuring, setConfiguring] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+  const [recipeBusy, setRecipeBusy] = useState(false);
+  const recipeOperation = useRef<string | null>(null);
+  const sequence = useRef(0);
+  const mounted = useRef(true);
+  const inFlight = useRef(false);
+  const context = useRef<MaterialExportInput>({ action: "configure" });
+  context.current = { action: "configure", sourcePath: sourcePath || undefined, taskId, projectId, sourceRevision, query, uiLocale: locale, languageMap: getMinecraftTranslations() };
+  const configure = async (settings?: Record<string, unknown>, reset = false): Promise<MaterialExportView | null> => {
+    const expected = ++sequence.current;
+    setConfiguring(true); setError("");
+    try {
+      const next = await commandMaterialExport({ ...context.current, action: reset ? "reset" : "configure", settings });
+      if (!mounted.current || expected !== sequence.current) return null;
+      draftRef.current = next.settings; setDraft(next.settings); setView(next);
+      return next;
+    } catch (failure) { if (mounted.current && expected === sequence.current) setError(String(failure)); return null; }
+    finally { if (mounted.current && expected === sequence.current) setConfiguring(false); }
+  };
+  useEffect(() => {
+    mounted.current = true; draftRef.current = {}; setDraft({}); setView(null); setStatus("");
+    void configure();
+    return () => {
+      mounted.current = false; sequence.current += 1;
+      if (recipeOperation.current) void getDataOperationStatus(recipeOperation.current, true).catch(() => undefined);
+      recipeOperation.current = null;
+    };
+  }, [sourcePath, taskId, locale]);
+  const change = (key: string, value: unknown) => {
+    const next = { ...draftRef.current, [key]: value }; draftRef.current = next; setDraft(next); setStatus("");
+    void configure(next);
+  };
+  const confirm = async () => {
+    if (inFlight.current || configuring || !view?.valid || error) return;
+    const captured = { ...context.current };
+    const settings = { ...draftRef.current };
+    const sameSource = () => mounted.current && captured.sourcePath === context.current.sourcePath && captured.taskId === context.current.taskId && captured.sourceRevision === context.current.sourceRevision;
+    inFlight.current = true; setBusy(true); setError(""); setStatus("");
+    try {
+      await beforeExport?.();
+      if (!sameSource()) return;
+      const current = await configure(settings);
+      if (!current?.valid || !sameSource()) return;
+      const result = await executeConfiguredMaterialExport(captured, current);
+      if (result && mounted.current) {
+        setStatus(t(current.copy ? "stockpile.copied" : "statistics.exported"));
+        await configure({ ...draftRef.current, accessPassword: "", adminPassword: "" });
+      }
+    } catch (failure) { if (mounted.current) setError(String(failure)); }
+    finally { inFlight.current = false; if (mounted.current) setBusy(false); }
+  };
+  const prepareRecipes = async () => {
+    if (recipeOperation.current || !sourcePath) return;
+    const operationId = crypto.randomUUID(); recipeOperation.current = operationId; setRecipeBusy(true); setStatus(""); setError("");
+    try {
+      const result = await fetchMaterialRecipeCache(sourcePath, draftRef.current.includeContainerItems === true, operationId);
+      if (!mounted.current || recipeOperation.current !== operationId) return;
+      setStatus(result ? t("statistics.recipesBatchReady", {
+        total: result.summary.totalMaterials.toLocaleString(locale), withRecipes: result.summary.materialsWithRecipes.toLocaleString(locale),
+        withoutRecipes: result.summary.materialsWithoutRecipes.toLocaleString(locale), unresolved: result.summary.unresolvedMaterials.toLocaleString(locale), excluded: result.summary.excludedMaterials.toLocaleString(locale),
+      }) : t("stats.export.recipesReady"));
+      await configure(draftRef.current);
+    } catch (failure) { if (mounted.current) setError(String(failure)); }
+    finally { if (recipeOperation.current === operationId) { recipeOperation.current = null; if (mounted.current) setRecipeBusy(false); } }
+  };
+  const visibleFields = view?.fields.filter(field => field.visible) || [];
+  const groups = [...new Set(visibleFields.map(field => field.group))];
+  return <Dialog title={t("stockpile.openExport")} onClose={onClose} width="lg" className="stockpile-export-dialog" busy={busy || recipeBusy}
+    footer={<><Button variant="ghost" disabled={busy || recipeBusy || configuring} onClick={() => { setStatus(""); void configure(undefined, true); }}>{t("stats.export.reset")}</Button>
+      <span className="material-export-footer-spacer" />
+      <Button variant="ghost" disabled={busy || recipeBusy} onClick={onClose}>{t("editor.cancel")}</Button>
+      <Button disabled={busy || recipeBusy || configuring || !view?.valid || !!error} onClick={() => void confirm()}>{busy ? t("statistics.exporting") : t("stockpile.confirmExport")}</Button></>}>
+    {groups.map(group => <fieldset key={group} className={`material-export-section material-export-group-${group}`} disabled={busy || recipeBusy}>
+      <legend>{t(`stats.export.group.${group}`)}</legend><div className="material-export-grid">{visibleFields.filter(field => field.group === group).map(field =>
+        <MaterialExportControl key={field.key} field={field} value={Object.prototype.hasOwnProperty.call(draft, field.key) ? draft[field.key] : field.value} busy={busy || recipeBusy} onChange={value => change(field.key, value)} />)}</div>
+      {visibleFields.some(field => field.group === group && field.key === "terminalRawMaterials") && <section className="material-export-recipes"><h4>{t("statistics.terminalRecipes")}</h4><p className="material-export-help">{t("stats.export.recipesHint")}</p>
+        <Button variant="secondary" title={t("statistics.prepareRecipesHint")} disabled={busy || recipeBusy || !sourcePath} onClick={() => void prepareRecipes()}>{recipeBusy ? t("statistics.preparingRecipes") : t("stats.export.prepareRecipes")}</Button>
+      </section>}
+    </fieldset>)}
+    {configuring && <p className="material-export-help" role="status">{t("stats.export.configuring")}</p>}
+    {!!view?.errors.length && <ul className="material-export-errors" role="alert">{view.errors.map((message, index) => <li key={index}>{localizeMessage(message)}</li>)}</ul>}
+    {error && <p className="subwindow-error" role="alert">{localizeMessage(error)}</p>}
+    {status && <p role="status">{status}</p>}
+  </Dialog>;
+}
+
+/** Kept for existing callers; lookup stays read-only and export uses one schema. */
+export function MaterialListContent({ onClose, currentFile, standalone = false, viewMode = "details", exportOnly = false }: {
+  data: StatsData | null; onClose?: () => void; currentFile: string; standalone?: boolean; embedded?: boolean; viewMode?: "details" | "export"; onViewModeChange?: (mode: "details" | "export") => void; exportOnly?: boolean;
+}) {
+  if (viewMode === "export" || exportOnly) return <MaterialExportDialog sourcePath={currentFile} onClose={onClose || (() => undefined)} />;
+  return <div className={standalone ? "material-list-window" : "material-catalog-content"}><MaterialCatalogDialog currentFile={currentFile} /></div>;
+}
+
+export function MaterialsDialog({ currentFile, onClose, viewMode = "details" }: { data: StatsData | null; onClose: () => void; currentFile: string; viewMode?: "details" | "export" }) {
+  if (viewMode === "export") return <MaterialExportDialog sourcePath={currentFile} onClose={onClose} />;
+  return <Dialog title={t("editor.materialDetails")} onClose={onClose} width="lg" className="materials-dialog"><MaterialCatalogDialog currentFile={currentFile} /></Dialog>;
 }
 
 export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
@@ -446,7 +426,7 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
     </section>
     <section className="statistics-stockpile-workspace" aria-label={t("editor.materialDetails")}>
       <StockpileTaskPanel sourcePath={currentFile || ""} onOpenMaterials={() => { void openMaterialListWindow(currentFile).catch(failure => setError(String(failure))); }}
-        materialExportContent={data && currentFile ? <MaterialListContent data={data} currentFile={currentFile} embedded viewMode="export" exportOnly /> : undefined} />
+        renderExportDialog={(context, onClose) => <MaterialExportDialog {...context} sourcePath={currentFile || ""} onClose={onClose} />} />
     </section>
     {showEnumerator && <EnumeratorDialog currentFile={currentFile} theme={theme} runtimeCollection={runtimeCollection} onClose={() => setShowEnumerator(false)} />}
     {showEnumeratorInfoEditor && <EnumeratorInfoEditorDialog rules={enumeratorRules} sourcePath={currentFile} onClose={() => setShowEnumeratorInfoEditor(false)} onSave={saveEnumeratorRules} />}

@@ -561,6 +561,68 @@ pub fn desktop_task_from_value(value: Value) -> Result<DesktopTaskWorkspace> {
     if let Some(path)=output {if let Some(backup)=workspace.backup.as_ref() {write_desktop_output(&path,&serde_json::to_vec_pretty(backup)?)?;}}
     Ok(workspace)
 }
+
+/// Export configuration and export reads do not select, modify, or create a
+/// task. In particular, cancelling a dialog must not update SQLite timestamps.
+fn desktop_export_record(root:&Path,input:&Value)->Result<(Connection,DesktopTaskRecord)> {
+    let id=input["taskId"].as_str().context("Select a material task to export")?;
+    let path=desktop_task_path(root,id)?;
+    let conn=Connection::open_with_flags(path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    let record=desktop_task_record_conn(&conn)?.context("Material task no longer exists")?;
+    if let Some(project)=input["projectId"].as_str().filter(|s|!s.is_empty()) {
+        if project!=record.project_id {bail!("The selected task belongs to a different projection");}
+    }
+    if let Some(revision)=input["sourceRevision"].as_str().filter(|s|!s.is_empty()) {
+        if revision!=record.source_revision {bail!("Material task changed; reopen export settings");}
+    }
+    Ok((conn,record))
+}
+
+pub(crate) fn material_export_context(input:&Value)->Result<Value> {
+    let (_conn,record)=desktop_export_record(&runtime_paths::stockpile_sessions_root()?,input)?;
+    Ok(json!({"taskId":record.task_id,"sourcePath":record.source_path,"minecraftVersion":record.minecraft_version,
+        "sourceRevision":record.source_revision,"individualCounts":record.preferences.individual_counts}))
+}
+
+pub(crate) fn material_export_task(input:&Value,view:&mut Value,cancel:&std::sync::atomic::AtomicBool)->Result<()> {
+    material_export_task_at(&runtime_paths::stockpile_sessions_root()?,input,view,cancel)
+}
+fn material_export_task_at(root:&Path,input:&Value,view:&mut Value,cancel:&std::sync::atomic::AtomicBool)->Result<()> {
+    if view["valid"].as_bool()!=Some(true){bail!("{}",view["errors"]);}
+    let export:crate::material_export::ExportSettings=serde_json::from_value(view["settings"].clone())?;
+    let (conn,initial)=desktop_export_record(root,input)?;
+    // A read transaction binds task requirements, progress, notes and unit
+    // overrides to one consistent SQLite snapshot even with another instance.
+    let tx=conn.unchecked_transaction()?;
+    let record=desktop_task_record_conn(&tx)?.context("Material task no longer exists")?;
+    if initial.source_revision!=record.source_revision {bail!("Material task changed; reopen export settings");}
+    let mut materials=desktop_task_materials(&record)?;
+    let state=desktop_task_state(&tx,&record.task_id,&record.source_revision,&materials,None)?;
+    let overrides=load_stack_overrides(&tx)?;
+    for item in &mut materials.materials {if let Some(&size)=overrides.get(&item.namespace_id){item.stack_size=size;}}
+    desktop_task_update_units(&mut materials)?;
+    let text=if export.format=="json" {
+        serde_json::to_string_pretty(&desktop_task_backup(&tx,&record,&state)?)?
+    } else {
+        let mut query:DesktopQueryRequest=serde_json::from_value(input.get("query").filter(|v|!v.is_null()).cloned().unwrap_or(json!({})))?;
+        query.ui_locale=input["uiLocale"].as_str().map(str::to_owned);
+        query.language_map=Some(serde_json::from_value(input.get("languageMap").filter(|v|!v.is_null()).cloned().unwrap_or(json!({})))?);
+        desktop_export_view(&record,&materials,&state,Some(&query),&DesktopViewExport {source:if export.source=="taskMaterials"{"materials"}else{"task"}.into(),format:export.format.clone(),scope:export.scope.clone(),individual_counts:Some(export.individual_counts),output_path:None})?
+    };
+    tx.commit()?;
+    if export.format=="copy" {
+        anyhow::ensure!(!cancel.load(std::sync::atomic::Ordering::Relaxed),"Data operation cancelled");
+        view["exportText"]=text.into();
+    } else {
+        let output=Path::new(input["outputPath"].as_str().context("Choose an output path")?);
+        crate::material_export::atomic_output(output,&record.source_path,cancel,|temporary|Ok(fs::write(temporary,text.as_bytes())?))?;
+        view["outputPath"]=output.display().to_string().into();
+    }
+    view["summary"]=json!({"taskId":record.task_id,"sourceRevision":record.source_revision,"format":export.format,"scope":export.scope,"materialCount":materials.materials.len()});
+    Ok(())
+}
+
 fn write_desktop_output(path:&Path,bytes:&[u8])->Result<()> {
     let temporary=path.with_extension(format!("{}.tmp",new_desktop_task_id()));
     fs::write(&temporary,bytes)?;
@@ -4630,6 +4692,30 @@ mod tests {
         let response=desktop_task_command(&root,desktop_test_request(json!({"action":"exportView","taskId":record.task_id,
             "export":{"source":"task","format":"csv","scope":"prepared","individualCounts":true}}))).unwrap();
         let text=response.export_text.unwrap();assert!(text.contains("north, \"\"wall\"\""));assert!(text.contains("minecraft:stone"));assert!(!text.contains("minecraft:diamond"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn material_export_task_is_readonly_isolated_and_preserves_complete_backup() {
+        let root=temp_db("material_export_configuration").with_extension("tasks");
+        let first=saved_desktop_fixture(&root,"First");let second=saved_desktop_fixture(&root,"Second");
+        desktop_task_command(&root,desktop_test_request(json!({"action":"mutate","taskId":first.task_id,"sourceRevision":"r1","mutation":{"materialId":"minecraft:stone","quantity":7,"publicNote":"north, wall","storageLocation":"box 2","stackSize":16}}))).unwrap();
+        let path=desktop_task_path(&root,&first.task_id).unwrap();
+        let conn=Connection::open(&path).unwrap();let last_opened=meta_value(&conn,"desktop_last_opened_at").unwrap();let record_revision=meta_value(&conn,"desktop_record_revision").unwrap();drop(conn);
+        let input=json!({"taskId":first.task_id,"sourceRevision":"r1","outputPath":root.join("first.csv")});
+        let mut settings=crate::material_export::ExportSettings::default();settings.source="task".into();settings.format="csv".into();settings.individual_counts=true;
+        let mut view=json!({"valid":true,"settings":settings});
+        material_export_task_at(&root,&input,&mut view,&std::sync::atomic::AtomicBool::new(false)).unwrap();
+        let text=fs::read_to_string(root.join("first.csv")).unwrap();assert!(text.contains("north, wall"));assert!(text.contains("box 2"));assert!(text.contains("Prepared"));
+        view["settings"]["format"]="json".into();let mut backup_input=input.clone();backup_input["outputPath"]=root.join("first.json").display().to_string().into();
+        material_export_task_at(&root,&backup_input,&mut view,&std::sync::atomic::AtomicBool::new(false)).unwrap();
+        let backup:DesktopTaskBackup=serde_json::from_slice(&fs::read(root.join("first.json")).unwrap()).unwrap();validate_desktop_backup(&backup).unwrap();
+        assert_eq!(backup.task.task_id,first.task_id);let stone=backup.items.iter().find(|i|i.material_id=="minecraft:stone").unwrap();assert_eq!(stone.quantity,7);assert_eq!(stone.public_note.as_deref(),Some("north, wall"));assert_eq!(stone.storage_location.as_deref(),Some("box 2"));assert_eq!(stone.stack_size,Some(16));
+        let mut other=input.clone();other["taskId"]=second.task_id.clone().into();other["outputPath"]=root.join("second.txt").display().to_string().into();view["settings"]["format"]="txt".into();
+        material_export_task_at(&root,&other,&mut view,&std::sync::atomic::AtomicBool::new(false)).unwrap();assert!(!fs::read_to_string(root.join("second.txt")).unwrap().contains("north, wall"));
+        let mut wrong=input.clone();wrong["projectId"]="different-projection".into();assert!(desktop_export_record(&root,&wrong).is_err());
+        let mut cancelled=input.clone();cancelled["outputPath"]=root.join("cancelled.txt").display().to_string().into();assert!(material_export_task_at(&root,&cancelled,&mut view,&std::sync::atomic::AtomicBool::new(true)).is_err());assert!(!root.join("cancelled.txt").exists());
+        let conn=Connection::open(&path).unwrap();assert_eq!(meta_value(&conn,"desktop_last_opened_at").unwrap(),last_opened);assert_eq!(meta_value(&conn,"desktop_record_revision").unwrap(),record_revision);drop(conn);
         fs::remove_dir_all(root).unwrap();
     }
 

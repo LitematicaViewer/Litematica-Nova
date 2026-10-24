@@ -254,27 +254,21 @@ test('detail selection follows the visible stable identity, never an old filtere
   assert.equal(stockpileDetailSelection([],'potion#B'),null);
 });
 
-test('unified export opens with zero I/O and only confirmation dispatches the chosen real export', async () => {
-  const writes = [], state = {};
-  const context = { exports: {}, preferences: { individualCounts: true }, task: task(), busy: false,
-    exportBusy: false, exportSource: 'materials', exportFormat: 'copy', exportScope: 'remaining', materialExportContent: undefined,
-    setExportSource: value => { state.source = value; }, setExportFormat: value => { state.format = value; },
-    setExportScope: value => { state.scope = value; }, setExportIndividualCounts: value => { state.individual = value; },
-    setStatus() {}, setExportOpen: value => { state.open = value; }, setExportBusy() {}, setError() {},
-    exportView: (...input) => writes.push(['view', ...input]),
-    backup: restore => writes.push(['backup', restore]),
-  };
-  vm.runInNewContext(transpile(`const ${declarations.get('beginExport')}; const ${declarations.get('confirmExport')}; globalThis.api={beginExport,confirmExport};`), context);
-  context.api.beginExport();
-  assert.deepEqual(state, { source: 'materials', format: 'copy', scope: 'all', individual: true, open: true });
-  assert.equal(writes.length, 0, 'opening configuration must not copy, save or mutate a task');
-  await context.api.confirmExport();
-  assert.deepEqual(writes.pop(), ['view', 'copy']);
-  context.exportSource = 'task'; context.exportFormat = 'csv';
-  await context.api.confirmExport(); assert.deepEqual(writes.pop(), ['view', 'csv']);
-  context.exportFormat = 'json'; await context.api.confirmExport(); assert.deepEqual(writes.pop(), ['backup', false]);
-  context.exportSource = 'materials'; context.materialExportContent = {};
-  await context.api.confirmExport(); assert.equal(writes.length, 0, 'static export keeps its own explicit final confirmation');
+test('unified export opens without I/O and hands task identity to the Rust-schema dialog', async () => {
+  const source = fs.readFileSync(new URL('../ui/windows/main/pages/statistics/StatisticsPage.tsx', import.meta.url), 'utf8');
+  assert.match(uiSource, /onClick=\{\(\) => setExportOpen\(true\)\}/);
+  assert.match(uiSource, /renderExportDialog\?\.\(\{ taskId: task\?\.taskId, projectId: task\?\.projectId, sourceRevision: task\?\.sourceRevision/);
+  assert.match(uiSource, /beforeExport: settleExport/);
+  assert.doesNotMatch(uiSource, /const exportView =|const confirmExport =|materialExportContent/);
+  assert.match(source, /view\?\.fields\.filter\(field => field\.visible\)/);
+  assert.match(source, /busy \|\| !field\.enabled/);
+  assert.match(source, /executeConfiguredMaterialExport\(captured, current\)/);
+  assert.match(source, /await beforeExport\?\.\(\)/);
+  const writes = [], context = { exports: {}, queue: { current: { pending: new Map(), running: false } }, quantityDrafts: { current: new Map() }, drain: async () => writes.push('drain'), t: key => key };
+  vm.runInNewContext(transpile(`const ${declarations.get('settleExport')}; globalThis.settleExport=settleExport;`), context);
+  await context.settleExport(); assert.deepEqual(writes, []);
+  context.quantityDrafts.current.set('stone', {});
+  await assert.rejects(context.settleExport(), /stockpile.pendingBackup/);
 });
 
 test('statistics default renders the existing task workspace even without a source, and retains genuine overview fields', () => {
@@ -283,7 +277,7 @@ test('statistics default renders the existing task workspace even without a sour
   assert.match(page, /<StockpileTaskPanel sourcePath=\{currentFile \|\| ""\}/);
   assert.doesNotMatch(page, /openMaterialsWithWindowBehavior|<MaterialTable|<MaterialsDialog|beta-statistics-panes/);
   assert.doesNotMatch(page, /<MaterialCatalogDialog/); assert.match(page, /openMaterialListWindow\(currentFile\)/);
-  assert.match(page, /materialExportContent=\{data && currentFile \? <MaterialListContent[^>]+exportOnly/);
+  assert.match(page, /renderExportDialog=\{\(context, onClose\) => <MaterialExportDialog/);
   for (const field of ['totalNonAirBlocks', 'enclosingSize.x', 'density', 'materialCount', 'entityCount', 'regionCount', 'redstoneRatio', 'fluidRatio']) {
     assert(page.includes(`data.${field}`), `Genuine statistics field ${field} remains visible`);
   }

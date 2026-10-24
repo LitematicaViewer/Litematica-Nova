@@ -7,14 +7,14 @@ import ts from "typescript";
 const catalog = JSON.parse(readFileSync(new URL("../../pack-in/materials/minecraft-26.3.json", import.meta.url), "utf8"));
 const iconManifest = JSON.parse(readFileSync(new URL("../../pack-in/materials/item-icons-26.3.json", import.meta.url), "utf8"));
 const chinese = JSON.parse(readFileSync(new URL("../../pack-in/lang/zh_cn.json", import.meta.url), "utf8"));
-function load(file, mocks) {
+function load(file, mocks, globals = {}) {
   const source = readFileSync(new URL(file, import.meta.url), "utf8");
   const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } });
   const exports = {};
   vm.runInNewContext(outputText, { exports, require: id => {
     if (!(id in mocks)) throw new Error(`unexpected dependency ${id}`);
     return mocks[id];
-  }, crypto:{randomUUID:()=>"test-stats-operation"}, performance, console, Map, Number });
+  }, crypto:{randomUUID:()=>"test-stats-operation"}, performance, console, Map, Number, ...globals });
   return exports;
 }
 
@@ -29,6 +29,24 @@ test("catalog pins actual 26.3 registries, aliases, Chinese names and non-64 sta
   assert.equal(catalog.items["minecraft:conduit"].stack_size, 64);
 });
 
+test("export picker cancellation performs no write; clipboard uses the exact Rust result", async () => {
+  const writes=[], clipboard=[]; let dialogs=0;
+  const service=load("../src/services/statsService.ts", {
+    "../platform/dialogs":{saveDialog:async()=>{dialogs++;return null;}},
+    "../platform/applicationOperations":{commandMaterialExport:async input=>{writes.push(input);return {exportText:"Rust\t64\n",settings:input.settings};}},
+    "./filePathIdentity":{windowsPathKey:value=>value},
+    "./i18n":{initI18n:async()=>{},getUiLocale:()=>"en-US",getMinecraftTranslations:()=>({}),t:key=>key},
+  }, {navigator:{clipboard:{writeText:async text=>clipboard.push(text)}}});
+  const input={action:"configure",sourcePath:"projection.litematic",taskId:"task-A",sourceRevision:"source-A"};
+  const view={settings:{source:"task",format:"csv"},defaultPath:"task-A.csv",extension:"csv",copy:false};
+  assert.equal(await service.executeConfiguredMaterialExport(input,view),null);
+  assert.equal(dialogs,1);assert.equal(writes.length,0);assert.equal(clipboard.length,0);
+  const result=await service.executeConfiguredMaterialExport(input,{...view,copy:true,extension:"txt",settings:{source:"task",format:"copy"}});
+  assert.equal(dialogs,1);assert.equal(writes.length,1);assert.equal(writes[0].taskId,"task-A");
+  assert.equal(writes[0].sourceRevision,"source-A");assert.equal(writes[0].outputPath,undefined);
+  assert.deepEqual(clipboard,["Rust\t64\n"]);assert.equal(result.exportText,clipboard[0]);
+});
+
 test("statistics service accepts Rust views unchanged and sends export settings instead of assembling files", async () => {
   const requests=[], exports=[], recipeRequests=[];
   const view={totalNonAirBlocks:8,materialCount:2,density:.5};
@@ -36,7 +54,7 @@ test("statistics service accepts Rust views unchanged and sends export settings 
     "../platform/dialogs": { saveDialog: async () => "materials.csv" },
     "../platform/applicationOperations": {
       getProjectStats: async input => {requests.push(input);return {source_revision:"source-A",statisticsView:view};},
-      exportMaterialList: async input => {exports.push(input);return {output:input.outputPath};},
+      commandMaterialExport: async input => {exports.push(input);return {outputPath:input.outputPath};},
       queryMaterialRecipes: async (input, operationId) => { recipeRequests.push({input,operationId}); return {sourceRevision:"source-A",summary:{totalMaterials:3,materialsWithRecipes:1,materialsWithoutRecipes:2,unresolvedMaterials:1,excludedMaterials:0}}; },
       prepareMaterialRecipes:async()=>({status:"available",has_recipes:true}),
     },
@@ -47,15 +65,19 @@ test("statistics service accepts Rust views unchanged and sends export settings 
   assert.equal(result,view);assert.equal(requests[0].includeContainerItems,true);
   assert.deepEqual(Object.keys(requests[0].languageMap),["item.minecraft.potion"]);
   assert.throws(()=>service.mapStructureStats({material_items:[]}),/displayDataMissing/);
-  await service.exportMaterialListWithOptions("projection.litematic",{scope:{kind:"all",value:null},includeContainerItems:true,multiplier:2,minecraftVersion:"26.3",terminalRawMaterials:false,format:"csv"});
-  assert.equal(exports.length,1);assert.equal(exports[0].multiplier,2);assert.equal(exports[0].outputPath,"materials.csv");
+  await service.executeConfiguredMaterialExport({action:"configure",sourcePath:"projection.litematic"}, {
+    settings:{scope:"all",includeContainerItems:true,multiplier:2,terminalRawMaterials:false,format:"csv"},
+    defaultPath:"materials.csv",extension:"csv",copy:false,
+  });
+  assert.equal(exports.length,1);assert.equal(exports[0].settings.multiplier,2);assert.equal(exports[0].outputPath,"materials.csv");
+  assert.equal(exports[0].action,"export");assert.equal(exports[0].sourcePath,"projection.litematic");
   const recipes=await service.fetchMaterialRecipeCache("projection.litematic",true,"recipes-batch-operation");
   assert.equal(recipeRequests.length,1);assert.equal(recipeRequests[0].operationId,"recipes-batch-operation");
   assert.equal(recipeRequests[0].input.sourcePath,"projection.litematic");assert.equal(recipeRequests[0].input.includeContainerItems,true);
   assert.equal(recipes.summary.materialsWithRecipes,1);assert.equal(recipes.summary.materialsWithoutRecipes,2);assert.equal(recipes.summary.unresolvedMaterials,1);
   assert.equal(await service.fetchMaterialRecipeCache(undefined,false,"global-cache-operation"),null);
   const page=readFileSync(new URL("../ui/windows/main/pages/statistics/StatisticsPage.tsx",import.meta.url),"utf8");
-  assert.match(page,/fetchMaterialRecipeCache\(currentFile, includeContainerItems, operationId\)/);
+  assert.match(page,/fetchMaterialRecipeCache\(sourcePath, draftRef.current.includeContainerItems === true, operationId\)/);
   assert.match(page,/result.summary.materialsWithoutRecipes/);assert.match(page,/recipeOperation.current !== operationId/);
   const source=readFileSync(new URL("../src/services/statsService.ts",import.meta.url),"utf8");
   assert.doesNotMatch(source,/formatMaterialUnits|csvEscape|writeTextFileAbsolute|filterMaterialItems|mapMaterial\(/);

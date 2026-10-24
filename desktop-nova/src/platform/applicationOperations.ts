@@ -197,29 +197,48 @@ export interface ApplicationProjectMaterialsOutput {
   material_items: MaterialAnalysisItem[];
 }
 
-export interface MaterialWebExportOptions {
-  mode: "single" | "multi";
-  accessPassword?: string;
-  adminPassword?: string;
-  whitelist: string[];
-  whitelistEnabled: boolean;
-  allowGuestReadonly: boolean;
-  adminPageEnabled: boolean;
-  targets: ("windows-x64" | "linux-x64" | "macos-x64" | "macos-arm64")[];
+/** The data worker owns all defaults, option dependencies and output semantics. */
+export interface MaterialExportField {
+  key: string;
+  type: "select" | "number" | "boolean" | "text" | "password" | "multiline" | "multiselect";
+  group: string;
+  labelKey: string;
+  descriptionKey?: string;
+  visible: boolean;
+  enabled: boolean;
+  reasonKey?: string;
+  value: unknown;
+  options?: Array<{ value: string; labelKey?: string; label?: string }>;
+  min?: number;
+  max?: number;
+  step?: number;
 }
-
-export interface ApplicationExportMaterialListInput extends ApplicationProjectMaterialsInput {
-  uiLocale?: "zh-CN" | "en-US";
+export interface MaterialExportView {
+  settings: Record<string, unknown>;
+  fields: MaterialExportField[];
+  valid: boolean;
+  errors: string[];
+  defaultPath: string;
+  extension: string;
+  copy: boolean;
+  sourceRevision?: string;
+  exportText?: string;
+  outputPath?: string;
+  summary?: unknown;
+}
+export interface MaterialExportInput {
+  action: "configure" | "export" | "reset";
+  sourcePath?: string;
+  taskId?: string;
+  projectId?: string;
+  sourceRevision?: string;
+  settings?: Record<string, unknown>;
+  outputPath?: string;
+  uiLocale?: string;
   languageMap?: Record<string, string>;
-  multiplier: number;
-  minecraftVersion: string;
-  terminalRawMaterials: boolean;
-  format: "svg" | "txt" | "html" | "csv";
-  webOptions?: MaterialWebExportOptions;
-  outputPath: string;
+  query?: { offset?: number; limit?: number };
 }
-
-export function exportMaterialList(input: ApplicationExportMaterialListInput): Promise<{ output: string; material_count: number }> {
+export function commandMaterialExport(input: MaterialExportInput): Promise<MaterialExportView> {
   return invoke("application_export_material_list", { input });
 }
 

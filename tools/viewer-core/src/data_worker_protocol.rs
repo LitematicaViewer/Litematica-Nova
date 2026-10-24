@@ -12,6 +12,7 @@ pub enum DataKind {
     Materials,
     MaterialDetail,
     MaterialRecipes,
+    MaterialExport,
     StatisticsRules,
     Stockpile,
     VersionConvert,

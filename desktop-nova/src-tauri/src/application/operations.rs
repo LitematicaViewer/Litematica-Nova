@@ -347,42 +347,6 @@ pub(crate) struct StockpileTaskSetInput {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct StockpileTaskResetInput { pub(crate) task_id: String, source_revision: String }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum MaterialExportFormat { Svg, Txt, Html, Csv }
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct MaterialWebExportOptions {
-    pub(crate) mode: String,
-    pub(crate) access_password: Option<String>,
-    pub(crate) admin_password: Option<String>,
-    pub(crate) whitelist: Vec<String>,
-    pub(crate) whitelist_enabled: bool,
-    pub(crate) allow_guest_readonly: bool,
-    pub(crate) admin_page_enabled: bool,
-    pub(crate) targets: Vec<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct ExportMaterialListInput {
-    #[serde(default)]
-    pub(crate) ui_locale: Option<String>,
-    #[serde(default)]
-    pub(crate) language_map: std::collections::BTreeMap<String, String>,
-    pub(crate) source_path: String,
-    pub(crate) scope: MaterialScope,
-    pub(crate) include_container_items: bool,
-    pub(crate) multiplier: u64,
-    pub(crate) minecraft_version: String,
-    pub(crate) terminal_raw_materials: bool,
-    pub(crate) format: MaterialExportFormat,
-    #[serde(default)]
-    pub(crate) web_options: Option<MaterialWebExportOptions>,
-    pub(crate) output_path: String,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct MaterialRecipeCacheInput { pub(crate) minecraft_version: String }
@@ -803,29 +767,9 @@ impl ApplicationOperations {
         self.data_request(super::data_worker::protocol::DataKind::Stockpile,request.clone(),None,true)
     }
 
-    pub(crate) fn export_material_list(&self, input: ExportMaterialListInput) -> Result<Value, String> {
-        if !(1..=1_000_000).contains(&input.multiplier) || input.minecraft_version.trim().is_empty() {
-            return Err("材料导出需要有效的建造份数和 Minecraft 版本".into());
-        }
-        let source = self.resolve_path(&input.source_path);
-        let output = self.resolve_path(&input.output_path);
-        if output == source || !output.parent().is_some_and(Path::is_dir) {
-            return Err("材料列表必须另存到现有目录，不能覆盖原投影".into());
-        }
-        let snapshot = self.material_snapshot(&source, &input.scope, input.include_container_items)?;
-        let (generation, prefix) = self.next_operation("materials-export");
-        let mut files = OperationFiles::new();
-        let request_path = files.track(self.operation_path(&prefix, "request.json"));
-        write_json(&request_path, &json!({
-            "source_path": path_text(&source), "stats": snapshot,
-            "multiplier": input.multiplier, "minecraft_version": input.minecraft_version,
-            "terminal_raw_materials": input.terminal_raw_materials, "format": input.format,
-            "web_options": input.web_options,
-            "ui_locale": input.ui_locale.as_deref().unwrap_or(crate::i18n::locale()),
-            "language_map": input.language_map,
-        }))?;
-        let result = self.run_core(generation, &prefix, vec!["materials-export".into(), path_text(&request_path), "--output".into(), path_text(&output)], &mut files)?;
-        parse_core_json(&result.stdout)
+    pub(crate) fn export_material_list(&self, input: Value) -> Result<Value, String> {
+        let writing = input["action"] == "export";
+        self.data_request(super::data_worker::protocol::DataKind::MaterialExport,input,None,writing)
     }
 
     pub(crate) fn read_material_detail(&self, input: MaterialDetailInput) -> Result<Value, String> {
@@ -1209,7 +1153,9 @@ impl ApplicationOperations {
     pub(crate) fn data_query(&self, query: DataQueryInput) -> Result<Value, String> {
         use super::data_worker::protocol::DataKind;
         if matches!(query.kind,DataKind::Analysis|DataKind::Cancel) { return Err("Unsupported public data query".into()); }
-        let writing=matches!(query.kind,DataKind::Stockpile)||query.kind==DataKind::VersionConvert&&query.input["outputPath"].is_string();
+        let writing=matches!(query.kind,DataKind::Stockpile)
+            ||query.kind==DataKind::VersionConvert&&query.input["outputPath"].is_string()
+            ||query.kind==DataKind::MaterialExport&&query.input["action"]=="export";
         self.data_request(query.kind,query.input,Some(query.operation_id),writing)
     }
     pub(crate) fn data_operation_status(&self, id:&str, cancel:bool) -> Result<Value,String> { self.data_worker.status(id,cancel) }
