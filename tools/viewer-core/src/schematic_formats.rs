@@ -400,6 +400,138 @@ pub fn decode(path: &Path, cancel: &AtomicBool) -> Result<SceneDocument> {
         cancel,
     )
 }
+
+/// Import and composition share the same content-bound source-version choice.
+/// Native consumers still use `decode`; they must not silently gain guessed
+/// version semantics merely because a file happens to have a familiar name.
+pub fn decode_for_import(
+    path: &Path,
+    cancel: &AtomicBool,
+    storage: &Path,
+    source_data_version: Option<i32>,
+) -> Result<SceneDocument> {
+    let mut scene = decode(path, cancel)?;
+    apply_source_version(&mut scene, Some(storage), source_data_version, true, cancel)?;
+    ensure!(
+        scene.data_version().is_some(),
+        "源模板没有声明Minecraft版本，请先选择真实源版本；未借用当前资源版本冒充"
+    );
+    Ok(scene)
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SourceVersionChoice {
+    schema: String,
+    source_identity: String,
+    format: String,
+    data_version: i32,
+}
+
+fn registered_source_version(version: i32) -> Result<()> {
+    ensure!(
+        crate::world_export::profiles()?
+            .iter()
+            .any(|profile| profile.data_version == Some(version)),
+        "源DataVersion {version} 未登记，不能猜测版本语义"
+    );
+    Ok(())
+}
+
+fn apply_source_version(
+    scene: &mut SceneDocument,
+    storage: Option<&Path>,
+    explicit: Option<i32>,
+    persist_explicit: bool,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    cancelled(cancel)?;
+    let choice_path = storage.map(|root| {
+        root.join("format-imports")
+            .join(&scene.content_id)
+            .join("source-version.json")
+    });
+    let cached = if let Some(path) = choice_path.as_ref().filter(|path| path.is_file()) {
+        let bytes = read_bounded(File::open(path)?, 4096, cancel)?;
+        let choice: SourceVersionChoice =
+            serde_json::from_slice(&bytes).context("源版本选择记录无效")?;
+        ensure!(
+            choice.schema == "nova.format-source-version.v1"
+                && choice.source_identity == scene.content_id
+                && choice.format == scene.source_format,
+            "源版本选择记录与实际内容身份不一致"
+        );
+        registered_source_version(choice.data_version)?;
+        Some(choice.data_version)
+    } else {
+        None
+    };
+    if let Some(version) = explicit {
+        registered_source_version(version)?;
+    }
+    if let Some(actual) = scene.data_version() {
+        registered_source_version(actual)?;
+        if let Some(selected) = explicit.or(cached) {
+            ensure!(
+                actual == selected,
+                "输入声明DataVersion与源文件不一致：声明{actual}，选择{selected}"
+            );
+        }
+        return Ok(());
+    }
+    let Some(version) = explicit.or(cached) else {
+        return Ok(());
+    };
+    std::sync::Arc::get_mut(&mut scene.root)
+        .context("源场景仍被共享，不能更改版本身份")?
+        .minecraft_data_version = Some(version);
+    if let Value::Compound(raw) = &mut scene.raw {
+        raw.insert("MinecraftDataVersion".into(), Value::Int(version));
+    }
+    if persist_explicit && explicit.is_some() && cached != explicit {
+        if let Some(path) = choice_path {
+            let parent = path.parent().context("源版本选择目录无效")?;
+            fs::create_dir_all(parent)?;
+            let choice = SourceVersionChoice {
+                schema: "nova.format-source-version.v1".into(),
+                source_identity: scene.content_id.clone(),
+                format: scene.source_format.clone(),
+                data_version: version,
+            };
+            let mut file = tempfile::NamedTempFile::new_in(parent)?;
+            serde_json::to_writer(file.as_file_mut(), &choice)?;
+            file.as_file().sync_all()?;
+            cancelled(cancel)?;
+            file.persist(&path).map_err(|error| error.error)?;
+        }
+    }
+    Ok(())
+}
+
+fn safe_source_stem(source: Option<&str>) -> String {
+    let stem = source
+        .and_then(|source| Path::new(source).file_stem())
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("Clipboard");
+    let safe: String = stem
+        .chars()
+        .take(80)
+        .map(|character| {
+            if character.is_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let safe = safe.trim_matches(['.', '_']);
+    if safe.is_empty() {
+        "schematic".into()
+    } else {
+        safe.into()
+    }
+}
+
 pub fn decode_bytes(bytes: &[u8], name: &str, cancel: &AtomicBool) -> Result<SceneDocument> {
     ensure!(bytes.len() as u64 <= MAX_INPUT, "格式输入超过文件容量");
     let is_text = std::str::from_utf8(bytes).is_ok_and(|text| text.trim_start().starts_with('{'));
@@ -1631,14 +1763,32 @@ pub fn execute(input: &serde_json::Value, cancel: &AtomicBool) -> Result<serde_j
         );
     }
     let source = source_path.unwrap_or("clipboard");
+    let explicit_version = match input
+        .get("sourceDataVersion")
+        .filter(|value| !value.is_null())
+    {
+        Some(value) => Some(i32::try_from(
+            value.as_i64().context("源DataVersion必须是整数")?,
+        )?),
+        None => None,
+    };
+    let storage = input
+        .get("storageDir")
+        .or_else(|| input.get("cacheDirectory"))
+        .and_then(|value| value.as_str())
+        .map(Path::new);
+    let display_name = source_path
+        .and_then(|source| Path::new(source).file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or("Clipboard");
     if matches!(action, "runtimeInput" | "libraryInspect")
-        && input.get("sourceDataVersion").is_none()
+        && explicit_version.is_none()
         && clipboard.is_none()
         && is_native_litematic(Path::new(source))?
     {
         cancelled(cancel)?;
         return Ok(
-            serde_json::json!({"sourcePath":source_path,"snapshotPath":source,"format":FormatId::Litematic,"nativePassthrough":true}),
+            serde_json::json!({"sourcePath":source_path,"originalSourcePath":source_path,"sourceDisplayName":display_name,"snapshotPath":source,"format":FormatId::Litematic,"nativePassthrough":true}),
         );
     }
     let mut scene = if let Some(text) = clipboard {
@@ -1646,28 +1796,16 @@ pub fn execute(input: &serde_json::Value, cancel: &AtomicBool) -> Result<serde_j
     } else {
         decode(Path::new(source), cancel)?
     };
-    if let Some(version) = input.get("sourceDataVersion").and_then(|v| v.as_i64()) {
-        let version = i32::try_from(version)?;
-        ensure!(
-            crate::world_export::profiles()?
-                .iter()
-                .any(|profile| profile.data_version == Some(version)),
-            "源DataVersion未登记，不能猜测版本语义"
-        );
-        if let Some(actual) = scene.data_version() {
-            ensure!(actual == version, "输入声明DataVersion与源文件不一致");
-        } else {
-            std::sync::Arc::get_mut(&mut scene.root)
-                .context("源场景仍被共享，不能更改版本身份")?
-                .minecraft_data_version = Some(version);
-            if let Value::Compound(raw) = &mut scene.raw {
-                raw.insert("MinecraftDataVersion".into(), Value::Int(version));
-            }
-        }
-    }
+    apply_source_version(
+        &mut scene,
+        storage,
+        explicit_version,
+        !matches!(action, "inspect" | "libraryInspect"),
+        cancel,
+    )?;
     let details = report(&scene, cancel)?;
     let supported = capabilities(&scene);
-    match action {
+    let result: Result<serde_json::Value> = match action {
         "inspect" | "libraryInspect" => Ok(
             serde_json::json!({"sourcePath":source_path,"sourceIdentity":scene.content_id,"report":details,"capabilities":supported}),
         ),
@@ -1701,7 +1839,7 @@ pub fn execute(input: &serde_json::Value, cancel: &AtomicBool) -> Result<serde_j
                 && is_native_litematic(Path::new(source))?
             {
                 return Ok(
-                    serde_json::json!({"sourcePath":source_path,"sourceIdentity":scene.content_id,"snapshotPath":source,"snapshotIdentity":scene.content_id,"report":details,"capabilities":supported}),
+                    serde_json::json!({"sourcePath":source_path,"originalSourcePath":source_path,"sourceDisplayName":display_name,"sourceIdentity":scene.content_id,"snapshotPath":source,"snapshotIdentity":scene.content_id,"report":details,"capabilities":supported}),
                 );
             }
             ensure!(
@@ -1711,20 +1849,25 @@ pub fn execute(input: &serde_json::Value, cancel: &AtomicBool) -> Result<serde_j
             let output = if let Some(output) = input.get("output").and_then(|v| v.as_str()) {
                 std::path::PathBuf::from(output)
             } else {
-                let cache = input
-                    .get("cacheDirectory")
-                    .or_else(|| input.get("storageDir"))
-                    .and_then(|v| v.as_str())
-                    .context("规范化导入需要宿主提供既有用户缓存目录")?;
-                fs::create_dir_all(cache)?;
-                // Revision 2 adds presence-mask semantics. Include the actual
-                // canonical content identity as well as source bytes: a user
-                // filename-derived display name or selected source version is
-                // part of the resulting snapshot, not a corrupt-cache event.
-                Path::new(cache).join(format!(
-                    "format-v2-{}-{}.litematic",
-                    scene.content_id,
-                    composition_scene::content_identity(&scene.raw)
+                let cache = storage.context("规范化导入需要宿主提供既有用户缓存目录")?;
+                // Revision 3 keeps content identity in directories, not the
+                // filename shown throughout the existing application. Source
+                // bytes and canonical semantics remain separate identities.
+                let canonical = format!(
+                    "{:x}",
+                    Sha256::digest(format!(
+                        "format-v3:{}",
+                        composition_scene::content_identity(&scene.raw)
+                    ))
+                );
+                let directory = cache
+                    .join("format-imports")
+                    .join(&scene.content_id)
+                    .join(canonical);
+                fs::create_dir_all(&directory)?;
+                directory.join(format!(
+                    "import-{}.litematic",
+                    safe_source_stem(source_path)
                 ))
             };
             ensure!(Path::new(source) != output, "规范化快照不能覆盖源文件");
@@ -1768,7 +1911,12 @@ pub fn execute(input: &serde_json::Value, cancel: &AtomicBool) -> Result<serde_j
             )
         }
         _ => bail!("未知格式操作{action}"),
-    }
+    };
+    let mut result = result?;
+    result["originalSourcePath"] = serde_json::json!(source_path);
+    result["sourceDisplayName"] = serde_json::json!(display_name);
+    result["cacheRevision"] = serde_json::json!(3);
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -2221,6 +2369,107 @@ mod tests {
         assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
         input["input"] = serde_json::json!("also-a-file");
         assert!(execute(&input, &cancel).is_err());
+    }
+
+    #[test]
+    fn source_version_choice_is_content_bound_persistent_and_never_overrides_a_declaration() {
+        let cancel = control();
+        let storage = tempfile::tempdir().unwrap();
+        let inputs = tempfile::tempdir().unwrap();
+        let path = inputs.path().join("同一路径+template.bgcp");
+        let scene = make_scene(
+            "choice",
+            [1, 1, 1],
+            [0; 3],
+            vec![blank_state("minecraft:stone")],
+            vec![0],
+            vec![],
+            vec![],
+            Some(2584),
+            FormatId::Litematic,
+            Fields::new(),
+        )
+        .unwrap();
+        let original = encode_bytes(&scene, FormatId::BuildingGadgets2, &cancel).unwrap();
+        fs::write(&path, &original).unwrap();
+
+        let inspect_input = serde_json::json!({"action":"inspect","input":path,"storageDir":storage.path(),"sourceDataVersion":2584});
+        let inspected = execute(&inspect_input, &cancel).unwrap();
+        assert_eq!(inspected["report"]["dataVersion"], 2584);
+        assert_eq!(
+            fs::read_dir(storage.path()).unwrap().count(),
+            0,
+            "inspect must not persist a choice"
+        );
+        assert!(decode_for_import(&path, &cancel, storage.path(), None).is_err());
+        let first = decode_for_import(&path, &cancel, storage.path(), Some(2584)).unwrap();
+        assert_eq!(first.data_version(), Some(2584));
+        drop(first);
+        let reopened = decode_for_import(&path, &cancel, storage.path(), None).unwrap();
+        assert_eq!(reopened.data_version(), Some(2584));
+        assert_eq!(
+            reopened.content_id,
+            format!("{:x}", Sha256::digest(&original))
+        );
+
+        let input =
+            serde_json::json!({"action":"runtimeInput","input":path,"storageDir":storage.path()});
+        let snapshot = execute(&input, &cancel).unwrap();
+        let snapshot_path = Path::new(snapshot["snapshotPath"].as_str().unwrap());
+        assert_eq!(
+            snapshot_path.file_name().unwrap().to_str().unwrap(),
+            "import-同一路径_template.litematic"
+        );
+        assert_eq!(snapshot["sourceDisplayName"], "同一路径+template.bgcp");
+        assert_eq!(
+            snapshot["sourceIdentity"],
+            format!("{:x}", Sha256::digest(&original))
+        );
+        assert_eq!(
+            snapshot["snapshotIdentity"],
+            format!("{:x}", Sha256::digest(fs::read(snapshot_path).unwrap()))
+        );
+        assert_eq!(
+            snapshot["snapshotPath"],
+            execute(&input, &cancel).unwrap()["snapshotPath"]
+        );
+
+        // A changed template at the exact same path has no inherited choice.
+        let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        changed["name"] = serde_json::json!("changed content");
+        fs::write(&path, serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(
+            decode_for_import(&path, &cancel, storage.path(), None)
+                .unwrap_err()
+                .to_string()
+                .contains("选择真实源版本")
+        );
+        assert!(decode_for_import(&path, &cancel, storage.path(), Some(-1)).is_err());
+
+        // A real declaration is authoritative even when the requested version
+        // is another registered profile. Missing/invalid input is never saved.
+        let declared = inputs.path().join("declared.nbt");
+        fs::write(&declared, gzip(&sample()).unwrap()).unwrap();
+        let other = crate::world_export::profiles()
+            .unwrap()
+            .into_iter()
+            .filter_map(|profile| profile.data_version)
+            .find(|version| *version != 2584)
+            .unwrap();
+        assert!(
+            decode_for_import(&declared, &cancel, storage.path(), Some(other))
+                .unwrap_err()
+                .to_string()
+                .contains("与源文件不一致")
+        );
+        assert_eq!(
+            decode_for_import(&declared, &cancel, storage.path(), None)
+                .unwrap()
+                .data_version(),
+            Some(2584)
+        );
+        let cancelled = AtomicBool::new(true);
+        assert!(decode_for_import(&path, &cancelled, storage.path(), Some(2584)).is_err());
     }
     #[test]
     #[ignore = "Requires the four actual upstream/user-created sample files in NOVA_FORMAT_SAMPLE_DIR"]

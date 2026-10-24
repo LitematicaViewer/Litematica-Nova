@@ -6,6 +6,7 @@ export interface FormatReport {
   canImport: boolean; canExport: boolean; missingSemantics: string[];
 }
 export interface FormatResult {
+  originalSourcePath?: string; sourceDisplayName?: string; cacheRevision?: number;
   sourcePath?: string; sourceIdentity?: string; snapshotPath?: string; snapshotIdentity?: string;
   nativePassthrough?: boolean; report?: FormatReport;
   clipboardText?: string;

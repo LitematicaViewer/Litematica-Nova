@@ -56,9 +56,10 @@ export function FormatImportDialog({ sourcePath = "", clipboardMode = false, onR
   };
   return <Dialog title={en ? "Import schematic" : "导入投影"} busy={pending} onClose={onCancel} footer={<>
     <Button variant="ghost" onClick={onCancel} disabled={pending}>{en ? "Cancel" : "取消"}</Button>
-    <Button onClick={() => void load()} disabled={pending}>{pending ? (en ? "Preparing…" : "正在准备…") : (en ? "Open in workbench" : "在工作台中打开")}</Button>
+    <Button onClick={() => void load()} disabled={pending}>{pending ? (en ? "Preparing…" : "正在准备…") : (en ? "Open schematic" : "打开投影")}</Button>
   </>}>
-    <p>{en ? "The source file stays unchanged. All workbench tools use the same normalized scene." : "源文件保持不变，工作台全部功能使用同一份规范化场景。"}</p>
+    <p>{en ? "The source file stays unchanged. All tools use the same normalized scene." : "源文件保持不变，各页面使用同一份规范化场景。"}</p>
+    {result?.sourceDisplayName && <p className="format-import-source" title={result.originalSourcePath}>{result.sourceDisplayName}</p>}
     {clipboardMode && <label>{en ? "Template / clipboard text" : "模板 / 剪贴板文本"}<textarea className="input format-import-text" value={clipboardText} onChange={event => setClipboardText(event.target.value)} spellCheck={false} /></label>}
     {result?.report && <dl className="format-import-report"><dt>{en ? "Format" : "格式"}</dt><dd>{result.report.variant}</dd><dt>{en ? "Size" : "尺寸"}</dt><dd>{result.report.size.join(" × ")}</dd><dt>{en ? "Blocks / entities / block entities" : "方块 / 实体 / 方块实体"}</dt><dd>{result.report.blocks} / {result.report.entities} / {result.report.blockEntities}</dd></dl>}
     {!result?.snapshotPath && <label>{en ? "Source Minecraft version (never guessed)" : "源 Minecraft 版本（不会自动猜测）"}<select className="input" value={version} onChange={event => setVersion(event.target.value)}>
