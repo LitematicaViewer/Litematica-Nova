@@ -23,6 +23,9 @@ import {
   categoryDescendants,
   categoryPath,
   copyFileToDirectory,
+  commandStockpileTask,
+  getStockpileTask,
+  getMinecraftTranslations,
   createLibraryCategory,
   deleteLibraryCategory,
   exportLibraryZip,
@@ -71,6 +74,8 @@ import { LibraryTaskCenter } from "./LibraryTaskCenter";
 import { SendProjectionDialog, type DispatchPlan } from "./sendDialog";
 import { DropImportDialog, type DroppedItem, type DropImportPlan } from "./DropImportDialog";
 import { ExportDialog, type ExportOptions } from "./ExportDialog";
+import { StockpileSourcesDialog, type StockpileSourcesSubmission } from "../statistics/StockpileSourcesDialog";
+import type { StockpileSourceInput, StockpileTaskView } from "../../../../../src/platform/applicationOperations";
 import { TrashPanel } from "../../../local_library_folders/TrashPanel";
 import { ReplicaNameEditor } from "./ReplicaNameEditor";
 import { ensureLitematicFileName } from "./function";
@@ -84,6 +89,16 @@ import {
   type LibraryEntryView,
 } from "./libraryEntryView";
 import "./library.css";
+
+type LibraryStockpileDraft = {
+  sources: StockpileSourceInput[];
+  phase: "target" | "sources";
+  targets: Awaited<ReturnType<typeof getStockpileTask>>["tasks"];
+  targetTaskId: string;
+  task?: StockpileTaskView;
+  loading: boolean;
+  error: string;
+};
 
 const samePath = (left: string, right: string) => windowsPathKey(left) === windowsPathKey(right);
 const joinPath = (folder: string, name: string) => `${folder.replace(/[\\/]+$/, "")}/${name}`;
@@ -127,6 +142,13 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   const [refreshTotal, setRefreshTotal] = useState(0);
   const [isCategorizing, setIsCategorizing] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
+  const [stockpileDraft, setStockpileDraft] = useState<LibraryStockpileDraft | null>(null);
+  const [stockpileSaved, setStockpileSaved] = useState<StockpileTaskView | null>(null);
+  const [stockpileWriting, setStockpileWriting] = useState(false);
+  const stockpileEpoch = useRef(0);
+  const stockpileReadPending = useRef(false);
+  const stockpileWritePending = useRef(false);
+  useEffect(() => () => { stockpileEpoch.current += 1; }, []);
 
   const [generatingPreviewId, setGeneratingPreviewId] = useState("");
   const [visiblePreviewIds, setVisiblePreviewIds] = useState<Set<string>>(new Set());
@@ -179,7 +201,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   const [dispatchEntryId, setDispatchEntryId] = useState("");
   const [dispatchError, setDispatchError] = useState("");
 
-  const libraryBusy = isRefreshing || isOpening || isCategorizing || isDispatching || trashBusy || isDropBusy || isExporting || isRepositioning;
+  const libraryBusy = stockpileWriting || isRefreshing || isOpening || isCategorizing || isDispatching || trashBusy || isDropBusy || isExporting || isRepositioning;
 
   // --- data loading + event subscription ----------------------------------------
   const applyState = (next: LibraryState) => {
@@ -777,6 +799,88 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     } catch (error) { setMessage(String(error)); }
   };
 
+  const stockpileCurrent = (epoch: number) => libraryAlive.current && stockpileEpoch.current === epoch;
+  const closeStockpile = () => {
+    if (stockpileWritePending.current) return;
+    stockpileEpoch.current += 1;
+    stockpileReadPending.current = false;
+    setStockpileDraft(null);
+  };
+  const loadStockpileTargets = async (epoch: number) => {
+    if (stockpileReadPending.current) return;
+    stockpileReadPending.current = true;
+    setStockpileDraft(current => current && ({ ...current, loading: true, error: "" }));
+    try {
+      // Read only: opening this chooser never creates or changes a task.
+      const workspace = await getStockpileTask({ uiLocale: getUiLocale(), languageMap: getMinecraftTranslations() });
+      if (stockpileCurrent(epoch)) setStockpileDraft(current => current && ({ ...current, targets: workspace.tasks }));
+    } catch (error) {
+      if (stockpileCurrent(epoch)) setStockpileDraft(current => current && ({ ...current, error: String(error) }));
+    } finally {
+      if (stockpileCurrent(epoch)) {
+        stockpileReadPending.current = false;
+        setStockpileDraft(current => current && ({ ...current, loading: false }));
+      }
+    }
+  };
+  const beginStockpile = () => {
+    if (libraryBusy || stockpileDraft || stockpileReadPending.current || !selectedEntries.length) return;
+    const epoch = ++stockpileEpoch.current;
+    // Preserve exact primary identities and every selection; Rust merges matching sources.
+    const sources: StockpileSourceInput[] = selectedEntries.map(entry => ({ sourcePath: entry.primary.path,
+      scope: { kind: "all", value: null }, includeContainerItems: false, copies: 1 }));
+    setStockpileSaved(null);
+    setStockpileDraft({ sources, phase: "target", targets: [], targetTaskId: "", loading: true, error: "" });
+    void loadStockpileTargets(epoch);
+  };
+  const editStockpileSources = async () => {
+    if (!stockpileDraft || stockpileReadPending.current || stockpileWritePending.current) return;
+    if (!stockpileDraft.targetTaskId) {
+      setStockpileDraft(current => current && ({ ...current, phase: "sources", task: undefined, error: "" }));
+      return;
+    }
+    const epoch = stockpileEpoch.current;
+    const taskId = stockpileDraft.targetTaskId;
+    stockpileReadPending.current = true;
+    setStockpileDraft(current => current && ({ ...current, loading: true, error: "" }));
+    try {
+      const workspace = await getStockpileTask({ taskId, uiLocale: getUiLocale(), languageMap: getMinecraftTranslations() });
+      if (!stockpileCurrent(epoch)) return;
+      if (!workspace.task || workspace.task.taskId !== taskId) throw new Error(t("stockpile.sources.taskMissing"));
+      setStockpileDraft(current => current && ({ ...current, phase: "sources", task: workspace.task! }));
+    } catch (error) {
+      if (stockpileCurrent(epoch)) setStockpileDraft(current => current && ({ ...current, error: String(error) }));
+    } finally {
+      if (stockpileCurrent(epoch)) {
+        stockpileReadPending.current = false;
+        setStockpileDraft(current => current && ({ ...current, loading: false }));
+      }
+    }
+  };
+  const submitStockpileSources = async ({ name, sources, requestId }: StockpileSourcesSubmission) => {
+    if (!stockpileDraft || stockpileDraft.phase !== "sources") throw new Error(t("stockpile.sources.taskMissing"));
+    if (stockpileWritePending.current) throw new Error(t("editor.saving"));
+    const epoch = stockpileEpoch.current;
+    const target = stockpileDraft.task;
+    stockpileWritePending.current = true;
+    setStockpileWriting(true);
+    try {
+      // The shared editor keeps requestId stable on unchanged retries. No optimistic counts or material merging.
+      const workspace = await commandStockpileTask({
+        uiLocale: getUiLocale(), languageMap: getMinecraftTranslations(), requestId, sources,
+        ...(target ? { action: "addSources", taskId: target.taskId, expectedRevision: target.sourceRevision }
+          : { action: "create", name }),
+      });
+      if (!stockpileCurrent(epoch)) return;
+      if (!workspace.task || (target && workspace.task.taskId !== target.taskId)) throw new Error(t("stockpile.sources.resultMissing"));
+      setStockpileSaved(workspace.task);
+      setStockpileDraft(null);
+    } finally {
+      stockpileWritePending.current = false;
+      if (stockpileCurrent(epoch)) setStockpileWriting(false);
+    }
+  };
+
   return (
     <div className="nova-page library-page" onDragOver={handlePageDragOver} onDrop={(event) => void handlePageDrop(event)}>
       <LibraryToolbar
@@ -791,6 +895,11 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
         onExport={() => { setExportError(""); setExportOpen(true); }}
       />
       {message && <div className="library-message" role="alert">{displayPathText(message)}<Button variant="ghost" size="icon-sm" aria-label="关闭提示" onClick={() => setMessage("")}><ThemeIcon name="close" size={14} fallback={X} /></Button></div>}
+      {stockpileSaved && <div className="library-message" role="status">
+        <span>{t("stockpile.sources.saved", { name: stockpileSaved.name })}</span>
+        <Button size="sm" onClick={() => setRoute("statistics")}>{t("stockpile.sources.viewTask")}</Button>
+        <Button variant="ghost" size="icon-sm" aria-label={t("library.closeDialog")} onClick={() => setStockpileSaved(null)}><ThemeIcon name="close" size={14} fallback={X} /></Button>
+      </div>}
       {generatingPreviewId && <div className="library-progress" role="status"><span>{t("library.previewProgress", previewProgress)}</span><Button size="sm" onClick={() => void handlePreviewControl(previewPaused ? "resume" : "pause")}>{t(previewPaused ? "library.previewResume" : "library.previewPause")}</Button><Button size="sm" onClick={() => void handlePreviewControl("cancel")}>{t("library.previewCancel")}</Button></div>}
       <PreviewDraftDialog draft={previewDrafts[0]?.image ?? null} sourcePath={previewDrafts[0]?.path ?? ""} onSaved={image => { if (previewDrafts[0]) handlePreviewSaved(previewDrafts[0].path, image); }} onClose={() => setPreviewDrafts(current => current.slice(1))} />
       {isRefreshing && <div className="library-progress" role="status">刷新中 {refreshProgress} / {refreshTotal}</div>}
@@ -830,6 +939,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
             <div className="library-batch-toolbar">
               <span>已选 {selectedEntries.length}</span>
               <Button size="sm" disabled={libraryBusy || !!generatingPreviewId} onClick={() => void handleGeneratePreviews(selectedEntries)}>{t("library.previewGenerateSelected")}</Button>
+              <Button size="sm" disabled={libraryBusy || !!stockpileDraft} onClick={beginStockpile}>{t("stockpile.sources.chooseTask")}</Button>
               <Button size="sm" disabled={libraryBusy} onClick={() => void addSelectedToComposition()}>加入组合</Button>
               <Button size="sm" disabled={libraryBusy} onClick={() => { setExportError(""); setExportOpen(true); }}>批量导出…</Button>
               <Button size="sm" onClick={() => { setMoveCategoryId(""); setCategoryError(""); setMoveEntryIds(selectedEntries.map((entry) => entry.entryId)); }} disabled={libraryBusy}>移动到分类…</Button>
@@ -868,6 +978,23 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
           </aside>
         )}
       </div>
+
+      {stockpileDraft?.phase === "target" && <Dialog title={t("stockpile.sources.chooseTask")} subtitle={t("stockpile.sources.chooseTaskHint")} width="sm" onClose={closeStockpile}
+        footer={<><Button variant="ghost" onClick={closeStockpile}>{t("editor.cancel")}</Button>
+          <Button disabled={stockpileDraft.loading} onClick={() => void editStockpileSources()}>{stockpileDraft.loading ? t("editor.loading") : t("stockpile.sources.next")}</Button></>}>
+        <div className="library-category-form">
+          <label id="library-stockpile-target-label">{t("stockpile.sources.targetTask")}</label>
+          <Dropdown ariaLabel={t("stockpile.sources.targetTask")} value={stockpileDraft.targetTaskId} disabled={stockpileDraft.loading}
+            onChange={targetTaskId => setStockpileDraft(current => current && ({ ...current, targetTaskId, error: "" }))}
+            options={[{ value: "", label: t("stockpile.sources.newTask") }, ...stockpileDraft.targets.map(task => ({ value: task.taskId, label: task.name }))]} />
+          {stockpileDraft.loading && <p role="status">{t("editor.loading")}</p>}
+          {!stockpileDraft.loading && !stockpileDraft.error && !stockpileDraft.targets.length && <p>{t("stockpile.sources.noTasks")}</p>}
+          {stockpileDraft.error && <div role="alert" className="dialog-message dialog-message-error"><p>{stockpileDraft.error}</p>
+            <Button size="sm" onClick={() => void loadStockpileTargets(stockpileEpoch.current)}>{t("stockpile.retry")}</Button></div>}
+        </div>
+      </Dialog>}
+      {stockpileDraft?.phase === "sources" && <StockpileSourcesDialog mode={stockpileDraft.task ? "add" : "create"}
+        initialSources={stockpileDraft.sources} task={stockpileDraft.task} onClose={closeStockpile} onSubmit={submitStockpileSources} />}
 
       {removeEntryIds.length > 0 && <Dialog title={`移入回收区${removeEntryIds.length > 1 ? ` ${removeEntryIds.length} 项` : "此投影"}？`} subtitle="文件会移入应用内回收区，可随时还原，不会被物理删除。" width="sm" busy={trashBusy} onClose={() => setRemoveEntryIds([])} footer={<><Button onClick={() => setRemoveEntryIds([])} disabled={trashBusy}>保留</Button><Button variant="destructive" onClick={() => void handleTrash(removeEntryIds)} disabled={trashBusy} aria-busy={trashBusy}>{trashBusy ? "正在移入…" : "移入回收区"}</Button></>}><ul className="library-remove-list">{removeEntryIds.slice(0, 8).map((id) => { const entry = entryById.get(id); return <li key={id}>{entry ? entry.displayName || entry.fileName : id}</li>; })}</ul>{removeEntryIds.length > 8 && <p>以及另外 {removeEntryIds.length - 8} 项</p>}</Dialog>}
 
