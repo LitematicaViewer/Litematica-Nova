@@ -23,6 +23,10 @@ Windows 更新载荷为包含全部资源的签名 NSIS Setup.exe，不提供便
 
 更新简介使用对应版本的更新日志；Beta 0.2 见 [更新日志](releases/BETA_0_2.md)。
 
+### VPS 安装包保留规则
+
+VPS 永久只保留当前线上最新版的各平台安装包、更新载荷、说明及必需元数据，不保留历史安装包。先上传并验明新版载荷，再切换正式清单；清单切换后由 `prune-vps-updates.py` 清理旧版本。新版载荷不完整时不清理；尚在上传的更高版本目录不删除。该规则仅针对 VPS 更新镜像，GitHub 历史发行版、核心组件、密文及构建登记不受影响。
+
 ## 唯一更新说明格式
 
 平台键为 `windows-x86_64`、`linux-x86_64-appimage`、`linux-x86_64-deb`、`darwin-x86_64` 和 `darwin-aarch64`。`latest.json` 遵循官方静态清单：`version`、RFC3339 `pub_date`、`notes`、`platforms.<平台-架构>.url` 与 `.signature`。后者是 `.sig` 内容，不是路径。GitHub 与镜像使用完全相同的已签名包和版本，URL 可不同。以下仅为说明模板，不代表已发布版本：
