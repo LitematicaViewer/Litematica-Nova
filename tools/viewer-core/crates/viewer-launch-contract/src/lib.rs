@@ -1009,7 +1009,7 @@ impl ViewerLaunchContract {
                 task.validate()
             }
             ViewerTask::QuickPreview(task) => {
-                if self.renderer.is_some() || self.content != ViewerContent::default() {
+                if self.renderer.is_some() || self.content.fabric_mods_dir.is_some() || !self.content.resource_packs.is_empty() {
                     return Err("quick_preview launch must not contain renderer settings or content resources".to_owned());
                 }
                 if task.initial_visible {
@@ -2222,6 +2222,8 @@ mod tests {
         contract.content.resource_packs.clear();
         contract.content.fabric_mods_dir = Some(absolute("mods"));
         assert!(contract.validate().unwrap_err().contains("content resources"));
+        contract.content = ViewerContent { composition_editor_path: Some(absolute("editor-scene.json")), ..Default::default() };
+        assert!(contract.validate().is_ok(), "Fast editor metadata is not a renderer resource pack");
         contract.content = ViewerContent::default();
         contract.task = ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: true, host: None, ..Default::default() });
         assert!(contract.validate().unwrap_err().contains("initialVisible must be false"));

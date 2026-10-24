@@ -441,7 +441,9 @@ impl QuickPreviewHost {
         let game_data = crate::game_data::resolve_context(&crate::current_user_config_dir()?.join("game-data"),
             &crate::get_root().join("pack-in/game-data/default")).map_err(|error| format!("{error:#}"))?;
         let editor = input.composition_editor_path.as_deref().map(read_editor_scene).transpose()?;
-        let content = ViewerContent { composition_editor_path: input.composition_editor_path.clone(), resource_packs: vec![game_data.resource_jar.clone()], ..Default::default() };
+        // Fast reads its pinned game package through NOVA_GAME_DATA_SNAPSHOT.
+        // Resource JARs are not Full/Standard content inputs in this contract.
+        let content = ViewerContent { composition_editor_path: input.composition_editor_path.clone(), ..Default::default() };
         self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.take();
         let mut slot = self.session.lock().map_err(|_| "快速预览状态锁异常".to_owned())?;
         if let Some(session) = slot.as_mut() {
@@ -1050,7 +1052,8 @@ mod tests {
             let slot = host.session.lock().unwrap(); let session = slot.as_ref().unwrap();
             let launch = ViewerLaunchContract::from_json_slice(&fs::read(session.contract.path()).unwrap()).unwrap();
             assert_eq!(launch.request_id, result.preview_id);
-            assert_eq!(launch.scene, fs::canonicalize(&source).unwrap());
+            assert_eq!(fs::canonicalize(&launch.scene).unwrap(), fs::canonicalize(&source).unwrap());
+            assert_eq!(launch.content, ViewerContent::default());
             assert!(matches!(launch.task, ViewerTask::QuickPreview(QuickPreviewTask {
                 preload: true, resource_report_path: None, resource_decision_path: None, ..
             })));
