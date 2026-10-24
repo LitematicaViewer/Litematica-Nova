@@ -2134,6 +2134,12 @@ impl PaletteLayout {
         palette_index_at_with_packing(block_states, self.nbits, index, self.packing)
     }
 
+    // Generic NBT conversion already owns native longs. Sparse block-entity
+    // lookups must not copy the entire packed region to the renderer storage.
+    pub(crate) fn palette_index_native(self, block_states: &[i64], index: usize) -> usize {
+        palette_index_with_read(self.nbits, index, self.packing, |word| block_states[word] as u64)
+    }
+
     // Sequential range reads retain the current/crossing long. In particular,
     // a nonzero word is decoded once, not fetched again for every palette item.
     // Returns actual backing-array word reads for the stage's aggregate ledger.
@@ -2285,6 +2291,10 @@ fn palette_index_at_with_packing(
     index: usize,
     packing: PalettePacking,
 ) -> usize {
+    palette_index_with_read(nbits, index, packing, |word| block_states.u64_at(word))
+}
+
+fn palette_index_with_read(nbits: usize, index: usize, packing: PalettePacking, read: impl Fn(usize) -> u64) -> usize {
     let mask = palette_mask(nbits);
     match packing {
         PalettePacking::CompactBitstream => {
@@ -2294,11 +2304,11 @@ fn palette_index_at_with_packing(
             let start_bit_offset = start_offset & 0x3f;
 
             if start_arr_index == end_arr_index {
-                ((block_states.u64_at(start_arr_index) >> start_bit_offset) & mask) as usize
+                ((read(start_arr_index) >> start_bit_offset) & mask) as usize
             } else {
                 let end_offset = 64 - start_bit_offset;
-                (((block_states.u64_at(start_arr_index) >> start_bit_offset)
-                    | (block_states.u64_at(end_arr_index) << end_offset))
+                (((read(start_arr_index) >> start_bit_offset)
+                    | (read(end_arr_index) << end_offset))
                     & mask) as usize
             }
         }
@@ -2306,7 +2316,7 @@ fn palette_index_at_with_packing(
             let values_per_long = (64 / nbits).max(1);
             let arr_index = index / values_per_long;
             let bit_offset = (index % values_per_long) * nbits;
-            ((block_states.u64_at(arr_index) >> bit_offset) & mask) as usize
+            ((read(arr_index) >> bit_offset) & mask) as usize
         }
     }
 }
@@ -2343,10 +2353,17 @@ pub(crate) fn choose_palette_packing(
     }
 
     let layout_is_valid = |packing: PalettePacking, layout_bits: usize| {
-        (0..size).all(|index| {
-            palette_index_at_with_packing(block_states, layout_bits, index, packing)
-                < palette_len.max(1)
-        })
+        let layout = PaletteLayout { packing, nbits: layout_bits };
+        // Zero is a valid palette index even when it is not AIR. Validate the
+        // same full range without fetching a backing word once per voxel.
+        // Bounded chunks retain the old early rejection of invalid layouts.
+        for start in (0..size).step_by(262_144) {
+            let mut valid = true;
+            layout.visit_palette_range(block_states, start, (start + 262_144).min(size), true,
+                |_, value| valid &= value < palette_len.max(1));
+            if !valid { return false; }
+        }
+        true
     };
 
     match (compact_possible, padded_possible) {
@@ -3968,6 +3985,8 @@ mod tests {
                 assert_eq!(baseline, expected);
                 for selected in [0, 1, 11, 12, 13, 31, 32, 64, 138] {
                     assert_eq!(layout.palette_index(packed, selected), baseline[selected]);
+                      let native=(0..packed.len()).map(|word|packed.i64_at(word)).collect::<Vec<_>>();
+                      assert_eq!(layout.palette_index_native(&native, selected),baseline[selected]);
                 }
                 for (start, end) in [(0, 139), (1, 31), (7, 64), (11, 13), (32, 139), (138, 139)] {
                     for zero_is_air in [false, true] {

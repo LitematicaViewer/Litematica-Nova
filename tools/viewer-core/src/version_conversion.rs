@@ -3,7 +3,7 @@
 //! DataVersion on partly converted data. No Java oracle is invoked at runtime.
 use crate::block_database::{Registry as BlockRegistry, database};
 use crate::nbt::{
-    BigEndianLongArray, Vec3i, bits_for_palette, decode_palette_frequencies, region_volume,
+    BigEndianLongArray, Vec3i, bits_for_palette, choose_palette_packing, region_volume,
 };
 use anyhow::{Context, Result, bail};
 use fastnbt::Value;
@@ -14,7 +14,9 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs,
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant, SystemTime},
 };
 
 pub(crate) fn target_has_item(data_version: i32, id: &str) -> Result<bool> {
@@ -22,7 +24,7 @@ pub(crate) fn target_has_item(data_version: i32, id: &str) -> Result<bool> {
     Ok(registry.items.contains(id))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ConversionRequest {
     pub target_version: String,
@@ -31,7 +33,28 @@ pub struct ConversionRequest {
     pub expected_source_sha256: Option<String>,
     #[serde(default)]
     pub overwrite: bool,
+    #[serde(default)]
+    pub selection: Option<ConversionSelection>,
+    #[serde(default)]
+    pub property_edit: Option<ConversionPropertyEdit>,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ConversionSelection {
+    pub source_state: String,
+    pub target_block_id: String,
+    #[serde(default)]
+    pub bulk: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ConversionPropertyEdit {
+    pub source_state: String,
+    pub properties: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversionEntry {
@@ -44,20 +67,36 @@ pub struct ConversionEntry {
     pub source_icon_state: String,
     pub target_name: Option<String>,
     pub category: String,
+    pub source_block_id: String,
+    pub source_icon_id: String,
+    pub source_properties: BTreeMap<String, String>,
+    pub target_block_id: Option<String>,
+    pub target_icon_id: Option<String>,
+    pub target_properties: BTreeMap<String, String>,
+    pub target_property_options: BTreeMap<String, Vec<String>>,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversionPreview {
     pub source_sha256: String,
     pub source_data_version: i32,
+    pub source_version: String,
     pub target_version: String,
     pub target_data_version: i32,
     pub entries: Vec<ConversionEntry>,
+    pub effective_replacements: BTreeMap<String, String>,
     pub blocked_payloads: Vec<String>,
     pub payload_issues: Vec<ConversionPayloadIssue>,
     pub payload_changes: Vec<String>,
     pub writable: bool,
     pub changed_block_count: u64,
+    pub checked_entity_count: u64,
+    pub checked_block_entity_count: u64,
+    pub checked_entity_types: BTreeMap<String, u64>,
+    pub checked_block_entity_types: BTreeMap<String, u64>,
+    pub checked_item_stack_count: u64,
+    pub changed_entity_count: u64,
+    pub changed_block_entity_count: u64,
     pub output_path: Option<String>,
     pub output_extension: String,
 }
@@ -69,6 +108,12 @@ pub struct ConversionPayloadIssue {
     pub type_name: String,
     pub count: usize,
     pub message: String,
+    pub domain: String,
+    pub source_id: String,
+    pub source_data_version: i32,
+    pub target_data_version: i32,
+    pub locations: Vec<String>,
+    pub locations_truncated: bool,
 }
 
 fn payload_type_name(id: &str) -> &str {
@@ -85,7 +130,10 @@ fn payload_type_name(id: &str) -> &str {
         "minecraft:frog" => "青蛙",
         "minecraft:parrot" => "鹦鹉",
         "minecraft:boat" => "船",
+        "minecraft:chest_minecart" | "MinecartChest" => "运输矿车",
+        "minecraft:hopper_minecart" | "MinecartHopper" => "漏斗矿车",
         "minecraft:chest"
+        | "minecraft:trapped_chest"
         | "minecraft:barrel"
         | "minecraft:hopper"
         | "minecraft:shulker_box"
@@ -96,7 +144,7 @@ fn payload_type_name(id: &str) -> &str {
     }
 }
 
-fn group_payload_issue(region: &Value, issue: &str) -> (String, String, String, String) {
+fn group_payload_issue(region: &Value, issue: &str) -> (String, String, String, String, String, String) {
     let (field, index) = issue
         .split_once('[')
         .and_then(|(field, rest)| {
@@ -138,6 +186,8 @@ fn group_payload_issue(region: &Value, issue: &str) -> (String, String, String, 
     };
     (
         kind.into(),
+        match field { "Entities" => "entity", "TileEntities" | "BlockEntities" => "block_entity", "PendingBlockTicks" | "PendingFluidTicks" => "scheduled_tick", _ => "payload" }.into(),
+        id.into(),
         payload_type_name(id).into(),
         format!("{field}[{index}]"),
         issue.split_once('：').map(|(_, detail)| detail).unwrap_or(message).into(),
@@ -286,48 +336,352 @@ fn recommend(
     valid(registry, &next).then_some(next)
 }
 
-pub fn convert(
+fn semantic_state(
+    source_data_version: i32,
+    registry: &BlockRegistry,
+    name: &str,
+    props: &BTreeMap<String, String>,
+) -> Result<(String, BTreeMap<String, String>)> {
+    if source_data_version >= 1519 { return Ok((name.to_owned(), props.clone())); }
+    database()?.registry_by_data_version(source_data_version)?
+        .legacy_state_aliases.get(&key(name, props))
+        .and_then(|states| states.iter().find(|state| parse_key(state).ok().is_some_and(|(id, _)| registry.blocks.contains_key(&id))).or_else(|| states.first()))
+        .map(|state| parse_key(state)).transpose()
+        .map(|state| state.unwrap_or_else(|| (name.to_owned(), props.clone())))
+}
+
+/// A cancellation result is distinct from malformed/unsupported NBT.
+#[derive(Debug)]
+pub struct ConversionCancelled;
+impl std::fmt::Display for ConversionCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("版本转换已取消") }
+}
+impl std::error::Error for ConversionCancelled {}
+
+pub(crate) fn check_cancel(cancel: &AtomicBool) -> Result<()> {
+    if cancel.load(Ordering::Relaxed) { return Err(ConversionCancelled.into()); }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversionProgress {
+    pub stage: &'static str,
+    pub completed: u64,
+    pub total: u64,
+    pub cache_hit: bool,
+    pub elapsed_ms: u64,
+}
+
+#[derive(PartialEq, Eq)]
+struct SourceIdentity {
+    path: PathBuf,
+    bytes: u64,
+    modified: SystemTime,
+    created: Option<SystemTime>,
+}
+impl SourceIdentity {
+    fn read(path: &Path) -> Result<Self> {
+        let path = fs::canonicalize(path).context("定位转换源文件")?;
+        let metadata = fs::metadata(&path)?;
+        Ok(Self { path, bytes: metadata.len(), modified: metadata.modified()?, created: metadata.created().ok() })
+    }
+}
+struct CachedSource {
+    identity: SourceIdentity,
+    sha256: String,
+    root: Value,
+    data_version: i32,
+    heap_bytes: usize,
+    frequencies: BTreeMap<String, RegionScan>,
+}
+
+#[derive(Clone)]
+struct RegionScan {
+    frequencies: Vec<u64>,
+    layout: crate::nbt::PaletteLayout,
+}
+
+/// Owned by the existing long-lived Rust data worker, never by UI/renderer.
+/// One source only; oversized inputs still convert normally without caching.
+pub struct ConversionCache {
+    max_source_bytes: usize,
+    source: Option<CachedSource>,
+}
+impl ConversionCache {
+    pub fn new(max_source_bytes: usize) -> Self { Self { max_source_bytes, source: None } }
+
+    pub fn convert(
+        &mut self,
+        input: &Path,
+        output: Option<&Path>,
+        request: &ConversionRequest,
+        cancel: &AtomicBool,
+        mut progress: impl FnMut(ConversionProgress),
+    ) -> Result<ConversionPreview> {
+        let started = Instant::now();
+        check_cancel(cancel)?;
+        let identity = SourceIdentity::read(input)?;
+        let cache_hit = self.source.as_ref().is_some_and(|source| source.identity == identity);
+        let mut emit = |stage, completed, total| progress(ConversionProgress {
+            stage, completed, total, cache_hit, elapsed_ms: started.elapsed().as_millis() as u64,
+        });
+        if !cache_hit { self.source = None; }
+        let (mut source, loaded_target, source_load_elapsed) = match self.source.take() {
+            Some(source) => (source, None, started.elapsed()),
+            None => {
+                // One bounded scoped task overlaps input-independent registry
+                // initialization with source I/O/NBT decode. Both still belong
+                // to this operation's measured time, and every exit joins it.
+                let (source, target, source_load_elapsed) = std::thread::scope(|scope| -> Result<_> {
+                    let registry = std::thread::Builder::new().name("nova-version-registry".into()).spawn_scoped(scope, || -> Result<i32> {
+                        let registry_started = Instant::now();
+                        // The worker's immutable game-data snapshot is TLS-
+                        // scoped, so bind it on this temporary thread as well.
+                        let _context = crate::game_data::operation_context()?;
+                        let result = database()?.version(&request.target_version).map(|version| version.data_version);
+                        eprintln!("[version-convert] stage=registry elapsed_ms={:.3} parallel=true", registry_started.elapsed().as_secs_f64() * 1000.0);
+                        result
+                    }).context("启动版本注册表读取任务")?;
+                    let load_started = Instant::now();
+                    let source = load_source(input, identity, cancel, &mut emit);
+                    let source_load_elapsed = load_started.elapsed();
+                    let target = registry.join().map_err(|_| anyhow::anyhow!("版本注册表读取任务异常"));
+                    check_cancel(cancel)?;
+                    // Join happens before propagating either source or registry
+                    // errors, so no initializer survives cancellation/failure.
+                    Ok((source?, target??, source_load_elapsed))
+                })?;
+                (source, Some(target), source_load_elapsed)
+            }
+        };
+        eprintln!("[version-convert] stage=load elapsed_ms={:.3} wall_elapsed_ms={:.3} cache_hit={} source_bytes={} source_heap_bytes={}", source_load_elapsed.as_secs_f64() * 1000.0, started.elapsed().as_secs_f64() * 1000.0, cache_hit, source.identity.bytes, source.heap_bytes);
+        // Preview reuse trusts normal file identity. Writes always re-hash the
+        // current bytes, including edits that preserved length/timestamps.
+        let result = (|| -> Result<ConversionPreview> {
+            if output.is_some() {
+                let actual = source_digest(input, cancel)?;
+                if actual != source.sha256 { bail!("原文件已变化，请重新预览转换差异") }
+            }
+            if request.expected_source_sha256.as_ref().is_some_and(|hash| hash != &source.sha256) {
+                bail!("原文件已变化，请重新预览转换差异")
+            }
+            let target = match loaded_target {
+                Some(target) => target,
+                None => {
+                    let registry_started = Instant::now();
+                    let target = database()?.version(&request.target_version)?.data_version;
+                    eprintln!("[version-convert] stage=registry elapsed_ms={:.3} parallel=false", registry_started.elapsed().as_secs_f64() * 1000.0);
+                    target
+                }
+            };
+            let backup = ConversionRestore::capture(&source.root, (source.data_version < 1519) != (target < 1519))?;
+            let result = convert_loaded(input, output, request, &mut source, cancel, &mut emit);
+            // Only palettes/payloads mutate on modern paths; packed block arrays
+            // are never cloned. Restore even after cancellation or an error.
+            backup.restore(&mut source.root);
+            result
+        })();
+        if source.heap_bytes.saturating_add(source.frequencies.values().map(|v| v.frequencies.capacity() * 8).sum::<usize>()) <= self.max_source_bytes {
+            self.source = Some(source);
+        }
+        if result.is_ok() { emit("ready", 1, 1); }
+        result
+    }
+}
+
+fn nbt_heap_bytes(value: &Value) -> usize {
+    use std::mem::size_of;
+    match value {
+        Value::String(value) => value.capacity(),
+        Value::ByteArray(value) => value.len(),
+        Value::IntArray(value) => value.len().saturating_mul(4),
+        Value::LongArray(value) => value.len().saturating_mul(8),
+        Value::List(values) => values.capacity().saturating_mul(size_of::<Value>()).saturating_add(values.iter().map(nbt_heap_bytes).sum::<usize>()),
+        Value::Compound(fields) => fields.capacity().saturating_mul(size_of::<(String, Value)>() + 16).saturating_add(fields.iter().map(|(key, value)| key.capacity().saturating_add(nbt_heap_bytes(value))).sum::<usize>()),
+        _ => 0,
+    }
+}
+fn source_digest(input: &Path, cancel: &AtomicBool) -> Result<String> {
+    let mut file = fs::File::open(input)?;
+    let mut buffer = vec![0; 1 << 20];
+    let mut digest = Sha256::new();
+    loop {
+        check_cancel(cancel)?;
+        let read = file.read(&mut buffer)?;
+        if read == 0 { break; }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+struct ConversionReader<'a, R, F> {
+    inner: R,
+    cancel: &'a AtomicBool,
+    emit: &'a mut F,
+    bytes: u64,
+    next_check: u64,
+    next_progress: u64,
+}
+impl<R: Read, F: FnMut(&'static str, u64, u64)> Read for ConversionReader<'_, R, F> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.bytes >= self.next_check {
+            if self.cancel.load(Ordering::Relaxed) { return Err(std::io::Error::other(ConversionCancelled)); }
+            self.next_check = self.bytes.saturating_add(65536);
+        }
+        let read = self.inner.read(buffer)?;
+        self.bytes = self.bytes.saturating_add(read as u64);
+        if self.bytes >= self.next_progress {
+            (self.emit)("decode", self.bytes, 0);
+            self.next_progress = self.bytes.saturating_add(1 << 20);
+        }
+        Ok(read)
+    }
+}
+
+fn load_source(input: &Path, identity: SourceIdentity, cancel: &AtomicBool, emit: &mut impl FnMut(&'static str, u64, u64)) -> Result<CachedSource> {
+    let mut file = fs::File::open(input).with_context(|| format!("读取投影 {}", input.display()))?;
+    let mut bytes = Vec::new();
+    let mut buffer = vec![0; 1 << 20];
+    let mut digest = Sha256::new();
+    loop {
+        check_cancel(cancel)?;
+        let count = file.read(&mut buffer)?;
+        if count == 0 { break; }
+        digest.update(&buffer[..count]); bytes.extend_from_slice(&buffer[..count]);
+        emit("read", bytes.len() as u64, identity.bytes);
+    }
+    let source_sha256 = format!("{:x}", digest.finalize());
+    // Stream the decoder into fastnbt: no second full decompressed byte copy,
+    // and cancellation is observable during both gzip and NBT deserialization.
+    let mut reader = ConversionReader { inner: GzDecoder::new(&bytes[..]), cancel, emit, bytes: 0, next_check: 0, next_progress: 0 };
+    let parsed = fastnbt::from_reader(&mut reader);
+    check_cancel(cancel)?;
+    let mut root: Value = parsed.context("解析完整投影 NBT")?;
+    let trailing = std::io::copy(&mut reader, &mut std::io::sink())?;
+    check_cancel(cancel)?;
+    if trailing != 0 { bail!("投影NBT根节点后存在未解析数据，原文件保留") }
+    let source_data_version = integer(compound(&root)?.get("MinecraftDataVersion"))?;
+    if compound(&root)?.get("Materials") == Some(&Value::String("Alpha".into())) {
+        root = crate::version_legacy_encoding::decode(&root, database()?.registry_by_data_version(source_data_version)?)?;
+    }
+    if SourceIdentity::read(input)? != identity { bail!("读取期间原文件已变化，请重试预检") }
+    let heap_bytes = nbt_heap_bytes(&root);
+    emit("parsed", 1, 1);
+    Ok(CachedSource { identity, sha256: source_sha256, root, data_version: source_data_version, heap_bytes, frequencies: BTreeMap::new() })
+}
+
+struct ConversionRestore {
+    root_fields: Vec<(String, Option<Value>)>,
+    regions: Vec<(String, Vec<(String, Option<Value>)>)>,
+}
+impl ConversionRestore {
+    fn capture(root: &Value, changes_packing: bool) -> Result<Self> {
+        let root = compound(root)?;
+        let regions = compound(root.get("Regions").context("投影缺少 Regions")?)?;
+        let mut saved = Vec::with_capacity(regions.len());
+        for (name, region) in regions {
+            let fields = compound(region)?;
+            let mut keys = vec!["BlockStatePalette", "TileEntities", "Entities", "BlockEntities", "PendingBlockTicks", "PendingFluidTicks"];
+            if changes_packing { keys.push("BlockStates"); }
+            saved.push((name.clone(), keys.into_iter().map(|key| (key.to_owned(), fields.get(key).cloned())).collect()));
+        }
+        Ok(Self { root_fields: ["MinecraftDataVersion", "Version", "SubVersion"].into_iter().map(|key| (key.into(), root.get(key).cloned())).collect(), regions: saved })
+    }
+    fn restore(self, root: &mut Value) {
+        let Value::Compound(root) = root else { return; };
+        for (key, value) in self.root_fields { if let Some(value) = value { root.insert(key, value); } else { root.remove(&key); } }
+        let Some(Value::Compound(regions)) = root.get_mut("Regions") else { return; };
+        for (name, fields) in self.regions {
+            let Some(Value::Compound(region)) = regions.get_mut(&name) else { continue; };
+            for (key, value) in fields { if let Some(value) = value { region.insert(key, value); } else { region.remove(&key); } }
+        }
+    }
+}
+
+pub fn convert(input: &Path, output: Option<&Path>, request: &ConversionRequest) -> Result<ConversionPreview> {
+    ConversionCache::new(0).convert(input, output, request, &AtomicBool::new(false), |_| {})
+}
+
+fn convert_loaded(
     input: &Path,
     output: Option<&Path>,
     request: &ConversionRequest,
+    source: &mut CachedSource,
+    cancel: &AtomicBool,
+    emit: &mut impl FnMut(&'static str, u64, u64),
 ) -> Result<ConversionPreview> {
-    let bytes = fs::read(input).with_context(|| format!("读取投影 {}", input.display()))?;
-    let source_sha256 = format!("{:x}", Sha256::digest(&bytes));
-    if request
-        .expected_source_sha256
-        .as_ref()
-        .is_some_and(|expected| expected != &source_sha256)
-    {
-        bail!("原文件已变化，请重新预览转换差异")
-    }
-    let mut raw = Vec::new();
-    GzDecoder::new(&bytes[..]).read_to_end(&mut raw)?;
-    let mut root: Value = fastnbt::from_bytes(&raw).context("解析完整投影 NBT")?;
-    let source_data_version = integer(compound(&root)?.get("MinecraftDataVersion"))?;
+    let source_data_version = source.data_version;
+    let source_sha256 = source.sha256.clone();
+    let frequencies_cache = &mut source.frequencies;
+    let root = &mut source.root;
     let db = database()?;
-    if compound(&root)?.get("Materials") == Some(&Value::String("Alpha".into())) {
-        root = crate::version_legacy_encoding::decode(
-            &root,
-            db.registry_by_data_version(source_data_version)?,
-        )?;
-    }
     let target = db.version(&request.target_version)?;
     let registry = db.registry(&request.target_version)?;
+    let selected_source = request.selection.as_ref().map(|selection| canonical(&selection.source_state)).transpose()?;
+    let selected_category = if let Some(selection) = &request.selection {
+        if !registry.blocks.contains_key(&selection.target_block_id) { bail!("目标真实注册表没有所选方块 {}", selection.target_block_id) }
+        let (name, props) = parse_key(selected_source.as_deref().unwrap())?;
+        let (name, _) = semantic_state(source_data_version, registry, &name, &props)?;
+        db.category(&name).filter(|category| !category.is_empty())
+    } else { None };
+    let edited_source = request.property_edit.as_ref().map(|edit| canonical(&edit.source_state)).transpose()?;
+    let mut selected_found = selected_source.is_none();
+    let mut edited_found = edited_source.is_none();
+    let mut effective_replacements = BTreeMap::new();
     let mut entries: BTreeMap<String, ConversionEntry> = BTreeMap::new();
     let mut blocked_payloads = Vec::new();
     let mut payload_changes = Vec::new();
+    let mut checked_entity_count = 0;
+    let mut checked_block_entity_count = 0;
+    let mut checked_entity_types = BTreeMap::new();
+    let mut checked_block_entity_types = BTreeMap::new();
+    let mut checked_item_stack_count = 0;
+    let mut changed_entity_count = 0;
+    let mut changed_block_entity_count = 0;
+    let mut frequency_elapsed = Duration::ZERO;
+    let mut frequency_layout_elapsed = Duration::ZERO;
+    let mut frequency_scan_elapsed = Duration::ZERO;
+    let mut frequency_cache_hits = 0_u64;
+    let mut frequency_blocks = 0_u64;
+    let mut frequency_word_reads = 0_usize;
+    let mut payload_elapsed = Duration::ZERO;
     let mut payload_issue_groups: BTreeMap<
-        (String, String, String),
+        (String, String, String, String, String),
         std::collections::BTreeSet<String>,
     > = BTreeMap::new();
-    let root_map = match &mut root {
+    let root_map = match &mut *root {
         Value::Compound(map) => map,
         _ => bail!("无效的投影根节点"),
     };
     let Some(Value::Compound(regions)) = root_map.get_mut("Regions") else {
         bail!("投影缺少 Regions")
     };
-    for (region_name, region) in regions {
+    let region_total = regions.len() as u64;
+    for (region_index, (region_name, region)) in regions.iter_mut().enumerate() {
+        check_cancel(cancel)?;
+        emit("regions", region_index as u64, region_total);
+        // Count the actual source row IDs before any palette/payload changes,
+        // including rows whose codec migration will later report a blocker.
+        let source_fields = compound(region)?;
+        for (field, types, count) in [
+            ("Entities", &mut checked_entity_types, &mut checked_entity_count),
+            ("TileEntities", &mut checked_block_entity_types, &mut checked_block_entity_count),
+        ] {
+            if let Some(Value::List(values)) = source_fields.get(field) {
+                *count += values.len() as u64;
+                for value in values {
+                    let id = compound(value).ok().and_then(|fields| fields.get("id")).and_then(|id| match id { Value::String(id) => Some(id.as_str()), _ => None }).unwrap_or("<missing-or-invalid-id>");
+                    *types.entry(id.to_owned()).or_insert(0) += 1;
+                }
+            }
+        }
+        if let Some(Value::List(values)) = source_fields.get("BlockEntities") {
+            checked_block_entity_count += values.len() as u64;
+            for value in values {
+                let id = compound(value).ok().and_then(|fields| fields.get("id")).and_then(|id| match id { Value::String(id) => Some(id.as_str()), _ => None }).unwrap_or("<missing-or-invalid-id>");
+                *checked_block_entity_types.entry(id.to_owned()).or_insert(0) += 1;
+            }
+        }
         crate::version_payload_migration::migrate_head_palette(region, source_data_version, target.data_version)?;
         crate::version_payload_migration::migrate_banner_palette(region, source_data_version, target.data_version)?;
         let Value::Compound(fields) = region else {
@@ -349,41 +703,58 @@ pub fn convert(
             .iter()
             .map(|value| state(value).map(|(name, _)| name))
             .collect::<Result<_>>()?;
-        let frequencies = decode_palette_frequencies(
-            &BigEndianLongArray::new(packed.iter().copied().collect()),
-            volume,
-            bits_for_palette(palette.len()),
-            palette.len(),
-        )?;
+        // Cross-flattening head/banner conversion may split/repack a palette;
+        // all other target changes reuse the immutable source frequency index.
+        let frequency_started = Instant::now();
+        let repacked = (source_data_version < 1519) != (target.data_version < 1519);
+        let scan = if !repacked { frequencies_cache.get(region_name).cloned() } else { None };
+        let scan = match scan {
+            Some(scan) => { frequency_cache_hits += 1; scan },
+            None => {
+                let layout_started = Instant::now();
+                let packed = BigEndianLongArray::new(packed.iter().copied().collect());
+                let layout = choose_palette_packing(&packed, volume, bits_for_palette(palette.len()), palette.len())?;
+                frequency_layout_elapsed += layout_started.elapsed();
+                let scan_started = Instant::now();
+                let mut counts = vec![0_u64; palette.len().max(1)];
+                let mut nonzero_count = 0_u64;
+                for start in (0..volume).step_by(65536) {
+                    check_cancel(cancel)?;
+                    emit("blocks", start as u64, volume as u64);
+                    let end = start.saturating_add(65536).min(volume);
+                    let mut invalid_index = None;
+                    frequency_word_reads += layout.visit_palette_range(&packed, start, end, true, |_, index| {
+                        if let Some(count) = counts.get_mut(index) {
+                            *count += 1;
+                            nonzero_count += 1;
+                        } else { invalid_index = Some(index); }
+                    });
+                    if let Some(index) = invalid_index { bail!("投影方块索引 {index} 超出调色板") }
+                }
+                // The shared reader skips encoded palette index zero. It need
+                // not be AIR: conversion still counts every such block, so a
+                // replacement of palette[0] has the complete actual frequency.
+                counts[0] = (volume as u64).checked_sub(nonzero_count).context("投影非零调色板频率超过选区体积")?;
+                frequency_scan_elapsed += scan_started.elapsed();
+                frequency_blocks += volume as u64;
+                let scan = RegionScan { frequencies: counts, layout };
+                if !repacked { frequencies_cache.insert(region_name.clone(), scan.clone()); }
+                scan
+            }
+        };
+        frequency_elapsed += frequency_started.elapsed();
+        let frequencies = &scan.frequencies;
         let Some(Value::List(palette)) = fields.get_mut("BlockStatePalette") else {
             unreachable!()
         };
         for (index, palette_value) in palette.iter_mut().enumerate() {
+            check_cancel(cancel)?;
             let (name, props) = state(palette_value)?;
             let old = key(&name, &props);
-            let (semantic_name, semantic_props) = if source_data_version < 1519 {
-                db.registry_by_data_version(source_data_version)?
-                    .legacy_state_aliases
-                    .get(&old)
-                    .and_then(|states| {
-                        states
-                            .iter()
-                            .find(|state| {
-                                parse_key(state)
-                                    .ok()
-                                    .is_some_and(|(id, _)| registry.blocks.contains_key(&id))
-                            })
-                            .or_else(|| states.first())
-                    })
-                    .map(|state| parse_key(state))
-                    .transpose()?
-                    .unwrap_or_else(|| (name.clone(), props.clone()))
-            } else {
-                (name.clone(), props.clone())
-            };
+            let (semantic_name, semantic_props) = semantic_state(source_data_version, registry, &name, &props)?;
             let target_name = migrated_block_name(&semantic_name, source_data_version, target.data_version);
             let compatible = valid(registry, &old);
-            let chosen = if let Some(replacement) = request.replacements.get(&old) {
+            let mut chosen = if let Some(replacement) = request.replacements.get(&old).filter(|value| !value.trim().is_empty()) {
                 let replacement = canonical(replacement)?;
                 if !replacement.contains('[')
                     && registry.blocks.contains_key(&replacement)
@@ -398,10 +769,38 @@ pub fn convert(
             } else {
                 recommend(registry, target_name, &semantic_props)
             };
+            if let Some(selection) = &request.selection {
+                let selected = selected_source.as_deref() == Some(old.as_str());
+                selected_found |= selected;
+                // Match the displayed affected entries, not hidden compatible
+                // blocks that happened to share a broad functional category.
+                let affected = !compatible || chosen.as_ref() != Some(&old);
+                let same_category = selected_category.is_some_and(|category| db.category(&semantic_name) == Some(category));
+                if selected || (selection.bulk && affected && same_category) {
+                    chosen = recommend(registry, &selection.target_block_id, &semantic_props);
+                }
+            }
+            if edited_source.as_deref() == Some(old.as_str()) {
+                edited_found = true;
+                let edit = request.property_edit.as_ref().unwrap();
+                let (target_id, _) = parse_key(chosen.as_deref().context("请先为该条目选择目标方块")?)?;
+                let definition = registry.blocks.get(&target_id).context("所选目标方块没有真实注册表定义")?;
+                let (_, mut properties) = parse_key(&definition.default)?;
+                for (property, value) in &edit.properties {
+                    if !definition.properties.get(property).is_some_and(|values| values.contains(value)) { bail!("目标方块 {target_id} 没有属性 {property}={value}") }
+                    properties.insert(property.clone(), value.clone());
+                }
+                chosen = Some(key(&target_id, &properties));
+            }
             let valid = chosen
                 .as_ref()
                 .is_some_and(|chosen| valid(registry, chosen));
             if !compatible || chosen.as_ref() != Some(&old) {
+                effective_replacements.insert(old.clone(), chosen.clone().unwrap_or_default());
+                let target_state = chosen.as_deref().map(parse_key).transpose()?;
+                let target_block_id = target_state.as_ref().map(|(id, _)| id.clone());
+                let target_properties = target_state.as_ref().map(|(_, props)| props.clone()).unwrap_or_default();
+                let target_property_options = target_block_id.as_ref().and_then(|id| registry.blocks.get(id)).map(|block| block.properties.clone()).unwrap_or_default();
                 let entry = entries
                     .entry(old.clone())
                     .or_insert_with(|| ConversionEntry {
@@ -427,6 +826,13 @@ pub fn convert(
                             .and_then(|state| parse_key(state).ok())
                             .map(|(id, _)| db.name(&request.target_version, &id)),
                         category: db.category(&semantic_name).unwrap_or("").into(),
+                        source_block_id: name.clone(),
+                        source_icon_id: semantic_name.clone(),
+                        source_properties: props.clone(),
+                        target_icon_id: target_block_id.clone(),
+                        target_block_id,
+                        target_properties,
+                        target_property_options,
                     });
                 entry.count += frequencies[index];
             }
@@ -451,7 +857,8 @@ pub fn convert(
                 }
             }
         }
-        if compound(region)?.iter().any(|(field, payload)| {
+        let region_fields = compound(region)?;
+        if region_fields.iter().any(|(field, payload)| {
             [
                 "Entities",
                 "TileEntities",
@@ -462,16 +869,25 @@ pub fn convert(
             .contains(&field.as_str())
                 && !matches!(payload,Value::List(values) if values.is_empty())
         }) {
-            let migration = crate::version_payload_migration::migrate_with_palette(
+            emit("payloads", region_index as u64, region_total);
+            let payload_started = Instant::now();
+            let migration = crate::version_payload_migration::migrate_with_palette_controlled(
                 region,
                 source_data_version,
                 target.data_version,
                 &original_names,
-            )?;
+                cancel,
+                Some(scan.layout),
+            );
+            payload_elapsed += payload_started.elapsed();
+            let migration = migration?;
+            checked_item_stack_count += migration.checked_item_stack_count;
+            changed_entity_count += migration.changed_entity_count;
+            changed_block_entity_count += migration.changed_block_entity_count;
             for issue in &migration.issues {
-                let (kind, name, identity, message) = group_payload_issue(region, issue);
+                let (kind, domain, source_id, name, identity, message) = group_payload_issue(region, issue);
                 payload_issue_groups
-                    .entry((kind, name, message))
+                    .entry((kind, domain, source_id, name, message))
                     .or_default()
                     .insert(format!("{region_name}/{identity}"));
             }
@@ -489,6 +905,10 @@ pub fn convert(
             );
         }
     }
+    eprintln!("[version-convert] stage=frequency elapsed_ms={:.3} layout_ms={:.3} scan_ms={:.3} cache_regions={} scanned_blocks={} word_reads={}", frequency_elapsed.as_secs_f64()*1000.0, frequency_layout_elapsed.as_secs_f64()*1000.0, frequency_scan_elapsed.as_secs_f64()*1000.0, frequency_cache_hits, frequency_blocks, frequency_word_reads);
+    eprintln!("[version-convert] stage=payload elapsed_ms={:.3} entities={} block_entities={} checked_items={}", payload_elapsed.as_secs_f64()*1000.0, checked_entity_count, checked_block_entity_count, checked_item_stack_count);
+    if !selected_found { bail!("所选源方块状态已变化，请重新预览转换差异") }
+    if !edited_found { bail!("属性编辑条目的源方块状态已变化，请重新预览转换差异") }
     if target.legacy && blocked_payloads.is_empty() && entries.values().all(|entry| entry.valid) {
         if let Err(error) = crate::version_legacy_encoding::encode(&root, registry) {
             blocked_payloads.push(error.to_string());
@@ -501,20 +921,28 @@ pub fn convert(
         .map(|entry| entry.count)
         .sum();
     let mut preview = ConversionPreview {
-        source_sha256,
+        source_sha256: source_sha256.clone(),
         source_data_version,
+        source_version: db.version_for_data_version(source_data_version).map(str::to_owned).unwrap_or_else(|| format!("DataVersion {source_data_version}")),
         target_version: request.target_version.clone(),
         target_data_version: target.data_version,
         entries: entries.into_values().collect(),
+        effective_replacements,
         blocked_payloads,
         payload_issues: payload_issue_groups
             .into_iter()
             .map(
-                |((kind, type_name, message), identities)| ConversionPayloadIssue {
+                |((kind, domain, source_id, type_name, message), identities)| ConversionPayloadIssue {
                     kind,
                     type_name,
                     count: identities.len(),
                     message,
+                    domain,
+                    source_id,
+                    source_data_version,
+                    target_data_version: target.data_version,
+                    locations: identities.iter().take(128).cloned().collect(),
+                    locations_truncated: identities.len() > 128,
                 },
             )
             .collect(),
@@ -525,10 +953,19 @@ pub fn convert(
             .collect(),
         writable,
         changed_block_count,
+        checked_entity_count,
+        checked_block_entity_count,
+        checked_entity_types,
+        checked_block_entity_types,
+        checked_item_stack_count,
+        changed_entity_count,
+        changed_block_entity_count,
         output_path: None,
         output_extension: target.output_extension.clone(),
     };
+    check_cancel(cancel)?;
     if let Some(output) = output {
+        emit("write", 0, 1);
         if request.expected_source_sha256.is_none() {
             bail!("另存前须预览并确认原文件哈希")
         }
@@ -538,7 +975,7 @@ pub fn convert(
         if output.exists() && !request.overwrite {
             bail!("另存目标已存在，不覆盖投影或原件")
         }
-        let Value::Compound(map) = &mut root else {
+        let Value::Compound(map) = &mut *root else {
             unreachable!()
         };
         map.insert(
@@ -549,21 +986,25 @@ pub fn convert(
             map.insert("Version".into(), Value::Int(6));
             map.insert("SubVersion".into(), Value::Int(1));
         }
-        if target.legacy {
-            root = crate::version_legacy_encoding::encode(&root, registry)?;
-        }
+        let encoded;
+        let expected: &Value = if target.legacy {
+            encoded = crate::version_legacy_encoding::encode(root, registry)?;
+            &encoded
+        } else { root };
         let converted = if target.legacy {
-            fastnbt::to_bytes_with_opts(&root, fastnbt::SerOpts::new().root_name("Schematic"))?
+            fastnbt::to_bytes_with_opts(expected, fastnbt::SerOpts::new().root_name("Schematic"))?
         } else {
-            fastnbt::to_bytes(&root)?
+            fastnbt::to_bytes(expected)?
         };
         let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
         gzip.write_all(&converted)?;
         let converted = gzip.finish()?;
-        verify_converted_payload(&converted, &root)?;
+        verify_converted_payload(&converted, expected)?;
+        check_cancel(cancel)?;
+        if source_digest(input, cancel)? != source_sha256 { bail!("另存期间原文件已变化，转换已停止") }
         if request.overwrite {
             atomic_replace(output, &converted)?;
-            verify_converted_payload(&fs::read(output)?, &root)?;
+            verify_converted_payload(&fs::read(output)?, expected)?;
             preview.output_path = Some(output.display().to_string());
             return Ok(preview);
         }
@@ -578,7 +1019,7 @@ pub fn convert(
             return Err(error.into());
         }
         drop(file);
-        if let Err(error) = fs::read(output).map_err(anyhow::Error::from).and_then(|bytes| verify_converted_payload(&bytes, &root)) {
+        if let Err(error) = fs::read(output).map_err(anyhow::Error::from).and_then(|bytes| verify_converted_payload(&bytes, expected)) {
             let _ = fs::remove_file(output);
             return Err(error.context("另存后重新读取校验失败，未改动原文件"));
         }
@@ -747,6 +1188,8 @@ mod tests {
             replacements: BTreeMap::new(),
             expected_source_sha256: None,
             overwrite: false,
+            selection: None,
+            property_edit: None,
         }
     }
     #[test]
@@ -773,7 +1216,7 @@ mod tests {
         gzip.write_all(&fastnbt::to_bytes(&source).unwrap()).unwrap();
         let original_bytes = gzip.finish().unwrap();
         fs::write(&input, &original_bytes).unwrap();
-        let mut request = ConversionRequest { target_version: "26.3".into(), replacements: BTreeMap::new(), expected_source_sha256: None, overwrite: false };
+        let mut request = ConversionRequest { target_version: "26.3".into(), replacements: BTreeMap::new(), expected_source_sha256: None, overwrite: false, selection: None, property_edit: None };
         let preview = convert(&input, None, &request).unwrap();
         assert!(preview.writable, "{:?}", preview.blocked_payloads);
         assert_eq!(preview.entries.len(), 1);
@@ -1024,6 +1467,8 @@ mod tests {
             replacements: BTreeMap::new(),
             expected_source_sha256: None,
             overwrite: false,
+            selection: None,
+            property_edit: None,
         };
         let preview = convert(&input, None, &request).unwrap();
         assert!(preview.writable);
@@ -1064,4 +1509,53 @@ mod tests {
         assert!(convert(&input, Some(&input), &request).is_err());
         assert_eq!(fs::read(&input).unwrap(), original);
     }
+    #[test]
+    fn cache_reuses_parsed_source_and_frequency_layout_then_restores_after_cancel() {
+        let dir=tempfile::tempdir().unwrap();let input=dir.path().join("cache.litematic");let original=fixture(&input,false);
+        let mut cache=ConversionCache::new(16 << 20);let cancel=AtomicBool::new(false);
+        let first=cache.convert(&input,None,&request(),&cancel,|_|{}).unwrap();
+        let cached_root=cache.source.as_ref().unwrap().root.clone();assert_eq!(cache.source.as_ref().unwrap().frequencies.len(),1);assert_eq!(cache.source.as_ref().unwrap().frequencies["test"].frequencies,vec![1,3]);
+        let mut stages=Vec::new();let second=cache.convert(&input,None,&request(),&cancel,|event|{assert!(event.cache_hit);stages.push(event.stage);}).unwrap();
+        assert_eq!(first.source_sha256,second.source_sha256);assert!(!stages.contains(&"decode")&&!stages.contains(&"blocks"));
+        assert_eq!(cache.source.as_ref().unwrap().root,cached_root);
+        let error=cache.convert(&input,None,&request(),&cancel,|event|{if event.stage=="regions" {cancel.store(true,Ordering::Relaxed);}}).unwrap_err();
+        assert!(error.downcast_ref::<ConversionCancelled>().is_some());assert_eq!(cache.source.as_ref().unwrap().root,cached_root);assert_eq!(fs::read(&input).unwrap(),original);
+        cancel.store(false,Ordering::Relaxed);
+        assert!(cache.convert(&input,None,&request(),&cancel,|_|{}).is_ok());
+        let mut uncacheable=ConversionCache::new(1);assert!(uncacheable.convert(&input,None,&request(),&cancel,|_|{}).is_ok());assert!(uncacheable.source.is_none());
+    }
+
+    #[test]
+    fn cached_write_rehashes_source_and_cancel_never_creates_output() {
+        let dir=tempfile::tempdir().unwrap();let input=dir.path().join("source.litematic");let output=dir.path().join("target.litematic");let original=fixture(&input,false);
+        let cancel=AtomicBool::new(false);let mut cache=ConversionCache::new(16 << 20);let mut req=request();let preview=cache.convert(&input,None,&req,&cancel,|_|{}).unwrap();req.expected_source_sha256=Some(preview.source_sha256);
+        let error=cache.convert(&input,Some(&output),&req,&cancel,|event|{if event.stage=="write" {cancel.store(true,Ordering::Relaxed);}}).unwrap_err();
+        assert!(error.downcast_ref::<ConversionCancelled>().is_some());assert!(!output.exists());assert_eq!(fs::read(&input).unwrap(),original);
+        cancel.store(false,Ordering::Relaxed);fs::write(&input,b"changed").unwrap();
+        assert!(cache.convert(&input,Some(&output),&req,&cancel,|_|{}).is_err());assert!(!output.exists());
+    }
+
+    #[test]
+    fn ui_selection_bulk_and_property_edits_return_backend_authoritative_states() {
+        let dir=tempfile::tempdir().unwrap();let input=dir.path().join("selection.litematic");fixture(&input,false);
+        let mut root=read(&input);
+        let Value::Compound(regions)=(match &mut root {Value::Compound(root)=>root.get_mut("Regions").unwrap(),_=>panic!()})else{panic!()};
+        let Value::Compound(region)=regions.get_mut("test").unwrap()else{panic!()};
+        let Value::List(palette)=region.get_mut("BlockStatePalette").unwrap()else{panic!()};
+        let mut second=palette[1].clone();let Value::Compound(state)=&mut second else{panic!()};state.insert("Properties".into(),Value::Compound([("axis".into(),Value::String("x".into()))].into()));palette.push(second);
+        let packed=crate::nbt::pack_palette_indices(&[1,2,1,0],bits_for_palette(3));
+        region.insert("BlockStates".into(),Value::LongArray(fastnbt::LongArray::new((0..packed.len()).map(|index|packed.i64_at(index)).collect())));
+        let mut gzip=GzEncoder::new(Vec::new(),Compression::default());gzip.write_all(&fastnbt::to_bytes(&root).unwrap()).unwrap();let original=gzip.finish().unwrap();fs::write(&input,&original).unwrap();
+        let mut req=request();req.selection=Some(ConversionSelection{source_state:"minecraft:pale_oak_log[axis=z]".into(),target_block_id:"minecraft:spruce_log".into(),bulk:true});
+        let preview=convert(&input,None,&req).unwrap();assert!(preview.writable,"{:?}",preview.blocked_payloads);assert_eq!(preview.source_version,"26.3");
+        assert_eq!(preview.effective_replacements["minecraft:pale_oak_log[axis=z]"],"minecraft:spruce_log[axis=z]");
+        assert_eq!(preview.effective_replacements["minecraft:pale_oak_log[axis=x]"],"minecraft:spruce_log[axis=x]");
+        let row=preview.entries.iter().find(|row|row.source_state=="minecraft:pale_oak_log[axis=z]").unwrap();
+        assert_eq!(row.source_icon_id,"minecraft:pale_oak_log");assert_eq!(row.target_block_id.as_deref(),Some("minecraft:spruce_log"));assert_eq!(row.target_properties["axis"],"z");assert!(row.target_property_options["axis"].contains(&"y".into()));
+        req.selection=None;req.replacements=preview.effective_replacements;
+        req.property_edit=Some(ConversionPropertyEdit{source_state:"minecraft:pale_oak_log[axis=z]".into(),properties:[("axis".into(),"y".into())].into()});
+        let preview=convert(&input,None,&req).unwrap();assert_eq!(preview.effective_replacements["minecraft:pale_oak_log[axis=z]"],"minecraft:spruce_log[axis=y]");assert_eq!(preview.effective_replacements["minecraft:pale_oak_log[axis=x]"],"minecraft:spruce_log[axis=x]");
+        req.property_edit.as_mut().unwrap().properties.insert("axis".into(),"invalid".into());assert!(convert(&input,None,&req).is_err());assert_eq!(fs::read(&input).unwrap(),original);
+    }
+
 }

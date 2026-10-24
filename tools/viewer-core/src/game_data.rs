@@ -165,7 +165,33 @@ pub fn resolve_context(store: &Path, default: &Path) -> Result<GameDataContext> 
     package_context(&store.join("packages").join(selection.id)).context("选定游戏数据包不可用，请重新选择或恢复默认")
 }
 
+thread_local! {
+    static OPERATION_CONTEXT: std::cell::RefCell<Option<GameDataContext>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) struct OperationContext(Option<GameDataContext>);
+impl Drop for OperationContext {
+    fn drop(&mut self) {
+        OPERATION_CONTEXT.with(|slot| { slot.replace(self.0.take()); });
+    }
+}
+
+/// Validate the immutable worker snapshot once per operation, not once per
+/// material/recipe lookup. A later operation validates it again; Host resource
+/// selection changes still create a worker with a different fixed snapshot.
+pub(crate) fn operation_context() -> Result<OperationContext> {
+    let context = if std::env::var_os(SNAPSHOT).is_some_and(|v| !v.is_empty()) {
+        Some(resolve_active_context()?)
+    } else { None };
+    Ok(OperationContext(OPERATION_CONTEXT.with(|slot| slot.replace(context))))
+}
+
 pub fn active_context() -> Result<GameDataContext> {
+    if let Some(context) = OPERATION_CONTEXT.with(|slot| slot.borrow().clone()) { return Ok(context); }
+    resolve_active_context()
+}
+
+fn resolve_active_context() -> Result<GameDataContext> {
     if let Some(json) = std::env::var_os(SNAPSHOT).filter(|value| !value.is_empty()) {
         let context: GameDataContext = serde_json::from_str(&json.to_string_lossy()).context("invalid fixed game-data snapshot")?;
         ensure!(context.root.is_absolute() && context.resource_jar.is_absolute(), "fixed game-data snapshot paths must be absolute");
@@ -175,6 +201,37 @@ pub fn active_context() -> Result<GameDataContext> {
         return Ok(actual);
     }
     resolve_context(&store_root()?, &default_root()?)
+}
+
+#[cfg(test)]
+mod operation_context_tests {
+    use super::*;
+    #[test]
+    fn fixed_snapshot_is_reused_within_operation_and_revalidated_between_operations() {
+        struct RestoreEnv(Option<std::ffi::OsString>);
+        impl Drop for RestoreEnv {
+            fn drop(&mut self) { unsafe { if let Some(value)=self.0.take(){std::env::set_var(SNAPSHOT,value)}else{std::env::remove_var(SNAPSHOT)} } }
+        }
+        let _restore=RestoreEnv(std::env::var_os(SNAPSHOT));
+        struct RemoveDirectory(PathBuf);
+        impl Drop for RemoveDirectory { fn drop(&mut self){ let _=fs::remove_dir_all(&self.0); } }
+        let directory=std::env::temp_dir().join(format!("nova-context-test-{}-{}",std::process::id(),stamp()));
+        fs::create_dir(&directory).unwrap();
+        let _directory=RemoveDirectory(directory.clone());
+        let root=directory.canonicalize().unwrap();
+        fs::write(root.join(RESOURCE_JAR),[]).unwrap();fs::write(root.join("index.json"),b"{}").unwrap();
+        let context=GameDataContext{schema_version:1,id:"fixture".into(),game_version:"26.3".into(),content_id:"a".repeat(64),root:root.clone(),resource_jar:root.join(RESOURCE_JAR),source:"fixture".into()};
+        let manifest=PackageManifest{context:context.clone(),imported_ms:0,source_jar_sha256:"b".repeat(64),data_version:Some(5023),resource_counts:BTreeMap::new(),missing:Vec::new()};
+        fs::write(root.join(MANIFEST),serde_json::to_vec(&manifest).unwrap()).unwrap();
+        unsafe { std::env::set_var(SNAPSHOT,serde_json::to_string(&context).unwrap()); }
+        {
+            let _operation=operation_context().unwrap();
+            fs::write(root.join(MANIFEST),b"invalid").unwrap();
+            assert_eq!(active_context().unwrap().content_id,context.content_id);
+        }
+        assert!(active_context().is_err());
+        assert!(operation_context().is_err());
+    }
 }
 
 pub fn context_metadata(context: &GameDataContext) -> Result<serde_json::Value> {
