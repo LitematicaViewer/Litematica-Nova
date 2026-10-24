@@ -84,9 +84,9 @@ export function StockpileSourcesDialog({ mode, initialSources = [], task, defaul
       <Input value={search} disabled={pending} aria-label={t("stockpile.sources.search")} placeholder={t("stockpile.sources.search")} onChange={event => setSearch(event.target.value)} />
       {reading && <p role="status">{t("editor.loading")}</p>}
       {libraryError && <div role="alert"><span>{libraryError}</span><Button size="sm" onClick={() => void readLibrary()}>{t("stockpile.retry")}</Button></div>}
-      <div className="stockpile-source-library-list">{visible.map(record => <label key={record.id} className="stockpile-source-library-row">
-        <Checkbox checked={selected.has(record.path)} disabled={pending || record.status !== "ok"} onCheckedChange={checked => setSelected(previous => { const next = new Set(previous); if (checked === true) next.add(record.path); else next.delete(record.path); return next; })} />
-        <span><strong>{record.displayName || record.fileName}</strong><span>{record.path}</span>{record.status !== "ok" && <span>{t("stockpile.sources.unavailable")}</span>}</span>
+      <div className="stockpile-source-library-list">{visible.map(record => <label key={record.id} className="stockpile-source-library-row" data-source-path={record.path} title={`${record.displayName || record.fileName}\n${record.path}`}>
+        <Checkbox aria-label={`${record.displayName || record.fileName} ${record.path}`} checked={selected.has(record.path)} disabled={pending || record.status !== "ok"} onCheckedChange={checked => setSelected(previous => { const next = new Set(previous); if (checked === true) next.add(record.path); else next.delete(record.path); return next; })} />
+        <span className="stockpile-source-library-text"><strong className="stockpile-source-library-name" title={record.displayName || record.fileName}>{record.displayName || record.fileName}</strong><span className="stockpile-source-library-path" title={record.path}>{record.status !== "ok" ? `${t("stockpile.sources.unavailable")} · ${record.path}` : record.path}</span></span>
       </label>)}</div>
       {!reading && !libraryError && !visible.length && <p>{t("statistics.noMatches")}</p>}
     </details>

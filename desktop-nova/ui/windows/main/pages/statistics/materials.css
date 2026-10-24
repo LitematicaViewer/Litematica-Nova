@@ -7,9 +7,13 @@
 .stockpile-source-picker-actions { display:flex; gap:8px; flex-wrap:wrap; margin-block:12px; }
 .stockpile-source-library { margin-bottom:16px; }
 .stockpile-source-library > summary { cursor:pointer; margin-bottom:8px; }
-.stockpile-source-library-list { max-height:220px; overflow:auto; display:flex; flex-direction:column; gap:4px; margin-top:8px; }
-.stockpile-source-library-row { display:flex; gap:8px; padding:6px; align-items:center; }
-.stockpile-source-library-row > span { display:flex; flex-direction:column; min-width:0; overflow-wrap:anywhere; }
+.stockpile-source-library-list { max-height:min(48rem, 55dvh); min-width:0; overflow:auto; scrollbar-gutter:stable; display:flex; flex-direction:column; gap:4px; margin-top:8px; }
+.stockpile-source-library-row { box-sizing:border-box; display:flex; flex:0 0 auto; min-height:56px; min-width:0; width:100%; gap:8px; padding:8px; align-items:center; }
+.stockpile-source-library-text { display:flex; flex-direction:column; flex:1 1 0; min-width:0; gap:2px; overflow:hidden; }
+.stockpile-source-library-name, .stockpile-source-library-path { display:block; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.stockpile-source-library-name { line-height:20px; }
+.stockpile-source-library-path { line-height:16px; font-size:var(--nova-text-xs); color:var(--muted-foreground); }
+.stockpile-source-library-row:focus-within { outline:2px solid var(--ring); outline-offset:-2px; }
 .stockpile-source-library-row:hover { background:var(--accent); }
 .stockpile-source-path { display:block; color:var(--muted-foreground); overflow-wrap:anywhere; font-size:var(--nova-text-xs); font-family:var(--nova-font-xs, inherit); }
 .stockpile-source-table-scroll { overflow:auto; min-width:0; }
@@ -394,4 +398,8 @@
    checker). The row it has to match is 51px: 32px icon + 9px padding + 1px collapsed border. */
 .material-list-table tbody tr > .material-list-virtual-spacer-cell { height:var(--material-list-virtual-spacer-height, 0px); padding:0; }
 .material-detail-table-scroll .beta-material-name > span { white-space:nowrap; }
+}
+
+@layer components.theme {
+html[data-theme] .stockpile-source-library-row > [data-slot="checkbox"] { box-sizing:border-box; flex:0 0 18px; width:18px; min-width:18px; max-width:18px; height:18px; min-height:18px; max-height:18px; padding:0; }
 }
