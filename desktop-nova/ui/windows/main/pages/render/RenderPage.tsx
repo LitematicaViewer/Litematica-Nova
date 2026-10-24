@@ -4,7 +4,9 @@ import { displayPathText } from "../../../../../src/business/facade";
 import React, { useEffect, useRef, useState } from "react";
 import { Box, EyeOff, Play, X, Image } from "lucide-react";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
-import { loadLibrary, setRecordPreview, renderPreviewImage, readProjectionPreviewImage } from "../../../../../src/business/facade";
+import { loadLibrary, setRecordPreview, renderPreviewImage } from "../../../../../src/business/facade";
+import type { ProductPreviewImage } from "../../../../../src/platform/previewImage";
+import { PreviewDraftDialog } from "../../../../components/PreviewDraftDialog";
 import { emitEvent } from "../../../../../src/platform/events";
 import { projectionLibraryStateChangedEvent } from "../../../libraryEvents";
 import { Button } from "../../../../components/ui/button";
@@ -14,6 +16,7 @@ import { useFullPreview } from "../../useFullPreview";
 import { formatResourceBytes } from "../../../../../src/business/resourcePreflightUnits";
 import { displayFilePath } from "../../../../../src/business/facade";
 import { FreeCameraControls } from "./FreeCameraControls";
+import { EnvironmentControls } from "./EnvironmentControls";
 import { openIrisSettings } from "../../../../../src/services/irisSettings";
 import "./render.css";
 
@@ -27,6 +30,7 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
   const preview = useQuickPreview(currentFile || "", mode !== "fast" || presentationBlocked, preload);
   const full = useFullPreview(currentFile || "", preload, mode === "fast" || presentationBlocked, exactMode);
   const [capturing, setCapturing] = useState(false);
+  const [draft, setDraft] = useState<{ image: ProductPreviewImage; source: string } | null>(null);
   const [captureMessage, setCaptureMessage] = useState<UiMessage>("");
   const captureInFlight = useRef(false);
   const captureSource = useRef(currentFile); captureSource.current = currentFile;
@@ -38,11 +42,7 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
     try {
       const image = await renderPreviewImage(source, mode === "fast" ? "fast_experimental" : mode, undefined,
         mode === "fast" ? preview.operation?.previewId : full.operation?.operationId);
-      const embedded = await readProjectionPreviewImage(source);
-      if (!embedded?.data_url) throw new Error(t("render.previewReadbackFailed"));
-      await setRecordPreview(await loadLibrary(), source, image.preview_path);
-      await emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: source }).catch(() => undefined);
-      if (captureSource.current === source) setCaptureMessage(message("render.thumbnailSaved"));
+      if (captureSource.current === source) setDraft({ image, source });
     } catch (error) { if (captureSource.current === source) setCaptureMessage(String(error)); }
     finally { captureInFlight.current = false; setCapturing(false); }
   };
@@ -65,10 +65,23 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
     </span>
   );
   const cameraControls = (
-<FreeCameraControls sourcePath={currentFile} displayMode={mode === "fast" ? "fast_experimental" : mode}
+<><FreeCameraControls sourcePath={currentFile} displayMode={mode === "fast" ? "fast_experimental" : mode}
       ready={mode === "fast" ? ready && !!operation?.presentation.visible : full.ready && full.visible} />
+    <EnvironmentControls sourcePath={currentFile} displayMode={mode === "fast" ? "fast_experimental" : mode}
+      ready={mode === "fast" ? ready && !!operation?.presentation.visible : full.ready && full.visible}
+      environmentSupported={mode === "full"} /></>
   );
   return <section className="render-page">
+    <PreviewDraftDialog draft={draft?.image ?? null} sourcePath={draft?.source ?? currentFile}
+      onClose={() => setDraft(null)} onSaved={image => {
+        const source = draft?.source; setDraft(null);
+        if (!source) return;
+        void (async () => {
+          await setRecordPreview(await loadLibrary(), source, image.preview_path);
+          await emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: source });
+          if (captureSource.current === source) setCaptureMessage(message("render.thumbnailSaved"));
+        })().catch(error => setCaptureMessage(String(error)));
+      }} />
     <header className="render-page-header">
       <h2 className="render-page-title">{mode === "full" ? t("render.title.full") : mode === "standard" ? t("render.title.standard") : t("render.title.fast")}</h2>
       <div className="render-page-source" title={displayFilePath(currentFile)}>{name}</div>

@@ -15,7 +15,7 @@ use nova_render_protocol::{
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Read;
@@ -53,6 +53,7 @@ struct RenderServiceClientInner {
     protection: Mutex<crate::application::protected_render::ProtectedRender>,
     service_protection: Mutex<Option<nova_render_protocol::ProtectedTask>>,
     hosted_children: Mutex<HashMap<ChildId, HostedChild>>,
+    cancelled_viewer_previews: Mutex<HashSet<String>>,
     pending_process_exits: Mutex<HashMap<ChildId, ProcessExit>>,
     observed_process_exits: Mutex<Vec<ProcessExit>>,
     process_exit_changed: Condvar,
@@ -97,6 +98,7 @@ impl Default for RenderServiceClient {
                 protection: Mutex::new(Default::default()),
                 service_protection: Mutex::new(None),
                 hosted_children: Mutex::new(HashMap::new()),
+                cancelled_viewer_previews: Mutex::new(HashSet::new()),
                 pending_process_exits: Mutex::new(HashMap::new()),
                 observed_process_exits: Mutex::new(Vec::new()),
                 process_exit_changed: Condvar::new(),
@@ -106,6 +108,34 @@ impl Default for RenderServiceClient {
 }
 
 impl RenderServiceClient {
+    /// The contract request id maps to one exact Host child identity. Register
+    /// cancellation even before Spawn so a queued preview cannot escape it.
+    pub(crate) fn cancel_viewer_preview(&self, request_id: &str) -> Result<bool, String> {
+        if request_id.is_empty() || request_id.len() > 128
+            || !request_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
+            return Err("Preview request identity is invalid".into());
+        }
+        let child_id = format!("viewer-preview-{request_id}");
+        self.inner.cancelled_viewer_previews.lock().map_err(|_| "Preview cancellation lock failed")?.insert(child_id.clone());
+        let children: Vec<_> = self.inner.hosted_children.lock().map_err(|_| "Hosted child state lock failed")?.values()
+            .filter(|child| child.role == HostExecutableRole::NativeViewer && child.identity.child_id == child_id).cloned().collect();
+        if children.is_empty() { return Ok(false); }
+        let supervisor = self.inner.supervisor.lock().map_err(|_| "Process supervisor lock failed")?.clone()
+            .ok_or("Application process supervisor is unavailable")?;
+        for child in &children {
+            match supervisor.terminate(&child.lease, 0).map_err(|error| format!("Cancel preview viewer: {error}"))? {
+                TerminateOutcome::Stale => return Err("Preview viewer process lease is stale".into()),
+                TerminateOutcome::Requested | TerminateOutcome::AlreadyRequested | TerminateOutcome::AlreadyExited => {},
+            }
+        }
+        Ok(true)
+    }
+
+    fn viewer_preview_cancelled(&self, role: HostExecutableRole, child_id: &str) -> Result<bool, String> {
+        if role != HostExecutableRole::NativeViewer { return Ok(false); }
+        Ok(self.inner.cancelled_viewer_previews.lock().map_err(|_| "Preview cancellation lock failed")?.contains(child_id))
+    }
+
     pub(crate) fn record_render_click(&self, epoch_ms: Option<u64>) {
         *self.inner.render_click_epoch_ms.lock().unwrap() = epoch_ms.filter(|value| *value != 0);
     }
@@ -560,6 +590,9 @@ impl RenderServiceClient {
         )?;
         match &request.command {
             HostProcessCommand::Spawn(spec) => {
+                if self.viewer_preview_cancelled(spec.role, &spec.identity.child_id)? {
+                    return Err("Preview generation was cancelled before Viewer spawn".into());
+                }
                 let mut checked_spec = spec.clone();
                 let ticket = checked_spec.environment.remove("NOVA_PROTECTED_TICKET_PATH");
                 let module = checked_spec.environment.remove("NOVA_PROTECTED_MODULE_PATH");
@@ -617,6 +650,14 @@ impl RenderServiceClient {
                     .then_some(result.child.id);
                 if spawned_child.is_some() {
                     self.register_pending_hosted_child(hosted);
+                }
+                // Register the lease before this check. A concurrent cancellation
+                // either finds that lease or leaves a marker observed here.
+                if self.viewer_preview_cancelled(spec.role, &spec.identity.child_id)? {
+                    match supervisor.terminate(&result.child, 0).map_err(|error| format!("Cancel newly spawned preview: {error}"))? {
+                        TerminateOutcome::Stale => return Err("New preview viewer process lease is stale".into()),
+                        TerminateOutcome::Requested | TerminateOutcome::AlreadyRequested | TerminateOutcome::AlreadyExited => {},
+                    }
                 }
                 Ok(HostProcessExecution {
                     outcome: HostProcessOutcome::Spawned {
@@ -1561,6 +1602,18 @@ fn connect_with_service_startup_retry(_pipe_name: &OsStr) -> Result<NamedPipeStr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_cancel_before_spawn_uses_exact_request_and_native_role() {
+        let client = RenderServiceClient::default();
+        assert!(!client.cancel_viewer_preview("draft_7").unwrap());
+        assert!(client.viewer_preview_cancelled(HostExecutableRole::NativeViewer, "viewer-preview-draft_7").unwrap());
+        assert!(!client.viewer_preview_cancelled(HostExecutableRole::NativeViewer, "viewer-preview-draft_7-other").unwrap());
+        assert!(!client.viewer_preview_cancelled(HostExecutableRole::NativeViewer, "viewer-session-draft_7").unwrap());
+        assert!(!client.viewer_preview_cancelled(HostExecutableRole::BuildWorker, "viewer-preview-draft_7").unwrap());
+        assert!(client.cancel_viewer_preview("").is_err());
+        assert!(client.cancel_viewer_preview("draft/7").is_err());
+    }
     use nova_render_protocol::host_supervision::HostLaunchIdentity;
     use nova_render_protocol::{
         AdmittedBuildStart, BuildAccepted, BuildAdmission, BuildStart, PresentationSpec,

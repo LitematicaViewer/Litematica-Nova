@@ -39,6 +39,8 @@ import { useQuickPreview } from "../../useQuickPreview";
 import { useFullPreview } from "../../useFullPreview";
 import { Checkbox } from "../../../../components/ui/checkbox";
 import { Dialog } from "../../../../components/Dialog";
+import { PreviewDraftDialog } from "../../../../components/PreviewDraftDialog";
+import type { ProductPreviewImage } from "../../../../../src/platform/previewImage";
 import "./properties.css";
 import { displayFilePath, minecraftVersionLabel, windowsPathKey } from "../../../../../src/business/projectionLibrary";
 import { VersionConversionDialog } from "./VersionConversionDialog";
@@ -146,6 +148,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, onDirtyC
   const [filePreview, setFilePreview] = useState("");
   const [filePreviewBusy, setFilePreviewBusy] = useState(false);
   const [capturingPreview, setCapturingPreview] = useState(false);
+  const [previewDraft, setPreviewDraft] = useState<{ source: string; image: ProductPreviewImage } | null>(null);
   const filePreviewWrite = useRef(false);
   const filePreviewRevision = useRef(0);
   const [clearPreviewConfirm, setClearPreviewConfirm] = useState(false);
@@ -193,12 +196,9 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, onDirtyC
     const source = currentFile;
     filePreviewWrite.current = true; setCapturingPreview(true); setError("");
     try {
-      await renderPreviewImage(source, renderMode === "fast" ? "fast_experimental" : renderMode, undefined,
+      const image = await renderPreviewImage(source, renderMode === "fast" ? "fast_experimental" : renderMode, undefined,
         renderMode === "fast" ? quickOperation?.previewId : fullPreview.operation?.operationId);
-      const image = await readProjectionPreviewImage(source);
-      if (!image?.data_url) { if (sourceRef.current === source) setError({key:"properties.previewReadAfterWrite"}); return; }
-      if (sourceRef.current === source) { setFilePreview(image.data_url); setStatus({key:"properties.thumbnailSaved"}); }
-      await emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: source });
+      if (sourceRef.current === source) setPreviewDraft({ source, image });
     } catch (reason) { if (sourceRef.current === source) setError(String(reason)); }
     finally { filePreviewWrite.current = false; setCapturingPreview(false); }
   };
@@ -365,6 +365,13 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, onDirtyC
 
   return (
     <section className="properties-page" aria-busy={saving}>
+      <PreviewDraftDialog draft={previewDraft?.image ?? null} sourcePath={previewDraft?.source ?? currentFile}
+        onClose={() => setPreviewDraft(null)} onSaved={image => {
+          const source = previewDraft?.source; setPreviewDraft(null);
+          if (!source) return;
+          if (sourceRef.current === source) { setFilePreview(image.data_url); setStatus({key:"properties.thumbnailSaved"}); }
+          void emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: source }).catch(reason => setError(String(reason)));
+        }} />
       <header className="properties-header">
         <h2 className="properties-title">{t("properties.title")}</h2>
         <div className="properties-toolbar">

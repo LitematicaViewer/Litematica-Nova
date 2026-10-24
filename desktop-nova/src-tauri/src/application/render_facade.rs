@@ -90,6 +90,16 @@ pub(crate) struct RenderStartResult {
     pub(crate) attached: bool,
 }
 
+/// Internal control correlation only; never expose renderer wire identity to UI.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RenderSceneIdentity {
+    pub(crate) operation_id: OperationId,
+    pub(crate) display_mode: RenderDisplayMode,
+    pub(crate) build_id: String,
+    pub(crate) generation: u64,
+    pub(crate) session_id: String,
+}
+
 /// Application-facing render boundary. Its public surface contains product
 /// semantics only; renderer wire DTOs remain private implementation details.
 #[derive(Clone)]
@@ -150,6 +160,9 @@ pub(crate) struct RenderStartAuthorization {
 }
 
 trait RenderTransport: Send + Sync {
+    fn cancel_viewer_preview(&self, _request_id: &str) -> Result<bool, String> {
+        Err("Preview cancellation is unavailable on this render transport".into())
+    }
     fn request<'a>(
         &'a self,
         command: UiCommand,
@@ -161,6 +174,9 @@ trait RenderTransport: Send + Sync {
 }
 
 impl RenderTransport for RenderServiceClient {
+    fn cancel_viewer_preview(&self, request_id: &str) -> Result<bool, String> {
+        RenderServiceClient::cancel_viewer_preview(self, request_id)
+    }
     fn request<'a>(
         &'a self,
         command: UiCommand,
@@ -178,6 +194,9 @@ impl RenderTransport for RenderServiceClient {
 }
 
 impl RenderFacade {
+    pub(crate) fn cancel_viewer_preview(&self, request_id: &str) -> Result<bool, String> {
+        self.inner.transport.cancel_viewer_preview(request_id)
+    }
     pub(crate) fn new(client: RenderServiceClient) -> Self {
         Self::with_transport(Arc::new(client))
     }
@@ -324,6 +343,7 @@ impl RenderFacade {
         Ok(ProductPreviewImage {
             preview_path: output.preview_path,
             data_url: output.data_url,
+            ..Default::default()
         })
     }
 
@@ -842,6 +862,34 @@ impl RenderFacade {
             // Wait for this specific completed reload, not mere transport acceptance.
             tokio::time::sleep(Duration::from_millis(30)).await;
         }
+    }
+
+    /// Resolve exactly the same source/mode/layer selection as scene controls,
+    /// and reject a binding retired by the service even before UI sees its event.
+    pub(crate) fn active_scene_identity(&self, source: &Path, display_mode: Option<RenderDisplayMode>, controls: Option<&viewer_launch_contract::SceneViewControls>) -> Result<Option<RenderSceneIdentity>, String> {
+        self.refresh_from_service();
+        let snapshot = self.inner.transport.snapshot();
+        let state = self.inner.state.lock().map_err(|_| "Render scene state lock failed")?;
+        let apply_layer = controls.is_some_and(|value| value.apply_layer_range);
+        let layer_view = controls.is_some_and(|value| value.layer_view);
+        Ok(state.operation_order.iter().rev().filter_map(|id| state.operations.get(id))
+            .filter(|record| capture_source_matches(&record.view.source.path, source)
+                && matches!(record.view.display_mode, RenderDisplayMode::Standard | RenderDisplayMode::Full)
+                && display_mode.is_none_or(|mode| mode == record.view.display_mode)
+                && !record.cancel_requested
+                && (!apply_layer || record.view.layer_view == layer_view)
+                && (matches!(record.view.state, OperationState::ViewerPrepared | OperationState::RealtimeReady)
+                    || (layer_view && apply_layer && record.view.layer_view
+                        && !matches!(record.view.state, OperationState::Failed | OperationState::Cancelled | OperationState::RuntimeReleased))))
+            .find_map(|record| {
+                let binding = record.binding.as_ref()?;
+                let session_id = binding.session_id.as_ref()?;
+                let live = snapshot.viewers.iter().any(|viewer| viewer.session_id == *session_id
+                    && viewer.build_id == binding.build_id && viewer.generation == binding.generation
+                    && !matches!(viewer.runtime_state, ViewerRuntimeState::Failed | ViewerRuntimeState::Released));
+                live.then(|| RenderSceneIdentity { operation_id: record.view.operation_id.clone(), display_mode: record.view.display_mode,
+                    build_id: binding.build_id.clone(), generation: binding.generation, session_id: session_id.clone() })
+            }))
     }
 
     pub(crate) async fn set_scene_view(&self, source: &Path, display_mode: Option<RenderDisplayMode>, controls: viewer_launch_contract::SceneViewControls) -> Result<(), String> {

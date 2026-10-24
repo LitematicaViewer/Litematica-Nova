@@ -29,7 +29,7 @@ use crate::viewer_launch_contract::ViewerLaunchContext;
 use ::viewer_launch_contract::ViewerControls;
 use application::model::{
     ApplicationRenderSnapshot, GraphicsBackendPreference, IrisFallbackPreference, LayerSelection,
-    OperationId, PresentationIntent, PresentationMode, ProductPreviewImage, ProjectRenderSettings,
+    OperationId, PresentationIntent, PresentationMode, ProjectRenderSettings,
     ProjectSource, RenderBuildMode, RenderDisplayMode, ResourcePreflightId, ResourcePreflightView,
     ShaderSelection, UserVisibleRenderRequest, WeatherPreference,
 };
@@ -59,7 +59,6 @@ use application::library_trash::{
 use base64::Engine;
 use render_service_client::RenderServiceClient;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -335,6 +334,14 @@ struct UserConfig {
     theme: String,
     #[serde(default = "default_color_mode")]
     color_mode: String,
+    #[serde(default = "default_motion_preference")]
+    motion_preference: String,
+    #[serde(default = "default_camera_input_mode")]
+    camera_input_mode: String,
+    #[serde(default = "default_camera_speed")]
+    camera_speed: f64,
+    #[serde(default = "default_camera_sensitivity")]
+    camera_sensitivity: f64,
     render_display_mode: String,
     preview_mode: String,
     #[serde(default = "default_material_list_window_behavior")]
@@ -362,6 +369,10 @@ struct UserConfigInput {
     ui_locale: Option<String>,
     theme: Option<String>,
     color_mode: Option<String>,
+    motion_preference: Option<String>,
+    camera_input_mode: Option<String>,
+    camera_speed: Option<f64>,
+    camera_sensitivity: Option<f64>,
     render_display_mode: Option<String>,
     preview_mode: Option<String>,
     material_list_window_behavior: Option<String>,
@@ -897,6 +908,10 @@ fn default_user_config() -> UserConfig {
         ui_locale: default_ui_locale(),
         theme: "shadcn".to_string(),
         color_mode: default_color_mode(),
+        motion_preference: default_motion_preference(),
+        camera_input_mode: default_camera_input_mode(),
+        camera_speed: default_camera_speed(),
+        camera_sensitivity: default_camera_sensitivity(),
         render_display_mode: "full".to_string(),
         preview_mode: "full".to_string(),
         material_list_window_behavior: default_material_list_window_behavior(),
@@ -913,6 +928,16 @@ fn default_user_config() -> UserConfig {
 fn default_ui_scale() -> f64 { application::ui_scale::DEFAULT }
 fn default_ui_language() -> String { "zh-CN".into() }
 fn default_ui_locale() -> String { "zh-CN".into() }
+fn default_motion_preference() -> String { "system".into() }
+fn default_camera_input_mode() -> String { "drag".into() }
+fn default_camera_speed() -> f64 { 12.0 }
+fn default_camera_sensitivity() -> f64 { 1.0 }
+fn validate_motion_preference(value: &str) -> Result<String, String> {
+    match value {
+        "system" | "off" | "reduced" | "standard" | "rich" => Ok(value.to_owned()),
+        _ => Err("Invalid motion preference".into()),
+    }
+}
 fn normalize_ui_language(value: &str) -> String {
     match value { "en-US" => "en-US", "system" => "system", _ => "zh-CN" }.into()
 }
@@ -1096,8 +1121,11 @@ mod theme_config_tests {
 }
 
 fn normalize_mode_string(value: &str) -> String {
-    let _ = value;
-    "full".to_string()
+    match value {
+        "fast" | "fast_experimental" => "fast_experimental",
+        "normal" | "standard" => "standard",
+        _ => "full",
+    }.to_owned()
 }
 
 fn user_config_path(dir: &Path) -> PathBuf {
@@ -1116,6 +1144,11 @@ fn read_user_config_data(dir: &Path) -> UserConfig {
     if config.ui_language != "system" { config.ui_locale = config.ui_language.clone(); }
     config.theme = normalize_theme(&config.theme);
     config.color_mode = normalize_color_mode(&config.color_mode);
+    config.motion_preference = validate_motion_preference(&config.motion_preference)
+        .unwrap_or_else(|_| default_motion_preference());
+    if !matches!(config.camera_input_mode.as_str(), "drag" | "pointer_lock") { config.camera_input_mode = default_camera_input_mode(); }
+    if !config.camera_speed.is_finite() || config.camera_speed <= 0.0 { config.camera_speed = default_camera_speed(); }
+    if !config.camera_sensitivity.is_finite() || config.camera_sensitivity <= 0.0 { config.camera_sensitivity = default_camera_sensitivity(); }
     config.render_display_mode = normalize_mode_string(&config.render_display_mode);
     config.preview_mode = normalize_mode_string(&config.preview_mode);
     config.material_list_window_behavior =
@@ -1511,127 +1544,6 @@ async fn application_read_embedded_preview(
     run_application_operation(move || operations.read_embedded_preview(input)).await
 }
 
-fn persist_rendered_preview(operations: &ApplicationOperations, source: &Path, frame: &Path, expected: &Path, mode: &str) -> Result<ProductPreviewImage, String> {
-    if application::thumbnails::cache_path(source)? != expected { return Err("截图期间投影已改变，请重新加载".into()); }
-    operations.edit_project_metadata(EditProjectMetadataInput {
-        source_path: source.to_string_lossy().into(),
-        patch: serde_json::json!({"preview_image_path": frame, "preview_image_mode": mode}), output_path: None,
-    })?;
-    let preview = operations.read_embedded_preview(InspectProjectInput { source_path: source.to_string_lossy().into() })?
-        .ok_or("内嵌预览写入后未能重新读取")?;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(preview.data_url.split_once(',').ok_or("投影预览编码错误")?.1).map_err(|error| error.to_string())?;
-    let temporary = application::thumbnails::temporary_preview_path();
-    std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-    let result = application::thumbnails::save(source, &temporary, &application::thumbnails::cache_path(source)?);
-    let _ = std::fs::remove_file(&temporary);
-    let _ = std::fs::remove_file(frame);
-    result
-}
-
-#[tauri::command]
-async fn render_preview_image(
-    file_path: String,
-    display_mode: String,
-    cache_input: Option<String>,
-    operation_id: Option<String>,
-    facade: tauri::State<'_, RenderFacade>,
-    host: tauri::State<'_, QuickPreviewHost>,
-    operations: tauri::State<'_, ApplicationOperations>,
-) -> Result<ProductPreviewImage, String> {
-    let _ = cache_input; // Capture always uses the selected live scene, never a new build.
-    let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
-    let expected = application::thumbnails::cache_path(&source)?;
-    let operations = operations.inner().clone();
-    if display_mode == "fast_experimental" {
-        let preview_id = operation_id.ok_or("请先启动该投影的快速渲染")?;
-        let host = host.inner().clone();
-        return tauri::async_runtime::spawn_blocking(move || {
-            let view = host.snapshot()?.filter(|view| view.source_path == source && view.state == "ready"
-                && preview_id == view.preview_id).ok_or("请先启动该投影的快速渲染")?;
-            let (source, frame) = host.capture_frame(&view.preview_id)?;
-            persist_rendered_preview(&operations, &source, &frame, &expected, "fast_experimental")
-        }).await.map_err(|error| error.to_string())?;
-    }
-    let mode = match display_mode.as_str() { "standard" => RenderDisplayMode::Standard, "full" => RenderDisplayMode::Full, _ => return Err("未知截图模式".into()) };
-    let id = operation_id.ok_or("请先启动对应渲染场景")?;
-    let frame = facade.capture_frame(&OperationId(id), &source, mode).await?;
-    tauri::async_runtime::spawn_blocking(move || persist_rendered_preview(&operations, &source, &frame, &expected, &display_mode))
-        .await.map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
-async fn generate_preview_image(
-    file_path: String,
-    display_mode: String,
-    facade: tauri::State<'_, RenderFacade>,
-    window: tauri::WebviewWindow,
-    host: tauri::State<'_, QuickPreviewHost>,
-    operations: tauri::State<'_, ApplicationOperations>,
-) -> Result<ProductPreviewImage, String> {
-    if display_mode == "fast_experimental" {
-
-    let host = host.inner().clone();
-    let operations = operations.inner().clone();
-    let parent = platform::native_preview_host::host_window(&window);
-    let graphics_backend = read_user_config_data(&current_user_config_dir()?).graphics_backend;
-    return tauri::async_runtime::spawn_blocking(move || {
-        let source = std::fs::canonicalize(file_path).map_err(|error| error.to_string())?;
-        let cache = application::thumbnails::cache_path(&source)?;
-        // Explicit generation takes a current real frame. Ordinary reads still
-        // reuse embedded/cache previews, including legacy square images.
-        if let Some(view) = host.snapshot()?.filter(|view| view.source_path == source && view.state == "ready") {
-            let (source, frame) = host.capture_frame(&view.preview_id)?;
-            return persist_rendered_preview(&operations, &source, &frame, &cache, "fast_experimental");
-        }
-        // Reuse QuickPreviewHost for an independent hidden WS_CHILD session; an
-        // existing interactive Viewer and its camera/GPU lifetime stay untouched.
-        let temporary = host.thumbnail_session();
-        let view = temporary.start(StartQuickPreviewInput { composition_editor_path: None, source_path: source.clone(), preload: false, click_started_at_epoch_ms: None, graphics_backend }, parent?)?;
-        let output = (|| {
-            loop {
-                let current = temporary.snapshot()?.ok_or("缩略图预览会话结束")?;
-                if let Some(error) = current.error { return Err(error); }
-                if current.state == "ready" { break; }
-                if matches!(current.state, "failed" | "closed") { return Err("缩略图预览准备未完成".into()); }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            let (source, frame) = temporary.capture_frame(&view.preview_id)?;
-            persist_rendered_preview(&operations, &source, &frame, &cache, "fast_experimental")
-        })();
-        let _ = temporary.close(&view.preview_id);
-        output
-    }).await.map_err(|error| error.to_string())?;
-    }
-
-    let launch = prepare_viewer_launch_context(CompatibilityScope::Render, display_mode).await?;
-    let mode = launch.display_mode();
-    let preview_mode = mode.to_owned();
-    let resolved_input = normalized_input_path(&file_path);
-    let source = resolved_input.clone();
-    let expected = application::thumbnails::cache_path(&source)?;
-    let preview_dir = data_root()?.join("projection-library").join("previews");
-    std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
-    let mut hasher = Sha256::new();
-    hasher.update(resolved_input.to_string_lossy().as_bytes());
-    hasher.update(mode.as_bytes());
-    hasher.update(launch.compatibility_fingerprint().as_bytes());
-    if let Ok(meta) = std::fs::metadata(&resolved_input) {
-        hasher.update(meta.len().to_le_bytes());
-        if let Ok(modified) = meta.modified() {
-            if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
-                hasher.update(duration.as_nanos().to_le_bytes());
-            }
-        }
-    }
-    let digest = hasher.finalize();
-    let output_path = preview_dir.join(format!("{mode}_{:x}.png", digest));
-    let launch_contract = launch.prepare_preview(resolved_input, output_path.clone(), None)?;
-    let image = facade.run_viewer_preview(&launch, &launch_contract, output_path).await?;
-    let operations = operations.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || persist_rendered_preview(&operations, &source, Path::new(&image.preview_path), &expected, &preview_mode))
-        .await.map_err(|error| error.to_string())?
-}
-
 #[tauri::command]
 async fn application_export_material_list(input: serde_json::Value, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
     let operations = operations.inner().clone();
@@ -1700,6 +1612,21 @@ fn save_user_config_inner(input: UserConfigInput) -> Result<UserConfigInfo, Stri
     if let Some(mode) = input.color_mode {
         config.color_mode = normalize_color_mode(&mode);
     }
+    if let Some(preference) = input.motion_preference {
+        config.motion_preference = validate_motion_preference(&preference)?;
+    }
+    if let Some(mode) = input.camera_input_mode {
+        if !matches!(mode.as_str(), "drag" | "pointer_lock") { return Err("Unknown camera input mode".into()); }
+        config.camera_input_mode = mode;
+    }
+    if let Some(speed) = input.camera_speed {
+        if !speed.is_finite() || speed <= 0.0 { return Err("Camera speed must be finite and positive".into()); }
+        config.camera_speed = speed;
+    }
+    if let Some(sensitivity) = input.camera_sensitivity {
+        if !sensitivity.is_finite() || sensitivity <= 0.0 { return Err("Camera sensitivity must be finite and positive".into()); }
+        config.camera_sensitivity = sensitivity;
+    }
     if let Some(mode) = input.render_display_mode {
         config.render_display_mode = normalize_mode_string(&mode);
     }
@@ -1722,9 +1649,6 @@ fn save_user_config_inner(input: UserConfigInput) -> Result<UserConfigInfo, Stri
     if let Some(compatibility) = input.v5_compatibility {
         config.v5_compatibility.apply_input(compatibility)?;
         let workspace_root = get_root();
-        if config.v5_compatibility.requires_full_mode() {
-            config.render_display_mode = "full".to_owned();
-        }
         // Saving a small UI preference must not recursively fingerprint every
         // configured pack in the Nova process. The render service computes
         // the authoritative content identities when a Build starts.
@@ -1788,7 +1712,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_user_config_dir(path: String, migrate: bool) -> Result<UserConfigInfo, String> {
+fn set_user_config_dir(path: String, migrate: bool, app: AppHandle) -> Result<UserConfigInfo, String> {
     let target = PathBuf::from(path);
     if !target.is_absolute() {
         return Err("User config directory must be an absolute path.".to_string());
@@ -1805,11 +1729,13 @@ fn set_user_config_dir(path: String, migrate: bool) -> Result<UserConfigInfo, St
     )
     .map_err(|e| e.to_string())?;
     initialize_flake_user_resources()?;
-    load_user_config_info()
+    let info = load_user_config_info()?;
+    app.emit("user-config-changed", &info).map_err(|error| error.to_string())?;
+    Ok(info)
 }
 
 #[tauri::command]
-fn reset_user_config_dir(migrate: bool) -> Result<UserConfigInfo, String> {
+fn reset_user_config_dir(migrate: bool, app: AppHandle) -> Result<UserConfigInfo, String> {
     let current = current_user_config_dir()?;
     let default_dir = default_user_config_dir()?;
     ensure_user_config_layout(&default_dir)?;
@@ -1821,7 +1747,9 @@ fn reset_user_config_dir(migrate: bool) -> Result<UserConfigInfo, String> {
         std::fs::remove_file(pointer).map_err(|e| e.to_string())?;
     }
     initialize_flake_user_resources()?;
-    load_user_config_info()
+    let info = load_user_config_info()?;
+    app.emit("user-config-changed", &info).map_err(|error| error.to_string())?;
+    Ok(info)
 }
 
 #[tauri::command]
@@ -3857,18 +3785,40 @@ fn application_render_request(
 
 #[tauri::command]
 async fn application_set_scene_view(source_path: PathBuf, display_mode: Option<String>, controls: ::viewer_launch_contract::SceneViewControls,
-    quick: tauri::State<'_, QuickPreviewHost>, facade: tauri::State<'_, RenderFacade>) -> Result<(), String> {
+    quick: tauri::State<'_, QuickPreviewHost>, facade: tauri::State<'_, RenderFacade>) -> Result<application::scene_controls::SceneViewAck, String> {
     controls.validate()?;
     if controls.composition_editor.is_some() && display_mode.as_deref().is_some_and(|mode| mode != "fast_experimental") {
         return Err("组合编辑使用快速编辑视图；标准和完整模式用于合并结果预览。".into());
     }
-    let source = std::fs::canonicalize(source_path).map_err(|error| error.to_string())?;
-    if display_mode.as_deref().is_none_or(|mode| mode == "fast_experimental") {
-        let quick=quick.inner().clone();let input_source=source.clone();let input_controls=controls.clone();
-        if tauri::async_runtime::spawn_blocking(move||quick.set_scene_view(&input_source,input_controls)).await.map_err(|error|error.to_string())?? {return Ok(());}
+    if controls.world_time.is_some() || controls.weather.is_some() {
+        if display_mode.as_deref() != Some("full") { return Err("Environment controls require Full rendering".into()); }
+        let config = read_user_config_data(&current_user_config_dir()?);
+        if controls.world_time.is_some() && !config.viewer_controls.allow_time_modification {
+            return Err("Time modification is disabled in settings".into());
+        }
+        if controls.weather.is_some() && !config.viewer_controls.allow_weather_modification {
+            return Err("Weather modification is disabled in settings".into());
+        }
     }
-    let mode = match display_mode.as_deref() { Some("full") => Some(RenderDisplayMode::Full), Some("standard") => Some(RenderDisplayMode::Standard), None => None, _ => return Err("请先启动快速预览".into()) };
-    facade.set_scene_view(&source, mode, controls).await
+    let source = std::fs::canonicalize(source_path).map_err(|error| error.to_string())?;
+    let mode = scene_control_mode(display_mode.as_deref())?;
+    application::scene_controls::set_scene_view(&source, mode, controls, quick.inner(), facade.inner()).await
+}
+
+fn scene_control_mode(mode: Option<&str>) -> Result<Option<RenderDisplayMode>, String> {
+    match mode {
+        Some("full") => Ok(Some(RenderDisplayMode::Full)),
+        Some("standard") => Ok(Some(RenderDisplayMode::Standard)),
+        Some("fast_experimental") | None => Ok(None),
+        _ => Err("Unknown scene display mode".into()),
+    }
+}
+
+#[tauri::command]
+async fn application_get_scene_view(source_path: PathBuf, display_mode: Option<String>,
+    quick: tauri::State<'_, QuickPreviewHost>, facade: tauri::State<'_, RenderFacade>) -> Result<application::scene_controls::SceneViewAck, String> {
+    let source = std::fs::canonicalize(source_path).map_err(|error| error.to_string())?;
+    application::scene_controls::get_scene_view_state(&source, scene_control_mode(display_mode.as_deref())?, quick.inner(), facade.inner()).await
 }
 
 static IRIS_OPTIONS_TRANSACTION: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -4476,6 +4426,7 @@ fn main() {
                         let report = supervisor.shutdown(Duration::from_millis(500), Duration::from_millis(1500));
                         eprintln!("[NOVA_LIFECYCLE] stage=close_children_reaped request_id={request_id} total_ms={} child_ms={} graceful_ms={} forced_ms={} pending={}", started.elapsed().as_millis(), report.elapsed_ms, report.graceful_wait_ms, report.forced_wait_ms, report.remaining.len());
                     }
+                    application::scene_controls::cleanup();
                     eprintln!("[NOVA_LIFECYCLE] stage=application_exit_requested request_id={request_id} elapsed_ms={}", started.elapsed().as_millis());
                     app.exit(0);
                 });
@@ -4550,10 +4501,15 @@ fn main() {
             application_generate_project,
             application_runtime_health,
             application_read_embedded_preview,
-            render_preview_image,
-            generate_preview_image,
+            application::thumbnails::render_preview_image,
+            application::thumbnails::generate_preview_image,
+            application::thumbnails::generate_preview_images,
+            application::thumbnails::save_generated_preview,
+            application::thumbnails::discard_generated_preview,
+            application::thumbnails::cancel_preview_generation,
             application_quick_preview_start,
             application_set_scene_view,
+            application_get_scene_view,
             iris_shaderpack_settings,
             application_quick_preview_resource_decision,
             application_quick_preview_snapshot,
@@ -4636,4 +4592,21 @@ fn main() {
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
         });
+}
+
+#[cfg(test)]
+mod ui_preference_tests {
+    use super::*;
+    #[test]
+    fn preferences_have_single_rust_defaults_and_round_trip() {
+        let config=default_user_config();
+        assert_eq!(config.motion_preference,"system");
+        assert_eq!(config.camera_input_mode,"drag");
+        for value in ["system","off","reduced","standard","rich"] {assert_eq!(validate_motion_preference(value).unwrap(),value);}
+        assert!(validate_motion_preference("legacy").is_err());
+        let round:UserConfig=serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        assert_eq!(round.motion_preference,config.motion_preference);
+        assert_eq!(round.camera_speed,12.0);
+        for (input,expected) in [("fast_experimental","fast_experimental"),("standard","standard"),("normal","standard"),("full","full")] { assert_eq!(normalize_mode_string(input),expected); }
+    }
 }

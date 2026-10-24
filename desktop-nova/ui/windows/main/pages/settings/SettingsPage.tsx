@@ -1,3 +1,4 @@
+import { listenEvent } from "../../../../../src/platform/events";
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
@@ -143,6 +144,7 @@ function PathRow({ label, path, info }: { label: string; path: string; info?: Pa
 
 import { SettingsCategories, type SettingsCategory } from "./SettingsCategories";
 import { UiScaleControl } from "./UiScaleControl";
+import { MotionControl } from "./MotionControl";
 
 export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebugMode, buildVersion }: any) {
   const language = useI18n();
@@ -150,6 +152,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
   const [showAssetManager, setShowAssetManager] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [previewMode, setPreviewMode] = useState<DisplayMode>("full");
+  const [previewModeSaving, setPreviewModeSaving] = useState(false);
   const [materialListWindowBehavior, setMaterialListWindowBehavior] = useState("independent_window");
   const [localLibraryTailPathCount, setLocalLibraryTailPathCount] = useState(3);
   const [debugMode, setDebugModeState] = useState(false);
@@ -222,10 +225,18 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
 
   const handleTheme = (value: string) => setTheme(normalizeTheme(value));
 
+  useEffect(() => {
+    const subscription = listenEvent<UserConfigInfo>("user-config-changed", event => setPreviewMode(normalizeDisplayMode(event.payload.config.preview_mode)));
+    return () => { void subscription.then(unlisten => unlisten()).catch(() => undefined); };
+  }, []);
+
   const handlePreviewMode = async (value: string) => {
     const mode = normalizeDisplayMode(value);
-    setPreviewMode(mode);
-    applyUserConfig(await savePreviewModeConfig(mode));
+    if (previewModeSaving) return;
+    setPreviewModeSaving(true);
+    try { applyUserConfig(await savePreviewModeConfig(mode)); }
+    catch (error) { setLog(String(error)); }
+    finally { setPreviewModeSaving(false); }
   };
 
   const handleMaterialListWindowBehavior = async (value: string) => {
@@ -487,6 +498,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           </select>
         </div>
         <UiScaleControl />
+        <MotionControl />
         <div className="form-row">
           <div className="form-label">{t("settings.theme")}</div>
           <div className="form-field">
@@ -638,8 +650,8 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         <div className="form-row">
           <div className="form-label">{t("settings.previewGeneration")}</div>
           <div className="form-field">
-            <Dropdown ariaLabel={t("settings.previewGeneration")} value={previewMode} options={DISPLAY_MODE_OPTIONS} onChange={handlePreviewMode} />
-            <Button onClick={() => handlePreviewMode("full")}>{t("settings.resetFullMode")}</Button>
+            <Dropdown ariaLabel={t("settings.previewGeneration")} value={previewMode} disabled={previewModeSaving} options={DISPLAY_MODE_OPTIONS} onChange={handlePreviewMode} />
+            <Button disabled={previewModeSaving} onClick={() => handlePreviewMode("full")}>{t("settings.resetFullMode")}</Button>
           </div>
         </div>
         <div className="form-row">

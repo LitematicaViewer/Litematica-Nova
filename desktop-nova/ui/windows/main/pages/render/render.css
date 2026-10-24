@@ -18,4 +18,18 @@
 .free-camera-controls label { display: inline-flex; align-items: center; gap: 6px; }
 .free-camera-controls select { min-height: 30px; }
 .free-camera-controls .render-preview-help { margin: 0; }
+.free-camera-group { display: grid; gap: 0.35rem; min-width: 0; }
+.free-camera-group > .render-preview-help { margin: 0; }
+.free-camera-status { color: var(--muted-foreground); font-size: var(--nova-text-sm); }
+.render-environment { min-width: 0; border-block-start: 1px solid var(--border); padding-block: 0.5rem; }
+.render-environment > summary { cursor: pointer; width: fit-content; font-weight: 600; padding: 0.25rem 0; }
+.render-environment > summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+.render-environment-body { display: grid; gap: 0.5rem; padding-block-start: 0.5rem; min-width: 0; }
+.render-environment-time { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.render-environment-time input[type="range"] { flex: 1 1 12rem; min-width: 6rem; accent-color: var(--primary); }
+.render-environment-time output { min-width: 7em; font-variant-numeric: tabular-nums; }
+.render-environment-weather { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.render-environment-weather select { min-width: 8rem; }
+.render-environment-body .render-preview-help { margin: 0; }
+.render-environment-applied { color: var(--muted-foreground); font-size: var(--nova-text-sm); }
 }

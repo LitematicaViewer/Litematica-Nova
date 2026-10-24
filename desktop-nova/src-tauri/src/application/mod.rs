@@ -13,3 +13,4 @@ pub(crate) mod protected_render;
 
 pub(crate) mod data_worker;
 pub(crate) mod ui_scale;
+pub(crate) mod scene_controls;
