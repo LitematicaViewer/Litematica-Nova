@@ -33,3 +33,5 @@ export * from "../services/creativeItemIdentity";
 export { readMaterialDetail, type MaterialDetail, type MaterialDetailInput } from "../platform/applicationOperations";
 
 export { commandStockpileTask, getStockpileTask, setStockpileTaskQuantity, resetStockpileTask, prepareMaterialTaskWindow, type ApplicationMaterialScope, type StockpileTaskInput, type StockpileTaskView, type StockpileTaskWorkspace, type StockpileTaskCommandInput, type StockpileTaskPreferences, type StockpileTaskMutation, type StockpileMaterial, type StockpileRecipeTree } from "../platform/applicationOperations";
+
+export { queryMaterials, queryStatisticsRules, getDataOperationStatus, type MaterialQueryInput, type MaterialQueryPage, type MaterialQueryRow, type MaterialSourceSummary, type MaterialSourceGroup, type StatisticsRuleView, type StockpileItemView, type ApplicationDataOperation } from "../platform/applicationOperations";

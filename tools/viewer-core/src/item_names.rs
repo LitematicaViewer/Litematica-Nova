@@ -43,20 +43,21 @@ pub fn resolve_stockpile_item_names(
     materials: &mut StockpileMaterialsData,
     recipe_trees: &BTreeMap<String, RecipeTreeNode>,
 ) -> Result<StockpileItemNamesPayload> {
-    let cache = LangCache::load_or_fetch(minecraft_version)?;
+    let cache = language_cache(minecraft_version)?;
     Ok(build_payload_from_cache(materials, recipe_trees, cache))
 }
 
 pub(crate) fn resolve_stockpile_item_names_cached(minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_trees: &BTreeMap<String, RecipeTreeNode>) -> Result<StockpileItemNamesPayload> {
-    let cache = LangCache::load_or_fetch(minecraft_version)?;
+    let cache = language_cache(minecraft_version)?;
     Ok(build_payload_from_cache(materials, recipe_trees, cache))
 }
 
 fn build_payload_from_cache(
     materials: &mut StockpileMaterialsData,
     recipe_trees: &BTreeMap<String, RecipeTreeNode>,
-    cache: LangCache,
+    cache: impl std::borrow::Borrow<LangCache>,
 ) -> StockpileItemNamesPayload {
+    let cache = cache.borrow();
     let keys = collect_name_keys(materials, recipe_trees);
     let minecraft_keys = keys
         .iter().cloned()
@@ -111,7 +112,7 @@ fn build_payload_from_cache(
     StockpileItemNamesPayload {
         schema_version: STOCKPILE_ITEM_NAMES_SCHEMA_VERSION,
         status,
-        manifest: cache.manifest,
+        manifest: cache.manifest.clone(),
         names,
         warning,
     }
@@ -139,6 +140,7 @@ fn collect_tree_keys(node: &RecipeTreeNode, keys: &mut BTreeSet<String>) {
     if node.icon_key.contains(':') {
         keys.insert(node.icon_key.clone());
     }
+    for item in &node.possible_items {if item.contains(':'){keys.insert(item.clone());}}
     for ingredient in &node.ingredients {
         if ingredient.item_id.contains(':') {
             keys.insert(ingredient.item_id.clone());
@@ -221,16 +223,30 @@ impl LangCache {
     }
 }
 
+fn language_cache(version: &str) -> Result<std::sync::Arc<LangCache>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static LANGUAGES: OnceLock<Mutex<BTreeMap<String, Arc<LangCache>>>> = OnceLock::new();
+    let context=crate::game_data::active_context()?;
+    let cache=LANGUAGES.get_or_init(Default::default);
+    if let Some(value)=cache.lock().map_err(|_|anyhow!("game language cache lock poisoned"))?.get(&context.content_id).cloned() {return Ok(value);}
+    let value=Arc::new(LangCache::load_or_fetch(version)?);
+    let mut cache=cache.lock().map_err(|_|anyhow!("game language cache lock poisoned"))?;
+    if cache.len()>=4 {cache.clear();}
+    cache.insert(context.content_id,value.clone()); Ok(value)
+}
+
+pub(crate) fn display_names_for_keys<'a>(keys: impl IntoIterator<Item=&'a str>, locale: &str, overrides: &BTreeMap<String,String>) -> Result<BTreeMap<String,String>> {
+    let cache=language_cache("")?; let mut names=BTreeMap::new();
+    for key in keys { let Some((namespace,path))=key.split_once(':') else{continue;}; let path=path.replace('/',".");
+        let value=overrides.get(&format!("block.{namespace}.{path}")).or_else(||overrides.get(&format!("item.{namespace}.{path}"))).cloned()
+            .or_else(||cache.lookup(if locale.starts_with("zh"){"zh-CN"}else{"en-US"},key));
+        if let Some(value)=value {names.insert(key.into(),value);}
+    } Ok(names)
+}
+
 pub(crate) fn selected_name(translation_key: &str, locale: &str) -> Result<Option<String>> {
-    use std::sync::{Mutex, OnceLock};
-    static LANGUAGES: OnceLock<Mutex<BTreeMap<String, LangCache>>> = OnceLock::new();
-    let context = crate::game_data::active_context()?;
-    let cache = LANGUAGES.get_or_init(Default::default);
-    let mut cache = cache.lock().map_err(|_| anyhow!("game language cache lock poisoned"))?;
-    if !cache.contains_key(&context.content_id) { cache.insert(context.content_id.clone(), LangCache::load_or_fetch(&context.game_version)?); }
-    let values = &cache[&context.content_id];
-    Ok(if locale == "zh_cn" { values.zh_cn.get(translation_key) } else { values.en_us.get(translation_key) }.cloned()
-        .or_else(|| values.en_us.get(translation_key).cloned()))
+    let cache=language_cache("")?;
+    Ok(if locale.starts_with("zh") {cache.zh_cn.get(translation_key)}else{cache.en_us.get(translation_key)}.cloned().or_else(||cache.en_us.get(translation_key).cloned()))
 }
 
 fn manifest_for(
@@ -279,7 +295,7 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let file =
         fs::File::open(path).with_context(|| format!("open JSON failed: {}", path.display()))?;
-    serde_json::from_reader(file).with_context(|| format!("parse JSON failed: {}", path.display()))
+    serde_json::from_reader(std::io::BufReader::new(file)).with_context(|| format!("parse JSON failed: {}", path.display()))
 }
 
 fn cache_dir(minecraft_version: &str) -> Result<PathBuf> {

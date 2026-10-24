@@ -1373,6 +1373,14 @@ async fn application_stockpile_task(input: StockpileTaskInput, operations: tauri
     run_application_operation(move || operations.stockpile_task(input)).await
 }
 #[tauri::command]
+async fn application_data_query(input: application::operations::DataQueryInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value,String> {
+    let operations=operations.inner().clone(); run_application_operation(move||operations.data_query(input)).await
+}
+#[tauri::command]
+async fn application_data_operation_status(operation_id:String,cancel:Option<bool>,operations:tauri::State<'_,ApplicationOperations>)->Result<serde_json::Value,String>{
+    let operations=operations.inner().clone();run_application_operation(move||operations.data_operation_status(&operation_id,cancel.unwrap_or(false))).await
+}
+#[tauri::command]
 async fn application_read_material_detail(input: MaterialDetailInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
     let operations = operations.inner().clone();
     run_application_operation(move || operations.read_material_detail(input)).await
@@ -2813,7 +2821,7 @@ async fn open_material_list_window(
 
     tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::App(url.into()))
         .title(i18n::text(if mode == "export" { "window.materialExport" } else { "window.materialList" }))
-        .inner_size(720.0, 520.0)
+        .inner_size(1080.0, 760.0)
         .min_inner_size(560.0, 420.0)
         .build()
         .map_err(|err| err.to_string())?;
@@ -4188,6 +4196,8 @@ fn main() {
             application_get_project_materials,
             application_stockpile_task,
             application_read_material_detail,
+            application_data_query,
+            application_data_operation_status,
             application_stockpile_task_set,
             application_stockpile_task_command,
             application_stockpile_task_reset,

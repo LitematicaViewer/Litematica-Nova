@@ -32,7 +32,7 @@ test('statistics-first workbench shares seven columns and gives the actual list 
   assert.equal(rule('.stockpile-task .stockpile-table').width, '100%');
   assert.equal(rule('.stockpile-task .stockpile-table')['min-width'], '945px');
   assert.equal(rule('.stockpile-table .stockpile-row').height, '44px');
-  assert.equal(rule('.stockpile-detail-drawer.dialog-surface').width, 'min(760px, calc(100vw - 48px))');
+  assert.equal(rule('.stockpile-material-detail-dialog.dialog-surface').width, 'min(760px, calc(100vw - 48px))');
   const compact = value => value.replace(/\s+/g, '');
   assert.equal(compact(panel['--stockpile-row-grid']), '40pxminmax(280px,2.2fr)minmax(145px,1fr)minmax(145px,.9fr)minmax(145px,1fr)90px100px');
   let sharedGrid = false, wideGrid = false;
@@ -107,9 +107,7 @@ const declarations = new Map(), functions = new Map(), arrows = [];
   if (ts.isArrowFunction(node)) arrows.push(node);
   ts.forEachChild(node, visit);
 })(uiAst);
-const helperNames = ['stockpileUnitParts', 'itemState', 'displayLanguage', 'materialName', 'filterStockpileRows',
-  'resetConfirmationMatches', 'mergeStockpileMutation', 'stockpileCompletionMutation', 'stockpileAdjustedQuantity', 'stockpileDetailSelection',
-  'recoverableStockpileCommands', 'pendingDraft', 'draftKey', 'stockpileExportSelection'];
+const helperNames = ['resetConfirmationMatches','mergeStockpileMutation','stockpileDetailSelection','recoverableStockpileCommands','pendingDraft','draftKey'];
 const transpile = source => ts.transpileModule(source, { fileName: 'replay.tsx', compilerOptions: {
   target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
 } }).outputText;
@@ -131,7 +129,7 @@ function task(sourceRevision='revision-A', taskId='task-A') { return {taskId,pro
 function setupQueue(write) {
   const states={views:[],errors:[],pending:[],recoveries:[]}, saved=new Map();
   const work={epoch:1,task:task(),pending:new Map(),running:false,refresh:false};
-  const context={exports:{},epoch:{current:1},sequence:{current:0},queue:{current:work},currentTask:{current:work.task},recovery:null,
+  const context={exports:{},pageOffset:0,mutationSequence:{current:0},crypto:{randomUUID:()=>`test-${Math.random()}`},getMinecraftTranslations:()=>({}),epoch:{current:1},sequence:{current:0},queue:{current:work},currentTask:{current:work.task},recovery:null,
     quantityDrafts:{current:new Map()},selectedItems:[],setEditingQuantities(){},
     preferencesRef:{current:{...basePreferences}},searchRef:{current:''},
     setPending:value=>states.pending.push(value),setError:value=>states.errors.push(value),setRecoveryOpen(){},setRecovery:value=>states.recoveries.push(value),
@@ -162,22 +160,6 @@ test('UI queue coalesces actual item commands, preserves overfill and serializes
   assert.equal(state.states.views.at(-1).task.preparedCount,21);
 });
 
-test('rapid adjustments and completion read the pending absolute quantity, not stale row props', async () => {
-  const requests=[],waiters=[];
-  const state=setupQueue(input=>{requests.push(input);return new Promise(resolve=>waiters.push(resolve));});
-  const stale=state.work.task.items[0];
-  assert.equal(state.adjustQuantity(stale,1),1);
-  assert.equal(state.adjustQuantity(stale,16),17);
-  assert.equal(state.adjustQuantity(stale,-1),16);
-  state.completeItem(stale,false); state.completeItem(stale,true);
-  assert.equal(requests.length,1);
-  assert.deepEqual(plain(state.work.pending.get('item:stone').mutation),{materialId:'stone',quantity:16,status:'preparing'});
-  waiters.shift()({task:{...task(),items:[row('stone',{quantity:1,status:'preparing'}),row('wood')]}});await tick();
-  assert.equal(requests[1].mutation.quantity,16);assert.equal(requests[1].mutation.status,'preparing');
-  waiters.shift()({task:{...task(),items:[row('stone',{quantity:16,status:'preparing'}),row('wood')]}});await tick();
-  assert.equal(state.work.pending.size,0);
-});
-
 test('uncommitted valid quantity drafts persist without Host writes and survive another row ACK', async () => {
   const requests=[],waiters=[];
   const state=setupQueue(input=>{requests.push(input);return new Promise(resolve=>waiters.push(resolve));});
@@ -203,7 +185,7 @@ test('batch completion targets only selected stable material identities through 
   state.context.selectedItems=[row('wood')];
   state.applySelected(false);await tick();
   assert.equal(requests.length,1);assert.equal(requests[0].mutation.materialId,'wood');
-  assert.equal(requests[0].mutation.quantity,10);assert.equal(requests[0].mutation.status,'done');
+  assert.equal(requests[0].mutation.quantity,0);assert.equal(requests[0].mutation.complete,true);assert.equal(requests[0].mutation.status,'done');
   assert.equal(requests[0].taskId,'task-A');assert.equal(requests[0].sourceRevision,'revision-A');
 });
 
@@ -263,33 +245,6 @@ test('pending search survives another item ACK and contains only idempotent patc
   assert.deepEqual(plain(mergeStockpileMutation({clear:true},{quantity:4,status:'preparing'})),{quantity:4,status:'preparing'});
 });
 
-test('web unit hierarchy uses each material stack size and retains exact raw integers',()=>{
-  const {stockpileUnitParts}=helpers();
-  for(const stack of [1,16,64,99])assert.deepEqual(Array.from(stockpileUnitParts(stack*27*27+stack*27+stack+(stack-1),stack)),[1,1,1,stack-1]);
-  assert.deepEqual(Array.from(stockpileUnitParts(0,16)),[0,0,0,0]);
-  assert.deepEqual(Array.from(stockpileUnitParts(15,16)),[0,0,0,15]);
-  assert.deepEqual(Array.from(stockpileUnitParts(27*64,64)),[0,1,0,0]);
-});
-
-test('completion fills the requirement, preserves overfill, and undo retains the absolute registered quantity', () => {
-  const {stockpileCompletionMutation} = helpers();
-  assert.deepEqual(plain(stockpileCompletionMutation(row('stone', {quantity:3}), 3, false)), {quantity:10,status:'done'});
-  assert.deepEqual(plain(stockpileCompletionMutation(row('stone', {quantity:22}), 22, false)), {quantity:22,status:'done'});
-  assert.deepEqual(plain(stockpileCompletionMutation(row('stone', {quantity:22}), 22, true)), {quantity:22,status:'preparing'});
-  assert.deepEqual(plain(stockpileCompletionMutation(row('stone', {quantity:3}), 17, true)), {quantity:17,status:'preparing'}, 'latest pending quantity wins over a stale ACK');
-});
-
-test('quantity adjustments retain integer units for non-64 stacks and never cross the exact integer range', () => {
-  const {stockpileAdjustedQuantity} = helpers();
-  for (const stack of [1,16,64,99]) {
-    assert.equal(stockpileAdjustedQuantity(7,stack),7+stack);
-    assert.equal(stockpileAdjustedQuantity(7,stack*27),7+stack*27);
-    assert.equal(stockpileAdjustedQuantity(7,stack*27*27),7+stack*27*27);
-  }
-  assert.equal(stockpileAdjustedQuantity(0,-1),0);
-  assert.equal(stockpileAdjustedQuantity(Number.MAX_SAFE_INTEGER,1),Number.MAX_SAFE_INTEGER);
-});
-
 test('detail selection follows the visible stable identity, never an old filtered or other variant row', () => {
   const {stockpileDetailSelection} = helpers();
   const visible = [row('potion#A'),row('potion#B')];
@@ -306,7 +261,7 @@ test('unified export opens with zero I/O and only confirmation dispatches the ch
     setExportSource: value => { state.source = value; }, setExportFormat: value => { state.format = value; },
     setExportScope: value => { state.scope = value; }, setExportIndividualCounts: value => { state.individual = value; },
     setStatus() {}, setExportOpen: value => { state.open = value; }, setExportBusy() {}, setError() {},
-    copy: (...input) => writes.push(['copy', ...input]), exportList: (...input) => writes.push(['file', ...input]),
+    exportView: (...input) => writes.push(['view', ...input]),
     backup: restore => writes.push(['backup', restore]),
   };
   vm.runInNewContext(transpile(`const ${declarations.get('beginExport')}; const ${declarations.get('confirmExport')}; globalThis.api={beginExport,confirmExport};`), context);
@@ -314,23 +269,12 @@ test('unified export opens with zero I/O and only confirmation dispatches the ch
   assert.deepEqual(state, { source: 'materials', format: 'copy', scope: 'all', individual: true, open: true });
   assert.equal(writes.length, 0, 'opening configuration must not copy, save or mutate a task');
   await context.api.confirmExport();
-  assert.deepEqual(writes.pop(), ['copy', 'remaining', 'materials']);
+  assert.deepEqual(writes.pop(), ['view', 'copy']);
   context.exportSource = 'task'; context.exportFormat = 'csv';
-  await context.api.confirmExport(); assert.deepEqual(writes.pop(), ['file', 'task', 'remaining', 'csv']);
+  await context.api.confirmExport(); assert.deepEqual(writes.pop(), ['view', 'csv']);
   context.exportFormat = 'json'; await context.api.confirmExport(); assert.deepEqual(writes.pop(), ['backup', false]);
   context.exportSource = 'materials'; context.materialExportContent = {};
   await context.api.confirmExport(); assert.equal(writes.length, 0, 'static export keeps its own explicit final confirmation');
-});
-
-test('export scopes preserve absolute task quantities and stable NBT identities without changing records', () => {
-  const { stockpileExportSelection } = helpers();
-  const items = [row('potion#A', {quantity: 5}), row('potion#B', {quantity: 12, remainingCount: 0, overfilledCount: 2})];
-  const before = JSON.stringify(items);
-  assert.deepEqual(Array.from(stockpileExportSelection(items, [items[1]], 'visible'), item => item.materialId), ['potion#B']);
-  assert.deepEqual(Array.from(stockpileExportSelection(items, [], 'remaining'), item => item.materialId), ['potion#A']);
-  assert.deepEqual(Array.from(stockpileExportSelection(items, [], 'prepared'), item => item.materialId), ['potion#A', 'potion#B']);
-  assert.deepEqual(Array.from(stockpileExportSelection(items, [], 'overfilled'), item => item.materialId), ['potion#B']);
-  assert.equal(JSON.stringify(items), before);
 });
 
 test('statistics default renders the existing task workspace even without a source, and retains genuine overview fields', () => {
@@ -338,56 +282,13 @@ test('statistics default renders the existing task workspace even without a sour
   const page = source.slice(source.indexOf('export function StatisticsPage'));
   assert.match(page, /<StockpileTaskPanel sourcePath=\{currentFile \|\| ""\}/);
   assert.doesNotMatch(page, /openMaterialsWithWindowBehavior|<MaterialTable|<MaterialsDialog|beta-statistics-panes/);
-  assert.match(page, /<MaterialCatalogDialog open=\{showMaterials\}/, 'lookup remains mounted to preserve filters');
+  assert.doesNotMatch(page, /<MaterialCatalogDialog/); assert.match(page, /openMaterialListWindow\(currentFile\)/);
   assert.match(page, /materialExportContent=\{data && currentFile \? <MaterialListContent[^>]+exportOnly/);
-  for (const field of ['totalNonAirBlocks', 'enclosingSize.x', 'density', 'materials.length', 'entityCount', 'regionCount', 'redstoneRatio', 'fluidRatio']) {
+  for (const field of ['totalNonAirBlocks', 'enclosingSize.x', 'density', 'materialCount', 'entityCount', 'regionCount', 'redstoneRatio', 'fluidRatio']) {
     assert(page.includes(`data.${field}`), `Genuine statistics field ${field} remains visible`);
   }
   assert.match(page, /enumeratorResults\.map/); assert.match(page, /EnumeratorInfoEditorDialog/);
   assert.doesNotMatch(page, /if \(!currentFile\)\s*\{\s*return/);
-});
-
-test('read-only material lookup filters real snapshot channels without merging NBT identities or writing tasks', () => {
-  const source = fs.readFileSync(new URL('../ui/windows/main/pages/statistics/MaterialCatalogDialog.tsx', import.meta.url), 'utf8');
-  const ast = ts.createSourceFile('MaterialCatalogDialog.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const filter = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'filterCatalogMaterials');
-  assert(filter);
-  const context = { exports: {}, materialDisplayName: item => item.name, getUiLocale: () => 'en-US' };
-  vm.runInNewContext(transpile(`${filter.getText(ast)};globalThis.filter=filterCatalogMaterials;`), context);
-  const materials = [
-    { id: 'minecraft:potion#A', itemId: 'minecraft:potion', name: 'Healing', blockCount: 0, containerItemCount: 2, totalCount: 2 },
-    { id: 'minecraft:potion#B', itemId: 'minecraft:potion', name: 'Swiftness', blockCount: 0, containerItemCount: 7, totalCount: 7 },
-    { id: 'minecraft:stone', itemId: 'minecraft:stone', name: 'Stone', blockCount: 4, containerItemCount: 1, totalCount: 5 },
-  ];
-  const before = JSON.stringify(materials);
-  const ids = (...input) => Array.from(context.filter(materials, ...input), item => item.id);
-  assert.deepEqual(ids('', 'variants', 'count_desc'), ['minecraft:potion#B', 'minecraft:potion#A']);
-  assert.deepEqual(ids('', 'placed', 'name'), ['minecraft:stone']);
-  assert.deepEqual(ids('potion#A', 'all', 'name'), ['minecraft:potion#A']);
-  assert.equal(JSON.stringify(materials), before);
-  assert.match(source, /modal=\{false\}/);
-  assert.doesNotMatch(source, /DialogPrimitive\.Overlay|commandStockpileTask|getStockpileTask|loadStructureStats/);
-  assert.match(source, /if \(!open \|\| !recipeOpen/);
-  const host = fs.readFileSync(new URL('../src-tauri/src/application/operations.rs', import.meta.url), 'utf8');
-  const read = host.slice(host.indexOf('pub(crate) fn read_material_detail'), host.indexOf('pub(crate) fn prepare_material_recipes'));
-  assert.match(read, /vec!\["material-detail"/);
-  assert.doesNotMatch(read.replace(/\/\/[^\n]*/g, ''), /material_snapshot|cached_analysis|run_stockpile_request/);
-});
-
-test('web single-user filters/search preserve NBT identity and language/base-ID fallback',()=>{
-  const {filterStockpileRows,materialName}=helpers();
-  const items=[row('potion#A',{doneCount:3,preparedCount:3,status:'done',remainingCount:7}),
-    row('potion#B',{preparingCount:8,status:'preparing',quantity:8,publicNote:'bring',storageLocation:'A1'}),
-    row('stone',{doneCount:12,preparedCount:12,quantity:12,overfilledCount:2,complete:true,remainingCount:0})];
-  const metadata=new Map([['potion#A',{item_icon_key:'minecraft:potion',display_name:'Healing',namespace_id:'potion#A',category:'brew',recipe_status:'available',display_names:{'en-US':'Healing Potion'}}],
-    ['potion#B',{item_icon_key:'minecraft:potion',display_name:'Speed',namespace_id:'potion#B',category:'brew',recipe_status:'unresolved',display_names:{'en-US':'Speed Potion'}}],
-    ['stone',{item_icon_key:'minecraft:stone',display_name:'Stone',category:'blocks',recipe_status:'missing',display_names:{}}]]);
-  const filtered=preferences=>Array.from(filterStockpileRows(items,metadata,{...basePreferences,...preferences}),item=>item.materialId);
-  assert.deepEqual(filtered({filter:'preparing'}),['potion#A','potion#B']);
-  assert.deepEqual(filtered({filter:'noted'}),['potion#B']);assert.deepEqual(filtered({filter:'stored'}),['potion#B']);
-  assert.deepEqual(filtered({filter:'overfilled'}),['stone']);assert.deepEqual(filtered({filter:'unresolved'}),['potion#B']);
-  assert.deepEqual(filtered({search:'healing potion'}),['potion#A']);assert.deepEqual(filtered({search:'potion#B'}),['potion#B']);
-  assert.equal(materialName({item_icon_key:'minecraft:potion',namespace_id:'potion#NBT',display_name:'Potion',display_names:{}},'auto','potion#NBT'),'minecraft:potion:Potion');
 });
 
 test('actual reset cancellation writes nothing and confirmation cannot target a different task or revision',()=>{
@@ -440,12 +341,12 @@ test('new stockpile labels exist in both locales without duplicate keys',()=>{
 function statsModule(getProjectStats = async () => { throw Error('Unexpected project read'); }) {
   const source = fs.readFileSync(new URL('../src/services/statsService.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } }).outputText;
-  const context = { exports: {}, performance, console: { info() {} }, require(name) {
+  const context = { exports: {}, crypto:{randomUUID:()=>"test-stats-operation"}, performance, console: { info() {} }, require(name) {
     if (name.endsWith('/dialogs')) return {};
     if (name.endsWith('/applicationOperations')) return { getProjectStats };
     if (name.endsWith('/backend')) return {};
     if (name.endsWith('/filePathIdentity')) return { windowsPathKey: value => value.toLowerCase().replaceAll('\\', '/') };
-    if (name.endsWith('/i18n')) return { t: key => key, getUiLocale: () => 'en-US', subscribeI18nChanges: () => () => {},
+    if (name.endsWith('/i18n')) return { t: key => key, getUiLocale: () => 'en-US', getI18nRevision:()=>1, getMinecraftTranslations:()=>({}), initI18n:async()=>{}, subscribeI18nChanges: () => () => {},
       resolveBlockDisplayName: (id, supplied) => `${id}:${supplied || 'localized'}`, translateBuildingType: value => value };
     throw Error(`Unexpected dependency: ${name}`);
   } };
@@ -453,31 +354,17 @@ function statsModule(getProjectStats = async () => { throw Error('Unexpected pro
   return context.exports;
 }
 const analysis = () => ({
-  source_revision: 'source-A', material_semantics: 'minecraft-inventory-v9:test', structural_block_counts: [],
+  statisticsView:{totalNonAirBlocks:8,materialCount:2,materials:[{id:'minecraft:potion#nbt-A',name:'Healing',totalCount:3},{id:'minecraft:potion#nbt-B',name:'Swiftness',totalCount:5}]},source_revision: 'source-A', material_semantics: 'minecraft-inventory-v9:test', structural_block_counts: [],
   material_items: [
     { block_id: 'minecraft:potion', item_identity: 'minecraft:potion#nbt-A', material_status: 'item', display_name: 'Healing', total_count: 3, icon_hint: 'minecraft:splash_potion' },
     { block_id: 'minecraft:potion', item_identity: 'minecraft:potion#nbt-B', material_status: 'item', display_name: 'Swiftness', total_count: 5 },
   ],
 });
 
-test('stats mapper preserves distinct NBT identities while resolving names and icons from the base item', () => {
-  const stats = statsModule();
-  const mapped = stats.mapStructureStats(analysis());
-  assert.deepEqual(Array.from(mapped.materials, item => item.id), ['minecraft:potion#nbt-A', 'minecraft:potion#nbt-B']);
-  assert(mapped.materials.every(item => item.itemId === 'minecraft:potion'));
-  assert.equal(mapped.materials[0].name, 'minecraft:potion:Healing');
-  assert.equal(mapped.materials[1].name, 'minecraft:potion:Swiftness');
-  assert.equal(mapped.materials[0].iconHint, 'minecraft:splash_potion');
-  assert.equal(mapped.materials[1].iconHint, 'minecraft:potion');
-  const refreshed = stats.refreshStatisticsNames(mapped);
-  assert.equal(stats.materialDisplayName(refreshed.materials[1]), 'minecraft:potion:Swiftness');
-  assert.equal(refreshed.materials[1].id, 'minecraft:potion#nbt-B');
-});
-
 test('inventory analysis accepts v9 only with source revision and cache reuse requires Host revision confirmation', async () => {
   const requests = [];
   const responses = [analysis(), { cache_unchanged: true, source_revision: 'source-A' },
-    { ...analysis(), source_revision: 'source-B', material_items: [{ ...analysis().material_items[0], total_count: 9 }] },
+    { ...analysis(), source_revision: 'source-B', statisticsView:{...analysis().statisticsView,materials:[{id:'minecraft:potion#nbt-A',name:'Healing',totalCount:9}]} },
     { cache_unchanged: true, source_revision: 'wrong-source' }];
   const stats = statsModule(async input => { requests.push(input); return responses.shift(); });
   assert.equal(stats.hasInventoryMaterialSemantics(analysis()), true);
@@ -490,6 +377,48 @@ test('inventory analysis accepts v9 only with source revision and cache reuse re
   const changed = await stats.loadStructureStats('C:/schematics/A.litematic');
   assert.notEqual(changed, first);
   assert.equal(changed.materials[0].totalCount, 9);
-  assert.equal(changed.raw.source_revision, 'source-B');
+  assert.equal(changed.sourceRevision, 'source-B');
   await assert.rejects(stats.loadStructureStats('C:/schematics/A.litematic'), /cacheChanged/);
+});
+
+
+test('increment buttons send independent Rust adjustments and stable retry identities, not UI arithmetic', async () => {
+ const requests=[], waiters=[];
+ const state=setupQueue(input=>{requests.push(input);return new Promise(resolve=>waiters.push(resolve));});
+ state.adjustQuantity(row(),1); state.adjustQuantity(row(),1);
+ assert.equal(requests.length,1);assert.equal(requests[0].mutation.adjustment.steps,1);assert.equal(requests[0].mutation.quantity,undefined);
+ const receipt=requests[0].mutation.requestId;assert(receipt);
+ waiters.shift()({task:task()});await tick();
+ assert.equal(requests.length,2);assert.notEqual(requests[1].mutation.requestId,receipt);
+ waiters.shift()({task:task()});await tick();assert.equal(state.work.pending.size,0);
+ assert.doesNotMatch(uiSource,/stockpileUnitParts|filterStockpileRows|quantityText\(|Math\.(floor|ceil)\(detailItem/);
+});
+
+test('catalog is native read-only paginated Rust data, with cancellable stale query isolation', () => {
+ const catalog=fs.readFileSync(new URL('../ui/windows/main/pages/statistics/MaterialCatalogDialog.tsx',import.meta.url),'utf8');
+ const native=fs.readFileSync(new URL('../ui/windows/material_list/MaterialListWindow.tsx',import.meta.url),'utf8');
+ assert.match(catalog,/queryMaterials\(/);assert.match(catalog,/getDataOperationStatus\(operationId, true\)/);
+ assert.match(catalog,/generation === queryGeneration.current/);assert.match(catalog,/limit: 200/);
+ assert.doesNotMatch(catalog,/filterCatalogMaterials|commandStockpileTask|getStockpileTask|loadStructureStats|DialogPrimitive|\.sort\(/);
+ assert.match(native,/<MaterialCatalogDialog/);assert.doesNotMatch(native,/StockpileTaskPanel|loadStructureStats|mapStructureStats/);
+ assert.match(catalog,/<MaterialSources/);assert.match(catalog,/group.layers.map/);assert.match(catalog,/sourceSummary/);
+});
+
+test('statistics mapping renders only the exact Rust view and never repairs missing business output', () => {
+ const stats=statsModule(),raw=analysis();
+ assert.equal(stats.mapStructureStats(raw),raw.statisticsView);
+ assert.equal(stats.materialDisplayName({name:'Backend localized name',id:'minecraft:any'}),'Backend localized name');
+ assert.throws(()=>stats.mapStructureStats({material_items:[]}),/displayDataMissing/);
+ const source=fs.readFileSync(new URL('../ui/windows/main/pages/statistics/StatisticsPage.tsx',import.meta.url),'utf8');
+ assert.match(source,/queryStatisticsRules\(/);assert.doesNotMatch(source,/evaluateEnumeratorInfoRule|buildBaseUniverse|evaluateEnumeratorExpression/);
+});
+
+
+test('version conversion sends selection/property edits to Rust and cancels superseded operations', () => {
+ const source=fs.readFileSync(new URL('../ui/windows/main/pages/properties/VersionConversionDialog.tsx',import.meta.url),'utf8');
+ assert.doesNotMatch(source,/function parseState|function stateString|function targetState|versions \|\| \[\]\)\.filter/);
+ assert.match(source,/setReplacements\(result.effectiveReplacements\)/);
+ assert.match(source,/selection, propertyEdit/);assert.match(source,/getDataOperationStatus\(operation.current, true\)/);
+ assert.match(source,/operationId/);assert.match(source,/progress.completed \?\? progress.current/);
+ assert.match(source,/entry.targetProperties/);assert.match(source,/entry.sourceBlockId/);
 });

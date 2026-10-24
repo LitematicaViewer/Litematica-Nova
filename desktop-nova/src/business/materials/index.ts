@@ -6,12 +6,8 @@ export type {
   StatsData,
 } from "../../services/statsService";
 export {
-  exportMaterials,
   exportMaterialListWithOptions,
   fetchMaterialRecipeCache,
-  filterMaterialItems,
-  formatMaterialUnits,
-  loadMaterialsScope,
   loadStructureStats,
 } from "../../services/statsService";
 

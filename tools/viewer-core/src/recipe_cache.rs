@@ -411,7 +411,7 @@ fn read_manifest(path: &Path) -> Result<RecipeCacheManifest> {
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let file = File::open(path).with_context(|| format!("open JSON failed: {}", path.display()))?;
-    serde_json::from_reader(file).with_context(|| format!("parse JSON failed: {}", path.display()))
+    serde_json::from_reader(std::io::BufReader::new(file)).with_context(|| format!("parse JSON failed: {}", path.display()))
 }
 
 fn read_string_vec(path: &Path) -> Result<Vec<String>> {

@@ -11,7 +11,7 @@ pub(crate) fn text(key: &str) -> &'static str {
         "dialog.configDirectory" => ("选择用户数据目录", "Choose user data directory"),
         "dialog.openSchematic" => ("打开投影文件", "Open schematic"),
         "dialog.schematicFilter" => ("Litematica 投影", "Litematica schematic"),
-        "window.materialList" => ("备货任务", "Stockpile Task"),
+        "window.materialList" => ("材料清单", "Material List"),
         "window.materialExport" => ("导出材料列表", "Export Material List"),
         "window.enumerator" => ("枚举器", "Enumerator"),
         "window.assets" => ("游戏资源管理", "Game Resource Manager"),

@@ -6,3 +6,5 @@ pub(crate) mod quick_preview;
 pub(crate) mod updater;
 pub(crate) mod thumbnails;
 pub(crate) mod protected_render;
+
+pub(crate) mod data_worker;

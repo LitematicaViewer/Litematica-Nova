@@ -154,7 +154,7 @@ fn build_stockpile_materials_data(
     let materials = aggregated_items
         .iter()
         .map(|item| {
-            let stack_size = max_stack_size(&item.block_id);
+            let stack_size = item.stack_size;
             let breakdown = stack_breakdown(item.total_count, stack_size);
             total_stack_units = total_stack_units.saturating_add(breakdown.stack_units);
             stockpile_material_item(item, breakdown, recipe_availability)
@@ -196,6 +196,13 @@ pub(crate) fn build_materials_data_from_stats(input: &Path, stats: StableStructu
 /// Maps one already analysed inventory row; never reads a schematic or task.
 pub(crate) fn material_detail_item(item: &MaterialItemOutput, minecraft_version: &str) -> Result<StockpileMaterialItem> {
     material_detail_item_with_availability(item, &resolve_recipe_availability(minecraft_version)?)
+}
+
+/// Batch mapping shares one recipe-availability lookup, preserving each
+/// inventory/NBT identity and the source's actual stack size and quantity.
+pub(crate) fn material_detail_items(items:&[MaterialItemOutput],minecraft_version:&str)->Result<Vec<StockpileMaterialItem>> {
+    let availability=resolve_recipe_availability(minecraft_version)?;
+    items.iter().filter(|item|item.material_status=="item").map(|item|material_detail_item_with_availability(item,&availability)).collect()
 }
 
 fn material_detail_item_with_availability(item: &MaterialItemOutput, availability: &RecipeAvailability) -> Result<StockpileMaterialItem> {
@@ -245,6 +252,7 @@ struct NormalizedMaterialItem {
     block_id: String,
     item_identity: Option<String>,
     display_name: String,
+    stack_size: u64,
     total_count: u64,
     region_counts: Option<Vec<RegionCountOutput>>,
     normalized_from: Vec<String>,
@@ -284,6 +292,7 @@ fn normalize_material_items(
                         .unwrap_or(normalized)
                         .replace('_', " ")
                 },
+                stack_size: item.stack_size.max(1),
                 total_count: 0,
                 region_counts: None,
                 normalized_from: Vec::new(),

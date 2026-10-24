@@ -242,6 +242,7 @@ struct MaterialAccumulator {
     block_count: u64,
     container_item_count: u64,
     has_custom_stack_size: bool,
+    custom_stack_size: Option<u64>,
     region_counts: BTreeMap<String, u64>,
     layer_counts: BTreeMap<i32, u64>,
     scope_counts: BTreeMap<(String, Option<i32>), MaterialScopeCount>,
@@ -270,6 +271,63 @@ pub fn build_stats_output(
         eprintln!("[NOVA_STATS_TIMING] aggregate_ms={:.3} aggregate_runs=1", started.elapsed().as_secs_f64() * 1000.0);
     }
     result
+}
+
+/// Adds only the inventory channel to an existing parsed-source analysis. The
+/// block palette/layers/structure are not decoded, counted or scanned again.
+/// The same production inventory scanner and item identity builder serve both
+/// cold statistics and this delta path.
+pub fn add_container_items_to_stats(root:&crate::nbt::LitematicRoot,base:&StableStructureOutput,cancel:&dyn Fn()->bool)->Result<StableStructureOutput> {
+    if cancel(){bail!("Cancelled");}
+    if base.container_scan.enabled {return Ok(base.clone());}
+    let identity=format!("minecraft-inventory-v9:{}",crate::game_data::active_context()?.content_id);
+    if base.material_semantics!=identity {bail!("Statistics use a different game-resource identity; reanalyse the projection");}
+    let min_y=compute_bounds(root).map_or_else(||fallback_bounds(&base.metadata).min_y,|bounds|bounds.min_y);
+    let scope=match base.structure_stats.scope.kind.as_str(){
+        "region"=>MaterialScope::Region(base.structure_stats.scope.region.clone().context("Statistics region scope is missing")?),
+        "layer"=>MaterialScope::Layer(base.structure_stats.scope.layer.context("Statistics layer scope is missing")?),
+        "all"=>MaterialScope::All,_=>bail!("Unknown statistics scope"),
+    };
+    let resolved=resolve_scope(&scope,&root.regions,&base.metadata)?;
+    let include_scopes=base.material_items.iter().any(|item|item.scope_counts.is_some())
+        ||base.structural_block_counts.as_ref().is_some_and(|rows|rows.iter().any(|row|row.scope_counts.is_some()));
+    let mut counts=BTreeMap::<String,MaterialAccumulator>::new();
+    let scan_started=std::time::Instant::now();
+    let mut scan=ContainerScanOutput{enabled:true,scope_entries:include_scopes.then(Vec::new),..Default::default()};
+    for (name,region) in &root.regions {
+        if cancel(){bail!("Cancelled");}
+        scan_region_container_items(name,region,&resolved,min_y,root.minecraft_data_version,&mut counts,&mut scan);
+    }
+    if cancel(){bail!("Cancelled");}
+    let scan_ms=scan_started.elapsed().as_secs_f64()*1000.0;
+    let merge_started=std::time::Instant::now();
+    // Inventory scanning does not need a reconstructed block accumulator.
+    // Empty inventories preserve existing rows verbatim; nonempty deltas merge
+    // the already counted block channel only once after the shared scanner.
+    let material_items=if counts.is_empty(){base.material_items.clone()}else{
+        for item in &base.material_items {
+            let identity=item.item_identity.clone().unwrap_or_else(||item.block_id.clone());
+            let value=counts.entry(identity).or_default();
+            value.item_id.get_or_insert_with(||item.block_id.clone());
+            value.block_count+=item.block_count;value.container_item_count+=item.container_item_count;
+            value.has_custom_stack_size|=item.has_custom_stack_size;
+            if value.custom_stack_size.is_none()&&item.has_custom_stack_size{value.custom_stack_size=Some(item.stack_size);}
+            for row in item.region_counts.as_deref().unwrap_or_default(){*value.region_counts.entry(row.region.clone()).or_default()+=row.count;}
+            for row in item.layer_counts.as_deref().unwrap_or_default(){*value.layer_counts.entry(row.layer).or_default()+=row.count;}
+            for row in item.scope_counts.as_deref().unwrap_or_default(){
+                let scope=value.scope_counts.entry((row.region.clone(),row.layer)).or_insert_with(||MaterialScopeCount{region:row.region.clone(),layer:row.layer,block_count:0,container_item_count:0,has_custom_stack_size:false});
+                scope.block_count+=row.block_count;scope.container_item_count+=row.container_item_count;scope.has_custom_stack_size|=row.has_custom_stack_size;
+            }
+        }
+        build_material_items(counts,min_y)
+    };
+    let merge_ms=merge_started.elapsed().as_secs_f64()*1000.0;
+    let copy_started=std::time::Instant::now();
+    // Do not clone every base material row only to immediately overwrite it.
+    let output=StableStructureOutput{material_semantics:base.material_semantics.clone(),metadata:base.metadata.clone(),structure_stats:base.structure_stats.clone(),derived:base.derived.clone(),
+        material_items,structural_block_counts:base.structural_block_counts.clone(),non_item_blocks:base.non_item_blocks.clone(),regions:base.regions.clone(),layers_summary:base.layers_summary.clone(),entity_summary:base.entity_summary.clone(),container_scan:scan};
+    if std::env::var_os("NOVA_STATS_TIMING").is_some(){eprintln!("[NOVA_STATS_TIMING] delta_scan_ms={scan_ms:.3} delta_merge_ms={merge_ms:.3} delta_copy_ms={:.3}",copy_started.elapsed().as_secs_f64()*1000.0);}
+    Ok(output)
 }
 
 /// Builds the legacy source-NBT analysis summary without reopening its input.
@@ -343,7 +401,6 @@ pub(crate) fn build_stats_output_from_canonical(
             material_catalog::non_item_status_for_version(&state.name, &state.properties, Some(world.provenance().source_minecraft_data_version()))
         }).collect::<Result<Vec<_>>>()?;
         let mut layer_palette_counts = vec![0_u64; region.palette().len()];
-        let mut storage_y = 0_usize;
         let mut accumulate_layer = |y: usize, counts: &mut [u64]| {
             let (_, ry, _) = storage_to_region_coords(0, y, 0, &size);
             let layer_index = position.y + ry - resolved_bounds.min_y;
@@ -375,16 +432,21 @@ pub(crate) fn build_stats_output_from_canonical(
             }
         };
         let palette_layout = choose_palette_packing(region.block_states(), volume, nbits, region.palette().len())?;
-        for index in 0..volume {
-                let palette_index = palette_layout.palette_index(region.block_states(), index);
-                let y = index / (width * length);
-                if y != storage_y {
-                    accumulate_layer(storage_y, &mut layer_palette_counts);
-                    storage_y = y;
-                }
-                if let Some(count) = layer_palette_counts.get_mut(palette_index) { *count += 1; }
+        let layer_area=width*length;
+        let zero_is_air=source_palette.first().is_some_and(|block|is_air_block(&block.name));
+        let mut layer_start=0_usize;let mut y=0_usize;
+        while layer_start<volume {
+            let layer_end=layer_start.saturating_add(layer_area).min(volume);
+            let mut chunk_start=layer_start;
+            while chunk_start<layer_end {
+                let chunk_end=chunk_start.saturating_add(262_144).min(layer_end);
+                palette_layout.visit_palette_range(region.block_states(),chunk_start,chunk_end,zero_is_air,|_,palette_index|{
+                    if let Some(count)=layer_palette_counts.get_mut(palette_index){*count+=1;}
+                });
+                chunk_start=chunk_end;
+            }
+            accumulate_layer(y,&mut layer_palette_counts);layer_start=layer_end;y+=1;
         }
-        accumulate_layer(storage_y, &mut layer_palette_counts);
         for tile in region.renderer_block_entities() {
             if world.provenance().source_minecraft_data_version() < 1519 && is_legacy_flower_pot(tile) {
                 let index = legacy_tile_storage_index(tile, &size)?;
@@ -591,13 +653,30 @@ fn build_structure_output_with_scope_cache(
     include_container_items: bool,
     include_scope_cache: bool,
 ) -> Result<StableStructureOutput> {
+    build_stats_output_from_root_cancellable(root,scope,include_container_items,include_scope_cache,&||false)
+}
+
+pub fn build_stats_output_cancellable(path:&Path,include_container_items:bool,cancel:&dyn Fn()->bool)->Result<StableStructureOutput> {
+    if cancel(){bail!("Cancelled");}
+    let root=load_litematic_root(path)?;
+    build_stats_output_from_root_cancellable(&root,MaterialScope::All,include_container_items,true,cancel)
+}
+
+pub fn build_stats_output_from_root_cancellable(root:&crate::nbt::LitematicRoot,scope:MaterialScope,include_container_items:bool,include_scope_cache:bool,cancel:&dyn Fn()->bool)->Result<StableStructureOutput> {
+    if cancel(){bail!("Cancelled");}
+    let aggregate_started=std::time::Instant::now();
+    let phase_started=std::time::Instant::now();
     material_catalog::ensure_available()?;
+    let catalog_ms=phase_started.elapsed().as_secs_f64()*1000.0;
+    let metadata_started=std::time::Instant::now();
     let bounds = compute_bounds(root);
     let metadata = build_metadata_output(root, bounds);
     let resolved_bounds = bounds.unwrap_or_else(|| fallback_bounds(&metadata));
     let total_layers = metadata.enclosing_size.y.max(0) as usize;
     let resolved_scope = resolve_scope(&scope, &root.regions, &metadata)?;
 
+    let initial_metadata_ms=metadata_started.elapsed().as_secs_f64()*1000.0;
+    let mut palette_ms=0.0_f64;
     let mut material_counts = BTreeMap::<String, MaterialAccumulator>::new();
     let mut non_item_counts = BTreeMap::<String, u64>::new();
     let mut structural_counts = BTreeMap::<String, u64>::new();
@@ -619,6 +698,7 @@ fn build_structure_output_with_scope_cache(
     let mut selected_block_types = BTreeSet::new();
 
     for (region_name, region) in &root.regions {
+        if cancel(){bail!("Cancelled");}
         let mut region_acc = RegionAccumulator::default();
         for entity in &region.entities {
             if let Some(entity_id) = entity.entity_id() {
@@ -633,14 +713,15 @@ fn build_structure_output_with_scope_cache(
         let length = i64::from(region.size.z).unsigned_abs() as usize;
         let nbits = bits_for_palette(region.block_state_palette.len());
 
+        let palette_started=std::time::Instant::now();
         let palette_materials = region.block_state_palette.iter().map(|block| material_catalog::requirements_for_version(&block.name, &block.properties, root.minecraft_data_version)).collect::<Result<Vec<_>>>()?;
         let palette_non_items = region.block_state_palette.iter().map(|block| material_catalog::non_item_status_for_version(&block.name, &block.properties, root.minecraft_data_version)).collect::<Result<Vec<_>>>()?;
+        palette_ms+=palette_started.elapsed().as_secs_f64()*1000.0;
         // Packed indices are ordered by storage Y. Count a whole palette layer
         // before updating string-keyed summaries: repeated blocks must not
         // allocate identifiers or perform five tree lookups for every voxel.
         // Only one palette-sized counter is resident, independent of volume.
         let mut layer_palette_counts = vec![0_u64; region.block_state_palette.len()];
-        let mut storage_y = 0_usize;
         let mut accumulate_layer = |y: usize, counts: &mut [u64]| {
             let (_, ry, _) = storage_to_region_coords(0, y, 0, &region.size);
             let layer_index = region.position.y + ry - resolved_bounds.min_y;
@@ -682,17 +763,30 @@ fn build_structure_output_with_scope_cache(
                 }
             }
         };
+        let layout_started=std::time::Instant::now();
         let palette_layout = choose_palette_packing(&region.block_states, volume, nbits, region.block_state_palette.len())?;
-        for index in 0..volume {
-                let palette_index = palette_layout.palette_index(&region.block_states, index);
-                let y = index / (width * length);
-                if y != storage_y {
-                    accumulate_layer(storage_y, &mut layer_palette_counts);
-                    storage_y = y;
-                }
-                if let Some(count) = layer_palette_counts.get_mut(palette_index) { *count += 1; }
+        let layout_ms=layout_started.elapsed().as_secs_f64()*1000.0;
+        let count_started=std::time::Instant::now();
+        let layer_area=width*length;
+        // Zero is omitted only when this exact source palette proves AIR.
+        // Each bounded range retains its current/crossing backing word; Y and
+        // layer division occur once per layer rather than once per voxel.
+        let zero_is_air=region.block_state_palette.first().is_some_and(|block|is_air_block(&block.name));
+        let mut layer_start=0_usize;let mut y=0_usize;let mut word_reads=0_usize;
+        while layer_start<volume {
+            let layer_end=layer_start.saturating_add(layer_area).min(volume);
+            let mut chunk_start=layer_start;
+            while chunk_start<layer_end {
+                if cancel(){bail!("Cancelled");}
+                let chunk_end=chunk_start.saturating_add(262_144).min(layer_end);
+                word_reads+=palette_layout.visit_palette_range(&region.block_states,chunk_start,chunk_end,zero_is_air,|_,palette_index|{
+                    if let Some(count)=layer_palette_counts.get_mut(palette_index){*count+=1;}
+                });
+                chunk_start=chunk_end;
+            }
+            accumulate_layer(y,&mut layer_palette_counts);layer_start=layer_end;y+=1;
         }
-        accumulate_layer(storage_y, &mut layer_palette_counts);
+        if std::env::var_os("NOVA_STATS_TIMING").is_some(){eprintln!("[NOVA_STATS_TIMING] region={region_name:?} layout_ms={layout_ms:.3} count_ms={:.3} backing_word_reads={word_reads}",count_started.elapsed().as_secs_f64()*1000.0);}
         for tile in &region.tile_entities {
             if root.minecraft_data_version.is_some_and(|source| source < 1519) && is_legacy_flower_pot(tile) {
                 let layer = tile_entity_layer_index(tile, region.position.y, resolved_bounds.min_y)
@@ -719,6 +813,7 @@ fn build_structure_output_with_scope_cache(
         }
 
         if include_container_items {
+            if cancel(){bail!("Cancelled");}
             scan_region_container_items(
                 region_name,
                 region,
@@ -751,7 +846,10 @@ fn build_structure_output_with_scope_cache(
         });
     }
 
+    let rows_started=std::time::Instant::now();
     let material_items = build_material_items(material_counts, resolved_bounds.min_y);
+    let material_rows_ms=rows_started.elapsed().as_secs_f64()*1000.0;
+    let final_metadata_started=std::time::Instant::now();
     let layers_summary = layers
         .into_iter()
         .enumerate()
@@ -779,11 +877,15 @@ fn build_structure_output_with_scope_cache(
                 .map(|((region, layer), count)| StructuralScopeCount { region, layer, count }).collect());
         }
     }
+    let mut final_metadata_ms=final_metadata_started.elapsed().as_secs_f64()*1000.0;
+    let derived_started=std::time::Instant::now();
     let derived = matches!(scope, MaterialScope::All).then(|| crate::business::build_analysis_derived(
         &structural_counts.iter().map(|(id, count)| (id.clone(), *count)).collect(),
         metadata.total_volume, (metadata.enclosing_size.x, metadata.enclosing_size.y, metadata.enclosing_size.z), total_selected_blocks,
     ));
-    Ok(StableStructureOutput {
+    let derived_ms=derived_started.elapsed().as_secs_f64()*1000.0;
+    let final_metadata_started=std::time::Instant::now();
+    let output=StableStructureOutput {
         derived,
         material_semantics: format!("minecraft-inventory-v9:{}", crate::game_data::active_context()?.content_id),
         metadata,
@@ -803,7 +905,10 @@ fn build_structure_output_with_scope_cache(
         layers_summary,
         entity_summary,
         container_scan,
-    })
+    };
+    final_metadata_ms+=final_metadata_started.elapsed().as_secs_f64()*1000.0;
+    if std::env::var_os("NOVA_STATS_TIMING").is_some(){eprintln!("[NOVA_STATS_TIMING] aggregate_total_ms={:.3} catalog_ms={catalog_ms:.3} palette_ms={palette_ms:.3} initial_metadata_ms={initial_metadata_ms:.3} material_rows_ms={material_rows_ms:.3} derived_ms={derived_ms:.3} final_metadata_ms={final_metadata_ms:.3}",aggregate_started.elapsed().as_secs_f64()*1000.0);}
+    Ok(output)
 }
 
 fn build_non_item_blocks(counts: BTreeMap<String, u64>) -> Vec<NonItemBlockOutput> {
@@ -826,7 +931,7 @@ fn build_material_items(
             let block_id = acc.item_id.unwrap_or_else(|| identity.clone());
             MaterialItemOutput {
             display_name: material_catalog::name(&block_id),
-            stack_size: material_catalog::item(&block_id).map_or(1, |item| item.stack_size),
+            stack_size: acc.custom_stack_size.unwrap_or_else(||material_catalog::item(&block_id).map_or(1, |item| item.stack_size)),
             can_fit_container: material_catalog::item(&block_id).is_some_and(|item| item.can_fit_container),
             material_status: material_catalog::status(&block_id).to_string(),
             has_custom_stack_size: acc.has_custom_stack_size,
@@ -884,9 +989,10 @@ fn scan_region_container_items(
     material_counts: &mut BTreeMap<String, MaterialAccumulator>,
     scan: &mut ContainerScanOutput,
 ) {
-    for (index, tile_entity) in region.tile_entities.iter().enumerate() {
-        if source_data_version.is_some_and(|version| version < 1519) && is_legacy_flower_pot(tile_entity) { continue; }
-        let layer_index = tile_entity_layer_index(tile_entity, region.position.y, min_world_y);
+    let blocks=region.tile_entities.iter().enumerate().map(|(index,tile)|(index,tile_entity_layer_index(tile,region.position.y,min_world_y),Some(tile),None));
+    let entities=region.entities.iter().enumerate().filter(|(_,entity)|entity.data.keys().any(|key|key.eq_ignore_ascii_case("Items"))).map(|(index,entity)|(index,entity_inventory_layer(entity,region.position.y,min_world_y),None,Some(entity)));
+    for (index,layer_index,tile_entity,entity) in blocks.chain(entities) {
+        if tile_entity.is_some_and(|tile|source_data_version.is_some_and(|version| version < 1519) && is_legacy_flower_pot(tile)) { continue; }
         let in_scope = match scope {
             ResolvedScope::All => true,
             ResolvedScope::Region(expected) => expected == region_name,
@@ -906,12 +1012,9 @@ fn scan_region_container_items(
 
         let mut stacks = Vec::<ContainerStack>::new();
         let mut entry_scan = ContainerScanOutput::default();
-        collect_container_stacks(
-            tile_entity,
-            &mut stacks,
-            &mut entry_scan,
-            &format!("{region_name}#{index}"),
-        );
+        let path=format!("{region_name}#{}{index}",if entity.is_some(){"entity-"}else{""});
+        if let Some(tile_entity)=tile_entity {collect_container_stacks(tile_entity,&mut stacks,&mut entry_scan,&path);}
+        if let Some(entity)=entity {collect_container_fields(entity.data.iter(),&mut stacks,&mut entry_scan,&path);}
         if !stacks.is_empty() {
             entry_scan.containers_scanned += 1;
         }
@@ -924,6 +1027,7 @@ fn scan_region_container_items(
             let material = material_counts.entry(stack.item_identity.unwrap_or_else(|| stack.id.clone())).or_default();
             material.item_id = Some(stack.id.clone());
             material.has_custom_stack_size |= stack.has_custom_stack_size;
+            if stack.custom_stack_size.is_some(){material.custom_stack_size=stack.custom_stack_size;}
             material.container_item_count =
                 material.container_item_count.saturating_add(stack.count);
             *material
@@ -962,6 +1066,7 @@ fn scan_region_container_items(
 
 #[derive(Debug)]
 struct ContainerStack {
+    custom_stack_size: Option<u64>,
     id: String,
     item_identity: Option<String>,
     count: u64,
@@ -978,7 +1083,11 @@ fn collect_container_stacks(
         return;
     };
 
-    if let Some(items) = get_case_insensitive(map, "Items") {
+    collect_container_fields(map.iter(),out,scan,path);
+}
+fn collect_container_fields<'a>(map:impl Iterator<Item=(&'a String,&'a NbtValue)>+Clone,out:&mut Vec<ContainerStack>,scan:&mut ContainerScanOutput,path:&str) {
+    let get=|key:&str|map.clone().find(|(candidate,_)|candidate.eq_ignore_ascii_case(key)).map(|(_,value)|value);
+    if let Some(items) = get("Items") {
         match items {
             NbtValue::List(list) => {
                 for (index, item) in list.iter().enumerate() {
@@ -996,17 +1105,18 @@ fn collect_container_stacks(
         }
     }
 
-    if let Some(item) = get_case_insensitive(map, "Item") {
+    if let Some(item) = get("Item") {
         if let Some(stack) = parse_pot_item(item) {
             out.push(stack);
         }
     }
 
-    if let Some(sherds) = get_case_insensitive(map, "Sherds") {
+    if let Some(sherds) = get("Sherds") {
         if let NbtValue::List(list) = sherds {
             for sherd in list {
                 if let Some(id) = nbt_string(sherd).filter(|id| !id.is_empty()) {
                     out.push(ContainerStack {
+                        custom_stack_size: None,
                         id: id.to_string(),
                         item_identity: None,
                         count: 1,
@@ -1059,7 +1169,9 @@ fn parse_item_stack(value: &NbtValue) -> Option<ContainerStack> {
     if count == 0 {
         return None;
     }
+    let custom_stack_size=map.get("components").and_then(|value|match value{NbtValue::Compound(values)=>values.get("minecraft:max_stack_size"),_=>None}).and_then(nbt_u64).filter(|count|(1..=99).contains(count));
     Some(ContainerStack {
+        custom_stack_size,
         id: id.to_string(),
         item_identity: container_item_identity(id, map),
         count,
@@ -1253,6 +1365,7 @@ fn replace_legacy_block_material(counts: &mut BTreeMap<String, MaterialAccumulat
 fn parse_pot_item(value: &NbtValue) -> Option<ContainerStack> {
     match value {
         NbtValue::String(id) if !id.is_empty() => Some(ContainerStack {
+            custom_stack_size: None,
             id: id.clone(),
             item_identity: None,
             count: 1,
@@ -1261,6 +1374,13 @@ fn parse_pot_item(value: &NbtValue) -> Option<ContainerStack> {
         NbtValue::Compound(_) => parse_item_stack(value),
         _ => None,
     }
+}
+
+fn entity_inventory_layer(entity:&crate::model::EntityNbt,region_y:i32,min_world_y:i32)->Option<i32> {
+    let NbtValue::List(pos)=entity.field("Pos")? else{return None;};
+    let y=match pos.get(1)?{NbtValue::Double(y)=>*y,NbtValue::Float(y)=>f64::from(*y),value=>nbt_i64(value)? as f64};
+    if !y.is_finite() || y < i32::MIN as f64 || y > i32::MAX as f64{return None;}
+    region_y.checked_add(y.floor() as i32)?.checked_sub(min_world_y)
 }
 
 fn tile_entity_layer_index(value: &NbtValue, region_y: i32, min_world_y: i32) -> Option<i32> {
@@ -1468,6 +1588,53 @@ mod tests {
     }
 
     #[test]
+    fn range_palette_statistics_match_scalar_counts_when_zero_is_air_or_material() {
+        for material_zero in [false,true] {
+            let mut root=load_litematic_root(std::path::Path::new(water_fixture_path())).unwrap();
+            if material_zero {for region in root.regions.values_mut(){region.block_state_palette[0].name="minecraft:stone".into();region.block_state_palette[0].properties.clear();}}
+            let mut expected=BTreeMap::<String,u64>::new();
+            for region in root.regions.values(){
+                let volume=crate::nbt::region_volume(&region.size).unwrap();
+                let layout=crate::nbt::choose_palette_packing(&region.block_states,volume,crate::nbt::bits_for_palette(region.block_state_palette.len()),region.block_state_palette.len()).unwrap();
+                for index in 0..volume {let block=&region.block_state_palette[layout.palette_index(&region.block_states,index)].name;if !is_air_block(block){*expected.entry(block.clone()).or_default()+=1;}}
+            }
+            let output=super::build_structure_output_with_scope_cache(&root,MaterialScope::All,false,true).unwrap();
+            let actual=output.structural_block_counts.as_ref().unwrap().iter().map(|row|(row.block_id.clone(),row.count)).collect::<BTreeMap<_,_>>();
+            assert_eq!(actual,expected);assert_eq!(output.structure_stats.total_non_air_blocks,expected.values().sum::<u64>());
+            assert_eq!(output.layers_summary.iter().map(|row|row.total_non_air_blocks).sum::<u64>(),expected.values().sum::<u64>());
+        }
+    }
+
+    #[test]
+    fn container_delta_reuses_block_statistics_and_matches_cold_scan() {
+        let mut root=load_litematic_root(std::path::Path::new(water_fixture_path())).unwrap();
+        root.regions.values_mut().next().unwrap().tile_entities.push(NbtValue::Compound(std::collections::HashMap::from([
+            ("y".into(),NbtValue::Int(0)),("Items".into(),NbtValue::List(vec![NbtValue::Compound(std::collections::HashMap::from([("id".into(),NbtValue::String("minecraft:stone".into())),("Count".into(),NbtValue::Byte(3))]))]))
+        ])));
+        let base=super::build_structure_output_with_scope_cache(&root,MaterialScope::All,false,true).unwrap();
+        let delta=super::add_container_items_to_stats(&root,&base,&||false).unwrap();
+        let cold=super::build_structure_output_with_scope_cache(&root,MaterialScope::All,true,true).unwrap();
+        assert_eq!(serde_json::to_value(&delta).unwrap(),serde_json::to_value(&cold).unwrap());
+        let twice=super::add_container_items_to_stats(&root,&delta,&||false).unwrap();
+        assert_eq!(serde_json::to_value(&twice).unwrap(),serde_json::to_value(&delta).unwrap());
+        assert!(super::add_container_items_to_stats(&root,&base,&||true).is_err());
+    }
+
+    #[test]
+    fn container_scan_includes_entity_inventories_once_with_exact_source_layer() {
+        let mut root=load_litematic_root(std::path::Path::new(water_fixture_path())).unwrap();
+        let region=root.regions.values_mut().next().unwrap();
+        region.entities.push(crate::model::EntityNbt{id_lower:Some("minecraft:chest_minecart".into()),id_upper:None,data:BTreeMap::from([
+            ("Pos".into(),NbtValue::List(vec![NbtValue::Double(0.5),NbtValue::Double(1.25),NbtValue::Double(0.5)])),
+            ("Items".into(),NbtValue::List(vec![NbtValue::Compound(std::collections::HashMap::from([("id".into(),NbtValue::String("minecraft:stone".into())),("Count".into(),NbtValue::Byte(5))]))]))
+        ])});
+        let output=super::build_structure_output_with_scope_cache(&root,MaterialScope::All,true,true).unwrap();
+        let stone=output.material_items.iter().find(|item|item.block_id=="minecraft:stone").unwrap();
+        assert_eq!(stone.container_item_count,5);assert_eq!(output.container_scan.containers_scanned,1);assert_eq!(output.container_scan.item_stacks_scanned,1);
+        assert_eq!(stone.scope_counts.as_ref().unwrap().iter().map(|scope|scope.container_item_count).sum::<u64>(),5);
+    }
+
+    #[test]
     fn source_scope_cache_keeps_material_channels_without_changing_render_analysis_contract() {
         let mut root = load_litematic_root(std::path::Path::new(water_fixture_path())).unwrap();
         let name = root.regions.keys().next().unwrap().clone();
@@ -1486,6 +1653,7 @@ mod tests {
         assert_eq!(stone.scope_counts.as_ref().unwrap().iter().map(|row|row.block_count).sum::<u64>(), stone.block_count);
         assert_eq!(stone.scope_counts.as_ref().unwrap().iter().map(|row|row.container_item_count).sum::<u64>(), 3);
         assert!(stone.scope_counts.as_ref().unwrap().iter().any(|row|row.container_item_count == 3 && row.has_custom_stack_size));
+        assert_eq!(stone.stack_size,16);
         assert_eq!(cached.container_scan.scope_entries.as_ref().unwrap().iter().map(|row|row.item_stacks_scanned).sum::<usize>(), 1);
         for row in cached.structural_block_counts.as_ref().unwrap() {
             assert_eq!(row.scope_counts.as_ref().unwrap().iter().map(|scope|scope.count).sum::<u64>(), row.count);

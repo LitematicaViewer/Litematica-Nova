@@ -107,6 +107,7 @@
 /* Material lookup is a non-modal Radix surface: no overlay or page-sized hit
    target is added here. Only the lookup list and detail own scrolling. */
 .material-catalog-dialog { position:fixed; top:50%; left:50%; z-index:2100; display:flex; flex-direction:column; width:min(1080px, calc(100vw - 48px)); height:min(760px, calc(100dvh - 48px)); max-width:calc(100vw - 48px); max-height:calc(100dvh - 48px); transform:translate(-50%, -50%); box-sizing:border-box; overflow:hidden; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--foreground); container:material-catalog / inline-size; }
+.material-catalog-content { display:flex; flex:1 1 auto; flex-direction:column; width:100%; height:100%; min-width:0; min-height:0; overflow:hidden; color:var(--foreground); background:var(--background); container:material-catalog / inline-size; }
 .material-catalog-header { display:flex; flex:0 0 auto; align-items:center; gap:10px; min-height:44px; padding:8px 14px; border-bottom:1px solid var(--border); }
 .material-catalog-title { margin:0; font-size:var(--nova-text-base); font-weight:600; }
 .material-catalog-source { flex:1 1 0; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:var(--muted-foreground); font-size:var(--nova-text-xs); font-family:var(--nova-font-xs, inherit); }
@@ -118,12 +119,12 @@
 .material-catalog-summary { color:var(--muted-foreground); font-size:var(--nova-text-xs); font-family:var(--nova-font-xs, inherit); font-variant-numeric:tabular-nums; }
 .material-catalog-workspace { display:grid; grid-template-columns:minmax(0, 62fr) minmax(0, 38fr); flex:1 1 0; min-width:0; min-height:0; overflow:hidden; border-top:1px solid var(--border); }
 .material-catalog-list, .material-catalog-detail { min-width:0; min-height:0; overflow-y:auto; overflow-x:hidden; scrollbar-gutter:stable; scrollbar-width:thin; scrollbar-color:var(--muted-foreground) var(--card); }
-.material-catalog-list { padding:4px 0; }
+.material-catalog-list { padding:4px 0; overflow-anchor:none; }
 .material-catalog-items { list-style:none; margin:0; padding:0; }
 .material-catalog-items > li { margin:0; }
-.material-catalog-spacer { height:var(--material-list-virtual-spacer-height, 0px); margin:0; padding:0; flex-shrink:0; }
+.material-catalog-items > .material-catalog-spacer { height:var(--material-list-virtual-spacer-height, 0px); margin:0; padding:0; flex-shrink:0; }
 .material-catalog-row { box-sizing:border-box; display:flex; align-items:center; gap:12px; width:100%; min-width:0; height:56px; min-height:56px; max-height:56px; padding:8px 12px; border:0; border-radius:0; background:transparent; color:var(--foreground); text-align:left; cursor:pointer; font:inherit; line-height:16px; }
-.material-catalog-items > li:nth-child(even) > .material-catalog-row { background:color-mix(in srgb, var(--foreground) 2%, var(--card)); }
+.material-catalog-items > .material-list-row-odd > .material-catalog-row { background:color-mix(in srgb, var(--foreground) 2%, var(--card)); }
 .material-catalog-items > li > .material-catalog-row:hover { background:var(--accent); }
 .material-catalog-items > li > .material-catalog-row[data-selected="true"] { background:color-mix(in srgb, var(--stockpile-accent) 11%, var(--card)); }
 .material-catalog-row:focus-visible { outline:2px solid var(--ring); outline-offset:-2px; }
@@ -173,7 +174,7 @@
 .material-list-task-content > .subwindow-body > .material-export-footer { flex:0 0 auto; }
 /* Local aliases follow the active palette; fallbacks are the pinned workbench
    palette, not a replacement for the app's light or pixel themes. */
-.stockpile-task, .stockpile-detail-drawer, .stockpile-menu, .stockpile-export-dialog, .material-catalog-dialog {
+.stockpile-task, .stockpile-material-detail-dialog, .stockpile-menu, .stockpile-export-dialog, .material-catalog-dialog {
   --stockpile-background:var(--background, #13151A);
   --stockpile-surface:var(--card, #1B1E24);
   --stockpile-header:var(--muted, #20242B);
@@ -257,7 +258,7 @@
 .stockpile-table .beta-material-name > span { flex:1 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
 .stockpile-table .beta-material-name small { display:block; margin:0; overflow:hidden; text-overflow:ellipsis; color:var(--stockpile-muted); font-size:var(--nova-text-xs); font-family:var(--nova-font-xs, inherit); font-weight:400; line-height:1.2; }
 .stockpile-prepared-control { display:flex; align-items:center; justify-content:flex-end; gap:4px; width:100%; min-width:0; }
-.stockpile-task [data-slot="input"].stockpile-quantity-input, .stockpile-detail-drawer [data-slot="input"].stockpile-quantity-input { width:0; min-width:0; flex:1 1 0; text-align:right; padding-inline:4px; font-variant-numeric:tabular-nums; }
+.stockpile-task [data-slot="input"].stockpile-quantity-input, .stockpile-material-detail-dialog [data-slot="input"].stockpile-quantity-input { width:0; min-width:0; flex:1 1 0; text-align:right; padding-inline:4px; font-variant-numeric:tabular-nums; }
 .stockpile-quantity-input::-webkit-inner-spin-button, .stockpile-quantity-input::-webkit-outer-spin-button { margin:0; appearance:none; }
 .stockpile-quantity-input { appearance:textfield; }
 .stockpile-prepared-control > [data-slot="button"] { flex:0 0 30px; width:30px; min-width:30px; max-width:30px; height:30px; min-height:30px; padding:0; }
@@ -313,19 +314,27 @@
 .stockpile-recipe-ingredients > li { margin:4px 0; }
 .stockpile-recipe-ingredients :is(.block-icon-image, .block-icon-fallback) { display:inline-flex; width:20px; min-width:20px; height:20px; min-height:20px; margin-right:4px; vertical-align:middle; }
 /* The existing Radix dialog owns its scrim, focus trap and Escape handling. */
-.stockpile-detail-drawer.dialog-surface { position:relative; inset:auto; width:min(760px, calc(100vw - 48px)); max-width:calc(100vw - 48px); max-height:min(760px, calc(100dvh - 48px)); margin:0; transform:none; border-radius:8px; background:var(--stockpile-surface); }
-.stockpile-detail-drawer .dialog-header { min-height:48px; padding:8px 14px; align-items:center; border-bottom:1px solid var(--stockpile-border); }
-.stockpile-detail-drawer .dialog-title { font-size:inherit; font-weight:600; }
-.stockpile-detail-drawer .dialog-body { flex:1 1 0; min-height:0; padding:14px; }
-.stockpile-detail-drawer .stockpile-detail-scroll { flex:initial; padding:0; overflow:visible; }
+.stockpile-material-detail-dialog.dialog-surface { height:min(760px, calc(100dvh - 48px)); position:relative; inset:auto; width:min(760px, calc(100vw - 48px)); max-width:calc(100vw - 48px); max-height:min(760px, calc(100dvh - 48px)); margin:0; transform:none; border-radius:8px; background:var(--stockpile-surface); }
+.stockpile-material-detail-dialog .dialog-header { min-height:48px; padding:8px 14px; align-items:center; border-bottom:1px solid var(--stockpile-border); }
+.stockpile-material-detail-dialog .dialog-title { font-size:inherit; font-weight:600; }
+.stockpile-material-detail-dialog .dialog-body { flex:1 1 auto; min-height:0; max-height:calc(100dvh - 112px); padding:14px; }
+.stockpile-material-detail-dialog .dialog-body > [data-slot="scroll-area-viewport"] { max-height:calc(100dvh - 140px); }
+.stockpile-material-detail-dialog .stockpile-detail-scroll { flex:initial; padding:0; overflow:visible; }
+.stockpile-pagination { display:flex; flex:0 0 auto; align-items:center; justify-content:flex-end; gap:12px; padding:8px 12px; color:var(--muted-foreground); font-size:var(--nova-text-xs); font-variant-numeric:tabular-nums; }
+.material-source-section { min-width:0; padding-top:12px; }
+.material-source-section h4 { margin:0 0 8px; font-size:inherit; font-weight:600; }
+.material-source-groups { max-height:320px; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--muted-foreground) var(--card); }
+.material-source-groups summary { display:flex; justify-content:space-between; gap:12px; }
+.material-source-groups summary > span:first-child { min-width:0; overflow-wrap:anywhere; }
+.material-source-groups summary > span:last-child { flex-shrink:0; font-variant-numeric:tabular-nums; }
 .stockpile-menu { z-index:2300; min-width:160px; max-width:min(320px, calc(100vw - 16px)); max-height:80vh; padding:4px; overflow-y:auto; border:1px solid var(--stockpile-border); border-radius:6px; background:var(--stockpile-surface); }
 .stockpile-menu-item { display:flex; align-items:center; min-height:30px; padding:5px 8px; border-radius:4px; outline:none; cursor:default; overflow-wrap:anywhere; }
 .stockpile-menu-item[data-highlighted] { background:var(--stockpile-hover); }
 .stockpile-menu-item[data-disabled] { color:var(--stockpile-muted); opacity:.55; pointer-events:none; }
 .stockpile-menu-item.is-danger { color:var(--stockpile-danger); }
 .stockpile-menu-separator { height:1px; margin:4px 0; background:var(--stockpile-border); }
-.stockpile-task ::selection, .stockpile-detail-drawer ::selection { color:var(--stockpile-foreground); background:color-mix(in srgb, var(--stockpile-accent) 35%, var(--stockpile-background)); }
-.stockpile-task :is(.stockpile-table-scroll, .stockpile-task-controls, .stockpile-detail-scroll), .stockpile-detail-drawer .dialog-body { scrollbar-width:thin; scrollbar-color:var(--stockpile-muted) var(--stockpile-surface); }
+.stockpile-task ::selection, .stockpile-material-detail-dialog ::selection { color:var(--stockpile-foreground); background:color-mix(in srgb, var(--stockpile-accent) 35%, var(--stockpile-background)); }
+.stockpile-task :is(.stockpile-table-scroll, .stockpile-task-controls, .stockpile-detail-scroll), .stockpile-material-detail-dialog .dialog-body { scrollbar-width:thin; scrollbar-color:var(--stockpile-muted) var(--stockpile-surface); }
 @media (max-width:999px) {
   .stockpile-panel-header { align-items:flex-start; }
   .stockpile-title-group { flex-basis:100%; }

@@ -141,7 +141,7 @@ const STATISTICS = 'ui/windows/main/pages/statistics/materials.css';
 
 const SURFACES = [
   {
-    label: '材料明细表（统计页对话框 / material_list 窗口）',
+    label: '备货任务七列网格表',
     stylesheet: STATISTICS,
     spacerSelector: '.material-list-table tbody tr > .material-list-virtual-spacer-cell',
     element: { tag: 'td', classes: ['material-list-virtual-spacer-cell'] },
@@ -155,10 +155,10 @@ const SURFACES = [
     loads: ['ui/styles/base.css', 'ui/styles/enumerator.css'],
   },
   {
-    label: '材料汇总列表 <ul>',
+    label: '独立材料查阅列表 <ul>',
     stylesheet: STATISTICS,
-    spacerSelector: '.material-summary-list > .material-virtual-spacer',
-    element: { tag: 'li', classes: ['material-virtual-spacer'] },
+    spacerSelector: '.material-catalog-items > .material-catalog-spacer',
+    element: { tag: 'li', classes: ['material-catalog-spacer'] },
     loads: ['ui/styles/base.css', STATISTICS],
   },
 ];
@@ -207,14 +207,12 @@ test('占位高度必须在每个表实际加载的样式表中赢得层叠', ()
 });
 
 test('虚拟化行列的斑马纹跟随数据行序，不跟随 DOM 位置', () => {
-  const page = source('ui/windows/main/pages/statistics/StatisticsPage.tsx');
-  assert.equal(
-    (page.match(/rowParityClass\(virtual\.startIndex \+ index\)/g) ?? []).length,
-    2,
-    'both virtualized branches (summary <li> and detail <tr>) must key the parity on the absolute data index',
-  );
-  assert.match(page, /material-list-row-odd/);
-  assert.match(page, /material-list-row-even/);
+  for (const file of ['StockpileTaskPanel.tsx', 'MaterialCatalogDialog.tsx']) {
+    const page = source(`ui/windows/main/pages/statistics/${file}`);
+    assert.match(page, /\(virtual\.startIndex \+ index\) % 2/);
+    assert.match(page, /material-list-row-odd/);
+    assert.match(page, /material-list-row-even/);
+  }
 
   const enumerator = source('ui/windows/enumerator/EnumeratorWindow.tsx');
   assert.ok(/(leftStartIndex|rightStartIndex) \+ index\) % 2/.test(enumerator), 'enumerator rows keep a data-keyed parity');
@@ -243,16 +241,9 @@ test('虚拟化行列的斑马纹跟随数据行序，不跟随 DOM 位置', () 
   assert.ok(enumeratorStripe, 'enumerator.css must stripe its virtualized rows by data parity');
   assert.ok(beats(enumeratorStripe, positional), 'the enumerator stripe must outrank the positional one');
 
-  // The summary list is virtualized in both branches, so it may not stripe by DOM position at all.
-  const summaryStripe = backgrounds.find(
-    (entry) => entry.selector.includes('.material-summary-list') && entry.selector.includes('.material-list-row-odd'),
-  );
-  assert.ok(summaryStripe, 'materials.css must stripe the summary list through `.material-list-row-odd`');
-  assert.equal(
-    backgrounds.filter((entry) => entry.selector.includes('.material-summary-list') && /:nth-child/.test(entry.selector)).length,
-    0,
-    'the summary list must not stripe by DOM position',
-  );
+  const catalogStripe = backgrounds.find(entry => entry.selector.includes('.material-catalog-items') && entry.selector.includes('.material-list-row-odd'));
+  assert.ok(catalogStripe, 'catalog rows stripe by absolute data parity');
+  assert.equal(backgrounds.filter(entry => entry.selector.includes('.material-catalog-items') && /:nth-child/.test(entry.selector)).length, 0);
 });
 
 test('rowHeight 常量与样式表实际行高一致', () => {
@@ -270,30 +261,13 @@ test('rowHeight 常量与样式表实际行高一致', () => {
       )?.value,
     );
   const listPadding = paddingOf('ui/shell/widget/subwindow.css', '.material-list-table td');
-  const detailPadding = paddingOf(STATISTICS, '.beta-material-table [data-slot="table-cell"]');
-  const summaryHeight = declarationsOf([STATISTICS])
-    .filter((entry) => entry.property === 'max-height' && entry.selector.includes('.material-summary-list'))
-    .map((entry) => px(entry.value))
-    .find((value) => Number.isFinite(value));
   assert.equal(listPadding, 6);
-  assert.equal(detailPadding, 9);
-
-  // 32px icon + 2x vertical padding + the 1px collapsed border between rows.
-  const detailRow = iconHeight + 2 * detailPadding + 1;
   const enumeratorRow = iconHeight + 2 * listPadding + 1;
-  assert.equal(detailRow, 51);
   assert.equal(enumeratorRow, 45);
-  assert.equal(summaryHeight, 48);
-
-  const statisticsCall = /useVirtualWindow\(materials\s*,\s*scrollRef\s*,\s*breakdown\s*\?\s*(\d+)\s*:\s*(\d+)\s*,\s*(\d+)\s*\)/.exec(
-    source('ui/windows/main/pages/statistics/StatisticsPage.tsx'),
-  );
-  assert.ok(statisticsCall, 'MaterialTable must pass the row height per branch');
-  assert.deepEqual(
-    statisticsCall.slice(1).map(Number),
-    [detailRow, summaryHeight, 8],
-    `MaterialTable must pass ${detailRow} for detail rows and ${summaryHeight} for summary rows`,
-  );
+  const catalogSource = source('ui/windows/main/pages/statistics/MaterialCatalogDialog.tsx');
+  assert.match(catalogSource, /useVirtualWindow\(page\?\.rows \|\| \[\], listRef, 56\)/);
+  const catalogHeight = declarationsOf([STATISTICS]).find(entry => entry.property === 'height' && entry.selector === '.material-catalog-row');
+  assert.equal(px(catalogHeight?.value), 56, 'catalog virtual row matches its CSS height');
 
   // Stockpile is a seven-column grid inside the same table/spacer pipeline.
   // Its 24px icons and compact editors deliberately use a separate fixed row.

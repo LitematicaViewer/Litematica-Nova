@@ -2,302 +2,71 @@ import { t, getUiLocale, localizeMessage, type UiMessage } from "../../../../../
 import { useI18n } from "../../../../i18n";
 import { displayFilePath } from "../../../../../src/business/facade";
 import { Checkbox } from "../../../../components/ui/checkbox";
-import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from "../../../../components/ui/table";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
 import { Textarea } from "../../../../components/ui/textarea";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import { Dialog } from "../../../../components/Dialog";
 import { ChevronDown, X } from "lucide-react";
-﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   exportMaterialListWithOptions,
   fetchMaterialRecipeCache,
-  formatMaterialQuantity,
   hasInventoryMaterialSemantics,
-  filterMaterialItems,
-  materialDisplayName,
   getI18nRevision,
   subscribeI18nChanges,
   loadStructureStats,
-  loadMaterialsScope,
   DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES,
-  createRuntimeProjectionCollection,
-  evaluateEnumeratorExpression,
-  loadEnumeratorCollections,
-  normalizeStatisticsEnumeratorInfoRules,
   saveStatisticsEnumeratorInfoRulesConfig,
-  type EnumeratorCollection,
-  mapStructureStats,
   recordStatisticsCommit,
   findRenderOperationForSource,
   getApplicationRenderState,
   isApplicationRenderPending,
   subscribeApplicationRender,
-  MaterialItem,
   StatsData,
-  prepareMaterialTaskWindow,
+  queryStatisticsRules, getDataOperationStatus, type StatisticsRuleView,
 } from "../../../../../src/business/facade";
 import { StockpileTaskPanel } from "./StockpileTaskPanel";
 import { MaterialCatalogDialog } from "./MaterialCatalogDialog";
 import { useSyncExternalStore } from "react";
 import {
   loadUserConfigMigratingLocalStorage,
-  normalizeMaterialListWindowBehavior,
   openMaterialListWindow,
 } from "../../../../../src/business/facade";
-import { VirtualSpacerCell, VirtualSpacerItem } from "../../../../components/VirtualSpacerCell";
-import { useVirtualWindow } from "../../../../components/useVirtualWindow";
-import { BlockIcon } from "../../../../components/BlockIcon";
 import { Dropdown } from "../../../../components/Dropdown";
 import "./materials.css";
 import "../../../../styles/statistics-enumerator.css";
 import { EnumeratorDialog, openEnumeratorWithWindowBehavior } from "../../../enumerator";
 
-interface EnumeratorInfoRule {
-  title: string;
-  expression: string;
-  raw: string;
-}
-
-interface EnumeratorInfoResult {
-  title: string;
-  value: string;
-  error: string;
-  raw: string;
-}
-
-function parseEnumeratorInfoRules(rules: string[]): EnumeratorInfoRule[] {
-  return normalizeStatisticsEnumeratorInfoRules(rules)
-    .map((raw) => {
-      const separatorIndex = raw.indexOf("=");
-      if (separatorIndex <= 0 || separatorIndex === raw.length - 1) {
-        return {
-          title: raw.trim() || t("statistics.unnamed"),
-          expression: "",
-          raw,
-        };
-      }
-      return {
-        title: raw === DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES[0] ? t("statistics.defaultVersion") : raw === DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES[1] ? t("statistics.defaultSurvival") : raw.slice(0, separatorIndex).trim() || t("statistics.unnamed"),
-        expression: raw.slice(separatorIndex + 1).trim(),
-        raw,
-      };
-    })
-    .filter((rule) => rule.title || rule.expression);
-}
-
-function parseFunctionCall(expression: string): { name: string; argument: string } | null {
-  const trimmed = String(expression || "").trim();
-  const openIndex = trimmed.indexOf("(");
-  if (openIndex <= 0 || !trimmed.endsWith(")")) return null;
-  return {
-    name: trimmed.slice(0, openIndex).trim().toLowerCase(),
-    argument: trimmed.slice(openIndex + 1, -1).trim(),
-  };
-}
-
-function uniqValues(values: string[]): string[] {
-  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
-}
-
-function buildBaseUniverse(collections: EnumeratorCollection[]): Set<string> {
-  return new Set(
-    collections
-      .filter((collection) => collection.category === "base")
-      .flatMap((collection) => collection.values),
-  );
-}
-
-function buildVersionUniverse(collections: EnumeratorCollection[]): Set<string> {
-  return new Set(
-    collections
-      .filter((collection) => collection.category === "version")
-      .flatMap((collection) => collection.values),
-  );
-}
-
-function parseVersionToken(collection: EnumeratorCollection): { kind: "older" | "normal"; numbers: number[]; label: string } | null {
-  const candidates = [collection.version, collection.name, collection.id];
-  for (const candidate of candidates) {
-    const normalized = String(candidate || "").trim();
-    if (!normalized) continue;
-    if (normalized === "v_older") {
-      return { kind: "older", numbers: [1, 12, 2], label: t("statistics.before1122") };
-    }
-    if (!normalized.startsWith("v_")) continue;
-    const parts = normalized
-      .slice(2)
-      .split("_")
-      .map((part) => Number.parseInt(part, 10));
-    if (!parts.length || parts.some((part) => !Number.isFinite(part))) continue;
-    return {
-      kind: "normal",
-      numbers: parts,
-      label: parts.join("."),
-    };
-  }
-  return null;
-}
-
-function compareVersionCollections(left: EnumeratorCollection, right: EnumeratorCollection): number {
-  const leftToken = parseVersionToken(left);
-  const rightToken = parseVersionToken(right);
-  if (!leftToken && !rightToken) return left.name.localeCompare(right.name, getUiLocale());
-  if (!leftToken) return -1;
-  if (!rightToken) return 1;
-  if (leftToken.kind !== rightToken.kind) {
-    return leftToken.kind === "older" ? -1 : 1;
-  }
-  const size = Math.max(leftToken.numbers.length, rightToken.numbers.length, 3);
-  for (let index = 0; index < size; index += 1) {
-    const diff = (leftToken.numbers[index] ?? 0) - (rightToken.numbers[index] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
-
-function formatVersionResult(values: string[], collections: EnumeratorCollection[]): string {
-  if (values.length === 0) return "--";
-  const targetSet = new Set(values);
-  const baseUniverse = buildBaseUniverse(collections);
-  const versionCollections = collections.filter((collection) => collection.category === "version");
-  const validVersionCollections = versionCollections.filter((collection) => Boolean(parseVersionToken(collection)));
-  const versionUniverse = buildVersionUniverse(collections);
-  const matchedVersions = versionCollections.filter((collection) => collection.values.some((value) => targetSet.has(value)));
-  const hasHigherVersion = [...targetSet].some((value) => baseUniverse.has(value) && !versionUniverse.has(value));
-  const sortedMatchedVersions = matchedVersions.sort(compareVersionCollections);
-  const latestVersion = sortedMatchedVersions.length > 0 ? sortedMatchedVersions[sortedMatchedVersions.length - 1] : null;
-  if (!latestVersion) {
-    if (validVersionCollections.length === 0) {
-      return t("statistics.noVersionSets");
-    }
-    return hasHigherVersion ? t("statistics.higherVersion") : "--";
-  }
-  const versionToken = parseVersionToken(latestVersion);
-  const label = versionToken?.label || latestVersion.name;
-  return hasHigherVersion ? t("statistics.withHigherVersion", {version:label}) : label;
-}
-
-function evaluateEnumeratorInfoRule(rule: EnumeratorInfoRule, data: StatsData, collections: EnumeratorCollection[]): EnumeratorInfoResult {
-  if (!rule.expression) {
-    return { title: rule.title, value: "", error: t("statistics.missingExpression"), raw: rule.raw };
-  }
-  if (data && !data.hasStructuralBlockCounts) return { title: rule.title, value: "", error: t("statistics.missingStructure"), raw:rule.raw };
-  const call = parseFunctionCall(rule.expression);
-  if (!call) {
-    return { title: rule.title, value: "", error: t("statistics.expressionForm"), raw: rule.raw };
-  }
-  const evaluated = evaluateEnumeratorExpression(call.argument, collections);
-  if (evaluated.error) {
-    return { title: rule.title, value: "", error: evaluated.error, raw: rule.raw };
-  }
-  const values = uniqValues(evaluated.values);
-  switch (call.name) {
-    case "version":
-      return { title: rule.title, value: formatVersionResult(values, collections), error: "", raw: rule.raw };
-    case "any":
-      return { title: rule.title, value: values.length > 0 ? t("statistics.yes") : t("statistics.no"), error: "", raw: rule.raw };
-    case "ratio": {
-      if (data.totalNonAirBlocks <= 0) {
-        return { title: rule.title, value: "--", error: "", raw: rule.raw };
-      }
-      const countById = new Map(data.structuralBlocks.map((block) => [block.id, block.count]));
-      const numerator = values.reduce((sum, value) => sum + (countById.get(value) || 0), 0);
-      return {
-        title: rule.title,
-        value: `${((numerator / data.totalNonAirBlocks) * 100).toLocaleString(getUiLocale(), {minimumFractionDigits:1, maximumFractionDigits:1})}%`,
-        error: "",
-        raw: rule.raw,
-      };
-    }
-    default:
-      return { title: rule.title, value: "", error: t("statistics.unsupportedFunction", {name:call.name}), raw: rule.raw };
-  }
-}
-
-export function buildEnumeratorInfoResults(rules: string[], data: StatsData | null, collections: EnumeratorCollection[]): EnumeratorInfoResult[] {
-  const parsedRules = parseEnumeratorInfoRules(rules);
-  if (!data) {
-    return parsedRules.map((rule) => ({ title: rule.title, value: t("statistics.waiting"), error: "", raw: rule.raw }));
-  }
-  return parsedRules.map((rule) => evaluateEnumeratorInfoRule(rule, data, collections));
-}
-
-function MaterialTooltip({ x, y, item, multiplier }: { x: number; y: number; item: MaterialItem | null; multiplier: number }) {
+function useStatisticsRules(sourcePath: string, rules: string[], sourceRevision?: string) {
   const { locale } = useI18n();
-  const popupRef = useRef<HTMLDivElement | null>(null);
-  const total = item ? Math.max(0, Math.floor(item.totalCount * multiplier)) : 0;
-
-  const [position, setPosition] = useState(() => ({ left: x + 14, top: y + 14 }));
-
-  useLayoutEffect(() => {
-    if (!item) return;
-    const popup = popupRef.current;
-    const offset = 14;
-    const margin = 4;
-    if (!popup) {
-      setPosition({ left: x + offset, top: y + offset });
-      return;
-    }
-
-    const rect = popup.getBoundingClientRect();
-    let left = x + offset;
-    let top = y + offset;
-
-    if (left + rect.width > window.innerWidth - margin) {
-      left = x - rect.width - offset;
-    }
-    if (top + rect.height > window.innerHeight - margin) {
-      top = y - rect.height - offset;
-    }
-
-    left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
-    top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
-    setPosition((previous) => previous.left === left && previous.top === top ? previous : { left, top });
-  }, [x, y, item, total, locale]);
-
-  useLayoutEffect(() => {
-    const popup = popupRef.current;
-    if (!popup) return;
-    popup.style.left = `${position.left}px`;
-    popup.style.top = `${position.top}px`;
-  }, [position.left, position.top]);
-
-  if (!item) return null;
-
-  return (
-    <div
-      ref={popupRef}
-      className="material-list-hover-popup"
-      role="tooltip"
-    >
-      <div className="material-list-hover-popup-row material-list-hover-popup-item-row">
-        <span className="material-list-hover-popup-label">{t("statistics.itemLabel")}</span>
-        <BlockIcon blockId={item.iconHint} />
-        <span className="material-list-hover-popup-name">{materialDisplayName(item)}</span>
-      </div>
-      <div className="material-list-hover-popup-row">ID：{item.id}</div>
-      <div className="material-list-hover-popup-row">
-        {t("statistics.totalLabel")}<strong>{total.toLocaleString(getUiLocale())}</strong> · {formatMaterialQuantity(item, total)}
-      </div>
-      <div className="material-list-hover-popup-row">
-        {item.materialStatus !== "item" ? t("statistics.nonPlaceable") : item.hasCustomStackSize ? t("statistics.customStack") : !item.canFitContainer ? t("statistics.cannotFit") : t("statistics.stackInfo", {size:item.stackSize})}
-      </div>
-    </div>
-  );
+  const [view, setView] = useState<StatisticsRuleView | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    if (!sourcePath) { setView(null); setLoading(false); return; }
+    const operationId = crypto.randomUUID();
+    setLoading(true); setError("");
+    const timer = window.setTimeout(() => {
+      void queryStatisticsRules({ sourcePath, rules, uiLocale: locale }, operationId)
+        .then(result => { if (active) setView(result); })
+        .catch(failure => { if (active) setError(String(failure)); })
+        .finally(() => { if (active) setLoading(false); });
+    }, 150);
+    return () => { active = false; window.clearTimeout(timer); void getDataOperationStatus(operationId, true).catch(() => undefined); };
+  }, [sourcePath, rules, locale, sourceRevision]);
+  return { view, loading, error };
 }
 
 function EnumeratorInfoEditorDialog({
   rules,
-  data,
-  collections,
+  sourcePath,
   onClose,
   onSave,
 }: {
   rules: string[];
-  data: StatsData | null;
-  collections: EnumeratorCollection[];
+  sourcePath: string;
   onClose: () => void;
   onSave: (rules: string[]) => Promise<void>;
 }) {
@@ -310,23 +79,17 @@ function EnumeratorInfoEditorDialog({
     setDraft(rules.join("\n"));
   }, [rules]);
 
-  const parsedDraftRules = useMemo(
-    () => normalizeStatisticsEnumeratorInfoRules(draft.split(/\r?\n/)),
-    [draft],
-  );
-
-  const previewResults = useMemo(
-    () => buildEnumeratorInfoResults(parsedDraftRules, data, collections),
-    [collections, data, parsedDraftRules, locale],
-  );
-
-  const hasErrors = previewResults.some((item) => Boolean(item.error));
+  const draftRules = useMemo(() => draft.split(/\r?\n/), [draft]);
+  const preview = useStatisticsRules(sourcePath, draftRules);
+  const previewResults = preview.view?.results || [];
+  const hasErrors = preview.view?.hasErrors || !!preview.error;
 
   const handleSave = async () => {
     setIsSaving(true);
     setSaveError("");
     try {
-      await onSave(parsedDraftRules);
+      if (!preview.view || preview.loading) return;
+      await onSave(preview.view.rules);
       onClose();
     } catch (error: any) {
       setSaveError(error?.message || error ? String(error?.message || error) : {key:"editor.saveFailed"});
@@ -338,7 +101,7 @@ function EnumeratorInfoEditorDialog({
   return <Dialog title={t("statistics.customTitle")} subtitle={t("statistics.customSubtitle")} onClose={onClose} busy={isSaving} width="lg" footer={<>
     <Button variant="secondary" disabled={isSaving} onClick={() => setDraft(DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES.join("\n"))}>{t("statistics.restoreDefaults")}</Button>
     <Button variant="secondary" disabled={isSaving} onClick={onClose}>{t("editor.cancel")}</Button>
-    <Button disabled={isSaving || hasErrors} onClick={handleSave}>{isSaving ? t("editor.saving") : t("editor.save")}</Button>
+    <Button disabled={isSaving || preview.loading || !preview.view || hasErrors} onClick={handleSave}>{isSaving ? t("editor.saving") : t("editor.save")}</Button>
   </>}>
     <div className="statistics-enumerator-editor-columns">
       <div className="statistics-enumerator-editor-column">
@@ -347,6 +110,8 @@ function EnumeratorInfoEditorDialog({
         <div className="statistics-enumerator-editor-hint">{t("statistics.rulesHint")}</div>
       </div>
       <div className="statistics-enumerator-editor-column"><h3 className="statistics-enumerator-editor-heading">{t("statistics.livePreview")}</h3>
+        {preview.loading && <p role="status">{t("statistics.loadingRules")}</p>}
+        {preview.error && <p role="alert">{preview.error}</p>}
         {previewResults.map((item,index) => <div key={index} className="statistics-enumerator-preview-item">
           <div className="statistics-enumerator-preview-main"><span>{item.title}</span><strong>{item.error ? t("editor.error") : item.value}</strong></div>
           {item.error && <p className="statistics-enumerator-preview-error" role="alert">{localizeMessage(item.error)}</p>}
@@ -358,71 +123,12 @@ function EnumeratorInfoEditorDialog({
   </Dialog>;
 }
 
-/**
- * Opens the material list according to the user's configured window behavior.
- */
-export async function openMaterialsWithWindowBehavior(currentFile: string, showOverlay: () => void, viewMode: "details" | "export" = "details"): Promise<void> {
-  await prepareMaterialTaskWindow();
-  const info = await loadUserConfigMigratingLocalStorage().catch(() => null);
-  const behavior = normalizeMaterialListWindowBehavior(info?.config.material_list_window_behavior);
-  if (behavior === "independent_window") {
-    try {
-      await openMaterialListWindow(currentFile,viewMode);
-      return;
-    } catch {
-      // Browser preview cannot create a desktop window, so keep the in-window dialog as fallback.
-    }
-  }
-  showOverlay();
+/** Material lookup always belongs to the existing native top-level window. */
+export async function openMaterialsWithWindowBehavior(currentFile: string, _showOverlay: () => void, viewMode: "details" | "export" = "details"): Promise<void> {
+  if (viewMode === "export") { _showOverlay(); return; }
+  await openMaterialListWindow(currentFile, "details");
 }
 
-const MaterialTable = React.memo(function MaterialTable({ materials, asItems, multiplier = 1, breakdown = false, onHover }: {
-  materials: MaterialItem[];
-  asItems: boolean;
-  multiplier?: number;
-  breakdown?: boolean;
-  onHover?: (material: MaterialItem | null) => void;
-}) {
-  const { locale } = useI18n();
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  // Must be the height the browser actually lays out (see materials.css): detail rows are a
-  // 32px icon plus 9px vertical padding plus the collapsed border; summary rows are pinned to
-  // 48px. A round number here would make the spacer disagree with the rendered rows.
-  const virtual = useVirtualWindow(materials,scrollRef,breakdown ? 51 : 48,8);
-  useLayoutEffect(() => { if(scrollRef.current) scrollRef.current.scrollTop = 0; },[materials]);
-  // Zebra striping is keyed on the row's position in the *data*, never on its DOM slot: the
-  // virtual window slides, so a `:nth-child` stripe would invert on every scrolled row.
-  const rowParityClass = (absoluteIndex: number) => (absoluteIndex % 2 === 1 ? "material-list-row-odd" : "material-list-row-even");
-  if (!breakdown) return <div className="material-table-scroll material-summary-scroll" ref={scrollRef}><ul className="material-summary-list" aria-label={t("editor.materials")}>
-    {virtual.topSpacerHeight > 0 && <VirtualSpacerItem className="material-virtual-spacer" height={virtual.topSpacerHeight} /> }
-    {virtual.visibleItems.map((material, index) => <li key={material.id} className={rowParityClass(virtual.startIndex + index)} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
-      <BlockIcon blockId={material.iconHint} />
-      <span className="material-summary-name" title={material.id}>{materialDisplayName(material)}
-        {material.materialStatus !== "item" && <small>{material.materialStatus === "no_item" ? t("statistics.noItem") : t("statistics.unknownItem")}</small>}
-      </span>
-      <span className="material-summary-quantity">{formatMaterialQuantity(material, material.totalCount * multiplier, asItems)}</span>
-    </li>)}
-    {virtual.bottomSpacerHeight > 0 && <VirtualSpacerItem className="material-virtual-spacer" height={virtual.bottomSpacerHeight} /> }
-    {materials.length === 0 && <li className="material-summary-empty">{t("statistics.noMatches")}</li>}
-  </ul></div>;
-  return <div className="material-table-scroll material-detail-table-scroll" ref={scrollRef}><Table className="material-list-table beta-material-table">
-    <TableHeader><TableRow><TableHead scope="col">{t("statistics.material")}</TableHead>{breakdown && <><TableHead scope="col">{t("statistics.buildQuantity")}</TableHead><TableHead scope="col">{t("statistics.containerItems")}</TableHead></>}<TableHead scope="col">{breakdown ? t("statistics.total") : t("statistics.quantity")}</TableHead></TableRow></TableHeader>
-    <TableBody>{virtual.topSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={4} height={virtual.topSpacerHeight} /></TableRow>}{virtual.visibleItems.map((material, index) => <TableRow key={material.id} className={rowParityClass(virtual.startIndex + index)} onMouseEnter={() => onHover?.(material)} onMouseLeave={() => onHover?.(null)}>
-      <TableCell><div className="beta-material-name"><BlockIcon blockId={material.iconHint} /><span title={material.id}>{materialDisplayName(material)}{material.materialStatus !== "item" && <small>{material.materialStatus === "no_item" ? t("statistics.noItem") : t("statistics.unknownItem")}</small>}</span></div></TableCell>
-      {breakdown && <><TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.blockCount * multiplier, asItems)}</TableCell><TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.containerItemCount * multiplier, asItems)}</TableCell></>}
-      <TableCell className="beta-material-quantity">{formatMaterialQuantity(material, material.totalCount * multiplier, asItems)}</TableCell>
-    </TableRow>)}{virtual.bottomSpacerHeight > 0 && <TableRow aria-hidden><VirtualSpacerCell colSpan={4} height={virtual.bottomSpacerHeight} /></TableRow>}{materials.length === 0 && <TableRow><TableCell colSpan={breakdown ? 4 : 2} className="material-list-empty-cell">{t("statistics.noMatches")}</TableCell></TableRow>}</TableBody>
-  </Table></div>;
-});
-
-function QuantitySwitch({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
-  useI18n();
-  return <label className="beta-material-check"><Checkbox  checked={checked} onCheckedChange={checked => onChange((checked === true))} />{t("statistics.individual")}</label>;
-}
-
-/**
- * Shared material-list body used by both the modal dialog and the desktop child window.
- */
 export function MaterialListContent({ data, onClose, currentFile, standalone = false, embedded = false, viewMode = "details", onViewModeChange, exportOnly = false }: {
   data: StatsData | null; onClose?: () => void; currentFile: string; standalone?: boolean; embedded?: boolean; viewMode?:"details"|"export"; onViewModeChange?:(mode:"details"|"export")=>void; exportOnly?: boolean;
 }) {
@@ -434,8 +140,6 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
   const [multiplier, setMultiplier] = useState(1);
   const [asItems, setAsItems] = useState(false);
   const [taskPending, setTaskPending] = useState(false);
-  const [hoverItem, setHoverItem] = useState<MaterialItem | null>(null);
-  const [mousePos, setMousePos] = useState({ x:0, y:0 });
   const [includeContainerItems, setIncludeContainerItems] = useState(data?.containerScan.enabled || false);
   const [exportFormat, setExportFormat] = useState<"svg" | "txt" | "html" | "csv">("svg");
   const [terminalRawMaterials, setTerminalRawMaterials] = useState(false);
@@ -459,6 +163,14 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
   const [error, setError] = useState<UiMessage>("");
   const exportInFlight = useRef(false);
   const prepareRecipesInFlight = useRef(false);
+  const recipeOperation = useRef<string | null>(null);
+  useEffect(() => {
+    setIsPreparingRecipes(false); setRecipeStatus("");
+    return () => {
+      const operationId = recipeOperation.current; recipeOperation.current = null; prepareRecipesInFlight.current = false;
+      if (operationId) void getDataOperationStatus(operationId, true).catch(() => undefined);
+    };
+  }, [currentFile]);
   const busy = isExporting || isPreparingRecipes;
   const selectedScope = useMemo(() => workbook.startsWith("region:") ? { kind:"region" as const, value:workbook.slice(7) }
     : workbook.startsWith("layer:") ? { kind:"layer" as const, value:workbook.slice(6) } : { kind:"all" as const, value:null },[workbook]);
@@ -486,17 +198,25 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
   };
   const handlePrepareRecipes = async () => {
     if (prepareRecipesInFlight.current) return;
+    const operationId = crypto.randomUUID(); recipeOperation.current = operationId;
     prepareRecipesInFlight.current = true; setIsPreparingRecipes(true); setRecipeStatus(""); setError("");
-    try { await fetchMaterialRecipeCache(); setRecipeStatus({key:"statistics.recipesReady"}); }
-    catch (error: any) { setError({ key: "statistics.recipesFailed", params: {error:String(error)} }); }
-    finally { prepareRecipesInFlight.current = false; setIsPreparingRecipes(false); }
+    try {
+      const result = await fetchMaterialRecipeCache(currentFile, includeContainerItems, operationId);
+      if (recipeOperation.current !== operationId) return;
+      setRecipeStatus(result ? { key: "statistics.recipesBatchReady", params: {
+        total: result.summary.totalMaterials.toLocaleString(locale), withRecipes: result.summary.materialsWithRecipes.toLocaleString(locale),
+        withoutRecipes: result.summary.materialsWithoutRecipes.toLocaleString(locale), unresolved: result.summary.unresolvedMaterials.toLocaleString(locale),
+        excluded: result.summary.excludedMaterials.toLocaleString(locale),
+      } } : { key: "statistics.recipesReady" });
+    } catch (error: unknown) { if (recipeOperation.current === operationId) setError({ key: "statistics.recipesFailed", params: {error:String(error)} }); }
+    finally { if (recipeOperation.current === operationId) { recipeOperation.current = null; prepareRecipesInFlight.current = false; setIsPreparingRecipes(false); } }
   };
-  return <div className={contentClassName} onMouseMove={event => setMousePos({ x:event.clientX, y:event.clientY })} onMouseLeave={() => setHoverItem(null)}>
+  return <div className={contentClassName}>
     {!embedded && contentMode !== "details" && <div className="subwindow-title-bar"><h3 className="subwindow-title">{t("editor.exportMaterials")}</h3>
       {onClose && <Button variant="ghost" size="icon" className="subwindow-close-button" aria-label={t("editor.closeWindow")} onClick={onClose}><X size={18} /></Button>}
     </div>}
     <div className="subwindow-body">
-      {contentMode === "details" ? <StockpileTaskPanel sourcePath={currentFile} scope={selectedScope} includeContainerItems={includeContainerItems} multiplier={multiplier} onPendingChange={setTaskPending} /> : <ScrollArea className="material-export-settings">
+      {contentMode === "details" ? <MaterialCatalogDialog currentFile={currentFile} /> : <ScrollArea className="material-export-settings">
         <>
         <fieldset className="material-export-section" disabled={busy}>
           <legend>{t("statistics.materialFormat")}</legend>
@@ -543,13 +263,12 @@ export function MaterialListContent({ data, onClose, currentFile, standalone = f
         </>
       </ScrollArea>}
       <div className="material-export-footer">
-        {!exportOnly && <Button variant="secondary" disabled={busy || taskPending} onClick={() => { const mode = contentMode === "details" ? "export" : "details"; setContentMode(mode); onViewModeChange?.(mode); setHoverItem(null); }}>{contentMode === "details" ? t("statistics.openExport") : t("statistics.returnDetails")}</Button>}
+        {!exportOnly && <Button variant="secondary" disabled={busy || taskPending} onClick={() => { const mode = contentMode === "details" ? "export" : "details"; setContentMode(mode); onViewModeChange?.(mode); }}>{contentMode === "details" ? t("statistics.openExport") : t("statistics.returnDetails")}</Button>}
         {contentMode === "export" && <Button onClick={handleExport} disabled={busy || !currentFile}>{isExporting ? t("statistics.exporting") : t("editor.exportMaterials")}</Button>}
         {exportStatus && <span role="status">{localizeMessage(exportStatus)}</span>}
-        {error && <pre className="subwindow-error" role="alert">{localizeMessage(error)}</pre>}
+      {error && <pre className="subwindow-error" role="alert">{localizeMessage(error)}</pre>}
       </div>
     </div>
-    <MaterialTooltip x={mousePos.x} y={mousePos.y} item={hoverItem} multiplier={multiplier} />
   </div>;
 }
 
@@ -573,39 +292,33 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
   );
   const [data, setData] = useState<StatsData | null>(null);
   const [error, setError] = useState<UiMessage>("");
-  const [showMaterials, setShowMaterials] = useState(false);
+
   const includeContainerItems = false;
   const [isLoading, setIsLoading] = useState(false);
   const statsGeneration = useRef(0);
+  const statsOperation = useRef<string | null>(null);
+  const [statsProgress, setStatsProgress] = useState<{ current: number; total: number } | null>(null);
+  const [statsStatus, setStatsStatus] = useState("");
   const [showEnumerator, setShowEnumerator] = useState(false);
   useEffect(() => { if (!debugMode) setShowEnumerator(false); }, [debugMode]);
   const [showEnumeratorInfoEditor, setShowEnumeratorInfoEditor] = useState(false);
-  const [enumeratorCollections, setEnumeratorCollections] = useState<EnumeratorCollection[]>([]);
   const [enumeratorError, setEnumeratorError] = useState<UiMessage>("");
-  const [enumeratorLoading, setEnumeratorLoading] = useState(false);
   const [enumeratorRules, setEnumeratorRules] = useState<string[]>([...DEFAULT_STATISTICS_ENUMERATOR_INFO_RULES]);
   const [configLoading, setConfigLoading] = useState(true);
-  const runtimeCollection = useMemo(() => data?.hasStructuralBlockCounts ? createRuntimeProjectionCollection(currentFile, data.structuralBlocks) : null,[currentFile,data]);
+  const runtimeCollection = null;
   useEffect(() => {
     let active = true;
-    loadUserConfigMigratingLocalStorage().then(info => { if(active) setEnumeratorRules(normalizeStatisticsEnumeratorInfoRules(info.config.statistics_enumerator_info_rules)); })
+    loadUserConfigMigratingLocalStorage().then(info => { if(active) setEnumeratorRules(info.config.statistics_enumerator_info_rules); })
       .catch(error => { if(active) setEnumeratorError({ key: "statistics.rulesFailed", params: {error:String(error)} }); })
       .finally(() => { if(active) setConfigLoading(false); });
     return () => { active = false; };
   },[]);
-  useEffect(() => {
-    let active = true;
-    if(!runtimeCollection) { setEnumeratorCollections([]); setEnumeratorLoading(false); return; }
-    setEnumeratorLoading(true); setEnumeratorError("");
-    loadEnumeratorCollections([runtimeCollection]).then(collections => { if(active) setEnumeratorCollections(collections); })
-      .catch(error => { if(active) { setEnumeratorCollections([]); setEnumeratorError({ key: "statistics.collectionsFailed", params: {error:String(error)} }); } })
-      .finally(() => { if(active) setEnumeratorLoading(false); });
-    return () => { active = false; };
-  },[runtimeCollection]);
-  const enumeratorResults = useMemo(() => buildEnumeratorInfoResults(enumeratorRules,data,enumeratorCollections),[enumeratorRules,data,enumeratorCollections,locale]);
+  const statisticsRules = useStatisticsRules(currentFile, enumeratorRules, data?.sourceRevision);
+  const enumeratorResults = statisticsRules.view?.results || [];
+  const enumeratorLoading = statisticsRules.loading;
   const saveEnumeratorRules = async (rules:string[]) => {
     const info = await saveStatisticsEnumeratorInfoRulesConfig(rules);
-    setEnumeratorRules(normalizeStatisticsEnumeratorInfoRules(info.config.statistics_enumerator_info_rules));
+    setEnumeratorRules(info.config.statistics_enumerator_info_rules);
   };
 
   const renderOperation = useMemo(
@@ -622,14 +335,14 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
   const loadStats = async () => {
     if (!currentFile) return;
     const generation = ++statsGeneration.current;
-    const source = applicationAnalysis && !includeContainerItems ? "application" : "source";
+    if (statsOperation.current) void getDataOperationStatus(statsOperation.current, true).catch(() => undefined);
+    const operationId = crypto.randomUUID(); statsOperation.current = operationId; setStatsProgress(null); setStatsStatus("");
+    const source = "data-worker";
     console.info(`[NOVA_STATS_REQUEST] source=${source} path=${currentFile} request started`);
     setError("");
     setIsLoading(true);
     try {
-      const next = applicationAnalysis && !includeContainerItems
-        ? mapStructureStats(applicationAnalysis)
-        : await loadStructureStats(currentFile, includeContainerItems);
+      const next = await loadStructureStats(currentFile, includeContainerItems, operationId);
       if (generation !== statsGeneration.current) return;
       setData(next);
       console.info(`[NOVA_STATS_REQUEST] source=${source} path=${currentFile} request succeeded`);
@@ -640,7 +353,7 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
         console.error(`[NOVA_STATS_REQUEST] source=${source} path=${currentFile} request failed: ${String(err)}`);
       }
     } finally {
-      if (generation === statsGeneration.current) setIsLoading(false);
+      if (generation === statsGeneration.current) { setIsLoading(false); statsOperation.current = null; }
     }
   };
 
@@ -654,16 +367,34 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
     }
     setData(null);
     void loadStats();
-    return () => { statsGeneration.current += 1; };
-  }, [currentFile, includeContainerItems, applicationAnalysisKey]);
+    return () => { statsGeneration.current += 1; if (statsOperation.current) { void getDataOperationStatus(statsOperation.current, true).catch(() => undefined); statsOperation.current = null; } };
+  }, [currentFile, includeContainerItems, applicationAnalysisKey, languageRevision]);
 
+  useEffect(() => {
+    if (!isLoading) return;
+    let active = true;
+    const timer = window.setInterval(() => {
+      const operationId = statsOperation.current; if (!operationId) return;
+      void getDataOperationStatus(operationId).then(operation => {
+        if (!active || operationId !== statsOperation.current) return;
+        const progress = operation.progress;
+        if (progress?.total !== undefined) setStatsProgress({ current: progress.completed ?? progress.current ?? 0, total: progress.total });
+      }).catch(() => undefined);
+    }, 300);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [isLoading]);
+  const cancelStats = () => {
+    const operationId = statsOperation.current; statsGeneration.current += 1; statsOperation.current = null;
+    if (operationId) void getDataOperationStatus(operationId, true).catch(failure => setError(String(failure)));
+    setIsLoading(false); setStatsStatus(t("statistics.analysisCancelled"));
+  };
   const scan = data?.containerScan;
   const percent = (value: number | null) => value === null ? t("statistics.notProvided") : `${(value * 100).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
   const metrics = data ? [
     { label: t("statistics.nonAir"), value: data.totalNonAirBlocks.toLocaleString(locale) },
     { label: t("statistics.bounds"), value: `${data.enclosingSize.x} × ${data.enclosingSize.y} × ${data.enclosingSize.z}` },
     { label: t("statistics.density"), value: percent(data.density) },
-    { label: t("statistics.materialKindsOverview"), value: data.materials.length.toLocaleString(locale) },
+    { label: t("statistics.materialKindsOverview"), value: data.materialCount.toLocaleString(locale) },
     { label: t("statistics.entities"), value: data.entityCount.toLocaleString(locale) },
   ] : [];
   return <React.Profiler id="statistics" onRender={recordStatisticsCommit}><div className="beta-statistics-page statistics-page">
@@ -673,7 +404,7 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
           <h2 className="statistics-overview-source" title={currentFile ? displayFilePath(currentFile) : undefined}>{currentFile ? currentFile.split(/[\\/]/).pop() : t("statistics.title")}</h2>
           <p>{t("statistics.workbenchContext")}</p>
         </div>
-        <Button size="sm" variant="secondary" onClick={() => void loadStats()} disabled={!currentFile || isLoading}>{isLoading ? t("statistics.analyzing") : t("statistics.reanalyze")}</Button>
+        <Button size="sm" variant="secondary" onClick={() => isLoading ? cancelStats() : void loadStats()} disabled={!currentFile}>{isLoading ? t("statistics.cancelAnalysis") : t("statistics.reanalyze")}</Button>
       </header>
       {data ? <>
         <dl className="statistics-overview-kpis statistics-kpis">{metrics.map(metric => <div className="statistics-overview-kpi statistics-kpi" key={metric.label}><dt>{metric.label}</dt><dd>{metric.value}</dd></div>)}</dl>
@@ -699,26 +430,26 @@ export function StatisticsPage({ currentFile, theme, debugMode = false }: any) {
           </dl>
           <section className="statistics-enumerator-panel" aria-busy={enumeratorLoading || configLoading}>
             <header className="material-summary-header"><h3>{t("statistics.customTitle")}</h3>
-              <Button size="sm" variant="secondary" disabled={configLoading || enumeratorLoading || !enumeratorCollections.length || !!enumeratorError} onClick={() => setShowEnumeratorInfoEditor(true)}>{t("statistics.editRules")}</Button>
+              <Button size="sm" variant="secondary" disabled={configLoading || enumeratorLoading || !data || !!enumeratorError} onClick={() => setShowEnumeratorInfoEditor(true)}>{t("statistics.editRules")}</Button>
               {debugMode && <Button size="sm" variant="ghost" onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true))}>{t("statistics.openEnumerator")}</Button>}
             </header>
-            {enumeratorLoading || configLoading ? <p role="status">{t("statistics.loadingRules")}</p> : enumeratorError ? <pre role="alert">{localizeMessage(enumeratorError)}</pre>
+            {enumeratorLoading || configLoading ? <p role="status">{t("statistics.loadingRules")}</p> : enumeratorError || statisticsRules.error ? <pre role="alert">{localizeMessage(enumeratorError || statisticsRules.error)}</pre>
               : enumeratorResults.map((item, index) => <div key={index} className="statistics-enumerator-row"><div className="statistics-enumerator-row-main"><span>{item.title}</span><strong>{item.error ? t("editor.error") : item.value}</strong></div>{item.error && <p className="statistics-enumerator-row-error">{localizeMessage(item.error)}</p>}</div>)}
           </section>
           {scan?.enabled && <p className="beta-statistics-status">{t("statistics.scanned", { containers: scan.containers_scanned.toLocaleString(locale), stacks: scan.item_stacks_scanned.toLocaleString(locale) })}</p>}
           {!!scan?.warnings?.length && <div className="beta-statistics-warnings"><p>{t("statistics.containerWarnings", { count: scan.warnings.length.toLocaleString(locale) })}</p><pre>{scan.warnings.slice(0, 40).map(localizeMessage).join("\n")}</pre></div>}
         </details>
       </> : <p className="beta-statistics-status" role="status">{!currentFile ? t("statistics.noProjectionOverview") : renderPending ? t("statistics.reading") : isLoading ? t("statistics.analyzing") : t("statistics.noData")}</p>}
+      {isLoading && statsProgress && <p role="status">{t("statistics.analysisProgress", { current: statsProgress.current, total: statsProgress.total })}</p>}
+      {statsStatus && <p role="status">{statsStatus}</p>}
       {error && <pre className="subwindow-error" role="alert">{localizeMessage(error)}</pre>}
     </section>
     <section className="statistics-stockpile-workspace" aria-label={t("editor.materialDetails")}>
-      <StockpileTaskPanel sourcePath={currentFile || ""} onOpenMaterials={() => setShowMaterials(true)}
+      <StockpileTaskPanel sourcePath={currentFile || ""} onOpenMaterials={() => { void openMaterialListWindow(currentFile).catch(failure => setError(String(failure))); }}
         materialExportContent={data && currentFile ? <MaterialListContent data={data} currentFile={currentFile} embedded viewMode="export" exportOnly /> : undefined} />
     </section>
     {showEnumerator && <EnumeratorDialog currentFile={currentFile} theme={theme} runtimeCollection={runtimeCollection} onClose={() => setShowEnumerator(false)} />}
-    {showEnumeratorInfoEditor && <EnumeratorInfoEditorDialog rules={enumeratorRules} data={data} collections={enumeratorCollections} onClose={() => setShowEnumeratorInfoEditor(false)} onSave={saveEnumeratorRules} />}
-    <MaterialCatalogDialog open={showMaterials} data={data} currentFile={currentFile || ""} onClose={() => setShowMaterials(false)}
-      onRequestContainerStats={include => loadStructureStats(currentFile, include)} />
+    {showEnumeratorInfoEditor && <EnumeratorInfoEditorDialog rules={enumeratorRules} sourcePath={currentFile} onClose={() => setShowEnumeratorInfoEditor(false)} onSave={saveEnumeratorRules} />}
   </div></React.Profiler>;
 }
 

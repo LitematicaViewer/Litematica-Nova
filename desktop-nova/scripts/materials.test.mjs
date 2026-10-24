@@ -14,100 +14,65 @@ function load(file, mocks) {
   vm.runInNewContext(outputText, { exports, require: id => {
     if (!(id in mocks)) throw new Error(`unexpected dependency ${id}`);
     return mocks[id];
-  }, console, Map, Number });
+  }, crypto:{randomUUID:()=>"test-stats-operation"}, performance, console, Map, Number });
   return exports;
 }
-let statsCalls = 0;
-let csv = "";
-const service = load("../src/services/statsService.ts", {
-  "../platform/dialogs": { saveDialog: async () => "materials.csv" },
-  "../platform/applicationOperations": { getProjectStats: async () => { statsCalls++; return {}; }, getProjectMaterials: async () => ({material_items:[]}) },
-  "./backend": { writeTextFileAbsolute: async (_path, text) => { csv = text; } },
-  "./i18n": { translateBlockId: id => id, translateBuildingType: id => id },
-});
-function material(id, count) {
-  const item = catalog.items[id];
-  return service.mapStructureStats({ material_items: [{ block_id: id, display_name: chinese[item.translation_key], total_count: count, block_count: count, stack_size: item.stack_size, can_fit_container: item.can_fit_container, material_status: "item" }] }).materials[0];
-}
+
 test("catalog pins actual 26.3 registries, aliases, Chinese names and non-64 stacks", () => {
   assert.equal(catalog.minecraft_version, "26.3");
   assert.equal(Object.keys(catalog.blocks).length, 1286);
   assert.equal(Object.keys(catalog.items).length, 1658);
   assert.equal(catalog.blocks["minecraft:redstone_wire"].item_id, "minecraft:redstone");
   assert.equal(catalog.blocks["minecraft:oak_wall_sign"].item_id, "minecraft:oak_sign");
-  assert.equal(material("minecraft:redstone", 4).name, "红石粉");
-  assert.equal(material("minecraft:oak_sign", 17).stackSize, 16);
-  assert.equal(material("minecraft:conduit", 65).stackSize, 64);
-});
-test("quantity display uses item capacity and switching to individuals is purely local", () => {
-  const item = material("minecraft:oak_sign", 16 * (729 + 27 + 1) + 3);
-  assert.equal(service.formatMaterialQuantity(item, item.totalCount), "1箱盒 1盒 1组 3个");
-  const before = statsCalls;
-  assert.equal(service.formatMaterialQuantity(item, item.totalCount, true), "12,115 个");
-  assert.equal(statsCalls, before);
-  assert.equal(service.formatMaterialUnits(0), "0个");
-  assert.equal(service.formatMaterialUnits(NaN), "0个");
-});
-test("non-nestable boxes and component-customized stacks do not claim shulker packing", () => {
-  const box = material("minecraft:shulker_box", 28);
-  assert.equal(service.formatMaterialQuantity(box, 28), "28 个");
-  const item = { ...material("minecraft:stone", 64), hasCustomStackSize: true };
-  assert.equal(service.formatMaterialQuantity(item, 64), "64 个");
-  const fluid = { ...item, materialStatus: "no_item" };
-  assert.equal(service.formatMaterialQuantity(fluid, 64), "64 方块");
-});
-test("CSV and table quantity semantics agree", async () => {
-  const sign = material("minecraft:oak_sign", 17);
-  await service.exportMaterials("sign.litematic", [sign], 2);
-  assert.ok(csv.includes("橡木告示牌,34,2组 2个"));
-});
-test("old renderer summaries are not falsely treated as item requirements", () => {
-  assert.equal(service.hasInventoryMaterialSemantics({ material_items: [] }), false);
-  assert.equal(service.hasInventoryMaterialSemantics({ material_semantics: "minecraft-26.3-inventory-v1" }), false);
-  assert.equal(service.hasInventoryMaterialSemantics({ material_semantics: "minecraft-26.3-inventory-v2" }), true);
-});
-test("missing derived summaries stay unavailable while explicit zero stays zero", () => {
-  const absent = service.mapStructureStats({});
-  assert.equal(absent.redstoneRatio, null);
-  assert.equal(absent.fluidRatio, null);
-  assert.equal(absent.buildingType, "未提供");
-  const available = service.mapStructureStats({ derived: { building: { redstone_ratio: 0, fluid_ratio: .125, building_type: "redstone" } } });
-  assert.equal(available.redstoneRatio, 0);
-  assert.equal(available.fluidRatio, .125);
-  assert.equal(available.buildingType, "redstone");
-});
-test("icons resolve actual aliases, prefer same-item icon, and never replace slab with planks", async () => {
-  const requests = [];
-  const icons = load("../src/services/blockIconResolver.ts", {
-    "../platform/files": { readImageBase64: async path => { requests.push(path); if (path === "pack-in/item-icons-26.3/redstone.png") return "real-item"; throw Error("missing"); } },
-    "../../../pack-in/materials/minecraft-26.3.json": catalog,
-    "../../../pack-in/materials/item-icons-26.3.json": iconManifest,
-  });
-  assert.equal(await icons.getBlockIconDataUrl("minecraft:redstone_wire"), "real-item");
-  assert.deepEqual(requests, ["pack-in/item-icons-26.3/redstone.png"]);
-  assert.equal(await icons.getBlockIconDataUrl("minecraft:stone_slab"), null);
-  assert.ok(requests.every(path => !path.includes("planks")));
-  assert.equal(Array.from(icons.iconCandidates("minecraft:water")).length, 0);
-  assert.equal(Array.from(icons.iconCandidates("minecraft:made_up")).length, 0);
-  assert.equal(Array.from(icons.iconCandidates("other:stone")).length, 0);
+  assert.equal(chinese[catalog.items["minecraft:redstone"].translation_key], "红石粉");
+  assert.equal(catalog.items["minecraft:oak_sign"].stack_size, 16);
+  assert.equal(catalog.items["minecraft:conduit"].stack_size, 64);
 });
 
-test("AIR-mapped technical blocks are diagnostics, never materials or exported items", async () => {
-  const piston = material("minecraft:piston", 2);
-  const rows = [
-    {block_id: "minecraft:piston", material_status: "item", block_count: 2, total_count: 2},
-    {block_id: "minecraft:piston_head", material_status: "no_item", block_count: 2, total_count: 2},
-    {block_id: "minecraft:moving_piston", material_status: "no_item", block_count: 1, total_count: 1},
-    {block_id: "other:unverified", material_status: "unknown", block_count: 3, total_count: 3},
-  ];
-  const data = service.mapStructureStats({structure_stats: {total_non_air_blocks: 8}, material_items: rows});
-  assert.equal(data.totalNonAirBlocks, 8);
-  assert.deepEqual(Array.from(data.materials, row => row.id), ["minecraft:piston"]);
-  assert.deepEqual(Array.from(data.nonItemBlocks, row => [row.id, row.count]), [["minecraft:piston_head", 2], ["minecraft:moving_piston", 1], ["other:unverified", 3]]);
-  const fresh = service.mapStructureStats({material_items: rows.slice(0, 1), non_item_blocks: [{block_id:"minecraft:piston_head", display_name:"活塞头", count:2, reason:"no_item"}]});
-  assert.equal(fresh.nonItemBlocks[0].name, "活塞头");
-  assert.equal(fresh.nonItemBlocks[0].count, 2);
-  await service.exportMaterials("piston.litematic", [piston, {...piston, id: "minecraft:piston_head", name:"活塞头", materialStatus:"no_item"}], 1);
-  assert.ok(!csv.includes("活塞头"));
-  assert.ok(csv.includes("活塞,2"));
+test("statistics service accepts Rust views unchanged and sends export settings instead of assembling files", async () => {
+  const requests=[], exports=[], recipeRequests=[];
+  const view={totalNonAirBlocks:8,materialCount:2,density:.5};
+  const service=load("../src/services/statsService.ts", {
+    "../platform/dialogs": { saveDialog: async () => "materials.csv" },
+    "../platform/applicationOperations": {
+      getProjectStats: async input => {requests.push(input);return {source_revision:"source-A",statisticsView:view};},
+      exportMaterialList: async input => {exports.push(input);return {output:input.outputPath};},
+      queryMaterialRecipes: async (input, operationId) => { recipeRequests.push({input,operationId}); return {sourceRevision:"source-A",summary:{totalMaterials:3,materialsWithRecipes:1,materialsWithoutRecipes:2,unresolvedMaterials:1,excludedMaterials:0}}; },
+      prepareMaterialRecipes:async()=>({status:"available",has_recipes:true}),
+    },
+    "./filePathIdentity": {windowsPathKey:value=>value.toLowerCase()},
+    "./i18n": { t:key=>key, getUiLocale:()=>"zh-CN",getI18nRevision:()=>1, getMinecraftTranslations:()=>({"item.minecraft.potion":"药水"}),initI18n:async()=>{} },
+  });
+  const result=await service.loadStructureStats("projection.litematic",true);
+  assert.equal(result,view);assert.equal(requests[0].includeContainerItems,true);
+  assert.deepEqual(Object.keys(requests[0].languageMap),["item.minecraft.potion"]);
+  assert.throws(()=>service.mapStructureStats({material_items:[]}),/displayDataMissing/);
+  await service.exportMaterialListWithOptions("projection.litematic",{scope:{kind:"all",value:null},includeContainerItems:true,multiplier:2,minecraftVersion:"26.3",terminalRawMaterials:false,format:"csv"});
+  assert.equal(exports.length,1);assert.equal(exports[0].multiplier,2);assert.equal(exports[0].outputPath,"materials.csv");
+  const recipes=await service.fetchMaterialRecipeCache("projection.litematic",true,"recipes-batch-operation");
+  assert.equal(recipeRequests.length,1);assert.equal(recipeRequests[0].operationId,"recipes-batch-operation");
+  assert.equal(recipeRequests[0].input.sourcePath,"projection.litematic");assert.equal(recipeRequests[0].input.includeContainerItems,true);
+  assert.equal(recipes.summary.materialsWithRecipes,1);assert.equal(recipes.summary.materialsWithoutRecipes,2);assert.equal(recipes.summary.unresolvedMaterials,1);
+  assert.equal(await service.fetchMaterialRecipeCache(undefined,false,"global-cache-operation"),null);
+  const page=readFileSync(new URL("../ui/windows/main/pages/statistics/StatisticsPage.tsx",import.meta.url),"utf8");
+  assert.match(page,/fetchMaterialRecipeCache\(currentFile, includeContainerItems, operationId\)/);
+  assert.match(page,/result.summary.materialsWithoutRecipes/);assert.match(page,/recipeOperation.current !== operationId/);
+  const source=readFileSync(new URL("../src/services/statsService.ts",import.meta.url),"utf8");
+  assert.doesNotMatch(source,/formatMaterialUnits|csvEscape|writeTextFileAbsolute|filterMaterialItems|mapMaterial\(/);
+});
+
+test("icons query the active resource and retain stable identities without unrelated substitutes", async () => {
+  const requests = [];
+  const icons = load("../src/services/blockIconResolver.ts", {
+    "../platform/events": {listenEvent:async()=>()=>{}},
+    "../platform/files": { readGameDataIcon: async id => { requests.push(id); return id === "minecraft:redstone" ? "real-item" : null; } },
+    "./gameResources": {getActiveIconSearchRoots:async()=>[],readIconFromRoot:async()=>null,getActiveResourceFingerprint:async()=>"active"},
+    "./enumeratorService": {loadEnumeratorCollections:async()=>[]},
+  });
+  assert.equal(await icons.getBlockIconDataUrl("minecraft:redstone"), "real-item");
+  assert.deepEqual(requests, ["minecraft:redstone"]);
+  assert.equal(await icons.getBlockIconDataUrl("minecraft:stone_slab"), null);
+  assert.ok(requests.every(id => !id.includes("planks")));
+  assert.equal(await icons.getBlockIconDataUrl("other:stone"), null);
+  assert.equal(requests.at(-1),"other:stone");
 });

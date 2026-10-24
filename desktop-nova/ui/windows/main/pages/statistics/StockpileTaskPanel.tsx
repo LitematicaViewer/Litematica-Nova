@@ -1,9 +1,9 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown, Copy, Download, FilePlus, Info, Minus, MoreHorizontal, Pencil, Plus, Settings, Upload } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import {
-  commandStockpileTask, getStockpileTask, displayFilePath, openDialog, saveDialog, writeTextFileAbsolute,
-  resolveBlockDisplayName, getUiLocale, t, type ApplicationMaterialScope,
+  commandStockpileTask, getStockpileTask, displayFilePath, openDialog, saveDialog,
+  getUiLocale, getMinecraftTranslations, t, type ApplicationMaterialScope, type StockpileItemView,
 } from "../../../../../src/business/facade";
 import { listenEvent } from "../../../../../src/platform/events";
 import { useI18n } from "../../../../i18n";
@@ -20,15 +20,16 @@ import { useVirtualWindow } from "../../../../components/useVirtualWindow";
 import { readUpdateDraft, saveUpdateDraft, useUpdateDraft } from "../../updateRecovery";
 import { getApplicationWindowLabel } from "../../../../../src/platform/nativeWindowGeometry";
 import { RecipeTreeView } from "./RecipeTreeView";
+import { MaterialSources } from "./MaterialCatalogDialog";
 
 type Workspace = Awaited<ReturnType<typeof getStockpileTask>>;
 type Task = NonNullable<Workspace["task"]>;
-type TaskItem = Task["items"][number];
+type TaskItem = StockpileItemView;
 type Command = Parameters<typeof commandStockpileTask>[0];
 type Mutation = NonNullable<Command["mutation"]>;
 type Preferences = Task["preferences"];
 type Material = Task["materials"]["materials"][number];
-type WriteQueue = { epoch: number; task: Task; pending: Map<string, Command>; running: boolean; refresh: boolean };
+type WriteQueue = { epoch: number; task: Task; pending: Map<string, Command>; running: boolean; refresh: boolean; settled?: Promise<void>; resolveSettled?: () => void };
 type Confirmation = { taskId: string; sourceRevision: string; name: string; scope: string };
 type PendingDraft = { taskId: string; projectId: string; sourceRevision: string; commands: Array<[string, Command]> };
 type ExportScope = "all" | "visible" | "remaining" | "overfilled" | "prepared";
@@ -40,75 +41,9 @@ const defaultPreferences: Preferences = {
   showAdvancedRecipeTree: true, showUnresolvedRecipes: true, showIconFallbackBadge: true, language: "auto",
 };
 
-/** The existing single-user web hierarchy: 27 stacks per box, 27 boxes per chest. */
-export function stockpileUnitParts(value: number, stackSize: number): [number, number, number, number] {
-  let remaining = Math.max(0, Math.trunc(value));
-  const stack = Math.max(1, Math.trunc(stackSize));
-  const box = stack * 27, chest = box * 27;
-  const chests = Math.floor(remaining / chest); remaining %= chest;
-  const boxes = Math.floor(remaining / box); remaining %= box;
-  const stacks = Math.floor(remaining / stack); remaining %= stack;
-  return [chests, boxes, stacks, remaining];
-}
-
-function quantityText(value: number, stackSize: number, individual: boolean): string {
-  if (individual) return value.toLocaleString();
-  const parts = stockpileUnitParts(value, stackSize);
-  const keys = ["stockpile.unitChest", "stockpile.unitBox", "stockpile.unitStack", "stockpile.unitEach"];
-  return parts.map((count, index) => count || index === 3 && !parts.some(Boolean) ? t(keys[index], { count }) : "").filter(Boolean).join(" ");
-}
-
-function itemState(item: TaskItem): string {
-  if (item.overfilledCount > 0) return "overfilled";
-  if (item.complete) return "done";
-  if (item.doneCount > 0) return "partial_done";
-  return item.status === "preparing" ? "preparing" : "not_started";
-}
-
-function displayLanguage(language: string): string { return language === "zh-CN" || language === "en-US" ? language : getUiLocale(); }
-
-function materialName(material: Material | undefined, language: string, id: string): string {
-  return material?.display_names?.[displayLanguage(language)] || resolveBlockDisplayName(material?.item_icon_key || id.split("#")[0], material?.display_name || id);
-}
-
 function StockpileIcon({ task, iconKey }: { task: Task; iconKey: string }) {
   const src = task.iconImages?.[iconKey];
   return src ? <img className="block-icon-image" src={src} alt="" /> : <BlockIcon blockId={iconKey} lookupMode="item_first" />;
-}
-
-export function filterStockpileRows(items: TaskItem[], metadata: Map<string, Material>, preferences: Preferences): TaskItem[] {
-  const query = preferences.search.trim().toLocaleLowerCase();
-  const rows = items.filter(item => {
-    const material = metadata.get(item.materialId);
-    if (preferences.category !== "all" && material?.category !== preferences.category) return false;
-    const state = itemState(item);
-    switch (preferences.filter) {
-      case "not_started": if (state !== "not_started") return false; break;
-      case "preparing": if (state !== "preparing" && state !== "partial_done") return false; break;
-      case "done": if (!item.complete) return false; break;
-      case "remaining": if (item.remainingCount <= 0) return false; break;
-      case "overfilled": if (item.overfilledCount <= 0) return false; break;
-      case "stalled": if (item.preparingCount <= 0 || item.complete) return false; break;
-      case "noted": if (!item.publicNote?.trim()) return false; break;
-      case "stored": if (!item.storageLocation?.trim()) return false; break;
-      case "available": case "unresolved": case "missing": if (material?.recipe_status !== preferences.filter) return false; break;
-    }
-    return !query || [materialName(material, preferences.language, item.materialId), material?.display_name, material?.namespace_id,
-      material?.category, material?.item_icon_key, item.materialId].join(" ").toLocaleLowerCase().includes(query);
-  });
-  const byName = (left: TaskItem, right: TaskItem) => materialName(metadata.get(left.materialId), preferences.language, left.materialId)
-    .localeCompare(materialName(metadata.get(right.materialId), preferences.language, right.materialId), displayLanguage(preferences.language));
-  return rows.sort((left, right) => {
-    switch (preferences.sort) {
-      case "count_asc": return left.requiredCount - right.requiredCount || byName(left, right);
-      case "count_desc": return right.requiredCount - left.requiredCount || byName(left, right);
-      case "remaining_desc": return right.remainingCount - left.remainingCount || byName(left, right);
-      case "status": return itemState(left).localeCompare(itemState(right)) || byName(left, right);
-      case "grouped": return (metadata.get(left.materialId)?.category || "").localeCompare(metadata.get(right.materialId)?.category || "")
-        || itemState(left).localeCompare(itemState(right)) || right.requiredCount - left.requiredCount || byName(left, right);
-      default: return byName(left, right);
-    }
-  });
 }
 
 export function resetConfirmationMatches(confirmation: Confirmation, task: Pick<Task, "taskId" | "sourceRevision"> | undefined): boolean {
@@ -121,24 +56,8 @@ export function mergeStockpileMutation(previous: Mutation | undefined, next: Mut
   return { ...retained, ...next };
 }
 
-export function stockpileCompletionMutation(item: Pick<TaskItem, "requiredCount" | "quantity">, quantity: number, undo: boolean): Mutation {
-  return { quantity: undo ? quantity : Math.max(item.requiredCount, quantity), status: undo ? "preparing" : "done" };
-}
-
-export function stockpileAdjustedQuantity(quantity: number, delta: number): number {
-  return Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, quantity + delta));
-}
-
 export function stockpileDetailSelection(items: Pick<TaskItem, "materialId">[], selectedId: string | null): string | null {
   return items.some(item => item.materialId === selectedId) ? selectedId : items[0]?.materialId || null;
-}
-
-export function stockpileExportSelection(items: TaskItem[], visibleItems: TaskItem[], scope: ExportScope): TaskItem[] {
-  if (scope === "visible") return visibleItems;
-  if (scope === "remaining") return items.filter(item => item.remainingCount > 0);
-  if (scope === "prepared") return items.filter(item => item.quantity > 0);
-  if (scope === "overfilled") return items.filter(item => item.overfilledCount > 0);
-  return items;
 }
 
 function StockpileMenu({ label, iconOnly = false, disabled = false, children }: {
@@ -162,7 +81,7 @@ function taskScopeLabel(task: Task): string {
 }
 
 export function recoverableStockpileCommands(commands: Array<[string, Command]>): Array<[string, Command]> {
-  return commands.filter(([, command]) => command.action === "settings" || command.action === "mutate" && !command.mutation?.reset && !command.mutation?.clear);
+  return commands.filter(([, command]) => command.action === "settings" || command.action === "mutate" && !command.mutation?.reset && !command.mutation?.clear && !command.mutation?.adjustment);
 }
 
 function pendingDraft(work: WriteQueue): PendingDraft | undefined {
@@ -173,7 +92,7 @@ function pendingDraft(work: WriteQueue): PendingDraft | undefined {
 function draftKey(taskId: string): string { return `stockpile.pending:${getApplicationWindowLabel()}:${taskId}`; }
 
 function QuantityInput({ value, label, onQuantity, onAdjust, onDraft }: {
-  value: number; label: string; onQuantity: (value: number) => void; onAdjust: (delta: number) => number;
+  value: number; label: string; onQuantity: (value: number) => void; onAdjust: (delta: number) => void;
   onDraft: (value: number | undefined) => void;
 }) {
   const [draft, setDraft] = useState(String(value));
@@ -190,7 +109,7 @@ function QuantityInput({ value, label, onQuantity, onAdjust, onDraft }: {
   };
   const adjust = (delta: number) => {
     commit();
-    const quantity = onAdjust(delta); submitted.current = quantity; setDraft(String(quantity));
+    onAdjust(delta);
   };
   return <div className="stockpile-prepared-control" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
     <Button size="icon-sm" variant="ghost" aria-label={t("stockpile.subtractOne")} onClick={() => adjust(-1)}><Minus size={14} /></Button>
@@ -211,7 +130,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   sourcePath: string; scope?: ApplicationMaterialScope; includeContainerItems?: boolean; multiplier?: number; onPendingChange?: (pending: boolean) => void;
   onOpenMaterials?: () => void; materialExportContent?: React.ReactNode;
 }) {
-  const { locale } = useI18n();
+  const { locale, revision } = useI18n();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [preferences, setPreferences] = useState<Preferences>(defaultPreferences);
   const [loading, setLoading] = useState(true);
@@ -238,8 +157,11 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   const [exportIndividualCounts, setExportIndividualCounts] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [pageOffset, setPageOffset] = useState(0);
   const [recipeOpen, setRecipeOpen] = useState(false);
+  const [detailBusy, setDetailBusy] = useState(false);
   const recipeRequested = useRef<string | null>(null);
+  const detailSequence = useRef(0);
   const quantityDrafts = useRef(new Map<string, { taskId: string; sourceRevision: string; materialId: string; quantity: number }>());
   const [editingQuantities, setEditingQuantities] = useState(0);
   const [searchDraft, setSearchDraft] = useState("");
@@ -250,6 +172,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   const queue = useRef<WriteQueue | null>(null);
   const epoch = useRef(0);
   const sequence = useRef(0);
+  const mutationSequence = useRef(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const currentTask = useRef<Task | undefined>(undefined);
   const currentSource = useRef(sourcePath);
@@ -294,7 +217,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     const expected = ++epoch.current, request = ++sequence.current;
     setLoading(true); setError(""); setStatus(""); setConfirmation(null);
     try {
-      const next = await getStockpileTask({ sourcePath: currentSource.current || undefined, scope, includeContainerItems, multiplier });
+      const next = await getStockpileTask({ uiLocale: getUiLocale(), languageMap: getMinecraftTranslations(), sourcePath: currentSource.current || undefined, scope, includeContainerItems, multiplier });
       if (expected !== epoch.current || request !== sequence.current) return;
       queue.current = next.task ? { epoch: expected, task: next.task, pending: new Map(), running: false, refresh: false } : null;
       setPending(0); accept(next);
@@ -308,13 +231,14 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   useEffect(() => { onPendingChange?.(pending > 0 || searchPending || editingQuantities > 0); }, [pending, searchPending, editingQuantities, onPendingChange]);
 
   const drain = async (work: WriteQueue) => {
-    if (work.running) return;
+    if (work.running) return work.settled;
     work.running = true;
+    work.settled = new Promise<void>(resolve => { work.resolveSettled = resolve; });
     if (work.epoch === epoch.current) { setError(""); setPending(work.pending.size); }
     try {
       while (work.pending.size) {
         const [key, command] = work.pending.entries().next().value as [string, Command];
-        const next = await commandStockpileTask({ ...command, projectId: work.task.projectId, taskId: work.task.taskId, sourceRevision: work.task.sourceRevision });
+        const next = await commandStockpileTask({ uiLocale: getUiLocale(), languageMap: getMinecraftTranslations(), ...command, projectId: work.task.projectId, taskId: work.task.taskId, sourceRevision: work.task.sourceRevision, query: { offset: pageOffset, limit: 200 } });
         if (!next.task || next.task.taskId !== work.task.taskId) throw new Error(t("stockpile.taskChanged"));
         if (work.pending.get(key) === command) work.pending.delete(key);
         work.task = next.task;
@@ -323,11 +247,11 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
       }
       if (work.refresh && work.epoch === epoch.current) {
         work.refresh = false;
-        const next = await commandStockpileTask({ action: "select", projectId: work.task.projectId, taskId: work.task.taskId });
+        const next = await commandStockpileTask({ uiLocale: getUiLocale(), languageMap: getMinecraftTranslations(), action: "select", projectId: work.task.projectId, taskId: work.task.taskId, query: { offset: pageOffset, limit: 200 } });
         if (work.epoch === epoch.current) { accept(next, true); if (next.task) work.task = next.task; }
       }
     } catch (failure) { if (work.epoch === epoch.current) setError(String(failure)); }
-    finally { work.running = false; if (work.epoch === epoch.current) setPending(work.pending.size); }
+    finally { work.running = false; work.resolveSettled?.(); if (work.epoch === epoch.current) setPending(work.pending.size); }
   };
   const enqueue = (key: string, command: Command) => {
     const work = queue.current;
@@ -361,12 +285,13 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     return (edit?.sourceRevision === work?.task.sourceRevision ? edit?.quantity : undefined)
       ?? work?.pending.get(`item:${item.materialId}`)?.mutation?.quantity ?? work?.task.items.find(entry => entry.materialId === item.materialId)?.quantity ?? item.quantity;
   };
-  const adjustQuantity = (item: TaskItem, delta: number) => {
-    const quantity = stockpileAdjustedQuantity(latestQuantity(item), delta); changeQuantity(item.materialId, quantity); return quantity;
+  const adjustQuantity = (item: TaskItem, delta: number, unit: "each" | "stack" | "box" | "chest" = "each") => {
+    clearQuantityDraft(item.materialId);
+    enqueue(`adjust:${item.materialId}:${++mutationSequence.current}`, { action: "mutate", mutation: { materialId: item.materialId, requestId: crypto.randomUUID(), adjustment: { unit, steps: delta } } });
   };
   const completeItem = (item: TaskItem, undo = item.complete) => {
     const quantity = latestQuantity(item); clearQuantityDraft(item.materialId);
-    mutate(item.materialId, stockpileCompletionMutation(item, quantity, undo));
+    mutate(item.materialId, { quantity, complete: !undo, status: undo ? "preparing" : "done" });
   };
   const rememberQuantity = (boundTaskId: string, boundRevision: string, materialId: string, quantity: number | undefined) => {
     const work = queue.current; if (!work || work.task.taskId !== boundTaskId || work.task.sourceRevision !== boundRevision) return;
@@ -381,7 +306,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     if (work?.pending.size) {
       if (work.running) return;
       try {
-        const next = await commandStockpileTask({ action: "select", projectId: work.task.projectId, taskId: work.task.taskId });
+        const next = await commandStockpileTask({ uiLocale: getUiLocale(), languageMap: getMinecraftTranslations(), action: "select", projectId: work.task.projectId, taskId: work.task.taskId, query: { offset: pageOffset, limit: 200 } });
         if (work !== queue.current || !next.task || next.task.taskId !== work.task.taskId) return;
         if (next.task.sourceRevision !== work.task.sourceRevision) {
           const draft = pendingDraft(work);
@@ -406,7 +331,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     if (showLoading) setLoading(true);
     setError(""); setStatus("");
     try {
-      const next = await commandStockpileTask({ projectId: task?.projectId, taskId: task?.taskId, sourceRevision: task?.sourceRevision, ...command });
+      const next = await commandStockpileTask({ uiLocale: getUiLocale(), languageMap: getMinecraftTranslations(), projectId: task?.projectId, taskId: task?.taskId, sourceRevision: task?.sourceRevision, query: { offset: pageOffset, limit: 200 }, ...command });
       if (expected !== epoch.current) return;
       queue.current = next.task ? { epoch: expected, task: next.task, pending: new Map(), running: false, refresh: false } : null;
       setPending(0); accept(next, command.action === "details" || command.action === "export");
@@ -436,6 +361,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     }).catch(() => undefined);
     return () => { void unlisten.then(stop => stop?.()); };
   }, []);
+  useEffect(() => { refreshRef.current(); }, [locale, revision]);
   useEffect(() => {
     if (composing.current) return;
     const timer = window.setTimeout(() => {
@@ -446,27 +372,27 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   const preference = <K extends keyof Preferences>(key: K, value: Preferences[K]) => {
     const next = { ...preferencesRef.current, [key]: value };
     preferencesRef.current = next; setPreferences(next);
-    enqueue("settings", { action: "settings", preferences: next });
+    setPageOffset(0);
+    enqueue("settings", { action: "settings", preferences: next, query: { offset: 0, limit: 200 } });
   };
   const editSearch = (value: string) => {
     searchRef.current = value; setSearchDraft(value);
     const work = queue.current;
     if (work && !recovery) try { saveUpdateDraft(draftKey(work.task.taskId), capturePending()); } catch (failure) { setError(String(failure)); }
   };
-  const metadata = useMemo(() => new Map(task?.materials.materials.map(material => [material.id, material]) || []), [task?.materials]);
-  const rows = useMemo(() => filterStockpileRows(task?.items || [], metadata, preferences), [task?.items, metadata, preferences]);
+  const rows = task?.view.rows || [];
   const rowHeight = 44;
   const virtual = useVirtualWindow(rows, scrollRef, rowHeight, 8);
   useLayoutEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [preferences.search, preferences.category, preferences.filter, preferences.sort, task?.taskId]);
-  const categories = useMemo(() => [...new Set(task?.materials.materials.map(material => material.category) || [])].sort(), [task?.materials]);
+  const categories = task?.view.categories || [];
   const detailItem = rows.find(item => item.materialId === detailId);
-  const detailMaterial = detailId ? metadata.get(detailId) : undefined;
+  const detailMaterial = detailItem?.material;
   const detailTree = detailId ? task?.recipeTrees?.[detailId] || (detailMaterial ? task?.recipeTrees?.[detailMaterial.namespace_id] : undefined) : undefined;
   const busy = loading || pending > 0 || searchPending;
   const sourceLabel = task?.sourcePath.split(/[\\/]/).pop() || sourcePath.split(/[\\/]/).pop() || t("stockpile.noProjection");
   const scopeLabel = task ? taskScopeLabel(task) : "";
-  const percent = task && task.requiredCount > 0 ? Math.min(100, task.preparedCount / task.requiredCount * 100) : task ? 100 : 0;
-  const displayQuantity = (item: TaskItem, quantity: number) => quantityText(quantity, item.stackSize, preferences.individualCounts);
+  const percent = task?.view.completionPercent || 0;
+  const displayQuantity = (item: TaskItem, field: "required" | "prepared" | "remaining") => field === "required" ? item.requiredText : field === "prepared" ? item.preparedText : item.remainingText;
   useEffect(() => {
     setDetailId(previous => stockpileDetailSelection(rows, previous));
     const visible = new Set(rows.map(item => item.materialId));
@@ -478,53 +404,30 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   }, [rows]);
   useEffect(() => { setRecipeOpen(false); recipeRequested.current = null; }, [detailId, task?.taskId]);
   useEffect(() => {
-    if (!recipeOpen || !preferences.showAdvancedRecipeTree || !detailId || !detailItem || !task || detailTree || busy) return;
+    if (!drawerOpen || !detailId || !detailItem || !task || busy) return;
     const key = `${task.taskId}:${task.sourceRevision}:${detailId}`;
     if (recipeRequested.current === key) return;
     recipeRequested.current = key;
-    void action({ action: "details", materialId: detailId }, false);
-  }, [recipeOpen, preferences.showAdvancedRecipeTree, detailId, task?.taskId, task?.sourceRevision, detailTree, busy]);
+    const expected = ++detailSequence.current; setDetailBusy(true);
+    void action({ action: "details", materialId: detailId }, false).finally(() => { if (expected === detailSequence.current) setDetailBusy(false); });
+  }, [drawerOpen, detailId, task?.taskId, task?.sourceRevision, busy]);
 
-  const exportItems = (kind: ExportScope) => task ? stockpileExportSelection(task.items, rows, kind) : [];
-  const exportText = (items: TaskItem[], source: ExportSource) => items.map(item => {
-    const name = materialName(metadata.get(item.materialId), preferences.language, item.materialId);
-    const requirement = `${t("stockpile.required")}: ${quantityText(item.requiredCount, item.stackSize, exportIndividualCounts)} (${item.requiredCount})`;
-    if (source === "materials") return `- ${name} (${item.materialId}) ${requirement}`;
-    return `- ${name} (${item.materialId}) ${requirement} | ${t("stockpile.currentQuantity")}: ${item.quantity}`
-      + ` | ${t("stockpile.prepared")}: ${item.doneCount} | ${t("stockpile.state.preparing")}: ${item.preparingCount}`
-      + ` | ${t("stockpile.remainingQuantity")}: ${quantityText(item.remainingCount, item.stackSize, exportIndividualCounts)} (${item.remainingCount})`
-      + ` | ${t("stockpile.overfilled")}: ${item.overfilledCount} | ${t(`stockpile.state.${itemState(item)}`)}`
-      + (item.publicNote ? ` | ${t("stockpile.note")}: ${item.publicNote}` : "")
-      + (item.storageLocation ? ` | ${t("stockpile.storage")}: ${item.storageLocation}` : "");
-  });
-  const copy = async (kind: ExportScope, source: ExportSource = "task") => {
+  const exportView = async (format: "copy" | "csv" | "txt") => {
     if (!task) return;
-    const lines = [`# ${task.name}`, sourceLabel, "", ...exportText(exportItems(kind), source)];
-    try { await navigator.clipboard.writeText(lines.join("\n")); setStatus(t("stockpile.copied")); }
-    catch (failure) { setError(String(failure)); }
-  };
-  const exportList = async (source: ExportSource = "task", kind: ExportScope = "visible", format: "csv" | "txt" = "csv") => {
-    if (!task) return;
-    const path = await saveDialog({ defaultPath: `${task.name}.${format}`, filters: [{ name: format.toUpperCase(), extensions: [format] }] });
-    if (!path) return;
-    const items = exportItems(kind);
-    const cell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
-    const headers = [t("statistics.material"), "ID", t("stockpile.required")];
-    if (source === "task") headers.push(t("stockpile.currentQuantity"), t("stockpile.prepared"), t("stockpile.state.preparing"),
-      t("stockpile.remainingQuantity"), t("stockpile.overfilled"), t("stockpile.stateLabel"), t("stockpile.note"), t("stockpile.storage"));
-    const lines = [headers.map(cell).join(",")];
-    for (const item of items) {
-      const values: Array<string | number> = [materialName(metadata.get(item.materialId), preferences.language, item.materialId), item.materialId, item.requiredCount];
-      if (source === "task") values.push(item.quantity, item.doneCount, item.preparingCount, item.remainingCount, item.overfilledCount,
-        item.status, item.publicNote || "", item.storageLocation || "");
-      lines.push(values.map(cell).join(","));
+    const path = format === "copy" ? undefined : await saveDialog({ defaultPath: `${task.name}.${format}`, filters: [{ name: format.toUpperCase(), extensions: [format] }] });
+    if (format !== "copy" && !path) return;
+    const next = await commandStockpileTask({ uiLocale: getUiLocale(), languageMap: getMinecraftTranslations(), action: "exportView", taskId: task.taskId, projectId: task.projectId, sourceRevision: task.sourceRevision,
+      query: { offset: pageOffset, limit: 200 }, export: { source: exportSource, format, scope: exportScope, individualCounts: exportIndividualCounts, outputPath: path || undefined } });
+    if (format === "copy") {
+      if (next.exportText === undefined) throw new Error(t("stockpile.exportMissing"));
+      await navigator.clipboard.writeText(next.exportText);
     }
-    const content = format === "txt" ? [`# ${task.name}`, sourceLabel, "", ...exportText(items, source)].join("\r\n") : lines.join("\r\n");
-    try { await writeTextFileAbsolute(path, `\uFEFF${content}\r\n`); setStatus(t("statistics.exported")); }
-    catch (failure) { setError(String(failure)); }
+    setStatus(t(format === "copy" ? "stockpile.copied" : "statistics.exported"));
   };
   const backup = async (restore: boolean) => {
     try {
+      const work = queue.current;
+      if (work?.pending.size || work?.running) { await drain(work); if (work.pending.size || work.running) throw new Error(t("stockpile.pendingBackup")); }
       if (restore) {
         const path = await openDialog({ multiple: false, filters: [{ name: "JSON", extensions: ["json"] }] });
         if (!path || Array.isArray(path)) return;
@@ -542,14 +445,15 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     if (exportBusy || !task || busy || exportSource === "materials" && materialExportContent) return;
     setExportBusy(true); setError(""); setStatus("");
     try {
-      if (exportFormat === "copy") await copy(exportScope, exportSource);
+      if (exportFormat === "copy") await exportView("copy");
       else if (exportSource === "task" && exportFormat === "json") await backup(false);
-      else if (exportFormat === "csv" || exportFormat === "txt") await exportList(exportSource, exportScope, exportFormat);
+      else if (exportFormat === "csv" || exportFormat === "txt") await exportView(exportFormat);
     } catch (failure) { setError(String(failure)); }
     finally { setExportBusy(false); }
   };
   const showDetails = (id: string) => {
-    if (id !== detailId) { setRecipeOpen(false); recipeRequested.current = null; }
+    if (id !== detailId) setRecipeOpen(false);
+    recipeRequested.current = null;
     setDetailId(id);
     setDrawerOpen(true);
   };
@@ -565,17 +469,17 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   const detailMutation = detailItem ? queue.current?.pending.get(`item:${detailItem.materialId}`)?.mutation : undefined;
   const detailsContent = task && detailItem ? <div className="stockpile-details-content">
     <div className="stockpile-detail-identity">
-      <StockpileIcon task={task} iconKey={detailMaterial?.item_icon_key || detailItem.materialId.split("#")[0]} />
-      <div><h4>{materialName(detailMaterial, preferences.language, detailItem.materialId)}</h4><span className="muted">{detailMaterial?.category}</span></div>
+      <StockpileIcon task={task} iconKey={detailItem.material.item_icon_key} />
+      <div><h4>{detailItem.displayName}</h4><span className="muted">{detailMaterial?.category}</span></div>
     </div>
     <div className="stockpile-detail-id"><code>{detailItem.materialId}</code><Button size="icon-sm" variant="ghost" aria-label={t("stockpile.copyId")} onClick={() => void copyId(detailItem.materialId)}><Copy size={14} /></Button></div>
     {preferences.showIconFallbackBadge && detailMaterial?.icon_available === false && detailMaterial.icon_diagnostic && <p className="stockpile-context-notice"><Info size={12} aria-hidden="true" />{detailMaterial.icon_diagnostic}</p>}
     <dl className="stockpile-detail-metrics">
-      <div><dt>{t("stockpile.required")}</dt><dd title={String(detailItem.requiredCount)}>{displayQuantity(detailItem, detailItem.requiredCount)}</dd></div>
-      <div><dt>{t("stockpile.prepared")}</dt><dd title={String(detailItem.quantity)}>{displayQuantity(detailItem, detailItem.quantity)}</dd></div>
-      <div><dt>{t("stockpile.remainingQuantity")}</dt><dd title={String(detailItem.remainingCount)}>{displayQuantity(detailItem, detailItem.remainingCount)}</dd></div>
+      <div><dt>{t("stockpile.required")}</dt><dd title={String(detailItem.requiredCount)}>{displayQuantity(detailItem, "required")}</dd></div>
+      <div><dt>{t("stockpile.prepared")}</dt><dd title={String(detailItem.quantity)}>{displayQuantity(detailItem, "prepared")}</dd></div>
+      <div><dt>{t("stockpile.remainingQuantity")}</dt><dd title={String(detailItem.remainingCount)}>{displayQuantity(detailItem, "remaining")}</dd></div>
     </dl>
-    <progress className="stockpile-detail-progress" max={Math.max(1, detailItem.requiredCount)} value={Math.min(detailItem.requiredCount, detailItem.doneCount)} aria-label={t("stockpile.progress")} />
+    <progress className="stockpile-detail-progress" max={detailItem.requiredCount || 1} value={detailItem.doneCount} aria-label={t("stockpile.progress")} />
     {detailItem.overfilledCount > 0 && <p className="stockpile-status is-overfilled">{t("stockpile.overfilledValue", { count: detailItem.overfilledCount })}</p>}
     <section className="stockpile-detail-section"><h4>{t("stockpile.registerQuantity")}</h4>
       <QuantityInput key={`${task.taskId}:${detailItem.materialId}:quantity`} value={latestQuantity(detailItem)} label={t("stockpile.currentQuantity")}
@@ -583,9 +487,9 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
         onDraft={quantity => rememberQuantity(task.taskId, task.sourceRevision, detailItem.materialId, quantity)} />
       <div className="stockpile-quick-add">
         <Button size="sm" variant="ghost" onClick={() => adjustQuantity(detailItem, 1)}>{t("stockpile.addUnitEach")}</Button>
-        {detailItem.stackSize > 1 && <Button size="sm" variant="ghost" onClick={() => adjustQuantity(detailItem, detailItem.stackSize)}>{t("stockpile.addUnitStack")}</Button>}
-        <Button size="sm" variant="ghost" onClick={() => adjustQuantity(detailItem, detailItem.stackSize * 27)}>{t("stockpile.addUnitBox")}</Button>
-        <StockpileMenu label={t("stockpile.moreUnits")}><DropdownMenu.Item className="stockpile-menu-item" onSelect={() => adjustQuantity(detailItem, detailItem.stackSize * 27 * 27)}>{t("stockpile.addUnitChest")}</DropdownMenu.Item></StockpileMenu>
+        {detailItem.stackSize > 1 && <Button size="sm" variant="ghost" onClick={() => adjustQuantity(detailItem, 1, "stack")}>{t("stockpile.addUnitStack")}</Button>}
+        <Button size="sm" variant="ghost" onClick={() => adjustQuantity(detailItem, 1, "box")}>{t("stockpile.addUnitBox")}</Button>
+        <StockpileMenu label={t("stockpile.moreUnits")}><DropdownMenu.Item className="stockpile-menu-item" onSelect={() => adjustQuantity(detailItem, 1, "chest")}>{t("stockpile.addUnitChest")}</DropdownMenu.Item></StockpileMenu>
       </div>
       <Button size="sm" variant={detailItem.complete ? "outline" : "secondary"} onClick={() => completeItem(detailItem)}>{t(detailItem.complete ? "stockpile.undoComplete" : "stockpile.markCompleteAction")}</Button>
     </section>
@@ -596,8 +500,8 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     <details className="stockpile-detail-meta"><summary>{t("stockpile.itemInformation")}</summary>
       <dl className="stockpile-detail-facts">
         <div><dt>{t("stockpile.rawCount")}</dt><dd>{detailItem.requiredCount}</dd></div>
-        <div><dt>{t("stockpile.stacksRemainder")}</dt><dd>{Math.floor(detailItem.requiredCount / detailItem.stackSize)} / {detailItem.requiredCount % detailItem.stackSize}</dd></div>
-        <div><dt>{t("stockpile.boxesRequired")}</dt><dd>{Math.ceil(detailItem.requiredCount / (detailItem.stackSize * 27))}</dd></div>
+        <div><dt>{t("stockpile.stacksRemainder")}</dt><dd>{detailItem.stacks} / {detailItem.remainder}</dd></div>
+        <div><dt>{t("stockpile.boxesRequired")}</dt><dd>{detailItem.boxesRequired}</dd></div>
         <div><dt>{t("stockpile.sourceRegions")}</dt><dd>{detailMaterial?.source_regions.join(", ") || "—"}</dd></div>
         <div><dt>{t("stockpile.recipeStatus")}</dt><dd>{detailMaterial?.recipe_status}</dd></div>
         {!!detailMaterial?.normalized_from.length && <div><dt>{t("stockpile.normalizedFrom")}</dt><dd>{detailMaterial.normalized_from.join(", ")}</dd></div>}
@@ -607,11 +511,16 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
         const size = Number(event.target.value); if (Number.isInteger(size) && size >= 1 && size <= 99) mutate(detailItem.materialId, { stackSize: size });
       }} onBlur={event => { const size = Number(event.target.value); if (!Number.isInteger(size) || size < 1 || size > 99) event.currentTarget.value = String(detailItem.stackSize); }} /></label>
     </details>
+    {error && <p className="subwindow-error" role="alert">{error}</p>}
+    {detailBusy && <p role="status">{t("statistics.catalogLoadingDetail")}</p>}
+    {task.detailMaterialId === detailItem.materialId && <MaterialSources key={detailItem.materialId} summary={task.sourceSummary} groups={task.sourceGroups} busy={detailBusy} onLoad={(region, offset) => {
+      const expected = ++detailSequence.current; setDetailBusy(true); void action({ action: "details", materialId: detailItem.materialId, sourceQuery: { region, offset, limit: 100 } }, false).finally(() => { if (expected === detailSequence.current) setDetailBusy(false); });
+    }} />}
     <section className="stockpile-detail-section stockpile-recipe-section">
       <Button className="stockpile-recipe-toggle" variant="ghost" size="sm" aria-expanded={recipeOpen} onClick={() => { setRecipeOpen(!recipeOpen); if (!recipeOpen) recipeRequested.current = null; }}><ChevronDown size={14} />{t("stockpile.recipeAndMaterials")}</Button>
       {recipeOpen && preferences.showAdvancedRecipeTree && detailTree && <RecipeTreeView node={detailTree} iconImages={task.iconImages} itemNames={task.itemNames} language={preferences.language} showUnresolved={preferences.showUnresolvedRecipes} />}
       {recipeOpen && !preferences.showAdvancedRecipeTree && <p className="muted">{t("stockpile.recipeDisplayDisabled")}</p>}
-      {recipeOpen && preferences.showAdvancedRecipeTree && !detailTree && <p className="muted">{busy ? t("editor.loading") : t(detailMaterial?.recipe_status === "available" ? "stockpile.recipeCachedNoTree" : detailMaterial?.recipe_status === "unresolved" ? "stockpile.recipeUnresolved" : "stockpile.recipeUnavailable")}</p>}
+      {recipeOpen && preferences.showAdvancedRecipeTree && !detailTree && <p className="muted">{detailBusy ? t("editor.loading") : t(detailMaterial?.recipe_status === "available" ? "stockpile.recipeCachedNoTree" : detailMaterial?.recipe_status === "unresolved" ? "stockpile.recipeUnresolved" : "stockpile.recipeUnavailable")}</p>}
     </section>
   </div> : <div className="stockpile-detail-empty">{t(rows.length ? "stockpile.selectMaterial" : "statistics.noMatches")}</div>;
 
@@ -630,11 +539,11 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
         {onOpenMaterials && <Button size="sm" variant="outline" onClick={onOpenMaterials}>{t("stockpile.materialCatalog")}</Button>}
         <Button size="sm" variant="secondary" disabled={!task && !materialExportContent} onClick={() => beginExport()}><Download size={15} />{t("stockpile.openExport")}</Button>
         <Button size="sm" variant="ghost" disabled={!task} onClick={() => setSettingsOpen(true)}><Settings size={16} />{t("stockpile.taskSettings")}</Button>
-        <StockpileMenu label={t("stockpile.taskMore")} iconOnly disabled={!task}>
-          <DropdownMenu.Item className="stockpile-menu-item" disabled={busy || !task} onSelect={() => beginExport("task", "json")}>{t("stockpile.exportBackup")}</DropdownMenu.Item>
-          <DropdownMenu.Item className="stockpile-menu-item" disabled={busy} onSelect={() => void backup(true)}>{t("stockpile.importBackup")}</DropdownMenu.Item>
+        <StockpileMenu label={t("stockpile.taskMore")} iconOnly>
+          <DropdownMenu.Item className="stockpile-menu-item" disabled={loading || !task?.view.capabilities.backup} title={task?.view.capabilities.reason} onSelect={() => void backup(false)}>{t("stockpile.exportBackup")}</DropdownMenu.Item>
+          <DropdownMenu.Item className="stockpile-menu-item" disabled={loading || task?.view.capabilities.import === false} title={task?.view.capabilities.reason} onSelect={() => void backup(true)}>{t("stockpile.importBackup")}</DropdownMenu.Item>
           <DropdownMenu.Separator className="stockpile-menu-separator" />
-          <DropdownMenu.Item className="stockpile-menu-item is-danger" disabled={busy || !task || !!recovery || !!error} onSelect={() => task && setConfirmation({ taskId: task.taskId, sourceRevision: task.sourceRevision, name: task.name, scope: scopeLabel })}>{t("stockpile.reset")}</DropdownMenu.Item>
+          <DropdownMenu.Item className="stockpile-menu-item is-danger" disabled={busy || !task?.view.capabilities.reset || !!recovery || !!error} onSelect={() => task && setConfirmation({ taskId: task.taskId, sourceRevision: task.sourceRevision, name: task.name, scope: scopeLabel })}>{t("stockpile.reset")}</DropdownMenu.Item>
         </StockpileMenu>
       </div>
     </header>
@@ -679,14 +588,14 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
             </TableRow></TableHeader>
             <TableBody>{virtual.topSpacerHeight > 0 && <TableRow aria-hidden className="stockpile-spacer-row"><VirtualSpacerCell colSpan={7} height={virtual.topSpacerHeight} /></TableRow>}
               {virtual.visibleItems.map((item, index) => {
-                const material = metadata.get(item.materialId), name = materialName(material, preferences.language, item.materialId), state = itemState(item);
+                const material = item.material, name = item.displayName, state = item.displayStatus;
                 return <TableRow key={item.materialId} className={`stockpile-row ${(virtual.startIndex + index) % 2 ? "material-list-row-odd" : "material-list-row-even"}${detailId === item.materialId ? " is-selected" : ""}`}
                   aria-selected={detailId === item.materialId} tabIndex={0} onClick={() => showDetails(item.materialId)} onKeyDown={event => { if (event.currentTarget === event.target && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); showDetails(item.materialId); } }}>
                   <TableCell className="stockpile-cell-check" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}><Checkbox checked={selectedIds.has(item.materialId)} aria-label={t("stockpile.selectNamed", { name })} onCheckedChange={checked => toggleSelected(item.materialId, checked === true)} /></TableCell>
-                  <TableCell className="stockpile-cell-name"><div className="beta-material-name">{task && <StockpileIcon task={task} iconKey={material?.item_icon_key || item.materialId.split("#")[0]} />}<span title={`${name}\n${item.materialId}`}>{name}{(item.materialId.includes("#") || preferences.showIconFallbackBadge && material?.icon_available === false && !!material.icon_diagnostic) && <small title={material?.icon_diagnostic || undefined}>{item.materialId.includes("#") ? item.materialId : ""}{preferences.showIconFallbackBadge && material?.icon_available === false && !!material.icon_diagnostic ? `${item.materialId.includes("#") ? " · " : ""}${t("stockpile.iconFallbackBadge")}` : ""}</small>}</span></div></TableCell>
-                  <TableCell className="stockpile-cell-required" title={String(item.requiredCount)}>{displayQuantity(item, item.requiredCount)}</TableCell>
-                  <TableCell className="stockpile-cell-prepared" title={displayQuantity(item, item.quantity)}><QuantityInput value={latestQuantity(item)} label={t("stockpile.preparedFor", { name })} onQuantity={quantity => { if (queue.current?.task.taskId === task?.taskId) changeQuantity(item.materialId, quantity); }} onAdjust={delta => adjustQuantity(item, delta)} onDraft={quantity => task && rememberQuantity(task.taskId, task.sourceRevision, item.materialId, quantity)} /></TableCell>
-                  <TableCell className="stockpile-cell-remaining" title={String(item.remainingCount)}>{displayQuantity(item, item.remainingCount)}</TableCell>
+                  <TableCell className="stockpile-cell-name"><div className="beta-material-name">{task && <StockpileIcon task={task} iconKey={item.material.item_icon_key} />}<span title={`${name}\n${item.materialId}`}>{name}{preferences.showIconFallbackBadge && material?.icon_available === false && !!material.icon_diagnostic && <small title={material.icon_diagnostic}>{t("stockpile.iconFallbackBadge")}</small>}</span></div></TableCell>
+                  <TableCell className="stockpile-cell-required" title={String(item.requiredCount)}>{displayQuantity(item, "required")}</TableCell>
+                  <TableCell className="stockpile-cell-prepared" title={displayQuantity(item, "prepared")}><QuantityInput value={latestQuantity(item)} label={t("stockpile.preparedFor", { name })} onQuantity={quantity => { if (queue.current?.task.taskId === task?.taskId) changeQuantity(item.materialId, quantity); }} onAdjust={delta => adjustQuantity(item, delta)} onDraft={quantity => task && rememberQuantity(task.taskId, task.sourceRevision, item.materialId, quantity)} /></TableCell>
+                  <TableCell className="stockpile-cell-remaining" title={String(item.remainingCount)}>{displayQuantity(item, "remaining")}</TableCell>
                   <TableCell className="stockpile-cell-status"><span className={`stockpile-status${state === "done" ? " is-done" : state === "overfilled" ? " is-overfilled" : ""}`}>{t(`stockpile.state.${state}`)}</span>{item.overfilledCount > 0 && <small className="stockpile-status is-overfilled">{t("stockpile.overfilledValue", { count: item.overfilledCount })}</small>}</TableCell>
                   <TableCell className="stockpile-cell-actions" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}><div className="stockpile-row-actions">
                     <Button size="sm" variant="ghost" title={t(item.complete ? "stockpile.undoComplete" : "stockpile.markCompleteAction")} aria-label={t(item.complete ? "stockpile.undoComplete" : "stockpile.markCompleteAction")} onClick={() => completeItem(item)}>{t(item.complete ? "stockpile.undoCompleteShort" : "stockpile.complete")}</Button>
@@ -705,6 +614,11 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
         </div>
       </div>
     </div>
+    {task && task.view.totalRows > task.view.limit && <nav className="stockpile-pagination" aria-label={t("statistics.pages")}>
+      <Button size="sm" disabled={busy || task.view.offset === 0} onClick={() => { const offset = Math.max(0, task.view.offset - task.view.limit); setPageOffset(offset); void action({ action: "select", query: { offset, limit: 200 } }, false); }}>{t("statistics.previousPage")}</Button>
+      <span>{t("statistics.pageRange", { start: task.view.offset + 1, end: task.view.offset + rows.length, total: task.view.totalRows })}</span>
+      <Button size="sm" disabled={busy || task.view.offset + rows.length >= task.view.totalRows} onClick={() => { const offset = task.view.offset + task.view.limit; setPageOffset(offset); void action({ action: "select", query: { offset, limit: 200 } }, false); }}>{t("statistics.nextPage")}</Button>
+    </nav>}
     {exportOpen && <Dialog title={t("stockpile.openExport")} onClose={() => setExportOpen(false)} width="lg" className="stockpile-export-dialog" busy={exportBusy}
       footer={<><Button variant="ghost" disabled={exportBusy} onClick={() => setExportOpen(false)}>{t("editor.cancel")}</Button>
         {!(exportSource === "materials" && materialExportContent) && <Button disabled={exportBusy || busy || !task} onClick={() => void confirmExport()}>{t(exportFormat === "copy" ? "stockpile.confirmCopy" : "stockpile.confirmExport")}</Button>}</>}>
@@ -726,7 +640,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
         {error && <p className="subwindow-error" role="alert">{error}</p>}
       </>}
     </Dialog>}
-    {drawerOpen && detailItem && <Dialog title={t("stockpile.materialDetails")} onClose={() => setDrawerOpen(false)} className="stockpile-detail-drawer" width="lg"><div className="stockpile-detail-scroll">{detailsContent}</div></Dialog>}
+    {drawerOpen && detailItem && <Dialog title={t("stockpile.materialDetails")} onClose={() => setDrawerOpen(false)} className="stockpile-material-detail-dialog" width="lg"><div className="stockpile-detail-scroll">{detailsContent}</div></Dialog>}
     {settingsOpen && task && <Dialog title={t("stockpile.settings")} onClose={() => setSettingsOpen(false)} width="lg" className="stockpile-settings-dialog">
       <div className="stockpile-settings-grid">
         <label>{t("statistics.copies")}<Input type="number" min={1} step={1} value={copiesDraft} onChange={event => {
@@ -754,7 +668,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
         <label className="beta-material-check"><Checkbox checked={preferences.showUnresolvedRecipes} onCheckedChange={checked => preference("showUnresolvedRecipes", checked === true)} />{t("stockpile.unresolvedRecipes")}</label>
         <label className="beta-material-check"><Checkbox checked={preferences.showIconFallbackBadge} onCheckedChange={checked => preference("showIconFallbackBadge", checked === true)} />{t("stockpile.iconFallbackBadge")}</label>
       </div>
-      <div className="stockpile-list-actions"><Button size="sm" disabled={busy} onClick={() => beginExport("task", "json")}><Download size={15} />{t("stockpile.exportBackup")}</Button><Button size="sm" disabled={busy} onClick={() => void backup(true)}><Upload size={15} />{t("stockpile.importBackup")}</Button>
+      <div className="stockpile-list-actions"><Button size="sm" disabled={loading || !task.view.capabilities.backup} onClick={() => void backup(false)}><Download size={15} />{t("stockpile.exportBackup")}</Button><Button size="sm" disabled={loading || !task.view.capabilities.import} onClick={() => void backup(true)}><Upload size={15} />{t("stockpile.importBackup")}</Button>
         <span className="muted">{t("stockpile.createdAt", { date: new Date(task.createdAt > 1e12 ? task.createdAt : task.createdAt * 1000).toLocaleString(locale) })}</span>
         <span className="muted">{t("stockpile.updatedAt", { date: new Date(task.updatedAt > 1e12 ? task.updatedAt : task.updatedAt * 1000).toLocaleString(locale) })}</span></div>
     </Dialog>}
@@ -777,9 +691,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
       try { saveUpdateDraft(draftKey(recovery.taskId), undefined); setRecovery(null); setRecoveryOpen(false); } catch (failure) { setError(String(failure)); }
     }}>{t("stockpile.discardRecovery")}</Button><Button disabled={task?.taskId !== recovery.taskId || busy} onClick={() => {
       const work = queue.current; if (!work || work.task.taskId !== recovery.taskId) return;
-      const validItems = new Set(work.task.items.map(item => item.materialId));
       for (const [key, command] of recoverableStockpileCommands(recovery.commands)) {
-        if (command.mutation?.materialId && !validItems.has(command.mutation.materialId)) continue;
         work.pending.set(key, command);
       }
       const savedPreferences = work.pending.get("settings")?.preferences;

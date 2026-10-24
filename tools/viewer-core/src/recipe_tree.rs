@@ -10,8 +10,10 @@ use crate::stockpile::StockpileMaterialsData;
 
 pub const MAX_RECIPE_DEPTH: u32 = 12;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MaterialRecipeOption {
+    pub display_name: String,
+    pub recipe_type_name: String,
     pub recipe_id: String,
     pub recipe_type: String,
     pub output_count: u64,
@@ -21,8 +23,7 @@ pub struct MaterialRecipeOption {
 pub fn resolve_material_detail(minecraft_version: &str, item_id: &str, count: u64, selected_recipe: Option<&str>)
     -> Result<(Vec<MaterialRecipeOption>, Option<RecipeTreeNode>)>
 {
-    let Some(recipes) = recipe_cache::load_available_recipes(minecraft_version)? else { return Ok((Vec::new(), None)); };
-    let resolver = RecipeTreeResolver::with_tags(&recipes, recipe_cache::load_item_tags()?);
+    let Some(resolver) = selected_resolver(minecraft_version)? else { return Ok((Vec::new(), None)); };
     material_detail_from_resolver(&resolver, item_id, count, selected_recipe)
 }
 
@@ -32,6 +33,7 @@ fn material_detail_from_resolver(resolver: &RecipeTreeResolver, item_id: &str, c
     let candidates = resolver.candidates.get(item_id);
     let options = candidates.into_iter().flatten().map(|candidate| MaterialRecipeOption {
         recipe_id: candidate.recipe_id.clone(), recipe_type: candidate.recipe_type.clone(), output_count: candidate.output_count,
+        display_name: display_name(&candidate.output_item), recipe_type_name: recipe_type_name(&candidate.recipe_type,"en-US"),
     }).collect();
     let tree = if let Some(id) = selected_recipe.filter(|id| !id.is_empty()) {
         let candidate = candidates.into_iter().flatten().find(|candidate| candidate.recipe_id == id)
@@ -43,6 +45,8 @@ fn material_detail_from_resolver(resolver: &RecipeTreeResolver, item_id: &str, c
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecipeTreeNode {
+    #[serde(default)] pub recipe_type_name: String,
+    #[serde(default)] pub tag_display_name: Option<String>,
     pub node_id: String,
     pub item_id: String,
     pub display_name: String,
@@ -68,6 +72,7 @@ pub struct RecipeTreeNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecipeTreeIngredient {
+    #[serde(default)] pub tag_display_name: Option<String>,
     pub item_id: String,
     pub display_name: String,
     pub icon_key: String,
@@ -132,11 +137,7 @@ pub fn resolve_recipe_trees_for_materials(
     minecraft_version: &str,
     materials: &StockpileMaterialsData,
 ) -> Result<BTreeMap<String, RecipeTreeNode>> {
-    let Some(recipes) = recipe_cache::load_available_recipes(minecraft_version)? else {
-        return Ok(BTreeMap::new());
-    };
-    let tags = recipe_cache::load_item_tags()?;
-    let resolver = RecipeTreeResolver::with_tags(&recipes, tags);
+    let Some(resolver) = selected_resolver(minecraft_version)? else {return Ok(BTreeMap::new());};
     Ok(materials.materials.iter().filter(|material| material.recipe_status == "available").map(|material| (material.namespace_id.clone(), resolver.resolve(&material.namespace_id, material.required_count))).collect())
 }
 
@@ -156,6 +157,94 @@ pub fn resolve_recipe_trees_from_recipes(
             )
         })
         .collect()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct MaterialRecipeBatchEntry {
+    pub material_id:String,
+    pub item_id:String,
+    pub required_count:u64,
+    pub recipe_status:String,
+    pub recipe_options:Vec<MaterialRecipeOption>,
+    pub recipe_tree_key:Option<String>,
+}
+
+/// One selected-resource resolver for the complete material set. Inventory
+/// identities remain distinct; identical recipe semantics/counts are resolved
+/// once even when multiple NBT variants request that same computation.
+pub fn resolve_material_batch(version:&str,materials:&StockpileMaterialsData,cancel:&dyn Fn()->bool)
+    ->Result<(Vec<MaterialRecipeBatchEntry>,BTreeMap<String,RecipeTreeNode>)>
+{
+    anyhow::ensure!(!cancel(),"Cancelled");
+    let resolver=selected_resolver(version)?;
+    let mut memo=BTreeMap::<(String,u64),(Vec<MaterialRecipeOption>,Option<RecipeTreeNode>)>::new();
+    let mut entries=Vec::with_capacity(materials.materials.len());let mut trees=BTreeMap::new();
+    for material in &materials.materials {
+        anyhow::ensure!(!cancel(),"Cancelled");
+        let semantic=(material.item_icon_key.clone(),material.required_count);
+        let (options,tree)=if let Some(found)=memo.get(&semantic){found.clone()}else{
+            let result=if let Some(resolver)=resolver.as_ref(){material_detail_from_resolver(resolver,&material.item_icon_key,material.required_count,None)?}else{(Vec::new(),None)};
+            memo.insert(semantic,result.clone());result
+        };
+        let tree_key=tree.map(|tree|{trees.insert(material.namespace_id.clone(),tree);material.namespace_id.clone()});
+        entries.push(MaterialRecipeBatchEntry{material_id:material.namespace_id.clone(),item_id:material.item_icon_key.clone(),required_count:material.required_count,
+            recipe_status:if options.is_empty(){"no_available_recipe"}else{"ready"}.into(),recipe_options:options,recipe_tree_key:tree_key});
+    }
+    Ok((entries,trees))
+}
+
+/// Resolve each distinct tag translation once for the complete tree set.
+pub(crate) fn localize_trees(trees:&mut BTreeMap<String,RecipeTreeNode>,locale:&str,names:&mut BTreeMap<String,String>)->Result<()> {
+    fn collect(node:&RecipeTreeNode,tags:&mut BTreeSet<String>){
+        if let Some(tag)=node.tag.as_ref(){tags.insert(tag.clone());}
+        for ingredient in &node.ingredients{if let Some(tag)=ingredient.tag.as_ref(){tags.insert(tag.clone());}}
+        for child in &node.children{collect(child,tags);}
+    }
+    let mut tags=BTreeSet::new();for tree in trees.values(){collect(tree,&mut tags);}
+    for tag in tags{names.insert(tag.clone(),localized_tag(&tag,locale)?);}
+    for tree in trees.values_mut(){localize_tree(tree,locale,names)?;}Ok(())
+}
+
+fn selected_resolver(version:&str)->Result<Option<std::sync::Arc<RecipeTreeResolver>>> {
+    use std::sync::{Arc,Mutex,OnceLock};
+    static RESOLVERS:OnceLock<Mutex<BTreeMap<String,Arc<RecipeTreeResolver>>>>=OnceLock::new();
+    let identity=crate::game_data::active_context()?.content_id;
+    let cache=RESOLVERS.get_or_init(Default::default);
+    if let Some(value)=cache.lock().map_err(|_|anyhow::anyhow!("recipe resolver lock poisoned"))?.get(&identity).cloned(){return Ok(Some(value));}
+    let Some(recipes)=recipe_cache::load_available_recipes(version)?else{return Ok(None);};
+    let resolver=Arc::new(RecipeTreeResolver::with_tags(&recipes,recipe_cache::load_item_tags()?));
+    let mut cache=cache.lock().map_err(|_|anyhow::anyhow!("recipe resolver lock poisoned"))?;
+    if cache.len()>=4{cache.clear();}cache.insert(identity,resolver.clone());Ok(Some(resolver))
+}
+
+pub fn recipe_type_name(kind:&str,locale:&str)->String {
+    let id=kind.strip_prefix("minecraft:").unwrap_or(kind);
+    let zh=locale.starts_with("zh");
+    match id {
+        "crafting_shaped"=>if zh{"有序合成"}else{"Shaped crafting"},"crafting_shapeless"=>if zh{"无序合成"}else{"Shapeless crafting"},
+        "smelting"=>if zh{"熔炉烧炼"}else{"Furnace smelting"},"blasting"=>if zh{"高炉冶炼"}else{"Blasting"},"smoking"=>if zh{"烟熏炉烹饪"}else{"Smoking"},
+        "stonecutting"=>if zh{"切石机加工"}else{"Stonecutting"},"campfire_cooking"=>if zh{"营火烹饪"}else{"Campfire cooking"},
+        "smithing_transform"=>if zh{"锻造升级"}else{"Smithing upgrade"},"smithing_trim"=>if zh{"盔甲纹饰"}else{"Armor trimming"},
+        "direct"|"raw"=>if zh{"直接获取"}else{"Direct acquisition"},_=>return crate::data_view::friendly_fallback("",kind),
+    }.into()
+}
+fn localized_tag(tag:&str,locale:&str)->Result<String> {
+    let raw=tag.trim_start_matches('#'); let (namespace,path)=raw.split_once(':').unwrap_or(("minecraft",raw));
+    let key=format!("tag.item.{namespace}.{}",path.replace('/',"."));
+    Ok(crate::item_names::selected_name(&key,locale)?.unwrap_or_else(||crate::data_view::friendly_fallback("",raw)))
+}
+pub fn localize_tree(node:&mut RecipeTreeNode,locale:&str,names:&BTreeMap<String,String>)->Result<()> {
+    node.recipe_type_name=recipe_type_name(&node.recipe_type,locale);
+    if let Some(tag)=node.tag.as_deref(){let name=if let Some(name)=names.get(tag){name.clone()}else{localized_tag(tag,locale)?};node.display_name=name.clone();node.tag_display_name=Some(name);}
+    else if let Some(name)=names.get(&node.item_id).or_else(||names.get(&node.icon_key)){node.display_name=name.clone();}
+    else {node.display_name=crate::data_view::friendly_fallback(&node.display_name,&node.item_id);}
+    for ingredient in &mut node.ingredients {
+        if let Some(tag)=ingredient.tag.as_deref(){let name=if let Some(name)=names.get(tag){name.clone()}else{localized_tag(tag,locale)?};ingredient.display_name=name.clone();ingredient.tag_display_name=Some(name);}
+        else if let Some(name)=names.get(&ingredient.item_id).or_else(||names.get(&ingredient.icon_key)){ingredient.display_name=name.clone();}
+        else {ingredient.display_name=crate::data_view::friendly_fallback(&ingredient.display_name,&ingredient.item_id);}
+    }
+    for child in &mut node.children {localize_tree(child,locale,names)?;}Ok(())
 }
 
 struct RecipeTreeResolver {
@@ -276,6 +365,7 @@ impl RecipeTreeResolver {
         stack.remove(&candidate.output_item);
 
         RecipeTreeNode {
+            recipe_type_name: String::new(), tag_display_name: None,
             node_id: node_id(&candidate.output_item, depth),
             item_id: candidate.output_item.clone(),
             display_name: display_name(&candidate.output_item),
@@ -643,6 +733,7 @@ fn ingredient_summary(input: &RecipeInput, needed_count: u64, tags: &BTreeMap<St
     };
     match &input.spec {
         InputSpec::Item(item) => RecipeTreeIngredient {
+            tag_display_name: None,
             item_id: item.clone(),
             display_name: format!("{role_prefix}{}", display_name(item)),
             icon_key: item.clone(),
@@ -654,6 +745,7 @@ fn ingredient_summary(input: &RecipeInput, needed_count: u64, tags: &BTreeMap<St
             possible_items: Vec::new(),
         },
         InputSpec::Tag(tag) => RecipeTreeIngredient {
+            tag_display_name: None,
             item_id: tag.clone(),
             display_name: format!("{role_prefix}{}", tag_display_name(tag)),
             icon_key: possible_items(input, tags).first().cloned().unwrap_or_else(|| "__tag".to_owned()),
@@ -665,6 +757,7 @@ fn ingredient_summary(input: &RecipeInput, needed_count: u64, tags: &BTreeMap<St
             possible_items: possible_items(input, tags),
         },
         InputSpec::Alternatives(items) => RecipeTreeIngredient {
+            tag_display_name: None,
             item_id: items.join("|"),
             display_name: format!(
                 "{role_prefix}{}",
@@ -695,6 +788,7 @@ fn tag_node(
     possible_items: Vec<String>,
 ) -> RecipeTreeNode {
     RecipeTreeNode {
+        recipe_type_name: String::new(), tag_display_name: None,
         node_id: node_id(tag, depth),
         item_id: tag.to_string(),
         display_name: tag_display_name(tag),
@@ -721,6 +815,7 @@ fn tag_node(
 
 fn alternative_node(values: &[String], needed_count: u64, depth: u32) -> RecipeTreeNode {
     RecipeTreeNode {
+        recipe_type_name: String::new(), tag_display_name: None,
         node_id: node_id(&values.join("|"), depth),
         item_id: values.join("|"),
         display_name: "Alternative material group".to_string(),
@@ -750,6 +845,7 @@ fn alternative_node(values: &[String], needed_count: u64, depth: u32) -> RecipeT
 
 fn special_node(item_id: &str, needed_count: u64, depth: u32, recipe_type: &str) -> RecipeTreeNode {
     RecipeTreeNode {
+        recipe_type_name: String::new(), tag_display_name: None,
         node_id: node_id(item_id, depth),
         item_id: item_id.to_string(),
         display_name: display_name(item_id),
@@ -776,6 +872,7 @@ fn special_node(item_id: &str, needed_count: u64, depth: u32, recipe_type: &str)
 
 fn unresolved_node(item_id: &str, needed_count: u64, depth: u32, reason: &str) -> RecipeTreeNode {
     RecipeTreeNode {
+        recipe_type_name: String::new(), tag_display_name: None,
         node_id: node_id(item_id, depth),
         item_id: item_id.to_string(),
         display_name: display_name(item_id),
@@ -802,6 +899,7 @@ fn unresolved_node(item_id: &str, needed_count: u64, depth: u32, reason: &str) -
 
 fn direct_node(item_id: &str, needed_count: u64, depth: u32) -> RecipeTreeNode {
     RecipeTreeNode {
+        recipe_type_name: String::new(), tag_display_name: None,
         node_id: node_id(item_id, depth),
         item_id: item_id.to_string(),
         display_name: display_name(item_id),

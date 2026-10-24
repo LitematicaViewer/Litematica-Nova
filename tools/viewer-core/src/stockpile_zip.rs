@@ -1901,6 +1901,7 @@ mod tests {
         depth: u32,
     ) -> RecipeTreeNode {
         RecipeTreeNode {
+            recipe_type_name: String::new(), tag_display_name: None,
             node_id: format!("{}_{}", item_id.replace([':', '#'], "_"), depth),
             item_id: item_id.to_string(),
             display_name: display_name.to_string(),

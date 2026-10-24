@@ -33,6 +33,7 @@ pub(crate) struct ApplicationOperations {
     lifecycle: Arc<(Mutex<OperationLifecycle>, Condvar)>,
     world_exports: Arc<Mutex<BTreeMap<String, WorldExportPaths>>>,
     stockpile_tasks: Arc<Mutex<()>>,
+    data_worker: Arc<super::data_worker::DataWorkerHost>,
     stockpile_project_ids: Arc<Mutex<BTreeMap<AnalysisKey, String>>>,
     iris_inspector: Arc<Mutex<(super::protected_render::ProtectedRender, Option<nova_render_protocol::ProtectedTask>)>>,
 }
@@ -92,6 +93,10 @@ impl AnalysisKey {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields,rename_all="camelCase")]
+pub(crate) struct DataQueryInput { pub(crate) operation_id:String, pub(crate) kind:super::data_worker::protocol::DataKind, pub(crate) input:Value }
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct InspectProjectInput {
@@ -145,7 +150,7 @@ pub(crate) struct ExportWorldInput {
 struct WorldExportPaths { cancel: PathBuf, progress: PathBuf }
 pub(crate) struct WorldExportWork { input: ExportWorldInput, generation: u64, prefix: String, paths: WorldExportPaths }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ConvertProjectVersionInput {
     pub(crate) source_path: String,
@@ -156,6 +161,7 @@ pub(crate) struct ConvertProjectVersionInput {
     pub(crate) output_path: Option<String>,
     #[serde(default)]
     pub(crate) overwrite: bool,
+    pub(crate) selection: Option<Value>,pub(crate) property_edit: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -282,13 +288,14 @@ pub(crate) struct ReplaceBlocksResult {
     pub(crate) output_path: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ProjectStatsInput {
     pub(crate) source_path: String,
     pub(crate) include_container_items: bool,
     #[serde(default)]
     pub(crate) known_revision: Option<String>,
+    #[serde(default)] pub(crate) include_structural_blocks: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -314,13 +321,14 @@ pub(crate) struct ProjectMaterialsInput {
     pub(crate) include_container_items: bool,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase", default)]
 pub(crate) struct StockpileTaskInput {
     source_path: Option<String>, task_id: Option<String>, scope: Option<MaterialScope>,
     include_container_items: Option<bool>, multiplier: Option<u64>,
+    ui_locale:Option<String>, language_map:Option<BTreeMap<String,String>>,
 }
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase", default)]
 pub(crate) struct StockpileTaskCommandInput {
     pub(crate) action: String, pub(crate) task_id: Option<String>, project_id: Option<String>, legacy_task_id: Option<String>,
@@ -328,6 +336,7 @@ pub(crate) struct StockpileTaskCommandInput {
     include_container_items: Option<bool>, multiplier: Option<u64>, name: Option<String>,
     preferences: Option<Value>, mutation: Option<Value>, material_id: Option<String>,
     output_path: Option<String>, input_path: Option<String>,
+    query: Option<Value>, source_query: Option<Value>, export: Option<Value>, ui_locale: Option<String>, language_map: Option<BTreeMap<String,String>>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -381,10 +390,9 @@ pub(crate) struct MaterialRecipeCacheInput { pub(crate) minecraft_version: Strin
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct MaterialDetailInput {
-    pub(crate) material: Value,
-    pub(crate) material_semantics: String,
-    pub(crate) data_version: i32,
-    pub(crate) selected_recipe: Option<String>,
+    pub(crate) source_path:String,pub(crate) material_id:String,
+    #[serde(default)] pub(crate) include_container_items:bool,
+    pub(crate) selected_recipe:Option<String>,pub(crate) ui_locale:Option<String>,pub(crate) language_map:Option<BTreeMap<String,String>>,pub(crate) source_query:Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -483,6 +491,7 @@ impl ApplicationOperations {
                 operations_root.display()
             )
         })?;
+        let data_worker = Arc::new(super::data_worker::DataWorkerHost::new(supervisor.clone(), data_root.clone(), backend_dir.clone()));
         Ok(Self {
             supervisor,
             project_root,
@@ -494,6 +503,7 @@ impl ApplicationOperations {
             lifecycle: Arc::new((Mutex::new(OperationLifecycle::default()), Condvar::new())),
             world_exports: Arc::new(Mutex::new(BTreeMap::new())),
             stockpile_tasks: Arc::new(Mutex::new(())),
+            data_worker,
             stockpile_project_ids: Arc::new(Mutex::new(BTreeMap::new())),
             iris_inspector: Arc::new(Mutex::new((super::protected_render::ProtectedRender::default(), None))),
         })
@@ -511,6 +521,7 @@ impl ApplicationOperations {
     pub(crate) fn begin_shutdown(&self) -> Vec<ChildLease> {
         let mut state = self.lifecycle.0.lock().unwrap();
         state.closing = true;
+        self.data_worker.cancel_reads();
         eprintln!("[NOVA_LIFECYCLE] stage=core_activity_at_close core_calls={} active_reads={} pending_writes={}", json!(state.core_launches), state.reads.len(), state.writes);
         state.reads.values().cloned().collect()
     }
@@ -679,21 +690,12 @@ impl ApplicationOperations {
         result
     }
 
-    pub(crate) fn convert_project_version(&self, input: ConvertProjectVersionInput) -> Result<Value, String> {
-        let source = self.resolve_path(&input.source_path);
-        let output = input.output_path.as_deref().map(|path| self.resolve_path(path));
-        if output.is_some() && input.expected_source_sha256.is_none() {
-            return Err("另存前须确认转换差异".into());
-        }
-        let (generation, prefix) = self.next_operation("version-convert");
-        let mut files = OperationFiles::new();
-        let request_path = files.track(self.operation_path(&prefix, "request.json"));
-        write_json(&request_path, &json!({ "targetVersion": input.target_version, "replacements": input.replacements,
-            "expectedSourceSha256": input.expected_source_sha256, "overwrite": input.overwrite }))?;
-        let mut args = vec!["version-convert".into(), "--input".into(), path_text(&source), "--request".into(), path_text(&request_path)];
-        if let Some(output) = output { args.extend(["--output".into(), path_text(&output)]); }
-        let result = self.run_core(generation, &prefix, args, &mut files)?;
-        serde_json::from_str(result.stdout.trim()).map_err(|error| format!("解析版本转换结果：{error}"))
+    pub(crate) fn convert_project_version(&self, mut input: ConvertProjectVersionInput) -> Result<Value, String> {
+        input.source_path = path_text(&self.resolve_path(&input.source_path));
+        if let Some(path) = input.output_path.as_mut() { *path = path_text(&self.resolve_path(path)); }
+        if input.output_path.is_some() && input.expected_source_sha256.is_none() { return Err("另存前须确认转换差异".into()); }
+        let writing = input.output_path.is_some();
+        self.data_request(super::data_worker::protocol::DataKind::VersionConvert, serde_json::to_value(input).map_err(|e|e.to_string())?, None, writing)
     }
 
     pub(crate) fn query_block_database(&self, input: BlockDatabaseQueryInput) -> Result<Value, String> {
@@ -753,119 +755,27 @@ impl ApplicationOperations {
         })
     }
 
-    pub(crate) fn project_stats(&self, input: ProjectStatsInput) -> Result<Value, String> {
-        let source = self.resolve_path(&input.source_path);
-        let args = stats_args(&source, input.include_container_items);
-        let key = AnalysisKey::new(&source, args.clone())?;
-        let revision = key.revision();
-        // A re-mounted page revalidates the file, not an unbounded frontend
-        // filename cache. Once unchanged, don't clone/encode/transfer the
-        // complete region/layer material breakdown again.
-        if input.known_revision.as_deref() == Some(revision.as_str()) {
-            if self.analysis_cache.lock().map_err(|_| "Statistics cache lock failed")?
-                .get(&key).and_then(|slot| slot.get()).is_some_and(Result::is_ok) {
-                return Ok(json!({ "source_revision": revision, "cache_unchanged": true }));
-            }
-        }
-        let mut analysis = self.cached_analysis(&source, args)?;
-        strip_material_scope_cache(&mut analysis);
-        if let Some(analysis) = analysis.as_object_mut() { analysis.insert("source_revision".into(), revision.into()); }
-        Ok(analysis)
+    pub(crate) fn project_stats(&self, mut input: ProjectStatsInput) -> Result<Value, String> {
+        input.source_path = path_text(&self.resolve_path(&input.source_path));
+        self.data_request(super::data_worker::protocol::DataKind::Stats,serde_json::to_value(input).map_err(|e|e.to_string())?,None,false)
     }
 
     pub(crate) fn project_materials(&self, input: ProjectMaterialsInput) -> Result<Value, String> {
-        let source = self.resolve_path(&input.source_path);
-        let result = self.material_snapshot(&source, &input.scope, input.include_container_items)?;
-        Ok(json!({
-            "material_items": result
-                .get("material_items")
-                .cloned()
-                .unwrap_or_else(|| Value::Array(Vec::new()))
-        }))
+        let value=self.material_snapshot(&self.resolve_path(&input.source_path),&input.scope,input.include_container_items)?;
+        Ok(json!({"material_items":value["material_items"]}))
     }
 
     pub(crate) fn stockpile_task(&self, input: StockpileTaskInput) -> Result<Value, String> {
-        if let Some(id) = input.task_id {
-            return self.run_stockpile_request(&json!({"action":"select","taskId":id}));
-        }
-        let Some(path) = input.source_path.filter(|path| !path.trim().is_empty()) else {
-            return self.run_stockpile_request(&json!({"action":"open"}));
-        };
-        let source = self.resolve_path(&path);
-        let source = fs::canonicalize(&source).unwrap_or(source);
-        // A saved task owns its requirements. Opening it must work even after
-        // its source file is edited, moved, deleted, or the Viewer is closed.
-        let existing = self.run_stockpile_request(&json!({"action":"open","sourcePath":path_text(&source)}))?;
-        if existing.get("task").is_some_and(|task| !task.is_null()) { return Ok(existing); }
-        if !source.is_file() { return Ok(existing); }
-        let project_id = self.stockpile_project_id(&source)?;
-        let existing = self.run_stockpile_request(&json!({"action":"open","sourcePath":path_text(&source),"projectId":project_id}))?;
-        if existing.get("task").is_some_and(|task| !task.is_null()) { return Ok(existing); }
-        let mut request = json!({"action":"open"});
-        self.prepare_stockpile_source(&mut request, &source, input.scope, input.include_container_items.unwrap_or(false), input.multiplier.unwrap_or(1))?;
-        self.run_stockpile_request(&request)
+        let mut request=serde_json::to_value(input).map_err(|e|e.to_string())?;
+        request["action"] = if request["taskId"].is_string() {"select"} else {"open"}.into();
+        self.data_request(super::data_worker::protocol::DataKind::Stockpile,request,None,true)
     }
 
     pub(crate) fn stockpile_task_command(&self, input: StockpileTaskCommandInput) -> Result<Value, String> {
-        if !matches!(input.action.as_str(), "open"|"list"|"create"|"select"|"rename"|"sync"|"settings"|"mutate"|"details"|"export"|"import"|"bindLegacy") {
-            return Err("未知备货任务操作".into());
-        }
-        let mut request = json!({"action": input.action});
-        for (key, value) in [("taskId",input.task_id.map(Value::String)), ("projectId",input.project_id.map(Value::String)), ("legacyTaskId",input.legacy_task_id.map(Value::String)),
-            ("sourceRevision",input.source_revision.map(Value::String)), ("expectedRevision",input.expected_revision.map(Value::String)), ("name",input.name.map(Value::String)),
-            ("preferences",input.preferences), ("mutation",input.mutation), ("materialId",input.material_id.map(Value::String)),
-            ("multiplier",input.multiplier.map(Value::from))] {
-            if let Some(value) = value { request[key] = value; }
-        }
-        if input.action == "sync" || input.action == "bindLegacy" || input.action == "create" && request["taskId"].is_null() {
-            let source = input.source_path.as_deref().filter(|path| !path.trim().is_empty()).ok_or("请选择备货任务的来源投影")?;
-            let source = self.resolve_path(source);
-            if input.action == "sync" {
-                // Explicit requirement refresh is the only task action that
-                // discards an old resource-bound analysis. Ordinary task reads
-                // and item edits keep using their durable demand snapshot.
-                let canonical = fs::canonicalize(&source).map_err(|error| format!("读取备货来源：{error}"))?;
-                self.analysis_cache.lock().map_err(|_|"材料快照缓存锁异常")?.retain(|key,_|key.source != canonical);
-            }
-            self.prepare_stockpile_source(&mut request, &source, input.scope, input.include_container_items.unwrap_or(false), input.multiplier.unwrap_or(1))?;
-        }
-        if input.action == "select" {
-            if let Some(path) = input.source_path.as_deref() {
-                let source = self.resolve_path(path);
-                if source.is_file() && request["projectId"].as_str().is_some_and(|id|self.stockpile_project_id(&source).is_ok_and(|actual|actual==id)) {
-                    request["sourcePath"] = path_text(&fs::canonicalize(&source).map_err(|error|error.to_string())?).into();
-                }
-            }
-        }
-        if input.action == "import" {
-            let source = self.resolve_path(input.input_path.as_deref().ok_or("请选择任务备份 JSON")?);
-            let metadata = fs::metadata(&source).map_err(|error| format!("读取备份：{error}"))?;
-            if !metadata.is_file() || metadata.len() > 64 * 1024 * 1024 { return Err("任务备份不是有效文件或超过 64 MiB".into()); }
-            request["backup"] = serde_json::from_slice(&fs::read(&source).map_err(|error|format!("读取备份：{error}"))?)
-                .map_err(|error|format!("任务备份 JSON 无效：{error}"))?;
-        }
-        let mut result = self.run_stockpile_request(&request)?;
-        if input.action == "export" {
-            let _write = self.begin_write()?;
-            let destination = self.resolve_path(input.output_path.as_deref().ok_or("请选择备份保存位置")?);
-            if !destination.extension().and_then(|extension|extension.to_str()).is_some_and(|extension|extension.eq_ignore_ascii_case("json")) || !destination.parent().is_some_and(Path::is_dir) {
-                return Err("请将任务备份另存为现有目录中的 JSON 文件".into());
-            }
-            let backup = result.get("backup").filter(|backup| !backup.is_null()).ok_or("备货模块未返回有效备份")?;
-            let generation = self.next_generation.fetch_add(1,Ordering::Relaxed);
-            let temporary = destination.with_extension(format!("nova-task-{generation}.tmp"));
-            let mut files = OperationFiles::new(); files.track(temporary.clone());
-            use std::io::Write;
-            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|error|format!("创建备份：{error}"))?;
-            serde_json::to_writer_pretty(&mut file,backup).map_err(|error|format!("写入备份：{error}"))?;
-            file.flush().and_then(|_|file.sync_all()).map_err(|error|format!("保存备份：{error}"))?;
-            drop(file);
-            fs::rename(&temporary,&destination).map_err(|error|format!("完成备份保存：{error}"))?;
-            result.as_object_mut().unwrap().remove("backup");
-            result["outputPath"] = path_text(&destination).into();
-        }
-        Ok(result)
+        let writing = !matches!(input.action.as_str(),"details"|"query"|"exportView"|"list");
+        self.data_request(super::data_worker::protocol::DataKind::Stockpile,serde_json::to_value(input).map_err(|e|e.to_string())?,None,writing)
     }
+
     pub(crate) fn set_stockpile_quantity(&self, input: StockpileTaskSetInput) -> Result<Value, String> {
         self.run_stockpile_request(&json!({"action":"mutate","taskId":input.task_id,"sourceRevision":input.source_revision,
             "mutation":{"materialId":input.material_id,"quantity":input.quantity,"status":"done"}}))
@@ -888,39 +798,9 @@ impl ApplicationOperations {
         if cache.len() >= 16 { if let Some(old) = cache.keys().next().cloned() { cache.remove(&old); } }
         cache.insert(key,id.clone()); Ok(id)
     }
-    fn prepare_stockpile_source(&self, request: &mut Value, source: &Path, scope: Option<MaterialScope>, containers: bool, multiplier: u64) -> Result<(), String> {
-        if !(1..=1_000_000).contains(&multiplier) { return Err("建造份数必须为 1…1000000".into()); }
-        let scope = scope.unwrap_or(MaterialScope {kind:MaterialScopeKind::All,value:None});
-        let key = AnalysisKey::new(source,stats_args(source,containers))?;
-        let snapshot = self.material_snapshot(source,&scope,containers)?;
-        let project_id = self.stockpile_project_id(source)?;
-        if AnalysisKey::new(source,key.args.clone())? != key { return Err("投影已更新，请重新加载备货需求".into()); }
-        if request["legacyTaskId"].is_null() { request["legacyTaskId"] = desktop_task_identity(&key.source,&scope,containers,multiplier,&snapshot).into(); }
-        request["projectId"] = project_id.clone().into();
-        request["sourcePath"] = path_text(&key.source).into(); request["sourceRevision"] = key.revision().into();
-        request["snapshot"] = snapshot; request["multiplier"] = multiplier.into();
-        request["context"] = json!({"scope":scope,"includeContainerItems":containers,"sourceContentId":project_id,"sourceFileRevision":key.revision()});
-        Ok(())
-    }
+
     fn run_stockpile_request(&self, request: &Value) -> Result<Value, String> {
-        let _task = self.stockpile_tasks.lock().map_err(|_|"备货任务操作锁异常")?;
-        let (generation, prefix) = self.next_operation("stockpile-task");
-        let mut files = OperationFiles::new();
-        let request_path = files.track(self.operation_path(&prefix,"request.json"));
-        write_json(&request_path,request)?;
-        let result = self.run_core(generation,&prefix,vec!["stockpile-task".into(),path_text(&request_path)],&mut files)?;
-        let mut result = parse_core_json(&result.stdout)?;
-        if let Some(task) = result.get_mut("task").filter(|task|!task.is_null()) {
-            if let Some(path) = task["sourcePath"].as_str() {
-                let source = self.resolve_path(path);
-                task["sourceStatus"] = if !source.is_file() { "missing" } else {
-                    let containers = task.pointer("/context/includeContainerItems").and_then(Value::as_bool).unwrap_or(false);
-                    let captured = task.pointer("/context/sourceFileRevision").and_then(Value::as_str);
-                    if captured.is_some_and(|captured|AnalysisKey::new(&source,stats_args(&source,containers)).is_ok_and(|current|current.revision()!=captured)) { "changed" } else { "current" }
-                }.into();
-            }
-        }
-        Ok(result)
+        self.data_request(super::data_worker::protocol::DataKind::Stockpile,request.clone(),None,true)
     }
 
     pub(crate) fn export_material_list(&self, input: ExportMaterialListInput) -> Result<Value, String> {
@@ -949,15 +829,7 @@ impl ApplicationOperations {
     }
 
     pub(crate) fn read_material_detail(&self, input: MaterialDetailInput) -> Result<Value, String> {
-        // This lookup consumes a single row from an existing snapshot. It must
-        // not material_snapshot()/cached_analysis(), select/create a task or
-        // acquire the task writer merely because a catalog row was selected.
-        let (generation, prefix) = self.next_operation("material-detail");
-        let mut files = OperationFiles::new();
-        let request_path = files.track(self.operation_path(&prefix, "request.json"));
-        write_json(&request_path, &serde_json::to_value(input).map_err(|error| error.to_string())?)?;
-        let result = self.run_core(generation, &prefix, vec!["material-detail".into(), path_text(&request_path)], &mut files)?;
-        parse_core_json(&result.stdout)
+        self.data_request(super::data_worker::protocol::DataKind::MaterialDetail,serde_json::to_value(input).map_err(|e|e.to_string())?,None,false)
     }
 
     pub(crate) fn prepare_material_recipes(&self, input: MaterialRecipeCacheInput) -> Result<Value, String> {
@@ -966,10 +838,7 @@ impl ApplicationOperations {
     }
 
     fn material_snapshot(&self, source: &Path, scope: &MaterialScope, include_container_items: bool) -> Result<Value, String> {
-        // Revalidate the same all-scope snapshot for every selection/export.
-        // Joint block/container channels were collected in the original pass;
-        // changing a scope must not reopen/decompress/parse the projection.
-        material_snapshot_for_scope(self.cached_analysis(source, stats_args(source, include_container_items))?, scope)
+        self.data_request(super::data_worker::protocol::DataKind::Analysis,json!({"sourcePath":path_text(source),"scope":scope,"includeContainerItems":include_container_items}),None,false)
     }
 
     fn cached_analysis(&self, source: &Path, args: Vec<String>) -> Result<Value, String> {
@@ -1337,6 +1206,22 @@ impl ApplicationOperations {
         Ok(CoreOutput { stdout })
     }
 
+    pub(crate) fn data_query(&self, query: DataQueryInput) -> Result<Value, String> {
+        use super::data_worker::protocol::DataKind;
+        if matches!(query.kind,DataKind::Analysis|DataKind::Cancel) { return Err("Unsupported public data query".into()); }
+        let writing=matches!(query.kind,DataKind::Stockpile)||query.kind==DataKind::VersionConvert&&query.input["outputPath"].is_string();
+        self.data_request(query.kind,query.input,Some(query.operation_id),writing)
+    }
+    pub(crate) fn data_operation_status(&self, id:&str, cancel:bool) -> Result<Value,String> { self.data_worker.status(id,cancel) }
+    fn data_request(&self,kind:super::data_worker::protocol::DataKind,mut input:Value,id:Option<String>,writing:bool)->Result<Value,String>{
+        if self.lifecycle.0.lock().map_err(|_|"任务状态锁异常")?.closing {return Err("应用正在关闭，新的数据任务已取消".into());}
+        let _write=if writing{Some(self.begin_write()?)}else{None};
+        if let Some(path)=input["sourcePath"].as_str().filter(|path|!path.is_empty()){input["sourcePath"]=path_text(&self.resolve_path(path)).into();}
+        for key in ["inputPath","outputPath"]{if let Some(path)=input[key].as_str().filter(|path|!path.is_empty()){input[key]=path_text(&self.resolve_path(path)).into();}}
+        let operation_id=id.unwrap_or_else(||self.next_operation("data").1);
+        self.data_worker.execute(super::data_worker::protocol::DataRequest{operation_id,kind,input})
+    }
+
     fn resolve_path(&self, value: &str) -> PathBuf {
         let path = PathBuf::from(value);
         if path.is_absolute() {
@@ -1413,102 +1298,12 @@ fn decode_product<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Str
     serde_json::from_value(value).map_err(|error| format!("Core operation returned invalid product data: {error}"))
 }
 
-fn strip_material_scope_cache(snapshot: &mut Value) {
-    for field in ["material_items", "non_item_blocks", "structural_block_counts"] {
-        if let Some(rows) = snapshot.get_mut(field).and_then(Value::as_array_mut) {
-            for row in rows { if let Some(row) = row.as_object_mut() { row.remove("scope_counts"); } }
-        }
-    }
-    if let Some(scan) = snapshot.get_mut("container_scan").and_then(Value::as_object_mut) { scan.remove("scope_entries"); }
-}
-
-fn material_snapshot_for_scope(mut snapshot: Value, scope: &MaterialScope) -> Result<Value, String> {
-    if scope.kind == MaterialScopeKind::All { strip_material_scope_cache(&mut snapshot); return Ok(snapshot); }
-    // Whole-structure derivation is not a material-scope result. Never retain
-    // global ratios on a selected-region/layer DTO. Scoped Core omits it too.
-    snapshot.as_object_mut().ok_or("统计快照格式异常")?.remove("derived");
-    let value = scope.value.as_deref().filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "请选择有效统计范围".to_owned())?;
-    let selected_layer = if scope.kind == MaterialScopeKind::Layer {
-        Some(value.parse::<i32>().map_err(|_| "层数必须是整数".to_owned())?)
-    } else { None };
-    let summaries = snapshot[if selected_layer.is_some() { "layers_summary" } else { "regions" }]
-        .as_array().ok_or_else(|| "统计快照缺少范围信息".to_owned())?;
-    let summary = summaries.iter().find(|row| if let Some(layer) = selected_layer {
-        row["layer"].as_i64() == Some(i64::from(layer))
-    } else { row["name"].as_str() == Some(value) }).cloned().ok_or_else(|| "统计范围已不存在，请重新选择".to_owned())?;
-    let layer_y = snapshot["layers_summary"].as_array().unwrap().iter()
-        .filter_map(|row| Some((row["layer"].as_i64()?, row["world_y"].as_i64()?))).collect::<BTreeMap<_, _>>();
-    let min_world_y = layer_y.get(&0).copied().unwrap_or(0);
-    let matches = |row: &Value| if let Some(layer) = selected_layer {
-        row["layer"].as_i64() == Some(i64::from(layer))
-    } else { row["region"].as_str() == Some(value) };
-    let source_rows = snapshot["material_items"].as_array().ok_or_else(|| "统计快照缺少材料".to_owned())?;
-    let mut materials = Vec::new();
-    for source in source_rows {
-        let joints = source["scope_counts"].as_array().ok_or_else(|| "统计核心未返回分范围数据，请更新统计核心".to_owned())?;
-        let (mut blocks, mut containers, mut custom) = (0_u64, 0_u64, false);
-        let mut regions = BTreeMap::<String, u64>::new();
-        let mut layers = BTreeMap::<i64, u64>::new();
-        for joint in joints.iter().filter(|row| matches(row)) {
-            let block = joint["block_count"].as_u64().unwrap_or(0);
-            let container = joint["container_item_count"].as_u64().unwrap_or(0);
-            blocks += block; containers += container; custom |= joint["has_custom_stack_size"].as_bool().unwrap_or(false);
-            *regions.entry(joint["region"].as_str().unwrap_or("").to_owned()).or_default() += block + container;
-            if let Some(layer) = joint["layer"].as_i64() { *layers.entry(layer).or_default() += block + container; }
-        }
-        if blocks + containers == 0 { continue; }
-        let mut row = source.clone();
-        row.as_object_mut().unwrap().remove("scope_counts");
-        row["block_count"] = blocks.into(); row["container_item_count"] = containers.into();
-        row["count"] = (blocks + containers).into(); row["total_count"] = (blocks + containers).into();
-        row["has_custom_stack_size"] = custom.into();
-        row["region_counts"] = Value::Array(regions.into_iter().map(|(region, count)| json!({"region":region,"count":count})).collect());
-        row["layer_counts"] = Value::Array(layers.into_iter().map(|(layer, count)| json!({"layer":layer,"world_y":min_world_y+layer,"count":count})).collect());
-        materials.push(row);
-    }
-    materials.sort_by(|left, right| right["total_count"].as_u64().cmp(&left["total_count"].as_u64())
-        .then_with(|| left["block_id"].as_str().cmp(&right["block_id"].as_str())));
-    snapshot["material_items"] = Value::Array(materials);
-    let mut non_items = Vec::new();
-    for source in snapshot["non_item_blocks"].as_array().ok_or_else(|| "统计快照缺少结构说明".to_owned())? {
-        let count = source["scope_counts"].as_array().ok_or_else(|| "统计核心未返回分范围结构说明".to_owned())?
-            .iter().filter(|row| matches(row)).map(|row| row["count"].as_u64().unwrap_or(0)).sum::<u64>();
-        if count == 0 { continue; }
-        let mut row = source.clone(); row.as_object_mut().unwrap().remove("scope_counts"); row["count"] = count.into(); non_items.push(row);
-    }
-    snapshot["non_item_blocks"] = Value::Array(non_items);
-    let mut structural = Vec::new();
-    for source in snapshot["structural_block_counts"].as_array().ok_or_else(|| "统计快照缺少原结构分布，请刷新统计核心".to_owned())? {
-        let count = source["scope_counts"].as_array().ok_or_else(|| "统计核心未返回原结构范围数据".to_owned())?
-            .iter().filter(|row| matches(row)).map(|row| row["count"].as_u64().unwrap_or(0)).sum::<u64>();
-        if count == 0 { continue; }
-        let mut row = source.clone(); row.as_object_mut().unwrap().remove("scope_counts"); row["count"] = count.into(); structural.push(row);
-    }
-    snapshot["structural_block_counts"] = Value::Array(structural);
-    if snapshot["container_scan"]["enabled"].as_bool() == Some(true) {
-        let entries = snapshot["container_scan"]["scope_entries"].as_array().ok_or_else(|| "统计核心未返回分范围容器信息".to_owned())?;
-        let (mut containers, mut stacks) = (0_u64, 0_u64); let mut warnings = Vec::new();
-        for entry in entries {
-            if matches(entry) {
-                containers += entry["containers_scanned"].as_u64().unwrap_or(0);
-                stacks += entry["item_stacks_scanned"].as_u64().unwrap_or(0);
-                warnings.extend(entry["warnings"].as_array().into_iter().flatten().cloned());
-            } else if selected_layer.is_some() && entry["layer"].is_null() {
-                if let Some(warning) = entry["missing_layer_warning"].as_str() { warnings.push(warning.into()); }
-            }
-        }
-        snapshot["container_scan"]["containers_scanned"] = containers.into();
-        snapshot["container_scan"]["item_stacks_scanned"] = stacks.into();
-        snapshot["container_scan"]["warnings"] = Value::Array(warnings);
-    }
-    snapshot["structure_stats"]["scope"] = if let Some(layer) = selected_layer {
-        json!({"kind":"layer","layer":layer,"world_y":summary["world_y"]})
-    } else { json!({"kind":"region","region":value}) };
-    snapshot["structure_stats"]["total_non_air_blocks"] = summary["total_non_air_blocks"].clone();
-    snapshot["structure_stats"]["unique_block_types"] = summary["unique_block_types"].clone();
-    strip_material_scope_cache(&mut snapshot);
-    Ok(snapshot)
+#[cfg(test)]
+#[path="../../../../tools/viewer-core/src/data_scope.rs"]
+mod core_data_scope_tests;
+#[cfg(test)]
+fn material_snapshot_for_scope(value:Value,scope:&MaterialScope)->Result<Value,String>{
+    core_data_scope_tests::material_snapshot_for_scope(value,&serde_json::from_value(serde_json::to_value(scope).unwrap()).unwrap())
 }
 
 /// This inspects only a Host-owned temporary request, never a projection.
@@ -1523,6 +1318,7 @@ fn args_request_snapshot_only(args: &[std::ffi::OsString]) -> bool {
         })
 }
 
+#[cfg(test)]
 fn desktop_task_identity(source: &Path, scope: &MaterialScope, containers: bool, multiplier: u64, snapshot: &Value) -> String {
     use sha2::{Digest, Sha256};
     let source_id = path_text(source);
@@ -1819,8 +1615,8 @@ mod tests {
         let result = operations.replace_blocks(ReplaceBlocksInput { source_path:path_text(&input),output_path:Some(path_text(&output)),rules:vec![],units:None,
             stages:Some(vec![vec![unit(&source_id,"minecraft:stone")],vec![unit("minecraft:stone","minecraft:gold_block")]]),dry_run:false }).unwrap();
         assert_eq!(result.output_path,Some(path_text(&output)));
-        let before = operations.project_stats(ProjectStatsInput { source_path:path_text(&input),include_container_items:true,known_revision:None }).unwrap();
-        let after = operations.project_stats(ProjectStatsInput { source_path:path_text(&output),include_container_items:true,known_revision:None }).unwrap();
+        let before = operations.project_stats(ProjectStatsInput { source_path:path_text(&input),include_container_items:true,known_revision:None, include_structural_blocks:false }).unwrap();
+        let after = operations.project_stats(ProjectStatsInput { source_path:path_text(&output),include_container_items:true,known_revision:None, include_structural_blocks:false }).unwrap();
         for field in ["total_non_air_blocks","total_regions","total_layers","total_entities","total_tile_entities"] {
             assert_eq!(before["structure_stats"][field],after["structure_stats"][field]);
         }
@@ -1921,7 +1717,7 @@ mod tests {
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
                 barrier.wait();
-                operations.project_stats(ProjectStatsInput { source_path: source, include_container_items: false, known_revision: None }).unwrap()
+                operations.project_stats(ProjectStatsInput { source_path: source, include_container_items: false, known_revision: None, include_structural_blocks:false }).unwrap()
             })
         }).collect::<Vec<_>>();
         let results = workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>();
@@ -1934,14 +1730,14 @@ mod tests {
         write_json(&operations.data_root.join("snapshot.json"), &results[0]).unwrap();
         let revision = results[0]["source_revision"].as_str().unwrap().to_owned();
         let hot_started = Instant::now();
-        let hot = operations.project_stats(ProjectStatsInput { source_path: source.clone(), include_container_items: false, known_revision: Some(revision) }).unwrap();
+        let hot = operations.project_stats(ProjectStatsInput { source_path: source.clone(), include_container_items: false, known_revision: Some(revision), include_structural_blocks:false }).unwrap();
         let hot_ms = hot_started.elapsed().as_secs_f64() * 1000.0;
         assert_eq!(hot["cache_unchanged"], true);
         assert_eq!(operations.next_generation.load(Ordering::Relaxed) - 1, 1);
           let mut scope_checks = Vec::new();
           for include_containers in [false, true] {
               let before = operations.next_generation.load(Ordering::Relaxed);
-              let all = operations.project_stats(ProjectStatsInput { source_path: source.clone(), include_container_items: include_containers, known_revision: None }).unwrap();
+              let all = operations.project_stats(ProjectStatsInput { source_path: source.clone(), include_container_items: include_containers, known_revision: None, include_structural_blocks:false }).unwrap();
               let region = all["regions"].as_array().unwrap().iter().max_by_key(|row| row["total_non_air_blocks"].as_u64()).unwrap()["name"].as_str().unwrap().to_owned();
               let layer = all["layers_summary"].as_array().unwrap().iter().max_by_key(|row| row["total_non_air_blocks"].as_u64()).unwrap()["layer"].as_i64().unwrap().to_string();
               for scope in [MaterialScope { kind: MaterialScopeKind::Region, value: Some(region) }, MaterialScope { kind: MaterialScopeKind::Layer, value: Some(layer) }] {
@@ -2037,7 +1833,7 @@ mod tests {
         let supervisor = Arc::new(supervisor);
         let operations = ApplicationOperations::new(Arc::clone(&supervisor), root.clone(), root.join(".tmp/beta-ui-corrections/close-read-data"), core.parent().unwrap().to_path_buf()).unwrap();
         let running = operations.clone(); let running_source = source.clone();
-        let worker = std::thread::spawn(move || running.project_stats(ProjectStatsInput { source_path: running_source, include_container_items: true, known_revision: None }));
+        let worker = std::thread::spawn(move || running.project_stats(ProjectStatsInput { source_path: running_source, include_container_items: true, known_revision: None, include_structural_blocks:false }));
         let deadline = Instant::now() + Duration::from_secs(2);
         while operations.lifecycle.0.lock().unwrap().reads.is_empty() && !worker.is_finished() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(1));

@@ -1,9 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, X } from "lucide-react";
-import { Dialog as DialogPrimitive } from "radix-ui";
+import React, { useEffect, useRef, useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import {
-  displayFilePath, formatMaterialQuantity, getUiLocale, materialDisplayName, readMaterialDetail, t,
-  type MaterialDetail, type MaterialItem, type StatsData,
+  displayFilePath, getDataOperationStatus, getMinecraftTranslations, queryMaterials, readMaterialDetail, t,
+  type MaterialDetail, type MaterialQueryPage, type MaterialQueryRow, type MaterialSourceGroup, type MaterialSourceSummary,
 } from "../../../../../src/business/facade";
 import { useI18n } from "../../../../i18n";
 import { BlockIcon } from "../../../../components/BlockIcon";
@@ -15,205 +14,157 @@ import { Checkbox } from "../../../../components/ui/checkbox";
 import { Input } from "../../../../components/ui/input";
 import { RecipeTreeView } from "./RecipeTreeView";
 
-interface MaterialCatalogDialogProps {
-  data: StatsData | null;
-  currentFile: string;
-  onClose: () => void;
-  /** Keep this component mounted so closing it preserves lookup preferences. */
-  open?: boolean;
-  onRequestContainerStats?: (include: boolean) => Promise<StatsData>;
+export function MaterialSources({ summary, groups = [], onLoad, busy = false }: {
+  summary?: MaterialSourceSummary; groups?: MaterialSourceGroup[]; busy?: boolean;
+  onLoad: (region: string, offset: number) => void;
+}) {
+  const { locale } = useI18n();
+  const [expandedRegion, setExpandedRegion] = useState<string | null>(null);
+  return <section className="material-source-section" aria-label={t("statistics.catalogSnapshotDetails")}>
+    <h4>{t("statistics.catalogSnapshotDetails")}</h4>
+    {summary ? <p className="material-catalog-summary">{t("statistics.sourceSummary", { regions: summary.regionCount, min: summary.minY ?? "—", max: summary.maxY ?? "—", count: summary.totalCount.toLocaleString(locale) })}</p>
+      : <p className="material-catalog-summary">{t("statistics.catalogNoDistribution")}</p>}
+    <div className="material-source-groups">{groups.map(group => <details className="material-catalog-detail-group" key={group.region} open={expandedRegion === group.region}
+      onToggle={event => { if (event.currentTarget.open) { setExpandedRegion(group.region); if (group.layers.length === 0 && group.layerCount > 0) onLoad(group.region, 0); } else setExpandedRegion(previous => previous === group.region ? null : previous); }}>
+      <summary><span>{group.displayName}</span><span>{t("statistics.sourceGroup", { min: group.minY ?? "—", max: group.maxY ?? "—", count: group.totalCount.toLocaleString(locale) })}</span></summary>
+      {busy && !group.layers.length && <p role="status">{t("editor.loading")}</p>}
+      {!!group.unlocatedCount && <p className="material-catalog-summary">{t("statistics.unlocatedCount", { count: group.unlocatedCount })}</p>}
+      <dl className="material-catalog-detail-facts">{group.layers.map(layer => <div key={`${layer.layer}:${layer.worldY}`}><dt>{t("statistics.catalogLayers", { layer: layer.layer, worldY: layer.worldY })}</dt><dd>{layer.count.toLocaleString(locale)}</dd></div>)}</dl>
+      {group.layerCount > group.limit && <nav className="stockpile-pagination" aria-label={t("statistics.pages")}>
+        <Button size="sm" variant="ghost" disabled={busy || group.offset === 0} onClick={() => onLoad(group.region, Math.max(0, group.offset - group.limit))}>{t("statistics.previousPage")}</Button>
+        <span>{t("statistics.pageRange", { start: group.offset + 1, end: group.offset + group.layers.length, total: group.layerCount })}</span>
+        <Button size="sm" variant="ghost" disabled={busy || group.offset + group.layers.length >= group.layerCount} onClick={() => onLoad(group.region, group.offset + group.limit)}>{t("statistics.nextPage")}</Button>
+      </nav>}
+    </details>)}</div>
+  </section>;
 }
 
-export function filterCatalogMaterials(materials: readonly MaterialItem[], search: string, category: string, sort: string): MaterialItem[] {
-  const query = search.trim().toLocaleLowerCase();
-  return materials.filter(item => {
-    if (category === "placed" && item.blockCount <= 0 || category === "containers" && item.containerItemCount <= 0
-      || category === "variants" && item.id === (item.itemId || item.id)) return false;
-    return !query || `${materialDisplayName(item)} ${item.id} ${item.itemId || ""}`.toLocaleLowerCase().includes(query);
-  }).sort((left, right) => {
-    const byName = () => materialDisplayName(left).localeCompare(materialDisplayName(right), getUiLocale()) || left.id.localeCompare(right.id);
-    return sort === "count_asc" ? left.totalCount - right.totalCount || byName()
-      : sort === "count_desc" ? right.totalCount - left.totalCount || byName() : byName();
-  });
-}
-
-function CatalogRows({ rows, snapshotAvailable, selectedId, individual, busy, onSelect }: {
-  rows: MaterialItem[]; snapshotAvailable: boolean; selectedId: string | null; individual: boolean; busy: boolean;
-  onSelect: (item: MaterialItem, element: HTMLButtonElement) => void;
+function CatalogRows({ page, selectedId, busy, onSelect }: {
+  page: MaterialQueryPage | null; selectedId: string | null; busy: boolean; onSelect: (item: MaterialQueryRow) => void;
 }) {
   const { locale } = useI18n();
   const listRef = useRef<HTMLDivElement>(null);
-  // Mounted with Content (not the persistent dialog root), so the existing
-  // virtual-window hook can observe a real scroll element on first effect.
-  const virtual = useVirtualWindow(rows, listRef, 56);
-  useEffect(() => { if (listRef.current) listRef.current.scrollTop = 0; }, [rows]);
+  const virtual = useVirtualWindow(page?.rows || [], listRef, 56);
+  useEffect(() => { if (listRef.current) listRef.current.scrollTop = 0; }, [page]);
   return <div className="material-catalog-list" ref={listRef} aria-label={t("statistics.catalogTitle")} aria-busy={busy}>
-    {!snapshotAvailable ? <p className="material-catalog-empty">{t("statistics.catalogUnavailable")}</p> : rows.length ? <ul className="material-catalog-items">
+    {page?.rows.length ? <ul className="material-catalog-items">
       {virtual.topSpacerHeight > 0 && <VirtualSpacerItem className="material-catalog-spacer" height={virtual.topSpacerHeight} />}
-      {virtual.visibleItems.map(item => <li key={item.id}><Button themeSlot="material-catalog-row" variant="ghost" className="material-catalog-row" data-selected={selectedId === item.id}
-        aria-pressed={selectedId === item.id} onClick={event => onSelect(item, event.currentTarget)} title={`${materialDisplayName(item)}\n${item.id}`}>
-        <span className="material-catalog-item"><BlockIcon blockId={item.iconHint} lookupMode="item_first" /><span>
-          <span className="material-catalog-name">{materialDisplayName(item)}</span><span className="material-catalog-id">{item.id}</span>
-        </span></span>
-        <span className="material-catalog-quantity" title={item.totalCount.toLocaleString(locale)}>{formatMaterialQuantity(item, item.totalCount, individual)}</span>
+      {virtual.visibleItems.map((item, index) => <li key={item.id} className={(virtual.startIndex + index) % 2 ? "material-list-row-odd" : "material-list-row-even"}><Button themeSlot="material-catalog-row" variant="ghost" className="material-catalog-row" data-selected={selectedId === item.id}
+        aria-pressed={selectedId === item.id} onClick={() => onSelect(item)} title={`${item.name}\n${item.id}`}>
+        <span className="material-catalog-item"><BlockIcon blockId={item.iconHint} lookupMode="item_first" /><span className="material-catalog-name">{item.name}</span></span>
+        <span className="material-catalog-quantity" title={item.totalCount.toLocaleString(locale)}>{item.quantityText}</span>
       </Button></li>)}
       {virtual.bottomSpacerHeight > 0 && <VirtualSpacerItem className="material-catalog-spacer" height={virtual.bottomSpacerHeight} />}
-    </ul> : <p className="material-catalog-empty">{t("statistics.noMatches")}</p>}
+    </ul> : <p className="material-catalog-empty">{t(busy ? "editor.loading" : "statistics.noMatches")}</p>}
   </div>;
 }
 
-/** Non-modal material lookup. It reads only the supplied projection snapshot. */
-export function MaterialCatalogDialog({ data, currentFile, onClose, open = true, onRequestContainerStats }: MaterialCatalogDialogProps) {
-  const { locale } = useI18n();
-  const [snapshot, setSnapshot] = useState(data);
+/** Read-only content for the existing native material_list window, never a modal. */
+export function MaterialCatalogDialog({ currentFile }: { currentFile: string }) {
+  const { locale, revision } = useI18n();
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
   const [sort, setSort] = useState("count_desc");
   const [individual, setIndividual] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [includeContainers, setIncludeContainers] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState<MaterialQueryPage | null>(null);
+  const [selected, setSelected] = useState<MaterialQueryRow | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [recipeOpen, setRecipeOpen] = useState(false);
   const [selectedRecipe, setSelectedRecipe] = useState("");
   const [detail, setDetail] = useState<MaterialDetail | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
   const [detailError, setDetailError] = useState("");
-  const [containerBusy, setContainerBusy] = useState(false);
-  const [containerError, setContainerError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [sourceQuery, setSourceQuery] = useState<{ region?: string; offset?: number; limit?: number }>({});
   const searchRef = useRef<HTMLInputElement>(null);
-  const previousFocus = useRef<HTMLElement | null>(null);
-  const selectedRowFocus = useRef<HTMLButtonElement | null>(null);
-  const containerGeneration = useRef(0);
-  const detailCache = useRef(new Map<string, MaterialDetail>());
+  const queryGeneration = useRef(0);
 
+  useEffect(() => { setSelected(null); setDetail(null); setPage(null); setOffset(0); setDetailOpen(false); }, [currentFile]);
   useEffect(() => {
-    containerGeneration.current += 1;
-    setSnapshot(data); setContainerBusy(false); setContainerError("");
-    detailCache.current.clear(); setDetail(null); setDetailError("");
-    setRecipeOpen(false); setSelectedRecipe("");
-    setSelectedId(null); setDetailOpen(false);
-  }, [data, currentFile]);
-  useEffect(() => () => { containerGeneration.current += 1; }, []);
-
-  const rows = useMemo(() => filterCatalogMaterials(snapshot?.materials || [], search, category, sort), [snapshot, search, category, sort, locale]);
-  const selected = snapshot?.materials.find(item => item.id === selectedId);
-  const includeContainers = snapshot?.containerScan.enabled === true;
-  const rawMaterial = selected && snapshot?.raw?.material_items?.find((item: any) => (item.item_identity || item.block_id || item.id) === selected.id);
-  const materialSemantics = String(snapshot?.raw?.material_semantics || "");
-  const dataVersion = Number(snapshot?.raw?.metadata?.minecraft_data_version);
-
+    const generation = ++queryGeneration.current;
+    if (!currentFile) { setBusy(false); return; }
+    const operationId = crypto.randomUUID();
+    setBusy(true); setError("");
+    const timer = window.setTimeout(() => {
+      void queryMaterials({ sourcePath: currentFile, includeContainerItems: includeContainers, search, category, sort,
+        individualCounts: individual, offset, limit: 200, uiLocale: locale, languageMap: getMinecraftTranslations() }, operationId)
+        .then(result => { if (generation === queryGeneration.current) { setPage(result); setSelected(previous => previous ? result.rows.find(row => row.id === previous.id) || null : null); } })
+        .catch(failure => { if (generation === queryGeneration.current) setError(String(failure)); })
+        .finally(() => { if (generation === queryGeneration.current) setBusy(false); });
+    }, 150);
+    return () => { queryGeneration.current += 1; window.clearTimeout(timer); void getDataOperationStatus(operationId, true).catch(() => undefined); };
+  }, [currentFile, search, category, sort, individual, includeContainers, offset, locale, revision]);
   useEffect(() => {
     let active = true;
     setDetail(null); setDetailError(""); setDetailBusy(false);
-    if (!open || !recipeOpen || !selected || !rawMaterial) return;
-    const key = JSON.stringify([selected.id, selected.totalCount, selectedRecipe]);
-    const cached = detailCache.current.get(key);
-    if (cached) { setDetail(cached); return; }
+    if (!selected || !currentFile) return;
     setDetailBusy(true);
-    void readMaterialDetail({ material: rawMaterial, materialSemantics, dataVersion, selectedRecipe: selectedRecipe || undefined })
-      .then(result => {
-        if (!active) return;
-        detailCache.current.set(key, result); setDetail(result);
-      }).catch(failure => { if (active) setDetailError(String(failure)); })
+    const operationId = crypto.randomUUID();
+    void readMaterialDetail({ sourcePath: currentFile, materialId: selected.id, includeContainerItems: includeContainers,
+      selectedRecipe: selectedRecipe || undefined, uiLocale: locale, languageMap: getMinecraftTranslations(), sourceQuery }, operationId)
+      .then(result => { if (active) setDetail(result); })
+      .catch(failure => { if (active) setDetailError(String(failure)); })
       .finally(() => { if (active) setDetailBusy(false); });
-    return () => { active = false; };
-  }, [open, recipeOpen, selected, rawMaterial, materialSemantics, dataVersion, selectedRecipe]);
-
-  const changeContainers = async (include: boolean) => {
-    if (!onRequestContainerStats || containerBusy || include === includeContainers) return;
-    const generation = ++containerGeneration.current;
-    setContainerBusy(true); setContainerError("");
-    try {
-      const result = await onRequestContainerStats(include);
-      if (generation !== containerGeneration.current) return;
-      setSnapshot(result); detailCache.current.clear(); setDetail(null);
-      setRecipeOpen(false); setSelectedRecipe("");
-      if (!result.materials.some(item => item.id === selectedId)) { setSelectedId(null); setDetailOpen(false); }
-    } catch (failure) { if (generation === containerGeneration.current) setContainerError(String(failure)); }
-    finally { if (generation === containerGeneration.current) setContainerBusy(false); }
+    return () => { active = false; void getDataOperationStatus(operationId, true).catch(() => undefined); };
+  }, [currentFile, selected?.id, selectedRecipe, includeContainers, locale, revision, sourceQuery, page?.sourceRevision]);
+  const selectMaterial = (item: MaterialQueryRow) => {
+    setSelected(item); setDetailOpen(true); setSelectedRecipe(""); setSourceQuery({}); setRecipeOpen(false);
   };
-  const selectMaterial = (item: MaterialItem, element: HTMLButtonElement) => {
-    if (selectedId !== item.id) { setDetail(null); setRecipeOpen(false); setSelectedRecipe(""); setDetailError(""); }
-    selectedRowFocus.current = element;
-    setSelectedId(item.id); setDetailOpen(true);
-  };
-  const detailName = selected ? materialDisplayName(selected) : "";
-  const detailIcon = selected ? detail?.iconImages[selected.iconHint] : undefined;
-  const fileName = displayFilePath(currentFile).split(/[\\/]/).pop() || currentFile;
-
-  return <DialogPrimitive.Root open={open} modal={false} onOpenChange={next => { if (!next) onClose(); }}>
-    <DialogPrimitive.Portal>
-      <DialogPrimitive.Content className="material-catalog-dialog" aria-describedby={undefined}
-        onInteractOutside={event => event.preventDefault()}
-        onOpenAutoFocus={event => {
-          event.preventDefault(); previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-          searchRef.current?.focus();
-        }}
-        onCloseAutoFocus={event => {
-          event.preventDefault();
-          if (document.activeElement === document.body || event.currentTarget instanceof HTMLElement && event.currentTarget.contains(document.activeElement)) previousFocus.current?.focus();
-        }}>
-        <header className="material-catalog-header">
-          <DialogPrimitive.Title className="material-catalog-title">{t("statistics.catalogTitle")}</DialogPrimitive.Title>
-          <span className="material-catalog-source" title={displayFilePath(currentFile)}>{fileName}</span>
-          <DialogPrimitive.Close asChild><Button className="material-catalog-close" variant="ghost" size="icon-sm" aria-label={t("editor.closeWindow")}><X size={17} /></Button></DialogPrimitive.Close>
-        </header>
-        <div className="material-catalog-toolbar">
-          <Input ref={searchRef} type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder={t("editor.materialSearchHint")} aria-label={t("editor.materialSearch")} />
-          <Dropdown value={category} onChange={setCategory} ariaLabel={t("stockpile.category")} options={[
-            { value: "all", label: t("statistics.catalogAll") }, { value: "placed", label: t("statistics.catalogPlaced") },
-            { value: "containers", label: t("statistics.catalogContainers") }, { value: "variants", label: t("statistics.catalogVariants") },
-          ]} />
-          <Dropdown value={sort} onChange={setSort} ariaLabel={t("stockpile.sort")} options={["count_desc", "count_asc", "name"].map(value => ({ value, label: t(`stockpile.sort.${value}`) }))} />
-        </div>
-        <div className="material-catalog-options">
-          <label className="beta-material-check"><Checkbox checked={individual} onCheckedChange={value => setIndividual(value === true)} />{t("statistics.individual")}</label>
-          <label className="beta-material-check"><Checkbox checked={includeContainers} disabled={!snapshot || !onRequestContainerStats || containerBusy} onCheckedChange={value => void changeContainers(value === true)} />{t("statistics.includeContainers")}</label>
-          {snapshot && <span className="material-catalog-summary">{t("statistics.materialKinds", { visible: rows.length, total: snapshot.materials.length })}</span>}
-        </div>
-        <p className="material-catalog-summary material-catalog-status">{t("statistics.catalogReadOnly")}</p>
-        {containerBusy && <p className="material-catalog-status" role="status">{t("statistics.catalogLoadingContainers")}</p>}
-        {containerError && <p className="material-catalog-error" role="alert">{t("statistics.catalogContainersFailed", { error: containerError })}</p>}
-        <div className="material-catalog-workspace" data-detail-open={detailOpen && !!selected}>
-          <CatalogRows rows={rows} snapshotAvailable={!!snapshot} selectedId={selectedId} individual={individual} busy={containerBusy} onSelect={selectMaterial} />
-          <aside className="material-catalog-detail" aria-label={t("stockpile.materialDetails")}>
-            {selected ? <>
-              <Button themeSlot="material-catalog-back" variant="ghost" size="sm" className="material-catalog-back" onClick={() => {
-                setDetailOpen(false);
-                window.requestAnimationFrame(() => { if (selectedRowFocus.current?.isConnected) selectedRowFocus.current.focus(); else searchRef.current?.focus(); });
-              }}><ArrowLeft size={15} />{t("statistics.catalogBack")}</Button>
-              <div className="material-catalog-detail-title">{detailIcon ? <img className="block-icon-image" src={detailIcon} alt="" /> : <BlockIcon blockId={selected.iconHint} lookupMode="item_first" />}<h3>{detailName}</h3></div>
-              <dl className="material-catalog-detail-facts">
-                <div><dt>{t("stockpile.required")}</dt><dd>{formatMaterialQuantity(selected, selected.totalCount, individual)}</dd></div>
-                <div><dt>{t("statistics.catalogStackSize")}</dt><dd>{selected.stackSize}</dd></div>
-                <div><dt>{t("statistics.buildQuantity")}</dt><dd>{selected.blockCount.toLocaleString(locale)}</dd></div>
-                <div><dt>{t("statistics.containerItems")}</dt><dd>{selected.containerItemCount.toLocaleString(locale)}</dd></div>
-                <div><dt>{t("statistics.catalogItemId")}</dt><dd>{selected.itemId || selected.id}</dd></div>
-                <div><dt>{t("statistics.catalogIdentity")}</dt><dd>{selected.id}</dd></div>
-              </dl>
-              {selected.hasCustomStackSize ? <p className="material-catalog-summary">{t("statistics.customStack")}</p> : !selected.canFitContainer && <p className="material-catalog-summary">{t("statistics.cannotFit")}</p>}
-              {selected.id !== (selected.itemId || selected.id) && <p className="material-catalog-summary">{t("statistics.catalogVariantHint")}</p>}
-              <details className="material-catalog-detail-group" open={recipeOpen} onToggle={event => setRecipeOpen(event.currentTarget.open)}>
-                <summary>{t("stockpile.recipeAndMaterials")}</summary>
-                {detailBusy && <p className="material-catalog-status" role="status">{t("statistics.catalogLoadingDetail")}</p>}
-                {detailError && <p className="material-catalog-error" role="alert">{t("statistics.catalogDetailFailed", { error: detailError })}</p>}
-                {!rawMaterial && <p className="material-catalog-status">{t("statistics.catalogUnavailable")}</p>}
-                {detail && <>
-                  {!!detail.recipeOptions.length && <label className="material-export-field"><span>{t("statistics.catalogRecipeChoice")}</span><Dropdown value={selectedRecipe} onChange={setSelectedRecipe} ariaLabel={t("statistics.catalogRecipeChoice")}
-                    options={[{ value: "", label: t("statistics.catalogRecipeAuto") }, ...detail.recipeOptions.map(option => ({ value: option.recipe_id, label: `${option.recipe_id} · ×${option.output_count}` }))]} /></label>}
-                  {detail.recipeTree ? <RecipeTreeView key={`${selected.id}:${selectedRecipe}`} node={detail.recipeTree} iconImages={detail.iconImages} itemNames={detail.itemNames} language={locale} /> : <p className="material-catalog-status">{t("stockpile.recipeUnavailable")}</p>}
-                </>}
-              </details>
-              <details className="material-catalog-detail-group"><summary>{t("statistics.catalogSnapshotDetails")}</summary>
-                {!selected.regionCounts.length && !selected.layerCounts.length && <p className="material-catalog-status">{t("statistics.catalogNoDistribution")}</p>}
-                <dl className="material-catalog-detail-facts">
-                  {selected.regionCounts.map(region => <div key={region.region}><dt>{region.region}</dt><dd>{region.count.toLocaleString(locale)}</dd></div>)}
-                  {selected.layerCounts.map(layer => <div key={`${layer.layer}:${layer.worldY}`}><dt>{t("statistics.catalogLayers", { layer: layer.layer, worldY: layer.worldY })}</dt><dd>{layer.count.toLocaleString(locale)}</dd></div>)}
-                </dl>
-              </details>
-            </> : <p className="material-catalog-empty">{t("stockpile.selectMaterial")}</p>}
-          </aside>
-        </div>
-      </DialogPrimitive.Content>
-    </DialogPrimitive.Portal>
-  </DialogPrimitive.Root>;
+  const changeFilter = (change: () => void) => { setOffset(0); change(); };
+  return <section className="material-catalog-content">
+    <header className="material-catalog-header"><h2 className="material-catalog-title">{t("statistics.catalogTitle")}</h2>
+      <span className="material-catalog-source" title={displayFilePath(currentFile)}>{displayFilePath(currentFile).split(/[\\/]/).pop()}</span></header>
+    <div className="material-catalog-toolbar">
+      <Input ref={searchRef} type="search" value={search} onChange={event => changeFilter(() => setSearch(event.target.value))} placeholder={t("editor.materialSearchHint")} aria-label={t("editor.materialSearch")} />
+      <Dropdown value={category} onChange={value => changeFilter(() => setCategory(value))} ariaLabel={t("stockpile.category")} options={[
+        { value: "all", label: t("statistics.catalogAll") }, { value: "placed", label: t("statistics.catalogPlaced") },
+        { value: "containers", label: t("statistics.catalogContainers") }, { value: "variants", label: t("statistics.catalogVariants") },
+      ]} />
+      <Dropdown value={sort} onChange={value => changeFilter(() => setSort(value))} ariaLabel={t("stockpile.sort")} options={["count_desc", "count_asc", "name"].map(value => ({ value, label: t(`stockpile.sort.${value}`) }))} />
+    </div>
+    <div className="material-catalog-options">
+      <label className="beta-material-check"><Checkbox checked={individual} onCheckedChange={value => changeFilter(() => setIndividual(value === true))} />{t("statistics.individual")}</label>
+      <label className="beta-material-check"><Checkbox checked={includeContainers} onCheckedChange={value => changeFilter(() => setIncludeContainers(value === true))} />{t("statistics.includeContainers")}</label>
+      {page && <span className="material-catalog-summary">{t("statistics.materialKinds", { visible: page.totalRows, total: page.totalMaterials })}</span>}
+    </div>
+    <p className="material-catalog-summary material-catalog-status" role="status">{t("statistics.catalogReadOnly")}</p>
+    {error && <p className="material-catalog-error" role="alert">{error}</p>}
+    <div className="material-catalog-workspace" data-detail-open={detailOpen && !!selected}>
+      <CatalogRows page={page} selectedId={selected?.id || null} busy={busy} onSelect={selectMaterial} />
+      <aside className="material-catalog-detail" aria-label={t("stockpile.materialDetails")}>
+        {selected ? <>
+          <Button themeSlot="material-catalog-back" variant="ghost" size="sm" className="material-catalog-back" onClick={() => { setDetailOpen(false); searchRef.current?.focus(); }}><ArrowLeft size={15} />{t("statistics.catalogBack")}</Button>
+          <div className="material-catalog-detail-title"><BlockIcon blockId={selected.iconHint} lookupMode="item_first" /><h3>{detail?.material.display_name || selected.name}</h3></div>
+          <dl className="material-catalog-detail-facts">
+            <div><dt>{t("stockpile.required")}</dt><dd>{selected.quantityText}</dd></div>
+            <div><dt>{t("statistics.catalogStackSize")}</dt><dd>{selected.stackSize}</dd></div>
+            <div><dt>{t("statistics.buildQuantity")}</dt><dd>{selected.blockCount.toLocaleString(locale)}</dd></div>
+            <div><dt>{t("statistics.containerItems")}</dt><dd>{selected.containerItemCount.toLocaleString(locale)}</dd></div>
+          </dl>
+          <details className="material-catalog-detail-group"><summary>{t("stockpile.itemInformation")}</summary><dl className="material-catalog-detail-facts">
+            <div><dt>{t("statistics.catalogItemId")}</dt><dd>{selected.itemId}</dd></div><div><dt>{t("statistics.catalogIdentity")}</dt><dd>{selected.id}</dd></div>
+          </dl></details>
+          {detailBusy && <p role="status">{t("statistics.catalogLoadingDetail")}</p>}
+          {detailError && <p className="material-catalog-error" role="alert">{t("statistics.catalogDetailFailed", { error: detailError })}</p>}
+          <details className="material-catalog-detail-group" open={recipeOpen} onToggle={event => setRecipeOpen(event.currentTarget.open)}>
+            <summary>{t("stockpile.recipeAndMaterials")}</summary>
+            {detail && <>
+              {!!detail.recipeOptions.length && <label className="material-export-field"><span>{t("statistics.catalogRecipeChoice")}</span><Dropdown value={selectedRecipe} onChange={setSelectedRecipe} ariaLabel={t("statistics.catalogRecipeChoice")}
+                options={[{ value: "", label: t("statistics.catalogRecipeAuto") }, ...detail.recipeOptions.map(option => ({ value: option.recipe_id, label: `${option.display_name} · ${option.recipe_type_name} · ×${option.output_count}` }))]} /></label>}
+              {detail.recipeTree ? <RecipeTreeView key={`${selected.id}:${selectedRecipe}`} node={detail.recipeTree} iconImages={detail.iconImages} itemNames={detail.itemNames} language={locale} /> : <p>{t("stockpile.recipeUnavailable")}</p>}
+            </>}
+          </details>
+          <MaterialSources key={selected.id} summary={detail?.sourceSummary || selected.sourceSummary} groups={detail?.sourceGroups || selected.sourceGroups} busy={detailBusy} onLoad={(region, nextOffset) => setSourceQuery({ region, offset: nextOffset, limit: 100 })} />
+        </> : <p className="material-catalog-empty">{t("stockpile.selectMaterial")}</p>}
+      </aside>
+    </div>
+    {page && page.totalRows > page.limit && <nav className="stockpile-pagination" aria-label={t("statistics.pages")}>
+      <Button size="sm" disabled={busy || page.offset === 0} onClick={() => setOffset(Math.max(0, page.offset - page.limit))}>{t("statistics.previousPage")}</Button>
+      <span>{t("statistics.pageRange", { start: page.offset + 1, end: page.offset + page.rows.length, total: page.totalRows })}</span>
+      <Button size="sm" disabled={busy || page.offset + page.rows.length >= page.totalRows} onClick={() => setOffset(page.offset + page.limit)}>{t("statistics.nextPage")}</Button>
+    </nav>}
+  </section>;
 }
