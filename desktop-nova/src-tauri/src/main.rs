@@ -3800,9 +3800,13 @@ async fn application_set_scene_view(source_path: PathBuf, display_mode: Option<S
             return Err("Weather modification is disabled in settings".into());
         }
     }
-    let source = std::fs::canonicalize(source_path).map_err(|error| error.to_string())?;
+    let source = std::fs::canonicalize(&source_path).map_err(|error| error.to_string())?;
     let mode = scene_control_mode(display_mode.as_deref())?;
-    application::scene_controls::set_scene_view(&source, mode, controls, quick.inner(), facade.inner()).await
+    let mut ack = application::scene_controls::set_scene_view(&source, mode, controls, quick.inner(), facade.inner()).await?;
+    // Canonical/extended Windows paths stay internal; UI request identity keeps
+    // its original spelling while the Host validates the real scene/session.
+    ack.source_path = source_path;
+    Ok(ack)
 }
 
 fn scene_control_mode(mode: Option<&str>) -> Result<Option<RenderDisplayMode>, String> {
@@ -3817,8 +3821,10 @@ fn scene_control_mode(mode: Option<&str>) -> Result<Option<RenderDisplayMode>, S
 #[tauri::command]
 async fn application_get_scene_view(source_path: PathBuf, display_mode: Option<String>,
     quick: tauri::State<'_, QuickPreviewHost>, facade: tauri::State<'_, RenderFacade>) -> Result<application::scene_controls::SceneViewAck, String> {
-    let source = std::fs::canonicalize(source_path).map_err(|error| error.to_string())?;
-    application::scene_controls::get_scene_view_state(&source, scene_control_mode(display_mode.as_deref())?, quick.inner(), facade.inner()).await
+    let source = std::fs::canonicalize(&source_path).map_err(|error| error.to_string())?;
+    let mut ack = application::scene_controls::get_scene_view_state(&source, scene_control_mode(display_mode.as_deref())?, quick.inner(), facade.inner()).await?;
+    ack.source_path = source_path;
+    Ok(ack)
 }
 
 static IRIS_OPTIONS_TRANSACTION: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();

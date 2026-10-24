@@ -125,16 +125,16 @@ pub fn read_cached(
     {
         index
     } else {
-        let temporary = tempfile::NamedTempFile::new_in(&root)?;
+        // The PNG writer atomically replaces this destination. Retain only the
+        // cleanup path, not an open destination handle (Windows denies replace).
+        let temporary = tempfile::NamedTempFile::new_in(&root)?.into_temp_path();
         let mut reader = HashingReader {
             file: fs::File::open(&source)?,
             hash: Sha256::new(),
             cancel,
         };
-        let extracted = extract_projection_preview_stream(
-            std::io::BufReader::new(&mut reader),
-            temporary.path(),
-        )?;
+        let extracted =
+            extract_projection_preview_stream(std::io::BufReader::new(&mut reader), &temporary)?;
         // Finish hashing compressed bytes not consumed by the gzip reader.
         std::io::copy(&mut reader, &mut std::io::sink())?;
         anyhow::ensure!(
@@ -143,10 +143,10 @@ pub fn read_cached(
         );
         let content_id = format!("{:x}", reader.hash.finalize());
         let dimensions = if extracted.found {
-            let image = image::open(temporary.path())?
+            let image = image::open(&temporary)?
                 .thumbnail(PREVIEW_WIDTH, PREVIEW_HEIGHT)
                 .to_rgba8();
-            write_preview_png(&image, temporary.path())?;
+            write_preview_png(&image, &temporary)?;
             let dimensions = Some(image.dimensions());
             temporary
                 .persist(root.join(format!("{content_id}.png")))
@@ -167,7 +167,10 @@ pub fn read_cached(
         let mut temporary = tempfile::NamedTempFile::new_in(&root)?;
         serde_json::to_writer(temporary.as_file_mut(), &index)?;
         temporary.as_file_mut().sync_all()?;
-        temporary.persist(&pointer).map_err(|error| error.error)?;
+        temporary
+            .into_temp_path()
+            .persist(&pointer)
+            .map_err(|error| error.error)?;
         index
     };
     anyhow::ensure!(!cancel.load(Ordering::Relaxed), "Preview read cancelled");
