@@ -48,6 +48,7 @@ pub mod stockpile_serve;
 pub mod stockpile_zip;
 pub mod storage;
 pub mod visual;
+pub mod layer_view;
 pub mod version_conversion;
 mod version_legacy_encoding;
 mod version_payload_migration;

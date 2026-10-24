@@ -22,7 +22,6 @@ export * from "../services/flakeService";
 export * from "../services/containerService";
 export * from "../services/enumeratorService";
 export * from "../services/gameResources";
-export { resolveFlakeLayerBlockImage, extractLayerPaletteStates, clearFlakeStateHintImageCache } from "../services/flakeStateHintResolver";
 
 export * from "../platform/quickPreview";
 export * from "../platform/sceneView";

@@ -197,6 +197,7 @@ impl AnalysisCache {
 
 struct Engine {
     analysis: Mutex<AnalysisCache>,
+    layers: crate::layer_view::LayerService,
     conversion: Mutex<crate::version_conversion::ConversionCache>,
     recipe_resources_ready: AtomicBool,
 }
@@ -204,6 +205,7 @@ impl Engine {
     fn new() -> Self {
         Self {
             analysis: Mutex::new(AnalysisCache::default()),
+            layers: crate::layer_view::LayerService::default(),
             conversion: Mutex::new(crate::version_conversion::ConversionCache::new(
                 ANALYSIS_CACHE_BYTES,
             )),
@@ -252,10 +254,13 @@ impl Engine {
         progress: impl Fn(Value),
     ) -> Result<Value> {
         ensure!(!cancel.load(Ordering::Relaxed), "Data operation cancelled");
-        let _context = crate::game_data::operation_context()?;
+        // Embedded preview bytes do not depend on selected game/model resources.
+        let _context = if req.kind == DataKind::Thumbnail { None } else { Some(crate::game_data::operation_context()?) };
         progress(json!({"stage":"prepare","current":0,"total":1}));
         match req.kind {
             DataKind::Composition => crate::composition::execute(&req.input, cancel),
+            DataKind::LayerView => self.layers.execute(&req.input, cancel),
+            DataKind::Thumbnail => crate::projection_preview::read_cached(&req.input, cancel),
             DataKind::ReplaceRules => crate::replace_blocks::editor_view(&req.input),
             DataKind::Format => crate::schematic_formats::execute(&req.input, cancel),
             DataKind::Workspace => crate::workspace::recent_projects(std::path::Path::new(req.input["storageDir"].as_str().context("Workspace storage directory is missing")?)),
@@ -629,6 +634,11 @@ pub fn run() -> Result<()> {
                 cancel.store(true, Ordering::Relaxed);
             }
             continue;
+        }
+        // Supersede stale 2D views before they wait behind an older render in
+        // the data lane. This only updates in-memory cancellation identities.
+        if request.kind == DataKind::LayerView {
+            engine.layers.prepare(&request.input);
         }
         let cancel = Arc::new(AtomicBool::new(false));
         let mut active = cancellations.lock().unwrap();

@@ -1174,8 +1174,19 @@ impl ApplicationOperations {
         if matches!(kind, super::data_worker::protocol::DataKind::Composition | super::data_worker::protocol::DataKind::Workspace | super::data_worker::protocol::DataKind::Format) {
             input["storageDir"] = path_text(&crate::current_user_config_dir()?).into();
         }
+        if kind == super::data_worker::protocol::DataKind::Thumbnail || (kind == super::data_worker::protocol::DataKind::LayerView && input["action"] == "openScene") {
+            input["storageDir"] = path_text(&crate::current_user_config_dir()?).into();
+        }
 
         if let Some(path)=input["sourcePath"].as_str().filter(|path|!path.is_empty()){input["sourcePath"]=path_text(&self.resolve_path(path)).into();}
+        if kind == super::data_worker::protocol::DataKind::Thumbnail {
+            if let Some(paths) = input["sourcePaths"].as_array_mut() {
+                for path in paths {
+                    let source = path.as_str().filter(|path| !path.is_empty()).ok_or("Empty preview source path")?;
+                    *path = path_text(&self.resolve_path(source)).into();
+                }
+            }
+        }
         for key in ["inputPath","outputPath"]{if let Some(path)=input[key].as_str().filter(|path|!path.is_empty()){input[key]=path_text(&self.resolve_path(path)).into();}}
         let operation_id=id.unwrap_or_else(||self.next_operation("data").1);
         self.data_worker.execute(super::data_worker::protocol::DataRequest{operation_id,kind,input})

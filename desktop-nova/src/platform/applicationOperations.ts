@@ -33,32 +33,6 @@ export interface ApplicationEditProjectOriginInput extends ApplicationInspectPro
   outputPath: string | null;
 }
 
-export interface LayerPaletteEntry {
-  block_id: string;
-  property_id: number;
-}
-
-export interface LayerSliceMeta {
-  minecraft_data_version: number | null;
-  chunk_size: number;
-  size_x: number;
-  size_y: number;
-  size_z: number;
-  palette: LayerPaletteEntry[];
-  property_pool: Array<Record<string, string>>;
-}
-
-export interface LayerSliceBlock {
-  x: number;
-  z: number;
-  palette_id: number;
-}
-
-export interface LayerSliceData {
-  y: number;
-  blocks: LayerSliceBlock[];
-}
-
 export interface LayerContainerData extends ProjectionMarkerPoint {
   block_id: string;
   nbt: Record<string, unknown>;
@@ -282,14 +256,6 @@ export function inspectProject(input: ApplicationInspectProjectInput): Promise<P
 
 export function readLayerBounds(input: ApplicationInspectProjectInput): Promise<[number, number] | null> {
   return invoke("application_read_layer_bounds", { input });
-}
-
-export function readLayerMeta(input: ApplicationInspectProjectInput): Promise<LayerSliceMeta> {
-  return invoke("application_read_layer_meta", { input });
-}
-
-export function readLayer(input: ApplicationReadLayerInput): Promise<LayerSliceData> {
-  return invoke("application_read_layer", { input });
 }
 
 export function readLayerContainer(

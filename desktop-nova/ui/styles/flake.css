@@ -53,6 +53,17 @@
     image-rendering: pixelated;
 }
 
+.flake-layer-image {
+    position: absolute;
+    left: var(--layer-image-x, 0);
+    top: var(--layer-image-z, 0);
+    width: var(--layer-image-width, 1px);
+    height: var(--layer-image-height, 1px);
+    max-width: none;
+    pointer-events: none;
+    image-rendering: pixelated;
+}
+
 .flake-layer-border {
     position: absolute;
     pointer-events: none;

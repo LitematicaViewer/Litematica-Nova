@@ -19,6 +19,8 @@ pub enum DataKind {
     Composition,
     Format,
     Workspace,
+    LayerView,
+    Thumbnail,
     ReplaceRules,
     Cancel,
 }

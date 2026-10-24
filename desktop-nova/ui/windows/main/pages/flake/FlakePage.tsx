@@ -1,4 +1,6 @@
-import { t, getUiLocale, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
+import { LayerCanvas, type LayerCanvasHandle } from "./LayerCanvas";
+import { openLayerScene, releaseLayerScene, type LayerScene, type LayerHit, type LayerViewImage } from "../../../../../src/platform/layerView";
+import { t, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
 import { creativeItemId } from "../../../../../src/business/facade";
@@ -12,27 +14,21 @@ import { Input } from "../../../../components/ui/input";
 import { Checkbox } from "../../../../components/ui/checkbox";
 import { takeUpdateDraft, useUpdateDraft } from "../../updateRecovery";
 import React, {
-  forwardRef,
   useCallback,
   useEffect,
-  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import {
-  loadLayerPaletteVisuals, layerMapColor, isLayerAirBlock, UNKNOWN_LAYER_COLOR,
-  layerPaletteState, loadFlakeModelTopTexture, loadFlakeModelTopTextures, getBlockIconDataUrl,
-  type LayerPaletteVisuals, type LayerSliceData, type LayerSliceMeta,
-  readLayerMeta, readLayer, loadProjectionMarkers, loadStructureStats,
+  loadProjectionMarkers, loadStructureStats,
   type ProjectionMarkerPoint, removeProjectionOrigin, selectLitematicSavePath,
-  setProjectionOrigin, type StatsData, getBlockProperties, loadDatabases,
+  setProjectionOrigin, type StatsData,
   translateBlockId, translateKey, translateValue,
 } from "../../../../../src/business/facade";
 import "../../../../styles/flake.css";
 import { loadStructuralBlocks } from "../../../../../src/business/facade";
-import { resolveFlakeLayerBlockImage, extractLayerPaletteStates } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { Dialog } from "../../../../components/Dialog";
@@ -40,26 +36,16 @@ import { MaterialsDialog, openMaterialsWithWindowBehavior } from "../statistics/
 import { Layer3DView } from "./Layer3DView";
 
 // 同级函数
-import { fitView, FlakeBlockTooltip, formatStateRecord } from "./function";
+import { FlakeBlockTooltip, formatStateRecord } from "./function";
 import { CreativeInventoryDialog } from "./creativeInventoryDialog";
 import { ContainerDialog } from "./containerDialog";
 import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem, type ContainerType } from "../../../../../src/business/facade";
 import { listenEvent } from "../../../../../src/platform/events";
-import { clearFlakeStateHintImageCache, clearFlakeModelTopTextureCache } from "../../../../../src/business/facade";
 import noteCsvText from "../../../../../note.csv?raw";
 
 // 缩放范围：scale 表示每个方块占用的像素数（像素/格）。
 const MIN_SCALE = 1;
 const MAX_SCALE = 64;
-const ICON_NATIVE_SIZE = 16;
-const LAYER_TILE_SIZE = 16;
-const HOVER_TOOLTIP_MIN_SCALE = 8;
-const RENDER_OVERSCAN_PIXELS = 256;
-const LOW_ZOOM_OVERSCAN_PIXELS = 64;
-const MAX_MAP_COLOR_TILE_CACHE_SIZE = 2048;
-const MAX_TEXTURE_TILE_CACHE_SIZE = 192;
-const TEXTURE_LOAD_IDLE_DELAY_MS = 160;
-const TEXTURE_LOAD_CONCURRENCY = 3;
 const NOTE_BLOCK_ID = "minecraft:note_block";
 const NOTE_BLOCK_NOTE_VALUES = Array.from({ length: 25 }, (_unused, index) => String(index));
 const NOTE_SCALE_LABEL_KEYS = ["flake.note.scale.values", "flake.note.scale.westernMajor", "flake.note.scale.maqamAjam", "flake.note.scale.raagBhairav", "flake.note.scale.maqamHijaz", "flake.note.scale.dorian", "flake.note.scale.gong", "flake.note.scale.miyakoBushi", "flake.note.scale.degung", "flake.note.scale.pyongjo"];
@@ -84,7 +70,6 @@ const EDIT_TOOL_PLACEHOLDERS = [
 ] as const;
 
 type EditToolId = typeof EDIT_TOOL_PLACEHOLDERS[number]["id"];
-type CssVariableStyle<T extends string> = React.CSSProperties & Record<T, string | number>;
 
 interface NoteToneLabel {
   value: string;
@@ -185,87 +170,7 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
   return !!target.closest("input, textarea, select");
 }
 
-// 全局图标缓存，避免重复处理相同方块
-const globalIconCache = new Map<string, Promise<string | null>>();
-
-function getCachedIconImage(
-  blockDatabaseVersion: string,
-  minecraftDataVersion: number | null,
-  blockId: string,
-  paletteEntry: any,
-  propertyPool: any[],
-  enabled: boolean,
-  modelTopTexture: () => Promise<string | null>,
-): Promise<string | null> {
-  // 缓存键必须基于解析后的真实状态，而非 paletteEntry.property_id 下标。
-  // property_id 只是指向当前投影 propertyPool 的索引，不同投影的 propertyPool
-  // 各自独立——同一个 property_id 在投影 A 可能是 level=0，在投影 B 却是 level=3。
-  // 若只用 property_id 作键，跨投影会命中错误的旧图标（如水的 level 遮罩错乱）。
-  const resolvedStates = extractLayerPaletteStates(paletteEntry, propertyPool);
-  const cacheKey = `${blockDatabaseVersion}::${minecraftDataVersion}::${blockId}::${JSON.stringify(Object.entries(resolvedStates).sort(([left], [right]) => left.localeCompare(right)))}::${enabled}`;
-
-  if (!globalIconCache.has(cacheKey)) {
-    if (globalIconCache.size >= 1024) globalIconCache.delete(globalIconCache.keys().next().value!);
-    globalIconCache.set(
-      cacheKey,
-      resolveFlakeLayerBlockImage({
-        blockId,
-        paletteEntry,
-        propertyPool,
-        enabled,
-        modelTopTexture,
-      })
-    );
-  }
-
-  return globalIconCache.get(cacheKey)!;
-}
-
-interface LayerCanvasHandle {
-  resetView: () => void;
-  // 将缩放设置到指定的像素/格值，围绕视口中心缩放。
-  zoomTo: (nextScale: number) => void;
-}
-
-export interface FlakeHoverBlock {
-  x: number;
-  y: number;
-  z: number;
-  paletteId: number;
-  id: string;
-  name: string;
-  states: string;
-  stateRecord: Record<string, string>;
-  originalStateRecord: Record<string, string>;
-  hasStates: boolean;
-  minecraftVersion?: string;
-}
-
-interface FlakeRenderSlice {
-  depth: number;
-  opacity: number;
-  sliceData: LayerSliceData;
-}
-
-interface VisibleLayerBlock {
-  block: LayerSliceData["blocks"][number];
-  y: number;
-  opacity: number;
-}
-
-interface VisibleLayerIndex {
-  byPosition: Map<number, VisibleLayerBlock>;
-  rows: Map<number, VisibleLayerBlock[]>;
-  tiles: Map<string, VisibleLayerBlock[]>;
-}
-
-interface VisibleBlockWindow {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-}
-
+export type FlakeHoverBlock = LayerHit;
 interface FlakeMeasurementRect {
   id: string;
   startX: number;
@@ -293,75 +198,6 @@ interface FlakeMarkerMenuState {
   clientY: number;
   point: ProjectionMarkerPoint;
   isOrigin: boolean;
-}
-
-type LayerTileRenderMode = "map-color" | "texture";
-
-interface TileIconImageCacheEntry {
-  image: HTMLImageElement;
-  ready: boolean;
-  failed: boolean;
-}
-
-interface LayerTileCache {
-  mode: LayerTileRenderMode | null;
-  meta: LayerSliceMeta | null;
-  scale: number;
-  devicePixelRatio: number;
-  colorMap: Map<number, string> | null;
-  tileSource: Map<string, VisibleLayerBlock[]> | null;
-  iconImages: Map<number, string> | null;
-  tileImageRevision: number;
-  tiles: Map<string, HTMLCanvasElement>;
-}
-
-function findFirstBlockAtOrAfterX(blocks: VisibleLayerBlock[], minX: number): number {
-  let low = 0;
-  let high = blocks.length;
-  while (low < high) {
-    const mid = Math.floor((low + high) / 2);
-    if (blocks[mid].block.x < minX) low = mid + 1;
-    else high = mid;
-  }
-  return low;
-}
-
-function layerTileKey(tileX: number, tileZ: number): string {
-  return `${tileX}:${tileZ}`;
-}
-
-function getMaxLayerTileCacheSize(mode: LayerTileRenderMode, scale: number): number {
-  if (mode === "map-color") return MAX_MAP_COLOR_TILE_CACHE_SIZE;
-  if (scale >= 48) return 48;
-  if (scale >= 32) return 96;
-  return MAX_TEXTURE_TILE_CACHE_SIZE;
-}
-
-function resolveReadyTileIconImage(
-  iconUrl: string,
-  imageCache: Map<string, TileIconImageCacheEntry>,
-  onReady: () => void,
-): HTMLImageElement | null {
-  let cacheEntry = imageCache.get(iconUrl);
-  if (!cacheEntry) {
-    const image = new Image();
-    cacheEntry = {
-      image,
-      ready: false,
-      failed: false,
-    };
-    image.onload = () => {
-      cacheEntry!.ready = true;
-      onReady();
-    };
-    image.onerror = () => {
-      cacheEntry!.failed = true;
-      onReady();
-    };
-    image.src = iconUrl;
-    imageCache.set(iconUrl, cacheEntry);
-  }
-  return cacheEntry.ready && !cacheEntry.failed ? cacheEntry.image : null;
 }
 
 function normalizeMeasurementRect(rect: FlakeMeasurementRect): NormalizedMeasurementRect {
@@ -417,1077 +253,6 @@ function pathsLookSame(left: string, right: string): boolean {
   return left.replace(/\//g, "\\").toLocaleLowerCase() === right.replace(/\//g, "\\").toLocaleLowerCase();
 }
 
-function formatMeasurementDistance(value: number): string {
-  if (Number.isInteger(value)) return value.toLocaleString(getUiLocale());
-  const digits = value < 10 ? 2 : 1;
-  return value.toLocaleString(getUiLocale(), {minimumFractionDigits: digits, maximumFractionDigits: digits});
-}
-
-function buildLayerTile(
-  tileBlocks: VisibleLayerBlock[],
-  tileX: number,
-  tileZ: number,
-  meta: LayerSliceMeta,
-  scale: number,
-  devicePixelRatio: number,
-  colorMap: Map<number, string>,
-  iconImages: Map<number, string> | null,
-  imageCache: Map<string, TileIconImageCacheEntry>,
-  onIconReady: () => void,
-): { canvas: HTMLCanvasElement; width: number; height: number } {
-  const originX = tileX * LAYER_TILE_SIZE;
-  const originZ = tileZ * LAYER_TILE_SIZE;
-  const width = Math.max(1, Math.ceil(Math.min(LAYER_TILE_SIZE, meta.size_x - originX) * scale));
-  const height = Math.max(1, Math.ceil(Math.min(LAYER_TILE_SIZE, meta.size_z - originZ) * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.ceil(width * devicePixelRatio));
-  canvas.height = Math.max(1, Math.ceil(height * devicePixelRatio));
-
-  const context = canvas.getContext("2d");
-  if (!context) return { canvas, width, height };
-
-  context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-  context.imageSmoothingEnabled = false;
-  for (const visibleBlock of tileBlocks) {
-    const color = colorMap.get(visibleBlock.block.palette_id) || UNKNOWN_LAYER_COLOR;
-    if (color === "transparent" && !iconImages) continue;
-
-    const localX = visibleBlock.block.x - originX;
-    const localZ = visibleBlock.block.z - originZ;
-    const left = Math.floor(localX * scale);
-    const top = Math.floor(localZ * scale);
-    const right = Math.max(left + 1, Math.ceil((localX + 1) * scale));
-    const bottom = Math.max(top + 1, Math.ceil((localZ + 1) * scale));
-    const iconUrl = iconImages?.get(visibleBlock.block.palette_id);
-    const iconImage = iconUrl ? resolveReadyTileIconImage(iconUrl, imageCache, onIconReady) : null;
-    context.globalAlpha = visibleBlock.opacity;
-    if (iconImage) {
-      context.drawImage(iconImage, left, top, right - left, bottom - top);
-    } else {
-      // The detailed view does not masquerade a map color as a texture.
-      // Missing/not-yet-decoded side assets remain visible neutral markers.
-      context.fillStyle = iconImages ? UNKNOWN_LAYER_COLOR : color;
-      context.fillRect(left, top, right - left, bottom - top);
-      if (iconImages) {
-        context.strokeStyle = "rgba(0,0,0,0.35)";
-        context.beginPath(); context.moveTo(left, top); context.lineTo(right, bottom); context.stroke();
-      }
-    }
-  }
-  context.globalAlpha = 1;
-
-  return { canvas, width, height };
-}
-
-const LayerCanvas = forwardRef<
-  LayerCanvasHandle,
-  {
-    meta: LayerSliceMeta | null;
-    layerY: number;
-    renderSlices: FlakeRenderSlice[];
-    showStateHints: boolean;
-    interactionTool: EditToolId;
-    editedBlockStates: Record<string, Record<string, string>>;
-    originMarker: ProjectionMarkerPoint | null;
-    measurements: FlakeMeasurementRect[];
-    onHoverBlock: (block: FlakeHoverBlock | null, event: React.MouseEvent | null) => void;
-    onBlockClick: (block: FlakeHoverBlock, event: React.MouseEvent) => void;
-    onBlockRightClick: (block: FlakeHoverBlock, event: React.MouseEvent) => void;
-    onMarkerContextMenu: (point: ProjectionMarkerPoint, isOrigin: boolean, event: React.MouseEvent) => void;
-    onOriginChange: (point: ProjectionMarkerPoint) => void;
-    onAddMeasurement: (rect: Omit<FlakeMeasurementRect, "id">) => void;
-    onDeleteMeasurementAt: (point: FlakeMeasurementPoint) => void;
-    onScaleChange?: (scale: number) => void;
-  }
->(({ meta, layerY, renderSlices, showStateHints, interactionTool, editedBlockStates, originMarker, measurements, onHoverBlock, onBlockClick, onBlockRightClick, onMarkerContextMenu, onOriginChange, onAddMeasurement, onDeleteMeasurementAt, onScaleChange }, ref) => {
-  const { locale } = useI18n();
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const worldRef = useRef<HTMLDivElement>(null);
-  const layerTileCanvasRef = useRef<HTMLCanvasElement>(null);
-  const [scale, setScale] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [isMeasuring, setIsMeasuring] = useState(false);
-  const [measurementDraft, setMeasurementDraft] = useState<FlakeMeasurementRect | null>(null);
-  const [originDragDraft, setOriginDragDraft] = useState<ProjectionMarkerPoint | null>(null);
-  const [isDraggingOrigin, setIsDraggingOrigin] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [iconImages, setIconImages] = useState<Map<number, string>>(new Map());
-  const [tileImageRevision, setTileImageRevision] = useState(0);
-  const [isTextureInteractionActive, setIsTextureInteractionActive] = useState(false);
-  const [paletteVisuals, setPaletteVisuals] = useState<LayerPaletteVisuals | null>(null);
-  const [visualError, setVisualError] = useState<UiMessage>("");
-  const [visualReload, setVisualReload] = useState(0);
-  useEffect(() => {
-    const pending = listenEvent("game-resources-changed", () => {
-      globalIconCache.clear();
-      clearFlakeStateHintImageCache();
-      clearFlakeModelTopTextureCache();
-      setVisualReload((value) => value + 1);
-    }).catch(() => undefined);
-    return () => { void pending.then((unlisten) => unlisten?.()); };
-  }, []);
-  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
-  const dragFrameRef = useRef<number | null>(null);
-  const pendingOffsetRef = useRef(offset);
-  const measurementDraftRef = useRef<FlakeMeasurementRect | null>(null);
-  const originDragDraftRef = useRef<ProjectionMarkerPoint | null>(null);
-  const originMarkerRef = useRef<ProjectionMarkerPoint | null>(originMarker);
-  const lastHoverBlockRef = useRef<FlakeHoverBlock | null>(null);
-  const iconImagesRef = useRef(iconImages);
-  const isTextureInteractionActiveRef = useRef(isTextureInteractionActive);
-  const textureInteractionTimerRef = useRef<number | null>(null);
-  const textureJobVersionRef = useRef(0);
-  const tileIconImageCacheRef = useRef(new Map<string, TileIconImageCacheEntry>());
-  const tileImageFrameRef = useRef<number | null>(null);
-  const layerTileCacheRef = useRef<LayerTileCache>({
-    mode: null,
-    meta: null,
-    scale: 0,
-    devicePixelRatio: 0,
-    colorMap: null,
-    tileSource: null,
-    iconImages: null,
-    tileImageRevision: 0,
-    tiles: new Map(),
-  });
-
-  // 用 ref 镜像最新的 scale / offset，供事件处理和命令式缩放共用，避免闭包读到旧值。
-  const scaleRef = useRef(scale);
-  const offsetRef = useRef(offset);
-  scaleRef.current = scale;
-  offsetRef.current = offset;
-  originMarkerRef.current = originMarker;
-
-  const scheduleOffset = useCallback((nextOffset: { x: number; y: number }) => {
-    pendingOffsetRef.current = nextOffset;
-    if (dragFrameRef.current !== null) return;
-    dragFrameRef.current = window.requestAnimationFrame(() => {
-      dragFrameRef.current = null;
-      setOffset(pendingOffsetRef.current);
-    });
-  }, []);
-
-  const scheduleTileImageRevision = useCallback(() => {
-    if (tileImageFrameRef.current !== null) return;
-    tileImageFrameRef.current = window.requestAnimationFrame(() => {
-      tileImageFrameRef.current = null;
-      setTileImageRevision((current) => current + 1);
-    });
-  }, []);
-
-  // 通知父组件当前缩放，用于同步滑块和输入框。用 ref 保存回调避免因引用变化触发多余 effect。
-  const onScaleChangeRef = useRef(onScaleChange);
-  onScaleChangeRef.current = onScaleChange;
-  useEffect(() => {
-    onScaleChangeRef.current?.(scale);
-  }, [scale]);
-
-  useEffect(() => {
-    iconImagesRef.current = iconImages;
-  }, [iconImages]);
-
-  const setMeasurementDraftValue = useCallback((nextDraft: FlakeMeasurementRect | null) => {
-    measurementDraftRef.current = nextDraft;
-    setMeasurementDraft(nextDraft);
-  }, []);
-
-  const updateMeasurementDraftValue = useCallback((updater: (current: FlakeMeasurementRect | null) => FlakeMeasurementRect | null) => {
-    setMeasurementDraftValue(updater(measurementDraftRef.current));
-  }, [setMeasurementDraftValue]);
-
-  const setOriginDragDraftValue = useCallback((nextDraft: ProjectionMarkerPoint | null) => {
-    originDragDraftRef.current = nextDraft;
-    setOriginDragDraft(nextDraft);
-  }, []);
-
-  const markTextureInteraction = useCallback(() => {
-    if (!isTextureInteractionActiveRef.current) {
-      isTextureInteractionActiveRef.current = true;
-      setIsTextureInteractionActive(true);
-    }
-    if (textureInteractionTimerRef.current !== null) {
-      window.clearTimeout(textureInteractionTimerRef.current);
-    }
-    textureInteractionTimerRef.current = window.setTimeout(() => {
-      textureInteractionTimerRef.current = null;
-      isTextureInteractionActiveRef.current = false;
-      setIsTextureInteractionActive(false);
-    }, TEXTURE_LOAD_IDLE_DELAY_MS);
-  }, []);
-
-  const emitHoverBlock = useCallback((block: FlakeHoverBlock | null, event: React.MouseEvent | null) => {
-    lastHoverBlockRef.current = block;
-    onHoverBlock(block, event);
-  }, [onHoverBlock]);
-
-  const resolveMeasurementPointAtClient = useCallback((clientX: number, clientY: number, clampToBounds = false): FlakeMeasurementPoint | null => {
-    if (!meta || !viewportRef.current) return null;
-
-    const rect = viewportRef.current.getBoundingClientRect();
-    const rawX = Math.floor((clientX - rect.left - offsetRef.current.x) / scaleRef.current);
-    const rawZ = Math.floor((clientY - rect.top - offsetRef.current.y) / scaleRef.current);
-    if (clampToBounds) {
-      return {
-        x: Math.max(0, Math.min(meta.size_x - 1, rawX)),
-        z: Math.max(0, Math.min(meta.size_z - 1, rawZ)),
-      };
-    }
-    if (rawX < 0 || rawX >= meta.size_x || rawZ < 0 || rawZ >= meta.size_z) return null;
-    return { x: rawX, z: rawZ };
-  }, [meta]);
-
-  const finishMeasurementDraft = useCallback(() => {
-    const draft = measurementDraftRef.current;
-    setIsMeasuring(false);
-    setMeasurementDraftValue(null);
-    if (!draft) return;
-    onAddMeasurement({
-      startX: draft.startX,
-      startZ: draft.startZ,
-      endX: draft.endX,
-      endZ: draft.endZ,
-    });
-  }, [onAddMeasurement, setMeasurementDraftValue]);
-
-  const finishOriginDrag = useCallback(() => {
-    const draft = originDragDraftRef.current;
-    const original = originMarkerRef.current;
-    setIsDraggingOrigin(false);
-    setOriginDragDraftValue(null);
-    if (!draft || !original || markerPointsEqual(draft, original)) return;
-    onOriginChange(draft);
-  }, [onOriginChange, setOriginDragDraftValue]);
-
-  useEffect(() => {
-    if (interactionTool === "measure" && meta) return;
-    setIsMeasuring(false);
-    setMeasurementDraftValue(null);
-  }, [interactionTool, meta, setMeasurementDraftValue]);
-
-  useEffect(() => {
-    if (interactionTool === "marker" && meta) return;
-    setIsDraggingOrigin(false);
-    setOriginDragDraftValue(null);
-  }, [interactionTool, meta, setOriginDragDraftValue]);
-
-  useEffect(() => {
-    if (!isMeasuring) return;
-
-    const handleMouseMove = (event: MouseEvent) => {
-      const point = resolveMeasurementPointAtClient(event.clientX, event.clientY, true);
-      if (!point) return;
-      updateMeasurementDraftValue((current) => current ? { ...current, endX: point.x, endZ: point.z } : current);
-    };
-    const handleMouseUp = (event: MouseEvent) => {
-      if (event.button !== 0) return;
-      event.preventDefault();
-      finishMeasurementDraft();
-    };
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [finishMeasurementDraft, isMeasuring, resolveMeasurementPointAtClient, updateMeasurementDraftValue]);
-
-  useEffect(() => {
-    if (!isDraggingOrigin) return;
-
-    const handleMouseMove = (event: MouseEvent) => {
-      const original = originMarkerRef.current;
-      if (!original) return;
-      const point = resolveMeasurementPointAtClient(event.clientX, event.clientY, true);
-      if (!point) return;
-      setOriginDragDraftValue({
-        x: point.x,
-        y: original.y,
-        z: point.z,
-      });
-    };
-    const handleMouseUp = (event: MouseEvent) => {
-      if (event.button !== 0) return;
-      event.preventDefault();
-      finishOriginDrag();
-    };
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [finishOriginDrag, isDraggingOrigin, resolveMeasurementPointAtClient, setOriginDragDraftValue]);
-
-  useEffect(() => {
-    if (scale < HOVER_TOOLTIP_MIN_SCALE) {
-      emitHoverBlock(null, null);
-    }
-  }, [emitHoverBlock, scale]);
-
-  useLayoutEffect(() => {
-    const world = worldRef.current;
-    if (!world) return;
-    world.style.transform = `translate(${Math.round(offset.x)}px, ${Math.round(offset.y)}px)`;
-  }, [offset.x, offset.y]);
-
-  useLayoutEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-
-    const updateViewportSize = () => {
-      const rect = viewport.getBoundingClientRect();
-      const width = Math.round(rect.width);
-      const height = Math.round(rect.height);
-      setViewportSize((current) => (
-        current.width === width && current.height === height ? current : { width, height }
-      ));
-    };
-
-    updateViewportSize();
-    const observer = new ResizeObserver(updateViewportSize);
-    observer.observe(viewport);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => () => {
-    if (dragFrameRef.current !== null) {
-      window.cancelAnimationFrame(dragFrameRef.current);
-    }
-    if (tileImageFrameRef.current !== null) {
-      window.cancelAnimationFrame(tileImageFrameRef.current);
-    }
-    if (textureInteractionTimerRef.current !== null) {
-      window.clearTimeout(textureInteractionTimerRef.current);
-    }
-    textureJobVersionRef.current += 1;
-  }, []);
-
-  // 围绕锚点 (anchorX, anchorY，均相对视口左上角) 将缩放设置为 nextScale。
-  const applyZoom = (rawScale: number, anchorX: number, anchorY: number) => {
-    const nextScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, rawScale));
-    const currentScale = scaleRef.current;
-    if (nextScale === currentScale) return;
-    markTextureInteraction();
-    const currentOffset = offsetRef.current;
-    const ratio = nextScale / currentScale;
-    setOffset({
-      x: anchorX - (anchorX - currentOffset.x) * ratio,
-      y: anchorY - (anchorY - currentOffset.y) * ratio,
-    });
-    setScale(nextScale);
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    setPaletteVisuals(null);
-    setVisualError("");
-    if (!meta) return;
-    loadLayerPaletteVisuals(meta)
-      .then((visuals) => {
-        if (!cancelled) setPaletteVisuals(visuals);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.warn("Failed to resolve source-version layer visuals:", error);
-        setVisualError({key:"flake.visualFailed"});
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [meta, visualReload]);
-
-  const colorMap = useMemo(() => {
-    const next = new Map<number, string>();
-    if (!meta) return next;
-    meta.palette.forEach((entry, index) => {
-      next.set(index, isLayerAirBlock(entry.block_id) ? "transparent" : layerMapColor(paletteVisuals?.byPalette.get(index)));
-    });
-    return next;
-  }, [paletteVisuals, meta]);
-  const missingMapColors = paletteVisuals && meta ? meta.palette.filter((_entry, index) => !paletteVisuals.byPalette.get(index)?.mapColor).length : 0;
-
-  const visibleLayerIndex = useMemo<VisibleLayerIndex>(() => {
-    const byPosition = new Map<number, VisibleLayerBlock>();
-    const rowMaps = new Map<number, Map<number, VisibleLayerBlock>>();
-    const tileMaps = new Map<string, VisibleLayerBlock[]>();
-    if (!meta || renderSlices.length === 0) {
-      return { byPosition, rows: new Map(), tiles: tileMaps };
-    }
-
-    for (const renderSlice of renderSlices) {
-      for (const block of renderSlice.sliceData.blocks) {
-        if (scale < ICON_NATIVE_SIZE && colorMap.get(block.palette_id) === "transparent") continue;
-        const positionKey = block.z * meta.size_x + block.x;
-        if (byPosition.has(positionKey)) continue;
-        const visibleBlock = {
-          block,
-          y: renderSlice.sliceData.y,
-          opacity: renderSlice.opacity,
-        };
-        byPosition.set(positionKey, visibleBlock);
-
-        const tileKey = layerTileKey(
-          Math.floor(block.x / LAYER_TILE_SIZE),
-          Math.floor(block.z / LAYER_TILE_SIZE),
-        );
-        const tile = tileMaps.get(tileKey);
-        if (tile) {
-          tile.push(visibleBlock);
-        } else {
-          tileMaps.set(tileKey, [visibleBlock]);
-        }
-
-        let row = rowMaps.get(block.z);
-        if (!row) {
-          row = new Map<number, VisibleLayerBlock>();
-          rowMaps.set(block.z, row);
-        }
-        row.set(block.x, visibleBlock);
-      }
-    }
-
-    const rows = new Map<number, VisibleLayerBlock[]>();
-    for (const [z, row] of rowMaps.entries()) {
-      rows.set(z, Array.from(row.values()).sort((a, b) => a.block.x - b.block.x));
-    }
-    return { byPosition, rows, tiles: tileMaps };
-  }, [meta, renderSlices, scale, colorMap]);
-
-  const visibleBlockWindow = useMemo<VisibleBlockWindow | null>(() => {
-    if (!meta) return null;
-    const width = viewportSize.width || 600;
-    const height = viewportSize.height || 600;
-    const safeScale = Math.max(MIN_SCALE, scale);
-    const overscanPixels = scale < ICON_NATIVE_SIZE ? LOW_ZOOM_OVERSCAN_PIXELS : RENDER_OVERSCAN_PIXELS;
-    const overscanBlocks = Math.max(2, Math.ceil(overscanPixels / safeScale));
-    const minX = Math.max(0, Math.floor((-offset.x) / safeScale) - overscanBlocks);
-    const maxX = Math.min(meta.size_x - 1, Math.ceil((width - offset.x) / safeScale) + overscanBlocks);
-    const minZ = Math.max(0, Math.floor((-offset.y) / safeScale) - overscanBlocks);
-    const maxZ = Math.min(meta.size_z - 1, Math.ceil((height - offset.y) / safeScale) + overscanBlocks);
-    if (maxX < minX || maxZ < minZ) return null;
-    return { minX, maxX, minZ, maxZ };
-  }, [meta, offset.x, offset.y, scale, viewportSize.height, viewportSize.width]);
-
-  const slicePaletteIds = useMemo(() => {
-    if (
-      !meta
-      || scale < ICON_NATIVE_SIZE
-      || visibleLayerIndex.rows.size === 0
-      || !visibleBlockWindow
-    ) {
-      return [] as number[];
-    }
-
-    const centerX = (visibleBlockWindow.minX + visibleBlockWindow.maxX) / 2;
-    const centerZ = (visibleBlockWindow.minZ + visibleBlockWindow.maxZ) / 2;
-    const palettePriority = new Map<number, number>();
-    for (let z = visibleBlockWindow.minZ; z <= visibleBlockWindow.maxZ; z += 1) {
-      const row = visibleLayerIndex.rows.get(z);
-      if (!row) continue;
-
-      for (let index = findFirstBlockAtOrAfterX(row, visibleBlockWindow.minX); index < row.length; index += 1) {
-        const visibleBlock = row[index];
-        if (visibleBlock.block.x > visibleBlockWindow.maxX) break;
-
-        const paletteId = visibleBlock.block.palette_id;
-        const entry = meta.palette[paletteId];
-        if (!entry?.block_id || isLayerAirBlock(entry.block_id)) continue;
-        const dx = visibleBlock.block.x - centerX;
-        const dz = visibleBlock.block.z - centerZ;
-        const priority = dx * dx + dz * dz;
-        const currentPriority = palettePriority.get(paletteId);
-        if (currentPriority === undefined || priority < currentPriority) {
-          palettePriority.set(paletteId, priority);
-        }
-      }
-    }
-    return Array.from(palettePriority.entries())
-      .sort((left, right) => left[1] - right[1])
-      .map(([paletteId]) => paletteId);
-  }, [meta, scale, visibleBlockWindow, visibleLayerIndex]);
-
-  useLayoutEffect(() => {
-    const tileCache = layerTileCacheRef.current;
-    if (!meta || !visibleBlockWindow) {
-      tileCache.tiles.clear();
-      tileCache.mode = null;
-      tileCache.meta = null;
-      tileCache.scale = 0;
-      tileCache.devicePixelRatio = 0;
-      tileCache.colorMap = null;
-      tileCache.tileSource = null;
-      tileCache.iconImages = null;
-      tileCache.tileImageRevision = 0;
-      const canvas = layerTileCanvasRef.current;
-      const context = canvas?.getContext("2d");
-      if (canvas && context) {
-        context.setTransform(1, 0, 0, 1, 0, 0);
-        context.clearRect(0, 0, canvas.width, canvas.height);
-      }
-      return;
-    }
-
-    const canvas = layerTileCanvasRef.current;
-    const viewport = viewportRef.current;
-    if (!canvas || !viewport) return;
-
-    const width = Math.max(1, viewportSize.width || viewport.clientWidth || 600);
-    const height = Math.max(1, viewportSize.height || viewport.clientHeight || 600);
-    const devicePixelRatio = Math.max(1, window.devicePixelRatio || 1);
-    const renderMode: LayerTileRenderMode = scale < ICON_NATIVE_SIZE ? "map-color" : "texture";
-    const tileIconImages = renderMode === "texture" ? iconImages : null;
-    const activeTileImageRevision = renderMode === "texture" ? tileImageRevision : 0;
-    if (
-      tileCache.mode !== renderMode
-      || tileCache.meta !== meta
-      || tileCache.scale !== scale
-      || tileCache.devicePixelRatio !== devicePixelRatio
-      || tileCache.colorMap !== colorMap
-      || tileCache.tileSource !== visibleLayerIndex.tiles
-      || tileCache.iconImages !== tileIconImages
-      || tileCache.tileImageRevision !== activeTileImageRevision
-    ) {
-      tileCache.tiles.clear();
-      tileCache.mode = renderMode;
-      tileCache.meta = meta;
-      tileCache.scale = scale;
-      tileCache.devicePixelRatio = devicePixelRatio;
-      tileCache.colorMap = colorMap;
-      tileCache.tileSource = visibleLayerIndex.tiles;
-      tileCache.iconImages = tileIconImages;
-      tileCache.tileImageRevision = activeTileImageRevision;
-    }
-
-    const canvasWidth = Math.max(1, Math.round(width * devicePixelRatio));
-    const canvasHeight = Math.max(1, Math.round(height * devicePixelRatio));
-    if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
-      canvas.width = canvasWidth;
-      canvas.height = canvasHeight;
-    }
-
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-    context.imageSmoothingEnabled = false;
-    context.clearRect(0, 0, width, height);
-
-    const minTileX = Math.floor(visibleBlockWindow.minX / LAYER_TILE_SIZE);
-    const maxTileX = Math.floor(visibleBlockWindow.maxX / LAYER_TILE_SIZE);
-    const minTileZ = Math.floor(visibleBlockWindow.minZ / LAYER_TILE_SIZE);
-    const maxTileZ = Math.floor(visibleBlockWindow.maxZ / LAYER_TILE_SIZE);
-    const maxCacheSize = getMaxLayerTileCacheSize(renderMode, scale);
-    for (let tileZ = minTileZ; tileZ <= maxTileZ; tileZ += 1) {
-      for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
-        const tileKey = layerTileKey(tileX, tileZ);
-        const tileBlocks = visibleLayerIndex.tiles.get(tileKey);
-        if (!tileBlocks) continue;
-
-        let tile = tileCache.tiles.get(tileKey);
-        if (!tile) {
-          const built = buildLayerTile(
-            tileBlocks,
-            tileX,
-            tileZ,
-            meta,
-            scale,
-            devicePixelRatio,
-            colorMap,
-            tileIconImages,
-            tileIconImageCacheRef.current,
-            scheduleTileImageRevision,
-          );
-          tile = built.canvas;
-          tileCache.tiles.set(tileKey, tile);
-          if (tileCache.tiles.size > maxCacheSize) {
-            const oldestKey = tileCache.tiles.keys().next().value;
-            if (oldestKey) tileCache.tiles.delete(oldestKey);
-          }
-        }
-
-        const originX = tileX * LAYER_TILE_SIZE;
-        const originZ = tileZ * LAYER_TILE_SIZE;
-        const tileWidth = Math.max(1, Math.ceil(Math.min(LAYER_TILE_SIZE, meta.size_x - originX) * scale));
-        const tileHeight = Math.max(1, Math.ceil(Math.min(LAYER_TILE_SIZE, meta.size_z - originZ) * scale));
-        context.drawImage(
-          tile,
-          Math.round(originX * scale + offset.x),
-          Math.round(originZ * scale + offset.y),
-          tileWidth,
-          tileHeight,
-        );
-      }
-    }
-  }, [
-    colorMap,
-    iconImages,
-    meta,
-    offset.x,
-    offset.y,
-    scale,
-    scheduleTileImageRevision,
-    tileImageRevision,
-    visibleBlockWindow,
-    visibleLayerIndex.tiles,
-    viewportSize.height,
-    viewportSize.width,
-  ]);
-
-  const borderStyle: CssVariableStyle<"--flake-layer-border-width" | "--flake-layer-border-height"> = useMemo(() => ({
-    "--flake-layer-border-width": `${Math.max(1, Math.round(meta ? meta.size_x * scale : 0))}px`,
-    "--flake-layer-border-height": `${Math.max(1, Math.round(meta ? meta.size_z * scale : 0))}px`,
-  }), [meta, scale]);
-
-  const measurementOverlays = useMemo(() => {
-    const allMeasurements = measurementDraft ? [...measurements, measurementDraft] : measurements;
-    return allMeasurements.map((rect) => {
-      const normalized = normalizeMeasurementRect(rect);
-      const leftPx = Math.round(normalized.minX * scale);
-      const topPx = Math.round(normalized.minZ * scale);
-      const widthPx = Math.max(1, Math.round((normalized.maxX + 1) * scale) - leftPx);
-      const heightPx = Math.max(1, Math.round((normalized.maxZ + 1) * scale) - topPx);
-      const diagonalStartX = rect.startX <= rect.endX ? 0 : widthPx;
-      const diagonalStartY = rect.startZ <= rect.endZ ? 0 : heightPx;
-      const diagonalEndX = rect.startX <= rect.endX ? widthPx : 0;
-      const diagonalEndY = rect.startZ <= rect.endZ ? heightPx : 0;
-      const euclidean = Math.sqrt(
-        normalized.widthBlocks * normalized.widthBlocks
-        + normalized.heightBlocks * normalized.heightBlocks
-      );
-      const manhattan = normalized.widthBlocks + normalized.heightBlocks;
-      const gridPathParts: string[] = [];
-      if (scale >= 8) {
-        for (let x = normalized.minX + 1; x <= normalized.maxX; x += 1) {
-          const lineX = Math.round(x * scale) - leftPx;
-          gridPathParts.push(`M ${lineX} 0 V ${heightPx}`);
-        }
-        for (let z = normalized.minZ + 1; z <= normalized.maxZ; z += 1) {
-          const lineZ = Math.round(z * scale) - topPx;
-          gridPathParts.push(`M 0 ${lineZ} H ${widthPx}`);
-        }
-      }
-      return {
-        id: rect.id,
-        isDraft: rect.id === "__draft__",
-        gridPath: gridPathParts.join(" "),
-        showGrid: gridPathParts.length > 0,
-        widthPx,
-        heightPx,
-        gridDash: scale >= 8 ? "4 4" : "2 2",
-        xLabel: `x ${normalized.widthBlocks}`,
-        zLabel: `z ${normalized.heightBlocks}`,
-        manhattanLabel: t("flake.manhattan", {distance:manhattan.toLocaleString(locale)}),
-        insideLabel: widthPx >= 64 && heightPx >= 28
-          ? t("flake.euclidean", {distance:formatMeasurementDistance(euclidean)})
-          : `E ${formatMeasurementDistance(euclidean)}`,
-        showInsideLabel: widthPx >= 28 && heightPx >= 18,
-        diagonalStartX,
-        diagonalStartY,
-        diagonalEndX,
-        diagonalEndY,
-        style: {
-          "--flake-measurement-left": `${leftPx}px`,
-          "--flake-measurement-top": `${topPx}px`,
-          "--flake-measurement-width": `${widthPx}px`,
-          "--flake-measurement-height": `${heightPx}px`,
-        } as CssVariableStyle<
-          | "--flake-measurement-left"
-          | "--flake-measurement-top"
-          | "--flake-measurement-width"
-          | "--flake-measurement-height"
-        >,
-      };
-    });
-  }, [measurementDraft, measurements, scale, locale]);
-
-  const originMarkerOverlay = useMemo(() => {
-    const marker = originDragDraft || originMarker;
-    if (!meta || !marker || marker.y !== layerY) return null;
-    if (marker.x < 0 || marker.x >= meta.size_x || marker.z < 0 || marker.z >= meta.size_z) return null;
-    const leftPx = Math.round(marker.x * scale);
-    const topPx = Math.round(marker.z * scale);
-    const rightPx = Math.max(leftPx + 1, Math.round((marker.x + 1) * scale));
-    const bottomPx = Math.max(topPx + 1, Math.round((marker.z + 1) * scale));
-    return {
-      style: {
-        "--flake-origin-marker-left": `${leftPx}px`,
-        "--flake-origin-marker-top": `${topPx}px`,
-        "--flake-origin-marker-width": `${rightPx - leftPx}px`,
-        "--flake-origin-marker-height": `${bottomPx - topPx}px`,
-      } as CssVariableStyle<
-        | "--flake-origin-marker-left"
-        | "--flake-origin-marker-top"
-        | "--flake-origin-marker-width"
-        | "--flake-origin-marker-height"
-      >,
-    };
-  }, [layerY, meta, originDragDraft, originMarker, scale]);
-
-  const resetView = () => {
-    if (meta) fitView(meta, viewportRef.current, setScale, setOffset);
-  };
-
-  // 命令式缩放：围绕视口中心缩放，供层级控制区的滑块 / 输入框调用。
-  const zoomTo = (nextScale: number) => {
-    const viewport = viewportRef.current;
-    const rect = viewport?.getBoundingClientRect();
-    const anchorX = rect ? rect.width / 2 : 0;
-    const anchorY = rect ? rect.height / 2 : 0;
-    applyZoom(nextScale, anchorX, anchorY);
-  };
-
-  useImperativeHandle(ref, () => ({ resetView, zoomTo }), [meta]);
-
-  useEffect(() => {
-    if (meta) resetView();
-  }, [meta]);
-
-  useEffect(() => {
-    textureJobVersionRef.current += 1;
-    const emptyImages = new Map<number, string>();
-    iconImagesRef.current = emptyImages;
-    tileIconImageCacheRef.current.clear();
-    setTileImageRevision((current) => current + 1);
-    setIconImages(emptyImages);
-  }, [meta, showStateHints, paletteVisuals, visualReload]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (
-      !meta
-      || !paletteVisuals
-      || scale < ICON_NATIVE_SIZE
-      || isDragging
-      || isTextureInteractionActive
-      || slicePaletteIds.length === 0
-    ) {
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    const pendingPaletteIds = slicePaletteIds.filter((paletteId) => !iconImagesRef.current.has(paletteId));
-    if (!pendingPaletteIds.length) {
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    const jobVersion = ++textureJobVersionRef.current;
-    let cursor = 0;
-    const workerCount = Math.min(TEXTURE_LOAD_CONCURRENCY, pendingPaletteIds.length);
-
-    const runWorker = async () => {
-      while (!cancelled && textureJobVersionRef.current === jobVersion) {
-        const paletteId = pendingPaletteIds[cursor];
-        cursor += 1;
-        if (paletteId === undefined) return;
-        if (iconImagesRef.current.has(paletteId)) continue;
-
-        const entry = meta.palette[paletteId];
-        if (!entry?.block_id) continue;
-
-        try {
-          const dataUrl = await getCachedIconImage(
-            paletteVisuals.version,
-            meta.minecraft_data_version,
-            entry.block_id,
-            entry,
-            meta.property_pool || [],
-            showStateHints,
-            () => loadFlakeModelTopTexture(
-              paletteVisuals.version,
-              layerPaletteState(entry, meta.property_pool || []),
-            ),
-          );
-          if (!dataUrl || cancelled || textureJobVersionRef.current !== jobVersion) continue;
-          setIconImages((current) => {
-            if (cancelled || textureJobVersionRef.current !== jobVersion || current.has(paletteId)) return current;
-            const next = new Map(current);
-            next.set(paletteId, dataUrl);
-            iconImagesRef.current = next;
-            return next;
-          });
-          await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-        } catch (error) {
-          console.error(`Failed to resolve icon for palette ${paletteId}:`, error);
-        }
-      }
-    };
-
-    // Check which pending blocks have no 2D icon, then rasterise every missing
-    // model plane in one native call instead of one process per state.
-    const prefetchModelPlanes = async () => {
-      const missingStates: string[] = [];
-      const checkBatchSize = 8;
-      for (let start = 0; start < pendingPaletteIds.length; start += checkBatchSize) {
-        if (cancelled || textureJobVersionRef.current !== jobVersion) return;
-        const batch = pendingPaletteIds.slice(start, start + checkBatchSize);
-        const missing = await Promise.all(batch.map(async (paletteId) => {
-          const entry = meta.palette[paletteId];
-          if (!entry?.block_id) return null;
-          const icon = await getBlockIconDataUrl(entry.block_id, "layering").catch(() => null);
-          return icon ? null : layerPaletteState(entry, meta.property_pool || []);
-        }));
-        for (const state of missing) {
-          if (state) missingStates.push(state);
-        }
-      }
-      if (!cancelled && textureJobVersionRef.current === jobVersion && missingStates.length) {
-        // Start the batch without blocking icons that already have a 2D image;
-        // its per-state promises are registered synchronously.
-        void loadFlakeModelTopTextures(paletteVisuals.version, missingStates);
-      }
-    };
-
-    void (async () => {
-      await prefetchModelPlanes();
-      if (cancelled || textureJobVersionRef.current !== jobVersion) return;
-      await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isDragging, isTextureInteractionActive, meta, scale, slicePaletteIds, showStateHints, paletteVisuals, visualReload]);
-
-  // 滚轮事件
-  const handleWheel = (event: React.WheelEvent) => {
-    event.preventDefault();
-    if (!viewportRef.current) return;
-    const direction = event.deltaY < 0 ? 1 : -1;
-    const rect = viewportRef.current.getBoundingClientRect();
-    // 缩放乘数
-    applyZoom(scaleRef.current * Math.pow(2, direction), event.clientX - rect.left, event.clientY - rect.top);
-  };
-
-  const resolveBlockAtEvent = (event: React.MouseEvent): FlakeHoverBlock | null => {
-    if (!meta || visibleLayerIndex.byPosition.size === 0) return null;
-
-    const point = resolveMeasurementPointAtClient(event.clientX, event.clientY);
-    if (!point) return null;
-    const bx = point.x;
-    const bz = point.z;
-    const visibleBlock = visibleLayerIndex.byPosition.get(bz * meta.size_x + bx);
-    if (!visibleBlock) return null;
-
-    const paletteId = visibleBlock.block.palette_id;
-    const paletteEntry = meta.palette[paletteId];
-    if (!paletteEntry) return null;
-
-    const originalStateRecord = normalizeLayerStateRecord(extractLayerPaletteStates(paletteEntry, meta.property_pool || []));
-    const positionKey = flakeBlockPositionKey(bx, visibleBlock.y, bz);
-    const stateRecord = editedBlockStates[positionKey] || originalStateRecord;
-
-    return {
-      x: bx,
-      y: visibleBlock.y,
-      z: bz,
-      paletteId,
-      id: paletteEntry.block_id,
-      name: translateBlockId(paletteEntry.block_id),
-      minecraftVersion: paletteVisuals?.version,
-      states: layerStateRecordText(stateRecord),
-      stateRecord,
-      originalStateRecord,
-      hasStates: Object.keys(originalStateRecord).length > 0,
-    };
-  };
-
-  const handleMouseMove = (event: React.MouseEvent) => {
-    if (isDraggingOrigin) {
-      emitHoverBlock(null, null);
-      return;
-    }
-
-    if (isMeasuring) {
-      emitHoverBlock(null, null);
-      return;
-    }
-
-    if (isDragging) {
-      markTextureInteraction();
-      if (scale >= HOVER_TOOLTIP_MIN_SCALE && lastHoverBlockRef.current) {
-        emitHoverBlock(lastHoverBlockRef.current, event);
-      }
-      scheduleOffset({ x: event.clientX - dragStart.x, y: event.clientY - dragStart.y });
-      return;
-    }
-
-    if (scale < HOVER_TOOLTIP_MIN_SCALE) {
-      emitHoverBlock(null, null);
-      return;
-    }
-
-    emitHoverBlock(resolveBlockAtEvent(event), event);
-  };
-
-  const handleContextMenu = (event: React.MouseEvent) => {
-    event.preventDefault();
-    if (interactionTool === "measure") {
-      setIsMeasuring(false);
-      setMeasurementDraftValue(null);
-      const point = resolveMeasurementPointAtClient(event.clientX, event.clientY);
-      if (point) onDeleteMeasurementAt(point);
-      return;
-    }
-
-    if (interactionTool === "marker") {
-      const gridPoint = resolveMeasurementPointAtClient(event.clientX, event.clientY);
-      if (gridPoint) {
-        const point = { x: gridPoint.x, y: layerY, z: gridPoint.z };
-        onMarkerContextMenu(point, markerPointsEqual(originMarker, point), event);
-      }
-      return;
-    }
-
-    const block = resolveBlockAtEvent(event);
-    if (block) onBlockRightClick(block, event);
-  };
-
-  const handleClick = (event: React.MouseEvent) => {
-    if (event.button !== 0 || interactionTool === "hand" || interactionTool === "measure" || interactionTool === "marker") return;
-    const block = resolveBlockAtEvent(event);
-    if (block) onBlockClick(block, event);
-  };
-
-  const handleMouseDown = (event: React.MouseEvent) => {
-    if (event.button === 0 && interactionTool === "marker" && originMarker?.y === layerY) {
-      const point = resolveMeasurementPointAtClient(event.clientX, event.clientY);
-      if (point && point.x === originMarker.x && point.z === originMarker.z) {
-        event.preventDefault();
-        emitHoverBlock(null, null);
-        setIsDraggingOrigin(true);
-        setOriginDragDraftValue({ ...originMarker });
-        return;
-      }
-    }
-
-    if (event.button === 0 && interactionTool === "hand") {
-      markTextureInteraction();
-      setIsDragging(true);
-      setDragStart({ x: event.clientX - offsetRef.current.x, y: event.clientY - offsetRef.current.y });
-      return;
-    }
-
-    if (event.button !== 0 || interactionTool !== "measure") return;
-    const point = resolveMeasurementPointAtClient(event.clientX, event.clientY);
-    if (!point) return;
-    event.preventDefault();
-    emitHoverBlock(null, null);
-    setMeasurementDraftValue({
-      id: "__draft__",
-      startX: point.x,
-      startZ: point.z,
-      endX: point.x,
-      endZ: point.z,
-    });
-    setIsMeasuring(true);
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-    if (isMeasuring) finishMeasurementDraft();
-    if (isDraggingOrigin) finishOriginDrag();
-  };
-
-  return (
-    <div
-      ref={viewportRef}
-      className={[
-        "flake-canvas",
-        isDragging ? "is-dragging" : "",
-        interactionTool === "measure" ? "is-measure-tool" : "",
-        interactionTool === "marker" ? "is-marker-tool" : "",
-        isMeasuring ? "is-measuring" : "",
-        isDraggingOrigin ? "is-dragging-marker" : "",
-      ].filter(Boolean).join(" ")}
-      onWheel={handleWheel}
-      onMouseDown={handleMouseDown}
-      onClick={handleClick}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={() => {
-        setIsDragging(false);
-        emitHoverBlock(null, null);
-      }}
-      onContextMenu={handleContextMenu}
-    >
-      {(visualError || missingMapColors > 0) && <div className="flake-visual-status" role="status" onMouseDown={event => event.stopPropagation()}>
-        <span>{localizeMessage(visualError) || t("flake.missingMapColors", {count:missingMapColors.toLocaleString(locale)})}</span>
-        {visualError && <Button onClick={event => { event.stopPropagation(); setVisualReload(previous => previous + 1); }}>{t("editor.reload")}</Button>}
-      </div>}
-      <canvas
-        ref={layerTileCanvasRef}
-        className="flake-layer-tile-canvas"
-        aria-hidden="true"
-      />
-      <div
-        ref={worldRef}
-        className="flake-layer-world"
-      >
-        <div
-          className="flake-layer-border"
-          style={borderStyle}
-        />
-        {measurementOverlays.map((measurement) => (
-          <div
-            key={measurement.id}
-            className={measurement.isDraft ? "flake-measurement-rect is-draft" : "flake-measurement-rect"}
-            style={measurement.style}
-          >
-            <svg
-              className="flake-measurement-svg"
-              viewBox={`0 0 ${measurement.widthPx} ${measurement.heightPx}`}
-              preserveAspectRatio="none"
-              aria-hidden="true"
-            >
-              {measurement.showGrid ? (
-                <path
-                  className="flake-measurement-grid-line"
-                  d={measurement.gridPath}
-                  strokeDasharray={measurement.gridDash}
-                />
-              ) : null}
-              <line
-                className="flake-measurement-diagonal"
-                x1={measurement.diagonalStartX}
-                y1={measurement.diagonalStartY}
-                x2={measurement.diagonalEndX}
-                y2={measurement.diagonalEndY}
-              />
-            </svg>
-            <span className="flake-measurement-label flake-measurement-label--x">
-              {measurement.xLabel}
-            </span>
-            <span className="flake-measurement-label flake-measurement-label--z">
-              {measurement.zLabel}
-            </span>
-            <span className="flake-measurement-label flake-measurement-label--manhattan">
-              {measurement.manhattanLabel}
-            </span>
-            {measurement.showInsideLabel ? (
-              <span className="flake-measurement-label flake-measurement-label--inside">
-                {measurement.insideLabel}
-              </span>
-            ) : null}
-          </div>
-        ))}
-        {originMarkerOverlay ? (
-          <div
-            className={isDraggingOrigin ? "flake-origin-marker is-dragging" : "flake-origin-marker"}
-            style={originMarkerOverlay.style}
-            aria-hidden="true"
-          />
-        ) : null}
-      </div>
-    </div>
-  );
-});
-
 function FlakeDebugStateDialog({
   block,
   onApply,
@@ -1501,17 +266,12 @@ function FlakeDebugStateDialog({
   const [draftState, setDraftState] = useState<Record<string, string>>(() => ({ ...block.stateRecord }));
   const [selectedNoteScaleName, setSelectedNoteScaleName] = useState(DEFAULT_NOTE_SCALE_NAME);
   const propertyKeys = useMemo(() => Object.keys(block.stateRecord).sort(), [block.stateRecord]);
-  const [knownProperties, setKnownProperties] = useState<Record<string, string[]>>({});
+  const knownProperties = block.propertyOptions;
   const selectedNoteScale = NOTE_SCALE_OPTIONS.find((option) => option.name === selectedNoteScaleName) || NOTE_SCALE_OPTIONS[0];
 
   useEffect(() => {
     setDraftState({ ...block.stateRecord });
-    setKnownProperties({});
-    let cancelled = false;
-    if (block.minecraftVersion) void loadDatabases(block.minecraftVersion).then(() => {
-      if (!cancelled) setKnownProperties(getBlockProperties(block.id, block.minecraftVersion));
-    }).catch(error => console.warn("Source-version state options unavailable", error));
-    return () => { cancelled = true; };
+
   }, [block]);
 
   const setProperty = (key: string, value: string) => {
@@ -1617,8 +377,10 @@ function FlakeDebugStateDialog({
 export function FlakePage({ currentFile, setRoute }: any) {
   const { locale } = useI18n();
   const [viewMode, setViewMode] = useState<"2d" | "3d">("2d");
-  const [meta, setMeta] = useState<LayerSliceMeta | null>(null);
-  const [sliceDataByY, setSliceDataByY] = useState<Record<number, LayerSliceData | null>>({});
+  const [scene, setScene] = useState<LayerScene | null>(null);
+  const meta = scene?.meta ?? null;
+  const sceneRef = useRef<LayerScene | null>(null);
+  const [layerImage, setLayerImage] = useState<LayerViewImage | null>(null);
   const [statsData, setStatsData] = useState<StatsData | null>(null);
   const [layerY, setLayerY] = useState(0);
   const [onionSkinDepth, setOnionSkinDepth] = useState(0);
@@ -1655,14 +417,13 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const markerMenuRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const syncRequestIdRef = useRef(0);
-  const inFlightSliceKeysRef = useRef(new Set<string>());
-  const loadedSliceKeysRef = useRef(new Set<string>());
   const measurementIdRef = useRef(0);
   const markerRequestIdRef = useRef(0);
+  const markerSourceRef = useRef("");
   const updateDraft = { editedBlockStates, measurementRects, draftOriginMarker, hasDraftOriginMarker, quickbarSlots, selectedQuickbarSlot };
   useUpdateDraft(`flake:${currentFile}`, updateDraft);
 
-  const refreshProjectionMarkers = useCallback(async () => {
+  const refreshProjectionMarkers = useCallback(async (initialOrigin?: ProjectionMarkerPoint | null) => {
     if (!currentFile) {
       setOriginMarker(null);
       setDraftOriginMarker(null);
@@ -1670,7 +431,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
       return;
     }
     const requestId = ++markerRequestIdRef.current;
-    const markers = await loadProjectionMarkers(currentFile);
+    const markers = initialOrigin === undefined ? await loadProjectionMarkers(currentFile) : { origin: initialOrigin };
     if (requestId !== markerRequestIdRef.current) return;
     setOriginMarker(markers.origin);
     const recovered = takeUpdateDraft<typeof updateDraft>(`flake:${currentFile}`);
@@ -1685,24 +446,25 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
   const loadProjectionLayers = async () => {
     const requestId = ++syncRequestIdRef.current;
-    setMeta(null);
-    setSliceDataByY({});
-    loadedSliceKeysRef.current.clear();
-    inFlightSliceKeysRef.current.clear();
-    setLayerError("");
-    setIsLoadingLayers(!!currentFile);
+    const previous = sceneRef.current; sceneRef.current = null;
+    setScene(null); setLayerImage(null); setLayerError(""); setIsLoadingLayers(!!currentFile);
+    if (previous) void releaseLayerScene(previous).catch(() => undefined);
     if (!currentFile) return;
     try {
-      const loadedMeta = await readLayerMeta({ sourcePath: currentFile });
-      if (requestId !== syncRequestIdRef.current) return;
-      setMeta(loadedMeta);
-      setLayerY(0);
+      const opened = await openLayerScene(currentFile);
+      if (requestId !== syncRequestIdRef.current) { void releaseLayerScene(opened).catch(() => undefined); return; }
+      sceneRef.current = opened; setScene(opened); setLayerY(value => Math.max(0, Math.min(value, opened.meta.size_y - 1)));
+      if (markerSourceRef.current !== currentFile) { markerSourceRef.current = currentFile; await refreshProjectionMarkers(opened.origin); }
+      else setOriginMarker(opened.origin);
     } catch (error) {
-      if (requestId === syncRequestIdRef.current) setLayerError({ key: "flake.layersFailed", params: {error:String(error)} });
+      if (requestId === syncRequestIdRef.current) setLayerError({ key: "flake.layersFailed", params: { error: String(error) } });
     } finally {
       if (requestId === syncRequestIdRef.current) setIsLoadingLayers(false);
     }
   };
+  const handleViewState = useCallback((image: LayerViewImage | null, error: string) => {
+    setLayerImage(image); setLayerError(error);
+  }, []);
 
   const handleToolSplitterPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     resizeStateRef.current = { startX: event.clientX, startWidth: toolPanelWidth };
@@ -1735,6 +497,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
   useEffect(() => {
 
+    markerSourceRef.current = ""; setLayerY(0);
     setStatsData(null);
     setMaterialBlocks([]);
     setShowContainerDialog(false);
@@ -1752,13 +515,17 @@ export function FlakePage({ currentFile, setRoute }: any) {
     measurementIdRef.current = 0;
     setDebugStateBlock(null);
     if (viewMode === "2d") void loadProjectionLayers();
-    else { setMeta(null); setSliceDataByY({}); setIsLoadingLayers(false); }
-    const requestId = syncRequestIdRef.current;
-    void refreshProjectionMarkers().catch((error) => {
-      if (requestId === syncRequestIdRef.current) setMarkerStatus({ key: "flake.originReadFailed", params: {error:String(error)} });
-    });
-    return () => { ++syncRequestIdRef.current; ++markerRequestIdRef.current; };
+    else { setScene(null); setLayerImage(null); setIsLoadingLayers(false); }
+    return () => { ++syncRequestIdRef.current; ++markerRequestIdRef.current; const opened = sceneRef.current; sceneRef.current = null; if (opened) void releaseLayerScene(opened).catch(() => undefined); };
   }, [currentFile]);
+
+  useEffect(() => {
+    const subscription = listenEvent("game-resources-changed", () => {
+      if (viewMode === "2d") void loadProjectionLayers();
+      else { const opened = sceneRef.current; sceneRef.current = null; setScene(null); if (opened) void releaseLayerScene(opened).catch(() => undefined); }
+    });
+    return () => { void subscription.then(unlisten => unlisten()).catch(() => undefined); };
+  }, [currentFile, viewMode]);
 
   // Selecting 3D for a new source must not start the unrelated all-layer 2D catalog.
   // Returning to 2D loads it only if this source has not already been prepared.
@@ -1818,47 +585,6 @@ export function FlakePage({ currentFile, setRoute }: any) {
       window.removeEventListener("blur", handleBlur);
     };
   }, [debugStateBlock, editMode]);
-
-  useEffect(() => {
-    if (!meta || !currentFile) return;
-    const requestId = syncRequestIdRef.current;
-    const maxDepth = Math.min(5, onionSkinDepth, layerY);
-    for (let depth = 0; depth <= maxDepth; depth += 1) {
-      const targetY = layerY - depth;
-      const sliceKey = `${currentFile}::${requestId}::${targetY}`;
-      if (inFlightSliceKeysRef.current.has(sliceKey) || loadedSliceKeysRef.current.has(sliceKey)) continue;
-      inFlightSliceKeysRef.current.add(sliceKey);
-      readLayer({ sourcePath: currentFile, y: targetY })
-        .then((nextSlice) => {
-          if (requestId !== syncRequestIdRef.current) return;
-          loadedSliceKeysRef.current.add(sliceKey);
-          setSliceDataByY((current) => ({ ...current, [targetY]: nextSlice }));
-        })
-        .catch((error) => {
-          if (requestId !== syncRequestIdRef.current) return;
-          setLayerError({ key: "flake.layerFailed", params: {layer:targetY,error:String(error)} });
-        })
-        .finally(() => inFlightSliceKeysRef.current.delete(sliceKey));
-    }
-  }, [layerY, onionSkinDepth, meta, currentFile]);
-
-  const sliceData = sliceDataByY[layerY] ?? null;
-  const renderSlices = useMemo(() => {
-    if (!Object.prototype.hasOwnProperty.call(sliceDataByY, layerY) || sliceDataByY[layerY] === null) return [] as FlakeRenderSlice[];
-    const effectiveDepth = Math.min(5, onionSkinDepth, layerY);
-    const next: FlakeRenderSlice[] = [];
-    for (let depth = 0; depth <= effectiveDepth; depth += 1) {
-      const targetY = layerY - depth;
-      const slice = sliceDataByY[targetY];
-      if (!slice) continue;
-      next.push({
-        depth,
-        opacity: depth === 0 ? 1 : (onionSkinDepth + 1 - depth) / (onionSkinDepth + 1),
-        sliceData: slice,
-      });
-    }
-    return next;
-  }, [layerY, onionSkinDepth, sliceDataByY]);
 
   const effectiveEditTool: EditToolId = editMode && !isSpaceHandTool ? selectedEditTool : "hand";
   const effectiveOriginMarker = hasDraftOriginMarker ? draftOriginMarker : originMarker;
@@ -1998,6 +724,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
       setMarkerStatus(summary.origin
         ? { key: "flake.originSaved", params: {x:summary.origin.x,y:summary.origin.y,z:summary.origin.z} }
         : {key:"flake.originRemoved"});
+      setIsSavingEdits(false); void loadProjectionLayers();
     } catch (error) {
       if (requestId === syncRequestIdRef.current) setMarkerStatus({ key: "flake.originSaveFailed", params: {error:String(error)} });
     } finally {
@@ -2029,6 +756,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
         setMarkerStatus(summary.origin
           ? { key: "flake.originSaved", params: {x:summary.origin.x,y:summary.origin.y,z:summary.origin.z} }
           : {key:"flake.originRemoved"});
+        setIsSavingEdits(false); void loadProjectionLayers();
       } else {
         setMarkerStatus({ key: "flake.originSavedAs", params: {path:displayFilePath(savedPath)} });
       }
@@ -2125,13 +853,13 @@ export function FlakePage({ currentFile, setRoute }: any) {
     menu.style.setProperty("--flake-marker-menu-top", `${markerMenu.clientY}px`);
   }, [markerMenu]);
 
-  const regionName = statsData?.regions?.[0]?.name || currentFile?.split(/[\\/]/).pop() || "Unnamed";
+  const regionName = hoverBlock?.region || meta?.name || currentFile?.split(/[\\/]/).pop() || "Unnamed";
   const maxY = meta ? Math.max(0, meta.size_y - 1) : 0;
   const ready = !!meta;
   const building = isLoadingLayers;
   const statusText = localizeMessage(layerError) || (!ready
     ? (building ? t("flake.readingLayers") : t("flake.layersNotReady"))
-    : !sliceData ? t("flake.readingLayer", {layer:layerY}) : t("flake.layerStatus", {layer:layerY,blocks:(sliceData?.blocks?.length || 0).toLocaleString(locale),depth:onionSkinDepth}));
+    : !layerImage ? t("flake.readingLayer", {layer:layerY + (meta?.min_y || 0)}) : t("flake.layerStatus", {layer:layerImage.worldY,blocks:layerImage.blockCount.toLocaleString(locale),depth:onionSkinDepth}));
 
   if (!currentFile) {
     return (
@@ -2199,9 +927,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
       {viewMode === "3d" ? <Layer3DView key={currentFile} sourcePath={currentFile} blocked={showMaterials || showContainerDialog || !!debugStateBlock || showInventoryDialog} /> : <>
       <div className="flake-page__control-box">
         <div className="flake-page__primary-controls" role="toolbar" aria-label={t("flake.layerControls")}>
-          <label className="flake-page__y-field">Y <Input type="number" min={0} max={maxY} value={layerY} disabled={!ready} aria-label={t("flake.currentLayer")} onChange={event => {
+          <label className="flake-page__y-field">Y <Input type="number" min={meta?.min_y ?? 0} max={maxY + (meta?.min_y ?? 0)} value={layerY + (meta?.min_y ?? 0)} disabled={!ready} aria-label={t("flake.currentLayer")} onChange={event => {
             const next = Number(event.target.value);
-            if (Number.isFinite(next)) setLayerY(Math.max(0, Math.min(maxY, Math.round(next))));
+            if (Number.isFinite(next)) setLayerY(Math.max(0, Math.min(maxY, Math.round(next) - (meta?.min_y ?? 0))));
           }} /></label>
           <Button className="flake-page__step-button" disabled={!ready || layerY === 0} title={t("flake.previousLayer")} aria-label={t("flake.previousLayer")} onClick={() => setLayerY(Math.max(0, layerY - 1))}><Minus aria-hidden="true" /></Button>
           <Button className="flake-page__step-button" disabled={!ready || layerY === maxY} title={t("flake.nextLayer")} aria-label={t("flake.nextLayer")} onClick={() => setLayerY(Math.min(maxY, layerY + 1))}><Plus aria-hidden="true" /></Button>
@@ -2249,9 +977,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
             ) : (
               <LayerCanvas
                 ref={canvasRef}
-                meta={meta}
+                scene={scene!}
                 layerY={layerY}
-                renderSlices={renderSlices}
+                onionDepth={onionSkinDepth}
                 showStateHints={showStateHints}
                 interactionTool={effectiveEditTool}
                 editedBlockStates={editedBlockStates}
@@ -2265,10 +993,11 @@ export function FlakePage({ currentFile, setRoute }: any) {
                 onAddMeasurement={handleAddMeasurement}
                 onDeleteMeasurementAt={handleDeleteMeasurementAt}
                 onScaleChange={setViewScale}
+                onViewState={handleViewState}
               />
             )}
 
-            {ready && sliceData && sliceData.blocks.length === 0 && <div className="flake-page__empty-layer" role="status">Y = {layerY} · {t("flake.emptyLayer")}</div>}
+            {ready && layerImage && layerImage.blockCount === 0 && <div className="flake-page__empty-layer" role="status">Y = {layerY + (meta?.min_y ?? 0)} · {t("flake.emptyViewport")}</div>}
             <FlakeBlockTooltip
               x={hoverPos.x}
               y={hoverPos.y}
@@ -2299,7 +1028,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
                   </div>
                   <div className="flake-page__tool-panel-kv">
                     <span className="nova-muted">{t("flake.layer")}</span>
-                    <span>Y = {layerY}</span>
+                    <span>Y = {layerY + (meta?.min_y ?? 0)}</span>
                   </div>
                   <div className="flake-page__tool-panel-kv">
                     <span className="nova-muted">{t("flake.data2d")}</span>
