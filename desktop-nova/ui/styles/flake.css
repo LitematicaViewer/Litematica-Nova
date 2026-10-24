@@ -20,16 +20,30 @@
     position: absolute;
     left: var(--ln-space-2);
     bottom: var(--ln-space-2);
-    z-index: 2;
+    z-index: 8;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
     gap: var(--ln-space-2);
     max-width: calc(100% - 1rem);
+    max-height: min(50%, 20rem);
+    overflow: auto;
     padding: var(--ln-space-2);
     font-size: .8125rem;
     color: var(--foreground);
     background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
 }
+.flake-visual-status__heading { display: flex; align-items: center; flex-wrap: wrap; gap: var(--ln-space-2); }
+.flake-visual-status__heading > span { flex: 1 1 14rem; overflow-wrap: anywhere; }
+.flake-visual-status[data-state="failed"] { border-color: var(--destructive); }
+.flake-visual-diagnostics { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+.flake-visual-diagnostics > summary { cursor: pointer; }
+.flake-visual-diagnostics > p { margin: var(--ln-space-2) 0; }
+.flake-visual-diagnostics > ul { padding-left: var(--ln-space-4); margin: 0; }
+.flake-visual-diagnostics li { display: flex; flex-direction: column; gap: var(--ln-space-1); margin-block: var(--ln-space-2); overflow-wrap: anywhere; }
+.flake-layer-image--pending { opacity: 0; }
 
 .flake-canvas.is-dragging {
     cursor: grabbing;

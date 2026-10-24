@@ -1,4 +1,4 @@
-import { LayerCanvas, type LayerCanvasHandle } from "./LayerCanvas";
+import { LayerCanvas, type LayerCanvasHandle, type LayerCanvasStatus, type LayerCanvasView } from "./LayerCanvas";
 import { openLayerScene, releaseLayerScene, type LayerScene, type LayerHit, type LayerViewImage } from "../../../../../src/platform/layerView";
 import { t, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
@@ -377,10 +377,13 @@ function FlakeDebugStateDialog({
 export function FlakePage({ currentFile, setRoute }: any) {
   const { locale } = useI18n();
   const [viewMode, setViewMode] = useState<"2d" | "3d">("2d");
+  const latestSource = useRef(currentFile); latestSource.current = currentFile;
+  const latestViewMode = useRef(viewMode); latestViewMode.current = viewMode;
   const [scene, setScene] = useState<LayerScene | null>(null);
   const meta = scene?.meta ?? null;
   const sceneRef = useRef<LayerScene | null>(null);
   const [layerImage, setLayerImage] = useState<LayerViewImage | null>(null);
+  const [layerViewStatus, setLayerViewStatus] = useState<LayerCanvasStatus>("loading");
   const [statsData, setStatsData] = useState<StatsData | null>(null);
   const [layerY, setLayerY] = useState(0);
   const [onionSkinDepth, setOnionSkinDepth] = useState(0);
@@ -413,6 +416,11 @@ export function FlakePage({ currentFile, setRoute }: any) {
   const [layerError, setLayerError] = useState<UiMessage>("");
   const pageRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<LayerCanvasHandle>(null);
+  const savedLayerView = useRef<LayerCanvasView | null>(null);
+  const layerLoadInFlight = useRef(false);
+  const autoReopenedResource = useRef("");
+  const loadedSource = useRef("");
+  const latestLayerY = useRef(layerY); latestLayerY.current = layerY;
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const markerMenuRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -444,26 +452,44 @@ export function FlakePage({ currentFile, setRoute }: any) {
     }
   }, [currentFile]);
 
-  const loadProjectionLayers = async () => {
+  const loadProjectionLayers = useCallback(async (preserveView = false) => {
+    if (currentFile !== latestSource.current) return;
     const requestId = ++syncRequestIdRef.current;
+    savedLayerView.current = preserveView ? canvasRef.current?.viewState() ?? savedLayerView.current : null;
     const previous = sceneRef.current; sceneRef.current = null;
-    setScene(null); setLayerImage(null); setLayerError(""); setIsLoadingLayers(!!currentFile);
+    layerLoadInFlight.current = !!currentFile;
+    if (!preserveView) setScene(null);
+    setLayerImage(null); setLayerViewStatus("loading"); setLayerError(""); setIsLoadingLayers(!!currentFile);
     if (previous) void releaseLayerScene(previous).catch(() => undefined);
-    if (!currentFile) return;
+    if (!currentFile) { setScene(null); return; }
     try {
       const opened = await openLayerScene(currentFile);
       if (requestId !== syncRequestIdRef.current) { void releaseLayerScene(opened).catch(() => undefined); return; }
-      sceneRef.current = opened; setScene(opened); setLayerY(value => Math.max(0, Math.min(value, opened.meta.size_y - 1)));
+      sceneRef.current = opened; loadedSource.current = currentFile; setScene(opened); setLayerY(value => Math.max(0, Math.min(value, opened.meta.size_y - 1)));
       if (markerSourceRef.current !== currentFile) { markerSourceRef.current = currentFile; await refreshProjectionMarkers(opened.origin); }
       else setOriginMarker(opened.origin);
     } catch (error) {
-      if (requestId === syncRequestIdRef.current) setLayerError({ key: "flake.layersFailed", params: { error: String(error) } });
+      if (requestId === syncRequestIdRef.current) {
+        if (preserveView) savedLayerView.current = canvasRef.current?.viewState() ?? savedLayerView.current;
+        setScene(null); setLayerViewStatus("failed"); setLayerError({ key: "flake.layersFailed", params: { error: String(error) } });
+      }
     } finally {
-      if (requestId === syncRequestIdRef.current) setIsLoadingLayers(false);
+      if (requestId === syncRequestIdRef.current) { layerLoadInFlight.current = false; setIsLoadingLayers(false); }
     }
-  };
-  const handleViewState = useCallback((image: LayerViewImage | null, error: string) => {
-    setLayerImage(image); setLayerError(error);
+  }, [currentFile, refreshProjectionMarkers]);
+  const handleResourceChanged = useCallback(() => {
+    const opened = sceneRef.current;
+    if (!opened || layerLoadInFlight.current || autoReopenedResource.current === opened.resourceIdentity) return;
+    autoReopenedResource.current = opened.resourceIdentity;
+    void loadProjectionLayers(true);
+  }, [loadProjectionLayers]);
+  const handleViewState = useCallback((image: LayerViewImage | null, error: string, status: LayerCanvasStatus) => {
+    const opened = sceneRef.current;
+    if (layerLoadInFlight.current || !opened) return;
+    if (image && (image.sceneHandle !== opened.sceneHandle || image.generation !== opened.generation
+      || image.resourceIdentity !== opened.resourceIdentity || image.y !== latestLayerY.current)) return;
+    if (image) autoReopenedResource.current = "";
+    setLayerImage(image); setLayerError(error); setLayerViewStatus(status);
   }, []);
 
   const handleToolSplitterPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -497,7 +523,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
   useEffect(() => {
 
-    markerSourceRef.current = ""; setLayerY(0);
+    markerSourceRef.current = ""; savedLayerView.current = null; autoReopenedResource.current = ""; setLayerY(0);
     setStatsData(null);
     setMaterialBlocks([]);
     setShowContainerDialog(false);
@@ -521,7 +547,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
   useEffect(() => {
     const subscription = listenEvent("game-resources-changed", () => {
-      if (viewMode === "2d") void loadProjectionLayers();
+      if (currentFile !== latestSource.current) return;
+      autoReopenedResource.current = "";
+      if (latestViewMode.current === "2d") void loadProjectionLayers(true);
       else { const opened = sceneRef.current; sceneRef.current = null; setScene(null); if (opened) void releaseLayerScene(opened).catch(() => undefined); }
     });
     return () => { void subscription.then(unlisten => unlisten()).catch(() => undefined); };
@@ -855,11 +883,13 @@ export function FlakePage({ currentFile, setRoute }: any) {
 
   const regionName = hoverBlock?.region || meta?.name || currentFile?.split(/[\\/]/).pop() || "Unnamed";
   const maxY = meta ? Math.max(0, meta.size_y - 1) : 0;
-  const ready = !!meta;
+  const ready = !!meta && loadedSource.current === currentFile;
   const building = isLoadingLayers;
-  const statusText = localizeMessage(layerError) || (!ready
-    ? (building ? t("flake.readingLayers") : t("flake.layersNotReady"))
-    : !layerImage ? t("flake.readingLayer", {layer:layerY + (meta?.min_y || 0)}) : t("flake.layerStatus", {layer:layerImage.worldY,blocks:layerImage.blockCount.toLocaleString(locale),depth:onionSkinDepth}));
+  const currentLayerImage = layerImage && scene && layerImage.sceneHandle === scene.sceneHandle && layerImage.generation === scene.generation
+    && layerImage.resourceIdentity === scene.resourceIdentity && layerImage.y === layerY ? layerImage : null;
+  const statusText = localizeMessage(layerError) || (building ? t("flake.readingLayers") : !ready
+    ? t("flake.layersNotReady")
+    : !currentLayerImage ? t("flake.readingLayer", {layer:layerY + (meta?.min_y || 0)}) : t("flake.layerStatus", {layer:currentLayerImage.worldY,blocks:currentLayerImage.blockCount.toLocaleString(locale),depth:onionSkinDepth}));
 
   if (!currentFile) {
     return (
@@ -958,7 +988,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
               <label className="subwindow-check-row flake-page__edit-toggle"><Checkbox checked={showStateHints} onCheckedChange={checked => setShowStateHints(checked === true)} disabled={!ready} />{t("flake.stateImages")}</label>
               <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 5))}>−5</Button>
               <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 5))}>+5</Button>
-              <Button className="flake-page__build-button" onClick={loadProjectionLayers} disabled={!currentFile || isLoadingLayers || isSavingEdits}>{isLoadingLayers ? t("flake.readingShort") : t("flake.reloadLayers")}</Button>
+              <Button className="flake-page__build-button" onClick={() => void loadProjectionLayers(true)} disabled={!currentFile || isLoadingLayers || isSavingEdits}>{isLoadingLayers ? t("flake.readingShort") : t("flake.reloadLayers")}</Button>
             </div>
           </div>
         </details>
@@ -978,6 +1008,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
               <LayerCanvas
                 ref={canvasRef}
                 scene={scene!}
+                suspended={isLoadingLayers}
+                initialView={savedLayerView.current}
+                onResourceChanged={handleResourceChanged}
                 layerY={layerY}
                 onionDepth={onionSkinDepth}
                 showStateHints={showStateHints}
@@ -997,7 +1030,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
               />
             )}
 
-            {ready && layerImage && layerImage.blockCount === 0 && <div className="flake-page__empty-layer" role="status">Y = {layerY + (meta?.min_y ?? 0)} · {t("flake.emptyViewport")}</div>}
+            {ready && currentLayerImage && currentLayerImage.blockCount === 0 && <div className="flake-page__empty-layer" role="status">Y = {layerY + (meta?.min_y ?? 0)} · {t("flake.emptyViewport")}</div>}
             <FlakeBlockTooltip
               x={hoverPos.x}
               y={hoverPos.y}
@@ -1032,7 +1065,8 @@ export function FlakePage({ currentFile, setRoute }: any) {
                   </div>
                   <div className="flake-page__tool-panel-kv">
                     <span className="nova-muted">{t("flake.data2d")}</span>
-                    <span>{ready ? t("flake.ready") : building ? t("flake.reading") : t("flake.notReady")}</span>
+                    <span>{building || layerViewStatus === "loading" || (ready && !currentLayerImage && layerViewStatus !== "failed") ? t("flake.reading") : layerViewStatus === "failed" ? t("flake.imageFailed")
+                      : layerViewStatus === "partial" ? t("flake.visualPartial") : ready && layerViewStatus === "ready" ? t("flake.ready") : t("flake.notReady")}</span>
                   </div>
                   <div className="flake-page__tool-panel-kv">
                     <span className="nova-muted">{t("flake.measurement")}</span>
