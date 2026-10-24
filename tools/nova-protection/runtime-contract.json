@@ -91,6 +91,11 @@
       "target": "x86_64-pc-windows-msvc",
       "runtime_build_id": "runtime-1-de57d61728a6-iris-atlas-20261024-r1-x86_64-pc-windows-msvc",
       "module_manifest_sha256": "9f4077ec4de1af0a3eb5f5434788395c45c0f561b19cd25b86b10df58462ee40"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_build_id": "runtime-1-ec392261fe8a-ui-040-20261024-r1-x86_64-pc-windows-msvc",
+      "module_manifest_sha256": "d62dfc17e1388611918831ccc65f4fe2a4b94bef0de53f059d7cff2644a45d51"
     }
   ]
 }

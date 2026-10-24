@@ -143,7 +143,7 @@ pub fn read_cached(
         );
         let content_id = format!("{:x}", reader.hash.finalize());
         let dimensions = if extracted.found {
-            let image = image::open(&temporary)?
+            let image = image::load_from_memory_with_format(&fs::read(&temporary)?, image::ImageFormat::Png)?
                 .thumbnail(PREVIEW_WIDTH, PREVIEW_HEIGHT)
                 .to_rgba8();
             write_preview_png(&image, &temporary)?;
