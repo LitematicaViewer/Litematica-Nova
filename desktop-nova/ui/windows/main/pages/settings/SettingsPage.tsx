@@ -141,8 +141,12 @@ function PathRow({ label, path, info }: { label: string; path: string; info?: Pa
   );
 }
 
+import { SettingsCategories, type SettingsCategory } from "./SettingsCategories";
+import { UiScaleControl } from "./UiScaleControl";
+
 export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebugMode, buildVersion }: any) {
   const language = useI18n();
+  const [category, setCategory] = useState<SettingsCategory>("appearance");
   const [showAssetManager, setShowAssetManager] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [previewMode, setPreviewMode] = useState<DisplayMode>("full");
@@ -466,11 +470,13 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
 
   return (
     <>
+    <div className="settings-layout">
+    <SettingsCategories category={category} onSelect={setCategory} />
     <ScrollArea className="settings-scroll-area" aria-label={t("settings.settingsAria")}>
     <div className="settings-page">
       <h2 className="settings-title">{t("settings.settingsTitle")}</h2>
 
-      <div className="group-box">
+      <div className="group-box" hidden={category !== "appearance"}>
         <div className="group-box-title">{t("settings.appearance")}</div>
         <div className="form-row">
           <label className="form-label" htmlFor="nova-ui-language">{language.t("settings.language")}</label>
@@ -480,6 +486,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
             <option value="system">{language.t("settings.language.system")}</option>
           </select>
         </div>
+        <UiScaleControl />
         <div className="form-row">
           <div className="form-label">{t("settings.theme")}</div>
           <div className="form-field">
@@ -506,7 +513,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         </div>
       </div>
 
-      <div className="group-box">
+      <div className="group-box" hidden={category !== "data"}>
         <div className="group-box-title">{t("settings.configDirectory")}</div>
         <div className="form-row">
           <div className="form-label">{t("settings.currentDirectory")}</div>
@@ -524,7 +531,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         </div>
       </div>
 
-      <div className="group-box">
+      <div className="group-box" hidden={category !== "ai"}>
         <div className="group-box-title">{t("settings.aiSettings")}</div>
         <div className="form-row">
           <div className="form-label">{t("settings.aiProvider")}</div>
@@ -575,7 +582,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         )}
       </div>
 
-      <div className="group-box">
+      <div className="group-box" hidden={category !== "appearance"}>
         <div className="group-box-title">{t("settings.interfaceBehavior")}</div>
         <div className="form-row">
           <div className="form-label">{t("settings.childWindowBehavior")}</div>
@@ -584,30 +591,11 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
               options={MATERIAL_LIST_WINDOW_BEHAVIOR_OPTIONS} onChange={handleMaterialListWindowBehavior} />
           </div>
         </div>
-        <div className="form-row">
-          <div className="form-label">{t("settings.debugMode")}</div>
-          <label className="form-field">
-            <Checkbox aria-label={t("settings.debugMode")} checked={debugMode} disabled={!userConfig || debugModeSaving} onCheckedChange={(checked) => void handleDebugMode(checked === true)} />
-            <span>{t("settings.uiTestEnumerator")}</span>
-          </label>
-        </div>
-        <div className="form-row">
-          <div className="form-label">{t("settings.pathTailSegments")}</div>
-          <div className="form-field">
-            <Input
-              aria-label={t("settings.pathTailSegments")}
-              className="input settings-count-input"
-              type="number"
-              min={1}
-              step={1}
-              value={localLibraryTailPathCount}
-              onChange={(event) => handleLocalLibraryTailPathCount(event.target.value)}
-            />
-          </div>
-        </div>
+
+
       </div>
 
-      <div className="group-box">
+      <div className="group-box" hidden={category !== "diagnostics"}>
         <div className="group-box-title">{t("settings.runtimeCapabilities")}</div>
         <PathRow label={t("settings.workingDirectory")} path={workspaceRoot || "..."} info={workspaceRoot ? ({ normalized: workspaceRoot, exists: true } as PathInfo) : null} />
         <div className="settings-actions settings-actions-spaced">
@@ -616,7 +604,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         </div>
       </div>
 
-      <div className="group-box">
+      <div className="group-box" hidden={category !== "data"}>
         <div className="group-box-title">{t("settings.dataFiles")}</div>
         <div className="form-row"><div className="form-label">{t("settings.blockDatabase")}</div><div>{t("settings.builtinBlockDatabase")}</div></div>
         <PathRow label={t("settings.blockIconLibrary")} path={iconDirInfo?.normalized || "..."} info={iconDirInfo} />
@@ -630,8 +618,23 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         </div>
       </div>
 
-      <div className="group-box">
+      <div className="group-box" hidden={category !== "rendering"}>
         <div className="group-box-title">{t("settings.rendering")}</div>
+        <div className="form-row">
+          <div className="form-label">{t("settings.graphicsApi")}</div>
+          <div className="form-field">
+            <Dropdown ariaLabel={t("settings.graphicsApi")} value={graphicsBackend}
+              disabled={graphicsBackendSaving || !userConfig}
+              onChange={handleGraphicsBackend}
+              options={[
+                { value: "auto", label: t("settings.automaticRecommended") },
+                { value: "dx12", label: t("settings.dx12FastWindows") },
+                { value: "vulkan", label: "Vulkan" },
+              ]} />
+            {graphicsBackendSaving && <span role="status">{t("settings.saving")}</span>}
+          </div>
+        </div>
+
         <div className="form-row">
           <div className="form-label">{t("settings.previewGeneration")}</div>
           <div className="form-field">
@@ -669,22 +672,8 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         </div>
       </div>
 
-      <div className="group-box">
+      <div className="group-box" hidden={category !== "shaders"}>
         <div className="group-box-title">{t("settings.renderCompatibility")}</div>
-        <div className="form-row">
-          <div className="form-label">{t("settings.graphicsApi")}</div>
-          <div className="form-field">
-            <Dropdown ariaLabel={t("settings.graphicsApi")} value={graphicsBackend}
-              disabled={graphicsBackendSaving || !userConfig}
-              onChange={handleGraphicsBackend}
-              options={[
-                { value: "auto", label: t("settings.automaticRecommended") },
-                { value: "dx12", label: t("settings.dx12FastWindows") },
-                { value: "vulkan", label: "Vulkan" },
-              ]} />
-            {graphicsBackendSaving && <span role="status">{t("settings.saving")}</span>}
-          </div>
-        </div>
         <div className="form-row">
           <div className="form-label">{t("settings.fullBackend")}</div>
           <Dropdown ariaLabel={t("settings.renderBackend")} value={v5Compatibility.backend}
@@ -755,10 +744,15 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         <IrisSettingsPanel root={v5Compatibility.shaderpack_root} pack={v5Compatibility.shaderpack_name} />
       </div>
 
-      <div className="group-box">
+      <div className="group-box" hidden={category !== "maintenance"}>
         <div className="group-box-title">{t("settings.maintenance")}</div>
         {buildVersion && <div className="form-row"><div className="form-label">{t("settings.appVersion")}</div><div>{buildVersion}</div></div>}
         <Button onClick={async () => setLog(await cleanupLocalTempFiles())}>{t("settings.cleanupTemp")}</Button>
+
+      </div>
+
+      <div className="group-box" hidden={category !== "diagnostics"}>
+        <div className="group-box-title">{t("settings.exportLogsZip")}</div>
         <Button type="button" disabled={exportingLogs} onClick={async () => {
           setExportingLogs(true); setLogExportStatus("");
           try {
@@ -771,11 +765,39 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         {logExportStatus && <div className="settings-feedback" role="status" aria-live="polite">{displayPathText(localizeMessage(logExportStatus))}</div>}
       </div>
 
+      <div className="group-box" hidden={category !== "diagnostics"}>
+        <div className="form-row">
+          <div className="form-label">{t("settings.debugMode")}</div>
+          <label className="form-field">
+            <Checkbox aria-label={t("settings.debugMode")} checked={debugMode} disabled={!userConfig || debugModeSaving} onCheckedChange={(checked) => void handleDebugMode(checked === true)} />
+            <span>{t("settings.uiTestEnumerator")}</span>
+          </label>
+        </div>
+      </div>
+
+      <div className="group-box" hidden={category !== "data"}>
+        <div className="form-row">
+          <div className="form-label">{t("settings.pathTailSegments")}</div>
+          <div className="form-field">
+            <Input
+              aria-label={t("settings.pathTailSegments")}
+              className="input settings-count-input"
+              type="number"
+              min={1}
+              step={1}
+              value={localLibraryTailPathCount}
+              onChange={(event) => handleLocalLibraryTailPathCount(event.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+
       {log && (
         <pre className="settings-feedback">{displayPathText(localizeMessage(log))}</pre>
       )}
     </div>
     </ScrollArea>
+    </div>
     {showAssetManager && <AssetManagerDialog theme={theme} onClose={() => setShowAssetManager(false)} />}
     </>
   );

@@ -57,20 +57,25 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
         : operation?.state === "failed" ? t("render.fastLoadingFailed")
           : operation?.state === "closed" ? t("render.fastClosed") : t("render.notLoaded");
   const name = currentFile?.split(/[\\/]/).pop() || t("render.noSchematic");
+  const modeControls = (
+    <span className="render-mode-switch" aria-label={t("render.modeLabel")}>
+      <Button variant={mode === "fast" ? "default" : "ghost"} aria-pressed={mode === "fast"} onClick={() => setMode("fast")}>{t("render.mode.fast")}</Button>
+      <Button variant={mode === "standard" ? "default" : "ghost"} aria-pressed={mode === "standard"} onClick={() => setMode("standard")}>{t("render.mode.standard")}</Button>
+      <Button variant={mode === "full" ? "default" : "ghost"} aria-pressed={mode === "full"} onClick={() => setMode("full")}>{t("render.mode.full")}</Button>
+    </span>
+  );
+  const cameraControls = (
+<FreeCameraControls sourcePath={currentFile} displayMode={mode === "fast" ? "fast_experimental" : mode}
+      ready={mode === "fast" ? ready && !!operation?.presentation.visible : full.ready && full.visible} />
+  );
   return <section className="render-page">
     <header className="render-page-header">
       <h2 className="render-page-title">{mode === "full" ? t("render.title.full") : mode === "standard" ? t("render.title.standard") : t("render.title.fast")}</h2>
       <div className="render-page-source" title={displayFilePath(currentFile)}>{name}</div>
     </header>
-    <div className="render-page-actions" aria-label={t("render.modeLabel")}>
-      <Button variant={mode === "fast" ? "default" : "ghost"} aria-pressed={mode === "fast"} onClick={() => setMode("fast")}>{t("render.mode.fast")}</Button>
-      <Button variant={mode === "standard" ? "default" : "ghost"} aria-pressed={mode === "standard"} onClick={() => setMode("standard")}>{t("render.mode.standard")}</Button>
-      <Button variant={mode === "full" ? "default" : "ghost"} aria-pressed={mode === "full"} onClick={() => setMode("full")}>{t("render.mode.full")}</Button>
-    </div>
-    <FreeCameraControls sourcePath={currentFile} displayMode={mode === "fast" ? "fast_experimental" : mode}
-      ready={mode === "fast" ? ready && !!operation?.presentation.visible : full.ready && full.visible} />
     {mode !== "fast" ? <>
       <div className="render-page-actions">
+        {modeControls}
         <label><Checkbox checked={preload} disabled={full.pending || full.loading} onCheckedChange={checked => setPreloads(previous => ({ ...previous, [exactMode]: checked === true }))} />{t("render.preload")}</label>
         <Button disabled={!currentFile || full.pending || full.loading} onClick={() => void full.start()}><ThemeIcon name={mode === "full" ? "build" : "run"} size={16} fallback={mode === "full" ? Box : Play} />{t(mode === "standard" ? "render.title.standard" : "render.title.full")}</Button>
         {mode === "full" && <Button variant="ghost" onClick={() => void openIrisSettings().catch(error => setCaptureMessage(String(error)))}>{t("iris.load")}</Button>}
@@ -78,6 +83,7 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
         <Button variant="ghost" disabled={!full.operation && !full.pending && !full.preflight} onClick={() => void full.close()}><ThemeIcon name="close" size={16} fallback={X} />{t("render.closeCancel")}</Button>
         <Button variant="ghost" disabled={!full.ready || full.pending || capturing} onClick={() => void capture()}><ThemeIcon name="picture_trans" size={16} fallback={Image} />{capturing ? t("render.saving") : t("render.setThumbnail")}</Button>
       </div>
+      {cameraControls}
       {full.preflight && <section className="render-preview-help" role="status">
         <p>{t("render.memoryRequired")}{full.preflight.conservativeVramBytes == null ? t("common.unknown") : formatResourceBytes(full.preflight.conservativeVramBytes)}</p>
         {full.preflight.severity === "warning" && <p>{t("render.pressure80")}</p>}
@@ -100,6 +106,7 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
       </div></div>
     </> : <>
     <div className="render-page-actions">
+      {modeControls}
       <label><Checkbox checked={preload} disabled={preview.pending || loading} onCheckedChange={(checked) => setPreloads((current) => ({ ...current, fast: checked === true }))} />{t("render.preload")}</label>
       <Button variant="default" disabled={!currentFile || preview.pending || loading} onClick={() => void preview.start()}>
         <ThemeIcon name="run" size={16} fallback={Play} />{preview.pending ? t("render.connecting") : loading ? t("render.loading") : ready ? t("render.embed") : operation ? t("render.reload") : t("render.title.fast")}
@@ -108,6 +115,7 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
       <Button variant="ghost" disabled={!operation || !["starting", "ready"].includes(operation.state) || preview.pending} onClick={() => void preview.close()}><ThemeIcon name="close" size={16} fallback={X} />{loading ? t("render.cancelLoading") : t("render.closePreview")}</Button>
       <Button variant="ghost" disabled={!ready || capturing} onClick={() => void capture()}><ThemeIcon name="picture_trans" size={16} fallback={Image} />{capturing ? t("render.readingFrame") : t("render.setThumbnail")}</Button>
     </div>
+    {cameraControls}
     {error && <pre className="render-error" role="alert">{displayPathText(localizeMessage(error))}</pre>}
     {captureMessage && <div role="status">{displayPathText(localizeMessage(captureMessage))}</div>}
     <div className="render-preview-group">

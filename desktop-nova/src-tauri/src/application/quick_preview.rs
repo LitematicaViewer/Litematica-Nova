@@ -222,10 +222,15 @@ impl QuickPreviewHost {
     }
 
     pub(crate) fn start(&self, input: StartQuickPreviewInput, host_window: QuickPreviewHostWindow) -> Result<QuickPreviewView, String> {
+        let scene = input.source_path.clone();
+        self.start_with_scene(input, host_window, scene)
+    }
+
+    pub(crate) fn start_with_scene(&self, input: StartQuickPreviewInput, host_window: QuickPreviewHostWindow, scene: PathBuf) -> Result<QuickPreviewView, String> {
         let source = fs::canonicalize(&input.source_path).map_err(|error| format!("读取快速预览投影失败：{error}"))?;
         let meta = fs::metadata(&source).map_err(|error| error.to_string())?;
-        if !meta.is_file() || !source.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("litematic")) {
-            return Err("快速预览需要现有的 .litematic 文件。".to_owned());
+        if !meta.is_file() || !scene.is_file() {
+            return Err("快速预览需要有效的源文件及规范场景快照。".to_owned());
         }
         let game_data = crate::game_data::resolve_context(&crate::current_user_config_dir()?.join("game-data"),
             &crate::get_root().join("pack-in/game-data/default")).map_err(|error| format!("{error:#}"))?;
@@ -255,7 +260,7 @@ impl QuickPreviewHost {
                 let replacement = session.directory.join(format!("replace-{generation:020}.launch.json"));
                 let resource_report_path = session.directory.join(format!("resource-report-{generation:020}.json"));
                 let resource_decision_path = session.directory.join(format!("resource-decision-{generation:020}.json"));
-                let launch = ViewerLaunchContract::new(session.session_id.clone(), source.clone(), content.clone(), None,
+                let launch = ViewerLaunchContract::new(session.session_id.clone(), scene.clone(), content.clone(), None,
                     ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(host_window), graphics_backend: input.graphics_backend, preload: input.preload,
                         resource_report_path: None, resource_decision_path: None }))?;
                 let replacement_contract = ViewerLaunchContractFile::create(replacement.clone(), &launch, &session.backend)?;
@@ -293,7 +298,7 @@ impl QuickPreviewHost {
         let resource_report_path = session_directory.join("resource-report.json");
         let resource_decision_path = session_directory.join("resource-decision.json");
         let backend = ViewerBackendIdentity::capture(&self.viewer_exe)?;
-        let launch = ViewerLaunchContract::new(id.clone(), source.clone(), content.clone(), None,
+        let launch = ViewerLaunchContract::new(id.clone(), scene, content.clone(), None,
             ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(host_window.clone()), graphics_backend: input.graphics_backend, preload: input.preload,
                 resource_report_path: None, resource_decision_path: None }))?;
         let contract = ViewerLaunchContractFile::create(directory.join("launch.json"), &launch, &backend)?;

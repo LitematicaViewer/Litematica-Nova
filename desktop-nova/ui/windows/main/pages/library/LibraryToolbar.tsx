@@ -41,6 +41,8 @@ export function LibraryToolbar({
   onRescanAll,
   onOpenTaskCenter,
   onExport,
+  onNewComposition,
+  onImportClipboard,
 }: {
   busy: boolean;
   isRefreshing: boolean;
@@ -67,12 +69,16 @@ export function LibraryToolbar({
   onRescanAll: (forceRecheck: boolean) => void;
   onOpenTaskCenter: () => void;
   onExport: () => void;
+  onNewComposition: () => void;
+  onImportClipboard?: () => void;
 }) {
   return (
     <header className="library-toolbar">
       <h2>投影库</h2>
       <Button variant="default" onClick={onImport} disabled={busy} aria-busy={isOpening}><ThemeIcon name="import" size={16} fallback={FolderPlus} />{isOpening ? "正在导入…" : "导入投影"}</Button>
-      <Button onClick={onDownload}><ThemeIcon name="download" size={16} fallback={Download} />下载投影</Button>
+      <Button onClick={onNewComposition}><FolderPlus size={16} aria-hidden="true" />新建组合</Button>
+      <div className="library-toolbar-second-row">
+      <div className="library-management library-download-link"><Button onClick={onDownload}><ThemeIcon name="download" size={16} fallback={Download} />下载投影</Button></div>
       <div className="library-search">
         <ThemeIcon name="search" size={16} fallback={Search} />
         <Input type="search" aria-label="搜索投影" placeholder="搜索名称、作者、标签、分类…" value={search} onChange={(event) => onSearchChange(event.target.value)} />
@@ -90,6 +96,8 @@ export function LibraryToolbar({
       </span>
       <div className="library-filter-control"><Dropdown ariaLabel="筛选文件状态" value={statusFilter} onChange={onStatusFilterChange} options={[{ value: "", label: "全部状态" }, { value: "ok", label: "正常" }, { value: "missing", label: "文件丢失" }, { value: "parse_error", label: "解析失败" }]} /></div>
       <div className="library-filter-control"><Dropdown ariaLabel="投影排序" value={sortMode} onChange={onSortModeChange} options={[{ value: "manual", label: "手动排序" }, { value: "recent_analyzed", label: "最近分析" }, { value: "blocks", label: "方块数量" }, { value: "name", label: "名称 A–Z" }]} /></div>
+      <details className="library-management"><summary>库管理 / 更多</summary><div>
+      <Button variant="ghost" onClick={onImportClipboard}>导入剪贴板模板…</Button>
       {view !== "detail" && (
         <>
           <div className="library-filter-control"><Dropdown ariaLabel="分组维度" value={groupDimension} onChange={(value) => onGroupDimensionChange(value as GroupingDimension)} options={[{ value: "none", label: "不分组" }, { value: "author", label: "按作者" }, { value: "version", label: "按版本" }, { value: "size", label: "按尺寸" }]} /></div>
@@ -102,6 +110,8 @@ export function LibraryToolbar({
       <Button variant="ghost" onClick={() => onRescanAll(false)} disabled={busy}><ThemeIcon name="refresh" size={16} fallback={RefreshCw} />重新扫描全部</Button>
       <Button variant="ghost" onClick={() => onRescanAll(true)} disabled={busy} title="忽略文件大小与修改时间缓存，强制重新计算校验值"><ThemeIcon name="refresh" size={16} fallback={RefreshCw} />强制重新校验</Button>
       <Button variant="ghost" size="icon" aria-label={isRefreshing ? "正在刷新投影库" : "刷新投影库"} title="刷新投影库" disabled={busy} aria-busy={isRefreshing} onClick={onRefresh}><ThemeIcon name="refresh" size={16} fallback={RefreshCw} /></Button>
+      </div></details>
+      </div>
     </header>
   );
 }

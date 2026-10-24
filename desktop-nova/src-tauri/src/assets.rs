@@ -317,7 +317,7 @@ pub(crate) async fn pick_litematic_file(app: AppHandle) -> Result<Option<String>
         .dialog()
         .file()
         .set_title(crate::i18n::text("dialog.openSchematic"))
-        .add_filter(crate::i18n::text("dialog.schematicFilter"), &["litematic"])
+        .add_filter(crate::i18n::text("dialog.schematicFilter"), &["litematic", "nbt", "json", "bg", "bgcp"])
         .blocking_pick_file();
     Ok(picked.map(|path| path.to_string()))
 }

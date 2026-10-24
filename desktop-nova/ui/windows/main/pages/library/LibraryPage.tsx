@@ -1,3 +1,4 @@
+import { queryComposition } from "../../../../../src/platform/composition";
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
@@ -97,7 +98,7 @@ const uniquePaths = (paths: string[]) => [...new Map(paths.map((path) => [window
  * components. It keeps the two legacy library events (`projection-library-state-changed`
  * / `-record-imported`) and refreshes the background index on every library change.
  */
-export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
+export function LibraryPage({ currentFile, setCurrentFile, setRoute, setCompositionId, onImportClipboard }: any) {
   const [state, setState] = useState<LibraryState>(() => normalizeLibraryState(null));
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -745,6 +746,14 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
     : activeView;
 
   const dispatchEntryView = dispatchEntry;
+  const addSelectedToComposition = async () => {
+    try {
+      const result = await queryComposition({ action: "create", sourcePaths: selectedEntries.map(entry => entry.primary.path) }, crypto.randomUUID());
+      if (!result.project) throw new Error("组合项目未返回");
+      setCompositionId(result.project.id);
+      setRoute("composition");
+    } catch (error) { setMessage(String(error)); }
+  };
 
   return (
     <div className="nova-page library-page" onDragOver={handlePageDragOver} onDrop={(event) => void handlePageDrop(event)}>
@@ -756,6 +765,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
         onImport={() => void handleSelect()} onDownload={() => void openRedenLibraryWithWindowBehavior(() => setShowRedenLibraryOverlay(true)).catch((error) => setMessage(`打开在线投影库失败：${String(error)}`))}
         onManageFolders={() => void openLocalLibraryFoldersWithWindowBehavior(() => setShowLocalLibraryFoldersOverlay(true)).catch((error) => setMessage(`打开本地库文件夹失败：${String(error)}`))}
         onRefresh={() => void handleRefresh()} onRescanAll={(forceRecheck) => void handleRescanAll(forceRecheck)} onOpenTaskCenter={() => setTaskCenterOpen(true)}
+        onNewComposition={() => setRoute("composition")} onImportClipboard={onImportClipboard}
         onExport={() => { setExportError(""); setExportOpen(true); }}
       />
       {message && <div className="library-message" role="alert">{displayPathText(message)}<Button variant="ghost" size="icon-sm" aria-label="关闭提示" onClick={() => setMessage("")}><ThemeIcon name="close" size={14} fallback={X} /></Button></div>}
@@ -792,8 +802,11 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
             <span className="library-result-count" role="status">{filteredEntries.length} 项{searchLoading ? " · 搜索中…" : ""}{grouped ? ` · ${groups.length} 组` : ""}</span>
             {view === "list" && <LibraryColumnPicker selected={columns} onToggle={toggleColumn} disabled={libraryBusy} />}
           </div>
-          {selectedEntries.length > 0 && (
+          {selectedEntries.length >= 2 && (
             <div className="library-batch-toolbar">
+              <span>已选 {selectedEntries.length}</span>
+              <Button size="sm" disabled={libraryBusy} onClick={() => void addSelectedToComposition()}>加入组合</Button>
+              <Button size="sm" disabled={libraryBusy} onClick={() => { setExportError(""); setExportOpen(true); }}>批量导出…</Button>
               <Button size="sm" onClick={() => { setMoveCategoryId(""); setCategoryError(""); setMoveEntryIds(selectedEntries.map((entry) => entry.entryId)); }} disabled={libraryBusy}>移动到分类…</Button>
               <Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => setRemoveEntryIds(selectedEntries.map((entry) => entry.entryId))}><ThemeIcon name="delete" size={14} fallback={Trash2} />移入回收区</Button>
               <Button size="sm" variant="ghost" onClick={() => setSelectedEntryIds([])}>取消选择</Button>
@@ -809,7 +822,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute }: any) {
           </footer>
         </section>
 
-        {view !== "detail" && (
+        {view !== "detail" && inspectedEntry && (
           <aside className="library-inspector" aria-label="投影详情">
             <div className="library-pane-heading"><h3>详情</h3>{inspectedEntry && <Button variant="ghost" size="icon-sm" aria-label="关闭投影详情" onClick={() => setInspectedEntryId("")}><ThemeIcon name="close" size={15} fallback={X} /></Button>}</div>
             <ScrollArea className="library-inspector-scroll">

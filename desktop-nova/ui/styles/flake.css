@@ -1026,3 +1026,155 @@
     font-family: 'MinecraftFive', monospace;
 }
 }
+
+@layer components.page {
+.flake-page {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    gap: 8px;
+    container-type: inline-size;
+}
+.flake-page__topbar {
+    padding: 0 0 8px;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+}
+.flake-page__topbar .layer3d-view-tabs {
+    display: inline-flex;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+.flake-page__materials-button, .flake-page__build-button {
+    min-width: 0;
+    width: auto;
+}
+.flake-page__file-path {
+    min-width: 0;
+    width: auto;
+    max-width: min(280px, 35%);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-size: 12px;
+}
+.flake-page__control-box {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    min-width: 0;
+    padding: 0;
+    gap: 4px;
+}
+.flake-page__primary-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.flake-page__primary-controls .flake-page__layer-range {
+    flex: 1 1 100px;
+    max-width: 320px;
+}
+.flake-page__primary-controls > button {
+    min-width: 32px;
+    min-height: 32px;
+}
+.flake-page__primary-controls svg, .flake-page__advanced-controls > summary > svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+}
+.flake-page__y-field {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+.flake-page__y-field input {
+    width: 72px;
+    min-height: 32px;
+}
+.flake-page__key-hint {
+    color: var(--muted-foreground);
+    white-space: nowrap;
+    font-size: 12px;
+}
+.flake-page__key-hint kbd { font: inherit; }
+.flake-page__advanced-controls {
+    min-width: 0;
+    max-height: 40dvh;
+    overflow: auto;
+}
+.flake-page__advanced-controls > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    width: fit-content;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    font-size: 12px;
+}
+.flake-page__advanced-controls[open] > summary { color: var(--foreground); }
+.flake-page__advanced-content {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 20px;
+    padding: 8px 0;
+}
+.flake-page__advanced-content .flake-page__layer-row { margin: 0; gap: 8px; }
+.flake-page__advanced-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    grid-column: 1 / -1;
+}
+.flake-page__status-text { margin: 0; font-size: 12px; }
+.flake-page__workspace { flex: 1 1 auto; min-height: 0; }
+.flake-page__main-panel, .flake-page__viewport { min-height: 0; }
+.flake-page__viewport { border-radius: 6px; }
+.flake-page__empty-layer {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    width: fit-content;
+    max-width: calc(100% - 24px);
+    padding: 6px 8px;
+    border-radius: 6px;
+    color: var(--muted-foreground);
+    background: var(--background);
+    font-size: 12px;
+    pointer-events: none;
+}
+.flake-page__tool-panel { margin: 0; padding: 12px; }
+@container (max-width: 959px) {
+    .flake-page__workspace { flex-direction: column; overflow: auto; }
+    .flake-page__main-panel { flex: 1 0 220px; }
+    .flake-page__splitter { display: none; }
+    .flake-page__tool-panel { width: 100%; min-width: 0; max-width: none; flex: 0 0 auto; }
+    .flake-page__advanced-content { grid-template-columns: minmax(0, 1fr); }
+    .flake-page__tool-panel-body { overflow: visible; }
+}
+@container (max-width: 540px) {
+    .flake-page__file-path { max-width: 100%; flex-basis: 100%; }
+    .flake-page__primary-controls .flake-page__layer-range { order: 1; flex-basis: 100%; max-width: none; }
+    .flake-page__key-hint { display: none; }
+    .flake-page__layer-row { flex-wrap: wrap; }
+    .flake-page__layer-row .flake-page__layer-range { flex-basis: 80px; }
+    .flake-page__zoom-unit { white-space: normal; }
+}
+@media (max-height: 700px) {
+    .flake-page { overflow-y: auto; }
+    .flake-page__workspace { flex: 1 0 220px; min-height: 220px; }
+    .flake-page__main-panel, .flake-page__viewport { min-height: 220px; }
+}
+}

@@ -18,6 +18,7 @@ export interface ViewerControlConfig {
 }
 
 export interface UserConfig {
+  ui_scale: number;
   ui_language: "zh-CN" | "en-US" | "system";
   ui_locale: "zh-CN" | "en-US";
   theme: string;

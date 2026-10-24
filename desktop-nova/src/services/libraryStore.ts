@@ -20,6 +20,7 @@ import {
   type LibraryExportZipParams,
 } from "./backend";
 import { inspectProject, editProjectMetadata, commandMaterialExport } from "../platform/applicationOperations";
+import { querySchematicFormat } from "../platform/schematicFormats";
 import { migrateLibraryState, needsLibraryMigration } from "./libraryMigration";
 import {
   applyContentDiverge,
@@ -2133,7 +2134,7 @@ export interface BuiltinImportOutcome {
 }
 
 /**
- * Copies `.litematic` files into the built-in import folder and then merges them
+ * Copies content-identified schematic files into the built-in import folder and then merges them
  * by scan (E.1, 5.1.1.7b). The folder is created on demand by the copy primitive
  * (so an externally deleted folder is rebuilt — 5.1.3.2); a file already inside
  * the folder is skipped instead of re-copied.
@@ -2145,9 +2146,9 @@ export async function importFilesToBuiltinFolder(state: LibraryState, filePaths:
   const skipped: string[] = [];
   const failures: { path: string; reason: string }[] = [];
   for (const filePath of filePaths) {
-    if (!/\.litematic$/i.test(filePath)) { failures.push({ path: filePath, reason: "不是 .litematic 文件" }); continue; }
     if (folderKey(parentDirectory(filePath)) === folderKey(builtinPath)) { skipped.push(filePath); continue; }
     try {
+      await querySchematicFormat({ action: "libraryInspect", input: filePath });
       await copyFileToDirectory(filePath, builtinPath, fileNameFromPath(filePath), false);
       copied.push(filePath);
     } catch (error: any) {

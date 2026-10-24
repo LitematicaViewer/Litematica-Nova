@@ -5,11 +5,11 @@
 .replace-page { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--ln-space-3, 12px); container-type: inline-size; }
 .replace-title { margin: 0; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.3; }
 .replace-intro, .replace-rules, .replace-toolbar, .replace-result { width: 100%; max-width: none; }
-.replace-scroll-area { flex: 1; min-height: 0; }
+.replace-scroll-area { flex: 1; min-height: 0; min-width: 0; }
 /* `nova-fieldset-plain` drops the shared fieldset border/padding; the page only
    keeps the gutter that separates the rules from the scrollbar. */
-html[data-theme] .replace-rules { min-width: 0; padding: 0 16px 0 0; }
-.replace-legend { font-weight: 600; margin-bottom: 16px; padding: 0; }
+html[data-theme] .replace-rules { min-width: 0; padding: 0; margin: 0; }
+.replace-legend { font-size: 15px; font-weight: 600; margin-bottom: 12px; padding: 0; }
 .replace-property > .dropdown { max-width: 100%; }
 .replace-toolbar { display: flex; flex-wrap: wrap; gap: var(--ln-space-2, 8px); align-items: center; padding: 12px 0 0; }
 .replace-toolbar > span { flex: 1; }
@@ -20,5 +20,61 @@ html[data-theme] .replace-rules { min-width: 0; padding: 0 16px 0 0; }
 .replace-page summary { cursor: pointer; }
 .replace-result { padding: 16px; margin-bottom: 16px; }
 .replace-output { max-width: none; }
+.replace-page-heading { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.replace-page-heading > span { font-size: 12px; }
+.replace-preset-panel { flex: 0 0 auto; min-width: 0; }
+.replace-preset-panel > summary { min-height: 32px; padding-block: 6px; color: var(--muted-foreground); }
+.replace-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; padding: 8px 0 12px; min-width: 0; border: 0; }
+.replace-presets > legend { display: none; }
+.replace-presets > :is(.input, .dropdown) { flex: 1 1 160px; min-width: 0; max-width: 280px; }
+.replace-workspace { display: grid; grid-template-columns: minmax(208px, 280px) minmax(0, 1fr); flex: 1; gap: 20px; min-height: 0; min-width: 0; }
+.replace-rule-browser { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: 8px; padding-right: 16px; border-right: 1px solid var(--border); }
+.replace-rule-search { position: relative; display: flex; align-items: center; min-width: 0; }
+.replace-rule-search > svg { position: absolute; left: 10px; width: 15px; height: 15px; color: var(--muted-foreground); pointer-events: none; }
+.replace-rule-search > input { width: 100%; min-width: 0; padding-left: 32px; }
+.replace-rule-list { min-height: 0; flex: 1; }
+.replace-rule-list [role="list"] { display: flex; flex-direction: column; gap: 4px; }
+.replace-rule-list-item { display: flex; justify-content: flex-start; width: 100%; min-height: 42px; padding: 8px; gap: 8px; text-align: left; border: 0; border-radius: 6px; white-space: normal; }
+.replace-page .replace-rule-list-item:hover { background: var(--accent); }
+.replace-page .replace-rule-list-item[aria-pressed="true"] { color: var(--primary); background: var(--accent); }
+.replace-rule-position { display: inline-flex; flex: 0 0 20px; align-items: center; justify-content: center; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.replace-rule-position > svg { width: 14px; height: 14px; }
+.replace-rule-list-label { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.replace-rule-list-hits { flex: 0 0 auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+.replace-rule-list-item.is-separator { font-size: 12px; color: var(--muted-foreground); }
+.replace-list-status { margin: 12px 4px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.replace-rule-list-actions { display: flex; flex-wrap: wrap; gap: 8px; flex: 0 0 auto; padding-top: 8px; }
+.replace-rule-list-actions > button { flex: 1 1 auto; }
+.replace-page .replace-unit-card { border: 0; background: transparent; margin: 0; box-shadow: none; }
+.replace-page .replace-unit-header { padding: 0 0 12px; flex-wrap: wrap; }
+.replace-page .replace-unit-label-input { flex: 1 1 150px; width: auto; min-height: 32px; }
+.replace-page .replace-unit-body { padding: 12px 0; gap: 12px; }
+.replace-page .replace-unit-arrow { padding: 0; }
+.replace-page .replace-add-buttons { flex-wrap: wrap; gap: 8px; }
+.replace-page .replace-entry-row { border-radius: 6px; padding: 8px; background: var(--background); }
+.replace-page .replace-entry-top { margin-block: 8px; }
+.replace-page .replace-unit-header button, .replace-page .replace-separator-actions button { min-height: 32px; }
+.replace-page .replace-unit-header button > svg, .replace-page .replace-entry-remove-btn > svg, .replace-page .replace-separator-actions button > svg, .replace-rule-list-actions button > svg { width: 16px; height: 16px; }
+.replace-page .replace-unit-hit-count { white-space: nowrap; }
+.replace-changes { padding-block: 16px; border-top: 1px solid var(--border); }
+.replace-changes h3 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+.replace-changes p { margin: 8px 0; overflow-wrap: anywhere; }
+.replace-changes ul { margin: 8px 0; padding-inline-start: 20px; }
+.replace-page > .replace-toolbar { padding: 12px 0 0; border-top: 1px solid var(--border); border-bottom: 0; flex-shrink: 0; }
+.replace-page > .replace-error { max-height: 100px; overflow: auto; margin: 0; }
+@container (max-width: 880px) {
+  .replace-workspace { grid-template-columns: minmax(176px, 220px) minmax(0, 1fr); gap: 12px; }
+  .replace-rule-browser { padding-right: 12px; }
+  .replace-page .replace-unit-body { flex-direction: column; }
+  .replace-page .replace-unit-arrow { justify-content: center; transform: rotate(90deg); }
+}
+@container (max-width: 620px) {
+  .replace-workspace { display: flex; flex-direction: column; overflow-y: auto; }
+  .replace-rule-browser { flex: 0 0 auto; max-height: 240px; min-height: 184px; padding: 0 0 12px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .replace-workspace > .replace-scroll-area { flex: 0 0 auto; overflow: visible; }
+  .replace-page .replace-unit-header { gap: 8px; }
+  .replace-toolbar > button { flex: 1 1 auto; white-space: normal; }
+  .replace-presets > :is(.input, .dropdown) { max-width: none; }
+}
 @container (max-width: 30rem) { .replace-toolbar > span { flex-basis: 100%; order: -1; } }
 }

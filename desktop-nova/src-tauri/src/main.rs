@@ -303,10 +303,12 @@ struct LibraryTaskHost {
 }
 
 impl LibraryTaskHost {
-    fn new(app: AppHandle) -> Self {
+    fn new(app: AppHandle, operations: ApplicationOperations) -> Result<Self, String> {
         let sink = Arc::new(LibraryTaskEventSink { app });
         let config_directory = Arc::new(|| current_user_config_dir());
-        Self { queue: LibraryTaskQueue::new(sink, config_directory) }
+        let queue = LibraryTaskQueue::new(sink, config_directory);
+        queue.set_format_inspector(Arc::new(move |path| operations.inspect_library_source(path)))?;
+        Ok(Self { queue })
     }
 }
 
@@ -324,6 +326,8 @@ struct LibraryTaskCancelOutput {
 
 #[derive(Deserialize, Serialize, Clone)]
 struct UserConfig {
+    #[serde(default = "default_ui_scale")]
+    ui_scale: f64,
     #[serde(default = "default_ui_language")]
     ui_language: String,
     #[serde(default = "default_ui_locale")]
@@ -353,6 +357,7 @@ struct UserConfig {
 
 #[derive(Deserialize)]
 struct UserConfigInput {
+    ui_scale: Option<f64>,
     ui_language: Option<String>,
     ui_locale: Option<String>,
     theme: Option<String>,
@@ -887,6 +892,7 @@ fn ensure_user_config_layout(dir: &Path) -> Result<(), String> {
 
 fn default_user_config() -> UserConfig {
     UserConfig {
+        ui_scale: default_ui_scale(),
         ui_language: default_ui_language(),
         ui_locale: default_ui_locale(),
         theme: "shadcn".to_string(),
@@ -904,6 +910,7 @@ fn default_user_config() -> UserConfig {
     }
 }
 
+fn default_ui_scale() -> f64 { application::ui_scale::DEFAULT }
 fn default_ui_language() -> String { "zh-CN".into() }
 fn default_ui_locale() -> String { "zh-CN".into() }
 fn normalize_ui_language(value: &str) -> String {
@@ -1103,6 +1110,7 @@ fn read_user_config_data(dir: &Path) -> UserConfig {
         .ok()
         .and_then(|text| serde_json::from_str::<UserConfig>(&text).ok())
         .unwrap_or_else(default_user_config);
+    config.ui_scale = application::ui_scale::validate(config.ui_scale).unwrap_or_else(|_| default_ui_scale());
     config.ui_language = normalize_ui_language(&config.ui_language);
     config.ui_locale = normalize_ui_locale(&config.ui_locale);
     if config.ui_language != "system" { config.ui_locale = config.ui_language.clone(); }
@@ -1427,6 +1435,16 @@ async fn application_stockpile_task(input: StockpileTaskInput, operations: tauri
     run_application_operation(move || operations.stockpile_task(input)).await
 }
 #[tauri::command]
+async fn application_recent_projects(operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
+    let operations = operations.inner().clone();
+    run_application_operation(move || operations.data_query(application::operations::DataQueryInput {
+        operation_id: format!("workspace-recent-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()),
+        kind: application::data_worker::protocol::DataKind::Workspace,
+        input: serde_json::json!({"action": "recent"}),
+    })).await
+}
+
+#[tauri::command]
 async fn application_data_query(input: application::operations::DataQueryInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value,String> {
     let operations=operations.inner().clone(); run_application_operation(move||operations.data_query(input)).await
 }
@@ -1652,7 +1670,8 @@ async fn save_user_config(app: AppHandle, input: UserConfigInput, operations: ta
     run_application_operation(move || {
         let _write = write;
         save_user_config_inner(input)
-    }).await.map(|info| {
+    }).await.and_then(|info| {
+        application::ui_scale::apply(&app, info.config.ui_scale)?;
         if !info.config.debug_mode {
             for label in ["enumerator", "ui-demo-window"] {
                 if let Some(window) = app.get_webview_window(label) { let _ = window.close(); }
@@ -1662,7 +1681,7 @@ async fn save_user_config(app: AppHandle, input: UserConfigInput, operations: ta
         i18n::update_window_titles(&app);
         let _ = app.emit("user-config-changed", &info);
         let _ = app.emit("nova-debug-mode-changed", serde_json::json!({"enabled": info.config.debug_mode}));
-        info
+        Ok(info)
     })
 }
 
@@ -1670,6 +1689,7 @@ fn save_user_config_inner(input: UserConfigInput) -> Result<UserConfigInfo, Stri
     let _serial = CONFIG_WRITE_LOCK.lock().map_err(|_| "配置保存锁异常")?;
     let dir = current_user_config_dir()?;
     let mut config = read_user_config_data(&dir);
+    if let Some(value) = input.ui_scale { config.ui_scale = application::ui_scale::validate(value)?; }
     if let Some(language) = input.ui_language { config.ui_language = normalize_ui_language(&language); }
     if let Some(locale) = input.ui_locale { config.ui_locale = normalize_ui_locale(&locale); }
     if config.ui_language != "system" { config.ui_locale = config.ui_language.clone(); }
@@ -1957,11 +1977,7 @@ fn collect_litematic_files_in_directory(
             }
             continue;
         }
-        let has_litematic_ext = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("litematic"))
-            .unwrap_or(false);
+        let has_litematic_ext = application::library_tasks::is_schematic_candidate(&path);
         if has_litematic_ext {
             files.push(path.display().to_string());
         }
@@ -2019,11 +2035,7 @@ fn collect_litematic_file_entries_in_directory(
             }
             continue;
         }
-        let has_litematic_ext = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("litematic"))
-            .unwrap_or(false);
+        let has_litematic_ext = application::library_tasks::is_schematic_candidate(&path);
         if has_litematic_ext {
             files.push(directory_entry_info(path)?);
         }
@@ -2112,11 +2124,7 @@ fn get_path_info(path: String) -> PathInfo {
     let parent = full_path.parent().map(PathBuf::from).unwrap_or_default();
     let metadata = std::fs::metadata(&full_path).ok();
     let parent_exists = parent.is_dir();
-    let has_litematic_ext = full_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("litematic"))
-        .unwrap_or(false);
+    let has_litematic_ext = application::library_tasks::is_schematic_candidate(&full_path);
 
     PathInfo {
         raw: path,
@@ -2323,11 +2331,13 @@ pub(crate) fn rename_replica_core(
 #[tauri::command]
 async fn compute_litematic_checksum(
     path: String,
+    tasks: tauri::State<'_, LibraryTaskHost>,
 ) -> Result<application::library_tasks::LitematicChecksum, String> {
+    let queue = Arc::clone(&tasks.queue);
     tauri::async_runtime::spawn_blocking(move || {
         let input = PathBuf::from(&path);
         let resolved = if input.is_absolute() { input } else { get_root().join(input) };
-        application::library_tasks::compute_litematic_checksum(&resolved)
+        queue.compute_projection_checksum(&resolved)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -3334,6 +3344,7 @@ async fn application_render_launch_plan(
     display_mode: Option<RenderDisplayMode>,
     viewport: Option<[u32; 2]>,
     facade: tauri::State<'_, RenderFacade>,
+    operations: tauri::State<'_, ApplicationOperations>,
 ) -> Result<RenderLaunchPlan, String> {
     let selected_mode = display_mode.unwrap_or_default();
     if matches!(selected_mode, RenderDisplayMode::Standard | RenderDisplayMode::Full) {
@@ -3351,6 +3362,7 @@ async fn application_render_launch_plan(
         click_started_at_epoch_ms: None,
         viewport,
     };
+    let operations = operations.inner().clone();
     let (source_bytes, prepared) = tauri::async_runtime::spawn_blocking(move || {
         if !input.source_path.is_absolute() { return Err("投影路径必须是绝对路径".to_owned()); }
         let metadata = std::fs::metadata(&input.source_path).map_err(|error| error.to_string())?;
@@ -3358,7 +3370,7 @@ async fn application_render_launch_plan(
         let bytes = metadata.len();
         // Small direct-Realtime starts do not run the heavy Prebuilt admission probe.
         let compatibility_started = std::time::Instant::now();
-        let prepared = if launch_requires_preflight(bytes, preload, input.display_mode) { Some(application_render_request(input)?) } else { None };
+        let prepared = if launch_requires_preflight(bytes, preload, input.display_mode) { Some(canonical_render_request(input, &operations)?) } else { None };
         eprintln!("[NOVA_RESOURCE_PHASE] stage=launch_compatibility_prepare elapsed_ms={:.3} preflight_required={}", compatibility_started.elapsed().as_secs_f64() * 1000.0, prepared.is_some());
         Ok::<_, String>((bytes, prepared))
     }).await.map_err(|error| error.to_string())??;
@@ -3718,6 +3730,18 @@ fn validate_exact_graphics_preference(backend: ::viewer_launch_contract::Graphic
     Ok(())
 }
 
+fn canonical_render_request(input: RenderServiceStartBuildInput, operations: &ApplicationOperations) -> Result<(UserVisibleRenderRequest, RenderEnvironmentInputs), String> {
+    let snapshot = operations.canonical_render_source(&input.source_path)?;
+    let (request, mut environment) = application_render_request(input)?;
+    if snapshot != request.source.path {
+        // The immutable canonical artifact and its editable source are distinct
+        // identity inputs; an old admission must not hide a source-file change.
+        environment.asset_inputs.push(request.source.path.clone());
+    }
+    environment.canonical_source = Some(snapshot);
+    Ok((request, environment))
+}
+
 fn application_render_request(
     input: RenderServiceStartBuildInput,
 ) -> Result<(UserVisibleRenderRequest, RenderEnvironmentInputs), String> {
@@ -3827,7 +3851,7 @@ fn application_render_request(
                 placement: None,
              presentation_epoch: None },
         },
-        RenderEnvironmentInputs { asset_inputs, viewport: input.viewport },
+        RenderEnvironmentInputs { canonical_source: None, asset_inputs, viewport: input.viewport },
     ))
 }
 
@@ -3922,7 +3946,7 @@ async fn application_quick_preview_resource_decision(
 }
 
 #[tauri::command]
-async fn application_quick_preview_start(window: tauri::WebviewWindow, mut input: StartQuickPreviewInput, host: tauri::State<'_, QuickPreviewHost>) -> Result<QuickPreviewView, String> {
+async fn application_quick_preview_start(window: tauri::WebviewWindow, mut input: StartQuickPreviewInput, host: tauri::State<'_, QuickPreviewHost>, operations: tauri::State<'_, ApplicationOperations>) -> Result<QuickPreviewView, String> {
     if window.label() != "main" { return Err("原生预览只允许主窗口启动".into()); }
     let host_window = platform::native_preview_host::host_window(&window)?;
     input.graphics_backend = read_user_config_data(&current_user_config_dir()?).graphics_backend;
@@ -3930,7 +3954,8 @@ async fn application_quick_preview_start(window: tauri::WebviewWindow, mut input
     let native_owner = platform::native_preview_host::begin_owner(&window)?;
     let host = host.inner().clone();
     let starting_host = host.clone();
-    let view = tauri::async_runtime::spawn_blocking(move || starting_host.start(input, host_window)).await.map_err(|error| error.to_string())??;
+    let operations = operations.inner().clone();
+    let view = tauri::async_runtime::spawn_blocking(move || { let scene = operations.canonical_render_source(&input.source_path)?; starting_host.start_with_scene(input, host_window, scene) }).await.map_err(|error| error.to_string())??;
     #[cfg(target_os="macos")]
     if platform::native_preview_host::complete_owner(native_owner, view.preview_id.clone()) {
         let id = view.preview_id.clone();
@@ -3984,12 +4009,14 @@ async fn application_quick_preview_close(window: tauri::WebviewWindow, preview_i
 async fn application_render_preflight(
     input: RenderServiceStartBuildInput,
     facade: tauri::State<'_, RenderFacade>,
+    operations: tauri::State<'_, ApplicationOperations>,
 ) -> Result<ResourcePreflightView, String> {
     if input.preflight_id.is_some() || input.resource_warning_confirmed {
         return Err("resource preflight request cannot carry a prior admission".to_owned());
     }
+    let operations = operations.inner().clone();
     let (request, environment) =
-        tauri::async_runtime::spawn_blocking(move || application_render_request(input))
+        tauri::async_runtime::spawn_blocking(move || canonical_render_request(input, &operations))
             .await
             .map_err(|error| format!("准备 Application resource preflight 失败：{error}"))??;
     facade.preflight_render(request, environment).await
@@ -4011,9 +4038,11 @@ async fn application_render_start(
     input: RenderServiceStartBuildInput,
     app: AppHandle,
     facade: tauri::State<'_, RenderFacade>,
+    operations: tauri::State<'_, ApplicationOperations>,
 ) -> Result<application::model::RenderOperationView, String> {
     #[cfg(target_os="macos")]
     let native_owner = platform::native_preview_host::begin_owner(&app.get_webview_window("main").ok_or("主窗口尚未创建")?)?;
+    let operations = operations.inner().clone();
     let click_started_at_epoch_ms = input.click_started_at_epoch_ms;
     let authorization = RenderStartAuthorization {
         click_started_at_epoch_ms,
@@ -4046,7 +4075,7 @@ async fn application_render_start(
                 return Ok(operation);
             }
             let (request, environment) =
-                tauri::async_runtime::spawn_blocking(move || application_render_request(input))
+                tauri::async_runtime::spawn_blocking(move || canonical_render_request(input, &operations))
                     .await
                     .map_err(|error| format!("准备 Application render request 失败：{error}"))??;
             facade.start_realtime_render_with_click(request, environment, click_started_at_epoch_ms).await
@@ -4218,6 +4247,16 @@ fn main() {
     let render_service = RenderServiceClient::default();
     let render_facade = RenderFacade::new(render_service.clone());
     let builder = tauri::Builder::default()
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                match current_user_config_dir() {
+                    Ok(dir) => if let Err(error) = webview.set_zoom(read_user_config_data(&dir).ui_scale) {
+                        eprintln!("[NOVA_UI_SCALE] window={} apply_failed={error}", webview.label());
+                    },
+                    Err(error) => eprintln!("[NOVA_UI_SCALE] config_failed={error}"),
+                }
+            }
+        })
         .manage(ApplicationCloseGate::default())
         .manage(render_service)
         .manage(render_facade)
@@ -4240,6 +4279,8 @@ fn main() {
             std::env::set_var("NOVA_USER_DATA_ROOT", &app_local_data_root);
             let ui_config = read_user_config_data(&current_user_config_dir()?);
             i18n::set_locale(&ui_config.ui_locale);
+            application::ui_scale::install_reset_menu(app.handle())?;
+            application::ui_scale::apply(app.handle(), ui_config.ui_scale).map_err(std::io::Error::other)?;
             application::diagnostics::init(&app_local_data_root, env!("CARGO_PKG_VERSION"),
                 option_env!("LBA_BUILD_GIT_SHA").unwrap_or("unknown"))?;
             app.manage(UpdateHost::new(app.package_info().version.to_string(), app_local_data_root.clone()));
@@ -4253,8 +4294,9 @@ fn main() {
                 required_backend_exe_path("litematica_native_viewer.exe").map_err(std::io::Error::other)?, app_local_data_root.clone()));
             assets::bind_operations(host.operations.clone());
             app.manage(Arc::clone(&host.supervisor));
+            let library_tasks = LibraryTaskHost::new(app.handle().clone(), host.operations.clone())?;
             app.manage(host.operations);
-            app.manage(LibraryTaskHost::new(app.handle().clone()));
+            app.manage(library_tasks);
             app.state::<RenderFacade>()
                 .start_event_bridge(app.handle().clone())
                 .map_err(std::io::Error::other)?;
@@ -4420,6 +4462,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            application_recent_projects,
             native_preview_set_background,
             application_export_logs_zip,
             assets::ensure_builtin_block_icons_extracted,

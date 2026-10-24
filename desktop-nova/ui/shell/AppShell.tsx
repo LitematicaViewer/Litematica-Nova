@@ -30,8 +30,11 @@ import {
   subscribeToThemeChanges,
 } from "./themeRuntime";
 import { projectionLibraryImportedEvent } from "../windows/libraryEvents";
+import { FormatImportDialog } from "../windows/main/FormatImportDialog";
 import { UpdateDialog } from "../windows/main/UpdateDialog";
 import { readUpdateDraft, takeUpdateDraft, useUpdateDraft, useApplicationCloseRecovery } from "../windows/main/updateRecovery";
+import { WorkbenchNavigation, isWorkbenchRoute } from "./WorkbenchNavigation";
+import { CompositionPage } from "../windows/main/pages/composition/CompositionPage";
 import { NavIcon } from "./NavIcon";
 
 import { EnumeratorDialog, openEnumeratorWithWindowBehavior } from "../windows/enumerator";
@@ -51,6 +54,14 @@ export function App() {
   const themeSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const [themeSaveError, setThemeSaveError] = useState<UiMessage>("");
   const [route, setRoute] = useState(() => readUpdateDraft<{route: string}>("shell")?.route || "home");
+  const [projectDirty, setProjectDirty] = useState(false);
+  const [formatImportOpen, setFormatImportOpen] = useState(false);
+  const [clipboardImportOpen, setClipboardImportOpen] = useState(false);
+  const [compositionId, setCompositionId] = useState("");
+  const lastWorkbenchRoute = useRef("properties");
+  if (isWorkbenchRoute(route)) lastWorkbenchRoute.current = route;
+  const workbench = isWorkbenchRoute(route);
+  useEffect(() => { setProjectDirty(false); }, [currentFile]);
   useUpdateDraft("shell", { currentFile, route });
   useEffect(() => { takeUpdateDraft("shell"); }, []);
   useEffect(() => {
@@ -169,6 +180,7 @@ export function App() {
     flake: { name: t("shell.layers"), icon: "flake", comp: FlakePage },
     render: { name: t("shell.render"), icon: "render", comp: RenderPage },
     replace: { name: t("shell.replace"), icon: "replace", comp: ReplacePage },
+    composition: { name: getUiLocale() === "en-US" ? "Compose / Split" : "组合/拆分", icon: "properties", comp: CompositionPage },
     generate: { name: t("shell.generate"), icon: "generate", comp: GeneratePage },
   };
 
@@ -177,6 +189,11 @@ export function App() {
     settings: { name: t("shell.settings"), icon: "options", comp: SettingsPage },
   };
 
+  const navigationPages = {
+    home: topPages.home, library: topPages.library,
+    workbench: { name: getUiLocale() === "en-US" ? "Workbench" : "工作台", icon: "render" },
+    generate: topPages.generate,
+  };
   const allPages = { ...topPages, ...bottomPages };
   const Page = allPages[route]?.comp || HomePage;
 
@@ -194,13 +211,13 @@ export function App() {
         </Button>
 
         <ScrollArea className="nav-scroll-area"><nav className="nav-list" aria-label={t("shell.navigation")}>
-          {Object.entries(topPages).map(([key, value]) => {
-            const active = route === key;
+          {Object.entries(navigationPages).map(([key, value]) => {
+            const active = key === "workbench" ? workbench : route === key;
             return (
               <Button variant="ghost"
                 key={key}
                 className={`sidebar-item nav-item ${active ? "active nav-item-active" : ""}`}
-                onClick={() => setRoute(key)}
+                onClick={() => setRoute(key === "workbench" ? lastWorkbenchRoute.current : key)}
                 title={!expanded ? value.name : ""}
                 type="button"
                 aria-pressed={active}
@@ -213,6 +230,11 @@ export function App() {
           })}
         </nav></ScrollArea>
 
+        {currentFile && <div className="workspace-project" title={currentFile}>
+          <span>{getUiLocale() === "en-US" ? "Current project" : "当前项目"}</span>
+          <strong>{currentFile.split(/[\\/]/).pop()}</strong>
+          {projectDirty && <span>{t("properties.unsaved")}</span>}
+        </div>}
         <nav className="nav-list nav-list-bottom" aria-label={t("shell.settings")}>
           {debugMode && <Button variant="ghost" className="sidebar-item nav-item" type="button" aria-label={t("shell.enumerator")} title={!expanded ? t("shell.enumerator") : ""}
             onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true)).catch((error) => setEnumeratorError(String(error)))}>
@@ -242,8 +264,12 @@ export function App() {
         {closeRecovery.error && <div role="alert"><p>{localizeMessage(closeRecovery.error)}</p><Button onClick={() => void closeRecovery.retry()}>{t("shell.retryClose")}</Button></div>}
         {themeSaveError && <p role="alert">{localizeMessage(themeSaveError)}</p>}
         {enumeratorError && <p role="alert">{t("shell.enumeratorContext")}{displayPathText(localizeMessage(enumeratorError))}</p>}
-        <Page presentationBlocked={showEnumerator} currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} debugMode={debugMode} setDebugMode={setDebugMode} buildVersion={buildVersion} />
+        {workbench && <WorkbenchNavigation route={route} onNavigate={setRoute} />}
+        <div className="workspace-page">
+        <Page onImportClipboard={() => setClipboardImportOpen(true)} initialProjectId={compositionId} setCompositionId={setCompositionId} onDirtyChange={setProjectDirty} presentationBlocked={showEnumerator || formatImportOpen} currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} debugMode={debugMode} setDebugMode={setDebugMode} buildVersion={buildVersion} />
+        </div>
       </main>
+      {clipboardImportOpen ? <FormatImportDialog clipboardMode onVisibilityChange={setFormatImportOpen} onReady={path => { setCurrentFile(path); setRoute("properties"); setClipboardImportOpen(false); }} onCancel={() => setClipboardImportOpen(false)} /> : currentFile && <FormatImportDialog onVisibilityChange={setFormatImportOpen} sourcePath={currentFile} onReady={setCurrentFile} onCancel={() => { setCurrentFile(""); setRoute("library"); }} />}
       {showEnumerator && <EnumeratorDialog theme={theme} currentFile={currentFile} runtimeCollection={enumeratorRuntime} onClose={() => setShowEnumerator(false)} />}
     </div>
   );

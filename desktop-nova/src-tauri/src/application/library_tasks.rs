@@ -30,6 +30,10 @@ use crate::application::library_trash::{self, TrashMoveItem, TrashRestoreItem};
 /// GB-scale projection is never loaded into memory at once.
 pub(crate) const HASH_BUFFER_BYTES: usize = 256 * 1024;
 
+/// The format data worker owns content recognition. The library only routes a
+/// path to it; extensions below are an inexpensive scan candidate filter.
+pub(crate) type FormatInspector = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
+
 // ---------------------------------------------------------------------------
 // Task vocabulary
 // ---------------------------------------------------------------------------
@@ -292,6 +296,7 @@ pub(crate) struct LibraryTaskQueue {
     sink: Arc<dyn TaskEventSink>,
     config_directory: ConfigDirectoryProvider,
     checksum_cache: Mutex<HashMap<String, CachedChecksum>>,
+    format_inspector: OnceLock<FormatInspector>,
     self_weak: OnceLock<Weak<LibraryTaskQueue>>,
 }
 
@@ -308,10 +313,30 @@ impl LibraryTaskQueue {
             sink,
             config_directory,
             checksum_cache: Mutex::new(HashMap::new()),
+            format_inspector: OnceLock::new(),
             self_weak: OnceLock::new(),
         });
         let _ = queue.self_weak.set(Arc::downgrade(&queue));
         queue
+    }
+
+    pub(crate) fn set_format_inspector(&self, inspector: FormatInspector) -> Result<(), String> {
+        self.format_inspector.set(inspector).map_err(|_| "projection format inspector is already configured".to_owned())?;
+        self.checksum_cache.lock().unwrap_or_else(|poison|poison.into_inner()).clear();
+        Ok(())
+    }
+
+    pub(crate) fn compute_projection_checksum(&self, path: &Path) -> Result<LitematicChecksum, String> {
+        if let Some(inspect) = self.format_inspector.get() {
+            if !path.is_file() { return Err(format!("文件不存在或不可读: {}", path.display())); }
+            inspect(path)?;
+            let (sha256, byte_count) = hash_file_sha256(path)?;
+            Ok(LitematicChecksum { sha256, byte_count })
+        } else {
+            // Preserve the old fixture entrypoint. Production installs the
+            // authoritative data-worker inspector before exposing this queue.
+            compute_litematic_checksum(path)
+        }
     }
 
     fn lock_state(&self) -> std::sync::MutexGuard<'_, QueueState> {
@@ -475,7 +500,7 @@ impl LibraryTaskQueue {
                     failures,
                 );
             }
-            if let Err(reason) = hash_file_sha256(Path::new(path)) {
+            if let Err(reason) = self.compute_projection_checksum(Path::new(path)) {
                 failures.push(TaskFailure { path: path.clone(), reason });
             }
             processed += 1;
@@ -606,6 +631,7 @@ impl LibraryTaskQueue {
         let (checksum, from_cache) = match cached {
             Some(sha256) => (sha256, true),
             None => {
+                if let Some(inspect) = self.format_inspector.get() { inspect(path)?; }
                 let (sha256, _bytes) = hash_file_sha256(path)?;
                 self.store_cache(&key, size, mtime_ms, &sha256);
                 (sha256, false)
@@ -976,14 +1002,16 @@ fn collect_litematic_files(
         let path = entry.path();
         if path.is_dir() {
             collect_litematic_files(&path, files, failures);
-        } else if path
-            .extension()
-            .and_then(std::ffi::OsStr::to_str)
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("litematic"))
-        {
+        } else if is_schematic_candidate(&path) {
             files.push(path);
         }
     }
+}
+
+pub(crate) fn is_schematic_candidate(path: &Path) -> bool {
+    path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|extension| {
+        ["litematic", "nbt", "json", "bg", "bgcp"].iter().any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    })
 }
 
 fn paths_equal(left: &str, right: &str) -> bool {
@@ -1420,6 +1448,36 @@ mod tests {
         let checksum = compute_litematic_checksum(&litematic).unwrap();
         assert_eq!(checksum.byte_count, 5);
         assert_eq!(checksum.sha256.len(), 64);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn new_format_scan_candidates_require_the_authoritative_inspector_and_cache_validated_identity() {
+        let dir=test_dir("format-inspector");
+        fs::write(dir.join("structure.nbt"),b"valid fixture").unwrap();
+        fs::write(dir.join("template.json"),b"not a template").unwrap();
+        fs::write(dir.join("image.png"),b"image").unwrap();
+        let mut candidates=Vec::new();let mut failures=Vec::new();collect_litematic_files(&dir,&mut candidates,&mut failures);
+        assert_eq!(candidates.len(),2);assert!(failures.is_empty());
+        let sink=Arc::new(RecordingSink::default());let queue=build_queue(sink);
+        let calls=Arc::new(AtomicUsize::new(0));let seen=calls.clone();
+        queue.set_format_inspector(Arc::new(move|path|{
+            seen.fetch_add(1,Ordering::SeqCst);
+            if fs::read(path).map_err(|e|e.to_string())?==b"valid fixture"{Ok(())}else{Err("actual format inspection failed".into())}
+        })).unwrap();
+        let path=dir.join("structure.nbt");assert!(!queue.scan_one(&path,true,false).unwrap().from_cache);assert!(queue.scan_one(&path,true,false).unwrap().from_cache);
+        assert!(queue.scan_one(&dir.join("template.json"),true,false).unwrap_err().contains("inspection failed"));assert_eq!(calls.load(Ordering::SeqCst),2);
+        assert!(!queue.scan_one(&path,true,true).unwrap().from_cache);assert_eq!(calls.load(Ordering::SeqCst),3);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn explicit_projection_checksum_routes_non_litematic_content_without_extension_authority(){
+        let dir=test_dir("format-checksum");let path=dir.join("template.any-extension");fs::write(&path,b"content").unwrap();
+        let sink=Arc::new(RecordingSink::default());let queue=build_queue(sink);let calls=Arc::new(AtomicUsize::new(0));let seen=calls.clone();
+        queue.set_format_inspector(Arc::new(move|_|{seen.fetch_add(1,Ordering::SeqCst);Ok(())})).unwrap();
+        assert_eq!(queue.compute_projection_checksum(&path).unwrap().byte_count,7);assert_eq!(calls.load(Ordering::SeqCst),1);
+        assert!(!is_schematic_candidate(&path));assert!(is_schematic_candidate(Path::new("a.NBT")));assert!(is_schematic_candidate(Path::new("a.bgcp")));assert!(!is_schematic_candidate(Path::new("a.schem")));
         fs::remove_dir_all(&dir).unwrap();
     }
 }

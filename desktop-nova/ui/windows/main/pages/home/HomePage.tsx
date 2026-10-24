@@ -5,6 +5,7 @@ import { ScrollArea } from "../../../../components/ui/scroll-area";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { FolderOpen, FileText, BarChart3, Box, Library, ArrowRight } from "lucide-react";
 import "./home.css";
+import { RecentProjects } from "./RecentProjects";
 import React from 'react';
 import { selectLitematicFile } from '../../../../../src/business/facade';
 import { loadLibrary, addOrUpdateRecord, displayFilePath } from '../../../../../src/business/facade';
@@ -45,6 +46,8 @@ export function HomePage({ currentFile, setCurrentFile, setRoute, buildVersion }
           {buildVersion && <p className="home-beta-note muted">{t("home.version", {version:buildVersion})}</p>}
         </section>
 
+        <div className="home-continue-grid">
+        <RecentProjects onOpen={path => { setCurrentFile(path); setRoute("properties"); }} />
         <section className="home-current group-box" aria-labelledby="home-current-title">
           <h2 id="home-current-title">{currentFile ? t("home.continue") : t("home.openToContinue")}</h2>
           {currentFile ? <div className="home-current-file">
@@ -61,8 +64,11 @@ export function HomePage({ currentFile, setCurrentFile, setRoute, buildVersion }
             <Button variant="ghost" aria-label={t("home.previewAria")} onClick={handleRender} disabled={!currentFile}>
               <ThemeIcon name="render" size={22} fallback={Box} /><span><strong>{t("home.preview")}</strong><small className="muted">{t("home.previewHint")}</small></span><ArrowRight size={18} aria-hidden="true" />
             </Button>
+            <Button variant="ghost" onClick={() => setRoute("flake")} disabled={!currentFile}>{t("shell.layers")}</Button>
+            <Button variant="ghost" onClick={() => setRoute("composition")} disabled={!currentFile}>{locale === "en-US" ? "Compose / Split" : "组合/拆分"}</Button>
           </div>
         </section>
+        </div>
       </div>
     </ScrollArea>
   );

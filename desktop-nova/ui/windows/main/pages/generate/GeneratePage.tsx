@@ -502,7 +502,7 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
 
       <ScrollArea className="generate-scroll-area" aria-label={t("generate.editArea")}>
       <fieldset className="generate-workspace" disabled={!!busy}>
-        <div className="generate-form-column">
+        <div className="generate-template-column">
           <TemplateLibrary
             loading={templatesLoading}
             loadError={templatesError}
@@ -516,6 +516,8 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
             onLoad={handleLoadTemplate}
             onExportCurrent={handleExportTemplate}
           />
+        </div>
+        <div className="generate-form-column">
           <MetadataGroup form={form} updateMetadata={updateMetadata} />
           <details className="generate-advanced">
             <summary>{t("generate.advancedRegion")}</summary>

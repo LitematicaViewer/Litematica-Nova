@@ -1150,18 +1150,31 @@ impl ApplicationOperations {
         Ok(CoreOutput { stdout })
     }
 
+    pub(crate) fn canonical_render_source(&self, source: &Path) -> Result<PathBuf, String> {
+        let result = self.data_request(super::data_worker::protocol::DataKind::Format,
+            json!({"action": "runtimeInput", "input": path_text(source)}), None, false)?;
+        result["snapshotPath"].as_str().map(PathBuf::from).ok_or_else(|| "格式准备未返回有效场景快照".into())
+    }
+
+    pub(crate) fn inspect_library_source(&self, source: &Path) -> Result<(), String> {
+        self.data_request(super::data_worker::protocol::DataKind::Format,
+            json!({"action": "libraryInspect", "input": path_text(source)}), None, false).map(|_| ())
+    }
+
     pub(crate) fn data_query(&self, query: DataQueryInput) -> Result<Value, String> {
         use super::data_worker::protocol::DataKind;
         if matches!(query.kind,DataKind::Analysis|DataKind::Cancel) { return Err("Unsupported public data query".into()); }
-        let writing=matches!(query.kind,DataKind::Stockpile)
-            ||query.kind==DataKind::VersionConvert&&query.input["outputPath"].is_string()
-            ||query.kind==DataKind::MaterialExport&&query.input["action"]=="export";
+        let writing = query.kind.writes(&query.input);
         self.data_request(query.kind,query.input,Some(query.operation_id),writing)
     }
     pub(crate) fn data_operation_status(&self, id:&str, cancel:bool) -> Result<Value,String> { self.data_worker.status(id,cancel) }
     fn data_request(&self,kind:super::data_worker::protocol::DataKind,mut input:Value,id:Option<String>,writing:bool)->Result<Value,String>{
         if self.lifecycle.0.lock().map_err(|_|"任务状态锁异常")?.closing {return Err("应用正在关闭，新的数据任务已取消".into());}
         let _write=if writing{Some(self.begin_write()?)}else{None};
+        if matches!(kind, super::data_worker::protocol::DataKind::Composition | super::data_worker::protocol::DataKind::Workspace | super::data_worker::protocol::DataKind::Format) {
+            input["storageDir"] = path_text(&crate::current_user_config_dir()?).into();
+        }
+
         if let Some(path)=input["sourcePath"].as_str().filter(|path|!path.is_empty()){input["sourcePath"]=path_text(&self.resolve_path(path)).into();}
         for key in ["inputPath","outputPath"]{if let Some(path)=input[key].as_str().filter(|path|!path.is_empty()){input[key]=path_text(&self.resolve_path(path)).into();}}
         let operation_id=id.unwrap_or_else(||self.next_operation("data").1);

@@ -34,7 +34,7 @@ export interface MetadataPatchInput {
 }
 
 export async function selectLitematicFile(): Promise<string | null> {
-  const selected = await openDialog({ filters: [{ name: "Litematic", extensions: ["litematic"] }] });
+  const selected = await openDialog({ filters: [{ name: "Schematic", extensions: ["litematic", "nbt", "json", "bg", "bgcp"] }] });
   return typeof selected === "string" ? selected : null;
 }
 

@@ -12,3 +12,4 @@ pub(crate) mod thumbnails;
 pub(crate) mod protected_render;
 
 pub(crate) mod data_worker;
+pub(crate) mod ui_scale;

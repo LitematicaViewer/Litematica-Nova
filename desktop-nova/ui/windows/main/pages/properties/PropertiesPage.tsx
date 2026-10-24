@@ -1,3 +1,4 @@
+import { FormatExportDialog } from "../../FormatExportDialog";
 import { t, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
@@ -122,7 +123,7 @@ function validateRegions(regions: RegionEdit[]): UiMessage {
   return "";
 }
 
-export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presentationBlocked = false }: any) {
+export function PropertiesPage({ currentFile, setCurrentFile, setRoute, onDirtyChange, presentationBlocked = false }: any) {
   const { locale } = useI18n();
   const applicationRender = React.useSyncExternalStore(
     subscribeApplicationRender,
@@ -132,6 +133,8 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
   const [data, setData] = useState<any>(null);
   const [initialForm, setInitialForm] = useState<MetadataForm | null>(null);
   const [form, setForm] = useState<MetadataForm | null>(null);
+  const [undoDrafts, setUndoDrafts] = useState<MetadataForm[]>([]);
+  const [redoDrafts, setRedoDrafts] = useState<MetadataForm[]>([]);
   useUpdateDraft(`properties:${currentFile}`, { form, initialForm });
   const [error, setError] = useState<UiMessage>("");
   const [status, setStatus] = useState<UiMessage>("");
@@ -233,6 +236,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
       const recovered = takeUpdateDraft<{ form: MetadataForm | null; initialForm: MetadataForm | null }>(`properties:${filePath}`);
       setInitialForm(recovered?.initialForm || nextForm);
       setForm(recovered?.form || nextForm);
+      setUndoDrafts([]); setRedoDrafts([]);
       setError("");
       console.info(`[NOVA_METADATA_REQUEST] source=${source} path=${filePath} request succeeded`);
       void loadLibrary()
@@ -281,10 +285,21 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
   const regionError = useMemo(() => validateRegions(form?.regions || []), [form?.regions]);
 
   const updateForm = (patch: Partial<MetadataForm>) => {
-    setForm((current) => current ? { ...current, ...patch } : current);
+    if (!form) return;
+    setUndoDrafts(history => [...history.slice(-63), form]); setRedoDrafts([]);
+    setForm({ ...form, ...patch });
   };
 
+  const undoDraft = () => {
+    if (!form || !undoDrafts.length) return;
+    setRedoDrafts(history => [...history, form]); setForm(undoDrafts[undoDrafts.length - 1]); setUndoDrafts(history => history.slice(0, -1));
+  };
+  const redoDraft = () => {
+    if (!form || !redoDrafts.length) return;
+    setUndoDrafts(history => [...history, form]); setForm(redoDrafts[redoDrafts.length - 1]); setRedoDrafts(history => history.slice(0, -1));
+  };
   const hasChanges = !!form && JSON.stringify(form) !== JSON.stringify(initialForm);
+  useEffect(() => { onDirtyChange?.(hasChanges); }, [hasChanges, onDirtyChange]);
   const worldExportUnavailable = !form || hasChanges || saving || filePreviewBusy || capturingPreview;
   const openWorldExport = () => {
     if (worldExportUnavailable) return;
@@ -358,6 +373,15 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
           {currentFile && <Button disabled={worldExportUnavailable} aria-describedby={hasChanges ? "world-export-save-first" : undefined} onClick={openWorldExport}><ThemeIcon name="download" size={16} fallback={Download} />{t("worldExport.title")}</Button>}
         </div>
       </header>
+      {currentFile && <div className="properties-actions">
+        <span className="muted">{saving ? t("editor.saving") : !form ? t("properties.readingShort") : hasChanges ? t("properties.unsaved") : t("properties.savedAll")}</span>
+        <Button variant="ghost" onClick={undoDraft} disabled={!undoDrafts.length || saving}>{locale === "en-US" ? "Undo" : "撤销"}</Button>
+        <Button variant="ghost" onClick={redoDraft} disabled={!redoDrafts.length || saving}>{locale === "en-US" ? "Redo" : "重做"}</Button>
+        <Button variant="ghost" onClick={handleRestore} disabled={!form || !hasChanges || saving || filePreviewBusy || capturingPreview}><ThemeIcon name="undo" size={16} fallback={RotateCcw} />{t("properties.undoUnsaved")}</Button>
+        <Button variant="ghost" onClick={() => setConvertOpen(true)} disabled={saving || filePreviewBusy || !form}>{t("properties.otherFormats")}</Button>
+        <Button onClick={handleSaveAs} disabled={!form || !!regionError || saving || filePreviewBusy || capturingPreview}>{t("properties.saveCopy")}</Button>
+        <Button variant="default" onClick={handleSave} disabled={!form || !hasChanges || !!regionError || saving || filePreviewBusy || capturingPreview}><ThemeIcon name="save" size={16} fallback={Save} />{saving ? t("editor.saveBusy") : t("properties.saveChanges")}</Button>
+      </div>}
       {currentFile && hasChanges && <div className="properties-toolbar">
         <span className="muted" id="world-export-save-first">{t("worldExport.saveFirst")}</span>
         <Button size="sm" variant="link" onClick={handleSave} disabled={!!regionError || saving || filePreviewBusy || capturingPreview}>{saving ? t("editor.saveBusy") : t("properties.saveChanges")}</Button>
@@ -371,6 +395,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
             {!form ? (!error && <div className="properties-empty muted" role="status">{t("properties.reading")}</div>) : (
             <fieldset className="properties-editor nova-box-plain" disabled={saving || filePreviewBusy || capturingPreview}>
                 <legend className="properties-sr-only">{t("properties.title")}</legend>
+                  <h3 className="properties-section-title">{locale === "en-US" ? "Basic information" : "基本信息"}</h3>
                   <TextRow label={t("properties.internalName")} value={form.name} onChange={(value) => updateForm({ name: value })} />
                   <TextRow label={t("properties.author")} value={form.author} onChange={(value) => updateForm({ author: value })} />
                   <label className="properties-field">
@@ -386,6 +411,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
                     <div><dt>{t("properties.volume")}</dt><dd>{Number(metadata.total_volume || 0).toLocaleString(locale)}</dd></div>
                     <div><dt>{t("properties.density")}</dt><dd>{(density * 100).toLocaleString(locale, {minimumFractionDigits:2, maximumFractionDigits:2})}%</dd></div>
                   </dl>
+                  <h3 className="properties-section-title">{locale === "en-US" ? "Regions" : "选区"}</h3>
                   {regionError && <div className="properties-error nova-text-danger" role="alert">{localizeMessage(regionError)}</div>}
                   <ScrollArea className="properties-table-scroll" horizontal>
                     <Table>
@@ -403,9 +429,11 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
                       ))}</TableBody>
                     </Table>
                   </ScrollArea>
+                  <details className="properties-advanced"><summary>{locale === "en-US" ? "File, version and advanced fields" : "文件、版本与高级字段"}</summary>
                   <DateRow label={t("properties.created")} value={form.time_created} onChange={(value) => updateForm({ time_created: value })} />
                   <DateRow label={t("properties.modified")} value={form.time_modified} onChange={(value) => updateForm({ time_modified: value })} />
                   <dl className="properties-facts nova-box-plain"><div className="properties-format-row"><dt>{t("properties.format")}</dt><dd>Litematica v{form.litematic_version}.{form.litematic_subversion}<Button size="sm" variant="ghost" disabled={saving || hasChanges} onClick={() => setVersionConvertOpen(true)}>{t("properties.convertVersion")}</Button></dd></div></dl>
+                  </details>
                 <div className="properties-file-preview">
                   <div className="properties-preview-toolbar"><h3>{t("properties.filePreview")}</h3>
                     <Button size="sm" variant="ghost" onClick={() => void updateFilePreview(false)}><ThemeIcon name="picture_import" size={16} fallback={ImagePlus} />{t("properties.importImage")}</Button>
@@ -450,22 +478,10 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, presenta
         </div>
       )}
       {clearPreviewConfirm && <Dialog title={t("properties.clearPreviewTitle")} busy={filePreviewBusy} onClose={() => setClearPreviewConfirm(false)} footer={<><Button variant="ghost" disabled={filePreviewBusy} onClick={() => setClearPreviewConfirm(false)}>{t("editor.cancel")}</Button><Button variant="destructive" disabled={filePreviewBusy} onClick={() => void updateFilePreview(true)}>{t("properties.confirmClear")}</Button></>}><p>{t("properties.clearPreviewPrompt")}</p></Dialog>}
-      {currentFile && <div className="properties-actions">
-        <span className="muted">{saving ? t("editor.saving") : !form ? t("properties.readingShort") : hasChanges ? t("properties.unsaved") : t("properties.savedAll")}</span>
-        <Button variant="ghost" onClick={handleRestore} disabled={!form || !hasChanges || saving || filePreviewBusy || capturingPreview}><ThemeIcon name="undo" size={16} fallback={RotateCcw} />{t("properties.undoUnsaved")}</Button>
-        <Button variant="ghost" onClick={() => setConvertOpen(true)} disabled={saving || filePreviewBusy || !form}>{t("properties.otherFormats")}</Button>
-        <Button onClick={handleSaveAs} disabled={!form || !!regionError || saving || filePreviewBusy || capturingPreview}>{t("properties.saveCopy")}</Button>
-        <Button variant="default" onClick={handleSave} disabled={!form || !hasChanges || !!regionError || saving || filePreviewBusy || capturingPreview}><ThemeIcon name="save" size={16} fallback={Save} />{saving ? t("editor.saveBusy") : t("properties.saveChanges")}</Button>
-      </div>}
+
       {versionConvertOpen && <VersionConversionDialog sourcePath={currentFile} onClose={() => setVersionConvertOpen(false)} onSaved={(path) => { setStatus({ key: "properties.convertedSaved", params: {path: displayFilePath(path)} }); setVersionConvertOpen(false); }} />}
       {worldExportOpen && <WorldExportDialog sourcePath={currentFile} name={form?.name || ""} onClose={() => setWorldExportOpen(false)} />}
-      {convertOpen && <Dialog title={t("properties.saveFormat")} busy={saving} onClose={() => setConvertOpen(false)} width="sm" footer={
-        <Button disabled={saving} onClick={handleSaveAs}>{t("properties.saveLitematic")}</Button>
-      }>
-        <p>{t("properties.litematicSupported")}</p>
-        <Button variant="ghost" disabled={worldExportUnavailable} onClick={openWorldExport}>{t("worldExport.title")}</Button>
-        {hasChanges && <p className="muted">{t("worldExport.saveFirst")}</p>}
-      </Dialog>}
+      {convertOpen && <FormatExportDialog sourcePath={currentFile} onClose={() => setConvertOpen(false)} onWorldExport={() => { setConvertOpen(false); openWorldExport(); }} />}
     </section>
   );
 }

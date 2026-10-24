@@ -1,0 +1,79 @@
+@layer theme, vendor, tokens, base, components, utilities;
+@layer components.shared, components.page, components.theme;
+
+@layer components.page {
+  .composition-page { height:100%; min-height:0; display:flex; flex-direction:column; gap:12px; padding:16px; color:var(--foreground); overflow:hidden}
+  .composition-header { min-width:0; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:16px}
+  .composition-header h2 { font-size:20px; margin:0}
+  .composition-header p { margin:4px 0 0; color:var(--muted-foreground); font-size:12px}
+  :is(.composition-page,.composition-drawer) input,:is(.composition-page,.composition-drawer) select { min-width:0; border:1px solid var(--border); background:var(--background); color:inherit; border-radius:var(--radius); padding:6px 8px; font:inherit}
+  .composition-toolbar,.composition-report-controls,.composition-split-controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .composition-workspace { display:grid; grid-template-columns:256px minmax(0,1fr) 300px; flex:1; min-height:0; overflow:hidden; border:1px solid var(--border); border-radius:var(--radius)}
+  .composition-parts,.composition-inspector { padding:12px; overflow:auto; background:var(--card)}
+  .composition-parts { border-right:1px solid var(--border)}
+  .composition-inspector { border-left:1px solid var(--border); display:flex; flex-direction:column; gap:12px}
+  :is(.composition-page,.composition-drawer) h3 { font-size:14px; margin:0 0 12px}
+  .composition-part { padding:8px; border:1px solid transparent; border-radius:var(--radius); margin-bottom:6px}
+  .composition-part.is-selected { border-color:var(--primary); background:var(--accent)}
+  .composition-part-name { display:flex; align-items:center; gap:6px; width:100%; padding:0; border:0; background:transparent; text-align:left; color:inherit; overflow-wrap:anywhere; cursor:pointer}
+  .composition-part-actions { display:flex; align-items:center; gap:8px; margin-top:8px}
+  .composition-part-actions label { display:flex; gap:4px; align-items:center; margin-right:auto; font-size:12px}
+  .composition-part-actions button,.composition-box>button { border:0; background:transparent; color:var(--muted-foreground); padding:4px; cursor:pointer}
+  .composition-canvas { min-width:0; min-height:0; display:flex; flex-direction:column; background:var(--background)}
+  .composition-canvas-toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--border); padding:8px}
+  .composition-canvas-toolbar span { font-size:12px; color:var(--muted-foreground)}
+  .composition-native-viewport { position:relative; flex:1; min-height:200px}
+  .composition-empty { height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; text-align:center; color:var(--muted-foreground)}
+  .composition-empty p { max-width:360px; font-size:13px; line-height:1.7}
+  .composition-inspector>label { display:flex; flex-direction:column; gap:6px; font-size:12px}
+  .composition-inspector>label:has([role=checkbox]) { flex-direction:row; align-items:center}
+  :is(.composition-page,.composition-drawer) fieldset { border:1px solid var(--border); padding:8px; margin:0; display:flex; flex-direction:column; gap:8px; min-width:0}
+  :is(.composition-page,.composition-drawer) legend { font-size:12px; padding:0 4px; color:var(--muted-foreground)}
+  .composition-vector { display:flex; gap:6px; min-width:0}
+  .composition-vector label { display:flex; flex-direction:column; gap:4px; min-width:0; flex:1; font-size:12px; color:var(--muted-foreground)}
+  .composition-vector input { width:100%; box-sizing:border-box}
+  .composition-checks { display:flex; gap:12px}
+  .composition-checks label,:is(.composition-page,.composition-drawer) fieldset>label { display:flex; align-items:center; gap:6px; font-size:12px}
+  .composition-inspector dl { font-size:12px; margin:0; display:grid; grid-template-columns:65px minmax(0,1fr); gap:8px}
+  .composition-inspector dd { margin:0; overflow-wrap:anywhere; font-variant-numeric:tabular-nums}
+  .composition-inspector dt { color:var(--muted-foreground)}
+  .composition-bottom { max-height:34%; min-height:40px; overflow:auto; border:1px solid var(--border); padding:10px; border-radius:var(--radius)}
+  .composition-report-controls label { font-size:12px; display:flex; gap:6px; align-items:center}
+  .composition-report-controls>span { font-size:12px; font-variant-numeric:tabular-nums}
+  .composition-error,.composition-issues { color:var(--destructive); font-size:13px; margin:0; overflow-wrap:anywhere}
+  .composition-muted { color:var(--muted-foreground); font-size:13px; line-height:1.6}
+  .composition-split { margin-top:10px; border-top:1px solid var(--border); padding-top:8px}
+  .composition-split>summary { display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px; margin-bottom:10px}
+  .composition-box { display:flex; align-items:center; gap:10px; padding:8px 0}
+  .composition-box>input { width:100px}
+  .composition-box .composition-vector { flex:1}
+  .composition-page table { width:100%; border-collapse:collapse; font-size:12px; margin-top:10px}
+  .composition-page th,.composition-page td { padding:7px 8px; text-align:left; border-bottom:1px solid var(--border); font-variant-numeric:tabular-nums}
+  .composition-page button:focus-visible,.composition-page summary:focus-visible { outline:2px solid var(--ring); outline-offset:2px}
+  .composition-page button:disabled { opacity:.5; cursor:default}
+  .composition-workspace.is-compact-inspector { grid-template-columns:256px minmax(0,1fr)}
+  .composition-workspace.is-compact-parts { grid-template-columns:minmax(0,1fr)}
+  .composition-canvas>.render-page { flex:1; min-width:0; min-height:0; padding:8px; overflow:auto}
+  .composition-canvas>.render-page .render-preview-group { flex:1; min-height:200px}
+  .composition-drawer { color:var(--foreground); background:var(--card); width:min(360px,calc(100vw - 24px)); max-height:calc(100vh - 24px)}
+  .composition-drawer .composition-inspector,.composition-drawer .composition-parts { border:0; padding:0; overflow:visible}
+  .composition-drawer .composition-inspector>h3,.composition-drawer .composition-parts>h3 { display:none}
+  .composition-drawer .composition-inspector { display:flex; flex-direction:column; gap:12px}
+  .composition-drawer button:focus-visible { outline:2px solid var(--ring); outline-offset:2px}
+  .composition-drawer button:disabled { opacity:.5; cursor:default}
+}
+
+@layer components.page {
+  @media (max-width: 959px) {
+    .composition-page { overflow: auto; padding: 12px; }
+    .composition-workspace { flex: 1 0 360px; min-height: 360px; }
+    .composition-bottom { flex-shrink: 0; max-height: none; }
+    .composition-header > div { min-width: 0; width: 100%; }
+    .composition-header > select { width: 100%; }
+    .composition-box { align-items: stretch; flex-wrap: wrap; }
+    .composition-box > input { width: 100%; }
+    .composition-box .composition-vector { flex: 1 0 100%; }
+    .composition-split { min-width: 0; overflow-x: auto; }
+    .composition-split table { min-width: 480px; }
+  }
+}

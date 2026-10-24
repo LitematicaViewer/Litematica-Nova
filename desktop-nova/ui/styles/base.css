@@ -2,6 +2,7 @@
 @import "./widgets.css";
 @import "./controls.css";
 @import "./page-appearance.css";
+@import "../shell/workspace.css";
 @layer theme, vendor, tokens, base, components, utilities;
 @layer components.shared, components.page, components.theme;
 

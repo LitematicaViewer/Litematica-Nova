@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@tauri-apps/api/core";
 import { invoke } from "./tauri";
+import { listenEvent } from "./events";
 
 /** Transparent GPU children expose the native parent, not the clipped WebView. */
 export async function synchronizeApplicationWindowBackground(color: [number, number, number, number]): Promise<void> {
@@ -30,6 +31,7 @@ export async function subscribeApplicationWindowGeometry(
     novaWindow.onResized(notify),
     novaWindow.onScaleChanged(notify),
     novaWindow.onFocusChanged(notify),
+    listenEvent<number>("nova-ui-scale-changed", notify),
   ]);
   return () => unlisteners.forEach((unlisten) => unlisten());
 }

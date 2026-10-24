@@ -3,7 +3,7 @@ import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
 import { creativeItemId } from "../../../../../src/business/facade";
 import { displayFilePath } from "../../../../../src/business/facade";
-import { Hand, Wand2, Ruler, MapPin, BoxSelect, Pencil, Eraser, Pipette, Square, Circle, PaintBucket, Type, Plus, Minus } from "lucide-react";
+import { Hand, Wand2, Ruler, MapPin, BoxSelect, Pencil, Eraser, Pipette, Square, Circle, PaintBucket, Type, Plus, Minus, Maximize2, SlidersHorizontal } from "lucide-react";
 import { Slider } from "../../../../components/ui/slider";
 import { ScrollArea } from "../../../../components/ui/scroll-area";
 import { Dropdown } from "../../../../components/Dropdown";
@@ -2125,7 +2125,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
     menu.style.setProperty("--flake-marker-menu-top", `${markerMenu.clientY}px`);
   }, [markerMenu]);
 
-  const regionName = statsData?.regions?.[0]?.name || currentFile.split(/[\\/]/).pop() || "Unnamed";
+  const regionName = statsData?.regions?.[0]?.name || currentFile?.split(/[\\/]/).pop() || "Unnamed";
   const maxY = meta ? Math.max(0, meta.size_y - 1) : 0;
   const ready = !!meta;
   const building = isLoadingLayers;
@@ -2155,7 +2155,13 @@ export function FlakePage({ currentFile, setRoute }: any) {
   }
 
   return (
-    <div ref={pageRef} className={editMode ? "nova-page flake-page flake-page--edit-mode" : "nova-page flake-page"}>
+    <div ref={pageRef} className={editMode ? "nova-page flake-page flake-page--edit-mode" : "nova-page flake-page"} onKeyDown={event => {
+      if (viewMode !== "2d" || !ready || showMaterials || showContainerDialog || debugStateBlock || showInventoryDialog || isTextEntryTarget(event.target)) return;
+      if (event.key === "PageUp" || event.key === "PageDown") {
+        event.preventDefault();
+        setLayerY(value => Math.max(0, Math.min(maxY, value + (event.key === "PageUp" ? 1 : -1))));
+      }
+    }}>
       <div className="subwindow-toolbar flake-page__topbar">
         <div className="layer3d-view-tabs">
           <Button aria-pressed={viewMode === "2d"} variant={viewMode === "2d" ? "default" : "outline"} onClick={() => setViewMode("2d")}>{t("layerView.2d")}</Button>
@@ -2173,13 +2179,11 @@ export function FlakePage({ currentFile, setRoute }: any) {
         }}>
           {t("editor.materials")}
         </Button>
-        <Button className="flake-page__build-button" onClick={loadProjectionLayers} disabled={!currentFile || isLoadingLayers || isSavingEdits}>
-          {isLoadingLayers ? t("flake.readingShort") : t("flake.reloadLayers")}
-        </Button>
         <label className="subwindow-check-row flake-page__edit-toggle">
           <Checkbox
 
             checked={editMode}
+            disabled={viewMode !== "2d"}
             onCheckedChange={(checked) => {
               const enabled = (checked === true);
               if (enabled) setSelectedEditTool("hand");
@@ -2193,87 +2197,50 @@ export function FlakePage({ currentFile, setRoute }: any) {
       </div>
 
       {viewMode === "3d" ? <Layer3DView key={currentFile} sourcePath={currentFile} blocked={showMaterials || showContainerDialog || !!debugStateBlock || showInventoryDialog} /> : <>
-      <div className="group-box flake-page__control-box">
-        <div className="group-box-title">{t("flake.layerControls")}</div>
-        <div className="flake-page__layer-row">
-          <span className="nova-muted flake-page__layer-label">{t("flake.layer")}</span>
+      <div className="flake-page__control-box">
+        <div className="flake-page__primary-controls" role="toolbar" aria-label={t("flake.layerControls")}>
+          <label className="flake-page__y-field">Y <Input type="number" min={0} max={maxY} value={layerY} disabled={!ready} aria-label={t("flake.currentLayer")} onChange={event => {
+            const next = Number(event.target.value);
+            if (Number.isFinite(next)) setLayerY(Math.max(0, Math.min(maxY, Math.round(next))));
+          }} /></label>
+          <Button className="flake-page__step-button" disabled={!ready || layerY === 0} title={t("flake.previousLayer")} aria-label={t("flake.previousLayer")} onClick={() => setLayerY(Math.max(0, layerY - 1))}><Minus aria-hidden="true" /></Button>
+          <Button className="flake-page__step-button" disabled={!ready || layerY === maxY} title={t("flake.nextLayer")} aria-label={t("flake.nextLayer")} onClick={() => setLayerY(Math.min(maxY, layerY + 1))}><Plus aria-hidden="true" /></Button>
           <Slider className="flake-page__layer-range" aria-label={t("flake.currentLayer")} min={0} max={Math.max(1, maxY)} value={[layerY]} onValueChange={([value]) => setLayerY(Math.min(value, maxY))} disabled={!ready || maxY === 0} />
+          <span className="flake-page__key-hint"><kbd>PgUp</kbd> / <kbd>PgDn</kbd></span>
+          <Button disabled={!ready} onClick={() => canvasRef.current?.resetView()}><Maximize2 aria-hidden="true" />{t("flake.resetView")}</Button>
         </div>
-
-        <div className="flake-page__layer-row flake-page__onion-row">
-          <span className="nova-muted flake-page__layer-label">{t("flake.onionSkin")}</span>
-          <Slider
-            className="flake-page__layer-range"
-            aria-label={t("flake.onionSkinDepth")}
-            min={0}
-            max={5}
-            step={1}
-            value={[onionSkinDepth]}
-            onValueChange={([value]) => setOnionSkinDepth(Math.min(5, Math.max(0, value || 0)))}
-            disabled={!ready}
-          />
-          <Input
-            className="input flake-page__onion-input"
-            type="number"
-            min={0}
-            max={5}
-            step={1}
-            value={onionSkinDepth}
-            onChange={(event) => setOnionSkinDepth(Math.min(5, Math.max(0, Number(event.target.value) || 0)))}
-            disabled={!ready}
-          />
-        </div>
-
-        <div className="flake-page__layer-row flake-page__zoom-row">
-          <span className="nova-muted flake-page__layer-label">{t("flake.zoom")}</span>
-          <Slider
-            className="flake-page__layer-range"
-            aria-label={t("flake.layerZoom")}
-            min={MIN_SCALE}
-            max={MAX_SCALE}
-            step={0.1}
-            value={[viewScale]}
-            onValueChange={([value]) => canvasRef.current?.zoomTo(value)}
-            disabled={!ready}
-          />
-          <Input
-            className="input flake-page__zoom-input"
-            type="number"
-            min={MIN_SCALE}
-            max={MAX_SCALE}
-            step={0.1}
-            value={Math.round(viewScale * 10) / 10}
-            onChange={(event) => {
-              const next = Number(event.target.value);
-              if (Number.isFinite(next)) canvasRef.current?.zoomTo(next);
-            }}
-            disabled={!ready}
-          />
-          <span className="nova-muted nova-small flake-page__zoom-unit">{t("flake.pixelsPerBlock")}</span>
-        </div>
-
-        <label className="subwindow-check-row flake-page__edit-toggle">
-          <Checkbox  checked={showStateHints} onCheckedChange={(checked) => setShowStateHints((checked === true))} disabled={!ready} />
-          {t("flake.stateImages")}
-        </label>
-
-        <div className="flake-page__layer-footer">
-          <div className="flake-page__layer-value">Y = {layerY}</div>
-          <div className="flake-page__layer-actions">
-            <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 5))}>-5</Button>
-            <Button className="flake-page__step-button" disabled={!ready} aria-label={t("flake.previousLayer")} onClick={() => setLayerY(Math.max(0, layerY - 1))}><Minus aria-hidden="true" /></Button>
-            <Button className="flake-page__step-button" disabled={!ready} aria-label={t("flake.nextLayer")} onClick={() => setLayerY(Math.min(maxY, layerY + 1))}><Plus aria-hidden="true" /></Button>
-            <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 5))}>+5</Button>
-            <Button disabled={!ready} onClick={() => canvasRef.current?.resetView()}>{t("flake.resetView")}</Button>
+        <details className="flake-page__advanced-controls">
+          <summary><SlidersHorizontal aria-hidden="true" />{t("flake.advanced")}</summary>
+          <div className="flake-page__advanced-content">
+            <div className="flake-page__layer-row flake-page__onion-row">
+              <span className="nova-muted flake-page__layer-label">{t("flake.onionSkin")}</span>
+              <Slider className="flake-page__layer-range" aria-label={t("flake.onionSkinDepth")} min={0} max={5} step={1} value={[onionSkinDepth]} onValueChange={([value]) => setOnionSkinDepth(Math.min(5, Math.max(0, value || 0)))} disabled={!ready} />
+              <Input className="input flake-page__onion-input" type="number" min={0} max={5} step={1} value={onionSkinDepth} aria-label={t("flake.onionSkinDepth")} onChange={event => setOnionSkinDepth(Math.min(5, Math.max(0, Number(event.target.value) || 0)))} disabled={!ready} />
+            </div>
+            <div className="flake-page__layer-row flake-page__zoom-row">
+              <span className="nova-muted flake-page__layer-label">{t("flake.zoom")}</span>
+              <Slider className="flake-page__layer-range" aria-label={t("flake.layerZoom")} min={MIN_SCALE} max={MAX_SCALE} step={0.1} value={[viewScale]} onValueChange={([value]) => canvasRef.current?.zoomTo(value)} disabled={!ready} />
+              <Input className="input flake-page__zoom-input" type="number" min={MIN_SCALE} max={MAX_SCALE} step={0.1} value={Math.round(viewScale * 10) / 10} aria-label={t("flake.layerZoom")} onChange={event => {
+                const next = Number(event.target.value);
+                if (Number.isFinite(next)) canvasRef.current?.zoomTo(next);
+              }} disabled={!ready} />
+              <span className="nova-muted nova-small flake-page__zoom-unit">{t("flake.pixelsPerBlock")}</span>
+            </div>
+            <div className="flake-page__advanced-actions">
+              <label className="subwindow-check-row flake-page__edit-toggle"><Checkbox checked={showStateHints} onCheckedChange={checked => setShowStateHints(checked === true)} disabled={!ready} />{t("flake.stateImages")}</label>
+              <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.max(0, layerY - 5))}>−5</Button>
+              <Button className="flake-page__step-button" disabled={!ready} onClick={() => setLayerY(Math.min(maxY, layerY + 5))}>+5</Button>
+              <Button className="flake-page__build-button" onClick={loadProjectionLayers} disabled={!currentFile || isLoadingLayers || isSavingEdits}>{isLoadingLayers ? t("flake.readingShort") : t("flake.reloadLayers")}</Button>
+            </div>
           </div>
-        </div>
+        </details>
       </div>
 
       <div className={layerError ? "nova-error flake-page__status-text" : "nova-muted nova-small flake-page__status-text"} role="status">{statusText}</div>
 
       <div className="flake-page__workspace">
         <section className="flake-page__main-panel">
-          <div ref={viewportRef} className="flake-page__viewport">
+          <div ref={viewportRef} className="flake-page__viewport" tabIndex={0} aria-label={t("flake.layerControls")}>
             {!ready ? (
               <div className="nova-empty-state flake-page__viewport-empty">
                 <div className="flake-page__viewport-title">{building ? t("flake.reading2d") : t("flake.dataNotReady")}</div>
@@ -2301,6 +2268,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
               />
             )}
 
+            {ready && sliceData && sliceData.blocks.length === 0 && <div className="flake-page__empty-layer" role="status">Y = {layerY} · {t("flake.emptyLayer")}</div>}
             <FlakeBlockTooltip
               x={hoverPos.x}
               y={hoverPos.y}

@@ -70,10 +70,7 @@ impl Shared {
             request.operation_id.clone(),
             DataResponse::state(&request.operation_id, DataState::Pending),
         );
-        if request.kind != DataKind::Stockpile
-            && !(request.kind == DataKind::VersionConvert
-                && request.input["outputPath"].is_string())
-            && !(request.kind == DataKind::MaterialExport && request.input["action"] == "export")
+        if !request.kind.writes(&request.input)
         {
             self.reads
                 .lock()

@@ -1,4 +1,16 @@
 export const zhCN: Record<string, string> = {
+  "replace.searchRules": "搜索规则",
+  "replace.ruleOrder": "执行顺序",
+  "replace.labelOrder": "规则名称",
+  "replace.editor": "规则编辑",
+  "replace.changes": "变化预览",
+  "replace.selectRule": "选择一条规则以编辑",
+  "replace.noRuleMatches": "没有匹配的规则",
+  "replace.runPreview": "运行预览后显示真实替换数量",
+  "replace.viewFailed": "规则列表加载失败：{error}",
+  "flake.advanced": "显示与高级",
+  "flake.emptyLayer": "当前层没有可见方块",
+
   "stats.export.group.primary": "导出对象与格式",
   "stats.export.group.common": "通用设置",
   "stats.export.group.web": "网页与部署设置",
@@ -1013,6 +1025,18 @@ export const zhCN: Record<string, string> = {
 };
 
 export const enUS: Record<string, string> = {
+  "replace.searchRules": "Search rules",
+  "replace.ruleOrder": "Execution order",
+  "replace.labelOrder": "Rule name",
+  "replace.editor": "Rule editor",
+  "replace.changes": "Changes preview",
+  "replace.selectRule": "Select a rule to edit",
+  "replace.noRuleMatches": "No matching rules",
+  "replace.runPreview": "Run preview to see actual replacement counts",
+  "replace.viewFailed": "Failed to load rules: {error}",
+  "flake.advanced": "Display and advanced",
+  "flake.emptyLayer": "No visible blocks on this layer",
+
   "stats.export.group.primary": "Source and format",
   "stats.export.group.common": "General settings",
   "stats.export.group.web": "Web and deployment",

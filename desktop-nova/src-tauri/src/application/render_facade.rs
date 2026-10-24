@@ -78,6 +78,7 @@ impl RenderEventPublication {
 /// authority for content identity and artifact validity.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RenderEnvironmentInputs {
+    pub(crate) canonical_source: Option<PathBuf>,
     pub(crate) asset_inputs: Vec<PathBuf>,
     pub(crate) viewport: Option<[u32; 2]>,
 }
@@ -114,6 +115,7 @@ struct FacadeState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RenderIntentKey {
     source: ProjectSource,
+    canonical_source: PathBuf,
     settings: ProjectRenderSettings,
 }
 
@@ -494,6 +496,7 @@ impl RenderFacade {
             request.settings.display_mode, request.settings.build_mode, request.source.path, request.settings.layers);
         let request_key = RenderIntentKey {
             source: request.source.clone(),
+            canonical_source: start.source_path.clone(),
             settings: request.settings.clone(),
         };
         let service_snapshot = self.inner.transport.snapshot();
@@ -1313,7 +1316,7 @@ fn derive_build_start(
         }
     }
     BuildStart {
-        source_path: request.source.path.clone(),
+        source_path: environment.canonical_source.clone().unwrap_or_else(|| request.source.path.clone()),
         display_mode: display_mode.clone(),
         build_mode: match request.settings.build_mode {
             RenderBuildMode::Prebuilt => ProtocolRenderBuildMode::Prebuilt,
@@ -1845,6 +1848,7 @@ mod tests {
         let start = derive_build_start(
             &request,
             RenderEnvironmentInputs {
+                canonical_source: None,
                 asset_inputs: vec![PathBuf::from(r"C:\runtime\backend-deployment.json")],
                 viewport: Some([2316, 1178]),
             },
@@ -1890,7 +1894,7 @@ mod tests {
             let facade = facade(fake.clone());
             let mut request = request();
             request.settings.display_mode = display_mode;
-            let environment = RenderEnvironmentInputs { asset_inputs: Vec::new(), viewport: Some([2316, 1178]) };
+            let environment = RenderEnvironmentInputs { canonical_source: None, asset_inputs: Vec::new(), viewport: Some([2316, 1178]) };
             let assessment = tauri::async_runtime::block_on(facade.preflight_render(request.clone(), environment)).unwrap();
             tauri::async_runtime::block_on(facade.start_prebuilt_render(request.source.clone(), RenderStartAuthorization {
                 preflight_id: Some(assessment.preflight_id), resource_warning_confirmed: false, click_started_at_epoch_ms: None,
@@ -2053,6 +2057,7 @@ mod tests {
         request.settings.backend = GraphicsBackendPreference::IrisGl46;
         request.settings.shader.path = Some(PathBuf::from(r"C:\packs\shader.zip"));
         let environment = RenderEnvironmentInputs {
+            canonical_source: None,
             asset_inputs: vec![PathBuf::from(r"C:\runtime\deployment.json")],
             viewport: Some([1280, 720]),
         };
