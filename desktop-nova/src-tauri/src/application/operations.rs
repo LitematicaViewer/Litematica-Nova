@@ -337,6 +337,13 @@ pub(crate) struct StockpileTaskCommandInput {
     preferences: Option<Value>, mutation: Option<Value>, material_id: Option<String>,
     output_path: Option<String>, input_path: Option<String>,
     query: Option<Value>, source_query: Option<Value>, export: Option<Value>, ui_locale: Option<String>, language_map: Option<BTreeMap<String,String>>,
+    sources: Option<Vec<StockpileSourceInput>>, source_ids: Option<Vec<String>>, request_id: Option<String>,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct StockpileSourceInput {
+    source_id: Option<String>, source_path: String, project_id: Option<String>,
+    scope: Option<MaterialScope>, #[serde(default)] include_container_items: bool, copies: u64,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1184,6 +1191,14 @@ impl ApplicationOperations {
         }
 
         if let Some(path)=input["sourcePath"].as_str().filter(|path|!path.is_empty()){input["sourcePath"]=path_text(&self.resolve_path(path)).into();}
+        if kind == super::data_worker::protocol::DataKind::Stockpile {
+            if let Some(sources) = input["sources"].as_array_mut() {
+                for source in sources {
+                    let path = source["sourcePath"].as_str().filter(|path| !path.is_empty()).ok_or("请选择有效的备货来源文件")?;
+                    source["sourcePath"] = path_text(&self.resolve_path(path)).into();
+                }
+            }
+        }
         let mut preview_sources = BTreeMap::new();
         if kind == super::data_worker::protocol::DataKind::Thumbnail {
             if let Some(paths) = input["sourcePaths"].as_array_mut() {
@@ -1523,6 +1538,15 @@ mod tests {
             "expectedRevision":"saved-snapshot","sourcePath":"fixture.litematic","scope":{"kind":"all","value":null}})).unwrap();
         assert_eq!(command.expected_revision.as_deref(),Some("saved-snapshot"));
         assert!(command.source_revision.is_none());
+        let multi: StockpileTaskCommandInput = serde_json::from_value(json!({"action":"setSources","taskId":"a".repeat(64),
+            "expectedRevision":"saved-snapshot","requestId":"sources-retry","sources":[{"sourceId":"one","sourcePath":"fixture.litematic",
+                "scope":{"kind":"all","value":null},"includeContainerItems":true,"copies":4}]})).unwrap();
+        assert_eq!(multi.sources.as_ref().unwrap()[0].copies,4);
+        assert_eq!(multi.request_id.as_deref(),Some("sources-retry"));
+        for forbidden in ["snapshot","context","baseMaterials","databasePath"] {
+            assert!(serde_json::from_value::<StockpileTaskCommandInput>(json!({"action":"create","sources":[{
+                "sourcePath":"fixture.litematic","copies":1,(forbidden):{}}]})).is_err());
+        }
         for forbidden in ["snapshot","databasePath","privateKey","commandLine"] {
             assert!(serde_json::from_value::<StockpileTaskCommandInput>(json!({"action":"mutate",(forbidden):{}})).is_err());
         }

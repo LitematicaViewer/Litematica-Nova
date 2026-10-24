@@ -73,6 +73,7 @@ impl SourceKey {
 }
 struct CachedAnalysis {
     key: SourceKey,
+    resource_id: String,
     root: Arc<crate::nbt::LitematicRoot>,
     analysis: Option<Arc<StableStructureOutput>>,
     blocks: Arc<StableStructureOutput>,
@@ -117,7 +118,12 @@ impl AnalysisCache {
         cancel: &AtomicBool,
     ) -> Result<(Arc<StableStructureOutput>, String, String, bool)> {
         let key = SourceKey::read(path)?;
-        if let Some(entry) = self.entries.iter_mut().find(|e| e.key == key) {
+        let resource_id = crate::game_data::active_context()?.content_id;
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|e| e.key == key && e.resource_id == resource_id)
+        {
             let hit = !containers || entry.analysis.is_some();
             return Ok((
                 Self::finish(entry, containers, cancel)?,
@@ -161,6 +167,7 @@ impl AnalysisCache {
             .saturating_add((key.bytes as usize).saturating_mul(8));
         let mut entry = CachedAnalysis {
             key: key.clone(),
+            resource_id,
             root,
             analysis: None,
             blocks,
@@ -255,7 +262,11 @@ impl Engine {
     ) -> Result<Value> {
         ensure!(!cancel.load(Ordering::Relaxed), "Data operation cancelled");
         // Embedded preview bytes do not depend on selected game/model resources.
-        let _context = if req.kind == DataKind::Thumbnail { None } else { Some(crate::game_data::operation_context()?) };
+        let _context = if req.kind == DataKind::Thumbnail {
+            None
+        } else {
+            Some(crate::game_data::operation_context()?)
+        };
         progress(json!({"stage":"prepare","current":0,"total":1}));
         match req.kind {
             DataKind::Composition => crate::composition::execute(&req.input, cancel),
@@ -263,7 +274,11 @@ impl Engine {
             DataKind::Thumbnail => crate::projection_preview::read_cached(&req.input, cancel),
             DataKind::ReplaceRules => crate::replace_blocks::editor_view(&req.input),
             DataKind::Format => crate::schematic_formats::execute(&req.input, cancel),
-            DataKind::Workspace => crate::workspace::recent_projects(std::path::Path::new(req.input["storageDir"].as_str().context("Workspace storage directory is missing")?)),
+            DataKind::Workspace => crate::workspace::recent_projects(std::path::Path::new(
+                req.input["storageDir"]
+                    .as_str()
+                    .context("Workspace storage directory is missing")?,
+            )),
             DataKind::Analysis => {
                 let (mut value, revision, _, _) = self.snapshot(&req.input, cancel)?;
                 value["source_revision"] = revision.into();
@@ -476,35 +491,129 @@ impl Engine {
         Ok(view)
     }
 
+    fn stockpile_snapshot(&self, input: &mut Value, cancel: &AtomicBool) -> Result<()> {
+        let (snapshot, revision, content, _) = self.snapshot(input, cancel)?;
+        let scope = input
+            .get("scope")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .unwrap_or(json!({"kind":"all","value":null}));
+        let resource = crate::game_data::active_context()?.content_id;
+        input["context"] = json!({"scope":scope,"includeContainerItems":input["includeContainerItems"].as_bool().unwrap_or(false),
+            "sourceContentId":content,"sourceFileRevision":revision,"resourceIdentity":resource});
+        input["projectId"] = content.into();
+        input["sourceRevision"] = revision.into();
+        input["snapshot"] = snapshot;
+        Ok(())
+    }
+
     fn stockpile(&self, mut input: Value, cancel: &AtomicBool) -> Result<Value> {
+        ensure!(!cancel.load(Ordering::Relaxed), "Data operation cancelled");
         let action = input["action"].as_str().unwrap_or("open").to_owned();
-        if action == "open" && input.get("taskId").is_none_or(Value::is_null) {
-            let existing = crate::stockpile_serve::desktop_task_from_value(
-                json!({"action":"open","sourcePath":input["sourcePath"],"uiLocale":input["uiLocale"],"languageMap":input["languageMap"],"query":input["query"]}),
-            )?;
-            let value = serde_json::to_value(existing)?;
-            if value.get("task").is_some_and(|task| !task.is_null())
-                || input["sourcePath"]
-                    .as_str()
-                    .is_none_or(|path| !Path::new(path).is_file())
-            {
-                return Ok(value);
-            }
+        if matches!(action.as_str(), "open" | "select") && input["taskId"].is_string() {
+            // Switching tasks does not relink any source to the projection
+            // currently open in the editor. Source changes require confirmation.
+            let command = input.as_object_mut().context("Invalid task command")?;
+            command.remove("sourcePath");
+            command.remove("projectId");
         }
-        if action == "sync"
-            || action == "bindLegacy"
-            || action == "open"
+        // Opening the workbench never creates a task or re-analyses a file.
+        // The selected task is independent of the currently open projection.
+        if action == "open" && input["taskId"].is_null() {
+            let mut result = serde_json::to_value(
+                crate::stockpile_serve::desktop_task_from_value(
+                    json!({"action":"open","uiLocale":input["uiLocale"],"languageMap":input["languageMap"],"query":input["query"]}),
+                )?,
+            )?;
+            stockpile_source_states(&mut result);
+            return Ok(result);
+        }
+        let source_edit = matches!(action.as_str(), "setSources" | "addSources" | "sync");
+        let saved = if source_edit && input["taskId"].is_string() {
+            serde_json::to_value(crate::stockpile_serve::desktop_task_from_value(json!({
+                "action":"query","taskId":input["taskId"],"query":{"offset":0,"limit":1}
+            }))?)?["task"]
+                .clone()
+        } else {
+            Value::Null
+        };
+        let saved_sources = saved["sources"].as_array().cloned().unwrap_or_default();
+        let current_resource = if action == "sync" {
+            Some(crate::game_data::active_context()?.content_id)
+        } else {
+            None
+        };
+        if action == "sync" && !saved_sources.is_empty() {
+            let selected = input["sourceIds"].as_array();
+            if let Some(ids) = selected {
+                ensure!(
+                    !ids.is_empty(),
+                    "Select at least one projection to synchronize"
+                );
+                for id in ids {
+                    ensure!(
+                        saved_sources.iter().any(|source| source["sourceId"] == *id),
+                        "The selected task source no longer exists"
+                    );
+                }
+            }
+            input["sources"] = Value::Array(
+                saved_sources
+                    .iter()
+                    .filter(|source| selected.is_none_or(|ids| ids.contains(&source["sourceId"])))
+                    .map(stockpile_source_input)
+                    .collect(),
+            );
+        }
+        if let Some(sources) = input["sources"].as_array_mut() {
+            // Group each file's scopes together, retaining one parsed source;
+            // copies never multiply parsing or container scans.
+            let mut order: Vec<_> = (0..sources.len()).collect();
+            order.sort_by_key(|index| {
+                sources[*index]["sourcePath"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            });
+            for index in order {
+                ensure!(!cancel.load(Ordering::Relaxed), "Data operation cancelled");
+                let requested = stockpile_source_input(&sources[index]);
+                let path = requested["sourcePath"]
+                    .as_str()
+                    .filter(|value| !value.is_empty())
+                    .context("A task source path is required")?;
+                let previous = saved_sources.iter().find(|source| {
+                    let same_id = requested["sourceId"].is_string()
+                        && source["sourceId"] == requested["sourceId"];
+                    let same_path = stockpile_same_path(
+                        source["sourcePath"].as_str().unwrap_or_default(),
+                        path,
+                    );
+                    (same_id || same_path)
+                        && same_path
+                        && stockpile_scope(source) == stockpile_scope(&requested)
+                        && source["includeContainerItems"].as_bool().unwrap_or(false)
+                            == requested["includeContainerItems"]
+                                .as_bool()
+                                .unwrap_or(false)
+                });
+                let reuse = previous.is_some_and(|source| {
+                    action != "sync"
+                        || stockpile_source_status(source) == "current"
+                            && source["resourceIdentity"].as_str() == current_resource.as_deref()
+                });
+                sources[index] = requested;
+                if reuse {
+                    sources[index]["sourceId"] = previous.unwrap()["sourceId"].clone();
+                } else {
+                    self.stockpile_snapshot(&mut sources[index], cancel)?;
+                }
+            }
+        } else if action == "bindLegacy"
+            || action == "sync"
             || action == "create" && input["taskId"].is_null()
         {
-            let (snapshot, revision, content, _) = self.snapshot(&input, cancel)?;
-            let scope = input
-                .get("scope")
-                .cloned()
-                .unwrap_or(json!({"kind":"all","value":null}));
-            input["context"] = json!({"scope":scope,"includeContainerItems":input["includeContainerItems"].as_bool().unwrap_or(false),"sourceContentId":content,"sourceFileRevision":revision});
-            input["projectId"] = content.into();
-            input["sourceRevision"] = revision.into();
-            input["snapshot"] = snapshot;
+            self.stockpile_snapshot(&mut input, cancel)?;
         }
         if input["projectId"].is_null() {
             input.as_object_mut().unwrap().remove("projectId");
@@ -518,33 +627,99 @@ impl Engine {
         ensure!(!cancel.load(Ordering::Relaxed), "Data operation cancelled");
         let mut result =
             serde_json::to_value(crate::stockpile_serve::desktop_task_from_value(input)?)?;
-        if let Some(task) = result.get_mut("task").filter(|task| !task.is_null()) {
-            if let Some(path) = task["sourcePath"].as_str() {
-                let source = Path::new(path);
-                task["sourceStatus"] = if !source.is_file() {
-                    "missing"
-                } else if task
-                    .pointer("/context/sourceFileRevision")
-                    .and_then(Value::as_str)
-                    .is_some_and(|revision| {
-                        SourceKey::read(source).is_ok_and(|key| {
-                            key.revision() != revision
-                                && key.legacy_revision(
-                                    task.pointer("/context/includeContainerItems")
-                                        .and_then(Value::as_bool)
-                                        .unwrap_or(false),
-                                ) != revision
-                        })
-                    })
-                {
-                    "changed"
-                } else {
-                    "current"
-                }
-                .into();
-            }
-        }
+        stockpile_source_states(&mut result);
         Ok(result)
+    }
+}
+
+fn stockpile_scope(source: &Value) -> Value {
+    let scope = source
+        .get("scope")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .or_else(|| source.pointer("/context/scope").cloned())
+        .unwrap_or(json!({"kind":"all","value":null}));
+    if scope["kind"] == "all" {
+        json!({"kind":"all","value":null})
+    } else if scope["kind"] == "layer" {
+        match scope["value"]
+            .as_str()
+            .and_then(|value| value.parse::<i32>().ok())
+        {
+            Some(layer) => json!({"kind":"layer","value":layer.to_string()}),
+            None => scope,
+        }
+    } else {
+        scope
+    }
+}
+fn stockpile_source_input(source: &Value) -> Value {
+    json!({"sourceId":source["sourceId"],"sourcePath":source["sourcePath"],
+        "scope":stockpile_scope(source),"includeContainerItems":source.get("includeContainerItems").cloned().unwrap_or(json!(false)),
+        "copies":source.get("copies").cloned().unwrap_or(json!(1))})
+}
+fn stockpile_same_path(left: &str, right: &str) -> bool {
+    if let (Ok(left), Ok(right)) = (fs::canonicalize(left), fs::canonicalize(right)) {
+        return left == right;
+    }
+    if cfg!(windows) {
+        left.trim_start_matches(r"\\?\")
+            .replace('/', "\\")
+            .eq_ignore_ascii_case(&right.trim_start_matches(r"\\?\").replace('/', "\\"))
+    } else {
+        left == right
+    }
+}
+fn stockpile_source_status(source: &Value) -> &'static str {
+    let Some(path) = source["sourcePath"].as_str() else {
+        return "missing";
+    };
+    let Ok(key) = SourceKey::read(Path::new(path)) else {
+        return "missing";
+    };
+    let saved = source
+        .pointer("/context/sourceFileRevision")
+        .and_then(Value::as_str)
+        .or_else(|| source["sourceRevision"].as_str());
+    let containers = source["includeContainerItems"].as_bool().unwrap_or(false)
+        || source
+            .pointer("/context/includeContainerItems")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    if saved.is_some_and(|revision| {
+        key.revision() != revision && key.legacy_revision(containers) != revision
+    }) {
+        "changed"
+    } else {
+        "current"
+    }
+}
+fn stockpile_source_states(result: &mut Value) {
+    if let Some(task) = result.get_mut("task").filter(|task| !task.is_null()) {
+        let resource = crate::game_data::active_context()
+            .ok()
+            .map(|context| context.content_id);
+        if let Some(sources) = task["sources"].as_array_mut() {
+            for source in sources.iter_mut() {
+                let mut status = stockpile_source_status(source);
+                if status == "current"
+                    && resource
+                        .as_deref()
+                        .zip(source["resourceIdentity"].as_str())
+                        .is_some_and(|(current, saved)| current != saved)
+                {
+                    status = "incompatible";
+                }
+                source["status"] = status.into();
+            }
+            task["sourceStatus"] = ["missing", "changed", "incompatible"]
+                .into_iter()
+                .find(|status| sources.iter().any(|source| source["status"] == *status))
+                .unwrap_or("current")
+                .into();
+        } else {
+            task["sourceStatus"] = stockpile_source_status(task).into();
+        }
     }
 }
 
@@ -587,8 +762,7 @@ pub fn run() -> Result<()> {
                 let mut response = DataResponse::state(
                     &request.operation_id,
                     if cancel.load(Ordering::Relaxed)
-                        && !(result.is_ok()
-                            && request.kind.writes(&request.input))
+                        && !(result.is_ok() && request.kind.writes(&request.input))
                     {
                         DataState::Cancelled
                     } else if result.is_ok() {
@@ -668,4 +842,212 @@ pub fn run() -> Result<()> {
         cancel.store(true, Ordering::Relaxed);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod stockpile_worker_tests {
+    use super::*;
+
+    #[test]
+    fn stockpile_source_binding_and_file_status_use_saved_identity() {
+        let path = std::env::temp_dir().join(format!(
+            "nova-stockpile-status-{}-{}.bin",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, b"first").unwrap();
+        let key = SourceKey::read(&path).unwrap();
+        let source = json!({"sourcePath":path,"sourceId":"stable","copies":4,"scope":{"kind":"all"},"context":{"sourceFileRevision":key.revision()}});
+        assert_eq!(stockpile_source_status(&source), "current");
+        assert_eq!(stockpile_scope(&source), json!({"kind":"all","value":null}));
+        assert_eq!(stockpile_source_input(&source)["copies"], 4);
+        fs::write(&path, b"changed input content").unwrap();
+        assert_eq!(stockpile_source_status(&source), "changed");
+        fs::remove_file(&path).unwrap();
+        assert_eq!(stockpile_source_status(&source), "missing");
+        assert!(stockpile_same_path(
+            path.to_str().unwrap(),
+            path.to_str().unwrap()
+        ));
+        let invalid = stockpile_source_input(
+            &json!({"sourcePath":"fixture","copies":-1,"scope":{"kind":"all"}}),
+        );
+        assert_eq!(
+            invalid["copies"], -1,
+            "invalid quantities must reach validation, not silently become one"
+        );
+    }
+
+    #[test]
+    #[ignore = "set LBA_DATA_ROOT to an isolated test directory; writes real task SQLite and generated small projections"]
+    fn stockpile_worker_multisource_production_flow() -> Result<()> {
+        let data = PathBuf::from(
+            std::env::var_os(crate::runtime_paths::LBA_DATA_ROOT_ENV)
+                .context("isolated LBA_DATA_ROOT is required")?,
+        );
+        ensure!(
+            data.to_string_lossy().contains("multi-stockpile-cli"),
+            "test data must use the isolated multi-stockpile-cli directory"
+        );
+        let root = data.join(format!(
+            "inputs-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root)?;
+        let make = |name: &str, count: i32| -> Result<PathBuf> {
+            let output = root.join(format!("{name}.litematic"));
+            let plan = root.join(format!("{name}.json"));
+            fs::write(
+                &plan,
+                serde_json::to_vec(&json!({"version":1,"minecraft_data_version":3953,
+                "regions":[{"name":name,"origin":[0,0,0],"size":[count,1,1],"operations":[{"type":"fill_box","from":[0,0,0],"to":[count-1,0,0],"block":{"name":"minecraft:stone"}}]}]}))?,
+            )?;
+            crate::generate_projection::generate_projection(&plan, Some(&output), false, true)?;
+            Ok(output)
+        };
+        let a = make("A", 64)?;
+        let b = make("B", 20)?;
+        let engine = Engine::new();
+        let cancel = AtomicBool::new(false);
+        let source = |path: &Path, copies: u64| json!({"sourcePath":path,"copies":copies,"scope":{"kind":"all","value":null},"includeContainerItems":false});
+        let create = json!({"action":"create","name":"Production multi-source fixture","requestId":format!("worker-create-{}-{}",std::process::id(),SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos()),"sources":[source(&a,3),source(&b,2)]});
+        let first = engine.stockpile(create.clone(), &cancel)?;
+        let mut task = first["task"].clone();
+        ensure!(
+            task["requiredCount"] == 232 && task["sourceCount"] == 2 && task["totalCopies"] == 5,
+            "64x3+20x2 must be 232: {task}"
+        );
+        ensure!(
+            task["materials"]["materials"].as_array().unwrap().len() == 1,
+            "stone must be one merged semantic row"
+        );
+        let replay = engine.stockpile(create, &cancel)?;
+        ensure!(
+            replay["task"]["taskId"] == task["taskId"],
+            "create retry must reuse the same task"
+        );
+        let id = task["taskId"].clone();
+        let material = task["items"][0]["materialId"].clone();
+        let selected = engine.stockpile(json!({"action":"select","taskId":id,"projectId":task["projectId"],"sourcePath":root.join("unrelated-current-file.litematic")}), &cancel)?;
+        ensure!(
+            selected["task"]["sourcePath"] == task["sourcePath"],
+            "task switching must not relink a saved projection to the editor's current file"
+        );
+        let a_id = task["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| {
+                stockpile_same_path(source["sourcePath"].as_str().unwrap(), a.to_str().unwrap())
+            })
+            .context("A source missing")?["sourceId"]
+            .clone();
+        task=engine.stockpile(json!({"action":"mutate","taskId":id,"sourceRevision":task["sourceRevision"],"mutation":{"materialId":material,"quantity":100,"status":"done","publicNote":"north","storageLocation":"box 2"}}),&cancel)?["task"].clone();
+        let mut sources = task["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(stockpile_source_input)
+            .collect::<Vec<_>>();
+        let a_index = sources
+            .iter()
+            .position(|source| source["sourceId"] == a_id)
+            .unwrap();
+        sources[a_index]["copies"] = 4.into();
+        task=engine.stockpile(json!({"action":"setSources","taskId":id,"expectedRevision":task["sourceRevision"],"sources":sources}),&cancel)?["task"].clone();
+        ensure!(
+            task["requiredCount"] == 296
+                && task["preparedCount"] == 100
+                && task["remainingCount"] == 196,
+            "source editing must preserve prepared 100: {task}"
+        );
+        ensure!(
+            engine.analysis.lock().unwrap().entries.len() == 2,
+            "copies must not create extra parsed scenes"
+        );
+        make("A", 80)?;
+        let changed =
+            engine.stockpile(json!({"action":"select","taskId":id}), &cancel)?["task"].clone();
+        ensure!(
+            changed["requiredCount"] == 296
+                && changed["sources"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|source| source["sourceId"] == a_id && source["status"] == "changed"),
+            "source changes must not replace confirmed requirements"
+        );
+        task=engine.stockpile(json!({"action":"sync","taskId":id,"expectedRevision":changed["sourceRevision"],"sourceIds":[a_id]}),&cancel)?["task"].clone();
+        ensure!(
+            task["requiredCount"] == 360 && task["preparedCount"] == 100,
+            "explicit source sync must update only A"
+        );
+        fs::rename(&a, root.join("A-moved.litematic"))?;
+        fs::rename(&b, root.join("B-moved.litematic"))?;
+        let fresh = Engine::new();
+        let offline =
+            fresh.stockpile(json!({"action":"select","taskId":id}), &cancel)?["task"].clone();
+        ensure!(
+            offline["requiredCount"] == 360
+                && offline["sources"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|source| source["status"] == "missing"),
+            "saved task must open without its source files"
+        );
+        let mut offline_sources = offline["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(stockpile_source_input)
+            .collect::<Vec<_>>();
+        let a_index = offline_sources
+            .iter()
+            .position(|source| source["sourceId"] == a_id)
+            .unwrap();
+        offline_sources[a_index]["copies"] = 3.into();
+        task=fresh.stockpile(json!({"action":"setSources","taskId":id,"expectedRevision":offline["sourceRevision"],"sources":offline_sources}),&cancel)?["task"].clone();
+        ensure!(
+            task["requiredCount"] == 280 && task["preparedCount"] == 100,
+            "offline multiplier changes must reuse confirmed snapshots"
+        );
+        let before = task.clone();
+        let failure=fresh.stockpile(json!({"action":"addSources","taskId":id,"expectedRevision":task["sourceRevision"],"sources":[source(&root.join("missing.litematic"),1)]}),&cancel);
+        ensure!(failure.is_err(), "missing new source must fail explicitly");
+        task = fresh.stockpile(json!({"action":"select","taskId":id}), &cancel)?["task"].clone();
+        ensure!(
+            task["sourceRevision"] == before["sourceRevision"] && task["preparedCount"] == 100,
+            "failed edit must preserve the complete previous task"
+        );
+        let exported = fresh.stockpile(json!({"action":"export","taskId":id}), &cancel)?;
+        let backup = root.join("multi-task-backup.json");
+        fs::write(&backup, serde_json::to_vec(&exported["backup"])?)?;
+        let restored =
+            fresh.stockpile(json!({"action":"import","inputPath":backup}), &cancel)?["task"]
+                .clone();
+        ensure!(
+            restored["requiredCount"] == 280
+                && restored["preparedCount"] == 100
+                && restored["sourceCount"] == 2,
+            "backup restore must retain sources and progress while files are missing"
+        );
+        ensure!(
+            restored["items"][0]["publicNote"] == "north"
+                && restored["items"][0]["storageLocation"] == "box 2",
+            "notes and location must survive source edits and backup restore"
+        );
+        let stopped = AtomicBool::new(true);
+        ensure!(fresh.stockpile(json!({"action":"setSources","taskId":id,"expectedRevision":task["sourceRevision"],"sources":[]}),&stopped).is_err(),"cancelled source changes must not commit");
+        println!(
+            "MULTI_SOURCE_PRODUCTION_FLOW initial=232 edited=296 prepared=100 remaining=196 synced=360 offline=280 restored=280 sources=2"
+        );
+        Ok(())
+    }
 }

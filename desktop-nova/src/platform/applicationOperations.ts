@@ -322,9 +322,24 @@ export interface StockpileTaskPreferences {
   individualCounts: boolean; language: string;
   showAdvancedRecipeTree: boolean; showUnresolvedRecipes: boolean; showIconFallbackBadge: boolean;
 }
+export interface StockpileSourceInput {
+  sourceId?: string; sourcePath: string; projectId?: string;
+  scope: ApplicationMaterialScope; includeContainerItems: boolean; copies: number;
+}
+export interface StockpileSource extends StockpileSourceInput {
+  sourceId: string; projectId: string; label: string; minecraftVersion: string;
+  resourceIdentity: string; sourceRevision: string;
+  status: "current" | "changed" | "missing" | "incompatible";
+  context?: { sourceFileRevision?: string; sourceContentId?: string; resourceIdentity?: string };
+}
+export interface StockpileDemandSource {
+  sourceId: string; sourcePath: string; label: string; copies: number;
+  perCopyCount: number; requiredCount: number; scope: ApplicationMaterialScope;
+}
 export interface StockpileTaskSummary {
   taskId: string; projectId: string; name: string; sourcePath: string; sourceRevision: string;
   multiplier: number; createdAt: number; updatedAt: number;
+  sourceCount: number; totalCopies: number;
 }
 export interface StockpileMaterial {
   id: string; namespace_id: string; display_name: string; required_count: number;
@@ -360,8 +375,10 @@ export interface MaterialDetail {
 }
 export const readMaterialDetail = (input: MaterialDetailInput, operationId = crypto.randomUUID()): Promise<MaterialDetail> => queryApplicationData({ operationId, kind: "materialDetail", input });
 export interface StockpileTaskView extends StockpileTaskSummary {
-  sourceStatus?: "current" | "changed" | "missing";
+  sourceStatus?: "current" | "changed" | "missing" | "incompatible";
   context: { scope?: ApplicationMaterialScope; includeContainerItems?: boolean; sourceContentId?: string; sourceFileRevision?: string };
+  sources: StockpileSource[];
+  demandSources: StockpileDemandSource[];
   preferences: StockpileTaskPreferences;
   view: StockpileQueryView;
   detailMaterialId?: string; sourceSummary?: MaterialSourceSummary; sourceGroups?: MaterialSourceGroup[];
@@ -389,9 +406,10 @@ export interface StockpileTaskMutation {
   requestId?: string; complete?: boolean; adjustment?: { unit: "each" | "stack" | "box" | "chest"; steps: number };
 }
 export interface StockpileTaskCommandInput {
-  action: "open" | "list" | "create" | "select" | "rename" | "sync" | "settings" | "mutate" | "details" | "export" | "import" | "bindLegacy" | "exportView";
+  action: "open" | "list" | "create" | "select" | "rename" | "sync" | "settings" | "mutate" | "details" | "export" | "import" | "bindLegacy" | "exportView" | "setSources" | "addSources";
   taskId?: string; projectId?: string; legacyTaskId?: string; sourceRevision?: string; expectedRevision?: string; sourcePath?: string;
   scope?: ApplicationMaterialScope; includeContainerItems?: boolean; multiplier?: number; name?: string;
+  sources?: StockpileSourceInput[]; sourceIds?: string[]; requestId?: string;
   preferences?: Partial<StockpileTaskPreferences>; mutation?: StockpileTaskMutation; materialId?: string;
   outputPath?: string; inputPath?: string; uiLocale?: string; languageMap?: Record<string, string>;
   query?: { offset?: number; limit?: number };
