@@ -96,6 +96,21 @@
       "target": "x86_64-pc-windows-msvc",
       "runtime_build_id": "runtime-1-ec392261fe8a-ui-040-20261024-r1-x86_64-pc-windows-msvc",
       "module_manifest_sha256": "d62dfc17e1388611918831ccc65f4fe2a4b94bef0de53f059d7cff2644a45d51"
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "runtime_build_id": "runtime-1-31cdf2678af3-nova-beta041-core-r1-x86_64-apple-darwin",
+      "module_manifest_sha256": "692e3f7f0a8685d91926347fdcb9425370e23cbb11ac2634f523beb9519aeb53"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "runtime_build_id": "runtime-1-31cdf2678af3-nova-beta041-core-r1-aarch64-apple-darwin",
+      "module_manifest_sha256": "61408172c7cc724eb2ffd0e5a7519b8a7903a3f87833176802de64176dcb370a"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "runtime_build_id": "runtime-1-58ec1757bbe3-nova-beta041-core-r1-x86_64-unknown-linux-gnu",
+      "module_manifest_sha256": "ebb7a0dbb1cb0b70cd1e792c582203febc5778d13299cee8037caeb2da85f0d4"
     }
   ]
 }
