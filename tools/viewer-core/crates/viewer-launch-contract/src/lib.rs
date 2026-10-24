@@ -1,3 +1,4 @@
+pub mod camera_input;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -143,6 +144,14 @@ pub struct SceneViewControls {
     pub camera_speed: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub camera_sensitivity: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub world_time: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weather: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control_receipt_path: Option<PathBuf>,
     #[serde(skip_serializing_if = "scene_control_false")]
     pub release_camera_input: bool,
     pub reset_camera: bool,
@@ -156,6 +165,17 @@ fn scene_control_false(value: &bool) -> bool { !*value }
 
 impl SceneViewControls {
     pub fn validate(&self) -> Result<(), String> {
+        if self.world_time.is_some_and(|time| time >= 24_000) {
+            return Err("World time must be in 0..23999 ticks".into());
+        }
+        if self.weather.as_deref().is_some_and(|value| !matches!(value, "auto"|"clear"|"rain"|"thunder"|"snow")) {
+            return Err("Unknown weather preference".into());
+        }
+        if self.control_request_id.is_some() != self.control_receipt_path.is_some() {
+            return Err("Scene control request and receipt path must be paired".into());
+        }
+        if let Some(id) = &self.control_request_id { validate_request_id(id)?; }
+        if let Some(path) = &self.control_receipt_path { require_absolute("controlReceiptPath", path)?; }
         if let Some(scene) = &self.composition_editor { scene.validate()?; }
         if self.layer_min_y.zip(self.layer_max_y).is_some_and(|(a,b)| a > b) {
             return Err("Layer minimum exceeds maximum".into());
@@ -1728,6 +1748,8 @@ impl ViewerFrameCaptureReceipt {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PreviewTask {
+    #[serde(default)]
+    pub effects_profile: ViewerEffectsProfile,
     pub output: PathBuf,
     pub cache_input: Option<PathBuf>,
 }
@@ -2715,6 +2737,7 @@ mod tests {
             ViewerContent::default(),
             renderer.clone(),
             ViewerTask::Preview(PreviewTask {
+                effects_profile: ViewerEffectsProfile::Full,
                 output: absolute("preview.png"),
                 cache_input: Some(absolute("scene.cache")),
             }),
@@ -2733,6 +2756,7 @@ mod tests {
             ViewerContent::default(),
             renderer.clone(),
             ViewerTask::Preview(PreviewTask {
+                effects_profile: ViewerEffectsProfile::Full,
                 output: absolute("preview.png"),
                 cache_input: None,
             }),
@@ -2759,6 +2783,7 @@ mod tests {
             ViewerContent::default(),
             renderer,
             ViewerTask::Preview(PreviewTask {
+                effects_profile: ViewerEffectsProfile::Full,
                 output: absolute("preview.png"),
                 cache_input: Some(PathBuf::from("scene.cache")),
             }),
@@ -3139,5 +3164,22 @@ mod composition_editor_contract_tests {
         scene.instances[1].transform.rotation=90;scene.instances[1].resource_id="missing".into();assert!(scene.validate().is_err());
         scene.instances[1].resource_id="source".into();scene.selected_instance_id=Some("removed".into());assert!(scene.validate().is_err());
         scene.selected_instance_id=None;scene.event_path=PathBuf::from("relative.json");assert!(scene.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod environment_control_contract_tests {
+    use super::*;
+    #[test]
+    fn environment_updates_are_bounded_optional_and_receipt_bound() {
+        let wire = serde_json::to_value(SceneViewControls::default()).unwrap();
+        for field in ["worldTime", "weather", "controlRequestId", "controlReceiptPath"] { assert!(wire.get(field).is_none()); }
+        for weather in ["auto", "clear", "rain", "thunder", "snow"] {
+            SceneViewControls { world_time: Some(23999), weather: Some(weather.into()), ..Default::default() }.validate().unwrap();
+        }
+        assert!(SceneViewControls { world_time: Some(24000), ..Default::default() }.validate().is_err());
+        assert!(SceneViewControls { weather: Some("invalid".into()), ..Default::default() }.validate().is_err());
+        assert!(SceneViewControls { control_request_id: Some("test".into()), ..Default::default() }.validate().is_err());
+        SceneViewControls { control_request_id: Some("test".into()), control_receipt_path: Some(std::env::temp_dir().join("control.json")), ..Default::default() }.validate().unwrap();
     }
 }

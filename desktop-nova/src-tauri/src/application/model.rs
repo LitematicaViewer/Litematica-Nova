@@ -303,10 +303,20 @@ pub(crate) struct ApplicationRenderSnapshot {
     pub(crate) operations: Vec<RenderOperationView>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct ProductPreviewImage {
     pub(crate) preview_path: String,
     pub(crate) data_url: String,
+    #[serde(default)]
+    pub(crate) draft_id: Option<String>,
+    #[serde(default)]
+    pub(crate) source_identity: Option<String>,
+    #[serde(default)]
+    pub(crate) display_mode: Option<String>,
+    #[serde(default)]
+    pub(crate) can_embed: bool,
+    #[serde(default)]
+    pub(crate) persisted: bool,
 }
 
 /// Typed, product-facing analysis persisted alongside a ready artifact. The
@@ -349,9 +359,16 @@ pub(crate) struct BuildingAnalysis {
     pub(crate) unique_block_types: u64,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct AnalysisCount { pub(crate) key: String, pub(crate) count: u64 }
+pub(crate) struct AnalysisCount {
+    pub(crate) key: String,
+    pub(crate) count: u64,
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct AnalysisCategory { pub(crate) category: String, pub(crate) total: u64, pub(crate) rows: Vec<AnalysisCount> }
+pub(crate) struct AnalysisCategory {
+    pub(crate) category: String,
+    pub(crate) total: u64,
+    pub(crate) rows: Vec<AnalysisCount>,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct NonItemBlockSummary {
@@ -509,17 +526,42 @@ mod tests {
             "non_item_blocks":[{"block_id":"minecraft:piston_head","display_name":"活塞头","count":1,"reason":"no_item"}],
             "structural_block_counts":[{"block_id":"minecraft:redstone_wire","count":2},{"block_id":"minecraft:piston_head","count":1}]
         });
-        value["derived"]=serde_json::json!({"building":{"density":0.0,"fluid_count":0,"fluid_ratio":0.0,"redstone_count":0,"redstone_ratio":0.0,"building_type":"too_small","unique_block_types":0},"material_counts":[],"category_totals":[],"categorized_groups":[]});
+        value["derived"] = serde_json::json!({"building":{"density":0.0,"fluid_count":0,"fluid_ratio":0.0,"redstone_count":0,"redstone_ratio":0.0,"building_type":"too_small","unique_block_types":0},"material_counts":[],"category_totals":[],"categorized_groups":[]});
         let analysis: ProjectAnalysis = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(analysis.material_semantics.as_deref(), Some("minecraft-inventory-v3"));
-        assert_eq!(analysis.derived.as_ref().unwrap().building.fluid_ratio,0.0);
-        assert_eq!(analysis.derived.as_ref().unwrap().building.building_type,"too_small");
-        assert_eq!(serde_json::to_value(&analysis).unwrap()["derived"],value["derived"]);
+        assert_eq!(
+            analysis.material_semantics.as_deref(),
+            Some("minecraft-inventory-v3")
+        );
+        assert_eq!(analysis.derived.as_ref().unwrap().building.fluid_ratio, 0.0);
+        assert_eq!(
+            analysis.derived.as_ref().unwrap().building.building_type,
+            "too_small"
+        );
+        assert_eq!(
+            serde_json::to_value(&analysis).unwrap()["derived"],
+            value["derived"]
+        );
         assert_eq!(analysis.non_item_blocks.as_ref().unwrap()[0].count, 1);
-        assert_eq!(analysis.structural_block_counts.as_ref().unwrap().iter().map(|block|block.count).sum::<u64>(),3);
-        let reloaded: ProjectAnalysis = serde_json::from_value(serde_json::to_value(&analysis).unwrap()).unwrap();
-        assert_eq!(analysis,reloaded);
-        for field in ["material_semantics","non_item_blocks","structural_block_counts"] { value.as_object_mut().unwrap().remove(field); }
+        assert_eq!(
+            analysis
+                .structural_block_counts
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|block| block.count)
+                .sum::<u64>(),
+            3
+        );
+        let reloaded: ProjectAnalysis =
+            serde_json::from_value(serde_json::to_value(&analysis).unwrap()).unwrap();
+        assert_eq!(analysis, reloaded);
+        for field in [
+            "material_semantics",
+            "non_item_blocks",
+            "structural_block_counts",
+        ] {
+            value.as_object_mut().unwrap().remove(field);
+        }
         let legacy: ProjectAnalysis = serde_json::from_value(value).unwrap();
         assert!(legacy.material_semantics.is_none());
         assert!(legacy.non_item_blocks.is_none());

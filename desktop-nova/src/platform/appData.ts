@@ -2,6 +2,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "./tauri";
 
 export type GraphicsApiPreference = "auto" | "dx12" | "vulkan";
+export type MotionPreference = "system" | "off" | "reduced" | "standard" | "rich";
 
 export interface V5CompatibilityConfig {
   backend: "auto" | "vulkan" | "iris-gl46";
@@ -23,6 +24,10 @@ export interface UserConfig {
   ui_locale: "zh-CN" | "en-US";
   theme: string;
   color_mode: "light" | "dark" | "system";
+  motion_preference: MotionPreference;
+  camera_input_mode: "drag" | "pointer_lock";
+  camera_speed: number;
+  camera_sensitivity: number;
   render_display_mode: string;
   preview_mode: string;
   graphics_backend: GraphicsApiPreference;
