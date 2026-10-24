@@ -71,6 +71,21 @@
       "target": "x86_64-pc-windows-msvc",
       "runtime_build_id": "runtime-1-18ff27ab063c-pointer-stockpile-20261024-r1-x86_64-pc-windows-msvc",
       "module_manifest_sha256": "0c66227fd498f27fab4c321bcdb9739eb6b06fb012c2e63907675551bd9ef212"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "runtime_build_id": "runtime-1-93651ec81250-beta030-release-r1-x86_64-unknown-linux-gnu",
+      "module_manifest_sha256": "79fa539fdd1214f98f44df46515cdba97271124037b8da418a5e74f849d6ec32"
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "runtime_build_id": "runtime-1-93651ec81250-beta030-release-r1-x86_64-apple-darwin",
+      "module_manifest_sha256": "e89ff14bef0c1dbd31bfaa0a35c3cb38198d05e6d3850df6498c53889fd119aa"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "runtime_build_id": "runtime-1-93651ec81250-beta030-release-r1-aarch64-apple-darwin",
+      "module_manifest_sha256": "2dfc64e0c579a30b74e2c112ada6fd477201b23f9a8e1ae580c0a00a08954ea1"
     }
   ]
 }
