@@ -1,7 +1,7 @@
 {
   "productName": "Litematica Nova",
   "mainBinaryName": "Litematica-Nova",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "identifier": "com.litematica.nova",
   "build": {
     "beforeDevCommand": "npm run dev",
