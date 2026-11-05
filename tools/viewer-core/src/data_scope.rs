@@ -14,6 +14,22 @@ pub struct MaterialScope {
     pub kind: MaterialScopeKind,
     pub value: Option<String>,
 }
+
+/// Per-scope joins are internal working data, not part of the Host's analysis response.
+pub(crate) fn material_snapshot_dto(mut snapshot: Value) -> Value {
+    for key in ["material_items", "non_item_blocks", "structural_block_counts"] {
+        if let Some(rows) = snapshot.get_mut(key).and_then(Value::as_array_mut) {
+            for row in rows.iter_mut().filter_map(Value::as_object_mut) {
+                row.remove("scope_counts");
+            }
+        }
+    }
+    if let Some(scan) = snapshot.get_mut("container_scan").and_then(Value::as_object_mut) {
+        scan.remove("scope_entries");
+    }
+    snapshot
+}
+
 pub(crate) fn material_snapshot_for_scope(
     mut snapshot: Value,
     scope: &MaterialScope,
@@ -61,7 +77,7 @@ pub(crate) fn material_snapshot_for_scope(
         .ok_or_else(|| "统计范围已不存在，请重新选择".to_owned())?;
     let layer_y = snapshot["layers_summary"]
         .as_array()
-        .unwrap()
+        .ok_or_else(|| "统计快照缺少层信息".to_owned())?
         .iter()
         .filter_map(|row| Some((row["layer"].as_i64()?, row["world_y"].as_i64()?)))
         .collect::<BTreeMap<_, _>>();
@@ -74,17 +90,18 @@ pub(crate) fn material_snapshot_for_scope(
         }
     };
     let source_rows = snapshot["material_items"]
-        .as_array()
+        .as_array_mut()
         .ok_or_else(|| "统计快照缺少材料".to_owned())?;
     let mut materials = Vec::new();
-    for source in source_rows {
-        let joints = source["scope_counts"]
-            .as_array()
+    for mut row in std::mem::take(source_rows) {
+        let joints = row.get_mut("scope_counts")
+            .and_then(Value::as_array_mut)
             .ok_or_else(|| "统计核心未返回分范围数据，请更新统计核心".to_owned())?;
         let (mut blocks, mut containers, mut custom) = (0_u64, 0_u64, false);
         let mut regions = BTreeMap::<String, u64>::new();
         let mut layers = BTreeMap::<i64, u64>::new();
-        for joint in joints.iter().filter(|row| matches(row)) {
+        joints.retain(&matches);
+        for joint in joints.iter() {
             let block = joint["block_count"].as_u64().unwrap_or(0);
             let container = joint["container_item_count"].as_u64().unwrap_or(0);
             blocks += block;
@@ -100,16 +117,6 @@ pub(crate) fn material_snapshot_for_scope(
         if blocks + containers == 0 {
             continue;
         }
-        let mut row = source.clone();
-        row["scope_counts"] = Value::Array(
-            source["scope_counts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|row| matches(row))
-                .cloned()
-                .collect(),
-        );
         row["block_count"] = blocks.into();
         row["container_item_count"] = containers.into();
         row["count"] = (blocks + containers).into();
@@ -131,64 +138,23 @@ pub(crate) fn material_snapshot_for_scope(
             .then_with(|| left["block_id"].as_str().cmp(&right["block_id"].as_str()))
     });
     snapshot["material_items"] = Value::Array(materials);
-    let mut non_items = Vec::new();
-    for source in snapshot["non_item_blocks"]
-        .as_array()
-        .ok_or_else(|| "统计快照缺少结构说明".to_owned())?
-    {
-        let count = source["scope_counts"]
-            .as_array()
-            .ok_or_else(|| "统计核心未返回分范围结构说明".to_owned())?
-            .iter()
-            .filter(|row| matches(row))
-            .map(|row| row["count"].as_u64().unwrap_or(0))
-            .sum::<u64>();
-        if count == 0 {
-            continue;
+    for (key, missing_rows, missing_counts) in [
+        ("non_item_blocks", "统计快照缺少结构说明", "统计核心未返回分范围结构说明"),
+        ("structural_block_counts", "统计快照缺少原结构分布，请刷新统计核心", "统计核心未返回原结构范围数据"),
+    ] {
+        let rows = snapshot[key].as_array_mut().ok_or(missing_rows)?;
+        let mut selected = Vec::new();
+        for mut row in std::mem::take(rows) {
+            let counts = row.get_mut("scope_counts").and_then(Value::as_array_mut).ok_or(missing_counts)?;
+            counts.retain(&matches);
+            let count: u64 = counts.iter().map(|joint| joint["count"].as_u64().unwrap_or(0)).sum();
+            if count != 0 {
+                row["count"] = count.into();
+                selected.push(row);
+            }
         }
-        let mut row = source.clone();
-        row["scope_counts"] = Value::Array(
-            source["scope_counts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|row| matches(row))
-                .cloned()
-                .collect(),
-        );
-        row["count"] = count.into();
-        non_items.push(row);
+        *rows = selected;
     }
-    snapshot["non_item_blocks"] = Value::Array(non_items);
-    let mut structural = Vec::new();
-    for source in snapshot["structural_block_counts"]
-        .as_array()
-        .ok_or_else(|| "统计快照缺少原结构分布，请刷新统计核心".to_owned())?
-    {
-        let count = source["scope_counts"]
-            .as_array()
-            .ok_or_else(|| "统计核心未返回原结构范围数据".to_owned())?
-            .iter()
-            .filter(|row| matches(row))
-            .map(|row| row["count"].as_u64().unwrap_or(0))
-            .sum::<u64>();
-        if count == 0 {
-            continue;
-        }
-        let mut row = source.clone();
-        row["scope_counts"] = Value::Array(
-            source["scope_counts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|row| matches(row))
-                .cloned()
-                .collect(),
-        );
-        row["count"] = count.into();
-        structural.push(row);
-    }
-    snapshot["structural_block_counts"] = Value::Array(structural);
     if snapshot["container_scan"]["enabled"].as_bool() == Some(true) {
         let entries = snapshot["container_scan"]["scope_entries"]
             .as_array()

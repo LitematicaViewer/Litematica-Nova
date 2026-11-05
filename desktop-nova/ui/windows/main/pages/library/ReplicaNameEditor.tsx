@@ -1,3 +1,4 @@
+import { t } from "../../../../../src/services/i18n";
 import { Input } from "../../../../components/ui/input";
 import { ensureLitematicFileName, replicaNameError } from "./function";
 
@@ -15,7 +16,7 @@ export function ReplicaNameEditor({
   disabled = false,
   autoFocus = false,
   ariaLabel,
-  placeholder = "输入文件名",
+  placeholder = t("library.ux.fileNamePlaceholder"),
   className = "",
 }: {
   value: string;

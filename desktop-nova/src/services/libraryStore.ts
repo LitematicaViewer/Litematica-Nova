@@ -1,4 +1,5 @@
-import { LIBRARY_ICON_PRESETS, normalizeLibraryCategoryIcon } from "./libraryCategoryIcons";
+import { libraryContentCommand } from "../platform/files";
+import { normalizeLibraryCategoryIcon } from "./libraryCategoryIcons";
 import { windowsPathKey } from "./filePathIdentity";
 import {
   readUserConfigFile,
@@ -30,11 +31,11 @@ import {
   buildChecksumIndex,
   entryActiveReplicas,
   reconcileDirtyReplicas,
+  normalizeLibraryContent,
   resolveEntryId as resolveRedirectChain,
 } from "./libraryContent";
 import type { DirtyReplicaMove, RedundancyReport } from "./libraryContent";
 import { cancelLibraryTask as cancelTask, submitAndAwait, submitLibraryTask as submitTask, subscribeLibraryTask as subscribeTask, awaitLibraryTask } from "./libraryTasks";
-import { loadStructureStats } from "./statsService";
 import { minecraftVersionLabel } from "./minecraftVersions";
 import {
   queryIndex,
@@ -556,11 +557,7 @@ function normalizeTwoLevelState(input: Record<string, any>): LibraryState {
     favorites,
     recent,
   };
-  // Invariant convergence (4.2.1 / 裁决 9): a replica whose active checksum
-  // disagrees with its entry is migrated out deterministically, never silently
-  // dropped. Idempotent: once converged, a second pass is a no-op.
-  const reconciled = reconcileDirtyReplicas(preliminary);
-  return { ...preliminary, entries: reconciled.state.entries, replicas: reconciled.state.replicas };
+  return preliminary;
 }
 
 export function normalizeLibraryState(raw?: RawLibraryState | null): LibraryState {
@@ -787,8 +784,13 @@ function enqueueLibraryWrite<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 async function readDiskLibraryRaw(): Promise<RawLibraryState | null> {
-  try { return JSON.parse(await readUserConfigFile(LIB_PATH)) as RawLibraryState; }
-  catch { return null; }
+  const text = await readUserConfigFile(LIB_PATH, true);
+  if (text === null) return null;
+  const value = JSON.parse(text);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${LIB_PATH}: 库文件不是 JSON 对象`);
+  }
+  return value;
 }
 
 /** Union merge of disk (base) and memory (latest intent); entries/replicas never physically vanish. */
@@ -824,6 +826,7 @@ async function persistLibraryState(state: LibraryState): Promise<LibraryState> {
         normalized = normalizeLibraryState(mergeLibraryStates(disk, normalized));
       }
     }
+    normalized = await normalizeLibraryContent(normalized);
     await writeUserConfigFile(LIB_PATH, JSON.stringify(normalized, null, 2));
     loadedBaseline = JSON.stringify(normalized);
     return normalized;
@@ -907,7 +910,7 @@ async function addOrUpdateRecordFromAnalysisInternal(
     const fingerprintResult = await computeLitematicChecksum(filePath).catch(() => null);
     const fingerprint = fingerprintResult?.sha256 ?? null;
     const at = Date.now();
-    const targetEntryId = fingerprint ? buildChecksumIndex(nextState).get(fingerprint) : undefined;
+    const targetEntryId = fingerprint ? (await buildChecksumIndex(nextState)).get(fingerprint) : undefined;
     if (targetEntryId) {
       const targetIndex = nextState.entries.findIndex((entry) => entry.id === targetEntryId);
       if (targetIndex >= 0 && nextState.entries[targetIndex].status === "retired") {
@@ -953,15 +956,13 @@ async function addOrUpdateRecordFromAnalysisInternal(
 export async function loadLibrary(): Promise<LibraryState> {
   return enqueueLibraryWrite(async () => {
     const builtinPath = await builtinImportFolderPath().catch(() => "");
-    let raw: RawLibraryState | null = null;
-    try { raw = JSON.parse(await readUserConfigFile(LIB_PATH)) as RawLibraryState; }
-    catch { raw = null; }
+    const raw = await readDiskLibraryRaw();
     const base = raw ?? { entries: [], replicas: [], folders: [] };
     // The built-in import folder is mounted by default and coerced back to
     // `builtin_import` (5.1.1.7). It is a derived-but-stable mount, so an absent
     // library file is not written just to add it; a migration/coercion commit is
     // still a single atomic write.
-    const state = ensureBuiltinImportFolder(normalizeLibraryState(base), builtinPath);
+    const state = await normalizeLibraryContent(ensureBuiltinImportFolder(normalizeLibraryState(base), builtinPath));
     if (raw !== null && JSON.stringify(base) !== JSON.stringify(state)) {
       await writeUserConfigFile(LIB_PATH, JSON.stringify(state, null, 2));
     }
@@ -1468,139 +1469,11 @@ function isUnderFolder(filePath: string, folderPath: string, recursive: boolean)
   const folderKey = windowsPathKey(folderPath);
   return fileKey.startsWith(`${folderKey}\\`) || fileKey.startsWith(`${folderKey}/`);
 }
-
-/**
- * Pure scan-merge kernel (C.2, design 2.1.4(1)):
- * 1. resolve each scanned file to a checksum (TS-side `size+mtime` cache reuse when allowed);
- * 2. merge by checksum into the active-entry index (covers `retired` for revival, excludes `merged`);
- * 3. upsert replicas keyed by `windowsPathKey(path)`;
- * 4. mark tracked replicas that did not appear this round as `missing` (never delete records).
- */
-export function integrateScannedFiles(
-  state: LibraryState,
-  files: ScannedFileInfo[],
-  options: { coveredFolders: CoveredFolder[]; useCache: boolean; forceRecheck: boolean; now: number; noAutoImportFolders?: CoveredFolder[] },
-): { state: LibraryState; stats: ScanIntegrationStats } {
-  const entries = state.entries.map((entry) => ({ ...entry, categoryIds: [...entry.categoryIds], tags: [...entry.tags], preview: { ...entry.preview }, stats: { ...entry.stats } }));
-  const replicas = state.replicas.map((replica) => ({ ...replica }));
-  const checksumIndex = buildChecksumIndex({ ...state, entries, replicas });
-  const replicaByPath = new Map<string, Replica>();
-  for (const replica of replicas) replicaByPath.set(windowsPathKey(replica.path), replica);
-  const presentKeys = new Set(files.map((file) => windowsPathKey(file.path)));
-  const stats: ScanIntegrationStats = { markedMissing: [], newReplicas: 0, revivedEntries: 0, pendingAnalysis: [] };
-  // One representative path per entry: a new entry or a changed/revived file needs a
-  // metadata (re)parse, but an already-tracked unchanged file is left untouched (C.2).
-  const pendingByEntry = new Map<string, string>();
-
-  for (const file of files) {
-    const key = windowsPathKey(file.path);
-    const existing = replicaByPath.get(key) || null;
-    // B.1: a folder whose "auto-activate" switch is off does not import *new* files;
-    // already-tracked replicas (and missing marking) are still processed normally.
-    if (!existing && options.noAutoImportFolders?.some((folder) => isUnderFolder(file.path, folder.path, folder.recursive))) continue;
-    let checksum = file.checksum;
-    // TS-side cache: reuse the stored fingerprint when size+mtime are unchanged.
-    if (
-      options.useCache && !options.forceRecheck && existing && existing.checksum &&
-      existing.fileSize === file.fileSize && existing.mtime === file.mtimeMs
-    ) {
-      checksum = existing.checksum;
-    }
-    if (!checksum) continue;
-
-    let targetEntryId = checksumIndex.get(checksum);
-    let createdEntryId: string | null = null;
-    if (!targetEntryId) {
-      const existingEntry = existing ? entries.find((entry) => entry.id === existing.entryId) : undefined;
-      if (existingEntry && (existingEntry.checksum === null || existingEntry.checksum === checksum)) {
-        // Fill a migrated entry's missing fingerprint instead of creating a duplicate.
-        targetEntryId = existingEntry.id;
-        existingEntry.checksum = checksum;
-        if (existingEntry.status === "retired") { existingEntry.status = "active"; stats.revivedEntries += 1; }
-      } else {
-        targetEntryId = newEntryId();
-        createdEntryId = targetEntryId;
-        entries.unshift({
-          id: targetEntryId,
-          createdAt: options.now,
-          checksum,
-          status: "active",
-          categoryIds: [],
-          displayName: file.fileName || fileNameFromPath(file.path),
-          internalName: undefined,
-          author: "",
-          description: "",
-          tags: [],
-          preview: {},
-          stats: { totalBlocks: 0, totalVolume: 0, regionCount: 0, enclosingSize: { x: 0, y: 0, z: 0 }, minecraftDataVersion: 0 },
-          sortIndex: entries.length,
-          lastAnalyzedAt: options.now,
-          lastError: "",
-        });
-      }
-      checksumIndex.set(checksum, targetEntryId);
-    } else {
-      const target = entries.find((entry) => entry.id === targetEntryId);
-      if (target && target.status === "retired") { target.status = "active"; stats.revivedEntries += 1; }
-    }
-
-    const fileName = file.fileName || fileNameFromPath(file.path);
-    const folderPath = file.folderPath || parentDirectory(file.path);
-    if (existing) {
-      // A file is "changed" when its fingerprint inputs moved, its content fingerprint
-      // differs (incl. a migrated `null`), it was `missing` and reappeared, or the caller
-      // forced a full recheck.
-      const changed = options.forceRecheck
-        || existing.fileSize !== file.fileSize
-        || existing.mtime !== file.mtimeMs
-        || existing.checksum !== checksum
-        || existing.status === "missing";
-      existing.entryId = targetEntryId;
-      existing.path = file.path;
-      existing.fileName = fileName;
-      existing.folderPath = folderPath;
-      existing.checksum = checksum;
-      existing.fileSize = file.fileSize;
-      existing.mtime = file.mtimeMs;
-      existing.status = "active";
-      existing.lastAnalyzedAt = options.now;
-      if (createdEntryId === targetEntryId || changed) pendingByEntry.set(targetEntryId, file.path);
-    } else {
-      const replica: Replica = {
-        id: newReplicaId(targetEntryId),
-        entryId: targetEntryId,
-        path: file.path,
-        fileName,
-        folderPath,
-        checksum,
-        fileSize: file.fileSize,
-        mtime: file.mtimeMs,
-        status: "active",
-        lastAnalyzedAt: options.now,
-        lastError: "",
-      };
-      replicas.push(replica);
-      replicaByPath.set(key, replica);
-      stats.newReplicas += 1;
-      if (createdEntryId === targetEntryId) pendingByEntry.set(targetEntryId, file.path);
-    }
-  }
-
-  stats.pendingAnalysis = [...pendingByEntry.entries()].map(([entryId, path]) => ({ entryId, path }));
-
-  // Missing marking is scoped to the covered folders so an incremental scan never
-  // hides replicas that live in folders this round did not visit (5.1.3.1).
-  for (const replica of replicas) {
-    if (replica.status !== "active") continue;
-    if (presentKeys.has(windowsPathKey(replica.path))) continue;
-    const covered = options.coveredFolders.some((folder) => isUnderFolder(replica.path, folder.path, folder.recursive));
-    if (!covered) continue;
-    replica.status = "missing";
-    stats.markedMissing.push(replica.id);
-  }
-
-  return { state: { ...state, entries, replicas }, stats };
+/** Rust owns checksum cache decisions, logical merging and physical replica ownership. */
+export function integrateScannedFiles(state: LibraryState, files: ScannedFileInfo[], options: { coveredFolders: CoveredFolder[]; useCache: boolean; forceRecheck: boolean; now: number; noAutoImportFolders?: CoveredFolder[] }): Promise<{ state: LibraryState; stats: ScanIntegrationStats }> {
+  return libraryContentCommand({ action: "scan", state, files, options });
 }
+
 
 export interface ScanScope {
   kind: "all" | "folder" | "entry" | "replica";
@@ -1741,7 +1614,7 @@ export async function scanLibraryFolders(state: LibraryState, options: ScanOptio
     if (status === "failed") errors.push(String(finished.summary?.message ?? "扫描任务失败"));
   }
 
-  const integration = integrateScannedFiles(normalized, files, { coveredFolders: covered, useCache, forceRecheck, now: Date.now(), noAutoImportFolders });
+  const integration = await integrateScannedFiles(normalized, files, { coveredFolders: covered, useCache, forceRecheck, now: Date.now(), noAutoImportFolders });
   // Backfill `EntryStats` only for entries that are new or whose file changed/was
   // revived (C.2): a fresh/cached analysis overwrites the zeroed placeholder. A parse
   // failure marks that replica `parse_error` and does NOT fail the whole scan.
@@ -1751,8 +1624,8 @@ export async function scanLibraryFolders(state: LibraryState, options: ScanOptio
     const analyses = await Promise.all(pending.map((item) => analyzeFile(item.path)));
     pending.forEach((item, index) => { integratedState = applyRecordAnalysis(integratedState, item.path, analyses[index]); });
   }
-  const reconciled = reconcileDirtyReplicas(integratedState);
-  const merged = autoMergeByChecksum(reconciled.state, Date.now());
+  const reconciled = await reconcileDirtyReplicas(integratedState);
+  const merged = await autoMergeByChecksum(reconciled.state, Date.now());
   const stamped: LibraryState = {
     ...merged.state,
     folders: merged.state.folders.map((folder) => {
@@ -1817,11 +1690,11 @@ export async function syncEntryContent(state: LibraryState, entryId: string, sou
   const entry = normalized.entries.find((item) => item.id === entryId);
   if (!entry) throw new Error("条目不存在，请刷新后重试。");
   const source = sourceReplicaId ? normalized.replicas.find((replica) => replica.id === sourceReplicaId) : primaryActiveReplica(normalized, entryId);
-  if (!source) throw new Error("没有可用于同步的活跃副本。");
+  if (!source || source.entryId !== entryId || source.status !== "active") throw new Error("没有可用于同步的活跃副本。");
   const { sha256 } = await computeLitematicChecksum(source.path);
   const targets = entryActiveReplicas(normalized, entryId).filter((replica) => replica.id !== source.id);
-  const { failures } = await overwriteReplicas(source, targets);
-  const synced = applyContentSync(normalized, entryId, sha256);
+  const { synced: copied, failures } = await overwriteReplicas(source, targets);
+  const synced = await applyContentSync(normalized, entryId, sha256, [source.id, ...copied.map(replica => replica.id)]);
   const persisted = await persistLibraryState(synced);
   return { state: persisted, ok: failures.length === 0, failures };
 }
@@ -1837,7 +1710,7 @@ export async function divergeEntryContent(state: LibraryState, replicaId: string
   if (!replica) throw new Error("副本不存在，请刷新后重试。");
   const { sha256 } = await computeLitematicChecksum(replica.path);
   normalized = { ...normalized, replicas: normalized.replicas.map((item) => item.id === replicaId ? { ...item, checksum: sha256 } : item) };
-  const diverged = applyContentDiverge(normalized, replicaId, Date.now());
+  const diverged = await applyContentDiverge(normalized, replicaId, Date.now());
   const persisted = await persistLibraryState(diverged ? diverged.state : normalized);
   return { state: persisted, ok: true, failures: [] };
 }
@@ -1866,9 +1739,9 @@ async function writeEntryMetadata(state: LibraryState, entryId: string, patch: R
   // 2. recompute the source fingerprint, then propagate the new bytes to every other active replica.
   const { sha256 } = await computeLitematicChecksum(source.path);
   const targets = entryActiveReplicas(normalized, entryId).filter((replica) => replica.id !== source.id);
-  const { failures } = await overwriteReplicas(source, targets);
+  const { synced: copied, failures } = await overwriteReplicas(source, targets);
   // 3. update entry fingerprint (ID unchanged) + mirror the field, best-effort copy report.
-  const synced = applyContentSync(normalized, entryId, sha256);
+  const synced = await applyContentSync(normalized, entryId, sha256, [source.id, ...copied.map(replica => replica.id)]);
   const updated: LibraryState = {
     ...synced,
     entries: synced.entries.map((item) => item.id === entryId ? { ...mutate(item), lastError: failures.length ? `部分副本未同步：${failures.map((failure) => failure.path).join("、")}` : "" } : item),
@@ -1916,32 +1789,10 @@ export async function repositionReplica(state: LibraryState, replicaId: string, 
   const exists = await checkFileExists(newPath);
   if (!exists) return { kind: "invalid", state: normalized };
 
-  const key = windowsPathKey(newPath);
-  const occupant = normalized.replicas.find((item) => item.id !== replicaId && windowsPathKey(item.path) === key) || null;
-  const targetChecksum = (await computeLitematicChecksum(newPath)).sha256;
-
-  if (occupant) {
-    const occupantEntry = normalized.entries.find((entry) => entry.id === occupant.entryId);
-    const occupantChecksum = occupantEntry?.checksum ?? null;
-    const sameContent = !!occupantChecksum && occupantChecksum === targetChecksum;
-    if (!sameContent && options.onConflict !== "relocate") {
-      return { kind: "conflict", entryId: replica.entryId, occupiedByEntryId: occupant.entryId, targetChecksum, occupantChecksum };
-    }
-    const record = occupantChecksum && occupantChecksum === targetChecksum ? targetChecksum : occupantChecksum || targetChecksum;
-    const replicas = normalized.replicas.map((item) => item.id === replicaId
-      ? { ...item, entryId: occupant.entryId, path: newPath, fileName: fileNameFromPath(newPath), folderPath: parentDirectory(newPath), checksum: record, status: "active" as ReplicaStatus }
-      : item);
-    const entries = retiresWithoutActiveReplicas(normalized.entries, replicas);
-    const persisted = await persistLibraryState({ ...normalized, entries, replicas });
-    return { kind: "merged", state: persisted, occupiedByEntryId: occupant.entryId };
-  }
-
-  const replicas = normalized.replicas.map((item) => item.id === replicaId
-    ? { ...item, path: newPath, fileName: fileNameFromPath(newPath), folderPath: parentDirectory(newPath), checksum: targetChecksum, status: "active" as ReplicaStatus }
-    : item);
-  const entries = normalized.entries.map((entry) => entry.id === replica.entryId && entry.checksum === null ? { ...entry, checksum: targetChecksum } : entry);
-  const persisted = await persistLibraryState({ ...normalized, entries, replicas });
-  return { kind: "repositioned", state: persisted };
+  const checksum = (await computeLitematicChecksum(newPath)).sha256;
+  const outcome = await libraryContentCommand<RepositionOutcome>({ action: "reposition", state: normalized, replicaId, path: newPath, checksum, onConflict: options.onConflict, at: Date.now() });
+  if (outcome.kind === "conflict") return outcome;
+  return { ...outcome, state: await persistLibraryState(outcome.state) };
 }
 
 // ---------------------------------------------------------------------------

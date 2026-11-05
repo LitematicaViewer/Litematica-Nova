@@ -1361,6 +1361,18 @@ async fn application_read_layer(
 }
 
 #[tauri::command]
+async fn application_bind_enumerator(window: tauri::WebviewWindow, collections: Vec<application::enumerator::Collection>) -> Result<u64, String> {
+    let label = window.label().to_string();
+    run_application_operation(move || application::enumerator::bind(&label, collections)).await
+}
+
+#[tauri::command]
+async fn application_evaluate_enumerator(window: tauri::WebviewWindow, snapshot: u64, expression: String) -> Result<application::enumerator::View, String> {
+    let label = window.label().to_string();
+    run_application_operation(move || application::enumerator::query(&label, snapshot, &expression)).await
+}
+
+#[tauri::command]
 async fn application_read_layer_container(
     input: ReadLayerContainerInput,
     operations: tauri::State<'_, ApplicationOperations>,
@@ -1493,8 +1505,11 @@ async fn application_read_material_detail(input: MaterialDetailInput, operations
 #[tauri::command]
 async fn application_stockpile_task_command(app: AppHandle, input: StockpileTaskCommandInput, operations: tauri::State<'_, ApplicationOperations>) -> Result<serde_json::Value, String> {
     let operations = operations.inner().clone();
+    let deleted=input.action=="delete";
+    let changed_task=input.task_id.clone();
     let result = run_application_operation(move || operations.stockpile_task_command(input)).await?;
-    app.emit("stockpile-task-changed", serde_json::json!({"taskId": result["task"]["taskId"]})).map_err(|error|error.to_string())?;
+    let task_id=if deleted {serde_json::json!(changed_task)}else{result["task"]["taskId"].clone()};
+    app.emit("stockpile-task-changed", serde_json::json!({"taskId":task_id,"deleted":deleted})).map_err(|error|error.to_string())?;
     Ok(result)
 }
 
@@ -1753,11 +1768,19 @@ fn reset_user_config_dir(migrate: bool, app: AppHandle) -> Result<UserConfigInfo
 }
 
 #[tauri::command]
-fn read_user_config_file(relative_path: String) -> Result<String, String> {
+fn read_user_config_file(relative_path: String, optional: Option<bool>) -> Result<Option<String>, String> {
     let dir = current_user_config_dir()?;
     migrate_legacy_library_if_needed(&dir)?;
-    let path = dir.join(user_runtime_relative_path(&relative_path)?);
-    std::fs::read_to_string(path).map_err(|e| e.to_string())
+    read_user_config_text(&dir, &relative_path, optional.unwrap_or(false))
+}
+
+fn read_user_config_text(dir: &Path, relative_path: &str, optional: bool) -> Result<Option<String>, String> {
+    let path = dir.join(user_runtime_relative_path(relative_path)?);
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if optional && error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -1810,6 +1833,24 @@ fn write_file_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Resul
 #[cfg(test)]
 mod atomic_write_tests {
     use super::write_file_atomically;
+
+    #[test]
+    fn optional_config_read_only_treats_not_found_as_absent() {
+        let directory = std::env::temp_dir().join(format!("nova-optional-read-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let read = |name, optional| super::read_user_config_text(&directory, name, optional);
+        assert_eq!(read("library.json", true).unwrap(), None);
+        assert!(read("library.json", false).is_err());
+        assert!(read("../outside", true).is_err());
+        let path = directory.join("library.json");
+        std::fs::write(&path, "[]").unwrap();
+        assert_eq!(read("library.json", false).unwrap().as_deref(), Some("[]"));
+        assert_eq!(read("library.json", true).unwrap().as_deref(), Some("[]"));
+        std::fs::write(&path, [0xff]).unwrap();
+        assert!(read("library.json", true).is_err());
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
 
     #[test]
     fn replaces_contents_and_leaves_no_temporary_siblings() {
@@ -2257,6 +2298,11 @@ pub(crate) fn rename_replica_core(
 /// background runtime. The file name never participates and the file is only
 /// opened for reading (spec 5.2.1.1 / design 2.2.2(A)).
 #[tauri::command]
+async fn library_content_command(request: serde_json::Value) -> Result<serde_json::Value, String> {
+    run_application_operation(move || application::library_content::command(request)).await
+}
+
+#[tauri::command]
 async fn compute_litematic_checksum(
     path: String,
     tasks: tauri::State<'_, LibraryTaskHost>,
@@ -2280,7 +2326,7 @@ fn library_task_submit(
     params: serde_json::Value,
 ) -> Result<LibraryTaskSubmitOutput, String> {
     validate_submission(kind, &params)?;
-    let task_id = state.queue.submit(kind, params);
+    let task_id = state.queue.submit(kind, params)?;
     Ok(LibraryTaskSubmitOutput { task_id })
 }
 
@@ -2310,7 +2356,7 @@ fn library_export_zip(
     params: serde_json::Value,
 ) -> Result<LibraryTaskSubmitOutput, String> {
     validate_submission(TaskKind::ExportZip, &params)?;
-    let task_id = state.queue.submit(TaskKind::ExportZip, params);
+    let task_id = state.queue.submit(TaskKind::ExportZip, params)?;
     Ok(LibraryTaskSubmitOutput { task_id })
 }
 
@@ -3784,7 +3830,7 @@ fn application_render_request(
 }
 
 #[tauri::command]
-async fn application_set_scene_view(source_path: PathBuf, display_mode: Option<String>, controls: ::viewer_launch_contract::SceneViewControls,
+async fn application_set_scene_view(source_path: PathBuf, display_mode: Option<String>, operation_id: Option<String>, overlay_revision: Option<u64>, controls: ::viewer_launch_contract::SceneViewControls,
     quick: tauri::State<'_, QuickPreviewHost>, facade: tauri::State<'_, RenderFacade>) -> Result<application::scene_controls::SceneViewAck, String> {
     controls.validate()?;
     if controls.composition_editor.is_some() && display_mode.as_deref().is_some_and(|mode| mode != "fast_experimental") {
@@ -3802,7 +3848,7 @@ async fn application_set_scene_view(source_path: PathBuf, display_mode: Option<S
     }
     let source = std::fs::canonicalize(&source_path).map_err(|error| error.to_string())?;
     let mode = scene_control_mode(display_mode.as_deref())?;
-    let mut ack = application::scene_controls::set_scene_view(&source, mode, controls, quick.inner(), facade.inner()).await?;
+    let mut ack = application::scene_controls::set_scene_view(&source, mode, controls, operation_id.as_deref(), overlay_revision, quick.inner(), facade.inner()).await?;
     // Canonical/extended Windows paths stay internal; UI request identity keeps
     // its original spelling while the Host validates the real scene/session.
     ack.source_path = source_path;
@@ -4292,6 +4338,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) { application::enumerator::forget(window.label()); }
             if window.label() == "material-list" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
@@ -4458,6 +4505,8 @@ fn main() {
             assets::game_data_import,
             assets::game_data_select,
             assets::game_data_default,
+            assets::game_data_mods,
+            assets::game_data_creative_inventory,
             wiki_block_icons::download_minecraft_wiki_block_icons,
             open_enumerator_window,
             open_asset_manager_window,
@@ -4484,6 +4533,8 @@ fn main() {
             application_read_layer_meta,
             application_read_layer,
             application_read_layer_container,
+            application_bind_enumerator,
+            application_evaluate_enumerator,
             application_read_project_markers,
             application_edit_project_origin,
             application_replace_blocks,
@@ -4552,6 +4603,7 @@ fn main() {
             open_file_parent_dir,
             copy_file_to_directory,
             compute_litematic_checksum,
+            library_content_command,
             library_task_submit,
             library_task_cancel,
             library_task_status,

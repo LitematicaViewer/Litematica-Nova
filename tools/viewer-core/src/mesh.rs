@@ -231,8 +231,6 @@ impl ChunkSceneIndex {
             return Ok(Vec::new());
         }
 
-        let target_set = selected_keys.iter().copied().collect::<HashSet<_>>();
-        let expanded_neighbor_chunks = expand_target_chunks(&target_set).len();
         println!(
             "[MESH_CACHE] block_class_cache_hit palette_entries={} selected_chunks={}",
             self.render_info.len(),
@@ -266,7 +264,7 @@ impl ChunkSceneIndex {
         println!(
             "[MESH_BUILD] batch_chunks={} shared_neighbor_chunks={} target_blocks={} occluding_cells={}",
             selected_keys.len(),
-            expanded_neighbor_chunks,
+            occupied.chunk_index.len(),
             access_stats.target_block_count,
             access_stats.occluding_cells
         );
@@ -646,7 +644,7 @@ struct OccupancyGrid {
 }
 
 impl OccupancyGrid {
-    fn new(chunk_size: usize, chunk_keys: Vec<ChunkKey>) -> Self {
+    fn new(chunk_size: usize, chunk_keys: &[ChunkKey]) -> Self {
         let chunk_index = chunk_keys
             .iter()
             .copied()
@@ -1371,7 +1369,7 @@ fn collect_target_chunk_blocks(
 ) -> Result<(OccupancyGrid, Vec<Vec<TargetBlock>>, BlockAccessStats)> {
     let Some(bounds) = catalog.bounds else {
         return Ok((
-            OccupancyGrid::new(chunk_size as usize, Vec::new()),
+            OccupancyGrid::new(chunk_size as usize, &[]),
             Vec::new(),
             BlockAccessStats::default(),
         ));
@@ -1388,12 +1386,7 @@ fn collect_target_chunk_blocks(
         .enumerate()
         .map(|(index, key)| (key, index))
         .collect::<HashMap<_, _>>();
-    let occupied_capacity = expanded_chunks
-        .iter()
-        .filter_map(|key| chunk_counts.get(key))
-        .copied()
-        .sum::<u32>() as usize;
-    let mut occupied = OccupancyGrid::new(chunk_size as usize, expanded_chunks.clone());
+    let mut occupied = OccupancyGrid::new(chunk_size as usize, &expanded_chunks);
     let mut chunk_blocks = selected
         .iter()
         .map(|chunk_key| {
@@ -1501,7 +1494,6 @@ fn collect_target_chunk_blocks(
         access_stats.palette_lookup_ms += palette_lookup_started_at.elapsed().as_millis();
     }
 
-    let _ = occupied_capacity;
     access_stats.occluding_cells = occupied.len();
     Ok((occupied, chunk_blocks, access_stats))
 }

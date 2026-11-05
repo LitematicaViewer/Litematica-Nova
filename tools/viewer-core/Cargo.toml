@@ -24,6 +24,7 @@ path = "src/bin/derive_resource_pack_32x.rs"
 default = ["public-beta"]
 public-beta = []
 development-runtime = ["nova-protected-loader/development-runtime"]
+standalone-runtime = ["development-runtime", "nova-protected-loader/standalone-runtime"]
 # Development/test oracle only. Production runtime normalization is native
 # Rust and must not compile or invoke the Mojang Java DataFix bridge.
 datafix-oracle = []
@@ -41,23 +42,18 @@ default-members = [
 ]
 
 [dependencies]
-nova-render-protocol = { path = "crates/nova-render-protocol" }
 nova-protected-loader = { path = "../nova-protected-loader" }
-ab_glyph = "=0.2.32"
 anyhow = "1.0"
 argon2 = { version = "0.5", features = ["std"] }
 base64 = "0.22"
 bytemuck = { version = "1.16", features = ["derive"] }
 fastnbt = "2.6"
 flate2 = "1.1"
-crc32fast = "1"
 glam = "0.27"
 image = "0.25"
 pollster = "0.3"
 rand = "0.8"
-rayon = "=1.12.0"
 viewer-launch-contract = { path = "crates/viewer-launch-contract" }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_bytes = "0.11"
@@ -68,7 +64,6 @@ toml = "1.1.2"
 wgpu = "0.19"
 winit = "0.29"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
-arrayvec = "=0.7.6"
 memmap2 = "0.9"
 tempfile = "3"
 

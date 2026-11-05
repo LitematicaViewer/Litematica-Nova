@@ -1,9 +1,9 @@
+import { useEnumeratorExpression } from "../../../../components/useEnumeratorExpression";
 import { t, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
 import React, { useState, useEffect, useMemo } from "react";
 import {
   loadEnumeratorCollections,
-  evaluateEnumeratorExpression,
   type EnumeratorCollection,
 } from "../../../../../src/business/facade";
 import { translateBlockId } from "../../../../../src/business/facade";
@@ -39,16 +39,20 @@ export function EnumeratorBlockPickerDialog({
   const [preview, setPreview] = useState<string[]>([]);
   const [nonBlockWarning, setNonBlockWarning] = useState<UiMessage[]>([]);
   const [evalError, setEvalError] = useState<UiMessage>("");
+  const [loadError, setLoadError] = useState<UiMessage>("");
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setLoadError("");
     loadEnumeratorCollections(currentBlocks.length ? [{ id:"runtime:replace", name:t("replace.currentResults"), symbol:"L", category:"runtime", valueType:"block", version:"runtime", values:currentBlocks, description:t("replace.originalBlocks"), updatedAt:"runtime", readOnly:true }] : [])
       .then(collections => { if(active) setCollections(collections); })
-      .catch(error => { if(active) { setCollections([]); setEvalError({key:"statistics.collectionsFailed",params:{error:String(error)}}); } })
+      .catch(error => { if(active) { setCollections([]); setLoadError({key:"statistics.collectionsFailed",params:{error:String(error)}}); } })
       .finally(() => { if(active) setLoading(false); });
     return () => { active = false; };
   }, [currentBlocks]);
 
+  const result = useEnumeratorExpression(expression, collections);
   useEffect(() => {
     if (!expression.trim() || collections.length === 0) {
       setPreview([]);
@@ -56,7 +60,6 @@ export function EnumeratorBlockPickerDialog({
       setEvalError("");
       return;
     }
-    const result = evaluateEnumeratorExpression(expression, collections);
     if (result.error) {
       setEvalError(result.error);
       setPreview([]);
@@ -76,7 +79,7 @@ export function EnumeratorBlockPickerDialog({
         ? [...rejected.slice(0, 5), ...(rejected.length > 5 ? [{key:"replace.rejectedCount",params:{count:rejected.length}}] : [])]
         : []
     );
-  }, [expression, collections, currentBlocks]);
+  }, [result, expression, collections, currentBlocks]);
 
   const collectionHints = useMemo(
     () =>
@@ -99,8 +102,9 @@ export function EnumeratorBlockPickerDialog({
         <div className="enum-picker-content">
           {/* Expression input */}
           <div>
-            <label className="enum-picker-label">{t("replace.expression")}</label>
+            <label className="enum-picker-label" htmlFor="replace-enumerator-expression">{t("replace.expression")}</label>
             <Input
+              id="replace-enumerator-expression"
               className="input enum-picker-input"
               value={expression}
               placeholder={t("replace.expressionHint")}
@@ -112,8 +116,9 @@ export function EnumeratorBlockPickerDialog({
             )}
           </div>
 
+          {loadError && <div className="enum-picker-error" role="alert">{localizeMessage(loadError)}</div>}
           {evalError && (
-            <div className="enum-picker-error">{t("replace.expressionError", {error:localizeMessage(evalError)})}</div>
+            <div className="enum-picker-error" role="alert">{t("replace.expressionError", {error:localizeMessage(evalError)})}</div>
           )}
 
           {nonBlockWarning.length > 0 && (
@@ -141,7 +146,7 @@ export function EnumeratorBlockPickerDialog({
             </div>
           )}
 
-          {preview.length === 0 && !evalError && expression.trim() && !loading && (
+          {preview.length === 0 && !evalError && !loadError && expression.trim() && !loading && (
             <div className="enum-picker-empty">{t("replace.emptySet")}</div>
           )}
 

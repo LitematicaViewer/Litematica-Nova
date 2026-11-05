@@ -3,7 +3,7 @@ import { useI18n } from "../i18n";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Dropdown } from "./Dropdown";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Popover } from "radix-ui";
 import { BlockIcon } from "./BlockIcon";
 import { getAllBlocks, loadDatabases, getBlockProperties, translateKey, translateValue } from "../../src/business/facade";
@@ -49,6 +49,7 @@ export function BlockSearchSelect({
   const [blocks, setBlocks] = useState<string[]>(() => getAllBlocks().sort());
   const [activeIndex, setActiveIndex] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const listId = useId();
 
   useEffect(() => {
     if (allowedBlocks) { setBlocks([...allowedBlocks].sort()); return; }
@@ -96,7 +97,7 @@ export function BlockSearchSelect({
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (disabled) return;
+    if (disabled || event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setOpen(true);
@@ -112,6 +113,7 @@ export function BlockSearchSelect({
       }
     } else if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation();
       setOpen(false);
       setQuery("");
     }
@@ -135,6 +137,7 @@ export function BlockSearchSelect({
         </Popover.Trigger>
         <Popover.Portal>
           <Popover.Content
+            data-native-ui-surface
             className="block-search-menu"
             data-slot="block-search-content"
             aria-label={t("library.chooseBlock")}
@@ -146,6 +149,11 @@ export function BlockSearchSelect({
               className="input block-search-input"
               autoFocus
               aria-label={t("library.searchBlocks")}
+              role="combobox"
+              aria-expanded={open}
+              aria-controls={listId}
+              aria-autocomplete="list"
+              aria-activedescendant={filtered[activeIndex] ? `${listId}-${activeIndex}` : undefined}
               value={query}
               placeholder={t("library.blockSearchPlaceholder")}
               onChange={(event) => setQuery(event.target.value)}
@@ -158,12 +166,18 @@ export function BlockSearchSelect({
             ) : (
               <div
                 ref={listRef}
+                id={listId}
+                role="listbox"
+                aria-label={t("library.chooseBlock")}
                 className="block-search-list"
                 onWheel={(event) => event.stopPropagation()}
               >
                 {filtered.map((option, index) => (
                   <Button
                     key={option.id}
+                    id={`${listId}-${index}`}
+                    role="option"
+                    aria-selected={index === activeIndex}
                     type="button"
                     tabIndex={-1}
                     data-active={index === activeIndex}

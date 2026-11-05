@@ -1,7 +1,6 @@
 //! Inventory requirements, not loot drops or renderer state. The registry data is exported
 //! from the selected Minecraft version; placement rules use that catalog's classes.
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::sync::{Mutex, OnceLock};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
@@ -105,27 +104,8 @@ fn legacy_nbt_inventory(source: i32) -> Result<&'static LegacyNbtInventory> {
     let key = format!("{}:{version}", context.content_id);
     let mut cache = DATA.get_or_init(Default::default).lock().map_err(|_| anyhow!("legacy inventory cache lock poisoned"))?;
     if let Some(value) = cache.get(&key) { return Ok(*value); }
-    let mut roots = vec![context.root.clone()];
-    let bundled = crate::runtime_paths::app_root()?.join("pack-in/game-data/default");
-    if bundled != context.root { roots.push(bundled); }
-    let mut bytes = None;
-    if context.game_version == version { bytes = Some(std::fs::read(context.root.join("derived/inventory.json"))?); }
-    for root in roots {
-        if bytes.is_some() { break; }
-        let directory = root.join("derived/version-adapters").join(version);
-        if directory.join("inventory.json").is_file() {
-            bytes = Some(std::fs::read(directory.join("inventory.json"))?);
-        } else {
-            let archive = root.join("derived/version-adapters").join(format!("{version}.zip"));
-            if archive.is_file() {
-                let mut zip = zip::ZipArchive::new(std::fs::File::open(archive)?)?;
-                let mut inventory = zip.by_name("inventory.json")?;
-                if inventory.size() > 16 * 1024 * 1024 { bail!("source inventory is too large: {version}"); }
-                let mut output = Vec::new(); inventory.read_to_end(&mut output)?; bytes = Some(output);
-            }
-        }
-    }
-    let value: LegacyNbtInventory = serde_json::from_slice(&bytes.with_context(|| format!("exact Minecraft {version} inventory is required for legacy block-entity materials"))?)?;
+    let bytes = crate::game_data::mod_registry::version_inventory(&context, version)?;
+    let value: LegacyNbtInventory = serde_json::from_slice(&bytes)?;
     if value.minecraft_version != version { bail!("legacy inventory version {} does not match source {version}", value.minecraft_version); }
     let value: &'static LegacyNbtInventory = Box::leak(Box::new(value));
     cache.insert(key, value);

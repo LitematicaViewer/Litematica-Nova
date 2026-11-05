@@ -216,7 +216,7 @@ pub fn export_stockpile_zip(
     let materials =
         stockpile::build_materials_data(input, include_container_items, Some(minecraft_version))?;
     let output_path = resolve_output_path(input, output)?;
-    ensure_stockpile_export_output(&output_path)?;
+    stockpile::ensure_stockpile_output(&runtime_paths::stockpile_exports_root()?, &output_path)?;
     export_stockpile_zip_from_materials(input, Some(&output_path), minecraft_version, materials, mode, deploy_options)
 }
 
@@ -244,8 +244,7 @@ pub(crate) fn export_stockpile_zip_from_materials(
     let payload = build_payload(input, minecraft_version, materials, recipe_status, mode)?;
     // The materials-export caller has validated the user-selected Save As path.
     // Legacy Stockpile CLI still enforces its exports-root contract above.
-    let file = File::create(&output_path).with_context(|| format!("create stockpile zip failed: {}", output_path.display()))?;
-    write_zip_contents(file, &payload, mode, &deploy_options)?;
+    write_zip_contents(&output_path, &payload, mode, &deploy_options)?;
     Ok(summary(&output_path, &payload, mode, &deploy_options))
 }
 
@@ -283,7 +282,6 @@ fn build_payload(
     };
     build_payload_with_trees(
         input,
-        minecraft_version,
         &mut materials,
         recipe_status,
         recipe_trees,
@@ -293,22 +291,15 @@ fn build_payload(
 
 fn build_payload_with_trees(
     input: &Path,
-    minecraft_version: &str,
     materials: &mut StockpileMaterialsData,
     recipe_status: RecipeCacheStatusOutput,
     recipe_trees: BTreeMap<String, RecipeTreeNode>,
     mode: StockpileExportMode,
 ) -> Result<StockpileZipPayload> {
-    build_payload_with_assets(input, minecraft_version, materials, recipe_status, recipe_trees, mode, true)
-}
-
-fn build_payload_with_assets(input: &Path, minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_status: RecipeCacheStatusOutput, recipe_trees: BTreeMap<String, RecipeTreeNode>, mode: StockpileExportMode, allow_network: bool) -> Result<StockpileZipPayload> {
     let game_data = crate::game_data::active_context()?;
     let minecraft_version = game_data.game_version.as_str();
-    let icon_assets = if allow_network { item_icons::resolve_stockpile_icons(minecraft_version, materials, &recipe_trees)? }
-        else { item_icons::resolve_stockpile_icons_cached(minecraft_version, materials, &recipe_trees)? };
-    let item_names = if allow_network { item_names::resolve_stockpile_item_names(minecraft_version, materials, &recipe_trees)? }
-        else { item_names::resolve_stockpile_item_names_cached(minecraft_version, materials, &recipe_trees)? };
+    let icon_assets = item_icons::resolve_stockpile_icons(minecraft_version, materials, &recipe_trees)?;
+    let item_names = item_names::resolve_stockpile_item_names(minecraft_version, materials, &recipe_trees)?;
     let manifest = StockpileZipManifest {
         schema_version: STOCKPILE_ZIP_SCHEMA_VERSION,
         materials_schema_version: STOCKPILE_MATERIALS_SCHEMA_VERSION,
@@ -342,19 +333,18 @@ fn write_zip(
     mode: StockpileExportMode,
     deploy_options: &StockpileDeployOptions,
 ) -> Result<()> {
-    ensure_stockpile_export_output(output_path)?;
-    let file = File::create(output_path)
-        .with_context(|| format!("create stockpile zip failed: {}", output_path.display()))?;
-    write_zip_contents(file, payload, mode, deploy_options)
+    stockpile::ensure_stockpile_output(&runtime_paths::stockpile_exports_root()?, output_path)?;
+    write_zip_contents(output_path, payload, mode, deploy_options)
 }
 
 fn write_zip_contents(
-    file: File,
+    output: &Path,
     payload: &StockpileZipPayload,
     mode: StockpileExportMode,
     deploy_options: &StockpileDeployOptions,
 ) -> Result<()> {
-    let mut zip = ZipWriter::new(file);
+    let mut temporary = tempfile::NamedTempFile::new_in(output.parent().context("missing stockpile zip parent")?)?;
+    let mut zip = ZipWriter::new(temporary.as_file_mut());
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
     add_text_file(
@@ -394,11 +384,12 @@ fn write_zip_contents(
         add_multi_deploy_files(&mut zip, payload, deploy_options, options)?;
     }
     zip.finish().context("finish stockpile zip failed")?;
+    temporary.persist(output)?;
     Ok(())
 }
 
 fn add_multi_deploy_files(
-    zip: &mut ZipWriter<File>,
+    zip: &mut ZipWriter<&mut File>,
     payload: &StockpileZipPayload,
     deploy_options: &StockpileDeployOptions,
     options: SimpleFileOptions,
@@ -516,7 +507,7 @@ fn stockpile_server_bin_root() -> Result<PathBuf> {
 }
 
 fn add_text_file(
-    zip: &mut ZipWriter<File>,
+    zip: &mut ZipWriter<&mut File>,
     name: &str,
     content: &str,
     options: SimpleFileOptions,
@@ -527,7 +518,7 @@ fn add_text_file(
 }
 
 fn add_bytes_file(
-    zip: &mut ZipWriter<File>,
+    zip: &mut ZipWriter<&mut File>,
     name: &str,
     content: &[u8],
     options: SimpleFileOptions,
@@ -538,7 +529,7 @@ fn add_bytes_file(
 }
 
 fn add_json_file<T: Serialize>(
-    zip: &mut ZipWriter<File>,
+    zip: &mut ZipWriter<&mut File>,
     name: &str,
     value: &T,
     options: SimpleFileOptions,
@@ -570,7 +561,7 @@ pub(crate) fn render_standalone_materials_html(input: &Path, version: &str, mate
     let status = recipe_cache::recipe_status(version)?;
     let mut materials = materials;
     let trees = recipe_tree::resolve_recipe_trees_for_materials(version, &materials)?;
-    let mut payload = build_payload_with_assets(input, version, &mut materials, status, trees, StockpileExportMode::Single, false)?;
+    let mut payload = build_payload_with_trees(input, &mut materials, status, trees, StockpileExportMode::Single)?;
     let urls = payload.icon_files.iter().map(|icon| (icon.path.clone(), format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&icon.bytes)))).collect::<BTreeMap<_, _>>();
     for icon in payload.icons.by_key.values_mut() {
         if let Some(url) = urls.get(&icon.path) { icon.path = url.clone(); }
@@ -599,33 +590,9 @@ fn resolve_output_path(input: &Path, output: Option<&Path>) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn ensure_stockpile_export_output(path: &Path) -> Result<()> {
-    let exports_root = runtime_paths::stockpile_exports_root()?;
-    let full_output = absolutize(path)?;
-    let full_exports = absolutize(&exports_root)?;
-    if !full_output.starts_with(&full_exports) {
-        bail!(
-            "stockpile zip output must be under {}",
-            full_exports.display()
-        );
-    }
-    if let Some(parent) = full_output.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "create stockpile export directory failed: {}",
-                parent.display()
-            )
-        })?;
-    }
-    Ok(())
-}
 
-fn absolutize(path: &Path) -> Result<PathBuf> {
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
-    }
-    Ok(runtime_paths::app_root()?.join(path))
-}
+
+
 
 fn project_slug(input: &Path) -> String {
     let raw = input
@@ -1783,7 +1750,6 @@ mod tests {
         trees.insert("minecraft:stone".to_string(), root);
         let payload = build_payload_with_trees(
             &input,
-            "1.21.10",
             &mut materials,
             available_recipe_status("1.21.10"),
             trees,

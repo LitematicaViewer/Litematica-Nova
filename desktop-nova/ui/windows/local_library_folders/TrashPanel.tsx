@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { Dialog } from "../../components/Dialog";
+import { getUiLocale, t } from "../../../src/services/i18n";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { ThemeIcon } from "../../components/ThemeIcon";
@@ -37,6 +39,10 @@ export function TrashPanel({
 }) {
   const [conflictId, setConflictId] = useState("");
   const [renameDraft, setRenameDraft] = useState("");
+  const [confirmation, setConfirmation] = useState<{ ids: string[]; names: string[] } | null>(null);
+  const [confirmationError, setConfirmationError] = useState("");
+  const purgeRunning = useRef(false);
+  const english = getUiLocale() === "en-US";
 
   const entries = state.trash || [];
 
@@ -49,63 +55,50 @@ export function TrashPanel({
       if (result.ok) {
         setConflictId("");
         setRenameDraft("");
-        onStatus(`已还原：${entry.originalFileName || entry.name}`);
+        onStatus(t("library.ux.restored", { value0: entry.originalFileName || entry.name }));
       } else if (result.reason === "occupied") {
         setConflictId(entry.id);
         setRenameDraft(entry.originalFileName || entry.name);
-        onStatus("原位置已存在同名文件，请输入新的文件名后重试。");
+        onStatus(t("library.ux.restoreConflict"));
       } else if (result.reason === "legacy") {
-        onStatus("历史记录不可还原，只能清理。");
+        onStatus(t("library.ux.restoreHistory"));
       } else {
-        onStatus(`还原失败：${result.reason || "未知原因"}`);
+        onStatus(t("library.ux.restoreFailed", { value0: result.reason || t("library.ux.unknownReason") }));
       }
     } catch (error: any) {
-      onStatus(`还原失败：${String(error)}`);
+      onStatus(t("library.ux.restoreFailed", { value0: String(error) }));
     } finally {
       onBusyChange("");
     }
   };
 
-  const handlePurge = async (entry: LibraryTrashEntry) => {
-    if (busy) return;
-    onBusyChange(`purge:${entry.id}`);
-    try {
-      const result = await purgeLibraryTrashAsync(state, [entry.id]);
-      onStateChange(result.state);
-      onStatus(result.failures.length
-        ? `未删除：${result.failures.map((failure) => failure.trashPath).join("、")}`
-        : `已清理：${entry.name || entry.originalFileName}`);
-    } catch (error: any) {
-      onStatus(`清理失败：${String(error)}`);
-    } finally {
-      onBusyChange("");
-    }
+  const requestPurge = (selected: LibraryTrashEntry[]) => {
+    if (busy || purgeRunning.current || !selected.length) return;
+    setConfirmationError("");
+    setConfirmation({ ids: selected.map(entry => entry.id), names: selected.map(entry => entry.name || entry.originalFileName) });
   };
-
-  const handlePurgeAll = async () => {
-    if (busy || !entries.length) return;
-    onBusyChange("purge-all");
+  const confirmPurge = async () => {
+    if (!confirmation || busy || purgeRunning.current) return;
+    purgeRunning.current = true;
+    onBusyChange("purge-confirmed"); setConfirmationError("");
     try {
-      const result = await purgeLibraryTrashAsync(state);
-      onStateChange(result.state);
+      // Keep the explicitly confirmed identities; later additions are never deleted.
+      const result = await purgeLibraryTrashAsync(state, confirmation.ids);
+      onStateChange(result.state); setConfirmation(null);
       onStatus(result.failures.length
-        ? `清空完成，但有 ${result.failures.length} 项未能删除并已保留。`
-        : "已清空回收区。");
-    } catch (error: any) {
-      onStatus(`清空回收区失败：${String(error)}`);
-    } finally {
-      onBusyChange("");
-    }
+        ? (english ? `${result.failures.length} items could not be deleted and were retained.` : t("library.ux.purgePartial", { value0: result.failures.length }))
+        : (english ? "Selected trash items were deleted." : t("library.ux.purged")));
+    } catch (error) { setConfirmationError(String(error)); }
+    finally { purgeRunning.current = false; onBusyChange(""); }
   };
 
   return (
-    <section className="library-trash-panel" aria-label="回收区">
+    <section className="library-trash-panel" aria-label={t("library.ux.recycle")}>
       <div className="library-trash-panel-heading">
-        <h4 className="library-trash-panel-title">回收区</h4>
-        <span className="muted library-trash-panel-count">共 {entries.length} 项</span>
+        <span className="muted library-trash-panel-count">{t("library.ux.total")} {entries.length} {t("library.items")}</span>
       </div>
       {entries.length === 0 ? (
-        <p className="muted">回收区为空。</p>
+        <p className="muted">{t("library.ux.trashEmpty")}</p>
       ) : (
         <ul className="library-trash-list">
           {entries.map((entry) => {
@@ -114,9 +107,9 @@ export function TrashPanel({
             return (
               <li key={entry.id} data-trash-status={entry.status}>
                 <div>
-                  <span className="library-trash-name">{entry.name || entry.originalFileName || "未命名"}</span>
+                  <span className="library-trash-name">{entry.name || entry.originalFileName || t("library.ux.unnamed")}</span>
                   <small className="muted">
-                    {isLegacy ? "历史记录（不可还原）" : `${entry.status === "in_trash" ? "在回收区" : entry.status} · ${formatEntryDate(entry.movedAt)}`}
+                    {isLegacy ? t("library.ux.historyUnrestorable") : `${entry.status === "in_trash" ? t("library.ux.inTrash") : entry.status} · ${formatEntryDate(entry.movedAt)}`}
                   </small>
                   {!isLegacy && entry.originalPath ? <small className="muted" title={displayFilePath(entry.originalPath)}>{displayFilePath(entry.originalPath)}</small> : null}
                   {isConflict && (
@@ -125,7 +118,7 @@ export function TrashPanel({
                         value={renameDraft}
                         disabled={busy}
                         autoFocus
-                        ariaLabel="还原冲突的新文件名"
+                        ariaLabel={t("library.ux.restoreFileName")}
                         onChange={setRenameDraft}
                       />
                       <Button
@@ -133,7 +126,7 @@ export function TrashPanel({
                         disabled={busy || !isReplicaNameValid(renameDraft)}
                         onClick={() => void handleRestore(entry, renameDraft)}
                       >
-                        改名还原
+                        {t("library.ux.renameRestore")}
                       </Button>
                     </div>
                   )}
@@ -145,16 +138,16 @@ export function TrashPanel({
                       disabled={busy}
                       onClick={() => void handleRestore(entry)}
                     >
-                      <ThemeIcon name="refresh" size={14} fallback={RotateCcw} />还原
+                      <ThemeIcon name="refresh" size={14} fallback={RotateCcw} />{t("library.ux.restoreAction")}
                     </Button>
                   )}
                   <Button
                     size="sm"
                     variant="ghost"
                     disabled={busy}
-                    onClick={() => void handlePurge(entry)}
+                    onClick={() => requestPurge([entry])}
                   >
-                    <ThemeIcon name="delete" size={14} fallback={Trash2} />{isLegacy ? "清理记录" : "删除"}
+                    <ThemeIcon name="delete" size={14} fallback={Trash2} />{isLegacy ? t("library.ux.purgeRecord") : t("editor.delete")}
                   </Button>
                 </div>
               </li>
@@ -164,12 +157,21 @@ export function TrashPanel({
       )}
       {entries.length > 0 && (
         <div className="library-trash-footer">
-          <span className="muted">清空将物理删除回收区中的文件，且不可恢复。</span>
-          <Button variant="destructive" size="sm" disabled={busy} onClick={() => void handlePurgeAll()} aria-busy={busy}>
-            清空回收区
+          <span className="muted">{t("library.ux.purgeHint")}</span>
+          <Button variant="destructive" size="sm" disabled={busy} onClick={() => requestPurge(entries)} aria-busy={busy}>
+            {t("library.ux.emptyTrash")}
           </Button>
         </div>
       )}
+      {confirmation && <Dialog title={english ? "Permanently delete trash items?" : t("library.ux.purgeTitle")}
+        subtitle={english ? "The selected trash files will be deleted permanently. Other files and library items are unchanged." : t("library.ux.purgeConfirmHint")}
+        width="sm" busy={busy} onClose={() => setConfirmation(null)} footer={<>
+          <Button variant="ghost" disabled={busy} onClick={() => setConfirmation(null)}>{t("editor.cancel")}</Button>
+          <Button variant="destructive" disabled={busy} onClick={() => void confirmPurge()}>{english ? "Delete permanently" : t("library.ux.purgeAction")}</Button>
+        </>}>
+        <ul>{confirmation.names.map((name, index) => <li key={confirmation.ids[index]}>{name}</li>)}</ul>
+        {confirmationError && <p className="dialog-message dialog-message-error" role="alert">{confirmationError}</p>}
+      </Dialog>}
     </section>
   );
 }

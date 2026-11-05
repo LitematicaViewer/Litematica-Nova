@@ -21,8 +21,9 @@ const icons = compile("../src/services/libraryCategoryIcons.ts", (name) => name 
 const paths = compile("../src/services/filePathIdentity.ts", () => { throw new Error("Unexpected path import"); });
 const migration = compile("../src/services/libraryMigration.ts", (name) =>
   name === "./filePathIdentity" ? paths : name === "./libraryCategoryIcons" ? icons : (() => { throw new Error(`Unexpected migration dependency: ${name}`); })());
+const files = { libraryContentCommand: async ({action,state}) => { if(action==='normalize')return state; if(action==='index')return {}; if(action==='reconcile')return {state,moved:[]}; if(action==='mergeAll')return {state,merges:[]}; if(action==='scan')return {state,stats:{markedMissing:[],newReplicas:0,revivedEntries:0,pendingAnalysis:[]}};throw new Error('Unstubbed Rust action '+action); } };
 const contentModule = compile("../src/services/libraryContent.ts", (name) =>
-  name === "./filePathIdentity" ? paths : name === "./libraryStore" ? {} : (() => { throw new Error(`Unexpected content dependency: ${name}`); })());
+  name === "../platform/files" ? files : name === "./filePathIdentity" ? paths : name === "./libraryStore" ? {} : (() => { throw new Error(`Unexpected content dependency: ${name}`); })());
 
 function loadStore({ backend = {}, tasks = {}, stats = {}, operations = {} } = {}) {
   let exportParams = null;
@@ -36,7 +37,7 @@ function loadStore({ backend = {}, tasks = {}, stats = {}, operations = {} } = {
   };
   const statsService = { loadStructureStats: async () => ({}), ...stats };
   const backendPath = {
-    readUserConfigFile: async () => { throw new Error("no disk"); }, writeUserConfigFile: async () => {},
+    readUserConfigFile: async (_path, optional) => { assert.equal(optional, true); return null; }, writeUserConfigFile: async () => {},
     checkFileExists: async () => true, listLitematicFileEntriesInDirectory: async () => [],
     copyFileToDirectory: async () => ({}), computeLitematicChecksum: async () => ({ sha256: "x", byte_count: 1 }),
     getUserConfigFilePath: async () => "C:/builtin/import", libraryTrashMove: async () => [],
@@ -45,6 +46,8 @@ function loadStore({ backend = {}, tasks = {}, stats = {}, operations = {} } = {
     ...backend,
   };
   const store = compile("../src/services/libraryStore.ts", (name) => {
+    if (name === "../platform/files") return files;
+    if (name === "../platform/schematicFormats") return { querySchematicFormat:async()=>({}) };
     if (name === "./libraryCategoryIcons") return icons;
     if (name === "./filePathIdentity") return paths;
     if (name === "./backend") return backendPath;

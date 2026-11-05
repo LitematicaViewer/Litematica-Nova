@@ -7,7 +7,7 @@ import { RadioGroup, RadioGroupItem } from "../../../../components/ui/radio-grou
 import { Input } from "../../../../components/ui/input";
 import { Button } from "../../../../components/ui/button";
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from "../../../../components/ui/table";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useState } from "react";
 
 import { Dialog } from "../../../../components/Dialog";
 import { Dropdown } from "../../../../components/Dropdown";
@@ -55,11 +55,14 @@ const thumbExampleUrlForTheme = (themeId: string) =>
   themeThumbExampleUrls[themeResourceKey(themeId)] || fallbackThumbExampleUrl;
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
-  const { locale } = useI18n();
+  const id = useId();
+  const input = React.isValidElement(children) && children.type === Input;
   return (
     <div className="form-row">
-      <label>{label}</label>
-      <div>{children}</div>
+      {input ? <label htmlFor={id}>{label}</label> : <span id={id}>{label}</span>}
+      <div role={input ? undefined : "group"} aria-labelledby={input ? undefined : id}>
+        {input ? React.cloneElement(children as React.ReactElement<{id?: string}>, {id}) : children}
+      </div>
     </div>
   );
 }
@@ -121,7 +124,11 @@ export function UiTestPage() {
           </RadioGroup>
         </FormRow>
         <FormRow label={t("ui.checkbox")}>
-          <label><Checkbox  /> {t("ui.checkboxExample")}</label>
+          <div className="button-row">
+            <label className="setting-row"><Checkbox /> {t("ui.checkboxExample")}</label>
+            <label className="setting-row"><Checkbox defaultChecked="indeterminate" /> {locale === "en-US" ? "Partially selected" : "部分选中"}</label>
+            <label className="setting-row"><Checkbox defaultChecked disabled /> {t("ui.disabled")}</label>
+          </div>
         </FormRow>
         <FormRow label={t("ui.singleLine")}><Input defaultValue={t("ui.defaultInput")} /></FormRow>
         <FormRow label={t("ui.dropdown")}>
@@ -158,8 +165,12 @@ export function UiTestPage() {
                 <span
                   key={entry.variant}
                   className="button-variant-demo"
+                  role={state === "disabled" ? "button" : undefined}
+                  tabIndex={state === "disabled" ? 0 : undefined}
+                  aria-label={state === "disabled" ? t("ui.variantHelp", {variant:t(entry.labelKey), state:t(VARIANT_DEMO_STATE_LABELS[state])}) : undefined}
                   title={t("ui.variantHelp", {variant:t(entry.labelKey), state:t(VARIANT_DEMO_STATE_LABELS[state])})}
                   onClick={() => advanceVariantDemo(entry.variant)}
+                  onKeyDown={event => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); advanceVariantDemo(entry.variant); } }}
                 >
                   <Button
                     type="button"
@@ -212,7 +223,9 @@ export function UiTestPage() {
                   key={label}
                   className={isSelected ? "table-row-selected" : ""}
                   aria-selected={isSelected}
-                  onClick={() => setSelectedTableRow(label)}
+                  tabIndex={0}
+                  onClick={() => setSelectedTableRow(isSelected ? "" : label)}
+                  onKeyDown={event => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setSelectedTableRow(isSelected ? "" : label); } }}
                 >
                   <TableCell>{renderThumbExample()}</TableCell>
                   <TableCell>{t(label)}</TableCell>
@@ -252,7 +265,7 @@ export function UiTestPage() {
             <span className="muted">{t("ui.headingHint")}</span>
             <span className="dialog-label">{t("ui.bodyArea")}</span>
             <div className="dialog-field-stack">
-              <Input defaultValue={t("ui.inputExample")} />
+              <Input aria-label={t("ui.inputExample")} defaultValue={t("ui.inputExample")} />
               <Dropdown ariaLabel={t("ui.templateExample")} value={sampleTemplate} onChange={setSampleTemplate} options={[
                 {value: "template-a", label: t("ui.templateA")}, {value: "template-b", label: t("ui.templateB")},
               ]} />

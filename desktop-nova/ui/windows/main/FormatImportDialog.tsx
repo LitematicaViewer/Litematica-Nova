@@ -18,12 +18,14 @@ export function FormatImportDialog({ sourcePath = "", clipboardMode = false, onR
   const [clipboardText, setClipboardText] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
   const generation = useRef(0);
   const ready = useRef(onReady); ready.current = onReady;
   useEffect(() => { onVisibilityChange?.(visible); return () => onVisibilityChange?.(false); }, [visible, onVisibilityChange]);
   useEffect(() => {
     const current = ++generation.current;
     setVisible(false); setResult(undefined); setError(""); setVersion("");
+    pendingRef.current = false; setPending(false);
     if (clipboardMode) { setVisible(true); return; }
     if (!sourcePath) return;
     void querySchematicFormat({ action: "runtimeInput", input: sourcePath }).then(view => {
@@ -43,8 +45,9 @@ export function FormatImportDialog({ sourcePath = "", clipboardMode = false, onR
   }, [visible]);
   if (!visible) return null;
   const load = async () => {
+    if (pendingRef.current) return;
     const current = generation.current;
-    setPending(true); setError("");
+    pendingRef.current = true; setPending(true); setError("");
     try {
       const view = result?.snapshotPath ? result : await querySchematicFormat({ action: "decodeToSnapshot", ...(clipboardMode ? { clipboardText } : { input: sourcePath }),
         ...(version ? { sourceDataVersion: Number(version) } : {}) });
@@ -52,11 +55,11 @@ export function FormatImportDialog({ sourcePath = "", clipboardMode = false, onR
       if (!view.snapshotPath) throw new Error(en ? "Import did not return a scene." : "导入未返回场景快照。");
       setVisible(false); ready.current(view.snapshotPath);
     } catch (reason) { if (current === generation.current) setError(String(reason)); }
-    finally { if (current === generation.current) setPending(false); }
+    finally { if (current === generation.current) { pendingRef.current = false; setPending(false); } }
   };
   return <Dialog title={en ? "Import schematic" : "导入投影"} busy={pending} onClose={onCancel} footer={<>
     <Button variant="ghost" onClick={onCancel} disabled={pending}>{en ? "Cancel" : "取消"}</Button>
-    <Button onClick={() => void load()} disabled={pending}>{pending ? (en ? "Preparing…" : "正在准备…") : (en ? "Open schematic" : "打开投影")}</Button>
+    <Button onClick={() => void load()} disabled={pending || clipboardMode && !clipboardText.trim()}>{pending ? (en ? "Preparing…" : "正在准备…") : (en ? "Open schematic" : "打开投影")}</Button>
   </>}>
     <p>{en ? "The source file stays unchanged. All tools use the same normalized scene." : "源文件保持不变，各页面使用同一份规范化场景。"}</p>
     {result?.sourceDisplayName && <p className="format-import-source" title={result.originalSourcePath}>{result.sourceDisplayName}</p>}

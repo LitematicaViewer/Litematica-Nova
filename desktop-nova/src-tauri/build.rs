@@ -82,7 +82,7 @@ fn build_git_sha(repo_root: &Path) -> String {
 
 // Only this freshly staged directory is bundled. Legacy private backend and
 // Release directories never enter the public resource map.
-fn validate_executable_target(path: &Path, target_os: &str, target_arch: &str) {
+fn validate_executable_target(path: &Path, target_os: &str, target_arch: &str, module: bool) {
     let mut file = fs::File::open(path).expect("open public helper executable");
     let mut header = [0u8; 64];
     file.read_exact(&mut header).expect("public helper executable is truncated");
@@ -96,7 +96,7 @@ fn validate_executable_target(path: &Path, target_os: &str, target_arch: &str) {
             assert_eq!(&pe[..4], b"PE\0\0");
             let machine = u16::from_le_bytes(pe[4..6].try_into().unwrap());
             assert_eq!(machine, if target_arch == "x86_64" { 0x8664 } else { 0xaa64 }, "public helper architecture differs");
-            assert_eq!(u16::from_le_bytes(pe[22..24].try_into().unwrap()) & 0x2000, 0, "a DLL cannot replace a public helper");
+            assert_eq!(u16::from_le_bytes(pe[22..24].try_into().unwrap()) & 0x2000, if module { 0x2000 } else { 0 }, "PE kind differs: runtime modules must be DLLs and public helpers must be EXEs");
             assert_eq!(u16::from_le_bytes(pe[24..26].try_into().unwrap()), 0x20b, "public helper must be PE32+");
         }
         "linux" => {
@@ -163,10 +163,14 @@ fn validate_public_backends(repo_root: &Path) {
     assert_eq!(manifest["schema"], "lba.backend.deployment.v1");
     if community {
         assert_eq!(manifest["runtimeKind"].as_str(), Some("community"), "community Host requires public-only helpers");
+    } else if env::var_os("CARGO_FEATURE_STANDALONE_RUNTIME").is_some() {
+        assert_eq!(manifest["runtimeKind"].as_str(), Some("standalone"), "standalone Host requires explicitly standalone-built helpers");
+        assert_eq!(manifest["standaloneRuntime"].as_bool(), Some(true), "standalone helpers must declare their local runtime selection");
     } else if env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some() {
         assert_eq!(manifest["runtimeKind"].as_str(), Some("development"), "local-source Host requires explicitly development-built helpers");
     } else {
-        assert_ne!(manifest["runtimeKind"].as_str(), Some("development"), "development helpers must not enter a production Host or installer");
+        assert!(!matches!(manifest["runtimeKind"].as_str(), Some("development" | "standalone")), "local runtime helpers must not enter a production Host or installer");
+        assert_ne!(manifest["standaloneRuntime"].as_bool(), Some(true), "standalone helpers must not enter a production Host or installer");
     }
     let source = manifest["gitSha"].as_str().expect("public deployment source commit");
     assert!(valid_git_sha(source), "public deployment source identity is malformed");
@@ -200,6 +204,19 @@ fn validate_public_backends(repo_root: &Path) {
         let path = PathBuf::from(env::var_os("NOVA_DEVELOPMENT_MODULE_PATH")
             .expect("local-source development requires its compile-time module path"));
         assert!(path.is_absolute() && path.is_file(), "selected local development module is missing");
+        if env::var_os("CARGO_FEATURE_STANDALONE_RUNTIME").is_some() {
+            assert!(selected["capabilities"].as_array().is_some_and(|values| values.iter().any(|value| value.as_str() == Some("standalone-light"))), "standalone runtime lacks local light capability");
+            validate_executable_target(&path, &target_os, &target_arch, true);
+            let mut file = fs::File::open(&path).expect("open selected standalone module");
+            let mut hash = Sha256::new();
+            let mut buffer = [0u8; 64 * 1024];
+            loop {
+                let count = file.read(&mut buffer).expect("hash selected standalone module");
+                if count == 0 { break; }
+                hash.update(&buffer[..count]);
+            }
+            assert_eq!(selected["module_sha256"].as_str(), Some(format!("{:x}", hash.finalize()).as_str()), "standalone module content differs from the compiled runtime descriptor");
+        }
     }
     let artifacts = manifest["artifacts"].as_object().expect("public deployment artifacts");
     let names: HashSet<_> = artifacts.keys().cloned().collect();
@@ -209,7 +226,7 @@ fn validate_public_backends(repo_root: &Path) {
         let bytes = fs::metadata(&path).expect("public helper metadata").len();
         assert!(bytes > 64 && bytes <= 512 * 1024 * 1024, "public helper size exceeds its expected bounds");
         assert_eq!(record["bytes"].as_u64(), Some(bytes), "public helper size differs from its manifest");
-        validate_executable_target(&path, &target_os, &target_arch);
+        validate_executable_target(&path, &target_os, &target_arch, false);
         let mut file = fs::File::open(&path).expect("open staged public helper");
         let mut hash = Sha256::new();
         let mut buffer = [0u8; 64 * 1024];
@@ -223,10 +240,13 @@ fn validate_public_backends(repo_root: &Path) {
 }
 
 fn main() {
+    let standalone = env::var_os("CARGO_FEATURE_STANDALONE_RUNTIME").is_some();
+    assert!(!standalone || env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_some(), "standalone-runtime requires the explicit local development runtime");
     assert!(
         env::var_os("CARGO_FEATURE_DEVELOPMENT_RUNTIME").is_none()
-            || env::var("PROFILE").as_deref() != Ok("release"),
-        "development-runtime is a local development feature and must not enter a Release Host or installer"
+            || env::var("PROFILE").as_deref() != Ok("release")
+            || standalone,
+        "ordinary development-runtime must not enter a Release Host or installer; standalone-runtime is only for the explicit local candidate"
     );
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is required"));

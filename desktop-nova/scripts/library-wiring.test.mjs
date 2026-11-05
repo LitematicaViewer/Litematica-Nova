@@ -21,11 +21,13 @@ const icons = compile("../src/services/libraryCategoryIcons.ts", (name) => name 
 const paths = compile("../src/services/filePathIdentity.ts", () => { throw new Error("Unexpected path import"); });
 const migration = compile("../src/services/libraryMigration.ts", (name) =>
   name === "./filePathIdentity" ? paths : name === "./libraryCategoryIcons" ? icons : (() => { throw new Error(`Unexpected migration dependency: ${name}`); })());
+const files = { libraryContentCommand: async ({action,state}) => { if(action==='normalize')return state; if(action==='index')return {}; if(action==='reconcile')return {state,moved:[]}; if(action==='mergeAll')return {state,merges:[]}; if(action==='scan')return {state,stats:{markedMissing:[],newReplicas:0,revivedEntries:0,pendingAnalysis:[]}};throw new Error('Unstubbed Rust action '+action); } };
 const contentModule = compile("../src/services/libraryContent.ts", (name) =>
-  name === "./filePathIdentity" ? paths : name === "./libraryStore" ? {} : (() => { throw new Error(`Unexpected content dependency: ${name}`); })());
+  name === "../platform/files" ? files : name === "./filePathIdentity" ? paths : name === "./libraryStore" ? {} : (() => { throw new Error(`Unexpected content dependency: ${name}`); })());
 
 /** Loads `libraryStore.ts` with injectable backend / task queue / app operations. */
-function loadStore({ backend = {}, tasks = {}, operations = {} } = {}) {
+function loadStore({ backend = {}, tasks = {}, operations = {}, scanReply } = {}) {
+  const contentApi={libraryContentCommand: request => request.action === "scan" && scanReply ? Promise.resolve(scanReply(request)) : files.libraryContentCommand(request)};
   const appOperations = {
     inspectProject: async () => ({ metadata: { name: "新名称", total_blocks: 4, total_volume: 4, region_count: 1 }, regions: [] }),
     editProjectMetadata: async () => ({}),
@@ -40,7 +42,7 @@ function loadStore({ backend = {}, tasks = {}, operations = {} } = {}) {
     ...tasks,
   };
   const backendPath = {
-    readUserConfigFile: async () => { throw new Error("no disk"); },
+    readUserConfigFile: async (_path, optional) => { assert.equal(optional, true); return null; },
     writeUserConfigFile: async () => {},
     checkFileExists: async () => true,
     listLitematicFileEntriesInDirectory: async () => [],
@@ -54,6 +56,8 @@ function loadStore({ backend = {}, tasks = {}, operations = {} } = {}) {
     ...backend,
   };
   return compile("../src/services/libraryStore.ts", (name) => {
+    if (name === "../platform/files") return contentApi;
+    if (name === "../platform/schematicFormats") return { querySchematicFormat:async()=>({}) };
     if (name === "./libraryCategoryIcons") return icons;
     if (name === "./filePathIdentity") return paths;
     if (name === "./backend") return backendPath;
@@ -92,6 +96,7 @@ const scanned = (checksum, name, over = {}) => ({
 test("A.1 入库接线：syncLocalLibraryFolder 委托 scan 内核建条目（不再只计数）", async () => {
   const calls = [];
   const store = loadStore({
+    scanReply: r=>({state:{...r.state,entries:[entry("e1",{checksum:"AA"})],replicas:[replica("a","e1",{checksum:"AA",path:"C:/lib/A.litematic"}),replica("b","e1",{checksum:"AA",path:"C:/lib/B.litematic"})]},stats:{markedMissing:[],newReplicas:2,revivedEntries:0,pendingAnalysis:[]}}),
     tasks: { submitAndAwait: async (kind, params) => { calls.push({ kind, params }); return { taskId: "t", kind, status: "completed", summary: { files: [scanned("AA", "A.litematic"), scanned("AA", "B.litematic")] }, failures: [] }; } },
   });
   const result = await store.syncLocalLibraryFolder(state([], []), "C:/lib");
@@ -107,6 +112,7 @@ test("A.1 入库接线：syncLocalLibraryFolder 委托 scan 内核建条目（�
 
 test("B.1 自动激活关闭：新文件不入库，已有副本仍被跟踪", async () => {
   const store = loadStore({
+    scanReply: r=>({state:{...r.state,entries:[entry("e1",{checksum:"AA"})],replicas:[replica("r1","e1",{checksum:"AA",path:"C:/lib/A.litematic"})]},stats:{markedMissing:[],newReplicas:0,revivedEntries:0,pendingAnalysis:[]}}),
     tasks: { submitAndAwait: async (kind) => ({ taskId: "t", kind, status: "completed", summary: { files: [scanned("AA", "A.litematic"), scanned("BB", "New.litematic")] }, failures: [] }) },
   });
   const base = state([entry("e1")], [replica("r1", "e1", { path: "C:/lib/A.litematic", fileName: "A.litematic" })], { folders: [folder({ autoActivate: false })] });
@@ -188,6 +194,7 @@ test("A.3 回收区刷新不重现：已 trashed 副本不被重新标记/复活
 
 test("A.2 分发后归并：按 checksum 重算并合并到既有条目（替代 addOrUpdateRecord）", async () => {
   const store = loadStore({
+    scanReply: r=>({state:{...r.state,replicas:[...r.state.replicas,replica("copy","e1",{checksum:"SHARED",path:"C:/lib/Copy.litematic"})]},stats:{markedMissing:[],newReplicas:1,revivedEntries:0,pendingAnalysis:[]}}),
     tasks: { submitAndAwait: async (kind) => ({ taskId: "t", kind, status: "completed", summary: { files: [scanned("SHARED", "Copy.litematic")] }, failures: [] }) },
   });
   const base = state([entry("e1", { checksum: "SHARED" })], [replica("r1", "e1", { path: "C:/lib/Original.litematic", checksum: "SHARED" })]);
@@ -245,6 +252,7 @@ test("C.2 扫描前兜底：扫描前把内置导入别名归一到绝对路径�
 test("C.2 元数据回填：新建条目解析并回填 stats", async () => {
   let analyzeCalls = 0;
   const store = loadStore({
+    scanReply: r=>({state:{...r.state,entries:[entry("e1",{checksum:"NEW"})],replicas:[replica("r1","e1",{checksum:"NEW",path:"C:/lib/N.litematic"})]},stats:{markedMissing:[],newReplicas:1,revivedEntries:0,pendingAnalysis:[{entryId:"e1",path:"C:/lib/N.litematic"}]}}),
     operations: { inspectProject: async () => { analyzeCalls += 1; return { metadata: { name: "内部名", total_blocks: 42, total_volume: 100, region_count: 2, enclosing_size: { x: 1, y: 2, z: 3 }, minecraft_data_version: 7 }, regions: [{ name: "选区一" }, { name: "选区二" }] }; } },
     tasks: { submitAndAwait: async (kind) => ({ taskId: "t", kind, status: "completed", summary: { files: [scanned("NEW", "N.litematic")] }, failures: [] }) },
   });
@@ -260,6 +268,7 @@ test("C.2 元数据回填：新建条目解析并回填 stats", async () => {
 
 test("C.2 元数据回填：解析失败仅置 parse_error，不使整次扫描失败", async () => {
   const store = loadStore({
+    scanReply: r=>({state:{...r.state,entries:[entry("e1",{checksum:"BAD"})],replicas:[replica("r1","e1",{checksum:"BAD",path:"C:/lib/Bad.litematic"})]},stats:{markedMissing:[],newReplicas:1,revivedEntries:0,pendingAnalysis:[{entryId:"e1",path:"C:/lib/Bad.litematic"}]}}),
     operations: { inspectProject: async () => { throw new Error("坏文件"); } },
     tasks: { submitAndAwait: async (kind) => ({ taskId: "t", kind, status: "completed", summary: { files: [scanned("BAD", "Bad.litematic")] }, failures: [] }) },
   });
@@ -282,6 +291,7 @@ test("C.2 元数据回填：变更/复活才重解析，未变更条目不重复
   assert.equal(analyzeCalls, 0, "已入库且未变更不重复解析");
 
   const changed = loadStore({
+    scanReply: r=>({state:{...r.state,replicas:r.state.replicas.map(value=>({...value,status:"active"}))},stats:{markedMissing:[],newReplicas:0,revivedEntries:0,pendingAnalysis:[{entryId:"e1",path:"C:/lib/A.litematic"}]}}),
     operations,
     tasks: { submitAndAwait: async (kind) => ({ taskId: "t", kind, status: "completed", summary: { files: [scanned("AA", "A.litematic", { fileSize: 20 })] }, failures: [] }) },
   });
@@ -289,6 +299,7 @@ test("C.2 元数据回填：变更/复活才重解析，未变更条目不重复
   assert.equal(analyzeCalls, 1, "size/mtime 变化触发重解析");
 
   const revived = loadStore({
+    scanReply: r=>({state:{...r.state,replicas:r.state.replicas.map(value=>({...value,status:"active"}))},stats:{markedMissing:[],newReplicas:0,revivedEntries:0,pendingAnalysis:[{entryId:"e1",path:"C:/lib/A.litematic"}]}}),
     operations,
     tasks: { submitAndAwait: async (kind) => ({ taskId: "t", kind, status: "completed", summary: { files: [scanned("AA", "A.litematic")] }, failures: [] }) },
   });

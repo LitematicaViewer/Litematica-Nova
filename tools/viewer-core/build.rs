@@ -101,12 +101,31 @@ fn embed_windows_version_info() {
         ),
     ];
 
+    // WS_EX_LAYERED children require an OS-aware process manifest. NativeViewer
+    // is also the private DLL host; this does not change elevation or DPI policy.
+    let compatibility_manifest = output_dir.join("native-viewer-compatibility.manifest");
+    fs::write(&compatibility_manifest, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+</assembly>
+"#).expect("write native Viewer compatibility manifest");
+    let compatibility_manifest = compatibility_manifest.to_string_lossy().replace('\\', "/");
+
     for (resource_name, binary_name, executable_name, description) in resources {
+        let manifest_resource = if binary_name == "litematica_native_viewer" {
+            format!("1 24 \"{compatibility_manifest}\"")
+        } else { String::new() };
         let resource_path = output_dir.join(resource_name);
         let resource = format!(
             r#"#pragma code_page(65001)
 
 1 ICON "{icon}"
+{manifest_resource}
 
 1 VERSIONINFO
 FILEVERSION {version_major},{version_minor},{version_patch},0

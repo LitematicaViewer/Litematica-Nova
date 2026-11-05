@@ -68,8 +68,8 @@ const waiters: Waiters = { progress: new Set(), finished: new Set(), queue: new 
 // task that finishes in the (small) window between submit and registration.
 const RECENT_FINISHED_CACHE = 32;
 const recentFinished = new Map<string, TaskFinishedPayload>();
-let listenerHandles: Array<() => void> = [];
-let started = false;
+const listenerHandles: Array<() => void> = [];
+let startup: Promise<void> | null = null;
 
 function rememberFinished(payload: TaskFinishedPayload): void {
   recentFinished.set(payload.taskId, payload);
@@ -80,21 +80,25 @@ function rememberFinished(payload: TaskFinishedPayload): void {
   }
 }
 
-async function ensureStarted(): Promise<void> {
-  if (started) return;
-  started = true;
-  listenerHandles = [
-    await listenEvent<TaskProgressPayload>(libraryTaskProgressEvent, (event) => {
-      for (const listener of waiters.progress) listener(event.payload);
-    }),
-    await listenEvent<TaskFinishedPayload>(libraryTaskFinishedEvent, (event) => {
-      rememberFinished(event.payload);
-      for (const listener of waiters.finished) listener(event.payload);
-    }),
-    await listenEvent<TaskQueueSnapshot>(libraryTaskQueueChangedEvent, (event) => {
-      for (const listener of waiters.queue) listener(event.payload);
-    }),
-  ];
+function ensureStarted(): Promise<void> {
+  return startup ??= registerListeners().catch(error => {
+    for (const handle of listenerHandles.splice(0)) handle();
+    startup = null;
+    throw error;
+  });
+}
+
+async function registerListeners(): Promise<void> {
+  listenerHandles.push(await listenEvent<TaskProgressPayload>(libraryTaskProgressEvent, (event) => {
+    for (const listener of waiters.progress) listener(event.payload);
+  }));
+  listenerHandles.push(await listenEvent<TaskFinishedPayload>(libraryTaskFinishedEvent, (event) => {
+    rememberFinished(event.payload);
+    for (const listener of waiters.finished) listener(event.payload);
+  }));
+  listenerHandles.push(await listenEvent<TaskQueueSnapshot>(libraryTaskQueueChangedEvent, (event) => {
+    for (const listener of waiters.queue) listener(event.payload);
+  }));
 }
 
 /** Subscribes to background-task events; returns an unsubscribe function. */
@@ -166,9 +170,8 @@ export async function submitAndAwait(
 
 /** Test/host reset: clears cached terminal events and listener handles. */
 export function resetLibraryTaskClientForTests(): void {
-  for (const handle of listenerHandles) handle();
-  listenerHandles = [];
-  started = false;
+  for (const handle of listenerHandles.splice(0)) handle();
+  startup = null;
   recentFinished.clear();
   waiters.progress.clear();
   waiters.finished.clear();

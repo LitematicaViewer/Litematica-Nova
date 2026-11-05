@@ -2,6 +2,7 @@
 param(
     [string] $RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path,
     [switch] $Development,
+    [switch] $StandaloneCandidate,
     [switch] $CheckOnly,
     [switch] $ReuseExisting,
     [switch] $Force,
@@ -59,6 +60,7 @@ try {
     # the same actual source graph/package checks, not a branch-name allowlist.
     $checkArgs = @((Join-Path $PSScriptRoot 'check-public-checkout.mjs'), '--repo', $repo)
     if ($Development) { $checkArgs += '--development' }
+    if ($StandaloneCandidate) { $checkArgs += '--standalone-candidate' }
     if ($CheckOnly) { $checkArgs += '--no-download' }
     if ($ReuseExisting) { $checkArgs += '--reuse-existing' }
     $checkArgs += @('--runtime-source', $RuntimeSource)
@@ -90,11 +92,15 @@ try {
             throw 'A resource map still references the old private backend; use only the public staging and signed ciphertext.'
         }
     }
-    $defaultDataReady = Test-Path -LiteralPath (Join-Path $repo 'pack-in/game-data/default/manifest.json') -PathType Leaf
+    # A prior default/manifest.json may describe the old loose staging layout;
+    # it does not replace the approved source inputs for the current importer.
+    $defaultDataReady = @('client.jar', 'oracle/oracle-manifest.json', 'assets/indexes/34.json').Where({
+        -not (Test-Path -LiteralPath (Join-Path $repo "data/mc26/26.3/$_") -PathType Leaf)
+    }).Count -eq 0
     $runtimeArchive = Join-Path $repo 'pack-in/minecraft-runtime-26.3.zip'
     $extractDefaultSource = -not $defaultDataReady -and (Test-Path -LiteralPath $runtimeArchive -PathType Leaf)
     if (-not $defaultDataReady -and -not $extractDefaultSource -and -not $Development -and -not $community) {
-        throw 'Official bundles require a generated default game-data package or its approved source archive.'
+        throw 'Official bundles require the default game-data source inputs or their approved archive.'
     }
     if ($CheckOnly -or $ReuseExisting) {
         if ($ReuseExisting) {
@@ -126,7 +132,7 @@ try {
     $runtimeStage = Join-Path $repo 'bin/protected'
     # Development uses the verified cache plus an ignored local resource
     # overlay. Never rewrite the release package tracked by the public tree.
-    if (-not $community -and -not $Development -and -not [IO.Path]::GetFullPath($packageRoot).Equals([IO.Path]::GetFullPath($runtimeStage), [StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $community -and -not $localRuntime -and -not $Development -and -not [IO.Path]::GetFullPath($packageRoot).Equals([IO.Path]::GetFullPath($runtimeStage), [StringComparison]::OrdinalIgnoreCase)) {
         New-Item -ItemType Directory -Path $runtimeStage -Force | Out-Null
         $runtimeNames = @('protected-build.json', 'runtime-compatibility.json', $identity.manifestFile, $identity.ciphertextFile)
         foreach ($existing in Get-ChildItem -LiteralPath $runtimeStage -Force) {
@@ -134,7 +140,6 @@ try {
         }
         foreach ($name in $runtimeNames) { Copy-IfChanged (Join-Path $packageRoot $name) (Join-Path $runtimeStage $name) | Out-Null }
     }
-    if ($ReuseExisting) { return }
     if ($extractDefaultSource) {
     $runtimeManifest = Get-Content -LiteralPath (Join-Path $repo 'pack-in/minecraft-runtime-26.3.manifest.json') -Raw | ConvertFrom-Json
     if ($runtimeManifest.schema -ne 'nova.minecraft-runtime-resources.v1' -or $runtimeManifest.java_class_entries -ne 0 -or $runtimeManifest.executable_entries -ne 0) { throw 'The vanilla runtime resource manifest is invalid.' }
@@ -179,6 +184,13 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
     $verifyBlockData | & node --input-type=commonjs - $repo
     if ($LASTEXITCODE -ne 0) { throw 'The required embedded block-data resources are missing or mismatched.' }
     }
+    if ($ReuseExisting) {
+        $dataArgs = @('--core', (Join-Path $stage 'litematica_core.exe'))
+        if ($Development -or $community) { $dataArgs += '--optional' }
+        & node (Join-Path $PSScriptRoot 'prepare-default-game-data.mjs') @dataArgs
+        if ($LASTEXITCODE -ne 0) { throw 'The bundled data staging is incompatible with the reused backend.' }
+        return
+    }
     # Keep public helper and desktop artifacts free of local checkout/cache paths.
     # The private module was separately compiled and protected in its private environment.
     $env:CARGO_ENCODED_RUSTFLAGS = @(
@@ -193,7 +205,7 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
     if ($env:GITHUB_ENV -and -not $localRuntime -and -not $community) {
         @("NOVA_PROTECTED_BUILD_ID=$($identity.buildId)","NOVA_PROTECTED_MANIFEST_PUBLIC_KEY=$($identity.manifestPublicKey)","NOVA_PROTECTED_ENDPOINT=$($identity.endpoint)","NOVA_PROTECTED_RUNTIME_COMPATIBILITY=$($env:NOVA_PROTECTED_RUNTIME_COMPATIBILITY)","NOVA_PUBLIC_HELPER_INPUT_ID=$($checked.helperInputId)","CARGO_ENCODED_RUSTFLAGS=$($env:CARGO_ENCODED_RUSTFLAGS)","CARGO_PROFILE_RELEASE_STRIP=symbols","CARGO_PROFILE_RELEASE_DEBUG=0") | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
     }
-    $coreFeatures = if ($localRuntime) { 'public-beta,development-runtime' } else { 'public-beta' }
+    $coreFeatures = if ($StandaloneCandidate) { 'public-beta,standalone-runtime' } elseif ($localRuntime) { 'public-beta,development-runtime' } else { 'public-beta' }
     & cargo build --locked --release --manifest-path tools/viewer-core/Cargo.toml --target-dir $coreTarget --no-default-features --features $coreFeatures --bin litematica_core --bin litematica_native_viewer --bin stockpile_server
     if ($LASTEXITCODE -ne 0) { throw 'Public Fast/core/stockpile compilation failed.' }
     $dataArgs = @('--core', (Join-Path $coreTarget 'release/litematica_core.exe'))
@@ -202,7 +214,7 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
     if ($LASTEXITCODE -ne 0) { throw 'The default game data package could not be prepared by the common importer.' }
     if (-not $community) {
     $loaderArgs = @('build','--locked','--release','--manifest-path','tools/nova-protected-loader/Cargo.toml','--target-dir',$loaderTarget,'--bins')
-    if ($localRuntime) { $loaderArgs += @('--features','development-runtime') }
+    if ($localRuntime) { $loaderArgs += @('--features', $(if ($StandaloneCandidate) {'standalone-runtime'} else {'development-runtime'})) }
     & cargo @loaderArgs
     if ($LASTEXITCODE -ne 0) { throw 'Public authenticated loader compilation failed.' }
     }
@@ -236,7 +248,7 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
         if ($hash -ne (Get-FileHash -LiteralPath $entry.Value -Algorithm SHA256).Hash.ToLowerInvariant()) { throw "Public helper staging is incomplete: $($entry.Key)" }
         $artifacts[$entry.Key] = [ordered]@{ bytes=(Get-Item -LiteralPath $destination).Length; sha256=$hash }
     }
-    $deployment = [ordered]@{ schema='lba.backend.deployment.v1'; gitSha=$sha; helperSourceSha=$helperSource; helperInputId=$checked.helperInputId; profile='release'; runtimeKind=$(if ($community) {'community'} elseif ($localRuntime) {'development'} else {'production'}); runtimeBuildId=$identity.buildId; targetTriple='x86_64-pc-windows-msvc'; artifacts=$artifacts }
+    $deployment = [ordered]@{ schema='lba.backend.deployment.v1'; gitSha=$sha; helperSourceSha=$helperSource; helperInputId=$checked.helperInputId; profile='release'; runtimeKind=$(if ($StandaloneCandidate) {'standalone'} elseif ($community) {'community'} elseif ($localRuntime) {'development'} else {'production'}); standaloneRuntime=[bool]$StandaloneCandidate; runtimeBuildId=$identity.buildId; targetTriple='x86_64-pc-windows-msvc'; artifacts=$artifacts }
     $manifestWritten = Write-TextIfChanged (Join-Path $stage 'backend-deployment.json') ($deployment | ConvertTo-Json -Depth 5)
     if ($restaged -eq 0 -and -not $manifestWritten) {
         Write-Host "[protected-backend] staging already current; helper timestamps left untouched"
@@ -248,7 +260,7 @@ console.log('Concrete block-data resources ready: embedded input and metadata id
             if (-not (Test-Path -LiteralPath (Join-Path $repo 'pack-in/game-icons/block.zip') -PathType Leaf)) { throw 'Missing source archive for generated block icons.' }
             continue
         }
-        if ($Development -and $entry.Name -eq '../../bin/protected') { continue }
+        if (($Development -or $StandaloneCandidate) -and $entry.Name -eq '../../bin/protected') { continue }
         $source = Resolve-ProductResourceSource $tauriPath $entry.Name $entry.Value $stockpileSource
         if (-not (Test-Path -LiteralPath $source)) { throw "Missing required product resource: $($entry.Name)" }
     }

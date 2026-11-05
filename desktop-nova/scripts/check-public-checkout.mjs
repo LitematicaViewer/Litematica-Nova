@@ -24,6 +24,11 @@ const fail = message => { throw new Error(message); };
 const relative = (repo, filename) => path.relative(repo, filename).split(path.sep).join('/');
 const contractPath = fileURLToPath(new URL('../../tools/nova-protection/runtime-contract.json', import.meta.url));
 export function runtimeContract() { return json(contractPath, 131072); }
+export function serviceUrl(route, contract = runtimeContract()) {
+  const base = new URL(contract.service_base_url);
+  if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash || !route.split('/').every(part => /^[a-zA-Z0-9._-]+$/.test(part) && part !== '.' && part !== '..')) fail('Invalid release service URL.');
+  return base.href.replace(/\/+$/, '') + '/' + route;
+}
 function plainFile(filename, limit) {
   const stat = lstatSync(filename);
   if (!stat.isFile() || stat.isSymbolicLink() || !stat.size || stat.size > limit) fail(`Invalid or oversized build input: ${path.basename(filename)}`);
@@ -94,6 +99,7 @@ export async function validatePackage(root, expectedModuleId = 'nova_protected_m
   if (Object.keys(config).some(key => !fields.includes(key))) fail('Unexpected runtime build metadata field.');
   if (config.schema !== 'nova.protected-build.v1' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(config.buildId)) fail('Invalid runtime build identity.');
   if (config.moduleId !== expectedModuleId || config.manifestFile !== config.moduleId + '.manifest.json' || config.ciphertextFile !== config.moduleId + '.enc') fail('Invalid runtime package paths.');
+  if (release && config.endpoint !== serviceUrl('nova-core', contract)) fail('The signed runtime endpoint differs from the release service configuration. Reissue the signed compatibility record.');
   const endpoint = new URL(config.endpoint);
   if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) fail('The runtime endpoint must be ordinary HTTPS.');
   const publicKey = Buffer.from(config.manifestPublicKey, 'base64');
@@ -137,7 +143,7 @@ export function runtimeSource(value = process.env.NOVA_RUNTIME_SOURCE || 'commun
   return value;
 }
 
-export async function validateDevelopmentPackage(directory, expectedModuleId, { target, contract = runtimeContract() } = {}) {
+export async function validateDevelopmentPackage(directory, expectedModuleId, { target, standalone = false, contract = runtimeContract() } = {}) {
   const descriptor = json(path.join(directory, 'development-runtime.json'), 131072);
   const fields = ['schema', 'runtime_abi', 'runtime_build_id', 'target', 'module_id', 'module_sha256', 'capabilities'];
   if (Object.keys(descriptor).length !== fields.length || Object.keys(descriptor).some(name => !fields.includes(name)) || descriptor.schema !== 'nova.development-runtime.v1') fail('Invalid local Development Runtime descriptor.');
@@ -147,7 +153,8 @@ export async function validateDevelopmentPackage(directory, expectedModuleId, { 
   if (JSON.stringify(readdirSync(directory).sort()) !== JSON.stringify(expected)) fail('The local Development Runtime directory must contain only its descriptor and actual native module.');
   const modulePath = path.join(directory, expectedModuleId);
   if (plainFile(modulePath, 512 * 1024 * 1024).size < 64 || await sha256(modulePath) !== descriptor.module_sha256) fail('The actual local Development Runtime module is missing or differs from its content identity.');
-  return { schema: descriptor.schema, runtimeKind: 'development', buildId: descriptor.runtime_build_id, moduleId: descriptor.module_id, runtimeAbi: descriptor.runtime_abi, target: descriptor.target, runtimeCapabilities: descriptor.capabilities, developmentDescriptor: descriptor, modulePath };
+  if (standalone && (!descriptor.runtime_build_id.startsWith('standalone-') || !descriptor.capabilities.includes('standalone-light'))) fail('The local candidate requires the real standalone-light runtime, not a remote Development Runtime.');
+  return { schema: descriptor.schema, runtimeKind: standalone ? 'standalone' : 'development', buildId: descriptor.runtime_build_id, moduleId: descriptor.module_id, runtimeAbi: descriptor.runtime_abi, target: descriptor.target, runtimeCapabilities: descriptor.capabilities, developmentDescriptor: descriptor, modulePath };
 }
 
 // This identity deliberately excludes AppVersion, UI files, Git HEAD and the
@@ -157,7 +164,7 @@ export async function validateDevelopmentPackage(directory, expectedModuleId, { 
 export async function helperInputIdentity(repo, identity, target = nativeTarget()) {
   const roots = ['tools/viewer-core', 'tools/nova-protected-loader', 'tools/nova-protection', 'third_party/wgpu-hal-patched', '.cargo', 'rust-toolchain.toml', 'rust-toolchain', 'desktop-nova/src-tauri/icons/icon.png'];
   const names = [...new Set(run(repo, 'git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...roots]).split('\0').filter(Boolean))].filter(name => !/(?:^|\/)(?:tests|examples|scripts|target)\//.test(name) && /\.(?:rs|toml|lock|json|js|css|tsv|wgsl|glsl|vert|frag|h|c|cpp|rc|ico|png|z)$/.test(name)).sort();
-  const digest = createHash('sha256').update(JSON.stringify({ schema: 'nova.public-helper-input.v1', target, profile: 'release', features: identity.developmentDescriptor ? ['public-beta', 'development-runtime'] : ['public-beta'], runtimeBuildId: identity.buildId, manifestPublicKey: identity.manifestPublicKey, endpoint: identity.endpoint, compatibility: identity.signedCompatibility, development: identity.developmentDescriptor, developmentModulePath: identity.modulePath, compiler: run(repo, 'rustc', ['-vV']) }));
+  const digest = createHash('sha256').update(JSON.stringify({ schema: 'nova.public-helper-input.v1', target, profile: 'release', features: identity.runtimeKind === 'standalone' ? ['public-beta', 'standalone-runtime'] : identity.developmentDescriptor ? ['public-beta', 'development-runtime'] : ['public-beta'], runtimeBuildId: identity.buildId, manifestPublicKey: identity.manifestPublicKey, endpoint: identity.endpoint, compatibility: identity.signedCompatibility, development: identity.developmentDescriptor, developmentModulePath: identity.modulePath, compiler: run(repo, 'rustc', ['-vV']) }));
   for (const name of names) {
     const filename = path.join(repo, name);
     plainFile(filename, 512 * 1024 * 1024);
@@ -185,7 +192,7 @@ export async function validateStaging(stage, { sha, requireCurrentSource = false
   return deployment;
 }
 
-export async function checkCheckout(repo, { development = false, reuseExisting = false, noDownload = false, runtimePackageDir = process.env.NOVA_RUNTIME_PACKAGE_DIR, source = runtimeSource(), privateSourceDir = process.env.NOVA_PRIVATE_SOURCE_DIR } = {}) {
+export async function checkCheckout(repo, { development = false, standalone = false, reuseExisting = false, noDownload = false, runtimePackageDir = process.env.NOVA_RUNTIME_PACKAGE_DIR, source = runtimeSource(), privateSourceDir = process.env.NOVA_PRIVATE_SOURCE_DIR } = {}) {
   repo = realpathSync(repo);
   const branch = run(repo, 'git', ['branch', '--show-current']);
   const sha = run(repo, 'git', ['rev-parse', '--verify', 'HEAD']);
@@ -194,13 +201,14 @@ export async function checkCheckout(repo, { development = false, reuseExisting =
   validateSource(repo);
   const target = nativeTarget();
   source = runtimeSource(source);
-  if (!development && source === 'local') fail('Local Development Runtime components are forbidden in release builds.');
+  if (standalone && (source !== 'local' || !runtimePackageDir)) fail('Standalone candidates require an explicit local runtime package.');
+  if (!development && !standalone && source === 'local') fail('Local Development Runtime components are forbidden in release builds.');
   const directory = source === 'community' ? null : source === 'local'
-    ? await (await import('./fetch-ci-runtime.mjs')).acquireLocalDevelopmentRuntime(repo, target, { privateSourceDir, checkOnly: noDownload, reuseExisting })
+    ? standalone ? runtimePackageDir : await (await import('./fetch-ci-runtime.mjs')).acquireLocalDevelopmentRuntime(repo, target, { privateSourceDir, checkOnly: noDownload, reuseExisting })
     : development && !noDownload
     ? await (await import('./fetch-ci-runtime.mjs')).ensureDevelopmentRuntime(repo, target, runtimePackageDir)
     : runtimePackageDir || path.join(repo, development ? 'bin/viewer-backend/protected' : target.includes('windows') ? 'bin/protected' : `bin/runtime/${target}`);
-  const identity = source === 'community' ? communityIdentity(target) : source === 'local' ? await validateDevelopmentPackage(directory, moduleForTarget(target), { target }) : await validatePackage(directory, moduleForTarget(target), { target, release: !development });
+  const identity = source === 'community' ? communityIdentity(target) : source === 'local' ? await validateDevelopmentPackage(directory, moduleForTarget(target), { target, standalone }) : await validatePackage(directory, moduleForTarget(target), { target, release: !development });
   const helperInputId = await helperInputIdentity(repo, identity, target);
   let deployment = null;
   if (reuseExisting || existsSync(path.join(repo, 'bin/public-beta/backend-deployment.json'))) {
@@ -212,7 +220,7 @@ export async function checkCheckout(repo, { development = false, reuseExisting =
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2), index = args.indexOf('--repo'), take = name => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
-  checkCheckout(index >= 0 ? args[index + 1] : process.cwd(), { development: args.includes('--development'), reuseExisting: args.includes('--reuse-existing'), noDownload: args.includes('--no-download'), source: take('--runtime-source') || runtimeSource(), privateSourceDir: take('--private-source') || process.env.NOVA_PRIVATE_SOURCE_DIR })
+  checkCheckout(index >= 0 ? args[index + 1] : process.cwd(), { development: args.includes('--development'), standalone: args.includes('--standalone-candidate'), reuseExisting: args.includes('--reuse-existing'), noDownload: args.includes('--no-download'), source: take('--runtime-source') || runtimeSource(), privateSourceDir: take('--private-source') || process.env.NOVA_PRIVATE_SOURCE_DIR })
     .then(result => console.log(JSON.stringify(result)))
     .catch(error => { console.error(error.message); process.exitCode = error.code === 'NOVA_RUNTIME_DOWNLOAD_AUTH_REQUIRED' ? 77 : 1; });
 }

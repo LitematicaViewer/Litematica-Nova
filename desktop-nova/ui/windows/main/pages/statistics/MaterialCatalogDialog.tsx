@@ -80,7 +80,16 @@ export function MaterialCatalogDialog({ currentFile }: { currentFile: string }) 
   const [error, setError] = useState("");
   const [sourceQuery, setSourceQuery] = useState<{ region?: string; offset?: number; limit?: number }>({});
   const searchRef = useRef<HTMLInputElement>(null);
+  const backRef = useRef<HTMLButtonElement>(null);
   const queryGeneration = useRef(0);
+  const [queryRetry, setQueryRetry] = useState(0);
+  const [detailRetry, setDetailRetry] = useState(0);
+
+  useEffect(() => {
+    // The compact layout hides the selected list button. Keep keyboard focus in
+    // the visible detail pane so Escape and the return action remain reachable.
+    if (detailOpen && selected && backRef.current?.getClientRects().length) backRef.current.focus();
+  }, [detailOpen, selected?.id]);
 
   useEffect(() => { setSelected(null); setDetail(null); setPage(null); setOffset(0); setDetailOpen(false); }, [currentFile]);
   useEffect(() => {
@@ -96,7 +105,7 @@ export function MaterialCatalogDialog({ currentFile }: { currentFile: string }) 
         .finally(() => { if (generation === queryGeneration.current) setBusy(false); });
     }, 150);
     return () => { queryGeneration.current += 1; window.clearTimeout(timer); void getDataOperationStatus(operationId, true).catch(() => undefined); };
-  }, [currentFile, search, category, sort, individual, includeContainers, offset, locale, revision]);
+  }, [currentFile, search, category, sort, individual, includeContainers, offset, locale, revision, queryRetry]);
   useEffect(() => {
     let active = true;
     setDetail(null); setDetailError(""); setDetailBusy(false);
@@ -109,12 +118,16 @@ export function MaterialCatalogDialog({ currentFile }: { currentFile: string }) 
       .catch(failure => { if (active) setDetailError(String(failure)); })
       .finally(() => { if (active) setDetailBusy(false); });
     return () => { active = false; void getDataOperationStatus(operationId, true).catch(() => undefined); };
-  }, [currentFile, selected?.id, selectedRecipe, includeContainers, locale, revision, sourceQuery, page?.sourceRevision]);
+  }, [currentFile, selected?.id, selectedRecipe, includeContainers, locale, revision, sourceQuery, page?.sourceRevision, detailRetry]);
   const selectMaterial = (item: MaterialQueryRow) => {
+    if (selected?.id === item.id && detailOpen) { setSelected(null); setDetailOpen(false); return; }
     setSelected(item); setDetailOpen(true); setSelectedRecipe(""); setSourceQuery({}); setRecipeOpen(false);
   };
   const changeFilter = (change: () => void) => { setOffset(0); change(); };
-  return <section className="material-catalog-content">
+  return <section className="material-catalog-content" onKeyDown={event => {
+    if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing || (event.target as Element).closest('[role="listbox"], [role="menu"]') || !selected) return;
+    setSelected(null); setDetailOpen(false); searchRef.current?.focus(); event.preventDefault(); event.stopPropagation();
+  }}>
     <header className="material-catalog-header"><h2 className="material-catalog-title">{t("statistics.catalogTitle")}</h2>
       <span className="material-catalog-source" title={displayFilePath(currentFile)}>{displayFilePath(currentFile).split(/[\\/]/).pop()}</span></header>
     <div className="material-catalog-toolbar">
@@ -130,13 +143,12 @@ export function MaterialCatalogDialog({ currentFile }: { currentFile: string }) 
       <label className="beta-material-check"><Checkbox checked={includeContainers} onCheckedChange={value => changeFilter(() => setIncludeContainers(value === true))} />{t("statistics.includeContainers")}</label>
       {page && <span className="material-catalog-summary">{t("statistics.materialKinds", { visible: page.totalRows, total: page.totalMaterials })}</span>}
     </div>
-    <p className="material-catalog-summary material-catalog-status" role="status">{t("statistics.catalogReadOnly")}</p>
-    {error && <p className="material-catalog-error" role="alert">{error}</p>}
+    <div className="material-catalog-summary material-catalog-status" role={error ? "alert" : "status"}>{error ? <><span className="material-catalog-error">{error}</span><Button size="sm" variant="ghost" onClick={() => setQueryRetry(value => value + 1)}>{t("stockpile.retry")}</Button></> : t("statistics.catalogReadOnly")}</div>
     <div className="material-catalog-workspace" data-detail-open={detailOpen && !!selected}>
       <CatalogRows page={page} selectedId={selected?.id || null} busy={busy} onSelect={selectMaterial} />
       <aside className="material-catalog-detail" aria-label={t("stockpile.materialDetails")}>
         {selected ? <>
-          <Button themeSlot="material-catalog-back" variant="ghost" size="sm" className="material-catalog-back" onClick={() => { setDetailOpen(false); searchRef.current?.focus(); }}><ArrowLeft size={15} />{t("statistics.catalogBack")}</Button>
+          <Button ref={backRef} themeSlot="material-catalog-back" variant="ghost" size="sm" className="material-catalog-back" onClick={() => { setDetailOpen(false); searchRef.current?.focus(); }}><ArrowLeft size={15} />{t("statistics.catalogBack")}</Button>
           <div className="material-catalog-detail-title"><BlockIcon blockId={selected.iconHint} lookupMode="item_first" /><h3>{detail?.material.display_name || selected.name}</h3></div>
           <dl className="material-catalog-detail-facts">
             <div><dt>{t("stockpile.required")}</dt><dd>{selected.quantityText}</dd></div>
@@ -148,7 +160,7 @@ export function MaterialCatalogDialog({ currentFile }: { currentFile: string }) 
             <div><dt>{t("statistics.catalogItemId")}</dt><dd>{selected.itemId}</dd></div><div><dt>{t("statistics.catalogIdentity")}</dt><dd>{selected.id}</dd></div>
           </dl></details>
           {detailBusy && <p role="status">{t("statistics.catalogLoadingDetail")}</p>}
-          {detailError && <p className="material-catalog-error" role="alert">{t("statistics.catalogDetailFailed", { error: detailError })}</p>}
+          {detailError && <div className="material-catalog-error" role="alert">{t("statistics.catalogDetailFailed", { error: detailError })}<Button size="sm" variant="ghost" onClick={() => setDetailRetry(value => value + 1)}>{t("stockpile.retry")}</Button></div>}
           <details className="material-catalog-detail-group" open={recipeOpen} onToggle={event => setRecipeOpen(event.currentTarget.open)}>
             <summary>{t("stockpile.recipeAndMaterials")}</summary>
             {detail && <>

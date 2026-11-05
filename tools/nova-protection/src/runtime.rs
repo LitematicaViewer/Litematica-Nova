@@ -20,6 +20,7 @@ pub struct ApprovedRuntime {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeContract {
+    pub service_base_url: String,
     pub schema: String,
     pub runtime_abi: u32,
     pub required_capabilities: Vec<String>,

@@ -1,6 +1,10 @@
 import { invoke } from "./tauri";
 import { readEmbeddedPreview } from "./applicationOperations";
 
+export function libraryContentCommand<T>(request: Record<string, unknown>): Promise<T> {
+  return invoke<T>("library_content_command", { request });
+}
+
 export interface LogExportResult {
   path: string;
   sessionIds: string[];
@@ -83,8 +87,10 @@ export function writeTextFileAbsolute(path: string, content: string): Promise<vo
   return invoke("write_text_file_absolute", { path, content });
 }
 
-export function readAppDataFile(relativePath: string): Promise<string> {
-  return invoke("read_user_config_file", { relativePath });
+export function readAppDataFile(relativePath: string): Promise<string>;
+export function readAppDataFile(relativePath: string, optional: true): Promise<string | null>;
+export function readAppDataFile(relativePath: string, optional?: true): Promise<string | null> {
+  return invoke("read_user_config_file", optional ? { relativePath, optional } : { relativePath });
 }
 
 export function writeAppDataFile(relativePath: string, content: string): Promise<void> {
@@ -444,3 +450,44 @@ export const readGameDataIcon = (id: string): Promise<string> => invoke("read_ga
 export const importGameDataJar = (jarPath: string, assetsDir?: string): Promise<GameDataContext> => invoke("game_data_import", { jarPath, assetsDir });
 export const selectGameData = (id: string): Promise<GameDataContext> => invoke("game_data_select", { id });
 export const restoreDefaultGameData = (): Promise<GameDataContext> => invoke("game_data_default");
+
+export interface ImportedModInfo {
+  id: string; name: string; version: string; loader: string;
+  minecraft: string[]; dependencies: Record<string, string>;
+}
+export interface ImportedModEntry {
+  id: string; mods: ImportedModInfo[]; jarSha256: string; enabled: boolean; priority: number;
+  resourceCount: number; registeredBlocks: string[];
+  unresolved: { id: string; reason: string }[];
+  status: "disabled" | "registry_verified" | "resources_only";
+}
+export interface ModResourceSnapshot {
+  context: GameDataContext; mods: ImportedModEntry[]; snapshotValid: boolean; snapshotFormat: string;
+}
+export const gameDataMods = (action: "list" | "import" | "snapshot" | "enable" | "remove", options: {path?: string; id?: string; enabled?: boolean} = {}): Promise<ModResourceSnapshot> => invoke("game_data_mods", {action, ...options});
+export interface CreativeInventoryItem {
+  id: string; blockState: string; state: {id: string; properties: Record<string, string>};
+  itemId: string; name: string; sourceName: string; category: string;
+}
+export interface CreativeInventoryQuery {
+  version?: string; contentId?: string; language?: string; query?: string; category?: string;
+  offset?: number; limit?: number;
+  extraCollections?: {id: string; name: string; values: string[]}[];
+}
+export interface CreativeInventoryResult {
+  contentId: string; version: string; offset: number; total: number;
+  items: CreativeInventoryItem[]; categories: {id: string; label: string; count: number}[];
+}
+export const queryCreativeInventory = (input: CreativeInventoryQuery): Promise<CreativeInventoryResult> => invoke("game_data_creative_inventory", {input});
+export interface CreativeIdentityView {
+  version: string; contentId: string; values: string[]; itemIds: Record<string, string>;
+}
+export const readCreativeIdentities = (identityValues: string[], version?: string, contentId?: string): Promise<CreativeIdentityView> =>
+  invoke("game_data_creative_inventory", {input: {identityValues, version, contentId}});
+
+export interface CreativeInventoryCatalog {
+  contentId: string; version: string; items: CreativeInventoryItem[];
+  categories: {id: string; label: string; indices: number[]}[];
+}
+export const readCreativeInventoryCatalog = (input: Pick<CreativeInventoryQuery, "version" | "contentId" | "language" | "extraCollections">): Promise<CreativeInventoryCatalog> =>
+  invoke("game_data_creative_inventory", {input: {...input, catalog: true}});

@@ -5,6 +5,7 @@ import ReactDOM from "react-dom/client";
 import { initI18n, loadDatabases, getUserConfig, displayPathText } from "../../../src/business/facade";
 import "../../styles/base.css";
 import "../../styles/enumerator.css";
+import "../standalone-layout.css";
 import { initializeWindowTheme } from "../../shell/themeRuntime";
 import { EnumeratorWindow } from ".";
 

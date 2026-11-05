@@ -1122,7 +1122,7 @@ impl AtlasAnimationContract {
     ) -> Result<AtlasAnimationUpdatePlan, AtlasAnimationUpdatePlanValidationError> {
         let mut seen_sprites = BTreeSet::new();
         for update in &updates {
-            if !seen_sprites.insert(update.sprite_id.clone()) {
+            if !seen_sprites.insert(&update.sprite_id) {
                 return Err(AtlasAnimationUpdatePlanValidationError::DuplicateSprite {
                     sprite: update.sprite_id.clone(),
                 });

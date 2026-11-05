@@ -5,9 +5,11 @@
 #include <msi.h>
 #include <tlhelp32.h>
 #include <psapi.h>
+#include <wincrypt.h>
 #include <algorithm>
 #include <array>
 #include <set>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -35,9 +37,53 @@ std::wstring read(HKEY key, const wchar_t* name) {
     result.resize(wcsnlen_s(result.c_str(), result.size()));
     return result;
 }
+bool driveRootAt(std::wstring_view path, size_t at) {
+    if (path.size() < at + 3) return false;
+    const auto drive = path[at];
+    return ((drive >= L'A' && drive <= L'Z') || (drive >= L'a' && drive <= L'z')) &&
+        path[at + 1] == L':' && path[at + 2] == L'\\';
+}
+// A normal Win32 path trims dots/spaces and resolves device names. Do not
+// turn a verbatim component into a different file in the editable directory page.
+bool ordinaryComponent(std::wstring_view component) {
+    if (component.empty() || component.size() > 255 || component.back() == L'.' || component.back() == L' ' ||
+        component.find_first_of(L"<>:\"/|?*") != component.npos ||
+        std::any_of(component.begin(), component.end(), [](wchar_t c) { return c < L' '; })) return false;
+    auto stem = component.substr(0, component.find(L'.'));
+    while (!stem.empty() && stem.back() == L' ') stem.remove_suffix(1);
+    const auto name = lower(std::wstring(stem));
+    if (name == L"con" || name == L"prn" || name == L"aux" || name == L"nul" ||
+        name == L"conin$" || name == L"conout$") return false;
+    return !(name.size() == 4 && (name.compare(0, 3, L"com") == 0 || name.compare(0, 3, L"lpt") == 0) &&
+        std::wstring_view(L"123456789\u00b9\u00b2\u00b3").find(name[3]) != std::wstring_view::npos);
+}
+std::wstring ordinaryPath(const std::wstring& path) {
+    if (path.compare(0, 4, L"\\\\?\\") != 0) return path;
+    const bool unc = _wcsnicmp(path.c_str() + 4, L"UNC\\", 4) == 0;
+    if (!unc && !driveRootAt(path, 4)) return path; // Volume GUIDs and other device namespaces.
+    const std::wstring_view view(path);
+    size_t count = 0;
+    for (size_t at = unc ? 8 : 7; at < view.size(); ++count) {
+        const auto end = view.find(L'\\', at);
+        if (!ordinaryComponent(view.substr(at, end - at))) return path;
+        at = end == view.npos ? view.size() : end + 1;
+    }
+    if (unc && count < 2) return path; // Both server and share are required.
+    return unc ? L"\\\\" + path.substr(8) : path.substr(4);
+}
+bool sameInstallPath(const std::wstring& a, const std::wstring& b) {
+    return equal(a, b) || equal(ordinaryPath(a), ordinaryPath(b));
+}
+// Short, losslessly representable paths are shared by the directory page and
+// Windows Shell. Keep verbatim-only names and genuine long paths intact.
+std::wstring shellPath(const std::wstring& path) {
+    auto ordinary = ordinaryPath(path);
+    return ordinary.size() < MAX_PATH ? ordinary : path;
+}
 std::wstring normalize(std::wstring path) {
     if (path.size() > 1 && path.front() == L'"' && path.back() == L'"') path = path.substr(1, path.size() - 2);
-    while (path.size() > 3 && (path.back() == L'\\' || path.back() == L'/')) path.pop_back();
+    const size_t root = path.compare(0, 4, L"\\\\?\\") == 0 && driveRootAt(path, 4) ? 7 : 3;
+    while (path.size() > root && (path.back() == L'\\' || path.back() == L'/')) path.pop_back();
     return path;
 }
 bool exists(const std::wstring& path) { const auto a = GetFileAttributesW(path.c_str()); return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY); }
@@ -71,7 +117,6 @@ struct Record {
     bool stable = false;
 };
 std::vector<Record> migrationRecords;
-DWORD shellError = ERROR_SUCCESS;
 std::set<std::wstring> relatedMsi() {
     std::set<std::wstring> related;
     wchar_t code[39]{};
@@ -112,7 +157,7 @@ std::vector<Record> records() {
             // A known ARP record without either payload is a stale record, not
             // permission to execute arbitrary UninstallString command lines.
             const bool noPayload = record.binary.empty() && !exists(record.uninstaller);
-            const bool trustedUninstaller = equal(record.uninstaller, record.directory + L"\\uninstall.exe") && knownName(versionName(record.uninstaller));
+            const bool trustedUninstaller = sameInstallPath(record.uninstaller, record.directory + L"\\uninstall.exe") && knownName(versionName(record.uninstaller));
             if (record.stable || !record.product.empty() || noPayload || (!record.binary.empty() && trustedUninstaller)) all.push_back(std::move(record));
         }
     }
@@ -132,12 +177,13 @@ std::wstring processUsing(const std::vector<Record>& entries, const std::wstring
         bool relevant = legacy; // Historical uninstallers terminate by name; never invoke one while any Nova is running.
         if (handle && QueryFullProcessImageNameW(handle, 0, buffer, &length)) {
             const std::wstring file(buffer, length);
-            relevant = relevant || equal(file, target + L"\\Litematica-Nova.exe");
-            for (const auto& r : entries) relevant = relevant || (!r.binary.empty() && equal(file, r.binary));
+            const bool destinationProcess = sameInstallPath(file, target + L"\\Litematica-Nova.exe");
+            relevant = relevant || destinationProcess;
+            for (const auto& r : entries) relevant = relevant || (!r.binary.empty() && sameInstallPath(file, r.binary));
             // The updater starts Setup before its own process exits. Wait only
             // for that same installation's Host to release files; never kill
             // by name and never wait for an unrelated running Nova instance.
-            if (relevant && updateHandoff && equal(file, target + L"\\Litematica-Nova.exe")) {
+            if (updateHandoff && destinationProcess) {
                 const auto now = GetTickCount64();
                 if (WaitForSingleObject(handle, static_cast<DWORD>(now < handoffDeadline ? handoffDeadline - now : 0)) == WAIT_OBJECT_0) {
                     CloseHandle(handle);
@@ -177,36 +223,61 @@ DWORD erase(const Record& r) {
     const auto result = RegDeleteTreeW(root.value, r.key.substr(wcslen(uninstallRoot) + 1).c_str());
     return result == ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : result;
 }
-void write(HKEY hive, const std::wstring& path, const wchar_t* name, const std::wstring& value) {
+void write(HKEY hive, const std::wstring& path, const wchar_t* name, const std::wstring& value, std::wstring& error) {
+    if (!error.empty()) return;
     HKEY key = nullptr;
-    const auto created = RegCreateKeyExW(hive, path.c_str(), 0, nullptr, 0, KEY_WRITE | KEY_WOW64_64KEY, nullptr, &key, nullptr);
-    if (created != ERROR_SUCCESS) { shellError = created; return; }
-    const auto result = RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()), static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
-    if (result != ERROR_SUCCESS) shellError = result;
-    RegCloseKey(key);
+    auto status = RegCreateKeyExW(hive, path.c_str(), 0, nullptr, 0, KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr, &key, nullptr);
+    if (status == ERROR_SUCCESS) {
+        status = RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()), static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
+        RegCloseKey(key);
+    }
+    if (status != ERROR_SUCCESS) error = std::wstring(novaText(L"文件关联登记失败：", L"Could not register file integration: ")) +
+        (hive == HKEY_LOCAL_MACHINE ? L"HKLM\\" : L"HKCU\\") + path + L" [" + (*name ? name : L"@") + L"] (" + std::to_wstring(status) + L")";
 }
 bool novaCommand(const std::wstring& command, const std::vector<Record>& old) {
+    // CommandLineToArgvW(L"") returns the current program (our installer).
+    if (command.find_first_not_of(L" \t\r\n") == std::wstring::npos) return false;
     const auto file = firstArgument(command);
     if (knownName(versionName(file))) return true;
-    for (const auto& entry : old) if ((!entry.binary.empty() && equal(file, entry.binary)) ||
-            (!entry.directory.empty() && equal(file, entry.directory + L"\\Litematica-Nova.exe"))) return true;
+    for (const auto& entry : old) if ((!entry.binary.empty() && sameInstallPath(file, entry.binary)) ||
+            (!entry.directory.empty() && sameInstallPath(file, entry.directory + L"\\Litematica-Nova.exe"))) return true;
     return false;
 }
-void repairShortcut(const std::wstring& link, const std::wstring& target, const std::vector<Record>& old) {
+std::wstring shortcutError(const std::wstring& link, const wchar_t* operation, HRESULT hr) {
+    wchar_t code[12]{};
+    swprintf_s(code, L"0x%08lX", static_cast<unsigned long>(hr));
+    return std::wstring(novaText(L"旧快捷方式未更新：", L"Previous shortcut not updated: ")) + link + L" (" + operation + L", " + code + L")";
+}
+std::wstring repairShortcut(const std::wstring& link, const std::wstring& target, const std::vector<Record>& old) {
+    if (!exists(link)) return {};
     IShellLinkW* shell = nullptr;
-    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&shell)))) return;
+    HRESULT hr = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&shell));
+    if (FAILED(hr)) return shortcutError(link, L"CoCreateInstance", hr);
     IPersistFile* file = nullptr;
-    if (SUCCEEDED(shell->QueryInterface(IID_PPV_ARGS(&file)))) {
-        if (SUCCEEDED(file->Load(link.c_str(), STGM_READWRITE))) {
+    const wchar_t* operation = L"QueryInterface";
+    hr = shell->QueryInterface(IID_PPV_ARGS(&file));
+    if (SUCCEEDED(hr)) {
+        operation = L"Load";
+        hr = file->Load(link.c_str(), STGM_READ | STGM_SHARE_DENY_NONE);
+        if (SUCCEEDED(hr)) {
             wchar_t path[32768]{};
-            if (SUCCEEDED(shell->GetPath(path, 32768, nullptr, SLGP_RAWPATH)) && novaCommand(L"\"" + std::wstring(path) + L"\"", old)) {
-                if (FAILED(shell->SetPath((target + L"\\Litematica-Nova.exe").c_str())) || FAILED(shell->SetWorkingDirectory(target.c_str())) ||
-                    FAILED(shell->SetIconLocation((target + L"\\Litematica-Nova.exe").c_str(), 0)) || FAILED(file->Save(link.c_str(), TRUE))) shellError = ERROR_WRITE_FAULT;
+            const auto directory = shellPath(target);
+            const auto executable = directory + L"\\Litematica-Nova.exe";
+            operation = L"GetPath";
+            hr = shell->GetPath(path, 32768, nullptr, SLGP_RAWPATH);
+            // NSIS already created the canonical link. Do not resave it, or
+            // overwrite arguments, a custom icon or a user working directory.
+            if (hr == S_OK && *path && !sameInstallPath(path, executable) && novaCommand(L"\"" + std::wstring(path) + L"\"", old)) {
+                operation = L"SetPath"; hr = shell->SetPath(executable.c_str());
+                if (SUCCEEDED(hr)) { operation = L"SetWorkingDirectory"; hr = shell->SetWorkingDirectory(directory.c_str()); }
+                if (SUCCEEDED(hr)) { operation = L"SetIconLocation"; hr = shell->SetIconLocation(executable.c_str(), 0); }
+                if (SUCCEEDED(hr)) { operation = L"Save"; hr = file->Save(nullptr, TRUE); }
             }
         }
         file->Release();
     }
     shell->Release();
+    return FAILED(hr) ? shortcutError(link, operation, hr) : std::wstring{};
 }
 }
 
@@ -217,6 +288,108 @@ NSIS_ENTRY(FindInstallLocation) {
     // location, but migrate a historical per-user package to Program Files.
     for (const auto& record : records()) if (record.root == HKEY_LOCAL_MACHINE && !record.directory.empty() && (!record.binary.empty() || record.stable)) { stack.push(record.directory); return; }
     stack.push(L"");
+}
+NSIS_ENTRY(DirectoryDisplayPath) {
+    (void)parent;
+    Stack stack{stringSize, stackTop};
+    stack.push(shellPath(stack.pop()));
+}
+
+namespace {
+// Keep all ancestors open while resolving the next component. No delete sharing:
+// the checked directory cannot be renamed out from underneath the elevated installer.
+struct PinnedFiles {
+    std::vector<HANDLE> handles;
+    ~PinnedFiles() { for (auto it = handles.rbegin(); it != handles.rend(); ++it) CloseHandle(*it); }
+    HANDLE open(const std::wstring& path, bool directory) {
+        const DWORD access = directory ? FILE_READ_ATTRIBUTES : GENERIC_READ | DELETE;
+        const DWORD flags = FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS | (directory ? 0 : FILE_FLAG_SEQUENTIAL_SCAN);
+        HANDLE file = CreateFileW(path.c_str(), access, FILE_SHARE_READ,
+                                  nullptr, OPEN_EXISTING, flags, nullptr);
+        if (file != INVALID_HANDLE_VALUE) handles.push_back(file);
+        return file;
+    }
+};
+const wchar_t* pruneOpenFailure() {
+    const auto error = GetLastError();
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND || error == ERROR_DIRECTORY
+        ? L"skipped" : L"busy";
+}
+struct FileDigest {
+    HCRYPTPROV provider{};
+    HCRYPTHASH hash{};
+    ~FileDigest() { if (hash) CryptDestroyHash(hash); if (provider) CryptReleaseContext(provider, 0); }
+    bool matches(HANDLE file, const std::wstring& expected, bool& match) {
+        if (!CryptAcquireContextW(&provider, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT | CRYPT_SILENT) ||
+            !CryptCreateHash(provider, CALG_SHA_256, 0, 0, &hash)) return false;
+        std::array<BYTE, 64 * 1024> buffer;
+        DWORD read = 0;
+        do {
+            if (!ReadFile(file, buffer.data(), DWORD(buffer.size()), &read, nullptr) ||
+                (read && !CryptHashData(hash, buffer.data(), read, 0))) return false;
+        } while (read);
+        std::array<BYTE, 32> bytes;
+        DWORD size = DWORD(bytes.size());
+        if (!CryptGetHashParam(hash, HP_HASHVAL, bytes.data(), &size, 0) || size != bytes.size()) return false;
+        constexpr wchar_t digits[] = L"0123456789abcdef";
+        match = true;
+        for (size_t i = 0; i < bytes.size(); ++i)
+            match &= digits[bytes[i] >> 4] == expected[i*2] && digits[bytes[i] & 15] == expected[i*2+1];
+        return true;
+    }
+};
+const wchar_t* pruneRetiredFile(const std::wstring& install, const std::wstring& relative,
+                               const std::wstring& sizeText, const std::wstring& digest) {
+    const auto root = ordinaryPath(install);
+    if (!driveRootAt(root, 0) || root.size() <= 3 || relative.empty() || relative.front() == L'\\' ||
+        relative.back() == L'\\' || sizeText.empty() || digest.size() != 64 ||
+        digest.find_first_not_of(L"0123456789abcdef") != digest.npos) return L"skipped";
+    ULONGLONG expected = 0;
+    for (auto c : sizeText) {
+        if (c < L'0' || c > L'9' || expected > (MAXULONGLONG - (c-L'0'))/10) return L"skipped";
+        expected = expected * 10 + (c-L'0');
+    }
+    std::wstring path = L"\\\\?\\" + root.substr(0, 3);
+    auto suffix = root.substr(3);
+    if (suffix.back() != L'\\') suffix += L'\\';
+    suffix += relative;
+    PinnedFiles pins;
+    size_t pos = 0;
+    for (;;) {
+        HANDLE dir = pins.open(path, true);
+        if (dir == INVALID_HANDLE_VALUE) return pruneOpenFailure();
+        BY_HANDLE_FILE_INFORMATION info{};
+        if (!GetFileInformationByHandle(dir, &info)) return L"busy";
+        if ((info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != FILE_ATTRIBUTE_DIRECTORY)
+            return L"skipped";
+        const auto next = suffix.find(L'\\', pos);
+        const auto part = suffix.substr(pos, next - pos);
+        if (!ordinaryComponent(part)) return L"skipped";
+        if (path.back() != L'\\') path += L'\\';
+        path += part;
+        if (next == suffix.npos) break;
+        pos = next + 1;
+    }
+    const auto file = pins.open(path, false);
+    if (file == INVALID_HANDLE_VALUE) return pruneOpenFailure();
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!GetFileInformationByHandle(file, &info)) return L"busy";
+    if ((info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ||
+        ((ULONGLONG(info.nFileSizeHigh) << 32) | info.nFileSizeLow) != expected) return L"skipped";
+    FileDigest hash;
+    bool matches = false;
+    if (!hash.matches(file, digest, matches)) return L"busy";
+    if (!matches) return L"skipped";
+    FILE_DISPOSITION_INFO disposition{TRUE};
+    // Mark the very handle we hashed; never reopen by name after checking its contents.
+    return SetFileInformationByHandle(file, FileDispositionInfo, &disposition, sizeof(disposition)) ? L"removed" : L"busy";
+}
+}
+NSIS_ENTRY(PruneRetiredFile) {
+    (void)parent;
+    Stack stack{stringSize, stackTop};
+    const auto root = stack.pop(), path = stack.pop(), bytes = stack.pop(), sha = lower(stack.pop());
+    stack.push(pruneRetiredFile(root, path, bytes, sha));
 }
 NSIS_ENTRY(CheckRunning) {
     Stack stack{stringSize, stackTop}; const auto directory = normalize(stack.pop());
@@ -245,7 +418,7 @@ NSIS_ENTRY(Migrate) {
         // Only the canonical installation at the destination is an in-place
         // overwrite. A stable record at another directory still owns real
         // files; overwriting its ARP key alone would strand a second version.
-        if (record.stable && equal(record.directory, target)) continue;
+        if (record.stable && sameInstallPath(record.directory, target)) continue;
         DWORD code = ERROR_SUCCESS;
         if (!record.product.empty() && removed.insert(lower(record.product)).second && MsiQueryProductStateW(record.product.c_str()) != INSTALLSTATE_UNKNOWN) {
             wchar_t system[MAX_PATH]{}; GetSystemDirectoryW(system, MAX_PATH);
@@ -270,7 +443,7 @@ NSIS_ENTRY(RepairShell) {
     Stack stack{stringSize, stackTop}; const auto target = normalize(stack.pop());
     auto old = records();
     old.insert(old.end(), migrationRecords.begin(), migrationRecords.end());
-    shellError = ERROR_SUCCESS;
+    std::wstring registrationError;
     const std::wstring command = L"\"" + target + L"\\Litematica-Nova.exe\" \"%1\" %*";
     // HKCU overrides HKLM. Repair only a command whose target is a verified Nova
     // payload; do not override Editor, UserChoice hashes, or other applications.
@@ -278,13 +451,13 @@ NSIS_ENTRY(RepairShell) {
     const auto progid = read(extension.value, L"");
     if (!progid.empty()) {
         Key existing(HKEY_CURRENT_USER, L"Software\\Classes\\" + progid + L"\\shell\\open\\command", KEY_READ | KEY_WOW64_64KEY);
-        if (novaCommand(read(existing.value, L""), old)) write(HKEY_CURRENT_USER, L"Software\\Classes\\" + progid + L"\\shell\\open\\command", L"", command);
+        if (novaCommand(read(existing.value, L""), old)) write(HKEY_CURRENT_USER, L"Software\\Classes\\" + progid + L"\\shell\\open\\command", L"", command, registrationError);
     }
     for (const auto& name : {L"LitematicaNova.Projection", L"Litematica projection", L"litematic_auto_file"}) {
         for (HKEY hive : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
             const auto path = std::wstring(L"Software\\Classes\\") + name + L"\\shell\\open\\command";
             Key existing(hive, path, KEY_READ | KEY_WOW64_64KEY);
-            if (novaCommand(read(existing.value, L""), old)) write(hive, path, L"", command);
+            if (novaCommand(read(existing.value, L""), old)) write(hive, path, L"", command, registrationError);
         }
     }
     // Per-user Applications and Run entries override the repaired machine
@@ -294,7 +467,7 @@ NSIS_ENTRY(RepairShell) {
         for (const auto& binary : {L"Litematica-Nova.exe", L"Litematica Nova.exe", L"Litematica Nova BA.exe"}) {
             const auto path = std::wstring(L"Software\\Classes\\Applications\\") + binary + L"\\shell\\open\\command";
             Key existing(hive, path, KEY_READ | KEY_WOW64_64KEY);
-            if (novaCommand(read(existing.value, L""), old)) write(hive, path, L"", command);
+            if (novaCommand(read(existing.value, L""), old)) write(hive, path, L"", command, registrationError);
         }
         const std::wstring runPath = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
         Key runKey(hive, runPath, KEY_READ | KEY_WOW64_64KEY);
@@ -306,24 +479,30 @@ NSIS_ENTRY(RepairShell) {
             const bool quotedPrefix = previous.compare(0, quoted.size(), quoted) == 0;
             if (!quotedPrefix && previous.compare(0, executable.size(), executable) != 0) continue;
             const auto prefixSize = quotedPrefix ? quoted.size() : executable.size();
-            write(hive, runPath, name.c_str(), L"\"" + target + L"\\Litematica-Nova.exe\"" + previous.substr(prefixSize));
+            write(hive, runPath, name.c_str(), L"\"" + target + L"\\Litematica-Nova.exe\"" + previous.substr(prefixSize), registrationError);
         }
     }
     const auto application = L"Software\\Classes\\Applications\\Litematica-Nova.exe";
-    write(HKEY_LOCAL_MACHINE, application, L"FriendlyAppName", L"Litematica-Nova");
-    write(HKEY_LOCAL_MACHINE, std::wstring(application) + L"\\SupportedTypes", L".litematic", L"");
-    write(HKEY_LOCAL_MACHINE, std::wstring(application) + L"\\shell\\open\\command", L"", command);
-    write(HKEY_LOCAL_MACHINE, std::wstring(application) + L"\\shell\\open", L"MultiSelectModel", L"Player");
+    write(HKEY_LOCAL_MACHINE, application, L"FriendlyAppName", L"Litematica-Nova", registrationError);
+    write(HKEY_LOCAL_MACHINE, std::wstring(application) + L"\\SupportedTypes", L".litematic", L"", registrationError);
+    write(HKEY_LOCAL_MACHINE, std::wstring(application) + L"\\shell\\open\\command", L"", command, registrationError);
+    write(HKEY_LOCAL_MACHINE, std::wstring(application) + L"\\shell\\open", L"MultiSelectModel", L"Player", registrationError);
+    if (!registrationError.empty()) { stack.push(registrationError); return; }
+    std::wstring warning;
+    const auto repair = [&](const std::wstring& link) {
+        auto result = repairShortcut(link, target, old);
+        if (warning.empty() && !result.empty()) warning = std::move(result);
+    };
     const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     for (int folder : {CSIDL_COMMON_PROGRAMS, CSIDL_PROGRAMS, CSIDL_COMMON_DESKTOPDIRECTORY, CSIDL_DESKTOPDIRECTORY}) {
         wchar_t path[MAX_PATH]{};
         if (FAILED(SHGetFolderPathW(nullptr, folder, nullptr, SHGFP_TYPE_CURRENT, path))) continue;
         for (const auto& name : names) {
-            repairShortcut(std::wstring(path) + L"\\" + name + L".lnk", target, old);
-            if (folder == CSIDL_COMMON_PROGRAMS || folder == CSIDL_PROGRAMS) repairShortcut(std::wstring(path) + L"\\" + name + L"\\" + name + L".lnk", target, old);
+            repair(std::wstring(path) + L"\\" + name + L".lnk");
+            if (folder == CSIDL_COMMON_PROGRAMS || folder == CSIDL_PROGRAMS) repair(std::wstring(path) + L"\\" + name + L"\\" + name + L".lnk");
         }
     }
     if (SUCCEEDED(initialized)) CoUninitialize();
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
-    stack.push(shellError == ERROR_SUCCESS ? L"ok" : std::wstring(novaText(L"文件入口更新失败，错误码 ", L"Could not update file integration; error code ")) + std::to_wstring(shellError));
+    stack.push(warning.empty() ? L"ok" : L"warning: " + warning);
 }

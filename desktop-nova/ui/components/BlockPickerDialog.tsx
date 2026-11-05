@@ -1,6 +1,7 @@
+import { useCreativeIdentities } from "./useCreativeIdentities";
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../src/services/i18n";
 import { useI18n } from "../i18n";
-import { creativeItemId, creativeInventoryValues, displayPathText } from "../../src/business/facade";
+import { displayPathText } from "../../src/business/facade";
 import React, { useState, useEffect, useMemo } from "react";
 import { type EnumeratorCollection, loadEnumeratorCollections } from "../../src/business/facade";
 import { translateBlockId } from "../../src/business/facade";
@@ -8,6 +9,8 @@ import { BlockIcon } from "./BlockIcon";
 import { Dropdown } from "./Dropdown";
 import { Dialog } from "./Dialog";
 import { Input } from "./ui/input";
+import { Button } from "./ui/button";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { CreativeInventoryTooltip } from "../windows/main/pages/flake/function";
 
 /**
@@ -34,8 +37,8 @@ export function BlockPickerDialog({
   );
   const [search, setSearch] = useState("");
   const [pageStart, setPageStart] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<UiMessage>("");
+  const [collectionsLoading, setLoading] = useState(true);
+  const [collectionError, setError] = useState<UiMessage>("");
   const [hoverItem, setHoverItem] = useState<{ id: string; name: string } | null>(null);
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
 
@@ -75,18 +78,19 @@ export function BlockPickerDialog({
     [collections, extraCollections, locale]
   );
 
-  const selectedValues = useMemo(
-    () => creativeInventoryValues(allCollections.find((c) => c.id === selectedCollectionId)?.values || []),
-    [allCollections, selectedCollectionId]
-  );
+  const identity = useCreativeIdentities(allCollections.find(c => c.id === selectedCollectionId)?.values ?? []);
+  const selectedValues = identity.values;
+  const loading = collectionsLoading || identity.loading;
+  const error = collectionError || identity.error;
+  const itemId = (source: string) => identity.itemIds[source] ?? source;
 
   const filtered = useMemo(() => {
     const kw = search.trim().toLowerCase();
     if (!kw) return selectedValues;
     return selectedValues.filter(
-      (id) => id.toLowerCase().includes(kw) || translateBlockId(creativeItemId(id) || id).toLowerCase().includes(kw)
+      (id) => id.toLowerCase().includes(kw) || translateBlockId(identity.itemIds[id] ?? id).toLowerCase().includes(kw)
     );
-  }, [search, selectedValues, revision]);
+  }, [search, selectedValues, identity.itemIds, revision]);
 
   const maxPage = filtered.length <= 45 ? 0 : Math.floor((filtered.length - 1) / 9) * 9;
   const visible = useMemo(() => {
@@ -106,6 +110,11 @@ export function BlockPickerDialog({
     });
   };
 
+  const changePage = (delta: number) => { setHoverItem(null); setPageStart(current => Math.max(0, Math.min(maxPage, current + delta))); };
+  const pageKey = (event: React.KeyboardEvent) => {
+    if (event.nativeEvent.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.target instanceof Element && event.target.closest('input,textarea,select,[role="combobox"],[contenteditable="true"]')) return;
+    if (event.key === "PageUp" || event.key === "PageDown") { event.preventDefault(); event.stopPropagation(); changePage(event.key === "PageUp" ? -45 : 45); }
+  };
   const rangeStart = filtered.length ? pageStart + 1 : 0;
   const rangeEnd = filtered.length ? Math.min(filtered.length, pageStart + 45) : 0;
 
@@ -116,7 +125,7 @@ export function BlockPickerDialog({
           three and carries the same `flake-page__inventory-dialog` styling that its
           sibling creativeInventoryDialog already uses. */}
       <Dialog title={title} onClose={onClose} width="lg" className="flake-page__inventory-dialog">
-        <div className="flake-page__inventory-dialog-body">
+        <div className="flake-page__inventory-dialog-body" onKeyDown={pageKey}>
           <div className="flake-page__creative-inventory-controls">
             <label className="flake-page__creative-inventory-control">
               <span className="nova-muted">{t("library.categories")}</span>
@@ -134,7 +143,9 @@ export function BlockPickerDialog({
               <Input className="input" value={search} placeholder={t("library.blockFilterPlaceholder")} onChange={(e) => setSearch(e.target.value)} />
             </label>
             <div className="flake-page__creative-inventory-range nova-muted nova-small">
-              {loading ? t("library.loading") : `${rangeStart}-${rangeEnd} / ${filtered.length}`}
+              <span aria-live="polite">{loading ? t("library.loading") : `${rangeStart}-${rangeEnd} / ${filtered.length}`}</span>
+              <Button variant="ghost" size="icon" disabled={loading || pageStart === 0} aria-label={t("library.previousPage")} title={t("library.previousPage")} onClick={() => changePage(-45)}><ChevronLeft size={16} aria-hidden /></Button>
+              <Button variant="ghost" size="icon" disabled={loading || pageStart >= maxPage} aria-label={t("library.nextPage")} title={t("library.nextPage")} onClick={() => changePage(45)}><ChevronRight size={16} aria-hidden /></Button>
             </div>
           </div>
           <div className="flake-page__creative-inventory-stage">
@@ -142,19 +153,20 @@ export function BlockPickerDialog({
               <div className="flake-page__creative-inventory-grid">
                 {visible.map((blockId, idx) =>
                   blockId ? (
-                    <div
+                    <Button variant="ghost" type="button"
                       key={`${blockId}-${idx}`}
                       className="flake-page__creative-slot"
-                      role="button"
-                      tabIndex={0}
+                      aria-label={translateBlockId(itemId(blockId))}
+                      disabled={loading}
+                      onFocus={event => { const rect=event.currentTarget.getBoundingClientRect(); setHoverItem({id:itemId(blockId),name:translateBlockId(itemId(blockId))}); setHoverPos({x:rect.right,y:rect.bottom}); }}
+                      onBlur={() => setHoverItem(null)}
                       onClick={() => { onPickBlock(blockId); onClose(); }}
-                      onKeyDown={event => { if(event.key === "Enter" || event.key === " ") { event.preventDefault(); onPickBlock(blockId); onClose(); } }}
-                      onMouseEnter={(e) => { setHoverItem({ id: creativeItemId(blockId) || blockId, name: translateBlockId(creativeItemId(blockId) || blockId) }); setHoverPos({ x: e.clientX, y: e.clientY }); }}
+                      onMouseEnter={(e) => { setHoverItem({ id: itemId(blockId), name: translateBlockId(itemId(blockId)) }); setHoverPos({ x: e.clientX, y: e.clientY }); }}
                       onMouseMove={(e) => { setHoverPos({ x: e.clientX, y: e.clientY }); }}
                       onMouseLeave={() => setHoverItem(null)}
                     >
-                      <BlockIcon blockId={creativeItemId(blockId) || blockId} lookupMode="item_first" />
-                    </div>
+                      <BlockIcon blockId={itemId(blockId)} lookupMode="item_first" />
+                    </Button>
                   ) : (
                     <div key={`empty-${idx}`} className="flake-page__creative-slot is-empty" aria-hidden />
                   )

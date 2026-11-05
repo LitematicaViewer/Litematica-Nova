@@ -2,7 +2,7 @@ import { FormatExportDialog } from "../../FormatExportDialog";
 import { t, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { takeUpdateDraft, useUpdateDraft } from "../../updateRecovery";
 import {
   analyzeProjectionFile,
@@ -40,7 +40,7 @@ import { useFullPreview } from "../../useFullPreview";
 import { Checkbox } from "../../../../components/ui/checkbox";
 import { Dialog } from "../../../../components/Dialog";
 import { PreviewDraftDialog } from "../../../../components/PreviewDraftDialog";
-import type { ProductPreviewImage } from "../../../../../src/platform/previewImage";
+import { discardGeneratedPreview, type ProductPreviewImage } from "../../../../../src/platform/previewImage";
 import "./properties.css";
 import { displayFilePath, minecraftVersionLabel, windowsPathKey } from "../../../../../src/business/projectionLibrary";
 import { VersionConversionDialog } from "./VersionConversionDialog";
@@ -157,14 +157,21 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, onDirtyC
   const savingRef = useRef(false);
   const sourceRef = useRef(currentFile);
   sourceRef.current = currentFile;
+  const captureEpoch = useRef(0);
+  const captureAlive = useRef(false);
+  useLayoutEffect(() => {
+    captureAlive.current = true; ++captureEpoch.current;
+    setPreviewDraft(null);
+    return () => { captureAlive.current = false; ++captureEpoch.current; };
+  }, [currentFile, renderMode]);
 
   const renderOperation = useMemo(
     () => findRenderOperationForSource(currentFile, applicationRender),
     [applicationRender.operations, currentFile],
   );
   const applicationAnalysis = renderOperation?.analysis ?? null;
-  const preview = useQuickPreview(currentFile || "", presentationBlocked || convertOpen || worldExportOpen || versionConvertOpen || clearPreviewConfirm || filePreviewBusy || renderMode !== "fast", preload);
-  const fullPreview = useFullPreview(currentFile || "", preload, presentationBlocked || convertOpen || worldExportOpen || versionConvertOpen || clearPreviewConfirm || filePreviewBusy || renderMode === "fast", renderMode === "standard" ? "standard" : "full");
+  const preview = useQuickPreview(currentFile || "", presentationBlocked || renderMode !== "fast", preload);
+  const fullPreview = useFullPreview(currentFile || "", preload, presentationBlocked || renderMode === "fast", renderMode === "standard" ? "standard" : "full");
   const quickOperation = preview.operation;
   const renderPending = renderMode === "fast" ? quickOperation?.state === "starting" && !quickOperation.error : fullPreview.loading;
   const viewerPrepared = renderMode === "fast" ? quickOperation?.state === "ready" : fullPreview.ready;
@@ -194,13 +201,15 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, onDirtyC
   const captureFilePreview = async () => {
     if (!currentFile || filePreviewWrite.current || savingRef.current || !viewerPrepared) return;
     const source = currentFile;
+    const epoch = ++captureEpoch.current;
     filePreviewWrite.current = true; setCapturingPreview(true); setError("");
     try {
       const image = await renderPreviewImage(source, renderMode === "fast" ? "fast_experimental" : renderMode, undefined,
         renderMode === "fast" ? quickOperation?.previewId : fullPreview.operation?.operationId);
-      if (sourceRef.current === source) setPreviewDraft({ source, image });
-    } catch (reason) { if (sourceRef.current === source) setError(String(reason)); }
-    finally { filePreviewWrite.current = false; setCapturingPreview(false); }
+      if (captureAlive.current && captureEpoch.current === epoch) setPreviewDraft({ source, image });
+      else if (image.draft_id) await discardGeneratedPreview(image.draft_id);
+    } catch (reason) { if (captureAlive.current && captureEpoch.current === epoch) setError(String(reason)); }
+    finally { filePreviewWrite.current = false; if (captureAlive.current) setCapturingPreview(false); }
   };
   const updateFilePreview = async (clear: boolean) => {
     if (!currentFile || filePreviewWrite.current || savingRef.current) return;
@@ -351,10 +360,10 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, onDirtyC
   };
 
   const handleSelectFile = async () => {
-    const res = await selectLitematicFile();
-    if (res) {
-      setCurrentFile(res);
-    }
+    try {
+      const res = await selectLitematicFile();
+      if (res) setCurrentFile(res);
+    } catch (reason) { setError(String(reason)); }
   };
 
   const previewFailure = renderMode === "fast" ? preview.error || quickOperation?.error : fullPreview.error;
@@ -367,7 +376,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, onDirtyC
     <section className="properties-page" aria-busy={saving}>
       <PreviewDraftDialog draft={previewDraft?.image ?? null} sourcePath={previewDraft?.source ?? currentFile}
         onClose={() => setPreviewDraft(null)} onSaved={image => {
-          const source = previewDraft?.source; setPreviewDraft(null);
+          const source = previewDraft?.source;
           if (!source) return;
           if (sourceRef.current === source) { setFilePreview(image.data_url); setStatus({key:"properties.thumbnailSaved"}); }
           void emitEvent(projectionLibraryStateChangedEvent, { reason: "embedded-preview", path: source }).catch(reason => setError(String(reason)));
@@ -464,7 +473,7 @@ export function PropertiesPage({ currentFile, setCurrentFile, setRoute, onDirtyC
               <Button size="sm" variant="ghost" disabled={!viewerPrepared || previewPending || saving || filePreviewBusy || capturingPreview} onClick={() => void captureFilePreview()}><ThemeIcon name="picture_trans" size={15} fallback={ImagePlus} />{capturingPreview ? t("editor.saving") : t("properties.thumbnail")}</Button>
               <Button size="sm" variant="ghost" onClick={() => setRoute("render")} ><ThemeIcon name="outlink" size={15} fallback={ExternalLink} />{t("properties.renderPage")}</Button>
             </header>
-            <div ref={renderMode === "fast" ? preview.hostRef : fullPreview.hostRef} className="properties-preview-host" aria-label={t("properties.viewport", {mode:modeLabel})}>
+            <div ref={renderMode === "fast" ? preview.mountHost : fullPreview.mountHost} className="properties-preview-host" aria-label={t("properties.viewport", {mode:modeLabel})}>
               {!previewVisible && <div className="properties-preview-placeholder muted"><ThemeIcon name="empty" size={36} fallback={Box} /><span>{previewFailure ? t("properties.previewFailedShort") : previewStatus}</span></div>}
             </div>
             {renderMode !== "fast" && fullPreview.preflight && <div role="status" className="properties-preview-status muted">

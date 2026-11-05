@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { posix } from 'node:path';
@@ -8,8 +8,9 @@ import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
 
 // Real React lifecycle in an in-memory DOM. No browser, HWND or GPU is started.
-const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost' });
+const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost', pretendToBeVisual: true });
 for (const name of ['window', 'document', 'HTMLElement', 'Element', 'Node', 'Event', 'CustomEvent', 'MutationObserver']) globalThis[name] = dom.window[name];
+for (const name of ['requestAnimationFrame', 'cancelAnimationFrame', 'getComputedStyle']) globalThis[name] = dom.window[name].bind(dom.window);
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const require = createRequire(import.meta.url);
 const React = require('react');
@@ -60,6 +61,7 @@ async function fixture(run) {
       return clone(current);
     }
     if (command === 'application_quick_preview_snapshot') return snapshotGate ? snapshotGate.promise : clone(current);
+    if (command === 'application_set_scene_view') return {};
     if (command === 'application_quick_preview_present') {
       const held = args.intent.visible && presentGate;
       if (held) { presentGate = null; await held.promise; }
@@ -73,24 +75,29 @@ async function fixture(run) {
     throw Error(`Unexpected IPC: ${command}`);
   };
   function load(path) {
-    if (cache.has(path)) return cache.get(path);
+    if (cache.has(path)) return cache.get(path).exports;
     const source = sourceRef
       ? execFileSync('git', ['show', `${sourceRef}:desktop-nova/${path}`], { cwd: base, encoding: 'utf8' })
       : readFileSync(new URL(path, base), 'utf8');
     const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React, esModuleInterop: true } });
     const module = { exports: {} };
+    // CommonJS exposes partial exports to cycles (e.g. i18n <-> gameResources).
+    cache.set(path, module);
     vm.runInThisContext(`(function(require,module,exports){${compiled.outputText}\n})`, { filename: path })(name => {
       if (name.endsWith('/facade')) return facade;
       if (name === './tauri') return { invoke };
       if (name === '@tauri-apps/api/window') return { getCurrentWindow: () => nativeWindow };
+      if (name === '@tauri-apps/api/event') return { listen: async (event, fn) => {
+        window.addEventListener(event, fn); return () => window.removeEventListener(event, fn);
+      } };
       if (!name.startsWith('.')) return require(name);
       const relative = posix.join(posix.dirname(path), name);
-      const resolved = [relative, `${relative}.ts`, `${relative}.tsx`].find(candidate => existsSync(new URL(candidate, base)));
+      const resolved = [relative, `${relative}.ts`, `${relative}.tsx`, `${relative}/index.ts`, `${relative}/index.tsx`]
+        .find(candidate => statSync(new URL(candidate, base), { throwIfNoEntry: false })?.isFile());
       assert.ok(resolved, `Missing module ${name} from ${path}`);
       return load(resolved);
     }, module, module.exports);
-    cache.set(path, module.exports);
     return module.exports;
   }
   const api = load('src/platform/quickPreview.ts');
@@ -227,12 +234,19 @@ test('迟到启动 Ready 与旧快照在离页之后不得自动呈现', async (
     presentation: hidden(), visible: false, presentationRevision: 0, error: null };
   f.setCurrent(ready); gate.resolve(clone(ready)); await act(async () => starting); await f.settle();
   assert.equal(f.getState().visible, false); assert.equal(f.presentations().filter(call => call.intent.visible).length, 0);
-  f.setStartGate(null); await f.render(); await f.start();
+  // A second user click forwards its timestamp to the Host. The Host returns
+  // the same ready preview; it does not allocate a second Viewer.
+  f.assertNoDestruction(1);
+  f.setStartGate({ promise: Promise.resolve(clone(ready)) });
+  await f.render(); await f.start();
+  const clicks = f.calls.filter(call => call.command === 'application_quick_preview_start');
+  assert.ok(Number.isSafeInteger(clicks.at(-1).input.clickStartedAtEpochMs));
+  assert.equal(f.api.getQuickPreviewState().previewId, ready.previewId);
   const old = f.getState(), snapshotGate = defer(); f.setSnapshotGate(snapshotGate);
   let reading; await act(async () => { reading = f.api.refreshQuickPreview(); });
   await f.render('away'); snapshotGate.resolve(old); await act(async () => reading); await f.settle();
   assert.equal(f.api.getQuickPreviewState().visible, false); assert.equal(f.getState().visible, false);
-  f.assertNoDestruction(1);
+  f.assertNoDestruction(2);
 }));
 
 test('属性与渲染页快速交接只有最新 lease 呈现，新页位置覆盖旧页', async () => fixture(async f => {

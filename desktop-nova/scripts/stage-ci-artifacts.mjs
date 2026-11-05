@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { copyIfDifferent } from './build-public-platform.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const arg = (key) => process.argv[process.argv.indexOf(key) + 1];
@@ -33,7 +34,7 @@ for (const entry of manifest.files) {
   for await (const bytes of fs.createReadStream(source)) hash.update(bytes);
   if (hash.digest('hex') !== entry.sha256) throw new Error(`Final artifact hash mismatch: ${name}`);
   const staged = path.join(destination, name);
-  fs.copyFileSync(source, staged);
+  await copyIfDifferent(source, staged, entry.sha256);
   paths.push(staged);
 }
 if (!paths.some((file) => !file.endsWith('.sig'))) throw new Error('No installable or runnable candidate is present.');

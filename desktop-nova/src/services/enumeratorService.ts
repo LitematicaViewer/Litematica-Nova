@@ -1,3 +1,4 @@
+import { bindEnumeratorCollections, queryEnumeratorExpression } from "../platform/applicationOperations";
 import { getAppDataFilePath, listDirectoryEntries, readAppDataFile, writeAppDataFile } from "../platform/files";
 import { listGameResourceRegistry, getSelectedGameDataContext, readActiveGameDataResource } from "./gameResources";
 import { readWorkspaceFile } from "./backend";
@@ -135,9 +136,9 @@ function safeSymbol(value: string, fallback: string): string {
   return trimmed || fallback;
 }
 
-function normalizeLookupKey(value: string): string {
-  return String(value || "").trim().toLowerCase();
-}
+
+
+function normalizeLookupKey(value: string): string { return String(value || "").trim().toLowerCase(); }
 
 function normalizeCollectionValue(value: unknown): string {
   const normalized = String(value || "").trim();
@@ -399,172 +400,20 @@ export function createRuntimeProjectionCollection(filePath: string, materials: A
   };
 }
 
-function resolveCollectionToken(token: string, collections: EnumeratorCollection[]): EnumeratorCollection | null {
-  const lookup = normalizeLookupKey(token);
-  if (!lookup) return null;
-  return collections.find((collection) =>
-    normalizeLookupKey(collection.id) === lookup ||
-    normalizeLookupKey(collection.name) === lookup ||
-    normalizeLookupKey(collection.symbol) === lookup,
-  ) || null;
-}
-
-function validateWildcardToken(token: string): void {
-  const lookup = normalizeLookupKey(token);
-  const firstWildcardIndex = lookup.indexOf("*");
-  const lastWildcardIndex = lookup.lastIndexOf("*");
-  if (firstWildcardIndex < 0) return;
-  if (firstWildcardIndex !== 0 && firstWildcardIndex !== lookup.length - 1) {
-    throw new Error(t("native.enumerator.wildcardEdge", { token }));
+// Each WebView owns one current editor snapshot. Bind changes in order so a
+// slow upload for a previous collection cannot replace a newer one.
+let bound: { collections: EnumeratorCollection[]; ready: Promise<number> } | undefined;
+export async function evaluateEnumeratorExpression(expression: string, collections: EnumeratorCollection[]) {
+  if (!expression.trim() || collections.length === 0) return {values: [] as string[], dependencies: [] as string[], error: ""};
+  if (bound?.collections !== collections) {
+    const ready = (bound?.ready.catch(() => undefined) ?? Promise.resolve()).then(() =>
+      bindEnumeratorCollections(collections.map(({id, name, symbol, values}) => ({id, name, symbol, values}))));
+    bound = {collections, ready};
+    void ready.catch(() => { if (bound?.ready === ready) bound = undefined; });
   }
-  if (lastWildcardIndex !== firstWildcardIndex && lastWildcardIndex !== lookup.length - 1) {
-    throw new Error(t("native.enumerator.wildcardEdge", { token }));
-  }
-}
-
-function isWildcardCollectionToken(token: string): boolean {
-  return normalizeLookupKey(token).includes("*");
-}
-
-function resolveWildcardCollections(token: string, collections: EnumeratorCollection[]): EnumeratorCollection[] {
-  const pattern = normalizeLookupKey(token);
-  validateWildcardToken(pattern);
-  const firstWildcardIndex = pattern.indexOf("*");
-  const prefix = pattern.startsWith("*") ? "" : pattern.slice(0, firstWildcardIndex);
-  const suffix = pattern.endsWith("*") ? "" : pattern.slice(pattern.lastIndexOf("*") + 1);
-  return collections.filter((collection) => {
-    const name = normalizeLookupKey(collection.name);
-    return name.startsWith(prefix) && name.endsWith(suffix) && name.length >= prefix.length + suffix.length;
-  });
-}
-
-function tokenizeExpression(expression: string): string[] {
-  const tokens: string[] = [];
-  let buffer = "";
-  const flush = () => {
-    const value = buffer.trim();
-    if (value) tokens.push(value);
-    buffer = "";
-  };
-
-  for (const char of expression) {
-    if (char === "(" || char === ")" || char === "∪" || char === "|" || char === "∩" || char === "&" || char === "-") {
-      flush();
-      tokens.push(char);
-      continue;
-    }
-    buffer += char;
-  }
-  flush();
-  return tokens;
-}
-
-function validateWildcardParentheses(tokens: string[]): void {
-  tokens.forEach((token, index) => {
-    if (!isWildcardCollectionToken(token)) return;
-    if (tokens[index - 1] !== "(" || tokens[index + 1] !== ")") {
-      throw new Error(t("native.enumerator.wildcardGroup", { token }));
-    }
-  });
-}
-
-function precedence(operator: string): number {
-  if (operator === "∩" || operator === "&") return 2;
-  if (operator === "∪" || operator === "|" || operator === "-") return 1;
-  return 0;
-}
-
-function toRpn(tokens: string[]): string[] {
-  const output: string[] = [];
-  const operators: string[] = [];
-  for (const token of tokens) {
-    if (token === "(") {
-      operators.push(token);
-      continue;
-    }
-    if (token === ")") {
-      while (operators.length && operators[operators.length - 1] !== "(") {
-        output.push(operators.pop()!);
-      }
-      if (!operators.length) throw new Error(t("native.enumerator.parentheses"));
-      operators.pop();
-      continue;
-    }
-    if (token === "∪" || token === "|" || token === "∩" || token === "&" || token === "-") {
-      while (operators.length && precedence(operators[operators.length - 1]) >= precedence(token)) {
-        output.push(operators.pop()!);
-      }
-      operators.push(token);
-      continue;
-    }
-    output.push(token);
-  }
-  while (operators.length) {
-    const operator = operators.pop()!;
-    if (operator === "(") throw new Error(t("native.enumerator.parentheses"));
-    output.push(operator);
-  }
-  return output;
-}
-
-function applyOperator(left: Set<string>, right: Set<string>, operator: string): Set<string> {
-  if (operator === "∪" || operator === "|") return new Set([...left, ...right]);
-  if (operator === "∩" || operator === "&") return new Set([...left].filter((value) => right.has(value)));
-  if (operator === "-") return new Set([...left].filter((value) => !right.has(value)));
-  return new Set(left);
-}
-
-/**
- * Evaluates an enumerator collection expression, including parenthesized name wildcards.
- *
- * @param expression Collection names, operators, and wildcard expressions to evaluate.
- * @param collections Collections available to the expression.
- * @returns The resolved values, referenced collection IDs, and any parse error.
- */
-export function evaluateEnumeratorExpression(expression: string, collections: EnumeratorCollection[]): { values: string[]; dependencies: string[]; error: string } {
-  const trimmed = String(expression || "").trim();
-  if (!trimmed) return { values: [], dependencies: [], error: "" };
-  try {
-    const tokens = tokenizeExpression(trimmed);
-    validateWildcardParentheses(tokens);
-    const rpn = toRpn(tokens);
-    const stack: Set<string>[] = [];
-    const dependencies: string[] = [];
-
-    for (const token of rpn) {
-      if (token === "∪" || token === "|" || token === "∩" || token === "&" || token === "-") {
-        const right = stack.pop();
-        const left = stack.pop();
-        if (!left || !right) throw new Error(t("native.enumerator.incomplete"));
-        stack.push(applyOperator(left, right, token));
-        continue;
-      }
-      if (isWildcardCollectionToken(token)) {
-        const matchedCollections = resolveWildcardCollections(token, collections);
-        if (!matchedCollections.length) throw new Error(t("native.enumerator.noMatch", { token }));
-        dependencies.push(...matchedCollections.map((collection) => collection.id));
-        stack.push(new Set(matchedCollections.flatMap((collection) => collection.values)));
-        continue;
-      }
-      const collection = resolveCollectionToken(token, collections);
-      if (!collection) throw new Error(t("native.enumerator.notFound", { token }));
-      dependencies.push(collection.id);
-      stack.push(new Set(collection.values));
-    }
-
-    if (stack.length !== 1) throw new Error(t("native.enumerator.incomplete"));
-    return {
-      values: [...stack[0]],
-      dependencies: uniq(dependencies),
-      error: "",
-    };
-  } catch (error: any) {
-    return {
-      values: [],
-      dependencies: [],
-      error: String(error?.message || error || t("native.enumerator.parseFailure")),
-    };
-  }
+  const result = await queryEnumeratorExpression(await bound.ready, expression);
+  return {values: result.values, dependencies: result.dependencies,
+    error: result.errorKey ? t(result.errorKey, result.token == null ? {} : {token: result.token}) : ""};
 }
 
 function detectValueType(value: string, membership: Record<string, Set<string>>): EnumeratorValueType {

@@ -81,6 +81,40 @@ const loadTasks = (host) => compile("../src/services/libraryTasks.ts", (name) =>
   throw new Error(`Unexpected dependency: ${name}`);
 });
 
+test("并发提交必须共同等待全部原生监听注册，不能错过即时完成", async () => {
+  const host = createHost();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const tasks = loadTasks({ ...host, async listenEvent(event, callback) {
+    if (event === FINISHED) await gate;
+    return host.listenEvent(event, callback);
+  } });
+  const subscribed = tasks.subscribeLibraryTask({});
+  host.plan({ immediateFinish: true });
+  const finished = tasks.submitAndAwait("scan", {});
+  await tick();
+  try { assert.equal(host.submitted.length, 0); }
+  finally { release(); await subscribed; }
+  assert.equal((await finished).status, "completed");
+});
+
+test("第二个监听注册失败时撤销第一个，下一次操作可以重试", async () => {
+  const host = createHost(), active = new Set();
+  let fail = true;
+  const tasks = loadTasks({ ...host, async listenEvent(event, callback) {
+    if (event === FINISHED && fail) throw new Error("event registration failed");
+    const remove = host.listenEvent(event, callback);
+    active.add(event);
+    return () => { active.delete(event); remove(); };
+  } });
+  await assert.rejects(tasks.submitLibraryTask("scan", {}), /event registration failed/);
+  assert.equal(active.size, 0);
+  assert.equal(host.submitted.length, 0);
+  fail = false;
+  assert.equal(await tasks.submitLibraryTask("scan", {}), "t1");
+  assert.deepEqual([...active], [PROGRESS, FINISHED, QUEUE]);
+});
+
 test("submitLibraryTask 透传任务类型与参数并返回任务 id", async () => {
   const host = createHost();
   const tasks = loadTasks(host);

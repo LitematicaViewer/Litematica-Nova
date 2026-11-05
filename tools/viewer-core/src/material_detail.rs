@@ -69,8 +69,8 @@ pub fn read(request: MaterialDetailRequest) -> Result<MaterialDetail> {
         summary: stockpile::StockpileSummary { total_blocks: item.required_count, unique_materials: 1, total_stacks: stacks, estimated_shulker_boxes: stacks.div_ceil(27) },
         materials: vec![item], diagnostics: Vec::new(),
     };
-    let names = crate::item_names::resolve_stockpile_item_names_cached(&version, &mut materials, &trees)?;
-    let icons = crate::item_icons::resolve_stockpile_icons_cached(&version, &mut materials, &trees)?;
+    let names = crate::item_names::resolve_stockpile_item_names(&version, &mut materials, &trees)?;
+    let icons = crate::item_icons::resolve_stockpile_icons(&version, &mut materials, &trees)?;
     let files = icons.files.into_iter().map(|file| (file.path, format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(file.bytes)))).collect::<BTreeMap<_, _>>();
     let icon_images = icons.payload.by_key.into_iter().filter_map(|(key, icon)| files.get(&icon.path).cloned().map(|url| (key, url))).collect();
     let locale=if request.ui_locale.is_empty(){"zh-CN"}else{request.ui_locale.as_str()};
@@ -150,7 +150,7 @@ pub fn read_all_cached(analysis:&crate::stats_api::StableStructureOutput,source_
     let (mut entries,mut trees)=recipe_tree::resolve_material_batch(&version,&materials,cancel)?;
     let recipe_ms=phase.elapsed().as_secs_f64()*1000.0;
     ensure!(!cancel(),"Cancelled");let phase=Instant::now();
-    let names=crate::item_names::resolve_stockpile_item_names_cached(&version,&mut materials,&trees)?;
+    let names=crate::item_names::resolve_stockpile_item_names(&version,&mut materials,&trees)?;
     let mut local_names=names.names.iter().filter_map(|(key,values)|values.get(locale).cloned().map(|value|(key.clone(),value))).collect::<BTreeMap<_,_>>();
     recipe_tree::localize_trees(&mut trees,locale,&mut local_names)?;
     for entry in &mut entries{for option in &mut entry.recipe_options{
@@ -159,7 +159,7 @@ pub fn read_all_cached(analysis:&crate::stats_api::StableStructureOutput,source_
     }}
     let names_ms=phase.elapsed().as_secs_f64()*1000.0;
     ensure!(!cancel(),"Cancelled");let phase=Instant::now();
-    let icons=crate::item_icons::resolve_stockpile_icons_cached(&version,&mut materials,&trees)?;
+    let icons=crate::item_icons::resolve_stockpile_icons(&version,&mut materials,&trees)?;
     let unique_resource_count=icons.payload.by_key.len();
     let files=icons.files.into_iter().map(|file|(file.path,format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(file.bytes)))).collect::<BTreeMap<_,_>>();
     let icon_images=icons.payload.by_key.into_iter().filter_map(|(key,icon)|files.get(&icon.path).cloned().map(|value|(key,value))).collect::<BTreeMap<_,_>>();

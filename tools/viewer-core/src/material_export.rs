@@ -197,7 +197,7 @@ fn build_export(
     )?;
     if request.terminal_raw_materials {
         ensure!(
-            recipe_cache::load_available_recipes(&request.minecraft_version)?.is_some(),
+            !recipe_cache::selected_index()?.recipes.is_empty(),
             "末端原料统计需要该 Minecraft 版本的完整本地配方缓存；请先准备配方缓存"
         );
         let trees = recipe_tree::resolve_recipe_trees_for_materials(
@@ -229,7 +229,7 @@ fn build_export(
     // or schematic rescan is introduced by exporting in another UI language.
     materials.ui_locale = Some(locale.into());
     materials.ui_translations = request.language_map;
-    crate::item_names::resolve_stockpile_item_names_cached(
+    crate::item_names::resolve_stockpile_item_names(
         &request.minecraft_version,
         &mut materials,
         &BTreeMap::new(),

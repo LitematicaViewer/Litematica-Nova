@@ -24,6 +24,8 @@ static RECEIPTS: OnceLock<Mutex<VecDeque<Arc<SceneReceipt>>>> = OnceLock::new();
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SceneViewAck {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) interaction: Option<viewer_launch_contract::SceneInteractionSnapshot>,
     pub(crate) source_path: PathBuf,
     pub(crate) display_mode: RenderDisplayMode,
     pub(crate) scene_id: String,
@@ -32,6 +34,8 @@ pub(crate) struct SceneViewAck {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) world_time: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) world_time_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) weather: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
@@ -39,6 +43,7 @@ pub(crate) struct SceneViewAck {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SceneKey {
+    operation_id: String,
     source: PathBuf,
     mode: RenderDisplayMode,
     owner: String,
@@ -48,6 +53,7 @@ struct SceneReceipt {
     scene_id: String,
     path: PathBuf,
     submission: tokio::sync::Mutex<()>,
+    overlay_revision: AtomicU64,
 }
 impl Drop for SceneReceipt {
     fn drop(&mut self) {
@@ -58,14 +64,30 @@ impl Drop for SceneReceipt {
     }
 }
 impl SceneReceipt {
+    // Called under submission, so a late IPC request cannot undo the latest
+    // mounted owner's clipping/input state for this exact Viewer generation.
+    fn accept_overlay(&self, expected: Option<&str>, revision: Option<u64>) -> Result<(), String> {
+        if expected.is_some_and(|expected| self.key.operation_id != expected) {
+            return Err("Preview scene changed before overlay submission".into());
+        }
+        if let Some(revision) = revision {
+            if revision <= self.overlay_revision.load(Ordering::Relaxed) {
+                return Err("Native overlay update was superseded".into());
+            }
+            self.overlay_revision.store(revision, Ordering::Relaxed);
+        }
+        Ok(())
+    }
     fn ack(&self, feedback: SceneViewFeedback) -> SceneViewAck {
         SceneViewAck {
+            interaction: feedback.interaction,
             source_path: self.key.source.clone(),
             display_mode: self.key.mode,
             scene_id: self.scene_id.clone(),
             request_id: feedback.request_id,
             camera_locked: feedback.camera_locked,
             world_time: feedback.world_time,
+            world_time_label: feedback.world_time.map(|ticks| { let minutes = (ticks % 24_000) * 60 / 1_000 + 360; format!("{:02}:{:02}", (minutes / 60) % 24, minutes % 60) }),
             weather: feedback.weather,
             error: feedback.error,
         }
@@ -118,6 +140,7 @@ fn receipt_for(key: SceneKey) -> Result<Arc<SceneReceipt>, String> {
         scene_id,
         path: directory.join("feedback.json"),
         submission: tokio::sync::Mutex::new(()),
+        overlay_revision: AtomicU64::new(0),
     });
     entries.push_back(entry.clone());
     Ok(entry)
@@ -153,6 +176,7 @@ fn active_scene(
             .filter(|view| view.source_path == source && view.state == "ready")
         {
             return Ok(SceneKey {
+                operation_id: view.preview_id.clone(),
                 source: source.to_owned(),
                 mode: RenderDisplayMode::FastExperimental,
                 owner: format!("quick:{}", view.preview_id),
@@ -164,6 +188,7 @@ fn active_scene(
     }
     if let Some(identity) = facade.active_scene_identity(source, mode, controls)? {
         return Ok(SceneKey {
+            operation_id: identity.operation_id.0.clone(),
             source: source.to_owned(),
             mode: identity.display_mode,
             owner: format!(
@@ -216,6 +241,8 @@ pub(crate) async fn set_scene_view(
     source: &Path,
     mode: Option<RenderDisplayMode>,
     mut controls: SceneViewControls,
+    expected_operation: Option<&str>,
+    overlay_revision: Option<u64>,
     quick: &QuickPreviewHost,
     facade: &RenderFacade,
 ) -> Result<SceneViewAck, String> {
@@ -228,6 +255,7 @@ pub(crate) async fn set_scene_view(
         .inspect_err(|_| retire(&source, mode))?;
     let entry = receipt_for(key)?;
     let _submission = entry.submission.lock().await;
+    entry.accept_overlay(expected_operation, overlay_revision)?;
     let still_active = || {
         active_scene(
             &source,
@@ -303,6 +331,7 @@ pub(crate) async fn get_scene_view_state(
         &source,
         Some(entry.key.mode),
         SceneViewControls::default(),
+        None, None,
         quick,
         facade,
     )
@@ -324,6 +353,7 @@ mod tests {
     use super::*;
     fn fixture() -> Arc<SceneReceipt> {
         receipt_for(SceneKey {
+            operation_id: "test-operation".into(),
             source: root().join(format!(
                 "fixture-{}",
                 SEQUENCE.fetch_add(1, Ordering::Relaxed)
@@ -337,6 +367,7 @@ mod tests {
     async fn receipt_requires_matching_request_and_live_scene() {
         let entry = fixture();
         let feedback = SceneViewFeedback {
+            interaction: None,
             request_id: "requested".into(),
             camera_locked: true,
             world_time: Some(6000),
@@ -375,4 +406,16 @@ mod tests {
         assert_ne!(first.scene_id, second.scene_id);
         assert!(read_feedback(&second.path).unwrap().is_none());
     }
+    #[test]
+    fn overlay_revision_and_operation_reject_late_cleanup_without_changing_scene() {
+        let entry = fixture();
+        entry.accept_overlay(Some("test-operation"), Some(7)).unwrap();
+        assert!(entry.accept_overlay(Some("test-operation"), Some(6)).is_err());
+        assert!(entry.accept_overlay(Some("departed-operation"), Some(9)).is_err());
+        assert_eq!(entry.overlay_revision.load(Ordering::Relaxed), 7);
+        entry.accept_overlay(Some("test-operation"), Some(8)).unwrap();
+        entry.accept_overlay(None, None).unwrap(); // Existing non-overlay controls.
+        assert_eq!(entry.overlay_revision.load(Ordering::Relaxed), 8);
+    }
+
 }

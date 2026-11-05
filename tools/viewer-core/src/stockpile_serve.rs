@@ -505,6 +505,15 @@ pub struct DesktopTaskWorkspace {
     #[serde(skip_serializing_if = "Option::is_none")] export_text: Option<String>,
 }
 
+impl DesktopTaskWorkspace {
+    // Synchronizing sources needs their saved identities, not another serialized
+    // copy of the workspace, material list, and task summaries.
+    pub(crate) fn into_source_views(self) -> Result<Vec<Value>> {
+        self.task.into_iter().flat_map(|task| task.sources)
+            .map(serde_json::to_value).collect::<serde_json::Result<_>>().map_err(Into::into)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopLegacyTaskSummary {
@@ -647,8 +656,22 @@ fn write_desktop_output(path:&Path,bytes:&[u8])->Result<()> {
 
 fn desktop_task_command(root: &Path, mut request: DesktopTaskRequest) -> Result<DesktopTaskWorkspace> {
     fs::create_dir_all(root)?;
-    if !["open","list","select","create","rename","sync","setSources","addSources","settings","mutate","details","export","import","bindLegacy","query","exportView"].contains(&request.action.as_str()) {
+    if !["open","list","select","create","rename","delete","sync","setSources","addSources","settings","mutate","details","export","import","bindLegacy","query","exportView"].contains(&request.action.as_str()) {
         bail!("Unknown material task action");
+    }
+    if request.action == "delete" {
+        delete_desktop_task(root, &request)?;
+        // Read the next existing task without selecting/writing it. Deleting
+        // one task must not change another task's data or open timestamps.
+        let (records, legacy_tasks) = desktop_task_records(root)?;
+        if records.is_empty() {
+            return Ok(DesktopTaskWorkspace { tasks:Vec::new(), selected_task_id:None, task:None, backup:None, export_text:None, legacy_tasks });
+        }
+        return desktop_task_command(root, serde_json::from_value(json!({
+            "action":"query", "taskId":records[0].task_id,
+            "uiLocale":request.ui_locale, "languageMap":request.language_map,
+            "query":{"offset":0,"limit":200}
+        }))?);
     }
     let (mut records,mut legacy_tasks) = desktop_task_records(root)?;
     if request.action == "list" {
@@ -722,6 +745,12 @@ fn desktop_task_command(root: &Path, mut request: DesktopTaskRequest) -> Result<
     // Re-read after obtaining the write transaction: stale UI actions must not
     // overwrite preferences or demand synchronized by another open window.
     let existing = desktop_task_record_conn(&tx)?;
+    if meta_value(&tx,"desktop_deleted")?.is_some() {
+        bail!("Material task was deleted");
+    }
+    if existing.is_none() && !["create","import","bindLegacy","open"].contains(&request.action.as_str()) {
+        bail!("Material task no longer exists");
+    }
     let source_operation=["create","addSources","setSources"].contains(&request.action.as_str())||(request.action=="sync"&&request.sources.is_some());
     let duplicate_source=source_operation&&multi_source::receipt(&tx,&request)?;
     let new_record=existing.is_none();
@@ -975,6 +1004,38 @@ fn desktop_task_path(root:&Path,id:&str) -> Result<PathBuf> {
     validate_desktop_task_id(id)?;
     Ok(root.join(format!("desktop-{id}.sqlite")))
 }
+fn delete_desktop_task(root:&Path, request:&DesktopTaskRequest) -> Result<()> {
+    let id=request.task_id.as_deref().context("Select a material task to delete")?;
+    let path=desktop_task_path(root,id)?;
+    if !path.is_file() { return Ok(()); }
+    let mut conn=Connection::open_with_flags(&path,rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.pragma_update(None,"secure_delete","ON")?;
+    let tx=conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    if meta_value(&tx,"desktop_deleted")?.is_some() { return Ok(()); }
+    let record=desktop_task_record_conn(&tx)?.context("Material task no longer exists")?;
+    if record.task_id!=id || !request.project_id.is_empty() && request.project_id!=record.project_id {
+        bail!("The selected task belongs to a different projection");
+    }
+    if request.expected_revision.as_deref().or(request.source_revision.as_deref())!=Some(record.source_revision.as_str()) {
+        bail!("Material task changed; confirm deletion again");
+    }
+    // Each desktop task owns its database. Clear every task-owned table in
+    // one transaction, including snapshot/source payloads and retry receipts.
+    // Keep only a content-free tombstone so stale writers and idempotent
+    // create retries cannot recreate the same identity after deletion.
+    tx.execute_batch("PRAGMA defer_foreign_keys=ON;")?;
+    let tables={
+        let mut statement=tx.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")?;
+        let names=statement.query_map([],|row|row.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        names
+    };
+    for table in tables { tx.execute(&format!("DELETE FROM \"{}\"",table.replace('"',"\"\"")),[])?; }
+    set_meta(&tx,"desktop_deleted","1")?;
+    tx.commit()?;
+    desktop_record_cache().lock().map_err(|_|anyhow!("Task snapshot cache lock poisoned"))?.remove(conn.path().unwrap_or(""));
+    Ok(())
+}
 fn desktop_task_source_matches(left:&Path,right:&Path) -> bool {
     if cfg!(windows) { left.to_string_lossy().replace('/',"\\").eq_ignore_ascii_case(&right.to_string_lossy().replace('/',"\\")) }
     else {left==right}
@@ -1035,6 +1096,7 @@ fn desktop_record_cache()->&'static DesktopRecordCache {
     static CACHE:std::sync::OnceLock<DesktopRecordCache>=std::sync::OnceLock::new();CACHE.get_or_init(Default::default)
 }
 fn desktop_task_record_conn(conn:&Connection) -> Result<Option<DesktopTaskRecord>> {
+    if meta_value(conn,"desktop_deleted")?.is_some() { return Ok(None); }
     let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='desktop_task')",[],|row|row.get(0))?;
     if !exists { return Ok(None); }
     let path=conn.path().unwrap_or("").to_string();
@@ -1052,6 +1114,7 @@ fn desktop_task_record_conn(conn:&Connection) -> Result<Option<DesktopTaskRecord
     Ok(Some(record))
 }
 fn save_desktop_task_record(conn:&Connection,record:&DesktopTaskRecord) -> Result<()> {
+    if meta_value(conn,"desktop_deleted")?.is_some() { bail!("Material task was deleted"); }
     conn.execute_batch("CREATE TABLE IF NOT EXISTS desktop_task(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);")?;
     conn.execute("INSERT INTO desktop_task(id,payload) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",[serde_json::to_string(record)?])?;
     let revision=new_desktop_task_id();set_meta(conn,"desktop_record_revision",&revision)?;
@@ -1070,6 +1133,7 @@ fn desktop_task_records(root:&Path) -> Result<(Vec<DesktopTaskRecord>,Vec<Deskto
         let Some(id)=name.strip_prefix("desktop-").and_then(|value|value.strip_suffix(".sqlite")) else {continue;};
         if validate_desktop_task_id(id).is_err() || !entry.file_type()?.is_file() {continue;}
         let conn=Connection::open_with_flags(entry.path(),rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        if meta_value(&conn,"desktop_deleted")?.is_some() {continue;}
         if let Some(record)=desktop_task_record_conn(&conn)? {
             if record.task_id!=id { bail!("Saved material task identity does not match its database"); }
             records.push(record);
@@ -1138,8 +1202,8 @@ fn desktop_task_require_resource_identity(record:&DesktopTaskRecord) -> Result<(
 fn desktop_task_snapshot_assets(record:&mut DesktopTaskRecord) -> Result<()> {
     desktop_task_require_resource_identity(record)?;
     let trees=record.recipe_trees.as_ref().context("Task recipe snapshot is missing")?;
-    let names=crate::item_names::resolve_stockpile_item_names_cached(&record.minecraft_version,&mut record.base_materials,trees)?;
-    let icons=crate::item_icons::resolve_stockpile_icons_cached(&record.minecraft_version,&mut record.base_materials,trees)?;
+    let names=crate::item_names::resolve_stockpile_item_names(&record.minecraft_version,&mut record.base_materials,trees)?;
+    let icons=crate::item_icons::resolve_stockpile_icons(&record.minecraft_version,&mut record.base_materials,trees)?;
     let files=icons.files.into_iter().map(|file| {
         (file.path,format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(file.bytes)))
     }).collect::<BTreeMap<_,_>>();
@@ -1204,6 +1268,7 @@ fn desktop_task_apply(path: &Path, task_id: &str, revision: &str, materials: &St
 
 fn desktop_task_state(conn:&Connection,task_id:&str,revision:&str,materials:&StockpileMaterialsData,
     mutation:Option<&DesktopTaskMutation>) -> Result<DesktopTaskView> {
+    if meta_value(conn,"desktop_deleted")?.is_some() { bail!("Material task was deleted"); }
     const USER: &str = "desktop-local";
     let requirements = materials.materials.iter().map(|item| (item.namespace_id.as_str(), item.required_count))
         .collect::<BTreeMap<_, _>>();
@@ -1388,8 +1453,15 @@ fn handle_connection(
     project: &StockpileZipPayload,
 ) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-    let request = read_request(&mut stream)?;
-    let response = route_request(&request, source, db_path, project);
+    let peer = stream.peer_addr().ok().map(|addr| addr.ip());
+    let response = {
+        let mut reader = BufReader::new(&mut stream);
+        match read_request(&mut reader, peer) {
+            Ok(request) if body_within_limit(&request) => route_request(&request, source, db_path, project),
+            Ok(_) => error_response(413, "payload_too_large", "stockpile command body exceeds 64 MiB"),
+            Err(_) => error_response(400, "bad_request", "invalid or oversized HTTP request headers"),
+        }
+    };
     write_response(&mut stream, response)
 }
 
@@ -1469,13 +1541,13 @@ fn route_request_inner(
             return Ok(json_response(200, auth_status_json(&config, &auth), "OK"));
         }
         ("POST", "/api/auth/access") => {
-            let body: AuthRequest = serde_json::from_slice(&request.body)
+            let body: AuthRequest = request.json()
                 .context("parse access auth request failed")?;
             return login_response(&conn, "access", body, request);
         }
         ("POST", "/api/auth/admin") => {
             let body: AuthRequest =
-                serde_json::from_slice(&request.body).context("parse admin auth request failed")?;
+                request.json().context("parse admin auth request failed")?;
             return login_response(&conn, "admin", body, request);
         }
         ("POST", "/api/auth/logout") => {
@@ -1493,12 +1565,12 @@ fn route_request_inner(
         }
         ("PUT", "/api/config") => {
             let body: Value =
-                serde_json::from_slice(&request.body).context("parse config request failed")?;
+                request.json().context("parse config request failed")?;
             let config = update_config_from_value(db_path, &body)?;
             return Ok(json_response(200, config, "OK"));
         }
         ("POST", "/api/participants") => {
-            let body: ParticipantRequest = serde_json::from_slice(&request.body)
+            let body: ParticipantRequest = request.json()
                 .context("parse participant request failed")?;
             upsert_participant(db_path, &body.user_id)?;
             eprintln!("stockpile participant upserted: {}", body.user_id);
@@ -1508,7 +1580,7 @@ fn route_request_inner(
         ("POST", "/api/presence") => {
             ensure_can_read(&config, &auth)?;
             let body: PresenceRequest =
-                serde_json::from_slice(&request.body).context("parse presence request failed")?;
+                request.json().context("parse presence request failed")?;
             let user_id = body.user_id.unwrap_or_else(|| "guest".to_string());
             upsert_presence(&conn, &user_id, !auth.access)?;
             return Ok(json_response(200, load_presence(&conn)?, "OK"));
@@ -1520,7 +1592,7 @@ fn route_request_inner(
         ("POST", "/api/users/merge") => {
             ensure_can_read(&config, &auth)?;
             let body: UserMergeRequest =
-                serde_json::from_slice(&request.body).context("parse user merge request failed")?;
+                request.json().context("parse user merge request failed")?;
             if !auth.admin && config.access_password_enabled && !auth.access {
                 bail!("unauthorized");
             }
@@ -1545,7 +1617,7 @@ fn route_request_inner(
         ("POST", "/api/whitelist") => {
             require_admin(&auth)?;
             let body: WhitelistRequest =
-                serde_json::from_slice(&request.body).context("parse whitelist request failed")?;
+                request.json().context("parse whitelist request failed")?;
             validate_user_id(&body.user_id)?;
             conn.execute(
                 "INSERT INTO stockpile_whitelist(user_id, created_at) VALUES(?1, ?2) ON CONFLICT(user_id) DO NOTHING",
@@ -1586,7 +1658,7 @@ fn route_request_inner(
         }
         ("POST", "/api/admin/import") => {
             require_admin(&auth)?;
-            let body: AdminBackupData = serde_json::from_slice(&request.body)
+            let body: AdminBackupData = request.json()
                 .context("parse admin import request failed")?;
             let report = import_admin_backup(
                 &conn,
@@ -1672,13 +1744,13 @@ fn route_request_inner(
         if let Some(user_id) = path.strip_prefix("/api/admin/users/") {
             require_admin(&auth)?;
             let user_id = percent_decode(user_id)?;
-            let body = if request.body.is_empty() {
+            let body = if request.body.borrow().limit() == 0 {
                 AdminUserDeleteRequest {
                     mode: None,
                     target_user_id: None,
                 }
             } else {
-                serde_json::from_slice(&request.body).context("parse admin user delete failed")?
+                request.json().context("parse admin user delete failed")?
             };
             delete_or_merge_user_conn(
                 &conn,
@@ -1696,7 +1768,7 @@ fn route_request_inner(
     if request.method == "PUT" {
         if let Some((material_id, user_id)) = parse_admin_claim_path(path)? {
             require_admin(&auth)?;
-            let body: AdminClaimRequest = serde_json::from_slice(&request.body)
+            let body: AdminClaimRequest = request.json()
                 .context("parse admin claim request failed")?;
             let target_user = if body.user_id.trim().is_empty() {
                 user_id
@@ -1728,7 +1800,7 @@ fn route_request_inner(
         if let Some(material_id) = path.strip_prefix("/api/admin/materials/") {
             require_admin(&auth)?;
             let material_id = percent_decode(material_id)?;
-            let body: MaterialNoteRequest = serde_json::from_slice(&request.body)
+            let body: MaterialNoteRequest = request.json()
                 .context("parse admin material request failed")?;
             let note = save_material_note_conn(&conn, &material_id, &body, auth.actor())?;
             return Ok(json_response(200, note, "OK"));
@@ -1738,7 +1810,7 @@ fn route_request_inner(
             .and_then(|rest| rest.strip_suffix("/note"))
         {
             let material_id = percent_decode(material_id)?;
-            let body: MaterialNoteRequest = serde_json::from_slice(&request.body)
+            let body: MaterialNoteRequest = request.json()
                 .context("parse material note request failed")?;
             let actor = body.user_id.as_deref().unwrap_or_else(|| auth.actor());
             ensure_can_write(&conn, &config, &auth, actor, &material_id)?;
@@ -1774,7 +1846,7 @@ fn route_request_inner(
             ensure_can_write(&conn, &config, &auth, &user_id, &material_id)?;
             if request.method == "PUT" {
                 let body: ClaimRequest =
-                    serde_json::from_slice(&request.body).context("parse claim request failed")?;
+                    request.json().context("parse claim request failed")?;
                 let before = load_claim_for_audit(&conn, &material_id, &user_id)?;
                 put_claim(db_path, &material_id, &user_id, &body.status, body.quantity)?;
                 write_audit_conn(
@@ -2231,6 +2303,7 @@ fn status_reason(status: u16) -> &'static str {
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
+        413 => "Content Too Large",
         429 => "Too Many Requests",
         500 => "Internal Server Error",
         _ => "Error",
@@ -2245,6 +2318,8 @@ pub(crate) fn init_db(path: &Path) -> Result<()> {
     }
     let conn = Connection::open(path)
         .with_context(|| format!("open stockpile session db failed: {}", path.display()))?;
+    let has_meta:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta')",[],|row|row.get(0))?;
+    if has_meta && meta_value(&conn,"desktop_deleted")?.is_some() { bail!("Material task was deleted"); }
     init_db_conn(&conn)
 }
 
@@ -2627,7 +2702,10 @@ pub(crate) fn upsert_participant(path: &Path, user_id: &str) -> Result<()> {
     validate_user_id(user_id)?;
     let conn = Connection::open(path)?;
     init_db_conn(&conn)?;
-    let now = current_unix_timestamp()?;
+    upsert_participant_conn(&conn, user_id, current_unix_timestamp()?)
+}
+
+fn upsert_participant_conn(conn: &Connection, user_id: &str, now: u64) -> Result<()> {
     conn.execute(
         r#"
         INSERT INTO participants(user_id, first_seen_at, last_seen_at)
@@ -2671,14 +2749,7 @@ fn put_claim_conn(
         bail!("claim status must be preparing or done");
     }
     let now = current_unix_timestamp()?;
-    conn.execute(
-        r#"
-        INSERT INTO participants(user_id, first_seen_at, last_seen_at)
-        VALUES(?1, ?2, ?2)
-        ON CONFLICT(user_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
-        "#,
-        params![user_id, now],
-    )?;
+    upsert_participant_conn(conn, user_id, now)?;
     conn.execute(
         r#"
         INSERT INTO material_claims(material_id, user_id, status, quantity, updated_at)
@@ -3418,7 +3489,8 @@ pub fn session_import(zip_path: &Path, input: &Path, replace: bool) -> Result<Se
         .iter()
         .map(|material| material.namespace_id.as_str())
         .collect::<BTreeSet<_>>();
-    let conn = Connection::open(&db_path)?;
+    let mut database = Connection::open(&db_path)?;
+    let conn = database.transaction()?;
     if replace {
         conn.execute("DELETE FROM material_claims", [])?;
         write_audit_conn(
@@ -3432,13 +3504,14 @@ pub fn session_import(zip_path: &Path, input: &Path, replace: bool) -> Result<Se
         )?;
     }
     for participant in &data.participants {
-        upsert_participant(&db_path, &participant.user_id)?;
+        validate_user_id(&participant.user_id)?;
+        upsert_participant_conn(&conn, &participant.user_id, current_unix_timestamp()?)?;
     }
     let mut imported_claims = 0_usize;
     for claim in &data.material_claims {
         if valid_materials.contains(claim.material_id.as_str()) {
-            put_claim(
-                &db_path,
+            put_claim_conn(
+                &conn,
                 &claim.material_id,
                 &claim.user_id,
                 &claim.status,
@@ -3457,6 +3530,7 @@ pub fn session_import(zip_path: &Path, input: &Path, replace: bool) -> Result<Se
         Some(json!({"imported_claims": imported_claims, "replace": replace})),
         None,
     )?;
+    conn.commit()?;
     Ok(SessionImportOutput {
         zip_path,
         session_db: db_path,
@@ -3905,6 +3979,8 @@ fn import_admin_backup(
         .iter()
         .map(|material| material.namespace_id.as_str())
         .collect::<BTreeSet<_>>();
+    let transaction = conn.unchecked_transaction()?;
+    let conn: &Connection = &transaction;
     let mut report = AdminImportReport::default();
     conn.execute("DELETE FROM participants", [])?;
     conn.execute("DELETE FROM material_claims", [])?;
@@ -4022,6 +4098,7 @@ fn import_admin_backup(
         ip,
     )?;
     touch_meta(conn)?;
+    transaction.commit()?;
     Ok(report)
 }
 
@@ -4505,12 +4582,21 @@ fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-struct HttpRequest {
+struct HttpRequest<'a> {
     method: String,
     path: String,
     headers: BTreeMap<String, String>,
     remote_addr: Option<IpAddr>,
-    body: Vec<u8>,
+    body: std::cell::RefCell<std::io::Take<Box<dyn BufRead + 'a>>>,
+}
+
+impl HttpRequest<'_> {
+    fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T> {
+        let mut body = self.body.borrow_mut();
+        let value = serde_json::from_reader(&mut *body)?;
+        anyhow::ensure!(body.limit() == 0, "incomplete HTTP request body");
+        Ok(value)
+    }
 }
 
 struct HttpResponse {
@@ -4521,47 +4607,47 @@ struct HttpResponse {
     body: Vec<u8>,
 }
 
-fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
-    let remote_addr = stream.peer_addr().ok().map(|addr| addr.ip());
-    let mut reader = BufReader::new(stream);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
-    if request_line.trim().is_empty() {
-        bail!("empty HTTP request");
-    }
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or_default().to_string();
-    let path = parts.next().unwrap_or("/").to_string();
-    let mut content_length = 0_usize;
+// Match the desktop task/worker envelope for ordinary commands; authenticated
+// admin restores stream their JSON without a size ceiling derived from a header.
+const HTTP_BODY_LIMIT: u64 = 64 * 1024 * 1024;
+const HTTP_HEADER_LIMIT: u64 = 64 * 1024;
+
+fn read_request<'a>(reader: &'a mut dyn BufRead, remote_addr: Option<IpAddr>) -> Result<HttpRequest<'a>> {
+    let mut header = reader.take(HTTP_HEADER_LIMIT);
+    let mut line = String::new();
+    header.read_line(&mut line)?;
+    anyhow::ensure!(line.ends_with('\n'), "incomplete or oversized HTTP request line");
+    let mut parts = line.split_whitespace();
+    let method = parts.next().context("empty HTTP request")?.to_string();
+    let path = parts.next().context("missing HTTP request path")?.to_string();
+
+    let mut content_length = None;
     let mut headers = BTreeMap::new();
     loop {
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            break;
+        line.clear();
+        header.read_line(&mut line)?;
+        anyhow::ensure!(line.ends_with('\n'), "incomplete or oversized HTTP headers");
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() { break; }
+        let (name, value) = trimmed.split_once(':').context("malformed HTTP header")?;
+        let name = name.trim().to_ascii_lowercase();
+        let value = value.trim();
+        if name == "content-length" {
+            anyhow::ensure!(!value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()), "invalid Content-Length");
+            let length = value.parse::<u64>()?;
+            anyhow::ensure!(content_length.replace(length).is_none_or(|old| old == length), "conflicting Content-Length");
+        } else if name == "transfer-encoding" {
+            bail!("unsupported HTTP transfer encoding");
         }
-        if let Some((name, value)) = trimmed.split_once(':') {
-            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
-        }
-        if let Some(value) = trimmed
-            .strip_prefix("Content-Length:")
-            .or_else(|| trimmed.strip_prefix("content-length:"))
-        {
-            content_length = value.trim().parse().unwrap_or(0);
-        }
+        headers.insert(name, value.to_string());
     }
-    let mut body = vec![0_u8; content_length];
-    if content_length > 0 {
-        reader.read_exact(&mut body)?;
-    }
-    Ok(HttpRequest {
-        method,
-        path,
-        headers,
-        remote_addr,
-        body,
-    })
+    let reader: Box<dyn BufRead> = Box::new(header.into_inner());
+    Ok(HttpRequest { method, path, headers, remote_addr, body: reader.take(content_length.unwrap_or(0)).into() })
+}
+
+fn body_within_limit(request: &HttpRequest) -> bool {
+    request.body.borrow().limit() <= HTTP_BODY_LIMIT ||
+        (request.method == "POST" && request.path.split('?').next() == Some("/api/admin/import"))
 }
 
 fn write_response(stream: &mut TcpStream, response: HttpResponse) -> Result<()> {
@@ -4632,6 +4718,28 @@ fn percent_decode(value: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn stockpile_http_headers_bound_body_and_restore_framing() {
+        fn parse(bytes: &[u8]) -> Result<(bool, u64)> {
+            let mut stream = std::io::Cursor::new(bytes);
+            let request = read_request(&mut stream, None)?;
+            let len = request.body.borrow().limit();
+            Ok((body_within_limit(&request), len))
+        }
+        let mut claim = std::io::Cursor::new(b"PUT /claim HTTP/1.1\r\ncOnTeNt-LeNgTh: 7\r\n\r\n{\"a\":1}trailer");
+        let request = read_request(&mut claim, None).unwrap();
+        assert_eq!(request.json::<Value>().unwrap(), json!({"a":1}));
+        assert!(parse(b"POST / HTTP/1.1\r\nContent-Length: abc\r\n\r\n").is_err());
+        assert!(parse(b"POST / HTTP/1.1\r\nContent-Length: 1\r\nCONTENT-LENGTH: 2\r\n\r\n").is_err());
+        assert!(parse(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n").is_err());
+        assert!(parse(&vec![b'x'; HTTP_HEADER_LIMIT as usize + 1]).is_err());
+        assert_eq!(parse(b"POST /claim HTTP/1.1\r\nContent-Length: 18446744073709551615\r\n\r\n").unwrap(), (false, u64::MAX));
+        assert_eq!(parse(b"POST /api/admin/import?replace=1 HTTP/1.1\r\nContent-Length: 67108865\r\n\r\n").unwrap(), (true, HTTP_BODY_LIMIT + 1));
+        let mut short = std::io::Cursor::new(b"POST / HTTP/1.1\r\nContent-Length: 8\r\n\r\n{\"a\":1}");
+        assert!(read_request(&mut short, None).unwrap().json::<Value>().is_err());
+    }
+
     use super::*;
     use crate::stockpile::{
         StockpileMaterialItem, StockpileMaterialsData, StockpileProjectInfo, StockpileSummary,
@@ -4642,6 +4750,32 @@ mod tests {
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn desktop_test_request(value:Value) -> DesktopTaskRequest {serde_json::from_value(value).unwrap()}
+
+    #[test]
+    fn desktop_delete_isolated_atomic_and_late_writes_stay_deleted() {
+        let root=temp_db("delete_isolation").with_extension("tasks");
+        let first=saved_multi_fixture(&root);let second=saved_desktop_fixture(&root,"Retained");
+        fs::write(&first.source_path,b"source schematic remains").unwrap();
+        desktop_task_command(&root,desktop_test_request(json!({"action":"mutate","taskId":first.task_id,"sourceRevision":"r1","mutation":{"materialId":"minecraft:stone","quantity":5,"publicNote":"private note","storageLocation":"private location"}}))).unwrap();
+        let other=Connection::open(desktop_task_path(&root,&second.task_id).unwrap()).unwrap();
+        let other_payload:String=other.query_row("SELECT payload FROM desktop_task",[],|row|row.get(0)).unwrap();
+        let other_meta:Vec<(String,String)>=other.prepare("SELECT key,value FROM meta ORDER BY key").unwrap().query_map([],|row|Ok((row.get(0)?,row.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        let delete=json!({"action":"delete","taskId":first.task_id,"projectId":first.project_id,"sourceRevision":"r1"});
+        let mut stale=delete.clone();stale["sourceRevision"]="wrong".into();assert!(desktop_task_command(&root,desktop_test_request(stale)).is_err());
+        let next=desktop_task_command(&root,desktop_test_request(delete.clone())).unwrap();assert_eq!(next.selected_task_id.as_deref(),Some(second.task_id.as_str()));
+        assert_eq!(fs::read(&first.source_path).unwrap(),b"source schematic remains");
+        assert_eq!(other.query_row::<String,_,_>("SELECT payload FROM desktop_task",[],|row|row.get(0)).unwrap(),other_payload);
+        let after:Vec<(String,String)>=other.prepare("SELECT key,value FROM meta ORDER BY key").unwrap().query_map([],|row|Ok((row.get(0)?,row.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();assert_eq!(after,other_meta);
+        let deleted=Connection::open(desktop_task_path(&root,&first.task_id).unwrap()).unwrap();
+        let tables:Vec<String>=deleted.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").unwrap().query_map([],|row|row.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        for table in tables {let count:i64=deleted.query_row(&format!("SELECT count(*) FROM \"{}\"",table),[],|row|row.get(0)).unwrap();assert_eq!(count,if table=="meta"{1}else{0},"{table}");}
+        assert!(save_desktop_task_record(&deleted,&first).is_err());
+        assert!(desktop_task_command(&root,desktop_test_request(json!({"action":"mutate","taskId":first.task_id,"sourceRevision":"r1","mutation":{"reset":true}}))).is_err());
+        assert!(init_db(&desktop_task_path(&root,&first.task_id).unwrap()).is_err());
+        assert_eq!(desktop_task_command(&root,desktop_test_request(delete)).unwrap().tasks.len(),1);
+        let empty=desktop_task_command(&root,desktop_test_request(json!({"action":"delete","taskId":second.task_id,"sourceRevision":"r1"}))).unwrap();assert!(empty.task.is_none());assert!(empty.tasks.is_empty());assert!(empty.legacy_tasks.is_empty());
+        let reopened=desktop_task_command(&root,desktop_test_request(json!({"action":"open"}))).unwrap();assert!(reopened.task.is_none());
+    }
 
     fn saved_desktop_fixture(root:&Path,name:&str) -> DesktopTaskRecord {
         fs::create_dir_all(root).unwrap();
@@ -5621,6 +5755,47 @@ mod tests {
         cleanup_fixture(&fixture, &db, Path::new(""));
     }
 
+
+    fn import_snapshot(conn: &Connection) -> (Value, Value) {
+        let mut state = serde_json::to_value(export_admin_backup(conn).unwrap()).unwrap();
+        state.as_object_mut().unwrap().remove("exported_at");
+        (state, revision_json(conn).unwrap())
+    }
+
+    #[test]
+    fn stockpile_admin_restore_failure_preserves_existing_tables_and_revision() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db_conn(&conn).unwrap();
+        put_claim_conn(&conn, "minecraft:stone", "original", "done", 5).unwrap();
+        let mut backup = export_admin_backup(&conn).unwrap();
+        backup.participants.push(backup.participants[0].clone()); // second insert fails after deletes
+        let before = import_snapshot(&conn);
+        assert!(import_admin_backup(&conn, &fixture_materials(), &backup, "admin", None).is_err());
+        assert_eq!(import_snapshot(&conn), before);
+    }
+
+    #[test]
+    fn stockpile_session_import_failure_preserves_existing_tables_and_revision() {
+        let fixture = exported_fixture("rollback_import");
+        let db = session_db_path(&fixture).unwrap();
+        let state_path = temp_session_export("rollback_import");
+        let _ = std::fs::remove_file(&db);
+        put_claim(&db, "minecraft:stone", "original", "done", 3).unwrap();
+        session_export(&fixture, &state_path).unwrap();
+        let mut data: SessionExportData = serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        data.participants[0].user_id = "new-participant".into();
+        data.material_claims[0].status = "invalid".into(); // fails only after participants were written
+        std::fs::write(&state_path, serde_json::to_vec(&data).unwrap()).unwrap();
+        let conn = Connection::open(&db).unwrap();
+        let before = import_snapshot(&conn);
+        for replace in [false, true] {
+            assert!(session_import(&fixture, &state_path, replace).is_err());
+            assert_eq!(import_snapshot(&conn), before);
+        }
+        drop(conn);
+        cleanup_fixture(&fixture, &db, &state_path);
+    }
+
     #[test]
     fn session_import_merges_by_default() {
         let fixture = exported_fixture("merge");
@@ -6065,6 +6240,11 @@ mod tests {
             &project,
         );
         assert_eq!(blocked.status, 403);
+        let mut unread = std::io::Cursor::new(b"POST /api/admin/import HTTP/1.1\r\nContent-Length: 18446744073709551615\r\n\r\n");
+        let oversized_restore = read_request(&mut unread, None).unwrap();
+        assert!(body_within_limit(&oversized_restore));
+        assert_eq!(route_request(&oversized_restore, &source, &db, &project).status, 403);
+        assert_eq!(oversized_restore.body.borrow().limit(), u64::MAX);
         let login = route_request_inner(
             &request(
                 "POST",
@@ -6102,6 +6282,14 @@ mod tests {
                 .expect("audit")
                 .is_empty()
         );
+
+        let backup = route_request(&request_with_cookie("GET", "/api/admin/export", b"", &cookie), &source, &db, &project);
+        assert_eq!(backup.status, 200);
+        let restored = route_request(&request_with_cookie("POST", "/api/admin/import", &backup.body, &cookie), &source, &db, &project);
+        assert_eq!(restored.status, 200);
+        let round_trip = load_material_note(&Connection::open(&db).unwrap(), "minecraft:stone").unwrap().unwrap();
+        assert_eq!(round_trip.public_note.as_deref(), Some("bring stone"));
+        assert!(round_trip.locked);
 
         cleanup_fixture(&fixture, &db, Path::new(""));
     }
@@ -6392,17 +6580,17 @@ mod tests {
         }
     }
 
-    fn request(method: &str, path: &str, body: &[u8]) -> HttpRequest {
+    fn request(method: &str, path: &str, body: &[u8]) -> HttpRequest<'static> {
         HttpRequest {
             method: method.to_string(),
             path: path.to_string(),
             headers: BTreeMap::new(),
             remote_addr: None,
-            body: body.to_vec(),
+            body: (Box::new(std::io::Cursor::new(body.to_vec())) as Box<dyn BufRead>).take(body.len() as u64).into(),
         }
     }
 
-    fn request_with_cookie(method: &str, path: &str, body: &[u8], cookie: &str) -> HttpRequest {
+    fn request_with_cookie(method: &str, path: &str, body: &[u8], cookie: &str) -> HttpRequest<'static> {
         let mut request = request(method, path, body);
         request
             .headers

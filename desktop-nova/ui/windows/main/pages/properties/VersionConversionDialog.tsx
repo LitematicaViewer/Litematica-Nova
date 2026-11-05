@@ -111,8 +111,8 @@ export function VersionConversionDialog({ sourcePath, onClose, onSaved }: {
     </div> : preview && <>
       <p>{t("conversion.summary", {source:preview.sourceVersion || String(preview.sourceDataVersion), target:preview.targetVersion, count:preview.changedBlockCount.toLocaleString(locale)})}</p>
       {!!preview.blockedPayloads.length && <div role="alert" className="properties-error nova-text-danger">
-        {preview.payloadIssues?.length ? preview.payloadIssues.map((issue) => <p key={`${issue.kind}:${issue.typeName}`}>
-          <strong>{t("conversion.issueCount", {type:issue.typeName, count:issue.count.toLocaleString(locale)})}</strong>: {localizeMessage(issue.message)}
+        {preview.payloadIssues?.length ? preview.payloadIssues.map((issue) => <p key={JSON.stringify([issue.domain, issue.sourceId, issue.kind, issue.message])}>
+          <strong>{t("conversion.issueCount", {type:issue.sourceId || issue.typeName, count:issue.count.toLocaleString(locale)})}</strong>: {localizeMessage(issue.message)}
         </p>) : <p>{t("conversion.payloadBlocked")}</p>}
       </div>}
       {preview.entries.length ? <Table className="properties-conversion-table"><TableHeader><TableRow>

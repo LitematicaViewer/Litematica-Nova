@@ -9,6 +9,9 @@ use litematica_core::{
 };
 use serde::Serialize;
 
+#[cfg(windows)]
+mod installer_resource_cleanup;
+
 fn emit_output<T: Serialize>(value: &T, output: Option<&std::path::Path>) -> Result<()> {
     match output {
         Some(path) => {
@@ -29,6 +32,10 @@ fn emit_output<T: Serialize>(value: &T, output: Option<&std::path::Path>) -> Res
 }
 
 fn main() -> Result<()> {
+    #[cfg(windows)]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("prune-replaced-install-resources")) {
+        return installer_resource_cleanup::run();
+    }
     if let Some(code) = nova_protected_loader::maybe_run_cpu_audit()? { std::process::exit(code); }
 
     let raw = std::env::args().skip(1).collect::<Vec<_>>();

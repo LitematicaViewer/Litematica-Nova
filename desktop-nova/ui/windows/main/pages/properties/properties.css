@@ -2,8 +2,8 @@
 @layer components.shared, components.page, components.theme;
 
 @layer components.page {
-.properties-page { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--ln-space-3, 12px); container-type: inline-size; }
-.properties-header, .properties-toolbar, .properties-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--ln-space-2, 8px); }
+.properties-page { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; gap: var(--nova-section-gap); container-type: inline-size; }
+.properties-header, .properties-toolbar, .properties-actions { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: var(--nova-toolbar-gap); }
 .properties-header { justify-content: space-between; }
 .properties-title { margin: 0; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.3; }
 .properties-file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -37,7 +37,7 @@
 .properties-preview-placeholder { position: absolute; inset: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 16px; padding: 24px; text-align: center; }
 .properties-preview-status { flex: none; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); line-height: 1.5; overflow-wrap: anywhere; }
 .properties-preview-error { flex: none; max-height: 5rem; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; }
-.properties-actions { flex: none; padding-top: 12px; }
+.properties-actions { flex: none; }
 .properties-actions > span { flex: 1; min-width: 8em; }
 .properties-message { flex: none; padding: 10px 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .properties-empty { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 16px; padding: var(--ln-space-6, 24px); }
@@ -55,8 +55,7 @@
   .properties-header { align-items: flex-start; }
   .properties-toolbar { width: 100%; }
   .properties-facts { grid-template-columns: minmax(0, 1fr); }
-  .properties-actions { gap: 6px; }
-  .properties-actions .btn { flex: 1 0 auto; }
+  .properties-actions .btn { flex: 1 1 auto; min-width: 0; max-width: 100%; white-space: normal; }
 }
 /* The default desktop window is only 480px high. Stacking both panes there
    would leave the native viewport a few pixels tall; keep them alongside. */

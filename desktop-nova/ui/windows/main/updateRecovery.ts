@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getApplicationWindowLabel, subscribeApplicationWindowCloseRequested } from "../../../src/platform/nativeWindowGeometry";
 import { listenEvent } from "../../../src/platform/events";
 import { confirmApplicationClose, getApplicationCloseRequest, requestApplicationClose, type ApplicationCloseRequest } from "../../../src/platform/applicationOperations";
+import { getUiLocale } from "../../../src/services/i18n";
 
 const KEY = "nova.update-recovery.v1";
 const captures = new Map<string, () => unknown>();
@@ -12,7 +13,7 @@ function readAll(): Record<string, unknown> {
   const raw = localStorage.getItem(KEY);
   if (!raw) return {};
   const value = JSON.parse(raw);
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("更新草稿格式错误，请保留本地数据后重试。");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(getUiLocale() === "en-US" ? "Recovery drafts are invalid. Keep your local data and retry." : "更新草稿格式错误，请保留本地数据后重试。");
   return value;
 }
 
@@ -66,7 +67,7 @@ export async function preserveDraftsForClose(requestId: number): Promise<void> {
     catch (error) {
       await confirmApplicationClose(requestId, false).catch(() => undefined);
       console.error("[NOVA_LIFECYCLE] draft preservation failed; close cancelled", error);
-      throw new Error("草稿保留失败，请先保存当前编辑，再重试关闭。当前窗口仍保持打开。");
+      throw new Error(getUiLocale() === "en-US" ? "Drafts could not be retained. Save your edits, then try closing again. This window remains open." : "草稿保留失败，请先保存当前编辑，再重试关闭。当前窗口仍保持打开。");
     }
     console.info("[NOVA_LIFECYCLE]", { stage: "close_drafts_ack_requested", requestId });
     await confirmApplicationClose(requestId, true);
@@ -92,7 +93,7 @@ export function useApplicationCloseRecovery() {
       const pending = await getApplicationCloseRequest();
       if (pending) accept(pending);
     };
-    void listening.then(recoverPendingClose).catch(reason => { if (active) setError(`关闭保护未连接，请重试关闭：${String(reason)}`); });
+    void listening.then(recoverPendingClose).catch(reason => { if (active) setError((getUiLocale() === "en-US" ? "Draft protection is not connected. Try closing again: " : "关闭保护未连接，请重试关闭：") + String(reason)); });
     // Native close is independent of renderer notifications and the custom
     // event listener. Both recover the SAME pending Host request; no extra
     // render wait, second close request, or direct WebView destruction.
@@ -101,7 +102,7 @@ export function useApplicationCloseRecovery() {
       console.info("[NOVA_LIFECYCLE]", { stage: "close_native_event_received" });
       void recoverPendingClose().catch(reason => { if (active) setError(String(reason)); });
     });
-    void nativeClose.catch(reason => { if (active) setError(`窗口关闭保护未连接：${String(reason)}`); });
+    void nativeClose.catch(reason => { if (active) setError((getUiLocale() === "en-US" ? "Window close protection is not connected: " : "窗口关闭保护未连接：") + String(reason)); });
     const cancelled = listenEvent<{ message: string }>("nova-close-cancelled", event => { if (active) setError(event.payload.message); });
     const delayed = listenEvent<{ requestId: number; message: string }>("nova-close-delayed", event => {
       if (!active || handledCloseRequests.has(event.payload.requestId)) return;
@@ -132,15 +133,20 @@ export function clearCurrentUpdateDrafts() {
 }
 
 export function releaseNoteSections(notes: string | null) {
-  const labels = ["新增", "优化", "修复", "注意事项"];
+  const labels = ["更新内容", "新增", "优化", "修复", "已知问题", "注意事项", "后续计划"];
   const sections = new Map(labels.map((label) => [label, [] as string[]]));
+  const aliases: Record<string, string> = {
+    "新增功能": "新增", "功能优化": "优化", "问题修复": "修复", "已知 Bug": "已知问题", "已知Bug": "已知问题",
+    "changes": "更新内容", "new features": "新增", "improvements": "优化", "fixes": "修复", "known bugs": "已知问题", "known issues": "已知问题", "notes": "注意事项", "next steps": "后续计划",
+  };
   let active = "注意事项";
   for (const raw of (notes || "").split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || /^(?:#+\s*)?(?:版本|日期)\s*[：:]/.test(line)) continue;
-    const heading = line.replace(/^#+\s*/, "").replace(/[：:]$/, "").trim();
+    const rawHeading = line.replace(/^#+\s*/, "").replace(/[：:]$/, "").replace(/^\*\*|\*\*$/g, "").trim();
+    const heading = aliases[rawHeading] || aliases[rawHeading.toLowerCase()] || rawHeading;
     if (sections.has(heading)) { active = heading; continue; }
     sections.get(active)!.push(line.replace(/^[-*]\s+/, ""));
   }
-  return labels.map((label) => ({ label, lines: sections.get(label)!.length ? sections.get(label)! : ["未提供"] }));
+  return labels.filter(label => sections.get(label)!.length).map((label) => ({ label, lines: sections.get(label)! }));
 }

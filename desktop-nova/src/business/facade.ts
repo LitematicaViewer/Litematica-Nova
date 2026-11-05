@@ -28,7 +28,7 @@ export * from "../platform/sceneView";
 export * from "../services/worldExport";
 export * from "../services/irisSettings";
 
-export * from "../services/creativeItemIdentity";
+export { readCreativeIdentities, type CreativeIdentityView } from "../platform/files";
 export { readMaterialDetail, type MaterialDetail, type MaterialDetailInput } from "../platform/applicationOperations";
 
 export { commandStockpileTask, getStockpileTask, setStockpileTaskQuantity, resetStockpileTask, prepareMaterialTaskWindow, type ApplicationMaterialScope, type StockpileTaskInput, type StockpileTaskView, type StockpileTaskWorkspace, type StockpileTaskCommandInput, type StockpileTaskPreferences, type StockpileTaskMutation, type StockpileMaterial, type StockpileRecipeTree, type StockpileSourceInput, type StockpileSource, type StockpileDemandSource } from "../platform/applicationOperations";

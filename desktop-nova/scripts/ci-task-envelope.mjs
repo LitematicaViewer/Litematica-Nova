@@ -13,6 +13,19 @@ function validate(context) {
   if (context.schema !== 'nova.ci.task.v1' || !/^[0-9]{1,30}$/.test(context.taskId) || !/^[a-f0-9]{40}$/.test(context.sourceSha) ||
       !['x86_64-apple-darwin','aarch64-apple-darwin'].includes(context.target) || !['source','result'].includes(context.direction) || Object.keys(context).length !== 5) throw new Error('Invalid task binding.');
 }
+async function writeExclusive(output, write) {
+  // An EEXIST here grants no ownership and must never enter cleanup.
+  const fd = fs.openSync(output, 'wx', 0o600);
+  const destination = fs.createWriteStream(output, { fd });
+  const closed = new Promise(resolve => destination.once('close', resolve));
+  try { await write(destination); }
+  catch (error) {
+    destination.destroy();
+    await closed;
+    try { fs.unlinkSync(output); } catch {}
+    throw error;
+  }
+}
 export async function sealTask(input, output, context, keyText = process.env.NOVA_CI_TASK_KEY) {
   validate(context);
   const nonce = crypto.randomBytes(12), header = Buffer.from(JSON.stringify({ ...context, nonce: nonce.toString('base64') }));
@@ -20,10 +33,12 @@ export async function sealTask(input, output, context, keyText = process.env.NOV
   const aad = Buffer.concat([magic, length, header]), key = taskKey(context, keyText);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce); cipher.setAAD(aad);
   try {
-    const descriptor = fs.openSync(output, 'wx', 0o600); fs.writeSync(descriptor, aad); fs.closeSync(descriptor);
-    await pipeline(fs.createReadStream(input), cipher, fs.createWriteStream(output, { flags: 'a', mode: 0o600 }));
-    fs.appendFileSync(output, cipher.getAuthTag());
-  } catch (error) { try { fs.unlinkSync(output); } catch {} throw error; }
+    await writeExclusive(output, destination => pipeline(fs.createReadStream(input), cipher, async function* (encrypted) {
+      yield aad;
+      yield* encrypted;
+      yield cipher.getAuthTag();
+    }, destination));
+  }
   finally { key.fill(0); }
 }
 export async function openTask(input, output, expected, keyText = process.env.NOVA_CI_TASK_KEY) {
@@ -43,7 +58,6 @@ export async function openTask(input, output, expected, keyText = process.env.NO
   } finally { fs.closeSync(descriptor); }
   const key = taskKey(expected, keyText), decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
   decipher.setAAD(aad); decipher.setAuthTag(tag);
-  try { await pipeline(fs.createReadStream(input, { start, end }), decipher, fs.createWriteStream(output, { flags: 'wx', mode: 0o600 })); }
-  catch (error) { try { fs.unlinkSync(output); } catch {} throw error; }
+  try { await writeExclusive(output, destination => pipeline(fs.createReadStream(input, { start, end }), decipher, destination)); }
   finally { key.fill(0); }
 }

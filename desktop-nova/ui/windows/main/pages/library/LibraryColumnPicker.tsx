@@ -1,3 +1,4 @@
+import { t } from "../../../../../src/services/i18n";
 import { Popover } from "radix-ui";
 import { Button } from "../../../../components/ui/button";
 import { Checkbox } from "../../../../components/ui/checkbox";
@@ -22,13 +23,13 @@ export function LibraryColumnPicker({
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <Button size="sm" variant="ghost" disabled={disabled} aria-label="配置详细信息列">
-          列
+        <Button size="sm" variant="ghost" disabled={disabled} aria-label={t("library.ux.columnsConfigure")}>
+          {t("library.ux.columns")}
         </Button>
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content className="library-column-menu" collisionPadding={8} align="end" sideOffset={4}>
-          <p className="library-column-menu-title">显示列</p>
+          <p className="library-column-menu-title">{t("library.ux.columnsVisible")}</p>
           {LIBRARY_COLUMNS.map((column) => (
             <label key={column.id} className="library-column-option">
               <Checkbox

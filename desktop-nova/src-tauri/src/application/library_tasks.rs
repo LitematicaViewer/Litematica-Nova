@@ -14,8 +14,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::UNIX_EPOCH;
 
@@ -252,6 +252,7 @@ struct TaskEnvelope {
 
 #[derive(Default)]
 struct QueueState {
+    worker_started: bool,
     pending: VecDeque<TaskEnvelope>,
     running: Option<TaskDescriptor>,
     cancel_flags: HashSet<String>,
@@ -291,13 +292,11 @@ impl TaskOutcome {
 pub(crate) struct LibraryTaskQueue {
     state: Mutex<QueueState>,
     available: Condvar,
-    started: AtomicBool,
     next_id: AtomicU64,
     sink: Arc<dyn TaskEventSink>,
     config_directory: ConfigDirectoryProvider,
     checksum_cache: Mutex<HashMap<String, CachedChecksum>>,
     format_inspector: OnceLock<FormatInspector>,
-    self_weak: OnceLock<Weak<LibraryTaskQueue>>,
 }
 
 impl LibraryTaskQueue {
@@ -305,19 +304,15 @@ impl LibraryTaskQueue {
         sink: Arc<dyn TaskEventSink>,
         config_directory: ConfigDirectoryProvider,
     ) -> Arc<Self> {
-        let queue = Arc::new(Self {
+        Arc::new(Self {
             state: Mutex::new(QueueState::default()),
             available: Condvar::new(),
-            started: AtomicBool::new(false),
             next_id: AtomicU64::new(1),
             sink,
             config_directory,
             checksum_cache: Mutex::new(HashMap::new()),
             format_inspector: OnceLock::new(),
-            self_weak: OnceLock::new(),
-        });
-        let _ = queue.self_weak.set(Arc::downgrade(&queue));
-        queue
+        })
     }
 
     pub(crate) fn set_format_inspector(&self, inspector: FormatInspector) -> Result<(), String> {
@@ -344,16 +339,22 @@ impl LibraryTaskQueue {
     }
 
     /// Enqueues a task and returns its id. The worker is spawned lazily.
-    pub(crate) fn submit(&self, kind: TaskKind, params: serde_json::Value) -> String {
+    pub(crate) fn submit(self: &Arc<Self>, kind: TaskKind, params: serde_json::Value) -> Result<String, String> {
         let id = format!("library-task-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         {
             let mut state = self.lock_state();
+            if !state.worker_started {
+                let worker = Arc::clone(self);
+                thread::Builder::new().name("library-task-worker".to_owned())
+                    .spawn(move || worker.run_loop())
+                    .map_err(|error| format!("无法启动本地库任务线程：{error}"))?;
+                state.worker_started = true;
+            }
             state.pending.push_back(TaskEnvelope { id: id.clone(), kind, params });
         }
-        self.ensure_worker();
         self.notify_queue_changed();
         self.available.notify_all();
-        id
+        Ok(id)
     }
 
     /// Requests cooperative cancellation. Returns `false` when no such task is
@@ -383,20 +384,6 @@ impl LibraryTaskQueue {
         }
     }
 
-    fn ensure_worker(&self) {
-        if self
-            .started
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
-            if let Some(worker) = self.self_weak.get().and_then(Weak::upgrade) {
-                let _ = thread::Builder::new()
-                    .name("library-task-worker".to_owned())
-                    .spawn(move || worker.run_loop());
-            }
-        }
-    }
-
     fn run_loop(self: Arc<Self>) {
         loop {
             let envelope = {
@@ -407,13 +394,10 @@ impl LibraryTaskQueue {
                         .wait(state)
                         .unwrap_or_else(|poison| poison.into_inner());
                 }
-                state.pending.pop_front().expect("non-empty queue")
+                let envelope = state.pending.pop_front().expect("non-empty queue");
+                state.running = Some(TaskDescriptor { task_id: envelope.id.clone(), kind: envelope.kind });
+                envelope
             };
-            let descriptor = TaskDescriptor { task_id: envelope.id.clone(), kind: envelope.kind };
-            {
-                let mut state = self.lock_state();
-                state.running = Some(descriptor);
-            }
             self.notify_queue_changed();
 
             let outcome = if self.is_cancelled(&envelope.id) {
@@ -1192,9 +1176,9 @@ mod tests {
         let sink = Arc::new(RecordingSink::default());
         let queue = build_queue(sink.clone());
 
-        let first = queue.submit(TaskKind::Checksum, serde_json::json!({ "paths": paths }));
-        let second = queue.submit(TaskKind::Checksum, serde_json::json!({ "paths": paths }));
-        let third = queue.submit(TaskKind::Checksum, serde_json::json!({ "paths": paths }));
+        let first = queue.submit(TaskKind::Checksum, serde_json::json!({ "paths": paths })).unwrap();
+        let second = queue.submit(TaskKind::Checksum, serde_json::json!({ "paths": paths })).unwrap();
+        let third = queue.submit(TaskKind::Checksum, serde_json::json!({ "paths": paths })).unwrap();
         wait_idle(&queue, &sink, 3);
 
         let finished = sink.finished.lock().unwrap();
@@ -1223,7 +1207,7 @@ mod tests {
         let sink = Arc::new(RecordingSink::default());
         let queue = build_queue(sink.clone());
 
-        let task_id = queue.submit(TaskKind::Checksum, serde_json::json!({ "paths": paths }));
+        let task_id = queue.submit(TaskKind::Checksum, serde_json::json!({ "paths": paths })).unwrap();
         *sink.cancel_target.lock().unwrap() = Some(task_id.clone());
         wait_idle(&queue, &sink, 1);
 
@@ -1254,7 +1238,7 @@ mod tests {
         queue.submit(
             TaskKind::Checksum,
             serde_json::json!({ "paths": [good.display().to_string(), missing.display().to_string()] }),
-        );
+        ).unwrap();
         wait_idle(&queue, &sink, 1);
 
         let finished = sink.finished.lock().unwrap();
@@ -1269,7 +1253,7 @@ mod tests {
     fn invalid_params_fail_the_task_without_panicking() {
         let sink = Arc::new(RecordingSink::default());
         let queue = build_queue(sink.clone());
-        queue.submit(TaskKind::Scan, serde_json::json!({ "folders": "not-an-array" }));
+        queue.submit(TaskKind::Scan, serde_json::json!({ "folders": "not-an-array" })).unwrap();
         wait_idle(&queue, &sink, 1);
         assert_eq!(finished_statuses(&sink), vec!["failed"]);
     }
@@ -1296,7 +1280,7 @@ mod tests {
             "forceRecheck": false,
             "scope": { "kind": "all" }
         });
-        queue.submit(TaskKind::Scan, params.clone());
+        queue.submit(TaskKind::Scan, params.clone()).unwrap();
         wait_idle(&queue, &sink, 1);
         let first = sink.finished.lock().unwrap()[0].clone();
         assert_eq!(first.status, "completed");
@@ -1305,7 +1289,7 @@ mod tests {
         assert_eq!(first.summary["cacheHits"].as_u64(), Some(0));
         assert_eq!(first.summary["files"].as_array().unwrap().len(), 2);
 
-        queue.submit(TaskKind::Scan, params.clone());
+        queue.submit(TaskKind::Scan, params.clone()).unwrap();
         wait_idle(&queue, &sink, 2);
         let second = sink.finished.lock().unwrap()[1].clone();
         assert_eq!(second.summary["cacheHits"].as_u64(), Some(2));
@@ -1313,7 +1297,7 @@ mod tests {
         // forceRecheck bypasses the size+mtime cache.
         let mut forced = params.clone();
         forced["forceRecheck"] = serde_json::json!(true);
-        queue.submit(TaskKind::Scan, forced);
+        queue.submit(TaskKind::Scan, forced).unwrap();
         wait_idle(&queue, &sink, 3);
         let third = sink.finished.lock().unwrap()[2].clone();
         assert_eq!(third.summary["cacheHits"].as_u64(), Some(0));
@@ -1351,7 +1335,7 @@ mod tests {
                     }
                 ]
             }),
-        );
+        ).unwrap();
         wait_idle(&queue, &sink, 1);
         let finished = sink.finished.lock().unwrap();
         assert_eq!(finished[0].status, "completed");
@@ -1383,7 +1367,7 @@ mod tests {
             serde_json::json!({
                 "items": [{ "sourcePath": source.display().to_string(), "trashName": "a.litematic" }]
             }),
-        );
+        ).unwrap();
         wait_idle(&queue, &sink, 1);
         let finished = sink.finished.lock().unwrap();
         assert_eq!(finished[0].status, "completed");
@@ -1418,7 +1402,7 @@ mod tests {
                     "version": "1.20"
                 }]
             }),
-        );
+        ).unwrap();
         wait_idle(&queue, &sink, 1);
         let finished = sink.finished.lock().unwrap();
         assert_eq!(finished[0].status, "completed");

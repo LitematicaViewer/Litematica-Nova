@@ -6,34 +6,36 @@
 .settings-page {
     display: flex;
     flex-direction: column;
-    gap: 28px;
+    gap: var(--nova-section-gap, 16px);
     width: 100%;
     max-width: none;
     min-height: 0;
     min-width: 0;
-    padding: 16px clamp(12px, 2vw, 32px) 32px;
+    padding: 0 0 var(--nova-page-inset, 16px);
     container-type: inline-size;
 }
 
 .settings-title { margin: 0; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.3; }
-html[data-theme] .settings-page > .group-box {
+html[data-theme] .settings-page > .settings-section {
     flex: 0 0 auto;
     min-width: 0;
-    padding: 0 0 24px;
+    padding: 0 0 var(--nova-section-gap, 16px);
     margin: 0;
 }
-html[data-theme] .settings-page .group-box-title { padding: 0; margin-bottom: 16px; font-size: var(--nova-text-base); }
+html[data-theme] .settings-page .group-box-title { padding: 0; margin-bottom: var(--nova-section-gap, 16px); font-size: var(--nova-text-base); }
 .settings-page .form-row {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: var(--ln-space-2, 8px) var(--ln-space-3, 12px);
+    gap: var(--nova-toolbar-gap, 8px) var(--nova-section-gap, 16px);
     margin-block: var(--ln-space-2, 8px);
 }
 .settings-page .form-label {
     flex: 0 0 10.75rem;
     width: auto;
     max-width: 100%;
+    text-align: start;
+    overflow-wrap: anywhere;
     line-height: 1.4;
 }
 .settings-page .form-field,
@@ -62,7 +64,7 @@ html[data-theme] .settings-page .group-box-title { padding: 0; margin-bottom: 16
 .settings-page .settings-count-input { flex: 0 1 8rem; width: 8rem; }
 .settings-page label.form-field > [data-slot="checkbox"] { flex: 0 0 auto; }
 .settings-page .settings-stack { flex-direction: column; align-items: stretch; }
-.settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ln-space-2, 8px); }
+.settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--nova-toolbar-gap, 8px); }
 .settings-actions-spaced { margin-top: var(--ln-space-2, 8px); }
 .settings-page .settings-help-text {
     max-width: 76ch;
@@ -130,4 +132,28 @@ html[data-theme] .settings-color-options > [data-slot="radio-group-item"] { gap:
 .iris-settings-panel { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); min-width: 0; }
 .iris-settings-title { margin: 0 0 12px; font-size: var(--nova-text-base); }
 
+}
+
+@layer components.page {
+.settings-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; gap: 12px; }
+.settings-sidebar .settings-categories { flex: 1; }
+.settings-category-select { display: none; }
+.settings-search { position: relative; display: grid; grid-template-columns: 16px minmax(0,1fr); align-items: center; gap: 8px; flex: none; min-width: 0; }
+.settings-search > svg { color: var(--muted-foreground); pointer-events: none; }
+.settings-search > input { width: 100%; min-width: 0; }
+.settings-search-results { position: absolute; top: calc(100% + 8px); left: 0; width: max(100%, 280px); max-width: calc(100vw - 24px); max-height: min(400px, 65vh); overflow: auto; overscroll-behavior: contain; z-index: 40; background: var(--popover,var(--background)); color: var(--foreground); border: 1px solid var(--border); border-radius: 10px; padding: 6px; box-shadow: 0 8px 24px rgb(0 0 0 / .16); }
+.settings-search-results > button { display: flex; width: 100%; min-height: 32px; height: auto; padding: 8px; white-space: normal; justify-content: flex-start; text-align: left; }
+.settings-search-results > p { padding: 8px; margin: 0; }
+.settings-section { border: 0; background: transparent; scroll-margin-top: 12px; }
+.settings-section[hidden] { display: none; }
+.settings-section .form-row { scroll-margin: 20px; }
+.settings-unsaved { display: flex; gap: 8px; align-items: center; margin: 0; color: var(--muted-foreground); line-height: 1.5; }
+.settings-operation-status { margin: 0; color: var(--muted-foreground); }
+@media (max-width: 959px) {
+  .settings-sidebar { flex-direction: row; align-items: center; gap: 8px; }
+  .settings-sidebar .settings-categories { display: none; }
+  .settings-category-select { display: block; flex: 1 1 40%; min-width: 0; max-width: 50%; }
+  .settings-search { flex: 1 1 50%; max-width: none; }
+  .settings-search-results { max-width: calc(100vw - 80px); }
+}
 }

@@ -22,7 +22,6 @@ pub const MODULE_ID: &str = "libnova_protected_module.dylib";
 pub const MODULE_EXTENSION: &str = std::env::consts::DLL_EXTENSION;
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 compile_error!("Nova protected modules require a supported Windows, Linux or macOS target");
-const DEFAULT_ENDPOINT: &str = "https://45-62-112-121.sslip.io:8448/nova-core";
 const MAX_TICKET_BYTES: u64 = 128 * 1024;
 const MAX_MODULE_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -81,11 +80,11 @@ pub fn trusted_config(identity_dir: impl Into<PathBuf>) -> Result<ClientConfig> 
     let build_id = option_env!("NOVA_PROTECTED_BUILD_ID")
         .filter(|value| !value.is_empty())
         .context("protected release build identity is not configured")?;
-    let endpoint = option_env!("NOVA_PROTECTED_ENDPOINT").unwrap_or(DEFAULT_ENDPOINT);
-    ensure!(
-        endpoint.starts_with("https://"),
-        "protected production endpoint must use HTTPS"
-    );
+    let endpoint = nova_protection::client::service_url("nova-core")?;
+    let compiled = option_env!("NOVA_PROTECTED_ENDPOINT")
+        .filter(|value| !value.is_empty())
+        .context("protected release endpoint is not configured")?;
+    ensure!(compiled == endpoint, "signed runtime endpoint differs from release service configuration");
     if let Some(compatibility) = nova_protection::runtime::compiled_compatibility()? {
         compatibility.verify(public_key, nova_protection::runtime::target()?)?;
         ensure!(

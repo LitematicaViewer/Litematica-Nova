@@ -263,7 +263,7 @@ function RedenLibraryPanel({ onClose }: { onClose?: () => void }) {
             aria-label={t("library.searchOnlineSchematics")}
             placeholder={t("library.onlineSearchPlaceholder")}
             onChange={(event) => { setRedenQuery(event.target.value); setSearchDirty(true); }}
-            onKeyDown={(event) => { if (event.key === "Enter") handleRedenSearch(); }}
+            onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) handleRedenSearch(); }}
           />
           <Button disabled={!!redenBusy} onClick={handleRedenSearch}>
             {redenBusy === "search" ? t("library.searching") : t("library.search")}

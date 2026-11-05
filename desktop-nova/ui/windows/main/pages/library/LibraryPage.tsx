@@ -1,5 +1,6 @@
 import { PreviewDraftDialog } from "../../../../components/PreviewDraftDialog";
 import { readVisiblePreviews, cancelPreviewRead, generatePreviewImages, cancelPreviewGeneration, discardGeneratedPreview, type ProductPreviewImage } from "../../../../../src/platform/previewImage";
+import { libraryContentCommand } from "../../../../../src/platform/files";
 import { queryComposition } from "../../../../../src/platform/composition";
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
@@ -83,7 +84,6 @@ import type { LibraryCardBinding } from "./EntryCard";
 import {
   DEFAULT_LIBRARY_COLUMNS,
   buildEntryViews,
-  groupEntryViews,
   type GroupingDimension,
   type GroupingMode,
   type LibraryEntryView,
@@ -127,6 +127,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   const [recentOnly, setRecentOnly] = useState(false);
   const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
   const [inspectedEntryId, setInspectedEntryId] = useState("");
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<string[]>([]);
   const [columns, setColumns] = useState<string[]>(DEFAULT_LIBRARY_COLUMNS);
   const [indexMatchIds, setIndexMatchIds] = useState<Set<string> | null>(null);
@@ -154,11 +155,16 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   const [visiblePreviewIds, setVisiblePreviewIds] = useState<Set<string>>(new Set());
   const [previewErrors, setPreviewErrors] = useState<Record<string, string>>({});
   const [previewDrafts, setPreviewDrafts] = useState<Array<{ path: string; image: ProductPreviewImage }>>([]);
+  const previewDraftQueue = useRef(previewDrafts);
+  const updatePreviewDrafts = (next: typeof previewDrafts) => {
+    previewDraftQueue.current = next; setPreviewDrafts(next);
+  };
   const [previewProgress, setPreviewProgress] = useState({ completed: 0, total: 0 });
   const [previewPaused, setPreviewPaused] = useState(false);
   const generationRequest = useRef("");
   const libraryAlive = useRef(true);
   const previewReadSequence = useRef(0);
+  const previewReadIdentity = useRef(new Map<string, string>());
   const handlePreviewVisibility = useCallback((id: string, visible: boolean) => setVisiblePreviewIds(current => {
     if (current.has(id) === visible) return current; const next = new Set(current); if (visible) next.add(id); else next.delete(id); return next;
   }), []);
@@ -188,6 +194,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   const [repositionRename, setRepositionRename] = useState("");
   const [repositionError, setRepositionError] = useState("");
   const [isRepositioning, setIsRepositioning] = useState(false);
+  const repositionPending = useRef(false);
 
   const [moveEntryIds, setMoveEntryIds] = useState<string[]>([]);
   const [moveCategoryId, setMoveCategoryId] = useState("");
@@ -212,7 +219,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   useEffect(() => {
     loadLibrary()
       .then((library) => applyState(normalizeLibraryState(library)))
-      .catch((error) => setMessage(`读取投影库失败，请点击刷新重试：${String(error)}`));
+      .catch((error) => setMessage(t("library.ux.readLibraryFailed", { value0: String(error) })));
   }, []);
 
   useEffect(() => {
@@ -237,6 +244,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     const unlistenPromise = listenEvent<{ path?: string; reason?: string }>(projectionLibraryStateChangedEvent, async (event) => {
       if (event.payload?.reason === "embedded-preview" && event.payload.path) {
         const path = event.payload.path;
+        previewReadIdentity.current.delete(path);
 
         const forget = <T,>(values: Record<string, T>) => Object.fromEntries(Object.entries(values).filter(([candidate]) => !samePath(candidate, path)));
         setPreviewDataUrls(forget); setPreviewErrors(forget); setPreviewLoadingPaths(forget);
@@ -253,14 +261,21 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   const recentRefs = useMemo(() => getRecent(state), [state]);
   const recentEntryIds = useMemo(() => new Set(recentRefs.filter((ref) => ref.kind === "entry" && ref.entryId).map((ref) => ref.entryId as string)), [recentRefs]);
   const selectedIds = useMemo(() => new Set(selectedEntryIds), [selectedEntryIds]);
-  const categoryCounts = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const category of state.categories) {
-      const ids = categoryDescendants(state, category.id);
-      map.set(category.id, entryViews.filter((entry) => entry.categoryIds.some((id) => ids.has(id))).length);
-    }
-    return map;
-  }, [state, entryViews]);
+  const [queryView, setQueryView] = useState<{ entryIds: string[]; groups: { key: string; label: string; entryIds: string[] }[]; categoryCounts: Record<string, number>; untaggedCount: number; issueCount: number } | null>(null);
+  const [queryBusy, setQueryBusy] = useState(false);
+  useEffect(() => {
+    let current = true;
+    setQueryBusy(true);
+    void libraryContentCommand<NonNullable<typeof queryView>>({ action: "query", state, query: {
+      category: categoryFilter, untaggedOnly, favoritesOnly, recentOnly, status: statusFilter, sort: sortMode,
+      matchIds: search.trim() && indexMatchIds ? [...indexMatchIds] : null, group: groupDimension,
+      versionLabels: Object.fromEntries(entryViews.map(entry => [entry.minecraftDataVersion, entry.versionLabel])),
+    } }).then(result => { if (current) setQueryView(result); })
+      .catch(error => { if (current) setMessage(t("library.ux.readListFailed", { value0: String(error) })); })
+      .finally(() => { if (current) setQueryBusy(false); });
+    return () => { current = false; };
+  }, [state, entryViews, categoryFilter, untaggedOnly, favoritesOnly, recentOnly, statusFilter, sortMode, search, indexMatchIds, groupDimension]);
+  const categoryCounts = useMemo(() => new Map(Object.entries(queryView?.categoryCounts || {})), [queryView]);
 
   const favorites = useMemo(() => entryViews.filter((entry) => favoriteIds.has(entry.entryId)), [entryViews, favoriteIds]);
   const recentItems = useMemo<LibraryRecentItem[]>(() => recentRefs
@@ -275,27 +290,12 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     })
     .filter((item): item is LibraryRecentItem => !!item), [recentRefs, entryById]);
 
-  const filteredEntries = useMemo(() => {
-    let entries = entryViews;
-    if (favoritesOnly) entries = entries.filter((entry) => favoriteIds.has(entry.entryId));
-    if (recentOnly) entries = entries.filter((entry) => recentEntryIds.has(entry.entryId));
-    if (categoryFilter) {
-      const ids = categoryDescendants(state, categoryFilter);
-      entries = entries.filter((entry) => entry.categoryIds.some((id) => ids.has(id)));
-    }
-    if (untaggedOnly) entries = entries.filter((entry) => !entry.categoryIds.length);
-    if (statusFilter) entries = entries.filter((entry) => entry.status === statusFilter);
-    if (search.trim() && indexMatchIds) entries = entries.filter((entry) => indexMatchIds.has(entry.entryId));
-    const sorted = [...entries];
-    if (sortMode === "recent_analyzed") sorted.sort((a, b) => b.lastAnalyzedAt - a.lastAnalyzedAt);
-    else if (sortMode === "blocks") sorted.sort((a, b) => b.totalBlocks - a.totalBlocks);
-    else if (sortMode === "name") sorted.sort((a, b) => (a.displayName || a.fileName).localeCompare(b.displayName || b.fileName));
-    else sorted.sort((a, b) => a.sortIndex - b.sortIndex);
-    return sorted;
-  }, [entryViews, state, favoriteIds, recentEntryIds, categoryFilter, untaggedOnly, statusFilter, search, indexMatchIds, sortMode, favoritesOnly, recentOnly]);
-
+  const filteredEntries = useMemo(() => (queryView?.entryIds || []).map(id => entryById.get(id)).filter((entry): entry is LibraryEntryView => !!entry), [queryView, entryById]);
   const grouped = groupDimension !== "none";
-  const groups = useMemo(() => grouped ? groupEntryViews(filteredEntries, groupDimension) : [], [grouped, filteredEntries, groupDimension]);
+  const groups = useMemo(() => (queryView?.groups || []).map(group => ({ ...group,
+    label: group.label || (groupDimension === "author" ? t("library.noAuthor") : groupDimension === "version" ? t("library.ux.unknownVersion") : t("stats.export.option.all")),
+    entries: group.entryIds.map(id => entryById.get(id)).filter((entry): entry is LibraryEntryView => !!entry),
+  })), [queryView, entryById, groupDimension]);
 
   const pageEntries = filteredEntries;
 
@@ -303,10 +303,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   const selectedEntries = entryViews.filter((entry) => selectedIds.has(entry.entryId));
   const allPageSelected = pageEntries.length > 0 && pageEntries.every((entry) => selectedIds.has(entry.entryId));
   const somePageSelected = pageEntries.some((entry) => selectedIds.has(entry.entryId));
-  const issueCount = entryViews.filter((entry) => entry.status !== "ok").length;
+  const issueCount = queryView?.issueCount || 0;
   const dispatchEntry = dispatchEntryId ? entryById.get(dispatchEntryId) || null : null;
   const trashEntries = state.trash || [];
-  const activeFilterLabel = untaggedOnly ? "未分类" : favoritesOnly ? "收藏夹" : recentOnly ? "最近使用" : categoryFilter ? categoryPath(state, categoryFilter) || "全库" : "全库";
+  const activeFilterLabel = untaggedOnly ? t("library.uncategorized") : favoritesOnly ? t("library.ux.favorites") : recentOnly ? t("library.ux.recents") : categoryFilter ? categoryPath(state, categoryFilter) || t("library.ux.allLibrary") : t("library.ux.allLibrary");
 
   // --- search through the background index ---------------------------------------
   useEffect(() => {
@@ -339,10 +339,13 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     if (inspectedEntry && inspectedEntry.status !== "missing" && !visible.includes(inspectedEntry)) visible.unshift(inspectedEntry);
     return visible;
   }, [pageEntries, inspectedEntry, visiblePreviewIds]);
+  const previewTargetIdentity = JSON.stringify(previewTargets.map(entry => [entry.primary.path, entry.checksum, entry.fileSize, entry.mtime, entry.previewUpdatedAt]));
   useEffect(() => {
     let active = true;
-    const paths = previewTargets.map(entry => entry.primary.path);
-    const keep = new Set(paths);
+    const identities = new Map(previewTargets.map(entry => [entry.primary.path, JSON.stringify([entry.checksum, entry.fileSize, entry.mtime, entry.previewUpdatedAt])]));
+    const keep = new Set(identities.keys());
+    const paths = [...keep].filter(path => previewReadIdentity.current.get(path) !== identities.get(path));
+    for (const path of previewReadIdentity.current.keys()) if (!keep.has(path)) previewReadIdentity.current.delete(path);
     setPreviewDataUrls(current => Object.fromEntries(Object.entries(current).filter(([path]) => keep.has(path))));
     setPreviewErrors(current => Object.fromEntries(Object.entries(current).filter(([path]) => keep.has(path))));
     setPreviewLoadingPaths(Object.fromEntries(paths.map(path => [path, true])));
@@ -353,19 +356,33 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
       operationIds.push(operationId);
       void readVisiblePreviews(targets, operationId).then(rows => {
         if (!active) return;
+        for (const row of rows) if (!row.error && identities.has(row.sourcePath)) previewReadIdentity.current.set(row.sourcePath, identities.get(row.sourcePath)!);
         setPreviewDataUrls(current => ({ ...current, ...Object.fromEntries(rows.map(row => [row.sourcePath, row.image?.data_url || ""])) }));
         setPreviewErrors(current => ({ ...current, ...Object.fromEntries(rows.map(row => [row.sourcePath, row.error || ""])) }));
       }).catch(error => { if (active) setPreviewErrors(current => ({ ...current, ...Object.fromEntries(targets.map(path => [path, String(error)])) })); })
         .finally(() => { if (active) setPreviewLoadingPaths(current => ({ ...current, ...Object.fromEntries(targets.map(path => [path, false])) })); });
     }
     return () => { active = false; for (const operationId of operationIds) void cancelPreviewRead(operationId).catch(() => undefined); };
-  }, [previewTargets]);
+  }, [previewTargetIdentity]);
   useEffect(() => {
     libraryAlive.current = true;
     const events = listenEvent<{ requestId: string; completed: number; total: number }>("nova://thumbnail-progress", event => {
       if (event.payload.requestId === generationRequest.current) setPreviewProgress({ completed: event.payload.completed, total: event.payload.total });
     });
-    return () => { libraryAlive.current = false; if (generationRequest.current) void cancelPreviewGeneration(generationRequest.current).catch(() => undefined); void events.then(unlisten => unlisten()).catch(() => undefined); };
+    return () => {
+      libraryAlive.current = false;
+      if (generationRequest.current) void cancelPreviewGeneration(generationRequest.current).catch(() => undefined);
+      generationRequest.current = "";
+      // The displayed first item belongs to PreviewDraftDialog (including any
+      // pending save). This page owns only the drafts still waiting in the queue.
+      queueMicrotask(() => {
+        if (libraryAlive.current) return;
+        for (const { image } of previewDraftQueue.current.slice(1)) if (image.draft_id) {
+          void discardGeneratedPreview(image.draft_id).catch(reason => console.warn("[NOVA_PREVIEW] discard queued draft failed", reason));
+        }
+      });
+      void events.then(unlisten => unlisten()).catch(() => undefined);
+    };
   }, []);
 
   // --- actions -------------------------------------------------------------------
@@ -380,7 +397,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
         applyState(await addOrUpdateRecord(await loadLibrary(), res));
       }
     } catch (error) {
-      setMessage(`打开投影失败，请重新选择文件：${String(error)}`);
+      setMessage(t("library.ux.openFailed", { value0: String(error) }));
     } finally { setIsOpening(false); }
   };
 
@@ -394,10 +411,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
         onProgress: (progress) => { setRefreshProgress(progress.processed); setRefreshTotal(progress.total); },
       });
       applyState(outcome.state);
-      if (outcome.status !== "completed") setMessage("刷新未完成，原有列表已保留。请重试。");
-      else if (outcome.failures.length) setMessage(`刷新完成，但有 ${outcome.failures.length} 个文件未能扫描。`);
+      if (outcome.status !== "completed") setMessage(t("library.ux.refreshIncomplete"));
+      else if (outcome.failures.length) setMessage(t("library.ux.scanPartial", { value0: outcome.failures.length }));
     } catch (error) {
-      setMessage(`刷新失败，原有列表已保留。请检查文件后重试：${String(error)}`);
+      setMessage(t("library.ux.refreshFailed", { value0: String(error) }));
     } finally { setIsRefreshing(false); }
   };
 
@@ -412,10 +429,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
         onProgress: (progress) => { setRefreshProgress(progress.processed); setRefreshTotal(progress.total); },
       });
       applyState(outcome.state);
-      if (outcome.status !== "completed") setMessage("重新扫描未完成，请重试。");
-      else setMessage(`${forceRecheck ? "已强制重新校验" : "已重新扫描"} ${outcome.scannedCount} 个文件。`);
+      if (outcome.status !== "completed") setMessage(t("library.ux.rescanIncomplete"));
+      else setMessage(t("library.ux.filesDone", { value0: forceRecheck ? t("library.ux.rechecked") : t("library.ux.rescanned"), value1: outcome.scannedCount }));
     } catch (error) {
-      setMessage(`重新扫描失败：${String(error)}`);
+      setMessage(t("library.ux.rescanFailed", { value0: String(error) }));
     } finally { setIsRefreshing(false); }
   };
 
@@ -426,7 +443,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     void loadLibrary()
       .then((library) => activateProjectionRecord(library, entry.primary.path))
       .then((next) => applyState(next))
-      .catch((error) => setMessage(`投影已激活，但最近记录刷新失败：${String(error)}`));
+      .catch((error) => setMessage(t("library.ux.recentFailed", { value0: String(error) })));
   };
 
   const handleActivatePath = async (path: string) => {
@@ -434,7 +451,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     try {
       applyState(await activateNonArchivedPath(await loadLibrary(), path));
     } catch (error) {
-      setMessage(`激活失败：${String(error)}`);
+      setMessage(t("library.ux.activateFailed", { value0: String(error) }));
     }
   };
 
@@ -445,12 +462,12 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     try {
       // Rust reads the persisted preview_mode, limits work and owns this batch.
       const output = await generatePreviewImages(entries.map(entry => entry.primary.path), requestId);
-      if (!libraryAlive.current) { for (const item of output.items) if (item.image?.draft_id) void discardGeneratedPreview(item.image.draft_id).catch(() => undefined); return; }
-      setPreviewDrafts(current => [...current, ...output.items.filter(item => !!item.image).map(item => ({ path: item.file_path, image: item.image! }))]);
+      if (!libraryAlive.current || generationRequest.current !== requestId) { for (const item of output.items) if (item.image?.draft_id) void discardGeneratedPreview(item.image.draft_id).catch(reason => console.warn("[NOVA_PREVIEW] discard late batch failed", reason)); return; }
+      updatePreviewDrafts([...previewDraftQueue.current, ...output.items.filter(item => !!item.image).map(item => ({ path: item.file_path, image: item.image! }))]);
       const failures = output.items.filter(item => item.error).map(item => item.error).join("\n");
       if (failures) setMessage(failures); else if (output.cancelled) setMessage(t("library.previewCancelled"));
-    } catch (error) { if (libraryAlive.current) setMessage(String(error)); }
-    finally { generationRequest.current = ""; if (libraryAlive.current) { setGeneratingPreviewId(""); setPreviewPaused(false); } }
+    } catch (error) { if (libraryAlive.current && generationRequest.current === requestId) setMessage(String(error)); }
+    finally { if (generationRequest.current === requestId) { generationRequest.current = ""; if (libraryAlive.current) { setGeneratingPreviewId(""); setPreviewPaused(false); } } }
   };
   const handleGeneratePreview = (entry: LibraryEntryView) => handleGeneratePreviews([entry]);
   const handlePreviewControl = async (action: "pause" | "resume" | "cancel") => {
@@ -514,12 +531,12 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
       applyState(result.state);
       setSelectedEntryIds((current) => current.filter((id) => !entryIds.includes(id)));
       if (entryIds.includes(inspectedEntryId)) setInspectedEntryId("");
-      if (result.failures.length) setMessage(`有 ${result.failures.length} 项未能移入回收区。`);
-      else if (result.removedRecords.length) setMessage(`已移除 ${result.removedRecords.length} 条文件丢失记录。`);
+      if (result.failures.length) setMessage(t("library.ux.trashPartial", { value0: result.failures.length }));
+      else if (result.removedRecords.length) setMessage(t("library.ux.removedMissing", { value0: result.removedRecords.length }));
       setRemoveEntryIds([]);
       void emitEvent(projectionLibraryStateChangedEvent).catch(() => undefined);
     } catch (error) {
-      setMessage(`移入回收区失败，请重试：${String(error)}`);
+      setMessage(t("library.ux.trashFailed", { value0: String(error) }));
     } finally { setTrashBusy(false); }
   };
 
@@ -530,12 +547,11 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
       const next = favoriteIds.has(entryId) ? removeFavorite(latest, entryId) : addFavorite(latest, entryId);
       await saveLibrary(next);
       applyState(next);
-    } catch (error) { setMessage(`收藏操作失败：${String(error)}`); }
+    } catch (error) { setMessage(t("library.ux.favoriteFailed", { value0: String(error) })); }
   };
 
   const toggleSelected = (entryId: string, checked: boolean) => {
     setSelectedEntryIds((current) => checked ? (current.includes(entryId) ? current : [...current, entryId]) : current.filter((id) => id !== entryId));
-    if (checked) setInspectedEntryId(entryId);
   };
 
   const handleDragStart = (entry: LibraryEntryView, event: React.DragEvent) => {
@@ -568,7 +584,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
       if (plan.additions.length) {
         const result = await submitAndAwait("batch-copy", { items: plan.additions.map((item) => ({ sourcePath: item.sourcePath, targetDirectory: item.folderPath, targetFileName: item.fileName, overwrite: false })) });
         const failed = new Set(result.failures.map((failure) => failure.path));
-        for (const item of plan.additions) if (failed.has(item.sourcePath)) failures.push(`${item.fileName}：复制失败`);
+        for (const item of plan.additions) if (failed.has(item.sourcePath)) failures.push(t("library.ux.copyFailed", { value0: item.fileName }));
         // A.2: merge the newly created copies back through the scan kernel
         // (recompute checksum + checksum merge) instead of `addOrUpdateRecord`.
         const copiedFolders = uniquePaths(plan.additions.filter((item) => !failed.has(item.sourcePath)).map((item) => item.folderPath));
@@ -583,7 +599,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
         const result = await submitAndAwait("batch-rename", { items: plan.renames.map((item) => ({ sourcePath: item.sourcePath, targetFileName: item.fileName })) });
         const failed = new Set(result.failures.map((failure) => failure.path));
         const succeeded = plan.renames.filter((item) => !failed.has(item.sourcePath));
-        for (const item of plan.renames) if (failed.has(item.sourcePath)) failures.push(`${item.fileName}：重命名失败`);
+        for (const item of plan.renames) if (failed.has(item.sourcePath)) failures.push(t("library.ux.renameFailedItem", { value0: item.fileName }));
         if (succeeded.length) {
           const working = await loadLibrary();
           await saveLibrary(applyReplicaRenames(working, succeeded.map((item) => ({ replicaId: item.replicaId, fileName: item.fileName }))));
@@ -592,11 +608,11 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
       if (plan.trash.length) {
         const working = await loadLibrary();
         const result = await moveReplicasToTrash(working, plan.trash.map((item) => item.replicaId));
-        for (const failure of result.failures) failures.push(`${failure.path}：移入回收区失败`);
+        for (const failure of result.failures) failures.push(t("library.ux.trashFailedItem", { value0: failure.path }));
       }
       applyState(await loadLibrary());
       setDispatchEntryId("");
-      if (failures.length) setMessage(`分发完成，但有 ${failures.length} 项失败：${failures.slice(0, 3).join("；")}`);
+      if (failures.length) setMessage(t("library.ux.dispatchPartial", { value0: failures.length, value1: failures.slice(0, 3).join("；") }));
       void emitEvent(projectionLibraryStateChangedEvent).catch(() => undefined);
     } catch (error) {
       setDispatchError(String(error));
@@ -666,10 +682,10 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
       }
       applyState(working);
       setDropItems(null);
-      if (failures.length) setMessage(`导入完成，但有 ${failures.length} 项失败：${failures.slice(0, 3).join("；")}`);
+      if (failures.length) setMessage(t("library.ux.importPartial", { value0: failures.length, value1: failures.slice(0, 3).join("；") }));
       void emitEvent(projectionLibraryStateChangedEvent).catch(() => undefined);
     } catch (error: any) {
-      setDropError(`导入失败：${String(error)}`);
+      setDropError(t("library.ux.importFailed", { value0: String(error) }));
     } finally { setIsDropBusy(false); }
   };
 
@@ -683,7 +699,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   const handleExport = async (options: ExportOptions) => {
     if (isExporting) return;
     const entryIds = exportTargetIds();
-    if (!entryIds.length) { setExportError("没有可导出的条目。"); return; }
+    if (!entryIds.length) { setExportError(t("library.ux.noExportEntries")); return; }
     setIsExporting(true); setExportError("");
     try {
       const result = await exportLibraryZip(normalizeLibraryState(await loadLibrary()), entryIds, {
@@ -694,9 +710,9 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
       });
       if (result.status === "completed") {
         setExportOpen(false);
-        setMessage(`已导出 ${result.entryCount} 个投影${result.failures.length ? `，${result.failures.length} 项未能包含` : ""}。`);
+        setMessage(t("library.ux.exported", { value0: result.entryCount, value1: result.failures.length ? t("library.ux.notIncluded", { value0: result.failures.length }) : "" }));
       } else {
-        setExportError(result.errors[0] || (result.status === "cancelled" ? "导出已取消。" : "导出失败。"));
+        setExportError(result.errors[0] || (result.status === "cancelled" ? t("library.ux.exportCancelled") : t("library.ux.exportFailed")));
       }
     } catch (error: any) {
       setExportError(String(error));
@@ -705,24 +721,26 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
 
   // --- reposition a missing replica (E.4) ----------------------------------------
   const applyRepositionOutcome = (outcome: RepositionOutcome, replicaId: string, newPath: string) => {
-    if (outcome.kind === "repositioned") { applyState(outcome.state); setMessage("已重定位并恢复该副本。"); return; }
-    if (outcome.kind === "merged") { applyState(outcome.state); setMessage("内容相同，已并入对应条目。"); return; }
-    if (outcome.kind === "invalid") { setMessage("目标路径无有效文件，记录仍为文件丢失。"); return; }
+    if (outcome.kind === "repositioned") { applyState(outcome.state); setMessage(t("library.ux.repositioned")); return; }
+    if (outcome.kind === "merged") { applyState(outcome.state); setMessage(t("library.ux.merged")); return; }
+    if (outcome.kind === "invalid") { setMessage(t("library.ux.noRepositionFile")); return; }
     setRepositionConflict({ replicaId, occupiedByEntryId: outcome.occupiedByEntryId, newPath });
     setRepositionRename(fileNameFromPath(newPath));
-    setRepositionError("目标路径已被库内其它记录占用，请选择拒绝、合并或改名。");
+    setRepositionError(t("library.ux.repositionChoice"));
   };
 
   const handleRepositionReplica = async (replicaId: string) => {
-    const picked = await selectLitematicFile().catch(() => null);
-    if (!picked) return;
+    if (repositionPending.current) return;
+    repositionPending.current = true;
     setIsRepositioning(true); setMessage(""); setRepositionError("");
     try {
+      const picked = await selectLitematicFile();
+      if (!picked) return;
       const outcome = await repositionReplica(normalizeLibraryState(await loadLibrary()), replicaId, picked, {});
       applyRepositionOutcome(outcome, replicaId, picked);
     } catch (error: any) {
-      setMessage(`重定位失败：${String(error)}`);
-    } finally { setIsRepositioning(false); }
+      setMessage(t("library.ux.locateFailed", { value0: String(error) }));
+    } finally { repositionPending.current = false; setIsRepositioning(false); }
   };
 
   const resolveRepositionConflict = async (mode: "reject" | "merge" | "rename") => {
@@ -733,9 +751,9 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
       let targetPath = newPath;
       if (mode === "rename") {
         const desired = ensureLitematicFileName(repositionRename);
-        if (!desired) { setRepositionError("请填写有效的文件名。"); return; }
+        if (!desired) { setRepositionError(t("library.ux.validName")); return; }
         const renamed = await submitAndAwait("batch-rename", { items: [{ sourcePath: newPath, targetFileName: desired }] });
-        if (renamed.failures.length) { setRepositionError(`重命名失败：${renamed.failures[0].reason}`); return; }
+        if (renamed.failures.length) { setRepositionError(t("library.ux.renameFailed", { value0: renamed.failures[0].reason })); return; }
         targetPath = joinPath(parentDirectory(newPath), desired);
       }
       const outcome = await repositionReplica(normalizeLibraryState(await loadLibrary()), replicaId, targetPath, mode === "merge" ? { onConflict: "relocate" } : {});
@@ -743,7 +761,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
       applyRepositionOutcome(outcome, replicaId, targetPath);
       void emitEvent(projectionLibraryStateChangedEvent).catch(() => undefined);
     } catch (error: any) {
-      setRepositionError(`重定位失败：${String(error)}`);
+      setRepositionError(t("library.ux.locateFailed", { value0: String(error) }));
     } finally { setIsRepositioning(false); }
   };
 
@@ -757,7 +775,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     previewError: (entry) => previewErrors[entry.primary.path] || "",
     onVisibility: handlePreviewVisibility,
     busy: libraryBusy,
-    onInspect: (entry) => setInspectedEntryId(entry.entryId),
+    onInspect: (entry) => setInspectedEntryId(current => current === entry.entryId ? "" : entry.entryId),
     onToggle: (entry, checked) => toggleSelected(entry.entryId, checked),
     onActivate: (entry) => void handleActivate(entry),
     onDragStart: handleDragStart,
@@ -773,7 +791,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   const handleCategoryDrop = (target: string, event: React.DragEvent) => {
     event.preventDefault(); event.stopPropagation();
     const draggedEntries = entryViews.filter((entry) => dragPaths.some((path) => entry.replicas.some((replica) => samePath(replica.path, path))));
-    void moveEntries(draggedEntries.map((entry) => entry.entryId), target).catch((error) => setMessage(`移动分类失败：${String(error)}`));
+    void moveEntries(draggedEntries.map((entry) => entry.entryId), target).catch((error) => setMessage(t("library.ux.categoryMoveFailed", { value0: String(error) })));
   };
 
   const toggleColumn = (id: string, checked: boolean) => setColumns((current) => checked ? (current.includes(id) ? current : [...current, id]) : current.filter((columnId) => columnId !== id));
@@ -783,7 +801,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
     : view === "list"
       ? <LibraryList entries={pageEntries} binding={binding} columns={columns} allSelected={allPageSelected} someSelected={somePageSelected} onToggleAll={(checked) => setSelectedEntryIds((current) => checked ? [...new Set([...current, ...pageEntries.map((entry) => entry.entryId)])] : current.filter((id) => !pageEntries.some((entry) => entry.entryId === id)))} />
       : <LibraryDetail entry={inspectedEntry} variant="full" columns={columns} onToggleColumn={toggleColumn} previewUrl={inspectedEntry ? previewDataUrls[inspectedEntry.primary.path] || "" : ""} previewLoading={inspectedEntry ? !!previewLoadingPaths[inspectedEntry.primary.path] : false} previewError={inspectedEntry ? previewErrors[inspectedEntry.primary.path] || "" : ""} busy={libraryBusy} favorite={!!inspectedEntry && favoriteIds.has(inspectedEntry.entryId)} generatingPreview={!!generatingPreviewId}
-        onActivate={() => inspectedEntry && void handleActivate(inspectedEntry)} onOpenProperties={() => { if (inspectedEntry) { setCurrentFile(inspectedEntry.primary.path); setRoute("properties"); } }} onOpenFolder={() => inspectedEntry && void openFileParentDir(inspectedEntry.primary.path).catch((error) => setMessage(`打开文件夹失败：${String(error)}`))} onCopy={() => inspectedEntry && (setDispatchError(""), setDispatchEntryId(inspectedEntry.entryId))} onMoveCategory={() => inspectedEntry && (setMoveCategoryId(""), setCategoryError(""), setMoveEntryIds([inspectedEntry.entryId]))} onGeneratePreview={() => inspectedEntry && void handleGeneratePreview(inspectedEntry)} onTrash={() => setRemoveEntryIds(inspectedEntry ? [inspectedEntry.entryId] : [])} onToggleFavorite={() => inspectedEntry && void toggleFavorite(inspectedEntry.entryId)} categoryLabel={(id) => categoryPath(state, id) || id} onRepositionReplica={(replicaId: string) => void handleRepositionReplica(replicaId)} repositioning={isRepositioning} />;
+        onActivate={() => inspectedEntry && void handleActivate(inspectedEntry)} onOpenProperties={() => { if (inspectedEntry) { setCurrentFile(inspectedEntry.primary.path); setRoute("properties"); } }} onOpenFolder={() => inspectedEntry && void openFileParentDir(inspectedEntry.primary.path).catch((error) => setMessage(t("library.ux.openFolderFailed", { value0: String(error) })))} onCopy={() => inspectedEntry && (setDispatchError(""), setDispatchEntryId(inspectedEntry.entryId))} onMoveCategory={() => inspectedEntry && (setMoveCategoryId(""), setCategoryError(""), setMoveEntryIds([inspectedEntry.entryId]))} onGeneratePreview={() => inspectedEntry && void handleGeneratePreview(inspectedEntry)} onTrash={() => setRemoveEntryIds(inspectedEntry ? [inspectedEntry.entryId] : [])} onToggleFavorite={() => inspectedEntry && void toggleFavorite(inspectedEntry.entryId)} categoryLabel={(id) => categoryPath(state, id) || id} onRepositionReplica={(replicaId: string) => void handleRepositionReplica(replicaId)} repositioning={isRepositioning} />;
 
   const boardContent = grouped
     ? <LibraryGrouping groups={groups} mode={groupMode} renderEntries={(entries) => <LibraryGrid entries={entries} binding={binding} />} renderStack={(group) => <LibraryGrid entries={group.entries.slice(0, 1)} binding={binding} />} />
@@ -793,7 +811,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   const addSelectedToComposition = async () => {
     try {
       const result = await queryComposition({ action: "create", sourcePaths: selectedEntries.map(entry => entry.primary.path) }, crypto.randomUUID());
-      if (!result.project) throw new Error("组合项目未返回");
+      if (!result.project) throw new Error(t("library.ux.compositionMissing"));
       setCompositionId(result.project.id);
       setRoute("composition");
     } catch (error) { setMessage(String(error)); }
@@ -882,31 +900,44 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
   };
 
   return (
-    <div className="nova-page library-page" onDragOver={handlePageDragOver} onDrop={(event) => void handlePageDrop(event)}>
+    <div className="nova-page library-page" onDragOver={handlePageDragOver} onDrop={(event) => void handlePageDrop(event)} onKeyDown={event => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing) return;
+      if ((event.target as Element).closest('[role="dialog"], [role="menu"], [role="listbox"]')) return;
+      if (categoriesOpen) setCategoriesOpen(false);
+      else if (inspectedEntryId) setInspectedEntryId("");
+      else if (selectedEntryIds.length) setSelectedEntryIds([]);
+      else return;
+      event.preventDefault(); event.stopPropagation();
+    }}>
       <LibraryToolbar
         busy={libraryBusy} isRefreshing={isRefreshing} isOpening={isOpening}
         search={search} onSearchChange={setSearch} searching={searchLoading} searchMatches={indexMatchCount} indexReady={indexReady}
         statusFilter={statusFilter} onStatusFilterChange={setStatusFilter} sortMode={sortMode} onSortModeChange={setSortMode}
         view={view} onViewChange={setView} groupDimension={groupDimension} groupMode={groupMode} onGroupDimensionChange={setGroupDimension} onGroupModeChange={setGroupMode}
-        onImport={() => void handleSelect()} onDownload={() => void openRedenLibraryWithWindowBehavior(() => setShowRedenLibraryOverlay(true)).catch((error) => setMessage(`打开在线投影库失败：${String(error)}`))}
-        onManageFolders={() => void openLocalLibraryFoldersWithWindowBehavior(() => setShowLocalLibraryFoldersOverlay(true)).catch((error) => setMessage(`打开本地库文件夹失败：${String(error)}`))}
+        onImport={() => void handleSelect()} onDownload={() => void openRedenLibraryWithWindowBehavior(() => setShowRedenLibraryOverlay(true)).catch((error) => setMessage(t("library.ux.onlineOpenFailed", { value0: String(error) })))}
+        onManageFolders={() => void openLocalLibraryFoldersWithWindowBehavior(() => setShowLocalLibraryFoldersOverlay(true)).catch((error) => setMessage(t("library.ux.foldersOpenFailed", { value0: String(error) })))}
         onRefresh={() => void handleRefresh()} onRescanAll={(forceRecheck) => void handleRescanAll(forceRecheck)} onOpenTaskCenter={() => setTaskCenterOpen(true)}
         onNewComposition={() => setRoute("composition")} onImportClipboard={onImportClipboard}
         onExport={() => { setExportError(""); setExportOpen(true); }}
       />
-      {message && <div className="library-message" role="alert">{displayPathText(message)}<Button variant="ghost" size="icon-sm" aria-label="关闭提示" onClick={() => setMessage("")}><ThemeIcon name="close" size={14} fallback={X} /></Button></div>}
+      <div className="library-status-slot">
+      {message && <div className="library-message" role="alert">{displayPathText(message)}<Button variant="ghost" size="icon-sm" aria-label={t("library.ux.dismiss")} onClick={() => setMessage("")}><ThemeIcon name="close" size={14} fallback={X} /></Button></div>}
       {stockpileSaved && <div className="library-message" role="status">
         <span>{t("stockpile.sources.saved", { name: stockpileSaved.name })}</span>
         <Button size="sm" onClick={() => setRoute("statistics")}>{t("stockpile.sources.viewTask")}</Button>
         <Button variant="ghost" size="icon-sm" aria-label={t("library.closeDialog")} onClick={() => setStockpileSaved(null)}><ThemeIcon name="close" size={14} fallback={X} /></Button>
       </div>}
       {generatingPreviewId && <div className="library-progress" role="status"><span>{t("library.previewProgress", previewProgress)}</span><Button size="sm" onClick={() => void handlePreviewControl(previewPaused ? "resume" : "pause")}>{t(previewPaused ? "library.previewResume" : "library.previewPause")}</Button><Button size="sm" onClick={() => void handlePreviewControl("cancel")}>{t("library.previewCancel")}</Button></div>}
-      <PreviewDraftDialog draft={previewDrafts[0]?.image ?? null} sourcePath={previewDrafts[0]?.path ?? ""} onSaved={image => { if (previewDrafts[0]) handlePreviewSaved(previewDrafts[0].path, image); }} onClose={() => setPreviewDrafts(current => current.slice(1))} />
-      {isRefreshing && <div className="library-progress" role="status">刷新中 {refreshProgress} / {refreshTotal}</div>}
+      {isRefreshing && <div className="library-progress" role="status">{t("library.refreshing")} {refreshProgress} / {refreshTotal}</div>}
+      </div>
+      <PreviewDraftDialog draft={previewDrafts[0]?.image ?? null} sourcePath={previewDrafts[0]?.path ?? ""} onSaved={image => { if (previewDrafts[0]) handlePreviewSaved(previewDrafts[0].path, image); }} onClose={() => {
+        if (previewDraftQueue.current[0]?.image.draft_id === previewDrafts[0]?.image.draft_id) updatePreviewDrafts(previewDraftQueue.current.slice(1));
+      }} />
 
-      <div className="library-workspace">
+
+      <div className="library-workspace" data-categories-open={categoriesOpen || undefined}>
         <LibraryCategoryTree
-          state={state} totalCount={entryViews.length} untaggedCount={entryViews.filter((entry) => !entry.categoryIds.length).length} busy={libraryBusy}
+          state={state} totalCount={entryViews.length} untaggedCount={queryView?.untaggedCount || 0} busy={libraryBusy}
           categoryFilter={categoryFilter} untaggedOnly={untaggedOnly} favoritesOnly={favoritesOnly} recentOnly={recentOnly}
           expandedCategories={expandedCategories} dropTarget={dropTarget} hasDrag={dragPaths.length > 0}
           favorites={favorites} recent={recentItems} categoryEntryCount={(categoryId) => categoryCounts.get(categoryId) || 0}
@@ -924,49 +955,54 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
           onDropCategory={handleCategoryDrop}
           onOpenCategoryDialog={openCategoryDialog} onOpenIconDialog={(id) => { setIconCategoryId(id); setCategoryError(""); }}
           onOpenTrash={() => { setTrashError(""); setTrashOpen(true); }} trashCount={trashEntries.length}
+          onClose={() => setCategoriesOpen(false)}
         />
 
-        <section className="library-collection" aria-label="投影条目">
+        <section className="library-collection" aria-label={t("library.ux.entries")}>
           <div className="library-collection-toolbar">
+            <Button className="library-categories-toggle" variant="ghost" size="sm" aria-expanded={categoriesOpen} aria-controls="library-categories" onClick={() => setCategoriesOpen(value => !value)}>{t("editor.category")}</Button>
             <label className="library-select-all">
-              <Checkbox checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false} disabled={!pageEntries.length || libraryBusy} aria-label="选择本页全部投影" onCheckedChange={(checked) => setSelectedEntryIds((current) => checked === true ? [...new Set([...current, ...pageEntries.map((entry) => entry.entryId)])] : current.filter((id) => !pageEntries.some((entry) => entry.entryId === id)))} />
-              <span>{selectedEntries.length ? `已选 ${selectedEntries.length}` : activeFilterLabel}</span>
+              <Checkbox checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false} disabled={!pageEntries.length || libraryBusy} aria-label={t("library.selectCurrentPage")} onCheckedChange={(checked) => setSelectedEntryIds((current) => checked === true ? [...new Set([...current, ...pageEntries.map((entry) => entry.entryId)])] : current.filter((id) => !pageEntries.some((entry) => entry.entryId === id)))} />
+              <span>{selectedEntries.length ? t("library.ux.selectedCount", { value0: selectedEntries.length }) : activeFilterLabel}</span>
             </label>
-            <span className="library-result-count" role="status">{filteredEntries.length} 项{searchLoading ? " · 搜索中…" : ""}{grouped ? ` · ${groups.length} 组` : ""}</span>
+            {!selectedEntries.length && <span className="library-result-count" role="status">{filteredEntries.length} {t("library.items")}{searchLoading ? t("library.searchingInline") : ""}{grouped ? t("library.ux.groupCount", { value0: groups.length }) : ""}</span>}
             {view === "list" && <LibraryColumnPicker selected={columns} onToggle={toggleColumn} disabled={libraryBusy} />}
-          </div>
           {selectedEntries.length >= 1 && (
             <div className="library-batch-toolbar">
-              <span>已选 {selectedEntries.length}</span>
+              <span>{t("library.ux.selected")} {selectedEntries.length}</span>
               <Button size="sm" disabled={libraryBusy || !!generatingPreviewId} onClick={() => void handleGeneratePreviews(selectedEntries)}>{t("library.previewGenerateSelected")}</Button>
               <Button size="sm" disabled={libraryBusy || !!stockpileDraft} onClick={beginStockpile}>{t("stockpile.sources.chooseTask")}</Button>
-              <Button size="sm" disabled={libraryBusy} onClick={() => void addSelectedToComposition()}>加入组合</Button>
-              <Button size="sm" disabled={libraryBusy} onClick={() => { setExportError(""); setExportOpen(true); }}>批量导出…</Button>
-              <Button size="sm" onClick={() => { setMoveCategoryId(""); setCategoryError(""); setMoveEntryIds(selectedEntries.map((entry) => entry.entryId)); }} disabled={libraryBusy}>移动到分类…</Button>
-              <Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => setRemoveEntryIds(selectedEntries.map((entry) => entry.entryId))}><ThemeIcon name="delete" size={14} fallback={Trash2} />移入回收区</Button>
-              <Button size="sm" variant="ghost" onClick={() => setSelectedEntryIds([])}>取消选择</Button>
+              <Button size="sm" disabled={libraryBusy} onClick={() => void addSelectedToComposition()}>{t("library.ux.addComposition")}</Button>
+              <Button size="sm" disabled={libraryBusy} onClick={() => { setExportError(""); setExportOpen(true); }}>{t("library.ux.batchExport")}</Button>
+              <Button size="sm" onClick={() => { setMoveCategoryId(""); setCategoryError(""); setMoveEntryIds(selectedEntries.map((entry) => entry.entryId)); }} disabled={libraryBusy}>{t("library.moveToCategoryMenu")}</Button>
+              <Button size="sm" variant="ghost" disabled={libraryBusy} onClick={() => setRemoveEntryIds(selectedEntries.map((entry) => entry.entryId))}><ThemeIcon name="delete" size={14} fallback={Trash2} />{t("library.ux.trash")}</Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedEntryIds([])}>{t("stockpile.clearSelection")}</Button>
             </div>
           )}
-          <ScrollArea className="library-grid-scroll">
-            {filteredEntries.length === 0
-              ? <div className="library-empty-state"><Box size={40} aria-hidden="true" /><h3>{entryViews.length || search ? "没有找到投影" : "把你的第一份投影放进来"}</h3><p>{entryViews.length || search ? "换个关键词或清除筛选，再试一次。" : "导入本地 .litematic，或从在线投影库下载。"}</p><div className="library-empty-actions">{entryViews.length || search ? <Button onClick={() => { setSearch(""); setCategoryFilter(""); setUntaggedOnly(false); setFavoritesOnly(false); setRecentOnly(false); setStatusFilter(""); }}>清除筛选</Button> : <Button variant="default" onClick={() => void handleSelect()} disabled={libraryBusy}><ThemeIcon name="import" size={16} fallback={Plus} />导入投影</Button>}</div></div>
+          </div>
+          <ScrollArea className="library-grid-scroll" onClick={event => {
+            const target = event.target as Element;
+            if (!target.closest('[data-entry-id], button, input, a, [role="button"], .library-detail-content')) setInspectedEntryId("");
+          }}>
+            {filteredEntries.length === 0 && queryBusy ? <p className="library-empty-state" role="status">{t("library.loading")}</p> : filteredEntries.length === 0
+              ? <div className="library-empty-state"><Box size={40} aria-hidden="true" /><h3>{entryViews.length || search ? t("library.noSchematicsFound") : t("library.firstSchematic")}</h3><p>{entryViews.length || search ? t("library.changeFilterHint") : t("library.importFirstHint")}</p><div className="library-empty-actions">{entryViews.length || search ? <Button onClick={() => { setSearch(""); setCategoryFilter(""); setUntaggedOnly(false); setFavoritesOnly(false); setRecentOnly(false); setStatusFilter(""); }}>{t("library.clearFilters")}</Button> : <Button variant="default" onClick={() => void handleSelect()} disabled={libraryBusy}><ThemeIcon name="import" size={16} fallback={Plus} />{t("library.importSchematic")}</Button>}</div></div>
               : boardContent}
           </ScrollArea>
           <footer className="library-collection-footer">
-            <span>{issueCount ? `${issueCount} 项需关注` : "双击卡片设为当前投影"}</span>
+            <span>{issueCount ? t("library.ux.attentionCount", { value0: issueCount }) : t("library.activateHint")}</span>
           </footer>
         </section>
 
         {view !== "detail" && inspectedEntry && (
-          <aside className="library-inspector" aria-label="投影详情">
-            <div className="library-pane-heading"><h3>详情</h3>{inspectedEntry && <Button variant="ghost" size="icon-sm" aria-label="关闭投影详情" onClick={() => setInspectedEntryId("")}><ThemeIcon name="close" size={15} fallback={X} /></Button>}</div>
+          <aside className="library-inspector" aria-label={t("library.schematicDetails")}>
+            <div className="library-pane-heading"><h3>{t("library.details")}</h3>{inspectedEntry && <Button variant="ghost" size="icon-sm" aria-label={t("library.closeDetails")} onClick={() => setInspectedEntryId("")}><ThemeIcon name="close" size={15} fallback={X} /></Button>}</div>
             <ScrollArea className="library-inspector-scroll">
               <LibraryDetail
                 entry={inspectedEntry} variant="inspector" columns={columns} onToggleColumn={toggleColumn}
                 previewUrl={inspectedEntry ? previewDataUrls[inspectedEntry.primary.path] || "" : ""} previewLoading={inspectedEntry ? !!previewLoadingPaths[inspectedEntry.primary.path] : false} previewError={inspectedEntry ? previewErrors[inspectedEntry.primary.path] || "" : ""}
                 busy={libraryBusy} favorite={!!inspectedEntry && favoriteIds.has(inspectedEntry.entryId)} generatingPreview={!!generatingPreviewId}
                 onActivate={() => inspectedEntry && void handleActivate(inspectedEntry)} onOpenProperties={() => { if (inspectedEntry) { setCurrentFile(inspectedEntry.primary.path); setRoute("properties"); } }}
-                onOpenFolder={() => inspectedEntry && void openFileParentDir(inspectedEntry.primary.path).catch((error) => setMessage(`打开文件夹失败：${String(error)}`))}
+                onOpenFolder={() => inspectedEntry && void openFileParentDir(inspectedEntry.primary.path).catch((error) => setMessage(t("library.ux.openFolderFailed", { value0: String(error) })))}
                 onCopy={() => inspectedEntry && (setDispatchError(""), setDispatchEntryId(inspectedEntry.entryId))}
                 onMoveCategory={() => inspectedEntry && (setMoveCategoryId(""), setCategoryError(""), setMoveEntryIds([inspectedEntry.entryId]))}
                 onGeneratePreview={() => inspectedEntry && void handleGeneratePreview(inspectedEntry)}
@@ -996,17 +1032,17 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
       {stockpileDraft?.phase === "sources" && <StockpileSourcesDialog mode={stockpileDraft.task ? "add" : "create"}
         initialSources={stockpileDraft.sources} task={stockpileDraft.task} onClose={closeStockpile} onSubmit={submitStockpileSources} />}
 
-      {removeEntryIds.length > 0 && <Dialog title={`移入回收区${removeEntryIds.length > 1 ? ` ${removeEntryIds.length} 项` : "此投影"}？`} subtitle="文件会移入应用内回收区，可随时还原，不会被物理删除。" width="sm" busy={trashBusy} onClose={() => setRemoveEntryIds([])} footer={<><Button onClick={() => setRemoveEntryIds([])} disabled={trashBusy}>保留</Button><Button variant="destructive" onClick={() => void handleTrash(removeEntryIds)} disabled={trashBusy} aria-busy={trashBusy}>{trashBusy ? "正在移入…" : "移入回收区"}</Button></>}><ul className="library-remove-list">{removeEntryIds.slice(0, 8).map((id) => { const entry = entryById.get(id); return <li key={id}>{entry ? entry.displayName || entry.fileName : id}</li>; })}</ul>{removeEntryIds.length > 8 && <p>以及另外 {removeEntryIds.length - 8} 项</p>}</Dialog>}
+      {removeEntryIds.length > 0 && <Dialog title={t("library.ux.trashConfirm", { value0: removeEntryIds.length > 1 ? t("library.ux.itemCount", { value0: removeEntryIds.length }) : t("library.ux.thisSchematic") })} subtitle={t("library.ux.trashHint")} width="sm" busy={trashBusy} onClose={() => setRemoveEntryIds([])} footer={<><Button onClick={() => setRemoveEntryIds([])} disabled={trashBusy}>{t("library.keep")}</Button><Button variant="destructive" onClick={() => void handleTrash(removeEntryIds)} disabled={trashBusy} aria-busy={trashBusy}>{trashBusy ? t("library.ux.trashing") : t("library.ux.trash")}</Button></>}><ul className="library-remove-list">{removeEntryIds.slice(0, 8).map((id) => { const entry = entryById.get(id); return <li key={id}>{entry ? entry.displayName || entry.fileName : id}</li>; })}</ul>{removeEntryIds.length > 8 && <p>{t("library.additionalItems")} {removeEntryIds.length - 8} {t("library.items")}</p>}</Dialog>}
 
-      {moveEntryIds.length > 0 && <Dialog title="移动到分类" subtitle={`${moveEntryIds.length} 个投影，原文件保持原位。`} width="sm" busy={isCategorizing} onClose={() => setMoveEntryIds([])} footer={<><Button disabled={isCategorizing} onClick={() => setMoveEntryIds([])}>取消</Button><Button variant="default" disabled={isCategorizing} onClick={() => void moveEntries(moveEntryIds, moveCategoryId).catch(() => undefined)}>移动</Button></>}><Dropdown ariaLabel="目标分类" value={moveCategoryId} onChange={setMoveCategoryId} options={[{ value: "", label: "未分类" }, ...state.categories.map((category) => ({ value: category.id, label: categoryPath(state, category.id) }))]} />{categoryError && <p className="dialog-message dialog-message-error" role="alert">{categoryError}</p>}</Dialog>}
+      {moveEntryIds.length > 0 && <Dialog title={t("library.moveToCategory")} subtitle={t("library.ux.moveHint", { value0: moveEntryIds.length })} width="sm" busy={isCategorizing} onClose={() => setMoveEntryIds([])} footer={<><Button disabled={isCategorizing} onClick={() => setMoveEntryIds([])}>{t("common.cancel")}</Button><Button variant="default" disabled={isCategorizing} onClick={() => void moveEntries(moveEntryIds, moveCategoryId).catch(() => undefined)}>{t("library.move")}</Button></>}><Dropdown ariaLabel={t("library.targetCategory")} value={moveCategoryId} onChange={setMoveCategoryId} options={[{ value: "", label: t("library.uncategorized") }, ...state.categories.map((category) => ({ value: category.id, label: categoryPath(state, category.id) }))]} />{categoryError && <p className="dialog-message dialog-message-error" role="alert">{categoryError}</p>}</Dialog>}
 
-      {categoryDialog && <Dialog title={categoryDialog.kind === "create" ? "新建分类" : categoryDialog.kind === "rename" ? "重命名分类" : categoryDialog.kind === "move" ? "移动分类" : "删除分类？"} subtitle={categoryDialog.kind === "delete" ? "此分类、子分类和其中的投影移入回收区，原文件保持不变。" : undefined} width="sm" busy={isCategorizing} onClose={() => setCategoryDialog(null)} footer={<><Button disabled={isCategorizing} onClick={() => setCategoryDialog(null)}>取消</Button><Button variant={categoryDialog.kind === "delete" ? "destructive" : "default"} disabled={isCategorizing || (["create", "rename"].includes(categoryDialog.kind) && !categoryNameDraft.trim())} onClick={() => void confirmCategory().catch(() => undefined)}>{categoryDialog.kind === "delete" ? "删除分类" : "保存"}</Button></>}>
-        {["create", "rename"].includes(categoryDialog.kind) && <div className="library-category-form"><label htmlFor="library-category-name">分类名称</label><Input id="library-category-name" autoFocus maxLength={80} disabled={isCategorizing} value={categoryNameDraft} onChange={(event) => setCategoryNameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && categoryNameDraft.trim()) { event.preventDefault(); void confirmCategory().catch(() => undefined); } }} /></div>}
-        {["create", "move"].includes(categoryDialog.kind) && <Dropdown ariaLabel="上级分类" value={categoryParentDraft} onChange={setCategoryParentDraft} options={[{ value: "", label: "分类根目录" }, ...state.categories.filter((category) => categoryDialog.kind !== "move" || !categoryDescendants(state, categoryDialog.id).has(category.id)).map((category) => ({ value: category.id, label: categoryPath(state, category.id) }))]} />}
+      {categoryDialog && <Dialog title={categoryDialog.kind === "create" ? t("library.createCategory") : categoryDialog.kind === "rename" ? t("library.renameCategory") : categoryDialog.kind === "move" ? t("library.moveCategory") : t("library.deleteCategoryConfirm")} subtitle={categoryDialog.kind === "delete" ? t("library.ux.categoryTrashHint") : undefined} width="sm" busy={isCategorizing} onClose={() => setCategoryDialog(null)} footer={<><Button disabled={isCategorizing} onClick={() => setCategoryDialog(null)}>{t("common.cancel")}</Button><Button variant={categoryDialog.kind === "delete" ? "destructive" : "default"} disabled={isCategorizing || (["create", "rename"].includes(categoryDialog.kind) && !categoryNameDraft.trim())} onClick={() => void confirmCategory().catch(() => undefined)}>{categoryDialog.kind === "delete" ? t("library.deleteCategory") : t("common.save")}</Button></>}>
+        {["create", "rename"].includes(categoryDialog.kind) && <div className="library-category-form"><label htmlFor="library-category-name">{t("library.categoryName")}</label><Input id="library-category-name" autoFocus maxLength={80} disabled={isCategorizing} value={categoryNameDraft} onChange={(event) => setCategoryNameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && categoryNameDraft.trim()) { event.preventDefault(); void confirmCategory().catch(() => undefined); } }} /></div>}
+        {["create", "move"].includes(categoryDialog.kind) && <Dropdown ariaLabel={t("library.parentCategory")} value={categoryParentDraft} onChange={setCategoryParentDraft} options={[{ value: "", label: t("library.categoryRoot") }, ...state.categories.filter((category) => categoryDialog.kind !== "move" || !categoryDescendants(state, categoryDialog.id).has(category.id)).map((category) => ({ value: category.id, label: categoryPath(state, category.id) }))]} />}
         {categoryError && <p className="dialog-message dialog-message-error" role="alert">{categoryError}</p>}
       </Dialog>}
 
-      {trashOpen && <Dialog title="回收区" width="lg" busy={trashBusy} onClose={() => setTrashOpen(false)} footer={<Button disabled={trashBusy} onClick={() => setTrashOpen(false)}>关闭</Button>}>
+      {trashOpen && <Dialog title={t("library.ux.recycle")} width="lg" busy={trashBusy} onClose={() => setTrashOpen(false)} footer={<Button disabled={trashBusy} onClick={() => setTrashOpen(false)}>{t("common.close")}</Button>}>
         {trashError && <p role="alert" className="dialog-message dialog-message-error">{trashError}</p>}
         <TrashPanel
           state={state}
@@ -1035,24 +1071,24 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
       />}
 
       {repositionConflict && <Dialog
-        title="重定位冲突"
-        subtitle="目标路径已被库内其它记录占用。"
+        title={t("library.ux.repositionConflict")}
+        subtitle={t("library.ux.pathOccupied")}
         width="sm"
         busy={isRepositioning}
         onClose={isRepositioning ? () => undefined : () => { setRepositionConflict(null); setRepositionError(""); }}
         footer={<>
-          <Button disabled={isRepositioning} onClick={() => { setRepositionConflict(null); setRepositionError(""); setMessage("已拒绝重定位，记录保持文件丢失。"); }}>拒绝</Button>
-          <Button disabled={isRepositioning} onClick={() => void resolveRepositionConflict("rename")}>改名并定位</Button>
-          <Button variant="default" disabled={isRepositioning} onClick={() => void resolveRepositionConflict("merge")}>合并到该条目</Button>
+          <Button disabled={isRepositioning} onClick={() => { setRepositionConflict(null); setRepositionError(""); setMessage(t("library.ux.repositionRejected")); }}>{t("library.ux.reject")}</Button>
+          <Button disabled={isRepositioning} onClick={() => void resolveRepositionConflict("rename")}>{t("library.ux.renameLocate")}</Button>
+          <Button variant="default" disabled={isRepositioning} onClick={() => void resolveRepositionConflict("merge")}>{t("library.ux.mergeEntry")}</Button>
         </>}
       >
         <div className="library-reposition-conflict">
           <p className="dialog-path-preview" title={displayPathText(repositionConflict.newPath)}>{displayPathText(repositionConflict.newPath)}</p>
-          <label className="dialog-label" htmlFor="library-reposition-name">改为新文件名后定位</label>
+          <label className="dialog-label" htmlFor="library-reposition-name">{t("library.ux.newLocateName")}</label>
           <ReplicaNameEditor
             value={repositionRename}
             disabled={isRepositioning}
-            ariaLabel="重定位的新文件名"
+            ariaLabel={t("library.ux.locateFileName")}
             onChange={setRepositionRename}
           />
         </div>
@@ -1061,7 +1097,7 @@ export function LibraryPage({ currentFile, setCurrentFile, setRoute, setComposit
 
       {iconCategoryId && state.categories.find((category) => category.id === iconCategoryId) && <CategoryIconDialog name={state.categories.find((category) => category.id === iconCategoryId)!.name} icon={state.categories.find((category) => category.id === iconCategoryId)!.icon} busy={isCategorizing} onClose={() => setIconCategoryId("")} onSubmit={async (icon: LibraryCategoryIcon) => { await commitCategories((latest) => updateLibraryCategory(latest, iconCategoryId, { icon })); setIconCategoryId(""); }} />}
 
-      {dispatchEntryView && <SendProjectionDialog entry={dispatchEntryView} folders={state.folders} busy={isDispatching} error={dispatchError} onClose={isDispatching ? () => undefined : () => { setDispatchEntryId(""); setDispatchError(""); }} onSubmit={(plan) => void handleDispatch(plan)} />}
+      {dispatchEntryView && <SendProjectionDialog key={dispatchEntryView.entryId} entry={dispatchEntryView} folders={state.folders} busy={isDispatching} error={dispatchError} onClose={isDispatching ? () => undefined : () => { setDispatchEntryId(""); setDispatchError(""); }} onSubmit={(plan) => void handleDispatch(plan)} />}
 
       <LibraryTaskCenter open={taskCenterOpen} onClose={() => setTaskCenterOpen(false)} onFinished={() => { void loadLibrary().then((library) => applyState(normalizeLibraryState(library))).catch(() => undefined); }} />
 

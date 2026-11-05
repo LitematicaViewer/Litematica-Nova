@@ -73,7 +73,8 @@ mod tests {
         std::fs::create_dir(&directory).unwrap();
         let path = crate::user_config_path(&directory);
         let mut config = crate::default_user_config();
-        for scale in [0.5, 0.75, 1.0, 1.25, 2.0, 3.0, 4.0, 5.0] {
+        for tick in 10..=100 {
+            let scale = tick as f64 / 20.0;
             config.ui_scale = scale;
             std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
             assert_eq!(crate::read_user_config_data(&directory).ui_scale, scale);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Dialog } from "../../components/Dialog";
 import { Button } from "../../components/ui/button";
 import { saveDialog } from "../../../src/platform/dialogs";
@@ -11,6 +11,7 @@ export function FormatExportDialog({ sourcePath, onClose, onWorldExport }: { sou
   const [view, setView] = useState<FormatResult>();
   const [format, setFormat] = useState<SchematicFormat>("litematic");
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
   useEffect(() => {
@@ -20,15 +21,19 @@ export function FormatExportDialog({ sourcePath, onClose, onWorldExport }: { sou
   }, [sourcePath]);
   const capability = view?.capabilities?.find(item => item.format === format);
   const exportFile = async () => {
-    const extension = format === "litematic" ? "litematic" : format === "buildingGadgetsLegacy" || format === "buildingGadgets2" ? "json" : "nbt";
-    const output = await saveDialog({ filters: [{ name: format, extensions: [extension] }] });
-    if (!output) return;
-    setBusy(true); setError(""); setSaved("");
-    try { await querySchematicFormat({ action: "export", input: sourcePath, output, format }); setSaved(output); }
-    catch (reason) { setError(String(reason)); }
-    finally { setBusy(false); }
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy(true); setError(""); setSaved("");
+    try {
+      const extension = format === "litematic" ? "litematic" : format === "buildingGadgetsLegacy" || format === "buildingGadgets2" ? "json" : "nbt";
+      const output = await saveDialog({ filters: [{ name: format, extensions: [extension] }] });
+      if (!output) return;
+      await querySchematicFormat({ action: "export", input: sourcePath, output, format }); setSaved(output);
+    } catch (reason) { setError(String(reason)); }
+    finally { busyRef.current = false; setBusy(false); }
   };
   const copyTemplate = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true); setError(""); setSaved("");
     try {
       const result = await querySchematicFormat({ action: "encodeText", input: sourcePath, format });
@@ -36,7 +41,7 @@ export function FormatExportDialog({ sourcePath, onClose, onWorldExport }: { sou
       await navigator.clipboard.writeText(result.clipboardText);
       setSaved(en ? "Template copied." : "模板共享文本已复制。");
     } catch (reason) { setError(String(reason)); }
-    finally { setBusy(false); }
+    finally { busyRef.current = false; setBusy(false); }
   };
   return <Dialog title={en ? "Export schematic" : "导出投影"} busy={busy} onClose={onClose} footer={<>
     <Button variant="ghost" disabled={busy} onClick={onWorldExport}>{en ? "Export world…" : "导出世界…"}</Button>

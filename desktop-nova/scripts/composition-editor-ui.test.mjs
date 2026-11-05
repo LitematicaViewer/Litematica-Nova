@@ -44,6 +44,15 @@ test('组合编辑UI：恢复既有资源、Host权威回执、数值/选择/工
   };
   const modules = {
     react: { ...React, default: React },
+    // This test covers editor commands, not portal/focus/layout behavior. The
+    // production Popover is exercised by the separate headless UI audit.
+    'radix-ui': { Popover: {
+      Root: ({ children }) => React.createElement(React.Fragment, null, children),
+      Trigger: ({ children }) => children,
+      Close: ({ children }) => children,
+      Portal: ({ children }) => React.createElement(React.Fragment, null, children),
+      Content: ({ children }) => React.createElement('div', null, children),
+    } },
     'lucide-react': new Proxy({}, { get: () => () => null }),
     '../../../../components/Dialog': { Dialog: ({ children }) => React.createElement('div', null, children) },
     '../../../../components/ui/button': { Button: ({ children, variant, size, ...props }) => React.createElement('button', props, children) },
@@ -117,8 +126,9 @@ test('组合页切页只隐藏，保留同一组件、数字草稿与Viewer；�
   const shell = fs.readFileSync(new URL('../ui/shell/AppShell.tsx', import.meta.url), 'utf8');
   assert.ok(shell.includes('(compositionVisited || route === "composition")'));
   assert.ok(shell.includes('className="workspace-composition-page" hidden={route !== "composition"}'));
-  assert.ok(shell.includes('formatImportOpen || route !== "composition"'));
-  assert.ok(shell.includes('route === "composition" ? null : requiresProjection(route)'));
+  assert.ok(shell.includes('presentationBlocked={route !== "composition"}'));
+  assert.ok(!shell.includes('formatImportOpen || route !== "composition"'));
+  assert.ok(shell.includes('route === "composition" || route === "settings" ? null : requiresProjection(route)'));
   assert.ok(source.includes('useQuickPreview(editorSourcePath,'));
   assert.ok(source.includes('false, editorScenePath || undefined)'));
   assert.ok(source.includes('<RenderPage currentFile={previewPath}'));

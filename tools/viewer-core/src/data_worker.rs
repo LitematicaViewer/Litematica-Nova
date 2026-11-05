@@ -270,6 +270,7 @@ impl Engine {
         progress(json!({"stage":"prepare","current":0,"total":1}));
         match req.kind {
             DataKind::Composition => crate::composition::execute(&req.input, cancel),
+            DataKind::LayerView if req.input["action"] == "creativeInventory" => crate::block_database::creative_inventory(&req.input),
             DataKind::LayerView => self.layers.execute(&req.input, cancel),
             DataKind::Thumbnail => crate::projection_preview::read_cached(&req.input, cancel),
             DataKind::ReplaceRules => crate::replace_blocks::editor_view(&req.input),
@@ -282,7 +283,7 @@ impl Engine {
             DataKind::Analysis => {
                 let (mut value, revision, _, _) = self.snapshot(&req.input, cancel)?;
                 value["source_revision"] = revision.into();
-                Ok(value)
+                Ok(crate::data_scope::material_snapshot_dto(value))
             }
             DataKind::Stats => {
                 let (analysis, revision, _, hit) = self.analysis(&req.input, cancel)?;
@@ -529,15 +530,13 @@ impl Engine {
             return Ok(result);
         }
         let source_edit = matches!(action.as_str(), "setSources" | "addSources" | "sync");
-        let saved = if source_edit && input["taskId"].is_string() {
-            serde_json::to_value(crate::stockpile_serve::desktop_task_from_value(json!({
+        let saved_sources = if source_edit && input["taskId"].is_string() {
+            crate::stockpile_serve::desktop_task_from_value(json!({
                 "action":"query","taskId":input["taskId"],"query":{"offset":0,"limit":1}
-            }))?)?["task"]
-                .clone()
+            }))?.into_source_views()?
         } else {
-            Value::Null
+            Vec::new()
         };
-        let saved_sources = saved["sources"].as_array().cloned().unwrap_or_default();
         let current_resource = if action == "sync" {
             Some(crate::game_data::active_context()?.content_id)
         } else {
@@ -569,11 +568,9 @@ impl Engine {
             // Group each file's scopes together, retaining one parsed source;
             // copies never multiply parsing or container scans.
             let mut order: Vec<_> = (0..sources.len()).collect();
-            order.sort_by_key(|index| {
-                sources[*index]["sourcePath"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_owned()
+            order.sort_by(|&left, &right| {
+                sources[left]["sourcePath"].as_str().unwrap_or_default()
+                    .cmp(sources[right]["sourcePath"].as_str().unwrap_or_default())
             });
             for index in order {
                 ensure!(!cancel.load(Ordering::Relaxed), "Data operation cancelled");
@@ -582,29 +579,25 @@ impl Engine {
                     .as_str()
                     .filter(|value| !value.is_empty())
                     .context("A task source path is required")?;
+                let scope = stockpile_scope(&requested);
                 let previous = saved_sources.iter().find(|source| {
-                    let same_id = requested["sourceId"].is_string()
-                        && source["sourceId"] == requested["sourceId"];
-                    let same_path = stockpile_same_path(
+                    stockpile_same_path(
                         source["sourcePath"].as_str().unwrap_or_default(),
                         path,
-                    );
-                    (same_id || same_path)
-                        && same_path
-                        && stockpile_scope(source) == stockpile_scope(&requested)
+                    ) && stockpile_scope(source) == scope
                         && source["includeContainerItems"].as_bool().unwrap_or(false)
                             == requested["includeContainerItems"]
                                 .as_bool()
                                 .unwrap_or(false)
                 });
-                let reuse = previous.is_some_and(|source| {
+                let reusable = previous.filter(|source| {
                     action != "sync"
                         || stockpile_source_status(source) == "current"
                             && source["resourceIdentity"].as_str() == current_resource.as_deref()
                 });
                 sources[index] = requested;
-                if reuse {
-                    sources[index]["sourceId"] = previous.unwrap()["sourceId"].clone();
+                if let Some(source) = reusable {
+                    sources[index]["sourceId"] = source["sourceId"].clone();
                 } else {
                     self.stockpile_snapshot(&mut sources[index], cancel)?;
                 }

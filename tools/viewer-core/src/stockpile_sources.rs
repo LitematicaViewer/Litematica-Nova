@@ -725,9 +725,9 @@ pub(super) fn details(
         one.materials = vec![item.clone()];
         let resolved = desktop_task_recipe_trees(version, &one)?;
         let names =
-            crate::item_names::resolve_stockpile_item_names_cached(version, &mut one, &resolved)?;
+            crate::item_names::resolve_stockpile_item_names(version, &mut one, &resolved)?;
         let icons =
-            crate::item_icons::resolve_stockpile_icons_cached(version, &mut one, &resolved)?;
+            crate::item_icons::resolve_stockpile_icons(version, &mut one, &resolved)?;
         let files = icons
             .files
             .into_iter()

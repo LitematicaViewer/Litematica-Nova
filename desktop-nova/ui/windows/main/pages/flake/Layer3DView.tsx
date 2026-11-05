@@ -8,6 +8,7 @@ import { Input } from "../../../../components/ui/input";
 import { Slider } from "../../../../components/ui/slider";
 import { useFullPreview } from "../../useFullPreview";
 import { listenEvent } from "../../../../../src/platform/events";
+import { SceneInteraction } from "../render/SceneInteraction";
 import { FreeCameraControls } from "../render/FreeCameraControls";
 import { shiftLayerRange } from "./layer3DSelection";
 import "./layer3D.css";
@@ -21,6 +22,7 @@ export function Layer3DView({ sourcePath, blocked = false }: { sourcePath: strin
   const [range, setRange] = useState<[number, number]>([0, 0]);
   const [selection, setSelection] = useState<"single" | "range" | "all">("single");
   const [error, setError] = useState("");
+  const [editorToolbar, setEditorToolbar] = useState<HTMLDivElement | null>(null);
   const preview = useFullPreview(sourcePath, false, blocked, "standard", { range: selection === "all" ? null : range });
   const previousRange = useRef<[number, number]>([0, 0]);
   const operationId = preview.operation?.operationId;
@@ -102,7 +104,7 @@ export function Layer3DView({ sourcePath, blocked = false }: { sourcePath: strin
     if (bounds) rememberedLayers.set(sourcePath, { range, selection, previousRange: previousRange.current });
   }, [sourcePath, bounds, range, selection]);
   return <section className="layer3d-view" onKeyDown={event => {
-    if (event.target instanceof HTMLElement && event.target.closest("input,textarea,select,[contenteditable=true]")) return;
+    if (event.nativeEvent.isComposing || event.defaultPrevented || event.target instanceof HTMLElement && event.target.closest("input,textarea,select,[contenteditable=true]")) return;
     if (event.key === "PageUp" || event.key === "PageDown") { event.preventDefault(); step(event.key === "PageUp" ? 1 : -1); }
   }}>
     <div className="layer3d-controls">
@@ -115,13 +117,14 @@ export function Layer3DView({ sourcePath, blocked = false }: { sourcePath: strin
       {selection === "range" && <label className="layer3d-number">– <Input aria-label={t("layerView.maximum")} type="number" min={range[0]} max={bounds?.[1]} value={range[1]} disabled={!bounds} onChange={event => change(range[0], Number(event.target.value))} /></label>}
 
     </div>
-    <FreeCameraControls sourcePath={sourcePath} displayMode="standard" ready={ready && preview.visible} />
+    <div className="layer3d-camera-toolbar"><FreeCameraControls sourcePath={sourcePath} displayMode="standard" ready={ready && preview.visible} /><div className="scene-editor-toolbar" ref={setEditorToolbar} /></div>
     <Slider className="layer3d-slider" aria-label={t("layerView.layers")} min={bounds?.[0] ?? 0} max={bounds ? Math.max(bounds[0] + 1, bounds[1]) : 1}
       value={selection === "range" ? range : [range[0]]} disabled={!bounds || bounds[0] === bounds[1]}
       onValueChange={values => change(values[0], values[1] ?? values[0], selection === "range" ? "range" : "single")} />
     {preview.error && <Button disabled={preview.pending} onClick={() => void preview.start()}>{t("render.reload")}</Button>}
     {(error || preview.error) && <div role="alert" className="nova-error">{error || preview.error}</div>}
-    <div ref={preview.hostRef} className="layer3d-viewport" aria-label={t("layerView.viewport")}>
+    <div ref={preview.mountHost} className="layer3d-viewport" aria-label={t("layerView.viewport")}>
+      <SceneInteraction sourcePath={sourcePath} operationId={operationId} displayMode="standard" ready={ready} visible={preview.visible} blocked={blocked} viewportRef={preview.hostRef} toolbarTarget={editorToolbar} onError={setError} />
       {!preview.visible && <div className="nova-empty-state">{preview.progressLabel}</div>}
     </div>
   </section>;

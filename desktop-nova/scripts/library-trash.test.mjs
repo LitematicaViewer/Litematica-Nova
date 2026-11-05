@@ -22,8 +22,9 @@ const icons = compile("../src/services/libraryCategoryIcons.ts", (name) => name 
 const paths = compile("../src/services/filePathIdentity.ts", () => { throw new Error("Unexpected path import"); });
 const migration = compile("../src/services/libraryMigration.ts", (name) =>
   name === "./filePathIdentity" ? paths : name === "./libraryCategoryIcons" ? icons : (() => { throw new Error(`Unexpected migration dependency: ${name}`); })());
+const files = { libraryContentCommand: async ({action,state}) => { if(action==='normalize')return state; if(action==='index')return {}; if(action==='reconcile')return {state,moved:[]}; if(action==='mergeAll')return {state,merges:[]}; if(action==='scan')return {state,stats:{markedMissing:[],newReplicas:0,revivedEntries:0,pendingAnalysis:[]}};throw new Error('Unstubbed Rust action '+action); } };
 const contentModule = compile("../src/services/libraryContent.ts", (name) =>
-  name === "./filePathIdentity" ? paths : name === "./libraryStore" ? {} : (() => { throw new Error(`Unexpected content dependency: ${name}`); })());
+  name === "../platform/files" ? files : name === "./filePathIdentity" ? paths : name === "./libraryStore" ? {} : (() => { throw new Error(`Unexpected content dependency: ${name}`); })());
 
 function loadStore({ backend = {}, index = {}, tasks = {}, stats = {} } = {}) {
   const appOperations = { inspectProject: async () => ({ metadata: {}, regions: [] }), editProjectMetadata: async () => ({}) };
@@ -36,7 +37,7 @@ function loadStore({ backend = {}, index = {}, tasks = {}, stats = {} } = {}) {
   };
   const statsService = { formatMaterialQuantity: () => "", loadStructureStats: async () => ({ materials: [] }), ...stats };
   const backendPath = {
-    readUserConfigFile: async () => { throw new Error("no disk"); },
+    readUserConfigFile: async (_path, optional) => { assert.equal(optional, true); return null; },
     writeUserConfigFile: async () => {},
     checkFileExists: async () => true,
     listLitematicFileEntriesInDirectory: async () => [],
@@ -50,6 +51,8 @@ function loadStore({ backend = {}, index = {}, tasks = {}, stats = {} } = {}) {
     ...backend,
   };
   return compile("../src/services/libraryStore.ts", (name) => {
+    if (name === "../platform/files") return files;
+    if (name === "../platform/schematicFormats") return { querySchematicFormat:async()=>({}) };
     if (name === "./libraryCategoryIcons") return icons;
     if (name === "./filePathIdentity") return paths;
     if (name === "./backend") return backendPath;

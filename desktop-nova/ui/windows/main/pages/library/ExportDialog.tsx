@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { t } from "../../../../../src/services/i18n";
+import { useEffect, useRef, useState } from "react";
 import { FolderOpen } from "lucide-react";
 import { Button } from "../../../../components/ui/button";
 import { Checkbox } from "../../../../components/ui/checkbox";
@@ -44,61 +45,68 @@ export function ExportDialog({
   const [includeMaterialList, setIncludeMaterialList] = useState(true);
   const [includeManifest, setIncludeManifest] = useState(true);
   const [outputPath, setOutputPath] = useState("");
+  const [pickError, setPickError] = useState("");
+  const [picking, setPicking] = useState(false);
+  const mounted = useRef(true);
+  const pickPending = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const handlePickPath = async () => {
-    const picked = await saveDialog({
-      defaultPath: defaultExportName(),
-      filters: [{ name: "ZIP", extensions: ["zip"] }],
-    }).catch(() => null);
-    if (picked) setOutputPath(picked);
+    if (pickPending.current) return;
+    pickPending.current = true; setPicking(true); setPickError("");
+    try {
+      const picked = await saveDialog({ defaultPath: defaultExportName(), filters: [{ name: "ZIP", extensions: ["zip"] }] });
+      if (mounted.current && picked) setOutputPath(picked);
+    } catch (reason) { if (mounted.current) setPickError(t("library.ux.pickExportFailed", { value0: String(reason) })); }
+    finally { pickPending.current = false; if (mounted.current) setPicking(false); }
   };
 
-  const canSubmit = !busy && !!outputPath.trim() && entryCount > 0;
+  const canSubmit = !busy && !picking && !!outputPath.trim() && entryCount > 0;
 
   return (
     <Dialog
-      title="打包导出"
-      subtitle={`将 ${entryCount} 个投影打包为扁平 zip；投影文件本体始终包含。`}
+      title={t("library.ux.exportZip")}
+      subtitle={t("library.ux.zipSummary", { value0: entryCount })}
       width="md"
       busy={busy}
       onClose={onClose}
       footer={(
         <>
-          <Button type="button" onClick={onClose} disabled={busy}>取消</Button>
+          <Button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</Button>
           <Button type="button" variant="default" disabled={!canSubmit} aria-busy={busy} onClick={() => onSubmit({ includePreview, includeMaterialList, includeManifest, outputPath: outputPath.trim() })}>
-            {busy ? "正在导出…" : "开始导出"}
+            {busy ? t("statistics.exporting") : t("library.ux.startExport")}
           </Button>
         </>
       )}
     >
       <div className="library-export-dialog">
         <fieldset className="library-export-content">
-          <legend>导出内容</legend>
+          <legend>{t("stockpile.exportContent")}</legend>
           <label className="setting-row library-export-option">
-            <Checkbox checked disabled aria-label="投影文件本体（必选）" /> 投影文件本体（必选）
+            <Checkbox checked disabled aria-label={t("library.ux.bodyRequired")} /> {t("library.ux.bodyRequired")}
           </label>
           <label className="setting-row library-export-option">
-            <Checkbox checked={includePreview} disabled={busy} aria-label="预览图" onCheckedChange={(value) => setIncludePreview(value === true)} /> 预览图
+            <Checkbox checked={includePreview} disabled={busy} aria-label={t("library.preview")} onCheckedChange={(value) => setIncludePreview(value === true)} /> {t("library.preview")}
           </label>
           <label className="setting-row library-export-option">
-            <Checkbox checked={includeMaterialList} disabled={busy} aria-label="材料清单" onCheckedChange={(value) => setIncludeMaterialList(value === true)} /> 材料清单（默认 txt）
+            <Checkbox checked={includeMaterialList} disabled={busy} aria-label={t("stockpile.materialCatalog")} onCheckedChange={(value) => setIncludeMaterialList(value === true)} /> {t("library.ux.materialTxt")}
           </label>
           <label className="setting-row library-export-option">
             <Checkbox checked={includeManifest} disabled={busy} aria-label="manifest.json" onCheckedChange={(value) => setIncludeManifest(value === true)} /> manifest.json
           </label>
         </fieldset>
         <div className="library-export-target">
-          <span className="dialog-label">导出目标</span>
+          <span className="dialog-label">{t("library.ux.exportTarget")}</span>
           <div className="library-export-target-row">
-            <Button type="button" disabled={busy} onClick={() => void handlePickPath()}>
-              <ThemeIcon name="explorer" size={16} fallback={FolderOpen} />选择目标…
+            <Button type="button" disabled={busy || picking} aria-busy={picking} onClick={() => void handlePickPath()}>
+              <ThemeIcon name="explorer" size={16} fallback={FolderOpen} />{t("library.ux.chooseTarget")}
             </Button>
-            <span className="library-export-path" title={outputPath ? displayFilePath(outputPath) : ""}>{outputPath ? displayFilePath(outputPath) : "未选择导出目标"}</span>
+            <span className="library-export-path" title={outputPath ? displayFilePath(outputPath) : ""}>{outputPath ? displayFilePath(outputPath) : t("library.ux.noTarget")}</span>
           </div>
         </div>
-        <p className="muted library-export-note">zip 采用扁平结构，按条目名组织，不保留原文件夹层级。</p>
+        <p className="muted library-export-note">{t("library.ux.flatZip")}</p>
       </div>
-      {error && <div className="dialog-message dialog-message-error" role="alert">{error}</div>}
+      {(error || pickError) && <div className="dialog-message dialog-message-error" role="alert">{error || pickError}</div>}
     </Dialog>
   );
 }

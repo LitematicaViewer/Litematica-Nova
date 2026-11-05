@@ -2137,6 +2137,21 @@ pub fn bits_for_palette(palette_len: usize) -> usize {
     bits.max(2)
 }
 
+/// Read-only words used by the existing compact and padded palette decoders.
+/// Generic NBT already owns native i64s; renderer NBT can be mapped big-endian bytes.
+pub trait PackedPaletteWords {
+    fn word_len(&self) -> usize;
+    fn palette_word(&self, index: usize) -> u64;
+}
+impl PackedPaletteWords for BigEndianLongArray {
+    fn word_len(&self) -> usize { self.len() }
+    fn palette_word(&self, index: usize) -> u64 { self.u64_at(index) }
+}
+impl PackedPaletteWords for fastnbt::LongArray {
+    fn word_len(&self) -> usize { self.len() }
+    fn palette_word(&self, index: usize) -> u64 { self[index] as u64 }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum PalettePacking {
     CompactBitstream,
@@ -2152,20 +2167,14 @@ pub(crate) struct PaletteLayout {
 impl PaletteLayout {
     // The owning immutable region resolves its packing once; selected chunk
     // reads reuse that exact decision without inflating another region copy.
-    pub(crate) fn palette_index(self, block_states: &BigEndianLongArray, index: usize) -> usize {
+    pub(crate) fn palette_index(self, block_states: &(impl PackedPaletteWords + ?Sized), index: usize) -> usize {
         palette_index_at_with_packing(block_states, self.nbits, index, self.packing)
-    }
-
-    // Generic NBT conversion already owns native longs. Sparse block-entity
-    // lookups must not copy the entire packed region to the renderer storage.
-    pub(crate) fn palette_index_native(self, block_states: &[i64], index: usize) -> usize {
-        palette_index_with_read(self.nbits, index, self.packing, |word| block_states[word] as u64)
     }
 
     // Sequential range reads retain the current/crossing long. In particular,
     // a nonzero word is decoded once, not fetched again for every palette item.
     // Returns actual backing-array word reads for the stage's aggregate ledger.
-    pub(crate) fn visit_palette_range<F>(self, block_states: &BigEndianLongArray,
+    pub(crate) fn visit_palette_range<F>(self, block_states: &(impl PackedPaletteWords + ?Sized),
         start: usize, end: usize, zero_is_air: bool, mut visit: F) -> usize
     where F: FnMut(usize, usize) {
         if start >= end { return 0; }
@@ -2176,7 +2185,7 @@ impl PaletteLayout {
                 let last_word = (end * self.nbits).div_ceil(64);
                 let mut index = start;
                 let mut word_index = (index * self.nbits) >> 6;
-                let mut word = block_states.u64_at(word_index);
+                let mut word = block_states.palette_word(word_index);
                 word_reads += 1;
                 let mut following: Option<(usize, u64)> = None;
                 while index < end {
@@ -2189,7 +2198,7 @@ impl PaletteLayout {
                                 cached_word
                             } else {
                                 word_reads += 1;
-                                block_states.u64_at(next_word)
+                                block_states.palette_word(next_word)
                             };
                             if next_value != 0 { break; }
                             next_word += 1;
@@ -2215,7 +2224,7 @@ impl PaletteLayout {
                             cached_word
                         } else {
                             word_reads += 1;
-                            let next = block_states.u64_at(word_index + 1);
+                            let next = block_states.palette_word(word_index + 1);
                             following = Some((word_index + 1, next));
                             next
                         };
@@ -2231,7 +2240,7 @@ impl PaletteLayout {
                             cached_word
                         } else {
                             word_reads += 1;
-                            block_states.u64_at(next_word)
+                            block_states.palette_word(next_word)
                         };
                         word_index = next_word;
                     }
@@ -2242,7 +2251,7 @@ impl PaletteLayout {
                 let mut index = start;
                 let mut word_index = index / per_word;
                 while index < end {
-                    let word = block_states.u64_at(word_index);
+                    let word = block_states.palette_word(word_index);
                     word_reads += 1;
                     let word_end = ((word_index + 1) * per_word).min(end);
                     if zero_is_air && word == 0 {
@@ -2308,12 +2317,12 @@ fn palette_mask(nbits: usize) -> u64 {
 }
 
 fn palette_index_at_with_packing(
-    block_states: &BigEndianLongArray,
+    block_states: &(impl PackedPaletteWords + ?Sized),
     nbits: usize,
     index: usize,
     packing: PalettePacking,
 ) -> usize {
-    palette_index_with_read(nbits, index, packing, |word| block_states.u64_at(word))
+    palette_index_with_read(nbits, index, packing, |word| block_states.palette_word(word))
 }
 
 fn palette_index_with_read(nbits: usize, index: usize, packing: PalettePacking, read: impl Fn(usize) -> u64) -> usize {
@@ -2344,14 +2353,14 @@ fn palette_index_with_read(nbits: usize, index: usize, packing: PalettePacking, 
 }
 
 pub(crate) fn choose_palette_packing(
-    block_states: &BigEndianLongArray,
+    block_states: &(impl PackedPaletteWords + ?Sized),
     size: usize,
     nbits: usize,
     palette_len: usize,
 ) -> Result<PaletteLayout> {
     let compact_len = compact_block_states_len(size, nbits);
     let padded_len = padded_block_states_len(size, nbits);
-    let actual_len = block_states.len();
+    let actual_len = block_states.word_len();
 
     let compact_possible = actual_len >= compact_len;
     let padded_possible = actual_len >= padded_len;
@@ -2420,7 +2429,7 @@ pub(crate) fn choose_palette_packing(
 }
 
 fn choose_legacy_underpacked_palette_layout(
-    block_states: &BigEndianLongArray,
+    block_states: &(impl PackedPaletteWords + ?Sized),
     size: usize,
     expected_nbits: usize,
     palette_len: usize,
@@ -2480,7 +2489,7 @@ pub fn region_bounds(region: &RegionNbt) -> RegionBounds {
 }
 
 pub fn decode_palette_frequencies(
-    block_states: &BigEndianLongArray,
+    block_states: &(impl PackedPaletteWords + ?Sized),
     size: usize,
     nbits: usize,
     palette_len: usize,
@@ -2540,7 +2549,7 @@ pub fn pack_palette_indices(indices: &[usize], nbits: usize) -> BigEndianLongArr
 }
 
 pub fn for_each_palette_index<F>(
-    block_states: &BigEndianLongArray,
+    block_states: &(impl PackedPaletteWords + ?Sized),
     size: usize,
     nbits: usize,
     palette_len: usize,
@@ -2561,7 +2570,7 @@ where
 }
 
 pub fn palette_index_at(
-    block_states: &BigEndianLongArray,
+    block_states: &(impl PackedPaletteWords + ?Sized),
     size: usize,
     nbits: usize,
     palette_len: usize,
@@ -4005,10 +4014,19 @@ mod tests {
                 let mut baseline = Vec::new();
                 for_each_palette_index(packed, expected.len(), bits_for_palette(palette_len), palette_len, |_, value| { baseline.push(value); Ok(()) }).unwrap();
                 assert_eq!(baseline, expected);
+                let native = fastnbt::LongArray::new((0..packed.len()).map(|word| packed.i64_at(word)).collect());
+                let bits = bits_for_palette(palette_len);
+                let mut actual = Vec::new();
+                for_each_palette_index(&native, expected.len(), bits, palette_len, |_, value| {
+                    actual.push(value);
+                    Ok(())
+                }).unwrap();
+                assert_eq!(actual, expected);
+                assert_eq!(decode_palette_frequencies(&native, expected.len(), bits, palette_len).unwrap(),
+                           decode_palette_frequencies(packed, expected.len(), bits, palette_len).unwrap());
                 for selected in [0, 1, 11, 12, 13, 31, 32, 64, 138] {
                     assert_eq!(layout.palette_index(packed, selected), baseline[selected]);
-                      let native=(0..packed.len()).map(|word|packed.i64_at(word)).collect::<Vec<_>>();
-                      assert_eq!(layout.palette_index_native(&native, selected),baseline[selected]);
+                    assert_eq!(layout.palette_index(&native, selected), baseline[selected]);
                 }
                 for (start, end) in [(0, 139), (1, 31), (7, 64), (11, 13), (32, 139), (138, 139)] {
                     for zero_is_air in [false, true] {
@@ -4032,6 +4050,7 @@ mod tests {
             }
         }
         assert!(choose_palette_packing(&BigEndianLongArray::new(vec![0]), 1000, bits_for_palette(33), 33).is_err());
+        assert!(choose_palette_packing(&fastnbt::LongArray::new(vec![0]), 1000, bits_for_palette(33), 33).is_err());
     }
 
     #[test]

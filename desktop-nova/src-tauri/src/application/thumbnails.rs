@@ -217,6 +217,39 @@ mod tests {
         fs::remove_file(frame).unwrap();
         fs::remove_dir(root).unwrap();
     }
+
+    #[test]
+    fn undelivered_thumbnail_drafts_are_discarded_after_cancel_or_teardown_error() {
+        let root = temporary_preview_path().with_extension("draft-test");
+        fs::create_dir(&root).unwrap();
+        let source = root.join("source.litematic");
+        fs::write(&source, b"unchanged synthetic source").unwrap();
+        let (_, control, _generation) = begin_generation(None).unwrap();
+        for (case, cancelled, closed) in [("cancel", true, Ok(())), ("teardown", false, Err("fixture teardown failure".into())), ("delivered", false, Ok(()))] {
+            control.cancelled.store(cancelled, Ordering::Release);
+            let id = format!("{}-{case}", root.file_name().unwrap().to_string_lossy());
+            let frame = root.join(format!("{case}.png"));
+            // This tests ownership, not image rendering or PNG validation.
+            fs::write(&frame, b"synthetic owned draft").unwrap();
+            drafts().lock().unwrap().insert(id.clone(), Draft { source: source.clone(), stamp: source_stamp(&source).unwrap(), source_id: "fixture".into(), frame: frame.clone(), frame_hash: "fixture".into(), mode: "fast_experimental".into() });
+            let result = finish_generation(Ok(ProductPreviewImage { draft_id: Some(id.clone()), ..Default::default() }), closed, &control);
+            if case == "delivered" {
+                assert!(result.is_ok()); assert!(frame.is_file());
+                assert!(drafts().lock().unwrap().contains_key(&id));
+                discard_generated_preview(id).unwrap();
+            } else {
+                assert!(result.is_err()); assert!(!frame.exists());
+                assert!(!drafts().lock().unwrap().contains_key(&id));
+            }
+            assert_eq!(fs::read(&source).unwrap(), b"unchanged synthetic source");
+        }
+        let unreturned = root.join("failed-capture.png");
+        fs::write(&unreturned, b"owned temporary readback").unwrap();
+        { let _frame = PreviewFrame(unreturned.clone()); }
+        assert!(!unreturned.exists());
+        fs::remove_file(source).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
 }
 
 // Product commands use the existing signed render paths. Generation creates a
@@ -246,6 +279,16 @@ fn generations() -> &'static Mutex<BTreeMap<String, Arc<Generation>>> {
     VALUE.get_or_init(Default::default)
 }
 struct GenerationGuard(String);
+struct PreviewFrame(PathBuf);
+impl Drop for PreviewFrame {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_file(&self.0) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[THUMBNAIL] temporary frame cleanup failed: {error}");
+            }
+        }
+    }
+}
 impl Drop for GenerationGuard {
     fn drop(&mut self) {
         generations().lock().unwrap().remove(&self.0);
@@ -288,6 +331,23 @@ fn check_generation(control: &Generation) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+// A draft belongs to the caller only after capture teardown and cancellation
+// checks. Never strand an already staged PNG when this command returns Err.
+fn finish_generation(
+    output: Result<ProductPreviewImage, String>,
+    closed: Result<(), String>,
+    control: &Generation,
+) -> Result<ProductPreviewImage, String> {
+    let image = output?;
+    if let Err(error) = closed.and_then(|_| check_generation(control)) {
+        if let Some(id) = image.draft_id {
+            discard_generated_preview(id)
+                .map_err(|cleanup| format!("{error}；草稿回收失败：{cleanup}"))?;
+        }
+        return Err(error);
+    }
+    Ok(image)
 }
 fn selected_mode(value: Option<String>) -> Result<String, String> {
     let value = match value {
@@ -507,6 +567,7 @@ pub(crate) async fn render_preview_image(
                 })
                 .ok_or("请先启动该投影的快速渲染")?;
             let (source, frame) = host.capture_frame(&view.preview_id)?;
+            let _frame = PreviewFrame(frame.clone());
             stage_preview(&source, &frame, &expected, &mode)
         })
         .await
@@ -521,7 +582,10 @@ pub(crate) async fn render_preview_image(
     let frame = facade
         .capture_frame(&OperationId(id), &source, display)
         .await?;
-    tauri::async_runtime::spawn_blocking(move || stage_preview(&source, &frame, &expected, &mode))
+    tauri::async_runtime::spawn_blocking(move || {
+        let _frame = PreviewFrame(frame.clone());
+        stage_preview(&source, &frame, &expected, &mode)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
@@ -574,11 +638,7 @@ async fn generate_one(
             })();
             let closed = temporary.close(&view.preview_id);
             *control.fast.lock().unwrap() = None;
-            match (output, closed) {
-                (Ok(result), Ok(())) => Ok(result),
-                (Err(error), _) => Err(error),
-                (_, Err(error)) => Err(error),
-            }
+            finish_generation(output, closed, &control)
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -588,6 +648,7 @@ async fn generate_one(
         .with_display_mode(&mode)?;
     check_generation(&control)?;
     let output = temporary_preview_path();
+    let _frame = PreviewFrame(output.clone());
     let contract = launch.prepare_preview(source.clone(), output.clone(), None)?;
     *control.protected.lock().unwrap() = Some(contract.request_id().into());
     // Publishing the identity precedes this check; cancel-before-spawn is also
@@ -600,11 +661,12 @@ async fn generate_one(
     *control.protected.lock().unwrap() = None;
     check_generation(&control)?;
     let rendered = rendered?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let image = tauri::async_runtime::spawn_blocking(move || {
         stage_preview(&source, Path::new(&rendered.preview_path), &expected, &mode)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    finish_generation(image, Ok(()), &control)
 }
 #[tauri::command]
 pub(crate) async fn generate_preview_image(
@@ -675,6 +737,9 @@ pub(crate) async fn generate_preview_images(
         )
         .await;
         if control.cancelled.load(Ordering::Acquire) {
+            if let Ok(image) = result {
+                if let Some(draft) = image.draft_id { discard_generated_preview(draft)?; }
+            }
             break;
         }
         let item = match result {

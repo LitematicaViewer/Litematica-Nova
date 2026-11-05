@@ -1,3 +1,5 @@
+import { Popover } from "radix-ui";
+import { Move3D, X } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
 import { t } from "../../../../../src/services/i18n";
 import { getUserConfig, saveUserConfig, type UserConfigInfo } from "../../../../../src/platform/appData";
@@ -45,6 +47,15 @@ export function FreeCameraControls({ sourcePath, displayMode, ready }: {
     const listener = listenEvent<UserConfigInfo>("user-config-changed", event => receive(event.payload));
     return () => { alive = false; void listener.then(stop => stop()); };
   }, []);
+  // Synchronising settings is not a presentation teardown. In particular, a
+  // speed/sensitivity update must not give up an existing native mouse grab.
+  useEffect(() => {
+    if (!ready || !configured) return;
+    let alive = true;
+    void updateSceneView({ sourcePath, displayMode, controls: controlsFor(viewRef.current) })
+      .catch(failure => { if (alive) setError(String(failure)); });
+    return () => { alive = false; };
+  }, [identity, sourcePath, displayMode, ready, configured, configurationRevision]);
   useEffect(() => {
     if (!ready || !configured) { setLocked(false); return; }
     let alive = true;
@@ -53,8 +64,6 @@ export function FreeCameraControls({ sourcePath, displayMode, ready }: {
       setLocked(state.cameraLocked);
       setNativeError(state.error ?? "");
     };
-    void updateSceneView({ sourcePath, displayMode, controls: controlsFor(viewRef.current) })
-      .then(receive).catch(failure => { if (alive) setError(String(failure)); });
     let querying = false;
     const query = () => {
       if (document.hidden || querying) return;
@@ -63,6 +72,7 @@ export function FreeCameraControls({ sourcePath, displayMode, ready }: {
         .catch(failure => { if (alive) setError(String(failure)); }).finally(() => { querying = false; });
     };
     // Only the native owner writes receipts, on actual state changes.
+    void query();
     const timer = window.setInterval(query, 500);
     const release = () => { void releaseCameraInput({ sourcePath, displayMode }).then(receive)
       .catch(failure => { if (alive) setError(String(failure)); }); };
@@ -81,7 +91,7 @@ export function FreeCameraControls({ sourcePath, displayMode, ready }: {
       document.removeEventListener("focusin", modalFocus);
       void releaseCameraInput({ sourcePath, displayMode }).catch(console.warn);
     };
-  }, [identity, ready, configured, configurationRevision]);
+  }, [identity, sourcePath, displayMode, ready, configured]);
   const apply = async (controls: SceneViewControls, next = view) => {
     setPending(true); setError("");
     try {
@@ -95,7 +105,11 @@ export function FreeCameraControls({ sourcePath, displayMode, ready }: {
     finally { if (currentIdentity.current === identity) setPending(false); }
   };
   const disabled = !ready || !configured || pending;
-  return <div className="free-camera-group">
+  return <Popover.Root onOpenChange={open => { if (open && ready) void releaseCameraInput({ sourcePath, displayMode }).catch(failure => setError(String(failure))); }}>
+    <Popover.Trigger asChild><Button variant="ghost" title={t("freeCamera.title")} aria-label={t("freeCamera.title")}><Move3D size={16} aria-hidden /><span className="render-tool-label">{t("freeCamera.title")}</span></Button></Popover.Trigger>
+    <Popover.Portal><Popover.Content sideOffset={8} align="start" collisionPadding={12} className="free-camera-group render-environment-panel" data-native-ui-surface
+      onWheel={event => event.stopPropagation()} aria-label={t("freeCamera.title")}>
+      <div className="render-panel-heading"><strong>{t("freeCamera.title")}</strong><Popover.Close asChild><Button variant="ghost" size="icon" aria-label={t("common.close")}><X size={16} /></Button></Popover.Close></div>
     <div className="render-page-actions free-camera-controls" role="group" aria-label={t("freeCamera.title")}>
       <Select value={view.inputMode} disabled={disabled}
         onValueChange={value => { const inputMode = value as CameraInputMode; void apply({ cameraInputMode: inputMode, releaseCameraInput: true }, { ...view, inputMode }); }}>
@@ -118,5 +132,5 @@ export function FreeCameraControls({ sourcePath, displayMode, ready }: {
     </div>
     <p className="render-preview-help">{t(view.inputMode === "pointer_lock" ? "freeCamera.lockHint" : "freeCamera.dragHint")}</p>
     {(error || nativeError) && <div className="render-error" role="alert">{error || nativeError}</div>}
-  </div>;
+  </Popover.Content></Popover.Portal></Popover.Root>;
 }

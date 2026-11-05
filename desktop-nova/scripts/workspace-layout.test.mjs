@@ -47,17 +47,19 @@ test('一级导航：十个入口直接可达，保持旧route ID，不再显示
     for (const label of locale === 'zh-CN' ? ['首页', '投影库', '概览', '三维', '分层', '备货', '替换', '组合/拆分', '生成', '设置']
       : ['Home', 'Library', 'Overview', '3D', 'Layers', 'Stockpile', 'Replace', 'Compose / Split', 'Generate', 'Settings']) assert.ok(html.includes(label));
     assert.equal(navigation.requiresProjection('composition'), false);
-    for (const route of ['properties', 'render', 'flake', 'statistics', 'replace']) assert.equal(navigation.requiresProjection(route), true);
+    assert.equal(navigation.requiresProjection('statistics'), false);
+    for (const route of ['properties', 'render', 'flake', 'replace']) assert.equal(navigation.requiresProjection(route), true);
   }
   const shell = read('ui/shell/AppShell.tsx');
-  assert.ok(shell.includes('<PrimaryNavigation route={route} onNavigate={setRoute} theme={theme} />'));
+  assert.ok(shell.includes('placement="main"'));
+  assert.ok(shell.includes('placement="footer"'));
   assert.ok(shell.includes('requiresProjection(route) && !currentFile'));
   assert.ok(shell.includes('currentFile={currentFile}'));
   assert.ok(!shell.includes('WorkbenchNavigation'));
   assert.ok(!shell.includes('lastWorkbenchRoute'));
-  const css = read('ui/shell/workspace.css');
-  assert.ok(css.includes('width: 188px; min-width: 188px; flex-basis: 188px'));
-  assert.ok(css.includes('.sidebar > .nav-scroll-area { flex: 1 1 0; min-height: 38px; }'));
+  const css = read('ui/shell/workspace.css') + read('ui/shell/widget/nav.css');
+  assert.ok(css.includes('--nova-nav-width: 184px')); 
+  assert.ok(css.includes('.sidebar > .nav-scroll-area { flex: 1 1 0; min-height: 36px; }'));
   assert.ok(!css.includes('.workbench-tabs'));
 });
 
@@ -154,9 +156,9 @@ test('原生视口：各UI倍率×系统DPI只换算一次，不改变几何身�
 
 test('导航只有Radix滚动层，独立热区10px、视觉4/6px，不改变页面滚动条', () => {
   const controls = read('ui/styles/controls.css');
-  const workspace = read('ui/shell/workspace.css');
+  const workspace = read('ui/shell/workspace.css') + read('ui/shell/widget/nav.css');
   const widgets = read('ui/styles/widgets.css');
-  assert.match(workspace, /\.app-shell \.sidebar \{[^}]*overflow: visible/);
+  assert.match(workspace, /\.sidebar \{[^}]*overflow: hidden/);
   assert.doesNotMatch(workspace, /\.app-shell \.sidebar \{[^}]*overflow-y: auto/);
   assert.match(controls, /--nova-nav-scroll-hit: 10px; --nova-nav-scroll-visual: 4px/);
   assert.match(controls, /width: calc\(100% - var\(--nova-nav-scroll-hit\)\)/);
@@ -267,7 +269,7 @@ test('统一动效覆盖按钮/标签/卡片/弹层，关闭/精简/像素语言
   assert.ok(css.includes('--nova-motion-overlay-scale: 1'));
   assert.ok(css.includes('[data-theme="minecraft"]'));
   assert.ok(css.includes('html:not([data-motion])'));
-  assert.ok(css.includes('nth-child(-n+8)'));
+  assert.ok(!css.includes('nth-child(-n+8)')); // Rows keep stable anchors instead of replaying stagger animations.
   assert.doesNotMatch(css, /infinite|blur\(|spring|elastic/);
   assert.match(read('ui/themes/modern.css'), /html:not\(\[data-motion\]\) \*/);
   for (const key of ['motion', 'motion.system', 'motion.off', 'motion.reduced', 'motion.standard', 'motion.rich', 'motionHelp', 'motionSystemReduced', 'motionFailed']) {

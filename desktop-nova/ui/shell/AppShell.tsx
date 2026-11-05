@@ -1,8 +1,9 @@
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../src/services/i18n";
 import { useI18n } from "../i18n";
+import { prepareCreativeInventoryCatalog } from "../../src/services/creativeInventoryCatalog";
 import { Button } from "../components/ui/button";
 import { ScrollArea } from "../components/ui/scroll-area";
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getApplicationVersion } from "../../src/platform/appData";
 import { invoke } from "../../src/platform/tauri";
 import { addOrUpdateRecord, loadLibrary } from "../../src/business/projectionLibrary";
@@ -32,7 +33,7 @@ import {
 import { projectionLibraryImportedEvent } from "../windows/libraryEvents";
 import { FormatImportDialog } from "../windows/main/FormatImportDialog";
 import { UpdateDialog } from "../windows/main/UpdateDialog";
-import { readUpdateDraft, takeUpdateDraft, useUpdateDraft, useApplicationCloseRecovery } from "../windows/main/updateRecovery";
+import { readUpdateDraft, takeUpdateDraft, useUpdateDraft, useApplicationCloseRecovery, preserveUpdateDrafts } from "../windows/main/updateRecovery";
 import { PrimaryNavigation, primaryNavigationItems, requiresProjection } from "./PrimaryNavigation";
 import { CompositionPage } from "../windows/main/pages/composition/CompositionPage";
 import { NavIcon } from "./NavIcon";
@@ -45,16 +46,49 @@ import "../styles/enumerator.css";
  * Renders the Nova desktop shell and keeps page logic behind the UI boundary.
  */
 export function App() {
-  useI18n();
+  const { locale } = useI18n();
+  useEffect(() => {
+    // Keep the first paint independent of catalog I/O. The editor shares
+    // this request only when its version, resources and language match.
+    const warm = () => { void prepareCreativeInventoryCatalog({}, locale).catch(() => undefined); };
+    const changed = listenEvent("resource-game-data-changed", warm);
+    const idle = typeof window.requestIdleCallback === "function";
+    const id = idle ? window.requestIdleCallback(warm, { timeout: 1000 }) : window.setTimeout(warm, 0);
+    return () => {
+      if (idle) window.cancelIdleCallback(id); else window.clearTimeout(id);
+      void changed.then(unlisten => unlisten()).catch(() => undefined);
+    };
+  }, [locale]);
   const closeRecovery = useApplicationCloseRecovery();
-  const [currentFile, setCurrentFile] = useState<string>(() => readUpdateDraft<{currentFile: string}>("shell")?.currentFile || "");
+  const [currentFile, commitCurrentFile] = useState<string>(() => readUpdateDraft<{currentFile: string}>("shell")?.currentFile || "");
   const [theme, setThemeState] = useState(currentThemeId);
   const themeRef = useRef(theme);
   const [colorMode, setColorModeState] = useState(currentColorMode);
   const colorModeRef = useRef(colorMode);
   const themeSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const [themeSaveError, setThemeSaveError] = useState<UiMessage>("");
-  const [route, setRoute] = useState(() => readUpdateDraft<{route: string}>("shell")?.route || "home");
+  const [route, commitRoute] = useState(() => readUpdateDraft<{route: string}>("shell")?.route || "home");
+  const [navigationError, setNavigationError] = useState("");
+  const setCurrentFile = useCallback((next: string) => {
+    try {
+      preserveUpdateDrafts();
+      setNavigationError("");
+      commitCurrentFile(next);
+    } catch (error) {
+      setNavigationError((getUiLocale() === "en-US" ? "Drafts could not be retained. Save your changes before switching files: " : "草稿保留失败，请保存当前修改后再切换投影：") + String(error));
+    }
+  }, []);
+  const setRoute = useCallback((next: string) => {
+    try {
+      preserveUpdateDrafts();
+      setNavigationError("");
+      commitRoute(next);
+    } catch (error) {
+      setNavigationError((getUiLocale() === "en-US" ? "Drafts could not be retained. Save your changes and retry: " : "草稿保留失败，请保存当前修改后重试：") + String(error));
+    }
+  }, []);
+  const [settingsVisited, setSettingsVisited] = useState(route === "settings");
+  useEffect(() => { if (route === "settings") setSettingsVisited(true); }, [route]);
   const pageRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => animatePageChange(pageRef.current), [route]);
   const [projectDirty, setProjectDirty] = useState(false);
@@ -102,7 +136,15 @@ export function App() {
     return () => { cancelled = true; };
   }, [showEnumerator, currentFile]);
   const [expanded, setExpanded] = useState(true);
+  const [compactNavigation, setCompactNavigation] = useState(() => window.matchMedia("(max-width: 959px)").matches);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 959px)");
+    const accept = () => setCompactNavigation(query.matches);
+    query.addEventListener("change", accept);
+    return () => query.removeEventListener("change", accept);
+  }, []);
   const [debugMode, setDebugMode] = useState(false);
+  const [debugModeLoaded, setDebugModeLoaded] = useState(false);
   const [buildVersion, setBuildVersion] = useState("");
   useEffect(() => { void getApplicationVersion().then(setBuildVersion).catch(console.error); }, []);
 
@@ -147,7 +189,8 @@ export function App() {
       .then((info) => {
         setDebugMode(normalizeDebugMode(info.config.debug_mode));
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => setDebugModeLoaded(true));
   }, []);
 
   useEffect(() => {
@@ -162,11 +205,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!debugModeLoaded) return;
     if (!debugMode) setShowEnumerator(false);
     if (!debugMode && route === "ui_test") {
       setRoute("settings");
     }
-  }, [debugMode, route]);
+  }, [debugMode, debugModeLoaded, route]);
 
   useEffect(() => {
     const listening = listenEvent<{ enabled: boolean }>("nova-debug-mode-changed", event => {
@@ -206,26 +250,30 @@ export function App() {
   return (
     <div className={["app-shell", themeClassName(theme)].filter(Boolean).join(" ")}>
       <aside className={expanded ? "sidebar" : "sidebar sidebar-collapsed"}>
-        <Button variant="ghost"
+        <Button variant="ghost" themeSlot="navigation"
           className="nav-expand"
           type="button"
           onClick={() => setExpanded(!expanded)}
           title={expanded ? t("shell.collapseSidebar") : t("shell.expandSidebar")}
+          aria-label={expanded ? t("shell.collapseSidebar") : t("shell.expandSidebar")}
+          aria-expanded={expanded && !compactNavigation}
+          disabled={compactNavigation}
         >
           <NavIcon name="hamburger" theme={theme} />
           <strong>Litematica-Nova</strong>
         </Button>
 
         <ScrollArea className="nav-scroll-area" aria-label={getUiLocale() === "en-US" ? "Scrollable navigation" : "可滚动导航"}>
-        <PrimaryNavigation route={route} onNavigate={setRoute} theme={theme} />
+        <PrimaryNavigation route={route} onNavigate={setRoute} theme={theme} placement="main" />
 
         {currentFile && <div className="workspace-project" title={currentFile}>
           <span>{getUiLocale() === "en-US" ? "Current project" : "当前项目"}</span>
           <strong>{currentFile.split(/[\\/]/).pop()}</strong>
           {projectDirty && <span>{t("properties.unsaved")}</span>}
         </div>}
-        <nav className="nav-list nav-list-bottom" aria-label={t("shell.settings")}>
-          {debugMode && <Button variant="ghost" className="sidebar-item nav-item" type="button" aria-label={t("shell.enumerator")} title={!expanded ? t("shell.enumerator") : ""}
+        </ScrollArea>
+        <div className="nav-list nav-list-bottom">
+          {debugMode && <Button variant="ghost" themeSlot="navigation" className="sidebar-item nav-item" type="button" aria-label={t("shell.enumerator")} title={t("shell.enumerator")}
             onClick={() => openEnumeratorWithWindowBehavior(currentFile, () => setShowEnumerator(true)).catch((error) => setEnumeratorError(String(error)))}>
             <NavIcon name="enumerator" theme={theme} /><span className="nav-label">{t("shell.enumerator")}</span>
           </Button>}
@@ -233,11 +281,11 @@ export function App() {
           {Object.entries(bottomPages).filter(([key]) => key !== "settings").map(([key, value]) => {
             const active = route === key;
             return (
-              <Button variant="ghost"
+              <Button variant="ghost" themeSlot="navigation"
                 key={key}
                 className={`sidebar-item nav-item ${active ? "active nav-item-active" : ""}`}
                 onClick={() => setRoute(key)}
-                title={!expanded ? value.name : ""}
+                title={value.name}
                 type="button"
                 aria-pressed={active}
                 aria-label={value.name}
@@ -247,24 +295,28 @@ export function App() {
               </Button>
             );
           })}
-        </nav>
-        </ScrollArea>
+          <PrimaryNavigation route={route} onNavigate={setRoute} theme={theme} placement="footer" />
+        </div>
       </aside>
       <main className="content">
         {closeRecovery.error && <div role="alert"><p>{localizeMessage(closeRecovery.error)}</p><Button onClick={() => void closeRecovery.retry()}>{t("shell.retryClose")}</Button></div>}
+        {navigationError && <p role="alert">{navigationError}</p>}
         {themeSaveError && <p role="alert">{localizeMessage(themeSaveError)}</p>}
         {enumeratorError && <p role="alert">{t("shell.enumeratorContext")}{displayPathText(localizeMessage(enumeratorError))}</p>}
         {openFileError && <p role="alert">{localizeMessage(openFileError)}</p>}
         <div className="workspace-page" ref={pageRef}>
         {(compositionVisited || route === "composition") && <div className="workspace-composition-page" hidden={route !== "composition"}>
-          <CompositionPage initialProjectId={compositionId} setCompositionId={setCompositionId} currentFile={currentFile} presentationBlocked={showEnumerator || formatImportOpen || route !== "composition"} />
+          <CompositionPage initialProjectId={compositionId} setCompositionId={setCompositionId} currentFile={currentFile} presentationBlocked={route !== "composition"} />
         </div>}
-        {route === "composition" ? null : requiresProjection(route) && !currentFile ? <section className="workspace-empty" aria-labelledby="workspace-empty-title">
+        {(settingsVisited || route === "settings") && <div className="workspace-settings-page" hidden={route !== "settings"}>
+          <SettingsPage theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} debugMode={debugMode} setDebugMode={setDebugMode} buildVersion={buildVersion} />
+        </div>}
+        {route === "composition" || route === "settings" ? null : requiresProjection(route) && !currentFile ? <section className="workspace-empty" aria-labelledby="workspace-empty-title">
           <h2 id="workspace-empty-title">{pageLabel}</h2>
           <p>{getUiLocale() === "en-US" ? "Open a schematic to use this page. Your other pages and saved tasks stay unchanged." : "请先选择投影，其他页面及已保存任务会保留。"}</p>
           <div><Button onClick={() => void openProjection()}>{t("home.open")}</Button><Button variant="outline" onClick={() => setRoute("library")}>{t("home.browse")}</Button></div>
         </section> :
-        <Page onImportClipboard={() => setClipboardImportOpen(true)} initialProjectId={compositionId} setCompositionId={setCompositionId} onDirtyChange={setProjectDirty} presentationBlocked={showEnumerator || formatImportOpen} currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} debugMode={debugMode} setDebugMode={setDebugMode} buildVersion={buildVersion} />
+        <Page onImportClipboard={() => setClipboardImportOpen(true)} initialProjectId={compositionId} setCompositionId={setCompositionId} onDirtyChange={setProjectDirty} presentationBlocked={false} currentFile={currentFile} setCurrentFile={setCurrentFile} setRoute={setRoute} activeRoute={route} theme={theme} setTheme={setTheme} colorMode={colorMode} setColorMode={announceColorModeChange} debugMode={debugMode} setDebugMode={setDebugMode} buildVersion={buildVersion} />
         }
         </div>
       </main>

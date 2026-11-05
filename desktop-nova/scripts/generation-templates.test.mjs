@@ -7,11 +7,12 @@ import ts from "typescript";
 
 const repoRoot = new URL("../../", import.meta.url);
 const indexPath = "data/generation-templates/index.json";
-function service(readWorkspaceFile) {
+function service(readWorkspaceFile, locale = "zh-CN") {
   const source = readFileSync(new URL("../src/services/generationTemplates.ts", import.meta.url), "utf8");
   const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } }).outputText;
   const context = { exports: {}, require(id) {
     if (id === "./backend") return { readWorkspaceFile };
+    if (id === "./i18n") return { getUiLocale: () => locale };
     if (id === "./generateService") return {};
     throw new Error("Unexpected dependency: " + id);
   } };
@@ -32,6 +33,18 @@ test("模板目录：读取实际带 BOM 的索引与全部 11 份模板", async
   assert.ok(templates.every((item) => item.plan.regions.length && Array.isArray(item.tags)));
   assert.equal(reads.length, 12);
   assert.equal(reads[0], indexPath);
+});
+
+test("内置模板列表按活动语言的名称排序", async () => {
+  const files = {
+    [indexPath]: '["a.json","b.json"]',
+    "data/generation-templates/a.json": '{"id":"a","name_zh":"A","name_en":"Zulu","tags":[]}',
+    "data/generation-templates/b.json": '{"id":"b","name_zh":"B","name_en":"Alpha","tags":[]}',
+  };
+  for (const [locale, expected] of [["zh-CN", "a,b"], ["en-US", "b,a"]]) {
+    const templates = await service(async path => files[path], locale).loadGenerationTemplates();
+    assert.equal(templates.map(template => template.id).join(","), expected);
+  }
 });
 
 test("模板解析：索引与模板分别兼容 BOM，正文字符保持不变", async () => {

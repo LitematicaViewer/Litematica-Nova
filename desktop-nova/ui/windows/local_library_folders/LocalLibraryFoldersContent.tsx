@@ -273,7 +273,7 @@ useI18n();
       const scanned = await scanLibraryFolders(nextState, { onlyFolderPath: folderPath });
       nextState = scanned.state;
       setState(nextState);
-      if (scanned.failures.length) setStatus(`已添加，但有 ${scanned.failures.length} 个文件未能扫描。`);
+      if (scanned.failures.length) setStatus(t("library.ux.folderScanPartial", { value0: scanned.failures.length }));
       await emitLibraryStateChanged();
     } catch (error: any) {
       setStatus(message("library.localFolderAddFailed", { error: String(error) }));
@@ -310,7 +310,7 @@ setStatus(message("library.folderSettingsUpdated", { path: displayFilePath(folde
     try {
       let nextState = await updateLocalLibraryFolder(state, folder.path, { type });
       setState(nextState);
-      setStatus(type === "non_archived" ? `已设为非归档：${displayFilePath(folder.path)}` : `已设为已追踪：${displayFilePath(folder.path)}`);
+      setStatus(type === "non_archived" ? t("library.ux.folderUntracked", { value0: displayFilePath(folder.path) }) : t("library.ux.folderTracked", { value0: displayFilePath(folder.path) }));
       if (type !== "non_archived") {
         const scanned = await scanLibraryFolders(nextState, { onlyFolderPath: folder.path });
         nextState = scanned.state;
@@ -318,7 +318,7 @@ setStatus(message("library.folderSettingsUpdated", { path: displayFilePath(folde
       }
       await emitLibraryStateChanged();
     } catch (error: any) {
-      setStatus(`更新文件夹类型失败：${String(error)}`);
+      setStatus(t("library.ux.folderTypeFailed", { value0: String(error) }));
     } finally {
       setBusyKey("");
     }
@@ -383,11 +383,11 @@ setStatus(message("library.folderSettingsUpdated", { path: displayFilePath(folde
       const outcome = await scanLibraryFolders(state, { useCache: !forceRecheck, forceRecheck });
       setState(outcome.state);
       setStatus(outcome.failures.length
-        ? `${forceRecheck ? "强制重新校验" : "重新扫描"}完成，但有 ${outcome.failures.length} 个文件失败。`
-        : `${forceRecheck ? "已强制重新校验" : "已重新扫描"} ${outcome.scannedCount} 个文件。`);
+        ? t("library.ux.folderActionPartial", { value0: forceRecheck ? t("library.ux.forceRecheck") : t("library.ux.rescanAction"), value1: outcome.failures.length })
+        : t("library.ux.filesDone", { value0: forceRecheck ? t("library.ux.rechecked") : t("library.ux.rescanned"), value1: outcome.scannedCount }));
       await emitLibraryStateChanged();
     } catch (error: any) {
-      setStatus(`重新扫描失败：${String(error)}`);
+      setStatus(t("library.ux.rescanFailed", { value0: String(error) }));
     } finally {
       setBusyKey("");
     }
@@ -516,10 +516,10 @@ setStatus(message("library.folderSettingsUpdated", { path: displayFilePath(folde
             {busyKey === "sync-all" ? t("library.syncing") : t("library.syncAllFolders")}
           </Button>
           <Button type="button" disabled={!!busyKey} onClick={() => void handleRescanAll(false)}>
-            {busyKey === "rescan" ? "重新扫描中..." : "重新扫描全部"}
+            {busyKey === "rescan" ? t("library.ux.rescanning") : t("library.ux.rescan")}
           </Button>
-          <Button type="button" disabled={!!busyKey} title="忽略文件大小与修改时间缓存，强制重新计算校验值" onClick={() => void handleRescanAll(true)}>
-            {busyKey === "rescan-force" ? "强制校验中..." : "强制重新校验"}
+          <Button type="button" disabled={!!busyKey} title={t("library.ux.forceHint")} onClick={() => void handleRescanAll(true)}>
+            {busyKey === "rescan-force" ? t("library.ux.rechecking") : t("library.ux.forceRecheck")}
           </Button>
         </div>
         <div className="muted subwindow-status-text">{t("library.mountedFolders", { count: state.folders.length, enabled: enabledCount })}</div>
@@ -567,7 +567,14 @@ setStatus(message("library.folderSettingsUpdated", { path: displayFilePath(folde
                         key={entry.path}
                         className={isSelected ? "table-row-selected" : ""}
                         aria-selected={isSelected}
-                        onClick={() => setSelectedBrowserEntryPath(entry.path)}
+                        tabIndex={0}
+                        onClick={() => setSelectedBrowserEntryPath(current => current === entry.path ? "" : entry.path)}
+                        onKeyDown={event => {
+                          if (event.currentTarget !== event.target || event.nativeEvent.isComposing) return;
+                          if (event.key === " ") { event.preventDefault(); setSelectedBrowserEntryPath(current => current === entry.path ? "" : entry.path); }
+                          if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setSelectedBrowserEntryPath(""); setHoverPreview(null); }
+                          if (event.key === "Enter" && !busyKey) { event.preventDefault(); if (entry.is_dir) setBrowserPath(entry.path); else if (canActivate) void handleActivateEntry(entry).catch(error => setStatus(message("library.activationFailed", { error: String(error) }))); }
+                        }}
                         onMouseEnter={(event) => {
                           if (!isLitematicEntry(entry)) return;
                           setHoverPreview({ entry, x: event.clientX, y: event.clientY });
@@ -650,15 +657,15 @@ setStatus(message("library.folderSettingsUpdated", { path: displayFilePath(folde
                 <div className="subwindow-status-text">{t("library.lastScannedCount", { count: folder.lastScanCount })}</div>
                 {folder.lastError ? <div className="subwindow-status-text-error">{localizeMessage(folder.lastError)}</div> : null}
                 <div className="setting-row subwindow-check-row library-folder-type-row">
-                  <span className="library-folder-type-label">类型</span>
+                  <span className="library-folder-type-label">{t("library.ux.type")}</span>
                   {folder.type === "builtin_import"
-                    ? <span className="library-folder-type-locked" data-folder-type="builtin_import">内置导入（不可改 · 不可移除）</span>
+                    ? <span className="library-folder-type-locked" data-folder-type="builtin_import">{t("library.ux.builtinType")}</span>
                     : <Dropdown
-                        ariaLabel={`${compactFolderPath(folder.path, localLibraryTailPathCount)} 文件夹类型`}
+                        ariaLabel={t("library.ux.folderType", { value0: compactFolderPath(folder.path, localLibraryTailPathCount) })}
                         value={folder.type}
                         disabled={!!busyKey}
                         onChange={(value) => void handleChangeFolderType(folder, value as LibraryFolderType)}
-                        options={[{ value: "tracked", label: "已追踪（扫描入库）" }, { value: "non_archived", label: "非归档（不扫描）" }]}
+                        options={[{ value: "tracked", label: t("library.ux.trackedType") }, { value: "non_archived", label: t("library.ux.untrackedType") }]}
                       />}
                 </div>
                 <div className="button-row subwindow-wrap-row">
@@ -683,7 +690,7 @@ setStatus(message("library.folderSettingsUpdated", { path: displayFilePath(folde
                         disabled={!!busyKey}
                         onCheckedChange={(checked) => handleToggleFolder(folder, { autoActivate: checked === true })}
                       />
-                      自动激活（新文件自动入库）
+                      {t("library.ux.autoActivate")}
                     </label>
                   )}
                 </div>
@@ -698,7 +705,7 @@ setStatus(message("library.folderSettingsUpdated", { path: displayFilePath(folde
                   >
                     {busyKey === `sync:${folder.path}` ? t("library.syncing") : t("library.syncNow")}
                   </Button>
-<Button type="button" disabled={!!busyKey || folder.type === "builtin_import"} title={folder.type === "builtin_import" ? "内置导入文件夹不可移除" : undefined} onClick={() => { setStatus(""); setRemoveFolder(folder); }}>{t("library.remove")}</Button>
+<Button type="button" disabled={!!busyKey || folder.type === "builtin_import"} title={folder.type === "builtin_import" ? t("library.ux.builtinNoRemove") : undefined} onClick={() => { setStatus(""); setRemoveFolder(folder); }}>{t("library.remove")}</Button>
                 </div>
               </div>
             </div>
@@ -706,7 +713,7 @@ setStatus(message("library.folderSettingsUpdated", { path: displayFilePath(folde
         </div></ScrollArea>
       </fieldset>
 <fieldset className="subwindow-list-fieldset">
-        <legend>回收区</legend>
+        <legend>{t("library.ux.recycle")}</legend>
         <TrashPanel
           state={state}
           busy={!!busyKey}

@@ -16,6 +16,23 @@
 !endif
 !addplugindir /x86-unicode "${NOVA_INSTALLER_SOURCES}\..\..\..\tools\nsis-duilib\target\x86-unicode"
 
+; Shell links use a shell path, not a verbatim filesystem path. Keep the
+; original $INSTDIR intact for file I/O, upgrade identity and the /D= handoff.
+Var NovaShortcutDir
+!macro NOVA_SHORTCUT_DIRECTORY
+  NovaDui::DirectoryDisplayPath /NOUNLOAD "$INSTDIR"
+  Pop $NovaShortcutDir
+!macroend
+!macro NOVA_CREATE_SHORTCUT link
+  ; NSIS copies $OUTDIR into the link's working directory. Set just the
+  ; variable for this instruction, without changing the process directory.
+  Push $OUTDIR
+  StrCpy $OUTDIR $NovaShortcutDir
+  ClearErrors
+  CreateShortcut "${link}" "$NovaShortcutDir\${MAINBINARYNAME}.exe"
+  Pop $OUTDIR
+!macroend
+
 !macro NOVA_MIGRATE_EXISTING
   NovaDui::SetLanguage /NOUNLOAD "$LANGUAGE"
   NovaDui::Migrate /NOUNLOAD "$INSTDIR"
@@ -33,6 +50,58 @@
   ${If} $R0 != "ok"
     SetErrorLevel 1618
     Abort "$R0"
+  ${EndIf}
+!macroend
+
+Var NovaPrunePreviousLayout
+Var NovaSameInstallDir
+Var NovaPrunedFileCount
+Var NovaBusyFileCount
+!macro NSIS_HOOK_PREINSTALL
+  StrCpy $NovaPrunePreviousLayout 0
+  StrCpy $NovaSameInstallDir 0
+  SetRegView 64
+  ReadRegStr $R0 SHCTX "${UNINSTKEY}" "InstallLocation"
+  ReadRegStr $R1 SHCTX "${UNINSTKEY}" "NovaInstallerIdentity"
+  ${If} $R0 != ""
+  ${AndIf} $R1 == "${BUNDLEID}"
+    NovaDui::DirectoryDisplayPath /NOUNLOAD "$R0"
+    Pop $R0
+    NovaDui::DirectoryDisplayPath /NOUNLOAD "$INSTDIR"
+    Pop $R1
+    ${If} $R0 == $R1
+      StrCpy $NovaSameInstallDir 1
+      IfFileExists "$INSTDIR\pack-in\game-data\default\derived\version-adapters\*.zip" 0 +2
+        StrCpy $NovaPrunePreviousLayout 1
+      IfFileExists "$INSTDIR\pack-in\game-data\default\assets\*.*" 0 +2
+        StrCpy $NovaPrunePreviousLayout 1
+    ${EndIf}
+  ${EndIf}
+  ClearErrors
+!macroend
+
+; Compiled from exact retired package receipts, never from the installation
+; being upgraded. A resource reintroduced by this Setup always wins.
+!macro NOVA_PRUNE_FILE relative bytes digest
+  !ifndef "NOVA_CURRENT_RESOURCE_${relative}"
+    NovaDui::PruneRetiredFile /NOUNLOAD "$INSTDIR" "${relative}" "${bytes}" "${digest}"
+    Pop $R0
+    ${If} $R0 == "removed"
+      IntOp $NovaPrunedFileCount $NovaPrunedFileCount + 1
+    ${ElseIf} $R0 == "busy"
+      IntOp $NovaBusyFileCount $NovaBusyFileCount + 1
+      DetailPrint "Previous Nova package file retained (in use or inaccessible): ${relative}"
+    ${EndIf}
+  !endif
+!macroend
+
+!macro NOVA_PRUNE_RETIRED_INSTALL_FILES
+  ; Previous identity and directory were checked before writing the new registration.
+  ${If} $NovaSameInstallDir == 1
+    StrCpy $NovaPrunedFileCount 0
+    StrCpy $NovaBusyFileCount 0
+    !include "${NOVA_INSTALLER_SOURCES}\retired-files.nsh"
+    DetailPrint "Previous Nova package files removed: $NovaPrunedFileCount; inaccessible: $NovaBusyFileCount."
   ${EndIf}
 !macroend
 
@@ -82,15 +151,41 @@
   File "${NOVA_INSTALLER_SOURCES}\licenses\WndShadow-NOTICE.txt"
   SetOutPath "$INSTDIR"
 
-  ; Repair this same canonical shortcut even for /UPDATE and repeat installs.
-  CreateShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  ; The start menu function owns the current shortcut, including on /UPDATE.
+  ; RepairShell distinguishes required registration from optional old links.
   NovaDui::SetLanguage /NOUNLOAD "$LANGUAGE"
   NovaDui::RepairShell /NOUNLOAD "$INSTDIR"
   Pop $R0
-  ${If} $R0 != "ok"
+  StrCpy $R1 $R0 9
+  ${If} $R1 == "warning: "
+    StrCpy $R1 $R0 "" 9
+    DetailPrint "$R1"
+  ${ElseIf} $R0 != "ok"
     SetErrorLevel 1603
     Abort "$R0"
   ${EndIf}
+  !ifdef NOVA_PRUNE_ADAPTERS
+    !ifndef NOVA_PRUNE_CORE
+      !error "Compact game data requires the packaged core helper"
+    !endif
+    !ifndef NOVA_PRUNE_RESOURCES
+      !error "Compact game data requires its resource index"
+    !endif
+    ${If} $NovaPrunePreviousLayout == 1
+      InitPluginsDir
+      SetOutPath "$PLUGINSDIR"
+      File /oname=nova-prune.exe "${NOVA_PRUNE_CORE}"
+      File /oname=nova-resources.json "${NOVA_PRUNE_RESOURCES}"
+      File /oname=nova-archives.json "${NOVA_PRUNE_ADAPTERS}"
+      nsExec::ExecToLog '"$PLUGINSDIR\nova-prune.exe" prune-replaced-install-resources "$INSTDIR" "$PLUGINSDIR\nova-resources.json" "$PLUGINSDIR\nova-archives.json"'
+      Pop $R0
+      SetOutPath "$INSTDIR"
+      ${If} $R0 != 0
+        DetailPrint "Previous resource cleanup skipped ($R0); previous files retained."
+      ${EndIf}
+    ${EndIf}
+  !endif
+  !insertmacro NOVA_PRUNE_RETIRED_INSTALL_FILES
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import React from "react";
 
 import "../../styles/base.css";
+import "../standalone-layout.css";
 import { getUserConfig } from "../../../src/business/facade";
 import { initializeWindowTheme } from "../../shell/themeRuntime";
 import { DemoWindow } from ".";

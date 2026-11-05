@@ -1165,7 +1165,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-nova"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1200,7 +1200,9 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tauri-runtime",
+ "tempfile",
  "tokio",
+ "toml 1.1.2+spec-1.1.0",
  "viewer-launch-contract",
  "windows-sys 0.59.0",
  "zip 2.4.2",

@@ -12,9 +12,11 @@ const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const repo = path.resolve(workspace, '../..');
 const frontend = path.join(repo, 'desktop-nova');
 const stockpilePicker = process.argv.includes('--stockpile-picker');
-const output = path.join(workspace, stockpilePicker ? '.cache/product-ui-stockpile-picker' : '.cache/product-ui');
+const sceneHud = process.argv.includes('--scene-hud');
+const uxAudit = process.argv.includes('--ux-audit');
+const output = path.join(workspace, uxAudit ? '.cache/product-ui-ux-audit' : sceneHud ? '.cache/product-ui-scene-hud' : stockpilePicker ? '.cache/product-ui-stockpile-picker' : '.cache/product-ui');
 let source, tag;
-if (!stockpilePicker) {
+if (!stockpilePicker && !sceneHud && !uxAudit) {
   source = spawnSync('git', ['rev-parse', 'HEAD'], {cwd: repo, encoding: 'utf8'}).stdout.trim();
   tag = spawnSync('git', ['rev-parse', 'beta-0.4.0^{}'], {cwd: repo, encoding: 'utf8'}).stdout.trim();
   const diff = spawnSync('git', ['diff', tag, '--', 'desktop-nova/src', 'desktop-nova/ui', 'desktop-nova/package.json'], {cwd: repo, encoding: 'utf8'});
@@ -22,7 +24,7 @@ if (!stockpilePicker) {
 }
 // Adapter-only debugging may reuse the just-built isolated bundle. The normal
 // invocation always builds; the published-media mode never skips its build.
-const reusePickerBuild = stockpilePicker && process.argv.includes('--reuse-build');
+const reusePickerBuild = (stockpilePicker || sceneHud || uxAudit) && process.argv.includes('--reuse-build');
 if (reusePickerBuild) {
   assert.ok(fs.existsSync(path.join(output,'index.html')), 'Run --stockpile-picker once before --reuse-build.');
 } else {
@@ -214,10 +216,70 @@ async function captureStockpilePicker(browser) {
   assert.ok(report.passed,'Stockpile picker geometry failed; inspect the bounds report.');
 }
 
+// Clearly labelled UI fixtures exercise the production component and CSS only.
+// They do not claim a native ray-hit, container decode, GPU or edit acceptance.
+async function captureSceneHud(browser) {
+  const directory=path.join(repo,'output/playwright/scene-hud'); fs.mkdirSync(directory,{recursive:true});
+  const icons=Object.fromEntries(['chest','oak_log','diamond','iron_ingot','bread','water_bucket'].map(id=>[id,'data:image/png;base64,'+fs.readFileSync(path.join(repo,'pack-in/item-icons-26.3',id+'.png')).toString('base64')]));
+  const report={kind:'production-SceneInteraction-UI-with-explicit-native-viewmodel-fixtures',nativeViewerValidated:false,visibleGuiOperated:false,scenarios:[]};
+  for(const theme of ['shadcn','8bitcn','Minecraft','Aero7','Metro10']) {
+    const context=await browser.newContext({viewport:{width:1600,height:1000},locale:'zh-CN',deviceScaleFactor:1,colorScheme:'dark'});
+    const page=await context.newPage(); const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    await context.route('**/*',route=>/^(?:data:|http:\/\/127\.0\.0\.1:)/.test(route.request().url())?route.continue():route.abort());
+    await context.addInitScript(({theme,icons})=>{
+      const sourcePath='X:\\Nova-UI-fixture\\Jade-HUD.litematic';
+      localStorage.setItem('nova.ui.language','zh-CN'); localStorage.setItem('theme',theme);localStorage.setItem('litematicanova-theme-id',theme);localStorage.setItem('litematicanova-color-mode','dark');localStorage.setItem('lba.appdataConfigMigrated.v1','1');
+      localStorage.setItem('nova.update-recovery.v1',JSON.stringify({shell:{route:'render',currentFile:sourcePath}}));
+      window.isTauri=true;let serial=0;
+      const hit={displayName:'橡木原木',sourceName:'Minecraft',instanceId:'ui-fixture',position:[12,64,-8],face:'up',distance:3.4,state:{id:'minecraft:oak_log',properties:{axis:'y'}},container:null};
+      const state={dataVersion:4189,gameVersion:'1.21.4',contentId:'ui-fixture-context',sceneGeneration:'ui-fixture-scene',revision:0,mode:'observe',menuOpen:false,activeSlot:0,hotbar:Array.from({length:9},(_,i)=>i<2?{id:i?'minecraft:chest':'minecraft:oak_log',properties:{}}:null),dirty:false,canUndo:false,canRedo:false,hit,error:null};
+      window.__novaHudFixture=state;
+      const operation={operationId:'ui-fixture',source:{path:sourcePath},displayMode:'standard',buildMode:'realtime',state:'viewer_prepared',progress:{phase:'viewer_prepared',activity:null,completed:1,total:1,elapsedMs:0},presentation:{mode:'embedded',visible:true,placement:{x:200,y:260,width:1300,height:700,dpiScale:1,focused:false}},presentationState:'visible',analysis:null,error:null};
+      const config={ui_scale:1,ui_language:'zh-CN',ui_locale:'zh-CN',theme,color_mode:'dark',motion_preference:'off',camera_input_mode:'drag',camera_speed:12,camera_sensitivity:1,render_display_mode:'standard',preview_mode:'standard',graphics_backend:'auto',material_list_window_behavior:'independent_window',debug_mode:false,show_ui_test_page:false,local_library_tail_path_count:3,statistics_enumerator_info_rules:[],v5_compatibility:{backend:'auto',resource_packs:[],shaderpack_root:'',shaderpack_name:'',iris_fallback:'fail',fabric_mods_dir:''},viewer_controls:{allow_time_modification:true,allow_weather_modification:true}};
+      const ack=()=>({sourcePath,displayMode:'standard',cameraLocked:false,interaction:structuredClone(state)});
+      window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebview:{label:'main'}},convertFileSrc:()=>'',transformCallback:callback=>{const id=++serial;window[`_${id}`]=callback;return id;},unregisterCallback:id=>delete window[`_${id}`],invoke:async(command,args)=>{
+        if(command==='get_user_config'||command==='save_user_config')return{config_dir:'X:\\Nova-UI-fixture',default_config_dir:'X:\\Nova-UI-fixture',config};
+        if(command==='plugin:app|version')return'0.4.1'; if(command==='plugin:event|listen')return++serial;
+        if(command==='application_take_open_files')return[];if(command==='application_recent_projects')return{projects:[]};
+        if(command==='application_render_get_snapshot')return{operations:[operation]};
+        if(command==='application_render_update_presentation')return operation;
+        if(command==='application_get_scene_view')return ack();
+        if(command==='application_set_scene_view'){const i=args.controls?.interaction;if(i){if(i.mode)state.mode=i.mode;if(i.menuOpen!==undefined)state.menuOpen=i.menuOpen;if(i.activeSlot!==undefined)state.activeSlot=i.activeSlot;if(i.setSlot)state.hotbar[i.setSlot.index]=i.setSlot.state;}return ack();}
+        if(command==='read_user_config_file')return null; if(command==='read_language_resource'||command==='read_resource_pack_language')return{};
+        if(command==='read_game_data_icon')return icons[args.id.replace('minecraft:','')]||null;
+        if(command==='application_data_query'){if(args.input.kind==='format')return{nativePassthrough:true};return{projects:[],records:[],entries:[],categories:[],folders:[],items:[],total:0};}
+        if(command==='application_library_index_query')return{entries:[],total:0};
+        if(command.includes('is_maximized')||command.includes('is_minimized'))return false;if(command.includes('is_visible'))return true;if(command.includes('scale_factor'))return 1;if(command.includes('position'))return{x:0,y:0};
+        return null;
+      }};
+      window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(){}};
+    },{theme,icons});
+    await page.goto(`http://127.0.0.1:${server.address().port}/`,{waitUntil:'networkidle'});
+    await page.waitForSelector('.render-page');await page.locator('.render-mode-switch button').nth(1).click();
+    await page.waitForSelector('.scene-info-hud');await page.evaluate(()=>document.fonts.ready);
+    for(const kind of ['block','container']) {
+      if(kind==='container')await page.evaluate(()=>{const s=window.__novaHudFixture;s.hit={...s.hit,displayName:'箱子',state:{id:'minecraft:chest',properties:{facing:'south',type:'single'}},container:{status:'known',capacity:27,items:[{slot:0,id:'minecraft:diamond',displayName:'钻石',count:64,variant:null},{slot:1,id:'minecraft:iron_ingot',displayName:'铁锭',count:32,variant:null},{slot:4,id:'minecraft:bread',displayName:'面包',count:12,variant:null},{slot:9,id:'minecraft:water_bucket',displayName:'水桶',count:1,variant:'自定义名称：备用水'}],error:null}};});
+      if(kind==='container')await page.waitForSelector('.scene-hud-slots');
+      await page.waitForFunction(()=>[...document.querySelectorAll('.scene-info-hud img')].every(img=>img.complete));
+      const geometry=await page.evaluate(()=>{const r=el=>{const b=el.getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height,bottom:b.bottom}};const h=document.querySelector('.scene-info-hud'),v=document.querySelector('.render-preview-host'),d=document.querySelector('.scene-editor-dock');return{hud:r(h),viewport:r(v),dock:r(d),slotCount:h.querySelectorAll('.scene-hud-slot').length,icon:r(h.querySelector('.block-icon-image,.block-icon-fallback')),overflow:h.scrollWidth>h.clientWidth+1};});
+      assert.equal(geometry.overflow,false);assert.ok(Math.abs(geometry.hud.x+geometry.hud.width/2-(geometry.viewport.x+geometry.viewport.width/2))<2);assert.ok(geometry.hud.bottom<geometry.dock.y);assert.equal(geometry.slotCount,kind==='container'?27:0);assert.equal(geometry.icon.width,26);
+      const filename=path.join(directory,`${theme}-${kind}.png`);await page.screenshot({path:filename});
+      report.scenarios.push({theme,kind,geometry,filename,errors:[...errors]});assert.equal(errors.length,0);
+    }
+    await context.close();
+  }
+  fs.writeFileSync(path.join(directory,'scene-hud-layout.json'),JSON.stringify(report,null,2));
+  console.log(`Scene HUD UI-fixture layouts: ${directory}`);
+}
 let browser;
 try {
   browser = await chromium.launch({channel:'msedge', headless:true});
-  if (stockpilePicker) {
+  if (uxAudit) {
+    const {runUxAudit} = await import('./ux-audit.mjs');
+    await runUxAudit({browser,baseURL:`http://127.0.0.1:${server.address().port}/`,outputDir:path.join(repo,'output/playwright/ux-audit')});
+  } else if (sceneHud) {
+    await captureSceneHud(browser);
+  } else if (stockpilePicker) {
     await captureStockpilePicker(browser);
   } else {
   for (const locale of ['zh-CN','en-US']) {
@@ -240,7 +302,7 @@ try {
         if(command==='application_close_request')return null;
         if(command==='read_user_config_file')return null;
         if(command==='read_language_resource')return{};
-        if(command==='application_data_query')return{projects:[],records:[],entries:[],categories:[],folders:[],items:[],total:0};
+        if(command==='application_data_query'){if(args.input.kind==='format')return{nativePassthrough:true};return{projects:[],records:[],entries:[],categories:[],folders:[],items:[],total:0};}
         if(command==='application_library_index_query')return{entries:[],total:0};
         if(command.includes('is_maximized')||command.includes('is_minimized'))return false;
         if(command.includes('is_visible'))return true;

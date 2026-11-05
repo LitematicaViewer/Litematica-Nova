@@ -282,6 +282,13 @@ function appHarness(runtime, facade) {
       const index = cursor++;
       return slots[index] ??= { current: initial };
     },
+    useCallback(callback, dependencies) {
+      const index = cursor++;
+      if (!slots[index] || dependencies.some((value, offset) => !Object.is(value, slots[index].dependencies[offset]))) {
+        slots[index] = { callback, dependencies };
+      }
+      return slots[index].callback;
+    },
     useEffect(effect, dependencies) {
       const index = cursor++;
       if (!slots[index] || dependencies.some((value, offset) => value !== slots[index][offset])) {
@@ -294,6 +301,12 @@ function appHarness(runtime, facade) {
   const pageStub = (props) => React.createElement('div', props);
   const dependencies = {
     react: hooks,
+    '../i18n': { useI18n: () => ({ locale: 'zh-CN' }) },
+    '../../src/services/creativeInventoryCatalog': { prepareCreativeInventoryCatalog: async () => ({}) },
+    '../../src/platform/tauri': { invoke: async command => {
+      assert.equal(command, 'application_take_open_files');
+      return [];
+    } },
     '../../src/platform/events': { listenEvent: async () => () => {} },
     '../../src/business/facade': {
       normalizeDebugMode: () => false, displayPathText: (value) => value, loadStructuralBlocks: async () => [],
@@ -334,7 +347,9 @@ function appHarness(runtime, facade) {
   for (const [folder, name] of [['home', 'Home'], ['library', 'Library'], ['properties', 'Properties'], ['statistics', 'Statistics'], ['flake', 'Flake'], ['replace', 'Replace'], ['generate', 'Generate'], ['render', 'Render'], ['settings', 'Settings'], ['ui-test', 'UiTest']]) {
     dependencies[`../windows/main/pages/${folder}/${name}Page`] = { [`${name}Page`]: () => null };
   }
-  const App = load('ui/shell/AppShell.tsx', dependencies).App;
+  const App = load('ui/shell/AppShell.tsx', dependencies, {
+    window: { matchMedia: () => Object.assign(new EventTarget(), { matches: false }), setTimeout, clearTimeout },
+  }).App;
   return () => {
     cursor = 0;
     const tree = App();

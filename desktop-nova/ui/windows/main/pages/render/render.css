@@ -4,13 +4,14 @@
 @layer components.page {
 /* Appearance (surface, border, muted text, progress track) lives in the shared
    component rules; this file only keeps the page's own flow and sizing. */
-.render-page .render-preview-group { margin: 0; gap: 8px; }
+.render-page .render-preview-group { position: relative; margin: 0; gap: var(--nova-toolbar-gap, 8px); }
 .render-page .render-preview-host { margin: 0; }
 .render-page .render-preview-state { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); letter-spacing: 0; }
 .render-page .render-preview-help { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
 .render-page .render-progress-track { overflow: hidden; }
 .render-page .render-error { max-height: 6rem; overflow: auto; overflow-wrap: anywhere; }
-.render-page .render-page-title { flex: 0 0 auto; margin: 0; text-align: left; }
+.render-page .render-page-header { margin: 0; gap: var(--nova-toolbar-gap, 8px) var(--nova-section-gap, 16px); align-items: baseline; }
+.render-page .render-page-title { flex: 0 0 auto; margin: 0; text-align: start; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.3; }
 .render-page .render-page-source { flex: 1; max-width: none; }
 }
 
@@ -21,15 +22,38 @@
 .free-camera-group { display: grid; gap: 0.35rem; min-width: 0; }
 .free-camera-group > .render-preview-help { margin: 0; }
 .free-camera-status { color: var(--muted-foreground); font-size: var(--nova-text-sm); }
-.render-environment { min-width: 0; border-block-start: 1px solid var(--border); padding-block: 0.5rem; }
-.render-environment > summary { cursor: pointer; width: fit-content; font-weight: 600; padding: 0.25rem 0; }
-.render-environment > summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
-.render-environment-body { display: grid; gap: 0.5rem; padding-block-start: 0.5rem; min-width: 0; }
-.render-environment-time { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
-.render-environment-time input[type="range"] { flex: 1 1 12rem; min-width: 6rem; accent-color: var(--primary); }
-.render-environment-time output { min-width: 7em; font-variant-numeric: tabular-nums; }
-.render-environment-weather { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
-.render-environment-weather select { min-width: 8rem; }
-.render-environment-body .render-preview-help { margin: 0; }
-.render-environment-applied { color: var(--muted-foreground); font-size: var(--nova-text-sm); }
+.render-view-tools { display:flex; align-items:center; flex-wrap:wrap; gap:var(--nova-toolbar-gap, 8px); min-height:32px; flex:none; }
+.scene-editor-toolbar { min-width:0; flex:1 1 15rem; }
+.render-panel-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.render-environment-panel { position:relative; z-index:1200; width:320px; max-width:calc(100vw - 24px); max-height:var(--radix-popover-content-available-height, 70vh); overflow:auto; padding:12px; border-radius:10px; background:var(--popover, var(--background)); color:var(--foreground); border:1px solid var(--border); box-shadow:0 4px 18px #0003; overscroll-behavior:contain; }
+.render-environment-body { display:grid; gap:12px; padding-top:8px; }
+.render-environment-time { display:grid; grid-template-columns:1fr auto; align-items:center; gap:8px; }
+.render-environment-time input[type="range"] { grid-column:1 / -1; grid-row:2; min-width:0; width:100%; accent-color:var(--primary); }
+.render-environment-time output { font-variant-numeric:tabular-nums; }
+.render-environment-weather { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.render-environment-weather select { min-width:128px; }
+.render-environment-body .render-preview-help { margin:0; }
+.render-environment-applied { color:var(--muted-foreground); font-size:var(--nova-text-sm); min-height:18px; }
+.free-camera-group .free-camera-controls { display:grid; gap:12px; padding:8px 0; border:0; }
+.free-camera-group .free-camera-controls label { justify-content:space-between; }
+.render-page { position:relative; gap:var(--nova-toolbar-gap, 8px); }
+/* Anchor notices to the measured preview region, not a desktop-only toolbar height.
+   The native host stays a full-sized sibling and never inherits notice padding. */
+.render-notices { position:absolute; inset-block-start:0; inset-inline:0; z-index:4; width:fit-content; max-width:min(100%,34rem); max-height:100%; overflow:auto; }
+.render-notices > :is(.render-preview-help, .render-error) { margin:0; padding:var(--nova-toolbar-gap, 8px); background:var(--popover, var(--background)); }
+.render-notices > .render-preview-help:has(> progress) { display:flex; flex-wrap:wrap; align-items:center; gap:var(--nova-toolbar-gap, 8px); color:var(--muted-foreground); }
+.render-notices > .render-preview-help > progress { width:8rem; height:.5rem; max-width:100%; accent-color:var(--primary); }
+.render-page > [role="status"]:last-child { height:20px; flex:none; overflow:auto; font-size:var(--nova-text-sm); }
+.render-page .render-page-actions { flex-wrap:wrap; min-height:32px; padding-block-end:var(--nova-toolbar-gap, 8px); gap:var(--nova-toolbar-gap, 8px); }
+.render-page .render-page-actions > * { flex-shrink:0; }
+.render-page .render-page-actions label { display:inline-flex; align-items:center; gap:var(--nova-toolbar-gap, 8px); }
+}
+
+/* Responsive visibility is layout, not a theme button presentation variant. */
+@layer utilities {
+.render-page .render-overflow-trigger { display:none; }
+@media (max-width:1100px) {
+  .render-page .render-page-actions > .render-secondary-action { display:none; }
+  .render-page .render-page-actions > .render-overflow-trigger { display:inline-flex; }
+}
 }

@@ -42,7 +42,7 @@
 :root {
     color-scheme: light;
     --navigation-background: var(--card);
-    --control-height: 36px;
+    --control-height: 32px;
     --option-active-background: var(--accent);
     --option-active-color: var(--foreground);
     --success: #306743;
@@ -100,7 +100,7 @@ button, .btn, .dropdown-trigger {
     cursor: pointer;
     transition: background-color 120ms, border-color 120ms, box-shadow 120ms;
 }
-button:not(.nav-item):not(.nav-expand) { padding: 6px 12px; }
+button:where(:not(.nav-item):not(.nav-expand)):where(:not([data-slot]), [data-slot="button"]) { padding: 6px 12px; }
 button:hover:not(:disabled), .btn:hover:not(:disabled) { background: var(--accent); border-color: var(--ring); }
 button:active:not(:disabled) { background: var(--secondary); }
 /* A pressed button is not styled here. `styles/controls.css` owns that state: it is the
@@ -128,22 +128,14 @@ select { cursor: pointer; }
 :where(button, input, select, textarea, summary, a):focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
 [aria-invalid="true"] { border-color: var(--destructive); }
 
-fieldset { border: 0; border-radius: calc(var(--radius) + 2px); background: var(--card); padding: 16px; }
-legend { padding: 0 6px; font-weight: 600; }
-.sidebar { border-right: var(--edge-width) solid var(--border); padding: 8px; gap: 4px; }
-.nav-expand, .nav-item { justify-content: flex-start; border: 0; border-radius: var(--radius); min-height: 44px; background: transparent; margin: 1px 0; }
-.nav-item:hover:not(:disabled), .nav-expand:hover:not(:disabled) { background: var(--muted); }
-.nav-item.active, .nav-item[aria-current="page"], .nav-item[aria-pressed="true"] { background: var(--accent); color: var(--foreground); box-shadow: inset 3px 0 var(--primary); font-weight: 650; }
-.sidebar-collapsed { padding: 4px; }
-.content { padding: 12px; }
+fieldset { border: 0; padding: 12px 0; }
+legend { padding: 0; font-weight: 600; }
+.content { padding: var(--ln-window-content-padding); }
 .dropdown-menu, .block-search-menu { padding: 4px; color: var(--foreground); background: var(--popover); border: var(--edge-width) solid var(--border); }
 .dropdown-item { border-radius: max(0px, calc(var(--radius) - 2px)); cursor: default; }
 .dropdown-item[data-highlighted], .dropdown-item:hover, .block-search-menu button:hover { background: var(--accent); outline: none; }
 .dropdown-item[data-state="checked"] { font-weight: 650; }
 .dialog-surface { position: relative; background: var(--popover); border: 0; border-radius: calc(var(--radius) + 4px); box-shadow: var(--panel-shadow); }
-.dialog-header { padding: 20px 20px 0; }
-.dialog-body { padding: 20px; }
-.dialog-footer { padding: 0 20px 20px; }
 .dialog-subtitle, .dialog-label { color: var(--muted-foreground); }
 button.dialog-close-button { padding: 0; min-width: 32px; width: 32px; height: 32px; min-height: 32px; }
 table { border-collapse: separate; border-spacing: 0; color: var(--foreground); font-size: inherit; }

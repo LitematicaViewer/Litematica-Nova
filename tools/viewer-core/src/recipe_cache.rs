@@ -75,16 +75,16 @@ pub trait RecipeProvider {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SelectedRecipeIndex {
+pub(crate) struct SelectedRecipeIndex {
     schema: u32,
-    content_id: String,
+    pub(crate) content_id: String,
     game_version: String,
-    recipes: BTreeMap<String, Value>,
-    tags: BTreeMap<String, Vec<String>>,
+    pub(crate) recipes: BTreeMap<String, Value>,
+    pub(crate) tags: BTreeMap<String, Vec<String>>,
     items: BTreeSet<String>,
 }
 
-fn selected_index() -> Result<std::sync::Arc<SelectedRecipeIndex>> {
+pub(crate) fn selected_index() -> Result<std::sync::Arc<SelectedRecipeIndex>> {
     use std::sync::{Arc, Mutex, OnceLock};
     static INDEX: OnceLock<Mutex<BTreeMap<String, Arc<SelectedRecipeIndex>>>> = OnceLock::new();
     let context = crate::game_data::active_context()?;
@@ -113,26 +113,36 @@ fn selected_index() -> Result<std::sync::Arc<SelectedRecipeIndex>> {
         let value: Value = serde_json::from_slice(&bytes).with_context(|| format!("invalid selected game JSON: {path}"))?;
         let local = parts[if recipe { 3 } else { 4 }..].join("/");
         let id = format!("{}:{}", parts[1], local.trim_end_matches(".json"));
-        if recipe {
+        let target = if recipe {
             if value.get("type").and_then(Value::as_str).is_none() { bail!("recipe type missing: {id}"); }
             collect_recipe_result_items(&value, &mut items);
-            if recipes.insert(id.clone(), value.clone()).is_some_and(|previous| previous != value) { bail!("conflicting recipe directories for {id}"); }
-        } else if raw_tags.insert(id.clone(), value.clone()).is_some_and(|previous| previous != value) { bail!("conflicting item tag directories for {id}"); }
+            &mut recipes
+        } else { &mut raw_tags };
+        match target.entry(id) {
+            std::collections::btree_map::Entry::Vacant(entry) => { entry.insert(value); }
+            std::collections::btree_map::Entry::Occupied(entry) if entry.get() != &value => {
+                bail!("conflicting {} directories for {}", if recipe { "recipe" } else { "item tag" }, entry.key());
+            }
+            _ => {}
+        }
     }
     let mut tags = BTreeMap::new();
     for id in raw_tags.keys() { expand_tag(id, &raw_tags, &mut tags, &mut BTreeSet::new())?; }
     let index = Arc::new(SelectedRecipeIndex { schema: 2, content_id: context.content_id.clone(), game_version: context.game_version, recipes, tags, items });
     fs::create_dir_all(&directory)?;
-    let temporary = directory.join(format!("selected-index-v2.{}.tmp", std::process::id()));
-    fs::write(&temporary, serde_json::to_vec(&*index)?)?;
-    if file.exists() { fs::remove_file(&file)?; }
-    fs::rename(temporary, &file)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
+    {
+        let mut writer = std::io::BufWriter::new(temporary.as_file_mut());
+        serde_json::to_writer(&mut writer, &*index)?;
+        writer.flush()?;
+    }
+    temporary.persist(&file)?;
     cache.lock().map_err(|_| anyhow!("game recipe index lock poisoned"))?.insert(context.content_id, index.clone());
     Ok(index)
 }
 
-fn expand_tag(id: &str, raw: &BTreeMap<String, Value>, complete: &mut BTreeMap<String, Vec<String>>, visiting: &mut BTreeSet<String>) -> Result<Vec<String>> {
-    if let Some(values) = complete.get(id) { return Ok(values.clone()); }
+fn expand_tag(id: &str, raw: &BTreeMap<String, Value>, complete: &mut BTreeMap<String, Vec<String>>, visiting: &mut BTreeSet<String>) -> Result<()> {
+    if complete.contains_key(id) { return Ok(()); }
     if !visiting.insert(id.to_owned()) { bail!("item tag cycle: {id}"); }
     let value = raw.get(id).with_context(|| format!("required item tag missing: {id}"))?;
     let entries = value.get("values").and_then(Value::as_array).with_context(|| format!("item tag values missing: {id}"))?;
@@ -143,15 +153,15 @@ fn expand_tag(id: &str, raw: &BTreeMap<String, Value>, complete: &mut BTreeMap<S
         if let Some(nested) = name.strip_prefix('#') {
             let nested = if nested.contains(':') { nested.to_owned() } else { format!("minecraft:{nested}") };
             if !required && !raw.contains_key(&nested) { continue; }
-            values.extend(expand_tag(&nested, raw, complete, visiting)?);
+            expand_tag(&nested, raw, complete, visiting)?;
+            values.extend(complete[&nested].iter().cloned());
         } else {
             values.insert(if name.contains(':') { name.to_owned() } else { format!("minecraft:{name}") });
         }
     }
     visiting.remove(id);
-    let values = values.into_iter().collect::<Vec<_>>();
-    complete.insert(id.to_owned(), values.clone());
-    Ok(values)
+    complete.insert(id.to_owned(), values.into_iter().collect());
+    Ok(())
 }
 
 pub fn load_item_tags() -> Result<BTreeMap<String, Vec<String>>> { Ok(selected_index()?.tags.clone()) }

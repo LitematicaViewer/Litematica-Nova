@@ -53,7 +53,7 @@ export function EntryCard({ entry, binding }: { entry: LibraryEntryView; binding
   const hasImage = !!previewUrl && failedImage !== previewUrl;
   const inspected = binding.isInspected(entry);
   const checked = binding.isChecked(entry);
-  const statusText = entry.status === "ok" ? `${entry.totalBlocks.toLocaleString()} 方块` : entryStatusLabel(entry);
+  const statusText = entry.status === "ok" ? t("library.ux.blocks", { value0: entry.totalBlocks.toLocaleString() }) : entryStatusLabel(entry);
   return (
     <article
       ref={card}
@@ -71,17 +71,17 @@ export function EntryCard({ entry, binding }: { entry: LibraryEntryView; binding
         <Checkbox
           checked={checked}
           disabled={binding.busy}
-          aria-label={`选择 ${entry.displayName || entry.fileName}`}
+          aria-label={t("library.ux.selectName", { value0: entry.displayName || entry.fileName })}
           onCheckedChange={(value) => binding.onToggle(entry, value === true)}
         />
       </div>
-      {binding.isCurrent(entry) && <span className="library-current-marker">当前</span>}
+      {binding.isCurrent(entry) && <span className="library-current-marker">{t("library.current")}</span>}
       <Button
         className="library-tile-open"
         variant="ghost"
         themeSlot="library-tile"
         aria-pressed={inspected}
-        aria-label={`查看 ${entry.displayName || entry.fileName} 的详情`}
+        aria-label={t("library.ux.inspectName", { value0: entry.displayName || entry.fileName })}
         onClick={() => binding.onInspect(entry)}
         onDoubleClick={() => { if (!binding.busy && entry.status === "ok") binding.onActivate(entry); }}
       >
@@ -97,8 +97,8 @@ export function EntryCard({ entry, binding }: { entry: LibraryEntryView; binding
         <span
           className="library-replica-badge"
           data-replica-count={entry.replicaCount}
-          title={`${entry.replicaCount} 份副本`}
-          aria-label={`重数 ${entry.replicaCount}`}
+          title={t("library.ux.copies", { value0: entry.replicaCount })}
+          aria-label={t("library.ux.copyCount", { value0: entry.replicaCount })}
         >
           {entry.replicaCount}
         </span>

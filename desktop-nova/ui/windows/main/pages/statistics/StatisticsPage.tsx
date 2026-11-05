@@ -230,10 +230,10 @@ export function MaterialExportDialog({ sourcePath, taskId, projectId, sourceRevi
   };
   const visibleFields = view?.fields.filter(field => field.visible) || [];
   const groups = [...new Set(visibleFields.map(field => field.group))];
-  return <Dialog title={t("stockpile.openExport")} onClose={onClose} width="lg" className="stockpile-export-dialog" busy={busy || recipeBusy}
+  return <Dialog title={t("stockpile.openExport")} onClose={onClose} width="lg" className="stockpile-export-dialog" busy={busy}
     footer={<><Button variant="ghost" disabled={busy || recipeBusy || configuring} onClick={() => { setStatus(""); void configure(undefined, true); }}>{t("stats.export.reset")}</Button>
       <span className="material-export-footer-spacer" />
-      <Button variant="ghost" disabled={busy || recipeBusy} onClick={onClose}>{t("editor.cancel")}</Button>
+      <Button variant="ghost" disabled={busy} onClick={onClose}>{t("editor.cancel")}</Button>
       <Button disabled={busy || recipeBusy || configuring || !view?.valid || !!error} onClick={() => void confirm()}>{busy ? t("statistics.exporting") : t("stockpile.confirmExport")}</Button></>}>
     {groups.map(group => <fieldset key={group} className={`material-export-section material-export-group-${group}`} disabled={busy || recipeBusy}>
       <legend>{t(`stats.export.group.${group}`)}</legend><div className="material-export-grid">{visibleFields.filter(field => field.group === group).map(field =>

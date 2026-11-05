@@ -23,7 +23,7 @@ export function useQuickPreview(sourcePath: string, blocked: boolean, preload = 
   const snapshot = useSyncExternalStore(subscribeQuickPreview, getQuickPreviewState, getQuickPreviewState);
   const operation = quickPreviewForSource(sourcePath, snapshot);
   const viewport = usePresentationViewport(operation ? {
-    operationId: operation.previewId, prepared: operation.state === "ready", presentation: operation.presentation,
+    operationId: operation.previewId, sourcePath, displayMode: "fast_experimental", prepared: operation.state === "ready", presentation: operation.presentation,
   } : null, blocked, quickController);
   const [pending, setPending] = useState(false);
   const [commandError, setCommandError] = useState<UiMessage>("");

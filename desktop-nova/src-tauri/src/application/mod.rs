@@ -1,6 +1,7 @@
 pub(crate) mod model;
 pub(crate) mod diagnostics;
 pub(crate) mod library_export;
+pub(crate) mod library_content;
 pub(crate) mod library_index;
 pub(crate) mod library_tasks;
 pub(crate) mod library_trash;
@@ -14,3 +15,5 @@ pub(crate) mod protected_render;
 pub(crate) mod data_worker;
 pub(crate) mod ui_scale;
 pub(crate) mod scene_controls;
+
+pub(crate) mod enumerator;

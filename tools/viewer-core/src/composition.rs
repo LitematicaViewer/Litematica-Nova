@@ -115,7 +115,7 @@ struct BuildSection {
     cells: BTreeMap<u16, PlacedBlock>,
 }
 struct Composed {
-    scene: SceneDocument,
+    scene: Arc<SceneDocument>,
     report: ConflictReport,
 }
 static SOURCES: OnceLock<Mutex<BTreeMap<String, Arc<SceneDocument>>>> = OnceLock::new();
@@ -166,7 +166,8 @@ fn snapshot_path(root: &Path, id: &str) -> Result<PathBuf> {
         .join("composition/snapshots")
         .join(format!("{id}.litematic")))
 }
-fn save_source(root: &Path, scene: SceneDocument, cancel: &AtomicBool) -> Result<String> {
+fn save_source(root: &Path, scene: impl Into<Arc<SceneDocument>>, cancel: &AtomicBool) -> Result<String> {
+    let scene = scene.into();
     let id = composition_scene::content_identity(&scene.raw);
     let path = snapshot_path(root, &id)?;
     fs::create_dir_all(path.parent().unwrap())?;
@@ -174,7 +175,7 @@ fn save_source(root: &Path, scene: SceneDocument, cancel: &AtomicBool) -> Result
         let mut tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
         {
             let mut gz = GzEncoder::new(tmp.as_file_mut(), Compression::default());
-            fastnbt::to_writer(&mut gz, &scene.raw_litematic()?)?;
+            fastnbt::to_writer(&mut gz, &scene.raw)?;
             gz.finish()?;
         }
         cancelled(cancel)?;
@@ -189,7 +190,7 @@ fn save_source(root: &Path, scene: SceneDocument, cancel: &AtomicBool) -> Result
         .get_or_init(Default::default)
         .lock()
         .unwrap()
-        .insert(id.clone(), Arc::new(scene));
+        .insert(id.clone(), scene);
     Ok(id)
 }
 fn source(root: &Path, id: &str) -> Result<Arc<SceneDocument>> {
@@ -852,7 +853,7 @@ fn compose(root: &Path, project: &CompositionProject, cancel: &AtomicBool) -> Re
         ("NovaFormatExtras".into(), Tag::Compound(format_extras)),
     ]));
     Ok(Composed {
-        scene: composition_scene::from_raw_litematic(raw, "litematic")?,
+        scene: Arc::new(composition_scene::from_raw_litematic(raw, "litematic")?),
         report,
     })
 }
@@ -1690,7 +1691,7 @@ pub fn execute(input: &Value, cancel: &AtomicBool) -> Result<Value> {
 fn split(
     root: &Path,
     project: &CompositionProject,
-    scene: &SceneDocument,
+    scene: &Arc<SceneDocument>,
     report: &ConflictReport,
     input: &Value,
     cancel: &AtomicBool,
@@ -1795,11 +1796,7 @@ fn split(
             )
         }
     }
-    let id = save_source(
-        root,
-        composition_scene::from_raw_litematic(scene.raw_litematic()?, "litematic")?,
-        cancel,
-    )?;
+    let id = save_source(root, Arc::clone(scene), cancel)?;
     let mut outputs = Vec::new();
     let mut pieces = Vec::new();
     for b in &boxes {

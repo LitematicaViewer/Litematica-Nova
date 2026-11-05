@@ -39,6 +39,8 @@
     --panel-shadow: 5px 5px 0 #0d130d;
 }
 :root {
+    --inventory-slot-edge: 2px;
+    --inventory-slot-shadow: inset -2px -2px var(--secondary);
     --background: #f2f0e7;
     --foreground: #292e29;
     --card: #fffdf4;
@@ -80,8 +82,6 @@
 @layer components.theme {
 button:not(.nav-item):not(.nav-expand):not(.dialog-close-button):not(:where([role="checkbox"], [role="radio"])) { box-shadow: var(--control-shadow); }
 button:active:not(:disabled):not(:where([role="checkbox"], [role="radio"])) { box-shadow: none; transform: translateY(1px); }
-.sidebar { border-right-width: 2px; }
-.nav-item.active, .nav-item[aria-current="page"] { box-shadow: inset 4px 0 var(--primary); }
 .dialog-surface { border: 3px solid var(--foreground); border-radius: 0; }
 .input:focus-visible, select:focus-visible { outline-offset: 4px; }
 .nova-pixel-decoration { display: contents; }

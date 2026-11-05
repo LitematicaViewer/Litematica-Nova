@@ -22,202 +22,10 @@
 /* The nav artwork is 32x32 game-style PNG art served through <img>, so it must
    stay crisp when the window is scaled. Aero7 never inverts it: the shipped
    glyphs already carry their own light/dark treatment. */
-.sidebar .nav-icon {
-    position: static;
-    width: 32px;
-    height: 32px;
-    transform: none;
-    image-rendering: pixelated;
-}
 
 /* Aero7 drives the shared sidebar width from its own tokens so a full-width
    nav button is exactly 60 / 160px; the shared `ui/shell/widget/nav.css` layout
    contract is left untouched. */
-.sidebar {
-    flex: 0 0 var(--ln-aero7-nav-width);
-    width: var(--ln-aero7-nav-width);
-    min-width: var(--ln-aero7-nav-width);
-    border-right: 1px solid var(--border);
-    background: var(--navigation-background);
-    transition: flex-basis var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
-                width var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
-                min-width var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
-}
-
-.sidebar-collapsed {
-    flex-basis: var(--ln-aero7-nav-width-collapsed);
-    width: var(--ln-aero7-nav-width-collapsed);
-    min-width: var(--ln-aero7-nav-width-collapsed);
-}
-
-.nav-expand,
-.nav-item {
-    box-sizing: border-box;
-    display: flex;
-    position: relative;
-    isolation: isolate;
-    width: 100%;
-    height: var(--ln-aero7-nav-height);
-    min-height: var(--ln-aero7-nav-height);
-    max-height: var(--ln-aero7-nav-height);
-    align-items: center;
-    justify-content: flex-start;
-    gap: 12px;
-    padding: 0 12px;
-    border: 3px solid transparent;
-    border-radius: 0;
-    border-image-source: url("./resource/button/nav_normal_min.png");
-    border-image-slice: 3 fill;
-    border-image-width: 3px;
-    border-image-repeat: stretch;
-    background: transparent;
-    color: var(--foreground);
-    text-align: left;
-    box-shadow: none;
-    font-size: 16px;
-    transition: gap var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
-                padding var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
-}
-
-.nav-expand::before,
-.nav-expand::after,
-.nav-item::before,
-.nav-item::after {
-    content: "";
-    position: absolute;
-    inset: -3px;
-    box-sizing: border-box;
-    pointer-events: none;
-    opacity: 0;
-    border: 3px solid transparent;
-    border-radius: 0;
-    border-image-slice: 3 fill;
-    border-image-width: 3px;
-    border-image-repeat: stretch;
-    background: transparent;
-    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
-}
-
-.nav-expand::before,
-.nav-item::before {
-    border-image-source: url("./resource/button/nav_hover_min.png");
-    z-index: -4;
-}
-
-.nav-expand::after,
-.nav-item::after {
-    border-image-source: url("./resource/button/nav_check_min.png");
-    z-index: -3;
-}
-
-.nav-expand > [data-slot="button-motion-layer"],
-.nav-item > [data-slot="button-motion-layer"] {
-    display: block;
-    position: absolute;
-    inset: -3px;
-    box-sizing: border-box;
-    pointer-events: none;
-    opacity: 0;
-    border: 3px solid transparent;
-    border-radius: 0;
-    border-image-source: url("./resource/button/nav_checkhover_min.png");
-    border-image-slice: 3 fill;
-    border-image-width: 3px;
-    border-image-repeat: stretch;
-    background: transparent;
-    z-index: -2;
-    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
-}
-
-.nav-expand > [data-slot="button-motion-layer"]::before,
-.nav-item > [data-slot="button-motion-layer"]::before {
-    content: "";
-    position: absolute;
-    inset: -3px;
-    box-sizing: border-box;
-    pointer-events: none;
-    opacity: 0;
-    border: 3px solid transparent;
-    border-radius: 0;
-    border-image-source: url("./resource/button/nav_disabled_min.png");
-    border-image-slice: 3 fill;
-    border-image-width: 3px;
-    border-image-repeat: stretch;
-    background: transparent;
-    z-index: -1;
-    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
-}
-
-.nav-expand:hover:not(:disabled)::before,
-.nav-item:hover:not(:disabled)::before {
-    opacity: 1;
-}
-
-.nav-item.nav-item-active:not(:disabled)::after {
-    opacity: 1;
-}
-
-.nav-item.nav-item-active:hover:not(:disabled) > [data-slot="button-motion-layer"] {
-    opacity: 1;
-}
-
-.nav-expand:disabled > [data-slot="button-motion-layer"]::before,
-.nav-item:disabled > [data-slot="button-motion-layer"]::before {
-    opacity: 1;
-}
-
-.sidebar-collapsed .nav-expand,
-.sidebar-collapsed .nav-item {
-    gap: 0;
-    padding-left: calc((var(--ln-aero7-nav-width-collapsed) - 2 * 3px - 32px) / 2);
-    padding-right: 0;
-}
-
-.nav-label,
-.nav-expand strong {
-    display: block;
-    opacity: 1;
-    visibility: visible;
-    max-width: 10rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
-                max-width var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
-                visibility 0s;
-}
-
-.sidebar-collapsed .nav-label,
-.sidebar-collapsed .nav-expand strong {
-    opacity: 0;
-    visibility: hidden;
-    max-width: 0;
-    transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
-                max-width var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing),
-                visibility 0s linear var(--ln-aero7-motion-duration);
-}
-
-@media (max-width: 760px) {
-    .sidebar {
-        flex-basis: var(--ln-aero7-nav-width-collapsed);
-        width: var(--ln-aero7-nav-width-collapsed);
-        min-width: var(--ln-aero7-nav-width-collapsed);
-    }
-
-    .sidebar .nav-expand,
-    .sidebar .nav-item {
-        gap: 0;
-        padding-left: calc((var(--ln-aero7-nav-width-collapsed) - 2 * 3px - 32px) / 2);
-        padding-right: 0;
-    }
-
-    .sidebar .nav-label,
-    .sidebar .nav-expand strong {
-        opacity: 0;
-        visibility: hidden;
-        max-width: 0;
-    }
-}
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 /* Structural Button call sites (nav rows, window controls, flake slots) own
@@ -260,8 +68,9 @@
     box-shadow: none;
 }
 
-/* `default` is the page's primary action: the filled Aero blue plate, always
-   labelled in white. Its artwork's left/right slices are 12px. */
+/* The normal artwork is translucent, so the primary plate needs its semantic
+   blue underlay; otherwise white text is painted over the light window itself.
+   Its artwork's left/right slices are 12px. */
 [data-slot="button"][data-variant="default"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot)) {
     --ln-aero7-button-normal-image: url("./resource/button/button_all_primary_normal_min.png");
     --ln-aero7-button-hover-image: url("./resource/button/button_all_primary_hover_min.png");
@@ -270,7 +79,8 @@
     --ln-aero7-button-disabled-image: url("./resource/button/button_all_primary_disabled_min.png");
     --ln-aero7-button-slice: 4 12 4 12 fill;
     --ln-aero7-button-image-width: 4px 12px 4px 12px;
-    color: #ffffff;
+    background-color: var(--primary);
+    color: var(--primary-foreground);
 }
 
 /* `destructive` is the filled Aero red plate, always labelled in white. Its
@@ -555,17 +365,17 @@
    transparent and keeps square corners (a radius would clip the texture). */
 
 [data-slot="checkbox"] {
-    width: 13px;
-    height: 13px;
-    min-width: 13px;
-    min-height: 13px;
-    max-width: 13px;
-    max-height: 13px;
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    min-height: 16px;
+    max-width: 16px;
+    max-height: 16px;
     padding: 0;
     border: 0;
     border-radius: 0;
     position: relative;
-    background: transparent url("./resource/form/checkbox_default.png") center / 13px 13px no-repeat;
+    background: transparent url("./resource/form/checkbox_default.png") center / 16px 16px no-repeat;
     image-rendering: auto;
     box-shadow: none;
     cursor: pointer;
@@ -580,7 +390,7 @@
     opacity: 0;
     background-position: center;
     background-repeat: no-repeat;
-    background-size: 13px 13px;
+    background-size: 16px 16px;
     background-color: transparent;
     transition: opacity var(--ln-aero7-motion-duration) var(--ln-aero7-motion-easing);
 }
@@ -612,6 +422,14 @@
 [data-slot="checkbox"] svg {
     visibility: hidden;
 }
+
+[data-slot="checkbox"][data-state="indeterminate"] {
+    background-image: url("./resource/form/checkbox_default.png");
+    color: var(--foreground);
+}
+[data-slot="checkbox"][data-state="indeterminate"]::before,
+[data-slot="checkbox"][data-state="indeterminate"]::after { display: none; }
+[data-slot="checkbox"][data-state="indeterminate"] [data-slot="checkbox-mixed"] { visibility: visible; }
 
 [data-slot="checkbox"]:focus-visible {
     outline: 2px solid var(--ring);

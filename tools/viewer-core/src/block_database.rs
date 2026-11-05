@@ -26,7 +26,7 @@ pub enum Plane {
     Side,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub(crate) struct Registry {
     pub blocks: BTreeMap<String, TargetBlock>,
     pub items: BTreeSet<String>,
@@ -39,7 +39,7 @@ pub(crate) struct Registry {
     #[serde(default)]
     pub legacy_state_aliases: BTreeMap<String, Vec<String>>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub(crate) struct TargetBlock {
     pub default: String,
     pub properties: BTreeMap<String, Vec<String>>,
@@ -635,10 +635,25 @@ impl BlockDatabase {
             bail!("方块数据库缺少精确注册表")
         }
         let len = r.count(32 * 1024 * 1024)?;
-        let supplement: Supplement =
+        let mut supplement: Supplement =
             serde_json::from_slice(&inflate(r.take(len)?, 64 * 1024 * 1024)?)?;
         if supplement.schema != 4 || r.pos != bytes.len() {
             bail!("方块数据库注册表格式不匹配")
+        }
+        let overlay = crate::game_data::mod_registry::registry_overlay(&context)?;
+        if !overlay.is_empty() {
+            let version = supplement.versions.get_mut(&context.game_version).context("Mod 基础版本注册表缺失")?;
+            let mut registry = supplement.registries.get(&version.registry).context("Mod 基础注册表缺失")?.clone();
+            for block in overlay {
+                if registry.blocks.contains_key(&block.block_id) { bail!("Mod 不得覆盖已存在的注册身份：{}", block.block_id); }
+                let state_count = block.properties.values().try_fold(1usize, |count, values| count.checked_mul(values.len())).context("Mod state count overflow")?;
+                if let Some(item) = block.item_id { registry.items.insert(item); }
+                registry.blocks.insert(block.block_id, TargetBlock { default:block.default_state, properties:block.properties, state_count, legacy_states:BTreeSet::new(), en:String::new(), category:"mod".into() });
+            }
+            version.block_count = registry.blocks.len();
+            version.state_count = registry.blocks.values().map(|block|block.state_count).sum();
+            version.registry = format!("mod-context-{}", context.content_id);
+            supplement.registries.insert(version.registry.clone(),registry);
         }
         Ok(Self {
             supplement,
@@ -823,6 +838,8 @@ fn face_tint(&self, version: &str, state: &str, index: i16) -> Result<u32> {
         let state_key = if properties.is_empty() { id } else {
             format!("{id}[{}]", properties.iter().map(|(name, value)| format!("{name}={value}")).collect::<Vec<_>>().join(","))
         };
+        let context=crate::game_data::active_context()?;
+        if context.game_version==version {if let Some(tint)=crate::game_data::mod_registry::tint(&context,&state_key,i32::from(index))? {return Ok(tint.plains_argb);}}
         let data = plains_tint_metadata()?;
         let table = data.versions.get(version).and_then(|key| data.tables.get(key))
             .with_context(|| format!("缺少版本 {version} 的实际侧纹理染色数据"))?;
@@ -902,6 +919,165 @@ pub fn normalized_registry(version: &str) -> Result<serde_json::Value> {
         blocks.insert(id.clone(), serde_json::json!({"properties":block.properties,"default_properties":defaults}));
     }
     Ok(serde_json::json!({"version_id":version,"blocks":blocks}))
+}
+
+// Inventory identity is not the default placement material: e.g. a plant may
+// share a creative item with another block, while a component-bearing item
+// variant still needs its own selectable slot. Keep the exact placement source.
+fn creative_identities(inventory: &serde_json::Value, values: &serde_json::Value) -> Result<serde_json::Value> {
+    use serde_json::json;
+    let items = inventory["items"].as_object().context("creative inventory has no item registry")?;
+    let blocks = inventory["blocks"].as_object().context("creative inventory has no block registry")?;
+    let mut ids = BTreeMap::new();
+    let mut positions = BTreeMap::new();
+    let mut sources: Vec<&str> = Vec::new();
+    for value in values.as_array().context("creative identity input must be a list")? {
+        let source = value.as_str().context("creative identity input must contain strings")?;
+        let bare = source.trim().split(['[', '{']).next().unwrap_or_default();
+        let id = if bare.contains(':') { bare.to_owned() } else { format!("minecraft:{bare}") };
+        let block = blocks.get(&id);
+        let property = |key: &str| block.and_then(|b| b[key].as_str()).filter(|s| !s.is_empty());
+        let Some(item) = property("creative_item_id").or_else(|| property("potted_item"))
+            .or_else(|| items.contains_key(&id).then_some(id.as_str())).or_else(|| property("item_id"))
+            .filter(|s| *s != "minecraft:air" && items.contains_key(*s)) else { continue };
+        ids.insert(source, item.to_owned());
+        let components = source.find('[').and_then(|i| source[i..].find(']').map(|n| &source[i..=i+n]))
+            .filter(|s| s.contains(':')).unwrap_or("");
+        let nbt = source.find('{').map(|i| &source[i..]).unwrap_or("");
+        let index = positions.entry((item.to_owned(), components, nbt)).or_insert_with(|| {
+            sources.push(source); sources.len() - 1
+        });
+        if source == item { sources[*index] = source; }
+    }
+    Ok(json!({"values":sources,"itemIds":ids}))
+}
+
+#[cfg(test)]
+#[test]
+fn creative_identities_preserve_exact_aliases_item_variants_and_source_order() {
+    use serde_json::json;
+    let inventory=json!({"items":{"minecraft:berries":{},"minecraft:stone":{},"mod:seed":{}},
+      "blocks":{"minecraft:vine":{"item_id":"minecraft:air","creative_item_id":"minecraft:berries"},
+                "minecraft:pot":{"potted_item":"mod:seed"},"mod:wall":{"item_id":"minecraft:stone"}}});
+    let input=json!(["mod:wall[facing=north]","minecraft:vine","minecraft:berries","minecraft:stone",
+        "minecraft:berries[mod:kind=a]","minecraft:berries[mod:kind=b]","minecraft:berries{n:1}",
+        "minecraft:berries{n:2}","minecraft:pot","mod:missing","minecraft:air"]);
+    let out=creative_identities(&inventory,&input).unwrap();
+    assert_eq!(out["values"],json!(["minecraft:stone","minecraft:berries","minecraft:berries[mod:kind=a]",
+        "minecraft:berries[mod:kind=b]","minecraft:berries{n:1}","minecraft:berries{n:2}","minecraft:pot"]));
+    assert_eq!(out["itemIds"]["mod:wall[facing=north]"],"minecraft:stone");
+    assert_eq!(out["itemIds"]["minecraft:pot"],"mod:seed");
+    assert!(out["itemIds"].get("mod:missing").is_none());
+}
+
+#[cfg(test)]
+#[test]
+fn creative_identities_default_registry_keeps_aliases_and_component_distinctions() {
+    use serde_json::json;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../pack-in/materials/minecraft-26.3.json");
+    let inventory = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let source = "minecraft:oak_door[half=upper,facing=north]";
+    let input = json!([source,"minecraft:oak_door[half=lower,facing=south]","minecraft:oak_wall_sign","minecraft:oak_sign",
+        "minecraft:red_wool","minecraft:blue_wool","minecraft:oak_planks","minecraft:birch_planks","minecraft:potted_dead_bush",
+        "minecraft:oak_wall_hanging_sign","minecraft:redstone_wall_torch","minecraft:water","minecraft:not_a_registered_variant",
+        "minecraft:cave_vines_plant[berries=true]","minecraft:cave_vines[berries=false]",
+        "minecraft:stone[minecraft:custom_name=A]","minecraft:stone[minecraft:custom_name=B]"]);
+    let out=creative_identities(&inventory,&input).unwrap();
+    for (source,item) in [("minecraft:potted_dead_bush","minecraft:dead_bush"),("minecraft:oak_wall_sign","minecraft:oak_sign"),
+        ("minecraft:oak_wall_hanging_sign","minecraft:oak_hanging_sign"),("minecraft:redstone_wall_torch","minecraft:redstone_torch"),
+        ("minecraft:cave_vines_plant[berries=true]","minecraft:glow_berries"),(source,"minecraft:oak_door")] {
+        assert_eq!(out["itemIds"][source],item);
+    }
+    assert_eq!(out["values"],json!([source,"minecraft:oak_sign","minecraft:red_wool","minecraft:blue_wool","minecraft:oak_planks",
+        "minecraft:birch_planks","minecraft:potted_dead_bush","minecraft:oak_wall_hanging_sign","minecraft:redstone_wall_torch",
+        "minecraft:cave_vines_plant[berries=true]","minecraft:stone[minecraft:custom_name=A]","minecraft:stone[minecraft:custom_name=B]"]));
+}
+
+/// Authoritative creative search over the task's exact resource identity.
+pub fn creative_inventory(input: &serde_json::Value) -> Result<serde_json::Value> {
+    use serde_json::{Value,json};
+    let context=crate::game_data::active_context()?;
+    if input["contentId"].as_str().is_some_and(|id|id!=context.content_id) {bail!("游戏资源已切换，请重新打开物品栏");}
+    let version=input["version"].as_str().filter(|s|!s.is_empty()).unwrap_or(&context.game_version);
+    if let Some(values) = input.get("identityValues") {
+        let inventory: Value = serde_json::from_slice(&crate::game_data::mod_registry::version_inventory(&context, version)?)?;
+        let mut out = creative_identities(&inventory, values)?;
+        out["contentId"] = json!(context.content_id);
+        out["version"] = json!(version);
+        return Ok(out);
+    }
+    let language=if input["language"].as_str().is_some_and(|s|s.starts_with("en")) {"en_us"} else {"zh_cn"};
+    let db=database()?;let registry=db.registry(version)?;
+    let version_names = db.resources.get(&db.version(version)?.resource_version).map(|resource| &resource.names);
+    let inventory:Value=serde_json::from_slice(&crate::game_data::mod_registry::version_inventory(&context,version)?)?;
+    let query=input["query"].as_str().unwrap_or("").trim().to_lowercase();
+    let category=input["category"].as_str().unwrap_or("base:dv-blocks");
+    let offset=input["offset"].as_u64().unwrap_or(0) as usize;
+    let limit=input["limit"].as_u64().unwrap_or(45).clamp(1,256) as usize;
+    let mut groups:BTreeMap<String,(String,BTreeSet<String>)>=BTreeMap::new();
+    groups.insert("base:dv-blocks".into(),((if language=="zh_cn" {"全部可放置方块"}else{"All placeable blocks"}).into(),BTreeSet::new()));
+    for extra in input["extraCollections"].as_array().into_iter().flatten() {
+        let id=extra["id"].as_str().context("creative collection id missing")?;if id=="base:dv-blocks" {continue;}
+        let label=extra["name"].as_str().or_else(||extra["label"].as_str()).unwrap_or(id).to_owned();
+        let values=extra["values"].as_array().or_else(||extra["blocks"].as_array()).context("creative collection values missing")?;
+        let mut states=BTreeSet::new();
+        for value in values {
+            let (id,props)=crate::version_conversion::parse_key(value.as_str().context("creative candidate is not a string")?)?;
+            if let Some(block)=registry.blocks.get(&id) {
+                let state=if props.is_empty(){block.default.clone()}else{crate::game_data::mod_registry::state_key(&id,&props)};
+                let (_,props)=crate::version_conversion::parse_key(&state)?;
+                if block.accepts(&state,&props){states.insert(state);}
+            }
+        }
+        groups.insert(id.to_owned(),(label,states));
+    }
+    let mut entries=BTreeMap::new();
+    for (id,block) in &registry.blocks {
+        let Some(item)=inventory["blocks"][id]["item_id"].as_str().filter(|item|*item!="minecraft:air")else{continue;};
+        if !registry.items.contains(item)||inventory["items"].get(item).is_none(){continue;}
+        let info=if version==context.game_version{crate::game_data::mod_registry::block_info(&context,id)?}else{None};
+        let source=info.as_ref().map(|v|v.source_name.as_str()).unwrap_or("Minecraft");
+        let key=inventory["items"][item]["translation_key"].as_str().map(str::to_owned).unwrap_or_else(||format!("block.{}",id.replace(':',".")));
+        let historical_zh = (version != context.game_version && language == "zh_cn")
+            .then(|| version_names.and_then(|names| names.get(id))).flatten();
+        // Placement stays on the exact registry; a historic Chinese item name
+        // comes from its release table first, then the selected language pack.
+        let name = if let Some(name) = historical_zh { name.clone() }
+            else if version == context.game_version || language == "zh_cn" {
+                crate::item_names::selected_name(&key, language)?.unwrap_or_else(|| block.en.clone())
+            } else { block.en.clone() };
+        let (_,props)=crate::version_conversion::parse_key(&block.default)?;
+        entries.insert(block.default.clone(),json!({"id":id,"blockState":block.default,"state":{"id":id,"properties":props},"itemId":item,"name":if name.is_empty(){id}else{&name},"sourceName":source,"category":block.category}));
+        groups.get_mut("base:dv-blocks").unwrap().1.insert(block.default.clone());
+        if !block.category.is_empty(){groups.entry(format!("category:{}",block.category)).or_insert_with(||(block.category.clone(),BTreeSet::new())).1.insert(block.default.clone());}
+        if info.is_some(){let ns=id.split_once(':').map(|(ns,_)|ns).unwrap_or(id);groups.entry(format!("mod:{ns}")).or_insert_with(||(source.to_owned(),BTreeSet::new())).1.insert(block.default.clone());}
+    }
+    for (_,states) in groups.values(){for state in states{
+        if entries.contains_key(state){continue;}
+        let (id,props)=crate::version_conversion::parse_key(state)?;
+        if let Some(block)=registry.blocks.get(&id){if let Some(mut value)=entries.get(&block.default).cloned(){value["blockState"]=json!(state);value["state"]=json!({"id":id,"properties":props});entries.insert(state.clone(),value);}}
+    }}
+    for (_,states) in groups.values_mut(){states.retain(|state|entries.contains_key(state));}
+    if input["catalog"].as_bool() == Some(true) {
+        // Transfer each validated state once. Membership stays registry-owned,
+        // including extra collections containing non-default property values.
+        let mut items: Vec<_> = entries.into_values().collect();
+        items.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str())
+            .then(a["blockState"].as_str().cmp(&b["blockState"].as_str())));
+        let positions: BTreeMap<_, _> = items.iter().enumerate()
+            .filter_map(|(index, item)| Some((item["blockState"].as_str()?, index))).collect();
+        let categories: Vec<_> = groups.into_iter().map(|(id, (label, states))| {
+            let mut indices: Vec<_> = states.iter().filter_map(|state| positions.get(state.as_str()).copied()).collect();
+            indices.sort_unstable();
+            json!({"id": id, "label": label, "indices": indices})
+        }).collect();
+        return Ok(json!({"contentId": context.content_id, "version": version, "items": items, "categories": categories}));
+    }
+    let selected=groups.get(category).or_else(||groups.get("base:dv-blocks")).context("creative category missing")?;
+    let mut matches:Vec<_>=selected.1.iter().filter_map(|state|entries.get(state)).filter(|v|query.is_empty()||["id","name","sourceName","itemId"].into_iter().any(|k|v[k].as_str().is_some_and(|s|s.to_lowercase().contains(&query)))).cloned().collect();
+    matches.sort_by(|a,b|a["name"].as_str().cmp(&b["name"].as_str()).then(a["blockState"].as_str().cmp(&b["blockState"].as_str())));
+    let total=matches.len();let categories:Vec<_>=groups.into_iter().map(|(id,(label,states))|json!({"id":id,"label":label,"count":states.len()})).collect();
+    Ok(json!({"contentId":context.content_id,"version":version,"offset":offset,"total":total,"items":matches.into_iter().skip(offset).take(limit).collect::<Vec<_>>(),"categories":categories}))
 }
 
 pub fn run_cli(args: &[String]) -> Result<()> {

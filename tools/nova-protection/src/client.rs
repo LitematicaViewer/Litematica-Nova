@@ -180,6 +180,22 @@ impl std::fmt::Display for RateLimited {
 }
 impl std::error::Error for RateLimited {}
 
+/// Release service locations come only from the tracked contract. Keep a
+/// reverse-proxy path prefix when moving the service, and do not accept
+/// credentials, queries, or a non-HTTPS origin as a production default.
+pub fn service_url(route: &str) -> Result<String> {
+    service_url_for(&crate::runtime::contract().service_base_url, route)
+}
+fn service_url_for(base: &str, route: &str) -> Result<String> {
+    let url = reqwest::Url::parse(base)?;
+    ensure!(url.scheme() == "https" && url.host_str().is_some()
+        && url.username().is_empty() && url.password().is_none()
+        && url.query().is_none() && url.fragment().is_none(), "invalid release service HTTPS base");
+    ensure!(route.split('/').all(|part| !part.is_empty() && part != "." && part != ".."
+        && part.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))), "invalid release service route");
+    Ok(format!("{}/{route}", url.as_str().trim_end_matches('/')))
+}
+
 fn http(config: &ClientConfig) -> Result<Client> {
     let url = reqwest::Url::parse(&config.endpoint)?;
     // Loopback HTTP is exclusively for local CLI business tests.
@@ -238,7 +254,28 @@ fn checked(mut response: reqwest::blocking::Response, max: usize) -> Result<Vec<
     ensure!(bytes.len() <= max, "service response exceeds byte budget");
     checked_status(status, bytes)
 }
+const SERVICE_UNAVAILABLE: &str = "NOVA_RENDER_SERVICE_UNAVAILABLE";
+fn transport_error(error: reqwest::Error) -> anyhow::Error {
+    // is_connect() also includes TLS trust failures: never present those as
+    // ordinary maintenance. Only identify concrete network/DNS/timeout causes.
+    use std::io::ErrorKind;
+    let mut unavailable = error.is_timeout();
+    let mut current = std::error::Error::source(&error);
+    while let Some(cause) = current {
+        unavailable |= cause.downcast_ref::<std::io::Error>().is_some_and(|io|
+            matches!(io.kind(), ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset |
+                ErrorKind::TimedOut | ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable |
+                ErrorKind::NetworkDown) || matches!(io.raw_os_error(), Some(11001 | 11002 | 11004))
+        ) || cause.to_string().to_ascii_lowercase().contains("dns error");
+        current = cause.source();
+    }
+    let error = anyhow::Error::new(error);
+    if unavailable { error.context(SERVICE_UNAVAILABLE) } else { error }
+}
 fn checked_status(status: reqwest::StatusCode, bytes: Vec<u8>) -> Result<Vec<u8>> {
+    if matches!(status.as_u16(), 502..=504) {
+        return Err(anyhow!("{SERVICE_UNAVAILABLE}: HTTP {}", status.as_u16()));
+    }
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         let error: ApiError = serde_json::from_slice(&bytes).unwrap_or(ApiError {
             error: "rate limited".into(),
@@ -292,7 +329,7 @@ fn execute_compute_request(
     compute_runtime()?.block_on(async {
         let exchange_started = std::time::Instant::now();
         let exchange = async {
-            let mut response = request.send().await?;
+            let mut response = request.send().await.map_err(transport_error)?;
             let headers_ms = exchange_started.elapsed().as_secs_f64() * 1000.;
             let version = response.version();
             let status = response.status();
@@ -391,8 +428,8 @@ impl TaskSession {
             ))
             .header("x-nova-proof", crypto::b64(&serde_json::to_vec(&proof)?))
             .body(body)
-            .send()
-            .context("acquire protected task")?;
+            .timeout(std::time::Duration::from_secs(20))
+            .send().map_err(transport_error)?;
         let response: AcquireResponse = serde_json::from_slice(&checked(response, 128 * 1024)?)?;
         let exchange_ms = exchange_started.elapsed().as_secs_f64() * 1000.;
         let verification_started = std::time::Instant::now();
@@ -621,7 +658,8 @@ fn register(http: &Client, config: &ClientConfig, identity: &DeviceKey) -> Resul
             unix_ms: time,
             signature,
         })
-        .send()?;
+        .timeout(std::time::Duration::from_secs(20))
+        .send().map_err(transport_error)?;
     let response: RegisterResponse = serde_json::from_slice(&checked(response, 8192)?)?;
     ensure!(
         valid_id(&response.device_id),
@@ -696,6 +734,36 @@ mod tests {
             manifest_public_key: String::new(),
             identity_dir: PathBuf::new(),
         }, server)
+    }
+
+    #[test]
+    fn release_service_routes_preserve_prefix_and_https() {
+        let base = "https://example.test:8448/prefix/";
+        assert_eq!(service_url_for(base, "nova-updates/latest.json").unwrap(),
+            "https://example.test:8448/prefix/nova-updates/latest.json");
+        assert!(service_url_for("http://example.test", "nova-core").is_err());
+        assert!(service_url_for("https://user@example.test", "nova-core").is_err());
+        assert!(service_url_for(base, "../outside").is_err());
+    }
+
+    #[test]
+    fn release_service_pause_does_not_mask_authorization_or_rate_limit() {
+        for status in [502, 503, 504] {
+            let err = checked_status(reqwest::StatusCode::from_u16(status).unwrap(), vec![]).unwrap_err();
+            assert!(err.to_string().contains(SERVICE_UNAVAILABLE));
+        }
+        for status in [401, 403, 404] {
+            let err = checked_status(reqwest::StatusCode::from_u16(status).unwrap(), vec![]).unwrap_err();
+            assert!(!err.to_string().contains(SERVICE_UNAVAILABLE));
+            assert!(err.to_string().contains(&status.to_string()));
+        }
+        let limited = checked_status(reqwest::StatusCode::TOO_MANY_REQUESTS, vec![]).unwrap_err();
+        assert!(limited.downcast_ref::<RateLimited>().is_some());
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap(); drop(closed);
+        let http = Client::builder().no_proxy().timeout(Duration::from_secs(3)).build().unwrap();
+        let error = http.get(format!("http://{port}")).send().unwrap_err();
+        assert_eq!(transport_error(error).to_string(), SERVICE_UNAVAILABLE);
     }
 
     #[test]

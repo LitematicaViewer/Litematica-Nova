@@ -23,8 +23,9 @@ const icons = compile("../src/services/libraryCategoryIcons.ts", (name) => name 
 const paths = compile("../src/services/filePathIdentity.ts", () => { throw new Error("Unexpected path import"); });
 const migration = compile("../src/services/libraryMigration.ts", (name) =>
   name === "./filePathIdentity" ? paths : name === "./libraryCategoryIcons" ? icons : (() => { throw new Error(`Unexpected migration dependency: ${name}`); })());
+const files = { libraryContentCommand: async ({action,state}) => { assert.equal(action,'normalize');return state; } };
 const content = compile("../src/services/libraryContent.ts", (name) =>
-  name === "./filePathIdentity" ? paths : name === "./libraryStore" ? {} : (() => { throw new Error(`Unexpected content dependency: ${name}`); })());
+  name === "../platform/files" ? files : name === "./filePathIdentity" ? paths : name === "./libraryStore" ? {} : (() => { throw new Error(`Unexpected content dependency: ${name}`); })());
 const tasks = compile("../src/services/libraryTasks.ts", (name) => {
   if (name === "../platform/events") return { listenEvent: async () => () => {} };
   if (name === "../platform/files") return { libraryTaskSubmit: async () => ({ taskId: "test" }), libraryTaskCancel: async () => ({ cancelled: true }), libraryTaskStatus: async () => ({ pending: [], running: [] }) };
@@ -42,6 +43,8 @@ export function categoryStore(backend = {}, operations = {}) {
     ...operations,
   };
   return compile("../src/services/libraryStore.ts", (name) => {
+    if (name === "../platform/files") return files;
+    if (name === "../platform/schematicFormats") return { querySchematicFormat:async()=>({}) };
     if (name === "./libraryCategoryIcons") return icons;
     if (name === "./filePathIdentity") return paths;
     if (name === "./backend") return backend;
@@ -198,6 +201,30 @@ test("批量移动分类只改条目归类，副本路径与其它条目不变",
   assert.equal(moved.replicas.find((item) => item.id === "r2").path, "B");
 });
 
+test("库文件只有真实缺失才当空库；读失败或损坏后加载和保存均不覆盖", async () => {
+  let bytes = null, readError = null, writes = 0;
+  const api = categoryStore({
+    readUserConfigFile: async (_path, optional) => {
+      assert.equal(optional, true);
+      if (readError) throw readError;
+      return bytes;
+    },
+    writeUserConfigFile: async () => { writes++; },
+    getUserConfigFilePath: async () => "C:/builtin/import",
+  });
+  const empty = await api.loadLibrary();
+  assert.equal(empty.entries.length, 0);
+  for (const corrupt of ['{"entries":', "null", "[]"]) {
+    bytes = corrupt;
+    await assert.rejects(api.loadLibrary());
+    await assert.rejects(api.saveLibrary(empty));
+  }
+  readError = new Error("permission denied");
+  await assert.rejects(api.loadLibrary(), /permission denied/);
+  await assert.rejects(api.saveLibrary(empty), /permission denied/);
+  assert.equal(writes, 0);
+});
+
 test("loadLibrary：迁移只持久化一次；写入失败向调用方暴露且不清空已有数据", async () => {
   let text = JSON.stringify({ records: [legacyRecord({ tags: ["甲", "乙"] })], folders: [] });
   let writes = 0;
@@ -222,7 +249,7 @@ test("loadLibrary：迁移只持久化一次；写入失败向调用方暴露且
 });
 
 test("setRecordPreview 更新条目预览并保留归类；reorderLibraryRecords 重排条目", async () => {
-  const api = categoryStore({ readUserConfigFile: async () => { throw new Error("no disk"); }, writeUserConfigFile: async () => {} });
+  const api = categoryStore({ readUserConfigFile: async (_path, optional) => { assert.equal(optional, true); return null; }, writeUserConfigFile: async () => {} });
   const base = state(
     [entry("e1", { categoryIds: ["test"], sortIndex: 5 })],
     [replica("r1", "e1", { path: "A" })],

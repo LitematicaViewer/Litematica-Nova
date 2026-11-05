@@ -117,71 +117,18 @@ fn collections() -> Result<Arc<Vec<Collection>>> {
     *slot.lock().unwrap() = Some((key, out.clone()));
     Ok(out)
 }
-fn precedence(op: &str) -> u8 {
-    match op {
-        "&" | "∩" => 2,
-        "|" | "∪" | "-" => 1,
-        _ => 0,
-    }
-}
+#[path = "enumerator_syntax.rs"]
+mod syntax;
+
 fn evaluate(text: &str, collections: &[Collection]) -> Result<BTreeSet<String>> {
-    let mut tokens = Vec::new();
-    let mut buf = String::new();
-    for c in text.chars() {
-        if "()∪|∩&-".contains(c) {
-            if !buf.trim().is_empty() {
-                tokens.push(buf.trim().to_owned());
-            }
-            buf.clear();
-            tokens.push(c.to_string());
-        } else {
-            buf.push(c);
-        }
-    }
-    if !buf.trim().is_empty() {
-        tokens.push(buf.trim().into());
-    }
-    let mut rpn = Vec::new();
-    let mut ops = Vec::<String>::new();
-    for (index, token) in tokens.iter().enumerate() {
-        if token.contains('*') {
-            ensure!(
-                index > 0
-                    && tokens[index - 1] == "("
-                    && tokens.get(index + 1).is_some_and(|x| x == ")"),
-                "Wildcard collections must be parenthesized"
-            );
-        }
-        match token.as_str() {
-            "(" => ops.push(token.clone()),
-            ")" => {
-                while ops.last().is_some_and(|x| x != "(") {
-                    rpn.push(ops.pop().unwrap());
-                }
-                ensure!(ops.pop().as_deref() == Some("("), "Unmatched parentheses");
-            }
-            _ if precedence(token) > 0 => {
-                while ops
-                    .last()
-                    .is_some_and(|x| precedence(x) >= precedence(token))
-                {
-                    rpn.push(ops.pop().unwrap());
-                }
-                ops.push(token.clone());
-            }
-            _ => rpn.push(token.clone()),
-        }
-    }
-    while let Some(op) = ops.pop() {
-        ensure!(op != "(", "Unmatched parentheses");
-        rpn.push(op);
-    }
+    let tokens = syntax::tokens(text);
+    let rpn = syntax::postfix(&tokens).map_err(|e| anyhow::anyhow!("{e}"))?;
     let mut stack = Vec::<BTreeSet<String>>::new();
     for token in rpn {
-        if precedence(&token) > 0 {
+        if syntax::precedence(token) > 0 {
             let right = stack.pop().context("Incomplete collection expression")?;
             let left = stack.pop().context("Incomplete collection expression")?;
-            stack.push(match token.as_str() {
+            stack.push(match token {
                 "&" | "∩" => left.intersection(&right).cloned().collect(),
                 "-" => left.difference(&right).cloned().collect(),
                 _ => left.union(&right).cloned().collect(),

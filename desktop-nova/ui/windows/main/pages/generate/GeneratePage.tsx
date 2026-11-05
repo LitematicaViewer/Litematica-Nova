@@ -9,6 +9,8 @@ import { Textarea } from "../../../../components/ui/textarea";
 import { Input } from "../../../../components/ui/input";
 import { Checkbox } from "../../../../components/ui/checkbox";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Popover } from "radix-ui";
+import { ArrowUp, ArrowDown, Copy, Trash2, X, ChevronDown } from "lucide-react";
 import { takeUpdateDraft, useUpdateDraft } from "../../updateRecovery";
 import { BlockSearchSelect } from "../../../../components/BlockSearchSelect";
 import { BlockIcon } from "../../../../components/BlockIcon";
@@ -146,12 +148,18 @@ function defaultFormState(): GenerateFormState {
 
 export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
   const { locale } = useI18n();
+  const l = (zh: string, en: string) => locale === "en-US" ? en : zh;
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [workspacePanel, setWorkspacePanel] = useState<"scheme" | "ai" | "output" | null>(null);
+  const [selectedOperationId, setSelectedOperationId] = useState("");
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [form, setForm] = useState<GenerateFormState>(() => defaultFormState());
   const [status, setStatus] = useState<Status>("idle");
   const [clientErrors, setClientErrors] = useState<string[]>([]);
   const [dryRunSummary, setDryRunSummary] = useState<GenerateSummary | null>(null);
   const [rawOutput, setRawOutput] = useState("");
   const [lastError, setLastError] = useState<UiMessage>("");
+  const [outputNotice, setOutputNotice] = useState("");
   const [outputPath, setOutputPath] = useState("");
   const [generatedPath, setGeneratedPath] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -201,7 +209,7 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
     let active = true;
     loadDatabases().then(() => {
       if (active) setAllBlocks(getAllBlocks().sort());
-    });
+    }).catch(reason => { if (active) setLastError(String(reason)); });
     return () => { active = false; };
   }, []);
 
@@ -263,18 +271,26 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
   const handleLoadTemplate = (template: GenerationTemplate) => {
     if (formDirty && !window.confirm(t("generate.confirmTemplate"))) return;
     setForm(templateToForm(template));
+    setTemplateOpen(false);
+    setSelectedOperationId("");
     setFormDirty(false);
     setGeneratedPath("");
     clearDryRun();
   };
 
   const handleExportTemplate = async () => {
-    const selected = await selectJsonSavePath(`${sanitizeFileName(form.metadata.name || "custom_template")}.json`);
-    if (selected) await exportTemplate(selected, form, plan);
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy("choose"); setLastError("");
+    try {
+      const selected = await selectJsonSavePath(`${sanitizeFileName(form.metadata.name || "custom_template")}.json`);
+      if (selected) { await exportTemplate(selected, form, plan); setOutputNotice(l("模板已保存。", "Template saved.")); setTemplateOpen(false); setWorkspacePanel("output"); }
+    } catch (reason) { setLastError(String(reason)); setTemplateOpen(false); setWorkspacePanel("output"); }
+    finally { busyRef.current = false; setBusy(null); }
   };
 
   const handleDryRun = async () => {
     if (busyRef.current) return;
+    setWorkspacePanel("output");
     const errors = validatePlanClientSide(plan);
     setClientErrors(errors);
     setLastError("");
@@ -312,6 +328,7 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
 
   const handleApply = async () => {
     if (busyRef.current) return;
+    setWorkspacePanel("output");
     const errors = validatePlanClientSide(plan);
     setClientErrors(errors);
     setLastError("");
@@ -357,14 +374,20 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
   };
 
   const savePlan = async () => {
-    const selected = await selectJsonSavePath("projection_plan.json");
-    if (selected) await writeWorkspaceFile(selected, planJson);
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy("choose"); setLastError("");
+    try {
+      const selected = await selectJsonSavePath("projection_plan.json");
+      if (selected) { await writeWorkspaceFile(selected, planJson); setOutputNotice(l("方案 JSON 已保存。", "Plan JSON saved.")); }
+    } catch (reason) { setLastError(String(reason)); }
+    finally { busyRef.current = false; setBusy(null); }
   };
 
   const openFolder = async () => {
     if (!generatedPath) return;
     const index = Math.max(generatedPath.lastIndexOf("\\"), generatedPath.lastIndexOf("/"));
-    if (index > 0) await openExternalPath(generatedPath.slice(0, index));
+    try { if (index > 0) await openExternalPath(generatedPath.slice(0, index)); }
+    catch (reason) { setLastError(String(reason)); }
   };
 
   const previewImportedPlan = (text: string) => {
@@ -380,6 +403,8 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
   };
 
   const applyMockPlan = async () => {
+    setAiPlanErrors([]);
+    try {
     const generated = await aiGeneratePlan({
       provider: "mock",
       prompt: aiPrompt,
@@ -392,13 +417,17 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
     const text = JSON.stringify(generated, null, 2);
     setAiPlanText(text);
     previewImportedPlan(text);
+    } catch (reason) { setAiPlanErrors([String(reason)]); }
   };
 
   const copyWebPrompt = async () => {
+    setAiPlanErrors([]);
+    try {
     const fullPrompt = await buildWebPrompt(aiPrompt, plan);
     await navigator.clipboard.writeText(fullPrompt);
     setAiWebPromptCopied(true);
     window.setTimeout(() => setAiWebPromptCopied(false), 1600);
+    } catch (reason) { setAiPlanErrors([String(reason)]); }
   };
 
   const importAiPlan = () => {
@@ -481,6 +510,29 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
     setAiChatPlan(null);
   };
 
+  const selectedOperationIndex = Math.max(0, form.operations.findIndex(operation => operation.id === selectedOperationId));
+  const selectedOperation = form.operations[selectedOperationIndex];
+  const removeOperation = (index: number) => {
+    setForm(prev => ({ ...prev, operations: prev.operations.filter((_, i) => i !== index) }));
+    setFormDirty(true); clearDryRun();
+  };
+  const duplicateOperation = (index: number) => {
+    const operation = form.operations[index];
+    const copy = { ...operation, id: makeId(), block: cloneBlock(operation.block), material: cloneMaterial(operation.material), materialA: cloneMaterial(operation.materialA), materialB: cloneMaterial(operation.materialB) };
+    setForm(prev => { const operations = [...prev.operations]; operations.splice(index + 1, 0, copy); return { ...prev, operations }; });
+    setSelectedOperationId(copy.id); setFormDirty(true); clearDryRun();
+  };
+  const moveOperation = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= form.operations.length) return;
+    setForm(prev => { const operations = [...prev.operations]; [operations[index], operations[target]] = [operations[target], operations[index]]; return { ...prev, operations }; });
+    setFormDirty(true); clearDryRun();
+  };
+  const operationSummary = (operation: OperationFormState) => {
+    const position = ["pillar"].includes(operation.type) ? operation.base : ["sphere", "ring", "cylinder"].includes(operation.type) ? operation.center : operation.from;
+    return `${translateBlockId(operation.block.name)} · ${position.join(", ")}`;
+  };
+
   return (
     <div className="generate-page" aria-busy={!!busy}>
       <div className="generate-header">
@@ -494,15 +546,11 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
         </div>
       </div>
 
-      <div className="generate-primary-toolbar">
-        <Button variant="secondary" onClick={handleDryRun} disabled={!!busy}>{busy === "preview" ? t("generate.previewing") : t("generate.preview")}</Button>
-        <Button variant="ghost" onClick={chooseOutput} disabled={!!busy}>{t("editor.changeSavePath")}</Button>
-        <Button variant="default" onClick={handleApply} disabled={!dryRunSummary || !!busy}>{busy === "apply" ? t("generate.generating") : t("generate.generateFile")}</Button>
-      </div>
-
-      <ScrollArea className="generate-scroll-area" aria-label={t("generate.editArea")}>
-      <fieldset className="generate-workspace" disabled={!!busy}>
-        <div className="generate-template-column">
+      <div className="generate-primary-toolbar" role="toolbar" aria-label={t("generate.editArea")}>
+        <Popover.Root open={templateOpen} onOpenChange={setTemplateOpen}>
+          <Popover.Trigger asChild><Button variant="secondary" disabled={!!busy}>{t("generate.templates")}<ChevronDown size={16} aria-hidden="true" /></Button></Popover.Trigger>
+          <Popover.Portal><Popover.Content className="generate-page generate-template-popover" data-native-ui-surface align="start" sideOffset={8} collisionPadding={12}>
+            <header className="generate-panel-heading"><strong>{t("generate.templates")}</strong><Popover.Close asChild><Button variant="ghost" size="icon" aria-label={t("library.closeDialog")}><X size={16} /></Button></Popover.Close></header>
           <TemplateLibrary
             loading={templatesLoading}
             loadError={templatesError}
@@ -516,58 +564,64 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
             onLoad={handleLoadTemplate}
             onExportCurrent={handleExportTemplate}
           />
-        </div>
-        <div className="generate-form-column">
-          <MetadataGroup form={form} updateMetadata={updateMetadata} />
+
+          </Popover.Content></Popover.Portal>
+        </Popover.Root>
+        <Button variant="ghost" onClick={() => setWorkspacePanel("scheme")}>{l("方案设置", "Plan settings")}</Button>
+        <Button variant="ghost" onClick={() => setWorkspacePanel("ai")}>{t("generate.optionalAi")}</Button>
+        <span className="generate-spacer" />
+        <Button variant="ghost" onClick={() => setWorkspacePanel("output")}>{l("结果与导出", "Results & export")}</Button>
+        <Button variant="secondary" onClick={handleDryRun} disabled={!!busy}>{busy === "preview" ? t("generate.previewing") : t("generate.preview")}</Button>
+        <Button variant="default" title={!dryRunSummary ? l("请先预览方案", "Preview the plan first") : undefined} onClick={handleApply} disabled={!dryRunSummary || !!busy}>{busy === "apply" ? t("generate.generating") : t("generate.generateFile")}</Button>
+      </div>
+      <fieldset className="generate-workspace" disabled={!!busy}>
+        <section className="generate-operation-browser" aria-label={t("generate.operations")}>
+          <div className="generate-operation-toolbar">
+            <h3>{t("generate.operations")}</h3>
+            <Button variant="secondary" onClick={() => { const operation = createDefaultOperation("fill_box"); setForm(prev => ({ ...prev, operations: [...prev.operations, operation] })); setSelectedOperationId(operation.id); setInspectorOpen(true); setFormDirty(true); clearDryRun(); }}>{t("generate.addOperation")}</Button>
+            <Button variant="ghost" disabled={!form.operations.length} onClick={() => { if (!window.confirm(l("清空全部操作？", "Clear all operations?"))) return; setForm(prev => ({ ...prev, operations: [] })); setFormDirty(true); clearDryRun(); }}>{t("editor.clear")}</Button>
+          </div>
+          <ScrollArea className="generate-operation-list" aria-label={t("generate.operations")}>
+            <div role="list">
+            {form.operations.map((operation, index) => <div className="generate-operation-row" key={operation.id} role="listitem" data-selected={operation.id === selectedOperation?.id}>
+              <Button variant="ghost" themeSlot="list-row" className="generate-operation-select" aria-pressed={operation.id === selectedOperation?.id} onClick={() => { setSelectedOperationId(operation.id); setInspectorOpen(true); }}>
+                <span className="generate-operation-index">{index + 1}</span><span className="generate-operation-label"><strong>{t(operationLabels.find(item => item.value === operation.type)?.labelKey ?? "generate.operations")}</strong><small>{operationSummary(operation)}</small></span>
+              </Button>
+              <div className="generate-operation-row-actions">
+                <Button variant="ghost" size="icon" aria-label={t("replace.moveUp")} title={t("replace.moveUp")} disabled={index === 0} onClick={() => moveOperation(index, -1)}><ArrowUp size={16} /></Button>
+                <Button variant="ghost" size="icon" aria-label={t("replace.moveDown")} title={t("replace.moveDown")} disabled={index === form.operations.length - 1} onClick={() => moveOperation(index, 1)}><ArrowDown size={16} /></Button>
+                <Button variant="ghost" size="icon" aria-label={t("editor.copy")} title={t("editor.copy")} onClick={() => duplicateOperation(index)}><Copy size={16} /></Button>
+                <Button variant="ghost" size="icon" aria-label={t("editor.delete")} title={t("editor.delete")} onClick={() => removeOperation(index)}><Trash2 size={16} /></Button>
+              </div>
+            </div>)}
+            {!form.operations.length && <p className="generate-empty">{l("添加一个操作，开始创建投影。", "Add an operation to start creating a schematic.")}</p>}
+            </div>
+          </ScrollArea>
+          <p className="generate-operation-hint">{t("generate.overlapHint")}</p>
+        </section>
+        <aside className={`generate-parameter-inspector${inspectorOpen ? " is-open" : ""}`} data-native-ui-surface aria-label={l("操作参数", "Operation parameters")} onKeyDown={event => {
+          if (event.key !== "Escape" || event.nativeEvent.isComposing || event.defaultPrevented || !event.currentTarget.contains(event.target as Node)) return;
+          event.stopPropagation(); setInspectorOpen(false);
+          document.querySelector<HTMLButtonElement>('.generate-operation-select[aria-pressed="true"]')?.focus();
+        }}>
+          <header className="generate-panel-heading"><h3>{l("操作参数", "Operation parameters")}</h3><Button className="generate-inspector-close" variant="ghost" size="icon" aria-label={t("library.closeDialog")} onClick={() => setInspectorOpen(false)}><X size={16} /></Button></header>
+          <ScrollArea className="generate-parameter-scroll">
+            {selectedOperation ? <OperationEditor operation={selectedOperation} index={selectedOperationIndex} allBlocks={allBlocks} onChange={next => updateOperation(selectedOperationIndex, next)} /> : <p className="generate-empty">{l("选择左侧操作以编辑参数。", "Select an operation to edit its parameters.")}</p>}
+          </ScrollArea>
+        </aside>
+      </fieldset>
+      {workspacePanel && <Dialog title={workspacePanel === "scheme" ? l("方案设置", "Plan settings") : workspacePanel === "ai" ? t("generate.optionalAi") : l("结果与导出", "Results & export")} width="lg" className="generate-page generate-panel-dialog" onClose={() => setWorkspacePanel(null)}>
+        {workspacePanel === "scheme" && <fieldset className="generate-panel-fields" disabled={!!busy}>          <MetadataGroup form={form} updateMetadata={updateMetadata} />
           <details className="generate-advanced">
             <summary>{t("generate.advancedRegion")}</summary>
             <RegionGroup form={form} updateRegion={updateRegion} />
           </details>
-
-          <div className="group-box">
-            <div className="group-box-title">{t("generate.operations")}</div>
-            <div className="generate-operation-toolbar">
-              <Button variant="secondary" onClick={() => { setForm((prev) => ({ ...prev, operations: [...prev.operations, createDefaultOperation("fill_box")] })); setFormDirty(true); clearDryRun(); }}>{t("generate.addOperation")}</Button>
-              <Button variant="secondary" onClick={() => { setForm((prev) => ({ ...prev, operations: [] })); setFormDirty(true); clearDryRun(); }}>{t("editor.clear")}</Button>
-              <div className="generate-spacer" />
-              <span className="generate-muted">{t("generate.overlapHint")}</span>
-            </div>
-            {form.operations.map((operation, index) => (
-              <OperationEditor
-                key={operation.id}
-                operation={operation}
-                index={index}
-                allBlocks={allBlocks}
-                onChange={(next) => updateOperation(index, next)}
-                onRemove={() => {
-                  setForm((prev) => ({ ...prev, operations: prev.operations.filter((_, i) => i !== index) }));
-                  setFormDirty(true);
-                  clearDryRun();
-                }}
-                onDuplicate={() => {
-                  setForm((prev) => {
-                    const copy = {
-                      ...operation,
-                      id: makeId(),
-                      block: cloneBlock(operation.block),
-                      material: cloneMaterial(operation.material),
-                    };
-                    const operations = [...prev.operations];
-                    operations.splice(index + 1, 0, copy);
-                    return { ...prev, operations };
-                  });
-                  setFormDirty(true);
-                  clearDryRun();
-                }}
-              />
-            ))}
-          </div>
-
-          <details className="group-box generate-advanced">
-            <summary>{t("generate.optionalAi")}</summary>
+</fieldset>}
+        {workspacePanel === "ai" && <fieldset className="generate-panel-fields" disabled={!!busy}>          <section className="generate-ai-panel">
+            
             <div className="form-row">
               <div className="form-label">{t("generate.naturalLanguage")}</div>
-              <Textarea className="input generate-ai-prompt" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} placeholder={t("generate.promptHint")} />
+              <Textarea className="input generate-ai-prompt" aria-label={t("generate.naturalLanguage")} value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} placeholder={t("generate.promptHint")} />
             </div>
             <div className="generate-action-row">
               <Button variant="secondary" onClick={copyWebPrompt}>{t("generate.copyWebPrompt")}</Button>
@@ -579,6 +633,7 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
               <div className="form-label">{t("generate.importAi")}</div>
               <Textarea
                 className="input generate-ai-plan-input"
+                aria-label={t("generate.importAi")}
                 value={aiPlanText}
                 onChange={(e) => {
                   setAiPlanText(e.target.value);
@@ -608,12 +663,10 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
             <div className="generate-help">
               {t("generate.aiHelp")}
             </div>
-          </details>
-        </div>
-
-        <div className="generate-output-column">
-          <div className="group-box">
-            <div className="group-box-title">{t("generate.generate")}</div>
+          </section></fieldset>}
+        {workspacePanel === "output" && <>        <div className="generate-output-column">
+          <div className="generate-section">
+            <div className="generate-section-title">{t("generate.generate")}</div>
             {currentValidation.length > 0 && <ErrorList errors={currentValidation} />}
             {clientErrors.length > 0 && <ErrorList errors={clientErrors} />}
 
@@ -621,7 +674,8 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
               <div className="form-label">{t("generate.savePath")}</div>
               <Input className="input generate-grow" value={displayFilePath(outputPath)} readOnly aria-label={t("generate.savePath")} placeholder={t("generate.autoSavePath")} />
             </div>
-            {lastError && <Textarea readOnly className="input generate-output-error" value={localizeMessage(lastError)} />}
+            {lastError && <Textarea readOnly role="alert" aria-label={l("操作错误", "Operation error")} className="input generate-output-error" value={localizeMessage(lastError)} />}
+            {outputNotice && <p role="status">{outputNotice}</p>}
             {dryRunSummary && <SummaryView summary={dryRunSummary} />}
             {rawOutput && (
               <div className="generate-log-section">
@@ -638,19 +692,18 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
               </div>
             )}
           </div>
-          <div className="group-box generate-plan-panel">
-            <div className="group-box-title">{t("generate.advancedJson")}</div>
+          <div className="generate-section generate-plan-panel">
+            <div className="generate-section-title">{t("generate.advancedJson")}</div>
             <div className="generate-action-row">
               <Button variant="secondary" onClick={() => setDetailsOpen(!detailsOpen)}>{detailsOpen ? t("generate.collapse") : t("generate.expand")}</Button>
-              <Button variant="secondary" onClick={() => navigator.clipboard.writeText(planJson)}>{t("generate.copyJson")}</Button>
+              <Button variant="secondary" onClick={() => { setLastError(""); void navigator.clipboard.writeText(planJson).then(() => setOutputNotice(l("方案 JSON 已复制。", "Plan JSON copied."))).catch(reason => setLastError(String(reason))); }}>{t("generate.copyJson")}</Button>
               <Button variant="secondary" onClick={savePlan}>{t("generate.exportJson")}</Button>
             </div>
             {detailsOpen && <pre className="generate-json-preview">{planJson}</pre>}
           </div>
 
-        </div>
-      </fieldset>
-      </ScrollArea>
+        </div><Button variant="ghost" onClick={chooseOutput} disabled={!!busy}>{t("editor.changeSavePath")}</Button></>}
+      </Dialog>}
       {aiChatOpen && (
         <Dialog title={t("generate.apiTitle")} width="lg" className="generate-ai-dialog" busy={aiChatSending || !!busy} onClose={() => setAiChatOpen(false)}>
             <div className="generate-chat-actions">
@@ -673,12 +726,13 @@ export function GeneratePage({ currentFile, setCurrentFile, setRoute }: any) {
                 ))
               )}
             </div>
-            <Textarea
+            <div className="generate-chat-compose"><Textarea
               className="input generate-chat-input"
+              aria-label={l("对话内容", "Chat message")}
               value={aiChatInput}
               onChange={(event) => setAiChatInput(event.target.value)}
               placeholder={aiDirectMode ? t("generate.directHint") : t("generate.wrappedHint")}
-            />
+            /></div>
             <div className="generate-chat-actions">
               <Button variant="default" onClick={handleAiChatSend} disabled={aiChatSending || !aiChatInput.trim()}>
                 {aiChatSending ? t("generate.sending") : t("generate.send")}
@@ -720,8 +774,8 @@ function TemplateLibrary({
 }) {
   const { locale } = useI18n();
   return (
-    <div className="group-box">
-      <div className="group-box-title">{t("generate.templates")}</div>
+    <div className="generate-section">
+      <div className="generate-section-title">{t("generate.templates")}</div>
       <div className="generate-editor-toolbar">
         <Input className="input generate-grow" value={query} onChange={(event) => onQueryChange(event.target.value)} aria-label={t("generate.searchTemplates")} placeholder={t("generate.templateSearchHint")} />
         <Dropdown value={selectedTag} onChange={onTagChange} ariaLabel={t("generate.templateTag")}
@@ -751,13 +805,11 @@ function TemplateLibrary({
   );
 }
 
-function OperationEditor({ operation, index, allBlocks, onChange, onRemove, onDuplicate }: {
+function OperationEditor({ operation, index, allBlocks, onChange }: {
   operation: OperationFormState;
   index: number;
   allBlocks: string[];
   onChange: (operation: OperationFormState) => void;
-  onRemove: () => void;
-  onDuplicate: () => void;
 }) {
   const { locale } = useI18n();
   const update = (patch: Partial<OperationFormState>) => onChange({ ...operation, ...patch });
@@ -765,10 +817,7 @@ function OperationEditor({ operation, index, allBlocks, onChange, onRemove, onDu
     <div className="generate-operation">
       <div className="generate-editor-toolbar">
         <strong>#{index + 1}</strong>
-        <Dropdown value={operation.type} options={operationLabels.map(({labelKey,value}) => ({label:t(labelKey),value}))} onChange={(value) => update({ type: value as OperationType })} />
-        <div className="generate-spacer" />
-        <Button variant="secondary" onClick={onDuplicate}>{t("editor.copy")}</Button>
-        <Button variant="ghost" onClick={onRemove}>{t("editor.delete")}</Button>
+        <Dropdown ariaLabel={t("generate.operations")} value={operation.type} options={operationLabels.map(({labelKey,value}) => ({label:t(labelKey),value}))} onChange={(value) => update({ type: value as OperationType })} />
       </div>
 
       {["fill_box", "hollow_box", "floor", "wall", "outline_box", "checkerboard_floor", "roof_gable"].includes(operation.type) && (
@@ -839,8 +888,8 @@ function OperationEditor({ operation, index, allBlocks, onChange, onRemove, onDu
 function MetadataGroup({ form, updateMetadata }: { form: GenerateFormState; updateMetadata: (key: keyof GenerateFormState["metadata"], value: string | number) => void }) {
   const { locale } = useI18n();
   return (
-    <div className="group-box">
-      <div className="group-box-title">{t("generate.metadata")}</div>
+    <div className="generate-section">
+      <div className="generate-section-title">{t("generate.metadata")}</div>
       <TextRow label={t("properties.schematicName")} value={form.metadata.name} onChange={(value) => updateMetadata("name", value)} />
       <TextRow label={t("properties.author")} value={form.metadata.author} onChange={(value) => updateMetadata("author", value)} />
       <TextRow label={t("properties.description")} value={form.metadata.description} onChange={(value) => updateMetadata("description", value)} />
@@ -852,8 +901,8 @@ function MetadataGroup({ form, updateMetadata }: { form: GenerateFormState; upda
 function RegionGroup({ form, updateRegion }: { form: GenerateFormState; updateRegion: (key: keyof GenerateFormState["region"], value: string | [number, number, number]) => void }) {
   const { locale } = useI18n();
   return (
-    <div className="group-box">
-      <div className="group-box-title">{t("generate.region")}</div>
+    <div className="generate-section">
+      <div className="generate-section-title">{t("generate.region")}</div>
       <TextRow label={t("generate.regionName")} value={form.region.name} onChange={(value) => updateRegion("name", value)} />
       <Vec3Row label={t("generate.start")} value={form.region.origin} onChange={(value) => updateRegion("origin", value)} />
       <Vec3Row label={t("generate.dimensions")} value={form.region.size} min={1} onChange={(value) => updateRegion("size", value)} />
@@ -964,14 +1013,14 @@ function WeightedRandomEditor({ material, onChange }: { material: Extract<Materi
     <div>
       <div className="form-row">
         <div className="form-label">{t("generate.randomSeed")}</div>
-        <Input className="input generate-seed-input" type="number" value={material.seed} onChange={(e) => onChange({ ...material, seed: Number(e.target.value) })} />
+        <Input className="input generate-seed-input" type="number" aria-label={t("generate.randomSeed")} value={material.seed} onChange={(e) => onChange({ ...material, seed: Number(e.target.value) })} />
         <Button variant="secondary" onClick={() => onChange({ ...material, entries: [...material.entries, { id: makeId(), weight: 10, block: { name: "minecraft:stone_bricks", properties: {} } }] })}>{t("generate.addMaterial")}</Button>
       </div>
       {material.entries.map((entry, index) => (
         <div key={entry.id} className="generate-material-entry">
           <div className="form-row">
             <div className="form-label">{t("generate.weight")}</div>
-            <Input className="input generate-number-input" type="number" min={1} value={entry.weight} onChange={(e) => updateEntry(index, { weight: Number(e.target.value) })} />
+            <Input className="input generate-number-input" type="number" aria-label={`${t("generate.weight")} ${index + 1}`} min={1} value={entry.weight} onChange={(e) => updateEntry(index, { weight: Number(e.target.value) })} />
             <Button variant="secondary" onClick={() => removeEntry(index)} disabled={material.entries.length <= 1}>{t("editor.delete")}</Button>
           </div>
           <BlockSelector block={entry.block} onChange={(nextBlock) => updateEntry(index, { block: nextBlock })} />

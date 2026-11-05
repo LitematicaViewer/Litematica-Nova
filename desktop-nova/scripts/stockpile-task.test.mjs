@@ -30,11 +30,13 @@ test('statistics-first workbench shares seven columns and gives the actual list 
   assert.equal(rule('.material-list-task-content > .subwindow-body').overflow, 'hidden');
   assert.equal(rule('.material-list-task-content > .subwindow-body > .material-export-footer').flex, '0 0 auto');
   assert.equal(rule('.stockpile-task .stockpile-table').width, '100%');
-  assert.equal(rule('.stockpile-task .stockpile-table')['min-width'], '945px');
-  assert.equal(rule('.stockpile-table .stockpile-row').height, '44px');
-  assert.equal(rule('.stockpile-material-detail-dialog.dialog-surface').width, 'min(760px, calc(100vw - 48px))');
+  assert.equal(rule('.stockpile-task .stockpile-table')['min-width'], '820px');
+  assert.equal(rule('.stockpile-table .stockpile-row').height, '40px');
+  assert.equal(rule('.stockpile-material-inspector').width, 'min(360px, 100%)');
+  assert.equal(rule('.stockpile-material-inspector').position, 'absolute');
+  assert.equal(rule('.stockpile-batch-slot').height, '32px');
   const compact = value => value.replace(/\s+/g, '');
-  assert.equal(compact(panel['--stockpile-row-grid']), '40pxminmax(280px,2.2fr)minmax(145px,1fr)minmax(145px,.9fr)minmax(145px,1fr)90px100px');
+  assert.equal(compact(panel['--stockpile-row-grid']), '32pxminmax(160px,1fr)112px120px112px80px104px');
   let sharedGrid = false, wideGrid = false;
   sheet.walkRules(node => {
     if (node.selector.includes('.stockpile-table-header') && node.selector.includes('.stockpile-row')) {
@@ -114,7 +116,7 @@ const transpile = source => ts.transpileModule(source, { fileName: 'replay.tsx',
 const helperSource = helperNames.map(name => { assert(functions.has(name), `Production ${name} must exist`); return functions.get(name); }).join('\n');
 const helperCode = transpile(`${helperSource}\nglobalThis.helpers={${helperNames.join(',')}};`);
 const queueNames = ['capturePending', 'persistPending', 'drain', 'enqueue', 'mutate', 'changeQuantity',
-  'clearQuantityDraft', 'latestQuantity', 'adjustQuantity', 'completeItem', 'rememberQuantity', 'applySelected', 'retry'];
+  'clearQuantityDraft', 'latestQuantity', 'adjustQuantity', 'completeItem', 'rememberQuantity', 'applySelected', 'retry', 'deleteCurrentTask'];
 const queueCode = transpile(`${helperSource}\n` + queueNames.map(name => {
   assert(declarations.has(name), `Production ${name} closure must exist`); return `const ${declarations.get(name)};`;
 }).join('\n') + `\nglobalThis.queueApi={${queueNames.join(',')}};`);
@@ -130,7 +132,7 @@ function setupQueue(write) {
   const states={views:[],errors:[],pending:[],recoveries:[]}, saved=new Map();
   const work={epoch:1,task:task(),pending:new Map(),running:false,refresh:false};
   const context={exports:{},pageOffset:0,mutationSequence:{current:0},crypto:{randomUUID:()=>`test-${Math.random()}`},getMinecraftTranslations:()=>({}),epoch:{current:1},sequence:{current:0},queue:{current:work},currentTask:{current:work.task},recovery:null,
-    quantityDrafts:{current:new Map()},selectedItems:[],setEditingQuantities(){},
+    quantityDrafts:{current:new Map()},selectedItems:[],setEditingQuantities(){},deletingTask:{current:null},setLoading(){},setStatus(){},restorePending(){},
     preferencesRef:{current:{...basePreferences}},searchRef:{current:''},
     setPending:value=>states.pending.push(value),setError:value=>states.errors.push(value),setRecoveryOpen(){},setRecovery:value=>states.recoveries.push(value),
     accept:value=>states.views.push(value),loadRef:{current(){}},commandStockpileTask:write,
@@ -245,12 +247,12 @@ test('pending search survives another item ACK and contains only idempotent patc
   assert.deepEqual(plain(mergeStockpileMutation({clear:true},{quantity:4,status:'preparing'})),{quantity:4,status:'preparing'});
 });
 
-test('detail selection follows the visible stable identity, never an old filtered or other variant row', () => {
+test('detail selection retains explicit identity and never reselects after clearing or filtering', () => {
   const {stockpileDetailSelection} = helpers();
   const visible = [row('potion#A'),row('potion#B')];
-  assert.equal(stockpileDetailSelection(visible,null),'potion#A');
+  assert.equal(stockpileDetailSelection(visible,null),null);
   assert.equal(stockpileDetailSelection(visible,'potion#B'),'potion#B');
-  assert.equal(stockpileDetailSelection([visible[0]],'potion#B'),'potion#A');
+  assert.equal(stockpileDetailSelection([visible[0]],'potion#B'),null);
   assert.equal(stockpileDetailSelection([],'potion#B'),null);
 });
 
@@ -298,6 +300,30 @@ test('actual reset cancellation writes nothing and confirmation cannot target a 
   context.currentTask.current=task('revision-A','task-B');context.confirm();assert.equal(writes.length,0);
   context.currentTask.current=task('revision-B');context.confirm();assert.equal(writes.length,0);
   context.currentTask.current=task();context.confirm();assert.equal(writes.length,1);assert.equal(writes[0][1].mutation.reset,true);
+});
+
+test('task deletion stops queued writes and ignores an in-flight old acknowledgement',async()=>{
+  let finish; const writes=[];
+  const q=setupQueue(command=>{writes.push(command);if(command.action==='delete')return Promise.resolve({task:task('revision-B','task-B')});return new Promise(resolve=>{finish=resolve;});});
+  q.enqueue('item:stone',{action:'mutate',mutation:{materialId:'stone',quantity:2}});
+  q.enqueue('item:wood',{action:'mutate',mutation:{materialId:'wood',quantity:3}});
+  const deleting=q.deleteCurrentTask({taskId:'task-A',sourceRevision:'revision-A',name:'A',scope:'all'});
+  q.enqueue('item:wood',{action:'mutate',mutation:{materialId:'wood',quantity:8}});
+  finish({task:task()});await deleting;
+  assert.deepEqual(writes.map(value=>value.action),['mutate','delete']);
+  assert.equal(writes[1].taskId,'task-A');assert.equal(q.context.queue.current.task.taskId,'task-B');
+  assert.equal(q.states.views.length,1);assert.equal(q.states.views[0].task.taskId,'task-B');assert.equal(q.saved.size,0);
+});
+
+test('delete cancellation and changed confirmation dispatch no task write',async()=>{
+  let dialog;
+  (function find(node){if(ts.isJsxOpeningElement(node)&&node.tagName.getText(uiAst)==='Dialog'&&node.attributes.getText(uiAst).includes('title={t("stockpile.delete")}'))dialog=node;ts.forEachChild(node,find);})(uiAst);
+  assert(dialog);const cancel=dialog.attributes.properties.find(node=>ts.isJsxAttribute(node)&&node.name.getText(uiAst)==='onClose').initializer.expression;
+  let closed=false;vm.runInNewContext(`(${cancel.getText(uiAst)})()`,{setDeleteConfirmation(){closed=true;}});assert(closed);
+  const writes=[],q=setupQueue(command=>{writes.push(command);return Promise.resolve({});});
+  await q.deleteCurrentTask({taskId:'task-B',sourceRevision:'revision-A'});
+  await q.deleteCurrentTask({taskId:'task-A',sourceRevision:'revision-B'});
+  assert.equal(writes.length,0);assert.equal(q.work.stopped,undefined);
 });
 
 test('existing recovery store captures the newest getter without stale-render overwrite and clears acknowledged keys',()=>{

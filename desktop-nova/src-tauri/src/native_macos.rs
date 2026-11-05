@@ -3,8 +3,7 @@
 //! boundary. The shader below copies final colour, not scene/rendering rules.
 #![cfg(target_os = "macos")]
 
-#[path = "native_macos_wire.rs"]
-pub mod wire;
+pub use viewer_launch_contract::native_macos_wire as wire;
 
 use core_graphics_types::geometry::CGSize;
 use foreign_types::{ForeignType, ForeignTypeRef};

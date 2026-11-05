@@ -17,6 +17,55 @@ pub struct BlockEntityOutput {
     pub z: i32,
     pub block_id: String,
     pub nbt: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Vec<LayerContainerItem>>,
+}
+
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LayerContainerItem {
+    pub id: String,
+    pub count: f64,
+    pub slot: f64,
+}
+
+// Project only immediate inventory slots. The statistics scanner intentionally
+// recurses into nested stacks and aggregates counts; that is a different view.
+fn layer_container_items(tile: &Value) -> Vec<LayerContainerItem> {
+    fn field<'a>(map: &'a std::collections::HashMap<String, Value>, key: &str) -> Option<&'a Value> {
+        map.get(key).or_else(|| map.iter().filter(|(k, _)| k.eq_ignore_ascii_case(key))
+            .min_by_key(|(k, _)| *k).map(|(_, v)| v))
+    }
+    fn number(value: Option<&Value>, default: f64) -> f64 {
+        match value {
+            Some(Value::Byte(v)) => f64::from(*v),
+            Some(Value::Short(v)) => f64::from(*v),
+            Some(Value::Int(v)) => f64::from(*v),
+            Some(Value::Long(v)) => *v as f64,
+            Some(Value::Float(v)) => f64::from(*v),
+            Some(Value::Double(v)) => *v,
+            Some(Value::String(v)) if v.trim().is_empty() => 0.,
+            Some(Value::String(v)) => v.trim().parse().unwrap_or(f64::NAN),
+            None => default,
+            _ => f64::NAN,
+        }
+    }
+    let Value::Compound(map) = tile else { return Vec::new() };
+    let Some(Value::List(entries)) = field(map, "Items") else { return Vec::new() };
+    entries.iter().filter_map(|entry| {
+        let Value::Compound(map) = entry else { return None };
+        let id = match field(map, "id")? {
+            Value::String(id) if !id.is_empty() && id != "minecraft:air" => id.clone(),
+            // Legacy stacks can store a numeric item ID. Keep its displayed ID; do not remap it.
+            Value::Byte(n) if *n != 0 => n.to_string(),
+            Value::Short(n) if *n != 0 => n.to_string(),
+            Value::Int(n) if *n != 0 => n.to_string(),
+            Value::Long(n) if *n != 0 => n.to_string(),
+            _ => return None,
+        };
+        Some(LayerContainerItem { id, count: number(field(map, "Count"), 1.),
+            slot: number(field(map, "Slot"), 0.) })
+    }).collect()
 }
 
 /// Compatibility CLI: x/y/z are world coordinates relative to schematic origin.
@@ -57,6 +106,7 @@ fn read_layer(root: &LitematicRoot, layer: [i32; 3]) -> Result<Option<BlockEntit
     }
     Ok(read_world(root, world)?.map(|mut result| {
         [result.x, result.y, result.z] = layer;
+        result.items = Some(layer_container_items(&result.nbt));
         result
     }))
 }
@@ -117,6 +167,7 @@ fn read_world(root: &LitematicRoot, world: [i32; 3]) -> Result<Option<BlockEntit
             z: world[2],
             block_id: block.name.clone(),
             nbt: tile_entity.clone(),
+            items: None,
         }));
     }
     Ok(None)
@@ -142,6 +193,26 @@ mod tests {
     use crate::model::BlockStateNbt;
     use crate::nbt::{MetadataNbt, RegionNbt, Vec3i, pack_palette_indices, save_litematic_root};
     use std::collections::{BTreeMap, HashMap};
+
+
+    #[test]
+    fn layer_container_items_keep_slot_order_zero_counts_and_raw_nested_contents() {
+        let stack = |pairs: Vec<(&str, Value)>| Value::Compound(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect());
+        let tile = stack(vec![("iTeMs", Value::List(vec![
+            stack(vec![("ID", Value::String("minecraft:bundle".into())), ("Count", Value::Byte(0)),
+                ("count", Value::Int(7)), ("slot", Value::Byte(11)), ("Items", Value::List(vec![stack(vec![("id", Value::String("minecraft:apple".into()))])]))]),
+            stack(vec![("id", Value::String("minecraft:air".into()))]),
+            stack(vec![("id", Value::Short(264)), ("Count", Value::Byte(2))]),
+            stack(vec![("id", Value::String("minecraft:stone".into()))]),
+        ]))]);
+        let before = tile.clone();
+        assert_eq!(layer_container_items(&tile), [
+            LayerContainerItem { id:"minecraft:bundle".into(), count:0., slot:11. },
+            LayerContainerItem { id:"264".into(), count:2., slot:0. },
+            LayerContainerItem { id:"minecraft:stone".into(), count:1., slot:0. },
+        ]);
+        assert_eq!(tile, before);
+    }
 
     fn region(position: Vec3i, size: Vec3i, at: [i32; 3], block_id: &str) -> RegionNbt {
         RegionNbt {

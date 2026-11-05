@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { FolderOpen, Plus, Trash2 } from "lucide-react";
 import type { StockpileSourceInput, StockpileTaskView } from "../../../../../src/platform/applicationOperations";
 import { openDialog } from "../../../../../src/platform/dialogs";
-import { libraryRecordViews, loadLibrary, type LibraryRecordView } from "../../../../../src/services/libraryStore";
+import { libraryRecordViews, loadLibrary, type LibraryRecordView, type LibraryState } from "../../../../../src/services/libraryStore";
+import { libraryContentCommand } from "../../../../../src/platform/files";
 import { t } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
 import { Dialog } from "../../../../components/Dialog";
@@ -30,9 +31,12 @@ export function StockpileSourcesDialog({ mode, initialSources = [], task, defaul
   const [name, setName] = useState(defaultName || task?.name || "");
   const [rows, setRows] = useState(() => initialSources.map(draft));
   const [records, setRecords] = useState<LibraryRecordView[]>([]);
+  const [library, setLibrary] = useState<LibraryState | null>(null);
+  const [visiblePaths, setVisiblePaths] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [search, setSearch] = useState("");
   const [reading, setReading] = useState(true);
+  const [queryPending, setQueryPending] = useState(true);
   const [libraryError, setLibraryError] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -42,11 +46,23 @@ export function StockpileSourcesDialog({ mode, initialSources = [], task, defaul
   const dirty = () => { requestId.current = crypto.randomUUID(); setError(""); };
   const readLibrary = async () => {
     setReading(true); setLibraryError("");
-    try { const state = await loadLibrary(); if (mounted.current) setRecords(libraryRecordViews(state)); }
-    catch (reason) { if (mounted.current) setLibraryError(String(reason)); }
+    try { const state = await loadLibrary(); if (mounted.current) { setRecords(libraryRecordViews(state)); setLibrary(state); } }
+    catch (reason) { if (mounted.current) { setLibraryError(String(reason)); setQueryPending(false); } }
     finally { if (mounted.current) setReading(false); }
   };
   useEffect(() => { mounted.current = true; void readLibrary(); return () => { mounted.current = false; }; }, []);
+  useEffect(() => {
+    if (!library) return;
+    let active = true;
+    setQueryPending(true);
+    const timer = window.setTimeout(() => {
+      void libraryContentCommand<{ paths: string[] }>({ action: "query", state: library, query: { text: search } })
+        .then(result => { if (active) { setVisiblePaths(new Set(result.paths)); setLibraryError(""); } })
+        .catch(reason => { if (active) setLibraryError(String(reason)); })
+        .finally(() => { if (active) setQueryPending(false); });
+    }, 150);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [library, search]);
   const append = (sources: StockpileSourceInput[]) => { dirty(); setRows(previous => [...previous, ...sources.map(draft)]); };
   const update = (key: string, edit: (row: DraftSource) => DraftSource) => { dirty(); setRows(previous => previous.map(row => row.key === key ? edit(row) : row)); };
   const files = async () => {
@@ -71,7 +87,7 @@ export function StockpileSourcesDialog({ mode, initialSources = [], task, defaul
     catch (reason) { if (mounted.current) setError(String(reason)); }
     finally { running.current = false; if (mounted.current) setPending(false); }
   };
-  const visible = records.filter(record => `${record.displayName} ${record.fileName} ${record.path}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
+  const visible = records.filter(record => visiblePaths.has(record.path));
   return <Dialog title={t(mode === "create" ? "stockpile.sources.create" : mode === "add" ? "stockpile.sources.add" : "stockpile.sources.manage")}
     subtitle={t("stockpile.sources.confirmOnly")} className="stockpile-sources-dialog" width="lg" busy={pending} onClose={onClose}
     footer={<><Button variant="ghost" disabled={pending} onClick={onClose}>{t("editor.cancel")}</Button>
@@ -82,13 +98,13 @@ export function StockpileSourcesDialog({ mode, initialSources = [], task, defaul
     <details className="stockpile-source-library" open={!rows.length}>
       <summary>{t("stockpile.sources.library")}</summary>
       <Input value={search} disabled={pending} aria-label={t("stockpile.sources.search")} placeholder={t("stockpile.sources.search")} onChange={event => setSearch(event.target.value)} />
-      {reading && <p role="status">{t("editor.loading")}</p>}
+      {(reading || queryPending) && <p role="status">{t("editor.loading")}</p>}
       {libraryError && <div role="alert"><span>{libraryError}</span><Button size="sm" onClick={() => void readLibrary()}>{t("stockpile.retry")}</Button></div>}
       <div className="stockpile-source-library-list">{visible.map(record => <label key={record.id} className="stockpile-source-library-row" data-source-path={record.path} title={`${record.displayName || record.fileName}\n${record.path}`}>
         <Checkbox aria-label={`${record.displayName || record.fileName} ${record.path}`} checked={selected.has(record.path)} disabled={pending || record.status !== "ok"} onCheckedChange={checked => setSelected(previous => { const next = new Set(previous); if (checked === true) next.add(record.path); else next.delete(record.path); return next; })} />
         <span className="stockpile-source-library-text"><strong className="stockpile-source-library-name" title={record.displayName || record.fileName}>{record.displayName || record.fileName}</strong><span className="stockpile-source-library-path" title={record.path}>{record.status !== "ok" ? `${t("stockpile.sources.unavailable")} · ${record.path}` : record.path}</span></span>
       </label>)}</div>
-      {!reading && !libraryError && !visible.length && <p>{t("statistics.noMatches")}</p>}
+      {!reading && !queryPending && !libraryError && !visible.length && <p>{t("statistics.noMatches")}</p>}
     </details>
     <div className="stockpile-source-table-scroll"><Table className="stockpile-source-table"><TableHeader><TableRow>
       <TableHead>{t("stockpile.sources.projection")}</TableHead><TableHead>{t("statistics.scope")}</TableHead><TableHead>{t("statistics.copies")}</TableHead><TableHead>{t("stockpile.sources.remove")}</TableHead>

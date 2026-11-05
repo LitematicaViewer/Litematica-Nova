@@ -286,10 +286,7 @@ impl ViewerLaunchContractFile {
         output: &str,
         expected_pid: u32,
     ) -> Result<Option<(ViewerReady, isize)>, String> {
-        for payload in output
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix(VIEWER_READY_PREFIX).map(str::trim))
-        {
+        if let Some(payload) = first_marker_payload(output, VIEWER_READY_PREFIX) {
             let ready = serde_json::from_str::<ViewerReady>(payload)
                 .map_err(|error| format!("parse hidden Viewer ready marker: {error}"))?;
             let hwnd =
@@ -300,11 +297,7 @@ impl ViewerLaunchContractFile {
     }
 
     pub(crate) fn accepted_viewer_integrity(&self, output: &str) -> Result<bool, String> {
-        for payload in output.lines().filter_map(|line| {
-            line.trim()
-                .strip_prefix(VIEWER_INTEGRITY_PREFIX)
-                .map(str::trim)
-        }) {
+        if let Some(payload) = first_marker_payload(output, VIEWER_INTEGRITY_PREFIX) {
             let marker = serde_json::from_str::<ViewerIntegrity>(payload)
                 .map_err(|error| format!("parse Viewer integrity marker: {error}"))?;
             marker.validate_for_contract(&self.request_id, &self.sha256)?;
@@ -378,6 +371,10 @@ impl ViewerLaunchContractFile {
     }
 }
 
+fn first_marker_payload<'a>(output: &'a str, prefix: &str) -> Option<&'a str> {
+    output.lines().find_map(|line| line.trim().strip_prefix(prefix)).map(str::trim)
+}
+
 pub(crate) fn accepted_launch_ack(
     output: &str,
     expected_request_id: &str,
@@ -385,11 +382,7 @@ pub(crate) fn accepted_launch_ack(
     expected_backend_exe_path: &Path,
     expected_backend_sha256: &str,
 ) -> Result<bool, String> {
-    for payload in output.lines().filter_map(|line| {
-        line.trim()
-            .strip_prefix(VIEWER_LAUNCH_ACK_PREFIX)
-            .map(str::trim)
-    }) {
+    if let Some(payload) = first_marker_payload(output, VIEWER_LAUNCH_ACK_PREFIX) {
         let ack = serde_json::from_str::<ViewerLaunchAck>(payload)
             .map_err(|error| format!("parse Viewer launch ACK: {error}"))?;
         ack.validate_for_contract(expected_request_id, expected_sha256)?;
@@ -557,6 +550,9 @@ mod tests {
             serde_json::to_string(&ack).unwrap()
         );
         assert!(contract_file.accepted_ack(&output).unwrap());
+        assert!(!contract_file.accepted_ack("ordinary viewer log").unwrap());
+        let invalid_first = format!("{VIEWER_LAUNCH_ACK_PREFIX}not-json\n{output}");
+        assert!(contract_file.accepted_ack(&invalid_first).unwrap_err().contains("parse Viewer launch ACK"));
 
         let mismatched = output.replace(contract_file.sha256(), &"c".repeat(64));
         assert!(

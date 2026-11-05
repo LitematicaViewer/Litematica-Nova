@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
 import { useI18n } from "../../i18n";
 import { displayPathText } from "../../../src/business/facade";
@@ -14,6 +15,9 @@ import {
   downloadWikiBlockIcons,
   downloadWikiEnumCatalog,
   importClientGameData,
+  gameDataMods,
+  invalidateGameDataContext,
+  type ModResourceSnapshot,
   restoreDefaultGameDataResource,
   importLanguageResource,
   initI18n,
@@ -276,6 +280,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
   const [itemIconDownloadBusy, setItemIconDownloadBusy] = useState(false);
   const [enumCatalogDownloadBusy, setEnumCatalogDownloadBusy] = useState(false);
   const [gameDataBusy, setGameDataBusy] = useState(false);
+  const [modResources, setModResources] = useState<ModResourceSnapshot | null>(null);
   const [gameAssetsDir, setGameAssetsDir] = useState("");
   const [languageBranches, setLanguageBranches] = useState<string[]>([]);
   const [remoteLanguages, setRemoteLanguages] = useState<string[]>([]);
@@ -331,6 +336,14 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     });
     return () => { void pending.then(unlisten => unlisten()).catch(() => undefined); };
   }, [refreshGameResources, reportStatus]);
+
+  useEffect(() => {
+    if (route !== "game_data") return;
+    let current = true;
+    void gameDataMods("list").then(value => { if (current) setModResources(value); })
+      .catch(error => { if (current) reportStatus(message("library.modActionFailed"), String(error)); });
+    return () => { current = false; };
+  }, [route, resourceSnapshot, reportStatus]);
 
   // Icon download progress: without these the UI looks frozen while working.
   useEffect(() => {
@@ -544,6 +557,22 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
       reportStatus(message("library.gameDataImportFailed"), String(error));
     } finally { setGameDataBusy(false); }
   };
+  const updateMod = async (action: "import" | "snapshot" | "enable" | "remove", options: {path?: string; id?: string; enabled?: boolean} = {}) => {
+    if (action === "import" || action === "snapshot") {
+      const selected = await openDialog({ filters: [{name: t(action === "import" ? "library.modJarFilter" : "library.modSnapshotFilter"), extensions: [action === "import" ? "jar" : "json"]}] });
+      if (typeof selected !== "string") return;
+      options = {...options, path: selected};
+    }
+    setGameDataBusy(true);
+    try {
+      setModResources(await gameDataMods(action, options));
+      invalidateGameDataContext();
+      await refreshGameResources(true);
+      await reloadRuntimeResources();
+      reportStatus(message("library.modUpdated"));
+    } catch (error) { reportStatus(message("library.modActionFailed"), String(error)); }
+    finally { setGameDataBusy(false); }
+  };
   const restoreGameData = async () => {
     setGameDataBusy(true);
     try { await applyResourceSnapshot(restoreDefaultGameDataResource(), message("library.gameDataDefaultRestored")); }
@@ -551,8 +580,10 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
     finally { setGameDataBusy(false); }
   };
   const chooseGameAssets = async () => {
-    const selected = await openDialog({ directory: true });
-    if (typeof selected === "string") setGameAssetsDir(selected);
+    try {
+      const selected = await openDialog({ directory: true });
+      if (typeof selected === "string") setGameAssetsDir(selected);
+    } catch (error) { reportStatus(message("library.resourceApplyFailed"), String(error)); }
   };
 
   const loadLanguageCatalog = useCallback(
@@ -650,15 +681,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
               { label: t("library.materialListSlot"), value: "material_list" },
             ]}
           />
-          {/* A disabled field that only states the source; it has nothing to choose. */}
-          <Dropdown
-            className="asset-manager-select"
-            ariaLabel={t("library.sourceHintOption")}
-            value=""
-            disabled
-            onChange={() => {}}
-            options={[{ label: blockIconSourceHint(selectedSource, effectiveBlockIconSlot), value: "" }]}
-          />
+          <span className="asset-manager-source-note">{blockIconSourceHint(selectedSource, effectiveBlockIconSlot)}</span>
         </>
       );
     }
@@ -688,12 +711,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
         </>
       );
     }
-    return (
-      <>
-        <Dropdown className="asset-manager-select" ariaLabel={t("library.option1")} value="" disabled onChange={() => {}} options={[{ label: t("library.option1"), value: "" }]} />
-        <Dropdown className="asset-manager-select" ariaLabel={t("library.option2")} value="" disabled onChange={() => {}} options={[{ label: t("library.option2"), value: "" }]} />
-      </>
-    );
+    return null;
   };
 
   // ── Line.5 table ──────────────────────────────────────────────────────────
@@ -787,8 +805,10 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
 
   const handleOpenRoot = async () => {
     if (!resourceSnapshot) return;
-    await openWorkspacePath(resourceSnapshot.config_dir);
-    reportStatus(message("library.rootOpened", { path: displayFilePath(resourceSnapshot.config_dir) }));
+    try {
+      await openWorkspacePath(resourceSnapshot.config_dir);
+      reportStatus(message("library.rootOpened", { path: displayFilePath(resourceSnapshot.config_dir) }));
+    } catch (error) { reportStatus(message("library.resourceApplyFailed"), String(error)); }
   };
 
   const fetchDisabled =
@@ -804,7 +824,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
         <h3 className="asset-manager-title">{t("library.assetManagerTitle")}</h3>
         {onClose ? (
           <Button className="subwindow-close-button" type="button" aria-label={t("library.closeWindow")} onClick={onClose}>
-            ×
+            <X size={18} aria-hidden="true" />
           </Button>
         ) : null}
       </div>
@@ -818,6 +838,8 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                 <Button
                   key={item.key}
                   className={`asset-manager-nav-item${active ? " active" : ""}`}
+                  variant="ghost"
+                  themeSlot="list-row"
                   type="button"
                   aria-pressed={active}
                   onClick={() => setRoute(item.key)}
@@ -845,12 +867,35 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                 </div>
                 <div className="asset-manager-actions">
                   <Button type="button" disabled={busy} onClick={() => void importGameData()}>{t("library.gameDataImportJar")}</Button>
+                  <Button type="button" disabled={busy} onClick={() => void updateMod("import")}>{t("library.modImportJar")}</Button>
+                  <Button type="button" disabled={busy || !modResources?.mods.some(entry => entry.enabled)} onClick={() => void updateMod("snapshot")}>{t("library.modImportSnapshot")}</Button>
                   <Button type="button" disabled={busy || !!(resourceSnapshot?.active_game_data.builtin && resourceSnapshot.active_game_data.version)} onClick={() => void restoreGameData()}>{t("library.gameDataRestoreDefault")}</Button>
                   <Button type="button" disabled={busy} onClick={() => void chooseGameAssets()}>{t("library.gameDataAssets")}</Button>
                 </div>
                 {gameAssetsDir ? <div className="asset-manager-form-row">
                   <span className="game-resource-path">{displayFilePath(gameAssetsDir)}</span>
                   <Button type="button" disabled={busy} onClick={() => setGameAssetsDir("")}>{t("library.gameDataAssetsAutomatic")}</Button>
+                </div> : null}
+                <p className="muted">{t("library.modSnapshotHint")}</p>
+                {modResources?.mods.length ? <div className="asset-manager-mods">
+                  {modResources.mods.map(entry => <section key={entry.id} className="asset-manager-mod-entry">
+                    <div className="asset-manager-form-row">
+                      <strong>{entry.mods.map(mod => `${mod.name} ${mod.version}`).join(" / ")}</strong>
+                      <span>{entry.mods.map(mod => mod.loader).join(" / ")}</span>
+                    </div>
+                    <p className="muted">{entry.mods.map(mod => `${mod.id} · Minecraft ${mod.minecraft.join(" || ") || "—"}`).join("; ")}</p>
+                    <p>{t(`library.modStatus_${entry.status}`)} · {t("library.modCounts", {resources: entry.resourceCount, blocks: entry.registeredBlocks.length})}</p>
+                    <div className="asset-manager-actions">
+                      <Button type="button" disabled={busy} onClick={() => void updateMod("enable", {id: entry.id, enabled: !entry.enabled})}>{t(entry.enabled ? "library.modDisable" : "library.modEnable")}</Button>
+                      <Button type="button" disabled={busy} onClick={() => void updateMod("remove", {id: entry.id})}>{t("library.modRemove")}</Button>
+                    </div>
+                    <details><summary>{t("library.modDependencies")}</summary>
+                      {entry.mods.map(mod => <p key={mod.id}>{mod.id}: {Object.entries(mod.dependencies).map(([id, range]) => `${id} ${range}`).join("; ") || "—"}</p>)}
+                    </details>
+                    {entry.unresolved.length > 0 ? <details><summary>{t("library.modUnresolved", {count: entry.unresolved.length})}</summary>
+                      <ul>{entry.unresolved.map(item => <li key={item.id}><code>{item.id}</code> — {t(`library.modReason_${item.reason}`)}</li>)}</ul>
+                    </details> : null}
+                  </section>)}
                 </div> : null}
               </div>
             ) : <div className="asset-manager-config">
@@ -873,7 +918,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                 />
               </div>
 
-              <div className="asset-manager-form-row asset-manager-form-row-suboptions">
+              {(route === "block_icon" || remoteLanguageEnabled) && <div className="asset-manager-form-row asset-manager-form-row-suboptions">
                 <span className="asset-manager-form-label">{t("library.subOptions")}</span>
                 <div className="asset-manager-inline-controls">
                   {renderSubOptionControls()}
@@ -882,7 +927,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
                       {t("library.refreshRemoteList")}</Button>
                   ) : null}
                 </div>
-              </div>
+              </div>}
             </div>}
 
             {route !== "game_data" ? <div className="asset-manager-actions">
@@ -937,7 +982,7 @@ export function AssetManagerContent({ theme, onClose }: { theme: string; onClose
           <footer className="asset-manager-footer">
             <span className="subwindow-status-text asset-manager-footer-status">{localizeMessage(statusText)}</span>
             <div className="asset-manager-footer-actions">
-              <Button type="button" onClick={() => void refreshGameResources().catch(() => undefined)} >
+              <Button type="button" onClick={() => void refreshGameResources().catch(error => reportStatus(message("library.resourcesLoadFailed"), String(error)))} >
                 {t("library.refresh")}</Button>
               <Button type="button" onClick={() => void handleHealth()}>
                 {t("library.healthCheck")}</Button>

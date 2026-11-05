@@ -20,6 +20,9 @@
 @layer tokens {
 
 :root {
+    --inventory-slot-fill: linear-gradient(var(--card), var(--accent));
+    --inventory-slot-radius: 3px;
+    --inventory-slot-shadow: inset 0 1px color-mix(in srgb, white 55%, transparent);
     color-scheme: light;
     --background: #cce6ff;
     --foreground: #000000;
@@ -52,7 +55,7 @@
     --nova-selected-foreground: #000000;
 
     --ln-body-font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
-    --ln-body-font-size: 11px;
+    --ln-body-font-size: 14px;
     --nova-text-xs: .75rem;
     --nova-text-sm: .875rem;
     --nova-text-base: 1rem;
@@ -63,7 +66,7 @@
 
     --ln-file-icon-size: 32px;
     --ln-check-label-gap: 6px;
-    --ln-check-label-min-height: 24px;
+    --ln-check-label-min-height: 28px;
     --ln-card-border-width: 2px;
     --ln-card-border-color-active: var(--primary);
     --ln-card-background-color-active: var(--option-active-background);
@@ -81,16 +84,16 @@
     --ln-scroll-shadow: none;
 
     /* Theme-private dimensions; consumed by `widgets.css` only. */
-    --ln-aero7-button-height: 30px;
+    --ln-aero7-button-height: 32px;
     --ln-aero7-button-padding-x: 12px;
     --ln-aero7-button-border: 4px;
     --ln-aero7-nav-height: 40px;
     --ln-aero7-nav-width: 160px;
     --ln-aero7-nav-width-collapsed: 60px;
-    --ln-aero7-input-height: 26px;
+    --ln-aero7-input-height: 32px;
     --ln-aero7-input-border: #808080;
     --ln-aero7-input-border-hover: color-mix(in srgb, var(--foreground) 55%, var(--border));
-    --ln-aero7-input-background: #00000080;
+    --ln-aero7-input-background: #ffffffcc;
     --ln-aero7-range-height: 19px;
     --ln-aero7-range-track: var(--muted-foreground);
     --ln-aero7-window-close-width: 66px;
@@ -138,7 +141,7 @@
     --ln-card-border-color-active: var(--primary);
     --ln-card-background-color-active: var(--option-active-background);
     --ln-table-row-selected-background: var(--option-active-background);
-    --ln-aero7-input-background: #ffffff80;
+    --ln-aero7-input-background: #00000080;
     --ln-scroll-track: #2b2b2b;
     --ln-scroll-track-hover: #3a3a3a;
     --ln-scroll-thumb: #767676;

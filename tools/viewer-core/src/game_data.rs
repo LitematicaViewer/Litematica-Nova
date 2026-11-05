@@ -6,6 +6,18 @@ use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, BTreeSet}, fs::{self, File}, io::{BufRead, BufReader, Read, Write}, path::{Component, Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
 
+#[path = "game_data_mods.rs"]
+pub mod mod_registry;
+#[path = "game_data_resources.rs"]
+mod resources;
+#[cfg(test)]
+#[path = "game_data_jar_tests.rs"]
+pub(crate) mod jar_resource_tests;
+#[path = "compact_oracle.rs"]
+pub mod compact_oracle;
+#[path = "version_adapter_store.rs"]
+mod version_adapter_store;
+
 const SCHEMA: u32 = 1;
 const MANIFEST: &str = "manifest.json";
 const RESOURCE_JAR: &str = "resources.jar";
@@ -141,7 +153,7 @@ fn package_context(root: &Path) -> Result<GameDataContext> {
     // Stored metadata is relocatable, including a default copied into an app.
     context.root = root.canonicalize().context("game-data package directory is missing")?;
     context.resource_jar = context.root.join(RESOURCE_JAR);
-    ensure!(context.resource_jar.is_file() && context.root.join("index.json").is_file(), "游戏数据包不完整：缺少资源或索引");
+    ensure!((context.resource_jar.is_file() || context.root.join("assets").is_dir() || context.root.join("data").is_dir()) && context.root.join("index.json").is_file(), "游戏数据包不完整：缺少资源或索引");
     Ok(context)
 }
 
@@ -243,20 +255,30 @@ pub fn context_metadata(context: &GameDataContext) -> Result<serde_json::Value> 
 pub fn read_resource(relative: &str) -> Result<Option<Vec<u8>>> { read_resource_from(&active_context()?, relative) }
 
 pub fn read_resource_from(context: &GameDataContext, relative: &str) -> Result<Option<Vec<u8>>> {
-    let relative = normalized(relative)?;
-    ensure!(resource_path(&relative) || relative.starts_with("derived/"), "not a resource/data package path");
-    let path = context.root.join(relative);
-    if !path.is_file() { return Ok(None); }
-    ensure!(path.canonicalize()?.starts_with(context.root.canonicalize()?), "game-resource symlink leaves its package");
-    Ok(Some(fs::read(path)?))
+    if version_adapter_store::virtual_oracle(relative) {
+        let path = context.root.join(relative);
+        if let Some(bytes) = read_shared_oracle_file(&path)? { return Ok(Some(bytes)); }
+        if compact_oracle::available_name(&path) && path.with_extension("novatab").try_exists()? {
+            ensure!(path.with_extension("novatab").canonicalize()?.starts_with(context.root.canonicalize()?), "compact oracle leaves its package");
+            let table = compact_oracle::open(&path)?.context("compact oracle disappeared")?;
+            let mut data = Vec::with_capacity(table.logical_len() as usize);
+            table.into_reader().read_to_end(&mut data)?;
+            return Ok(Some(data));
+        }
+    }
+    resources::read(context, relative)
 }
+
+// The protected terrain catalog asks for an individual artifact's length before
+// opening it. Its regular-file path remains in use for loose/legacy exports.
+pub fn shared_oracle_file_len(path: &Path) -> Result<Option<u64>> { version_adapter_store::referenced_len(path) }
+pub fn read_shared_oracle_file(path: &Path) -> Result<Option<Vec<u8>>> { version_adapter_store::referenced_bytes(path, None) }
+
 
 pub fn list_resources(prefix: &str) -> Result<Vec<String>> { list_resources_from(&active_context()?, prefix) }
 
 pub fn list_resources_from(context: &GameDataContext, prefix: &str) -> Result<Vec<String>> {
-    let prefix = if prefix.is_empty() { String::new() } else { normalized(prefix.trim_end_matches('/'))? };
-    let index: BTreeMap<String, ResourceRecord> = read_json(&context.root.join("index.json"))?;
-    Ok(index.keys().filter(|path| prefix.is_empty() || *path == &prefix || path.starts_with(&format!("{prefix}/"))).cloned().collect())
+    resources::list(context, prefix)
 }
 
 pub fn list_contexts(store: &Path, default: &Path) -> Result<GameDataList> {
@@ -289,11 +311,14 @@ pub fn select_context(store: &Path, default: &Path, id: &str) -> Result<GameData
     Ok(context)
 }
 
-fn record_file(root: &Path, relative: &str, mut input: impl Read, index: &mut BTreeMap<String, ResourceRecord>) -> Result<()> {
+fn record_file(root: &Path, relative: &str, input: impl Read, index: &mut BTreeMap<String, ResourceRecord>) -> Result<()> {
     let relative = normalized(relative)?;
     let destination = root.join(&relative);
     fs::create_dir_all(destination.parent().context("resource destination parent")?)?;
-    let mut file = File::create(destination)?;
+    record_to(&relative, input, File::create(destination)?, index)
+}
+
+fn record_to(relative: &str, mut input: impl Read, mut output: impl Write, index: &mut BTreeMap<String, ResourceRecord>) -> Result<()> {
     let mut digest = Sha256::new();
     let mut bytes = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
@@ -303,9 +328,9 @@ fn record_file(root: &Path, relative: &str, mut input: impl Read, index: &mut BT
         bytes += count as u64;
         ensure!(bytes <= 1024 * 1024 * 1024, "individual resource exceeds the importer memory/storage boundary");
         digest.update(&buffer[..count]);
-        file.write_all(&buffer[..count])?;
+        output.write_all(&buffer[..count])?;
     }
-    index.insert(relative, ResourceRecord { bytes, sha256: format!("{:x}", digest.finalize()) });
+    index.insert(relative.to_owned(), ResourceRecord { bytes, sha256: format!("{:x}", digest.finalize()) });
     Ok(())
 }
 
@@ -324,7 +349,7 @@ fn language_values(bytes: &[u8], legacy: bool) -> Result<BTreeMap<String, String
     Ok(values)
 }
 
-fn derive_languages(root: &Path, index: &mut BTreeMap<String, ResourceRecord>) -> Result<()> {
+fn derive_languages(root: &Path, index: &mut BTreeMap<String, ResourceRecord>, jar: &mut zip::ZipArchive<BufReader<File>>) -> Result<()> {
     let mut languages: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut sources = index.keys().filter(|path| path.starts_with("assets/") && path.contains("/lang/") && (path.ends_with(".json") || path.ends_with(".lang"))).cloned().collect::<Vec<_>>();
     sources.sort_by_key(|path| (path.ends_with(".json"), path.clone()));
@@ -336,7 +361,7 @@ fn derive_languages(root: &Path, index: &mut BTreeMap<String, ResourceRecord>) -
         let primary = parts.next().unwrap_or_default();
         if !(2..=4).contains(&primary.len()) || !primary.bytes().all(|c| c.is_ascii_alphabetic())
             || !parts.all(|part| (2..=8).contains(&part.len()) && part.bytes().all(|c| c.is_ascii_alphanumeric())) { continue; }
-        let values = language_values(&fs::read(root.join(&relative))?, relative.ends_with(".lang"))
+        let values = language_values(&read_build_entry(jar, &relative)?, relative.ends_with(".lang"))
             .with_context(|| format!("读取游戏语言：{relative}"))?;
         if values.is_empty() { continue; }
         languages.entry(language).or_default().extend(values);
@@ -347,7 +372,7 @@ fn derive_languages(root: &Path, index: &mut BTreeMap<String, ResourceRecord>) -
     Ok(())
 }
 
-fn copy_assets(root: &Path, assets: &Path, asset_index: Option<&str>, index: &mut BTreeMap<String, ResourceRecord>, missing: &mut Vec<String>) -> Result<()> {
+fn copy_assets(jar: &mut ResourceJarWriter, assets: &Path, asset_index: Option<&str>, index: &mut BTreeMap<String, ResourceRecord>, missing: &mut Vec<String>) -> Result<()> {
     let (assets, file) = if assets.is_file() {
         (assets.parent().and_then(Path::parent).context("asset index location")?.to_owned(), assets.to_owned())
     } else {
@@ -377,7 +402,24 @@ fn copy_assets(root: &Path, assets: &Path, asset_index: Option<&str>, index: &mu
         let mut buffer = [0_u8; 64 * 1024];
         loop { let count = file.read(&mut buffer)?; if count == 0 { break; } digest.update(&buffer[..count]); }
         ensure!(format!("{:x}", digest.finalize()).eq_ignore_ascii_case(hash), "配套资源内容与索引不符：{logical}");
-        record_file(root, &relative, File::open(object)?, index)?;
+        add_resource(jar, &relative, File::open(object)?, index)?;
+    }
+    Ok(())
+}
+
+// Physical package identity and original source identity are separate records.
+fn compact_logical_name(relative: &str) -> Option<String> {
+    let name = relative.strip_prefix("derived/oracle/")?.strip_suffix(".novatab")?;
+    let path = format!("derived/oracle/{name}.jsonl");
+    (!name.contains('/') && compact_oracle::available_name(Path::new(&path))).then_some(path)
+}
+
+fn copy_adapter_file(root: &Path, relative: &str, source: &Path, index: &mut BTreeMap<String, ResourceRecord>) -> Result<()> {
+    ensure!(!index.contains_key(relative), "duplicate physical/logical adapter file: {relative}");
+    record_file(root, relative, File::open(source)?, index)?;
+    if let Some(logical) = compact_logical_name(relative) {
+        let table = compact_oracle::open(&root.join(&logical))?.context("missing compact oracle")?;
+        ensure!(index.insert(logical, table.verified_record()?).is_none(), "both loose and compact oracle are present");
     }
     Ok(())
 }
@@ -392,7 +434,7 @@ fn copy_adapters(root: &Path, adapter: &Path, version: &str, index: &mut BTreeMa
             if kind.is_dir() { visit(base, &entry.path(), root, index)?; }
             else if kind.is_file() {
                 let name = entry.path().strip_prefix(base)?.to_string_lossy().replace('\\', "/");
-                record_file(root, &format!("derived/{name}"), File::open(entry.path())?, index)?;
+                copy_adapter_file(root, &format!("derived/{name}"), &entry.path(), index)?;
             }
         }
         Ok(())
@@ -401,6 +443,11 @@ fn copy_adapters(root: &Path, adapter: &Path, version: &str, index: &mut BTreeMa
     validate_adapter(root, "derived", version, index, false)?;
     let versions = root.join("derived/version-adapters");
     if versions.is_dir() {
+        if version_adapter_store::Store::present(&versions) {
+            ensure!(fs::read_dir(&versions)?.all(|entry| entry.is_ok_and(|e| matches!(e.file_name().to_str(), Some("shared.zip" | "index.json")))),
+                "canonical version adapter store must not include legacy copies");
+            return version_adapter_store::Store::open(&versions)?.check_layout();
+        }
         for entry in fs::read_dir(versions)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -464,7 +511,7 @@ fn validate_adapter(root: &Path, prefix: &str, version: &str, index: &BTreeMap<S
         let start = format!("{prefix}/");
         for (path, record) in index.range(start.clone()..) {
             let Some(relative) = path.strip_prefix(&start) else { break; };
-            if relative == "adapter.json" { continue; }
+            if relative == "adapter.json" || compact_logical_name(path).is_some() { continue; }
             let expected = files.get(relative).with_context(|| format!("version adapter has an unrecorded file: {version}/{relative}"))?;
             ensure!(expected["bytes"].as_u64() == Some(record.bytes) && expected["sha256"].as_str() == Some(record.sha256.as_str()), "版本适配数据内容身份不匹配：{version}/{relative}");
             digest.update(format!("{relative}\0{}\0{}\n", record.sha256, record.bytes));
@@ -508,7 +555,11 @@ fn copy_derived(source: &Path, destination: &Path, relative: &str, index: &mut B
             copy_derived(source, destination, &format!("{relative}/{}", entry.file_name().to_string_lossy()), index)?;
         }
     } else if metadata.is_file() {
-        record_file(destination, relative, File::open(path)?, index)?;
+        // An upgrade preserves user-modified loose exports. Reusing the default adapter
+        // must copy its canonical compact table, not treat the stale loose file as a second input.
+        if relative.starts_with("derived/oracle/") && compact_oracle::available_name(&path)
+            && path.with_extension("novatab").try_exists()? { return Ok(()); }
+        copy_adapter_file(destination, relative, &path, index)?;
     }
     Ok(())
 }
@@ -519,11 +570,31 @@ fn reuse_version_adapters(root: &Path, default: &Path, version: &str, index: &mu
     // This contains real per-version tables, not default-version resources.
     // Consumers must still select the requested registry exactly.
     ensure!(valid_id(version), "invalid game version adapter selector");
-    let exact = default.join("derived/version-adapters").join(version);
-    let archive = default.join("derived/version-adapters").join(format!("{version}.zip"));
-    if archive.is_file() {
+    let versions = default.join("derived/version-adapters");
+    let exact = versions.join(version);
+    let archive = versions.join(format!("{version}.zip"));
+    // Do not expand even the selected version's oracle into the user's store.
+    let mut shared = version_adapter_store::Store::present(&versions)
+        .then(|| version_adapter_store::Store::open(&versions)).transpose()?;
+    let selected = match &mut shared { Some(store) => store.select(version)?, None => None };
+    if let (Some(store), Some(selected)) = (&mut shared, selected) {
+        record_file(root, "derived/adapter.json", selected.identity.as_slice(), index)?;
+        for (name, record) in &selected.files {
+            let relative = format!("derived/{name}");
+            if version_adapter_store::virtual_oracle(&relative) {
+                index.insert(relative, record.clone());
+            } else {
+                // Keep small native provenance files (notably the manifest) addressable.
+                let data = store.read(&selected, name)?;
+                record_file(root, &relative, data.as_slice(), index)?;
+            }
+        }
+        validate_adapter(root, "derived", version, index, true)?;
+        record_file(root, version_adapter_store::REFERENCE,
+            serde_json::to_vec(&version_adapter_store::Reference::for_version(&selected))?.as_slice(), index)?;
+    } else if shared.is_none() && archive.is_file() {
         unpack_version_adapter(&archive, root, version, index)?;
-    } else if exact.is_dir() {
+    } else if shared.is_none() && exact.is_dir() {
         // Flatten only the selected exact adapter into this imported package.
         // Other versions' inventory/oracle facts never enter its active paths.
         copy_adapters(root, &exact, version, index)?;
@@ -539,10 +610,13 @@ fn reuse_version_adapters(root: &Path, default: &Path, version: &str, index: &mu
     Ok(())
 }
 
-fn oracle_rows(root: &Path, file: &str, mut visit: impl FnMut(serde_json::Value) -> Result<()>) -> Result<bool> {
+fn oracle_rows(root: &Path, file: &str, default: Option<&Path>, mut visit: impl FnMut(serde_json::Value) -> Result<()>) -> Result<bool> {
     let path = root.join("derived/oracle").join(file);
-    if !path.is_file() { return Ok(false); }
-    for (line, value) in BufReader::new(File::open(&path)?).lines().enumerate() {
+    let reader: Box<dyn Read> = if let Some(bytes) = version_adapter_store::referenced_bytes(&path, default)? {
+        Box::new(std::io::Cursor::new(bytes))
+    } else if let Some(table) = compact_oracle::open(&path)? { Box::new(table.into_reader()) }
+    else if path.is_file() { Box::new(File::open(&path)?) } else { return Ok(false); };
+    for (line, value) in BufReader::new(reader).lines().enumerate() {
         let value = value?;
         if value.trim().is_empty() { continue; }
         visit(serde_json::from_str(&value).with_context(|| format!("oracle {}:{}", path.display(), line + 1))?)?;
@@ -605,10 +679,10 @@ struct BlockProperties {
     default_properties: BTreeMap<String, String>,
 }
 
-fn derive_registry_data(root: &Path, version: &str, index: &mut BTreeMap<String, ResourceRecord>) -> Result<()> {
+fn derive_registry_data(root: &Path, version: &str, default: Option<&Path>, index: &mut BTreeMap<String, ResourceRecord>, jar: &mut zip::ZipArchive<BufReader<File>>) -> Result<()> {
     validate_semantic_versions(root, "derived", version, index)?;
     let mut blocks: BTreeMap<String, BlockProperties> = BTreeMap::new();
-    if oracle_rows(root, "block_states.jsonl", |row| {
+    if oracle_rows(root, "block_states.jsonl", default, |row| {
         let id = row["block_id"].as_str().context("oracle block state has no block_id")?;
         let block = blocks.entry(id.to_owned()).or_default();
         if let Some(properties) = row["properties"].as_object() {
@@ -624,16 +698,16 @@ fn derive_registry_data(root: &Path, version: &str, index: &mut BTreeMap<String,
         record_file(root, "derived/blockstates.json", serde_json::to_vec(&serde_json::json!({"version_id":version,"blocks":blocks}))?.as_slice(), index)?;
     }
     let mut items = BTreeSet::new();
-    if oracle_rows(root, "builtin_registries.jsonl", |row| {
+    if oracle_rows(root, "builtin_registries.jsonl", default, |row| {
         if row["registry_id"].as_str() == Some("minecraft:item") { items.insert(row["entry_id"].as_str().context("oracle item has no entry_id")?.to_owned()); }
         Ok(())
     })? { record_file(root, "derived/enumerator/DV_Items.json", serde_json::to_vec(&items)?.as_slice(), index)?; }
     let mut entities = BTreeSet::new();
-    if oracle_rows(root, "entity_types.jsonl", |row| {
+    if oracle_rows(root, "entity_types.jsonl", default, |row| {
         entities.insert(row["type_id"].as_str().context("oracle entity has no type_id")?.to_owned()); Ok(())
     })? { record_file(root, "derived/enumerator/DV_Entities.json", serde_json::to_vec(&entities)?.as_slice(), index)?; }
     let mut enchantments = BTreeSet::new();
-    if oracle_rows(root, "data_registries.jsonl", |row| {
+    if oracle_rows(root, "data_registries.jsonl", default, |row| {
         if row["registry_id"].as_str() == Some("minecraft:enchantment") { enchantments.insert(row["entry_id"].as_str().context("oracle enchantment has no entry_id")?.to_owned()); }
         Ok(())
     })? { record_file(root, "derived/enumerator/DV_Enchantments.json", serde_json::to_vec(&enchantments)?.as_slice(), index)?; }
@@ -643,7 +717,7 @@ fn derive_registry_data(root: &Path, version: &str, index: &mut BTreeMap<String,
         for path in index.keys().filter(|path| path.starts_with("data/") && path.ends_with(".json")) {
             let Some((namespace, entry)) = path.strip_prefix("data/").and_then(|path| path.split_once('/')) else { continue; };
             let Some(entry) = entry.strip_prefix("enchantment/").and_then(|path| path.strip_suffix(".json")) else { continue; };
-            let definition: serde_json::Value = read_json(&root.join(path))?;
+            let definition: serde_json::Value = serde_json::from_slice(&read_build_entry(jar, path)?)?;
             ensure!(definition.is_object(), "enchantment registry definition is invalid: {path}");
             enchantments.insert(format!("{namespace}:{entry}"));
         }
@@ -653,15 +727,25 @@ fn derive_registry_data(root: &Path, version: &str, index: &mut BTreeMap<String,
     Ok(())
 }
 
-fn make_resource_jar(root: &Path, index: &BTreeMap<String, ResourceRecord>) -> Result<()> {
-    let mut archive = zip::ZipWriter::new(File::create(root.join(RESOURCE_JAR))?);
-    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    for relative in index.keys().filter(|path| resource_path(path)) {
-        archive.start_file(relative, options)?;
-        std::io::copy(&mut File::open(root.join(relative))?, &mut archive)?;
-    }
-    archive.finish()?;
-    Ok(())
+type ResourceJarWriter = zip::ZipWriter<std::io::BufWriter<File>>;
+
+fn new_resource_jar(root: &Path) -> Result<ResourceJarWriter> {
+    Ok(zip::ZipWriter::new(std::io::BufWriter::new(File::create(root.join(RESOURCE_JAR))?)))
+}
+
+fn add_resource(jar: &mut ResourceJarWriter, path: &str, input: impl Read, index: &mut BTreeMap<String, ResourceRecord>) -> Result<()> {
+    jar.start_file(path, zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated))?;
+    record_to(path, input, jar, index)
+}
+
+fn open_build_jar(root: &Path) -> Result<zip::ZipArchive<BufReader<File>>> {
+    Ok(zip::ZipArchive::new(BufReader::new(File::open(root.join(RESOURCE_JAR))?))?)
+}
+
+fn read_build_entry(jar: &mut zip::ZipArchive<BufReader<File>>, path: &str) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    jar.by_name(path).with_context(|| format!("missing package build resource: {path}"))?.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn create_package(jar: &Path, assets: Option<&Path>, version: Option<&str>, adapter: Option<&Path>, default: Option<&Path>, root: &Path, source: &str) -> Result<GameDataContext> {
@@ -678,13 +762,14 @@ fn create_package(jar: &Path, assets: Option<&Path>, version: Option<&str>, adap
     let game_version = detected.or(version).context("JAR 未提供可识别版本，请提供同目录版本 JSON 或明确 --game-version")?.to_owned();
     ensure!(!game_version.is_empty() && game_version.len() <= 100, "invalid game version");
     let mut index = BTreeMap::new();
+    let mut output = new_resource_jar(root)?;
     for position in 0..archive.len() {
         let mut entry = archive.by_index(position)?;
         if entry.is_dir() { continue; }
         let relative = normalized(entry.name())?;
         if !resource_path(&relative) { continue; }
         ensure!(!index.contains_key(&relative), "JAR 包含重复资源路径：{relative}");
-        record_file(root, &relative, &mut entry, &mut index)?;
+        add_resource(&mut output, &relative, &mut entry, &mut index)?;
     }
     ensure!(index.keys().any(|path| path.starts_with("assets/") || path.starts_with("data/")), "JAR 未包含可导入的 assets 或 data；不能把程序类当作游戏数据");
     let mut missing = Vec::new();
@@ -695,11 +780,13 @@ fn create_package(jar: &Path, assets: Option<&Path>, version: Option<&str>, adap
         asset_id.and_then(|id| jar.ancestors().skip(1).take(3).map(|parent| parent.join("assets"))
             .find(|directory| directory.join("indexes").join(format!("{id}.json")).is_file()))
     } else { None };
-    if let Some(assets) = assets.or(nearby_assets.as_deref()) { copy_assets(root, assets, asset_id, &mut index, &mut missing)?; }
+    if let Some(assets) = assets.or(nearby_assets.as_deref()) { copy_assets(&mut output, assets, asset_id, &mut index, &mut missing)?; }
+    output.finish()?.flush()?;
+    let mut resources = open_build_jar(root)?;
     if let Some(adapter) = adapter { copy_adapters(root, adapter, &game_version, &mut index)?; }
     else if let Some(default) = default { reuse_version_adapters(root, default, &game_version, &mut index)?; }
-    derive_registry_data(root, &game_version, &mut index)?;
-    derive_languages(root, &mut index)?;
+    derive_registry_data(root, &game_version, default, &mut index, &mut resources)?;
+    derive_languages(root, &mut index, &mut resources)?;
     if !index.keys().any(|path| path.starts_with("assets/") && path.contains("/textures/")) { missing.push("贴图资源".into()); }
     if !index.keys().any(|path| path.starts_with("data/") && (path.contains("/recipe/") || path.contains("/recipes/"))) { missing.push("配方数据".into()); }
     for language in ["zh_cn", "en_us"] { if !index.contains_key(&format!("derived/lang/{language}.json")) { missing.push(format!("游戏语言：{language}")); } }
@@ -726,7 +813,6 @@ fn create_package(jar: &Path, assets: Option<&Path>, version: Option<&str>, adap
     let mut buffer = [0_u8; 64 * 1024];
     loop { let count = source_file.read(&mut buffer)?; if count == 0 { break; } source_hash.update(&buffer[..count]); }
     let counts = ["assets", "data", "derived"].into_iter().map(|prefix| (prefix.to_owned(), index.keys().filter(|path| path.starts_with(&format!("{prefix}/"))).count())).collect();
-    make_resource_jar(root, &index)?;
     atomic_json(&root.join("index.json"), &index)?;
     atomic_json(&root.join(MANIFEST), &PackageManifest { context, imported_ms: (stamp() / 1_000_000).min(u64::MAX as u128) as u64,
         source_jar_sha256: format!("{:x}", source_hash.finalize()), data_version: version_json["world_version"].as_i64(), resource_counts: counts, missing })?;
@@ -764,7 +850,9 @@ pub fn build_default(jar: &Path, assets: Option<&Path>, game_version: &str, adap
     let parent = output.parent().context("default package output has no parent")?;
     let temporary = staging(parent)?;
     let generated = create_package(jar, assets, Some(game_version), adapter, None, &temporary.0, "bundled-default")?;
-    if output.exists() && package_context(&output).is_ok_and(|context| context.content_id == generated.content_id) { return package_context(&output); }
+    // A dual-layout package has the same logical identity; replace its old physical layout too.
+    if output.exists() && !["assets", "data", "version.json", "pack.png", "pack.mcmeta"].iter().any(|p| output.join(p).exists())
+        && package_context(&output).is_ok_and(|context| context.content_id == generated.content_id) { return package_context(&output); }
     let retired = parent.join(format!(".game-data-replace-{}-{}", std::process::id(), stamp()));
     let existed = output.exists();
     if existed { fs::rename(&output, &retired)?; }
@@ -797,6 +885,12 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         "select" => serde_json::to_value(select_context(&store, &default, get("--id")?)?)?,
         "default" => serde_json::to_value(select_context(&store, &default, "default")?)?,
         "import" => serde_json::to_value(import_jar(Path::new(get("--jar")?), values.get("--assets-dir").map(Path::new), values.get("--game-version").copied(), values.get("--adapter-dir").map(Path::new), &store, &default)?)?,
+        "verify-adapter-store" => version_adapter_store::verify(&default, Path::new(get("--originals")?))?,
+        "mods" => mod_registry::list(&store, &default)?,
+        "mod-import" => mod_registry::import_jar(Path::new(get("--jar")?), &store, &default)?,
+        "mod-snapshot" => mod_registry::import_snapshot(Path::new(get("--snapshot")?), &store, &default)?,
+        "mod-enable" => mod_registry::set_enabled(get("--id")?, get("--enabled")?.parse().context("enabled must be true or false")?, &store, &default)?,
+        "mod-remove" => mod_registry::remove(get("--id")?, &store, &default)?,
         "build-default" => serde_json::to_value(build_default(Path::new(get("--jar")?), values.get("--assets-dir").map(Path::new), values.get("--game-version").copied().unwrap_or("26.3"), values.get("--adapter-dir").map(Path::new), Path::new(get("--output")?))?)?,
         "language" => {
             let language = get("--language")?.to_ascii_lowercase().replace('-', "_");

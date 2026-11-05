@@ -4,7 +4,7 @@ use crate::platform::process_supervisor::{ChildLease, ExecutableRole, LaunchIden
 use crate::viewer_backend::ViewerBackendIdentity;
 use crate::viewer_launch_contract::ViewerLaunchContractFile;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -198,6 +198,7 @@ pub(crate) struct QuickPreviewHost {
     editor_submission: Arc<Mutex<()>>,
     editor_monitor: Arc<Mutex<Option<String>>>,
     editor_shutdown: Arc<AtomicBool>,
+    thumbnail_only: bool,
 }
 
 struct PendingQuickResource {
@@ -236,7 +237,8 @@ struct QuickSession {
     pending_intents: BTreeMap<u64, QuickPresentationIntent>,
     deferred_presentation: bool,
     pending_replacements: BTreeMap<u64, ViewerLaunchContractFile>,
-    capture_errors: BTreeMap<u64, String>,
+    capture_receipts: BTreeMap<u64, Option<Result<(), String>>>,
+    feedback_controls: BTreeSet<u64>,
     host_window: QuickPreviewHostWindow,
     launch_accepted: bool,
     gpu_context_only: bool,
@@ -249,10 +251,10 @@ struct QuickSession {
 
 impl QuickPreviewHost {
     pub(crate) fn thumbnail_session(&self) -> Self {
-        Self { session: Arc::new(Mutex::new(None)), pending_resource: Arc::new(Mutex::new(None)), editor_monitor: Arc::new(Mutex::new(None)), editor_shutdown: Arc::new(AtomicBool::new(false)), ..self.clone() }
+        Self { session: Arc::new(Mutex::new(None)), pending_resource: Arc::new(Mutex::new(None)), editor_monitor: Arc::new(Mutex::new(None)), editor_shutdown: Arc::new(AtomicBool::new(false)), thumbnail_only: true, ..self.clone() }
     }
     pub(crate) fn new(supervisor: Arc<ProcessSupervisor>, viewer_exe: PathBuf, data_root: PathBuf) -> Self {
-        Self { supervisor, viewer_exe, data_root, sequence: Arc::new(AtomicU64::new(1)), session: Arc::new(Mutex::new(None)), pending_resource: Arc::new(Mutex::new(None)), editor_operations: Arc::new(Mutex::new(None)), editor_submission: Arc::new(Mutex::new(())), editor_monitor: Arc::new(Mutex::new(None)), editor_shutdown: Arc::new(AtomicBool::new(false)) }
+        Self { supervisor, viewer_exe, data_root, sequence: Arc::new(AtomicU64::new(1)), session: Arc::new(Mutex::new(None)), pending_resource: Arc::new(Mutex::new(None)), editor_operations: Arc::new(Mutex::new(None)), editor_submission: Arc::new(Mutex::new(())), editor_monitor: Arc::new(Mutex::new(None)), editor_shutdown: Arc::new(AtomicBool::new(false)), thumbnail_only: false }
     }
 
     pub(crate) fn bind_editor_operations(&self, operations: super::operations::ApplicationOperations) -> Result<(), String> {
@@ -411,7 +413,7 @@ impl QuickPreviewHost {
             presentation: QuickPresentationIntent::default(), presentation_revision: 0, visible: false, error: None, preload: false, resource: None };
         *slot = Some(QuickSession { editor_scene_path: None, editor_handled_sequence: 0, editor_last_event: None, editor_failed_sequence: None, editor_sync_pending: false, editor: None, view, session_id: id.clone(), child, contract, backend, directory: session_directory.clone(), stdout, stderr,
             source_bytes: 0, source_modified: None, requested_preload: false, graphics_backend, game_data_id: game_data.map(|context| context.content_id), pending_click_epoch_ms: None, next_command: 1, next_status: 0, next_event: 1,
-            pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window, launch_accepted: false,
+            pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_receipts: BTreeMap::new(), feedback_controls: BTreeSet::new(), host_window, launch_accepted: false,
             gpu_context_only: true, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
             resource_report_path: session_directory.join("resource-report.json"), resource_decision_path: session_directory.join("resource-decision.json"), resource_decided: false });
         eprintln!("[NOVA_GPU_INITIALIZATION] stage=ordinary_startup_requested epoch_ms={epoch_ms} launch_dispatch_ms={:.3} session_id={id} asynchronous=true projection_reads=0 scene_mesh_builds=0", started.elapsed().as_secs_f64()*1000.0);
@@ -507,7 +509,7 @@ impl QuickPreviewHost {
                 session.editor_sync_pending = false;
                 session.pending_intents.clear();
                 session.deferred_presentation = false;
-                session.capture_errors.clear();
+                session.capture_receipts.clear();
                 session.gpu_context_only = false;
                 eprintln!("[NOVA_RENDER_PHASE] stage=fast_scene_replacement session_id={} preview_id={} existing_gpu_context=true gpu_ready_observed_epoch_ms={:?} source_bytes={} preload={} scene_work_started_before_click=false", session.session_id, session.view.preview_id, session.gpu_ready_observed_epoch_ms, session.source_bytes, input.preload);
                 return Ok(session.view.clone());
@@ -550,7 +552,7 @@ impl QuickPreviewHost {
             presentation: QuickPresentationIntent::default(), presentation_revision: 0, visible: false, error: None, preload: input.preload, resource: None };
         *slot = Some(QuickSession { editor_scene_path: input.composition_editor_path.clone(), editor_handled_sequence: editor.as_ref().and_then(|scene|scene.acknowledged_event_sequence).unwrap_or(0), editor_last_event: None, editor_failed_sequence: None, editor_sync_pending: false, editor, view: view.clone(), session_id: view.preview_id.clone(), child, contract, backend, directory: session_directory, stdout, stderr,
             source_bytes: meta.len(), source_modified: meta.modified().ok(), requested_preload: input.preload, graphics_backend: input.graphics_backend, game_data_id: Some(game_data.content_id), pending_click_epoch_ms: input.click_started_at_epoch_ms, next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(),
-            launch_accepted: false, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None, resource_report_path, resource_decision_path, resource_decided: false, capture_errors: BTreeMap::new(), host_window });
+            launch_accepted: false, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None, resource_report_path, resource_decision_path, resource_decided: false, capture_receipts: BTreeMap::new(), feedback_controls: BTreeSet::new(), host_window });
         Ok(view)
     }
 
@@ -653,6 +655,44 @@ impl QuickPreviewHost {
     }
 
     pub(crate) fn close(&self, id: &str) -> Result<(), String> {
+        if self.thumbnail_only {
+            let mut slot = self.session.lock().map_err(|_| "快速预览状态锁异常")?;
+            if let Some(session) = slot.as_mut().filter(|session| session.view.preview_id == id) {
+                // A capture task has no later interactive owner to reuse its GPU.
+                // A malformed receipt or failed command publication must not skip reaping it.
+                let refreshed = session.refresh(&self.supervisor);
+                let released = if matches!(self.supervisor.wait_for_exit(&session.child, Duration::ZERO), WaitOutcome::TimedOut) {
+                    ViewerSessionCommand::release(session.session_id.clone(), session.next_command)
+                        .and_then(|command| session.publish_command(&command))
+                } else { Ok(()) };
+                if !matches!(self.supervisor.wait_for_exit(&session.child, Duration::from_millis(300)), WaitOutcome::Exited(_) | WaitOutcome::Stale) {
+                    self.supervisor.terminate(&session.child, 0).map_err(|error| error.to_string())?;
+                    if matches!(self.supervisor.wait_for_exit(&session.child, Duration::from_secs(2)), WaitOutcome::TimedOut) {
+                        return Err("缩略图捕获进程尚未退出".into());
+                    }
+                }
+                session.view.state = "closed";
+                session.view.visible = false;
+                session.view.presentation = QuickPresentationIntent::default();
+                session.pending_intents.clear();
+                session.deferred_presentation = false;
+                session.pending_replacements.clear();
+                // Only task-owned readback PNGs, after the writer has exited. Logs,
+                // contracts and any shared source/cache artifacts are not removed.
+                for entry in fs::read_dir(&session.directory).map_err(|error| error.to_string())? {
+                    let entry = entry.map_err(|error| error.to_string())?;
+                    let name = entry.file_name();
+                    let capture = name.to_str().and_then(|name| name.strip_prefix("capture-")).and_then(|name| name.strip_suffix(".png"));
+                    if capture.is_some_and(|sequence| sequence.len() == 20 && sequence.bytes().all(|c| c.is_ascii_digit()))
+                        && entry.file_type().map_err(|error| error.to_string())?.is_file() {
+                        fs::remove_file(entry.path()).map_err(|error| error.to_string())?;
+                    }
+                }
+                refreshed?;
+                released?;
+            }
+            return Ok(());
+        }
         let _gate=self.editor_submission.lock().map_err(|_|"组合编辑提交锁异常")?;
         let flush_error=self.flush_editor_locked(true).err();
         if let Some(request) = self.pending_resource.lock().map_err(|_| "快速预览显存决策锁异常")?.as_mut().filter(|request| request.view.preview_id == id) {
@@ -751,6 +791,7 @@ impl QuickPreviewHost {
             if metadata.len() != session.source_bytes || metadata.modified().ok() != session.source_modified { return Err("投影已修改，请重新加载预览".into()); }
             let sequence = session.next_command;
             session.publish_command(&ViewerSessionCommand::capture_frame(session.session_id.clone(), sequence)?)?;
+            session.capture_receipts.insert(sequence, None);
             session.next_command += 1;
             (session.view.source_path.clone(), session.directory.join(format!("capture-{sequence:020}.png")), sequence)
         };
@@ -758,17 +799,16 @@ impl QuickPreviewHost {
             {
                 let mut slot = self.session.lock().map_err(|error| error.to_string())?;
                 let session = slot.as_mut().filter(|session| session.view.preview_id == id).ok_or("预览会话已改变，截图未保存")?;
-                session.refresh(&self.supervisor)?;
-                if let Some(error) = session.capture_errors.remove(&sequence) { return Err(error); }
-                if let Some(error) = &session.view.error { return Err(error.clone()); }
-                if matches!(session.view.state, "closed" | "failed") { return Err("预览已关闭，截图未保存".into()); }
-            }
-            if output.is_file() {
-                let slot = self.session.lock().map_err(|error| error.to_string())?;
-                let session = slot.as_ref().filter(|session| session.view.preview_id == id).ok_or("预览会话已改变")?;
-                let metadata = fs::metadata(&source).map_err(|error| error.to_string())?;
-                if metadata.len() != session.source_bytes || metadata.modified().ok() != session.source_modified { return Err("截图期间投影发生修改，未保存旧帧".into()); }
-                return Ok((source, output));
+                let result = session.refresh(&self.supervisor).and_then(|_| session.capture_delivered(sequence, &output));
+                match result {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        let metadata = fs::metadata(&source).map_err(|error| error.to_string())?;
+                        if metadata.len() != session.source_bytes || metadata.modified().ok() != session.source_modified { return Err("截图期间投影发生修改，未保存旧帧".into()); }
+                        return Ok((source, output));
+                    }
+                    Err(error) => { session.capture_receipts.remove(&sequence); return Err(error); }
+                }
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -797,6 +837,17 @@ impl QuickPreviewHost {
 }
 
 impl QuickSession {
+    fn capture_delivered(&mut self, sequence: u64, output: &Path) -> Result<bool, String> {
+        if let Some(error) = &self.view.error { return Err(error.clone()); }
+        if matches!(self.view.state, "closed" | "failed") { return Err("预览已关闭，截图未保存".into()); }
+        let receipt = self.capture_receipts.get_mut(&sequence).ok_or("截图请求已结束")?;
+        let Some(completed) = receipt.take() else { return Ok(false); };
+        self.capture_receipts.remove(&sequence);
+        completed?;
+        if !output.is_file() { return Err("快速预览已确认截图，但没有返回图像文件".into()); }
+        Ok(true)
+    }
+
     fn flush_editor_controls(&mut self) -> Result<(), String> {
         // A SetView before status-0/SceneReady would make that Ready no longer
         // the newest command and could strand a new preview in `starting`.
@@ -816,7 +867,7 @@ impl QuickSession {
         self.pending_intents.clear();
         self.deferred_presentation = false;
         self.editor_sync_pending = false;
-        self.capture_errors.clear();
+        self.capture_receipts.clear();
         self.view.state = "closed";
         self.view.visible = false;
         self.view.presentation = QuickPresentationIntent::default();
@@ -825,8 +876,11 @@ impl QuickSession {
         Ok(())
     }
 
-    fn publish_command(&self, command: &ViewerSessionCommand) -> Result<(), String> {
+    fn publish_command(&mut self, command: &ViewerSessionCommand) -> Result<(), String> {
         publish_command(&self.directory, command)?;
+        if command.kind == viewer_launch_contract::ViewerSessionCommandKind::SetView {
+            self.feedback_controls.insert(command.sequence);
+        }
         // Wake the original native message loop after the atomic command rename;
         // no GUI automation and no extra visibility or process control operation.
         #[cfg(windows)]
@@ -862,7 +916,20 @@ impl QuickSession {
         if self.launch_accepted {
             while self.next_status < self.next_command {
                 let path = self.directory.join(format!("status-{:020}.json", self.next_status));
-                if !path.is_file() { break; }
+                // A successful SetView produces control feedback (where requested) then
+                // acknowledges by unlinking command-N, with no status-N. On failure the
+                // Viewer publishes status-N *before* unlinking: observe unlink first,
+                // then check the status so a concurrent rejection cannot be lost.
+                let control_ack = self.feedback_controls.contains(&self.next_status)
+                    && !self.directory.join(format!("command-{:020}.json", self.next_status)).try_exists().map_err(|e| e.to_string())?;
+                if !path.try_exists().map_err(|e| e.to_string())? {
+                    if control_ack {
+                        self.feedback_controls.remove(&self.next_status);
+                        self.next_status += 1;
+                        continue;
+                    }
+                    break;
+                }
                 let status = ViewerSessionStatus::from_json_slice(&fs::read(&path).map_err(|error| error.to_string())?)?;
                 if status.session_id != self.session_id || status.pid != self.child.pid || status.sequence != self.next_status {
                     return Err("快速预览回执与当前进程不一致。".to_owned());
@@ -878,17 +945,35 @@ impl QuickSession {
                 if status.sequence == 0 && matches!(status.state, ViewerSessionState::Ready) {
                     self.gpu_ready_observed_epoch_ms = Some(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_err(|error| error.to_string())?.as_millis().min(u128::from(u64::MAX)) as u64);
                 }
-                if !matches!(&status.state, ViewerSessionState::Error { .. }) && status.sequence + 1 == self.next_command {
-                    if let Some(intent) = self.pending_intents.get(&status.sequence) { self.view.presentation = intent.clone(); }
+                // A capture or view-control command does not supersede the native
+                // placement. A newer presentation, scene or close clears its owner.
+                let placement = self.pending_intents.get(&status.sequence);
+                let current = match &status.state {
+                    ViewerSessionState::Attached { .. } | ViewerSessionState::Hidden
+                    | ViewerSessionState::Error { command_kind: viewer_launch_contract::ViewerSessionCommandKind::AttachEmbedded
+                        | viewer_launch_contract::ViewerSessionCommandKind::Hide, .. } => placement.is_some(),
+                    _ => status.sequence + 1 == self.next_command,
+                };
+                if matches!(&status.state, ViewerSessionState::Attached { .. } | ViewerSessionState::Hidden) {
+                    if let Some(intent) = placement { self.view.presentation = intent.clone(); }
                 }
-                if let ViewerSessionState::Error { command_kind: viewer_launch_contract::ViewerSessionCommandKind::CaptureFrame, message } = &status.state {
-                    self.capture_errors.insert(status.sequence, message.clone());
-                } else { self.view.apply_status(&status.state, status.sequence + 1 == self.next_command); }
+                if let Some(waiter) = self.capture_receipts.get_mut(&status.sequence) {
+                    // Another observer may drain and unlink this status before capture_frame polls.
+                    // Only the receipt for this registered command may release its readback.
+                    *waiter = Some(match &status.state {
+                        ViewerSessionState::Captured => Ok(()),
+                        ViewerSessionState::Error { command_kind: viewer_launch_contract::ViewerSessionCommandKind::CaptureFrame, message } => Err(message.clone()),
+                        _ => Err("快速预览的截图回执类型不匹配".into()),
+                    });
+                } else if !matches!(&status.state, ViewerSessionState::Error { command_kind: viewer_launch_contract::ViewerSessionCommandKind::CaptureFrame, .. }) {
+                    self.view.apply_status(&status.state, current);
+                }
                 if matches!(&status.state, ViewerSessionState::SceneReady { .. }
                     | ViewerSessionState::Error { command_kind: viewer_launch_contract::ViewerSessionCommandKind::ReplaceScene, .. }) {
                     self.pending_replacements.remove(&status.sequence);
                 }
                 self.pending_intents.remove(&self.next_status);
+                self.feedback_controls.remove(&self.next_status);
                 self.next_status += 1;
                 fs::remove_file(path).map_err(|error| error.to_string())?;
             }
@@ -1028,6 +1113,140 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn thumbnail_close_releases_only_task_child_and_reaps_even_after_bad_receipt() {
+        use crate::platform::process_supervisor::ExecutableAllowlist;
+        let command = std::env::var_os("COMSPEC").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\cmd.exe"));
+        let mut allowlist = ExecutableAllowlist::new();
+        allowlist.allow(ExecutableRole::NativeViewer, &command).unwrap();
+        let (supervisor, _) = ProcessSupervisor::new(allowlist).unwrap();
+        let supervisor = Arc::new(supervisor);
+        struct Directory(PathBuf);
+        impl Drop for Directory { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+        let directory = Directory(std::env::temp_dir().join(format!("nova-thumbnail-close-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos())));
+        fs::create_dir(&directory.0).unwrap();
+        let source = directory.0.join("source.litematic");
+        fs::write(&source, b"CLI-only fixture, no Viewer or GPU").unwrap();
+        let host = QuickPreviewHost::new(supervisor.clone(), command.clone(), directory.0.clone());
+        let install = |owner: &QuickPreviewHost, id: &str| {
+            let dir = directory.0.join(id); fs::create_dir(&dir).unwrap();
+            let mut spec = LaunchSpec::new(ExecutableRole::NativeViewer, LaunchIdentity { owner_epoch: supervisor.owner_epoch(), generation: 1, launch_token: LaunchToken::new(id).unwrap() });
+            spec.args = vec!["/d".into(), "/c".into(), "ping -n 20 127.0.0.1 > nul".into()];
+            let child = supervisor.spawn(spec).unwrap().child;
+            let window = QuickPreviewHostWindow { hwnd: "42".into(), process_id: std::process::id(), native_composition: None };
+            let backend = ViewerBackendIdentity::capture(&command).unwrap();
+            let launch = ViewerLaunchContract::new(id.into(), source.clone(), ViewerContent::default(), None, ViewerTask::QuickPreview(QuickPreviewTask { initial_visible: false, host: Some(window.clone()), ..Default::default() })).unwrap();
+            let contract = ViewerLaunchContractFile::create(dir.join("launch.json"), &launch, &backend).unwrap();
+            let mut current = view(QuickPresentationIntent::default()); current.preview_id = id.into(); current.source_path = source.clone();
+            *owner.session.lock().unwrap() = Some(QuickSession {
+                editor: None, editor_sync_pending: false, editor_scene_path: None, editor_handled_sequence: 0, editor_last_event: None, editor_failed_sequence: None,
+                view: current, session_id: id.into(), child: child.clone(), contract, backend, directory: dir.clone(), stdout: dir.join("stdout"), stderr: dir.join("stderr"),
+                source_bytes: 0, source_modified: None, requested_preload: false, graphics_backend: Default::default(), game_data_id: None, pending_click_epoch_ms: None,
+                next_command: 1, next_status: 1, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_receipts: BTreeMap::new(), feedback_controls: BTreeSet::new(), host_window: window,
+                launch_accepted: true, gpu_context_only: false, gpu_ready_observed_epoch_ms: Some(1), native_hwnd: None,
+                resource_report_path: dir.join("resource-report.json"), resource_decision_path: dir.join("resource-decision.json"), resource_decided: false,
+            });
+            (child, dir)
+        };
+        let (interactive, interactive_dir) = install(&host, "interactive");
+        for damaged in [false, true] {
+            let temporary = host.thumbnail_session();
+            assert!(!Arc::ptr_eq(&host.session, &temporary.session));
+            let id = if damaged { "thumbnail-bad-receipt" } else { "thumbnail-ready" };
+            let (child, dir) = install(&temporary, id);
+            let captured = dir.join("capture-00000000000000000001.png");
+            let preserved = dir.join("source-cache.png");
+            fs::write(&captured, b"task readback").unwrap(); fs::write(&preserved, b"not a capture").unwrap();
+            if damaged {
+                temporary.session.lock().unwrap().as_mut().unwrap().next_command = 2;
+                fs::write(dir.join("status-00000000000000000001.json"), b"invalid receipt").unwrap();
+            }
+            let result = temporary.close(id);
+            assert_eq!(result.is_err(), damaged);
+            assert!(matches!(supervisor.wait_for_exit(&child, Duration::ZERO), WaitOutcome::Exited(_) | WaitOutcome::Stale));
+            let sequence = if damaged { 2 } else { 1 };
+            let release = ViewerSessionCommand::from_json_slice(&fs::read(dir.join(format!("command-{sequence:020}.json"))).unwrap()).unwrap();
+            assert_eq!(release.kind, viewer_launch_contract::ViewerSessionCommandKind::Release);
+            assert!(!captured.exists()); assert_eq!(fs::read(preserved).unwrap(), b"not a capture");
+            temporary.close(id).unwrap(); // cancellation/completion teardown is idempotent
+            assert_eq!(supervisor.active_children(), vec![interactive.clone()]);
+            let slot = host.session.lock().unwrap(); let current = slot.as_ref().unwrap();
+            assert_eq!(current.view.preview_id, "interactive"); assert_eq!(current.view.state, "ready");
+            assert_eq!(current.view.presentation_revision, 7); assert_eq!(current.next_command, 1);
+            assert!(!interactive_dir.join("command-00000000000000000001.json").exists());
+        }
+        // A concurrent snapshot can drain status-N.json; preserve the verified result
+        // for its waiter. A PNG alone, another status kind or an exit is not success.
+        let mut slot = host.session.lock().unwrap();
+        let session = slot.as_mut().unwrap();
+        let attach = session.next_command;
+        session.view.presentation = QuickPresentationIntent { mode: QuickPresentationMode::Embedded, visible: true,
+            placement: Some(PresentationPlacement { x: 10, y: 20, width: 640, height: 480, dpi_scale: 1.0, focused: false }), presentation_epoch: None };
+        session.deferred_presentation = true;
+        session.refresh(&supervisor).unwrap();
+        let mut control_sequences = Vec::new();
+        for _ in 0..2 {
+            let sequence = session.next_command;
+            session.publish_command(&ViewerSessionCommand::set_view(session.session_id.clone(), sequence,
+                viewer_launch_contract::SceneViewControls { release_camera_input: true, ..Default::default() }).unwrap()).unwrap();
+            session.next_command += 1;
+            control_sequences.push(sequence);
+        }
+        let attached = ViewerSessionStatus::new(session.session_id.clone(), attach, interactive.pid, "42".into(),
+            ViewerSessionState::Attached { host_hwnd: "42".into(), width: 640, height: 480 }).unwrap();
+        fs::write(interactive_dir.join(format!("status-{attach:020}.json")), attached.to_json_bytes().unwrap()).unwrap();
+        session.refresh(&supervisor).unwrap();
+        assert!(session.view.visible, "subsequent SetView commands do not revoke the current Attach");
+        assert_eq!(session.next_status, control_sequences[0], "a pending control is not an ack");
+        for sequence in control_sequences {
+            fs::remove_file(interactive_dir.join(format!("command-{sequence:020}.json"))).unwrap();
+        }
+        let cases = [
+            (ViewerSessionState::Captured, true, None),
+            (ViewerSessionState::Captured, false, Some("快速预览已确认截图，但没有返回图像文件")),
+            (ViewerSessionState::Hidden, true, Some("快速预览的截图回执类型不匹配")),
+            (ViewerSessionState::Error { command_kind: viewer_launch_contract::ViewerSessionCommandKind::CaptureFrame, message: "fixture readback failure".into() }, true, Some("fixture readback failure")),
+        ];
+        for (state, file_present, expected_error) in cases {
+            let sequence = session.next_command;
+            session.capture_receipts.insert(sequence, None);
+            session.next_command += 1;
+            let output = interactive_dir.join(format!("capture-{sequence:020}.png"));
+            if file_present { fs::write(&output, b"fixture readback").unwrap(); }
+            assert_eq!(session.capture_delivered(sequence, &output), Ok(false));
+            let receipt = interactive_dir.join(format!("status-{sequence:020}.json"));
+            let status = ViewerSessionStatus::new(session.session_id.clone(), sequence, interactive.pid, "42".into(), state).unwrap();
+            fs::write(&receipt, status.to_json_bytes().unwrap()).unwrap();
+            session.refresh(&supervisor).unwrap();
+            assert!(!receipt.exists());
+            assert_eq!(session.capture_delivered(sequence, &output), expected_error.map_or(Ok(true), |message| Err(message.to_string())));
+            assert!(session.capture_receipts.is_empty());
+        }
+        assert!(session.feedback_controls.is_empty(), "SetView acknowledgements did not stall capture");
+        let seq = session.next_command;
+        session.publish_command(&ViewerSessionCommand::set_view(session.session_id.clone(), seq,
+            viewer_launch_contract::SceneViewControls { release_camera_input: true, ..Default::default() }).unwrap()).unwrap();
+        session.next_command += 1;
+        let rejected = ViewerSessionStatus::new(session.session_id.clone(), seq, interactive.pid, "42".into(), ViewerSessionState::Error {
+            command_kind: viewer_launch_contract::ViewerSessionCommandKind::SetView, message: "rejected control".into(),
+        }).unwrap();
+        fs::write(interactive_dir.join(format!("status-{seq:020}.json")), rejected.to_json_bytes().unwrap()).unwrap();
+        fs::remove_file(interactive_dir.join(format!("command-{seq:020}.json"))).unwrap();
+        session.refresh(&supervisor).unwrap();
+        assert_eq!(session.view.error.take().as_deref(), Some("rejected control"));
+        let sequence = session.next_command;
+        session.capture_receipts.insert(sequence, Some(Ok(())));
+        let output = interactive_dir.join(format!("capture-{sequence:020}.png"));
+        fs::write(&output, b"cancelled frame").unwrap();
+        session.close_presentation().unwrap();
+        assert!(session.capture_delivered(sequence, &output).is_err());
+        assert!(session.capture_receipts.is_empty());
+        drop(slot);
+        supervisor.terminate(&interactive, 0).unwrap();
+        assert!(matches!(supervisor.wait_for_exit(&interactive, Duration::from_secs(2)), WaitOutcome::Exited(_) | WaitOutcome::Stale));
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn quick_preload_start_writes_pathless_contract_and_dispatches_supervised_child() {
         use crate::platform::process_supervisor::ExecutableAllowlist;
         struct TestDirectory(PathBuf);
@@ -1097,7 +1316,7 @@ mod tests {
         let host = QuickPreviewHost::new(Arc::clone(&supervisor), command, directory.0.clone());
         *host.session.lock().unwrap() = Some(QuickSession { editor_scene_path: None, editor_handled_sequence: 0, editor_last_event: None, editor_failed_sequence: None, editor_sync_pending: false, editor: None, view: initial, session_id: "quick-one".into(), child: child.clone(), contract, backend, directory: directory.0.clone(), stdout, stderr,
             source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, graphics_backend: Default::default(), game_data_id: crate::game_data::resolve_context(&crate::current_user_config_dir().unwrap().join("game-data"), &crate::get_root().join("pack-in/game-data/default")).ok().map(|context| context.content_id), pending_click_epoch_ms: Some(41),
-            next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window: window.clone(),
+            next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_receipts: BTreeMap::new(), feedback_controls: BTreeSet::new(), host_window: window.clone(),
             launch_accepted: true, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
             resource_report_path: directory.0.join("resource-report.json"), resource_decision_path: directory.0.join("resource-decision.json"), resource_decided: false });
         let status = |sequence, state| {
@@ -1203,7 +1422,7 @@ mod tests {
         let host = QuickPreviewHost::new(Arc::clone(&supervisor), command, directory.0.clone());
         *host.session.lock().unwrap() = Some(QuickSession { editor_scene_path: None, editor_handled_sequence: 0, editor_last_event: None, editor_failed_sequence: None, editor_sync_pending: false, editor: None, view: initial, session_id: "quick-one".into(), child: child.clone(), contract, backend, directory: directory.0.clone(), stdout, stderr,
             source_bytes: metadata.len(), source_modified: metadata.modified().ok(), requested_preload: false, graphics_backend: Default::default(), game_data_id: crate::game_data::resolve_context(&crate::current_user_config_dir().unwrap().join("game-data"), &crate::get_root().join("pack-in/game-data/default")).ok().map(|context| context.content_id), pending_click_epoch_ms: None,
-            next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_errors: BTreeMap::new(), host_window: window.clone(),
+            next_command: 1, next_status: 0, next_event: 1, pending_intents: BTreeMap::new(), deferred_presentation: false, pending_replacements: BTreeMap::new(), capture_receipts: BTreeMap::new(), feedback_controls: BTreeSet::new(), host_window: window.clone(),
             launch_accepted: true, gpu_context_only: false, gpu_ready_observed_epoch_ms: None, native_hwnd: None,
             resource_report_path: directory.0.join("resource-report.json"), resource_decision_path: directory.0.join("resource-decision.json"), resource_decided: false });
         let status = |sequence, state| {

@@ -23,8 +23,9 @@ export function platformFor(target, host = { platform: process.platform, arch: p
   if (platform.os !== host.platform || platform.arch !== host.arch) throw new Error('Use a real native runner for the selected desktop target.');
   return platform;
 }
-export function tauriBuildStages(platform, config) {
+export function tauriBuildStages(platform, config, componentsOnly = false) {
   const build = ['build', '--config', config];
+  if (componentsOnly) return [[...build, '--no-bundle']];
   return platform.os === 'darwin' || platform.os === 'linux'
     ? [[...build, '--no-bundle'], ['bundle', '--config', config, '--bundles', platform.bundles]]
     : [[...build, '--bundles', platform.bundles]];
@@ -52,6 +53,13 @@ async function hash(filename) {
   for await (const bytes of fs.createReadStream(filename)) digest.update(bytes);
   return digest.digest('hex');
 }
+export async function copyIfDifferent(source, destination, verifiedSourceHash) {
+  // Callers that already validated the source may reuse that digest, never its mtime.
+  if (fs.existsSync(destination) && fs.statSync(destination).size === fs.statSync(source).size &&
+      await hash(destination) === (verifiedSourceHash ?? await hash(source))) return false;
+  fs.copyFileSync(source, destination);
+  return true;
+}
 function npmCli() {
   const bin = path.dirname(process.execPath);
   const choices = [process.env.npm_execpath, path.join(bin, 'node_modules/npm/bin/npm-cli.js'), path.join(bin, '../lib/node_modules/npm/bin/npm-cli.js')];
@@ -59,10 +67,16 @@ function npmCli() {
   if (!result) throw new Error('The active Node toolchain does not contain npm-cli.js.');
   return result;
 }
-export function tauriOverride(base, { platform, stage, runtime, stockpile, icon, candidate, fullRuntime = Boolean(runtime) }) {
+export function tauriOverride(base, { platform, stage, runtime, stockpile, icon, layerIndex, candidate, fullRuntime = Boolean(runtime) }) {
   const resources = Object.fromEntries(Object.keys(base.bundle.resources).map((key) => [key, null]));
   for (const [key, destination] of Object.entries(base.bundle.resources)) {
     if (key.includes('/bin/public-beta') || key.includes('/bin/protected') || destination.startsWith('bin/viewer-backend') || /stockpile_server\.exe|litematica_thumbnail\.dll/.test(key)) continue;
+    if (layerIndex && destination === 'pack-in/layer-resources') {
+      // Explicit files, not the v1 source directory: stale staged indexes cannot be bundled.
+      resources[path.join(path.dirname(layerIndex), 'assets.zip')] = destination + '/assets.zip';
+      resources[layerIndex] = destination + '/index.json.z';
+      continue;
+    }
     resources[path.resolve(tauri, key)] = destination;
   }
   resources[stage] = 'bin/viewer-backend';
@@ -76,15 +90,33 @@ export function tauriOverride(base, { platform, stage, runtime, stockpile, icon,
   if (platform.os === 'win32') resources[path.join(root, 'tools/windows-thumbnail-provider/target/release/litematica_thumbnail.dll')] = 'litematica_thumbnail.dll';
   return { bundle: { targets: platform.bundles.split(','), resources, ...(platform.os !== 'win32' ? { icon: platform.os === 'darwin' ? [path.join(path.dirname(icon), 'icon.png'), icon] : [icon], windows: null } : {}), ...(platform.os === 'darwin' && fullRuntime ? { macOS: { frameworks: [path.join(tauri, 'target/platform-frameworks/libMoltenVK.dylib')] } } : {}), ...(platform.os === 'linux' ? { linux: { deb: { depends: [...new Set([...(base.bundle.linux?.deb?.depends ?? []), 'libvulkan1', 'libdbus-1-3', 'libc6 (>= 2.39)'])] } } } : {}), createUpdaterArtifacts: Boolean(runtime && !candidate) } };
 }
-export async function stageRuntimeResources(runtime, target, platform) {
+export async function prepareLayerIndex(outputDirectory = path.join(root, '.tmp/game-data/layer-resources')) {
+  const source = path.join(root, 'pack-in/layer-resources/index.json.z');
+  const script = path.join(root, 'tools/viewer-core/scripts/build-layer-resources.py');
+  const index = path.join(outputDirectory, 'index.json.z');
+  // Keep cache bookkeeping outside the packaged resource mapping.
+  const marker = path.join(outputDirectory, 'build-inputs.json');
+  const sourceZip = path.join(path.dirname(source), 'assets.zip');
+  const zip = path.join(outputDirectory, 'assets.zip');
+  const input = [await hash(source), await hash(sourceZip), await hash(script)].join(':');
+  if (fs.existsSync(marker) && fs.existsSync(index) && fs.existsSync(zip)) {
+    const saved = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    if (saved.input === input && saved.sha256 === await hash(index) && saved.zipSha256 === await hash(zip)) return index;
+  }
+  run(process.platform === 'win32' ? 'python' : 'python3', [script, '--compact-index', source, '--output', outputDirectory]);
+  fs.writeFileSync(marker, JSON.stringify({ input, sha256: await hash(index), zipSha256: await hash(zip) }));
+  return index;
+}
+export async function stageRuntimeResources(runtime, target, platform, { standalone = false } = {}) {
   if (platform.os !== 'win32' || path.parse(runtime).root.toLowerCase() === path.parse(tauri).root.toLowerCase()) return runtime;
-  const identity = await validatePackage(runtime, platform.module, { target });
-  const directory = path.join(root, '.tmp/ci-runtime', target);
-  const names = ['protected-build.json', 'runtime-compatibility.json', identity.manifestFile, identity.ciphertextFile];
+  const identity = standalone ? await validateDevelopmentPackage(runtime, platform.module, { target, standalone }) : await validatePackage(runtime, platform.module, { target });
+  const directory = path.join(root, standalone ? '.tmp/ci-local-runtime' : '.tmp/ci-runtime', target);
+  const names = standalone ? ['development-runtime.json', identity.moduleId] : ['protected-build.json', 'runtime-compatibility.json', identity.manifestFile, identity.ciphertextFile];
   fs.mkdirSync(directory, { recursive: true });
   if (fs.readdirSync(directory).some(name => !names.includes(name))) throw new Error('Unexpected file in runtime resource staging.');
-  for (const name of names) fs.copyFileSync(path.join(runtime, name), path.join(directory, name));
-  await validatePackage(directory, platform.module, { target });
+  for (const name of names) await copyIfDifferent(path.join(runtime, name), path.join(directory, name));
+  if (standalone) await validateDevelopmentPackage(directory, platform.module, { target, standalone });
+  else await validatePackage(directory, platform.module, { target });
   return directory;
 }
 export async function stageStockpileResource(source, target, platform, resourceRoot = root) {
@@ -96,12 +128,12 @@ export async function stageStockpileResource(source, target, platform, resourceR
   fs.mkdirSync(directory, { recursive: true });
   const staged = path.join(directory, 'stockpile_server.exe');
   const sourceHash = await hash(source);
-  if (!fs.existsSync(staged) || fs.statSync(staged).size !== fs.statSync(source).size || await hash(staged) !== sourceHash) fs.copyFileSync(source, staged);
+  await copyIfDifferent(source, staged, sourceHash);
   if (await hash(staged) !== sourceHash) throw new Error('The cross-drive stockpile resource staging differs from its real Cargo output.');
   return staged;
 }
 async function prepareAssets(optional = false) {
-  if (fs.existsSync(path.join(root, 'pack-in/game-data/default/manifest.json'))) return;
+  if (['client.jar', 'oracle/oracle-manifest.json', 'assets/indexes/34.json'].every(name => fs.existsSync(path.join(root, 'data/mc26/26.3', name)))) return;
   if (optional && !fs.existsSync(path.join(root, 'pack-in/minecraft-runtime-26.3.zip'))) return;
   const archive = path.join(root, 'pack-in/minecraft-runtime-26.3.zip');
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'pack-in/minecraft-runtime-26.3.manifest.json'), 'utf8'));
@@ -149,11 +181,11 @@ async function stageBackends(target, platform, identity, sha, directory, cargo, 
   for (const name of names) {
     const source = platform.os === 'win32' ? path.join(root, 'bin/public-beta', name) : path.join(name.startsWith('nova-') ? cargo.loader : cargo.core, 'release', name);
     const destination = path.join(directory, name);
-    if (!fs.existsSync(destination) || fs.statSync(destination).size !== fs.statSync(source).size || await hash(destination) !== await hash(source)) fs.copyFileSync(source, destination);
+    await copyIfDifferent(source, destination);
     if (platform.os !== 'win32') fs.chmodSync(destination, 0o755);
     artifacts[name] = { bytes: fs.statSync(destination).size, sha256: await hash(destination) };
   }
-  const deployment = JSON.stringify({ schema: 'lba.backend.deployment.v1', gitSha: sha, helperSourceSha, helperInputId, profile: 'release', runtimeKind: identity.runtimeKind || (identity.developmentDescriptor ? 'development' : 'production'), runtimeBuildId: identity.buildId, targetTriple: target, artifacts }, null, 2);
+  const deployment = JSON.stringify({ schema: 'lba.backend.deployment.v1', gitSha: sha, helperSourceSha, helperInputId, profile: 'release', runtimeKind: identity.runtimeKind || (identity.developmentDescriptor ? 'development' : 'production'), standaloneRuntime: identity.runtimeKind === 'standalone', runtimeBuildId: identity.buildId, targetTriple: target, artifacts }, null, 2);
   const manifest = path.join(directory, 'backend-deployment.json');
   if (!fs.existsSync(manifest) || fs.readFileSync(manifest, 'utf8') !== deployment) fs.writeFileSync(manifest, deployment);
 }
@@ -259,12 +291,17 @@ async function finalizeLinuxAppImage(cargoTarget, stage, base, npm) {
 export async function build(args = process.argv.slice(2)) {
   const targetIndex = args.indexOf('--target');
   const target = targetIndex >= 0 ? args[targetIndex + 1] : nativeTarget(), platform = platformFor(target);
-  const checkOnly = args.includes('--check'), candidate = args.includes('--candidate'), development = args.includes('--development'), compileOnly = args.includes('--compile-only');
+  const standalone = args.includes('--standalone-candidate');
+  const checkOnly = args.includes('--check'), candidate = standalone || args.includes('--candidate'), development = args.includes('--development'), compileOnly = args.includes('--compile-only');
+  const componentsOnly = args.includes('--components-only');
+  if (componentsOnly && (!standalone || development || compileOnly || checkOnly))
+    throw new Error('Component checkpoints require the full native standalone candidate workflow.');
   const take = name => { const index = args.indexOf(name); return index < 0 ? undefined : args[index + 1]; };
   const source = runtimeSource(take('--runtime-source') || runtimeSource());
   const community = source === 'community';
   const privateSourceDir = take('--private-source') || process.env.NOVA_PRIVATE_SOURCE_DIR;
-  if (!community && !development && (source === 'local' || process.env.NOVA_DEVELOPMENT_RUNTIME_JSON || process.env.NOVA_DEVELOPMENT_MODULE_PATH)) throw new Error('A local Development Runtime is forbidden in formal candidate/release packaging.');
+  if (standalone && (source !== 'local' || development || compileOnly || !process.env.NOVA_RUNTIME_PACKAGE_DIR)) throw new Error('Standalone candidates require an explicit local runtime package and the native optimized build path.');
+  if (!community && !development && !standalone && (source === 'local' || process.env.NOVA_DEVELOPMENT_RUNTIME_JSON || process.env.NOVA_DEVELOPMENT_MODULE_PATH)) throw new Error('A local Development Runtime is forbidden in formal candidate/release packaging.');
   const valueIndexes = ['--target','--runtime-source','--private-source'].map(name => args.indexOf(name)).filter(index => index >= 0).map(index => index + 1);
   const reuseExisting = args.includes('--skip-prepare');
   const devArguments = args.filter((value, index) => !['--development', '--prepare', '--check', '--candidate', '--compile-only', '--target', '--runtime-source', '--private-source', '--skip-prepare', '--'].includes(value) && !valueIndexes.includes(index));
@@ -276,9 +313,9 @@ export async function build(args = process.argv.slice(2)) {
   validateRef({ branch: output('git', ['branch', '--show-current']), sha, development, community });
   validateSource(root);
   const runtime = community ? null : source === 'local'
-    ? await acquireLocalDevelopmentRuntime(root, target, { privateSourceDir, checkOnly, reuseExisting: args.includes('--skip-prepare') })
+    ? standalone ? path.resolve(process.env.NOVA_RUNTIME_PACKAGE_DIR) : await acquireLocalDevelopmentRuntime(root, target, { privateSourceDir, checkOnly, reuseExisting: args.includes('--skip-prepare') })
     : path.resolve(development && !checkOnly ? await ensureDevelopmentRuntime(root, target, process.env.NOVA_RUNTIME_PACKAGE_DIR) : process.env.NOVA_RUNTIME_PACKAGE_DIR || path.join(root, development ? 'bin/viewer-backend/protected' : platform.os === 'win32' ? 'bin/protected' : `bin/runtime/${target}`));
-  const identity = community ? communityIdentity(target) : source === 'local' ? await validateDevelopmentPackage(runtime, platform.module, { target }) : await validatePackage(runtime, platform.module, { target, release: !development });
+  const identity = community ? communityIdentity(target) : source === 'local' ? await validateDevelopmentPackage(runtime, platform.module, { target, standalone }) : await validatePackage(runtime, platform.module, { target, release: !development });
   const base = JSON.parse(fs.readFileSync(path.join(tauri, 'tauri.conf.json'), 'utf8'));
   const helperInputId = await helperInputIdentity(root, identity, target);
   if (output('rustc', ['-vV']).split('\n').find((line) => line.startsWith('host: ')) !== `host: ${target}`) throw new Error('The active Rust toolchain is not native to this target.');
@@ -322,14 +359,14 @@ export async function build(args = process.argv.slice(2)) {
   const npm = npmCli();
   if ((!development && !community) || !fs.existsSync(path.join(desktop, 'node_modules'))) run(process.execPath, [npm, 'ci'], { cwd: desktop });
   if (platform.os === 'win32') {
-    run('pwsh', ['-NoProfile', '-File', path.join(desktop, 'scripts/prepare-protected-backend.ps1'), '-RepoRoot', root, '-RuntimeSource', source, ...(development ? ['-Development'] : [])]);
+    run('pwsh', ['-NoProfile', '-File', path.join(desktop, 'scripts/prepare-protected-backend.ps1'), '-RepoRoot', root, '-RuntimeSource', source, ...(development ? ['-Development'] : []), ...(standalone ? ['-StandaloneCandidate'] : [])]);
     helperSourceSha = JSON.parse(fs.readFileSync(path.join(root, 'bin/public-beta/backend-deployment.json'), 'utf8')).helperSourceSha;
   }
-  else if (!reuseExisting) {
+  else {
     await prepareAssets(development || community || compileOnly);
-    run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/viewer-core/Cargo.toml', '--target-dir', cargo.core, '--no-default-features', '--features', source === 'local' ? 'public-beta,development-runtime' : 'public-beta', '--bin', 'litematica_core', '--bin', 'litematica_native_viewer', '--bin', 'stockpile_server']);
-    prepareDefaultGameData(path.join(cargo.core, 'release', `litematica_core${platform.suffix}`), { optional: development || community || compileOnly });
-    if (!community) run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/nova-protected-loader/Cargo.toml', '--target-dir', cargo.loader, '--bins', ...(source === 'local' ? ['--features','development-runtime'] : [])]);
+    if (!reuseExisting) run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/viewer-core/Cargo.toml', '--target-dir', cargo.core, '--no-default-features', '--features', standalone ? 'public-beta,standalone-runtime' : source === 'local' ? 'public-beta,development-runtime' : 'public-beta', '--bin', 'litematica_core', '--bin', 'litematica_native_viewer', '--bin', 'stockpile_server']);
+    prepareDefaultGameData(path.join(reuseExisting ? stage : path.join(cargo.core, 'release'), `litematica_core${platform.suffix}`), { optional: development || community || compileOnly });
+    if (!reuseExisting && !community) run('cargo', ['build', '--locked', '--release', '--manifest-path', 'tools/nova-protected-loader/Cargo.toml', '--target-dir', cargo.loader, '--bins', ...(source === 'local' ? ['--features', standalone ? 'standalone-runtime' : 'development-runtime'] : [])]);
   }
   if (!reuseExisting) await stageBackends(target, platform, identity, sha, stage, cargo, helperInputId, helperSourceSha);
   let resourceRuntime = community || source === 'local' ? null : await stageRuntimeResources(runtime, target, platform);
@@ -347,7 +384,7 @@ export async function build(args = process.argv.slice(2)) {
     ]) {
       for (const name of names) {
         const source = path.join(sourceDirectory, name), destination = path.join(destinationDirectory, name);
-        if (!fs.existsSync(destination) || fs.statSync(source).size !== fs.statSync(destination).size || await hash(source) !== await hash(destination)) fs.copyFileSync(source, destination);
+        await copyIfDifferent(source, destination);
       }
     }
     resourceRuntime = source !== 'prebuilt' ? null : protectedDirectory;
@@ -361,7 +398,13 @@ export async function build(args = process.argv.slice(2)) {
     icon = path.join(temporary, 'icons', platform.os === 'darwin' ? 'icon.icns' : 'icon.png');
   }
   const stockpile = await stageStockpileResource(path.join(cargo.core, 'release', `stockpile_server${platform.suffix}`), target, platform);
-  const overlay = tauriOverride(base, { platform, stage, runtime: resourceRuntime, stockpile, icon, candidate: candidate || community || compileOnly, fullRuntime: !community });
+  const layerIndex = await prepareLayerIndex();
+  const overlay = tauriOverride(base, { platform, stage, runtime: resourceRuntime, stockpile, layerIndex, icon, candidate: candidate || community || compileOnly, fullRuntime: !community });
+  if (standalone) {
+    overlay.bundle.resources[await stageRuntimeResources(runtime, target, platform, { standalone })] = 'bin/viewer-backend/local';
+    // Local candidates neither publish updates nor install a network-dependent runtime.
+    overlay.bundle.createUpdaterArtifacts = false;
+  }
   if (compileOnly) overlay.build = { beforeBuildCommand: 'npm run build' };
   const config = path.join(temporary, 'tauri.json'); fs.writeFileSync(config, JSON.stringify(overlay, null, 2));
   if (compileOnly) {
@@ -386,17 +429,22 @@ export async function build(args = process.argv.slice(2)) {
     run('powershell.exe', ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'tools/nsis-duilib/check-installer.ps1'), '-TauriConfigOverlay', config, '-Compile', '-RunAbi']);
   }
   const cargoTarget = cargo.host; process.env.CARGO_TARGET_DIR = cargoTarget;
-  removePreviousDistributables(cargoTarget, platform);
+  if (!componentsOnly) removePreviousDistributables(cargoTarget, platform);
   let bundleTarget = cargoTarget;
   let collected = false;
   try {
-    for (const command of tauriBuildStages(platform, config)) {
+    for (const command of tauriBuildStages(platform, config, componentsOnly)) {
       if (platform.os === 'linux' && command[0] === 'bundle') {
         bundleTarget = prepareLinuxBundleTarget(cargoTarget);
         process.env.CARGO_TARGET_DIR = bundleTarget;
       }
       console.log(`Public candidate phase=${command[0]} target=${target}`);
-      run(process.execPath, [npm, 'run', 'tauri', '--', ...command], { cwd: desktop });
+      run(process.execPath, [npm, 'run', 'tauri', '--', ...command, ...(standalone ? ['--features', 'standalone-runtime'] : [])], { cwd: desktop });
+    }
+    if (componentsOnly) {
+      if (output('git', ['rev-parse', '--verify', 'HEAD']) !== sha) throw new Error('Source commit changed during the component build.');
+      console.log(`Release components built: target=${target} source=${sha}; no distribution packages created.`);
+      return;
     }
     if (platform.os === 'linux') await finalizeLinuxAppImage(bundleTarget, stage, base, npm);
     if (platform.os === 'darwin') archiveMacApplication(bundleTarget);

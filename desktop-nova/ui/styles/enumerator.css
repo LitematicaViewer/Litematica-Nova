@@ -114,7 +114,7 @@
     flex: 0 0 92px;
 }
 
-.enumerator-input-row-split .enumerator-name-input,
+.enumerator-name-input,
 .enumerator-expression-input,
 .enumerator-content-search-input {
     flex: 1 1 260px;
@@ -389,4 +389,24 @@
     border: 0 !important;
     background: transparent !important;
 }
+}
+
+@layer components.page {
+.enumerator-pane-select { display: none; }
+.enumerator-dialog { padding: 0; width: min(1120px,calc(100vw - 24px)); height: min(800px,calc(100vh - 24px)); min-height: 0; }
+.enumerator-dialog > .enumerator-content { width: 100%; height: 100%; min-height: 0; max-height: none; border: 0; box-shadow: none; }
+.enumerator-collections-panel, .enumerator-source-column, .enumerator-edit-column { border: 0; background: transparent; }
+@media (max-width: 959px) {
+  .enumerator-pane-select { display: block; width: min(48%, 240px); margin-left: auto; }
+  .enumerator-window .enumerator-body, .enumerator-window .enumerator-editor-grid { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr); }
+  .enumerator-window .enumerator-collections-panel, .enumerator-window .enumerator-source-column, .enumerator-window .enumerator-edit-column, .enumerator-window .enumerator-editor-panel { display: none; }
+  .enumerator-window[data-active-pane="collections"] .enumerator-collections-panel { display: grid; }
+  .enumerator-window[data-active-pane="source"] .enumerator-editor-panel, .enumerator-window[data-active-pane="edit"] .enumerator-editor-panel { display: flex; }
+  .enumerator-window[data-active-pane="source"] .enumerator-source-column, .enumerator-window[data-active-pane="edit"] .enumerator-edit-column { display: grid; }
+  .enumerator-window .enumerator-footer-row { flex-direction: row; flex-wrap: wrap; }
+  .enumerator-footer-actions { min-width: 0; }
+  .enumerator-window .enumerator-toolbar-row { flex-direction: row; align-items: center; }
+  .enumerator-window .enumerator-filter-select { min-width: 0; width: auto; flex: 1; }
+}
+.enumerator-table tr:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 }

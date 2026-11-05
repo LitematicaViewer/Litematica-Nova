@@ -4,7 +4,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use fastnbt::{IntArray, Value};
-use std::io::{Read, Write};
+use std::io::{self, BufReader, Read};
+#[cfg(test)]
+use std::io::Write;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde::{Deserialize, Serialize};
 use crate::projection_preview::{PreviewImageMode, embedded_preview_dimensions, normalize_preview_image};
@@ -51,6 +53,14 @@ pub struct RegionRenamePatchOutput {
     pub new_name: String,
 }
 
+// Read the complete gzip member, including its trailer, before accepting the document.
+fn read_document(input: impl Read) -> Result<Value> {
+    let mut decoded = BufReader::new(GzDecoder::new(input));
+    let document = fastnbt::from_reader(&mut decoded)?;
+    io::copy(&mut decoded, &mut io::sink())?;
+    Ok(document)
+}
+
 pub fn edit_metadata(
     input: &Path,
     output: Option<&Path>,
@@ -68,9 +78,7 @@ pub fn edit_metadata(
         anyhow::ensure!(format!("{:x}", Sha256::digest(&original)).eq_ignore_ascii_case(expected),
             "Preview draft source identity changed before metadata editing; reload and generate again");
     }
-    let mut plain = Vec::new();
-    GzDecoder::new(original.as_slice()).read_to_end(&mut plain)?;
-    let mut value: Value = fastnbt::from_bytes(&plain)?;
+    let mut value = read_document(original.as_slice())?;
     let Value::Compound(root) = &mut value else { bail!("projection root must be a compound"); };
     if let Some(version) = patch.minecraft_data_version {
         if root.get("MinecraftDataVersion") != Some(&Value::Int(version)) {
@@ -163,14 +171,12 @@ pub fn edit_metadata(
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     {
         let mut gzip = GzEncoder::new(temporary.as_file_mut(), Compression::default());
-        gzip.write_all(&fastnbt::to_bytes(&value)?)?;
+        fastnbt::to_writer(&mut gzip, &value)?;
         gzip.finish()?;
     }
     temporary.as_file().sync_all()?;
     // Reopen and compare the complete semantic document before committing it.
-    let mut check = Vec::new();
-    GzDecoder::new(fs::File::open(temporary.path())?).read_to_end(&mut check)?;
-    let reopened: Value = fastnbt::from_bytes(&check)?;
+    let reopened = read_document(fs::File::open(temporary.path())?)?;
     anyhow::ensure!(reopened == value, "metadata write-back verification failed");
     anyhow::ensure!(fs::read(input)? == original, "投影在写入期间已改变，请重新加载");
     let backup_path = None;

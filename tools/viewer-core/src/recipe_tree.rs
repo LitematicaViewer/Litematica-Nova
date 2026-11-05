@@ -206,16 +206,17 @@ pub(crate) fn localize_trees(trees:&mut BTreeMap<String,RecipeTreeNode>,locale:&
     for tree in trees.values_mut(){localize_tree(tree,locale,names)?;}Ok(())
 }
 
-fn selected_resolver(version:&str)->Result<Option<std::sync::Arc<RecipeTreeResolver>>> {
+fn selected_resolver(_version:&str)->Result<Option<std::sync::Arc<RecipeTreeResolver>>> {
     use std::sync::{Arc,Mutex,OnceLock};
     static RESOLVERS:OnceLock<Mutex<BTreeMap<String,Arc<RecipeTreeResolver>>>>=OnceLock::new();
-    let identity=crate::game_data::active_context()?.content_id;
+    let index = recipe_cache::selected_index()?;
+    let identity = &index.content_id;
     let cache=RESOLVERS.get_or_init(Default::default);
-    if let Some(value)=cache.lock().map_err(|_|anyhow::anyhow!("recipe resolver lock poisoned"))?.get(&identity).cloned(){return Ok(Some(value));}
-    let Some(recipes)=recipe_cache::load_available_recipes(version)?else{return Ok(None);};
-    let resolver=Arc::new(RecipeTreeResolver::with_tags(&recipes,recipe_cache::load_item_tags()?));
+    if let Some(value)=cache.lock().map_err(|_|anyhow::anyhow!("recipe resolver lock poisoned"))?.get(identity).cloned(){return Ok(Some(value));}
+    if index.recipes.is_empty() { return Ok(None); }
+    let resolver=Arc::new(RecipeTreeResolver::with_tags(&index.recipes,index.tags.clone()));
     let mut cache=cache.lock().map_err(|_|anyhow::anyhow!("recipe resolver lock poisoned"))?;
-    if cache.len()>=4{cache.clear();}cache.insert(identity,resolver.clone());Ok(Some(resolver))
+    if cache.len()>=4{cache.clear();}cache.insert(identity.clone(),resolver.clone());Ok(Some(resolver))
 }
 
 pub(crate) fn prepare_selected_resolver() -> Result<()> {

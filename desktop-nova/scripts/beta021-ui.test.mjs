@@ -11,14 +11,12 @@ function service(name, dependencies = {}) {
   });
   const exports = {};
   vm.runInNewContext(result.outputText, { exports, require(id) {
-    if (id.endsWith("minecraft-26.3.json")) return JSON.parse(readFileSync(new URL("../../pack-in/materials/minecraft-26.3.json", import.meta.url), "utf8"));
     if (id in dependencies) return dependencies[id];
     throw new Error(`Unexpected service dependency ${id}`);
   } });
   return exports;
 }
 const paths = service("filePathIdentity");
-const items = service("creativeItemIdentity");
 
 test("调试开关仅显式true开启，旧UI测试配置不构成新发行版默认开启", async () => {
   const writes = [];
@@ -41,33 +39,16 @@ test("展示路径和错误内路径处理扩展UNC/盘符，身份去重且不�
   assert.equal(local.charAt(2), "?"); assert.equal(unc.charAt(2), "?");
 });
 
-test("创造物品名和图标基于真实注册表身份，盆栽/墙面/上下状态归一且真实颜色树种分开", () => {
-  for (const [source, expected] of [
-    ["minecraft:potted_dead_bush", "minecraft:dead_bush"],
-    ["minecraft:oak_wall_sign", "minecraft:oak_sign"],
-    ["minecraft:oak_wall_hanging_sign", "minecraft:oak_hanging_sign"],
-    ["minecraft:redstone_wall_torch", "minecraft:redstone_torch"],
-    ["minecraft:oak_door[half=upper,facing=north]", "minecraft:oak_door"],
-  ]) assert.equal(items.creativeItemId(source), expected);
-  assert.notEqual(items.creativeItemId("minecraft:red_wool"), items.creativeItemId("minecraft:blue_wool"));
-  assert.notEqual(items.creativeItemId("minecraft:oak_planks"), items.creativeItemId("minecraft:birch_planks"));
-  assert.equal(items.creativeItemId("minecraft:water"), null);
-  assert.equal(items.creativeItemId("minecraft:not_a_registered_variant"), null);
-});
-
-test("创造栏去重只影响展示，选择保留源state/物品数据变体，材料注册表不变", () => {
-  const source = "minecraft:oak_door[half=upper,facing=north]";
-  const values = [source, "minecraft:oak_door[half=lower,facing=south]", "minecraft:oak_wall_sign", "minecraft:oak_sign", "minecraft:red_wool", "minecraft:blue_wool"];
-  const shown = [...items.creativeInventoryValues(values)];
-  assert.deepEqual(shown, [source, "minecraft:oak_sign", "minecraft:red_wool", "minecraft:blue_wool"]);
-  const distinct = ['minecraft:stone[minecraft:custom_name="A"]', 'minecraft:stone[minecraft:custom_name="B"]'];
-  assert.equal(items.creativeInventoryValues(distinct).length, 2);
-  assert.equal(values[0], source);
-  for (const file of ["ui/components/BlockPickerDialog.tsx", "ui/windows/main/pages/flake/creativeInventoryDialog.tsx"]) {
-    const ui = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
-    assert.match(ui, /creativeInventoryValues\(/); assert.match(ui, /creativeItemId\(blockId\)/);
-    assert.match(ui, /lookupMode="item_first"/);
+test("创造物品选择器和两个场景快捷栏使用 Rust 资源身份投影；选择值不改写", () => {
+  const picker = readFileSync(new URL("../ui/components/BlockPickerDialog.tsx", import.meta.url), "utf8");
+  const flake = readFileSync(new URL("../ui/windows/main/pages/flake/FlakePage.tsx", import.meta.url), "utf8");
+  const menu = readFileSync(new URL("../ui/windows/main/pages/flake/creativeInventoryDialog.tsx", import.meta.url), "utf8");
+  for (const source of [picker, flake, menu]) {
+    assert.match(source, /useCreativeIdentities\(/);
+    assert.doesNotMatch(source, /minecraft-26\.3\.json|creativeItemIdentity/);
+    assert.match(source, /lookupMode="item_first"/);
   }
+  assert.match(picker, /onPickBlock\(blockId\); onClose\(\)/);
 });
 
 test("枚举器生产多页面资源指向真实独立组件，不引用主壳或关闭恢复", () => {
@@ -137,13 +118,10 @@ test("子窗启动与选择器和投影库错误只经路径展示层，不改�
 test("洞穴藤蔓头身复用原版glow_berries创造身份而材料AIR保持不变", () => {
   const catalog = JSON.parse(readFileSync(new URL("../../pack-in/materials/minecraft-26.3.json", import.meta.url), "utf8"));
   for (const id of ["minecraft:cave_vines", "minecraft:cave_vines_plant"]) {
-    assert.equal(items.creativeItemId(`${id}[berries=true]`), "minecraft:glow_berries");
     assert.equal(catalog.blocks[id].creative_item_id, "minecraft:glow_berries");
   }
   assert.equal(catalog.blocks["minecraft:cave_vines_plant"].item_id, "minecraft:air");
   assert.equal(catalog.blocks["minecraft:cave_vines"].item_id, "minecraft:glow_berries");
-  const source = "minecraft:cave_vines_plant[berries=true]";
-  assert.deepEqual([...items.creativeInventoryValues([source, "minecraft:cave_vines[berries=false]"])], [source]);
   const generator = readFileSync(new URL("../../tools/mc26-oracle/src/main/java/net/litematicaba/mc26oracle/MaterialCatalogMain.java", import.meta.url), "utf8");
   assert.match(generator, /classes\.contains\("CaveVinesPlantBlock"\)/);
   assert.match(generator, /"GLOW_BERRIES"/);
@@ -177,4 +155,24 @@ test("Fast截图IPC传原路径与精确previewId，后端拒绝缺失或其他�
   const generated = backend.split("async fn generate_preview_image(")[1].split("async fn application_export_material_list(")[0];
   assert.match(generated, /persist_rendered_preview\([^;]+&preview_mode\)/s);
   assert.doesNotMatch(generated, /if let Some\(preview\) = operations\.read_embedded_preview/);
+});
+
+test("枚举表达式只在集合变更时绑定一次，后续键入仅送快照与文本", async () => {
+  const binds = [], queries = [];
+  const api = service("enumeratorService", {
+    "../platform/files": {}, "./gameResources": {}, "./backend": {}, "./i18n": {t:(key, params) => key + ":" + (params?.token || "")},
+    "../platform/applicationOperations": {
+      bindEnumeratorCollections: async collections => { binds.push(collections); return binds.length; },
+      queryEnumeratorExpression: async (id, expression) => { queries.push([id, expression]); return {values:[expression], dependencies:["a"], errorKey: null, token:null}; },
+    },
+  });
+  const collections = [{id:"id", name:"中文", symbol:"A", values:["z","a","m"], description:"does not cross IPC"}];
+  const first = api.evaluateEnumeratorExpression("A", collections);
+  const second = api.evaluateEnumeratorExpression("A|A", collections);
+  assert.deepEqual([...(await first).values], ["A"]);
+  assert.deepEqual([...(await second).values], ["A|A"]);
+  assert.equal(binds.length, 1);
+  assert.deepEqual(Object.keys(binds[0][0]).sort(), ["id","name","symbol","values"]);
+  await api.evaluateEnumeratorExpression("A", [...collections]);
+  assert.deepEqual(queries, [[1,"A"],[1,"A|A"],[2,"A"]]);
 });

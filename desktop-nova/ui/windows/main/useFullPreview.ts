@@ -34,12 +34,12 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   const current = useRef({ sourcePath, preload, displayMode }); current.current = { sourcePath, preload, displayMode };
   const generation = useRef(0);
   const pendingGrant = useRef<ResourcePreflightView | null>(null);
-  const viewport = useEmbeddedViewer(operation, blocked || preflight !== null);
+  const viewport = useEmbeddedViewer(operation, blocked);
   const mounted = useRef(false);
   const clickedAt = useRef<number | null>(null);
   const inFlightLaunches = useRef(new Map<number, string>());
   const cancelledLaunches = useRef(new Set<number>());
-  const previousContext = useRef({ sourcePath, preload, blocked, displayMode });
+  const previousContext = useRef({ sourcePath, preload, displayMode });
   useEffect(() => {
     if (operation?.error) console.error("[NOVA_RENDER_PHASE]", { stage: "render_failed", operationId: operation.operationId,
       state: operation.state, error: operation.error, displayMode, buildMode: operation.buildMode });
@@ -62,15 +62,15 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   }, []);
   useEffect(() => {
     const previous = previousContext.current;
-    previousContext.current = { sourcePath, preload, blocked, displayMode };
+    previousContext.current = { sourcePath, preload, displayMode };
     if (previous.sourcePath === sourcePath && previous.preload === preload
-      && previous.blocked === blocked && previous.displayMode === displayMode) return;
+      && previous.displayMode === displayMode) return;
     console.info("[NOVA_RENDER_PHASE]", { stage: "render_context_changed", previous, current: { sourcePath, preload, blocked, displayMode }, generation: generation.current + 1 });
     generation.current++; setError(""); setPending(false); setLaunchStage(null); setSelection(null);
     void discardGrant().catch(reason => setError(String(reason)));
     viewport.requestPresentationWhenReady(null);
     if (operation) void updateApplicationRenderPresentation(operation.operationId, { mode: "hidden", visible: false, placement: null }).catch(() => undefined);
-  }, [sourcePath, preload, blocked, displayMode]);
+  }, [sourcePath, preload, displayMode]);
 
 
   async function execute(action: (version: number) => Promise<void>) {
@@ -208,7 +208,8 @@ export function useFullPreview(sourcePath: string, preload: boolean, blocked = f
   const ready = isApplicationViewerPrepared(operation);
   const visible = ready && isApplicationPresentationVisible(operation);
   const operationFailure = operation?.state === "failed" && !pending
-    ? operation.progress.phase === "viewer_failed"
+    ? operation.error?.includes("NOVA_RENDER_SERVICE_UNAVAILABLE") ? t("render.serviceUnavailable")
+    : operation.progress.phase === "viewer_failed"
       ? /PPLL|ZeroCaptureEpoch|CaptureStatusEpochMismatch|ResolveParameters/i.test(operation.error || "")
         ? t("render.transparencyFailed") : t("render.renderFailed")
       : t("render.loadingFailed")

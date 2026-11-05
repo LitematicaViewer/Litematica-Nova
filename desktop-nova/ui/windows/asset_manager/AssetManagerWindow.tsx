@@ -1,6 +1,6 @@
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
 import { useI18n } from "../../i18n";
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { closeApplicationWindow } from "../../../src/platform/nativeWindowGeometry";
 
 import { loadUserConfigMigratingLocalStorage, normalizeMaterialListWindowBehavior, openAssetManagerWindow as openAssetManagerDesktopWindow } from "../../../src/business/facade";
@@ -11,6 +11,7 @@ import {
   subscribeToThemeChanges,
   themeClassName,
 } from "../../shell/themeRuntime";
+import { Dialog, DialogContent, DialogTitle } from "../../components/ui/dialog";
 import { AssetManagerContent } from "./AssetManagerContent";
 
 /** Opens the resource manager using the existing auxiliary-window preference. */
@@ -23,11 +24,13 @@ export async function openAssetManagerWithWindowBehavior(showOverlay: () => void
 }
 export function AssetManagerDialog({ theme, onClose }: { theme: string; onClose: () => void }) {
   useI18n();
-  return <div className="dialog-overlay"><section
-    className={["dialog-content", "subwindow-frame", "subwindow-frame-wide", "asset-manager-window", themeClassName(theme)].filter(Boolean).join(" ")}
-    role="dialog" aria-modal="true" aria-label={t("library.assetManagerTitle")} onClick={(event) => event.stopPropagation()}>
+  const opener = useRef(document.activeElement);
+  return <Dialog open onOpenChange={open => { if (!open) onClose(); }}><DialogContent
+    className={["asset-manager-dialog", themeClassName(theme)].filter(Boolean).join(" ")}
+    aria-describedby={undefined} onCloseAutoFocus={event => { event.preventDefault(); if (opener.current instanceof HTMLElement && opener.current.isConnected) opener.current.focus(); }}>
+    <DialogTitle className="sr-only">{t("library.assetManagerTitle")}</DialogTitle>
     <AssetManagerContent theme={theme} onClose={onClose} />
-  </section></div>;
+  </DialogContent></Dialog>;
 }
 
 /**

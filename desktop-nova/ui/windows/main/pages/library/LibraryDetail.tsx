@@ -65,7 +65,7 @@ export function LibraryDetail({
     return (
       <div className="library-inspector-empty">
         <Box size={32} />
-        <p>点击卡片查看详情</p>
+        <p>{t("library.inspectHint")}</p>
       </div>
     );
   }
@@ -75,7 +75,7 @@ export function LibraryDetail({
     <div className="library-detail-content" data-variant={variant}>
       <div className="library-detail-preview">
         {previewUrl
-          ? <img src={previewUrl} alt={`${entry.displayName} 预览`} />
+          ? <img src={previewUrl} alt={t("library.ux.namedPreview", { value0: entry.displayName })} />
           : <span className="library-preview-placeholder"><ThemeIcon name="picture_error" size={36} fallback={ImageOff} /><span>{previewLoading ? t("library.previewLoading") : previewError ? t("library.previewReadFailed", { error: previewError }) : t("library.previewMissing")}</span></span>}
       </div>
       <div className="library-detail-heading">
@@ -84,25 +84,25 @@ export function LibraryDetail({
           variant="ghost"
           size="icon-sm"
           aria-pressed={favorite}
-          aria-label={favorite ? "取消收藏" : "加入收藏夹"}
-          title={favorite ? "取消收藏" : "加入收藏夹"}
+          aria-label={favorite ? t("library.ux.unfavorite") : t("library.ux.favorite")}
+          title={favorite ? t("library.ux.unfavorite") : t("library.ux.favorite")}
           disabled={busy}
           onClick={onToggleFavorite}
         >
           <Star size={15} fill={favorite ? "currentColor" : "none"} aria-hidden="true" />
         </Button>
-        {onClose && <Button variant="ghost" size="icon-sm" aria-label="关闭投影详情" onClick={onClose}><ThemeIcon name="close" size={15} fallback={X} /></Button>}
+        {onClose && <Button variant="ghost" size="icon-sm" aria-label={t("library.closeDetails")} onClick={onClose}><ThemeIcon name="close" size={15} fallback={X} /></Button>}
       </div>
-      <p className="library-detail-author">{entry.author ? `作者 · ${entry.author}` : "未填写作者"}</p>
+      <p className="library-detail-author">{entry.author ? t("library.ux.author", { value0: entry.author }) : t("library.noAuthor")}</p>
       {entry.status !== "ok" && <div className="library-detail-error" role="status">{entryStatusLabel(entry)}{entry.lastError && <p>{entry.lastError}</p>}</div>}
       <div className="library-detail-actions">
-        <Button variant="default" disabled={busy || entry.status !== "ok"} onClick={onActivate}>设为当前投影</Button>
-        <Button disabled={busy || entry.status !== "ok"} onClick={onOpenProperties}>查看属性</Button>
+        <Button variant="default" disabled={busy || entry.status !== "ok"} onClick={onActivate}>{t("library.setCurrentSchematic")}</Button>
+        <Button disabled={busy || entry.status !== "ok"} onClick={onOpenProperties}>{t("library.viewProperties")}</Button>
       </div>
 
       {variant === "full" ? (
         <div className="library-detail-section">
-          <div className="library-detail-section-heading"><h4>详细信息</h4><LibraryColumnPicker selected={columns} onToggle={onToggleColumn} disabled={busy} /></div>
+          <div className="library-detail-section-heading"><h4>{t("library.ux.detailInfo")}</h4><LibraryColumnPicker selected={columns} onToggle={onToggleColumn} disabled={busy} /></div>
           <dl className="library-detail-facts">
             {activeColumns.map((column) => (
               <div key={column.id}><dt>{column.label}</dt><dd>{column.value(entry)}</dd></div>
@@ -111,51 +111,51 @@ export function LibraryDetail({
         </div>
       ) : (
         <dl className="library-detail-facts">
-          <div><dt>选区名</dt><dd>{entry.primary.regionNames === undefined ? "未读取（刷新或查看属性后补齐）" : entry.primary.regionNames.length ? entry.primary.regionNames.map((name, index) => <div key={index}>{name || "（空名称）"}</div>) : "无选区"}</dd></div>
-          {typeof entry.primary.internalName === "string" && <div><dt>内部名称</dt><dd>{entry.primary.internalName || "未填写"}</dd></div>}
-          <div><dt>方块数量</dt><dd>{entry.totalBlocks.toLocaleString()}</dd></div>
-          <div><dt>尺寸</dt><dd>{entry.enclosingSize.x} × {entry.enclosingSize.y} × {entry.enclosingSize.z}</dd></div>
-          <div><dt>重数</dt><dd>{entry.replicaCount}</dd></div>
-          <div><dt>文件大小</dt><dd>{formatSize(entry.fileSize)}</dd></div>
-          <div><dt>最近分析</dt><dd>{formatEntryDate(entry.lastAnalyzedAt)}</dd></div>
+          <div><dt>{t("properties.regionNames")}</dt><dd>{entry.primary.regionNames === undefined ? t("library.regionNamesUnread") : entry.primary.regionNames.length ? entry.primary.regionNames.map((name, index) => <div key={index}>{name || t("properties.emptyName")}</div>) : t("properties.noRegions")}</dd></div>
+          {typeof entry.primary.internalName === "string" && <div><dt>{t("properties.internalName")}</dt><dd>{entry.primary.internalName || t("library.notSpecified")}</dd></div>}
+          <div><dt>{t("properties.blocks")}</dt><dd>{entry.totalBlocks.toLocaleString()}</dd></div>
+          <div><dt>{t("library.dimensions")}</dt><dd>{entry.enclosingSize.x} × {entry.enclosingSize.y} × {entry.enclosingSize.z}</dd></div>
+          <div><dt>{t("library.ux.replicas")}</dt><dd>{entry.replicaCount}</dd></div>
+          <div><dt>{t("library.fileSize")}</dt><dd>{formatSize(entry.fileSize)}</dd></div>
+          <div><dt>{t("library.lastAnalyzed")}</dt><dd>{formatEntryDate(entry.lastAnalyzedAt)}</dd></div>
         </dl>
       )}
 
       {entry.description && <p className="library-detail-description">{entry.description}</p>}
 
       <div className="library-detail-section">
-        <h4>分类</h4>
+        <h4>{t("editor.category")}</h4>
         <div className="library-detail-categories">
-          {entry.categoryIds.length ? entry.categoryIds.map((id) => <span className="library-category-membership" key={id} data-category-id={id}>{categoryLabel(id)}</span>) : <span className="muted">未分类</span>}
+          {entry.categoryIds.length ? entry.categoryIds.map((id) => <span className="library-category-membership" key={id} data-category-id={id}>{categoryLabel(id)}</span>) : <span className="muted">{t("library.uncategorized")}</span>}
         </div>
-        <Button size="sm" disabled={busy} onClick={onMoveCategory}>移动到分类…</Button>
+        <Button size="sm" disabled={busy} onClick={onMoveCategory}>{t("library.moveToCategoryMenu")}</Button>
       </div>
 
       <div className="library-detail-section">
-        <h4>预览图</h4>
+        <h4>{t("library.preview")}</h4>
         <div className="library-detail-actions">
           <Button size="sm" disabled={busy || generatingPreview || entry.status !== "ok"} aria-busy={generatingPreview} onClick={onGeneratePreview}>{generatingPreview ? t("library.previewGenerating") : t(previewUrl ? "library.previewRegenerate" : "library.previewGenerate")}</Button>
         </div>
       </div>
 
       <div className="library-detail-section">
-        <h4>文件</h4>
+        <h4>{t("library.file")}</h4>
         <p className="library-detail-path" title={entry.primary.path}>{entry.primary.path}</p>
         <div className="library-detail-actions">
-          <Button size="sm" onClick={onOpenFolder}>打开文件夹</Button>
-          <Button size="sm" disabled={busy || entry.status === "missing"} onClick={onCopy}>复制到…</Button>
-          <Button size="sm" variant="ghost" disabled={busy} onClick={onTrash}><ThemeIcon name="delete" size={14} fallback={Trash2} />移入回收站</Button>
+          <Button size="sm" onClick={onOpenFolder}>{t("library.openFolder")}</Button>
+          <Button size="sm" disabled={busy || entry.status === "missing"} onClick={onCopy}>{t("library.copyToMenu")}</Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={onTrash}><ThemeIcon name="delete" size={14} fallback={Trash2} />{t("library.moveToTrash")}</Button>
         </div>
       </div>
 
       {missingReplicas.length > 0 && (
         <div className="library-detail-section" data-section="reposition">
-          <h4>文件丢失（{missingReplicas.length}）</h4>
+          <h4>{t("library.ux.missingPrefix")}{missingReplicas.length}）</h4>
           <ul className="library-reposition-list">
             {missingReplicas.map((replica) => (
               <li key={replica.id}>
                 <span className="library-reposition-path" title={replica.path}>{replica.fileName || replica.path}</span>
-                <Button size="sm" disabled={busy || repositioning} onClick={() => onRepositionReplica(replica.id)}>重新定位…</Button>
+                <Button size="sm" disabled={busy || repositioning} onClick={() => onRepositionReplica(replica.id)}>{t("library.ux.reposition")}</Button>
               </li>
             ))}
           </ul>

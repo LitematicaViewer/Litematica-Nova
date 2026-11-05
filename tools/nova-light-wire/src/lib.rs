@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::io::{Read, Write};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};

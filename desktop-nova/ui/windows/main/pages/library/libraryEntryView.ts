@@ -1,3 +1,4 @@
+import { t } from "../../../../../src/services/i18n";
 import {
   libraryRecordViews,
   type LibraryRecordView,
@@ -110,21 +111,21 @@ export interface LibraryGroup {
 export function groupingField(entry: LibraryEntryView, dimension: GroupingDimension): { key: string; label: string } {
   if (dimension === "author") {
     const author = entry.author.trim();
-    return author ? { key: `author:${author.toLowerCase()}`, label: author } : { key: "author:__none", label: "未填写作者" };
+    return author ? { key: `author:${author.toLowerCase()}`, label: author } : { key: "author:__none", label: t("library.noAuthor") };
   }
   if (dimension === "version") {
     const version = entry.versionLabel;
-    return version ? { key: `version:${version}`, label: version } : { key: "version:__none", label: "未知版本" };
+    return version ? { key: `version:${version}`, label: version } : { key: "version:__none", label: t("library.ux.unknownVersion") };
   }
   if (dimension === "size") {
     const size = `${entry.enclosingSize.x}×${entry.enclosingSize.y}×${entry.enclosingSize.z}`;
     return { key: `size:${size}`, label: size };
   }
-  return { key: "all", label: "全部" };
+  return { key: "all", label: t("stats.export.option.all") };
 }
 
 export function groupEntryViews(entries: LibraryEntryView[], dimension: GroupingDimension): LibraryGroup[] {
-  if (dimension === "none") return [{ key: "all", label: "全部", entries }];
+  if (dimension === "none") return [{ key: "all", label: t("stats.export.option.all"), entries }];
   const groups = new Map<string, LibraryGroup>();
   for (const entry of entries) {
     const { key, label } = groupingField(entry, dimension);
@@ -164,21 +165,21 @@ export function formatEntryDate(timestamp: number): string {
 }
 
 export function entryStatusLabel(entry: LibraryEntryView): string {
-  if (entry.status === "missing") return "文件丢失";
-  if (entry.status === "parse_error") return "解析失败";
-  return "正常";
+  if (entry.status === "missing") return t("library.fileMissing");
+  if (entry.status === "parse_error") return t("library.parseFailed");
+  return t("library.statusOk");
 }
 
 export const LIBRARY_COLUMNS: LibraryColumn[] = [
-  { id: "author", label: "作者", value: (entry) => entry.author || "—" },
-  { id: "version", label: "版本", value: (entry) => entry.versionLabel || "—" },
-  { id: "blocks", label: "方块数", value: (entry) => entry.totalBlocks.toLocaleString() },
-  { id: "size", label: "尺寸", value: (entry) => `${entry.enclosingSize.x}×${entry.enclosingSize.y}×${entry.enclosingSize.z}` },
-  { id: "replicas", label: "重数", value: (entry) => String(entry.replicaCount) },
-  { id: "status", label: "状态", value: (entry) => entryStatusLabel(entry) },
-  { id: "analyzed", label: "最近分析", value: (entry) => formatEntryDate(entry.lastAnalyzedAt) },
-  { id: "fileName", label: "文件名", value: (entry) => entry.fileName },
-  { id: "path", label: "文件路径", value: (entry) => entry.primary.path },
+  { id: "author", get label() { return t("properties.author"); }, value: (entry) => entry.author || "—" },
+  { id: "version", get label() { return t("library.version"); }, value: (entry) => entry.versionLabel || "—" },
+  { id: "blocks", get label() { return t("library.ux.columnBlocks"); }, value: (entry) => entry.totalBlocks.toLocaleString() },
+  { id: "size", get label() { return t("library.dimensions"); }, value: (entry) => `${entry.enclosingSize.x}×${entry.enclosingSize.y}×${entry.enclosingSize.z}` },
+  { id: "replicas", get label() { return t("library.ux.replicas"); }, value: (entry) => String(entry.replicaCount) },
+  { id: "status", get label() { return t("stockpile.stateLabel"); }, value: (entry) => entryStatusLabel(entry) },
+  { id: "analyzed", get label() { return t("library.lastAnalyzed"); }, value: (entry) => formatEntryDate(entry.lastAnalyzedAt) },
+  { id: "fileName", get label() { return t("library.fileName"); }, value: (entry) => entry.fileName },
+  { id: "path", get label() { return t("library.ux.filePath"); }, value: (entry) => entry.primary.path },
 ];
 
 export const DEFAULT_LIBRARY_COLUMNS = ["author", "version", "blocks", "replicas", "status"];

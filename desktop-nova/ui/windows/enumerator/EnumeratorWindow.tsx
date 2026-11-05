@@ -1,7 +1,11 @@
+import { useEnumeratorExpression } from "../../components/useEnumeratorExpression";
+import { X } from "lucide-react";
+import { Dialog as DialogRoot, DialogContent, DialogTitle } from "../../components/ui/dialog";
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
 import { useI18n } from "../../i18n";
+import { readUpdateDraft, saveUpdateDraft, useUpdateDraft } from "../main/updateRecovery";
 import { displayFilePath } from "../../../src/business/facade";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import {
   loadStructuralBlocks,
@@ -14,7 +18,6 @@ import { listenEvent } from "../../../src/platform/events";
 import {
   buildEnumeratorValueRows,
   createRuntimeProjectionCollection,
-  evaluateEnumeratorExpression,
   loadEnumeratorCollections,
   saveEnumeratorCollection,
   type EnumeratorCollection,
@@ -54,6 +57,8 @@ type CopyToast = {
   x: number;
   y: number;
 };
+type EnumeratorDraft = { editCollectionId: string; editName: string; editValueType: EnumeratorValueType; editVersion: string; editDescription: string; rightValues: string[] };
+const emptyEnumeratorDraft: EnumeratorDraft = { editCollectionId: "", editName: "", editValueType: "mixed", editVersion: "custom", editDescription: "", rightValues: [] };
 
 const initialFileFromUrl = () => {
   try {
@@ -175,11 +180,15 @@ export function EnumeratorDialog({
   onClose: () => void;
 }) {
   useI18n();
-  return (
-    <div className={["dialog-overlay", themeClassName(theme)].filter(Boolean).join(" ")}>
-      <EnumeratorContent currentFile={currentFile} runtimeCollection={runtimeCollection} onClose={onClose} />
-    </div>
-  );
+  const opener = useRef(document.activeElement);
+  const closeGuard = useRef<() => boolean>(() => true);
+  const close = () => { if (closeGuard.current()) onClose(); };
+  return <DialogRoot open onOpenChange={open => { if (!open) close(); }}>
+    <DialogContent className={["enumerator-dialog", themeClassName(theme)].join(" ")} aria-describedby={undefined} onCloseAutoFocus={event => { event.preventDefault(); if (opener.current instanceof HTMLElement && opener.current.isConnected) opener.current.focus(); }}>
+      <DialogTitle className="sr-only">{t("library.enumeratorTitle")}</DialogTitle>
+      <EnumeratorContent currentFile={currentFile} runtimeCollection={runtimeCollection} onClose={close} closeGuard={closeGuard} />
+    </DialogContent>
+  </DialogRoot>;
 }
 
 export function EnumeratorWindow() {
@@ -243,38 +252,59 @@ function EnumeratorContent({
   runtimeCollection,
   runtimeStatus = "",
   onClose,
+  closeGuard,
   standalone = false,
 }: {
   currentFile: string;
   runtimeCollection: EnumeratorCollection | null;
   runtimeStatus?: UiMessage;
   onClose?: () => void;
+  closeGuard?: { current: () => boolean };
   standalone?: boolean;
 }) {
   const { locale, revision } = useI18n();
+  const draftKey = standalone ? "enumerator:window" : "enumerator:dialog";
+  const [recovered] = useState(() => readUpdateDraft<{ draft: EnumeratorDraft; baseline: string }>(draftKey));
+  const draftBaseline = useRef(recovered?.baseline ?? JSON.stringify(emptyEnumeratorDraft));
   const [collections, setCollections] = useState<EnumeratorCollection[]>([]);
   const [isLoadingCollections, setIsLoadingCollections] = useState(false);
   const [status, setStatus] = useState<UiMessage>("");
   const [error, setError] = useState<UiMessage>("");
   const [searchKeyword, setSearchKeyword] = useState("");
+  const [compactPane, setCompactPane] = useState<"collections" | "source" | "edit">("collections");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [sourceCollectionId, setSourceCollectionId] = useState("");
   const [sourceExpression, setSourceExpression] = useState("");
   const [subtractRight, setSubtractRight] = useState(false);
-  const [editCollectionId, setEditCollectionId] = useState("");
-  const [editName, setEditName] = useState("");
-  const [editValueType, setEditValueType] = useState<EnumeratorValueType>("mixed");
-  const [editVersion, setEditVersion] = useState("custom");
-  const [editDescription, setEditDescription] = useState("");
+  const [editCollectionId, setEditCollectionId] = useState(recovered?.draft.editCollectionId ?? "");
+  const [editName, setEditName] = useState(recovered?.draft.editName ?? "");
+  const [editValueType, setEditValueType] = useState<EnumeratorValueType>(recovered?.draft.editValueType ?? "mixed");
+  const [editVersion, setEditVersion] = useState(recovered?.draft.editVersion ?? "custom");
+  const [editDescription, setEditDescription] = useState(recovered?.draft.editDescription ?? "");
   const [leftSearchKeyword, setLeftSearchKeyword] = useState("");
   const [rightSearchKeyword, setRightSearchKeyword] = useState("");
-  const [rightValues, setRightValues] = useState<string[]>([]);
+  const [rightValues, setRightValues] = useState<string[]>(recovered?.draft.rightValues ?? []);
   const [rightSelected, setRightSelected] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [copyToast, setCopyToast] = useState<CopyToast | null>(null);
   const copyToastTimerRef = useRef<number | null>(null);
+  const currentDraft = { editCollectionId, editName, editValueType, editVersion, editDescription, rightValues };
+  const serializedDraft = JSON.stringify(currentDraft);
+  const draftDirty = serializedDraft !== draftBaseline.current;
+  useUpdateDraft(draftKey, { draft: currentDraft, baseline: draftBaseline.current });
+  useLayoutEffect(() => {
+    try { saveUpdateDraft(draftKey, { draft: currentDraft, baseline: draftBaseline.current }); }
+    catch (reason) { setError(String(reason)); }
+  }, [draftKey, serializedDraft]);
+  if (closeGuard) closeGuard.current = () => {
+    if (isSaving) return false;
+    try { saveUpdateDraft(draftKey, { draft: currentDraft, baseline: draftBaseline.current }); return true; }
+    catch (reason) { setError(String(reason)); return false; }
+  };
+  const replaceDraftAllowed = () => !draftDirty || window.confirm(locale === "en-US" ? "Replace the unsaved collection draft? Save it first to keep your changes." : "替换当前未保存的集合草稿？如需保留修改，请先保存。");
 
   const hydrateRightEditor = useCallback((collection: EnumeratorCollection | null) => {
+    draftBaseline.current = JSON.stringify(collection ? { editCollectionId: collection.category === "custom" ? collection.id : "", editName: collection.name, editValueType: collection.valueType, editVersion: collection.version, editDescription: collection.description, rightValues: collection.values } : emptyEnumeratorDraft);
     if (!collection) {
       setEditCollectionId("");
       setEditName("");
@@ -318,7 +348,7 @@ function EnumeratorContent({
   }, [hydrateRightEditor, runtimeCollection]);
 
   useEffect(() => {
-    reloadCollections(editCollectionId);
+    reloadCollections();
   }, [reloadCollections]);
 
   const editingCollection = useMemo(
@@ -342,10 +372,7 @@ function EnumeratorContent({
     });
   }, [categoryFilter, collections, searchKeyword, locale]);
 
-  const expressionResult = useMemo(
-    () => evaluateEnumeratorExpression(sourceExpression, collections),
-    [collections, sourceExpression],
-  );
+  const expressionResult = useEnumeratorExpression(sourceExpression, collections);
 
   const sourceValues = useMemo(() => {
     if (!subtractRight) return expressionResult.values;
@@ -387,17 +414,22 @@ function EnumeratorContent({
   } = useVirtualWindow(filteredRightRows, rightValueTableRef, 45, 10);
 
   const handleCreateCollection = () => {
+    if (!replaceDraftAllowed()) return;
+    setCompactPane("edit");
     hydrateRightEditor(null);
     setStatus(message("library.collectionDraftCreated"));
   };
 
   const handlePickSourceCollection = (collection: EnumeratorCollection) => {
+    setCompactPane("source");
     setSourceCollectionId(collection.id);
     setSourceExpression(collection.name);
     setStatus(message("library.collectionAsSource", { name: collection.readOnly && (collection.category === "runtime" || collection.id.startsWith("base:dv-")) ? message(collection.category === "runtime" ? "library.collection.runtime" : `library.collection.${collection.id}`) : collection.name }));
   };
 
   const handleLoadRightCollection = (collection: EnumeratorCollection) => {
+    if (!replaceDraftAllowed()) return;
+    setCompactPane("edit");
     hydrateRightEditor(collection);
     setStatus(collection.readOnly ? message("library.collectionAsCopy", { name: collection.readOnly && (collection.category === "runtime" || collection.id.startsWith("base:dv-")) ? message(collection.category === "runtime" ? "library.collection.runtime" : `library.collection.${collection.id}`) : collection.name }) : message("library.collectionForEdit", { name: collection.readOnly && (collection.category === "runtime" || collection.id.startsWith("base:dv-")) ? message(collection.category === "runtime" ? "library.collection.runtime" : `library.collection.${collection.id}`) : collection.name }));
   };
@@ -428,7 +460,7 @@ function EnumeratorContent({
     }, 1000);
   };
 
-  const handleCopyValue = async (value: string, event: MouseEvent) => {
+  const handleCopyValue = async (value: string, event: Pick<MouseEvent, "clientX" | "clientY">) => {
     const { clientX, clientY } = event;
     try {
       await writeClipboardText(value);
@@ -443,6 +475,7 @@ function EnumeratorContent({
   };
 
   const persistCollection = async (asCopy: boolean) => {
+    if (isSaving) return;
     const name = editName.trim() || (editingCollection?.name || t("library.newCollection"));
     const inputName = asCopy ? t("library.collectionCopyName", { name: name }) : name;
     setIsSaving(true);
@@ -477,14 +510,19 @@ function EnumeratorContent({
 
   const contentClassName = [
     "enumerator-content",
-    standalone ? "subwindow-frame subwindow-frame-full enumerator-content-standalone enumerator-window" : "dialog-content subwindow-frame subwindow-frame-wide enumerator-window",
+    standalone ? "subwindow-frame subwindow-frame-full enumerator-content-standalone enumerator-window" : "subwindow-frame subwindow-frame-wide enumerator-window",
   ].filter(Boolean).join(" ");
 
   return (
-    <div className={contentClassName}>
+    <div className={contentClassName} data-active-pane={compactPane}>
       <div className="subwindow-title-bar">
         <h3 className="subwindow-title">{t("library.enumeratorTitle")}</h3>
-        {onClose ? <Button className="subwindow-close-button" type="button" aria-label={t("library.closeWindow")} onClick={onClose}>×</Button> : null}
+        <select className="input enumerator-pane-select" aria-label={getUiLocale() === "en-US" ? "Enumerator panel" : "枚举器面板"} value={compactPane} onChange={event => setCompactPane(event.target.value as typeof compactPane)}>
+          <option value="collections">{getUiLocale() === "en-US" ? "Collections" : "集合列表"}</option>
+          <option value="source">{getUiLocale() === "en-US" ? "Source contents" : "来源内容"}</option>
+          <option value="edit">{getUiLocale() === "en-US" ? "Edit collection" : "编辑集合"}</option>
+        </select>
+        {onClose ? <Button className="subwindow-close-button" type="button" aria-label={t("library.closeWindow")} onClick={onClose}><X size={18} aria-hidden="true" /></Button> : null}
       </div>
 
       <div className="subwindow-body enumerator-body">
@@ -492,6 +530,7 @@ function EnumeratorContent({
           <div className="enumerator-toolbar-row">
             <Input
               className="enumerator-search-input"
+              aria-label={t("library.searchCollections")}
               placeholder={t("library.searchCollections")}
               value={searchKeyword}
               onChange={(event) => setSearchKeyword(event.target.value)}
@@ -524,6 +563,9 @@ function EnumeratorContent({
                     <TableRow
                       key={collection.id}
                       className={isSource || isEditing ? "enumerator-row-selected" : ""}
+                      tabIndex={0}
+                      aria-selected={isSource || isEditing}
+                      onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handlePickSourceCollection(collection); } if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); handleLoadRightCollection(collection); } }}
                       onClick={() => handlePickSourceCollection(collection)}
                       onContextMenu={(event) => {
                         event.preventDefault();
@@ -559,6 +601,7 @@ function EnumeratorContent({
                 <label className="enumerator-input-label">{t("library.sourceCollection")}</label>
                 <Input
                   className="enumerator-expression-input"
+                  aria-label={t("library.sourceCollection")}
                   value={sourceExpression}
                   onChange={(event) => {
                     setSourceCollectionId("");
@@ -577,6 +620,7 @@ function EnumeratorContent({
                 <Input
                   className="enumerator-content-search-input"
                   value={leftSearchKeyword}
+                  aria-label={t("library.searchLeftHint")}
                   onChange={(event) => setLeftSearchKeyword(event.target.value)}
                   placeholder={t("library.searchLeftHint")}
                 />
@@ -605,6 +649,12 @@ function EnumeratorContent({
                         {visibleLeftRows.map((row, index) => (
                           <TableRow
                             key={row.id}
+                            tabIndex={0}
+                            onKeyDown={event => {
+                              if (event.nativeEvent.isComposing) return;
+                              if (event.key === "Enter" || event.key === " ") { event.preventDefault(); const r = event.currentTarget.getBoundingClientRect(); void handleCopyValue(row.id, { clientX: r.x + 16, clientY: r.y + 16 }); }
+                              if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); handleAddValueToRight(row.id); }
+                            }}
                             className={(leftStartIndex + index) % 2 === 0 ? "material-list-row-even" : "material-list-row-odd"}
                             onClick={(event) => handleCopyValue(row.id, event)}
                             onContextMenu={(event) => {
@@ -633,6 +683,7 @@ function EnumeratorContent({
                 <label className="enumerator-input-label">{t("library.editCollectionName")}</label>
                 <Input
                   className="enumerator-name-input"
+                  aria-label={t("library.editCollectionName")}
                   value={editName}
                   onChange={(event) => setEditName(event.target.value)}
                   placeholder={t("library.editCollectionHint")}
@@ -649,6 +700,7 @@ function EnumeratorContent({
                 <Input
                   className="enumerator-content-search-input"
                   value={rightSearchKeyword}
+                  aria-label={t("library.searchRightHint")}
                   onChange={(event) => setRightSearchKeyword(event.target.value)}
                   placeholder={t("library.searchRightHint")}
                 />
@@ -684,6 +736,13 @@ function EnumeratorContent({
                             <TableRow
                               key={row.id}
                               className={rowClassName}
+                              tabIndex={0}
+                              aria-selected={active}
+                              onKeyDown={event => {
+                                if (event.nativeEvent.isComposing) return;
+                                if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleToggleRightSelection(row.id); const r = event.currentTarget.getBoundingClientRect(); void handleCopyValue(row.id, { clientX: r.x + 16, clientY: r.y + 16 }); }
+                                if (event.key === "Delete" || event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); handleRemoveValueFromRight(row.id); }
+                              }}
                               onClick={(event) => {
                                 handleToggleRightSelection(row.id);
                                 handleCopyValue(row.id, event);
@@ -715,7 +774,8 @@ function EnumeratorContent({
 
       <div className="enumerator-footer-row">
         <div className="enumerator-footer-status">
-          <div>{localizeMessage(error || status || runtimeStatus || (currentFile ? displayFilePath(currentFile) : t("library.noCurrentSchematic")))}</div>
+          <div role={error ? "alert" : "status"}>{localizeMessage(error || status || runtimeStatus || (currentFile ? displayFilePath(currentFile) : t("library.noCurrentSchematic")))}</div>
+          {draftDirty && <div className="enumerator-footer-meta">{locale === "en-US" ? "Unsaved collection draft · restored when this window is reopened" : "集合草稿尚未保存 · 重开窗口后恢复"}</div>}
           <div className="enumerator-footer-meta">
             {editCollectionId
               ? t("library.editingCollectionCount", { count: rightValues.length })

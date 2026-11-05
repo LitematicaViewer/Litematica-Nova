@@ -11,14 +11,15 @@ import * as irisSettings from "./locales/irisSettings";
 import * as worldExport from "./locales/worldExport";
 import * as layerView from "./locales/layerView";
 import * as freeCamera from "./locales/freeCamera";
+import * as sceneInteraction from "./locales/sceneInteraction";
 
 export type UiLocale = "zh-CN" | "en-US";
 export type UiLanguagePreference = UiLocale | "system";
 export type UiParams = Record<string, string | number | { key: string; params?: UiParams }>;
 export type UiMessage = string | { key: string; params?: UiParams };
 const dictionaries: Record<UiLocale, Record<string, string>> = {
-  "zh-CN": { ...editor.zhCN, ...library.zhCN, ...native.zhCN, ...settings.zhCN, ...irisSettings.zhCN, ...worldExport.zhCN, ...layerView.zhCN, ...freeCamera.zhCN, ...app.zhCN },
-  "en-US": { ...editor.enUS, ...library.enUS, ...native.enUS, ...settings.enUS, ...irisSettings.enUS, ...worldExport.enUS, ...layerView.enUS, ...freeCamera.enUS, ...app.enUS },
+  "zh-CN": { ...editor.zhCN, ...library.zhCN, ...native.zhCN, ...settings.zhCN, ...irisSettings.zhCN, ...worldExport.zhCN, ...layerView.zhCN, ...freeCamera.zhCN, ...sceneInteraction.zhCN, ...app.zhCN },
+  "en-US": { ...editor.enUS, ...library.enUS, ...native.enUS, ...settings.enUS, ...irisSettings.enUS, ...worldExport.enUS, ...layerView.enUS, ...freeCamera.enUS, ...sceneInteraction.enUS, ...app.enUS },
 };
 const storageKey = "nova.ui.language";
 const languageSubscribers = new Set<() => void>();
@@ -128,6 +129,7 @@ export function localizeMessage(value: unknown, depth = 0): string {
   if (value && typeof value === "object" && "key" in value && typeof value.key === "string") return t(value.key, (value as Exclude<UiMessage, string>).params, depth);
   const raw = value instanceof Error ? value.message : String(value ?? "");
   const plain = raw.replace(/^Error:\s*/, "");
+  if (plain === "NOVA_RENDER_SERVICE_UNAVAILABLE" || plain.includes("NOVA_RENDER_SERVICE_UNAVAILABLE:")) return t("render.serviceUnavailable");
   const key = literalKeys.get(plain); if (key) return t(key, {}, depth);
   for (const row of messageTemplates) {
     const match = row.regex?.exec(plain);

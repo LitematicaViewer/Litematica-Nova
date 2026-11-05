@@ -1,5 +1,33 @@
 //! Renderer-independent camera input math. Cursor and viewport coordinates are
 //! physical pixels; relative mouse deltas are consumed once, without DPI or dt.
+
+/// Shared click/drag hysteresis. The threshold is in logical pixels; deltas
+/// remain physical pixels and are applied exactly once after crossing it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DragThreshold {
+    anchor: Option<[f64; 2]>,
+    previous: Option<[f64; 2]>,
+    active: bool,
+}
+impl DragThreshold {
+    pub fn reset(&mut self, anchor: Option<[f64; 2]>) {
+        self.anchor = anchor; self.previous = anchor; self.active = false;
+    }
+    pub fn movement(&mut self, cursor: [f64; 2], scale_factor: f64) -> Option<[f64; 2]> {
+        if cursor.iter().any(|v| !v.is_finite()) { return None; }
+        let Some(anchor) = self.anchor else { self.reset(Some(cursor)); return None; };
+        let previous = self.previous.replace(cursor).unwrap_or(anchor);
+        if !self.active {
+            let scale = if scale_factor.is_finite() && scale_factor > 0.0 { scale_factor } else { 1.0 };
+            let delta = [cursor[0]-anchor[0], cursor[1]-anchor[1]];
+            if delta[0].hypot(delta[1]) < 4.0 * scale { return None; }
+            self.active = true;
+            return Some(delta);
+        }
+        Some([cursor[0]-previous[0], cursor[1]-previous[1]])
+    }
+}
+
 pub fn rotation_delta(delta: [f64; 2], sensitivity: f64) -> Option<[f64; 2]> {
     if !sensitivity.is_finite() || sensitivity <= 0.0 || delta.iter().any(|v| !v.is_finite()) {
         return None;
@@ -52,6 +80,8 @@ pub fn movement_step(keys: [bool; 9], forward: [f64; 3], right: [f64; 3],
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SceneViewFeedback {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interaction: Option<crate::SceneInteractionSnapshot>,
     pub request_id: String,
     pub camera_locked: bool,
     pub world_time: Option<u32>,
@@ -86,6 +116,21 @@ pub fn publish_feedback(path: &std::path::Path, value: &SceneViewFeedback) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drag_threshold_uses_logical_distance_and_clears_on_release() {
+        let mut drag=DragThreshold::default();
+        drag.reset(Some([10.0,10.0]));
+        assert_eq!(drag.movement([13.0,10.0],1.0),None);
+        assert_eq!(drag.movement([14.0,10.0],1.0),Some([4.0,0.0]));
+        assert_eq!(drag.movement([15.0,11.0],1.0),Some([1.0,1.0]));
+        drag.reset(Some([20.0,20.0]));
+        assert_eq!(drag.movement([27.0,20.0],2.0),None);
+        assert_eq!(drag.movement([28.0,20.0],2.0),Some([8.0,0.0]));
+        drag.reset(None);
+        assert_eq!(drag.movement([90.0,80.0],1.0),None);
+        assert_eq!(drag.movement([91.0,81.0],1.0),None);
+    }
+
 
     #[test]
     fn feedback_atomically_replaces_actual_capture_and_failure_state() {
@@ -93,7 +138,7 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("nova-camera-feedback-{}-{nonce}", std::process::id()));
         std::fs::create_dir(&directory).unwrap();
         let path = directory.join("state.json");
-        let mut feedback = SceneViewFeedback { request_id: "camera-test".into(), camera_locked: true,
+        let mut feedback = SceneViewFeedback { interaction: None, request_id: "camera-test".into(), camera_locked: true,
             world_time: Some(6000), weather: Some("auto".into()), error: None };
         publish_feedback(&path, &feedback).unwrap();
         feedback.camera_locked = false;

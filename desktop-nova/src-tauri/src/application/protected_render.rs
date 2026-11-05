@@ -24,8 +24,7 @@ impl ProtectedRender {
         nova_protected_loader::require_private_runtime().map_err(|error| error.to_string())?;
         #[cfg(feature = "development-runtime")]
         {
-            let _ = backend;
-            return self.acquire_development(data_root, request);
+            return self.acquire_development(data_root, backend, request);
         }
         #[cfg(not(feature = "development-runtime"))]
         {
@@ -66,8 +65,10 @@ impl ProtectedRender {
     }
 
     #[cfg(feature = "development-runtime")]
-    fn acquire_development(&mut self, data_root: &Path, request: &[u8]) -> Result<ProtectedTask, String> {
+    fn acquire_development(&mut self, data_root: &Path, backend: &Path, request: &[u8]) -> Result<ProtectedTask, String> {
         use nova_protected_loader::development;
+        #[cfg(not(feature = "standalone-runtime"))]
+        let _ = backend;
         let selected = development::runtime().map_err(|e| e.to_string())?;
         let value: serde_json::Value = serde_json::from_slice(request).map_err(|e| e.to_string())?;
         let mode = value.get("displayMode").or_else(|| value.pointer("/settings/displayMode"))
@@ -75,7 +76,7 @@ impl ProtectedRender {
             .and_then(|value| value.as_str()).ok_or("development render request has no display mode")?;
         let requires_shared_light = match mode {
             "standard" => false,
-            "full" => true,
+            "full" => !cfg!(feature = "standalone-runtime"),
             _ => return Err(format!("unsupported development core display mode: {mode}")),
         };
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_millis();
@@ -97,6 +98,9 @@ impl ProtectedRender {
         development::validate_task_context(&context).map_err(|e| e.to_string())?;
         let module_path = root.join(format!("{}.{}", context.module_sha256, nova_protected_loader::MODULE_EXTENSION));
         if !module_path.exists() {
+            #[cfg(feature = "standalone-runtime")]
+            let source = development::source_module(backend).map_err(|e| e.to_string())?;
+            #[cfg(not(feature = "standalone-runtime"))]
             let source = development::source_module().map_err(|e| e.to_string())?;
             let mut file = std::fs::File::open(&source).map_err(|e| e.to_string())?;
             development::verify_module(&mut file, &context).map_err(|e| e.to_string())?;
@@ -109,13 +113,14 @@ impl ProtectedRender {
         }
         let mut file = std::fs::File::open(&module_path).map_err(|e| e.to_string())?;
         development::verify_module(&mut file, &context).map_err(|e| e.to_string())?;
+        #[cfg(not(feature = "standalone-runtime"))]
         development::prepare_remote_task(&context, data_root.join("protection/devices")).map_err(|e| e.to_string())?;
         let ticket_path = root.join(format!("{task_id}.json"));
         std::fs::write(&ticket_path, serde_json::to_vec(&context).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         self.retries.remove(&key);
         // This is an explicit local DevelopmentTask, never a forged signed grant.
-        // Standard makes no network request; Full has one real shared-light
-        // service grant, resumed across children independently of local loading.
+        // Standalone Standard/Full use only the authenticated packaged module.
+        // Ordinary development Full still resumes one real shared-light grant.
         Ok(ProtectedTask { ticket_path, module_path })
     }
 }

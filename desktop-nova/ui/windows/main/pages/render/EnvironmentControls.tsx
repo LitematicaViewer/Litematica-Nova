@@ -1,3 +1,6 @@
+import { Popover } from "radix-ui";
+import { CloudSun, X } from "lucide-react";
+import { Button } from "../../../../components/ui/button";
 import React, { useEffect, useRef, useState } from "react";
 import { t } from "../../../../../src/services/i18n";
 import { getUserConfig, type UserConfigInfo, type ViewerControlConfig } from "../../../../../src/platform/appData";
@@ -76,20 +79,23 @@ export function EnvironmentControls({ sourcePath, displayMode, ready, environmen
   const timeDisabled = !ready || !supported || !permissions.allow_time_modification;
   const weatherDisabled = !ready || !supported || !permissions.allow_weather_modification;
   const confirmed = applied && !applied.error && (typeof applied.worldTime === "number" || applied.weather);
-  return <details className="render-environment" onToggle={event => {
-    if (event.currentTarget.open && ready) void releaseCameraInput({ sourcePath, displayMode }).catch(failure => setError(String(failure)));
+  return <Popover.Root onOpenChange={open => {
+    if (open && ready) void releaseCameraInput({ sourcePath, displayMode }).catch(failure => setError(String(failure)));
   }}>
-    <summary>{t("environment.title")}</summary>
+    <Popover.Trigger asChild><Button variant="ghost" title={t("environment.title")} aria-label={t("environment.title")}><CloudSun size={16} aria-hidden /><span className="render-tool-label">{t("environment.title")}</span></Button></Popover.Trigger>
+    <Popover.Portal><Popover.Content sideOffset={8} align="start" collisionPadding={12} className="render-environment-panel" data-native-ui-surface
+      onWheel={event => event.stopPropagation()} aria-label={t("environment.title")}>
+    <div className="render-panel-heading"><strong>{t("environment.title")}</strong><Popover.Close asChild><Button variant="ghost" size="icon" aria-label={t("common.close")}><X size={16} /></Button></Popover.Close></div>
     <div className="render-environment-body">
       {!supported && <p className="render-preview-help">{t("environment.unavailable")}</p>}
       <label className="render-environment-time">{t("environment.time")}
         <input type="range" min={0} max={23999} step={1} value={time} disabled={timeDisabled}
           aria-describedby="render-environment-clock" list="render-environment-ticks"
           onChange={event => { const next = Number(event.currentTarget.value); setTime(next); enqueue({ worldTime: next }); }} />
-        <output>{time} {t("environment.ticks")}</output>
+        <output title={`${time} ${t("environment.ticks")}`}>{applied?.worldTimeLabel ?? "—"}</output>
       </label>
       <datalist id="render-environment-ticks"><option value="0" label="06:00" /><option value="6000" label="12:00" /><option value="12000" label="18:00" /><option value="18000" label="00:00" /></datalist>
-      <p id="render-environment-clock" className="render-preview-help">{t("environment.clockHint")}</p>
+      <span id="render-environment-clock" className="sr-only">{t("environment.clockHint")}</span>
       <label className="render-environment-weather">{t("environment.weather")}
         <select className="nova-control" value={weather} disabled={weatherDisabled}
           onChange={event => { const next = event.currentTarget.value as Weather; setWeather(next); enqueue({ weather: next }); }}>
@@ -102,5 +108,5 @@ export function EnvironmentControls({ sourcePath, displayMode, ready, environmen
       <output className="render-environment-applied" aria-live="polite">{t(error ? "environment.failed" : pending ? "environment.applying" : confirmed ? "environment.applied" : "environment.waiting")}</output>
       {error && <div className="render-error" role="alert">{error}</div>}
     </div>
-  </details>;
+  </Popover.Content></Popover.Portal></Popover.Root>;
 }

@@ -7,7 +7,7 @@ import { NavIcon } from "./NavIcon";
 // same page; only the location and labels of its navigation entry change.
 export const PRIMARY_ROUTES = ["home", "library", "properties", "render", "flake", "statistics", "replace", "composition", "generate", "settings"] as const;
 export type PrimaryRoute = typeof PRIMARY_ROUTES[number];
-export const FILE_REQUIRED_ROUTES = ["properties", "render", "flake", "statistics", "replace"] as const;
+export const FILE_REQUIRED_ROUTES = ["properties", "render", "flake", "replace"] as const;
 export function requiresProjection(route: string): boolean {
   return (FILE_REQUIRED_ROUTES as readonly string[]).includes(route);
 }
@@ -19,10 +19,10 @@ export function primaryNavigationItems(locale: string) {
   return PRIMARY_ROUTES.map((route, index) => ({ route, label: labels[index], icon: icons[index] }));
 }
 
-export function PrimaryNavigation({ route, onNavigate, theme }: { route: string; onNavigate: (route: PrimaryRoute) => void; theme: string }) {
+export function PrimaryNavigation({ route, onNavigate, theme, placement = "all" }: { route: string; onNavigate: (route: PrimaryRoute) => void; theme: string; placement?: "all" | "main" | "footer" }) {
   const { locale } = useI18n();
-  return <nav className="nav-list primary-navigation" aria-label={locale === "en-US" ? "Main navigation" : "主导航"}>
-    {primaryNavigationItems(locale).map(item => <Button variant="ghost" key={item.route} type="button"
+  return <nav className="nav-list primary-navigation" aria-label={placement === "footer" ? (locale === "en-US" ? "Settings navigation" : "设置导航") : (locale === "en-US" ? "Main navigation" : "主导航")}>
+    {primaryNavigationItems(locale).filter(item => placement === "all" || (item.route === "settings") === (placement === "footer")).map(item => <Button variant="ghost" themeSlot="navigation" key={item.route} type="button"
       data-route={item.route} className={`sidebar-item nav-item${route === item.route ? " active nav-item-active" : ""}`}
       aria-current={route === item.route ? "page" : undefined} aria-label={item.label} title={item.label}
       onClick={() => onNavigate(item.route)}>

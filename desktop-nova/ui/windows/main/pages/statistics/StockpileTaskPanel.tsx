@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ChevronDown, Copy, Download, FilePlus, Info, Minus, MoreHorizontal, Pencil, Plus, Settings, Upload } from "lucide-react";
-import { DropdownMenu } from "radix-ui";
+import { ChevronDown, Copy, Download, FilePlus, Info, Minus, MoreHorizontal, Pencil, Plus, Settings, Upload, X } from "lucide-react";
+import { DropdownMenu, Popover } from "radix-ui";
 import {
   commandStockpileTask, getStockpileTask, displayFilePath, openDialog, saveDialog,
   getUiLocale, getMinecraftTranslations, t, type ApplicationMaterialScope, type StockpileItemView,
@@ -30,7 +30,7 @@ type Command = Parameters<typeof commandStockpileTask>[0];
 type Mutation = NonNullable<Command["mutation"]>;
 type Preferences = Task["preferences"];
 type Material = Task["materials"]["materials"][number];
-type WriteQueue = { epoch: number; task: Task; pending: Map<string, Command>; running: boolean; refresh: boolean; settled?: Promise<void>; resolveSettled?: () => void };
+type WriteQueue = { epoch: number; task: Task; pending: Map<string, Command>; running: boolean; refresh: boolean; stopped?: boolean; settled?: Promise<void>; resolveSettled?: () => void };
 type Confirmation = { taskId: string; sourceRevision: string; name: string; scope: string };
 type PendingDraft = { taskId: string; projectId: string; sourceRevision: string; commands: Array<[string, Command]> };
 export interface StockpileExportContext {
@@ -62,7 +62,7 @@ export function mergeStockpileMutation(previous: Mutation | undefined, next: Mut
 }
 
 export function stockpileDetailSelection(items: Pick<TaskItem, "materialId">[], selectedId: string | null): string | null {
-  return items.some(item => item.materialId === selectedId) ? selectedId : items[0]?.materialId || null;
+  return items.some(item => item.materialId === selectedId) ? selectedId : null;
 }
 
 function StockpileMenu({ label, iconOnly = false, disabled = false, children }: {
@@ -104,6 +104,7 @@ function QuantityInput({ value, label, onQuantity, onAdjust, onDraft }: {
   const [draft, setDraft] = useState(String(value));
   const focused = useRef(false);
   const submitted = useRef(value);
+  const cancelBlur = useRef(false);
   useEffect(() => { if (!focused.current) { setDraft(String(value)); submitted.current = value; } }, [value]);
   const commit = () => {
     const quantity = /^\d+$/.test(draft) ? Number(draft) : NaN;
@@ -126,8 +127,12 @@ function QuantityInput({ value, label, onQuantity, onAdjust, onDraft }: {
       const quantity = Number(text);
       if (!Number.isSafeInteger(quantity) || quantity < 0) return;
       onDraft(quantity);
-    }} onBlur={() => { focused.current = false; commit(); }}
-    onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { event.stopPropagation(); event.currentTarget.blur(); } }} />
+    }} onBlur={() => { focused.current = false; if (cancelBlur.current) { cancelBlur.current = false; return; } commit(); }}
+    onKeyDown={event => {
+      if (event.nativeEvent.isComposing) return;
+      if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelBlur.current = true; setDraft(String(submitted.current)); onDraft(undefined); event.currentTarget.blur(); }
+    }} />
     <Button size="icon-sm" variant="ghost" aria-label={t("stockpile.addOne")} onClick={() => adjust(1)}><Plus size={14} /></Button>
   </div>;
 }
@@ -148,6 +153,8 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   const [sourcesDialog, setSourcesDialog] = useState<{ mode: "create" | "manage"; task?: Task } | null>(null);
   const [nameDraft, setNameDraft] = useState("");
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<Confirmation | null>(null);
+  const deletingTask = useRef<string | null>(null);
   const [legacyOpen, setLegacyOpen] = useState(false);
   const [legacyId, setLegacyId] = useState("");
   const [recovery, setRecovery] = useState<PendingDraft | null>(null);
@@ -180,7 +187,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   currentTask.current = task;
   const capturePending = () => {
     const work = queue.current;
-    if (!work) return undefined;
+    if (!work || work.stopped) return undefined;
     if (recovery?.taskId === work.task.taskId) return recovery;
     const draft = pendingDraft(work);
     const commands = new Map(draft?.commands || []);
@@ -200,12 +207,12 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   const accept = (next: Workspace, preserveInput = false) => {
     const changedTask = next.task?.taskId !== currentTask.current?.taskId;
     setWorkspace(next); currentTask.current = next.task || undefined;
+    if (changedTask) { setDetailId(null); setRecovery(null); setSelectedIds(new Set()); setDrawerOpen(false); quantityDrafts.current.clear(); setEditingQuantities(0); setPageOffset(0); }
     if (next.task && (changedTask || !preserveInput)) {
       const nextPreferences = { ...defaultPreferences, ...next.task.preferences,
         view: next.task.preferences.view === "comfortable" ? "comfortable" : "compact" };
       setPreferences(nextPreferences); setSearchDraft(nextPreferences.search);
       preferencesRef.current = nextPreferences; searchRef.current = nextPreferences.search;
-      if (changedTask) { setDetailId(null); setRecovery(null); setSelectedIds(new Set()); setDrawerOpen(false); quantityDrafts.current.clear(); setEditingQuantities(0); }
     }
   };
   const load = async () => {
@@ -226,31 +233,33 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   useEffect(() => { onPendingChange?.(pending > 0 || searchPending || editingQuantities > 0); }, [pending, searchPending, editingQuantities, onPendingChange]);
 
   const drain = async (work: WriteQueue) => {
+    if (work.stopped) return;
     if (work.running) return work.settled;
     work.running = true;
     work.settled = new Promise<void>(resolve => { work.resolveSettled = resolve; });
     if (work.epoch === epoch.current) { setError(""); setPending(work.pending.size); }
     try {
-      while (work.pending.size) {
+      while (!work.stopped && work.pending.size) {
         const [key, command] = work.pending.entries().next().value as [string, Command];
         const next = await commandStockpileTask({ uiLocale: getUiLocale(), languageMap: getMinecraftTranslations(), ...command, projectId: work.task.projectId, taskId: work.task.taskId, sourceRevision: work.task.sourceRevision, query: { offset: pageOffset, limit: 200 } });
+        if (work.stopped) return;
         if (!next.task || next.task.taskId !== work.task.taskId) throw new Error(t("stockpile.taskChanged"));
         if (work.pending.get(key) === command) work.pending.delete(key);
         work.task = next.task;
         persistPending(work);
         if (work.epoch === epoch.current) { sequence.current += 1; accept(next, true); setPending(work.pending.size); }
       }
-      if (work.refresh && work.epoch === epoch.current) {
+      if (!work.stopped && work.refresh && work.epoch === epoch.current) {
         work.refresh = false;
         const next = await commandStockpileTask({ uiLocale: getUiLocale(), languageMap: getMinecraftTranslations(), action: "select", projectId: work.task.projectId, taskId: work.task.taskId, query: { offset: pageOffset, limit: 200 } });
-        if (work.epoch === epoch.current) { accept(next, true); if (next.task) work.task = next.task; }
+        if (!work.stopped && work.epoch === epoch.current) { accept(next, true); if (next.task) work.task = next.task; }
       }
     } catch (failure) { if (work.epoch === epoch.current) setError(String(failure)); }
     finally { work.running = false; work.resolveSettled?.(); if (work.epoch === epoch.current) setPending(work.pending.size); }
   };
   const enqueue = (key: string, command: Command) => {
     const work = queue.current;
-    if (!work || work.task.taskId !== currentTask.current?.taskId) return;
+    if (!work || work.stopped || work.task.taskId !== currentTask.current?.taskId) return;
     if (recovery?.taskId === work.task.taskId) { setRecoveryOpen(true); return; }
     const previous = work.pending.get(key);
     work.pending.set(key, command.mutation ? { ...command, mutation: mergeStockpileMutation(previous?.mutation, command.mutation) } : command);
@@ -265,7 +274,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
   const changeQuantity = (materialId: string, quantity: number) => {
     const work = queue.current;
     const item = work?.task.items.find(entry => entry.materialId === materialId);
-    if (!work || !item || !Number.isSafeInteger(quantity) || quantity < 0) return;
+    if (!work || work.stopped || !item || !Number.isSafeInteger(quantity) || quantity < 0) return;
     clearQuantityDraft(materialId);
     const pendingMutation = work.pending.get(`item:${materialId}`)?.mutation;
     if (quantity === (pendingMutation?.clear ? 0 : pendingMutation?.quantity ?? item.quantity)) {
@@ -289,7 +298,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     mutate(item.materialId, { quantity, complete: !undo, status: undo ? "preparing" : "done" });
   };
   const rememberQuantity = (boundTaskId: string, boundRevision: string, materialId: string, quantity: number | undefined) => {
-    const work = queue.current; if (!work || work.task.taskId !== boundTaskId || work.task.sourceRevision !== boundRevision) return;
+    const work = queue.current; if (!work || work.stopped || work.task.taskId !== boundTaskId || work.task.sourceRevision !== boundRevision) return;
     const key = `${boundTaskId}:${materialId}`;
     if (quantity === undefined) quantityDrafts.current.delete(key);
     else quantityDrafts.current.set(key, { taskId: boundTaskId, sourceRevision: boundRevision, materialId, quantity });
@@ -348,12 +357,45 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     }
     setPending(work.pending.size); if (work.pending.size) void drain(work);
   };
+  const deleteCurrentTask = async (captured: Confirmation) => {
+    const work = queue.current;
+    if (!work || deletingTask.current || !resetConfirmationMatches(captured, currentTask.current)) return;
+    const expected = ++epoch.current; sequence.current += 1;
+    deletingTask.current = captured.taskId; work.stopped = true; work.refresh = false;
+    setLoading(true); setError(""); setStatus("");
+    try {
+      // Stop queued edits; one already-dispatched write may finish before the atomic delete.
+      if (work.running) await work.settled;
+      const next = await commandStockpileTask({ action: "delete", taskId: captured.taskId, projectId: work.task.projectId,
+        sourceRevision: captured.sourceRevision, uiLocale: getUiLocale(), languageMap: getMinecraftTranslations() });
+      work.pending.clear();
+      // A local draft-store error cannot undo an acknowledged database deletion.
+      try { saveUpdateDraft(draftKey(captured.taskId), undefined); } catch (failure) { setError(String(failure)); }
+      if (expected !== epoch.current) return;
+      queue.current = next.task ? { epoch: expected, task: next.task, pending: new Map(), running: false, refresh: false } : null;
+      setPending(0); accept(next);
+      if (queue.current) restorePending(queue.current);
+    } catch (failure) {
+      if (expected === epoch.current) {
+        work.stopped = false; work.epoch = expected; queue.current = work;
+        setPending(work.pending.size); setError(String(failure));
+      }
+    } finally { deletingTask.current = null; if (expected === epoch.current) setLoading(false); }
+  };
   const refreshRef = useRef<() => void>(() => {});
-  refreshRef.current = () => { const work = queue.current; if (!work) return; if (work.pending.size || work.running) work.refresh = true;
+  refreshRef.current = () => { const work = queue.current; if (!work || work.stopped) return; if (work.pending.size || work.running) work.refresh = true;
     else void action({ action: "select", taskId: work.task.taskId, projectId: work.task.projectId }, false); };
   useEffect(() => {
-    const unlisten = listenEvent<{ taskId: string }>("stockpile-task-changed", event => {
-      if (event.payload.taskId === currentTask.current?.taskId) refreshRef.current();
+    const unlisten = listenEvent<{ taskId: string; deleted?: boolean }>("stockpile-task-changed", event => {
+      const { taskId, deleted } = event.payload;
+      if (deleted && deletingTask.current === taskId) return;
+      if (deleted && taskId === currentTask.current?.taskId) {
+        const work = queue.current;
+        if (work) { work.stopped = true; work.refresh = false; work.pending.clear(); }
+        queue.current = null; quantityDrafts.current.clear(); setEditingQuantities(0);
+        try { saveUpdateDraft(draftKey(taskId), undefined); } catch (failure) { setError(String(failure)); }
+        void loadRef.current();
+      } else if (deleted || taskId === currentTask.current?.taskId) refreshRef.current();
     }).catch(() => undefined);
     return () => { void unlisten.then(stop => stop?.()); };
   }, []);
@@ -377,7 +419,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     if (work && !recovery) try { saveUpdateDraft(draftKey(work.task.taskId), capturePending()); } catch (failure) { setError(String(failure)); }
   };
   const rows = task?.view.rows || [];
-  const rowHeight = 44;
+  const rowHeight = 40;
   const virtual = useVirtualWindow(rows, scrollRef, rowHeight, 8);
   useLayoutEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0; }, [preferences.search, preferences.category, preferences.filter, preferences.sort, task?.taskId]);
   const categories = task?.view.categories || [];
@@ -428,6 +470,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     if (quantityDrafts.current.size) throw new Error(t("stockpile.pendingBackup"));
   };
   const showDetails = (id: string) => {
+    if (drawerOpen && id === detailId) { setDetailId(null); setDrawerOpen(false); return; }
     if (id !== detailId) setRecipeOpen(false);
     recipeRequested.current = null;
     setDetailId(id);
@@ -508,7 +551,14 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     </section>
   </div> : <div className="stockpile-detail-empty">{t(rows.length ? "stockpile.selectMaterial" : "statistics.noMatches")}</div>;
 
-  return <section className={`stockpile-task stockpile-density-${preferences.view}`} aria-busy={loading}>
+  return <section className={`stockpile-task stockpile-density-${preferences.view}`} aria-busy={loading} onKeyDown={event => {
+    if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing) return;
+    if ((event.target as Element).closest('[role="dialog"], [role="menu"], [role="listbox"]')) return;
+    if (drawerOpen) { setDrawerOpen(false); setDetailId(null); }
+    else if (selectedIds.size) setSelectedIds(new Set());
+    else return;
+    event.preventDefault(); event.stopPropagation();
+  }}>
     <div className="stockpile-task-controls">
     <header className="stockpile-panel-header">
       <div className="stockpile-title-group"><h2>{t("editor.materialDetails")}</h2>
@@ -529,6 +579,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
           <DropdownMenu.Item className="stockpile-menu-item" disabled={loading || task?.view.capabilities.import === false} title={task?.view.capabilities.reason} onSelect={() => void backup(true)}>{t("stockpile.importBackup")}</DropdownMenu.Item>
           <DropdownMenu.Separator className="stockpile-menu-separator" />
           <DropdownMenu.Item className="stockpile-menu-item is-danger" disabled={busy || !task?.view.capabilities.reset || !!recovery || !!error} onSelect={() => task && setConfirmation({ taskId: task.taskId, sourceRevision: task.sourceRevision, name: task.name, scope: scopeLabel })}>{t("stockpile.reset")}</DropdownMenu.Item>
+          <DropdownMenu.Item className="stockpile-menu-item is-danger" disabled={loading || !task} onSelect={() => task && setDeleteConfirmation({ taskId: task.taskId, sourceRevision: task.sourceRevision, name: task.name, scope: scopeLabel })}>{t("stockpile.delete")}</DropdownMenu.Item>
         </StockpileMenu>
       </div>
     </header>
@@ -551,25 +602,25 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
         <span className="stockpile-save-status muted" role="status">{error || recovery ? t("stockpile.notSaved") : pending || searchPending ? t("editor.saving") : editingQuantities ? t("stockpile.editingQuantity") : loading ? t("editor.loading") : task ? t("stockpile.saved") : ""}</span>
         {status && <span className="stockpile-action-status muted" role="status">{status}</span>}
       </div>
-      {selectedItems.length > 0 && <div className="stockpile-batch-toolbar"><strong>{t("stockpile.selectedCount", { count: selectedItems.length })}</strong>
-        <Button size="sm" onClick={() => applySelected(false)}>{t("stockpile.batchComplete")}</Button>
-        <Button size="sm" variant="ghost" onClick={() => applySelected(true)}>{t("stockpile.batchPreparing")}</Button>
-        <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>{t("stockpile.clearSelection")}</Button>
-      </div>}
       {error && <div className="subwindow-error stockpile-error" role="alert"><span>{t("stockpile.failed", { error })}</span><Button size="sm" onClick={() => void retry()}>{t("stockpile.retry")}</Button></div>}
       {task?.sourceStatus && task.sourceStatus !== "current" && <div className="stockpile-context-notice" role="status">{t(task.sourceStatus === "changed" ? "stockpile.sourceChanged" : task.sourceStatus === "incompatible" ? "stockpile.sources.status.incompatible" : "stockpile.sourceMissing")}</div>}
-      {task && <details className="stockpile-task-sources"><summary>{t("stockpile.sources.list")}</summary>
+      {task && <Popover.Root><Popover.Trigger asChild><Button className="stockpile-task-sources-trigger" size="sm" variant="ghost">{t("stockpile.sources.list")}<ChevronDown size={14} /></Button></Popover.Trigger><Popover.Portal><Popover.Content className="stockpile-task-sources" align="start" sideOffset={4} collisionPadding={8} onKeyDown={event => event.stopPropagation()}>
         <ul>{task.sources.map(source => <li key={source.sourceId}>
           <div><strong>{source.label || source.sourcePath.split(/[\\/]/).pop()} ×{source.copies}</strong><span className="stockpile-source-path">{displayFilePath(source.sourcePath)}</span>
             <span>{source.scope.kind === "region" ? t("statistics.regionScope", { name: source.scope.value }) : source.scope.kind === "layer" ? t("stockpile.layerScope", { layer: source.scope.value }) : t("statistics.all")} · {source.minecraftVersion} · {t(`stockpile.sources.status.${source.status}`)}</span>
             {source.includeContainerItems && <span>{t("statistics.includeContainers")}</span>}
           </div><Button size="sm" variant="ghost" disabled={busy} onClick={() => void action({ action: "sync", sourceIds: [source.sourceId], expectedRevision: task.sourceRevision, requestId: crypto.randomUUID() })}>{t("stockpile.syncSnapshot")}</Button>
         </li>)}</ul>
-      </details>}
+      </Popover.Content></Popover.Portal></Popover.Root>}
       {recovery && <div className="stockpile-context-notice" role="status"><span>{t("stockpile.pendingRecovery")}</span><Button size="sm" variant="outline" onClick={() => setRecoveryOpen(true)}>{t("stockpile.reviewRecovery")}</Button></div>}
       {!!workspace?.legacyTasks?.length && <div className="stockpile-context-notice"><span>{t("stockpile.legacyRecords", { count: workspace.legacyTasks.length })}</span><Button size="sm" disabled={busy} onClick={() => { setLegacyId(workspace.legacyTasks[0].taskId); setLegacyOpen(true); }}>{t("stockpile.bindLegacy")}</Button></div>}
     </div>
     </div>
+      <div className="stockpile-batch-slot">{selectedItems.length > 0 && <div className="stockpile-batch-toolbar"><strong>{t("stockpile.selectedCount", { count: selectedItems.length })}</strong>
+        <Button size="sm" onClick={() => applySelected(false)}>{t("stockpile.batchComplete")}</Button>
+        <Button size="sm" variant="ghost" onClick={() => applySelected(true)}>{t("stockpile.batchPreparing")}</Button>
+        <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>{t("stockpile.clearSelection")}</Button>
+      </div>}</div>
     <div className="stockpile-workspace">
       <div className="stockpile-list-panel">
         <div className="material-table-scroll stockpile-table-scroll" ref={scrollRef}>
@@ -584,7 +635,7 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
               {virtual.visibleItems.map((item, index) => {
                 const material = item.material, name = item.displayName, state = item.displayStatus;
                 return <TableRow key={item.materialId} className={`stockpile-row ${(virtual.startIndex + index) % 2 ? "material-list-row-odd" : "material-list-row-even"}${detailId === item.materialId ? " is-selected" : ""}`}
-                  aria-selected={detailId === item.materialId} tabIndex={0} onClick={() => showDetails(item.materialId)} onKeyDown={event => { if (event.currentTarget === event.target && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); showDetails(item.materialId); } }}>
+                  aria-selected={detailId === item.materialId} tabIndex={0} onClick={() => showDetails(item.materialId)} onKeyDown={event => { if (!event.nativeEvent.isComposing && event.currentTarget === event.target && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); showDetails(item.materialId); } }}>
                   <TableCell className="stockpile-cell-check" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}><Checkbox checked={selectedIds.has(item.materialId)} aria-label={t("stockpile.selectNamed", { name })} onCheckedChange={checked => toggleSelected(item.materialId, checked === true)} /></TableCell>
                   <TableCell className="stockpile-cell-name"><div className="beta-material-name">{task && <StockpileIcon task={task} iconKey={item.material.item_icon_key} />}<span title={`${name}\n${item.materialId}`}>{name}{preferences.showIconFallbackBadge && material?.icon_available === false && !!material.icon_diagnostic && <small title={material.icon_diagnostic}>{t("stockpile.iconFallbackBadge")}</small>}</span></div></TableCell>
                   <TableCell className="stockpile-cell-required" title={String(item.requiredCount)}>{displayQuantity(item, "required")}</TableCell>
@@ -607,6 +658,10 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
           </Table>
         </div>
       </div>
+      {drawerOpen && detailItem && <aside className="stockpile-material-inspector" role="region" aria-label={t("stockpile.materialDetails")}>
+        <header><h3>{t("stockpile.materialDetails")}</h3><Button variant="ghost" size="icon-sm" aria-label={t("library.closeDialog")} onClick={() => { setDrawerOpen(false); setDetailId(null); }}><X size={16} /></Button></header>
+        <div className="stockpile-detail-scroll">{detailsContent}</div>
+      </aside>}
     </div>
     {task && task.view.totalRows > task.view.limit && <nav className="stockpile-pagination" aria-label={t("statistics.pages")}>
       <Button size="sm" disabled={busy || task.view.offset === 0} onClick={() => { const offset = Math.max(0, task.view.offset - task.view.limit); setPageOffset(offset); void action({ action: "select", query: { offset, limit: 200 } }, false); }}>{t("statistics.previousPage")}</Button>
@@ -615,7 +670,6 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
     </nav>}
     {exportOpen && renderExportDialog?.({ taskId: task?.taskId, projectId: task?.projectId, sourceRevision: task?.sourceRevision,
       query: { offset: pageOffset, limit: 200 }, beforeExport: settleExport }, () => setExportOpen(false))}
-    {drawerOpen && detailItem && <Dialog title={t("stockpile.materialDetails")} onClose={() => setDrawerOpen(false)} className="stockpile-material-detail-dialog" width="lg"><div className="stockpile-detail-scroll">{detailsContent}</div></Dialog>}
     {sourcesDialog && <StockpileSourcesDialog mode={sourcesDialog.mode} task={sourcesDialog.task}
       defaultName={sourcesDialog.mode === "create" ? sourcePath.split(/[\\/]/).pop()?.replace(/\.litematic$/i, "") || "" : undefined}
       initialSources={sourcesDialog.mode === "manage" ? sourcesDialog.task!.sources : sourcePath ? [{ sourcePath, scope, includeContainerItems, copies: multiplier }] : []}
@@ -650,6 +704,9 @@ export function StockpileTaskPanel({ sourcePath, scope = { kind: "all", value: n
       const captured = confirmation; setConfirmation(null);
       if (resetConfirmationMatches(captured, currentTask.current)) enqueue("reset", { action: "mutate", mutation: { reset: true } });
     }}>{t("stockpile.confirmReset")}</Button></>}><p>{t("stockpile.resetNamedPrompt", { name: confirmation.name })}</p><p className="muted">{confirmation.scope}</p></Dialog>}
+    {deleteConfirmation && <Dialog title={t("stockpile.delete")} onClose={() => setDeleteConfirmation(null)} width="sm" footer={<><Button variant="ghost" onClick={() => setDeleteConfirmation(null)}>{t("editor.cancel")}</Button><Button variant="destructive" disabled={loading || !resetConfirmationMatches(deleteConfirmation, task)} onClick={() => {
+      const captured = deleteConfirmation; setDeleteConfirmation(null); void deleteCurrentTask(captured);
+    }}>{t("stockpile.confirmDelete")}</Button></>}><p>{t("stockpile.deleteNamedPrompt", { name: deleteConfirmation.name })}</p><p className="muted">{deleteConfirmation.scope}</p><p>{t("stockpile.deleteScope")}</p></Dialog>}
     {legacyOpen && <Dialog title={t("stockpile.bindLegacy")} onClose={() => setLegacyOpen(false)} width="md" footer={<><Button variant="ghost" onClick={() => setLegacyOpen(false)}>{t("editor.cancel")}</Button><Button disabled={!legacyId || !sourcePath || busy} onClick={() => {
       setLegacyOpen(false); void action({ action: "bindLegacy", legacyTaskId: legacyId, sourcePath, scope, includeContainerItems, multiplier });
     }}>{t("stockpile.confirmBind")}</Button></>}>

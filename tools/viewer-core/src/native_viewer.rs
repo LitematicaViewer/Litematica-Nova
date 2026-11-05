@@ -1,3 +1,5 @@
+#[path = "scene_ui_regions.rs"]
+mod scene_ui_regions;
 use std::borrow::Cow;
 use std::collections::{HashMap,BTreeMap,HashSet,VecDeque};
 use std::f32::consts::FRAC_PI_4;
@@ -3368,11 +3370,20 @@ impl ChunkResidencyPlan {
 struct FreeCameraPointerCapture {
     captured: bool, focused: bool, dragging: bool, raw_keyboard: bool,
     capture_requested: bool,
+    ui_input_blocked: bool,
     feedback: Option<(PathBuf, camera_input::SceneViewFeedback)>,
     feedback_error: Option<String>,
     capture_error: Option<String>,
 }
 impl FreeCameraPointerCapture {
+    // Disabling the HWND stops new native input, not input already queued by winit.
+    fn modal_owns_event<T: 'static>(&self, event: &Event<T>, id: winit::window::WindowId) -> bool {
+        self.ui_input_blocked && matches!(event, Event::WindowEvent { window_id, event:
+            WindowEvent::KeyboardInput { .. } | WindowEvent::ModifiersChanged(_) |
+            WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } |
+            WindowEvent::CursorMoved { .. } | WindowEvent::Touch(_), .. } if *window_id == id)
+    }
+
     fn publish_capture_state(&mut self, error: Option<String>) {
         self.capture_error = error.clone();
         let Some((path, state)) = self.feedback.as_mut() else { return; };
@@ -3388,6 +3399,7 @@ impl FreeCameraPointerCapture {
         environment: Option<(u32, String)>) -> Result<()> {
         let (Some(path), Some(request_id)) = (&controls.control_receipt_path, &controls.control_request_id) else { return Ok(()); };
         let mut state = self.feedback.as_ref().map(|(_, state)| state.clone()).unwrap_or(camera_input::SceneViewFeedback {
+            interaction: None,
             request_id: request_id.clone(), camera_locked: self.captured, world_time: None, weather: None, error: None,
         });
         state.request_id = request_id.clone();
@@ -3439,7 +3451,7 @@ impl FreeCameraPointerCapture {
             self.dragging = self.focused && state == ElementState::Pressed;
         }
     }
-    fn input_allowed(&self, lock: bool) -> bool { self.focused && (!lock || self.captured) }
+    fn input_allowed(&self, lock: bool) -> bool { !self.ui_input_blocked && self.focused && (!lock || self.captured) }
     fn update_device_events<T: 'static>(&mut self, target: &winit::event_loop::EventLoopWindowTarget<T>) {
         if let Some(error) = self.feedback_error.take() {
             record_viewer_shutdown("camera_feedback_failed", 1, &error);
@@ -5846,6 +5858,7 @@ struct ViewerState {
     label_anchors: Vec<LabelAnchor>,
     drag_mode: Option<DragMode>,
     last_cursor_position: Option<Vec2>,
+    drag_threshold: camera_input::DragThreshold,
     scene_bounds: SceneBounds,
     chunk_scene_index: Option<Arc<ChunkSceneIndex>>,
     cpu_mesh_cache: ChunkMeshCpuCache,
@@ -6300,6 +6313,7 @@ impl ViewerState {
             label_anchors: scene_label_anchors,
             drag_mode: None,
             last_cursor_position: None,
+            drag_threshold: camera_input::DragThreshold::default(),
             scene_bounds,
             chunk_scene_index,
             cpu_mesh_cache: ChunkMeshCpuCache::new(
@@ -8880,7 +8894,7 @@ impl ViewerState {
         if let Some(mode) = controls.camera_input_mode.as_deref() { self.camera.set_free_input_mode(mode); }
         if let Some(speed) = controls.camera_speed { self.camera.movement_speed = speed; }
         if let Some(sensitivity) = controls.camera_sensitivity { self.camera.mouse_sensitivity = sensitivity; }
-        if controls.release_camera_input { self.cancel_editor_gesture(); self.editor_cycle=false; self.camera_observe_modifier=false; self.camera.clear_movement(); self.drag_mode = None; self.last_cursor_position = None; }
+        if controls.release_camera_input || controls.ui_input_blocked == Some(true) { self.cancel_editor_gesture(); self.editor_cycle=false; self.camera_observe_modifier=false; self.camera.clear_movement(); self.drag_mode = None; self.last_cursor_position = None; }
         if controls.reset_camera { self.reset_camera(); }
         self.write_camera();
         self.mark_residency_dirty();
@@ -8896,8 +8910,11 @@ impl ViewerState {
         match self.editor_motion(position) { Ok(true) => return, Err(error) => { self.presentation_error=Some(format!("组合拖拽失败：{error:#}")); return; }, _=>{} }
         if self.camera.requires_pointer_capture() && !self.camera_observe_modifier { return; }
         let next = Vec2::new(position.x as f32, position.y as f32);
-        if let Some(last) = self.last_cursor_position {
-            let delta = next - last;
+        if self.last_cursor_position.is_none() || self.drag_mode.is_none() {
+            self.drag_threshold.reset(Some([position.x, position.y]));
+        }
+        if let Some(delta) = self.drag_threshold.movement([position.x, position.y], self.composition_dpi) {
+            let delta = Vec2::new(delta[0] as f32, delta[1] as f32);
             match self.drag_mode {
                 Some(DragMode::Rotate) => {
                     self.camera.orbit_drag(delta);
@@ -10759,6 +10776,7 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
             pointer_capture.release(window.as_ref()); state.camera.clear_movement(); state.drag_mode = None; state.last_cursor_position = None;
         } else if pointer_capture.captured && !state.camera.requires_pointer_capture() { pointer_capture.release(window.as_ref()); }
         if pointer_capture.take_drag_end(window.as_ref()) { state.drag_mode = None; state.last_cursor_position = None; }
+        if pointer_capture.modal_owns_event(&event, window.id()) { return; }
         #[cfg(target_os = "macos")]
         let event = if let Some(viewport) = window.shared() {
             state.device.poll(wgpu::Maintain::Poll);
@@ -11155,27 +11173,39 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             }
                         } else if command.kind == ViewerSessionCommandKind::SetView {
                             let mut result = command.view_controls.as_ref().context("scene view controls missing")
-                                .and_then(|controls| state.apply_scene_view_controls(controls));
+                                .and_then(|controls| {
+                                    if let Some(regions) = &controls.ui_regions { scene_ui_regions::apply(legacy_window_hwnd, regions)?; }
+                                    if let Some(opacity) = controls.ui_backdrop_opacity { scene_ui_regions::set_backdrop(legacy_window_hwnd, opacity)?; }
+                                    if let Some(blocked) = controls.ui_input_blocked {
+                                        scene_ui_regions::set_input_blocked(legacy_window_hwnd, blocked)?;
+                                        pointer_capture.ui_input_blocked = blocked;
+                                    }
+                                    state.apply_scene_view_controls(controls)
+                                });
                             if let Some(controls) = command.view_controls.as_ref() {
-                                if result.is_ok() && (!state.camera.requires_pointer_capture() || controls.release_camera_input || controls.camera_input_mode.is_some() || controls.camera_mode.is_some()) {
+                                if result.is_ok() && (!state.camera.requires_pointer_capture() || controls.release_camera_input || controls.ui_input_blocked == Some(true) || controls.camera_input_mode.is_some() || controls.camera_mode.is_some()) {
                                     pointer_capture.release(window.as_ref());
                                 }
                                 if let Err(error) = pointer_capture.record_controls(controls, &result, None) { result = Err(error); }
                             }
-                            match result {
+                            let receipt = match result {
                                 Ok(()) => {
                                     state.drag_mode = None; state.last_cursor_position = None;
                                     quick_redraw.request();
-                                    if let Err(error) = watcher.acknowledge(command.sequence) {
-                                        *event_error.lock().expect("scene view error mutex") = Some(error.to_string());
-                                        event_loop_window_target.exit(); return;
-                                    }
+                                    watcher.acknowledge(command.sequence)
                                 }
-                                Err(error) => { let _ = reject_viewer_session_command(watcher, &command, &error, legacy_window_hwnd); }
+                                Err(error) => reject_viewer_session_command(watcher, &command, &error, legacy_window_hwnd),
+                            };
+                            if let Err(error) = receipt {
+                                *event_error.lock().expect("scene view error mutex") = Some(format!("SetView receipt {}: {error:#}", command.sequence));
+                                event_loop_window_target.exit(); return;
                             }
                         } else if command.kind == ViewerSessionCommandKind::CaptureFrame {
                             if pending_capture.is_some() {
-                                let _ = reject_viewer_session_command(watcher, &command, &anyhow!("另一个真实帧读取尚未结束"), legacy_window_hwnd);
+                                if let Err(error) = reject_viewer_session_command(watcher, &command, &anyhow!("另一个真实帧读取尚未结束"), legacy_window_hwnd) {
+                                    *event_error.lock().expect("capture error mutex") = Some(format!("CaptureFrame rejection {}: {error:#}", command.sequence));
+                                    event_loop_window_target.exit(); return;
+                                }
                             } else {
                                 let path = watcher.capture_path(command.sequence);
                                 if let Err(error) = watcher.acknowledge(command.sequence) { *event_error.lock().expect("capture error mutex") = Some(error.to_string()); event_loop_window_target.exit(); return; }
@@ -11287,7 +11317,10 @@ pub fn run(provenance: &BackendProvenance) -> Result<()> {
                             Err(error) => Some(ViewerSessionState::Error { command_kind: command.kind, message: error.to_string() }),
                         };
                         if let Some(status) = status {
-                            let _ = watcher.publish_status(command.sequence, status, std::process::id(), legacy_window_hwnd);
+                            if let Err(error) = watcher.publish_status(command.sequence, status, std::process::id(), legacy_window_hwnd) {
+                                *event_error.lock().expect("capture error mutex") = Some(format!("CaptureFrame result {}: {error:#}", command.sequence));
+                                event_loop_window_target.exit(); return;
+                            }
                             pending_capture = None;
                         }
                     }

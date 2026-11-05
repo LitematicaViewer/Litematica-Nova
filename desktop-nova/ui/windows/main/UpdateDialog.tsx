@@ -67,8 +67,9 @@ export function UpdateDialog({ theme }: { theme: string }) {
   const installing = view?.phase === "installing" || view?.phase === "restartRequired";
   const canUpdate = !!view?.version && !running && ["available", "error", "cancelled", "downloaded"].includes(view.phase);
   const phaseText = { idle: t("update.notChecked"), disabled: t("update.notConfigured"), checking: t("update.checking"), available: t("update.available"), current: t("update.current"), skipped: t("update.skipped"), downloading: t("update.downloading"), downloaded: t("update.verified"), waiting: t("update.waiting"), installing: t("update.installing"), cancelled: t("update.cancelled"), error: t("update.incomplete"), restartRequired: t("update.recoveryRequired") };
+  const noteLabels: Record<string, string> = { "更新内容": t("update.notes.changes"), "新增": t("update.notes.features"), "优化": t("update.notes.improvements"), "修复": t("update.notes.fixes"), "已知问题": t("update.notes.known"), "注意事项": getUiLocale() === "en-US" ? "Notes" : "注意事项", "后续计划": getUiLocale() === "en-US" ? "Next steps" : "后续计划" };
   return <>
-    <Button variant="ghost" className="sidebar-item nav-item updater-check" onClick={manualCheck} disabled={running} title={t("update.check")} aria-label={t("update.check")}>
+    <Button variant="ghost" themeSlot="navigation" className="sidebar-item nav-item updater-check" onClick={manualCheck} disabled={running} title={t("update.check")} aria-label={t("update.check")}>
       <NavIcon name="update" theme={theme} /><span className="nav-label">{t("update.check")}</span>
     </Button>
     {open && <Dialog title={view?.version ? t("update.toVersion", { version: view.version }) : t("update.title")} subtitle={t("update.restartHint")} onClose={() => void cancel()} busy={installing} width="md"
@@ -83,7 +84,7 @@ export function UpdateDialog({ theme }: { theme: string }) {
       <dl className="update-version"><dt>{t("update.currentVersion")}</dt><dd>{view?.currentVersion || "—"}</dd><dt>{t("update.version")}</dt><dd>{view?.version || "—"}</dd><dt>{t("update.date")}</dt><dd>{view?.date ? formatDate(view.date, {dateStyle:"medium"}) : t("common.notProvided")}</dd></dl>
       {view?.source && <p className="muted">{t("update.source")}{view.source}</p>}
       {view?.phase === "downloading" && <div className="update-download"><progress aria-label={t("update.downloadProgress")} max={view.total || undefined} value={view.total ? Math.min(view.downloaded, view.total) : undefined} /><span>{(view.downloaded / 1048576).toFixed(1)} MB{view.total ? ` / ${(view.total / 1048576).toFixed(1)} MB` : ""}</span></div>}
-      {view?.version && releaseNoteSections(view.notes).map(({ label, lines }) => <section className="update-notes" key={label}><h4>{localizeMessage(label)}</h4><ul>{lines.map((line, i) => <li key={i}>{line}</li>)}</ul></section>)}
+      {view?.version && releaseNoteSections(view.notes).map(({ label, lines }) => <section className="update-notes" key={label}><h4>{noteLabels[label] || label}</h4><ul>{lines.map((line, i) => <li key={i}>{line}</li>)}</ul></section>)}
       {(error || view?.message) && <p role="alert">{localizeMessage(error || view?.message)}</p>}
     </Dialog>}
   </>;

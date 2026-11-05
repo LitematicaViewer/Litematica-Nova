@@ -20,11 +20,24 @@ test('macOS和Linux编译与打包分离，Windows保持既有NSIS流程', () =>
     ['build', '--config', '/build/config.json', '--no-bundle'],
     ['bundle', '--config', '/build/config.json', '--bundles', 'app,dmg'],
   ]);
+  assert.deepEqual(tauriBuildStages({ os: 'win32', bundles: 'nsis' }, '/build/config.json', true), [['build', '--config', '/build/config.json', '--no-bundle']]);
   assert.deepEqual(tauriBuildStages({ os: 'win32', bundles: 'nsis' }, '/build/config.json'), [['build', '--config', '/build/config.json', '--bundles', 'nsis']]);
   assert.deepEqual(tauriBuildStages({ os: 'linux', bundles: 'deb,appimage' }, '/build/config.json'), [
     ['build', '--config', '/build/config.json', '--no-bundle'],
     ['bundle', '--config', '/build/config.json', '--bundles', 'deb,appimage'],
   ]);
+});
+test('精简二维资源映射在三个生产平台只收录实际纹理包与新索引', () => {
+  const index = path.resolve('generated/index.json.z');
+  for (const [os, bundles] of [['win32', 'nsis'], ['linux', 'deb,appimage'], ['darwin', 'app,dmg']]) {
+    const result = tauriOverride(base, { platform: { os, bundles }, layerIndex: index, stage: '/helpers',
+      stockpile: '/stockpile', icon: '/icons/icon.icns' }).bundle.resources;
+    assert.equal(result['../../pack-in/layer-resources'], null);
+    assert.equal(result[index], 'pack-in/layer-resources/index.json.z');
+    assert.equal(result[path.join(path.dirname(index), 'assets.zip')], 'pack-in/layer-resources/assets.zip');
+    assert.deepEqual(Object.values(result).filter(v => v?.startsWith('pack-in/layer-resources')).sort(),
+      ['pack-in/layer-resources/assets.zip', 'pack-in/layer-resources/index.json.z']);
+  }
 });
 test('AppImage恢复正式helper原始字节，不篡改部署身份以接受RPATH变换', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nova-appimage-identity-'));

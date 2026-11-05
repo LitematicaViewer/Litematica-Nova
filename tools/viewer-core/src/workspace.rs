@@ -17,8 +17,11 @@ struct RecentProject {
 
 pub fn recent_projects(directory: &Path) -> Result<Value> {
     let path = directory.join("projection-library/js_library.json");
-    if !path.exists() { return Ok(serde_json::json!({"projects": []})); }
-    let file = std::fs::File::open(path)?;
+    let file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(serde_json::json!({"projects": []})),
+        Err(err) => return Err(err).context("Open library metadata"),
+    };
     // A library document is metadata, never the schematic or its block arrays.
     anyhow::ensure!(file.metadata()?.len() <= 64 * 1024 * 1024, "Library metadata exceeds the supported document size");
     let library: Value = serde_json::from_reader(std::io::BufReader::new(file)).context("Read library metadata")?;
@@ -36,22 +39,22 @@ pub fn recent_projects(directory: &Path) -> Result<Value> {
 }
 
 fn recent(library: &Value) -> Vec<RecentProject> {
-    let array = |key: &str| library[key].as_array().cloned().unwrap_or_default();
+    let array = |key: &str| library[key].as_array().map(Vec::as_slice).unwrap_or_default();
     let entries = array("entries");
     let replicas = array("replicas");
-    let redirects: BTreeMap<_, _> = array("redirects").into_iter()
-        .filter_map(|value| Some((value["fromId"].as_str()?.to_owned(), value["toId"].as_str()?.to_owned()))).collect();
+    let redirects: BTreeMap<_, _> = array("redirects").iter()
+        .filter_map(|value| Some((value["fromId"].as_str()?, value["toId"].as_str()?))).collect();
     let mut seen = BTreeSet::new();
     let mut output = Vec::new();
     for reference in array("recent") {
-        let mut id = reference["entryId"].as_str().unwrap_or_default().to_owned();
+        let mut id = reference["entryId"].as_str().unwrap_or_default();
         let mut visited = BTreeSet::new();
-        while visited.insert(id.clone()) {
-            let Some(next) = redirects.get(&id) else { break; };
-            id = next.clone();
+        while visited.insert(id) {
+            let Some(&next) = redirects.get(id) else { break; };
+            id = next;
         }
-        let entry = entries.iter().find(|entry| entry["id"].as_str() == Some(&id));
-        let replica = replicas.iter().find(|replica| replica["entryId"].as_str() == Some(&id)
+        let entry = entries.iter().find(|entry| entry["id"].as_str() == Some(id));
+        let replica = replicas.iter().find(|replica| replica["entryId"].as_str() == Some(id)
             && replica["status"].as_str() == Some("active"));
         let path = reference["path"].as_str().or_else(|| replica.and_then(|item| item["path"].as_str()));
         let Some(path) = path.filter(|path| !path.is_empty()) else { continue; };

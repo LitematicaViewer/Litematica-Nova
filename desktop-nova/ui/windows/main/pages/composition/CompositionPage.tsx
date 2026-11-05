@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Plus, Copy, Trash2, Undo2, Redo2, Save, Download, Play, X, Scissors, Eye, Lock, MousePointer, Move, RotateCw, FlipHorizontal, FlipVertical } from "lucide-react";
+import { Plus, Copy, Trash2, Undo2, Redo2, Save, Download, Play, X, Scissors, Eye, Lock, MousePointer, Move, RotateCw, FlipHorizontal, FlipVertical, SlidersHorizontal } from "lucide-react";
+import { Popover } from "radix-ui";
 import { Dialog } from "../../../../components/Dialog";
 import { Button } from "../../../../components/ui/button";
 import { Checkbox } from "../../../../components/ui/checkbox";
@@ -70,7 +71,7 @@ export function CompositionPage({ currentFile = "", presentationBlocked = false,
   selectedRef.current = selected; toolRef.current = tool; boxesDirtyRef.current = boxesDirty;
   editorSceneRef.current = editorScene; editorPathRef.current = editorScenePath; editorSourceRef.current = editorSourcePath;
   const project = view.project;
-  const editor = useQuickPreview(editorSourcePath, presentationBlocked || !!drawer || pane !== "editor" || requiresPreparation || !project, false, editorScenePath || undefined);
+  const editor = useQuickPreview(editorSourcePath, presentationBlocked || pane !== "editor" || requiresPreparation || !project, false, editorScenePath || undefined);
   const editorRef = useRef(editor); editorRef.current = editor;
   const part = project?.state.parts.find(p => p.id === selected), detail = view.parts?.find(p => p.part.id === selected);
   const setSelection = (id: string) => { selectedRef.current = id; setSelected(id); };
@@ -162,6 +163,7 @@ export function CompositionPage({ currentFile = "", presentationBlocked = false,
       const result = await perform(afterFlush ? afterFlush() : intent);
       if (!result) return;
       if (intent.action === "export" || intent.action === "split") setNotice(intent.action === "split" && intent.splitOutput === "project" ? l("已创建拆分组合，源文件未修改。", "Split composition created. Sources are unchanged.") : l("导出完成，源文件未修改。", "Export complete. Sources are unchanged."));
+      if (intent.action === "save") setNotice(l("组合已保存。", "Composition saved."));
       if (["create", "save", "split"].includes(intent.action)) { const list = await queryComposition({ action: "list" }, crypto.randomUUID()); if (alive.current) setProjects(list.projects ?? []); }
       return result;
     } catch (reason) { if (alive.current) setError(String(reason)); }
@@ -218,8 +220,10 @@ export function CompositionPage({ currentFile = "", presentationBlocked = false,
     startRequested.current = true; setStartRevision(value => value + 1);
   };
   const add = async () => {
-    const chosen = await openDialog({ multiple: true, filters: [{ name: l("投影文件", "Schematic files"), extensions: ["litematic", "nbt", "json", "bg", "bgcp"] }] });
-    if (chosen) await run({ action: project ? "add" : "create", sourcePaths: typeof chosen === "string" ? [chosen] : chosen, placement, ...(sourceVersion ? { sourceDataVersion: Number(sourceVersion) } : {}) });
+    try {
+      const chosen = await openDialog({ multiple: true, filters: [{ name: l("投影文件", "Schematic files"), extensions: ["litematic", "nbt", "json", "bg", "bgcp"] }] });
+      if (chosen) await run({ action: project ? "add" : "create", sourcePaths: typeof chosen === "string" ? [chosen] : chosen, placement, ...(sourceVersion ? { sourceDataVersion: Number(sourceVersion) } : {}) });
+    } catch (reason) { setError(String(reason)); }
   };
   const update = (patch: CompositionIntent["patch"]) => part && run({ action: "update", partId: part.id, patch });
   const updateAxis = (group: "offset" | "origin", index: number, value: string) => {
@@ -241,16 +245,29 @@ export function CompositionPage({ currentFile = "", presentationBlocked = false,
       return { action: "update", partId, patch: { transform: { ...latest.transform, ...patch } } };
     });
   };
-  const exportFile = async () => { const path = await saveDialog({ defaultPath: `${project?.state.name ?? "composition"}.${format === "litematic" ? "litematic" : format.startsWith("building") ? "json" : "nbt"}` }); if (path) await run({ action: "export", format, outputPath: path }); };
+  const exportFile = async () => {
+    try {
+      const path = await saveDialog({ defaultPath: `${project?.state.name ?? "composition"}.${format === "litematic" ? "litematic" : format.startsWith("building") ? "json" : "nbt"}` });
+      if (path) await run({ action: "export", format, outputPath: path });
+    } catch (reason) { setError(String(reason)); }
+  };
   const splitInput = { splitMode, axis, at: Number(plane), boxes: project?.state.splitBoxes ?? [] };
-  const exportSplit = async () => { if (splitOutput === "project") { await run({ action: "split", ...splitInput, splitOutput }); return; } const directory = await openDialog({ directory: true }); if (typeof directory === "string") await run({ action: "split", ...splitInput, splitOutput, outputDirectory: directory }); };
+  const exportSplit = async () => {
+    try {
+      if (splitOutput === "project") { await run({ action: "split", ...splitInput, splitOutput }); return; }
+      const directory = await openDialog({ directory: true });
+      if (typeof directory === "string") await run({ action: "split", ...splitInput, splitOutput, outputDirectory: directory });
+    } catch (reason) { setError(String(reason)); }
+  };
   const editBoxes = (next: CompositionSplitBox[]) => { boxesDirtyRef.current = true; setBoxesDirty(true); setBoxes(next); if (toolRef.current === "split") setEditorTool("select"); };
   const applyBoxes = async (next = boxes) => {
     const result = await run({ action: "setSplitBoxes", boxes: next });
     if (result?.project) { setSplitMode("boxes"); setEditorTool("split"); setPane("editor"); }
   };
   const removePart = async (partId: string) => {
-    if (await confirmDialog(l("从组合中移除此实例？源投影文件不会删除。", "Remove this instance from the composition? The source schematic will not be deleted."), { title: l("移除部件", "Remove part"), kind: "warning" })) await run({ action: "remove", partId });
+    try {
+      if (await confirmDialog(l("从组合中移除此实例？源投影文件不会删除。", "Remove this instance from the composition? The source schematic will not be deleted."), { title: l("移除部件", "Remove part"), kind: "warning" })) await run({ action: "remove", partId });
+    } catch (reason) { setError(String(reason)); }
   };
   const partsPanel = <div className="composition-parts" aria-label={l("部件列表", "Parts")}><h3>{l("部件", "Parts")}</h3>{project?.state.parts.map(p => <div key={p.id} className={`composition-part${selected === p.id ? " is-selected" : ""}`}><button className="composition-part-name" aria-pressed={selected === p.id} onClick={() => setSelection(p.id)}>{p.locked && <Lock size={13} />}{p.name}</button><div className="composition-part-actions"><label><Checkbox disabled={busy || p.locked} checked={p.visible} onCheckedChange={v => void run({ action: "update", partId: p.id, patch: { visible: v === true } })} /><Eye size={13} />{l("显示", "Show")}</label><button disabled={busy || p.locked} aria-label={l("复制实例", "Duplicate instance")} onClick={() => void run({ action: "duplicate", partId: p.id })}><Copy size={14} /></button><button disabled={busy || p.locked} aria-label={l("删除实例", "Remove instance")} onClick={() => void removePart(p.id)}><Trash2 size={14} /></button></div></div>)}{!project && <p className="composition-muted">{l("添加投影开始组合，或打开已保存项目。", "Add schematics to begin, or open a saved project.")}</p>}</div>;
   const propertiesPanel = <div className="composition-inspector"><h3>{l("部件属性", "Part properties")}</h3>{part ? <><label>{l("名称", "Name")}<input key={`${part.id}-name-${project?.generation}`} defaultValue={part.name} disabled={busy || part.locked} onBlur={e => { if (e.target.value !== part.name) void update({ name: e.target.value }); }} /></label><label><Checkbox checked={part.locked} disabled={busy} onCheckedChange={v => void update({ locked: v === true })} />{l("锁定实例", "Lock instance")}</label>{(["offset", "origin"] as const).map(group => <fieldset key={group} disabled={busy || part.locked}><legend>{group === "offset" ? l("位移（整数方块）", "Offset (integer blocks)") : l("局部原点", "Local origin")}</legend><div className="composition-vector">{["X", "Y", "Z"].map((a, i) => <label key={a}>{a}<input type="number" step="1" key={`${part.id}-${group}-${i}-${project?.generation}`} defaultValue={part.transform[group][i]} onBlur={e => { if (Number(e.target.value) !== part.transform[group][i]) updateAxis(group, i, e.target.value); }} /></label>)}</div></fieldset>)}<label>{l("绕 Y 旋转", "Y rotation")}<select value={part.transform.rotation} disabled={busy || part.locked} onChange={e => void transform({ rotation: Number(e.target.value) as CompositionTransform["rotation"] })}>{[0, 90, 180, 270].map(v => <option key={v} value={v}>{v}°</option>)}</select></label><div className="composition-checks"><label><Checkbox checked={part.transform.mirrorX} disabled={busy || part.locked} onCheckedChange={v => void transform({ mirrorX: v === true })} />{l("镜像 X", "Mirror X")}</label><label><Checkbox checked={part.transform.mirrorZ} disabled={busy || part.locked} onCheckedChange={v => void transform({ mirrorZ: v === true })} />{l("镜像 Z", "Mirror Z")}</label></div><label><Checkbox checked={part.clearAir} disabled={busy || part.locked} onCheckedChange={v => void update({ clearAir: v === true })} />{l("显式清空所覆盖区域的空气", "Explicitly clear air in covered selections")}</label><dl><dt>{l("尺寸", "Size")}</dt><dd>{detail?.size?.join(" × ") ?? "—"}</dd><dt>{l("边界", "Bounds")}</dt><dd>{detail?.bounds ? `${detail.bounds.min.join(", ")} → ${detail.bounds.max.join(", ")}` : "—"}</dd><dt>DataVersion</dt><dd>{detail?.dataVersion ?? "—"}</dd></dl><fieldset disabled={busy || part.locked}><legend>{l("源选区（空选表示全部）", "Source regions (none selects all)")}</legend>{detail?.regions.map(name => <label key={name}><Checkbox checked={part.regions.includes(name)} onCheckedChange={v => void update({ regions: v === true ? [...part.regions, name] : part.regions.filter(r => r !== name) })} />{name}</label>)}</fieldset></> : <p className="composition-muted">{l("选择左侧部件编辑。", "Select a part to edit.")}</p>}</div>;
@@ -260,14 +277,20 @@ export function CompositionPage({ currentFile = "", presentationBlocked = false,
       {compactParts && <Button variant="outline" aria-expanded={panel === "parts"} onClick={() => setPanel("parts")}>{l("部件列表", "Parts")}</Button>}
       {compactInspector && <Button variant="outline" aria-expanded={panel === "properties"} onClick={() => setPanel("properties")}>{l("部件属性", "Part properties")}</Button>}
       <Button disabled={busy} onClick={() => void add()}><Plus size={16} />{l("添加部件", "Add parts")}</Button>
-      <select value={placement} onChange={e => setPlacement(e.target.value as typeof placement)} aria-label={l("添加位置", "Placement")}><option value="original">{l("按原位置", "Original positions")}</option><option value="beside">{l("放在组合旁", "Place beside composition")}</option></select>
-      <label className="composition-source-version">{l("源版本缺失时", "Missing source version")}<select value={sourceVersion} onChange={event => setSourceVersion(event.target.value)}><option value="">{l("使用文件声明", "Use file declaration")}</option>{sourceVersions.map(version => <option key={version.version} disabled={version.dataVersion === null} value={version.dataVersion ?? ""}>{version.version}</option>)}</select></label>
+      <Popover.Root><Popover.Trigger asChild><Button variant="ghost" size="icon" aria-label={l("添加选项", "Add options")} title={l("添加选项", "Add options")}><SlidersHorizontal size={16} /></Button></Popover.Trigger><Popover.Portal><Popover.Content className="composition-options-popover" data-native-ui-surface sideOffset={8} collisionPadding={12} align="start">
+        <header><strong>{l("添加选项", "Add options")}</strong><Popover.Close asChild><Button variant="ghost" size="icon" aria-label={l("关闭", "Close")}><X size={16} /></Button></Popover.Close></header>
+        <label>{l("添加位置", "Placement")}<select value={placement} onChange={e => setPlacement(e.target.value as typeof placement)}><option value="original">{l("按原位置", "Original positions")}</option><option value="beside">{l("放在组合旁", "Place beside composition")}</option></select></label>
+        <label>{l("源版本缺失时", "Missing source version")}<select value={sourceVersion} onChange={event => setSourceVersion(event.target.value)}><option value="">{l("使用文件声明", "Use file declaration")}</option>{sourceVersions.map(version => <option key={version.version} disabled={version.dataVersion === null} value={version.dataVersion ?? ""}>{version.version}</option>)}</select></label>
+      </Popover.Content></Popover.Portal></Popover.Root>
       {!project && (currentFile || initial.current.length > 0) && <Button variant="outline" disabled={busy} onClick={() => void run({ action: "create", sourcePaths: initial.current.length ? initial.current : [currentFile], placement, ...(sourceVersion ? { sourceDataVersion: Number(sourceVersion) } : {}) })}>{l("加入当前投影", "Add current schematic")}</Button>}
-      <Button variant="ghost" disabled={busy || !view.canUndo} onClick={() => void run({ action: "undo" })}><Undo2 size={16} />{l("撤销", "Undo")}</Button><Button variant="ghost" disabled={busy || !view.canRedo} onClick={() => void run({ action: "redo" })}><Redo2 size={16} />{l("重做", "Redo")}</Button>
+      <Button variant="ghost" size="icon" aria-label={l("撤销", "Undo")} title={l("撤销", "Undo")} disabled={busy || !view.canUndo} onClick={() => void run({ action: "undo" })}><Undo2 size={16} /></Button><Button variant="ghost" size="icon" aria-label={l("重做", "Redo")} title={l("重做", "Redo")} disabled={busy || !view.canRedo} onClick={() => void run({ action: "redo" })}><Redo2 size={16} /></Button>
       <Button variant="outline" disabled={busy || !project} onClick={() => void run({ action: "save" })}><Save size={16} />{l("保存组合", "Save")}</Button>
-      <select aria-label={l("导出格式", "Export format")} value={format} onChange={e => setFormat(e.target.value)}><option value="litematic">Litematic</option><option value="structure">Minecraft Structure</option><option value="create">Create</option><option value="anvilCraft">AnvilCraft</option><option value="buildingGadgetsLegacy">Building Gadgets</option><option value="buildingGadgets2">Building Gadgets 2</option></select>
-      <Button variant="outline" disabled={busy || !project} onClick={() => void exportFile()}><Download size={16} />{l("导出合并投影…", "Export merged…")}</Button>
-      {activeOperation && <Button variant="ghost" onClick={() => { if (active.current) void cancelComposition(active.current); }}><X size={16} />{l("取消", "Cancel")}</Button>}
+      <Popover.Root><Popover.Trigger asChild><Button variant="outline" disabled={busy || !project}><Download size={16} />{l("导出…", "Export…")}</Button></Popover.Trigger><Popover.Portal><Popover.Content className="composition-options-popover" data-native-ui-surface sideOffset={8} collisionPadding={12} align="end">
+        <header><strong>{l("导出合并投影", "Export merged schematic")}</strong><Popover.Close asChild><Button variant="ghost" size="icon" aria-label={l("关闭", "Close")}><X size={16} /></Button></Popover.Close></header>
+        <label>{l("导出格式", "Export format")}<select value={format} onChange={e => setFormat(e.target.value)}><option value="litematic">Litematic</option><option value="structure">Minecraft Structure</option><option value="create">Create</option><option value="anvilCraft">AnvilCraft</option><option value="buildingGadgetsLegacy">Building Gadgets</option><option value="buildingGadgets2">Building Gadgets 2</option></select></label>
+        <Button disabled={busy || !project} onClick={() => void exportFile()}>{l("选择保存位置…", "Choose save location…")}</Button>
+      </Popover.Content></Popover.Portal></Popover.Root>
+      {activeOperation && <Button variant="ghost" onClick={() => { if (active.current) void cancelComposition(active.current).catch(reason => setError(String(reason))); }}><X size={16} />{l("取消", "Cancel")}</Button>}
     </div>
     {error && <p className="composition-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     <div className={`composition-workspace${compactInspector ? " is-compact-inspector" : ""}${compactParts ? " is-compact-parts" : ""}`}>
@@ -293,7 +316,7 @@ export function CompositionPage({ currentFile = "", presentationBlocked = false,
             ] as const).map(([key, label, Icon]) => <Button key={key} size="sm" variant={tool === key ? "secondary" : "ghost"} aria-pressed={tool === key}
               disabled={busy || !editorScene || requiresPreparation || key === "split" && (!project?.state.splitBoxes.length || boxesDirty)} onClick={() => setEditorTool(key)}><Icon size={14} />{label}</Button>)}
           </div>
-          <div ref={editor.hostRef} className="composition-native-viewport" aria-label={l("组合原生三维编辑视口", "Native 3D composition editor")}>
+          <div ref={editor.mountHost} className="composition-native-viewport" aria-label={l("组合原生三维编辑视口", "Native 3D composition editor")}>
             {(editor.operation?.state !== "ready" || requiresPreparation) && <div className="composition-empty"><h3>{l("快速编辑视图", "Fast editing view")}</h3><p>{requiresPreparation ? l("部件资源已变化，请准备编辑视图。普通位置、旋转、镜像与拆分框修改不重建几何。", "Part resources changed. Prepare the editor. Position, rotation, mirrors and split bounds reuse the existing geometry.") : editor.pending || editor.operation?.state === "starting" ? l("正在准备原生编辑视图…", "Preparing the native editing view…") : l("添加部件后准备编辑视图；同一源资源仅构建一次，拖拽由原生 Viewer 处理。", "Add parts and prepare the editor. Each unique source resource is built once. Gestures are handled by the native Viewer.")}</p></div>}
           </div>
           <p className="composition-editor-help">{l("左键选择 / 拖动手柄；Ctrl+左键循环重叠实例；右键环绕、中键平移、滚轮缩放；Esc 取消。平移按方块、旋转按 90° 吸附。", "Left-click to select / drag handles; Ctrl+click cycles overlapping instances. Right-drag orbits, middle-drag pans, wheel zooms. Esc cancels. Movement snaps to blocks and rotation to 90°.")}</p>
@@ -301,7 +324,7 @@ export function CompositionPage({ currentFile = "", presentationBlocked = false,
         </div>
         <div className="composition-result-panel" hidden={pane !== "result"}>
           {previewGeneration !== null && previewGeneration !== project?.generation && <p role="status" className="composition-editor-help">{l("合并快照早于当前编辑，请明确更新后查看最终结果。", "The merged snapshot predates the current edits. Update it to inspect the final result.")}</p>}
-          {previewPath ? <RenderPage currentFile={previewPath} presentationBlocked={presentationBlocked || !!drawer || pane !== "result"} /> : <div className="composition-empty"><h3>{l("合并结果预览", "Merged result preview")}</h3><p>{l("明确生成合并快照后，使用真实快速、标准或完整模式查看最终结果。编辑视图不会触发标准 / 完整构建或领钥。", "Generate a merged snapshot explicitly, then use the real Fast, Standard or Full renderer. Editing never triggers a Standard/Full build or key request.")}</p></div>}
+          {previewPath ? <RenderPage currentFile={previewPath} presentationBlocked={presentationBlocked || pane !== "result"} /> : <div className="composition-empty"><h3>{l("合并结果预览", "Merged result preview")}</h3><p>{l("明确生成合并快照后，使用真实快速、标准或完整模式查看最终结果。编辑视图不会触发标准 / 完整构建或领钥。", "Generate a merged snapshot explicitly, then use the real Fast, Standard or Full renderer. Editing never triggers a Standard/Full build or key request.")}</p></div>}
         </div>
       </main>
       {!compactInspector && propertiesPanel}

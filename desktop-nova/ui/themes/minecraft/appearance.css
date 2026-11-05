@@ -56,6 +56,10 @@ html[data-theme="minecraft"] {
     --ln-scroll-active: #c0c0c0;
 }
 
+html[data-theme="minecraft"][data-color-scheme="light"] img.nav-icon {
+    /* Keep the supplied pixel silhouettes readable on the light work surface. */
+    filter: brightness(0.16);
+}
 html[data-theme="minecraft"][data-color-scheme="light"] {
     color-scheme: light;
     --background: #deded6;
@@ -121,15 +125,15 @@ html[data-theme="minecraft"] .home-workflows > [data-slot="button"][data-variant
 
 /* Radix Checkbox keeps the shipped Minecraft checkbox textures and keyboard semantics. */
 html[data-theme="minecraft"] [data-slot="checkbox"] {
-    width: 20px;
-    height: 20px;
-    min-width: 20px;
-    min-height: 20px;
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    min-height: 16px;
     padding: 0;
     border: 0;
     border-image: none;
     border-radius: 0;
-    background: transparent url("./resource/form/checkbox_default.png") center / 20px 20px no-repeat;
+    background: transparent url("./resource/form/checkbox_default.png") center / 16px 16px no-repeat;
     image-rendering: pixelated;
     box-shadow: none;
 }
@@ -142,8 +146,9 @@ html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"] {
 html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"]:hover:not(:disabled) {
     background-image: url("./resource/form/checkbox_checked_hover.png");
 }
-html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"] svg { visibility: hidden; }
-html[data-theme="minecraft"] [data-slot="checkbox"][data-state="indeterminate"] { color: #ffffff; }
+/* The shipped checked texture supplies a filled slot, not a check glyph. */
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"] { color: var(--ln-minecraft-button-normal-color); }
+html[data-theme="minecraft"] [data-slot="checkbox"][data-state="indeterminate"] { color: var(--foreground); }
 /* The shared layer fills a checked checkbox with `--primary`, which is what the
    other themes want. Minecraft's textures carry the whole control - a check mark on
    a transparent centre - so that fill would show through as a `--primary` square
@@ -201,9 +206,6 @@ html[data-theme="minecraft"] .library-collection {
 html[data-theme="minecraft"] .library-collection-toolbar,
 html[data-theme="minecraft"] .library-collection-footer {
     background: var(--card);
-}
-html[data-theme="minecraft"] .library-tile {
-    box-shadow: inset 1px 1px var(--library-bevel-light), inset -1px -1px var(--library-bevel-dark);
 }
 html[data-theme="minecraft"] .library-tile-image,
 html[data-theme="minecraft"] .library-detail-preview {

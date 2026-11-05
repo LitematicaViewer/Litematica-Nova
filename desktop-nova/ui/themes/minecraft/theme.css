@@ -5,6 +5,9 @@
 @layer tokens {
 
 :root {
+    --inventory-slot-fill: var(--muted);
+    --inventory-slot-shadow: inset 2px 2px color-mix(in srgb, var(--muted) 48%, black),
+        inset -2px -2px color-mix(in srgb, var(--muted) 40%, white);
     --background: #3c3c3c;
     --navigation-background: #3c3c3c;
     --ln-file-icon-size: 32px;

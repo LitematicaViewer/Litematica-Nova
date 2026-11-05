@@ -47,11 +47,6 @@ pub fn resolve_stockpile_item_names(
     Ok(build_payload_from_cache(materials, recipe_trees, cache))
 }
 
-pub(crate) fn resolve_stockpile_item_names_cached(minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_trees: &BTreeMap<String, RecipeTreeNode>) -> Result<StockpileItemNamesPayload> {
-    let cache = language_cache(minecraft_version)?;
-    Ok(build_payload_from_cache(materials, recipe_trees, cache))
-}
-
 fn build_payload_from_cache(
     materials: &mut StockpileMaterialsData,
     recipe_trees: &BTreeMap<String, RecipeTreeNode>,
@@ -59,12 +54,10 @@ fn build_payload_from_cache(
 ) -> StockpileItemNamesPayload {
     let cache = cache.borrow();
     let keys = collect_name_keys(materials, recipe_trees);
-    let minecraft_keys = keys
-        .iter().cloned()
-        .filter(|key| key.split_once(':').is_some())
-        .collect::<BTreeSet<_>>();
+    let mut minecraft_keys = 0;
     let mut names = BTreeMap::<String, BTreeMap<String, String>>::new();
-    for key in &minecraft_keys {
+    for key in keys.iter().filter(|key| key.contains(':')) {
+        minecraft_keys += 1;
         let mut localized = BTreeMap::<String, String>::new();
         if let Some(value) = cache.lookup("en-US", key) {
             localized.insert("en-US".to_string(), value);
@@ -101,7 +94,7 @@ fn build_payload_from_cache(
             "missing".to_string(),
             Some("item name cache is unavailable".to_string()),
         )
-    } else if names.len() < minecraft_keys.len() || has_missing_locale {
+    } else if names.len() < minecraft_keys || has_missing_locale {
         (
             "partial".to_string(),
             Some("item name cache is missing some project translations".to_string()),
@@ -184,21 +177,32 @@ impl LangCache {
         }
         let mut en_us = BTreeMap::new();
         let mut zh_cn = BTreeMap::new();
-        for path in crate::game_data::list_resources_from(&context, "assets/")? {
-            let destination = if path.ends_with("/lang/en_us.json") { &mut en_us }
-                else if path.ends_with("/lang/zh_cn.json") { &mut zh_cn } else { continue; };
-            if let Some(bytes) = crate::game_data::read_resource_from(&context, &path)? {
-                let values: BTreeMap<String, String> = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("parse selected game language failed: {path}"))?;
-                destination.extend(values);
+        let normalized = |locale: &str| -> Result<Option<BTreeMap<String, String>>> {
+            crate::game_data::read_resource_from(&context, &format!("derived/lang/{locale}.json"))?
+                .map(|bytes| serde_json::from_slice(&bytes).with_context(|| format!("invalid normalized selected language: {locale}")))
+                .transpose()
+        };
+        let en = normalized("en_us")?;
+        let zh = normalized("zh_cn")?;
+        // build-default already merged *all* namespaces into these locale tables.
+        // A material query need not open and scan the 21k-entry render JAR.
+        // Imported/overlaid packs can supply partial normalized tables: keep the
+        // original raw-resource merge and precedence for them and for old layouts.
+        let scan_en = context.source != "bundled-default" || en.is_none();
+        let scan_zh = context.source != "bundled-default" || zh.is_none();
+        if scan_en || scan_zh {
+            for path in crate::game_data::list_resources_from(&context, "assets/")? {
+                let destination = if scan_en && path.ends_with("/lang/en_us.json") { &mut en_us }
+                    else if scan_zh && path.ends_with("/lang/zh_cn.json") { &mut zh_cn } else { continue; };
+                if let Some(bytes) = crate::game_data::read_resource_from(&context, &path)? {
+                    let values: BTreeMap<String, String> = serde_json::from_slice(&bytes)
+                        .with_context(|| format!("parse selected game language failed: {path}"))?;
+                    destination.extend(values);
+                }
             }
         }
-        for (locale, destination) in [("en_us", &mut en_us), ("zh_cn", &mut zh_cn)] {
-            if let Some(bytes) = crate::game_data::read_resource_from(&context, &format!("derived/lang/{locale}.json"))? {
-                let values: BTreeMap<String, String> = serde_json::from_slice(&bytes).with_context(|| format!("invalid normalized selected language: {locale}"))?;
-                destination.extend(values);
-            }
-        }
+        if let Some(values) = en { en_us.extend(values); }
+        if let Some(values) = zh { zh_cn.extend(values); }
         let manifest = manifest_for(&context.game_version, &format!("game-data:{}", context.content_id), &en_us, &zh_cn)?;
         write_cache(&context.content_id, &manifest, &en_us, &zh_cn)?;
         Ok(Self { manifest: Some(manifest), en_us, zh_cn })

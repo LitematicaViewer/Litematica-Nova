@@ -128,10 +128,89 @@ pub struct CompositionEditorEvent {
     pub split_boxes: Option<Vec<CompositionEditorBox>>,
 }
 
+
+/// UI cutouts are physical pixels in the existing native child viewport.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneUiRegion { pub x: i32, pub y: i32, pub width: u32, pub height: u32 }
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneUiPointer { pub kind: String, pub x: i32, pub y: i32, pub button: Option<u8>, pub delta: Option<i32> }
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneBlockState { pub id: String, #[serde(default)] pub properties: std::collections::BTreeMap<String, String> }
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneInteractionControls {
+    pub mode: Option<String>, pub menu_open: Option<bool>, pub active_slot: Option<u8>,
+    pub hotbar: Option<Vec<Option<SceneBlockState>>>, pub set_slot: Option<SceneSetSlot>, pub command: Option<SceneEditCommand>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneSetSlot { pub index:u8, pub state:Option<SceneBlockState> }
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneEditCommand {
+    pub kind: String, pub request_id: String, pub scene_generation: String,
+    pub expected_revision: u64, pub save_path: Option<PathBuf>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneContainerItem { pub display_name: Option<String>, pub slot: u32, pub id: String, pub count: u64, pub variant: Option<String> }
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneContainer {
+    pub status: String, pub capacity: u32, pub items: Vec<SceneContainerItem>, pub error: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneBlockHit {
+    pub display_name: Option<String>, pub source_name: Option<String>,
+    pub instance_id: String, pub position: [i32; 3], pub face: String, pub distance: f64,
+    pub state: SceneBlockState, pub container: Option<SceneContainer>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneDetailsRequest {
+    pub sequence: u64, pub hit: SceneBlockHit,
+}
+fn default_scene_input_mode() -> String { "drag".into() }
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SceneInteractionSnapshot {
+    /// Selected input mapping, independent of a currently acquired OS pointer.
+    #[serde(default = "default_scene_input_mode")]
+    pub camera_input_mode: String,
+    /// Last explicit inspection, independent of the moving/hidden hover HUD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details_request: Option<SceneDetailsRequest>,
+    #[serde(default)] pub pointer: Option<[f64; 2]>,
+    #[serde(default)] pub pointer_locked: bool,
+    pub data_version: Option<i32>, pub game_version: Option<String>, pub content_id: Option<String>,
+    pub scene_generation: String, pub revision: u64, pub mode: String, pub menu_open: bool,
+    pub active_slot: u8, pub hotbar: Vec<Option<SceneBlockState>>, pub dirty: bool,
+    pub can_undo: bool, pub can_redo: bool, pub hit: Option<SceneBlockHit>, pub error: Option<String>,
+}
+
 /// Display-only state for a resident scene. No build or resource identity changes.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct SceneViewControls {
+    /// Modal input ownership is separate from native visibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_input_blocked: Option<bool>,
+    /// Presentation-only black modal backdrop, composed over the live native surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_backdrop_opacity: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_regions: Option<Vec<SceneUiRegion>>,
+    /// Logical hit targets in physical viewport coordinates, not window cutouts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hotbar_regions: Option<Vec<SceneUiRegion>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_pointer: Option<SceneUiPointer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interaction: Option<SceneInteractionControls>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub composition_editor: Option<CompositionEditorScene>,
     pub apply_layer_range: bool,
@@ -165,6 +244,35 @@ fn scene_control_false(value: &bool) -> bool { !*value }
 
 impl SceneViewControls {
     pub fn validate(&self) -> Result<(), String> {
+        if self.ui_backdrop_opacity.is_some_and(|alpha| !alpha.is_finite() || !(0.0..=1.0).contains(&alpha)) {
+            return Err("Invalid native UI backdrop opacity".into());
+        }
+        if let Some(regions) = &self.ui_regions {
+            if regions.len() > 64 || regions.iter().any(|r| r.width > 32768 || r.height > 32768) { return Err("Invalid native UI regions".into()); }
+        }
+        if let Some(bar) = &self.hotbar_regions {
+            if (!bar.is_empty() && bar.len() != 9) || bar.iter().any(|r| r.width > 32768 || r.height > 32768) {
+                return Err("Native hotbar regions require zero or nine slot rectangles".into());
+            }
+        }
+        if let Some(pointer) = &self.ui_pointer {
+            if !matches!(pointer.kind.as_str(), "down"|"up"|"move"|"wheel") || pointer.button.is_some_and(|b| b > 2) { return Err("Invalid native UI pointer".into()); }
+        }
+        if let Some(interaction) = &self.interaction {
+            if interaction.mode.as_deref().is_some_and(|v| !matches!(v, "observe"|"edit")) || interaction.active_slot.is_some_and(|v| v > 8) {
+                return Err("Invalid scene interaction mode or slot".into());
+            }
+            if let Some(hotbar) = &interaction.hotbar {
+                if hotbar.len() != 9 || hotbar.iter().flatten().any(|state| state.id.is_empty() || state.id.len() > 512 || state.properties.len() > 64) { return Err("Scene hotbar requires nine valid slots".into()); }
+            }
+            if interaction.set_slot.as_ref().is_some_and(|slot|slot.index>8) {return Err("Invalid hotbar slot".into());}
+            if let Some(command) = &interaction.command {
+                validate_request_id(&command.request_id)?;
+                if command.scene_generation.is_empty() || !matches!(command.kind.as_str(), "break"|"place"|"pick"|"undo"|"redo"|"save") { return Err("Invalid scene edit command".into()); }
+                if let Some(path) = &command.save_path { require_absolute("savePath", path)?; }
+            }
+        }
+
         if self.world_time.is_some_and(|time| time >= 24_000) {
             return Err("World time must be in 0..23999 ticks".into());
         }
@@ -3121,6 +3229,40 @@ pub mod native_macos_wire;
 #[cfg(test)]
 mod scene_view_optional_control_tests {
     use super::*;
+    #[test]
+    fn native_surface_input_controls_round_trip_without_hiding_presentation() {
+        let wire=serde_json::json!({"uiInputBlocked":true,"releaseCameraInput":true,"uiRegions":[{"x":4,"y":8,"width":320,"height":240}]});
+        let controls:SceneViewControls=serde_json::from_value(wire.clone()).unwrap();
+        controls.validate().unwrap();
+        assert_eq!(controls.ui_input_blocked,Some(true));
+        let round=serde_json::to_value(&controls).unwrap();
+        assert_eq!(round["uiInputBlocked"],wire["uiInputBlocked"]);
+        assert_eq!(round["uiRegions"],wire["uiRegions"]);
+        assert!(round.get("presentation").is_none());
+        let clear:SceneViewControls=serde_json::from_value(serde_json::json!({"uiInputBlocked":false,"uiRegions":[]})).unwrap();
+        assert_eq!(clear.ui_input_blocked,Some(false));
+        assert!(clear.ui_regions.unwrap().is_empty());
+    }
+    #[test]
+    fn native_hotbar_regions_and_pinned_details_round_trip() {
+        let rect=serde_json::json!({"x":10,"y":20,"width":32,"height":32});
+        for count in [0, 6, 9, 10] {
+            let wire=serde_json::json!({"hotbarRegions":vec![rect.clone();count]});
+            let controls:SceneViewControls=serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(controls.validate().is_ok(), matches!(count,0|9));
+            assert_eq!(serde_json::to_value(controls).unwrap()["hotbarRegions"],wire["hotbarRegions"]);
+        }
+        let info=serde_json::json!({"sequence":4,"hit":{"instanceId":"main","position":[2,1,0],
+            "face":"up","distance":2.3,"state":{"id":"minecraft:hopper","properties":{"facing":"down"}},
+            "container":{"status":"known","capacity":5,"items":[]}}});
+        let snapshot=serde_json::json!({"sceneGeneration":"scene","revision":0,"mode":"observe","menuOpen":false,
+            "activeSlot":5,"hotbar":vec![None::<String>;9],"dirty":false,"canUndo":false,"canRedo":false,"detailsRequest":info});
+        let decoded:SceneInteractionSnapshot=serde_json::from_value(snapshot).unwrap();
+        let result=serde_json::to_value(decoded).unwrap();
+        assert!(result["hit"].is_null());
+        assert_eq!(result["detailsRequest"]["sequence"],4);
+        assert_eq!(result["detailsRequest"]["hit"]["container"]["capacity"],5);
+    }
     #[test]
     fn unused_new_controls_keep_existing_wire_shape() {
         let value = serde_json::to_value(SceneViewControls::default()).unwrap();

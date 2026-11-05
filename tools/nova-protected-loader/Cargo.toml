@@ -9,6 +9,7 @@ publish = false
 
 [features]
 development-runtime = ["nova-protection/development-runtime"]
+standalone-runtime = ["development-runtime"]
 
 [dependencies]
 anyhow = "1"

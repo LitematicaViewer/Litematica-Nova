@@ -1,11 +1,12 @@
+import { DropdownMenu } from "radix-ui";
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
-import React, { useEffect, useRef, useState } from "react";
-import { Box, EyeOff, Play, X, Image } from "lucide-react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Box, EyeOff, Play, X, Image, MoreHorizontal } from "lucide-react";
 import { ThemeIcon } from "../../../../components/ThemeIcon";
 import { loadLibrary, setRecordPreview, renderPreviewImage } from "../../../../../src/business/facade";
-import type { ProductPreviewImage } from "../../../../../src/platform/previewImage";
+import { discardGeneratedPreview, type ProductPreviewImage } from "../../../../../src/platform/previewImage";
 import { PreviewDraftDialog } from "../../../../components/PreviewDraftDialog";
 import { emitEvent } from "../../../../../src/platform/events";
 import { projectionLibraryStateChangedEvent } from "../../../libraryEvents";
@@ -17,14 +18,24 @@ import { formatResourceBytes } from "../../../../../src/business/resourcePreflig
 import { displayFilePath } from "../../../../../src/business/facade";
 import { FreeCameraControls } from "./FreeCameraControls";
 import { EnvironmentControls } from "./EnvironmentControls";
+import { SceneInteraction } from "./SceneInteraction";
 import { openIrisSettings } from "../../../../../src/services/irisSettings";
 import "./render.css";
+
+function RenderOverflow({items}:{items:{label:string;disabled?:boolean;action:()=>void}[]}) {
+  return <DropdownMenu.Root modal={false}><DropdownMenu.Trigger asChild><Button variant="ghost" size="icon" className="render-overflow-trigger" aria-label={t("scene.viewCommands")} title={t("scene.viewCommands")}><MoreHorizontal size={16}/></Button></DropdownMenu.Trigger>
+    <DropdownMenu.Portal><DropdownMenu.Content className="dropdown-menu scene-edit-menu" align="end" sideOffset={8} collisionPadding={12} data-native-ui-surface>
+      {items.map(item=><DropdownMenu.Item key={item.label} className="dropdown-item" disabled={item.disabled} onSelect={item.action}>{item.label}</DropdownMenu.Item>)}
+    </DropdownMenu.Content></DropdownMenu.Portal>
+  </DropdownMenu.Root>;
+}
 
 /** Separate historical Fast and real private Full service paths; no algorithm substitution. */
 export function RenderPage({ currentFile, presentationBlocked = false }: { currentFile: string; presentationBlocked?: boolean }) {
   useI18n();
   const [mode, setMode] = useState<"fast" | "standard" | "full">("fast");
   const [preloads, setPreloads] = useState({ full: false, standard: false, fast: false });
+  const [editorToolbar, setEditorToolbar] = useState<HTMLDivElement | null>(null);
   const exactMode = mode === "standard" ? "standard" : "full";
   const preload = preloads[mode];
   const preview = useQuickPreview(currentFile || "", mode !== "fast" || presentationBlocked, preload);
@@ -34,17 +45,26 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
   const [captureMessage, setCaptureMessage] = useState<UiMessage>("");
   const captureInFlight = useRef(false);
   const captureSource = useRef(currentFile); captureSource.current = currentFile;
+  const captureEpoch = useRef(0);
+  const captureAlive = useRef(false);
+  useLayoutEffect(() => {
+    captureAlive.current = true; ++captureEpoch.current;
+    setDraft(null);
+    return () => { captureAlive.current = false; ++captureEpoch.current; };
+  }, [currentFile, mode]);
   useEffect(() => { setCaptureMessage(""); }, [currentFile]);
   const capture = async () => {
     if (captureInFlight.current) return;
     const source = currentFile; captureInFlight.current = true;
+    const epoch = ++captureEpoch.current;
     setCapturing(true); setCaptureMessage("");
     try {
       const image = await renderPreviewImage(source, mode === "fast" ? "fast_experimental" : mode, undefined,
         mode === "fast" ? preview.operation?.previewId : full.operation?.operationId);
-      if (captureSource.current === source) setDraft({ image, source });
-    } catch (error) { if (captureSource.current === source) setCaptureMessage(String(error)); }
-    finally { captureInFlight.current = false; setCapturing(false); }
+      if (captureAlive.current && captureEpoch.current === epoch) setDraft({ image, source });
+      else if (image.draft_id) await discardGeneratedPreview(image.draft_id);
+    } catch (error) { if (captureAlive.current && captureEpoch.current === epoch) setCaptureMessage(String(error)); }
+    finally { captureInFlight.current = false; if (captureAlive.current) setCapturing(false); }
   };
   const fullProgress = full.progress;
   const operation = preview.operation;
@@ -65,16 +85,16 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
     </span>
   );
   const cameraControls = (
-<><FreeCameraControls sourcePath={currentFile} displayMode={mode === "fast" ? "fast_experimental" : mode}
+<div className="render-view-tools"><FreeCameraControls sourcePath={currentFile} displayMode={mode === "fast" ? "fast_experimental" : mode}
       ready={mode === "fast" ? ready && !!operation?.presentation.visible : full.ready && full.visible} />
     <EnvironmentControls sourcePath={currentFile} displayMode={mode === "fast" ? "fast_experimental" : mode}
       ready={mode === "fast" ? ready && !!operation?.presentation.visible : full.ready && full.visible}
-      environmentSupported={mode === "full"} /></>
+      environmentSupported={mode === "full"} /><div className="scene-editor-toolbar" ref={setEditorToolbar} /></div>
   );
   return <section className="render-page">
     <PreviewDraftDialog draft={draft?.image ?? null} sourcePath={draft?.source ?? currentFile}
       onClose={() => setDraft(null)} onSaved={image => {
-        const source = draft?.source; setDraft(null);
+        const source = draft?.source;
         if (!source) return;
         void (async () => {
           await setRecordPreview(await loadLibrary(), source, image.preview_path);
@@ -83,7 +103,7 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
         })().catch(error => setCaptureMessage(String(error)));
       }} />
     <header className="render-page-header">
-      <h2 className="render-page-title">{mode === "full" ? t("render.title.full") : mode === "standard" ? t("render.title.standard") : t("render.title.fast")}</h2>
+      <h2 className="render-page-title">{t("scene.title")}</h2>
       <div className="render-page-source" title={displayFilePath(currentFile)}>{name}</div>
     </header>
     {mode !== "fast" ? <>
@@ -91,30 +111,41 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
         {modeControls}
         <label><Checkbox checked={preload} disabled={full.pending || full.loading} onCheckedChange={checked => setPreloads(previous => ({ ...previous, [exactMode]: checked === true }))} />{t("render.preload")}</label>
         <Button disabled={!currentFile || full.pending || full.loading} onClick={() => void full.start()}><ThemeIcon name={mode === "full" ? "build" : "run"} size={16} fallback={mode === "full" ? Box : Play} />{t(mode === "standard" ? "render.title.standard" : "render.title.full")}</Button>
-        {mode === "full" && <Button variant="ghost" onClick={() => void openIrisSettings().catch(error => setCaptureMessage(String(error)))}>{t("iris.load")}</Button>}
-        <Button variant="ghost" disabled={!full.operation || full.pending} onClick={() => void full.hide()}><ThemeIcon name="hide" size={16} fallback={EyeOff} />{t("render.hide")}</Button>
-        <Button variant="ghost" disabled={!full.operation && !full.pending && !full.preflight} onClick={() => void full.close()}><ThemeIcon name="close" size={16} fallback={X} />{t("render.closeCancel")}</Button>
-        <Button variant="ghost" disabled={!full.ready || full.pending || capturing} onClick={() => void capture()}><ThemeIcon name="picture_trans" size={16} fallback={Image} />{capturing ? t("render.saving") : t("render.setThumbnail")}</Button>
+        {mode === "full" && <Button className="render-secondary-action" variant="ghost" onClick={() => void openIrisSettings().catch(error => setCaptureMessage(String(error)))}>{t("iris.load")}</Button>}
+        <Button className="render-secondary-action" variant="ghost" disabled={!full.operation || full.pending} onClick={() => void full.hide()}><ThemeIcon name="hide" size={16} fallback={EyeOff} />{t("render.hide")}</Button>
+        <Button className="render-secondary-action" variant="ghost" disabled={!full.operation && !full.pending && !full.preflight} onClick={() => void full.close()}><ThemeIcon name="close" size={16} fallback={X} />{t("render.closeCancel")}</Button>
+        <Button className="render-secondary-action" variant="ghost" disabled={!full.ready || full.pending || capturing} onClick={() => void capture()}><ThemeIcon name="picture_trans" size={16} fallback={Image} />{capturing ? t("render.saving") : t("render.setThumbnail")}</Button>
+        <RenderOverflow items={[
+          ...(mode === "full" ? [{label:t("iris.load"),action:()=>{void openIrisSettings().catch(error=>setCaptureMessage(String(error)));}}] : []),
+          {label:t("render.hide"),disabled:!full.operation||full.pending,action:()=>{void full.hide();}},
+          {label:t("render.closeCancel"),disabled:!full.operation&&!full.pending&&!full.preflight,action:()=>{void full.close();}},
+          {label:t("render.setThumbnail"),disabled:!full.ready||full.pending||capturing,action:()=>{void capture();}},
+        ]}/>
       </div>
       {cameraControls}
-      {full.preflight && <section className="render-preview-help" role="status">
-        <p>{t("render.memoryRequired")}{full.preflight.conservativeVramBytes == null ? t("common.unknown") : formatResourceBytes(full.preflight.conservativeVramBytes)}</p>
-        {full.preflight.severity === "warning" && <p>{t("render.pressure80")}</p>}
-        {full.preflight.severity === "hard" && <p>{t("render.pressure95")}</p>}
-        {full.preflight.severity === "unmeasured" && <p role="alert">{full.preflight.invalidReason ? displayPathText(localizeMessage(full.preflight.invalidReason)) : t("render.pressureUnknown")}</p>}
-        <div className="render-page-actions">
-          <Button disabled={full.pending || !full.preflight.allowedActions.includes("continue_prebuilt")} onClick={() => void full.choose("prebuilt")}>{t("render.confirmPrebuild")}</Button>
-          <Button disabled={full.pending || (full.preflight.severity !== "normal" && !full.preflight.allowedActions.includes("switch_realtime"))} onClick={() => void full.choose("realtime")}>{t("render.openRealtime")}</Button>
-          <Button variant="ghost" disabled={full.pending || !full.preflight.allowedActions.includes("use_basic_vulkan")} onClick={() => void full.choose("basic_vulkan")}>{t("render.reduceQuality")}</Button>
-          <Button variant="ghost" onClick={() => void full.close()}>{t("common.cancel")}</Button>
+      <div className="render-preview-group">
+        <div className="render-notices">
+          {full.preflight && <section className="render-preview-help" role="status">
+            <p>{t("render.memoryRequired")}{full.preflight.conservativeVramBytes == null ? t("common.unknown") : formatResourceBytes(full.preflight.conservativeVramBytes)}</p>
+            {full.preflight.severity === "warning" && <p>{t("render.pressure80")}</p>}
+            {full.preflight.severity === "hard" && <p>{t("render.pressure95")}</p>}
+            {(full.preflight.severity === "unmeasured" || full.preflight.severity === "invalid") && <p role="alert">{full.preflight.invalidReason ? displayPathText(localizeMessage(full.preflight.invalidReason)) : t("render.pressureUnknown")}</p>}
+            <div className="render-page-actions">
+              <Button disabled={full.pending || !full.preflight.allowedActions.includes("continue_prebuilt")} onClick={() => void full.choose("prebuilt")}>{t("render.confirmPrebuild")}</Button>
+              <Button disabled={full.pending || (full.preflight.severity !== "normal" && !full.preflight.allowedActions.includes("switch_realtime"))} onClick={() => void full.choose("realtime")}>{t("render.openRealtime")}</Button>
+              <Button variant="ghost" disabled={full.pending || !full.preflight.allowedActions.includes("use_basic_vulkan")} onClick={() => void full.choose("basic_vulkan")}>{t("render.reduceQuality")}</Button>
+              <Button variant="ghost" onClick={() => void full.close()}>{t("common.cancel")}</Button>
+            </div>
+          </section>}
+          {full.error && <pre className="render-error" role="alert">{displayPathText(localizeMessage(full.error))}</pre>}
+          {fullProgress && !full.visible && !full.error && <div className="render-preview-help" role="status" aria-live="polite">
+            {full.progressLabel}
+            <progress aria-label={t("render.progress")} max={full.progressRange?.total} value={full.progressRange?.completed} />
+          </div>}
         </div>
-      </section>}
-      {full.error && <pre className="render-error" role="alert">{displayPathText(localizeMessage(full.error))}</pre>}
-      {fullProgress && !full.visible && !full.error && <div className="render-preview-help" role="status" aria-live="polite">
-        {full.progressLabel}
-        <progress aria-label={t("render.progress")} max={full.progressRange?.total} value={full.progressRange?.completed} />
-      </div>}
-      <div className="render-preview-group"><div ref={full.hostRef} className="render-preview-host" aria-label={t("render.viewport", { mode: mode === "standard" ? t("render.standard") : t("render.full") })}>
+        <div ref={full.mountHost} className="render-preview-host" aria-label={t("render.viewport", { mode: mode === "standard" ? t("render.standard") : t("render.full") })}>
+        <SceneInteraction key={`${exactMode}:${currentFile}`} sourcePath={currentFile} operationId={full.operation?.operationId} displayMode={exactMode} ready={full.ready} visible={full.visible}
+          blocked={presentationBlocked} viewportRef={full.hostRef} toolbarTarget={editorToolbar} onError={setCaptureMessage} />
         {!full.visible && <div className="render-preview-placeholder"><ThemeIcon name="empty" size={40} fallback={Box} /><strong>{name}</strong><span>{full.error ? t("render.loadingFailed") : full.progressLabel}</span></div>}
       </div></div>
     </> : <>
@@ -124,15 +155,20 @@ export function RenderPage({ currentFile, presentationBlocked = false }: { curre
       <Button variant="default" disabled={!currentFile || preview.pending || loading} onClick={() => void preview.start()}>
         <ThemeIcon name="run" size={16} fallback={Play} />{preview.pending ? t("render.connecting") : loading ? t("render.loading") : ready ? t("render.embed") : operation ? t("render.reload") : t("render.title.fast")}
       </Button>
-      <Button variant="ghost" disabled={!operation?.presentation.visible || preview.pending} onClick={() => void preview.hide()}><ThemeIcon name="hide" size={16} fallback={EyeOff} />{t("render.hidePreview")}</Button>
-      <Button variant="ghost" disabled={!operation || !["starting", "ready"].includes(operation.state) || preview.pending} onClick={() => void preview.close()}><ThemeIcon name="close" size={16} fallback={X} />{loading ? t("render.cancelLoading") : t("render.closePreview")}</Button>
-      <Button variant="ghost" disabled={!ready || capturing} onClick={() => void capture()}><ThemeIcon name="picture_trans" size={16} fallback={Image} />{capturing ? t("render.readingFrame") : t("render.setThumbnail")}</Button>
+      <Button className="render-secondary-action" variant="ghost" disabled={!operation?.presentation.visible || preview.pending} onClick={() => void preview.hide()}><ThemeIcon name="hide" size={16} fallback={EyeOff} />{t("render.hidePreview")}</Button>
+      <Button className="render-secondary-action" variant="ghost" disabled={!operation || !["starting", "ready"].includes(operation.state) || preview.pending} onClick={() => void preview.close()}><ThemeIcon name="close" size={16} fallback={X} />{loading ? t("render.cancelLoading") : t("render.closePreview")}</Button>
+      <Button className="render-secondary-action" variant="ghost" disabled={!ready || capturing} onClick={() => void capture()}><ThemeIcon name="picture_trans" size={16} fallback={Image} />{capturing ? t("render.readingFrame") : t("render.setThumbnail")}</Button>
+      <RenderOverflow items={[
+        {label:t("render.hidePreview"),disabled:!operation?.presentation.visible||preview.pending,action:()=>{void preview.hide();}},
+        {label:t("render.closePreview"),disabled:!operation||!["starting","ready"].includes(operation.state)||preview.pending,action:()=>{void preview.close();}},
+        {label:t("render.setThumbnail"),disabled:!ready||capturing,action:()=>{void capture();}},
+      ]}/>
     </div>
     {cameraControls}
-    {error && <pre className="render-error" role="alert">{displayPathText(localizeMessage(error))}</pre>}
     {captureMessage && <div role="status">{displayPathText(localizeMessage(captureMessage))}</div>}
     <div className="render-preview-group">
-      <div ref={preview.hostRef} className="render-preview-host" aria-label={t("render.fastViewport")}>
+      {error && <div className="render-notices"><pre className="render-error" role="alert">{displayPathText(localizeMessage(error))}</pre></div>}
+      <div ref={preview.mountHost} className="render-preview-host" aria-label={t("render.fastViewport")}>
         {!ready && <div className="render-preview-placeholder"><ThemeIcon name="empty" size={40} fallback={Box} /><strong>{name}</strong><span>{status}</span></div>}
       </div>
       <div className="render-preview-help" role="status" aria-live="polite">{status}</div>

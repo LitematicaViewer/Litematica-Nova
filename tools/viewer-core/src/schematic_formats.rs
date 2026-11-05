@@ -209,14 +209,16 @@ fn read_bounded(reader: impl Read, max: u64, cancel: &AtomicBool) -> Result<Vec<
     Ok(data)
 }
 fn read_nbt(bytes: &[u8], cancel: &AtomicBool) -> Result<Value> {
+    let expanded;
     let decoded = if bytes.starts_with(&[0x1f, 0x8b]) {
-        read_bounded(GzDecoder::new(bytes), MAX_EXPANDED, cancel)?
+        expanded = read_bounded(GzDecoder::new(bytes), MAX_EXPANDED, cancel)?;
+        expanded.as_slice()
     } else {
         ensure!(bytes.len() as u64 <= MAX_EXPANDED, "NBT超过容量");
-        bytes.to_vec()
+        bytes
     };
     cancelled(cancel)?;
-    let value = fastnbt::from_bytes(&decoded).context("NBT解码失败")?;
+    let value = fastnbt::from_bytes(decoded).context("NBT解码失败")?;
     compound(&value)?;
     Ok(value)
 }
@@ -230,14 +232,9 @@ pub fn is_native_litematic(path: &Path) -> Result<bool> {
     if !compressed {
         return Ok(false);
     }
-    let reader: Box<dyn Read> = if compressed {
-        Box::new(GzDecoder::new(file))
-    } else {
-        Box::new(file)
-    };
     // Normal embedded 320x240 ARGB previews alone exceed 128 KiB. Permit the
     // existing small metadata payload without ever descending into Regions.
-    let mut reader = reader.take(2 << 20);
+    let mut reader = GzDecoder::new(file).take(2 << 20);
     fn byte(reader: &mut impl Read) -> Result<u8> {
         let mut value = [0];
         reader.read_exact(&mut value)?;
@@ -1310,7 +1307,7 @@ pub fn encode_bytes(
 ) -> Result<Vec<u8>> {
     cancelled(cancel)?;
     if format == FormatId::Litematic {
-        return gzip(&scene.raw_litematic()?);
+        return gzip(&scene.raw);
     }
     // The composition owner provides the sole conflict/air/void merge policy.
     // Dense flattening happens only on confirmed export, never on menu display.

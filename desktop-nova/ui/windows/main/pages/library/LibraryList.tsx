@@ -1,3 +1,4 @@
+import { t } from "../../../../../src/services/i18n";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../../../components/ui/table";
 import { Checkbox } from "../../../../components/ui/checkbox";
 import { LIBRARY_COLUMNS, type LibraryEntryView } from "./libraryEntryView";
@@ -32,11 +33,11 @@ export function LibraryList({
             <Checkbox
               checked={allSelected ? true : someSelected ? "indeterminate" : false}
               disabled={!entries.length || binding.busy}
-              aria-label="选择本页全部投影"
+              aria-label={t("library.selectCurrentPage")}
               onCheckedChange={(value) => onToggleAll(value === true)}
             />
           </TableHead>
-          <TableHead>名称</TableHead>
+          <TableHead>{t("library.name")}</TableHead>
           {activeColumns.map((column) => <TableHead key={column.id}>{column.label}</TableHead>)}
         </TableRow>
       </TableHeader>
@@ -48,21 +49,26 @@ export function LibraryList({
             data-inspected={binding.isInspected(entry) || undefined}
             aria-selected={binding.isInspected(entry)}
             className="library-list-row"
+            tabIndex={0}
+            onKeyDown={event => {
+              if (event.currentTarget !== event.target || event.nativeEvent.isComposing) return;
+              if (event.key === "Enter" || event.key === " ") { event.preventDefault(); binding.onInspect(entry); }
+            }}
             onClick={() => binding.onInspect(entry)}
             onDoubleClick={() => { if (!binding.busy && entry.status === "ok") binding.onActivate(entry); }}
           >
-            <TableCell className="library-list-select-col" onClick={(event) => event.stopPropagation()}>
+            <TableCell className="library-list-select-col" onClick={(event) => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
               <Checkbox
                 checked={binding.isChecked(entry)}
                 disabled={binding.busy}
-                aria-label={`选择 ${entry.displayName || entry.fileName}`}
+                aria-label={t("library.ux.selectName", { value0: entry.displayName || entry.fileName })}
                 onCheckedChange={(value) => binding.onToggle(entry, value === true)}
               />
             </TableCell>
             <TableCell>
               <span className="library-list-name" title={entry.displayName || entry.fileName}>{entry.displayName || entry.fileName}</span>
               {entry.replicaCount > 1 && (
-                <span className="library-replica-chip" data-replica-count={entry.replicaCount} title={`${entry.replicaCount} 份副本`}>
+                <span className="library-replica-chip" data-replica-count={entry.replicaCount} title={t("library.ux.copies", { value0: entry.replicaCount })}>
                   ×{entry.replicaCount}
                 </span>
               )}

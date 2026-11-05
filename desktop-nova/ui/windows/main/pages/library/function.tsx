@@ -1,3 +1,4 @@
+import { t } from "../../../../../src/services/i18n";
 import { displayFilePath } from "../../../../../src/business/projectionLibrary";
 
 /**
@@ -48,7 +49,7 @@ export function ensureLitematicFileName(fileName: string): string {
  */
 export function replicaNameError(fileName: string): string {
   const normalized = ensureLitematicFileName(fileName);
-  if (!normalized) return "请填写文件名。";
-  if (/[\\/:*?"<>|]/.test(normalized)) return "文件名不能包含 \\ / : * ? \" < > | 等字符。";
+  if (!normalized) return t("library.ux.fileNameRequired");
+  if (/[\\/:*?"<>|]/.test(normalized)) return t("library.ux.fileNameInvalid");
   return "";
 }

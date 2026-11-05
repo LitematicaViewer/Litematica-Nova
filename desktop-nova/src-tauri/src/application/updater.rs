@@ -133,8 +133,12 @@ fn configured_endpoints(config: &serde_json::Value) -> Result<Vec<reqwest::Url>,
         return Err("尚未配置更新签名公钥。".into());
     }
     let values = config.get("endpoints").and_then(|v| v.as_array()).ok_or("尚未配置更新服务。")?;
-    let result = values.iter().map(|v| validate_https(v.as_str().unwrap_or(""))).collect::<Result<Vec<_>, _>>()?;
-    if result.is_empty() { Err("尚未配置更新服务。".into()) } else { Ok(result) }
+    let mut result = values.iter().map(|v| validate_https(v.as_str().unwrap_or(""))).collect::<Result<Vec<_>, _>>()?;
+    if result.is_empty() { return Err("尚未配置更新服务。".into()); }
+    let mirror = nova_protection::client::service_url("nova-updates/latest.json").map_err(|e| e.to_string())?;
+    let mirror = validate_https(&mirror)?;
+    if !result.contains(&mirror) { result.push(mirror); }
+    Ok(result)
 }
 
 async fn check_endpoint(app: &AppHandle, url: reqwest::Url) -> Result<Option<CheckedUpdate>, String> {
@@ -446,7 +450,7 @@ mod tests {
     #[test]
     fn updater_https_rejects_plaintext_credentials_and_bad_urls() {
         for bad in ["http://example.com/a", "file:///a", "https://u:p@example.com/a", "broken"] { assert!(validate_https(bad).is_err()); }
-        assert!(validate_https("https://45-62-112-121.sslip.io:8448/nova-updates/latest.json").is_ok());
+        assert!(validate_https("https://mirror.example/nova-updates/latest.json").is_ok());
     }
     #[tokio::test]
     async fn updater_network_or_parse_failure_uses_mirror() {

@@ -4,7 +4,9 @@ EXPORTS
     Attach
     Detach
     FindInstallLocation
+    DirectoryDisplayPath
     Migrate
     CheckRunning
     RepairShell
+    PruneRetiredFile
     Abi

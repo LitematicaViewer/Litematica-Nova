@@ -193,7 +193,11 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 ; products are removed before any new application files are written.
 
 ; 5. Choose install directory page
-!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+Var NovaDirectoryChoice
+Var NovaDirectoryInitial
+!define MUI_DIRECTORYPAGE_VARIABLE $NovaDirectoryChoice
+!define MUI_PAGE_CUSTOMFUNCTION_PRE NovaDirectoryPre
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE NovaDirectoryLeave
 !insertmacro MUI_PAGE_DIRECTORY
 
 ; 6. Start menu shortcut page
@@ -485,6 +489,17 @@ Section Install
   {{/each}}
   {{#each resources}}
     File /a "/oname={{this.[1]}}" "{{no-escape @key}}"
+    !define "NOVA_CURRENT_RESOURCE_{{this.[1]}}" 1
+    ; Use the exact core and resource receipts selected by this bundle.
+    !if "{{this.[1]}}" == "bin\viewer-backend\litematica_core.exe"
+      !define NOVA_PRUNE_CORE "{{no-escape @key}}"
+    !endif
+    !if "{{this.[1]}}" == "pack-in\game-data\default\index.json"
+      !define NOVA_PRUNE_RESOURCES "{{no-escape @key}}"
+    !endif
+    !if "{{this.[1]}}" == "pack-in\game-data\default\derived\version-adapters\index.json"
+      !define NOVA_PRUNE_ADAPTERS "{{no-escape @key}}"
+    !endif
   {{/each}}
 
   ; Copy external binaries
@@ -660,18 +675,19 @@ Section Uninstall
 
   ; Remove shortcuts if not updating
   ${If} $UpdateMode <> 1
+    !insertmacro NOVA_SHORTCUT_DIRECTORY
     !insertmacro DeleteAppUserModelId
 
     ; Remove start menu shortcut
     !insertmacro MUI_STARTMENU_GETFOLDER Application $AppStartMenuFolder
-    !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$NovaShortcutDir\${MAINBINARYNAME}.exe"
     Pop $0
     ${If} $0 = 1
       !insertmacro UnpinShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
       Delete "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
       RMDir "$SMPROGRAMS\$AppStartMenuFolder"
     ${EndIf}
-    !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$NovaShortcutDir\${MAINBINARYNAME}.exe"
     Pop $0
     ${If} $0 = 1
       !insertmacro UnpinShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk"
@@ -679,7 +695,7 @@ Section Uninstall
     ${EndIf}
 
     ; Remove desktop shortcuts
-    !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$NovaShortcutDir\${MAINBINARYNAME}.exe"
     Pop $0
     ${If} $0 = 1
       !insertmacro UnpinShortcut "$DESKTOP\${PRODUCTNAME}.lnk"
@@ -733,6 +749,22 @@ Section Uninstall
   ${EndIf}
 SectionEnd
 
+; Only the directory page uses a shell-friendly spelling. Preserve the original
+; install/update target (including /D=) unless the user actually picks another.
+Function NovaDirectoryPre
+  ${IfThen} $PassiveMode = 1  ${|} Abort ${|}
+  NovaDui::DirectoryDisplayPath /NOUNLOAD "$INSTDIR"
+  Pop $NovaDirectoryInitial
+  StrCpy $NovaDirectoryChoice $NovaDirectoryInitial
+FunctionEnd
+
+Function NovaDirectoryLeave
+  StrCmp $NovaDirectoryChoice "" done
+  StrCmpS $NovaDirectoryChoice $NovaDirectoryInitial done
+  StrCpy $INSTDIR $NovaDirectoryChoice
+  done:
+FunctionEnd
+
 Function RestorePreviousInstallLocation
   ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
   StrCmp $4 "" +2 0
@@ -751,54 +783,79 @@ Function un.SkipIfPassive
 FunctionEnd
 
 Function CreateOrUpdateStartMenuShortcut
+  !insertmacro NOVA_SHORTCUT_DIRECTORY
+  !if "${STARTMENUFOLDER}" != ""
+    StrCpy $R8 "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
+  !else
+    StrCpy $R8 "$SMPROGRAMS\${PRODUCTNAME}.lnk"
+  !endif
+  !insertmacro IsShortcutTarget "$R8" "$NovaShortcutDir\${MAINBINARYNAME}.exe"
+  Pop $0
+  ${If} $0 = 1
+    Return
+  ${EndIf}
   ; We used to use product name as MAINBINARYNAME
   ; migrate old shortcuts to target the new MAINBINARYNAME
   StrCpy $R0 0
 
-  !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+  !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$NovaShortcutDir\$OldMainBinaryName"
   Pop $0
   ${If} $0 = 1
-    !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$NovaShortcutDir\${MAINBINARYNAME}.exe"
     StrCpy $R0 1
   ${EndIf}
 
-  !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+  !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$NovaShortcutDir\$OldMainBinaryName"
   Pop $0
   ${If} $0 = 1
-    !insertmacro SetShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    !insertmacro SetShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$NovaShortcutDir\${MAINBINARYNAME}.exe"
     StrCpy $R0 1
   ${EndIf}
 
   ${If} $R0 = 1
-    Return
+    !insertmacro IsShortcutTarget "$R8" "$NovaShortcutDir\${MAINBINARYNAME}.exe"
+    Pop $0
+    ${If} $0 = 1
+      Return
+    ${EndIf}
   ${EndIf}
 
-  ; Skip creating shortcut if in update mode or no shortcut mode
-  ; but always create if migrating from wix
+  ; Restore a missing start menu shortcut on update without rewriting a valid
+  ; or user-customized link. RepairShell handles verified historical targets.
   ${If} $WixMode = 0
+    ${If} $NoShortcutMode = 1
+      Return
+    ${EndIf}
     ${If} $UpdateMode = 1
-    ${OrIf} $NoShortcutMode = 1
+    ${AndIf} ${FileExists} "$R8"
       Return
     ${EndIf}
   ${EndIf}
 
   !if "${STARTMENUFOLDER}" != ""
     CreateDirectory "$SMPROGRAMS\$AppStartMenuFolder"
-    CreateShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-    !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
-  !else
-    CreateShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-    !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\${PRODUCTNAME}.lnk"
   !endif
+  !insertmacro NOVA_CREATE_SHORTCUT "$R8"
+  ${If} ${Errors}
+    SetErrorLevel 1603
+    Abort "$(novaStartMenuFailed)"
+  ${EndIf}
+  !insertmacro SetLnkAppUserModelId "$R8"
 FunctionEnd
 
 Function CreateOrUpdateDesktopShortcut
-  ; We used to use product name as MAINBINARYNAME
-  ; migrate old shortcuts to target the new MAINBINARYNAME
-  !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+  !insertmacro NOVA_SHORTCUT_DIRECTORY
+  !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$NovaShortcutDir\${MAINBINARYNAME}.exe"
   Pop $0
   ${If} $0 = 1
-    !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+    Return
+  ${EndIf}
+  ; We used to use product name as MAINBINARYNAME
+  ; migrate old shortcuts to target the new MAINBINARYNAME
+  !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$NovaShortcutDir\$OldMainBinaryName"
+  Pop $0
+  ${If} $0 = 1
+    !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$NovaShortcutDir\${MAINBINARYNAME}.exe"
     Return
   ${EndIf}
 
@@ -811,7 +868,7 @@ Function CreateOrUpdateDesktopShortcut
     ${EndIf}
   ${EndIf}
 
-  CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  !insertmacro NOVA_CREATE_SHORTCUT "$DESKTOP\${PRODUCTNAME}.lnk"
   !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
 FunctionEnd
 

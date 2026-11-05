@@ -142,18 +142,15 @@ export function parseAiPlanText(text: string): ProjectionPlan {
 }
 
 export function normalizeAiPlanForImport(plan: ProjectionPlan): AiPlanNormalizeResult {
-  const blockNormalized = normalizePlanBlockStates(plan);
-  const geometryNormalized = normalizeAiPlanGeometry(blockNormalized.plan);
-  return {
-    plan: geometryNormalized.plan,
-    warnings: [...blockNormalized.warnings, ...geometryNormalized.warnings],
-    errors: geometryNormalized.errors,
-  };
+  const normalized = normalizePlanBlockStates(plan);
+  return normalizeOwnedGeometry(normalized.plan, normalized.warnings);
 }
 
 export function normalizeAiPlanGeometry(plan: ProjectionPlan): AiPlanNormalizeResult {
-  const normalized: ProjectionPlan = JSON.parse(JSON.stringify(plan));
-  const warnings: string[] = [];
+  return normalizeOwnedGeometry(JSON.parse(JSON.stringify(plan)), []);
+}
+
+function normalizeOwnedGeometry(normalized: ProjectionPlan, warnings: string[]): AiPlanNormalizeResult {
   const errors: string[] = [];
 
   for (const [regionIndex, region] of (normalized.regions || []).entries()) {

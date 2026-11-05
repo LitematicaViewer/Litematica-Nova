@@ -3,7 +3,7 @@
 //! DataVersion on partly converted data. No Java oracle is invoked at runtime.
 use crate::block_database::{Registry as BlockRegistry, database};
 use crate::nbt::{
-    BigEndianLongArray, Vec3i, bits_for_palette, choose_palette_packing, region_volume,
+    Vec3i, bits_for_palette, choose_palette_packing, region_volume,
 };
 use anyhow::{Context, Result, bail};
 use fastnbt::Value;
@@ -173,7 +173,7 @@ fn group_payload_issue(region: &Value, issue: &str) -> (String, String, String, 
             "unsupported",
             "目标版本不能无损保存，请选择兼容版本或调整对应内容。",
         )
-    } else if ["尚未", "未覆盖", "需要单独迁移", "需单独", "只覆盖"]
+    } else if ["尚未", "未覆盖", "未验证", "未经验证", "未支持", "未实现", "需要单独迁移", "需单独", "只覆盖"]
         .iter()
         .any(|term| issue.contains(term))
     {
@@ -684,6 +684,10 @@ fn convert_loaded(
         }
         crate::version_payload_migration::migrate_head_palette(region, source_data_version, target.data_version)?;
         crate::version_payload_migration::migrate_banner_palette(region, source_data_version, target.data_version)?;
+        let music_pots = match crate::version_payload_migration::prepare_music_pots(region, source_data_version, target.data_version, cancel) {
+            Ok(bound) => bound,
+            Err(error) => { check_cancel(cancel)?; blocked_payloads.push(format!("{region_name}：{error}")); continue; }
+        };
         let Value::Compound(fields) = region else {
             bail!("选区不是 Compound")
         };
@@ -712,8 +716,7 @@ fn convert_loaded(
             Some(scan) => { frequency_cache_hits += 1; scan },
             None => {
                 let layout_started = Instant::now();
-                let packed = BigEndianLongArray::new(packed.iter().copied().collect());
-                let layout = choose_palette_packing(&packed, volume, bits_for_palette(palette.len()), palette.len())?;
+                let layout = choose_palette_packing(packed, volume, bits_for_palette(palette.len()), palette.len())?;
                 frequency_layout_elapsed += layout_started.elapsed();
                 let scan_started = Instant::now();
                 let mut counts = vec![0_u64; palette.len().max(1)];
@@ -723,7 +726,7 @@ fn convert_loaded(
                     emit("blocks", start as u64, volume as u64);
                     let end = start.saturating_add(65536).min(volume);
                     let mut invalid_index = None;
-                    frequency_word_reads += layout.visit_palette_range(&packed, start, end, true, |_, index| {
+                    frequency_word_reads += layout.visit_palette_range(packed, start, end, true, |_, index| {
                         if let Some(count) = counts.get_mut(index) {
                             *count += 1;
                             nonzero_count += 1;
@@ -903,6 +906,14 @@ fn convert_loaded(
                     .into_iter()
                     .map(|change| format!("{region_name}/{change}")),
             );
+        }
+        match music_pots.finish(region) {
+            Ok(0) => (),
+            Ok(count) => {
+                changed_block_entity_count += count;
+                payload_changes.push(format!("{region_name}：按实际位置迁移 {count} 个花盆/音符盒载荷"));
+            }
+            Err(error) => blocked_payloads.push(format!("{region_name}：{error}")),
         }
     }
     eprintln!("[version-convert] stage=frequency elapsed_ms={:.3} layout_ms={:.3} scan_ms={:.3} cache_regions={} scanned_blocks={} word_reads={}", frequency_elapsed.as_secs_f64()*1000.0, frequency_layout_elapsed.as_secs_f64()*1000.0, frequency_scan_elapsed.as_secs_f64()*1000.0, frequency_cache_hits, frequency_blocks, frequency_word_reads);

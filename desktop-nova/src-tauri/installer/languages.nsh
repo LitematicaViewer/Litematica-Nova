@@ -9,3 +9,5 @@ LangString novaApplicationDescription 2052 "查看、整理 Minecraft Litematica
 LangString novaApplicationDescription 1033 "View and organize Minecraft Litematica schematics"
 LangString novaRegistrationFailed 2052 "Windows 文件入口登记失败"
 LangString novaRegistrationFailed 1033 "Could not register Windows file integration"
+LangString novaStartMenuFailed 2052 "未能创建开始菜单快捷方式：$R8"
+LangString novaStartMenuFailed 1033 "Could not create the Start menu shortcut: $R8"

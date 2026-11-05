@@ -1,274 +1,214 @@
-import { t, getUiLocale, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
+import { useCreativeIdentities } from "../../../../components/useCreativeIdentities";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { t } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
-import { creativeItemId, creativeInventoryValues, displayPathText } from "../../../../../src/business/facade";
+import { translateBlockId } from "../../../../../src/business/facade";
+import type { CreativeInventoryCatalog, CreativeInventoryItem } from "../../../../../src/platform/files";
+import { listenEvent } from "../../../../../src/platform/events";
+import { bundledCreativeGroups, filterCreativeItems, invalidateCreativeInventoryCatalog, prepareCreativeInventoryCatalog, type CreativeCatalogSource } from "../../../../../src/services/creativeInventoryCatalog";
+import type { SceneBlockState } from "../../../../../src/platform/sceneView";
 import { Dropdown } from "../../../../components/Dropdown";
 import { Dialog } from "../../../../components/Dialog";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
-import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from "react";
-import { type EnumeratorCollection, loadEnumeratorCollections } from "../../../../../src/business/facade";
-import { translateBlockId } from "../../../../../src/business/facade";
 import { BlockIcon } from "../../../../components/BlockIcon";
 import { CreativeInventoryTooltip } from "./function";
+import "../../../../styles/flake.css";
 
+type Carried = { blockState: string; itemId: string; name: string; state?: SceneBlockState };
+type CatalogData = { data: CreativeInventoryCatalog | null; loading: boolean; error: string };
+type CatalogState = CatalogData & {key: string; knownGroups: {id: string; label: string}[]};
+const cold: CatalogData = { data: null, loading: true, error: "" };
+const emptyItems: CreativeInventoryItem[] = [];
+const firstRows = new Set(Array.from({length:45}, (_, i) => i));
 
-export function CreativeInventoryDialog({
-  onClose, quickbarSlots, onChangeQuickbarSlots, extraCollections = [],
-}: {
+// Mounted by the scene, not the dialog. Opening/closing the inventory doesn't reload it.
+export function useCreativeInventoryCatalog({ version, contentId, resourceIdentity, extraCollections, enabled = true }: CreativeCatalogSource & { enabled?: boolean }): CatalogState {
+  const { locale } = useI18n();
+  const [revision, setRevision] = useState(0);
+  const collections = useMemo(() => JSON.stringify(extraCollections ?? []), [extraCollections]);
+  const key = enabled ? JSON.stringify([version, contentId, resourceIdentity, collections, locale, revision]) : "";
+  const [resolved, setResolved] = useState<{key:string; contentId:string; version:string} | null>(null);
+  const exactContent = contentId || (resolved?.key === key ? resolved.contentId : undefined);
+  const exactVersion = version || (resolved?.key === key ? resolved.version : undefined);
+  // Always-known groups and exact bundled registry metadata are available
+  // before any item/icon query. Never publish bundled categories for a Mod.
+  const knownGroups = useMemo(() => [
+    ...(extraCollections ?? []).map(({id, name}) => ({id, label:name})),
+    {id:"base:dv-blocks", label:t("flake.creativeAll")},
+    ...bundledCreativeGroups(exactContent, exactVersion).map(name => ({id:"category:" + name, label:name})),
+  ], [extraCollections, locale, exactContent, exactVersion]);
+  const [state, setState] = useState<CatalogData & {key: string} | null>(null);
+  useEffect(() => {
+    const subscription = listenEvent("resource-game-data-changed", () => {
+      invalidateCreativeInventoryCatalog();
+      setRevision(value => value + 1);
+    });
+    return () => { void subscription.then(unlisten => unlisten()).catch(() => undefined); };
+  }, []);
+  useEffect(() => {
+    if (!key) return;
+    let active = true;
+    void prepareCreativeInventoryCatalog({version, contentId, resourceIdentity, extraCollections: JSON.parse(collections)}, locale,
+      (id, v) => { if (active) setResolved({key, contentId:id, version:v}); })
+      .then(data => { if (active) setState({key, data, loading:false, error:""}); })
+      .catch(reason => { if (active) setState({key, data:null, loading:false, error:String(reason)}); });
+    return () => { active = false; };
+  }, [key, version, contentId, resourceIdentity, collections, locale]);
+  return {...(state?.key === key ? state : cold), key, knownGroups};
+}
+
+type InventoryProps = {
+  catalog: CatalogState;
   onClose: () => void;
   quickbarSlots: string[];
+  quickbarIdentity?: { itemIds: Record<string, string>; error: string };
   onChangeQuickbarSlots: (updater: (current: string[]) => string[]) => void;
-  /** 额外注入的分类（如"当前统计结果"），显示在分类列表顶部。 */
-  extraCollections?: { id: string; name: string; values: string[] }[];
-}) {
-  const { locale, revision } = useI18n();
-  const [collections, setCollections] = useState<EnumeratorCollection[]>([]);
-  const [selectedCollectionId, setSelectedCollectionId] = useState("");
+  typedSlots?: (SceneBlockState | null)[];
+  onSelectState?: (index: number, state: SceneBlockState | null) => void;
+};
+export function CreativeInventoryDialog(props: InventoryProps) {
+  // A carried typed state is only valid for the registry it came from.
+  return <InventoryDialogBody key={props.catalog.key} {...props} />;
+}
+function InventoryDialogBody({ catalog, onClose, quickbarSlots, quickbarIdentity, onChangeQuickbarSlots, typedSlots, onSelectState }: InventoryProps) {
+  const { locale } = useI18n();
+  const [category, setCategory] = useState("");
   const [search, setSearch] = useState("");
-  const [pageStart, setPageStart] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<UiMessage>("");
-  const [carryBlockId, setCarryBlockId] = useState("");
-  const [carryPosition, setCarryPosition] = useState({ x: 0, y: 0 });
-  const [hoverItem, setHoverItem] = useState<{ id: string; name: string; } | null>(null);
-  const [hoverPosition, setHoverPosition] = useState({ x: 0, y: 0 });
-  const carryPreviewRef = useRef<HTMLDivElement | null>(null);
-
+  const { data, loading } = catalog;
+  const [selectionError, setError] = useState("");
+  const localIdentity = useCreativeIdentities(quickbarSlots, data?.version, data?.contentId, !quickbarIdentity && !!data);
+  const identity = quickbarIdentity ?? localIdentity;
+  const error = catalog.error || selectionError || identity.error;
+  const [carried, setCarried] = useState<Carried | null>(null);
+  const [pointer, setPointer] = useState({ x: 0, y: 0 });
+  const [hover, setHover] = useState<Carried | null>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    let active = true;
-    setLoading(true);
-    setError("");
-    loadEnumeratorCollections()
-      .then((allCollections) => {
-        if (!active) return;
-        const creativeCollections = allCollections
-          .filter((collection) => (collection.category === "creative" || collection.id === "base:dv-blocks") && collection.values.length > 0)
-          .sort((left, right) => {
-            if (left.id === "base:dv-blocks") return -1;
-            if (right.id === "base:dv-blocks") return 1;
-            return left.name.localeCompare(right.name, getUiLocale());
-          });
-        setCollections(creativeCollections);
-        setSelectedCollectionId((previous) => {
-          const allIds = new Set([
-            ...extraCollections.map((c) => c.id),
-            ...creativeCollections.map((c) => c.id),
-          ]);
-          if (previous && allIds.has(previous)) return previous;
-          // 优先选中第一个额外分类
-          return extraCollections.length > 0
-            ? extraCollections[0].id
-            : (creativeCollections[0]?.id || "");
-        });
-      })
-      .catch((nextError: any) => {
-        if (!active) return;
-        setCollections([]);
-        setSelectedCollectionId(extraCollections.length > 0 ? extraCollections[0].id : "");
-        setError(nextError ? String(nextError) : {key:"flake.loadCreativeFailed"});
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  // extraCollections 在组件生命周期内不变，安全忽略
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /** 合并后的全部分类：额外分类在前，枚举分类在后。 */
-  const allCollections = useMemo(
-    () => [
-      ...extraCollections.map((c) => ({ id: c.id, name: c.name, values: c.values })),
-      ...collections.map((c) => ({ id: c.id, name: c.name, values: c.values })),
-    ],
-    [collections, extraCollections]
-  );
-
-  const selectedCollection = useMemo(
-    () => allCollections.find((collection) => collection.id === selectedCollectionId) || null,
-    [allCollections, selectedCollectionId]
-  );
-
-  const filteredValues = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-    const source = creativeInventoryValues(selectedCollection?.values || []);
-    if (!keyword) return source;
-    return source.filter((blockId) => {
-      const translated = translateBlockId(creativeItemId(blockId) || blockId).toLowerCase();
-      return blockId.toLowerCase().includes(keyword) || translated.includes(keyword);
-    });
-  }, [search, selectedCollection, revision]);
-
-  const maxPageStart = useMemo(() => {
-    if (filteredValues.length <= 45) return 0;
-    return Math.floor((filteredValues.length - 1) / 9) * 9;
-  }, [filteredValues.length]);
-
-  const visibleValues = useMemo(() => {
-    const page = filteredValues.slice(pageStart, pageStart + 45);
-    const placeholders = Array.from({ length: Math.max(0, 45 - page.length) }, () => "");
-    return [...page, ...placeholders];
-  }, [filteredValues, pageStart]);
-
-  const collectionOptions = useMemo(
-    () => allCollections.map((collection) => ({ label: collection.name, value: collection.id })),
-    [allCollections]
-  );
-
+    if (!carried) return;
+    const move = (event: MouseEvent) => setPointer({ x: event.clientX, y: event.clientY });
+    window.addEventListener("mousemove", move);
+    return () => window.removeEventListener("mousemove", move);
+  }, [carried]);
   useEffect(() => {
-    setPageStart(0);
-  }, [selectedCollectionId, search]);
-
-  useEffect(() => {
-    setPageStart((current) => Math.min(current, maxPageStart));
-  }, [maxPageStart]);
-
-  useEffect(() => {
-    if (!carryBlockId) return undefined;
-    setHoverItem(null);
-    const handlePointerMove = (event: MouseEvent) => {
-      setCarryPosition({ x: event.clientX, y: event.clientY });
-    };
-    window.addEventListener("mousemove", handlePointerMove);
-    return () => {
-      window.removeEventListener("mousemove", handlePointerMove);
-    };
-  }, [carryBlockId]);
-
+    previewRef.current?.style.setProperty("--flake-carry-x", `${pointer.x}px`);
+    previewRef.current?.style.setProperty("--flake-carry-y", `${pointer.y}px`);
+  }, [pointer, carried]);
+  const options = useMemo(() => (data?.categories ?? catalog.knownGroups).map(value => ({
+    value: value.id, label: value.id.startsWith("category:") ? t("flake.category." + value.id.slice(9)) : value.label,
+  })), [data, catalog.knownGroups, locale]);
+  const selected = options.some(option => option.value === category) ? category : options[0]?.value ?? "";
+  const items = useMemo(() => data ? filterCreativeItems(data, selected, search) : emptyItems, [data, selected, search]);
+  // Radix mounts the portal after its owner. A callback ref also starts the
+  // observer when the full catalog was already ready before the dialog opened.
+  const [grid, setGrid] = useState<HTMLDivElement | null>(null);
+  const [visibility, setVisibility] = useState<{items: CreativeInventoryItem[]; indices: Set<number>} | null>(null);
+  const visibleIcons = visibility?.items === items ? visibility.indices : firstRows;
+  // All slots participate in native scroll/focus. Only visible/nearby icons
+  // start native icon reads or subscribe to resource changes.
   useLayoutEffect(() => {
-    const preview = carryPreviewRef.current;
-    if (!preview || !carryBlockId) return;
-    preview.style.setProperty("--flake-carry-x", `${carryPosition.x}px`);
-    preview.style.setProperty("--flake-carry-y", `${carryPosition.y}px`);
-  }, [carryBlockId, carryPosition.x, carryPosition.y]);
-
-  const handleHoverItem = (blockId: string, event: React.MouseEvent<HTMLButtonElement>) => {
-    if (carryBlockId || !blockId) return;
-    setHoverItem({ id: creativeItemId(blockId) || blockId, name: translateBlockId(creativeItemId(blockId) || blockId) });
-    setHoverPosition({ x: event.clientX, y: event.clientY });
+    if (!grid) return;
+    grid.scrollTop = 0;
+    setHover(null);
+    let active = true;
+    const observer = new IntersectionObserver(entries => {
+      if (!active) return;
+      setVisibility(current => {
+        const next = new Set(current?.items === items ? current.indices : []);
+        for (const entry of entries) {
+          const index = Number((entry.target as HTMLElement).dataset.itemIndex);
+          if (entry.isIntersecting) next.add(index); else next.delete(index);
+        }
+        return {items, indices:next};
+      });
+    }, {root:grid, rootMargin:"96px 0px"});
+    grid.querySelectorAll("[data-item-index]").forEach(slot => observer.observe(slot));
+    return () => { active = false; observer.disconnect(); };
+  }, [items, grid]);
+  const carriedState = carried?.blockState;
+  const slots = useMemo(() => <>
+    {items.map((item, index) => <Button themeSlot="inventory-slot" variant="ghost" key={item.blockState} data-item-index={index} draggable
+      className={carriedState === item.blockState ? "flake-page__creative-slot is-carried-source" : "flake-page__creative-slot"} aria-label={item.name}>
+      {visibleIcons.has(index) && <BlockIcon blockId={item.itemId} lookupMode="item_first" />}
+    </Button>)}
+    {Array.from({length:Math.max(0, 45-items.length)}, (_, i) => <div key={i} className="flake-page__creative-slot is-empty" aria-hidden />)}
+  </>, [items, visibleIcons, carriedState]);
+  const eventSlot = (target: EventTarget) => target instanceof Element ? target.closest<HTMLElement>("[data-item-index]") : null;
+  const eventItem = (target: EventTarget) => { const slot = eventSlot(target); return slot ? items[Number(slot.dataset.itemIndex)] : undefined; };
+  const showHover = (value: Carried, event: React.MouseEvent) => {
+    if (!carried) setHover(value);
+    setPointer({ x: event.clientX, y: event.clientY });
   };
-
-  const handleHoverLeave = () => {
-    setHoverItem(null);
+  const focusItem = (value: Carried | null, element: HTMLElement) => {
+    if (!value || carried) return; const rect=element.getBoundingClientRect(); setHover(value); setPointer({x:rect.right,y:rect.bottom});
   };
-
-  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    if (!filteredValues.length) return;
-    event.preventDefault();
-    setPageStart((current) => {
-      if (event.deltaY > 0) return Math.min(maxPageStart, current + 9);
-      if (event.deltaY < 0) return Math.max(0, current - 9);
-      return current;
-    });
+  const slotValue = (index: number): Carried | null => {
+    const value = quickbarSlots[index];
+    if (!value) return null;
+    const itemId = identity.itemIds[value] ?? value;
+    return { blockState: value, itemId, name: translateBlockId(itemId), state: typedSlots?.[index] ?? undefined };
   };
-
-  const handleInventorySlotClick = (blockId: string, event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    setHoverItem(null);
-    if (!blockId) return;
-    if (carryBlockId) {
-      setCarryBlockId("");
-      return;
+  const putSlot = (index: number, next: Carried | null) => {
+    if (onSelectState) {
+      // Typed states originate in the Rust registry query or the native hotbar.
+      if (next && !next.state) { setError(t("scene.inventoryStateMissing")); return; }
+      onSelectState(index, next?.state ?? null);
+    } else {
+      onChangeQuickbarSlots(current => current.map((value, i) => i === index ? next?.blockState ?? "" : value));
     }
-    setCarryBlockId(blockId);
-    setCarryPosition({ x: event.clientX, y: event.clientY });
   };
-
-  const handleCreativeHotbarSlotClick = (index: number, event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    setHoverItem(null);
-    const slotBlockId = quickbarSlots[index] || "";
-    if (carryBlockId) {
-      onChangeQuickbarSlots((current) => current.map((value, slotIndex) => slotIndex === index ? carryBlockId : value));
-      setCarryBlockId(slotBlockId);
-      setCarryPosition({ x: event.clientX, y: event.clientY });
-      return;
-    }
-    if (!slotBlockId) return;
-    setCarryBlockId(slotBlockId);
-    setCarryPosition({ x: event.clientX, y: event.clientY });
-    onChangeQuickbarSlots((current) => current.map((value, slotIndex) => slotIndex === index ? "" : value));
+  const takeItem = (item: CreativeInventoryItem, event: React.MouseEvent) => {
+    event.stopPropagation(); setHover(null); setCarried(carried ? null : item);
+    setPointer({ x: event.clientX, y: event.clientY });
   };
-
-  const handleDropOutside = () => {
-    setHoverItem(null);
-    if (carryBlockId) setCarryBlockId("");
+  const changeSlot = (index: number, event: React.MouseEvent) => {
+    event.stopPropagation(); setHover(null);
+    const previous = slotValue(index);
+    putSlot(index, carried); setCarried(previous);
+    setPointer({ x: event.clientX, y: event.clientY });
   };
-
-  const rangeStart = filteredValues.length ? pageStart + 1 : 0;
-  const rangeEnd = filteredValues.length ? Math.min(filteredValues.length, pageStart + 45) : 0;
-
-  return (
-    <Dialog title={t("flake.inventory")} onClose={onClose} width="lg" className="flake-page__inventory-dialog">
-      <section onClick={handleDropOutside}>
-        <div className="flake-page__inventory-dialog-body">
-          <div className="flake-page__creative-inventory-controls">
-            <label className="flake-page__creative-inventory-control">
-              <span className="nova-muted">{t("editor.category")}</span>
-              <Dropdown value={selectedCollectionId} onChange={setSelectedCollectionId} options={collectionOptions} ariaLabel={t("flake.creativeCategory")} />
-            </label>
-            <label className="flake-page__creative-inventory-control flake-page__creative-inventory-search">
-              <span className="nova-muted">{t("editor.search")}</span>
-              <Input className="input" value={search} placeholder={t("flake.filterBlocks")} onChange={(event) => setSearch(event.target.value)} />
-            </label>
-            <div className="flake-page__creative-inventory-range nova-muted nova-small">
-              {loading ? t("flake.loadingShort") : `${rangeStart}-${rangeEnd} / ${filteredValues.length}`}
-            </div>
-          </div>
-
-          <div className="flake-page__creative-inventory-stage">
-            <div className="flake-page__creative-inventory-surface" onWheel={handleWheel}>
-              <div className="flake-page__creative-inventory-grid">
-                {visibleValues.map((blockId, index) => blockId ? (
-                  <Button variant="ghost"
-                    key={`${blockId}-${index}`}
-                    className={carryBlockId === blockId ? "flake-page__creative-slot is-carried-source" : "flake-page__creative-slot"}
-                    aria-label={translateBlockId(creativeItemId(blockId) || blockId)}
-                    onClick={(event) => handleInventorySlotClick(blockId, event)}
-                    onMouseEnter={(event) => handleHoverItem(blockId, event)}
-                    onMouseMove={(event) => handleHoverItem(blockId, event)}
-                    onMouseLeave={handleHoverLeave}
-                  >
-                    <BlockIcon blockId={creativeItemId(blockId) || blockId} lookupMode="item_first" />
-                  </Button>
-                ) : (
-                  <div key={`empty-${index}`} className="flake-page__creative-slot is-empty" aria-hidden />
-                ))}
-              </div>
-
-              <div className="flake-page__creative-hotbar-grid">
-                {quickbarSlots.map((blockId, index) => (
-                  <Button variant="ghost"
-                    key={`creative-hotbar-${index + 1}`}
-                    className={blockId ? "flake-page__creative-hotbar-slot has-item" : "flake-page__creative-hotbar-slot"}
-                    aria-label={t("flake.hotbarItem", {index:index+1, item:blockId ? translateBlockId(creativeItemId(blockId) || blockId) : t("flake.emptySlot")})}
-                    onClick={(event) => handleCreativeHotbarSlotClick(index, event)}
-                    onMouseEnter={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
-                    onMouseMove={blockId ? (event) => handleHoverItem(blockId, event) : undefined}
-                    onMouseLeave={blockId ? handleHoverLeave : undefined}
-                  >
-                    {blockId ? <BlockIcon blockId={creativeItemId(blockId) || blockId} lookupMode="item_first" /> : null}
-                  </Button>
-                ))}
-              </div>
-
-              {!loading && !error && !filteredValues.length ? (
-                <div className="flake-page__creative-inventory-overlay nova-muted">{t("flake.noBlocks")}</div>
-              ) : null}
-              {loading ? <div className="flake-page__creative-inventory-overlay nova-muted">{t("flake.loadingCreative")}</div> : null}
-              {!loading && error ? <div className="flake-page__creative-inventory-overlay nova-error">{displayPathText(localizeMessage(error))}</div> : null}
-            </div>
+  return <Dialog title={t("flake.inventory")} onClose={onClose} width="lg" className="flake-page__inventory-dialog">
+    <section onClick={() => { setCarried(null); setHover(null); }} onKeyDown={event => {
+      if (event.defaultPrevented || event.nativeEvent.isComposing || event.ctrlKey || event.altKey || event.metaKey || event.target instanceof Element && event.target.closest('input,textarea,select,[role="combobox"],[role="listbox"],[contenteditable=true]')) return;
+      if (/^[1-9]$/.test(event.key) && (carried || hover)) { event.preventDefault(); event.stopPropagation(); putSlot(Number(event.key)-1, carried || hover); setCarried(null); }
+    }}>
+      <div className="flake-page__inventory-dialog-body">
+        <div className="flake-page__creative-inventory-controls">
+          <label className="flake-page__creative-inventory-control"><span className="nova-muted">{t("editor.category")}</span>
+            <Dropdown value={selected} onChange={setCategory} options={options} ariaLabel={t("flake.creativeCategory")} /></label>
+          <label className="flake-page__creative-inventory-control flake-page__creative-inventory-search"><span className="nova-muted">{t("editor.search")}</span>
+            <Input value={search} autoComplete="off" spellCheck={false} aria-label={t("editor.search")} placeholder={t("flake.filterBlocks")} onChange={event => setSearch(event.target.value)} /></label>
+          <div className="flake-page__creative-inventory-range nova-muted nova-small"><span aria-live="polite">{data && t("flake.creativeCount", {count:items.length})}</span>
           </div>
         </div>
-      </section>
-      {carryBlockId ? (
-        <div ref={carryPreviewRef} className="flake-page__creative-carry-preview">
-          <BlockIcon blockId={creativeItemId(carryBlockId) || carryBlockId} lookupMode="item_first" />
-        </div>
-      ) : null}
-      {!carryBlockId ? <CreativeInventoryTooltip x={hoverPosition.x} y={hoverPosition.y} item={hoverItem} /> : null}
-    </Dialog>
-  );
+        <div className="flake-page__creative-inventory-stage"><div className="flake-page__creative-inventory-surface">
+          <div ref={setGrid} className="flake-page__creative-inventory-grid flake-page__creative-inventory-grid--scroll"
+            tabIndex={0} role="group" aria-label={t("flake.inventory")} aria-busy={loading}
+            onScroll={() => setHover(null)} onMouseLeave={() => setHover(null)} onBlur={() => setHover(null)}
+            onFocus={event => { const slot = eventSlot(event.target); if (slot) focusItem(items[Number(slot.dataset.itemIndex)], slot); }}
+            onClick={event => { const item = eventItem(event.target); if (item) takeItem(item, event); }}
+            onMouseMove={event => { const item = eventItem(event.target); if (item) showHover(item, event); else setHover(null); }}
+            onDragStart={event => { const item = eventItem(event.target); if (item) { setCarried(item); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", item.blockState); } }}>
+            {slots}</div>
+          <div className="flake-page__creative-hotbar-grid">{quickbarSlots.map((_, index) => {
+            const value = slotValue(index);
+            return <Button themeSlot="inventory-slot" variant="ghost" key={index} className={`flake-page__creative-hotbar-slot${value ? " has-item" : ""}`}
+              aria-label={t("flake.hotbarItem", { index: index + 1, item: value?.name ?? t("flake.emptySlot") })}
+              onClick={event => changeSlot(index, event)} onFocus={event => focusItem(value,event.currentTarget)} onBlur={() => setHover(null)} draggable={!!value}
+              onDragStart={event => { if(value){setCarried(value);event.dataTransfer.effectAllowed="copy";event.dataTransfer.setData("text/plain",value.blockState);} }}
+              onContextMenu={event => {event.preventDefault();event.stopPropagation();putSlot(index,null);setCarried(null);}}
+              onDragOver={event => { if (carried) event.preventDefault(); }}
+              onDrop={event => { event.preventDefault(); event.stopPropagation(); if (carried) { putSlot(index, carried); setCarried(null); } }}
+              onMouseEnter={event => { if (value) showHover(value, event); }} onMouseMove={event => { if (value) showHover(value, event); }} onMouseLeave={() => setHover(null)}>
+              {value && <BlockIcon blockId={value.itemId} lookupMode="item_first" />}<kbd>{index+1}</kbd></Button>;
+          })}</div>
+          {!loading && !error && !items.length && <div className="flake-page__creative-inventory-overlay nova-muted">{t("flake.noBlocks")}</div>}
+          {loading && <div className="flake-page__creative-inventory-overlay nova-muted" role="status">{t("flake.creativePreparingItems")}</div>}
+          {!loading && error && <div className="flake-page__creative-inventory-overlay nova-error" role="alert">{error}</div>}
+        </div></div>
+      </div>
+    </section>
+    {carried && <div ref={previewRef} className="flake-page__creative-carry-preview"><BlockIcon blockId={carried.itemId} lookupMode="item_first" /></div>}
+    {!carried && <CreativeInventoryTooltip x={pointer.x} y={pointer.y} item={hover ? { id: hover.itemId, name: hover.name } : null} />}
+  </Dialog>;
 }

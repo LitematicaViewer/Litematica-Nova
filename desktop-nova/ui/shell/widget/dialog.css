@@ -9,19 +9,22 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 20px;
+    padding: 12px;
+    overflow: auto;
+    overscroll-behavior: contain;
     background: var(--overlay);
 }
 
 .dialog-surface {
     display: flex;
     width: min(100%, 640px);
-    max-height: min(90vh, 820px);
+    max-height: calc(100dvh - 24px);
     flex-direction: column;
     overflow: hidden;
     color: var(--foreground);
     background: var(--background);
     border: 1px solid var(--border);
+    border-radius: 10px;
 }
 
 .dialog-surface-sm {
@@ -42,7 +45,7 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
-    padding: 12px 16px 0;
+    padding: var(--nova-page-inset) var(--nova-page-inset) 0;
 }
 
 .dialog-title-stack {
@@ -60,6 +63,7 @@
 
 .dialog-subtitle {
     margin: 0;
+    overflow-wrap: anywhere;
 }
 
 .dialog-close-button {
@@ -77,7 +81,7 @@
 .dialog-body {
     display: flex;
     min-height: 0;
-    padding: 16px;
+    padding: var(--nova-page-inset);
     flex-direction: column;
     gap: 12px;
     overflow: auto;
@@ -88,8 +92,8 @@
     flex: 0 0 auto;
     flex-wrap: wrap;
     justify-content: flex-end;
-    gap: 8px;
-    padding: 0 16px 16px;
+    gap: var(--nova-toolbar-gap);
+    padding: 0 var(--nova-page-inset) var(--nova-page-inset);
 }
 
 .dialog-form-grid {
@@ -97,6 +101,18 @@
     grid-template-columns: minmax(96px, 140px) minmax(0, 1fr);
     gap: 10px 12px;
     align-items: center;
+}
+@media (max-width: 480px) {
+    .dialog-form-grid { grid-template-columns: minmax(0, 1fr); }
+    .dialog-header, .dialog-body, .dialog-footer { padding-inline: 12px; }
+}
+
+/* At extreme native WebView zoom a fixed header/footer can consume the whole
+   viewport. Keep one real scroll surface rather than clipping all body content. */
+@media (max-height: 360px) {
+    .dialog-surface { overflow-y: auto; overscroll-behavior: contain; }
+    .dialog-surface > .dialog-body.nova-scroll-area { flex: 0 0 auto; }
+    .dialog-body.nova-scroll-area > [data-slot="scroll-area-viewport"] { height: auto; }
 }
 
 .dialog-label {

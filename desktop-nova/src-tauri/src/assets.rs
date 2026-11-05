@@ -92,6 +92,30 @@ pub(crate) async fn game_data_default(app: AppHandle, operations: tauri::State<'
     Ok(context)
 }
 
+#[tauri::command]
+pub(crate) async fn game_data_mods(app: AppHandle, operations: tauri::State<'_, ApplicationOperations>, action: String, path: Option<String>, id: Option<String>, enabled: Option<bool>) -> Result<serde_json::Value,String> {
+    let required_path = || path.clone().filter(|value| !value.trim().is_empty()).ok_or_else(|| "Mod 数据路径缺失".to_owned());
+    let required_id = || id.clone().filter(|value| !value.trim().is_empty()).ok_or_else(|| "Mod 导入身份缺失".to_owned());
+    let args = match action.as_str() {
+        "list" => vec!["mods".into()],
+        "import" => vec!["mod-import".into(), "--jar".into(), required_path()?],
+        "snapshot" => vec!["mod-snapshot".into(), "--snapshot".into(), required_path()?],
+        "enable" => vec!["mod-enable".into(), "--id".into(), required_id()?, "--enabled".into(), enabled.ok_or("Mod 启用状态缺失")?.to_string()],
+        "remove" => vec!["mod-remove".into(), "--id".into(), required_id()?],
+        _ => return Err("Unknown Mod resource action".into()),
+    };
+    let result=game_data_operation(operations.inner().clone(),args).await?;
+    if action!="list" { announce_game_data(&app,&result["context"]); }
+    Ok(result)
+}
+
+#[tauri::command]
+pub(crate) async fn game_data_creative_inventory(operations: tauri::State<'_, ApplicationOperations>, input: serde_json::Value) -> Result<serde_json::Value,String> {
+    ensure_resource_work_allowed()?;
+    let operations=operations.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || operations.game_data_creative_inventory(input)).await.map_err(|error|error.to_string())?
+}
+
 pub(crate) fn bind_operations(operations: ApplicationOperations) {
     *RESOURCE_OPERATIONS.lock().expect("资源任务状态锁异常") = Some(operations);
 }

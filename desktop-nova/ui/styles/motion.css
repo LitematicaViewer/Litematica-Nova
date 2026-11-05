@@ -5,15 +5,15 @@
   :root {
     --nova-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
     --nova-motion-feedback-duration: 100ms;
-    --nova-motion-state-duration: 150ms;
-    --nova-motion-page-duration: 180ms;
-    --nova-motion-overlay-duration: 190ms;
-    --nova-motion-page-distance: 8px;
-    --nova-motion-overlay-distance: 6px;
+    --nova-motion-state-duration: 120ms;
+    --nova-motion-page-duration: 160ms;
+    --nova-motion-overlay-duration: 160ms;
+    --nova-motion-page-distance: 0px;
+    --nova-motion-overlay-distance: 4px;
     --nova-motion-overlay-scale: .98;
     --nova-motion-card-lift: 0px;
   }
-  html[data-motion="rich"] { --nova-motion-card-lift: -1px; --nova-motion-overlay-scale: .975; }
+  html[data-motion="rich"] { --nova-motion-card-lift: 0px; --nova-motion-overlay-scale: .975; }
   html[data-motion="reduced"] {
     --nova-motion-state-duration: 100ms;
     --nova-motion-page-duration: 120ms;
@@ -55,13 +55,8 @@
       background-color var(--nova-motion-state-duration) var(--nova-motion-ease),
       transform var(--nova-motion-state-duration) var(--nova-motion-ease);
   }
-  html[data-motion="rich"] :is(.library-card, .library-tile, .reden-result-card, .settings-theme-option):is(:hover, :focus-within) { transform: translateY(var(--nova-motion-card-lift)); }
   html[data-theme] :is([role="tab"][aria-selected="true"], .layer3d-view-tabs > [data-slot="button"][aria-pressed="true"]) { box-shadow: inset 0 -2px var(--primary); }
   /* Only the paged, nonvirtual grid's first visible group gets a bounded stagger. */
-  html[data-motion="rich"] .library-card-grid > .library-tile:nth-child(-n+8) { animation: nova-list-in var(--nova-motion-state-duration) var(--nova-motion-ease) both; }
-  html[data-motion="rich"] .library-card-grid > .library-tile:nth-child(2) { animation-delay: 12ms; }
-  html[data-motion="rich"] .library-card-grid > .library-tile:nth-child(3) { animation-delay: 24ms; }
-  html[data-motion="rich"] .library-card-grid > .library-tile:nth-child(n+4):nth-child(-n+8) { animation-delay: 36ms; }
 
   html[data-theme] :is([data-slot="dialog-overlay"], [data-slot="dialog-content"], [data-slot="select-content"], [data-slot="block-search-content"], .dialog-surface) {
     animation-duration: var(--nova-motion-overlay-duration);

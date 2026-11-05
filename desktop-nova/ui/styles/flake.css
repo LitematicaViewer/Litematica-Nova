@@ -666,7 +666,7 @@
 .flake-page__quickbar {
     position: absolute;
     left: 50%;
-    bottom: 0;
+    bottom: 6px;
     transform: translateX(-50%);
     z-index: 20;
     display: flex;
@@ -694,7 +694,7 @@
     padding: var(--flake-hotbar-inset);
     image-rendering: pixelated;
     background:
-        var(--flake-hotbar-image, url("../shell/resource/content/hotbar.png"))
+        var(--flake-hotbar-image, none)
         center / 100% 100% no-repeat;
 }
 
@@ -710,7 +710,7 @@
     margin: 0;
     place-items: center;
     background: transparent;
-    color: transparent;
+    color: var(--foreground);
     overflow: visible;
 }
 
@@ -720,7 +720,7 @@
     border: 0;
     margin: 0;
     background: transparent;
-    color: transparent;
+    color: var(--foreground);
 }
 
 .flake-page__quickbar-slot::after {
@@ -731,7 +731,7 @@
     height: 48px;
     transform: translate(-50%, -50%);
     background:
-        var(--flake-hotbar-selection-image, url("../shell/resource/content/hotbar_selection.png"))
+        var(--flake-hotbar-selection-image, none)
         center no-repeat;
     image-rendering: pixelated;
     opacity: 0;
@@ -740,24 +740,6 @@
 
 .flake-page__quickbar-slot.is-selected::after {
     opacity: 1;
-}
-
-.flake-page__quickbar-slot-icon {
-    display: block;
-    width: 32px;
-    height: 32px;
-}
-
-.flake-page__quickbar-slot-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
 }
 
 .flake-page__quickbar-open-inventory {
@@ -771,132 +753,37 @@
     display: inline-block;
 }
 
-.flake-page__inventory-dialog {
-    width: 720px;
-    max-width: 92vw;
+.flake-page__inventory-dialog.dialog-surface {
+    width: 472px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px);
+    color: var(--foreground);
 }
-
-.flake-page__inventory-dialog-body {
-    display: flex;
-    margin-top: 12px;
-    flex-direction: column;
-    gap: 12px;
+.flake-page__inventory-dialog .dialog-header { padding:8px 12px; border:0; }
+.flake-page__inventory-dialog .dialog-body { padding:0 12px 12px; min-height:0; }
+.flake-page__inventory-dialog-body { display:flex; flex-direction:column; gap:8px; }
+.flake-page__creative-inventory-controls { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.2fr); gap:8px; align-items:end; width:100%; }
+.flake-page__creative-inventory-control { display:grid; gap:4px; min-width:0; }
+.flake-page__creative-inventory-range { grid-column:1/-1; display:flex; justify-content:flex-end; align-items:center; gap:4px; font-size:12px; height:32px; font-variant-numeric:tabular-nums; }
+.flake-page__creative-inventory-range > span { margin-right:4px; }
+.flake-page__creative-inventory-range > button { width:32px; height:32px; padding:0; flex:none; }
+.flake-page__creative-inventory-stage { min-width:0; max-width:100%; overflow:auto; }
+.flake-page__creative-inventory-surface { position:relative; container-type:inline-size; width:100%; min-width:270px; padding:2px; }
+.flake-page__creative-inventory-grid,.flake-page__creative-hotbar-grid { display:grid; grid-template-columns:repeat(9,minmax(0,1fr)); gap:4px; }
+.flake-page__creative-inventory-grid--scroll {
+    /* Five rows of the nine-column catalogue; the chosen hotbar stays below
+       this scroller rather than disappearing along with the search results. */
+    height: min(calc((100cqw - var(--ln-scroll-size, 12px) - 32px) / 9 * 5 + 16px), max(120px, 44dvh));
+    overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; align-content: start; scrollbar-gutter: stable;
 }
-
-.flake-page__creative-inventory-controls {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-end;
-    gap: 12px;
-    /* 限制控制栏宽度不超过物品栏面板，并跟随面板居中 */
-    max-width: 424px;
-    align-self: center;
-    width: 100%;
-}
-
-.flake-page__creative-inventory-control {
-    display: flex;
-    min-width: 160px;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.flake-page__creative-inventory-search {
-    flex: 1;
-    /* 移除固定 min-width，让搜索框随可用空间收缩 */
-    min-width: 0;
-}
-
-.flake-page__creative-inventory-range {
-    margin-left: auto;
-}
-
-.flake-page__creative-inventory-stage {
-    max-width: 100%;
-    overflow: auto;
-    /* 将固定宽度的物品栏面板在对话框中居中 */
-    display: flex;
-    justify-content: center;
-}
-
-.flake-page__creative-inventory-surface {
-    --flake-creative-inventory-width: 424px;
-    --flake-creative-inventory-height: 272px;
-    --flake-creative-slot-size: 32px;
-    --flake-creative-slot-gap: 4px;
-    --flake-creative-grid-left: 16px;
-    --flake-creative-grid-top: 36px;
-    position: relative;
-    width: var(--flake-creative-inventory-width);
-    min-width: var(--flake-creative-inventory-width);
-    height: var(--flake-creative-inventory-height);
-    min-height: var(--flake-creative-inventory-height);
-    image-rendering: pixelated;
-    background: var(--flake-creative-inventory-image, url("../shell/resource/content/creativeInventory.png")) center no-repeat;
-}
-
-.flake-page__creative-inventory-grid {
-    position: absolute;
-    top: var(--flake-creative-grid-top);
-    left: var(--flake-creative-grid-left);
-    display: grid;
-    grid-template-columns: repeat(9, var(--flake-creative-slot-size));
-    grid-template-rows: repeat(5, var(--flake-creative-slot-size));
-    gap: var(--flake-creative-slot-gap);
-}
-
-.flake-page__creative-hotbar-grid {
-    position: absolute;
-    top: 224px;
-    left: 16px;
-    display: grid;
-    grid-template-columns: repeat(9, 32px);
-    gap: 4px;
-}
-
-.flake-page__creative-slot,
-.flake-page__creative-hotbar-slot {
-    position: relative;
-    display: grid;
-    width: 32px;
-    height: 32px;
-    place-items: center;
-    cursor: pointer;
-}
-
-.flake-page__creative-slot.is-empty {
-    opacity: 0;
-}
-
-.flake-page__creative-slot.is-carried-source,
-.flake-page__creative-hotbar-slot.has-item.is-carried-source {
-    opacity: .45;
-}
-
-.flake-page__creative-slot .block-icon-image,
-.flake-page__creative-slot .block-icon-fallback,
-.flake-page__creative-hotbar-slot .block-icon-image,
-.flake-page__creative-hotbar-slot .block-icon-fallback,
-.flake-page__quickbar-slot .block-icon-image,
-.flake-page__quickbar-slot .block-icon-fallback,
-.flake-page__creative-carry-preview .block-icon-image,
-.flake-page__creative-carry-preview .block-icon-fallback {
-    width: 32px;
-    min-width: 32px;
-    height: 32px;
-    min-height: 32px;
-}
-
-.flake-page__creative-inventory-overlay {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    padding: 24px 32px;
-    background: rgb(0 0 0 / 24%);
-    text-align: center;
-    pointer-events: none;
-}
+.flake-page__creative-inventory-grid--scroll + .flake-page__creative-hotbar-grid { padding-inline-end: var(--ln-scroll-size, 12px); }
+.flake-page__creative-hotbar-grid { margin-top:12px; }
+.flake-page__creative-slot,.flake-page__creative-hotbar-slot { position:relative; min-width:0; width:100%; aspect-ratio:1; cursor:pointer; }
+.flake-page__creative-slot.is-empty { pointer-events:none; }
+.flake-page__creative-slot.is-carried-source { opacity:.5; }
+.flake-page__creative-hotbar-slot kbd { position:absolute; top:2px; left:3px; font:inherit; font-size:10px; font-weight:600; line-height:1; color:var(--foreground); }
+.flake-page__creative-slot .block-icon-image,.flake-page__creative-slot .block-icon-fallback,.flake-page__creative-hotbar-slot .block-icon-image,.flake-page__creative-hotbar-slot .block-icon-fallback { width:100%; min-width:0; height:100%; min-height:0; max-height:36px; object-fit:contain; image-rendering:pixelated; }
+.flake-page__quickbar-slot .block-icon-image,.flake-page__quickbar-slot .block-icon-fallback,.flake-page__creative-carry-preview .block-icon-image,.flake-page__creative-carry-preview .block-icon-fallback { width:32px; min-width:32px; height:32px; min-height:32px; }
+.flake-page__creative-inventory-overlay { position:absolute; inset:0; display:grid; place-items:center; padding:12px; background:color-mix(in srgb, var(--popover) 94%, transparent); color:var(--muted-foreground); text-align:center; pointer-events:none; }
+.flake-page__creative-inventory-overlay.nova-error { color:var(--destructive); }
 
 .flake-page__creative-carry-preview {
     position: fixed;
@@ -1060,12 +947,12 @@
     height: 100%;
     min-width: 0;
     min-height: 0;
-    gap: 8px;
+    gap: var(--nova-toolbar-gap, 8px);
     container-type: inline-size;
 }
 .flake-page__topbar {
-    padding: 0 0 8px;
-    gap: 8px;
+    padding: 0 0 var(--nova-toolbar-gap, 8px);
+    gap: var(--nova-toolbar-gap, 8px);
     border-bottom: 1px solid var(--border);
     flex: 0 0 auto;
 }
@@ -1099,7 +986,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: var(--nova-toolbar-gap, 8px);
     min-width: 0;
 }
 .flake-page__primary-controls .flake-page__layer-range {
@@ -1132,11 +1019,7 @@
     font-size: 12px;
 }
 .flake-page__key-hint kbd { font: inherit; }
-.flake-page__advanced-controls {
-    min-width: 0;
-    max-height: 40dvh;
-    overflow: auto;
-}
+.flake-page__advanced-controls { position:relative; min-width:0; overflow:visible; }
 .flake-page__advanced-controls > summary {
     display: flex;
     align-items: center;
@@ -1149,10 +1032,11 @@
 }
 .flake-page__advanced-controls[open] > summary { color: var(--foreground); }
 .flake-page__advanced-content {
+    position:absolute; top:calc(100% + 8px); right:0; z-index:30; width:360px; max-width:calc(100vw - 32px); max-height:60dvh; overflow:auto; overscroll-behavior:contain; background:var(--popover,var(--background)); color:var(--foreground); border:1px solid var(--border); border-radius:10px; box-shadow:0 4px 18px #0003;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px 20px;
-    padding: 8px 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 12px;
 }
 .flake-page__advanced-content .flake-page__layer-row { margin: 0; gap: 8px; }
 .flake-page__advanced-actions {
@@ -1202,4 +1086,34 @@
     .flake-page__workspace { flex: 1 0 220px; min-height: 220px; }
     .flake-page__main-panel, .flake-page__viewport { min-height: 220px; }
 }
+}
+
+@layer utilities {
+.flake-page__creative-slot,.flake-page__creative-hotbar-slot {
+    display:grid; place-items:center; height:auto; min-height:28px; max-height:none; padding:3px;
+    border:var(--inventory-slot-edge, 1px) solid var(--border); border-image:none; border-radius:var(--inventory-slot-radius, var(--radius));
+    background:var(--inventory-slot-fill, var(--card)); color:var(--foreground); box-shadow:var(--inventory-slot-shadow, none);
+}
+.flake-page__creative-slot:hover:not(:disabled,.is-empty),.flake-page__creative-hotbar-slot:hover {
+    background:var(--accent); border-color:var(--ring);
+}
+.flake-page__creative-slot:focus-visible,.flake-page__creative-hotbar-slot:focus-visible {
+    outline:2px solid var(--ring); outline-offset:-3px;
+}
+.flake-page__tool-panel-kv { align-items:flex-start; min-width:0; }
+.flake-page__tool-panel-kv > :first-child { flex:none; }
+.flake-page__tool-panel-kv > :last-child { min-width:0; text-align:right; overflow-wrap:anywhere; }
+}
+
+@layer utilities {
+.flake-page__tool-panel-actions > button { flex:0 0 auto; max-width:100%; white-space:normal; height:auto; max-height:none; min-height:32px; padding-block:4px; }
+.flake-page__quickbar-body { flex:0 1 auto; min-width:0; width:calc(9 * var(--flake-hotbar-slot-size) + 8 * var(--flake-hotbar-gap) + 2 * var(--flake-hotbar-inset)); grid-template-columns:repeat(9,minmax(0,1fr)); }
+.flake-page__quickbar-slot { box-sizing:border-box; display:grid; min-width:0; width:32px; max-width:100%; height:32px; min-height:32px; max-height:32px; padding:0; border:0; }
+html:is([data-theme="shadcn"],[data-theme="8bitcn"]) .flake-page__quickbar-body { --flake-hotbar-gap:2px; --flake-hotbar-inset:0px; }
+html[data-theme="8bitcn"] .flake-page__quickbar-slot { border:var(--inventory-slot-edge) solid var(--border); background:var(--card); box-shadow:var(--inventory-slot-shadow); }
+html[data-theme="8bitcn"] .flake-page__quickbar-slot:is(:hover,[aria-pressed="true"]) { border-color:var(--primary); background:var(--accent); }
+html[data-theme="8bitcn"] .flake-page__quickbar-slot[aria-pressed="true"] { border-width:3px; }
+.flake-page__quickbar-slot .block-icon-image,.flake-page__quickbar-slot .block-icon-fallback { width:24px; min-width:0; height:24px; min-height:0; }
+.flake-page__quickbar-open-inventory { flex:none; }
+.flake-page__tool-panel-body [data-slot="scroll-area-viewport"] > div { box-sizing:border-box; padding-inline-end:calc(var(--ln-scroll-size, 12px) + 4px); }
 }

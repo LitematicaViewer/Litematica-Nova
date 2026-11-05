@@ -3,6 +3,27 @@
 @layer theme, vendor, tokens, base, components, utilities;
 @layer components.shared, components.page, components.theme;
 
+/* The scene and layer editors share the same frame and key legend. The scene
+   also measures these borders when punching through its native child window. */
+@layer utilities {
+[data-slot="hotbar-slot"] kbd {
+  position: absolute; left: 3px; top: 2px; color: var(--foreground); font: inherit;
+  font-size: max(10px, .625rem); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+}
+html[data-theme="shadcn"] [data-slot="hotbar-slot"] {
+  border: 1px solid color-mix(in srgb, var(--hotbar-ink, var(--foreground)) 70%, transparent); border-radius: 0; background: transparent; box-shadow: none;
+}
+/* In-world HUD ink stays white over the actual scene, including in light UI. */
+html[data-theme="shadcn"] .scene-hotbar { --hotbar-ink: white; }
+html[data-theme="shadcn"] [data-slot="hotbar-slot"] kbd { color: var(--hotbar-ink, var(--foreground)); }
+html[data-theme="shadcn"] [data-slot="hotbar-slot"]:is(:hover, :focus-visible) { border-color: var(--hotbar-ink, var(--foreground)); }
+html[data-theme="shadcn"] [data-slot="hotbar-slot"][aria-pressed="true"] { border: 2px solid var(--hotbar-ink, var(--foreground)); background: transparent; }
+html[data-theme="shadcn"] [data-slot="hotbar-slot"]:focus-visible { outline: none; border-style: dashed; }
+html[data-theme="shadcn"] [data-slot="hotbar-slot"] .block-icon-fallback {
+  width: max-content; height: auto; min-width: 0; min-height: 0; border: 0; background: transparent; line-height: 1;
+}
+}
+
 @layer components.shared {
 /* Sizing rules for the `size` prop. Two constraints shape them:
    1. NO `font-size`: every button inherits one size via `font: inherit` (`base.css`).
@@ -102,7 +123,7 @@ html[data-theme] button:is([data-slot="checkbox"], [data-slot="radio-group-item"
 }
 html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group-item"])) {
   display: inline-flex; align-items: center; gap: var(--ln-check-label-gap, 8px);
-  min-height: var(--ln-check-label-min-height, 24px); cursor: pointer;
+  min-height: var(--ln-check-label-min-height, 28px); cursor: pointer;
 }
 html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group-item"]):disabled) { cursor: not-allowed; }
 /* Only the fill colour belongs to the shared layer. A `background` shorthand here
@@ -117,7 +138,7 @@ html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group
    8bitcn and minecraft rules below rely on winning the tie at (0,2,1) by coming later. */
 html[data-theme] [data-slot="checkbox"] {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px; min-width: 20px; max-width: 20px; min-height: 20px; flex: 0 0 20px; padding: 0; margin: 0;
+  width: 16px; height: 16px; min-width: 16px; max-width: 16px; min-height: 16px; max-height: 16px; flex: 0 0 16px; padding: 0; margin: 0;
   border: 1px solid var(--border); border-radius: 4px; background-color: var(--background);
   color: var(--primary-foreground); cursor: pointer; box-shadow: none; vertical-align: middle;
 }
@@ -177,7 +198,7 @@ html[data-theme] [data-slot="slider"] { position: relative; display: flex; align
 [data-slot="slider"][data-disabled] { opacity: .45; }
 
 /* Content is separated by tone and spacing, not nested boxes. */
-html[data-theme] .group-box { border: 0; box-shadow: none; margin-top: 0; padding: 16px; background: var(--card); border-radius: var(--radius, 0px); }
+html[data-theme] .group-box { border: 0; box-shadow: none; margin-top: 0; padding: 16px 0; background: transparent; border-radius: 0; }
 html[data-theme] .group-box .group-box { padding: 12px 0 0; background: transparent; }
 html[data-theme] .group-box-title { position: static; top: auto; left: auto; padding: 0; margin: 0 0 12px; background: transparent; font-size: 1rem; font-weight: 600; }
 html[data-theme] [data-slot="table"] { border: 0; border-collapse: collapse; width: 100%; }
@@ -202,7 +223,9 @@ html[data-theme] .flake-page__creative-hotbar-slot[data-slot="button"] { min-hei
 .flake-page__tool-panel-body.nova-scroll-area { overflow: hidden; }
 .flake-page__tool-panel-body [data-slot="scroll-area-viewport"] > div { display: flex !important; flex-direction: column; gap: 12px; padding-right: 8px; }
 .ui-control-gallery { height: 100%; }
-.ui-control-gallery [data-slot="scroll-area-viewport"] > div { padding: 16px; }
+.ui-control-gallery [data-slot="scroll-area-viewport"] > div { padding: 0; padding-inline-end: var(--ln-scroll-size, 12px); }
+.ui-control-gallery [data-slot="scroll-area-viewport"] > div > h2 { margin: 0; }
+.ui-control-gallery [data-slot="scroll-area-viewport"] > div > p { margin-block: var(--nova-toolbar-gap) var(--nova-section-gap); }
 /* The gallery cycles its variant demo buttons through `disabled` so that state can be
    inspected. A disabled <button> swallows its own clicks, so the press is let through to
    the wrapper, which is what advances the demo out of the disabled state again. */

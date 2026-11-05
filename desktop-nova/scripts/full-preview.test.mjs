@@ -4,6 +4,13 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 const source=readFileSync(new URL('../ui/windows/main/useFullPreview.ts',import.meta.url),'utf8');
+const dictionaries={};
+for(const name of ['native','editor','app']){
+ const exports={};vm.runInNewContext(ts.transpileModule(readFileSync(new URL(`../src/services/locales/${name}.ts`,import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports});Object.assign(dictionaries,exports.zhCN);
+}
+const i18n={useI18n:()=>({locale:'zh-CN'}),getUiLocale:()=> 'zh-CN',message:(key,params)=>({key,params}),
+ t:(key,params)=>String(dictionaries[key]??key).replace(/\{(\w+)\}/g,(match,name)=>typeof params?.[name]==='number'?new Intl.NumberFormat('zh-CN').format(params[name]):params?.[name]??match),
+ localizeMessage:value=>typeof value==='string'?value:i18n.t(value?.key??'',value?.params)};
 const normal={preflightId:'grant',severity:'normal',allowedActions:['continue_prebuilt']};
 const warning={...normal,severity:'warning',allowedActions:['continue_prebuilt','switch_realtime','use_basic_vulkan','cancel']};
 const hard={...warning,severity:'hard',allowedActions:['switch_realtime','use_basic_vulkan','cancel']};
@@ -27,7 +34,7 @@ test('属性和渲染页保留未知显存的真实原因，按路径显示规�
   const compiled=ts.transpileModule(`const output=(${expression.getText(parsed)});`,{compilerOptions:{jsx:ts.JsxEmit.React,target:ts.ScriptTarget.ES2022}}).outputText;
   for(const reason of ['完整资源需求预估未完成：resource demand calculation exceeded its 10000ms planning deadline',null]) {
    const calls=[];
-   const result=vm.runInNewContext(`${compiled};output`,{[binding]:{preflight:{severity:'unmeasured',invalidReason:reason}},
+   const result=vm.runInNewContext(`${compiled};output`,{...i18n,[binding]:{preflight:{severity:'unmeasured',invalidReason:reason}},
     React:{createElement:(type,props,...children)=>({type,props,children})},displayPathText:value=>{calls.push(value);return `显示：${value}`;}});
    assert.equal(result.type,'p');assert.equal(result.props.role,'alert');
    assert.equal(result.children.length,1);
@@ -42,8 +49,8 @@ function harness({preload=false,plan={directRealtime:true,preflight:null},deferr
  const hooks={useState(initial){const i=cursor++;if(!(i in slots))slots[i]={value:initial};return[slots[i].value,v=>{slots[i].value=typeof v==='function'?v(slots[i].value):v;}];},useRef(value){const i=cursor++;if(!(i in slots))slots[i]={current:value};return slots[i];},useSyncExternalStore(_subscribe,get){cursor++;return get();},useEffect(effect,deps){const i=cursor++,previous=slots[i];if(previous&&deps?.length===previous.deps?.length&&deps.every((v,j)=>Object.is(v,previous.deps[j])))return;slots[i]={deps,cleanup:previous?.cleanup};effects.push(()=>{previous?.cleanup?.();slots[i].cleanup=effect();});}};
  const facade={windowsPathKey:pathIdentity.windowsPathKey,subscribeApplicationRender:()=>()=>{},getApplicationRenderState:()=>snapshot,findRenderOperationForSource:(path,_snapshot,settings)=>[...snapshot.operations].reverse().find(op=>pathIdentity.windowsPathKey(op.source.path)===pathIdentity.windowsPathKey(path)&&(!settings||(op.displayMode===settings.displayMode&&op.buildMode===settings.buildMode)))||null,isApplicationViewerPrepared:op=>['viewer_prepared','realtime_ready'].includes(op?.state),isApplicationPresentationVisible:op=>op?.presentationState==='visible',isApplicationRenderPending:op=>op?.state==='running',ensureApplicationRenderSubscription:async()=>{},prepareApplicationRenderLaunch:async(...input)=>{calls.plan.push(input);return deferredPlan?await deferredPlan:plan;},resourcePreflightAllows:(grant,action)=>grant.allowedActions.includes(action),discardApplicationRenderPreflight:async id=>{calls.discard.push(id);},useBasicVulkanForApplicationRender:async id=>{calls.basic.push(id);return{...normal,preflightId:'basic'};},startApplicationRender:async input=>{calls.start.push(input);if(deferredStart)await deferredStart;const op={operationId:`op${++next}`,source:{path:input.sourcePath},displayMode:input.displayMode,buildMode:input.buildMode,state:prepared?'viewer_prepared':'running',presentationState:'hidden',presentation:{mode:'hidden',visible:false,placement:null}};snapshot={operations:[...snapshot.operations,op]};return op;},updateApplicationRenderPresentation:async(id,intent)=>{calls.present.push({id,intent});snapshot={operations:snapshot.operations.map(op=>op.operationId===id?{...op,presentation:intent}:op)};},cancelApplicationRender:async id=>{calls.cancel.push(id);}};
  const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,module={exports:{}};
- vm.runInNewContext(`(function(require,module,exports){${compiled}})`)(name=>name==='react'?hooks:name.endsWith('embeddedViewerGeometry')?{elementToNativeChildPlacement:async()=>({width:viewportSize[0],height:viewportSize[1],dpiScale:2})}:name.endsWith('useEmbeddedViewer')?{useEmbeddedViewer(op,blocked){
-   hooks.useEffect(()=>{if(op&&requestedId===op.operationId&&facade.isApplicationViewerPrepared(op)&&!blocked)void facade.updateApplicationRenderPresentation(op.operationId,{mode:'embedded',visible:true,placement:{x:10,y:20,width:800,height:600,dpiScale:1,focused:false}});},[op?.operationId,op?.state,blocked]);
+ vm.runInNewContext(`(function(require,module,exports){${compiled}})`)(name=>name.endsWith('i18n')?i18n:name==='react'?hooks:name.endsWith('embeddedViewerGeometry')?{elementToNativeChildPlacement:async()=>({width:viewportSize[0],height:viewportSize[1],dpiScale:2})}:name.endsWith('useEmbeddedViewer')?{useEmbeddedViewer(op,blocked){
+   hooks.useEffect(()=>{if(op&&blocked)void facade.updateApplicationRenderPresentation(op.operationId,{mode:'hidden',visible:false,placement:null});if(op&&requestedId===op.operationId&&facade.isApplicationViewerPrepared(op)&&!blocked)void facade.updateApplicationRenderPresentation(op.operationId,{mode:'embedded',visible:true,placement:{x:10,y:20,width:800,height:600,dpiScale:1,focused:false}});},[op?.operationId,op?.state,blocked]);
    hooks.useEffect(()=>()=>{if(op)void facade.updateApplicationRenderPresentation(op.operationId,{mode:'hidden',visible:false,placement:null});},[op?.operationId]);
    return {hostRef:{current:{}},error:'',requestPresentationWhenReady(id){requestedId=id;},showOverlay:async()=>{},setPresentation:async intent=>{if(op)await facade.updateApplicationRenderPresentation(op.operationId,intent);}};
   }}:facade,module,module.exports);
@@ -233,7 +240,7 @@ test('渲染页实际progress元素使用统一范围，未知阶段不画伪零
  visit(parsed);assert(element);
  const compiled=ts.transpileModule(`const output=(${element.getText(parsed)});`,{compilerOptions:{jsx:ts.JsxEmit.React,target:ts.ScriptTarget.ES2022}}).outputText;
  for(const progressRange of [null,{completed:12,total:48}]) {
-  const result=vm.runInNewContext(`${compiled};output`,{full:{progressRange},React:{createElement:(type,props)=>({type,props})}});
+  const result=vm.runInNewContext(`${compiled};output`,{...i18n,full:{progressRange},React:{createElement:(type,props)=>({type,props})}});
   assert.equal(result.type,'progress');assert.equal(result.props.max,progressRange?.total);
   assert.equal(result.props.value,progressRange?.completed);
  }
@@ -281,4 +288,13 @@ test('冷预加载预估等待显示真实前置阶段，不沿用旧构建百�
   await h.result.close();done({directRealtime:false,preflight:normal});await start;await h.settle();
   assert.equal(h.calls.start.length,0);assert.notEqual(h.result.progressLabel,'正在预估显存…');
  }
+});
+
+// Dialog coverage uses the real production page headless harness separately.
+test('Presentation 暂停只保留现有预检决策，不重置业务上下文或重复计量',async()=>{
+ const h=harness({preload:true,plan:{directRealtime:false,preflight:warning}});
+ await h.result.start();await h.settle();assert.equal(h.result.preflight.preflightId,'grant');
+ h.setProps({blocked:true});await h.settle();h.setProps({blocked:false});await h.settle();
+ assert.equal(h.result.preflight.preflightId,'grant');assert.equal(h.calls.plan.length,1);assert.equal(h.calls.discard.length,0);
+ await h.result.choose('prebuilt');assert.equal(h.calls.start.length,1);
 });

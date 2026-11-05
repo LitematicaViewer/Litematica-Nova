@@ -4,7 +4,7 @@
 use crate::{
     block_database::Registry,
     nbt::{
-        BigEndianLongArray, Vec3i, bits_for_palette, for_each_palette_index, pack_palette_indices,
+        Vec3i, bits_for_palette, for_each_palette_index, pack_palette_indices,
         region_volume, storage_to_region_coords,
     },
     version_conversion::parse_key,
@@ -127,9 +127,8 @@ pub(crate) fn encode(root: &Value, registry: &Registry) -> Result<Value> {
         let Some(Value::LongArray(packed)) = map.get("BlockStates") else {
             bail!("选区缺少 BlockStates")
         };
-        let packed = BigEndianLongArray::new(packed.iter().copied().collect());
         for_each_palette_index(
-            &packed,
+            packed,
             volume,
             bits_for_palette(palette.len()),
             palette.len(),

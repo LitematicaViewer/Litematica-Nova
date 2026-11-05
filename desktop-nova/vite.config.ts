@@ -3,9 +3,14 @@ import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
+import { bundledCreativeIdentity } from "./scripts/bundled-creative-identity.mjs";
+
+// Same directory tauriOverride maps to pack-in/game-data/default.
+const packagedContentId = bundledCreativeIdentity(resolve(__dirname, "../pack-in/game-data/default"));
 
 export default defineConfig({
     plugins: [react(), tailwindcss()],
+    define: { __NOVA_CREATIVE_CATALOG_BINDING__: JSON.stringify(packagedContentId ? "nova-catalog-v1:" + packagedContentId : null) },
     resolve: { alias: { "@": resolve(__dirname, "ui") } },
     clearScreen: false,
     server: {

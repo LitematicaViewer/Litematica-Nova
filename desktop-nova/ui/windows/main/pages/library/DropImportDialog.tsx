@@ -1,3 +1,4 @@
+import { t } from "../../../../../src/services/i18n";
 import { useEffect, useState } from "react";
 import { Button } from "../../../../components/ui/button";
 import { Dropdown } from "../../../../components/Dropdown";
@@ -89,15 +90,15 @@ export function DropImportDialog({
 
   return (
     <Dialog
-      title="导入拖入的内容"
-      subtitle="选择如何处理拖入的文件或文件夹。"
+      title={t("library.ux.dropTitle")}
+      subtitle={t("library.ux.dropSubtitle")}
       width="md"
       busy={busy}
       onClose={onClose}
       footer={(
         <>
-          <Button type="button" onClick={onClose} disabled={busy}>取消</Button>
-          <Button type="button" variant="default" disabled={!canSubmit} aria-busy={busy} onClick={handleSubmit}>{busy ? "正在导入…" : "导入"}</Button>
+          <Button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</Button>
+          <Button type="button" variant="default" disabled={!canSubmit} aria-busy={busy} onClick={handleSubmit}>{busy ? t("library.importing") : t("library.ux.import")}</Button>
         </>
       )}
     >
@@ -105,22 +106,22 @@ export function DropImportDialog({
         {files.length > 0 && (
           <div className="library-drop-group" data-drop-kind="file">
             <div className="library-drop-heading">
-              <span>拖入的文件（{files.length}）</span>
+              <span>{t("library.ux.droppedFilesPrefix")}{files.length}）</span>
               <Dropdown
-                ariaLabel="文件导入方式"
+                ariaLabel={t("library.ux.fileImportMode")}
                 value={fileMode}
                 onChange={(value) => setFileMode(value as "builtin" | "copy")}
-                options={[{ value: "builtin", label: "导入内置文件夹" }, { value: "copy", label: "复制到已挂载文件夹" }]}
+                options={[{ value: "builtin", label: t("library.ux.importBuiltin") }, { value: "copy", label: t("library.ux.copyMounted") }]}
               />
             </div>
             <ul className="library-drop-list">
               {files.slice(0, 8).map((item) => <li key={item.path} title={displayFilePath(item.path)}>{fileNameFromPath(item.path)}</li>)}
-              {files.length > 8 && <li className="muted">以及另外 {files.length - 8} 个文件</li>}
+              {files.length > 8 && <li className="muted">{t("library.additionalItems")} {files.length - 8} {t("library.ux.filesUnit")}</li>}
             </ul>
             {fileMode === "copy" && (
               targets.length
-                ? <Dropdown ariaLabel="复制目标文件夹" value={copyTarget} onChange={setCopyTarget} options={targets.map((folder) => ({ value: folder.path, label: compactFolderPath(folder.path, 3) }))} />
-                : <p className="muted" role="alert">没有可作为目标的已追踪文件夹。</p>
+                ? <Dropdown ariaLabel={t("library.ux.copyDestination")} value={copyTarget} onChange={setCopyTarget} options={targets.map((folder) => ({ value: folder.path, label: compactFolderPath(folder.path, 3) }))} />
+                : <p className="muted" role="alert">{t("library.ux.noTrackedTarget")}</p>
             )}
           </div>
         )}
@@ -128,24 +129,24 @@ export function DropImportDialog({
         {directories.length > 0 && (
           <div className="library-drop-group" data-drop-kind="folder">
             <div className="library-drop-heading">
-              <span>拖入的文件夹（{directories.length}）</span>
+              <span>{t("library.ux.droppedFoldersPrefix")}{directories.length}）</span>
               <Dropdown
-                ariaLabel="文件夹处理方式"
+                ariaLabel={t("library.ux.folderImportMode")}
                 value={folderMode}
                 onChange={(value) => setFolderMode(value as "mount" | "contents")}
-                options={[{ value: "mount", label: "挂载为文件夹" }, { value: "contents", label: "导入其中的文件" }]}
+                options={[{ value: "mount", label: t("library.ux.mountFolder") }, { value: "contents", label: t("library.ux.importFolderContents") }]}
               />
             </div>
             <ul className="library-drop-list">
               {directories.slice(0, 8).map((item) => <li key={item.path} title={displayFilePath(item.path)}>{compactFolderPath(item.path, 3)}</li>)}
-              {directories.length > 8 && <li className="muted">以及另外 {directories.length - 8} 个文件夹</li>}
+              {directories.length > 8 && <li className="muted">{t("library.additionalItems")} {directories.length - 8} {t("library.ux.foldersUnit")}</li>}
             </ul>
           </div>
         )}
 
         {unsupported.length > 0 && (
           <div className="library-drop-group library-drop-unsupported" role="status">
-            <span>不支持的类型（{unsupported.length}），将被忽略：</span>
+            <span>{t("library.ux.unsupportedPrefix")}{unsupported.length}{t("library.ux.ignoredSuffix")}</span>
             <ul className="library-drop-list">
               {unsupported.slice(0, 8).map((item) => <li key={item.path}>{fileNameFromPath(item.path)}</li>)}
             </ul>
@@ -153,7 +154,7 @@ export function DropImportDialog({
         )}
 
         {files.length === 0 && directories.length === 0 && (
-          <p className="muted">没有可导入的投影文件或文件夹。</p>
+          <p className="muted">{t("library.ux.nothingToImport")}</p>
         )}
       </div>
       {error && <div className="dialog-message dialog-message-error" role="alert">{error}</div>}

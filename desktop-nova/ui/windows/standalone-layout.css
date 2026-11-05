@@ -1,0 +1,21 @@
+/* Only loaded by the standalone subwindow entrypoints. Shared panel components
+   can still be embedded in dialogs, which own their own padding and chrome. */
+@layer components.page {
+  .subwindow-standalone-page {
+    padding: 0;
+    gap: var(--nova-section-gap);
+  }
+  .subwindow-standalone-page .subwindow-title-bar,
+  .subwindow-standalone-page .subwindow-body,
+  .subwindow-standalone-page .library-aux-panel > .subwindow-subtitle,
+  .subwindow-standalone-page .enumerator-footer-row {
+    padding-inline: var(--nova-page-inset);
+  }
+  .subwindow-standalone-page .subwindow-body { padding-block-end: var(--nova-page-inset); }
+  .subwindow-standalone-page .library-aux-panel,
+  .subwindow-standalone-page .enumerator-body { gap: var(--nova-section-gap); }
+  .subwindow-standalone-page .library-folders-panel > fieldset { margin-inline: var(--nova-page-inset); }
+  .subwindow-standalone-page .subwindow-toolbar,
+  .subwindow-standalone-page .enumerator-toolbar-row,
+  .subwindow-standalone-page .enumerator-footer-actions { gap: var(--nova-toolbar-gap); }
+}

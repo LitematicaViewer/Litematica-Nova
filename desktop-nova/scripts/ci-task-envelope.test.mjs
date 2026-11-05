@@ -8,6 +8,32 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { sealTask, openTask } from './ci-task-envelope.mjs';
 import { allowedSnapshotPath, validateSnapshot } from './validate-private-snapshot.mjs';
+test('task AEAD exclusive output preserves existing files and removes only its own partial file', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nova-exclusive-envelope-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const input = path.join(dir, 'input'), envelope = path.join(dir, 'sealed'), output = path.join(dir, 'output');
+  const data = Buffer.from('source must survive'), sentinel = Buffer.from('existing destination');
+  const context = { schema: 'nova.ci.task.v1', taskId: '420', sourceSha: 'a'.repeat(40), target: 'aarch64-apple-darwin', direction: 'source' };
+  const key = crypto.randomBytes(32).toString('base64');
+  fs.writeFileSync(input, data);
+  await sealTask(input, envelope, context, key);
+  const sealed = fs.readFileSync(envelope);
+  fs.writeFileSync(output, sentinel);
+  for (const [fn, source, original] of [[sealTask, input, data], [openTask, envelope, sealed]]) {
+    await assert.rejects(fn(source, output, context, key), { code: 'EEXIST' });
+    assert.deepEqual(fs.readFileSync(output), sentinel);
+    await assert.rejects(fn(source, source, context, key), { code: 'EEXIST' });
+    assert.deepEqual(fs.readFileSync(source), original);
+  }
+  const partial = path.join(dir, 'partial');
+  await assert.rejects(sealTask(path.join(dir, 'missing'), partial, context, key), { code: 'ENOENT' });
+  assert.equal(fs.existsSync(partial), false);
+  sealed[sealed.length - 1] ^= 1;
+  fs.writeFileSync(envelope, sealed);
+  await assert.rejects(openTask(envelope, partial, context, key));
+  assert.equal(fs.existsSync(partial), false);
+});
+
 test('task AEAD preserves bytes and rejects another architecture/task and modified tags', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nova-ci-envelope-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

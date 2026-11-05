@@ -107,6 +107,7 @@ function OutputEntryRow({ entry, onChange, onRemove }: {
         <Input
           className="input replace-entry-weight-input"
           type="number"
+          aria-label={t("replace.weight")}
           min={0}
           value={entry.weight}
           onChange={(e) => onChange({ ...entry, weight: Math.max(0, parseInt(e.target.value) || 0) })}
@@ -311,6 +312,7 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
   const [error, setError] = useState<UiMessage>("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [confirmApply, setConfirmApply] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [ruleQuery, setRuleQuery] = useState("");
   const [ruleSort, setRuleSort] = useState<"execution" | "label">("execution");
@@ -431,13 +433,19 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
     </fieldset>
     </details>
     {error && <pre className="replace-error nova-text-danger" role="alert">{displayPathText(localizeMessage(error))}</pre>}
+    <Button className="replace-browser-toggle" themeSlot="inline-control" variant="secondary" aria-expanded={browserOpen} onClick={() => setBrowserOpen(open => !open)}>{t("replace.rules")}</Button>
     <div className="replace-workspace">
-      <aside className="replace-rule-browser" aria-label={t("replace.rules")}>
+      <aside className={`replace-rule-browser${browserOpen ? " is-open" : ""}`} data-native-ui-surface aria-label={t("replace.rules")} onKeyDown={event => {
+        if (event.key !== "Escape" || event.nativeEvent.isComposing || event.defaultPrevented || !event.currentTarget.contains(event.target as Node)) return;
+        event.stopPropagation(); setBrowserOpen(false);
+        document.querySelector<HTMLButtonElement>(".replace-browser-toggle")?.focus();
+      }}>
+        <Button className="replace-browser-close" themeSlot="inline-control" variant="ghost" onClick={() => setBrowserOpen(false)}>{t("library.closeDialog")}</Button>
         <label className="replace-rule-search"><Search aria-hidden="true" /><Input value={ruleQuery} onChange={event => setRuleQuery(event.target.value)} aria-label={t("replace.searchRules")} placeholder={t("replace.searchRules")} /></label>
         <Dropdown value={ruleSort} onChange={value => setRuleSort(value === "label" ? "label" : "execution")} options={[{value:"execution",label:t("replace.ruleOrder")},{value:"label",label:t("replace.labelOrder")}]} ariaLabel={t("replace.ruleOrder")} />
         <ScrollArea className="replace-rule-list" aria-label={t("replace.rules")}>
           {viewError ? <p className="nova-text-danger" role="alert">{localizeMessage(viewError)}</p> : viewPending ? <p className="replace-list-status" role="status">{t("replace.checking")}</p> : rulesView?.rows.length ? <div role="list">
-            {rulesView.rows.map(row => <Button key={row.index} className={`replace-rule-list-item${row.kind === "separator" ? " is-separator" : ""}`} variant="ghost" aria-pressed={selectedIndex === row.index} onClick={() => setSelectedIndex(row.index)}>
+            {rulesView.rows.map(row => <Button key={row.index} className={`replace-rule-list-item${row.kind === "separator" ? " is-separator" : ""}`} themeSlot="list-row" variant="ghost" aria-pressed={selectedIndex === row.index} onClick={() => { setSelectedIndex(row.index); setBrowserOpen(false); }}>
               <span className="replace-rule-position">{row.unitIndex == null ? <ArrowDown aria-hidden="true" /> : row.unitIndex + 1}</span>
               <span className="replace-rule-list-label">{row.kind === "separator" ? t("replace.nextStep") : row.label || t("replace.ruleName", {index:(row.unitIndex ?? 0)+1})}</span>
               {row.unitIndex != null && preview?.summary.per_unit[row.unitIndex] && <span className="replace-rule-list-hits">{preview.summary.per_unit[row.unitIndex].hit_count.toLocaleString(locale)}</span>}
@@ -470,7 +478,7 @@ export function ReplacePage({ currentFile }: { currentFile?: string }) {
       </ScrollArea>
     </div>
     <div className="replace-toolbar">
-      <Button variant="destructive" disabled={!!busy || !items.length} onClick={() => changeItems([])}>{t("replace.clearRules")}</Button>
+      <Button variant="destructive" disabled={!!busy || !items.length} onClick={() => { if (window.confirm(locale === "en-US" ? "Clear every replacement rule?" : "清空全部替换规则？")) changeItems([]); }}>{t("replace.clearRules")}</Button>
       <span className="muted">{t("replace.ruleCount", {count:unitItems.length.toLocaleString(locale)})}</span>
       <Button disabled={!!busy || !unitItems.length || !currentFile} onClick={handleDryRun}>{busy === "preview" ? t("replace.checking") : t("replace.preview")}</Button>
       <Button disabled={!!busy || !preview} onClick={() => setConfirmApply(true)}>{t("replace.confirmSave")}</Button>

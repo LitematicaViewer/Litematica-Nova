@@ -10,7 +10,7 @@ const DialogPortal = DialogPrimitive.Portal;
 
 const DialogOverlay = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Overlay>, React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>>(
   function DialogOverlay({ className, ...props }, ref) {
-    return <DialogPrimitive.Overlay ref={ref} data-slot="dialog-overlay"
+    return <DialogPrimitive.Overlay ref={ref} data-slot="dialog-overlay" data-native-ui-blocking
       className={cn("dialog-overlay fixed inset-0", className)} {...props} />;
   },
 );
@@ -20,7 +20,7 @@ const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.C
     return (
       <DialogPortal>
         <DialogOverlay>
-          <DialogPrimitive.Content ref={ref} data-slot="dialog-content" asChild
+          <DialogPrimitive.Content ref={ref} data-slot="dialog-content" data-native-ui-surface asChild
             className={cn("nova-control dialog-surface outline-none", className)} {...props}>
             <section>
               {children}

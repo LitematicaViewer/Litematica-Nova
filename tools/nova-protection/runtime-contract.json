@@ -1,6 +1,7 @@
 {
   "schema": "nova.runtime-contract.v1",
   "runtime_abi": 1,
+  "service_base_url": "https://45-62-112-121.sslip.io:8448",
   "required_capabilities": [
     "standard",
     "full",

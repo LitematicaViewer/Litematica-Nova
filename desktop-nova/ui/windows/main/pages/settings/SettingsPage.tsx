@@ -1,9 +1,10 @@
 import { listenEvent } from "../../../../../src/platform/events";
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
+import { takeUpdateDraft, useUpdateDraft } from "../../updateRecovery";
 import { displayPathText } from "../../../../../src/business/facade";
-import React, { useEffect, useState } from "react";
-import { Sun, Moon, Monitor, Check } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { Sun, Moon, Monitor, Check, Search } from "lucide-react";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
 import { Checkbox } from "../../../../components/ui/checkbox";
@@ -148,7 +149,15 @@ import { MotionControl } from "./MotionControl";
 
 export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebugMode, buildVersion }: any) {
   const language = useI18n();
-  const [category, setCategory] = useState<SettingsCategory>("appearance");
+  const [recoveredDraft] = useState(() => takeUpdateDraft<{ v5?: V5CompatibilityConfig; ai?: {provider:string;baseUrl:string;model:string}; category?: SettingsCategory }>("settings"));
+  const pageRef = useRef<HTMLDivElement>(null);
+  const [search, setSearch] = useState("");
+  const [searchItems, setSearchItems] = useState<Array<{ label: string; category: SettingsCategory; element: HTMLElement }>>([]);
+  const [settingsAction, setSettingsAction] = useState("");
+  const settingsActionRef = useRef(false);
+  const v5Dirty = useRef(!!recoveredDraft?.v5);
+  const [v5Unsaved, setV5Unsaved] = useState(!!recoveredDraft?.v5);
+  const [category, setCategory] = useState<SettingsCategory>(recoveredDraft?.category ?? "appearance");
   const [showAssetManager, setShowAssetManager] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [previewMode, setPreviewMode] = useState<DisplayMode>("full");
@@ -177,11 +186,42 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
   const [aiStatus, setAiStatus] = useState<UiMessage>(message("settings.notSaved"));
   const [aiSaveMessage, setAiSaveMessage] = useState<UiMessage>("");
   const [aiTestStatus, setAiTestStatus] = useState<UiMessage>("");
-  const [v5Compatibility, setV5Compatibility] = useState<V5CompatibilityConfig>(DEFAULT_V5_COMPATIBILITY);
+  const [v5Compatibility, setV5Compatibility] = useState<V5CompatibilityConfig>(recoveredDraft?.v5 ?? DEFAULT_V5_COMPATIBILITY);
+  const latestV5Draft = useRef(v5Compatibility); latestV5Draft.current = v5Compatibility;
   const [viewerControls, setViewerControls] = useState<ViewerControlConfig>(DEFAULT_VIEWER_CONTROLS);
   const [graphicsBackend, setGraphicsBackend] = useState<GraphicsApiPreference>("auto");
   const [graphicsBackendSaving, setGraphicsBackendSaving] = useState(false);
   const [v5PickerBusy, setV5PickerBusy] = useState(false);
+  const aiDraftChanged = !!aiConfig && (aiProvider !== aiConfig.provider || aiBaseUrl !== aiConfig.base_url || aiModel !== aiConfig.model);
+  useUpdateDraft("settings", {category, v5:v5Unsaved ? v5Compatibility : undefined, ai:aiDraftChanged ? {provider:aiProvider,baseUrl:aiBaseUrl,model:aiModel} : undefined});
+
+  const updateV5Draft: typeof setV5Compatibility = (next) => {
+    v5Dirty.current = true; setV5Unsaved(true); setV5Compatibility(next);
+  };
+  const runSettingsAction = async (name: string, action: () => Promise<unknown>) => {
+    if (settingsActionRef.current) return;
+    settingsActionRef.current = true; setSettingsAction(name); setLog("");
+    try { await action(); } catch (reason) { setLog(String(reason)); }
+    finally { settingsActionRef.current = false; setSettingsAction(""); }
+  };
+  useEffect(() => {
+    // Index only visible control labels, never field values, keys or user paths.
+    const rows = Array.from(pageRef.current?.querySelectorAll<HTMLElement>("[data-settings-category] .form-row, [data-settings-category] .settings-actions") ?? []);
+    setSearchItems(rows.flatMap(element => {
+      const category = element.closest<HTMLElement>("[data-settings-category]")?.dataset.settingsCategory as SettingsCategory;
+      const label = element.querySelector(".form-label")?.textContent?.trim() || Array.from(element.querySelectorAll("button")).map(button => button.textContent?.trim()).filter(Boolean).join(" / ");
+      return category && label ? [{ label, category, element }] : [];
+    }));
+  }, [language.locale]);
+  const searchResults = search.trim() ? searchItems.filter(item => item.label.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) : [];
+  const jumpToSetting = (item: typeof searchItems[number]) => {
+    setCategory(item.category); setSearch("");
+    requestAnimationFrame(() => {
+      item.element.scrollIntoView({ block: "center", behavior: "instant" });
+      const control = item.element.querySelector<HTMLElement>("input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex='0']");
+      control?.focus({ preventScroll: true });
+    });
+  };
 
   const applyUserConfig = (info: UserConfigInfo, changedConfigDirectory = false) => {
     const showUiTest = normalizeDebugMode(info.config.debug_mode);
@@ -193,7 +233,10 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
     setDebugMode?.(showUiTest);
     if (changedConfigDirectory) setTheme(normalizeTheme(info.config.theme));
     if (changedConfigDirectory) setColorMode(normalizeColorMode(info.config.color_mode));
-    setV5Compatibility(info.config.v5_compatibility || DEFAULT_V5_COMPATIBILITY);
+    if (changedConfigDirectory || !v5Dirty.current) {
+      setV5Compatibility(info.config.v5_compatibility || DEFAULT_V5_COMPATIBILITY);
+      v5Dirty.current = false; setV5Unsaved(false);
+    }
     setViewerControls(info.config.viewer_controls || DEFAULT_VIEWER_CONTROLS);
     setGraphicsBackend(normalizeGraphicsBackend(info.config.graphics_backend));
   };
@@ -209,9 +252,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
   const refreshAiConfig = async () => {
     const config = await aiGetConfig();
     setAiConfig(config);
-    setAiProvider(config.provider);
-    setAiBaseUrl(config.base_url);
-    setAiModel(config.model);
+    setAiProvider(recoveredDraft?.ai?.provider ?? config.provider);
+    setAiBaseUrl(recoveredDraft?.ai?.baseUrl ?? config.base_url);
+    setAiModel(recoveredDraft?.ai?.model ?? config.model);
     setAiStatus(config.has_key ? message("settings.saved") : config.key_status === "cleared" ? message("settings.cleared") : message("settings.notSaved"));
     setApiKeyInput("");
     setApiKeyDirty(false);
@@ -241,8 +284,10 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
 
   const handleMaterialListWindowBehavior = async (value: string) => {
     const behavior = normalizeMaterialListWindowBehavior(value);
+    const previous = materialListWindowBehavior;
     setMaterialListWindowBehavior(behavior);
-    applyUserConfig(await saveMaterialListWindowBehaviorConfig(behavior));
+    try { applyUserConfig(await saveMaterialListWindowBehaviorConfig(behavior)); }
+    catch (reason) { setMaterialListWindowBehavior(previous); setLog(String(reason)); }
   };
 
   const handleDebugMode = async (checked: boolean) => {
@@ -257,8 +302,10 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
 
   const handleLocalLibraryTailPathCount = async (value: string) => {
     const count = normalizeLocalLibraryTailPathCount(value);
+    const previous = localLibraryTailPathCount;
     setLocalLibraryTailPathCount(count);
-    applyUserConfig(await saveLocalLibraryTailPathCountConfig(count));
+    try { applyUserConfig(await saveLocalLibraryTailPathCountConfig(count)); }
+    catch (reason) { setLocalLibraryTailPathCount(previous); setLog(String(reason)); }
   };
 
   const saveViewerControls = async (next: ViewerControlConfig) => {
@@ -283,6 +330,8 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         resource_packs: v5Compatibility.resource_packs.map((value) => value.trim()).filter(Boolean),
       };
       const info = await saveUserConfig({ v5_compatibility: normalized });
+      const changedDuringSave = latestV5Draft.current !== v5Compatibility;
+      v5Dirty.current = changedDuringSave; setV5Unsaved(changedDuringSave);
       applyUserConfig(info);
       setLog(message("settings.renderSettingsSaved"));
     } catch (err) {
@@ -326,7 +375,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         setLog(message("settings.shaderpackPathInvalid", { path: displayFilePath(path) }));
         return;
       }
-      setV5Compatibility((current) => ({
+      updateV5Draft((current) => ({
         ...current,
         shaderpack_root: parts.root,
         shaderpack_name: parts.name,
@@ -340,7 +389,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
   };
 
   const clearShaderpack = () => {
-    setV5Compatibility((current) => ({
+    updateV5Draft((current) => ({
       ...current,
       backend: current.backend === "iris-gl46" ? "auto" : current.backend,
       shaderpack_root: "",
@@ -360,7 +409,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
       });
       const paths = selectedPaths(selection);
       if (paths.length === 0) return;
-      setV5Compatibility((current) => ({
+      updateV5Draft((current) => ({
         ...current,
         resource_packs: appendPackPaths(current.resource_packs, paths),
       }));
@@ -432,6 +481,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
   };
 
   const resetConfigDir = async () => {
+    if (!window.confirm(language.locale === "en-US" ? "Move configuration to the default directory? Existing settings are retained." : "迁回默认配置目录？现有配置将保留。")) return;
     applyUserConfig(await resetUserConfigDir(true), true);
     setLog(message("settings.configReset"));
   };
@@ -445,6 +495,8 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
       api_key: typedKey ? apiKeyInput : null,
     });
     setAiConfig(saved);
+    setApiKeyInput("");
+    setShowApiKey(false);
     setApiKeyDirty(false);
     setAiStatus(saved.has_key ? message("settings.saved") : message("settings.notSaved"));
     setAiSaveMessage(typedKey ? message("settings.keySaved") : saved.has_key ? message("settings.savedKeyRetained") : message("settings.keyNotSaved"));
@@ -458,6 +510,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
   };
 
   const clearAiKey = async () => {
+    if (!window.confirm(language.locale === "en-US" ? "Delete the saved API key?" : "删除已保存的 API Key？")) return;
     const next = await aiClearKey();
     setApiKeyInput("");
     setApiKeyDirty(false);
@@ -482,12 +535,40 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
   return (
     <>
     <div className="settings-layout">
-    <SettingsCategories category={category} onSelect={setCategory} />
+    <aside className="settings-sidebar">
+      <div className="settings-search" onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSearch("");
+      }} onKeyDown={event => {
+        if (event.nativeEvent.isComposing) return;
+        if (event.key === "Escape") {
+          event.preventDefault(); event.stopPropagation(); setSearch("");
+          event.currentTarget.querySelector<HTMLInputElement>("input")?.focus();
+        }
+        if ((event.key === "ArrowDown" || event.key === "ArrowUp") && event.target instanceof HTMLButtonElement) {
+          const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>(".settings-search-results button"));
+          const index = buttons.indexOf(event.target);
+          event.preventDefault();
+          if (event.key === "ArrowUp" && index === 0) event.currentTarget.querySelector<HTMLInputElement>("input")?.focus();
+          else buttons[Math.max(0, Math.min(buttons.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))]?.focus();
+        }
+      }}>
+        <Search size={16} aria-hidden="true" />
+        <Input type="search" value={search} aria-label={language.locale === "en-US" ? "Find a setting" : "搜索设置"} placeholder={language.locale === "en-US" ? "Find a setting…" : "搜索设置…"} onChange={event => setSearch(event.target.value)} onKeyDown={event => { if (event.nativeEvent.isComposing) return; if (event.key === "Escape") { setSearch(""); event.stopPropagation(); } if (event.key === "ArrowDown" && searchResults.length) { event.preventDefault(); event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(".settings-search-results button")?.focus(); } }} />
+        {search && <div className="settings-search-results" data-native-ui-surface aria-label={language.locale === "en-US" ? "Matching settings" : "匹配设置"}>
+          {searchResults.map((item, index) => <Button key={`${item.category}-${index}`} variant="ghost" onClick={() => jumpToSetting(item)}>{item.label}</Button>)}
+          {!searchResults.length && <p role="status">{language.locale === "en-US" ? "No matching setting." : "未找到匹配设置。"}</p>}
+        </div>}
+      </div>
+      <SettingsCategories category={category} onSelect={next => { setSearch(""); setCategory(next); }} />
+    </aside>
     <ScrollArea className="settings-scroll-area" aria-label={t("settings.settingsAria")}>
-    <div className="settings-page">
+    <div className="settings-page" ref={pageRef}>
       <h2 className="settings-title">{t("settings.settingsTitle")}</h2>
+      {settingsAction && <p className="settings-operation-status" role="status">{language.locale === "en-US" ? "Working…" : "正在处理…"}</p>}
+      {v5Unsaved && <p className="settings-unsaved" role="status">{language.locale === "en-US" ? "Shader and resource changes have not been applied." : "光影与资源设置已修改，尚未应用。"}<Button variant="ghost" onClick={() => { setCategory("shaders"); }}>{language.locale === "en-US" ? "View" : "查看"}</Button></p>}
+      {(aiDraftChanged || apiKeyDirty) && <p className="settings-unsaved" role="status">{language.locale === "en-US" ? "AI settings have not been saved. Save the API key before closing; keys are not included in recovery drafts." : "AI 设置尚未保存。关闭前请保存 API Key，密钥不会写入恢复草稿。"}<Button variant="ghost" onClick={() => setCategory("ai")}>{language.locale === "en-US" ? "View" : "查看"}</Button></p>}
 
-      <div className="group-box" hidden={category !== "appearance"}>
+      <section className="settings-section" data-settings-category="appearance" hidden={category !== "appearance"}>
         <div className="group-box-title">{t("settings.appearance")}</div>
         <div className="form-row">
           <label className="form-label" htmlFor="nova-ui-language">{language.t("settings.language")}</label>
@@ -523,9 +604,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
             ))}
           </RadioGroup>
         </div>
-      </div>
+      </section>
 
-      <div className="group-box" hidden={category !== "data"}>
+      <section className="settings-section" data-settings-category="data" hidden={category !== "data"}>
         <div className="group-box-title">{t("settings.configDirectory")}</div>
         <div className="form-row">
           <div className="form-label">{t("settings.currentDirectory")}</div>
@@ -536,14 +617,14 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           <Input className="input settings-grow" aria-label={t("settings.defaultConfigDirectoryAria")} value={displayFilePath(userConfig?.default_config_dir || "")} readOnly />
         </div>
         <div className="settings-actions">
-          <Button onClick={chooseConfigDir}>{t("settings.chooseDirectory")}</Button>
-          <Button onClick={() => openUserConfigDir()}>{t("settings.openDirectory")}</Button>
-          <Button onClick={resetConfigDir}>{t("settings.resetDirectory")}</Button>
-          <Button onClick={migrateConfigDir}>{t("settings.migrateDirectory")}</Button>
+          <Button disabled={!!settingsAction} onClick={() => void runSettingsAction("chooseConfigDir", chooseConfigDir)}>{t("settings.chooseDirectory")}</Button>
+          <Button onClick={() => void runSettingsAction("openConfigDir", openUserConfigDir)}>{t("settings.openDirectory")}</Button>
+          <Button disabled={!!settingsAction} onClick={() => void runSettingsAction("resetConfigDir", resetConfigDir)}>{t("settings.resetDirectory")}</Button>
+          <Button disabled={!!settingsAction} onClick={() => void runSettingsAction("migrateConfigDir", migrateConfigDir)}>{t("settings.migrateDirectory")}</Button>
         </div>
-      </div>
+      </section>
 
-      <div className="group-box" hidden={category !== "ai"}>
+      <section className="settings-section" data-settings-category="ai" hidden={category !== "ai"}>
         <div className="group-box-title">{t("settings.aiSettings")}</div>
         <div className="form-row">
           <div className="form-label">{t("settings.aiProvider")}</div>
@@ -583,18 +664,18 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           </div>
         </div>
         <div className="settings-actions">
-          <Button onClick={saveAi}>{t("settings.saveKey")}</Button>
-          <Button onClick={clearAiKey}>{t("settings.clearKey")}</Button>
-          <Button onClick={testAi}>{t("settings.testConnection")}</Button>
+          <Button disabled={!!settingsAction} onClick={() => void runSettingsAction("saveAi", saveAi)}>{t("settings.saveKey")}</Button>
+          <Button disabled={!!settingsAction} onClick={() => void runSettingsAction("clearAiKey", clearAiKey)}>{t("settings.clearKey")}</Button>
+          <Button disabled={!!settingsAction} onClick={() => void runSettingsAction("testAi", testAi)}>{t("settings.testConnection")}</Button>
         </div>
         {(aiSaveMessage || aiTestStatus) && (
           <pre className="settings-feedback" data-state={(typeof aiTestStatus !== "string" && aiTestStatus.key === "settings.connectionTestFailed") ? "error" : "normal"}>
             {[aiSaveMessage, aiTestStatus].filter(Boolean).map(localizeMessage).join("\n")}
           </pre>
         )}
-      </div>
+      </section>
 
-      <div className="group-box" hidden={category !== "appearance"}>
+      <section className="settings-section" data-settings-category="appearance" hidden={category !== "appearance"}>
         <div className="group-box-title">{t("settings.interfaceBehavior")}</div>
         <div className="form-row">
           <div className="form-label">{t("settings.childWindowBehavior")}</div>
@@ -605,18 +686,18 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         </div>
 
 
-      </div>
+      </section>
 
-      <div className="group-box" hidden={category !== "diagnostics"}>
+      <section className="settings-section" data-settings-category="diagnostics" hidden={category !== "diagnostics"}>
         <div className="group-box-title">{t("settings.runtimeCapabilities")}</div>
         <PathRow label={t("settings.workingDirectory")} path={workspaceRoot || "..."} info={workspaceRoot ? ({ normalized: workspaceRoot, exists: true } as PathInfo) : null} />
         <div className="settings-actions settings-actions-spaced">
           <Button onClick={checkApplicationRuntime}>{t("settings.checkRuntime")}</Button>
           <span className="settings-status" data-state={runtimeOk === false ? "error" : "normal"}>{statusText(runtimeOk)}</span>
         </div>
-      </div>
+      </section>
 
-      <div className="group-box" hidden={category !== "data"}>
+      <section className="settings-section" data-settings-category="data" hidden={category !== "data"}>
         <div className="group-box-title">{t("settings.dataFiles")}</div>
         <div className="form-row"><div className="form-label">{t("settings.blockDatabase")}</div><div>{t("settings.builtinBlockDatabase")}</div></div>
         <PathRow label={t("settings.blockIconLibrary")} path={iconDirInfo?.normalized || "..."} info={iconDirInfo} />
@@ -628,9 +709,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
             {t("settings.dataHealth", { blocks: statusText(dbOk), icons: statusText(iconOk) })}
           </span>
         </div>
-      </div>
+      </section>
 
-      <div className="group-box" hidden={category !== "rendering"}>
+      <section className="settings-section" data-settings-category="rendering" hidden={category !== "rendering"}>
         <div className="group-box-title">{t("settings.rendering")}</div>
         <div className="form-row">
           <div className="form-label">{t("settings.graphicsApi")}</div>
@@ -682,14 +763,14 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
             <span>{t("settings.viewerWeatherHint")}</span>
           </label>
         </div>
-      </div>
+      </section>
 
-      <div className="group-box" hidden={category !== "shaders"}>
+      <section className="settings-section" data-settings-category="shaders" hidden={category !== "shaders"}>
         <div className="group-box-title">{t("settings.renderCompatibility")}</div>
         <div className="form-row">
           <div className="form-label">{t("settings.fullBackend")}</div>
           <Dropdown ariaLabel={t("settings.renderBackend")} value={v5Compatibility.backend}
-            onChange={(value) => setV5Compatibility((current) => ({ ...current, backend: value as V5CompatibilityConfig["backend"] }))}
+            onChange={(value) => updateV5Draft((current) => ({ ...current, backend: value as V5CompatibilityConfig["backend"] }))}
             options={[{ value: "auto", label: t("settings.automatic") }, { value: "vulkan", label: t("settings.vulkanShaderpacks") }, { value: "iris-gl46", label: t("settings.glShaderReference") }]} />
         </div>
         <div className="form-row">
@@ -697,7 +778,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           <Input
             className="input"
             aria-label={t("settings.shaderpackFolder")} value={displayFilePath(v5Compatibility.shaderpack_root)}
-            onChange={(event) => setV5Compatibility((current) => ({ ...current, shaderpack_root: event.target.value }))}
+            onChange={(event) => updateV5Draft((current) => ({ ...current, shaderpack_root: event.target.value }))}
             placeholder={t("settings.shaderpackFolderHint")}
           />
         </div>
@@ -707,7 +788,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
             <Input
               className="input"
               aria-label={t("settings.shaderpackName")} value={v5Compatibility.shaderpack_name}
-              onChange={(event) => setV5Compatibility((current) => ({ ...current, shaderpack_name: event.target.value }))}
+              onChange={(event) => updateV5Draft((current) => ({ ...current, shaderpack_name: event.target.value }))}
               placeholder={t("settings.shaderpackNameHint")}
             />
             <Button type="button" disabled={v5PickerBusy} onClick={() => chooseShaderpack(false)}>{t("settings.chooseZip")}</Button>
@@ -718,7 +799,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
         <div className="form-row">
           <div className="form-label">{t("settings.shaderpackFailure")}</div>
           <Dropdown ariaLabel={t("settings.shaderpackFailure")} value={v5Compatibility.iris_fallback}
-            onChange={(value) => setV5Compatibility((current) => ({ ...current, iris_fallback: value as V5CompatibilityConfig["iris_fallback"] }))}
+            onChange={(value) => updateV5Draft((current) => ({ ...current, iris_fallback: value as V5CompatibilityConfig["iris_fallback"] }))}
             options={[{ value: "fail", label: t("settings.failImmediately") }, { value: "vulkan", label: t("settings.useBasicRendering") }]} />
         </div>
         <div className="form-row">
@@ -726,7 +807,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           <Input
             className="input"
             aria-label={t("settings.fabricModsDirectory")} value={displayFilePath(v5Compatibility.fabric_mods_dir)}
-            onChange={(event) => setV5Compatibility((current) => ({ ...current, fabric_mods_dir: event.target.value }))}
+            onChange={(event) => updateV5Draft((current) => ({ ...current, fabric_mods_dir: event.target.value }))}
             placeholder={t("settings.fabricModsHint")}
           />
         </div>
@@ -737,7 +818,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
               aria-label={t("settings.resourcePackList")}
               className="input v5-resource-pack-list"
               value={v5Compatibility.resource_packs.map(displayFilePath).join("\n")}
-              onChange={(event) => setV5Compatibility((current) => ({ ...current, resource_packs: event.target.value.split(/\r?\n/) }))}
+              onChange={(event) => updateV5Draft((current) => ({ ...current, resource_packs: event.target.value.split(/\r?\n/) }))}
               placeholder={t("settings.resourcePackListHint")}
             />
             <div className="v5-pack-actions">
@@ -747,23 +828,26 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
                
                 type="button"
                 disabled={v5PickerBusy || v5Compatibility.resource_packs.every((path) => !path.trim())}
-                onClick={() => setV5Compatibility((current) => ({ ...current, resource_packs: [] }))}
+                onClick={() => updateV5Draft((current) => ({ ...current, resource_packs: [] }))}
               >{t("settings.clearAll")}</Button>
             </div>
           </div>
         </div>
-        <Button onClick={saveV5Compatibility}>{t("settings.saveRenderSettings")}</Button>
+        <Button disabled={!!settingsAction} onClick={() => void runSettingsAction("saveRenderSettings", saveV5Compatibility)}>{t("settings.saveRenderSettings")}</Button>
         <IrisSettingsPanel root={v5Compatibility.shaderpack_root} pack={v5Compatibility.shaderpack_name} />
-      </div>
+      </section>
 
-      <div className="group-box" hidden={category !== "maintenance"}>
+      <section className="settings-section" data-settings-category="maintenance" hidden={category !== "maintenance"}>
         <div className="group-box-title">{t("settings.maintenance")}</div>
         {buildVersion && <div className="form-row"><div className="form-label">{t("settings.appVersion")}</div><div>{buildVersion}</div></div>}
-        <Button onClick={async () => setLog(await cleanupLocalTempFiles())}>{t("settings.cleanupTemp")}</Button>
+        <Button disabled={!!settingsAction} onClick={() => void runSettingsAction("cleanupTemp", async () => {
+          if (!window.confirm(language.locale === "en-US" ? "Remove temporary files? Your schematics and saved configuration are kept." : "清理临时文件？投影文件和已保存配置会保留。")) return;
+          setLog(await cleanupLocalTempFiles());
+        })}>{t("settings.cleanupTemp")}</Button>
 
-      </div>
+      </section>
 
-      <div className="group-box" hidden={category !== "diagnostics"}>
+      <section className="settings-section" data-settings-category="diagnostics" hidden={category !== "diagnostics"}>
         <div className="group-box-title">{t("settings.exportLogsZip")}</div>
         <Button type="button" disabled={exportingLogs} onClick={async () => {
           setExportingLogs(true); setLogExportStatus("");
@@ -775,9 +859,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
           } finally { setExportingLogs(false); }
         }}>{exportingLogs ? t("settings.exportingLogs") : t("settings.exportLogsZip")}</Button>
         {logExportStatus && <div className="settings-feedback" role="status" aria-live="polite">{displayPathText(localizeMessage(logExportStatus))}</div>}
-      </div>
+      </section>
 
-      <div className="group-box" hidden={category !== "diagnostics"}>
+      <section className="settings-section" data-settings-category="diagnostics" hidden={category !== "diagnostics"}>
         <div className="form-row">
           <div className="form-label">{t("settings.debugMode")}</div>
           <label className="form-field">
@@ -785,9 +869,9 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
             <span>{t("settings.uiTestEnumerator")}</span>
           </label>
         </div>
-      </div>
+      </section>
 
-      <div className="group-box" hidden={category !== "data"}>
+      <section className="settings-section" data-settings-category="data" hidden={category !== "data"}>
         <div className="form-row">
           <div className="form-label">{t("settings.pathTailSegments")}</div>
           <div className="form-field">
@@ -802,7 +886,7 @@ export function SettingsPage({ theme, setTheme, colorMode, setColorMode, setDebu
             />
           </div>
         </div>
-      </div>
+      </section>
 
       {log && (
         <pre className="settings-feedback">{displayPathText(localizeMessage(log))}</pre>

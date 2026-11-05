@@ -36,6 +36,7 @@ export interface ApplicationEditProjectOriginInput extends ApplicationInspectPro
 export interface LayerContainerData extends ProjectionMarkerPoint {
   block_id: string;
   nbt: Record<string, unknown>;
+  items: { id: string; count: number | null; slot: number | null }[];
 }
 
 export interface ProjectionMarkers {
@@ -133,7 +134,7 @@ export interface ConversionPreview {
   targetDataVersion: number;
   entries: { sourceBlockId: string; sourceIconId: string; sourceProperties: Record<string,string>; targetBlockId: string | null; targetProperties: Record<string,string>; targetPropertyOptions: Record<string,string[]>; sourceState: string; sourceName?: string; sourceIconState?: string; targetName?: string; category?: string; targetState: string | null; count: number; reason: string; valid: boolean }[];
   blockedPayloads: string[];
-  payloadIssues?: { kind: "unsupported" | "unimplemented" | "invalid"; typeName: string; count: number; message: string }[];
+  payloadIssues?: { kind: "unsupported" | "unimplemented" | "invalid"; domain?: string; sourceId?: string; typeName: string; count: number; message: string }[];
   payloadChanges: string[];
   writable: boolean;
   changedBlockCount: number;
@@ -406,7 +407,7 @@ export interface StockpileTaskMutation {
   requestId?: string; complete?: boolean; adjustment?: { unit: "each" | "stack" | "box" | "chest"; steps: number };
 }
 export interface StockpileTaskCommandInput {
-  action: "open" | "list" | "create" | "select" | "rename" | "sync" | "settings" | "mutate" | "details" | "export" | "import" | "bindLegacy" | "exportView" | "setSources" | "addSources";
+  action: "open" | "list" | "create" | "select" | "rename" | "delete" | "sync" | "settings" | "mutate" | "details" | "export" | "import" | "bindLegacy" | "exportView" | "setSources" | "addSources";
   taskId?: string; projectId?: string; legacyTaskId?: string; sourceRevision?: string; expectedRevision?: string; sourcePath?: string;
   scope?: ApplicationMaterialScope; includeContainerItems?: boolean; multiplier?: number; name?: string;
   sources?: StockpileSourceInput[]; sourceIds?: string[]; requestId?: string;
@@ -479,3 +480,11 @@ export interface StatisticsDisplayView {
   layers: Array<{ layer: number; world_y: number; total_non_air_blocks: number; unique_block_types: number }>;
   containerScan: { enabled: boolean; containers_scanned: number; item_stacks_scanned: number; warnings: string[] };
 }
+
+export type EnumeratorDescriptor = {id: string; name: string; symbol: string; values: string[]};
+export function bindEnumeratorCollections(collections: EnumeratorDescriptor[]): Promise<number> {
+  return invoke("application_bind_enumerator", {collections});
+}
+export function queryEnumeratorExpression(snapshot: number, expression: string): Promise<{
+  values: string[]; dependencies: string[]; errorKey: string | null; token: string | null;
+}> { return invoke("application_evaluate_enumerator", {snapshot, expression}); }

@@ -11,9 +11,26 @@ use anyhow::{Context, Result, bail};
 use fastnbt::Value;
 
 use crate::version_conversion::target_has_item;
+use crate::version_entity_registry::{self as type_registry, Kind};
+
+#[path = "version_block_entity_families.rs"]
+mod block_entity_families;
+
+#[path = "version_legacy_music_pots.rs"]
+mod legacy_music_pots;
+pub(crate) use legacy_music_pots::prepare as prepare_music_pots;
+
+#[path = "version_falling_block.rs"]
+mod falling_block;
+
+#[path = "version_entity_families.rs"]
+mod entity_families;
 
 #[path = "version_item_components.rs"]
 mod additional_items;
+
+#[path = "version_test_instance.rs"]
+mod test_instance;
 
 #[path = "version_trial_vault.rs"]
 mod trial_vault;
@@ -34,6 +51,38 @@ pub(crate) struct PayloadMigrationReport {
     pub checked_item_stack_count: u64,
     pub changed_entity_count: u64,
     pub changed_block_entity_count: u64,
+    registry_endpoints: Option<(i32, i32)>,
+}
+
+impl PayloadMigrationReport {
+    // v3818 is an internal component normalization step, not a supported
+    // game release. Its intermediate IDs are canonical names; the real outer
+    // endpoints (never a nearest release) are their authority.
+    fn intermediate_id(&self, kind: Kind, id: &str) -> Result<Option<&'static str>> {
+        let (source, target) = self.registry_endpoints.context("组件中间格式缺少真实两端版本")?;
+        for version in [source, target] {
+            if let Some(raw) = type_registry::encode(kind, version, id)? {
+                return type_registry::canonical(kind, version, raw);
+            }
+        }
+        Ok(None)
+    }
+    fn has_item(&self, version: i32, id: &str) -> Result<bool> {
+        if version != 3818 { return target_has_item(version, id); }
+        let (source, target) = self.registry_endpoints.context("物品组件中间格式缺少真实版本")?;
+        for version in [source, target] {
+            let reg = crate::block_database::database()?.registry_by_data_version(version)?;
+            let name = if version >= 4541 && id == "minecraft:chain" { "minecraft:iron_chain" } else { id };
+            if reg.items.contains(name) || reg.legacy_items.values().any(|v| v == name) { return Ok(true); }
+        }
+        Ok(false)
+    }
+    fn input_id(&self, kind: Kind, version: i32, raw: &str) -> Result<Option<&'static str>> {
+        if version == 3818 { self.intermediate_id(kind, raw) } else { type_registry::canonical(kind, version, raw) }
+    }
+    fn output_id(&self, kind: Kind, version: i32, id: &str) -> Result<Option<&'static str>> {
+        if version == 3818 { self.intermediate_id(kind, id) } else { type_registry::encode(kind, version, id) }
+    }
 }
 
 /// Accepts one Litematica region Compound. Only TileEntities may be transformed;
@@ -52,7 +101,7 @@ fn migrate_controlled(
     target_version: i32,
     cancel: &AtomicBool,
 ) -> Result<PayloadMigrationReport> {
-    let mut report = PayloadMigrationReport::default();
+    let mut report = PayloadMigrationReport { registry_endpoints: Some((source_version, target_version)), ..Default::default() };
     crate::version_conversion::check_cancel(cancel)?;
     if crate::block_database::database()?
         .registry_by_data_version(source_version)
@@ -102,7 +151,7 @@ fn migrate_controlled(
                         migrate_entity(entity, source_version, target_version, &mut report)
                     {
                         report.issues.push(format!(
-                            "Entities[{index}]：转换器尚未实现此数据迁移（{error}）"
+                            "Entities[{index}]：{error:#}"
                         ));
                     }
                 }
@@ -182,7 +231,7 @@ pub(crate) fn migrate_with_palette_controlled(
     known_layout: Option<crate::nbt::PaletteLayout>,
 ) -> Result<PayloadMigrationReport> {
     use crate::nbt::{
-        BigEndianLongArray, Vec3i, bits_for_palette, choose_palette_packing, region_volume,
+        Vec3i, bits_for_palette, choose_palette_packing, region_volume,
     };
     crate::version_conversion::check_cancel(cancel)?;
     let Value::Compound(fields) = region else {
@@ -228,9 +277,8 @@ pub(crate) fn migrate_with_palette_controlled(
     };
     // Conversion already resolved this immutable region's layout. A handful
     // of container positions must not copy the entire packed block array.
-    let owned_packed = if known_layout.is_none() { Some(BigEndianLongArray::new(packed.iter().copied().collect())) } else { None };
     let db = crate::block_database::database()?;
-    let layout = match known_layout { Some(layout) => layout, None => choose_palette_packing(owned_packed.as_ref().unwrap(), volume, bits_for_palette(palette.len()), palette.len())? };
+    let layout = match known_layout { Some(layout) => layout, None => choose_palette_packing(packed, volume, bits_for_palette(palette.len()), palette.len())? };
     for (index, tile) in tiles.iter_mut().enumerate() {
         crate::version_conversion::check_cancel(cancel)?;
         let Value::Compound(tile_fields) = tile else {
@@ -276,7 +324,7 @@ pub(crate) fn migrate_with_palette_controlled(
             continue;
         }
         let position = (y as usize * length + z as usize) * width + x as usize;
-        let palette_index = if let Some(packed) = owned_packed.as_ref() { layout.palette_index(packed, position) } else { layout.palette_index_native(packed, position) };
+        let palette_index = layout.palette_index(packed, position);
         let old_name = original_names.get(palette_index).context("原调色板缺失")?;
         if old_name != &format!("minecraft:{id}") && db.category(old_name) != Some(id.as_str()) {
             issues.push(format!("TileEntities[{index}]：原方块与容器实体不匹配"));
@@ -442,9 +490,7 @@ fn migrate_vehicle_inventory(fields: &mut Fields, source: i32, target: i32, slot
 }
 
 fn migrate_minecart(fields: &mut Fields, id: &str, source: i32, target: i32, report: &mut PayloadMigrationReport) -> Result<()> {
-    let item = match id { "minecraft:minecart" => "minecraft:minecart", "minecraft:chest_minecart" => "minecraft:chest_minecart", "minecraft:hopper_minecart" => "minecraft:hopper_minecart", _ => return Ok(()) };
-    let registry = crate::block_database::database()?.registry_by_data_version(target)?;
-    if !registry.items.contains(item) && !registry.legacy_items.values().any(|value| value == item) { bail!("目标真实注册表没有矿车{id}") }
+    if !entity_families::is_minecart(id) { return Ok(()) }
     if let Some(display) = fields.get_mut("DisplayState") { migrate_stored_block_state(display, source, target)?; }
     if fields.contains_key("DisplayTile") || fields.contains_key("DisplayData") { bail!("矿车旧数值显示方块需先解析真实注册表，原载荷保留") }
     if source < 4325 && target >= 4325 {
@@ -479,40 +525,34 @@ fn migrate_container(
         report.issues.push(format!("{path}/id 缺失或不是 String"));
         return Ok(());
     };
-    // Actual BlockEntityIdFix(v704) mapping, before namespaced IDs.
-    let id = match source_id.as_str() {
-        "Chest" => "minecraft:chest",
-        "EnderChest" => "minecraft:ender_chest",
-        "EnchantTable" => "minecraft:enchanting_table",
-        "RecordPlayer" => "minecraft:jukebox",
-        "Control" => "minecraft:command_block",
-        "Piston" => "minecraft:piston",
-        "Comparator" => "minecraft:comparator",
-        "Airportal" => "minecraft:end_portal",
-        "Structure" => "minecraft:structure_block",
-        "Hopper" => "minecraft:hopper",
-        "Trap" => "minecraft:dispenser",
-        "Dropper" => "minecraft:dropper",
-        "Banner" => "minecraft:banner",
-        "Sign" => "minecraft:sign",
-        "Cauldron" => "minecraft:brewing_stand",
-        "Beacon" => "minecraft:beacon",
-        "Skull" => "minecraft:skull",
-        "MobSpawner" => "minecraft:mob_spawner",
-        "Furnace"=>"minecraft:furnace",
-        "DLDetector"=>"minecraft:daylight_detector",
-        id => id,
-    }
-    .to_owned();
-    let slots = match id.as_str() {
+    // Bed carriers can be created/removed by the position-bound palette fix
+    // before this pass (v1125/v4885). Never relax identity checks for other types.
+    let bed = source_id == "minecraft:bed" && (target < 1125 || target >= 4885 || source >= 4885);
+    let id = if bed { "minecraft:bed" } else {
+        let Some(id) = report.input_id(Kind::BlockEntity, source, source_id)? else {
+            report.issues.push(format!("{path}/{source_id}：来源方块实体注册表没有该保存ID"));
+            return Ok(());
+        };
+        id
+    };
+    let output_id = if bed { "minecraft:bed" } else {
+        let Some(id) = report.output_id(Kind::BlockEntity, target, id)? else {
+            report.issues.push(format!("{path}/{id}：目标注册表没有对应方块实体，保留原数据"));
+            return Ok(());
+        };
+        id
+    };
+    let slots = match id {
         "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" | "minecraft:shulker_box" => 27,
         "minecraft:hopper" => 5,
         "minecraft:dispenser" | "minecraft:dropper" | "minecraft:crafter" => 9,
         "minecraft:shelf" => 3,
         "minecraft:furnace" | "minecraft:smoker" | "minecraft:blast_furnace"=>3,
         _ => {
-            if let Err(error) = migrate_decorative(fields, &id, source, target, report) {
+            if let Err(error) = migrate_decorative(fields, id, source, target, report) {
                 report.issues.push(format!("{path}/{id}：{error}"));
+            } else {
+                fields.insert("id".into(), Value::String(output_id.into()));
             }
             return Ok(());
         }
@@ -521,21 +561,8 @@ fn migrate_container(
         report.issues.push(format!("{path}/lock：{error}"));
     }
     let hopper = id == "minecraft:hopper";
-    let furnace=["minecraft:furnace","minecraft:smoker","minecraft:blast_furnace"].contains(&id.as_str());
+    let furnace=["minecraft:furnace","minecraft:smoker","minecraft:blast_furnace"].contains(&id);
     if furnace { migrate_furnace(fields,source,target)?; }
-    let target_registry = crate::block_database::database()?.registry_by_data_version(target)?;
-    if !target_registry.blocks.contains_key(&id)
-        && !(id == "minecraft:shelf" && target_registry.blocks.keys().any(|id| id.ends_with("_shelf")))
-        && !(id == "minecraft:shulker_box"
-            && target_registry
-                .blocks
-                .keys()
-                .any(|id| id.ends_with("_shulker_box")))
-    {
-        report
-            .issues
-            .push(format!("{path}/{id}：目标没有对应方块实体"));
-    }
     let mut keys: Vec<_> = fields.keys().cloned().collect();
     keys.sort();
     for key in keys {
@@ -605,18 +632,6 @@ fn migrate_container(
                 .push(format!("{path}/{key}：此方块实体字段未覆盖")),
         }
     }
-    let output_id = if target < 704 {
-        match id.as_str() {
-            "minecraft:chest" | "minecraft:trapped_chest" => "Chest",
-            "minecraft:hopper" => "Hopper",
-            "minecraft:dispenser" => "Trap",
-            "minecraft:dropper" => "Dropper",
-            "minecraft:furnace"=>"Furnace",
-            id => id,
-        }
-    } else {
-        id.as_str()
-    };
     fields.insert("id".into(), Value::String(output_id.into()));
     for coordinate in ["x", "y", "z"] {
         if !fields.contains_key(coordinate) {
@@ -747,11 +762,11 @@ fn migrate_stack(
             raw_id.clone()
         }
     };
-    if id == "minecraft:air" || (source >= 1519 && !target_has_item(source, raw_id)?) {
+    if id == "minecraft:air" || (source >= 1519 && !report.has_item(source, raw_id)?) {
         report
             .issues
             .push(format!("{path}/id={id}：来源真实物品注册表未验证"));
-    } else if target >= 1519 && !target_has_item(target, &id)? {
+    } else if target >= 1519 && !report.has_item(target, &id)? {
         report
             .issues
             .push(format!("{path}/id={id}：目标版本没有该真实物品"));
@@ -1050,7 +1065,7 @@ fn head_palette_block(registry: &crate::block_database::Registry, name: &str, wa
 /// yaw live in each Skull block entity. Split shared indices before generic
 /// registry conversion; inverse writes the same per-position metadata back.
 pub(crate) fn migrate_head_palette(region: &mut Value, source: i32, target: i32) -> Result<()> {
-    use crate::nbt::{BigEndianLongArray, Vec3i, bits_for_palette, for_each_palette_index, pack_palette_indices, region_volume};
+    use crate::nbt::{Vec3i, bits_for_palette, for_each_palette_index, pack_palette_indices, region_volume};
     if (source < 1519) == (target < 1519) { return Ok(()) }
     let fields = object(region)?;
     let Some(Value::List(original_palette)) = fields.get("BlockStatePalette") else { return Ok(()) };
@@ -1066,7 +1081,7 @@ pub(crate) fn migrate_head_palette(region: &mut Value, source: i32, target: i32)
     let volume = region_volume(&size)?;
     let Some(Value::LongArray(packed)) = fields.get("BlockStates") else { bail!("头颅迁移缺少方块索引") };
     let mut indices = Vec::with_capacity(volume);
-    for_each_palette_index(&BigEndianLongArray::new(packed.iter().copied().collect()), volume, bits_for_palette(original_palette.len()), original_palette.len(), |_, index| { indices.push(index); Ok(()) })?;
+    for_each_palette_index(packed, volume, bits_for_palette(original_palette.len()), original_palette.len(), |_, index| { indices.push(index); Ok(()) })?;
     let mut palette = original_palette.clone();
     let mut tiles = match fields.get("TileEntities") { Some(Value::List(tiles)) => tiles.clone(), None => Vec::new(), _ => bail!("头颅TileEntities不是List") };
     let registry = crate::block_database::database()?.registry_by_data_version(target)?;
@@ -1154,7 +1169,7 @@ pub(crate) fn migrate_head_palette(region: &mut Value, source: i32, target: i32)
 // BedBlockEntity color (v1125) is per position until flattening, while the
 // legacy block registry contains only numeric block26 / red_bed states.
 fn migrate_bed_palette(region:&mut Value,source:i32,target:i32)->Result<()> {
-    use crate::nbt::{BigEndianLongArray,Vec3i,bits_for_palette,for_each_palette_index,pack_palette_indices,region_volume};
+    use crate::nbt::{Vec3i,bits_for_palette,for_each_palette_index,pack_palette_indices,region_volume};
     if (source<1519)==(target<1519){return Ok(())}
     let fields=object(region)?;
     let Some(Value::List(original_palette))=fields.get("BlockStatePalette")else{return Ok(())};
@@ -1165,7 +1180,7 @@ fn migrate_bed_palette(region:&mut Value,source:i32,target:i32)->Result<()> {
     let(width,height,length)=(size.x.unsigned_abs()as usize,size.y.unsigned_abs()as usize,size.z.unsigned_abs()as usize);
     let Some(Value::LongArray(packed))=fields.get("BlockStates")else{bail!("床颜色迁移缺少方块索引")};
     let mut indices=Vec::with_capacity(region_volume(&size)?);
-    for_each_palette_index(&BigEndianLongArray::new(packed.iter().copied().collect()),region_volume(&size)?,bits_for_palette(original_palette.len()),original_palette.len(),|_,index|{indices.push(index);Ok(())})?;
+    for_each_palette_index(packed,region_volume(&size)?,bits_for_palette(original_palette.len()),original_palette.len(),|_,index|{indices.push(index);Ok(())})?;
     let mut palette=original_palette.clone();
     let mut tiles=match fields.get("TileEntities"){Some(Value::List(tiles))=>tiles.clone(),None=>Vec::new(),_=>bail!("床颜色迁移TileEntities不是List")};
     if source<1519 {
@@ -1203,7 +1218,7 @@ fn migrate_bed_palette(region:&mut Value,source:i32,target:i32)->Result<()> {
 
 pub(crate) fn migrate_banner_palette(region: &mut Value, source: i32, target: i32) -> Result<()> {
     migrate_bed_palette(region,source,target)?;
-    use crate::nbt::{BigEndianLongArray, Vec3i, bits_for_palette, for_each_palette_index, pack_palette_indices, region_volume};
+    use crate::nbt::{Vec3i, bits_for_palette, for_each_palette_index, pack_palette_indices, region_volume};
     if (source < 1519) == (target < 1519) { return Ok(()) }
     let fields = object(region)?;
     let Some(Value::List(tiles)) = fields.get("TileEntities") else { return Ok(()) };
@@ -1216,7 +1231,7 @@ pub(crate) fn migrate_banner_palette(region: &mut Value, source: i32, target: i3
     let Some(Value::List(palette)) = fields.get("BlockStatePalette") else { bail!("缺少调色板") };
     let Some(Value::LongArray(packed)) = fields.get("BlockStates") else { bail!("缺少方块索引") };
     let mut indices = Vec::with_capacity(volume);
-    for_each_palette_index(&BigEndianLongArray::new(packed.iter().copied().collect()), volume, bits_for_palette(palette.len()), palette.len(), |_, index| { indices.push(index); Ok(()) })?;
+    for_each_palette_index(packed, volume, bits_for_palette(palette.len()), palette.len(), |_, index| { indices.push(index); Ok(()) })?;
     let mut palette = palette.clone();
     let mut tiles = tiles.clone();
     for tile in &mut tiles {
@@ -1873,6 +1888,7 @@ fn migrate_decorative(
         return trial_vault::migrate(fields, id, source, target, report);
     }
     let extra: &[&str] = match id {
+        "minecraft:test_instance_block" => test_instance::migrate(fields, source, target)?,
         "minecraft:banner" => &["patterns", "Patterns", "Base"],
         "minecraft:sign" | "minecraft:hanging_sign" => {
             &["front_text", "back_text", "is_waxed", "allow_op_features", "Text1", "Text2", "Text3", "Text4", "FilteredText1", "FilteredText2", "FilteredText3", "FilteredText4", "Color", "GlowingText"]
@@ -1906,11 +1922,9 @@ fn migrate_decorative(
         "minecraft:bed" => &["color"],
         "minecraft:beehive" => &["Bees", "bees", "FlowerPos", "flower_pos"],
         "minecraft:mob_spawner"=>&["EntityId","SpawnData","SpawnPotentials","Delay","MinSpawnDelay","MaxSpawnDelay","SpawnCount","MaxNearbyEntities","RequiredPlayerRange","SpawnRange"],
-        _ => bail!("转换器尚未实现该类方块实体迁移，原数据保留"),
+        "minecraft:jukebox" => &["RecordItem", "Record", "IsPlaying", "TickCount", "RecordStartTick", "ticks_since_song_started"],
+        _ => block_entity_families::fields(id), // No permission to pass unexamined tags.
     };
-    if (id == "minecraft:hanging_sign" && target < 3437) || (id == "minecraft:decorated_pot" && target < 3437) {
-        bail!("目标版本没有{id}对应的方块实体，原文件保留")
-    }
     for key in fields.keys() {
         if !["id", "x", "y", "z", "CustomName", "components"].contains(&key.as_str())
             && !extra.contains(&key.as_str())
@@ -1931,6 +1945,7 @@ fn migrate_decorative(
         migrate_components(components, source, target, report)?;
     }
     migrate_static_block_entity(fields, id, source, target, report)?;
+    block_entity_families::migrate(fields, id, source, target)?;
     match id {
         "minecraft:bed" => {
             if let Some(color)=fields.get("color"){let color=match color{Value::Byte(n)=>i32::from(*n),Value::Short(n)=>i32::from(*n),Value::Int(n)=>*n,_=>bail!("床color类型无效")};if !(0..=15).contains(&color){bail!("床color超出染料注册表")};if target<1125{if color!=14{bail!("目标1.12以前只有红床")};fields.remove("color");}else if target>=1519{bail!("床颜色必须先按位置迁移到实际方块调色板")}}
@@ -2003,8 +2018,7 @@ fn migrate_decorative(
                     )?;
                 }
             }
-            // Both target getInt codecs accept Short/Byte numerics; keep the
-            // value and representation rather than reset brew state.
+            // block_entity_families already normalized timer widths and target slot availability.
         }
         "minecraft:lectern" => {
             if let Some(book) = fields.get_mut("Book") {
@@ -2016,16 +2030,13 @@ fn migrate_decorative(
             if !matches!(fields.get("last_interacted_slot"), None | Some(Value::Int(-1..=5))) { bail!("雕纹书架最近交互槽位无效") }
             if let Some(Value::List(items)) = fields.get_mut("Items") { let mut seen = HashSet::new(); for item in items { migrate_stack(item, source, target, 6, &mut seen, "雕纹书架", report)?; } }
         }
+        "minecraft:jukebox" => entity_families::migrate_jukebox(fields, source, target, report)?,
         "minecraft:beehive" => migrate_bees(fields, source, target, report)?,
         "minecraft:mob_spawner"=>migrate_spawner(fields,source,target,report)?,
         "minecraft:beacon"=>{for(old,new)in[("Primary","primary_effect"),("Secondary","secondary_effect")]{let from=if source<3568{old}else{new};let to=if target<3568{old}else{new};if let Some(value)=fields.remove(from){if source<3568&&matches!(value,Value::Int(0)|Value::Byte(0)){continue};let value=effect_id(&value,source,target)?;fields.insert(to.into(),match value{Value::Byte(value)=>Value::Int(i32::from(value)),value=>value});}}}
 
         _ => {}
     }
-    let output_id = if target < 704 {
-        match id { "minecraft:banner" => "Banner", "minecraft:sign" => "Sign", "minecraft:brewing_stand" => "Cauldron", "minecraft:beacon" => "Beacon", "minecraft:skull" => "Skull", "minecraft:mob_spawner"=>"MobSpawner", "minecraft:daylight_detector"=>"DLDetector", "minecraft:ender_chest"=>"EnderChest", "minecraft:enchanting_table"=>"EnchantTable", "minecraft:jukebox"=>"RecordPlayer", "minecraft:command_block"=>"Control", "minecraft:piston"=>"Piston", "minecraft:comparator"=>"Comparator", "minecraft:end_portal"=>"Airportal", "minecraft:structure_block"=>"Structure", _ => id }
-    } else { id };
-    fields.insert("id".into(), Value::String(output_id.into()));
     report.changes.push(format!("{id}：保留内容并迁移目标格式"));
     Ok(())
 }
@@ -2271,16 +2282,6 @@ fn migrate_villager(fields: &mut Fields, source: i32, target: i32, report: &mut 
             for key in ["buy", "buyB", "sell"] { if let Some(item) = recipe.get_mut(key) { item_payload(item, source, target, report)?; } }
             if target < 1918 { for key in ["specialPrice", "demand", "priceMultiplier", "xp"] { if let Some(value) = recipe.remove(key) { if !matches!(value, Value::Int(0) | Value::Float(0.0)) { bail!("目标旧版不能保存村民交易{key}数据") } } } }
         }}
-    }
-    if let Some(Value::Compound(brain)) = fields.get_mut("Brain") {
-        if let Some(Value::Compound(memories)) = brain.get_mut("memories") {
-            for memory in memories.values_mut() {
-                if source < 2505 && target >= 2505 { *memory = Value::Compound([("value".into(), memory.clone())].into()); }
-                else if source >= 2505 && target < 2505 { let map = object(memory)?; if map.keys().any(|key| key != "value") { bail!("目标旧版不能保存村民记忆过期时间") } *memory = map.remove("value").context("村民记忆缺少value")?; }
-            }
-            if target < 1918 && !memories.is_empty() { bail!("目标旧版没有村民Brain记忆") }
-        }
-        if target < 1918 { fields.remove("Brain"); }
     }
     if let Some(Value::List(gossips)) = fields.get_mut("Gossips") {
         if target < 1918 && !gossips.is_empty() { bail!("目标旧版没有村民流言与信誉记录") }
@@ -2534,25 +2535,16 @@ fn migrate_entity_payload(
     let Some(Value::String(id)) = fields.get("id") else {
         bail!("实体名称缺失")
     };
-    let mut id = match id.as_str() {
-        "ArmorStand" => "minecraft:armor_stand", "ItemFrame" => "minecraft:item_frame", "Painting" => "minecraft:painting", "Boat" => "minecraft:boat", "Item" => "minecraft:item", "MinecartRideable" => "minecraft:minecart", "MinecartChest" => "minecraft:chest_minecart", "MinecartHopper" => "minecraft:hopper_minecart", "Villager" => "minecraft:villager", "Chicken" => "minecraft:chicken", "Cow" => "minecraft:cow", "Pig" => "minecraft:pig", "Sheep" => "minecraft:sheep", "Rabbit" => "minecraft:rabbit", "Horse" | "EntityHorse" => "minecraft:horse", "Zombie" => "minecraft:zombie", "Skeleton" => "minecraft:skeleton", "Creeper"=>"minecraft:creeper", "Wolf"=>"minecraft:wolf", "Donkey"=>"minecraft:donkey", "Mule"=>"minecraft:mule", "Llama"=>"minecraft:llama", "ZombieHorse"=>"minecraft:zombie_horse", "SkeletonHorse"=>"minecraft:skeleton_horse", "Ozelot"|"Ocelot"=>"minecraft:ocelot", "Spider"=>"minecraft:spider","CaveSpider"=>"minecraft:cave_spider","Silverfish"=>"minecraft:silverfish","Slime"=>"minecraft:slime","Husk"=>"minecraft:husk","Stray"=>"minecraft:stray", other => other,
-    }.to_owned();
+    let mut id = report.input_id(Kind::Entity, source, id)?
+        .with_context(|| format!("来源实体注册表没有保存ID {id}"))?.to_owned();
     if id=="minecraft:horse"&&source<703{if let Some(kind)=fields.remove("Type"){let Value::Int(kind)=kind else{bail!("旧EntityHorse.Type不是Int")};id=match kind{0=>"minecraft:horse",1=>"minecraft:donkey",2=>"minecraft:mule",3=>"minecraft:zombie_horse",4=>"minecraft:skeleton_horse",_=>bail!("旧EntityHorse.Type没有原版映射")}.into();}}
     if id=="minecraft:ocelot"&&source<1904{if matches!(fields.get("CatType"),Some(Value::Int(1..=3))){id="minecraft:cat".into();}}
     fields.insert("id".into(), Value::String(id.clone()));
     migrate_entity_uuid(fields, source, target)?;
     migrate_entity_attributes(fields, source, target)?;
-    let boat = id == "minecraft:boat"
-        || [
-            "oak", "spruce", "birch", "jungle", "acacia", "cherry", "dark_oak", "mangrove",
-            "bamboo",
-        ]
-        .iter()
-        .any(|wood| {
-            id == format!("minecraft:{wood}_boat") || id == format!("minecraft:{wood}_raft")
-        });
-    let extra: &[&str] = if boat {
-        &["Type"]
+    let boat = entity_families::boat_kind(&id);
+    let extra: &[&str] = if let Some((chest, _)) = boat {
+        if chest { &["Type", "Items", "LootTable", "LootTableSeed"] } else { &["Type"] }
     } else {
         match id.as_str() {
             "minecraft:armor_stand" => &[
@@ -2607,7 +2599,7 @@ fn migrate_entity_payload(
             "minecraft:pufferfish" => &["PuffState", "FromBucket"],
             "minecraft:frog" => &["variant", "Age", "ForcedAge", "InLove"],
             "minecraft:parrot" => &["Variant", "Age", "ForcedAge", "InLove", "Owner", "OwnerUUID", "Sitting"],
-            _ => bail!("实体 {id} 的转换分支尚未实现"),
+            _ => &[], // Every registered entity uses the same base codecs.
         }
     };
     const COMMON: &[&str] = &[
@@ -2626,6 +2618,7 @@ fn migrate_entity_payload(
         "fall_distance",
         "CustomName",
         "CustomNameVisible",
+        "TicksFrozen", "HasVisualFire",
         "Tags",
         "Silent",
         "NoGravity",
@@ -2655,19 +2648,21 @@ fn migrate_entity_payload(
         "NoAI","DeathLootTable","DeathLootTableSeed","Leash","leash","AgeLocked","home_pos","home_radius","current_explosion_impact_pos","current_impulse_context_reset_grace_time",
     ];
     for key in fields.keys() {
-        if !COMMON.contains(&key.as_str()) && !extra.contains(&key.as_str()) {
+        if crate::version_entity_stable::handles(&id, key) {
+            crate::version_entity_stable::validate(&id, key, &fields[key], source, target)?;
+        } else if !COMMON.contains(&key.as_str()) && !extra.contains(&key.as_str()) && !entity_families::handles(&id, key) {
             bail!("实体 {id} 字段 {key} 的迁移尚未实现")
         }
     }
+    entity_families::migrate(fields, &id, source, target, report)?;
     migrate_minecart(fields, &id, source, target, report)?;
     migrate_mob_common(fields,source,target)?;
     if let Some(name) = fields.get_mut("CustomName") {
         *name = migrate_component(name, source, target)?;
     }
-    for (entity,item) in [("minecraft:glow_item_frame","minecraft:glow_item_frame"),("minecraft:frog","minecraft:frog_spawn_egg"),("minecraft:tropical_fish","minecraft:tropical_fish_spawn_egg"),("minecraft:pufferfish","minecraft:pufferfish_spawn_egg")] {
-        if id==entity { let registry=crate::block_database::database()?.registry_by_data_version(target)?;
-            if !registry.items.contains(item) && !(target<1519&&registry.legacy_items.values().any(|value|value==item)) { bail!("目标真实注册表没有实体{id}的对应物品{item}") }
-        }
+    if boat.is_none() && !matches!(id.as_str(), "minecraft:cat"|"minecraft:ocelot"|"minecraft:horse"|"minecraft:donkey"|"minecraft:mule"|"minecraft:skeleton_horse"|"minecraft:zombie_horse"|"minecraft:potion"|"minecraft:splash_potion"|"minecraft:lingering_potion")
+        && report.output_id(Kind::Entity, target, &id)?.is_none() {
+        bail!("目标注册表没有实体{id}，保留原数据")
     }
     if id=="minecraft:parrot"&&target<1139{bail!("目标1.12以前没有鹦鹉实体")}
     if source<4314&&target>=4314&&["SleepingX","SleepingY","SleepingZ"].iter().any(|key|fields.contains_key(*key)) {
@@ -2683,16 +2678,17 @@ fn migrate_entity_payload(
     let effect_from = if source < 3568 { "ActiveEffects" } else { "active_effects" };
     let effect_to = if target < 3568 { "ActiveEffects" } else { "active_effects" };
     if let Some(mut effects) = fields.remove(effect_from) { migrate_effects(&mut effects, source, target)?; fields.insert(effect_to.into(),effects); }
-    if source < 109 && target >=109 {
+    if type_registry::is_living(&id) && source < 109 && target >=109 {
         if let Some(value) = fields.remove("HealF").or_else(||fields.remove("Health")) {
             let health=match value{Value::Short(value)=>f32::from(value),Value::Float(value)=>value,_=>bail!("旧Health类型无效")};fields.insert("Health".into(),Value::Float(health));
         }
-    }else if source>=109&&target<109{if let Some(value)=fields.remove("Health"){let Value::Float(health)=value else{bail!("Health不是Float")};fields.insert("HealF".into(),Value::Float(health));}}
+    }else if type_registry::is_living(&id) && source>=109&&target<109{if let Some(value)=fields.remove("Health"){let Value::Float(health)=value else{bail!("Health不是Float")};fields.insert("HealF".into(),Value::Float(health));}}
     migrate_extra_species(fields,&id,source,target,report)?;
     if ["minecraft:pig","minecraft:cow","minecraft:chicken"].contains(&id.as_str()) && target <4300 {
         if let Some(value)=fields.remove("variant"){if value!=Value::String("minecraft:temperate".into()){bail!("目标旧版不能保存{id}的温度品种外观")}}
     }
-    if let Some(Value::List(passengers)) = fields.get_mut("Passengers") {
+    if let Some(value) = fields.get_mut("Passengers") {
+        let Value::List(passengers) = value else { bail!("Passengers不是实体列表") };
         for passenger in passengers { migrate_entity_payload(passenger, source, target, report)?; }
     }
     if source < 4303 && target >= 4303 {
@@ -2713,18 +2709,11 @@ fn migrate_entity_payload(
             fields.insert("FallDistance".into(), Value::Float(value as f32));
         }
     }
-    if [
-        "minecraft:armor_stand",
-        "minecraft:tropical_fish",
-        "minecraft:pufferfish",
-        "minecraft:frog",
-        "minecraft:parrot",
-        "minecraft:bee", "minecraft:villager", "minecraft:chicken", "minecraft:pig", "minecraft:cow", "minecraft:sheep", "minecraft:rabbit", "minecraft:horse", "minecraft:zombie", "minecraft:skeleton",
-        "minecraft:creeper","minecraft:wolf","minecraft:cat","minecraft:ocelot","minecraft:fox","minecraft:donkey","minecraft:mule","minecraft:llama","minecraft:zombie_horse","minecraft:skeleton_horse",
-        "minecraft:spider","minecraft:cave_spider","minecraft:silverfish","minecraft:slime","minecraft:husk","minecraft:stray","minecraft:bogged","minecraft:breeze",
-    ]
-    .contains(&id.as_str())
-    {
+    // The presence of a real equipment carrier drives shared migration;
+    // special saddle/body slots still use their own species-aware codecs.
+    if (type_registry::is_living(&id) && source >= 4301 && target < 4301)
+        || fields.keys().any(|key| matches!(key.as_str(), "ArmorItems" | "HandItems" | "equipment" | "Equipment" | "DropChances" | "drop_chances" | "ArmorDropChances" | "HandDropChances"))
+        || matches!(id.as_str(), "minecraft:pig" | "minecraft:horse" | "minecraft:donkey" | "minecraft:mule" | "minecraft:zombie_horse" | "minecraft:skeleton_horse" | "minecraft:llama" | "minecraft:wolf") {
         migrate_equipment_100(fields, source, target, true)?;
         migrate_special_equipment(fields, &id, source, target, true, report)?;
         migrate_equipment(fields, source, target, report)?;
@@ -2768,41 +2757,8 @@ fn migrate_entity_payload(
             item_payload(item, source, target, report)?;
         }
     }
-    if boat {
-        let wood = if source < 4067 { match fields.get("Type") { Some(Value::String(wood))=>wood.as_str(),None=>"oak",_=>bail!("船木材类型无效") } }
-            else { id.strip_prefix("minecraft:").and_then(|id|id.strip_suffix("_boat").or_else(||id.strip_suffix("_raft"))).context("船木材类型无效")? };
-        let item=if wood=="oak"&&target<1519{"minecraft:boat".into()}else{format!("minecraft:{wood}_{}",if wood=="bamboo"{"raft"}else{"boat"})};
-        if !target_has_item(target,&item)? { bail!("目标真实注册表没有{wood}船，不能保持木材外观") }
-        if source < 4067 && target >= 4067 {
-            let wood = match fields.remove("Type") {
-                Some(Value::String(wood)) => wood,
-                None => "oak".into(),
-                _ => bail!("船的木材类型格式无效"),
-            };
-            if ![
-                "oak", "spruce", "birch", "jungle", "acacia", "cherry", "dark_oak", "mangrove",
-                "bamboo",
-            ]
-            .contains(&wood.as_str())
-            {
-                bail!("船的木材类型不能无损迁移")
-            }
-            let suffix = if wood == "bamboo" { "raft" } else { "boat" };
-            fields.insert(
-                "id".into(),
-                Value::String(format!("minecraft:{wood}_{suffix}")),
-            );
-        } else if source >= 4067 && target < 4067 {
-            let wood = id
-                .strip_prefix("minecraft:")
-                .and_then(|id| {
-                    id.strip_suffix("_boat")
-                        .or_else(|| id.strip_suffix("_raft"))
-                })
-                .context("船的目标木材类型无法降级")?;
-            fields.insert("id".into(), Value::String("minecraft:boat".into()));
-            fields.insert("Type".into(), Value::String(wood.into()));
-        }
+    if let Some((chest, wood)) = boat {
+        entity_families::migrate_boat(fields, chest, wood, source, target, report)?;
     }
     if id == "minecraft:item" { if let Some(item) = fields.get_mut("Item") { item_payload(item, source, target, report)?; } }
     if id == "minecraft:painting" && (source < 1460) != (target < 1460) {
@@ -2820,13 +2776,10 @@ fn migrate_entity_payload(
         }
     }
     if target<703{let kind=match fields.get("id"){Some(Value::String(id))=>match id.as_str(){"minecraft:donkey"=>Some(1),"minecraft:mule"=>Some(2),"minecraft:zombie_horse"=>Some(3),"minecraft:skeleton_horse"=>Some(4),_=>None},_=>None};if let Some(kind)=kind{fields.insert("id".into(),Value::String("minecraft:horse".into()));fields.insert("Type".into(),Value::Int(kind));}}
-    if target < 705 {
-        // BoatSplit may already have changed a wood-specific ID to boat.
-        // Encode the actual migrated identity, not the immutable source ID.
-        let canonical_id=match fields.get("id"){Some(Value::String(id))=>id.as_str(),_=>bail!("目标实体ID缺失")};
-        let old = match canonical_id { "minecraft:armor_stand" => "ArmorStand", "minecraft:item_frame" => "ItemFrame", "minecraft:painting" => "Painting", "minecraft:boat" => "Boat", "minecraft:item" => "Item", "minecraft:minecart" => "MinecartRideable", "minecraft:chest_minecart" => "MinecartChest", "minecraft:hopper_minecart" => "MinecartHopper", "minecraft:villager"=>"Villager", "minecraft:chicken"=>"Chicken", "minecraft:pig"=>"Pig", "minecraft:cow"=>"Cow", "minecraft:sheep"=>"Sheep", "minecraft:rabbit"=>"Rabbit", "minecraft:horse"=>"EntityHorse", "minecraft:zombie"=>"Zombie", "minecraft:skeleton"=>"Skeleton", "minecraft:creeper"=>"Creeper","minecraft:wolf"=>"Wolf","minecraft:ocelot"=>"Ozelot","minecraft:donkey"=>"Donkey","minecraft:mule"=>"Mule","minecraft:zombie_horse"=>"ZombieHorse","minecraft:skeleton_horse"=>"SkeletonHorse","minecraft:spider"=>"Spider","minecraft:cave_spider"=>"CaveSpider","minecraft:silverfish"=>"Silverfish","minecraft:slime"=>"Slime","minecraft:husk"=>"Husk","minecraft:stray"=>"Stray", _ => bail!("目标旧版没有该实体ID {id}") };
-        fields.insert("id".into(), Value::String(old.into()));
-    }
+    let Some(Value::String(canonical)) = fields.get("id") else { bail!("目标实体ID缺失") };
+    let output_id = report.output_id(Kind::Entity, target, canonical)?
+        .with_context(|| format!("目标注册表没有对应实体 {canonical}，保留原数据"))?;
+    fields.insert("id".into(), Value::String(output_id.into()));
     report
         .changes
         .push(format!("{id}：保留实体与物品并迁移目标格式"));
@@ -3117,6 +3070,158 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    #[test]
+    fn registry_adjacent_release_identity_matrix_not_payload_equivalence() {
+        // An identity smoke, not a claim that an empty tag verifies a mob's
+        // appearance, a memory graph, an inventory, or runtime placement.
+        let data: serde_json::Value=serde_json::from_str(include_str!("../assets/version_entity_registry.json")).unwrap();
+        let mut versions:Vec<i32>=data["versions"].as_array().unwrap().iter().map(|r|r[0].as_i64().unwrap() as i32).collect();
+        versions.sort_unstable();versions.dedup();
+        let mut checked=[0usize;2];
+        let mut deferred=std::collections::BTreeMap::<(String,String),usize>::new();
+        let mut wrong=Vec::new();
+        for (column,kind,section) in [(0,Kind::Entity,"entity"),(1,Kind::BlockEntity,"block_entity")] {
+            let rows=data[section].as_array().unwrap();
+            for pair in versions.windows(2) {
+                for (source,target) in [(pair[0],pair[1]),(pair[1],pair[0])] {
+                    for entry in rows {
+                        let raw=entry[0].as_str().unwrap();let canonical=entry[1].as_str().unwrap();
+                        if !type_registry::contains(kind,source,raw).unwrap() || type_registry::encode(kind,target,canonical).unwrap().is_none() { continue }
+                        checked[column]+=1;
+                        let mut report=PayloadMigrationReport{registry_endpoints:Some((source,target)),..Default::default()};
+                        let mut val=map(&[("id",Value::String(raw.into()))]);
+                        let result=if column==0 { migrate_entity(&mut val,source,target,&mut report) }
+                            else { for axis in ["x","y","z"] { fields(&mut val).insert(axis.into(),Value::Int(0)); }
+                                migrate_container(&mut val,source,target,"identity",&mut report) };
+                        if let Err(e)=result { report.issues.push(e.to_string()); }
+                        for diagnostic in report.issues {
+                            if diagnostic.contains("分支尚未实现") || diagnostic.contains("该类方块实体迁移") || diagnostic.contains("来源实体注册表没有")
+                                || diagnostic.contains("来源方块实体注册表没有") || diagnostic.contains("对应物品") || diagnostic.contains("对应的方块实体") || diagnostic.contains("目标注册表没有实体") || diagnostic.contains("目标注册表没有对应方块实体") {
+                                wrong.push(format!("{source}->{target} {raw}: {diagnostic}"));
+                            }
+                            *deferred.entry((canonical.into(),diagnostic)).or_default()+=1;
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("adjacent identity-only checks: entity={} block_entity={} deferred reasons={:?}",checked[0],checked[1],deferred);
+        assert!(checked[0]>6000 && checked[1]>2000,"{checked:?}");
+        assert!(wrong.is_empty(),"registered identities rejected by class/item proxy: {wrong:?}");
+    }
+
+    #[test]
+    fn registry_falling_block_and_tnt_roundtrip_real_carriers() {
+        // TileEntityData merges into the landed chest; it legitimately omits
+        // both the block entity id and its placement coordinates.
+        let mut value=read_snbt(r#"{Entities:[{id:"minecraft:falling_block",BlockState:{Name:"minecraft:chest",Properties:{facing:"north",type:"single",waterlogged:"false"}},TileEntityData:{Items:[{Slot:3b,id:"minecraft:stone",Count:9b}]},Time:8,DropItem:1b,HurtEntities:0b,CancelDrop:1b},{id:"minecraft:tnt",Fuse:53s}]}"#).unwrap();
+        let old=value.clone();let report=migrate(&mut value,3465,5023).unwrap(); assert!(report.issues.is_empty(),"{:?}",report.issues);
+        let Value::List(entities)=&fields(&mut value)["Entities"] else {panic!()};
+        let Value::Compound(fall)=&entities[0] else {panic!()};
+        assert_eq!(fall["BlockState"],read_snbt(r#"{id:"minecraft:chest",properties:{facing:"north",type:"single",waterlogged:"false"}}"#).unwrap());
+        assert_eq!(fall["TileEntityData"],read_snbt(r#"{Items:[{Slot:3b,id:"minecraft:stone",count:9}]}"#).unwrap());
+        assert_eq!(entities[1],read_snbt(r#"{id:"minecraft:tnt",fuse:53s,block_state:{id:"minecraft:tnt"}}"#).unwrap());
+        let report=migrate(&mut value,5023,3465).unwrap();assert!(report.issues.is_empty(),"{:?}",report.issues);assert_eq!(value,old);
+    }
+
+    #[test]
+    fn registry_falling_legacy_state_and_tnt_fuse_bounds_preserve_data() {
+        let mut value=read_snbt(r#"{Entities:[{id:"FallingSand",Tile:12b,Data:1b,Time:-1b},{id:"PrimedTnt",Fuse:78b}]}"#).unwrap();
+        let report=migrate(&mut value,0,5023).unwrap();assert!(report.issues.is_empty(),"{:?}",report.issues);
+        let Value::List(entries)=&fields(&mut value)["Entities"] else {panic!()};
+        assert_eq!(entries[0],read_snbt(r#"{id:"minecraft:falling_block",BlockState:{id:"minecraft:red_sand"},Time:255}"#).unwrap());
+        assert_eq!(entries[1],read_snbt(r#"{id:"minecraft:tnt",fuse:78s,block_state:{id:"minecraft:tnt"}}"#).unwrap());
+        let report=migrate(&mut value,5023,0).unwrap();assert!(report.issues.is_empty(),"{:?}",report.issues);
+        let Value::List(entries)=&fields(&mut value)["Entities"] else {panic!()};
+        assert_eq!(entries[0],read_snbt(r#"{id:"FallingSand",Block:"minecraft:sand",Data:1b,Time:-1b}"#).unwrap());
+        assert_eq!(entries[1],read_snbt(r#"{id:"PrimedTnt",Fuse:78b}"#).unwrap());
+        for (target,raw,why) in [
+            (3465,r#"{id:"minecraft:tnt",fuse:20s,block_state:{id:"minecraft:stone"}}"#,"自定义block_state"),
+            (3465,r#"{id:"minecraft:tnt",explosion_power:8f}"#,"爆炸威力"),
+            (3465,r#"{id:"minecraft:tnt",owner:[I;1,2,3,4]}"#,"owner"),
+            (0,r#"{id:"minecraft:tnt",fuse:150s}"#,"Byte范围"),
+            (3465,r#"{id:"minecraft:falling_block",BlockState:{id:"minecraft:sand"},TileEntityData:{Items:[]}}"#,"载体"),
+            (3465,r#"{id:"minecraft:falling_block",BlockState:{id:"minecraft:chest"},TileEntityData:{id:"minecraft:hopper"}}"#,"实际载体"),
+        ] {
+            let mut r=map(&[("Entities",Value::List(vec![read_snbt(raw).unwrap()]))]);let orig=r.clone();
+            let report=migrate(&mut r,5023,target).unwrap();
+            assert!(report.issues.iter().any(|s|s.contains(why)),"{raw}: {:?}",report.issues);assert_eq!(r,orig);
+        }
+    }
+
+    #[test]
+    fn registry_snow_golem_keeps_pumpkin_and_migrates_inherited_nbt() {
+        // Real 1.20.1 SnowGolem.saveAdditional stores "Pumpkin" as a boolean;
+        // a sheared golem must remain sheared even though 26.3 defaults to true.
+        for pumpkin in [0, 1] {
+            let mut snow = read_snbt(r#"{id:"minecraft:snow_golem",Pumpkin:1b,Health:4f,Pos:[1d,2d,3d],Motion:[0d,0d,0d],Rotation:[0f,0f],OnGround:1b,Brain:{memories:{}},HurtByTimestamp:0,HasVisualFire:1b,TicksFrozen:3,FallDistance:2.5f,Attributes:[{Name:"minecraft:generic.max_health",Base:4d}],ArmorItems:[{},{},{},{id:"minecraft:carved_pumpkin",Count:1b}],HandItems:[{},{}],ArmorDropChances:[0.085f,0.085f,0.085f,0.25f],Passengers:[{id:"minecraft:snowball",Item:{id:"minecraft:snowball",Count:2b}}]}"#).unwrap();
+            fields(&mut snow).insert("Pumpkin".into(),Value::Byte(pumpkin));
+            let mut region = map(&[("Entities",Value::List(vec![snow]))]);
+            let report = migrate(&mut region,3465,5023).unwrap();
+            assert!(report.issues.is_empty(), "{:?}", report.issues);
+            assert_eq!(report.changed_entity_count,1);
+            let Value::List(entities)=&fields(&mut region)["Entities"] else {panic!()};
+            let Value::Compound(snow)=&entities[0] else {panic!()};
+            assert_eq!(snow["Pumpkin"],Value::Byte(pumpkin));
+            assert_eq!(snow["fall_distance"],Value::Double(2.5));
+            assert!(!snow.contains_key("HurtByTimestamp"));
+            assert_eq!(snow["equipment"],read_snbt(r#"{head:{id:"minecraft:carved_pumpkin",count:1}}"#).unwrap());
+            assert_eq!(snow["attributes"],read_snbt(r#"[{id:"minecraft:max_health",base:4d}]"#).unwrap());
+            assert_eq!(snow["Passengers"],read_snbt(r#"[{id:"minecraft:snowball",Item:{id:"minecraft:snowball",count:2}}]"#).unwrap());
+            let Value::Compound(chances)=&snow["drop_chances"] else {panic!()};
+            assert_eq!(chances["head"],Value::Float(0.25));
+        }
+    }
+
+    #[test]
+    fn registry_nested_display_chest_boat_and_tnt_cart_use_target_codecs() {
+        let mut region=read_snbt(r#"{Entities:[{id:"minecraft:chest_boat",Type:"spruce",Items:[{Slot:3b,id:"minecraft:stone",Count:6b}],Passengers:[{id:"minecraft:block_display",block_state:{Name:"minecraft:stone"}},{id:"minecraft:text_display",text:'{"text":"旅途","bold":true}'},{id:"minecraft:item_display",item:{id:"minecraft:stone",Count:2b}}]},{id:"minecraft:tnt_minecart",TNTFuse:27}]}"#).unwrap();
+        let report=migrate(&mut region,3465,5023).unwrap();
+        assert!(report.issues.is_empty(),"{:?}",report.issues);
+        let Value::List(entities)=&fields(&mut region)["Entities"] else {panic!()};
+        let Value::Compound(boat)=&entities[0] else {panic!()};
+        assert_eq!(boat["id"],Value::String("minecraft:spruce_chest_boat".into()));
+        assert_eq!(boat["Items"],read_snbt(r#"[{Slot:3b,id:"minecraft:stone",count:6}]"#).unwrap());
+        let Value::List(passengers)=&boat["Passengers"] else {panic!()};
+        let Value::Compound(block)=&passengers[0] else {panic!()};
+        assert_eq!(block["block_state"],read_snbt(r#"{id:"minecraft:stone"}"#).unwrap());
+        let Value::Compound(text)=&passengers[1] else {panic!()};
+        assert!(matches!(&text["text"],Value::Compound(v) if v["text"]==Value::String("旅途".into()) && v["bold"]==Value::Byte(1)));
+        let Value::Compound(item)=&passengers[2] else {panic!()};
+        assert_eq!(item["item"],read_snbt(r#"{id:"minecraft:stone",count:2}"#).unwrap());
+        assert_eq!(entities[1],read_snbt(r#"{id:"minecraft:tnt_minecart",fuse:27}"#).unwrap());
+    }
+
+    #[test]
+    fn registry_keeps_region_atomic_for_unknown_fields_and_unrepresentable_targets() {
+        for (from,to,entity,diagnostic) in [
+            (3465,5023,r#"{id:"minecraft:snow_golem",Pumpkin:1b,PluginTag:123}"#,"PluginTag"),
+            (3465,5023,r#"{id:"minecraft:snow_golem",Pumpkin:2b}"#,"Pumpkin"),
+            (3465,0,r#"{id:"minecraft:snow_golem",Pumpkin:0b}"#,"南瓜"),
+            (5023,3465,r#"{id:"minecraft:copper_golem"}"#,"目标注册表"),
+            (3465,5023,r#"{id:"example:snow_golem"}"#,"来源实体注册表"),
+            (5023,3465,r#"{id:"minecraft:item_display",teleport_duration:20}"#,"插值"),
+        ] {
+            let mut r=map(&[("Entities",Value::List(vec![read_snbt(entity).unwrap()]))]);
+            let before=r.clone(); let report=migrate(&mut r,from,to).unwrap();
+            assert!(report.issues.iter().any(|s|s.contains(diagnostic)),"{entity}: {:?}",report.issues);
+            assert_eq!(r,before); assert!(report.changes.is_empty());
+        }
+    }
+
+    #[test]
+    fn registry_jukebox_migrates_record_and_checks_unsupported_block_fields() {
+        let mut r=read_snbt(r#"{TileEntities:[{id:"minecraft:jukebox",x:0,y:0,z:0,RecordItem:{id:"minecraft:music_disc_cat",Count:1b},IsPlaying:1b,TickCount:160L,RecordStartTick:20L}]}"#).unwrap();
+        let report=migrate(&mut r,3465,5023).unwrap(); assert!(report.issues.is_empty(),"{:?}",report.issues);
+        let Value::List(tiles)=&fields(&mut r)["TileEntities"] else {panic!()};
+        let Value::Compound(tile)=&tiles[0] else {panic!()};
+        assert_eq!(tile["RecordItem"],read_snbt(r#"{id:"minecraft:music_disc_cat",count:1}"#).unwrap());
+        assert_eq!(tile["ticks_since_song_started"],Value::Long(140));
+        let mut r=read_snbt(r#"{TileEntities:[{id:"minecraft:sculk_sensor",x:0,y:0,z:0,unverified_listener:{event:"minecraft:step"}}]}"#).unwrap();
+        let before=r.clone(); let report=migrate(&mut r,3465,5023).unwrap();
+        assert!(report.issues.iter().any(|i|i.contains("unverified_listener"))); assert_eq!(r,before);
+    }
+
     fn head_test_region(palette: Vec<Value>, indices: &[usize], tiles: Vec<Value>) -> Value {
         let packed = crate::nbt::pack_palette_indices(indices, crate::nbt::bits_for_palette(palette.len()));
         map(&[("Size", map(&[("x", Value::Int(indices.len() as i32)), ("y", Value::Int(1)), ("z", Value::Int(1))])),
@@ -3133,7 +3238,7 @@ mod tests {
         let Value::LongArray(packed) = &fields["BlockStates"] else { panic!() };
         let Value::Compound(size) = &fields["Size"] else { panic!() };
         let Value::Int(width) = size["x"] else { panic!() };
-        let index = crate::nbt::palette_index_at(&crate::nbt::BigEndianLongArray::new(packed.iter().copied().collect()), width as usize, crate::nbt::bits_for_palette(palette.len()), palette.len(), position).unwrap();
+        let index = crate::nbt::palette_index_at(packed, width as usize, crate::nbt::bits_for_palette(palette.len()), palette.len(), position).unwrap();
         palette[index].clone()
     }
 

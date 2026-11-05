@@ -4,43 +4,43 @@
 @layer components.page {
 .home-scroll-area { height: 100%; min-height: 0; }
 .home-page {
-    display: grid;
-    grid-template-columns: minmax(0, 1.1fr) minmax(20rem, .9fr);
-    gap: clamp(32px, 5vw, 88px);
-    align-items: center;
-    justify-items: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: var(--nova-section-gap);
     text-align: left;
-    min-height: calc(100dvh - 72px);
-    padding: clamp(24px, 5vw, 72px);
+    min-height: 0;
+    /* The shell already provides the page inset, including at narrow widths. */
+    padding: 0;
 }
 .home-introduction, .home-current { min-width: 0; }
-.home-introduction h1 { margin: 0 0 20px; font-size: clamp(1.8rem, 3vw, 2.7rem); font-weight: 650; line-height: 1.15; letter-spacing: -.025em; overflow-wrap: anywhere; }
-.home-lead { max-width: 28em; margin: 0 0 32px; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.7; }
-.home-start-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.home-introduction h1 { margin: 0 0 var(--nova-toolbar-gap); font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
+.home-lead { max-width: 60ch; margin: 0 0 16px; font-size: var(--nova-text-base); font-family: var(--nova-font-base, inherit); line-height: 20px; }
+.home-start-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--nova-toolbar-gap); }
 .home-start-actions > button { gap: 8px; }
-.home-beta-note { margin: 24px 0 0; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
+.home-beta-note { margin: 12px 0 0; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
 /* Surface, radius and text tone come from the shared card/text classes (`group-box`,
    `muted`); the page only owns spacing and flow. */
-.home-current { margin: 0; padding: 28px; }
-.home-current h2 { margin: 0 0 22px; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); font-weight: 600; }
-.home-current-file { display: flex; gap: 14px; align-items: center; margin-bottom: 24px; }
+.home-current { margin: 0; padding: 0; }
+.home-current h2 { margin: 0 0 12px; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); font-weight: 600; }
+.home-current-file { display: flex; gap: var(--nova-toolbar-gap); align-items: center; margin-bottom: var(--nova-section-gap); }
 .home-current-file > svg { flex-shrink: 0; color: var(--primary); }
 .home-current-file > div { min-width: 0; }
 .home-current-file strong { display: block; font-weight: 600; overflow-wrap: anywhere; }
 .home-current-file span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }
 .home-empty { margin: 0 0 20px; line-height: 1.6; }
 .home-workflows { display: flex; flex-direction: column; gap: 6px; }
-html[data-theme] .home-workflows > button { display: flex; justify-content: flex-start; gap: 14px; height: auto; min-height: 72px; padding: 14px 12px; text-align: left; white-space: normal; }
-.home-workflows > button > span:not(.nova-pixel-decoration) { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
 .home-workflows strong { font-weight: 600; }
 .home-workflows small { font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); font-weight: 400; }
-@media (max-width: 1050px) {
-    .home-page { grid-template-columns: minmax(0, 1fr); gap: 32px; align-content: start; padding: 28px 24px; }
-    .home-current { padding: 22px; }
-}
 @media (max-width: 520px) {
-    .home-page { padding: 20px 12px; }
-    .home-current { padding: 18px 12px; }
     .home-start-actions { align-items: stretch; flex-direction: column; }
 }
+}
+
+@layer components.page { .home-open-error { overflow-wrap: anywhere; color: var(--destructive); } .home-current { border: 0; box-shadow: none; background: transparent; } }
+
+/* These are multiline navigation rows, not fixed-height theme action buttons. */
+@layer utilities {
+html[data-theme] .home-workflows > button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; height: auto; min-height: 32px; max-height: none; padding: 8px; text-align: left; white-space: normal; }
+.home-workflow-copy { display: flex; flex: 1; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; text-align: left; }
+.home-workflows > button > svg, .home-workflows > button > .theme-icon { flex: none; }
 }

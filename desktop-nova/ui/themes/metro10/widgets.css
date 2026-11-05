@@ -32,90 +32,12 @@
     filter: invert(1);
 }
 
-[data-slot="button"].nav-expand,
-[data-slot="button"].nav-item {
-    box-sizing: border-box;
-    display: flex;
-    position: relative;
-    width: 100%;
-    height: 48px;
-    min-height: 48px;
-    max-height: 48px;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 12px;
-    padding: 0 16px;
-    border: 0;
-    border-bottom: 1px solid var(--border);
-    border-radius: 0;
-    background: transparent;
-    color: var(--foreground);
-    text-align: left;
-    box-shadow: none;
-}
-
-[data-slot="button"].nav-expand:hover:not(:disabled),
-[data-slot="button"].nav-item:hover:not(:disabled) {
-    background: var(--accent);
-    color: var(--foreground);
-}
-
 /* Windows 8/10 selection: a flat accent-tinted row plus a 4x24 highlight bar.
    The bar is a pseudo-element (not `border-left`) so the collapsed sidebar can
    keep its icon centred. */
-[data-slot="button"].nav-item-active {
-    padding-left: 16px;
-    border-left: 0;
-    background: var(--option-active-background);
-    color: var(--option-active-color);
-}
-
-[data-slot="button"].nav-item-active::before {
-    position: absolute;
-    top: 50%;
-    left: 0;
-    width: 4px;
-    height: 24px;
-    background: var(--primary);
-    transform: translateY(-50%);
-    content: "";
-}
 
 /* Keep the selection tint under the pointer: the generic nav hover is lighter
    than the selected plate and would otherwise read as "deselecting". */
-[data-slot="button"].nav-item-active:hover:not(:disabled) {
-    background: var(--option-active-background);
-    color: var(--option-active-color);
-}
-
-.sidebar {
-    border-right: 1px solid var(--border);
-    background: var(--navigation-background);
-}
-
-.sidebar-collapsed [data-slot="button"].nav-expand,
-.sidebar-collapsed [data-slot="button"].nav-item {
-    justify-content: center;
-    gap: 0;
-    padding: 0;
-}
-
-.sidebar-collapsed [data-slot="button"].nav-item-active {
-    padding-left: 0;
-}
-
-@media (max-width: 760px) {
-    .sidebar [data-slot="button"].nav-expand,
-    .sidebar [data-slot="button"].nav-item {
-        justify-content: center;
-        gap: 0;
-        padding: 0;
-    }
-
-    .sidebar [data-slot="button"].nav-item-active {
-        padding-left: 0;
-    }
-}
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 /* Structural Button call sites (nav rows, window controls, flake slots and the
@@ -442,16 +364,16 @@
    ring/check artwork, so the box itself becomes transparent. */
 
 [data-slot="checkbox"] {
-    width: 20px;
-    height: 20px;
-    min-width: 20px;
-    min-height: 20px;
-    max-width: 20px;
-    max-height: 20px;
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    min-height: 16px;
+    max-width: 16px;
+    max-height: 16px;
     padding: 0;
     border: 0;
     border-radius: 0;
-    background: transparent url("./resource/form/checkbox_default.svg") center / 20px 20px no-repeat;
+    background: transparent url("./resource/form/checkbox_default.svg") center / 16px 16px no-repeat;
     image-rendering: auto;
     box-shadow: none;
     cursor: pointer;
@@ -477,6 +399,12 @@
 [data-slot="checkbox"] svg {
     visibility: hidden;
 }
+
+[data-slot="checkbox"][data-state="indeterminate"] {
+    background-image: url("./resource/form/checkbox_default.svg");
+    color: var(--foreground);
+}
+[data-slot="checkbox"][data-state="indeterminate"] [data-slot="checkbox-mixed"] { visibility: visible; }
 
 [data-slot="checkbox"]:focus-visible {
     outline: 2px solid var(--ring);

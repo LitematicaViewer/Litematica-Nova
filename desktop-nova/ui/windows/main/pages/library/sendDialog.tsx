@@ -114,7 +114,8 @@ export function SendProjectionDialog({
       .catch(() => undefined);
   }, []);
 
-  useEffect(() => { setRows(buildRows(entry, folders)); }, [entry, folders]);
+  // The dialog is keyed by entryId. Background library/preview refreshes must
+  // not replace the names and inclusion checkboxes currently being edited.
 
   const replicaPathById = useMemo(() => new Map(entry.replicas.map((replica) => [replica.id, replica.path])), [entry]);
 
@@ -138,27 +139,27 @@ export function SendProjectionDialog({
 
   return (
     <Dialog
-      title="分发投影"
-      subtitle={`${entry.displayName || entry.fileName} · 勾选空槽位新增副本，取消勾选既有副本移入回收区，行内改名即批量重命名。`}
+      title={t("library.ux.dispatch")}
+      subtitle={t("library.ux.dispatchHint", { value0: entry.displayName || entry.fileName })}
       width="lg"
       busy={busy}
       onClose={onClose}
       footer={(
         <>
-          <span className="library-dispatch-summary" role="status">新增 {additions.length} · 重命名 {renames.length} · 入回收区 {trash.length}</span>
-          <Button type="button" onClick={onClose} disabled={busy}>取消</Button>
-          <Button type="button" variant="default" onClick={handleSubmit} aria-busy={busy} disabled={!canSubmit}>{busy ? "正在分发…" : "确认分发"}</Button>
+          <span className="library-dispatch-summary" role="status">{t("library.ux.added")} {additions.length} {t("library.ux.renamedPart")} {renames.length} {t("library.ux.trashPart")} {trash.length}</span>
+          <Button type="button" onClick={onClose} disabled={busy}>{t("common.cancel")}</Button>
+          <Button type="button" variant="default" onClick={handleSubmit} aria-busy={busy} disabled={!canSubmit}>{busy ? t("library.ux.dispatching") : t("library.ux.confirmDispatch")}</Button>
         </>
       )}
     >
-      <div className="dialog-path-preview" title={displayFilePath(entry.primary.path)}>源文件：{displayFilePath(entry.primary.path)}</div>
+      <div className="dialog-path-preview" title={displayFilePath(entry.primary.path)}>{t("library.ux.sourceFilePrefix")}{displayFilePath(entry.primary.path)}</div>
       <Table className="library-dispatch-table" data-entry-id={entry.entryId}>
         <TableHeader>
           <TableRow>
-            <TableHead>文件夹路径</TableHead>
-            <TableHead>文件名</TableHead>
-            <TableHead className="library-dispatch-seq-col">重数序号</TableHead>
-            <TableHead className="library-dispatch-select-col">选择</TableHead>
+            <TableHead>{t("library.ux.folderPath")}</TableHead>
+            <TableHead>{t("library.fileName")}</TableHead>
+            <TableHead className="library-dispatch-seq-col">{t("library.ux.replicaSequence")}</TableHead>
+            <TableHead className="library-dispatch-select-col">{t("library.ux.select")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -171,17 +172,17 @@ export function SendProjectionDialog({
                   <ReplicaNameEditor
                     value={row.name}
                     disabled={busy || (row.replicaId !== null && !row.included)}
-                    ariaLabel={`${compactFolderPath(row.folderPath, localLibraryTailPathCount)} 第 ${row.sequence} 份文件名`}
+                    ariaLabel={t("library.ux.copyFileLabel", { value0: compactFolderPath(row.folderPath, localLibraryTailPathCount), value1: row.sequence })}
                     onChange={(value) => update(row.key, { name: value })}
                   />
-                  {nameError && <small className="library-dispatch-hint" role="alert">请填写文件名</small>}
+                  {nameError && <small className="library-dispatch-hint" role="alert">{t("library.ux.enterName")}</small>}
                 </TableCell>
                 <TableCell className="library-dispatch-seq-col">{row.sequence}</TableCell>
                 <TableCell className="library-dispatch-select-col">
                   <Checkbox
                     checked={row.included}
                     disabled={busy}
-                    aria-label={`${row.replicaId ? `第 ${row.sequence} 份副本` : "新增副本"}`}
+                    aria-label={`${row.replicaId ? t("library.ux.copyLabel", { value0: row.sequence }) : t("library.ux.newReplica")}`}
                     onCheckedChange={(value) => update(row.key, { included: value === true })}
                   />
                 </TableCell>
@@ -190,7 +191,7 @@ export function SendProjectionDialog({
           })}
         </TableBody>
       </Table>
-      {dispatchTargets(folders).length === 0 && <p className="muted">没有可作为分发目标的已追踪文件夹。</p>}
+      {dispatchTargets(folders).length === 0 && <p className="muted">{t("library.ux.noDispatchTarget")}</p>}
       {error && <div className="dialog-message dialog-message-error" role="alert">{error}</div>}
     </Dialog>
   );

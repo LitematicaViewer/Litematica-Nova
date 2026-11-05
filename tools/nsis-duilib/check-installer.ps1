@@ -156,17 +156,53 @@ Unicode true
 RequestExecutionLevel user
 SilentInstall silent
 !addplugindir /x86-unicode "__PLUGIN__"
+!include LogicLib.nsh
+!define MAINBINARYNAME "abi-only"
+!include "__INSTALLER__\nsis-hooks.nsh"
 Name "Nova ABI only"
 OutFile "__OUTPUT__\abi-only.exe"
+; Exercise the actual Unicode export, not a second path parser. No file
+; system or registry operations are performed for these sample paths.
+!macro CheckDirectoryDisplay source expected
+  NovaDui::DirectoryDisplayPath /NOUNLOAD "${source}"
+  Pop $0
+  StrCmpS $0 "${expected}" +3
+    SetErrorLevel 1
+    Quit
+!macroend
 Section
+  !insertmacro CheckDirectoryDisplay "C:\Program Files\Litematica-Nova" "C:\Program Files\Litematica-Nova"
+  !insertmacro CheckDirectoryDisplay "\\?\C:\Program Files\Litematica-Nova" "C:\Program Files\Litematica-Nova"
+  !insertmacro CheckDirectoryDisplay "\\?\UNC\server\share\目录" "\\server\share\目录"
+  !insertmacro CheckDirectoryDisplay "\\?\UNC\server" "\\?\UNC\server"
+  !insertmacro CheckDirectoryDisplay "\\?\C:\末尾空格 " "\\?\C:\末尾空格 "
+  !insertmacro CheckDirectoryDisplay "\\?\C:\NUL.txt" "\\?\C:\NUL.txt"
+  !insertmacro CheckDirectoryDisplay "\\?\Volume{00000000-0000-0000-0000-000000000000}\Nova" "\\?\Volume{00000000-0000-0000-0000-000000000000}\Nova"
+  StrCpy $1 "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+  StrCpy $2 "\\?\C:\$1\$1\$1\$1\$1\Nova"
+  !insertmacro CheckDirectoryDisplay "$2" "$2"
+  ; Exercise NSIS's actual .lnk writer. Only the private plugin temp directory
+  ; is written; the user's Start menu and desktop are never accessed.
+  InitPluginsDir
+  StrCpy $INSTDIR "\\?\$EXEDIR"
+  StrCpy $OUTDIR $INSTDIR
+  !insertmacro NOVA_SHORTCUT_DIRECTORY
+  !insertmacro NOVA_CREATE_SHORTCUT "$PLUGINSDIR\Nova shortcut.lnk"
+  IfErrors shortcut_failed
+  IfFileExists "$PLUGINSDIR\Nova shortcut.lnk" 0 shortcut_failed
+  StrCmpS $OUTDIR $INSTDIR +1 shortcut_failed
   NovaDui::Abi
   Pop $0
   FileOpen $1 "__OUTPUT__\abi-result.txt" w
   FileWriteUTF16LE $1 $0
   FileClose $1
+  Goto done
+  shortcut_failed:
+    SetErrorLevel 1
+  done:
 SectionEnd
 '@
-$abiHost = $abiHost.Replace('__PLUGIN__', (Join-Path $root 'target/x86-unicode')).Replace('__OUTPUT__', $escapedOut)
+$abiHost = $abiHost.Replace('__PLUGIN__', (Join-Path $root 'target/x86-unicode')).Replace('__OUTPUT__', $escapedOut).Replace('__INSTALLER__', $escapedInstaller)
 $abiPath = Join-Path $out 'abi-only.nsi'
 [IO.File]::WriteAllText($abiPath, $abiHost, [Text.UTF8Encoding]::new($true))
 $compilerOutput = @(& $compiler /V2 /NOCD $abiPath 2>&1)

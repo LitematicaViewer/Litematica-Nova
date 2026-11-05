@@ -1,3 +1,4 @@
+import { serviceUrl } from './check-public-checkout.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,7 +12,7 @@ import { moduleForTarget, validatePackage, validateDevelopmentPackage } from './
 const targets = ['x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu', 'x86_64-apple-darwin', 'aarch64-apple-darwin'];
 const settingsRoot = () => process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData/Local'), 'Litematica-Nova') : path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'Litematica-Nova');
 const cacheRoot = () => process.platform === 'win32' ? path.join(settingsRoot(), 'runtime-cache') : path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'Litematica-Nova/runtime');
-const defaultIndex = 'https://45-62-112-121.sslip.io:8448/nova-development/index.json';
+const defaultIndex = serviceUrl('nova-development/index.json');
 const requestHeaders = () => {
   const token = process.env.NOVA_DEVELOPMENT_READ_TOKEN || process.env.NOVA_RUNTIME_DOWNLOAD_TOKEN;
   return token ? { Authorization: `Bearer ${token}` } : {};

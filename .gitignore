@@ -103,3 +103,9 @@ _lava*
 
 # Reproducible default game-data output; never imported user packages.
 /pack-in/game-data/
+
+# Registry extraction markers are not inputs of the patched path dependency.
+/third_party/wgpu-hal-patched/.cargo-ok
+/third_party/wgpu-hal-patched/.cargo_vcs_info.json
+# Local production-UI fixture captures, never application resources.
+/output/playwright/scene-hud/

@@ -59,17 +59,8 @@ pub fn resolve_stockpile_icons(
     materials: &mut StockpileMaterialsData,
     recipe_trees: &BTreeMap<String, RecipeTreeNode>,
 ) -> Result<StockpileIconAssets> {
-    resolve_stockpile_icons_with_network(minecraft_version, materials, recipe_trees, true)
-}
-
-pub(crate) fn resolve_stockpile_icons_cached(minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_trees: &BTreeMap<String, RecipeTreeNode>) -> Result<StockpileIconAssets> {
-    resolve_stockpile_icons_with_network(minecraft_version, materials, recipe_trees, false)
-}
-
-fn resolve_stockpile_icons_with_network(minecraft_version: &str, materials: &mut StockpileMaterialsData, recipe_trees: &BTreeMap<String, RecipeTreeNode>, allow_network: bool) -> Result<StockpileIconAssets> {
     let keys = collect_icon_keys(materials, recipe_trees);
     let mut resolver = IconResolver::new(minecraft_version)?;
-    let _ = allow_network; // Historical API: all resources are now local selected game data.
     let mut by_key = BTreeMap::<String, IconRef>::new();
     let mut files = Vec::<IconZipAsset>::new();
 

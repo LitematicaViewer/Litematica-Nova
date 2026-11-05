@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
+import { serviceUrl } from "./check-public-checkout.mjs";
 
 function fixture(label = "main") {
   const values = new Map(), cleanups = [], exports = {};
@@ -16,6 +17,7 @@ function fixture(label = "main") {
     if (name === "../../../src/platform/nativeWindowGeometry") return { getApplicationWindowLabel: () => label };
     if (name === "../../../src/platform/events") return {};
     if (name === "../../../src/platform/applicationOperations") return {};
+    if (name === "../../../src/services/i18n") return { getUiLocale: () => "zh-CN" };
     assert.equal(name, "react"); return { useRef: (current) => ({ current }), useEffect: (fn) => cleanups.push(fn()), useState: (current) => [current, () => {}] };
   }});
   return { api: exports, values, cleanups, fail: () => { failWrite = true; } };
@@ -48,19 +50,26 @@ test("取消更新后清理当次恢复快照，后续正常保存不会复活�
   assert.equal(f.api.takeUpdateDraft("properties:one"), undefined);
 });
 
-test("更新说明：始终统一新增、优化、修复、注意事项；旧文本进入注意事项", () => {
+test("更新说明：识别实际发布标题，保留已知问题，不制造空节", () => {
   const f = fixture();
   const sections = f.api.releaseNoteSections("版本：0.2.0\n日期：2026-10-12\n## 新增\n- A\n## 修复\n- B");
-  assert.equal(sections.map((s) => s.label).join(","), "新增,优化,修复,注意事项");
-  assert.equal(sections[0].lines[0], "A"); assert.equal(sections[2].lines[0], "B");
-  assert.equal(f.api.releaseNoteSections("legacy text")[3].lines[0], "legacy text");
+  assert.equal(sections.map((s) => s.label).join(","), "新增,修复");
+  assert.equal(sections[0].lines[0], "A"); assert.equal(sections[1].lines[0], "B");
+  assert.equal(f.api.releaseNoteSections("legacy text")[0].lines[0], "legacy text");
+  assert.equal(f.api.releaseNoteSections("## 已知 Bug\n- GPU issue")[0].label, "已知问题");
+  assert.equal(f.api.releaseNoteSections("## New Features\n- Feature")[0].label, "新增");
+  assert.equal(f.api.releaseNoteSections(null).length, 0);
 });
 
 test("更新接口：前端仅走应用命令；官方验证与HTTPS不被旁路", () => {
   const source = fs.readFileSync(new URL("../src-tauri/src/application/updater.rs", import.meta.url), "utf8");
   const config = JSON.parse(fs.readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
   assert.ok(config.plugins.updater.pubkey.length > 50);
-  assert.equal(config.plugins.updater.endpoints.length, 2);
+  assert.equal(config.plugins.updater.endpoints.length, 1); // GitHub first; the signed client appends the configured mirror.
+  assert.equal(new URL(config.plugins.updater.endpoints[0]).hostname, "raw.githubusercontent.com");
+  assert.match(source, /service_url\("nova-updates\/latest\.json"\)/);
+  assert.equal(serviceUrl("nova-updates/latest.json", { service_base_url: "https://test.example:8448/prefix/" }), "https://test.example:8448/prefix/nova-updates/latest.json");
+  assert.throws(() => serviceUrl("nova-core", {service_base_url:"http://test.example"}));
   assert.ok(config.plugins.updater.endpoints.every((url) => new URL(url).protocol === "https:"));
   assert.match(source, /update\.download\(/);
   assert.match(source, /pending\.update\.install\(/);
@@ -72,7 +81,9 @@ test("更新接口：前端仅走应用命令；官方验证与HTTPS不被旁路
   const quiesce = source.indexOf("supervisor.stop_admitting();");
   const shutdown = source.indexOf("request_shutdown();");
   assert.ok(quiesce > 0 && shutdown > quiesce);
-  assert.doesNotMatch(source.slice(shutdown, source.indexOf("pending.update.install")), /cancel.changed/);
+  const irreversible = source.indexOf("host.commit_installing_after_wait");
+  assert.ok(irreversible > 0);
+  assert.doesNotMatch(source.slice(irreversible, source.indexOf("pending.update.install")), /cancel.changed/);
   assert.doesNotMatch(source, /danger_accept_invalid|verify_signature\s*=\s*false/);
 });
 

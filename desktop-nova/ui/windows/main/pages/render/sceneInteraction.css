@@ -1,0 +1,60 @@
+@layer components.page {
+.render-page .render-preview-host { position: relative; isolation: isolate; }
+.scene-interaction-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
+.scene-info-hud { max-height: calc(100% - 5rem); overflow: auto; overscroll-behavior: contain; color: var(--foreground); background: var(--popover, var(--background)); border: 1px solid var(--border); box-shadow: 0 2px 8px #0005; pointer-events: auto; }
+.scene-info-hud { position: absolute; top: .65rem; left: 50%; transform: translateX(-50%); width: max-content; min-width: min(12rem, calc(100% - 1.2rem)); max-width: min(26rem, calc(100% - 1.2rem)); padding: .45rem .55rem .3rem; border-radius: var(--radius, .35rem); font-size: var(--nova-text-sm, .8125rem); line-height: 1.3; }
+.scene-info-hud.scene-info-hud--pointer { left: var(--scene-hud-x, 12px); top: var(--scene-hud-y, 12px); transform: none; }
+/* The reticle and its pick ray belong to the native surface. Even a large
+   container HUD must never punch a WebView hole at the locked cursor. */
+.scene-info-hud[data-aim-hud] { pointer-events: none; overflow: hidden; max-height: max(0px, calc(50% - 1.5rem)); }
+.scene-hud-heading { display: flex; gap: .5rem; align-items: center; min-width: 0; }
+.scene-hud-heading > .block-icon-image, .scene-hud-heading > .block-icon-fallback { width: 26px; min-width: 26px; height: 26px; min-height: 26px; flex: 0 0 26px; object-fit: contain; image-rendering: pixelated; line-height: 24px; }
+.scene-hud-heading-text { display: grid; min-width: 0; gap: .12rem; }
+.scene-hud-heading-text strong { font-weight: 650; font-size: var(--nova-text-base, .875rem); }
+.scene-hud-heading-text > * { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.scene-hud-heading-text > span { color: var(--muted-foreground); font-size: .9em; }
+.scene-hud-properties { display: flex; gap: .35rem .65rem; flex-wrap: wrap; margin-top: .35rem; overflow: hidden; max-height: 2.7em; color: var(--muted-foreground); }
+.scene-hud-properties b { font-weight: 500; color: var(--foreground); }
+.scene-hud-position { display: flex; justify-content: space-between; gap: 1rem; color: var(--muted-foreground); font-size: .85em; margin-top: .3rem; font-variant-numeric: tabular-nums; }
+.scene-hud-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 2px; margin-top: .4rem; width: 17rem; max-width: 100%; }
+.scene-hud-slot { min-width: 0; aspect-ratio: 1; position: relative; display: grid; place-items: center; background: var(--muted); border: 1px solid var(--border); }
+.scene-hud-slot .block-icon-image, .scene-hud-slot .block-icon-fallback { width: 1.4rem; min-width: 0; height: 1.4rem; min-height: 0; object-fit: contain; image-rendering: pixelated; line-height: 1.4rem; }
+.scene-hud-count { position: absolute; right: 1px; bottom: -1px; font-size: .7rem; font-weight: 700; color: white; text-shadow: 1px 1px 1px #000, -1px -1px 1px #000; line-height: 1.2; }
+.scene-hud-variant { position: absolute; top: 0; left: 1px; font-size: .45rem; color: var(--primary); }
+.scene-info-hud .scene-hud-details { display: block; margin: .2rem auto 0; padding: .1rem .3rem; min-height: 1.2rem; height: auto; font-size: .8em; color: var(--muted-foreground); border: 0; box-shadow: none; }
+.scene-hud-empty { margin: .4rem 0 .1rem; color: var(--muted-foreground); }
+.scene-editor-dock { color: var(--foreground); position: absolute; left: 50%; bottom: .65rem; transform: translateX(-50%); max-width: calc(100% - 1.2rem); width: max-content; }
+.scene-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--nova-toolbar-gap, 8px); min-width: 0; min-height: 32px; }
+.scene-input-hint { flex: 1 1 13rem; min-width: 0; color: var(--muted-foreground); font-size: var(--nova-text-sm); line-height: 1.35; }
+.scene-editor-actions button { font-size: var(--nova-text-sm, .8rem); padding-inline: 8px; height: 32px; flex: none; }
+.scene-hotbar { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); max-width: 100%; gap: 2px; }
+.scene-hud-expanded { overflow: auto; max-height: 60vh; }
+.scene-hud-expanded dl > div { display: flex; gap: 1rem; justify-content: space-between; }
+.scene-hud-expanded dd { margin: 0; }
+.scene-hud-expanded .scene-hud-slot { width: 100%; height: 2rem; }
+@media (max-width: 600px) { .scene-editor-actions button { font-size: .7rem; } }
+}
+
+@layer components.page {
+.scene-edit-menu { z-index:1200; min-width:180px; padding:4px; background:var(--popover,var(--background)); color:var(--foreground); border:1px solid var(--border); border-radius:10px; box-shadow:0 4px 18px #0003; }
+.scene-edit-menu .dropdown-item { min-height:32px; display:flex; align-items:center; padding:4px 10px; outline:none; cursor:default; }
+.scene-edit-menu .dropdown-item[data-highlighted] { background:var(--accent); color:var(--accent-foreground); }
+.scene-edit-menu .dropdown-item[data-disabled] { opacity:.45; pointer-events:none; }
+@media (max-width:1000px) { .render-view-tools > button .render-tool-label { display:none; } .render-view-tools > button { width:32px; padding:0; flex:none; } }
+}
+
+/* Borders are also the geometry of the native viewport cutouts. Keep the
+   selected stroke inside the slot and the gaps outside the hit regions. */
+@layer utilities {
+.scene-hotbar .scene-hotbar-slot {
+  position: relative; pointer-events: auto; display: grid; place-items: center;
+  box-sizing: border-box; width: 2.6rem; max-width: 100%; height: 2.6rem; min-width: 0; min-height: 0; padding: 0;
+  border: var(--inventory-slot-edge, 1px) solid var(--border); border-radius: 0;
+  background: var(--inventory-slot-fill, var(--card)); color: var(--foreground); box-shadow: var(--inventory-slot-shadow, none);
+}
+.scene-hotbar .scene-hotbar-slot:hover { border-color: var(--ring); }
+.scene-hotbar .scene-hotbar-slot[aria-pressed="true"] { border: 3px solid var(--primary); background: var(--accent); }
+.scene-hotbar .scene-hotbar-slot:focus-visible { outline: none; border-style: dashed; border-color: var(--ring); }
+.scene-hotbar-slot .block-icon-image, .scene-hotbar-slot .block-icon-fallback { width: 1.65rem; min-width: 0; height: 1.65rem; min-height: 0; image-rendering: pixelated; object-fit: contain; line-height: 1.65rem; }
+@media (max-width: 600px) { .scene-hotbar .scene-hotbar-slot { width: 2.1rem; height: 2.1rem; } }
+}

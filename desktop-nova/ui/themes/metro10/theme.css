@@ -18,6 +18,8 @@
 @layer tokens {
 
 :root {
+    --inventory-slot-edge: 2px;
+    --inventory-slot-fill: var(--muted);
     color-scheme: light;
     --background: #ffffff;
     --foreground: #000000;
@@ -34,7 +36,7 @@
     --ring: #0072c6;
     --radius: 0px;
     --edge-width: 2px;
-    --control-height: 31px;
+    --control-height: 32px;
     --control-shadow: none;
     --panel-shadow: 0 10px 24px rgb(0 0 0 / 24%);
     --overlay: rgb(0 0 0 / 42%);
@@ -58,7 +60,7 @@
 
     --ln-file-icon-size: 32px;
     --ln-check-label-gap: 6px;
-    --ln-check-label-min-height: 24px;
+    --ln-check-label-min-height: 28px;
     --ln-card-border-width: 2px;
     --ln-card-border-color-active: var(--primary);
     --ln-card-background-color-active: var(--option-active-background);

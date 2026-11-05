@@ -1,4 +1,6 @@
-import { Download, FileText, FolderOpen, FolderPlus, LayoutGrid, List, RefreshCw, Search, X } from "lucide-react";
+import { t } from "../../../../../src/services/i18n";
+import { Download, FileText, FolderOpen, FolderPlus, LayoutGrid, List, MoreHorizontal, RefreshCw, Search, X } from "lucide-react";
+import { Popover } from "radix-ui";
 import { Button } from "../../../../components/ui/button";
 import { Input } from "../../../../components/ui/input";
 import { Dropdown } from "../../../../components/Dropdown";
@@ -74,43 +76,43 @@ export function LibraryToolbar({
 }) {
   return (
     <header className="library-toolbar">
-      <h2>投影库</h2>
-      <Button variant="default" onClick={onImport} disabled={busy} aria-busy={isOpening}><ThemeIcon name="import" size={16} fallback={FolderPlus} />{isOpening ? "正在导入…" : "导入投影"}</Button>
-      <Button onClick={onNewComposition}><FolderPlus size={16} aria-hidden="true" />新建组合</Button>
+      <h2>{t("library.libraryTitle")}</h2>
+      <Button variant="default" onClick={onImport} disabled={busy} aria-busy={isOpening}><ThemeIcon name="import" size={16} fallback={FolderPlus} />{isOpening ? t("library.importing") : t("library.importSchematic")}</Button>
+      <Button onClick={onNewComposition}><FolderPlus size={16} aria-hidden="true" />{t("library.ux.newComposition")}</Button>
       <div className="library-toolbar-second-row">
-      <div className="library-management library-download-link"><Button onClick={onDownload}><ThemeIcon name="download" size={16} fallback={Download} />下载投影</Button></div>
+      <div className="library-management library-download-link"><Button onClick={onDownload}><ThemeIcon name="download" size={16} fallback={Download} />{t("library.downloadSchematic")}</Button></div>
       <div className="library-search">
         <ThemeIcon name="search" size={16} fallback={Search} />
-        <Input type="search" aria-label="搜索投影" placeholder="搜索名称、作者、标签、分类…" value={search} onChange={(event) => onSearchChange(event.target.value)} />
-        {search && <Button variant="ghost" size="icon-sm" aria-label="清除搜索" onClick={() => onSearchChange("")}><ThemeIcon name="close" size={14} fallback={X} /></Button>}
+        <Input type="search" aria-label={t("library.searchSchematics")} placeholder={t("library.ux.searchLibrary")} value={search} onChange={(event) => onSearchChange(event.target.value)} />
+        {search && <Button variant="ghost" size="icon-sm" aria-label={t("library.ux.clearSearch")} onClick={() => onSearchChange("")}><ThemeIcon name="close" size={14} fallback={X} /></Button>}
       </div>
-      {search && (
         <span className="library-search-status" role="status" data-index-ready={indexReady || undefined}>
-          {searching ? "搜索中…" : indexReady ? `${searchMatches} 项匹配` : `索引构建中 · 已就绪 ${searchMatches} 项`}
+          {search && <>
+          {searching ? t("library.ux.searching") : indexReady ? t("library.ux.searchCount", { value0: searchMatches }) : t("library.ux.indexProgress", { value0: searchMatches })}
+          </>}
         </span>
-      )}
-      <span className="library-view-switch" role="group" aria-label="视图切换">
-        <Button size="icon" variant="ghost" aria-pressed={view === "grid"} aria-label="网格视图" title="网格视图" disabled={busy} onClick={() => onViewChange("grid")}><LayoutGrid size={16} aria-hidden="true" /></Button>
-        <Button size="icon" variant="ghost" aria-pressed={view === "list"} aria-label="列表视图" title="列表视图" disabled={busy} onClick={() => onViewChange("list")}><List size={16} aria-hidden="true" /></Button>
-        <Button size="icon" variant="ghost" aria-pressed={view === "detail"} aria-label="详情视图" title="详情视图" disabled={busy} onClick={() => onViewChange("detail")}><FileText size={16} aria-hidden="true" /></Button>
+      <span className="library-view-switch" role="group" aria-label={t("library.ux.views")}>
+        <Button size="icon" variant="ghost" aria-pressed={view === "grid"} aria-label={t("library.ux.grid")} title={t("library.ux.grid")} disabled={busy} onClick={() => onViewChange("grid")}><LayoutGrid size={16} aria-hidden="true" /></Button>
+        <Button size="icon" variant="ghost" aria-pressed={view === "list"} aria-label={t("library.ux.list")} title={t("library.ux.list")} disabled={busy} onClick={() => onViewChange("list")}><List size={16} aria-hidden="true" /></Button>
+        <Button size="icon" variant="ghost" aria-pressed={view === "detail"} aria-label={t("library.ux.detailView")} title={t("library.ux.detailView")} disabled={busy} onClick={() => onViewChange("detail")}><FileText size={16} aria-hidden="true" /></Button>
       </span>
-      <div className="library-filter-control"><Dropdown ariaLabel="筛选文件状态" value={statusFilter} onChange={onStatusFilterChange} options={[{ value: "", label: "全部状态" }, { value: "ok", label: "正常" }, { value: "missing", label: "文件丢失" }, { value: "parse_error", label: "解析失败" }]} /></div>
-      <div className="library-filter-control"><Dropdown ariaLabel="投影排序" value={sortMode} onChange={onSortModeChange} options={[{ value: "manual", label: "手动排序" }, { value: "recent_analyzed", label: "最近分析" }, { value: "blocks", label: "方块数量" }, { value: "name", label: "名称 A–Z" }]} /></div>
-      <details className="library-management"><summary>库管理 / 更多</summary><div>
-      <Button variant="ghost" onClick={onImportClipboard}>导入剪贴板模板…</Button>
+      <div className="library-filter-control"><Dropdown ariaLabel={t("library.fileStatusFilter")} value={statusFilter} onChange={onStatusFilterChange} options={[{ value: "", label: t("stockpile.filter.all") }, { value: "ok", label: t("library.statusOk") }, { value: "missing", label: t("library.fileMissing") }, { value: "parse_error", label: t("library.parseFailed") }]} /></div>
+      <div className="library-filter-control"><Dropdown ariaLabel={t("library.schematicSort")} value={sortMode} onChange={onSortModeChange} options={[{ value: "manual", label: t("library.manualSort") }, { value: "recent_analyzed", label: t("library.lastAnalyzed") }, { value: "blocks", label: t("properties.blocks") }, { value: "name", label: t("library.nameSort") }]} /></div>
+      <Popover.Root><Popover.Trigger asChild><Button variant="ghost" aria-label={t("library.ux.management")}><MoreHorizontal size={16} aria-hidden="true" />{t("library.ux.more")}</Button></Popover.Trigger><Popover.Portal><Popover.Content className="library-management-popover" align="end" sideOffset={4} collisionPadding={8} onKeyDown={event => event.stopPropagation()}>
+      <Button variant="ghost" onClick={onImportClipboard}>{t("library.ux.clipboard")}</Button>
       {view !== "detail" && (
         <>
-          <div className="library-filter-control"><Dropdown ariaLabel="分组维度" value={groupDimension} onChange={(value) => onGroupDimensionChange(value as GroupingDimension)} options={[{ value: "none", label: "不分组" }, { value: "author", label: "按作者" }, { value: "version", label: "按版本" }, { value: "size", label: "按尺寸" }]} /></div>
-          <div className="library-filter-control"><Dropdown ariaLabel="分组方式" value={groupMode} disabled={groupDimension === "none"} onChange={(value) => onGroupModeChange(value as GroupingMode)} options={[{ value: "group", label: "分组" }, { value: "stack", label: "堆叠" }]} /></div>
+          <div className="library-filter-control"><Dropdown ariaLabel={t("library.ux.groupBy")} value={groupDimension} onChange={(value) => onGroupDimensionChange(value as GroupingDimension)} options={[{ value: "none", label: t("library.ux.noGrouping") }, { value: "author", label: t("library.ux.byAuthor") }, { value: "version", label: t("library.ux.byVersion") }, { value: "size", label: t("library.ux.bySize") }]} /></div>
+          <div className="library-filter-control"><Dropdown ariaLabel={t("library.ux.groupStyle")} value={groupMode} disabled={groupDimension === "none"} onChange={(value) => onGroupModeChange(value as GroupingMode)} options={[{ value: "group", label: t("library.ux.groups") }, { value: "stack", label: t("library.ux.stacks") }]} /></div>
         </>
       )}
-      <Button variant="ghost" onClick={onManageFolders}><ThemeIcon name="explorer" size={16} fallback={FolderOpen} />管理文件夹</Button>
-      <Button variant="ghost" onClick={onExport} disabled={busy}><ThemeIcon name="download" size={16} fallback={Download} />打包导出</Button>
-      <Button variant="ghost" onClick={onOpenTaskCenter} aria-haspopup="dialog">任务中心</Button>
-      <Button variant="ghost" onClick={() => onRescanAll(false)} disabled={busy}><ThemeIcon name="refresh" size={16} fallback={RefreshCw} />重新扫描全部</Button>
-      <Button variant="ghost" onClick={() => onRescanAll(true)} disabled={busy} title="忽略文件大小与修改时间缓存，强制重新计算校验值"><ThemeIcon name="refresh" size={16} fallback={RefreshCw} />强制重新校验</Button>
-      <Button variant="ghost" size="icon" aria-label={isRefreshing ? "正在刷新投影库" : "刷新投影库"} title="刷新投影库" disabled={busy} aria-busy={isRefreshing} onClick={onRefresh}><ThemeIcon name="refresh" size={16} fallback={RefreshCw} /></Button>
-      </div></details>
+      <Button variant="ghost" onClick={onManageFolders}><ThemeIcon name="explorer" size={16} fallback={FolderOpen} />{t("library.manageFolders")}</Button>
+      <Button variant="ghost" onClick={onExport} disabled={busy}><ThemeIcon name="download" size={16} fallback={Download} />{t("library.ux.exportZip")}</Button>
+      <Button variant="ghost" onClick={onOpenTaskCenter} aria-haspopup="dialog">{t("library.ux.taskCenter")}</Button>
+      <Button variant="ghost" onClick={() => onRescanAll(false)} disabled={busy}><ThemeIcon name="refresh" size={16} fallback={RefreshCw} />{t("library.ux.rescan")}</Button>
+      <Button variant="ghost" onClick={() => onRescanAll(true)} disabled={busy} title={t("library.ux.forceHint")}><ThemeIcon name="refresh" size={16} fallback={RefreshCw} />{t("library.ux.forceRecheck")}</Button>
+      <Button variant="ghost" aria-label={isRefreshing ? t("library.libraryRefreshing") : t("library.refreshLibrary")} title={t("library.refreshLibrary")} disabled={busy} aria-busy={isRefreshing} onClick={onRefresh}><ThemeIcon name="refresh" size={16} fallback={RefreshCw} />{t("library.refreshLibrary")}</Button>
+      </Popover.Content></Popover.Portal></Popover.Root>
       </div>
     </header>
   );

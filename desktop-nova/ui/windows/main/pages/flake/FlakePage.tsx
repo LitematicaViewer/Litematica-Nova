@@ -3,7 +3,7 @@ import { openLayerScene, releaseLayerScene, type LayerScene, type LayerHit, type
 import { t, localizeMessage, type UiMessage } from "../../../../../src/services/i18n";
 import { useI18n } from "../../../../i18n";
 import { displayPathText } from "../../../../../src/business/facade";
-import { creativeItemId } from "../../../../../src/business/facade";
+import { useCreativeIdentities } from "../../../../components/useCreativeIdentities";
 import { displayFilePath } from "../../../../../src/business/facade";
 import { Hand, Wand2, Ruler, MapPin, BoxSelect, Pencil, Eraser, Pipette, Square, Circle, PaintBucket, Type, Plus, Minus, Maximize2, SlidersHorizontal } from "lucide-react";
 import { Slider } from "../../../../components/ui/slider";
@@ -37,7 +37,7 @@ import { Layer3DView } from "./Layer3DView";
 
 // 同级函数
 import { FlakeBlockTooltip, formatStateRecord } from "./function";
-import { CreativeInventoryDialog } from "./creativeInventoryDialog";
+import { CreativeInventoryDialog, useCreativeInventoryCatalog } from "./creativeInventoryDialog";
 import { ContainerDialog } from "./containerDialog";
 import { loadContainerData, isContainerBlock, getContainerType, type ContainerItem, type ContainerType } from "../../../../../src/business/facade";
 import { listenEvent } from "../../../../../src/platform/events";
@@ -568,15 +568,22 @@ export function FlakePage({ currentFile, setRoute }: any) {
     handleToolSplitterPointerUp();
   }, []);
 
-  // 打开创造模式物品栏时懒加载当前投影的材料方块列表
+  const extraCollections = useMemo(() => materialBlocks.length
+    ? [{ id: "__current__", name: t("flake.currentBlocks"), values: materialBlocks }] : [], [materialBlocks, locale]);
+  const inventorySourceReady = !!scene && loadedSource.current === currentFile && viewMode === "2d";
+  const catalog = useCreativeInventoryCatalog({ version: scene?.meta.version,
+    resourceIdentity: scene?.resourceIdentity, enabled: inventorySourceReady, extraCollections });
+  const hotbarIdentity = useCreativeIdentities(quickbarSlots, scene?.meta.version, catalog.data?.contentId, inventorySourceReady);
+  // Prepare the projection-specific group when editing becomes available, not
+  // on the first inventory click. Do not start a 2D scan from the 3D page.
   useEffect(() => {
-    if (!showInventoryDialog || !currentFile || materialBlocks.length > 0) return;
+    if (!inventorySourceReady || !editMode || !currentFile || materialBlocks.length > 0) return;
     let active = true;
     loadStructuralBlocks(currentFile)
       .then((mats) => { if (active) setMaterialBlocks(mats.map((m) => m.id).filter(Boolean)); })
       .catch((error) => { if (active) setLayerError({ key: "flake.inventoryFailed", params: {error:String(error)} }); });
     return () => { active = false; };
-  }, [showInventoryDialog, currentFile]);
+  }, [inventorySourceReady, editMode, currentFile, scene?.sourceIdentity, materialBlocks.length]);
 
   useEffect(() => {
     if (!editMode) {
@@ -590,19 +597,30 @@ export function FlakePage({ currentFile, setRoute }: any) {
   }, [editMode]);
 
   useEffect(() => {
-    if (!editMode || debugStateBlock) return;
+    if (!editMode || viewMode !== "2d" || debugStateBlock || showInventoryDialog || showMaterials || showContainerDialog) return;
 
+    let spaceHeld = false;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.code !== "Space" || isTextEntryTarget(event.target)) return;
+      if (!event.defaultPrevented && !event.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey
+        && !isTextEntryTarget(event.target) && /^[1-9]$/.test(event.key)
+        && !(event.target instanceof Element && event.target.closest('[role="dialog"],[role="menu"],[role="combobox"],[role="listbox"],[data-native-ui-surface]'))) {
+        event.preventDefault();
+        setSelectedQuickbarSlot(Number(event.key) - 1);
+        return;
+      }
+      if (event.code !== "Space" || event.defaultPrevented || event.isComposing || isTextEntryTarget(event.target)
+        || event.target instanceof Element && event.target.closest('button,a[href],summary,[role="button"],[role="checkbox"],[role="switch"],[role="slider"],[role="combobox"],[role="menu"],[role="dialog"],[data-native-ui-surface]')) return;
       event.preventDefault();
+      spaceHeld = true;
       setIsSpaceHandTool(true);
     };
     const handleKeyUp = (event: KeyboardEvent) => {
-      if (event.code !== "Space") return;
+      if (event.code !== "Space" || !spaceHeld) return;
       event.preventDefault();
+      spaceHeld = false;
       setIsSpaceHandTool(false);
     };
-    const handleBlur = () => setIsSpaceHandTool(false);
+    const handleBlur = () => { spaceHeld = false; setIsSpaceHandTool(false); };
 
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
@@ -611,8 +629,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleBlur);
+      if (spaceHeld) handleBlur();
     };
-  }, [debugStateBlock, editMode]);
+  }, [debugStateBlock, editMode, viewMode, showInventoryDialog, showMaterials, showContainerDialog]);
 
   const effectiveEditTool: EditToolId = editMode && !isSpaceHandTool ? selectedEditTool : "hand";
   const effectiveOriginMarker = hasDraftOriginMarker ? draftOriginMarker : originMarker;
@@ -954,7 +973,7 @@ export function FlakePage({ currentFile, setRoute }: any) {
         <div className="flake-page__file-path" title={displayFilePath(currentFile)}>{displayFilePath(currentFile)}</div>
       </div>
 
-      {viewMode === "3d" ? <Layer3DView key={currentFile} sourcePath={currentFile} blocked={showMaterials || showContainerDialog || !!debugStateBlock || showInventoryDialog} /> : <>
+      {viewMode === "3d" ? <Layer3DView key={currentFile} sourcePath={currentFile} blocked={false} /> : <>
       <div className="flake-page__control-box">
         <div className="flake-page__primary-controls" role="toolbar" aria-label={t("flake.layerControls")}>
           <label className="flake-page__y-field">Y <Input type="number" min={meta?.min_y ?? 0} max={maxY + (meta?.min_y ?? 0)} value={layerY + (meta?.min_y ?? 0)} disabled={!ready} aria-label={t("flake.currentLayer")} onChange={event => {
@@ -967,9 +986,9 @@ export function FlakePage({ currentFile, setRoute }: any) {
           <span className="flake-page__key-hint"><kbd>PgUp</kbd> / <kbd>PgDn</kbd></span>
           <Button disabled={!ready} onClick={() => canvasRef.current?.resetView()}><Maximize2 aria-hidden="true" />{t("flake.resetView")}</Button>
         </div>
-        <details className="flake-page__advanced-controls">
+        <details className="flake-page__advanced-controls" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); } }}>
           <summary><SlidersHorizontal aria-hidden="true" />{t("flake.advanced")}</summary>
-          <div className="flake-page__advanced-content">
+          <div className="flake-page__advanced-content" data-native-ui-surface onWheel={event => event.stopPropagation()}>
             <div className="flake-page__layer-row flake-page__onion-row">
               <span className="nova-muted flake-page__layer-label">{t("flake.onionSkin")}</span>
               <Slider className="flake-page__layer-range" aria-label={t("flake.onionSkinDepth")} min={0} max={5} step={1} value={[onionSkinDepth]} onValueChange={([value]) => setOnionSkinDepth(Math.min(5, Math.max(0, value || 0)))} disabled={!ready} />
@@ -1037,6 +1056,33 @@ export function FlakePage({ currentFile, setRoute }: any) {
               item={hoverBlock}
               highlightEmptyState={effectiveEditTool === "debug-stick"}
             />
+      {editMode ? (
+        <div className="flake-page__quickbar" aria-label={t("flake.quickbar")}>
+          <div className="flake-page__quickbar-body" role="toolbar" aria-label={t("flake.quickbarBody")}>
+            {quickbarSlots.map((blockId, index) => {
+              const isSelected = selectedQuickbarSlot === index;
+              return (
+                <Button
+                  key={`slot-${index + 1}`}
+                  themeSlot="hotbar-slot" variant="ghost"
+                  className={isSelected ? "flake-page__quickbar-slot is-selected" : "flake-page__quickbar-slot"}
+                  type="button"
+                  aria-label={blockId ? t("flake.hotbarItemAria", {item:translateBlockId(hotbarIdentity.itemIds[blockId] ?? blockId),index:index+1}) : t("flake.hotbarSlotAria", {index:index+1})}
+                  aria-pressed={isSelected}
+                  onClick={() => setSelectedQuickbarSlot(index)}
+                >
+                  {blockId && <BlockIcon blockId={hotbarIdentity.itemIds[blockId] ?? blockId} lookupMode="item_first" />}
+                  <kbd aria-hidden="true">{index + 1}</kbd>
+                </Button>
+              );
+            })}
+          </div>
+          {hotbarIdentity.error && <span className="nova-error" role="alert">{hotbarIdentity.error}</span>}
+          <Button className="flake-page__quickbar-open-inventory" type="button" onClick={() => setShowInventoryDialog(true)}>
+            <span className="flake-page__quickbar-open-inventory-text">{t("flake.openInventory")}</span>
+          </Button>
+        </div>
+      ) : null}
           </div>
         </section>
 
@@ -1132,31 +1178,6 @@ export function FlakePage({ currentFile, setRoute }: any) {
         ) : null}
       </div>
 
-      {editMode ? (
-        <div className="flake-page__quickbar" aria-label={t("flake.quickbar")}>
-          <div className="flake-page__quickbar-body" role="toolbar" aria-label={t("flake.quickbarBody")}>
-            {quickbarSlots.map((blockId, index) => {
-              const isSelected = selectedQuickbarSlot === index;
-              return (
-                <Button
-                  key={`slot-${index + 1}`}
-                  className={isSelected ? "flake-page__quickbar-slot is-selected" : "flake-page__quickbar-slot"}
-                  type="button"
-                  aria-label={blockId ? t("flake.hotbarItemAria", {item:translateBlockId(creativeItemId(blockId) || blockId),index:index+1}) : t("flake.hotbarSlotAria", {index:index+1})}
-                  aria-pressed={isSelected}
-                  onClick={() => setSelectedQuickbarSlot(index)}
-                >
-                  {blockId ? <BlockIcon blockId={creativeItemId(blockId) || blockId} lookupMode="item_first" /> : <span className="flake-page__quickbar-slot-icon" aria-hidden />}
-                  <span className="flake-page__quickbar-slot-label">{blockId ? translateBlockId(creativeItemId(blockId) || blockId) : t("flake.emptySlot")}</span>
-                </Button>
-              );
-            })}
-          </div>
-          <Button className="flake-page__quickbar-open-inventory" type="button" onClick={() => setShowInventoryDialog(true)}>
-            <span className="flake-page__quickbar-open-inventory-text">{t("flake.openInventory")}</span>
-          </Button>
-        </div>
-      ) : null}
 
       {markerMenu ? (
         <div
@@ -1204,14 +1225,11 @@ export function FlakePage({ currentFile, setRoute }: any) {
       </>}
       {showInventoryDialog ? (
         <CreativeInventoryDialog
+          catalog={catalog}
           onClose={() => setShowInventoryDialog(false)}
           quickbarSlots={quickbarSlots}
+          quickbarIdentity={hotbarIdentity}
           onChangeQuickbarSlots={(updater) => setQuickbarSlots((current) => updater([...current]))}
-          extraCollections={
-            materialBlocks.length > 0
-              ? [{ id: '__current__', name: t("flake.currentBlocks"), values: materialBlocks }]
-              : []
-          }
         />
       ) : null}
 

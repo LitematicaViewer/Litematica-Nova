@@ -6,7 +6,7 @@ import { Slot } from "radix-ui";
 import { cn } from "../../lib/utils";
 
 const buttonVariants = cva(
-  "nova-control btn inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap transition-all outline-none disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "nova-control btn inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap outline-none disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     variants: {
       variant: {

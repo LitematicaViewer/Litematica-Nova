@@ -1,7 +1,7 @@
 {
   "productName": "Litematica Nova",
   "mainBinaryName": "Litematica-Nova",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "identifier": "com.litematica.nova",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -99,8 +99,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1NzZBN0MyNkE1Qjg5Q0QKUldUTmlWdHF3cWQydFVuaENKU3ZjQ1EvWEUyUmdvd3RlNlF0ZEdiWXdZNW1OSTlMVUdGK2ZNWHMK",
       "endpoints": [
-        "https://raw.githubusercontent.com/LitematicaViewer/Litematica-Nova/main/updates/latest.json",
-        "https://45-62-112-121.sslip.io:8448/nova-updates/latest.json"
+        "https://raw.githubusercontent.com/LitematicaViewer/Litematica-Nova/main/updates/latest.json"
       ],
       "windows": {
         "installMode": "passive"

@@ -279,7 +279,8 @@ pub struct OperationSummary {
 #[derive(Debug)]
 struct BuiltRegion {
     name: String,
-    region: RegionNbt,
+    volume: u64,
+    palette_entries: usize,
     non_air_count: u64,
     material_counts: BTreeMap<String, (BlockStateNbt, u64)>,
     operation_summaries: Vec<OperationSummary>,
@@ -308,8 +309,8 @@ pub fn generate_projection(
         }
     }
 
-    let built = build_root(&plan)?;
-    let mut summary = summarize(plan_path, output, dry_run, &built);
+    let BuiltRoot { root, regions } = build_root(&plan)?;
+    let mut summary = summarize(plan_path, output, dry_run, regions);
 
     if !dry_run {
         let output = output.expect("checked above");
@@ -318,7 +319,7 @@ pub fn generate_projection(
                 format!("failed to create output directory {}", parent.display())
             })?;
         }
-        save_litematic_root(output, &built.root)?;
+        save_litematic_root(output, &root)?;
         summary.wrote_file = true;
         summary.output_size = Some(
             fs::metadata(output)
@@ -346,8 +347,8 @@ fn build_root(plan: &ProjectionPlan) -> Result<BuiltRoot> {
     let mut bounds_max: Option<[i32; 3]> = None;
 
     for (region_index, region_plan) in plan.regions.iter().enumerate() {
-        let built_region = build_region(region_plan, region_index)?;
-        total_volume += region_volume_u64(region_plan.size)?;
+        let (region, built_region) = build_region(region_plan, region_index)?;
+        total_volume += built_region.volume;
         total_blocks += built_region.non_air_count;
         let region_min = region_plan.origin;
         let region_max = [
@@ -371,10 +372,7 @@ fn build_root(plan: &ProjectionPlan) -> Result<BuiltRoot> {
             ],
             None => region_max,
         });
-        regions.insert(
-            built_region.name.clone(),
-            clone_region(&built_region.region),
-        );
+        regions.insert(built_region.name.clone(), region);
         built_regions.push(built_region);
     }
     let bounds_min = bounds_min.unwrap_or([0, 0, 0]);
@@ -416,18 +414,7 @@ fn build_root(plan: &ProjectionPlan) -> Result<BuiltRoot> {
     })
 }
 
-fn clone_region(region: &RegionNbt) -> RegionNbt {
-    RegionNbt {
-        position: region.position,
-        size: region.size,
-        block_state_palette: region.block_state_palette.clone(),
-        block_states: region.block_states.clone(),
-        entities: region.entities.clone(),
-        tile_entities: region.tile_entities.clone(),
-    }
-}
-
-fn build_region(region_plan: &PlanRegion, region_index: usize) -> Result<BuiltRegion> {
+fn build_region(region_plan: &PlanRegion, region_index: usize) -> Result<(RegionNbt, BuiltRegion)> {
     let width = region_plan.size[0] as usize;
     let height = region_plan.size[1] as usize;
     let length = region_plan.size[2] as usize;
@@ -505,13 +492,15 @@ fn build_region(region_plan: &PlanRegion, region_index: usize) -> Result<BuiltRe
         tile_entities: Vec::<Value>::new(),
     };
 
-    Ok(BuiltRegion {
+    let details = BuiltRegion {
         name: region_plan.name.clone(),
-        region,
+        volume: region_volume_u64(region_plan.size)?,
+        palette_entries: region.block_state_palette.len(),
         non_air_count,
         material_counts,
         operation_summaries,
-    })
+    };
+    Ok((region, details))
 }
 
 #[derive(Default)]
@@ -1373,7 +1362,7 @@ fn summarize(
     plan_path: &Path,
     output: Option<&Path>,
     dry_run: bool,
-    built: &BuiltRoot,
+    regions: Vec<BuiltRegion>,
 ) -> GenerateSummary {
     let mut material_counts = BTreeMap::<String, (BlockStateNbt, u64)>::new();
     let mut total_volume = 0_u64;
@@ -1383,40 +1372,29 @@ fn summarize(
     let mut palettes = Vec::new();
     let mut operations = Vec::new();
 
-    for built_region in &built.regions {
-        total_volume += built_region.region.size.x as u64
-            * built_region.region.size.y as u64
-            * built_region.region.size.z as u64;
+    for built_region in regions {
+        total_volume += built_region.volume;
         total_non_air += built_region.non_air_count;
         operation_count += built_region.operation_summaries.len();
-        estimated_palette_count += built_region.region.block_state_palette.len();
+        estimated_palette_count += built_region.palette_entries;
         palettes.push(RegionPaletteSummary {
-            region: built_region.name.clone(),
-            palette_entries: built_region.region.block_state_palette.len(),
+            region: built_region.name,
+            palette_entries: built_region.palette_entries,
         });
-        operations.extend(clone_operation_summaries(&built_region.operation_summaries));
-        for (key, (state, count)) in &built_region.material_counts {
-            let entry = material_counts
-                .entry(key.clone())
-                .or_insert((state.clone(), 0));
+        operations.extend(built_region.operation_summaries);
+        for (key, (state, count)) in built_region.material_counts {
+            let entry = material_counts.entry(key).or_insert((state, 0));
             entry.1 += count;
         }
     }
 
-    let material_summary = material_counts
-        .into_values()
-        .map(|(state, count)| MaterialSummaryEntry {
-            block_id: state.name,
-            properties: state.properties,
-            count,
-        })
-        .collect();
+    let material_summary = material_counts_to_summary(material_counts);
 
     GenerateSummary {
         plan_path: plan_path.display().to_string(),
         output_path: output.map(|path| path.display().to_string()),
         dry_run,
-        regions_count: built.regions.len(),
+        regions_count: palettes.len(),
         operation_count,
         total_volume,
         estimated_non_air_blocks: total_non_air,
@@ -1441,28 +1419,6 @@ fn material_counts_to_summary(
             block_id: state.name,
             properties: state.properties,
             count,
-        })
-        .collect()
-}
-
-fn clone_operation_summaries(summaries: &[OperationSummary]) -> Vec<OperationSummary> {
-    summaries
-        .iter()
-        .map(|summary| OperationSummary {
-            region: summary.region.clone(),
-            index: summary.index,
-            name: summary.name.clone(),
-            operation_type: summary.operation_type.clone(),
-            affected_block_count: summary.affected_block_count,
-            material_summary: summary
-                .material_summary
-                .iter()
-                .map(|entry| MaterialSummaryEntry {
-                    block_id: entry.block_id.clone(),
-                    properties: entry.properties.clone(),
-                    count: entry.count,
-                })
-                .collect(),
         })
         .collect()
 }

@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -113,17 +112,18 @@ pub fn export_materials_data(
         &empty_trees,
     );
     let output_path = resolve_output_path(input, output)?;
-    ensure_stockpile_project_output(&output_path)?;
-    let file = File::create(&output_path).with_context(|| {
-        format!(
-            "create stockpile materials output failed: {}",
-            output_path.display()
-        )
-    })?;
-    let mut writer = BufWriter::new(file);
-    serde_json::to_writer_pretty(&mut writer, &data)?;
-    writer.write_all(b"\n")?;
-    writer.flush()?;
+    ensure_stockpile_output(&runtime_paths::stockpile_projects_root()?, &output_path)?;
+    if output_path.exists() {
+        anyhow::ensure!(std::fs::canonicalize(&output_path)? != std::fs::canonicalize(input)?, "stockpile export cannot replace the input projection");
+    }
+    let mut file = tempfile::NamedTempFile::new_in(output_path.parent().context("missing output parent")?)?;
+    {
+        let mut writer = BufWriter::new(file.as_file_mut());
+        serde_json::to_writer_pretty(&mut writer, &data)?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+    }
+    file.persist(&output_path)?;
     Ok(data)
 }
 
@@ -452,33 +452,41 @@ fn resolve_output_path(input: &Path, output: Option<&Path>) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn ensure_stockpile_project_output(path: &Path) -> Result<()> {
-    let projects_root = runtime_paths::stockpile_projects_root()?;
-    let full_output = absolutize(path)?;
-    let full_projects = absolutize(&projects_root)?;
-    if !full_output.starts_with(&full_projects) {
-        bail!(
-            "stockpile export output must be under {}",
-            full_projects.display()
-        );
+/// Fence the legacy export commands; explicit material "Save As" uses its own validation.
+pub(super) fn ensure_stockpile_output(root: &Path, path: &Path) -> Result<()> {
+    use std::path::Component;
+    let relative = path.strip_prefix(root)
+        .with_context(|| format!("stockpile output must be under {}", root.display()))?;
+    let name = relative.file_name().context("stockpile output requires a file name")?;
+    anyhow::ensure!(relative.components().all(|part| matches!(part, Component::Normal(_))),
+        "stockpile output contains a parent or rooted component");
+
+    std::fs::create_dir_all(root)?;
+    let canonical_root = std::fs::canonicalize(root)?;
+    let mut parent = canonical_root.clone();
+    for part in relative.parent().unwrap_or(Path::new("")).components() {
+        parent.push(part.as_os_str());
+        // Check each existing parent before making children through it (including junctions).
+        match std::fs::create_dir(&parent) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        parent = std::fs::canonicalize(&parent)?;
+        anyhow::ensure!(parent.starts_with(&canonical_root) && parent.is_dir(),
+            "stockpile output parent escapes its root or is not a directory");
     }
-    if let Some(parent) = full_output.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "create stockpile output directory failed: {}",
-                parent.display()
-            )
-        })?;
+    let target = parent.join(name);
+    match std::fs::symlink_metadata(&target) {
+        Ok(_) => anyhow::ensure!(std::fs::canonicalize(&target)?.starts_with(canonical_root),
+            "stockpile output escapes its root"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     Ok(())
 }
 
-fn absolutize(path: &Path) -> Result<PathBuf> {
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
-    }
-    Ok(runtime_paths::app_root()?.join(path))
-}
+
 
 fn project_slug(input: &Path) -> String {
     let raw = input
@@ -792,6 +800,41 @@ fn category(name: &'static str, icon: &'static str) -> MaterialCategory {
 
 #[cfg(test)]
 mod tests {
+    use super::ensure_stockpile_output;
+
+    #[test]
+    fn stockpile_output_fence_rejects_traversal_and_preserves_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("exports");
+        let source = dir.path().join("projection");
+        std::fs::write(&source, b"original").unwrap();
+        assert!(ensure_stockpile_output(&root, &root.join("../projection")).is_err());
+        assert!(ensure_stockpile_output(&root, &root.join("nested/../../projection")).is_err());
+        assert!(ensure_stockpile_output(&root, &source).is_err());
+        assert!(!root.exists());
+        assert!(ensure_stockpile_output(&root, &root.join("nested/materials.json")).is_ok());
+        assert!(root.join("nested").is_dir());
+        assert_eq!(std::fs::read(source).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stockpile_output_fence_rejects_symlinked_parents_and_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("exports");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("alias")).unwrap();
+        assert!(ensure_stockpile_output(&root, &root.join("alias/new/m.json")).is_err());
+        assert!(!outside.join("new").exists());
+        let real = outside.join("old");
+        std::fs::write(&real, b"keep").unwrap();
+        std::os::unix::fs::symlink(&real, root.join("linked")).unwrap();
+        assert!(ensure_stockpile_output(&root, &root.join("linked")).is_err());
+        assert_eq!(std::fs::read(real).unwrap(), b"keep");
+    }
+
     use super::{
         RecipeAvailability, build_stockpile_materials_data, categorize_material,
         normalize_unobtainable_material, recipe_status_for_material, stack_breakdown,

@@ -237,6 +237,14 @@ pub(crate) struct LayerContainerData {
     pub(crate) z: i32,
     pub(crate) block_id: String,
     pub(crate) nbt: BTreeMap<String, Value>,
+    pub(crate) items: Vec<LayerContainerItem>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct LayerContainerItem {
+    pub(crate) id: String,
+    pub(crate) count: Option<f64>,
+    pub(crate) slot: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -987,7 +995,7 @@ impl ApplicationOperations {
     /// Game-data selection/import uses the same supervised Core business bridge.
     /// It deliberately resolves the current store instead of a render snapshot.
     pub(crate) fn game_data_command(&self, args: Vec<String>) -> Result<Value, String> {
-        let writing = matches!(args.first().map(String::as_str), Some("import" | "select" | "default"));
+        let writing = matches!(args.first().map(String::as_str), Some("import" | "select" | "default" | "mod-import" | "mod-snapshot" | "mod-enable" | "mod-remove"));
         let _write = if writing { Some(self.begin_write()?) } else { None };
         let mut command = vec!["game-data".to_owned()];
         command.extend(args);
@@ -1168,6 +1176,11 @@ impl ApplicationOperations {
             json!({"action": "libraryInspect", "input": path_text(source)}), None, false).map(|_| ())
     }
 
+    pub(crate) fn game_data_creative_inventory(&self, mut input: Value) -> Result<Value, String> {
+        input["action"] = "creativeInventory".into();
+        self.data_request(super::data_worker::protocol::DataKind::LayerView, input, None, false)
+    }
+
     pub(crate) fn data_query(&self, query: DataQueryInput) -> Result<Value, String> {
         use super::data_worker::protocol::DataKind;
         if matches!(query.kind,DataKind::Analysis|DataKind::Cancel) { return Err("Unsupported public data query".into()); }
@@ -1305,6 +1318,7 @@ mod core_data_scope_tests;
 #[cfg(test)]
 fn material_snapshot_for_scope(value:Value,scope:&MaterialScope)->Result<Value,String>{
     core_data_scope_tests::material_snapshot_for_scope(value,&serde_json::from_value(serde_json::to_value(scope).unwrap()).unwrap())
+        .map(core_data_scope_tests::material_snapshot_dto)
 }
 
 /// This inspects only a Host-owned temporary request, never a projection.

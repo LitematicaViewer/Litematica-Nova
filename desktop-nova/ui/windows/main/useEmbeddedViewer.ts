@@ -1,6 +1,7 @@
 import { t, getUiLocale, localizeMessage, message, type UiMessage } from "../../../src/services/i18n";
 import { useI18n } from "../../i18n";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { updateSceneView } from "../../../src/platform/sceneView";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ensureApplicationRenderSubscription,
   isApplicationViewerPrepared,
@@ -15,9 +16,16 @@ import {
 import {
   elementToPresentationPlacement,
   elementToNativeChildPlacement,
+  nativeClientPlacement,
   isUsableEmbeddedRect,
+  sceneOverlayGeometry,
+  nativeBackdropOpacity,
   subscribeNativeWindowGeometry,
 } from "./embeddedViewerGeometry";
+
+// Latest mounted presentation owns the native overlay, not an individual dialog.
+const overlayOwners = new Map<string, symbol>();
+let overlayRevision = 0;
 
 function placementKey(intent: PresentationIntent) {
   const p = intent.placement;
@@ -26,6 +34,8 @@ function placementKey(intent: PresentationIntent) {
 
 export interface PresentationViewportOperation {
   operationId: string;
+  sourcePath?: string;
+  displayMode?: "fast_experimental" | "standard" | "full";
   prepared: boolean;
   presentation: PresentationIntent;
 }
@@ -52,7 +62,7 @@ const applicationController: PresentationViewportController = {
 export function useEmbeddedViewer(operation: RenderOperationView | null, blocked = false) {
   useI18n();
   return usePresentationViewport(operation ? {
-    operationId: operation.operationId, prepared: isApplicationViewerPrepared(operation), presentation: operation.presentation,
+    operationId: operation.operationId, sourcePath: operation.source.path, displayMode: operation.displayMode === "normal" ? "standard" : operation.displayMode, prepared: isApplicationViewerPrepared(operation), presentation: operation.presentation,
   } : null, blocked, applicationController);
 }
 
@@ -62,6 +72,11 @@ export function usePresentationViewport(operation: PresentationViewportOperation
   const resolvePlacement = inlineMode === "embedded" ? elementToNativeChildPlacement : elementToPresentationPlacement;
   const useRouteEffect = inlineMode === "embedded" ? useLayoutEffect : useEffect;
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const [mountedHost, setMountedHost] = useState<HTMLDivElement | null>(null);
+  const attachHost = useCallback((host: HTMLDivElement | null) => {
+    hostRef.current = host;
+    setMountedHost(host);
+  }, []);
   const [error, setError] = useState<UiMessage>("");
   const leasedOperation = useRef(operation);
   if (operation?.operationId === leasedOperation.current?.operationId) leasedOperation.current = operation;
@@ -233,7 +248,7 @@ export function usePresentationViewport(operation: PresentationViewportOperation
     };
     void restore().catch((reason) => { if (!cancelled) setError(message("render.showFailed", { error: String(reason) })); });
     return () => { cancelled = true; };
-  }, [operation?.operationId, mayQueuePresentation, blocked, requestedOperationId, visibilityRevision]);
+  }, [operation?.operationId, mayQueuePresentation, blocked, requestedOperationId, visibilityRevision, mountedHost]);
 
   useEffect(() => {
     if (!operation || !mayQueuePresentation || blocked) return;
@@ -310,7 +325,87 @@ export function usePresentationViewport(operation: PresentationViewportOperation
       window.removeEventListener("focus", schedule);
       window.removeEventListener("blur", schedule);
     };
-  }, [operation?.operationId, mayQueuePresentation, blocked, operation?.presentation.mode, operation?.presentation.visible, requestedOperationId, visibilityRevision]);
+  }, [operation?.operationId, mayQueuePresentation, blocked, operation?.presentation.mode, operation?.presentation.visible, requestedOperationId, visibilityRevision, mountedHost]);
 
-  return { hostRef, error: localizeMessage(error), showOverlay, setPresentation, requestPresentationWhenReady };
+  // Native child visibility belongs only to route/window presentation. Temporary
+  // WebView surfaces cut out their actual rectangles and lease input separately.
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    const sourcePath = operation?.sourcePath;
+    const displayMode = operation?.displayMode;
+    if (!host || !sourcePath || !displayMode || !ready || blocked || inlineMode !== "embedded"
+      || operation?.presentation.mode !== "embedded" || !operation.presentation.visible) return;
+    const operationId = operation.operationId;
+    const owner = Symbol(operationId);
+    overlayOwners.set(operationId, owner);
+    let alive = true, running = false, again = false, frame = 0, last = "";
+    let lastOwnsInput = false, lastBlocked: boolean | undefined;
+    const exposed = (element: HTMLElement) => {
+      const style = getComputedStyle(element), rect = element.getBoundingClientRect();
+      return !element.hidden && style.display !== "none" && style.visibility !== "hidden"
+        && rect.width > 0 && rect.height > 0 && element.dataset.state !== "closed";
+    };
+    const refresh = async () => {
+      frame = 0;
+      if (!alive) return;
+      if (running) { again = true; return; }
+      running = true;
+      const revision = ++overlayRevision;
+      try {
+        // Holes and pointer hits are child-relative. Sampling two screen origins
+        // across IPC while dragging the main window shifts them apart.
+        const placement = nativeClientPlacement(host);
+        const scale = placement.dpiScale;
+        const surfaces = [...document.querySelectorAll<HTMLElement>("[data-native-ui-surface]")]
+          .filter(element => exposed(element) && !element.contains(host));
+        const elements = [...surfaces, ...host.querySelectorAll<HTMLElement>("[data-scene-ui-region]")].filter(exposed);
+        const slots = Array.from(host.querySelectorAll<HTMLElement>("[data-scene-hotbar-slot]"));
+        const {uiRegions, hotbarRegions} = sceneOverlayGeometry(elements, slots, document.documentElement.dataset.theme === "shadcn", placement, { x: 0, y: 0 }, scale);
+        const blockers = Array.from(document.querySelectorAll<HTMLElement>("[data-native-ui-blocking]"))
+          .filter(element => exposed(element) && !element.contains(host));
+        const uiInputBlocked = blockers.length > 0 || host.querySelectorAll("[data-scene-system-modal]").length > 0;
+        // Match the actual shared black CSS backdrops, including nested owners
+        // and fade animation. This dims the live GPU surface, not a captured image.
+        const uiBackdropOpacity = nativeBackdropOpacity(blockers);
+        for (const element of [...surfaces, ...blockers]) resize.observe(element);
+        // Cutouts are visual; tracking a block or changing slot ink is not a
+        // request to give the WebView the native camera's mouse capture.
+        const ownsInput = uiInputBlocked || surfaces.some(el => !el.closest('[role="tooltip"],[data-scene-ui-region]'));
+        const key = JSON.stringify([placement, uiRegions, hotbarRegions, uiInputBlocked, ownsInput, uiBackdropOpacity]);
+        if (key !== last) {
+          await updateSceneView({ sourcePath, displayMode, operationId, overlayRevision: revision, controls: { uiRegions, hotbarRegions, uiBackdropOpacity,
+            ...(lastBlocked !== uiInputBlocked ? { uiInputBlocked } : {}),
+            ...(ownsInput && !lastOwnsInput || uiInputBlocked && !lastBlocked ? { releaseCameraInput: true } : {}),
+          } });
+          if (alive) { last = key; lastBlocked = uiInputBlocked; lastOwnsInput = ownsInput; }
+        }
+        // Follow an in-progress surface transition without polling stationary UI.
+        if (alive && [...elements, ...blockers].some(element => element.getAnimations().some(animation => animation.playState === "running"))) schedule();
+      } catch (reason) { if (alive) setError(String(reason)); }
+      finally { running = false; if (again && alive) { again = false; schedule(); } }
+    };
+    function schedule() { if (alive && !frame) frame = requestAnimationFrame(() => void refresh()); }
+    const resize = new ResizeObserver(schedule); resize.observe(host);
+    const changes = new MutationObserver(schedule);
+    changes.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["style", "class", "hidden", "open", "data-state", "data-theme", "data-color-scheme", "aria-pressed"] });
+    const native = subscribeNativeWindowGeometry(schedule);
+    window.addEventListener("resize", schedule); window.addEventListener("scroll", schedule, true);
+    document.addEventListener("transitionrun", schedule, true); document.addEventListener("animationstart", schedule, true);
+    schedule();
+    return () => {
+      alive = false; cancelAnimationFrame(frame); changes.disconnect(); resize.disconnect(); void native.then(stop => stop());
+      window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true);
+      document.removeEventListener("transitionrun", schedule, true); document.removeEventListener("animationstart", schedule, true);
+      if (overlayOwners.get(operationId) === owner) overlayOwners.delete(operationId);
+      const revision = ++overlayRevision;
+      // React mounts the replacement owner in this commit. Its registration
+      // must not be undone by the old hook's asynchronous cleanup.
+      queueMicrotask(() => {
+        if (!overlayOwners.has(operationId)) void updateSceneView({ sourcePath, displayMode, operationId, overlayRevision: revision,
+          controls: { uiRegions: [], hotbarRegions: [], uiBackdropOpacity: 0, uiInputBlocked: false, releaseCameraInput: true } }).catch(() => undefined);
+      });
+    };
+  }, [operation?.operationId, operation?.sourcePath, operation?.displayMode, ready, blocked, inlineMode, operation?.presentation.mode, operation?.presentation.visible, mountedHost]);
+
+  return { hostRef, mountHost: attachHost, error: localizeMessage(error), showOverlay, setPresentation, requestPresentationWhenReady };
 }

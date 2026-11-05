@@ -108,3 +108,6 @@ export type {
   AiSaveConfigInput,
   AiTestResult,
 } from "../platform/keyStorage";
+
+export { gameDataMods, queryCreativeInventory } from "../platform/files";
+export type { ImportedModInfo, ImportedModEntry, ModResourceSnapshot, CreativeInventoryItem, CreativeInventoryQuery, CreativeInventoryResult } from "../platform/files";

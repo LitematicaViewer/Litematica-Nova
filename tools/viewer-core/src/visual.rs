@@ -8,7 +8,7 @@ use crate::model::{
     VisualMetaOutput, VisualMetaSummaryOutput, VisualOutput, VisualSummaryOutput,
 };
 use crate::nbt::{
-    LitematicRoot, RegionBounds, bits_for_palette, for_each_palette_index, load_litematic_root,
+    LitematicRoot, RegionBounds, bits_for_palette, choose_palette_packing, region_coord_to_storage_coord, load_litematic_root,
     region_bounds, region_volume, storage_to_region_coords,
 };
 
@@ -182,44 +182,27 @@ pub fn build_visual_layer_output(
         let length = i64::from(region.size.z).unsigned_abs() as usize;
         let nbits = bits_for_palette(region.block_state_palette.len());
 
-        for_each_palette_index(
-            &region.block_states,
-            volume,
-            nbits,
-            region.block_state_palette.len(),
-            |index, palette_index| {
-                let Some(block) = region.block_state_palette.get(palette_index) else {
-                    return Ok(());
-                };
-                let state = format_block_state(block);
-                if is_air_state(&state) {
-                    return Ok(());
-                }
-
-                let y = index / (width * length);
-                let i_in_layer = index % (width * length);
-                let z = i_in_layer / width;
-                let x = i_in_layer % width;
-                let (rx, ry, rz) = storage_to_region_coords(x, y, z, &region.size);
-                let global_y = region.position.y + ry - bounds.min_y;
-                if global_y != target_y {
-                    return Ok(());
-                }
-                let global_x = region.position.x + rx - bounds.min_x;
-                let global_z = region.position.z + rz - bounds.min_z;
-                let palette_id = *catalog
-                    .state_lookup
-                    .get(&state)
-                    .ok_or_else(|| anyhow!("missing palette entry for state {}", state))?;
-
-                blocks.push(LayerBlockOutput {
-                    x: global_x,
-                    z: global_z,
-                    palette_id,
-                });
-                Ok(())
-            },
-        )?;
+        let layout = choose_palette_packing(&region.block_states, volume, nbits, region.block_state_palette.len())?;
+        let relative_y = i64::from(target_y) + i64::from(bounds.min_y) - i64::from(region.position.y);
+        let Some(y) = i32::try_from(relative_y).ok().and_then(|dy| region_coord_to_storage_coord(dy, region.size.y)) else {
+            continue;
+        };
+        let layer_size = width * length;
+        let start = y * layer_size;
+        for offset in 0..layer_size {
+            let i = layout.palette_index(&region.block_states, start + offset);
+            let Some(block) = region.block_state_palette.get(i) else { continue; };
+            let state = format_block_state(block);
+            if is_air_state(&state) { continue; }
+            let (rx, _, rz) = storage_to_region_coords(offset % width, y, offset / width, &region.size);
+            let palette_id = *catalog.state_lookup.get(&state)
+                .ok_or_else(|| anyhow!("missing palette entry for state {}", state))?;
+            blocks.push(LayerBlockOutput {
+                x: region.position.x + rx - bounds.min_x,
+                z: region.position.z + rz - bounds.min_z,
+                palette_id,
+            });
+        }
     }
 
     Ok(VisualLayerOutput {
