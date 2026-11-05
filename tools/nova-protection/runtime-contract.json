@@ -112,6 +112,26 @@
       "target": "x86_64-unknown-linux-gnu",
       "runtime_build_id": "runtime-1-58ec1757bbe3-nova-beta041-core-r1-x86_64-unknown-linux-gnu",
       "module_manifest_sha256": "ebb7a0dbb1cb0b70cd1e792c582203febc5778d13299cee8037caeb2da85f0d4"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_build_id": "runtime-1-8dd4d7be91a1-nova042-release-r1-x86_64-pc-windows-msvc",
+      "module_manifest_sha256": "52f91c860230acc0efbaca26b3fce41a1b1e66aff04bf28449d2c7c708104848"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "runtime_build_id": "runtime-1-8dd4d7be91a1-nova042-release-r1-x86_64-unknown-linux-gnu",
+      "module_manifest_sha256": "2997698b0826dafb615977a71151ff4ebce2a142b943d48e03418fc41505da5c"
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "runtime_build_id": "runtime-1-98b2f546a111-nova042-release-r1-x86_64-apple-darwin",
+      "module_manifest_sha256": "bde6ff6544c9af09669e3ecb08fe34a0f633ded8cb82a246a2378de2cbb8887f"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "runtime_build_id": "runtime-1-98b2f546a111-nova042-release-r1-aarch64-apple-darwin",
+      "module_manifest_sha256": "21e5ba29be5c0a18a072b565e60b0ffb4186cda8a410904905f831c0c2d99055"
     }
   ]
 }
