@@ -32,9 +32,6 @@
     filter: invert(1);
 }
 
-/* Windows 8/10 selection: a flat accent-tinted row plus a 4x24 highlight bar.
-   The bar is a pseudo-element (not `border-left`) so the collapsed sidebar can
-   keep its icon centred. */
 .nav-expand,
 .nav-item {
     box-sizing: border-box;
@@ -63,14 +60,17 @@
     color: var(--foreground);
 }
 
-.nav-item.nav-item-active {
+/* Windows 8/10 selection: a flat accent-tinted row plus a 4x24 highlight bar.
+   The bar is a pseudo-element (not `border-left`) so the collapsed sidebar can
+   keep its icon centred. */
+.nav-item-active {
     padding-left: 16px;
     border-left: 0;
     background: var(--option-active-background);
     color: var(--option-active-color);
 }
 
-.nav-item.nav-item-active::before {
+.nav-item-active::before {
     position: absolute;
     top: 50%;
     left: 0;
@@ -83,7 +83,7 @@
 
 /* Keep the selection tint under the pointer: the generic nav hover is lighter
    than the selected plate and would otherwise read as "deselecting". */
-.nav-item.nav-item-active:hover:not(:disabled) {
+.nav-item-active:hover:not(:disabled) {
     background: var(--option-active-background);
     color: var(--option-active-color);
 }
@@ -100,12 +100,8 @@
     padding: 0;
 }
 
-.sidebar-collapsed .nav-item.nav-item-active {
+.sidebar-collapsed .nav-item-active {
     padding-left: 0;
-}
-
-.sidebar-collapsed .workspace-project {
-    display: none;
 }
 
 @media (max-width: 760px) {
@@ -116,12 +112,8 @@
         padding: 0;
     }
 
-    .sidebar .nav-item.nav-item-active {
+    .sidebar .nav-item-active {
         padding-left: 0;
-    }
-
-    .sidebar .workspace-project {
-        display: none;
     }
 }
 
@@ -485,12 +477,6 @@
 [data-slot="checkbox"] svg {
     visibility: hidden;
 }
-
-[data-slot="checkbox"][data-state="indeterminate"] {
-    background-image: url("./resource/form/checkbox_default.svg");
-    color: var(--foreground);
-}
-[data-slot="checkbox"][data-state="indeterminate"] [data-slot="checkbox-mixed"] { visibility: visible; }
 
 [data-slot="checkbox"]:focus-visible {
     outline: 2px solid var(--ring);

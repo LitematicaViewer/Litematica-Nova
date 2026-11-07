@@ -197,12 +197,6 @@
                 visibility 0s linear var(--ln-aero7-motion-duration);
 }
 
-/* The active project caption is a shell element, not a nav row: keep it inside
-   the 60px collapsed rail by hiding it with the labels. */
-.sidebar-collapsed .workspace-project {
-    display: none;
-}
-
 @media (max-width: 760px) {
     .sidebar {
         flex-basis: var(--ln-aero7-nav-width-collapsed);
@@ -218,12 +212,10 @@
     }
 
     .sidebar .nav-label,
-    .sidebar .nav-expand strong,
-    .sidebar .workspace-project {
+    .sidebar .nav-expand strong {
         opacity: 0;
         visibility: hidden;
         max-width: 0;
-        display: none;
     }
 }
 
@@ -620,14 +612,6 @@
 [data-slot="checkbox"] svg {
     visibility: hidden;
 }
-
-[data-slot="checkbox"][data-state="indeterminate"] {
-    background-image: url("./resource/form/checkbox_default.png");
-    color: var(--foreground);
-}
-[data-slot="checkbox"][data-state="indeterminate"]::before,
-[data-slot="checkbox"][data-state="indeterminate"]::after { display: none; }
-[data-slot="checkbox"][data-state="indeterminate"] [data-slot="checkbox-mixed"] { visibility: visible; }
 
 [data-slot="checkbox"]:focus-visible {
     outline: 2px solid var(--ring);

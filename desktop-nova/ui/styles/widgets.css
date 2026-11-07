@@ -38,7 +38,7 @@
 :where(.group-box, fieldset, .page-content, .scroll-body, .content, .form-field) { min-width: 0; min-height: 0; }
 :where(.form-row, .dialog-form-grid) { column-gap: var(--ln-space-4); row-gap: var(--ln-space-2); }
 :where(.dialog-title, .subwindow-title, .group-box-title) { letter-spacing: 0; }
-.dialog-surface { max-height: calc(100dvh - 32px); }
+.dialog-surface { max-height: calc(100dvh - 32px); border-radius: var(--radius); box-shadow: var(--panel-shadow); }
 .dialog-content { min-width: min(400px, calc(100vw - 32px)); max-width: calc(100vw - 32px); }
 .dialog-footer { flex: 0 0 auto; }
 .dialog-form-grid > :where(input, select, textarea, .input) { width: 100%; min-width: 0; }
@@ -54,7 +54,7 @@
     max-height: min(24rem, var(--radix-popover-content-available-height));
     color: var(--foreground);
 }
-.dropdown-menu[data-slot="select-content"] { max-height: min(var(--radix-select-content-available-height), 24rem); }
+.dropdown-menu[data-slot="select-content"] { max-height: min(var(--radix-select-content-available-height), 24rem); color: var(--foreground); background: var(--background); }
 .subwindow-standalone-page { height: 100dvh; min-height: 0; }
 .subwindow-demo-fill { min-height: 8rem; }
 

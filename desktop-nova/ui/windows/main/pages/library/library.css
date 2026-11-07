@@ -21,7 +21,7 @@
 html[data-theme] .library-page [data-slot="button"] { gap: 8px; }
 .library-toolbar > button { flex-shrink: 0; }
 .library-toolbar-second-row { display:flex; flex:1 0 100%; align-items:center; flex-wrap:wrap; gap:var(--nova-toolbar-gap); min-width:0; }
-.library-toolbar h2 { margin: 0; margin-inline-end: auto; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.3; }
+.library-toolbar h2 { margin: 0; margin-inline-end: auto; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.4; }
 .library-search { display: flex; flex: 1 1 15rem; position: relative; min-width: 10rem; }
 .library-search > svg,
 .library-search > .theme-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); pointer-events: none; }

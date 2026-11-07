@@ -142,7 +142,6 @@ html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"] {
 html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"]:hover:not(:disabled) {
     background-image: url("./resource/form/checkbox_checked_hover.png");
 }
-/* The shipped checked texture supplies a filled slot, not a check glyph. */
 html[data-theme="minecraft"] [data-slot="checkbox"][data-state="checked"] svg { visibility: hidden; }
 html[data-theme="minecraft"] [data-slot="checkbox"][data-state="indeterminate"] { color: #ffffff; }
 /* The shared layer fills a checked checkbox with `--primary`, which is what the

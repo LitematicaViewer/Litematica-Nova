@@ -161,7 +161,7 @@ html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"])[ari
 .nova-scroll-area > [data-slot="scroll-area-viewport"] { width: 100%; height: 100%; min-width: 0; border-radius: inherit; overscroll-behavior: contain; outline: none; }
 /* Radix owns the only thumb in a ScrollArea. Native page scrollbars elsewhere
    remain themed by widgets.css; they must not reappear inside this viewport. */
-.nova-scroll-area > [data-slot="scroll-area-viewport"] { scrollbar-width: none; }
+.nova-scroll-area > [data-slot="scroll-area-viewport"] { scrollbar-width: none; border-radius: inherit; }
 .nova-scroll-area > [data-slot="scroll-area-viewport"]::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .nova-scroll-area > [data-slot="scroll-area-viewport"]:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .nova-scroll-area > [data-slot="scroll-area-viewport"] > div { display: block !important; min-width: 100%; }
@@ -201,7 +201,7 @@ html[data-theme] [data-slot="slider"] { position: relative; display: flex; align
    containing block, and without `display: flex` the track's `flex: 1` does
    nothing and `align-items` cannot centre the thumb. */
 [data-slot="slider"] { position: relative; display: flex; align-items: center; width: 100%; height: 18px; cursor: pointer; touch-action: none; user-select: none; }
-[data-slot="slider"][data-disabled] { cursor: default; }
+[data-slot="slider"][data-disabled] { cursor: default; opacity: .45; }
 [data-slot="slider-track"] { position: relative; flex: 1; height: 6px; overflow: hidden; border-radius: var(--radius, 0px); background: var(--muted); }
 [data-slot="slider-range"] { position: absolute; height: 100%; background: var(--primary); }
 [data-slot="slider-thumb"] { display: block; width: 18px; height: 18px; border: 2px solid var(--primary); border-radius: var(--radius, 0px); background: var(--card); }

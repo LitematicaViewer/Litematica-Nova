@@ -100,7 +100,7 @@ button, .btn, .dropdown-trigger {
     cursor: pointer;
     transition: background-color 120ms, border-color 120ms, box-shadow 120ms;
 }
-button:where(:not(.nav-item):not(.nav-expand)):where(:not([data-slot]), [data-slot="button"]) { padding: 6px 12px; }
+button:not(.nav-item):not(.nav-expand) { padding: 6px 12px; }
 button:hover:not(:disabled), .btn:hover:not(:disabled) { background: var(--accent); border-color: var(--ring); }
 button:active:not(:disabled) { background: var(--secondary); }
 /* A pressed button is not styled here. `styles/controls.css` owns that state: it is the
