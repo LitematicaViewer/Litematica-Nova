@@ -9,22 +9,19 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 12px;
-    overflow: auto;
-    overscroll-behavior: contain;
+    padding: 20px;
     background: var(--overlay);
 }
 
 .dialog-surface {
     display: flex;
     width: min(100%, 640px);
-    max-height: calc(100dvh - 24px);
+    max-height: min(90vh, 820px);
     flex-direction: column;
     overflow: hidden;
     color: var(--foreground);
     background: var(--background);
     border: 1px solid var(--border);
-    border-radius: 10px;
 }
 
 .dialog-surface-sm {
@@ -45,7 +42,7 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
-    padding: var(--nova-page-inset) var(--nova-page-inset) 0;
+    padding: 12px 16px 0;
 }
 
 .dialog-title-stack {
@@ -81,7 +78,7 @@
 .dialog-body {
     display: flex;
     min-height: 0;
-    padding: var(--nova-page-inset);
+    padding: 16px;
     flex-direction: column;
     gap: 12px;
     overflow: auto;
@@ -92,8 +89,8 @@
     flex: 0 0 auto;
     flex-wrap: wrap;
     justify-content: flex-end;
-    gap: var(--nova-toolbar-gap);
-    padding: 0 var(--nova-page-inset) var(--nova-page-inset);
+    gap: 8px;
+    padding: 0 16px 16px;
 }
 
 .dialog-form-grid {

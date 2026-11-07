@@ -83,6 +83,8 @@
 button:not(.nav-item):not(.nav-expand):not(.dialog-close-button):not(:where([role="checkbox"], [role="radio"])) { box-shadow: var(--control-shadow); }
 button:active:not(:disabled):not(:where([role="checkbox"], [role="radio"])) { box-shadow: none; transform: translateY(1px); }
 .dialog-surface { border: 3px solid var(--foreground); border-radius: 0; }
+.sidebar { border-right-width: 2px; }
+.nav-item.active, .nav-item[aria-current="page"] { box-shadow: inset 4px 0 var(--primary); }
 .input:focus-visible, select:focus-visible { outline-offset: 4px; }
 .nova-pixel-decoration { display: contents; }
 [data-slot="dialog-pixel-x"], [data-slot="dialog-pixel-y"] { display: block; }

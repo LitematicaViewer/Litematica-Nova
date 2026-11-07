@@ -35,9 +35,95 @@
 /* Windows 8/10 selection: a flat accent-tinted row plus a 4x24 highlight bar.
    The bar is a pseudo-element (not `border-left`) so the collapsed sidebar can
    keep its icon centred. */
+.nav-expand,
+.nav-item {
+    box-sizing: border-box;
+    display: flex;
+    position: relative;
+    width: 100%;
+    height: 48px;
+    min-height: 48px;
+    max-height: 48px;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 0 16px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--foreground);
+    text-align: left;
+    box-shadow: none;
+}
+
+.nav-expand:hover:not(:disabled),
+.nav-item:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--foreground);
+}
+
+.nav-item.nav-item-active {
+    padding-left: 16px;
+    border-left: 0;
+    background: var(--option-active-background);
+    color: var(--option-active-color);
+}
+
+.nav-item.nav-item-active::before {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 4px;
+    height: 24px;
+    background: var(--primary);
+    transform: translateY(-50%);
+    content: "";
+}
 
 /* Keep the selection tint under the pointer: the generic nav hover is lighter
    than the selected plate and would otherwise read as "deselecting". */
+.nav-item.nav-item-active:hover:not(:disabled) {
+    background: var(--option-active-background);
+    color: var(--option-active-color);
+}
+
+.sidebar {
+    border-right: 1px solid var(--border);
+    background: var(--navigation-background);
+}
+
+.sidebar-collapsed .nav-expand,
+.sidebar-collapsed .nav-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+}
+
+.sidebar-collapsed .nav-item.nav-item-active {
+    padding-left: 0;
+}
+
+.sidebar-collapsed .workspace-project {
+    display: none;
+}
+
+@media (max-width: 760px) {
+    .sidebar .nav-expand,
+    .sidebar .nav-item {
+        justify-content: center;
+        gap: 0;
+        padding: 0;
+    }
+
+    .sidebar .nav-item.nav-item-active {
+        padding-left: 0;
+    }
+
+    .sidebar .workspace-project {
+        display: none;
+    }
+}
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 /* Structural Button call sites (nav rows, window controls, flake slots and the
@@ -364,16 +450,16 @@
    ring/check artwork, so the box itself becomes transparent. */
 
 [data-slot="checkbox"] {
-    width: 16px;
-    height: 16px;
-    min-width: 16px;
-    min-height: 16px;
-    max-width: 16px;
-    max-height: 16px;
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px;
+    max-width: 20px;
+    max-height: 20px;
     padding: 0;
     border: 0;
     border-radius: 0;
-    background: transparent url("./resource/form/checkbox_default.svg") center / 16px 16px no-repeat;
+    background: transparent url("./resource/form/checkbox_default.svg") center / 20px 20px no-repeat;
     image-rendering: auto;
     box-shadow: none;
     cursor: pointer;

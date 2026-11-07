@@ -136,13 +136,6 @@ export function App() {
     return () => { cancelled = true; };
   }, [showEnumerator, currentFile]);
   const [expanded, setExpanded] = useState(true);
-  const [compactNavigation, setCompactNavigation] = useState(() => window.matchMedia("(max-width: 959px)").matches);
-  useEffect(() => {
-    const query = window.matchMedia("(max-width: 959px)");
-    const accept = () => setCompactNavigation(query.matches);
-    query.addEventListener("change", accept);
-    return () => query.removeEventListener("change", accept);
-  }, []);
   const [debugMode, setDebugMode] = useState(false);
   const [debugModeLoaded, setDebugModeLoaded] = useState(false);
   const [buildVersion, setBuildVersion] = useState("");
@@ -256,8 +249,7 @@ export function App() {
           onClick={() => setExpanded(!expanded)}
           title={expanded ? t("shell.collapseSidebar") : t("shell.expandSidebar")}
           aria-label={expanded ? t("shell.collapseSidebar") : t("shell.expandSidebar")}
-          aria-expanded={expanded && !compactNavigation}
-          disabled={compactNavigation}
+          aria-expanded={expanded}
         >
           <NavIcon name="hamburger" theme={theme} />
           <strong>Litematica-Nova</strong>

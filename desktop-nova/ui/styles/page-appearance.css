@@ -24,7 +24,12 @@ html[data-theme] .generate-workspace {
     color: var(--foreground);
     border-radius: var(--radius, 0);
 }
-.generate-page .generate-summary { color: var(--foreground); }
+.generate-page .generate-summary {
+    border: 0;
+    background: var(--muted);
+    color: var(--foreground);
+    border-radius: var(--radius, 0);
+}
 .generate-page .generate-error-list {
     color: var(--destructive);
 }
@@ -43,6 +48,15 @@ html[data-theme] .generate-workspace {
 }
 .generate-summary-warning {
     color: var(--foreground);
+}
+html[data-theme] .generate-page .generate-operation,
+html[data-theme] .generate-page .generate-material-entry {
+    border: 0;
+    background: var(--muted);
+    border-radius: var(--radius, 0);
+}
+html[data-theme] .generate-page .generate-operation .generate-material-entry {
+    background: transparent;
 }
 
 .generate-page .template-library-list {
@@ -214,12 +228,12 @@ html[data-theme] .library-page .library-category[aria-pressed="true"] {
 }
 .library-tile {
     border-radius: var(--radius);
-    background: transparent;
+    background: var(--library-muted);
     outline: 1px solid transparent;
     outline-offset: 2px;
 }
 .library-tile[data-inspected], .library-tile[data-checked] {
-    background: var(--option-active-background, var(--library-muted));
+    outline-color: var(--ring);
 }
 .library-tile[data-checked] {
     background: var(--option-active-background, var(--library-muted));

@@ -123,7 +123,7 @@ html[data-theme] button:is([data-slot="checkbox"], [data-slot="radio-group-item"
 }
 html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group-item"])) {
   display: inline-flex; align-items: center; gap: var(--ln-check-label-gap, 8px);
-  min-height: var(--ln-check-label-min-height, 28px); cursor: pointer;
+  min-height: var(--ln-check-label-min-height, 24px); cursor: pointer;
 }
 html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group-item"]):disabled) { cursor: not-allowed; }
 /* Only the fill colour belongs to the shared layer. A `background` shorthand here
@@ -138,7 +138,7 @@ html[data-theme] label:has(> :is([data-slot="checkbox"], [data-slot="radio-group
    8bitcn and minecraft rules below rely on winning the tie at (0,2,1) by coming later. */
 html[data-theme] [data-slot="checkbox"] {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
-  width: 16px; height: 16px; min-width: 16px; max-width: 16px; min-height: 16px; max-height: 16px; flex: 0 0 16px; padding: 0; margin: 0;
+  width: 20px; height: 20px; min-width: 20px; max-width: 20px; min-height: 20px; flex: 0 0 20px; padding: 0; margin: 0;
   border: 1px solid var(--border); border-radius: 4px; background-color: var(--background);
   color: var(--primary-foreground); cursor: pointer; box-shadow: none; vertical-align: middle;
 }
@@ -179,10 +179,21 @@ html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"])[ari
    full-width button stays exactly square, and the anchored bottom list has no
    inset either. */
 .sidebar .nav-scroll-area .nav-list { margin: 0; padding: 0; }
-/* A dedicated gutter separates the 10px drag target from the icon/selection.
-   Only the thumb paints 4px (6px when interacted with), not the full hit area. */
-.sidebar .nav-scroll-area { --nova-nav-scroll-hit: 10px; --nova-nav-scroll-visual: 4px; }
-.sidebar .nav-scroll-area > [data-slot="scroll-area-viewport"] { width: calc(100% - var(--nova-nav-scroll-hit)); }
+/* The sidebar scrollbar overlays the list instead of reserving width, so it can
+   never narrow a button, and it only appears while the pointer is over the list
+   area or the list holds keyboard focus. */
+.sidebar .nav-scroll-area [data-slot="scroll-area-scrollbar"] {
+  padding: 0;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms;
+}
+.sidebar .nav-scroll-area:hover [data-slot="scroll-area-scrollbar"],
+.sidebar .nav-scroll-area:focus-within [data-slot="scroll-area-scrollbar"] {
+  opacity: 1;
+  pointer-events: auto;
+}
 
 html[data-theme] [data-slot="slider"] { position: relative; display: flex; align-items: center; width: 100%; min-width: 4rem; min-height: 28px; touch-action: none; user-select: none; }
 /* Radix gives the root no positioning and no layout, so both have to be stated
@@ -198,7 +209,7 @@ html[data-theme] [data-slot="slider"] { position: relative; display: flex; align
 [data-slot="slider"][data-disabled] { opacity: .45; }
 
 /* Content is separated by tone and spacing, not nested boxes. */
-html[data-theme] .group-box { border: 0; box-shadow: none; margin-top: 0; padding: 16px 0; background: transparent; border-radius: 0; }
+html[data-theme] .group-box { border: 0; box-shadow: none; margin-top: 0; padding: 16px; background: var(--card); border-radius: var(--radius, 0px); }
 html[data-theme] .group-box .group-box { padding: 12px 0 0; background: transparent; }
 html[data-theme] .group-box-title { position: static; top: auto; left: auto; padding: 0; margin: 0 0 12px; background: transparent; font-size: 1rem; font-weight: 600; }
 html[data-theme] [data-slot="table"] { border: 0; border-collapse: collapse; width: 100%; }
@@ -223,9 +234,7 @@ html[data-theme] .flake-page__creative-hotbar-slot[data-slot="button"] { min-hei
 .flake-page__tool-panel-body.nova-scroll-area { overflow: hidden; }
 .flake-page__tool-panel-body [data-slot="scroll-area-viewport"] > div { display: flex !important; flex-direction: column; gap: 12px; padding-right: 8px; }
 .ui-control-gallery { height: 100%; }
-.ui-control-gallery [data-slot="scroll-area-viewport"] > div { padding: 0; padding-inline-end: var(--ln-scroll-size, 12px); }
-.ui-control-gallery [data-slot="scroll-area-viewport"] > div > h2 { margin: 0; }
-.ui-control-gallery [data-slot="scroll-area-viewport"] > div > p { margin-block: var(--nova-toolbar-gap) var(--nova-section-gap); }
+.ui-control-gallery [data-slot="scroll-area-viewport"] > div { padding: 16px; }
 /* The gallery cycles its variant demo buttons through `disabled` so that state can be
    inspected. A disabled <button> swallows its own clicks, so the press is let through to
    the wrapper, which is what advances the demo out of the disabled state again. */
@@ -294,33 +303,4 @@ html[data-theme] [data-slot="dialog-pixel-y"] { border-block: 2px solid var(--fo
     font-family: var(--nova-font-sm, inherit);
 }
 
-}
-
-@layer utilities {
-/* Navigation's slim rail is the one deliberate exception to full-width theme
-   scrollbar artwork (Aero's 8px nine-slice alone has a 16px minimum width). */
-html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] {
-  width: var(--nova-nav-scroll-hit);
-  align-items: flex-start;
-  justify-content: center;
-  padding: 0 2px;
-  background: transparent;
-}
-html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"] > [data-slot="scroll-area-thumb"] {
-  flex: none;
-  /* Radix sets width:var(...) inline even on the vertical thumb. Supply its
-     cross-axis value instead of letting an unresolved inline var compute auto. */
-  --radix-scroll-area-thumb-width: var(--nova-nav-scroll-visual);
-  width: var(--nova-nav-scroll-visual);
-  margin-inline: auto;
-  border: 0;
-  border-image: none;
-  background: var(--ln-scroll-thumb);
-  box-shadow: none;
-  transition: width var(--nova-motion-feedback-duration, 100ms) var(--nova-motion-ease, ease-out), background-color var(--nova-motion-feedback-duration, 100ms);
-}
-html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"] > [data-slot="scroll-area-thumb"]::before { inset: 0 -3px; min-width: 0; }
-html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"]:is(:hover, :active) { --nova-nav-scroll-visual: 6px; }
-html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"]:hover > [data-slot="scroll-area-thumb"] { background: var(--ln-scroll-hover); }
-html[data-theme] .sidebar .nav-scroll-area > [data-slot="scroll-area-scrollbar"] > [data-slot="scroll-area-thumb"]:active { background: var(--ln-scroll-active); }
 }

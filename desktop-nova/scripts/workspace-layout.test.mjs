@@ -57,10 +57,16 @@ test('一级导航：十个入口直接可达，保持旧route ID，不再显示
   assert.ok(shell.includes('currentFile={currentFile}'));
   assert.ok(!shell.includes('WorkbenchNavigation'));
   assert.ok(!shell.includes('lastWorkbenchRoute'));
-  const css = read('ui/shell/workspace.css') + read('ui/shell/widget/nav.css');
-  assert.ok(css.includes('--nova-nav-width: 184px')); 
-  assert.ok(css.includes('.sidebar > .nav-scroll-area { flex: 1 1 0; min-height: 36px; }'));
+  const css = read('ui/shell/widget/nav.css') + read('ui/styles/controls.css');
+  // dev/ui restores the pre-0.4 sidebar contract: a 220px rail with 48px rows, a
+  // full-width row separated by a 1px rule, and a 4px left selection bar. The
+  // workspace redesign keeps the route model, not the compact rail geometry.
+  assert.ok(css.includes('flex: 0 0 220px'));
+  assert.ok(css.includes('min-height: 48px'));
+  assert.ok(css.includes('.sidebar > .nav-scroll-area { flex: 1; min-height: 0; }'));
+  assert.ok(css.includes('border-left: 4px solid var(--primary)'));
   assert.ok(!css.includes('.workbench-tabs'));
+  assert.ok(!css.includes('--nova-nav-width'));
 });
 
 test('设置目录：七类设置均真实保留', () => {
@@ -154,30 +160,30 @@ test('原生视口：各UI倍率×系统DPI只换算一次，不改变几何身�
   }
 });
 
-test('导航只有Radix滚动层，独立热区10px、视觉4/6px，不改变页面滚动条', () => {
+test('导航只有Radix滚动层，侧栏改用悬停浮层滚动条，不预留宽度', () => {
   const controls = read('ui/styles/controls.css');
   const workspace = read('ui/shell/workspace.css') + read('ui/shell/widget/nav.css');
   const widgets = read('ui/styles/widgets.css');
   assert.match(workspace, /\.sidebar \{[^}]*overflow: hidden/);
   assert.doesNotMatch(workspace, /\.app-shell \.sidebar \{[^}]*overflow-y: auto/);
-  assert.match(controls, /--nova-nav-scroll-hit: 10px; --nova-nav-scroll-visual: 4px/);
-  assert.match(controls, /width: calc\(100% - var\(--nova-nav-scroll-hit\)\)/);
-  assert.match(controls, /\[data-slot="scroll-area-scrollbar"\]:is\(:hover, :active\) \{ --nova-nav-scroll-visual: 6px/);
-  assert.match(controls, /--radix-scroll-area-thumb-width: var\(--nova-nav-scroll-visual\)/);
-  assert.match(controls, /width: var\(--nova-nav-scroll-hit\);\s+align-items: flex-start/);
-  assert.match(controls, /border-image: none/);
+  // The pre-0.4 contract: the themed scrollbar is an overlay that fades in on
+  // hover/focus, so it can never narrow a nav row. The compact rail's dedicated
+  // 10px gutter and 4/6px thumb are gone with the 184px layout.
+  assert.match(controls, /\.sidebar \.nav-scroll-area \[data-slot="scroll-area-scrollbar"\] \{\s*padding: 0;\s*background: transparent;\s*opacity: 0;\s*pointer-events: none;/);
+  assert.match(controls, /\.sidebar \.nav-scroll-area:hover \[data-slot="scroll-area-scrollbar"\],\s*\.sidebar \.nav-scroll-area:focus-within \[data-slot="scroll-area-scrollbar"\] \{\s*opacity: 1;/);
+  assert.doesNotMatch(controls, /--nova-nav-scroll-hit/);
+  assert.doesNotMatch(controls, /width: calc\(100% - var\(--nova-nav-scroll-hit\)\)/);
   assert.match(controls, /scroll-area-viewport"\] \{ scrollbar-width: none/);
   assert.match(controls, /scroll-area-viewport"\]::-webkit-scrollbar \{ display: none/);
   assert.match(controls, /scroll-area-viewport"\]:focus-visible \{ outline: 2px/);
   assert.match(widgets, /--ln-scroll-size: 12px/);
   assert.match(widgets, /--ln-scroll-size: 14px/);
   assert.ok(read('ui/components/ui/scroll-area.tsx').includes('type="auto"'));
+  // 220px rail / 48px collapsed rail: one 16px icon plus 12px row padding fits at
+  // every WebView zoom because the overlay bar takes no layout width at all.
   for (const scale of [.5, 1, 1.5, 3, 5]) {
-    // 56px collapsed rail: 10px reserved, 12px button margins, 12px padding;
-    // the 16px icon fits without entering the drag target at every WebView zoom.
-    assert.ok((56 - 10 - 12 - 12) * scale >= 16 * scale);
-    assert.equal(6 * scale / (56 * scale), 6 / 56);
-    assert.ok((40 - 10 - 4 - 4) * scale >= 16 * scale);
+    assert.ok((220 - 24) * scale >= 16 * scale);
+    assert.equal(48 * scale / (48 * scale), 1);
   }
 });
 
