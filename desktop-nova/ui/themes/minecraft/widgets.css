@@ -45,32 +45,81 @@
    forgot one state would silently keep the base texture for it.
    `default` is drawn as "primary" - the file name says what the button is, while
    `default` is the shadcn variant name it maps to.
-   The primary button is a LIGHT plate, so its resting label is dark grey instead of
-   white; hover / pressed / disabled keep the shared colours. */
+   Every variant was drawn twice, once per scheme (`button_dark_*` / `button_light_*`);
+   the dark set is the unsuffixed default, the light set is switched in by
+   `[data-color-scheme="light"]`. Dark primary is the purple plate (white label),
+   light primary the green plate (white label). */
 [data-slot="button"][data-variant="default"] {
-    --ln-minecraft-button-normal-color: #3f3f3f;
-    --ln-minecraft-button-normal-image: url("./resource/button/button_normal_primary_min.png");
-    --ln-minecraft-button-hover-image: url("./resource/button/button_hover_primary_min.png");
-    --ln-minecraft-button-check-image: url("./resource/button/button_check_primary_min.png");
-    --ln-minecraft-button-check-hover-image: url("./resource/button/button_check_hover_primary_min.png");
-    --ln-minecraft-button-disabled-image: url("./resource/button/button_disabled_primary_min.png");
+    --ln-minecraft-button-normal-color: #ffffff;
+    --ln-minecraft-button-normal-image: url("./resource/button/button_dark_primary_normal_min.png");
+    --ln-minecraft-button-hover-image: url("./resource/button/button_dark_primary_hover_min.png");
+    --ln-minecraft-button-check-image: url("./resource/button/button_dark_primary_check_min.png");
+    --ln-minecraft-button-check-hover-image: url("./resource/button/button_dark_primary_checkhover_min.png");
+    --ln-minecraft-button-disabled-image: url("./resource/button/button_dark_primary_disabled_min.png");
 }
 
 [data-slot="button"][data-variant="outline"] {
-    --ln-minecraft-button-normal-image: url("./resource/button/button_normal_outline_min.png");
-    --ln-minecraft-button-hover-image: url("./resource/button/button_hover_outline_min.png");
-    --ln-minecraft-button-check-image: url("./resource/button/button_check_outline_min.png");
-    --ln-minecraft-button-check-hover-image: url("./resource/button/button_check_hover_outline_min.png");
-    --ln-minecraft-button-disabled-image: url("./resource/button/button_disabled_outline_min.png");
+    --ln-minecraft-button-normal-image: url("./resource/button/button_dark_outline_normal_min.png");
+    --ln-minecraft-button-hover-image: url("./resource/button/button_dark_outline_hover_min.png");
+    --ln-minecraft-button-check-image: url("./resource/button/button_dark_outline_check_min.png");
+    --ln-minecraft-button-check-hover-image: url("./resource/button/button_dark_outline_checkhover_min.png");
+    --ln-minecraft-button-disabled-image: url("./resource/button/button_dark_outline_disabled_min.png");
 }
 
 [data-slot="button"][data-variant="destructive"] {
-    --ln-minecraft-button-normal-image: url("./resource/button/button_normal_destructive_min.png");
-    --ln-minecraft-button-hover-image: url("./resource/button/button_hover_destructive_min.png");
-    --ln-minecraft-button-check-image: url("./resource/button/button_check_destructive_min.png");
-    --ln-minecraft-button-check-hover-image: url("./resource/button/button_check_hover_destructive_min.png");
-    --ln-minecraft-button-disabled-image: url("./resource/button/button_disabled_destructive_min.png");
+    --ln-minecraft-button-normal-image: url("./resource/button/button_dark_destructive_normal_min.png");
+    --ln-minecraft-button-hover-image: url("./resource/button/button_dark_destructive_hover_min.png");
+    --ln-minecraft-button-check-image: url("./resource/button/button_dark_destructive_check_min.png");
+    --ln-minecraft-button-check-hover-image: url("./resource/button/button_dark_destructive_checkhover_min.png");
+    --ln-minecraft-button-disabled-image: url("./resource/button/button_dark_destructive_disabled_min.png");
 }
+
+/* Light scheme: the drawn `button_light_*` set replaces every plate, and the resting
+   label flips to the dark grey that artwork was drawn for. The green light primary and
+   the red light destructive keep a white label. */
+html[data-theme="minecraft"][data-color-scheme="light"] [data-slot="button"] {
+    --ln-minecraft-button-normal-image: url("./resource/button/button_light_default_normal_min.png");
+    --ln-minecraft-button-hover-image: url("./resource/button/button_light_default_hover_min.png");
+    --ln-minecraft-button-check-image: url("./resource/button/button_light_default_check_min.png");
+    --ln-minecraft-button-check-hover-image: url("./resource/button/button_light_default_checkhover_min.png");
+    --ln-minecraft-button-disabled-image: url("./resource/button/button_light_default_disabled_min.png");
+    --ln-minecraft-button-normal-color: #3f3f3f;
+}
+
+html[data-theme="minecraft"][data-color-scheme="light"] [data-slot="button"][data-variant="default"] {
+    --ln-minecraft-button-normal-image: url("./resource/button/button_light_primary_normal_min.png");
+    --ln-minecraft-button-hover-image: url("./resource/button/button_light_primary_hover_min.png");
+    --ln-minecraft-button-check-image: url("./resource/button/button_light_primary_check_min.png");
+    --ln-minecraft-button-check-hover-image: url("./resource/button/button_light_primary_checkhover_min.png");
+    --ln-minecraft-button-disabled-image: url("./resource/button/button_light_primary_disabled_min.png");
+    --ln-minecraft-button-normal-color: #ffffff;
+}
+
+html[data-theme="minecraft"][data-color-scheme="light"] [data-slot="button"][data-variant="outline"] {
+    --ln-minecraft-button-normal-image: url("./resource/button/button_light_outline_normal_min.png");
+    --ln-minecraft-button-hover-image: url("./resource/button/button_light_outline_hover_min.png");
+    --ln-minecraft-button-check-image: url("./resource/button/button_light_outline_check_min.png");
+    --ln-minecraft-button-check-hover-image: url("./resource/button/button_light_outline_checkhover_min.png");
+    --ln-minecraft-button-disabled-image: url("./resource/button/button_light_outline_disabled_min.png");
+    --ln-minecraft-button-normal-color: #3f3f3f;
+}
+
+html[data-theme="minecraft"][data-color-scheme="light"] [data-slot="button"][data-variant="destructive"] {
+    --ln-minecraft-button-normal-image: url("./resource/button/button_light_destructive_normal_min.png");
+    --ln-minecraft-button-hover-image: url("./resource/button/button_light_destructive_hover_min.png");
+    --ln-minecraft-button-check-image: url("./resource/button/button_light_destructive_check_min.png");
+    --ln-minecraft-button-check-hover-image: url("./resource/button/button_light_destructive_checkhover_min.png");
+    --ln-minecraft-button-disabled-image: url("./resource/button/button_light_destructive_disabled_min.png");
+    --ln-minecraft-button-normal-color: #ffffff;
+}
+
+html[data-theme="minecraft"][data-color-scheme="light"] [data-slot="button"][data-variant="ghost"] {
+    --ln-minecraft-button-normal-color: #3f3f3f;
+}
+
+/* The `link` label uses the accent pair the plate artwork was drawn for. */
+[data-slot="button"][data-variant="link"] { color: #7345e5; }
+html[data-theme="minecraft"][data-color-scheme="light"] [data-slot="button"][data-variant="link"] { color: #3c8527; }
 
 [data-slot="button"] {
     --ln-minecraft-button-image: var(--ln-minecraft-button-normal-image, url("./resource/button/button_normal_min.png"));
