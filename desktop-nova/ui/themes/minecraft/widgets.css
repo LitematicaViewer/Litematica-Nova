@@ -303,6 +303,9 @@ html[data-theme="minecraft"][data-color-scheme="light"] [data-slot="button"][dat
     justify-content: center;
     gap: 12px;
     padding: 0 16px;
+    /* Nav rows carry `data-slot="navigation"`, so the action-button base no longer
+       supplies these variables; restate the resting plate here. */
+    --ln-minecraft-button-image: var(--ln-minecraft-button-normal-image, url("./resource/button/button_normal_min.png"));
     border: var(--ln-minecraft-button-border, 4px) solid transparent;
     border-image-source: var(--ln-minecraft-button-image);
     border-image-slice: 4 fill;
@@ -311,6 +314,11 @@ html[data-theme="minecraft"][data-color-scheme="light"] [data-slot="button"][dat
     text-align: center;
     color: #ffffff;
     background: transparent;
+}
+
+.nav-expand:hover:not(:disabled),
+.nav-item:hover:not(:disabled) {
+    --ln-minecraft-button-image: var(--ln-minecraft-button-hover-image, url("./resource/button/button_hover_min.png"));
 }
 
 .sidebar-collapsed .nav-expand,
@@ -367,6 +375,28 @@ html[data-theme="minecraft"][data-color-scheme="light"] [data-slot="button"][dat
 
 .nav-item.nav-item-active:hover:not(:disabled) {
     --ln-minecraft-button-image: url("./resource/button/button_check_hover_min.png");
+    color: #ffff00;
+}
+
+/* The sidebar is a button surface too, so it follows the same drawn light set. */
+html[data-theme="minecraft"][data-color-scheme="light"] .nav-expand,
+html[data-theme="minecraft"][data-color-scheme="light"] .nav-item {
+    --ln-minecraft-button-image: url("./resource/button/button_light_default_normal_min.png");
+    color: #3f3f3f;
+}
+
+html[data-theme="minecraft"][data-color-scheme="light"] .nav-expand:hover:not(:disabled),
+html[data-theme="minecraft"][data-color-scheme="light"] .nav-item:hover:not(:disabled) {
+    --ln-minecraft-button-image: url("./resource/button/button_light_default_hover_min.png");
+}
+
+html[data-theme="minecraft"][data-color-scheme="light"] .nav-item.nav-item-active {
+    --ln-minecraft-button-image: url("./resource/button/button_light_default_check_min.png");
+    color: #ffff00;
+}
+
+html[data-theme="minecraft"][data-color-scheme="light"] .nav-item.nav-item-active:hover:not(:disabled) {
+    --ln-minecraft-button-image: url("./resource/button/button_light_default_checkhover_min.png");
     color: #ffff00;
 }
 
