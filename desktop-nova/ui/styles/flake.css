@@ -81,6 +81,9 @@
 .flake-layer-border {
     position: absolute;
     pointer-events: none;
+    width: var(--flake-layer-border-width, 1px);
+    height: var(--flake-layer-border-height, 1px);
+    border: 1px solid #555;
 }
 
 .flake-layer-border {
@@ -760,13 +763,13 @@
 .flake-page__inventory-dialog .dialog-header { padding:8px 12px; border:0; }
 .flake-page__inventory-dialog .dialog-body { padding:0 12px 12px; min-height:0; }
 .flake-page__inventory-dialog-body { display:flex; flex-direction:column; gap:8px; }
-.flake-page__creative-inventory-controls { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.2fr); gap:8px; align-items:end; width:100%; }
-.flake-page__creative-inventory-control { display:grid; gap:4px; min-width:0; }
+.flake-page__creative-inventory-controls { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.2fr); gap:8px; align-items:end; width:100%; max-width: 424px; }
+.flake-page__creative-inventory-control { display:grid; gap:4px; min-width:160px; }
 .flake-page__creative-inventory-range { grid-column:1/-1; display:flex; justify-content:flex-end; align-items:center; gap:4px; font-size:12px; height:32px; font-variant-numeric:tabular-nums; }
 .flake-page__creative-inventory-range > span { margin-right:4px; }
 .flake-page__creative-inventory-range > button { width:32px; height:32px; padding:0; flex:none; }
 .flake-page__creative-inventory-stage { min-width:0; max-width:100%; overflow:auto; }
-.flake-page__creative-inventory-surface { position:relative; container-type:inline-size; width:100%; min-width:270px; padding:2px; image-rendering: pixelated; background: var(--flake-creative-inventory-image, url("../shell/resource/content/creativeInventory.png")) center no-repeat; }
+.flake-page__creative-inventory-surface { position:relative; container-type:inline-size; width:var(--flake-creative-inventory-width); min-width:var(--flake-creative-inventory-width); padding:2px; image-rendering: pixelated; background: var(--flake-creative-inventory-image, url("../shell/resource/content/creativeInventory.png")) center no-repeat; height: var(--flake-creative-inventory-height); min-height: var(--flake-creative-inventory-height); --flake-creative-inventory-width: 424px; --flake-creative-inventory-height: 272px; --flake-creative-slot-size: 32px; --flake-creative-slot-gap: 4px; --flake-creative-grid-left: 16px; --flake-creative-grid-top: 36px; }
 .flake-page__creative-inventory-grid,.flake-page__creative-hotbar-grid { display:grid; grid-template-columns:repeat(9,minmax(0,1fr)); gap:4px; }
 .flake-page__creative-inventory-grid--scroll {
     /* Five rows of the nine-column catalogue; the chosen hotbar stays below
@@ -782,7 +785,7 @@
 .flake-page__creative-hotbar-slot kbd { position:absolute; top:2px; left:3px; font:inherit; font-size:10px; font-weight:600; line-height:1; color:var(--foreground); }
 .flake-page__creative-slot .block-icon-image,.flake-page__creative-slot .block-icon-fallback,.flake-page__creative-hotbar-slot .block-icon-image,.flake-page__creative-hotbar-slot .block-icon-fallback { width:100%; min-width:0; height:100%; min-height:0; max-height:36px; object-fit:contain; image-rendering:pixelated; }
 .flake-page__quickbar-slot .block-icon-image,.flake-page__quickbar-slot .block-icon-fallback,.flake-page__creative-carry-preview .block-icon-image,.flake-page__creative-carry-preview .block-icon-fallback { width:32px; min-width:32px; height:32px; min-height:32px; }
-.flake-page__creative-inventory-overlay { position:absolute; inset:0; display:grid; place-items:center; padding:12px; background:rgb(0 0 0 / 24%); color:var(--muted-foreground); text-align:center; pointer-events:none; }
+.flake-page__creative-inventory-overlay { position:absolute; inset:0; display:grid; place-items:center; padding:24px 32px; background:rgb(0 0 0 / 24%); color:var(--muted-foreground); text-align:center; pointer-events:none; }
 .flake-page__creative-inventory-overlay.nova-error { color:var(--destructive); }
 
 .flake-page__creative-carry-preview {

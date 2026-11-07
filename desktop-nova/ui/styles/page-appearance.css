@@ -99,6 +99,7 @@ html[data-theme] .generate-page .generate-operation .generate-material-entry {
 }
 .beta-statistics-facts > div {
     border-bottom: 1px solid var(--border);
+    border: 0;
 }
 .beta-statistics-facts > div:last-child {
     border-bottom: 0;
@@ -132,6 +133,7 @@ html[data-theme] .generate-page .generate-operation .generate-material-entry {
 }
 .beta-statistics-facts > div {
     border: 0;
+    border-bottom: 1px solid var(--border);
 }
 .beta-statistics-facts > div:nth-child(even) {
     background: color-mix(in srgb, var(--muted) 45%, transparent);

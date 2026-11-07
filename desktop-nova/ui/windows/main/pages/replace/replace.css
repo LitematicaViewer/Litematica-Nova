@@ -8,14 +8,14 @@
 .replace-scroll-area { flex: 1; min-height: 0; min-width: 0; }
 /* `nova-fieldset-plain` drops the shared fieldset border/padding; the page only
    keeps the gutter that separates the rules from the scrollbar. */
-html[data-theme] .replace-rules { min-width: 0; padding: 0; margin: 0; }
+html[data-theme] .replace-rules { min-width: 0; padding: 0 16px 0 0; margin: 0; }
 .replace-legend { font-size: 15px; font-weight: 600; margin-bottom: 12px; padding: 0; }
 .replace-property > .dropdown { max-width: 100%; }
 .replace-toolbar { display: flex; flex-wrap: wrap; gap: var(--nova-toolbar-gap, 8px); align-items: center; padding: 12px 0 0; }
 .replace-toolbar > span { flex: 1 0 auto; max-width: 100%; overflow-wrap: anywhere; }
 .replace-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--ln-space-6, 24px); gap: var(--ln-space-2, 8px); }
 .replace-error { white-space: pre-wrap; overflow-wrap: anywhere; }
-.replace-output { max-width: var(--ln-field-max, 42rem); display: flex; flex-direction: column; gap: var(--ln-space-2, 8px); margin: 16px 0 8px; }
+.replace-output { max-width: none; display: flex; flex-direction: column; gap: var(--ln-space-2, 8px); margin: 16px 0 8px; }
 .replace-preview details, .replace-result details { margin-top: 8px; }
 .replace-page summary { cursor: pointer; }
 .replace-result { padding: 16px; margin-bottom: 16px; }

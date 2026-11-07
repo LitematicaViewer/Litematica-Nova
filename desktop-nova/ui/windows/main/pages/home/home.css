@@ -8,19 +8,19 @@
     flex-direction: column;
     gap: var(--nova-section-gap);
     text-align: left;
-    min-height: 0;
+    min-height: calc(100dvh - 72px);
     /* The shell already provides the page inset, including at narrow widths. */
-    padding: 0;
+    padding: clamp(24px, 5vw, 72px);
 }
 .home-introduction, .home-current { min-width: 0; }
 .home-introduction h1 { margin: 0 0 var(--nova-toolbar-gap); font-size: clamp(1.8rem, 3vw, 2.7rem); font-family: var(--nova-font-lg, inherit); font-weight: 650; line-height: 1.15; overflow-wrap: anywhere; letter-spacing: -.025em; }
-.home-lead { max-width: 60ch; margin: 0 0 16px; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.7; }
+.home-lead { max-width: 28em; margin: 0 0 16px; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); line-height: 1.7; }
 .home-start-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--nova-toolbar-gap); }
 .home-start-actions > button { gap: 8px; }
 .home-beta-note { margin: 12px 0 0; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); }
 /* Surface, radius and text tone come from the shared card/text classes (`group-box`,
    `muted`); the page only owns spacing and flow. */
-.home-current { margin: 0; padding: 0; }
+.home-current { margin: 0; padding: 28px; }
 .home-current h2 { margin: 0 0 12px; font-size: var(--nova-text-lg); font-family: var(--nova-font-lg, inherit); font-weight: 600; }
 .home-current-file { display: flex; gap: var(--nova-toolbar-gap); align-items: center; margin-bottom: var(--nova-section-gap); }
 .home-current-file > svg { flex-shrink: 0; color: var(--primary); }
@@ -36,7 +36,7 @@
 }
 }
 
-@layer components.page { .home-open-error { overflow-wrap: anywhere; color: var(--destructive); } .home-current { border: 0; box-shadow: none; background: transparent; } }
+@layer components.page { .home-open-error { overflow-wrap: anywhere; color: var(--destructive); } .home-current { border: 0; box-shadow: none; background: transparent; padding: 28px; } }
 
 /* These are multiline navigation rows, not fixed-height theme action buttons. */
 @layer utilities {

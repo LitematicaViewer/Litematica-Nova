@@ -161,7 +161,7 @@ html[data-theme] :is([data-slot="checkbox"], [data-slot="radio-group-item"])[ari
 .nova-scroll-area > [data-slot="scroll-area-viewport"] { width: 100%; height: 100%; min-width: 0; border-radius: inherit; overscroll-behavior: contain; outline: none; }
 /* Radix owns the only thumb in a ScrollArea. Native page scrollbars elsewhere
    remain themed by widgets.css; they must not reappear inside this viewport. */
-.nova-scroll-area > [data-slot="scroll-area-viewport"] { scrollbar-width: none; border-radius: inherit; }
+.nova-scroll-area > [data-slot="scroll-area-viewport"] { scrollbar-width: none; border-radius: inherit; width: 100%; height: 100%; min-width: 0; }
 .nova-scroll-area > [data-slot="scroll-area-viewport"]::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .nova-scroll-area > [data-slot="scroll-area-viewport"]:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .nova-scroll-area > [data-slot="scroll-area-viewport"] > div { display: block !important; min-width: 100%; }

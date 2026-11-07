@@ -28,7 +28,7 @@ html[data-theme] .library-page [data-slot="button"] { gap: 8px; }
 .library-search > .theme-icon { color: var(--muted-foreground); }
 .library-page .library-search input { width: 100%; min-width: 0; padding-left: 35px; }
 .library-status-slot { display:flex; align-items:center; gap:8px; flex:0 0 32px; height:32px; min-width:0; overflow:auto; }
-.library-message { display:flex; flex:1 0 min(100%, 420px); align-items:center; justify-content:space-between; gap:8px; padding:0 4px; max-height:32px; overflow:auto; overflow-wrap:anywhere; }
+.library-message { display:flex; flex:1 0 min(100%, 420px); align-items:center; justify-content:space-between; gap:8px; padding:8px 12px; max-height:7rem; overflow:auto; overflow-wrap:anywhere; }
 .library-progress { font-variant-numeric: tabular-nums; }
 .library-workspace { position: relative; display: grid; grid-template-columns: 11rem minmax(0, 1fr); flex: 1; min-height: 0; min-width: 0; overflow: hidden; gap: 16px; }
 .library-categories, .library-collection, .library-inspector { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -47,15 +47,15 @@ html[data-theme] .library-page .library-category { transform: none; }
 /* Structural slots do not receive the shared `[data-slot="button"]` focus ring, so the
    page owns it. */
 .library-category small { flex-shrink: 0; font-variant-numeric: tabular-nums; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); }
-.library-collection-toolbar, .library-batch-toolbar { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.library-collection-toolbar, .library-batch-toolbar { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 12px; }
 .library-collection-toolbar { min-height: 48px; padding: var(--nova-toolbar-gap) 12px; overflow-x: auto; scrollbar-width: thin; box-sizing: border-box; }
 .library-collection-toolbar > * { flex-shrink: 0; }
 .library-select-all { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .library-select-all span { overflow-wrap: anywhere; }
 .library-result-count { font-variant-numeric: tabular-nums; font-size: var(--nova-text-xs); font-family: var(--nova-font-xs, inherit); margin-right: auto; }
-.library-filter-control { flex: 0 1 11rem; min-width: 11rem; }
+.library-filter-control { flex: 0 1 11rem; min-width: 7rem; }
 .library-filter-control .dropdown-container { width: 100%; }
-.library-batch-toolbar { padding: 0; white-space: nowrap; }
+.library-batch-toolbar { padding: 0; white-space: nowrap; padding-block: 8px; }
 .library-batch-toolbar > span { display: none; }
 /* Column minimum is the preview plus a 6px gutter on each side, expressed in px so the
    grid does not shrink under themes whose root font size is 14px (shadcn). */
@@ -140,6 +140,7 @@ html[data-theme] .library-page .library-tile-open { display: flex; flex-directio
 .library-folders-panel > fieldset {
     min-inline-size: 0;
     margin-inline: var(--ln-space-3, 12px);
+    padding: 12px;
 }
 
 .library-folders-panel > .subwindow-list-fieldset {
@@ -153,6 +154,7 @@ html[data-theme] .library-page .library-tile-open { display: flex; flex-directio
 .library-folders-panel .subwindow-list {
     gap: var(--ln-space-3, 12px);
     scrollbar-gutter: stable;
+    padding: 4px;
 }
 
 .library-folders-panel .subwindow-list > * {
@@ -220,7 +222,10 @@ html[data-theme] .library-page .library-tile-open { display: flex; flex-directio
 
 .library-reden-panel .reden-result-card {
     min-width: 0;
-    padding: var(--ln-space-3, 12px);
+    padding: 14px;
+    width: 100%;
+    height: auto;
+    min-height: 0;
 }
 
 .library-reden-panel .reden-result-card-body {
@@ -264,6 +269,7 @@ html[data-theme] .library-page .library-tile-open { display: flex; flex-directio
 .library-reden-panel .reden-attachment-row {
     flex-wrap: wrap;
     gap: var(--ln-space-2, 8px);
+    padding: 12px;
 }
 
 .library-reden-panel .reden-attachment-row > .nova-flex-1 {
@@ -341,12 +347,12 @@ html[data-theme] .library-page .library-tile-open { display: flex; flex-directio
 .library-window-dialog .library-aux-panel { padding-top: 12px; }
 .library-folder-scroll, .library-online-results-scroll { flex: 1; min-width: 0; min-height: 0; }
 .library-folders-panel .subwindow-list { overflow: visible; padding: 4px; }
-.library-folders-panel > fieldset { padding: 12px; }
+.library-folders-panel > fieldset { padding: 12px; min-inline-size: 0; }
 .library-folders-panel .local-browser-table [data-slot="table-cell"], .library-folders-panel .local-browser-table [data-slot="table-head"] { white-space: normal; overflow-wrap: anywhere; }
 .library-folders-panel .local-browser-table .local-browser-size-cell { white-space: nowrap; }
-.library-reden-panel .reden-result-list { overflow: visible; }
-.library-reden-panel .reden-result-card { width: 100%; height: auto; min-height: 0; padding: 14px; text-align: left; white-space: normal; }
-.library-reden-panel .reden-detail-pane { overflow: hidden; }
+.library-reden-panel .reden-result-list { overflow: visible; padding: var(--ln-space-1, 4px); }
+.library-reden-panel .reden-result-card { width: 100%; height: auto; min-height: 0; padding: 14px; text-align: left; white-space: normal; min-width: 0; }
+.library-reden-panel .reden-detail-pane { overflow: hidden; padding-inline-start: var(--ln-space-4, 16px); }
 .library-reden-panel .reden-detail-pane > [data-slot="scroll-area-viewport"] > div { padding-right: 8px; }
 .library-reden-panel .reden-attachment-row { padding: 12px; }
 .library-aux-panel .subwindow-empty-state { text-align: center; padding: 32px 16px; }

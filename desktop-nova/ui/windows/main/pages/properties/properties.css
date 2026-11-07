@@ -37,7 +37,7 @@
 .properties-preview-placeholder { position: absolute; inset: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 16px; padding: 24px; text-align: center; }
 .properties-preview-status { flex: none; font-size: var(--nova-text-sm); font-family: var(--nova-font-sm, inherit); line-height: 1.5; overflow-wrap: anywhere; }
 .properties-preview-error { flex: none; max-height: 5rem; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; }
-.properties-actions { flex: none; }
+.properties-actions { flex: none; padding-top: 12px; }
 .properties-actions > span { flex: 1; min-width: 8em; }
 .properties-message { flex: none; padding: 10px 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .properties-empty { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 16px; padding: var(--ln-space-6, 24px); }
@@ -72,7 +72,7 @@
 .properties-conversion-target { display: flex; align-items: center; gap: 12px; }
 .properties-conversion-target [data-slot="select-trigger"] { padding: 6px 10px; }
 .properties-conversion-table code { overflow-wrap: anywhere; }
-.properties-conversion-table [data-slot="table-cell"] { vertical-align: top; }
+.properties-conversion-table [data-slot="table-cell"] { vertical-align: top; max-width: 20rem; }
 .properties-conversion-table .input { min-width: 16em; }
 
 .properties-conversion-source { display: flex; align-items: center; gap: 10px; }

@@ -13,14 +13,14 @@
     z-index: 2100;
     min-width: var(--radix-select-trigger-width);
     max-width: min(90vw, 600px);
-    max-height: min(var(--radix-select-content-available-height), 320px);
+    max-height: min(var(--radix-select-content-available-height), 24rem);
     overflow: hidden;
     color: var(--foreground);
     background: var(--background);
 }
 .dropdown-menu [data-slot="select-viewport"] { padding: 4px; }
 .dropdown-item[data-slot="select-item"] { position: relative; padding-right: 30px; outline: none; }
-.dropdown-item[data-slot="select-item"] { white-space: normal; overflow-wrap: anywhere; }
+.dropdown-item[data-slot="select-item"] { white-space: normal; overflow-wrap: anywhere; padding-right: 30px; }
 .dropdown-item[data-highlighted] { color: var(--option-active-color); background: var(--option-active-background); }
 .dropdown-item [data-slot="select-item-indicator"] { position: absolute; right: 8px; display: flex; align-items: center; }
 [data-slot="select-scroll-up-button"], [data-slot="select-scroll-down-button"] { display: flex; justify-content: center; padding: 4px; }
@@ -54,7 +54,7 @@
     max-height: min(24rem, var(--radix-popover-content-available-height));
     color: var(--foreground);
 }
-.dropdown-menu[data-slot="select-content"] { max-height: min(var(--radix-select-content-available-height), 24rem); color: var(--foreground); background: var(--background); }
+.dropdown-menu[data-slot="select-content"] { max-height: min(var(--radix-select-content-available-height), 24rem); color: var(--foreground); background: var(--background); min-width: var(--radix-select-trigger-width); max-width: min(90vw, 600px); }
 .subwindow-standalone-page { height: 100dvh; min-height: 0; }
 .subwindow-demo-fill { min-height: 8rem; }
 
@@ -72,6 +72,13 @@
     --ln-scroll-active: #52525b;
     --ln-scroll-edge: 2px;
     --ln-scroll-shadow: none;
+    --control-height: 32px;
+    --radius: 3px;
+    --panel-shadow: 0 8px 24px rgb(0 0 0 / 20%);
+    --option-active-background: var(--accent);
+    --option-active-color: var(--foreground);
+    --success: #306743;
+    --warning: #8a4b00;
 }
 html[data-theme="8bitcn"] {
     --ln-scroll-radius: 0;
@@ -129,6 +136,15 @@ html[data-theme="minecraft"] {
     --option-active-color: var(--foreground);
     --success: #306743;
     --warning: #8a4b00;
+    --ln-scroll-size: 12px;
+    --ln-scroll-radius: 8px;
+    --ln-scroll-track: #f1f1f3;
+    --ln-scroll-track-hover: #e8e8eb;
+    --ln-scroll-thumb: #a1a1aa;
+    --ln-scroll-hover: #71717a;
+    --ln-scroll-active: #52525b;
+    --ln-scroll-edge: 2px;
+    --ln-scroll-shadow: none;
 }
 }
 
@@ -239,6 +255,7 @@ td {
 .dialog-surface {
     border-radius: var(--radius);
     box-shadow: var(--panel-shadow);
+    max-height: calc(100dvh - 32px);
 }
 
 .dialog-title,

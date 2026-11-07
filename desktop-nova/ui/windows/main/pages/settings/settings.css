@@ -11,7 +11,7 @@
     max-width: none;
     min-height: 0;
     min-width: 0;
-    padding: 0 0 var(--nova-page-inset, 16px);
+    padding: 16px clamp(12px, 2vw, 32px) 32px;
     container-type: inline-size;
 }
 

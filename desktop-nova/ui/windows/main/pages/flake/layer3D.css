@@ -6,6 +6,6 @@
 .layer3d-number { display:flex; align-items:center; gap:var(--ln-space-2, .5rem); }
 .layer3d-number input { width:6rem; }
 .layer3d-slider { margin:.5rem 0; }
-.layer3d-viewport { flex:1; min-height:8rem; position:relative; overflow:hidden; background:var(--background); border:1px solid var(--border); }
+.layer3d-viewport { flex:1; min-height:20rem; position:relative; overflow:hidden; background:var(--background); border:1px solid var(--border); }
 .layer3d-view-tabs { display:flex; gap:var(--ln-space-1, .25rem); }
 }
