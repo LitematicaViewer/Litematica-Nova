@@ -56,10 +56,6 @@ html[data-theme="minecraft"] {
     --ln-scroll-active: #c0c0c0;
 }
 
-html[data-theme="minecraft"][data-color-scheme="light"] img.nav-icon {
-    /* Keep the supplied pixel silhouettes readable on the light work surface. */
-    filter: brightness(0.16);
-}
 html[data-theme="minecraft"][data-color-scheme="light"] {
     color-scheme: light;
     --background: #deded6;

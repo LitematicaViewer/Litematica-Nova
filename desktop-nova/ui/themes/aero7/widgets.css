@@ -268,9 +268,8 @@
     box-shadow: none;
 }
 
-/* The normal artwork is translucent, so the primary plate needs its semantic
-   blue underlay; otherwise white text is painted over the light window itself.
-   Its artwork's left/right slices are 12px. */
+/* `default` is the page's primary action: the filled Aero blue plate, always
+   labelled in white. Its artwork's left/right slices are 12px. */
 [data-slot="button"][data-variant="default"]:where(:not(.nav-item,.nav-expand,.dialog-close-button,.subwindow-close-button,.material-list-close-button,.flake-page__quickbar-slot,.flake-page__quickbar-open-inventory,.flake-page__edit-tool-button,.flake-page__creative-slot,.flake-page__creative-hotbar-slot)) {
     --ln-aero7-button-normal-image: url("./resource/button/button_all_primary_normal_min.png");
     --ln-aero7-button-hover-image: url("./resource/button/button_all_primary_hover_min.png");
@@ -279,8 +278,7 @@
     --ln-aero7-button-disabled-image: url("./resource/button/button_all_primary_disabled_min.png");
     --ln-aero7-button-slice: 4 12 4 12 fill;
     --ln-aero7-button-image-width: 4px 12px 4px 12px;
-    background-color: var(--primary);
-    color: var(--primary-foreground);
+    color: #ffffff;
 }
 
 /* `destructive` is the filled Aero red plate, always labelled in white. Its
